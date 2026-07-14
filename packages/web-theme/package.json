@@ -1,0 +1,20 @@
+{
+  "name": "@task-handoff/web-theme",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "style": "./index.css",
+  "dependencies": {
+    "highlight.js": "^11.11.1",
+    "katex": "^0.17.0",
+    "marked": "^15.0.12",
+    "marked-katex-extension": "^5.1.10",
+    "mermaid": "^11.16.0",
+    "vue": "^3.5.25"
+  },
+  "exports": {
+    "./index.css": "./index.css",
+    "./markdown": "./markdown.ts",
+    "./MarkdownContent.vue": "./MarkdownContent.vue"
+  }
+}

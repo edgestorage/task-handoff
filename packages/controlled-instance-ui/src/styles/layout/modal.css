@@ -1,0 +1,137 @@
+.modal-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(1180px, calc(100vw - 48px)) !important;
+  max-width: calc(100vw - 48px) !important;
+  max-height: min(860px, calc(100vh - 48px));
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-popover);
+}
+
+.settings-modal {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(1280px, calc(100vw - 48px)) !important;
+  max-width: calc(100vw - 48px) !important;
+  height: min(880px, calc(100vh - 48px));
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--workspace-bg);
+  box-shadow:
+    var(--shadow-panel),
+    inset 0 1px 0 var(--workspace-grid);
+}
+
+.settings-modal-body {
+  display: grid;
+  grid-template-columns: 184px minmax(0, 1fr);
+  min-height: 0;
+}
+
+.settings-nav {
+  display: grid !important;
+  grid-auto-flow: row;
+  align-content: start;
+  align-self: stretch;
+  justify-content: stretch !important;
+  height: auto !important;
+  gap: 6px;
+  border-right: 1px solid var(--line);
+  background: var(--surface-inset);
+  padding: 14px 10px;
+}
+
+.settings-nav button {
+  display: flex;
+  width: 100%;
+  justify-content: flex-start !important;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 9px 12px;
+  text-align: left;
+}
+
+.settings-nav button:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.settings-nav button.active {
+  border-color: var(--line-strong);
+  background: var(--surface-active);
+  color: var(--text-strong);
+  box-shadow: inset 3px 0 0 var(--brand-accent);
+}
+
+.settings-content {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, var(--surface-raised), transparent 220px),
+    var(--surface-inset);
+}
+
+.settings-pane {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.settings-content-inner {
+  min-height: 100%;
+}
+
+.settings-list {
+  display: grid;
+  gap: 12px;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-raised);
+  padding: 12px 14px;
+}
+
+.modal-header h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 16px;
+}
+
+.modal-header p {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.modal-panel > .panel {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.modal-scroll {
+  min-height: 0;
+  padding: 14px;
+}
+
+.modal-scroll-content {
+  display: grid;
+  gap: 16px;
+  min-height: 100%;
+  padding-right: 2px;
+}

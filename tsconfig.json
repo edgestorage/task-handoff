@@ -1,0 +1,48 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "moduleDetection": "force",
+    "rootDir": ".",
+    "outDir": "dist",
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "strict": false,
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "baseUrl": ".",
+    "ignoreDeprecations": "6.0",
+    "paths": {
+      "@task-handoff/ai-session-runtime": ["packages/ai-session-runtime/src/index.ts"],
+      "@task-handoff/ai-session-runtime/*": ["packages/ai-session-runtime/src/*.ts"],
+      "@task-handoff/app-runtime": ["packages/app-runtime/src/index.ts"],
+      "@task-handoff/app-runtime/*": ["packages/app-runtime/src/*.ts"],
+      "@task-handoff/core": ["packages/core/src/index.ts"],
+      "@task-handoff/core/*": ["packages/core/src/*"],
+      "@task-handoff/protocol": ["packages/protocol/src/index.ts"],
+      "@task-handoff/protocol/*": ["packages/protocol/src/*.ts"],
+      "@task-handoff/receiver-worker": ["packages/receiver-worker/src/index.ts"],
+      "@task-handoff/receiver-worker/*": ["packages/receiver-worker/src/*"],
+      "@task-handoff/terminal-ui": ["packages/terminal-ui/src/index.ts"],
+      "@task-handoff/terminal-ui/*": ["packages/terminal-ui/src/*.ts"]
+    },
+    "types": ["node", "react"],
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": [
+    "apps/cli/src/**/*",
+    "apps/controlled-instance-image/src/**/*",
+    "packages/core/src/**/*",
+    "packages/protocol/src/**/*",
+    "packages/app-runtime/src/**/*",
+    "packages/ai-session-runtime/src/**/*",
+    "packages/receiver-worker/src/**/*",
+    "packages/controlled-instance/src/**/*",
+    "packages/control-plane/src/**/*",
+    "packages/terminal-ui/src/**/*"
+  ],
+  "exclude": ["packages/control-plane-ui/**/*", "packages/controlled-instance-ui/**/*"]
+}

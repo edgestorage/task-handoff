@@ -1,0 +1,11 @@
+{
+  "name": "@task-handoff/control-plane-image",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "node -e \"console.log('control-plane image package is a scaffold during monorepo phase 0')\"",
+    "check": "pnpm run build",
+    "test": "node --test"
+  }
+}
+

@@ -1,0 +1,118 @@
+name: Runtime Package Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version without the v prefix"
+        required: true
+        type: string
+      publish_npm:
+        description: "Publish packages to npm"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.3
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            version="${{ inputs.version }}"
+          else
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          node -e 'if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(process.argv[1])) process.exit(1)' "$version"
+          npm_tag="latest"
+          if [[ "$version" == *-* ]]; then
+            prerelease="${version#*-}"
+            npm_tag="${prerelease%%.*}"
+            if [[ "$npm_tag" != "alpha" && "$npm_tag" != "beta" ]]; then
+              echo "Only alpha and beta prerelease channels are supported, got: $npm_tag" >&2
+              exit 1
+            fi
+          fi
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+          echo "npm_tag=$npm_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Build npm tarballs
+        env:
+          TASK_HANDOFF_VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          pnpm runtime:pack
+          cp scripts/install-server.sh release/npm/artifacts/install-server.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: task-handoff-runtime-packages-${{ steps.version.outputs.value }}
+          path: |
+            release/npm/artifacts/*.tgz
+            release/npm/artifacts/install-server.sh
+          if-no-files-found: error
+
+      - name: Attach packages to GitHub Release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes --title "TaskHandoff $GITHUB_REF_NAME" || true
+          fi
+          gh release upload "$GITHUB_REF_NAME" release/npm/artifacts/*.tgz release/npm/artifacts/install-server.sh --clobber
+
+      - name: Publish npm packages
+        if: github.event_name == 'push' || inputs.publish_npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_DIST_TAG: ${{ steps.version.outputs.npm_tag }}
+        run: |
+          npm publish release/npm/control-plane --access public --tag "$NPM_DIST_TAG"
+          npm publish release/npm/node-agent --access public --tag "$NPM_DIST_TAG"
+          npm publish release/npm/controlled-instance --access public --tag "$NPM_DIST_TAG"
+          npm publish release/npm/server --access public --tag "$NPM_DIST_TAG"
+
+      - name: Keep prereleases out of the latest dist-tag
+        if: steps.version.outputs.npm_tag != 'latest'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          RELEASE_VERSION: ${{ steps.version.outputs.value }}
+        shell: bash
+        run: |
+          packages=(
+            @task-handoff/control-plane
+            @task-handoff/node-agent
+            @task-handoff/controlled-instance
+            @task-handoff/server
+          )
+          for package in "${packages[@]}"; do
+            latest="$(npm view "$package" dist-tags.latest --json 2>/dev/null | node -e 'const fs = require("node:fs"); const value = JSON.parse(fs.readFileSync(0, "utf8")); process.stdout.write(typeof value === "string" ? value : "")' || true)"
+            if [[ "$latest" == "$RELEASE_VERSION" ]]; then
+              npm dist-tag rm "$package" latest
+            fi
+          done

@@ -1,0 +1,32 @@
+{
+  "name": "@task-handoff/ai-session-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./*": {
+      "types": "./src/*.ts",
+      "default": "./src/*.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit",
+    "check": "pnpm run build",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@task-handoff/core": "workspace:*",
+    "@task-handoff/protocol": "workspace:*",
+    "write-file-atomic": "^8.0.0",
+    "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1"
+  }
+}

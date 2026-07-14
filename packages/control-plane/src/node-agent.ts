@@ -1,0 +1,2683 @@
+import fs from "node:fs";
+import http from "node:http";
+import net from "node:net";
+import path from "node:path";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import Fastify from "fastify";
+import websocket from "@fastify/websocket";
+import WebSocket from "ws";
+import type { FastifyServerOptions } from "fastify";
+import { z } from "zod";
+import {
+  CONTROL_PLANE_PROTOCOL_VERSION,
+  ApplyUpdateRequestSchema,
+  ControlledInstanceSchema,
+  ControlledInstanceHeartbeatSchema,
+  ControlledInstanceRegisterSchema,
+  ImageProfileSchema,
+  NodeAgentExternalListenerConfigSchema,
+  NodeAgentExternalListenerSchema,
+  NodeLocalFolderSchema,
+  NodeRuntimeSchema,
+  NodeSchema,
+  ProjectSchema,
+  ProjectSourceSchema,
+  WorkspacePolicySchema,
+  UpdateCheckRequestSchema,
+  UpdateNodeAgentExternalListenerSchema,
+  safeParseStoredControlledInstance,
+  sanitizeStoredControlledInstance,
+  type BuildInfo,
+  type ControlledInstance,
+  type ControlledInstanceHeartbeat,
+  type ControlledInstanceRegister,
+  type ImageProfile,
+  type Node,
+  type NodeAgentExternalListener,
+  type NodeAgentExternalListenerConfig,
+  type NodeLocalFolder,
+  type NodeRuntime,
+  type Project,
+  type UpdateJob,
+} from "@task-handoff/protocol/control-plane";
+import { bridgeWebSockets } from "@task-handoff/protocol/websocket-bridge";
+import { defaultCommandRunner, LocalDockerExecutor, listLocalDockerImages, type CommandRunner, type ExecutorContext, type ExecutorStartResult } from "./executor.ts";
+import { NodeAgentInstanceEventForwarder } from "./node-agent-events.ts";
+import { listFolderTree } from "./node-agent-folders.ts";
+import {
+  CreateLocalFolderSchema,
+  CreateNodeInstanceSchema,
+  CreateNodeRuntimeSchema,
+  FolderTreeQuerySchema,
+  ProxyRequestSchema,
+  UpdateNodeInstanceSchema,
+  UpdateNodeRuntimeSchema,
+} from "./node-agent-schemas.ts";
+import { createId, createSecret, JsonCollection, JsonFile, nodeAgentStorePaths, type NodeAgentStorePaths } from "./store.ts";
+import { acquireProcessSingletonLock, defaultNodeAgentSingletonLockPath } from "./process-lock.ts";
+import { nodeAgentIpcEndpoint, nodeAgentIpcPath, prepareNodeAgentIpcPath } from "./node-agent-ipc.ts";
+import {
+  NODE_AGENT_HMAC_TIMESTAMP_WINDOW_MS,
+  createNodeAgentHmacHeaders,
+  hmacHeadersFromRecord,
+  sha256Hex,
+  signNodeAgentRequest,
+  timingSafeHexEqual,
+} from "./node-agent-auth.ts";
+import { nodeAgentProxyMethod, type NodeAgentInjectResponse, websocketPayload } from "./node-agent-proxy-utils.ts";
+import { checkControlledInstanceUpdate, checkNodeAgentUpdate, npmCommand, NodeUpdateJobs } from "./node-updates.ts";
+
+declare module "fastify" {
+  interface FastifyInstance {
+    nodeAgentState?: NodeAgentState;
+    nodeAgentEventForwarder?: NodeAgentInstanceEventForwarder;
+    nodeAgentReverseTunnels?: ReturnType<typeof createReverseTunnelManager>;
+    nodeAgentListenerManager?: NodeAgentExternalListenerManager;
+    nodeAgentRestoreLocalInstances?: () => Promise<void>;
+  }
+
+  interface FastifyRequest {
+    nodeAgentAuthKeyId?: string;
+  }
+}
+
+const DECODED_RESPONSE_HEADERS = new Set(["content-encoding", "content-length", "transfer-encoding"]);
+const AUTO_IMPORT_AGENT_CONFIG_PRESETS = ["codex", "claude"] as const;
+const DEFAULT_AUTO_IMPORT_AGENT_CONFIG_TIMEOUT_MS = 5_000;
+const NODE_AGENT_PAIRING_INVITE_TTL_MS = 10 * 60 * 1000;
+
+const NodeAgentRuntimeSettingsSchema = z.object({
+  version: z.literal(1),
+  externalListener: NodeAgentExternalListenerConfigSchema,
+}).strict();
+
+type NodeAgentRuntimeSettings = z.infer<typeof NodeAgentRuntimeSettingsSchema>;
+
+const NodeAgentPairingInviteSchema = z
+  .object({
+    controlPlaneName: z.string().trim().min(1).max(160).optional(),
+    controlPlaneUrl: z.string().trim().max(2048).optional(),
+    expiresInMs: z.number().int().positive().max(60 * 60 * 1000).optional(),
+  })
+  .strict();
+
+const NodeAgentPairingCompleteSchema = z
+  .object({
+    joinToken: z.string().trim().min(1).max(4096),
+    controlPlaneId: z.string().trim().min(1).max(160).optional(),
+    controlPlaneName: z.string().trim().min(1).max(160).optional(),
+    controlPlaneUrl: z.string().trim().max(2048).optional(),
+  })
+  .strict();
+
+const NodeInstanceLifecycleRequestSchema = z.object({
+  modelEnv: z.record(z.string(), z.string()).default({}),
+}).strict().default({ modelEnv: {} });
+
+const NodeAgentApplyUpdateRequestSchema = ApplyUpdateRequestSchema.extend({
+  modelEnv: z.record(z.string(), z.string()).default({}),
+}).strict();
+
+const NodeAgentRemoteConnectSchema = z
+  .object({
+    controlPlaneUrl: z.string().trim().url().max(2048),
+    joinToken: z.string().trim().min(1).max(4096),
+    controlPlaneName: z.string().trim().min(1).max(160).optional(),
+    activate: z.boolean().optional(),
+  })
+  .strict();
+
+type NodeAgentPairingInvite = {
+  tokenHash: string;
+  expiresAt: string;
+  createdAt: string;
+  controlPlaneName?: string;
+  controlPlaneUrl?: string;
+};
+
+type NodeAgentRemoteControlPlane = {
+  id: string;
+  keyId: string;
+  name?: string;
+  url?: string;
+  secret: string;
+  pairedAt: string;
+  updatedAt: string;
+  active?: boolean;
+};
+
+type PublicNodeAgentRemoteControlPlane = Omit<NodeAgentRemoteControlPlane, "secret"> & {
+  current: boolean;
+};
+
+type NodeAgentIdentity = {
+  nodeId: string;
+  createdAt: string;
+  updatedAt: string;
+  pairingInvites?: NodeAgentPairingInvite[];
+  remoteControlPlanes?: NodeAgentRemoteControlPlane[];
+};
+
+function optionalEnv(name: string) {
+  const value = process.env[name]?.trim();
+  return value || undefined;
+}
+
+function packageVersion() {
+  try {
+    const packagePath = path.resolve(__dirname, "..", "package.json");
+    return JSON.parse(fs.readFileSync(packagePath, "utf8")).version || "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+function buildInfo(component: BuildInfo["component"]): BuildInfo {
+  return {
+    component,
+    packageName: component === "node-agent" ? "@task-handoff/node-agent" : undefined,
+    packageVersion: packageVersion(),
+    protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+    buildId: optionalEnv("TASK_HANDOFF_BUILD_ID"),
+    builtAt: optionalEnv("TASK_HANDOFF_BUILT_AT"),
+    gitCommit: optionalEnv("TASK_HANDOFF_GIT_COMMIT"),
+    imageRef: optionalEnv("TASK_HANDOFF_IMAGE_REF"),
+    imageDigest: optionalEnv("TASK_HANDOFF_IMAGE_DIGEST"),
+  };
+}
+
+function proxyResponseHeaders(headers: Headers) {
+  return Object.fromEntries([...headers.entries()].filter(([key]) => !DECODED_RESPONSE_HEADERS.has(key.toLowerCase())));
+}
+
+function proxyRequestBody(parsed: { body?: string; bodyBase64?: string }) {
+  return parsed.bodyBase64 ? Buffer.from(parsed.bodyBase64, "base64") : parsed.body;
+}
+
+export type CreateNodeAgentAppOptions = {
+  token?: string;
+  remoteSecret?: string;
+  remoteKeyId?: string;
+  connectionMode?: "local-ipc" | "local-loopback";
+  ipcPath?: string;
+  port?: number | string;
+  containerUrl?: string;
+  nodeId?: string;
+  dataDir?: string;
+  logger?: FastifyServerOptions["logger"];
+  dockerCommandRunner?: CommandRunner;
+  updateCommandRunner?: CommandRunner;
+  fetchImpl?: typeof fetch;
+};
+
+export type RunNodeAgentServerOptions = CreateNodeAgentAppOptions & {
+  host: string;
+  port: number;
+  controlPlaneTunnelUrl?: string;
+};
+
+function installGracefulShutdown(app: Awaited<ReturnType<typeof createNodeAgentApp>>, cleanup?: () => void) {
+  let closing = false;
+  const shutdown = async (signal: NodeJS.Signals) => {
+    if (closing) {
+      return;
+    }
+    closing = true;
+    cleanup?.();
+    try {
+      await app.close();
+    } finally {
+      process.exitCode = signal ? 0 : process.exitCode;
+    }
+  };
+  const onSigint = () => {
+    void shutdown("SIGINT");
+  };
+  const onSigterm = () => {
+    void shutdown("SIGTERM");
+  };
+  process.once("SIGINT", onSigint);
+  process.once("SIGTERM", onSigterm);
+  app.addHook("onClose", async () => {
+    process.off("SIGINT", onSigint);
+    process.off("SIGTERM", onSigterm);
+  });
+}
+
+function errorPayload(error: unknown) {
+  if (error instanceof z.ZodError) {
+    return {
+      statusCode: 400,
+      code: "VALIDATION_ERROR",
+      message: error.issues.map((issue) => `${issue.path.join(".") || "body"}: ${issue.message}`).join("; "),
+    };
+  }
+  const record = error && typeof error === "object" ? (error as Record<string, unknown>) : {};
+  return {
+    statusCode: typeof record.statusCode === "number" ? record.statusCode : 500,
+    code: typeof record.code === "string" ? record.code : "NODE_AGENT_ERROR",
+    message: error instanceof Error ? error.message : String(error),
+  };
+}
+
+function bearerToken(headers: Record<string, unknown>) {
+  const authorization = headers.authorization;
+  return typeof authorization === "string" && authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length).trim() : undefined;
+}
+
+function requestBodyForHmac(body: unknown) {
+  if (body === undefined || body === null) {
+    return "";
+  }
+  if (typeof body === "string") {
+    return body;
+  }
+  if (Buffer.isBuffer(body)) {
+    return body;
+  }
+  return JSON.stringify(body);
+}
+
+function isLoopbackAddress(value: unknown) {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const address = value.trim().toLowerCase();
+  return address === "localhost" || address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
+}
+
+function isLocalStaticKeyConnection(request: { ip?: string; socket: { remoteAddress?: string; remoteFamily?: string } }) {
+  return isLoopbackAddress(request.ip)
+    || isLoopbackAddress(request.socket.remoteAddress)
+    || (!request.ip && !request.socket.remoteAddress && !request.socket.remoteFamily);
+}
+
+function isUnixSocketRequest(request: { ip?: string; socket: { remoteAddress?: string; remoteFamily?: string } }) {
+  return !request.ip
+    && !request.socket.remoteAddress
+    && !request.socket.remoteFamily;
+}
+
+function isInstanceReportRoute(url: string) {
+  const path = url.split("?")[0];
+  return /^\/api\/node-agent\/instances\/[^/]+\/(register|heartbeat)$/.test(path);
+}
+
+function isPairingCompleteRoute(url: string) {
+  return url.split("?")[0] === "/api/node-agent/pairing/complete";
+}
+
+function now() {
+  return new Date().toISOString();
+}
+
+function listenerHost(bindScope: NodeAgentExternalListenerConfig["bindScope"]) {
+  return bindScope === "all-ipv4" ? "0.0.0.0" as const : "127.0.0.1" as const;
+}
+
+function bootstrapListener(host: string, port: number): NodeAgentExternalListenerConfig {
+  return NodeAgentExternalListenerConfigSchema.parse({
+    bindScope: host.trim() === "0.0.0.0" ? "all-ipv4" : "loopback",
+    port,
+  });
+}
+
+function sanitizeNodeAgentRuntimeSettings(input: unknown) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+  const source = input as Record<string, unknown>;
+  const listener = source.externalListener && typeof source.externalListener === "object" && !Array.isArray(source.externalListener)
+    ? source.externalListener as Record<string, unknown>
+    : {};
+  const unknownTopLevel = Object.keys(source).filter((key) => key !== "version" && key !== "externalListener");
+  const unknownListener = Object.keys(listener).filter((key) => key !== "bindScope" && key !== "port");
+  if (unknownTopLevel.length || unknownListener.length) {
+    console.warn(JSON.stringify({
+      message: "unknown stored node agent runtime setting fields were ignored",
+      filePath: "runtime-settings.json",
+      fields: [...unknownTopLevel, ...unknownListener.map((key) => `externalListener.${key}`)],
+    }));
+  }
+  return {
+    version: source.version,
+    externalListener: {
+      bindScope: listener.bindScope,
+      port: listener.port,
+    },
+  };
+}
+
+function runtimeSettingsFile(paths: NodeAgentStorePaths, defaults: NodeAgentExternalListenerConfig) {
+  return new JsonFile<NodeAgentRuntimeSettings>(paths.settingsPath, () => ({ version: 1, externalListener: defaults }), {
+    schema: NodeAgentRuntimeSettingsSchema,
+    sanitize: sanitizeNodeAgentRuntimeSettings,
+  });
+}
+
+function envFlag(value: string | undefined) {
+  return ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase());
+}
+
+function nodeAgentDiagnosticLogsEnabled() {
+  return envFlag(process.env.TASK_HANDOFF_DIAGNOSTIC_LOGS);
+}
+
+function normalizeNodeAgentIdentity(record: unknown): NodeAgentIdentity | undefined {
+  if (!record || typeof record !== "object") {
+    return undefined;
+  }
+  const value = record as Record<string, unknown>;
+  const nodeId = typeof value.nodeId === "string" && value.nodeId.trim() ? value.nodeId.trim() : undefined;
+  if (!nodeId) {
+    return undefined;
+  }
+  return {
+    nodeId,
+    createdAt: typeof value.createdAt === "string" ? value.createdAt : now(),
+    updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : now(),
+    pairingInvites: Array.isArray(value.pairingInvites) ? value.pairingInvites.filter((item): item is NodeAgentPairingInvite => {
+      if (!item || typeof item !== "object") {
+        return false;
+      }
+      const invite = item as Record<string, unknown>;
+      return typeof invite.tokenHash === "string" && typeof invite.expiresAt === "string" && typeof invite.createdAt === "string";
+    }) : [],
+    remoteControlPlanes: Array.isArray(value.remoteControlPlanes) ? value.remoteControlPlanes.filter((item): item is NodeAgentRemoteControlPlane => {
+      if (!item || typeof item !== "object") {
+        return false;
+      }
+      const remote = item as Record<string, unknown>;
+      return typeof remote.id === "string" && typeof remote.keyId === "string" && typeof remote.secret === "string" && typeof remote.pairedAt === "string" && typeof remote.updatedAt === "string";
+    }).map((item) => ({ ...item, active: typeof item.active === "boolean" ? item.active : true })) : [],
+  };
+}
+
+function readNodeAgentIdentityRecord(paths: NodeAgentStorePaths) {
+  try {
+    return normalizeNodeAgentIdentity(JSON.parse(fs.readFileSync(paths.identityPath, "utf8")));
+  } catch {
+    return undefined;
+  }
+}
+
+function writeNodeAgentIdentityRecord(paths: NodeAgentStorePaths, identity: NodeAgentIdentity) {
+  fs.mkdirSync(path.dirname(paths.identityPath), { recursive: true });
+  fs.writeFileSync(paths.identityPath, `${JSON.stringify({ ...identity, updatedAt: now() }, null, 2)}\n`, { mode: 0o600 });
+}
+
+function writeNodeAgentIdentity(paths: NodeAgentStorePaths, nodeId: string) {
+  const current = readNodeAgentIdentityRecord(paths);
+  writeNodeAgentIdentityRecord(paths, {
+    ...(current || { createdAt: now() }),
+    nodeId,
+    updatedAt: now(),
+    pairingInvites: current?.pairingInvites || [],
+    remoteControlPlanes: current?.remoteControlPlanes || [],
+  });
+}
+
+function resolveNodeAgentId(paths: NodeAgentStorePaths, explicitNodeId?: string) {
+  if (explicitNodeId?.trim()) {
+    writeNodeAgentIdentity(paths, explicitNodeId.trim());
+    return explicitNodeId.trim();
+  }
+  const existing = readNodeAgentIdentityRecord(paths);
+  if (existing?.nodeId) {
+    return existing.nodeId;
+  }
+  const nodeId = createId("node");
+  writeNodeAgentIdentity(paths, nodeId);
+  return nodeId;
+}
+
+function prunePairingInvites(identity: NodeAgentIdentity) {
+  const nowMs = Date.now();
+  return {
+    ...identity,
+    pairingInvites: (identity.pairingInvites || []).filter((invite) => Date.parse(invite.expiresAt) > nowMs),
+  };
+}
+
+function createPairingInvite(paths: NodeAgentStorePaths, input: z.infer<typeof NodeAgentPairingInviteSchema>) {
+  const current = prunePairingInvites(readNodeAgentIdentityRecord(paths) || {
+    nodeId: resolveNodeAgentId(paths),
+    createdAt: now(),
+    updatedAt: now(),
+  });
+  const createdAt = now();
+  const expiresAt = new Date(Date.now() + (input.expiresInMs || NODE_AGENT_PAIRING_INVITE_TTL_MS)).toISOString();
+  const token = createSecret();
+  const invite: NodeAgentPairingInvite = {
+    tokenHash: sha256Hex(token),
+    createdAt,
+    expiresAt,
+    ...(input.controlPlaneName ? { controlPlaneName: input.controlPlaneName } : {}),
+    ...(input.controlPlaneUrl ? { controlPlaneUrl: input.controlPlaneUrl } : {}),
+  };
+  writeNodeAgentIdentityRecord(paths, {
+    ...current,
+    pairingInvites: [...(current.pairingInvites || []), invite],
+  });
+  return { ...invite, token };
+}
+
+function completePairingInvite(paths: NodeAgentStorePaths, input: z.infer<typeof NodeAgentPairingCompleteSchema>) {
+  const current = prunePairingInvites(readNodeAgentIdentityRecord(paths) || {
+    nodeId: resolveNodeAgentId(paths),
+    createdAt: now(),
+    updatedAt: now(),
+  });
+  const tokenHash = sha256Hex(input.joinToken);
+  const invite = (current.pairingInvites || []).find((item) => item.tokenHash === tokenHash);
+  if (!invite) {
+    const error = new Error("Node agent pairing invite is invalid or expired.");
+    Object.assign(error, { statusCode: 401, code: "NODE_AGENT_PAIRING_INVITE_INVALID" });
+    throw error;
+  }
+  const timestamp = now();
+  const remoteId = input.controlPlaneId || createId("cp");
+  const remote: NodeAgentRemoteControlPlane = {
+    id: remoteId,
+    keyId: createId("key"),
+    ...(input.controlPlaneName || invite.controlPlaneName ? { name: input.controlPlaneName || invite.controlPlaneName } : {}),
+    ...(input.controlPlaneUrl || invite.controlPlaneUrl ? { url: input.controlPlaneUrl || invite.controlPlaneUrl } : {}),
+    secret: createSecret(),
+    pairedAt: timestamp,
+    updatedAt: timestamp,
+    active: true,
+  };
+  writeNodeAgentIdentityRecord(paths, {
+    ...current,
+    pairingInvites: (current.pairingInvites || []).filter((item) => item.tokenHash !== tokenHash),
+    remoteControlPlanes: [...(current.remoteControlPlanes || []).filter((item) => item.id !== remote.id), remote],
+  });
+  return remote;
+}
+
+function upsertRemoteControlPlane(paths: NodeAgentStorePaths, remote: NodeAgentRemoteControlPlane) {
+  const current = readNodeAgentIdentityRecord(paths) || {
+    nodeId: resolveNodeAgentId(paths),
+    createdAt: now(),
+    updatedAt: now(),
+    pairingInvites: [],
+    remoteControlPlanes: [],
+  };
+  const normalizedUrl = remote.url?.replace(/\/$/, "");
+  writeNodeAgentIdentityRecord(paths, {
+    ...current,
+    remoteControlPlanes: [
+      ...(current.remoteControlPlanes || []).filter((item) => {
+        if (item.id === remote.id) {
+          return false;
+        }
+        return !normalizedUrl || item.url?.replace(/\/$/, "") !== normalizedUrl;
+      }),
+      remote,
+    ],
+  });
+  return remote;
+}
+
+function listRemoteControlPlanes(paths: NodeAgentStorePaths, currentKeyId = ""): PublicNodeAgentRemoteControlPlane[] {
+  const remotes = readNodeAgentIdentityRecord(paths)?.remoteControlPlanes || [];
+  return remotes
+    .map(({ secret: _secret, ...remote }) => ({
+      ...remote,
+      current: Boolean(currentKeyId && remote.keyId === currentKeyId),
+    }))
+    .sort((a, b) => Number(b.current) - Number(a.current) || b.updatedAt.localeCompare(a.updatedAt));
+}
+
+function deleteRemoteControlPlane(paths: NodeAgentStorePaths, keyId: string, currentKeyId = "") {
+  if (currentKeyId && keyId === currentKeyId) {
+    const error = new Error("Cannot delete the key currently used by this control-plane connection.");
+    Object.assign(error, { statusCode: 409, code: "NODE_AGENT_REMOTE_KEY_IN_USE" });
+    throw error;
+  }
+  const current = readNodeAgentIdentityRecord(paths);
+  if (!current) {
+    return false;
+  }
+  const nextRemotes = (current.remoteControlPlanes || []).filter((remote) => remote.keyId !== keyId);
+  if (nextRemotes.length === (current.remoteControlPlanes || []).length) {
+    return false;
+  }
+  writeNodeAgentIdentityRecord(paths, {
+    ...current,
+    remoteControlPlanes: nextRemotes,
+  });
+  return true;
+}
+
+function nodeAgentRemoteSecrets(paths: NodeAgentStorePaths, overrideSecret?: string, overrideKeyId?: string) {
+  const remotes = readNodeAgentIdentityRecord(paths)?.remoteControlPlanes || [];
+  return [
+    ...remotes.map((remote) => ({ keyId: remote.keyId, secret: remote.secret })),
+    ...(overrideSecret && overrideKeyId ? [{ keyId: overrideKeyId, secret: overrideSecret }] : []),
+  ];
+}
+
+function nodeAgentReverseTunnelSecret(paths: NodeAgentStorePaths, controlPlaneUrl?: string, overrideSecret?: string, overrideKeyId?: string) {
+  if (overrideSecret && overrideKeyId) {
+    return { keyId: overrideKeyId, secret: overrideSecret };
+  }
+  const remotes = readNodeAgentIdentityRecord(paths)?.remoteControlPlanes || [];
+  if (!remotes.length) {
+    return undefined;
+  }
+  if (controlPlaneUrl) {
+    const exact = remotes.find((remote) => remote.url && remote.url.replace(/\/$/, "") === controlPlaneUrl.replace(/\/$/, ""));
+    if (exact) {
+      return { keyId: exact.keyId, secret: exact.secret };
+    }
+  }
+  const latest = [...remotes].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+  return latest ? { keyId: latest.keyId, secret: latest.secret } : undefined;
+}
+
+function workspacePolicyForSource(source: Project["source"]) {
+  if (source.type === "local-folder") {
+    return WorkspacePolicySchema.parse({ mode: "local-bind", path: "/workspace", readOnly: false });
+  }
+  return WorkspacePolicySchema.parse({ mode: "git-clone", path: "/workspace", readOnly: false });
+}
+
+function projectForInstance(instance: ControlledInstance): Project {
+  const source = ProjectSourceSchema.parse(instance.source);
+  const projectId =
+    instance.projectId ||
+    (source.type === "local-folder" ? source.localFolderId : undefined) ||
+    (source.type === "git-repository" ? source.repositoryId : undefined) ||
+    (source.type === "git-template" ? source.templateId : undefined) ||
+    `project_${instance.id}`;
+  return ProjectSchema.parse({
+    id: projectId,
+    name: typeof instance.sourceSnapshot.name === "string" ? instance.sourceSnapshot.name : instance.name,
+    source,
+    defaultImageId: instance.imageId,
+    defaultNodeId: instance.nodeId,
+    defaultRuntimeId: instance.runtimeId,
+    modelSelection: instance.sourceSnapshot.modelSelection && typeof instance.sourceSnapshot.modelSelection === "object" && !Array.isArray(instance.sourceSnapshot.modelSelection)
+      ? instance.sourceSnapshot.modelSelection
+      : {},
+    workspacePolicy: workspacePolicyForSource(source),
+    labels: {},
+    createdAt: instance.createdAt,
+    updatedAt: instance.updatedAt,
+  });
+}
+
+async function probeInstanceEndpoint(fetchImpl: typeof fetch, instance: ControlledInstance) {
+  if (!instance.target.web) {
+    return "unknown" as const;
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 2_000);
+  try {
+    const response = await fetchImpl(`${nodeLocalInstanceWebBase(instance)}/api/health`, { signal: controller.signal });
+    return response.ok ? "reachable" as const : "endpoint-unreachable" as const;
+  } catch {
+    return "endpoint-unreachable" as const;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function fetchWithTimeout(fetchImpl: typeof fetch, url: string, init: RequestInit, timeoutMs: number) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetchImpl(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function autoImportAgentConfig(fetchImpl: typeof fetch, instance: ControlledInstance, action: "start" | "restart", loggers: NodeAgentLifecycleLoggers) {
+  if (!instance.config.autoImportAgentConfigs) {
+    loggers.diagnostic({ instanceId: instance.id, action }, "node instance config auto-import skipped");
+    return;
+  }
+  if (instance.targetStatus !== "reachable") {
+    return;
+  }
+  const instanceBase = nodeLocalInstanceWebBase(instance);
+  const timeoutMs = Number(process.env.TASK_HANDOFF_CONFIG_AUTO_IMPORT_TIMEOUT_MS || DEFAULT_AUTO_IMPORT_AGENT_CONFIG_TIMEOUT_MS);
+  for (const preset of AUTO_IMPORT_AGENT_CONFIG_PRESETS) {
+    try {
+      const response = await fetchWithTimeout(fetchImpl, `${instanceBase}/api/config-sync/import/${encodeURIComponent(preset)}`, { method: "POST" }, Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_AUTO_IMPORT_AGENT_CONFIG_TIMEOUT_MS);
+      if (!response.ok) {
+        loggers.warn({ instanceId: instance.id, action, preset, statusCode: response.status }, "node instance config auto-import failed");
+        continue;
+      }
+      loggers.diagnostic({ instanceId: instance.id, action, preset }, "node instance config auto-import completed");
+    } catch (error) {
+      loggers.warn({ instanceId: instance.id, action, preset, error: error instanceof Error ? error.message : String(error) }, "node instance config auto-import failed");
+    }
+  }
+}
+
+function nodeLocalInstanceWebBase(instance: ControlledInstance) {
+  const webBase = instance.target.web;
+  if (!webBase) {
+    const error = new Error(`Instance ${instance.id} does not have a web endpoint.`);
+    Object.assign(error, { statusCode: 409, code: "NODE_INSTANCE_WEB_ENDPOINT_MISSING" });
+    throw error;
+  }
+  if (instance.target.strategy !== "direct-port") {
+    return webBase.replace(/\/$/, "");
+  }
+  try {
+    const url = new URL(webBase);
+    if (!url.port) {
+      return webBase.replace(/\/$/, "");
+    }
+    url.hostname = process.env.TASK_HANDOFF_NODE_AGENT_PROXY_HOST || "127.0.0.1";
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return webBase.replace(/\/$/, "");
+  }
+}
+
+function proxyWebSocketProtocols(headers: Record<string, unknown>) {
+  const value = headers["sec-websocket-protocol"];
+  const text = Array.isArray(value) ? value.join(",") : typeof value === "string" ? value : "";
+  const protocols = text
+    .split(",")
+    .map((protocol) => protocol.trim())
+    .filter(Boolean);
+  return protocols.length ? protocols : undefined;
+}
+
+function throwForbidden(code: string, message: string): never {
+  const error = new Error(message);
+  Object.assign(error, { statusCode: 403, code });
+  throw error;
+}
+
+function assertProtocolVersion(protocolVersion: string, peer: string) {
+  if (protocolVersion === CONTROL_PLANE_PROTOCOL_VERSION) {
+    return;
+  }
+  const error = new Error(`${peer} protocol version ${protocolVersion || "missing"} is not compatible with ${CONTROL_PLANE_PROTOCOL_VERSION}.`);
+  Object.assign(error, { statusCode: 409, code: "PROTOCOL_VERSION_MISMATCH" });
+  throw error;
+}
+
+function storedInstancePayloadError(id: string, issues: Array<{ path: PropertyKey[]; message: string }>) {
+  const detail = issues.map((issue) => `${issue.path.join(".") || "body"}: ${issue.message}`).join("; ");
+  const error = new Error(`Stored instance ${id} is not compatible with protocol ${CONTROL_PLANE_PROTOCOL_VERSION}: ${detail}`);
+  Object.assign(error, { statusCode: 409, code: "NODE_INSTANCE_PAYLOAD_INVALID" });
+  return error;
+}
+
+function runtimeRequiresImage(runtime: NodeRuntime) {
+  if (typeof runtime.capabilities.requiresImage === "boolean") {
+    return runtime.capabilities.requiresImage;
+  }
+  return runtime.type !== "local";
+}
+
+function localRuntimeCapabilities(capabilities: Record<string, unknown> = {}) {
+  return {
+    requiresImage: false,
+    supportsControlledInstanceApi: true,
+    supportsContainerLifecycle: false,
+    supportsAppSessions: true,
+    supportsHostSessions: true,
+    artifactKind: "none",
+    isolation: "none",
+    ...capabilities,
+  };
+}
+
+function defaultAccessStrategyForRuntime(type: NodeRuntime["type"]) {
+  if (type === "docker") {
+    return "direct-port" as const;
+  }
+  return "node-proxy" as const;
+}
+
+function localWorkspacePath(instance: ControlledInstance) {
+  if (instance.source.type !== "local-folder") {
+    const error = new Error("Localhost runtime currently supports local folder sources only.");
+    Object.assign(error, { statusCode: 400, code: "LOCAL_RUNTIME_REQUIRES_LOCAL_FOLDER" });
+    throw error;
+  }
+  return path.resolve(instance.source.path);
+}
+
+function controlledInstanceCommand() {
+  const configured = process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND?.trim();
+  if (configured) {
+    return configured.split(/\s+/);
+  }
+  const repositoryCli = path.resolve(process.cwd(), "bin", "task-handoff.js");
+  if (fs.existsSync(repositoryCli)) {
+    return [process.execPath, repositoryCli, "web"];
+  }
+  return ["task-handoff-controlled-instance", "web"];
+}
+
+async function allocateLocalPort() {
+  const configured = Number(process.env.TASK_HANDOFF_LOCAL_INSTANCE_PORT_START || 19000);
+  const start = Number.isInteger(configured) && configured > 0 ? configured : 19000;
+  for (let port = start; port < start + 1000 && port <= 65535; port += 1) {
+    if (await canListen(port)) {
+      return port;
+    }
+  }
+  const error = new Error(`No free localhost port found in range ${start}-${Math.min(start + 999, 65535)}.`);
+  Object.assign(error, { statusCode: 503, code: "LOCAL_INSTANCE_PORT_UNAVAILABLE" });
+  throw error;
+}
+
+function canListen(port: number) {
+  return new Promise<boolean>((resolve) => {
+    const server = net.createServer();
+    server.once("error", () => resolve(false));
+    server.listen({ host: "127.0.0.1", port }, () => {
+      server.close(() => resolve(true));
+    });
+  });
+}
+
+function waitForChildExit(child: ChildProcessWithoutNullStreams, timeoutMs = 3_000) {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve();
+  }
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(() => {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
+      }
+      resolve();
+    }, timeoutMs);
+    timer.unref();
+    child.once("exit", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
+
+function waitForChildSpawn(child: ChildProcessWithoutNullStreams) {
+  return new Promise<void>((resolve, reject) => {
+    const onSpawn = () => {
+      child.off("error", onError);
+      resolve();
+    };
+    const onError = (error: Error) => {
+      child.off("spawn", onSpawn);
+      reject(error);
+    };
+    child.once("spawn", onSpawn);
+    child.once("error", onError);
+  });
+}
+
+async function stopLocalProcess(instance: ControlledInstance, processByInstanceId: Map<string, ChildProcessWithoutNullStreams>) {
+  const child = processByInstanceId.get(instance.id);
+  if (child && !child.killed) {
+    child.kill("SIGTERM");
+    processByInstanceId.delete(instance.id);
+    await waitForChildExit(child);
+    return;
+  }
+  if (instance.runtime.pid) {
+    try {
+      process.kill(instance.runtime.pid, "SIGTERM");
+    } catch {
+      // Process already exited.
+    }
+  }
+}
+
+const RESTORABLE_LOCAL_INSTANCE_STATUSES = new Set<ControlledInstance["status"]>(["provisioning", "starting", "registering", "registered", "running"]);
+
+async function waitForLocalInstanceHealth(web: string, timeoutMs = 3_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`${web}/api/health`);
+      if (response.ok) {
+        return true;
+      }
+    } catch {
+      // Keep waiting until the controlled-instance process has bound its port.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return false;
+}
+
+async function commandVersion(runCommand: CommandRunner, command: string) {
+  try {
+    const result = await runCommand(command, ["--version"]);
+    return {
+      available: true,
+      command,
+      version: (result.stdout || result.stderr).split(/\r?\n/)[0]?.trim() || undefined,
+    };
+  } catch {
+    return { available: false };
+  }
+}
+
+type RuntimeAdapter = {
+  start(context: ExecutorContext): Promise<ExecutorStartResult>;
+  stop(context: ExecutorContext): Promise<ExecutorStartResult>;
+  restart(context: ExecutorContext): Promise<ExecutorStartResult>;
+  delete(context: ExecutorContext): Promise<ExecutorStartResult>;
+  check?(runtime: NodeRuntime): Promise<Partial<NodeRuntime>>;
+};
+
+class DockerRuntimeAdapter implements RuntimeAdapter {
+  private readonly executor: LocalDockerExecutor;
+
+  constructor(executor: LocalDockerExecutor) {
+    this.executor = executor;
+  }
+
+  start(context: ExecutorContext) {
+    return this.executor.start(context);
+  }
+
+  stop(context: ExecutorContext) {
+    return this.executor.stop(context);
+  }
+
+  restart(context: ExecutorContext) {
+    return this.executor.restart(context);
+  }
+
+  delete(context: ExecutorContext) {
+    return this.executor.delete(context);
+  }
+}
+
+class LocalhostRuntimeAdapter implements RuntimeAdapter {
+  private readonly runCommand: CommandRunner;
+  private readonly paths: NodeAgentStorePaths;
+  private readonly nodeAgentUrl: () => string;
+  private readonly processByInstanceId = new Map<string, ChildProcessWithoutNullStreams>();
+
+  constructor(runCommand: CommandRunner, paths: NodeAgentStorePaths, nodeAgentUrl: () => string) {
+    this.runCommand = runCommand;
+    this.paths = paths;
+    this.nodeAgentUrl = nodeAgentUrl;
+  }
+
+  async start(context: ExecutorContext): Promise<ExecutorStartResult> {
+    const workspacePath = localWorkspacePath(context.instance);
+    const port = context.instance.runtime.port || await allocateLocalPort();
+    const dataDir = path.join(this.paths.dataDir, "local-instances", context.instance.id);
+    const logDir = path.join(dataDir, "logs");
+    fs.mkdirSync(logDir, { recursive: true });
+    const [command, ...baseArgs] = controlledInstanceCommand();
+    const args = [...baseArgs, "--host", "127.0.0.1", "--port", String(port)];
+    const out = fs.openSync(path.join(logDir, "controlled-instance.out.log"), "a");
+    const err = fs.openSync(path.join(logDir, "controlled-instance.err.log"), "a");
+    const child = spawn(command, args, {
+      cwd: workspacePath,
+      detached: false,
+      stdio: ["ignore", out, err],
+      env: {
+        ...process.env,
+        TASK_HANDOFF_CONTROL_MODE: "controlled",
+        TASK_HANDOFF_NODE_AGENT_URL: this.nodeAgentUrl(),
+        TASK_HANDOFF_INSTANCE_ID: context.instance.id,
+        TASK_HANDOFF_INSTANCE_NAME: context.instance.name,
+        TASK_HANDOFF_REGISTRATION_TOKEN: context.instance.registrationToken || "",
+        TASK_HANDOFF_PROJECT_ID: context.project.id,
+        TASK_HANDOFF_NODE_ID: context.node.id,
+        TASK_HANDOFF_RUNTIME_ID: context.runtime.id,
+        TASK_HANDOFF_WORKSPACE: workspacePath,
+        TASK_HANDOFF_WORKSPACE_MODE: "local-bind",
+        TASK_HANDOFF_DATA_DIR: dataDir,
+        TASK_HANDOFF_LOG_DIR: logDir,
+        TASK_HANDOFF_APP_SESSION_PERSIST: "1",
+        TASK_HANDOFF_CODEX_APP_SERVER: process.env.TASK_HANDOFF_CODEX_APP_SERVER || "1",
+        TASK_HANDOFF_WEB_PORT: String(port),
+        TASK_HANDOFF_WEB_HOST: "127.0.0.1",
+      },
+    });
+    fs.closeSync(out);
+    fs.closeSync(err);
+    try {
+      await waitForChildSpawn(child);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      try {
+        fs.appendFileSync(
+          path.join(logDir, "controlled-instance.lifecycle.log"),
+          `[${new Date().toISOString()}] spawn failed command=${command} cwd=${workspacePath} error=${message}\n`,
+        );
+      } catch {
+        // Best-effort lifecycle logging.
+      }
+      throw Object.assign(
+        new Error(`Controlled instance process could not start with command ${command} in ${workspacePath}: ${message}`),
+        { statusCode: 500, code: "LOCAL_INSTANCE_PROCESS_SPAWN_FAILED" },
+      );
+    }
+    this.processByInstanceId.set(context.instance.id, child);
+    child.on("error", (error) => {
+      try {
+        fs.appendFileSync(
+          path.join(logDir, "controlled-instance.lifecycle.log"),
+          `[${new Date().toISOString()}] process error pid=${child.pid ?? ""} error=${error.message}\n`,
+        );
+      } catch {
+        // Best-effort lifecycle logging.
+      }
+    });
+    child.once("exit", (code, signal) => {
+      this.processByInstanceId.delete(context.instance.id);
+      try {
+        fs.appendFileSync(
+          path.join(logDir, "controlled-instance.lifecycle.log"),
+          `[${new Date().toISOString()}] exited pid=${child.pid ?? ""} code=${code ?? ""} signal=${signal ?? ""}\n`,
+        );
+      } catch {
+        // Best-effort lifecycle logging.
+      }
+    });
+    const web = `http://127.0.0.1:${port}`;
+    await waitForLocalInstanceHealth(web);
+    return {
+      status: "registering",
+      health: "unknown",
+      connectionStatus: "online",
+      agentStatus: "unknown",
+      targetStatus: "unknown",
+      uiAccessStatus: "unknown",
+      target: {
+        strategy: "direct-port",
+        status: "unknown",
+        web,
+        api: `${web}/api`,
+      },
+      workspace: {
+        mode: "local-bind",
+        status: "pending",
+        path: workspacePath,
+      },
+      runtime: {
+        kind: "local",
+        workspacePath,
+        pid: child.pid,
+        port,
+        labels: {
+          ...context.instance.runtime.labels,
+          "task-handoff.runtime-kind": "local",
+        },
+      },
+    };
+  }
+
+  async stop(context: ExecutorContext): Promise<ExecutorStartResult> {
+    await stopLocalProcess(context.instance, this.processByInstanceId);
+    return {
+      status: "stopped",
+      health: "unknown",
+      connectionStatus: "offline",
+      agentStatus: "offline",
+      targetStatus: "unknown",
+      uiAccessStatus: "unknown",
+      target: {
+        ...context.instance.target,
+        status: "unknown",
+      },
+      runtime: context.instance.runtime,
+    };
+  }
+
+  async restart(context: ExecutorContext): Promise<ExecutorStartResult> {
+    return this.start(context);
+  }
+
+  async delete(context: ExecutorContext): Promise<ExecutorStartResult> {
+    return this.stop(context);
+  }
+
+  async check(runtime: NodeRuntime): Promise<Partial<NodeRuntime>> {
+    const [codex, claude] = await Promise.all([
+      commandVersion(this.runCommand, "codex"),
+      commandVersion(this.runCommand, "claude"),
+    ]);
+    return {
+      status: "online",
+      capabilities: localRuntimeCapabilities({
+        ...runtime.capabilities,
+        apps: {
+          terminal: true,
+          codex,
+          claude,
+        },
+      }),
+    };
+  }
+
+  async stopAll() {
+    const children = Array.from(this.processByInstanceId.values());
+    for (const child of this.processByInstanceId.values()) {
+      if (!child.killed) {
+        child.kill("SIGTERM");
+      }
+    }
+    this.processByInstanceId.clear();
+    await Promise.all(children.map((child) => waitForChildExit(child)));
+  }
+}
+
+class RuntimeAdapterRegistry {
+  private readonly docker: RuntimeAdapter;
+  private readonly local: RuntimeAdapter;
+
+  constructor(docker: RuntimeAdapter, local: RuntimeAdapter) {
+    this.docker = docker;
+    this.local = local;
+  }
+
+  forRuntime(runtime: NodeRuntime) {
+    if (runtime.type === "docker") {
+      return this.docker;
+    }
+    if (runtime.type === "local") {
+      return this.local;
+    }
+    const error = new Error(`Runtime type ${runtime.type} is not supported by this node agent.`);
+    Object.assign(error, { statusCode: 400, code: "NODE_RUNTIME_TYPE_UNSUPPORTED" });
+    throw error;
+  }
+
+  async stopAll() {
+    if (this.local instanceof LocalhostRuntimeAdapter) {
+      await this.local.stopAll();
+    }
+  }
+}
+
+class NodeAgentState {
+  readonly nodeId: string;
+  readonly paths: NodeAgentStorePaths;
+  readonly localFolders: JsonCollection<NodeLocalFolder>;
+  readonly nodeRuntimes: JsonCollection<NodeRuntime>;
+  readonly controlledInstances: JsonCollection<ControlledInstance>;
+  readonly updateJobs: NodeUpdateJobs;
+  readonly node: Node;
+  private listenerPort: number;
+  private readonly containerUrlOverride?: string;
+
+  constructor(paths: NodeAgentStorePaths, nodeId: string, endpoint: string | undefined, containerUrl: string | undefined, listenerPort: number) {
+    this.paths = paths;
+    this.nodeId = nodeId;
+    this.localFolders = new JsonCollection(paths.localFoldersDir, { schema: NodeLocalFolderSchema });
+    this.nodeRuntimes = new JsonCollection(paths.nodeRuntimesDir, { schema: NodeRuntimeSchema });
+    this.controlledInstances = new JsonCollection(paths.controlledInstancesDir, {
+      schema: ControlledInstanceSchema,
+      sanitize: sanitizeStoredControlledInstance,
+    });
+    this.updateJobs = new NodeUpdateJobs(paths);
+    this.listenerPort = listenerPort;
+    this.containerUrlOverride = containerUrl;
+    const timestamp = now();
+    this.node = NodeSchema.parse({
+      id: nodeId,
+      name: nodeId,
+      connectionMode: "direct-http",
+      endpoint,
+      controlEndpoint: endpoint,
+      containerEndpoint: this.containerUrl,
+      publicWebBase: endpoint ? endpoint.replace(/:\d+$/, "") : undefined,
+      status: "online",
+      health: "ok",
+      capabilities: {},
+      labels: {},
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+  }
+
+  init() {
+    this.localFolders.init();
+    this.nodeRuntimes.init();
+    this.controlledInstances.init();
+    this.updateJobs.init();
+    if (!this.nodeRuntimes.get("runtime_local_docker")) {
+      const timestamp = now();
+      this.nodeRuntimes.put(
+        NodeRuntimeSchema.parse({
+          id: "runtime_local_docker",
+          nodeId: this.nodeId,
+          name: "Local Docker",
+          type: "docker",
+          status: "unknown",
+          accessStrategy: "direct-port",
+          capabilities: {},
+          labels: {},
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        }),
+      );
+    }
+    for (const runtime of this.nodeRuntimes.list()) {
+      if (runtime.nodeId !== this.nodeId) {
+        this.nodeRuntimes.put(NodeRuntimeSchema.parse({ ...runtime, nodeId: this.nodeId, updatedAt: now() }));
+      }
+    }
+    for (const folder of this.localFolders.list()) {
+      if (folder.nodeId !== this.nodeId) {
+        this.localFolders.put(NodeLocalFolderSchema.parse({ ...folder, nodeId: this.nodeId, updatedAt: now() }));
+      }
+    }
+  }
+
+  get localNodeAgentUrl() {
+    return `http://127.0.0.1:${this.listenerPort}`;
+  }
+
+  get currentListenerPort() {
+    return this.listenerPort;
+  }
+
+  get containerUrl() {
+    return this.containerUrlOverride || `http://host.docker.internal:${this.listenerPort}`;
+  }
+
+  setListenerPort(port: number) {
+    this.listenerPort = port;
+    this.node.containerEndpoint = this.containerUrl;
+    this.node.updatedAt = now();
+  }
+
+  runningInstanceCount() {
+    const inactive = new Set<ControlledInstance["status"]>(["created", "stopped", "failed"]);
+    return this.listInstances().filter((instance) => !inactive.has(instance.status)).length;
+  }
+
+  createLocalFolder(input: z.infer<typeof CreateLocalFolderSchema>) {
+    const timestamp = now();
+    const folder = NodeLocalFolderSchema.parse({
+      ...input,
+      id: input.id || createId("folder"),
+      nodeId: this.nodeId,
+      modelSelection: input.modelSelection || {},
+      labels: input.labels || {},
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+    return this.localFolders.put(folder);
+  }
+
+  createRuntime(input: z.infer<typeof CreateNodeRuntimeSchema>) {
+    const timestamp = now();
+    const runtime = NodeRuntimeSchema.parse({
+      ...input,
+      id: input.id || createId("runtime"),
+      nodeId: this.nodeId,
+      accessStrategy: input.accessStrategy || defaultAccessStrategyForRuntime(input.type),
+      capabilities: input.type === "local" ? localRuntimeCapabilities(input.capabilities) : input.capabilities || {},
+      labels: input.labels || {},
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+    return this.nodeRuntimes.put(runtime);
+  }
+
+  updateRuntime(id: string, input: z.infer<typeof UpdateNodeRuntimeSchema>) {
+    const current = this.requireRuntime(id);
+    const updated = NodeRuntimeSchema.parse({
+      ...current,
+      ...input,
+      id: current.id,
+      nodeId: this.nodeId,
+      accessStrategy: input.accessStrategy || current.accessStrategy,
+      capabilities: (input.type || current.type) === "local" ? localRuntimeCapabilities(input.capabilities || current.capabilities) : input.capabilities || current.capabilities,
+      createdAt: current.createdAt,
+      updatedAt: now(),
+    });
+    return this.nodeRuntimes.put(updated);
+  }
+
+  deleteRuntime(id: string) {
+    this.requireRuntime(id);
+    const references = this.listInstances().filter((instance) => instance.runtimeId === id);
+    if (references.length) {
+      const error = new Error(`Runtime ${id} is used by ${references.length} instance${references.length === 1 ? "" : "s"}.`);
+      Object.assign(error, { statusCode: 409, code: "NODE_RUNTIME_IN_USE" });
+      throw error;
+    }
+    return this.nodeRuntimes.delete(id);
+  }
+
+  checkRuntime(id: string, adapter: RuntimeAdapter) {
+    const runtime = this.requireRuntime(id);
+    if (!adapter.check) {
+      return this.nodeRuntimes.put(NodeRuntimeSchema.parse({ ...runtime, status: "unknown", updatedAt: now() }));
+    }
+    return adapter.check(runtime).then((patch) => {
+      const updated = NodeRuntimeSchema.parse({
+        ...runtime,
+        ...patch,
+        id: runtime.id,
+        nodeId: this.nodeId,
+        createdAt: runtime.createdAt,
+        updatedAt: now(),
+      });
+      return this.nodeRuntimes.put(updated);
+    });
+  }
+
+  requireRuntime(id: string) {
+    const runtime = this.nodeRuntimes.get(id);
+    if (!runtime) {
+      const error = new Error(`Node runtime ${id} was not found.`);
+      Object.assign(error, { statusCode: 404, code: "NODE_RUNTIME_NOT_FOUND" });
+      throw error;
+    }
+    return runtime;
+  }
+
+  requireInstance(id: string) {
+    const instance = this.controlledInstances.get(id);
+    if (!instance) {
+      const error = new Error(`Instance ${id} was not found on node ${this.nodeId}.`);
+      Object.assign(error, { statusCode: 404, code: "NODE_INSTANCE_NOT_FOUND" });
+      throw error;
+    }
+    const parsed = safeParseStoredControlledInstance(instance);
+    if (!parsed.success) {
+      throw storedInstancePayloadError(id, parsed.error.issues);
+    }
+    return parsed.data;
+  }
+
+  listInstances() {
+    return this.controlledInstances.list().flatMap((instance) => {
+      const parsed = safeParseStoredControlledInstance(instance);
+      return parsed.success ? [parsed.data] : [];
+    });
+  }
+
+  createInstance(input: z.infer<typeof CreateNodeInstanceSchema>) {
+    const runtime = this.requireRuntime(input.runtimeId);
+    const timestamp = now();
+    const id = input.id || createId("inst");
+    const source = ProjectSourceSchema.parse(input.source);
+    if (runtimeRequiresImage(runtime) && (!input.imageId || !input.image)) {
+      const error = new Error(`Runtime ${runtime.name} requires an image.`);
+      Object.assign(error, { statusCode: 400, code: "NODE_RUNTIME_IMAGE_REQUIRED" });
+      throw error;
+    }
+    if (runtime.type === "local" && source.type !== "local-folder") {
+      const error = new Error("Localhost runtime currently supports local folder sources only.");
+      Object.assign(error, { statusCode: 400, code: "LOCAL_RUNTIME_REQUIRES_LOCAL_FOLDER" });
+      throw error;
+    }
+    if (runtime.type === "local" && this.listInstances().some((instance) => this.requireRuntime(instance.runtimeId).type === "local")) {
+      const error = new Error("A localhost instance already exists on this node.");
+      Object.assign(error, { statusCode: 409, code: "LOCAL_RUNTIME_INSTANCE_EXISTS" });
+      throw error;
+    }
+    const image = input.image ? ImageProfileSchema.parse(input.image) : undefined;
+    const workspacePath = runtime.type === "local" && source.type === "local-folder" ? path.resolve(source.path) : undefined;
+    const instance = ControlledInstanceSchema.parse({
+      id,
+      name: input.name || `instance-${timestamp.replace(/[-:.TZ]/g, "").slice(0, 14)}-${id.replace(/^inst_?/, "").slice(0, 4)}`,
+      source,
+      sourceSnapshot: input.sourceSnapshot || {},
+      projectId: input.projectId,
+      nodeId: this.nodeId,
+      runtimeId: runtime.id,
+      imageId: image?.id,
+      imageSnapshot: image,
+      status: "created",
+      health: "unknown",
+      connectionStatus: "unknown",
+      agentStatus: "unknown",
+      targetStatus: "unknown",
+      uiAccessStatus: "unknown",
+      controlMode: "controlled",
+      capabilities: runtime.type === "local" ? { apps: runtime.capabilities.apps || {} } : {},
+      config: input.config,
+      workspace: runtime.type === "local" ? { mode: "local-bind", status: "unknown", path: workspacePath } : { status: "unknown" },
+      target: { strategy: "node-proxy", status: "unknown" },
+      runtime: runtime.type === "local" ? { kind: "local", workspacePath, labels: { "task-handoff.runtime-kind": "local" } } : { labels: {} },
+      registrationToken: createSecret(),
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+    return this.controlledInstances.put(instance);
+  }
+
+  registerInstance(id: string, input: ControlledInstanceRegister, token?: string) {
+    const parsed = ControlledInstanceRegisterSchema.parse(input);
+    const timestamp = now();
+    const existing = this.controlledInstances.get(id);
+    if (!existing) {
+      const error = new Error(`Instance ${id} was not found on node ${this.nodeId}.`);
+      Object.assign(error, { statusCode: 404, code: "NODE_INSTANCE_NOT_FOUND" });
+      throw error;
+    }
+    this.validateInstanceReport(existing, parsed, token);
+    assertProtocolVersion(parsed.protocolVersion, `Instance ${id}`);
+    const updated = ControlledInstanceSchema.parse({
+      ...existing,
+      name: parsed.name,
+      status: "registered",
+      health: "ok",
+      connectionStatus: "online",
+      agentStatus: "online",
+      targetStatus: parsed.target.status === "endpoint-unreachable" ? "endpoint-unreachable" : parsed.target.status === "reachable" ? "reachable" : existing.targetStatus,
+      uiAccessStatus: parsed.target.status === "endpoint-unreachable" ? "endpoint-unreachable" : existing.uiAccessStatus,
+      controlMode: parsed.controlMode,
+      protocolVersion: parsed.protocolVersion,
+      instanceVersion: parsed.instanceVersion,
+      build: parsed.build,
+      capabilities: parsed.capabilities,
+      workspace: parsed.workspace,
+      target: { ...existing.target, ...parsed.target },
+      registrationToken: existing.registrationToken || parsed.registrationToken,
+      lastHeartbeatAt: timestamp,
+      updatedAt: timestamp,
+    });
+    return this.controlledInstances.put(updated);
+  }
+
+  heartbeatInstance(id: string, input: ControlledInstanceHeartbeat, token?: string) {
+    const current = this.requireInstance(id);
+    this.validateInstanceToken(current, token);
+    const parsed = ControlledInstanceHeartbeatSchema.parse(input);
+    assertProtocolVersion(parsed.protocolVersion, `Instance ${id}`);
+    const timestamp = now();
+    const mergedTarget = parsed.target ? { ...current.target, ...parsed.target } : current.target;
+    const target = {
+      ...mergedTarget,
+      status: mergedTarget.status === "unknown" && (mergedTarget.web || mergedTarget.api) ? "reachable" as const : mergedTarget.status,
+    };
+    const targetStatus = target.status === "endpoint-unreachable" ? "endpoint-unreachable" : target.status === "reachable" ? "reachable" : current.targetStatus;
+    const updated = ControlledInstanceSchema.parse({
+      ...current,
+      ...parsed,
+      target,
+      agentStatus: "online",
+      targetStatus,
+      uiAccessStatus: targetStatus,
+      connectionStatus: "online",
+      build: parsed.build || current.build,
+      lastHeartbeatAt: timestamp,
+      updatedAt: timestamp,
+    });
+    return this.controlledInstances.put(updated);
+  }
+
+  private validateInstanceReport(existing: ControlledInstance, input: ControlledInstanceRegister, token?: string) {
+    this.validateInstanceToken(existing, token || input.registrationToken);
+    if (input.instanceId && input.instanceId !== existing.id) {
+      throwForbidden("INSTANCE_ID_MISMATCH", `Instance ${input.instanceId} cannot register as ${existing.id}.`);
+    }
+    if (input.nodeId && input.nodeId !== this.nodeId) {
+      throwForbidden("INSTANCE_NODE_MISMATCH", `Instance ${existing.id} belongs to node ${this.nodeId}.`);
+    }
+    if (input.runtimeId && input.runtimeId !== existing.runtimeId) {
+      throwForbidden("INSTANCE_RUNTIME_MISMATCH", `Instance ${existing.id} belongs to runtime ${existing.runtimeId}.`);
+    }
+    if (input.imageId && input.imageId !== existing.imageId) {
+      throwForbidden("INSTANCE_IMAGE_MISMATCH", `Instance ${existing.id} belongs to image ${existing.imageId}.`);
+    }
+  }
+
+  private validateInstanceToken(instance: ControlledInstance, token?: string) {
+    if (!instance.registrationToken || token !== instance.registrationToken) {
+      throwForbidden("INSTANCE_REGISTRATION_TOKEN_INVALID", `Invalid registration token for instance ${instance.id}.`);
+    }
+  }
+
+  context(instance: ControlledInstance, modelEnv: Record<string, string> = {}): ExecutorContext {
+    const image = instance.imageSnapshot || ImageProfileSchema.parse({ id: instance.imageId || "img_localhost", name: instance.imageId || "Localhost", image: instance.imageId || "localhost", registry: "local", capabilities: [], optionalApps: [], defaultEnv: {}, labels: {}, createdAt: instance.createdAt, updatedAt: instance.updatedAt });
+    return {
+      project: projectForInstance(instance),
+      image,
+      node: this.node,
+      runtime: this.requireRuntime(instance.runtimeId),
+      instance,
+      nodeAgentUrl: this.containerUrl,
+      modelEnv,
+    };
+  }
+}
+
+export class NodeAgentExternalListenerManager {
+  private readonly app: Awaited<ReturnType<typeof createNodeAgentApp>>;
+  private readonly state: NodeAgentState;
+  private readonly settings: JsonFile<NodeAgentRuntimeSettings>;
+  private readonly sockets = new Set<net.Socket>();
+  private config: NodeAgentExternalListenerConfig;
+  private source: NodeAgentExternalListener["source"];
+  private status: NodeAgentExternalListener["status"] = "error";
+  private error?: string;
+
+  constructor(input: {
+    app: Awaited<ReturnType<typeof createNodeAgentApp>>;
+    state: NodeAgentState;
+    settings: JsonFile<NodeAgentRuntimeSettings>;
+    config: NodeAgentExternalListenerConfig;
+    source: NodeAgentExternalListener["source"];
+  }) {
+    this.app = input.app;
+    this.state = input.state;
+    this.settings = input.settings;
+    this.config = input.config;
+    this.source = input.source;
+    this.app.server.on("connection", (socket) => {
+      this.sockets.add(socket);
+      socket.once("close", () => this.sockets.delete(socket));
+    });
+  }
+
+  current() {
+    return NodeAgentExternalListenerSchema.parse({
+      ...this.config,
+      host: listenerHost(this.config.bindScope),
+      status: this.status,
+      source: this.source,
+      ...(this.error ? { error: this.error } : {}),
+    });
+  }
+
+  async start() {
+    try {
+      await this.listen(this.config);
+      this.status = "listening";
+      this.error = undefined;
+      this.state.setListenerPort(this.config.port);
+    } catch (error) {
+      this.status = "error";
+      this.error = error instanceof Error ? error.message : String(error);
+      this.app.log.error({ host: listenerHost(this.config.bindScope), port: this.config.port, error: this.error }, "node agent TCP listener failed to start; Unix IPC remains available");
+    }
+    return this.current();
+  }
+
+  async update(input: unknown) {
+    const candidate = UpdateNodeAgentExternalListenerSchema.parse(input);
+    if (candidate.bindScope === this.config.bindScope && candidate.port === this.config.port) {
+      return this.current();
+    }
+    if (candidate.port !== this.config.port) {
+      const blockingInstanceCount = this.state.runningInstanceCount();
+      if (blockingInstanceCount > 0) {
+        const error = new Error(`Cannot change the node agent port while ${blockingInstanceCount} controlled instance(s) are running.`);
+        Object.assign(error, { statusCode: 409, code: "NODE_AGENT_LISTENER_PORT_IN_USE_BY_INSTANCES", blockingInstanceCount });
+        throw error;
+      }
+    }
+
+    const previous = { config: this.config, source: this.source, status: this.status, error: this.error };
+    await this.stop();
+    try {
+      await this.listen(candidate);
+    } catch (error) {
+      await this.restore(previous);
+      const wrapped = new Error(`Failed to bind node agent TCP listener at ${listenerHost(candidate.bindScope)}:${candidate.port}: ${error instanceof Error ? error.message : String(error)}`);
+      Object.assign(wrapped, { statusCode: 409, code: "NODE_AGENT_LISTENER_BIND_FAILED" });
+      throw wrapped;
+    }
+
+    try {
+      this.settings.put({ version: 1, externalListener: candidate });
+    } catch (error) {
+      await this.stop();
+      await this.restore(previous);
+      const wrapped = new Error(`Failed to persist node agent TCP listener: ${error instanceof Error ? error.message : String(error)}`);
+      Object.assign(wrapped, { statusCode: 500, code: "NODE_AGENT_LISTENER_PERSIST_FAILED" });
+      throw wrapped;
+    }
+
+    this.config = candidate;
+    this.source = "persisted";
+    this.status = "listening";
+    this.error = undefined;
+    this.state.setListenerPort(candidate.port);
+    return this.current();
+  }
+
+  async shutdown() {
+    await this.stop();
+  }
+
+  private async restore(previous: { config: NodeAgentExternalListenerConfig; source: NodeAgentExternalListener["source"]; status: NodeAgentExternalListener["status"]; error?: string }) {
+    this.config = previous.config;
+    this.source = previous.source;
+    this.status = previous.status;
+    this.error = previous.error;
+    if (previous.status === "listening") {
+      try {
+        await this.listen(previous.config);
+      } catch (error) {
+        this.status = "error";
+        this.error = `Failed to restore previous listener: ${error instanceof Error ? error.message : String(error)}`;
+        this.app.log.error({ error: this.error }, "node agent TCP listener rollback failed");
+      }
+    }
+    this.state.setListenerPort(previous.config.port);
+  }
+
+  private async listen(config: NodeAgentExternalListenerConfig) {
+    await new Promise<void>((resolve, reject) => {
+      const onError = (error: Error) => {
+        this.app.server.off("listening", onListening);
+        reject(error);
+      };
+      const onListening = () => {
+        this.app.server.off("error", onError);
+        resolve();
+      };
+      this.app.server.once("error", onError);
+      this.app.server.once("listening", onListening);
+      this.app.server.listen({ host: listenerHost(config.bindScope), port: config.port });
+    });
+  }
+
+  private async stop() {
+    if (!this.app.server.listening) return;
+    await new Promise<void>((resolve, reject) => {
+      this.app.server.close((error) => error ? reject(error) : resolve());
+      for (const socket of this.sockets) socket.destroy();
+    });
+  }
+}
+
+type NodeAgentDiagnosticLogger = (data: Record<string, unknown>, message: string) => void;
+type NodeAgentLifecycleLoggers = {
+  diagnostic: NodeAgentDiagnosticLogger;
+  warn: NodeAgentDiagnosticLogger;
+};
+
+async function startNodeInstance(
+  state: NodeAgentState,
+  runtimeAdapters: RuntimeAdapterRegistry,
+  fetchImpl: typeof fetch,
+  id: string,
+  modelEnv: Record<string, string>,
+  loggers: NodeAgentLifecycleLoggers,
+  reason: "request" | "restore" | "update" = "request",
+) {
+  const current = state.requireInstance(id);
+  loggers.diagnostic({ instanceId: id, action: "start", reason, runtimeId: current.runtimeId, imageId: current.imageId }, "node instance start requested");
+  const starting = state.controlledInstances.put(ControlledInstanceSchema.parse({ ...current, status: "provisioning", updatedAt: now() }));
+  const adapter = runtimeAdapters.forRuntime(state.requireRuntime(starting.runtimeId));
+  const result = await adapter.start(state.context(starting, modelEnv));
+  const probedEndpointStatus = await probeInstanceEndpoint(fetchImpl, ControlledInstanceSchema.parse({
+    ...starting,
+    ...result,
+    target: result.target ? { ...starting.target, ...result.target } : starting.target,
+    workspace: result.workspace ? { ...starting.workspace, error: undefined, ...result.workspace } : starting.workspace,
+    runtime: result.runtime ? { ...starting.runtime, ...result.runtime } : starting.runtime,
+    updatedAt: now(),
+  }));
+  const updated = ControlledInstanceSchema.parse({
+    ...starting,
+    ...result,
+    target: result.target ? { ...starting.target, ...result.target, status: probedEndpointStatus } : starting.target,
+    workspace: result.workspace ? { ...starting.workspace, error: undefined, ...result.workspace } : starting.workspace,
+    runtime: result.runtime ? { ...starting.runtime, ...result.runtime } : starting.runtime,
+    targetStatus: probedEndpointStatus,
+    uiAccessStatus: probedEndpointStatus,
+    connectionStatus: result.connectionStatus,
+    updatedAt: now(),
+  });
+  const stored = state.controlledInstances.put(updated);
+  await autoImportAgentConfig(fetchImpl, stored, "start", loggers);
+  loggers.diagnostic({ instanceId: id, action: "start", reason, status: stored.status, connectionStatus: stored.connectionStatus, targetStatus: stored.targetStatus, targetWeb: stored.target.web, containerName: stored.runtime.containerName }, "node instance start completed");
+  return stored;
+}
+
+function restoreFailurePatch(instance: ControlledInstance, error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return ControlledInstanceSchema.parse({
+    ...instance,
+    status: "failed",
+    health: "failed",
+    connectionStatus: "offline",
+    agentStatus: "offline",
+    targetStatus: "unknown",
+    uiAccessStatus: "unknown",
+    workspace: {
+      ...instance.workspace,
+      error: message,
+    },
+    updatedAt: now(),
+  });
+}
+
+function stoppedLocalShutdownPatch(instance: ControlledInstance) {
+  return ControlledInstanceSchema.parse({
+    ...instance,
+    status: "stopped",
+    health: "unknown",
+    connectionStatus: "offline",
+    agentStatus: "offline",
+    targetStatus: "unknown",
+    uiAccessStatus: "unknown",
+    target: {
+      ...instance.target,
+      status: "unknown",
+    },
+    updatedAt: now(),
+  });
+}
+
+function resumableLocalShutdownPatch(instance: ControlledInstance) {
+  return ControlledInstanceSchema.parse({
+    ...instance,
+    health: "unknown",
+    connectionStatus: "offline",
+    agentStatus: "offline",
+    targetStatus: "unknown",
+    uiAccessStatus: "unknown",
+    target: {
+      ...instance.target,
+      status: "unknown",
+    },
+    updatedAt: now(),
+  });
+}
+
+async function stopLocalInstancesForNodeAgentShutdown(state: NodeAgentState, runtimeAdapters: RuntimeAdapterRegistry) {
+  await runtimeAdapters.stopAll();
+  for (const instance of state.listInstances()) {
+    const runtime = state.requireRuntime(instance.runtimeId);
+    if (runtime.type !== "local") {
+      continue;
+    }
+    state.controlledInstances.put(resumableLocalShutdownPatch(instance));
+  }
+}
+
+export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}) {
+  const token = options.token || process.env.TASK_HANDOFF_NODE_AGENT_TOKEN;
+  const port = Number(options.port || process.env.TASK_HANDOFF_NODE_AGENT_PORT || "8091");
+  const endpoint = `http://127.0.0.1:${port}`;
+  const containerUrl = options.containerUrl || process.env.TASK_HANDOFF_NODE_AGENT_CONTAINER_URL;
+  const paths = nodeAgentStorePaths(options.dataDir);
+  const remoteSecretOverride = options.remoteSecret || process.env.TASK_HANDOFF_NODE_AGENT_REMOTE_SECRET;
+  const remoteKeyIdOverride = options.remoteKeyId || process.env.TASK_HANDOFF_NODE_AGENT_REMOTE_KEY_ID;
+  const nodeId = resolveNodeAgentId(paths, options.nodeId || process.env.TASK_HANDOFF_NODE_ID);
+  const connectionMode = options.connectionMode || (process.env.TASK_HANDOFF_NODE_AGENT_CONNECTION_MODE === "local-ipc" ? "local-ipc" : "local-loopback");
+  const ipcPath = options.ipcPath || process.env.TASK_HANDOFF_NODE_AGENT_IPC_PATH || nodeAgentIpcPath(paths.dataDir);
+  const controlEndpoint = connectionMode === "local-ipc" ? nodeAgentIpcEndpoint(ipcPath) : endpoint;
+  const state = new NodeAgentState(paths, nodeId, endpoint, containerUrl, port);
+  state.node.connectionMode = connectionMode;
+  state.node.controlEndpoint = controlEndpoint;
+  state.node.endpoint = controlEndpoint;
+  state.init();
+  const dockerExecutor = new LocalDockerExecutor(options.dockerCommandRunner, {
+    publishHost: "127.0.0.1",
+  });
+  const runtimeAdapters = new RuntimeAdapterRegistry(new DockerRuntimeAdapter(dockerExecutor), new LocalhostRuntimeAdapter(options.dockerCommandRunner || defaultCommandRunner, paths, () => state.localNodeAgentUrl));
+  const updateCommandRunner = options.updateCommandRunner || options.dockerCommandRunner || defaultCommandRunner;
+  const fetchImpl = options.fetchImpl || fetch;
+  const app = Fastify({ logger: options.logger ?? true });
+  app.decorate("nodeAgentState", state);
+  await app.register(websocket);
+  const eventForwarder = new NodeAgentInstanceEventForwarder(state, token, { logger: app.log, safetyIntervalMs: Number(process.env.TASK_HANDOFF_EVENT_CONNECTION_SAFETY_INTERVAL_MS) || undefined });
+  eventForwarder.start();
+  app.decorate("nodeAgentEventForwarder", eventForwarder);
+  const diagnosticLogsEnabled = nodeAgentDiagnosticLogsEnabled();
+  const usedHmacNonces = new Map<string, number>();
+  const logDiagnostic = (data: Record<string, unknown>, message: string) => {
+    if (diagnosticLogsEnabled) {
+      app.log.info(data, message);
+    }
+  };
+  const lifecycleLoggers: NodeAgentLifecycleLoggers = {
+    diagnostic: logDiagnostic,
+    warn: (data, message) => app.log.warn(data, message),
+  };
+
+  const checkUpdate = async (input: z.infer<typeof UpdateCheckRequestSchema>) => {
+    if (input.target.component === "node-agent") {
+      return checkNodeAgentUpdate({ channel: input.channel, currentVersion: packageVersion(), runCommand: updateCommandRunner });
+    }
+    const instance = state.requireInstance(input.target.instanceId);
+    return checkControlledInstanceUpdate({
+      channel: input.channel,
+      instance,
+      runtime: state.requireRuntime(instance.runtimeId),
+      runCommand: updateCommandRunner,
+    });
+  };
+
+  const runInstanceUpdate = async (job: UpdateJob, modelEnv: Record<string, string>) => {
+    if (job.target.component !== "controlled-instance") return;
+    const instance = state.requireInstance(job.target.instanceId);
+    const runtime = state.requireRuntime(instance.runtimeId);
+    const adapter = runtimeAdapters.forRuntime(runtime);
+    if (runtime.type === "local") {
+      const npm = npmCommand();
+      const prefix = (await updateCommandRunner(npm, ["prefix", "--global"])).stdout.trim();
+      await updateCommandRunner(npm, ["install", "--global", "--prefix", prefix, `@task-handoff/controlled-instance@${job.toVersion}`]);
+    } else if (runtime.type === "docker") {
+      const imageRef = job.artifactRef;
+      if (!imageRef || instance.imageSnapshot?.registry === "local") {
+        throw Object.assign(new Error("The instance does not use an updateable remote Docker image."), { code: "INSTANCE_UPDATE_UNSUPPORTED", statusCode: 400 });
+      }
+      await updateCommandRunner("docker", ["pull", imageRef]);
+    } else {
+      throw Object.assign(new Error(`Runtime type ${runtime.type} does not support managed updates.`), { code: "INSTANCE_UPDATE_UNSUPPORTED", statusCode: 400 });
+    }
+    await adapter.delete(state.context(instance, modelEnv));
+    state.controlledInstances.put(stoppedLocalShutdownPatch(ControlledInstanceSchema.parse({
+      ...instance,
+      ...(runtime.type === "docker" && job.artifactRef && instance.imageSnapshot ? {
+        imageSnapshot: { ...instance.imageSnapshot, image: job.artifactRef, updatedAt: now() },
+      } : {}),
+    })));
+    await startNodeInstance(state, runtimeAdapters, fetchImpl, instance.id, modelEnv, lifecycleLoggers, "update");
+  };
+
+  app.setErrorHandler((error, request, reply) => {
+    const payload = errorPayload(error);
+    if (diagnosticLogsEnabled || payload.statusCode >= 500) {
+      const log = payload.statusCode >= 500 ? app.log.error.bind(app.log) : app.log.warn.bind(app.log);
+      log(
+        {
+          method: request.method,
+          url: request.url,
+          statusCode: payload.statusCode,
+          errorCode: payload.code,
+          error: payload.message,
+        },
+        "node agent request failed",
+      );
+    }
+    reply.code(payload.statusCode).send({
+      error: {
+        code: payload.code,
+        message: payload.message,
+        ...(error && typeof error === "object" && typeof (error as { blockingInstanceCount?: unknown }).blockingInstanceCount === "number"
+          ? { blockingInstanceCount: (error as { blockingInstanceCount: number }).blockingInstanceCount }
+          : {}),
+      },
+    });
+  });
+
+  function pruneHmacNonces() {
+    const cutoff = Date.now() - NODE_AGENT_HMAC_TIMESTAMP_WINDOW_MS;
+    for (const [key, expiresAt] of usedHmacNonces) {
+      if (expiresAt <= cutoff) {
+        usedHmacNonces.delete(key);
+      }
+    }
+  }
+
+  function verifyPairedHmac(request: { method: string; url: string; headers: Record<string, unknown>; body: unknown }) {
+    const headers = hmacHeadersFromRecord(request.headers);
+    if (!headers.nodeId && !headers.signature) {
+      return false;
+    }
+    const remoteSecrets = nodeAgentRemoteSecrets(paths, remoteSecretOverride, remoteKeyIdOverride);
+    if (!remoteSecrets.length) {
+      return false;
+    }
+    if (headers.nodeId !== nodeId) {
+      throw Object.assign(new Error("Invalid node agent HMAC node id."), { statusCode: 401, code: "NODE_AGENT_HMAC_NODE_MISMATCH" });
+    }
+    if (!headers.keyId) {
+      throw Object.assign(new Error("Node agent HMAC key id is missing."), { statusCode: 401, code: "NODE_AGENT_HMAC_KEY_MISSING" });
+    }
+    const candidateSecrets = remoteSecrets.filter((item) => headers.keyId === item.keyId);
+    if (!candidateSecrets.length) {
+      throw Object.assign(new Error("Invalid node agent HMAC key id."), { statusCode: 401, code: "NODE_AGENT_HMAC_KEY_INVALID" });
+    }
+    const timestampMs = Date.parse(headers.timestamp);
+    if (!Number.isFinite(timestampMs) || Math.abs(Date.now() - timestampMs) > NODE_AGENT_HMAC_TIMESTAMP_WINDOW_MS) {
+      throw Object.assign(new Error("Node agent HMAC timestamp is outside the allowed window."), { statusCode: 401, code: "NODE_AGENT_HMAC_TIMESTAMP_INVALID" });
+    }
+    if (!headers.nonce) {
+      throw Object.assign(new Error("Node agent HMAC nonce is missing."), { statusCode: 401, code: "NODE_AGENT_HMAC_NONCE_MISSING" });
+    }
+    pruneHmacNonces();
+    const nonceKey = `${headers.nodeId}:${headers.keyId}:${headers.nonce}`;
+    if (usedHmacNonces.has(nonceKey)) {
+      throw Object.assign(new Error("Node agent HMAC nonce was already used."), { statusCode: 401, code: "NODE_AGENT_HMAC_NONCE_REPLAY" });
+    }
+    const body = requestBodyForHmac(request.body);
+    const bodySha256 = sha256Hex(body);
+    if (headers.bodySha256 !== bodySha256) {
+      throw Object.assign(new Error("Node agent HMAC body hash mismatch."), { statusCode: 401, code: "NODE_AGENT_HMAC_BODY_HASH_INVALID" });
+    }
+    const signatureMatches = candidateSecrets.some((item) => timingSafeHexEqual(headers.signature, signNodeAgentRequest(item.secret, {
+        keyId: headers.keyId,
+        method: request.method,
+        pathWithQuery: request.url,
+        timestamp: headers.timestamp,
+        nonce: headers.nonce,
+        bodySha256,
+      })));
+    if (!signatureMatches) {
+      throw Object.assign(new Error("Invalid node agent HMAC signature."), { statusCode: 401, code: "NODE_AGENT_HMAC_SIGNATURE_INVALID" });
+    }
+    usedHmacNonces.set(nonceKey, Date.now() + NODE_AGENT_HMAC_TIMESTAMP_WINDOW_MS);
+    return headers.keyId;
+  }
+
+  app.addHook("preHandler", async (request) => {
+    const hmacKeyId = verifyPairedHmac(request);
+    if (hmacKeyId) {
+      request.nodeAgentAuthKeyId = hmacKeyId;
+      return;
+    }
+    if (isUnixSocketRequest(request)) {
+      if (token && bearerToken(request.headers) !== token) {
+        const error = new Error("Invalid node agent token.");
+        Object.assign(error, { statusCode: 401, code: "NODE_AGENT_UNAUTHORIZED" });
+        throw error;
+      }
+      return;
+    }
+    if (isPairingCompleteRoute(request.url)) {
+      return;
+    }
+    if (isInstanceReportRoute(request.url)) {
+      return;
+    }
+    if (nodeAgentRemoteSecrets(paths, remoteSecretOverride, remoteKeyIdOverride).length) {
+      const error = new Error("Node agent HMAC signature is required.");
+      Object.assign(error, { statusCode: 401, code: "NODE_AGENT_HMAC_SIGNATURE_REQUIRED" });
+      throw error;
+    }
+    if (!isLocalStaticKeyConnection(request)) {
+      const error = new Error("Local node agent access is only accepted from loopback or local IPC connections.");
+      Object.assign(error, { statusCode: 401, code: "NODE_AGENT_LOCAL_TOKEN_REQUIRES_LOOPBACK" });
+      throw error;
+    }
+    if (token && bearerToken(request.headers) !== token) {
+      const error = new Error("Invalid node agent token.");
+      Object.assign(error, { statusCode: 401, code: "NODE_AGENT_UNAUTHORIZED" });
+      throw error;
+    }
+  });
+
+  app.addHook("onClose", async () => {
+    eventForwarder.stop();
+    await stopLocalInstancesForNodeAgentShutdown(state, runtimeAdapters);
+  });
+
+  const restoreLocalInstances = async () => {
+    const instances = state.listInstances().filter((instance) => {
+      const runtime = state.requireRuntime(instance.runtimeId);
+      return runtime.type === "local" && RESTORABLE_LOCAL_INSTANCE_STATUSES.has(instance.status);
+    });
+    for (const instance of instances) {
+      try {
+        await startNodeInstance(state, runtimeAdapters, fetchImpl, instance.id, {}, lifecycleLoggers, "restore");
+      } catch (error) {
+        state.controlledInstances.put(restoreFailurePatch(state.requireInstance(instance.id), error));
+        logDiagnostic({ instanceId: instance.id, action: "restore", error: error instanceof Error ? error.message : String(error) }, "node local instance restore failed");
+      }
+    }
+  };
+
+  app.decorate("nodeAgentRestoreLocalInstances", restoreLocalInstances);
+
+  app.get("/api/node-agent/health", async () => ({
+    data: {
+      ok: true,
+      role: "node-agent",
+      nodeId,
+      protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+      build: buildInfo("node-agent"),
+      serverTime: new Date().toISOString(),
+    },
+  }));
+
+  const requireListenerManager = (request: { ip?: string; socket: { remoteAddress?: string; remoteFamily?: string } }) => {
+    if (!isUnixSocketRequest(request)) {
+      const error = new Error("Node agent TCP listener settings are available only over local Unix IPC.");
+      Object.assign(error, { statusCode: 403, code: "NODE_AGENT_LISTENER_LOCAL_IPC_ONLY" });
+      throw error;
+    }
+    if (!app.nodeAgentListenerManager) {
+      const error = new Error("Node agent TCP listener manager is not initialized.");
+      Object.assign(error, { statusCode: 503, code: "NODE_AGENT_LISTENER_UNAVAILABLE" });
+      throw error;
+    }
+    return app.nodeAgentListenerManager;
+  };
+
+  app.get("/api/node-agent/settings/external-listener", async (request) => ({
+    data: requireListenerManager(request).current(),
+  }));
+
+  app.patch("/api/node-agent/settings/external-listener", async (request) => ({
+    data: await requireListenerManager(request).update(request.body),
+  }));
+
+  app.get("/api/node-agent/updates/jobs", async () => ({ data: state.updateJobs.list() }));
+
+  app.post("/api/node-agent/updates/check", async (request) => ({
+    data: await checkUpdate(UpdateCheckRequestSchema.parse(request.body)),
+  }));
+
+  app.post("/api/node-agent/updates/apply", async (request, reply) => {
+    const input = NodeAgentApplyUpdateRequestSchema.parse(request.body);
+    const check = await checkUpdate(input);
+    if (!check.supported) {
+      const error = new Error(check.reason || "The requested update is not supported.");
+      Object.assign(error, { statusCode: 400, code: "UPDATE_UNSUPPORTED" });
+      throw error;
+    }
+    if (!check.updateAvailable) {
+      const error = new Error(check.reason || "No update is available for the selected channel.");
+      Object.assign(error, { statusCode: 409, code: "UPDATE_NOT_AVAILABLE" });
+      throw error;
+    }
+    const job = state.updateJobs.create(nodeId, check);
+    if (input.target.component === "node-agent") {
+      const worker = path.resolve(__dirname, "..", "bin", "task-handoff-node-update-worker");
+      if (!fs.existsSync(worker)) {
+        state.updateJobs.patch(job.id, { status: "failed", error: `Update worker was not found: ${worker}`, completedAt: now() });
+        const error = new Error(`Node agent update worker was not found: ${worker}`);
+        Object.assign(error, { statusCode: 500, code: "UPDATE_WORKER_NOT_FOUND" });
+        throw error;
+      }
+      await updateCommandRunner("systemd-run", [
+        "--unit", `task-handoff-update-${job.id}`,
+        "--collect",
+        "--property=Type=exec",
+        worker,
+        "--job-file", state.updateJobs.records.filePath(job.id),
+        "--target-version", job.toVersion,
+        "--npm-command", npmCommand(),
+      ]);
+    } else {
+      state.updateJobs.run(job, (current) => runInstanceUpdate(current, input.modelEnv));
+    }
+    return reply.code(202).send({ data: job });
+  });
+
+  app.post("/api/node-agent/pairing/invites", async (request, reply) => {
+    const invite = createPairingInvite(paths, NodeAgentPairingInviteSchema.parse(request.body || {}));
+    return reply.code(201).send({
+      data: {
+        nodeId,
+        joinToken: invite.token,
+        expiresAt: invite.expiresAt,
+      },
+    });
+  });
+
+  app.post("/api/node-agent/pairing/complete", async (request, reply) => {
+    const remote = completePairingInvite(paths, NodeAgentPairingCompleteSchema.parse(request.body));
+    return reply.code(201).send({
+      data: {
+        nodeId,
+        keyId: remote.keyId,
+        secret: remote.secret,
+        pairedAt: remote.pairedAt,
+      },
+    });
+  });
+
+  app.get("/api/node-agent/remotes", async (request) => ({
+    data: listRemoteControlPlanes(paths, request.nodeAgentAuthKeyId),
+  }));
+
+  app.delete("/api/node-agent/remotes/:keyId", async (request) => {
+    const keyId = z.string().trim().min(1).max(160).parse((request.params as { keyId: string }).keyId);
+    return {
+      data: {
+        deleted: deleteRemoteControlPlane(paths, keyId, request.nodeAgentAuthKeyId),
+      },
+    };
+  });
+
+  app.post("/api/node-agent/remotes/connect", async (request, reply) => {
+    const input = NodeAgentRemoteConnectSchema.parse(request.body);
+    const controlPlaneUrl = assertHttpControlPlaneUrl(input.controlPlaneUrl);
+    const timestamp = now();
+    const remote: NodeAgentRemoteControlPlane = {
+      id: createId("cp"),
+      keyId: createId("key"),
+      ...(input.controlPlaneName ? { name: input.controlPlaneName } : {}),
+      url: controlPlaneUrl,
+      secret: createSecret(),
+      pairedAt: timestamp,
+      updatedAt: timestamp,
+      active: input.activate !== false,
+    };
+    const joined = await completeControlPlaneJoin(fetchImpl, controlPlaneUrl, {
+      joinToken: input.joinToken,
+      nodeId,
+      nodeName: state.node.name,
+      keyId: remote.keyId,
+      secret: remote.secret,
+      pairedAt: remote.pairedAt,
+    });
+    const stored = upsertRemoteControlPlane(paths, {
+      ...remote,
+      ...(typeof joined.name === "string" && joined.name ? { name: input.controlPlaneName || joined.name } : {}),
+    });
+    let tunnelStatus: "disabled" | "saved" | "connecting" | "failed" = stored.active !== false ? "saved" : "disabled";
+    let tunnelError: string | undefined;
+    if (stored.active !== false) {
+      if (app.nodeAgentReverseTunnels) {
+        try {
+          app.nodeAgentReverseTunnels.connect({ url: controlPlaneUrl, keyId: stored.keyId, secret: stored.secret });
+          tunnelStatus = "connecting";
+        } catch (error) {
+          tunnelStatus = "failed";
+          tunnelError = error instanceof Error ? error.message : String(error);
+        }
+      }
+    }
+    return reply.code(201).send({
+      data: {
+        remote: {
+          id: stored.id,
+          url: stored.url,
+          keyId: stored.keyId,
+          pairedAt: stored.pairedAt,
+          active: stored.active !== false,
+        },
+        tunnel: {
+          status: tunnelStatus,
+          ...(tunnelError ? { error: tunnelError } : {}),
+        },
+      },
+    });
+  });
+
+  app.get("/api/node-agent/runtimes", async () => ({
+    data: state.nodeRuntimes.list(),
+  }));
+
+  app.post("/api/node-agent/runtimes", async (request, reply) => reply.code(201).send({ data: state.createRuntime(CreateNodeRuntimeSchema.parse(request.body)) }));
+
+  app.patch("/api/node-agent/runtimes/:id", async (request) => ({
+    data: state.updateRuntime((request.params as { id: string }).id, UpdateNodeRuntimeSchema.parse(request.body)),
+  }));
+
+  app.delete("/api/node-agent/runtimes/:id", async (request) => ({
+    data: {
+      deleted: state.deleteRuntime((request.params as { id: string }).id),
+    },
+  }));
+
+  app.post("/api/node-agent/runtimes/:id/check", async (request) => {
+    const runtime = state.requireRuntime((request.params as { id: string }).id);
+    return { data: await state.checkRuntime(runtime.id, runtimeAdapters.forRuntime(runtime)) };
+  });
+
+  app.get("/api/node-agent/local-folders", async () => ({
+    data: state.localFolders.list(),
+  }));
+
+  app.get("/api/node-agent/folders/tree", async (request) => ({
+    data: listFolderTree(FolderTreeQuerySchema.parse(request.query)),
+  }));
+
+  app.post("/api/node-agent/local-folders", async (request, reply) => reply.code(201).send({ data: state.createLocalFolder(CreateLocalFolderSchema.parse(request.body)) }));
+
+  app.delete("/api/node-agent/local-folders/:id", async (request) => ({
+    data: {
+      deleted: state.localFolders.delete((request.params as { id: string }).id),
+    },
+  }));
+
+  app.get("/api/node-agent/instances", async () => ({
+    data: state.listInstances(),
+  }));
+
+  app.post("/api/node-agent/instances", async (request, reply) => {
+    const instance = state.createInstance(CreateNodeInstanceSchema.parse(request.body));
+    eventForwarder.syncNow();
+    return reply.code(201).send({ data: instance });
+  });
+
+  app.patch("/api/node-agent/instances/:id", async (request) => {
+    const id = (request.params as { id: string }).id;
+    const current = state.requireInstance(id);
+    const parsed = UpdateNodeInstanceSchema.parse(request.body);
+    const updated = ControlledInstanceSchema.parse({ ...current, ...parsed, updatedAt: now() });
+    const stored = state.controlledInstances.put(updated);
+    eventForwarder.syncNow();
+    return { data: stored };
+  });
+
+  app.post("/api/node-agent/instances/:id/register", async (request, reply) => {
+    const id = (request.params as { id: string }).id;
+    const registered = state.registerInstance(id, ControlledInstanceRegisterSchema.parse(request.body), bearerToken(request.headers));
+    eventForwarder.syncNow();
+    logDiagnostic({ instanceId: id, action: "register", protocolVersion: registered.protocolVersion, build: registered.build, targetStatus: registered.targetStatus, targetStrategy: registered.target.strategy }, "node instance registered");
+    return reply.code(201).send({ data: registered });
+  });
+
+  app.post("/api/node-agent/instances/:id/heartbeat", async (request) => {
+    const id = (request.params as { id: string }).id;
+    const updated = state.heartbeatInstance(id, ControlledInstanceHeartbeatSchema.parse(request.body), bearerToken(request.headers));
+    eventForwarder.syncNow();
+    logDiagnostic({ instanceId: id, action: "heartbeat", status: updated.status, health: updated.health, protocolVersion: updated.protocolVersion, build: updated.build, targetStatus: updated.targetStatus, apps: updated.apps.runningCount }, "node instance heartbeat accepted");
+    return { data: updated };
+  });
+
+  app.get("/api/node-agent/events", { websocket: true }, (socket) => {
+    const ws = socket as WebSocket;
+    ws.send(JSON.stringify({ type: "node-agent.events.connected", nodeId, serverTime: new Date().toISOString() }));
+    const dispose = eventForwarder.addOutput(ws);
+    ws.on("close", dispose);
+    ws.on("error", dispose);
+  });
+
+  app.get("/api/node-agent/docker/images", async () => ({
+    data: await listLocalDockerImages(options.dockerCommandRunner),
+  }));
+
+  app.post("/api/node-agent/instances/:id/start", async (request) => {
+    const id = (request.params as { id: string }).id;
+    const body = NodeInstanceLifecycleRequestSchema.parse(request.body);
+    const instance = await startNodeInstance(state, runtimeAdapters, fetchImpl, id, body.modelEnv, lifecycleLoggers);
+    eventForwarder.syncNow();
+    return { data: instance };
+  });
+
+  app.post("/api/node-agent/instances/:id/stop", async (request) => {
+    const current = state.requireInstance((request.params as { id: string }).id);
+    logDiagnostic({ instanceId: current.id, action: "stop", runtimeId: current.runtimeId, containerName: current.runtime.containerName }, "node instance stop requested");
+    const adapter = runtimeAdapters.forRuntime(state.requireRuntime(current.runtimeId));
+    const result = await adapter.stop(state.context(current));
+    const updated = ControlledInstanceSchema.parse({
+      ...current,
+      ...result,
+      agentStatus: "offline",
+      targetStatus: "unknown",
+      uiAccessStatus: "unknown",
+      updatedAt: now(),
+    });
+    const stored = state.controlledInstances.put(updated);
+    eventForwarder.syncNow();
+    logDiagnostic({ instanceId: current.id, action: "stop", status: stored.status, connectionStatus: stored.connectionStatus, containerName: stored.runtime.containerName }, "node instance stop completed");
+    return { data: stored };
+  });
+
+  app.post("/api/node-agent/instances/:id/restart", async (request) => {
+    const id = (request.params as { id: string }).id;
+    const current = state.requireInstance(id);
+    const body = NodeInstanceLifecycleRequestSchema.parse(request.body);
+    logDiagnostic({ instanceId: id, action: "restart", runtimeId: current.runtimeId, imageId: current.imageId, containerName: current.runtime.containerName }, "node instance restart requested");
+    const adapter = runtimeAdapters.forRuntime(state.requireRuntime(current.runtimeId));
+    const result = await adapter.restart(state.context(current, body.modelEnv));
+    const probeTarget = ControlledInstanceSchema.parse({ ...current, ...result, target: result.target ? { ...current.target, ...result.target } : current.target, updatedAt: now() });
+    const probedEndpointStatus = await probeInstanceEndpoint(fetchImpl, probeTarget);
+    const updated = ControlledInstanceSchema.parse({
+      ...current,
+      ...result,
+      target: result.target ? { ...current.target, ...result.target, status: probedEndpointStatus } : current.target,
+      targetStatus: probedEndpointStatus,
+      uiAccessStatus: probedEndpointStatus,
+      connectionStatus: result.connectionStatus,
+      updatedAt: now(),
+    });
+    const stored = state.controlledInstances.put(updated);
+    await autoImportAgentConfig(fetchImpl, stored, "restart", lifecycleLoggers);
+    eventForwarder.syncNow();
+    logDiagnostic({ instanceId: id, action: "restart", status: stored.status, connectionStatus: stored.connectionStatus, targetStatus: stored.targetStatus, targetWeb: stored.target.web, containerName: stored.runtime.containerName }, "node instance restart completed");
+    return { data: stored };
+  });
+
+  app.post("/api/node-agent/instances/:id/delete", async (request) => {
+    const id = (request.params as { id: string }).id;
+    const current = state.requireInstance(id);
+    logDiagnostic({ instanceId: id, action: "delete", runtimeId: current.runtimeId, containerName: current.runtime.containerName }, "node instance delete requested");
+    const adapter = runtimeAdapters.forRuntime(state.requireRuntime(current.runtimeId));
+    await adapter.delete(state.context(current));
+    logDiagnostic({ instanceId: id, action: "delete" }, "node instance delete completed");
+    const deleted = state.controlledInstances.delete(id);
+    eventForwarder.syncNow();
+    return { data: { deleted } };
+  });
+
+  app.post("/api/node-agent/instances/:id/proxy", async (request, reply) => {
+    const id = (request.params as { id: string }).id;
+    const parsed = ProxyRequestSchema.parse(request.body);
+    const instanceBase = nodeLocalInstanceWebBase(state.requireInstance(id));
+    const proxyPath = parsed.path.startsWith("/") ? parsed.path : `/${parsed.path}`;
+    logDiagnostic({ instanceId: id, action: "proxy", method: parsed.method, path: proxyPath, instanceBase }, "node instance proxy requested");
+    const response = await fetchImpl(`${instanceBase}${proxyPath}`, {
+      method: parsed.method,
+      headers: {
+        ...parsed.headers,
+      },
+      body: proxyRequestBody(parsed),
+    });
+    const contentType = response.headers.get("content-type") || "application/octet-stream";
+    const text = await response.text();
+    logDiagnostic({ instanceId: id, action: "proxy", method: parsed.method, path: proxyPath, statusCode: response.status, contentType }, "node instance proxy completed");
+    reply.code(response.status).type(contentType).send(text);
+  });
+
+  app.post("/api/node-agent/instances/:id/proxy/raw", async (request) => {
+    const id = (request.params as { id: string }).id;
+    const parsed = ProxyRequestSchema.parse(request.body);
+    const instanceBase = nodeLocalInstanceWebBase(state.requireInstance(id));
+    const proxyPath = parsed.path.startsWith("/") ? parsed.path : `/${parsed.path}`;
+    logDiagnostic({ instanceId: id, action: "proxy.raw", method: parsed.method, path: proxyPath, instanceBase }, "node instance raw proxy requested");
+    const response = await fetchImpl(`${instanceBase}${proxyPath}`, {
+      method: parsed.method,
+      headers: {
+        ...parsed.headers,
+      },
+      body: proxyRequestBody(parsed),
+    });
+    const bytes = Buffer.from(await response.arrayBuffer());
+    logDiagnostic({ instanceId: id, action: "proxy.raw", method: parsed.method, path: proxyPath, statusCode: response.status, byteLength: bytes.length }, "node instance raw proxy completed");
+    return {
+      data: {
+        status: response.status,
+        headers: proxyResponseHeaders(response.headers),
+        bodyBase64: bytes.toString("base64"),
+      },
+    };
+  });
+
+  app.get("/api/node-agent/instances/:id/proxy/ws/*", { websocket: true }, (socket, request) => {
+    const id = (request.params as { id: string; "*": string }).id;
+    const suffix = (request.params as { id: string; "*": string })["*"] || "";
+    const queryIndex = request.url.indexOf("?");
+    const query = queryIndex >= 0 ? request.url.slice(queryIndex) : "";
+    let upstream: WebSocket | undefined;
+    try {
+      const instanceBase = nodeLocalInstanceWebBase(state.requireInstance(id));
+      const upstreamUrl = new URL(`/${suffix}${query}`, `${instanceBase}/`);
+      upstreamUrl.protocol = upstreamUrl.protocol === "https:" ? "wss:" : "ws:";
+      const protocols = proxyWebSocketProtocols(request.headers);
+      logDiagnostic({ instanceId: id, action: "proxy.ws", path: `/${suffix}${query}`, upstreamUrl: upstreamUrl.toString(), protocols: protocols || [] }, "node instance websocket proxy opening");
+      upstream = protocols ? new WebSocket(upstreamUrl, protocols) : new WebSocket(upstreamUrl);
+      upstream.on("open", () => {
+        logDiagnostic({ instanceId: id, action: "proxy.ws", path: `/${suffix}${query}` }, "node instance websocket proxy opened");
+        socket.on("message", (data, isBinary) => upstream?.readyState === WebSocket.OPEN && upstream.send(websocketPayload(data, isBinary)));
+        socket.on("close", () => upstream?.close());
+        socket.on("error", () => upstream?.close());
+      });
+      upstream.on("message", (data, isBinary) => {
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(isBinary ? data : data.toString());
+        }
+      });
+      upstream.on("close", () => {
+        logDiagnostic({ instanceId: id, action: "proxy.ws", path: `/${suffix}${query}` }, "node instance websocket proxy closed");
+        socket.close();
+      });
+      upstream.on("error", (error) => {
+        logDiagnostic({ instanceId: id, action: "proxy.ws", path: `/${suffix}${query}`, error: error instanceof Error ? error.message : String(error) }, "node instance websocket proxy failed");
+        socket.close(1011, "Instance websocket proxy failed.");
+      });
+    } catch (error) {
+      logDiagnostic({ instanceId: id, action: "proxy.ws", path: `/${suffix}${query}`, error: error instanceof Error ? error.message : String(error) }, "node instance websocket endpoint unavailable");
+      upstream?.close();
+      socket.close(1011, "Instance websocket endpoint is not reachable.");
+    }
+  });
+
+  return app;
+}
+
+function controlPlaneTunnelUrl(options: RunNodeAgentServerOptions) {
+  const explicit = options.controlPlaneTunnelUrl || process.env.TASK_HANDOFF_CONTROL_PLANE_TUNNEL_URL;
+  if (explicit) {
+    return explicit;
+  }
+  const base = process.env.TASK_HANDOFF_CONTROL_PLANE_URL;
+  if (!base) {
+    return undefined;
+  }
+  const url = new URL("/api/node-agent/tunnel", base);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url.toString();
+}
+
+function controlPlaneTunnelUrlForBase(controlPlaneUrl: string) {
+  const url = new URL("/api/node-agent/tunnel", controlPlaneUrl);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url.toString();
+}
+
+function assertHttpControlPlaneUrl(value: string) {
+  const url = new URL(value);
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    const error = new Error("Control-plane URL must use http or https.");
+    Object.assign(error, { statusCode: 400, code: "NODE_AGENT_REMOTE_CONTROL_PLANE_URL_INVALID" });
+    throw error;
+  }
+  return url.toString().replace(/\/$/, "");
+}
+
+async function completeControlPlaneJoin(fetchImpl: typeof fetch, controlPlaneUrl: string, input: {
+  joinToken: string;
+  nodeId: string;
+  nodeName?: string;
+  keyId: string;
+  secret: string;
+  pairedAt: string;
+}) {
+  const response = await fetchImpl(new URL("/api/node-join/complete", controlPlaneUrl).toString(), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const payload = (await response.json().catch(() => ({}))) as { data?: { id?: unknown; name?: unknown }; error?: { message?: string; code?: string } };
+  if (!response.ok) {
+    const error = new Error(payload.error?.message || `Control-plane node join failed with HTTP ${response.status}.`);
+    Object.assign(error, { statusCode: response.status, code: payload.error?.code || "NODE_AGENT_REMOTE_JOIN_FAILED" });
+    throw error;
+  }
+  return payload.data || {};
+}
+
+function connectReverseTunnel(app: Awaited<ReturnType<typeof createNodeAgentApp>>, input: {
+  tunnelUrl: string;
+  nodeId: string;
+  port: number | string | (() => number | string);
+  token?: string;
+  keyId?: string;
+  secret?: string;
+}) {
+  const url = new URL(input.tunnelUrl);
+  url.searchParams.set("nodeId", input.nodeId);
+  const tunnelHeaders = input.secret
+    ? createNodeAgentHmacHeaders({
+        nodeId: input.nodeId,
+        keyId: input.keyId,
+        secret: input.secret,
+        method: "GET",
+        pathWithQuery: `${url.pathname}${url.search}`,
+      })
+    : {};
+  const socket = new WebSocket(url, { headers: tunnelHeaders });
+  const streams = new Map<string, { upstream?: WebSocket; tunnel?: WebSocket; close: (code?: number, reason?: string) => void }>();
+  let disposeEventForwarderOutput: (() => void) | undefined;
+  const localNodeAgentWsUrl = (route: string) => {
+    const path = route.startsWith("/") ? route : `/${route}`;
+    const port = typeof input.port === "function" ? input.port() : input.port;
+    const localUrl = new URL(`/api/node-agent${path}`, `http://127.0.0.1:${port}`);
+    localUrl.protocol = "ws:";
+    return localUrl;
+  };
+  const controlPlaneStreamUrl = (streamId: string) => {
+    const streamUrl = new URL(url);
+    streamUrl.pathname = `${streamUrl.pathname.replace(/\/$/, "")}/streams/${encodeURIComponent(streamId)}`;
+    return streamUrl;
+  };
+  const controlPlaneStreamHeaders = (streamUrl: URL) => input.secret
+    ? createNodeAgentHmacHeaders({
+        nodeId: input.nodeId,
+        keyId: input.keyId,
+        secret: input.secret,
+        method: "GET",
+        pathWithQuery: `${streamUrl.pathname}${streamUrl.search}`,
+      })
+    : {};
+  const closeStream = (streamId: string, code = 1000, reason = "") => {
+    const stream = streams.get(streamId);
+    streams.delete(streamId);
+    stream?.upstream?.close(code, reason);
+    stream?.tunnel?.close(code, reason);
+  };
+  socket.on("open", () => {
+    socket.send(JSON.stringify({ type: "node-agent.identify", nodeId: input.nodeId, serverTime: new Date().toISOString() }));
+    disposeEventForwarderOutput = app.nodeAgentEventForwarder?.addOutput(socket);
+  });
+  socket.on("close", () => {
+    for (const streamId of streams.keys()) {
+      closeStream(streamId, 1001, "Reverse tunnel disconnected.");
+    }
+    disposeEventForwarderOutput?.();
+    disposeEventForwarderOutput = undefined;
+  });
+  socket.on("message", async (raw) => {
+    let message: unknown;
+    try {
+      message = JSON.parse(String(raw));
+    } catch {
+      socket.send(JSON.stringify({ type: "node-agent.error", code: "INVALID_JSON" }));
+      return;
+    }
+    const record = message && typeof message === "object" ? message as Record<string, unknown> : {};
+    if (record.type === "control-plane.websocket.open") {
+      const streamId = typeof record.streamId === "string" ? record.streamId : "";
+      const route = typeof record.route === "string" ? record.route : "";
+      const protocols = Array.isArray(record.protocols) ? record.protocols.filter((item): item is string => typeof item === "string") : undefined;
+      try {
+        const headers = input.token ? { authorization: `Bearer ${input.token}` } : undefined;
+        const upstream = protocols?.length ? new WebSocket(localNodeAgentWsUrl(route), protocols, { headers }) : new WebSocket(localNodeAgentWsUrl(route), { headers });
+        const streamUrl = controlPlaneStreamUrl(streamId);
+        const tunnel = new WebSocket(streamUrl, { headers: controlPlaneStreamHeaders(streamUrl) });
+        streams.set(streamId, {
+          upstream,
+          tunnel,
+          close: (code = 1000, reason = "") => {
+            upstream.close(code, reason);
+            tunnel.close(code, reason);
+          },
+        });
+        upstream.on("open", () => {
+          socket.send(JSON.stringify({ type: "node-agent.websocket.open", streamId, protocol: upstream.protocol }));
+        });
+        bridgeWebSockets(tunnel, upstream, {
+          pendingFrameLimit: 256,
+          upstreamOpenTimeoutMs: 10_000,
+          onClientClose: () => {
+            streams.delete(streamId);
+          },
+          onClientError: (error) => {
+            streams.delete(streamId);
+            socket.send(JSON.stringify({
+              type: "node-agent.websocket.error",
+              streamId,
+              message: error instanceof Error ? error.message : String(error),
+            }));
+          },
+          onUpstreamClose: (code, reason) => {
+            streams.delete(streamId);
+            socket.send(JSON.stringify({
+              type: "node-agent.websocket.close",
+              streamId,
+              code: typeof code === "number" ? code : 1000,
+              reason: Buffer.isBuffer(reason) ? reason.toString("utf8") : String(reason || ""),
+            }));
+          },
+          onUpstreamError: (error) => {
+            streams.delete(streamId);
+            socket.send(JSON.stringify({
+              type: "node-agent.websocket.error",
+              streamId,
+              message: error instanceof Error ? error.message : String(error),
+            }));
+          },
+        });
+      } catch (error) {
+        socket.send(JSON.stringify({
+          type: "node-agent.websocket.error",
+          streamId,
+          message: error instanceof Error ? error.message : String(error),
+        }));
+      }
+      return;
+    }
+    if (record.type === "control-plane.websocket.close") {
+      const streamId = typeof record.streamId === "string" ? record.streamId : "";
+      closeStream(streamId, typeof record.code === "number" ? record.code : 1000, typeof record.reason === "string" ? record.reason : "");
+      return;
+    }
+    if (record.type === "control-plane.request") {
+      const requestId = typeof record.requestId === "string" ? record.requestId : "";
+      const init = record.init && typeof record.init === "object" ? record.init as Record<string, unknown> : {};
+      const route = typeof record.route === "string" && record.route.startsWith("/") ? record.route : "/health";
+      const headers = init.headers && typeof init.headers === "object" ? init.headers as Record<string, string> : {};
+      try {
+        const response: NodeAgentInjectResponse = await app.inject({
+          method: nodeAgentProxyMethod(init.method),
+          url: `/api/node-agent${route}`,
+          headers: {
+            ...headers,
+            ...(input.token ? { authorization: `Bearer ${input.token}` } : {}),
+          },
+          payload: typeof init.body === "string" ? init.body : undefined,
+        });
+        socket.send(
+          JSON.stringify({
+            type: "node-agent.response",
+            requestId,
+            status: response.statusCode,
+            headers: response.headers,
+            body: response.body,
+          }),
+        );
+      } catch (error) {
+        socket.send(
+          JSON.stringify({
+            type: "node-agent.response",
+            requestId,
+            status: 502,
+            error: {
+              code: "NODE_AGENT_REVERSE_INJECT_FAILED",
+              message: error instanceof Error ? error.message : String(error),
+            },
+          }),
+        );
+      }
+    }
+  });
+  return socket;
+}
+
+function createReverseTunnelManager(app: Awaited<ReturnType<typeof createNodeAgentApp>>, options: RunNodeAgentServerOptions, paths: NodeAgentStorePaths, nodeId: string) {
+  const token = options.token || process.env.TASK_HANDOFF_NODE_AGENT_TOKEN;
+  const sockets = new Map<string, WebSocket>();
+  const connect = (remote: { url: string; keyId?: string; secret?: string }) => {
+    const key = remote.url.replace(/\/$/, "");
+    sockets.get(key)?.close(1000, "Reverse tunnel reconnecting.");
+    const socket = connectReverseTunnel(app, {
+      tunnelUrl: controlPlaneTunnelUrlForBase(remote.url),
+      nodeId,
+      port: () => app.nodeAgentState!.currentListenerPort,
+      token,
+      keyId: remote.keyId,
+      secret: remote.secret,
+    });
+    sockets.set(key, socket);
+    socket.on("close", () => {
+      if (sockets.get(key) === socket) {
+        sockets.delete(key);
+      }
+    });
+    return socket;
+  };
+  const connectConfigured = () => {
+    const explicitTunnelUrl = controlPlaneTunnelUrl(options);
+    if (explicitTunnelUrl) {
+      const tunnelSecret = nodeAgentReverseTunnelSecret(
+        paths,
+        process.env.TASK_HANDOFF_CONTROL_PLANE_URL,
+        options.remoteSecret || process.env.TASK_HANDOFF_NODE_AGENT_REMOTE_SECRET,
+        options.remoteKeyId || process.env.TASK_HANDOFF_NODE_AGENT_REMOTE_KEY_ID,
+      );
+      const key = (process.env.TASK_HANDOFF_CONTROL_PLANE_URL || explicitTunnelUrl).replace(/\/$/, "");
+      sockets.get(key)?.close(1000, "Reverse tunnel reconnecting.");
+      const socket = connectReverseTunnel(app, {
+        tunnelUrl: explicitTunnelUrl,
+        nodeId,
+        port: () => app.nodeAgentState!.currentListenerPort,
+        token,
+        keyId: tunnelSecret?.keyId,
+        secret: tunnelSecret?.secret,
+      });
+      sockets.set(key, socket);
+    }
+    for (const remote of readNodeAgentIdentityRecord(paths)?.remoteControlPlanes || []) {
+      if (remote.url && remote.active !== false) {
+        connect({ url: remote.url, keyId: remote.keyId, secret: remote.secret });
+      }
+    }
+  };
+  const closeAll = () => {
+    for (const socket of sockets.values()) {
+      socket.close(1001, "Node agent shutting down.");
+    }
+    sockets.clear();
+  };
+  return { connect, connectConfigured, closeAll };
+}
+
+export async function listenNodeAgentIpcServer(app: Awaited<ReturnType<typeof createNodeAgentApp>>, ipcPath: string) {
+  prepareNodeAgentIpcPath(ipcPath);
+  const ipcServer = http.createServer((request, response) => {
+    app.server.emit("request", request, response);
+  });
+  ipcServer.on("upgrade", (request, socket, head) => {
+    app.server.emit("upgrade", request, socket, head);
+  });
+  await new Promise<void>((resolve, reject) => {
+    ipcServer.once("error", reject);
+    ipcServer.listen(ipcPath, () => {
+      ipcServer.off("error", reject);
+      resolve();
+    });
+  });
+  return ipcServer;
+}
+
+export async function runNodeAgentServer(options: RunNodeAgentServerOptions) {
+  const paths = nodeAgentStorePaths(options.dataDir);
+  const defaults = bootstrapListener(options.host, options.port);
+  const hadPersistedSettings = fs.existsSync(paths.settingsPath);
+  const settings = runtimeSettingsFile(paths, defaults);
+  const listenerConfig = settings.get().externalListener;
+  const lock = acquireProcessSingletonLock(defaultNodeAgentSingletonLockPath(), {
+    component: "node-agent",
+    dataDir: paths.dataDir,
+    host: listenerHost(listenerConfig.bindScope),
+    port: listenerConfig.port,
+  });
+  try {
+    const effectiveOptions = { ...options, port: listenerConfig.port };
+    const app = await createNodeAgentApp(effectiveOptions);
+    const nodeId = resolveNodeAgentId(paths, options.nodeId || process.env.TASK_HANDOFF_NODE_ID);
+    const reverseTunnels = createReverseTunnelManager(app, effectiveOptions, paths, nodeId);
+    app.decorate("nodeAgentReverseTunnels", reverseTunnels);
+    const listenerManager = new NodeAgentExternalListenerManager({
+      app,
+      state: app.nodeAgentState!,
+      settings,
+      config: listenerConfig,
+      source: hadPersistedSettings ? "persisted" : "bootstrap",
+    });
+    app.decorate("nodeAgentListenerManager", listenerManager);
+    let ipcServer: http.Server | undefined;
+    installGracefulShutdown(app, () => {
+      reverseTunnels.closeAll();
+      ipcServer?.close();
+    });
+    app.addHook("onClose", async () => {
+      ipcServer?.close();
+      lock.release();
+    });
+    try {
+      await app.ready();
+      const ipcPath = options.ipcPath || process.env.TASK_HANDOFF_NODE_AGENT_IPC_PATH || nodeAgentIpcPath(paths.dataDir);
+      ipcServer = await listenNodeAgentIpcServer(app, ipcPath);
+      await listenerManager.start();
+      reverseTunnels.connectConfigured();
+      await app.nodeAgentRestoreLocalInstances?.();
+    } catch (error) {
+      await app.close();
+      throw error;
+    }
+  } catch (error) {
+    lock.release();
+    throw error;
+  }
+}

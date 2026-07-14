@@ -1,0 +1,1018 @@
+/* Cockpit theme overrides */
+body {
+  background:
+    radial-gradient(circle at 52% -8%, var(--brand-accent-soft), transparent 32rem),
+    linear-gradient(180deg, var(--workspace-bg) 0%, var(--surface-inset) 100%);
+}
+
+.app-shell {
+  background:
+    radial-gradient(circle at 70% 0%, var(--brand-accent-soft), transparent 34rem),
+    var(--workspace-bg);
+  color: var(--text);
+}
+
+.desktop-launcher {
+  border-right-color: var(--line);
+  background: linear-gradient(180deg, var(--surface) 0%, var(--surface-inset) 100%);
+  box-shadow: inset -1px 0 0 var(--workspace-grid);
+}
+
+.native-macos-titlebar .desktop-launcher::before {
+  background: var(--surface-overlay);
+  backdrop-filter: blur(14px);
+}
+
+.launcher-button {
+  color: var(--text);
+  transition:
+    background 120ms ease,
+    color 120ms ease,
+    transform 120ms ease;
+}
+
+.launcher-button:hover,
+.launcher-button:focus-visible {
+  background: var(--surface-subtle);
+  color: var(--brand-accent-foreground);
+  transform: translateY(-1px);
+}
+
+.launcher-button::before {
+  content: "";
+  position: absolute;
+  left: -8px;
+  width: 3px;
+  height: 0;
+  border-radius: 999px;
+  background: var(--brand-accent);
+  transition: height 120ms ease;
+}
+
+.launcher-button:has(.launcher-running)::before {
+  height: 22px;
+}
+
+.launcher-running {
+  width: 8px;
+  min-width: 8px;
+  height: 8px;
+  overflow: hidden;
+  background: var(--brand-accent);
+  box-shadow: 0 0 14px var(--focus-ring);
+  text-indent: 999px;
+}
+
+.launcher-popover {
+  border-color: var(--line);
+  background: var(--surface-overlay);
+  box-shadow:
+    var(--shadow-panel),
+    inset 0 1px 0 var(--workspace-grid);
+}
+
+.launcher-popover-head {
+  border-bottom-color: var(--line);
+}
+
+.launcher-popover-head strong,
+.launcher-session {
+  color: var(--text);
+}
+
+.launcher-popover-head span,
+.launcher-session-meta,
+.launcher-session-empty {
+  color: var(--text-muted);
+}
+
+.launcher-session:hover,
+.launcher-session:focus-within {
+  background: var(--surface-subtle);
+  color: var(--brand-accent-foreground);
+}
+
+.launcher-session-close {
+  color: var(--text-muted);
+}
+
+.launcher-new-instance {
+  background: var(--surface-subtle);
+  color: var(--brand-accent-muted);
+}
+
+.launcher-new-instance:hover,
+.launcher-new-instance:focus-visible {
+  background: var(--surface-raised);
+  color: var(--brand-accent-foreground);
+}
+
+.launcher-session-close:hover,
+.launcher-session-close:focus-visible {
+  background: var(--surface-raised);
+  color: var(--brand-accent-foreground);
+}
+
+.topbar {
+  border-bottom-color: var(--line);
+  background: var(--surface-overlay);
+  backdrop-filter: blur(14px);
+}
+
+.brand {
+  color: var(--text);
+}
+
+.event-state {
+  background: var(--surface-subtle);
+  color: var(--text-muted);
+}
+
+.event-state[data-state="connected"] {
+  background: var(--status-success-bg);
+  color: var(--status-success);
+}
+
+.event-state[data-state="error"],
+.event-state[data-state="disconnected"] {
+  background: var(--status-danger-bg);
+  color: var(--status-danger);
+}
+
+.last-event,
+.section-head span,
+.stats dt,
+.diagnostics-card dt,
+.diagnostics-list small,
+.item-meta,
+.session-metadata dt,
+.tab-kind,
+.tab-close,
+.gui-session dt,
+.row span,
+.field-row,
+.catalog-editor p,
+.settings-meta,
+.conversation-meta,
+.log-file header span {
+  color: var(--text-muted);
+}
+
+.desktop-workspace {
+  background:
+    linear-gradient(var(--workspace-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--workspace-grid) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+.desktop-tabs,
+.workspace-tabs {
+  border-color: var(--line);
+  background: var(--surface);
+  box-shadow:
+    var(--shadow-panel),
+    inset 0 1px 0 var(--workspace-grid);
+}
+
+.workspace-tab-list {
+  gap: 0;
+  border-bottom-color: var(--line);
+  background: var(--surface-inset);
+  padding: 0 8px;
+}
+
+.workspace-workbar {
+  border-bottom-color: var(--line);
+  background: var(--surface-inset);
+}
+
+.workspace-session-actions {
+  color: var(--text-muted);
+}
+
+.workspace-tab-list button {
+  position: relative;
+  min-height: 32px;
+  border: 0;
+  border-left: 1px solid transparent;
+  border-right: 1px solid transparent;
+  border-radius: 0;
+  color: var(--text-muted);
+  padding: 0 12px;
+}
+
+.workspace-tab-list button:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.workspace-tab-list button.dragging {
+  opacity: 0.55;
+}
+
+.workspace-tab-list button.active {
+  border-color: var(--line);
+  background: var(--surface-raised);
+  color: var(--text-strong);
+}
+
+.workspace-tab-list button.active::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--brand-accent);
+}
+
+.tab-close {
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.tab-close:hover {
+  background: var(--workspace-tab-close-hover-bg);
+  color: var(--workspace-tab-close-hover-text);
+}
+
+.workspace-tab-list button:hover .tab-close,
+.workspace-tab-list button.active .tab-close {
+  opacity: 1;
+}
+
+.desktop-tab-toolbar {
+  border-bottom-color: var(--line);
+  background: var(--surface-raised);
+  color: var(--text-muted);
+}
+
+.segmented-control {
+  border-color: var(--line-strong);
+  background: var(--surface-overlay);
+}
+
+.segmented-control button {
+  color: var(--text-muted);
+}
+
+.segmented-control button:hover {
+  color: var(--text);
+}
+
+.segmented-control button[data-state="on"] {
+  background: var(--surface-active);
+  color: var(--white);
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    var(--shadow-soft);
+}
+
+.desktop-tab-toolbar .inline-flex,
+.workspace-session-actions .inline-flex,
+.topbar .inline-flex,
+.modal-header .inline-flex,
+.session-actions .inline-flex,
+.catalog-actions .inline-flex,
+.editor-actions .inline-flex,
+.actions .inline-flex {
+  border-color: var(--workspace-button-border);
+  background: var(--workspace-button-bg);
+  color: var(--workspace-button-text);
+}
+
+.desktop-tab-toolbar .inline-flex:hover,
+.workspace-session-actions .inline-flex:hover,
+.topbar .inline-flex:hover,
+.modal-header .inline-flex:hover,
+.session-actions .inline-flex:hover,
+.catalog-actions .inline-flex:hover,
+.editor-actions .inline-flex:hover,
+.actions .inline-flex:hover {
+  border-color: var(--workspace-button-hover-border);
+  background: var(--workspace-button-hover-bg);
+  color: var(--workspace-button-hover-text);
+}
+
+.workspace-tab-panel,
+.desktop-tab-panel {
+  background: var(--workspace-bg);
+}
+
+.workspace-vnc-frame,
+.vnc-frame,
+.web-frame,
+.terminal-panel {
+  border-color: var(--line);
+  border-radius: 0;
+  background: var(--terminal-bg);
+}
+
+.desktop-empty {
+  border-color: var(--line);
+  background:
+    radial-gradient(circle at 50% 40%, var(--brand-accent-soft), transparent 18rem),
+    var(--surface);
+  color: var(--text-muted);
+}
+
+.desktop-empty h1 {
+  color: var(--text);
+}
+
+.settings-modal,
+.modal-panel {
+  border-color: var(--line);
+  background: var(--surface);
+  box-shadow:
+    var(--shadow-panel),
+    inset 0 1px 0 var(--workspace-grid);
+}
+
+.modal-header {
+  border-bottom-color: var(--line);
+  background: var(--surface-raised);
+}
+
+.modal-header h2 {
+  color: var(--text-strong);
+}
+
+.modal-header p {
+  color: var(--text-muted);
+}
+
+.settings-nav {
+  border-right-color: var(--line);
+  background: var(--surface-inset);
+}
+
+.settings-nav button {
+  position: relative;
+  color: var(--text-muted);
+}
+
+.settings-nav button.active,
+.settings-nav button:hover {
+  background: var(--surface-hover);
+  color: var(--text-strong);
+}
+
+.settings-nav button.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  border-radius: 999px;
+  background: var(--brand-accent);
+}
+
+.settings-content,
+.modal-scroll,
+.panel,
+.settings-pane {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.stats div,
+.row,
+.receiver-logs,
+.diagnostics-card,
+.session-card,
+.catalog-editor,
+.settings-list .rounded-lg,
+.catalog .rounded-lg,
+.rounded-lg.border.bg-card,
+.log-file,
+.channel-grid .rounded-lg {
+  border-color: var(--line);
+  background: var(--surface-raised);
+  color: var(--text);
+  box-shadow: inset 0 1px 0 var(--workspace-grid);
+}
+
+input,
+textarea,
+.native-select,
+.token-input {
+  border-color: var(--line-strong);
+  background: var(--surface-inset);
+  color: var(--text);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-subtle);
+}
+
+input:focus,
+textarea:focus,
+.native-select:focus,
+.token-input:focus {
+  border-color: var(--brand-accent);
+  outline: none;
+  box-shadow: 0 0 0 2px var(--brand-accent-soft);
+}
+
+.receiver-logs pre,
+.logs-panel pre,
+.catalog-json,
+.terminal-canvas-shell,
+.terminal-canvas,
+.log-file pre {
+  background: var(--terminal-surface);
+  color: var(--terminal-text);
+}
+
+.session-error,
+.form-error {
+  color: var(--status-danger) !important;
+}
+
+.dot-ok {
+  background: var(--brand-accent);
+}
+
+.dot-bad {
+  background: var(--status-warning);
+}
+
+.badge-on {
+  background: var(--brand-accent-soft);
+  color: var(--status-success);
+}
+
+.badge-off {
+  background: var(--surface-subtle);
+  color: var(--text-muted);
+}
+
+/* Settings console skin */
+.settings-modal {
+  --console-bg: var(--surface-inset);
+  --console-surface: var(--surface-overlay);
+  --console-surface-2: var(--surface-raised);
+  --console-surface-3: var(--surface-active);
+  --console-border: var(--line);
+  --console-border-strong: var(--line-strong);
+  --console-text: var(--surface-subtle);
+  --console-muted: var(--text-muted);
+  --console-dim: var(--text-subtle);
+  --console-accent: var(--brand-accent);
+  --console-accent-soft: var(--brand-accent-soft);
+  --console-danger: var(--status-danger);
+  --console-success: var(--status-success);
+}
+
+.settings-modal .settings-content,
+.settings-modal .panel,
+.settings-modal .settings-pane {
+  background:
+    linear-gradient(var(--workspace-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--workspace-grid) 1px, transparent 1px),
+    var(--console-bg);
+  background-size: 36px 36px;
+  color: var(--console-text);
+}
+
+.settings-modal .panel,
+.settings-modal .settings-pane {
+  padding: 18px;
+}
+
+.settings-modal .panel h1,
+.settings-modal .section-head h2 {
+  color: var(--console-text);
+  font-size: 18px;
+  letter-spacing: 0;
+}
+
+.settings-modal .section-head {
+  min-height: 34px;
+  border-bottom: 1px solid var(--console-border);
+  padding-bottom: 10px;
+}
+
+.settings-modal .section-head span,
+.settings-modal [class*="text-muted"],
+.settings-modal p,
+.settings-modal dt,
+.settings-modal .field-row,
+.settings-modal .settings-meta,
+.settings-modal .conversation-meta,
+.settings-modal .task-meta,
+.settings-modal .item-meta,
+.settings-modal .session-metadata dt,
+.settings-modal .conversation-cwd,
+.settings-modal .conversation-card-footer > span,
+.settings-modal .logs-empty,
+.settings-modal .logs-meta {
+  color: var(--console-muted);
+}
+
+.settings-modal .rounded-xl.border.bg-card,
+.settings-modal .bg-card,
+.settings-modal .stats div,
+.settings-modal .receiver-logs,
+.settings-modal .diagnostics-card,
+.settings-modal .conversation-card,
+.settings-modal .conversation-row,
+.settings-modal .task-summary div,
+.settings-modal .task-card,
+.settings-modal .queued-row,
+.settings-modal .log-file,
+.settings-modal .settings-list > .rounded-xl,
+.settings-modal .catalog-editor {
+  border-color: var(--console-border) !important;
+  border-radius: 8px !important;
+  background:
+    linear-gradient(180deg, var(--workspace-grid), transparent 90px),
+    var(--console-surface) !important;
+  color: var(--console-text) !important;
+  box-shadow:
+    var(--shadow-popover),
+    inset 0 1px 0 var(--workspace-grid) !important;
+}
+
+.settings-modal .rounded-xl.border.bg-card > div:first-child,
+.settings-modal .settings-list > .rounded-xl > div:first-child,
+.settings-modal .receiver-logs .section-head,
+.settings-modal .log-file header {
+  border-bottom: 1px solid var(--console-border);
+}
+
+.settings-modal h3,
+.settings-modal .item-title,
+.settings-modal .conversation-title,
+.settings-modal .task-title,
+.settings-modal .queued-row strong,
+.settings-modal .diagnostics-card h2 {
+  color: var(--console-text);
+}
+
+.settings-modal h3 {
+  font-size: 15px;
+}
+
+.settings-modal h3 + p,
+.settings-modal .text-muted-foreground {
+  color: var(--console-muted) !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
+.settings-modal input,
+.settings-modal textarea,
+.settings-modal select,
+.settings-modal .select-input,
+.settings-modal .native-select {
+  min-height: 34px;
+  border-color: var(--console-border) !important;
+  background: var(--workspace-bg) !important;
+  color: var(--console-text) !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  box-shadow: inset 0 1px 0 var(--workspace-grid) !important;
+}
+
+.settings-modal input::placeholder,
+.settings-modal textarea::placeholder {
+  color: var(--console-dim) !important;
+}
+
+.settings-modal input:focus,
+.settings-modal input:focus-visible,
+.settings-modal textarea:focus,
+.settings-modal textarea:focus-visible,
+.settings-modal select:focus,
+.settings-modal .select-input:focus,
+.settings-modal .native-select:focus {
+  border-color: var(--console-accent) !important;
+  outline: none !important;
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 4px var(--console-accent-soft) !important;
+}
+
+.settings-modal .inline-flex {
+  border-color: var(--settings-console-button-border);
+}
+
+.settings-modal button.inline-flex,
+.settings-modal .inline-flex.bg-background,
+.settings-modal .inline-flex.bg-secondary {
+  background: var(--settings-console-button-bg) !important;
+  color: var(--settings-console-button-text) !important;
+}
+
+.settings-modal button.inline-flex:hover {
+  border-color: var(--console-accent) !important;
+  background: var(--settings-console-button-hover-bg) !important;
+  color: var(--workspace-button-hover-text) !important;
+}
+
+.settings-modal button.inline-flex.bg-primary,
+.settings-modal .channel-save {
+  border-color: var(--settings-console-primary-border) !important;
+  background: var(--settings-console-primary-bg) !important;
+  color: var(--settings-console-primary-text) !important;
+}
+
+.settings-modal button.inline-flex.bg-primary:hover,
+.settings-modal .channel-save:hover {
+  background: var(--settings-console-primary-hover-bg) !important;
+}
+
+.settings-modal .inline-flex.rounded-md.border,
+.settings-modal .inline-flex.rounded-md.bg-secondary,
+.settings-modal .inline-flex.rounded-md.bg-primary {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  text-transform: uppercase;
+}
+
+.settings-modal [class*="bg-secondary"],
+.settings-modal [class*="bg-primary"] {
+  border-color: var(--line-strong) !important;
+}
+
+.settings-modal .conversation-form,
+.settings-modal .conversation-edit-grid,
+.settings-modal .custom-app-form,
+.settings-modal .settings-form {
+  gap: 10px 12px;
+}
+
+.settings-modal .conversation-card,
+.settings-modal .task-card,
+.settings-modal .queued-row {
+  background: var(--console-surface-2) !important;
+}
+
+.settings-modal .conversation-card-header,
+.settings-modal .task-header,
+.settings-modal .queued-header {
+  border-bottom: 1px solid var(--console-border);
+  padding-bottom: 10px;
+}
+
+.settings-modal .conversation-card-footer {
+  border-top: 1px solid var(--console-border);
+  padding-top: 10px;
+}
+
+.settings-modal .task-summary div {
+  min-height: 78px;
+}
+
+.settings-modal .task-summary dt,
+.settings-modal .session-metadata dt,
+.settings-modal .diagnostics-card dt {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  letter-spacing: 0;
+}
+
+.settings-modal .task-summary dd {
+  color: var(--console-accent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+.settings-modal .task-result,
+.settings-modal .queued-value,
+.settings-modal .receiver-logs pre,
+.settings-modal .log-file pre,
+.settings-modal .catalog-json,
+.settings-modal .settings-json,
+.settings-modal .launch-json {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background:
+    linear-gradient(var(--workspace-grid) 1px, transparent 1px),
+    var(--terminal-bg) !important;
+  background-size: 100% 22px;
+  color: var(--terminal-text) !important;
+}
+
+.settings-modal .save-ok {
+  color: var(--console-success);
+}
+
+.settings-modal .form-error,
+.settings-modal .session-error {
+  color: var(--console-danger) !important;
+}
+
+.settings-modal .session-error {
+  border-color: var(--status-danger-bg);
+  background: var(--status-danger-bg);
+}
+
+.settings-modal .logs-empty {
+  border: 1px dashed var(--console-border);
+  border-radius: 8px;
+  background: var(--workspace-grid);
+  padding: 12px;
+}
+
+.settings-modal .dot-ok {
+  background: var(--console-success);
+  box-shadow: 0 0 12px var(--status-success-bg);
+}
+
+.settings-modal .dot-bad {
+  background: var(--status-warning);
+  box-shadow: 0 0 12px var(--status-warning-bg);
+}
+
+@media (max-width: 920px) {
+  .settings-modal-body {
+    grid-template-columns: 150px minmax(0, 1fr);
+  }
+
+  .settings-modal .conversation-wide-field {
+    grid-column: auto;
+  }
+
+  .settings-modal .task-header,
+  .settings-modal .conversation-card-header,
+  .settings-modal .conversation-card-footer,
+  .settings-modal .session-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+/* Compact flat pass */
+.settings-modal .panel,
+.settings-modal .settings-pane {
+  padding: 12px;
+}
+
+.settings-modal .settings-modal-body {
+  grid-template-columns: 172px minmax(0, 1fr);
+}
+
+.settings-modal .settings-nav {
+  gap: 3px;
+  padding: 10px 8px;
+}
+
+.settings-modal .settings-nav button {
+  min-height: 34px;
+  border-radius: 5px;
+  font-size: 12px;
+  padding: 7px 10px;
+}
+
+.settings-modal .modal-header {
+  min-height: 48px;
+  padding: 8px 12px;
+}
+
+.settings-modal .modal-header h2 {
+  font-size: 15px;
+}
+
+.settings-modal .modal-close-button {
+  width: 30px;
+  min-width: 30px;
+  padding: 0;
+}
+
+.settings-modal .panel h1,
+.settings-modal .section-head h2 {
+  font-size: 16px;
+}
+
+.settings-modal .panel h1 {
+  margin-bottom: 10px;
+}
+
+.settings-modal .section-head {
+  min-height: 28px;
+  padding-bottom: 7px;
+}
+
+.settings-modal .conversations-layout,
+.settings-modal .tasks-layout,
+.settings-modal .settings-layout,
+.settings-modal .settings-list,
+.settings-modal .task-list,
+.settings-modal .queued-list,
+.settings-modal .conversation-list,
+.settings-modal .channel-grid {
+  gap: 8px;
+}
+
+.settings-modal .rounded-xl.border.bg-card,
+.settings-modal .bg-card,
+.settings-modal .stats div,
+.settings-modal .receiver-logs,
+.settings-modal .diagnostics-card,
+.settings-modal .conversation-card,
+.settings-modal .conversation-row,
+.settings-modal .task-summary div,
+.settings-modal .task-card,
+.settings-modal .queued-row,
+.settings-modal .log-file,
+.settings-modal .settings-list > .rounded-xl,
+.settings-modal .catalog-editor,
+.settings-modal .channel-card {
+  border-radius: 6px !important;
+  background: var(--console-surface) !important;
+  box-shadow: none !important;
+}
+
+.settings-modal .rounded-xl.border.bg-card > div,
+.settings-modal .settings-list > .rounded-xl > div,
+.settings-modal .channel-header,
+.settings-modal .channel-form,
+.settings-modal .channel-actions {
+  padding: 10px 12px;
+}
+
+.settings-modal .rounded-xl.border.bg-card > div:first-child,
+.settings-modal .settings-list > .rounded-xl > div:first-child,
+.settings-modal .channel-header {
+  padding-bottom: 9px;
+}
+
+.settings-modal .rounded-xl.border.bg-card > div:last-child,
+.settings-modal .settings-list > .rounded-xl > div:last-child,
+.settings-modal .channel-actions {
+  padding-top: 9px;
+}
+
+.settings-modal h3 {
+  font-size: 14px;
+}
+
+.settings-modal h3 + p,
+.settings-modal .text-muted-foreground,
+.settings-modal .field-row,
+.settings-modal .conversation-meta,
+.settings-modal .task-meta,
+.settings-modal .item-meta,
+.settings-modal .session-metadata dt,
+.settings-modal .logs-empty,
+.settings-modal .logs-meta {
+  font-size: 11px;
+}
+
+.settings-modal input,
+.settings-modal select,
+.settings-modal .select-input,
+.settings-modal .native-select {
+  height: 30px;
+  min-height: 30px;
+  border-radius: 5px;
+  padding-inline: 9px;
+}
+
+.settings-modal textarea {
+  min-height: 54px;
+  border-radius: 5px;
+  padding: 8px 9px;
+}
+
+.settings-modal .inline-flex {
+  min-height: 30px;
+  border-radius: 5px;
+  box-shadow: none !important;
+}
+
+.settings-modal .inline-flex.h-8 {
+  height: 30px;
+  padding-inline: 10px;
+}
+
+.settings-modal .conversation-form,
+.settings-modal .conversation-edit-grid,
+.settings-modal .custom-app-form,
+.settings-modal .settings-form,
+.settings-modal .channel-form {
+  gap: 8px;
+}
+
+.settings-modal .conversation-card,
+.settings-modal .task-card,
+.settings-modal .queued-row {
+  gap: 8px;
+  padding: 10px;
+}
+
+.settings-modal .conversation-card-header,
+.settings-modal .task-header,
+.settings-modal .queued-header {
+  padding-bottom: 8px;
+}
+
+.settings-modal .conversation-card-footer {
+  padding-top: 8px;
+}
+
+.settings-modal .task-summary {
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.settings-modal .task-summary div {
+  min-height: 58px;
+  padding: 8px 10px;
+}
+
+.settings-modal .task-summary dd {
+  font-size: 18px;
+}
+
+.settings-modal .task-result,
+.settings-modal .queued-value,
+.settings-modal .receiver-logs pre,
+.settings-modal .log-file pre,
+.settings-modal .catalog-json,
+.settings-modal .settings-json,
+.settings-modal .launch-json {
+  border-radius: 5px;
+  box-shadow: none;
+}
+
+.settings-modal .logs-empty {
+  border-radius: 5px;
+  padding: 8px 10px;
+}
+
+.settings-modal .channel-glyph {
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+}
+
+.settings-modal .channel-toggle {
+  border-radius: 5px;
+  padding: 7px 9px;
+}
+
+@media (min-width: 1180px) {
+  .settings-modal .channel-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* Refined settings navigation state */
+.settings-modal .settings-nav {
+  background:
+    linear-gradient(180deg, var(--workspace-grid), transparent 160px),
+    var(--surface-inset);
+}
+
+.settings-modal .settings-nav button {
+  display: flex;
+  align-items: center;
+  min-height: 32px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-weight: 600;
+  line-height: 1;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.settings-modal .settings-nav button::before {
+  content: "";
+  width: 3px;
+  height: 14px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: transparent;
+  margin-right: 8px;
+  transition:
+    background 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.settings-modal .settings-nav button:hover {
+  border-color: var(--line);
+  background: var(--workspace-grid);
+  color: var(--text);
+}
+
+.settings-modal .settings-nav button.active {
+  border-color: var(--line-strong);
+  background:
+    linear-gradient(90deg, var(--brand-accent-soft), var(--workspace-grid)),
+    var(--surface-hover);
+  color: var(--text-strong);
+  box-shadow: inset 0 1px 0 var(--workspace-grid);
+}
+
+.settings-modal .settings-nav button.active::before {
+  background: var(--console-accent);
+  box-shadow: 0 0 10px var(--focus-ring);
+}

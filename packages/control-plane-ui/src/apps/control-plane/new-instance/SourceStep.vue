@@ -1,0 +1,338 @@
+<template>
+  <section class="wizard-section">
+    <div class="section-head">
+      <span>Workspace</span>
+      <button v-if="sourceDraft.mode === 'project'" type="button" @click="$emit('update:newProjectOpen', !newProjectOpen)">{{ newProjectOpen ? "Use existing" : "Add repository" }}</button>
+    </div>
+
+    <div class="choice-grid" aria-label="Workspace source">
+      <button type="button" class="choice-tile" :class="{ active: sourceDraft.mode === 'project' }" @click="$emit('select-source-mode', 'project')">
+        <GitBranch :size="17" />
+        <span>Repository</span>
+      </button>
+      <button type="button" class="choice-tile" :class="{ active: sourceDraft.mode === 'local-folder' }" @click="$emit('select-source-mode', 'local-folder')">
+        <Folder :size="17" />
+        <span>Local folder</span>
+      </button>
+    </div>
+
+    <div v-if="sourceDraft.mode === 'project' && !newProjectOpen" class="step-fields">
+      <label>
+        <span>Repository</span>
+        <ControlPlaneSelect v-model="sourceDraft.projectId" placeholder="Select project">
+          <ControlPlaneSelectItem v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</ControlPlaneSelectItem>
+        </ControlPlaneSelect>
+      </label>
+    </div>
+
+    <div v-else-if="sourceDraft.mode === 'project'" class="step-fields">
+      <label>
+        <span>Name</span>
+        <ControlPlaneInput v-model="newProject.name" placeholder="Repository name" />
+      </label>
+      <label>
+        <span>Git URL</span>
+        <ControlPlaneInput v-model="newProject.url" placeholder="https://github.com/org/repo" />
+      </label>
+      <Button variant="outline" size="sm" :disabled="!canCreateProject || creatingProject" @click="$emit('create-project')">
+        <Plus :size="15" />
+        <span>{{ creatingProject ? "Creating" : "Create repository" }}</span>
+      </Button>
+      <div v-if="codexModels.length || claudeModels.length" class="project-model-picker">
+        <label v-if="codexModels.length">
+          <span>Codex model</span>
+          <ControlPlaneSelect :model-value="newProjectCodexModelValue" placeholder="Global default" @update:model-value="$emit('set-new-project-model', 'codex', $event)">
+            <ControlPlaneSelectItem :value="defaultModelValue">Global default</ControlPlaneSelectItem>
+            <ControlPlaneSelectItem v-for="model in codexModels" :key="`new-project-codex-${model.id}`" :value="model.id">{{ model.name }}</ControlPlaneSelectItem>
+          </ControlPlaneSelect>
+        </label>
+        <label v-if="claudeModels.length">
+          <span>Claude model</span>
+          <ControlPlaneSelect :model-value="newProjectClaudeModelValue" placeholder="Global default" @update:model-value="$emit('set-new-project-model', 'claude', $event)">
+            <ControlPlaneSelectItem :value="defaultModelValue">Global default</ControlPlaneSelectItem>
+            <ControlPlaneSelectItem v-for="model in claudeModels" :key="`new-project-claude-${model.id}`" :value="model.id">{{ model.name }}</ControlPlaneSelectItem>
+          </ControlPlaneSelect>
+        </label>
+      </div>
+    </div>
+
+    <div v-else class="step-fields">
+      <label>
+        <span>Node</span>
+        <ControlPlaneSelect v-model="sourceDraft.localNodeId" placeholder="Select node">
+          <ControlPlaneSelectItem v-for="node in nodes" :key="node.id" :value="node.id">{{ node.name }}</ControlPlaneSelectItem>
+        </ControlPlaneSelect>
+      </label>
+      <label>
+        <span>Node folder</span>
+        <ControlPlaneSelect :model-value="localFolderSelectValue" placeholder="Select local folder" @update:model-value="$emit('select-local-folder', $event)">
+          <ControlPlaneSelectItem v-for="folder in localFolders" :key="folder.id" :value="folder.id">{{ folder.name }} · {{ folder.path }}</ControlPlaneSelectItem>
+          <ControlPlaneSelectItem :value="chooseFolderValue">Choose folder...</ControlPlaneSelectItem>
+        </ControlPlaneSelect>
+      </label>
+      <span v-if="localPathOpen || sourceDraft.localPath" class="field-with-action">
+        <ControlPlaneInput :model-value="sourceDraft.localPath" :placeholder="localPathPlaceholder" @update:model-value="$emit('set-local-folder-path', $event)" />
+        <Button v-if="canBrowseProjectFolder" variant="outline" size="sm" :disabled="creatingLocalFolder || !sourceDraft.localNodeId" @click="$emit('choose-project-folder-path')">
+          <FolderOpen :size="14" />
+          <span>{{ creatingLocalFolder ? "Choosing" : "Browse" }}</span>
+        </Button>
+      </span>
+      <NodeFolderTree
+        v-if="showNodeFolderTree"
+        :error="nodeFolderTreeError"
+        :loading="loadingNodeFolderTree"
+        :rows="nodeFolderTreeRows"
+        :selected-path="sourceDraft.localPath"
+        @refresh="$emit('load-node-folder-roots')"
+        @select="$emit('select-node-folder-path', $event)"
+      />
+    </div>
+
+    <p v-if="projectCreateError" class="control-plane-error">{{ projectCreateError }}</p>
+  </section>
+</template>
+
+<script setup lang="ts">
+import { Folder, FolderOpen, GitBranch, Plus } from "@lucide/vue";
+import { computed } from "vue";
+import type { ModelConfig, Node, NodeLocalFolder, Project } from "../../../api/types";
+import { Button } from "../../../components/ui/button";
+import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
+import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
+import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
+import NodeFolderTree from "./NodeFolderTree.vue";
+import type { NodeFolderTreeNode } from "./nodeFolderTree";
+import type { NewProjectDraft, SourceDraft, SourceMode } from "./newInstanceTypes";
+
+const props = defineProps<{
+  canBrowseProjectFolder: boolean;
+  canCreateProject: boolean;
+  chooseFolderValue: string;
+  creatingLocalFolder: boolean;
+  creatingProject: boolean;
+  loadingNodeFolderTree: boolean;
+  localFolderSelectValue: string;
+  localFolders: NodeLocalFolder[];
+  localPathOpen: boolean;
+  localPathPlaceholder: string;
+  models: ModelConfig[];
+  newProject: NewProjectDraft;
+  newProjectOpen: boolean;
+  nodeFolderTreeError: string;
+  nodeFolderTreeRows: NodeFolderTreeNode[];
+  nodes: Node[];
+  projectCreateError: string;
+  projects: Project[];
+  showNodeFolderTree: boolean;
+  sourceDraft: SourceDraft;
+}>();
+
+const codexModels = computed(() => props.models.filter((model) => model.app === "codex"));
+const claudeModels = computed(() => props.models.filter((model) => model.app === "claude"));
+const defaultModelValue = "__default__";
+const newProjectCodexModelValue = computed(() => props.newProject.codexModelId || defaultModelValue);
+const newProjectClaudeModelValue = computed(() => props.newProject.claudeModelId || defaultModelValue);
+
+defineEmits<{
+  "choose-project-folder-path": [];
+  "create-project": [];
+  "load-node-folder-roots": [];
+  "select-local-folder": [value: string];
+  "select-node-folder-path": [folder: NodeFolderTreeNode];
+  "set-new-project-model": [app: "codex" | "claude", value: string];
+  "select-source-mode": [mode: SourceMode];
+  "set-local-folder-path": [value: string];
+  "update:newProjectOpen": [open: boolean];
+}>();
+</script>
+
+<style scoped>
+.wizard-section {
+  display: grid;
+  gap: 14px;
+}
+
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.section-head span,
+.step-fields label span,
+.project-model-picker > span {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.section-head button:not(.inline-flex) {
+  border: 0;
+  background: transparent;
+  color: var(--status-success);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 0;
+}
+
+.section-head button:not(.inline-flex):hover,
+.section-head button:not(.inline-flex):focus-visible {
+  color: var(--white);
+  outline: none;
+}
+
+.choice-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.choice-tile {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 48px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+  padding: 0 12px;
+}
+
+.choice-tile:hover,
+.choice-tile:focus-visible,
+.choice-tile.active {
+  border-color: var(--brand-accent);
+  background: var(--surface-active);
+  color: var(--white);
+  outline: none;
+}
+
+.step-fields {
+  display: grid;
+  gap: 10px;
+}
+
+.step-fields label {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.field-with-action {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.field-with-action .inline-flex {
+  min-height: 34px;
+}
+
+.field-hint {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+  margin: -4px 0 0;
+}
+
+.project-model-picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  margin-top: 2px;
+}
+
+.project-model-picker label {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 32px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 0 11px 0 34px;
+}
+
+.project-model-picker input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+  margin: 0;
+}
+
+.project-model-picker label::before {
+  position: absolute;
+  left: 11px;
+  top: 50%;
+  display: grid;
+  width: 15px;
+  height: 15px;
+  place-items: center;
+  border: 1px solid var(--text-subtle);
+  border-radius: 4px;
+  background: var(--surface-inset);
+  color: transparent;
+  content: "";
+  font-size: 13px;
+  font-weight: 900;
+  line-height: 1;
+  transform: translateY(-50%);
+}
+
+.project-model-picker label:hover,
+.project-model-picker label:focus-within {
+  border-color: var(--brand-accent);
+  background: var(--surface-hover);
+  color: var(--text-strong);
+}
+
+.project-model-picker label:has(input:focus-visible) {
+  outline: 2px solid var(--brand-accent);
+  outline-offset: 2px;
+}
+
+.project-model-picker label:has(input:checked) {
+  border-color: var(--brand-accent);
+  background: var(--surface-active);
+  color: var(--text-strong);
+}
+
+.project-model-picker label:has(input:checked)::before {
+  border-color: var(--brand-accent);
+  background: var(--brand-accent);
+  color: var(--surface-inset);
+  content: "✓";
+}
+
+.project-model-picker small {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.control-plane-error {
+  color: var(--status-danger);
+  font-size: 12px;
+}
+
+@media (max-width: 820px) {
+  .choice-grid {
+    grid-template-columns: 1fr;
+  }
+}
+</style>

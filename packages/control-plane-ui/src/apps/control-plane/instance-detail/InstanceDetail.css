@@ -1,0 +1,351 @@
+.instance-detail {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  padding: 18px;
+}
+
+.instance-detail-layout {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.instance-detail-layout.preview-expanded {
+  display: flex;
+}
+
+.detail-empty {
+  display: grid;
+  min-height: 300px;
+  place-content: center;
+  gap: 10px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 8px;
+  background: var(--white);
+  color: var(--text-muted);
+  text-align: center;
+  padding: 28px;
+}
+
+.detail-empty h1 {
+  margin: 0;
+  color: var(--text);
+  font-size: 22px;
+}
+
+.detail-empty p {
+  max-width: 420px;
+  margin: 0;
+}
+
+.detail-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.detail-head p {
+  margin: 0 0 3px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.detail-head > div:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.detail-head span {
+  display: block;
+  max-width: 640px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detail-name-field {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  max-width: min(760px, 100%);
+  vertical-align: top;
+}
+
+.detail-name-button,
+.detail-name-input {
+  box-sizing: border-box;
+  grid-area: 1 / 1;
+  min-width: 0;
+  margin: 0 0 1px -6px;
+  font: inherit;
+  font-size: 28px;
+  font-weight: 750;
+  letter-spacing: 0;
+  line-height: 1.08;
+  white-space: nowrap;
+}
+
+.detail-name-field.editing {
+  width: min(var(--detail-name-edit-width, 760px), 100%);
+}
+
+.detail-name-button {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  border: 0;
+  padding: 0;
+  overflow: visible;
+  background: transparent;
+  color: var(--text-strong);
+  cursor: text;
+  text-align: left;
+}
+
+.detail-name-button .detail-name-button-label {
+  display: inline-block;
+  box-sizing: border-box;
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: inherit;
+  font: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+  padding: 2px 6px 3px;
+  text-overflow: ellipsis;
+  vertical-align: top;
+}
+
+.detail-name-button:hover .detail-name-button-label,
+.detail-name-button:focus-visible .detail-name-button-label {
+  border-color: var(--line);
+  background: var(--surface-hover);
+  box-shadow: inset 0 1px 0 var(--workspace-grid);
+}
+
+.detail-name-button:focus-visible {
+  outline: none;
+}
+
+.detail-name-input {
+  width: 100%;
+  border: 1px solid var(--brand-accent);
+  border-radius: 8px;
+  background: var(--surface-inset);
+  color: var(--text-strong);
+  padding: 2px 6px 3px;
+  outline: none;
+  box-shadow:
+    0 0 0 3px var(--brand-accent-soft),
+    inset 0 1px 0 var(--workspace-grid);
+}
+
+.detail-name-input:disabled {
+  cursor: progress;
+  opacity: 0.72;
+}
+
+.detail-name-error {
+  display: block;
+  margin: 3px 0 4px;
+  color: var(--status-danger);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.detail-side {
+  display: grid;
+  justify-items: end;
+  gap: 10px;
+  min-width: 260px;
+}
+
+.detail-badges,
+.instance-controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.diagnostic-badge {
+  display: inline-flex;
+  max-width: none;
+  overflow: visible;
+  white-space: normal;
+  cursor: help;
+  outline: none;
+}
+
+:global(.diagnostic-tooltip) {
+  min-width: 230px;
+  max-width: min(360px, 80vw);
+  border: 1px solid var(--line-strong) !important;
+  background: var(--surface-inset) !important;
+  color: var(--text) !important;
+  box-shadow: var(--shadow-popover);
+}
+
+:global(.diagnostic-tooltip-grid) {
+  display: grid;
+  gap: 7px;
+}
+
+:global(.diagnostic-tooltip-grid span) {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+:global(.diagnostic-tooltip-grid b),
+:global(.diagnostic-tooltip-grid em) {
+  overflow: hidden;
+  font-size: 11px;
+  font-style: normal;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:global(.diagnostic-tooltip-grid b) {
+  color: var(--text-muted) !important;
+  font-weight: 750;
+}
+
+:global(.diagnostic-tooltip-grid em) {
+  color: var(--text-strong) !important;
+  font-weight: 650;
+}
+
+.instance-controls {
+  max-width: 420px;
+}
+
+.instance-detail button.bg-destructive,
+.instance-detail button.bg-destructive span,
+.instance-detail button.bg-destructive svg {
+  color: hsl(var(--destructive-foreground));
+}
+
+.instance-detail button.bg-destructive:disabled,
+.instance-detail button.bg-destructive:disabled span,
+.instance-detail button.bg-destructive:disabled svg {
+  color: hsl(var(--destructive-foreground) / 0.72);
+}
+
+.instance-action-error {
+  margin: -4px 0 12px;
+}
+
+.detail-meta {
+  display: block;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--white);
+  padding: 12px;
+}
+
+.detail-meta {
+  flex: 0 0 auto;
+  align-self: start;
+  width: 100%;
+  margin-top: 12px;
+  padding: 7px 10px;
+}
+
+.detail-meta-status {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detail-meta-status span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.detail-meta-status span + span::before {
+  content: "·";
+  padding: 0 7px;
+  color: var(--text-muted);
+}
+
+@media (max-width: 780px) {
+  .instance-detail {
+    overflow: hidden;
+    padding: 12px;
+  }
+
+  .instance-detail-layout {
+    height: auto;
+    min-height: 640px;
+  }
+
+  .detail-head {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .detail-side {
+    justify-items: start;
+    min-width: 0;
+  }
+
+  .detail-badges,
+  .instance-controls {
+    justify-content: flex-start;
+  }
+}
+
+.detail-head p,
+.detail-head span {
+  color: var(--text-muted);
+}
+
+.detail-empty h1,
+.detail-meta-status {
+  color: var(--text-strong);
+}
+
+.detail-empty {
+  border-color: var(--line-strong);
+  background: var(--surface-inset);
+  color: var(--text-muted);
+}
+
+.detail-meta {
+  border-color: var(--line);
+  background: var(--surface);
+  box-shadow:
+    var(--shadow-panel),
+    inset 0 1px 0 var(--workspace-grid);
+}
+
+.detail-empty.error {
+  color: var(--status-danger);
+}

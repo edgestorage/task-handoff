@@ -1,0 +1,39 @@
+{
+  "name": "@task-handoff/app-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./catalog": {
+      "types": "./src/catalog.ts",
+      "default": "./src/catalog.ts"
+    },
+    "./runtime": {
+      "types": "./src/runtime.ts",
+      "default": "./src/runtime.ts"
+    },
+    "./types": {
+      "types": "./src/types.ts",
+      "default": "./src/types.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit",
+    "check": "pnpm run build",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@task-handoff/core": "workspace:*",
+    "@task-handoff/protocol": "workspace:*",
+    "node-pty": "^1.1.0",
+    "write-file-atomic": "^8.0.0",
+    "ws": "^8.21.0",
+    "zod": "^4.4.3"
+  }
+}

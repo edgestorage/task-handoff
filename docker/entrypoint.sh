@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+mkdir -p \
+  "${TASK_HANDOFF_DATA_DIR:-/data/task-handoff}" \
+  "${TASK_HANDOFF_CHANNELS_DIR:-/data/task-handoff/channels}" \
+  "${TASK_HANDOFF_CONVERSATIONS_DIR:-/data/task-handoff/conversations}" \
+  "${TASK_HANDOFF_APP_CATALOG_DIR:-/data/task-handoff/app-catalog}" \
+  "${TASK_HANDOFF_APP_SESSION_DIR:-/data/task-handoff/app-sessions}" \
+  "${TASK_HANDOFF_RUNTIME_DIR:-/data/task-handoff/runtime}" \
+  "${TASK_HANDOFF_EVENTS_DIR:-/data/task-handoff/events}" \
+  "${TASK_HANDOFF_ARTIFACT_DIR:-/data/artifacts}" \
+  "${TASK_HANDOFF_LOG_DIR:-/data/logs}" \
+  "${CODEX_HOME:-/home/agent/.codex}" \
+  "${CLAUDE_HOME:-/home/agent/.claude}" \
+  "${TASK_HANDOFF_WORKSPACE:-/workspace}"
+
+bootstrap_workspace() {
+  local workspace="${TASK_HANDOFF_WORKSPACE:-/workspace}"
+  local mode="${TASK_HANDOFF_WORKSPACE_MODE:-}"
+  local git_url="${TASK_HANDOFF_GIT_URL:-}"
+  local git_ref="${TASK_HANDOFF_GIT_REF:-}"
+
+  if [ "${mode}" != "git-clone" ] || [ -z "${git_url}" ]; then
+    return
+  fi
+
+  if ! command -v git >/dev/null 2>&1; then
+    echo "Git workspace bootstrap requested, but git is not installed." >&2
+    return 1
+  fi
+
+  mkdir -p "${workspace}"
+  if [ -n "$(find "${workspace}" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
+    echo "Workspace ${workspace} is not empty; skipping git clone."
+    return
+  fi
+
+  local clone_args=(clone)
+  if [ -n "${TASK_HANDOFF_GIT_DEPTH:-}" ]; then
+    clone_args+=(--depth "${TASK_HANDOFF_GIT_DEPTH}")
+  fi
+  if [ "${TASK_HANDOFF_GIT_SUBMODULES:-false}" = "true" ]; then
+    clone_args+=(--recurse-submodules)
+  fi
+  if [ -n "${git_ref}" ]; then
+    clone_args+=(--branch "${git_ref}")
+  fi
+  clone_args+=("${git_url}" "${workspace}")
+
+  echo "Cloning workspace ${git_url} into ${workspace}."
+  git "${clone_args[@]}"
+
+  if [ -n "${TASK_HANDOFF_GIT_COMMIT:-}" ]; then
+    git -C "${workspace}" checkout "${TASK_HANDOFF_GIT_COMMIT}"
+  fi
+}
+
+if command -v web-cap >/dev/null 2>&1 && [ -d /tmp/task-handoff-web-cap-skill ]; then
+  for skills_dir in \
+    /home/agent/.agents/skills \
+    "${CODEX_HOME:-/home/agent/.codex}/skills" \
+    "${CLAUDE_HOME:-/home/agent/.claude}/skills"
+  do
+    rm -rf "${skills_dir}/web-cap"
+    mkdir -p "${skills_dir}"
+    cp -R /tmp/task-handoff-web-cap-skill "${skills_dir}/web-cap"
+  done
+fi
+
+start_web_cap_daemon() {
+  if ! command -v web-cap >/dev/null 2>&1; then
+    return
+  fi
+
+  local log_file="${TASK_HANDOFF_LOG_DIR:-/data/logs}/web-cap-daemon.log"
+  local idle_timeout="${WEB_CAP_DAEMON_IDLE_TIMEOUT_MS:-0}"
+
+  if WEB_CAP_DAEMON_IDLE_TIMEOUT_MS="${idle_timeout}" timeout 15s web-cap session-status >"${log_file}" 2>&1; then
+    echo "Web Cap daemon startup probe completed."
+  else
+    echo "Web Cap daemon startup probe failed; see ${log_file}."
+  fi
+}
+
+if [ "${1:-}" = "task-handoff" ] && [ "${2:-}" = "web" ]; then
+  bootstrap_workspace
+  start_web_cap_daemon
+
+  exec task-handoff-controlled-instance web \
+    --host "${TASK_HANDOFF_WEB_HOST:-0.0.0.0}" \
+    --port "${TASK_HANDOFF_WEB_PORT:-8080}" \
+    --socket "${TASK_HANDOFF_SOCKET:-/tmp/task-handoff.sock}"
+fi
+
+if [ "${1:-}" = "task-handoff" ]; then
+  shift
+  exec task-handoff-controlled-instance "$@"
+fi
+
+exec "$@"

@@ -1,0 +1,203 @@
+.channels-panel {
+  color: var(--text);
+}
+
+.channels-panel [data-slot="badge"],
+.panel-title-row > div + div {
+  border-color: var(--line);
+  background: var(--surface-raised);
+  color: var(--text-muted);
+}
+
+.channel-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
+  align-items: start;
+  gap: 12px;
+}
+
+.channel-card {
+  overflow: hidden;
+  border-color: var(--line);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, var(--surface-raised), var(--surface-inset)),
+    var(--surface-inset);
+  color: var(--text);
+  box-shadow: var(--shadow-popover);
+}
+
+.channel-card:hover {
+  border-color: var(--line-strong);
+}
+
+.channel-header,
+.channel-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.channel-header {
+  border-bottom: 1px solid var(--line);
+  padding: 14px 16px;
+}
+
+.channel-header h3 {
+  color: var(--text-strong);
+  font-size: 15px;
+  line-height: 1.2;
+}
+
+.channel-header p {
+  color: var(--text-subtle);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
+.channel-identity {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.channel-glyph {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface-active);
+  color: var(--brand-accent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.channel-status {
+  border-color: var(--line) !important;
+  background: var(--surface-hover) !important;
+  color: var(--text-muted) !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  text-transform: uppercase;
+}
+
+.channel-status:first-letter {
+  color: var(--brand-accent);
+}
+
+.channel-form {
+  display: grid;
+  gap: 11px;
+  padding: 14px 16px;
+}
+
+.field-row {
+  display: grid;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.channel-toggle {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-inset);
+  color: var(--text-muted);
+  padding: 9px 10px;
+}
+
+.secret-row {
+  gap: 8px;
+}
+
+.clear-secret-row {
+  color: var(--text-subtle);
+  font-size: 12px;
+}
+
+.channels-panel input {
+  height: 32px;
+  border-color: var(--line);
+  background: var(--surface-inset);
+  color: var(--surface-inset);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  box-shadow: inset 0 1px 0 var(--workspace-grid);
+}
+
+.channels-panel input::placeholder {
+  color: var(--text-subtle);
+}
+
+.channels-panel input:focus-visible {
+  border-color: var(--brand-accent);
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 4px var(--brand-accent-soft);
+}
+
+.channels-panel button[role="checkbox"] {
+  border-color: var(--brand-accent);
+  background: var(--surface-inset);
+  color: var(--workspace-bg);
+}
+
+.channels-panel button[role="checkbox"][data-state="checked"] {
+  border-color: var(--brand-accent);
+  background: var(--brand-accent);
+}
+
+.channel-actions {
+  min-height: 58px;
+  border-top: 1px solid var(--line);
+  padding: 10px 16px 14px;
+}
+
+@media (min-width: 1180px) {
+  .channel-card-dingding {
+    grid-column: span 2;
+  }
+
+  .channel-card-dingding .channel-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .channel-card-dingding .channel-toggle,
+  .channel-card-dingding .channel-actions {
+    grid-column: 1 / -1;
+  }
+}
+
+.channel-feedback {
+  min-width: 0;
+}
+
+.save-ok {
+  color: var(--status-success);
+  font-size: 12px;
+  margin: 0;
+}
+
+.channel-save {
+  border: 1px solid var(--brand-accent);
+  background: var(--surface-active);
+  color: var(--brand-accent-foreground);
+  box-shadow: var(--shadow-panel);
+}
+
+.channel-save:hover {
+  background: var(--brand-accent);
+}

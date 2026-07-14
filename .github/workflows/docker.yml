@@ -1,0 +1,328 @@
+name: Docker
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/docker.yml"
+      - "Dockerfile"
+      - ".dockerignore"
+      - "docker/**"
+      - "apps/**"
+      - "bin/**"
+      - "packages/**"
+      - "test/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "rollup.config.mjs"
+      - "tsconfig.json"
+      - "tsconfig.controlled-instance.json"
+      - "tsconfig.workspace.json"
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOCKERHUB_IMAGE_NAME: ${{ vars.DOCKERHUB_IMAGE_NAME || 'task-handoff-controlled-instance' }}
+
+jobs:
+  docker-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build controlled instance image
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: task-handoff-controlled-instance:ci
+          build-args: |
+            TASK_HANDOFF_BUILD_ID=${{ github.run_id }}
+            TASK_HANDOFF_BUILT_AT=${{ github.event.repository.updated_at }}
+            TASK_HANDOFF_GIT_COMMIT=${{ github.sha }}
+            TASK_HANDOFF_IMAGE_REF=task-handoff-controlled-instance:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        run: |
+          docker run --rm -d \
+            --name task-handoff-web-ci \
+            -p 18080:8080 \
+            --shm-size=1g \
+            --security-opt seccomp=unconfined \
+            -e TASK_HANDOFF_WEB_AUTH=off \
+            task-handoff-controlled-instance:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18080/api/health; then
+              break
+            fi
+            if [ "$i" = "30" ]; then
+              docker logs task-handoff-web-ci
+              exit 1
+            fi
+            sleep 1
+          done
+          diagnostics_response="$(curl -fsS http://127.0.0.1:18080/api/diagnostics)"
+          echo "$diagnostics_response"
+          printf '%s\n' "$diagnostics_response" | node -e '
+          const fs = require("node:fs");
+          const payload = JSON.parse(fs.readFileSync(0, "utf8")).data;
+          const requiredCommands = new Set(["Xvfb", "openbox", "x11vnc", "websockify", "chromium", "xterm", "import", "codex", "claude"]);
+          if (!payload.ok) {
+            throw new Error("diagnostics ok=false");
+          }
+          if (!payload.runtime.linuxRuntime) {
+            throw new Error("diagnostics did not detect linux runtime");
+          }
+          if (!payload.noVnc.available) {
+            throw new Error("noVNC is not available");
+          }
+          for (const command of payload.commands) {
+            requiredCommands.delete(command.name);
+            if (!command.available) {
+              throw new Error(`${command.name} is unavailable`);
+            }
+          }
+          if (requiredCommands.size > 0) {
+            throw new Error(`missing command diagnostics: ${Array.from(requiredCommands).join(", ")}`);
+          }
+          const notWritable = payload.storage.filter((entry) => !entry.writable);
+          if (notWritable.length > 0) {
+            throw new Error(`storage not writable: ${notWritable.map((entry) => entry.key).join(", ")}`);
+          }
+          '
+          docker exec task-handoff-web-ci codex --version
+          docker exec task-handoff-web-ci claude --version
+          terminal_response="$(curl -fsS \
+            -H 'content-type: application/json' \
+            -d '{"appId":"terminal-tty","title":"Terminal Smoke","cwd":"/workspace","args":["-lc","printf launch-options-ready"]}' \
+            http://127.0.0.1:18080/api/apps/sessions)"
+          echo "$terminal_response"
+          echo "$terminal_response" | grep -q '"kind":"tty"'
+          echo "$terminal_response" | grep -q '"title":"Terminal Smoke"'
+          echo "$terminal_response" | grep -q '"cwd":"/workspace"'
+          terminal_id="$(echo "$terminal_response" | node -pe 'JSON.parse(fs.readFileSync(0, "utf8")).data.id')"
+          restart_response="$(curl -fsS \
+            -X POST \
+            http://127.0.0.1:18080/api/apps/sessions/$terminal_id/restart)"
+          echo "$restart_response"
+          echo "$restart_response" | grep -q '"title":"Terminal Smoke"'
+          restarted_id="$(echo "$restart_response" | node -pe 'JSON.parse(fs.readFileSync(0, "utf8")).data.id')"
+          test "$restarted_id" != "$terminal_id"
+          screenshot_status="$(curl -sS -o /tmp/tty-screenshot.json -w '%{http_code}' \
+            http://127.0.0.1:18080/api/apps/sessions/$restarted_id/screenshot)"
+          cat /tmp/tty-screenshot.json
+          test "$screenshot_status" = "409"
+          curl -fsS \
+            -X DELETE \
+            http://127.0.0.1:18080/api/apps/sessions/$terminal_id
+          curl -fsS \
+            -X DELETE \
+            http://127.0.0.1:18080/api/apps/sessions/$restarted_id
+          browser_response="$(curl -fsS \
+            -H 'content-type: application/json' \
+            -d '{"appId":"chromium","title":"Browser Smoke","args":["about:blank"],"display":{"width":1024,"height":768,"depth":24},"env":{"TASK_HANDOFF_SMOKE":"1"}}' \
+            http://127.0.0.1:18080/api/apps/sessions)"
+          echo "$browser_response"
+          echo "$browser_response" | grep -q '"kind":"gui"'
+          echo "$browser_response" | grep -q '"title":"Browser Smoke"'
+          echo "$browser_response" | grep -q '"width":1024'
+          echo "$browser_response" | grep -q '"height":768'
+          browser_id="$(echo "$browser_response" | node -pe 'JSON.parse(fs.readFileSync(0, "utf8")).data.id')"
+          for i in $(seq 1 30); do
+            session_response="$(curl -fsS http://127.0.0.1:18080/api/apps/sessions/$browser_id)"
+            echo "$session_response"
+            if echo "$session_response" | grep -q '"vnc"' && echo "$session_response" | grep -q '"automation"'; then
+              break
+            fi
+            if [ "$i" = "30" ]; then
+              docker logs task-handoff-web-ci
+              exit 1
+            fi
+            sleep 1
+          done
+          for i in $(seq 1 30); do
+            automation_response="$(curl -fsS http://127.0.0.1:18080/api/apps/sessions/$browser_id/automation)"
+            echo "$automation_response"
+            if echo "$automation_response" | grep -q '"ready":true' && echo "$automation_response" | grep -q '"browser"'; then
+              break
+            fi
+            session_response="$(curl -fsS http://127.0.0.1:18080/api/apps/sessions/$browser_id)"
+            if echo "$session_response" | grep -Eq '"status":"(failed|exited)"'; then
+              echo "$session_response"
+              curl -fsS "http://127.0.0.1:18080/api/apps/sessions/$browser_id/logs?maxBytes=524288" || true
+              docker logs task-handoff-web-ci
+              exit 1
+            fi
+            if [ "$i" = "30" ]; then
+              echo "$session_response"
+              curl -fsS "http://127.0.0.1:18080/api/apps/sessions/$browser_id/logs?maxBytes=524288" || true
+              docker logs task-handoff-web-ci
+              exit 1
+            fi
+            sleep 1
+          done
+          curl -fsS "http://127.0.0.1:18080/api/apps/sessions/$browser_id/novnc/vnc.html" >/tmp/novnc-redirect.html
+          for i in $(seq 1 30); do
+            screenshot_status="$(curl -sS -o /tmp/browser-screenshot.png -w '%{http_code}' \
+              http://127.0.0.1:18080/api/apps/sessions/$browser_id/screenshot)"
+            if [ "$screenshot_status" = "200" ]; then
+              break
+            fi
+            if [ "$i" = "30" ]; then
+              cat /tmp/browser-screenshot.png || true
+              docker logs task-handoff-web-ci
+              exit 1
+            fi
+            sleep 1
+          done
+          file /tmp/browser-screenshot.png
+          file /tmp/browser-screenshot.png | grep -q 'PNG image data'
+          test "$(wc -c </tmp/browser-screenshot.png)" -gt 1000
+          browser_delete_status="$(curl -sS -o /tmp/browser-delete.json -w '%{http_code}' \
+            -X DELETE \
+            http://127.0.0.1:18080/api/apps/sessions/$browser_id)"
+          cat /tmp/browser-delete.json
+          test "$browser_delete_status" = "200"
+          gui_terminal_response="$(curl -fsS \
+            -H 'content-type: application/json' \
+            -d '{"appId":"terminal-gui","title":"GUI Terminal Smoke","display":{"width":800,"height":600,"depth":24}}' \
+            http://127.0.0.1:18080/api/apps/sessions)"
+          echo "$gui_terminal_response"
+          echo "$gui_terminal_response" | grep -q '"appId":"terminal-gui"'
+          echo "$gui_terminal_response" | grep -q '"kind":"gui"'
+          echo "$gui_terminal_response" | grep -q '"title":"GUI Terminal Smoke"'
+          gui_terminal_id="$(echo "$gui_terminal_response" | node -pe 'JSON.parse(fs.readFileSync(0, "utf8")).data.id')"
+          for i in $(seq 1 30); do
+            gui_terminal_session="$(curl -fsS http://127.0.0.1:18080/api/apps/sessions/$gui_terminal_id)"
+            echo "$gui_terminal_session"
+            if echo "$gui_terminal_session" | grep -q '"vnc"'; then
+              break
+            fi
+            if [ "$i" = "30" ]; then
+              docker logs task-handoff-web-ci
+              exit 1
+            fi
+            sleep 1
+          done
+          for i in $(seq 1 30); do
+            screenshot_status="$(curl -sS -o /tmp/gui-terminal-screenshot.png -w '%{http_code}' \
+              http://127.0.0.1:18080/api/apps/sessions/$gui_terminal_id/screenshot)"
+            if [ "$screenshot_status" = "200" ]; then
+              break
+            fi
+            if [ "$i" = "30" ]; then
+              cat /tmp/gui-terminal-screenshot.png || true
+              docker logs task-handoff-web-ci
+              exit 1
+            fi
+            sleep 1
+          done
+          file /tmp/gui-terminal-screenshot.png
+          file /tmp/gui-terminal-screenshot.png | grep -q 'PNG image data, 800 x 600'
+          curl -fsS \
+            -X DELETE \
+            http://127.0.0.1:18080/api/apps/sessions/$gui_terminal_id
+          curl -fsS \
+            -H 'content-type: application/json' \
+            -X PATCH \
+            -d '{"items":[{"id":"fail-fast-gui","name":"Fail Fast GUI","kind":"gui","command":"/bin/false","display":{"width":640,"height":480,"depth":24}}]}' \
+            http://127.0.0.1:18080/api/apps/catalog/custom
+          failed_response="$(curl -fsS \
+            -H 'content-type: application/json' \
+            -d '{"appId":"fail-fast-gui"}' \
+            http://127.0.0.1:18080/api/apps/sessions)"
+          echo "$failed_response"
+          failed_id="$(echo "$failed_response" | node -pe 'JSON.parse(fs.readFileSync(0, "utf8")).data.id')"
+          for i in $(seq 1 30); do
+            failed_session="$(curl -fsS http://127.0.0.1:18080/api/apps/sessions/$failed_id)"
+            echo "$failed_session"
+            if echo "$failed_session" | grep -q '"status":"failed"' && echo "$failed_session" | grep -q '"error"'; then
+              break
+            fi
+            if [ "$i" = "30" ]; then
+              docker logs task-handoff-web-ci
+              exit 1
+            fi
+            sleep 1
+          done
+          curl -fsS \
+            -X DELETE \
+            http://127.0.0.1:18080/api/apps/sessions/$failed_id
+
+      - name: Cleanup
+        if: ${{ always() && !startsWith(github.ref, 'refs/tags/v') }}
+        run: docker rm -f task-handoff-web-ci 2>/dev/null || true
+
+      - name: Login to Docker Hub
+        if: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Publish immutable commit image
+        if: ${{ github.ref == 'refs/heads/main' }}
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          image="${DOCKERHUB_USERNAME}/${DOCKERHUB_IMAGE_NAME}"
+          sha_tag="sha-${GITHUB_SHA::7}"
+          docker tag task-handoff-controlled-instance:ci "${image}:${sha_tag}"
+          docker push "${image}:${sha_tag}"
+
+      - name: Promote immutable image to release tags
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          version="$GITHUB_REF_NAME"
+          if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Release tag is not a supported semantic version: $version"
+            exit 1
+          fi
+
+          image="${DOCKERHUB_USERNAME}/${DOCKERHUB_IMAGE_NAME}"
+          source="${image}:sha-${GITHUB_SHA::7}"
+          for attempt in $(seq 1 120); do
+            if docker buildx imagetools inspect "$source" >/dev/null 2>&1; then
+              break
+            fi
+            if [ "$attempt" = "120" ]; then
+              echo "::error::Immutable source image was not published within 20 minutes: $source"
+              exit 1
+            fi
+            sleep 10
+          done
+
+          tags=(--tag "${image}:${version}")
+          if [[ "$version" != *-* ]]; then
+            tags+=(--tag "${image}:latest")
+          else
+            prerelease="${version#*-}"
+            channel="${prerelease%%.*}"
+            if [[ "$channel" != "alpha" && "$channel" != "beta" ]]; then
+              echo "::error::Only alpha and beta prerelease channels are supported: $version"
+              exit 1
+            fi
+            tags+=(--tag "${image}:${channel}")
+          fi
+          docker buildx imagetools create --prefer-index=false "${tags[@]}" "$source"
+          docker buildx imagetools inspect "${image}:${version}"

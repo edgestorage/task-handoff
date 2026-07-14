@@ -1,0 +1,15 @@
+.DS_Store
+.idea/
+.pnpm-store/
+.task-handoff/
+node_modules/
+/dist/
+/release/
+scripts/docker-up-workspace-local.sh
+packages/web-ui/dist/
+packages/control-plane-ui/dist/
+packages/controlled-instance-ui/dist/
+openspec
+docs
+tasks
+AGENTS.md

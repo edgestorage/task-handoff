@@ -1,0 +1,16 @@
+{
+  "name": "@task-handoff/controlled-instance-image",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "node -e \"console.log('controlled-instance image build is still handled by the root Dockerfile during monorepo phase 0')\"",
+    "check": "pnpm run build",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@task-handoff/core": "workspace:*",
+    "@task-handoff/controlled-instance": "workspace:*",
+    "@task-handoff/receiver-worker": "workspace:*",
+    "commander": "^14.0.3"
+  }
+}

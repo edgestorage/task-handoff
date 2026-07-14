@@ -1,0 +1,317 @@
+.control-plane-shell {
+  height: 100vh;
+  overflow: hidden;
+  background: var(--workspace-bg);
+  color: var(--text);
+}
+
+.control-plane-topbar {
+  -webkit-app-region: drag;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  height: 56px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  padding: 0 16px;
+}
+
+.topbar-left {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 12px;
+}
+
+.desktop-window-controls {
+  -webkit-app-region: no-drag;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 56px;
+  flex: 0 0 56px;
+}
+
+.native-window-control-space {
+  pointer-events: none;
+}
+
+.window-control {
+  display: grid;
+  width: 14px;
+  height: 14px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  color: transparent;
+  cursor: pointer;
+  padding: 0;
+}
+
+.desktop-window-controls:hover .window-control,
+.window-control:focus-visible {
+  color: var(--text);
+}
+
+.window-control.close {
+  background: var(--window-close);
+}
+
+.window-control.minimize {
+  background: var(--window-minimize);
+}
+
+.window-control.maximize {
+  background: var(--window-maximize);
+}
+
+.window-control:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.control-plane-title {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.control-plane-kicker {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.control-plane-title strong {
+  overflow: hidden;
+  font-size: 17px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.control-plane-actions {
+  -webkit-app-region: no-drag;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.control-plane-actions .inline-flex,
+.modal-actions .inline-flex {
+  gap: 6px;
+}
+
+.control-plane-actions .inline-flex {
+  box-sizing: border-box;
+  height: 32px;
+  border-width: 1px;
+  border-style: solid;
+}
+
+.workbench-view-switcher {
+  position: relative;
+  isolation: isolate;
+  display: inline-grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  height: 32px;
+  width: 216px;
+  overflow: hidden;
+  border: 1px solid hsl(var(--input));
+  border-radius: 999px;
+  background: hsl(var(--background));
+  box-shadow: 0 1px 2px rgb(0 0 0 / 5%);
+  padding: 2px;
+}
+
+.workbench-view-switcher::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 2px;
+  z-index: 0;
+  width: calc((100% - 4px) / 3);
+  border-radius: 999px;
+  background: hsl(var(--primary));
+  box-shadow: 0 1px 2px rgb(0 0 0 / 10%);
+  transition: left 0.18s ease;
+}
+
+.workbench-view-switcher[data-active-view="board"]::before {
+  left: calc(2px + (100% - 4px) / 3);
+}
+
+.workbench-view-switcher[data-active-view="ai"]::before {
+  left: calc(2px + (100% - 4px) * 2 / 3);
+}
+
+.workbench-view-option {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  border-radius: 999px;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 0 10px;
+  transition: color 0.15s ease;
+  white-space: nowrap;
+}
+
+.workbench-view-option:hover {
+  color: hsl(var(--accent-foreground));
+}
+
+.workbench-view-option.active {
+  background: transparent;
+  color: hsl(var(--primary-foreground));
+  box-shadow: none;
+}
+
+.workbench-view-option:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline: 1px solid hsl(var(--ring));
+  outline-offset: 1px;
+}
+
+.control-plane-update-indicator {
+  border-color: var(--brand-accent);
+  background: var(--surface-active);
+  color: var(--text-strong);
+  font-weight: 750;
+}
+
+.control-plane-workbench {
+  display: grid;
+  grid-template-columns: var(--instances-width, 292px) minmax(0, 1fr);
+  height: calc(100vh - 56px);
+  min-height: 0;
+}
+
+.control-plane-workbench.instances-collapsed {
+  grid-template-columns: 52px minmax(0, 1fr);
+}
+
+.control-plane-workbench.board-mode {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.status-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--text-subtle);
+  margin-top: 5px;
+}
+
+.status-dot[data-state="online"] {
+  background: var(--status-success);
+  box-shadow: 0 0 0 3px var(--status-success-bg);
+}
+
+.status-dot[data-state="offline"] {
+  background: var(--status-warning);
+}
+
+.status-dot[data-state="endpoint-unreachable"] {
+  background: var(--status-danger);
+}
+
+@media (max-width: 780px) {
+  .control-plane-topbar {
+    height: auto;
+    min-height: 56px;
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 10px 12px;
+  }
+
+  .control-plane-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .topbar-left {
+    width: 100%;
+  }
+
+  .control-plane-workbench {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+    height: calc(100vh - 98px);
+  }
+
+  .control-plane-workbench.instances-collapsed {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+}
+
+@media (max-width: 520px) {
+  .workbench-view-switcher {
+    width: 120px;
+  }
+
+  .workbench-view-option {
+    padding: 0 6px;
+  }
+
+  .workbench-view-option span,
+  .control-plane-actions > .inline-flex span {
+    display: none;
+  }
+
+  .control-plane-actions > .inline-flex {
+    width: 36px;
+    padding: 0;
+  }
+}
+
+/* Cockpit theme alignment with controlled-instance UI */
+.control-plane-shell {
+  background: var(--control-plane-cockpit-background);
+  color: var(--control-plane-cockpit-text);
+}
+
+.control-plane-topbar {
+  border-bottom-color: var(--control-plane-topbar-border);
+  background: var(--control-plane-topbar-bg);
+  backdrop-filter: blur(14px);
+}
+
+.control-plane-kicker {
+  color: var(--control-plane-muted);
+}
+
+.control-plane-title strong {
+  color: var(--control-plane-heading);
+}
+
+.status-dot[data-state="online"] {
+  background: var(--control-plane-status-online);
+  box-shadow: var(--control-plane-status-online-shadow);
+}
+
+.status-dot[data-state="offline"] {
+  background: var(--control-plane-status-offline);
+}
+
+.status-dot[data-state="endpoint-unreachable"] {
+  background: var(--control-plane-status-danger);
+}

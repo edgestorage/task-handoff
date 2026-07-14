@@ -1,0 +1,100 @@
+.catalog-head,
+.session-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.catalog-head {
+  flex-wrap: wrap;
+}
+
+.catalog-item {
+  display: grid;
+  gap: 12px;
+}
+
+.catalog-head > div {
+  min-width: 0;
+}
+
+.catalog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.item-title {
+  font-weight: 600;
+}
+
+.item-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-top: 5px;
+}
+
+.display-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.launch-json {
+  min-height: 68px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+
+.catalog-editor {
+  margin-top: 6px;
+}
+
+.custom-app-form {
+  display: grid;
+  gap: 8px;
+}
+
+.native-select {
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-raised);
+  color: var(--text);
+  padding: 0 10px;
+  font-size: 13px;
+}
+
+.catalog-editor p {
+  margin: 0 0 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.catalog-json {
+  height: 220px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.editor-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.form-error {
+  color: var(--status-danger) !important;
+}

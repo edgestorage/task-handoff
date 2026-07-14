@@ -1,0 +1,75 @@
+.app-access-view {
+  min-height: 100%;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.app-access-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line-subtle);
+  background: var(--surface-raised);
+}
+
+.app-access-header div {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.app-access-header span,
+.app-access-header small {
+  color: var(--text-muted);
+}
+
+.app-access-header strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-access-surface {
+  min-height: 0;
+  background: var(--terminal-bg);
+}
+
+.app-access-terminal,
+.app-access-frame {
+  width: 100%;
+  height: 100%;
+}
+
+.app-access-terminal {
+  box-sizing: border-box;
+}
+
+.app-access-terminal .xterm {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  padding: 8px;
+}
+
+.app-access-terminal .xterm-viewport {
+  background: var(--terminal-bg) !important;
+  overflow-y: hidden;
+}
+
+.app-access-frame {
+  display: block;
+  border: 0;
+}
+
+.app-access-state {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: var(--text-muted);
+}

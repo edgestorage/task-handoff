@@ -1,0 +1,7 @@
+.app-shell {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  height: 100vh;
+  overflow: hidden;
+  background: var(--workspace-bg);
+}

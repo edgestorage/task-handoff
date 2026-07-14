@@ -1,0 +1,25 @@
+.logs-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.panel-title-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.panel-title-row h1 {
+  margin-bottom: 0;
+}
+
+.panel-kicker {
+  margin: 0 0 4px;
+  color: var(--text-subtle);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+

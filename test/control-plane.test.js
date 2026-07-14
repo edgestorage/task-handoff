@@ -1,0 +1,11917 @@
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const net = require("node:net");
+const os = require("node:os");
+const path = require("node:path");
+const { EventEmitter } = require("node:events");
+const test = require("node:test");
+const WebSocket = require("ws");
+const { z } = require("zod");
+
+const { createControlPlaneApp } = require("../packages/control-plane/src/server.ts");
+const { createNodeAgentApp, listenNodeAgentIpcServer, NodeAgentExternalListenerManager } = require("../packages/control-plane/src/node-agent.ts");
+const { ControlPlaneChatGatewayRuntime, aiSessionDeliveryText, createDingdingStreamClient } = require("../packages/control-plane/src/chat-gateway.ts");
+const { ControlledInstanceGateway } = require("../packages/control-plane/src/controlled-instance-gateway.ts");
+const { DingdingProgressStore, parseDingdingCardEvent, sendDingdingActionsCard } = require("../packages/control-plane/src/chat-gateway-adapters.ts");
+const { ControlPlaneEventBus } = require("../packages/control-plane/src/events.ts");
+const { ControlPlaneAiSessionAggregator } = require("../packages/control-plane/src/ai-session-aggregator.ts");
+const { ControlPlaneAppSessionAggregator } = require("../packages/control-plane/src/app-session-aggregator.ts");
+const { NodeAgentInstanceEventForwarder } = require("../packages/control-plane/src/node-agent-events.ts");
+const { ControlPlaneNodeAgentTunnelTransport } = require("../packages/control-plane/src/node-agent-tunnel.ts");
+const { createNodeAgentHmacHeaders } = require("../packages/control-plane/src/node-agent-auth.ts");
+const { fetchNodeAgentIpc, nodeAgentIpcEndpoint, nodeAgentIpcPath, prepareNodeAgentIpcPath } = require("../packages/control-plane/src/node-agent-ipc.ts");
+const { can } = require("../packages/control-plane/src/authorization.ts");
+const { LocalDockerExecutor, dockerRunArgs } = require("../packages/control-plane/src/executor.ts");
+const { checkControlledInstanceUpdate, checkNodeAgentUpdate, dockerImageRefForChannel, isNewerVersion } = require("../packages/control-plane/src/node-updates.ts");
+const { ProcessSingletonError, acquireProcessSingletonLock } = require("../packages/control-plane/src/process-lock.ts");
+const { EventConnectionRetryTimer, eventConnectionRetryDelay, eventConnectionSafetyIntervalMs } = require("../packages/control-plane/src/event-connection-retry.ts");
+const { JsonCollection, JsonFile, nodeAgentStorePaths } = require("../packages/control-plane/src/store.ts");
+const { displayAiSessionMessage, displayAiSessionTitle } = require("../packages/control-plane-ui/src/apps/control-plane/useInstanceSessions.ts");
+const { appSessionStatus } = require("../packages/control-plane-ui/src/apps/control-plane/appSessionVisibility.ts");
+const { AiSessionEventType, AiSessionEventTopic } = require("../packages/protocol/src/ai-sessions.ts");
+const { AppSessionEventType, normalizeAppSessionRecord } = require("../packages/protocol/src/app-sessions.ts");
+const { CONTROL_PLANE_PROTOCOL_VERSION } = require("../packages/protocol/src/control-plane.ts");
+
+function tempDataDir(name) {
+  return fs.mkdtempSync(path.join(os.tmpdir(), `task-handoff-${name}-`));
+}
+
+async function json(app, method, url, payload, headers) {
+  const response = await app.inject({
+    method,
+    url,
+    payload,
+    headers,
+  });
+  return {
+    statusCode: response.statusCode,
+    body: response.json(),
+  };
+}
+
+function onceWebSocketMessage(socket) {
+  return new Promise((resolve, reject) => {
+    socket.once("message", (message) => {
+      try {
+        resolve(JSON.parse(String(message)));
+      } catch (error) {
+        reject(error);
+      }
+    });
+    socket.once("error", reject);
+  });
+}
+
+function waitTelegramAggregate() {
+  return new Promise((resolve) => setTimeout(resolve, 1050));
+}
+
+function onceRawWebSocketMessage(socket) {
+  return new Promise((resolve, reject) => {
+    socket.once("message", (message) => resolve(String(message)));
+    socket.once("error", reject);
+  });
+}
+
+function onceWebSocketMessageFrame(socket) {
+  return new Promise((resolve, reject) => {
+    socket.once("message", (message, isBinary) => resolve({ message: String(message), isBinary }));
+    socket.once("error", reject);
+  });
+}
+
+function waitForWebSocketOpen(socket) {
+  return new Promise((resolve, reject) => {
+    socket.once("open", resolve);
+    socket.once("error", reject);
+  });
+}
+
+function withTimeout(promise, label, timeoutMs = 2000) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+let aiSessionTestRevision = 0;
+function aiSessionSnapshotPayload(snapshot, input = {}) {
+  const timestamp = input.generatedAt || new Date().toISOString();
+  return {
+    meta: {
+      instanceId: input.instanceId || "inst_1",
+      nodeId: input.nodeId,
+      streamId: input.streamId || "ai_test_stream",
+      revision: input.revision ?? ++aiSessionTestRevision,
+      previousRevision: input.previousRevision,
+      traceId: input.traceId || `test_ai_evt_${aiSessionTestRevision}`,
+      generatedAt: timestamp,
+      reason: input.reason || "provider-event",
+    },
+    snapshot: {
+      runningCount: snapshot.runningCount ?? 0,
+      waitingCount: snapshot.waitingCount ?? 0,
+      staleCount: snapshot.staleCount ?? 0,
+      sessions: snapshot.sessions || [],
+      updatedAt: snapshot.updatedAt || timestamp,
+    },
+  };
+}
+
+function publishAiSessionSnapshotForTest(events, snapshot, options = {}) {
+  const instanceId = options.scope?.instanceId || options.instanceId || "inst_1";
+  events.publish(AiSessionEventType.Snapshot, aiSessionSnapshotPayload(snapshot, { ...options, instanceId }), options.scope ? { scope: options.scope } : undefined);
+}
+
+function aiSessionGatewayOptions(events, options = {}) {
+  const aiSessions = new ControlPlaneAiSessionAggregator({ bootstrap: async () => ({ instances: [] }) });
+  events.on((event) => aiSessions.handleEvent(event));
+  return { ...options, aiSessions };
+}
+
+let appSessionTestRevision = 0;
+function appSessionSnapshotPayload(snapshot, input = {}) {
+  const timestamp = input.generatedAt || new Date().toISOString();
+  const sessions = snapshot.sessions || [];
+  return {
+    meta: {
+      instanceId: input.instanceId || "inst_1",
+      nodeId: input.nodeId,
+      streamId: input.streamId || "app_test_stream",
+      revision: input.revision ?? ++appSessionTestRevision,
+      previousRevision: input.previousRevision,
+      traceId: input.traceId || `test_app_evt_${appSessionTestRevision}`,
+      generatedAt: timestamp,
+      reason: input.reason || "app-session-updated",
+    },
+    snapshot: {
+      runningCount: snapshot.runningCount ?? sessions.filter((session) => session.status === "running").length,
+      problemCount: snapshot.problemCount ?? sessions.filter((session) => session.status === "failed").length,
+      sessions,
+      updatedAt: snapshot.updatedAt || timestamp,
+    },
+  };
+}
+
+function publishAppSessionSnapshotForTest(events, snapshot, options = {}) {
+  const instanceId = options.scope?.instanceId || options.instanceId || "inst_1";
+  events.publish(AppSessionEventType.Snapshot, appSessionSnapshotPayload(snapshot, { ...options, instanceId }), options.scope ? { scope: options.scope } : undefined);
+}
+
+test("session aggregators never let an older bootstrap overwrite realtime state", async () => {
+  const timestamp = new Date().toISOString();
+  const appAggregator = new ControlPlaneAppSessionAggregator({
+    bootstrap: async () => ({
+      instances: [{
+        instanceId: "inst_revision",
+        streamId: "app_revision_stream",
+        revision: 1,
+        lastEventAt: timestamp,
+        appSessions: appSessionSnapshotPayload({ sessions: [{ id: "old", status: "running" }] }, { generatedAt: timestamp }).snapshot,
+      }],
+    }),
+  });
+  appAggregator.applySnapshot(appSessionSnapshotPayload(
+    { sessions: [{ id: "current", status: "running" }] },
+    { instanceId: "inst_revision", streamId: "app_revision_stream", revision: 2, previousRevision: 1, generatedAt: timestamp },
+  ));
+
+  const refreshed = await appAggregator.list({ refresh: true });
+  assert.equal(refreshed.instances[0].revision, 2);
+  assert.deepEqual(refreshed.instances[0].appSessions.sessions.map((session) => session.id), ["current"]);
+});
+
+test("controlled instance gateway preserves structured remote errors for every proxied route", async () => {
+  const gateway = new ControlledInstanceGateway({
+    requireNode: () => ({ id: "node_1" }),
+    nodeAgentGateway: {},
+    nodeAgentRequest: async () => new Response(JSON.stringify({
+      error: {
+        code: "APP_SESSION_NOT_FOUND",
+        message: "App session not found.",
+        details: { appSessionId: "app_missing" },
+      },
+    }), { status: 404, headers: { "content-type": "application/json" } }),
+    fetchImpl: fetch,
+  });
+  const instance = {
+    id: "inst_1",
+    name: "Instance 1",
+    nodeId: "node_1",
+    connectionStatus: "online",
+    target: { web: "http://instance.test" },
+  };
+
+  await assert.rejects(
+    () => gateway.request(instance, "/apps/sessions/app_missing"),
+    (error) => {
+      assert.equal(error.code, "APP_SESSION_NOT_FOUND");
+      assert.equal(error.statusCode, 404);
+      assert.equal(error.instanceId, "inst_1");
+      assert.equal(error.nodeId, "node_1");
+      assert.equal(error.route, "/apps/sessions/app_missing");
+      assert.equal(error.message, "App session not found.");
+      return true;
+    },
+  );
+});
+
+test("JSON collections isolate invalid records and strip unknown stored fields", () => {
+  const directory = tempDataDir("schema-store");
+  const warnings = [];
+  const schema = z.object({
+    id: z.string(),
+    createdAt: z.string().datetime(),
+    updatedAt: z.string().datetime(),
+    name: z.string(),
+  }).strict();
+  const collection = new JsonCollection(directory, { schema, logger: (message, details) => warnings.push({ message, details }) });
+  const timestamp = new Date().toISOString();
+  fs.writeFileSync(path.join(directory, "valid.json"), JSON.stringify({ id: "valid", name: "kept", createdAt: timestamp, updatedAt: timestamp, futureField: true }));
+  fs.writeFileSync(path.join(directory, "broken.json"), "{not json");
+
+  assert.deepEqual(collection.list(), [{ id: "valid", name: "kept", createdAt: timestamp, updatedAt: timestamp }]);
+  assert.equal(warnings.length, 2);
+  assert.match(warnings[0].message + warnings[1].message, /could not be read/);
+  assert.match(warnings[0].message + warnings[1].message, /unknown stored fields were ignored/);
+});
+
+test("session aggregators apply patch and removed events as one revisioned stream", async () => {
+  const timestamp = new Date().toISOString();
+  const appAggregator = new ControlPlaneAppSessionAggregator({ bootstrap: async () => ({ instances: [] }) });
+  appAggregator.applySnapshot(appSessionSnapshotPayload(
+    { sessions: [{ id: "app_1", status: "running" }] },
+    { instanceId: "inst_events", streamId: "app_events_stream", revision: 1, generatedAt: timestamp },
+  ));
+  assert.equal(appAggregator.applyPatch({
+    meta: { instanceId: "inst_events", streamId: "app_events_stream", revision: 2, previousRevision: 1, traceId: "app_patch", generatedAt: timestamp, reason: "app-session-updated" },
+    session: { id: "app_1", status: "failed" },
+  }), true);
+  assert.equal(appAggregator.applyRemoved({
+    meta: { instanceId: "inst_events", streamId: "app_events_stream", revision: 3, previousRevision: 2, traceId: "app_removed", generatedAt: timestamp, reason: "app-session-deleted" },
+    sessionId: "app_1",
+  }), true);
+  const appDelta = await appAggregator.delta({ instanceId: "inst_events", streamId: "app_events_stream", sinceRevision: 1 });
+  assert.deepEqual(appDelta.events.map((event) => event.type), [AppSessionEventType.Patch, AppSessionEventType.Removed]);
+  const appDeltaAtHead = await appAggregator.delta({ instanceId: "inst_events", streamId: "app_events_stream", sinceRevision: 3 });
+  assert.equal(appDeltaAtHead.syncRequired, false);
+  assert.deepEqual(appDeltaAtHead.events, []);
+  const appDeltaPastHead = await appAggregator.delta({ instanceId: "inst_events", streamId: "app_events_stream", sinceRevision: 4 });
+  assert.equal(appDeltaPastHead.syncRequired, true);
+  assert.deepEqual(appDeltaPastHead.events, []);
+
+  const aiAggregator = new ControlPlaneAiSessionAggregator({ bootstrap: async () => ({ instances: [] }) });
+  const aiUpdates = [];
+  aiAggregator.onSnapshot((update) => aiUpdates.push({
+    revision: update.revision,
+    sessionIds: update.aiSessions.sessions.map((session) => session.id),
+  }));
+  aiAggregator.applySnapshot(aiSessionSnapshotPayload(
+    { sessions: [] },
+    { instanceId: "inst_events", streamId: "ai_events_stream", revision: 1, generatedAt: timestamp },
+  ));
+  assert.equal(aiAggregator.applyPatch({
+    meta: { instanceId: "inst_events", streamId: "ai_events_stream", revision: 2, previousRevision: 1, traceId: "ai_patch", generatedAt: timestamp, reason: "provider-event" },
+    upserted: [{ id: "ai_1", agent: "codex", status: "idle", phase: "unknown", startedAt: timestamp, updatedAt: timestamp, queue: { pendingCount: 0, items: [] } }],
+    removed: [],
+  }), true);
+  assert.equal(aiAggregator.applyRemoved({
+    meta: { instanceId: "inst_events", streamId: "ai_events_stream", revision: 3, previousRevision: 2, traceId: "ai_removed", generatedAt: timestamp, reason: "provider-event" },
+    sessionIds: ["ai_1"],
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  }), true);
+  const aiDelta = await aiAggregator.delta({ instanceId: "inst_events", streamId: "ai_events_stream", sinceRevision: 1 });
+  assert.deepEqual(aiDelta.events.map((event) => event.type), [AiSessionEventType.Patch, AiSessionEventType.Removed]);
+  const aiDeltaAtHead = await aiAggregator.delta({ instanceId: "inst_events", streamId: "ai_events_stream", sinceRevision: 3 });
+  assert.equal(aiDeltaAtHead.syncRequired, false);
+  assert.deepEqual(aiDeltaAtHead.events, []);
+  const aiDeltaPastHead = await aiAggregator.delta({ instanceId: "inst_events", streamId: "ai_events_stream", sinceRevision: 4 });
+  assert.equal(aiDeltaPastHead.syncRequired, true);
+  assert.deepEqual(aiDeltaPastHead.events, []);
+  assert.deepEqual(aiUpdates, [
+    { revision: 1, sessionIds: [] },
+    { revision: 2, sessionIds: ["ai_1"] },
+    { revision: 3, sessionIds: [] },
+  ]);
+
+  const normalizedAppSession = normalizeAppSessionRecord({
+    id: "legacy_workspace",
+    status: "RUNNING",
+    workspace: {
+      path: "/legacy/path",
+      extra: true,
+    },
+    tty: {
+      cwd: "/workspace/current",
+    },
+  });
+  assert.equal(normalizedAppSession.status, "running");
+  assert.deepEqual(normalizedAppSession.workspace, { cwd: "/workspace/current" });
+  assert.equal(appSessionStatus({ status: "future-state" }), "unknown");
+});
+
+test("AI session aggregator recovers advertised gaps from instance deltas and rejects obsolete bootstrap streams", async () => {
+  const timestamp = new Date().toISOString();
+  let bootstrapStreamId = "ai_obsolete_stream";
+  const recovered = [];
+  const aggregator = new ControlPlaneAiSessionAggregator({
+    bootstrap: async () => ({
+      instances: [{
+        instanceId: "inst_recovery",
+        streamId: bootstrapStreamId,
+        revision: 0,
+        lastEventAt: timestamp,
+        aiSessions: aiSessionSnapshotPayload({ sessions: [] }, { generatedAt: timestamp }).snapshot,
+      }],
+    }),
+    recoverDelta: async (instanceId, streamId, sinceRevision) => ({
+      instanceId,
+      streamId,
+      sinceRevision,
+      latestRevision: 3,
+      earliestRetainedRevision: 2,
+      syncRequired: false,
+      events: [2, 3].filter((revision) => revision > sinceRevision).map((revision) => ({
+        type: AiSessionEventType.Patch,
+        payload: {
+          meta: { instanceId, streamId, revision, previousRevision: revision - 1, traceId: `recover_${revision}`, generatedAt: timestamp, reason: "provider-event" },
+          upserted: [{ id: `ai_${revision}`, agent: "codex", status: "idle", phase: "unknown", startedAt: timestamp, updatedAt: timestamp, queue: { pendingCount: 0, items: [] } }],
+          removed: [],
+        },
+      })),
+    }),
+    recoverSnapshot: async () => { throw new Error("snapshot fallback should not be used"); },
+    onRecoveredEvent: (event) => recovered.push(event.payload.meta.revision),
+  });
+  aggregator.applySnapshot(aiSessionSnapshotPayload({ sessions: [] }, { instanceId: "inst_recovery", streamId: "ai_current_stream", revision: 1, generatedAt: timestamp }));
+  await aggregator.advertiseStream("inst_recovery", { topic: "ai.sessions", instanceId: "inst_recovery", streamId: "ai_current_stream", latestRevision: 3, earliestRetainedRevision: 2 });
+  assert.deepEqual(recovered, [2, 3]);
+  assert.equal((await aggregator.list()).instances[0].revision, 3);
+  assert.equal(aggregator.diagnostics().deltaRecoveries, 1);
+
+  await aggregator.list({ refresh: true });
+  assert.equal((await aggregator.list()).instances[0].streamId, "ai_current_stream");
+  bootstrapStreamId = "ai_current_stream";
+});
+
+test("app session aggregator clears retained history when a new stream snapshot is accepted", async () => {
+  const timestamp = new Date().toISOString();
+  const aggregator = new ControlPlaneAppSessionAggregator({ bootstrap: async () => ({ instances: [] }) });
+  aggregator.applySnapshot(appSessionSnapshotPayload({ sessions: [] }, { instanceId: "inst_epoch", streamId: "app_old_stream", revision: 1, generatedAt: timestamp }));
+  aggregator.applySnapshot(appSessionSnapshotPayload({ sessions: [] }, { instanceId: "inst_epoch", streamId: "app_new_stream", revision: 1, generatedAt: timestamp }));
+  assert.equal(aggregator.diagnostics().streamResets, 1);
+  const delta = await aggregator.delta({ instanceId: "inst_epoch", streamId: "app_new_stream", sinceRevision: 0 });
+  assert.equal(delta.events.length, 1);
+  assert.equal(delta.events[0].payload.meta.streamId, "app_new_stream");
+});
+
+test("control-plane aggregator restart bootstraps the authoritative stream and ignores duplicate delivery", async () => {
+  const timestamp = new Date().toISOString();
+  const snapshot = aiSessionSnapshotPayload({ sessions: [] }, { instanceId: "inst_restart", streamId: "ai_restart_stream", revision: 5, generatedAt: timestamp });
+  const aggregator = new ControlPlaneAiSessionAggregator({
+    bootstrap: async () => ({
+      instances: [{ instanceId: "inst_restart", streamId: "ai_restart_stream", revision: 5, lastEventAt: timestamp, aiSessions: snapshot.snapshot }],
+    }),
+  });
+  const restarted = await aggregator.list();
+  assert.equal(restarted.instances[0].streamId, "ai_restart_stream");
+  assert.equal(restarted.instances[0].revision, 5);
+  assert.equal(aggregator.applySnapshot(snapshot), false);
+  assert.equal((await aggregator.list()).instances[0].revision, 5);
+});
+
+test("AI session aggregator ignores obsolete epoch events during active recovery", async () => {
+  const timestamp = new Date().toISOString();
+  let releaseDelta;
+  const deltaReady = new Promise((resolve) => { releaseDelta = resolve; });
+  let deltaRequests = 0;
+  const aggregator = new ControlPlaneAiSessionAggregator({
+    bootstrap: async () => ({ instances: [] }),
+    recoverDelta: async (instanceId, streamId, sinceRevision) => {
+      deltaRequests += 1;
+      await deltaReady;
+      return {
+        instanceId,
+        streamId,
+        sinceRevision,
+        latestRevision: 2,
+        earliestRetainedRevision: 2,
+        syncRequired: false,
+        events: [{
+          type: AiSessionEventType.Patch,
+          payload: {
+            meta: { instanceId, streamId, revision: 2, previousRevision: 1, traceId: "current_2", generatedAt: timestamp, reason: "provider-event" },
+            upserted: [],
+            removed: [],
+          },
+        }],
+      };
+    },
+    recoverSnapshot: async () => { throw new Error("snapshot fallback should not be used"); },
+  });
+  aggregator.applySnapshot(aiSessionSnapshotPayload({ sessions: [] }, { instanceId: "inst_epoch_delay", streamId: "ai_current", revision: 1, generatedAt: timestamp }));
+  const recovery = aggregator.advertiseStream("inst_epoch_delay", { topic: "ai.sessions", instanceId: "inst_epoch_delay", streamId: "ai_current", latestRevision: 2, earliestRetainedRevision: 2 });
+  await new Promise((resolve) => setImmediate(resolve));
+  aggregator.applyPatch({
+    meta: { instanceId: "inst_epoch_delay", streamId: "ai_obsolete", revision: 50, previousRevision: 49, traceId: "obsolete_50", generatedAt: timestamp, reason: "provider-event" },
+    upserted: [],
+    removed: [],
+  });
+  releaseDelta();
+  await recovery;
+
+  assert.equal(deltaRequests, 1);
+  const current = (await aggregator.list()).instances[0];
+  assert.equal(current.streamId, "ai_current");
+  assert.equal(current.revision, 2);
+});
+
+test("session aggregators remove projections and descriptors for deleted instances", async () => {
+  const timestamp = new Date().toISOString();
+  const ai = new ControlPlaneAiSessionAggregator({ bootstrap: async () => ({ instances: [] }) });
+  const apps = new ControlPlaneAppSessionAggregator({ bootstrap: async () => ({ instances: [] }) });
+  ai.applySnapshot(aiSessionSnapshotPayload({ sessions: [] }, { instanceId: "inst_deleted", streamId: "ai_deleted", revision: 1, generatedAt: timestamp }));
+  apps.applySnapshot(appSessionSnapshotPayload({ sessions: [] }, { instanceId: "inst_deleted", streamId: "app_deleted", revision: 1, generatedAt: timestamp }));
+  ai.removeInstance("inst_deleted");
+  apps.removeInstance("inst_deleted");
+
+  assert.deepEqual((await ai.list()).instances, []);
+  assert.deepEqual((await apps.list()).instances, []);
+  assert.deepEqual(await ai.streamDescriptors(), []);
+  assert.deepEqual(await apps.streamDescriptors(), []);
+});
+
+async function waitForProcessExit(pid, label, timeoutMs = 3000) {
+  await withTimeout(
+    (async () => {
+      for (;;) {
+        try {
+          process.kill(pid, 0);
+        } catch {
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    })(),
+    label,
+    timeoutMs,
+  );
+}
+
+async function waitForCondition(check, label, timeoutMs = 2000) {
+  const startedAt = Date.now();
+  for (;;) {
+    const result = await check();
+    if (result) {
+      return result;
+    }
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error(`${label} timed out after ${timeoutMs}ms`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
+function freePort(host = "127.0.0.1") {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once("error", reject);
+    server.listen(0, host, () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      server.close(() => resolve(port));
+    });
+  });
+}
+
+test("local IPC can rebind the node agent TCP listener without changing the socket", async (t) => {
+  const dataDir = tempDataDir("external-listener");
+  const paths = nodeAgentStorePaths(dataDir);
+  const firstPort = await freePort();
+  const secondPort = await freePort();
+  const ipcPath = path.join(dataDir, "node-agent.sock");
+  const app = await createNodeAgentApp({ dataDir, logger: false, connectionMode: "local-ipc", port: firstPort });
+  const settings = new JsonFile(paths.settingsPath, () => ({ version: 1, externalListener: { bindScope: "loopback", port: firstPort } }));
+  const manager = new NodeAgentExternalListenerManager({
+    app,
+    state: app.nodeAgentState,
+    settings,
+    config: { bindScope: "loopback", port: firstPort },
+    source: "bootstrap",
+  });
+  app.decorate("nodeAgentListenerManager", manager);
+  await app.ready();
+  const ipcServer = await listenNodeAgentIpcServer(app, ipcPath);
+  await manager.start();
+  t.after(async () => {
+    await manager.shutdown();
+    await new Promise((resolve) => ipcServer.close(resolve));
+    await app.close();
+  });
+
+  const initial = await fetchNodeAgentIpc(ipcPath, "/settings/external-listener");
+  assert.equal(initial.status, 200);
+  assert.deepEqual((await initial.json()).data, {
+    bindScope: "loopback",
+    host: "127.0.0.1",
+    port: firstPort,
+    status: "listening",
+    source: "bootstrap",
+  });
+
+  const updated = await fetchNodeAgentIpc(ipcPath, "/settings/external-listener", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ bindScope: "loopback", port: secondPort }),
+  });
+  assert.equal(updated.status, 200);
+  assert.equal((await updated.json()).data.port, secondPort);
+  assert.equal((await fetch(`http://127.0.0.1:${secondPort}/api/node-agent/health`)).status, 200);
+  await assert.rejects(() => fetch(`http://127.0.0.1:${firstPort}/api/node-agent/health`));
+
+  const remoteSettings = await fetch(`http://127.0.0.1:${secondPort}/api/node-agent/settings/external-listener`);
+  assert.equal(remoteSettings.status, 403);
+  assert.equal((await remoteSettings.json()).error.code, "NODE_AGENT_LISTENER_LOCAL_IPC_ONLY");
+  assert.equal(JSON.parse(fs.readFileSync(paths.settingsPath, "utf8")).externalListener.port, secondPort);
+
+  const occupied = net.createServer();
+  await new Promise((resolve, reject) => {
+    occupied.once("error", reject);
+    occupied.listen(0, "127.0.0.1", resolve);
+  });
+  t.after(() => occupied.close());
+  const occupiedAddress = occupied.address();
+  assert.equal(typeof occupiedAddress, "object");
+  const rejected = await fetchNodeAgentIpc(ipcPath, "/settings/external-listener", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ bindScope: "loopback", port: occupiedAddress.port }),
+  });
+  assert.equal(rejected.status, 409);
+  assert.equal((await rejected.json()).error.code, "NODE_AGENT_LISTENER_BIND_FAILED");
+  assert.equal((await fetchNodeAgentIpc(ipcPath, "/settings/external-listener")).status, 200);
+  assert.equal((await fetch(`http://127.0.0.1:${secondPort}/api/node-agent/health`)).status, 200);
+
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances",
+    payload: {
+      id: "inst_listener_blocker",
+      name: "listener blocker",
+      runtimeId: "runtime_local_docker",
+      imageId: "img_listener_blocker",
+      source: { type: "local-folder", path: "/tmp/listener-blocker" },
+      image: {
+        id: "img_listener_blocker",
+        name: "Listener blocker",
+        image: "task-handoff/listener-blocker",
+        registry: "local",
+        capabilities: [],
+        optionalApps: [],
+        defaultEnv: {},
+        labels: {},
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+    },
+  });
+  assert.equal(created.statusCode, 201, created.body);
+  app.nodeAgentState.controlledInstances.put({ ...created.json().data, status: "running" });
+  const blockedPort = await freePort();
+  const blocked = await fetchNodeAgentIpc(ipcPath, "/settings/external-listener", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ bindScope: "loopback", port: blockedPort }),
+  });
+  assert.equal(blocked.status, 409);
+  assert.deepEqual((await blocked.json()).error, {
+    code: "NODE_AGENT_LISTENER_PORT_IN_USE_BY_INSTANCES",
+    message: "Cannot change the node agent port while 1 controlled instance(s) are running.",
+    blockingInstanceCount: 1,
+  });
+});
+
+function createMockNodeAgentFetch(options = {}) {
+  const timestamp = new Date().toISOString();
+  const nodeId = options.nodeId || "node_mock";
+  const runtimes = options.runtimes || [
+    {
+      id: "runtime_local_docker",
+      nodeId,
+      name: "Local Docker",
+      type: "docker",
+      status: "unknown",
+      accessStrategy: "direct-port",
+      capabilities: {},
+      labels: {},
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    },
+  ];
+  const folders = [...(options.localFolders || [])];
+  const instances = new Map((options.instances || []).map((instance) => [instance.id, instance]));
+  let externalListener = options.externalListener || { bindScope: "loopback", host: "127.0.0.1", port: 8091, status: "listening", source: "bootstrap" };
+  const requests = [];
+  const jsonResponse = (data, status = 200) =>
+    new Response(JSON.stringify({ data }), {
+      status,
+      headers: { "content-type": "application/json" },
+    });
+  const errorResponse = (message, status = 404, code) =>
+    new Response(JSON.stringify({ error: { ...(code ? { code } : {}), message } }), {
+      status,
+      headers: { "content-type": "application/json" },
+    });
+
+  async function fetchImpl(url, init = {}) {
+    const parsedUrl = new URL(String(url));
+    const path = parsedUrl.pathname.replace(/^\/api\/node-agent/, "");
+    const body = init.body ? JSON.parse(init.body) : undefined;
+    requests.push({ url: String(url), method: init.method || "GET", headers: init.headers || {}, body, path });
+
+    if (path === "/health") {
+      return jsonResponse({ ok: true, role: "node-agent", nodeId, protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, ...(options.health || {}) });
+    }
+    if (path === "/settings/external-listener" && (!init.method || init.method === "GET")) {
+      return jsonResponse(externalListener);
+    }
+    if (path === "/settings/external-listener" && init.method === "PATCH") {
+      externalListener = {
+        ...body,
+        host: body.bindScope === "all-ipv4" ? "0.0.0.0" : "127.0.0.1",
+        status: "listening",
+        source: "persisted",
+      };
+      return jsonResponse(externalListener);
+    }
+    if (path === "/runtimes" && (!init.method || init.method === "GET")) {
+      return jsonResponse(runtimes);
+    }
+    if (path === "/runtimes" && init.method === "POST") {
+      const runtime = {
+        id: body.id || `runtime_${runtimes.length + 1}`,
+        nodeId,
+        name: body.name,
+        type: body.type,
+        status: body.status || "unknown",
+        accessStrategy: body.accessStrategy || (body.type === "docker" ? "direct-port" : "node-proxy"),
+        capabilities: body.type === "local"
+          ? {
+              requiresImage: false,
+              supportsControlledInstanceApi: true,
+              supportsContainerLifecycle: false,
+              supportsAppSessions: true,
+              supportsHostSessions: true,
+              artifactKind: "none",
+              isolation: "none",
+              ...(body.capabilities || {}),
+            }
+          : body.capabilities || {},
+        labels: body.labels || {},
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      };
+      runtimes.push(runtime);
+      return jsonResponse(runtime, 201);
+    }
+    const runtimeUpdate = path.match(/^\/runtimes\/([^/]+)$/);
+    if (runtimeUpdate && init.method === "PATCH") {
+      const id = decodeURIComponent(runtimeUpdate[1]);
+      const index = runtimes.findIndex((runtime) => runtime.id === id);
+      if (index < 0) return errorResponse(`Runtime ${id} was not found.`);
+      runtimes[index] = { ...runtimes[index], ...body, id, nodeId, updatedAt: timestamp };
+      return jsonResponse(runtimes[index]);
+    }
+    if (runtimeUpdate && init.method === "DELETE") {
+      const id = decodeURIComponent(runtimeUpdate[1]);
+      const index = runtimes.findIndex((runtime) => runtime.id === id);
+      if (index >= 0) runtimes.splice(index, 1);
+      return jsonResponse({ deleted: index >= 0 });
+    }
+    const runtimeCheck = path.match(/^\/runtimes\/([^/]+)\/check$/);
+    if (runtimeCheck && init.method === "POST") {
+      const id = decodeURIComponent(runtimeCheck[1]);
+      const index = runtimes.findIndex((runtime) => runtime.id === id);
+      if (index < 0) return errorResponse(`Runtime ${id} was not found.`);
+      runtimes[index] = {
+        ...runtimes[index],
+        status: "online",
+        capabilities: {
+          ...runtimes[index].capabilities,
+          apps: {
+            terminal: true,
+            codex: { available: false },
+            claude: { available: false },
+          },
+        },
+        updatedAt: timestamp,
+      };
+      return jsonResponse(runtimes[index]);
+    }
+    if (path === "/docker/images") {
+      return jsonResponse(options.dockerImages || []);
+    }
+    if (path === "/local-folders" && (!init.method || init.method === "GET")) {
+      return jsonResponse(folders);
+    }
+    if (path === "/folders/tree") {
+      return jsonResponse(options.folderTree || []);
+    }
+    if (path === "/local-folders" && init.method === "POST") {
+      const folder = {
+        id: body.id || `folder_${folders.length + 1}`,
+        nodeId,
+        name: body.name,
+        path: body.path,
+        defaultImageId: body.defaultImageId,
+        modelSelection: body.modelSelection || {},
+        labels: body.labels || {},
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      };
+      folders.push(folder);
+      return jsonResponse(folder, 201);
+    }
+    const folderDelete = path.match(/^\/local-folders\/([^/]+)$/);
+    if (folderDelete && init.method === "DELETE") {
+      const index = folders.findIndex((folder) => folder.id === decodeURIComponent(folderDelete[1]));
+      if (index >= 0) folders.splice(index, 1);
+      return jsonResponse({ deleted: index >= 0 });
+    }
+    if (path === "/instances" && (!init.method || init.method === "GET")) {
+      return jsonResponse([...instances.values()]);
+    }
+    if (path === "/instances" && init.method === "POST") {
+      const id = body.id || `inst_${instances.size + 1}`;
+      const instance = {
+        id,
+        name: body.name || `instance-${timestamp.replace(/[-:.TZ]/g, "").slice(0, 14)}-${id.replace(/^inst_?/, "").slice(0, 4)}`,
+        projectId: body.projectId,
+        source: body.source,
+        sourceSnapshot: body.sourceSnapshot || {},
+        nodeId,
+        runtimeId: body.runtimeId,
+        imageId: body.imageId,
+        imageSnapshot: body.image,
+        status: "created",
+        health: "unknown",
+        connectionStatus: "unknown",
+        controlMode: "controlled",
+        capabilities: {},
+        config: body.config || { autoImportAgentConfigs: true },
+        workspace: { status: "unknown" },
+        target: { strategy: "node-proxy", status: "unknown" },
+        receiver: { status: "unknown", pendingCount: 0 },
+        apps: { runningCount: 0 },
+        runtime: { labels: {} },
+        registrationToken: `token_${id}`,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      };
+      instances.set(id, instance);
+      return jsonResponse(instance, 201);
+    }
+    const proxyRaw = path.match(/^\/instances\/([^/]+)\/proxy\/raw$/);
+    if (proxyRaw) {
+      const id = decodeURIComponent(proxyRaw[1]);
+      const current = instances.get(id);
+      if (!current) return errorResponse(`Instance ${id} was not found.`);
+      return options.proxy ? options.proxy({ url, init, body, instance: current, requests, jsonResponse, errorResponse }) : jsonResponse({ ok: true });
+    }
+    const lifecycle = path.match(/^\/instances\/([^/]+)\/(start|stop|restart|delete|proxy|register|heartbeat)$/);
+    if (lifecycle) {
+      const id = decodeURIComponent(lifecycle[1]);
+      const action = lifecycle[2];
+      const current = instances.get(id);
+      if (!current) return errorResponse(`Instance ${id} was not found.`);
+      if (action === "delete") {
+        instances.delete(id);
+        return jsonResponse({ deleted: true });
+      }
+      if (action === "proxy") {
+        return options.proxy ? options.proxy({ url, init, body, instance: current, requests, jsonResponse, errorResponse }) : jsonResponse({ ok: true });
+      }
+      if (action === "heartbeat" && options.heartbeat) {
+        return options.heartbeat({ url, init, body, instance: current, requests, jsonResponse, errorResponse });
+      }
+      const updated = {
+        ...current,
+        ...(action === "start" || action === "restart"
+          ? {
+              status: "registering",
+              connectionStatus: "online",
+              target: { ...current.target, strategy: "direct-port", status: "reachable", web: `http://127.0.0.1/${id}`, api: `http://127.0.0.1/${id}/api` },
+              workspace: { ...current.workspace, status: "pending", path: "/workspace" },
+              runtime: { ...current.runtime, kind: "docker", containerName: `task-handoff-${id}`, containerId: `container-${id}` },
+            }
+          : {}),
+        ...(action === "stop" ? { status: "stopped", connectionStatus: "offline", target: { ...current.target, status: "unknown" } } : {}),
+        ...(action === "register"
+          ? {
+              name: body.name || current.name,
+              status: "registered",
+              health: "ok",
+              connectionStatus: "online",
+              agentStatus: "online",
+              targetStatus: body.target?.status === "endpoint-unreachable" ? "endpoint-unreachable" : body.target?.status === "reachable" ? "reachable" : current.targetStatus,
+              target: { ...current.target, ...(body.target || {}) },
+              workspace: body.workspace || current.workspace,
+            }
+          : {}),
+        ...(action === "heartbeat"
+          ? {
+              ...body,
+              target: { ...current.target, ...(body.target || {}) },
+              connectionStatus: "online",
+              agentStatus: "online",
+              targetStatus: body.target?.status === "endpoint-unreachable" ? "endpoint-unreachable" : body.target?.status === "reachable" ? "reachable" : current.targetStatus,
+            }
+          : {}),
+        updatedAt: timestamp,
+      };
+      instances.set(id, updated);
+      return jsonResponse(updated, action === "register" ? 201 : 200);
+    }
+    return errorResponse(`Unhandled node agent route ${path}`);
+  }
+
+  return { fetchImpl, requests, instances, folders, runtimes };
+}
+
+test("control plane auth is disabled by default", async () => {
+  const app = await createControlPlaneApp({ dataDir: tempDataDir("cp-auth-disabled") });
+  try {
+    const session = await json(app, "GET", "/api/auth/session");
+    assert.equal(session.statusCode, 200);
+    assert.equal(session.body.data.mode, "disabled");
+    assert.equal(session.body.data.authenticated, true);
+
+    const projects = await json(app, "GET", "/api/projects");
+    assert.equal(projects.statusCode, 200);
+  } finally {
+    await app.close();
+  }
+});
+
+test("control plane persists one update channel for server and node updates", async () => {
+  const dataDir = tempDataDir("cp-update-channel-setting");
+  fs.writeFileSync(path.join(dataDir, "control-plane-settings.json"), JSON.stringify({
+    publicBaseUrl: "https://legacy-control.example.test",
+  }));
+  let app = await createControlPlaneApp({ dataDir });
+  try {
+    const defaults = await json(app, "GET", "/api/control-plane/settings");
+    assert.equal(defaults.statusCode, 200);
+    assert.equal(defaults.body.data.updateChannel, "stable");
+    assert.equal(defaults.body.data.publicBaseUrl, "https://legacy-control.example.test");
+
+    const publicUrl = await json(app, "PATCH", "/api/control-plane/settings", {
+      publicBaseUrl: "https://control.example.test",
+    });
+    assert.equal(publicUrl.statusCode, 200);
+    assert.equal(publicUrl.body.data.updateChannel, "stable");
+
+    const channel = await json(app, "PATCH", "/api/control-plane/settings", { updateChannel: "beta" });
+    assert.equal(channel.statusCode, 200);
+    assert.equal(channel.body.data.updateChannel, "beta");
+    assert.equal(channel.body.data.publicBaseUrl, "https://control.example.test");
+  } finally {
+    await app.close();
+  }
+
+  app = await createControlPlaneApp({ dataDir });
+  try {
+    const persisted = await json(app, "GET", "/api/control-plane/settings");
+    assert.equal(persisted.statusCode, 200);
+    assert.equal(persisted.body.data.updateChannel, "beta");
+    assert.equal(persisted.body.data.publicBaseUrl, "https://control.example.test");
+  } finally {
+    await app.close();
+  }
+});
+
+test("control plane password auth protects APIs and supports bootstrap login logout", async () => {
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("cp-auth-password"),
+    auth: { mode: "password" },
+  });
+  try {
+    const anonymousSession = await json(app, "GET", "/api/auth/session");
+    assert.equal(anonymousSession.statusCode, 200);
+    assert.equal(anonymousSession.body.data.mode, "password");
+    assert.equal(anonymousSession.body.data.requiresBootstrap, true);
+    assert.equal(anonymousSession.body.data.authenticated, false);
+
+    const health = await json(app, "GET", "/api/health");
+    assert.equal(health.statusCode, 200);
+
+    const blocked = await json(app, "GET", "/api/projects");
+    assert.equal(blocked.statusCode, 401);
+
+    const bootstrap = await json(app, "POST", "/api/auth/bootstrap-admin", {
+      username: "admin",
+      password: "password123",
+    });
+    assert.equal(bootstrap.statusCode, 201);
+    assert.equal(bootstrap.body.data.username, "admin");
+
+    const login = await app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      payload: { username: "admin", password: "password123" },
+    });
+    assert.equal(login.statusCode, 200);
+    const cookie = login.headers["set-cookie"];
+    assert.ok(cookie);
+    assert.match(cookie, /HttpOnly/);
+    assert.match(cookie, /SameSite=Lax/);
+
+    const authorized = await json(app, "GET", "/api/projects", undefined, { cookie });
+    assert.equal(authorized.statusCode, 200);
+
+    const session = await json(app, "GET", "/api/auth/session", undefined, { cookie });
+    assert.equal(session.statusCode, 200);
+    assert.equal(session.body.data.authenticated, true);
+    assert.equal(session.body.data.user.username, "admin");
+    assert.equal(session.body.data.user.role, "admin");
+
+    const logout = await app.inject({
+      method: "POST",
+      url: "/api/auth/logout",
+      headers: { cookie },
+    });
+    assert.equal(logout.statusCode, 200);
+    assert.match(logout.headers["set-cookie"], /Max-Age=0/);
+
+    const blockedAfterLogout = await json(app, "GET", "/api/projects", undefined, { cookie });
+    assert.equal(blockedAfterLogout.statusCode, 401);
+  } finally {
+    await app.close();
+  }
+});
+
+test("control plane serves the remote node-agent installer without auth", async (t) => {
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("cp-node-agent-installer"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    auth: { mode: "password" },
+  });
+  t.after(() => app.close());
+
+  const response = await app.inject({
+    method: "GET",
+    url: "/install-node-agent.sh",
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.match(response.headers["content-type"], /text\/x-shellscript/);
+  assert.match(response.body, /task-handoff-node-agent\.service/);
+  assert.match(response.body, /--control-plane <url>/);
+  assert.match(response.body, /api\/node-agent\/remotes\/connect/);
+});
+
+test("control plane authorization role matrix separates viewer operator and admin", () => {
+  const admin = { type: "user", userId: "u_admin", role: "admin" };
+  const operator = { type: "user", userId: "u_operator", role: "operator" };
+  const viewer = { type: "user", userId: "u_viewer", role: "viewer" };
+
+  assert.equal(can(admin, "manage-secrets", { type: "model" }), true);
+  assert.equal(can(operator, "start", { type: "instance", id: "inst_1" }), true);
+  assert.equal(can(operator, "send-message", { type: "ai-session", instanceId: "inst_1", id: "ais_1" }), true);
+  assert.equal(can(operator, "manage-secrets", { type: "model", id: "model_1" }), false);
+  assert.equal(can(operator, "manage-node-auth", { type: "node", id: "node_1" }), false);
+  assert.equal(can(viewer, "read", { type: "instance", id: "inst_1" }), true);
+  assert.equal(can(viewer, "start", { type: "instance", id: "inst_1" }), false);
+});
+
+test("event connection retry timing is bounded, jittered, and safety reconciliation is clamped", () => {
+  assert.equal(eventConnectionRetryDelay(0, () => 0), 750);
+  assert.equal(eventConnectionRetryDelay(1, () => 0.5), 2_000);
+  assert.equal(eventConnectionRetryDelay(10, () => 0.5), 30_000);
+  assert.equal(eventConnectionRetryDelay(10, () => 1), 30_000);
+  assert.equal(eventConnectionSafetyIntervalMs(1_000), 30_000);
+  assert.equal(eventConnectionSafetyIntervalMs(50_000), 50_000);
+  assert.equal(eventConnectionSafetyIntervalMs(120_000), 60_000);
+});
+
+test("event connection retry timer resets after success and cancels removal cleanup deterministically", () => {
+  const scheduled = [];
+  const cleared = [];
+  const setTimeoutFn = (callback, delay) => {
+    const handle = { callback, delay };
+    scheduled.push(handle);
+    return handle;
+  };
+  const clearTimeoutFn = (handle) => cleared.push(handle);
+  const retry = new EventConnectionRetryTimer();
+
+  assert.deepEqual(retry.schedule(() => undefined, { random: () => 0.5, setTimeoutFn }), { attempt: 1, delay: 1_000 });
+  assert.equal(retry.pending, true);
+  assert.equal(retry.schedule(() => undefined, { random: () => 0.5, setTimeoutFn }), undefined);
+  scheduled[0].callback();
+  assert.equal(retry.pending, false);
+  assert.deepEqual(retry.schedule(() => undefined, { random: () => 0.5, setTimeoutFn }), { attempt: 2, delay: 2_000 });
+  retry.reset(clearTimeoutFn);
+  assert.equal(retry.attempts, 0);
+  assert.equal(cleared.includes(scheduled[1]), true);
+  assert.deepEqual(retry.schedule(() => undefined, { random: () => 0.5, setTimeoutFn }), { attempt: 1, delay: 1_000 });
+  retry.cancel(clearTimeoutFn);
+  assert.equal(retry.pending, false);
+  assert.equal(cleared.includes(scheduled[2]), true);
+});
+
+test("instance event connections reconcile immediately, clean retries on removal, and safety-repair missed lifecycle changes", () => {
+  const instances = [];
+  const sockets = [];
+  let safetyTick;
+  class FakeSocket extends EventEmitter {
+    constructor(url) {
+      super();
+      this.url = url;
+      this.readyState = WebSocket.CONNECTING;
+      this.sent = [];
+      this.closed = false;
+    }
+    send(value) { this.sent.push(String(value)); }
+    close() { this.closed = true; }
+  }
+  const forwarder = new NodeAgentInstanceEventForwarder(
+    { listInstances: () => instances },
+    undefined,
+    {
+      safetyIntervalMs: 30_000,
+      createSocket: (url) => {
+        const socket = new FakeSocket(url);
+        sockets.push(socket);
+        return socket;
+      },
+      setIntervalFn: (callback) => {
+        safetyTick = callback;
+        return { kind: "interval" };
+      },
+      clearIntervalFn: () => undefined,
+    },
+  );
+  const output = new EventEmitter();
+  output.readyState = WebSocket.OPEN;
+  output.send = () => undefined;
+  forwarder.addOutput(output);
+  forwarder.start();
+
+  instances.push({ id: "inst_reconcile", target: { api: "http://127.0.0.1:18080" } });
+  assert.equal(sockets.length, 0);
+  safetyTick();
+  assert.equal(sockets.length, 1);
+  assert.equal(forwarder.diagnostics().safetyReconciliations, 1);
+  sockets[0].readyState = WebSocket.OPEN;
+  sockets[0].emit("open");
+
+  instances[0].target.api = "http://127.0.0.1:18081";
+  forwarder.syncNow();
+  assert.equal(sockets[0].closed, true);
+  assert.equal(sockets.length, 2);
+
+  sockets[1].emit("close");
+  assert.equal(forwarder.diagnostics().pendingRetries, 1);
+  instances.splice(0, 1);
+  forwarder.syncNow();
+  assert.equal(forwarder.diagnostics().pendingRetries, 0);
+
+  instances.push({ id: "inst_immediate", target: { api: "http://127.0.0.1:18082" } });
+  forwarder.syncNow();
+  assert.equal(sockets.length, 3);
+  forwarder.stop();
+});
+
+test("control plane process lock enforces one owner per system lock", () => {
+  const dataDir = tempDataDir("control-plane-lock");
+  const lockPath = path.join(dataDir, "control-plane-system.lock");
+  const first = acquireProcessSingletonLock(lockPath, { component: "control-plane", dataDir: path.join(dataDir, "first"), host: "127.0.0.1", port: 18081 });
+
+  assert.throws(
+    () => acquireProcessSingletonLock(lockPath, { component: "control-plane", dataDir: path.join(dataDir, "second"), host: "127.0.0.1", port: 18082 }),
+    (error) => {
+      assert.equal(error instanceof ProcessSingletonError, true);
+      assert.equal(error.code, "CONTROL_PLANE_ALREADY_RUNNING");
+      assert.equal(error.owner.pid, process.pid);
+      assert.equal(error.owner.component, "control-plane");
+      assert.equal(error.owner.port, 18081);
+      assert.equal(error.owner.dataDir, path.join(dataDir, "first"));
+      return true;
+    },
+  );
+
+  first.release();
+  const second = acquireProcessSingletonLock(lockPath, { component: "control-plane", dataDir: path.join(dataDir, "second"), host: "127.0.0.1", port: 18082 });
+  assert.equal(second.owner.port, 18082);
+  second.release();
+});
+
+test("node agent process lock enforces one owner independent of port", () => {
+  const dataDir = tempDataDir("node-agent-lock");
+  const lockPath = path.join(dataDir, "node-agent-system.lock");
+  const first = acquireProcessSingletonLock(lockPath, { component: "node-agent", dataDir: path.join(dataDir, "first"), host: "127.0.0.1", port: 18091 });
+
+  assert.throws(
+    () => acquireProcessSingletonLock(lockPath, { component: "node-agent", dataDir: path.join(dataDir, "second"), host: "127.0.0.1", port: 18092 }),
+    (error) => {
+      assert.equal(error instanceof ProcessSingletonError, true);
+      assert.equal(error.code, "NODE_AGENT_ALREADY_RUNNING");
+      assert.equal(error.owner.pid, process.pid);
+      assert.equal(error.owner.component, "node-agent");
+      assert.equal(error.owner.port, 18091);
+      return true;
+    },
+  );
+
+  first.release();
+});
+
+test("control plane process lock recovers stale owners", () => {
+  const dataDir = tempDataDir("control-plane-stale-lock");
+  const lockPath = path.join(dataDir, "control-plane.lock");
+  fs.mkdirSync(lockPath, { recursive: true });
+  fs.writeFileSync(path.join(lockPath, "owner.json"), `${JSON.stringify({
+    pid: 99999999,
+    hostname: "old-host",
+    command: "task-handoff control-plane",
+    acquiredAt: "2026-07-03T00:00:00.000Z",
+    token: "old-token",
+    host: "127.0.0.1",
+    port: 18081,
+  })}\n`);
+
+  const lock = acquireProcessSingletonLock(lockPath, { component: "control-plane", host: "127.0.0.1", port: 18082 });
+  assert.equal(lock.owner.pid, process.pid);
+  assert.equal(lock.owner.port, 18082);
+  lock.release();
+});
+
+test("control plane emits websocket events for mutations", async (t) => {
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("cp-events"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+  });
+  t.after(() => app.close());
+  await app.listen({ host: "127.0.0.1", port: 0 });
+  const address = app.server.address();
+  assert.equal(typeof address, "object");
+  const socket = new WebSocket(`ws://127.0.0.1:${address.port}/api/events`);
+  t.after(() => socket.terminate());
+  const connectedMessage = withTimeout(onceWebSocketMessageFrame(socket), "events connected");
+  await withTimeout(waitForWebSocketOpen(socket), "control plane events websocket open");
+  assert.equal(JSON.parse((await connectedMessage).message).type, "streams.hello");
+
+  const project = await json(app, "POST", "/api/projects", {
+    name: "Events Project",
+    source: {
+      type: "local-folder",
+      path: "/tmp/events",
+    },
+  });
+  assert.equal(project.statusCode, 201);
+  const event = JSON.parse((await withTimeout(onceWebSocketMessageFrame(socket), "project created event")).message);
+  assert.equal(event.type, "project.created");
+  assert.equal(event.payload.projectId, project.body.data.id);
+});
+
+test("control plane event bus drops clients that fail to send", () => {
+  const events = new ControlPlaneEventBus();
+  const sent = [];
+  const badSocket = {
+    readyState: 1,
+    OPEN: 1,
+    send: () => {
+      throw new Error("socket closed");
+    },
+    on: () => undefined,
+  };
+  const goodSocket = {
+    readyState: 1,
+    OPEN: 1,
+    send: (value) => sent.push(JSON.parse(value)),
+    on: () => undefined,
+  };
+  events.connect(badSocket);
+  events.connect(goodSocket);
+
+  events.publish("project.created", { projectId: "proj_1" });
+  events.publish("project.updated", { projectId: "proj_1" });
+
+  assert.deepEqual(sent.map((event) => event.type), ["project.created", "project.updated"]);
+});
+
+test("control plane event bus filters websocket topics", () => {
+  const events = new ControlPlaneEventBus();
+  const listeners = {};
+  const sent = [];
+  const socket = {
+    readyState: 1,
+    OPEN: 1,
+    send: (value) => sent.push(value),
+    on: (event, listener) => {
+      listeners[event] = listener;
+    },
+  };
+  events.connect(socket);
+  listeners.message(JSON.stringify({ type: "subscribe", topics: [AiSessionEventTopic] }));
+
+  events.publish("project.created", { projectId: "project_1" });
+  events.publish(AiSessionEventType.Snapshot, aiSessionSnapshotPayload({ sessions: [] }));
+
+  assert.equal(sent.length, 1);
+  const event = JSON.parse(sent[0]);
+  assert.equal(event.type, AiSessionEventType.Snapshot);
+  assert.equal(event.topic, AiSessionEventTopic);
+});
+
+test("node agent ai session event forwarder logs revision gaps", async (t) => {
+  const instanceEvents = new WebSocket.Server({ host: "127.0.0.1", port: 0 });
+  t.after(() => instanceEvents.close());
+  await new Promise((resolve) => instanceEvents.once("listening", resolve));
+  const address = instanceEvents.address();
+  assert.equal(typeof address, "object");
+  const warnings = [];
+  const outputFrames = [];
+  const forwarder = new NodeAgentInstanceEventForwarder({
+    listInstances: () => [{
+      id: "inst_gap",
+      target: {
+        api: `http://127.0.0.1:${address.port}`,
+        web: `http://127.0.0.1:${address.port}`,
+      },
+    }],
+  }, undefined, {
+    logger: {
+      warn: (data, message) => warnings.push({ data, message }),
+      info: () => undefined,
+    },
+  });
+  t.after(() => forwarder.stop());
+  const output = {
+    readyState: 1,
+    OPEN: 1,
+    send: (value) => outputFrames.push(JSON.parse(value)),
+    on: () => undefined,
+  };
+  instanceEvents.on("connection", (socket) => {
+    socket.on("message", () => {
+      socket.send(JSON.stringify({
+        type: AiSessionEventType.Snapshot,
+        topic: AiSessionEventTopic,
+        payload: aiSessionSnapshotPayload({ sessions: [] }, { instanceId: "inst_gap", streamId: "ai_gap_stream", revision: 1 }),
+      }));
+      socket.send(JSON.stringify({
+        type: AiSessionEventType.Snapshot,
+        topic: AiSessionEventTopic,
+        payload: aiSessionSnapshotPayload({ sessions: [] }, { instanceId: "inst_gap", streamId: "ai_gap_stream", revision: 3 }),
+      }));
+    });
+  });
+
+  forwarder.addOutput(output);
+  await waitForCondition(() => outputFrames.length >= 2, "forwarded ai session events");
+
+  const gap = warnings.find((entry) => entry.message === "ai-session.event.forward.gap");
+  assert.ok(gap);
+  assert.equal(gap.data.instanceId, "inst_gap");
+  assert.equal(gap.data.previousRevision, 1);
+  assert.equal(gap.data.revision, 3);
+});
+
+test("control plane forwards node agent websocket events with instance scope", async (t) => {
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("cp-node-agent-events"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+  });
+  t.after(() => app.close());
+  await app.listen({ host: "127.0.0.1", port: 0 });
+  const address = app.server.address();
+  assert.equal(typeof address, "object");
+  const node = await json(app, "POST", "/api/nodes", {
+    id: "node_events",
+    name: "Events Node",
+    connectionMode: "reverse-wss",
+    auth: {
+      mode: "paired-hmac",
+      keyId: "key_agent",
+      secret: "agent-secret",
+    },
+  });
+  assert.equal(node.statusCode, 201);
+
+  const eventsSocket = new WebSocket(`ws://127.0.0.1:${address.port}/api/events`);
+  t.after(() => eventsSocket.terminate());
+  const connectedMessage = withTimeout(onceWebSocketMessageFrame(eventsSocket), "events connected");
+  await withTimeout(waitForWebSocketOpen(eventsSocket), "control plane events websocket open");
+  assert.equal(JSON.parse((await connectedMessage).message).type, "streams.hello");
+
+  const tunnelUrl = `/api/node-agent/tunnel?nodeId=node_events`;
+  const tunnel = new WebSocket(`ws://127.0.0.1:${address.port}${tunnelUrl}`, {
+    headers: createNodeAgentHmacHeaders({
+      nodeId: "node_events",
+      keyId: "key_agent",
+      secret: "agent-secret",
+      method: "GET",
+      pathWithQuery: tunnelUrl,
+    }),
+  });
+  t.after(() => tunnel.terminate());
+  const welcomeMessage = withTimeout(onceWebSocketMessageFrame(tunnel), "node tunnel welcome");
+  await withTimeout(waitForWebSocketOpen(tunnel), "node agent tunnel websocket open");
+  assert.equal(JSON.parse((await welcomeMessage).message).type, "control-plane.hello");
+  tunnel.send(JSON.stringify({ type: "node-agent.identify", nodeId: "node_events" }));
+  assert.equal(JSON.parse((await withTimeout(onceWebSocketMessageFrame(tunnel), "node tunnel identified")).message).type, "control-plane.identified");
+
+  tunnel.send(JSON.stringify({
+    type: "node-agent.event.forwarded",
+    event: {
+      type: AiSessionEventType.Snapshot,
+      topic: AiSessionEventTopic,
+      payload: aiSessionSnapshotPayload({ sessions: [] }, { instanceId: "inst_events" }),
+      scope: { instanceId: "inst_events" },
+    },
+  }));
+
+  const event = JSON.parse((await withTimeout(onceWebSocketMessageFrame(eventsSocket), "forwarded ai session event")).message);
+  assert.equal(event.type, AiSessionEventType.Snapshot);
+  assert.equal(event.topic, AiSessionEventTopic);
+  assert.equal(event.scope.nodeId, "node_events");
+  assert.equal(event.scope.instanceId, "inst_events");
+});
+
+test("control plane subscribes to direct node agent websocket events", async (t) => {
+  const instanceEvents = new WebSocket.Server({ host: "127.0.0.1", port: 0 });
+  t.after(() => instanceEvents.close());
+  instanceEvents.on("connection", (socket) => {
+    socket.on("message", () => {
+      const timestamp = new Date().toISOString();
+      socket.send(JSON.stringify({
+        type: AiSessionEventType.Snapshot,
+        topic: AiSessionEventTopic,
+        payload: aiSessionSnapshotPayload({
+          sessions: [{
+            id: "ai_1",
+            agent: "codex",
+            appId: "codex",
+            appSessionId: "app_1",
+            status: "idle",
+            phase: "unknown",
+            startedAt: timestamp,
+            updatedAt: timestamp,
+          }],
+        }, { instanceId: "inst_direct_events", streamId: "ai_direct_stream", revision: 1 }),
+      }));
+      socket.send(JSON.stringify({
+        type: AiSessionEventType.Snapshot,
+        topic: AiSessionEventTopic,
+        payload: aiSessionSnapshotPayload({
+          sessions: [{
+            id: "ai_1",
+            agent: "codex",
+            appId: "codex",
+            appSessionId: "app_1",
+            status: "idle",
+            phase: "unknown",
+            startedAt: timestamp,
+            updatedAt: timestamp,
+          }],
+        }, { instanceId: "inst_direct_events", streamId: "ai_direct_stream", revision: 1 }),
+      }));
+    });
+  });
+  await new Promise((resolve) => instanceEvents.once("listening", resolve));
+  const instanceEventsAddress = instanceEvents.address();
+  assert.equal(typeof instanceEventsAddress, "object");
+
+  const nodeAgent = await createNodeAgentApp({
+    dataDir: tempDataDir("direct-node-agent-events"),
+    logger: false,
+    token: "agent-secret",
+    port: 0,
+  });
+  t.after(() => nodeAgent.close());
+  await nodeAgent.listen({ host: "127.0.0.1", port: 0 });
+  const nodeAgentAddress = nodeAgent.server.address();
+  assert.equal(typeof nodeAgentAddress, "object");
+
+  const createdInstance = await nodeAgent.inject({
+    method: "POST",
+    url: "/api/node-agent/instances",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: "inst_direct_events",
+      name: "direct events",
+      runtimeId: "runtime_local_docker",
+      imageId: "img_default",
+      source: {
+        type: "local-folder",
+        path: "/tmp/direct-events",
+      },
+      image: {
+        id: "img_default",
+        name: "Default",
+        image: "task-handoff/default",
+        registry: "local",
+        capabilities: [],
+        optionalApps: [],
+        defaultEnv: {},
+        labels: {},
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+    },
+  });
+  assert.equal(createdInstance.statusCode, 201);
+  const registeredInstance = await nodeAgent.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_direct_events/register",
+    headers: { authorization: `Bearer ${createdInstance.json().data.registrationToken}` },
+    payload: {
+      instanceId: "inst_direct_events",
+      name: "direct events",
+      protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+      target: {
+        strategy: "direct-port",
+        web: `http://127.0.0.1:${instanceEventsAddress.port}`,
+        api: `http://127.0.0.1:${instanceEventsAddress.port}`,
+        status: "reachable",
+      },
+      workspace: {
+        status: "ready",
+      },
+    },
+  });
+  assert.equal(registeredInstance.statusCode, 201);
+
+  const controlPlane = await createControlPlaneApp({
+    dataDir: tempDataDir("cp-direct-node-agent-events"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+  });
+  t.after(() => controlPlane.close());
+  await controlPlane.listen({ host: "127.0.0.1", port: 0 });
+  const controlPlaneAddress = controlPlane.server.address();
+  assert.equal(typeof controlPlaneAddress, "object");
+
+  const createdNode = await json(controlPlane, "POST", "/api/nodes", {
+    name: "Direct Events Node",
+    connectionMode: "local-loopback",
+    endpoint: `http://127.0.0.1:${nodeAgentAddress.port}`,
+    controlEndpoint: `http://127.0.0.1:${nodeAgentAddress.port}`,
+    auth: {
+      mode: "local-static-key",
+      secret: "agent-secret",
+    },
+  });
+  assert.equal(createdNode.statusCode, 201);
+  const directNodeId = createdNode.body.data.id;
+
+  const eventsSocket = new WebSocket(`ws://127.0.0.1:${controlPlaneAddress.port}/api/events`);
+  t.after(() => eventsSocket.terminate());
+  const receivedEvents = [];
+  eventsSocket.on("message", (message) => receivedEvents.push(JSON.parse(String(message))));
+  await withTimeout(waitForWebSocketOpen(eventsSocket), "control plane events websocket open");
+  const hello = await waitForCondition(() => receivedEvents.find((entry) => entry.type === "streams.hello"), "control plane streams hello");
+  assert.equal(hello.type, "streams.hello");
+
+  const event = await waitForCondition(() => receivedEvents.find((entry) => entry.type === AiSessionEventType.Snapshot), "direct node agent ai session event", 7000);
+  assert.equal(event.type, AiSessionEventType.Snapshot);
+  assert.equal(event.topic, AiSessionEventTopic);
+  assert.equal(event.scope.nodeId, directNodeId);
+  assert.equal(event.scope.instanceId, "inst_direct_events");
+  assert.equal(event.payload.meta.revision, 1);
+  assert.equal(event.payload.snapshot.sessions[0].id, "ai_1");
+
+  const aggregated = await waitForCondition(async () => {
+    const response = await json(controlPlane, "GET", "/api/ai-sessions");
+    return response.body.data.instances.find((entry) => entry.instanceId === "inst_direct_events")?.revision === 1 ? response : undefined;
+  }, "aggregated direct ai session snapshot");
+  assert.equal(aggregated.statusCode, 200);
+  const aggregatedEntry = aggregated.body.data.instances.find((entry) => entry.instanceId === "inst_direct_events");
+  assert.ok(aggregatedEntry);
+  assert.equal(aggregatedEntry.revision, 1);
+
+  const delta = await waitForCondition(async () => {
+    const response = await json(controlPlane, "GET", "/api/ai-sessions?instanceId=inst_direct_events&streamId=ai_direct_stream&sinceRevision=0");
+    return response.body.data.events.length ? response : undefined;
+  }, "ai session delta");
+  assert.equal(delta.statusCode, 200);
+  assert.equal(delta.body.data.instanceId, "inst_direct_events");
+  assert.equal(delta.body.data.syncRequired, false);
+  assert.equal(delta.body.data.events.length, 1);
+  assert.equal(delta.body.data.events[0].type, AiSessionEventType.Snapshot);
+  assert.equal(delta.body.data.events[0].payload.snapshot.sessions[0].id, "ai_1");
+
+  const currentDelta = await json(controlPlane, "GET", `/api/ai-sessions?instanceId=inst_direct_events&streamId=ai_direct_stream&sinceRevision=${event.payload.meta.revision}`);
+  assert.equal(currentDelta.statusCode, 200);
+  assert.equal(currentDelta.body.data.syncRequired, false);
+  assert.deepEqual(currentDelta.body.data.events, []);
+});
+
+test("local docker run args include controlled metadata and disable local chat bridges", () => {
+  const timestamp = new Date().toISOString();
+  const args = dockerRunArgs(
+    {
+      nodeAgentUrl: "http://127.0.0.1:8091",
+      node: {
+        id: "node_exec",
+        name: "Execution Node",
+        connectionMode: "direct-http",
+        endpoint: "http://127.0.0.1:8091",
+        controlEndpoint: "http://127.0.0.1:8091",
+        status: "online",
+        health: "ok",
+        capabilities: {},
+        labels: {},
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      project: {
+        id: "proj_1",
+        name: "Project",
+        source: {
+          type: "local-folder",
+          path: "/tmp/workspace",
+        },
+        workspacePolicy: {
+          mode: "local-bind",
+          path: "/workspace",
+          readOnly: false,
+        },
+        labels: {},
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      image: {
+        id: "img_1",
+        name: "Image",
+        image: "task-handoff-web:latest",
+        registry: "local",
+        capabilities: [],
+        optionalApps: [],
+        defaultEnv: {
+          EXTRA_FLAG: "1",
+        },
+        labels: {},
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      runtime: {
+        id: "runtime_local_docker",
+        type: "docker",
+        name: "Docker",
+        endpoint: "unix:///var/run/docker.sock",
+        accessStrategy: "direct-port",
+        labels: {},
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      instance: {
+        id: "inst_1",
+        name: "worker",
+        projectId: "proj_1",
+        runtimeId: "runtime_local_docker",
+        imageId: "img_1",
+        status: "created",
+        health: "unknown",
+        connectionStatus: "unknown",
+        controlMode: "controlled",
+        capabilities: {},
+        workspace: { status: "unknown" },
+        target: { strategy: "direct-port", status: "unknown" },
+        receiver: { status: "unknown", pendingCount: 0 },
+        apps: { runningCount: 0 },
+        runtime: { labels: {} },
+        registrationToken: "secret",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    },
+    "task-handoff-inst_1",
+  );
+
+  assert.ok(args.includes("task-handoff.node-id=node_exec"));
+  assert.ok(args.includes("task-handoff.runtime-id=runtime_local_docker"));
+  assert.ok(args.includes("task-handoff.image-id=img_1"));
+  assert.ok(args.includes("TASK_HANDOFF_NODE_ID=node_exec"));
+  assert.ok(args.includes("TASK_HANDOFF_NODE_AGENT_URL=http://127.0.0.1:8091"));
+  assert.ok(args.includes("TASK_HANDOFF_RUNTIME_ID=runtime_local_docker"));
+  assert.ok(args.includes("TASK_HANDOFF_IMAGE_ID=img_1"));
+  assert.ok(args.includes("TASK_HANDOFF_CHAT_BRIDGES=none"));
+  assert.ok(args.includes("TASK_HANDOFF_WORKSPACE=/workspace"));
+  assert.ok(args.includes("TASK_HANDOFF_WORKSPACE_MODE=local-bind"));
+  assert.ok(args.includes("bridge"));
+  assert.ok(args.includes("host.docker.internal:host-gateway"));
+  assert.ok(args.includes("/tmp:rw,mode=1777"));
+  assert.ok(args.includes("task-handoff-inst_1-data:/data"));
+  assert.ok(args.includes("task-handoff-inst_1-agent-home:/home/agent"));
+  assert.ok(args.includes("EXTRA_FLAG=1"));
+  assert.ok(args.includes("/tmp/workspace:/workspace:rw"));
+});
+
+test("managed Docker updates resolve the selected channel and registry digest", async () => {
+  assert.equal(dockerImageRefForChannel("ghcr.io/task-handoff/server:beta", "stable"), "ghcr.io/task-handoff/server:latest");
+  assert.equal(dockerImageRefForChannel("ghcr.io/task-handoff/server:stable", "beta"), "ghcr.io/task-handoff/server:beta");
+  assert.equal(dockerImageRefForChannel("registry.example:5000/task-handoff/server@sha256:old", "alpha"), "registry.example:5000/task-handoff/server:alpha");
+  assert.equal(isNewerVersion("1.2.3", "1.2.4"), true);
+  assert.equal(isNewerVersion("1.2.3", "1.2.3-beta.1"), false);
+  assert.equal(isNewerVersion("1.2.3-alpha.2", "1.2.3-alpha.10"), true);
+  assert.equal(isNewerVersion("1.2.3-alpha.10", "1.2.3-alpha.2"), false);
+  assert.equal(isNewerVersion("1.2.3-alpha.1", "1.2.3-alpha.beta"), true);
+  assert.equal(isNewerVersion("1.2.3+build.1", "1.2.3+build.2"), false);
+
+  const calls = [];
+  const checked = await checkControlledInstanceUpdate({
+    channel: "beta",
+    runtime: { type: "docker" },
+    instance: {
+      id: "inst_update",
+      build: { imageDigest: "sha256:old" },
+      imageSnapshot: {
+        image: "ghcr.io/task-handoff/server:stable",
+        registry: "ghcr.io",
+      },
+    },
+    runCommand: async (command, args) => {
+      calls.push([command, args]);
+      return { stdout: JSON.stringify({ Descriptor: { digest: "sha256:new" } }), stderr: "" };
+    },
+  });
+
+  assert.deepEqual(calls, [["docker", ["manifest", "inspect", "--verbose", "ghcr.io/task-handoff/server:beta"]]]);
+  assert.equal(checked.artifactRef, "ghcr.io/task-handoff/server:beta");
+  assert.equal(checked.currentVersion, "sha256:old");
+  assert.equal(checked.availableVersion, "sha256:new");
+  assert.equal(checked.updateAvailable, true);
+});
+
+test("missing npm channel releases are reported as no update", async () => {
+  const npm404 = Object.assign(new Error("npm ERR! code E404"), {
+    details: {
+      stdout: "",
+      stderr: "npm ERR! code E404 npm ERR! 404 No match found for version beta",
+    },
+  });
+  const runCommand = async () => {
+    throw npm404;
+  };
+
+  const agent = await checkNodeAgentUpdate({
+    channel: "beta",
+    currentVersion: "1.0.0",
+    runCommand,
+  });
+  assert.equal(agent.supported, true);
+  assert.equal(agent.updateAvailable, false);
+  assert.equal(agent.availableVersion, "1.0.0");
+  assert.equal(agent.reason, "No beta release is currently published.");
+
+  const instance = await checkControlledInstanceUpdate({
+    channel: "alpha",
+    runtime: { type: "local" },
+    instance: { id: "inst_no_prerelease", instanceVersion: "1.0.0" },
+    runCommand,
+  });
+  assert.equal(instance.supported, true);
+  assert.equal(instance.updateAvailable, false);
+  assert.equal(instance.reason, "No alpha release is currently published.");
+});
+
+test("npm update checks preserve non-404 registry failures", async () => {
+  const registryError = Object.assign(new Error("npm ERR! code E401"), {
+    details: { stdout: "", stderr: "npm ERR! code E401 authentication required" },
+  });
+
+  await assert.rejects(
+    checkNodeAgentUpdate({
+      channel: "beta",
+      currentVersion: "1.0.0",
+      runCommand: async () => {
+        throw registryError;
+      },
+    }),
+    /E401/,
+  );
+});
+
+test("node agent update API treats a missing npm channel as no update", async (t) => {
+  const app = await createNodeAgentApp({
+    dataDir: tempDataDir("node-agent-update-missing-channel"),
+    logger: false,
+    token: "agent-secret",
+    updateCommandRunner: async () => {
+      throw Object.assign(new Error("npm ERR! code E404"), {
+        details: { stdout: "", stderr: "npm ERR! code E404 npm ERR! 404 No match found for version beta" },
+      });
+    },
+  });
+  t.after(() => app.close());
+
+  const check = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/updates/check",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: { target: { component: "node-agent" }, channel: "beta" },
+  });
+  assert.equal(check.statusCode, 200);
+  assert.equal(check.json().data.updateAvailable, false);
+  assert.equal(check.json().data.reason, "No beta release is currently published.");
+
+  const apply = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/updates/apply",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: { target: { component: "node-agent" }, channel: "beta" },
+  });
+  assert.equal(apply.statusCode, 409);
+  assert.equal(apply.json().error.code, "UPDATE_NOT_AVAILABLE");
+});
+
+test("node agent update checks default to the stable npm channel", async (t) => {
+  const calls = [];
+  const app = await createNodeAgentApp({
+    dataDir: tempDataDir("node-agent-update-check"),
+    logger: false,
+    token: "agent-secret",
+    updateCommandRunner: async (command, args) => {
+      calls.push([command, args]);
+      return { stdout: JSON.stringify("9.8.7"), stderr: "" };
+    },
+  });
+  t.after(() => app.close());
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/updates/check",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: { target: { component: "node-agent" } },
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().data.channel, "stable");
+  assert.equal(response.json().data.availableVersion, "9.8.7");
+  assert.deepEqual(calls, [["npm", ["view", "@task-handoff/node-agent@latest", "version", "--json"]]]);
+});
+
+test("node agent update checks use the configured absolute npm command", async (t) => {
+  const previous = process.env.TASK_HANDOFF_NPM_COMMAND;
+  process.env.TASK_HANDOFF_NPM_COMMAND = "/opt/node/bin/npm";
+  t.after(() => {
+    if (previous === undefined) delete process.env.TASK_HANDOFF_NPM_COMMAND;
+    else process.env.TASK_HANDOFF_NPM_COMMAND = previous;
+  });
+  const calls = [];
+
+  const result = await checkNodeAgentUpdate({
+    channel: "beta",
+    currentVersion: "1.0.0",
+    runCommand: async (command, args) => {
+      calls.push([command, args]);
+      return { stdout: JSON.stringify("1.1.0-beta.1"), stderr: "" };
+    },
+  });
+
+  assert.equal(result.updateAvailable, true);
+  assert.deepEqual(calls, [["/opt/node/bin/npm", ["view", "@task-handoff/node-agent@beta", "version", "--json"]]]);
+});
+
+test("local docker run args include resolved model environment", () => {
+  const timestamp = new Date().toISOString();
+  const args = dockerRunArgs(
+    {
+      nodeAgentUrl: "http://127.0.0.1:8091",
+      modelEnv: {
+        OPENAI_API_KEY: "codex-key",
+        OPENAI_BASE_URL: "https://openai.example/v1",
+        TASK_HANDOFF_CODEX_MODEL: "gpt-codex",
+        ANTHROPIC_API_KEY: "claude-key",
+        ANTHROPIC_BASE_URL: "https://anthropic.example",
+        TASK_HANDOFF_CLAUDE_MODEL: "claude-sonnet",
+      },
+      project: {
+        id: "proj_1",
+        name: "Project",
+        source: {
+          type: "local-folder",
+          path: "/tmp/workspace",
+        },
+        modelSelection: {},
+        workspacePolicy: {
+          mode: "local-bind",
+          path: "/workspace",
+          readOnly: false,
+        },
+        labels: {},
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      image: {
+        id: "img_1",
+        name: "Image",
+        image: "task-handoff-web:latest",
+        registry: "local",
+        capabilities: [],
+        optionalApps: [],
+        defaultEnv: {},
+        labels: {},
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      runtime: {
+        id: "runtime_local_docker",
+        type: "docker",
+        name: "Docker",
+        endpoint: "unix:///var/run/docker.sock",
+        accessStrategy: "direct-port",
+        labels: {},
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      instance: {
+        id: "inst_1",
+        name: "worker",
+        projectId: "proj_1",
+        runtimeId: "runtime_local_docker",
+        imageId: "img_1",
+        status: "created",
+        health: "unknown",
+        connectionStatus: "unknown",
+        controlMode: "controlled",
+        capabilities: {},
+        workspace: { status: "unknown" },
+        target: { strategy: "direct-port", status: "unknown" },
+        receiver: { status: "unknown", pendingCount: 0 },
+        apps: { runningCount: 0 },
+        runtime: { labels: {} },
+        registrationToken: "secret",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    },
+    "task-handoff-inst_1",
+  );
+
+  assert.ok(args.includes("OPENAI_API_KEY=codex-key"));
+  assert.ok(args.includes("OPENAI_BASE_URL=https://openai.example/v1"));
+  assert.ok(args.includes("TASK_HANDOFF_CODEX_MODEL=gpt-codex"));
+  assert.ok(args.includes("ANTHROPIC_API_KEY=claude-key"));
+  assert.ok(args.includes("ANTHROPIC_BASE_URL=https://anthropic.example"));
+  assert.ok(args.includes("TASK_HANDOFF_CLAUDE_MODEL=claude-sonnet"));
+});
+
+test("local docker run args expose git workspace bootstrap environment", () => {
+  const timestamp = new Date().toISOString();
+  const args = dockerRunArgs(
+    {
+      nodeAgentUrl: "http://127.0.0.1:8091",
+      project: {
+        id: "proj_git",
+        name: "Git Project",
+        source: {
+          type: "git-repository",
+          url: "https://github.com/example/repo.git",
+          ref: { type: "branch", name: "main" },
+          auth: { type: "none" },
+          clone: { depth: 10, submodules: true, lfs: false, subdirectory: "" },
+        },
+        workspacePolicy: {
+          mode: "git-clone",
+          path: "/workspace",
+          readOnly: false,
+        },
+        labels: {},
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      image: {
+        id: "img_1",
+        name: "Image",
+        image: "task-handoff-web:latest",
+        registry: "local",
+        capabilities: [],
+        optionalApps: [],
+        defaultEnv: {},
+        labels: {},
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      runtime: {
+        id: "runtime_local_docker",
+        type: "docker",
+        name: "Docker",
+        endpoint: "unix:///var/run/docker.sock",
+        accessStrategy: "direct-port",
+        labels: {},
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      instance: {
+        id: "inst_git",
+        name: "git-worker",
+        projectId: "proj_git",
+        runtimeId: "runtime_local_docker",
+        imageId: "img_1",
+        status: "created",
+        health: "unknown",
+        connectionStatus: "unknown",
+        controlMode: "controlled",
+        capabilities: {},
+        workspace: { status: "unknown" },
+        target: { strategy: "direct-port", status: "unknown" },
+        receiver: { status: "unknown", pendingCount: 0 },
+        apps: { runningCount: 0 },
+        runtime: { labels: {} },
+        registrationToken: "secret",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    },
+    "task-handoff-inst_git",
+  );
+
+  assert.ok(args.includes("TASK_HANDOFF_WORKSPACE=/workspace"));
+  assert.ok(args.includes("TASK_HANDOFF_WORKSPACE_MODE=git-clone"));
+  assert.ok(args.includes("TASK_HANDOFF_GIT_URL=https://github.com/example/repo.git"));
+  assert.ok(args.includes("TASK_HANDOFF_GIT_REF=main"));
+  assert.ok(args.includes("TASK_HANDOFF_GIT_DEPTH=10"));
+  assert.ok(args.includes("TASK_HANDOFF_GIT_SUBMODULES=true"));
+  assert.ok(args.includes("TASK_HANDOFF_GIT_LFS=false"));
+});
+
+test("local docker executor checks local images and pulls registry images before running", async () => {
+  const timestamp = new Date().toISOString();
+  const baseContext = {
+    nodeAgentUrl: "http://127.0.0.1:8091",
+    project: {
+      id: "proj_1",
+      name: "Project",
+      source: {
+        type: "local-folder",
+        path: "/tmp/workspace",
+      },
+      workspacePolicy: {
+        mode: "local-bind",
+        path: "/workspace",
+        readOnly: false,
+      },
+      labels: {},
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    },
+    runtime: {
+      id: "runtime_local_docker",
+      type: "docker",
+      name: "Docker",
+      endpoint: "unix:///var/run/docker.sock",
+      accessStrategy: "direct-port",
+      labels: {},
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    },
+    instance: {
+      id: "inst_1",
+      name: "worker",
+      projectId: "proj_1",
+      runtimeId: "runtime_local_docker",
+      imageId: "img_1",
+      status: "created",
+      health: "unknown",
+      connectionStatus: "unknown",
+      controlMode: "controlled",
+      capabilities: {},
+      workspace: { status: "unknown" },
+      target: { strategy: "direct-port", status: "unknown" },
+      receiver: { status: "unknown", pendingCount: 0 },
+      apps: { runningCount: 0 },
+      runtime: { labels: {} },
+      registrationToken: "secret",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    },
+  };
+
+  const localCalls = [];
+  const localExecutor = new LocalDockerExecutor(async (command, args) => {
+    localCalls.push([command, args]);
+    if (args[0] === "start") {
+      throw new Error("missing container");
+    }
+    if (args[0] === "image" && args[1] === "inspect") {
+      throw new Error("missing");
+    }
+    return { stdout: "", stderr: "" };
+  });
+  await assert.rejects(
+    () =>
+      localExecutor.start({
+        ...baseContext,
+        image: {
+          id: "img_1",
+          name: "Image",
+          image: "task-handoff-web:local",
+          registry: "local",
+          capabilities: [],
+          optionalApps: [],
+          defaultEnv: {},
+          labels: {},
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+      }),
+    /Docker image task-handoff-web:local was not found/,
+  );
+  assert.deepEqual(localCalls, [
+    ["docker", ["start", "task-handoff-inst_1"]],
+    ["docker", ["image", "inspect", "task-handoff-web:local"]],
+  ]);
+
+  const remoteCalls = [];
+  const remoteExecutor = new LocalDockerExecutor(async (command, args) => {
+    remoteCalls.push([command, args]);
+    if (args[0] === "start") {
+      throw new Error("missing container");
+    }
+    if (args[0] === "image" && args[1] === "inspect") {
+      throw new Error("missing");
+    }
+    if (args[0] === "run") {
+      return { stdout: "container-1", stderr: "" };
+    }
+    if (args[0] === "port") {
+      return { stdout: "127.0.0.1:18080", stderr: "" };
+    }
+    return { stdout: "", stderr: "" };
+  });
+  const started = await remoteExecutor.start({
+    ...baseContext,
+    image: {
+      id: "img_2",
+      name: "Registry Image",
+      image: "ghcr.io/example/task-handoff-web:latest",
+      registry: "ghcr.io",
+      capabilities: [],
+      optionalApps: [],
+      defaultEnv: {},
+      labels: {},
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    },
+  });
+  assert.equal(started.runtime.containerId, "container-1");
+  assert.deepEqual(
+    remoteCalls.slice(0, 3),
+    [
+      ["docker", ["start", "task-handoff-inst_1"]],
+      ["docker", ["image", "inspect", "ghcr.io/example/task-handoff-web:latest"]],
+      ["docker", ["pull", "ghcr.io/example/task-handoff-web:latest"]],
+    ],
+  );
+  assert.ok(remoteCalls.some(([, args]) => args[0] === "run"));
+  assert.equal(remoteCalls.some(([, args]) => args[0] === "rm"), false);
+
+  const existingCalls = [];
+  const existingExecutor = new LocalDockerExecutor(async (command, args) => {
+    existingCalls.push([command, args]);
+    if (args[0] === "port") {
+      return { stdout: "127.0.0.1:18081", stderr: "" };
+    }
+    return { stdout: "task-handoff-inst_1", stderr: "" };
+  });
+  const resumed = await existingExecutor.start({
+    ...baseContext,
+    instance: {
+      ...baseContext.instance,
+      status: "stopped",
+      runtime: {
+        kind: "docker",
+        containerName: "task-handoff-inst_1",
+        containerId: "container-1",
+        labels: {},
+      },
+    },
+    image: {
+      id: "img_2",
+      name: "Registry Image",
+      image: "ghcr.io/example/task-handoff-web:latest",
+      registry: "ghcr.io",
+      capabilities: [],
+      optionalApps: [],
+      defaultEnv: {},
+      labels: {},
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    },
+  });
+  assert.equal(resumed.runtime.containerId, "container-1");
+  assert.equal(resumed.target.web, "http://127.0.0.1:18081");
+  assert.deepEqual(existingCalls, [
+    ["docker", ["start", "task-handoff-inst_1"]],
+    ["docker", ["port", "task-handoff-inst_1", "8080/tcp"]],
+  ]);
+
+  const restartCalls = [];
+  const restartExecutor = new LocalDockerExecutor(async (command, args) => {
+    restartCalls.push([command, args]);
+    if (args[0] === "port") {
+      return { stdout: "127.0.0.1:19090", stderr: "" };
+    }
+    return { stdout: "task-handoff-inst_1", stderr: "" };
+  });
+  const restarted = await restartExecutor.restart({
+    ...baseContext,
+    instance: {
+      ...baseContext.instance,
+      status: "running",
+      runtime: {
+        kind: "docker",
+        containerName: "task-handoff-inst_1",
+        containerId: "container-1",
+        labels: {},
+      },
+    },
+    image: {
+      id: "img_2",
+      name: "Registry Image",
+      image: "ghcr.io/example/task-handoff-web:latest",
+      registry: "ghcr.io",
+      capabilities: [],
+      optionalApps: [],
+      defaultEnv: {},
+      labels: {},
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    },
+  });
+  assert.equal(restarted.runtime.containerId, "container-1");
+  assert.equal(restarted.target.web, "http://127.0.0.1:19090");
+  assert.deepEqual(restartCalls, [
+    ["docker", ["restart", "task-handoff-inst_1"]],
+    ["docker", ["port", "task-handoff-inst_1", "8080/tcp"]],
+  ]);
+});
+
+test("node agent runs local docker behind node-local target and auto-imports agent config on start and restart", async (t) => {
+  const calls = [];
+  const fetchCalls = [];
+  const app = await createNodeAgentApp({
+    dataDir: tempDataDir("node-agent-local-endpoint"),
+    logger: false,
+    token: "agent-secret",
+    port: 18091,
+    fetchImpl: async (url, init = {}) => {
+      fetchCalls.push({ url: String(url), method: init.method || "GET" });
+      return new Response(JSON.stringify({ data: { ok: true } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+    dockerCommandRunner: async (command, args) => {
+      calls.push([command, args]);
+      if (args[0] === "start") {
+        throw new Error("missing container");
+      }
+      if (args[0] === "run") {
+        return { stdout: "container-1", stderr: "" };
+      }
+      if (args[0] === "port") {
+        return { stdout: "0.0.0.0:18080", stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    },
+  });
+  t.after(() => app.close());
+
+  const health = await app.inject({
+    method: "GET",
+    url: "/api/node-agent/health",
+    headers: {
+      authorization: "Bearer agent-secret",
+    },
+  });
+  assert.equal(health.statusCode, 200);
+  assert.equal(health.json().data.role, "node-agent");
+  assert.equal(health.json().data.protocolVersion, CONTROL_PLANE_PROTOCOL_VERSION);
+  assert.equal(health.json().data.build.component, "node-agent");
+  assert.equal(health.json().data.build.protocolVersion, CONTROL_PLANE_PROTOCOL_VERSION);
+  assert.equal(health.json().data.endpoint, undefined);
+  assert.equal(health.json().data.controlEndpoint, undefined);
+  assert.equal(health.json().data.containerUrl, undefined);
+  assert.equal(health.json().data.containerEndpoint, undefined);
+
+  const timestamp = new Date().toISOString();
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances",
+    headers: {
+      authorization: "Bearer agent-secret",
+    },
+    payload: {
+      id: "inst_1",
+      name: "worker",
+      runtimeId: "runtime_local_docker",
+      imageId: "img_1",
+      image: {
+        id: "img_1",
+        name: "Image",
+        image: "task-handoff-web:local",
+        registry: "local",
+        capabilities: [],
+        optionalApps: [],
+        defaultEnv: {},
+        labels: {},
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      source: {
+        type: "git-repository",
+        url: "https://github.com/example/repo.git",
+      },
+      sourceSnapshot: {
+        id: "proj_1",
+        name: "Git Project",
+        modelSelection: {},
+      },
+    },
+  });
+  assert.equal(created.statusCode, 201, JSON.stringify(created.body));
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_1/start",
+    headers: {
+      authorization: "Bearer agent-secret",
+    },
+    payload: {},
+  });
+
+  assert.equal(response.statusCode, 200);
+  const body = response.json();
+  assert.equal(body.data.target.web, "http://127.0.0.1:18080");
+  assert.deepEqual(
+    fetchCalls.map((call) => `${call.method} ${new URL(call.url).pathname}`),
+    [
+      "GET /api/health",
+      "POST /api/config-sync/import/codex",
+      "POST /api/config-sync/import/claude",
+    ],
+  );
+  assert.ok(calls.some(([, args]) => args[0] === "run" && args.includes("127.0.0.1::8080")));
+  assert.ok(calls.some(([, args]) => args[0] === "run" && args.includes("TASK_HANDOFF_NODE_AGENT_URL=http://host.docker.internal:18091")));
+
+  fetchCalls.length = 0;
+  const restarted = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_1/restart",
+    headers: {
+      authorization: "Bearer agent-secret",
+    },
+    payload: {},
+  });
+  assert.equal(restarted.statusCode, 200);
+  assert.deepEqual(
+    fetchCalls.map((call) => `${call.method} ${new URL(call.url).pathname}`),
+    [
+      "GET /api/health",
+      "POST /api/config-sync/import/codex",
+      "POST /api/config-sync/import/claude",
+    ],
+  );
+});
+
+test("node agent skips start config auto-import when disabled on the instance", async (t) => {
+  const fetchCalls = [];
+  const app = await createNodeAgentApp({
+    dataDir: tempDataDir("node-agent-config-auto-import-disabled"),
+    logger: false,
+    token: "agent-secret",
+    dockerCommandRunner: async (_command, args) => {
+      if (args[0] === "start") {
+        throw new Error("missing container");
+      }
+      if (args[0] === "run") {
+        return { stdout: "container-1", stderr: "" };
+      }
+      if (args[0] === "port") {
+        return { stdout: "0.0.0.0:18180", stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    },
+    fetchImpl: async (url, init = {}) => {
+      fetchCalls.push({ url: String(url), method: init.method || "GET" });
+      return new Response(JSON.stringify({ data: { ok: true } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  t.after(() => app.close());
+
+  const timestamp = new Date().toISOString();
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: "inst_no_auto_import",
+      name: "worker",
+      runtimeId: "runtime_local_docker",
+      imageId: "img_1",
+      image: {
+        id: "img_1",
+        name: "Image",
+        image: "task-handoff-web:local",
+        registry: "local",
+        capabilities: [],
+        optionalApps: [],
+        defaultEnv: {},
+        labels: {},
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      source: {
+        type: "git-repository",
+        url: "https://github.com/example/repo.git",
+      },
+      config: {
+        autoImportAgentConfigs: false,
+      },
+    },
+  });
+  assert.equal(created.statusCode, 201, JSON.stringify(created.body));
+  assert.equal(created.json().data.config.autoImportAgentConfigs, false);
+
+  const started = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_no_auto_import/start",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {},
+  });
+  assert.equal(started.statusCode, 200);
+  assert.deepEqual(fetchCalls.map((call) => `${call.method} ${new URL(call.url).pathname}`), ["GET /api/health"]);
+});
+
+test("node agent config auto-import failure does not fail start", async (t) => {
+  const fetchCalls = [];
+  const app = await createNodeAgentApp({
+    dataDir: tempDataDir("node-agent-config-auto-import-failure"),
+    logger: false,
+    token: "agent-secret",
+    dockerCommandRunner: async (_command, args) => {
+      if (args[0] === "start") {
+        throw new Error("missing container");
+      }
+      if (args[0] === "run") {
+        return { stdout: "container-1", stderr: "" };
+      }
+      if (args[0] === "port") {
+        return { stdout: "0.0.0.0:18181", stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    },
+    fetchImpl: async (url, init = {}) => {
+      fetchCalls.push({ url: String(url), method: init.method || "GET" });
+      const pathname = new URL(String(url)).pathname;
+      if (pathname === "/api/health") {
+        return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ error: { message: "sync failed" } }), {
+        status: 500,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  t.after(() => app.close());
+
+  const timestamp = new Date().toISOString();
+  await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: "inst_auto_import_fails",
+      name: "worker",
+      runtimeId: "runtime_local_docker",
+      imageId: "img_1",
+      image: {
+        id: "img_1",
+        name: "Image",
+        image: "task-handoff-web:local",
+        registry: "local",
+        capabilities: [],
+        optionalApps: [],
+        defaultEnv: {},
+        labels: {},
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      source: {
+        type: "git-repository",
+        url: "https://github.com/example/repo.git",
+      },
+    },
+  });
+
+  const started = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_auto_import_fails/start",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {},
+  });
+  assert.equal(started.statusCode, 200);
+  assert.equal(started.json().data.target.status, "reachable");
+  assert.deepEqual(
+    fetchCalls.map((call) => `${call.method} ${new URL(call.url).pathname}`),
+    [
+      "GET /api/health",
+      "POST /api/config-sync/import/codex",
+      "POST /api/config-sync/import/claude",
+    ],
+  );
+});
+
+test("node agent config auto-import timeout does not hang start", async (t) => {
+  const previousTimeout = process.env.TASK_HANDOFF_CONFIG_AUTO_IMPORT_TIMEOUT_MS;
+  process.env.TASK_HANDOFF_CONFIG_AUTO_IMPORT_TIMEOUT_MS = "20";
+  t.after(() => {
+    if (previousTimeout === undefined) {
+      delete process.env.TASK_HANDOFF_CONFIG_AUTO_IMPORT_TIMEOUT_MS;
+    } else {
+      process.env.TASK_HANDOFF_CONFIG_AUTO_IMPORT_TIMEOUT_MS = previousTimeout;
+    }
+  });
+  const app = await createNodeAgentApp({
+    dataDir: tempDataDir("node-agent-config-auto-import-timeout"),
+    logger: false,
+    token: "agent-secret",
+    dockerCommandRunner: async (_command, args) => {
+      if (args[0] === "start") {
+        throw new Error("missing container");
+      }
+      if (args[0] === "run") {
+        return { stdout: "container-1", stderr: "" };
+      }
+      if (args[0] === "port") {
+        return { stdout: "0.0.0.0:18182", stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    },
+    fetchImpl: async (url, init = {}) => {
+      const pathname = new URL(String(url)).pathname;
+      if (pathname === "/api/health") {
+        return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(resolve, 1_000);
+        init.signal?.addEventListener("abort", () => {
+          clearTimeout(timeout);
+          reject(new Error("aborted"));
+        });
+      });
+      return new Response(JSON.stringify({ data: { ok: true } }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+  t.after(() => app.close());
+
+  const timestamp = new Date().toISOString();
+  await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: "inst_auto_import_timeout",
+      name: "worker",
+      runtimeId: "runtime_local_docker",
+      imageId: "img_1",
+      image: {
+        id: "img_1",
+        name: "Image",
+        image: "task-handoff-web:local",
+        registry: "local",
+        capabilities: [],
+        optionalApps: [],
+        defaultEnv: {},
+        labels: {},
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      source: {
+        type: "git-repository",
+        url: "https://github.com/example/repo.git",
+      },
+    },
+  });
+
+  const started = await withTimeout(
+    app.inject({
+      method: "POST",
+      url: "/api/node-agent/instances/inst_auto_import_timeout/start",
+      headers: { authorization: "Bearer agent-secret" },
+      payload: {},
+    }),
+    "auto import timeout start",
+    500,
+  );
+  assert.equal(started.statusCode, 200);
+  assert.equal(started.json().data.target.status, "reachable");
+});
+
+test("node agent local-ipc endpoint supports control plane direct requests", async (t) => {
+  const dataDir = tempDataDir("node-agent-local-ipc");
+  const ipcPath = nodeAgentIpcPath(dataDir);
+  const nodeAgent = await createNodeAgentApp({
+    dataDir,
+    logger: false,
+    token: "agent-secret",
+    connectionMode: "local-ipc",
+    ipcPath,
+  });
+  t.after(() => nodeAgent.close());
+  prepareNodeAgentIpcPath(ipcPath);
+  await nodeAgent.listen({ path: ipcPath });
+
+  const controlPlane = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-local-ipc"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+  });
+  t.after(() => controlPlane.close());
+
+  const created = await json(controlPlane, "POST", "/api/nodes", {
+    name: "Local IPC Node",
+    connectionMode: "local-ipc",
+    endpoint: nodeAgentIpcEndpoint(ipcPath),
+    auth: {
+      mode: "local-static-key",
+      secret: "agent-secret",
+    },
+  });
+  assert.equal(created.statusCode, 201);
+  assert.equal(created.body.data.connectionMode, "local-ipc");
+
+  const runtimes = await json(controlPlane, "GET", `/api/nodes/${created.body.data.id}/runtimes`);
+  assert.equal(runtimes.statusCode, 200);
+  assert.ok(runtimes.body.data.some((runtime) => runtime.id === "runtime_local_docker"));
+});
+
+test("node agent keeps local IPC control available when remote HMAC pairing exists", async (t) => {
+  const dataDir = tempDataDir("node-agent-local-ipc-with-remote");
+  const ipcPath = nodeAgentIpcPath(dataDir);
+  const nodeAgent = await createNodeAgentApp({
+    dataDir,
+    logger: false,
+    connectionMode: "local-ipc",
+    ipcPath,
+    nodeId: "node_local_ipc",
+    remoteKeyId: "key_remote",
+    remoteSecret: "remote-secret",
+  });
+  t.after(() => nodeAgent.close());
+  prepareNodeAgentIpcPath(ipcPath);
+  await nodeAgent.listen({ path: ipcPath });
+
+  const localHealth = await fetchNodeAgentIpc(ipcPath, "/health");
+  assert.equal(localHealth.status, 200);
+  assert.equal((await localHealth.json()).data.nodeId, "node_local_ipc");
+
+  const unsignedLoopback = await nodeAgent.inject({
+    method: "GET",
+    url: "/api/node-agent/health",
+    remoteAddress: "127.0.0.1",
+  });
+  assert.equal(unsignedLoopback.statusCode, 401);
+  assert.equal(unsignedLoopback.json().error.code, "NODE_AGENT_HMAC_SIGNATURE_REQUIRED");
+});
+
+test("node agent local-ipc path uses windows named pipe format on win32", () => {
+  const pipePath = nodeAgentIpcPath("C:\\Users\\agent\\task-handoff", "win32");
+  assert.ok(pipePath.startsWith("\\\\.\\pipe\\task-handoff-node-agent-"));
+  assert.equal(nodeAgentIpcEndpoint(pipePath).startsWith("ipc://"), true);
+});
+
+test("node agent accepts paired HMAC APIs but denies listener management over TCP", async (t) => {
+  const app = await createNodeAgentApp({
+    dataDir: tempDataDir("node-agent-hmac"),
+    logger: false,
+    nodeId: "node_hmac",
+    remoteKeyId: "key_remote",
+    remoteSecret: "remote-secret",
+  });
+  t.after(() => app.close());
+
+  const unsigned = await app.inject({
+    method: "GET",
+    url: "/api/node-agent/health",
+  });
+  assert.equal(unsigned.statusCode, 401);
+
+  const signed = await app.inject({
+    method: "GET",
+    url: "/api/node-agent/health",
+    headers: createNodeAgentHmacHeaders({
+      nodeId: "node_hmac",
+      keyId: "key_remote",
+      secret: "remote-secret",
+      method: "GET",
+      pathWithQuery: "/api/node-agent/health",
+    }),
+  });
+  assert.equal(signed.statusCode, 200);
+  assert.equal(signed.json().data.nodeId, "node_hmac");
+
+  const signedListener = await app.inject({
+    method: "GET",
+    url: "/api/node-agent/settings/external-listener",
+    headers: createNodeAgentHmacHeaders({
+      nodeId: "node_hmac",
+      keyId: "key_remote",
+      secret: "remote-secret",
+      method: "GET",
+      pathWithQuery: "/api/node-agent/settings/external-listener",
+    }),
+  });
+  assert.equal(signedListener.statusCode, 403);
+  assert.equal(signedListener.json().error.code, "NODE_AGENT_LISTENER_LOCAL_IPC_ONLY");
+});
+
+test("node agent pairs additional control planes with one-time join tokens", async (t) => {
+  const dataDir = tempDataDir("node-agent-pairing");
+  const app = await createNodeAgentApp({
+    dataDir,
+    logger: false,
+    nodeId: "node_pairing",
+    token: "agent-secret",
+  });
+  t.after(() => app.close());
+
+  const unauthenticatedInvite = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/pairing/invites",
+    payload: {},
+  });
+  assert.equal(unauthenticatedInvite.statusCode, 401);
+
+  const invite = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/pairing/invites",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: { controlPlaneName: "Second Control Plane", controlPlaneUrl: "http://control-plane-two.test" },
+    remoteAddress: "127.0.0.1",
+  });
+  assert.equal(invite.statusCode, 201);
+  const joinToken = invite.json().data.joinToken;
+  assert.ok(joinToken);
+
+  const paired = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/pairing/complete",
+    payload: { joinToken, controlPlaneId: "cp_two" },
+    remoteAddress: "203.0.113.10",
+  });
+  assert.equal(paired.statusCode, 201);
+  const pairedBody = paired.json().data;
+  assert.equal(pairedBody.nodeId, "node_pairing");
+  assert.ok(pairedBody.keyId);
+  assert.ok(pairedBody.secret);
+
+  const reused = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/pairing/complete",
+    payload: { joinToken, controlPlaneId: "cp_three" },
+    remoteAddress: "203.0.113.11",
+  });
+  assert.equal(reused.statusCode, 401);
+
+  const signed = await app.inject({
+    method: "GET",
+    url: "/api/node-agent/health",
+    headers: createNodeAgentHmacHeaders({
+      nodeId: "node_pairing",
+      keyId: pairedBody.keyId,
+      secret: pairedBody.secret,
+      method: "GET",
+      pathWithQuery: "/api/node-agent/health",
+    }),
+    remoteAddress: "203.0.113.10",
+  });
+  assert.equal(signed.statusCode, 200);
+
+  const wrongKey = await app.inject({
+    method: "GET",
+    url: "/api/node-agent/health",
+    headers: createNodeAgentHmacHeaders({
+      nodeId: "node_pairing",
+      keyId: "key_wrong",
+      secret: pairedBody.secret,
+      method: "GET",
+      pathWithQuery: "/api/node-agent/health",
+    }),
+    remoteAddress: "203.0.113.10",
+  });
+  assert.equal(wrongKey.statusCode, 401);
+  assert.equal(wrongKey.json().error.code, "NODE_AGENT_HMAC_KEY_INVALID");
+
+  const restarted = await createNodeAgentApp({
+    dataDir,
+    logger: false,
+    nodeId: "node_pairing",
+    token: "agent-secret",
+  });
+  t.after(() => restarted.close());
+  const signedAfterRestart = await restarted.inject({
+    method: "GET",
+    url: "/api/node-agent/health",
+    headers: createNodeAgentHmacHeaders({
+      nodeId: "node_pairing",
+      keyId: pairedBody.keyId,
+      secret: pairedBody.secret,
+      method: "GET",
+      pathWithQuery: "/api/node-agent/health",
+    }),
+    remoteAddress: "203.0.113.10",
+  });
+  assert.equal(signedAfterRestart.statusCode, 200);
+});
+
+test("node agent rejects hmac replay stale timestamp and body hash mismatch", async (t) => {
+  const app = await createNodeAgentApp({
+    dataDir: tempDataDir("node-agent-hmac-negative"),
+    logger: false,
+    nodeId: "node_hmac_negative",
+    remoteKeyId: "key_remote",
+    remoteSecret: "remote-secret",
+  });
+  t.after(() => app.close());
+
+  const reusableHeaders = createNodeAgentHmacHeaders({
+    nodeId: "node_hmac_negative",
+    keyId: "key_remote",
+    secret: "remote-secret",
+    method: "GET",
+    pathWithQuery: "/api/node-agent/health",
+    nonce: "nonce_replay",
+  });
+  assert.equal((await app.inject({ method: "GET", url: "/api/node-agent/health", headers: reusableHeaders })).statusCode, 200);
+  const replayed = await app.inject({ method: "GET", url: "/api/node-agent/health", headers: reusableHeaders });
+  assert.equal(replayed.statusCode, 401);
+  assert.equal(replayed.json().error.code, "NODE_AGENT_HMAC_NONCE_REPLAY");
+
+  const stale = await app.inject({
+    method: "GET",
+    url: "/api/node-agent/health",
+    headers: createNodeAgentHmacHeaders({
+      nodeId: "node_hmac_negative",
+      keyId: "key_remote",
+      secret: "remote-secret",
+      method: "GET",
+      pathWithQuery: "/api/node-agent/health",
+      timestamp: new Date(Date.now() - 120_000).toISOString(),
+    }),
+  });
+  assert.equal(stale.statusCode, 401);
+  assert.equal(stale.json().error.code, "NODE_AGENT_HMAC_TIMESTAMP_INVALID");
+
+  const body = JSON.stringify({ name: "Local" });
+  const mismatchedBody = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/runtimes",
+    headers: {
+      "content-type": "application/json",
+      ...createNodeAgentHmacHeaders({
+        nodeId: "node_hmac_negative",
+        keyId: "key_remote",
+        secret: "remote-secret",
+        method: "POST",
+        pathWithQuery: "/api/node-agent/runtimes",
+        body: JSON.stringify({ name: "Different" }),
+      }),
+    },
+    payload: body,
+  });
+  assert.equal(mismatchedBody.statusCode, 401);
+  assert.equal(mismatchedBody.json().error.code, "NODE_AGENT_HMAC_BODY_HASH_INVALID");
+});
+
+test("control plane creates remote direct http nodes with node-agent join tokens", async (t) => {
+  const port = await freePort();
+  const nodeAgent = await createNodeAgentApp({
+    dataDir: tempDataDir("node-agent-control-plane-pairing"),
+    logger: false,
+    nodeId: "node_joined",
+    token: "agent-secret",
+    port,
+  });
+  await nodeAgent.listen({ host: "127.0.0.1", port });
+  t.after(() => nodeAgent.close());
+
+  const invite = await nodeAgent.inject({
+    method: "POST",
+    url: "/api/node-agent/pairing/invites",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: { controlPlaneName: "New Control Plane" },
+    remoteAddress: "127.0.0.1",
+  });
+  assert.equal(invite.statusCode, 201);
+
+  const controlPlane = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-node-pairing"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+  });
+  t.after(() => controlPlane.close());
+
+  const created = await json(controlPlane, "POST", "/api/nodes", {
+    name: "Joined Node",
+    connectionMode: "direct-http",
+    endpoint: `http://127.0.0.1:${port}`,
+    joinToken: invite.json().data.joinToken,
+  });
+  assert.equal(created.statusCode, 201, JSON.stringify(created.body));
+  assert.equal(created.body.data.id, "node_joined");
+  assert.equal(created.body.data.auth.mode, "paired-hmac");
+  assert.ok(created.body.data.auth.keyId);
+  assert.equal(created.body.data.auth.secret, undefined);
+  assert.equal(created.body.data.auth.pairing.status, "paired");
+
+  const runtimes = await json(controlPlane, "GET", "/api/nodes/node_joined/runtimes");
+  assert.equal(runtimes.statusCode, 200);
+  assert.ok(runtimes.body.data.some((runtime) => runtime.id === "runtime_local_docker"));
+
+  const remotes = await json(controlPlane, "GET", "/api/nodes/node_joined/remotes");
+  assert.equal(remotes.statusCode, 200, JSON.stringify(remotes.body));
+  assert.equal(remotes.body.data.length, 1);
+  assert.equal(remotes.body.data[0].url, undefined);
+  assert.equal(remotes.body.data[0].active, true);
+});
+
+test("control plane node runtime aggregation isolates invalid node protocol data", async (t) => {
+  const timestamp = new Date().toISOString();
+  const requests = [];
+  const fetchImpl = async (url, init = {}) => {
+    const parsedUrl = new URL(String(url));
+    const route = parsedUrl.pathname.replace(/^\/api\/node-agent/, "");
+    requests.push({ url: String(url), route, host: parsedUrl.host, method: init.method || "GET" });
+    const nodeId = parsedUrl.hostname.startsWith("bad-node") ? "node_bad" : "node_good";
+    if (route === "/health") {
+      return new Response(JSON.stringify({
+        data: {
+          ok: true,
+          role: "node-agent",
+          nodeId,
+          protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+        },
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (route === "/runtimes") {
+      const data = nodeId === "node_bad"
+        ? [{ id: "runtime_bad", nodeId }]
+        : [{
+            id: "runtime_good",
+            nodeId,
+            name: "Good Runtime",
+            type: "docker",
+            status: "online",
+            accessStrategy: "direct-port",
+            capabilities: {},
+            labels: {},
+            createdAt: timestamp,
+            updatedAt: timestamp,
+          }];
+      return new Response(JSON.stringify({ data }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify({ data: [] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-node-runtime-invalid-aggregate"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: { fetchImpl },
+  });
+  t.after(() => app.close());
+
+  const goodNode = await json(app, "POST", "/api/nodes", {
+    id: "node_good",
+    name: "Good Node",
+    connectionMode: "direct-http",
+    endpoint: "http://good-node.example:8091",
+    auth: {
+      mode: "paired-hmac",
+      keyId: "key_good",
+      secret: "good-secret",
+    },
+  });
+  assert.equal(goodNode.statusCode, 201, JSON.stringify(goodNode.body));
+
+  const badNode = await json(app, "POST", "/api/nodes", {
+    id: "node_bad",
+    name: "Bad Node",
+    connectionMode: "direct-http",
+    endpoint: "http://bad-node.example:8091",
+    auth: {
+      mode: "paired-hmac",
+      keyId: "key_bad",
+      secret: "bad-secret",
+    },
+  });
+  assert.equal(badNode.statusCode, 201, JSON.stringify(badNode.body));
+
+  const allRuntimes = await json(app, "GET", "/api/node-runtimes");
+  assert.equal(allRuntimes.statusCode, 200);
+  assert.deepEqual(allRuntimes.body.data.map((runtime) => runtime.id), ["runtime_good"]);
+  assert.equal(allRuntimes.body.meta.nodeErrors.length, 1);
+  assert.equal(allRuntimes.body.meta.nodeErrors[0].nodeId, "node_bad");
+  assert.equal(allRuntimes.body.meta.nodeErrors[0].code, "NODE_AGENT_PROTOCOL_INVALID");
+  assert.ok(requests.some((request) => request.host === "bad-node.example:8091" && request.route === "/runtimes"));
+
+  const badRuntimes = await json(app, "GET", "/api/nodes/node_bad/runtimes");
+  assert.equal(badRuntimes.statusCode, 502);
+  assert.equal(badRuntimes.body.error.code, "NODE_AGENT_PROTOCOL_INVALID");
+});
+
+test("control plane node instance aggregation isolates invalid node protocol data", async (t) => {
+  const timestamp = new Date().toISOString();
+  const requests = [];
+  const validInstance = {
+    id: "inst_good",
+    name: "Good Instance",
+    source: {
+      type: "local-folder",
+      path: "/workspace/good",
+    },
+    nodeId: "node_good",
+    runtimeId: "runtime_good",
+    status: "running",
+    health: "ok",
+    connectionStatus: "online",
+    agentStatus: "online",
+    targetStatus: "reachable",
+    uiAccessStatus: "reachable",
+    controlMode: "controlled",
+    capabilities: {},
+    config: { autoImportAgentConfigs: true },
+    workspace: { status: "ready", path: "/workspace/good" },
+    target: { strategy: "direct-port", status: "reachable", web: "http://127.0.0.1:19001" },
+    access: { strategy: "control-plane-proxy", status: "reachable" },
+    receiver: { status: "online", pendingCount: 0 },
+    apps: { runningCount: 0 },
+    aiSessions: {
+      runningCount: 0,
+      waitingCount: 0,
+      staleCount: 0,
+      sessions: [],
+      updatedAt: timestamp,
+    },
+    runtime: { labels: {} },
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+  const incompatibleInstance = {
+    ...validInstance,
+    id: "inst_old_protocol",
+    name: "Old Protocol Instance",
+    protocolVersion: "2026-06-23",
+  };
+  const fetchImpl = async (url, init = {}) => {
+    const parsedUrl = new URL(String(url));
+    const route = parsedUrl.pathname.replace(/^\/api\/node-agent/, "");
+    requests.push({ route, host: parsedUrl.host, method: init.method || "GET" });
+    const nodeId = parsedUrl.hostname.startsWith("bad-node") ? "node_bad" : "node_good";
+    if (route === "/health") {
+      return new Response(JSON.stringify({
+        data: {
+          ok: true,
+          role: "node-agent",
+          nodeId,
+          protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+        },
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (route === "/instances") {
+      const data = nodeId === "node_bad"
+        ? [{ id: "inst_bad", nodeId }]
+        : [validInstance, incompatibleInstance, { id: "inst_invalid_same_node", nodeId }];
+      return new Response(JSON.stringify({ data }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (route === "/triggers") {
+      return new Response(JSON.stringify({
+        data: {
+          enabledCount: 0,
+          runningCount: 0,
+          errorCount: 0,
+          configs: [],
+          recentRuns: [],
+        },
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify({ data: [] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-node-instance-invalid-aggregate"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: { fetchImpl },
+  });
+  t.after(() => app.close());
+
+  const goodNode = await json(app, "POST", "/api/nodes", {
+    id: "node_good",
+    name: "Good Node",
+    connectionMode: "direct-http",
+    endpoint: "http://good-node.example:8091",
+    auth: {
+      mode: "paired-hmac",
+      keyId: "key_good",
+      secret: "good-secret",
+    },
+  });
+  assert.equal(goodNode.statusCode, 201, JSON.stringify(goodNode.body));
+
+  const badNode = await json(app, "POST", "/api/nodes", {
+    id: "node_bad",
+    name: "Bad Node",
+    connectionMode: "direct-http",
+    endpoint: "http://bad-node.example:8091",
+    auth: {
+      mode: "paired-hmac",
+      keyId: "key_bad",
+      secret: "bad-secret",
+    },
+  });
+  assert.equal(badNode.statusCode, 201, JSON.stringify(badNode.body));
+
+  const instances = await json(app, "GET", "/api/controlled-instances");
+  assert.equal(instances.statusCode, 200, JSON.stringify(instances.body));
+  assert.deepEqual(instances.body.data.map((instance) => instance.id), ["inst_good", "inst_old_protocol"]);
+  assert.ok(requests.some((request) => request.host === "bad-node.example:8091" && request.route === "/instances"));
+
+  const board = await json(app, "GET", "/api/instance-board");
+  assert.equal(board.statusCode, 200, JSON.stringify(board.body));
+  assert.deepEqual(board.body.data.map((instance) => instance.id), ["inst_good", "inst_old_protocol"]);
+  assert.equal(board.body.data.find((instance) => instance.id === "inst_old_protocol").protocolCompatible, false);
+  assert.equal(board.body.meta.nodeErrors.length, 3);
+  assert.deepEqual(board.body.meta.nodeErrors.map((error) => [error.nodeId, error.code]).sort(), [
+    ["node_bad", "NODE_INSTANCE_PAYLOAD_INVALID"],
+    ["node_good", "NODE_INSTANCE_PAYLOAD_INVALID"],
+    ["node_good", "PROTOCOL_VERSION_MISMATCH"],
+  ]);
+});
+
+test("node agent connects itself to another control plane with a join token", async (t) => {
+  const targetPort = await freePort();
+  const targetControlPlane = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-node-join-target"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+  });
+  await targetControlPlane.listen({ host: "127.0.0.1", port: targetPort });
+  t.after(() => targetControlPlane.close());
+
+  const invite = await json(targetControlPlane, "POST", "/api/node-join/invites", {});
+  assert.equal(invite.statusCode, 201);
+  assert.ok(invite.body.data.joinToken);
+
+  const agentDataDir = tempDataDir("node-agent-remote-connect");
+  const nodeAgent = await createNodeAgentApp({
+    dataDir: agentDataDir,
+    logger: false,
+    nodeId: "node_remote_connect",
+    token: "agent-secret",
+    port: await freePort(),
+  });
+  t.after(() => nodeAgent.close());
+
+  const connected = await nodeAgent.inject({
+    method: "POST",
+    url: "/api/node-agent/remotes/connect",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      controlPlaneUrl: `http://127.0.0.1:${targetPort}`,
+      joinToken: invite.body.data.joinToken,
+      controlPlaneName: "Target Control Plane",
+    },
+    remoteAddress: "127.0.0.1",
+  });
+  assert.equal(connected.statusCode, 201);
+  assert.equal(connected.json().data.remote.url, `http://127.0.0.1:${targetPort}`);
+  assert.equal(connected.json().data.tunnel.status, "saved");
+
+  const listed = await json(targetControlPlane, "GET", "/api/nodes");
+  assert.equal(listed.statusCode, 200);
+  const joined = listed.body.data.find((node) => node.id === "node_remote_connect");
+  assert.ok(joined);
+  assert.equal(joined.connectionMode, "reverse-wss");
+  assert.equal(joined.auth.mode, "paired-hmac");
+  assert.ok(joined.auth.keyId);
+  assert.equal(joined.auth.secret, undefined);
+
+  const identity = JSON.parse(fs.readFileSync(path.join(agentDataDir, "identity.json"), "utf8"));
+  const remote = identity.remoteControlPlanes.find((item) => item.url === `http://127.0.0.1:${targetPort}`);
+  assert.ok(remote);
+  assert.equal(remote.active, true);
+  assert.equal(remote.keyId, joined.auth.keyId);
+});
+
+test("control plane rejects node join when node id already exists", async (t) => {
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-node-join-duplicate"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+  });
+  t.after(() => app.close());
+
+  const invite = await json(app, "POST", "/api/node-join/invites", {});
+  assert.equal(invite.statusCode, 201);
+
+  const first = await json(app, "POST", "/api/node-join/complete", {
+    joinToken: invite.body.data.joinToken,
+    nodeId: "node_duplicate_join",
+    nodeName: "First",
+    keyId: "key_first",
+    secret: "secret-first",
+  });
+  assert.equal(first.statusCode, 201);
+
+  const secondInvite = await json(app, "POST", "/api/node-join/invites", {});
+  assert.equal(secondInvite.statusCode, 201);
+  const duplicate = await json(app, "POST", "/api/node-join/complete", {
+    joinToken: secondInvite.body.data.joinToken,
+    nodeId: "node_duplicate_join",
+    nodeName: "Second",
+    keyId: "key_second",
+    secret: "secret-second",
+  });
+  assert.equal(duplicate.statusCode, 409);
+  assert.equal(duplicate.body.error.code, "NODE_JOIN_NODE_ALREADY_EXISTS");
+});
+
+test("control plane does not use local static key for remote direct http node auth", async (t) => {
+  const mock = createMockNodeAgentFetch({
+    nodeId: "node_remote_auth",
+  });
+  const controlPlane = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-remote-auth-headers"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: {
+      fetchImpl: mock.fetchImpl,
+    },
+  });
+  t.after(() => controlPlane.close());
+
+  const created = await json(controlPlane, "POST", "/api/nodes", {
+    id: "node_remote_auth",
+    name: "Remote Auth Node",
+    connectionMode: "direct-http",
+    endpoint: "http://node-agent.example.test",
+    auth: {
+      mode: "paired-hmac",
+      keyId: "key_remote",
+      secret: "remote-secret",
+    },
+  });
+  assert.equal(created.statusCode, 201, JSON.stringify(created.body));
+  const remoteHealthRequest = mock.requests.find((request) => request.path === "/health" && request.url.startsWith("http://node-agent.example.test"));
+  assert.ok(remoteHealthRequest);
+  assert.equal(remoteHealthRequest.headers.authorization, undefined);
+  assert.equal(remoteHealthRequest.headers["x-taskhandoff-key-id"], "key_remote");
+  assert.ok(remoteHealthRequest.headers["x-taskhandoff-signature"]);
+});
+
+test("node agent only accepts local static key from loopback clients", async (t) => {
+  const app = await createNodeAgentApp({
+    dataDir: tempDataDir("node-agent-local-static-key"),
+    logger: false,
+    token: "agent-secret",
+  });
+  t.after(() => app.close());
+
+  const local = await app.inject({
+    method: "GET",
+    url: "/api/node-agent/health",
+    headers: { authorization: "Bearer agent-secret" },
+    remoteAddress: "127.0.0.1",
+  });
+  assert.equal(local.statusCode, 200);
+
+  const remote = await app.inject({
+    method: "GET",
+    url: "/api/node-agent/health",
+    headers: { authorization: "Bearer agent-secret" },
+    remoteAddress: "203.0.113.10",
+  });
+  assert.equal(remote.statusCode, 401);
+  assert.equal(remote.json().error.code, "NODE_AGENT_LOCAL_TOKEN_REQUIRES_LOOPBACK");
+});
+
+test("node agent keeps localhost runtime manual and creates local instances without images", async (t) => {
+  const app = await createNodeAgentApp({
+    dataDir: tempDataDir("node-agent-localhost-runtime"),
+    logger: false,
+    token: "agent-secret",
+    dockerCommandRunner: async (command) => {
+      if (command === "codex") {
+        return { stdout: "codex 1.2.3", stderr: "" };
+      }
+      throw new Error(`${command} missing`);
+    },
+  });
+  t.after(() => app.close());
+
+  const initialRuntimes = await app.inject({
+    method: "GET",
+    url: "/api/node-agent/runtimes",
+    headers: { authorization: "Bearer agent-secret" },
+  });
+  assert.equal(initialRuntimes.statusCode, 200);
+  assert.deepEqual(initialRuntimes.json().data.map((runtime) => runtime.id), ["runtime_local_docker"]);
+
+  const createdRuntime = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/runtimes",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: "runtime_local_host",
+      name: "Localhost",
+      type: "local",
+    },
+  });
+  assert.equal(createdRuntime.statusCode, 201);
+  assert.equal(createdRuntime.json().data.type, "local");
+  assert.equal(createdRuntime.json().data.capabilities.requiresImage, false);
+  assert.equal(createdRuntime.json().data.accessStrategy, "node-proxy");
+
+  const checkedRuntime = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/runtimes/runtime_local_host/check",
+    headers: { authorization: "Bearer agent-secret" },
+  });
+  assert.equal(checkedRuntime.statusCode, 200);
+  assert.equal(checkedRuntime.json().data.status, "online");
+  assert.equal(checkedRuntime.json().data.capabilities.apps.terminal, true);
+  assert.equal(checkedRuntime.json().data.capabilities.apps.codex.available, true);
+  assert.equal(checkedRuntime.json().data.capabilities.apps.claude.available, false);
+
+  const createdInstance = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: "inst_local",
+      name: "local workspace",
+      runtimeId: "runtime_local_host",
+      source: {
+        type: "local-folder",
+        path: "/tmp/task-handoff-localhost-workspace",
+      },
+      sourceSnapshot: {
+        name: "workspace",
+      },
+    },
+  });
+  assert.equal(createdInstance.statusCode, 201);
+  assert.equal(createdInstance.json().data.imageId, undefined);
+  assert.equal(createdInstance.json().data.status, "created");
+  assert.equal(createdInstance.json().data.connectionStatus, "unknown");
+  assert.equal(createdInstance.json().data.workspace.status, "unknown");
+  assert.equal(createdInstance.json().data.workspace.path, "/tmp/task-handoff-localhost-workspace");
+  assert.equal(createdInstance.json().data.runtime.kind, "local");
+
+  const duplicateInstance = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: "inst_local_duplicate",
+      name: "local workspace duplicate",
+      runtimeId: "runtime_local_host",
+      source: {
+        type: "local-folder",
+        path: "/tmp/task-handoff-localhost-workspace-2",
+      },
+    },
+  });
+  assert.equal(duplicateInstance.statusCode, 409);
+  assert.equal(duplicateInstance.json().error.code, "LOCAL_RUNTIME_INSTANCE_EXISTS");
+
+  const secondRuntime = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/runtimes",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: "runtime_local_host_2",
+      name: "Localhost 2",
+      type: "local",
+    },
+  });
+  assert.equal(secondRuntime.statusCode, 201);
+
+  const duplicateAcrossLocalRuntimes = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: "inst_local_duplicate_2",
+      name: "second local runtime duplicate",
+      runtimeId: "runtime_local_host_2",
+      source: {
+        type: "local-folder",
+        path: "/tmp/task-handoff-localhost-workspace-3",
+      },
+    },
+  });
+  assert.equal(duplicateAcrossLocalRuntimes.statusCode, 409);
+  assert.equal(duplicateAcrossLocalRuntimes.json().error.code, "LOCAL_RUNTIME_INSTANCE_EXISTS");
+
+  const deleteRuntime = await app.inject({
+    method: "DELETE",
+    url: "/api/node-agent/runtimes/runtime_local_host",
+    headers: { authorization: "Bearer agent-secret" },
+  });
+  assert.equal(deleteRuntime.statusCode, 409);
+  assert.equal(deleteRuntime.json().error.code, "NODE_RUNTIME_IN_USE");
+});
+
+test("node agent rejects unknown management request fields", async (t) => {
+  const app = await createNodeAgentApp({
+    dataDir: tempDataDir("node-agent-unknown-management-fields"),
+    logger: false,
+    token: "agent-secret",
+  });
+  t.after(() => app.close());
+
+  const runtime = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/runtimes",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: "runtime_unknown_fields",
+      name: "Unknown fields runtime",
+      type: "local",
+      defaultRuntimeTargetId: "ignored",
+    },
+  });
+  assert.equal(runtime.statusCode, 400);
+
+  const cleanRuntime = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/runtimes",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: "runtime_unknown_fields",
+      name: "Unknown fields runtime",
+      type: "local",
+    },
+  });
+  assert.equal(cleanRuntime.statusCode, 201);
+
+  const updatedRuntime = await app.inject({
+    method: "PATCH",
+    url: "/api/node-agent/runtimes/runtime_unknown_fields",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      name: "Updated runtime",
+      defaultRuntimeTargetId: "ignored",
+    },
+  });
+  assert.equal(updatedRuntime.statusCode, 400);
+
+  const folder = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/local-folders",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      name: "Unknown fields folder",
+      path: "/tmp/task-handoff-unknown-folder",
+      defaultRuntimeTargetId: "ignored",
+    },
+  });
+  assert.equal(folder.statusCode, 400);
+});
+
+test("node agent starts localhost runtime as a host controlled-instance process", async (t) => {
+  const dataDir = tempDataDir("node-agent-localhost-process");
+  const webStub = path.join(dataDir, "controlled-web-stub.js");
+  const envLog = path.join(dataDir, "controlled-web-env.jsonl");
+  fs.writeFileSync(
+    webStub,
+    [
+      "const fs = require('node:fs');",
+      "const http = require('node:http');",
+      "const port = Number(process.env.TASK_HANDOFF_WEB_PORT);",
+      "(async () => {",
+      "const registered = await fetch(`${process.env.TASK_HANDOFF_NODE_AGENT_URL}/api/node-agent/instances/${process.env.TASK_HANDOFF_INSTANCE_ID}/register`, {",
+      "  method: 'POST',",
+      "  headers: { 'content-type': 'application/json', authorization: `Bearer ${process.env.TASK_HANDOFF_REGISTRATION_TOKEN}` },",
+      "  body: JSON.stringify({",
+      "    instanceId: process.env.TASK_HANDOFF_INSTANCE_ID,",
+      "    name: process.env.TASK_HANDOFF_INSTANCE_NAME,",
+      "    nodeId: process.env.TASK_HANDOFF_NODE_ID,",
+      "    runtimeId: process.env.TASK_HANDOFF_RUNTIME_ID,",
+      "    protocolVersion: '2026-07-13',",
+      "    build: { component: 'controlled-instance' },",
+      "    controlMode: 'controlled',",
+      "    capabilities: { protocolVersion: '2026-07-13', apps: [], features: {} },",
+      "    target: { strategy: 'direct-port', web: `http://127.0.0.1:${port}`, api: `http://127.0.0.1:${port}/api`, status: 'reachable' },",
+      "    workspace: { mode: 'local-bind', status: 'ready', path: process.env.TASK_HANDOFF_WORKSPACE, exists: true },",
+      "  }),",
+      "});",
+      "if (!registered.ok) { throw new Error(`register failed ${registered.status}: ${await registered.text()}`); }",
+      `fs.appendFileSync(${JSON.stringify(envLog)}, JSON.stringify({`,
+      "  persist: process.env.TASK_HANDOFF_APP_SESSION_PERSIST,",
+      "  dataDir: process.env.TASK_HANDOFF_DATA_DIR,",
+      "  logDir: process.env.TASK_HANDOFF_LOG_DIR,",
+      "  receiverAutoStart: process.argv.includes('--receiver-auto-start'),",
+      "}) + '\\n');",
+      "const server = http.createServer((req, res) => {",
+      "  if (req.url === '/api/health') { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ ok: true })); return; }",
+      "  res.end('ok');",
+      "});",
+      "server.listen(port, '127.0.0.1');",
+      "process.on('SIGTERM', () => server.close(() => process.exit(0)));",
+      "})().catch((error) => { console.error(error instanceof Error ? error.message : String(error)); process.exit(1); });",
+    ].join("\n"),
+  );
+  const previousCommand = process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND;
+  process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND = `${process.execPath} ${webStub}`;
+  const host = "127.0.0.1";
+  const port = await freePort(host);
+  const app = await createNodeAgentApp({
+    dataDir,
+    logger: false,
+    token: "agent-secret",
+    host,
+    port,
+  });
+  t.after(async () => {
+    if (previousCommand === undefined) {
+      delete process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND;
+    } else {
+      process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND = previousCommand;
+    }
+    await app.close();
+  });
+  await app.listen({ host, port });
+
+  const runtime = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/runtimes",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: "runtime_local_host",
+      name: "Localhost",
+      type: "local",
+    },
+  });
+  assert.equal(runtime.statusCode, 201);
+
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: "inst_local_process",
+      name: "local process",
+      runtimeId: "runtime_local_host",
+      source: {
+        type: "local-folder",
+        path: dataDir,
+      },
+    },
+  });
+  assert.equal(created.statusCode, 201);
+
+  const started = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_local_process/start",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {},
+  });
+  assert.equal(started.statusCode, 200);
+  assert.equal(started.json().data.status, "registering");
+  assert.equal(started.json().data.runtime.kind, "local");
+  assert.equal(typeof started.json().data.runtime.pid, "number");
+  assert.equal(typeof started.json().data.runtime.port, "number");
+  assert.equal(started.json().data.target.web, `http://127.0.0.1:${started.json().data.runtime.port}`);
+  assert.equal(started.json().data.target.status, "reachable");
+  const envLines = fs.readFileSync(envLog, "utf8").trim().split(/\n/).map((line) => JSON.parse(line));
+  assert.equal(envLines[0].receiverAutoStart, false);
+
+  const stopped = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_local_process/stop",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {},
+  });
+  assert.equal(stopped.statusCode, 200);
+  assert.equal(stopped.json().data.status, "stopped");
+});
+
+test("localhost process spawn failures fail the instance without crashing node agent", async (t) => {
+  const dataDir = tempDataDir("node-agent-localhost-spawn-failure");
+  const inaccessibleCommand = path.join(dataDir, "controlled-instance-no-exec");
+  fs.writeFileSync(inaccessibleCommand, "#!/bin/sh\nexit 0\n", { mode: 0o644 });
+  const previousCommand = process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND;
+  process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND = inaccessibleCommand;
+  const app = await createNodeAgentApp({
+    dataDir,
+    logger: false,
+    token: "agent-secret",
+  });
+  t.after(async () => {
+    if (previousCommand === undefined) {
+      delete process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND;
+    } else {
+      process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND = previousCommand;
+    }
+    await app.close();
+  });
+
+  await app.inject({
+    method: "POST",
+    url: "/api/node-agent/runtimes",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: { id: "runtime_local_spawn_failure", name: "Localhost", type: "local" },
+  });
+  await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: "inst_local_spawn_failure",
+      name: "local spawn failure",
+      runtimeId: "runtime_local_spawn_failure",
+      source: { type: "local-folder", path: dataDir },
+    },
+  });
+
+  const started = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_local_spawn_failure/start",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {},
+  });
+  assert.equal(started.statusCode, 500);
+  assert.equal(started.json().error.code, "LOCAL_INSTANCE_PROCESS_SPAWN_FAILED");
+
+  const health = await app.inject({
+    method: "GET",
+    url: "/api/node-agent/health",
+    headers: { authorization: "Bearer agent-secret" },
+  });
+  assert.equal(health.statusCode, 200);
+});
+
+test("node agent shutdown stops localhost processes while preserving active restore state", async (t) => {
+  const dataDir = tempDataDir("node-agent-localhost-shutdown");
+  const webStub = path.join(dataDir, "controlled-web-stub.js");
+  const signalLog = path.join(dataDir, "controlled-web-signal.jsonl");
+  fs.writeFileSync(
+    webStub,
+    [
+      "const fs = require('node:fs');",
+      "const http = require('node:http');",
+      "const port = Number(process.env.TASK_HANDOFF_WEB_PORT);",
+      "const server = http.createServer((req, res) => {",
+      "  if (req.url === '/api/health') { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ ok: true })); return; }",
+      "  res.end('ok');",
+      "});",
+      "server.listen(port, '127.0.0.1');",
+      "process.on('SIGTERM', () => {",
+      `  fs.appendFileSync(${JSON.stringify(signalLog)}, JSON.stringify({ signal: 'SIGTERM', pid: process.pid }) + '\\n');`,
+      "  server.close(() => process.exit(0));",
+      "});",
+    ].join("\n"),
+  );
+  const previousCommand = process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND;
+  process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND = `${process.execPath} ${webStub}`;
+  const host = "127.0.0.1";
+  const port = await freePort(host);
+  const app = await createNodeAgentApp({
+    dataDir,
+    logger: false,
+    token: "agent-secret",
+    host,
+    port,
+  });
+  t.after(async () => {
+    if (previousCommand === undefined) {
+      delete process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND;
+    } else {
+      process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND = previousCommand;
+    }
+    try {
+      await app.close();
+    } catch {
+      // The test closes the app explicitly.
+    }
+  });
+  await app.listen({ host, port });
+
+  const runtime = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/runtimes",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: "runtime_local_host",
+      name: "Localhost",
+      type: "local",
+    },
+  });
+  assert.equal(runtime.statusCode, 201);
+
+  const localCreated = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: "inst_local_shutdown",
+      name: "local shutdown",
+      runtimeId: "runtime_local_host",
+      source: {
+        type: "local-folder",
+        path: dataDir,
+      },
+    },
+  });
+  assert.equal(localCreated.statusCode, 201);
+
+  const timestamp = new Date().toISOString();
+  const dockerCreated = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: "inst_docker_shutdown",
+      name: "docker shutdown",
+      runtimeId: "runtime_local_docker",
+      imageId: "img_1",
+      image: {
+        id: "img_1",
+        name: "Image",
+        image: "task-handoff-web:local",
+        registry: "local",
+        capabilities: [],
+        optionalApps: [],
+        defaultEnv: {},
+        labels: {},
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      source: {
+        type: "git-repository",
+        url: "https://example.com/repo.git",
+        ref: { type: "branch", name: "main" },
+        auth: { type: "none" },
+        clone: { submodules: false, lfs: false, subdirectory: "" },
+      },
+    },
+  });
+  assert.equal(dockerCreated.statusCode, 201);
+
+  const started = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_local_shutdown/start",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {},
+  });
+  assert.equal(started.statusCode, 200);
+  const pid = started.json().data.runtime.pid;
+  assert.equal(typeof pid, "number");
+
+  await app.close();
+  await waitForProcessExit(pid, "localhost controlled instance exit");
+  const signalRows = fs.readFileSync(signalLog, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  assert.deepEqual(signalRows.map((row) => row.signal), ["SIGTERM"]);
+
+  const localRecord = JSON.parse(fs.readFileSync(path.join(dataDir, "controlled-instances", "inst_local_shutdown.json"), "utf8"));
+  assert.equal(localRecord.status, "registering");
+  assert.equal(localRecord.connectionStatus, "offline");
+  const dockerRecord = JSON.parse(fs.readFileSync(path.join(dataDir, "controlled-instances", "inst_docker_shutdown.json"), "utf8"));
+  assert.equal(dockerRecord.status, "created");
+  assert.equal(dockerRecord.connectionStatus, "unknown");
+});
+
+test("node agent restores localhost runtime processes after graceful shutdown", async (t) => {
+  const dataDir = tempDataDir("node-agent-localhost-restore");
+  const webStub = path.join(dataDir, "controlled-web-stub.js");
+  const envLog = path.join(dataDir, "controlled-web-env.jsonl");
+  fs.writeFileSync(
+    webStub,
+    [
+      "const fs = require('node:fs');",
+      "const http = require('node:http');",
+      "const port = Number(process.env.TASK_HANDOFF_WEB_PORT);",
+      `fs.appendFileSync(${JSON.stringify(envLog)}, JSON.stringify({`,
+      "  persist: process.env.TASK_HANDOFF_APP_SESSION_PERSIST,",
+      "  dataDir: process.env.TASK_HANDOFF_DATA_DIR,",
+      "  logDir: process.env.TASK_HANDOFF_LOG_DIR,",
+      "}) + '\\n');",
+      "const server = http.createServer((req, res) => {",
+      "  if (req.url === '/api/health') { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ ok: true })); return; }",
+      "  res.end('ok');",
+      "});",
+      "server.listen(port, '127.0.0.1');",
+      "process.on('SIGTERM', () => server.close(() => process.exit(0)));",
+    ].join("\n"),
+  );
+  const previousCommand = process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND;
+  process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND = `${process.execPath} ${webStub}`;
+  const host = "127.0.0.1";
+  const port = await freePort(host);
+  let app = await createNodeAgentApp({
+    dataDir,
+    logger: false,
+    token: "agent-secret",
+    host,
+    port,
+  });
+  t.after(async () => {
+    if (previousCommand === undefined) {
+      delete process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND;
+    } else {
+      process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND = previousCommand;
+    }
+    await app.close();
+  });
+  await app.listen({ host, port });
+
+  const runtime = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/runtimes",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: "runtime_local_host",
+      name: "Localhost",
+      type: "local",
+    },
+  });
+  assert.equal(runtime.statusCode, 201);
+
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: "inst_local_restore",
+      name: "local restore",
+      runtimeId: "runtime_local_host",
+      source: {
+        type: "local-folder",
+        path: dataDir,
+      },
+    },
+  });
+  assert.equal(created.statusCode, 201);
+
+  const started = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_local_restore/start",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {},
+  });
+  assert.equal(started.statusCode, 200);
+  const firstPid = started.json().data.runtime.pid;
+  const firstPort = started.json().data.runtime.port;
+  assert.equal(started.json().data.status, "registering");
+  assert.equal(started.json().data.target.status, "reachable");
+
+  await app.close();
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  app = await createNodeAgentApp({
+    dataDir,
+    logger: false,
+    token: "agent-secret",
+    host,
+    port,
+  });
+  await app.listen({ host, port });
+  await app.nodeAgentRestoreLocalInstances();
+
+  const listed = await withTimeout(
+    (async () => {
+      for (;;) {
+        const response = await app.inject({
+          method: "GET",
+          url: "/api/node-agent/instances",
+          headers: { authorization: "Bearer agent-secret" },
+        });
+        const candidate = response.json().data.find((item) => item.id === "inst_local_restore");
+        if (candidate?.status === "registering" && candidate?.runtime?.pid !== firstPid && candidate?.target?.status === "reachable") {
+          return response;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    })(),
+    "graceful localhost runtime restore",
+    3000,
+  );
+  const instance = listed.json().data.find((item) => item.id === "inst_local_restore");
+  assert.equal(instance.status, "registering");
+  assert.equal(instance.connectionStatus, "online");
+  assert.equal(instance.runtime.port, firstPort);
+  assert.notEqual(instance.runtime.pid, firstPid);
+  const envRows = fs.readFileSync(envLog, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  assert.equal(envRows.length, 2);
+  assert.deepEqual(envRows.map((row) => row.persist), ["1", "1"]);
+});
+
+test("node agent restores active localhost runtime processes after unclean shutdown state", async (t) => {
+  const dataDir = tempDataDir("node-agent-localhost-restore-unclean");
+  const webStub = path.join(dataDir, "controlled-web-stub.js");
+  const envLog = path.join(dataDir, "controlled-web-env.jsonl");
+  const requestLog = path.join(dataDir, "controlled-web-requests.jsonl");
+  fs.writeFileSync(
+    webStub,
+    [
+      "const fs = require('node:fs');",
+      "const http = require('node:http');",
+      "const port = Number(process.env.TASK_HANDOFF_WEB_PORT);",
+      `fs.appendFileSync(${JSON.stringify(envLog)}, JSON.stringify({`,
+      "  persist: process.env.TASK_HANDOFF_APP_SESSION_PERSIST,",
+      "  dataDir: process.env.TASK_HANDOFF_DATA_DIR,",
+      "  logDir: process.env.TASK_HANDOFF_LOG_DIR,",
+      "}) + '\\n');",
+      "const server = http.createServer((req, res) => {",
+      `  fs.appendFileSync(${JSON.stringify(requestLog)}, JSON.stringify({ method: req.method, url: req.url }) + '\\n');`,
+      "  if (req.url === '/api/health') { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ ok: true })); return; }",
+      "  if (req.url && req.url.startsWith('/api/config-sync/import/')) { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ data: { ok: true } })); return; }",
+      "  res.end('ok');",
+      "});",
+      "server.listen(port, '127.0.0.1');",
+      "process.on('SIGTERM', () => server.close(() => process.exit(0)));",
+    ].join("\n"),
+  );
+  const previousCommand = process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND;
+  process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND = `${process.execPath} ${webStub}`;
+  const host = "127.0.0.1";
+  const port = await freePort(host);
+  let app = await createNodeAgentApp({
+    dataDir,
+    logger: false,
+    token: "agent-secret",
+    host,
+    port,
+  });
+  t.after(async () => {
+    if (previousCommand === undefined) {
+      delete process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND;
+    } else {
+      process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND = previousCommand;
+    }
+    await app.close();
+  });
+  await app.listen({ host, port });
+  await app.nodeAgentRestoreLocalInstances();
+
+  const runtime = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/runtimes",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: "runtime_local_host",
+      name: "Localhost",
+      type: "local",
+    },
+  });
+  assert.equal(runtime.statusCode, 201);
+
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: "inst_local_restore_unclean",
+      name: "local restore",
+      runtimeId: "runtime_local_host",
+      source: {
+        type: "local-folder",
+        path: dataDir,
+      },
+    },
+  });
+  assert.equal(created.statusCode, 201);
+
+  const started = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_local_restore_unclean/start",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {},
+  });
+  assert.equal(started.statusCode, 200);
+  const firstPid = started.json().data.runtime.pid;
+  const firstPort = started.json().data.runtime.port;
+  assert.equal(started.json().data.status, "registering");
+  assert.equal(started.json().data.target.status, "reachable");
+
+  const child = app.nodeAgentState.controlledInstances.get("inst_local_restore_unclean");
+  app.nodeAgentState.controlledInstances.put({ ...child, status: "running", connectionStatus: "online" });
+  await app.close();
+  app.nodeAgentState.controlledInstances.put({ ...child, status: "running", connectionStatus: "online" });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  app = await createNodeAgentApp({
+    dataDir,
+    logger: false,
+    token: "agent-secret",
+    host,
+    port,
+  });
+  await app.listen({ host, port });
+  await app.nodeAgentRestoreLocalInstances();
+
+  const restored = await withTimeout(
+    (async () => {
+      for (;;) {
+        const response = await app.inject({
+          method: "GET",
+          url: "/api/node-agent/instances",
+          headers: { authorization: "Bearer agent-secret" },
+        });
+        const instance = response.json().data.find((item) => item.id === "inst_local_restore_unclean");
+        if (instance?.status === "registering" && instance?.runtime?.pid !== firstPid && instance?.target?.status === "reachable") {
+          return response;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    })(),
+    "localhost runtime restore",
+    3000,
+  );
+  assert.equal(restored.statusCode, 200);
+  const instance = restored.json().data.find((item) => item.id === "inst_local_restore_unclean");
+  assert.equal(instance.status, "registering");
+  assert.equal(instance.connectionStatus, "online");
+  assert.equal(instance.target.status, "reachable");
+  assert.equal(instance.runtime.port, firstPort);
+  assert.equal(typeof instance.runtime.pid, "number");
+  assert.notEqual(instance.runtime.pid, firstPid);
+  const envRows = fs.readFileSync(envLog, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  assert.equal(envRows.length, 2);
+  assert.deepEqual(envRows.map((row) => row.persist), ["1", "1"]);
+  assert.ok(envRows.every((row) => row.dataDir.includes("local-instances/inst_local_restore_unclean")));
+  assert.ok(envRows.every((row) => row.logDir.includes("local-instances/inst_local_restore_unclean/logs")));
+  const requestRows = await waitForCondition(() => {
+    const rows = fs.readFileSync(requestLog, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    return rows.filter((row) => row.url.startsWith("/api/config-sync/import/")).length === 4 ? rows : undefined;
+  }, "localhost runtime config auto-imports");
+  assert.deepEqual(
+    requestRows.filter((row) => row.url.startsWith("/api/config-sync/import/")).map((row) => `${row.method} ${row.url}`),
+    [
+      "POST /api/config-sync/import/codex",
+      "POST /api/config-sync/import/claude",
+      "POST /api/config-sync/import/codex",
+      "POST /api/config-sync/import/claude",
+    ],
+  );
+});
+
+test("node agent rejects incompatible controlled instance protocol versions", async (t) => {
+  const app = await createNodeAgentApp({
+    dataDir: tempDataDir("node-agent-protocol-mismatch"),
+    logger: false,
+    token: "agent-secret",
+  });
+  t.after(() => app.close());
+
+  const timestamp = new Date().toISOString();
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances",
+    headers: {
+      authorization: "Bearer agent-secret",
+    },
+    payload: {
+      id: "inst_protocol",
+      name: "worker",
+      runtimeId: "runtime_local_docker",
+      imageId: "img_1",
+      image: {
+        id: "img_1",
+        name: "Image",
+        image: "task-handoff-web:local",
+        registry: "local",
+        capabilities: [],
+        optionalApps: [],
+        defaultEnv: {},
+        labels: {},
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      source: {
+        type: "git-repository",
+        url: "https://github.com/example/repo.git",
+      },
+    },
+  });
+  assert.equal(created.statusCode, 201);
+  const token = created.json().data.registrationToken;
+
+  const rejectedRegister = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_protocol/register",
+    headers: {
+      authorization: `Bearer ${token}`,
+    },
+    payload: {
+      instanceId: "inst_protocol",
+      name: "worker",
+      protocolVersion: "2026-01-01",
+      target: {
+        strategy: "direct-port",
+        status: "reachable",
+        web: "http://127.0.0.1:18080",
+      },
+      workspace: {
+        status: "ready",
+      },
+    },
+  });
+  assert.equal(rejectedRegister.statusCode, 409);
+  assert.equal(rejectedRegister.json().error.code, "PROTOCOL_VERSION_MISMATCH");
+
+  const registered = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_protocol/register",
+    headers: {
+      authorization: `Bearer ${token}`,
+    },
+    payload: {
+      instanceId: "inst_protocol",
+      name: "worker",
+      protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+      build: {
+        component: "controlled-instance",
+        packageVersion: "0.1.0",
+        buildId: "build-1",
+        imageRef: "task-handoff-web:test",
+      },
+      target: {
+        strategy: "direct-port",
+        status: "reachable",
+        web: "http://127.0.0.1:18080",
+      },
+      workspace: {
+        status: "ready",
+      },
+    },
+  });
+  assert.equal(registered.statusCode, 201);
+  assert.equal(registered.json().data.build.buildId, "build-1");
+  assert.equal(registered.json().data.build.imageRef, "task-handoff-web:test");
+
+  const rejectedHeartbeat = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_protocol/heartbeat",
+    headers: {
+      authorization: `Bearer ${token}`,
+    },
+    payload: {
+      protocolVersion: "2026-01-01",
+      status: "running",
+      health: "ok",
+      target: {
+        status: "reachable",
+      },
+    },
+  });
+  assert.equal(rejectedHeartbeat.statusCode, 409);
+  assert.equal(rejectedHeartbeat.json().error.code, "PROTOCOL_VERSION_MISMATCH");
+});
+
+test("node agent migrates legacy local stored endpoint-shaped instances on startup", async (t) => {
+  const dataDir = tempDataDir("node-agent-invalid-stored-instance");
+  const timestamp = new Date().toISOString();
+  const instanceDir = path.join(dataDir, "controlled-instances");
+  fs.mkdirSync(instanceDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(instanceDir, "inst_legacy.json"),
+    `${JSON.stringify(
+      {
+        id: "inst_legacy",
+        name: "legacy-worker",
+        source: {
+          type: "local-folder",
+          path: "/workspace",
+        },
+        sourceSnapshot: {},
+        nodeId: "node_old",
+        runtimeId: "runtime_local_docker",
+        imageId: "img_default",
+        status: "running",
+        health: "ok",
+        connectionStatus: "online",
+        agentStatus: "online",
+        endpointStatus: "reachable",
+        uiAccessStatus: "reachable",
+        controlMode: "controlled",
+        capabilities: {},
+        workspace: { status: "ready" },
+        endpoints: {
+          strategy: "direct-port",
+          status: "reachable",
+          web: "http://127.0.0.1:18080",
+        },
+        runtime: { labels: {} },
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
+  const app = await createNodeAgentApp({
+    dataDir,
+    logger: false,
+    nodeId: "node_current",
+    token: "agent-secret",
+  });
+  t.after(() => app.close());
+
+  const listed = await app.inject({
+    method: "GET",
+    url: "/api/node-agent/instances",
+    headers: { authorization: "Bearer agent-secret" },
+  });
+  assert.equal(listed.statusCode, 200);
+  assert.equal(listed.json().data.length, 1);
+  assert.equal(listed.json().data[0].id, "inst_legacy");
+  assert.deepEqual(listed.json().data[0].target, {
+    strategy: "direct-port",
+    status: "reachable",
+    web: "http://127.0.0.1:18080",
+  });
+  assert.equal("endpoints" in listed.json().data[0], false);
+});
+
+test("node agent tolerates extra fields in stored controlled instances", async (t) => {
+  const dataDir = tempDataDir("node-agent-stored-instance-extra-fields");
+  const timestamp = new Date().toISOString();
+  const instanceDir = path.join(dataDir, "controlled-instances");
+  fs.mkdirSync(instanceDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(instanceDir, "inst_extra.json"),
+    `${JSON.stringify(
+      {
+        id: "inst_extra",
+        name: "extra-worker",
+        source: {
+          type: "local-folder",
+          path: "/workspace",
+        },
+        sourceSnapshot: {},
+        nodeId: "node_current",
+        runtimeId: "runtime_local_docker",
+        imageId: "img_default",
+        status: "running",
+        health: "ok",
+        connectionStatus: "online",
+        controlMode: "controlled",
+        capabilities: {},
+        workspace: { status: "ready", futureWorkspaceField: true },
+        target: {
+          strategy: "direct-port",
+          status: "reachable",
+          web: "http://127.0.0.1:18080",
+        },
+        receiver: { status: "running", pendingCount: 0, legacyReceiverField: true },
+        apps: {
+          runningCount: 1,
+          sessions: [{ id: "app_legacy", appId: "codex", status: "running" }],
+          legacyAppsField: true,
+        },
+        runtime: { labels: {}, legacyRuntimeField: true },
+        legacyTopLevelField: true,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
+  const app = await createNodeAgentApp({
+    dataDir,
+    logger: false,
+    nodeId: "node_current",
+    token: "agent-secret",
+  });
+  t.after(() => app.close());
+
+  const listed = await app.inject({
+    method: "GET",
+    url: "/api/node-agent/instances",
+    headers: { authorization: "Bearer agent-secret" },
+  });
+  assert.equal(listed.statusCode, 200);
+  assert.equal(listed.json().data.length, 1);
+  assert.equal(listed.json().data[0].id, "inst_extra");
+  assert.deepEqual(listed.json().data[0].apps, { runningCount: 1, problemCount: 0 });
+  assert.equal("legacyTopLevelField" in listed.json().data[0], false);
+  assert.equal("sessions" in listed.json().data[0].apps, false);
+});
+
+test("node agent proxies instance API requests", async (t) => {
+  const calls = [];
+  const app = await createNodeAgentApp({
+    dataDir: tempDataDir("node-agent-proxy"),
+    logger: false,
+    token: "agent-secret",
+    fetchImpl: async (url, init = {}) => {
+      calls.push({
+        url,
+        method: init.method || "GET",
+        headers: init.headers || {},
+        body: init.body,
+      });
+      return new Response(JSON.stringify({ data: { accepted: true } }), {
+        status: 202,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  t.after(() => app.close());
+
+  const timestamp = new Date().toISOString();
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: "inst_1",
+      name: "proxy-worker",
+      runtimeId: "runtime_local_docker",
+      imageId: "img_1",
+      image: {
+        id: "img_1",
+        name: "Image",
+        image: "task-handoff-web:local",
+        registry: "local",
+        capabilities: [],
+        optionalApps: [],
+        defaultEnv: {},
+        labels: {},
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      source: {
+        type: "local-folder",
+        path: "/workspace",
+      },
+      sourceSnapshot: {},
+    },
+  });
+  await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_1/register",
+    headers: {
+      authorization: `Bearer ${created.json().data.registrationToken}`,
+    },
+    payload: {
+      instanceId: "inst_1",
+      name: "proxy-worker",
+      protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+      controlMode: "controlled",
+      capabilities: {},
+      target: {
+        strategy: "direct-port",
+        web: "http://127.0.0.1:18080",
+        api: "http://127.0.0.1:18080/api",
+        status: "unknown",
+      },
+      workspace: {
+        status: "ready",
+      },
+    },
+  });
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_1/proxy",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      path: "/api/receiver/messages",
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ message: { text: "hello" } }),
+    },
+  });
+
+  assert.equal(response.statusCode, 202);
+  assert.deepEqual(response.json(), { data: { accepted: true } });
+  assert.deepEqual(calls, [
+    {
+      url: "http://127.0.0.1:18080/api/receiver/messages",
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ message: { text: "hello" } }),
+    },
+  ]);
+});
+
+test("node agent proxies direct-port instances through the node-local host", async (t) => {
+  const calls = [];
+  const app = await createNodeAgentApp({
+    dataDir: tempDataDir("node-agent-proxy-local-host"),
+    logger: false,
+    token: "agent-secret",
+    fetchImpl: async (url, init = {}) => {
+      calls.push({
+        url,
+        method: init.method || "GET",
+        bodyBytes: init.body ? [...Buffer.from(await new Response(init.body).arrayBuffer())] : [],
+      });
+      return new Response("<html>ok</html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      });
+    },
+  });
+  t.after(() => app.close());
+
+  const timestamp = new Date().toISOString();
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: "inst_proxy",
+      name: "proxy-worker",
+      runtimeId: "runtime_local_docker",
+      imageId: "img_1",
+      image: {
+        id: "img_1",
+        name: "Image",
+        image: "task-handoff-web:local",
+        registry: "local",
+        capabilities: [],
+        optionalApps: [],
+        defaultEnv: {},
+        labels: {},
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      source: {
+        type: "local-folder",
+        path: "/workspace",
+      },
+      sourceSnapshot: {},
+    },
+  });
+  await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_proxy/register",
+    headers: {
+      authorization: `Bearer ${created.json().data.registrationToken}`,
+    },
+    payload: {
+      instanceId: "inst_proxy",
+      name: "proxy-worker",
+      protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+      controlMode: "controlled",
+      capabilities: {},
+      target: {
+        strategy: "direct-port",
+        web: "http://127.0.0.1:18080",
+        api: "http://127.0.0.1:18080/api",
+        status: "unknown",
+      },
+      workspace: {
+        status: "ready",
+      },
+    },
+  });
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_proxy/proxy/raw",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      path: "/",
+      method: "GET",
+      headers: {},
+    },
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().data.status, 200);
+  assert.deepEqual(calls, [
+    {
+      url: "http://127.0.0.1:18080/",
+      method: "GET",
+      bodyBytes: [],
+    },
+  ]);
+
+  const posted = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_proxy/proxy/raw",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      path: "/upload",
+      method: "POST",
+      headers: { "content-type": "application/octet-stream" },
+      bodyBase64: Buffer.from([0, 1, 2, 255]).toString("base64"),
+    },
+  });
+
+  assert.equal(posted.statusCode, 200);
+  assert.deepEqual(calls.at(-1), {
+    url: "http://127.0.0.1:18080/upload",
+    method: "POST",
+    bodyBytes: [0, 1, 2, 255],
+  });
+});
+
+test("node agent proxies instance websocket subprotocols", async (t) => {
+  const upstream = new WebSocket.Server({ host: "127.0.0.1", port: 0 });
+  const upstreamSockets = new Set();
+  const seen = [];
+  t.after(() => {
+    for (const socket of upstreamSockets) socket.terminate();
+    return new Promise((resolve) => upstream.close(resolve));
+  });
+  await withTimeout(new Promise((resolve) => upstream.once("listening", resolve)), "controlled websocket listening");
+  const upstreamAddress = upstream.address();
+  assert.equal(typeof upstreamAddress, "object");
+  upstream.on("connection", (socket, request) => {
+    upstreamSockets.add(socket);
+    socket.on("close", () => upstreamSockets.delete(socket));
+    seen.push({
+      url: request.url,
+      protocol: request.headers["sec-websocket-protocol"] || "",
+    });
+    socket.send(Buffer.from("RFB 003.008\n"));
+  });
+
+  const app = await createNodeAgentApp({
+    dataDir: tempDataDir("node-agent-ws-protocol"),
+    logger: false,
+    token: "agent-secret",
+  });
+  t.after(() => app.close());
+
+  const timestamp = new Date().toISOString();
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: "inst_ws",
+      name: "ws-worker",
+      runtimeId: "runtime_local_docker",
+      imageId: "img_1",
+      image: {
+        id: "img_1",
+        name: "Image",
+        image: "task-handoff-web:local",
+        registry: "local",
+        capabilities: [],
+        optionalApps: [],
+        defaultEnv: {},
+        labels: {},
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      source: {
+        type: "local-folder",
+        path: "/workspace",
+      },
+      sourceSnapshot: {},
+    },
+  });
+  await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_ws/register",
+    headers: {
+      authorization: `Bearer ${created.json().data.registrationToken}`,
+    },
+    payload: {
+      instanceId: "inst_ws",
+      name: "ws-worker",
+      protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+      controlMode: "controlled",
+      capabilities: {},
+      target: {
+        strategy: "direct-port",
+        web: `http://127.0.0.1:${upstreamAddress.port}`,
+        api: `http://127.0.0.1:${upstreamAddress.port}/api`,
+        status: "reachable",
+      },
+      workspace: {
+        status: "ready",
+      },
+    },
+  });
+
+  await withTimeout(app.listen({ host: "127.0.0.1", port: 0 }), "node agent listen");
+  const address = app.server.address();
+  assert.equal(typeof address, "object");
+  const client = new WebSocket(`ws://127.0.0.1:${address.port}/api/node-agent/instances/inst_ws/proxy/ws/api/apps/sessions/app_1/web/websockify`, ["binary"], {
+    headers: { authorization: "Bearer agent-secret" },
+  });
+  t.after(() => client.terminate());
+  await withTimeout(waitForWebSocketOpen(client), "node-agent proxied websocket open");
+  assert.equal(client.protocol, "binary");
+  assert.deepEqual(await withTimeout(onceWebSocketMessageFrame(client), "node-agent proxied websocket greeting"), { message: "RFB 003.008\n", isBinary: true });
+  assert.deepEqual(seen.filter((entry) => entry.url !== "/api/node-agent/events"), [
+    {
+      url: "/api/apps/sessions/app_1/web/websockify",
+      protocol: "binary",
+    },
+  ]);
+});
+
+test("control plane checks node agent runtime targets and lists their images", async (t) => {
+  const timestamp = new Date().toISOString();
+  const mock = createMockNodeAgentFetch({
+    nodeId: "node_agent",
+    health: {
+      build: {
+        component: "node-agent",
+        packageName: "@task-handoff/node-agent",
+        packageVersion: "1.0.0",
+        protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+        buildId: "agent-build",
+      },
+      publicHost: "agent.example",
+      endpoint: "http://agent.example:8091",
+      controlEndpoint: "http://agent.example:8091",
+      containerEndpoint: "http://host.docker.internal:8091",
+    },
+    runtimes: [
+      {
+        id: "runtime_agent",
+        nodeId: "node_agent",
+        type: "docker",
+        name: "Docker",
+        status: "unknown",
+        accessStrategy: "direct-port",
+        capabilities: {},
+        labels: {},
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    ],
+    dockerImages: [
+      {
+        repository: "task-handoff-web",
+        tag: "remote",
+        id: "sha256:abc123",
+        reference: "task-handoff-web:remote",
+      },
+    ],
+    folderTree: [
+      {
+        name: "workspace",
+        path: "/workspace",
+        children: [
+          { name: "project", path: "/workspace/project", children: [] },
+        ],
+      },
+    ],
+  });
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-runtime-check"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: {
+      fetchImpl: mock.fetchImpl,
+    },
+  });
+  t.after(() => app.close());
+  mock.requests.length = 0;
+
+  const node = await json(app, "POST", "/api/nodes", {
+    id: "node_agent",
+    name: "Node Agent",
+    connectionMode: "direct-http",
+    endpoint: "http://agent.example:8091",
+    auth: {
+      mode: "paired-hmac",
+      keyId: "key_agent",
+      secret: "agent-secret",
+    },
+  });
+  assert.equal(node.statusCode, 201);
+  assert.equal(node.body.data.status, "online");
+  assert.equal(node.body.data.health, "ok");
+  assert.equal(node.body.data.capabilities.agent.build.buildId, "agent-build");
+
+  const checked = await json(app, "POST", "/api/nodes/node_agent/check");
+  assert.equal(checked.statusCode, 200);
+  assert.equal(checked.body.data.status, "online");
+  assert.equal(checked.body.data.agent.role, "node-agent");
+
+  const publicNode = await json(app, "GET", "/api/nodes/node_agent");
+  assert.equal(publicNode.statusCode, 200);
+  assert.equal(publicNode.body.data.auth.secret, undefined);
+  assert.deepEqual(publicNode.body.data.capabilities.agent, {
+    ok: true,
+    role: "node-agent",
+    nodeId: "node_agent",
+    protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+    build: {
+      component: "node-agent",
+      packageName: "@task-handoff/node-agent",
+      packageVersion: "1.0.0",
+      protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+      buildId: "agent-build",
+    },
+  });
+
+  const runtimes = await json(app, "GET", "/api/nodes/node_agent/runtimes");
+  assert.equal(runtimes.statusCode, 200);
+  assert.equal(runtimes.body.data[0].id, "runtime_agent");
+  assert.equal(runtimes.body.data[0].nodeId, "node_agent");
+
+  const images = await json(app, "GET", "/api/nodes/node_agent/docker/images");
+  assert.equal(images.statusCode, 200);
+  assert.equal(images.body.data[0].reference, "task-handoff-web:remote");
+  const folders = await json(app, "GET", "/api/nodes/node_agent/folders/tree?path=%2Fworkspace&depth=1");
+  assert.equal(folders.statusCode, 200);
+  assert.equal(folders.body.data[0].children[0].path, "/workspace/project");
+  assert.deepEqual(mock.requests.map((request) => [request.method, request.url, Boolean(request.headers["x-taskhandoff-signature"]), request.headers.authorization]), [
+    ["GET", "http://agent.example:8091/api/node-agent/health", true, undefined],
+    ["GET", "http://agent.example:8091/api/node-agent/health", true, undefined],
+    ["GET", "http://agent.example:8091/api/node-agent/runtimes", true, undefined],
+    ["GET", "http://agent.example:8091/api/node-agent/docker/images", true, undefined],
+    ["GET", "http://agent.example:8091/api/node-agent/folders/tree?path=%2Fworkspace&depth=1", true, undefined],
+  ]);
+});
+
+test("control plane proxies manual localhost runtimes and creates local instances without images", async (t) => {
+  const mock = createMockNodeAgentFetch({
+    nodeId: "node_agent",
+  });
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-localhost-runtime"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: {
+      fetchImpl: mock.fetchImpl,
+    },
+  });
+  t.after(() => app.close());
+
+  const node = await json(app, "POST", "/api/nodes", {
+    id: "node_agent",
+    name: "Node Agent",
+    connectionMode: "direct-http",
+    endpoint: "http://agent.example:8091",
+    auth: {
+      mode: "paired-hmac",
+      keyId: "key_agent",
+      secret: "agent-secret",
+    },
+  });
+  assert.equal(node.statusCode, 201);
+
+  const runtime = await json(app, "POST", "/api/nodes/node_agent/runtimes", {
+    id: "runtime_local_host",
+    name: "Localhost",
+    type: "local",
+  });
+  assert.equal(runtime.statusCode, 201);
+  assert.equal(runtime.body.data.type, "local");
+  assert.equal(runtime.body.data.capabilities.requiresImage, false);
+
+  const checked = await json(app, "POST", "/api/nodes/node_agent/runtimes/runtime_local_host/check");
+  assert.equal(checked.statusCode, 200);
+  assert.equal(checked.body.data.status, "online");
+
+  const instance = await json(app, "POST", "/api/controlled-instances", {
+    name: "Local Workspace",
+    nodeId: "node_agent",
+    runtimeId: "runtime_local_host",
+    source: {
+      type: "local-folder",
+      path: "/tmp/local-workspace",
+      ownerNodeId: "node_agent",
+    },
+    sourceSnapshot: {
+      name: "local-workspace",
+    },
+  });
+  assert.equal(instance.statusCode, 201);
+  assert.equal(instance.body.data.imageId, undefined);
+
+  const createRequest = mock.requests.find((request) => request.path === "/instances" && request.method === "POST");
+  assert.ok(createRequest);
+  assert.equal(createRequest.body.imageId, undefined);
+  assert.equal(createRequest.body.image, undefined);
+  assert.equal(createRequest.body.runtimeId, "runtime_local_host");
+  assert.equal(createRequest.body.source.path, "/tmp/local-workspace");
+});
+
+test("control plane rejects node agents with incompatible protocol versions", async (t) => {
+  const mock = createMockNodeAgentFetch({
+    nodeId: "node_old",
+    health: {
+      protocolVersion: "2026-01-01",
+    },
+  });
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-node-protocol-mismatch"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: {
+      fetchImpl: mock.fetchImpl,
+    },
+  });
+  t.after(() => app.close());
+
+  const node = await json(app, "POST", "/api/nodes", {
+    id: "node_old",
+    name: "Old Node",
+    connectionMode: "direct-http",
+    endpoint: "http://old-node.example:8091",
+    auth: {
+      mode: "paired-hmac",
+      keyId: "key_agent",
+      secret: "agent-secret",
+    },
+  });
+  assert.equal(node.statusCode, 409);
+  assert.equal(node.body.error.code, "PROTOCOL_VERSION_MISMATCH");
+});
+
+test("control plane registers node connections with the agent node id", async (t) => {
+  const timestamp = new Date().toISOString();
+  const mock = createMockNodeAgentFetch({
+    nodeId: "node_remote",
+    runtimes: [
+      {
+        id: "runtime_local_docker",
+        nodeId: "node_remote",
+        type: "docker",
+        name: "Local Docker",
+        status: "unknown",
+        accessStrategy: "direct-port",
+        capabilities: {},
+        labels: {},
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    ],
+    localFolders: [
+      {
+        id: "folder_1",
+        nodeId: "node_remote",
+        name: "Workspace",
+        path: "/home/agent/work",
+        modelSelection: {},
+        labels: {},
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    ],
+  });
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-node-resource-scope"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: {
+      fetchImpl: mock.fetchImpl,
+    },
+  });
+  t.after(() => app.close());
+
+  const node = await json(app, "POST", "/api/nodes", {
+    id: "node_remote",
+    name: "Remote Node",
+    connectionMode: "direct-http",
+    endpoint: "http://agent.example:8091",
+    auth: {
+      mode: "paired-hmac",
+      keyId: "key_agent",
+      secret: "agent-secret",
+    },
+  });
+  assert.equal(node.statusCode, 201);
+  assert.equal(node.body.data.id, "node_remote");
+
+  const runtimes = await json(app, "GET", "/api/nodes/node_remote/runtimes");
+  assert.equal(runtimes.statusCode, 200);
+  assert.equal(runtimes.body.data.length, 1);
+  assert.equal(runtimes.body.data[0].id, "runtime_local_docker");
+  assert.equal(runtimes.body.data[0].nodeId, "node_remote");
+
+  const allRuntimes = await json(app, "GET", "/api/node-runtimes");
+  const remoteRuntime = allRuntimes.body.data.find((runtime) => runtime.id === "runtime_local_docker" && runtime.nodeId === "node_remote");
+  assert.ok(remoteRuntime);
+
+  const folders = await json(app, "GET", "/api/nodes/node_remote/local-folders");
+  assert.equal(folders.statusCode, 200);
+  assert.equal(folders.body.data[0].id, "folder_1");
+  assert.equal(folders.body.data[0].nodeId, "node_remote");
+});
+
+test("control plane accepts node agent reverse tunnel handshake", async (t) => {
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-node-agent-tunnel"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+  });
+  await app.listen({ host: "127.0.0.1", port: 0 });
+  t.after(() => app.close());
+
+  const node = await json(app, "POST", "/api/nodes", {
+    id: "node_tunnel",
+    name: "Tunnel Node",
+    connectionMode: "reverse-wss",
+    auth: {
+      mode: "paired-hmac",
+      keyId: "key_agent",
+      secret: "agent-secret",
+    },
+  });
+  assert.equal(node.statusCode, 201);
+
+  const address = app.server.address();
+  assert.equal(typeof address, "object");
+  const tunnelPath = "/api/node-agent/tunnel?nodeId=node_tunnel";
+  const socket = new WebSocket(`ws://127.0.0.1:${address.port}${tunnelPath}`, {
+    headers: createNodeAgentHmacHeaders({
+      nodeId: "node_tunnel",
+      keyId: "key_agent",
+      secret: "agent-secret",
+      method: "GET",
+      pathWithQuery: tunnelPath,
+    }),
+  });
+  t.after(() => socket.close());
+
+  const hello = await onceWebSocketMessage(socket);
+  assert.equal(hello.type, "control-plane.hello");
+  assert.equal(hello.nodeId, "node_tunnel");
+  assert.equal(hello.capabilities.reverseTunnel, "request-response");
+  assert.equal(hello.capabilities.lifecycleCommands, true);
+  assert.equal(hello.capabilities.instanceApiProxy, true);
+
+  socket.send(JSON.stringify({ type: "node-agent.ping" }));
+  const pong = await onceWebSocketMessage(socket);
+  assert.equal(pong.type, "control-plane.pong");
+  assert.equal(pong.nodeId, "node_tunnel");
+
+  const runtimesPromise = json(app, "GET", "/api/nodes/node_tunnel/runtimes");
+  const request = await onceWebSocketMessage(socket);
+  assert.equal(request.type, "control-plane.request");
+  assert.equal(request.route, "/runtimes");
+  socket.send(
+    JSON.stringify({
+      type: "node-agent.response",
+      requestId: request.requestId,
+      status: 200,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        data: [
+          {
+            id: "runtime_reverse",
+            nodeId: "node_tunnel",
+            name: "Reverse Docker",
+            type: "docker",
+            status: "online",
+            accessStrategy: "node-proxy",
+            capabilities: {},
+            labels: {},
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+        ],
+      }),
+    }),
+  );
+  const runtimes = await runtimesPromise;
+  assert.equal(runtimes.statusCode, 200);
+  assert.equal(runtimes.body.data[0].id, "runtime_reverse");
+});
+
+test("control plane proxies instance websocket routes through reverse node tunnels", async (t) => {
+  const mock = createMockNodeAgentFetch();
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-reverse-websocket"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: {
+      fetchImpl: mock.fetchImpl,
+    },
+  });
+  await app.listen({ host: "127.0.0.1", port: 0 });
+  t.after(() => app.close());
+
+  const project = await json(app, "POST", "/api/projects", {
+    name: "Reverse WebSocket Project",
+    source: {
+      type: "local-folder",
+      path: "/tmp/reverse-websocket",
+    },
+  });
+  assert.equal(project.statusCode, 201);
+  const created = await json(app, "POST", "/api/controlled-instances", {
+    name: "reverse-worker",
+    projectId: project.body.data.id,
+    runtimeId: "runtime_local_docker",
+    imageId: "img_default",
+  });
+  assert.equal(created.statusCode, 201);
+  await mock.fetchImpl(`http://127.0.0.1:8091/api/node-agent/instances/${created.body.data.id}/register`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${created.body.data.registrationToken}` },
+    body: JSON.stringify({
+      instanceId: created.body.data.id,
+      name: "reverse-worker",
+      target: {
+        strategy: "direct-port",
+        web: "http://controlled.internal:8080",
+        api: "http://controlled.internal:8080/api",
+        status: "reachable",
+      },
+      workspace: {
+        status: "ready",
+      },
+      capabilities: {
+        apps: [
+          { id: "codex", name: "Codex" },
+          { id: "claude", name: "Claude" },
+        ],
+      },
+    }),
+  });
+  const updatedNode = await json(app, "PATCH", "/api/nodes/node_mock", {
+    connectionMode: "reverse-wss",
+    auth: {
+      mode: "paired-hmac",
+      keyId: "key_agent",
+      secret: "agent-secret",
+    },
+  });
+  assert.equal(updatedNode.statusCode, 200);
+
+  const address = app.server.address();
+  assert.equal(typeof address, "object");
+  const tunnelPath = "/api/node-agent/tunnel?nodeId=node_mock";
+  const tunnel = new WebSocket(`ws://127.0.0.1:${address.port}${tunnelPath}`, {
+    headers: createNodeAgentHmacHeaders({
+      nodeId: "node_mock",
+      keyId: "key_agent",
+      secret: "agent-secret",
+      method: "GET",
+      pathWithQuery: tunnelPath,
+    }),
+  });
+  t.after(() => tunnel.terminate());
+  const hello = await onceWebSocketMessage(tunnel);
+  assert.equal(hello.type, "control-plane.hello");
+
+  const respondToRecoveryRequest = async (data) => {
+    for (;;) {
+      const message = await onceWebSocketMessage(tunnel);
+      if (message.type !== "control-plane.request") continue;
+      if (message.route === "/instances") {
+        tunnel.send(JSON.stringify({
+          type: "node-agent.response",
+          requestId: message.requestId,
+          status: 200,
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ data: [...mock.instances.values()] }),
+        }));
+        continue;
+      }
+      assert.equal(message.route, `/instances/${created.body.data.id}/proxy`);
+      tunnel.send(JSON.stringify({
+        type: "node-agent.response",
+        requestId: message.requestId,
+        status: 200,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ data }),
+      }));
+      return JSON.parse(message.init.body);
+    }
+  };
+
+  const recoveredAt = new Date().toISOString();
+  tunnel.send(JSON.stringify({
+    type: "node-agent.streams.hello",
+    instanceId: created.body.data.id,
+    payload: {
+      protocolVersion: 1,
+      streams: [{ topic: "ai.sessions", instanceId: created.body.data.id, streamId: "ai_reverse_stream", latestRevision: 1, earliestRetainedRevision: 1 }],
+    },
+  }));
+  const initialRecoveryBody = await respondToRecoveryRequest({
+    streamId: "ai_reverse_stream",
+    revision: 1,
+    lastEventAt: recoveredAt,
+    snapshot: { runningCount: 0, waitingCount: 0, staleCount: 0, sessions: [], updatedAt: recoveredAt },
+  });
+  assert.equal(initialRecoveryBody.path, "/api/ai-sessions/state");
+  await waitForCondition(async () => {
+    const response = await json(app, "GET", "/api/ai-sessions");
+    return response.body.data.instances.some((entry) => entry.instanceId === created.body.data.id && entry.streamId === "ai_reverse_stream" && entry.revision === 1);
+  }, "reverse tunnel initial stream recovery");
+
+  tunnel.send(JSON.stringify({
+    type: "node-agent.streams.hello",
+    instanceId: created.body.data.id,
+    payload: {
+      protocolVersion: 1,
+      streams: [{ topic: "ai.sessions", instanceId: created.body.data.id, streamId: "ai_reverse_stream", latestRevision: 3, earliestRetainedRevision: 2 }],
+    },
+  }));
+  const recoveredSession = { id: "ai_reverse_recovered", agent: "codex", status: "idle", phase: "unknown", startedAt: recoveredAt, updatedAt: recoveredAt, queue: { pendingCount: 0, items: [] } };
+  const deltaEvents = [2, 3].map((revision) => ({
+    type: AiSessionEventType.Patch,
+    payload: {
+      meta: { instanceId: created.body.data.id, streamId: "ai_reverse_stream", revision, previousRevision: revision - 1, traceId: `reverse_${revision}`, generatedAt: recoveredAt, reason: "provider-event" },
+      upserted: [recoveredSession],
+      removed: [],
+    },
+  }));
+  const deltaRecoveryBody = await respondToRecoveryRequest({
+    instanceId: created.body.data.id,
+    streamId: "ai_reverse_stream",
+    sinceRevision: 1,
+    latestRevision: 3,
+    earliestRetainedRevision: 2,
+    syncRequired: false,
+    events: deltaEvents,
+  });
+  assert.match(deltaRecoveryBody.path, /^\/api\/ai-sessions\?/);
+  await waitForCondition(async () => {
+    const response = await json(app, "GET", "/api/ai-sessions");
+    return response.body.data.instances.find((entry) => entry.instanceId === created.body.data.id)?.revision === 3;
+  }, "reverse tunnel delta recovery");
+
+  tunnel.send(JSON.stringify({
+    type: "node-agent.streams.hello",
+    instanceId: created.body.data.id,
+    payload: {
+      protocolVersion: 1,
+      streams: [{ topic: "ai.sessions", instanceId: created.body.data.id, streamId: "ai_reverse_restarted", latestRevision: 1, earliestRetainedRevision: 1 }],
+    },
+  }));
+  await respondToRecoveryRequest({
+    streamId: "ai_reverse_restarted",
+    revision: 1,
+    lastEventAt: recoveredAt,
+    snapshot: { runningCount: 0, waitingCount: 0, staleCount: 0, sessions: [], updatedAt: recoveredAt },
+  });
+  tunnel.send(JSON.stringify({
+    type: "node-agent.event.forwarded",
+    event: { type: AiSessionEventType.Snapshot, topic: AiSessionEventTopic, payload: aiSessionSnapshotPayload({ sessions: [recoveredSession] }, { instanceId: created.body.data.id, streamId: "ai_reverse_stream", revision: 4 }), scope: { instanceId: created.body.data.id } },
+  }));
+  const restarted = await waitForCondition(async () => {
+    const response = await json(app, "GET", "/api/ai-sessions");
+    return response.body.data.instances.find((entry) => entry.instanceId === created.body.data.id && entry.streamId === "ai_reverse_restarted");
+  }, "reverse tunnel restarted stream recovery");
+  assert.equal(restarted.revision, 1);
+  assert.deepEqual(restarted.aiSessions.sessions, []);
+
+  const client = new WebSocket(`ws://127.0.0.1:${address.port}/instances/${created.body.data.id}/api/apps/sessions/app_1/tty?token=abc`, ["binary"]);
+  t.after(() => client.terminate());
+  await withTimeout(waitForWebSocketOpen(client), "reverse proxied websocket open");
+
+  let open;
+  while (!open) {
+    const message = await onceWebSocketMessage(tunnel);
+    if (message.type === "control-plane.request") {
+      assert.equal(message.route, "/instances");
+      tunnel.send(JSON.stringify({
+        type: "node-agent.response",
+        requestId: message.requestId,
+        status: 200,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ data: [...mock.instances.values()] }),
+      }));
+      continue;
+    }
+    open = message;
+  }
+  assert.equal(open.type, "control-plane.websocket.open");
+  assert.equal(open.route, `/instances/${created.body.data.id}/proxy/ws/api/apps/sessions/app_1/tty?token=abc`);
+  assert.deepEqual(open.protocols, ["binary"]);
+
+  const streamPath = `/api/node-agent/tunnel/streams/${open.streamId}?nodeId=node_mock`;
+  const stream = new WebSocket(`ws://127.0.0.1:${address.port}${streamPath}`, {
+    headers: createNodeAgentHmacHeaders({
+      nodeId: "node_mock",
+      keyId: "key_agent",
+      secret: "agent-secret",
+      method: "GET",
+      pathWithQuery: streamPath,
+    }),
+  });
+  t.after(() => stream.terminate());
+  await withTimeout(waitForWebSocketOpen(stream), "reverse websocket stream open");
+  stream.send("ready");
+  assert.deepEqual(await withTimeout(onceWebSocketMessageFrame(client), "reverse websocket ready"), { message: "ready", isBinary: false });
+
+  client.send("hello");
+  assert.deepEqual(await withTimeout(onceWebSocketMessageFrame(stream), "reverse websocket stream frame"), { message: "hello", isBinary: false });
+});
+
+test("control plane models are project-scoped and resolved in start context", async (t) => {
+  const mock = createMockNodeAgentFetch();
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-models"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: {
+      fetchImpl: mock.fetchImpl,
+    },
+  });
+  t.after(() => app.close());
+
+  const first = await json(app, "POST", "/api/models", {
+    name: "First Codex",
+    endpoint: "https://first.example/v1",
+    key: "first-key-secret",
+    model: "first-model",
+    app: "codex",
+  });
+  assert.equal(first.statusCode, 201);
+  assert.equal(first.body.data.key, undefined);
+  assert.equal(first.body.data.keySet, true);
+
+  const selectedCodex = await json(app, "POST", "/api/models", {
+    name: "Allowed Codex",
+    endpoint: "https://allowed.example/v1",
+    key: "allowed-codex-key-secret",
+    model: "allowed-codex-model",
+    app: "codex",
+  });
+  assert.equal(selectedCodex.statusCode, 201);
+
+  const selectedClaude = await json(app, "POST", "/api/models", {
+    name: "Allowed Claude",
+    endpoint: "https://anthropic.example",
+    key: "allowed-claude-key-secret",
+    model: "allowed-claude-model",
+    app: "claude",
+  });
+  assert.equal(selectedClaude.statusCode, 201);
+
+  const wrongAppProject = await json(app, "POST", "/api/projects", {
+    name: "Wrong App Project",
+    source: {
+      type: "local-folder",
+      path: "/tmp/workspace",
+    },
+    modelSelection: { claudeModelId: selectedCodex.body.data.id },
+  });
+  assert.equal(wrongAppProject.statusCode, 400);
+  assert.equal(wrongAppProject.body.error.code, "MODEL_APP_MISMATCH");
+
+  const project = await json(app, "POST", "/api/projects", {
+    name: "Scoped Project",
+    source: {
+      type: "local-folder",
+      path: "/tmp/workspace",
+    },
+    modelSelection: {
+      codexModelId: selectedCodex.body.data.id,
+      claudeModelId: selectedClaude.body.data.id,
+    },
+  });
+  assert.equal(project.statusCode, 201);
+  assert.deepEqual(project.body.data.modelSelection, {
+    codexModelId: selectedCodex.body.data.id,
+    claudeModelId: selectedClaude.body.data.id,
+  });
+
+  const instance = await json(app, "POST", "/api/controlled-instances", {
+    name: "scoped-1",
+    projectId: project.body.data.id,
+    runtimeId: "runtime_local_docker",
+    imageId: "img_default",
+  });
+  assert.equal(instance.statusCode, 201);
+
+  const started = await json(app, "POST", `/api/controlled-instances/${instance.body.data.id}/start`);
+  assert.equal(started.statusCode, 200);
+  const startRequest = mock.requests.find((request) => request.path === `/instances/${instance.body.data.id}/start`);
+  assert.equal(startRequest.body.modelEnv.OPENAI_API_KEY, "allowed-codex-key-secret");
+  assert.equal(startRequest.body.modelEnv.OPENAI_BASE_URL, "https://allowed.example/v1");
+  assert.equal(startRequest.body.modelEnv.TASK_HANDOFF_CODEX_MODEL, "allowed-codex-model");
+  assert.equal(startRequest.body.modelEnv.ANTHROPIC_API_KEY, "allowed-claude-key-secret");
+  assert.equal(startRequest.body.modelEnv.ANTHROPIC_BASE_URL, "https://anthropic.example");
+  assert.equal(startRequest.body.modelEnv.TASK_HANDOFF_CLAUDE_MODEL, "allowed-claude-model");
+});
+
+test("control plane manages projects, instances, register, heartbeat, and board state", async (t) => {
+  const mock = createMockNodeAgentFetch({
+    proxy: ({ body, jsonResponse }) => {
+      if (body.path === "/api/apps/sessions" && body.method === "GET") {
+        return jsonResponse([{ id: "app_1", appId: "terminal-tty", kind: "tty", status: "running" }]);
+      }
+      return jsonResponse({ ok: true });
+    },
+  });
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: {
+      fetchImpl: mock.fetchImpl,
+    },
+  });
+  t.after(() => app.close());
+
+  const health = await json(app, "GET", "/api/health");
+  assert.equal(health.statusCode, 200);
+  assert.equal(health.body.data.role, "control-plane");
+  assert.equal(health.body.data.build.component, "control-plane");
+  assert.equal(health.body.data.build.protocolVersion, CONTROL_PLANE_PROTOCOL_VERSION);
+
+  const status = await json(app, "GET", "/api/control-plane/status");
+  assert.equal(status.statusCode, 200);
+  assert.equal(status.body.data.build.component, "control-plane");
+
+  const nodes = await json(app, "GET", "/api/nodes");
+  assert.equal(nodes.statusCode, 200);
+  const localNodeId = nodes.body.data[0].id;
+  assert.equal(localNodeId, "node_mock");
+  assert.equal(nodes.body.data[0].labels["task-handoff.control-plane.local"], "true");
+  assert.equal(nodes.body.data[0].labels["task-handoff.control-plane.builtin"], "true");
+
+  const syncedLocalNode = await json(app, "POST", "/api/nodes/local/sync");
+  assert.equal(syncedLocalNode.statusCode, 200);
+  assert.equal(syncedLocalNode.body.data.id, localNodeId);
+
+  const deletedLocalNode = await json(app, "DELETE", `/api/nodes/${localNodeId}`);
+  assert.equal(deletedLocalNode.statusCode, 400);
+  assert.equal(deletedLocalNode.body.error.code, "LOCAL_NODE_CANNOT_BE_DELETED");
+
+  const listener = await json(app, "GET", `/api/nodes/${localNodeId}/settings/external-listener`);
+  assert.equal(listener.statusCode, 200);
+  assert.equal(listener.body.data.port, 8091);
+  const originalLocalEndpoint = nodes.body.data[0].endpoint;
+  const originalLocalConnectionMode = nodes.body.data[0].connectionMode;
+  const updatedListener = await json(app, "PATCH", `/api/nodes/${localNodeId}/settings/external-listener`, { bindScope: "all-ipv4", port: 18091 });
+  assert.equal(updatedListener.statusCode, 200);
+  assert.deepEqual(updatedListener.body.data, { bindScope: "all-ipv4", host: "0.0.0.0", port: 18091, status: "listening", source: "persisted" });
+  const localAfterListenerUpdate = await json(app, "GET", `/api/nodes/${localNodeId}`);
+  assert.equal(localAfterListenerUpdate.body.data.connectionMode, originalLocalConnectionMode);
+  assert.equal(localAfterListenerUpdate.body.data.endpoint, originalLocalEndpoint);
+
+  const remoteNode = await json(app, "POST", "/api/nodes", {
+    name: "Remote",
+    connectionMode: "direct-http",
+    endpoint: "http://remote.example:8091",
+    auth: { mode: "paired-hmac", keyId: "key_remote", secret: "secret_remote", pairedAt: new Date().toISOString() },
+  });
+  assert.equal(remoteNode.statusCode, 201);
+  const remoteListener = await json(app, "GET", `/api/nodes/${remoteNode.body.data.id}/settings/external-listener`);
+  assert.equal(remoteListener.statusCode, 403);
+  assert.equal(remoteListener.body.error.code, "LOCAL_NODE_LISTENER_ONLY");
+
+  const targets = await json(app, "GET", "/api/node-runtimes");
+  assert.equal(targets.statusCode, 200);
+  assert.equal(targets.body.data[0].id, "runtime_local_docker");
+
+  const project = await json(app, "POST", "/api/projects", {
+    name: "Local Project",
+    source: {
+      type: "local-folder",
+      path: "/tmp/workspace",
+    },
+  });
+  assert.equal(project.statusCode, 201);
+  assert.equal(project.body.data.workspacePolicy.mode, "local-bind");
+
+  const createdInstance = await json(app, "POST", "/api/controlled-instances", {
+    name: "local-1",
+    projectId: project.body.data.id,
+    runtimeId: "runtime_local_docker",
+    imageId: "img_default",
+  });
+  assert.equal(createdInstance.statusCode, 201);
+  assert.match(createdInstance.body.data.registrationToken, /^[A-Za-z0-9_-]+$/);
+
+  const registeredResponse = await mock.fetchImpl(`http://127.0.0.1:8091/api/node-agent/instances/${createdInstance.body.data.id}/register`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${createdInstance.body.data.registrationToken}`,
+    },
+    body: JSON.stringify({
+      instanceId: createdInstance.body.data.id,
+      name: "local-1",
+      projectId: project.body.data.id,
+      instanceVersion: "0.1.0",
+      protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+      controlMode: "controlled",
+      capabilities: {
+        apps: ["terminal-tty"],
+      },
+      target: {
+        strategy: "direct-port",
+        web: "http://127.0.0.1:18080",
+        api: "http://127.0.0.1:18080/api",
+        status: "reachable",
+      },
+      workspace: {
+        mode: "local-bind",
+        status: "ready",
+        path: "/workspace",
+      },
+    }),
+  });
+  assert.equal(registeredResponse.status, 201);
+
+  const heartbeatResponse = await mock.fetchImpl(`http://127.0.0.1:8091/api/node-agent/instances/${createdInstance.body.data.id}/heartbeat`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${createdInstance.body.data.registrationToken}`,
+    },
+    body: JSON.stringify({
+      status: "running",
+      health: "ok",
+      capabilities: {
+        apps: [
+          { id: "terminal-tty", name: "Terminal", kind: "tty" },
+          { id: "cc-switch", name: "CC Switch", kind: "gui" },
+        ],
+      },
+      receiver: {
+        status: "running",
+        pendingCount: 1,
+      },
+      apps: {
+        runningCount: 1,
+      },
+      aiSessions: {
+        runningCount: 1,
+        waitingCount: 0,
+        staleCount: 0,
+        updatedAt: new Date().toISOString(),
+        sessions: [{
+          id: "ais_1",
+          agent: "codex",
+          appId: "codex",
+          appSessionId: "app_1",
+          status: "running",
+          phase: "responding",
+          summary: "Working",
+          startedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }],
+      },
+      workspace: {
+        status: "ready",
+        resolvedCommit: "abc123",
+      },
+      target: {
+        status: "reachable",
+      },
+    }),
+  });
+  assert.equal(heartbeatResponse.status, 200);
+
+  const board = await json(app, "GET", "/api/instance-board");
+  assert.equal(board.statusCode, 200);
+  assert.equal(board.body.data.length, 1);
+  assert.equal(board.body.data[0].project.name, "Local Project");
+  assert.equal(board.body.data[0].image.id, "img_default");
+  assert.deepEqual(board.body.data[0].capabilities.apps, [
+    { id: "terminal-tty", name: "Terminal", kind: "tty" },
+    { id: "cc-switch", name: "CC Switch", kind: "gui" },
+  ]);
+  assert.equal(board.body.data[0].runtime.id, "runtime_local_docker");
+  assert.equal(board.body.data[0].protocolCompatible, true);
+  assert.equal(board.body.data[0].aiSessions.runningCount, 1);
+  assert.equal(board.body.data[0].aiSessions.idleCount, 0);
+  assert.equal(board.body.data[0].aiSessions.problemCount, 0);
+  assert.equal("sessions" in board.body.data[0].aiSessions, false);
+
+  const aiSessions = await json(app, "GET", "/api/ai-sessions");
+  assert.equal(aiSessions.statusCode, 200);
+  assert.equal(aiSessions.body.data.instances.length, 1);
+  assert.equal(aiSessions.body.data.instances[0].instanceId, createdInstance.body.data.id);
+  assert.equal(aiSessions.body.data.instances[0].aiSessions.sessions[0].id, "ais_1");
+});
+
+test("control plane rejects unknown project request fields", async (t) => {
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-project-unknown-fields"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+  });
+  t.after(() => app.close());
+
+  const project = await json(app, "POST", "/api/projects", {
+    name: "Tolerant Project",
+    source: {
+      type: "local-folder",
+      path: "/tmp/workspace",
+    },
+    defaultRuntimeTargetId: "runtime_should_be_ignored",
+  });
+  assert.equal(project.statusCode, 400);
+
+  const cleanProject = await json(app, "POST", "/api/projects", {
+    name: "Clean Project",
+    source: {
+      type: "local-folder",
+      path: "/tmp/workspace",
+    },
+  });
+  assert.equal(cleanProject.statusCode, 201);
+
+  const projectIdPatch = await json(app, "PATCH", `/api/projects/${cleanProject.body.data.id}`, {
+    id: "project_patch_id",
+  });
+  assert.equal(projectIdPatch.statusCode, 400);
+});
+
+test("control plane rejects unknown controlled instance request fields", async (t) => {
+  const mock = createMockNodeAgentFetch();
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-instance-unknown-fields"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: {
+      fetchImpl: mock.fetchImpl,
+    },
+  });
+  t.after(() => app.close());
+
+  const project = await json(app, "POST", "/api/projects", {
+    name: "Instance Tolerant Project",
+    source: {
+      type: "local-folder",
+      path: "/tmp/workspace",
+    },
+  });
+  assert.equal(project.statusCode, 201);
+
+  const instance = await json(app, "POST", "/api/controlled-instances", {
+    name: "unknown-field-instance",
+    projectId: project.body.data.id,
+    imageId: "img_default",
+    defaultRuntimeTargetId: "runtime_should_be_ignored",
+  });
+  assert.equal(instance.statusCode, 400);
+});
+
+test("control plane forwards instance config auto-import setting to node agent", async (t) => {
+  const mock = createMockNodeAgentFetch();
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-instance-auto-import-config"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: {
+      fetchImpl: mock.fetchImpl,
+    },
+  });
+  t.after(() => app.close());
+
+  const project = await json(app, "POST", "/api/projects", {
+    name: "Config Project",
+    source: {
+      type: "local-folder",
+      path: "/tmp/workspace",
+    },
+  });
+  assert.equal(project.statusCode, 201);
+
+  const instance = await json(app, "POST", "/api/controlled-instances", {
+    name: "config-instance",
+    projectId: project.body.data.id,
+    imageId: "img_default",
+    config: {
+      autoImportAgentConfigs: false,
+    },
+  });
+  assert.equal(instance.statusCode, 201);
+  assert.equal(instance.body.data.config.autoImportAgentConfigs, false);
+
+  const createRequest = mock.requests.find((request) => request.path === "/instances");
+  assert.ok(createRequest);
+  assert.deepEqual(createRequest.body.config, { autoImportAgentConfigs: false });
+});
+
+test("control plane rejects unknown management request fields", async (t) => {
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-unknown-management-fields"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+  });
+  t.after(() => app.close());
+
+  const model = await json(app, "POST", "/api/models", {
+    name: "Unknown Model",
+    endpoint: "https://model.example/v1",
+    key: "model-secret",
+    model: "unknown-model",
+    app: "codex",
+    defaultRuntimeTargetId: "ignored",
+  });
+  assert.equal(model.statusCode, 400);
+
+  const cleanModel = await json(app, "POST", "/api/models", {
+    name: "Unknown Model",
+    endpoint: "https://model.example/v1",
+    key: "model-secret",
+    model: "unknown-model",
+    app: "codex",
+  });
+  assert.equal(cleanModel.statusCode, 201);
+
+  const updatedModel = await json(app, "PATCH", `/api/models/${cleanModel.body.data.id}`, {
+    name: "Updated Unknown Model",
+    defaultRuntimeTargetId: "ignored",
+  });
+  assert.equal(updatedModel.statusCode, 400);
+
+  const modelIdPatch = await json(app, "PATCH", `/api/models/${cleanModel.body.data.id}`, {
+    id: "model_patch_id",
+  });
+  assert.equal(modelIdPatch.statusCode, 400);
+
+  const modelNamePatch = await json(app, "PATCH", `/api/models/${cleanModel.body.data.id}`, {
+    name: "Renamed Model",
+  });
+  assert.equal(modelNamePatch.statusCode, 200);
+  assert.equal(modelNamePatch.body.data.name, "Renamed Model");
+
+  const image = await json(app, "POST", "/api/images", {
+    name: "Unknown Image",
+    image: "task-handoff-unknown:latest",
+    defaultRuntimeTargetId: "ignored",
+  });
+  assert.equal(image.statusCode, 400);
+
+  const cleanImage = await json(app, "POST", "/api/images", {
+    name: "Unknown Image",
+    image: "task-handoff-unknown:latest",
+  });
+  assert.equal(cleanImage.statusCode, 201);
+
+  const updatedImage = await json(app, "PATCH", `/api/images/${cleanImage.body.data.id}`, {
+    name: "Updated Unknown Image",
+    defaultRuntimeTargetId: "ignored",
+  });
+  assert.equal(updatedImage.statusCode, 400);
+
+  const imageIdPatch = await json(app, "PATCH", `/api/images/${cleanImage.body.data.id}`, {
+    id: "image_patch_id",
+  });
+  assert.equal(imageIdPatch.statusCode, 400);
+
+  const imageNamePatch = await json(app, "PATCH", `/api/images/${cleanImage.body.data.id}`, {
+    name: "Renamed Image",
+  });
+  assert.equal(imageNamePatch.statusCode, 200);
+  assert.equal(imageNamePatch.body.data.name, "Renamed Image");
+
+  const node = await json(app, "POST", "/api/nodes", {
+    id: "node_unknown_fields",
+    name: "Unknown Fields Node",
+    connectionMode: "reverse-wss",
+    auth: {
+      mode: "paired-hmac",
+      keyId: "key_agent",
+      secret: "agent-secret",
+    },
+    defaultRuntimeTargetId: "ignored",
+  });
+  assert.equal(node.statusCode, 400);
+
+  const cleanNode = await json(app, "POST", "/api/nodes", {
+    id: "node_unknown_fields",
+    name: "Unknown Fields Node",
+    connectionMode: "reverse-wss",
+    auth: {
+      mode: "paired-hmac",
+      keyId: "key_agent",
+      secret: "agent-secret",
+    },
+  });
+  assert.equal(cleanNode.statusCode, 201);
+
+  const updatedNode = await json(app, "PATCH", "/api/nodes/node_unknown_fields", {
+    name: "Updated Unknown Fields Node",
+    defaultRuntimeTargetId: "ignored",
+  });
+  assert.equal(updatedNode.statusCode, 400);
+
+  const joinTokenNodePatch = await json(app, "PATCH", "/api/nodes/node_unknown_fields", {
+    joinToken: "create-only-token",
+  });
+  assert.equal(joinTokenNodePatch.statusCode, 400);
+
+  const bridge = await json(app, "POST", "/api/chat-gateway/bridges", {
+    channel: "web",
+    enabled: true,
+    defaultRuntimeTargetId: "ignored",
+  });
+  assert.equal(bridge.statusCode, 400);
+});
+
+test("control plane renames offline nodes with strict validation and preserves node configuration", async (t) => {
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-node-rename-offline"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: {
+      fetchImpl: createMockNodeAgentFetch().fetchImpl,
+    },
+  });
+  t.after(() => app.close());
+
+  const created = await json(app, "POST", "/api/nodes", {
+    id: "node_offline_rename",
+    name: "Offline original",
+    connectionMode: "reverse-wss",
+    auth: {
+      mode: "paired-hmac",
+      keyId: "key_offline_rename",
+      secret: "offline-rename-secret",
+      pairedAt: "2026-07-13T00:00:00.000Z",
+      pairing: { status: "paired" },
+    },
+    status: "offline",
+    health: "failed",
+    capabilities: { inventory: true },
+    labels: { zone: "west" },
+    lastSeenAt: "2026-07-12T23:59:00.000Z",
+  });
+  assert.equal(created.statusCode, 201);
+
+  const renamed = await json(app, "PATCH", "/api/nodes/node_offline_rename", {
+    name: "  Offline renamed  ",
+  });
+  assert.equal(renamed.statusCode, 200);
+  assert.equal(renamed.body.data.id, "node_offline_rename");
+  assert.equal(renamed.body.data.name, "Offline renamed");
+  const { name: _createdName, updatedAt: _createdUpdatedAt, ...createdInvariant } = created.body.data;
+  const { name: _renamedName, updatedAt: _renamedUpdatedAt, ...renamedInvariant } = renamed.body.data;
+  assert.deepEqual(renamedInvariant, createdInvariant);
+
+  const persisted = await json(app, "GET", "/api/nodes/node_offline_rename");
+  assert.equal(persisted.statusCode, 200);
+  assert.equal(persisted.body.data.name, "Offline renamed");
+
+  const blank = await json(app, "PATCH", "/api/nodes/node_offline_rename", { name: "   " });
+  assert.equal(blank.statusCode, 400);
+  const tooLong = await json(app, "PATCH", "/api/nodes/node_offline_rename", { name: "n".repeat(161) });
+  assert.equal(tooLong.statusCode, 400);
+  const unknownField = await json(app, "PATCH", "/api/nodes/node_offline_rename", {
+    name: "Should not save",
+    displayName: "not-supported",
+  });
+  assert.equal(unknownField.statusCode, 400);
+
+  const afterRejectedUpdates = await json(app, "GET", "/api/nodes/node_offline_rename");
+  assert.equal(afterRejectedUpdates.body.data.name, "Offline renamed");
+});
+
+test("control plane preserves a renamed built-in node across sync and instance projections", async (t) => {
+  const mock = createMockNodeAgentFetch();
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-node-rename-builtin"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: {
+      fetchImpl: mock.fetchImpl,
+    },
+  });
+  t.after(() => app.close());
+
+  const before = await json(app, "GET", "/api/nodes/node_mock");
+  assert.equal(before.statusCode, 200);
+  assert.equal(before.body.data.labels["task-handoff.control-plane.builtin"], "true");
+
+  const project = await json(app, "POST", "/api/projects", {
+    name: "Renamed node project",
+    source: { type: "local-folder", path: "/tmp/renamed-node-project" },
+  });
+  assert.equal(project.statusCode, 201);
+  const instance = await json(app, "POST", "/api/controlled-instances", {
+    name: "renamed-node-instance",
+    projectId: project.body.data.id,
+    runtimeId: "runtime_local_docker",
+    imageId: "img_default",
+  });
+  assert.equal(instance.statusCode, 201);
+  assert.equal(instance.body.data.nodeId, "node_mock");
+
+  const renamed = await json(app, "PATCH", "/api/nodes/node_mock", { name: "  Local build host  " });
+  assert.equal(renamed.statusCode, 200);
+  assert.equal(renamed.body.data.name, "Local build host");
+  const { name: _beforeName, updatedAt: _beforeUpdatedAt, ...beforeInvariant } = before.body.data;
+  const { name: _afterName, updatedAt: _afterUpdatedAt, ...afterInvariant } = renamed.body.data;
+  assert.deepEqual(afterInvariant, beforeInvariant);
+
+  const synced = await json(app, "POST", "/api/nodes/local/sync");
+  assert.equal(synced.statusCode, 200);
+  assert.equal(synced.body.data.id, "node_mock");
+  assert.equal(synced.body.data.name, "Local build host");
+
+  const board = await json(app, "GET", "/api/instance-board");
+  assert.equal(board.statusCode, 200);
+  const boardItem = board.body.data.find((item) => item.id === instance.body.data.id);
+  assert.ok(boardItem);
+  assert.equal(boardItem.nodeId, "node_mock");
+  assert.equal(boardItem.node.name, "Local build host");
+
+  const persistedInstance = await json(app, "GET", `/api/controlled-instances/${instance.body.data.id}`);
+  assert.equal(persistedInstance.statusCode, 200);
+  assert.equal(persistedInstance.body.data.nodeId, "node_mock");
+});
+
+test("control plane proxies instance websocket routes while preserving HTTP proxy routes", async (t) => {
+  const nodeAgentProxy = new WebSocket.Server({ host: "127.0.0.1", port: 0 });
+  const upstreamSockets = new Set();
+  t.after(() => {
+    for (const socket of upstreamSockets) socket.terminate();
+    return new Promise((resolve) => nodeAgentProxy.close(resolve));
+  });
+  await withTimeout(new Promise((resolve) => nodeAgentProxy.once("listening", resolve)), "node-agent websocket proxy listening");
+  const nodeAgentAddress = nodeAgentProxy.address();
+  assert.equal(typeof nodeAgentAddress, "object");
+  const nodeAgentEndpoint = `http://127.0.0.1:${nodeAgentAddress.port}`;
+  const seen = [];
+  nodeAgentProxy.on("connection", (socket, request) => {
+    upstreamSockets.add(socket);
+    socket.on("close", () => upstreamSockets.delete(socket));
+    seen.push({
+      url: request.url,
+      protocol: request.headers["sec-websocket-protocol"] || "",
+    });
+    socket.send(request.url?.includes("websockify") ? Buffer.from("RFB 003.008\n") : "ready");
+    socket.on("message", (message) => socket.send(`echo:${message}`));
+  });
+
+  const mock = createMockNodeAgentFetch({
+    proxy: ({ body, jsonResponse }) =>
+      body.path === "/"
+        ? jsonResponse({
+            status: 200,
+            headers: { "content-type": "text/html; charset=utf-8" },
+            bodyBase64: Buffer.from("<!doctype html><html><head><title>Instance</title></head><body><div id=\"app\"></div></body></html>").toString("base64"),
+          })
+        : body.path.startsWith("/api/apps/sessions/app_1/web/")
+          ? jsonResponse({
+              status: 200,
+              headers: { "content-type": "text/html; charset=utf-8", "content-encoding": "gzip" },
+              bodyBase64: Buffer.from("<!doctype html><html><head><title>App</title></head><body><script src=\"./app.js\"></script></body></html>").toString("base64"),
+            })
+        : jsonResponse({
+            status: 200,
+            headers: { "content-type": "text/plain" },
+            bodyBase64: Buffer.from(`proxied:${body.path}`).toString("base64"),
+          }),
+  });
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-instance-ws-proxy"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: {
+      fetchImpl: mock.fetchImpl,
+    },
+  });
+  t.after(() => app.close());
+
+  const nodes = await json(app, "GET", "/api/nodes");
+  assert.equal(nodes.statusCode, 200);
+  const localNode = nodes.body.data.find((node) => node.id === "node_mock");
+  assert.ok(localNode);
+  assert.equal(localNode.status, "online");
+  assert.equal(localNode.health, "ok");
+  const updatedNode = await json(app, "PATCH", "/api/nodes/node_mock", {
+    endpoint: nodeAgentEndpoint,
+    controlEndpoint: nodeAgentEndpoint,
+  });
+  assert.equal(updatedNode.statusCode, 200);
+
+  const project = await json(app, "POST", "/api/projects", {
+    name: "WebSocket Proxy Project",
+    source: {
+      type: "local-folder",
+      path: "/tmp/workspace",
+    },
+  });
+  assert.equal(project.statusCode, 201);
+
+  const createdInstance = await json(app, "POST", "/api/controlled-instances", {
+    projectId: project.body.data.id,
+    runtimeId: "runtime_local_docker",
+    imageId: "img_default",
+  });
+  assert.equal(createdInstance.statusCode, 201);
+
+  const registeredResponse = await mock.fetchImpl(`http://127.0.0.1:8091/api/node-agent/instances/${createdInstance.body.data.id}/register`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${createdInstance.body.data.registrationToken}`,
+    },
+    body: JSON.stringify({
+      instanceId: createdInstance.body.data.id,
+      name: "ws-proxy-instance",
+      projectId: project.body.data.id,
+      instanceVersion: "0.1.0",
+      protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+      controlMode: "controlled",
+      capabilities: {
+        apps: ["terminal-tty"],
+      },
+      target: {
+        strategy: "direct-port",
+        web: "http://controlled.internal:8080",
+        api: "http://controlled.internal:8080/api",
+        status: "reachable",
+      },
+      workspace: {
+        mode: "local-bind",
+        status: "ready",
+        path: "/workspace",
+      },
+    }),
+  });
+  assert.equal(registeredResponse.status, 201);
+
+  await withTimeout(app.listen({ host: "127.0.0.1", port: 0 }), "control plane listen");
+  const address = app.server.address();
+  assert.equal(typeof address, "object");
+  const client = new WebSocket(`ws://127.0.0.1:${address.port}/instances/${createdInstance.body.data.id}/api/apps/sessions/app_1/tty?token=abc`);
+  t.after(() => client.terminate());
+  await withTimeout(waitForWebSocketOpen(client), "proxied websocket open");
+  assert.deepEqual(await withTimeout(onceWebSocketMessageFrame(client), "proxied websocket ready"), { message: "ready", isBinary: false });
+  client.send("hello");
+  assert.deepEqual(await withTimeout(onceWebSocketMessageFrame(client), "proxied websocket echo"), { message: "echo:hello", isBinary: false });
+  const binaryClient = new WebSocket(`ws://127.0.0.1:${address.port}/instances/${createdInstance.body.data.id}/api/apps/sessions/app_1/web/websockify`, ["binary"]);
+  t.after(() => binaryClient.terminate());
+  await withTimeout(waitForWebSocketOpen(binaryClient), "proxied websocket binary open");
+  assert.equal(binaryClient.protocol, "binary");
+  assert.deepEqual(await withTimeout(onceWebSocketMessageFrame(binaryClient), "proxied websocket binary greeting"), { message: "RFB 003.008\n", isBinary: true });
+  assert.deepEqual(seen.filter((entry) => entry.url !== "/api/node-agent/events"), [
+    {
+      url: `/api/node-agent/instances/${createdInstance.body.data.id}/proxy/ws/api/apps/sessions/app_1/tty?token=abc`,
+      protocol: "",
+    },
+    {
+      url: `/api/node-agent/instances/${createdInstance.body.data.id}/proxy/ws/api/apps/sessions/app_1/web/websockify`,
+      protocol: "binary",
+    },
+  ]);
+
+  const rootRedirect = await app.inject({
+    method: "GET",
+    url: `/instances/${createdInstance.body.data.id}`,
+  });
+  assert.equal(rootRedirect.statusCode, 302);
+  assert.equal(rootRedirect.headers.location, `/instances/${createdInstance.body.data.id}/`);
+
+  const proxiedRoot = await app.inject({
+    method: "GET",
+    url: `/instances/${createdInstance.body.data.id}/`,
+  });
+  assert.equal(proxiedRoot.statusCode, 200);
+  assert.match(proxiedRoot.body, new RegExp(`window\\.__TASK_HANDOFF_PUBLIC_BASE__="/instances/${createdInstance.body.data.id}"`));
+  assert.doesNotMatch(proxiedRoot.body, /<base href=/);
+
+  const proxied = await app.inject({
+    method: "GET",
+    url: `/instances/${createdInstance.body.data.id}/api/apps/sessions/app_1/web/index.html?theme=dark`,
+  });
+  assert.equal(proxied.statusCode, 200);
+  assert.equal(proxied.headers["content-encoding"], undefined);
+  assert.equal(proxied.body, "<!doctype html><html><head><title>App</title></head><body><script src=\"./app.js\"></script></body></html>");
+  assert.doesNotMatch(proxied.body, /__TASK_HANDOFF_PUBLIC_BASE__/);
+  assert.doesNotMatch(proxied.body, /<base href=/);
+
+  const uploaded = await app.inject({
+    method: "POST",
+    url: `/instances/${createdInstance.body.data.id}/api/upload`,
+    headers: {
+      "content-type": "application/octet-stream",
+    },
+    payload: Buffer.from([0, 1, 2, 255]),
+  });
+  assert.equal(uploaded.statusCode, 200);
+  const uploadProxyRequest = mock.requests.find((request) =>
+    request.path.endsWith("/proxy/raw") &&
+    request.body?.path === "/api/upload"
+  );
+  assert.deepEqual(uploadProxyRequest.body, {
+    path: "/api/upload",
+    method: "POST",
+    headers: {
+      "content-type": "application/octet-stream",
+      host: "localhost:80",
+      "user-agent": "lightMyRequest",
+    },
+    bodyBase64: Buffer.from([0, 1, 2, 255]).toString("base64"),
+  });
+
+  const urlencoded = await app.inject({
+    method: "POST",
+    url: `/instances/${createdInstance.body.data.id}/api/form`,
+    headers: {
+      "content-type": "application/x-www-form-urlencoded",
+    },
+    payload: new URLSearchParams([[
+      "alpha",
+      "1",
+    ], [
+      "beta",
+      "two words",
+    ]]).toString(),
+  });
+  assert.equal(urlencoded.statusCode, 200);
+  const formProxyRequest = mock.requests.find((request) =>
+    request.path.endsWith("/proxy/raw") &&
+    request.body?.path === "/api/form"
+  );
+  assert.deepEqual(formProxyRequest.body, {
+    path: "/api/form",
+    method: "POST",
+    headers: {
+      "content-type": "application/x-www-form-urlencoded",
+      host: "localhost:80",
+      "user-agent": "lightMyRequest",
+    },
+    bodyBase64: Buffer.from("alpha=1&beta=two+words").toString("base64"),
+  });
+});
+
+test("control plane generated instance names include seconds and id suffix", async (t) => {
+  const mock = createMockNodeAgentFetch();
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-generated-name"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: {
+      fetchImpl: mock.fetchImpl,
+    },
+  });
+  t.after(() => app.close());
+
+  const project = await json(app, "POST", "/api/projects", {
+    name: "Generated Name Project",
+    source: {
+      type: "local-folder",
+      path: "/tmp/workspace",
+    },
+  });
+  assert.equal(project.statusCode, 201);
+
+  const created = await json(app, "POST", "/api/controlled-instances", {
+    projectId: project.body.data.id,
+    runtimeId: "runtime_local_docker",
+    imageId: "img_default",
+  });
+  assert.equal(created.statusCode, 201);
+  assert.match(created.body.data.name, /^instance-\d{14}-[A-Za-z0-9_-]{1,4}$/);
+});
+
+test("control plane starts, stops, and restarts instances through runtime executors", async (t) => {
+  const mock = createMockNodeAgentFetch();
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-lifecycle"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: {
+      fetchImpl: mock.fetchImpl,
+    },
+  });
+  t.after(() => app.close());
+
+  const project = await json(app, "POST", "/api/projects", {
+    name: "Git Project",
+    source: {
+      type: "git-repository",
+      url: "https://github.com/example/repo.git",
+    },
+  });
+  assert.equal(project.statusCode, 201);
+
+  const created = await json(app, "POST", "/api/controlled-instances", {
+    name: "git-1",
+    projectId: project.body.data.id,
+    runtimeId: "runtime_local_docker",
+    imageId: "img_default",
+  });
+  assert.equal(created.statusCode, 201);
+
+  const started = await json(app, "POST", `/api/controlled-instances/${created.body.data.id}/start`);
+  assert.equal(started.statusCode, 200);
+  assert.equal(started.body.data.status, "registering");
+  assert.equal(started.body.data.connectionStatus, "online");
+  assert.equal(started.body.data.target, undefined);
+  assert.equal(started.body.data.targetStatus, undefined);
+  assert.equal(started.body.data.agentStatus, undefined);
+  assert.equal(started.body.data.access.web, `/instances/${created.body.data.id}/`);
+  assert.equal(started.body.data.runtime.containerName, `task-handoff-${created.body.data.id}`);
+  assert.equal(started.body.data.runtime.containerId, `container-${created.body.data.id}`);
+  assert.equal(started.body.data.registrationToken, undefined);
+
+  const stopped = await json(app, "POST", `/api/controlled-instances/${created.body.data.id}/stop`);
+  assert.equal(stopped.statusCode, 200);
+  assert.equal(stopped.body.data.status, "stopped");
+  assert.equal(stopped.body.data.connectionStatus, "offline");
+
+  const restarted = await json(app, "POST", `/api/controlled-instances/${created.body.data.id}/restart`);
+  assert.equal(restarted.statusCode, 200);
+  assert.equal(restarted.body.data.status, "registering");
+
+  const deleted = await json(app, "DELETE", `/api/controlled-instances/${created.body.data.id}`);
+  assert.equal(deleted.statusCode, 200);
+  assert.equal(deleted.body.data.deleted, true);
+  const afterDelete = await json(app, "GET", "/api/controlled-instances");
+  assert.equal(afterDelete.statusCode, 200);
+  assert.equal(afterDelete.body.data.length, 0);
+
+  assert.deepEqual(
+    mock.requests
+      .filter((request) => request.path.startsWith(`/instances/${created.body.data.id}/`))
+      .map((request) => request.path.split("/").at(-1)),
+    ["start", "stop", "restart", "delete"],
+  );
+});
+
+test("control plane lists local Docker images for image management", async (t) => {
+  const mock = createMockNodeAgentFetch({
+    dockerImages: [
+      {
+        repository: "task-handoff-web",
+        tag: "local",
+        id: "sha256:abc123",
+        createdSince: "2 hours ago",
+        size: "1.2GB",
+        reference: "task-handoff-web:local",
+      },
+      {
+        repository: "<none>",
+        tag: "<none>",
+        id: "sha256:def456",
+        createdSince: "3 days ago",
+        size: "900MB",
+        reference: "sha256:def456",
+      },
+    ],
+  });
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-local-images"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: {
+      fetchImpl: mock.fetchImpl,
+    },
+  });
+  t.after(() => app.close());
+
+  const nodes = await json(app, "GET", "/api/nodes");
+  const images = await json(app, "GET", `/api/nodes/${nodes.body.data[0].id}/docker/images`);
+  assert.equal(images.statusCode, 200);
+  assert.deepEqual(mock.requests.map((request) => [request.method, request.url]), [
+    ["GET", "http://127.0.0.1:8091/api/node-agent/health"],
+    ["GET", "http://127.0.0.1:8091/api/node-agent/docker/images"],
+  ]);
+  assert.equal(images.body.data[0].reference, "task-handoff-web:local");
+  assert.equal(images.body.data[0].size, "1.2GB");
+  assert.equal(images.body.data[1].reference, "sha256:def456");
+});
+
+test("control plane launches app sessions through the controlled instance API", async (t) => {
+  const appSessionsById = new Map();
+  let appSessionRevision = 0;
+  const appSessionPayload = (status = "running", title = "Claude") => ({
+    id: "app_1",
+    appId: "claude",
+    title,
+    kind: "tty",
+    status,
+    bindings: [
+      { type: "app-session", id: "app_1" },
+      { type: "adapter-key", adapter: "claude", agent: "claude", id: "short:ac8eaf94", key: "short:ac8eaf94" },
+    ],
+    workspace: {
+      cwd: "/workspace/demo",
+    },
+    tty: {
+      webPath: "/api/apps/sessions/app_1/tty",
+      shell: "claude",
+      cwd: "/workspace/demo",
+      mode: "claude-attach",
+    },
+    ai: {
+      agent: "claude",
+      claude: {
+        short: "ac8eaf94",
+        controlSock: "/tmp/control.sock",
+        cwd: "/workspace/demo",
+      },
+    },
+  });
+  const mock = createMockNodeAgentFetch({
+    proxy: ({ body, jsonResponse }) => {
+      if (body.path === "/api/apps/sessions/state") {
+        const updatedAt = new Date().toISOString();
+        const sessions = [...appSessionsById.values()];
+        return jsonResponse({ streamId: "app_launch_stream", revision: appSessionRevision, lastEventAt: updatedAt, snapshot: { runningCount: sessions.filter((session) => session.status === "running").length, problemCount: 0, sessions, updatedAt } });
+      }
+      if (body.path === "/api/apps/sessions" && body.method === "GET") {
+        return jsonResponse([...appSessionsById.values()]);
+      }
+      if (body.path === "/api/apps/sessions/app_1" && body.method === "PATCH") {
+        const current = appSessionsById.get("app_1") || appSessionPayload();
+        const session = { ...current, title: JSON.parse(body.body).title };
+        appSessionsById.set(session.id, session);
+        appSessionRevision += 1;
+        return jsonResponse(session);
+      }
+      if (body.path !== "/api/apps/sessions" && !body.path.endsWith("/stop")) {
+        return jsonResponse({ accepted: true });
+      }
+      const existing = appSessionsById.get("app_1");
+      const session = appSessionPayload(body.path.endsWith("/stop") ? "stopped" : "running", existing?.title || "Claude");
+      appSessionsById.set(session.id, session);
+      appSessionRevision += 1;
+      return jsonResponse(session);
+    },
+  });
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-app-session"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: {
+      fetchImpl: mock.fetchImpl,
+    },
+  });
+  t.after(() => app.close());
+  await app.listen({ host: "127.0.0.1", port: 0 });
+  const address = app.server.address();
+  assert.equal(typeof address, "object");
+  const eventsSocket = new WebSocket(`ws://127.0.0.1:${address.port}/api/events`);
+  t.after(() => eventsSocket.terminate());
+  const connectedMessage = withTimeout(onceWebSocketMessageFrame(eventsSocket), "app session events connected");
+  await withTimeout(waitForWebSocketOpen(eventsSocket), "app session events websocket open");
+  assert.equal(JSON.parse((await connectedMessage).message).type, "streams.hello");
+
+  const project = await json(app, "POST", "/api/projects", {
+    name: "App Project",
+    source: {
+      type: "local-folder",
+      path: "/tmp/workspace",
+    },
+  });
+  assert.equal(project.statusCode, 201);
+
+  const created = await json(app, "POST", "/api/controlled-instances", {
+    name: "app-worker",
+    projectId: project.body.data.id,
+    runtimeId: "runtime_local_docker",
+    imageId: "img_default",
+  });
+  assert.equal(created.statusCode, 201);
+
+  await mock.fetchImpl(`http://127.0.0.1:8091/api/node-agent/instances/${created.body.data.id}/register`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${created.body.data.registrationToken}` },
+    body: JSON.stringify({
+      instanceId: created.body.data.id,
+      name: "app-worker",
+      projectId: project.body.data.id,
+      target: {
+        strategy: "direct-port",
+        web: "http://127.0.0.1:18082",
+        api: "http://127.0.0.1:18082/api",
+        status: "endpoint-unreachable",
+      },
+      workspace: {
+        status: "ready",
+      },
+      capabilities: {
+        apps: [
+          { id: "codex", name: "Codex" },
+          { id: "claude", name: "Claude" },
+        ],
+      },
+    }),
+  });
+
+  const registered = await json(app, "GET", `/api/controlled-instances/${created.body.data.id}`);
+  assert.equal(registered.statusCode, 200);
+  assert.equal(registered.body.data.connectionStatus, "online");
+  assert.equal(registered.body.data.targetStatus, undefined);
+  assert.equal(registered.body.data.target, undefined);
+  assert.equal(registered.body.data.access.status, "reachable");
+  const heartbeatRequestsBeforeLaunch = mock.requests.filter((request) => request.path.endsWith("/heartbeat")).length;
+
+  const launched = await json(app, "POST", `/api/controlled-instances/${created.body.data.id}/apps/sessions`, {
+    appId: "claude",
+    options: {
+      cwd: "/workspace/demo",
+      env: {
+        DEMO: "1",
+      },
+      display: {
+        width: 1280,
+        height: 720,
+      },
+    },
+  });
+  assert.equal(launched.statusCode, 200);
+  assert.equal(launched.body.data.id, "app_1");
+  const launchEvent = JSON.parse((await withTimeout(onceWebSocketMessageFrame(eventsSocket), "app session created event")).message);
+  assert.equal(launchEvent.type, "instance.app-session.launched");
+  assert.equal(launchEvent.payload.instanceId, created.body.data.id);
+  assert.equal(launchEvent.payload.sessionId, "app_1");
+  assert.equal(launchEvent.payload.appId, "claude");
+  const appSessionsAfterLaunch = await json(app, "GET", "/api/app-sessions");
+  assert.equal(appSessionsAfterLaunch.statusCode, 200);
+  assert.equal(appSessionsAfterLaunch.body.data.instances[0].instanceId, created.body.data.id);
+  assert.equal(appSessionsAfterLaunch.body.data.instances[0].appSessions.runningCount, 1);
+  assert.deepEqual(appSessionsAfterLaunch.body.data.instances[0].appSessions.sessions, [
+    appSessionPayload("running"),
+  ]);
+  const boardAfterLaunch = await json(app, "GET", "/api/instance-board");
+  assert.equal(boardAfterLaunch.statusCode, 200);
+  assert.equal(boardAfterLaunch.body.data[0].status, "registered");
+  assert.equal(boardAfterLaunch.body.data[0].connectionStatus, "online");
+  assert.equal(boardAfterLaunch.body.data[0].workspace.status, "ready");
+  assert.equal(boardAfterLaunch.body.data[0].apps.runningCount, 0);
+  assert.equal("sessions" in boardAfterLaunch.body.data[0].apps, false);
+  const heartbeatRequestsAfterLaunch = mock.requests.filter((request) => request.path.endsWith("/heartbeat"));
+  assert.equal(heartbeatRequestsAfterLaunch.length, heartbeatRequestsBeforeLaunch);
+  const proxyRequests = mock.requests.filter((request) => request.path.endsWith("/proxy") && request.body?.path === "/api/apps/sessions" && request.body?.method === "POST");
+  assert.deepEqual(proxyRequests.map(({ url, method, body }) => ({ url, method, body })), [
+    {
+      url: `http://127.0.0.1:8091/api/node-agent/instances/${created.body.data.id}/proxy`,
+      method: "POST",
+      body: {
+        path: "/api/apps/sessions",
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          appId: "claude",
+          cwd: "/workspace/demo",
+          env: {
+            DEMO: "1",
+          },
+          display: {
+            width: 1280,
+            height: 720,
+          },
+        }),
+      },
+    },
+  ]);
+
+  const renamed = await json(app, "PATCH", `/api/controlled-instances/${created.body.data.id}/apps/sessions/app_1`, {
+    title: "Control Claude",
+  });
+  assert.equal(renamed.statusCode, 200);
+  assert.equal(renamed.body.data.title, "Control Claude");
+  const renameEvent = JSON.parse((await withTimeout(onceWebSocketMessageFrame(eventsSocket), "app session renamed event")).message);
+  assert.equal(renameEvent.type, "instance.app-session.renamed");
+  assert.deepEqual(renameEvent.payload, {
+    instanceId: created.body.data.id,
+    sessionId: "app_1",
+    title: "Control Claude",
+  });
+  const appSessionsAfterRename = await json(app, "GET", "/api/app-sessions");
+  assert.equal(appSessionsAfterRename.body.data.instances[0].appSessions.sessions[0].title, "Control Claude");
+  const renameProxy = mock.requests.find((request) => request.path.endsWith("/proxy") && request.body?.path === "/api/apps/sessions/app_1" && request.body?.method === "PATCH");
+  assert.deepEqual({ url: renameProxy.url, method: renameProxy.method, body: renameProxy.body }, {
+    url: `http://127.0.0.1:8091/api/node-agent/instances/${created.body.data.id}/proxy`,
+    method: "POST",
+    body: {
+      path: "/api/apps/sessions/app_1",
+      method: "PATCH",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ title: "Control Claude" }),
+    },
+  });
+
+  const stopped = await json(app, "POST", `/api/controlled-instances/${created.body.data.id}/apps/sessions/app_1/stop`);
+  assert.equal(stopped.statusCode, 200);
+  assert.equal(stopped.body.data.id, "app_1");
+  const stopEvent = JSON.parse((await withTimeout(onceWebSocketMessageFrame(eventsSocket), "app session updated event")).message);
+  assert.equal(stopEvent.type, "instance.app-session.stopped");
+  assert.equal(stopEvent.payload.instanceId, created.body.data.id);
+  assert.equal(stopEvent.payload.sessionId, "app_1");
+  const appSessionsAfterStop = await json(app, "GET", "/api/app-sessions");
+  assert.equal(appSessionsAfterStop.statusCode, 200);
+  assert.equal(appSessionsAfterStop.body.data.instances[0].appSessions.runningCount, 0);
+  assert.deepEqual(appSessionsAfterStop.body.data.instances[0].appSessions.sessions, []);
+  const appSessionTombstonesAfterStop = await json(app, "GET", "/api/app-sessions?includeTombstones=true");
+  assert.equal(appSessionTombstonesAfterStop.statusCode, 200);
+  assert.equal(appSessionTombstonesAfterStop.body.data.instances[0].appSessions.runningCount, 0);
+  assert.deepEqual(appSessionTombstonesAfterStop.body.data.instances[0].appSessions.sessions, [
+    appSessionPayload("stopped", "Control Claude"),
+  ]);
+  const boardAfterStop = await json(app, "GET", "/api/instance-board");
+  assert.equal(boardAfterStop.statusCode, 200);
+  assert.equal(boardAfterStop.body.data[0].apps.runningCount, 0);
+  assert.equal("sessions" in boardAfterStop.body.data[0].apps, false);
+  {
+    const stopProxy = mock.requests.find((request) => request.path.endsWith("/proxy") && request.body?.path === "/api/apps/sessions/app_1/stop");
+    assert.deepEqual({ url: stopProxy.url, method: stopProxy.method, body: stopProxy.body }, {
+      url: `http://127.0.0.1:8091/api/node-agent/instances/${created.body.data.id}/proxy`,
+      method: "POST",
+      body: {
+        path: "/api/apps/sessions/app_1/stop",
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({}),
+      },
+    });
+  }
+
+  const synced = await json(app, "POST", `/api/controlled-instances/${created.body.data.id}/config-sync/export/browser`);
+  assert.equal(synced.statusCode, 200);
+  {
+    const syncProxy = mock.requests.find((request) => request.path.endsWith("/proxy") && request.body?.path === "/api/config-sync/export/browser");
+    assert.deepEqual({ url: syncProxy.url, method: syncProxy.method, body: syncProxy.body }, {
+    url: `http://127.0.0.1:8091/api/node-agent/instances/${created.body.data.id}/proxy`,
+    method: "POST",
+    body: {
+      path: "/api/config-sync/export/browser",
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        preset: {
+          id: "browser",
+          label: "Browser",
+          projectRoot: ".task-handoff/configs/browser",
+          items: [
+            {
+              id: "chromium-profile",
+              type: "dir",
+              projectPath: "chromium",
+              containerPath: "${HOME}/.config/chromium",
+            },
+          ],
+        },
+      }),
+    },
+  });
+  }
+
+  const gitProject = await json(app, "POST", "/api/projects", {
+    name: "Git App Project",
+    source: {
+      type: "git-repository",
+      url: "https://github.com/example/repo.git",
+    },
+  });
+  assert.equal(gitProject.statusCode, 201);
+  const gitInstance = await json(app, "POST", "/api/controlled-instances", {
+    name: "git-app-worker",
+    projectId: gitProject.body.data.id,
+    runtimeId: "runtime_local_docker",
+    imageId: "img_default",
+  });
+  assert.equal(gitInstance.statusCode, 201);
+  await mock.fetchImpl(`http://127.0.0.1:8091/api/node-agent/instances/${gitInstance.body.data.id}/register`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${gitInstance.body.data.registrationToken}` },
+    body: JSON.stringify({
+      instanceId: gitInstance.body.data.id,
+      name: "git-app-worker",
+      projectId: gitProject.body.data.id,
+      target: {
+        strategy: "direct-port",
+        web: "http://127.0.0.1:18083",
+        api: "http://127.0.0.1:18083/api",
+        status: "reachable",
+      },
+      workspace: {
+        status: "ready",
+      },
+    }),
+  });
+  const rejectedExport = await json(app, "POST", `/api/controlled-instances/${gitInstance.body.data.id}/config-sync/export/browser`);
+  assert.equal(rejectedExport.statusCode, 400);
+  assert.equal(rejectedExport.body.error.code, "CONFIG_SYNC_EXPORT_REQUIRES_LOCAL_PROJECT");
+});
+
+test("control plane app session launch succeeds when board heartbeat sync fails", async (t) => {
+  const mock = createMockNodeAgentFetch({
+    proxy: ({ jsonResponse }) =>
+      jsonResponse({
+        id: "app_heartbeat_failure",
+        appId: "terminal-tty",
+        title: "terminal-tty",
+        kind: "tty",
+        status: "running",
+      }),
+    heartbeat: ({ errorResponse }) => errorResponse("heartbeat sync failed", 500),
+  });
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-app-session-heartbeat-failure"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: {
+      fetchImpl: mock.fetchImpl,
+    },
+  });
+  t.after(() => app.close());
+
+  const project = await json(app, "POST", "/api/projects", {
+    name: "Heartbeat Failure Project",
+    source: {
+      type: "local-folder",
+      path: "/tmp/heartbeat-failure",
+    },
+  });
+  assert.equal(project.statusCode, 201);
+  const created = await json(app, "POST", "/api/controlled-instances", {
+    name: "heartbeat-worker",
+    projectId: project.body.data.id,
+    runtimeId: "runtime_local_docker",
+    imageId: "img_default",
+  });
+  assert.equal(created.statusCode, 201);
+  await mock.fetchImpl(`http://127.0.0.1:8091/api/node-agent/instances/${created.body.data.id}/register`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${created.body.data.registrationToken}` },
+    body: JSON.stringify({
+      instanceId: created.body.data.id,
+      name: "heartbeat-worker",
+      target: {
+        strategy: "direct-port",
+        web: "http://127.0.0.1:18083",
+        api: "http://127.0.0.1:18083/api",
+        status: "reachable",
+      },
+      workspace: {
+        status: "ready",
+      },
+    }),
+  });
+
+  const launched = await json(app, "POST", `/api/controlled-instances/${created.body.data.id}/apps/sessions`, {
+    appId: "terminal-tty",
+  });
+  assert.equal(launched.statusCode, 200);
+  assert.equal(launched.body.data.id, "app_heartbeat_failure");
+  const board = await json(app, "GET", "/api/instance-board");
+  assert.equal(board.statusCode, 200);
+  assert.equal(board.body.data[0].apps.runningCount, 0);
+  assert.equal("sessions" in board.body.data[0].apps, false);
+});
+
+test("control plane rejects local folder projects on non-local runtimes before executor selection", async (t) => {
+  const timestamp = new Date().toISOString();
+  const mock = createMockNodeAgentFetch({
+    nodeId: "node_remote",
+    runtimes: [
+      {
+        id: "runtime_remote",
+        nodeId: "node_remote",
+        type: "docker",
+        name: "Docker",
+        status: "unknown",
+        accessStrategy: "direct-port",
+        capabilities: {},
+        labels: {},
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    ],
+  });
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-reject"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: {
+      fetchImpl: mock.fetchImpl,
+    },
+  });
+  t.after(() => app.close());
+
+  const node = await json(app, "POST", "/api/nodes", {
+    id: "node_remote",
+    name: "Remote Node",
+    connectionMode: "direct-http",
+    endpoint: "http://10.0.0.12:8091",
+    auth: {
+      mode: "paired-hmac",
+      keyId: "key_agent",
+      secret: "agent-secret",
+    },
+  });
+  assert.equal(node.statusCode, 201);
+
+  const project = await json(app, "POST", "/api/projects", {
+    name: "Local Project",
+    source: {
+      type: "local-folder",
+      path: "/tmp/workspace",
+      ownerNodeId: "node_other",
+    },
+    defaultNodeId: "node_remote",
+    defaultRuntimeId: "runtime_remote",
+  });
+  assert.equal(project.statusCode, 201);
+
+  const rejected = await json(app, "POST", "/api/controlled-instances", {
+    name: "bad-remote",
+    projectId: project.body.data.id,
+    nodeId: "node_remote",
+    runtimeId: "runtime_remote",
+    imageId: "img_default",
+  });
+  assert.equal(rejected.statusCode, 400);
+  assert.equal(rejected.body.error.code, "LOCAL_FOLDER_REQUIRES_OWNER_NODE");
+});
+
+test("control plane chat gateway binds sessions and forwards messages to active instances", async (t) => {
+  const forwarded = [];
+  let chatWorkerInstanceId = "";
+  const liveAppSessions = [
+    { id: "app_codex", appId: "codex", title: "Codex", kind: "tty", status: "running" },
+    { id: "app_claude", appId: "claude", title: "Claude", kind: "tty", status: "running" },
+    { id: "app_closed", appId: "codex", title: "Closed Codex", kind: "tty", status: "closed" },
+  ];
+  let liveAppSessionRevision = 1;
+  const mock = createMockNodeAgentFetch({
+    proxy: ({ url, init, body, jsonResponse }) => {
+      forwarded.push({
+        url,
+        method: init.method,
+        body,
+      });
+      if (body.path === "/api/apps/sessions/state") {
+        const sessions = chatWorkerInstanceId && url.includes(`/instances/${chatWorkerInstanceId}/proxy`)
+          ? liveAppSessions
+          : [{ id: "app_other_claude", appId: "claude", title: "Claude", kind: "tty", status: "running" }];
+        const updatedAt = new Date().toISOString();
+        const revision = chatWorkerInstanceId && url.includes(`/instances/${chatWorkerInstanceId}/proxy`) ? liveAppSessionRevision : 1;
+        return jsonResponse({ streamId: "app_chat_stream", revision, lastEventAt: updatedAt, snapshot: { runningCount: sessions.filter((session) => session.status === "running").length, problemCount: 0, sessions, updatedAt } });
+      }
+      if (body.path === "/api/ai-sessions/state") {
+        const updatedAt = new Date().toISOString();
+        const isPrimary = chatWorkerInstanceId && url.includes(`/instances/${chatWorkerInstanceId}/proxy`);
+        const sessions = isPrimary
+          ? [
+              { id: "ais_1", agent: "codex", appSessionId: "app_codex", status: "running", phase: "responding", summary: "Working", startedAt: updatedAt, updatedAt },
+              { id: "ais_2", agent: "claude", appSessionId: "app_claude", status: "waiting", phase: "approval", summary: "Needs approval", startedAt: updatedAt, updatedAt },
+            ]
+          : [{ id: "ais_other", agent: "claude", appSessionId: "app_other_claude", status: "idle", phase: "unknown", summary: "Other project session", startedAt: updatedAt, updatedAt }];
+        return jsonResponse({ streamId: "ai_chat_stream", revision: 1, lastEventAt: updatedAt, snapshot: { runningCount: isPrimary ? 1 : 0, waitingCount: isPrimary ? 1 : 0, staleCount: 0, sessions, updatedAt } });
+      }
+      if (body.path === "/api/apps/sessions" && body.method === "GET") {
+        if (chatWorkerInstanceId && url.includes(`/instances/${chatWorkerInstanceId}/proxy`)) {
+          return jsonResponse(liveAppSessions);
+        }
+        return jsonResponse([
+          { id: "app_other_claude", appId: "claude", title: "Claude", kind: "tty", status: "running" },
+        ]);
+      }
+      if (body.path === "/api/apps/sessions") {
+        const payload = typeof body.body === "string" ? JSON.parse(body.body) : body.body || {};
+        const session = {
+          id: "app_launched_chromium",
+          appId: payload.appId,
+          title: "Chromium",
+          kind: "web",
+          status: "running",
+        };
+        liveAppSessions.push(session);
+        liveAppSessionRevision += 1;
+        return jsonResponse(session);
+      }
+      const aiActionMatch = body.path.match(/^\/api\/ai-sessions\/([^/]+)\/(messages|interrupt)$/);
+      if (aiActionMatch) {
+        const timestamp = new Date().toISOString();
+        return jsonResponse({
+          session: {
+            id: aiActionMatch[1],
+            agent: aiActionMatch[1] === "ais_2" ? "claude" : "codex",
+            status: aiActionMatch[2] === "interrupt" ? "idle" : "running",
+            phase: "unknown",
+            startedAt: timestamp,
+            updatedAt: timestamp,
+          },
+          provider: aiActionMatch[1] === "ais_2" ? "claude" : "codex",
+          action: aiActionMatch[2] === "interrupt" ? "interrupt" : "send",
+          ...(aiActionMatch[2] === "messages" ? { turnId: "turn_test", providerTurnId: "turn_test" } : {}),
+        });
+      }
+      return jsonResponse({ accepted: true, conversationId: 7, taskId: "task_1" });
+    },
+  });
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-chat"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: {
+      fetchImpl: mock.fetchImpl,
+    },
+  });
+  t.after(() => app.close());
+
+  const project = await json(app, "POST", "/api/projects", {
+    name: "Chat Project",
+    source: {
+      type: "git-repository",
+      url: "https://github.com/example/repo.git",
+    },
+  });
+  assert.equal(project.statusCode, 201);
+
+  const created = await json(app, "POST", "/api/controlled-instances", {
+    name: "chat-worker",
+    projectId: project.body.data.id,
+    runtimeId: "runtime_local_docker",
+    imageId: "img_default",
+  });
+  assert.equal(created.statusCode, 201);
+  chatWorkerInstanceId = created.body.data.id;
+
+  await mock.fetchImpl(`http://127.0.0.1:8091/api/node-agent/instances/${created.body.data.id}/register`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${created.body.data.registrationToken}` },
+    body: JSON.stringify({
+      instanceId: created.body.data.id,
+      name: "chat-worker",
+      projectId: project.body.data.id,
+      target: {
+        strategy: "direct-port",
+        web: "http://127.0.0.1:18081",
+        api: "http://127.0.0.1:18081/api",
+        status: "reachable",
+      },
+      workspace: {
+        status: "ready",
+      },
+      capabilities: {
+        apps: [
+          { id: "codex", name: "Codex" },
+          { id: "claude", name: "Claude" },
+        ],
+      },
+    }),
+  });
+  await mock.fetchImpl(`http://127.0.0.1:8091/api/node-agent/instances/${created.body.data.id}/heartbeat`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${created.body.data.registrationToken}` },
+    body: JSON.stringify({
+      status: "running",
+      health: "ok",
+      connectionStatus: "online",
+      apps: {
+        runningCount: 2,
+      },
+      aiSessions: {
+        runningCount: 1,
+        waitingCount: 0,
+        staleCount: 0,
+        updatedAt: new Date().toISOString(),
+        sessions: [
+          {
+            id: "ais_1",
+            agent: "codex",
+            appSessionId: "app_codex",
+            status: "running",
+            phase: "responding",
+            summary: "Working",
+            startedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+          {
+            id: "ais_2",
+            agent: "claude",
+            appSessionId: "app_claude",
+            status: "waiting",
+            phase: "approval",
+            summary: "Needs approval",
+            startedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+        ],
+      },
+      target: {
+        status: "reachable",
+      },
+      workspace: {
+        status: "ready",
+      },
+    }),
+  });
+
+  const selected = await json(app, "POST", "/api/chat-gateway/messages", {
+    source: {
+      channel: "telegram",
+      chatSessionId: "telegram:123",
+      userId: "user-1",
+    },
+    message: {
+      text: `/use ${project.body.data.id}`,
+    },
+  });
+  assert.equal(selected.statusCode, 200);
+  assert.equal(selected.body.data.binding.activeProjectId, project.body.data.id);
+  assert.equal(selected.body.data.binding.activeInstanceId, created.body.data.id);
+  assert.equal(selected.body.data.binding.activeAiSessionId, undefined);
+  assert.match(selected.body.data.reply, /Chat Project \/ chat-worker/);
+
+  const help = await json(app, "POST", "/api/chat-gateway/messages", {
+    source: {
+      channel: "telegram",
+      chatSessionId: "telegram:123",
+      userId: "user-1",
+    },
+    message: {
+      text: "/help@TaskHandoffBot",
+      attachments: [],
+    },
+  });
+  assert.equal(help.statusCode, 200);
+  assert.match(help.body.data.reply, /TaskHandoff chat commands/);
+  assert.match(help.body.data.reply, /\/sessions/);
+  assert.match(help.body.data.reply, /\/apps/);
+  assert.match(help.body.data.reply, /Current target: Chat Project \/ chat-worker \/ none/);
+
+  const sessionList = await json(app, "POST", "/api/chat-gateway/messages", {
+    source: {
+      channel: "telegram",
+      chatSessionId: "telegram:123",
+      userId: "user-1",
+    },
+    message: {
+      text: "/session",
+      attachments: [],
+    },
+  });
+  assert.equal(sessionList.statusCode, 200);
+  assert.match(sessionList.body.data.reply, /Select AI session/);
+  assert.match(sessionList.body.data.reply, /1\. Chat Project \/ chat-worker - claude - waiting\/approval - ais_2/);
+  assert.match(sessionList.body.data.reply, /2\. Chat Project \/ chat-worker - codex - running\/responding - ais_1/);
+  assert.deepEqual(sessionList.body.data.replyMarkup.inline_keyboard.map((row) => row[0].callback_data), [
+    "task_handoff:cp_session:0",
+    "task_handoff:cp_session:1",
+  ]);
+
+  const otherProject = await json(app, "POST", "/api/projects", {
+    name: "Other Chat Project",
+    source: {
+      type: "git-repository",
+      url: "https://github.com/example/other.git",
+    },
+  });
+  assert.equal(otherProject.statusCode, 201);
+
+  const otherCreated = await json(app, "POST", "/api/controlled-instances", {
+    name: "other-chat-worker",
+    projectId: otherProject.body.data.id,
+    runtimeId: "runtime_local_docker",
+    imageId: "img_default",
+  });
+  assert.equal(otherCreated.statusCode, 201);
+
+  await mock.fetchImpl(`http://127.0.0.1:8091/api/node-agent/instances/${otherCreated.body.data.id}/register`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${otherCreated.body.data.registrationToken}` },
+    body: JSON.stringify({
+      instanceId: otherCreated.body.data.id,
+      name: "other-chat-worker",
+      projectId: otherProject.body.data.id,
+      target: {
+        strategy: "direct-port",
+        web: "http://127.0.0.1:28081",
+        api: "http://127.0.0.1:28081/api",
+        status: "reachable",
+      },
+      workspace: {
+        status: "ready",
+      },
+    }),
+  });
+  await mock.fetchImpl(`http://127.0.0.1:8091/api/node-agent/instances/${otherCreated.body.data.id}/heartbeat`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${otherCreated.body.data.registrationToken}` },
+    body: JSON.stringify({
+      status: "running",
+      health: "ok",
+      connectionStatus: "online",
+      apps: {
+        runningCount: 1,
+      },
+      aiSessions: {
+        runningCount: 0,
+        waitingCount: 0,
+        staleCount: 0,
+        updatedAt: new Date().toISOString(),
+        sessions: [
+          {
+            id: "ais_other",
+            agent: "claude",
+            appSessionId: "app_other_claude",
+            status: "idle",
+            phase: "unknown",
+            summary: "Other project session",
+            startedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+        ],
+      },
+      target: {
+        status: "reachable",
+      },
+      workspace: {
+        status: "ready",
+      },
+    }),
+  });
+
+  const refreshedAppSessions = await json(app, "GET", "/api/app-sessions?refresh=true");
+  assert.equal(refreshedAppSessions.statusCode, 200);
+
+  const globalSessionList = await json(app, "POST", "/api/chat-gateway/messages", {
+    source: {
+      channel: "telegram",
+      chatSessionId: "telegram:123",
+      userId: "user-1",
+    },
+    message: {
+      text: "/sessions",
+      attachments: [],
+    },
+  });
+  assert.equal(globalSessionList.statusCode, 200);
+  assert.match(globalSessionList.body.data.reply, /Chat Project \/ chat-worker - claude - waiting\/approval - ais_2/);
+  assert.match(globalSessionList.body.data.reply, /Other Chat Project \/ other-chat-worker - claude - idle - ais_other/);
+
+  const instanceMenu = await json(app, "POST", "/api/chat-gateway/messages", {
+    source: {
+      channel: "telegram",
+      chatSessionId: "telegram:123",
+      userId: "user-1",
+    },
+    message: {
+      text: "/instances",
+      attachments: [],
+    },
+  });
+  assert.equal(instanceMenu.statusCode, 200);
+  assert.equal(instanceMenu.body.data.reply, "Instances: 1. Tap an instance to create an app.");
+  assert.deepEqual(instanceMenu.body.data.replyMarkup.inline_keyboard.map((row) => row[0].text), [
+    "chat-worker",
+  ]);
+  assert.match(instanceMenu.body.data.replyMarkup.inline_keyboard[0][0].callback_data, /^task_handoff:cp_i:/);
+  assert.ok(instanceMenu.body.data.replyMarkup.inline_keyboard[0][0].callback_data.length <= 64);
+
+  const appMenu = await json(app, "POST", "/api/chat-gateway/actions", {
+    source: {
+      channel: "telegram",
+      chatSessionId: "telegram:123",
+      userId: "user-1",
+    },
+    action: {
+      type: "instance-app-menu",
+      instanceId: created.body.data.id,
+    },
+  });
+  assert.equal(appMenu.statusCode, 200);
+  assert.equal(appMenu.body.data.reply, "New app for chat-worker");
+  assert.deepEqual(appMenu.body.data.replyMarkup.inline_keyboard.map((row) => row[0].text), ["Chromium", "Terminal", "GUI Terminal", "VS Code"]);
+  assert.match(appMenu.body.data.replyMarkup.inline_keyboard[0][0].callback_data, /^task_handoff:cp_a:/);
+  assert.ok(appMenu.body.data.replyMarkup.inline_keyboard[0][0].callback_data.length <= 64);
+
+  const launchedFromMenu = await json(app, "POST", "/api/chat-gateway/actions", {
+    source: {
+      channel: "telegram",
+      chatSessionId: "telegram:123",
+      userId: "user-1",
+    },
+    action: {
+      type: "launch-app",
+      instanceId: created.body.data.id,
+      appId: "chromium",
+    },
+  });
+  assert.equal(launchedFromMenu.statusCode, 200);
+  assert.equal(launchedFromMenu.body.data.reply, "Launched Chromium on chat-worker.");
+  assert.ok(mock.requests.some((request) => {
+    const innerBody = typeof request.body?.body === "string" ? JSON.parse(request.body.body) : request.body?.body;
+    return request.path === `/instances/${created.body.data.id}/proxy` &&
+      request.body?.path === "/api/apps/sessions" &&
+      innerBody?.appId === "chromium";
+  }));
+
+  const settingsPatch = await json(app, "PATCH", "/api/control-plane/settings", {
+    publicBaseUrl: "https://control.example.test",
+  });
+  assert.equal(settingsPatch.statusCode, 200);
+  const appSessionList = await json(app, "POST", "/api/chat-gateway/messages", {
+    source: {
+      channel: "telegram",
+      chatSessionId: "telegram:123",
+      userId: "user-1",
+    },
+    message: {
+      text: "/apps",
+      attachments: [],
+    },
+  });
+  assert.equal(appSessionList.statusCode, 200);
+  assert.equal(appSessionList.body.data.reply, "App sessions: 4. Tap a button to open.");
+  assert.ok(appSessionList.body.data.reply.length < 120);
+  assert.deepEqual(appSessionList.body.data.replyMarkup.inline_keyboard.map((row) => row[0].text), [
+    "chat-worker · Codex",
+    "chat-worker · Claude",
+    "chat-worker · Chromium",
+    "other-chat-worker · Claude",
+  ]);
+  assert.match(appSessionList.body.data.replyMarkup.inline_keyboard[0][0].url, /^https:\/\/control\.example\.test\/apps\/access\/tty\?token=/);
+  assert.equal(appSessionList.body.data.replyMarkup.inline_keyboard[0][0].callback_data, undefined);
+
+  await mock.fetchImpl(`http://127.0.0.1:8091/api/node-agent/instances/${created.body.data.id}/heartbeat`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${created.body.data.registrationToken}` },
+    body: JSON.stringify({
+      status: "running",
+      health: "ok",
+      connectionStatus: "online",
+      apps: {
+        runningCount: 0,
+      },
+      aiSessions: {
+        runningCount: 1,
+        waitingCount: 0,
+        staleCount: 0,
+        updatedAt: new Date().toISOString(),
+        sessions: [
+          {
+            id: "ais_snapshot_only",
+            agent: "claude",
+            appSessionId: "app_not_yet_synced",
+            status: "idle",
+            phase: "unknown",
+            summary: "Available from AI session snapshot",
+            startedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+        ],
+      },
+      target: {
+        status: "reachable",
+      },
+      workspace: {
+        status: "ready",
+      },
+    }),
+  });
+
+  const snapshotOnlySessionList = await json(app, "POST", "/api/chat-gateway/messages", {
+    source: {
+      channel: "telegram",
+      chatSessionId: "telegram:123",
+      userId: "user-1",
+    },
+    message: {
+      text: "/sessions",
+      attachments: [],
+    },
+  });
+  assert.equal(snapshotOnlySessionList.statusCode, 200);
+  assert.match(snapshotOnlySessionList.body.data.reply, /Select AI session/);
+  assert.doesNotMatch(snapshotOnlySessionList.body.data.reply, /ais_snapshot_only/);
+  assert.match(snapshotOnlySessionList.body.data.reply, /ais_other/);
+  assert.deepEqual(snapshotOnlySessionList.body.data.replyMarkup.inline_keyboard.map((row) => row[0].callback_data), [
+    "task_handoff:cp_session:0",
+    "task_handoff:cp_session:1",
+    "task_handoff:cp_session:2",
+  ]);
+
+  await mock.fetchImpl(`http://127.0.0.1:8091/api/node-agent/instances/${created.body.data.id}/heartbeat`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${created.body.data.registrationToken}` },
+    body: JSON.stringify({
+      status: "running",
+      health: "ok",
+      connectionStatus: "online",
+      apps: {
+        runningCount: 2,
+      },
+      aiSessions: {
+        runningCount: 1,
+        waitingCount: 0,
+        staleCount: 0,
+        updatedAt: new Date().toISOString(),
+        sessions: [
+          {
+            id: "ais_1",
+            agent: "codex",
+            appSessionId: "app_codex",
+            status: "running",
+            phase: "responding",
+            summary: "Working",
+            startedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+          {
+            id: "ais_2",
+            agent: "claude",
+            appSessionId: "app_claude",
+            status: "waiting",
+            phase: "approval",
+            summary: "Needs approval",
+            startedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+        ],
+      },
+      target: {
+        status: "reachable",
+      },
+      workspace: {
+        status: "ready",
+      },
+    }),
+  });
+  const refreshedActionAppSessions = await json(app, "GET", "/api/app-sessions?refresh=true");
+  assert.equal(refreshedActionAppSessions.statusCode, 200);
+
+  const actionSelected = await app.inject({
+    method: "POST",
+    url: "/api/chat-gateway/messages",
+    payload: {
+      source: {
+        channel: "telegram",
+        chatSessionId: "telegram:123",
+        userId: "user-1",
+      },
+      message: {
+        text: "/session ais_2",
+        attachments: [],
+      },
+    },
+  });
+  const parsedActionSelected = JSON.parse(actionSelected.body);
+  assert.equal(actionSelected.statusCode, 200);
+  assert.equal(parsedActionSelected.data.binding.activeAiSessionId, "ais_2");
+
+  const sent = await json(app, "POST", "/api/chat-gateway/messages", {
+    source: {
+      channel: "telegram",
+      chatSessionId: "telegram:123",
+      userId: "user-1",
+    },
+    message: {
+      text: "run tests",
+      attachments: [],
+    },
+  });
+  assert.equal(sent.statusCode, 200);
+  assert.equal(sent.body.data.routed, true);
+  assert.equal(sent.body.data.binding.activeAiSessionId, "ais_2");
+  const aiForwardsAfterSent = forwarded.filter((entry) => /^\/api\/ai-sessions\/[^/]+\/(messages|interrupt)$/.test(entry.body.path));
+  assert.equal(aiForwardsAfterSent.length, 1);
+  assert.equal(aiForwardsAfterSent[0].body.path, "/api/ai-sessions/ais_2/messages");
+  assert.equal(aiForwardsAfterSent[0].body.method, "POST");
+  assert.deepEqual(JSON.parse(aiForwardsAfterSent[0].body.body), { message: "run tests" });
+
+  const aiSessionSelected = await json(app, "POST", "/api/chat-gateway/messages", {
+    source: {
+      channel: "telegram",
+      chatSessionId: "telegram:123",
+      userId: "user-1",
+    },
+    message: {
+      text: "/session ais_1",
+      attachments: [],
+    },
+  });
+  assert.equal(aiSessionSelected.statusCode, 200);
+  assert.equal(aiSessionSelected.body.data.binding.activeAiSessionId, "ais_1");
+
+  const aiSent = await json(app, "POST", "/api/chat-gateway/messages", {
+    source: {
+      channel: "telegram",
+      chatSessionId: "telegram:123",
+      userId: "user-1",
+    },
+    message: {
+      text: "continue",
+      attachments: [],
+    },
+  });
+  assert.equal(aiSent.statusCode, 200);
+  assert.equal(aiSent.body.data.routed, true);
+  const aiForwardsAfterContinue = forwarded.filter((entry) => /^\/api\/ai-sessions\/[^/]+\/(messages|interrupt)$/.test(entry.body.path));
+  assert.equal(aiForwardsAfterContinue.length, 2);
+  assert.equal(aiForwardsAfterContinue[1].body.path, "/api/ai-sessions/ais_1/messages");
+  assert.equal(aiForwardsAfterContinue[1].body.method, "POST");
+  assert.deepEqual(JSON.parse(aiForwardsAfterContinue[1].body.body), { message: "continue" });
+
+  const interrupted = await json(app, "POST", "/api/chat-gateway/messages", {
+    source: {
+      channel: "telegram",
+      chatSessionId: "telegram:123",
+      userId: "user-1",
+    },
+    message: {
+      text: "/cancel",
+      attachments: [],
+    },
+  });
+  assert.equal(interrupted.statusCode, 200);
+  assert.equal(interrupted.body.data.routed, true);
+  const aiForwardsAfterInterrupt = forwarded.filter((entry) => /^\/api\/ai-sessions\/[^/]+\/(messages|interrupt)$/.test(entry.body.path));
+  assert.equal(aiForwardsAfterInterrupt.length, 3);
+  assert.equal(aiForwardsAfterInterrupt[2].body.path, "/api/ai-sessions/ais_1/interrupt");
+  assert.equal(aiForwardsAfterInterrupt[2].body.method, "POST");
+  assert.deepEqual(JSON.parse(aiForwardsAfterInterrupt[2].body.body), {});
+
+  const unknown = await json(app, "POST", "/api/chat-gateway/messages", {
+    source: {
+      channel: "telegram",
+      chatSessionId: "telegram:123",
+      userId: "user-1",
+    },
+    message: {
+      text: "/wat",
+      attachments: [],
+    },
+  });
+  assert.equal(unknown.statusCode, 200);
+  assert.match(unknown.body.data.reply, /Try \/help/);
+
+  const sessions = await json(app, "GET", "/api/chat/sessions");
+  assert.equal(sessions.statusCode, 200);
+  assert.equal(sessions.body.data.length, 1);
+  assert.equal(sessions.body.data[0].id, "telegram:telegram:123");
+  assert.equal(sessions.body.data[0].activeAiSessionId, "ais_1");
+});
+
+test("control plane chat gateway clears stale ai session bindings instead of crashing", async (t) => {
+  const forwarded = [];
+  const mock = createMockNodeAgentFetch({
+    proxy: ({ init, body, jsonResponse, errorResponse }) => {
+      forwarded.push({
+        method: init.method,
+        body,
+      });
+      if (body.path === "/api/apps/sessions/state") {
+        const updatedAt = new Date().toISOString();
+        const sessions = [{ id: "app_missing", appId: "codex", kind: "tty", status: "running" }];
+        return jsonResponse({ streamId: "app_stale_stream", revision: 1, lastEventAt: updatedAt, snapshot: { runningCount: 1, problemCount: 0, sessions, updatedAt } });
+      }
+      if (body.path === "/api/ai-sessions/state") {
+        const updatedAt = new Date().toISOString();
+        const sessions = [{ id: "ais_missing", agent: "codex", appSessionId: "app_missing", status: "running", phase: "responding", summary: "Stale session", startedAt: updatedAt, updatedAt }];
+        return jsonResponse({ streamId: "ai_stale_stream", revision: 1, lastEventAt: updatedAt, snapshot: { runningCount: 1, waitingCount: 0, staleCount: 0, sessions, updatedAt } });
+      }
+      if (body.path === "/api/apps/sessions" && body.method === "GET") {
+        return jsonResponse([{ id: "app_missing", appId: "codex", kind: "tty", status: "running" }]);
+      }
+      if (body.path === "/api/ai-sessions/ais_missing/messages") {
+        return errorResponse("AI session not found.", 404, "AI_SESSION_NOT_FOUND");
+      }
+      return jsonResponse({ accepted: true });
+    },
+  });
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-chat-stale-ai-session"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: {
+      fetchImpl: mock.fetchImpl,
+    },
+  });
+  t.after(() => app.close());
+
+  const project = await json(app, "POST", "/api/projects", {
+    name: "Chat Project",
+    source: {
+      type: "git-repository",
+      url: "https://github.com/example/repo.git",
+    },
+  });
+  assert.equal(project.statusCode, 201);
+
+  const created = await json(app, "POST", "/api/controlled-instances", {
+    name: "chat-worker",
+    projectId: project.body.data.id,
+    runtimeId: "runtime_local_docker",
+    imageId: "img_default",
+  });
+  assert.equal(created.statusCode, 201);
+
+  await mock.fetchImpl(`http://127.0.0.1:8091/api/node-agent/instances/${created.body.data.id}/register`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${created.body.data.registrationToken}` },
+    body: JSON.stringify({
+      instanceId: created.body.data.id,
+      name: "chat-worker",
+      projectId: project.body.data.id,
+      target: {
+        strategy: "direct-port",
+        web: "http://127.0.0.1:18081",
+        api: "http://127.0.0.1:18081/api",
+        status: "reachable",
+      },
+      workspace: {
+        status: "ready",
+      },
+    }),
+  });
+  await mock.fetchImpl(`http://127.0.0.1:8091/api/node-agent/instances/${created.body.data.id}/heartbeat`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${created.body.data.registrationToken}` },
+    body: JSON.stringify({
+      status: "running",
+      health: "ok",
+      connectionStatus: "online",
+      apps: {
+        runningCount: 1,
+      },
+      aiSessions: {
+        runningCount: 1,
+        waitingCount: 0,
+        staleCount: 0,
+        updatedAt: new Date().toISOString(),
+        sessions: [{
+          id: "ais_missing",
+          agent: "codex",
+          appSessionId: "app_missing",
+          status: "running",
+          phase: "responding",
+          summary: "Stale session",
+          startedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }],
+      },
+      target: {
+        status: "reachable",
+      },
+      workspace: {
+        status: "ready",
+      },
+    }),
+  });
+
+  const selected = await json(app, "POST", "/api/chat-gateway/messages", {
+    source: {
+      channel: "telegram",
+      chatSessionId: "telegram:stale",
+      userId: "user-1",
+    },
+    message: {
+      text: `/use ${project.body.data.id}`,
+      attachments: [],
+    },
+  });
+  assert.equal(selected.statusCode, 200);
+  assert.equal(selected.body.data.binding.activeInstanceId, created.body.data.id);
+  assert.equal(selected.body.data.binding.activeAiSessionId, "ais_missing");
+
+  const sessionSelected = await json(app, "POST", "/api/chat-gateway/messages", {
+    source: {
+      channel: "telegram",
+      chatSessionId: "telegram:stale",
+      userId: "user-1",
+    },
+    message: {
+      text: "/session ais_missing",
+      attachments: [],
+    },
+  });
+  assert.equal(sessionSelected.statusCode, 200);
+  assert.equal(sessionSelected.body.data.binding.activeAiSessionId, "ais_missing");
+
+  const sent = await json(app, "POST", "/api/chat-gateway/messages", {
+    source: {
+      channel: "telegram",
+      chatSessionId: "telegram:stale",
+      userId: "user-1",
+    },
+    message: {
+      text: "hello",
+      attachments: [],
+    },
+  });
+  assert.equal(sent.statusCode, 200);
+  assert.equal(sent.body.data.routed, false);
+  assert.equal(sent.body.data.binding.activeAiSessionId, undefined);
+  assert.match(sent.body.data.reply, /no longer exists/i);
+  assert.equal(forwarded.filter((entry) => entry.body.path === "/api/ai-sessions/ais_missing/messages").length, 1);
+
+  const sessions = await json(app, "GET", "/api/chat/sessions");
+  assert.equal(sessions.statusCode, 200);
+  assert.equal(sessions.body.data[0].activeAiSessionId, undefined);
+});
+
+test("control plane chat bridge config patch does not stop an enabled bridge", async (t) => {
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-chat-bridge-enabled-patch"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+  });
+  t.after(() => app.close());
+
+  const created = await json(app, "POST", "/api/chat-gateway/bridges", {
+    channel: "telegram",
+    name: "Telegram",
+    token: "telegram-token",
+    enabled: true,
+  });
+  assert.equal(created.statusCode, 200);
+  const bridgeId = created.body.data.id;
+
+  const started = await json(app, "POST", `/api/chat-gateway/bridges/${bridgeId}/start`);
+  assert.equal(started.statusCode, 200);
+  assert.equal(started.body.data.bridges.find((bridge) => bridge.id === bridgeId)?.running, true);
+
+  const patched = await json(app, "PATCH", `/api/chat-gateway/bridges/${bridgeId}`, {
+    name: "Telegram renamed",
+    pollIntervalMs: 5000,
+    settings: { telegramLastUpdateId: 123 },
+  });
+  assert.equal(patched.statusCode, 200);
+  assert.equal(patched.body.data.enabled, true);
+
+  const bridges = await json(app, "GET", "/api/chat-gateway/bridges");
+  assert.equal(bridges.statusCode, 200);
+  assert.equal(bridges.body.data.find((bridge) => bridge.id === bridgeId)?.enabled, true);
+
+  const status = await json(app, "GET", "/api/chat-gateway/status");
+  assert.equal(status.statusCode, 200);
+  assert.equal(status.body.data.bridges.find((bridge) => bridge.id === bridgeId)?.running, true);
+});
+
+test("control plane telegram bridge polls messages and sends replies", async (t) => {
+  const calls = [];
+  const forwarded = [];
+  const mock = createMockNodeAgentFetch();
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-telegram-bridge"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: {
+      fetchImpl: async (url, init = {}) => {
+        if (String(url).includes("/api/node-agent/")) {
+          return mock.fetchImpl(url, init);
+        }
+        calls.push({
+          url,
+          method: init.method || "GET",
+          body: init.body ? JSON.parse(init.body) : undefined,
+        });
+        if (String(url).includes("getUpdates")) {
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              result: [
+                {
+                  update_id: 100,
+                  message: {
+                    text: "/instances",
+                    chat: { id: 123 },
+                    from: { id: 456 },
+                  },
+                },
+                {
+                  update_id: 101,
+                  message: {
+                    text: "/instances",
+                    chat: { id: 789 },
+                    from: { id: 789 },
+                  },
+                },
+              ],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        if (String(url).includes("sendMessage")) {
+          return new Response(JSON.stringify({ ok: true, result: {} }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        forwarded.push({ url, init });
+        return new Response(JSON.stringify({ data: { accepted: true } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    },
+  });
+  t.after(() => app.close());
+
+  const createdBridge = await json(app, "POST", "/api/chat-gateway/bridges", {
+    channel: "telegram",
+    name: "Telegram Ops",
+  });
+  assert.equal(createdBridge.statusCode, 200);
+
+  const patched = await json(app, "PATCH", `/api/chat-gateway/bridges/${createdBridge.body.data.id}`, {
+    token: "telegram-token",
+    pollIntervalMs: 30000,
+  });
+  assert.equal(patched.statusCode, 200);
+  assert.equal(patched.body.data.token, undefined);
+  assert.equal(patched.body.data.tokenSet, true);
+
+  const started = await json(app, "POST", `/api/chat-gateway/bridges/${createdBridge.body.data.id}/start`);
+  assert.equal(started.statusCode, 200);
+  await new Promise((resolve) => setTimeout(resolve, 80));
+
+  assert.ok(calls.some((call) => String(call.url).includes("getUpdates")));
+  const sentMessages = calls.filter((call) => String(call.url).includes("sendMessage"));
+  assert.equal(sentMessages.length, 1);
+  const sent = sentMessages[0];
+  assert.ok(sent);
+  assert.match(sent.body.text, /No controlled instances/);
+
+  const bridges = await json(app, "GET", "/api/chat-gateway/bridges");
+  assert.deepEqual(
+    bridges.body.data.find((bridge) => bridge.id === createdBridge.body.data.id)?.allowedUserIds,
+    ["456"],
+  );
+
+  const stopped = await json(app, "POST", `/api/chat-gateway/bridges/${createdBridge.body.data.id}/stop`);
+  assert.equal(stopped.statusCode, 200);
+});
+
+test("control plane telegram bridge renders ai session buttons and handles selections", async () => {
+  const calls = [];
+  const bridge = {
+    id: "chat_telegram_test",
+    channel: "telegram",
+    name: "Telegram Test",
+    enabled: true,
+    token: "telegram-token",
+    tokenSet: true,
+    defaultChatId: "",
+    allowedUserIds: ["456"],
+    pollIntervalMs: 30000,
+    settings: {},
+  };
+  let aiSessionLastMessage = "";
+  let aiSessionStatus = "idle";
+  let aiSessionPhase = "unknown";
+  const service = {
+    listChatBridges: () => [bridge],
+    requireChatBridge: () => bridge,
+    handleChatGatewayMessage: async (message) => {
+      calls.push({ type: "message", message });
+      if (message.message.text === "hello") {
+        return {
+          routed: true,
+          instance: { id: "inst_1" },
+          aiSession: {
+            session: {
+              id: "ais_2",
+              agent: "claude",
+              activeTurnId: "turn_1",
+              status: "running",
+              phase: "responding",
+              updatedAt: "2026-07-03T00:00:00.000Z",
+            },
+            provider: "claude",
+            action: "send",
+            providerTurnId: "turn_1",
+          },
+          reply: "Sent to Project / inst / ais_2.",
+        };
+      }
+      return {
+        reply: "Select AI session\n1. Project / inst - codex - running - ais_1\n2. Project / inst - claude - waiting - ais_2",
+        replyMarkup: {
+          inline_keyboard: [
+            [{ text: "inst - codex running", callback_data: "task_handoff:cp_session:0" }],
+            [{ text: "inst - claude waiting", callback_data: "task_handoff:cp_session:1" }],
+          ],
+        },
+      };
+    },
+    handleChatGatewayAction: async (input) => {
+      calls.push({ type: "action", input });
+      if (input.action.type === "pending-decision") {
+        return {
+          accepted: true,
+          message: `${input.action.decision} sent`,
+          reply: `${input.action.decision} sent to ${input.action.routeId}.`,
+        };
+      }
+      return {
+        message: "selected ais_2",
+        reply: "Current chat is bound to AI session ais_2",
+        replyMarkup: {
+          inline_keyboard: [
+            [{ text: "inst - codex running", callback_data: "task_handoff:cp_session:0" }],
+            [{ text: "✓ inst - claude waiting", callback_data: "task_handoff:cp_session:1" }],
+          ],
+        },
+      };
+    },
+    listChatSessions: () => [{
+      id: "telegram:123",
+      channel: "telegram",
+      bridgeId: bridge.id,
+      chatSessionId: "123",
+      activeInstanceId: "inst_1",
+      activeAiSessionId: "ais_2",
+    }],
+    boardAsync: async () => [{
+      id: "inst_1",
+      name: "instance-main",
+    }],
+    listAiSessions: async () => ({
+      updatedAt: "2026-07-03T00:00:02.000Z",
+      instances: [{
+        instanceId: "inst_1",
+        aiSessions: {
+          runningCount: 0,
+          waitingCount: 0,
+          staleCount: 0,
+          updatedAt: "2026-07-03T00:00:02.000Z",
+          sessions: [{
+            id: "ais_2",
+            agent: "claude",
+            status: aiSessionStatus,
+            phase: aiSessionPhase,
+            lastMessage: aiSessionLastMessage,
+            turns: aiSessionTurns,
+            updatedAt: aiSessionLastMessage ? "2026-07-03T00:00:03.000Z" : "2026-07-03T00:00:00.000Z",
+            startedAt: "2026-07-03T00:00:00.000Z",
+          }],
+        },
+      }],
+    }),
+    listPendingRoutes: async () => [],
+  };
+  let pollCount = 0;
+  let telegramMessageId = 1000;
+  let aiSessionTurns = [];
+  const runtime = new ControlPlaneChatGatewayRuntime(service, async (url, init = {}) => {
+    calls.push({
+      type: "fetch",
+      url: String(url),
+      body: init.body ? JSON.parse(init.body) : undefined,
+    });
+    if (String(url).includes("getUpdates")) {
+      pollCount += 1;
+      return new Response(JSON.stringify({
+        ok: true,
+        result: pollCount === 1
+          ? [{
+              update_id: 1,
+              message: {
+                message_id: 10,
+                text: "/session",
+                chat: { id: 123 },
+                from: { id: 456 },
+              },
+            }]
+          : pollCount === 2
+            ? [{
+              update_id: 2,
+              callback_query: {
+                id: "callback-1",
+                data: "task_handoff:cp_session:1",
+                from: { id: 456 },
+                message: {
+                  message_id: 10,
+                  chat: { id: 123 },
+                },
+              },
+            }]
+            : pollCount === 3
+              ? [{
+                  update_id: 3,
+                  message: {
+                    message_id: 12,
+                    text: "hello",
+                    chat: { id: 123 },
+                    from: { id: 456 },
+                  },
+                }]
+              : [{
+                update_id: 4,
+                callback_query: {
+                  id: "callback-2",
+                  data: "task_handoff:approval:inst_1:ai:ais_2:allow",
+                  from: { id: 456 },
+                  message: {
+                    message_id: telegramMessageId,
+                    chat: { id: 123 },
+                  },
+                },
+              }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (String(url).includes("sendMessage")) {
+      telegramMessageId += 1;
+      return new Response(JSON.stringify({ ok: true, result: { message_id: telegramMessageId } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify({ ok: true, result: {} }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  });
+
+  await runtime.pollBridgeNow(bridge.id);
+  const sent = calls.find((call) => call.type === "fetch" && call.url.includes("sendMessage"));
+  assert.ok(sent);
+  assert.equal(sent.body.chat_id, "123");
+  assert.match(sent.body.text, /Select AI session/);
+  assert.equal(sent.body.parse_mode, "MarkdownV2");
+  assert.equal(sent.body.disable_web_page_preview, true);
+  assert.equal(sent.body.reply_markup.inline_keyboard[1][0].callback_data, "task_handoff:cp_session:1");
+
+  await runtime.pollBridgeNow(bridge.id);
+  const action = calls.find((call) => call.type === "action");
+  assert.equal(action.input.source.chatSessionId, "123");
+  assert.equal(action.input.source.userId, "456");
+  assert.deepEqual(action.input.action, { type: "ai-session", index: 1 });
+  const answered = calls.find((call) => call.type === "fetch" && call.url.includes("answerCallbackQuery"));
+  assert.equal(answered.body.callback_query_id, "callback-1");
+  const edited = calls.find((call) => call.type === "fetch" && call.url.includes("editMessageText"));
+  assert.equal(edited.body.message_id, 10);
+  assert.match(edited.body.text, /bound to AI session ais\\_2/);
+  assert.equal(edited.body.parse_mode, "MarkdownV2");
+  assert.match(edited.body.reply_markup.inline_keyboard[1][0].text, /claude waiting/);
+  const sendCountAfterSelection = calls.filter((call) => call.type === "fetch" && call.url.includes("sendMessage")).length;
+  await runtime.pollAiSessionsNow();
+  assert.equal(calls.filter((call) => call.type === "fetch" && call.url.includes("sendMessage")).length, sendCountAfterSelection);
+
+  await runtime.pollBridgeNow(bridge.id);
+  await waitTelegramAggregate();
+  const sentAck = calls.filter((call) => call.type === "fetch" && call.url.includes("sendMessage")).at(-1);
+  assert.equal(sentAck.body.reply_to_message_id, 12);
+  assert.match(sentAck.body.text, /Sent to Project/);
+  assert.equal(sentAck.body.parse_mode, "MarkdownV2");
+  const sentAckMessageId = telegramMessageId;
+
+  aiSessionTurns = [{
+    id: "turn_1",
+    userPrompt: "hello",
+    updatedAt: "2026-07-03T00:00:02.500Z",
+  }];
+  aiSessionStatus = "running";
+  aiSessionPhase = "thinking";
+  await runtime.pollAiSessionsNow();
+  assert.equal(calls.filter((call) => call.type === "fetch" && call.url.includes("editMessageText")).length, 1);
+
+  aiSessionLastMessage = "你好。需要我在 /Users/example/project/work 里处理哪个项目？";
+  aiSessionTurns = [{
+    id: "turn_1",
+    providerTurnId: "claude_transcript_turn_1",
+    userPrompt: "hello",
+    lastMessage: aiSessionLastMessage,
+    updatedAt: "2026-07-03T00:00:03.000Z",
+  }];
+  aiSessionStatus = "running";
+  aiSessionPhase = "responding";
+  await runtime.pollAiSessionsNow();
+  await waitTelegramAggregate();
+  const runningReply = calls.filter((call) => call.type === "fetch" && call.url.includes("editMessageText")).at(-1);
+  assert.equal(runningReply.body.message_id, sentAckMessageId);
+  assert.match(runningReply.body.text, /需要我在/);
+  assert.equal(calls.filter((call) => call.type === "fetch" && call.url.includes("sendMessage")).length, sendCountAfterSelection + 1);
+
+  aiSessionStatus = "idle";
+  aiSessionPhase = "unknown";
+  await runtime.pollAiSessionsNow();
+  await waitTelegramAggregate();
+  const aiReply = calls.filter((call) => call.type === "fetch" && call.url.includes("editMessageText")).at(-1);
+  assert.equal(aiReply.body.message_id, sentAckMessageId);
+  assert.match(aiReply.body.text, /^\*instance\\-main · claude idle\*/);
+  assert.match(aiReply.body.text, /需要我在/);
+  const sendCountAfterAiReply = calls.filter((call) => call.type === "fetch" && call.url.includes("sendMessage")).length;
+  const editCountAfterAiReply = calls.filter((call) => call.type === "fetch" && call.url.includes("editMessageText")).length;
+  await runtime.pollAiSessionsNow();
+  assert.equal(calls.filter((call) => call.type === "fetch" && call.url.includes("sendMessage")).length, sendCountAfterAiReply);
+  assert.equal(calls.filter((call) => call.type === "fetch" && call.url.includes("editMessageText")).length, editCountAfterAiReply);
+
+  aiSessionLastMessage = "";
+  aiSessionTurns = [{
+    id: "turn_1",
+    userPrompt: "hello",
+    lastMessage: "你好。需要我在这个工作目录里处理哪个项目或 workflow?",
+    updatedAt: "2026-07-03T00:00:04.000Z",
+  }];
+  await runtime.pollAiSessionsNow();
+  await waitTelegramAggregate();
+  const turnReply = calls.filter((call) => call.type === "fetch" && call.url.includes("editMessageText")).at(-1);
+  assert.equal(turnReply.body.message_id, sentAckMessageId);
+  assert.match(turnReply.body.text, /这个工作目录/);
+
+  await runtime.pollBridgeNow(bridge.id);
+  const approvalAction = calls.filter((call) => call.type === "action").at(-1);
+  assert.deepEqual(approvalAction.input.action, {
+    type: "pending-decision",
+    routeId: "inst_1:ai:ais_2",
+    decision: "allow",
+  });
+  const approvalAnswer = calls.filter((call) => call.type === "fetch" && call.url.includes("answerCallbackQuery")).at(-1);
+  assert.equal(approvalAnswer.body.text, "");
+  assert.equal(calls.some((call) => call.type === "fetch" && call.url.includes("deleteMessage")), false);
+  assert.equal(calls.some((call) => call.type === "fetch" && call.url.includes("editMessageText") && /allow sent/i.test(call.body.text || "")), false);
+});
+
+test("control plane telegram bridge deletes standalone approval cards after decisions", async () => {
+  const calls = [];
+  const bridge = {
+    id: "chat_telegram_standalone_approval",
+    channel: "telegram",
+    name: "Telegram",
+    enabled: true,
+    token: "telegram-token",
+    tokenSet: true,
+    defaultChatId: "123",
+    allowedUserIds: [],
+    pollIntervalMs: 30000,
+    settings: {},
+  };
+  const service = {
+    listChatBridges: () => [bridge],
+    requireChatBridge: () => bridge,
+    updateChatBridge: (_id, input) => {
+      calls.push({ type: "update", input });
+    },
+    resolveChatActionToken: () => ({
+      type: "pending-decision",
+      routeId: "task_1",
+      decision: "allow",
+    }),
+    handleChatGatewayAction: async (input) => {
+      calls.push({ type: "action", input });
+      return { accepted: true, message: "allow sent" };
+    },
+    listPendingRoutes: async () => [],
+  };
+  const runtime = new ControlPlaneChatGatewayRuntime(service, async (url, init = {}) => {
+    calls.push({
+      type: "fetch",
+      url: String(url),
+      body: init.body ? JSON.parse(init.body) : undefined,
+    });
+    if (String(url).includes("getUpdates")) {
+      return new Response(JSON.stringify({
+        ok: true,
+        result: [{
+          update_id: 1,
+          callback_query: {
+            id: "callback-approval",
+            data: "task_handoff:cp_p:allow_token",
+            from: { id: 456 },
+            message: {
+              message_id: 20,
+              chat: { id: 123 },
+            },
+          },
+        }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return new Response(JSON.stringify({ ok: true, result: {} }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  });
+
+  await runtime.pollBridgeNow(bridge.id);
+
+  assert.deepEqual(bridge.allowedUserIds, ["456"]);
+  assert.deepEqual(
+    calls.find((call) => call.type === "update" && call.input.allowedUserIds)?.input,
+    { allowedUserIds: ["456"] },
+  );
+
+  const approvalAction = calls.find((call) => call.type === "action");
+  assert.deepEqual(approvalAction.input.action, {
+    type: "pending-decision",
+    routeId: "task_1",
+    decision: "allow",
+  });
+  const approvalAnswer = calls.filter((call) => call.type === "fetch" && call.url.includes("answerCallbackQuery")).at(-1);
+  assert.equal(approvalAnswer.body.text, "");
+  const deleteMessage = calls.filter((call) => call.type === "fetch" && call.url.includes("deleteMessage")).at(-1);
+  assert.equal(deleteMessage.body.chat_id, "123");
+  assert.equal(deleteMessage.body.message_id, 20);
+  assert.equal(calls.some((call) => call.type === "fetch" && call.url.includes("editMessageText")), false);
+});
+
+test("control plane telegram bridge appends downloaded image paths to messages", async () => {
+  const calls = [];
+  const receivedMessages = [];
+  const bridge = {
+    id: "chat_telegram_images",
+    channel: "telegram",
+    name: "Telegram Images",
+    enabled: true,
+    token: "telegram-token",
+    tokenSet: true,
+    defaultChatId: "",
+    allowedUserIds: ["456"],
+    pollIntervalMs: 30000,
+    settings: {},
+  };
+  const runtime = new ControlPlaneChatGatewayRuntime(
+    {
+      listChatBridges: () => [bridge],
+      requireChatBridge: () => bridge,
+      listChatSessions: () => [],
+      listPendingRoutes: async () => [],
+      handleChatGatewayMessage: async (message) => {
+        receivedMessages.push(message);
+        return { reply: "ok" };
+      },
+    },
+    async (url, init = {}) => {
+      calls.push({
+        url: String(url),
+        body: init.body ? JSON.parse(init.body) : undefined,
+      });
+      const value = String(url);
+      if (value.includes("getUpdates")) {
+        return new Response(JSON.stringify({
+          ok: true,
+          result: [{
+            update_id: 100,
+            message: {
+              caption: "看一下这张图",
+              photo: [
+                { file_id: "small", file_size: 10, width: 10 },
+                { file_id: "large", file_size: 20, width: 20 },
+              ],
+              chat: { id: 123 },
+              from: { id: 456 },
+            },
+          }],
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (value.includes("getFile")) {
+        assert.equal(JSON.parse(init.body).file_id, "large");
+        return new Response(JSON.stringify({
+          ok: true,
+          result: { file_path: "photos/large.jpg" },
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (value.includes("/file/bottelegram-token/photos/large.jpg")) {
+        return new Response(Buffer.from("image-bytes"), {
+          status: 200,
+          headers: { "content-type": "image/jpeg", "content-length": "11" },
+        });
+      }
+      if (value.includes("sendMessage")) {
+        return new Response(JSON.stringify({ ok: true, result: {} }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      throw new Error(`unexpected request: ${value}`);
+    },
+  );
+
+  await runtime.pollBridgeNow(bridge.id);
+  await waitTelegramAggregate();
+
+  assert.equal(receivedMessages.length, 1);
+  assert.equal(receivedMessages[0].message.text, "看一下这张图");
+  assert.equal(receivedMessages[0].message.attachments.length, 1);
+  assert.equal(receivedMessages[0].message.attachments[0].kind, "image");
+  assert.equal(receivedMessages[0].message.attachments[0].mime, "image/jpeg");
+  assert.equal(receivedMessages[0].message.attachments[0].size, 11);
+  assert.equal(receivedMessages[0].message.attachments[0].data, Buffer.from("image-bytes").toString("base64"));
+  assert.match(receivedMessages[0].message.attachments[0].name, /^telegram-/);
+  assert.ok(calls.some((call) => call.url.includes("getFile")));
+  assert.ok(calls.some((call) => call.url.includes("/file/bottelegram-token/photos/large.jpg")));
+});
+
+test("control plane telegram bridge does not download images from unauthorized users", async () => {
+  const calls = [];
+  const bridge = {
+    id: "chat_telegram_unauthorized_images",
+    channel: "telegram",
+    name: "Telegram Unauthorized Images",
+    enabled: true,
+    token: "telegram-token",
+    tokenSet: true,
+    defaultChatId: "",
+    allowedUserIds: ["456"],
+    pollIntervalMs: 30000,
+    settings: {},
+  };
+  const runtime = new ControlPlaneChatGatewayRuntime(
+    {
+      listChatBridges: () => [bridge],
+      requireChatBridge: () => bridge,
+      listChatSessions: () => [],
+      listPendingRoutes: async () => [],
+      handleChatGatewayMessage: async () => {
+        throw new Error("unauthorized message should not be handled");
+      },
+    },
+    async (url, init = {}) => {
+      calls.push({
+        url: String(url),
+        body: init.body ? JSON.parse(init.body) : undefined,
+      });
+      const value = String(url);
+      if (value.includes("getUpdates")) {
+        return new Response(JSON.stringify({
+          ok: true,
+          result: [{
+            update_id: 100,
+            message: {
+              caption: "unauthorized image",
+              photo: [{ file_id: "large", file_size: 20, width: 20 }],
+              chat: { id: 123 },
+              from: { id: 999 },
+            },
+          }],
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      throw new Error(`unexpected request: ${value}`);
+    },
+  );
+
+  await runtime.pollBridgeNow(bridge.id);
+
+  assert.equal(calls.filter((call) => call.url.includes("getFile")).length, 0);
+  assert.equal(calls.filter((call) => call.url.includes("/file/bottelegram-token/")).length, 0);
+});
+
+test("control plane telegram bridge auto begins collection for a single image without caption", async () => {
+  const calls = [];
+  const receivedMessages = [];
+  const bridge = {
+    id: "chat_telegram_image_begin",
+    channel: "telegram",
+    name: "Telegram Image Begin",
+    enabled: true,
+    token: "telegram-token",
+    tokenSet: true,
+    defaultChatId: "",
+    allowedUserIds: ["456"],
+    pollIntervalMs: 30000,
+    settings: {},
+  };
+  let pollCount = 0;
+  const runtime = new ControlPlaneChatGatewayRuntime(
+    {
+      listChatBridges: () => [bridge],
+      requireChatBridge: () => bridge,
+      listChatSessions: () => [],
+      listPendingRoutes: async () => [],
+      handleChatGatewayMessage: async (message) => {
+        receivedMessages.push(message);
+        return { reply: "ok" };
+      },
+    },
+    async (url, init = {}) => {
+      calls.push({
+        url: String(url),
+        body: init.body ? JSON.parse(init.body) : undefined,
+      });
+      const value = String(url);
+      if (value.includes("getUpdates")) {
+        pollCount += 1;
+        const result = pollCount === 1
+          ? [{
+              update_id: 100,
+              message: {
+                message_id: 10,
+                photo: [{ file_id: "single", file_size: 20, width: 20 }],
+                chat: { id: 123 },
+                from: { id: 456 },
+              },
+            }]
+          : pollCount === 2
+            ? [{
+                update_id: 101,
+                message: { message_id: 11, text: "/end", chat: { id: 123 }, from: { id: 456 } },
+              }]
+            : [];
+        return new Response(JSON.stringify({ ok: true, result }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (value.includes("getFile")) {
+        assert.equal(JSON.parse(init.body).file_id, "single");
+        return new Response(JSON.stringify({
+          ok: true,
+          result: { file_path: "photos/single.jpg" },
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (value.includes("/file/bottelegram-token/photos/single.jpg")) {
+        return new Response(Buffer.from("image-bytes"), {
+          status: 200,
+          headers: { "content-type": "image/jpeg", "content-length": "11" },
+        });
+      }
+      if (value.includes("sendMessage")) {
+        return new Response(JSON.stringify({ ok: true, result: {} }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      throw new Error(`unexpected request: ${value}`);
+    },
+  );
+
+  await runtime.pollBridgeNow(bridge.id);
+  const beginReply = calls.filter((call) => call.url.includes("sendMessage")).at(-1);
+  assert.match(beginReply.body.text, /Image received/);
+  assert.equal(beginReply.body.reply_markup.inline_keyboard[0][0].text, "/end");
+  assert.match(beginReply.body.reply_markup.inline_keyboard[0][0].callback_data, /^task_handoff:cp_msg_end:[A-Za-z0-9_-]+$/);
+  await waitTelegramAggregate();
+  assert.equal(receivedMessages.length, 0);
+
+  await runtime.pollBridgeNow(bridge.id);
+  assert.equal(receivedMessages.length, 1);
+  assert.equal(receivedMessages[0].message.text, "");
+  assert.equal(receivedMessages[0].message.attachments.length, 1);
+  assert.equal(receivedMessages[0].message.attachments[0].kind, "image");
+  assert.equal(receivedMessages[0].message.attachments[0].mime, "image/jpeg");
+  assert.equal(receivedMessages[0].message.attachments[0].size, 11);
+  assert.equal(receivedMessages[0].message.attachments[0].data, Buffer.from("image-bytes").toString("base64"));
+});
+
+test("control plane telegram bridge aggregates adjacent messages and explicit begin end batches", async () => {
+  const calls = [];
+  const receivedMessages = [];
+  const bridge = {
+    id: "chat_telegram_aggregate",
+    channel: "telegram",
+    name: "Telegram Aggregate",
+    enabled: true,
+    token: "telegram-token",
+    tokenSet: true,
+    defaultChatId: "",
+    allowedUserIds: ["456"],
+    pollIntervalMs: 30000,
+    settings: {},
+  };
+  const service = {
+    listChatBridges: () => [bridge],
+    requireChatBridge: () => bridge,
+    listChatSessions: () => [],
+    listPendingRoutes: async () => [],
+    handleChatGatewayMessage: async (message) => {
+      receivedMessages.push(message);
+      return { reply: `received ${receivedMessages.length}` };
+    },
+  };
+  let pollCount = 0;
+  const runtime = new ControlPlaneChatGatewayRuntime(service, async (url, init = {}) => {
+    calls.push({
+      url: String(url),
+      body: init.body ? JSON.parse(init.body) : undefined,
+    });
+    if (String(url).includes("getUpdates")) {
+      pollCount += 1;
+      const result = pollCount === 1
+        ? [{
+            update_id: 100,
+            message: { message_id: 10, text: "first chunk", chat: { id: 123 }, from: { id: 456 } },
+          }, {
+            update_id: 101,
+            message: { message_id: 11, text: "second chunk", chat: { id: 123 }, from: { id: 456 } },
+          }]
+        : pollCount === 2
+          ? [{
+              update_id: 102,
+              message: { message_id: 12, text: "/begin", chat: { id: 123 }, from: { id: 456 } },
+            }, {
+              update_id: 103,
+              message: { message_id: 13, text: "manual one", chat: { id: 123 }, from: { id: 456 } },
+            }, {
+              update_id: 104,
+              message: { message_id: 14, text: "manual two", chat: { id: 123 }, from: { id: 456 } },
+            }]
+          : pollCount === 3
+            ? [{
+                update_id: 105,
+                message: { message_id: 15, text: "/end", chat: { id: 123 }, from: { id: 456 } },
+              }]
+            : [];
+      return new Response(JSON.stringify({ ok: true, result }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (String(url).includes("sendMessage")) {
+      return new Response(JSON.stringify({ ok: true, result: { message_id: 900 + calls.length } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify({ ok: true, result: {} }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  });
+
+  await runtime.pollBridgeNow(bridge.id);
+  assert.equal(receivedMessages.length, 0);
+  await waitTelegramAggregate();
+  assert.equal(receivedMessages.length, 1);
+  assert.equal(receivedMessages[0].message.text, "first chunk\n\nsecond chunk");
+
+  await runtime.pollBridgeNow(bridge.id);
+  const beginReply = calls.filter((call) => call.url.includes("sendMessage")).at(-1);
+  assert.match(beginReply.body.text, /Started collecting messages/);
+  assert.equal(beginReply.body.reply_markup.inline_keyboard[0][0].text, "/end");
+  assert.match(beginReply.body.reply_markup.inline_keyboard[0][0].callback_data, /^task_handoff:cp_msg_end:[A-Za-z0-9_-]+$/);
+  await waitTelegramAggregate();
+  assert.equal(receivedMessages.length, 1);
+
+  await runtime.pollBridgeNow(bridge.id);
+  assert.equal(receivedMessages.length, 2);
+  assert.equal(receivedMessages[1].message.text, "manual one\n\nmanual two");
+});
+
+test("control plane telegram ai session ack updates from node agent events without event scope", async () => {
+  const calls = [];
+  const events = new ControlPlaneEventBus();
+  const tunnel = new ControlPlaneNodeAgentTunnelTransport(events);
+  const bridge = {
+    id: "chat_telegram_node_event",
+    channel: "telegram",
+    name: "Telegram Node Event",
+    enabled: true,
+    token: "telegram-token",
+    tokenSet: true,
+    defaultChatId: "",
+    allowedUserIds: [],
+    pollIntervalMs: 30000,
+    settings: {},
+  };
+  const service = {
+    listChatBridges: () => [bridge],
+    requireChatBridge: () => bridge,
+    handleChatGatewayMessage: async (message) => ({
+      accepted: true,
+      routed: true,
+      binding: {
+        id: "telegram:123",
+        channel: "telegram",
+        bridgeId: bridge.id,
+        chatSessionId: message.source.chatSessionId,
+        activeInstanceId: "inst_1",
+        activeAiSessionId: "ais_1",
+      },
+      instance: { id: "inst_1" },
+      aiSession: {
+        session: {
+          id: "ais_1",
+          agent: "codex",
+          activeTurnId: "turn_1",
+          status: "running",
+          phase: "thinking",
+          userPrompt: message.message.text,
+          turns: [{
+            id: "turn_1",
+            userPrompt: message.message.text,
+          }],
+          updatedAt: "2026-07-03T00:00:00.000Z",
+        },
+        provider: "codex",
+        action: "send",
+      },
+      turnId: "turn_1",
+      providerTurnId: "turn_1",
+      reply: "Sent to work / inst_1 / ais_1.",
+    }),
+    listChatSessions: () => [{
+      id: "telegram:123",
+      channel: "telegram",
+      bridgeId: bridge.id,
+      chatSessionId: "123",
+      activeInstanceId: "inst_1",
+      activeAiSessionId: "ais_1",
+    }],
+    boardAsync: async () => [{ id: "inst_1", name: "instance-main" }],
+    listPendingRoutes: async () => [],
+  };
+  let pollCount = 0;
+  let telegramMessageId = 700;
+  const runtime = new ControlPlaneChatGatewayRuntime(service, async (url, init = {}) => {
+    calls.push({
+      url: String(url),
+      body: init.body ? JSON.parse(init.body) : undefined,
+    });
+    if (String(url).includes("getUpdates")) {
+      pollCount += 1;
+      return new Response(JSON.stringify({
+        ok: true,
+        result: pollCount === 1
+          ? [{
+              update_id: 1,
+              message: {
+                message_id: 10,
+                text: "你是谁",
+                chat: { id: 123 },
+                from: { id: 456 },
+              },
+            }]
+          : [],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (String(url).includes("sendMessage")) {
+      telegramMessageId += 1;
+      return new Response(JSON.stringify({ ok: true, result: { message_id: telegramMessageId } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify({ ok: true, result: {} }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }, aiSessionGatewayOptions(events, { telegramProgressUpdateIntervalMs: 1 }));
+
+  await runtime.pollBridgeNow(bridge.id);
+  await waitTelegramAggregate();
+  const sentAck = calls.find((call) => call.url.includes("sendMessage"));
+  assert.ok(sentAck);
+  assert.equal(sentAck.body.reply_to_message_id, 10);
+  assert.match(sentAck.body.text, /Sent to work/);
+  const ackMessageId = telegramMessageId;
+
+  tunnel.handleMessage("node_1", {
+    type: "node-agent.event.forwarded",
+    instanceId: "inst_1",
+    event: {
+      type: AiSessionEventType.Snapshot,
+      topic: AiSessionEventTopic,
+      payload: aiSessionSnapshotPayload({
+        runningCount: 0,
+        waitingCount: 0,
+        staleCount: 0,
+        updatedAt: "2026-07-03T00:00:03.000Z",
+        sessions: [{
+          id: "ais_1",
+          agent: "codex",
+          status: "idle",
+          phase: "unknown",
+          turns: [{
+            id: "turn_1",
+            userPrompt: "你是谁",
+            lastMessage: "我是这个工作区里的 AI 助手。",
+            updatedAt: "2026-07-03T00:00:03.000Z",
+          }],
+          startedAt: "2026-07-03T00:00:00.000Z",
+          updatedAt: "2026-07-03T00:00:03.000Z",
+        }],
+      }, { instanceId: "inst_1" }),
+    },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  const edit = calls.find((call) => call.url.includes("editMessageText"));
+  assert.ok(edit);
+  assert.equal(edit.body.message_id, ackMessageId);
+  assert.match(edit.body.text, /AI 助手/);
+  assert.equal(calls.filter((call) => call.url.includes("sendMessage")).length, 1);
+  runtime.stopAll();
+});
+
+test("control plane telegram ai session ack remembers action result turn id", async () => {
+  const calls = [];
+  const events = new ControlPlaneEventBus();
+  const bridge = {
+    id: "chat_telegram_turn_result",
+    channel: "telegram",
+    name: "Telegram Turn Result",
+    enabled: true,
+    token: "telegram-token",
+    tokenSet: true,
+    defaultChatId: "",
+    allowedUserIds: [],
+    pollIntervalMs: 30000,
+    settings: {},
+  };
+  const service = {
+    listChatBridges: () => [bridge],
+    requireChatBridge: () => bridge,
+    handleChatGatewayMessage: async (message) => ({
+      accepted: true,
+      routed: true,
+      binding: {
+        id: "telegram:123",
+        channel: "telegram",
+        bridgeId: bridge.id,
+        chatSessionId: message.source.chatSessionId,
+        activeInstanceId: "inst_1",
+        activeAiSessionId: "ais_1",
+      },
+      instance: { id: "inst_1" },
+      aiSession: {
+        session: {
+          id: "ais_1",
+          agent: "claude",
+          activeTurnId: "turn_control_1",
+          status: "running",
+          phase: "thinking",
+          turns: [{
+            id: "turn_control_1",
+            userPrompt: message.message.text,
+            updatedAt: "2026-07-03T00:00:00.000Z",
+          }],
+          updatedAt: "2026-07-03T00:00:00.000Z",
+        },
+        provider: "claude",
+        action: "send",
+        turnId: "turn_control_1",
+      },
+      reply: "Sent to work / inst_1 / ais_1.",
+    }),
+    listChatSessions: () => [{
+      id: "telegram:123",
+      channel: "telegram",
+      bridgeId: bridge.id,
+      chatSessionId: "123",
+      activeInstanceId: "inst_1",
+      activeAiSessionId: "ais_1",
+    }],
+    boardAsync: async () => [{ id: "inst_1", name: "instance-main" }],
+    listPendingRoutes: async () => [],
+  };
+  let pollCount = 0;
+  const runtime = new ControlPlaneChatGatewayRuntime(service, async (url, init = {}) => {
+    calls.push({
+      url: String(url),
+      body: init.body ? JSON.parse(init.body) : undefined,
+    });
+    if (String(url).includes("getUpdates")) {
+      pollCount += 1;
+      return new Response(JSON.stringify({
+        ok: true,
+        result: pollCount === 1
+          ? [{
+              update_id: 1,
+              message: {
+                message_id: 12,
+                text: "你好啊",
+                chat: { id: 123 },
+                from: { id: 456 },
+              },
+            }]
+          : [],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (String(url).includes("sendMessage")) {
+      return new Response(JSON.stringify({ ok: true, result: { message_id: 1001 } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify({ ok: true, result: {} }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }, aiSessionGatewayOptions(events, { telegramProgressUpdateIntervalMs: 1 }));
+
+  await runtime.pollBridgeNow(bridge.id);
+  await waitTelegramAggregate();
+  publishAiSessionSnapshotForTest(events, {
+    runningCount: 0,
+    waitingCount: 0,
+    staleCount: 0,
+    updatedAt: "2026-07-03T00:00:02.000Z",
+    sessions: [{
+      id: "ais_1",
+      agent: "claude",
+      status: "idle",
+      phase: "unknown",
+      turns: [{
+        id: "turn_control_1",
+        userPrompt: "你好啊",
+        lastMessage: "你好！有什么我可以帮你的吗？",
+        updatedAt: "2026-07-03T00:00:02.000Z",
+      }],
+      updatedAt: "2026-07-03T00:00:02.000Z",
+      startedAt: "2026-07-03T00:00:00.000Z",
+    }],
+  }, { scope: { instanceId: "inst_1" } });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const sends = calls.filter((call) => call.url.includes("sendMessage"));
+  assert.equal(sends.length, 1);
+  assert.equal(sends[0].body.reply_to_message_id, 12);
+  const edit = calls.find((call) => call.url.includes("editMessageText"));
+  assert.ok(edit);
+  assert.equal(edit.body.message_id, 1001);
+  assert.match(edit.body.text, /有什么我可以帮你的吗/);
+  runtime.stopAll();
+});
+
+test("control plane telegram queued ack replaces and deletes the previous progress message", async () => {
+  const calls = [];
+  const events = new ControlPlaneEventBus();
+  const bridge = {
+    id: "chat_telegram_queue_replace",
+    channel: "telegram",
+    name: "Telegram Queue Replace",
+    enabled: true,
+    token: "telegram-token",
+    tokenSet: true,
+    defaultChatId: "",
+    allowedUserIds: ["456"],
+    pollIntervalMs: 30000,
+    settings: {},
+  };
+  let handledMessages = 0;
+  const service = {
+    listChatBridges: () => [bridge],
+    requireChatBridge: () => bridge,
+    handleChatGatewayMessage: async (message) => {
+      handledMessages += 1;
+      const queued = handledMessages >= 2;
+      return {
+        accepted: true,
+        routed: true,
+        binding: {
+          id: "telegram:123",
+          channel: "telegram",
+          bridgeId: bridge.id,
+          chatSessionId: message.source.chatSessionId,
+          activeInstanceId: "inst_1",
+          activeAiSessionId: "ais_1",
+        },
+        instance: { id: "inst_1" },
+        aiSession: {
+          session: {
+            id: "ais_1",
+            agent: "codex",
+            activeTurnId: "turn_1",
+            status: "running",
+            phase: "thinking",
+            queue: queued ? {
+              pendingCount: 1,
+              items: [{ id: "queue_1", message: message.message.text, status: "queued" }],
+            } : { pendingCount: 0, items: [] },
+            turns: [{ id: "turn_1", userPrompt: "first", updatedAt: "2026-07-10T00:00:00.000Z" }],
+            updatedAt: "2026-07-10T00:00:00.000Z",
+          },
+          provider: "codex",
+          action: queued ? "queue" : "send",
+          ...(queued ? { queueId: "queue_1" } : { turnId: "turn_1", providerTurnId: "turn_1" }),
+        },
+        reply: queued ? "Queued for ais_1." : "Sent to ais_1.",
+      };
+    },
+    listChatSessions: () => [{
+      id: "telegram:123",
+      channel: "telegram",
+      bridgeId: bridge.id,
+      chatSessionId: "123",
+      activeInstanceId: "inst_1",
+      activeAiSessionId: "ais_1",
+    }],
+    boardAsync: async () => [{ id: "inst_1", name: "instance-main" }],
+    listPendingRoutes: async () => [],
+  };
+  const updates = [{
+    update_id: 1,
+    message: { message_id: 10, text: "first", chat: { id: 123 }, from: { id: 456 } },
+  }, {
+    update_id: 2,
+    message: { message_id: 11, text: "queued follow up", chat: { id: 123 }, from: { id: 456 } },
+  }, {
+    update_id: 3,
+    message: { message_id: 12, text: "latest queued follow up", chat: { id: 123 }, from: { id: 456 } },
+  }];
+  let nextTelegramMessageId = 900;
+  let deleteCallCount = 0;
+  const runtime = new ControlPlaneChatGatewayRuntime(service, async (url, init = {}) => {
+    calls.push({ url: String(url), body: init.body ? JSON.parse(init.body) : undefined });
+    if (String(url).includes("getUpdates")) {
+      const update = updates.shift();
+      return new Response(JSON.stringify({ ok: true, result: update ? [update] : [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (String(url).includes("sendMessage")) {
+      nextTelegramMessageId += 1;
+      return new Response(JSON.stringify({ ok: true, result: { message_id: nextTelegramMessageId } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (String(url).includes("deleteMessage")) {
+      deleteCallCount += 1;
+      return new Response(JSON.stringify(deleteCallCount === 2
+        ? { ok: false, description: "message cannot be deleted" }
+        : { ok: true, result: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify({ ok: true, result: {} }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }, aiSessionGatewayOptions(events, { telegramProgressUpdateIntervalMs: 1 }));
+
+  await runtime.pollBridgeNow(bridge.id);
+  await waitTelegramAggregate();
+  await runtime.pollBridgeNow(bridge.id);
+  await waitTelegramAggregate();
+  await runtime.pollBridgeNow(bridge.id);
+  await waitTelegramAggregate();
+
+  const sends = calls.filter((call) => call.url.includes("sendMessage"));
+  assert.equal(sends.length, 3);
+  const deletions = calls.filter((call) => call.url.includes("deleteMessage"));
+  assert.deepEqual(deletions.map((call) => call.body.message_id), [901, 902]);
+
+  publishAiSessionSnapshotForTest(events, {
+    runningCount: 1,
+    waitingCount: 0,
+    staleCount: 0,
+    updatedAt: "2026-07-10T00:00:01.000Z",
+    sessions: [{
+      id: "ais_1",
+      agent: "codex",
+      activeTurnId: "turn_1",
+      status: "running",
+      phase: "tool",
+      currentTool: { name: "shell", inputPreview: "still working" },
+      queue: {
+        pendingCount: 1,
+        items: [{
+          id: "queue_1",
+          message: "latest queued follow up",
+          status: "queued",
+          createdAt: "2026-07-10T00:00:01.000Z",
+          updatedAt: "2026-07-10T00:00:01.000Z",
+        }],
+      },
+      turns: [{ id: "turn_1", userPrompt: "first", updatedAt: "2026-07-10T00:00:01.000Z" }],
+      startedAt: "2026-07-10T00:00:00.000Z",
+      updatedAt: "2026-07-10T00:00:01.000Z",
+    }],
+  }, { scope: { instanceId: "inst_1" } });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const edit = calls.filter((call) => call.url.includes("editMessageText")).at(-1);
+  assert.ok(edit);
+  assert.equal(edit.body.message_id, 903);
+  assert.match(edit.body.text, /Running shell/);
+  assert.deepEqual(edit.body.reply_markup.inline_keyboard.map((row) => row.map((button) => button.text)), [
+    ["1. latest queued follow up"],
+    ["Delete Queue", "Cancel"],
+  ]);
+  runtime.stopAll();
+});
+
+test("control plane telegram replies route to the replied ai session and include quote text", async () => {
+  const calls = [];
+  const receivedMessages = [];
+  const events = new ControlPlaneEventBus();
+  const bridge = {
+    id: "chat_telegram_reply_quote",
+    channel: "telegram",
+    name: "Telegram Reply Quote",
+    enabled: true,
+    token: "telegram-token",
+    tokenSet: true,
+    defaultChatId: "",
+    allowedUserIds: [],
+    pollIntervalMs: 30000,
+    settings: {},
+  };
+  let nextTelegramMessageId = 1200;
+  const service = {
+    listChatBridges: () => [bridge],
+    requireChatBridge: () => bridge,
+    handleChatGatewayMessage: async (message) => {
+      receivedMessages.push(message);
+      const target = message.target || { instanceId: "inst_reply", aiSessionId: "ais_reply" };
+      return {
+        accepted: true,
+        routed: true,
+        binding: {
+          id: "telegram:123",
+          channel: "telegram",
+          bridgeId: bridge.id,
+          chatSessionId: message.source.chatSessionId,
+          activeInstanceId: "inst_default",
+          activeAiSessionId: "ais_default",
+        },
+        instance: { id: target.instanceId },
+        aiSession: {
+          session: {
+            id: target.aiSessionId,
+            agent: "codex",
+            activeTurnId: target.aiSessionId === "ais_reply" ? "turn_reply" : "turn_default",
+            status: "running",
+            phase: "thinking",
+            turns: [{
+              id: target.aiSessionId === "ais_reply" ? "turn_reply" : "turn_default",
+              userPrompt: message.message.text,
+              updatedAt: "2026-07-03T00:00:00.000Z",
+            }],
+            updatedAt: "2026-07-03T00:00:00.000Z",
+          },
+          provider: "codex",
+          action: "send",
+        },
+        turnId: target.aiSessionId === "ais_reply" ? "turn_reply" : "turn_default",
+        providerTurnId: target.aiSessionId === "ais_reply" ? "turn_reply" : "turn_default",
+        reply: `Sent to work / ${target.instanceId} / ${target.aiSessionId}.`,
+      };
+    },
+    listChatSessions: () => [{
+      id: "telegram:123",
+      channel: "telegram",
+      bridgeId: bridge.id,
+      chatSessionId: "123",
+      activeInstanceId: "inst_default",
+      activeAiSessionId: "ais_default",
+    }],
+    boardAsync: async () => [{ id: "inst_default", name: "default" }, { id: "inst_reply", name: "reply" }],
+    listPendingRoutes: async () => [],
+  };
+  let pollCount = 0;
+  let ackMessageId = 0;
+  const runtime = new ControlPlaneChatGatewayRuntime(service, async (url, init = {}) => {
+    calls.push({
+      url: String(url),
+      body: init.body ? JSON.parse(init.body) : undefined,
+    });
+    if (String(url).includes("getUpdates")) {
+      pollCount += 1;
+      return new Response(JSON.stringify({
+        ok: true,
+        result: pollCount === 1
+          ? [{
+              update_id: 1,
+              message: {
+                message_id: 10,
+                text: "first prompt",
+                chat: { id: 123 },
+                from: { id: 456 },
+              },
+            }]
+          : pollCount === 2
+            ? [{
+                update_id: 2,
+                message: {
+                  message_id: 11,
+                  text: "继续解释",
+                  quote: { text: "关键片段" },
+                  reply_to_message: {
+                    message_id: ackMessageId,
+                    chat: { id: 123 },
+                  },
+                  chat: { id: 123 },
+                  from: { id: 456 },
+                },
+              }]
+            : [],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (String(url).includes("sendMessage")) {
+      nextTelegramMessageId += 1;
+      return new Response(JSON.stringify({ ok: true, result: { message_id: nextTelegramMessageId } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify({ ok: true, result: {} }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }, aiSessionGatewayOptions(events, { telegramProgressUpdateIntervalMs: 1 }));
+
+  await runtime.pollBridgeNow(bridge.id);
+  await waitTelegramAggregate();
+  ackMessageId = nextTelegramMessageId;
+
+  publishAiSessionSnapshotForTest(events, {
+    runningCount: 1,
+    waitingCount: 0,
+    staleCount: 0,
+    updatedAt: "2026-07-03T00:00:01.000Z",
+    sessions: [{
+      id: "ais_reply",
+      agent: "codex",
+      activeTurnId: "turn_reply",
+      status: "running",
+      phase: "thinking",
+      turns: [{
+        id: "turn_reply",
+        userPrompt: "first prompt",
+        updatedAt: "2026-07-03T00:00:01.000Z",
+      }],
+      startedAt: "2026-07-03T00:00:00.000Z",
+      updatedAt: "2026-07-03T00:00:01.000Z",
+    }],
+  }, { scope: { instanceId: "inst_reply" } });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  await runtime.pollBridgeNow(bridge.id);
+  await waitTelegramAggregate();
+
+  assert.equal(receivedMessages.length, 2);
+  assert.equal(receivedMessages[1].target.instanceId, "inst_reply");
+  assert.equal(receivedMessages[1].target.aiSessionId, "ais_reply");
+  assert.equal(receivedMessages[1].message.text, "引用：关键片段\n继续解释");
+  const replyAck = calls.filter((call) => call.url.includes("sendMessage")).at(-1);
+  assert.equal(replyAck.body.reply_to_message_id, 11);
+  assert.match(replyAck.body.text, /inst\\_reply \/ ais\\_reply/);
+  runtime.stopAll();
+});
+
+test("control plane ai session delivery keeps response content inside the latest turn", () => {
+  const session = {
+    id: "ais_1",
+    agent: "claude",
+    status: "running",
+    phase: "thinking",
+    userPrompt: "second prompt",
+    summary: "first answer",
+    lastMessage: "first answer",
+    turns: [
+      {
+        userPrompt: "first prompt",
+        summary: "first answer",
+        lastMessage: "first answer",
+        updatedAt: "2026-07-03T00:00:00.000Z",
+      },
+      {
+        userPrompt: "second prompt",
+        updatedAt: "2026-07-03T00:00:01.000Z",
+      },
+    ],
+    startedAt: "2026-07-03T00:00:00.000Z",
+    updatedAt: "2026-07-03T00:00:01.000Z",
+  };
+
+  assert.equal(aiSessionDeliveryText(session, "instance-main · claude running/thinking"), "");
+
+  session.turns[1].lastMessage = "second answer";
+  assert.equal(aiSessionDeliveryText(session, "instance-main · claude idle"), "instance-main · claude idle\nsecond answer");
+});
+
+test("control plane ai session delivery keys explicit turns by id and revision", () => {
+  const session = {
+    id: "ais_1",
+    agent: "claude",
+    status: "running",
+    phase: "thinking",
+    turns: [
+      {
+        id: "turn_1",
+        userPrompt: "first prompt",
+        status: "completed",
+        revision: 2,
+        summary: "first answer",
+        lastMessage: "first answer",
+        updatedAt: "2026-07-03T00:00:00.000Z",
+      },
+      {
+        id: "turn_2",
+        userPrompt: "second prompt",
+        status: "running",
+        phase: "thinking",
+        revision: 0,
+        updatedAt: "2026-07-03T00:00:01.000Z",
+      },
+    ],
+    startedAt: "2026-07-03T00:00:00.000Z",
+    updatedAt: "2026-07-03T00:00:01.000Z",
+  };
+
+  assert.equal(aiSessionDeliveryText(session, "instance-main · claude running/thinking"), "");
+
+  session.status = "idle";
+  session.phase = "unknown";
+  session.turns[1] = {
+    ...session.turns[1],
+    status: "completed",
+    phase: "responding",
+    revision: 1,
+    summary: "second answer",
+    lastMessage: "second answer",
+    completedAt: "2026-07-03T00:00:02.000Z",
+    updatedAt: "2026-07-03T00:00:02.000Z",
+  };
+  const delivered = aiSessionDeliveryText(session, "instance-main · claude idle");
+  assert.equal(delivered, "instance-main · claude idle\nsecond answer");
+  assert.doesNotMatch(delivered, /first answer/);
+});
+
+test("control plane ai session UI does not pair a new prompt with the previous turn response", () => {
+  const session = {
+    id: "ais_1",
+    agent: "codex",
+    activeTurnId: "turn_6",
+    providerSessionId: "thread_1",
+    userPrompt: "sixth prompt",
+    status: "running",
+    phase: "thinking",
+    summary: "fifth answer",
+    lastMessage: "fifth answer",
+    turns: [
+      {
+        id: "turn_5",
+        userPrompt: "fifth prompt",
+        status: "completed",
+        revision: 2,
+        summary: "fifth answer",
+        lastMessage: "fifth answer",
+        updatedAt: "2026-07-04T00:00:00.000Z",
+      },
+    ],
+    startedAt: "2026-07-04T00:00:00.000Z",
+    updatedAt: "2026-07-04T00:00:01.000Z",
+  };
+
+  assert.equal(displayAiSessionTitle(session, 1), "sixth prompt");
+  assert.equal(displayAiSessionMessage(session, 1), "Running...");
+  assert.equal(displayAiSessionMessage(session), "Running...");
+});
+
+test("control plane chat gateway delivers canonical ai session updates without heartbeat polling", async () => {
+  const calls = [];
+  const events = new ControlPlaneEventBus();
+  let pollCount = 0;
+  let telegramMessageId = 900;
+  const bridge = {
+    id: "chat_telegram_events",
+    channel: "telegram",
+    name: "Telegram Events",
+    enabled: true,
+    token: "telegram-token",
+    tokenSet: true,
+    defaultChatId: "",
+    allowedUserIds: [],
+    pollIntervalMs: 30000,
+    settings: {},
+  };
+  const interrupts = [];
+  const steeredQueuedMessages = [];
+  const removedQueuedMessages = [];
+  const telegramCallbacks = [];
+  let cancelCallbackData = "";
+  let steerCallbackData = "";
+  let deleteQueueCallbackData = "";
+  let deleteItemCallbackData = "";
+  const runtime = new ControlPlaneChatGatewayRuntime(
+    {
+      listChatBridges: () => [bridge],
+      requireChatBridge: () => bridge,
+      listChatSessions: () => [{
+        id: "telegram:123",
+        channel: "telegram",
+        bridgeId: bridge.id,
+        chatSessionId: "123",
+        activeInstanceId: "inst_1",
+        activeAiSessionId: "ais_1",
+      }],
+      boardAsync: async () => [{
+        id: "inst_1",
+        name: "instance-main",
+      }],
+      listAiSessions: async () => {
+        throw new Error("listAiSessions should not be used for event delivery");
+      },
+      listPendingRoutes: async () => [],
+      pendingDecisionCallbackData: (_routeId, decision) => `task_handoff:cp_p:${decision}_token`,
+      interruptAiSession: async (instanceId, sessionId) => {
+        interrupts.push({ instanceId, sessionId });
+        return { session: { id: sessionId }, action: "interrupt" };
+      },
+      steerAiSessionQueuedMessage: async (instanceId, sessionId, queueId) => {
+        steeredQueuedMessages.push({ instanceId, sessionId, queueId });
+        return { session: { id: sessionId }, action: "steer", queueId };
+      },
+      aiSessionQueue: async () => ({
+        pendingCount: 2,
+        items: [{
+          id: "queue_1",
+          message: "please steer this queued follow up into the active turn and keep going",
+          status: "queued",
+        }, {
+          id: "queue_sent",
+          message: "already sent",
+          status: "sent",
+        }, {
+          id: "queue_2",
+          message: "delete this queued follow up",
+          status: "queued",
+        }],
+      }),
+      removeAiSessionQueuedMessage: async (instanceId, sessionId, queueId) => {
+        removedQueuedMessages.push({ instanceId, sessionId, queueId });
+        return { session: { id: sessionId }, action: "remove", queueId };
+      },
+    },
+    async (url, init = {}) => {
+      calls.push({
+        url: String(url),
+        body: init.body ? JSON.parse(init.body) : undefined,
+      });
+      if (String(url).includes("getUpdates")) {
+        pollCount += 1;
+        return new Response(JSON.stringify({
+          ok: true,
+          result: telegramCallbacks.length
+            ? [{
+                update_id: pollCount,
+                callback_query: {
+                  id: "cancel-callback",
+                  data: telegramCallbacks.shift(),
+                  from: { id: 456 },
+                  message: {
+                    message_id: 902,
+                    chat: { id: 123 },
+                  },
+                },
+              }]
+            : [],
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      const messageId = String(url).includes("sendMessage") ? ++telegramMessageId : telegramMessageId;
+      return new Response(JSON.stringify({ ok: true, result: { message_id: messageId } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+    aiSessionGatewayOptions(events, { telegramProgressUpdateIntervalMs: 1 }),
+  );
+
+  publishAiSessionSnapshotForTest(events, {
+    runningCount: 0,
+    waitingCount: 0,
+    staleCount: 0,
+    updatedAt: "2026-07-03T00:00:03.000Z",
+    sessions: [{
+      id: "ais_1",
+      agent: "codex",
+      status: "idle",
+      phase: "unknown",
+      turns: [{
+        id: "turn_event_1",
+        userPrompt: "hello",
+        lastMessage: "event delivered answer",
+        updatedAt: "2026-07-03T00:00:03.000Z",
+      }],
+      startedAt: "2026-07-03T00:00:00.000Z",
+      updatedAt: "2026-07-03T00:00:03.000Z",
+    }],
+  }, {
+    scope: { instanceId: "inst_1" },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const sent = calls.find((call) => call.url.includes("sendMessage"));
+  assert.ok(sent);
+  assert.equal(sent.body.chat_id, "123");
+  assert.match(sent.body.text, /event delivered answer/);
+  assert.equal(calls.some((call) => call.url.includes("editMessageText")), false);
+
+  publishAiSessionSnapshotForTest(events, {
+    runningCount: 0,
+    waitingCount: 0,
+    staleCount: 0,
+    updatedAt: "2026-07-03T00:00:04.000Z",
+    sessions: [{
+      id: "ais_1",
+      agent: "codex",
+      status: "idle",
+      phase: "unknown",
+      turns: [{
+        id: "turn_event_1",
+        userPrompt: "hello",
+        lastMessage: "event delivered answer again",
+        updatedAt: "2026-07-03T00:00:04.000Z",
+      }],
+      startedAt: "2026-07-03T00:00:00.000Z",
+      updatedAt: "2026-07-03T00:00:04.000Z",
+    }],
+  }, {
+    scope: { instanceId: "inst_1" },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const edited = calls.find((call) => call.url.includes("editMessageText"));
+  assert.ok(edited);
+  assert.equal(edited.body.message_id, 901);
+  assert.match(edited.body.text, /again/);
+
+  publishAiSessionSnapshotForTest(events, {
+    runningCount: 1,
+    waitingCount: 0,
+    staleCount: 0,
+    updatedAt: "2026-07-03T00:00:05.000Z",
+    sessions: [{
+      id: "ais_1",
+      agent: "codex",
+      activeTurnId: "turn_web_2",
+      status: "running",
+      phase: "thinking",
+      currentTool: {
+        name: "web_search",
+        inputPreview: "checking docs",
+      },
+      turns: [{
+        id: "turn_event_1",
+        userPrompt: "hello",
+        lastMessage: "event delivered answer again",
+        updatedAt: "2026-07-03T00:00:04.000Z",
+      }, {
+        id: "turn_web_2",
+        userPrompt: "web started another turn",
+        updatedAt: "2026-07-03T00:00:05.000Z",
+      }],
+      queue: {
+        pendingCount: 1,
+        items: [{
+          id: "queue_1",
+          message: "please steer this queued follow up into the active turn and keep going",
+          status: "queued",
+          createdAt: "2026-07-03T00:00:05.100Z",
+          updatedAt: "2026-07-03T00:00:05.100Z",
+        }],
+      },
+      startedAt: "2026-07-03T00:00:00.000Z",
+      updatedAt: "2026-07-03T00:00:05.000Z",
+    }],
+  }, {
+    scope: { instanceId: "inst_1" },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(calls.filter((call) => call.url.includes("sendMessage")).length, 2);
+  const runningProgress = calls.filter((call) => call.url.includes("sendMessage")).at(-1);
+  assert.match(runningProgress.body.text, /Running web\\_search/);
+  steerCallbackData = runningProgress.body.reply_markup.inline_keyboard[0][0].callback_data;
+  deleteQueueCallbackData = runningProgress.body.reply_markup.inline_keyboard[1][0].callback_data;
+  cancelCallbackData = runningProgress.body.reply_markup.inline_keyboard[1][1].callback_data;
+  assert.match(runningProgress.body.reply_markup.inline_keyboard[0][0].text, /^1\. please steer this queued follow up/);
+  assert.match(steerCallbackData, /^task_handoff:cp_ai_steer:[A-Za-z0-9_-]+$/);
+  assert.ok(Buffer.byteLength(steerCallbackData, "utf8") <= 64);
+  assert.deepEqual(runningProgress.body.reply_markup.inline_keyboard[1].map((button) => button.text), ["Delete Queue", "Cancel"]);
+  assert.match(deleteQueueCallbackData, /^task_handoff:cp_ai_qdel_menu:[A-Za-z0-9_-]+$/);
+  assert.ok(Buffer.byteLength(deleteQueueCallbackData, "utf8") <= 64);
+  assert.match(cancelCallbackData, /^task_handoff:cp_ai_cancel:[A-Za-z0-9_-]+$/);
+  assert.ok(Buffer.byteLength(cancelCallbackData, "utf8") <= 64);
+  telegramCallbacks.push(deleteQueueCallbackData);
+  await runtime.pollBridgeNow(bridge.id);
+  const deleteMenuMessage = calls.filter((call) => call.url.includes("sendMessage")).at(-1);
+  assert.equal(deleteMenuMessage.body.text, "Delete queued message");
+  assert.match(deleteMenuMessage.body.reply_markup.inline_keyboard[0][0].text, /^1\. please steer this queued follow up into th\.\.\.$/);
+  assert.equal(deleteMenuMessage.body.reply_markup.inline_keyboard[1][0].text, "2. delete this queued follow up");
+  deleteItemCallbackData = deleteMenuMessage.body.reply_markup.inline_keyboard[1][0].callback_data;
+  assert.match(deleteItemCallbackData, /^task_handoff:cp_ai_qdel:[A-Za-z0-9_-]+$/);
+  assert.ok(Buffer.byteLength(deleteItemCallbackData, "utf8") <= 64);
+  const deleteMenuAnswer = calls.filter((call) => call.url.includes("answerCallbackQuery")).at(-1);
+  assert.equal(deleteMenuAnswer.body.text, "Select a queued message");
+  telegramCallbacks.push(deleteItemCallbackData);
+  await runtime.pollBridgeNow(bridge.id);
+  assert.deepEqual(removedQueuedMessages, [{ instanceId: "inst_1", sessionId: "ais_1", queueId: "queue_2" }]);
+  const deleteMessageCall = calls.find((call) => call.url.includes("deleteMessage"));
+  assert.equal(deleteMessageCall.body.chat_id, "123");
+  assert.equal(deleteMessageCall.body.message_id, 902);
+  const deleteItemAnswer = calls.filter((call) => call.url.includes("answerCallbackQuery")).at(-1);
+  assert.equal(deleteItemAnswer.body.text, "Queued message deleted");
+  telegramCallbacks.push(steerCallbackData);
+  await runtime.pollBridgeNow(bridge.id);
+  assert.deepEqual(steeredQueuedMessages, [{ instanceId: "inst_1", sessionId: "ais_1", queueId: "queue_1" }]);
+  const steerAnswer = calls.filter((call) => call.url.includes("answerCallbackQuery")).at(-1);
+  assert.equal(steerAnswer.body.text, "Steered queued message");
+  steerCallbackData = "";
+
+  publishAiSessionSnapshotForTest(events, {
+    runningCount: 1,
+    waitingCount: 0,
+    staleCount: 0,
+    updatedAt: "2026-07-03T00:00:05.500Z",
+    sessions: [{
+      id: "ais_1",
+      agent: "codex",
+      activeTurnId: "turn_web_2",
+      status: "running",
+      phase: "tool",
+      currentTool: {
+        name: "shell",
+        inputPreview: "still running",
+      },
+      turns: [{
+        id: "turn_event_1",
+        userPrompt: "hello",
+        lastMessage: "event delivered answer again",
+        updatedAt: "2026-07-03T00:00:04.000Z",
+      }, {
+        id: "turn_web_2",
+        userPrompt: "web started another turn",
+        updatedAt: "2026-07-03T00:00:05.500Z",
+      }],
+      startedAt: "2026-07-03T00:00:00.000Z",
+      updatedAt: "2026-07-03T00:00:05.500Z",
+    }],
+  }, {
+    scope: { instanceId: "inst_1" },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const waitingEdit = calls.filter((call) => call.url.includes("editMessageText")).at(-1);
+  assert.match(waitingEdit.body.text, /Running shell/);
+  assert.equal(waitingEdit.body.reply_markup.inline_keyboard[0][0].text, "Cancel");
+  cancelCallbackData = waitingEdit.body.reply_markup.inline_keyboard[0][0].callback_data;
+
+  publishAiSessionSnapshotForTest(events, {
+    runningCount: 1,
+    waitingCount: 0,
+    staleCount: 0,
+    updatedAt: "2026-07-03T00:00:05.750Z",
+    sessions: [{
+      id: "ais_1",
+      agent: "codex",
+      activeTurnId: "turn_web_2",
+      status: "running",
+      phase: "approval",
+      currentTool: {
+        name: "shell",
+        inputPreview: "needs approval",
+      },
+      turns: [{
+        id: "turn_event_1",
+        userPrompt: "hello",
+        lastMessage: "event delivered answer again",
+        updatedAt: "2026-07-03T00:00:04.000Z",
+      }, {
+        id: "turn_web_2",
+        userPrompt: "web started another turn",
+        updatedAt: "2026-07-03T00:00:05.750Z",
+      }],
+      startedAt: "2026-07-03T00:00:00.000Z",
+      updatedAt: "2026-07-03T00:00:05.750Z",
+    }],
+  }, {
+    scope: { instanceId: "inst_1" },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const approvalEdit = calls.filter((call) => call.url.includes("editMessageText")).at(-1);
+  assert.match(approvalEdit.body.text, /Running shell/);
+  assert.deepEqual(approvalEdit.body.reply_markup.inline_keyboard.map((row) => row.map((button) => button.text)), [["Cancel"]]);
+  const approvalCallbackData = approvalEdit.body.reply_markup.inline_keyboard.flatMap((row) => row.map((button) => button.callback_data));
+  for (const callbackData of approvalCallbackData) {
+    assert.ok(Buffer.byteLength(callbackData, "utf8") <= 64);
+  }
+  cancelCallbackData = approvalCallbackData[0];
+
+  publishAiSessionSnapshotForTest(events, {
+    runningCount: 0,
+    waitingCount: 1,
+    staleCount: 0,
+    updatedAt: "2026-07-03T00:00:05.875Z",
+    sessions: [{
+      id: "ais_1",
+      agent: "codex",
+      activeTurnId: "turn_web_2",
+      status: "waiting",
+      phase: "approval",
+      currentTool: {
+        name: "shell",
+        inputPreview: "needs approval",
+      },
+      turns: [{
+        id: "turn_event_1",
+        userPrompt: "hello",
+        lastMessage: "event delivered answer again",
+        updatedAt: "2026-07-03T00:00:04.000Z",
+      }, {
+        id: "turn_web_2",
+        userPrompt: "web started another turn",
+        updatedAt: "2026-07-03T00:00:05.875Z",
+      }],
+      startedAt: "2026-07-03T00:00:00.000Z",
+      updatedAt: "2026-07-03T00:00:05.875Z",
+    }],
+  }, {
+    scope: { instanceId: "inst_1" },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const waitingApprovalEdit = calls.filter((call) => call.url.includes("editMessageText")).at(-1);
+  assert.match(waitingApprovalEdit.body.text, /Running shell/);
+  assert.deepEqual(waitingApprovalEdit.body.reply_markup.inline_keyboard.map((row) => row.map((button) => button.text)), [["Allow", "Skip", "Deny"]]);
+  const waitingApprovalCallbackData = waitingApprovalEdit.body.reply_markup.inline_keyboard.flatMap((row) => row.map((button) => button.callback_data));
+  assert.deepEqual(waitingApprovalCallbackData, [
+    "task_handoff:cp_p:allow_token",
+    "task_handoff:cp_p:skip_token",
+    "task_handoff:cp_p:deny_token",
+  ]);
+
+  publishAiSessionSnapshotForTest(events, {
+    runningCount: 0,
+    waitingCount: 0,
+    staleCount: 0,
+    updatedAt: "2026-07-03T00:00:06.000Z",
+    sessions: [{
+      id: "ais_1",
+      agent: "codex",
+      status: "idle",
+      phase: "unknown",
+      turns: [{
+        id: "turn_event_1",
+        userPrompt: "hello",
+        lastMessage: "event delivered answer again",
+        updatedAt: "2026-07-03T00:00:04.000Z",
+      }, {
+        id: "turn_web_2",
+        userPrompt: "web started another turn",
+        lastMessage: "web turn answer",
+        updatedAt: "2026-07-03T00:00:06.000Z",
+      }],
+      startedAt: "2026-07-03T00:00:00.000Z",
+      updatedAt: "2026-07-03T00:00:06.000Z",
+    }],
+  }, {
+    scope: { instanceId: "inst_1" },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const sentMessages = calls.filter((call) => call.url.includes("sendMessage"));
+  assert.equal(sentMessages.length, 3);
+  const webTurnEdit = calls.filter((call) => call.url.includes("editMessageText")).at(-1);
+  assert.match(webTurnEdit.body.text, /web turn answer/);
+  assert.deepEqual(webTurnEdit.body.reply_markup.inline_keyboard, []);
+  telegramCallbacks.push(cancelCallbackData);
+  await runtime.pollBridgeNow(bridge.id);
+  assert.deepEqual(interrupts, [{ instanceId: "inst_1", sessionId: "ais_1" }]);
+  const cancelAnswer = calls.filter((call) => call.url.includes("answerCallbackQuery")).at(-1);
+  assert.equal(cancelAnswer.body.text, "Interrupt sent");
+
+  publishAiSessionSnapshotForTest(events, {
+    runningCount: 0,
+    waitingCount: 0,
+    staleCount: 0,
+    updatedAt: "2026-07-03T00:00:07.000Z",
+    sessions: [{
+      id: "ais_1",
+      agent: "codex",
+      status: "idle",
+      phase: "unknown",
+      turns: [{
+        userPrompt: "hello",
+        lastMessage: "event delivered answer again",
+        updatedAt: "2026-07-03T00:00:04.000Z",
+      }, {
+        userPrompt: "web started another turn",
+        lastMessage: "web turn final",
+        updatedAt: "2026-07-03T00:00:07.000Z",
+      }],
+      startedAt: "2026-07-03T00:00:00.000Z",
+      updatedAt: "2026-07-03T00:00:07.000Z",
+    }],
+  }, {
+    scope: { instanceId: "inst_1" },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const finalEdit = calls.filter((call) => call.url.includes("editMessageText")).at(-1);
+  assert.deepEqual(finalEdit.body.reply_markup.inline_keyboard, []);
+  assert.equal(calls.some((call) => call.url.includes("editMessageText") && call.body.message_id === 901 && /web turn/.test(call.body.text)), false);
+  runtime.stopAll();
+});
+
+test("control plane telegram bridge treats getUpdates conflicts as runtime errors without throwing", async () => {
+  const bridge = {
+    id: "chat_telegram_conflict",
+    channel: "telegram",
+    name: "Telegram Conflict",
+    enabled: true,
+    token: "telegram-token",
+    tokenSet: true,
+    defaultChatId: "",
+    allowedUserIds: [],
+    pollIntervalMs: 30000,
+    settings: {},
+  };
+  const runtime = new ControlPlaneChatGatewayRuntime({
+    listChatBridges: () => [bridge],
+    requireChatBridge: () => bridge,
+    listPendingRoutes: async () => [],
+  }, async () =>
+    new Response(JSON.stringify({
+      ok: false,
+      description: "Conflict: terminated by other getUpdates request; make sure that only one bot instance is running",
+    }), { status: 409, headers: { "content-type": "application/json" } }));
+
+  const status = await runtime.pollBridgeNow(bridge.id);
+  assert.match(status.bridges[0].error, /terminated by other getUpdates request/);
+});
+
+test("control plane telegram bridge keeps old progress message updating after session switch", async () => {
+  const bridge = {
+    id: "chat_telegram_task2",
+    channel: "telegram",
+    name: "Telegram Task2",
+    enabled: true,
+    token: "telegram-token",
+    tokenSet: true,
+    defaultChatId: "",
+    allowedUserIds: ["456"],
+    pollIntervalMs: 30000,
+    settings: {},
+  };
+  const calls = [];
+  const events = new ControlPlaneEventBus();
+  let telegramMessageId = 900;
+  const bindings = [{
+    id: "telegram:123",
+    channel: "telegram",
+    bridgeId: bridge.id,
+    chatSessionId: "123",
+    activeInstanceId: "inst_1",
+    activeAiSessionId: "ais_1",
+  }];
+  const interrupts = [];
+  let updatePayloads = [];
+  const runtime = new ControlPlaneChatGatewayRuntime({
+    listChatBridges: () => [bridge],
+    requireChatBridge: () => bridge,
+    handleChatGatewayMessage: async (message) => {
+      if (message.message.text === "hello") {
+        return {
+          routed: true,
+          instance: { id: "inst_1" },
+          aiSession: {
+            session: {
+              id: "ais_1",
+              agent: "codex",
+              activeTurnId: "turn_1",
+              status: "running",
+              phase: "responding",
+              updatedAt: "2026-07-10T00:00:00.000Z",
+            },
+            provider: "codex",
+            action: "send",
+            providerTurnId: "turn_1",
+          },
+          reply: "Sent to ais_1.",
+        };
+      }
+      return { reply: "ok" };
+    },
+    handleChatGatewayAction: async () => ({ accepted: true, reply: "ok" }),
+    listChatSessions: () => bindings,
+    boardAsync: async () => [{ id: "inst_1", name: "instance-main" }],
+    listPendingRoutes: async () => [],
+    listAiSessions: async () => ({ instances: [] }),
+    interruptAiSession: async (instanceId, sessionId) => {
+      interrupts.push({ instanceId, sessionId });
+    },
+    aiSessionQueue: async () => ({ pendingCount: 0, items: [] }),
+    steerAiSessionQueuedMessage: async () => ({}),
+    removeAiSessionQueuedMessage: async () => ({}),
+    resolveChatActionToken: () => { throw new Error("unused"); },
+    pendingDecisionCallbackData: () => "unused",
+  },
+  async (url, init = {}) => {
+    calls.push({ url: String(url), body: init.body ? JSON.parse(init.body) : undefined });
+    if (String(url).includes("getUpdates")) {
+      return new Response(JSON.stringify({
+        ok: true,
+        result: updatePayloads.length ? [updatePayloads.shift()] : [],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    const messageId = String(url).includes("sendMessage") ? ++telegramMessageId : telegramMessageId;
+    return new Response(JSON.stringify({ ok: true, result: { message_id: messageId } }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }, aiSessionGatewayOptions(events, { telegramProgressUpdateIntervalMs: 1 }));
+
+  updatePayloads.push({
+    update_id: 1,
+    message: {
+      text: "hello",
+      chat: { id: 123 },
+      from: { id: 456 },
+    },
+  });
+  await runtime.pollBridgeNow(bridge.id);
+  await waitTelegramAggregate();
+  publishAiSessionSnapshotForTest(events, {
+    runningCount: 1,
+    waitingCount: 0,
+    staleCount: 0,
+    updatedAt: "2026-07-10T00:00:01.000Z",
+    sessions: [{
+      id: "ais_1",
+      agent: "codex",
+      activeTurnId: "turn_1",
+      status: "running",
+      phase: "thinking",
+      turns: [{ id: "turn_1", userPrompt: "hello", updatedAt: "2026-07-10T00:00:01.000Z" }],
+      startedAt: "2026-07-10T00:00:00.000Z",
+      updatedAt: "2026-07-10T00:00:01.000Z",
+    }],
+  }, { scope: { instanceId: "inst_1" } });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  bindings[0].activeAiSessionId = "ais_2";
+  publishAiSessionSnapshotForTest(events, {
+    runningCount: 1,
+    waitingCount: 1,
+    staleCount: 0,
+    updatedAt: "2026-07-10T00:00:02.000Z",
+    sessions: [{
+      id: "ais_1",
+      agent: "codex",
+      activeTurnId: "turn_1",
+      status: "running",
+      phase: "tool",
+      currentTool: { name: "shell", inputPreview: "still running" },
+      turns: [{ id: "turn_1", userPrompt: "hello", updatedAt: "2026-07-10T00:00:02.000Z" }],
+      startedAt: "2026-07-10T00:00:00.000Z",
+      updatedAt: "2026-07-10T00:00:02.000Z",
+    }, {
+      id: "ais_2",
+      agent: "claude",
+      status: "waiting",
+      phase: "approval",
+      turns: [{ id: "turn_2", userPrompt: "other", updatedAt: "2026-07-10T00:00:02.000Z" }],
+      startedAt: "2026-07-10T00:00:00.000Z",
+      updatedAt: "2026-07-10T00:00:02.000Z",
+    }],
+  }, { scope: { instanceId: "inst_1" } });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const switchedEdit = calls.filter((call) => call.url.includes("editMessageText")).at(-1);
+  assert.ok(switchedEdit);
+  assert.equal(switchedEdit.body.message_id, 901);
+  assert.match(switchedEdit.body.text, /Running shell/);
+  assert.equal(calls.filter((call) => call.url.includes("sendMessage")).length, 1);
+
+  const cancelCallbackData = switchedEdit.body.reply_markup.inline_keyboard[0][0].callback_data;
+  updatePayloads = [{
+    update_id: 2,
+    callback_query: {
+      id: "cb-unrelated",
+      data: cancelCallbackData,
+      from: { id: 456 },
+      message: {
+        message_id: 999,
+        chat: { id: 123 },
+      },
+    },
+  }];
+  await runtime.pollBridgeNow(bridge.id);
+  const unrelatedAnswer = calls.filter((call) => call.url.includes("answerCallbackQuery")).at(-1);
+  assert.equal(unrelatedAnswer?.body?.text, "This chat is not bound to that AI session");
+  assert.deepEqual(interrupts, []);
+
+  updatePayloads = [{
+    update_id: 3,
+    callback_query: {
+      id: "cb-1",
+      data: cancelCallbackData,
+      from: { id: 456 },
+      message: {
+        message_id: 901,
+        chat: { id: 123 },
+      },
+    },
+  }];
+  await runtime.pollBridgeNow(bridge.id);
+  const cancelAnswer = calls.filter((call) => call.url.includes("answerCallbackQuery")).at(-1);
+  assert.equal(cancelAnswer?.body?.text, "Interrupt sent");
+  assert.deepEqual(interrupts, [{ instanceId: "inst_1", sessionId: "ais_1" }]);
+  runtime.stopAll();
+});
+
+test("control plane telegram bridge falls back from markdown v2 to legacy markdown", async () => {
+  const bridge = {
+    id: "chat_telegram_markdown_fallback",
+    channel: "telegram",
+    name: "Telegram Markdown",
+    enabled: true,
+    token: "telegram-token",
+    tokenSet: true,
+    defaultChatId: "",
+    allowedUserIds: ["456"],
+    pollIntervalMs: 30000,
+    settings: {},
+  };
+  const calls = [];
+  const runtime = new ControlPlaneChatGatewayRuntime({
+    listChatBridges: () => [bridge],
+    requireChatBridge: () => bridge,
+    handleChatGatewayMessage: async () => ({
+      reply: "Use *markdown* please",
+    }),
+    listPendingRoutes: async () => [],
+  }, async (url, init = {}) => {
+    const body = init.body ? JSON.parse(init.body) : undefined;
+    calls.push({ url: String(url), body });
+    if (String(url).includes("getUpdates")) {
+      return new Response(JSON.stringify({
+        ok: true,
+        result: [{
+          update_id: 1,
+          message: {
+            message_id: 10,
+            text: "hello",
+            chat: { id: 123 },
+            from: { id: 456 },
+          },
+        }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (body?.parse_mode === "MarkdownV2") {
+      return new Response(JSON.stringify({ ok: false, description: "Bad Request: can't parse entities" }), {
+        status: 400,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify({ ok: true, result: { message_id: 1001 } }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  });
+
+  await runtime.pollBridgeNow(bridge.id);
+  await waitTelegramAggregate();
+  const sent = calls.filter((call) => call.url.includes("sendMessage"));
+  assert.equal(sent.length, 2);
+  assert.equal(sent[0].body.parse_mode, "MarkdownV2");
+  assert.equal(sent[0].body.text, "Use _markdown_ please");
+  assert.equal(sent[1].body.parse_mode, undefined);
+  assert.equal(sent[1].body.text, "Use *markdown* please");
+});
+
+test("control plane chat bridge settings cover telegram wechat and dingding", async (t) => {
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-chat-bridges"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+  });
+  t.after(() => app.close());
+
+  const telegramBridge = await json(app, "POST", "/api/chat-gateway/bridges", {
+    channel: "telegram",
+    name: "Telegram Main",
+  });
+  assert.equal(telegramBridge.statusCode, 200);
+
+  const secondTelegramBridge = await json(app, "POST", "/api/chat-gateway/bridges", {
+    channel: "telegram",
+    name: "Telegram Alerts",
+  });
+  assert.equal(secondTelegramBridge.statusCode, 200);
+
+  const telegram = await json(app, "PATCH", `/api/chat-gateway/bridges/${telegramBridge.body.data.id}`, {
+    token: "telegram-token",
+    defaultChatId: "123",
+    allowedUserIds: ["456"],
+  });
+  assert.equal(telegram.statusCode, 200);
+  assert.equal(telegram.body.data.token, undefined);
+  assert.equal(telegram.body.data.tokenSet, true);
+  assert.equal(telegram.body.data.defaultChatId, "123");
+  assert.notEqual(telegramBridge.body.data.id, secondTelegramBridge.body.data.id);
+
+  const wechatBridge = await json(app, "POST", "/api/chat-gateway/bridges", {
+    channel: "wechat",
+    name: "WeChat Main",
+  });
+  assert.equal(wechatBridge.statusCode, 200);
+
+  const wechatStart = await json(app, "POST", `/api/chat-gateway/bridges/${wechatBridge.body.data.id}/start`);
+  assert.equal(wechatStart.statusCode, 200);
+  const wechatStatus = wechatStart.body.data.bridges.find((bridge) => bridge.id === wechatBridge.body.data.id);
+  assert.equal(wechatStatus.running, false);
+  assert.match(wechatStatus.error, /token is not configured/i);
+
+  const dingdingBridge = await json(app, "POST", "/api/chat-gateway/bridges", {
+    channel: "dingding",
+    name: "DingDing Main",
+  });
+  assert.equal(dingdingBridge.statusCode, 200);
+
+  const dingding = await json(app, "PATCH", `/api/chat-gateway/bridges/${dingdingBridge.body.data.id}`, {
+    token: "dingding-client-id",
+    defaultChatId: "dingding-chat",
+    allowedUserIds: [],
+    settings: {
+      clientSecret: "dingding-secret",
+      robotCode: "robot-code",
+      corpId: "corp-id",
+    },
+  });
+  assert.equal(dingding.statusCode, 200);
+  assert.equal(dingding.body.data.token, undefined);
+  assert.equal(dingding.body.data.tokenSet, true);
+  assert.equal(dingding.body.data.settings.clientSecret, undefined);
+  assert.equal(dingding.body.data.settings.clientSecretSet, true);
+  assert.equal(dingding.body.data.settings.robotCode, "robot-code");
+
+  const bridges = await json(app, "GET", "/api/chat-gateway/bridges");
+  assert.equal(bridges.statusCode, 200);
+  assert.equal(bridges.body.data.filter((bridge) => bridge.channel === "telegram").length, 2);
+  assert.equal(bridges.body.data.find((bridge) => bridge.channel === "dingding").settings.clientSecret, undefined);
+  assert.equal(bridges.body.data.find((bridge) => bridge.channel === "dingding").settings.clientSecretSet, true);
+});
+
+test("control plane wechat bridge polls messages and sends replies", async (t) => {
+  const calls = [];
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-wechat-bridge"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: {
+      fetchImpl: async (url, init = {}) => {
+        calls.push({
+          url: String(url),
+          method: init.method || "GET",
+          body: init.body ? JSON.parse(init.body) : undefined,
+        });
+        if (String(url).includes("getupdates")) {
+          return new Response(
+            JSON.stringify({
+              ret: 0,
+              get_updates_buf: "cursor-2",
+              msgs: [
+                {
+                  from_user_id: "wechat-chat",
+                  message_type: 1,
+                  context_token: "context-1",
+                  item_list: [{ type: 1, text_item: { text: "/instances" } }],
+                },
+              ],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        if (String(url).includes("sendmessage")) {
+          return new Response(JSON.stringify({ ret: 0, msg: "ok" }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({ ret: 0 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    },
+  });
+  t.after(() => app.close());
+
+  const createdBridge = await json(app, "POST", "/api/chat-gateway/bridges", {
+    channel: "wechat",
+    name: "WeChat Ops",
+  });
+  assert.equal(createdBridge.statusCode, 200);
+
+  const patched = await json(app, "PATCH", `/api/chat-gateway/bridges/${createdBridge.body.data.id}`, {
+    token: "wechat-token",
+    defaultChatId: "wechat-chat",
+    pollIntervalMs: 30000,
+    settings: {
+      baseUrl: "https://wechat.example.test",
+      contextToken: "context-1",
+    },
+  });
+  assert.equal(patched.statusCode, 200);
+  assert.equal(patched.body.data.tokenSet, true);
+
+  const started = await json(app, "POST", `/api/chat-gateway/bridges/${createdBridge.body.data.id}/start`);
+  assert.equal(started.statusCode, 200);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  assert.ok(calls.some((call) => call.url.includes("getupdates")));
+  const sent = calls.find((call) => call.url.includes("sendmessage"));
+  assert.ok(sent);
+  assert.equal(sent.body.msg.to_user_id, "wechat-chat");
+  assert.match(sent.body.msg.item_list[0].text_item.text, /No controlled instances/);
+
+  const bridges = await json(app, "GET", "/api/chat-gateway/bridges");
+  assert.equal(bridges.body.data.find((bridge) => bridge.id === createdBridge.body.data.id).settings.updatesBuf, "cursor-2");
+});
+
+test("control plane dingding bridge receives robot messages and sends replies", async () => {
+  const calls = [];
+  let fakeClient;
+  const bridge = {
+    id: "chat_dingding_test",
+    channel: "dingding",
+    name: "DingDing Test",
+    enabled: true,
+    token: "dingding-client-id",
+    tokenSet: true,
+    defaultChatId: "",
+    allowedUserIds: [],
+    pollIntervalMs: 30000,
+    settings: {
+      clientSecret: "dingding-secret",
+    },
+  };
+  const service = {
+    listChatBridges: () => [bridge],
+    requireChatBridge: () => bridge,
+    updateChatBridge: (_channel, input) => {
+      calls.push({ type: "update", input });
+      Object.assign(bridge, input, {
+        settings: {
+          ...bridge.settings,
+          ...(input.settings || {}),
+        },
+      });
+      return bridge;
+    },
+    handleChatGatewayMessage: async (message) => {
+      calls.push({ type: "message", message });
+      return { reply: "DingDing reply" };
+    },
+    listPendingRoutes: async () => [],
+  };
+  class FakeDingdingClient {
+    constructor() {
+      this.listeners = new Map();
+      this.responses = [];
+      this.connected = false;
+      this.disconnected = false;
+    }
+
+    registerCallbackListener(topic, listener) {
+      this.listeners.set(topic, listener);
+    }
+
+    async connect() {
+      this.connected = true;
+    }
+
+    disconnect() {
+      this.disconnected = true;
+    }
+
+    socketCallBackResponse(messageId, payload) {
+      this.responses.push({ messageId, payload });
+    }
+
+    emitRobot(data) {
+      const listener = this.listeners.get("/v1.0/im/bot/messages/get");
+      listener({
+        headers: { messageId: "ding-msg-1" },
+        data: JSON.stringify(data),
+      });
+    }
+
+    emitCard(data) {
+      const listener = this.listeners.get("/v1.0/card/instances/callback");
+      listener({
+        headers: { messageId: "ding-card-1" },
+        data: JSON.stringify(data),
+      });
+    }
+  }
+  const runtime = new ControlPlaneChatGatewayRuntime(
+    service,
+    async (url, init = {}) => {
+      calls.push({
+        type: "fetch",
+        url: String(url),
+        body: init.body ? JSON.parse(init.body) : undefined,
+      });
+      return new Response(JSON.stringify({ errcode: 0 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+    {
+      createDingdingClient: () => {
+        fakeClient = new FakeDingdingClient();
+        return fakeClient;
+      },
+    },
+  );
+
+  const started = runtime.startBridge(bridge.id);
+  assert.equal(started.bridges.find((status) => status.id === bridge.id).running, true);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(fakeClient.connected, true);
+
+  fakeClient.emitRobot({
+    conversationId: "dingding-chat",
+    senderStaffId: "staff-1",
+    sessionWebhook: "https://dingding.example.test/webhook",
+    text: { content: "/instances" },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  fakeClient.emitRobot({
+    conversationId: "other-chat",
+    senderStaffId: "staff-2",
+    sessionWebhook: "https://dingding.example.test/other-webhook",
+    text: { content: "/instances" },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const routedMessages = calls.filter((call) => call.type === "message");
+  assert.equal(routedMessages.length, 1);
+  const routed = routedMessages[0];
+  assert.equal(routed.message.source.channel, "dingding");
+  assert.equal(routed.message.source.bridgeId, bridge.id);
+  assert.equal(routed.message.source.chatSessionId, "dingding-chat");
+  assert.equal(routed.message.source.userId, "staff-1");
+  assert.equal(routed.message.message.text, "/instances");
+  assert.deepEqual(bridge.allowedUserIds, ["staff-1"]);
+  assert.deepEqual(
+    calls.find((call) => call.type === "update" && call.input.allowedUserIds)?.input,
+    { allowedUserIds: ["staff-1"] },
+  );
+  assert.equal(bridge.defaultChatId, "dingding-chat");
+  assert.deepEqual(fakeClient.responses, [
+    { messageId: "ding-msg-1", payload: {} },
+    { messageId: "ding-msg-1", payload: {} },
+  ]);
+  const reply = calls.find((call) => call.type === "fetch");
+  assert.equal(reply.url, "https://dingding.example.test/webhook");
+  assert.equal(reply.body.msgtype, "markdown");
+  assert.match(reply.body.markdown.text, /DingDing reply/);
+
+  runtime.stopAll();
+  assert.equal(fakeClient.disconnected, true);
+});
+
+test("control plane dingding stream client disables unsafe sdk heartbeat", () => {
+  const client = createDingdingStreamClient({
+    clientId: "dingding-client-id",
+    clientSecret: "dingding-secret",
+  });
+  assert.equal(client.getConfig().keepAlive, false);
+});
+
+test("control plane dingding bridge replies business errors through robot message", async () => {
+  const calls = [];
+  let fakeClient;
+  const bridge = {
+    id: "chat_dingding_business_error",
+    channel: "dingding",
+    name: "DingDing Business Error",
+    enabled: true,
+    token: "dingding-client-id",
+    tokenSet: true,
+    defaultChatId: "",
+    allowedUserIds: ["staff-1"],
+    pollIntervalMs: 30000,
+    settings: {
+      clientSecret: "dingding-secret",
+    },
+  };
+  const service = {
+    listChatBridges: () => [bridge],
+    requireChatBridge: () => bridge,
+    updateChatBridge: (_channel, input) => {
+      Object.assign(bridge, input, {
+        settings: {
+          ...bridge.settings,
+          ...(input.settings || {}),
+        },
+      });
+      return bridge;
+    },
+    handleChatGatewayMessage: async () => {
+      throw new Error("Project 123 was not found.");
+    },
+    listPendingRoutes: async () => [],
+  };
+  class FakeDingdingClient {
+    constructor() {
+      this.listeners = new Map();
+      this.responses = [];
+      this.connected = false;
+    }
+
+    registerCallbackListener(topic, listener) {
+      this.listeners.set(topic, listener);
+    }
+
+    async connect() {
+      this.connected = true;
+    }
+
+    disconnect() {}
+
+    socketCallBackResponse(messageId, payload) {
+      this.responses.push({ messageId, payload });
+    }
+
+    emitRobot(data) {
+      this.listeners.get("/v1.0/im/bot/messages/get")({
+        headers: { messageId: "ding-msg-error" },
+        data: JSON.stringify(data),
+      });
+    }
+  }
+  const runtime = new ControlPlaneChatGatewayRuntime(
+    service,
+    async (url, init = {}) => {
+      calls.push({
+        type: "fetch",
+        url: String(url),
+        body: init.body ? JSON.parse(init.body) : undefined,
+      });
+      return new Response(JSON.stringify({ errcode: 0 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+    {
+      createDingdingClient: () => {
+        fakeClient = new FakeDingdingClient();
+        return fakeClient;
+      },
+    },
+  );
+
+  runtime.startBridge(bridge.id);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  fakeClient.emitRobot({
+    conversationId: "dingding-chat",
+    senderStaffId: "staff-1",
+    sessionWebhook: "https://dingding.example.test/webhook",
+    text: { content: "/use 123" },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.deepEqual(fakeClient.responses, [{ messageId: "ding-msg-error", payload: {} }]);
+  const reply = calls.find((call) => call.type === "fetch");
+  assert.equal(reply.url, "https://dingding.example.test/webhook");
+  assert.equal(reply.body.msgtype, "markdown");
+  assert.match(reply.body.markdown.text, /Project 123 was not found/);
+  assert.equal(runtime.status().bridges.find((status) => status.id === bridge.id).error, undefined);
+  runtime.stopAll();
+});
+
+test("control plane dingding bridge reuses cached robot webhook for later command replies", async () => {
+  const calls = [];
+  let fakeClient;
+  const bridge = {
+    id: "chat_dingding_cached_webhook",
+    channel: "dingding",
+    name: "DingDing Cached Webhook",
+    enabled: true,
+    token: "dingding-client-id",
+    tokenSet: true,
+    defaultChatId: "",
+    allowedUserIds: ["staff-1"],
+    pollIntervalMs: 30000,
+    settings: {
+      clientSecret: "dingding-secret",
+    },
+  };
+  const service = {
+    listChatBridges: () => [bridge],
+    requireChatBridge: () => bridge,
+    updateChatBridge: (_channel, input) => {
+      Object.assign(bridge, input, {
+        settings: {
+          ...bridge.settings,
+          ...(input.settings || {}),
+        },
+      });
+      return bridge;
+    },
+    handleChatGatewayMessage: async (message) => {
+      calls.push({ type: "message", message });
+      if (message.message.text === "/sessions") {
+        return {
+          reply: "Sessions: 1. Tap a session to use.",
+          replyMarkup: {
+            inline_keyboard: [[{ text: "worker - idle - ais_1", callback_data: "task_handoff:cp_session:0" }]],
+          },
+        };
+      }
+      return { reply: "ok" };
+    },
+    listPendingRoutes: async () => [],
+  };
+  class FakeDingdingClient {
+    constructor() {
+      this.listeners = new Map();
+      this.responses = [];
+    }
+
+    registerCallbackListener(topic, listener) {
+      this.listeners.set(topic, listener);
+    }
+
+    async connect() {}
+
+    disconnect() {}
+
+    socketCallBackResponse(messageId, payload) {
+      this.responses.push({ messageId, payload });
+    }
+
+    emitRobot(messageId, data) {
+      this.listeners.get("/v1.0/im/bot/messages/get")({
+        headers: { messageId },
+        data: JSON.stringify(data),
+      });
+    }
+  }
+  const runtime = new ControlPlaneChatGatewayRuntime(
+    service,
+    async (url, init = {}) => {
+      calls.push({
+        type: "fetch",
+        url: String(url),
+        body: init.body ? JSON.parse(init.body) : undefined,
+      });
+      return new Response(JSON.stringify({ errcode: 0, result: { outTrackId: "card-track-1" } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+    {
+      createDingdingClient: () => {
+        fakeClient = new FakeDingdingClient();
+        return fakeClient;
+      },
+    },
+  );
+
+  runtime.startBridge(bridge.id);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  fakeClient.emitRobot("ding-msg-prime", {
+    conversationId: "dingding-chat",
+    senderStaffId: "staff-1",
+    sessionWebhook: "https://dingding.example.test/webhook",
+    text: { content: "/help" },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  fakeClient.emitRobot("ding-msg-sessions", {
+    conversationId: "dingding-chat",
+    senderStaffId: "staff-1",
+    text: { content: "/sessions" },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const routed = calls.filter((call) => call.type === "message").map((call) => call.message.message.text);
+  assert.deepEqual(routed, ["/help", "/sessions"]);
+  const replies = calls.filter((call) => call.type === "fetch" && call.url === "https://dingding.example.test/webhook");
+  assert.equal(replies.length, 2);
+  assert.match(replies[1].body.markdown.text, /Sessions: 1/);
+  assert.deepEqual(fakeClient.responses, [
+    { messageId: "ding-msg-prime", payload: {} },
+    { messageId: "ding-msg-sessions", payload: {} },
+  ]);
+  assert.equal(runtime.status().bridges.find((status) => status.id === bridge.id).error, undefined);
+  runtime.stopAll();
+});
+
+test("control plane dingding bridge sends command action cards without robot webhook", async () => {
+  const calls = [];
+  let fakeClient;
+  const bridge = {
+    id: "chat_dingding_command_card",
+    channel: "dingding",
+    name: "DingDing Command Card",
+    enabled: true,
+    token: "dingding-client-id",
+    tokenSet: true,
+    defaultChatId: "",
+    allowedUserIds: ["staff-1"],
+    pollIntervalMs: 30000,
+    settings: {
+      clientSecret: "dingding-secret",
+      robotCode: "robot-code",
+    },
+  };
+  const service = {
+    listChatBridges: () => [bridge],
+    requireChatBridge: () => bridge,
+    updateChatBridge: (_channel, input) => {
+      Object.assign(bridge, input, {
+        settings: {
+          ...bridge.settings,
+          ...(input.settings || {}),
+        },
+      });
+      return bridge;
+    },
+    handleChatGatewayMessage: async (message) => {
+      calls.push({ type: "message", message });
+      return {
+        reply: "Select AI session",
+        replyMarkup: {
+          inline_keyboard: [[{ text: "worker - idle - ais_1", callback_data: "task_handoff:cp_session:0" }]],
+        },
+      };
+    },
+    listPendingRoutes: async () => [],
+  };
+  class FakeDingdingClient {
+    constructor() {
+      this.listeners = new Map();
+      this.responses = [];
+    }
+
+    registerCallbackListener(topic, listener) {
+      this.listeners.set(topic, listener);
+    }
+
+    async connect() {}
+
+    disconnect() {}
+
+    socketCallBackResponse(messageId, payload) {
+      this.responses.push({ messageId, payload });
+    }
+
+    emitRobot(messageId, data) {
+      this.listeners.get("/v1.0/im/bot/messages/get")({
+        headers: { messageId },
+        data: JSON.stringify(data),
+      });
+    }
+  }
+  const runtime = new ControlPlaneChatGatewayRuntime(
+    service,
+    async (url, init = {}) => {
+      calls.push({
+        type: "fetch",
+        url: String(url),
+        body: init.body ? JSON.parse(init.body) : undefined,
+      });
+      if (String(url).includes("/oauth2/accessToken")) {
+        return new Response(JSON.stringify({ accessToken: "access-token", expireIn: 7200 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+    {
+      createDingdingClient: () => {
+        fakeClient = new FakeDingdingClient();
+        return fakeClient;
+      },
+    },
+  );
+
+  try {
+    runtime.startBridge(bridge.id);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    fakeClient.emitRobot("ding-msg-sessions", {
+      conversationId: "dingding-chat",
+      conversationType: "2",
+      senderStaffId: "staff-1",
+      text: { content: "/sessions" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const routed = calls.find((call) => call.type === "message");
+    assert.equal(routed.message.message.text, "/sessions");
+    const cardCreate = calls.find((call) => call.type === "fetch" && call.url.includes("/card/instances/createAndDeliver"));
+    assert.ok(cardCreate);
+    assert.equal(cardCreate.body.userId, "staff-1");
+    assert.equal(cardCreate.body.imGroupOpenDeliverModel.robotCode, "robot-code");
+    assert.equal(cardCreate.body.cardData.cardParamMap.biz_conversation_id, "dingding-chat");
+    assert.equal(cardCreate.body.cardData.cardParamMap.biz_session_webhook, "");
+    assert.match(cardCreate.body.cardData.cardParamMap.description, /Select AI session/);
+    assert.match(cardCreate.body.cardData.cardParamMap.list, /worker - idle - ais_1/);
+    assert.deepEqual(fakeClient.responses, [{ messageId: "ding-msg-sessions", payload: {} }]);
+  } finally {
+    runtime.stopAll();
+  }
+});
+
+test("control plane dingding bridge sends action cards and handles callbacks", async () => {
+  const calls = [];
+  let fakeClient;
+  const bridge = {
+    id: "chat_dingding_cards",
+    channel: "dingding",
+    name: "DingDing Cards",
+    enabled: true,
+    token: "dingding-client-id",
+    tokenSet: true,
+    defaultChatId: "",
+    allowedUserIds: ["staff-1", "staff-2"],
+    pollIntervalMs: 30000,
+    settings: {
+      clientSecret: "dingding-secret",
+      robotCode: "robot-code",
+    },
+  };
+  const service = {
+    listChatBridges: () => [bridge],
+    requireChatBridge: () => bridge,
+    updateChatBridge: (_channel, input) => {
+      Object.assign(bridge, input, {
+        settings: {
+          ...bridge.settings,
+          ...(input.settings || {}),
+        },
+      });
+      return bridge;
+    },
+    handleChatGatewayMessage: async (message) => {
+      calls.push({ type: "message", message });
+      return {
+        reply: "Pick a session",
+        replyMarkup: {
+          inline_keyboard: [
+            [{ text: "Session 1", callback_data: "task_handoff:cp_session:0" }],
+          ],
+        },
+      };
+    },
+    handleChatGatewayAction: async (input) => {
+      calls.push({ type: "action", input });
+      return {
+        message: "selected",
+        reply: "Selected session",
+        replyMarkup: {
+          inline_keyboard: [
+            [{ text: "Session 1", callback_data: "task_handoff:cp_session:0" }],
+          ],
+        },
+      };
+    },
+    listPendingRoutes: async () => [],
+  };
+  class FakeDingdingClient {
+    constructor() {
+      this.listeners = new Map();
+      this.responses = [];
+    }
+
+    registerCallbackListener(topic, listener) {
+      this.listeners.set(topic, listener);
+    }
+
+    async connect() {}
+
+    disconnect() {}
+
+    socketCallBackResponse(messageId, payload) {
+      this.responses.push({ messageId, payload });
+    }
+
+    emitRobot(data) {
+      this.listeners.get("/v1.0/im/bot/messages/get")({
+        headers: { messageId: "ding-msg-1" },
+        data: JSON.stringify(data),
+      });
+    }
+
+    emitCard(data) {
+      this.listeners.get("/v1.0/card/instances/callback")({
+        headers: { messageId: "ding-card-1" },
+        data: JSON.stringify(data),
+      });
+    }
+  }
+  const runtime = new ControlPlaneChatGatewayRuntime(
+    service,
+    async (url, init = {}) => {
+      calls.push({
+        type: "fetch",
+        url: String(url),
+        body: init.body ? JSON.parse(init.body) : undefined,
+      });
+      if (String(url).includes("/oauth2/accessToken")) {
+        return new Response(JSON.stringify({ accessToken: "access-token", expireIn: 7200 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+    {
+      createDingdingClient: () => {
+        fakeClient = new FakeDingdingClient();
+        return fakeClient;
+      },
+    },
+  );
+
+  try {
+    runtime.startBridge(bridge.id);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    fakeClient.emitRobot({
+      conversationId: "dingding-chat",
+      senderStaffId: "staff-1",
+      sessionWebhook: "https://dingding.example.test/webhook",
+      text: { content: "/session" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const cardCreate = calls.find((call) => call.type === "fetch" && call.url.includes("/card/instances/createAndDeliver"));
+    assert.ok(cardCreate);
+    assert.equal(cardCreate.body.userId, "staff-1");
+    assert.equal(cardCreate.body.imGroupOpenDeliverModel.robotCode, "robot-code");
+    const cardParams = cardCreate.body.cardData.cardParamMap;
+    assert.equal(cardParams.biz_conversation_id, "dingding-chat");
+    assert.equal(cardParams.biz_sender_id, "staff-1");
+    assert.match(cardParams.list, /Session 1/);
+
+    fakeClient.emitCard({
+      userId: "staff-2",
+      outTrackId: cardCreate.body.outTrackId,
+      cardActionData: {
+        cardPrivateData: {
+          actionIdList: [JSON.parse(cardParams.list)[0].id],
+          params: {
+            biz_conversation_id: "dingding-chat",
+            biz_sender_id: "staff-1",
+            biz_session_webhook: "https://dingding.example.test/webhook",
+          },
+        },
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const action = calls.find((call) => call.type === "action");
+    assert.deepEqual(action.input.action, { type: "ai-session", index: 0 });
+    assert.equal(action.input.source.channel, "dingding");
+    assert.equal(action.input.source.chatSessionId, "dingding-chat");
+    assert.equal(action.input.source.userId, "staff-2");
+    const cardResponse = fakeClient.responses.find((response) => response.messageId === "ding-card-1");
+    assert.ok(cardResponse);
+    assert.match(cardResponse.payload.cardData.cardParamMap.description, /Selected session/);
+    assert.match(cardResponse.payload.cardData.cardParamMap.list, /Session 1/);
+    assert.equal(cardResponse.payload.cardData.cardParamMap.biz_sender_id, "staff-1");
+  } finally {
+    runtime.stopAll();
+  }
+});
+
+test("control plane dingding bridge binds the first card callback user", async () => {
+  const calls = [];
+  let fakeClient;
+  const bridge = {
+    id: "chat_dingding_first_card_user",
+    channel: "dingding",
+    name: "DingDing First Card User",
+    enabled: true,
+    token: "dingding-client-id",
+    tokenSet: true,
+    defaultChatId: "dingding-chat",
+    allowedUserIds: [],
+    pollIntervalMs: 30000,
+    settings: { clientSecret: "dingding-secret" },
+  };
+  const service = {
+    listChatBridges: () => [bridge],
+    requireChatBridge: () => bridge,
+    updateChatBridge: (_id, input) => {
+      calls.push({ type: "update", input });
+    },
+    handleChatGatewayAction: async (input) => {
+      calls.push({ type: "action", input });
+      return { reply: "Selected session" };
+    },
+    listPendingRoutes: async () => [],
+  };
+  class FakeDingdingClient {
+    constructor() {
+      this.listeners = new Map();
+      this.responses = [];
+    }
+
+    registerCallbackListener(topic, listener) {
+      this.listeners.set(topic, listener);
+    }
+
+    async connect() {}
+
+    disconnect() {}
+
+    socketCallBackResponse(messageId, payload) {
+      this.responses.push({ messageId, payload });
+    }
+
+    emitCard(data) {
+      this.listeners.get("/v1.0/card/instances/callback")({
+        headers: { messageId: "ding-card-first-user" },
+        data: JSON.stringify(data),
+      });
+    }
+  }
+  const runtime = new ControlPlaneChatGatewayRuntime(
+    service,
+    async () => new Response(JSON.stringify({ success: true }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+    {
+      createDingdingClient: () => {
+        fakeClient = new FakeDingdingClient();
+        return fakeClient;
+      },
+    },
+  );
+
+  try {
+    runtime.startBridge(bridge.id);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    fakeClient.emitCard({
+      userId: "staff-card-1",
+      cardActionData: {
+        cardPrivateData: {
+          actionIdList: ["task_handoff:cp_session:0"],
+          params: { biz_conversation_id: "dingding-chat" },
+        },
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.deepEqual(bridge.allowedUserIds, ["staff-card-1"]);
+    assert.deepEqual(
+      calls.find((call) => call.type === "update" && call.input.allowedUserIds)?.input,
+      { allowedUserIds: ["staff-card-1"] },
+    );
+    assert.equal(calls.filter((call) => call.type === "action").length, 1);
+  } finally {
+    runtime.stopAll();
+  }
+});
+
+test("control plane dingding card callback parses action id from card action data", () => {
+  const encoded = Buffer.from("task_handoff:cp_session:2", "utf8").toString("base64url");
+  const event = parseDingdingCardEvent(JSON.stringify({
+    userId: "staff-2",
+    spaceId: "dtv1.card//IM_GROUP.dingding-chat",
+    cardActionData: {
+      actionId: `th_cb_${encoded}`,
+      params: {
+        biz_conversation_id: "dingding-chat",
+        biz_sender_id: "staff-1",
+        biz_conversation_type: "IM_GROUP",
+      },
+    },
+  }));
+
+  assert.equal(event.callbackData, "task_handoff:cp_session:2");
+  assert.equal(event.chatId, "dingding-chat");
+  assert.equal(event.deliverySenderId, "staff-1");
+  assert.equal(event.conversationType, "IM_GROUP");
+});
+
+test("control plane dingding card callback parses json string private data", () => {
+  const event = parseDingdingCardEvent(JSON.stringify({
+    userId: "staff-2",
+    cardActionData: {
+      cardPrivateData: JSON.stringify({
+        actionIdList: ["task_handoff:cp_session:3"],
+        params: {
+          biz_conversation_id: "single-chat",
+          biz_sender_id: "staff-1",
+          biz_conversation_type: "IM_ROBOT",
+        },
+      }),
+    },
+  }));
+
+  assert.equal(event.callbackData, "task_handoff:cp_session:3");
+  assert.equal(event.chatId, "single-chat");
+  assert.equal(event.deliverySenderId, "staff-1");
+  assert.equal(event.conversationType, "IM_ROBOT");
+});
+
+test("control plane dingding card callback parses action data from content", () => {
+  const event = parseDingdingCardEvent(JSON.stringify({
+    userId: "staff-2",
+    outTrackId: "task_handoff_cp_1",
+    spaceId: "cid-single-chat",
+    content: JSON.stringify({
+      cardPrivateData: {
+        actionIds: ["task_handoff:cp_session:4"],
+        params: {
+          biz_conversation_id: "single-chat",
+          biz_sender_id: "staff-1",
+          biz_session_webhook: "https://dingding.example.test/webhook",
+          biz_conversation_type: "IM_ROBOT",
+        },
+      },
+    }),
+  }));
+
+  assert.equal(event.callbackData, "task_handoff:cp_session:4");
+  assert.equal(event.chatId, "single-chat");
+  assert.equal(event.deliverySenderId, "staff-1");
+  assert.equal(event.sessionWebhook, "https://dingding.example.test/webhook");
+  assert.equal(event.conversationType, "IM_ROBOT");
+});
+
+test("control plane chat gateway records default bridge send misses", async () => {
+  const bridge = {
+    id: "chat_wechat_default_miss",
+    channel: "wechat",
+    name: "WeChat Default Miss",
+    enabled: true,
+    token: "wechat-token",
+    tokenSet: true,
+    defaultChatId: "wechat-chat",
+    allowedUserIds: [],
+    pollIntervalMs: 30000,
+    settings: {},
+  };
+  let listPendingCalls = 0;
+  const runtime = new ControlPlaneChatGatewayRuntime(
+    {
+      listChatBridges: () => [bridge],
+      requireChatBridge: () => bridge,
+      listPendingRoutes: async () => {
+        listPendingCalls += 1;
+        return [{
+          id: "route_1",
+          projectId: "proj_1",
+          instanceId: "inst_1",
+          kind: "approval",
+          result: "Approve command",
+        }];
+      },
+      pendingDecisionCallbackData: (_routeId, decision) => `task_handoff:approval:route_1:${decision}`,
+    },
+    async () => {
+      return new Response(JSON.stringify({ errcode: 0, msgs: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  );
+
+  try {
+    await runtime.pollPendingRoutes();
+    await runtime.pollPendingRoutes();
+
+    const status = runtime.status();
+    assert.equal(status.bridges.find((item) => item.id === bridge.id).error, "Chat bridge message was not delivered.");
+    assert.equal(listPendingCalls, 2);
+  } finally {
+    runtime.stopAll();
+  }
+});
+
+test("control plane chat gateway keeps default bridge send errors", async () => {
+  const bridge = {
+    id: "chat_telegram_default_error",
+    channel: "telegram",
+    name: "Telegram Default Error",
+    enabled: true,
+    token: "telegram-token",
+    tokenSet: true,
+    defaultChatId: "telegram-chat",
+    allowedUserIds: [],
+    pollIntervalMs: 30000,
+    settings: {},
+  };
+  const runtime = new ControlPlaneChatGatewayRuntime(
+    {
+      listChatBridges: () => [bridge],
+      requireChatBridge: () => bridge,
+      listPendingRoutes: async () => [{
+        id: "route_1",
+        projectId: "proj_1",
+        instanceId: "inst_1",
+        kind: "approval",
+        result: "Approve command",
+      }],
+      pendingDecisionCallbackData: (_routeId, decision) => `task_handoff:approval:route_1:${decision}`,
+    },
+    async () => {
+      throw new Error("telegram send failed");
+    },
+  );
+
+  try {
+    await runtime.pollPendingRoutes();
+
+    const status = runtime.status();
+    assert.equal(status.bridges.find((item) => item.id === bridge.id).error, "telegram send failed");
+  } finally {
+    runtime.stopAll();
+  }
+});
+
+test("control plane dingding progress webhook fallback is delivered once", async () => {
+  const calls = [];
+  const events = new ControlPlaneEventBus();
+  const bridge = {
+    id: "chat_dingding_progress_webhook_fallback",
+    channel: "dingding",
+    name: "DingDing Progress Webhook Fallback",
+    enabled: true,
+    token: "dingding-client-id",
+    tokenSet: true,
+    defaultChatId: "dingding-chat",
+    allowedUserIds: [],
+    pollIntervalMs: 30000,
+    settings: {
+      clientSecret: "dingding-secret",
+      sessionWebhook: "https://dingding.example.test/webhook",
+    },
+  };
+  const service = {
+    listChatBridges: () => [bridge],
+    requireChatBridge: () => bridge,
+    listChatSessions: () => [{
+      id: "dingding:chat",
+      channel: "dingding",
+      bridgeId: bridge.id,
+      chatSessionId: "dingding-chat",
+      activeInstanceId: "inst_1",
+      activeAiSessionId: "ais_1",
+    }],
+    boardAsync: async () => [{ id: "inst_1", name: "instance-main" }],
+    listPendingRoutes: async () => [],
+  };
+  class FakeDingdingClient {
+    registerCallbackListener() {}
+    async connect() {}
+    disconnect() {}
+    socketCallBackResponse() {}
+  }
+  const runtime = new ControlPlaneChatGatewayRuntime(
+    service,
+    async (url, init = {}) => {
+      calls.push({
+        type: "fetch",
+        url: String(url),
+        body: init.body ? JSON.parse(init.body) : undefined,
+      });
+      return new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+    aiSessionGatewayOptions(events, {
+      createDingdingClient: () => new FakeDingdingClient(),
+    }),
+  );
+
+  try {
+    runtime.startBridge(bridge.id);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    publishAiSessionSnapshotForTest(events, {
+      runningCount: 1,
+      waitingCount: 0,
+      staleCount: 0,
+      updatedAt: "2026-07-03T00:00:05.000Z",
+      sessions: [{
+        id: "ais_1",
+        agent: "codex",
+        activeTurnId: "turn_1",
+        status: "running",
+        phase: "thinking",
+        currentTool: { name: "shell", inputPreview: "npm test" },
+        turns: [{ id: "turn_1", userPrompt: "run tests", updatedAt: "2026-07-03T00:00:05.000Z" }],
+        startedAt: "2026-07-03T00:00:00.000Z",
+        updatedAt: "2026-07-03T00:00:05.000Z",
+      }],
+    }, {
+      scope: { instanceId: "inst_1" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    assert.equal(calls.filter((call) => call.url === "https://dingding.example.test/webhook").length, 1);
+    assert.equal(calls.some((call) => call.url.includes("/card/instances/createAndDeliver")), false);
+  } finally {
+    runtime.stopAll();
+  }
+});
+
+test("control plane dingding progress treats API business errors as failures", async () => {
+  const calls = [];
+  const events = new ControlPlaneEventBus();
+  const bridge = {
+    id: "chat_dingding_progress_api_error",
+    channel: "dingding",
+    name: "DingDing Progress API Error",
+    enabled: true,
+    token: "dingding-client-id",
+    tokenSet: true,
+    defaultChatId: "dingding-chat",
+    allowedUserIds: [],
+    pollIntervalMs: 30000,
+    settings: {
+      clientSecret: "dingding-secret",
+      robotCode: "robot-code",
+      senderId: "staff-1",
+    },
+  };
+  const service = {
+    listChatBridges: () => [bridge],
+    requireChatBridge: () => bridge,
+    listChatSessions: () => [{
+      id: "dingding:chat",
+      channel: "dingding",
+      bridgeId: bridge.id,
+      chatSessionId: "dingding-chat",
+      activeInstanceId: "inst_1",
+      activeAiSessionId: "ais_1",
+    }],
+    boardAsync: async () => [{ id: "inst_1", name: "instance-main" }],
+    listPendingRoutes: async () => [],
+  };
+  class FakeDingdingClient {
+    registerCallbackListener() {}
+    async connect() {}
+    disconnect() {}
+    socketCallBackResponse() {}
+  }
+  const runtime = new ControlPlaneChatGatewayRuntime(
+    service,
+    async (url, init = {}) => {
+      calls.push({
+        type: "fetch",
+        url: String(url),
+        body: init.body ? JSON.parse(init.body) : undefined,
+      });
+      if (String(url).includes("/oauth2/accessToken")) {
+        return new Response(JSON.stringify({ accessToken: "access-token", expireIn: 7200 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ success: false, code: "InvalidParameter", message: "bad card" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+    aiSessionGatewayOptions(events, {
+      createDingdingClient: () => new FakeDingdingClient(),
+    }),
+  );
+
+  try {
+    runtime.startBridge(bridge.id);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const payload = {
+      runningCount: 1,
+      waitingCount: 0,
+      staleCount: 0,
+      updatedAt: "2026-07-03T00:00:05.000Z",
+      sessions: [{
+        id: "ais_1",
+        agent: "codex",
+        activeTurnId: "turn_1",
+        status: "running",
+        phase: "thinking",
+        currentTool: { name: "shell", inputPreview: "npm test" },
+        turns: [{ id: "turn_1", userPrompt: "run tests", updatedAt: "2026-07-03T00:00:05.000Z" }],
+        startedAt: "2026-07-03T00:00:00.000Z",
+        updatedAt: "2026-07-03T00:00:05.000Z",
+      }],
+    };
+    publishAiSessionSnapshotForTest(events, payload, { scope: { instanceId: "inst_1" } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    publishAiSessionSnapshotForTest(events, payload, { scope: { instanceId: "inst_1" } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    assert.equal(calls.filter((call) => call.url.includes("/card/instances/createAndDeliver")).length, 2);
+  } finally {
+    runtime.stopAll();
+  }
+});
+
+test("control plane dingding bridge renders ai session progress as cards", async () => {
+  const calls = [];
+  const events = new ControlPlaneEventBus();
+  let fakeClient;
+  const bridge = {
+    id: "chat_dingding_progress",
+    channel: "dingding",
+    name: "DingDing Progress",
+    enabled: true,
+    token: "dingding-client-id",
+    tokenSet: true,
+    defaultChatId: "dingding-chat",
+    allowedUserIds: [],
+    pollIntervalMs: 30000,
+    settings: {
+      clientSecret: "dingding-secret",
+      robotCode: "robot-code",
+      senderId: "staff-1",
+      sessionWebhook: "https://dingding.example.test/webhook",
+    },
+  };
+  const service = {
+    listChatBridges: () => [bridge],
+    requireChatBridge: () => bridge,
+    listChatSessions: () => [{
+      id: "dingding:chat",
+      channel: "dingding",
+      bridgeId: bridge.id,
+      chatSessionId: "dingding-chat",
+      activeInstanceId: "inst_1",
+      activeAiSessionId: "ais_1",
+    }],
+    boardAsync: async () => [{
+      id: "inst_1",
+      name: "instance-main",
+    }],
+    listAiSessions: async () => {
+      throw new Error("listAiSessions should not be used for event delivery");
+    },
+    listPendingRoutes: async () => [],
+  };
+  class FakeDingdingClient {
+    constructor() {
+      this.listeners = new Map();
+    }
+
+    registerCallbackListener(topic, listener) {
+      this.listeners.set(topic, listener);
+    }
+
+    async connect() {}
+
+    disconnect() {}
+
+    socketCallBackResponse() {}
+  }
+  const runtime = new ControlPlaneChatGatewayRuntime(
+    service,
+    async (url, init = {}) => {
+      calls.push({
+        type: "fetch",
+        url: String(url),
+        body: init.body ? JSON.parse(init.body) : undefined,
+      });
+      if (String(url).includes("/oauth2/accessToken")) {
+        return new Response(JSON.stringify({ accessToken: "access-token", expireIn: 7200 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+    aiSessionGatewayOptions(events, {
+      createDingdingClient: () => {
+        fakeClient = new FakeDingdingClient();
+        return fakeClient;
+      },
+    }),
+  );
+
+  runtime.startBridge(bridge.id);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  publishAiSessionSnapshotForTest(events, {
+    runningCount: 1,
+    waitingCount: 0,
+    staleCount: 0,
+    updatedAt: "2026-07-03T00:00:05.000Z",
+    sessions: [{
+      id: "ais_1",
+      agent: "codex",
+      activeTurnId: "turn_1",
+      status: "running",
+      phase: "thinking",
+      currentTool: {
+        name: "shell",
+        inputPreview: "npm test",
+      },
+      turns: [{
+        id: "turn_1",
+        userPrompt: "run tests",
+        updatedAt: "2026-07-03T00:00:05.000Z",
+      }],
+      startedAt: "2026-07-03T00:00:00.000Z",
+      updatedAt: "2026-07-03T00:00:05.000Z",
+    }],
+  }, {
+    scope: { instanceId: "inst_1" },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const cardCreate = calls.find((call) => call.type === "fetch" && call.url.includes("/card/instances/createAndDeliver"));
+  assert.ok(cardCreate);
+  assert.equal(cardCreate.body.userId, "staff-1");
+  const cardParams = cardCreate.body.cardData.cardParamMap;
+  assert.equal(cardParams.biz_step, "progress");
+  assert.equal(cardParams.biz_conversation_id, "dingding-chat");
+  assert.match(cardParams.description, /Running shell/);
+  assert.match(cardParams.list, /Cancel/);
+  assert.equal(calls.some((call) => call.url === "https://dingding.example.test/webhook"), false);
+
+  runtime.stopAll();
+});
+
+test("control plane dingding progress cards update when only actions change", async () => {
+  const calls = [];
+  const events = new ControlPlaneEventBus();
+  const bridge = {
+    id: "chat_dingding_progress_actions",
+    channel: "dingding",
+    name: "DingDing Progress Actions",
+    enabled: true,
+    token: "dingding-client-id",
+    tokenSet: true,
+    defaultChatId: "dingding-chat",
+    allowedUserIds: [],
+    pollIntervalMs: 30000,
+    settings: {
+      clientSecret: "dingding-secret",
+      robotCode: "robot-code",
+      senderId: "staff-1",
+      sessionWebhook: "https://dingding.example.test/webhook",
+    },
+  };
+  const service = {
+    listChatBridges: () => [bridge],
+    requireChatBridge: () => bridge,
+    listChatSessions: () => [{
+      id: "dingding:chat",
+      channel: "dingding",
+      bridgeId: bridge.id,
+      chatSessionId: "dingding-chat",
+      activeInstanceId: "inst_1",
+      activeAiSessionId: "ais_1",
+    }],
+    boardAsync: async () => [{
+      id: "inst_1",
+      name: "instance-main",
+    }],
+    listAiSessions: async () => {
+      throw new Error("listAiSessions should not be used for event delivery");
+    },
+    listPendingRoutes: async () => [],
+    pendingDecisionCallbackData: (_routeId, decision) => `task_handoff:cp_p:${decision}_token`,
+  };
+  class FakeDingdingClient {
+    registerCallbackListener() {}
+    async connect() {}
+    disconnect() {}
+    socketCallBackResponse() {}
+  }
+  const runtime = new ControlPlaneChatGatewayRuntime(
+    service,
+    async (url, init = {}) => {
+      calls.push({
+        type: "fetch",
+        url: String(url),
+        body: init.body ? JSON.parse(init.body) : undefined,
+      });
+      if (String(url).includes("/oauth2/accessToken")) {
+        return new Response(JSON.stringify({ accessToken: "access-token", expireIn: 7200 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+    aiSessionGatewayOptions(events, {
+      createDingdingClient: () => new FakeDingdingClient(),
+    }),
+  );
+
+  runtime.startBridge(bridge.id);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const session = {
+    id: "ais_1",
+    agent: "codex",
+    activeTurnId: "turn_1",
+    status: "running",
+    phase: "thinking",
+    currentTool: {
+      name: "shell",
+      inputPreview: "npm test",
+    },
+    turns: [{
+      id: "turn_1",
+      userPrompt: "run tests",
+      updatedAt: "2026-07-03T00:00:05.000Z",
+    }],
+    startedAt: "2026-07-03T00:00:00.000Z",
+    updatedAt: "2026-07-03T00:00:05.000Z",
+  };
+
+  publishAiSessionSnapshotForTest(events, {
+    runningCount: 1,
+    waitingCount: 0,
+    staleCount: 0,
+    updatedAt: "2026-07-03T00:00:05.000Z",
+    sessions: [session],
+  }, {
+    scope: { instanceId: "inst_1" },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const cardCreate = calls.find((call) => call.type === "fetch" && call.url.includes("/card/instances/createAndDeliver"));
+  assert.ok(cardCreate);
+  assert.match(cardCreate.body.cardData.cardParamMap.list, /Cancel/);
+  assert.equal(calls.some((call) => call.url === "https://dingding.example.test/webhook"), false);
+
+  service.listPendingRoutes = async () => [{
+    id: "inst_1:ai:ais_1",
+    projectId: "proj_1",
+    instanceId: "inst_1",
+    aiSessionId: "ais_1",
+    kind: "approval",
+    result: "Approve command: npm test",
+  }];
+  publishAiSessionSnapshotForTest(events, {
+    runningCount: 0,
+    waitingCount: 1,
+    staleCount: 0,
+    updatedAt: "2026-07-03T00:00:05.000Z",
+    sessions: [{ ...session, status: "waiting", phase: "approval" }],
+  }, {
+    scope: { instanceId: "inst_1" },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 1100));
+
+  const cardUpdate = calls.find((call) => call.type === "fetch" && call.body?.cardUpdateOptions && call.body?.outTrackId === cardCreate.body.outTrackId);
+  assert.ok(cardUpdate);
+  assert.match(cardUpdate.body.cardData.cardParamMap.description, /Running shell/);
+  assert.match(cardUpdate.body.cardData.cardParamMap.list, /Allow/);
+  assert.match(cardUpdate.body.cardData.cardParamMap.list, /Deny/);
+
+  runtime.stopAll();
+});
+
+test("control plane dingding routed ai session ack starts progress card", async () => {
+  const calls = [];
+  const events = new ControlPlaneEventBus();
+  const bridge = {
+    id: "chat_dingding_routed_ack",
+    channel: "dingding",
+    name: "DingDing Routed Ack",
+    enabled: true,
+    token: "dingding-client-id",
+    tokenSet: true,
+    defaultChatId: "",
+    allowedUserIds: [],
+    pollIntervalMs: 30000,
+    settings: {
+      clientSecret: "dingding-secret",
+      robotCode: "robot-code",
+      senderId: "staff-1",
+    },
+  };
+  const service = {
+    listChatBridges: () => [bridge],
+    requireChatBridge: () => bridge,
+    updateChatBridge: (_id, patch) => {
+      if (patch.defaultChatId) {
+        bridge.defaultChatId = patch.defaultChatId;
+      }
+    },
+    handleChatGatewayMessage: async (message) => ({
+      accepted: true,
+      routed: true,
+      binding: {
+        id: "dingding:chat",
+        channel: "dingding",
+        bridgeId: bridge.id,
+        chatSessionId: message.source.chatSessionId,
+        activeInstanceId: "inst_1",
+        activeAiSessionId: "ais_1",
+      },
+      instance: { id: "inst_1" },
+      aiSession: {
+        session: {
+          id: "ais_1",
+          agent: "codex",
+          activeTurnId: "turn_1",
+          status: "running",
+          phase: "thinking",
+          turns: [{
+            id: "turn_1",
+            userPrompt: message.message.text,
+            updatedAt: "2026-07-03T00:00:00.000Z",
+          }],
+          updatedAt: "2026-07-03T00:00:00.000Z",
+        },
+        provider: "codex",
+        action: "send",
+      },
+      turnId: "turn_1",
+      providerTurnId: "turn_1",
+      reply: "Sent to work / inst_1 / ais_1.",
+    }),
+    listChatSessions: () => [{
+      id: "dingding:chat",
+      channel: "dingding",
+      bridgeId: bridge.id,
+      chatSessionId: "dingding-chat",
+      activeInstanceId: "inst_1",
+      activeAiSessionId: "ais_1",
+    }],
+    boardAsync: async () => [{ id: "inst_1", name: "instance-main" }],
+    listAiSessions: async () => {
+      throw new Error("listAiSessions should not be used for event delivery");
+    },
+    listPendingRoutes: async () => [],
+    pendingDecisionCallbackData: (_routeId, decision) => `task_handoff:cp_p:${decision}_token`,
+  };
+  const listeners = new Map();
+  class FakeDingdingClient {
+    registerCallbackListener(topic, listener) {
+      listeners.set(topic, listener);
+    }
+    async connect() {}
+    disconnect() {}
+    socketCallBackResponse() {}
+  }
+  const runtime = new ControlPlaneChatGatewayRuntime(
+    service,
+    async (url, init = {}) => {
+      calls.push({
+        type: "fetch",
+        url: String(url),
+        body: init.body ? JSON.parse(init.body) : undefined,
+      });
+      if (String(url).includes("/oauth2/accessToken")) {
+        return new Response(JSON.stringify({ accessToken: "access-token", expireIn: 7200 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+    aiSessionGatewayOptions(events, {
+      createDingdingClient: () => new FakeDingdingClient(),
+    }),
+  );
+
+  runtime.startBridge(bridge.id);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  listeners.get("/v1.0/im/bot/messages/get")({
+    headers: { messageId: "msg-1" },
+    data: JSON.stringify({
+      conversationId: "dingding-chat",
+      conversationType: "2",
+      senderStaffId: "staff-1",
+      sessionWebhook: "https://dingding.example.test/webhook",
+      text: { content: "你好" },
+    }),
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const cardCreate = calls.find((call) => call.type === "fetch" && call.url.includes("/card/instances/createAndDeliver"));
+  assert.ok(cardCreate);
+  assert.match(cardCreate.body.cardData.cardParamMap.description, /Sent to work/);
+  assert.equal(calls.some((call) => call.url === "https://dingding.example.test/webhook"), false);
+
+  publishAiSessionSnapshotForTest(events, {
+    runningCount: 0,
+    waitingCount: 0,
+    staleCount: 0,
+    updatedAt: "2026-07-03T00:00:03.000Z",
+    sessions: [{
+      id: "ais_1",
+      agent: "codex",
+      status: "idle",
+      phase: "unknown",
+      turns: [{
+        id: "turn_1",
+        userPrompt: "你好",
+        lastMessage: "你好。需要我做什么？",
+        updatedAt: "2026-07-03T00:00:03.000Z",
+      }],
+      startedAt: "2026-07-03T00:00:00.000Z",
+      updatedAt: "2026-07-03T00:00:03.000Z",
+    }],
+  }, { scope: { instanceId: "inst_1" } });
+  await new Promise((resolve) => setTimeout(resolve, 1100));
+
+  const cardUpdate = calls.find((call) => call.type === "fetch" && call.body?.cardUpdateOptions);
+  assert.ok(cardUpdate);
+  assert.equal(cardUpdate.body.outTrackId, cardCreate.body.outTrackId);
+  assert.match(cardUpdate.body.cardData.cardParamMap.description, /需要我做什么/);
+  assert.equal(calls.filter((call) => call.url.includes("/card/instances/createAndDeliver")).length, 1);
+  assert.equal(calls.some((call) => call.url === "https://dingding.example.test/webhook"), false);
+
+  runtime.stopAll();
+});
+
+test("control plane dingding throttled progress update failures can retry", async () => {
+  const calls = [];
+  const events = new ControlPlaneEventBus();
+  const bridge = {
+    id: "chat_dingding_progress_update_retry",
+    channel: "dingding",
+    name: "DingDing Progress Update Retry",
+    enabled: true,
+    token: "dingding-client-id",
+    tokenSet: true,
+    defaultChatId: "dingding-chat",
+    allowedUserIds: [],
+    pollIntervalMs: 30000,
+    settings: {
+      clientSecret: "dingding-secret",
+      robotCode: "robot-code",
+      senderId: "staff-1",
+    },
+  };
+  const service = {
+    listChatBridges: () => [bridge],
+    requireChatBridge: () => bridge,
+    listChatSessions: () => [{
+      id: "dingding:chat",
+      channel: "dingding",
+      bridgeId: bridge.id,
+      chatSessionId: "dingding-chat",
+      activeInstanceId: "inst_1",
+      activeAiSessionId: "ais_1",
+    }],
+    boardAsync: async () => [{ id: "inst_1", name: "instance-main" }],
+    listPendingRoutes: async () => [],
+    pendingDecisionCallbackData: (_routeId, decision) => `task_handoff:cp_p:${decision}_token`,
+  };
+  class FakeDingdingClient {
+    registerCallbackListener() {}
+    async connect() {}
+    disconnect() {}
+    socketCallBackResponse() {}
+  }
+  const runtime = new ControlPlaneChatGatewayRuntime(
+    service,
+    async (url, init = {}) => {
+      const body = init.body ? JSON.parse(init.body) : undefined;
+      calls.push({ type: "fetch", url: String(url), body });
+      if (String(url).includes("/oauth2/accessToken")) {
+        return new Response(JSON.stringify({ accessToken: "access-token", expireIn: 7200 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (body?.cardUpdateOptions && calls.filter((call) => call.body?.cardUpdateOptions).length === 1) {
+        return new Response(JSON.stringify({ success: false, code: "InvalidParameter", message: "bad update" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+    aiSessionGatewayOptions(events, {
+      createDingdingClient: () => new FakeDingdingClient(),
+    }),
+  );
+
+  try {
+    runtime.startBridge(bridge.id);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const session = {
+      id: "ais_1",
+      agent: "codex",
+      activeTurnId: "turn_1",
+      status: "running",
+      phase: "thinking",
+      currentTool: { name: "shell", inputPreview: "npm test" },
+      turns: [{ id: "turn_1", userPrompt: "run tests", updatedAt: "2026-07-03T00:00:05.000Z" }],
+      startedAt: "2026-07-03T00:00:00.000Z",
+      updatedAt: "2026-07-03T00:00:05.000Z",
+    };
+
+    publishAiSessionSnapshotForTest(events, {
+      runningCount: 1,
+      waitingCount: 0,
+      staleCount: 0,
+      updatedAt: "2026-07-03T00:00:05.000Z",
+      sessions: [session],
+    }, { scope: { instanceId: "inst_1" } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    service.listPendingRoutes = async () => [{
+      id: "inst_1:ai:ais_1",
+      projectId: "proj_1",
+      instanceId: "inst_1",
+      aiSessionId: "ais_1",
+      kind: "approval",
+      result: "Approve command: npm test",
+    }];
+    const waitingPayload = {
+      runningCount: 0,
+      waitingCount: 1,
+      staleCount: 0,
+      updatedAt: "2026-07-03T00:00:06.000Z",
+      sessions: [{ ...session, status: "waiting", phase: "approval" }],
+    };
+    publishAiSessionSnapshotForTest(events, waitingPayload, { scope: { instanceId: "inst_1" } });
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    publishAiSessionSnapshotForTest(events, waitingPayload, { scope: { instanceId: "inst_1" } });
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+
+    assert.equal(calls.filter((call) => call.body?.cardUpdateOptions).length, 2);
+  } finally {
+    runtime.stopAll();
+  }
+});
+
+test("control plane dingding progress clear rejects throttled updates", async () => {
+  const calls = [];
+  const bridge = {
+    id: "chat_dingding_progress_clear",
+    channel: "dingding",
+    name: "DingDing Progress Clear",
+    enabled: true,
+    token: "dingding-client-id",
+    tokenSet: true,
+    defaultChatId: "dingding-chat",
+    allowedUserIds: [],
+    pollIntervalMs: 30000,
+    settings: {
+      clientSecret: "dingding-secret",
+      robotCode: "robot-code",
+      senderId: "staff-1",
+    },
+  };
+  const runtimeState = {
+    client: {
+      connect: async () => {},
+      disconnect: () => {},
+      registerCallbackListener: () => {},
+      socketCallBackResponse: () => {},
+    },
+    chatWebhooks: new Map(),
+    senderIds: new Map([["dingding-chat", "staff-1"]]),
+  };
+  const store = new DingdingProgressStore(async (url, init = {}) => {
+    calls.push({ url: String(url), body: init.body ? JSON.parse(init.body) : undefined });
+    if (String(url).includes("/oauth2/accessToken")) {
+      return new Response(JSON.stringify({ accessToken: "access-token", expireIn: 7200 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify({ success: true }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  });
+
+  await store.applyUpdate({
+    bridge,
+    dingdingRuntime: runtimeState,
+    key: "inst_1:ais_1:turn_1:chat_dingding_progress_clear:dingding-chat",
+    chatId: "dingding-chat",
+    text: "Running shell",
+    replyMarkup: { inline_keyboard: [[{ text: "Cancel", callback_data: "cancel" }]] },
+  });
+  const pending = store.applyUpdate({
+    bridge,
+    dingdingRuntime: runtimeState,
+    key: "inst_1:ais_1:turn_1:chat_dingding_progress_clear:dingding-chat",
+    chatId: "dingding-chat",
+    text: "Waiting for approval",
+    replyMarkup: { inline_keyboard: [[{ text: "Allow", callback_data: "allow" }]] },
+  });
+  store.clearBridge(bridge.id);
+
+  await assert.rejects(pending, /cancelled/);
+  assert.equal(calls.filter((call) => call.body?.cardUpdateOptions).length, 0);
+});
+
+test("control plane dingding action cards use robot private-chat delivery target", async () => {
+  const calls = [];
+  const bridge = {
+    id: "chat_dingding_single",
+    channel: "dingding",
+    name: "DingDing Single",
+    enabled: true,
+    token: "dingding-client-id",
+    tokenSet: true,
+    defaultChatId: "single-chat",
+    allowedUserIds: [],
+    pollIntervalMs: 30000,
+    settings: {
+      clientSecret: "dingding-secret",
+      robotCode: "robot-code",
+      senderId: "staff-1",
+    },
+  };
+  const runtimeState = {
+    client: {
+      connect: async () => {},
+      disconnect: () => {},
+      registerCallbackListener: () => {},
+      socketCallBackResponse: () => {},
+    },
+    chatWebhooks: new Map(),
+    senderIds: new Map([["single-chat", "staff-1"]]),
+    conversationTypes: new Map([["single-chat", "IM_ROBOT"]]),
+  };
+
+  await sendDingdingActionsCard({
+    fetchImpl: async (url, init = {}) => {
+      calls.push({ url: String(url), body: init.body ? JSON.parse(init.body) : undefined });
+      if (String(url).includes("/oauth2/accessToken")) {
+        return new Response(JSON.stringify({ accessToken: "access-token", expireIn: 7200 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+    bridge,
+    runtime: runtimeState,
+    chatId: "single-chat",
+    text: "Select AI session",
+    replyMarkup: { inline_keyboard: [[{ text: "Session 1", callback_data: "task_handoff:cp_session:1" }]] },
+  });
+
+  const deliver = calls.find((call) => String(call.url).includes("/v1.0/card/instances/createAndDeliver"));
+  assert.ok(deliver);
+  assert.equal(deliver.body.openSpaceId, "dtv1.card//IM_ROBOT.staff-1");
+  assert.deepEqual(deliver.body.imRobotOpenSpaceModel, { supportForward: false });
+  assert.deepEqual(deliver.body.imRobotOpenDeliverModel, { extension: {}, robotCode: "robot-code", spaceType: "IM_ROBOT" });
+  assert.equal(deliver.body.imSingleOpenSpaceModel, undefined);
+  assert.equal(deliver.body.imSingleOpenDeliverModel, undefined);
+  assert.equal(deliver.body.imGroupOpenSpaceModel, undefined);
+  assert.equal(deliver.body.imGroupOpenDeliverModel, undefined);
+  assert.equal(deliver.body.cardData.cardParamMap.biz_conversation_type, "IM_ROBOT");
+});
+
+test("control plane dingding action cards reject failed delivery results", async () => {
+  const bridge = {
+    id: "chat_dingding_delivery_failure",
+    channel: "dingding",
+    name: "DingDing Delivery Failure",
+    enabled: true,
+    token: "dingding-client-id",
+    tokenSet: true,
+    defaultChatId: "single-chat",
+    allowedUserIds: [],
+    pollIntervalMs: 30000,
+    settings: {
+      clientSecret: "dingding-secret",
+      robotCode: "robot-code",
+      senderId: "staff-1",
+    },
+  };
+  const runtimeState = {
+    client: {
+      connect: async () => {},
+      disconnect: () => {},
+      registerCallbackListener: () => {},
+      socketCallBackResponse: () => {},
+    },
+    chatWebhooks: new Map(),
+    senderIds: new Map([["single-chat", "staff-1"]]),
+    conversationTypes: new Map([["single-chat", "IM_SINGLE"]]),
+  };
+
+  await assert.rejects(
+    () => sendDingdingActionsCard({
+      fetchImpl: async (url) => {
+        if (String(url).includes("/oauth2/accessToken")) {
+          return new Response(JSON.stringify({ accessToken: "access-token", expireIn: 7200 }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({
+          success: true,
+          result: {
+            deliverResults: [{ spaceId: "IM_ALL", spaceType: "IM", success: false, errorMsg: "spaces of card is empty" }],
+          },
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+      bridge,
+      runtime: runtimeState,
+      chatId: "single-chat",
+      text: "Select AI session",
+      replyMarkup: { inline_keyboard: [[{ text: "Session 1", callback_data: "task_handoff:cp_session:1" }]] },
+    }),
+    /DingDing card delivery failed for IM_ALL: spaces of card is empty/,
+  );
+});
+
+test("control plane chat gateway does not duplicate ai session pending notifications", async () => {
+  const calls = [];
+  const bridgeA = {
+    id: "chat_telegram_a",
+    channel: "telegram",
+    name: "Telegram A",
+    enabled: true,
+    token: "token-a",
+    tokenSet: true,
+    defaultChatId: "fallback-a",
+    allowedUserIds: [],
+    pollIntervalMs: 30000,
+    settings: {},
+  };
+  const bridgeB = {
+    id: "chat_telegram_b",
+    channel: "telegram",
+    name: "Telegram B",
+    enabled: true,
+    token: "token-b",
+    tokenSet: true,
+    defaultChatId: "fallback-b",
+    allowedUserIds: [],
+    pollIntervalMs: 30000,
+    settings: {},
+  };
+  const bridges = new Map([
+    [bridgeA.id, bridgeA],
+    [bridgeB.id, bridgeB],
+  ]);
+  const runtime = new ControlPlaneChatGatewayRuntime(
+    {
+      listChatBridges: () => [bridgeA, bridgeB],
+      requireChatBridge: (id) => bridges.get(id),
+      listChatSessions: () => [
+        {
+          id: "binding-a",
+          channel: "telegram",
+          bridgeId: bridgeA.id,
+          chatSessionId: "chat-a",
+          activeInstanceId: "inst_1",
+          activeAiSessionId: "ais_1",
+        },
+        {
+          id: "binding-b",
+          channel: "telegram",
+          bridgeId: bridgeB.id,
+          chatSessionId: "chat-b",
+          activeInstanceId: "inst_1",
+          activeAiSessionId: "ais_1",
+        },
+      ],
+      listPendingRoutes: async () => [
+        {
+          id: "inst_1:ai:ais_1",
+          projectId: "proj_1",
+          instanceId: "inst_1",
+          aiSessionId: "ais_1",
+          kind: "approval",
+          result: "Approve command: npm test",
+        },
+      ],
+      pendingDecisionCallbackData: (_routeId, decision) => `task_handoff:cp_p:${decision}_token`,
+    },
+    async (url, init = {}) => {
+      calls.push({
+        url: String(url),
+        body: init.body ? JSON.parse(init.body) : undefined,
+      });
+      return new Response(JSON.stringify({ ok: true, result: {} }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  );
+
+  await runtime.pollPendingRoutes();
+
+  assert.deepEqual(
+    calls.map((call) => [call.url.includes("bottoken-a"), call.url.includes("bottoken-b"), call.body.chat_id]),
+    [
+      [true, false, "chat-a"],
+      [false, true, "chat-b"],
+    ],
+  );
+  assert.match(calls[0].body.text, /npm test/);
+  for (const call of calls) {
+    const callbackData = call.body.reply_markup.inline_keyboard.flatMap((row) => row.map((button) => button.callback_data));
+    assert.deepEqual(callbackData, [
+      "task_handoff:cp_p:allow_token",
+      "task_handoff:cp_p:skip_token",
+      "task_handoff:cp_p:deny_token",
+    ]);
+    for (const value of callbackData) {
+      assert.ok(Buffer.byteLength(value, "utf8") <= 64);
+    }
+  }
+
+  calls.length = 0;
+
+  runtime.service.listPendingRoutes = async () => [
+    {
+      id: "task_1",
+      projectId: "proj_1",
+      instanceId: "inst_1",
+      kind: "approval",
+      result: "Approve command: npm test",
+    },
+  ];
+
+  await runtime.pollPendingRoutes();
+
+  assert.deepEqual(
+    calls.map((call) => [call.url.includes("bottoken-a"), call.url.includes("bottoken-b"), call.body.chat_id]),
+    [
+      [true, false, "fallback-a"],
+      [false, true, "fallback-b"],
+    ],
+  );
+  assert.match(calls[0].body.text, /npm test/);
+  for (const call of calls) {
+    const callbackData = call.body.reply_markup.inline_keyboard.flatMap((row) => row.map((button) => button.callback_data));
+    assert.deepEqual(callbackData, [
+      "task_handoff:cp_p:allow_token",
+      "task_handoff:cp_p:skip_token",
+      "task_handoff:cp_p:deny_token",
+    ]);
+    for (const value of callbackData) {
+      assert.ok(Buffer.byteLength(value, "utf8") <= 64);
+    }
+  }
+});
+
+test("control plane aggregates ai session pending routes and proxies ai session actions", async (t) => {
+  const requests = [];
+  const mock = createMockNodeAgentFetch({
+    proxy: ({ url, init, body }) => {
+      requests.push({
+        url,
+        method: init.method || "GET",
+        body,
+      });
+      if (body?.path === "/api/apps/sessions/state") {
+        const updatedAt = new Date().toISOString();
+        const sessions = [{ id: "app_waiting", appId: "codex", kind: "tty", status: "running" }];
+        return new Response(JSON.stringify({ data: { revision: 1, lastEventAt: updatedAt, snapshot: { runningCount: 1, problemCount: 0, sessions, updatedAt } } }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (body?.path === "/api/ai-sessions/state") {
+        const updatedAt = new Date().toISOString();
+        const sessions = [{ id: "ais_waiting", agent: "codex", appSessionId: "app_waiting", status: "waiting", phase: "approval", summary: "Approve command: npm install", startedAt: updatedAt, updatedAt }];
+        return new Response(JSON.stringify({ data: { revision: 1, lastEventAt: updatedAt, snapshot: { runningCount: 0, waitingCount: 1, staleCount: 0, sessions, updatedAt } } }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (body?.path === "/api/apps/sessions" && body.method === "GET") {
+        return new Response(JSON.stringify({ data: [{ id: "app_waiting", appId: "codex", kind: "tty", status: "running" }] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (body?.path === "/api/ai-sessions/ais_waiting/approval") {
+        const timestamp = new Date().toISOString();
+        const decision = JSON.parse(body.body).decision;
+        return new Response(JSON.stringify({ data: {
+          session: { id: "ais_waiting", agent: "codex", status: "waiting", phase: "approval", startedAt: timestamp, updatedAt: timestamp },
+          provider: "codex",
+          action: "approval",
+          decision,
+        } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (body?.path === "/api/ai-sessions/ais_waiting/messages") {
+        const timestamp = new Date().toISOString();
+        return new Response(JSON.stringify({ data: {
+          session: { id: "ais_waiting", agent: "codex", status: "running", phase: "responding", startedAt: timestamp, updatedAt: timestamp },
+          provider: "codex",
+          action: "send",
+          turnId: "turn_continue",
+          providerTurnId: "turn_continue",
+        } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ error: { message: "unexpected request" } }), {
+        status: 404,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-pending"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: {
+      fetchImpl: mock.fetchImpl,
+    },
+  });
+  t.after(() => app.close());
+
+  const project = await json(app, "POST", "/api/projects", {
+    name: "Pending Project",
+    source: {
+      type: "git-repository",
+      url: "https://github.com/example/repo.git",
+    },
+  });
+  assert.equal(project.statusCode, 201);
+
+  const created = await json(app, "POST", "/api/controlled-instances", {
+    name: "pending-worker",
+    projectId: project.body.data.id,
+    runtimeId: "runtime_local_docker",
+    imageId: "img_default",
+  });
+  assert.equal(created.statusCode, 201);
+
+  const registered = await mock.fetchImpl(`http://127.0.0.1:8091/api/node-agent/instances/${created.body.data.id}/register`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${created.body.data.registrationToken}`,
+    },
+    body: JSON.stringify({
+      instanceId: created.body.data.id,
+      name: "pending-worker",
+      projectId: project.body.data.id,
+      target: {
+        strategy: "direct-port",
+        web: "http://127.0.0.1:18082",
+        api: "http://127.0.0.1:18082/api",
+        status: "reachable",
+      },
+      workspace: {
+        status: "ready",
+      },
+    }),
+  });
+  assert.equal(registered.status, 201);
+
+  await mock.fetchImpl(`http://127.0.0.1:8091/api/node-agent/instances/${created.body.data.id}/heartbeat`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${created.body.data.registrationToken}`,
+    },
+    body: JSON.stringify({
+      status: "running",
+      health: "ok",
+      connectionStatus: "online",
+      apps: {
+        runningCount: 1,
+      },
+      aiSessions: {
+        runningCount: 0,
+        waitingCount: 1,
+        staleCount: 0,
+        updatedAt: new Date().toISOString(),
+        sessions: [{
+          id: "ais_waiting",
+          agent: "codex",
+          appSessionId: "app_waiting",
+          status: "waiting",
+          phase: "approval",
+          summary: "Approve command: npm install",
+          startedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }],
+      },
+      target: {
+        status: "reachable",
+      },
+      workspace: {
+        status: "ready",
+      },
+    }),
+  });
+
+  const pending = await json(app, "GET", "/api/pending-routes");
+  assert.equal(pending.statusCode, 200);
+  assert.equal(pending.body.data.length, 1);
+  const aiPending = pending.body.data.find((route) => route.aiSessionId === "ais_waiting");
+  assert.equal(aiPending.id, `${created.body.data.id}:ai:ais_waiting`);
+  assert.equal(aiPending.instanceId, created.body.data.id);
+  assert.equal(aiPending.projectId, project.body.data.id);
+  assert.equal(aiPending.project.name, "Pending Project");
+  assert.equal(aiPending.instance.name, "pending-worker");
+  assert.equal(aiPending.kind, "approval");
+  assert.match(aiPending.result, /npm install/);
+
+  const pendingCommand = await json(app, "POST", "/api/chat-gateway/messages", {
+    source: {
+      channel: "telegram",
+      chatSessionId: "telegram:pending",
+      userId: "user-1",
+    },
+    message: {
+      text: "/pending",
+      attachments: [],
+    },
+  });
+  assert.equal(pendingCommand.statusCode, 200);
+  assert.match(pendingCommand.body.data.reply, new RegExp(`${created.body.data.id}:ai:ais_waiting`));
+  const pendingCallbackData = pendingCommand.body.data.replyMarkup.inline_keyboard.map((row) => row[0].callback_data);
+  assert.equal(pendingCallbackData.length, 3);
+  for (const callbackData of pendingCallbackData) {
+    assert.match(callbackData, /^task_handoff:cp_p:[A-Za-z0-9_-]+$/);
+    assert.ok(Buffer.byteLength(callbackData, "utf8") <= 64);
+  }
+
+  const aiSkipAction = await app.inject({
+    method: "POST",
+    url: "/api/chat-gateway/messages",
+    payload: {
+      source: {
+        channel: "telegram",
+        chatSessionId: "telegram:pending",
+        userId: "user-1",
+      },
+      message: {
+        text: `/skip ${created.body.data.id}:ai:ais_waiting`,
+        attachments: [],
+      },
+    },
+  });
+  assert.equal(aiSkipAction.statusCode, 200);
+
+  const aiApprovalCommand = await json(app, "POST", "/api/chat-gateway/messages", {
+    source: {
+      channel: "telegram",
+      chatSessionId: "telegram:pending",
+      userId: "user-1",
+    },
+    message: {
+      text: `/approve ${created.body.data.id}:ai:ais_waiting`,
+      attachments: [],
+    },
+  });
+  assert.equal(aiApprovalCommand.statusCode, 200);
+  assert.match(aiApprovalCommand.body.data.reply, /allow sent/);
+
+  const replyCommand = await json(app, "POST", "/api/chat-gateway/messages", {
+    source: {
+      channel: "telegram",
+      chatSessionId: "telegram:pending",
+      userId: "user-1",
+    },
+    message: {
+      text: `/reply ${created.body.data.id}:ai:ais_waiting continue`,
+      attachments: [],
+    },
+  });
+  assert.equal(replyCommand.statusCode, 200);
+  assert.match(replyCommand.body.data.reply, /Reply sent/);
+
+  assert.deepEqual(
+    requests.filter((request) => /^\/api\/ai-sessions\/[^/]+\/(approval|messages)$/.test(request.body.path)).map((request) => [
+      request.method,
+      request.url,
+      request.body.path,
+      request.body.body ? JSON.parse(request.body.body) : undefined,
+    ]),
+    [
+      ["POST", `http://127.0.0.1:8091/api/node-agent/instances/${created.body.data.id}/proxy`, "/api/ai-sessions/ais_waiting/approval", { decision: "skip" }],
+      ["POST", `http://127.0.0.1:8091/api/node-agent/instances/${created.body.data.id}/proxy`, "/api/ai-sessions/ais_waiting/approval", { decision: "allow" }],
+      ["POST", `http://127.0.0.1:8091/api/node-agent/instances/${created.body.data.id}/proxy`, "/api/ai-sessions/ais_waiting/messages", { message: "continue" }],
+    ],
+  );
+});

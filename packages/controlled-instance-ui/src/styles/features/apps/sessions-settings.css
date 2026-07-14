@@ -1,0 +1,58 @@
+.session-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.session-error {
+  border: 1px solid var(--status-danger);
+  border-radius: 8px;
+  background: var(--status-danger-bg);
+  color: var(--status-danger);
+  font-size: 12px;
+  margin: 0 0 12px;
+  overflow-wrap: anywhere;
+  padding: 8px 10px;
+}
+
+.session-history {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 12px;
+}
+
+.session-history p {
+  flex: 1 1 260px;
+  margin: 0;
+}
+
+.session-metadata {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px 14px;
+  margin: 0;
+}
+
+.session-metadata div {
+  min-width: 0;
+}
+
+.session-metadata dt {
+  color: var(--text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.session-metadata dd {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}

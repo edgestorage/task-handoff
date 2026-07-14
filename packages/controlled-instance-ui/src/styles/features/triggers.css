@@ -1,0 +1,96 @@
+.triggers-view {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.triggers-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.triggers-head p {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+}
+
+.triggers-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  gap: 16px;
+}
+
+.trigger-form {
+  display: grid;
+  gap: 12px;
+}
+
+.trigger-wide {
+  grid-column: 1 / -1;
+}
+
+.trigger-list,
+.trigger-run-list {
+  display: grid;
+  gap: 10px;
+}
+
+.trigger-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-inset);
+  padding: 12px;
+}
+
+.trigger-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.trigger-title,
+.trigger-meta,
+.trigger-actions,
+.trigger-run-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.trigger-title {
+  color: var(--text-strong);
+  font-weight: 700;
+}
+
+.trigger-meta {
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.trigger-prompt {
+  margin: 12px 0 0;
+  max-height: 120px;
+  overflow: auto;
+  white-space: pre-wrap;
+  border: 1px solid var(--line-subtle);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 10px;
+}
+
+.trigger-run-row {
+  min-height: 36px;
+  border-bottom: 1px solid var(--line-subtle);
+  color: var(--text-muted);
+}
+
+@media (max-width: 980px) {
+  .triggers-layout {
+    grid-template-columns: 1fr;
+  }
+}

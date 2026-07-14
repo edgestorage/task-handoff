@@ -1,0 +1,24 @@
+{
+  "name": "@task-handoff/cli",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit",
+    "check": "pnpm run build",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@task-handoff/control-plane": "workspace:*",
+    "@task-handoff/controlled-instance": "workspace:*",
+    "@task-handoff/core": "workspace:*",
+    "@task-handoff/protocol": "workspace:*",
+    "@task-handoff/terminal-ui": "workspace:*",
+    "@task-handoff/receiver-worker": "workspace:*",
+    "@iarna/toml": "^2.2.5",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "commander": "^14.0.3",
+    "semver": "^7.8.5",
+    "zod": "^4.4.3"
+  }
+}

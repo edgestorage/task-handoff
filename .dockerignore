@@ -1,0 +1,11 @@
+.git
+.idea
+.task-handoff
+.DS_Store
+node_modules
+dist
+src/web/ui/dist
+coverage
+*.log
+docker-compose*.yml
+compose*.yml

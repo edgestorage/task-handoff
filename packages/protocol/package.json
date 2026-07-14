@@ -1,0 +1,52 @@
+{
+  "name": "@task-handoff/protocol",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./sender": {
+      "types": "./src/sender.ts",
+      "default": "./src/sender.ts"
+    },
+    "./control-plane": {
+      "types": "./src/control-plane.ts",
+      "default": "./src/control-plane.ts"
+    },
+    "./ai-sessions": {
+      "types": "./src/ai-sessions.ts",
+      "default": "./src/ai-sessions.ts"
+    },
+    "./app-sessions": {
+      "types": "./src/app-sessions.ts",
+      "default": "./src/app-sessions.ts"
+    },
+    "./triggers": {
+      "types": "./src/triggers.ts",
+      "default": "./src/triggers.ts"
+    },
+    "./events": {
+      "types": "./src/events.ts",
+      "default": "./src/events.ts"
+    },
+    "./websocket-bridge": {
+      "types": "./src/websocket-bridge.ts",
+      "default": "./src/websocket-bridge.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit",
+    "check": "pnpm run build",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@task-handoff/core": "workspace:*",
+    "@task-handoff/terminal-ui": "workspace:*",
+    "zod": "^4.4.3"
+  }
+}

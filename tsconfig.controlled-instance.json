@@ -1,0 +1,19 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "apps/controlled-instance-image/src/**/*",
+    "packages/core/src/**/*",
+    "packages/protocol/src/**/*",
+    "packages/app-runtime/src/**/*",
+    "packages/ai-session-runtime/src/**/*",
+    "packages/receiver-worker/src/**/*",
+    "packages/controlled-instance/src/**/*",
+    "packages/terminal-ui/src/**/*"
+  ],
+  "exclude": [
+    "apps/cli/src/**/*",
+    "packages/control-plane/src/**/*",
+    "packages/control-plane-ui/**/*",
+    "packages/controlled-instance-ui/**/*"
+  ]
+}

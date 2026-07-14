@@ -1,0 +1,53 @@
+.apps-layout {
+  display: grid;
+  grid-template-columns: 360px minmax(0, 1fr);
+  align-items: start;
+  gap: 18px;
+  min-height: calc(100vh - 118px);
+}
+
+.catalog,
+.sessions {
+  min-width: 0;
+}
+
+.catalog-content,
+.sessions {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+}
+
+.catalog {
+  max-height: calc(100vh - 118px);
+}
+
+.catalog-content {
+  min-height: 100%;
+  padding-right: 2px;
+}
+
+.catalog h2,
+.sessions h2 {
+  font-size: 16px;
+  margin: 0 0 12px;
+}
+
+
+.launch-form {
+  display: grid;
+  gap: 8px;
+}
+
+.display-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.launch-json {
+  min-height: 68px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.45;
+}

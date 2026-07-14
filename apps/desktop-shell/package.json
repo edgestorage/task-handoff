@@ -1,0 +1,15 @@
+{
+  "name": "@task-handoff/desktop-shell",
+  "version": "1.0.0",
+  "private": true,
+  "main": "src/main.cjs",
+  "scripts": {
+    "start": "node node_modules/electron/cli.js .",
+    "build": "node --check src/config.cjs && node --check src/main.cjs && node --check src/preload.cjs",
+    "check": "pnpm run build",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "electron": "catalog:"
+  }
+}
