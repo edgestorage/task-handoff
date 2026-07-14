@@ -166,12 +166,6 @@ export function controlledInstanceCapabilities(appRuntime: AppRuntimeManager) {
   const catalog = appRuntime.catalog();
   return {
     protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
-    apps: catalog.map((item) => ({
-      id: item.id,
-      name: item.name,
-      kind: item.kind,
-      automation: item.automation,
-    })),
     features: {
       appRuntime: true,
       tty: catalog.some((item) => item.kind === "tty"),
@@ -214,6 +208,7 @@ export async function controlledInstanceSnapshot(
     build: buildInfo(),
     controlMode: (controlledMode() ? "controlled" : "standalone") as "standalone" | "controlled",
     capabilities: controlledInstanceCapabilities(appRuntime),
+    appInventory: appRuntime.appInventory(),
     apps: {
       runningCount: appRuntime.runningSessionCount(),
       problemCount: appRuntime.problemSessionCount(),

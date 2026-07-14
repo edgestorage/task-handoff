@@ -32,6 +32,7 @@
           @collapse="temporaryListOpen = false"
           @expand="expandTemporaryList"
           @new-instance="openNewInstanceFromTemporaryList"
+          @open-settings="(instanceId) => $emit('openSettings', instanceId)"
           @resize-start="$emit('resizeStart', $event)"
           @run-action="(action, instance) => $emit('runAction', action, instance)"
           @run-config-sync="(direction, presetId, instance) => $emit('runConfigSync', direction, presetId, instance)"
@@ -159,6 +160,10 @@
                           </DropdownMenuItem>
                         </DropdownMenuSubContent>
                       </DropdownMenuSub>
+                      <DropdownMenuItem class="instance-action-item" @select="$emit('openSettings', instance.id)">
+                        <Settings :size="14" />
+                        <span>Settings</span>
+                      </DropdownMenuItem>
                       <DropdownMenuItem class="instance-action-item danger" :disabled="isInstanceActionBusy(instance)" @select="$emit('runAction', 'delete', instance)">
                         <Trash2 :size="14" />
                         <span>{{ activeActionLabel(instance, "delete", "Delete") }}</span>
@@ -203,6 +208,10 @@
                   </ContextMenuItem>
                 </ContextMenuSubContent>
               </ContextMenuSub>
+              <ContextMenuItem class="instance-action-item" @select="$emit('openSettings', instance.id)">
+                <Settings :size="14" />
+                <span>Settings</span>
+              </ContextMenuItem>
               <ContextMenuItem class="instance-action-item danger" :disabled="isInstanceActionBusy(instance)" @select="$emit('runAction', 'delete', instance)">
                 <Trash2 :size="14" />
                 <span>{{ activeActionLabel(instance, "delete", "Delete") }}</span>
@@ -221,7 +230,7 @@
 
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
-import { Boxes, ChevronRight, Container, Download, Laptop, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Play, Plus, RotateCw, Search, Server, Square, Trash2, Upload } from "@lucide/vue";
+import { Boxes, ChevronRight, Container, Download, Laptop, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Play, Plus, RotateCw, Search, Server, Settings, Square, Trash2, Upload } from "@lucide/vue";
 import type { InstanceBoardItem } from "../../../api/types";
 import { Button } from "../../../components/ui/button";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger, ContextMenuTrigger } from "../../../components/ui/context-menu";
@@ -265,6 +274,7 @@ const emit = defineEmits<{
   collapse: [];
   expand: [];
   newInstance: [];
+  openSettings: [instanceId: string];
   resizeStart: [event: PointerEvent];
   runAction: [action: InstanceAction, instance: InstanceBoardItem];
   runConfigSync: [direction: ConfigSyncDirection, presetId: string, instance: InstanceBoardItem];

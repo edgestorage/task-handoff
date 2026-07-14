@@ -5940,7 +5940,8 @@ test("web app serves core API routes with isolated storage", async () => {
     const capabilitiesData = JSON.parse(instanceCapabilities.payload).data;
     assert.equal(capabilitiesData.features.appRuntime, true);
     assert.equal(capabilitiesData.features.receiver, undefined);
-    assert.equal(capabilitiesData.apps.some((entry) => entry.id === "terminal-tty"), true);
+    assert.equal(capabilitiesData.apps, undefined);
+    assert.equal(instanceStatusData.appInventory.items.some((entry) => entry.id === "terminal-tty"), true);
 
     const workspaceStatus = await app.inject({ method: "GET", url: "/api/workspace/status" });
     assert.equal(workspaceStatus.statusCode, 200);
@@ -6110,6 +6111,7 @@ test("web app ai session read routes do not refresh discovery state", async () =
 	    TASK_HANDOFF_AI_SESSION_SCAN_INTERVAL_MS: "600000",
 	  });
 	  const appRuntime = {
+	    replaceManagedEnvironment: () => undefined,
 	    listSessions: () => [{ id: "app_existing", appId: "codex", status: "running", ai: { threadIds: ["thread_existing"] } }],
 	    runningSessionCount: () => 1,
 	    sharedCodexAppServerInfo: () => undefined,
@@ -6222,6 +6224,7 @@ test("controlled instance publishes provider changes immediately and discovery c
   const paths = appRuntimeTestPaths(root);
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
   const appRuntime = {
+    replaceManagedEnvironment: () => undefined,
     listSessions: () => [{ id: "app_discovery", appId: "codex", status: "running" }],
     runningSessionCount: () => 1,
     sharedCodexAppServerInfo: () => undefined,
@@ -6430,7 +6433,7 @@ test("web app imports and exports built-in config sync presets", async () => {
   }
 });
 
-test("controlled instance merges its selected model into durable Codex config", () => {
+test("controlled instance materializes its selected Codex model and API-key auth", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-model-config-"));
   const codexHome = path.join(root, ".codex");
   const configPath = path.join(codexHome, "config.toml");
@@ -6442,7 +6445,7 @@ test("controlled instance merges its selected model into durable Codex config", 
     CODEX_HOME: codexHome,
     TASK_HANDOFF_CODEX_MODEL: "selected-model",
     TASK_HANDOFF_CODEX_BASE_URL: "https://proxy.example/v1",
-    OPENAI_API_KEY: "must-not-be-persisted",
+    OPENAI_API_KEY: "managed-api-key",
   });
 
   assert.equal(result.applied, true);
@@ -6454,8 +6457,52 @@ test("controlled instance merges its selected model into durable Codex config", 
   assert.equal(config.model_provider, "openai");
   assert.equal(config.openai_base_url, "https://proxy.example/v1");
   assert.equal(config.features.hooks, true);
-  assert.equal(contents.includes("must-not-be-persisted"), false);
+  assert.equal(contents.includes("managed-api-key"), false);
   assert.equal(fs.statSync(configPath).mode & 0o777, 0o600);
+  const authPath = path.join(codexHome, "auth.json");
+  assert.deepEqual(JSON.parse(fs.readFileSync(authPath, "utf8")), {
+    auth_mode: "apikey",
+    OPENAI_API_KEY: "managed-api-key",
+  });
+  assert.equal(fs.statSync(authPath).mode & 0o777, 0o600);
+});
+
+test("controlled instance refreshes managed model auth through its registration-token endpoint", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-managed-model-env-"));
+  const paths = appRuntimeTestPaths(root);
+  const codexHome = path.join(root, ".codex");
+  const restoreEnv = withWebStorageEnv(paths, {
+    TASK_HANDOFF_WEB_AUTH: "off",
+    TASK_HANDOFF_CONTROL_MODE: "controlled",
+    TASK_HANDOFF_REGISTRATION_TOKEN: "instance-registration-token",
+    CODEX_HOME: codexHome,
+  });
+  const app = await createWebApp({ staticDir: path.join(root, "missing-static"), logger: false });
+  try {
+    const forbidden = await app.inject({ method: "PUT", url: "/api/internal/model-environment", payload: { OPENAI_API_KEY: "should-not-apply" } });
+    assert.equal(forbidden.statusCode, 403);
+    const applied = await app.inject({
+      method: "PUT",
+      url: "/api/internal/model-environment",
+      headers: { authorization: "Bearer instance-registration-token" },
+      payload: {
+        OPENAI_API_KEY: "rotated-managed-key",
+        OPENAI_BASE_URL: "https://proxy.example/v1",
+        TASK_HANDOFF_CODEX_BASE_URL: "https://proxy.example/v1",
+        TASK_HANDOFF_CODEX_MODEL: "gpt-managed",
+      },
+    });
+    assert.equal(applied.statusCode, 200);
+    assert.deepEqual(applied.json().data, { applied: true, codexAuthConfigured: true, configUpdated: true });
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(codexHome, "auth.json"), "utf8")), {
+      auth_mode: "apikey",
+      OPENAI_API_KEY: "rotated-managed-key",
+    });
+    assert.equal(applied.payload.includes("rotated-managed-key"), false);
+  } finally {
+    await app.close();
+    restoreEnv();
+  }
 });
 
 test("web app exposes cc-switch only when enabled", async () => {
@@ -6507,6 +6554,7 @@ test("web app never starts or stops a receiver in standalone or controlled mode"
       TASK_HANDOFF_RECEIVER_AUTO_START: "1",
       TASK_HANDOFF_WEB_AUTH: "off",
       TASK_HANDOFF_NOVNC_ROOT: path.join(root, "missing-novnc"),
+      CODEX_HOME: path.join(root, ".codex"),
     });
     const app = await createWebApp({
       staticDir: path.join(root, "missing-static"),
@@ -6704,6 +6752,29 @@ test("app runtime launches claude through background worker and attaches by shor
   } finally {
     restoreEnv();
   }
+});
+
+test("app runtime injects managed model credentials without persisting them in session metadata", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-managed-app-env-"));
+  const paths = appRuntimeTestPaths(root);
+  const runtime = new AppRuntimeManager(paths);
+  runtime.replaceManagedEnvironment({ OPENAI_API_KEY: "runtime-managed-key" });
+  runtime.hasCommand = () => true;
+  let spawnedEnv;
+  runtime.spawnTerminalPty = (_shell, _args, _cwd, env) => {
+    spawnedEnv = env;
+    const pty = new EventEmitter();
+    pty.pid = 2468;
+    pty.onData = (listener) => pty.on("data", listener);
+    pty.onExit = (listener) => pty.on("exit", listener);
+    pty.write = () => {};
+    pty.resize = () => {};
+    pty.kill = () => {};
+    return pty;
+  };
+  const session = runtime.start("terminal-tty", { cwd: root });
+  assert.equal(spawnedEnv.OPENAI_API_KEY, "runtime-managed-key");
+  assert.equal(JSON.stringify(session).includes("runtime-managed-key"), false);
 });
 
 test("app runtime stops claude background worker when attach fails", () => {
@@ -7700,6 +7771,8 @@ function withWebStorageEnv(paths, extra = {}) {
     TASK_HANDOFF_ARTIFACT_DIR: paths.artifactDir,
     TASK_HANDOFF_LOG_DIR: paths.logDir,
     TASK_HANDOFF_WEB_TOKEN_FILE: paths.webTokenPath,
+    CODEX_HOME: undefined,
+    CLAUDE_HOME: undefined,
     TASK_HANDOFF_AI_PROCESS_SCAN: "0",
     TASK_HANDOFF_AI_SESSION_SCAN: "0",
     TASK_HANDOFF_CODEX_APP_SERVER: "0",

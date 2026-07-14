@@ -284,6 +284,24 @@ const AppLaunchSchema = z
   })
   .strict();
 
+const ManagedModelEnvironmentSchema = z.object({
+  OPENAI_API_KEY: z.string().max(4096).optional(),
+  OPENAI_BASE_URL: z.string().max(4096).optional(),
+  TASK_HANDOFF_CODEX_BASE_URL: z.string().max(4096).optional(),
+  TASK_HANDOFF_CODEX_MODEL: z.string().max(4096).optional(),
+  ANTHROPIC_API_KEY: z.string().max(4096).optional(),
+  ANTHROPIC_BASE_URL: z.string().max(4096).optional(),
+  TASK_HANDOFF_CLAUDE_MODEL: z.string().max(4096).optional(),
+}).strict();
+
+const MANAGED_MODEL_ENV_KEYS = Object.keys(ManagedModelEnvironmentSchema.shape);
+
+function managedModelEnvironment(env: NodeJS.ProcessEnv) {
+  return ManagedModelEnvironmentSchema.parse(Object.fromEntries(
+    MANAGED_MODEL_ENV_KEYS.flatMap((key) => typeof env[key] === "string" ? [[key, env[key]]] : []),
+  ));
+}
+
 const AppDisplaySchema = z
   .object({
     width: z.number().int().min(320).max(7680).optional(),
@@ -465,11 +483,13 @@ async function runTriggerOnce(triggers: TriggerStore, executor: TriggerExecutor,
 export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   const startedAt = new Date().toISOString();
   const storagePaths = resolveStoragePaths();
+  const managedModelEnv = { ...process.env };
   logControlledInstanceStart(storagePaths.logDir, storagePaths.dataDir);
-  applyManagedCodexModelConfig();
+  applyManagedCodexModelConfig(managedModelEnv);
   const auth = resolveWebAuth(storagePaths);
   const events = new WebEventBus();
   const appRuntime = options.appRuntime || new AppRuntimeManager(storagePaths);
+  appRuntime.replaceManagedEnvironment(managedModelEnvironment(managedModelEnv));
   const aiSessions = options.aiSessionRegistry || createAiSessionRegistry();
   const aiSessionController = new AiSessionController(aiSessions);
   const triggers = new TriggerStore(storagePaths);
@@ -1232,6 +1252,20 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     data: appRuntime.catalog(),
   }));
 
+  app.put<{ Body: unknown }>("/api/internal/model-environment", async (request, reply) => {
+    const expectedToken = process.env.TASK_HANDOFF_REGISTRATION_TOKEN?.trim();
+    const authorization = request.headers.authorization || "";
+    if (!expectedToken || authorization !== `Bearer ${expectedToken}`) {
+      return reply.code(403).send({ error: { code: "MANAGED_MODEL_ENVIRONMENT_FORBIDDEN", message: "Instance registration token is required." } });
+    }
+    const next = ManagedModelEnvironmentSchema.parse(request.body || {});
+    for (const key of MANAGED_MODEL_ENV_KEYS) delete managedModelEnv[key];
+    Object.assign(managedModelEnv, next);
+    appRuntime.replaceManagedEnvironment(next);
+    const codex = applyManagedCodexModelConfig(managedModelEnv);
+    return { data: { applied: true, codexAuthConfigured: Boolean(next.OPENAI_API_KEY), configUpdated: codex.applied } };
+  });
+
   app.get("/api/config-sync/presets", async () => ({
     data: configSyncPresets(),
   }));
@@ -1245,7 +1279,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       const body = ConfigSyncRequestSchema.parse(request.body || {});
       const result = runConfigSync(direction, request.params.preset, body.preset);
       if (direction === "import" && request.params.preset === "codex") {
-        applyManagedCodexModelConfig();
+        applyManagedCodexModelConfig(managedModelEnv);
       }
       return { data: result };
     } catch (error: unknown) {

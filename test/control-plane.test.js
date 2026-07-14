@@ -26,16 +26,103 @@ const { assertInstalledPackageVersion, checkControlledInstanceUpdate, checkNodeA
 const { ProcessSingletonError, acquireProcessSingletonLock } = require("../packages/control-plane/src/process-lock.ts");
 const { EventConnectionRetryTimer, eventConnectionRetryDelay, eventConnectionSafetyIntervalMs } = require("../packages/control-plane/src/event-connection-retry.ts");
 const { JsonCollection, JsonFile, nodeAgentStorePaths } = require("../packages/control-plane/src/store.ts");
-const { displayAiSessionMessage, displayAiSessionTitle } = require("../packages/control-plane-ui/src/apps/control-plane/useInstanceSessions.ts");
+const { displayAiSessionMessage, displayAiSessionTitle, launchableAppsForInstance: uiLaunchableAppsForInstance } = require("../packages/control-plane-ui/src/apps/control-plane/useInstanceSessions.ts");
+const { launchableAppsForInstance: chatLaunchableAppsForInstance } = require("../packages/control-plane/src/control-plane-chat-rendering.ts");
 const { appSessionStatus } = require("../packages/control-plane-ui/src/apps/control-plane/appSessionVisibility.ts");
 const { AiSessionEventType, AiSessionEventTopic } = require("../packages/protocol/src/ai-sessions.ts");
 const { AppSessionEventType, normalizeAppSessionRecord } = require("../packages/protocol/src/app-sessions.ts");
-const { CONTROL_PLANE_PROTOCOL_VERSION, ControlledInstanceHeartbeatSchema } = require("../packages/protocol/src/control-plane.ts");
+const { CONTROL_PLANE_PROTOCOL_VERSION, ControlledInstanceHeartbeatSchema, InstanceAppInventorySchema, modelConfigHash, parseStoredControlledInstance } = require("../packages/protocol/src/control-plane.ts");
+
+function emptyAppInventory(observedAt = new Date().toISOString()) {
+  return { items: [], observedAt, issues: [] };
+}
+
+function testAppInventory(apps, observedAt = new Date().toISOString()) {
+  return {
+    observedAt,
+    issues: [],
+    items: apps.map((app) => ({
+      id: app.id,
+      name: app.name,
+      kind: app.kind || "tty",
+      source: "builtin",
+      availability: app.availability || "available",
+      capabilities: { supportsCwdSelection: ["terminal-tty", "codex", "claude"].includes(app.id) },
+    })),
+  };
+}
 
 test("controlled instance heartbeat protocol rejects legacy receiver projection", () => {
-  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-07-14");
+  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-07-15-model-hash-registry");
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, receiver: { status: "running", pendingCount: 1 } }).success, false);
-  assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, apps: { runningCount: 1 } }).success, true);
+  assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, apps: { runningCount: 1 } }).success, false);
+  assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, appInventory: emptyAppInventory(), apps: { runningCount: 1 } }).success, true);
+});
+
+test("app inventory protocol is strict and stored legacy app capability is discarded", () => {
+  const observedAt = new Date().toISOString();
+  const inventory = {
+    observedAt,
+    items: [{
+      id: "codex",
+      name: "Codex",
+      kind: "tty",
+      source: "builtin",
+      availability: "available",
+      capabilities: { supportsCwdSelection: true },
+    }],
+    issues: [],
+  };
+  assert.equal(InstanceAppInventorySchema.safeParse(inventory).success, true);
+  assert.equal(InstanceAppInventorySchema.safeParse({ ...inventory, env: { SECRET: "nope" } }).success, false);
+  assert.equal(InstanceAppInventorySchema.safeParse({ ...inventory, items: [{ ...inventory.items[0], command: "codex" }] }).success, false);
+  assert.equal(InstanceAppInventorySchema.safeParse(emptyAppInventory(observedAt)).success, true);
+
+  const warnings = [];
+  const timestamp = new Date().toISOString();
+  const parsed = parseStoredControlledInstance({
+    id: "inst_legacy_apps",
+    name: "Legacy",
+    source: { type: "local-folder", path: "/tmp/workspace" },
+    sourceSnapshot: {},
+    modelSelection: {},
+    nodeId: "node_1",
+    runtimeId: "runtime_1",
+    status: "stopped",
+    capabilities: { apps: [{ id: "codex" }], features: { tty: true } },
+    config: { autoImportAgentConfigs: true },
+    workspace: { status: "ready" },
+    target: { strategy: "node-proxy", status: "unknown" },
+    access: { strategy: "control-plane-proxy", status: "unknown" },
+    apps: { runningCount: 0, problemCount: 0 },
+    runtime: { labels: {} },
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  }, (warning) => warnings.push(warning));
+  assert.equal(parsed.appInventory, undefined);
+  assert.deepEqual(parsed.capabilities, { features: { tty: true } });
+  assert.deepEqual(warnings, [{ instanceId: "inst_legacy_apps", field: "capabilities.apps" }]);
+});
+
+test("UI and chat launchers consume only the current authoritative app inventory", () => {
+  const instance = {
+    id: "inst_inventory",
+    name: "Inventory",
+    connectionStatus: "online",
+    capabilities: { apps: [{ id: "legacy-app", name: "Legacy" }] },
+    image: { optionalApps: ["image-app"] },
+    sourceSnapshot: { apps: [{ id: "snapshot-app", name: "Snapshot" }] },
+    appInventory: testAppInventory([
+      { id: "codex", name: "Codex" },
+      { id: "missing-app", name: "Missing App", availability: "missing-dependency" },
+    ]),
+  };
+  assert.deepEqual(uiLaunchableAppsForInstance(instance), [{ id: "codex", label: "Codex", supportsCwdSelection: true }]);
+  assert.deepEqual(chatLaunchableAppsForInstance(instance), [{ id: "codex", label: "Codex" }]);
+  assert.deepEqual(uiLaunchableAppsForInstance({ ...instance, connectionStatus: "offline" }), []);
+  assert.deepEqual(chatLaunchableAppsForInstance({ ...instance, connectionStatus: "offline" }), []);
+  assert.deepEqual(uiLaunchableAppsForInstance({ ...instance, appInventory: undefined }), []);
+  assert.deepEqual(chatLaunchableAppsForInstance({ ...instance, appInventory: undefined }), []);
 });
 
 function tempDataDir(name) {
@@ -53,6 +140,38 @@ async function json(app, method, url, payload, headers) {
     statusCode: response.statusCode,
     body: response.json(),
   };
+}
+
+async function createAndAssignNodeModel(app, instanceId, overrides = {}) {
+  const model = {
+    name: overrides.name || "Test Codex model",
+    endpoint: overrides.endpoint || "https://openai.example/v1",
+    key: overrides.key || "test-codex-key",
+    model: overrides.model || "gpt-test",
+    app: "codex",
+    enabled: true,
+    order: 100,
+    labels: {},
+  };
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/models",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: model,
+  });
+  assert.equal(created.statusCode, 201);
+  const modelHash = created.json().data.id;
+  const assigned = await app.inject({
+    method: "PUT",
+    url: `/api/node-agent/instances/${instanceId}/model-assignment`,
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      modelSelection: { codexModelHash: modelHash },
+      codexModelHash: modelHash,
+    },
+  });
+  assert.equal(assigned.statusCode, 200);
+  return created.json().data;
 }
 
 function onceWebSocketMessage(socket) {
@@ -616,6 +735,8 @@ function createMockNodeAgentFetch(options = {}) {
     },
   ];
   const folders = [...(options.localFolders || [])];
+  const nodeModels = new Map((options.nodeModels || []).map((model) => [model.id, model]));
+  const nodeModelKeys = new Map(Object.entries(options.nodeModelKeys || {}));
   const instances = new Map((options.instances || []).map((instance) => [instance.id, instance]));
   let externalListener = options.externalListener || { bindScope: "loopback", host: "127.0.0.1", port: 8091, status: "listening", source: "bootstrap" };
   const requests = [];
@@ -738,6 +859,71 @@ function createMockNodeAgentFetch(options = {}) {
       folders.push(folder);
       return jsonResponse(folder, 201);
     }
+    if (path === "/models" && (!init.method || init.method === "GET")) {
+      if (options.modelsError) throw options.modelsError;
+      return jsonResponse([...nodeModels.values()]);
+    }
+    if (path === "/models" && init.method === "POST") {
+      const id = modelConfigHash(body);
+      const model = {
+        ...body,
+        id,
+        enabled: body.enabled ?? true,
+        order: body.order ?? (nodeModels.size + 1) * 100,
+        labels: body.labels || {},
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        keyPreview: "set",
+        keySet: true,
+        referenceCount: 0,
+      };
+      delete model.key;
+      nodeModels.set(id, model);
+      nodeModelKeys.set(id, body.key);
+      return jsonResponse(model, 201);
+    }
+    const modelDeploy = path.match(/^\/models\/([^/]+)\/deploy$/);
+    if (modelDeploy && init.method === "PUT") {
+      if (options.deployModelError) throw options.deployModelError;
+      const id = decodeURIComponent(modelDeploy[1]);
+      const model = {
+        ...body,
+        id,
+        keyPreview: "set",
+        keySet: true,
+        referenceCount: nodeModels.get(id)?.referenceCount || 0,
+      };
+      delete model.key;
+      nodeModels.set(id, model);
+      nodeModelKeys.set(id, body.key);
+      return jsonResponse(model);
+    }
+    const modelRoute = path.match(/^\/models\/([^/]+)$/);
+    if (modelRoute && init.method === "PATCH") {
+      const id = decodeURIComponent(modelRoute[1]);
+      const current = nodeModels.get(id);
+      if (!current) return errorResponse(`Model ${id} was not found.`, 404, "NODE_MODEL_NOT_FOUND");
+      const candidate = { ...current, ...body, updatedAt: timestamp };
+      const nextKey = body.key || nodeModelKeys.get(id) || "mock-private-key";
+      const nextId = modelConfigHash({ ...candidate, key: nextKey });
+      const model = { ...candidate, id: nextId };
+      delete model.key;
+      nodeModels.set(nextId, model);
+      nodeModelKeys.set(nextId, nextKey);
+      if (!current.referenceCount) {
+        nodeModels.delete(id);
+        nodeModelKeys.delete(id);
+      }
+      return jsonResponse(model);
+    }
+    if (modelRoute && init.method === "DELETE") {
+      if (options.modelDeleteError) throw options.modelDeleteError;
+      const id = decodeURIComponent(modelRoute[1]);
+      const current = nodeModels.get(id);
+      if (current?.referenceCount) return errorResponse(`Model ${id} is in use.`, 409, "NODE_MODEL_IN_USE");
+      nodeModelKeys.delete(id);
+      return jsonResponse({ deleted: nodeModels.delete(id) });
+    }
     const folderDelete = path.match(/^\/local-folders\/([^/]+)$/);
     if (folderDelete && init.method === "DELETE") {
       const index = folders.findIndex((folder) => folder.id === decodeURIComponent(folderDelete[1]));
@@ -787,6 +973,25 @@ function createMockNodeAgentFetch(options = {}) {
       const updated = { ...current, ...instancePatch, id, nodeId, updatedAt: timestamp };
       instances.set(id, updated);
       return jsonResponse(updated);
+    }
+    const instanceModelAssignment = path.match(/^\/instances\/([^/]+)\/model-assignment$/);
+    if (instanceModelAssignment && init.method === "PUT") {
+      if (options.assignmentError) throw options.assignmentError;
+      const id = decodeURIComponent(instanceModelAssignment[1]);
+      const current = instances.get(id);
+      if (!current) return errorResponse(`Instance ${id} was not found.`, 404, "NODE_INSTANCE_NOT_FOUND");
+      const instance = { ...current, modelSelection: body.modelSelection, updatedAt: timestamp };
+      instances.set(id, instance);
+      for (const modelHash of [body.codexModelHash, body.claudeModelHash]) {
+        if (modelHash && nodeModels.has(modelHash)) {
+          const model = nodeModels.get(modelHash);
+          nodeModels.set(modelHash, { ...model, referenceCount: model.referenceCount + 1 });
+        }
+      }
+      return jsonResponse({
+        assignment: { instanceId: id, codexModelHash: body.codexModelHash, claudeModelHash: body.claudeModelHash, updatedAt: timestamp },
+        instance,
+      });
     }
     const proxyRaw = path.match(/^\/instances\/([^/]+)\/proxy\/raw$/);
     if (proxyRaw) {
@@ -852,7 +1057,7 @@ function createMockNodeAgentFetch(options = {}) {
     return errorResponse(`Unhandled node agent route ${path}`);
   }
 
-  return { fetchImpl, requests, instances, folders, runtimes };
+  return { fetchImpl, requests, instances, folders, runtimes, nodeModels };
 }
 
 test("control plane auth is disabled by default", async () => {
@@ -1451,6 +1656,7 @@ test("control plane subscribes to direct node agent websocket events", async (t)
       instanceId: "inst_direct_events",
       name: "direct events",
       protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+      appInventory: emptyAppInventory(),
       target: {
         strategy: "direct-port",
         web: `http://127.0.0.1:${instanceEventsAddress.port}`,
@@ -3473,10 +3679,11 @@ test("node agent starts localhost runtime as a host controlled-instance process"
       "    name: process.env.TASK_HANDOFF_INSTANCE_NAME,",
       "    nodeId: process.env.TASK_HANDOFF_NODE_ID,",
       "    runtimeId: process.env.TASK_HANDOFF_RUNTIME_ID,",
-      "    protocolVersion: '2026-07-14',",
+      "    protocolVersion: '2026-07-15-model-hash-registry',",
       "    build: { component: 'controlled-instance' },",
       "    controlMode: 'controlled',",
-      "    capabilities: { protocolVersion: '2026-07-14', apps: [], features: {} },",
+      "    capabilities: { protocolVersion: '2026-07-15-model-hash-registry', features: {} },",
+      "    appInventory: { items: [], observedAt: new Date().toISOString(), issues: [] },",
       "    target: { strategy: 'direct-port', web: `http://127.0.0.1:${port}`, api: `http://127.0.0.1:${port}/api`, status: 'reachable' },",
       "    workspace: { mode: 'local-bind', status: 'ready', path: process.env.TASK_HANDOFF_WORKSPACE, exists: true },",
       "  }),",
@@ -3546,12 +3753,16 @@ test("node agent starts localhost runtime as a host controlled-instance process"
     },
   });
   assert.equal(created.statusCode, 201);
+  const initialModel = await createAndAssignNodeModel(app, "inst_local_process", {
+    id: "model_local_process",
+    key: "instance-codex-key",
+  });
 
   const started = await app.inject({
     method: "POST",
     url: "/api/node-agent/instances/inst_local_process/start",
     headers: { authorization: "Bearer agent-secret" },
-    payload: { modelEnv: { OPENAI_API_KEY: "instance-codex-key" } },
+    payload: {},
   });
   assert.equal(started.statusCode, 200);
   assert.equal(started.json().data.status, "registering");
@@ -3565,11 +3776,29 @@ test("node agent starts localhost runtime as a host controlled-instance process"
   assert.equal(envLines[0].argv.includes("--receiver-auto-start"), false);
   assert.equal(envLines[0].openaiKey, "instance-codex-key");
 
+  const updatedModel = await app.inject({
+    method: "PATCH",
+    url: `/api/node-agent/models/${initialModel.id}`,
+    headers: { authorization: "Bearer agent-secret" },
+    payload: { key: "restarted-codex-key" },
+  });
+  assert.equal(updatedModel.statusCode, 200);
+  const reassigned = await app.inject({
+    method: "PUT",
+    url: "/api/node-agent/instances/inst_local_process/model-assignment",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      modelSelection: { codexModelHash: updatedModel.json().data.id },
+      codexModelHash: updatedModel.json().data.id,
+    },
+  });
+  assert.equal(reassigned.statusCode, 200);
+
   const restarted = await app.inject({
     method: "POST",
     url: "/api/node-agent/instances/inst_local_process/restart",
     headers: { authorization: "Bearer agent-secret" },
-    payload: { modelEnv: { OPENAI_API_KEY: "restarted-codex-key" } },
+    payload: {},
   });
   assert.equal(restarted.statusCode, 200);
   assert.notEqual(restarted.json().data.runtime.pid, firstPid);
@@ -3846,17 +4075,18 @@ test("node agent restores localhost runtime processes after graceful shutdown", 
     },
   });
   assert.equal(created.statusCode, 201);
+  const restoreModel = await createAndAssignNodeModel(app, "inst_local_restore", {
+    id: "model_local_restore",
+    key: "restore-key-secret",
+    endpoint: "https://restore.example/v1",
+    model: "gpt-restore",
+  });
 
   const started = await app.inject({
     method: "POST",
     url: "/api/node-agent/instances/inst_local_restore/start",
     headers: { authorization: "Bearer agent-secret" },
-    payload: {
-      modelEnv: {
-        OPENAI_API_KEY: "restore-key-secret",
-        OPENAI_BASE_URL: "https://restore.example/v1",
-      },
-    },
+    payload: {},
   });
   assert.equal(started.statusCode, 200);
   const firstPid = started.json().data.runtime.pid;
@@ -3905,7 +4135,8 @@ test("node agent restores localhost runtime processes after graceful shutdown", 
   assert.deepEqual(envRows.map((row) => row.apiKey), ["restore-key-secret", "restore-key-secret"]);
   assert.deepEqual(envRows.map((row) => row.baseUrl), ["https://restore.example/v1", "https://restore.example/v1"]);
   const modelEnvironmentPath = path.join(dataDir, "model-environments", "inst_local_restore.json");
-  assert.equal(fs.statSync(modelEnvironmentPath).mode & 0o777, 0o600);
+  assert.equal(fs.existsSync(modelEnvironmentPath), false);
+  assert.equal(fs.statSync(path.join(dataDir, "models", `${restoreModel.id}.json`)).mode & 0o777, 0o600);
 });
 
 test("node agent restores active localhost runtime processes after unclean shutdown state", async (t) => {
@@ -4131,6 +4362,7 @@ test("node agent rejects incompatible controlled instance protocol versions", as
       instanceId: "inst_protocol",
       name: "worker",
       protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+      appInventory: emptyAppInventory(),
       build: {
         component: "controlled-instance",
         packageVersion: "0.1.0",
@@ -4370,6 +4602,7 @@ test("node agent proxies instance API requests", async (t) => {
       instanceId: "inst_1",
       name: "proxy-worker",
       protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+      appInventory: emptyAppInventory(),
       controlMode: "controlled",
       capabilities: {},
       target: {
@@ -4470,6 +4703,7 @@ test("node agent proxies direct-port instances through the node-local host", asy
       instanceId: "inst_proxy",
       name: "proxy-worker",
       protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+      appInventory: emptyAppInventory(),
       controlMode: "controlled",
       capabilities: {},
       target: {
@@ -4592,6 +4826,7 @@ test("node agent proxies instance websocket subprotocols", async (t) => {
       instanceId: "inst_ws",
       name: "ws-worker",
       protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+      appInventory: emptyAppInventory(),
       controlMode: "controlled",
       capabilities: {},
       target: {
@@ -5031,12 +5266,11 @@ test("control plane proxies instance websocket routes through reverse node tunne
       workspace: {
         status: "ready",
       },
-      capabilities: {
-        apps: [
-          { id: "codex", name: "Codex" },
-          { id: "claude", name: "Claude" },
-        ],
-      },
+      capabilities: { features: { appRuntime: true } },
+      appInventory: testAppInventory([
+        { id: "codex", name: "Codex" },
+        { id: "claude", name: "Claude" },
+      ]),
     }),
   });
   const updatedNode = await json(app, "PATCH", "/api/nodes/node_mock", {
@@ -5212,8 +5446,9 @@ test("control plane proxies instance websocket routes through reverse node tunne
   assert.deepEqual(await withTimeout(onceWebSocketMessageFrame(stream), "reverse websocket stream frame"), { message: "hello", isBinary: false });
 });
 
-test("control plane models are instance-scoped and resolved in start context", async (t) => {
-  const mock = createMockNodeAgentFetch();
+test("control plane models deploy to the target node and instances store assignments", async (t) => {
+  const mockOptions = {};
+  const mock = createMockNodeAgentFetch(mockOptions);
   const app = await createControlPlaneApp({
     dataDir: tempDataDir("control-plane-models"),
     logger: false,
@@ -5276,7 +5511,7 @@ test("control plane models are instance-scoped and resolved in start context", a
   const projectWithModels = await json(app, "POST", "/api/projects", {
     name: "Legacy Model Project",
     source: { type: "local-folder", path: "/tmp/legacy-workspace" },
-    modelSelection: { codexModelId: selectedCodex.body.data.id },
+    modelSelection: { codexModelHash: selectedCodex.body.data.id },
   });
   assert.equal(projectWithModels.statusCode, 400);
 
@@ -5285,7 +5520,7 @@ test("control plane models are instance-scoped and resolved in start context", a
     projectId: project.body.data.id,
     runtimeId: "runtime_local_docker",
     imageId: "img_default",
-    modelSelection: { claudeModelId: selectedCodex.body.data.id },
+    modelSelection: { claudeModelHash: selectedCodex.body.data.id },
   });
   assert.equal(wrongAppInstance.statusCode, 400);
   assert.equal(wrongAppInstance.body.error.code, "MODEL_APP_MISMATCH");
@@ -5295,7 +5530,7 @@ test("control plane models are instance-scoped and resolved in start context", a
     projectId: project.body.data.id,
     runtimeId: "runtime_local_docker",
     imageId: "img_default",
-    modelSelection: { codexModelId: disabledCodex.body.data.id },
+    modelSelection: { codexModelHash: disabledCodex.body.data.id },
   });
   assert.equal(disabledModelInstance.statusCode, 400);
   assert.equal(disabledModelInstance.body.error.code, "MODEL_DISABLED");
@@ -5306,64 +5541,98 @@ test("control plane models are instance-scoped and resolved in start context", a
     runtimeId: "runtime_local_docker",
     imageId: "img_default",
     modelSelection: {
-      codexModelId: selectedCodex.body.data.id,
-      claudeModelId: selectedClaude.body.data.id,
+      codexModelHash: selectedCodex.body.data.id,
+      claudeModelHash: selectedClaude.body.data.id,
     },
   });
   assert.equal(instance.statusCode, 201);
   assert.deepEqual(instance.body.data.modelSelection, {
-    codexModelId: selectedCodex.body.data.id,
-    claudeModelId: selectedClaude.body.data.id,
+    codexModelHash: selectedCodex.body.data.id,
+    claudeModelHash: selectedClaude.body.data.id,
   });
   const createRequest = mock.requests.find((request) => request.path === "/instances" && request.method === "POST" && request.body.name === "scoped-1");
-  assert.equal(createRequest.body.modelEnv.OPENAI_API_KEY, "allowed-codex-key-secret");
-  assert.equal(createRequest.body.modelEnv.ANTHROPIC_API_KEY, "allowed-claude-key-secret");
+  assert.equal("modelEnv" in createRequest.body, false);
+  const codexDeploy = mock.requests.find((request) => request.path === `/models/${selectedCodex.body.data.id}/deploy` && request.method === "PUT");
+  assert.equal(codexDeploy.body.key, "allowed-codex-key-secret");
+  assert.equal(modelConfigHash(codexDeploy.body), selectedCodex.body.data.id);
+  const assignmentRequest = mock.requests.find((request) => request.path === `/instances/${instance.body.data.id}/model-assignment` && request.method === "PUT");
+  assert.equal(assignmentRequest.body.codexModelHash, selectedCodex.body.data.id);
+  assert.equal(assignmentRequest.body.claudeModelHash, selectedClaude.body.data.id);
+  assert.equal("key" in assignmentRequest.body, false);
+
+  const registry = await json(app, "GET", "/api/models");
+  assert.equal(registry.statusCode, 200);
+  assert.equal(Array.isArray(registry.body.data.models), true);
+  const selectedGroup = registry.body.data.models.find((group) => group.id === selectedCodex.body.data.id);
+  assert.deepEqual(selectedGroup.locations.map((location) => location.type), ["control-plane", "node"]);
+  assert.equal("key" in selectedGroup.model, false);
+
+  const localModel = await json(app, "POST", "/api/nodes/node_mock/models", {
+    name: "Node local Codex",
+    endpoint: "http://node-local.test/v1",
+    key: "node-local-secret",
+    model: "node-local-model",
+    app: "codex",
+  });
+  assert.equal(localModel.statusCode, 201);
+  const registryWithLocal = await json(app, "GET", "/api/models");
+  assert.equal(registryWithLocal.statusCode, 200, JSON.stringify(registryWithLocal.body));
+  assert.equal(registryWithLocal.body.data.models.some((group) => group.locations.some((location) => location.type === "node" && location.nodeId === "node_mock")), true);
 
   const rotatedModel = await json(app, "PATCH", `/api/models/${selectedCodex.body.data.id}`, {
     key: "rotated-codex-key-secret",
     endpoint: "https://rotated.example/v1",
   });
   assert.equal(rotatedModel.statusCode, 200);
-  const synchronizedModelRequest = mock.requests.findLast((request) =>
-    request.path === `/instances/${instance.body.data.id}` && request.method === "PATCH" && request.body.modelEnv);
-  assert.equal(synchronizedModelRequest.body.modelEnv.OPENAI_API_KEY, "rotated-codex-key-secret");
-  assert.equal(synchronizedModelRequest.body.modelEnv.OPENAI_BASE_URL, "https://rotated.example/v1");
+  assert.notEqual(rotatedModel.body.data.id, selectedCodex.body.data.id);
+  assert.equal(mock.requests.filter((request) => request.path === `/models/${selectedCodex.body.data.id}/deploy`).length, 1);
 
-  const disableSelectedModel = await json(app, "PATCH", `/api/models/${selectedCodex.body.data.id}`, { enabled: false });
-  assert.equal(disableSelectedModel.statusCode, 409);
-  assert.equal(disableSelectedModel.body.error.code, "MODEL_SELECTION_INVALID");
+  const selectRotated = await json(app, "PATCH", `/api/controlled-instances/${instance.body.data.id}`, {
+    modelSelection: { codexModelHash: rotatedModel.body.data.id },
+  });
+  assert.equal(selectRotated.statusCode, 200);
+  const disableSelectedModel = await json(app, "PATCH", `/api/models/${rotatedModel.body.data.id}`, { enabled: false });
+  assert.equal(disableSelectedModel.statusCode, 200);
+  assert.equal(disableSelectedModel.body.data.enabled, false);
+
+  const rejectedStart = await json(app, "POST", `/api/controlled-instances/${instance.body.data.id}/start`);
+  assert.equal(rejectedStart.statusCode, 400);
+  assert.equal(rejectedStart.body.error.code, "MODEL_DISABLED");
+
+  const updated = await json(app, "PATCH", `/api/controlled-instances/${instance.body.data.id}`, {
+    modelSelection: { codexModelHash: first.body.data.id },
+  });
+  assert.equal(updated.statusCode, 200);
+  assert.deepEqual(updated.body.data.modelSelection, { codexModelHash: first.body.data.id });
 
   const started = await json(app, "POST", `/api/controlled-instances/${instance.body.data.id}/start`);
   assert.equal(started.statusCode, 200);
   const startRequest = mock.requests.find((request) => request.path === `/instances/${instance.body.data.id}/start`);
-  assert.equal(startRequest.body.modelEnv.OPENAI_API_KEY, "rotated-codex-key-secret");
-  assert.equal(startRequest.body.modelEnv.OPENAI_BASE_URL, "https://rotated.example/v1");
-  assert.equal(startRequest.body.modelEnv.TASK_HANDOFF_CODEX_BASE_URL, "https://rotated.example/v1");
-  assert.equal(startRequest.body.modelEnv.TASK_HANDOFF_CODEX_MODEL, "allowed-codex-model");
-  assert.equal(startRequest.body.modelEnv.ANTHROPIC_API_KEY, "allowed-claude-key-secret");
-  assert.equal(startRequest.body.modelEnv.ANTHROPIC_BASE_URL, "https://anthropic.example");
-  assert.equal(startRequest.body.modelEnv.TASK_HANDOFF_CLAUDE_MODEL, "allowed-claude-model");
+  assert.deepEqual(startRequest.body, {});
 
-  const updated = await json(app, "PATCH", `/api/controlled-instances/${instance.body.data.id}`, {
-    modelSelection: { codexModelId: first.body.data.id },
+  const generalUpdated = await json(app, "PATCH", `/api/controlled-instances/${instance.body.data.id}`, {
+    config: { autoImportAgentConfigs: false },
   });
-  assert.equal(updated.statusCode, 200);
-  assert.deepEqual(updated.body.data.modelSelection, { codexModelId: first.body.data.id });
+  assert.equal(generalUpdated.statusCode, 200);
+  assert.deepEqual(generalUpdated.body.data.config, { autoImportAgentConfigs: false });
+  const generalUpdateRequest = mock.requests.findLast((request) => request.path === `/instances/${instance.body.data.id}` && request.method === "PATCH" && request.body.config);
+  assert.deepEqual(generalUpdateRequest.body.config, { autoImportAgentConfigs: false });
+
+  const rejectedGeneralUpdate = await json(app, "PATCH", `/api/controlled-instances/${instance.body.data.id}`, {
+    config: { autoImportAgentConfigs: true, unknown: true },
+  });
+  assert.equal(rejectedGeneralUpdate.statusCode, 400);
 
   const restarted = await json(app, "POST", `/api/controlled-instances/${instance.body.data.id}/restart`);
   assert.equal(restarted.statusCode, 200);
   const restartRequest = mock.requests.findLast((request) => request.path === `/instances/${instance.body.data.id}/restart`);
-  assert.equal(restartRequest.body.modelEnv.OPENAI_API_KEY, "first-key-secret");
-  assert.equal(restartRequest.body.modelEnv.TASK_HANDOFF_CODEX_BASE_URL, "https://first.example/v1");
-  assert.equal(restartRequest.body.modelEnv.TASK_HANDOFF_CODEX_MODEL, "first-model");
-  assert.equal(restartRequest.body.modelEnv.ANTHROPIC_API_KEY, "allowed-claude-key-secret");
+  assert.deepEqual(restartRequest.body, {});
 
   const deleteBoundModel = await json(app, "DELETE", `/api/models/${first.body.data.id}`);
-  assert.equal(deleteBoundModel.statusCode, 409);
-  assert.equal(deleteBoundModel.body.error.code, "MODEL_IN_USE");
+  assert.equal(deleteBoundModel.statusCode, 200);
 });
 
-test("control plane refuses model deletion when fleet references are incomplete", async (t) => {
+test("control plane deletes an undeployed model without scanning an offline fleet", async (t) => {
   const mockOptions = {};
   const mock = createMockNodeAgentFetch(mockOptions);
   const app = await createControlPlaneApp({
@@ -5385,8 +5654,141 @@ test("control plane refuses model deletion when fleet references are incomplete"
 
   mockOptions.instancesError = new Error("node offline");
   const deleted = await json(app, "DELETE", `/api/models/${model.body.data.id}`);
-  assert.equal(deleted.statusCode, 503);
-  assert.equal(deleted.body.error.code, "MODEL_FLEET_INCOMPLETE");
+  assert.equal(deleted.statusCode, 200);
+  assert.equal(deleted.body.data.deleted, true);
+});
+
+test("federated model registry groups one control-plane model across multiple nodes", async (t) => {
+  const firstOptions = { nodeId: "node_one" };
+  const secondOptions = { nodeId: "node_two" };
+  const firstNode = createMockNodeAgentFetch(firstOptions);
+  const secondNode = createMockNodeAgentFetch(secondOptions);
+  const fetchImpl = (url, init) => new URL(String(url)).hostname === "node-two.example"
+    ? secondNode.fetchImpl(url, init)
+    : firstNode.fetchImpl(url, init);
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-models-multi-node"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: { fetchImpl },
+  });
+  t.after(() => app.close());
+
+  const nodeTwo = await json(app, "POST", "/api/nodes", {
+    id: "node_two",
+    name: "Node Two",
+    connectionMode: "direct-http",
+    endpoint: "http://node-two.example:8091",
+    auth: { mode: "paired-hmac", keyId: "key_two", secret: "secret-two" },
+  });
+  assert.equal(nodeTwo.statusCode, 201, JSON.stringify(nodeTwo.body));
+  const model = await json(app, "POST", "/api/models", {
+    name: "Shared Codex",
+    endpoint: "https://shared.example/v1",
+    key: "shared-secret-key",
+    model: "shared-codex",
+    app: "codex",
+  });
+  const project = await json(app, "POST", "/api/projects", {
+    name: "Multi-node models",
+    source: { type: "local-folder", path: "/tmp/multi-node" },
+  });
+  for (const nodeId of ["node_one", "node_two"]) {
+    const instance = await json(app, "POST", "/api/controlled-instances", {
+      name: `instance-${nodeId}`,
+      projectId: project.body.data.id,
+      nodeId,
+      runtimeId: "runtime_local_docker",
+      imageId: "img_default",
+      modelSelection: { codexModelHash: model.body.data.id },
+    });
+    assert.equal(instance.statusCode, 201, JSON.stringify(instance.body));
+  }
+  const local = await json(app, "POST", "/api/nodes/node_two/models", {
+    name: "Node Two Local",
+    endpoint: "http://node-two.local/v1",
+    key: "node-two-local-secret",
+    model: "node-two-local",
+    app: "codex",
+  });
+  assert.equal(local.statusCode, 201);
+
+  const registry = await json(app, "GET", "/api/models");
+  const group = registry.body.data.models.find((item) => item.id === model.body.data.id);
+  assert.deepEqual(group.locations.filter((item) => item.type === "node").map((item) => item.nodeId).sort(), ["node_one", "node_two"]);
+  assert.equal(registry.body.data.models.some((item) => item.locations.some((location) => location.type === "node" && location.nodeId === "node_two")), true);
+  assert.equal(JSON.stringify(registry.body.data).includes("shared-secret-key"), false);
+  assert.equal(JSON.stringify(registry.body.data).includes("node-two-local-secret"), false);
+
+  secondOptions.modelsError = new Error("node two offline");
+  secondOptions.deployModelError = new Error("node two offline");
+  const staleRegistry = await json(app, "GET", "/api/models");
+  assert.equal(staleRegistry.statusCode, 200, JSON.stringify(staleRegistry.body));
+  const partialGroup = staleRegistry.body.data.models.find((item) => item.id === model.body.data.id);
+  assert.equal(partialGroup.locations.some((item) => item.type === "node" && item.nodeId === "node_two"), false);
+  assert.equal(staleRegistry.body.data.nodeDiagnostics.some((item) => item.nodeId === "node_two"), true);
+
+  secondOptions.modelsError = undefined;
+  secondOptions.deployModelError = undefined;
+  const reconciled = await json(app, "GET", "/api/models");
+  assert.equal(reconciled.body.data.models.find((item) => item.id === model.body.data.id).locations.some((item) => item.type === "node" && item.nodeId === "node_two"), true);
+
+  for (const mock of [firstNode, secondNode]) {
+    const deployed = mock.nodeModels.get(model.body.data.id);
+    mock.nodeModels.set(model.body.data.id, { ...deployed, referenceCount: 0 });
+  }
+  secondOptions.modelDeleteError = new Error("node two offline");
+  const sourceDelete = await json(app, "DELETE", `/api/models/${model.body.data.id}`);
+  assert.equal(sourceDelete.statusCode, 200);
+});
+
+test("failed assignment leaves an unreferenced hash entry without deployment state", async (t) => {
+  const mockOptions = {};
+  const mock = createMockNodeAgentFetch(mockOptions);
+  const dataDir = tempDataDir("control-plane-model-assignment-compensation");
+  const app = await createControlPlaneApp({
+    dataDir,
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: { fetchImpl: mock.fetchImpl },
+  });
+  t.after(() => app.close());
+
+  const model = await json(app, "POST", "/api/models", {
+    name: "Compensated model",
+    endpoint: "https://compensated.example/v1",
+    key: "compensated-key",
+    model: "compensated-model",
+    app: "codex",
+  });
+  const project = await json(app, "POST", "/api/projects", {
+    name: "Compensation project",
+    source: { type: "local-folder", path: "/tmp/compensation" },
+  });
+  mockOptions.assignmentError = new Error("assignment failed");
+  const failed = await json(app, "POST", "/api/controlled-instances", {
+    projectId: project.body.data.id,
+    runtimeId: "runtime_local_docker",
+    imageId: "img_default",
+    modelSelection: { codexModelHash: model.body.data.id },
+  });
+  assert.notEqual(failed.statusCode, 201);
+  assert.equal(mock.requests.some((request) => request.path === `/models/${model.body.data.id}/deploy` && request.method === "PUT"), true);
+  assert.equal(mock.requests.some((request) => /^\/instances\/[^/]+\/delete$/.test(request.path) && request.method === "POST"), true);
+  assert.equal(mock.requests.some((request) => request.path === `/models/${model.body.data.id}` && request.method === "DELETE"), false);
+  assert.equal(fs.existsSync(path.join(dataDir, "model-deployments")), false);
+
+  mockOptions.assignmentError = undefined;
+  mockOptions.modelsError = new Error("target node offline");
+  const requestCount = mock.requests.length;
+  const offline = await json(app, "POST", "/api/controlled-instances", {
+    projectId: project.body.data.id,
+    runtimeId: "runtime_local_docker",
+    imageId: "img_default",
+    modelSelection: { codexModelHash: model.body.data.id },
+  });
+  assert.notEqual(offline.statusCode, 201);
+  assert.equal(mock.requests.slice(requestCount).some((request) => request.path === "/instances" && request.method === "POST"), false);
 });
 
 test("control plane manages projects, instances, register, heartbeat, and board state", async (t) => {
@@ -5492,9 +5894,8 @@ test("control plane manages projects, instances, register, heartbeat, and board 
       instanceVersion: "0.1.0",
       protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
       controlMode: "controlled",
-      capabilities: {
-        apps: ["terminal-tty"],
-      },
+      capabilities: { features: { appRuntime: true } },
+      appInventory: testAppInventory([{ id: "terminal-tty", name: "Terminal" }]),
       target: {
         strategy: "direct-port",
         web: "http://127.0.0.1:18080",
@@ -5519,12 +5920,11 @@ test("control plane manages projects, instances, register, heartbeat, and board 
     body: JSON.stringify({
       status: "running",
       health: "ok",
-      capabilities: {
-        apps: [
-          { id: "terminal-tty", name: "Terminal", kind: "tty" },
-          { id: "cc-switch", name: "CC Switch", kind: "gui" },
-        ],
-      },
+      capabilities: { features: { appRuntime: true } },
+      appInventory: testAppInventory([
+        { id: "terminal-tty", name: "Terminal", kind: "tty" },
+        { id: "cc-switch", name: "CC Switch", kind: "gui" },
+      ]),
       apps: {
         runningCount: 1,
       },
@@ -5561,9 +5961,9 @@ test("control plane manages projects, instances, register, heartbeat, and board 
   assert.equal(board.body.data.length, 1);
   assert.equal(board.body.data[0].project.name, "Local Project");
   assert.equal(board.body.data[0].image.id, "img_default");
-  assert.deepEqual(board.body.data[0].capabilities.apps, [
-    { id: "terminal-tty", name: "Terminal", kind: "tty" },
-    { id: "cc-switch", name: "CC Switch", kind: "gui" },
+  assert.deepEqual(board.body.data[0].appInventory.items.map(({ id, availability }) => ({ id, availability })), [
+    { id: "terminal-tty", availability: "available" },
+    { id: "cc-switch", availability: "available" },
   ]);
   assert.equal(board.body.data[0].runtime.id, "runtime_local_docker");
   assert.equal(board.body.data[0].protocolCompatible, true);
@@ -6003,9 +6403,8 @@ test("control plane proxies instance websocket routes while preserving HTTP prox
       instanceVersion: "0.1.0",
       protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
       controlMode: "controlled",
-      capabilities: {
-        apps: ["terminal-tty"],
-      },
+      capabilities: { features: { appRuntime: true } },
+      appInventory: testAppInventory([{ id: "terminal-tty", name: "Terminal" }]),
       target: {
         strategy: "direct-port",
         web: "http://controlled.internal:8080",
@@ -6216,7 +6615,8 @@ test("control plane starts, stops, and restarts instances through runtime execut
   assert.deepEqual(
     mock.requests
       .filter((request) => request.path.startsWith(`/instances/${created.body.data.id}/`))
-      .map((request) => request.path.split("/").at(-1)),
+      .map((request) => request.path.split("/").at(-1))
+      .filter((action) => ["start", "stop", "restart", "delete"].includes(action)),
     ["start", "stop", "restart", "delete"],
   );
 });
@@ -6373,12 +6773,11 @@ test("control plane launches app sessions through the controlled instance API", 
       workspace: {
         status: "ready",
       },
-      capabilities: {
-        apps: [
-          { id: "codex", name: "Codex" },
-          { id: "claude", name: "Claude" },
-        ],
-      },
+      capabilities: { features: { appRuntime: true } },
+      appInventory: testAppInventory([
+        { id: "codex", name: "Codex" },
+        { id: "claude", name: "Claude" },
+      ]),
     }),
   });
 
@@ -6838,12 +7237,11 @@ test("control plane chat gateway binds sessions and forwards messages to active 
       workspace: {
         status: "ready",
       },
-      capabilities: {
-        apps: [
-          { id: "codex", name: "Codex" },
-          { id: "claude", name: "Claude" },
-        ],
-      },
+      capabilities: { features: { appRuntime: true } },
+      appInventory: testAppInventory([
+        { id: "codex", name: "Codex" },
+        { id: "claude", name: "Claude" },
+      ]),
     }),
   });
   await mock.fetchImpl(`http://127.0.0.1:8091/api/node-agent/instances/${created.body.data.id}/heartbeat`, {
@@ -6853,6 +7251,12 @@ test("control plane chat gateway binds sessions and forwards messages to active 
       status: "running",
       health: "ok",
       connectionStatus: "online",
+      appInventory: testAppInventory([
+        { id: "chromium", name: "Chromium", kind: "web" },
+        { id: "terminal-tty", name: "Terminal" },
+        { id: "terminal-gui", name: "GUI Terminal", kind: "gui" },
+        { id: "vscode", name: "VS Code", kind: "gui" },
+      ]),
       apps: {
         runningCount: 2,
       },

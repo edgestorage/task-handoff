@@ -1,6 +1,6 @@
 <template>
-  <Select v-model="model">
-    <SelectTrigger :class="['control-plane-select', triggerClass]">
+  <Select v-model="model" :disabled="disabled">
+    <SelectTrigger :class="['control-plane-select', triggerClass]" :disabled="disabled">
       <SelectValue :placeholder="placeholder" />
     </SelectTrigger>
     <SelectContent class="control-plane-select-content">
@@ -14,6 +14,7 @@ import type { HTMLAttributes } from "vue";
 import { Select, SelectContent, SelectTrigger, SelectValue } from "../../../components/ui/select";
 
 defineProps<{
+  disabled?: boolean;
   placeholder?: string;
   triggerClass?: HTMLAttributes["class"];
 }>();

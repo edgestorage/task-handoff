@@ -58,14 +58,14 @@
         <span>Codex model</span>
         <ControlPlaneSelect v-model="instanceCodexModelValue" placeholder="Global default">
           <ControlPlaneSelectItem :value="defaultModelValue">Global default</ControlPlaneSelectItem>
-          <ControlPlaneSelectItem v-for="model in codexModels" :key="`instance-codex-${model.id}`" :value="model.id">{{ model.name }}</ControlPlaneSelectItem>
+          <ControlPlaneSelectItem v-for="model in codexModels" :key="`instance-codex-${model.id}`" :value="model.id">{{ modelOptionLabel(model) }}</ControlPlaneSelectItem>
         </ControlPlaneSelect>
       </label>
       <label v-if="claudeModels.length">
         <span>Claude model</span>
         <ControlPlaneSelect v-model="instanceClaudeModelValue" placeholder="Global default">
           <ControlPlaneSelectItem :value="defaultModelValue">Global default</ControlPlaneSelectItem>
-          <ControlPlaneSelectItem v-for="model in claudeModels" :key="`instance-claude-${model.id}`" :value="model.id">{{ model.name }}</ControlPlaneSelectItem>
+          <ControlPlaneSelectItem v-for="model in claudeModels" :key="`instance-claude-${model.id}`" :value="model.id">{{ modelOptionLabel(model) }}</ControlPlaneSelectItem>
         </ControlPlaneSelect>
       </label>
     </div>
@@ -106,15 +106,19 @@ const props = defineProps<{
 }>();
 
 const defaultModelValue = "__default__";
-const codexModels = computed(() => props.models.filter((model) => model.app === "codex"));
-const claudeModels = computed(() => props.models.filter((model) => model.app === "claude"));
+const eligibleModels = computed(() => props.models.filter((model) => model.locations?.some((location) => location.type === "control-plane" || (location.type === "node" && location.nodeId === props.runtimeDraft.nodeId))));
+const codexModels = computed(() => eligibleModels.value.filter((model) => model.app === "codex"));
+const claudeModels = computed(() => eligibleModels.value.filter((model) => model.app === "claude"));
+const modelOptionLabel = (model: ModelConfig) => model.locations?.some((location) => location.type === "control-plane")
+  ? `${model.name} · copy to node`
+  : `${model.name} · this node`;
 const instanceCodexModelValue = computed({
-  get: () => props.instanceDraft.codexModelId || defaultModelValue,
-  set: (value: string) => { props.instanceDraft.codexModelId = value === defaultModelValue ? "" : value; },
+  get: () => props.instanceDraft.codexModelHash || defaultModelValue,
+  set: (value: string) => { props.instanceDraft.codexModelHash = value === defaultModelValue ? "" : value; },
 });
 const instanceClaudeModelValue = computed({
-  get: () => props.instanceDraft.claudeModelId || defaultModelValue,
-  set: (value: string) => { props.instanceDraft.claudeModelId = value === defaultModelValue ? "" : value; },
+  get: () => props.instanceDraft.claudeModelHash || defaultModelValue,
+  set: (value: string) => { props.instanceDraft.claudeModelHash = value === defaultModelValue ? "" : value; },
 });
 
 defineEmits<{

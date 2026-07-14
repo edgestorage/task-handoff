@@ -17,7 +17,12 @@ function snapshot() {
     },
     controlMode: "controlled",
     capabilities: {
-      apps: [{ id: "terminal-tty" }],
+      features: { tty: true },
+    },
+    appInventory: {
+      observedAt: "2026-07-15T00:00:00.000Z",
+      items: [{ id: "terminal-tty", name: "Terminal", kind: "tty", source: "builtin", availability: "available", capabilities: { supportsCwdSelection: true } }],
+      issues: [],
     },
     target: {
       strategy: "direct-port",
@@ -78,7 +83,7 @@ test("controlled instance node agent client posts register and heartbeat payload
   assert.equal(requests[0].body.protocolVersion, "2026-06-23");
   assert.equal(requests[0].body.build.buildId, "build-test");
   assert.equal(requests[0].body.build.imageRef, "task-handoff-web:test");
-  assert.deepEqual(requests[0].body.capabilities.apps, [{ id: "terminal-tty" }]);
+  assert.deepEqual(requests[0].body.appInventory, snapshot().appInventory);
   assert.equal(requests[0].body.endpoints, undefined);
   assert.deepEqual(requests[0].body.target, {
     strategy: "direct-port",
@@ -89,7 +94,7 @@ test("controlled instance node agent client posts register and heartbeat payload
   assert.equal(requests[1].url, "http://node.local/api/node-agent/instances/inst_registered/heartbeat");
   assert.equal(requests[1].body.protocolVersion, "2026-06-23");
   assert.equal(requests[1].body.build.buildId, "build-test");
-  assert.deepEqual(requests[1].body.capabilities.apps, [{ id: "terminal-tty" }]);
+  assert.deepEqual(requests[1].body.appInventory, snapshot().appInventory);
   assert.equal(requests[1].body.endpoints, undefined);
   assert.equal(requests[1].body.target.web, "http://instance.local");
   assert.equal(requests[1].body.receiver, undefined);

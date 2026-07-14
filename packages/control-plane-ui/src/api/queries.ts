@@ -34,6 +34,7 @@ import type {
   LaunchAppSessionInput,
   LocalDockerImage,
   ModelConfig,
+  FederatedModelRegistry,
   Node,
   NodeAgentExternalListener,
   NodeFolderTreeEntry,
@@ -122,10 +123,33 @@ export function useImagesQuery() {
   });
 }
 
+const modelRegistryQueryKey = ["control-plane-models"] as const;
+
+function fetchModelRegistry() {
+  return getApiData<FederatedModelRegistry>("models");
+}
+
+export function modelConfigsFromRegistry(registry: FederatedModelRegistry) {
+  return registry.models.map((group) => ({
+    ...group.model,
+    locations: group.locations,
+    referenceCount: group.referenceCount,
+  } satisfies ModelConfig));
+}
+
+export function useModelRegistryQuery() {
+  return useQuery({
+    queryKey: modelRegistryQueryKey,
+    queryFn: fetchModelRegistry,
+    retry: false,
+  });
+}
+
 export function useModelsQuery() {
   return useQuery({
-    queryKey: ["control-plane-models"],
-    queryFn: () => getApiData<ModelConfig[]>("models"),
+    queryKey: modelRegistryQueryKey,
+    queryFn: fetchModelRegistry,
+    select: modelConfigsFromRegistry,
     retry: false,
   });
 }
@@ -420,6 +444,18 @@ export function updateModel(id: string, input: UpdateModelInput) {
 
 export function deleteModel(id: string) {
   return deleteApiData<{ deleted: boolean }>(`models/${id}`);
+}
+
+export function createNodeModel(nodeId: string, input: CreateModelInput) {
+  return postApiData<ModelConfig>(`nodes/${nodeId}/models`, input);
+}
+
+export function updateNodeModel(nodeId: string, id: string, input: UpdateModelInput) {
+  return patchApiData<ModelConfig>(`nodes/${nodeId}/models/${id}`, input);
+}
+
+export function deleteNodeModel(nodeId: string, id: string) {
+  return deleteApiData<{ deleted: boolean }>(`nodes/${nodeId}/models/${id}`);
 }
 
 export function reorderModels(ids: string[]) {

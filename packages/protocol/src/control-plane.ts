@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { z } from "zod";
 import {
   AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES,
@@ -7,7 +8,7 @@ import {
 } from "./ai-sessions.ts";
 import { TriggerConfigSchema, TriggerDeploymentSchema, TriggerRunSchema, TriggerRuntimeStateSchema } from "./triggers.ts";
 
-export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-07-14";
+export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-07-15-model-hash-registry";
 
 const IdSchema = z.string().trim().min(1).max(120).regex(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$/);
 const TimestampSchema = z.string().datetime();
@@ -16,11 +17,44 @@ const StringRecordSchema = z.record(z.string(), z.string()).default({});
 
 export const ModelSelectionSchema = z
   .object({
-    codexModelId: IdSchema.optional(),
-    claudeModelId: IdSchema.optional(),
+    codexModelHash: IdSchema.optional(),
+    claudeModelHash: IdSchema.optional(),
   })
   .strict()
   .default({});
+
+export const InstanceAppInventoryItemSchema = z
+  .object({
+    id: IdSchema,
+    name: z.string().trim().min(1).max(120),
+    kind: z.enum(["tty", "gui", "web"]),
+    source: z.enum(["builtin", "custom"]),
+    availability: z.enum(["available", "missing-dependency"]),
+    capabilities: z
+      .object({
+        automation: z.enum(["cdp"]).optional(),
+        supportsCwdSelection: z.boolean().default(false),
+      })
+      .strict()
+      .default({ supportsCwdSelection: false }),
+    diagnosticCode: z.enum(["APP_EXECUTABLE_NOT_FOUND"]).optional(),
+  })
+  .strict();
+
+export const InstanceAppInventoryIssueSchema = z
+  .object({
+    code: z.enum(["APP_CATALOG_INVALID"]),
+    message: z.string().trim().min(1).max(500),
+  })
+  .strict();
+
+export const InstanceAppInventorySchema = z
+  .object({
+    items: z.array(InstanceAppInventoryItemSchema).max(256),
+    observedAt: TimestampSchema,
+    issues: z.array(InstanceAppInventoryIssueSchema).max(32).default([]),
+  })
+  .strict();
 
 export const BuildInfoSchema = z
   .object({
@@ -202,6 +236,86 @@ export const ModelConfigSchema = z
   })
   .strict();
 
+export const NodeModelConfigSchema = ModelConfigSchema;
+
+export const PublicModelConfigSchema = ModelConfigSchema.omit({ key: true }).extend({
+  keyPreview: z.string().trim().min(1).max(160),
+  keySet: z.boolean(),
+}).strict();
+
+export const NodeModelPublicRecordSchema = PublicModelConfigSchema.extend({
+  referenceCount: z.number().int().min(0),
+}).strict();
+
+export const NodeModelAssignmentSchema = z.object({
+  instanceId: IdSchema,
+  codexModelHash: IdSchema.optional(),
+  claudeModelHash: IdSchema.optional(),
+  updatedAt: TimestampSchema,
+}).strict();
+
+export const ModelLocationSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("control-plane"),
+    name: ModelConfigSchema.shape.name,
+    enabled: ModelConfigSchema.shape.enabled,
+    order: ModelConfigSchema.shape.order,
+  }).strict(),
+  z.object({
+    type: z.literal("node"),
+    nodeId: IdSchema,
+    name: ModelConfigSchema.shape.name,
+    enabled: ModelConfigSchema.shape.enabled,
+    order: ModelConfigSchema.shape.order,
+    referenceCount: z.number().int().min(0),
+  }).strict(),
+]);
+
+export const FederatedModelGroupSchema = z.object({
+  id: IdSchema,
+  model: PublicModelConfigSchema,
+  locations: z.array(ModelLocationSchema).min(1),
+  referenceCount: z.number().int().min(0).default(0),
+}).strict();
+
+export const ModelRegistryNodeDiagnosticSchema = z.object({
+  nodeId: IdSchema,
+  code: z.string().trim().min(1).max(120),
+  message: z.string().trim().min(1).max(2000),
+}).strict();
+
+export const FederatedModelRegistrySchema = z.object({
+  models: z.array(FederatedModelGroupSchema),
+  nodeDiagnostics: z.array(ModelRegistryNodeDiagnosticSchema).default([]),
+  updatedAt: TimestampSchema,
+}).strict();
+
+export const CreateNodeModelSchema = ModelConfigSchema.omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+}).strict();
+
+export const UpdateNodeModelSchema = CreateNodeModelSchema.partial().strict();
+
+export const DeployNodeModelSchema = ModelConfigSchema;
+
+export const UpdateNodeModelAssignmentSchema = z.object({
+  modelSelection: ModelSelectionSchema,
+  codexModelHash: IdSchema.optional(),
+  claudeModelHash: IdSchema.optional(),
+}).strict();
+
+export function modelConfigHash(input: Pick<z.infer<typeof ModelConfigSchema>, "app" | "endpoint" | "key" | "model">) {
+  const canonical = {
+    app: ModelAppSchema.parse(input.app),
+    endpoint: ModelConfigSchema.shape.endpoint.parse(input.endpoint),
+    key: ModelConfigSchema.shape.key.parse(input.key),
+    model: ModelConfigSchema.shape.model.parse(input.model),
+  };
+  return `mdl_${crypto.createHash("sha256").update(JSON.stringify(canonical)).digest("hex")}`;
+}
+
 export const ImageProfileSchema = z
   .object({
     id: IdSchema,
@@ -246,6 +360,7 @@ export const NodeSchema = z
     status: z.enum(["unknown", "online", "offline", "degraded"]).default("unknown"),
     health: z.enum(["unknown", "ok", "degraded", "failed"]).default("unknown"),
     capabilities: z.record(z.string(), z.unknown()).default({}),
+    appInventory: InstanceAppInventorySchema.optional(),
     labels: LabelsSchema,
     lastSeenAt: TimestampSchema.optional(),
     createdAt: TimestampSchema,
@@ -428,6 +543,7 @@ export const ControlledInstanceSchema = z
     instanceVersion: z.string().trim().max(80).optional(),
     build: BuildInfoSchema.optional(),
     capabilities: z.record(z.string(), z.unknown()).default({}),
+    appInventory: InstanceAppInventorySchema.optional(),
     config: z
       .object({
         autoImportAgentConfigs: z.boolean().default(true),
@@ -487,12 +603,12 @@ export const ControlledInstanceSchema = z
   })
   .strict();
 
-export function parseStoredControlledInstance(input: unknown) {
-  return ControlledInstanceSchema.parse(sanitizeStoredControlledInstance(input));
+export function parseStoredControlledInstance(input: unknown, onWarning?: (warning: { instanceId?: string; field: string }) => void) {
+  return ControlledInstanceSchema.parse(sanitizeStoredControlledInstance(input, onWarning));
 }
 
-export function safeParseStoredControlledInstance(input: unknown) {
-  return ControlledInstanceSchema.safeParse(sanitizeStoredControlledInstance(input));
+export function safeParseStoredControlledInstance(input: unknown, onWarning?: (warning: { instanceId?: string; field: string }) => void) {
+  return ControlledInstanceSchema.safeParse(sanitizeStoredControlledInstance(input, onWarning));
 }
 
 export function sanitizeStoredControlledInstance(
@@ -514,13 +630,48 @@ export function sanitizeStoredControlledInstance(
   for (const [key, value] of Object.entries(source)) {
     if (knownTopLevelKeys.has(key)) next[key] = value;
   }
+  if (source.capabilities && typeof source.capabilities === "object" && !Array.isArray(source.capabilities)) {
+    const capabilities = { ...(source.capabilities as Record<string, unknown>) };
+    if (Object.prototype.hasOwnProperty.call(capabilities, "apps")) {
+      onWarning?.({
+        instanceId: typeof source.id === "string" ? source.id : undefined,
+        field: "capabilities.apps",
+      });
+      delete capabilities.apps;
+    }
+    next.capabilities = capabilities;
+  }
+  next.appInventory = sanitizeStoredAppInventory(source.appInventory);
   next.apps = pickObjectFields(source.apps, ["runningCount", "problemCount", "updatedAt", "revision"]);
   next.config = pickObjectFields(source.config, ["autoImportAgentConfigs"]);
-  next.modelSelection = pickObjectFields(source.modelSelection, ["codexModelId", "claudeModelId"]);
+  next.modelSelection = pickObjectFields(source.modelSelection, ["codexModelHash", "claudeModelHash"]);
   next.runtime = pickObjectFields(source.runtime, ["kind", "containerName", "containerId", "workspacePath", "pid", "port", "labels"]);
   next.target = pickObjectFields(source.target ?? source.endpoints, ["strategy", "web", "api", "status"]);
   next.access = pickObjectFields(source.access, ["strategy", "web", "api", "ws", "status"]);
   return next;
+}
+
+function sanitizeStoredAppInventory(input: unknown) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return undefined;
+  const source = input as Record<string, unknown>;
+  const candidate = {
+    observedAt: source.observedAt,
+    items: Array.isArray(source.items)
+      ? source.items.map((item) => {
+          const picked = pickObjectFields(item, ["id", "name", "kind", "source", "availability", "diagnosticCode"]);
+          if (!picked || typeof picked !== "object" || Array.isArray(picked)) return picked;
+          return {
+            ...picked,
+            capabilities: pickObjectFields((item as Record<string, unknown>).capabilities, ["automation", "supportsCwdSelection"]),
+          };
+        })
+      : source.items,
+    issues: Array.isArray(source.issues)
+      ? source.issues.map((issue) => pickObjectFields(issue, ["code", "message"]))
+      : source.issues,
+  };
+  const parsed = InstanceAppInventorySchema.safeParse(candidate);
+  return parsed.success ? parsed.data : undefined;
 }
 
 function pickObjectFields(input: unknown, keys: string[]) {
@@ -543,11 +694,17 @@ export const ControlledInstanceRegisterSchema = z
     build: BuildInfoSchema.optional(),
     controlMode: z.enum(["standalone", "controlled"]).default("controlled"),
     capabilities: z.record(z.string(), z.unknown()).default({}),
+    appInventory: InstanceAppInventorySchema.optional(),
     target: InstanceTargetSchema.default({ strategy: "direct-port", status: "unknown" }),
     workspace: WorkspaceStatusSchema.default({ status: "unknown" }),
     registrationToken: z.string().trim().max(240).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    if (value.protocolVersion === CONTROL_PLANE_PROTOCOL_VERSION && !value.appInventory) {
+      context.addIssue({ code: "custom", path: ["appInventory"], message: "Current protocol register payload requires appInventory." });
+    }
+  });
 
 export const ControlledInstanceHeartbeatSchema = z
   .object({
@@ -556,13 +713,19 @@ export const ControlledInstanceHeartbeatSchema = z
     protocolVersion: z.string().trim().max(80),
     build: BuildInfoSchema.optional(),
     capabilities: ControlledInstanceSchema.shape.capabilities.optional(),
+    appInventory: InstanceAppInventorySchema.optional(),
     apps: ControlledInstanceSchema.shape.apps.optional(),
     aiSessions: ControlledInstanceSchema.shape.aiSessions.optional(),
     triggers: ControlledInstanceSchema.shape.triggers.optional(),
     workspace: WorkspaceStatusSchema.optional(),
     target: InstanceTargetSchema.partial().optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    if (value.protocolVersion === CONTROL_PLANE_PROTOCOL_VERSION && !value.appInventory) {
+      context.addIssue({ code: "custom", path: ["appInventory"], message: "Current protocol heartbeat payload requires appInventory." });
+    }
+  });
 
 export const ChatChannelSchema = z.enum(["web", "telegram", "wechat", "dingding"]);
 
@@ -656,6 +819,13 @@ export type GitRepository = z.infer<typeof GitRepositorySchema>;
 export type NodeLocalFolder = z.infer<typeof NodeLocalFolderSchema>;
 export type Project = z.infer<typeof ProjectSchema>;
 export type ModelConfig = z.infer<typeof ModelConfigSchema>;
+export type NodeModelConfig = z.infer<typeof NodeModelConfigSchema>;
+export type PublicModelConfig = z.infer<typeof PublicModelConfigSchema>;
+export type NodeModelPublicRecord = z.infer<typeof NodeModelPublicRecordSchema>;
+export type NodeModelAssignment = z.infer<typeof NodeModelAssignmentSchema>;
+export type ModelLocation = z.infer<typeof ModelLocationSchema>;
+export type FederatedModelGroup = z.infer<typeof FederatedModelGroupSchema>;
+export type FederatedModelRegistry = z.infer<typeof FederatedModelRegistrySchema>;
 export type ImageProfile = z.infer<typeof ImageProfileSchema>;
 export type Node = z.infer<typeof NodeSchema>;
 export type NodeRuntime = z.infer<typeof NodeRuntimeSchema>;
@@ -676,6 +846,8 @@ export type UpdateCheckRequest = z.infer<typeof UpdateCheckRequestSchema>;
 export type UpdateCheckResult = z.infer<typeof UpdateCheckResultSchema>;
 export type UpdateJob = z.infer<typeof UpdateJobSchema>;
 export type ControlledInstance = z.infer<typeof ControlledInstanceSchema>;
+export type InstanceAppInventory = z.infer<typeof InstanceAppInventorySchema>;
+export type InstanceAppInventoryItem = z.infer<typeof InstanceAppInventoryItemSchema>;
 export type ControlledInstanceRegister = z.infer<typeof ControlledInstanceRegisterSchema>;
 export type ControlledInstanceHeartbeat = z.infer<typeof ControlledInstanceHeartbeatSchema>;
 export type ChatSessionBinding = z.infer<typeof ChatSessionBindingSchema>;

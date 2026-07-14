@@ -52,17 +52,21 @@
           </div>
           <ScrollArea class="registered-project-list">
             <div class="settings-scroll-content">
-            <div v-for="(model, index) in models.data.value || []" :key="model.id" class="registered-project-row">
+            <div v-for="model in models.data.value || []" :key="model.id" class="registered-project-row" data-model-row>
               <div>
                 <strong>{{ model.name }}</strong>
                 <code>{{ model.model }} · {{ model.endpoint }}</code>
                 <span class="image-meta-line">{{ model.app }} · {{ model.enabled ? "enabled" : "disabled" }} · {{ model.keyPreview || "key set" }}</span>
+                <span class="image-meta-line">
+                  {{ model.locations?.map((location) => location.type === "control-plane" ? "control-plane" : `${location.nodeId} (${location.referenceCount} refs)`).join(", ") }}
+                  · {{ model.referenceCount || 0 }} refs total
+                </span>
               </div>
               <div class="settings-row-actions">
-                <Button variant="outline" size="sm" class="icon-button" :disabled="savingModelId === model.id || index === 0" aria-label="Move model up" title="Move up" @click="moveModel(model.id, -1)">
+                <Button variant="outline" size="sm" class="icon-button" :disabled="!model.locations?.some((location) => location.type === 'control-plane') || savingModelId === model.id || !canMoveModel(model.id, -1)" aria-label="Move model up" title="Move up" @click="moveModel(model.id, -1)">
                   <ChevronUp :size="14" />
                 </Button>
-                <Button variant="outline" size="sm" class="icon-button" :disabled="savingModelId === model.id || index === (models.data.value || []).length - 1" aria-label="Move model down" title="Move down" @click="moveModel(model.id, 1)">
+                <Button variant="outline" size="sm" class="icon-button" :disabled="!model.locations?.some((location) => location.type === 'control-plane') || savingModelId === model.id || !canMoveModel(model.id, 1)" aria-label="Move model down" title="Move down" @click="moveModel(model.id, 1)">
                   <ChevronDown :size="14" />
                 </Button>
                 <Badge :variant="model.enabled ? 'default' : 'secondary'">{{ model.enabled ? "On" : "Off" }}</Badge>
@@ -79,6 +83,12 @@
             <p v-if="!(models.data.value || []).length" class="settings-empty">No models configured.</p>
             </div>
           </ScrollArea>
+          <div v-if="modelRegistry.data.value?.nodeDiagnostics.length" class="model-node-diagnostics" role="status">
+            <strong>Node diagnostics</strong>
+            <span v-for="diagnostic in modelRegistry.data.value.nodeDiagnostics" :key="`${diagnostic.nodeId}:${diagnostic.code}`">
+              {{ diagnostic.nodeId }} · {{ diagnostic.code }} · {{ diagnostic.message }}
+            </span>
+          </div>
           <p v-if="modelSaveSuccess" class="settings-success">{{ modelSaveSuccess }}</p>
         </section>
 
@@ -88,6 +98,13 @@
             <button v-if="editingModelId" type="button" @click="resetModelForm">New model</button>
           </div>
           <div class="inline-create">
+            <label>
+              <span>Location</span>
+              <ControlPlaneSelect v-model="settingsModel.locationScope" :disabled="Boolean(editingModelId)" placeholder="Select location">
+                <ControlPlaneSelectItem value="control-plane">Control plane</ControlPlaneSelectItem>
+                <ControlPlaneSelectItem v-for="node in nodes.data.value || []" :key="node.id" :value="node.id">Node · {{ node.name }}</ControlPlaneSelectItem>
+              </ControlPlaneSelect>
+            </label>
             <label>
               <span>Name</span>
               <ControlPlaneInput v-model="settingsModel.name" placeholder="OpenAI primary" />
@@ -425,7 +442,7 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import { ArrowLeft, ChevronDown, ChevronUp, Plus, RefreshCw, Search, Settings, Trash2 } from "@lucide/vue";
-import { getNodeExternalListener, updateControlPlaneSettings, updateNodeExternalListener, useChatBridgesQuery, useChatGatewayStatusQuery, useControlPlaneSettingsQuery, useImagesQuery, useInstanceBoardPayloadQuery, useLocalDockerImagesQuery, useModelsQuery, useNodeRuntimesPayloadQuery, useNodesQuery, useProjectsQuery, useServerUpdateCheckQuery } from "../../../api/queries";
+import { getNodeExternalListener, updateControlPlaneSettings, updateNodeExternalListener, useChatBridgesQuery, useChatGatewayStatusQuery, useControlPlaneSettingsQuery, useImagesQuery, useInstanceBoardPayloadQuery, useLocalDockerImagesQuery, useModelRegistryQuery, useModelsQuery, useNodeRuntimesPayloadQuery, useNodesQuery, useProjectsQuery, useServerUpdateCheckQuery } from "../../../api/queries";
 import type { BuildInfo, ControlPlaneSettings, InstanceBoardItem, Node, NodeAgentExternalListener, UpdateChannel } from "../../../api/types";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
@@ -472,6 +489,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   back: [];
+  openInstanceSettings: [instanceId: string];
   "section-change": [section: SettingsSection];
 }>();
 
@@ -489,6 +507,7 @@ const settingsSections: Array<{ id: SettingsSection; label: string }> = [
 const queryClient = useQueryClient();
 const projects = useProjectsQuery();
 const models = useModelsQuery();
+const modelRegistry = useModelRegistryQuery();
 const images = useImagesQuery();
 const nodes = useNodesQuery();
 const nodeRuntimes = useNodeRuntimesPayloadQuery();
@@ -766,6 +785,7 @@ const {
 });
 const {
   canSaveModel,
+  canMoveModel,
   clearModelFeedback,
   deletingModelId,
   editModel,
@@ -781,6 +801,7 @@ const {
 } = useModelSettings({
   errorText,
   models: () => models.data.value || [],
+  nodes: () => nodes.data.value || [],
   onModelDeleted() {},
   refresh,
 });
@@ -912,6 +933,7 @@ const nodeDetailActions = computed(() => ({
   loadNodeImages,
   loadRemoteKeys,
   loadManagedUpdateJobs,
+  openInstanceSettings: (instanceId: string) => emit("openInstanceSettings", instanceId),
   openNodeRename,
   removeNode,
   removeNodeLocalFolder,
@@ -1597,6 +1619,20 @@ function errorText(error: unknown) {
 
 .image-meta-line {
   line-height: 1.35;
+}
+
+.model-node-diagnostics {
+  display: grid;
+  gap: 4px;
+  border-top: 1px solid var(--line);
+  color: var(--status-danger);
+  font-size: 11px;
+  padding-top: 9px;
+}
+
+.model-node-diagnostics strong {
+  color: var(--text-strong);
+  font-size: 12px;
 }
 
 .checkbox-row,

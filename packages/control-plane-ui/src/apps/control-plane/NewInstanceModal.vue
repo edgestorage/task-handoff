@@ -170,8 +170,8 @@ const runtimeDraft = reactive<RuntimeDraft>({
 const instanceDraft = reactive<InstanceDraft>({
   name: "",
   autoImportAgentConfigs: true,
-  codexModelId: "",
-  claudeModelId: "",
+  codexModelHash: "",
+  claudeModelHash: "",
 });
 const newProject = reactive<NewProjectDraft>({
   name: "",
@@ -375,11 +375,11 @@ watch(
   () => models.data.value,
   (items) => {
     const modelIds = new Set((items || []).map((model) => model.id));
-    if (instanceDraft.codexModelId && !modelIds.has(instanceDraft.codexModelId)) {
-      instanceDraft.codexModelId = "";
+    if (instanceDraft.codexModelHash && !modelIds.has(instanceDraft.codexModelHash)) {
+      instanceDraft.codexModelHash = "";
     }
-    if (instanceDraft.claudeModelId && !modelIds.has(instanceDraft.claudeModelId)) {
-      instanceDraft.claudeModelId = "";
+    if (instanceDraft.claudeModelHash && !modelIds.has(instanceDraft.claudeModelHash)) {
+      instanceDraft.claudeModelHash = "";
     }
   },
   { immediate: true },
@@ -531,15 +531,15 @@ async function createInstance() {
         autoImportAgentConfigs: instanceDraft.autoImportAgentConfigs,
       },
       modelSelection: {
-        ...(instanceDraft.codexModelId ? { codexModelId: instanceDraft.codexModelId } : {}),
-        ...(instanceDraft.claudeModelId ? { claudeModelId: instanceDraft.claudeModelId } : {}),
+        ...(instanceDraft.codexModelHash ? { codexModelHash: instanceDraft.codexModelHash } : {}),
+        ...(instanceDraft.claudeModelHash ? { claudeModelHash: instanceDraft.claudeModelHash } : {}),
       },
       ...(instanceDraft.name.trim() ? { name: instanceDraft.name.trim() } : {}),
     });
     instanceDraft.name = "";
     instanceDraft.autoImportAgentConfigs = true;
-    instanceDraft.codexModelId = "";
-    instanceDraft.claudeModelId = "";
+    instanceDraft.codexModelHash = "";
+    instanceDraft.claudeModelHash = "";
   } catch (error) {
     showControlPlaneToast(errorText(error));
     return;

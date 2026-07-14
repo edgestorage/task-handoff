@@ -58,6 +58,7 @@ export const CreateInstanceInputSchema = z.object({
 
 export const UpdateInstanceInputSchema = z.object({
   name: ControlledInstanceSchema.shape.name.optional(),
+  config: ControlledInstanceSchema.shape.config.optional(),
   modelSelection: ControlledInstanceSchema.shape.modelSelection.optional(),
 }).strict();
 
@@ -69,7 +70,6 @@ export const ControlPlaneSettingsSchema = z.object({
 export const UpdateControlPlaneSettingsSchema = ControlPlaneSettingsSchema.partial().strict();
 
 export const CreateModelInputSchema = z.object({
-  id: ModelConfigSchema.shape.id.optional(),
   name: ModelConfigSchema.shape.name,
   endpoint: ModelConfigSchema.shape.endpoint,
   key: ModelConfigSchema.shape.key,
@@ -80,7 +80,7 @@ export const CreateModelInputSchema = z.object({
   labels: ModelConfigSchema.shape.labels.optional(),
 }).strict();
 
-export const UpdateModelInputSchema = CreateModelInputSchema.omit({ id: true }).partial().strict();
+export const UpdateModelInputSchema = CreateModelInputSchema.partial().strict();
 
 export const CreateImageInputSchema = z.object({
   id: ImageProfileSchema.shape.id.optional(),

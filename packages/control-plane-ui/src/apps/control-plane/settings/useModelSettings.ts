@@ -1,16 +1,17 @@
 import { computed, reactive, ref } from "vue";
-import { createModel, deleteModel, reorderModels, updateModel } from "../../../api/queries";
-import type { ModelApp, ModelConfig } from "../../../api/types";
+import { createModel, createNodeModel, deleteModel, deleteNodeModel, reorderModels, updateModel, updateNodeModel } from "../../../api/queries";
+import type { ModelApp, ModelConfig, Node } from "../../../api/types";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 
 type UseModelSettingsInput = {
   errorText: (error: unknown) => string;
   models: () => ModelConfig[];
+  nodes: () => Node[];
   onModelDeleted: (modelId: string) => void;
   refresh: () => Promise<void>;
 };
 
-export function useModelSettings({ errorText, models, onModelDeleted, refresh }: UseModelSettingsInput) {
+export function useModelSettings({ errorText, models, nodes, onModelDeleted, refresh }: UseModelSettingsInput) {
   const editingModelId = ref("");
   const savingModelId = ref("");
   const deletingModelId = ref("");
@@ -22,6 +23,7 @@ export function useModelSettings({ errorText, models, onModelDeleted, refresh }:
     model: "",
     app: "codex" as ModelApp,
     enabled: true,
+    locationScope: "control-plane",
   });
 
   const formModelBusyId = computed(() => editingModelId.value || "__new_model__");
@@ -30,6 +32,9 @@ export function useModelSettings({ errorText, models, onModelDeleted, refresh }:
       return false;
     }
     if (!editingModelId.value && !settingsModel.key.trim()) {
+      return false;
+    }
+    if (!editingModelId.value && settingsModel.locationScope !== "control-plane" && !nodes().some((node) => node.id === settingsModel.locationScope)) {
       return false;
     }
     return settingsModel.app === "codex" || settingsModel.app === "claude";
@@ -47,6 +52,7 @@ export function useModelSettings({ errorText, models, onModelDeleted, refresh }:
     settingsModel.model = "";
     settingsModel.app = "codex";
     settingsModel.enabled = true;
+    settingsModel.locationScope = "control-plane";
   }
 
   function editModel(model: ModelConfig) {
@@ -57,6 +63,8 @@ export function useModelSettings({ errorText, models, onModelDeleted, refresh }:
     settingsModel.model = model.model;
     settingsModel.app = model.app;
     settingsModel.enabled = model.enabled;
+    const location = model.locations?.find((item) => item.type === "control-plane") || model.locations?.find((item) => item.type === "node");
+    settingsModel.locationScope = location?.type === "node" ? location.nodeId : "control-plane";
     clearModelFeedback();
   }
 
@@ -76,7 +84,15 @@ export function useModelSettings({ errorText, models, onModelDeleted, refresh }:
         enabled: settingsModel.enabled,
         ...(settingsModel.key.trim() ? { key: settingsModel.key.trim() } : {}),
       };
-      const saved = editingModelId.value ? await updateModel(editingModelId.value, payload) : await createModel({ ...payload, key: settingsModel.key.trim() });
+      const editing = models().find((model) => model.id === editingModelId.value);
+      const editingLocation = editing?.locations?.find((item) => item.type === "control-plane") || editing?.locations?.find((item) => item.type === "node");
+      const saved = editingModelId.value
+        ? editingLocation?.type === "node"
+          ? await updateNodeModel(editingLocation.nodeId, editingModelId.value, payload)
+          : await updateModel(editingModelId.value, payload)
+        : settingsModel.locationScope === "control-plane"
+          ? await createModel({ ...payload, key: settingsModel.key.trim() })
+          : await createNodeModel(settingsModel.locationScope, { ...payload, key: settingsModel.key.trim() });
       modelSaveSuccess.value = `${saved.name} saved.`;
       resetModelForm();
       await refresh();
@@ -97,7 +113,9 @@ export function useModelSettings({ errorText, models, onModelDeleted, refresh }:
     deletingModelId.value = model.id;
     clearModelFeedback();
     try {
-      await deleteModel(model.id);
+      const location = model.locations?.find((item) => item.type === "control-plane") || model.locations?.find((item) => item.type === "node");
+      if (location?.type === "node") await deleteNodeModel(location.nodeId, model.id);
+      else await deleteModel(model.id);
       if (editingModelId.value === model.id) {
         resetModelForm();
       }
@@ -111,7 +129,7 @@ export function useModelSettings({ errorText, models, onModelDeleted, refresh }:
   }
 
   async function moveModel(modelId: string, direction: -1 | 1) {
-    const items = [...models()];
+    const items = models().filter((model) => model.locations?.some((location) => location.type === "control-plane"));
     const index = items.findIndex((model) => model.id === modelId);
     const nextIndex = index + direction;
     if (index < 0 || nextIndex < 0 || nextIndex >= items.length || savingModelId.value) {
@@ -130,8 +148,16 @@ export function useModelSettings({ errorText, models, onModelDeleted, refresh }:
     }
   }
 
+  function canMoveModel(modelId: string, direction: -1 | 1) {
+    const items = models().filter((model) => model.locations?.some((location) => location.type === "control-plane"));
+    const index = items.findIndex((model) => model.id === modelId);
+    const nextIndex = index + direction;
+    return index >= 0 && nextIndex >= 0 && nextIndex < items.length;
+  }
+
   return {
     canSaveModel,
+    canMoveModel,
     clearModelFeedback,
     deletingModelId,
     editModel,

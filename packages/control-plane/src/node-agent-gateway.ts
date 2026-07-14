@@ -12,6 +12,8 @@ import {
   NodeAgentRemoteControlPlaneSchema,
   NodeFolderTreeEntrySchema,
   NodeLocalFolderSchema,
+  NodeModelAssignmentSchema,
+  NodeModelPublicRecordSchema,
   NodeRuntimeSchema,
   UpdateCheckResultSchema,
   UpdateJobSchema,
@@ -19,6 +21,7 @@ import {
   type ControlledInstance,
   type Node,
   type NodeLocalFolder,
+  type NodeModelPublicRecord,
   type NodeRuntime,
   type UpdateCheckRequest,
 } from "@task-handoff/protocol/control-plane";
@@ -59,7 +62,7 @@ export class ControlPlaneNodeAgentGateway {
     });
   }
 
-  applyUpdate(node: Node, input: UpdateCheckRequest & { modelEnv?: Record<string, string> }) {
+  applyUpdate(node: Node, input: UpdateCheckRequest) {
     return this.client.requestSchema(node, "/updates/apply", UpdateJobSchema, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -184,6 +187,63 @@ export class ControlPlaneNodeAgentGateway {
     return this.client.requestSchema(node, `/local-folders/${encodeURIComponent(folderId)}`, NodeAgentDeleteResponseSchema, {
       method: "DELETE",
     });
+  }
+
+  listModels(node: Node) {
+    return this.client.requestSchema(node, "/models", z.array(NodeModelPublicRecordSchema));
+  }
+
+  createModel(node: Node, input: unknown) {
+    return this.client.requestSchema(node, "/models", NodeModelPublicRecordSchema, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    });
+  }
+
+  deployModel(node: Node, modelId: string, input: unknown) {
+    return this.client.requestSchema(node, `/models/${encodeURIComponent(modelId)}/deploy`, NodeModelPublicRecordSchema, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    });
+  }
+
+  updateModel(node: Node, modelId: string, input: unknown) {
+    return this.client.requestSchema(node, `/models/${encodeURIComponent(modelId)}`, NodeModelPublicRecordSchema, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    });
+  }
+
+  deleteModel(node: Node, modelId: string) {
+    return this.client.requestSchema(node, `/models/${encodeURIComponent(modelId)}`, NodeAgentDeleteResponseSchema, { method: "DELETE" });
+  }
+
+  assignInstanceModels(node: Node, instanceId: string, input: unknown) {
+    return this.client.requestSchema(node, `/instances/${encodeURIComponent(instanceId)}/model-assignment`, z.object({
+      assignment: NodeModelAssignmentSchema,
+      instance: ControlledInstanceSchema,
+    }).strict(), {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    });
+  }
+
+  async listFleetModels(nodes: Node[]): Promise<NodeAgentFleetResult<{ nodeId: string; model: NodeModelPublicRecord }>> {
+    const route = "/models";
+    const results = await Promise.allSettled(nodes.map(async (node) => ({ node, models: await this.listModels(node) })));
+    return results.reduce<NodeAgentFleetResult<{ nodeId: string; model: NodeModelPublicRecord }>>((current, result, index) => {
+      if (result.status === "fulfilled") {
+        current.items.push(...result.value.models.map((model) => ({ nodeId: result.value.node.id, model })));
+      } else {
+        const node = nodes[index];
+        if (node) current.nodeErrors.push(nodeAgentScopedError(node, route, "GET", result.reason));
+      }
+      return current;
+    }, { items: [], nodeErrors: [] });
   }
 
   async listFleetRuntimes(nodes: Node[]): Promise<NodeAgentFleetResult<NodeRuntime>> {

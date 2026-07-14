@@ -1,3 +1,5 @@
+import type { InstanceAppInventory } from "@task-handoff/protocol/control-plane";
+
 export type NodeAgentRegistrationConfig = {
   controlMode: "standalone" | "controlled";
   nodeAgentUrl?: string;
@@ -19,6 +21,7 @@ export type ControlledInstanceSnapshot = {
   build?: Record<string, unknown>;
   controlMode: "standalone" | "controlled";
   capabilities: Record<string, unknown>;
+  appInventory: InstanceAppInventory;
   target: Record<string, unknown>;
   workspace: Record<string, unknown>;
   apps: {
@@ -108,6 +111,7 @@ export class NodeAgentRegistrationClient {
       build: snapshot.build,
       controlMode: "controlled",
       capabilities: snapshot.capabilities,
+      appInventory: snapshot.appInventory,
       target: snapshot.target,
       workspace: snapshot.workspace,
     });
@@ -127,6 +131,7 @@ export class NodeAgentRegistrationClient {
       protocolVersion: snapshot.protocolVersion,
       build: snapshot.build,
       capabilities: snapshot.capabilities,
+      appInventory: snapshot.appInventory,
       apps: snapshot.apps,
       aiSessions: snapshot.aiSessions,
       workspace: snapshot.workspace,

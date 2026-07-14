@@ -10,6 +10,7 @@ type TomlMap = ReturnType<typeof TOML.parse>;
 export type ManagedCodexModelConfigResult = {
   applied: boolean;
   configPath?: string;
+  authPath?: string;
   backupPath?: string;
 };
 
@@ -65,18 +66,40 @@ export function applyManagedCodexModelConfig(env: NodeJS.ProcessEnv = process.en
   }
   const model = (env.TASK_HANDOFF_CODEX_MODEL || env.CODEX_MODEL || "").trim();
   const baseUrl = (env.TASK_HANDOFF_CODEX_BASE_URL || env.OPENAI_BASE_URL || "").trim();
+  const apiKey = (env.OPENAI_API_KEY || "").trim();
+  const home = codexHome(env);
+  const configPath = path.join(home, "config.toml");
+  const authPath = path.join(home, "auth.json");
+  let applied = false;
+  if (apiKey) {
+    let currentKey = "";
+    try {
+      const currentAuth = JSON.parse(fs.readFileSync(authPath, "utf8")) as Record<string, unknown>;
+      currentKey = currentAuth.auth_mode === "apikey" && typeof currentAuth.OPENAI_API_KEY === "string"
+        ? currentAuth.OPENAI_API_KEY
+        : "";
+    } catch {
+      currentKey = "";
+    }
+    if (currentKey !== apiKey) {
+      atomicWrite(authPath, `${JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: apiKey }, null, 2)}\n`);
+      applied = true;
+    }
+  } else if (fs.existsSync(authPath)) {
+    fs.rmSync(authPath, { force: true });
+    applied = true;
+  }
   if (!model || !baseUrl) {
-    return { applied: false };
+    return { applied, authPath };
   }
 
-  const configPath = path.join(codexHome(env), "config.toml");
   const current = readConfig(configPath);
   if (
     current.config.model === model
     && current.config.model_provider === "openai"
     && current.config.openai_base_url === baseUrl
   ) {
-    return { applied: false, configPath };
+    return { applied, configPath, authPath };
   }
 
   const next: ConfigObject = {
@@ -93,5 +116,5 @@ export function applyManagedCodexModelConfig(env: NodeJS.ProcessEnv = process.en
     fs.chmodSync(backupPath, 0o600);
   }
   atomicWrite(configPath, TOML.stringify(next as TomlMap));
-  return { applied: true, configPath, backupPath };
+  return { applied: true, configPath, authPath, backupPath };
 }

@@ -64,7 +64,7 @@ export function requestToken(request: FastifyRequest) {
 
 export function registerAuth(app: FastifyInstance, auth: WebAuthState) {
   app.addHook("preHandler", async (request, reply) => {
-    if (!auth.enabled || request.url === "/api/health" || request.url === "/api/auth/status" || !request.url.startsWith("/api/")) {
+    if (!auth.enabled || request.url === "/api/health" || request.url === "/api/auth/status" || request.url === "/api/internal/model-environment" || !request.url.startsWith("/api/")) {
       return;
     }
     if (requestToken(request) === auth.token) {

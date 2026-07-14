@@ -91,32 +91,17 @@ export function stringValue(value: unknown) {
 }
 
 function appCatalogName(instance: ChatBoardInstance, appId: string) {
-  for (const app of sourceSnapshotApps(instance.sourceSnapshot)) {
-    if (stringValue(app.id) === appId) {
-      return stringValue(app.name).trim();
+  for (const app of instance.appInventory?.items || []) {
+    if (app.id === appId) {
+      return app.name;
     }
   }
   return "";
 }
 
-function sourceSnapshotApps(sourceSnapshot: Record<string, unknown>) {
-  const apps = sourceSnapshot.apps;
-  if (!Array.isArray(apps)) {
-    return [];
-  }
-  return apps.filter((app): app is Record<string, unknown> => typeof app === "object" && app !== null && !Array.isArray(app));
-}
-
 function launchableAppValues(instance: ChatBoardInstance) {
-  const apps = objectRecord(instance.capabilities).apps;
-  if (Array.isArray(apps) && apps.length > 0) {
-    return apps;
-  }
-  const optionalApps = objectRecord(instance.image).optionalApps;
-  if (Array.isArray(optionalApps) && optionalApps.length > 0) {
-    return optionalApps;
-  }
-  return ["terminal-tty"];
+  if (instance.connectionStatus !== "online") return [];
+  return (instance.appInventory?.items || []).filter((app) => app.availability === "available");
 }
 
 function launchableAppFromValue(value: unknown) {

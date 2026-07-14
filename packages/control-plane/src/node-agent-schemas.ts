@@ -44,15 +44,14 @@ export const CreateNodeInstanceSchema = z
     sourceSnapshot: z.record(z.string(), z.unknown()).default({}),
     config: ControlledInstanceSchema.shape.config.optional(),
     modelSelection: ControlledInstanceSchema.shape.modelSelection,
-    modelEnv: z.record(z.string(), z.string()).default({}),
   })
   .strict();
 
 export const UpdateNodeInstanceSchema = z
   .object({
     name: z.string().trim().min(1).max(160).optional(),
+    config: ControlledInstanceSchema.shape.config.optional(),
     modelSelection: ControlledInstanceSchema.shape.modelSelection.optional(),
-    modelEnv: z.record(z.string(), z.string()).optional(),
   })
   .strict();
 

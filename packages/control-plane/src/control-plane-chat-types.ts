@@ -4,6 +4,7 @@ import type {
   PendingRoute,
   Project,
 } from "@task-handoff/protocol/control-plane";
+import type { InstanceAppInventory } from "@task-handoff/protocol/control-plane";
 import type {
   AiSessionActionResult,
   AiSessionMessageAttachment,
@@ -29,6 +30,7 @@ export type ChatBoardInstance = {
     sessions?: Record<string, unknown>[];
   };
   capabilities?: Record<string, unknown>;
+  appInventory?: InstanceAppInventory;
   image?: Record<string, unknown>;
   project?: { name?: string };
   sourceSnapshot: Record<string, unknown>;

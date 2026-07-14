@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { DomainStore } from "@task-handoff/core/storage/domain-store";
 import type { TaskHandoffStoragePaths } from "@task-handoff/core/storage/paths";
+import type { InstanceAppInventory, InstanceAppInventoryItem } from "@task-handoff/protocol/control-plane";
 import type { AppCatalogItem } from "./types";
 import fs from "node:fs";
 import path from "node:path";
@@ -39,7 +40,7 @@ const CommandSchema = z
 const AppCatalogItemSchema = z.object({
   id: z.string().trim().min(1).max(80).regex(/^[a-z0-9][a-z0-9._-]*$/),
   name: z.string().trim().min(1).max(120),
-  kind: z.enum(["tty", "gui"]),
+  kind: z.enum(["tty", "gui", "web"]),
   description: z.string().max(500).optional(),
   command: CommandSchema,
   args: z.array(z.string().max(1024)).max(64).default([]).optional(),
@@ -50,28 +51,35 @@ const AppCatalogItemSchema = z.object({
       width: z.number().int().min(320).max(7680).optional(),
       height: z.number().int().min(240).max(4320).optional(),
       depth: z.union([z.literal(16), z.literal(24), z.literal(32)]).optional(),
-    })
+    }).strict()
     .optional(),
   defaultDisplayTarget: z
     .object({
       mode: z.enum(["isolated", "shared"]),
       id: z.string().trim().min(1).max(80).regex(/^[a-z0-9][a-z0-9._-]*$/).optional(),
       autoCreate: z.boolean().optional(),
-    })
+    }).strict()
     .optional(),
   automation: z
     .object({
       type: z.literal("cdp"),
       portArg: z.string().optional(),
       endpointPath: z.string().optional(),
-    })
+    }).strict()
     .optional(),
-});
+  web: z
+    .object({
+      portArg: z.string().optional(),
+      readyPath: z.string().optional(),
+    })
+    .strict()
+    .optional(),
+}).strict();
 
 const CustomCatalogSchema = z.object({
   schemaVersion: z.literal(1).default(1),
   items: z.array(AppCatalogItemSchema).default([]),
-}).superRefine((catalog, context) => {
+}).strict().superRefine((catalog, context) => {
   const builtinIds = new Set(builtinAppCatalog({ includeOptional: true }).map((app) => app.id));
   const seen = new Set<string>();
   for (const [index, item] of catalog.items.entries()) {
@@ -94,6 +102,8 @@ const CustomCatalogSchema = z.object({
 });
 
 export type CustomCatalog = z.infer<typeof CustomCatalogSchema>;
+
+const CWD_SELECTABLE_APP_IDS = new Set(["terminal-tty", "codex", "claude"]);
 
 const CORE_BUILTIN_APP_CATALOG: AppCatalogItem[] = [
   {
@@ -262,11 +272,13 @@ export function isAppAvailable(app: AppCatalogItem) {
 
 export class AppCatalogRepository {
   private readonly customStore: DomainStore<CustomCatalog>;
+  private inventoryCache?: { fingerprint: string; items: InstanceAppInventoryItem[] };
 
   constructor(paths: TaskHandoffStoragePaths) {
     this.customStore = new DomainStore<CustomCatalog>(path.join(paths.appCatalogDir, "custom.json"), {
       schema: CustomCatalogSchema,
       defaultValue: () => ({ schemaVersion: 1, items: [] }),
+      sanitize: sanitizeCustomCatalog,
     });
   }
 
@@ -288,6 +300,53 @@ export class AppCatalogRepository {
     return this.list().filter(isAppAvailable);
   }
 
+  inventory(observedAt = new Date().toISOString()): InstanceAppInventory {
+    const builtin = builtinAppCatalog().map((app) => ({ app, source: "builtin" as const }));
+    const custom = this.safeCustom();
+    const merged = new Map<string, { app: AppCatalogItem; source: "builtin" | "custom" }>();
+    for (const entry of builtin) merged.set(entry.app.id, entry);
+    for (const app of custom.data?.items || []) merged.set(app.id, { app, source: "custom" });
+
+    const resolved = [...merged.values()].map(({ app, source }) => ({
+      app,
+      source,
+      executable: app.command?.trim() ? executablePath(app.command.trim(), { ...process.env, ...app.env }, app.cwd) : undefined,
+    }));
+    const fingerprint = JSON.stringify(resolved.map(({ app, source, executable }) => ({
+      id: app.id,
+      name: app.name,
+      kind: app.kind,
+      source,
+      executable,
+      automation: app.automation?.type,
+      cwd: app.cwd,
+    })));
+    if (!this.inventoryCache || this.inventoryCache.fingerprint !== fingerprint) {
+      this.inventoryCache = {
+        fingerprint,
+        items: resolved.map(({ app, source, executable }): InstanceAppInventoryItem => ({
+          id: app.id,
+          name: app.name,
+          kind: app.kind,
+          source,
+          availability: executable ? "available" : "missing-dependency",
+          capabilities: {
+            automation: app.automation?.type,
+            supportsCwdSelection: CWD_SELECTABLE_APP_IDS.has(app.id),
+          },
+          diagnosticCode: executable ? undefined : "APP_EXECUTABLE_NOT_FOUND",
+        })),
+      };
+    }
+    return {
+      items: this.inventoryCache.items,
+      observedAt,
+      issues: custom.error
+        ? [{ code: "APP_CATALOG_INVALID", message: "Custom app catalog could not be read completely; valid catalog entries remain available." }]
+        : [],
+    };
+  }
+
   find(appId: string) {
     return this.list().find((app) => app.id === appId);
   }
@@ -300,11 +359,12 @@ export class AppCatalogRepository {
     try {
       return { data: this.customStore.load(), error: undefined };
     } catch (error: unknown) {
+      const recovered = recoverCustomCatalog(this.customStore.path());
       return {
-        data: undefined,
+        data: recovered,
         error: {
           code: "APP_CATALOG_INVALID",
-          message: error instanceof Error ? error.message : String(error),
+          message: "Custom app catalog is invalid.",
         },
       };
     }
@@ -312,10 +372,58 @@ export class AppCatalogRepository {
 
   saveCustom(value: unknown) {
     this.customStore.save(CustomCatalogSchema.parse(value));
+    this.inventoryCache = undefined;
     return this.customStore.load();
   }
 
   customPath() {
     return this.customStore.path();
   }
+}
+
+function sanitizeCustomCatalog(input: unknown) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+  const source = input as Record<string, unknown>;
+  return {
+    schemaVersion: source.schemaVersion,
+    items: Array.isArray(source.items) ? source.items.map(sanitizeCustomCatalogItem) : source.items,
+  };
+}
+
+function sanitizeCustomCatalogItem(input: unknown) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+  const source = input as Record<string, unknown>;
+  return {
+    ...pickFields(source, ["id", "name", "kind", "description", "command", "args", "cwd", "env"]),
+    display: pickFields(source.display, ["width", "height", "depth"]),
+    defaultDisplayTarget: pickFields(source.defaultDisplayTarget, ["mode", "id", "autoCreate"]),
+    automation: pickFields(source.automation, ["type", "portArg", "endpointPath"]),
+    web: pickFields(source.web, ["portArg", "readyPath"]),
+  };
+}
+
+function recoverCustomCatalog(filePath: string): CustomCatalog | undefined {
+  try {
+    const raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    const source = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+    if (!Array.isArray(source.items)) return undefined;
+    const builtinIds = new Set(builtinAppCatalog({ includeOptional: true }).map((app) => app.id));
+    const seen = new Set<string>();
+    const items: CustomCatalog["items"] = [];
+    for (const candidate of source.items) {
+      const parsed = AppCatalogItemSchema.safeParse(sanitizeCustomCatalogItem(candidate));
+      if (!parsed.success || builtinIds.has(parsed.data.id) || seen.has(parsed.data.id)) continue;
+      seen.add(parsed.data.id);
+      items.push(parsed.data);
+    }
+    return { schemaVersion: 1, items };
+  } catch {
+    return undefined;
+  }
+}
+
+function pickFields(input: unknown, keys: string[]) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return undefined;
+  const source = input as Record<string, unknown>;
+  return Object.fromEntries(keys.filter((key) => Object.prototype.hasOwnProperty.call(source, key)).map((key) => [key, source[key]]));
 }

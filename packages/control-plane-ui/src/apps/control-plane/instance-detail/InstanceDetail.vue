@@ -88,6 +88,10 @@
               <RotateCw :size="14" />
               <span>{{ activeActionLabel(instance, "restart", "Restart") }}</span>
             </Button>
+            <Button variant="outline" size="sm" @click="$emit('openSettings', instance.id)">
+              <Settings :size="14" />
+              <span>Settings</span>
+            </Button>
             <Button variant="destructive" size="sm" :disabled="isInstanceActionBusy(instance)" @click="$emit('runAction', 'delete', instance)">
               <Trash2 :size="14" />
               <span>{{ activeActionLabel(instance, "delete", "Delete") }}</span>
@@ -134,23 +138,6 @@
       />
 
       <section v-if="!previewExpanded" class="detail-meta">
-        <div v-if="codexModels.length || claudeModels.length" class="detail-model-selectors">
-          <label v-if="codexModels.length">
-            <span>Codex model</span>
-            <ControlPlaneSelect :model-value="modelValue('codex')" :disabled="savingModels" @update:model-value="setInstanceModel('codex', $event)">
-              <ControlPlaneSelectItem :value="defaultModelValue">Global default</ControlPlaneSelectItem>
-              <ControlPlaneSelectItem v-for="model in codexModels" :key="`detail-codex-${model.id}`" :value="model.id">{{ model.name }}</ControlPlaneSelectItem>
-            </ControlPlaneSelect>
-          </label>
-          <label v-if="claudeModels.length">
-            <span>Claude model</span>
-            <ControlPlaneSelect :model-value="modelValue('claude')" :disabled="savingModels" @update:model-value="setInstanceModel('claude', $event)">
-              <ControlPlaneSelectItem :value="defaultModelValue">Global default</ControlPlaneSelectItem>
-              <ControlPlaneSelectItem v-for="model in claudeModels" :key="`detail-claude-${model.id}`" :value="model.id">{{ model.name }}</ControlPlaneSelectItem>
-            </ControlPlaneSelect>
-          </label>
-          <small>Model changes apply on the next start or restart.</small>
-        </div>
         <p class="detail-meta-status">
           <span>Health {{ instance.health }}</span>
           <span>Workspace {{ instance.workspace.status }}</span>
@@ -172,13 +159,11 @@
 
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
-import { Play, Plus, RotateCw, Square, Trash2 } from "@lucide/vue";
-import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, ModelConfig, ModelSelection, NodeLocalFolder } from "../../../api/types";
+import { Play, Plus, RotateCw, Settings, Square, Trash2 } from "@lucide/vue";
+import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, NodeLocalFolder } from "../../../api/types";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
-import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
-import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
 import SessionPreview from "./SessionPreview.vue";
 import type { InstanceAction } from "../useInstanceActions";
 import { canShowInstanceAction, instanceSourceLabel } from "../useInstanceStatus";
@@ -209,11 +194,9 @@ const props = defineProps<{
   launchingApp: boolean;
   nodeLocalFolders?: NodeLocalFolder[];
   loading: boolean;
-  models: ModelConfig[];
   previewExpanded: boolean;
   renameInstance: (instance: InstanceBoardItem, name: string) => Promise<void>;
   renameSession: (instance: InstanceBoardItem, session: SessionTab, title: string) => Promise<void>;
-  updateInstanceModels: (instance: InstanceBoardItem, modelSelection: ModelSelection) => Promise<void>;
   selectedAiSession: (instance: InstanceBoardItem, sessions?: AiSessionSummary[]) => AiSessionSummary | undefined;
   orderedSessionTabs: SessionTab[];
   sessionMenuOpen: boolean;
@@ -227,6 +210,7 @@ defineEmits<{
   moveSessionTab: [sourceKey: string, targetKey: string, placement: "before" | "after"];
   newInstance: [];
   openAiSessionApp: [instance: InstanceBoardItem, session?: AiSessionSummary];
+  openSettings: [instanceId: string];
   openUrl: [url: string];
   runAction: [action: InstanceAction, instance: InstanceBoardItem];
   selectAiSession: [instanceId: string, sessionId: string];
@@ -241,34 +225,7 @@ const editingNameId = ref("");
 const instanceNameDraft = ref("");
 const nameInput = ref<HTMLInputElement | null>(null);
 const savingName = ref(false);
-const savingModels = ref(false);
 const editNameWidth = ref(0);
-const defaultModelValue = "__default__";
-const codexModels = computed(() => props.models.filter((model) => model.app === "codex"));
-const claudeModels = computed(() => props.models.filter((model) => model.app === "claude"));
-
-function modelValue(app: "codex" | "claude") {
-  const id = app === "codex" ? props.instance?.modelSelection?.codexModelId : props.instance?.modelSelection?.claudeModelId;
-  return id || defaultModelValue;
-}
-
-async function setInstanceModel(app: "codex" | "claude", value: string) {
-  if (!props.instance || savingModels.value) return;
-  const modelId = value === defaultModelValue ? undefined : value;
-  const modelSelection = {
-    ...props.instance.modelSelection,
-    ...(app === "codex" ? { codexModelId: modelId } : { claudeModelId: modelId }),
-  };
-  savingModels.value = true;
-  try {
-    await props.updateInstanceModels(props.instance, modelSelection);
-    showControlPlaneToast("Instance models updated. Restart the instance to apply them.", "success");
-  } catch (error) {
-    showControlPlaneToast(error instanceof Error ? error.message : "Failed to update instance models.");
-  } finally {
-    savingModels.value = false;
-  }
-}
 
 watch(
   () => props.instance?.id,

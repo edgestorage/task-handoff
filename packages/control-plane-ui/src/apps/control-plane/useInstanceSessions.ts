@@ -186,27 +186,17 @@ export function aiSessionAppDisplayName(appTab: SessionTab | undefined, fallback
 }
 
 export function launchableAppsForInstance(instance: InstanceBoardItem): LaunchableApp[] {
-  const apps = (instance.capabilities as { apps?: unknown }).apps;
-  if (!Array.isArray(apps)) {
+  if (instance.connectionStatus !== "online" || !instance.appInventory) {
     return [];
   }
   return uniqueLaunchableApps(
-    apps
+    instance.appInventory.items
+      .filter((app) => app.availability === "available")
       .map((app): LaunchableApp | undefined => {
-        if (typeof app === "string") {
-          return { id: app, label: appDisplayName(app), supportsCwdSelection: supportsAppCwdSelection(app) };
-        }
-        if (!app || typeof app !== "object") {
-          return undefined;
-        }
-        const record = app as Record<string, unknown>;
-        if (typeof record.id !== "string" || !record.id.trim()) {
-          return undefined;
-        }
         return {
-          id: record.id,
-          label: typeof record.name === "string" && record.name.trim() ? record.name : appDisplayName(record.id),
-          supportsCwdSelection: typeof record.supportsCwdSelection === "boolean" ? record.supportsCwdSelection : supportsAppCwdSelection(record.id),
+          id: app.id,
+          label: app.name || appDisplayName(app.id),
+          supportsCwdSelection: app.capabilities.supportsCwdSelection,
         };
       })
       .filter((app): app is LaunchableApp => Boolean(app)),

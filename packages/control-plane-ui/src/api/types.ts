@@ -153,6 +153,23 @@ export type ModelConfig = {
   keySet?: boolean;
   createdAt: string;
   updatedAt: string;
+  locations?: ModelLocation[];
+  referenceCount?: number;
+};
+
+export type ModelLocation =
+  | { type: "control-plane"; name: string; enabled: boolean; order: number }
+  | { type: "node"; nodeId: string; name: string; enabled: boolean; order: number; referenceCount: number };
+
+export type FederatedModelRegistry = {
+  models: Array<{
+    id: string;
+    model: Omit<ModelConfig, "locations" | "referenceCount">;
+    locations: ModelLocation[];
+    referenceCount: number;
+  }>;
+  nodeDiagnostics: Array<{ nodeId: string; code: string; message: string }>;
+  updatedAt: string;
 };
 
 export type ImageProfile = {
@@ -338,6 +355,28 @@ export type InstanceAccess = {
   status: "unknown" | "reachable" | "endpoint-unreachable";
 };
 
+export type InstanceAppInventoryItem = {
+  id: string;
+  name: string;
+  kind: "tty" | "gui" | "web";
+  source: "builtin" | "custom";
+  availability: "available" | "missing-dependency";
+  capabilities: {
+    automation?: "cdp";
+    supportsCwdSelection: boolean;
+  };
+  diagnosticCode?: "APP_EXECUTABLE_NOT_FOUND";
+};
+
+export type InstanceAppInventory = {
+  items: InstanceAppInventoryItem[];
+  observedAt: string;
+  issues: Array<{
+    code: "APP_CATALOG_INVALID";
+    message: string;
+  }>;
+};
+
 export type ControlledInstance = {
   id: string;
   name: string;
@@ -357,6 +396,7 @@ export type ControlledInstance = {
   instanceVersion?: string;
   build?: BuildInfo;
   capabilities: Record<string, unknown>;
+  appInventory?: InstanceAppInventory;
   config: {
     autoImportAgentConfigs: boolean;
   };
@@ -398,8 +438,8 @@ export type ControlledInstance = {
 };
 
 export type ModelSelection = {
-  codexModelId?: string;
-  claudeModelId?: string;
+  codexModelHash?: string;
+  claudeModelHash?: string;
 };
 
 export type TriggerSource =
@@ -832,6 +872,9 @@ export type CreateControlledInstanceInput = {
 
 export type UpdateControlledInstanceInput = {
   name?: string;
+  config?: {
+    autoImportAgentConfigs: boolean;
+  };
   modelSelection?: ModelSelection;
 };
 

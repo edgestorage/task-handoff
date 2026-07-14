@@ -16,6 +16,12 @@ import {
   ControlledInstanceHeartbeatSchema,
   ControlledInstanceRegisterSchema,
   ImageProfileSchema,
+  CreateNodeModelSchema,
+  DeployNodeModelSchema,
+  modelConfigHash,
+  NodeModelAssignmentSchema,
+  NodeModelConfigSchema,
+  NodeModelPublicRecordSchema,
   NodeAgentExternalListenerConfigSchema,
   NodeAgentExternalListenerSchema,
   NodeLocalFolderSchema,
@@ -25,6 +31,8 @@ import {
   ProjectSourceSchema,
   WorkspacePolicySchema,
   UpdateCheckRequestSchema,
+  UpdateNodeModelAssignmentSchema,
+  UpdateNodeModelSchema,
   UpdateNodeAgentExternalListenerSchema,
   safeParseStoredControlledInstance,
   sanitizeStoredControlledInstance,
@@ -34,6 +42,9 @@ import {
   type ControlledInstanceRegister,
   type ImageProfile,
   type Node,
+  type NodeModelAssignment,
+  type NodeModelConfig,
+  type NodeModelPublicRecord,
   type NodeAgentExternalListener,
   type NodeAgentExternalListenerConfig,
   type NodeLocalFolder,
@@ -95,6 +106,19 @@ const NodeAgentRuntimeSettingsSchema = z.object({
 type NodeAgentRuntimeSettings = z.infer<typeof NodeAgentRuntimeSettingsSchema>;
 
 const ModelEnvironmentSchema = z.record(z.string(), z.string());
+const LEGACY_MODEL_ENV_KEYS = new Set([
+  "OPENAI_API_KEY",
+  "OPENAI_BASE_URL",
+  "CODEX_MODEL",
+  "TASK_HANDOFF_CODEX_BASE_URL",
+  "TASK_HANDOFF_CODEX_MODEL",
+  "TASK_HANDOFF_CODEX_MODEL_ID",
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_BASE_URL",
+  "CLAUDE_MODEL",
+  "TASK_HANDOFF_CLAUDE_MODEL",
+  "TASK_HANDOFF_CLAUDE_MODEL_ID",
+]);
 
 class InstanceModelEnvironmentStore {
   private readonly directory: string;
@@ -112,10 +136,144 @@ class InstanceModelEnvironmentStore {
     }
   }
 
+  has(instanceId: string) {
+    return fs.existsSync(this.filePath(instanceId));
+  }
+
+  listInstanceIds() {
+    if (!fs.existsSync(this.directory)) return [];
+    return fs.readdirSync(this.directory)
+      .filter((name) => name.endsWith(".json"))
+      .map((name) => name.slice(0, -5))
+      .sort();
+  }
+
   put(instanceId: string, value: Record<string, string>) {
     const parsed = ModelEnvironmentSchema.parse(value);
     fs.mkdirSync(this.directory, { recursive: true, mode: 0o700 });
     const filePath = this.filePath(instanceId);
+    writeFileAtomic.sync(filePath, `${JSON.stringify(parsed, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+    fs.chmodSync(filePath, 0o600);
+    return parsed;
+  }
+
+  delete(instanceId: string) {
+    fs.rmSync(this.filePath(instanceId), { force: true });
+  }
+
+  private filePath(instanceId: string) {
+    return path.join(this.directory, `${instanceId}.json`);
+  }
+}
+
+class NodeModelStore {
+  private readonly directory: string;
+  private readonly nodeId: string;
+
+  constructor(directory: string, nodeId: string) {
+    this.directory = directory;
+    this.nodeId = nodeId;
+  }
+
+  init() {
+    fs.mkdirSync(this.directory, { recursive: true, mode: 0o700 });
+    fs.chmodSync(this.directory, 0o700);
+  }
+
+  list() {
+    this.init();
+    return fs.readdirSync(this.directory)
+      .filter((name) => name.endsWith(".json"))
+      .sort()
+      .flatMap((name) => {
+        const model = this.read(path.join(this.directory, name));
+        return model ? [model] : [];
+      });
+  }
+
+  get(id: string) {
+    const filePath = this.filePath(id);
+    return fs.existsSync(filePath) ? this.read(filePath) : undefined;
+  }
+
+  put(model: NodeModelConfig) {
+    const parsed = NodeModelConfigSchema.parse(model);
+    this.init();
+    const filePath = this.filePath(parsed.id);
+    writeFileAtomic.sync(filePath, `${JSON.stringify(parsed, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+    fs.chmodSync(filePath, 0o600);
+    return parsed;
+  }
+
+  delete(id: string) {
+    const filePath = this.filePath(id);
+    if (!fs.existsSync(filePath)) return false;
+    fs.unlinkSync(filePath);
+    return true;
+  }
+
+  private read(filePath: string) {
+    try {
+      const raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      const expectedId = path.basename(filePath, ".json");
+      const parsed = NodeModelConfigSchema.safeParse(raw);
+      if (parsed.success && parsed.data.id === expectedId && modelConfigHash(parsed.data) === parsed.data.id) return parsed.data;
+      const sanitized = NodeModelConfigSchema.strip().safeParse(raw);
+      if (sanitized.success && sanitized.data.id === expectedId && modelConfigHash(sanitized.data) === sanitized.data.id) {
+        console.warn(JSON.stringify({ message: "unknown stored node model fields were ignored", nodeId: this.nodeId, filePath }));
+        return sanitized.data;
+      }
+      console.warn(JSON.stringify({ message: "stored node model failed validation and was isolated", nodeId: this.nodeId, filePath }));
+      return undefined;
+    } catch (error) {
+      console.warn(JSON.stringify({ message: "stored node model could not be read", nodeId: this.nodeId, filePath, error: error instanceof Error ? error.message : String(error) }));
+      return undefined;
+    }
+  }
+
+  private filePath(id: string) {
+    return path.join(this.directory, `${id}.json`);
+  }
+}
+
+class InstanceModelAssignmentStore {
+  private readonly directory: string;
+
+  constructor(directory: string) {
+    this.directory = directory;
+  }
+
+  init() {
+    fs.mkdirSync(this.directory, { recursive: true, mode: 0o700 });
+    fs.chmodSync(this.directory, 0o700);
+  }
+
+  get(instanceId: string) {
+    const filePath = this.filePath(instanceId);
+    if (!fs.existsSync(filePath)) return undefined;
+    try {
+      const raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      const parsed = NodeModelAssignmentSchema.safeParse(raw);
+      if (parsed.success) return parsed.data;
+      const sanitized = NodeModelAssignmentSchema.strip().safeParse(raw);
+      if (sanitized.success) {
+        console.warn(JSON.stringify({ message: "unknown stored model assignment fields were ignored", instanceId, filePath }));
+        return sanitized.data;
+      }
+      throw parsed.error;
+    } catch (error) {
+      throw Object.assign(new Error(`Stored model assignment for instance ${instanceId} is invalid.`), {
+        statusCode: 409,
+        code: "NODE_MODEL_ASSIGNMENT_INVALID",
+        cause: error,
+      });
+    }
+  }
+
+  put(assignment: NodeModelAssignment) {
+    const parsed = NodeModelAssignmentSchema.parse(assignment);
+    this.init();
+    const filePath = this.filePath(parsed.instanceId);
     writeFileAtomic.sync(filePath, `${JSON.stringify(parsed, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
     fs.chmodSync(filePath, 0o600);
     return parsed;
@@ -147,13 +305,9 @@ const NodeAgentPairingCompleteSchema = z
   })
   .strict();
 
-const NodeInstanceLifecycleRequestSchema = z.object({
-  modelEnv: z.record(z.string(), z.string()).optional(),
-}).strict().default({});
+const NodeInstanceLifecycleRequestSchema = z.object({}).strict().default({});
 
-const NodeAgentApplyUpdateRequestSchema = ApplyUpdateRequestSchema.extend({
-  modelEnv: z.record(z.string(), z.string()).optional(),
-}).strict();
+const NodeAgentApplyUpdateRequestSchema = ApplyUpdateRequestSchema.strict();
 
 const NodeAgentRemoteConnectSchema = z
   .object({
@@ -690,6 +844,26 @@ async function autoImportAgentConfig(fetchImpl: typeof fetch, instance: Controll
   }
 }
 
+async function syncAssignedModelEnvironment(fetchImpl: typeof fetch, state: NodeAgentState, instanceId: string) {
+  const instance = state.requireInstance(instanceId);
+  if (instance.targetStatus !== "reachable" || !instance.target.web) return false;
+  const response = await fetchWithTimeout(fetchImpl, `${nodeLocalInstanceWebBase(instance)}/api/internal/model-environment`, {
+    method: "PUT",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${instance.registrationToken}`,
+    },
+    body: JSON.stringify(state.resolvedAssignedModelEnvironment(instanceId)),
+  }, DEFAULT_AUTO_IMPORT_AGENT_CONFIG_TIMEOUT_MS);
+  if (!response.ok) {
+    throw Object.assign(new Error(`Instance ${instanceId} rejected its managed model environment with HTTP ${response.status}.`), {
+      statusCode: 502,
+      code: "INSTANCE_MODEL_ENVIRONMENT_APPLY_FAILED",
+    });
+  }
+  return true;
+}
+
 function nodeLocalInstanceWebBase(instance: ControlledInstance) {
   const webBase = instance.target.web;
   if (!webBase) {
@@ -1155,6 +1329,8 @@ class NodeAgentState {
   readonly localFolders: JsonCollection<NodeLocalFolder>;
   readonly nodeRuntimes: JsonCollection<NodeRuntime>;
   readonly controlledInstances: JsonCollection<ControlledInstance>;
+  readonly models: NodeModelStore;
+  readonly modelAssignments: InstanceModelAssignmentStore;
   readonly modelEnvironments: InstanceModelEnvironmentStore;
   readonly updateJobs: NodeUpdateJobs;
   readonly node: Node;
@@ -1175,6 +1351,8 @@ class NodeAgentState {
         }));
       }),
     });
+    this.models = new NodeModelStore(paths.nodeModelsDir, nodeId);
+    this.modelAssignments = new InstanceModelAssignmentStore(paths.modelAssignmentsDir);
     this.modelEnvironments = new InstanceModelEnvironmentStore(paths.modelEnvironmentsDir);
     this.updateJobs = new NodeUpdateJobs(paths);
     this.listenerPort = listenerPort;
@@ -1201,6 +1379,9 @@ class NodeAgentState {
     this.localFolders.init();
     this.nodeRuntimes.init();
     this.controlledInstances.init();
+    this.models.init();
+    this.modelAssignments.init();
+    this.migrateLegacyModelEnvironments();
     this.updateJobs.init();
     if (!this.nodeRuntimes.get("runtime_local_docker")) {
       const timestamp = now();
@@ -1357,6 +1538,265 @@ class NodeAgentState {
     });
   }
 
+  listModels(): NodeModelPublicRecord[] {
+    const referenceCounts = new Map<string, number>();
+    for (const instance of this.listInstances()) {
+      const assignment = this.modelAssignments.get(instance.id);
+      for (const modelHash of [assignment?.codexModelHash, assignment?.claudeModelHash]) {
+        if (modelHash) referenceCounts.set(modelHash, (referenceCounts.get(modelHash) || 0) + 1);
+      }
+    }
+    return this.models.list().map((model) => this.publicModel(model, referenceCounts.get(model.id) || 0));
+  }
+
+  createModel(input: z.infer<typeof CreateNodeModelSchema>) {
+    const timestamp = now();
+    const id = modelConfigHash(input);
+    const current = this.models.get(id);
+    const model = NodeModelConfigSchema.parse({
+      ...input,
+      id,
+      enabled: input.enabled ?? true,
+      order: input.order ?? this.nextModelOrder(),
+      labels: input.labels || {},
+      createdAt: current?.createdAt || timestamp,
+      updatedAt: timestamp,
+    });
+    return this.publicModel(this.models.put(model), this.modelReferenceIds(id).length);
+  }
+
+  deployModel(input: z.infer<typeof DeployNodeModelSchema>) {
+    const expectedHash = modelConfigHash(input);
+    if (input.id !== expectedHash) throw Object.assign(new Error(`Model content hash ${expectedHash} does not match ${input.id}.`), { statusCode: 400, code: "NODE_MODEL_HASH_MISMATCH" });
+    const current = this.models.get(input.id);
+    const stored = current || this.models.put(NodeModelConfigSchema.parse(input));
+    return this.publicModel(stored, this.modelReferenceIds(stored.id).length);
+  }
+
+  updateModel(id: string, input: z.infer<typeof UpdateNodeModelSchema>) {
+    const current = this.requireModel(id);
+    const candidate = NodeModelConfigSchema.parse({
+      ...current,
+      ...input,
+      key: input.key?.trim() ? input.key : current.key,
+      createdAt: current.createdAt,
+      updatedAt: now(),
+    });
+    const nextId = modelConfigHash(candidate);
+    const stored = this.models.put(NodeModelConfigSchema.parse({ ...candidate, id: nextId }));
+    if (nextId !== id && this.modelReferenceIds(id).length === 0) this.models.delete(id);
+    return this.publicModel(stored, this.modelReferenceIds(nextId).length);
+  }
+
+  deleteModel(id: string) {
+    this.requireModel(id);
+    const instanceIds = this.modelReferenceIds(id);
+    if (instanceIds.length) {
+      throw Object.assign(new Error(`Model ${id} is assigned to ${instanceIds.length} instance${instanceIds.length === 1 ? "" : "s"}.`), {
+        statusCode: 409,
+        code: "NODE_MODEL_IN_USE",
+        instanceIds,
+      });
+    }
+    return this.models.delete(id);
+  }
+
+  assignModels(instanceId: string, input: z.infer<typeof UpdateNodeModelAssignmentSchema>) {
+    const current = this.requireInstance(instanceId);
+    this.validateAssignmentRef("codex", input.codexModelHash);
+    this.validateAssignmentRef("claude", input.claudeModelHash);
+    if (input.modelSelection.codexModelHash && input.modelSelection.codexModelHash !== input.codexModelHash) {
+      throw Object.assign(new Error("Codex model selection does not match its node assignment."), { statusCode: 400, code: "NODE_MODEL_SELECTION_MISMATCH" });
+    }
+    if (input.modelSelection.claudeModelHash && input.modelSelection.claudeModelHash !== input.claudeModelHash) {
+      throw Object.assign(new Error("Claude model selection does not match its node assignment."), { statusCode: 400, code: "NODE_MODEL_SELECTION_MISMATCH" });
+    }
+    const previous = this.modelAssignments.get(instanceId);
+    const assignment = NodeModelAssignmentSchema.parse({ instanceId, codexModelHash: input.codexModelHash, claudeModelHash: input.claudeModelHash, updatedAt: now() });
+    this.modelAssignments.put(assignment);
+    try {
+      const instance = this.controlledInstances.put(ControlledInstanceSchema.parse({ ...current, modelSelection: input.modelSelection, updatedAt: now() }));
+      return { assignment, instance };
+    } catch (error) {
+      if (previous) this.modelAssignments.put(previous);
+      else this.modelAssignments.delete(instanceId);
+      throw error;
+    }
+  }
+
+  resolvedAssignedModelEnvironment(instanceId: string) {
+    const assignment = this.modelAssignments.get(instanceId);
+    if (!assignment) {
+      if (this.modelEnvironments.has(instanceId)) {
+        throw Object.assign(new Error(`Legacy model environment for instance ${instanceId} requires manual migration.`), {
+          statusCode: 409,
+          code: "NODE_MODEL_MIGRATION_REQUIRED",
+        });
+      }
+      return {};
+    }
+    return {
+      ...this.modelEnvironmentForRef("codex", assignment.codexModelHash),
+      ...this.modelEnvironmentForRef("claude", assignment.claudeModelHash),
+    };
+  }
+
+  private validateAssignmentRef(app: "codex" | "claude", modelHash?: string) {
+    if (!modelHash) return;
+    const model = this.requireModel(modelHash);
+    if (model.app !== app) {
+      throw Object.assign(new Error(`Model ${model.id} belongs to ${model.app}, not ${app}.`), { statusCode: 400, code: "NODE_MODEL_APP_MISMATCH" });
+    }
+    if (!model.enabled) {
+      throw Object.assign(new Error(`Model ${model.id} is disabled.`), { statusCode: 409, code: "NODE_MODEL_DISABLED" });
+    }
+  }
+
+  private modelEnvironmentForRef(app: "codex" | "claude", modelHash?: string) {
+    if (!modelHash) return {};
+    this.validateAssignmentRef(app, modelHash);
+    const model = this.requireModel(modelHash);
+    return app === "codex" ? {
+      OPENAI_API_KEY: model.key,
+      OPENAI_BASE_URL: model.endpoint,
+      TASK_HANDOFF_CODEX_BASE_URL: model.endpoint,
+      TASK_HANDOFF_CODEX_MODEL: model.model,
+    } : {
+      ANTHROPIC_API_KEY: model.key,
+      ANTHROPIC_BASE_URL: model.endpoint,
+      TASK_HANDOFF_CLAUDE_MODEL: model.model,
+    };
+  }
+
+  private requireModel(id: string) {
+    const model = this.models.get(id);
+    if (!model) throw Object.assign(new Error(`Model ${id} was not found on node ${this.nodeId}.`), { statusCode: 404, code: "NODE_MODEL_NOT_FOUND" });
+    if (modelConfigHash(model) !== model.id) throw Object.assign(new Error(`Stored model ${id} does not match its content hash.`), { statusCode: 409, code: "NODE_MODEL_HASH_INVALID" });
+    return model;
+  }
+
+  private modelReferenceIds(modelId: string) {
+    return this.listInstances().filter((instance) => {
+      const assignment = this.modelAssignments.get(instance.id);
+      return assignment?.codexModelHash === modelId || assignment?.claudeModelHash === modelId;
+    }).map((instance) => instance.id);
+  }
+
+  private publicModel(model: NodeModelConfig, referenceCount: number): NodeModelPublicRecord {
+    const { key, ...safe } = model;
+    return NodeModelPublicRecordSchema.parse({ ...safe, keyPreview: key.length <= 8 ? "set" : `${key.slice(0, 4)}...${key.slice(-4)}`, keySet: true, referenceCount });
+  }
+
+  private nextModelOrder() {
+    return this.models.list().reduce((max, model) => Math.max(max, model.order), 0) + 100;
+  }
+
+  private migrateLegacyModelEnvironments() {
+    for (const instanceId of this.modelEnvironments.listInstanceIds()) {
+      const instance = this.controlledInstances.get(instanceId);
+      if (!instance) {
+        this.warnLegacyModelMigration(instanceId, "instance-not-found");
+        continue;
+      }
+      const existingAssignment = this.modelAssignments.get(instanceId);
+      if (existingAssignment) {
+        try {
+          this.resolvedAssignedModelEnvironment(instanceId);
+          this.modelEnvironments.delete(instanceId);
+        } catch {
+          this.warnLegacyModelMigration(instanceId, "existing-assignment-invalid");
+        }
+        continue;
+      }
+
+      let environment: Record<string, string>;
+      try {
+        environment = this.modelEnvironments.get(instanceId);
+      } catch {
+        this.warnLegacyModelMigration(instanceId, "sidecar-invalid");
+        continue;
+      }
+      if (!Object.keys(environment).length) {
+        this.modelEnvironments.delete(instanceId);
+        continue;
+      }
+      if (Object.keys(environment).some((key) => !LEGACY_MODEL_ENV_KEYS.has(key))) {
+        this.warnLegacyModelMigration(instanceId, "unknown-fields");
+        continue;
+      }
+
+      const createdModelIds: string[] = [];
+      try {
+        const codex = this.migrateLegacyModelForApp(environment, "codex", createdModelIds);
+        const claude = this.migrateLegacyModelForApp(environment, "claude", createdModelIds);
+        if (!codex && !claude) throw new Error("no complete model configuration");
+        const modelSelection = {
+          ...(codex ? { codexModelHash: codex } : {}),
+          ...(claude ? { claudeModelHash: claude } : {}),
+        };
+        this.assignModels(instanceId, { modelSelection, codexModelHash: codex, claudeModelHash: claude });
+        this.resolvedAssignedModelEnvironment(instanceId);
+        this.modelEnvironments.delete(instanceId);
+      } catch {
+        this.modelAssignments.delete(instanceId);
+        for (const modelId of createdModelIds) this.models.delete(modelId);
+        this.warnLegacyModelMigration(instanceId, "mapping-failed");
+      }
+    }
+  }
+
+  private migrateLegacyModelForApp(
+    environment: Record<string, string>,
+    app: "codex" | "claude",
+    createdModelIds: string[],
+  ) {
+    const key = environment[app === "codex" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY"];
+    const endpoint = app === "codex"
+      ? environment.TASK_HANDOFF_CODEX_BASE_URL || environment.OPENAI_BASE_URL
+      : environment.ANTHROPIC_BASE_URL;
+    const modelName = app === "codex"
+      ? environment.TASK_HANDOFF_CODEX_MODEL || environment.CODEX_MODEL
+      : environment.TASK_HANDOFF_CLAUDE_MODEL || environment.CLAUDE_MODEL;
+    const related = Boolean(key || endpoint || modelName);
+    if (!related) return undefined;
+    if (!key || !endpoint || !modelName) throw new Error("model configuration incomplete");
+
+    const modelId = modelConfigHash({ app, endpoint, key, model: modelName });
+    const existing = this.models.get(modelId);
+    if (existing) {
+      if (existing.app !== app || existing.key !== key || existing.endpoint !== endpoint || existing.model !== modelName || !existing.enabled) {
+        throw new Error("existing model conflicts with legacy environment");
+      }
+      return modelId;
+    }
+
+    const timestamp = now();
+    this.models.put(NodeModelConfigSchema.parse({
+      id: modelId,
+      name: `Migrated ${app === "codex" ? "Codex" : "Claude"} model`,
+      endpoint,
+      key,
+      model: modelName,
+      app,
+      enabled: true,
+      order: this.nextModelOrder(),
+      labels: { migratedFrom: "instance-model-environment" },
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }));
+    createdModelIds.push(modelId);
+    return modelId;
+  }
+
+  private warnLegacyModelMigration(instanceId: string, reason: string) {
+    console.warn(JSON.stringify({
+      message: "legacy model environment was preserved because it could not be migrated",
+      nodeId: this.nodeId,
+      instanceId,
+      reason,
+    }));
+  }
+
   createInstance(input: z.infer<typeof CreateNodeInstanceSchema>) {
     const runtime = this.requireRuntime(input.runtimeId);
     const timestamp = now();
@@ -1397,7 +1837,7 @@ class NodeAgentState {
       targetStatus: "unknown",
       uiAccessStatus: "unknown",
       controlMode: "controlled",
-      capabilities: runtime.type === "local" ? { apps: runtime.capabilities.apps || {} } : {},
+      capabilities: {},
       config: input.config,
       workspace: runtime.type === "local" ? { mode: "local-bind", status: "unknown", path: workspacePath } : { status: "unknown" },
       target: { strategy: "node-proxy", status: "unknown" },
@@ -1406,13 +1846,7 @@ class NodeAgentState {
       createdAt: timestamp,
       updatedAt: timestamp,
     });
-    this.modelEnvironments.put(instance.id, input.modelEnv);
-    try {
-      return this.controlledInstances.put(instance);
-    } catch (error) {
-      this.modelEnvironments.delete(instance.id);
-      throw error;
-    }
+    return this.controlledInstances.put(instance);
   }
 
   registerInstance(id: string, input: ControlledInstanceRegister, token?: string) {
@@ -1440,6 +1874,7 @@ class NodeAgentState {
       instanceVersion: parsed.instanceVersion,
       build: parsed.build,
       capabilities: parsed.capabilities,
+      appInventory: parsed.appInventory,
       workspace: parsed.workspace,
       target: { ...existing.target, ...parsed.target },
       registrationToken: existing.registrationToken || parsed.registrationToken,
@@ -1498,11 +1933,7 @@ class NodeAgentState {
     }
   }
 
-  resolvedModelEnvironment(instanceId: string, provided?: Record<string, string>) {
-    return provided === undefined ? this.modelEnvironments.get(instanceId) : this.modelEnvironments.put(instanceId, provided);
-  }
-
-  context(instance: ControlledInstance, modelEnv: Record<string, string> = this.modelEnvironments.get(instance.id)): ExecutorContext {
+  context(instance: ControlledInstance, modelEnv: Record<string, string> = this.resolvedAssignedModelEnvironment(instance.id)): ExecutorContext {
     const image = instance.imageSnapshot || ImageProfileSchema.parse({ id: instance.imageId || "img_localhost", name: instance.imageId || "Localhost", image: instance.imageId || "localhost", registry: "local", capabilities: [], optionalApps: [], defaultEnv: {}, labels: {}, createdAt: instance.createdAt, updatedAt: instance.updatedAt });
     return {
       project: projectForInstance(instance),
@@ -1668,7 +2099,6 @@ async function startNodeInstance(
   runtimeAdapters: RuntimeAdapterRegistry,
   fetchImpl: typeof fetch,
   id: string,
-  modelEnv: Record<string, string>,
   loggers: NodeAgentLifecycleLoggers,
   reason: "request" | "restore" | "update" = "request",
 ) {
@@ -1676,7 +2106,7 @@ async function startNodeInstance(
   loggers.diagnostic({ instanceId: id, action: "start", reason, runtimeId: current.runtimeId, imageId: current.imageId }, "node instance start requested");
   const starting = state.controlledInstances.put(ControlledInstanceSchema.parse({ ...current, status: "provisioning", updatedAt: now() }));
   const adapter = runtimeAdapters.forRuntime(state.requireRuntime(starting.runtimeId));
-  const result = await adapter.start(state.context(starting, modelEnv));
+  const result = await adapter.start(state.context(starting));
   const probedEndpointStatus = await probeInstanceEndpoint(fetchImpl, ControlledInstanceSchema.parse({
     ...starting,
     ...result,
@@ -1818,10 +2248,9 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     });
   };
 
-  const runInstanceUpdate = async (job: UpdateJob, providedModelEnv?: Record<string, string>) => {
+  const runInstanceUpdate = async (job: UpdateJob) => {
     if (job.target.component !== "controlled-instance") return;
     const instance = state.requireInstance(job.target.instanceId);
-    const modelEnv = state.resolvedModelEnvironment(instance.id, providedModelEnv);
     const runtime = state.requireRuntime(instance.runtimeId);
     const adapter = runtimeAdapters.forRuntime(runtime);
     if (runtime.type === "local") {
@@ -1845,14 +2274,14 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     } else {
       throw Object.assign(new Error(`Runtime type ${runtime.type} does not support managed updates.`), { code: "INSTANCE_UPDATE_UNSUPPORTED", statusCode: 400 });
     }
-    await adapter.delete(state.context(instance, modelEnv));
+    await adapter.delete(state.context(instance, {}));
     state.controlledInstances.put(stoppedLocalShutdownPatch(ControlledInstanceSchema.parse({
       ...instance,
       ...(runtime.type === "docker" && job.artifactRef && instance.imageSnapshot ? {
         imageSnapshot: { ...instance.imageSnapshot, image: job.artifactRef, updatedAt: now() },
       } : {}),
     })));
-    await startNodeInstance(state, runtimeAdapters, fetchImpl, instance.id, modelEnv, lifecycleLoggers, "update");
+    await startNodeInstance(state, runtimeAdapters, fetchImpl, instance.id, lifecycleLoggers, "update");
   };
 
   app.setErrorHandler((error, request, reply) => {
@@ -1995,7 +2424,6 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
           runtimeAdapters,
           fetchImpl,
           instance.id,
-          state.resolvedModelEnvironment(instance.id),
           lifecycleLoggers,
           "restore",
         );
@@ -2079,7 +2507,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
         "--npm-command", npmCommand(),
       ]);
     } else {
-      state.updateJobs.run(job, (current) => runInstanceUpdate(current, input.modelEnv));
+      state.updateJobs.run(job, (current) => runInstanceUpdate(current));
     }
     return reply.code(202).send({ data: job });
   });
@@ -2213,6 +2641,31 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     },
   }));
 
+  app.get("/api/node-agent/models", async () => ({
+    data: state.listModels(),
+  }));
+
+  app.post("/api/node-agent/models", async (request, reply) => reply.code(201).send({
+    data: state.createModel(CreateNodeModelSchema.parse(request.body)),
+  }));
+
+  app.put("/api/node-agent/models/:id/deploy", async (request) => {
+    const id = (request.params as { id: string }).id;
+    const input = DeployNodeModelSchema.parse(request.body);
+    if (input.id !== id) {
+      throw Object.assign(new Error(`Model payload id ${input.id} does not match route id ${id}.`), { statusCode: 400, code: "NODE_MODEL_ID_MISMATCH" });
+    }
+    return { data: state.deployModel(input) };
+  });
+
+  app.patch("/api/node-agent/models/:id", async (request) => ({
+    data: state.updateModel((request.params as { id: string }).id, UpdateNodeModelSchema.parse(request.body)),
+  }));
+
+  app.delete("/api/node-agent/models/:id", async (request) => ({
+    data: { deleted: state.deleteModel((request.params as { id: string }).id) },
+  }));
+
   app.get("/api/node-agent/instances", async () => ({
     data: state.listInstances(),
   }));
@@ -2227,19 +2680,17 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     const id = (request.params as { id: string }).id;
     const current = state.requireInstance(id);
     const parsed = UpdateNodeInstanceSchema.parse(request.body);
-    const { modelEnv, ...instancePatch } = parsed;
-    const updated = ControlledInstanceSchema.parse({ ...current, ...instancePatch, updatedAt: now() });
-    const previousModelEnv = modelEnv === undefined ? undefined : state.modelEnvironments.get(id);
-    if (modelEnv !== undefined) state.modelEnvironments.put(id, modelEnv);
-    let stored: ControlledInstance;
-    try {
-      stored = state.controlledInstances.put(updated);
-    } catch (error) {
-      if (previousModelEnv !== undefined) state.modelEnvironments.put(id, previousModelEnv);
-      throw error;
-    }
+    const updated = ControlledInstanceSchema.parse({ ...current, ...parsed, updatedAt: now() });
+    const stored = state.controlledInstances.put(updated);
     eventForwarder.syncNow();
     return { data: stored };
+  });
+
+  app.put("/api/node-agent/instances/:id/model-assignment", async (request) => {
+    const id = (request.params as { id: string }).id;
+    const result = state.assignModels(id, UpdateNodeModelAssignmentSchema.parse(request.body));
+    await syncAssignedModelEnvironment(fetchImpl, state, id);
+    return { data: result };
   });
 
   app.post("/api/node-agent/instances/:id/register", async (request, reply) => {
@@ -2272,9 +2723,8 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
 
   app.post("/api/node-agent/instances/:id/start", async (request) => {
     const id = (request.params as { id: string }).id;
-    const body = NodeInstanceLifecycleRequestSchema.parse(request.body);
-    const modelEnv = state.resolvedModelEnvironment(id, body.modelEnv);
-    const instance = await startNodeInstance(state, runtimeAdapters, fetchImpl, id, modelEnv, lifecycleLoggers);
+    NodeInstanceLifecycleRequestSchema.parse(request.body);
+    const instance = await startNodeInstance(state, runtimeAdapters, fetchImpl, id, lifecycleLoggers);
     eventForwarder.syncNow();
     return { data: instance };
   });
@@ -2301,11 +2751,10 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   app.post("/api/node-agent/instances/:id/restart", async (request) => {
     const id = (request.params as { id: string }).id;
     const current = state.requireInstance(id);
-    const body = NodeInstanceLifecycleRequestSchema.parse(request.body);
+    NodeInstanceLifecycleRequestSchema.parse(request.body);
     logDiagnostic({ instanceId: id, action: "restart", runtimeId: current.runtimeId, imageId: current.imageId, containerName: current.runtime.containerName }, "node instance restart requested");
     const adapter = runtimeAdapters.forRuntime(state.requireRuntime(current.runtimeId));
-    const modelEnv = state.resolvedModelEnvironment(id, body.modelEnv);
-    const result = await adapter.restart(state.context(current, modelEnv));
+    const result = await adapter.restart(state.context(current));
     const probeTarget = ControlledInstanceSchema.parse({ ...current, ...result, target: result.target ? { ...current.target, ...result.target } : current.target, updatedAt: now() });
     const probedEndpointStatus = await probeInstanceEndpoint(fetchImpl, probeTarget);
     const updated = ControlledInstanceSchema.parse({
@@ -2329,9 +2778,10 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     const current = state.requireInstance(id);
     logDiagnostic({ instanceId: id, action: "delete", runtimeId: current.runtimeId, containerName: current.runtime.containerName }, "node instance delete requested");
     const adapter = runtimeAdapters.forRuntime(state.requireRuntime(current.runtimeId));
-    await adapter.delete(state.context(current));
+    await adapter.delete(state.context(current, {}));
     logDiagnostic({ instanceId: id, action: "delete" }, "node instance delete completed");
     const deleted = state.controlledInstances.delete(id);
+    state.modelAssignments.delete(id);
     state.modelEnvironments.delete(id);
     eventForwarder.syncNow();
     return { data: { deleted } };
@@ -2342,6 +2792,9 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     const parsed = ProxyRequestSchema.parse(request.body);
     const instanceBase = nodeLocalInstanceWebBase(state.requireInstance(id));
     const proxyPath = parsed.path.startsWith("/") ? parsed.path : `/${parsed.path}`;
+    if (parsed.method === "POST" && proxyPath === "/api/apps/sessions") {
+      await syncAssignedModelEnvironment(fetchImpl, state, id);
+    }
     logDiagnostic({ instanceId: id, action: "proxy", method: parsed.method, path: proxyPath, instanceBase }, "node instance proxy requested");
     const response = await fetchImpl(`${instanceBase}${proxyPath}`, {
       method: parsed.method,

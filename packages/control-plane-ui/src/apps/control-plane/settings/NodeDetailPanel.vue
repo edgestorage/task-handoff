@@ -347,7 +347,13 @@
                       <strong>{{ instance.name }}</strong>
                       <code>{{ instance.source.type }} · {{ instance.image?.name || instance.imageId }}</code>
                     </div>
-                    <Badge :variant="instance.connectionStatus === 'online' ? 'default' : 'secondary'">{{ instance.status }}</Badge>
+                    <div class="node-resource-row-actions">
+                      <Badge :variant="instance.connectionStatus === 'online' ? 'default' : 'secondary'">{{ instance.status }}</Badge>
+                      <Button variant="outline" size="sm" :aria-label="`Settings for ${instance.name}`" @click="actions.openInstanceSettings(instance.id)">
+                        <Settings :size="14" />
+                        <span>Settings</span>
+                      </Button>
+                    </div>
                   </div>
                   <p v-if="!resources.instances.length" class="settings-empty">No instances on this node.</p>
                 </div>
@@ -420,7 +426,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch, type Component } from "vue";
-import { Box, Boxes, Download, FolderOpen, Gauge, Monitor, MoreHorizontal, Network, Pencil, Plus, RefreshCw, ServerCog, Trash2 } from "@lucide/vue";
+import { Box, Boxes, Download, FolderOpen, Gauge, Monitor, MoreHorizontal, Network, Pencil, Plus, RefreshCw, ServerCog, Settings, Trash2 } from "@lucide/vue";
 import { TooltipTrigger as RekaTooltipTrigger } from "reka-ui";
 import type { BuildInfo, InstanceBoardItem, LocalDockerImage, Node, NodeAgentExternalListener, NodeLocalFolder, NodeRemoteControlPlane, NodeRuntime, UpdateChannel, UpdateCheckResult, UpdateJob, UpdateTarget } from "../../../api/types";
 import { Badge } from "../../../components/ui/badge";
@@ -470,6 +476,7 @@ type NodeDetailActions = {
   loadRemoteKeys: (nodeId: string) => void | Promise<void>;
   loadManagedUpdateJobs: (nodeId: string) => void | Promise<void>;
   openNodeRename: (node: Node) => void;
+  openInstanceSettings: (instanceId: string) => void;
   removeNode: (node: Node) => void | Promise<void>;
   removeNodeLocalFolder: (folderId: string) => void | Promise<void>;
   removeRemoteKey: (nodeId: string, keyId: string) => void | Promise<void>;
@@ -1112,6 +1119,12 @@ watch(
 
 .control-plane-error {
   color: var(--status-danger);
+}
+
+.node-resource-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 :global(.node-diagnostic-tooltip) {

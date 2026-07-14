@@ -16,6 +16,11 @@ const ModelReorderRequestSchema = z
   })
   .strict();
 
+const NodeModelParamsSchema = z.object({
+  nodeId: z.string().trim().min(1).max(120),
+  modelId: z.string().trim().min(1).max(120).optional(),
+}).strict();
+
 export function registerCatalogRoutes({ app, service, events }: RegisterCatalogRoutesOptions) {
   app.get("/api/projects", async () => ({ data: service.listProjects() }));
   app.post("/api/projects", async (request, reply) => {
@@ -36,7 +41,7 @@ export function registerCatalogRoutes({ app, service, events }: RegisterCatalogR
     return { data: { deleted } };
   });
 
-  app.get("/api/models", async () => ({ data: service.listModels() }));
+  app.get("/api/models", async () => ({ data: await service.listFederatedModels() }));
   app.post("/api/models", async (request, reply) => {
     const model = await service.createModel(request.body);
     events.publish("model.created", { modelId: model.id });
@@ -59,6 +64,25 @@ export function registerCatalogRoutes({ app, service, events }: RegisterCatalogR
     const deleted = await service.deleteModel(id);
     events.publish("model.deleted", { modelId: id, deleted });
     return { data: { deleted } };
+  });
+
+  app.post("/api/nodes/:nodeId/models", async (request, reply) => {
+    const { nodeId } = NodeModelParamsSchema.parse(request.params);
+    const model = await service.createNodeModel(nodeId, request.body);
+    events.publish("model.created", { modelId: model.id, nodeId });
+    return reply.code(201).send({ data: model });
+  });
+  app.patch("/api/nodes/:nodeId/models/:modelId", async (request) => {
+    const { nodeId, modelId } = NodeModelParamsSchema.parse(request.params);
+    const model = await service.updateNodeModel(nodeId, modelId!, request.body);
+    events.publish("model.updated", { modelId, nodeId });
+    return { data: model };
+  });
+  app.delete("/api/nodes/:nodeId/models/:modelId", async (request) => {
+    const { nodeId, modelId } = NodeModelParamsSchema.parse(request.params);
+    const result = await service.deleteNodeModel(nodeId, modelId!);
+    events.publish("model.deleted", { modelId, nodeId, deleted: result.deleted });
+    return { data: result };
   });
 
   app.get("/api/images", async () => ({ data: service.listImages() }));

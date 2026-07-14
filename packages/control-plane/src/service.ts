@@ -5,7 +5,10 @@ import {
   BuildInfoSchema,
   ControlledInstanceSchema,
   ImageProfileSchema,
+  FederatedModelRegistrySchema,
   ModelConfigSchema,
+  modelConfigHash,
+  NodeModelPublicRecordSchema,
   NodeSchema,
   PendingRouteSchema,
   ProjectSchema,
@@ -18,6 +21,7 @@ import {
   type ControlledInstanceHeartbeat,
   type ImageProfile,
   type ModelConfig,
+  type NodeModelPublicRecord,
   type Node,
   type NodeLocalFolder,
   type NodeRuntime,
@@ -58,7 +62,6 @@ import { ChatBridgeService } from "./chat-bridge-service.ts";
 import { ChatSessionService } from "./chat-session-service.ts";
 import { ControlPlaneChatSessionRuntime } from "./control-plane-chat-session-runtime.ts";
 import { configSyncPresets, type ConfigSyncPreset } from "./config-sync.ts";
-import { modelEnvForInstance, modelEnvForSelection } from "./model-env.ts";
 import { relativeNodePathSegments, resolveNodePath } from "./node-path.ts";
 import { normalizeModel, normalizeProject, publicInstance, publicInstanceWithAccess, publicModel, publicNode, publicNodeAgentCapabilities, publicProject, workspacePolicyForSource } from "./public-records.ts";
 import { controlPlaneDiagnosticLogsEnabled, errorMessage, now, protocolMismatchError, throwNotFound } from "./service-helpers.ts";
@@ -497,6 +500,48 @@ export class ControlPlaneService {
     return this.listAllModels().map(publicModel);
   }
 
+  async listFederatedModels() {
+    const nodes = this.listNodes();
+    const fleet = await this.nodeAgentGateway.listFleetModels(nodes);
+    const groups = new Map<string, {
+      id: string;
+      model: ReturnType<typeof publicModel> | NodeModelPublicRecord;
+      locations: Array<
+        | { type: "control-plane"; name: string; enabled: boolean; order: number }
+        | { type: "node"; nodeId: string; name: string; enabled: boolean; order: number; referenceCount: number }
+      >;
+      referenceCount: number;
+    }>();
+    for (const model of this.listAllModels()) {
+      groups.set(model.id, {
+        id: model.id,
+        model: publicModel(model),
+        locations: [{ type: "control-plane", name: model.name, enabled: model.enabled, order: model.order }],
+        referenceCount: 0,
+      });
+    }
+    for (const { nodeId, model } of fleet.items) {
+      const { referenceCount: _referenceCount, ...publicModelRecord } = model;
+      const group = groups.get(model.id);
+      if (group) {
+        group.locations.push({ type: "node", nodeId, name: model.name, enabled: model.enabled, order: model.order, referenceCount: model.referenceCount });
+        group.referenceCount += model.referenceCount;
+      } else {
+        groups.set(model.id, {
+          id: model.id,
+          model: publicModelRecord,
+          locations: [{ type: "node", nodeId, name: model.name, enabled: model.enabled, order: model.order, referenceCount: model.referenceCount }],
+          referenceCount: model.referenceCount,
+        });
+      }
+    }
+    return FederatedModelRegistrySchema.parse({
+      models: [...groups.values()].sort((a, b) => a.model.order - b.model.order || a.model.name.localeCompare(b.model.name)),
+      nodeDiagnostics: fleet.nodeErrors.map((error) => ({ nodeId: error.nodeId, code: error.code, message: error.message })),
+      updatedAt: now(),
+    });
+  }
+
   private listAllModels() {
     return this.models.list().map((model) => this.normalizeModelRecord(model)).sort((a, b) => a.order - b.order || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
   }
@@ -505,52 +550,38 @@ export class ControlPlaneService {
     const parsedInput = CreateModelInputSchema.parse(input);
     const timestamp = now();
     const nextOrder = this.nextModelOrder();
+    const id = modelConfigHash(parsedInput);
+    const existing = this.models.get(id);
     const model = ModelConfigSchema.parse({
       ...parsedInput,
-      id: parsedInput.id || createId("model"),
+      id,
       enabled: parsedInput.enabled ?? true,
       order: parsedInput.order ?? nextOrder,
       labels: parsedInput.labels || {},
-      createdAt: timestamp,
+      createdAt: existing?.createdAt || timestamp,
       updatedAt: timestamp,
     });
-    const currentModels = this.listAllModels();
-    const nextModels = this.sortedModels([...currentModels, model]);
-    const instances = await this.requireCompleteFleetInstances("create a model");
-    await this.syncInstanceModelEnvironments(instances, currentModels, nextModels);
     return publicModel(this.models.put(model));
   }
 
   async updateModel(id: string, input: unknown) {
     const parsedInput: UpdateModelInput = UpdateModelInputSchema.parse(input);
     const current = this.requireModelSecret(id);
-    const updated = ModelConfigSchema.parse({
+    const candidate = ModelConfigSchema.parse({
       ...current,
       ...parsedInput,
-      id,
       key: parsedInput.key?.trim() ? parsedInput.key : current.key,
       createdAt: current.createdAt,
       updatedAt: now(),
     });
-    const currentModels = this.listAllModels();
-    const nextModels = this.sortedModels(currentModels.map((model) => model.id === id ? updated : model));
-    const instances = await this.requireCompleteFleetInstances("update a model");
-    await this.syncInstanceModelEnvironments(instances, currentModels, nextModels);
-    return publicModel(this.models.put(updated));
+    const nextId = modelConfigHash(candidate);
+    const stored = this.models.put(ModelConfigSchema.parse({ ...candidate, id: nextId }));
+    if (nextId !== id) this.models.delete(id);
+    return publicModel(stored);
   }
 
   async deleteModel(id: string) {
-    const instances = await this.requireCompleteFleetInstances("delete a model");
-    const references = instances.filter((instance) =>
-      instance.modelSelection.codexModelId === id || instance.modelSelection.claudeModelId === id);
-    if (references.length) {
-      const error = new Error(`Model ${id} is used by ${references.length} instance${references.length === 1 ? "" : "s"}.`);
-      Object.assign(error, { statusCode: 409, code: "MODEL_IN_USE" });
-      throw error;
-    }
-    const currentModels = this.listAllModels();
-    const nextModels = currentModels.filter((model) => model.id !== id);
-    await this.syncInstanceModelEnvironments(instances, currentModels, nextModels);
+    this.requireModelSecret(id);
     return this.models.delete(id);
   }
 
@@ -562,18 +593,23 @@ export class ControlPlaneService {
         throwNotFound("MODEL_NOT_FOUND", `Model ${id} was not found.`);
       }
     }
-    const nextModels = this.sortedModels(this.listAllModels().map((model) => {
-      const index = uniqueIds.indexOf(model.id);
-      return index < 0 ? model : ModelConfigSchema.parse({ ...model, order: (index + 1) * 100, updatedAt: now() });
-    }));
-    const currentModels = this.listAllModels();
-    const instances = await this.requireCompleteFleetInstances("reorder models");
-    await this.syncInstanceModelEnvironments(instances, currentModels, nextModels);
     uniqueIds.forEach((id, index) => {
       const current = byId.get(id)!;
       this.models.put(ModelConfigSchema.parse({ ...current, order: (index + 1) * 100, updatedAt: now() }));
     });
     return this.listModels();
+  }
+
+  createNodeModel(nodeId: string, input: unknown) {
+    return this.nodeAgentGateway.createModel(this.requireNode(nodeId), input);
+  }
+
+  updateNodeModel(nodeId: string, modelId: string, input: unknown) {
+    return this.nodeAgentGateway.updateModel(this.requireNode(nodeId), modelId, input);
+  }
+
+  deleteNodeModel(nodeId: string, modelId: string) {
+    return this.nodeAgentGateway.deleteModel(this.requireNode(nodeId), modelId);
   }
 
   createProject(input: unknown) {
@@ -716,7 +752,8 @@ export class ControlPlaneService {
         Object.assign(error, { statusCode: 400, code: "UPDATE_TARGET_NODE_MISMATCH" });
         throw error;
       }
-      return this.nodeAgentGateway.applyUpdate(node, { ...input, modelEnv: this.modelEnvForInstance(instance) });
+      await this.ensureInstanceModelAssignment(instance);
+      return this.nodeAgentGateway.applyUpdate(node, input);
     }
     return this.nodeAgentGateway.applyUpdate(node, input);
   }
@@ -1067,7 +1104,7 @@ export class ControlPlaneService {
       }
     }
 
-    const modelSelection = this.validateModelSelection(parsedInput.modelSelection || {});
+    const preparedModels = await this.prepareInstanceModels(node, parsedInput.modelSelection || {});
     const instance = await this.nodeAgentGateway.createInstance(node, {
       id: parsedInput.id,
       name: parsedInput.name,
@@ -1077,12 +1114,18 @@ export class ControlPlaneService {
       source,
       sourceSnapshot,
       config: parsedInput.config,
-      modelSelection,
-      modelEnv: modelEnvForSelection(modelSelection, this.listAllModels()),
+      modelSelection: {},
     });
+    let assigned = instance;
+    try {
+      assigned = (await this.nodeAgentGateway.assignInstanceModels(node, instance.id, preparedModels)).instance;
+    } catch (error) {
+      await this.nodeAgentGateway.deleteInstance(node, instance.id).catch(() => undefined);
+      throw error;
+    }
     return {
-      ...publicInstanceWithAccess(instance),
-      registrationToken: instance.registrationToken,
+      ...publicInstanceWithAccess(assigned),
+      registrationToken: assigned.registrationToken,
     };
   }
 
@@ -1090,14 +1133,14 @@ export class ControlPlaneService {
     const parsedInput: UpdateInstanceInput = UpdateInstanceInputSchema.parse(input);
     const current = await this.requireNodeInstance(id);
     const node = this.requireNode(current.nodeId);
-    const modelSelection = parsedInput.modelSelection ? this.validateModelSelection(parsedInput.modelSelection) : undefined;
-    const instance = await this.nodeAgentGateway.updateInstance(node, id, {
-      ...parsedInput,
-      ...(modelSelection ? {
-        modelSelection,
-        modelEnv: modelEnvForSelection(modelSelection, this.listAllModels()),
-      } : {}),
-    });
+    const { modelSelection, ...instancePatch } = parsedInput;
+    let instance = Object.keys(instancePatch).length
+      ? await this.nodeAgentGateway.updateInstance(node, id, instancePatch)
+      : current;
+    if (modelSelection) {
+      const preparedModels = await this.prepareInstanceModels(node, modelSelection);
+      instance = (await this.nodeAgentGateway.assignInstanceModels(node, id, preparedModels)).instance;
+    }
     return publicInstanceWithAccess(instance);
   }
 
@@ -1111,7 +1154,8 @@ export class ControlPlaneService {
   async startControlledInstance(id: string) {
     const current = await this.requireNodeInstance(id);
     const node = this.requireNode(current.nodeId);
-    const instance = await this.nodeAgentGateway.startInstance(node, id, { modelEnv: this.modelEnvForInstance(current) });
+    await this.ensureInstanceModelAssignment(current);
+    const instance = await this.nodeAgentGateway.startInstance(node, id);
     return publicInstanceWithAccess(instance);
   }
 
@@ -1125,7 +1169,8 @@ export class ControlPlaneService {
   async restartControlledInstance(id: string) {
     const current = await this.requireNodeInstance(id);
     const node = this.requireNode(current.nodeId);
-    const instance = await this.nodeAgentGateway.restartInstance(node, id, { modelEnv: this.modelEnvForInstance(current) });
+    await this.ensureInstanceModelAssignment(current);
+    const instance = await this.nodeAgentGateway.restartInstance(node, id);
     return publicInstanceWithAccess(instance);
   }
 
@@ -1694,90 +1739,53 @@ export class ControlPlaneService {
     return relativeSegments.length ? path.posix.join(workspacePath, ...relativeSegments) : workspacePath;
   }
 
-  private modelEnvForInstance(instance: ControlledInstance) {
-    return modelEnvForInstance(instance, this.listAllModels());
-  }
-
-  private sortedModels(models: ModelConfig[]) {
-    return [...models].sort((a, b) => a.order - b.order || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
-  }
-
-  private async requireCompleteFleetInstances(operation: string) {
-    const result = await this.nodeAgentGateway.listFleetInstances(this.listNodes());
-    if (result.nodeErrors.length) {
-      const error = new Error(`Cannot ${operation} while instance references are unavailable on ${result.nodeErrors.length} node${result.nodeErrors.length === 1 ? "" : "s"}.`);
-      Object.assign(error, { statusCode: 503, code: "MODEL_FLEET_INCOMPLETE" });
-      throw error;
-    }
-    return result.items;
-  }
-
-  private async syncInstanceModelEnvironments(instances: ControlledInstance[], currentModels: ModelConfig[], nextModels: ModelConfig[]) {
-    const changes = instances.map((instance) => ({
-      instance,
-      current: modelEnvForInstance(instance, currentModels),
-      next: modelEnvForInstance(instance, nextModels),
-    })).filter(({ current, next }) => JSON.stringify(current) !== JSON.stringify(next));
-    const completed: typeof changes = [];
-    try {
-      for (const change of changes) {
-        await this.nodeAgentGateway.updateInstance(this.requireNode(change.instance.nodeId), change.instance.id, { modelEnv: change.next });
-        completed.push(change);
+  private async prepareInstanceModels(node: Node, selection: { codexModelHash?: string; claudeModelHash?: string }) {
+    const nodeModels = await this.nodeAgentGateway.listModels(node);
+    const storedSelection = {
+      ...(selection.codexModelHash?.trim() ? { codexModelHash: selection.codexModelHash.trim() } : {}),
+      ...(selection.claudeModelHash?.trim() ? { claudeModelHash: selection.claudeModelHash.trim() } : {}),
+    };
+    const resolve = async (app: "codex" | "claude", selectedId?: string) => {
+      const controlPlaneModel = selectedId
+        ? this.listAllModels().find((model) => model.id === selectedId)
+        : this.listAllModels().find((model) => model.enabled && model.app === app);
+      if (controlPlaneModel) {
+        if (controlPlaneModel.app !== app) {
+          throw Object.assign(new Error(`Model ${controlPlaneModel.id} is not a ${app} model.`), { statusCode: 400, code: "MODEL_APP_MISMATCH" });
+        }
+        if (!controlPlaneModel.enabled) {
+          throw Object.assign(new Error(`Model ${controlPlaneModel.id} is disabled.`), { statusCode: 400, code: "MODEL_DISABLED" });
+        }
+        await this.nodeAgentGateway.deployModel(node, controlPlaneModel.id, controlPlaneModel);
+        return controlPlaneModel.id;
       }
-    } catch (cause) {
-      await Promise.allSettled(completed.map((change) =>
-        this.nodeAgentGateway.updateInstance(this.requireNode(change.instance.nodeId), change.instance.id, { modelEnv: change.current })));
-      const error = new Error(`Instance model configuration could not be synchronized: ${errorMessage(cause)}`);
-      Object.assign(error, { statusCode: 502, code: "MODEL_ENV_SYNC_FAILED", cause });
-      throw error;
-    }
+      if (!selectedId) return undefined;
+      const local = nodeModels.find((model) => model.id === selectedId);
+      if (!local) {
+        throwNotFound("MODEL_NOT_FOUND", `Model ${selectedId} was not found on control-plane or node ${node.id}.`);
+      }
+      if (local.app !== app) {
+        throw Object.assign(new Error(`Model ${selectedId} is not a ${app} model.`), { statusCode: 400, code: "MODEL_APP_MISMATCH" });
+      }
+      if (!local.enabled) throw Object.assign(new Error(`Model ${selectedId} is disabled.`), { statusCode: 400, code: "MODEL_DISABLED" });
+      return local.id;
+    };
+    return {
+      modelSelection: storedSelection,
+      codexModelHash: await resolve("codex", storedSelection.codexModelHash),
+      claudeModelHash: await resolve("claude", storedSelection.claudeModelHash),
+    };
+  }
+
+  private async ensureInstanceModelAssignment(instance: ControlledInstance) {
+    const node = this.requireNode(instance.nodeId);
+    const prepared = await this.prepareInstanceModels(node, instance.modelSelection);
+    return this.nodeAgentGateway.assignInstanceModels(node, instance.id, prepared);
   }
 
   private nextModelOrder() {
     const last = this.models.list().reduce((max, model) => Math.max(max, model.order), 0);
     return last + 100;
-  }
-
-  private validateModelSelection(selection: { codexModelId?: string; claudeModelId?: string }) {
-    const byId = new Map(this.listAllModels().map((model) => [model.id, model]));
-    const result: { codexModelId?: string; claudeModelId?: string } = {};
-    const codexModelId = selection.codexModelId?.trim();
-    const claudeModelId = selection.claudeModelId?.trim();
-    if (codexModelId) {
-      const model = byId.get(codexModelId);
-      if (!model) {
-        throwNotFound("MODEL_NOT_FOUND", `Model ${codexModelId} was not found.`);
-      }
-      if (model.app !== "codex") {
-        const error = new Error(`Model ${codexModelId} is not a Codex model.`);
-        Object.assign(error, { statusCode: 400, code: "MODEL_APP_MISMATCH" });
-        throw error;
-      }
-      if (!model.enabled) {
-        const error = new Error(`Model ${codexModelId} is disabled.`);
-        Object.assign(error, { statusCode: 400, code: "MODEL_DISABLED" });
-        throw error;
-      }
-      result.codexModelId = codexModelId;
-    }
-    if (claudeModelId) {
-      const model = byId.get(claudeModelId);
-      if (!model) {
-        throwNotFound("MODEL_NOT_FOUND", `Model ${claudeModelId} was not found.`);
-      }
-      if (model.app !== "claude") {
-        const error = new Error(`Model ${claudeModelId} is not a Claude model.`);
-        Object.assign(error, { statusCode: 400, code: "MODEL_APP_MISMATCH" });
-        throw error;
-      }
-      if (!model.enabled) {
-        const error = new Error(`Model ${claudeModelId} is disabled.`);
-        Object.assign(error, { statusCode: 400, code: "MODEL_DISABLED" });
-        throw error;
-      }
-      result.claudeModelId = claudeModelId;
-    }
-    return result;
   }
 
   requireProject(id: string) {

@@ -107,6 +107,7 @@ export class AppRuntimeManager extends EventEmitter {
   private sharedCodexAppServer?: SharedCodexAppServerRuntimeSession;
   private readonly catalogRepository: AppCatalogRepository;
   private readonly persistSessionMetadata: boolean;
+  private managedEnvironment: NodeJS.ProcessEnv = {};
 
   constructor(private readonly paths: TaskHandoffStoragePaths) {
     super();
@@ -122,10 +123,14 @@ export class AppRuntimeManager extends EventEmitter {
     return this.catalogRepository.available();
   }
 
+  appInventory(observedAt?: string) {
+    return this.catalogRepository.inventory(observedAt);
+  }
+
   customCatalog() {
     const custom = this.catalogRepository.safeCustom();
     return custom.data
-      ? { data: { path: this.catalogRepository.customPath(), ...custom.data }, error: undefined }
+      ? { data: { path: this.catalogRepository.customPath(), ...custom.data }, error: custom.error }
       : { data: undefined, error: custom.error };
   }
 
@@ -134,6 +139,12 @@ export class AppRuntimeManager extends EventEmitter {
       path: this.catalogRepository.customPath(),
       ...this.catalogRepository.saveCustom({ schemaVersion: 1, items }),
     };
+  }
+
+  replaceManagedEnvironment(env: NodeJS.ProcessEnv) {
+    const changed = JSON.stringify(this.managedEnvironment) !== JSON.stringify(env);
+    this.managedEnvironment = { ...env };
+    if (changed) this.stopSharedCodexAppServer();
   }
 
   listSessions() {
@@ -164,7 +175,7 @@ export class AppRuntimeManager extends EventEmitter {
       throw Object.assign(new Error(`Missing required command: ${command}`), { code: "APP_DEPENDENCY_MISSING" });
     }
     const cwd = app?.cwd || process.env.TASK_HANDOFF_WORKSPACE || process.cwd();
-    const env = { ...process.env, ...app?.env, TERM: "xterm-256color" };
+    const env = { ...process.env, ...app?.env, ...this.managedEnvironment, TERM: "xterm-256color" };
     return this.acquireSharedCodexAppServer(command, cwd, env, "__shared_codex_app_server__");
   }
 
@@ -242,7 +253,7 @@ export class AppRuntimeManager extends EventEmitter {
     const cwd = options.cwd || app.cwd || process.env.TASK_HANDOFF_WORKSPACE || process.cwd();
     const launch = this.normalizeLaunchOptions(options);
     let args = [...(app.args || []), ...(launch.args || [])];
-    let env: NodeJS.ProcessEnv = { ...process.env, ...app.env, ...launch.env, TERM: "xterm-256color" };
+    let env: NodeJS.ProcessEnv = { ...process.env, ...app.env, ...launch.env, ...this.managedEnvironment, TERM: "xterm-256color" };
     const sessionDir = path.join(this.paths.appSessionsDir, id);
     const logDir = path.join(this.paths.logDir, "app-sessions", id);
     fs.mkdirSync(sessionDir, { recursive: true });
@@ -446,7 +457,7 @@ export class AppRuntimeManager extends EventEmitter {
     const launch = this.normalizeLaunchOptions(options);
     const cwd = launch.cwd || app.cwd || process.env.TASK_HANDOFF_WORKSPACE || process.cwd();
     const port = this.allocatePort("web");
-    const env = { ...process.env, ...app.env, ...launch.env };
+    const env = { ...process.env, ...app.env, ...launch.env, ...this.managedEnvironment };
     const args = this.webArgs(app, sessionDir, cwd, port, launch.args || []);
     this.prepareWebAppSession(app, sessionDir);
     const child = this.spawnLogged(appCommand, args, env, logDir, `${app.id}.log`, cwd);
@@ -594,7 +605,7 @@ export class AppRuntimeManager extends EventEmitter {
     const width = launch.display?.width || app.display?.width || 1440;
     const height = launch.display?.height || app.display?.height || 900;
     const depth = launch.display?.depth || app.display?.depth || 24;
-    const env = { ...process.env, ...app.env, ...launch.env, DISPLAY: display };
+    const env = { ...process.env, ...app.env, ...launch.env, ...this.managedEnvironment, DISPLAY: display };
     const scale = guiScaleFromEnv(env);
     const kasmHomeDir = path.join(sessionDir, "home");
     const xauthority = backend === "kasmvnc" ? path.join(kasmHomeDir, ".Xauthority") : undefined;
@@ -726,7 +737,7 @@ export class AppRuntimeManager extends EventEmitter {
     const width = launch.display?.width || app.display?.width || 1440;
     const height = launch.display?.height || app.display?.height || 900;
     const depth = launch.display?.depth || app.display?.depth || 24;
-    const env = { ...process.env, ...app.env, ...launch.env, DISPLAY: display };
+    const env = { ...process.env, ...app.env, ...launch.env, ...this.managedEnvironment, DISPLAY: display };
     const scale = guiScaleFromEnv(env);
     const kasmHomeDir = path.join(sessionDir, "home");
     const xauthority = backend === "kasmvnc" ? path.join(kasmHomeDir, ".Xauthority") : undefined;
@@ -785,6 +796,7 @@ export class AppRuntimeManager extends EventEmitter {
       ...process.env,
       ...app.env,
       ...launch.env,
+      ...this.managedEnvironment,
       DISPLAY: displaySession.display,
     };
     const scale = guiScaleFromEnv(env);

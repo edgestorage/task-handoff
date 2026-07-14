@@ -88,6 +88,7 @@
         @collapse="collapseInstances"
         @expand="expandInstances"
         @new-instance="newInstanceOpen = true"
+        @open-settings="openInstanceSettings"
         @resize-start="startInstanceResize"
         @run-action="runRowInstanceAction"
         @run-config-sync="runRowConfigSync"
@@ -155,6 +156,7 @@
         :initial-section="settingsSection"
         :instances="sortedInstances"
         @back="closeSettings"
+        @open-instance-settings="openInstanceSettings"
         @section-change="settingsSection = $event"
       />
 
@@ -184,11 +186,9 @@
         :launchable-apps="launchableApps"
         :launching-app="launchingApp"
         :loading="board.isLoading.value"
-        :models="models.data.value || []"
         :node-local-folders="activeNodeLocalFolders"
         :rename-instance="renameInstance"
         :rename-session="renameSession"
-        :update-instance-models="updateInstanceModels"
         :selected-ai-session="selectedAiSession"
         :ordered-session-tabs="orderedSessionTabs"
         :session-tabs="sessionTabs"
@@ -197,6 +197,7 @@
         @launch-app="launchSelectedApp"
         @new-instance="newInstanceOpen = true"
         @open-ai-session-app="openAiSessionApp"
+        @open-settings="openInstanceSettings"
         @open-url="openAppUrl"
         @move-session-tab="moveSessionTab"
         @run-action="runInstanceAction"
@@ -207,6 +208,13 @@
     </main>
 
     <NewInstanceModal v-if="newInstanceOpen" :choose-project-folder="desktopBridge?.chooseProjectFolder" @close="newInstanceOpen = false" @created="handleInstanceCreated" />
+
+    <InstanceSettingsDialog
+      v-model:open="instanceSettingsOpen"
+      :instance="instanceSettingsInstance"
+      :models="models.data.value || []"
+      :update-instance="updateInstanceSettings"
+    />
 
   </div>
 </template>
@@ -219,12 +227,13 @@ import { Bot, Download, House, LayoutGrid, LogOut, Maximize2, Minus, RefreshCw, 
 import "@xterm/xterm/css/xterm.css";
 import { logoutControlPlane, renameAppSession, resolveAiSessionApproval, updateControlledInstance, useAuthSessionQuery, useConfigSyncPresetsQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useInstanceBoardQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
 import { getApiData } from "../../api/client";
-import { type AiSessionSummary, type InstanceBoardItem, type ModelSelection, type NodeLocalFolder } from "../../api/types";
+import { type AiSessionSummary, type InstanceBoardItem, type NodeLocalFolder, type UpdateControlledInstanceInput } from "../../api/types";
 import { Button } from "../../components/ui/button";
 import AiSessionBoardView from "./ai-board/AiSessionBoardView.vue";
 import InstanceBoardView from "./board/InstanceBoardView.vue";
 import InstanceDetail from "./instance-detail/InstanceDetail.vue";
 import InstanceList from "./instance-list/InstanceList.vue";
+import InstanceSettingsDialog from "./instance-settings/InstanceSettingsDialog.vue";
 import NewInstanceModal from "./NewInstanceModal.vue";
 import SettingsModal from "./settings/SettingsModal.vue";
 import { useActiveInstanceSessions } from "./instance-detail/useActiveInstanceSessions";
@@ -293,6 +302,13 @@ const boardBulkAppFilter = ref(ALL_BOARD_FILTER_VALUE);
 const boardSize = ref<BoardSize>(storedBoardSize());
 const sessionPreviewExpanded = ref(storedSessionPreviewExpanded());
 const newInstanceOpen = ref(false);
+const instanceSettingsId = ref("");
+const instanceSettingsOpen = computed({
+  get: () => Boolean(instanceSettingsId.value),
+  set: (open: boolean) => {
+    if (!open) instanceSettingsId.value = "";
+  },
+});
 const copiedText = ref("");
 const { clearToasts, showToast } = useControlPlaneToasts();
 const lastRefreshAt = ref(new Date().toISOString());
@@ -325,6 +341,7 @@ const aiSessionStore = useAiSessionStore({
   aiSessions: () => controlPlaneAiSessions.data.value,
 });
 const boardInstancesWithAiSessions = aiSessionStore.boardInstancesWithAiSessions;
+const instanceSettingsInstance = computed(() => boardInstancesWithAppSessions.value.find((instance) => instance.id === instanceSettingsId.value));
 const {
   activeInstance,
   activeInstanceId,
@@ -710,9 +727,15 @@ async function renameInstance(instance: InstanceBoardItem, name: string) {
   await refresh();
 }
 
-async function updateInstanceModels(instance: InstanceBoardItem, modelSelection: ModelSelection) {
-  await updateControlledInstance(instance.id, { modelSelection });
+async function updateInstanceSettings(instance: InstanceBoardItem, input: UpdateControlledInstanceInput) {
+  await updateControlledInstance(instance.id, input);
   await refresh();
+}
+
+function openInstanceSettings(instanceId: string) {
+  if (!boardInstancesWithAppSessions.value.some((instance) => instance.id === instanceId)) return;
+  instanceSettingsId.value = instanceId;
+  closeFloatingLayers();
 }
 
 async function renameSession(instance: InstanceBoardItem, session: SessionTab, title: string) {
