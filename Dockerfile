@@ -15,6 +15,8 @@ ARG TASK_HANDOFF_ENABLE_WEB_CAP=0
 ARG WEB_CAPABILITY_VERSION=0.0.7
 ARG WEB_CAP_EXTENSION_VERSION=0.0.7
 ARG WEB_CAP_EXTENSION_URL=
+ARG WEB_CAP_SKILL_REPOSITORY=https://github.com/edgestorage/web-cap.git
+ARG WEB_CAP_SKILL_REF=v0.0.7
 ARG TASK_HANDOFF_BUILD_ID=local
 ARG TASK_HANDOFF_BUILT_AT=unknown
 ARG TASK_HANDOFF_GIT_COMMIT=
@@ -123,11 +125,20 @@ RUN set -eux; \
   ln -sf "$(npm root -g)/${claude_native_package}/claude" /usr/local/bin/claude; \
   claude --version
 COPY docker/optional-apps.sh /tmp/task-handoff-optional-apps.sh
-COPY .agents/skills/web-cap /tmp/task-handoff-web-cap-skill
 RUN set -eux; \
   . /tmp/task-handoff-optional-apps.sh; \
   set_optional_app_defaults; \
   install_chromium_extensions; \
+  if optional_app_enabled "${TASK_HANDOFF_ENABLE_WEB_CAP}"; then \
+    git init /tmp/task-handoff-web-cap-source; \
+    git -C /tmp/task-handoff-web-cap-source remote add origin "${WEB_CAP_SKILL_REPOSITORY}"; \
+    git -C /tmp/task-handoff-web-cap-source sparse-checkout set skills/web-cap; \
+    git -C /tmp/task-handoff-web-cap-source fetch --depth 1 origin "${WEB_CAP_SKILL_REF}"; \
+    git -C /tmp/task-handoff-web-cap-source checkout --detach FETCH_HEAD; \
+    test -f /tmp/task-handoff-web-cap-source/skills/web-cap/SKILL.md; \
+    cp -R /tmp/task-handoff-web-cap-source/skills/web-cap /tmp/task-handoff-web-cap-skill; \
+    rm -rf /tmp/task-handoff-web-cap-source; \
+  fi; \
   install_web_cap; \
   case "${TASK_HANDOFF_ENABLE_CC_SWITCH}" in \
     1|true|TRUE|yes|YES|on|ON) \

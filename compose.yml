@@ -16,6 +16,8 @@ services:
         WEB_CAPABILITY_VERSION: ${WEB_CAPABILITY_VERSION:-0.0.7}
         WEB_CAP_EXTENSION_VERSION: ${WEB_CAP_EXTENSION_VERSION:-0.0.7}
         WEB_CAP_EXTENSION_URL: ${WEB_CAP_EXTENSION_URL:-}
+        WEB_CAP_SKILL_REPOSITORY: ${WEB_CAP_SKILL_REPOSITORY:-https://github.com/edgestorage/web-cap.git}
+        WEB_CAP_SKILL_REF: ${WEB_CAP_SKILL_REF:-v0.0.7}
     image: task-handoff-web:local
     shm_size: "1gb"
     security_opt:

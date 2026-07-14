@@ -89,8 +89,7 @@ if [ "${1:-}" = "task-handoff" ] && [ "${2:-}" = "web" ]; then
 
   exec task-handoff-controlled-instance web \
     --host "${TASK_HANDOFF_WEB_HOST:-0.0.0.0}" \
-    --port "${TASK_HANDOFF_WEB_PORT:-8080}" \
-    --socket "${TASK_HANDOFF_SOCKET:-/tmp/task-handoff.sock}"
+    --port "${TASK_HANDOFF_WEB_PORT:-8080}"
 fi
 
 if [ "${1:-}" = "task-handoff" ]; then
