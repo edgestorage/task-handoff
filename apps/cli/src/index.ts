@@ -371,16 +371,12 @@ async function main() {
     .description("Run the TaskHandoff web server.")
     .option("--host <host>", "Web server host", process.env.TASK_HANDOFF_WEB_HOST || "127.0.0.1")
     .option("-p, --port <port>", "Web server port", parsePort, Number(process.env.TASK_HANDOFF_WEB_PORT) || 8080)
-    .option("-s, --socket <path>", "Unix socket path", DEFAULT_SOCKET_PATH)
     .option("--static-dir <path>", "Web UI static directory")
-    .option("--receiver-auto-start", "Start the receiver runtime with the web server.")
     .action(async (options) => {
       await runWebServer({
         host: options.host,
         port: options.port,
-        socketPath: options.socket,
         staticDir: options.staticDir,
-        receiverAutoStart: options.receiverAutoStart,
       });
     });
 

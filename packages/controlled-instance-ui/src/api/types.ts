@@ -1,18 +1,7 @@
 export type StatusResponse = {
-  receiverReady: boolean;
-  receiver: {
-    running: boolean;
-    pid?: number;
-    startedAt?: string;
-    exitedAt?: string;
-    exitCode?: number | null;
-    signal?: string | null;
-  };
-  socketPath: string;
-  defaultConversationId: number;
-  pendingTaskCount: number;
+  version: string;
+  startedAt: string;
   runningAppCount: number;
-  aiSessions?: AiSessionsSnapshot;
   storage: Record<string, string>;
 };
 
@@ -161,11 +150,9 @@ export type TriggerSource =
   | { type: "schedule"; scheduleKind: "daily"; timeOfDay: string; timezone: string }
   | { type: "schedule"; scheduleKind: "weekly"; weekdays: number[]; timeOfDay: string; timezone: string }
   | { type: "file-change"; roots: string[]; globs: string[]; ignore?: string[]; debounceMs: number }
-  | { type: "ai-session"; conversationId?: number; agent?: string; statuses?: AiSessionLifecycle[]; phases?: AiSessionPhase[] };
+  | { type: "ai-session"; agent?: string; statuses?: AiSessionLifecycle[]; phases?: AiSessionPhase[] };
 
-export type TriggerTarget =
-  | { type: "conversation"; conversationId: number }
-  | { type: "ai-session"; aiSessionId: string };
+export type TriggerTarget = { type: "ai-session"; aiSessionId: string };
 
 export type TriggerConfig = {
   configHash: string;
@@ -236,10 +223,10 @@ export type TriggerCreateInput = {
   source: TriggerSource;
   action: { promptTemplate: string };
   policy?: Partial<TriggerConfig["policy"]>;
-  deployment?: {
+  deployment: {
     enabled?: boolean;
     origin?: TriggerDeployment["origin"];
-    target?: TriggerTarget;
+    target: TriggerTarget;
     localName?: string;
   };
 };
@@ -285,120 +272,6 @@ export type DiagnosticsResponse = {
     type: "file" | "directory" | "missing";
     writable: boolean;
   }>;
-};
-
-export type ReceiverLogsResponse = {
-  logPath?: string;
-  maxBytes: number;
-  size: number;
-  updatedAt?: string;
-  truncated: boolean;
-  content: string;
-};
-
-export type TaskHandoffSettings = Record<string, unknown> & {
-  defaultConversationId?: number | string;
-  nextConversationId?: number | string;
-  conversations?: Array<{
-    id?: number | string;
-    mode?: "passive" | "codex" | "claude" | string;
-    status?: "open" | "closed" | string;
-    cwd?: string;
-    timeoutMs?: number | string;
-    agent?: "codex" | "claude" | string;
-    agentSessionId?: string;
-    codexSessionId?: string;
-    createdAt?: string;
-    updatedAt?: string;
-    closedAt?: string;
-  }>;
-};
-
-export type SettingsPatch = {
-  defaultConversationId?: number;
-};
-
-export type ConversationRecord = {
-  schemaVersion: 1;
-  id: number;
-  mode: "passive" | "codex" | "claude";
-  status: "open" | "closed";
-  title?: string;
-  cwd?: string;
-  timeoutMs?: number;
-  agent?: "codex" | "claude";
-  agentSessionId?: string;
-  codexSessionId?: string;
-  createdAt: string;
-  updatedAt: string;
-  closedAt?: string;
-};
-
-export type ConversationListResponse = {
-  schemaVersion: 1;
-  defaultConversationId: number;
-  nextConversationId: number;
-  indexPath: string;
-  items: ConversationRecord[];
-};
-
-export type ConversationPatch = {
-  mode?: ConversationRecord["mode"];
-  status?: ConversationRecord["status"];
-  title?: string;
-  cwd?: string;
-  timeoutMs?: number;
-  agent?: ConversationRecord["agent"];
-  agentSessionId?: string;
-  codexSessionId?: string;
-};
-
-export type PendingTask = {
-  id: number;
-  conversationId: number;
-  result: string;
-  timeoutMs: number;
-  source?: string;
-  visibleConversationIds?: number[];
-  kind?: "task" | "result" | "approval" | string;
-  attachments?: Array<{
-    id: string;
-    kind: "image" | "file";
-    path: string;
-    name: string;
-    mime?: string;
-    size?: number;
-  }>;
-};
-
-export type QueuedReply = {
-  id: number;
-  conversationId: number;
-  value: string;
-  label?: string;
-};
-
-export type PendingTasksResponse = {
-  pending: PendingTask[];
-  queuedReplies: QueuedReply[];
-};
-
-export type ChannelView = {
-  schemaVersion: 1;
-  channel: "telegram" | "wechat" | "dingding";
-  instanceId: string;
-  enabled: boolean;
-  defaultChatId?: string;
-  allowedUserIds?: string[];
-  secrets?: Record<string, { configured: boolean; preview?: string }>;
-  state?: Record<string, unknown>;
-};
-
-export type ChannelPatch = {
-  enabled?: boolean;
-  defaultChatId?: string | null;
-  allowedUserIds?: string[];
-  secrets?: Record<string, string | null>;
 };
 
 export type AppCatalogItem = {

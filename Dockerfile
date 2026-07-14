@@ -25,15 +25,10 @@ ENV PNPM_HOME=/pnpm
 ENV PATH=/pnpm:$PATH
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
-ENV TASK_HANDOFF_CONFIG=/data/task-handoff/config.json
-ENV TASK_HANDOFF_SOCKET=/tmp/task-handoff.sock
 ENV TASK_HANDOFF_WEB_HOST=0.0.0.0
 ENV TASK_HANDOFF_WEB_PORT=8080
-ENV TASK_HANDOFF_RECEIVER_AUTO_START=1
 ENV TASK_HANDOFF_WORKSPACE=/workspace
 ENV TASK_HANDOFF_DATA_DIR=/data/task-handoff
-ENV TASK_HANDOFF_CHANNELS_DIR=/data/task-handoff/channels
-ENV TASK_HANDOFF_CONVERSATIONS_DIR=/data/task-handoff/conversations
 ENV TASK_HANDOFF_APP_CATALOG_DIR=/data/task-handoff/app-catalog
 ENV TASK_HANDOFF_ARTIFACT_DIR=/data/artifacts
 ENV TASK_HANDOFF_APP_SESSION_DIR=/data/task-handoff/app-sessions
@@ -190,8 +185,6 @@ COPY docker/healthcheck.sh /usr/local/bin/task-handoff-healthcheck
 RUN chmod +x /usr/local/bin/task-handoff-entrypoint /usr/local/bin/task-handoff-healthcheck \
   && mkdir -p \
     /workspace \
-    /data/task-handoff/channels \
-    /data/task-handoff/conversations \
     /data/task-handoff/app-catalog \
     /data/task-handoff/app-sessions \
     /data/task-handoff/runtime \

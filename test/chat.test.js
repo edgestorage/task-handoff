@@ -155,10 +155,8 @@ const { summarizeTranscriptLine } = require("../packages/core/src/core/transcrip
 const { summarizeThreadTurns } = require("../packages/ai-session-runtime/src/codex-app-server-protocol.ts");
 const { encodeMessage } = require("../packages/core/src/core/protocol.ts");
 const { AppRuntimeManager } = require("../packages/app-runtime/src/runtime.ts");
-const { syncChannelDirectoryToReceiverSettings } = require("../packages/controlled-instance/src/web/receiver-settings-bridge.ts");
 const { AiSessionRefreshScheduler, createWebApp } = require("../packages/controlled-instance/src/web/server.ts");
-const { controlledInstanceSnapshot } = require("../packages/controlled-instance/src/web/status.ts");
-const { ReceiverProcessManager } = require("../packages/controlled-instance/src/web/receiver-process.ts");
+const { applyManagedCodexModelConfig } = require("../packages/controlled-instance/src/web/codex-model-config.ts");
 const {
   APPROVAL_TIMEOUT_MS,
   APPROVAL_TIMEOUT_REPLY,
@@ -5888,6 +5886,17 @@ test("unified install target parsing supports explicit and detected targets", ()
 test("web app serves core API routes with isolated storage", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-web-api-"));
   const paths = appRuntimeTestPaths(root);
+  const historicalChannelsDir = path.join(root, "channels");
+  const historicalConversationsDir = path.join(root, "conversations");
+  const historicalFiles = [
+    [path.join(historicalChannelsDir, "telegram.default.json"), '{"legacy":"channel"}\n'],
+    [path.join(historicalConversationsDir, "index.json"), '{"legacy":"conversation"}\n'],
+    [paths.configPath, '{"legacy":"receiver-settings"}\n'],
+  ];
+  for (const [filePath, content] of historicalFiles) {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, content);
+  }
   const restoreEnv = withWebStorageEnv(paths, {
     TASK_HANDOFF_WEB_AUTH: "off",
     TASK_HANDOFF_NOVNC_ROOT: path.join(root, "missing-novnc"),
@@ -5901,7 +5910,7 @@ test("web app serves core API routes with isolated storage", async () => {
     TASK_HANDOFF_XTERM_COMMAND: process.execPath,
     TASK_HANDOFF_AI_SESSION_SCAN: "0",
   });
-  const app = await createWebApp({ socketPath: path.join(root, "receiver.sock"), staticDir: path.join(root, "missing-static"), logger: false });
+  const app = await createWebApp({ staticDir: path.join(root, "missing-static"), logger: false });
   try {
     const health = await app.inject({ method: "GET", url: "/api/health" });
     assert.equal(health.statusCode, 200);
@@ -5918,7 +5927,7 @@ test("web app serves core API routes with isolated storage", async () => {
     const instanceStatusData = JSON.parse(instanceStatus.payload).data;
     assert.equal(instanceStatusData.status, "running");
     assert.equal(instanceStatusData.controlMode, "standalone");
-    assert.equal(instanceStatusData.receiver.pendingCount, 0);
+    assert.equal(instanceStatusData.receiver, undefined);
     assert.equal(instanceStatusData.apps.runningCount, 0);
     assert.equal(instanceStatusData.aiSessions.waitingCount, 0);
 
@@ -5930,15 +5939,12 @@ test("web app serves core API routes with isolated storage", async () => {
     assert.equal(instanceCapabilities.statusCode, 200);
     const capabilitiesData = JSON.parse(instanceCapabilities.payload).data;
     assert.equal(capabilitiesData.features.appRuntime, true);
+    assert.equal(capabilitiesData.features.receiver, undefined);
     assert.equal(capabilitiesData.apps.some((entry) => entry.id === "terminal-tty"), true);
 
     const workspaceStatus = await app.inject({ method: "GET", url: "/api/workspace/status" });
     assert.equal(workspaceStatus.statusCode, 200);
     assert.equal(JSON.parse(workspaceStatus.payload).data.path, process.env.TASK_HANDOFF_WORKSPACE || process.env.WORKSPACE || "/workspace");
-
-    const receiverStatus = await app.inject({ method: "GET", url: "/api/receiver/status" });
-    assert.equal(receiverStatus.statusCode, 200);
-    assert.equal(JSON.parse(receiverStatus.payload).data.pendingCount, 0);
 
     const diagnostics = await app.inject({ method: "GET", url: "/api/diagnostics" });
     assert.equal(diagnostics.statusCode, 200);
@@ -5951,6 +5957,8 @@ test("web app serves core API routes with isolated storage", async () => {
     assert.equal(diagnosticsData.storage.some((entry) => entry.key === "runtimeDir"), true);
     assert.equal(diagnosticsData.storage.some((entry) => entry.key === "eventsDir"), true);
     assert.equal(diagnosticsData.storage.some((entry) => entry.key === "logDir"), true);
+    assert.equal(diagnosticsData.storage.some((entry) => entry.key === "channelsDir"), false);
+    assert.equal(diagnosticsData.storage.some((entry) => entry.key === "conversationsDir"), false);
     assert.equal(diagnosticsData.commands.some((entry) => entry.name === "chromium"), true);
     assert.match(diagnosticsData.sessionStreams.ai.streamId, /^ais_/);
     assert.match(diagnosticsData.sessionStreams.app.streamId, /^aps_/);
@@ -6029,80 +6037,28 @@ test("web app serves core API routes with isolated storage", async () => {
       assert.equal(JSON.parse(invalidLaunch.payload).error.code, "APP_LAUNCH_INVALID");
     }
 
-    const createdConversation = await app.inject({
-      method: "POST",
-      url: "/api/conversations",
-      payload: { title: "Web API", mode: "passive", cwd: "/workspace" },
-    });
-    assert.equal(createdConversation.statusCode, 200);
-    const conversation = JSON.parse(createdConversation.payload).data;
-    assert.equal(conversation.title, "Web API");
-
-    const usedConversation = await app.inject({ method: "POST", url: `/api/conversations/${conversation.id}/use` });
-    assert.equal(usedConversation.statusCode, 200);
-    assert.equal(JSON.parse(usedConversation.payload).data.id, conversation.id);
-
-    const settings = await app.inject({ method: "GET", url: "/api/settings" });
-    assert.equal(settings.statusCode, 200);
-    assert.equal(Number(JSON.parse(settings.payload).data.defaultConversationId), conversation.id);
-
-    const pending = await app.inject({ method: "GET", url: "/api/tasks/pending" });
-    assert.equal(pending.statusCode, 503);
-    assert.equal(JSON.parse(pending.payload).error.code, "RECEIVER_UNAVAILABLE");
-
-    const receiverLogs = await app.inject({ method: "GET", url: "/api/receiver/logs" });
-    assert.equal(receiverLogs.statusCode, 200);
-    const receiverLogsData = JSON.parse(receiverLogs.payload).data;
-    assert.equal(receiverLogsData.logPath, path.join(paths.logDir, "receiver.log"));
-    assert.equal(receiverLogsData.content, "");
-
-    const savedChannel = await app.inject({
-      method: "PATCH",
-      url: "/api/channels/telegram/default",
-      payload: {
-        enabled: true,
-        defaultChatId: "chat-1",
-        allowedUserIds: ["user-1", "user-2"],
-        secrets: { botToken: "123456789:secret-token" },
-      },
-    });
-    assert.equal(savedChannel.statusCode, 200);
-    const savedChannelData = JSON.parse(savedChannel.payload).data;
-    assert.equal(savedChannelData.enabled, true);
-    assert.equal(savedChannelData.defaultChatId, "chat-1");
-    assert.deepEqual(savedChannelData.allowedUserIds, ["user-1", "user-2"]);
-    assert.deepEqual(savedChannelData.secrets.botToken, { configured: true, preview: "123456***" });
-    assert.equal(JSON.stringify(savedChannelData).includes("secret-token"), false);
-
-    const rawChannelFile = JSON.parse(fs.readFileSync(path.join(paths.channelsDir, "telegram.default.json"), "utf8"));
-    assert.equal(rawChannelFile.secrets.botToken, "123456789:secret-token");
-    const legacySettings = JSON.parse(fs.readFileSync(paths.configPath, "utf8"));
-    assert.equal(legacySettings.chatTools.telegram.default.token, "123456789:secret-token");
-    assert.equal(legacySettings.chatTools.telegram.default.defaultChatId, "chat-1");
-    assert.deepEqual(legacySettings.chatTools.telegram.default.allowedUserIds, ["user-1", "user-2"]);
-    assert.equal(legacySettings.chatBindings.telegram.default["chat-1"].conversationId, 1);
-
-    const listedChannels = await app.inject({ method: "GET", url: "/api/channels" });
-    assert.equal(listedChannels.statusCode, 200);
-    const listedTelegram = JSON.parse(listedChannels.payload).data.find((entry) => entry.channel === "telegram");
-    assert.equal(JSON.stringify(listedTelegram).includes("secret-token"), false);
-    assert.equal(listedTelegram.secrets.botToken.preview, "123456***");
-
-    const clearedChannel = await app.inject({
-      method: "PATCH",
-      url: "/api/channels/telegram/default",
-      payload: {
-        defaultChatId: null,
-        secrets: { botToken: null },
-      },
-    });
-    assert.equal(clearedChannel.statusCode, 200);
-    const clearedChannelData = JSON.parse(clearedChannel.payload).data;
-    assert.equal(clearedChannelData.defaultChatId, undefined);
-    assert.equal(clearedChannelData.secrets.botToken, undefined);
-    const clearedLegacySettings = JSON.parse(fs.readFileSync(paths.configPath, "utf8"));
-    assert.equal(clearedLegacySettings.chatTools.telegram.default.token, undefined);
-    assert.equal(clearedLegacySettings.chatTools.telegram.default.defaultChatId, undefined);
+    for (const [method, url, payload] of [
+      ["GET", "/api/receiver/status"],
+      ["POST", "/api/receiver/start"],
+      ["POST", "/api/receiver/messages", {}],
+      ["GET", "/api/receiver/pending"],
+      ["POST", "/api/receiver/pending/1/reply", { markdown: "reply" }],
+      ["GET", "/api/tasks/pending"],
+      ["POST", "/api/tasks/1/approve"],
+      ["GET", "/api/channels"],
+      ["PATCH", "/api/channels/telegram/default", {}],
+      ["GET", "/api/conversations"],
+      ["POST", "/api/conversations/1/use"],
+      ["GET", "/api/settings"],
+      ["PATCH", "/api/settings", {}],
+    ]) {
+      const response = await app.inject({ method, url, ...(payload === undefined ? {} : { payload }) });
+      assert.equal(response.statusCode, 404, `${method} ${url}`);
+      assert.deepEqual(JSON.parse(response.payload), { error: { code: "NOT_FOUND", message: "Not found." } });
+    }
+    for (const [filePath, content] of historicalFiles) {
+      assert.equal(fs.readFileSync(filePath, "utf8"), content);
+    }
   } finally {
     await app.close();
     restoreEnv();
@@ -6160,7 +6116,7 @@ test("web app ai session read routes do not refresh discovery state", async () =
 	    on: () => undefined,
 	    stopAll: () => undefined,
 	  };
-	  const app = await createWebApp({ socketPath: path.join(root, "receiver.sock"), staticDir: path.join(root, "missing-static"), logger: false, appRuntime });
+	  const app = await createWebApp({ staticDir: path.join(root, "missing-static"), logger: false, appRuntime });
   try {
     await app.ready();
     process.env.TASK_HANDOFF_AI_SESSION_SCAN = "1";
@@ -6191,7 +6147,7 @@ test("web app events websocket sends stream handshake without an unconditional s
     TASK_HANDOFF_WEB_AUTH: "off",
     TASK_HANDOFF_AI_SESSION_SCAN: "0",
   });
-  const app = await createWebApp({ socketPath: path.join(root, "receiver.sock"), staticDir: path.join(root, "missing-static"), logger: false });
+  const app = await createWebApp({ staticDir: path.join(root, "missing-static"), logger: false });
   t.after(async () => {
     await app.close();
     restoreEnv();
@@ -6222,7 +6178,7 @@ test("controlled instance session streams use restart epochs and ordered retaine
   let second;
   const originalDateNow = Date.now;
   try {
-    first = await createWebApp({ socketPath: path.join(root, "receiver-1.sock"), staticDir: path.join(root, "missing-static"), logger: false });
+    first = await createWebApp({ staticDir: path.join(root, "missing-static"), logger: false });
     await first.ready();
     const firstAi = JSON.parse((await first.inject({ method: "GET", url: "/api/ai-sessions/state" })).payload).data;
     const firstApp = JSON.parse((await first.inject({ method: "GET", url: "/api/apps/sessions/state" })).payload).data;
@@ -6247,7 +6203,7 @@ test("controlled instance session streams use restart epochs and ordered retaine
 
     await first.close();
     first = undefined;
-    second = await createWebApp({ socketPath: path.join(root, "receiver-2.sock"), staticDir: path.join(root, "missing-static"), logger: false });
+    second = await createWebApp({ staticDir: path.join(root, "missing-static"), logger: false });
     await second.ready();
     const secondAi = JSON.parse((await second.inject({ method: "GET", url: "/api/ai-sessions/state" })).payload).data;
     const secondApp = JSON.parse((await second.inject({ method: "GET", url: "/api/apps/sessions/state" })).payload).data;
@@ -6280,7 +6236,6 @@ test("controlled instance publishes provider changes immediately and discovery c
     TASK_HANDOFF_CODEX_APP_SERVER: "0",
   });
   const app = await createWebApp({
-    socketPath: path.join(root, "receiver.sock"),
     staticDir: path.join(root, "missing-static"),
     logger: false,
     aiSessionRegistry: registry,
@@ -6388,7 +6343,7 @@ test("web app AI session snapshot endpoint only exposes app-bound sessions", asy
     TASK_HANDOFF_CODEX_APP_SERVER: "0",
     TASK_HANDOFF_AI_SESSION_SCAN_INTERVAL_MS: "600000",
   });
-  const app = await createWebApp({ socketPath: path.join(root, "receiver.sock"), staticDir: path.join(root, "missing-static"), logger: false });
+  const app = await createWebApp({ staticDir: path.join(root, "missing-static"), logger: false });
   try {
     await app.listen({ port: 0, host: "127.0.0.1" });
     const address = app.server.address();
@@ -6412,6 +6367,11 @@ test("web app imports and exports built-in config sync presets", async () => {
   fs.writeFileSync(path.join(workspace, ".task-handoff", "configs", "claude", ".claude.json"), JSON.stringify({ projects: {} }));
   fs.writeFileSync(path.join(workspace, ".task-handoff", "configs", "claude", "settings.json"), JSON.stringify({ model: "sonnet" }));
   fs.writeFileSync(path.join(workspace, ".task-handoff", "configs", "claude", "commands", "hello.md"), "hello");
+  fs.mkdirSync(path.join(workspace, ".task-handoff", "configs", "codex"), { recursive: true });
+  fs.writeFileSync(
+    path.join(workspace, ".task-handoff", "configs", "codex", "config.toml"),
+    'model = "workspace-model"\nmodel_provider = "workspace-provider"\n[features]\nhooks = true\n',
+  );
   fs.mkdirSync(path.join(home, ".config", "chromium", "Default"), { recursive: true });
   fs.writeFileSync(path.join(home, ".config", "chromium", "Default", "Bookmarks"), "{}");
 
@@ -6420,8 +6380,11 @@ test("web app imports and exports built-in config sync presets", async () => {
     TASK_HANDOFF_WORKSPACE: workspace,
     TASK_HANDOFF_WEB_AUTH: "off",
     TASK_HANDOFF_NOVNC_ROOT: path.join(root, "missing-novnc"),
+    TASK_HANDOFF_CONTROL_MODE: "controlled",
+    TASK_HANDOFF_CODEX_MODEL: "instance-model",
+    TASK_HANDOFF_CODEX_BASE_URL: "https://instance.example/v1",
   });
-  const app = await createWebApp({ socketPath: path.join(root, "receiver.sock"), staticDir: path.join(root, "missing-static"), logger: false });
+  const app = await createWebApp({ staticDir: path.join(root, "missing-static"), logger: false });
   try {
     const presets = await app.inject({ method: "GET", url: "/api/config-sync/presets" });
     assert.equal(presets.statusCode, 200);
@@ -6432,6 +6395,14 @@ test("web app imports and exports built-in config sync presets", async () => {
     assert.equal(fs.readFileSync(path.join(home, ".claude.json"), "utf8"), JSON.stringify({ projects: {} }));
     assert.equal(fs.existsSync(path.join(home, ".claude", "settings.json")), true);
     assert.equal(fs.readFileSync(path.join(home, ".claude", "commands", "hello.md"), "utf8"), "hello");
+
+    const importedCodex = await app.inject({ method: "POST", url: "/api/config-sync/import/codex" });
+    assert.equal(importedCodex.statusCode, 200);
+    const managedCodexConfig = require("@iarna/toml").parse(fs.readFileSync(path.join(home, ".codex", "config.toml"), "utf8"));
+    assert.equal(managedCodexConfig.model, "instance-model");
+    assert.equal(managedCodexConfig.model_provider, "openai");
+    assert.equal(managedCodexConfig.openai_base_url, "https://instance.example/v1");
+    assert.equal(managedCodexConfig.features.hooks, true);
 
     const exported = await app.inject({ method: "POST", url: "/api/config-sync/export/browser" });
     assert.equal(exported.statusCode, 200);
@@ -6459,6 +6430,34 @@ test("web app imports and exports built-in config sync presets", async () => {
   }
 });
 
+test("controlled instance merges its selected model into durable Codex config", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-model-config-"));
+  const codexHome = path.join(root, ".codex");
+  const configPath = path.join(codexHome, "config.toml");
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(configPath, 'model = "old-model"\n[features]\nhooks = true\n');
+
+  const result = applyManagedCodexModelConfig({
+    TASK_HANDOFF_CONTROL_MODE: "controlled",
+    CODEX_HOME: codexHome,
+    TASK_HANDOFF_CODEX_MODEL: "selected-model",
+    TASK_HANDOFF_CODEX_BASE_URL: "https://proxy.example/v1",
+    OPENAI_API_KEY: "must-not-be-persisted",
+  });
+
+  assert.equal(result.applied, true);
+  assert.equal(fs.existsSync(result.backupPath), true);
+  assert.match(fs.readFileSync(result.backupPath, "utf8"), /old-model/);
+  const contents = fs.readFileSync(configPath, "utf8");
+  const config = require("@iarna/toml").parse(contents);
+  assert.equal(config.model, "selected-model");
+  assert.equal(config.model_provider, "openai");
+  assert.equal(config.openai_base_url, "https://proxy.example/v1");
+  assert.equal(config.features.hooks, true);
+  assert.equal(contents.includes("must-not-be-persisted"), false);
+  assert.equal(fs.statSync(configPath).mode & 0o777, 0o600);
+});
+
 test("web app exposes cc-switch only when enabled", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-web-cc-switch-"));
   const paths = appRuntimeTestPaths(root);
@@ -6467,7 +6466,7 @@ test("web app exposes cc-switch only when enabled", async () => {
     TASK_HANDOFF_ENABLE_CC_SWITCH: "1",
     TASK_HANDOFF_CC_SWITCH_COMMAND: process.execPath,
   });
-  const app = await createWebApp({ socketPath: path.join(root, "receiver.sock"), staticDir: path.join(root, "missing-static"), logger: false });
+  const app = await createWebApp({ staticDir: path.join(root, "missing-static"), logger: false });
   try {
     const catalog = await app.inject({ method: "GET", url: "/api/apps/catalog" });
     assert.equal(catalog.statusCode, 200);
@@ -6488,7 +6487,7 @@ test("web app does not expose internal web-cap when enabled", async () => {
     TASK_HANDOFF_WEB_AUTH: "off",
     TASK_HANDOFF_ENABLE_WEB_CAP: "1",
   });
-  const app = await createWebApp({ socketPath: path.join(root, "receiver.sock"), staticDir: path.join(root, "missing-static"), logger: false });
+  const app = await createWebApp({ staticDir: path.join(root, "missing-static"), logger: false });
   try {
     const catalog = await app.inject({ method: "GET", url: "/api/apps/catalog" });
     assert.equal(catalog.statusCode, 200);
@@ -6499,125 +6498,31 @@ test("web app does not expose internal web-cap when enabled", async () => {
   }
 });
 
-test("web status reports pending task count when receiver control is available", async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-web-pending-"));
-  const paths = appRuntimeTestPaths(root);
-  const socketPath = path.join(root, "receiver.sock");
-  const receiver = await createFakeReceiverControl(socketPath, {
-    pending: [
-      { id: 1, conversationId: 1, result: "one", timeoutMs: 1000, source: "cli", kind: "task" },
-      { id: 2, conversationId: 1, result: "two", timeoutMs: 1000, source: "cli", kind: "task" },
-    ],
-    queuedReplies: [],
-  });
-  const restoreEnv = withWebStorageEnv(paths, {
-    TASK_HANDOFF_WEB_AUTH: "off",
-    TASK_HANDOFF_NOVNC_ROOT: path.join(root, "missing-novnc"),
-  });
-  const app = await createWebApp({ socketPath, staticDir: path.join(root, "missing-static"), logger: false });
-  try {
-    const status = await app.inject({ method: "GET", url: "/api/status" });
-    assert.equal(status.statusCode, 200);
-    assert.equal(JSON.parse(status.payload).data.pendingTaskCount, 2);
-
-    const pending = await app.inject({ method: "GET", url: "/api/tasks/pending" });
-    assert.equal(pending.statusCode, 200);
-    assert.equal(JSON.parse(pending.payload).data.pending.length, 2);
-  } finally {
-    await app.close();
-    await new Promise((resolve) => receiver.close(resolve));
-    fs.rmSync(socketPath, { force: true });
-    restoreEnv();
-  }
-});
-
-test("web app can auto-start receiver runtime after syncing channel directory", async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-web-auto-receiver-"));
-  const paths = appRuntimeTestPaths(root);
-  fs.mkdirSync(paths.channelsDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(paths.channelsDir, "telegram.default.json"),
-    `${JSON.stringify({
-      schemaVersion: 1,
-      channel: "telegram",
-      instanceId: "default",
-      enabled: true,
-      defaultChatId: "auto-chat",
-      secrets: { botToken: "123456789:auto-token" },
-    })}\n`,
-  );
-  const restoreEnv = withWebStorageEnv(paths, {
-    TASK_HANDOFF_WEB_AUTH: "off",
-    TASK_HANDOFF_NOVNC_ROOT: path.join(root, "missing-novnc"),
-  });
-  const receiverProcess = createFakeReceiverProcess();
-  const app = await createWebApp({
-    socketPath: path.join(root, "receiver.sock"),
-    staticDir: path.join(root, "missing-static"),
-    logger: false,
-    receiverAutoStart: true,
-    receiverProcess,
-  });
-  try {
-    await app.ready();
-    const status = await app.inject({ method: "GET", url: "/api/status" });
-    assert.equal(status.statusCode, 200);
-    assert.equal(JSON.parse(status.payload).data.receiver.running, true);
-
-    const legacySettings = JSON.parse(fs.readFileSync(paths.configPath, "utf8"));
-    assert.equal(legacySettings.chatTools.telegram.default.token, "123456789:auto-token");
-    assert.equal(legacySettings.chatTools.telegram.default.defaultChatId, "auto-chat");
-  } finally {
-    await app.close();
-    restoreEnv();
-  }
-});
-
-test("web app disables local receiver chat binding startup in controlled mode", async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-web-controlled-receiver-"));
-  const paths = appRuntimeTestPaths(root);
-  fs.mkdirSync(paths.channelsDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(paths.channelsDir, "telegram.default.json"),
-    `${JSON.stringify({
-      schemaVersion: 1,
-      channel: "telegram",
-      instanceId: "default",
-      enabled: true,
-      defaultChatId: "managed-chat",
-      secrets: { botToken: "123456789:managed-token" },
-    })}\n`,
-  );
-  const restoreEnv = withWebStorageEnv(paths, {
-    TASK_HANDOFF_CONTROL_MODE: "controlled",
-    TASK_HANDOFF_WEB_AUTH: "off",
-    TASK_HANDOFF_NOVNC_ROOT: path.join(root, "missing-novnc"),
-  });
-  const app = await createWebApp({
-    socketPath: path.join(root, "receiver.sock"),
-    staticDir: path.join(root, "missing-static"),
-    logger: false,
-    receiverAutoStart: true,
-  });
-  try {
-    await app.ready();
-    const status = await app.inject({ method: "GET", url: "/api/status" });
-    assert.equal(status.statusCode, 200);
-    assert.equal(JSON.parse(status.payload).data.receiver.running, false);
-    const instanceStatus = await app.inject({ method: "GET", url: "/api/instance/status" });
-    assert.equal(instanceStatus.statusCode, 200);
-    const data = JSON.parse(instanceStatus.payload).data;
-    assert.equal(data.controlMode, "controlled");
-    assert.equal(data.receiver.status, "stopped");
-    assert.equal(fs.existsSync(paths.configPath), false);
-
-    const started = await app.inject({ method: "POST", url: "/api/receiver/start" });
-    assert.equal(started.statusCode, 409);
-    assert.equal(JSON.parse(started.payload).error.code, "RECEIVER_MANAGED_BY_CONTROL_PLANE");
-    assert.equal(fs.existsSync(paths.configPath), false);
-  } finally {
-    await app.close();
-    restoreEnv();
+test("web app never starts or stops a receiver in standalone or controlled mode", async () => {
+  for (const mode of ["standalone", "controlled"]) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), `task-handoff-web-${mode}-no-receiver-`));
+    const paths = appRuntimeTestPaths(root);
+    const restoreEnv = withWebStorageEnv(paths, {
+      TASK_HANDOFF_CONTROL_MODE: mode,
+      TASK_HANDOFF_RECEIVER_AUTO_START: "1",
+      TASK_HANDOFF_WEB_AUTH: "off",
+      TASK_HANDOFF_NOVNC_ROOT: path.join(root, "missing-novnc"),
+    });
+    const app = await createWebApp({
+      staticDir: path.join(root, "missing-static"),
+      logger: false,
+    });
+    try {
+      await app.ready();
+      const status = await app.inject({ method: "GET", url: "/api/instance/status" });
+      assert.equal(status.statusCode, 200);
+      assert.equal(JSON.parse(status.payload).data.controlMode, mode);
+      assert.equal(JSON.parse(status.payload).data.receiver, undefined);
+      assert.equal(fs.existsSync(path.join(paths.logDir, "receiver.log")), false);
+    } finally {
+      await app.close();
+      restoreEnv();
+    }
   }
 });
 
@@ -6628,7 +6533,7 @@ test("web app enforces token auth for API routes", async () => {
     TASK_HANDOFF_WEB_AUTH: "required",
     TASK_HANDOFF_NOVNC_ROOT: path.join(root, "missing-novnc"),
   });
-  const app = await createWebApp({ socketPath: path.join(root, "receiver.sock"), staticDir: path.join(root, "missing-static"), logger: false });
+  const app = await createWebApp({ staticDir: path.join(root, "missing-static"), logger: false });
   try {
     const unauthorized = await app.inject({ method: "GET", url: "/api/status" });
     assert.equal(unauthorized.statusCode, 401);
@@ -6645,52 +6550,6 @@ test("web app enforces token auth for API routes", async () => {
     await app.close();
     restoreEnv();
   }
-});
-
-test("channel directory sync rebuilds receiver settings before start", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-channel-sync-"));
-  const channelsDir = path.join(root, "channels");
-  const configPath = path.join(root, "config.json");
-  fs.mkdirSync(channelsDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(channelsDir, "telegram.default.json"),
-    `${JSON.stringify(
-      {
-        schemaVersion: 1,
-        channel: "telegram",
-        instanceId: "default",
-        enabled: true,
-        defaultChatId: "chat-from-file",
-        allowedUserIds: ["user-from-file"],
-        secrets: { botToken: "token-from-file" },
-      },
-      null,
-      2,
-    )}\n`,
-  );
-
-  syncChannelDirectoryToReceiverSettings(channelsDir, configPath);
-  const settings = JSON.parse(fs.readFileSync(configPath, "utf8"));
-  assert.equal(settings.chatTools.telegram.default.token, "token-from-file");
-  assert.equal(settings.chatTools.telegram.default.defaultChatId, "chat-from-file");
-  assert.deepEqual(settings.chatTools.telegram.default.allowedUserIds, ["user-from-file"]);
-  assert.equal(settings.chatBindings.telegram.default["chat-from-file"].conversationId, 1);
-});
-
-test("receiver process manager persists and tails logs", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-receiver-logs-"));
-  const manager = new ReceiverProcessManager(path.join(root, "receiver.sock"), root);
-  manager.appendLog("first\n");
-  manager.appendLog("second\n");
-
-  const full = manager.readLogs(1024);
-  assert.equal(full.logPath, path.join(root, "receiver.log"));
-  assert.equal(full.content, "first\nsecond\n");
-  assert.equal(full.truncated, false);
-
-  const tail = manager.readLogs(6);
-  assert.equal(tail.content, "econd\n");
-  assert.equal(tail.truncated, true);
 });
 
 test("app runtime ignores persisted sessions by default", () => {
@@ -6749,7 +6608,6 @@ test("app session title updates through the API, persists, and emits an authorit
   const updates = [];
   runtime.on("updated", (session) => updates.push(session));
   const app = await createWebApp({
-    socketPath: path.join(root, "receiver.sock"),
     staticDir: path.join(root, "missing-static"),
     logger: false,
     appRuntime: runtime,
@@ -7393,7 +7251,7 @@ test("web app reports automation route errors", async () => {
     TASK_HANDOFF_NOVNC_ROOT: path.join(root, "missing-novnc"),
     TASK_HANDOFF_APP_SESSION_PERSIST: "1",
   });
-  const app = await createWebApp({ socketPath: path.join(root, "receiver.sock"), staticDir: path.join(root, "missing-static"), logger: false });
+  const app = await createWebApp({ staticDir: path.join(root, "missing-static"), logger: false });
   try {
     const missing = await app.inject({ method: "GET", url: "/api/apps/sessions/missing/automation" });
     assert.equal(missing.statusCode, 404);
@@ -7505,7 +7363,7 @@ test("web app proxies session HTTP with httpxy while preserving KasmVNC theming"
     TASK_HANDOFF_KASMVNC_USERNAME: "agent",
     TASK_HANDOFF_KASMVNC_PASSWORD: "secret",
   });
-  const app = await createWebApp({ socketPath: path.join(root, "receiver.sock"), staticDir: path.join(root, "missing-static"), logger: false, appRuntime: runtime });
+  const app = await createWebApp({ staticDir: path.join(root, "missing-static"), logger: false, appRuntime: runtime });
   try {
     const html = await app.inject({ method: "GET", url: "/api/apps/sessions/app_proxy/web/index.html?theme=dark" });
     assert.equal(html.statusCode, 200);
@@ -7727,8 +7585,6 @@ function appRuntimeTestPaths(root) {
   return {
     configPath: path.join(root, "config.json"),
     dataDir: root,
-    channelsDir: path.join(root, "channels"),
-    conversationsDir: path.join(root, "conversations"),
     appCatalogDir: path.join(root, "app-catalog"),
     appSessionsDir: path.join(root, "app-sessions"),
     runtimeDir: path.join(root, "runtime"),
@@ -7837,15 +7693,12 @@ function withWebStorageEnv(paths, extra = {}) {
   const patch = {
     TASK_HANDOFF_CONFIG: paths.configPath,
     TASK_HANDOFF_DATA_DIR: paths.dataDir,
-    TASK_HANDOFF_CHANNELS_DIR: paths.channelsDir,
-    TASK_HANDOFF_CONVERSATIONS_DIR: paths.conversationsDir,
     TASK_HANDOFF_APP_CATALOG_DIR: paths.appCatalogDir,
     TASK_HANDOFF_APP_SESSION_DIR: paths.appSessionsDir,
     TASK_HANDOFF_RUNTIME_DIR: paths.runtimeDir,
     TASK_HANDOFF_EVENTS_DIR: paths.eventsDir,
     TASK_HANDOFF_ARTIFACT_DIR: paths.artifactDir,
     TASK_HANDOFF_LOG_DIR: paths.logDir,
-    TASK_HANDOFF_RECEIVER_AUTO_START: "0",
     TASK_HANDOFF_WEB_TOKEN_FILE: paths.webTokenPath,
     TASK_HANDOFF_AI_PROCESS_SCAN: "0",
     TASK_HANDOFF_AI_SESSION_SCAN: "0",
@@ -7881,48 +7734,4 @@ function withWebStorageEnv(paths, extra = {}) {
       }
     }
   };
-}
-
-function createFakeReceiverControl(socketPath, pendingListResponse) {
-  fs.rmSync(socketPath, { force: true });
-  const server = net.createServer((socket) => {
-    let buffer = "";
-    socket.on("data", (chunk) => {
-      buffer += chunk.toString("utf8");
-      const newlineIndex = buffer.indexOf("\n");
-      if (newlineIndex === -1) {
-        return;
-      }
-      const message = JSON.parse(buffer.slice(0, newlineIndex));
-      if (message.action === "pending.list") {
-        socket.write(encodeMessage({ type: "control.response", requestId: message.requestId, ok: true, data: pendingListResponse }));
-        socket.end();
-      }
-    });
-  });
-  return new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(socketPath, () => resolve(server));
-  });
-}
-
-function createFakeReceiverProcess() {
-  const emitter = new EventEmitter();
-  let status = { running: false };
-  const stop = () => {
-    status = { ...status, running: false, exitedAt: new Date().toISOString(), exitCode: 0, signal: null };
-    emitter.emit("exit", { ...status });
-    return { ...status };
-  };
-  return Object.assign(emitter, {
-    status: () => ({ ...status }),
-    start: () => {
-      status = { running: true, pid: 12345, startedAt: new Date().toISOString() };
-      emitter.emit("start", { ...status });
-      return { ...status };
-    },
-    stop,
-    stopAndWait: async () => stop(),
-    readLogs: () => ({ logPath: undefined, maxBytes: 0, size: 0, truncated: false, content: "" }),
-  });
 }

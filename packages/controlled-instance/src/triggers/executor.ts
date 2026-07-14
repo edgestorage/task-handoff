@@ -1,4 +1,3 @@
-import type { ReceiverControlClient } from "../web/receiver-control-client";
 import type { AiSessionController } from "@task-handoff/ai-session-runtime";
 import type { TriggerConfig, TriggerDeployment, TriggerRun } from "@task-handoff/protocol/triggers";
 import type { TriggerStore } from "./store.ts";
@@ -12,11 +11,16 @@ export type TriggerExecuteInput = {
 };
 
 export class TriggerExecutor {
+  private readonly store: TriggerStore;
+  private readonly aiSessionController: AiSessionController;
+
   constructor(
-    private readonly store: TriggerStore,
-    private readonly receiverControl: ReceiverControlClient,
-    private readonly aiSessionController?: AiSessionController,
-  ) {}
+    store: TriggerStore,
+    aiSessionController: AiSessionController,
+  ) {
+    this.store = store;
+    this.aiSessionController = aiSessionController;
+  }
 
   async execute(input: TriggerExecuteInput) {
     const run = this.store.startRun(input.config, input.deployment, input.eventType, input.eventSummary);
@@ -25,30 +29,15 @@ export class TriggerExecutor {
       event: { type: input.eventType, summary: input.eventSummary || "" },
     });
     try {
-      if (input.deployment.target.type === "ai-session") {
-        if (!this.aiSessionController) {
-          throw Object.assign(new Error("AI session trigger targets are not available."), { code: "TRIGGER_AI_SESSION_TARGET_UNAVAILABLE", statusCode: 400 });
+      let result: unknown;
+      try {
+        result = await this.aiSessionController.sendMessage(input.deployment.target.aiSessionId, { message: text });
+      } catch (error) {
+        if (error && typeof error === "object" && "code" in error && String(error.code) === "AI_SESSION_NOT_FOUND") {
+          this.store.deleteDeployment(input.deployment.configHash, input.deployment.deploymentId || input.deployment.configHash);
         }
-        let result: unknown;
-        try {
-          result = await this.aiSessionController.sendMessage(input.deployment.target.aiSessionId, { message: text });
-        } catch (error) {
-          if (error && typeof error === "object" && "code" in error && String(error.code) === "AI_SESSION_NOT_FOUND") {
-            this.store.deleteDeployment(input.deployment.configHash, input.deployment.deploymentId || input.deployment.configHash);
-          }
-          throw error;
-        }
-        const completed = this.store.completeRun(run);
-        return { run: completed, result };
+        throw error;
       }
-      const result = await this.receiverControl.message({
-        channel: "web",
-        chatSessionId: `trigger:${input.deployment.deploymentId || input.deployment.configHash}`,
-        userId: "trigger",
-        conversationId: input.deployment.target.conversationId,
-        text,
-        attachments: [],
-      });
       const completed = this.store.completeRun(run);
       return { run: completed, result };
     } catch (error) {

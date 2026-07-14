@@ -8,13 +8,20 @@ const JsonObjectSchema = z.record(z.string(), z.unknown());
 export type DomainStoreOptions<T> = {
   schema: z.ZodType<T>;
   defaultValue: () => T;
+  sanitize?: (value: unknown) => unknown;
 };
 
 export class DomainStore<T> {
+  private readonly filePath: string;
+  private readonly options: DomainStoreOptions<T>;
+
   constructor(
-    private readonly filePath: string,
-    private readonly options: DomainStoreOptions<T>,
-  ) {}
+    filePath: string,
+    options: DomainStoreOptions<T>,
+  ) {
+    this.filePath = filePath;
+    this.options = options;
+  }
 
   path() {
     return this.filePath;
@@ -23,7 +30,7 @@ export class DomainStore<T> {
   load(): T {
     try {
       const raw = JSON.parse(fs.readFileSync(this.filePath, "utf8"));
-      return this.options.schema.parse(raw);
+      return this.options.schema.parse(this.options.sanitize ? this.options.sanitize(raw) : raw);
     } catch (error: unknown) {
       if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
         return this.options.defaultValue();

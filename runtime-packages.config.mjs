@@ -83,8 +83,6 @@ export const runtimePackages = {
     entryFile: "controlled-instance-cli.js",
     binName: "task-handoff-controlled-instance",
     uiDir: "packages/controlled-instance-ui/dist",
-    receiverEntry: "packages/receiver-worker/src/receiver-entry.ts",
-    receiverInkEntry: "packages/receiver-worker/src/app.ts",
     dependencies: runtimeDependencies(["@task-handoff/controlled-instance-image"]),
   },
 };

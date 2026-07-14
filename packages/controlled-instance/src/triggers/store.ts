@@ -15,7 +15,12 @@ import { DomainStore } from "@task-handoff/core/storage/domain-store";
 import type { TaskHandoffStoragePaths } from "@task-handoff/core/storage/paths";
 
 const MAX_RECENT_RUNS = 100;
-const DEFAULT_TRIGGER_CONVERSATION_ID = 1;
+
+type TriggerStorageWarning = {
+  kind: "config" | "deployment" | "runtime" | "recent-run" | "index";
+  id: string;
+  reason: string;
+};
 
 type TriggerCreateInput = {
   name: string;
@@ -23,7 +28,9 @@ type TriggerCreateInput = {
   source: TriggerConfig["source"];
   action: TriggerConfig["action"];
   policy?: Partial<TriggerConfig["policy"]>;
-  deployment?: Partial<Omit<TriggerDeployment, "configHash" | "instanceId" | "createdAt" | "updatedAt">>;
+  deployment: Partial<Omit<TriggerDeployment, "configHash" | "instanceId" | "createdAt" | "updatedAt" | "target">> & {
+    target: TriggerDeployment["target"];
+  };
 };
 
 function now() {
@@ -38,7 +45,7 @@ function deploymentKey(deployment: Pick<TriggerDeployment, "configHash" | "deplo
   return deployment.deploymentId || deployment.configHash;
 }
 
-function defaultDeployment(configHash: string, input: TriggerCreateInput["deployment"] = {}) {
+function defaultDeployment(configHash: string, input: TriggerCreateInput["deployment"]) {
   const timestamp = now();
   return TriggerDeploymentSchema.parse({
     configHash,
@@ -46,7 +53,7 @@ function defaultDeployment(configHash: string, input: TriggerCreateInput["deploy
     instanceId: localInstanceId(),
     origin: input.origin || "controlled-instance",
     enabled: input.enabled ?? true,
-    target: input.target || { type: "conversation", conversationId: DEFAULT_TRIGGER_CONVERSATION_ID },
+    target: input.target,
     localName: input.localName,
     createdAt: timestamp,
     updatedAt: timestamp,
@@ -72,9 +79,16 @@ export class TriggerStore {
   private readonly indexStore: DomainStore<TriggerIndex>;
 
   constructor(paths: TaskHandoffStoragePaths) {
+    const warned = new Set<string>();
     this.indexStore = new DomainStore(path.join(paths.triggersDir, "index.json"), {
       schema: TriggerIndexSchema,
       defaultValue: () => ({ schemaVersion: 1, configs: [], deployments: [], runtime: [], recentRuns: [] }),
+      sanitize: (value) => sanitizeStoredTriggerIndex(value, (warning) => {
+        const key = `${warning.kind}:${warning.id}:${warning.reason}`;
+        if (warned.has(key)) return;
+        warned.add(key);
+        console.warn(JSON.stringify({ message: "historical trigger entry was sanitized", ...warning }));
+      }),
     });
   }
 
@@ -329,3 +343,136 @@ export class TriggerStore {
 }
 
 export type { TriggerCreateInput };
+
+export function sanitizeStoredTriggerIndex(input: unknown, onWarning?: (warning: TriggerStorageWarning) => void): TriggerIndex {
+  const source = objectRecord(input);
+  if (!source) {
+    onWarning?.({ kind: "index", id: "index", reason: "invalid index replaced with an empty index" });
+    return TriggerIndexSchema.parse({});
+  }
+
+  const configs = arrayValue(source.configs).flatMap((entry, index) => {
+    const raw = objectRecord(entry);
+    const id = stringValue(raw?.configHash) || `config[${index}]`;
+    if (!raw) {
+      onWarning?.({ kind: "config", id, reason: "invalid config removed" });
+      return [];
+    }
+    const candidate = storedTriggerConfig(raw);
+    return parsedStoredEntry(TriggerConfigSchema, candidate, raw, "config", id, onWarning);
+  });
+
+  const deployments = arrayValue(source.deployments).flatMap((entry, index) => {
+    const raw = objectRecord(entry);
+    const id = stringValue(raw?.deploymentId) || stringValue(raw?.configHash) || `deployment[${index}]`;
+    const target = objectRecord(raw?.target);
+    if (target?.type === "conversation") {
+      onWarning?.({ kind: "deployment", id, reason: "conversation target removed" });
+      return [];
+    }
+    if (!raw) {
+      onWarning?.({ kind: "deployment", id, reason: "invalid deployment removed" });
+      return [];
+    }
+    const candidate = pick(raw, ["configHash", "deploymentId", "instanceId", "origin", "enabled", "localName", "createdAt", "updatedAt"]);
+    candidate.target = target ? pick(target, ["type", "aiSessionId"]) : target;
+    return parsedStoredEntry(TriggerDeploymentSchema, candidate, raw, "deployment", id, onWarning);
+  });
+
+  const deploymentKeys = new Set(deployments.map((entry) => deploymentKey(entry)));
+  const runtime = arrayValue(source.runtime).flatMap((entry, index) => {
+    const raw = objectRecord(entry);
+    const id = stringValue(raw?.deploymentId) || stringValue(raw?.configHash) || `runtime[${index}]`;
+    if (!raw || !deploymentKeys.has(id)) {
+      onWarning?.({ kind: "runtime", id, reason: "orphaned or conversation runtime removed" });
+      return [];
+    }
+    return parsedStoredEntry(
+      TriggerRuntimeStateSchema,
+      pick(raw, ["configHash", "deploymentId", "instanceId", "status", "lastTriggeredAt", "lastCompletedAt", "lastSkippedAt", "lastError", "runCount", "skippedCount"]),
+      raw,
+      "runtime",
+      id,
+      onWarning,
+    );
+  });
+
+  const recentRuns = arrayValue(source.recentRuns).flatMap((entry, index) => {
+    const raw = objectRecord(entry);
+    const id = stringValue(raw?.id) || `recentRun[${index}]`;
+    const target = objectRecord(raw?.target);
+    if (target?.type === "conversation") {
+      onWarning?.({ kind: "recent-run", id, reason: "conversation target run removed" });
+      return [];
+    }
+    if (!raw) {
+      onWarning?.({ kind: "recent-run", id, reason: "invalid run removed" });
+      return [];
+    }
+    const candidate = pick(raw, ["id", "configHash", "deploymentId", "instanceId", "eventType", "status", "promptPreview", "eventSummary", "error", "startedAt", "completedAt"]);
+    candidate.target = target ? pick(target, ["type", "aiSessionId"]) : target;
+    return parsedStoredEntry(TriggerRunSchema, candidate, raw, "recent-run", id, onWarning);
+  });
+
+  const knownIndex = pick(source, ["schemaVersion", "configs", "deployments", "runtime", "recentRuns"]);
+  if (Object.keys(source).some((key) => !(key in knownIndex))) {
+    onWarning?.({ kind: "index", id: "index", reason: "unknown index fields ignored" });
+  }
+  return TriggerIndexSchema.parse({ schemaVersion: 1, configs, deployments, runtime, recentRuns });
+}
+
+function storedTriggerConfig(raw: Record<string, unknown>) {
+  const candidate = pick(raw, ["configHash", "name", "description", "createdAt", "updatedAt"]);
+  const source = objectRecord(raw.source);
+  if (source) {
+    if (source.type === "schedule") {
+      candidate.source = pick(source, ["type", "scheduleKind", "intervalMs", "timeOfDay", "timezone", "weekdays"]);
+    } else if (source.type === "file-change") {
+      candidate.source = pick(source, ["type", "roots", "globs", "ignore", "debounceMs"]);
+    } else if (source.type === "ai-session") {
+      candidate.source = pick(source, ["type", "agent", "statuses", "phases"]);
+    } else {
+      candidate.source = source;
+    }
+  }
+  const action = objectRecord(raw.action);
+  candidate.action = action ? pick(action, ["promptTemplate"]) : action;
+  const policy = objectRecord(raw.policy);
+  candidate.policy = policy ? pick(policy, ["cooldownMs", "maxConcurrentRuns", "whenBusy"]) : policy;
+  return candidate;
+}
+
+function parsedStoredEntry<T>(
+  schema: { safeParse(value: unknown): { success: true; data: T } | { success: false } },
+  candidate: Record<string, unknown>,
+  raw: Record<string, unknown>,
+  kind: TriggerStorageWarning["kind"],
+  id: string,
+  onWarning?: (warning: TriggerStorageWarning) => void,
+): T[] {
+  const parsed = schema.safeParse(candidate);
+  if (!parsed.success) {
+    onWarning?.({ kind, id, reason: "entry failed current schema and was removed" });
+    return [];
+  }
+  if (JSON.stringify(candidate) !== JSON.stringify(raw)) {
+    onWarning?.({ kind, id, reason: "unknown or legacy fields ignored" });
+  }
+  return [parsed.data];
+}
+
+function objectRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function arrayValue(value: unknown) {
+  return Array.isArray(value) ? value : [];
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" ? value : "";
+}
+
+function pick(source: Record<string, unknown>, keys: string[]) {
+  return Object.fromEntries(keys.filter((key) => Object.prototype.hasOwnProperty.call(source, key)).map((key) => [key, source[key]]));
+}

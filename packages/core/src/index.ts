@@ -16,4 +16,3 @@ export * from "./core/text";
 export * from "./core/transcript";
 export * from "./storage/domain-store";
 export * from "./storage/paths";
-export * from "./storage/repositories";

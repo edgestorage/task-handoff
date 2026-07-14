@@ -11,7 +11,7 @@
       <Card>
         <CardHeader>
           <CardTitle>Create Local Trigger</CardTitle>
-          <CardDescription>Manual run and receiver delivery are available in this first pass.</CardDescription>
+          <CardDescription>Triggers send prompts directly to an AI session.</CardDescription>
         </CardHeader>
         <CardContent class="trigger-form">
           <label class="field-row">
@@ -39,8 +39,15 @@
             <Input v-model="form.statuses" placeholder="idle,failed" />
           </label>
           <label class="field-row">
-            <span>Conversation</span>
-            <Input v-model="form.conversationId" inputmode="numeric" />
+            <span>AI session</span>
+            <Select v-model="form.aiSessionId">
+              <SelectTrigger class="select-input"><SelectValue placeholder="Select a session" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem v-for="session in aiSessions.data.value?.sessions || []" :key="session.id" :value="session.id">
+                  {{ session.title || session.id }} · {{ session.agent }}
+                </SelectItem>
+              </SelectContent>
+            </Select>
           </label>
           <label class="field-row trigger-wide">
             <span>Prompt</span>
@@ -49,7 +56,7 @@
         </CardContent>
         <CardFooter class="editor-actions">
           <p v-if="createError" class="form-error">{{ createError }}</p>
-          <Button size="sm" @click="createLocalTrigger">Create</Button>
+          <Button size="sm" :disabled="!form.aiSessionId" @click="createLocalTrigger">Create</Button>
         </CardFooter>
       </Card>
 
@@ -114,7 +121,7 @@
 <script setup lang="ts">
 import { useQueryClient } from "@tanstack/vue-query";
 import { computed, reactive, ref } from "vue";
-import { createTrigger, deleteTrigger, disableTrigger, enableTrigger, runTrigger, useTriggersQuery } from "../../api/queries";
+import { createTrigger, deleteTrigger, disableTrigger, enableTrigger, runTrigger, useAiSessionsQuery, useTriggersQuery } from "../../api/queries";
 import type { TriggerConfig, TriggerDeployment, TriggerRuntimeState, TriggerSource, TriggerTarget } from "../../api/types";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -125,6 +132,7 @@ import { Textarea } from "../../components/ui/textarea";
 
 const queryClient = useQueryClient();
 const triggers = useTriggersQuery();
+const aiSessions = useAiSessionsQuery();
 const createError = ref("");
 
 const form = reactive({
@@ -134,7 +142,7 @@ const form = reactive({
   roots: "/workspace",
   globs: "**/*",
   statuses: "idle,failed",
-  conversationId: "1",
+  aiSessionId: "",
   promptTemplate: "Please review the current context and continue with the next useful step.",
 });
 
@@ -178,7 +186,10 @@ function sourceFromForm(): TriggerSource {
 }
 
 function targetFromForm(): TriggerTarget {
-  return { type: "conversation", conversationId: Math.max(1, Number(form.conversationId) || 1) };
+  if (!form.aiSessionId) {
+    throw new Error("Select an AI session target.");
+  }
+  return { type: "ai-session", aiSessionId: form.aiSessionId };
 }
 
 function splitList(value: string) {
@@ -232,7 +243,7 @@ function shortHash(value: string) {
 }
 
 function targetText(target: TriggerTarget) {
-  return target.type === "conversation" ? `conversation ${target.conversationId}` : `ai session ${target.aiSessionId}`;
+  return `AI session ${target.aiSessionId}`;
 }
 
 function formatDate(value: string) {

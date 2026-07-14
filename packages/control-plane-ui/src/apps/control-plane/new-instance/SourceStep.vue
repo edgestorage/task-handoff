@@ -38,22 +38,6 @@
         <Plus :size="15" />
         <span>{{ creatingProject ? "Creating" : "Create repository" }}</span>
       </Button>
-      <div v-if="codexModels.length || claudeModels.length" class="project-model-picker">
-        <label v-if="codexModels.length">
-          <span>Codex model</span>
-          <ControlPlaneSelect :model-value="newProjectCodexModelValue" placeholder="Global default" @update:model-value="$emit('set-new-project-model', 'codex', $event)">
-            <ControlPlaneSelectItem :value="defaultModelValue">Global default</ControlPlaneSelectItem>
-            <ControlPlaneSelectItem v-for="model in codexModels" :key="`new-project-codex-${model.id}`" :value="model.id">{{ model.name }}</ControlPlaneSelectItem>
-          </ControlPlaneSelect>
-        </label>
-        <label v-if="claudeModels.length">
-          <span>Claude model</span>
-          <ControlPlaneSelect :model-value="newProjectClaudeModelValue" placeholder="Global default" @update:model-value="$emit('set-new-project-model', 'claude', $event)">
-            <ControlPlaneSelectItem :value="defaultModelValue">Global default</ControlPlaneSelectItem>
-            <ControlPlaneSelectItem v-for="model in claudeModels" :key="`new-project-claude-${model.id}`" :value="model.id">{{ model.name }}</ControlPlaneSelectItem>
-          </ControlPlaneSelect>
-        </label>
-      </div>
     </div>
 
     <div v-else class="step-fields">
@@ -94,8 +78,7 @@
 
 <script setup lang="ts">
 import { Folder, FolderOpen, GitBranch, Plus } from "@lucide/vue";
-import { computed } from "vue";
-import type { ModelConfig, Node, NodeLocalFolder, Project } from "../../../api/types";
+import type { Node, NodeLocalFolder, Project } from "../../../api/types";
 import { Button } from "../../../components/ui/button";
 import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
@@ -115,7 +98,6 @@ const props = defineProps<{
   localFolders: NodeLocalFolder[];
   localPathOpen: boolean;
   localPathPlaceholder: string;
-  models: ModelConfig[];
   newProject: NewProjectDraft;
   newProjectOpen: boolean;
   nodeFolderTreeError: string;
@@ -127,19 +109,12 @@ const props = defineProps<{
   sourceDraft: SourceDraft;
 }>();
 
-const codexModels = computed(() => props.models.filter((model) => model.app === "codex"));
-const claudeModels = computed(() => props.models.filter((model) => model.app === "claude"));
-const defaultModelValue = "__default__";
-const newProjectCodexModelValue = computed(() => props.newProject.codexModelId || defaultModelValue);
-const newProjectClaudeModelValue = computed(() => props.newProject.claudeModelId || defaultModelValue);
-
 defineEmits<{
   "choose-project-folder-path": [];
   "create-project": [];
   "load-node-folder-roots": [];
   "select-local-folder": [value: string];
   "select-node-folder-path": [folder: NodeFolderTreeNode];
-  "set-new-project-model": [app: "codex" | "claude", value: string];
   "select-source-mode": [mode: SourceMode];
   "set-local-folder-path": [value: string];
   "update:newProjectOpen": [open: boolean];

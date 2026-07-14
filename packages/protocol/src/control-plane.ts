@@ -7,14 +7,14 @@ import {
 } from "./ai-sessions.ts";
 import { TriggerConfigSchema, TriggerDeploymentSchema, TriggerRunSchema, TriggerRuntimeStateSchema } from "./triggers.ts";
 
-export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-07-13";
+export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-07-14";
 
 const IdSchema = z.string().trim().min(1).max(120).regex(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$/);
 const TimestampSchema = z.string().datetime();
 const LabelsSchema = z.record(z.string(), z.string()).default({});
 const StringRecordSchema = z.record(z.string(), z.string()).default({});
 
-export const ProjectModelSelectionSchema = z
+export const ModelSelectionSchema = z
   .object({
     codexModelId: IdSchema.optional(),
     claudeModelId: IdSchema.optional(),
@@ -109,7 +109,6 @@ export const GitRepositorySchema = z
     auth: GitAuthSchema.default({ type: "none" }),
     clone: GitCloneOptionsSchema.default({ submodules: false, lfs: false, subdirectory: "" }),
     defaultImageId: IdSchema.optional(),
-    modelSelection: ProjectModelSelectionSchema,
     labels: LabelsSchema,
     createdAt: TimestampSchema,
     updatedAt: TimestampSchema,
@@ -123,7 +122,6 @@ export const NodeLocalFolderSchema = z
     name: z.string().trim().min(1).max(160),
     path: z.string().trim().min(1).max(4096),
     defaultImageId: IdSchema.optional(),
-    modelSelection: ProjectModelSelectionSchema,
     labels: LabelsSchema,
     createdAt: TimestampSchema,
     updatedAt: TimestampSchema,
@@ -181,7 +179,6 @@ export const ProjectSchema = z
     defaultImageId: IdSchema.optional(),
     defaultNodeId: IdSchema.optional(),
     defaultRuntimeId: IdSchema.optional(),
-    modelSelection: ProjectModelSelectionSchema,
     workspacePolicy: WorkspacePolicySchema,
     labels: LabelsSchema,
     createdAt: TimestampSchema,
@@ -415,6 +412,7 @@ export const ControlledInstanceSchema = z
     projectId: IdSchema.optional(),
     source: ProjectSourceSchema,
     sourceSnapshot: z.record(z.string(), z.unknown()).default({}),
+    modelSelection: ModelSelectionSchema,
     nodeId: IdSchema,
     runtimeId: IdSchema,
     imageId: IdSchema.optional(),
@@ -439,13 +437,6 @@ export const ControlledInstanceSchema = z
     workspace: WorkspaceStatusSchema.default({ status: "unknown" }),
     target: InstanceTargetSchema.default({ strategy: "direct-port", status: "unknown" }),
     access: InstanceAccessSchema,
-    receiver: z
-      .object({
-        status: z.string().trim().max(80).default("unknown"),
-        pendingCount: z.number().int().min(0).default(0),
-      })
-      .strict()
-      .default({ status: "unknown", pendingCount: 0 }),
     apps: z
       .object({
         runningCount: z.number().int().min(0).default(0),
@@ -504,11 +495,20 @@ export function safeParseStoredControlledInstance(input: unknown) {
   return ControlledInstanceSchema.safeParse(sanitizeStoredControlledInstance(input));
 }
 
-export function sanitizeStoredControlledInstance(input: unknown) {
+export function sanitizeStoredControlledInstance(
+  input: unknown,
+  onWarning?: (warning: { instanceId?: string; field: string }) => void,
+) {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     return input;
   }
   const source = input as Record<string, unknown>;
+  if (Object.prototype.hasOwnProperty.call(source, "receiver")) {
+    onWarning?.({
+      instanceId: typeof source.id === "string" ? source.id : undefined,
+      field: "receiver",
+    });
+  }
   const knownTopLevelKeys = new Set(Object.keys(ControlledInstanceSchema.shape));
   const next: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(source)) {
@@ -516,7 +516,7 @@ export function sanitizeStoredControlledInstance(input: unknown) {
   }
   next.apps = pickObjectFields(source.apps, ["runningCount", "problemCount", "updatedAt", "revision"]);
   next.config = pickObjectFields(source.config, ["autoImportAgentConfigs"]);
-  next.receiver = pickObjectFields(source.receiver, ["status", "pendingCount"]);
+  next.modelSelection = pickObjectFields(source.modelSelection, ["codexModelId", "claudeModelId"]);
   next.runtime = pickObjectFields(source.runtime, ["kind", "containerName", "containerId", "workspacePath", "pid", "port", "labels"]);
   next.target = pickObjectFields(source.target ?? source.endpoints, ["strategy", "web", "api", "status"]);
   next.access = pickObjectFields(source.access, ["strategy", "web", "api", "ws", "status"]);
@@ -556,7 +556,6 @@ export const ControlledInstanceHeartbeatSchema = z
     protocolVersion: z.string().trim().max(80),
     build: BuildInfoSchema.optional(),
     capabilities: ControlledInstanceSchema.shape.capabilities.optional(),
-    receiver: ControlledInstanceSchema.shape.receiver.optional(),
     apps: ControlledInstanceSchema.shape.apps.optional(),
     aiSessions: ControlledInstanceSchema.shape.aiSessions.optional(),
     triggers: ControlledInstanceSchema.shape.triggers.optional(),

@@ -105,7 +105,14 @@
                 <button type="button" class="instance-row-content" @click="$emit('selectInstance', instance.id)">
                   <span class="status-dot" :data-state="instance.connectionStatus" />
                   <span class="instance-row-main">
-                    <strong>{{ instanceDisplayName(instance) }}</strong>
+                    <span class="instance-row-title">
+                      <span v-if="instance.runtime" class="instance-runtime-icon" role="img" :aria-label="instanceRuntimeLabel(instance)" :title="instanceRuntimeLabel(instance)">
+                        <Laptop v-if="instance.runtime.type === 'local'" :size="14" aria-hidden="true" />
+                        <Container v-else-if="instance.runtime.type === 'docker'" :size="14" aria-hidden="true" />
+                        <Boxes v-else :size="14" aria-hidden="true" />
+                      </span>
+                      <strong>{{ instanceDisplayName(instance) }}</strong>
+                    </span>
                     <small>{{ instanceSourceLabel(instance) }}</small>
                   </span>
                   <span v-if="!groupByNode" class="instance-row-session">{{ instanceNodeLabel(instance) }}</span>
@@ -214,7 +221,7 @@
 
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
-import { ChevronRight, Download, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Play, Plus, RotateCw, Search, Server, Square, Trash2, Upload } from "@lucide/vue";
+import { Boxes, ChevronRight, Container, Download, Laptop, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Play, Plus, RotateCw, Search, Server, Square, Trash2, Upload } from "@lucide/vue";
 import type { InstanceBoardItem } from "../../../api/types";
 import { Button } from "../../../components/ui/button";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger, ContextMenuTrigger } from "../../../components/ui/context-menu";
@@ -272,6 +279,16 @@ const temporaryListOpen = ref(false);
 
 function instanceNodeLabel(instance: InstanceBoardItem) {
   return instance.node?.name || instance.nodeId;
+}
+
+function instanceRuntimeLabel(instance: InstanceBoardItem) {
+  if (instance.runtime?.type === "local") {
+    return "Local runtime";
+  }
+  if (instance.runtime?.type === "docker") {
+    return "Docker runtime";
+  }
+  return "Kubernetes runtime";
 }
 
 const collapsedGroups = reactive<Record<string, boolean>>({});
@@ -780,6 +797,19 @@ function openNewInstanceFromTemporaryList() {
   gap: 2px;
 }
 
+.instance-row-title {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 6px;
+}
+
+.instance-runtime-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+
 .instance-row-main strong,
 .instance-row-main small,
 .instance-row-session {
@@ -789,6 +819,10 @@ function openNewInstanceFromTemporaryList() {
 }
 
 .instance-row-main strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--instance-list-title);
   font-size: 13px;
   font-weight: 750;

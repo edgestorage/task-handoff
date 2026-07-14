@@ -38,25 +38,25 @@ export function registerCatalogRoutes({ app, service, events }: RegisterCatalogR
 
   app.get("/api/models", async () => ({ data: service.listModels() }));
   app.post("/api/models", async (request, reply) => {
-    const model = service.createModel(request.body);
+    const model = await service.createModel(request.body);
     events.publish("model.created", { modelId: model.id });
     return reply.code(201).send({ data: model });
   });
   app.post("/api/models/reorder", async (request) => {
     const parsed = ModelReorderRequestSchema.parse(request.body);
-    const models = service.reorderModels(parsed.ids);
+    const models = await service.reorderModels(parsed.ids);
     events.publish("model.reordered", { ids: parsed.ids });
     return { data: models };
   });
   app.get("/api/models/:id", async (request) => ({ data: service.requireModel(IdParamsSchema.parse(request.params).id) }));
   app.patch("/api/models/:id", async (request) => {
-    const model = service.updateModel(IdParamsSchema.parse(request.params).id, request.body);
+    const model = await service.updateModel(IdParamsSchema.parse(request.params).id, request.body);
     events.publish("model.updated", { modelId: model.id });
     return { data: model };
   });
   app.delete("/api/models/:id", async (request) => {
     const id = IdParamsSchema.parse(request.params).id;
-    const deleted = service.deleteModel(id);
+    const deleted = await service.deleteModel(id);
     events.publish("model.deleted", { modelId: id, deleted });
     return { data: { deleted } };
   });

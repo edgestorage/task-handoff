@@ -26,6 +26,7 @@ const jobFile = options.jobFile;
 const targetVersion = options.targetVersion;
 const service = options.service;
 const npmCommand = options.npmCommand;
+const nodeAgentManifest = path.resolve(__dirname, "..", "package.json");
 
 function updateJob(patch) {
   const current = JSON.parse(fs.readFileSync(jobFile, "utf8"));
@@ -36,6 +37,13 @@ function updateJob(patch) {
 function run(command, args) {
   const result = spawnSync(command, args, { stdio: "inherit" });
   if (result.status !== 0) throw new Error(`${command} exited with status ${result.status ?? "unknown"}`);
+}
+
+function verifyInstalledVersion() {
+  const installedVersion = JSON.parse(fs.readFileSync(nodeAgentManifest, "utf8")).version;
+  if (installedVersion !== targetVersion) {
+    throw new Error(`Updated node-agent verification failed: expected ${targetVersion}, found ${installedVersion || "unknown"}.`);
+  }
 }
 
 try {
@@ -59,6 +67,7 @@ try {
     updateJob({ status: "restarting" });
     run("systemctl", ["restart", service]);
   }
+  verifyInstalledVersion();
   updateJob({ status: "succeeded", completedAt: new Date().toISOString() });
 } catch (error) {
   updateJob({ status: "failed", error: error instanceof Error ? error.message : String(error), completedAt: new Date().toISOString() });

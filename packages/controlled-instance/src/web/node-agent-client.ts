@@ -21,10 +21,6 @@ export type ControlledInstanceSnapshot = {
   capabilities: Record<string, unknown>;
   target: Record<string, unknown>;
   workspace: Record<string, unknown>;
-  receiver: {
-    status: string;
-    pendingCount: number;
-  };
   apps: {
     runningCount: number;
     problemCount?: number;
@@ -131,7 +127,6 @@ export class NodeAgentRegistrationClient {
       protocolVersion: snapshot.protocolVersion,
       build: snapshot.build,
       capabilities: snapshot.capabilities,
-      receiver: snapshot.receiver,
       apps: snapshot.apps,
       aiSessions: snapshot.aiSessions,
       workspace: snapshot.workspace,

@@ -132,10 +132,6 @@ export type Project = {
   defaultImageId?: string;
   defaultNodeId?: string;
   defaultRuntimeId?: string;
-  modelSelection: {
-    codexModelId?: string;
-    claudeModelId?: string;
-  };
   workspacePolicy: WorkspacePolicy;
   labels: Record<string, string>;
   createdAt: string;
@@ -259,7 +255,6 @@ export type NodeLocalFolder = {
   name: string;
   path: string;
   defaultImageId?: string;
-  modelSelection: Project["modelSelection"];
   labels: Record<string, string>;
   createdAt: string;
   updatedAt: string;
@@ -349,6 +344,7 @@ export type ControlledInstance = {
   projectId?: string;
   source: ProjectSource;
   sourceSnapshot: Record<string, unknown>;
+  modelSelection: ModelSelection;
   nodeId: string;
   runtimeId: string;
   imageId?: string;
@@ -372,10 +368,6 @@ export type ControlledInstance = {
     error?: string;
   };
   access: InstanceAccess;
-  receiver: {
-    status: string;
-    pendingCount: number;
-  };
   apps: {
     runningCount: number;
     sessions: Array<Record<string, unknown>>;
@@ -405,16 +397,19 @@ export type ControlledInstance = {
   updatedAt: string;
 };
 
+export type ModelSelection = {
+  codexModelId?: string;
+  claudeModelId?: string;
+};
+
 export type TriggerSource =
   | { type: "schedule"; scheduleKind?: "interval"; intervalMs: number }
   | { type: "schedule"; scheduleKind: "daily"; timeOfDay: string; timezone: string }
   | { type: "schedule"; scheduleKind: "weekly"; weekdays: number[]; timeOfDay: string; timezone: string }
   | { type: "file-change"; roots: string[]; globs: string[]; ignore?: string[]; debounceMs: number }
-  | { type: "ai-session"; conversationId?: number; agent?: string; statuses?: string[]; phases?: string[] };
+  | { type: "ai-session"; agent?: string; statuses?: string[]; phases?: string[] };
 
-export type TriggerTarget =
-  | { type: "conversation"; conversationId: number }
-  | { type: "ai-session"; aiSessionId: string };
+export type TriggerTarget = { type: "ai-session"; aiSessionId: string };
 
 export type TriggerConfig = {
   configHash: string;
@@ -832,10 +827,12 @@ export type CreateControlledInstanceInput = {
   config?: {
     autoImportAgentConfigs?: boolean;
   };
+  modelSelection?: ModelSelection;
 };
 
 export type UpdateControlledInstanceInput = {
   name?: string;
+  modelSelection?: ModelSelection;
 };
 
 export type CreateProjectInput = {
@@ -844,10 +841,6 @@ export type CreateProjectInput = {
   defaultImageId?: string;
   defaultNodeId?: string;
   defaultRuntimeId?: string;
-  modelSelection?: {
-    codexModelId?: string;
-    claudeModelId?: string;
-  };
 };
 
 export type CreateModelInput = {
@@ -892,7 +885,6 @@ export type CreateNodeLocalFolderInput = {
   name: string;
   path: string;
   defaultImageId?: string;
-  modelSelection?: Project["modelSelection"];
   labels?: Record<string, string>;
 };
 

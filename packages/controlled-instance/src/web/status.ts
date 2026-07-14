@@ -4,11 +4,9 @@ import path from "node:path";
 import { executablePath } from "@task-handoff/app-runtime/catalog";
 import { AppRuntimeManager } from "@task-handoff/app-runtime/runtime";
 import { createAiSessionRegistry } from "@task-handoff/ai-session-runtime";
-import { createStorageRepositories } from "@task-handoff/core/storage/repositories";
+import type { TaskHandoffStoragePaths } from "@task-handoff/core/storage/paths";
 import { CONTROL_PLANE_PROTOCOL_VERSION } from "@task-handoff/protocol/control-plane";
 import { TriggerStore } from "../triggers/store";
-import { ReceiverControlClient } from "./receiver-control-client";
-import { ReceiverProcessManager } from "./receiver-process";
 
 export function packageVersion() {
   try {
@@ -42,7 +40,7 @@ export function controlledMode() {
   return process.env.TASK_HANDOFF_CONTROL_MODE === "controlled";
 }
 
-function storageDiagnostic(paths: ReturnType<typeof createStorageRepositories>["paths"]) {
+function storageDiagnostic(paths: TaskHandoffStoragePaths) {
   const nearestExistingDirectory = (inputPath: string) => {
     let current = inputPath;
     while (!fs.existsSync(current)) {
@@ -82,7 +80,7 @@ function storageDiagnostic(paths: ReturnType<typeof createStorageRepositories>["
   });
 }
 
-export function runtimeDiagnostics(paths: ReturnType<typeof createStorageRepositories>["paths"], noVncRoot: string | undefined) {
+export function runtimeDiagnostics(paths: TaskHandoffStoragePaths, noVncRoot: string | undefined) {
   const commands = [
     { name: "Xvfb", requiredFor: ["gui-display"] },
     { name: "openbox", requiredFor: ["gui-window-manager"] },
@@ -133,18 +131,6 @@ export function runtimeDiagnostics(paths: ReturnType<typeof createStorageReposit
   };
 }
 
-export async function pendingTaskCount(receiverControl: ReceiverControlClient) {
-  try {
-    const pending = await receiverControl.pendingList();
-    if (pending && typeof pending === "object" && "pending" in pending && Array.isArray(pending.pending)) {
-      return pending.pending.length;
-    }
-  } catch {
-    return 0;
-  }
-  return 0;
-}
-
 function controlledInstanceTarget() {
   const web = process.env.TASK_HANDOFF_INSTANCE_WEB_URL || process.env.TASK_HANDOFF_PUBLIC_WEB_URL;
   const api = process.env.TASK_HANDOFF_INSTANCE_API_URL || (web ? `${web.replace(/\/$/, "")}/api` : undefined);
@@ -156,7 +142,7 @@ function controlledInstanceTarget() {
   };
 }
 
-export function workspaceStatus(paths: ReturnType<typeof createStorageRepositories>["paths"]) {
+export function workspaceStatus(paths: TaskHandoffStoragePaths) {
   const workspacePath = process.env.TASK_HANDOFF_WORKSPACE || process.env.WORKSPACE || "/workspace";
   const exists = fs.existsSync(workspacePath);
   return {
@@ -187,7 +173,6 @@ export function controlledInstanceCapabilities(appRuntime: AppRuntimeManager) {
       automation: item.automation,
     })),
     features: {
-      receiver: true,
       appRuntime: true,
       tty: catalog.some((item) => item.kind === "tty"),
       gui: catalog.some((item) => item.kind === "gui"),
@@ -216,13 +201,10 @@ export function triggerSnapshot(triggers: TriggerStore) {
 
 export async function controlledInstanceSnapshot(
   appRuntime: AppRuntimeManager,
-  receiver: ReceiverProcessManager,
-  receiverControl: ReceiverControlClient,
-  paths: ReturnType<typeof createStorageRepositories>["paths"],
+  paths: TaskHandoffStoragePaths,
   aiSessions = createAiSessionRegistry(),
   triggers?: TriggerStore,
 ) {
-  const receiverStatus = receiver.status();
   const appSessions = appRuntime.listSessions();
   return {
     status: "running" as const,
@@ -232,10 +214,6 @@ export async function controlledInstanceSnapshot(
     build: buildInfo(),
     controlMode: (controlledMode() ? "controlled" : "standalone") as "standalone" | "controlled",
     capabilities: controlledInstanceCapabilities(appRuntime),
-    receiver: {
-      status: receiverStatus.running ? "running" : "stopped",
-      pendingCount: await pendingTaskCount(receiverControl),
-    },
     apps: {
       runningCount: appRuntime.runningSessionCount(),
       problemCount: appRuntime.problemSessionCount(),

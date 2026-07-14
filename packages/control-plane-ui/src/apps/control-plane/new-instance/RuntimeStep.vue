@@ -53,6 +53,23 @@
       <ControlPlaneInput v-model="instanceDraft.name" placeholder="Optional instance name" />
     </label>
 
+    <div v-if="codexModels.length || claudeModels.length" class="step-fields instance-model-fields">
+      <label v-if="codexModels.length">
+        <span>Codex model</span>
+        <ControlPlaneSelect v-model="instanceCodexModelValue" placeholder="Global default">
+          <ControlPlaneSelectItem :value="defaultModelValue">Global default</ControlPlaneSelectItem>
+          <ControlPlaneSelectItem v-for="model in codexModels" :key="`instance-codex-${model.id}`" :value="model.id">{{ model.name }}</ControlPlaneSelectItem>
+        </ControlPlaneSelect>
+      </label>
+      <label v-if="claudeModels.length">
+        <span>Claude model</span>
+        <ControlPlaneSelect v-model="instanceClaudeModelValue" placeholder="Global default">
+          <ControlPlaneSelectItem :value="defaultModelValue">Global default</ControlPlaneSelectItem>
+          <ControlPlaneSelectItem v-for="model in claudeModels" :key="`instance-claude-${model.id}`" :value="model.id">{{ model.name }}</ControlPlaneSelectItem>
+        </ControlPlaneSelect>
+      </label>
+    </div>
+
     <label class="config-check-field">
       <Checkbox :model-value="instanceDraft.autoImportAgentConfigs" @update:model-value="(value) => instanceDraft.autoImportAgentConfigs = value === true" />
       <span>Auto-import Codex and Claude config whenever this instance becomes reachable</span>
@@ -63,7 +80,8 @@
 
 <script setup lang="ts">
 import { Plus } from "@lucide/vue";
-import type { ImageProfile, Node, NodeRuntime } from "../../../api/types";
+import { computed } from "vue";
+import type { ImageProfile, ModelConfig, Node, NodeRuntime } from "../../../api/types";
 import { Button } from "../../../components/ui/button";
 import { Checkbox } from "../../../components/ui/checkbox";
 import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
@@ -71,11 +89,12 @@ import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
 import type { InstanceDraft, NewImageDraft, RuntimeDraft } from "./newInstanceTypes";
 
-defineProps<{
+const props = defineProps<{
   canCreateImage: boolean;
   creatingImage: boolean;
   images: ImageProfile[];
   instanceDraft: InstanceDraft;
+  models: ModelConfig[];
   newImage: NewImageDraft;
   newImageOpen: boolean;
   nodes: Node[];
@@ -85,6 +104,18 @@ defineProps<{
   selectedRuntimeRequiresImage: boolean;
   sourceSummary: string;
 }>();
+
+const defaultModelValue = "__default__";
+const codexModels = computed(() => props.models.filter((model) => model.app === "codex"));
+const claudeModels = computed(() => props.models.filter((model) => model.app === "claude"));
+const instanceCodexModelValue = computed({
+  get: () => props.instanceDraft.codexModelId || defaultModelValue,
+  set: (value: string) => { props.instanceDraft.codexModelId = value === defaultModelValue ? "" : value; },
+});
+const instanceClaudeModelValue = computed({
+  get: () => props.instanceDraft.claudeModelId || defaultModelValue,
+  set: (value: string) => { props.instanceDraft.claudeModelId = value === defaultModelValue ? "" : value; },
+});
 
 defineEmits<{
   "create-image": [];

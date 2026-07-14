@@ -10,8 +10,6 @@ function envPath(name: string, fallback: string) {
 export type TaskHandoffStoragePaths = {
   configPath: string;
   dataDir: string;
-  channelsDir: string;
-  conversationsDir: string;
   appCatalogDir: string;
   appSessionsDir: string;
   triggersDir: string;
@@ -29,8 +27,6 @@ export function resolveStoragePaths(): TaskHandoffStoragePaths {
   return {
     configPath,
     dataDir,
-    channelsDir: envPath("TASK_HANDOFF_CHANNELS_DIR", path.join(dataDir, "channels")),
-    conversationsDir: envPath("TASK_HANDOFF_CONVERSATIONS_DIR", path.join(dataDir, "conversations")),
     appCatalogDir: envPath("TASK_HANDOFF_APP_CATALOG_DIR", path.join(dataDir, "app-catalog")),
     appSessionsDir: envPath("TASK_HANDOFF_APP_SESSION_DIR", path.join(dataDir, "app-sessions")),
     triggersDir: envPath("TASK_HANDOFF_TRIGGERS_DIR", path.join(dataDir, "triggers")),

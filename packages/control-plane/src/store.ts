@@ -36,6 +36,7 @@ export type NodeAgentStorePaths = {
   localFoldersDir: string;
   nodeRuntimesDir: string;
   controlledInstancesDir: string;
+  modelEnvironmentsDir: string;
   updatesDir: string;
   logsDir: string;
 };
@@ -78,6 +79,7 @@ export function nodeAgentStorePaths(dataDir = defaultNodeAgentDataDir()): NodeAg
     localFoldersDir: path.join(root, "local-folders"),
     nodeRuntimesDir: path.join(root, "node-runtimes"),
     controlledInstancesDir: path.join(root, "controlled-instances"),
+    modelEnvironmentsDir: path.join(root, "model-environments"),
     updatesDir: path.join(root, "updates"),
     logsDir: path.join(root, "logs"),
   };

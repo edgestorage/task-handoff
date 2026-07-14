@@ -73,7 +73,7 @@ const sessions = useAppSessionsQuery();
 const tokenInput = ref(auth.token);
 const settingsOpen = ref(false);
 const settingsSection = ref("general");
-const statusText = computed(() => (status.data.value?.receiverReady ? "Receiver ready" : "Web server ready"));
+const statusText = computed(() => (status.data.value ? "Instance ready" : "Web server ready"));
 const lastEventText = computed(() => `last event ${formatEventTime(events.lastEventAt)}`);
 const authStoreHasToken = computed(() => Boolean(auth.token));
 const activeTab = computed(() => workspace.tabs.find((tab) => tab.id === workspace.activeTabId));

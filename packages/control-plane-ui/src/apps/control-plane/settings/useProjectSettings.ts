@@ -1,5 +1,5 @@
 import { computed, reactive, ref } from "vue";
-import { createProject, deleteProject, updateProject } from "../../../api/queries";
+import { createProject, deleteProject } from "../../../api/queries";
 import type { Project } from "../../../api/types";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 
@@ -15,15 +15,12 @@ type UseProjectSettingsInput = {
 export function useProjectSettings({ errorText, onProjectDeleted, projectInUse, refresh }: UseProjectSettingsInput) {
   const creatingSettingsProject = ref(false);
   const deletingProjectId = ref("");
-  const savingProjectModelId = ref("");
   const settingsProjectSuccess = ref("");
   const settingsProject = reactive({
     name: "",
     url: "",
     defaultImageId: "",
     defaultRuntimeId: "",
-    codexModelId: "",
-    claudeModelId: "",
   });
 
   const settingsDefaultImageSelectValue = computed({
@@ -38,18 +35,6 @@ export function useProjectSettings({ errorText, onProjectDeleted, projectInUse, 
       settingsProject.defaultRuntimeId = value === DEFAULT_SELECT_VALUE ? "" : value;
     },
   });
-  const settingsCodexModelSelectValue = computed({
-    get: () => settingsProject.codexModelId || DEFAULT_SELECT_VALUE,
-    set: (value: string) => {
-      settingsProject.codexModelId = value === DEFAULT_SELECT_VALUE ? "" : value;
-    },
-  });
-  const settingsClaudeModelSelectValue = computed({
-    get: () => settingsProject.claudeModelId || DEFAULT_SELECT_VALUE,
-    set: (value: string) => {
-      settingsProject.claudeModelId = value === DEFAULT_SELECT_VALUE ? "" : value;
-    },
-  });
   const canCreateSettingsProject = computed(() => {
     if (!settingsProject.name.trim()) {
       return false;
@@ -59,15 +44,6 @@ export function useProjectSettings({ errorText, onProjectDeleted, projectInUse, 
 
   function clearProjectFeedback() {
     settingsProjectSuccess.value = "";
-  }
-
-  function removeModelSelection(modelId: string) {
-    if (settingsProject.codexModelId === modelId) {
-      settingsProject.codexModelId = "";
-    }
-    if (settingsProject.claudeModelId === modelId) {
-      settingsProject.claudeModelId = "";
-    }
   }
 
   function clearDefaultImage(imageId: string) {
@@ -100,49 +76,17 @@ export function useProjectSettings({ errorText, onProjectDeleted, projectInUse, 
         },
         ...(settingsProject.defaultImageId ? { defaultImageId: settingsProject.defaultImageId } : {}),
         ...(settingsProject.defaultRuntimeId ? { defaultRuntimeId: settingsProject.defaultRuntimeId } : {}),
-        modelSelection: {
-          ...(settingsProject.codexModelId ? { codexModelId: settingsProject.codexModelId } : {}),
-          ...(settingsProject.claudeModelId ? { claudeModelId: settingsProject.claudeModelId } : {}),
-        },
       });
       settingsProjectSuccess.value = `${project.name} created.`;
       settingsProject.name = "";
       settingsProject.url = "";
       settingsProject.defaultImageId = "";
       settingsProject.defaultRuntimeId = "";
-      settingsProject.codexModelId = "";
-      settingsProject.claudeModelId = "";
       await refresh();
     } catch (error) {
       showControlPlaneToast(errorText(error));
     } finally {
       creatingSettingsProject.value = false;
-    }
-  }
-
-  function projectModelValue(project: Project, app: "codex" | "claude") {
-    return app === "codex" ? project.modelSelection.codexModelId || DEFAULT_SELECT_VALUE : project.modelSelection.claudeModelId || DEFAULT_SELECT_VALUE;
-  }
-
-  async function setProjectModel(project: Project, app: "codex" | "claude", value: string) {
-    if (savingProjectModelId.value) {
-      return;
-    }
-    const modelId = value === DEFAULT_SELECT_VALUE ? "" : value;
-    const modelSelection = {
-      ...project.modelSelection,
-      ...(app === "codex" ? { codexModelId: modelId || undefined } : { claudeModelId: modelId || undefined }),
-    };
-    savingProjectModelId.value = project.id;
-    clearProjectFeedback();
-    try {
-      const updated = await updateProject(project.id, { modelSelection });
-      settingsProjectSuccess.value = `${updated.name} models updated.`;
-      await refresh();
-    } catch (error) {
-      showControlPlaneToast(errorText(error));
-    } finally {
-      savingProjectModelId.value = "";
     }
   }
 
@@ -177,17 +121,11 @@ export function useProjectSettings({ errorText, onProjectDeleted, projectInUse, 
     createSettingsProject,
     creatingSettingsProject,
     deletingProjectId,
-    projectModelValue,
     projectSourceLabel,
-    removeModelSelection,
     removeProject,
-    savingProjectModelId,
-    settingsClaudeModelSelectValue,
-    settingsCodexModelSelectValue,
     settingsDefaultImageSelectValue,
     settingsDefaultRuntimeSelectValue,
     settingsProject,
     settingsProjectSuccess,
-    setProjectModel,
   };
 }

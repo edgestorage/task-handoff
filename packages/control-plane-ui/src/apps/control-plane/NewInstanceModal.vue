@@ -38,7 +38,6 @@
             :local-folders="localFolders.data.value || []"
             :local-path-open="localPathOpen"
             :local-path-placeholder="localPathPlaceholder"
-            :models="models.data.value || []"
             :new-project="newProject"
             :node-folder-tree-error="nodeFolderTreeError"
             :node-folder-tree-rows="nodeFolderTreeRows"
@@ -52,7 +51,6 @@
             @load-node-folder-roots="loadNodeFolderRoots"
             @select-local-folder="selectLocalFolder"
             @select-node-folder-path="selectNodeFolderPath"
-            @set-new-project-model="setNewProjectModel"
             @select-source-mode="selectSourceMode"
             @set-local-folder-path="setLocalFolderPath"
           />
@@ -64,6 +62,7 @@
             :creating-image="creatingImage"
             :images="images.data.value || []"
             :instance-draft="instanceDraft"
+            :models="models.data.value || []"
             :new-image="newImage"
             :nodes="nodes.data.value || []"
             :runtime-draft="runtimeDraft"
@@ -125,7 +124,6 @@ const wizardSteps: Array<{ id: WizardStep; label: string }> = [
   { id: "runtime", label: "Runtime" },
 ];
 const chooseFolderValue = "__choose_folder__";
-const defaultModelValue = "__default__";
 const CONTROL_PLANE_LOCAL_NODE_LABEL = "task-handoff.control-plane.local";
 
 const queryClient = useQueryClient();
@@ -172,12 +170,12 @@ const runtimeDraft = reactive<RuntimeDraft>({
 const instanceDraft = reactive<InstanceDraft>({
   name: "",
   autoImportAgentConfigs: true,
+  codexModelId: "",
+  claudeModelId: "",
 });
 const newProject = reactive<NewProjectDraft>({
   name: "",
   url: "",
-  codexModelId: "",
-  claudeModelId: "",
 });
 const newImage = reactive<NewImageDraft>({
   name: "",
@@ -377,11 +375,11 @@ watch(
   () => models.data.value,
   (items) => {
     const modelIds = new Set((items || []).map((model) => model.id));
-    if (newProject.codexModelId && !modelIds.has(newProject.codexModelId)) {
-      newProject.codexModelId = "";
+    if (instanceDraft.codexModelId && !modelIds.has(instanceDraft.codexModelId)) {
+      instanceDraft.codexModelId = "";
     }
-    if (newProject.claudeModelId && !modelIds.has(newProject.claudeModelId)) {
-      newProject.claudeModelId = "";
+    if (instanceDraft.claudeModelId && !modelIds.has(instanceDraft.claudeModelId)) {
+      instanceDraft.claudeModelId = "";
     }
   },
   { immediate: true },
@@ -397,15 +395,6 @@ function selectSourceMode(mode: SourceMode) {
   if (mode === "local-folder") {
     newProjectOpen.value = false;
   }
-}
-
-function setNewProjectModel(app: "codex" | "claude", value: string) {
-  const modelId = value === defaultModelValue ? "" : value;
-  if (app === "codex") {
-    newProject.codexModelId = modelId;
-    return;
-  }
-  newProject.claudeModelId = modelId;
 }
 
 function selectLocalFolder(value: string) {
@@ -541,10 +530,16 @@ async function createInstance() {
       config: {
         autoImportAgentConfigs: instanceDraft.autoImportAgentConfigs,
       },
+      modelSelection: {
+        ...(instanceDraft.codexModelId ? { codexModelId: instanceDraft.codexModelId } : {}),
+        ...(instanceDraft.claudeModelId ? { claudeModelId: instanceDraft.claudeModelId } : {}),
+      },
       ...(instanceDraft.name.trim() ? { name: instanceDraft.name.trim() } : {}),
     });
     instanceDraft.name = "";
     instanceDraft.autoImportAgentConfigs = true;
+    instanceDraft.codexModelId = "";
+    instanceDraft.claudeModelId = "";
   } catch (error) {
     showControlPlaneToast(errorText(error));
     return;
@@ -577,15 +572,9 @@ async function createQuickProject() {
       defaultImageId: images.data.value?.[0]?.id,
       defaultNodeId: firstNodeId,
       defaultRuntimeId: nodeRuntimes.data.value?.find((runtime) => runtime.nodeId === firstNodeId)?.id,
-      modelSelection: {
-        ...(newProject.codexModelId ? { codexModelId: newProject.codexModelId } : {}),
-        ...(newProject.claudeModelId ? { claudeModelId: newProject.claudeModelId } : {}),
-      },
     });
     newProject.name = "";
     newProject.url = "";
-    newProject.codexModelId = "";
-    newProject.claudeModelId = "";
     newProjectOpen.value = false;
     sourceDraft.mode = "project";
     sourceDraft.projectId = project.id;

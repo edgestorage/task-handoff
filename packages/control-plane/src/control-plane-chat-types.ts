@@ -20,7 +20,6 @@ export type ChatBoardInstance = {
   projectId?: string;
   status: string;
   connectionStatus: string;
-  receiver: { pendingCount: number };
   aiSessions: InstanceBoardAiSummary;
   apps?: {
     runningCount?: number;

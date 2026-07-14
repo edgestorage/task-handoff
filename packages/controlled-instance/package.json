@@ -10,10 +10,6 @@
       "types": "./src/index.ts",
       "default": "./src/index.ts"
     },
-    "./conversations/store": {
-      "types": "./src/conversations/store.ts",
-      "default": "./src/conversations/store.ts"
-    },
     "./web/*": {
       "types": "./src/web/*.ts",
       "default": "./src/web/*.ts"
@@ -31,9 +27,9 @@
     "@task-handoff/protocol": "workspace:*",
     "@fastify/static": "^8.3.0",
     "@fastify/websocket": "^11.2.0",
+    "@iarna/toml": "^2.2.5",
     "fastify": "^5.6.2",
     "httpxy": "^0.5.3",
-    "write-file-atomic": "^8.0.0",
     "ws": "^8.21.0",
     "zod": "^4.4.3"
   }

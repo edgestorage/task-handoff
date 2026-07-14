@@ -2,7 +2,6 @@ import { z } from "zod";
 import {
   ControlledInstanceSchema,
   ImageProfileSchema,
-  ProjectModelSelectionSchema,
   ProjectSourceSchema,
 } from "@task-handoff/protocol/control-plane";
 
@@ -22,7 +21,6 @@ export const CreateLocalFolderSchema = z
     name: z.string().trim().min(1).max(160),
     path: z.string().trim().min(1).max(4096),
     defaultImageId: z.string().trim().min(1).max(120).optional(),
-    modelSelection: ProjectModelSelectionSchema,
     labels: z.record(z.string(), z.string()).default({}),
   })
   .strict();
@@ -45,6 +43,7 @@ export const CreateNodeInstanceSchema = z
     source: ProjectSourceSchema,
     sourceSnapshot: z.record(z.string(), z.unknown()).default({}),
     config: ControlledInstanceSchema.shape.config.optional(),
+    modelSelection: ControlledInstanceSchema.shape.modelSelection,
     modelEnv: z.record(z.string(), z.string()).default({}),
   })
   .strict();
@@ -52,6 +51,8 @@ export const CreateNodeInstanceSchema = z
 export const UpdateNodeInstanceSchema = z
   .object({
     name: z.string().trim().min(1).max(160).optional(),
+    modelSelection: ControlledInstanceSchema.shape.modelSelection.optional(),
+    modelEnv: z.record(z.string(), z.string()).optional(),
   })
   .strict();
 

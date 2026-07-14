@@ -196,22 +196,6 @@
               <div>
                 <strong>{{ project.name }}</strong>
                 <code>{{ projectSourceLabel(project) }}</code>
-                <div v-if="codexModels.length || claudeModels.length" class="settings-form-grid project-model-selectors">
-                  <label v-if="codexModels.length">
-                    <span>Codex model</span>
-                    <ControlPlaneSelect :model-value="projectModelValue(project, 'codex')" placeholder="Global default" :disabled="savingProjectModelId === project.id" @update:model-value="setProjectModel(project, 'codex', $event)">
-                      <ControlPlaneSelectItem :value="DEFAULT_SELECT_VALUE">Global default</ControlPlaneSelectItem>
-                      <ControlPlaneSelectItem v-for="model in codexModels" :key="`${project.id}-codex-${model.id}`" :value="model.id">{{ model.name }}</ControlPlaneSelectItem>
-                    </ControlPlaneSelect>
-                  </label>
-                  <label v-if="claudeModels.length">
-                    <span>Claude model</span>
-                    <ControlPlaneSelect :model-value="projectModelValue(project, 'claude')" placeholder="Global default" :disabled="savingProjectModelId === project.id" @update:model-value="setProjectModel(project, 'claude', $event)">
-                      <ControlPlaneSelectItem :value="DEFAULT_SELECT_VALUE">Global default</ControlPlaneSelectItem>
-                      <ControlPlaneSelectItem v-for="model in claudeModels" :key="`${project.id}-claude-${model.id}`" :value="model.id">{{ model.name }}</ControlPlaneSelectItem>
-                    </ControlPlaneSelect>
-                  </label>
-                </div>
               </div>
               <div class="settings-row-actions">
                 <Badge variant="secondary">{{ projectInUse(project.id) ? "In use" : project.workspacePolicy.mode }}</Badge>
@@ -252,22 +236,6 @@
                 <ControlPlaneSelect v-model="settingsDefaultRuntimeSelectValue" placeholder="Use default">
                   <ControlPlaneSelectItem :value="DEFAULT_SELECT_VALUE">Use default</ControlPlaneSelectItem>
                   <ControlPlaneSelectItem v-for="runtime in nodeRuntimeItems" :key="runtime.id" :value="runtime.id">{{ runtimeName(runtime) }}</ControlPlaneSelectItem>
-                </ControlPlaneSelect>
-              </label>
-            </div>
-            <div v-if="codexModels.length || claudeModels.length" class="settings-form-grid">
-              <label v-if="codexModels.length">
-                <span>Codex model</span>
-                <ControlPlaneSelect v-model="settingsCodexModelSelectValue" placeholder="Global default">
-                  <ControlPlaneSelectItem :value="DEFAULT_SELECT_VALUE">Global default</ControlPlaneSelectItem>
-                  <ControlPlaneSelectItem v-for="model in codexModels" :key="`settings-project-codex-${model.id}`" :value="model.id">{{ model.name }}</ControlPlaneSelectItem>
-                </ControlPlaneSelect>
-              </label>
-              <label v-if="claudeModels.length">
-                <span>Claude model</span>
-                <ControlPlaneSelect v-model="settingsClaudeModelSelectValue" placeholder="Global default">
-                  <ControlPlaneSelectItem :value="DEFAULT_SELECT_VALUE">Global default</ControlPlaneSelectItem>
-                  <ControlPlaneSelectItem v-for="model in claudeModels" :key="`settings-project-claude-${model.id}`" :value="model.id">{{ model.name }}</ControlPlaneSelectItem>
                 </ControlPlaneSelect>
               </label>
             </div>
@@ -630,18 +598,12 @@ const {
   createSettingsProject,
   creatingSettingsProject,
   deletingProjectId,
-  projectModelValue,
   projectSourceLabel,
-  removeModelSelection,
   removeProject,
-  savingProjectModelId,
-  settingsClaudeModelSelectValue,
-  settingsCodexModelSelectValue,
   settingsDefaultImageSelectValue,
   settingsDefaultRuntimeSelectValue,
   settingsProject,
   settingsProjectSuccess,
-  setProjectModel,
 } = useProjectSettings({
   errorText,
   onProjectDeleted() {},
@@ -819,7 +781,7 @@ const {
 } = useModelSettings({
   errorText,
   models: () => models.data.value || [],
-  onModelDeleted: removeModelSelection,
+  onModelDeleted() {},
   refresh,
 });
 const {

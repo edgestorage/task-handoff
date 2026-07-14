@@ -11,17 +11,17 @@ product is organized around four cooperating layers:
   configuration, runtime resources, controlled instance lifecycle, local folder
   inventory, and host-side session launching.
 - **Controlled instance**: a managed workspace runtime, usually Docker today,
-  with its own controlled instance API, app runtime, receiver, and metadata.
+  with its own controlled instance API, app runtime, AI sessions, triggers, and metadata.
   The agent is responsible for starting, restoring, stopping, and proxying it.
-- **Receiver and AI sessions**: the receiver is now a reusable messaging layer
-  for task results, replies, approvals, and chat bridge traffic. AI sessions are
-  the shared source of truth for conversation state and controls, whether they
-  are surfaced locally in a controlled instance or through the control plane.
+- **Chat gateway and AI sessions**: the control plane owns Telegram, DingDing,
+  Wechat, bindings, and approval routes. AI sessions in each controlled instance
+  are the source of truth for conversation state and controls.
 
-Chat integrations such as Telegram, DingDing, Wechat, and future bridges should
-route through this shared receiver/session model. A chat entry has global single
-ownership: it should not be bound to both the control plane and a controlled
-instance, or to multiple controlled instances at the same time.
+Chat integrations such as Telegram, DingDing, Wechat, and future bridges route
+through the control-plane gateway to the selected instance's AI-session API.
+Controlled instances do not store chat credentials, channels, receiver
+conversations, or receiver pending tasks. The standalone `task-handoff receiver`
+CLI remains available as an independent legacy workflow.
 
 ## Runtime Model
 

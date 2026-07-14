@@ -58,9 +58,9 @@ import { ChatBridgeService } from "./chat-bridge-service.ts";
 import { ChatSessionService } from "./chat-session-service.ts";
 import { ControlPlaneChatSessionRuntime } from "./control-plane-chat-session-runtime.ts";
 import { configSyncPresets, type ConfigSyncPreset } from "./config-sync.ts";
-import { modelEnvForInstance, modelEnvForProject, modelEnvForSourceSnapshot } from "./model-env.ts";
+import { modelEnvForInstance, modelEnvForSelection } from "./model-env.ts";
 import { relativeNodePathSegments, resolveNodePath } from "./node-path.ts";
-import { normalizeModel, normalizeModelSelection, normalizeProject, publicInstance, publicInstanceWithAccess, publicModel, publicNode, publicNodeAgentCapabilities, publicProject, workspacePolicyForSource } from "./public-records.ts";
+import { normalizeModel, normalizeProject, publicInstance, publicInstanceWithAccess, publicModel, publicNode, publicNodeAgentCapabilities, publicProject, workspacePolicyForSource } from "./public-records.ts";
 import { controlPlaneDiagnosticLogsEnabled, errorMessage, now, protocolMismatchError, throwNotFound } from "./service-helpers.ts";
 import {
   ConnectNodeRemoteInputSchema,
@@ -501,7 +501,7 @@ export class ControlPlaneService {
     return this.models.list().map((model) => this.normalizeModelRecord(model)).sort((a, b) => a.order - b.order || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
   }
 
-  createModel(input: unknown) {
+  async createModel(input: unknown) {
     const parsedInput = CreateModelInputSchema.parse(input);
     const timestamp = now();
     const nextOrder = this.nextModelOrder();
@@ -514,10 +514,14 @@ export class ControlPlaneService {
       createdAt: timestamp,
       updatedAt: timestamp,
     });
+    const currentModels = this.listAllModels();
+    const nextModels = this.sortedModels([...currentModels, model]);
+    const instances = await this.requireCompleteFleetInstances("create a model");
+    await this.syncInstanceModelEnvironments(instances, currentModels, nextModels);
     return publicModel(this.models.put(model));
   }
 
-  updateModel(id: string, input: unknown) {
+  async updateModel(id: string, input: unknown) {
     const parsedInput: UpdateModelInput = UpdateModelInputSchema.parse(input);
     const current = this.requireModelSecret(id);
     const updated = ModelConfigSchema.parse({
@@ -528,29 +532,29 @@ export class ControlPlaneService {
       createdAt: current.createdAt,
       updatedAt: now(),
     });
+    const currentModels = this.listAllModels();
+    const nextModels = this.sortedModels(currentModels.map((model) => model.id === id ? updated : model));
+    const instances = await this.requireCompleteFleetInstances("update a model");
+    await this.syncInstanceModelEnvironments(instances, currentModels, nextModels);
     return publicModel(this.models.put(updated));
   }
 
-  deleteModel(id: string) {
-    const deleted = this.models.delete(id);
-    if (deleted) {
-      for (const project of this.listProjects()) {
-        if (project.modelSelection.codexModelId === id || project.modelSelection.claudeModelId === id) {
-          this.projects.put(ProjectSchema.parse({
-            ...project,
-            modelSelection: {
-              ...(project.modelSelection.codexModelId === id ? {} : { codexModelId: project.modelSelection.codexModelId }),
-              ...(project.modelSelection.claudeModelId === id ? {} : { claudeModelId: project.modelSelection.claudeModelId }),
-            },
-            updatedAt: now(),
-          }));
-        }
-      }
+  async deleteModel(id: string) {
+    const instances = await this.requireCompleteFleetInstances("delete a model");
+    const references = instances.filter((instance) =>
+      instance.modelSelection.codexModelId === id || instance.modelSelection.claudeModelId === id);
+    if (references.length) {
+      const error = new Error(`Model ${id} is used by ${references.length} instance${references.length === 1 ? "" : "s"}.`);
+      Object.assign(error, { statusCode: 409, code: "MODEL_IN_USE" });
+      throw error;
     }
-    return deleted;
+    const currentModels = this.listAllModels();
+    const nextModels = currentModels.filter((model) => model.id !== id);
+    await this.syncInstanceModelEnvironments(instances, currentModels, nextModels);
+    return this.models.delete(id);
   }
 
-  reorderModels(ids: string[]) {
+  async reorderModels(ids: string[]) {
     const uniqueIds = [...new Set(ids)];
     const byId = new Map(this.models.list().map((model) => [model.id, model]));
     for (const id of uniqueIds) {
@@ -558,6 +562,13 @@ export class ControlPlaneService {
         throwNotFound("MODEL_NOT_FOUND", `Model ${id} was not found.`);
       }
     }
+    const nextModels = this.sortedModels(this.listAllModels().map((model) => {
+      const index = uniqueIds.indexOf(model.id);
+      return index < 0 ? model : ModelConfigSchema.parse({ ...model, order: (index + 1) * 100, updatedAt: now() });
+    }));
+    const currentModels = this.listAllModels();
+    const instances = await this.requireCompleteFleetInstances("reorder models");
+    await this.syncInstanceModelEnvironments(instances, currentModels, nextModels);
     uniqueIds.forEach((id, index) => {
       const current = byId.get(id)!;
       this.models.put(ModelConfigSchema.parse({ ...current, order: (index + 1) * 100, updatedAt: now() }));
@@ -569,7 +580,6 @@ export class ControlPlaneService {
     const parsedInput = CreateProjectInputSchema.parse(input);
     const timestamp = now();
     const source = ProjectSourceSchema.parse(parsedInput.source);
-    const modelSelection = this.validateProjectModelSelection(parsedInput.modelSelection || {});
     const project = ProjectSchema.parse({
       ...parsedInput,
       id: parsedInput.id || createId("proj"),
@@ -577,7 +587,6 @@ export class ControlPlaneService {
       defaultImageId: parsedInput.defaultImageId || "img_default",
       defaultNodeId: parsedInput.defaultNodeId || this.defaultNodeId(),
       defaultRuntimeId: parsedInput.defaultRuntimeId || "runtime_local_docker",
-      modelSelection,
       workspacePolicy: WorkspacePolicySchema.parse(parsedInput.workspacePolicy || workspacePolicyForSource(source)),
       labels: parsedInput.labels || {},
       createdAt: timestamp,
@@ -590,13 +599,11 @@ export class ControlPlaneService {
     const parsedInput: UpdateProjectInput = UpdateProjectInputSchema.parse(input);
     const current = this.requireProject(id);
     const source = parsedInput.source ? ProjectSourceSchema.parse(parsedInput.source) : current.source;
-    const modelSelection = parsedInput.modelSelection ? this.validateProjectModelSelection(parsedInput.modelSelection) : current.modelSelection;
     const updated = ProjectSchema.parse({
       ...current,
       ...parsedInput,
       id,
       source,
-      modelSelection,
       workspacePolicy: parsedInput.workspacePolicy ? WorkspacePolicySchema.parse(parsedInput.workspacePolicy) : current.workspacePolicy,
       createdAt: current.createdAt,
       updatedAt: now(),
@@ -1054,13 +1061,13 @@ export class ControlPlaneService {
             name: typeof sourceSnapshot.name === "string" ? sourceSnapshot.name : "Local folder",
             path: source.path,
             defaultImageId: image?.id,
-            modelSelection: normalizeModelSelection(sourceSnapshot),
           });
         source = { ...source, localFolderId: folder.id, ownerNodeId: folder.nodeId, path: folder.path };
         sourceSnapshot = folder as Record<string, unknown>;
       }
     }
 
+    const modelSelection = this.validateModelSelection(parsedInput.modelSelection || {});
     const instance = await this.nodeAgentGateway.createInstance(node, {
       id: parsedInput.id,
       name: parsedInput.name,
@@ -1070,7 +1077,8 @@ export class ControlPlaneService {
       source,
       sourceSnapshot,
       config: parsedInput.config,
-      modelEnv: project ? this.modelEnvForProject(project) : this.modelEnvForSourceSnapshot(source, sourceSnapshot),
+      modelSelection,
+      modelEnv: modelEnvForSelection(modelSelection, this.listAllModels()),
     });
     return {
       ...publicInstanceWithAccess(instance),
@@ -1082,7 +1090,14 @@ export class ControlPlaneService {
     const parsedInput: UpdateInstanceInput = UpdateInstanceInputSchema.parse(input);
     const current = await this.requireNodeInstance(id);
     const node = this.requireNode(current.nodeId);
-    const instance = await this.nodeAgentGateway.updateInstance(node, id, parsedInput);
+    const modelSelection = parsedInput.modelSelection ? this.validateModelSelection(parsedInput.modelSelection) : undefined;
+    const instance = await this.nodeAgentGateway.updateInstance(node, id, {
+      ...parsedInput,
+      ...(modelSelection ? {
+        modelSelection,
+        modelEnv: modelEnvForSelection(modelSelection, this.listAllModels()),
+      } : {}),
+    });
     return publicInstanceWithAccess(instance);
   }
 
@@ -1683,8 +1698,39 @@ export class ControlPlaneService {
     return modelEnvForInstance(instance, this.listAllModels());
   }
 
-  private modelEnvForSourceSnapshot(source: Project["source"], snapshot: Record<string, unknown>) {
-    return modelEnvForSourceSnapshot(source, snapshot, this.listAllModels());
+  private sortedModels(models: ModelConfig[]) {
+    return [...models].sort((a, b) => a.order - b.order || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  }
+
+  private async requireCompleteFleetInstances(operation: string) {
+    const result = await this.nodeAgentGateway.listFleetInstances(this.listNodes());
+    if (result.nodeErrors.length) {
+      const error = new Error(`Cannot ${operation} while instance references are unavailable on ${result.nodeErrors.length} node${result.nodeErrors.length === 1 ? "" : "s"}.`);
+      Object.assign(error, { statusCode: 503, code: "MODEL_FLEET_INCOMPLETE" });
+      throw error;
+    }
+    return result.items;
+  }
+
+  private async syncInstanceModelEnvironments(instances: ControlledInstance[], currentModels: ModelConfig[], nextModels: ModelConfig[]) {
+    const changes = instances.map((instance) => ({
+      instance,
+      current: modelEnvForInstance(instance, currentModels),
+      next: modelEnvForInstance(instance, nextModels),
+    })).filter(({ current, next }) => JSON.stringify(current) !== JSON.stringify(next));
+    const completed: typeof changes = [];
+    try {
+      for (const change of changes) {
+        await this.nodeAgentGateway.updateInstance(this.requireNode(change.instance.nodeId), change.instance.id, { modelEnv: change.next });
+        completed.push(change);
+      }
+    } catch (cause) {
+      await Promise.allSettled(completed.map((change) =>
+        this.nodeAgentGateway.updateInstance(this.requireNode(change.instance.nodeId), change.instance.id, { modelEnv: change.current })));
+      const error = new Error(`Instance model configuration could not be synchronized: ${errorMessage(cause)}`);
+      Object.assign(error, { statusCode: 502, code: "MODEL_ENV_SYNC_FAILED", cause });
+      throw error;
+    }
   }
 
   private nextModelOrder() {
@@ -1692,7 +1738,7 @@ export class ControlPlaneService {
     return last + 100;
   }
 
-  private validateProjectModelSelection(selection: { codexModelId?: string; claudeModelId?: string }) {
+  private validateModelSelection(selection: { codexModelId?: string; claudeModelId?: string }) {
     const byId = new Map(this.listAllModels().map((model) => [model.id, model]));
     const result: { codexModelId?: string; claudeModelId?: string } = {};
     const codexModelId = selection.codexModelId?.trim();
@@ -1707,6 +1753,11 @@ export class ControlPlaneService {
         Object.assign(error, { statusCode: 400, code: "MODEL_APP_MISMATCH" });
         throw error;
       }
+      if (!model.enabled) {
+        const error = new Error(`Model ${codexModelId} is disabled.`);
+        Object.assign(error, { statusCode: 400, code: "MODEL_DISABLED" });
+        throw error;
+      }
       result.codexModelId = codexModelId;
     }
     if (claudeModelId) {
@@ -1719,13 +1770,14 @@ export class ControlPlaneService {
         Object.assign(error, { statusCode: 400, code: "MODEL_APP_MISMATCH" });
         throw error;
       }
+      if (!model.enabled) {
+        const error = new Error(`Model ${claudeModelId} is disabled.`);
+        Object.assign(error, { statusCode: 400, code: "MODEL_DISABLED" });
+        throw error;
+      }
       result.claudeModelId = claudeModelId;
     }
     return result;
-  }
-
-  private modelEnvForProject(project: Project) {
-    return modelEnvForProject(project, this.listAllModels());
   }
 
   requireProject(id: string) {

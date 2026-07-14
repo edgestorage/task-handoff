@@ -176,6 +176,7 @@ test("server update CLI defaults to the installed release channel", async () => 
 
 test("node update worker uses Commander for required and validated options", () => {
   const worker = path.join(root, "scripts", "node-update-worker.cjs");
+  const source = fs.readFileSync(worker, "utf8");
   const help = spawnSync(process.execPath, [worker, "--help"], { encoding: "utf8" });
   assert.equal(help.status, 0);
   assert.match(help.stdout, /--job-file <path>/);
@@ -184,6 +185,8 @@ test("node update worker uses Commander for required and validated options", () 
   const invalid = spawnSync(process.execPath, [worker, "--job-file", "/tmp/unused-job.json", "--target-version", "not-semver"], { encoding: "utf8" });
   assert.notEqual(invalid.status, 0);
   assert.match(invalid.stderr, /must be an exact semantic version/);
+  assert.match(source, /verifyInstalledVersion\(\)/);
+  assert.match(source, /expected \$\{targetVersion\}, found/);
 });
 
 test("runtime package scripts use Commander for validated target selection", () => {

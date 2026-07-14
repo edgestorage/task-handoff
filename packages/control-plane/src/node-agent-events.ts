@@ -150,7 +150,7 @@ export class NodeAgentInstanceEventForwarder {
       retry?.timer.reset();
       this.retries.set(instanceId, { timer: retry?.timer || new EventConnectionRetryTimer(), url });
       if (socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ v: 1, type: "subscribe", topics: [AiSessionEventTopic, "app.sessions", "receiver", "instances"] }));
+        socket.send(JSON.stringify({ v: 1, type: "subscribe", topics: [AiSessionEventTopic, "app.sessions", "instances"] }));
         this.logger?.info?.({ instanceId, url }, "ai-session.event.forward.connect");
         this.logger?.info?.({ instanceId, url }, "app-session.event.forward.connect");
       }

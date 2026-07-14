@@ -8,6 +8,8 @@ import {
   type UpdateJob,
 } from "@task-handoff/protocol/control-plane";
 import semver from "semver";
+import fs from "node:fs";
+import path from "node:path";
 import type { CommandRunner } from "./executor.ts";
 import { createId, JsonCollection, type NodeAgentStorePaths } from "./store.ts";
 
@@ -37,6 +39,66 @@ async function npmVersion(runCommand: CommandRunner, packageName: string, channe
 
 export function npmCommand() {
   return process.env.TASK_HANDOFF_NPM_COMMAND || "npm";
+}
+
+function packageRootFromExecutable(executable: string, packageName: string) {
+  if (!path.isAbsolute(executable) || !fs.existsSync(executable)) return undefined;
+  const resolved = fs.realpathSync(executable);
+  let current = fs.statSync(resolved).isDirectory() ? resolved : path.dirname(resolved);
+  while (current !== path.dirname(current)) {
+    try {
+      const manifest = JSON.parse(fs.readFileSync(path.join(current, "package.json"), "utf8"));
+      if (manifest.name === packageName) return current;
+    } catch {}
+    current = path.dirname(current);
+  }
+  return undefined;
+}
+
+function ancestorPackageRoot(start: string, packageName: string) {
+  let current = path.dirname(start);
+  while (current !== path.dirname(current)) {
+    try {
+      const manifest = JSON.parse(fs.readFileSync(path.join(current, "package.json"), "utf8"));
+      if (manifest.name === packageName) return current;
+    } catch {}
+    current = path.dirname(current);
+  }
+  return undefined;
+}
+
+export function managedNpmPackageInstall(input: {
+  executable: string;
+  globalPrefix: string;
+  packageName: string;
+  targetVersion: string;
+}) {
+  const currentPackageRoot = packageRootFromExecutable(input.executable, input.packageName);
+  const aggregateRoot = currentPackageRoot && ancestorPackageRoot(currentPackageRoot, "@task-handoff/server");
+  if (aggregateRoot) {
+    return {
+      args: ["install", "--prefix", aggregateRoot, "--no-save", `${input.packageName}@${input.targetVersion}`],
+      manifestPath: path.join(currentPackageRoot, "package.json"),
+    };
+  }
+  return {
+    args: ["install", "--global", "--prefix", input.globalPrefix, `${input.packageName}@${input.targetVersion}`],
+    manifestPath: currentPackageRoot
+      ? path.join(currentPackageRoot, "package.json")
+      : path.join(input.globalPrefix, "lib", "node_modules", ...input.packageName.split("/"), "package.json"),
+  };
+}
+
+export function assertInstalledPackageVersion(manifestPath: string, expectedVersion: string) {
+  let installedVersion: unknown;
+  try {
+    installedVersion = JSON.parse(fs.readFileSync(manifestPath, "utf8")).version;
+  } catch (error) {
+    throw new Error(`Could not verify the updated package at ${manifestPath}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (installedVersion !== expectedVersion) {
+    throw new Error(`Updated package verification failed: expected ${expectedVersion}, found ${String(installedVersion || "unknown")}.`);
+  }
 }
 
 function isNpmNotFoundError(error: unknown) {

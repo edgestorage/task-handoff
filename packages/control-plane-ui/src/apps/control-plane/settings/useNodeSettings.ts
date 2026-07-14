@@ -255,6 +255,9 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
   async function loadManagedUpdateJobs(nodeId: string) {
     try {
       updateJobs.value = await listNodeUpdateJobs(nodeId);
+      const succeededTargets = updateJobs.value.filter((job) => job.status === "succeeded").map((job) => managedUpdateKey(nodeId, job.target));
+      for (const key of succeededTargets) delete updateChecks[key];
+      await Promise.all([checkSettingsNode(nodeId), refresh()]);
     } catch (error) {
       showControlPlaneToast(errorText(error));
     }

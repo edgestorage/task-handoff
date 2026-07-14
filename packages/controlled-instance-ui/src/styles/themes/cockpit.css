@@ -152,8 +152,6 @@ body {
 .row span,
 .field-row,
 .catalog-editor p,
-.settings-meta,
-.conversation-meta,
 .log-file header span {
   color: var(--text-muted);
 }
@@ -380,15 +378,13 @@ body {
 
 .stats div,
 .row,
-.receiver-logs,
 .diagnostics-card,
 .session-card,
 .catalog-editor,
 .settings-list .rounded-lg,
 .catalog .rounded-lg,
 .rounded-lg.border.bg-card,
-.log-file,
-.channel-grid .rounded-lg {
+.log-file {
   border-color: var(--line);
   background: var(--surface-raised);
   color: var(--text);
@@ -418,7 +414,6 @@ textarea:focus,
   box-shadow: 0 0 0 2px var(--brand-accent-soft);
 }
 
-.receiver-logs pre,
 .logs-panel pre,
 .catalog-json,
 .terminal-canvas-shell,
@@ -502,13 +497,8 @@ textarea:focus,
 .settings-modal p,
 .settings-modal dt,
 .settings-modal .field-row,
-.settings-modal .settings-meta,
-.settings-modal .conversation-meta,
-.settings-modal .task-meta,
 .settings-modal .item-meta,
 .settings-modal .session-metadata dt,
-.settings-modal .conversation-cwd,
-.settings-modal .conversation-card-footer > span,
 .settings-modal .logs-empty,
 .settings-modal .logs-meta {
   color: var(--console-muted);
@@ -517,13 +507,7 @@ textarea:focus,
 .settings-modal .rounded-xl.border.bg-card,
 .settings-modal .bg-card,
 .settings-modal .stats div,
-.settings-modal .receiver-logs,
 .settings-modal .diagnostics-card,
-.settings-modal .conversation-card,
-.settings-modal .conversation-row,
-.settings-modal .task-summary div,
-.settings-modal .task-card,
-.settings-modal .queued-row,
 .settings-modal .log-file,
 .settings-modal .settings-list > .rounded-xl,
 .settings-modal .catalog-editor {
@@ -540,16 +524,12 @@ textarea:focus,
 
 .settings-modal .rounded-xl.border.bg-card > div:first-child,
 .settings-modal .settings-list > .rounded-xl > div:first-child,
-.settings-modal .receiver-logs .section-head,
 .settings-modal .log-file header {
   border-bottom: 1px solid var(--console-border);
 }
 
 .settings-modal h3,
 .settings-modal .item-title,
-.settings-modal .conversation-title,
-.settings-modal .task-title,
-.settings-modal .queued-row strong,
 .settings-modal .diagnostics-card h2 {
   color: var(--console-text);
 }
@@ -615,15 +595,13 @@ textarea:focus,
   color: var(--workspace-button-hover-text) !important;
 }
 
-.settings-modal button.inline-flex.bg-primary,
-.settings-modal .channel-save {
+.settings-modal button.inline-flex.bg-primary {
   border-color: var(--settings-console-primary-border) !important;
   background: var(--settings-console-primary-bg) !important;
   color: var(--settings-console-primary-text) !important;
 }
 
-.settings-modal button.inline-flex.bg-primary:hover,
-.settings-modal .channel-save:hover {
+.settings-modal button.inline-flex.bg-primary:hover {
   background: var(--settings-console-primary-hover-bg) !important;
 }
 
@@ -639,53 +617,18 @@ textarea:focus,
   border-color: var(--line-strong) !important;
 }
 
-.settings-modal .conversation-form,
-.settings-modal .conversation-edit-grid,
-.settings-modal .custom-app-form,
-.settings-modal .settings-form {
+.settings-modal .custom-app-form {
   gap: 10px 12px;
 }
 
-.settings-modal .conversation-card,
-.settings-modal .task-card,
-.settings-modal .queued-row {
-  background: var(--console-surface-2) !important;
-}
-
-.settings-modal .conversation-card-header,
-.settings-modal .task-header,
-.settings-modal .queued-header {
-  border-bottom: 1px solid var(--console-border);
-  padding-bottom: 10px;
-}
-
-.settings-modal .conversation-card-footer {
-  border-top: 1px solid var(--console-border);
-  padding-top: 10px;
-}
-
-.settings-modal .task-summary div {
-  min-height: 78px;
-}
-
-.settings-modal .task-summary dt,
 .settings-modal .session-metadata dt,
 .settings-modal .diagnostics-card dt {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   letter-spacing: 0;
 }
 
-.settings-modal .task-summary dd {
-  color: var(--console-accent);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-}
-
-.settings-modal .task-result,
-.settings-modal .queued-value,
-.settings-modal .receiver-logs pre,
 .settings-modal .log-file pre,
 .settings-modal .catalog-json,
-.settings-modal .settings-json,
 .settings-modal .launch-json {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -732,13 +675,6 @@ textarea:focus,
     grid-template-columns: 150px minmax(0, 1fr);
   }
 
-  .settings-modal .conversation-wide-field {
-    grid-column: auto;
-  }
-
-  .settings-modal .task-header,
-  .settings-modal .conversation-card-header,
-  .settings-modal .conversation-card-footer,
   .settings-modal .session-header {
     align-items: flex-start;
     flex-direction: column;
@@ -796,53 +732,34 @@ textarea:focus,
   padding-bottom: 7px;
 }
 
-.settings-modal .conversations-layout,
-.settings-modal .tasks-layout,
-.settings-modal .settings-layout,
-.settings-modal .settings-list,
-.settings-modal .task-list,
-.settings-modal .queued-list,
-.settings-modal .conversation-list,
-.settings-modal .channel-grid {
+.settings-modal .settings-list {
   gap: 8px;
 }
 
 .settings-modal .rounded-xl.border.bg-card,
 .settings-modal .bg-card,
 .settings-modal .stats div,
-.settings-modal .receiver-logs,
 .settings-modal .diagnostics-card,
-.settings-modal .conversation-card,
-.settings-modal .conversation-row,
-.settings-modal .task-summary div,
-.settings-modal .task-card,
-.settings-modal .queued-row,
 .settings-modal .log-file,
 .settings-modal .settings-list > .rounded-xl,
-.settings-modal .catalog-editor,
-.settings-modal .channel-card {
+.settings-modal .catalog-editor {
   border-radius: 6px !important;
   background: var(--console-surface) !important;
   box-shadow: none !important;
 }
 
 .settings-modal .rounded-xl.border.bg-card > div,
-.settings-modal .settings-list > .rounded-xl > div,
-.settings-modal .channel-header,
-.settings-modal .channel-form,
-.settings-modal .channel-actions {
+.settings-modal .settings-list > .rounded-xl > div {
   padding: 10px 12px;
 }
 
 .settings-modal .rounded-xl.border.bg-card > div:first-child,
-.settings-modal .settings-list > .rounded-xl > div:first-child,
-.settings-modal .channel-header {
+.settings-modal .settings-list > .rounded-xl > div:first-child {
   padding-bottom: 9px;
 }
 
 .settings-modal .rounded-xl.border.bg-card > div:last-child,
-.settings-modal .settings-list > .rounded-xl > div:last-child,
-.settings-modal .channel-actions {
+.settings-modal .settings-list > .rounded-xl > div:last-child {
   padding-top: 9px;
 }
 
@@ -853,8 +770,6 @@ textarea:focus,
 .settings-modal h3 + p,
 .settings-modal .text-muted-foreground,
 .settings-modal .field-row,
-.settings-modal .conversation-meta,
-.settings-modal .task-meta,
 .settings-modal .item-meta,
 .settings-modal .session-metadata dt,
 .settings-modal .logs-empty,
@@ -889,51 +804,12 @@ textarea:focus,
   padding-inline: 10px;
 }
 
-.settings-modal .conversation-form,
-.settings-modal .conversation-edit-grid,
-.settings-modal .custom-app-form,
-.settings-modal .settings-form,
-.settings-modal .channel-form {
+.settings-modal .custom-app-form {
   gap: 8px;
 }
 
-.settings-modal .conversation-card,
-.settings-modal .task-card,
-.settings-modal .queued-row {
-  gap: 8px;
-  padding: 10px;
-}
-
-.settings-modal .conversation-card-header,
-.settings-modal .task-header,
-.settings-modal .queued-header {
-  padding-bottom: 8px;
-}
-
-.settings-modal .conversation-card-footer {
-  padding-top: 8px;
-}
-
-.settings-modal .task-summary {
-  gap: 8px;
-  margin-bottom: 10px;
-}
-
-.settings-modal .task-summary div {
-  min-height: 58px;
-  padding: 8px 10px;
-}
-
-.settings-modal .task-summary dd {
-  font-size: 18px;
-}
-
-.settings-modal .task-result,
-.settings-modal .queued-value,
-.settings-modal .receiver-logs pre,
 .settings-modal .log-file pre,
 .settings-modal .catalog-json,
-.settings-modal .settings-json,
 .settings-modal .launch-json {
   border-radius: 5px;
   box-shadow: none;
@@ -942,23 +818,6 @@ textarea:focus,
 .settings-modal .logs-empty {
   border-radius: 5px;
   padding: 8px 10px;
-}
-
-.settings-modal .channel-glyph {
-  width: 30px;
-  height: 30px;
-  border-radius: 6px;
-}
-
-.settings-modal .channel-toggle {
-  border-radius: 5px;
-  padding: 7px 9px;
-}
-
-@media (min-width: 1180px) {
-  .settings-modal .channel-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
 }
 
 /* Refined settings navigation state */

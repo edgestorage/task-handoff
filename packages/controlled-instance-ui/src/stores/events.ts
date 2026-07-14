@@ -54,10 +54,7 @@ function eventUrl(token: string) {
 }
 
 function queryKeysForEvent(type: string) {
-  if (type.startsWith("receiver.")) return [["status"]];
-  if (type.startsWith("conversation.")) return [["conversations"], ["settings"], ["status"]];
   if (type.startsWith("trigger.")) return [["triggers"], ["status"]];
-  if (type.startsWith("channel.")) return [["channels"]];
   return [];
 }
 

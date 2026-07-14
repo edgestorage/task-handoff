@@ -13,18 +13,9 @@ import type {
   AiSessionTranscriptTail,
   AiSessionsSnapshot,
   AuthStatusResponse,
-  ChannelPatch,
-  ChannelView,
-  ConversationListResponse,
-  ConversationPatch,
-  ConversationRecord,
   CustomAppCatalog,
   DiagnosticsResponse,
-  PendingTasksResponse,
-  ReceiverLogsResponse,
-  SettingsPatch,
   StatusResponse,
-  TaskHandoffSettings,
   TriggerCreateInput,
   TriggerIndex,
 } from "./types";
@@ -69,105 +60,6 @@ export function useDiagnosticsQuery() {
     refetchInterval: 15_000,
     retry: retryUnlessUnauthorized,
   });
-}
-
-export function useReceiverLogsQuery() {
-  return useQuery({
-    queryKey: ["receiver-logs"],
-    queryFn: () => getApiData<ReceiverLogsResponse>("receiver/logs"),
-    enabled: protectedQueryEnabled(),
-    refetchInterval: 5_000,
-    retry: retryUnlessUnauthorized,
-  });
-}
-
-export function useChannelsQuery() {
-  return useQuery({
-    queryKey: ["channels"],
-    queryFn: () => getApiData<ChannelView[]>("channels"),
-    enabled: protectedQueryEnabled(),
-    retry: retryUnlessUnauthorized,
-  });
-}
-
-export function useSettingsQuery() {
-  return useQuery({
-    queryKey: ["settings"],
-    queryFn: () => getApiData<TaskHandoffSettings>("settings"),
-    enabled: protectedQueryEnabled(),
-    retry: retryUnlessUnauthorized,
-  });
-}
-
-export function saveSettings(patch: SettingsPatch) {
-  return patchApiData<TaskHandoffSettings>("settings", patch);
-}
-
-export function useConversationsQuery() {
-  return useQuery({
-    queryKey: ["conversations"],
-    queryFn: () => getApiData<ConversationListResponse>("conversations"),
-    enabled: protectedQueryEnabled(),
-    retry: retryUnlessUnauthorized,
-  });
-}
-
-export function createConversation(patch: ConversationPatch = {}) {
-  return postApiData<ConversationRecord>("conversations", patch);
-}
-
-export function saveConversation(id: number, patch: ConversationPatch) {
-  return patchApiData<ConversationRecord>(`conversations/${id}`, patch);
-}
-
-export function useConversation(id: number) {
-  return postApiData<ConversationRecord>(`conversations/${id}/use`);
-}
-
-export function closeConversation(id: number) {
-  return postApiData<ConversationRecord>(`conversations/${id}/close`);
-}
-
-export function reopenConversation(id: number) {
-  return postApiData<ConversationRecord>(`conversations/${id}/reopen`);
-}
-
-export function deleteConversation(id: number) {
-  return deleteApiData<ConversationRecord>(`conversations/${id}`);
-}
-
-export function usePendingTasksQuery() {
-  return useQuery({
-    queryKey: ["pending-tasks"],
-    queryFn: () => getApiData<PendingTasksResponse>("tasks/pending"),
-    enabled: protectedQueryEnabled(),
-    refetchInterval: 5_000,
-    retry: false,
-  });
-}
-
-export function replyTask(id: number, markdown: string) {
-  return postApiData<{ id: number; status: string }>(`tasks/${id}/reply`, { markdown });
-}
-
-export function dropTask(id: number) {
-  return postApiData<{ id: number; status: string }>(`tasks/${id}/drop`);
-}
-
-export function approveTask(id: number) {
-  return postApiData<{ id: number; status: string }>(`tasks/${id}/approve`);
-}
-
-export function denyTask(id: number) {
-  return postApiData<{ id: number; status: string }>(`tasks/${id}/deny`);
-}
-
-export function skipTask(id: number) {
-  return postApiData<{ id: number; status: string }>(`tasks/${id}/skip`);
-}
-
-export function saveChannel(channel: ChannelView["channel"], instanceId: string, patch: ChannelPatch) {
-  return patchApiData<ChannelView>(`channels/${channel}/${instanceId}`, patch);
 }
 
 export function useAppCatalogQuery() {
@@ -327,12 +219,4 @@ export function resizeAppSessionDisplay(sessionId: string, display: NonNullable<
 
 export function deleteAppSession(sessionId: string) {
   return deleteApiData<AppSession>(`apps/sessions/${sessionId}`);
-}
-
-export function startReceiver() {
-  return postApiData<StatusResponse["receiver"]>("receiver/start");
-}
-
-export function stopReceiver() {
-  return postApiData<StatusResponse["receiver"]>("receiver/stop");
 }

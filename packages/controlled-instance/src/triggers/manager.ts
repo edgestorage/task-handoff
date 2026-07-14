@@ -176,9 +176,6 @@ export class TriggerManager {
     if (config.source.type !== "ai-session") {
       return false;
     }
-    if (config.source.conversationId && session.conversationId !== config.source.conversationId) {
-      return false;
-    }
     if (config.source.agent && session.agent !== config.source.agent) {
       return false;
     }

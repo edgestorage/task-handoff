@@ -33,7 +33,6 @@ export const TriggerSourceSchema = z.union([
   }).strict(),
   z.object({
     type: z.literal("ai-session"),
-    conversationId: z.number().int().positive().optional(),
     agent: z.string().trim().min(1).max(80).optional(),
     statuses: z.array(z.enum(["running", "waiting", "idle", "failed"])).max(20).optional(),
     phases: z.array(z.enum(["thinking", "tool", "editing", "approval", "responding", "unknown"])).max(20).optional(),
@@ -61,16 +60,12 @@ export const TriggerConfigSchema = z.object({
   updatedAt: z.string().datetime(),
 }).strict();
 
-export const TriggerTargetSchema = z.discriminatedUnion("type", [
-  z.object({
-    type: z.literal("conversation"),
-    conversationId: z.number().int().positive(),
-  }).strict(),
-  z.object({
+export const TriggerTargetSchema = z
+  .object({
     type: z.literal("ai-session"),
     aiSessionId: z.string().trim().min(1).max(160),
-  }).strict(),
-]);
+  })
+  .strict();
 
 export const TriggerDeploymentSchema = z.object({
   configHash: z.string().trim().min(8).max(80),

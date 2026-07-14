@@ -22,7 +22,7 @@ const { createNodeAgentHmacHeaders } = require("../packages/control-plane/src/no
 const { fetchNodeAgentIpc, nodeAgentIpcEndpoint, nodeAgentIpcPath, prepareNodeAgentIpcPath } = require("../packages/control-plane/src/node-agent-ipc.ts");
 const { can } = require("../packages/control-plane/src/authorization.ts");
 const { LocalDockerExecutor, dockerRunArgs } = require("../packages/control-plane/src/executor.ts");
-const { checkControlledInstanceUpdate, checkNodeAgentUpdate, dockerImageRefForChannel, isNewerVersion } = require("../packages/control-plane/src/node-updates.ts");
+const { assertInstalledPackageVersion, checkControlledInstanceUpdate, checkNodeAgentUpdate, dockerImageRefForChannel, isNewerVersion, managedNpmPackageInstall } = require("../packages/control-plane/src/node-updates.ts");
 const { ProcessSingletonError, acquireProcessSingletonLock } = require("../packages/control-plane/src/process-lock.ts");
 const { EventConnectionRetryTimer, eventConnectionRetryDelay, eventConnectionSafetyIntervalMs } = require("../packages/control-plane/src/event-connection-retry.ts");
 const { JsonCollection, JsonFile, nodeAgentStorePaths } = require("../packages/control-plane/src/store.ts");
@@ -30,7 +30,13 @@ const { displayAiSessionMessage, displayAiSessionTitle } = require("../packages/
 const { appSessionStatus } = require("../packages/control-plane-ui/src/apps/control-plane/appSessionVisibility.ts");
 const { AiSessionEventType, AiSessionEventTopic } = require("../packages/protocol/src/ai-sessions.ts");
 const { AppSessionEventType, normalizeAppSessionRecord } = require("../packages/protocol/src/app-sessions.ts");
-const { CONTROL_PLANE_PROTOCOL_VERSION } = require("../packages/protocol/src/control-plane.ts");
+const { CONTROL_PLANE_PROTOCOL_VERSION, ControlledInstanceHeartbeatSchema } = require("../packages/protocol/src/control-plane.ts");
+
+test("controlled instance heartbeat protocol rejects legacy receiver projection", () => {
+  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-07-14");
+  assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, receiver: { status: "running", pendingCount: 1 } }).success, false);
+  assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, apps: { runningCount: 1 } }).success, true);
+});
 
 function tempDataDir(name) {
   return fs.mkdtempSync(path.join(os.tmpdir(), `task-handoff-${name}-`));
@@ -725,7 +731,6 @@ function createMockNodeAgentFetch(options = {}) {
         name: body.name,
         path: body.path,
         defaultImageId: body.defaultImageId,
-        modelSelection: body.modelSelection || {},
         labels: body.labels || {},
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -740,6 +745,7 @@ function createMockNodeAgentFetch(options = {}) {
       return jsonResponse({ deleted: index >= 0 });
     }
     if (path === "/instances" && (!init.method || init.method === "GET")) {
+      if (options.instancesError) throw options.instancesError;
       return jsonResponse([...instances.values()]);
     }
     if (path === "/instances" && init.method === "POST") {
@@ -750,6 +756,7 @@ function createMockNodeAgentFetch(options = {}) {
         projectId: body.projectId,
         source: body.source,
         sourceSnapshot: body.sourceSnapshot || {},
+        modelSelection: body.modelSelection || {},
         nodeId,
         runtimeId: body.runtimeId,
         imageId: body.imageId,
@@ -762,7 +769,6 @@ function createMockNodeAgentFetch(options = {}) {
         config: body.config || { autoImportAgentConfigs: true },
         workspace: { status: "unknown" },
         target: { strategy: "node-proxy", status: "unknown" },
-        receiver: { status: "unknown", pendingCount: 0 },
         apps: { runningCount: 0 },
         runtime: { labels: {} },
         registrationToken: `token_${id}`,
@@ -771,6 +777,16 @@ function createMockNodeAgentFetch(options = {}) {
       };
       instances.set(id, instance);
       return jsonResponse(instance, 201);
+    }
+    const instanceUpdate = path.match(/^\/instances\/([^/]+)$/);
+    if (instanceUpdate && init.method === "PATCH") {
+      const id = decodeURIComponent(instanceUpdate[1]);
+      const current = instances.get(id);
+      if (!current) return errorResponse(`Instance ${id} was not found.`);
+      const { modelEnv: _modelEnv, ...instancePatch } = body;
+      const updated = { ...current, ...instancePatch, id, nodeId, updatedAt: timestamp };
+      instances.set(id, updated);
+      return jsonResponse(updated);
     }
     const proxyRaw = path.match(/^\/instances\/([^/]+)\/proxy\/raw$/);
     if (proxyRaw) {
@@ -1584,7 +1600,6 @@ test("local docker run args include controlled metadata and disable local chat b
         capabilities: {},
         workspace: { status: "unknown" },
         target: { strategy: "direct-port", status: "unknown" },
-        receiver: { status: "unknown", pendingCount: 0 },
         apps: { runningCount: 0 },
         runtime: { labels: {} },
         registrationToken: "secret",
@@ -1648,6 +1663,36 @@ test("managed Docker updates resolve the selected channel and registry digest", 
   assert.equal(checked.currentVersion, "sha256:old");
   assert.equal(checked.availableVersion, "sha256:new");
   assert.equal(checked.updateAvailable, true);
+});
+
+test("managed npm updates replace the package behind an aggregate server executable", () => {
+  const root = tempDataDir("managed-npm-aggregate");
+  const serverRoot = path.join(root, "lib", "node_modules", "@task-handoff", "server");
+  const packageRoot = path.join(serverRoot, "node_modules", "@task-handoff", "controlled-instance");
+  const executable = path.join(packageRoot, "bin", "task-handoff-controlled-instance");
+  fs.mkdirSync(path.dirname(executable), { recursive: true });
+  fs.writeFileSync(path.join(serverRoot, "package.json"), JSON.stringify({ name: "@task-handoff/server", version: "1.0.0" }));
+  fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ name: "@task-handoff/controlled-instance", version: "1.0.0" }));
+  fs.writeFileSync(executable, "#!/usr/bin/env node\n");
+
+  const install = managedNpmPackageInstall({
+    executable,
+    globalPrefix: root,
+    packageName: "@task-handoff/controlled-instance",
+    targetVersion: "1.1.0",
+  });
+
+  assert.deepEqual(install.args, ["install", "--prefix", fs.realpathSync(serverRoot), "--no-save", "@task-handoff/controlled-instance@1.1.0"]);
+  assert.equal(install.manifestPath, path.join(fs.realpathSync(packageRoot), "package.json"));
+});
+
+test("managed npm update verification rejects commands that left the old package installed", () => {
+  const root = tempDataDir("managed-npm-verification");
+  const manifest = path.join(root, "package.json");
+  fs.writeFileSync(manifest, JSON.stringify({ name: "@task-handoff/controlled-instance", version: "1.0.0" }));
+
+  assert.doesNotThrow(() => assertInstalledPackageVersion(manifest, "1.0.0"));
+  assert.throws(() => assertInstalledPackageVersion(manifest, "1.1.0"), /expected 1\.1\.0, found 1\.0\.0/);
 });
 
 test("missing npm channel releases are reported as no update", async () => {
@@ -1788,6 +1833,7 @@ test("local docker run args include resolved model environment", () => {
       modelEnv: {
         OPENAI_API_KEY: "codex-key",
         OPENAI_BASE_URL: "https://openai.example/v1",
+        TASK_HANDOFF_CODEX_BASE_URL: "https://openai.example/v1",
         TASK_HANDOFF_CODEX_MODEL: "gpt-codex",
         ANTHROPIC_API_KEY: "claude-key",
         ANTHROPIC_BASE_URL: "https://anthropic.example",
@@ -1800,7 +1846,6 @@ test("local docker run args include resolved model environment", () => {
           type: "local-folder",
           path: "/tmp/workspace",
         },
-        modelSelection: {},
         workspacePolicy: {
           mode: "local-bind",
           path: "/workspace",
@@ -1845,7 +1890,6 @@ test("local docker run args include resolved model environment", () => {
         capabilities: {},
         workspace: { status: "unknown" },
         target: { strategy: "direct-port", status: "unknown" },
-        receiver: { status: "unknown", pendingCount: 0 },
         apps: { runningCount: 0 },
         runtime: { labels: {} },
         registrationToken: "secret",
@@ -1858,6 +1902,7 @@ test("local docker run args include resolved model environment", () => {
 
   assert.ok(args.includes("OPENAI_API_KEY=codex-key"));
   assert.ok(args.includes("OPENAI_BASE_URL=https://openai.example/v1"));
+  assert.ok(args.includes("TASK_HANDOFF_CODEX_BASE_URL=https://openai.example/v1"));
   assert.ok(args.includes("TASK_HANDOFF_CODEX_MODEL=gpt-codex"));
   assert.ok(args.includes("ANTHROPIC_API_KEY=claude-key"));
   assert.ok(args.includes("ANTHROPIC_BASE_URL=https://anthropic.example"));
@@ -1923,7 +1968,6 @@ test("local docker run args expose git workspace bootstrap environment", () => {
         capabilities: {},
         workspace: { status: "unknown" },
         target: { strategy: "direct-port", status: "unknown" },
-        receiver: { status: "unknown", pendingCount: 0 },
         apps: { runningCount: 0 },
         runtime: { labels: {} },
         registrationToken: "secret",
@@ -1986,7 +2030,6 @@ test("local docker executor checks local images and pulls registry images before
       capabilities: {},
       workspace: { status: "unknown" },
       target: { strategy: "direct-port", status: "unknown" },
-      receiver: { status: "unknown", pendingCount: 0 },
       apps: { runningCount: 0 },
       runtime: { labels: {} },
       registrationToken: "secret",
@@ -2234,7 +2277,6 @@ test("node agent runs local docker behind node-local target and auto-imports age
       sourceSnapshot: {
         id: "proj_1",
         name: "Git Project",
-        modelSelection: {},
       },
     },
   });
@@ -2965,7 +3007,6 @@ test("control plane node instance aggregation isolates invalid node protocol dat
     workspace: { status: "ready", path: "/workspace/good" },
     target: { strategy: "direct-port", status: "reachable", web: "http://127.0.0.1:19001" },
     access: { strategy: "control-plane-proxy", status: "reachable" },
-    receiver: { status: "online", pendingCount: 0 },
     apps: { runningCount: 0 },
     aiSessions: {
       runningCount: 0,
@@ -3432,10 +3473,10 @@ test("node agent starts localhost runtime as a host controlled-instance process"
       "    name: process.env.TASK_HANDOFF_INSTANCE_NAME,",
       "    nodeId: process.env.TASK_HANDOFF_NODE_ID,",
       "    runtimeId: process.env.TASK_HANDOFF_RUNTIME_ID,",
-      "    protocolVersion: '2026-07-13',",
+      "    protocolVersion: '2026-07-14',",
       "    build: { component: 'controlled-instance' },",
       "    controlMode: 'controlled',",
-      "    capabilities: { protocolVersion: '2026-07-13', apps: [], features: {} },",
+      "    capabilities: { protocolVersion: '2026-07-14', apps: [], features: {} },",
       "    target: { strategy: 'direct-port', web: `http://127.0.0.1:${port}`, api: `http://127.0.0.1:${port}/api`, status: 'reachable' },",
       "    workspace: { mode: 'local-bind', status: 'ready', path: process.env.TASK_HANDOFF_WORKSPACE, exists: true },",
       "  }),",
@@ -3445,7 +3486,8 @@ test("node agent starts localhost runtime as a host controlled-instance process"
       "  persist: process.env.TASK_HANDOFF_APP_SESSION_PERSIST,",
       "  dataDir: process.env.TASK_HANDOFF_DATA_DIR,",
       "  logDir: process.env.TASK_HANDOFF_LOG_DIR,",
-      "  receiverAutoStart: process.argv.includes('--receiver-auto-start'),",
+      "  openaiKey: process.env.OPENAI_API_KEY,",
+      "  argv: process.argv.slice(2),",
       "}) + '\\n');",
       "const server = http.createServer((req, res) => {",
       "  if (req.url === '/api/health') { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ ok: true })); return; }",
@@ -3509,7 +3551,7 @@ test("node agent starts localhost runtime as a host controlled-instance process"
     method: "POST",
     url: "/api/node-agent/instances/inst_local_process/start",
     headers: { authorization: "Bearer agent-secret" },
-    payload: {},
+    payload: { modelEnv: { OPENAI_API_KEY: "instance-codex-key" } },
   });
   assert.equal(started.statusCode, 200);
   assert.equal(started.json().data.status, "registering");
@@ -3518,8 +3560,23 @@ test("node agent starts localhost runtime as a host controlled-instance process"
   assert.equal(typeof started.json().data.runtime.port, "number");
   assert.equal(started.json().data.target.web, `http://127.0.0.1:${started.json().data.runtime.port}`);
   assert.equal(started.json().data.target.status, "reachable");
+  const firstPid = started.json().data.runtime.pid;
   const envLines = fs.readFileSync(envLog, "utf8").trim().split(/\n/).map((line) => JSON.parse(line));
-  assert.equal(envLines[0].receiverAutoStart, false);
+  assert.equal(envLines[0].argv.includes("--receiver-auto-start"), false);
+  assert.equal(envLines[0].openaiKey, "instance-codex-key");
+
+  const restarted = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_local_process/restart",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: { modelEnv: { OPENAI_API_KEY: "restarted-codex-key" } },
+  });
+  assert.equal(restarted.statusCode, 200);
+  assert.notEqual(restarted.json().data.runtime.pid, firstPid);
+  await waitForProcessExit(firstPid, "replaced localhost controlled instance");
+  const restartedEnvLines = fs.readFileSync(envLog, "utf8").trim().split(/\n/).map((line) => JSON.parse(line));
+  assert.equal(restartedEnvLines.length, 2);
+  assert.equal(restartedEnvLines[1].openaiKey, "restarted-codex-key");
 
   const stopped = await app.inject({
     method: "POST",
@@ -3730,6 +3787,8 @@ test("node agent restores localhost runtime processes after graceful shutdown", 
       "  persist: process.env.TASK_HANDOFF_APP_SESSION_PERSIST,",
       "  dataDir: process.env.TASK_HANDOFF_DATA_DIR,",
       "  logDir: process.env.TASK_HANDOFF_LOG_DIR,",
+      "  apiKey: process.env.OPENAI_API_KEY,",
+      "  baseUrl: process.env.OPENAI_BASE_URL,",
       "}) + '\\n');",
       "const server = http.createServer((req, res) => {",
       "  if (req.url === '/api/health') { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ ok: true })); return; }",
@@ -3792,7 +3851,12 @@ test("node agent restores localhost runtime processes after graceful shutdown", 
     method: "POST",
     url: "/api/node-agent/instances/inst_local_restore/start",
     headers: { authorization: "Bearer agent-secret" },
-    payload: {},
+    payload: {
+      modelEnv: {
+        OPENAI_API_KEY: "restore-key-secret",
+        OPENAI_BASE_URL: "https://restore.example/v1",
+      },
+    },
   });
   assert.equal(started.statusCode, 200);
   const firstPid = started.json().data.runtime.pid;
@@ -3838,6 +3902,10 @@ test("node agent restores localhost runtime processes after graceful shutdown", 
   const envRows = fs.readFileSync(envLog, "utf8").trim().split("\n").map((line) => JSON.parse(line));
   assert.equal(envRows.length, 2);
   assert.deepEqual(envRows.map((row) => row.persist), ["1", "1"]);
+  assert.deepEqual(envRows.map((row) => row.apiKey), ["restore-key-secret", "restore-key-secret"]);
+  assert.deepEqual(envRows.map((row) => row.baseUrl), ["https://restore.example/v1", "https://restore.example/v1"]);
+  const modelEnvironmentPath = path.join(dataDir, "model-environments", "inst_local_restore.json");
+  assert.equal(fs.statSync(modelEnvironmentPath).mode & 0o777, 0o600);
 });
 
 test("node agent restores active localhost runtime processes after unclean shutdown state", async (t) => {
@@ -4222,17 +4290,24 @@ test("node agent tolerates extra fields in stored controlled instances", async (
   });
   t.after(() => app.close());
 
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.map(String).join(" "));
   const listed = await app.inject({
     method: "GET",
     url: "/api/node-agent/instances",
     headers: { authorization: "Bearer agent-secret" },
+  }).finally(() => {
+    console.warn = originalWarn;
   });
   assert.equal(listed.statusCode, 200);
   assert.equal(listed.json().data.length, 1);
   assert.equal(listed.json().data[0].id, "inst_extra");
+  assert.equal("receiver" in listed.json().data[0], false);
   assert.deepEqual(listed.json().data[0].apps, { runningCount: 1, problemCount: 0 });
   assert.equal("legacyTopLevelField" in listed.json().data[0], false);
   assert.equal("sessions" in listed.json().data[0].apps, false);
+  assert.ok(warnings.some((warning) => warning.includes("legacy controlled instance field was ignored") && warning.includes("inst_extra") && warning.includes("receiver")));
 });
 
 test("node agent proxies instance API requests", async (t) => {
@@ -4314,12 +4389,11 @@ test("node agent proxies instance API requests", async (t) => {
     url: "/api/node-agent/instances/inst_1/proxy",
     headers: { authorization: "Bearer agent-secret" },
     payload: {
-      path: "/api/receiver/messages",
-      method: "POST",
+      path: "/api/status",
+      method: "GET",
       headers: {
         "content-type": "application/json",
       },
-      body: JSON.stringify({ message: { text: "hello" } }),
     },
   });
 
@@ -4327,12 +4401,12 @@ test("node agent proxies instance API requests", async (t) => {
   assert.deepEqual(response.json(), { data: { accepted: true } });
   assert.deepEqual(calls, [
     {
-      url: "http://127.0.0.1:18080/api/receiver/messages",
-      method: "POST",
+      url: "http://127.0.0.1:18080/api/status",
+      method: "GET",
       headers: {
         "content-type": "application/json",
       },
-      body: JSON.stringify({ message: { text: "hello" } }),
+      body: undefined,
     },
   ]);
 });
@@ -4788,7 +4862,6 @@ test("control plane registers node connections with the agent node id", async (t
         nodeId: "node_remote",
         name: "Workspace",
         path: "/home/agent/work",
-        modelSelection: {},
         labels: {},
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -5139,7 +5212,7 @@ test("control plane proxies instance websocket routes through reverse node tunne
   assert.deepEqual(await withTimeout(onceWebSocketMessageFrame(stream), "reverse websocket stream frame"), { message: "hello", isBinary: false });
 });
 
-test("control plane models are project-scoped and resolved in start context", async (t) => {
+test("control plane models are instance-scoped and resolved in start context", async (t) => {
   const mock = createMockNodeAgentFetch();
   const app = await createControlPlaneApp({
     dataDir: tempDataDir("control-plane-models"),
@@ -5180,51 +5253,140 @@ test("control plane models are project-scoped and resolved in start context", as
   });
   assert.equal(selectedClaude.statusCode, 201);
 
-  const wrongAppProject = await json(app, "POST", "/api/projects", {
-    name: "Wrong App Project",
-    source: {
-      type: "local-folder",
-      path: "/tmp/workspace",
-    },
-    modelSelection: { claudeModelId: selectedCodex.body.data.id },
+  const disabledCodex = await json(app, "POST", "/api/models", {
+    name: "Disabled Codex",
+    endpoint: "https://disabled.example/v1",
+    key: "disabled-codex-key-secret",
+    model: "disabled-codex-model",
+    app: "codex",
+    enabled: false,
   });
-  assert.equal(wrongAppProject.statusCode, 400);
-  assert.equal(wrongAppProject.body.error.code, "MODEL_APP_MISMATCH");
+  assert.equal(disabledCodex.statusCode, 201);
 
   const project = await json(app, "POST", "/api/projects", {
-    name: "Scoped Project",
+    name: "Instance Model Project",
     source: {
       type: "local-folder",
       path: "/tmp/workspace",
-    },
-    modelSelection: {
-      codexModelId: selectedCodex.body.data.id,
-      claudeModelId: selectedClaude.body.data.id,
     },
   });
   assert.equal(project.statusCode, 201);
-  assert.deepEqual(project.body.data.modelSelection, {
-    codexModelId: selectedCodex.body.data.id,
-    claudeModelId: selectedClaude.body.data.id,
+  assert.equal(project.body.data.modelSelection, undefined);
+
+  const projectWithModels = await json(app, "POST", "/api/projects", {
+    name: "Legacy Model Project",
+    source: { type: "local-folder", path: "/tmp/legacy-workspace" },
+    modelSelection: { codexModelId: selectedCodex.body.data.id },
   });
+  assert.equal(projectWithModels.statusCode, 400);
+
+  const wrongAppInstance = await json(app, "POST", "/api/controlled-instances", {
+    name: "wrong-app-instance",
+    projectId: project.body.data.id,
+    runtimeId: "runtime_local_docker",
+    imageId: "img_default",
+    modelSelection: { claudeModelId: selectedCodex.body.data.id },
+  });
+  assert.equal(wrongAppInstance.statusCode, 400);
+  assert.equal(wrongAppInstance.body.error.code, "MODEL_APP_MISMATCH");
+
+  const disabledModelInstance = await json(app, "POST", "/api/controlled-instances", {
+    name: "disabled-model-instance",
+    projectId: project.body.data.id,
+    runtimeId: "runtime_local_docker",
+    imageId: "img_default",
+    modelSelection: { codexModelId: disabledCodex.body.data.id },
+  });
+  assert.equal(disabledModelInstance.statusCode, 400);
+  assert.equal(disabledModelInstance.body.error.code, "MODEL_DISABLED");
 
   const instance = await json(app, "POST", "/api/controlled-instances", {
     name: "scoped-1",
     projectId: project.body.data.id,
     runtimeId: "runtime_local_docker",
     imageId: "img_default",
+    modelSelection: {
+      codexModelId: selectedCodex.body.data.id,
+      claudeModelId: selectedClaude.body.data.id,
+    },
   });
   assert.equal(instance.statusCode, 201);
+  assert.deepEqual(instance.body.data.modelSelection, {
+    codexModelId: selectedCodex.body.data.id,
+    claudeModelId: selectedClaude.body.data.id,
+  });
+  const createRequest = mock.requests.find((request) => request.path === "/instances" && request.method === "POST" && request.body.name === "scoped-1");
+  assert.equal(createRequest.body.modelEnv.OPENAI_API_KEY, "allowed-codex-key-secret");
+  assert.equal(createRequest.body.modelEnv.ANTHROPIC_API_KEY, "allowed-claude-key-secret");
+
+  const rotatedModel = await json(app, "PATCH", `/api/models/${selectedCodex.body.data.id}`, {
+    key: "rotated-codex-key-secret",
+    endpoint: "https://rotated.example/v1",
+  });
+  assert.equal(rotatedModel.statusCode, 200);
+  const synchronizedModelRequest = mock.requests.findLast((request) =>
+    request.path === `/instances/${instance.body.data.id}` && request.method === "PATCH" && request.body.modelEnv);
+  assert.equal(synchronizedModelRequest.body.modelEnv.OPENAI_API_KEY, "rotated-codex-key-secret");
+  assert.equal(synchronizedModelRequest.body.modelEnv.OPENAI_BASE_URL, "https://rotated.example/v1");
+
+  const disableSelectedModel = await json(app, "PATCH", `/api/models/${selectedCodex.body.data.id}`, { enabled: false });
+  assert.equal(disableSelectedModel.statusCode, 409);
+  assert.equal(disableSelectedModel.body.error.code, "MODEL_SELECTION_INVALID");
 
   const started = await json(app, "POST", `/api/controlled-instances/${instance.body.data.id}/start`);
   assert.equal(started.statusCode, 200);
   const startRequest = mock.requests.find((request) => request.path === `/instances/${instance.body.data.id}/start`);
-  assert.equal(startRequest.body.modelEnv.OPENAI_API_KEY, "allowed-codex-key-secret");
-  assert.equal(startRequest.body.modelEnv.OPENAI_BASE_URL, "https://allowed.example/v1");
+  assert.equal(startRequest.body.modelEnv.OPENAI_API_KEY, "rotated-codex-key-secret");
+  assert.equal(startRequest.body.modelEnv.OPENAI_BASE_URL, "https://rotated.example/v1");
+  assert.equal(startRequest.body.modelEnv.TASK_HANDOFF_CODEX_BASE_URL, "https://rotated.example/v1");
   assert.equal(startRequest.body.modelEnv.TASK_HANDOFF_CODEX_MODEL, "allowed-codex-model");
   assert.equal(startRequest.body.modelEnv.ANTHROPIC_API_KEY, "allowed-claude-key-secret");
   assert.equal(startRequest.body.modelEnv.ANTHROPIC_BASE_URL, "https://anthropic.example");
   assert.equal(startRequest.body.modelEnv.TASK_HANDOFF_CLAUDE_MODEL, "allowed-claude-model");
+
+  const updated = await json(app, "PATCH", `/api/controlled-instances/${instance.body.data.id}`, {
+    modelSelection: { codexModelId: first.body.data.id },
+  });
+  assert.equal(updated.statusCode, 200);
+  assert.deepEqual(updated.body.data.modelSelection, { codexModelId: first.body.data.id });
+
+  const restarted = await json(app, "POST", `/api/controlled-instances/${instance.body.data.id}/restart`);
+  assert.equal(restarted.statusCode, 200);
+  const restartRequest = mock.requests.findLast((request) => request.path === `/instances/${instance.body.data.id}/restart`);
+  assert.equal(restartRequest.body.modelEnv.OPENAI_API_KEY, "first-key-secret");
+  assert.equal(restartRequest.body.modelEnv.TASK_HANDOFF_CODEX_BASE_URL, "https://first.example/v1");
+  assert.equal(restartRequest.body.modelEnv.TASK_HANDOFF_CODEX_MODEL, "first-model");
+  assert.equal(restartRequest.body.modelEnv.ANTHROPIC_API_KEY, "allowed-claude-key-secret");
+
+  const deleteBoundModel = await json(app, "DELETE", `/api/models/${first.body.data.id}`);
+  assert.equal(deleteBoundModel.statusCode, 409);
+  assert.equal(deleteBoundModel.body.error.code, "MODEL_IN_USE");
+});
+
+test("control plane refuses model deletion when fleet references are incomplete", async (t) => {
+  const mockOptions = {};
+  const mock = createMockNodeAgentFetch(mockOptions);
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-model-delete-offline"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: { fetchImpl: mock.fetchImpl },
+  });
+  t.after(() => app.close());
+
+  const model = await json(app, "POST", "/api/models", {
+    name: "Offline reference model",
+    endpoint: "https://offline.example/v1",
+    key: "offline-key-secret",
+    model: "offline-model",
+    app: "codex",
+  });
+  assert.equal(model.statusCode, 201);
+
+  mockOptions.instancesError = new Error("node offline");
+  const deleted = await json(app, "DELETE", `/api/models/${model.body.data.id}`);
+  assert.equal(deleted.statusCode, 503);
+  assert.equal(deleted.body.error.code, "MODEL_FLEET_INCOMPLETE");
 });
 
 test("control plane manages projects, instances, register, heartbeat, and board state", async (t) => {
@@ -5362,10 +5524,6 @@ test("control plane manages projects, instances, register, heartbeat, and board 
           { id: "terminal-tty", name: "Terminal", kind: "tty" },
           { id: "cc-switch", name: "CC Switch", kind: "gui" },
         ],
-      },
-      receiver: {
-        status: "running",
-        pendingCount: 1,
       },
       apps: {
         runningCount: 1,
@@ -7107,6 +7265,7 @@ test("control plane chat gateway binds sessions and forwards messages to active 
   assert.equal(aiForwardsAfterSent[0].body.path, "/api/ai-sessions/ais_2/messages");
   assert.equal(aiForwardsAfterSent[0].body.method, "POST");
   assert.deepEqual(JSON.parse(aiForwardsAfterSent[0].body.body), { message: "run tests" });
+  assert.equal(forwarded.some((entry) => entry.body.path === "/api/receiver/messages"), false);
 
   const aiSessionSelected = await json(app, "POST", "/api/chat-gateway/messages", {
     source: {

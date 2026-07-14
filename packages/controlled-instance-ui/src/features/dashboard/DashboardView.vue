@@ -3,42 +3,18 @@
     <h1>Dashboard</h1>
     <dl v-if="status.data.value" class="stats">
       <div>
-        <dt>Receiver</dt>
-        <dd>{{ status.data.value.receiver.running ? `running pid ${status.data.value.receiver.pid}` : "stopped" }}</dd>
-      </div>
-      <div>
-        <dt>Socket</dt>
-        <dd>{{ status.data.value.socketPath }}</dd>
-      </div>
-      <div>
-        <dt>Default conversation</dt>
-        <dd>{{ status.data.value.defaultConversationId }}</dd>
-      </div>
-      <div>
-        <dt>Pending tasks</dt>
-        <dd>{{ status.data.value.pendingTaskCount }}</dd>
-      </div>
-      <div>
         <dt>Running apps</dt>
         <dd>{{ status.data.value.runningAppCount }}</dd>
       </div>
-    </dl>
-    <div class="actions">
-      <Button size="sm" @click="start">Start receiver</Button>
-      <Button variant="outline" size="sm" @click="stop">Stop receiver</Button>
-    </div>
-    <p v-if="receiverActionError" class="form-error">{{ receiverActionError }}</p>
-
-    <section class="receiver-logs">
-      <div class="section-head">
-        <h2>Receiver Logs</h2>
-        <span>{{ receiverLogs.data.value?.logPath || "receiver.log" }}</span>
+      <div>
+        <dt>Version</dt>
+        <dd>{{ status.data.value.version }}</dd>
       </div>
-      <ScrollArea v-if="receiverLogs.data.value?.content" class="receiver-logs-scroll">
-        <pre>{{ receiverLogs.data.value.content }}</pre>
-      </ScrollArea>
-      <p v-else class="logs-empty">No receiver logs yet.</p>
-    </section>
+      <div>
+        <dt>Started</dt>
+        <dd>{{ formatDate(status.data.value.startedAt) }}</dd>
+      </div>
+    </dl>
 
     <section v-if="diagnostics.data.value" class="diagnostics-grid">
       <div class="diagnostics-card">
@@ -93,38 +69,14 @@
 </template>
 
 <script setup lang="ts">
-import { useQueryClient } from "@tanstack/vue-query";
-import { ref } from "vue";
-import { startReceiver, stopReceiver, useDiagnosticsQuery, useReceiverLogsQuery, useStatusQuery } from "../../api/queries";
-import { Button } from "../../components/ui/button";
-import { ScrollArea } from "../../components/ui/scroll-area";
+import { useDiagnosticsQuery, useStatusQuery } from "../../api/queries";
 
 const status = useStatusQuery();
 const diagnostics = useDiagnosticsQuery();
-const receiverLogs = useReceiverLogsQuery();
-const queryClient = useQueryClient();
-const receiverActionError = ref("");
 
-async function start() {
-  receiverActionError.value = "";
-  try {
-    await startReceiver();
-    await queryClient.invalidateQueries({ queryKey: ["status"] });
-    await queryClient.invalidateQueries({ queryKey: ["receiver-logs"] });
-  } catch (error) {
-    receiverActionError.value = error instanceof Error ? error.message : String(error);
-  }
-}
-
-async function stop() {
-  receiverActionError.value = "";
-  try {
-    await stopReceiver();
-    await queryClient.invalidateQueries({ queryKey: ["status"] });
-    await queryClient.invalidateQueries({ queryKey: ["receiver-logs"] });
-  } catch (error) {
-    receiverActionError.value = error instanceof Error ? error.message : String(error);
-  }
+function formatDate(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 </script>
 

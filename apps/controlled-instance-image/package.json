@@ -8,9 +8,7 @@
     "test": "node --test"
   },
   "dependencies": {
-    "@task-handoff/core": "workspace:*",
     "@task-handoff/controlled-instance": "workspace:*",
-    "@task-handoff/receiver-worker": "workspace:*",
     "commander": "^14.0.3"
   }
 }

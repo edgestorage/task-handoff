@@ -118,10 +118,3 @@ function keyPreview(key: string) {
   }
   return `${key.slice(0, 4)}...${key.slice(-4)}`;
 }
-
-export function normalizeModelSelection(record: Record<string, unknown>) {
-  if (record.modelSelection && typeof record.modelSelection === "object" && !Array.isArray(record.modelSelection)) {
-    return record.modelSelection;
-  }
-  return {};
-}

@@ -595,7 +595,7 @@ function formatInterval(value: number) {
 }
 
 function targetText(target: TriggerTarget) {
-  return target.type === "conversation" ? `conversation ${target.conversationId}` : `AI session ${target.aiSessionId}`;
+  return `AI session ${target.aiSessionId}`;
 }
 
 function formatDate(value: string) {

@@ -37,7 +37,6 @@ export const CreateProjectInputSchema = z.object({
   defaultImageId: ProjectSchema.shape.defaultImageId,
   defaultNodeId: ProjectSchema.shape.defaultNodeId,
   defaultRuntimeId: ProjectSchema.shape.defaultRuntimeId,
-  modelSelection: ProjectSchema.shape.modelSelection.optional(),
   workspacePolicy: WorkspacePolicySchema.optional(),
   labels: ProjectSchema.shape.labels.optional(),
 }).strict();
@@ -54,10 +53,12 @@ export const CreateInstanceInputSchema = z.object({
   runtimeId: ControlledInstanceSchema.shape.runtimeId.optional(),
   imageId: ControlledInstanceSchema.shape.imageId,
   config: ControlledInstanceSchema.shape.config.optional(),
+  modelSelection: ControlledInstanceSchema.shape.modelSelection.optional(),
 }).strict();
 
 export const UpdateInstanceInputSchema = z.object({
   name: ControlledInstanceSchema.shape.name.optional(),
+  modelSelection: ControlledInstanceSchema.shape.modelSelection.optional(),
 }).strict();
 
 export const ControlPlaneSettingsSchema = z.object({
@@ -168,7 +169,7 @@ export const CreateControlPlaneTriggerSchema = z.object({
 
 export const ApplyControlPlaneTriggerSchema = z.object({
   instanceIds: z.array(ControlledInstanceSchema.shape.id).min(1),
-  target: TriggerTargetSchema.optional(),
+  target: TriggerTargetSchema,
   enabled: z.boolean().optional(),
 }).strict();
 

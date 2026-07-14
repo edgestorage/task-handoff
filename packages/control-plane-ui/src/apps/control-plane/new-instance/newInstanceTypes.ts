@@ -19,13 +19,13 @@ export type RuntimeDraft = {
 export type InstanceDraft = {
   name: string;
   autoImportAgentConfigs: boolean;
+  codexModelId: string;
+  claudeModelId: string;
 };
 
 export type NewProjectDraft = {
   name: string;
   url: string;
-  codexModelId: string;
-  claudeModelId: string;
 };
 
 export type NewImageDraft = {

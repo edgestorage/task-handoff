@@ -3,6 +3,7 @@ import http from "node:http";
 import net from "node:net";
 import path from "node:path";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import writeFileAtomic from "write-file-atomic";
 import Fastify from "fastify";
 import websocket from "@fastify/websocket";
 import WebSocket from "ws";
@@ -65,7 +66,7 @@ import {
   timingSafeHexEqual,
 } from "./node-agent-auth.ts";
 import { nodeAgentProxyMethod, type NodeAgentInjectResponse, websocketPayload } from "./node-agent-proxy-utils.ts";
-import { checkControlledInstanceUpdate, checkNodeAgentUpdate, npmCommand, NodeUpdateJobs } from "./node-updates.ts";
+import { assertInstalledPackageVersion, checkControlledInstanceUpdate, checkNodeAgentUpdate, managedNpmPackageInstall, npmCommand, NodeUpdateJobs } from "./node-updates.ts";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -93,6 +94,42 @@ const NodeAgentRuntimeSettingsSchema = z.object({
 
 type NodeAgentRuntimeSettings = z.infer<typeof NodeAgentRuntimeSettingsSchema>;
 
+const ModelEnvironmentSchema = z.record(z.string(), z.string());
+
+class InstanceModelEnvironmentStore {
+  private readonly directory: string;
+
+  constructor(directory: string) {
+    this.directory = directory;
+  }
+
+  get(instanceId: string) {
+    try {
+      return ModelEnvironmentSchema.parse(JSON.parse(fs.readFileSync(this.filePath(instanceId), "utf8")));
+    } catch (error) {
+      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return {};
+      throw new Error(`Stored model environment for instance ${instanceId} is invalid: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  put(instanceId: string, value: Record<string, string>) {
+    const parsed = ModelEnvironmentSchema.parse(value);
+    fs.mkdirSync(this.directory, { recursive: true, mode: 0o700 });
+    const filePath = this.filePath(instanceId);
+    writeFileAtomic.sync(filePath, `${JSON.stringify(parsed, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+    fs.chmodSync(filePath, 0o600);
+    return parsed;
+  }
+
+  delete(instanceId: string) {
+    fs.rmSync(this.filePath(instanceId), { force: true });
+  }
+
+  private filePath(instanceId: string) {
+    return path.join(this.directory, `${instanceId}.json`);
+  }
+}
+
 const NodeAgentPairingInviteSchema = z
   .object({
     controlPlaneName: z.string().trim().min(1).max(160).optional(),
@@ -111,11 +148,11 @@ const NodeAgentPairingCompleteSchema = z
   .strict();
 
 const NodeInstanceLifecycleRequestSchema = z.object({
-  modelEnv: z.record(z.string(), z.string()).default({}),
-}).strict().default({ modelEnv: {} });
+  modelEnv: z.record(z.string(), z.string()).optional(),
+}).strict().default({});
 
 const NodeAgentApplyUpdateRequestSchema = ApplyUpdateRequestSchema.extend({
-  modelEnv: z.record(z.string(), z.string()).default({}),
+  modelEnv: z.record(z.string(), z.string()).optional(),
 }).strict();
 
 const NodeAgentRemoteConnectSchema = z
@@ -596,9 +633,6 @@ function projectForInstance(instance: ControlledInstance): Project {
     defaultImageId: instance.imageId,
     defaultNodeId: instance.nodeId,
     defaultRuntimeId: instance.runtimeId,
-    modelSelection: instance.sourceSnapshot.modelSelection && typeof instance.sourceSnapshot.modelSelection === "object" && !Array.isArray(instance.sourceSnapshot.modelSelection)
-      ? instance.sourceSnapshot.modelSelection
-      : {},
     workspacePolicy: workspacePolicyForSource(source),
     labels: {},
     createdAt: instance.createdAt,
@@ -828,6 +862,21 @@ async function stopLocalProcess(instance: ControlledInstance, processByInstanceI
       process.kill(instance.runtime.pid, "SIGTERM");
     } catch {
       // Process already exited.
+      return;
+    }
+    const deadline = Date.now() + 3_000;
+    while (Date.now() < deadline) {
+      try {
+        process.kill(instance.runtime.pid, 0);
+      } catch {
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    try {
+      process.kill(instance.runtime.pid, "SIGKILL");
+    } catch {
+      // Process exited after the final liveness check.
     }
   }
 }
@@ -939,6 +988,7 @@ class LocalhostRuntimeAdapter implements RuntimeAdapter {
         TASK_HANDOFF_CODEX_APP_SERVER: process.env.TASK_HANDOFF_CODEX_APP_SERVER || "1",
         TASK_HANDOFF_WEB_PORT: String(port),
         TASK_HANDOFF_WEB_HOST: "127.0.0.1",
+        ...(context.modelEnv || {}),
       },
     });
     fs.closeSync(out);
@@ -1033,6 +1083,7 @@ class LocalhostRuntimeAdapter implements RuntimeAdapter {
   }
 
   async restart(context: ExecutorContext): Promise<ExecutorStartResult> {
+    await stopLocalProcess(context.instance, this.processByInstanceId);
     return this.start(context);
   }
 
@@ -1104,6 +1155,7 @@ class NodeAgentState {
   readonly localFolders: JsonCollection<NodeLocalFolder>;
   readonly nodeRuntimes: JsonCollection<NodeRuntime>;
   readonly controlledInstances: JsonCollection<ControlledInstance>;
+  readonly modelEnvironments: InstanceModelEnvironmentStore;
   readonly updateJobs: NodeUpdateJobs;
   readonly node: Node;
   private listenerPort: number;
@@ -1116,8 +1168,14 @@ class NodeAgentState {
     this.nodeRuntimes = new JsonCollection(paths.nodeRuntimesDir, { schema: NodeRuntimeSchema });
     this.controlledInstances = new JsonCollection(paths.controlledInstancesDir, {
       schema: ControlledInstanceSchema,
-      sanitize: sanitizeStoredControlledInstance,
+      sanitize: (value) => sanitizeStoredControlledInstance(value, (warning) => {
+        console.warn(JSON.stringify({
+          message: "legacy controlled instance field was ignored",
+          ...warning,
+        }));
+      }),
     });
+    this.modelEnvironments = new InstanceModelEnvironmentStore(paths.modelEnvironmentsDir);
     this.updateJobs = new NodeUpdateJobs(paths);
     this.listenerPort = listenerPort;
     this.containerUrlOverride = containerUrl;
@@ -1202,7 +1260,6 @@ class NodeAgentState {
       ...input,
       id: input.id || createId("folder"),
       nodeId: this.nodeId,
-      modelSelection: input.modelSelection || {},
       labels: input.labels || {},
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -1327,6 +1384,7 @@ class NodeAgentState {
       name: input.name || `instance-${timestamp.replace(/[-:.TZ]/g, "").slice(0, 14)}-${id.replace(/^inst_?/, "").slice(0, 4)}`,
       source,
       sourceSnapshot: input.sourceSnapshot || {},
+      modelSelection: input.modelSelection,
       projectId: input.projectId,
       nodeId: this.nodeId,
       runtimeId: runtime.id,
@@ -1348,7 +1406,13 @@ class NodeAgentState {
       createdAt: timestamp,
       updatedAt: timestamp,
     });
-    return this.controlledInstances.put(instance);
+    this.modelEnvironments.put(instance.id, input.modelEnv);
+    try {
+      return this.controlledInstances.put(instance);
+    } catch (error) {
+      this.modelEnvironments.delete(instance.id);
+      throw error;
+    }
   }
 
   registerInstance(id: string, input: ControlledInstanceRegister, token?: string) {
@@ -1434,7 +1498,11 @@ class NodeAgentState {
     }
   }
 
-  context(instance: ControlledInstance, modelEnv: Record<string, string> = {}): ExecutorContext {
+  resolvedModelEnvironment(instanceId: string, provided?: Record<string, string>) {
+    return provided === undefined ? this.modelEnvironments.get(instanceId) : this.modelEnvironments.put(instanceId, provided);
+  }
+
+  context(instance: ControlledInstance, modelEnv: Record<string, string> = this.modelEnvironments.get(instance.id)): ExecutorContext {
     const image = instance.imageSnapshot || ImageProfileSchema.parse({ id: instance.imageId || "img_localhost", name: instance.imageId || "Localhost", image: instance.imageId || "localhost", registry: "local", capabilities: [], optionalApps: [], defaultEnv: {}, labels: {}, createdAt: instance.createdAt, updatedAt: instance.updatedAt });
     return {
       project: projectForInstance(instance),
@@ -1750,15 +1818,24 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     });
   };
 
-  const runInstanceUpdate = async (job: UpdateJob, modelEnv: Record<string, string>) => {
+  const runInstanceUpdate = async (job: UpdateJob, providedModelEnv?: Record<string, string>) => {
     if (job.target.component !== "controlled-instance") return;
     const instance = state.requireInstance(job.target.instanceId);
+    const modelEnv = state.resolvedModelEnvironment(instance.id, providedModelEnv);
     const runtime = state.requireRuntime(instance.runtimeId);
     const adapter = runtimeAdapters.forRuntime(runtime);
     if (runtime.type === "local") {
       const npm = npmCommand();
       const prefix = (await updateCommandRunner(npm, ["prefix", "--global"])).stdout.trim();
-      await updateCommandRunner(npm, ["install", "--global", "--prefix", prefix, `@task-handoff/controlled-instance@${job.toVersion}`]);
+      const [executable] = controlledInstanceCommand();
+      const install = managedNpmPackageInstall({
+        executable,
+        globalPrefix: prefix,
+        packageName: "@task-handoff/controlled-instance",
+        targetVersion: job.toVersion,
+      });
+      await updateCommandRunner(npm, install.args);
+      assertInstalledPackageVersion(install.manifestPath, job.toVersion);
     } else if (runtime.type === "docker") {
       const imageRef = job.artifactRef;
       if (!imageRef || instance.imageSnapshot?.registry === "local") {
@@ -1913,7 +1990,15 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     });
     for (const instance of instances) {
       try {
-        await startNodeInstance(state, runtimeAdapters, fetchImpl, instance.id, {}, lifecycleLoggers, "restore");
+        await startNodeInstance(
+          state,
+          runtimeAdapters,
+          fetchImpl,
+          instance.id,
+          state.resolvedModelEnvironment(instance.id),
+          lifecycleLoggers,
+          "restore",
+        );
       } catch (error) {
         state.controlledInstances.put(restoreFailurePatch(state.requireInstance(instance.id), error));
         logDiagnostic({ instanceId: instance.id, action: "restore", error: error instanceof Error ? error.message : String(error) }, "node local instance restore failed");
@@ -2142,8 +2227,17 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     const id = (request.params as { id: string }).id;
     const current = state.requireInstance(id);
     const parsed = UpdateNodeInstanceSchema.parse(request.body);
-    const updated = ControlledInstanceSchema.parse({ ...current, ...parsed, updatedAt: now() });
-    const stored = state.controlledInstances.put(updated);
+    const { modelEnv, ...instancePatch } = parsed;
+    const updated = ControlledInstanceSchema.parse({ ...current, ...instancePatch, updatedAt: now() });
+    const previousModelEnv = modelEnv === undefined ? undefined : state.modelEnvironments.get(id);
+    if (modelEnv !== undefined) state.modelEnvironments.put(id, modelEnv);
+    let stored: ControlledInstance;
+    try {
+      stored = state.controlledInstances.put(updated);
+    } catch (error) {
+      if (previousModelEnv !== undefined) state.modelEnvironments.put(id, previousModelEnv);
+      throw error;
+    }
     eventForwarder.syncNow();
     return { data: stored };
   });
@@ -2179,7 +2273,8 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   app.post("/api/node-agent/instances/:id/start", async (request) => {
     const id = (request.params as { id: string }).id;
     const body = NodeInstanceLifecycleRequestSchema.parse(request.body);
-    const instance = await startNodeInstance(state, runtimeAdapters, fetchImpl, id, body.modelEnv, lifecycleLoggers);
+    const modelEnv = state.resolvedModelEnvironment(id, body.modelEnv);
+    const instance = await startNodeInstance(state, runtimeAdapters, fetchImpl, id, modelEnv, lifecycleLoggers);
     eventForwarder.syncNow();
     return { data: instance };
   });
@@ -2209,7 +2304,8 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     const body = NodeInstanceLifecycleRequestSchema.parse(request.body);
     logDiagnostic({ instanceId: id, action: "restart", runtimeId: current.runtimeId, imageId: current.imageId, containerName: current.runtime.containerName }, "node instance restart requested");
     const adapter = runtimeAdapters.forRuntime(state.requireRuntime(current.runtimeId));
-    const result = await adapter.restart(state.context(current, body.modelEnv));
+    const modelEnv = state.resolvedModelEnvironment(id, body.modelEnv);
+    const result = await adapter.restart(state.context(current, modelEnv));
     const probeTarget = ControlledInstanceSchema.parse({ ...current, ...result, target: result.target ? { ...current.target, ...result.target } : current.target, updatedAt: now() });
     const probedEndpointStatus = await probeInstanceEndpoint(fetchImpl, probeTarget);
     const updated = ControlledInstanceSchema.parse({
@@ -2236,6 +2332,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     await adapter.delete(state.context(current));
     logDiagnostic({ instanceId: id, action: "delete" }, "node instance delete completed");
     const deleted = state.controlledInstances.delete(id);
+    state.modelEnvironments.delete(id);
     eventForwarder.syncNow();
     return { data: { deleted } };
   });

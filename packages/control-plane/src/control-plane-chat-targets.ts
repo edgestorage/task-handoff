@@ -46,7 +46,7 @@ export class ControlPlaneChatTargetResolver {
     if (!instance) {
       return `Active target: ${await this.renderChatTarget(binding)}`;
     }
-    return `Active target: ${await this.renderChatTarget(binding)}\nStatus: ${instance.status}, connection: ${instance.connectionStatus}, pending: ${instance.receiver.pendingCount}`;
+    return `Active target: ${await this.renderChatTarget(binding)}\nStatus: ${instance.status}, connection: ${instance.connectionStatus}`;
   }
 
   async renderChatHelp(binding: ChatSessionBinding) {

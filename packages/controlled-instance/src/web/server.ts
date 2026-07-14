@@ -12,14 +12,11 @@ import Fastify from "fastify";
 import type { FastifyServerOptions } from "fastify";
 import { proxyFetch } from "httpxy";
 import { z } from "zod";
-import { DEFAULT_CONVERSATION_ID, DEFAULT_SOCKET_PATH } from "@task-handoff/core/core/config";
 import { appendJsonl, processSnapshot } from "@task-handoff/core/core/diagnostics";
-import { loadSettings, patchSettings } from "@task-handoff/core/core/persistence";
-import { ConversationStore } from "../conversations/store";
 import { TriggerExecutor } from "../triggers/executor";
 import { TriggerManager } from "../triggers/manager";
 import { TriggerStore, type TriggerCreateInput } from "../triggers/store";
-import { createStorageRepositories } from "@task-handoff/core/storage/repositories";
+import { resolveStoragePaths } from "@task-handoff/core/storage/paths";
 import { AppRuntimeManager } from "@task-handoff/app-runtime/runtime";
 import type { AppCatalogItem, AppLaunchOptions } from "@task-handoff/app-runtime/types";
 import {
@@ -34,18 +31,13 @@ import {
 } from "@task-handoff/ai-session-runtime";
 import { NodeAgentRegistrationClient, nodeAgentRegistrationConfigFromEnv } from "./node-agent-client";
 import { registerAuth, resolveWebAuth } from "./auth";
-import { registerConversationRoutes } from "./conversation-routes";
-import { syncChannelDirectoryToReceiverSettings, syncChannelStateToReceiverSettings } from "./receiver-settings-bridge";
 import { WebEventBus } from "./events";
-import { ReceiverControlClient } from "./receiver-control-client";
-import { ReceiverProcessManager } from "./receiver-process";
 import { configSyncPresets, runConfigSync } from "./config-sync";
+import { applyManagedCodexModelConfig } from "./codex-model-config";
 import {
   controlledInstanceCapabilities,
   controlledInstanceSnapshot,
-  controlledMode,
   packageVersion,
-  pendingTaskCount,
   runtimeDiagnostics,
   triggerSnapshot,
   workspaceStatus,
@@ -156,19 +148,14 @@ function normalizeProxyRequestBody(value: unknown): Buffer | string | undefined 
 type RunWebServerOptions = {
   host: string;
   port: number;
-  socketPath: string;
   staticDir?: string;
-  receiverAutoStart?: boolean;
 };
 
 type CreateWebAppOptions = {
-  socketPath: string;
   staticDir?: string;
   logger?: FastifyServerOptions["logger"];
-  receiverAutoStart?: boolean;
   appRuntime?: AppRuntimeManager;
   aiSessionRegistry?: AiSessionRegistry;
-  receiverProcess?: ReceiverProcessManager;
 };
 
 export class AiSessionRefreshScheduler {
@@ -229,21 +216,6 @@ function installGracefulShutdown(app: Awaited<ReturnType<typeof createWebApp>>) 
     process.off("SIGINT", onSigint);
     process.off("SIGTERM", onSigterm);
   });
-}
-
-function redactChannel(channel: ReturnType<ReturnType<typeof createStorageRepositories>["channel"]>["load"]) {
-  const state = channel();
-  return {
-    ...state,
-    secrets: state.secrets
-      ? Object.fromEntries(
-          Object.entries(state.secrets).map(([key, value]) => [
-            key,
-            { configured: value !== undefined && value !== "", preview: typeof value === "string" ? `${value.slice(0, 6)}***` : undefined },
-          ]),
-        )
-      : undefined,
-  };
 }
 
 type AppLaunchRequestBody = AppLaunchOptions & {
@@ -326,32 +298,6 @@ const AppSessionRenameSchema = z
   })
   .strict();
 
-const ReceiverMessageSchema = z
-  .object({
-    source: z
-      .object({
-        type: z.literal("chat-gateway").default("chat-gateway"),
-        channel: z.enum(["web", "telegram", "wechat", "dingding"]),
-        chatSessionId: z.string().trim().min(1).max(240),
-        userId: z.string().trim().max(240).optional(),
-      })
-      .strict(),
-    message: z
-      .object({
-        text: z.string().trim().max(20000).default(""),
-        attachments: z.array(z.record(z.string(), z.unknown())).default([]),
-      })
-      .strict(),
-    routing: z
-      .object({
-        projectId: z.string().trim().min(1).max(120),
-        instanceId: z.string().trim().min(1).max(120),
-        conversationId: z.number().int().positive().optional(),
-      })
-      .strict(),
-  })
-  .strict();
-
 const TriggerCreateSchema = z.object({
   name: z.string().trim().min(1).max(160),
   description: z.string().trim().max(1000).optional(),
@@ -362,7 +308,7 @@ const TriggerCreateSchema = z.object({
     deploymentId: z.string().trim().min(1).max(240).optional(),
     origin: z.enum(["control-plane", "controlled-instance"]).optional(),
     enabled: z.boolean().optional(),
-    target: TriggerTargetSchema.optional(),
+    target: TriggerTargetSchema,
     localName: z.string().trim().min(1).max(160).optional(),
   }).strict().optional(),
 }).strict();
@@ -442,38 +388,25 @@ function envFlag(name: string, fallback = false) {
   return ["1", "true", "yes", "on"].includes(raw.toLowerCase());
 }
 
-function receiverDiagnosticLogPath(logDir: string) {
-  return process.env.TASK_HANDOFF_RECEIVER_LOG || path.join(logDir, "receiver.log");
-}
-
 function logControlledInstanceStart(logDir: string, dataDir: string) {
   if (!envFlag("TASK_HANDOFF_DIAGNOSTIC_LOGS")) {
     return;
   }
   try {
-    appendJsonl(receiverDiagnosticLogPath(logDir), {
+    const logPath = path.join(logDir, "controlled-instance.log");
+    appendJsonl(logPath, {
       event: "controlled_instance_start",
       component: "controlled-instance",
       controlMode: process.env.TASK_HANDOFF_CONTROL_MODE,
       diagnosticLogs: process.env.TASK_HANDOFF_DIAGNOSTIC_LOGS,
       dataDir,
       logDir,
-      receiverLog: receiverDiagnosticLogPath(logDir),
+      logPath,
       process: processSnapshot(),
     });
   } catch {
     // Diagnostics must never prevent the controlled instance from starting.
   }
-}
-
-function stripNullishPatch(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(stripNullishPatch);
-  }
-  if (value && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, entry === null ? undefined : stripNullishPatch(entry)]));
-  }
-  return value;
 }
 
 function resolveNoVncRoot() {
@@ -530,29 +463,23 @@ async function runTriggerOnce(triggers: TriggerStore, executor: TriggerExecutor,
 }
 
 export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
-  const socketPath = options.socketPath || DEFAULT_SOCKET_PATH;
   const startedAt = new Date().toISOString();
-  const repositories = createStorageRepositories();
-  logControlledInstanceStart(repositories.paths.logDir, repositories.paths.dataDir);
-  const auth = resolveWebAuth(repositories.paths);
+  const storagePaths = resolveStoragePaths();
+  logControlledInstanceStart(storagePaths.logDir, storagePaths.dataDir);
+  applyManagedCodexModelConfig();
+  const auth = resolveWebAuth(storagePaths);
   const events = new WebEventBus();
-  const receiver = options.receiverProcess || new ReceiverProcessManager(socketPath, repositories.paths.logDir);
-  const receiverControl = new ReceiverControlClient(socketPath);
-  const appRuntime = options.appRuntime || new AppRuntimeManager(repositories.paths);
+  const appRuntime = options.appRuntime || new AppRuntimeManager(storagePaths);
   const aiSessions = options.aiSessionRegistry || createAiSessionRegistry();
   const aiSessionController = new AiSessionController(aiSessions);
-  const conversations = new ConversationStore(repositories.paths);
-  const triggers = new TriggerStore(repositories.paths);
-  const triggerExecutor = new TriggerExecutor(triggers, receiverControl, aiSessionController);
-  const triggerManager = new TriggerManager(triggers, triggerExecutor, repositories.paths, (type, payload) => events.publish(type, payload));
-  const nodeAgentClient = new NodeAgentRegistrationClient(nodeAgentRegistrationConfigFromEnv(), () => controlledInstanceSnapshot(appRuntime, receiver, receiverControl, repositories.paths, aiSessions, triggers));
+  const triggers = new TriggerStore(storagePaths);
+  const triggerExecutor = new TriggerExecutor(triggers, aiSessionController);
+  const triggerManager = new TriggerManager(triggers, triggerExecutor, storagePaths, (type, payload) => events.publish(type, payload));
+  const nodeAgentClient = new NodeAgentRegistrationClient(nodeAgentRegistrationConfigFromEnv(), () => controlledInstanceSnapshot(appRuntime, storagePaths, aiSessions, triggers));
   const app = Fastify({ logger: options.logger ?? true, bodyLimit: 64 * 1024 * 1024 });
 
   await app.register(websocket);
   registerAuth(app, auth);
-
-  receiver.on("start", (status) => events.publish("receiver.started", status));
-  receiver.on("exit", (status) => events.publish("receiver.exited", status));
 
   app.addHook("onReady", async () => {
     if (nodeAgentClient.enabled()) {
@@ -924,21 +851,12 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       app.log.warn({ err: error, reason, sessionId: session.id }, "failed to refresh AI sessions after app session event");
     });
   };
-  receiver.on("log", (message) => events.publish("receiver.log", { message }));
   appRuntime.on("created", (session) => publishAppSessionRuntimeChange("app-session-created", session));
   appRuntime.on("updated", (session) => publishAppSessionRuntimeChange("app-session-updated", session));
   appRuntime.on("deleted", (session) => publishAppSessionRuntimeChange("app-session-deleted", session));
   app.addHook("onClose", async () => {
-    await receiver.stopAndWait();
     appRuntime.stopAll();
   });
-
-  if (!controlledMode() && (options.receiverAutoStart ?? envFlag("TASK_HANDOFF_RECEIVER_AUTO_START"))) {
-    app.addHook("onReady", async () => {
-      syncChannelDirectoryToReceiverSettings(repositories.paths.channelsDir, repositories.paths.configPath);
-      receiver.start();
-    });
-  }
 
   const noVncRoot = resolveNoVncRoot();
   if (noVncRoot) {
@@ -1006,29 +924,23 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   });
 
   app.get("/api/status", async () => {
-    const settings = loadSettings();
     return {
       data: {
-        receiverReady: receiver.status().running,
-        receiver: receiver.status(),
-        socketPath,
-        defaultConversationId: Number(settings.defaultConversationId) || DEFAULT_CONVERSATION_ID,
-        pendingTaskCount: await pendingTaskCount(receiverControl),
+        version: packageVersion(),
+        startedAt,
         runningAppCount: appRuntime.runningSessionCount(),
-        storage: repositories.paths,
+        storage: storagePaths,
       },
     };
   });
 
   app.get("/api/instance/status", async () => {
-    const settings = loadSettings();
-    const snapshot = await controlledInstanceSnapshot(appRuntime, receiver, receiverControl, repositories.paths, aiSessions, triggers);
+    const snapshot = await controlledInstanceSnapshot(appRuntime, storagePaths, aiSessions, triggers);
     return {
       data: {
         id: process.env.TASK_HANDOFF_INSTANCE_ID,
         name: process.env.TASK_HANDOFF_INSTANCE_NAME || os.hostname(),
         ...snapshot,
-        defaultConversationId: Number(settings.defaultConversationId) || DEFAULT_CONVERSATION_ID,
         startedAt,
       },
     };
@@ -1039,7 +951,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   }));
 
   app.get("/api/workspace/status", async () => ({
-    data: workspaceStatus(repositories.paths),
+    data: workspaceStatus(storagePaths),
   }));
 
   app.get<{ Querystring: { streamId?: string; sinceRevision?: string } }>("/api/ai-sessions", async (request, reply) => {
@@ -1156,7 +1068,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     } catch (error: unknown) {
       const code = error && typeof error === "object" && "code" in error ? String(error.code) : "TRIGGER_RUN_FAILED";
       events.publish("trigger.run.failed", { configHash: request.params.configHash, error: appLaunchInvalidMessage(error) });
-      return reply.code(code === "TRIGGER_NOT_FOUND" ? 404 : code === "RECEIVER_UNAVAILABLE" ? 503 : 400).send({
+      return reply.code(code === "TRIGGER_NOT_FOUND" ? 404 : 400).send({
         error: { code, message: appLaunchInvalidMessage(error) },
       });
     }
@@ -1297,7 +1209,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
 
   app.get("/api/diagnostics", async () => ({
     data: {
-      ...runtimeDiagnostics(repositories.paths, noVncRoot),
+      ...runtimeDiagnostics(storagePaths, noVncRoot),
       sessionStreams: {
         ai: {
           streamId: aiSessionStreamId,
@@ -1316,167 +1228,6 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     },
   }));
 
-  app.get("/api/settings", async () => ({
-    data: loadSettings(),
-  }));
-
-  registerConversationRoutes(app, { conversations, events });
-
-  app.post("/api/receiver/start", async (_request, reply) => {
-    if (controlledMode()) {
-      return reply.code(409).send({
-        error: {
-          code: "RECEIVER_MANAGED_BY_CONTROL_PLANE",
-          message: "Receiver chat bindings are managed by the control plane while this instance is node-agent controlled.",
-        },
-      });
-    }
-    syncChannelDirectoryToReceiverSettings(repositories.paths.channelsDir, repositories.paths.configPath);
-    return { data: receiver.start() };
-  });
-
-  app.post("/api/receiver/stop", async () => ({
-    data: receiver.stop(),
-  }));
-
-  app.get<{ Querystring: { maxBytes?: string } }>("/api/receiver/logs", async (request) => {
-    const requestedMaxBytes = Number(request.query.maxBytes || 64 * 1024);
-    const maxBytes = Number.isFinite(requestedMaxBytes) ? Math.min(Math.max(1024, requestedMaxBytes), 512 * 1024) : 64 * 1024;
-    return { data: receiver.readLogs(maxBytes) };
-  });
-
-  app.get("/api/receiver/status", async () => ({
-    data: {
-      ...receiver.status(),
-      pendingCount: await pendingTaskCount(receiverControl),
-    },
-  }));
-
-  app.post<{ Body: unknown }>("/api/receiver/messages", async (request, reply) => {
-    try {
-      const parsed = ReceiverMessageSchema.parse(request.body);
-      if (!parsed.message.text.trim()) {
-        return reply.code(400).send({ error: { code: "RECEIVER_MESSAGE_INVALID", message: "Message text is required." } });
-      }
-      return {
-        data: await receiverControl.message({
-          channel: parsed.source.channel,
-          chatSessionId: parsed.source.chatSessionId,
-          userId: parsed.source.userId,
-          text: parsed.message.text,
-          attachments: parsed.message.attachments,
-          conversationId: parsed.routing.conversationId,
-        }),
-      };
-    } catch (error: unknown) {
-      const code = error && typeof error === "object" && "code" in error ? String(error.code) : "RECEIVER_MESSAGE_INVALID";
-      return reply.code(code === "RECEIVER_UNAVAILABLE" ? 503 : 400).send({
-        error: {
-          code,
-          message: appLaunchInvalidMessage(error),
-        },
-      });
-    }
-  });
-
-  const pendingListHandler = async (_request: unknown, reply: { code: (statusCode: number) => { send: (payload: unknown) => unknown } }) => {
-    try {
-      return { data: await receiverControl.pendingList() };
-    } catch (error: unknown) {
-      const code = error && typeof error === "object" && "code" in error ? String(error.code) : "RECEIVER_CONTROL_FAILED";
-      return reply.code(code === "RECEIVER_UNAVAILABLE" ? 503 : 400).send({ error: { code, message: error instanceof Error ? error.message : String(error) } });
-    }
-  };
-
-  app.get("/api/tasks/pending", pendingListHandler);
-  app.get("/api/receiver/pending", pendingListHandler);
-
-  app.post<{ Params: { id: string }; Body: { markdown?: string } }>("/api/tasks/:id/reply", async (request, reply) => {
-    const id = Number(request.params.id);
-    const markdown = request.body?.markdown;
-    if (!Number.isInteger(id) || id <= 0 || !markdown?.trim()) {
-      return reply.code(400).send({ error: { code: "TASK_REPLY_INVALID", message: "Task id and markdown are required." } });
-    }
-    try {
-      return { data: await receiverControl.reply(id, markdown) };
-    } catch (error: unknown) {
-      const code = error && typeof error === "object" && "code" in error ? String(error.code) : "RECEIVER_CONTROL_FAILED";
-      return reply.code(code === "PENDING_TASK_NOT_FOUND" ? 404 : code === "RECEIVER_UNAVAILABLE" ? 503 : 400).send({ error: { code, message: error instanceof Error ? error.message : String(error) } });
-    }
-  });
-
-  app.post<{ Params: { id: string }; Body: { markdown?: string } }>("/api/receiver/pending/:id/reply", async (request, reply) => {
-    const id = Number(request.params.id);
-    const markdown = request.body?.markdown;
-    if (!Number.isInteger(id) || id <= 0 || !markdown?.trim()) {
-      return reply.code(400).send({ error: { code: "TASK_REPLY_INVALID", message: "Task id and markdown are required." } });
-    }
-    try {
-      return { data: await receiverControl.reply(id, markdown) };
-    } catch (error: unknown) {
-      const code = error && typeof error === "object" && "code" in error ? String(error.code) : "RECEIVER_CONTROL_FAILED";
-      return reply.code(code === "PENDING_TASK_NOT_FOUND" ? 404 : code === "RECEIVER_UNAVAILABLE" ? 503 : 400).send({ error: { code, message: error instanceof Error ? error.message : String(error) } });
-    }
-  });
-
-  app.post<{ Params: { id: string } }>("/api/tasks/:id/drop", async (request, reply) => {
-    const id = Number(request.params.id);
-    if (!Number.isInteger(id) || id <= 0) {
-      return reply.code(400).send({ error: { code: "TASK_ID_INVALID", message: "Task id must be a positive integer." } });
-    }
-    try {
-      return { data: await receiverControl.drop(id) };
-    } catch (error: unknown) {
-      const code = error && typeof error === "object" && "code" in error ? String(error.code) : "RECEIVER_CONTROL_FAILED";
-      return reply.code(code === "PENDING_TASK_NOT_FOUND" ? 404 : code === "RECEIVER_UNAVAILABLE" ? 503 : 400).send({ error: { code, message: error instanceof Error ? error.message : String(error) } });
-    }
-  });
-
-  for (const [route, decision] of [
-    ["approve", "allow"],
-    ["deny", "deny"],
-    ["skip", "skip"],
-  ] as const) {
-    app.post<{ Params: { id: string } }>(`/api/tasks/:id/${route}`, async (request, reply) => {
-      const id = Number(request.params.id);
-      if (!Number.isInteger(id) || id <= 0) {
-        return reply.code(400).send({ error: { code: "TASK_ID_INVALID", message: "Task id must be a positive integer." } });
-      }
-      try {
-        return { data: await receiverControl.approval(id, decision) };
-      } catch (error: unknown) {
-        const code = error && typeof error === "object" && "code" in error ? String(error.code) : "RECEIVER_CONTROL_FAILED";
-        return reply.code(code === "PENDING_TASK_NOT_FOUND" ? 404 : code === "RECEIVER_UNAVAILABLE" ? 503 : 400).send({ error: { code, message: error instanceof Error ? error.message : String(error) } });
-      }
-    });
-    app.post<{ Params: { id: string } }>(`/api/receiver/pending/:id/${route}`, async (request, reply) => {
-      const id = Number(request.params.id);
-      if (!Number.isInteger(id) || id <= 0) {
-        return reply.code(400).send({ error: { code: "TASK_ID_INVALID", message: "Task id must be a positive integer." } });
-      }
-      try {
-        return { data: await receiverControl.approval(id, decision) };
-      } catch (error: unknown) {
-        const code = error && typeof error === "object" && "code" in error ? String(error.code) : "RECEIVER_CONTROL_FAILED";
-        return reply.code(code === "PENDING_TASK_NOT_FOUND" ? 404 : code === "RECEIVER_UNAVAILABLE" ? 503 : 400).send({ error: { code, message: error instanceof Error ? error.message : String(error) } });
-      }
-    });
-  }
-
-  app.post<{ Params: { id: string }; Body: { decision?: "allow" | "deny" | "skip" } }>("/api/receiver/pending/:id/approval", async (request, reply) => {
-    const id = Number(request.params.id);
-    const decision = request.body?.decision;
-    if (!Number.isInteger(id) || id <= 0 || !decision) {
-      return reply.code(400).send({ error: { code: "TASK_APPROVAL_INVALID", message: "Task id and approval decision are required." } });
-    }
-    try {
-      return { data: await receiverControl.approval(id, decision) };
-    } catch (error: unknown) {
-      const code = error && typeof error === "object" && "code" in error ? String(error.code) : "RECEIVER_CONTROL_FAILED";
-      return reply.code(code === "PENDING_TASK_NOT_FOUND" ? 404 : code === "RECEIVER_UNAVAILABLE" ? 503 : 400).send({ error: { code, message: error instanceof Error ? error.message : String(error) } });
-    }
-  });
-
   app.get("/api/apps/catalog", async () => ({
     data: appRuntime.catalog(),
   }));
@@ -1492,7 +1243,11 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     }
     try {
       const body = ConfigSyncRequestSchema.parse(request.body || {});
-      return { data: runConfigSync(direction, request.params.preset, body.preset) };
+      const result = runConfigSync(direction, request.params.preset, body.preset);
+      if (direction === "import" && request.params.preset === "codex") {
+        applyManagedCodexModelConfig();
+      }
+      return { data: result };
     } catch (error: unknown) {
       const record = error && typeof error === "object" ? (error as Record<string, unknown>) : {};
       return reply.code(typeof record.statusCode === "number" ? record.statusCode : 500).send({
@@ -1812,59 +1567,6 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       resize,
     });
     return reply.redirect(`/api/novnc/vnc.html?${params.toString()}`);
-  });
-
-  app.patch<{ Body: Record<string, unknown> }>("/api/settings", async (request, reply) => {
-    try {
-      const body = request.body || {};
-      const requestedDefaultConversationId = Number(body.defaultConversationId);
-      if (Object.prototype.hasOwnProperty.call(body, "defaultConversationId")) {
-        if (!Number.isInteger(requestedDefaultConversationId) || requestedDefaultConversationId <= 0) {
-          return reply.code(400).send({ error: { code: "SETTINGS_INVALID_CONVERSATION", message: "Default conversation id must be a positive integer." } });
-        }
-        if (!conversations.get(requestedDefaultConversationId)) {
-          return reply.code(404).send({ error: { code: "CONVERSATION_NOT_FOUND", message: "Default conversation does not exist." } });
-        }
-      }
-      const next = patchSettings(body);
-      if (Number.isInteger(requestedDefaultConversationId) && requestedDefaultConversationId > 0) {
-        conversations.use(requestedDefaultConversationId);
-      }
-      return { data: next };
-    } catch (error: unknown) {
-      return reply.code(400).send({ error: { code: "SETTINGS_UPDATE_FAILED", message: error instanceof Error ? error.message : String(error) } });
-    }
-  });
-
-  app.get("/api/channels", async () => ({
-    data: [
-      redactChannel(repositories.channel("telegram").load.bind(repositories.channel("telegram"))),
-      redactChannel(repositories.channel("wechat").load.bind(repositories.channel("wechat"))),
-      redactChannel(repositories.channel("dingding").load.bind(repositories.channel("dingding"))),
-    ],
-  }));
-
-  app.get<{ Params: { channel: "telegram" | "wechat" | "dingding"; instanceId: string } }>("/api/channels/:channel/:instanceId", async (request, reply) => {
-    const channel = request.params.channel;
-    if (!["telegram", "wechat", "dingding"].includes(channel)) {
-      return reply.code(404).send({ error: { code: "CHANNEL_NOT_FOUND", message: "Channel not found." } });
-    }
-    const store = repositories.channel(channel, request.params.instanceId);
-    return { data: redactChannel(store.load.bind(store)) };
-  });
-
-  app.patch<{
-    Params: { channel: "telegram" | "wechat" | "dingding"; instanceId: string };
-    Body: Record<string, unknown>;
-  }>("/api/channels/:channel/:instanceId", async (request, reply) => {
-    const channel = request.params.channel;
-    if (!["telegram", "wechat", "dingding"].includes(channel)) {
-      return reply.code(404).send({ error: { code: "CHANNEL_NOT_FOUND", message: "Channel not found." } });
-    }
-    const store = repositories.channel(channel, request.params.instanceId);
-    const next = store.patch({ ...(stripNullishPatch(request.body) as Record<string, unknown>), channel, instanceId: request.params.instanceId, schemaVersion: 1 });
-    syncChannelStateToReceiverSettings(next, repositories.paths.configPath);
-    return { data: redactChannel(() => next) };
   });
 
   app.setNotFoundHandler(async (request, reply) => {

@@ -95,7 +95,6 @@ const controlledInstanceBuild = [
   {
     input: {
       "controlled-instance-cli": "apps/controlled-instance-image/src/cli.ts",
-      receiver: "packages/receiver-worker/src/receiver-entry.ts",
       web: "packages/controlled-instance/src/web/server.ts",
     },
     output: {
@@ -106,16 +105,6 @@ const controlledInstanceBuild = [
     },
     external: isExternal,
     plugins: [cleanDist, ...plugins],
-  },
-  {
-    input: "packages/receiver-worker/src/app.ts",
-    output: {
-      file: "dist/receiver-ink.mjs",
-      format: "esm",
-      inlineDynamicImports: true,
-    },
-    external: isExternal,
-    plugins,
   },
 ];
 

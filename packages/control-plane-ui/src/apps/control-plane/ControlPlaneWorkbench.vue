@@ -184,9 +184,11 @@
         :launchable-apps="launchableApps"
         :launching-app="launchingApp"
         :loading="board.isLoading.value"
+        :models="models.data.value || []"
         :node-local-folders="activeNodeLocalFolders"
         :rename-instance="renameInstance"
         :rename-session="renameSession"
+        :update-instance-models="updateInstanceModels"
         :selected-ai-session="selectedAiSession"
         :ordered-session-tabs="orderedSessionTabs"
         :session-tabs="sessionTabs"
@@ -215,9 +217,9 @@ import { useQueryClient } from "@tanstack/vue-query";
 import { useEventListener } from "@vueuse/core";
 import { Bot, Download, House, LayoutGrid, LogOut, Maximize2, Minus, RefreshCw, Settings, X } from "@lucide/vue";
 import "@xterm/xterm/css/xterm.css";
-import { logoutControlPlane, renameAppSession, resolveAiSessionApproval, updateControlledInstance, useAuthSessionQuery, useConfigSyncPresetsQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useInstanceBoardQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
+import { logoutControlPlane, renameAppSession, resolveAiSessionApproval, updateControlledInstance, useAuthSessionQuery, useConfigSyncPresetsQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useInstanceBoardQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
 import { getApiData } from "../../api/client";
-import { type AiSessionSummary, type InstanceBoardItem, type NodeLocalFolder } from "../../api/types";
+import { type AiSessionSummary, type InstanceBoardItem, type ModelSelection, type NodeLocalFolder } from "../../api/types";
 import { Button } from "../../components/ui/button";
 import AiSessionBoardView from "./ai-board/AiSessionBoardView.vue";
 import InstanceBoardView from "./board/InstanceBoardView.vue";
@@ -266,6 +268,7 @@ const queryClient = useQueryClient();
 const authSession = useAuthSessionQuery();
 const controlPlane = useControlPlaneStatusQuery();
 const board = useInstanceBoardQuery();
+const models = useModelsQuery();
 const controlPlaneAiSessions = useControlPlaneAiSessionsQuery();
 const controlPlaneAppSessions = useControlPlaneAppSessionsQuery();
 const configSyncPresetsQuery = useConfigSyncPresetsQuery();
@@ -704,6 +707,11 @@ function handleInstanceCreated(instance: InstanceBoardItem) {
 
 async function renameInstance(instance: InstanceBoardItem, name: string) {
   await updateControlledInstance(instance.id, { name });
+  await refresh();
+}
+
+async function updateInstanceModels(instance: InstanceBoardItem, modelSelection: ModelSelection) {
+  await updateControlledInstance(instance.id, { modelSelection });
   await refresh();
 }
 
