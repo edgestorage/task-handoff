@@ -1,7 +1,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-const { relativeNodePathSegments, resolveNodePath } = require("../packages/control-plane/src/node-path.ts");
+const { relativeNodePathSegments, resolveNodePath } = require("../packages/control-plane/src/control-plane/nodes/path.ts");
 
 test("node paths resolve with the selected node platform semantics", () => {
   assert.equal(resolveNodePath("/workspace/../project"), "/project");

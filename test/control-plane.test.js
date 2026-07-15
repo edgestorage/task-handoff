@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
+const { spawn } = require("node:child_process");
 const { EventEmitter } = require("node:events");
 const test = require("node:test");
 const WebSocket = require("ws");
@@ -11,23 +12,31 @@ const { z } = require("zod");
 const { createControlPlaneApp } = require("../packages/control-plane/src/server.ts");
 const { createNodeAgentApp, listenNodeAgentIpcServer, NodeAgentExternalListenerManager } = require("../packages/control-plane/src/node-agent.ts");
 const { ControlPlaneChatGatewayRuntime, aiSessionDeliveryText, createDingdingStreamClient } = require("../packages/control-plane/src/chat-gateway.ts");
-const { ControlledInstanceGateway } = require("../packages/control-plane/src/controlled-instance-gateway.ts");
-const { DingdingProgressStore, parseDingdingCardEvent, sendDingdingActionsCard } = require("../packages/control-plane/src/chat-gateway-adapters.ts");
-const { ControlPlaneEventBus } = require("../packages/control-plane/src/events.ts");
-const { ControlPlaneAiSessionAggregator } = require("../packages/control-plane/src/ai-session-aggregator.ts");
-const { ControlPlaneAppSessionAggregator } = require("../packages/control-plane/src/app-session-aggregator.ts");
-const { NodeAgentInstanceEventForwarder } = require("../packages/control-plane/src/node-agent-events.ts");
-const { ControlPlaneNodeAgentTunnelTransport } = require("../packages/control-plane/src/node-agent-tunnel.ts");
-const { createNodeAgentHmacHeaders } = require("../packages/control-plane/src/node-agent-auth.ts");
-const { fetchNodeAgentIpc, nodeAgentIpcEndpoint, nodeAgentIpcPath, prepareNodeAgentIpcPath } = require("../packages/control-plane/src/node-agent-ipc.ts");
-const { can } = require("../packages/control-plane/src/authorization.ts");
-const { LocalDockerExecutor, dockerRunArgs } = require("../packages/control-plane/src/executor.ts");
-const { assertInstalledPackageVersion, checkControlledInstanceUpdate, checkNodeAgentUpdate, dockerImageRefForChannel, isNewerVersion, managedNpmPackageInstall } = require("../packages/control-plane/src/node-updates.ts");
-const { ProcessSingletonError, acquireProcessSingletonLock } = require("../packages/control-plane/src/process-lock.ts");
-const { EventConnectionRetryTimer, eventConnectionRetryDelay, eventConnectionSafetyIntervalMs } = require("../packages/control-plane/src/event-connection-retry.ts");
-const { JsonCollection, JsonFile, nodeAgentStorePaths } = require("../packages/control-plane/src/store.ts");
+const { ControlledInstanceGateway } = require("../packages/control-plane/src/control-plane/instances/gateway.ts");
+const { parseDingdingCardEvent, sendDingdingActionsCard } = require("../packages/control-plane/src/control-plane/chat/adapters/dingding.ts");
+const { DingdingProgressStore } = require("../packages/control-plane/src/control-plane/chat/gateway/dingding-progress-store.ts");
+const { DingdingBridgeRuntimeManager } = require("../packages/control-plane/src/control-plane/chat/gateway/dingding-bridge-runtime.ts");
+const { ControlPlaneEventBus } = require("../packages/control-plane/src/control-plane/events/bus.ts");
+const { ControlPlaneAiSessionAggregator } = require("../packages/control-plane/src/control-plane/sessions/ai-session-aggregator.ts");
+const { ControlPlaneAppSessionAggregator } = require("../packages/control-plane/src/control-plane/sessions/app-session-aggregator.ts");
+const { NodeAgentInstanceEventForwarder } = require("../packages/control-plane/src/node-agent/events.ts");
+const { NodeAgentPairedHmacVerifier } = require("../packages/control-plane/src/node-agent/identity/hmac-verifier.ts");
+const { NodeAgentIdentityService } = require("../packages/control-plane/src/node-agent/identity/service.ts");
+const { NodeAgentIdentityStore } = require("../packages/control-plane/src/node-agent/identity/store.ts");
+const { ControlPlaneNodeAgentTunnelTransport } = require("../packages/control-plane/src/control-plane/nodes/tunnel.ts");
+const { createNodeAgentHmacHeaders, NODE_AGENT_HMAC_TIMESTAMP_WINDOW_MS } = require("../packages/control-plane/src/shared/security/node-agent-auth.ts");
+const { fetchNodeAgentIpc, nodeAgentIpcEndpoint, nodeAgentIpcPath, prepareNodeAgentIpcPath } = require("../packages/control-plane/src/shared/transport/node-agent-ipc.ts");
+const { can } = require("../packages/control-plane/src/control-plane/auth/authorization.ts");
+const { LocalDockerExecutor, dockerRunArgs } = require("../packages/control-plane/src/node-agent/runtimes/docker.ts");
+const { assertInstalledPackageVersion, checkControlledInstanceUpdate, checkNodeAgentUpdate, dockerImageRefForChannel, isNewerVersion, managedNpmPackageInstall, resolveNodeAgentUpdateWorker } = require("../packages/control-plane/src/node-agent/updates.ts");
+const { ProcessSingletonError, acquireProcessSingletonLock } = require("../packages/control-plane/src/shared/process/singleton-lock.ts");
+const { acquireControlPlaneSingletonLock } = require("../packages/control-plane/src/control-plane/process/singleton-lock.ts");
+const { acquireNodeAgentSingletonLock } = require("../packages/control-plane/src/node-agent/process/singleton-lock.ts");
+const { EventConnectionRetryTimer, eventConnectionRetryDelay, eventConnectionSafetyIntervalMs } = require("../packages/control-plane/src/shared/events/connection-retry.ts");
+const { JsonCollection, JsonFile } = require("../packages/control-plane/src/shared/persistence/store.ts");
+const { nodeAgentStorePaths } = require("../packages/control-plane/src/node-agent/persistence/paths.ts");
 const { displayAiSessionMessage, displayAiSessionTitle, launchableAppsForInstance: uiLaunchableAppsForInstance } = require("../packages/control-plane-ui/src/apps/control-plane/useInstanceSessions.ts");
-const { launchableAppsForInstance: chatLaunchableAppsForInstance } = require("../packages/control-plane/src/control-plane-chat-rendering.ts");
+const { launchableAppsForInstance: chatLaunchableAppsForInstance } = require("../packages/control-plane/src/control-plane/chat/rendering.ts");
 const { appSessionStatus } = require("../packages/control-plane-ui/src/apps/control-plane/appSessionVisibility.ts");
 const { AiSessionEventType, AiSessionEventTopic } = require("../packages/protocol/src/ai-sessions.ts");
 const { AppSessionEventType, normalizeAppSessionRecord } = require("../packages/protocol/src/app-sessions.ts");
@@ -1309,10 +1318,10 @@ test("instance event connections reconcile immediately, clean retries on removal
 test("control plane process lock enforces one owner per system lock", () => {
   const dataDir = tempDataDir("control-plane-lock");
   const lockPath = path.join(dataDir, "control-plane-system.lock");
-  const first = acquireProcessSingletonLock(lockPath, { component: "control-plane", dataDir: path.join(dataDir, "first"), host: "127.0.0.1", port: 18081 });
+  const first = acquireControlPlaneSingletonLock(lockPath, { dataDir: path.join(dataDir, "first"), host: "127.0.0.1", port: 18081 });
 
   assert.throws(
-    () => acquireProcessSingletonLock(lockPath, { component: "control-plane", dataDir: path.join(dataDir, "second"), host: "127.0.0.1", port: 18082 }),
+    () => acquireControlPlaneSingletonLock(lockPath, { dataDir: path.join(dataDir, "second"), host: "127.0.0.1", port: 18082 }),
     (error) => {
       assert.equal(error instanceof ProcessSingletonError, true);
       assert.equal(error.code, "CONTROL_PLANE_ALREADY_RUNNING");
@@ -1325,7 +1334,7 @@ test("control plane process lock enforces one owner per system lock", () => {
   );
 
   first.release();
-  const second = acquireProcessSingletonLock(lockPath, { component: "control-plane", dataDir: path.join(dataDir, "second"), host: "127.0.0.1", port: 18082 });
+  const second = acquireControlPlaneSingletonLock(lockPath, { dataDir: path.join(dataDir, "second"), host: "127.0.0.1", port: 18082 });
   assert.equal(second.owner.port, 18082);
   second.release();
 });
@@ -1333,10 +1342,10 @@ test("control plane process lock enforces one owner per system lock", () => {
 test("node agent process lock enforces one owner independent of port", () => {
   const dataDir = tempDataDir("node-agent-lock");
   const lockPath = path.join(dataDir, "node-agent-system.lock");
-  const first = acquireProcessSingletonLock(lockPath, { component: "node-agent", dataDir: path.join(dataDir, "first"), host: "127.0.0.1", port: 18091 });
+  const first = acquireNodeAgentSingletonLock(lockPath, { dataDir: path.join(dataDir, "first"), host: "127.0.0.1", port: 18091 });
 
   assert.throws(
-    () => acquireProcessSingletonLock(lockPath, { component: "node-agent", dataDir: path.join(dataDir, "second"), host: "127.0.0.1", port: 18092 }),
+    () => acquireNodeAgentSingletonLock(lockPath, { dataDir: path.join(dataDir, "second"), host: "127.0.0.1", port: 18092 }),
     (error) => {
       assert.equal(error instanceof ProcessSingletonError, true);
       assert.equal(error.code, "NODE_AGENT_ALREADY_RUNNING");
@@ -1367,6 +1376,118 @@ test("control plane process lock recovers stale owners", () => {
   const lock = acquireProcessSingletonLock(lockPath, { component: "control-plane", host: "127.0.0.1", port: 18082 });
   assert.equal(lock.owner.pid, process.pid);
   assert.equal(lock.owner.port, 18082);
+  lock.release();
+});
+
+test("process lock allows exactly one concurrent child-process owner", async () => {
+  const dataDir = tempDataDir("concurrent-process-lock");
+  const lockPath = path.join(dataDir, "system.lock");
+  const gatePath = path.join(dataDir, "start");
+  const modulePath = path.resolve(__dirname, "../packages/control-plane/src/shared/process/singleton-lock.ts");
+  const script = String.raw`
+    const fs = require("node:fs");
+    const { acquireProcessSingletonLock } = require(process.argv[1]);
+    const lockPath = process.argv[2];
+    const gatePath = process.argv[3];
+    while (!fs.existsSync(gatePath)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+    try {
+      const lock = acquireProcessSingletonLock(lockPath, { component: "control-plane" });
+      process.stdout.write(JSON.stringify({ acquired: true, pid: process.pid }));
+      setTimeout(() => { lock.release(); process.exit(0); }, 300);
+    } catch (error) {
+      process.stdout.write(JSON.stringify({ acquired: false, code: error.code }));
+    }
+  `;
+  const children = Array.from({ length: 8 }, () => spawn(process.execPath, ["-e", script, modulePath, lockPath, gatePath], {
+    stdio: ["ignore", "pipe", "pipe"],
+  }));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  fs.writeFileSync(gatePath, "start\n");
+  const results = await Promise.all(children.map((child) => new Promise((resolve, reject) => {
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.once("error", reject);
+    child.once("exit", (code) => code === 0 ? resolve(JSON.parse(stdout)) : reject(new Error(stderr || `child exited ${code}`)));
+  })));
+
+  assert.equal(results.filter((result) => result.acquired).length, 1);
+  assert.equal(results.filter((result) => result.code === "PROCESS_ALREADY_RUNNING").length, 7);
+});
+
+test("process lock does not reclaim a recent incomplete child-process initialization", async () => {
+  const dataDir = tempDataDir("initializing-process-lock");
+  const lockPath = path.join(dataDir, "system.lock");
+  const script = String.raw`
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const lockPath = process.argv[1];
+    fs.mkdirSync(lockPath);
+    process.stdout.write("ready\n");
+    setTimeout(() => {
+      fs.writeFileSync(path.join(lockPath, "owner.json"), JSON.stringify({
+        pid: process.pid, hostname: "child", command: "test", acquiredAt: new Date().toISOString(), token: "child-token"
+      }));
+      setTimeout(() => process.exit(0), 200);
+    }, 250);
+  `;
+  const child = spawn(process.execPath, ["-e", script, lockPath], { stdio: ["ignore", "pipe", "pipe"] });
+  await new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.stdout.once("data", resolve);
+  });
+
+  assert.throws(
+    () => acquireControlPlaneSingletonLock(lockPath),
+    (error) => error instanceof ProcessSingletonError && error.code === "CONTROL_PLANE_ALREADY_RUNNING",
+  );
+  assert.equal(fs.existsSync(lockPath), true);
+  await new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("exit", (code) => code === 0 ? resolve() : reject(new Error(`child exited ${code}`)));
+  });
+});
+
+test("process lock recovers an aged directory with no owner", () => {
+  const dataDir = tempDataDir("missing-owner-process-lock");
+  const lockPath = path.join(dataDir, "system.lock");
+  fs.mkdirSync(lockPath);
+  const staleAt = new Date(Date.now() - 10_000);
+  fs.utimesSync(lockPath, staleAt, staleAt);
+
+  const lock = acquireControlPlaneSingletonLock(lockPath);
+  assert.equal(lock.owner.pid, process.pid);
+  lock.release();
+});
+
+test("process lock recovers an aged directory with an invalid owner", () => {
+  const dataDir = tempDataDir("invalid-owner-process-lock");
+  const lockPath = path.join(dataDir, "system.lock");
+  fs.mkdirSync(lockPath);
+  fs.writeFileSync(path.join(lockPath, "owner.json"), "{ truncated");
+  const staleAt = new Date(Date.now() - 10_000);
+  fs.utimesSync(lockPath, staleAt, staleAt);
+
+  const lock = acquireControlPlaneSingletonLock(lockPath);
+  assert.equal(lock.owner.pid, process.pid);
+  lock.release();
+});
+
+test("process lock recovers an abandoned stale-recovery claim", () => {
+  const dataDir = tempDataDir("abandoned-recovery-process-lock");
+  const lockPath = path.join(dataDir, "system.lock");
+  fs.mkdirSync(lockPath);
+  fs.writeFileSync(path.join(lockPath, "recovering.json"), JSON.stringify({
+    token: "abandoned-token",
+    pid: 99999999,
+    startedAt: new Date(Date.now() - 10_000).toISOString(),
+  }));
+  const staleAt = new Date(Date.now() - 10_000);
+  fs.utimesSync(lockPath, staleAt, staleAt);
+
+  const lock = acquireControlPlaneSingletonLock(lockPath);
+  assert.equal(lock.owner.pid, process.pid);
   lock.release();
 });
 
@@ -2029,6 +2150,62 @@ test("node agent update checks use the configured absolute npm command", async (
 
   assert.equal(result.updateAvailable, true);
   assert.deepEqual(calls, [["/opt/node/bin/npm", ["view", "@task-handoff/node-agent@beta", "version", "--json"]]]);
+});
+
+test("node agent resolves update workers in source and bundled runtime layouts", () => {
+  const root = tempDataDir("node-agent-worker-layouts");
+  const sourceModuleDir = path.join(root, "packages", "control-plane", "src", "node-agent");
+  const sourceWorker = path.join(root, "scripts", "node-update-worker.cjs");
+  fs.mkdirSync(sourceModuleDir, { recursive: true });
+  fs.mkdirSync(path.dirname(sourceWorker), { recursive: true });
+  fs.writeFileSync(sourceWorker, "// source worker\n");
+  assert.deepEqual(resolveNodeAgentUpdateWorker(sourceModuleDir), {
+    worker: sourceWorker,
+    packaged: false,
+    expectedWorker: path.join(root, "packages", "control-plane", "src", "bin", "task-handoff-node-update-worker"),
+  });
+
+  const packageRoot = path.join(root, "release", "npm", "node-agent");
+  const distModuleDir = path.join(packageRoot, "dist");
+  const packagedWorker = path.join(packageRoot, "bin", "task-handoff-node-update-worker");
+  fs.mkdirSync(distModuleDir, { recursive: true });
+  fs.mkdirSync(path.dirname(packagedWorker), { recursive: true });
+  fs.writeFileSync(packagedWorker, "#!/usr/bin/env node\n");
+  assert.deepEqual(resolveNodeAgentUpdateWorker(distModuleDir), {
+    worker: packagedWorker,
+    packaged: true,
+    expectedWorker: packagedWorker,
+  });
+});
+
+test("node agent update apply launches the resolved worker through systemd-run", async (t) => {
+  const calls = [];
+  const app = await createNodeAgentApp({
+    dataDir: tempDataDir("node-agent-update-apply-worker"),
+    logger: false,
+    token: "agent-secret",
+    updateCommandRunner: async (command, args) => {
+      calls.push([command, args]);
+      return command === "npm" ? { stdout: JSON.stringify("9.8.7"), stderr: "" } : { stdout: "", stderr: "" };
+    },
+  });
+  t.after(() => app.close());
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/updates/apply",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: { target: { component: "node-agent" } },
+  });
+  assert.equal(response.statusCode, 202);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1][0], "systemd-run");
+  const args = calls[1][1];
+  const propertyIndex = args.indexOf("--property=Type=exec");
+  assert.equal(args[propertyIndex + 1], process.execPath);
+  assert.equal(args[propertyIndex + 2], path.resolve(__dirname, "..", "scripts", "node-update-worker.cjs"));
+  assert.equal(args[args.indexOf("--target-version") + 1], "9.8.7");
+  assert.equal(args[args.indexOf("--npm-command") + 1], "npm");
 });
 
 test("local docker run args include resolved model environment", () => {
@@ -2983,6 +3160,167 @@ test("node agent pairs additional control planes with one-time join tokens", asy
     remoteAddress: "203.0.113.10",
   });
   assert.equal(signedAfterRestart.statusCode, 200);
+});
+
+test("node agent identity sanitizes unknown stored fields and writes atomically with private permissions", () => {
+  const dataDir = tempDataDir("node-agent-identity-sanitize");
+  const paths = nodeAgentStorePaths(dataDir);
+  const timestamp = new Date().toISOString();
+  const warnings = [];
+  fs.mkdirSync(path.dirname(paths.identityPath), { recursive: true });
+  fs.writeFileSync(paths.identityPath, JSON.stringify({
+    nodeId: " node_sanitized ",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    futureIdentityField: true,
+    pairingInvites: [{
+      tokenHash: "token-hash",
+      createdAt: timestamp,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      futureInviteField: "ignored",
+    }],
+    remoteControlPlanes: [{
+      id: "cp_remote",
+      keyId: "key_remote",
+      secret: "remote-secret",
+      pairedAt: timestamp,
+      updatedAt: timestamp,
+      futureRemoteField: "ignored",
+    }],
+  }));
+
+  const store = new NodeAgentIdentityStore(paths, { logger: (message, details) => warnings.push({ message, details }) });
+  const identity = store.read();
+  assert.equal(identity.nodeId, "node_sanitized");
+  assert.equal(identity.futureIdentityField, undefined);
+  assert.equal(identity.pairingInvites[0].futureInviteField, undefined);
+  assert.equal(identity.remoteControlPlanes[0].futureRemoteField, undefined);
+  assert.equal(identity.remoteControlPlanes[0].active, true);
+  assert.equal(warnings.length, 3);
+
+  store.write(identity);
+  const persisted = JSON.parse(fs.readFileSync(paths.identityPath, "utf8"));
+  assert.equal(persisted.futureIdentityField, undefined);
+  assert.equal(persisted.pairingInvites[0].futureInviteField, undefined);
+  assert.equal(persisted.remoteControlPlanes[0].futureRemoteField, undefined);
+  assert.equal(fs.statSync(paths.identityPath).mode & 0o777, 0o600);
+  assert.equal(fs.readdirSync(path.dirname(paths.identityPath)).filter((name) => name.includes("identity.json.")).length, 0);
+});
+
+test("node agent does not replace malformed or truncated identity data", () => {
+  const dataDir = tempDataDir("node-agent-identity-truncated");
+  const paths = nodeAgentStorePaths(dataDir);
+  const truncated = '{"nodeId":"node_original","remoteControlPlanes":[';
+  fs.mkdirSync(path.dirname(paths.identityPath), { recursive: true });
+  fs.writeFileSync(paths.identityPath, truncated);
+
+  const identity = new NodeAgentIdentityService(paths);
+  assert.throws(
+    () => identity.resolveNodeId(),
+    (error) => error.code === "NODE_AGENT_IDENTITY_INVALID" && /invalid JSON/.test(error.message),
+  );
+  assert.equal(fs.readFileSync(paths.identityPath, "utf8"), truncated);
+});
+
+test("node agent does not initialize over an unreadable identity", (t) => {
+  if (process.platform === "win32") {
+    t.skip("POSIX file permissions are required");
+    return;
+  }
+  const dataDir = tempDataDir("node-agent-identity-unreadable");
+  const paths = nodeAgentStorePaths(dataDir);
+  const stored = JSON.stringify({ nodeId: "node_original", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+  fs.mkdirSync(path.dirname(paths.identityPath), { recursive: true });
+  fs.writeFileSync(paths.identityPath, stored, { mode: 0o600 });
+  fs.chmodSync(paths.identityPath, 0o000);
+  try {
+    assert.throws(
+      () => new NodeAgentIdentityService(paths).resolveNodeId(),
+      (error) => error.code === "NODE_AGENT_IDENTITY_READ_FAILED",
+    );
+  } finally {
+    fs.chmodSync(paths.identityPath, 0o600);
+  }
+  assert.equal(fs.readFileSync(paths.identityPath, "utf8"), stored);
+});
+
+test("node agent identity ignores invalid stored credentials and invite records", () => {
+  const paths = nodeAgentStorePaths(tempDataDir("node-agent-identity-invalid-records"));
+  const timestamp = new Date().toISOString();
+  const warnings = [];
+  fs.mkdirSync(path.dirname(paths.identityPath), { recursive: true });
+  fs.writeFileSync(paths.identityPath, JSON.stringify({
+    nodeId: "node_valid",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    pairingInvites: [{ tokenHash: "token", createdAt: timestamp, expiresAt: "not-a-datetime" }],
+    remoteControlPlanes: [
+      { id: "cp_empty_secret", keyId: "known", secret: "", pairedAt: timestamp, updatedAt: timestamp },
+      { id: "cp_invalid_url", keyId: "key_url", secret: "secret", url: "not a url", pairedAt: timestamp, updatedAt: timestamp },
+    ],
+  }));
+
+  const store = new NodeAgentIdentityStore(paths, { logger: (message, details) => warnings.push({ message, details }) });
+  const stored = store.read();
+  assert.deepEqual(stored.pairingInvites, []);
+  assert.deepEqual(stored.remoteControlPlanes, []);
+  assert.equal(warnings.filter((warning) => warning.message.includes("was ignored")).length, 3);
+  store.write(stored);
+  assert.deepEqual(new NodeAgentIdentityService(paths).remoteSecrets(), []);
+});
+
+test("node agent hmac nonce expires after one timestamp window", () => {
+  const paths = nodeAgentStorePaths(tempDataDir("node-agent-hmac-nonce-expiry"));
+  const identity = new NodeAgentIdentityService(paths);
+  let clock = Date.parse("2026-07-15T00:00:00.000Z");
+  const verifier = new NodeAgentPairedHmacVerifier(identity, "node_hmac_expiry", "remote-secret", "key_remote", () => clock);
+  const requestForClock = () => ({
+    method: "GET",
+    url: "/api/node-agent/health",
+    body: undefined,
+    headers: createNodeAgentHmacHeaders({
+      nodeId: "node_hmac_expiry",
+      keyId: "key_remote",
+      secret: "remote-secret",
+      method: "GET",
+      pathWithQuery: "/api/node-agent/health",
+      timestamp: new Date(clock).toISOString(),
+      nonce: "reusable-after-expiry",
+    }),
+  });
+
+  assert.equal(verifier.verify(requestForClock()), "key_remote");
+  clock += NODE_AGENT_HMAC_TIMESTAMP_WINDOW_MS * 2;
+  assert.equal(verifier.verify(requestForClock()), "key_remote");
+});
+
+test("node agent hmac retains a future-timestamp nonce until that signature is stale", () => {
+  const paths = nodeAgentStorePaths(tempDataDir("node-agent-hmac-future-nonce"));
+  const identity = new NodeAgentIdentityService(paths);
+  let clock = Date.parse("2026-07-15T00:00:00.000Z");
+  const verifier = new NodeAgentPairedHmacVerifier(identity, "node_hmac_future", "remote-secret", "key_remote", () => clock);
+  const timestamp = new Date(clock + NODE_AGENT_HMAC_TIMESTAMP_WINDOW_MS).toISOString();
+  const request = {
+    method: "GET",
+    url: "/api/node-agent/health",
+    body: undefined,
+    headers: createNodeAgentHmacHeaders({
+      nodeId: "node_hmac_future",
+      keyId: "key_remote",
+      secret: "remote-secret",
+      method: "GET",
+      pathWithQuery: "/api/node-agent/health",
+      timestamp,
+      nonce: "future-timestamp-exact-replay",
+    }),
+  };
+
+  assert.equal(verifier.verify(request), "key_remote");
+  clock += NODE_AGENT_HMAC_TIMESTAMP_WINDOW_MS + 1;
+  assert.throws(
+    () => verifier.verify(request),
+    (error) => error.code === "NODE_AGENT_HMAC_NONCE_REPLAY",
+  );
 });
 
 test("node agent rejects hmac replay stale timestamp and body hash mismatch", async (t) => {
@@ -10442,6 +10780,7 @@ test("control plane dingding stream client disables unsafe sdk heartbeat", () =>
     clientSecret: "dingding-secret",
   });
   assert.equal(client.getConfig().keepAlive, false);
+  assert.equal(client.getConfig().autoReconnect, false);
 });
 
 test("control plane dingding bridge replies business errors through robot message", async () => {
@@ -11968,24 +12307,188 @@ test("control plane dingding progress clear rejects throttled updates", async ()
 
   await store.applyUpdate({
     bridge,
-    dingdingRuntime: runtimeState,
     key: "inst_1:ais_1:turn_1:chat_dingding_progress_clear:dingding-chat",
     chatId: "dingding-chat",
     text: "Running shell",
     replyMarkup: { inline_keyboard: [[{ text: "Cancel", callback_data: "cancel" }]] },
-  });
+  }, runtimeState);
   const pending = store.applyUpdate({
     bridge,
-    dingdingRuntime: runtimeState,
     key: "inst_1:ais_1:turn_1:chat_dingding_progress_clear:dingding-chat",
     chatId: "dingding-chat",
     text: "Waiting for approval",
     replyMarkup: { inline_keyboard: [[{ text: "Allow", callback_data: "allow" }]] },
-  });
+  }, runtimeState);
   store.clearBridge(bridge.id);
 
   await assert.rejects(pending, /cancelled/);
   assert.equal(calls.filter((call) => call.body?.cardUpdateOptions).length, 0);
+});
+
+test("control plane dingding progress ignores an in-flight delivery after bridge stop", async () => {
+  let resolveDelivery;
+  let deliveryStarted = false;
+  const bridge = {
+    id: "chat_dingding_progress_inflight",
+    channel: "dingding",
+    name: "DingDing In-flight",
+    enabled: true,
+    token: "dingding-client-id",
+    tokenSet: true,
+    defaultChatId: "dingding-chat",
+    allowedUserIds: [],
+    pollIntervalMs: 30000,
+    settings: { clientSecret: "dingding-secret", robotCode: "robot-code", senderId: "staff-1" },
+  };
+  const runtimeState = {
+    client: { connect: async () => {}, disconnect: () => {}, registerCallbackListener: () => {}, socketCallBackResponse: () => {} },
+    chatWebhooks: new Map(), senderIds: new Map(), conversationTypes: new Map(),
+  };
+  const store = new DingdingProgressStore(async (url) => {
+    if (String(url).includes("/oauth2/accessToken")) {
+      return new Response(JSON.stringify({ accessToken: "access-token", expireIn: 7200 }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    deliveryStarted = true;
+    await new Promise((resolve) => { resolveDelivery = resolve; });
+    return new Response(JSON.stringify({ success: true, result: { outTrackId: "track-inflight" } }), { status: 200, headers: { "content-type": "application/json" } });
+  });
+  const pending = store.applyUpdate({
+    bridge,
+    key: "inst_1:ais_1:turn_1:chat_dingding_progress_inflight:dingding-chat",
+    chatId: "dingding-chat",
+    text: "Running shell",
+  }, runtimeState);
+  while (!deliveryStarted) await new Promise((resolve) => setImmediate(resolve));
+  store.clearBridge(bridge.id);
+  resolveDelivery();
+  assert.equal(await pending, false);
+  assert.equal(store.entries.size, 0);
+});
+
+test("dingding runtime stop cancels manager-owned reconnect after socket close", async () => {
+  let onDisconnect;
+  let connectAttempts = 0;
+  const bridge = {
+    id: "chat_dingding_disconnect",
+    channel: "dingding",
+    name: "DingDing Disconnect",
+    enabled: true,
+    token: "dingding-client-id",
+    tokenSet: true,
+    defaultChatId: "dingding-chat",
+    allowedUserIds: [],
+    pollIntervalMs: 30000,
+    settings: { clientSecret: "dingding-secret" },
+  };
+  const manager = new DingdingBridgeRuntimeManager({
+    fetchImpl: fetch,
+    createClient: () => ({
+      connect: async () => { connectAttempts += 1; },
+      disconnect: () => {},
+      onDisconnect: (listener) => { onDisconnect = listener; },
+      registerCallbackListener: () => {},
+      socketCallBackResponse: () => {},
+    }),
+    logger: { info: () => {}, warn: () => {} },
+    onRobotMessage: async () => {}, onCardCallback: async () => ({}), onError: () => {}, clearError: () => {},
+    reconnectDelayMs: 40,
+  });
+  manager.start(bridge);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(manager.isRunning(bridge.id), true);
+  onDisconnect(new Error("socket closed"));
+  assert.equal(manager.isRunning(bridge.id), false);
+  manager.stop(bridge.id);
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.equal(connectAttempts, 1);
+  assert.equal(manager.has(bridge.id), false);
+});
+
+test("invalid dingding bridge does not start pending polling", () => {
+  const bridge = {
+    id: "chat_dingding_invalid",
+    channel: "dingding",
+    name: "DingDing Invalid",
+    enabled: true,
+    token: "",
+    tokenSet: false,
+    defaultChatId: "",
+    allowedUserIds: [],
+    pollIntervalMs: 30000,
+    settings: {},
+  };
+  const runtime = new ControlPlaneChatGatewayRuntime({
+    listChatBridges: () => [bridge], requireChatBridge: () => bridge, listPendingRoutes: async () => [],
+  }, fetch);
+  const status = runtime.startBridge(bridge.id);
+  assert.equal(status.bridges[0].running, false);
+  assert.equal(runtime.pendingTimer, undefined);
+  runtime.startEnabled();
+  assert.equal(runtime.pendingTimer, undefined);
+  runtime.stopAll();
+});
+
+test("dingding runtime rejection clears pending progress and retries under manager control", async () => {
+  let rejectConnect;
+  let clientCount = 0;
+  let connectAttempts = 0;
+  const bridge = {
+    id: "chat_dingding_runtime_reject",
+    channel: "dingding",
+    name: "DingDing Runtime Reject",
+    enabled: true,
+    token: "dingding-client-id",
+    tokenSet: true,
+    defaultChatId: "dingding-chat",
+    allowedUserIds: [],
+    pollIntervalMs: 30000,
+    settings: { clientSecret: "dingding-secret", robotCode: "robot-code", senderId: "staff-1" },
+  };
+  const manager = new DingdingBridgeRuntimeManager({
+    fetchImpl: async (url) => new Response(JSON.stringify(String(url).includes("/oauth2/accessToken")
+      ? { accessToken: "access-token", expireIn: 7200 }
+      : { success: true }), { status: 200, headers: { "content-type": "application/json" } }),
+    createClient: () => {
+      clientCount += 1;
+      return {
+        connect: () => ++connectAttempts === 1
+          ? new Promise((_resolve, reject) => { rejectConnect = reject; })
+          : Promise.resolve(),
+        disconnect: () => {},
+        registerCallbackListener: () => {},
+        socketCallBackResponse: () => {},
+      };
+    },
+    logger: { info: () => {}, warn: () => {} },
+    onRobotMessage: async () => {},
+    onCardCallback: async () => ({}),
+    onError: () => {},
+    clearError: () => {},
+    reconnectDelayMs: 50,
+  });
+
+  assert.equal(manager.start(bridge), true);
+  const update = {
+    bridge,
+    key: "inst_1:ais_1:turn_1:chat_dingding_runtime_reject:dingding-chat",
+    chatId: "dingding-chat",
+    text: "Running shell",
+    replyMarkup: { inline_keyboard: [[{ text: "Cancel", callback_data: "cancel" }]] },
+  };
+  assert.equal(await manager.applyProgressUpdate(update), true);
+  const pending = manager.applyProgressUpdate({ ...update, text: "Waiting for approval" });
+  rejectConnect(new Error("connect rejected"));
+  await assert.rejects(pending, /cancelled/);
+  assert.equal(manager.has(bridge.id), true);
+  assert.equal(manager.isRunning(bridge.id), false);
+
+  await new Promise((resolve) => setTimeout(resolve, 70));
+  assert.equal(clientCount, 1);
+  assert.equal(connectAttempts, 2);
+  assert.equal(manager.has(bridge.id), true);
+  assert.equal(manager.isRunning(bridge.id), true);
+  manager.stopAll();
+  assert.equal(manager.has(bridge.id), false);
 });
 
 test("control plane dingding action cards use robot private-chat delivery target", async () => {

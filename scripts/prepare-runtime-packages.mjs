@@ -81,7 +81,14 @@ for (const [name, definition] of selected) {
     license: rootPackage.license,
     type: "commonjs",
     bin,
-    files: ["bin", ...(definition.input ? ["dist"] : []), ...(definition.uiDir ? ["ui"] : []), "README.md"],
+    files: [
+      "bin",
+      ...(definition.input ? ["dist"] : []),
+      ...(definition.uiDir ? ["ui"] : []),
+      "README.md",
+      "LICENSE",
+      "NOTICE",
+    ],
     engines: rootPackage.engines,
     dependencies: definition.aggregateDependencies
       ? Object.fromEntries(definition.aggregateDependencies.map((dependency) => [dependency, process.env.TASK_HANDOFF_VERSION || rootPackage.version]))
@@ -95,4 +102,6 @@ for (const [name, definition] of selected) {
       ? `# ${definition.packageName}\n\nComplete TaskHandoff server package. Installing it installs the control plane, node agent, and controlled instance runtimes at the same version. Run \`task-handoff install\` as root to create and start the systemd services.\n`
       : `# ${definition.packageName}\n\nPrebuilt ${name} runtime for TaskHandoff. This package contains compiled JavaScript${definition.uiDir ? " and built Web UI assets" : ""}; it does not contain monorepo source code.\n`,
   );
+  fs.copyFileSync(path.join(root, "LICENSE"), path.join(packageDir, "LICENSE"));
+  fs.copyFileSync(path.join(root, "NOTICE"), path.join(packageDir, "NOTICE"));
 }

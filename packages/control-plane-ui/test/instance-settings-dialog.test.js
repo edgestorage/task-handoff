@@ -41,3 +41,10 @@ test("instance settings exposes general, models, apps, and inventory freshness s
   assert.match(dialog, /DialogContent/);
   assert.match(dialog, /ScrollArea/);
 });
+
+test("instance settings keeps a stable height within the viewport", () => {
+  const dialog = read("src/apps/control-plane/instance-settings/InstanceSettingsDialog.vue");
+  assert.match(dialog, /height: 680px;/);
+  assert.match(dialog, /max-height: calc\(100vh - 36px\);/);
+  assert.match(dialog, /\.instance-settings-scroll\s*\{[^}]*height: 100%;/s);
+});

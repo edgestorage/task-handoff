@@ -585,3 +585,8 @@ receiver through callbacks, instead of being mixed into the CLI entrypoint.
 
 The receiver UI is built with Ink. It shows a status panel, pending senders, the
 latest result, event logs, and a command input at the bottom.
+
+## License
+
+TaskHandoff is licensed under the [Apache License 2.0](LICENSE). See
+[NOTICE](NOTICE) for attribution information.

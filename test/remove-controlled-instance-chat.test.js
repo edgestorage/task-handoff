@@ -56,7 +56,7 @@ test("controlled instance UI has no chat administration routes or API clients", 
 });
 
 test("node-agent subscribes only to instance and authoritative session topics", () => {
-  const forwarder = read("packages/control-plane/src/node-agent-events.ts");
+  const forwarder = read("packages/control-plane/src/node-agent/events.ts");
   assert.match(forwarder, /topics:\s*\[AiSessionEventTopic,\s*"app\.sessions",\s*"instances"\]/);
   assert.doesNotMatch(forwarder, /topics:\s*\[[^\]]*"receiver"/);
 });

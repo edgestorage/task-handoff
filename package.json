@@ -21,7 +21,9 @@
     "packages",
     "scripts/install-server-services.sh",
     "scripts/install-server.sh",
-    "README.md"
+    "README.md",
+    "LICENSE",
+    "NOTICE"
   ],
   "scripts": {
     "build": "pnpm run build:legacy",
@@ -60,7 +62,7 @@
   "engines": {
     "node": ">=22.22.2"
   },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "build": {
     "appId": "com.taskhandoff.desktop",
     "productName": "TaskHandoff",
@@ -76,7 +78,9 @@
       "bin/task-handoff.js",
       "dist/**/*",
       "packages/control-plane-ui/dist/**/*",
-      "package.json"
+      "package.json",
+      "LICENSE",
+      "NOTICE"
     ],
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "mac": {

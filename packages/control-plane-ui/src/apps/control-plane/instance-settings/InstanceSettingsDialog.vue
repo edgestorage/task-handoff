@@ -1,28 +1,42 @@
 <template>
   <Dialog :open="open" @update:open="handleOpenChange">
     <DialogContent class="instance-settings-dialog" aria-describedby="instance-settings-description">
-      <DialogHeader>
-        <DialogTitle>{{ instance ? `${instance.name} settings` : "Instance settings" }}</DialogTitle>
-        <DialogDescription id="instance-settings-description">
-          Instance-specific configuration. Global model credentials remain in control-plane Settings.
-        </DialogDescription>
+      <DialogHeader class="instance-settings-header">
+        <div class="instance-settings-heading">
+          <span>Instance settings</span>
+          <div class="instance-settings-title-row">
+            <DialogTitle>{{ instance?.name || "Instance unavailable" }}</DialogTitle>
+            <Badge v-if="instance" :variant="instance.connectionStatus === 'online' ? 'default' : 'secondary'">
+              {{ instance.status }} · {{ instance.connectionStatus }}
+            </Badge>
+          </div>
+          <DialogDescription id="instance-settings-description">
+            Configure this instance. Model credentials remain in control-plane Settings.
+          </DialogDescription>
+        </div>
+        <button type="button" class="instance-settings-close" aria-label="Close instance settings" @click="handleOpenChange(false)">
+          <X :size="16" />
+        </button>
       </DialogHeader>
 
       <div v-if="!instance" class="instance-settings-empty">This instance is no longer available.</div>
       <Tabs v-else v-model="section" class="instance-settings-tabs">
         <TabsList class="instance-settings-tabs-list" aria-label="Instance settings sections">
-          <TabsTrigger value="general">General</TabsTrigger>
-          <TabsTrigger value="models">Models</TabsTrigger>
-          <TabsTrigger value="apps">Apps</TabsTrigger>
+          <TabsTrigger value="general"><SlidersHorizontal :size="14" />General</TabsTrigger>
+          <TabsTrigger value="models"><Cpu :size="14" />Models</TabsTrigger>
+          <TabsTrigger value="apps"><Boxes :size="14" />Apps</TabsTrigger>
         </TabsList>
 
         <ScrollArea class="instance-settings-scroll">
           <TabsContent value="general" class="instance-settings-section">
             <section class="instance-settings-card">
-              <h3>Instance</h3>
+              <div class="instance-settings-section-heading">
+                <h3>Instance details</h3>
+                <p>Runtime and workspace information reported by the node.</p>
+              </div>
               <dl class="instance-settings-grid">
                 <div><dt>ID</dt><dd><code>{{ instance.id }}</code></dd></div>
-                <div><dt>Status</dt><dd>{{ instance.status }} · {{ instance.connectionStatus }}</dd></div>
+                <div><dt>State</dt><dd>{{ instance.status }} · {{ instance.connectionStatus }}</dd></div>
                 <div><dt>Node</dt><dd>{{ instance.node?.name || instance.nodeId }}</dd></div>
                 <div><dt>Runtime</dt><dd>{{ instance.runtime?.name || instance.runtimeId }}</dd></div>
                 <div><dt>Image</dt><dd>{{ instance.image?.name || instance.imageId || "None" }}</dd></div>
@@ -33,17 +47,20 @@
             </section>
 
             <section class="instance-settings-card">
-              <h3>Configuration</h3>
-              <label class="instance-settings-checkbox">
-                <Checkbox :model-value="autoImportAgentConfigs" :disabled="savingGeneral" @update:model-value="autoImportAgentConfigs = $event === true" />
-                <span>
-                  <strong>Automatically import agent configuration</strong>
-                  <small>Import supported agent configuration when this instance starts.</small>
-                </span>
-              </label>
-              <div class="instance-settings-actions">
+              <div class="instance-settings-section-heading">
+                <h3>Configuration</h3>
+                <p>Applied the next time this instance starts.</p>
+              </div>
+              <div class="instance-settings-control-row">
+                <label class="instance-settings-checkbox">
+                  <Checkbox :model-value="autoImportAgentConfigs" :disabled="savingGeneral" @update:model-value="autoImportAgentConfigs = $event === true" />
+                  <span>
+                    <strong>Automatically import agent configuration</strong>
+                    <small>Import supported agent configuration when this instance starts.</small>
+                  </span>
+                </label>
                 <Button size="sm" :disabled="savingGeneral || !generalChanged" @click="saveGeneral">
-                  {{ savingGeneral ? "Saving" : "Save general settings" }}
+                  {{ savingGeneral ? "Saving" : "Save changes" }}
                 </Button>
               </div>
             </section>
@@ -107,20 +124,18 @@
 
       <p v-if="error" class="instance-settings-error" role="alert">{{ error }}</p>
       <p v-if="success" class="instance-settings-success" role="status">{{ success }}</p>
-      <DialogFooter>
-        <Button variant="outline" @click="handleOpenChange(false)">Close</Button>
-      </DialogFooter>
     </DialogContent>
   </Dialog>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import { Boxes, Cpu, SlidersHorizontal, X } from "@lucide/vue";
 import type { InstanceBoardItem, ModelApp, ModelConfig, ModelSelection, UpdateControlledInstanceInput } from "../../../api/types";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Checkbox } from "../../../components/ui/checkbox";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../../components/ui/tabs";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
@@ -267,79 +282,225 @@ function formatObservedAt(value: string) {
 
 <style scoped>
 :global(.instance-settings-dialog[role="dialog"]) {
-  width: min(860px, calc(100vw - 32px));
-  max-width: 860px;
-  max-height: min(760px, calc(100vh - 32px));
-  grid-template-rows: auto minmax(0, 1fr) auto auto;
-  border-color: var(--line);
-  background: var(--surface);
+  width: min(800px, calc(100vw - 36px));
+  max-width: 800px;
+  height: 680px;
+  max-height: calc(100vh - 36px);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-inset);
+  box-shadow: var(--shadow-popover);
+  padding: 14px;
+}
+
+.instance-settings-header {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  text-align: left;
+}
+
+.instance-settings-heading {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.instance-settings-heading > span {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.instance-settings-title-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+}
+
+.instance-settings-title-row :deep(h2) {
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 19px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.instance-settings-heading :deep(p) {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.instance-settings-close {
+  display: grid;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: var(--surface-hover);
+  color: var(--brand-accent-muted);
+  cursor: pointer;
+}
+
+.instance-settings-close:hover,
+.instance-settings-close:focus-visible {
+  background: var(--surface-active);
+  color: var(--white);
+  outline: none;
 }
 
 .instance-settings-tabs {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
   min-height: 0;
 }
 
 .instance-settings-tabs-list {
-  width: fit-content;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  width: 100%;
+  height: auto;
+  min-height: 36px;
+  gap: 1px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-inset);
+  padding: 2px;
+}
+
+.instance-settings-tabs-list :deep(button) {
+  height: 30px;
+  border-radius: 5px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 750;
+  padding: 0 8px;
+}
+
+.instance-settings-tabs-list :deep(.truncate) {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  gap: 6px;
+}
+
+.instance-settings-tabs-list :deep(.truncate svg) {
+  flex: 0 0 auto;
+}
+
+.instance-settings-tabs-list :deep(button:not([data-state="active"]):hover) {
+  background: var(--surface-hover);
+  color: var(--text-strong);
+}
+
+.instance-settings-tabs-list :deep(button[data-state="active"]) {
+  background: var(--surface-active);
+  color: var(--white);
+  box-shadow: none;
 }
 
 .instance-settings-scroll {
+  height: 100%;
   min-height: 0;
-  height: min(560px, calc(100vh - 220px));
-  margin-top: 12px;
 }
 
 .instance-settings-section {
   display: grid;
-  gap: 14px;
+  gap: 16px;
   margin: 0;
-  padding: 2px 12px 14px 2px;
+  padding: 2px 10px 4px 2px;
 }
 
 .instance-settings-card {
   display: grid;
-  gap: 14px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--surface-inset);
-  padding: 16px;
+  gap: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
+}
+
+.instance-settings-card:first-child {
+  border-top: 0;
+  padding-top: 0;
 }
 
 .instance-settings-card h3,
 .instance-app-heading h3 {
   margin: 0;
-  color: var(--terminal-text);
-  font-size: 14px;
+  color: var(--text-strong);
+  font-size: 13px;
+}
+
+.instance-settings-section-heading {
+  display: grid;
+  gap: 3px;
+}
+
+.instance-settings-section-heading p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
 }
 
 .instance-settings-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: 8px;
   margin: 0;
 }
 
 .instance-settings-grid div {
+  display: grid;
   min-width: 0;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-raised);
+  padding: 10px;
 }
 
 .instance-settings-grid dt {
   color: var(--text-muted);
   font-size: 11px;
+  font-weight: 750;
   text-transform: uppercase;
 }
 
 .instance-settings-grid dd {
   overflow-wrap: anywhere;
-  margin: 4px 0 0;
-  color: var(--terminal-text);
-  font-size: 13px;
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 12px;
+}
+
+.instance-settings-grid code {
+  color: inherit;
+  font-size: 11px;
+}
+
+.instance-settings-control-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-raised);
+  padding: 12px;
 }
 
 .instance-settings-checkbox {
   display: flex;
+  min-width: 0;
   align-items: flex-start;
   gap: 10px;
 }
@@ -357,6 +518,11 @@ function formatObservedAt(value: string) {
 .instance-settings-observed {
   margin: 0;
   color: var(--text-muted);
+  font-size: 12px;
+}
+
+.instance-settings-checkbox strong {
+  color: var(--text-strong);
   font-size: 12px;
 }
 
@@ -435,6 +601,11 @@ function formatObservedAt(value: string) {
   .instance-settings-grid,
   .instance-model-grid {
     grid-template-columns: 1fr;
+  }
+
+  .instance-settings-control-row {
+    align-items: stretch;
+    flex-direction: column;
   }
 }
 </style>

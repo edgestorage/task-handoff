@@ -4,7 +4,7 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
-const { filesystemRoots, listFolderTree, MAX_FOLDER_TREE_CHILDREN } = require("../packages/control-plane/src/node-agent-folders.ts");
+const { filesystemRoots, listFolderTree, MAX_FOLDER_TREE_CHILDREN } = require("../packages/control-plane/src/node-agent/folders.ts");
 
 test("folder picker starts at filesystem roots", () => {
   const roots = filesystemRoots();

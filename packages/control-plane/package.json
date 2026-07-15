@@ -19,57 +19,58 @@
       "default": "./src/node-agent.ts"
     },
     "./node-agent-folders": {
-      "types": "./src/node-agent-folders.ts",
-      "default": "./src/node-agent-folders.ts"
+      "types": "./src/node-agent/folders.ts",
+      "default": "./src/node-agent/folders.ts"
     },
     "./node-agent-schemas": {
-      "types": "./src/node-agent-schemas.ts",
-      "default": "./src/node-agent-schemas.ts"
+      "types": "./src/node-agent/schemas.ts",
+      "default": "./src/node-agent/schemas.ts"
     },
     "./node-agent-tunnel": {
-      "types": "./src/node-agent-tunnel.ts",
-      "default": "./src/node-agent-tunnel.ts"
+      "types": "./src/control-plane/nodes/tunnel.ts",
+      "default": "./src/control-plane/nodes/tunnel.ts"
     },
     "./chat-gateway": {
       "types": "./src/chat-gateway.ts",
       "default": "./src/chat-gateway.ts"
     },
     "./ai-session-presentation": {
-      "types": "./src/ai-session-presentation.ts",
-      "default": "./src/ai-session-presentation.ts"
+      "types": "./src/control-plane/sessions/ai-session-presentation.ts",
+      "default": "./src/control-plane/sessions/ai-session-presentation.ts"
     },
     "./chat-bridge-records": {
-      "types": "./src/chat-bridge-records.ts",
-      "default": "./src/chat-bridge-records.ts"
+      "types": "./src/control-plane/chat/bridges/records.ts",
+      "default": "./src/control-plane/chat/bridges/records.ts"
     },
     "./config-sync": {
-      "types": "./src/config-sync.ts",
-      "default": "./src/config-sync.ts"
+      "types": "./src/control-plane/instances/config-sync.ts",
+      "default": "./src/control-plane/instances/config-sync.ts"
     },
     "./telegram-gateway": {
-      "types": "./src/telegram-gateway.ts",
-      "default": "./src/telegram-gateway.ts"
+      "types": "./src/control-plane/chat/adapters/telegram-gateway.ts",
+      "default": "./src/control-plane/chat/adapters/telegram-gateway.ts"
     },
     "./service": {
       "types": "./src/service.ts",
       "default": "./src/service.ts"
     },
     "./public-records": {
-      "types": "./src/public-records.ts",
-      "default": "./src/public-records.ts"
+      "types": "./src/control-plane/public-records.ts",
+      "default": "./src/control-plane/public-records.ts"
     },
     "./store": {
-      "types": "./src/store.ts",
-      "default": "./src/store.ts"
+      "types": "./src/public/store.ts",
+      "default": "./src/public/store.ts"
     },
     "./executor": {
-      "types": "./src/executor.ts",
-      "default": "./src/executor.ts"
+      "types": "./src/node-agent/runtimes/docker.ts",
+      "default": "./src/node-agent/runtimes/docker.ts"
     }
   },
   "scripts": {
     "build": "tsc -p tsconfig.json --noEmit",
-    "check": "pnpm run build",
+    "check": "pnpm run build && pnpm run check:boundaries",
+    "check:boundaries": "node scripts/check-boundaries.mjs",
     "test": "node --test"
   },
   "dependencies": {

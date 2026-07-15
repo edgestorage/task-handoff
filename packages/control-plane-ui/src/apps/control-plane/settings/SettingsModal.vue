@@ -1643,7 +1643,35 @@ function errorText(error: unknown) {
   gap: 7px;
 }
 
-.checkbox-row label,
+.modal-section .checkbox-row label {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  gap: 7px;
+  min-height: 32px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 0 11px;
+}
+
+.modal-section .checkbox-row label:hover,
+.modal-section .checkbox-row label:focus-within {
+  border-color: var(--brand-accent);
+  background: var(--surface-hover);
+  color: var(--text-strong);
+}
+
+.modal-section .checkbox-row label:has([data-state="checked"]) {
+  border-color: var(--brand-accent);
+  background: var(--surface-active);
+  color: var(--text-strong);
+}
+
 .project-model-picker label {
   position: relative;
   display: inline-flex;
@@ -1660,7 +1688,6 @@ function errorText(error: unknown) {
   padding: 0 11px 0 34px;
 }
 
-.checkbox-row input,
 .project-model-picker input {
   position: absolute;
   width: 1px;
@@ -1670,7 +1697,6 @@ function errorText(error: unknown) {
   margin: 0;
 }
 
-.checkbox-row label::before,
 .project-model-picker label::before {
   position: absolute;
   left: 11px;
@@ -1690,29 +1716,24 @@ function errorText(error: unknown) {
   transform: translateY(-50%);
 }
 
-.checkbox-row label:hover,
 .project-model-picker label:hover,
-.checkbox-row label:focus-within,
 .project-model-picker label:focus-within {
   border-color: var(--brand-accent);
   background: var(--surface-hover);
   color: var(--text-strong);
 }
 
-.checkbox-row label:has(input:focus-visible),
 .project-model-picker label:has(input:focus-visible) {
   outline: 2px solid var(--brand-accent);
   outline-offset: 2px;
 }
 
-.checkbox-row label:has(input:checked),
 .project-model-picker label:has(input:checked) {
   border-color: var(--brand-accent);
   background: var(--surface-active);
   color: var(--text-strong);
 }
 
-.checkbox-row label:has(input:checked)::before,
 .project-model-picker label:has(input:checked)::before {
   border-color: var(--brand-accent);
   background: var(--brand-accent);

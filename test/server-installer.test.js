@@ -40,7 +40,7 @@ test("global server package pins and resolves all three runtime packages", async
 
 test("server services default to root for host workspace and runtime ownership", () => {
   const installer = fs.readFileSync(path.join(root, "scripts", "install-server-services.sh"), "utf8");
-  const remoteInstaller = fs.readFileSync(path.join(root, "packages", "control-plane", "src", "install-scripts.ts"), "utf8");
+  const remoteInstaller = fs.readFileSync(path.join(root, "packages", "control-plane", "src", "control-plane", "nodes", "install-script.ts"), "utf8");
 
   assert.match(installer, /SERVICE_USER="root"/);
   assert.match(installer, /systemd service user, default root/);
@@ -76,7 +76,7 @@ test("installer rejects runtime commands inaccessible to the service user", () =
 
 test("node agent services persist the absolute npm command for managed updates", () => {
   const installer = fs.readFileSync(path.join(root, "scripts", "install-server-services.sh"), "utf8");
-  const remoteInstaller = fs.readFileSync(path.join(root, "packages", "control-plane", "src", "install-scripts.ts"), "utf8");
+  const remoteInstaller = fs.readFileSync(path.join(root, "packages", "control-plane", "src", "control-plane", "nodes", "install-script.ts"), "utf8");
   const worker = fs.readFileSync(path.join(root, "scripts", "node-update-worker.cjs"), "utf8");
   const updater = fs.readFileSync(path.join(root, "apps", "cli", "src", "runtime", "server.ts"), "utf8");
 
