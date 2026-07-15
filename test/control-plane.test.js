@@ -3218,26 +3218,21 @@ test("node agent does not replace malformed or truncated identity data", () => {
   assert.equal(fs.readFileSync(paths.identityPath, "utf8"), truncated);
 });
 
-test("node agent does not initialize over an unreadable identity", (t) => {
+test("node agent does not initialize over an unreadable identity path", (t) => {
   if (process.platform === "win32") {
-    t.skip("POSIX file permissions are required");
+    t.skip("POSIX symbolic links are required");
     return;
   }
   const dataDir = tempDataDir("node-agent-identity-unreadable");
   const paths = nodeAgentStorePaths(dataDir);
-  const stored = JSON.stringify({ nodeId: "node_original", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
   fs.mkdirSync(path.dirname(paths.identityPath), { recursive: true });
-  fs.writeFileSync(paths.identityPath, stored, { mode: 0o600 });
-  fs.chmodSync(paths.identityPath, 0o000);
-  try {
-    assert.throws(
-      () => new NodeAgentIdentityService(paths).resolveNodeId(),
-      (error) => error.code === "NODE_AGENT_IDENTITY_READ_FAILED",
-    );
-  } finally {
-    fs.chmodSync(paths.identityPath, 0o600);
-  }
-  assert.equal(fs.readFileSync(paths.identityPath, "utf8"), stored);
+  fs.symlinkSync(paths.identityPath, paths.identityPath);
+
+  assert.throws(
+    () => new NodeAgentIdentityService(paths).resolveNodeId(),
+    (error) => error.code === "NODE_AGENT_IDENTITY_READ_FAILED",
+  );
+  assert.equal(fs.lstatSync(paths.identityPath).isSymbolicLink(), true);
 });
 
 test("node agent identity ignores invalid stored credentials and invite records", () => {
