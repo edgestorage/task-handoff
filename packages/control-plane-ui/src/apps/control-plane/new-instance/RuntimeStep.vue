@@ -58,6 +58,7 @@
         <span>Codex model</span>
         <ControlPlaneSelect v-model="instanceCodexModelValue" placeholder="Global default">
           <ControlPlaneSelectItem :value="defaultModelValue">Global default</ControlPlaneSelectItem>
+          <ControlPlaneSelectItem :value="noModelValue">No model</ControlPlaneSelectItem>
           <ControlPlaneSelectItem v-for="model in codexModels" :key="`instance-codex-${model.id}`" :value="model.id">{{ modelOptionLabel(model) }}</ControlPlaneSelectItem>
         </ControlPlaneSelect>
       </label>
@@ -65,6 +66,7 @@
         <span>Claude model</span>
         <ControlPlaneSelect v-model="instanceClaudeModelValue" placeholder="Global default">
           <ControlPlaneSelectItem :value="defaultModelValue">Global default</ControlPlaneSelectItem>
+          <ControlPlaneSelectItem :value="noModelValue">No model</ControlPlaneSelectItem>
           <ControlPlaneSelectItem v-for="model in claudeModels" :key="`instance-claude-${model.id}`" :value="model.id">{{ modelOptionLabel(model) }}</ControlPlaneSelectItem>
         </ControlPlaneSelect>
       </label>
@@ -106,6 +108,7 @@ const props = defineProps<{
 }>();
 
 const defaultModelValue = "__default__";
+const noModelValue = "__none__";
 const eligibleModels = computed(() => props.models.filter((model) => model.locations?.some((location) => location.type === "control-plane" || (location.type === "node" && location.nodeId === props.runtimeDraft.nodeId))));
 const codexModels = computed(() => eligibleModels.value.filter((model) => model.app === "codex"));
 const claudeModels = computed(() => eligibleModels.value.filter((model) => model.app === "claude"));
@@ -113,12 +116,12 @@ const modelOptionLabel = (model: ModelConfig) => model.locations?.some((location
   ? `${model.name} · copy to node`
   : `${model.name} · this node`;
 const instanceCodexModelValue = computed({
-  get: () => props.instanceDraft.codexModelHash || defaultModelValue,
-  set: (value: string) => { props.instanceDraft.codexModelHash = value === defaultModelValue ? "" : value; },
+  get: () => props.instanceDraft.codexModelHash === null ? noModelValue : props.instanceDraft.codexModelHash || defaultModelValue,
+  set: (value: string) => { props.instanceDraft.codexModelHash = value === defaultModelValue ? undefined : value === noModelValue ? null : value; },
 });
 const instanceClaudeModelValue = computed({
-  get: () => props.instanceDraft.claudeModelHash || defaultModelValue,
-  set: (value: string) => { props.instanceDraft.claudeModelHash = value === defaultModelValue ? "" : value; },
+  get: () => props.instanceDraft.claudeModelHash === null ? noModelValue : props.instanceDraft.claudeModelHash || defaultModelValue,
+  set: (value: string) => { props.instanceDraft.claudeModelHash = value === defaultModelValue ? undefined : value === noModelValue ? null : value; },
 });
 
 defineEmits<{

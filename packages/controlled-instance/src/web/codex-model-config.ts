@@ -64,9 +64,12 @@ export function applyManagedCodexModelConfig(env: NodeJS.ProcessEnv = process.en
   if (env.TASK_HANDOFF_CONTROL_MODE !== "controlled") {
     return { applied: false };
   }
-  const model = (env.TASK_HANDOFF_CODEX_MODEL || env.CODEX_MODEL || "").trim();
-  const baseUrl = (env.TASK_HANDOFF_CODEX_BASE_URL || env.OPENAI_BASE_URL || "").trim();
+  const model = (env.TASK_HANDOFF_CODEX_MODEL || "").trim();
+  const baseUrl = (env.TASK_HANDOFF_CODEX_BASE_URL || "").trim();
   const apiKey = (env.OPENAI_API_KEY || "").trim();
+  if (!model || !baseUrl || !apiKey) {
+    return { applied: false };
+  }
   const home = codexHome(env);
   const configPath = path.join(home, "config.toml");
   const authPath = path.join(home, "auth.json");
@@ -85,12 +88,6 @@ export function applyManagedCodexModelConfig(env: NodeJS.ProcessEnv = process.en
       atomicWrite(authPath, `${JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: apiKey }, null, 2)}\n`);
       applied = true;
     }
-  } else if (fs.existsSync(authPath)) {
-    fs.rmSync(authPath, { force: true });
-    applied = true;
-  }
-  if (!model || !baseUrl) {
-    return { applied, authPath };
   }
 
   const current = readConfig(configPath);

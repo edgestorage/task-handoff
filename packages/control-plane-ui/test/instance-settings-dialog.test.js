@@ -28,6 +28,7 @@ test("instance model controls live only in the settings dialog", () => {
   const dialog = read("src/apps/control-plane/instance-settings/InstanceSettingsDialog.vue");
   assert.doesNotMatch(detail, /Codex model|Claude model|updateInstanceModels|detail-model-selectors/);
   assert.match(dialog, /Global default/);
+  assert.match(dialog, /No model/);
   assert.match(dialog, /Unavailable/);
   assert.match(dialog, /next start or restart/);
   assert.doesNotMatch(dialog, /keyPreview|\.key\b|API key/);

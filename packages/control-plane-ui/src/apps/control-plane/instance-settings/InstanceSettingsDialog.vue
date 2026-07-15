@@ -75,6 +75,7 @@
                   <span>{{ app === "codex" ? "Codex" : "Claude" }}</span>
                   <ControlPlaneSelect :model-value="modelDraftValue(app)" :disabled="savingModels" @update:model-value="setModelDraft(app, $event)">
                     <ControlPlaneSelectItem :value="defaultModelValue">Global default</ControlPlaneSelectItem>
+                    <ControlPlaneSelectItem :value="noModelValue">No model</ControlPlaneSelectItem>
                     <ControlPlaneSelectItem v-if="invalidSelection(app)" :value="draftModelId(app)!">Unavailable · {{ draftModelId(app) }}</ControlPlaneSelectItem>
                     <ControlPlaneSelectItem v-for="model in selectableModels(app)" :key="`${app}-${model.id}`" :value="model.id">{{ modelOptionLabel(model) }}</ControlPlaneSelectItem>
                   </ControlPlaneSelect>
@@ -160,6 +161,7 @@ const savingModels = ref(false);
 const error = ref("");
 const success = ref("");
 const defaultModelValue = "__default__";
+const noModelValue = "__none__";
 const modelApps: ModelApp[] = ["codex", "claude"];
 
 const generalChanged = computed(() => Boolean(props.instance && autoImportAgentConfigs.value !== props.instance.config.autoImportAgentConfigs));
@@ -213,7 +215,7 @@ function draftModelId(app: ModelApp) {
 }
 
 function modelDraftValue(app: ModelApp) {
-  return draftModelId(app) || defaultModelValue;
+  return draftModelId(app) === null ? noModelValue : draftModelId(app) || defaultModelValue;
 }
 
 function invalidSelection(app: ModelApp) {
@@ -221,12 +223,13 @@ function invalidSelection(app: ModelApp) {
 }
 
 function effectiveModelLabel(app: ModelApp) {
+  if (draftModelId(app) === null) return "No model";
   const match = effectiveInstanceModel(props.models, app, props.instance?.nodeId || "", draftModelId(app));
   return match ? `${match.name} · ${match.model}` : "No enabled global model";
 }
 
 function setModelDraft(app: ModelApp, value: string) {
-  const id = value === defaultModelValue ? undefined : value;
+  const id = value === defaultModelValue ? undefined : value === noModelValue ? null : value;
   modelSelection.value = normalizedSelection({
     ...modelSelection.value,
     ...(app === "codex" ? { codexModelHash: id } : { claudeModelHash: id }),
@@ -237,8 +240,8 @@ function setModelDraft(app: ModelApp, value: string) {
 
 function normalizedSelection(value: ModelSelection): ModelSelection {
   return {
-    ...(value.codexModelHash ? { codexModelHash: value.codexModelHash } : {}),
-    ...(value.claudeModelHash ? { claudeModelHash: value.claudeModelHash } : {}),
+    ...(value.codexModelHash !== undefined ? { codexModelHash: value.codexModelHash } : {}),
+    ...(value.claudeModelHash !== undefined ? { claudeModelHash: value.claudeModelHash } : {}),
   };
 }
 

@@ -1146,10 +1146,10 @@ class NodeAgentState {
     const current = this.requireInstance(instanceId);
     this.validateAssignmentRef("codex", input.codexModelHash);
     this.validateAssignmentRef("claude", input.claudeModelHash);
-    if (input.modelSelection.codexModelHash && input.modelSelection.codexModelHash !== input.codexModelHash) {
+    if (input.modelSelection.codexModelHash !== undefined && (input.modelSelection.codexModelHash ?? undefined) !== input.codexModelHash) {
       throw Object.assign(new Error("Codex model selection does not match its node assignment."), { statusCode: 400, code: "NODE_MODEL_SELECTION_MISMATCH" });
     }
-    if (input.modelSelection.claudeModelHash && input.modelSelection.claudeModelHash !== input.claudeModelHash) {
+    if (input.modelSelection.claudeModelHash !== undefined && (input.modelSelection.claudeModelHash ?? undefined) !== input.claudeModelHash) {
       throw Object.assign(new Error("Claude model selection does not match its node assignment."), { statusCode: 400, code: "NODE_MODEL_SELECTION_MISMATCH" });
     }
     const previous = this.modelAssignments.get(instanceId);

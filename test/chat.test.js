@@ -6467,6 +6467,28 @@ test("controlled instance materializes its selected Codex model and API-key auth
   assert.equal(fs.statSync(authPath).mode & 0o777, 0o600);
 });
 
+test("controlled instance leaves user Codex files unchanged when no managed model is assigned", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-no-model-"));
+  const codexHome = path.join(root, ".codex");
+  const configPath = path.join(codexHome, "config.toml");
+  const authPath = path.join(codexHome, "auth.json");
+  const configContents = 'model = "user-model"\nmodel_provider = "user-provider"\n';
+  const authContents = `${JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "user-key" }, null, 2)}\n`;
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(configPath, configContents);
+  fs.writeFileSync(authPath, authContents);
+
+  const result = applyManagedCodexModelConfig({
+    TASK_HANDOFF_CONTROL_MODE: "controlled",
+    CODEX_HOME: codexHome,
+  });
+
+  assert.deepEqual(result, { applied: false });
+  assert.equal(fs.readFileSync(configPath, "utf8"), configContents);
+  assert.equal(fs.readFileSync(authPath, "utf8"), authContents);
+  assert.deepEqual(fs.readdirSync(codexHome).sort(), ["auth.json", "config.toml"]);
+});
+
 test("controlled instance refreshes managed model auth through its registration-token endpoint", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-managed-model-env-"));
   const paths = appRuntimeTestPaths(root);
@@ -6499,6 +6521,18 @@ test("controlled instance refreshes managed model auth through its registration-
       OPENAI_API_KEY: "rotated-managed-key",
     });
     assert.equal(applied.payload.includes("rotated-managed-key"), false);
+    const configBeforeNoModel = fs.readFileSync(path.join(codexHome, "config.toml"), "utf8");
+    const authBeforeNoModel = fs.readFileSync(path.join(codexHome, "auth.json"), "utf8");
+    const noModel = await app.inject({
+      method: "PUT",
+      url: "/api/internal/model-environment",
+      headers: { authorization: "Bearer instance-registration-token" },
+      payload: {},
+    });
+    assert.equal(noModel.statusCode, 200);
+    assert.deepEqual(noModel.json().data, { applied: true, codexAuthConfigured: false, configUpdated: false });
+    assert.equal(fs.readFileSync(path.join(codexHome, "config.toml"), "utf8"), configBeforeNoModel);
+    assert.equal(fs.readFileSync(path.join(codexHome, "auth.json"), "utf8"), authBeforeNoModel);
   } finally {
     await app.close();
     restoreEnv();

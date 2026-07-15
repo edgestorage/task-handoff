@@ -170,8 +170,6 @@ const runtimeDraft = reactive<RuntimeDraft>({
 const instanceDraft = reactive<InstanceDraft>({
   name: "",
   autoImportAgentConfigs: true,
-  codexModelHash: "",
-  claudeModelHash: "",
 });
 const newProject = reactive<NewProjectDraft>({
   name: "",
@@ -375,11 +373,11 @@ watch(
   () => models.data.value,
   (items) => {
     const modelIds = new Set((items || []).map((model) => model.id));
-    if (instanceDraft.codexModelHash && !modelIds.has(instanceDraft.codexModelHash)) {
-      instanceDraft.codexModelHash = "";
+    if (typeof instanceDraft.codexModelHash === "string" && !modelIds.has(instanceDraft.codexModelHash)) {
+      instanceDraft.codexModelHash = undefined;
     }
-    if (instanceDraft.claudeModelHash && !modelIds.has(instanceDraft.claudeModelHash)) {
-      instanceDraft.claudeModelHash = "";
+    if (typeof instanceDraft.claudeModelHash === "string" && !modelIds.has(instanceDraft.claudeModelHash)) {
+      instanceDraft.claudeModelHash = undefined;
     }
   },
   { immediate: true },
@@ -531,15 +529,15 @@ async function createInstance() {
         autoImportAgentConfigs: instanceDraft.autoImportAgentConfigs,
       },
       modelSelection: {
-        ...(instanceDraft.codexModelHash ? { codexModelHash: instanceDraft.codexModelHash } : {}),
-        ...(instanceDraft.claudeModelHash ? { claudeModelHash: instanceDraft.claudeModelHash } : {}),
+        ...(instanceDraft.codexModelHash !== undefined ? { codexModelHash: instanceDraft.codexModelHash } : {}),
+        ...(instanceDraft.claudeModelHash !== undefined ? { claudeModelHash: instanceDraft.claudeModelHash } : {}),
       },
       ...(instanceDraft.name.trim() ? { name: instanceDraft.name.trim() } : {}),
     });
     instanceDraft.name = "";
     instanceDraft.autoImportAgentConfigs = true;
-    instanceDraft.codexModelHash = "";
-    instanceDraft.claudeModelHash = "";
+    instanceDraft.codexModelHash = undefined;
+    instanceDraft.claudeModelHash = undefined;
   } catch (error) {
     showControlPlaneToast(errorText(error));
     return;

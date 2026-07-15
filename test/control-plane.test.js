@@ -62,7 +62,7 @@ function testAppInventory(apps, observedAt = new Date().toISOString()) {
 }
 
 test("controlled instance heartbeat protocol rejects legacy receiver projection", () => {
-  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-07-15");
+  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-07-16");
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, receiver: { status: "running", pendingCount: 1 } }).success, false);
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, apps: { runningCount: 1 } }).success, false);
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, appInventory: emptyAppInventory(), apps: { runningCount: 1 } }).success, true);
@@ -4008,10 +4008,10 @@ test("node agent starts localhost runtime as a host controlled-instance process"
       "    name: process.env.TASK_HANDOFF_INSTANCE_NAME,",
       "    nodeId: process.env.TASK_HANDOFF_NODE_ID,",
       "    runtimeId: process.env.TASK_HANDOFF_RUNTIME_ID,",
-      "    protocolVersion: '2026-07-15',",
+      "    protocolVersion: '2026-07-16',",
       "    build: { component: 'controlled-instance' },",
       "    controlMode: 'controlled',",
-      "    capabilities: { protocolVersion: '2026-07-15', features: {} },",
+      "    capabilities: { protocolVersion: '2026-07-16', features: {} },",
       "    appInventory: { items: [], observedAt: new Date().toISOString(), issues: [] },",
       "    target: { strategy: 'direct-port', web: `http://127.0.0.1:${port}`, api: `http://127.0.0.1:${port}/api`, status: 'reachable' },",
       "    workspace: { mode: 'local-bind', status: 'ready', path: process.env.TASK_HANDOFF_WORKSPACE, exists: true },",
@@ -4135,6 +4135,29 @@ test("node agent starts localhost runtime as a host controlled-instance process"
   const restartedEnvLines = fs.readFileSync(envLog, "utf8").trim().split(/\n/).map((line) => JSON.parse(line));
   assert.equal(restartedEnvLines.length, 2);
   assert.equal(restartedEnvLines[1].openaiKey, "restarted-codex-key");
+
+  const noModelAssignment = await app.inject({
+    method: "PUT",
+    url: "/api/node-agent/instances/inst_local_process/model-assignment",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      modelSelection: { codexModelHash: null },
+    },
+  });
+  assert.equal(noModelAssignment.statusCode, 200);
+  assert.deepEqual(noModelAssignment.json().data.instance.modelSelection, { codexModelHash: null });
+
+  const restartedWithoutModel = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_local_process/restart",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {},
+  });
+  assert.equal(restartedWithoutModel.statusCode, 200);
+  const noModelEnvLines = fs.readFileSync(envLog, "utf8").trim().split(/\n/).map((line) => JSON.parse(line));
+  assert.equal(noModelEnvLines.length, 3);
+  assert.equal(noModelEnvLines[2].openaiKey, process.env.OPENAI_API_KEY);
+  assert.notEqual(noModelEnvLines[2].openaiKey, "restarted-codex-key");
 
   const stopped = await app.inject({
     method: "POST",
@@ -5936,6 +5959,29 @@ test("control plane models deploy to the target node and instances store assignm
   assert.equal(assignmentRequest.body.codexModelHash, selectedCodex.body.data.id);
   assert.equal(assignmentRequest.body.claudeModelHash, selectedClaude.body.data.id);
   assert.equal("key" in assignmentRequest.body, false);
+
+  const noModelInstance = await json(app, "POST", "/api/controlled-instances", {
+    name: "no-managed-model",
+    projectId: project.body.data.id,
+    runtimeId: "runtime_local_docker",
+    imageId: "img_default",
+    modelSelection: {
+      codexModelHash: null,
+      claudeModelHash: null,
+    },
+  });
+  assert.equal(noModelInstance.statusCode, 201);
+  assert.deepEqual(noModelInstance.body.data.modelSelection, {
+    codexModelHash: null,
+    claudeModelHash: null,
+  });
+  const noModelAssignment = mock.requests.find((request) => request.path === `/instances/${noModelInstance.body.data.id}/model-assignment` && request.method === "PUT");
+  assert.deepEqual(noModelAssignment.body.modelSelection, {
+    codexModelHash: null,
+    claudeModelHash: null,
+  });
+  assert.equal(noModelAssignment.body.codexModelHash, undefined);
+  assert.equal(noModelAssignment.body.claudeModelHash, undefined);
 
   const registry = await json(app, "GET", "/api/models");
   assert.equal(registry.statusCode, 200);

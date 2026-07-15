@@ -1663,13 +1663,14 @@ export class ControlPlaneService {
     return relativeSegments.length ? path.posix.join(workspacePath, ...relativeSegments) : workspacePath;
   }
 
-  private async prepareInstanceModels(node: Node, selection: { codexModelHash?: string; claudeModelHash?: string }) {
+  private async prepareInstanceModels(node: Node, selection: { codexModelHash?: string | null; claudeModelHash?: string | null }) {
     const nodeModels = await this.nodeAgentGateway.listModels(node);
     const storedSelection = {
-      ...(selection.codexModelHash?.trim() ? { codexModelHash: selection.codexModelHash.trim() } : {}),
-      ...(selection.claudeModelHash?.trim() ? { claudeModelHash: selection.claudeModelHash.trim() } : {}),
+      ...(selection.codexModelHash === null ? { codexModelHash: null } : selection.codexModelHash?.trim() ? { codexModelHash: selection.codexModelHash.trim() } : {}),
+      ...(selection.claudeModelHash === null ? { claudeModelHash: null } : selection.claudeModelHash?.trim() ? { claudeModelHash: selection.claudeModelHash.trim() } : {}),
     };
-    const resolve = async (app: "codex" | "claude", selectedId?: string) => {
+    const resolve = async (app: "codex" | "claude", selectedId?: string | null) => {
+      if (selectedId === null) return undefined;
       const controlPlaneModel = selectedId
         ? this.listAllModels().find((model) => model.id === selectedId)
         : this.listAllModels().find((model) => model.enabled && model.app === app);

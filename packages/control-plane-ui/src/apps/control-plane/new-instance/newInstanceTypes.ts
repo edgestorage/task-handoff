@@ -19,8 +19,8 @@ export type RuntimeDraft = {
 export type InstanceDraft = {
   name: string;
   autoImportAgentConfigs: boolean;
-  codexModelHash: string;
-  claudeModelHash: string;
+  codexModelHash?: string | null;
+  claudeModelHash?: string | null;
 };
 
 export type NewProjectDraft = {

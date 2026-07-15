@@ -438,8 +438,8 @@ export type ControlledInstance = {
 };
 
 export type ModelSelection = {
-  codexModelHash?: string;
-  claudeModelHash?: string;
+  codexModelHash?: string | null;
+  claudeModelHash?: string | null;
 };
 
 export type TriggerSource =

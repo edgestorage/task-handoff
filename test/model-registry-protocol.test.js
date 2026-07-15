@@ -18,7 +18,7 @@ const spec = { app: "codex", endpoint: "https://example.test/v1", key: "secret",
 const id = modelConfigHash(spec);
 
 test("control plane emits a date-only protocol version while parsing historical identifiers", () => {
-  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-07-15");
+  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-07-16");
   assert.equal(ProtocolVersionSchema.safeParse(CONTROL_PLANE_PROTOCOL_VERSION).success, true);
   assert.equal(ProtocolVersionSchema.safeParse("2026-07-15-model-hash-registry").success, true);
 });
@@ -55,6 +55,9 @@ test("model assignments contain only hashes and no credentials", () => {
   assert.equal(UpdateNodeModelAssignmentSchema.safeParse({
     modelSelection: { codexModelHash: id }, codexModelHash: id, env: { OPENAI_API_KEY: "leaked" },
   }).success, false);
+  assert.deepEqual(UpdateNodeModelAssignmentSchema.parse({
+    modelSelection: { codexModelHash: null },
+  }).modelSelection, { codexModelHash: null });
 });
 
 test("federated registry groups equal hashes by location without exposing keys", () => {

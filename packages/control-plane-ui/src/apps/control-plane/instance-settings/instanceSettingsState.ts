@@ -10,12 +10,13 @@ export function selectableInstanceModels(models: ModelConfig[], app: ModelApp, n
     .sort(modelOrder);
 }
 
-export function invalidInstanceModelSelection(models: ModelConfig[], app: ModelApp, nodeId: string, modelId?: string) {
+export function invalidInstanceModelSelection(models: ModelConfig[], app: ModelApp, nodeId: string, modelId?: string | null) {
   if (!modelId) return false;
   return !selectableInstanceModels(models, app, nodeId).some((model) => model.id === modelId);
 }
 
-export function effectiveInstanceModel(models: ModelConfig[], app: ModelApp, nodeId: string, modelId?: string) {
+export function effectiveInstanceModel(models: ModelConfig[], app: ModelApp, nodeId: string, modelId?: string | null) {
+  if (modelId === null) return undefined;
   const selectable = selectableInstanceModels(models, app, nodeId);
   if (modelId) return selectable.find((model) => model.id === modelId);
   return selectable.find((model) => model.locations?.some((location) => location.type === "control-plane" && location.enabled));

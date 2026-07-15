@@ -47,5 +47,7 @@ test("global default resolves only to an enabled control-plane model", () => {
 
   assert.equal(effectiveInstanceModel(models, "codex", "node-a")?.id, "global-default");
   assert.equal(effectiveInstanceModel(models, "codex", "node-a", "node-local")?.id, "node-local");
+  assert.equal(effectiveInstanceModel(models, "codex", "node-a", null), undefined);
+  assert.equal(invalidInstanceModelSelection(models, "codex", "node-a", null), false);
   assert.equal(effectiveInstanceModel(models, "codex", "node-a", "missing"), undefined);
 });

@@ -8,7 +8,7 @@ import {
 } from "./ai-sessions.ts";
 import { TriggerConfigSchema, TriggerDeploymentSchema, TriggerRunSchema, TriggerRuntimeStateSchema } from "./triggers.ts";
 
-export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-07-15";
+export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-07-16";
 // The local value follows the date-only convention. Parsing remains permissive
 // so persisted records written before that convention do not disappear.
 export const ProtocolVersionSchema = z.string();
@@ -18,10 +18,12 @@ const TimestampSchema = z.string().datetime();
 const LabelsSchema = z.record(z.string(), z.string()).default({});
 const StringRecordSchema = z.record(z.string(), z.string()).default({});
 
+// Omitted uses the enabled global default, null disables managed model binding,
+// and a hash pins the instance to that model.
 export const ModelSelectionSchema = z
   .object({
-    codexModelHash: IdSchema.optional(),
-    claudeModelHash: IdSchema.optional(),
+    codexModelHash: IdSchema.nullable().optional(),
+    claudeModelHash: IdSchema.nullable().optional(),
   })
   .strict()
   .default({});
