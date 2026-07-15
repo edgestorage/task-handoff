@@ -9,7 +9,9 @@ import {
 import { TriggerConfigSchema, TriggerDeploymentSchema, TriggerRunSchema, TriggerRuntimeStateSchema } from "./triggers.ts";
 
 export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-07-15";
-export const ProtocolVersionSchema = z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, "Protocol version must use YYYY-MM-DD format.");
+// The local value follows the date-only convention. Parsing remains permissive
+// so persisted records written before that convention do not disappear.
+export const ProtocolVersionSchema = z.string();
 
 const IdSchema = z.string().trim().min(1).max(120).regex(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$/);
 const TimestampSchema = z.string().datetime();

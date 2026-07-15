@@ -17,10 +17,10 @@ const timestamp = "2026-07-15T00:00:00.000Z";
 const spec = { app: "codex", endpoint: "https://example.test/v1", key: "secret", model: "gpt-test" };
 const id = modelConfigHash(spec);
 
-test("federated model registry protocol version is explicit", () => {
+test("control plane emits a date-only protocol version while parsing historical identifiers", () => {
   assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-07-15");
   assert.equal(ProtocolVersionSchema.safeParse(CONTROL_PLANE_PROTOCOL_VERSION).success, true);
-  assert.equal(ProtocolVersionSchema.safeParse("2026-07-15-model-hash-registry").success, false);
+  assert.equal(ProtocolVersionSchema.safeParse("2026-07-15-model-hash-registry").success, true);
 });
 
 test("model identity is a stable canonical content hash", () => {
