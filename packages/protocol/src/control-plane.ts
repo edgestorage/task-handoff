@@ -8,7 +8,8 @@ import {
 } from "./ai-sessions.ts";
 import { TriggerConfigSchema, TriggerDeploymentSchema, TriggerRunSchema, TriggerRuntimeStateSchema } from "./triggers.ts";
 
-export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-07-15-model-hash-registry";
+export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-07-15";
+export const ProtocolVersionSchema = z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, "Protocol version must use YYYY-MM-DD format.");
 
 const IdSchema = z.string().trim().min(1).max(120).regex(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$/);
 const TimestampSchema = z.string().datetime();
@@ -61,7 +62,7 @@ export const BuildInfoSchema = z
     component: z.enum(["control-plane", "node-agent", "controlled-instance"]),
     packageName: z.string().trim().max(160).optional(),
     packageVersion: z.string().trim().max(80).optional(),
-    protocolVersion: z.string().trim().max(80).optional(),
+    protocolVersion: ProtocolVersionSchema.optional(),
     buildId: z.string().trim().max(160).optional(),
     builtAt: z.string().trim().max(120).optional(),
     gitCommit: z.string().trim().max(120).optional(),
@@ -539,7 +540,7 @@ export const ControlledInstanceSchema = z
     targetStatus: z.enum(["unknown", "reachable", "endpoint-unreachable"]).default("unknown"),
     uiAccessStatus: z.enum(["unknown", "reachable", "endpoint-unreachable"]).default("unknown"),
     controlMode: z.enum(["standalone", "controlled"]).default("controlled"),
-    protocolVersion: z.string().trim().max(80).optional(),
+    protocolVersion: ProtocolVersionSchema.optional(),
     instanceVersion: z.string().trim().max(80).optional(),
     build: BuildInfoSchema.optional(),
     capabilities: z.record(z.string(), z.unknown()).default({}),
@@ -690,7 +691,7 @@ export const ControlledInstanceRegisterSchema = z
     runtimeId: IdSchema.optional(),
     imageId: IdSchema.optional(),
     instanceVersion: z.string().trim().max(80).optional(),
-    protocolVersion: z.string().trim().max(80),
+    protocolVersion: ProtocolVersionSchema,
     build: BuildInfoSchema.optional(),
     controlMode: z.enum(["standalone", "controlled"]).default("controlled"),
     capabilities: z.record(z.string(), z.unknown()).default({}),
@@ -710,7 +711,7 @@ export const ControlledInstanceHeartbeatSchema = z
   .object({
     status: ControlledInstanceSchema.shape.status.optional(),
     health: ControlledInstanceSchema.shape.health.optional(),
-    protocolVersion: z.string().trim().max(80),
+    protocolVersion: ProtocolVersionSchema,
     build: BuildInfoSchema.optional(),
     capabilities: ControlledInstanceSchema.shape.capabilities.optional(),
     appInventory: InstanceAppInventorySchema.optional(),

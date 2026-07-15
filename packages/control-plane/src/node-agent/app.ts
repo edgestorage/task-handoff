@@ -1126,7 +1126,6 @@ class NodeAgentState {
     });
     const nextId = modelConfigHash(candidate);
     const stored = this.models.put(NodeModelConfigSchema.parse({ ...candidate, id: nextId }));
-    if (nextId !== id && this.modelReferenceIds(id).length === 0) this.models.delete(id);
     return this.publicModel(stored, this.modelReferenceIds(nextId).length);
   }
 

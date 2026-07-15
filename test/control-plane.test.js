@@ -62,7 +62,7 @@ function testAppInventory(apps, observedAt = new Date().toISOString()) {
 }
 
 test("controlled instance heartbeat protocol rejects legacy receiver projection", () => {
-  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-07-15-model-hash-registry");
+  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-07-15");
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, receiver: { status: "running", pendingCount: 1 } }).success, false);
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, apps: { runningCount: 1 } }).success, false);
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, appInventory: emptyAppInventory(), apps: { runningCount: 1 } }).success, true);
@@ -919,10 +919,6 @@ function createMockNodeAgentFetch(options = {}) {
       delete model.key;
       nodeModels.set(nextId, model);
       nodeModelKeys.set(nextId, nextKey);
-      if (!current.referenceCount) {
-        nodeModels.delete(id);
-        nodeModelKeys.delete(id);
-      }
       return jsonResponse(model);
     }
     if (modelRoute && init.method === "DELETE") {
@@ -4017,10 +4013,10 @@ test("node agent starts localhost runtime as a host controlled-instance process"
       "    name: process.env.TASK_HANDOFF_INSTANCE_NAME,",
       "    nodeId: process.env.TASK_HANDOFF_NODE_ID,",
       "    runtimeId: process.env.TASK_HANDOFF_RUNTIME_ID,",
-      "    protocolVersion: '2026-07-15-model-hash-registry',",
+      "    protocolVersion: '2026-07-15',",
       "    build: { component: 'controlled-instance' },",
       "    controlMode: 'controlled',",
-      "    capabilities: { protocolVersion: '2026-07-15-model-hash-registry', features: {} },",
+      "    capabilities: { protocolVersion: '2026-07-15', features: {} },",
       "    appInventory: { items: [], observedAt: new Date().toISOString(), issues: [] },",
       "    target: { strategy: 'direct-port', web: `http://127.0.0.1:${port}`, api: `http://127.0.0.1:${port}/api`, status: 'reachable' },",
       "    workspace: { mode: 'local-bind', status: 'ready', path: process.env.TASK_HANDOFF_WORKSPACE, exists: true },",
@@ -5784,6 +5780,54 @@ test("control plane proxies instance websocket routes through reverse node tunne
   assert.deepEqual(await withTimeout(onceWebSocketMessageFrame(stream), "reverse websocket stream frame"), { message: "hello", isBinary: false });
 });
 
+test("node model edits create a new hash and retain the previous location until explicit deletion", async (t) => {
+  const app = await createNodeAgentApp({
+    dataDir: tempDataDir("node-agent-model-content-addressed-edit"),
+    logger: false,
+    token: "agent-secret",
+  });
+  t.after(() => app.close());
+
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/models",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      name: "Node model",
+      endpoint: "https://node-model.example/v1",
+      key: "node-model-secret",
+      model: "gpt-node-model",
+      app: "codex",
+    },
+  });
+  assert.equal(created.statusCode, 201);
+  const originalId = created.json().data.id;
+
+  const updated = await app.inject({
+    method: "PATCH",
+    url: `/api/node-agent/models/${originalId}`,
+    headers: { authorization: "Bearer agent-secret" },
+    payload: { endpoint: "https://node-model-v2.example/v1" },
+  });
+  assert.equal(updated.statusCode, 200);
+  assert.notEqual(updated.json().data.id, originalId);
+
+  const listed = await app.inject({
+    method: "GET",
+    url: "/api/node-agent/models",
+    headers: { authorization: "Bearer agent-secret" },
+  });
+  assert.deepEqual(new Set(listed.json().data.map((model) => model.id)), new Set([originalId, updated.json().data.id]));
+
+  const removed = await app.inject({
+    method: "DELETE",
+    url: `/api/node-agent/models/${originalId}`,
+    headers: { authorization: "Bearer agent-secret" },
+  });
+  assert.equal(removed.statusCode, 200);
+  assert.equal(removed.json().data.deleted, true);
+});
+
 test("control plane models deploy to the target node and instances store assignments", async (t) => {
   const mockOptions = {};
   const mock = createMockNodeAgentFetch(mockOptions);
@@ -5924,6 +5968,9 @@ test("control plane models deploy to the target node and instances store assignm
   assert.equal(rotatedModel.statusCode, 200);
   assert.notEqual(rotatedModel.body.data.id, selectedCodex.body.data.id);
   assert.equal(mock.requests.filter((request) => request.path === `/models/${selectedCodex.body.data.id}/deploy`).length, 1);
+  const registryAfterRotation = await json(app, "GET", "/api/models");
+  assert.equal(registryAfterRotation.body.data.models.some((group) => group.id === selectedCodex.body.data.id), true);
+  assert.equal(registryAfterRotation.body.data.models.some((group) => group.id === rotatedModel.body.data.id), true);
 
   const selectRotated = await json(app, "PATCH", `/api/controlled-instances/${instance.body.data.id}`, {
     modelSelection: { codexModelHash: rotatedModel.body.data.id },

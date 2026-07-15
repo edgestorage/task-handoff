@@ -52,59 +52,108 @@
           </div>
           <ScrollArea class="registered-project-list">
             <div class="settings-scroll-content">
-            <div v-for="model in models.data.value || []" :key="model.id" class="registered-project-row" data-model-row>
-              <div>
-                <strong>{{ model.name }}</strong>
-                <code>{{ model.model }} · {{ model.endpoint }}</code>
-                <span class="image-meta-line">{{ model.app }} · {{ model.enabled ? "enabled" : "disabled" }} · {{ model.keyPreview || "key set" }}</span>
-                <span class="image-meta-line">
-                  {{ model.locations?.map((location) => location.type === "control-plane" ? "control-plane" : `${location.nodeId} (${location.referenceCount} refs)`).join(", ") }}
-                  · {{ model.referenceCount || 0 }} refs total
-                </span>
+            <article v-for="model in models.data.value || []" :key="model.id" class="registered-project-row model-card" data-model-row>
+              <header class="model-card-header">
+                <div class="model-card-title">
+                  <strong>{{ model.name }}</strong>
+                  <code>{{ model.model }}</code>
+                </div>
+                <div class="model-card-badges">
+                  <Badge variant="secondary">{{ model.app }}</Badge>
+                  <Badge :variant="model.enabled ? 'default' : 'secondary'">{{ model.enabled ? "Enabled" : "Disabled" }}</Badge>
+                </div>
+              </header>
+              <div class="model-card-endpoint" :title="model.endpoint">{{ model.endpoint }}</div>
+              <div class="model-card-meta">
+                <span>Credential {{ model.keyPreview || (model.keySet ? "set" : "missing") }}</span>
+                <span>{{ model.referenceCount || 0 }} {{ (model.referenceCount || 0) === 1 ? "reference" : "references" }}</span>
               </div>
-              <div class="settings-row-actions">
+              <div class="model-location-list" aria-label="Model locations">
+                <div v-for="location in model.locations || []" :key="modelLocationKey(location)" class="model-location-row">
+                  <MapPin :size="13" aria-hidden="true" />
+                  <span>{{ modelLocationLabel(location) }}</span>
+                  <small v-if="location.type === 'node'">{{ location.referenceCount }} {{ location.referenceCount === 1 ? "ref" : "refs" }}</small>
+                </div>
+              </div>
+              <footer class="settings-row-actions model-card-actions">
                 <Button variant="outline" size="sm" class="icon-button" :disabled="!model.locations?.some((location) => location.type === 'control-plane') || savingModelId === model.id || !canMoveModel(model.id, -1)" aria-label="Move model up" title="Move up" @click="moveModel(model.id, -1)">
                   <ChevronUp :size="14" />
                 </Button>
                 <Button variant="outline" size="sm" class="icon-button" :disabled="!model.locations?.some((location) => location.type === 'control-plane') || savingModelId === model.id || !canMoveModel(model.id, 1)" aria-label="Move model down" title="Move down" @click="moveModel(model.id, 1)">
                   <ChevronDown :size="14" />
                 </Button>
-                <Badge :variant="model.enabled ? 'default' : 'secondary'">{{ model.enabled ? "On" : "Off" }}</Badge>
-                <Button variant="outline" size="sm" :disabled="savingModelId === model.id" @click="editModel(model)">
+                <Button variant="outline" size="sm" class="model-edit-button" :disabled="savingModelId === model.id" @click="editModel(model)">
                   <Settings :size="14" />
-                  <span>Edit</span>
+                  <span>Edit all</span>
                 </Button>
-                <Button variant="outline" size="sm" :disabled="deletingModelId === model.id" @click="removeModel(model)">
-                  <Trash2 :size="14" />
-                  <span>{{ deletingModelId === model.id ? "Deleting" : "Delete" }}</span>
-                </Button>
-              </div>
-            </div>
+                <DropdownMenu>
+                  <DropdownMenuTrigger as-child>
+                    <Button variant="outline" size="sm" class="model-delete-trigger" :disabled="deletingModelId === model.id || !model.locations?.length">
+                      <Trash2 :size="14" />
+                      <span>{{ deletingModelId === model.id ? "Deleting" : "Delete from" }}</span>
+                      <ChevronDown :size="13" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent class="model-location-menu" align="end" :side-offset="6">
+                    <DropdownMenuItem
+                      v-for="location in model.locations || []"
+                      :key="`delete-${modelLocationKey(location)}`"
+                      class="model-location-menu-item"
+                      :disabled="location.type === 'node' && location.referenceCount > 0"
+                      @select="removeModel(model, location)"
+                    >
+                      <Trash2 :size="14" />
+                      <span>
+                        <strong>{{ modelLocationLabel(location) }}</strong>
+                        <small v-if="location.type === 'node' && location.referenceCount > 0">In use by {{ location.referenceCount }} {{ location.referenceCount === 1 ? "instance" : "instances" }}</small>
+                        <small v-else>Delete this location only</small>
+                      </span>
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </footer>
+            </article>
             <p v-if="!(models.data.value || []).length" class="settings-empty">No models configured.</p>
             </div>
           </ScrollArea>
-          <div v-if="modelRegistry.data.value?.nodeDiagnostics.length" class="model-node-diagnostics" role="status">
-            <strong>Node diagnostics</strong>
-            <span v-for="diagnostic in modelRegistry.data.value.nodeDiagnostics" :key="`${diagnostic.nodeId}:${diagnostic.code}`">
-              {{ diagnostic.nodeId }} · {{ diagnostic.code }} · {{ diagnostic.message }}
-            </span>
+          <div v-if="modelRegistry.data.value?.nodeDiagnostics.length" class="model-node-diagnostics" role="status" aria-live="polite">
+            <div class="model-node-diagnostics-head">
+              <AlertTriangle :size="15" aria-hidden="true" />
+              <strong>Some node models could not be loaded</strong>
+              <Button variant="ghost" size="sm" :disabled="modelRegistry.isFetching.value" @click="modelRegistry.refetch()">
+                <RefreshCw :size="13" />
+                <span>{{ modelRegistry.isFetching.value ? "Retrying" : "Retry" }}</span>
+              </Button>
+            </div>
+            <div v-for="diagnostic in modelRegistry.data.value.nodeDiagnostics" :key="`${diagnostic.nodeId}:${diagnostic.code}`" class="model-node-diagnostic-row">
+              <strong>{{ nodeName(diagnostic.nodeId) }}</strong>
+              <span>{{ diagnostic.message }}</span>
+              <code>{{ diagnostic.code }}</code>
+            </div>
           </div>
           <p v-if="modelSaveSuccess" class="settings-success">{{ modelSaveSuccess }}</p>
         </section>
 
         <section class="modal-section">
-          <div class="section-head">
-            <span>{{ editingModelId ? "Edit model" : "Add model" }}</span>
+          <div class="section-head model-form-head">
+            <div>
+              <span>{{ editingModelId ? "Edit model" : "Add model" }}</span>
+              <small>{{ editingModelId ? `Changes apply to all ${editingModelLocationCount} locations; the old configuration remains available.` : "Create a private model configuration at one location." }}</small>
+            </div>
             <button v-if="editingModelId" type="button" @click="resetModelForm">New model</button>
           </div>
           <div class="inline-create">
-            <label>
+            <label v-if="!editingModelId">
               <span>Location</span>
-              <ControlPlaneSelect v-model="settingsModel.locationScope" :disabled="Boolean(editingModelId)" placeholder="Select location">
+              <ControlPlaneSelect v-model="settingsModel.locationScope" placeholder="Select location">
                 <ControlPlaneSelectItem value="control-plane">Control plane</ControlPlaneSelectItem>
                 <ControlPlaneSelectItem v-for="node in nodes.data.value || []" :key="node.id" :value="node.id">Node · {{ node.name }}</ControlPlaneSelectItem>
               </ControlPlaneSelect>
             </label>
+            <div v-else class="model-edit-scope">
+              <span>Location</span>
+              <div><Layers :size="15" /><strong>All {{ editingModelLocationCount }} locations</strong></div>
+            </div>
             <label>
               <span>Name</span>
               <ControlPlaneInput v-model="settingsModel.name" placeholder="OpenAI primary" />
@@ -118,8 +167,9 @@
               <ControlPlaneInput v-model="settingsModel.model" placeholder="gpt-5-codex" />
             </label>
             <label>
-              <span>Key</span>
+              <span>API key</span>
               <ControlPlaneInput v-model="settingsModel.key" type="password" :placeholder="editingModelId ? 'Leave blank to keep current key' : 'API key'" />
+              <small v-if="editingModelId">Leave blank to keep the current credential at every location.</small>
             </label>
             <label>
               <span>App</span>
@@ -134,7 +184,7 @@
                 <span>Enabled</span>
               </label>
             </div>
-            <Button variant="outline" size="sm" :disabled="!canSaveModel || savingModelId === formModelBusyId" @click="saveModel">
+            <Button size="sm" class="model-submit" :disabled="!canSaveModel || savingModelId === formModelBusyId" @click="saveModel">
               <Plus :size="15" />
               <span>{{ savingModelId === formModelBusyId ? "Saving" : editingModelId ? "Save model" : "Create model" }}</span>
             </Button>
@@ -441,9 +491,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import { useQueryClient } from "@tanstack/vue-query";
-import { ArrowLeft, ChevronDown, ChevronUp, Plus, RefreshCw, Search, Settings, Trash2 } from "@lucide/vue";
+import { AlertTriangle, ArrowLeft, ChevronDown, ChevronUp, Layers, MapPin, Plus, RefreshCw, Search, Settings, Trash2 } from "@lucide/vue";
 import { getNodeExternalListener, updateControlPlaneSettings, updateNodeExternalListener, useChatBridgesQuery, useChatGatewayStatusQuery, useControlPlaneSettingsQuery, useImagesQuery, useInstanceBoardPayloadQuery, useLocalDockerImagesQuery, useModelRegistryQuery, useModelsQuery, useNodeRuntimesPayloadQuery, useNodesQuery, useProjectsQuery, useServerUpdateCheckQuery } from "../../../api/queries";
-import type { BuildInfo, ControlPlaneSettings, InstanceBoardItem, Node, NodeAgentExternalListener, UpdateChannel } from "../../../api/types";
+import type { BuildInfo, ControlPlaneSettings, InstanceBoardItem, ModelLocation, Node, NodeAgentExternalListener, UpdateChannel } from "../../../api/types";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Checkbox } from "../../../components/ui/checkbox";
@@ -805,6 +855,22 @@ const {
   onModelDeleted() {},
   refresh,
 });
+const editingModelLocationCount = computed(() => {
+  const model = (models.data.value || []).find((item) => item.id === editingModelId.value);
+  return model?.locations?.length || 1;
+});
+
+function nodeName(nodeId: string) {
+  return (nodes.data.value || []).find((node) => node.id === nodeId)?.name || nodeId;
+}
+
+function modelLocationKey(location: ModelLocation) {
+  return location.type === "control-plane" ? "control-plane" : `node:${location.nodeId}`;
+}
+
+function modelLocationLabel(location: ModelLocation) {
+  return location.type === "control-plane" ? "Control plane" : nodeName(location.nodeId);
+}
 const {
   addLocalNode,
   applyManagedUpdate,
@@ -1621,18 +1687,244 @@ function errorText(error: unknown) {
   line-height: 1.35;
 }
 
-.model-node-diagnostics {
+.model-card {
+  gap: 9px;
+  padding: 12px;
+  transition: border-color 140ms ease, background 140ms ease;
+}
+
+.model-card:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-hover);
+}
+
+.model-card-header,
+.model-card-badges,
+.model-card-meta,
+.model-location-row,
+.model-node-diagnostics-head {
+  display: flex;
+  align-items: center;
+}
+
+.model-card-header {
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.model-card-title {
   display: grid;
-  gap: 4px;
-  border-top: 1px solid var(--line);
-  color: var(--status-danger);
+  min-width: 0;
+  gap: 3px;
+}
+
+.model-card-title strong {
+  font-size: 14px;
+}
+
+.model-card-title code {
+  color: var(--text-muted);
   font-size: 11px;
+}
+
+.model-card-badges {
+  flex: 0 0 auto;
+  gap: 5px;
+}
+
+.model-card-endpoint {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-card-meta {
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.model-location-list {
+  display: grid;
+  gap: 5px;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.model-location-row {
+  min-width: 0;
+  gap: 6px;
+  color: var(--text);
+  font-size: 11px;
+}
+
+.model-location-row svg {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+
+.model-location-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-location-row small {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.model-card-actions {
+  border-top: 1px solid var(--line);
   padding-top: 9px;
 }
 
-.model-node-diagnostics strong {
+.model-card-actions .model-edit-button {
+  margin-left: auto;
+}
+
+:global(.model-location-menu) {
+  min-width: 250px;
+}
+
+:global(.model-location-menu-item) {
+  align-items: flex-start !important;
+  gap: 9px !important;
+  padding-block: 8px !important;
+}
+
+:global(.model-location-menu-item > svg) {
+  color: var(--status-danger);
+  margin-top: 2px;
+}
+
+:global(.model-location-menu-item > span) {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+:global(.model-location-menu-item strong),
+:global(.model-location-menu-item small) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:global(.model-location-menu-item strong) {
   color: var(--text-strong);
   font-size: 12px;
+}
+
+:global(.model-location-menu-item small) {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.model-node-diagnostics {
+  display: grid;
+  gap: 8px;
+  border: 1px solid color-mix(in srgb, var(--status-danger) 35%, var(--line));
+  border-radius: 7px;
+  background: var(--status-danger-bg);
+  color: var(--text);
+  font-size: 11px;
+  padding: 9px;
+}
+
+.model-node-diagnostics-head {
+  gap: 7px;
+}
+
+.model-node-diagnostics-head > svg {
+  flex: 0 0 auto;
+  color: var(--status-danger);
+}
+
+.model-node-diagnostics-head > button {
+  height: 26px;
+  margin-left: auto;
+}
+
+.model-node-diagnostics-head strong {
+  color: var(--text-strong);
+  font-size: 12px;
+}
+
+.model-node-diagnostic-row {
+  display: grid;
+  grid-template-columns: minmax(90px, 0.35fr) minmax(0, 1fr) auto;
+  gap: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--status-danger) 25%, transparent);
+  padding-top: 7px;
+}
+
+.model-node-diagnostic-row strong,
+.model-node-diagnostic-row span,
+.model-node-diagnostic-row code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-node-diagnostic-row code {
+  color: var(--status-danger);
+  font-size: 10px;
+}
+
+.model-form-head {
+  align-items: flex-start;
+}
+
+.model-form-head > div {
+  display: grid;
+  gap: 4px;
+}
+
+.model-form-head small,
+.inline-create label > small {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 550;
+  line-height: 1.4;
+}
+
+.model-edit-scope {
+  display: grid;
+  gap: 7px;
+}
+
+.model-edit-scope > span {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.model-edit-scope > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-inset);
+  color: var(--text-muted);
+  padding: 0 10px;
+}
+
+.model-edit-scope strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.model-submit {
+  width: 100%;
+  margin-top: 2px;
 }
 
 .checkbox-row,

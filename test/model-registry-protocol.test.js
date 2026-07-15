@@ -8,6 +8,7 @@ const {
   ModelConfigSchema,
   NodeModelAssignmentSchema,
   NodeModelPublicRecordSchema,
+  ProtocolVersionSchema,
   UpdateNodeModelAssignmentSchema,
   modelConfigHash,
 } = require("../packages/protocol/src/control-plane.ts");
@@ -17,7 +18,9 @@ const spec = { app: "codex", endpoint: "https://example.test/v1", key: "secret",
 const id = modelConfigHash(spec);
 
 test("federated model registry protocol version is explicit", () => {
-  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-07-15-model-hash-registry");
+  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-07-15");
+  assert.equal(ProtocolVersionSchema.safeParse(CONTROL_PLANE_PROTOCOL_VERSION).success, true);
+  assert.equal(ProtocolVersionSchema.safeParse("2026-07-15-model-hash-registry").success, false);
 });
 
 test("model identity is a stable canonical content hash", () => {

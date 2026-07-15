@@ -550,7 +550,6 @@ export class ControlPlaneService {
     });
     const nextId = modelConfigHash(candidate);
     const stored = this.models.put(ModelConfigSchema.parse({ ...candidate, id: nextId }));
-    if (nextId !== id) this.models.delete(id);
     return publicModel(stored);
   }
 

@@ -1,6 +1,6 @@
 import { computed, reactive, ref } from "vue";
 import { createModel, createNodeModel, deleteModel, deleteNodeModel, reorderModels, updateModel, updateNodeModel } from "../../../api/queries";
-import type { ModelApp, ModelConfig, Node } from "../../../api/types";
+import type { ModelApp, ModelConfig, ModelLocation, Node } from "../../../api/types";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 
 type UseModelSettingsInput = {
@@ -85,17 +85,28 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
         ...(settingsModel.key.trim() ? { key: settingsModel.key.trim() } : {}),
       };
       const editing = models().find((model) => model.id === editingModelId.value);
-      const editingLocation = editing?.locations?.find((item) => item.type === "control-plane") || editing?.locations?.find((item) => item.type === "node");
-      const saved = editingModelId.value
-        ? editingLocation?.type === "node"
-          ? await updateNodeModel(editingLocation.nodeId, editingModelId.value, payload)
-          : await updateModel(editingModelId.value, payload)
-        : settingsModel.locationScope === "control-plane"
+      let saved: ModelConfig;
+      let refreshed = false;
+      if (editingModelId.value && editing) {
+        const locations = editing.locations?.length
+          ? editing.locations
+          : [{ type: "control-plane", name: editing.name, enabled: editing.enabled, order: editing.order } as const];
+        const results = await Promise.allSettled(locations.map((location) => location.type === "node"
+          ? updateNodeModel(location.nodeId, editingModelId.value, payload)
+          : updateModel(editingModelId.value, payload)));
+        await refresh();
+        refreshed = true;
+        const failure = results.find((result) => result.status === "rejected");
+        if (failure?.status === "rejected") throw failure.reason;
+        saved = results.find((result): result is PromiseFulfilledResult<ModelConfig> => result.status === "fulfilled")!.value;
+      } else {
+        saved = settingsModel.locationScope === "control-plane"
           ? await createModel({ ...payload, key: settingsModel.key.trim() })
           : await createNodeModel(settingsModel.locationScope, { ...payload, key: settingsModel.key.trim() });
+      }
       modelSaveSuccess.value = `${saved.name} saved.`;
       resetModelForm();
-      await refresh();
+      if (!refreshed) await refresh();
     } catch (error) {
       showControlPlaneToast(errorText(error));
     } finally {
@@ -103,20 +114,22 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
     }
   }
 
-  async function removeModel(model: ModelConfig) {
+  async function removeModel(model: ModelConfig, location: ModelLocation) {
     if (deletingModelId.value) {
       return;
     }
-    if (!window.confirm(`Delete model ${model.name}?`)) {
+    const locationName = location.type === "control-plane"
+      ? "Control plane"
+      : nodes().find((node) => node.id === location.nodeId)?.name || location.nodeId;
+    if (!window.confirm(`Delete ${model.name} from ${locationName}? Other locations will be kept.`)) {
       return;
     }
     deletingModelId.value = model.id;
     clearModelFeedback();
     try {
-      const location = model.locations?.find((item) => item.type === "control-plane") || model.locations?.find((item) => item.type === "node");
-      if (location?.type === "node") await deleteNodeModel(location.nodeId, model.id);
+      if (location.type === "node") await deleteNodeModel(location.nodeId, model.id);
       else await deleteModel(model.id);
-      if (editingModelId.value === model.id) {
+      if (editingModelId.value === model.id && (model.locations?.length || 1) === 1) {
         resetModelForm();
       }
       onModelDeleted(model.id);
