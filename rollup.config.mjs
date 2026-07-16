@@ -46,29 +46,11 @@ const legacyBuild = [
   {
     input: {
       cli: "apps/cli/src/index.ts",
-      chat: "packages/core/src/core/chat.ts",
       "chat-render": "packages/core/src/core/chat-render.ts",
-      config: "packages/core/src/core/config.ts",
       diagnostics: "packages/core/src/core/diagnostics.ts",
-      duration: "packages/core/src/core/duration.ts",
       persistence: "packages/core/src/core/persistence.ts",
-      progress: "packages/core/src/core/progress.ts",
-      protocol: "packages/core/src/core/protocol.ts",
-      text: "packages/core/src/core/text.ts",
-      "codex-approval-hook": "apps/cli/src/hooks/codex-approval.ts",
-      "claude-hook-install": "apps/cli/src/hooks/claude-install.ts",
-      "codex-hook-install": "apps/cli/src/hooks/codex-install.ts",
-      "mcp-install": "apps/cli/src/hooks/mcp-install.ts",
-      "unified-install": "apps/cli/src/hooks/unified-install.ts",
-      mcp: "apps/cli/src/mcp/index.ts",
-      receiver: "packages/receiver-worker/src/receiver-entry.ts",
-      sender: "packages/protocol/src/sender.ts",
-      socket: "packages/core/src/core/socket.ts",
-      "telegram-bridge": "packages/receiver-worker/src/integrations/telegram.ts",
       transcript: "packages/core/src/core/transcript.ts",
-      ui: "packages/terminal-ui/src/index.ts",
       web: "packages/controlled-instance/src/web/server.ts",
-      "wechat-bridge": "packages/receiver-worker/src/integrations/wechat.ts",
     },
     output: {
       dir: "dist",
@@ -78,16 +60,6 @@ const legacyBuild = [
     },
     external: isExternal,
     plugins: [cleanDist, ...plugins],
-  },
-  {
-    input: "packages/receiver-worker/src/app.ts",
-    output: {
-      file: "dist/receiver-ink.mjs",
-      format: "esm",
-      inlineDynamicImports: true,
-    },
-    external: isExternal,
-    plugins,
   },
 ];
 
@@ -151,18 +123,6 @@ function runtimeBuild(name, definition) {
       plugins: [cleanRuntimeDir(outputDir), ...plugins, runtimeMinifier()],
     },
   ];
-  if (definition.receiverInkEntry) {
-    builds.push({
-      input: definition.receiverInkEntry,
-      output: {
-        file: `${outputDir}/receiver-ink.mjs`,
-        format: "esm",
-        inlineDynamicImports: true,
-      },
-      external: externalFrom(definition.dependencies),
-      plugins: [...plugins, runtimeMinifier()],
-    });
-  }
   return builds;
 }
 

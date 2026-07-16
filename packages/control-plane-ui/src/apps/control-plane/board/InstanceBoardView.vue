@@ -59,6 +59,9 @@
                 <Badge variant="secondary">{{ instance.status }}</Badge>
               </div>
             </header>
+            <p v-if="instance.imageProvisioning && instance.imageProvisioning.phase !== 'ready'" class="image-provisioning-status">
+              {{ imageProvisioningLabel(instance) }}<template v-if="instance.imageProvisioning.error"> · {{ instance.imageProvisioning.error }}</template>
+            </p>
             <div class="board-card-preview" :data-state="boardPreviewState(instance)">
               <div v-if="boardSessions(instance).length > 1" class="board-session-switcher" @click.stop>
                 <DropdownMenu>
@@ -135,6 +138,10 @@
                 <RotateCw :size="14" />
                 <span>{{ activeActionLabel(instance, "restart", "Restart") }}</span>
               </Button>
+              <Button v-if="canShowInstanceAction(instance, 'retry-image')" variant="outline" size="sm" :disabled="isInstanceActionBusy(instance)" @click="$emit('runAction', 'retry-image', instance)">
+                <RotateCw :size="14" />
+                <span>{{ activeActionLabel(instance, "retry-image", "Retry image") }}</span>
+              </Button>
               <Button v-if="boardOpenUrl(instance)" variant="outline" size="sm" @click="$emit('openUrl', boardOpenUrl(instance))">
                 <ExternalLink :size="14" />
                 <span>Open</span>
@@ -160,7 +167,7 @@ import { ScrollArea } from "../../../components/ui/scroll-area";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
 import type { InstanceAction } from "../useInstanceActions";
-import { canShowInstanceAction, instanceSourceLabel, isInstanceAppReady } from "../useInstanceStatus";
+import { canShowInstanceAction, imageProvisioningLabel, instanceSourceLabel, isInstanceAppReady } from "../useInstanceStatus";
 import type { InstanceListSortMode } from "../instance-list/useWorkbenchInstances";
 import InstanceViewOptionsMenu from "../shared/InstanceViewOptionsMenu.vue";
 import AppLaunchMenuItems from "../shared/AppLaunchMenuItems.vue";
@@ -807,6 +814,16 @@ function canLaunchBoardApp(instance: InstanceBoardItem) {
   gap: 6px;
   border-top: 1px solid var(--line);
   padding: 8px;
+}
+
+.image-provisioning-status {
+  overflow: hidden;
+  margin: 0;
+  color: var(--status-warning);
+  font-size: 11px;
+  padding: 0 12px 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .board-card-actions .inline-flex {

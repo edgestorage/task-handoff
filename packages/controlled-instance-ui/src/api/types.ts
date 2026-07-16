@@ -103,7 +103,6 @@ export type AiSessionStatus = {
   providerSessionId?: string;
   providerMeta?: Record<string, unknown>;
   activeTurnId?: string;
-  conversationId?: number;
   title?: string;
   cwd?: string;
   userPrompt?: string;
@@ -132,7 +131,7 @@ export type AiSessionStatus = {
 
 export type AiSessionSummary = Pick<
   AiSessionStatus,
-  "id" | "agent" | "appSessionId" | "appId" | "providerSessionId" | "providerMeta" | "activeTurnId" | "conversationId" | "title" | "cwd" | "userPrompt" | "turns" | "status" | "phase" | "summary" | "startedAt" | "updatedAt" | "error"
+  "id" | "agent" | "appSessionId" | "appId" | "providerSessionId" | "providerMeta" | "activeTurnId" | "title" | "cwd" | "userPrompt" | "turns" | "status" | "phase" | "summary" | "startedAt" | "updatedAt" | "error"
   | "lastMessage" | "currentTool"
   | "queue"
 >;

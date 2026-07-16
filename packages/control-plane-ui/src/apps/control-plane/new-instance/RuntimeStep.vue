@@ -28,7 +28,7 @@
       <label v-if="selectedRuntimeRequiresImage && !newImageOpen">
         <span>Image</span>
         <ControlPlaneSelect v-model="runtimeDraft.imageId" placeholder="Select image">
-          <ControlPlaneSelectItem v-for="image in images" :key="image.id" :value="image.id">{{ image.name }}</ControlPlaneSelectItem>
+          <ControlPlaneSelectItem v-for="image in images" :key="image.id" :value="image.id">{{ image.name }} · {{ availabilityLabel(image.id) }}</ControlPlaneSelectItem>
         </ControlPlaneSelect>
       </label>
     </div>
@@ -40,7 +40,7 @@
       </label>
       <label>
         <span>Image ref</span>
-        <ControlPlaneInput v-model="newImage.image" placeholder="task-handoff-web:latest" />
+        <ControlPlaneInput v-model="newImage.reference" placeholder="docker.io/example/image:v1" />
       </label>
       <Button variant="outline" size="sm" :disabled="!canCreateImage || creatingImage" @click="$emit('create-image')">
         <Plus :size="15" />
@@ -56,7 +56,7 @@
     <div v-if="codexModels.length || claudeModels.length" class="step-fields instance-model-fields">
       <label v-if="codexModels.length">
         <span>Codex model</span>
-        <ControlPlaneSelect v-model="instanceCodexModelValue" placeholder="Global default">
+        <ControlPlaneSelect v-model="instanceCodexModelValue" placeholder="No model">
           <ControlPlaneSelectItem :value="defaultModelValue">Global default</ControlPlaneSelectItem>
           <ControlPlaneSelectItem :value="noModelValue">No model</ControlPlaneSelectItem>
           <ControlPlaneSelectItem v-for="model in codexModels" :key="`instance-codex-${model.id}`" :value="model.id">{{ modelOptionLabel(model) }}</ControlPlaneSelectItem>
@@ -64,7 +64,7 @@
       </label>
       <label v-if="claudeModels.length">
         <span>Claude model</span>
-        <ControlPlaneSelect v-model="instanceClaudeModelValue" placeholder="Global default">
+        <ControlPlaneSelect v-model="instanceClaudeModelValue" placeholder="No model">
           <ControlPlaneSelectItem :value="defaultModelValue">Global default</ControlPlaneSelectItem>
           <ControlPlaneSelectItem :value="noModelValue">No model</ControlPlaneSelectItem>
           <ControlPlaneSelectItem v-for="model in claudeModels" :key="`instance-claude-${model.id}`" :value="model.id">{{ modelOptionLabel(model) }}</ControlPlaneSelectItem>
@@ -83,7 +83,7 @@
 <script setup lang="ts">
 import { Plus } from "@lucide/vue";
 import { computed } from "vue";
-import type { ImageProfile, ModelConfig, Node, NodeRuntime } from "../../../api/types";
+import type { ImageProfile, ModelConfig, Node, NodeImageAvailability, NodeRuntime } from "../../../api/types";
 import { Button } from "../../../components/ui/button";
 import { Checkbox } from "../../../components/ui/checkbox";
 import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
@@ -95,6 +95,7 @@ const props = defineProps<{
   canCreateImage: boolean;
   creatingImage: boolean;
   images: ImageProfile[];
+  imageAvailability: NodeImageAvailability[];
   instanceDraft: InstanceDraft;
   models: ModelConfig[];
   newImage: NewImageDraft;
@@ -109,6 +110,10 @@ const props = defineProps<{
 
 const defaultModelValue = "__default__";
 const noModelValue = "__none__";
+const availabilityLabel = (imageId: string) => {
+  const status = props.imageAvailability.find((item) => item.image.id === imageId)?.status || "unknown";
+  return status === "available" ? "Available" : status === "pull-required" ? "Will be pulled" : "Availability unknown";
+};
 const eligibleModels = computed(() => props.models.filter((model) => model.locations?.some((location) => location.type === "control-plane" || (location.type === "node" && location.nodeId === props.runtimeDraft.nodeId))));
 const codexModels = computed(() => eligibleModels.value.filter((model) => model.app === "codex"));
 const claudeModels = computed(() => eligibleModels.value.filter((model) => model.app === "claude"));

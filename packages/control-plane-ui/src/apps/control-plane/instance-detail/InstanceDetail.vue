@@ -34,6 +34,9 @@
             </button>
           </div>
           <span>{{ instance.image?.name || instance.imageId }} · {{ instance.node?.name || instance.nodeId }} / {{ instance.runtime?.name || instance.runtimeId }}</span>
+          <span v-if="instance.imageProvisioning && instance.imageProvisioning.phase !== 'ready'" class="image-provisioning-status">
+            {{ imageProvisioningLabel(instance) }}<template v-if="instance.imageProvisioning.error"> · {{ instance.imageProvisioning.error }}</template>
+          </span>
         </div>
         <div class="detail-side">
           <TooltipProvider :delay-duration="120">
@@ -87,6 +90,10 @@
             <Button v-if="canShowInstanceAction(instance, 'restart')" variant="outline" size="sm" :disabled="isInstanceActionBusy(instance)" @click="$emit('runAction', 'restart', instance)">
               <RotateCw :size="14" />
               <span>{{ activeActionLabel(instance, "restart", "Restart") }}</span>
+            </Button>
+            <Button v-if="canShowInstanceAction(instance, 'retry-image')" variant="outline" size="sm" :disabled="isInstanceActionBusy(instance)" @click="$emit('runAction', 'retry-image', instance)">
+              <RotateCw :size="14" />
+              <span>{{ activeActionLabel(instance, "retry-image", "Retry image") }}</span>
             </Button>
             <Button variant="outline" size="sm" @click="$emit('openSettings', instance.id)">
               <Settings :size="14" />
@@ -166,7 +173,7 @@ import { Button } from "../../../components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
 import SessionPreview from "./SessionPreview.vue";
 import type { InstanceAction } from "../useInstanceActions";
-import { canShowInstanceAction, instanceSourceLabel } from "../useInstanceStatus";
+import { canShowInstanceAction, imageProvisioningLabel, instanceSourceLabel } from "../useInstanceStatus";
 import type { LaunchableApp, SessionTab } from "../useInstanceSessions";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 

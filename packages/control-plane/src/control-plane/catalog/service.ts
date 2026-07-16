@@ -56,8 +56,8 @@ export class ControlPlaneCatalogService {
       ImageProfileSchema.parse({
         id: "img_default",
         name: "TaskHandoff Browser + Terminal",
-        image: process.env.TASK_HANDOFF_CONTROLLED_IMAGE || "task-handoff-web:local",
-        registry: "local",
+        reference: process.env.TASK_HANDOFF_CONTROLLED_IMAGE || "huadream/task-handoff-controlled-instance:latest",
+        pullPolicy: "if-not-present",
         capabilities: ["browser", "terminal", "gui-terminal", "codex", "claude"],
         optionalApps: ["chromium", "terminal-tty", "gui-terminal", "vscode-web"],
         defaultEnv: {},
@@ -130,7 +130,7 @@ export class ControlPlaneCatalogService {
     return this.options.images.put(ImageProfileSchema.parse({
       ...parsedInput,
       id: parsedInput.id || createId("img"),
-      registry: parsedInput.registry || "local",
+      pullPolicy: parsedInput.pullPolicy || "if-not-present",
       capabilities: parsedInput.capabilities || [],
       optionalApps: parsedInput.optionalApps || [],
       defaultEnv: parsedInput.defaultEnv || {},

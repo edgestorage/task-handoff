@@ -15,6 +15,7 @@ import {
   ControlledInstanceSchema,
   ControlledInstanceHeartbeatSchema,
   ControlledInstanceRegisterSchema,
+  InstanceImageSnapshotSchema,
   ImageProfileSchema,
   CreateNodeModelSchema,
   DeployNodeModelSchema,
@@ -54,6 +55,7 @@ import {
 } from "@task-handoff/protocol/control-plane";
 import { bridgeWebSockets } from "@task-handoff/protocol/websocket-bridge";
 import { defaultCommandRunner, LocalDockerExecutor, listLocalDockerImages, type CommandRunner, type ExecutorContext, type ExecutorStartResult } from "./runtimes/docker.ts";
+import { DockerImageService, type DockerImagePhase, type ResolvedDockerImage } from "./docker-images.ts";
 import { NodeAgentInstanceEventForwarder } from "./events.ts";
 import { listFolderTree } from "./folders.ts";
 import {
@@ -1359,6 +1361,10 @@ class NodeAgentState {
       throw error;
     }
     const image = input.image ? ImageProfileSchema.parse(input.image) : undefined;
+    const imageSnapshot = image ? (() => {
+      const { reference, ...profile } = image;
+      return InstanceImageSnapshotSchema.parse({ ...profile, requestedReference: reference });
+    })() : undefined;
     const workspacePath = runtime.type === "local" && source.type === "local-folder" ? path.resolve(source.path) : undefined;
     const instance = ControlledInstanceSchema.parse({
       id,
@@ -1370,8 +1376,15 @@ class NodeAgentState {
       nodeId: this.nodeId,
       runtimeId: runtime.id,
       imageId: image?.id,
-      imageSnapshot: image,
-      status: "created",
+      imageSnapshot,
+      imageProvisioning: imageSnapshot && runtime.type === "docker" ? {
+        phase: "checking-image",
+        requestedReference: imageSnapshot.requestedReference,
+        generation: 0,
+        startedAt: timestamp,
+        updatedAt: timestamp,
+      } : undefined,
+      status: imageSnapshot && runtime.type === "docker" ? "provisioning" : "created",
       health: "unknown",
       connectionStatus: "unknown",
       agentStatus: "unknown",
@@ -1475,7 +1488,7 @@ class NodeAgentState {
   }
 
   context(instance: ControlledInstance, modelEnv: Record<string, string> = this.resolvedAssignedModelEnvironment(instance.id)): ExecutorContext {
-    const image = instance.imageSnapshot || ImageProfileSchema.parse({ id: instance.imageId || "img_localhost", name: instance.imageId || "Localhost", image: instance.imageId || "localhost", registry: "local", capabilities: [], optionalApps: [], defaultEnv: {}, labels: {}, createdAt: instance.createdAt, updatedAt: instance.updatedAt });
+    const image = instance.imageSnapshot || InstanceImageSnapshotSchema.parse({ id: instance.imageId || "img_localhost", name: instance.imageId || "Localhost", requestedReference: "localhost:local", pullPolicy: "if-not-present", capabilities: [], optionalApps: [], defaultEnv: {}, labels: {}, createdAt: instance.createdAt, updatedAt: instance.updatedAt });
     return {
       project: projectForInstance(instance),
       image,
@@ -1635,6 +1648,91 @@ type NodeAgentLifecycleLoggers = {
   warn: NodeAgentDiagnosticLogger;
 };
 
+async function provisionNodeInstanceImage(
+  state: NodeAgentState,
+  images: DockerImageService,
+  id: string,
+  generation: number,
+  sync: () => void,
+  loggers: NodeAgentLifecycleLoggers,
+) {
+  const updatePhase = (phase: DockerImagePhase) => {
+    const current = state.controlledInstances.get(id);
+    if (!current || current.imageProvisioning?.generation !== generation || !current.imageSnapshot) return;
+    state.controlledInstances.put(ControlledInstanceSchema.parse({
+      ...current,
+      status: "provisioning",
+      imageProvisioning: { ...current.imageProvisioning, phase, error: undefined, updatedAt: now() },
+      updatedAt: now(),
+    }));
+    sync();
+  };
+  const initial = state.controlledInstances.get(id);
+  if (!initial?.imageSnapshot || initial.imageProvisioning?.generation !== generation) return;
+  try {
+    const resolved = await images.ensure(initial.imageSnapshot.requestedReference!, updatePhase);
+    const current = state.controlledInstances.get(id);
+    if (!current?.imageSnapshot || current.imageProvisioning?.generation !== generation) return;
+    state.controlledInstances.put(ControlledInstanceSchema.parse({
+      ...current,
+      status: "created",
+      health: "unknown",
+      imageSnapshot: {
+        ...current.imageSnapshot,
+        requestedReference: resolved.requestedReference,
+        resolvedDigest: resolved.resolvedDigest,
+        resolvedReference: resolved.resolvedReference,
+      },
+      imageProvisioning: { ...current.imageProvisioning, phase: "ready", error: undefined, updatedAt: now() },
+      updatedAt: now(),
+    }));
+    sync();
+    loggers.diagnostic({ instanceId: id, action: "image.provision", reference: resolved.requestedReference, digest: resolved.resolvedDigest, pulled: resolved.pulled }, "node instance image provisioning completed");
+  } catch (error) {
+    const current = state.controlledInstances.get(id);
+    if (!current?.imageProvisioning || current.imageProvisioning.generation !== generation) return;
+    const message = error instanceof Error ? error.message : String(error);
+    state.controlledInstances.put(ControlledInstanceSchema.parse({
+      ...current,
+      status: "failed",
+      health: "failed",
+      imageProvisioning: { ...current.imageProvisioning, phase: "failed", error: message, updatedAt: now() },
+      updatedAt: now(),
+    }));
+    sync();
+    loggers.warn({ instanceId: id, action: "image.provision", reference: current.imageProvisioning.requestedReference, error: message }, "node instance image provisioning failed");
+  }
+}
+
+function retryNodeInstanceImageProvisioning(state: NodeAgentState, id: string) {
+  const current = state.requireInstance(id);
+  const runtime = state.requireRuntime(current.runtimeId);
+  if (runtime.type !== "docker" || !current.imageSnapshot) {
+    const error = new Error(`Instance ${id} does not use a Docker image.`);
+    Object.assign(error, { statusCode: 400, code: "INSTANCE_IMAGE_PROVISIONING_UNSUPPORTED" });
+    throw error;
+  }
+  if (current.status !== "failed" || current.imageProvisioning?.phase !== "failed") {
+    const error = new Error(`Instance ${id} does not have failed image provisioning to retry.`);
+    Object.assign(error, { statusCode: 409, code: "INSTANCE_IMAGE_PROVISIONING_NOT_FAILED" });
+    throw error;
+  }
+  const timestamp = now();
+  return state.controlledInstances.put(ControlledInstanceSchema.parse({
+    ...current,
+    status: "provisioning",
+    health: "unknown",
+    imageProvisioning: {
+      phase: "checking-image",
+      requestedReference: current.imageSnapshot.requestedReference,
+      generation: (current.imageProvisioning?.generation || 0) + 1,
+      startedAt: timestamp,
+      updatedAt: timestamp,
+    },
+    updatedAt: timestamp,
+  }));
+}
+
 async function startNodeInstance(
   state: NodeAgentState,
   runtimeAdapters: RuntimeAdapterRegistry,
@@ -1644,6 +1742,11 @@ async function startNodeInstance(
   reason: "request" | "restore" | "update" = "request",
 ) {
   const current = state.requireInstance(id);
+  if (current.imageProvisioning && current.imageProvisioning.phase !== "ready" && state.requireRuntime(current.runtimeId).type === "docker") {
+    const error = new Error(`Instance ${id} image is not ready.`);
+    Object.assign(error, { statusCode: 409, code: "INSTANCE_IMAGE_NOT_READY" });
+    throw error;
+  }
   loggers.diagnostic({ instanceId: id, action: "start", reason, runtimeId: current.runtimeId, imageId: current.imageId }, "node instance start requested");
   const starting = state.controlledInstances.put(ControlledInstanceSchema.parse({ ...current, status: "provisioning", updatedAt: now() }));
   const adapter = runtimeAdapters.forRuntime(state.requireRuntime(starting.runtimeId));
@@ -1708,6 +1811,28 @@ function stoppedLocalShutdownPatch(instance: ControlledInstance) {
   });
 }
 
+export function resolvedDockerImageUpdatePatch(instance: ControlledInstance, resolvedImage: ResolvedDockerImage, timestamp = now()) {
+  if (!instance.imageSnapshot) {
+    throw new Error(`Instance ${instance.id} does not have an image snapshot.`);
+  }
+  return {
+    imageSnapshot: {
+      ...instance.imageSnapshot,
+      requestedReference: resolvedImage.requestedReference,
+      resolvedDigest: resolvedImage.resolvedDigest,
+      resolvedReference: resolvedImage.resolvedReference,
+      updatedAt: timestamp,
+    },
+    imageProvisioning: {
+      phase: "ready" as const,
+      requestedReference: resolvedImage.requestedReference,
+      generation: (instance.imageProvisioning?.generation || 0) + 1,
+      startedAt: timestamp,
+      updatedAt: timestamp,
+    },
+  };
+}
+
 function resumableLocalShutdownPatch(instance: ControlledInstance) {
   return ControlledInstanceSchema.parse({
     ...instance,
@@ -1753,11 +1878,15 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   state.node.controlEndpoint = controlEndpoint;
   state.node.endpoint = controlEndpoint;
   state.init();
-  const dockerExecutor = new LocalDockerExecutor(options.dockerCommandRunner, {
+  const dockerCommandRunner = options.dockerCommandRunner || defaultCommandRunner;
+  const dockerImageService = new DockerImageService(dockerCommandRunner);
+  const dockerExecutor = new LocalDockerExecutor(dockerCommandRunner, {
     publishHost: "127.0.0.1",
+    imageService: dockerImageService,
   });
   const runtimeAdapters = new RuntimeAdapterRegistry(new DockerRuntimeAdapter(dockerExecutor), new LocalhostRuntimeAdapter(options.dockerCommandRunner || defaultCommandRunner, paths, () => state.localNodeAgentUrl));
   const updateCommandRunner = options.updateCommandRunner || options.dockerCommandRunner || defaultCommandRunner;
+  const updateDockerImageService = new DockerImageService(updateCommandRunner);
   const fetchImpl = options.fetchImpl || fetch;
   const app = Fastify({ logger: options.logger ?? true });
   app.decorate("nodeAgentState", state);
@@ -1795,6 +1924,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     const instance = state.requireInstance(job.target.instanceId);
     const runtime = state.requireRuntime(instance.runtimeId);
     const adapter = runtimeAdapters.forRuntime(runtime);
+    let resolvedImage: ResolvedDockerImage | undefined;
     if (runtime.type === "local") {
       const npm = npmCommand();
       const prefix = (await updateCommandRunner(npm, ["prefix", "--global"])).stdout.trim();
@@ -1809,18 +1939,19 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       assertInstalledPackageVersion(install.manifestPath, job.toVersion);
     } else if (runtime.type === "docker") {
       const imageRef = job.artifactRef;
-      if (!imageRef || instance.imageSnapshot?.registry === "local") {
+      if (!imageRef || !instance.imageSnapshot) {
         throw Object.assign(new Error("The instance does not use an updateable remote Docker image."), { code: "INSTANCE_UPDATE_UNSUPPORTED", statusCode: 400 });
       }
       await updateCommandRunner("docker", ["pull", imageRef]);
+      resolvedImage = await updateDockerImageService.ensure(imageRef);
     } else {
       throw Object.assign(new Error(`Runtime type ${runtime.type} does not support managed updates.`), { code: "INSTANCE_UPDATE_UNSUPPORTED", statusCode: 400 });
     }
     await adapter.delete(state.context(instance, {}));
     state.controlledInstances.put(stoppedLocalShutdownPatch(ControlledInstanceSchema.parse({
       ...instance,
-      ...(runtime.type === "docker" && job.artifactRef && instance.imageSnapshot ? {
-        imageSnapshot: { ...instance.imageSnapshot, image: job.artifactRef, updatedAt: now() },
+      ...(runtime.type === "docker" && resolvedImage && instance.imageSnapshot ? {
+        ...resolvedDockerImageUpdatePatch(instance, resolvedImage),
       } : {}),
     })));
     await startNodeInstance(state, runtimeAdapters, fetchImpl, instance.id, lifecycleLoggers, "update");
@@ -1895,6 +2026,9 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   });
 
   const restoreLocalInstances = async () => {
+    for (const instance of state.listInstances().filter((item) => item.status === "provisioning" && item.imageProvisioning && state.requireRuntime(item.runtimeId).type === "docker")) {
+      void provisionNodeInstanceImage(state, dockerImageService, instance.id, instance.imageProvisioning!.generation, () => eventForwarder.syncNow(), lifecycleLoggers);
+    }
     const instances = state.listInstances().filter((instance) => {
       const runtime = state.requireRuntime(instance.runtimeId);
       return runtime.type === "local" && RESTORABLE_LOCAL_INSTANCE_STATUSES.has(instance.status);
@@ -2150,7 +2284,17 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   app.post("/api/node-agent/instances", async (request, reply) => {
     const instance = state.createInstance(CreateNodeInstanceSchema.parse(request.body));
     eventForwarder.syncNow();
+    if (instance.imageProvisioning) {
+      void provisionNodeInstanceImage(state, dockerImageService, instance.id, instance.imageProvisioning.generation, () => eventForwarder.syncNow(), lifecycleLoggers);
+    }
     return reply.code(201).send({ data: instance });
+  });
+
+  app.post("/api/node-agent/instances/:id/image-provisioning/retry", async (request) => {
+    const instance = retryNodeInstanceImageProvisioning(state, (request.params as { id: string }).id);
+    eventForwarder.syncNow();
+    void provisionNodeInstanceImage(state, dockerImageService, instance.id, instance.imageProvisioning!.generation, () => eventForwarder.syncNow(), lifecycleLoggers);
+    return { data: instance };
   });
 
   app.patch("/api/node-agent/instances/:id", async (request) => {

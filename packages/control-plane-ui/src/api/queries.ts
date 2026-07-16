@@ -33,6 +33,7 @@ import type {
   InstanceBoardPayload,
   LaunchAppSessionInput,
   LocalDockerImage,
+  NodeImageAvailability,
   ModelConfig,
   FederatedModelRegistry,
   Node,
@@ -56,6 +57,8 @@ import type {
   UpdateTarget,
   UpdateNodeAgentExternalListener,
   UpdateNodeInput,
+  AppManagementJobResponse,
+  AppManagementSnapshot,
 } from "./types";
 
 export function useHealthQuery() {
@@ -90,7 +93,6 @@ export function useControlPlaneStatusQuery() {
   return useQuery({
     queryKey: ["control-plane-status"],
     queryFn: () => getApiData<ControlPlaneStatusResponse>("control-plane/status"),
-    refetchInterval: 10_000,
     retry: false,
   });
 }
@@ -233,6 +235,16 @@ export function useLocalDockerImagesQuery(nodeId: MaybeRefOrGetter<string>) {
     queryKey: computed(() => ["node-docker-images", resolvedNodeId.value]),
     queryFn: () => getApiData<LocalDockerImage[]>(`nodes/${resolvedNodeId.value}/docker/images`),
     enabled: false,
+    retry: false,
+  });
+}
+
+export function useNodeImageAvailabilityQuery(nodeId: MaybeRefOrGetter<string>) {
+  const resolvedNodeId = computed(() => toValue(nodeId));
+  return useQuery({
+    queryKey: computed(() => ["node-image-catalog", resolvedNodeId.value]),
+    queryFn: () => getApiData<NodeImageAvailability[]>(`nodes/${resolvedNodeId.value}/images/catalog`),
+    enabled: computed(() => Boolean(resolvedNodeId.value)),
     retry: false,
   });
 }
@@ -390,6 +402,22 @@ export function renameAppSession(instanceId: string, sessionId: string, title: s
   return patchApiData<AppSession>(`controlled-instances/${instanceId}/apps/sessions/${sessionId}`, { title });
 }
 
+export function getInstanceAppManagement(instanceId: string) {
+  return getApiData<AppManagementSnapshot>(`controlled-instances/${instanceId}/apps/management`);
+}
+
+export function installInstanceApp(instanceId: string, appId: string, requestId?: string) {
+  return postApiData<AppManagementJobResponse>(`controlled-instances/${instanceId}/apps/${encodeURIComponent(appId)}/install`, requestId ? { requestId } : {});
+}
+
+export function uninstallInstanceApp(instanceId: string, appId: string, requestId?: string) {
+  return postApiData<AppManagementJobResponse>(`controlled-instances/${instanceId}/apps/${encodeURIComponent(appId)}/uninstall`, requestId ? { requestId } : {});
+}
+
+export function getInstanceAppManagementJob(instanceId: string, jobId: string) {
+  return getApiData<AppManagementJobResponse>(`controlled-instances/${instanceId}/apps/jobs/${encodeURIComponent(jobId)}`);
+}
+
 export function uploadAiSessionAttachment(input: { instanceId: string; sessionId: string; kind: "image"; name: string; mime: string; data: string }) {
   return postApiData<AiSessionAttachment>("ai-session-attachments", input);
 }
@@ -468,6 +496,10 @@ export function createImage(input: CreateImageInput) {
 
 export function deleteImage(id: string) {
   return deleteApiData<{ deleted: boolean }>(`images/${id}`);
+}
+
+export function retryInstanceImageProvisioning(id: string) {
+  return postApiData<InstanceBoardItem>(`controlled-instances/${id}/image-provisioning/retry`, {});
 }
 
 export function createNode(input: CreateNodeInput) {

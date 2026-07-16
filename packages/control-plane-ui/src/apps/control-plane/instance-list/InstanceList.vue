@@ -115,6 +115,9 @@
                       <strong>{{ instanceDisplayName(instance) }}</strong>
                     </span>
                     <small>{{ instanceSourceLabel(instance) }}</small>
+                    <small v-if="instance.imageProvisioning && instance.imageProvisioning.phase !== 'ready'" class="image-provisioning-status">
+                      {{ imageProvisioningLabel(instance) }}<template v-if="instance.imageProvisioning.error"> · {{ instance.imageProvisioning.error }}</template>
+                    </small>
                   </span>
                   <span v-if="!groupByNode" class="instance-row-session">{{ instanceNodeLabel(instance) }}</span>
                 </button>
@@ -137,6 +140,10 @@
                       <DropdownMenuItem v-if="canShowInstanceAction(instance, 'restart')" class="instance-action-item" :disabled="isInstanceActionBusy(instance)" @select="$emit('runAction', 'restart', instance)">
                         <RotateCw :size="14" />
                         <span>{{ activeActionLabel(instance, "restart", "Restart") }}</span>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem v-if="canShowInstanceAction(instance, 'retry-image')" class="instance-action-item" :disabled="isInstanceActionBusy(instance)" @select="$emit('runAction', 'retry-image', instance)">
+                        <RotateCw :size="14" />
+                        <span>{{ activeActionLabel(instance, "retry-image", "Retry image") }}</span>
                       </DropdownMenuItem>
                       <DropdownMenuSub>
                         <DropdownMenuSubTrigger class="instance-action-item">
@@ -185,6 +192,10 @@
               <ContextMenuItem v-if="canShowInstanceAction(instance, 'restart')" class="instance-action-item" :disabled="isInstanceActionBusy(instance)" @select="$emit('runAction', 'restart', instance)">
                 <RotateCw :size="14" />
                 <span>{{ activeActionLabel(instance, "restart", "Restart") }}</span>
+              </ContextMenuItem>
+              <ContextMenuItem v-if="canShowInstanceAction(instance, 'retry-image')" class="instance-action-item" :disabled="isInstanceActionBusy(instance)" @select="$emit('runAction', 'retry-image', instance)">
+                <RotateCw :size="14" />
+                <span>{{ activeActionLabel(instance, "retry-image", "Retry image") }}</span>
               </ContextMenuItem>
               <ContextMenuSub>
                 <ContextMenuSubTrigger class="instance-action-item">
@@ -238,7 +249,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSub, D
 import { Popover, PopoverContent, PopoverTrigger } from "../../../components/ui/popover";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import type { ConfigSyncDirection, InstanceAction } from "../useInstanceActions";
-import { canShowInstanceAction, instanceSourceLabel } from "../useInstanceStatus";
+import { canShowInstanceAction, imageProvisioningLabel, instanceSourceLabel } from "../useInstanceStatus";
 import type { InstanceListSortMode } from "./useWorkbenchInstances";
 import InstanceViewOptionsMenu from "../shared/InstanceViewOptionsMenu.vue";
 
@@ -843,6 +854,10 @@ function openNewInstanceFromTemporaryList() {
 .list-empty {
   color: var(--instance-list-meta);
   font-size: 11px;
+}
+
+.instance-row-main .image-provisioning-status {
+  color: var(--status-warning);
 }
 
 .instance-row-session {

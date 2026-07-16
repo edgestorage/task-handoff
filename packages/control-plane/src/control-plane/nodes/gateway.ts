@@ -313,6 +313,12 @@ export class ControlPlaneNodeAgentGateway {
     });
   }
 
+  retryInstanceImageProvisioning(node: Node, instanceId: string) {
+    return this.client.requestSchema(node, `/instances/${encodeURIComponent(instanceId)}/image-provisioning/retry`, ControlledInstanceSchema, {
+      method: "POST",
+    });
+  }
+
   stopInstance(node: Node, instanceId: string) {
     return this.client.requestSchema(node, `/instances/${encodeURIComponent(instanceId)}/stop`, ControlledInstanceSchema, {
       method: "POST",

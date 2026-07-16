@@ -373,3 +373,6 @@
 .detail-empty.error {
   color: var(--status-danger);
 }
+.image-provisioning-status {
+  color: var(--status-warning);
+}

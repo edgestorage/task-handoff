@@ -32,6 +32,56 @@ export type AppCatalogItem = {
   };
 };
 
+export type ManagedAppDetectionRule = {
+  type: "launcher-executable" | "executable";
+  command?: string;
+  versionArgs?: string[];
+};
+
+export type ManagedAppRecipePlatform = "linux" | "darwin" | "win32" | "freebsd" | "openbsd" | "aix" | "sunos";
+export type ManagedAppRecipeArch = "x64" | "arm64" | "arm" | "ia32" | "ppc64" | "s390x" | "riscv64";
+export type ManagedAppRecipePrivilege = "user" | "passwordless-sudo" | "root";
+
+type ManagedAppRecipeConstraint = {
+  platforms: ManagedAppRecipePlatform[];
+  arches?: ManagedAppRecipeArch[];
+  privilege?: ManagedAppRecipePrivilege;
+};
+
+export type BundledInstallRecipe = ManagedAppRecipeConstraint & {
+  type: "bundled";
+};
+
+export type SystemPackageInstallRecipe = ManagedAppRecipeConstraint & {
+  type: "system-package";
+  installer: "apt" | "dnf" | "brew";
+  packages: string[];
+};
+
+export type ArchiveInstallRecipe = ManagedAppRecipeConstraint & {
+  type: "archive";
+  url: string;
+  sha256: string;
+  format: "tar.gz" | "tar.xz" | "zip";
+  installRoot: string;
+};
+
+export type InstallRecipe = BundledInstallRecipe | SystemPackageInstallRecipe | ArchiveInstallRecipe;
+
+export type ManagedAppDefinition = {
+  launcher: AppCatalogItem;
+  detection: ManagedAppDetectionRule[];
+  distribution: {
+    recipes: InstallRecipe[];
+  };
+};
+
+export type ManagedAppDetectionResult = {
+  state: "installed" | "not-installed" | "broken";
+  executablePaths: string[];
+  version?: string;
+};
+
 export type AppLaunchOptions = {
   title?: string;
   args?: string[];

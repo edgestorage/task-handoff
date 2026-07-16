@@ -10,10 +10,6 @@
       "types": "./src/index.ts",
       "default": "./src/index.ts"
     },
-    "./sender": {
-      "types": "./src/sender.ts",
-      "default": "./src/sender.ts"
-    },
     "./control-plane": {
       "types": "./src/control-plane.ts",
       "default": "./src/control-plane.ts"
@@ -45,8 +41,6 @@
     "test": "node --test"
   },
   "dependencies": {
-    "@task-handoff/core": "workspace:*",
-    "@task-handoff/terminal-ui": "workspace:*",
     "zod": "^4.4.3"
   }
 }

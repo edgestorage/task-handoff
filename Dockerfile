@@ -165,12 +165,10 @@ COPY packages/protocol/package.json ./packages/protocol/package.json
 COPY packages/core/package.json ./packages/core/package.json
 COPY packages/ai-session-runtime/package.json ./packages/ai-session-runtime/package.json
 COPY packages/app-runtime/package.json ./packages/app-runtime/package.json
-COPY packages/receiver-worker/package.json ./packages/receiver-worker/package.json
 COPY packages/controlled-instance/package.json ./packages/controlled-instance/package.json
 COPY packages/control-plane/package.json ./packages/control-plane/package.json
 COPY packages/control-plane-ui/package.json ./packages/control-plane-ui/package.json
 COPY packages/controlled-instance-ui/package.json ./packages/controlled-instance-ui/package.json
-COPY packages/terminal-ui/package.json ./packages/terminal-ui/package.json
 COPY packages/web-theme/package.json ./packages/web-theme/package.json
 COPY apps/cli/package.json ./apps/cli/package.json
 COPY apps/controlled-instance-image/package.json ./apps/controlled-instance-image/package.json
@@ -180,7 +178,7 @@ RUN pnpm install --frozen-lockfile
 
 FROM deps AS build
 COPY . .
-RUN pnpm test
+RUN pnpm exec node --test --test-concurrency=1
 RUN pnpm run check:controlled-instance
 RUN pnpm run runtime:pack:controlled-instance
 

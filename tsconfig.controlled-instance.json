@@ -6,9 +6,7 @@
     "packages/protocol/src/**/*",
     "packages/app-runtime/src/**/*",
     "packages/ai-session-runtime/src/**/*",
-    "packages/receiver-worker/src/**/*",
-    "packages/controlled-instance/src/**/*",
-    "packages/terminal-ui/src/**/*"
+    "packages/controlled-instance/src/**/*"
   ],
   "exclude": [
     "apps/cli/src/**/*",

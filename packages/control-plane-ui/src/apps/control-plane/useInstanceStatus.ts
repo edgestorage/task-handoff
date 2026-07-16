@@ -23,6 +23,9 @@ export function canShowInstanceAction(instance: InstanceBoardItem, action: Insta
   if (action === "delete") {
     return true;
   }
+  if (action === "retry-image") {
+    return instance.status === "failed" && instance.imageProvisioning?.phase === "failed";
+  }
   if (action === "start") {
     return !isInstanceRunning(instance) && !["provisioning", "starting", "registering", "registered", "stopping"].includes(instance.status);
   }
@@ -53,6 +56,15 @@ export function instanceConnectionDetail(instance?: InstanceBoardItem) {
     return "Waiting for the controlled instance to connect...";
   }
   return `Waiting for the controlled instance to connect · ${instance.status} · ${instance.connectionStatus}`;
+}
+
+export function imageProvisioningLabel(instance: InstanceBoardItem) {
+  const phase = instance.imageProvisioning?.phase;
+  if (phase === "checking-image") return "Checking image";
+  if (phase === "pulling-image") return "Pulling image";
+  if (phase === "resolving-image") return "Resolving image digest";
+  if (phase === "failed") return "Image provisioning failed";
+  return phase === "ready" ? "Image ready" : "";
 }
 
 export function shortId(id: string) {

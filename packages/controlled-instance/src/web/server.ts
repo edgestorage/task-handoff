@@ -32,6 +32,7 @@ import {
 import { NodeAgentRegistrationClient, nodeAgentRegistrationConfigFromEnv } from "./node-agent-client";
 import { registerAuth, resolveWebAuth } from "./auth";
 import { WebEventBus } from "./events";
+import { AppManagementManager, AppManagementRequestError } from "./app-management";
 import { configSyncPresets, runConfigSync } from "./config-sync";
 import { applyManagedCodexModelConfig } from "./codex-model-config";
 import {
@@ -84,6 +85,7 @@ import {
 import { TriggerSourceSchema, TriggerActionSchema, TriggerPolicySchema, TriggerTargetSchema } from "@task-handoff/protocol/triggers";
 import { bridgeWebSockets } from "@task-handoff/protocol/websocket-bridge";
 import { SESSION_STREAM_PROTOCOL_VERSION, SessionStreamsHelloEventType } from "@task-handoff/protocol/events";
+import { AppManagementOperationRequestSchema } from "@task-handoff/protocol/control-plane";
 
 const WebSocketClient = require("ws");
 
@@ -156,6 +158,7 @@ type CreateWebAppOptions = {
   logger?: FastifyServerOptions["logger"];
   appRuntime?: AppRuntimeManager;
   aiSessionRegistry?: AiSessionRegistry;
+  appManagement?: AppManagementManager;
 };
 
 export class AiSessionRefreshScheduler {
@@ -490,13 +493,20 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   const events = new WebEventBus();
   const appRuntime = options.appRuntime || new AppRuntimeManager(storagePaths);
   appRuntime.replaceManagedEnvironment(managedModelEnvironment(managedModelEnv));
+  const app = Fastify({ logger: options.logger ?? true, bodyLimit: 64 * 1024 * 1024 });
+  const appManagement = options.appManagement || new AppManagementManager({
+    stateDir: path.join(storagePaths.runtimeDir, "app-management"),
+    installBaseDir: process.env.TASK_HANDOFF_MANAGED_APP_ROOT || path.join(storagePaths.dataDir, "managed-apps"),
+    sessions: () => appRuntime.listSessions(),
+    publish: (event) => events.publish("app.management", event),
+    warn: (message) => app.log?.warn?.({ message }, "app management persistence warning"),
+  });
   const aiSessions = options.aiSessionRegistry || createAiSessionRegistry();
   const aiSessionController = new AiSessionController(aiSessions);
   const triggers = new TriggerStore(storagePaths);
   const triggerExecutor = new TriggerExecutor(triggers, aiSessionController);
   const triggerManager = new TriggerManager(triggers, triggerExecutor, storagePaths, (type, payload) => events.publish(type, payload));
   const nodeAgentClient = new NodeAgentRegistrationClient(nodeAgentRegistrationConfigFromEnv(), () => controlledInstanceSnapshot(appRuntime, storagePaths, aiSessions, triggers));
-  const app = Fastify({ logger: options.logger ?? true, bodyLimit: 64 * 1024 * 1024 });
 
   await app.register(websocket);
   registerAuth(app, auth);
@@ -941,6 +951,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
         },
       ],
     });
+    events.send(socket, "app.management", appManagement.snapshotEvent());
   });
 
   app.get("/api/status", async () => {
@@ -1251,6 +1262,46 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   app.get("/api/apps/catalog", async () => ({
     data: appRuntime.catalog(),
   }));
+
+  app.get("/api/apps/management", async () => ({
+    data: appManagement.snapshot(),
+  }));
+
+  const appManagementError = (reply: { code: (statusCode: number) => { send: (payload: unknown) => unknown } }, error: unknown) => {
+    if (error instanceof z.ZodError) {
+      return reply.code(400).send({ error: { code: "app_management_input_invalid", message: appLaunchInvalidMessage(error) } });
+    }
+    if (error instanceof AppManagementRequestError) {
+      return reply.code(error.statusCode).send({ error: { code: error.code, message: error.message, ...(error.details ? { details: error.details } : {}) } });
+    }
+    return reply.code(500).send({ error: { code: "app_management_failed", message: error instanceof Error ? error.message : String(error) } });
+  };
+
+  app.post<{ Params: { appId: string }; Body: unknown }>("/api/apps/:appId/install", async (request, reply) => {
+    try {
+      const input = AppManagementOperationRequestSchema.parse(request.body || {});
+      return reply.code(202).send({ data: { job: appManagement.request(request.params.appId, "install", input.requestId) } });
+    } catch (error) {
+      return appManagementError(reply, error);
+    }
+  });
+
+  app.post<{ Params: { appId: string }; Body: unknown }>("/api/apps/:appId/uninstall", async (request, reply) => {
+    try {
+      const input = AppManagementOperationRequestSchema.parse(request.body || {});
+      return reply.code(202).send({ data: { job: appManagement.request(request.params.appId, "uninstall", input.requestId) } });
+    } catch (error) {
+      return appManagementError(reply, error);
+    }
+  });
+
+  app.get<{ Params: { jobId: string } }>("/api/apps/jobs/:jobId", async (request, reply) => {
+    try {
+      return { data: { job: appManagement.getJob(request.params.jobId) } };
+    } catch (error) {
+      return appManagementError(reply, error);
+    }
+  });
 
   app.put<{ Body: unknown }>("/api/internal/model-environment", async (request, reply) => {
     const expectedToken = process.env.TASK_HANDOFF_REGISTRATION_TOKEN?.trim();

@@ -202,7 +202,7 @@ function parseToolInput(input: unknown) {
 }
 
 function isHandoffCommand(command: string) {
-  return /\b(task-handoff|result-ipc)(\.js)?\b/.test(command);
+  return /\btask-handoff(\.js)?\b/.test(command);
 }
 
 function isFileEditTool(tool: string) {

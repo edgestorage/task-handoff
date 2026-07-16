@@ -1,4 +1,38 @@
+import crypto from "node:crypto";
 import { ExpiringTokenStore } from "../tokens/expiring-token-store.ts";
+
+const PENDING_DECISION_CALLBACK_PREFIX = "task_handoff:cp_p:v1:";
+const PENDING_DECISION_FINGERPRINT_BYTES = 12;
+const pendingDecisionCodes = {
+  allow: "a",
+  deny: "d",
+  skip: "s",
+} as const;
+
+export type PendingDecisionCallbackReference = {
+  routeFingerprint: string;
+  decision: "allow" | "deny" | "skip";
+};
+
+export function pendingDecisionRouteFingerprint(routeId: string) {
+  return crypto
+    .createHash("sha256")
+    .update(routeId)
+    .digest("base64url")
+    .slice(0, Math.ceil(PENDING_DECISION_FINGERPRINT_BYTES * 4 / 3));
+}
+
+export function parsePendingDecisionCallbackData(data: string): PendingDecisionCallbackReference | undefined {
+  const match = data.match(/^task_handoff:cp_p:v1:([ads]):([A-Za-z0-9_-]{16})$/);
+  if (!match) {
+    return undefined;
+  }
+  const decision = Object.entries(pendingDecisionCodes).find(([, code]) => code === match[1])?.[0];
+  if (decision !== "allow" && decision !== "deny" && decision !== "skip") {
+    return undefined;
+  }
+  return { routeFingerprint: match[2], decision };
+}
 
 export type ChatActionToken = {
   token: string;
@@ -37,6 +71,6 @@ export class ChatActionTokenService {
   }
 
   pendingDecisionCallbackData(routeId: string, decision: "allow" | "deny" | "skip") {
-    return `task_handoff:cp_p:${this.create({ type: "pending-decision", routeId, decision }).token}`;
+    return `${PENDING_DECISION_CALLBACK_PREFIX}${pendingDecisionCodes[decision]}:${pendingDecisionRouteFingerprint(routeId)}`;
   }
 }

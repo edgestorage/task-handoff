@@ -157,6 +157,41 @@ function findDigest(value: unknown): string | undefined {
   return Object.values(record).map(findDigest).find(Boolean);
 }
 
+function dockerArchitecture(arch: NodeJS.Architecture) {
+  const architectures: Partial<Record<NodeJS.Architecture, string>> = {
+    x64: "amd64",
+    ia32: "386",
+    arm: "arm",
+    arm64: "arm64",
+    ppc64: "ppc64le",
+    s390x: "s390x",
+    riscv64: "riscv64",
+  };
+  return architectures[arch] || arch;
+}
+
+function manifestPlatformArchitecture(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const descriptor = (record.Descriptor || record.descriptor || record) as Record<string, unknown>;
+  const platform = (descriptor.platform || descriptor.Platform) as Record<string, unknown> | undefined;
+  return typeof platform?.architecture === "string"
+    ? platform.architecture
+    : typeof platform?.Architecture === "string"
+      ? platform.Architecture
+      : undefined;
+}
+
+export function dockerManifestDigestForArchitecture(value: unknown, arch: NodeJS.Architecture = process.arch) {
+  const record = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+  const entries = Array.isArray(value) ? value : Array.isArray(record?.manifests) ? record.manifests : undefined;
+  if (!entries) return findDigest(value);
+  const platformEntries = entries.filter((entry) => manifestPlatformArchitecture(entry));
+  if (!platformEntries.length) return findDigest(value);
+  const selected = platformEntries.find((entry) => manifestPlatformArchitecture(entry) === dockerArchitecture(arch));
+  return selected ? findDigest(selected) : undefined;
+}
+
 export function dockerImageRefForChannel(imageRef: string, channel: UpdateChannel) {
   const withoutDigest = imageRef.split("@", 1)[0];
   const lastSlash = withoutDigest.lastIndexOf("/");
@@ -194,6 +229,7 @@ export async function checkControlledInstanceUpdate(input: {
   instance: ControlledInstance;
   runtime: NodeRuntime;
   runCommand: CommandRunner;
+  arch?: NodeJS.Architecture;
 }): Promise<UpdateCheckResult> {
   const target = { component: "controlled-instance" as const, instanceId: input.instance.id };
   if (input.runtime.type === "local") {
@@ -211,8 +247,8 @@ export async function checkControlledInstanceUpdate(input: {
     });
   }
   if (input.runtime.type === "docker") {
-    const imageRef = input.instance.imageSnapshot?.image;
-    if (!imageRef || input.instance.imageSnapshot?.registry === "local") {
+    const imageRef = input.instance.imageSnapshot?.requestedReference;
+    if (!imageRef) {
       return UpdateCheckResultSchema.parse({
         target,
         source: "docker-registry",
@@ -227,8 +263,8 @@ export async function checkControlledInstanceUpdate(input: {
     }
     const artifactRef = dockerImageRefForChannel(imageRef, input.channel);
     const result = await input.runCommand("docker", ["manifest", "inspect", "--verbose", artifactRef]);
-    const availableVersion = findDigest(JSON.parse(result.stdout));
-    if (!availableVersion) throw new Error(`Docker registry did not return a digest for ${artifactRef}.`);
+    const availableVersion = dockerManifestDigestForArchitecture(JSON.parse(result.stdout), input.arch);
+    if (!availableVersion) throw new Error(`Docker registry did not return a digest for ${artifactRef} matching ${dockerArchitecture(input.arch || process.arch)}.`);
     const currentVersion = input.instance.build?.imageDigest;
     return UpdateCheckResultSchema.parse({
       target,

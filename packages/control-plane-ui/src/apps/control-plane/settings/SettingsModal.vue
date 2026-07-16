@@ -196,20 +196,23 @@
         <section class="modal-section">
           <div class="section-head">
             <span>Registered images · {{ images.data.value?.length || 0 }}</span>
+            <ControlPlaneSelect v-model="imageCatalogNodeId" placeholder="Select node">
+              <ControlPlaneSelectItem v-for="node in nodes.data.value || []" :key="node.id" :value="node.id">{{ node.name }}</ControlPlaneSelectItem>
+            </ControlPlaneSelect>
           </div>
           <ScrollArea class="registered-image-list">
             <div class="settings-scroll-content">
             <div v-for="image in images.data.value || []" :key="image.id" class="registered-image-row">
               <div>
                 <strong>{{ image.name }}</strong>
-                <code>{{ image.image }}</code>
+                <code>{{ image.reference }}</code>
                 <span class="image-meta-line">
-                  {{ imageLocalStatus(image) }} · {{ image.capabilities.length ? image.capabilities.join(", ") : "no expected capabilities" }}
+                  {{ catalogAvailabilityLabel(image.id) }} · {{ image.capabilities.length ? image.capabilities.join(", ") : "no expected capabilities" }}
                 </span>
               </div>
               <div class="settings-row-actions">
-                <Badge variant="secondary">{{ imageInUse(image.id) ? "In use" : image.registry }}</Badge>
-                <Button variant="outline" size="sm" :disabled="imageInUse(image.id) || deletingImageId === image.id" @click="removeImageProfile(image)">
+                <Badge variant="secondary">{{ image.pullPolicy }}</Badge>
+                <Button variant="outline" size="sm" :disabled="deletingImageId === image.id" @click="removeImageProfile(image)">
                   <Trash2 :size="14" />
                   <span>{{ deletingImageId === image.id ? "Deleting" : "Delete" }}</span>
                 </Button>
@@ -222,33 +225,24 @@
 
         <section class="modal-section">
           <div class="section-head">
-            <span>Local Docker images · {{ filteredLocalDockerImages.length }}</span>
-            <Button variant="outline" size="sm" :disabled="localDockerImages.isFetching.value" @click="localDockerImages.refetch()">
-              <RefreshCw :size="14" />
-              <span>{{ localDockerImages.isFetching.value ? "Loading" : "Refresh" }}</span>
+            <span>Add public registry image</span>
+          </div>
+          <div class="inline-create">
+            <label>
+              <span>Name</span>
+              <ControlPlaneInput v-model="settingsImage.name" placeholder="Controlled instance" />
+            </label>
+            <label>
+              <span>Image reference</span>
+              <ControlPlaneInput v-model="settingsImage.reference" placeholder="docker.io/org/image:v1" />
+              <small>Use an explicit tag or sha256 digest. Private registry credentials are not configured here.</small>
+            </label>
+            <Button variant="outline" size="sm" :disabled="!canCreateImage || savingImage" @click="createRegistryImage">
+              <Plus :size="14" />
+              <span>{{ savingImage ? "Adding" : "Add image" }}</span>
             </Button>
           </div>
-          <label class="list-filter local-image-filter">
-            <Search :size="14" />
-            <input v-model="localImageFilter" placeholder="Search local images" />
-          </label>
-          <p v-if="localDockerImages.error.value" class="control-plane-error">{{ errorText(localDockerImages.error.value) }}</p>
-          <p v-if="localImageCreateSuccess" class="settings-success">{{ localImageCreateSuccess }}</p>
-          <ScrollArea class="local-image-list">
-            <div class="settings-scroll-content">
-            <div v-for="image in filteredLocalDockerImages" :key="`${image.reference}-${image.id}`" class="local-image-row">
-              <div>
-                <strong>{{ image.reference }}</strong>
-                <span>{{ image.id }} · {{ image.size || "unknown size" }} · {{ image.createdSince || "unknown age" }}</span>
-              </div>
-              <Button variant="outline" size="sm" :disabled="isLocalImageRegistered(image) || addingLocalImageRef === image.reference" @click="addLocalImage(image)">
-                <Plus :size="14" />
-                <span>{{ isLocalImageRegistered(image) ? "Added" : addingLocalImageRef === image.reference ? "Adding" : "Add" }}</span>
-              </Button>
-            </div>
-            <p v-if="!localDockerImages.isFetching.value && !filteredLocalDockerImages.length" class="settings-empty">No local Docker images found.</p>
-            </div>
-          </ScrollArea>
+          <p v-if="imageCreateSuccess" class="settings-success">{{ imageCreateSuccess }}</p>
         </section>
       </div>
 
@@ -489,10 +483,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { useQueryClient } from "@tanstack/vue-query";
-import { AlertTriangle, ArrowLeft, ChevronDown, ChevronUp, Layers, MapPin, Plus, RefreshCw, Search, Settings, Trash2 } from "@lucide/vue";
-import { getNodeExternalListener, updateControlPlaneSettings, updateNodeExternalListener, useChatBridgesQuery, useChatGatewayStatusQuery, useControlPlaneSettingsQuery, useImagesQuery, useInstanceBoardPayloadQuery, useLocalDockerImagesQuery, useModelRegistryQuery, useModelsQuery, useNodeRuntimesPayloadQuery, useNodesQuery, useProjectsQuery, useServerUpdateCheckQuery } from "../../../api/queries";
+import { AlertTriangle, ArrowLeft, ChevronDown, ChevronUp, Layers, MapPin, Plus, RefreshCw, Settings, Trash2 } from "@lucide/vue";
+import { getNodeExternalListener, updateControlPlaneSettings, updateNodeExternalListener, useChatBridgesQuery, useChatGatewayStatusQuery, useControlPlaneSettingsQuery, useImagesQuery, useInstanceBoardPayloadQuery, useModelRegistryQuery, useModelsQuery, useNodeImageAvailabilityQuery, useNodeRuntimesPayloadQuery, useNodesQuery, useProjectsQuery, useServerUpdateCheckQuery } from "../../../api/queries";
 import type { BuildInfo, ControlPlaneSettings, InstanceBoardItem, ModelLocation, Node, NodeAgentExternalListener, UpdateChannel } from "../../../api/types";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
@@ -577,7 +571,6 @@ const codexModels = computed(() => (models.data.value || []).filter((model) => m
 const claudeModels = computed(() => (models.data.value || []).filter((model) => model.app === "claude"));
 const nodeRuntimeItems = computed(() => nodeRuntimes.data.value?.data || []);
 const boardItems = computed(() => board.data.value?.data || []);
-const imageIdsInUse = computed(() => new Set(boardItems.value.map((instance) => instance.imageId)));
 const projectIdsInUse = computed(() => new Set(boardItems.value.map((instance) => instance.projectId)));
 const nodeDiagnosticsByNodeId = computed(() => {
   const diagnostics: Record<string, NodeDiagnosticLog[]> = {};
@@ -629,6 +622,7 @@ async function refresh() {
     queryClient.invalidateQueries({ queryKey: ["control-plane-projects"] }),
     queryClient.invalidateQueries({ queryKey: ["control-plane-models"] }),
     queryClient.invalidateQueries({ queryKey: ["control-plane-images"] }),
+    queryClient.invalidateQueries({ queryKey: ["node-image-catalog"] }),
     queryClient.invalidateQueries({ queryKey: ["control-plane-nodes"] }),
     queryClient.invalidateQueries({ queryKey: ["control-plane-node-local-folders"] }),
     queryClient.invalidateQueries({ queryKey: ["control-plane-node-runtimes"] }),
@@ -690,7 +684,6 @@ const {
   deletingRuntimeId,
   isControlPlaneBuiltinNode,
   isControlPlaneLocalNode,
-  localNodeId,
   nodeLocalFolders,
   nodeStorageFolderCanConfirm,
   nodeStorageFolderDialogOpen,
@@ -798,38 +791,29 @@ watch(
   () => { void loadExternalListener(); },
   { immediate: true },
 );
-const localDockerImages = useLocalDockerImagesQuery(() => localNodeId.value);
+const imageCatalogNodeId = ref("");
+const imageAvailability = useNodeImageAvailabilityQuery(() => imageCatalogNodeId.value);
 const hasLocalNode = computed(() => (nodes.data.value || []).some(isControlPlaneLocalNode));
-onMounted(() => {
-  if (localNodeId.value) {
-    void localDockerImages.refetch();
-  }
-});
-
 watch(
-  localNodeId,
-  (nodeId) => {
-    if (nodeId) {
-      void localDockerImages.refetch();
-    }
+  () => nodes.data.value,
+  (items) => {
+    if (imageCatalogNodeId.value && (items || []).some((node) => node.id === imageCatalogNodeId.value)) return;
+    imageCatalogNodeId.value = items?.[0]?.id || "";
   },
+  { immediate: true },
 );
 const {
-  addLocalImage,
-  addingLocalImageRef,
+  canCreateImage,
   clearImageFeedback,
+  createRegistryImage,
   deletingImageId,
-  filteredLocalDockerImages,
-  imageLocalStatus,
-  isLocalImageRegistered,
-  localImageCreateSuccess,
-  localImageFilter,
+  imageCreateSuccess,
   removeImageProfile,
+  savingImage,
+  settingsImage,
 } = useImageSettings({
   errorText,
-  imageInUse,
   images: images.data,
-  localDockerImages: localDockerImages.data,
   onImageDeleted: clearDefaultImage,
   refresh,
 });
@@ -1092,9 +1076,6 @@ async function setSettingsSection(section: SettingsSection) {
   clearModelFeedback();
   clearChatFeedback();
   publicBaseUrlMessage.value = "";
-  if (section === "images" && !localDockerImages.data.value) {
-    await localDockerImages.refetch();
-  }
   if (section === "chat") {
     await refreshChat();
   }
@@ -1138,8 +1119,11 @@ async function refreshChat() {
   ]);
 }
 
-function imageInUse(imageId: string) {
-  return imageIdsInUse.value.has(imageId);
+function catalogAvailabilityLabel(imageId: string) {
+  const availability = imageAvailability.data.value?.find((item) => item.image.id === imageId);
+  if (!imageCatalogNodeId.value) return "select a node";
+  if (!availability || availability.status === "unknown") return "availability unknown";
+  return availability.status === "available" ? "available on node" : "will be pulled when an instance is created";
 }
 
 function projectInUse(projectId: string) {

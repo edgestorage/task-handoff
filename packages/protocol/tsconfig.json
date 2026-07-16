@@ -3,5 +3,5 @@
   "compilerOptions": {
     "rootDir": "../.."
   },
-  "include": ["src/**/*", "../core/src/**/*", "../terminal-ui/src/**/*"]
+  "include": ["src/**/*", "../core/src/**/*"]
 }

@@ -2,7 +2,8 @@ import { z } from "zod";
 import { DomainStore } from "@task-handoff/core/storage/domain-store";
 import type { TaskHandoffStoragePaths } from "@task-handoff/core/storage/paths";
 import type { InstanceAppInventory, InstanceAppInventoryItem } from "@task-handoff/protocol/control-plane";
-import type { AppCatalogItem } from "./types";
+import { detectManagedApp } from "./managed-apps";
+import type { AppCatalogItem, InstallRecipe, ManagedAppDefinition } from "./types";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -104,30 +105,39 @@ const CustomCatalogSchema = z.object({
 export type CustomCatalog = z.infer<typeof CustomCatalogSchema>;
 
 const CWD_SELECTABLE_APP_IDS = new Set(["terminal-tty", "codex", "claude"]);
+const ALL_MANAGED_PLATFORMS = ["linux", "darwin", "win32", "freebsd", "openbsd", "aix", "sunos"] as const;
 
-const CORE_BUILTIN_APP_CATALOG: AppCatalogItem[] = [
-  {
+function managedApp(launcher: AppCatalogItem, recipes: InstallRecipe[] = [{ type: "bundled", platforms: [...ALL_MANAGED_PLATFORMS] }]): ManagedAppDefinition {
+  return {
+    launcher,
+    detection: [{ type: "launcher-executable", versionArgs: ["--version"] }],
+    distribution: { recipes },
+  };
+}
+
+const CORE_BUILTIN_MANAGED_APPS: ManagedAppDefinition[] = [
+  managedApp({
     id: "terminal-tty",
     name: "Terminal",
     kind: "tty",
     description: "Interactive shell in the task workspace.",
     command: process.env.SHELL || "/bin/bash",
-  },
-  {
+  }),
+  managedApp({
     id: "codex",
     name: "Codex",
     kind: "tty",
     description: "OpenAI Codex CLI in the task workspace.",
     command: process.env.TASK_HANDOFF_CODEX_COMMAND || "codex",
-  },
-  {
+  }),
+  managedApp({
     id: "claude",
     name: "Claude",
     kind: "tty",
     description: "Claude Code CLI in the task workspace.",
     command: process.env.TASK_HANDOFF_CLAUDE_COMMAND || "claude",
-  },
-  {
+  }),
+  managedApp({
     id: "terminal-gui",
     name: "GUI Terminal",
     kind: "gui",
@@ -139,8 +149,8 @@ const CORE_BUILTIN_APP_CATALOG: AppCatalogItem[] = [
       height: 768,
       depth: 24,
     },
-  },
-  {
+  }, [{ type: "system-package", platforms: ["linux"], installer: "apt", packages: ["xterm"], privilege: "passwordless-sudo" }]),
+  managedApp({
     id: "chromium",
     name: "Browser",
     kind: "gui",
@@ -156,8 +166,8 @@ const CORE_BUILTIN_APP_CATALOG: AppCatalogItem[] = [
       type: "cdp",
       portArg: "--remote-debugging-port={port}",
     },
-  },
-  {
+  }, [{ type: "system-package", platforms: ["linux"], installer: "apt", packages: ["chromium", "chromium-sandbox"], privilege: "passwordless-sudo" }]),
+  managedApp({
     id: "vscode-web",
     name: "VS Code",
     kind: "web",
@@ -178,12 +188,12 @@ const CORE_BUILTIN_APP_CATALOG: AppCatalogItem[] = [
     web: {
       readyPath: "/",
     },
-  },
+  }),
 ];
 
-function optionalBuiltinAppCatalog(): AppCatalogItem[] {
+function optionalBuiltinManagedApps(): ManagedAppDefinition[] {
   return [
-    {
+    managedApp({
       id: "cc-switch",
       name: "CC Switch",
       kind: "gui",
@@ -194,7 +204,7 @@ function optionalBuiltinAppCatalog(): AppCatalogItem[] {
         height: 900,
         depth: 24,
       },
-    },
+    }),
   ];
 }
 
@@ -221,10 +231,40 @@ function withRuntimeEnvArgs(app: AppCatalogItem): AppCatalogItem {
 }
 
 export function builtinAppCatalog(options: { includeOptional?: boolean } = {}) {
+  return builtinManagedAppDefinitions(options).map((definition) => definition.launcher);
+}
+
+export function builtinManagedAppDefinitions(options: { includeOptional?: boolean } = {}) {
   return [
-    ...CORE_BUILTIN_APP_CATALOG.map(withRuntimeEnvArgs),
-    ...(options.includeOptional || envFlag("TASK_HANDOFF_ENABLE_CC_SWITCH") ? optionalBuiltinAppCatalog().map(withRuntimeEnvArgs) : []),
-  ];
+    ...CORE_BUILTIN_MANAGED_APPS,
+    ...(options.includeOptional || envFlag("TASK_HANDOFF_ENABLE_CC_SWITCH") ? optionalBuiltinManagedApps() : []),
+  ].map((definition) => ({
+    ...definition,
+    launcher: withRuntimeEnvArgs(definition.launcher),
+    detection: definition.detection.map((rule) => ({ ...rule, versionArgs: rule.versionArgs ? [...rule.versionArgs] : undefined })),
+    distribution: { recipes: definition.distribution.recipes.map((recipe) => ({ ...recipe })) },
+  }));
+}
+
+export function detectBuiltinManagedApps(options: { includeOptional?: boolean } = {}) {
+  return builtinManagedAppDefinitions(options).map((definition) => ({
+    definition,
+    detection: detectManagedApp(definition),
+  }));
+}
+
+export function builtinManagedAppDefinition(appId: string, options: { includeOptional?: boolean } = {}) {
+  return builtinManagedAppDefinitions(options).find((definition) => definition.launcher.id === appId);
+}
+
+export function publicManagedAppDefinitions(options: { includeOptional?: boolean } = {}) {
+  return builtinManagedAppDefinitions(options).map((definition) => ({
+    id: definition.launcher.id,
+    name: definition.launcher.name,
+    kind: definition.launcher.kind,
+    description: definition.launcher.description,
+    recipeTypes: [...new Set(definition.distribution.recipes.map((recipe) => recipe.type))],
+  }));
 }
 
 export const BUILTIN_APP_CATALOG: AppCatalogItem[] = builtinAppCatalog({ includeOptional: true });

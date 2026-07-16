@@ -43,7 +43,6 @@ type AiSessionStartInput = {
   appSessionId?: string;
   appId?: string;
   providerSessionId?: string;
-  conversationId?: number;
   title?: string;
   cwd?: string;
   userPrompt?: string;
@@ -56,7 +55,7 @@ type AiSessionStartInput = {
 type AiSessionUpdateInput = Partial<
   Pick<
     AiSessionStatus,
-    "appSessionId" | "appId" | "providerSessionId" | "activeTurnId" | "conversationId" | "title" | "cwd" | "userPrompt" | "turns" | "status" | "phase" | "summary" | "lastMessage" | "currentTool" | "transcriptPath" | "error"
+    "appSessionId" | "appId" | "providerSessionId" | "activeTurnId" | "title" | "cwd" | "userPrompt" | "turns" | "status" | "phase" | "summary" | "lastMessage" | "currentTool" | "transcriptPath" | "error"
     | "providerMeta"
     | "appBindingKeys"
     | "actions"
@@ -266,7 +265,6 @@ function normalizeSession(value: unknown): AiSessionStatus | undefined {
     appBindingKeys: normalizeStringArray(record.appBindingKeys, 20, 240),
     actions: normalizeActions(record.actions),
     activeTurnId: record.activeTurnId ? compact(record.activeTurnId, 240) : undefined,
-    conversationId: Number.isInteger(record.conversationId) && Number(record.conversationId) > 0 ? Number(record.conversationId) : undefined,
     title: record.title ? compact(record.title, 240) : undefined,
     cwd: record.cwd ? compact(record.cwd, 4096) : undefined,
     userPrompt: record.userPrompt ? messageText(record.userPrompt) : undefined,
@@ -350,7 +348,6 @@ function summaryForHeartbeat(session: AiSessionStatus): AiSessionSummary {
     appBindingKeys: session.appBindingKeys,
     actions: actionsForSession(session),
     activeTurnId: session.activeTurnId,
-    conversationId: session.conversationId,
     title: session.title,
     cwd: session.cwd,
     userPrompt: session.userPrompt,
@@ -512,7 +509,6 @@ export class AiSessionRegistry {
       providerSessionId: input.providerSessionId ? compact(input.providerSessionId, 240) : undefined,
       providerMeta: undefined,
       activeTurnId: undefined,
-      conversationId: input.conversationId,
       title: input.title ? compact(input.title, 240) : undefined,
       cwd: input.cwd ? compact(input.cwd, 4096) : undefined,
       userPrompt: input.userPrompt ? messageText(input.userPrompt) : undefined,
@@ -799,7 +795,6 @@ export class AiSessionRegistry {
         appSessionId: input.appSessionId,
         appId: input.appId,
         providerSessionId: input.providerSessionId,
-        conversationId: input.conversationId,
         title: input.title,
         cwd: input.cwd,
         userPrompt: input.userPrompt,
@@ -848,7 +843,6 @@ export class AiSessionRegistry {
       appBindingKeys: replaceAppBinding ? event.appBindingKeys : event.appBindingKeys || current.appBindingKeys,
       actions: event.actions || current.actions,
       activeTurnId: nextActiveTurnId(current, event, staleActivitySnapshot),
-      conversationId: event.conversationId || current.conversationId,
       title: event.title || current.title,
       cwd: event.cwd || current.cwd,
       userPrompt: staleActivitySnapshot ? current.userPrompt : event.userPrompt || current.userPrompt,
@@ -927,13 +921,6 @@ export class AiSessionRegistry {
       text: `Failed: ${message}`,
       source: "control",
     });
-  }
-
-  markWaitingByConversation(conversationId: number, summary: string) {
-    const session = this.list()
-      .filter((entry) => entry.conversationId === conversationId && !["idle", "failed"].includes(entry.status))
-      .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))[0];
-    return session ? this.applyRealtimeEvent(session.id, { kind: "approval-requested", status: "waiting", phase: "approval", summary, counters: { approvals: 1 }, source: "realtime" }) : undefined;
   }
 
   list() {
@@ -1124,7 +1111,7 @@ export class AiSessionRegistry {
       (options.providerSessionId && session.providerSessionId === options.providerSessionId)
     );
     if (existing) {
-      const transcriptOnly = !existing.appSessionId && !existing.conversationId;
+      const transcriptOnly = !existing.appSessionId;
       const hasKnownSize = Number.isInteger(existing.transcriptSize);
       const sizeIncreased = hasKnownSize && stat.size > Number(existing.transcriptSize);
       const observedAt = transcriptOnly && sizeIncreased
@@ -1219,7 +1206,7 @@ export class AiSessionRegistry {
       return session;
     }
     const age = now - Date.parse(session.updatedAt);
-    if (age > this.staleAfterMs && session.transcriptPath && !session.conversationId) {
+    if (age > this.staleAfterMs && session.transcriptPath) {
       return { ...session, status: "idle" as const };
     }
     if (age > this.idleAfterMs && session.status === "running") {

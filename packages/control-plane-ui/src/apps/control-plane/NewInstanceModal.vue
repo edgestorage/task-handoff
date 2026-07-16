@@ -61,6 +61,7 @@
             :can-create-image="canCreateImage"
             :creating-image="creatingImage"
             :images="images.data.value || []"
+            :image-availability="imageAvailability.data.value || []"
             :instance-draft="instanceDraft"
             :models="models.data.value || []"
             :new-image="newImage"
@@ -84,7 +85,7 @@
         </Button>
         <Button v-else size="sm" :disabled="!canCreateInstance || creating" @click="createInstance">
           <Plus :size="15" />
-          <span>{{ creating ? "Creating" : "Create & start" }}</span>
+          <span>{{ creating ? "Creating" : "Create" }}</span>
         </Button>
       </div>
         </div>
@@ -97,7 +98,7 @@
 import { computed, nextTick, reactive, ref, watch } from "vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import { ArrowRight, Plus, X } from "@lucide/vue";
-import { createControlledInstance, createImage, createProject, listNodeFolderTree, useImagesQuery, useModelsQuery, useNodeLocalFoldersQuery, useNodeRuntimesQuery, useNodesQuery, useProjectsQuery } from "../../api/queries";
+import { createControlledInstance, createImage, createProject, listNodeFolderTree, useImagesQuery, useModelsQuery, useNodeImageAvailabilityQuery, useNodeLocalFoldersQuery, useNodeRuntimesQuery, useNodesQuery, useProjectsQuery } from "../../api/queries";
 import type { InstanceBoardItem } from "../../api/types";
 import { Button } from "../../components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "../../components/ui/dialog";
@@ -167,9 +168,12 @@ const runtimeDraft = reactive<RuntimeDraft>({
   runtimeId: "",
   imageId: "",
 });
+const imageAvailability = useNodeImageAvailabilityQuery(() => runtimeDraft.nodeId);
 const instanceDraft = reactive<InstanceDraft>({
   name: "",
   autoImportAgentConfigs: true,
+  codexModelHash: null,
+  claudeModelHash: null,
 });
 const newProject = reactive<NewProjectDraft>({
   name: "",
@@ -177,7 +181,7 @@ const newProject = reactive<NewProjectDraft>({
 });
 const newImage = reactive<NewImageDraft>({
   name: "",
-  image: "",
+  reference: "",
 });
 const localFolders = useNodeLocalFoldersQuery(() => sourceDraft.localNodeId);
 
@@ -246,7 +250,7 @@ const currentBlockedReason = computed(() => {
 const canContinue = computed(() => !currentBlockedReason.value);
 const canCreateInstance = computed(() => !sourceBlockedReason.value && !runtimeBlockedReason.value);
 const canCreateProject = computed(() => Boolean(newProject.name.trim() && newProject.url.trim()));
-const canCreateImage = computed(() => Boolean(newImage.name.trim() && newImage.image.trim()));
+const canCreateImage = computed(() => Boolean(newImage.name.trim() && newImage.reference.trim()));
 
 watch(
   () => projects.data.value,
@@ -374,10 +378,10 @@ watch(
   (items) => {
     const modelIds = new Set((items || []).map((model) => model.id));
     if (typeof instanceDraft.codexModelHash === "string" && !modelIds.has(instanceDraft.codexModelHash)) {
-      instanceDraft.codexModelHash = undefined;
+      instanceDraft.codexModelHash = null;
     }
     if (typeof instanceDraft.claudeModelHash === "string" && !modelIds.has(instanceDraft.claudeModelHash)) {
-      instanceDraft.claudeModelHash = undefined;
+      instanceDraft.claudeModelHash = null;
     }
   },
   { immediate: true },
@@ -536,8 +540,8 @@ async function createInstance() {
     });
     instanceDraft.name = "";
     instanceDraft.autoImportAgentConfigs = true;
-    instanceDraft.codexModelHash = undefined;
-    instanceDraft.claudeModelHash = undefined;
+    instanceDraft.codexModelHash = null;
+    instanceDraft.claudeModelHash = null;
   } catch (error) {
     showControlPlaneToast(errorText(error));
     return;
@@ -644,15 +648,15 @@ async function createQuickImage() {
   try {
     const image = await createImage({
       name: newImage.name.trim(),
-      image: newImage.image.trim(),
-      registry: "local",
+      reference: newImage.reference.trim(),
+      pullPolicy: "if-not-present",
       capabilities: [],
       optionalApps: [],
       defaultEnv: {},
       labels: {},
     });
     newImage.name = "";
-    newImage.image = "";
+    newImage.reference = "";
     newImageOpen.value = false;
     runtimeDraft.imageId = image.id;
     createdImageName = `${image.name} created`;

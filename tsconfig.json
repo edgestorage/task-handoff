@@ -23,13 +23,9 @@
       "@task-handoff/core": ["packages/core/src/index.ts"],
       "@task-handoff/core/*": ["packages/core/src/*"],
       "@task-handoff/protocol": ["packages/protocol/src/index.ts"],
-      "@task-handoff/protocol/*": ["packages/protocol/src/*.ts"],
-      "@task-handoff/receiver-worker": ["packages/receiver-worker/src/index.ts"],
-      "@task-handoff/receiver-worker/*": ["packages/receiver-worker/src/*"],
-      "@task-handoff/terminal-ui": ["packages/terminal-ui/src/index.ts"],
-      "@task-handoff/terminal-ui/*": ["packages/terminal-ui/src/*.ts"]
+      "@task-handoff/protocol/*": ["packages/protocol/src/*.ts"]
     },
-    "types": ["node", "react"],
+    "types": ["node"],
     "forceConsistentCasingInFileNames": true
   },
   "include": [
@@ -39,10 +35,8 @@
     "packages/protocol/src/**/*",
     "packages/app-runtime/src/**/*",
     "packages/ai-session-runtime/src/**/*",
-    "packages/receiver-worker/src/**/*",
     "packages/controlled-instance/src/**/*",
-    "packages/control-plane/src/**/*",
-    "packages/terminal-ui/src/**/*"
+    "packages/control-plane/src/**/*"
   ],
   "exclude": ["packages/control-plane-ui/**/*", "packages/controlled-instance-ui/**/*"]
 }

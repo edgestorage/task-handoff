@@ -32,17 +32,11 @@ export function eventTopic(type: string) {
   if (type.startsWith("app-session.")) {
     return "app.sessions";
   }
-  if (type.startsWith("receiver.")) {
-    return "receiver";
-  }
-  if (type.startsWith("conversation.")) {
-    return "conversations";
+  if (type.startsWith("app.management")) {
+    return "apps";
   }
   if (type.startsWith("trigger.")) {
     return "triggers";
-  }
-  if (type.startsWith("channel.")) {
-    return "channels";
   }
   if (type.startsWith("instance.")) {
     return "instances";

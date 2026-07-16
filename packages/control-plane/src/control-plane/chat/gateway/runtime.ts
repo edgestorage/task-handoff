@@ -15,6 +15,10 @@ import {
   parseChatGatewayCallbackAction,
 } from "../adapters/callback-actions.ts";
 import {
+  parsePendingDecisionCallbackData,
+  pendingDecisionRouteFingerprint,
+} from "../action-token-service.ts";
+import {
   dingdingCardUpdateResponse,
   parseDingdingCardEvent,
   parseDingdingRobotEvent,
@@ -172,7 +176,6 @@ export class ControlPlaneChatGatewayRuntime {
   private telegramOffsets = new Map<string, number>();
   private seenTelegramUpdates = new Set<string>();
   private wechatCursors = new Map<string, string>();
-  private pendingTimer: Timer | undefined;
   private announcedPending = new Set<string>();
   private deliveredAiSessionFingerprints = new Map<string, string>();
   private aiSessionCancelTokens = new Map<string, { instanceId: string; sessionId: string }>();
@@ -249,7 +252,6 @@ export class ControlPlaneChatGatewayRuntime {
         stage: "bridge-start-skipped-running",
         bridgeId: id,
       });
-      this.startPendingPolling();
       return this.status();
     }
     const bridge = this.service.requireChatBridge(id);
@@ -292,10 +294,6 @@ export class ControlPlaneChatGatewayRuntime {
       this.stopBridge(id);
     }
     this.dingdingBridges.stopAll();
-    if (this.pendingTimer) {
-      clearInterval(this.pendingTimer);
-      this.pendingTimer = undefined;
-    }
     for (const aggregate of this.telegramMessageAggregates.values()) {
       if (aggregate.timer) {
         clearTimeout(aggregate.timer);
@@ -346,20 +344,6 @@ export class ControlPlaneChatGatewayRuntime {
     };
   }
 
-  private startPendingPolling() {
-    if (this.pendingTimer) {
-      this.logAiSessionDelivery({
-        stage: "pending-poll-already-started",
-      });
-      return;
-    }
-    this.logAiSessionDelivery({
-      stage: "pending-poll-started",
-      intervalMs: 5000,
-    });
-    this.pendingTimer = setInterval(() => void this.pollPendingRoutes(), 5000);
-  }
-
   private startPollingBridge(bridge: ChatBridgeConfig, poll: (bridge: ChatBridgeConfig) => Promise<void>) {
     if (!bridge.token) {
       this.bridgeErrors.set(bridge.id, `${bridge.channel} token is not configured.`);
@@ -385,12 +369,11 @@ export class ControlPlaneChatGatewayRuntime {
       const current = this.service.requireChatBridge(bridge.id);
       void poll(current).catch((error) => this.bridgeErrors.set(bridge.id, error instanceof Error ? error.message : String(error)));
     }
-    this.startPendingPolling();
     return this.status();
   }
 
   private startDingdingBridge(bridge: ChatBridgeConfig) {
-    if (this.dingdingBridges.start(bridge)) this.startPendingPolling();
+    this.dingdingBridges.start(bridge);
     return this.status();
   }
 
@@ -561,7 +544,15 @@ export class ControlPlaneChatGatewayRuntime {
     if (chatId && senderId) {
       runtime.senderIds.set(chatId, senderId);
     }
-    const action = this.parseChatGatewayCallbackAction(event.callbackData);
+    let action: ChatGatewayAction | undefined;
+    try {
+      action = await this.parseChatGatewayCallbackAction(event.callbackData);
+    } catch (error) {
+      if (hasErrorCode(error, "CHAT_PENDING_ACTION_STALE")) {
+        return dingdingCardUpdateResponse(errorMessage(error), undefined, "approval_stale", event.body, event.params);
+      }
+      throw error;
+    }
     if (!action) {
       this.logWarn({
         bridgeId: bridge.id,
@@ -1033,7 +1024,20 @@ export class ControlPlaneChatGatewayRuntime {
       await this.handleTelegramAggregateEndCallback(bridge, chatId, stringSetting(callbackQuery.id), aggregateEndMatch[1], userId);
       return;
     }
-    const action = this.parseChatGatewayCallbackAction(data);
+    let action: ChatGatewayAction | undefined;
+    try {
+      action = await this.parseChatGatewayCallbackAction(data);
+    } catch (error) {
+      if (hasErrorCode(error, "CHAT_PENDING_ACTION_STALE")) {
+        await this.answerTelegramCallback(bridge, stringSetting(callbackQuery.id), errorMessage(error));
+        const messageId = messageIdFromTelegramMessage(message);
+        if (messageId !== undefined) {
+          await this.deleteTelegramStandaloneApprovalMessage(bridge, chatId, messageId);
+        }
+        return;
+      }
+      throw error;
+    }
     if (!action) {
       await this.answerTelegramCallback(bridge, stringSetting(callbackQuery.id), "Unsupported action");
       return;
@@ -1221,7 +1225,25 @@ export class ControlPlaneChatGatewayRuntime {
     return Boolean(target && target.instanceId === instanceId && target.sessionId === sessionId);
   }
 
-  private parseChatGatewayCallbackAction(data: string) {
+  private async parseChatGatewayCallbackAction(data: string) {
+    const pendingDecision = parsePendingDecisionCallbackData(data);
+    if (pendingDecision) {
+      const matches = (await this.service.listPendingRoutes()).filter((route) =>
+        route.kind === "approval" &&
+        route.status === "pending" &&
+        pendingDecisionRouteFingerprint(route.id) === pendingDecision.routeFingerprint
+      );
+      if (matches.length !== 1) {
+        const error = new Error("This approval is no longer pending.");
+        Object.assign(error, { statusCode: 409, code: "CHAT_PENDING_ACTION_STALE" });
+        throw error;
+      }
+      return {
+        type: "pending-decision" as const,
+        routeId: matches[0].id,
+        decision: pendingDecision.decision,
+      };
+    }
     return parseChatGatewayCallbackAction(data, (token, expectedType) => this.service.resolveChatActionToken(token, expectedType));
   }
 
@@ -1894,6 +1916,10 @@ function stringSetting(value: unknown) {
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
+}
+
+function hasErrorCode(error: unknown, code: string) {
+  return Boolean(error && typeof error === "object" && "code" in error && error.code === code);
 }
 
 function compactLogText(value: unknown, maxLength = 160) {

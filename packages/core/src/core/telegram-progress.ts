@@ -1,4 +1,12 @@
-import type { ChatPayload, ChatProgressOptions } from "./chat.ts";
+export type ChatProgressAction = {
+  text: string;
+  callbackData: string;
+};
+
+export type ChatProgressOptions = {
+  actions?: ChatProgressAction[];
+  actionRows?: ChatProgressAction[][];
+};
 
 type TelegramProgressEntry<Route> = {
   lastText: string;
@@ -268,10 +276,6 @@ class TelegramProgressStore<Route = unknown> {
       }
       return false;
     }
-  }
-
-  finishPayload(key: string, payload: ChatPayload, route?: Route, options?: ChatProgressOptions, renderOptions?: unknown) {
-    return this.finish(key, `${payload.title}\n\n${payload.body}`, route, options, renderOptions);
   }
 
   async delete(key: string, route?: Route) {

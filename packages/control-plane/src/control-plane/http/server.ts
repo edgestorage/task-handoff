@@ -133,6 +133,7 @@ function errorPayload(error: unknown) {
     statusCode: typeof record.statusCode === "number" ? record.statusCode : 500,
     code: typeof record.code === "string" ? record.code : "CONTROL_PLANE_ERROR",
     message: error instanceof Error ? error.message : String(error),
+    ...(record.details && typeof record.details === "object" && !Array.isArray(record.details) ? { details: record.details } : {}),
   };
 }
 
@@ -418,15 +419,6 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
       build: buildInfo(),
       storage: paths,
-      counts: {
-        projects: service.listProjects().length,
-        models: service.listModels().length,
-        images: service.listImages().length,
-        nodes: service.listNodes().length,
-        nodeRuntimes: (await service.listNodeRuntimes()).length,
-        controlledInstances: (await service.listControlledInstances()).length,
-        chatSessions: service.listChatSessions().length,
-      },
     },
   }));
   app.get("/api/control-plane/settings", async () => ({ data: service.getSettings() }));

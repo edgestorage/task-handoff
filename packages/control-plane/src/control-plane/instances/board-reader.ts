@@ -2,6 +2,7 @@ import {
   CONTROL_PLANE_PROTOCOL_VERSION,
   type ControlledInstance,
   type ImageProfile,
+  type InstanceImageSnapshot,
   type Node,
   type NodeRuntime,
   type Project,
@@ -36,7 +37,7 @@ export class InstanceBoardReader {
         instance,
         currentTime,
         project: instance.projectId ? projects.get(instance.projectId) : undefined,
-        image: instance.imageId ? images.get(instance.imageId) || instance.imageSnapshot : instance.imageSnapshot,
+        image: instance.imageSnapshot || (instance.imageId ? images.get(instance.imageId) : undefined),
         node: nodes.get(instance.nodeId),
         runtime: runtimes.get(`${instance.nodeId}:${instance.runtimeId}`),
       })),
@@ -49,7 +50,7 @@ function boardInstance(input: {
   instance: ControlledInstance;
   currentTime: number;
   project?: Project;
-  image?: ImageProfile;
+  image?: ImageProfile | InstanceImageSnapshot;
   node?: Node;
   runtime?: NodeRuntime;
 }) {

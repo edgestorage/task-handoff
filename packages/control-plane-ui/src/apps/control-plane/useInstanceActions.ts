@@ -2,6 +2,7 @@ import { ref } from "vue";
 import {
   deleteControlledInstance,
   restartControlledInstance,
+  retryInstanceImageProvisioning,
   startControlledInstance,
   stopControlledInstance,
   syncControlledInstanceConfig,
@@ -9,7 +10,7 @@ import {
 import type { InstanceBoardItem } from "../../api/types";
 import { canShowInstanceAction } from "./useInstanceStatus";
 
-export type InstanceAction = "start" | "stop" | "restart" | "delete";
+export type InstanceAction = "start" | "stop" | "restart" | "retry-image" | "delete";
 export type ConfigSyncDirection = "import" | "export";
 
 type UseInstanceActionsInput = {
@@ -59,6 +60,8 @@ export function useInstanceActions({ clearActiveInstance, closeInstanceMenu, err
         await stopControlledInstance(instance.id);
       } else if (action === "restart") {
         await restartControlledInstance(instance.id);
+      } else if (action === "retry-image") {
+        await retryInstanceImageProvisioning(instance.id);
       } else {
         await deleteControlledInstance(instance.id);
         clearActiveInstance(instance.id);
@@ -117,7 +120,8 @@ export function useInstanceActions({ clearActiveInstance, closeInstanceMenu, err
   }
 
   function activeActionLabel(instance: InstanceBoardItem, action: InstanceAction, idleLabel: string) {
-    return activeInstanceActionId.value === instance.id && activeInstanceAction.value === action ? `${idleLabel}ing` : idleLabel;
+    if (activeInstanceActionId.value !== instance.id || activeInstanceAction.value !== action) return idleLabel;
+    return action === "retry-image" ? "Retrying image" : `${idleLabel}ing`;
   }
 
   return {

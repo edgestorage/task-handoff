@@ -1,11 +1,12 @@
-import type { ControlledInstance, ImageProfile, LocalDockerImage, Node, NodeRuntime, Project } from "@task-handoff/protocol/control-plane";
+import type { ControlledInstance, InstanceImageSnapshot, LocalDockerImage, Node, NodeRuntime, Project } from "@task-handoff/protocol/control-plane";
 import { defaultCommandRunner, type CommandRunner } from "../../shared/process/command-runner.ts";
+import { DockerImageService, listDockerImages } from "../docker-images.ts";
 
 export { defaultCommandRunner, type CommandResult, type CommandRunner } from "../../shared/process/command-runner.ts";
 
 export type ExecutorContext = {
   project: Project;
-  image: ImageProfile;
+  image: InstanceImageSnapshot;
   node: Node;
   runtime: NodeRuntime;
   instance: ControlledInstance;
@@ -34,14 +35,17 @@ export type NodeRuntimeExecutor = {
 
 export type DockerExecutorOptions = {
   publishHost?: string;
+  imageService?: DockerImageService;
 };
 
 export class LocalDockerExecutor implements NodeRuntimeExecutor {
   private readonly runCommand: CommandRunner;
   private readonly publishHost: string;
+  private readonly images: DockerImageService;
 
   constructor(runCommand: CommandRunner = defaultCommandRunner, options: DockerExecutorOptions = {}) {
     this.runCommand = runCommand;
+    this.images = options.imageService || new DockerImageService(runCommand);
     this.publishHost = options.publishHost || "127.0.0.1";
   }
 
@@ -52,7 +56,7 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
     if (existing) {
       return this.runningResult(context, containerName, context.instance.runtime.containerId);
     }
-    await this.ensureImageAvailable(context.image);
+    await this.images.ensure(context.image.resolvedReference || context.image.requestedReference!);
     const runResult = await this.runCommand("docker", dockerRunArgs(context, containerName, { publishHost: this.publishHost }));
     return this.runningResult(context, containerName, runResult.stdout || undefined);
   }
@@ -138,45 +142,10 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
     return match?.[1];
   }
 
-  private async ensureImageAvailable(image: ImageProfile) {
-    const inspected = await this.runCommand("docker", ["image", "inspect", image.image]).then(
-      () => true,
-      () => false,
-    );
-    if (inspected) {
-      return;
-    }
-    if (image.registry === "local") {
-      const error = new Error(`Local Docker image ${image.image} was not found. Build it or add an existing local image before starting an instance.`);
-      Object.assign(error, { statusCode: 400, code: "LOCAL_IMAGE_NOT_FOUND" });
-      throw error;
-    }
-    await this.runCommand("docker", ["pull", image.image]);
-  }
 }
 
 export async function listLocalDockerImages(runCommand: CommandRunner = defaultCommandRunner): Promise<LocalDockerImage[]> {
-  const result = await runCommand("docker", ["images", "--format", "{{json .}}"]);
-  return result.stdout
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      const record = JSON.parse(line) as Record<string, string>;
-      const repository = record.Repository || "<none>";
-      const tag = record.Tag || "<none>";
-      const id = record.ID || record.IDShort || "";
-      const reference = repository !== "<none>" && tag !== "<none>" ? `${repository}:${tag}` : id;
-      return {
-        repository,
-        tag,
-        id,
-        createdSince: record.CreatedSince,
-        size: record.Size,
-        reference,
-      };
-    })
-    .filter((image) => Boolean(image.reference));
+  return listDockerImages(runCommand);
 }
 
 export function containerNameForInstance(instanceId: string) {
@@ -273,7 +242,7 @@ export function dockerRunArgs(context: ExecutorContext, containerName: string, o
     args.push("-e", `${key}=${value}`);
   }
 
-  args.push(context.image.image);
+  args.push(context.image.resolvedReference || context.image.requestedReference!);
   return args;
 }
 
@@ -283,7 +252,7 @@ export function validateStartContext(context: ExecutorContext) {
     Object.assign(error, { statusCode: 400, code: "LOCAL_FOLDER_REQUIRES_OWNER_NODE" });
     throw error;
   }
-  if (!context.image.image.trim()) {
+  if (!context.image.requestedReference?.trim()) {
     const error = new Error("Image profile must reference a registered image.");
     Object.assign(error, { statusCode: 400, code: "IMAGE_PROFILE_INVALID" });
     throw error;

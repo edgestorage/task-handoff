@@ -37,30 +37,40 @@ env:
 
 jobs:
   docker-build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
 
       - uses: docker/setup-buildx-action@v3
 
       - name: Build controlled instance image
-        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         uses: docker/build-push-action@v6
         with:
           context: .
           load: true
-          tags: task-handoff-controlled-instance:ci
+          platforms: ${{ matrix.platform }}
+          tags: task-handoff-controlled-instance:ci-${{ matrix.arch }}
           build-args: |
             TASK_HANDOFF_BUILD_ID=${{ github.run_id }}
             TASK_HANDOFF_BUILT_AT=${{ github.event.repository.updated_at }}
             TASK_HANDOFF_GIT_COMMIT=${{ github.sha }}
-            TASK_HANDOFF_IMAGE_REF=task-handoff-controlled-instance:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            TASK_HANDOFF_IMAGE_REF=task-handoff-controlled-instance:ci-${{ matrix.arch }}
+          cache-from: type=gha,scope=controlled-instance-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=controlled-instance-${{ matrix.arch }}
 
       - name: Smoke test
-        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        if: ${{ matrix.arch == 'amd64' }}
         run: |
           docker run --rm -d \
             --name task-handoff-web-ci \
@@ -68,7 +78,7 @@ jobs:
             --shm-size=1g \
             --security-opt seccomp=unconfined \
             -e TASK_HANDOFF_WEB_AUTH=off \
-            task-handoff-controlled-instance:ci
+            task-handoff-controlled-instance:ci-amd64
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:18080/api/health; then
               break
@@ -268,7 +278,7 @@ jobs:
             http://127.0.0.1:18080/api/apps/sessions/$failed_id
 
       - name: Cleanup
-        if: ${{ always() && !startsWith(github.ref, 'refs/tags/v') }}
+        if: ${{ always() && matrix.arch == 'amd64' }}
         run: docker rm -f task-handoff-web-ci 2>/dev/null || true
 
       - name: Login to Docker Hub
@@ -279,17 +289,56 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Publish immutable commit image
-        if: ${{ github.ref == 'refs/heads/main' }}
+        if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          image="${DOCKERHUB_USERNAME}/${DOCKERHUB_IMAGE_NAME}"
+          sha_tag="sha-${GITHUB_SHA::7}-${{ matrix.arch }}"
+          docker tag "task-handoff-controlled-instance:ci-${{ matrix.arch }}" "${image}:${sha_tag}"
+          docker push "${image}:${sha_tag}"
+
+  publish-multiarch-image:
+    if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
+    needs: docker-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Publish multi-architecture commit image
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
           image="${DOCKERHUB_USERNAME}/${DOCKERHUB_IMAGE_NAME}"
           sha_tag="sha-${GITHUB_SHA::7}"
-          docker tag task-handoff-controlled-instance:ci "${image}:${sha_tag}"
-          docker push "${image}:${sha_tag}"
+          docker buildx imagetools create \
+            --tag "${image}:${sha_tag}" \
+            "${image}:${sha_tag}-amd64" \
+            "${image}:${sha_tag}-arm64"
+          docker buildx imagetools inspect "${image}:${sha_tag}"
+
+  promote-release:
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    needs: publish-multiarch-image
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Promote immutable image to release tags
-        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
@@ -301,17 +350,6 @@ jobs:
 
           image="${DOCKERHUB_USERNAME}/${DOCKERHUB_IMAGE_NAME}"
           source="${image}:sha-${GITHUB_SHA::7}"
-          for attempt in $(seq 1 120); do
-            if docker buildx imagetools inspect "$source" >/dev/null 2>&1; then
-              break
-            fi
-            if [ "$attempt" = "120" ]; then
-              echo "::error::Immutable source image was not published within 20 minutes: $source"
-              exit 1
-            fi
-            sleep 10
-          done
-
           tags=(--tag "${image}:${version}")
           if [[ "$version" != *-* ]]; then
             tags+=(--tag "${image}:latest")

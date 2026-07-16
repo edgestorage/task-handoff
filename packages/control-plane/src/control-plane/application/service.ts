@@ -3,8 +3,12 @@ import {
   ChatSessionBindingSchema,
   CONTROL_PLANE_PROTOCOL_VERSION,
   BuildInfoSchema,
+  AppManagementJobResponseSchema,
+  AppManagementSnapshotSchema,
   ControlledInstanceSchema,
   ImageProfileSchema,
+  NodeImageAvailabilitySchema,
+  sanitizeStoredImageProfile,
   FederatedModelRegistrySchema,
   ModelConfigSchema,
   modelConfigHash,
@@ -26,6 +30,7 @@ import {
   type PendingRoute,
   type Project,
   type UpdateCheckRequest,
+  type AppManagementOperationRequest,
 } from "@task-handoff/protocol/control-plane";
 import {
   AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES,
@@ -89,6 +94,20 @@ import { createId, createSecret, JsonCollection, JsonFile, type StoredRecord } f
 import { controlledInstanceTriggerSnapshot } from "../triggers/records.ts";
 import { createNodeAgentHmacHeaders } from "../../shared/security/node-agent-auth.ts";
 import { assertLocalIpcSocketOwnedByCurrentUser, createNodeAgentIpcWebSocket, fetchNodeAgentIpc, parseNodeAgentIpcEndpoint } from "../../shared/transport/node-agent-ipc.ts";
+
+export function parseInstanceAppManagementSnapshot(value: unknown) {
+  try {
+    return AppManagementSnapshotSchema.parse(value);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      const unsupported = new Error("This controlled instance does not support managed app operations.");
+      Object.assign(unsupported, { statusCode: 409, code: "INSTANCE_APP_MANAGEMENT_UNSUPPORTED" });
+      throw unsupported;
+    }
+    throw error;
+  }
+}
+
 type FetchImpl = typeof fetch;
 type ServiceLogger = {
   info?: (data: unknown, message?: string) => void;
@@ -229,7 +248,10 @@ export class ControlPlaneService {
     });
     this.projects = new JsonCollection(paths.projectsDir, storeOptions(ProjectSchema));
     this.models = new JsonCollection(paths.modelsDir, storeOptions(ModelConfigSchema));
-    this.images = new JsonCollection(paths.imagesDir, storeOptions(ImageProfileSchema));
+    this.images = new JsonCollection(paths.imagesDir, {
+      ...storeOptions(ImageProfileSchema),
+      sanitize: (value) => sanitizeStoredImageProfile(value, (warning) => this.logWarn(warning, "legacy image profile field was migrated")),
+    });
     this.nodes = new JsonCollection(paths.nodesDir, storeOptions(NodeSchema));
     this.chatSessions = new JsonCollection(paths.chatSessionsDir, storeOptions(ChatSessionBindingSchema));
     this.chatBridges = new JsonCollection(paths.chatBridgesDir, storeOptions(ChatBridgeConfigSchema));
@@ -610,6 +632,21 @@ export class ControlPlaneService {
     return this.nodeAgentGateway.listDockerImages(node);
   }
 
+  async listNodeImageAvailability(nodeId: string) {
+    const node = this.requireNode(nodeId);
+    const images = this.listImages();
+    try {
+      const localImages = await this.nodeAgentGateway.listDockerImages(node);
+      return images.map((image) => {
+        const localImage = localImages.find((local) => local.reference === image.reference || local.repoDigests.includes(image.reference!));
+        return NodeImageAvailabilitySchema.parse({ image, status: localImage ? "available" : "pull-required", localImage });
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return images.map((image) => NodeImageAvailabilitySchema.parse({ image, status: "unknown", error: message }));
+    }
+  }
+
   async listNodeLocalFolders(nodeId: string) {
     const node = this.requireNode(nodeId);
     return this.nodeAgentGateway.listLocalFolders(node);
@@ -814,7 +851,16 @@ export class ControlPlaneService {
     return this.catalogService.updateImage(id, input);
   }
 
-  deleteImage(id: string) {
+  async deleteImage(id: string) {
+    this.catalogService.requireImage(id);
+    const project = this.listProjects().find((item) => item.defaultImageId === id);
+    if (project) throw Object.assign(new Error(`Image ${id} is the default for project ${project.name}.`), { statusCode: 409, code: "IMAGE_IN_USE" });
+    const folders = (await Promise.all(this.listNodes().map((node) => this.nodeAgentGateway.listLocalFolders(node)))).flat();
+    const folder = folders.find((item) => item.defaultImageId === id);
+    if (folder) throw Object.assign(new Error(`Image ${id} is the default for local folder ${folder.name}.`), { statusCode: 409, code: "IMAGE_IN_USE" });
+    const instances = await this.listNodeInstances();
+    const instance = instances.find((item) => item.imageId === id);
+    if (instance) throw Object.assign(new Error(`Image ${id} is used by instance ${instance.name}.`), { statusCode: 409, code: "IMAGE_IN_USE" });
     return this.catalogService.deleteImage(id);
   }
 
@@ -1098,6 +1144,12 @@ export class ControlPlaneService {
     return publicInstanceWithAccess(instance);
   }
 
+  async retryControlledInstanceImageProvisioning(id: string) {
+    const current = await this.requireNodeInstance(id);
+    const instance = await this.nodeAgentGateway.retryInstanceImageProvisioning(this.requireNode(current.nodeId), id);
+    return publicInstanceWithAccess(instance);
+  }
+
   async boardAsync() {
     return (await this.boardWithDiagnostics()).items;
   }
@@ -1373,6 +1425,35 @@ export class ControlPlaneService {
     }) as Record<string, unknown>;
     await this.listAppSessions({ refresh: true });
     return session;
+  }
+
+  async instanceAppManagement(instanceId: string) {
+    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
+    try {
+      return parseInstanceAppManagementSnapshot(await this.instanceRequest(instance, "/apps/management"));
+    } catch (error) {
+      const record = error && typeof error === "object" ? error as Record<string, unknown> : {};
+      if (error instanceof z.ZodError || record.statusCode === 404) {
+        const unsupported = new Error("This controlled instance does not support managed app operations.");
+        Object.assign(unsupported, { statusCode: 409, code: "INSTANCE_APP_MANAGEMENT_UNSUPPORTED" });
+        throw unsupported;
+      }
+      throw error;
+    }
+  }
+
+  async requestInstanceAppOperation(instanceId: string, appId: string, operation: "install" | "uninstall", input: AppManagementOperationRequest = {}) {
+    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
+    return AppManagementJobResponseSchema.parse(await this.instanceRequest(instance, `/apps/${encodeURIComponent(appId)}/${operation}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    }));
+  }
+
+  async instanceAppManagementJob(instanceId: string, jobId: string) {
+    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
+    return AppManagementJobResponseSchema.parse(await this.instanceRequest(instance, `/apps/jobs/${encodeURIComponent(jobId)}`));
   }
 
   async renameAppSession(instanceId: string, sessionId: string, title: string) {

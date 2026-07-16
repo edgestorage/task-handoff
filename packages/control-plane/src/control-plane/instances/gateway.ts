@@ -52,6 +52,7 @@ export class ControlledInstanceGateway {
       Object.assign(error, {
         statusCode: response.status,
         code: remoteError?.code || "INSTANCE_REQUEST_FAILED",
+        ...(remoteError?.details ? { details: remoteError.details } : {}),
         instanceId: instance.id,
         nodeId: instance.nodeId,
         route,
@@ -133,7 +134,8 @@ function remoteErrorPayload(value: unknown) {
   const record = value as Record<string, unknown>;
   const code = typeof record.code === "string" && record.code.trim() ? record.code : undefined;
   const message = typeof record.message === "string" && record.message ? record.message : undefined;
-  return code || message ? { code, message } : undefined;
+  const details = record.details && typeof record.details === "object" && !Array.isArray(record.details) ? record.details as Record<string, unknown> : undefined;
+  return code || message ? { code, message, details } : undefined;
 }
 
 function requestBody(body: BodyInit | null | undefined) {

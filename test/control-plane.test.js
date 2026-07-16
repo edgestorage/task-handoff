@@ -10,7 +10,7 @@ const WebSocket = require("ws");
 const { z } = require("zod");
 
 const { createControlPlaneApp } = require("../packages/control-plane/src/server.ts");
-const { createNodeAgentApp, listenNodeAgentIpcServer, NodeAgentExternalListenerManager } = require("../packages/control-plane/src/node-agent.ts");
+const { createNodeAgentApp, listenNodeAgentIpcServer, NodeAgentExternalListenerManager, resolvedDockerImageUpdatePatch } = require("../packages/control-plane/src/node-agent.ts");
 const { ControlPlaneChatGatewayRuntime, aiSessionDeliveryText, createDingdingStreamClient } = require("../packages/control-plane/src/chat-gateway.ts");
 const { ControlledInstanceGateway } = require("../packages/control-plane/src/control-plane/instances/gateway.ts");
 const { parseDingdingCardEvent, sendDingdingActionsCard } = require("../packages/control-plane/src/control-plane/chat/adapters/dingding.ts");
@@ -28,7 +28,7 @@ const { createNodeAgentHmacHeaders, NODE_AGENT_HMAC_TIMESTAMP_WINDOW_MS } = requ
 const { fetchNodeAgentIpc, nodeAgentIpcEndpoint, nodeAgentIpcPath, prepareNodeAgentIpcPath } = require("../packages/control-plane/src/shared/transport/node-agent-ipc.ts");
 const { can } = require("../packages/control-plane/src/control-plane/auth/authorization.ts");
 const { LocalDockerExecutor, dockerRunArgs } = require("../packages/control-plane/src/node-agent/runtimes/docker.ts");
-const { assertInstalledPackageVersion, checkControlledInstanceUpdate, checkNodeAgentUpdate, dockerImageRefForChannel, isNewerVersion, managedNpmPackageInstall, resolveNodeAgentUpdateWorker } = require("../packages/control-plane/src/node-agent/updates.ts");
+const { assertInstalledPackageVersion, checkControlledInstanceUpdate, checkNodeAgentUpdate, dockerImageRefForChannel, dockerManifestDigestForArchitecture, isNewerVersion, managedNpmPackageInstall, resolveNodeAgentUpdateWorker } = require("../packages/control-plane/src/node-agent/updates.ts");
 const { ProcessSingletonError, acquireProcessSingletonLock } = require("../packages/control-plane/src/shared/process/singleton-lock.ts");
 const { acquireControlPlaneSingletonLock } = require("../packages/control-plane/src/control-plane/process/singleton-lock.ts");
 const { acquireNodeAgentSingletonLock } = require("../packages/control-plane/src/node-agent/process/singleton-lock.ts");
@@ -41,6 +41,21 @@ const { appSessionStatus } = require("../packages/control-plane-ui/src/apps/cont
 const { AiSessionEventType, AiSessionEventTopic } = require("../packages/protocol/src/ai-sessions.ts");
 const { AppSessionEventType, normalizeAppSessionRecord } = require("../packages/protocol/src/app-sessions.ts");
 const { CONTROL_PLANE_PROTOCOL_VERSION, ControlledInstanceHeartbeatSchema, InstanceAppInventorySchema, modelConfigHash, parseStoredControlledInstance } = require("../packages/protocol/src/control-plane.ts");
+const { ChatActionTokenService, parsePendingDecisionCallbackData, pendingDecisionRouteFingerprint } = require("../packages/control-plane/src/control-plane/chat/action-token-service.ts");
+
+test("pending decision callbacks are stable and resolved from the current route", () => {
+  const first = new ChatActionTokenService();
+  const second = new ChatActionTokenService();
+  const routeId = "inst_12345678901234567890:ai:session-with-a-long-provider-generated-id";
+  const callbackData = first.pendingDecisionCallbackData(routeId, "allow");
+
+  assert.equal(callbackData, second.pendingDecisionCallbackData(routeId, "allow"));
+  assert.ok(Buffer.byteLength(callbackData, "utf8") <= 64);
+  assert.deepEqual(parsePendingDecisionCallbackData(callbackData), {
+    routeFingerprint: pendingDecisionRouteFingerprint(routeId),
+    decision: "allow",
+  });
+});
 
 function emptyAppInventory(observedAt = new Date().toISOString()) {
   return { items: [], observedAt, issues: [] };
@@ -687,27 +702,21 @@ test("local IPC can rebind the node agent TCP listener without changing the sock
   assert.equal((await fetchNodeAgentIpc(ipcPath, "/settings/external-listener")).status, 200);
   assert.equal((await fetch(`http://127.0.0.1:${secondPort}/api/node-agent/health`)).status, 200);
 
+  const localRuntime = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/runtimes",
+    payload: { id: "runtime_localhost", name: "Localhost", type: "local" },
+  });
+  assert.equal(localRuntime.statusCode, 201, localRuntime.body);
+
   const created = await app.inject({
     method: "POST",
     url: "/api/node-agent/instances",
     payload: {
       id: "inst_listener_blocker",
       name: "listener blocker",
-      runtimeId: "runtime_local_docker",
-      imageId: "img_listener_blocker",
+      runtimeId: "runtime_localhost",
       source: { type: "local-folder", path: "/tmp/listener-blocker" },
-      image: {
-        id: "img_listener_blocker",
-        name: "Listener blocker",
-        image: "task-handoff/listener-blocker",
-        registry: "local",
-        capabilities: [],
-        optionalApps: [],
-        defaultEnv: {},
-        labels: {},
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      },
     },
   });
   assert.equal(created.statusCode, 201, created.body);
@@ -846,6 +855,7 @@ function createMockNodeAgentFetch(options = {}) {
       return jsonResponse(runtimes[index]);
     }
     if (path === "/docker/images") {
+      if (options.dockerImagesError) throw options.dockerImagesError;
       return jsonResponse(options.dockerImages || []);
     }
     if (path === "/local-folders" && (!init.method || init.method === "GET")) {
@@ -951,7 +961,10 @@ function createMockNodeAgentFetch(options = {}) {
         nodeId,
         runtimeId: body.runtimeId,
         imageId: body.imageId,
-        imageSnapshot: body.image,
+        imageSnapshot: body.image ? (() => {
+          const { reference, ...profile } = body.image;
+          return { ...profile, requestedReference: reference };
+        })() : undefined,
         status: "created",
         health: "unknown",
         connectionStatus: "unknown",
@@ -1753,8 +1766,7 @@ test("control plane subscribes to direct node agent websocket events", async (t)
       image: {
         id: "img_default",
         name: "Default",
-        image: "task-handoff/default",
-        registry: "local",
+        reference: "task-handoff/default:latest",
         capabilities: [],
         optionalApps: [],
         defaultEnv: {},
@@ -1889,8 +1901,7 @@ test("local docker run args include controlled metadata and disable local chat b
       image: {
         id: "img_1",
         name: "Image",
-        image: "task-handoff-web:latest",
-        registry: "local",
+        reference: "task-handoff-web:latest",
         capabilities: [],
         optionalApps: [],
         defaultEnv: {
@@ -1971,8 +1982,7 @@ test("managed Docker updates resolve the selected channel and registry digest", 
       id: "inst_update",
       build: { imageDigest: "sha256:old" },
       imageSnapshot: {
-        image: "ghcr.io/task-handoff/server:stable",
-        registry: "ghcr.io",
+        requestedReference: "ghcr.io/task-handoff/server:stable",
       },
     },
     runCommand: async (command, args) => {
@@ -1986,6 +1996,30 @@ test("managed Docker updates resolve the selected channel and registry digest", 
   assert.equal(checked.currentVersion, "sha256:old");
   assert.equal(checked.availableVersion, "sha256:new");
   assert.equal(checked.updateAvailable, true);
+
+  const multiarch = [
+    { Descriptor: { digest: "sha256:amd64", platform: { architecture: "amd64", os: "linux" } } },
+    { Descriptor: { digest: "sha256:arm64", platform: { architecture: "arm64", os: "linux" } } },
+  ];
+  assert.equal(dockerManifestDigestForArchitecture(multiarch, "x64"), "sha256:amd64");
+  assert.equal(dockerManifestDigestForArchitecture(multiarch, "arm64"), "sha256:arm64");
+  assert.equal(dockerManifestDigestForArchitecture(multiarch, "s390x"), undefined);
+
+  const timestamp = new Date().toISOString();
+  const updatedImage = resolvedDockerImageUpdatePatch({
+    id: "inst_update",
+    imageSnapshot: { requestedReference: "example/app:old", updatedAt: timestamp },
+    imageProvisioning: { phase: "ready", requestedReference: "example/app:old", generation: 4, startedAt: timestamp, updatedAt: timestamp },
+  }, {
+    requestedReference: "example/app:latest",
+    resolvedDigest: `sha256:${"c".repeat(64)}`,
+    resolvedReference: `example/app@sha256:${"c".repeat(64)}`,
+    pulled: false,
+  }, timestamp);
+  assert.equal(updatedImage.imageSnapshot.resolvedDigest, `sha256:${"c".repeat(64)}`);
+  assert.equal(updatedImage.imageSnapshot.resolvedReference, `example/app@sha256:${"c".repeat(64)}`);
+  assert.equal(updatedImage.imageProvisioning.requestedReference, "example/app:latest");
+  assert.equal(updatedImage.imageProvisioning.generation, 5);
 });
 
 test("managed npm updates replace the package behind an aggregate server executable", () => {
@@ -2237,8 +2271,7 @@ test("local docker run args include resolved model environment", () => {
       image: {
         id: "img_1",
         name: "Image",
-        image: "task-handoff-web:latest",
-        registry: "local",
+        reference: "task-handoff-web:latest",
         capabilities: [],
         optionalApps: [],
         defaultEnv: {},
@@ -2315,8 +2348,7 @@ test("local docker run args expose git workspace bootstrap environment", () => {
       image: {
         id: "img_1",
         name: "Image",
-        image: "task-handoff-web:latest",
-        registry: "local",
+        reference: "task-handoff-web:latest",
         capabilities: [],
         optionalApps: [],
         defaultEnv: {},
@@ -2435,8 +2467,8 @@ test("local docker executor checks local images and pulls registry images before
         image: {
           id: "img_1",
           name: "Image",
-          image: "task-handoff-web:local",
-          registry: "local",
+          requestedReference: "task-handoff-web:local",
+          pullPolicy: "if-not-present",
           capabilities: [],
           optionalApps: [],
           defaultEnv: {},
@@ -2445,21 +2477,35 @@ test("local docker executor checks local images and pulls registry images before
           updatedAt: timestamp,
         },
       }),
-    /Docker image task-handoff-web:local was not found/,
+    /missing/,
   );
   assert.deepEqual(localCalls, [
     ["docker", ["start", "task-handoff-inst_1"]],
-    ["docker", ["image", "inspect", "task-handoff-web:local"]],
+    ["docker", ["image", "inspect", "task-handoff-web:local", "--format", "{{json .}}"]],
+    ["docker", ["pull", "task-handoff-web:local"]],
+    ["docker", ["image", "inspect", "task-handoff-web:local", "--format", "{{json .}}"]],
   ]);
 
   const remoteCalls = [];
+  let remotePulled = false;
   const remoteExecutor = new LocalDockerExecutor(async (command, args) => {
     remoteCalls.push([command, args]);
     if (args[0] === "start") {
       throw new Error("missing container");
     }
     if (args[0] === "image" && args[1] === "inspect") {
-      throw new Error("missing");
+      if (!remotePulled) throw new Error("missing");
+      return {
+        stdout: JSON.stringify({
+          Id: `sha256:${"a".repeat(64)}`,
+          RepoDigests: [`ghcr.io/example/task-handoff-web@sha256:${"a".repeat(64)}`],
+        }),
+        stderr: "",
+      };
+    }
+    if (args[0] === "pull") {
+      remotePulled = true;
+      return { stdout: "pulled", stderr: "" };
     }
     if (args[0] === "run") {
       return { stdout: "container-1", stderr: "" };
@@ -2474,8 +2520,8 @@ test("local docker executor checks local images and pulls registry images before
     image: {
       id: "img_2",
       name: "Registry Image",
-      image: "ghcr.io/example/task-handoff-web:latest",
-      registry: "ghcr.io",
+          requestedReference: "ghcr.io/example/task-handoff-web:latest",
+          pullPolicy: "if-not-present",
       capabilities: [],
       optionalApps: [],
       defaultEnv: {},
@@ -2486,15 +2532,49 @@ test("local docker executor checks local images and pulls registry images before
   });
   assert.equal(started.runtime.containerId, "container-1");
   assert.deepEqual(
-    remoteCalls.slice(0, 3),
+    remoteCalls.slice(0, 4),
     [
       ["docker", ["start", "task-handoff-inst_1"]],
-      ["docker", ["image", "inspect", "ghcr.io/example/task-handoff-web:latest"]],
+      ["docker", ["image", "inspect", "ghcr.io/example/task-handoff-web:latest", "--format", "{{json .}}"]],
       ["docker", ["pull", "ghcr.io/example/task-handoff-web:latest"]],
+      ["docker", ["image", "inspect", "ghcr.io/example/task-handoff-web:latest", "--format", "{{json .}}"]],
     ],
   );
   assert.ok(remoteCalls.some(([, args]) => args[0] === "run"));
   assert.equal(remoteCalls.some(([, args]) => args[0] === "rm"), false);
+
+  const resolvedReference = `ghcr.io/example/task-handoff-web@sha256:${"b".repeat(64)}`;
+  const resolvedCalls = [];
+  const resolvedExecutor = new LocalDockerExecutor(async (command, args) => {
+    resolvedCalls.push([command, args]);
+    if (args[0] === "start") throw new Error("missing container");
+    if (args[0] === "image" && args[1] === "inspect") {
+      assert.equal(args[2], resolvedReference);
+      return { stdout: JSON.stringify({ Id: `sha256:${"b".repeat(64)}`, RepoDigests: [resolvedReference] }), stderr: "" };
+    }
+    if (args[0] === "run") return { stdout: "container-resolved", stderr: "" };
+    if (args[0] === "port") return { stdout: "127.0.0.1:18082", stderr: "" };
+    return { stdout: "", stderr: "" };
+  });
+  await resolvedExecutor.start({
+    ...baseContext,
+    image: {
+      id: "img_resolved",
+      name: "Resolved image",
+      requestedReference: "ghcr.io/example/task-handoff-web:latest",
+      resolvedReference,
+      resolvedDigest: `sha256:${"b".repeat(64)}`,
+      pullPolicy: "if-not-present",
+      capabilities: [],
+      optionalApps: [],
+      defaultEnv: {},
+      labels: {},
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    },
+  });
+  assert.equal(resolvedCalls.some(([, args]) => args[0] === "pull"), false);
+  assert.equal(resolvedCalls.find(([, args]) => args[0] === "run")[1].at(-1), resolvedReference);
 
   const existingCalls = [];
   const existingExecutor = new LocalDockerExecutor(async (command, args) => {
@@ -2519,8 +2599,7 @@ test("local docker executor checks local images and pulls registry images before
     image: {
       id: "img_2",
       name: "Registry Image",
-      image: "ghcr.io/example/task-handoff-web:latest",
-      registry: "ghcr.io",
+      requestedReference: "ghcr.io/example/task-handoff-web:latest",
       capabilities: [],
       optionalApps: [],
       defaultEnv: {},
@@ -2559,8 +2638,7 @@ test("local docker executor checks local images and pulls registry images before
     image: {
       id: "img_2",
       name: "Registry Image",
-      image: "ghcr.io/example/task-handoff-web:latest",
-      registry: "ghcr.io",
+      requestedReference: "ghcr.io/example/task-handoff-web:latest",
       capabilities: [],
       optionalApps: [],
       defaultEnv: {},
@@ -2596,6 +2674,9 @@ test("node agent runs local docker behind node-local target and auto-imports age
       calls.push([command, args]);
       if (args[0] === "start") {
         throw new Error("missing container");
+      }
+      if (args[0] === "image" && args[1] === "inspect") {
+        return { stdout: JSON.stringify({ Id: `sha256:${"b".repeat(64)}`, RepoDigests: [`task-handoff-web@sha256:${"b".repeat(64)}`] }), stderr: "" };
       }
       if (args[0] === "run") {
         return { stdout: "container-1", stderr: "" };
@@ -2640,8 +2721,7 @@ test("node agent runs local docker behind node-local target and auto-imports age
       image: {
         id: "img_1",
         name: "Image",
-        image: "task-handoff-web:local",
-        registry: "local",
+        reference: "task-handoff-web:local",
         capabilities: [],
         optionalApps: [],
         defaultEnv: {},
@@ -2660,6 +2740,10 @@ test("node agent runs local docker behind node-local target and auto-imports age
     },
   });
   assert.equal(created.statusCode, 201, JSON.stringify(created.body));
+  await waitForCondition(
+    () => app.nodeAgentState.controlledInstances.get("inst_1")?.status === "created",
+    "image provisioning",
+  );
 
   const response = await app.inject({
     method: "POST",
@@ -2714,6 +2798,9 @@ test("node agent skips start config auto-import when disabled on the instance", 
       if (args[0] === "start") {
         throw new Error("missing container");
       }
+      if (args[0] === "image" && args[1] === "inspect") {
+        return { stdout: JSON.stringify({ Id: `sha256:${"c".repeat(64)}`, RepoDigests: [`task-handoff-web@sha256:${"c".repeat(64)}`] }), stderr: "" };
+      }
       if (args[0] === "run") {
         return { stdout: "container-1", stderr: "" };
       }
@@ -2745,8 +2832,7 @@ test("node agent skips start config auto-import when disabled on the instance", 
       image: {
         id: "img_1",
         name: "Image",
-        image: "task-handoff-web:local",
-        registry: "local",
+        reference: "task-handoff-web:local",
         capabilities: [],
         optionalApps: [],
         defaultEnv: {},
@@ -2765,6 +2851,7 @@ test("node agent skips start config auto-import when disabled on the instance", 
   });
   assert.equal(created.statusCode, 201, JSON.stringify(created.body));
   assert.equal(created.json().data.config.autoImportAgentConfigs, false);
+  await waitForCondition(() => app.nodeAgentState.controlledInstances.get("inst_no_auto_import")?.status === "created", "disabled auto-import image provisioning");
 
   const started = await app.inject({
     method: "POST",
@@ -2785,6 +2872,9 @@ test("node agent config auto-import failure does not fail start", async (t) => {
     dockerCommandRunner: async (_command, args) => {
       if (args[0] === "start") {
         throw new Error("missing container");
+      }
+      if (args[0] === "image" && args[1] === "inspect") {
+        return { stdout: JSON.stringify({ Id: `sha256:${"d".repeat(64)}`, RepoDigests: [`task-handoff-web@sha256:${"d".repeat(64)}`] }), stderr: "" };
       }
       if (args[0] === "run") {
         return { stdout: "container-1", stderr: "" };
@@ -2821,8 +2911,7 @@ test("node agent config auto-import failure does not fail start", async (t) => {
       image: {
         id: "img_1",
         name: "Image",
-        image: "task-handoff-web:local",
-        registry: "local",
+        reference: "task-handoff-web:local",
         capabilities: [],
         optionalApps: [],
         defaultEnv: {},
@@ -2836,6 +2925,7 @@ test("node agent config auto-import failure does not fail start", async (t) => {
       },
     },
   });
+  await waitForCondition(() => app.nodeAgentState.controlledInstances.get("inst_auto_import_fails")?.status === "created", "failed auto-import image provisioning");
 
   const started = await app.inject({
     method: "POST",
@@ -2872,6 +2962,9 @@ test("node agent config auto-import timeout does not hang start", async (t) => {
     dockerCommandRunner: async (_command, args) => {
       if (args[0] === "start") {
         throw new Error("missing container");
+      }
+      if (args[0] === "image" && args[1] === "inspect") {
+        return { stdout: JSON.stringify({ Id: `sha256:${"e".repeat(64)}`, RepoDigests: [`task-handoff-web@sha256:${"e".repeat(64)}`] }), stderr: "" };
       }
       if (args[0] === "run") {
         return { stdout: "container-1", stderr: "" };
@@ -2911,8 +3004,7 @@ test("node agent config auto-import timeout does not hang start", async (t) => {
       image: {
         id: "img_1",
         name: "Image",
-        image: "task-handoff-web:local",
-        registry: "local",
+        reference: "task-handoff-web:local",
         capabilities: [],
         optionalApps: [],
         defaultEnv: {},
@@ -2926,6 +3018,7 @@ test("node agent config auto-import timeout does not hang start", async (t) => {
       },
     },
   });
+  await waitForCondition(() => app.nodeAgentState.controlledInstances.get("inst_auto_import_timeout")?.status === "created", "timed-out auto-import image provisioning");
 
   const started = await withTimeout(
     app.inject({
@@ -4311,8 +4404,7 @@ test("node agent shutdown stops localhost processes while preserving active rest
       image: {
         id: "img_1",
         name: "Image",
-        image: "task-handoff-web:local",
-        registry: "local",
+        reference: "task-handoff-web:local",
         capabilities: [],
         optionalApps: [],
         defaultEnv: {},
@@ -4330,6 +4422,10 @@ test("node agent shutdown stops localhost processes while preserving active rest
     },
   });
   assert.equal(dockerCreated.statusCode, 201);
+  const dockerStatusBeforeShutdown = await waitForCondition(() => {
+    const status = app.nodeAgentState.controlledInstances.get("inst_docker_shutdown")?.status;
+    return status && status !== "provisioning" ? status : undefined;
+  }, "docker image provisioning completion");
 
   const started = await app.inject({
     method: "POST",
@@ -4350,7 +4446,7 @@ test("node agent shutdown stops localhost processes while preserving active rest
   assert.equal(localRecord.status, "registering");
   assert.equal(localRecord.connectionStatus, "offline");
   const dockerRecord = JSON.parse(fs.readFileSync(path.join(dataDir, "controlled-instances", "inst_docker_shutdown.json"), "utf8"));
-  assert.equal(dockerRecord.status, "created");
+  assert.equal(dockerRecord.status, dockerStatusBeforeShutdown);
   assert.equal(dockerRecord.connectionStatus, "unknown");
 });
 
@@ -4663,8 +4759,7 @@ test("node agent rejects incompatible controlled instance protocol versions", as
       image: {
         id: "img_1",
         name: "Image",
-        image: "task-handoff-web:local",
-        registry: "local",
+        reference: "task-handoff-web:local",
         capabilities: [],
         optionalApps: [],
         defaultEnv: {},
@@ -4928,8 +5023,7 @@ test("node agent proxies instance API requests", async (t) => {
       image: {
         id: "img_1",
         name: "Image",
-        image: "task-handoff-web:local",
-        registry: "local",
+        reference: "task-handoff-web:local",
         capabilities: [],
         optionalApps: [],
         defaultEnv: {},
@@ -5029,8 +5123,7 @@ test("node agent proxies direct-port instances through the node-local host", asy
       image: {
         id: "img_1",
         name: "Image",
-        image: "task-handoff-web:local",
-        registry: "local",
+        reference: "task-handoff-web:local",
         capabilities: [],
         optionalApps: [],
         defaultEnv: {},
@@ -5152,8 +5245,7 @@ test("node agent proxies instance websocket subprotocols", async (t) => {
       image: {
         id: "img_1",
         name: "Image",
-        image: "task-handoff-web:local",
-        registry: "local",
+        reference: "task-handoff-web:local",
         capabilities: [],
         optionalApps: [],
         defaultEnv: {},
@@ -6242,9 +6334,12 @@ test("control plane manages projects, instances, register, heartbeat, and board 
   assert.equal(health.body.data.build.component, "control-plane");
   assert.equal(health.body.data.build.protocolVersion, CONTROL_PLANE_PROTOCOL_VERSION);
 
+  const nodeAgentRequestsBeforeStatus = mock.requests.length;
   const status = await json(app, "GET", "/api/control-plane/status");
   assert.equal(status.statusCode, 200);
   assert.equal(status.body.data.build.component, "control-plane");
+  assert.equal("counts" in status.body.data, false);
+  assert.equal(mock.requests.length, nodeAgentRequestsBeforeStatus);
 
   const nodes = await json(app, "GET", "/api/nodes");
   assert.equal(nodes.statusCode, 200);
@@ -6505,6 +6600,122 @@ test("control plane forwards instance config auto-import setting to node agent",
   assert.deepEqual(createRequest.body.config, { autoImportAgentConfigs: false });
 });
 
+test("control plane reports node-scoped image availability and preserves unknown inventory failures", async (t) => {
+  const reference = "huadream/task-handoff-controlled-instance:latest";
+  const availableAgent = createMockNodeAgentFetch({
+    dockerImages: [{
+      repository: "huadream/task-handoff-controlled-instance",
+      tag: "latest",
+      id: "sha256:local",
+      reference,
+      repoDigests: ["huadream/task-handoff-controlled-instance@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+    }],
+  });
+  const missingAgent = createMockNodeAgentFetch({ nodeId: "node_missing", dockerImages: [] });
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-image-availability"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: {
+      fetchImpl: (url, init) => {
+        const host = new URL(String(url)).hostname;
+        if (host === "node-missing.invalid") return missingAgent.fetchImpl(url, init);
+        if (host === "node-offline.invalid") throw new Error("node inventory unavailable");
+        return availableAgent.fetchImpl(url, init);
+      },
+    },
+  });
+  t.after(() => app.close());
+
+  for (const node of [
+    { id: "node_missing", name: "Missing image node", endpoint: "http://node-missing.invalid:8091", connectionMode: "direct-http", keyId: "key_missing", secret: "missing-secret" },
+    { id: "node_offline", name: "Offline node", endpoint: "http://node-offline.invalid:8091", connectionMode: "reverse-wss", keyId: "key_offline", secret: "offline-secret" },
+  ]) {
+    const created = await json(app, "POST", "/api/nodes", {
+      id: node.id,
+      name: node.name,
+      endpoint: node.endpoint,
+      connectionMode: node.connectionMode,
+      auth: { mode: "paired-hmac", keyId: node.keyId, secret: node.secret, pairing: { status: "paired" } },
+    });
+    assert.equal(created.statusCode, 201, JSON.stringify(created.body));
+  }
+
+  const available = await json(app, "GET", "/api/nodes/node_mock/images/catalog");
+  assert.equal(available.statusCode, 200);
+  assert.equal(available.body.data[0].status, "available");
+  assert.equal(available.body.data[0].localImage.reference, reference);
+
+  const missing = await json(app, "GET", "/api/nodes/node_missing/images/catalog");
+  assert.equal(missing.statusCode, 200);
+  assert.equal(missing.body.data[0].status, "pull-required");
+
+  const offline = await json(app, "GET", "/api/nodes/node_offline/images/catalog");
+  assert.equal(offline.statusCode, 200);
+  assert.equal(offline.body.data[0].status, "unknown");
+  assert.ok(offline.body.data[0].error);
+});
+
+test("control plane protects referenced images and keeps instance image snapshots immutable", async (t) => {
+  const mock = createMockNodeAgentFetch({
+    localFolders: [{
+      id: "folder_image_guard",
+      nodeId: "node_mock",
+      name: "Guarded folder",
+      path: "/tmp/guarded-folder",
+      defaultImageId: "img_folder_guard",
+      labels: {},
+      createdAt: "2026-07-16T00:00:00.000Z",
+      updatedAt: "2026-07-16T00:00:00.000Z",
+    }],
+  });
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-image-delete-guards"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: { fetchImpl: mock.fetchImpl },
+  });
+  t.after(() => app.close());
+
+  for (const [id, name] of [
+    ["img_project_guard", "Project guard"],
+    ["img_folder_guard", "Folder guard"],
+    ["img_instance_guard", "Instance guard"],
+    ["img_unused", "Unused"],
+  ]) {
+    const created = await json(app, "POST", "/api/images", { id, name, reference: `docker.io/example/${id}:v1` });
+    assert.equal(created.statusCode, 201);
+  }
+  const project = await json(app, "POST", "/api/projects", {
+    name: "Image guard project",
+    source: { type: "local-folder", path: "/tmp/image-guard" },
+    defaultImageId: "img_project_guard",
+  });
+  assert.equal(project.statusCode, 201);
+  const instance = await json(app, "POST", "/api/controlled-instances", {
+    name: "snapshot-instance",
+    projectId: project.body.data.id,
+    imageId: "img_instance_guard",
+  });
+  assert.equal(instance.statusCode, 201);
+  assert.equal(instance.body.data.imageSnapshot.requestedReference, "docker.io/example/img_instance_guard:v1");
+
+  const updated = await json(app, "PATCH", "/api/images/img_instance_guard", { reference: "docker.io/example/img_instance_guard:v2" });
+  assert.equal(updated.statusCode, 200);
+  const board = await json(app, "GET", "/api/instance-board");
+  assert.equal(board.statusCode, 200);
+  assert.equal(board.body.data.find((item) => item.id === instance.body.data.id).image.requestedReference, "docker.io/example/img_instance_guard:v1");
+
+  for (const id of ["img_project_guard", "img_folder_guard", "img_instance_guard"]) {
+    const guarded = await json(app, "DELETE", `/api/images/${id}`);
+    assert.equal(guarded.statusCode, 409);
+    assert.equal(guarded.body.error.code, "IMAGE_IN_USE");
+  }
+  const removed = await json(app, "DELETE", "/api/images/img_unused");
+  assert.equal(removed.statusCode, 200);
+  assert.equal(removed.body.data.deleted, true);
+});
+
 test("control plane rejects unknown management request fields", async (t) => {
   const app = await createControlPlaneApp({
     dataDir: tempDataDir("control-plane-unknown-management-fields"),
@@ -6551,14 +6762,14 @@ test("control plane rejects unknown management request fields", async (t) => {
 
   const image = await json(app, "POST", "/api/images", {
     name: "Unknown Image",
-    image: "task-handoff-unknown:latest",
+    reference: "task-handoff-unknown:latest",
     defaultRuntimeTargetId: "ignored",
   });
   assert.equal(image.statusCode, 400);
 
   const cleanImage = await json(app, "POST", "/api/images", {
     name: "Unknown Image",
-    image: "task-handoff-unknown:latest",
+    reference: "task-handoff-unknown:latest",
   });
   assert.equal(cleanImage.statusCode, 201);
 
@@ -8744,6 +8955,8 @@ test("control plane telegram bridge renders ai session buttons and handles selec
 
 test("control plane telegram bridge deletes standalone approval cards after decisions", async () => {
   const calls = [];
+  const routeId = "inst_1:ai:ais_1";
+  const callbackData = new ChatActionTokenService().pendingDecisionCallbackData(routeId, "allow");
   const bridge = {
     id: "chat_telegram_standalone_approval",
     channel: "telegram",
@@ -8762,16 +8975,12 @@ test("control plane telegram bridge deletes standalone approval cards after deci
     updateChatBridge: (_id, input) => {
       calls.push({ type: "update", input });
     },
-    resolveChatActionToken: () => ({
-      type: "pending-decision",
-      routeId: "task_1",
-      decision: "allow",
-    }),
+    resolveChatActionToken: () => { throw new Error("stable pending callbacks must not use the expiring token store"); },
     handleChatGatewayAction: async (input) => {
       calls.push({ type: "action", input });
       return { accepted: true, message: "allow sent" };
     },
-    listPendingRoutes: async () => [],
+    listPendingRoutes: async () => [{ id: routeId, kind: "approval", status: "pending" }],
   };
   const runtime = new ControlPlaneChatGatewayRuntime(service, async (url, init = {}) => {
     calls.push({
@@ -8786,7 +8995,7 @@ test("control plane telegram bridge deletes standalone approval cards after deci
           update_id: 1,
           callback_query: {
             id: "callback-approval",
-            data: "task_handoff:cp_p:allow_token",
+            data: callbackData,
             from: { id: 456 },
             message: {
               message_id: 20,
@@ -8813,7 +9022,7 @@ test("control plane telegram bridge deletes standalone approval cards after deci
   const approvalAction = calls.find((call) => call.type === "action");
   assert.deepEqual(approvalAction.input.action, {
     type: "pending-decision",
-    routeId: "task_1",
+    routeId,
     decision: "allow",
   });
   const approvalAnswer = calls.filter((call) => call.type === "fetch" && call.url.includes("answerCallbackQuery")).at(-1);
@@ -8822,6 +9031,66 @@ test("control plane telegram bridge deletes standalone approval cards after deci
   assert.equal(deleteMessage.body.chat_id, "123");
   assert.equal(deleteMessage.body.message_id, 20);
   assert.equal(calls.some((call) => call.type === "fetch" && call.url.includes("editMessageText")), false);
+});
+
+test("control plane telegram bridge rejects approval buttons after the route stops pending", async () => {
+  const calls = [];
+  const callbackData = new ChatActionTokenService().pendingDecisionCallbackData("inst_1:ai:ais_finished", "deny");
+  const bridge = {
+    id: "chat_telegram_stale_approval",
+    channel: "telegram",
+    name: "Telegram",
+    enabled: true,
+    token: "telegram-token",
+    tokenSet: true,
+    defaultChatId: "123",
+    allowedUserIds: ["456"],
+    pollIntervalMs: 30000,
+    settings: {},
+  };
+  const runtime = new ControlPlaneChatGatewayRuntime({
+    listChatBridges: () => [bridge],
+    requireChatBridge: () => bridge,
+    updateChatBridge: () => {},
+    listPendingRoutes: async () => [],
+    resolveChatActionToken: () => { throw new Error("stable pending callbacks must not use the expiring token store"); },
+    handleChatGatewayAction: async (input) => {
+      calls.push({ type: "action", input });
+      return { accepted: true };
+    },
+  }, async (url, init = {}) => {
+    calls.push({
+      type: "fetch",
+      url: String(url),
+      body: init.body ? JSON.parse(init.body) : undefined,
+    });
+    if (String(url).includes("getUpdates")) {
+      return new Response(JSON.stringify({
+        ok: true,
+        result: [{
+          update_id: 1,
+          callback_query: {
+            id: "callback-stale-approval",
+            data: callbackData,
+            from: { id: 456 },
+            message: { message_id: 21, chat: { id: 123 } },
+          },
+        }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return new Response(JSON.stringify({ ok: true, result: {} }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  });
+
+  await runtime.pollBridgeNow(bridge.id);
+
+  assert.equal(calls.some((call) => call.type === "action"), false);
+  assert.equal(calls.some((call) => call.type === "fetch" && call.url.includes("sendMessage")), false);
+  const answer = calls.find((call) => call.type === "fetch" && call.url.includes("answerCallbackQuery"));
+  assert.equal(answer.body.text, "This approval is no longer pending.");
+  assert.equal(calls.some((call) => call.type === "fetch" && call.url.includes("deleteMessage")), true);
 });
 
 test("control plane telegram bridge appends downloaded image paths to messages", async () => {
@@ -12510,9 +12779,39 @@ test("invalid dingding bridge does not start pending polling", () => {
   }, fetch);
   const status = runtime.startBridge(bridge.id);
   assert.equal(status.bridges[0].running, false);
-  assert.equal(runtime.pendingTimer, undefined);
   runtime.startEnabled();
-  assert.equal(runtime.pendingTimer, undefined);
+  runtime.stopAll();
+});
+
+test("enabled chat bridges rely on AI session snapshot events instead of pending-route polling", () => {
+  const bridge = {
+    id: "chat_telegram_events",
+    channel: "telegram",
+    name: "Telegram Events",
+    enabled: true,
+    token: "telegram-token",
+    tokenSet: true,
+    defaultChatId: "chat-1",
+    allowedUserIds: [],
+    pollIntervalMs: 30000,
+    settings: {},
+  };
+  let pendingRouteReads = 0;
+  const runtime = new ControlPlaneChatGatewayRuntime({
+    listChatBridges: () => [bridge],
+    requireChatBridge: () => bridge,
+    listPendingRoutes: async () => {
+      pendingRouteReads += 1;
+      return [];
+    },
+  }, async () => new Response(JSON.stringify({ ok: true, result: [] }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  }));
+
+  runtime.startEnabled();
+  assert.equal(runtime.status().bridges[0].running, true);
+  assert.equal(pendingRouteReads, 0);
   runtime.stopAll();
 });
 
@@ -13006,7 +13305,7 @@ test("control plane aggregates ai session pending routes and proxies ai session 
   const pendingCallbackData = pendingCommand.body.data.replyMarkup.inline_keyboard.map((row) => row[0].callback_data);
   assert.equal(pendingCallbackData.length, 3);
   for (const callbackData of pendingCallbackData) {
-    assert.match(callbackData, /^task_handoff:cp_p:[A-Za-z0-9_-]+$/);
+    assert.match(callbackData, /^task_handoff:cp_p:v1:[ads]:[A-Za-z0-9_-]{16}$/);
     assert.ok(Buffer.byteLength(callbackData, "utf8") <= 64);
   }
 

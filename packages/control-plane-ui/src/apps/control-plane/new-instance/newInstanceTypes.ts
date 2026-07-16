@@ -30,5 +30,5 @@ export type NewProjectDraft = {
 
 export type NewImageDraft = {
   name: string;
-  image: string;
+  reference: string;
 };

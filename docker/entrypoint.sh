@@ -3,8 +3,6 @@ set -euo pipefail
 
 mkdir -p \
   "${TASK_HANDOFF_DATA_DIR:-/data/task-handoff}" \
-  "${TASK_HANDOFF_CHANNELS_DIR:-/data/task-handoff/channels}" \
-  "${TASK_HANDOFF_CONVERSATIONS_DIR:-/data/task-handoff/conversations}" \
   "${TASK_HANDOFF_APP_CATALOG_DIR:-/data/task-handoff/app-catalog}" \
   "${TASK_HANDOFF_APP_SESSION_DIR:-/data/task-handoff/app-sessions}" \
   "${TASK_HANDOFF_RUNTIME_DIR:-/data/task-handoff/runtime}" \

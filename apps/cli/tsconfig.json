@@ -8,9 +8,7 @@
     "../../packages/core/src/**/*",
     "../../packages/protocol/src/**/*",
     "../../packages/control-plane/src/**/*",
-    "../../packages/receiver-worker/src/**/*",
     "../../packages/controlled-instance/src/**/*",
-    "../../packages/app-runtime/src/**/*",
-    "../../packages/terminal-ui/src/**/*"
+    "../../packages/app-runtime/src/**/*"
   ]
 }

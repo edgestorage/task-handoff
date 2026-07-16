@@ -17,6 +17,29 @@ function sourceTree(relativeDirectory) {
   });
 }
 
+test("legacy receiver CLI and package are removed", () => {
+  assert.equal(fs.existsSync(path.join(root, "packages/receiver-worker")), false);
+  assert.equal(fs.existsSync(path.join(root, "packages/protocol/src/sender.ts")), false);
+  assert.equal(fs.existsSync(path.join(root, "apps/cli/src/mcp")), false);
+  assert.equal(fs.existsSync(path.join(root, "apps/cli/src/hooks")), false);
+  assert.equal(fs.existsSync(path.join(root, "bin/result-ipc.js")), false);
+  assert.equal(fs.existsSync(path.join(root, "packages/terminal-ui/package.json")), false);
+  assert.equal(fs.existsSync(path.join(root, "packages/terminal-ui/src/index.ts")), false);
+
+  const rootManifest = JSON.parse(read("package.json"));
+  const cliManifest = JSON.parse(read("apps/cli/package.json"));
+  const cliSource = read("apps/cli/src/index.ts");
+  const rollupSource = read("rollup.config.mjs");
+  const lockfile = read("pnpm-lock.yaml");
+
+  assert.deepEqual(rootManifest.bin, { "task-handoff": "bin/task-handoff.js" });
+  assert.equal(cliManifest.dependencies?.["@task-handoff/receiver-worker"], undefined);
+  assert.equal(cliManifest.dependencies?.["@task-handoff/terminal-ui"], undefined);
+  assert.doesNotMatch(cliSource, /\.command\("(?:receiver|send|mcp|codex-approval-hook|claude-approval-hook)"\)/);
+  assert.doesNotMatch(rollupSource, /receiver-worker|receiver-ink|protocol\/src\/sender|apps\/cli\/src\/(?:mcp|hooks)/);
+  assert.doesNotMatch(lockfile, /receiver-worker|ink-text-input|react-ink-textarea/);
+});
+
 test("controlled instance runtime and image have no chat runtime dependency", async () => {
   const controlledManifest = JSON.parse(read("packages/controlled-instance/package.json"));
   const imageManifest = JSON.parse(read("apps/controlled-instance-image/package.json"));
@@ -57,6 +80,6 @@ test("controlled instance UI has no chat administration routes or API clients", 
 
 test("node-agent subscribes only to instance and authoritative session topics", () => {
   const forwarder = read("packages/control-plane/src/node-agent/events.ts");
-  assert.match(forwarder, /topics:\s*\[AiSessionEventTopic,\s*"app\.sessions",\s*"instances"\]/);
+  assert.match(forwarder, /topics:\s*\[AiSessionEventTopic,\s*"app\.sessions",\s*"apps",\s*"instances"\]/);
   assert.doesNotMatch(forwarder, /topics:\s*\[[^\]]*"receiver"/);
 });

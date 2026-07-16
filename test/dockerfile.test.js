@@ -34,6 +34,23 @@ test("Docker build context includes files read by the test suite", () => {
   assert.ok(!ignoredEntries.includes(".github"), ".github workflows are required by release workflow tests");
 });
 
+test("Docker CI builds amd64 and arm64 concurrently and publishes a multi-architecture image", () => {
+  const workflow = fs.readFileSync(path.join(root, ".github", "workflows", "docker.yml"), "utf8");
+
+  assert.match(workflow, /strategy:\n\s+fail-fast: false\n\s+matrix:/);
+  assert.match(workflow, /runs-on: \$\{\{ matrix\.runner \}\}/);
+  assert.match(workflow, /arch: amd64\n\s+platform: linux\/amd64\n\s+runner: ubuntu-latest/);
+  assert.match(workflow, /arch: arm64\n\s+platform: linux\/arm64\n\s+runner: ubuntu-24\.04-arm/);
+  assert.doesNotMatch(workflow, /docker\/setup-qemu-action/);
+  assert.match(workflow, /scope=controlled-instance-\$\{\{ matrix\.arch \}\}/);
+  assert.match(workflow, /sha_tag="sha-\$\{GITHUB_SHA::7\}-\$\{\{ matrix\.arch \}\}"/);
+  assert.match(workflow, /"\$\{image\}:\$\{sha_tag\}-amd64"/);
+  assert.match(workflow, /"\$\{image\}:\$\{sha_tag\}-arm64"/);
+  assert.match(workflow, /Publish immutable commit image\n\s+if: \$\{\{ github\.ref == 'refs\/heads\/main' \|\| startsWith\(github\.ref, 'refs\/tags\/v'\) \}\}/);
+  assert.match(workflow, /promote-release:\n\s+if:.*refs\/tags\/v.*\n\s+needs: publish-multiarch-image/);
+  assert.doesNotMatch(workflow, /Immutable source image was not published within/);
+});
+
 test("Docker fetches the Web Cap skill from its versioned upstream source", () => {
   const dockerfile = fs.readFileSync(path.join(root, "Dockerfile"), "utf8");
 

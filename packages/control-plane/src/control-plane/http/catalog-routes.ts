@@ -99,7 +99,7 @@ export function registerCatalogRoutes({ app, service, events }: RegisterCatalogR
   });
   app.delete("/api/images/:id", async (request) => {
     const id = IdParamsSchema.parse(request.params).id;
-    const deleted = service.deleteImage(id);
+    const deleted = await service.deleteImage(id);
     events.publish("image.deleted", { imageId: id, deleted });
     return { data: { deleted } };
   });

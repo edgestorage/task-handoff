@@ -29,14 +29,6 @@ export type ControlPlaneStatusResponse = {
   protocolVersion: string;
   build?: BuildInfo;
   storage: Record<string, string>;
-  counts: {
-    projects: number;
-    models?: number;
-    images: number;
-    nodes: number;
-    nodeRuntimes: number;
-    controlledInstances: number;
-  };
 };
 
 export type ControlPlaneSettings = {
@@ -175,8 +167,8 @@ export type FederatedModelRegistry = {
 export type ImageProfile = {
   id: string;
   name: string;
-  image: string;
-  registry: string;
+  reference: string;
+  pullPolicy: "if-not-present";
   capabilities: string[];
   optionalApps: string[];
   defaultEnv: Record<string, string>;
@@ -192,6 +184,29 @@ export type LocalDockerImage = {
   createdSince?: string;
   size?: string;
   reference: string;
+  repoDigests: string[];
+};
+
+export type NodeImageAvailability = {
+  image: ImageProfile;
+  status: "available" | "pull-required" | "unknown";
+  localImage?: LocalDockerImage;
+  error?: string;
+};
+
+export type InstanceImageSnapshot = Omit<ImageProfile, "reference"> & {
+  requestedReference: string;
+  resolvedDigest?: string;
+  resolvedReference?: string;
+};
+
+export type ImageProvisioning = {
+  phase: "checking-image" | "pulling-image" | "resolving-image" | "ready" | "failed";
+  requestedReference: string;
+  generation: number;
+  error?: string;
+  startedAt: string;
+  updatedAt: string;
 };
 
 export type Node = {
@@ -387,7 +402,8 @@ export type ControlledInstance = {
   nodeId: string;
   runtimeId: string;
   imageId?: string;
-  imageSnapshot?: ImageProfile;
+  imageSnapshot?: InstanceImageSnapshot;
+  imageProvisioning?: ImageProvisioning;
   status: "created" | "provisioning" | "starting" | "registering" | "registered" | "running" | "stopping" | "stopped" | "failed" | "unhealthy";
   health: "unknown" | "ok" | "degraded" | "failed";
   connectionStatus: "unknown" | "online" | "offline" | "endpoint-unreachable";
@@ -441,6 +457,16 @@ export type ModelSelection = {
   codexModelHash?: string | null;
   claudeModelHash?: string | null;
 };
+
+export type {
+  AppManagementError,
+  AppManagementEvent,
+  AppManagementJob,
+  AppManagementJobResponse,
+  AppManagementOperation,
+  AppManagementSnapshot,
+  ManagedAppProjection,
+} from "@task-handoff/protocol/control-plane";
 
 export type TriggerSource =
   | { type: "schedule"; scheduleKind?: "interval"; intervalMs: number }
@@ -662,7 +688,6 @@ export type AiSessionSummary = {
     approval?: boolean;
   };
   activeTurnId?: string;
-  conversationId?: number;
   title?: string;
   cwd?: string;
   userPrompt?: string;
@@ -841,7 +866,7 @@ export type InstanceBoardItem = Omit<ControlledInstance, "aiSessions"> & {
   aiSessions: InstanceBoardAiSummary;
   heartbeatAgeMs?: number;
   project?: Project;
-  image?: ImageProfile;
+  image?: ImageProfile | InstanceImageSnapshot;
   node?: Node;
   runtime?: NodeRuntime;
   protocolCompatible: boolean;
@@ -903,8 +928,8 @@ export type UpdateProjectInput = Partial<CreateProjectInput>;
 
 export type CreateImageInput = {
   name: string;
-  image: string;
-  registry?: string;
+  reference: string;
+  pullPolicy?: "if-not-present";
   capabilities?: string[];
   optionalApps?: string[];
   defaultEnv?: Record<string, string>;

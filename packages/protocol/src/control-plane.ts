@@ -18,6 +18,63 @@ const TimestampSchema = z.string().datetime();
 const LabelsSchema = z.record(z.string(), z.string()).default({});
 const StringRecordSchema = z.record(z.string(), z.string()).default({});
 
+const DockerTagPattern = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/;
+const DockerDigestPattern = /^sha256:([a-fA-F0-9]{64})$/;
+const DockerRegistryPattern = /^(?:localhost|[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)(?::[1-9][0-9]{0,4})?$/;
+const DockerRepositoryComponentPattern = /^[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*$/;
+
+export function normalizeDockerImageReference(input: string) {
+  const value = input.trim();
+  if (!value || value.length > 512 || value.includes("://") || /\s/.test(value)) {
+    throw new Error("Docker image reference must not contain a URL scheme or whitespace.");
+  }
+  const at = value.indexOf("@");
+  if (at !== -1 && at !== value.lastIndexOf("@")) throw new Error("Docker image reference contains more than one digest separator.");
+  const digestInput = at === -1 ? undefined : value.slice(at + 1);
+  const base = at === -1 ? value : value.slice(0, at);
+  const digestMatch = digestInput ? DockerDigestPattern.exec(digestInput) : undefined;
+  if (digestInput && !digestMatch) throw new Error("Docker image digest must use sha256 followed by 64 hexadecimal characters.");
+
+  const lastSlash = base.lastIndexOf("/");
+  const lastColon = base.lastIndexOf(":");
+  const hasTag = lastColon > lastSlash;
+  const tag = hasTag ? base.slice(lastColon + 1) : undefined;
+  const name = hasTag ? base.slice(0, lastColon) : base;
+  if (tag && !DockerTagPattern.test(tag)) throw new Error("Docker image tag is invalid.");
+  if (!tag && !digestMatch) throw new Error("Docker image reference must include an explicit tag or sha256 digest.");
+
+  const parts = name.split("/");
+  if (!parts.length || parts.some((part) => !part)) throw new Error("Docker image repository path is invalid.");
+  const hasRegistry = parts.length > 1 && (parts[0].includes(".") || parts[0].includes(":") || parts[0] === "localhost");
+  const repositoryParts = hasRegistry ? parts.slice(1) : parts;
+  if (hasRegistry && !DockerRegistryPattern.test(parts[0].toLowerCase())) throw new Error("Docker image registry host or port is invalid.");
+  if (!repositoryParts.length || repositoryParts.some((part) => !DockerRepositoryComponentPattern.test(part))) {
+    throw new Error("Docker image repository names must be lowercase and use valid separators.");
+  }
+
+  const normalizedName = parts.map((part, index) => hasRegistry && index === 0 ? part.toLowerCase() : part).join("/");
+  const normalizedDigest = digestMatch ? `sha256:${digestMatch[1].toLowerCase()}` : undefined;
+  return `${normalizedName}${tag ? `:${tag}` : ""}${normalizedDigest ? `@${normalizedDigest}` : ""}`;
+}
+
+export const DockerImageReferenceSchema = z.string().trim().min(1).max(512).transform((value, context) => {
+  try {
+    return normalizeDockerImageReference(value);
+  } catch (error) {
+    context.addIssue({ code: "custom", message: error instanceof Error ? error.message : String(error) });
+    return z.NEVER;
+  }
+});
+
+export const DockerImageDigestSchema = z.string().trim().transform((value, context) => {
+  const match = DockerDigestPattern.exec(value);
+  if (!match) {
+    context.addIssue({ code: "custom", message: "Docker image digest must use sha256 followed by 64 hexadecimal characters." });
+    return z.NEVER;
+  }
+  return `sha256:${match[1].toLowerCase()}`;
+});
+
 // Omitted uses the enabled global default, null disables managed model binding,
 // and a hash pins the instance to that model.
 export const ModelSelectionSchema = z
@@ -60,6 +117,99 @@ export const InstanceAppInventorySchema = z
     issues: z.array(InstanceAppInventoryIssueSchema).max(32).default([]),
   })
   .strict();
+
+export const FinalComputerPlatformSchema = z.enum(["linux", "darwin", "win32", "freebsd", "openbsd", "aix", "sunos", "unknown"]);
+export const FinalComputerArchSchema = z.enum(["x64", "arm64", "arm", "ia32", "ppc64", "s390x", "riscv64", "unknown"]);
+export const AppInstallerSchema = z.enum(["apt", "dnf", "brew"]);
+export const AppInstallPrivilegeSchema = z.enum(["user", "passwordless-sudo", "root"]);
+export const FinalComputerCapabilitiesSchema = z.object({
+  platform: FinalComputerPlatformSchema,
+  arch: FinalComputerArchSchema,
+  installers: z.array(AppInstallerSchema).max(8),
+  privilege: AppInstallPrivilegeSchema,
+}).strict();
+
+export const ManagedAppStateSchema = z.enum(["installed", "not-installed", "broken", "unsupported"]);
+export const ManagedAppActionReasonSchema = z.object({
+  code: z.enum(["BUNDLED", "ALREADY_INSTALLED", "NOT_INSTALLED", "UNSUPPORTED_PLATFORM", "INSTALLER_UNAVAILABLE", "INSUFFICIENT_PRIVILEGE", "OPERATION_IN_PROGRESS"]),
+  message: z.string().trim().min(1).max(500),
+}).strict();
+export const ManagedAppProjectionSchema = z.object({
+  id: IdSchema,
+  name: z.string().trim().min(1).max(120),
+  kind: z.enum(["tty", "gui", "web"]),
+  description: z.string().trim().max(500).optional(),
+  state: ManagedAppStateSchema,
+  version: z.string().trim().max(120).optional(),
+  canInstall: z.boolean(),
+  canUninstall: z.boolean(),
+  installReason: ManagedAppActionReasonSchema.optional(),
+  uninstallReason: ManagedAppActionReasonSchema.optional(),
+  activeJobId: IdSchema.optional(),
+}).strict();
+
+export const AppManagementOperationSchema = z.enum(["install", "uninstall"]);
+export const AppManagementJobStateSchema = z.enum(["queued", "running", "succeeded", "failed", "cancelled", "interrupted"]);
+export const AppManagementProgressSchema = z.object({
+  current: z.number().finite().nonnegative().optional(),
+  total: z.number().finite().positive().optional(),
+  unit: z.string().trim().min(1).max(40).optional(),
+}).strict().refine((value) => value.total === undefined || value.current === undefined || value.current <= value.total, {
+  message: "Progress current must not exceed total.",
+  path: ["current"],
+});
+export const AppManagementCommandSchema = z.object({
+  executable: z.string().trim().min(1).max(4096),
+  args: z.array(z.string().max(4096)).max(128),
+}).strict();
+export const AppManagementErrorSchema = z.object({
+  code: z.string().trim().min(1).max(120).regex(/^[a-z0-9][a-z0-9._-]*$/),
+  message: z.string().trim().min(1).max(4096),
+  retryable: z.boolean(),
+  sessionIds: z.array(IdSchema).max(64).optional(),
+}).strict();
+export const AppManagementJobSchema = z.object({
+  id: IdSchema,
+  requestId: IdSchema.optional(),
+  appId: IdSchema,
+  operation: AppManagementOperationSchema,
+  state: AppManagementJobStateSchema,
+  phase: z.string().trim().min(1).max(120).optional(),
+  progress: AppManagementProgressSchema.optional(),
+  command: AppManagementCommandSchema.optional(),
+  logTail: z.string().max(32768).optional(),
+  logTruncated: z.boolean().optional(),
+  error: AppManagementErrorSchema.optional(),
+  requestedAt: TimestampSchema,
+  startedAt: TimestampSchema.optional(),
+  finishedAt: TimestampSchema.optional(),
+  updatedAt: TimestampSchema,
+}).strict();
+export const AppManagementSnapshotSchema = z.object({
+  streamId: IdSchema,
+  sequence: z.number().int().nonnegative(),
+  capabilities: FinalComputerCapabilitiesSchema,
+  apps: z.array(ManagedAppProjectionSchema).max(256),
+  activeJobs: z.array(AppManagementJobSchema).max(256),
+  recentJobs: z.array(AppManagementJobSchema).max(256),
+  observedAt: TimestampSchema,
+}).strict();
+export const AppManagementOperationRequestSchema = z.object({
+  requestId: IdSchema.optional(),
+}).strict();
+export const AppManagementJobResponseSchema = z.object({
+  job: AppManagementJobSchema,
+}).strict();
+export const AppManagementEventSchema = z.object({
+  type: z.literal("app-management"),
+  streamId: IdSchema,
+  sequence: z.number().int().nonnegative(),
+  observedAt: TimestampSchema,
+  job: AppManagementJobSchema.optional(),
+  snapshot: AppManagementSnapshotSchema.optional(),
+}).strict().refine((value) => value.job !== undefined || value.snapshot !== undefined, {
+  message: "An app management event requires a job or snapshot.",
+});
 
 export const BuildInfoSchema = z
   .object({
@@ -325,8 +475,8 @@ export const ImageProfileSchema = z
   .object({
     id: IdSchema,
     name: z.string().trim().min(1).max(160),
-    image: z.string().trim().min(1).max(512),
-    registry: z.string().trim().min(1).max(160).default("local"),
+    reference: DockerImageReferenceSchema,
+    pullPolicy: z.literal("if-not-present").default("if-not-present"),
     capabilities: z.array(z.string().trim().min(1).max(80)).default([]),
     optionalApps: z.array(z.string().trim().min(1).max(120)).default([]),
     defaultEnv: StringRecordSchema,
@@ -335,6 +485,81 @@ export const ImageProfileSchema = z
     updatedAt: TimestampSchema,
   })
   .strict();
+
+export const InstanceImageSnapshotSchema = ImageProfileSchema.omit({ reference: true }).extend({
+  requestedReference: DockerImageReferenceSchema,
+  resolvedDigest: DockerImageDigestSchema.optional(),
+  resolvedReference: DockerImageReferenceSchema.optional(),
+}).strict();
+
+export const ImageProvisioningSchema = z.object({
+  phase: z.enum(["checking-image", "pulling-image", "resolving-image", "ready", "failed"]),
+  requestedReference: DockerImageReferenceSchema,
+  generation: z.number().int().nonnegative().default(0),
+  error: z.string().trim().max(4096).optional(),
+  startedAt: TimestampSchema,
+  updatedAt: TimestampSchema,
+}).strict();
+
+export function sanitizeStoredImageProfile(
+  input: unknown,
+  onWarning?: (warning: { imageId?: string; field: string }) => void,
+) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+  const source = input as Record<string, unknown>;
+  const imageId = typeof source.id === "string" ? source.id : undefined;
+  const legacyReference = typeof source.image === "string" ? source.image : undefined;
+  if (legacyReference !== undefined) onWarning?.({ imageId, field: "image" });
+  if (Object.prototype.hasOwnProperty.call(source, "registry")) onWarning?.({ imageId, field: "registry" });
+  let reference = typeof source.reference === "string" ? source.reference : legacyReference;
+  if (reference) {
+    try {
+      reference = normalizeDockerImageReference(reference);
+    } catch {
+      if (!reference.includes("@") && reference.lastIndexOf(":") <= reference.lastIndexOf("/")) {
+        try {
+          reference = normalizeDockerImageReference(`${reference}:latest`);
+          onWarning?.({ imageId, field: "reference:implicit-latest" });
+        } catch {
+          // Leave invalid historical values for record-level schema isolation.
+        }
+      }
+    }
+  }
+  return {
+    id: source.id,
+    name: source.name,
+    reference,
+    pullPolicy: source.pullPolicy ?? "if-not-present",
+    capabilities: source.capabilities,
+    optionalApps: source.optionalApps,
+    defaultEnv: source.defaultEnv,
+    labels: source.labels,
+    createdAt: source.createdAt,
+    updatedAt: source.updatedAt,
+  };
+}
+
+function sanitizeStoredInstanceImageSnapshot(
+  input: unknown,
+  imageId: unknown,
+  onWarning?: (warning: { instanceId?: string; field: string }) => void,
+  instanceId?: string,
+) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+  const source = input as Record<string, unknown>;
+  const sanitizedProfile = sanitizeStoredImageProfile(source) as Record<string, unknown>;
+  const { reference: profileReference, ...profile } = sanitizedProfile;
+  const requestedReference = source.requestedReference ?? profileReference;
+  if (source.image !== undefined || source.reference !== undefined) onWarning?.({ instanceId, field: "imageSnapshot.reference" });
+  return {
+    ...profile,
+    id: source.id ?? imageId,
+    requestedReference,
+    resolvedDigest: source.resolvedDigest,
+    resolvedReference: source.resolvedReference,
+  };
+}
 
 export const NodeSchema = z
   .object({
@@ -467,8 +692,16 @@ export const LocalDockerImageSchema = z
     createdSince: z.string().trim().optional(),
     size: z.string().trim().optional(),
     reference: z.string().trim().min(1),
+    repoDigests: z.array(z.string().trim().min(1).max(512)).default([]),
   })
   .passthrough();
+
+export const NodeImageAvailabilitySchema = z.object({
+  image: ImageProfileSchema,
+  status: z.enum(["available", "pull-required", "unknown"]),
+  localImage: LocalDockerImageSchema.optional(),
+  error: z.string().trim().max(2048).optional(),
+}).strict();
 
 export type NodeFolderTreeEntry = {
   name: string;
@@ -536,7 +769,8 @@ export const ControlledInstanceSchema = z
     nodeId: IdSchema,
     runtimeId: IdSchema,
     imageId: IdSchema.optional(),
-    imageSnapshot: ImageProfileSchema.optional(),
+    imageSnapshot: InstanceImageSnapshotSchema.optional(),
+    imageProvisioning: ImageProvisioningSchema.optional(),
     status: z.enum(["created", "provisioning", "starting", "registering", "registered", "running", "stopping", "stopped", "failed", "unhealthy"]).default("created"),
     health: z.enum(["unknown", "ok", "degraded", "failed"]).default("unknown"),
     connectionStatus: z.enum(["unknown", "online", "offline", "endpoint-unreachable"]).default("unknown"),
@@ -624,16 +858,17 @@ export function sanitizeStoredControlledInstance(
     return input;
   }
   const source = input as Record<string, unknown>;
-  if (Object.prototype.hasOwnProperty.call(source, "receiver")) {
-    onWarning?.({
-      instanceId: typeof source.id === "string" ? source.id : undefined,
-      field: "receiver",
-    });
-  }
   const knownTopLevelKeys = new Set(Object.keys(ControlledInstanceSchema.shape));
   const next: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(source)) {
-    if (knownTopLevelKeys.has(key)) next[key] = value;
+    if (knownTopLevelKeys.has(key)) {
+      next[key] = value;
+    } else {
+      onWarning?.({
+        instanceId: typeof source.id === "string" ? source.id : undefined,
+        field: key,
+      });
+    }
   }
   if (source.capabilities && typeof source.capabilities === "object" && !Array.isArray(source.capabilities)) {
     const capabilities = { ...(source.capabilities as Record<string, unknown>) };
@@ -650,6 +885,13 @@ export function sanitizeStoredControlledInstance(
   next.apps = pickObjectFields(source.apps, ["runningCount", "problemCount", "updatedAt", "revision"]);
   next.config = pickObjectFields(source.config, ["autoImportAgentConfigs"]);
   next.modelSelection = pickObjectFields(source.modelSelection, ["codexModelHash", "claudeModelHash"]);
+  next.imageSnapshot = sanitizeStoredInstanceImageSnapshot(
+    source.imageSnapshot,
+    source.imageId,
+    onWarning,
+    typeof source.id === "string" ? source.id : undefined,
+  );
+  next.imageProvisioning = pickObjectFields(source.imageProvisioning, ["phase", "requestedReference", "generation", "error", "startedAt", "updatedAt"]);
   next.runtime = pickObjectFields(source.runtime, ["kind", "containerName", "containerId", "workspacePath", "pid", "port", "labels"]);
   next.target = pickObjectFields(source.target ?? source.endpoints, ["strategy", "web", "api", "status"]);
   next.access = pickObjectFields(source.access, ["strategy", "web", "api", "ws", "status"]);
@@ -832,6 +1074,9 @@ export type ModelLocation = z.infer<typeof ModelLocationSchema>;
 export type FederatedModelGroup = z.infer<typeof FederatedModelGroupSchema>;
 export type FederatedModelRegistry = z.infer<typeof FederatedModelRegistrySchema>;
 export type ImageProfile = z.infer<typeof ImageProfileSchema>;
+export type InstanceImageSnapshot = z.infer<typeof InstanceImageSnapshotSchema>;
+export type ImageProvisioning = z.infer<typeof ImageProvisioningSchema>;
+export type NodeImageAvailability = z.infer<typeof NodeImageAvailabilitySchema>;
 export type Node = z.infer<typeof NodeSchema>;
 export type NodeRuntime = z.infer<typeof NodeRuntimeSchema>;
 export type NodeAgentHealth = z.infer<typeof NodeAgentHealthSchema>;
@@ -853,6 +1098,23 @@ export type UpdateJob = z.infer<typeof UpdateJobSchema>;
 export type ControlledInstance = z.infer<typeof ControlledInstanceSchema>;
 export type InstanceAppInventory = z.infer<typeof InstanceAppInventorySchema>;
 export type InstanceAppInventoryItem = z.infer<typeof InstanceAppInventoryItemSchema>;
+export type FinalComputerPlatform = z.infer<typeof FinalComputerPlatformSchema>;
+export type FinalComputerArch = z.infer<typeof FinalComputerArchSchema>;
+export type AppInstaller = z.infer<typeof AppInstallerSchema>;
+export type AppInstallPrivilege = z.infer<typeof AppInstallPrivilegeSchema>;
+export type FinalComputerCapabilities = z.infer<typeof FinalComputerCapabilitiesSchema>;
+export type ManagedAppState = z.infer<typeof ManagedAppStateSchema>;
+export type ManagedAppActionReason = z.infer<typeof ManagedAppActionReasonSchema>;
+export type ManagedAppProjection = z.infer<typeof ManagedAppProjectionSchema>;
+export type AppManagementOperation = z.infer<typeof AppManagementOperationSchema>;
+export type AppManagementJobState = z.infer<typeof AppManagementJobStateSchema>;
+export type AppManagementProgress = z.infer<typeof AppManagementProgressSchema>;
+export type AppManagementError = z.infer<typeof AppManagementErrorSchema>;
+export type AppManagementJob = z.infer<typeof AppManagementJobSchema>;
+export type AppManagementSnapshot = z.infer<typeof AppManagementSnapshotSchema>;
+export type AppManagementOperationRequest = z.infer<typeof AppManagementOperationRequestSchema>;
+export type AppManagementJobResponse = z.infer<typeof AppManagementJobResponseSchema>;
+export type AppManagementEvent = z.infer<typeof AppManagementEventSchema>;
 export type ControlledInstanceRegister = z.infer<typeof ControlledInstanceRegisterSchema>;
 export type ControlledInstanceHeartbeat = z.infer<typeof ControlledInstanceHeartbeatSchema>;
 export type ChatSessionBinding = z.infer<typeof ChatSessionBindingSchema>;

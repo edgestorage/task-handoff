@@ -1,5 +1,5 @@
 import { claudeControlSock, killClaudeDaemonJob, listClaudeDaemonJobs, replyClaudeDaemonJob, subscribeClaudeDaemonJob, type ClaudeDaemonJob } from "@task-handoff/core/core/claude-control-sock";
-import { CONFIG_PATH } from "@task-handoff/core/core/config";
+import { CONFIG_PATH } from "@task-handoff/core/core/persistence";
 import { appendJsonl, defaultDiagnosticLogPath } from "@task-handoff/core/core/diagnostics";
 import { findClaudeTranscriptPath } from "@task-handoff/core/core/transcript";
 import type { AiSessionLifecycle, AiSessionPhase, AiSessionStatus } from "@task-handoff/protocol/ai-sessions";
@@ -49,10 +49,10 @@ type ClaudeControlClientLike = {
   ) => () => void;
 };
 
-const RECEIVER_LOG_PATH =
-  process.env.TASK_HANDOFF_RECEIVER_LOG ||
-  (process.env.TASK_HANDOFF_LOG_DIR ? `${process.env.TASK_HANDOFF_LOG_DIR}/receiver.log` : undefined) ||
-  defaultDiagnosticLogPath(CONFIG_PATH, "receiver.log");
+const CLAUDE_CONTROL_SOCK_LOG_PATH =
+  process.env.TASK_HANDOFF_CLAUDE_CONTROL_SOCK_LOG ||
+  (process.env.TASK_HANDOFF_LOG_DIR ? `${process.env.TASK_HANDOFF_LOG_DIR}/claude-control-sock.log` : undefined) ||
+  defaultDiagnosticLogPath(CONFIG_PATH, "claude-control-sock.log");
 
 export class ClaudeControlSockSessionBridge implements AiSessionControlProvider, AiSessionDiscoveryProvider {
   readonly id = "claude-control-sock";
@@ -317,7 +317,7 @@ export class ClaudeControlSockSessionBridge implements AiSessionControlProvider,
       return;
     }
     try {
-      appendJsonl(RECEIVER_LOG_PATH, {
+      appendJsonl(CLAUDE_CONTROL_SOCK_LOG_PATH, {
         event: "claude_control_subscribe",
         short,
         controlSock,

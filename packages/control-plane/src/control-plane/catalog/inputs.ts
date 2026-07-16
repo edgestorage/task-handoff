@@ -11,8 +11,8 @@ export const UpdateProjectInputSchema = CreateProjectInputSchema.omit({ id: true
 export const ControlPlaneSettingsSchema = z.object({ publicBaseUrl: z.string().trim().max(2048).optional(), updateChannel: UpdateChannelSchema.default("stable") }).strict();
 export const UpdateControlPlaneSettingsSchema = ControlPlaneSettingsSchema.partial().strict();
 export const CreateImageInputSchema = z.object({
-  id: ImageProfileSchema.shape.id.optional(), name: ImageProfileSchema.shape.name, image: ImageProfileSchema.shape.image,
-  registry: ImageProfileSchema.shape.registry.optional(), capabilities: z.array(z.string().trim().min(1).max(80)).optional(),
+  id: ImageProfileSchema.shape.id.optional(), name: ImageProfileSchema.shape.name, reference: ImageProfileSchema.shape.reference,
+  pullPolicy: ImageProfileSchema.shape.pullPolicy.optional(), capabilities: z.array(z.string().trim().min(1).max(80)).optional(),
   optionalApps: z.array(z.string().trim().min(1).max(120)).optional(), defaultEnv: ImageProfileSchema.shape.defaultEnv.optional(),
   labels: ImageProfileSchema.shape.labels.optional(),
 }).strict();

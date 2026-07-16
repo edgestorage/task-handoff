@@ -10,18 +10,21 @@ type ErrorPayload = {
   error?: {
     code?: string;
     message?: string;
+    details?: Record<string, unknown>;
   };
 };
 
 export class ApiError extends Error {
   code: string;
   status?: number;
+  details?: Record<string, unknown>;
 
-  constructor(message: string, code = "API_ERROR", status?: number) {
+  constructor(message: string, code = "API_ERROR", status?: number, details?: Record<string, unknown>) {
     super(message);
     this.name = "ApiError";
     this.code = code;
     this.status = status;
+    this.details = details;
   }
 }
 
@@ -34,7 +37,7 @@ async function withApiError<T>(request: Promise<T>): Promise<T> {
       try {
         const payload = (await response.clone().json()) as ErrorPayload;
         const message = payload.error?.message || `${response.status} ${response.statusText}`;
-        throw new ApiError(message, payload.error?.code, response.status);
+        throw new ApiError(message, payload.error?.code, response.status, payload.error?.details);
       } catch (parseError) {
         if (parseError instanceof ApiError) {
           throw parseError;

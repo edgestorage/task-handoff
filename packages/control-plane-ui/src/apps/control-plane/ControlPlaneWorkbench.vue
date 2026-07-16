@@ -213,6 +213,11 @@
       v-model:open="instanceSettingsOpen"
       :instance="instanceSettingsInstance"
       :models="models.data.value || []"
+      :app-management="instanceSettingsAppManagement?.snapshot"
+      :app-management-loading="instanceSettingsAppManagement?.loading || false"
+      :app-management-error="instanceSettingsAppManagement?.error || ''"
+      :refresh-app-management="recoverInstanceAppManagement"
+      :manage-app="manageInstanceApp"
       :update-instance="updateInstanceSettings"
     />
 
@@ -225,15 +230,16 @@ import { useQueryClient } from "@tanstack/vue-query";
 import { useEventListener } from "@vueuse/core";
 import { Bot, Download, House, LayoutGrid, LogOut, Maximize2, Minus, RefreshCw, Settings, X } from "@lucide/vue";
 import "@xterm/xterm/css/xterm.css";
-import { logoutControlPlane, renameAppSession, resolveAiSessionApproval, updateControlledInstance, useAuthSessionQuery, useConfigSyncPresetsQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useInstanceBoardQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
+import { getInstanceAppManagement, installInstanceApp, logoutControlPlane, renameAppSession, resolveAiSessionApproval, uninstallInstanceApp, updateControlledInstance, useAuthSessionQuery, useConfigSyncPresetsQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useInstanceBoardQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
 import { getApiData } from "../../api/client";
-import { type AiSessionSummary, type InstanceBoardItem, type NodeLocalFolder, type UpdateControlledInstanceInput } from "../../api/types";
+import { type AiSessionSummary, type AppManagementOperation, type InstanceBoardItem, type NodeLocalFolder, type UpdateControlledInstanceInput } from "../../api/types";
 import { Button } from "../../components/ui/button";
 import AiSessionBoardView from "./ai-board/AiSessionBoardView.vue";
 import InstanceBoardView from "./board/InstanceBoardView.vue";
 import InstanceDetail from "./instance-detail/InstanceDetail.vue";
 import InstanceList from "./instance-list/InstanceList.vue";
 import InstanceSettingsDialog from "./instance-settings/InstanceSettingsDialog.vue";
+import { useInstanceAppManagement } from "./instance-settings/useInstanceAppManagement";
 import NewInstanceModal from "./NewInstanceModal.vue";
 import SettingsModal from "./settings/SettingsModal.vue";
 import { useActiveInstanceSessions } from "./instance-detail/useActiveInstanceSessions";
@@ -342,6 +348,8 @@ const aiSessionStore = useAiSessionStore({
 });
 const boardInstancesWithAiSessions = aiSessionStore.boardInstancesWithAiSessions;
 const instanceSettingsInstance = computed(() => boardInstancesWithAppSessions.value.find((instance) => instance.id === instanceSettingsId.value));
+const instanceAppManagement = useInstanceAppManagement({ load: getInstanceAppManagement, errorText });
+const instanceSettingsAppManagement = computed(() => instanceSettingsId.value ? instanceAppManagement.state(instanceSettingsId.value) : undefined);
 const {
   activeInstance,
   activeInstanceId,
@@ -422,6 +430,10 @@ useControlPlaneEvents({
   appSessions: appSessionStore,
   isRefreshing: () => refreshing.value,
   refresh,
+  appManagement: {
+    applyEvent: instanceAppManagement.applyEvent,
+    recoverOpen: () => instanceSettingsId.value ? instanceAppManagement.recover(instanceSettingsId.value) : undefined,
+  },
 });
 const lastRefreshLabel = computed(() => new Date(lastRefreshAt.value).toLocaleTimeString());
 const connectingInstanceIds = computed(() => sortedInstances.value.filter(isInstanceConnecting).map((instance) => instance.id).join("\n"));
@@ -719,7 +731,9 @@ function settingsSectionTitle(section: typeof settingsSection.value) {
 
 function handleInstanceCreated(instance: InstanceBoardItem) {
   activeInstanceId.value = instance.id;
-  void startCreatedInstance(instance.id);
+  if (instance.status === "created") {
+    void startCreatedInstance(instance.id);
+  }
 }
 
 async function renameInstance(instance: InstanceBoardItem, name: string) {
@@ -730,6 +744,18 @@ async function renameInstance(instance: InstanceBoardItem, name: string) {
 async function updateInstanceSettings(instance: InstanceBoardItem, input: UpdateControlledInstanceInput) {
   await updateControlledInstance(instance.id, input);
   await refresh();
+}
+
+function recoverInstanceAppManagement(instanceId: string) {
+  return instanceAppManagement.recover(instanceId);
+}
+
+async function manageInstanceApp(instanceId: string, appId: string, operation: AppManagementOperation) {
+  const requestId = `appop_${Date.now().toString(36)}_${Math.random().toString(16).slice(2)}`;
+  const response = operation === "install"
+    ? await installInstanceApp(instanceId, appId, requestId)
+    : await uninstallInstanceApp(instanceId, appId, requestId);
+  instanceAppManagement.applyJob(instanceId, response.job);
 }
 
 function openInstanceSettings(instanceId: string) {

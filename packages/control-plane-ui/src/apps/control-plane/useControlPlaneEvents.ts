@@ -2,6 +2,7 @@ import { onBeforeUnmount, onMounted } from "vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import { SessionStreamsHelloEventType, SessionStreamsHelloSchema } from "@task-handoff/protocol/events";
 import type { SessionStreamDescriptor } from "@task-handoff/protocol/events";
+import type { AppManagementEvent } from "../../api/types";
 import {
   AiSessionEventType,
   AppSessionEventType,
@@ -28,6 +29,10 @@ export function useControlPlaneEvents(input: {
   };
   isRefreshing: () => boolean;
   refresh: () => Promise<void>;
+  appManagement?: {
+    applyEvent: (instanceId: string, event: AppManagementEvent) => boolean;
+    recoverOpen: () => void | Promise<void>;
+  };
 }) {
   const queryClient = useQueryClient();
   let refreshTimer: ReturnType<typeof setTimeout> | undefined;
@@ -41,7 +46,10 @@ export function useControlPlaneEvents(input: {
     closing = false;
     const current = new WebSocket(eventsUrl());
     socket = current;
-    current.addEventListener("open", () => { reconnectAttempt = 0; });
+    current.addEventListener("open", () => {
+      reconnectAttempt = 0;
+      void input.appManagement?.recoverOpen();
+    });
     current.addEventListener("message", (event) => handleMessage(String(event.data)));
     current.addEventListener("close", () => {
       if (socket === current) socket = undefined;
@@ -88,6 +96,9 @@ export function useControlPlaneEvents(input: {
     }
     if (event.type === AppSessionEventType.Snapshot || event.type === AppSessionEventType.Patch || event.type === AppSessionEventType.Removed) {
       return input.appSessions.applyEvent({ type: event.type, payload: event.payload } as AppSessionDeltaResponse["events"][number]);
+    }
+    if (event.type === "app.management" && event.scope?.instanceId && event.payload && typeof event.payload === "object") {
+      return input.appManagement?.applyEvent(event.scope.instanceId, event.payload as AppManagementEvent) || false;
     }
     return false;
   }
