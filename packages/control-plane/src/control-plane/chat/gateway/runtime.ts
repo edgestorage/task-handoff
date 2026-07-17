@@ -53,6 +53,8 @@ function chatGatewayDiagnosticLogsEnabled() {
 }
 
 const TELEGRAM_MESSAGE_AGGREGATE_DELAY_MS = 1000;
+const AI_SESSION_INSTANCE_NAMES_TTL_MS = 30_000;
+const AI_SESSION_PENDING_ROUTES_TTL_MS = 1_000;
 type AiSessionQueueTelegramAction =
   | { type: "steer"; instanceId: string; sessionId: string; queueId: string }
   | { type: "delete-menu"; instanceId: string; sessionId: string }
@@ -145,6 +147,7 @@ type ChatGatewayService = {
   resolveChatActionToken(token: string, type?: ChatActionToken["type"]): ChatActionToken;
   pendingDecisionCallbackData(routeId: string, decision: "allow" | "deny" | "skip"): string;
   listAiSessions(options?: { refresh?: boolean }): Promise<{ instances: Array<{ instanceId: string; aiSessions: AiSessionsSnapshot }> }>;
+  listAiSessionInstanceNames?: () => Promise<Array<{ id: string; name?: string }>>;
   boardAsync(): Promise<Array<{ id: string; name?: string }>>;
   aiSessionQueue(instanceId: string, sessionId: string): Promise<unknown>;
   steerAiSessionQueuedMessage(instanceId: string, sessionId: string, queueId: string): Promise<unknown>;
@@ -183,6 +186,10 @@ export class ControlPlaneChatGatewayRuntime {
   private telegramMessageAggregates = new Map<string, TelegramMessageAggregate>();
   private telegramMessageAggregateEndTokens = new Map<string, string>();
   private telegramProgressMessageTargets = new Map<string, TelegramReplyAiSessionTarget>();
+  private aiSessionInstanceNamesCache: { expiresAt: number; value: Map<string, string> } | undefined;
+  private aiSessionInstanceNamesPending: Promise<Map<string, string>> | undefined;
+  private aiSessionPendingRoutesCache: { expiresAt: number; value: Array<PendingRoute & { instance?: { id: string; name?: string } }> } | undefined;
+  private aiSessionPendingRoutesPending: Promise<Array<PendingRoute & { instance?: { id: string; name?: string } }>> | undefined;
   private telegramProgress: TelegramProgressAdapter;
   private stopAiSessionListener: (() => void) | undefined;
 
@@ -1795,12 +1802,39 @@ export class ControlPlaneChatGatewayRuntime {
   }
 
   private async aiSessionInstanceNames() {
-    const instances = await this.service.boardAsync().catch(() => []);
-    return new Map<string, string>(instances.map((instance) => [instance.id, instance.name || instance.id] as const));
+    if (this.aiSessionInstanceNamesCache && this.aiSessionInstanceNamesCache.expiresAt > Date.now()) {
+      return this.aiSessionInstanceNamesCache.value;
+    }
+    if (this.aiSessionInstanceNamesPending) return this.aiSessionInstanceNamesPending;
+    this.aiSessionInstanceNamesPending = (this.service.listAiSessionInstanceNames?.() || this.service.boardAsync())
+      .catch(() => [])
+      .then((instances) => {
+        const value = new Map<string, string>(instances.map((instance) => [instance.id, instance.name || instance.id] as const));
+        this.aiSessionInstanceNamesCache = { expiresAt: Date.now() + AI_SESSION_INSTANCE_NAMES_TTL_MS, value };
+        return value;
+      })
+      .finally(() => {
+        this.aiSessionInstanceNamesPending = undefined;
+      });
+    return this.aiSessionInstanceNamesPending;
   }
 
   private async aiSessionPendingApprovalRoutes(instanceId: string) {
-    const routes = await this.service.listPendingRoutes().catch(() => []);
+    let routes = this.aiSessionPendingRoutesCache?.expiresAt && this.aiSessionPendingRoutesCache.expiresAt > Date.now()
+      ? this.aiSessionPendingRoutesCache.value
+      : undefined;
+    if (!routes) {
+      this.aiSessionPendingRoutesPending ||= this.service.listPendingRoutes()
+        .catch(() => [])
+        .then((value) => {
+          this.aiSessionPendingRoutesCache = { expiresAt: Date.now() + AI_SESSION_PENDING_ROUTES_TTL_MS, value };
+          return value;
+        })
+        .finally(() => {
+          this.aiSessionPendingRoutesPending = undefined;
+        });
+      routes = await this.aiSessionPendingRoutesPending;
+    }
     return new Map(routes
       .filter((route) => route.instanceId === instanceId && route.aiSessionId && route.kind === "approval")
       .map((route) => [route.aiSessionId || "", route]));

@@ -4,7 +4,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { createInlineKeyboard } from "@task-handoff/core/core/chat-interactions";
-import { renderTelegramProgressText } from "@task-handoff/core/core/chat-render";
+import { renderBoundedTelegramProgressText } from "@task-handoff/core/core/chat-render";
 import { TelegramProgressStore } from "@task-handoff/core/core/telegram-progress";
 import { downloadTelegramFile, telegramImageAttachments } from "@task-handoff/core/core/telegram-images";
 import { sendTelegramMessage, telegramFileLink, type TelegramMessageOptions } from "./telegram-gateway.ts";
@@ -51,11 +51,11 @@ export class TelegramProgressAdapter implements ChatGatewayProgressStore {
   }) {
     this.store = new TelegramProgressStore<TelegramProgressRoute>({
       updateIntervalMs: options.updateIntervalMs,
-      send: (text, route, progressOptions) => options.send(options.requireBridge(route?.bridgeId || ""), route?.chatId || "", renderTelegramProgressText(text), {
+      send: (text, route, progressOptions) => options.send(options.requireBridge(route?.bridgeId || ""), route?.chatId || "", renderBoundedTelegramProgressText(text), {
         rawMarkdownV2: true,
         replyMarkup: progressReplyMarkup(progressOptions),
       }),
-      edit: (messageId, text, route, progressOptions) => options.edit(options.requireBridge(route?.bridgeId || ""), route?.chatId || "", messageId, renderTelegramProgressText(text), {
+      edit: (messageId, text, route, progressOptions) => options.edit(options.requireBridge(route?.bridgeId || ""), route?.chatId || "", messageId, renderBoundedTelegramProgressText(text), {
         rawMarkdownV2: true,
         replyMarkup: progressReplyMarkup(progressOptions),
       }),

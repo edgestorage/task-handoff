@@ -437,8 +437,6 @@ const refreshing = computed(() => board.isFetching.value || controlPlane.isFetch
 useControlPlaneEvents({
   aiSessions: aiSessionStore,
   appSessions: appSessionStore,
-  isRefreshing: () => refreshing.value,
-  refresh,
   appManagement: {
     applyEvent: instanceAppManagement.applyEvent,
     recoverOpen: () => instanceSettingsId.value ? instanceAppManagement.recover(instanceSettingsId.value) : undefined,

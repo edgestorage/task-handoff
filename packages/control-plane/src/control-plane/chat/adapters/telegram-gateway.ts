@@ -10,6 +10,7 @@ export type TelegramMessageOptions = {
 };
 
 type TelegramRequest = (body: Record<string, unknown>) => Promise<Response>;
+const TELEGRAM_MESSAGE_TEXT_LIMIT = 4000;
 
 export async function answerTelegramCallback(fetchImpl: typeof fetch, bridge: ChatBridgeConfig, callbackQueryId: string, text: string) {
   if (!bridge.token || !callbackQueryId) {
@@ -50,11 +51,47 @@ export async function sendTelegramMessage(fetchImpl: typeof fetch, bridge: ChatB
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-  return sendOrEditTelegramMarkdown(request, "sendMessage", text, {
-    chat_id: chatId,
-    ...(options.replyToMessageId ? { reply_to_message_id: options.replyToMessageId, allow_sending_without_reply: true } : {}),
-    ...(options.replyMarkup ? { reply_markup: options.replyMarkup } : {}),
-  }, options);
+  const chunks = splitTelegramMessageText(text, options);
+  let result: unknown;
+  for (const [index, chunk] of chunks.entries()) {
+    result = await sendOrEditTelegramMarkdown(request, "sendMessage", chunk, {
+      chat_id: chatId,
+      ...(index === 0 && options.replyToMessageId ? { reply_to_message_id: options.replyToMessageId, allow_sending_without_reply: true } : {}),
+      ...(index === chunks.length - 1 && options.replyMarkup ? { reply_markup: options.replyMarkup } : {}),
+    }, options);
+  }
+  return result;
+}
+
+export function splitTelegramMessageText(text: string, options: Pick<TelegramMessageOptions, "rawMarkdownV2"> = {}) {
+  const source = String(text);
+  const render = options.rawMarkdownV2 ? (value: string) => value : telegramMarkdownEscape;
+  if (render(source).length <= TELEGRAM_MESSAGE_TEXT_LIMIT) return [source];
+
+  const chunks: string[] = [];
+  let remaining = source;
+  while (remaining) {
+    let low = 1;
+    let high = remaining.length;
+    let length = 1;
+    while (low <= high) {
+      const candidate = Math.floor((low + high) / 2);
+      if (render(remaining.slice(0, candidate)).length <= TELEGRAM_MESSAGE_TEXT_LIMIT) {
+        length = candidate;
+        low = candidate + 1;
+      } else {
+        high = candidate - 1;
+      }
+    }
+    if (length < remaining.length) {
+      const prefix = remaining.slice(0, length);
+      const boundary = Math.max(prefix.lastIndexOf("\n"), prefix.lastIndexOf(" "));
+      if (boundary >= Math.floor(length * 0.6)) length = boundary + 1;
+    }
+    chunks.push(remaining.slice(0, length).trimEnd());
+    remaining = remaining.slice(length).trimStart();
+  }
+  return chunks.filter(Boolean);
 }
 
 export async function deleteTelegramMessage(fetchImpl: typeof fetch, bridge: ChatBridgeConfig, chatId: string, messageId: number) {

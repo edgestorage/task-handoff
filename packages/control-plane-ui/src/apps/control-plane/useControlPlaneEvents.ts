@@ -31,8 +31,6 @@ export function useControlPlaneEvents(input: {
     applyEvent: (event: AppSessionDeltaResponse["events"][number]) => boolean;
     recoverDescriptor: (descriptor: SessionStreamDescriptor) => Promise<void>;
   };
-  isRefreshing: () => boolean;
-  refresh: () => Promise<void>;
   appManagement?: {
     applyEvent: (instanceId: string, event: AppManagementEvent) => boolean;
     recoverOpen: () => void | Promise<void>;
@@ -43,7 +41,8 @@ export function useControlPlaneEvents(input: {
   };
 }) {
   const queryClient = useQueryClient();
-  let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+  const pendingInvalidationKeys = new Map<string, readonly unknown[]>();
+  let invalidationTimer: ReturnType<typeof setTimeout> | undefined;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   let socket: WebSocket | undefined;
   let closing = false;
@@ -93,9 +92,9 @@ export function useControlPlaneEvents(input: {
         return;
       }
       const handled = normalizedEvents(message).some(applyToCache);
-      if (message.type && !handled) scheduleRefresh();
-    } catch {
-      scheduleRefresh();
+      if (!handled) scheduleTargetedInvalidation(normalizedEvents(message));
+    } catch (error) {
+      console.warn("CONTROL_PLANE_EVENT_INVALID", error);
     }
   }
 
@@ -120,15 +119,34 @@ export function useControlPlaneEvents(input: {
     return false;
   }
 
-  function scheduleRefresh() {
-    if (refreshTimer) return;
-    refreshTimer = setTimeout(() => {
-      refreshTimer = undefined;
-      if (input.isRefreshing()) {
-        scheduleRefresh();
-        return;
-      }
-      void input.refresh();
+  function scheduleTargetedInvalidation(events: EventMessage[]) {
+    const topics = new Set(events.map((event) => event.topic).filter(Boolean));
+    if (topics.has("triggers")) queueInvalidation(["control-plane-triggers"]);
+    if (topics.has("nodes")) {
+      queueInvalidation(["control-plane-nodes"]);
+      queueInvalidation(["control-plane-node-runtimes"]);
+      queueInvalidation(["instance-board"]);
+    }
+    if (topics.has("instances")) queueInvalidation(["instance-board"]);
+    if (topics.has("projects")) {
+      queueInvalidation(["control-plane-projects"]);
+      queueInvalidation(["instance-board"]);
+    }
+    if (topics.has("models")) queueInvalidation(["control-plane-models"]);
+    if (topics.has("images")) {
+      queueInvalidation(["control-plane-images"]);
+      queueInvalidation(["instance-board"]);
+    }
+  }
+
+  function queueInvalidation(queryKey: readonly unknown[]) {
+    pendingInvalidationKeys.set(JSON.stringify(queryKey), queryKey);
+    if (invalidationTimer) return;
+    invalidationTimer = setTimeout(() => {
+      invalidationTimer = undefined;
+      const keys = [...pendingInvalidationKeys.values()];
+      pendingInvalidationKeys.clear();
+      for (const key of keys) void queryClient.invalidateQueries({ queryKey: key });
     }, 100);
   }
 
@@ -138,7 +156,7 @@ export function useControlPlaneEvents(input: {
     reconnectAttempt = 0;
     socket?.close();
     socket = undefined;
-    if (refreshTimer) clearTimeout(refreshTimer);
+    if (invalidationTimer) clearTimeout(invalidationTimer);
     if (reconnectTimer) clearTimeout(reconnectTimer);
   });
 }

@@ -933,10 +933,6 @@
   padding: 14px 10px;
 }
 
-.session-ai-detail-block-assistant > span {
-  color: var(--status-info);
-}
-
 .session-ai-detail-block-assistant > div {
   color: var(--text-strong);
   font-weight: 400;

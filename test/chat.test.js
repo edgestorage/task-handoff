@@ -30,9 +30,11 @@ require.extensions[".ts"] = (module, filename) => {
 };
 
 const {
+  renderBoundedTelegramProgressText,
   renderTelegramProgressText,
   telegramMarkdownEscape,
 } = require("../packages/core/src/core/chat-render.ts");
+const { sendTelegramMessage, splitTelegramMessageText } = require("../packages/control-plane/src/control-plane/chat/adapters/telegram-gateway.ts");
 const { TelegramProgressStore } = require("../packages/core/src/core/telegram-progress.ts");
 const { listHistoricalSessions } = require("../packages/ai-session-runtime/src/session-history.ts");
 const {
@@ -71,6 +73,35 @@ test("codex approval parser preserves the request reason", () => {
 test("telegram renderer escapes messages and progress payloads", () => {
   assert.equal(telegramMarkdownEscape("a_b"), "a\\_b");
   assert.match(renderTelegramProgressText("Working_now\nrun npm_test"), /^\*Working\\_now\*/);
+});
+
+test("telegram progress rendering preserves the heading and latest output within the message limit", () => {
+  const rendered = renderBoundedTelegramProgressText(`Working_now\n${"old output\n".repeat(500)}latest_result`, 4000);
+  assert.ok(rendered.length <= 4000);
+  assert.match(rendered, /^\*Working\\_now\*/);
+  assert.match(rendered, /\\\.\\\.\\\./);
+  assert.match(rendered, /latest\\_result$/);
+});
+
+test("telegram sender chunks escaped text and keeps reply and actions on their intended chunks", async () => {
+  const bodies = [];
+  const bridge = { id: "telegram_test", channel: "telegram", name: "Telegram", enabled: true, token: "token" };
+  const result = await sendTelegramMessage(async (_url, init) => {
+    const body = JSON.parse(String(init?.body));
+    bodies.push(body);
+    return new Response(JSON.stringify({ ok: true, result: { message_id: bodies.length } }), { status: 200 });
+  }, bridge, "123", `${"escaped_value! ".repeat(600)}done`, {
+    replyToMessageId: 42,
+    replyMarkup: { inline_keyboard: [[{ text: "Done", callback_data: "done" }]] },
+  });
+
+  assert.ok(bodies.length > 1);
+  assert.equal(result.message_id, bodies.length);
+  assert.equal(bodies[0].reply_to_message_id, 42);
+  assert.equal(bodies.at(-1).reply_markup.inline_keyboard[0][0].callback_data, "done");
+  assert.equal(bodies.slice(1).some((body) => body.reply_to_message_id), false);
+  assert.equal(bodies.slice(0, -1).some((body) => body.reply_markup), false);
+  assert.ok(splitTelegramMessageText("a_b ".repeat(1200)).every((chunk) => telegramMarkdownEscape(chunk).length <= 4000));
 });
 
 test("telegram progress store shares send edit and finish semantics", async () => {
@@ -1776,6 +1807,7 @@ test("codex app server bridge syncs loaded threads and status notifications", as
       this.reads.push({ threadId, options });
       return this.threads.find((thread) => thread.id === threadId);
     }
+    async respondToApproval() {}
     stop() {
       this.stopped = true;
     }
@@ -1811,9 +1843,40 @@ test("codex app server bridge syncs loaded threads and status notifications", as
     threadId: "thread_1",
     status: { type: "active", activeFlags: ["waitingOnApproval"] },
   });
+  const unattachedWaiting = registry.list()[0];
+  assert.equal(unattachedWaiting.status, "waiting");
+  assert.equal(unattachedWaiting.phase, "thinking");
+
+  fake.emit("event", {
+    type: "approval-request",
+    request: {
+      id: 42,
+      method: "item/commandExecution/requestApproval",
+      kind: "command",
+      threadId: "thread_1",
+      turnId: "turn_1",
+      itemId: "cmd_1",
+      summary: "Tests need access to the local package cache.",
+      params: { threadId: "thread_1", turnId: "turn_1", itemId: "cmd_1", command: "pnpm test" },
+    },
+  });
   const waiting = registry.list()[0];
   assert.equal(waiting.status, "waiting");
   assert.equal(waiting.phase, "approval");
+  assert.equal(waiting.actions.approval, true);
+  assert.equal(waiting.summary, "Tests need access to the local package cache.");
+
+  fake.emit("event", {
+    type: "thread",
+    thread: {
+      ...fake.threads[0],
+      status: { type: "active", activeFlags: ["waitingOnApproval"] },
+    },
+  });
+  const waitingAfterSnapshot = registry.list()[0];
+  assert.equal(waitingAfterSnapshot.phase, "approval");
+  assert.equal(waitingAfterSnapshot.summary, "Tests need access to the local package cache.");
+  assert.equal(waitingAfterSnapshot.turns[0].summary, "Tests need access to the local package cache.");
 
   fake.emit("event", { type: "turn-completed", threadId: "thread_1", status: "completed" });
   assert.equal(registry.list()[0].status, "idle");
@@ -1882,6 +1945,36 @@ test("codex app server bridge repeated snapshots keep completed turns stable", a
   assert.equal(second.turns[0].observedAt, firstTurn.observedAt);
   assert.equal(second.turns[0].completedAt, firstTurn.completedAt);
   assert.equal(second.turns[0].lastMessage, firstTurn.lastMessage);
+});
+
+test("codex app server bridge does not expose approval actions before the request is attached", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-unattached-approval-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  class FakeCodexAppServerClient extends EventEmitter {
+    async start() {}
+    async listLoadedThreadIds() {
+      return ["thread_unattached_approval"];
+    }
+    async readThread() {
+      return {
+        id: "thread_unattached_approval",
+        cwd: "/workspace",
+        status: { type: "active", activeFlags: ["waitingOnApproval"] },
+        turns: [],
+      };
+    }
+    async respondToApproval() {}
+    stop() {}
+  }
+
+  const bridge = new CodexAppServerSessionBridge(registry, new FakeCodexAppServerClient());
+  await bridge.sync();
+
+  const waiting = registry.list()[0];
+  assert.equal(waiting.status, "waiting");
+  assert.equal(waiting.phase, "thinking");
+  assert.equal(waiting.actions.approval, false);
+  bridge.stop();
 });
 
 test("codex app server failed turns expose the turn error message", async () => {
@@ -3260,6 +3353,11 @@ test("codex app server bridge updates user prompts from app-server item notifica
   const fake = new FakeCodexAppServerClient();
   const bridge = new CodexAppServerSessionBridge(registry, fake);
   await bridge.sync();
+  registry.applyRealtimeEvent(registry.list()[0].id, {
+    kind: "assistant-message",
+    text: "Existing assistant response",
+    source: "control",
+  });
   fake.emit("event", {
     type: "user-message",
     threadId: "thread_item",
@@ -3288,7 +3386,12 @@ test("codex app server bridge resolves app-server approval requests structurally
       return ["thread_approval"];
     }
     async readThread() {
-      return { id: "thread_approval", cwd: "/workspace", status: { type: "active", activeFlags: [] }, turns: [] };
+      return {
+        id: "thread_approval",
+        cwd: "/workspace",
+        status: { type: "active", activeFlags: [] },
+        turns: [{ id: "turn_previous", items: [{ type: "agentMessage", text: "Existing assistant response" }] }],
+      };
     }
     async startTurn(threadId, message) {
       this.startedTurns.push({ threadId, message });
@@ -3323,13 +3426,17 @@ test("codex app server bridge resolves app-server approval requests structurally
   assert.equal(waiting.phase, "approval");
   assert.equal(waiting.activeTurnId, "turn_approval");
   assert.equal(waiting.summary, "Approve command: pnpm test");
+  assert.equal(waiting.actions.approval, true);
 
   const approved = await bridge.resolveApproval(waiting, "allow");
   assert.equal(approved.action, "approval");
   assert.equal(approved.decision, "allow");
   assert.deepEqual(fake.approvals.map((entry) => [entry.request.id, entry.decision]), [[42, "allow"]]);
   assert.deepEqual(fake.startedTurns, []);
-  assert.equal(registry.get(waiting.id).summary, "Codex approval allowed.");
+  assert.equal(registry.get(waiting.id).status, "running");
+  assert.equal(registry.get(waiting.id).phase, "thinking");
+  assert.equal(registry.get(waiting.id).lastMessage, "Existing assistant response");
+  assert.notEqual(registry.get(waiting.id).summary, "Codex approval allowed.");
 });
 
 test("codex app server bridge resumes thread to attach pending approval requests", async () => {
@@ -3350,7 +3457,7 @@ test("codex app server bridge resumes thread to attach pending approval requests
         id: "thread_resume_approval",
         cwd: "/workspace",
         status: { type: "active", activeFlags: ["waitingOnApproval"] },
-        turns: [],
+        turns: [{ id: "turn_previous", items: [{ type: "agentMessage", text: "Existing assistant response" }] }],
       };
     }
     async resumeThread(threadId) {
@@ -3374,7 +3481,7 @@ test("codex app server bridge resumes thread to attach pending approval requests
         id: threadId,
         cwd: "/workspace",
         status: { type: "active", activeFlags: ["waitingOnApproval"] },
-        turns: [],
+        turns: [{ id: "turn_previous", items: [{ type: "agentMessage", text: "Existing assistant response" }] }],
       };
     }
     async respondToApproval(request, decision) {
@@ -3396,7 +3503,10 @@ test("codex app server bridge resumes thread to attach pending approval requests
   assert.deepEqual(fake.resumedThreads, ["thread_resume_approval"]);
   assert.deepEqual(fake.approvals.map((entry) => [entry.request.id, entry.decision]), [[88, "allow"]]);
   assert.equal(registry.get(waiting.id).activeTurnId, "turn_replayed");
-  assert.equal(registry.get(waiting.id).summary, "Codex approval allowed.");
+  assert.equal(registry.get(waiting.id).status, "running");
+  assert.equal(registry.get(waiting.id).phase, "thinking");
+  assert.equal(registry.get(waiting.id).lastMessage, "Existing assistant response");
+  assert.notEqual(registry.get(waiting.id).summary, "Codex approval allowed.");
 });
 
 test("codex app server bridge subscribes each loaded thread once per connection epoch", async () => {

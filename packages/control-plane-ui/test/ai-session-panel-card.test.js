@@ -33,6 +33,8 @@ test("waiting approval actions float at the bottom left of instance AI session c
   assert.match(panel, /<div v-if="canResolveApproval\(session\)" class="session-ai-card-approval-actions">[\s\S]*?resolveApproval\(session, 'allow'\)/);
   assert.match(styles, /\.session-ai-card-approval-actions\s*\{[^}]*position: absolute;[^}]*bottom: 8px;[^}]*left: 14px;/s);
   assert.match(panel, /async function resolveApproval\(session: AiSessionSummary, decision:/);
+  assert.match(panel, /session\.status === "waiting" && session\.phase === "approval"/);
+  assert.doesNotMatch(panel, /actions\?\.approval/);
 });
 
 test("instance AI session card previews do not open an expanded overlay", () => {

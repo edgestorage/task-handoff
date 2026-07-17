@@ -457,7 +457,7 @@ function nextPrompt(card: AiBoardCard) {
 }
 
 function canResolveApproval(session: AiSessionSummary) {
-  return session.status === "waiting" && session.phase === "approval" && Boolean(session.actions?.approval);
+  return session.status === "waiting" && session.phase === "approval";
 }
 
 function canInterrupt(session: AiSessionSummary) {

@@ -59,12 +59,10 @@
         <ScrollArea class="ai-board-floating-scroll">
           <div class="ai-board-floating-content">
             <section class="ai-board-floating-block ai-board-floating-block-user">
-              <span>User Message</span>
               <MarkdownContent :content="displayAiSessionTitle(card.session, promptIndex)" />
             </section>
 
             <section class="ai-board-floating-block ai-board-floating-block-assistant">
-              <span>AI Response / Progress</span>
               <MarkdownContent :content="displayAiSessionMessage(card.session, promptIndex)" />
             </section>
 
@@ -522,10 +520,6 @@ onBeforeUnmount(() => {
   background: var(--ai-board-assistant-bg);
   margin-inline: -14px;
   padding: 12px 14px;
-}
-
-.ai-board-floating-block-assistant > span {
-  color: var(--ai-board-active-text);
 }
 
 .ai-board-floating-block-assistant > div {

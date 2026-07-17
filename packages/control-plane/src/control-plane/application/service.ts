@@ -1370,7 +1370,8 @@ export class ControlPlaneService {
     const routes: Array<PendingRoute & { project?: Project; instance: ReturnType<typeof publicInstance> }> = [];
     const aiSessions = await this.listAiSessions();
     const snapshots = new Map(aiSessions.instances.map((entry) => [entry.instanceId, entry.aiSessions]));
-    for (const instance of await this.listNodeInstances()) {
+    const instanceResult = await this.nodeAgentGateway.listFleetInstances(this.listNodes());
+    for (const instance of instanceResult.items) {
       if ((instance.connectionStatus !== "online" && instance.agentStatus !== "online") || !instance.target.web) {
         continue;
       }
@@ -1399,6 +1400,11 @@ export class ControlPlaneService {
       }
     }
     return routes;
+  }
+
+  async listAiSessionInstanceNames() {
+    const result = await this.nodeAgentGateway.listFleetInstances(this.listNodes());
+    return result.items.map((instance) => ({ id: instance.id, name: instance.name }));
   }
 
   async resolveAiSessionApproval(instanceId: string, sessionId: string, decision: "allow" | "deny" | "skip"): Promise<AiSessionActionResult> {

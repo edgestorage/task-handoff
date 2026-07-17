@@ -11,7 +11,6 @@ import type { AiSessionDiscoveryContext, AiSessionDiscoveryProvider } from "./ai
 import type { AiSessionRegistry } from "./ai-session-registry";
 import {
   activeTurnMismatchFoundId,
-  approvalDecisionVerb,
   approvalResponseForRequest,
   codexApprovalRequest,
   codexNotification,
@@ -702,10 +701,9 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
     const pendingApproval = await this.resolveAttachedApproval(session, decision);
     if (pendingApproval) {
       const updated = this.registry.applyRealtimeEvent(session.id, {
-        kind: "assistant-message",
+        kind: "lifecycle",
         status: decision === "skip" ? "idle" : "running",
         phase: decision === "skip" ? "unknown" : "thinking",
-        text: `Codex approval ${approvalDecisionVerb(decision)}.`,
         source: "control",
       }) || session;
       return { session: updated, provider: this.agent, action: "approval", decision };
@@ -829,11 +827,16 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       return;
     }
     if (event.type === "thread-closed") {
+      this.approvals.clearSession(session.id);
       this.registry.applyRealtimeEvent(session.id, { kind: "turn-completed", activeTurnId: session.activeTurnId, status: "idle", phase: "unknown", text: "Codex thread closed.", source: "realtime" });
       return;
     }
     if (event.type === "thread-status") {
-      const lifecycle = lifecycleForStatus(event.status);
+      const providerLifecycle = lifecycleForStatus(event.status);
+      if (providerLifecycle.phase !== "approval") {
+        this.approvals.clearSession(session.id);
+      }
+      const lifecycle = this.lifecycleWithAttachedApproval(session.id, providerLifecycle);
       this.registry.applyRealtimeEvent(session.id, {
         kind: "lifecycle",
         activeTurnId: session.activeTurnId,
@@ -852,6 +855,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       return;
     }
     if (event.type === "turn-completed") {
+      this.approvals.clearSession(session.id);
       this.registry.applyRealtimeEvent(session.id, {
         kind: "turn-completed",
         activeTurnId: event.turnId,
@@ -882,7 +886,9 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
     if (!id || thread.ephemeral === true) {
       return;
     }
-    const lifecycle = lifecycleForStatus(thread.status || {});
+    const existing = this.registry.list().find((entry) => entry.agent === "codex" && entry.providerSessionId === id);
+    const pendingApproval = existing ? this.approvals.latestForSession(existing.id) : undefined;
+    const lifecycle = this.lifecycleWithAttachedApproval(existing?.id, lifecycleForStatus(thread.status || {}));
     const appSessionId = options.bindAppSession ? this.appSessionIdForThread(id) : undefined;
     const history = summarizeThreadTurns(thread);
     this.registry.applyAdapterSnapshot({
@@ -902,12 +908,22 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       activeTurnId: history.activeTurnId,
       userPrompt: history.userPrompt,
       turns: history.turns,
-      summary: history.summary,
+      summary: pendingApproval?.summary || history.summary,
       lastMessage: history.lastMessage,
       status: lifecycle.status,
       phase: lifecycle.phase,
       replaceActivity: true,
     });
+  }
+
+  private lifecycleWithAttachedApproval(
+    sessionId: string | undefined,
+    lifecycle: ReturnType<typeof lifecycleForStatus>,
+  ): ReturnType<typeof lifecycleForStatus> {
+    if (lifecycle.phase !== "approval" || sessionId && this.approvals.latestForSession(sessionId)) {
+      return lifecycle;
+    }
+    return { status: "waiting", phase: "thinking" };
   }
 
   private applyApprovalRequest(request: CodexApprovalRequest) {

@@ -229,13 +229,11 @@
             </div>
           </header>
           <section class="session-ai-detail-block session-ai-detail-block-user">
-            <span>User Message</span>
             <ScrollArea class="session-ai-detail-block-scroll">
               <MarkdownContent :content="displayAiSessionTitle(selectedSession, promptIndexFor(selectedSession))" />
             </ScrollArea>
           </section>
           <section class="session-ai-detail-block session-ai-detail-block-assistant">
-            <span>AI Response / Progress</span>
             <MarkdownContent class="session-ai-detail-block-content" :content="displayAiSessionMessage(selectedSession, promptIndexFor(selectedSession))" />
           </section>
           <div v-if="selectedSession.currentTool?.name" class="session-ai-tool">
@@ -588,7 +586,7 @@ function canInterrupt(session: AiSessionSummary) {
 }
 
 function canResolveApproval(session: AiSessionSummary) {
-  return session.status === "waiting" && session.phase === "approval" && Boolean(session.actions?.approval);
+  return session.status === "waiting" && session.phase === "approval";
 }
 
 async function refreshBoard() {

@@ -15,6 +15,13 @@ test("AI session details expose compact message navigation without a visible lab
   assert.match(floatingDock, /<AiSessionTurnNavigator[\s\S]*?:count="promptCount"[\s\S]*?@previous="\$emit\('previousPrompt'\)"[\s\S]*?@next="\$emit\('nextPrompt'\)"/);
 });
 
+test("AI session details render messages without redundant section titles", () => {
+  for (const detail of [panel, floatingDock]) {
+    assert.doesNotMatch(detail, />\s*User Message\s*</);
+    assert.doesNotMatch(detail, />\s*AI Response \/ Progress\s*</);
+  }
+});
+
 test("cards and details count the same display turns", () => {
   assert.match(panel, /return aiSessionTurns\(session\)\.length;/);
   assert.match(board, /return aiSessionTurns\(session\)\.length;/);
@@ -26,4 +33,10 @@ test("current approval summary remains visible while navigating messages", () =>
   const currentApproval = displayHelpers.indexOf('if (session.status === "waiting" && session.phase === "approval"');
   assert.ok(currentApproval >= 0);
   assert.ok(explicitSelection > currentApproval);
+});
+
+test("waiting approval state is the only source for approval actions", () => {
+  for (const detail of [panel, floatingDock]) {
+    assert.doesNotMatch(detail, /actions\?\.approval/);
+  }
 });

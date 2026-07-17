@@ -759,6 +759,7 @@ export class AiSessionRegistry {
         status: event.status || "waiting",
         phase: event.phase || "approval",
         summary: event.summary || event.text,
+        actions: { ...current.actions, approval: true },
         counters: event.counters || { approvals: 1 },
       }, { updatedAt: event.observedAt, meta });
     }
