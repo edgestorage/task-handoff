@@ -6,6 +6,10 @@ import {
   AiSessionEventType,
   AiSessionDeltaResponseSchema,
   AiSessionMessageDeltaEventSchema,
+  AiSessionRealtimeInputSchema,
+  AiSessionStatusSchema,
+  AiSessionSummarySchema,
+  AiSessionToolSchema,
   applyAiSessionStreamEvent,
   emptyAiSessionsSnapshot,
 } from "../src/ai-sessions.ts";
@@ -20,6 +24,56 @@ import {
 } from "../src/events.ts";
 
 const now = "2026-07-13T00:00:00.000Z";
+
+function session(overrides = {}) {
+  return {
+    id: "session-a",
+    agent: "codex",
+    startedAt: now,
+    updatedAt: now,
+    counters: {},
+    queue: {},
+    ...overrides,
+  };
+}
+
+test("AI session tool activity schemas default and project the window count", () => {
+  const status = AiSessionStatusSchema.parse(session());
+  assert.equal(status.toolCallsSinceLastMessage, 0);
+  const summary = { ...status };
+  delete summary.counters;
+  assert.equal(AiSessionSummarySchema.parse(summary).toolCallsSinceLastMessage, 0);
+
+  const projected = AiSessionSummarySchema.parse({ ...summary,
+    currentTool: { id: "item-1", kind: "commandExecution", name: "Command", inputPreview: "pnpm test" },
+    toolCallsSinceLastMessage: 3,
+  });
+  assert.deepEqual(projected.currentTool, {
+    id: "item-1",
+    kind: "commandExecution",
+    name: "Command",
+    inputPreview: "pnpm test",
+  });
+  assert.equal(projected.toolCallsSinceLastMessage, 3);
+});
+
+test("AI session tool activity schemas remain strict and require atomic realtime values", () => {
+  assert.equal(AiSessionToolSchema.safeParse({ name: "Command", providerOutput: "secret" }).success, false);
+  assert.equal(AiSessionStatusSchema.safeParse(session({ unknownField: true })).success, false);
+
+  const baseEvent = { type: "event", source: "realtime", sessionId: "session-a", kind: "tool-activity" };
+  assert.equal(AiSessionRealtimeInputSchema.safeParse({ ...baseEvent, currentTool: null, toolCallsSinceLastMessage: 2 }).success, true);
+  assert.equal(AiSessionRealtimeInputSchema.safeParse({ ...baseEvent, currentTool: null }).success, false);
+  assert.equal(AiSessionRealtimeInputSchema.safeParse({ ...baseEvent, toolCallsSinceLastMessage: 2 }).success, false);
+  assert.equal(AiSessionRealtimeInputSchema.safeParse({
+    type: "event",
+    source: "realtime",
+    sessionId: "session-a",
+    kind: "turn-started",
+    currentTool: null,
+    toolCallsSinceLastMessage: 0,
+  }).success, false);
+});
 
 function meta(overrides = {}) {
   return {

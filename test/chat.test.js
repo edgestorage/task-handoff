@@ -43,8 +43,10 @@ const {
   scanRecentTranscripts,
 } = require("../packages/ai-session-runtime/src/ai-session-registry.ts");
 const {
+  CodexToolActivityTracker,
   codexApprovalRequest,
   codexNotification,
+  rebuildCodexToolActivity,
 } = require("../packages/ai-session-runtime/src/codex-app-server-protocol.ts");
 const { AiSessionController } = require("../packages/ai-session-runtime/src/ai-session-control.ts");
 const { AiSessionDiscoveryCoordinator } = require("../packages/ai-session-runtime/src/ai-session-discovery.ts");
@@ -68,6 +70,120 @@ test("codex approval parser preserves the request reason", () => {
   });
 
   assert.equal(request?.summary, "Tests need access to the local package cache.");
+});
+
+test("codex app-server parser projects supported tool items without output fields", () => {
+  const cases = [
+    [{ type: "commandExecution", id: "cmd", command: "pnpm test", aggregatedOutput: "secret output" }, "Command", "pnpm test"],
+    [{ type: "fileChange", id: "file", changes: [{ path: "src/app.ts", diff: "secret contents" }] }, "File change", "src/app.ts"],
+    [{ type: "mcpToolCall", id: "mcp", server: "github", tool: "search", arguments: { q: "issue" }, result: { secret: true } }, "github · search", '{"q":"issue"}'],
+    [{ type: "dynamicToolCall", id: "dynamic", namespace: "browser", tool: "click", arguments: { id: 4 }, contentItems: [{ secret: true }] }, "browser · click", '{"id":4}'],
+    [{ type: "collabAgentToolCall", id: "collab", tool: "spawnAgent", prompt: "Inspect tests", agentsStates: { child: { message: "secret result" } } }, "Spawn agent", "Inspect tests"],
+    [{ type: "webSearch", id: "web", query: "Codex docs" }, "Web search", "Codex docs"],
+    [{ type: "imageView", id: "image", path: "/tmp/image.png" }, "View image", "/tmp/image.png"],
+    [{ type: "sleep", id: "sleep", durationMs: 250 }, "Sleep", "250 ms"],
+    [{ type: "imageGeneration", id: "gen", revisedPrompt: "A map", result: "secret image data" }, "Image generation", "A map"],
+  ];
+  for (const [item, name, inputPreview] of cases) {
+    const event = codexNotification("item/started", {
+      threadId: "thread_tools",
+      turnId: "turn_tools",
+      startedAtMs: 1_750_000_000_000,
+      item,
+    });
+    assert.equal(event.type, "tool-item-started");
+    assert.equal(event.tool.id, item.id);
+    assert.equal(event.tool.kind, item.type);
+    assert.equal(event.tool.name, name);
+    assert.equal(event.tool.inputPreview, inputPreview);
+    assert.equal(event.tool.startedAt, "2025-06-15T15:06:40.000Z");
+    assert.doesNotMatch(JSON.stringify(event.tool), /secret/);
+  }
+
+  const long = codexNotification("item/started", {
+    threadId: "thread_tools",
+    item: { type: "commandExecution", id: "long", command: `run ${"x".repeat(600)}` },
+  });
+  assert.equal(long.tool.inputPreview.length, 500);
+  assert.match(long.tool.inputPreview, /\.\.\.$/);
+
+  const completed = codexNotification("item/completed", {
+    threadId: "thread_tools",
+    completedAtMs: 1_750_000_000_100,
+    item: { type: "commandExecution", id: "cmd", command: "pnpm test", aggregatedOutput: "secret output" },
+  });
+  assert.equal(completed.type, "tool-item-completed");
+  assert.equal(completed.tool.startedAt, undefined);
+  assert.doesNotMatch(JSON.stringify(completed.tool), /secret/);
+});
+
+test("codex app-server parser excludes non-tools and diagnoses unknown items", () => {
+  for (const type of ["agentMessage", "reasoning", "plan", "hookPrompt", "subAgentActivity", "contextCompaction", "enteredReviewMode", "exitedReviewMode"]) {
+    assert.equal(codexNotification("item/started", { threadId: "thread_non_tools", item: { type, id: type } }), undefined);
+  }
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (message) => warnings.push(String(message));
+  try {
+    assert.equal(codexNotification("item/started", { threadId: "thread_unknown", item: { type: "futureTool", id: "future" } }), undefined);
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.deepEqual(warnings, ["[codex-app-server] ignoring unknown ThreadItem.type: futureTool"]);
+});
+
+test("codex tool tracker deduplicates, backfills completed tools, and falls back across parallel tools", () => {
+  const tracker = new CodexToolActivityTracker();
+  const first = { id: "tool_a", kind: "commandExecution", name: "Command", inputPreview: "one" };
+  const second = { id: "tool_b", kind: "webSearch", name: "Web search", inputPreview: "two" };
+  assert.equal(tracker.started(first).toolCallsSinceLastMessage, 1);
+  assert.deepEqual(tracker.started(first).currentTool, first);
+  assert.deepEqual(tracker.started(second).currentTool, second);
+  assert.equal(tracker.snapshot().toolCallsSinceLastMessage, 2);
+  assert.deepEqual(tracker.completed(second).currentTool, first);
+  assert.equal(tracker.completed({ id: "tool_c", kind: "sleep", name: "Sleep" }).toolCallsSinceLastMessage, 3);
+  assert.deepEqual(tracker.snapshot().currentTool, first);
+  assert.equal(tracker.completed(second).toolCallsSinceLastMessage, 3);
+  assert.equal(tracker.clearActiveTools().currentTool, undefined);
+  assert.equal(tracker.snapshot().toolCallsSinceLastMessage, 3);
+  assert.deepEqual(tracker.resetForAgentMessage(), {
+    seenToolIds: [],
+    activeTools: [],
+    toolCallsSinceLastMessage: 0,
+    currentTool: undefined,
+  });
+});
+
+test("codex thread tool snapshot rebuild matches realtime tracking and conservatively infers statusless tools", () => {
+  const thread = {
+    status: { type: "active" },
+    turns: [{
+      id: "turn_tools",
+      status: "inProgress",
+      items: [
+        { type: "commandExecution", id: "before", command: "old", status: "completed" },
+        { type: "agentMessage", id: "boundary", text: "Working" },
+        { type: "commandExecution", id: "active", command: "pnpm test", status: "inProgress" },
+        { type: "mcpToolCall", id: "done", server: "git", tool: "status", arguments: {}, status: "completed", result: { secret: true } },
+        { type: "webSearch", id: "search", query: "latest docs" },
+      ],
+    }],
+  };
+  const rebuilt = rebuildCodexToolActivity(thread);
+  assert.equal(rebuilt.toolCallsSinceLastMessage, 3);
+  assert.deepEqual(rebuilt.seenToolIds, ["active", "done", "search"]);
+  assert.equal(rebuilt.currentTool.id, "search");
+
+  const realtime = new CodexToolActivityTracker();
+  realtime.started(rebuilt.activeTools[0]);
+  realtime.completed({ id: "done", kind: "mcpToolCall", name: "git · status" });
+  realtime.started(rebuilt.activeTools[1]);
+  assert.deepEqual(realtime.snapshot(), rebuilt);
+
+  thread.turns[0].items.push({ type: "reasoning", id: "after", summary: [], content: [] });
+  const conservative = rebuildCodexToolActivity(thread);
+  assert.equal(conservative.toolCallsSinceLastMessage, 3);
+  assert.equal(conservative.currentTool.id, "active");
 });
 
 test("telegram renderer escapes messages and progress payloads", () => {
@@ -356,6 +472,116 @@ test("ai session registry initializes empty app sessions as idle without placeho
   assert.deepEqual(session.turns, []);
   assert.equal(session.summary, undefined);
   assert.equal(session.lastMessage, undefined);
+  assert.equal(session.toolCallsSinceLastMessage, 0);
+});
+
+test("ai session registry atomically replaces and explicitly clears tool activity", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-tools-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const session = registry.start({ agent: "codex", providerSessionId: "thread-tools" });
+  let changes = 0;
+  const stop = registry.onChange(() => { changes += 1; });
+
+  const running = registry.applyRealtimeEvent(session.id, {
+    kind: "tool-activity",
+    currentTool: {
+      id: "item-2",
+      kind: "commandExecution",
+      name: "Command",
+      inputPreview: "pnpm test",
+      startedAt: "2026-07-13T00:00:01.000Z",
+    },
+    toolCallsSinceLastMessage: 2,
+  });
+  assert.equal(changes, 1);
+  assert.equal(running.toolCallsSinceLastMessage, 2);
+  assert.equal(running.currentTool.id, "item-2");
+
+  const replaced = registry.applyRealtimeEvent(session.id, {
+    kind: "tool-activity",
+    currentTool: null,
+    toolCallsSinceLastMessage: 1,
+  });
+  assert.equal(changes, 2);
+  assert.equal(replaced.currentTool, undefined);
+  assert.equal(replaced.toolCallsSinceLastMessage, 1);
+  assert.equal(replaced.counters.toolCalls, 0);
+  stop();
+});
+
+test("ai session registry clears stale current tools at turn completion without clearing the window count", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-tool-terminal-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const session = registry.start({ agent: "codex", providerSessionId: "thread-terminal" });
+  registry.applyRealtimeEvent(session.id, {
+    kind: "tool-activity",
+    currentTool: { id: "item-1", kind: "webSearch", name: "Web search" },
+    toolCallsSinceLastMessage: 4,
+  });
+
+  const completed = registry.applyRealtimeEvent(session.id, {
+    kind: "turn-completed",
+    status: "idle",
+    text: "Done",
+  });
+  assert.equal(completed.currentTool, undefined);
+  assert.equal(completed.toolCallsSinceLastMessage, 4);
+});
+
+test("ai session registry resets tool activity at an assistant message boundary", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-tool-message-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const session = registry.start({ agent: "codex", providerSessionId: "thread-message" });
+  registry.applyRealtimeEvent(session.id, {
+    kind: "tool-activity",
+    currentTool: { id: "item-1", kind: "commandExecution", name: "Command" },
+    toolCallsSinceLastMessage: 2,
+  });
+
+  const messaged = registry.applyRealtimeEvent(session.id, {
+    kind: "assistant-message",
+    text: "Result",
+  });
+  assert.equal(messaged.currentTool, undefined);
+  assert.equal(messaged.toolCallsSinceLastMessage, 0);
+});
+
+test("ai session registry migrates historical tool activity and ignores unknown persisted fields", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-tool-migrate-"));
+  const dir = path.join(root, "ai-sessions");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "legacy.json"), JSON.stringify({
+    id: "legacy",
+    agent: "codex",
+    status: "running",
+    phase: "tool",
+    currentTool: {
+      name: "Command",
+      inputPreview: "pnpm test",
+      startedAt: "legacy-date",
+      historicalDetail: "ignored",
+    },
+    startedAt: "2026-07-13T00:00:00.000Z",
+    updatedAt: "2026-07-13T00:00:01.000Z",
+    counters: {},
+    queue: {},
+    futureSessionField: "ignored",
+  }));
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (message) => warnings.push(String(message));
+  try {
+    const registry = createAiSessionRegistry({ dir });
+    const session = registry.get("legacy");
+    assert.ok(session);
+    assert.equal(session.toolCallsSinceLastMessage, 0);
+    assert.deepEqual(session.currentTool, { name: "Command", inputPreview: "pnpm test" });
+    assert.equal(registry.list().some((item) => item.id === "legacy"), true);
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.equal(warnings.some((message) => message.includes("futureSessionField")), true);
+  assert.equal(warnings.some((message) => message.includes("historicalDetail")), true);
 });
 
 test("ai session registry starts explicit turns without carrying over previous responses", () => {
@@ -1885,6 +2111,81 @@ test("codex app server bridge syncs loaded threads and status notifications", as
   assert.equal(registry.list()[0].status, "idle");
   bridge.stop();
   assert.equal(fake.stopped, true);
+});
+
+test("codex app server bridge projects realtime tool activity and replaces it from thread snapshots", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-tools-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  class FakeCodexAppServerClient extends EventEmitter {
+    constructor() {
+      super();
+      this.thread = {
+        id: "thread_tools",
+        status: { type: "active", activeFlags: [] },
+        turns: [{
+          id: "turn_tools",
+          status: "inProgress",
+          items: [
+            { type: "agentMessage", id: "message", text: "Starting tools" },
+            { type: "commandExecution", id: "snapshot_cmd", command: "pnpm test", status: "inProgress" },
+          ],
+        }],
+      };
+    }
+    async start() {}
+    async listLoadedThreadIds() { return [this.thread.id]; }
+    async readThread() { return this.thread; }
+    stop() {}
+  }
+
+  const fake = new FakeCodexAppServerClient();
+  const bridge = new CodexAppServerSessionBridge(registry, fake);
+  await bridge.sync();
+  let session = registry.list()[0];
+  assert.equal(session.toolCallsSinceLastMessage, 1);
+  assert.equal(session.currentTool.id, "snapshot_cmd");
+
+  fake.emit("event", codexNotification("item/started", {
+    threadId: "thread_tools",
+    turnId: "turn_tools",
+    startedAtMs: 1_750_000_000_000,
+    item: { type: "webSearch", id: "live_search", query: "Codex app-server" },
+  }));
+  session = registry.list()[0];
+  assert.equal(session.toolCallsSinceLastMessage, 2);
+  assert.equal(session.currentTool.id, "live_search");
+
+  fake.emit("event", { type: "turn-completed", threadId: "thread_tools", turnId: "turn_tools", status: "completed" });
+  session = registry.list()[0];
+  assert.equal(session.currentTool, undefined);
+  assert.equal(session.toolCallsSinceLastMessage, 2);
+
+  fake.emit("event", { type: "agent-message-completed", threadId: "thread_tools", turnId: "turn_tools", text: "Done" });
+  session = registry.list()[0];
+  assert.equal(session.currentTool, undefined);
+  assert.equal(session.toolCallsSinceLastMessage, 0);
+
+  fake.emit("event", codexNotification("item/started", {
+    threadId: "thread_tools",
+    item: { type: "commandExecution", id: "stale_live", command: "stale" },
+  }));
+  assert.equal(registry.list()[0].toolCallsSinceLastMessage, 1);
+  fake.thread = {
+    id: "thread_tools",
+    status: { type: "idle" },
+    turns: [{
+      id: "turn_tools",
+      status: "completed",
+      items: [
+        { type: "agentMessage", id: "latest_boundary", text: "Latest" },
+        { type: "webSearch", id: "snapshot_done", query: "finished search" },
+      ],
+    }],
+  };
+  await bridge.sync();
+  session = registry.list()[0];
+  assert.equal(session.toolCallsSinceLastMessage, 1);
+  assert.equal(session.currentTool, undefined);
 });
 
 test("codex app server bridge repeated snapshots keep completed turns stable", async () => {
@@ -4135,13 +4436,41 @@ test("controlled instance publishes provider changes immediately and discovery c
     const appSessionId = "app_discovery";
     const initial = JSON.parse((await app.inject({ method: "GET", url: "/api/ai-sessions/state" })).payload).data;
     const providerStartedAt = Date.now();
-    registry.start({ agent: "codex", appSessionId, providerSessionId: "provider_immediate", status: "idle" });
+    const providerSession = registry.start({ agent: "codex", appSessionId, providerSessionId: "provider_immediate", status: "idle" });
     const providerState = await waitForCondition(async () => {
       const state = JSON.parse((await app.inject({ method: "GET", url: "/api/ai-sessions/state" })).payload).data;
       return state.revision > initial.revision ? state : undefined;
     }, "provider event projection", 500);
     assert.ok(Date.now() - providerStartedAt < 500);
     assert.equal(providerState.snapshot.sessions.some((session) => session.providerSessionId === "provider_immediate"), true);
+
+    registry.applyRealtimeEvent(providerSession.id, {
+      kind: "tool-activity",
+      currentTool: { id: "tool_immediate", kind: "commandExecution", name: "Command", inputPreview: "pnpm test" },
+      toolCallsSinceLastMessage: 2,
+      source: "realtime",
+    });
+    const toolState = await waitForCondition(async () => {
+      const state = JSON.parse((await app.inject({ method: "GET", url: "/api/ai-sessions/state" })).payload).data;
+      return state.revision > providerState.revision ? state : undefined;
+    }, "tool activity projection", 500);
+    const toolSession = toolState.snapshot.sessions.find((session) => session.id === providerSession.id);
+    assert.deepEqual(toolSession.currentTool, {
+      id: "tool_immediate",
+      kind: "commandExecution",
+      name: "Command",
+      inputPreview: "pnpm test",
+    });
+    assert.equal(toolSession.toolCallsSinceLastMessage, 2);
+    const toolDelta = JSON.parse((await app.inject({
+      method: "GET",
+      url: `/api/ai-sessions?streamId=${encodeURIComponent(toolState.streamId)}&sinceRevision=${providerState.revision}`,
+    })).payload).data;
+    const retainedToolSession = toolDelta.events
+      .flatMap((event) => event.payload.upserted || event.payload.snapshot?.sessions || [])
+      .find((session) => session.id === providerSession.id && session.toolCallsSinceLastMessage === 2);
+    assert.equal(retainedToolSession.toolCallsSinceLastMessage, 2);
+    assert.equal(retainedToolSession.currentTool.id, "tool_immediate");
 
     const externalRegistry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
     externalRegistry.start({ agent: "claude", appSessionId, providerSessionId: "provider_missed", status: "idle" });

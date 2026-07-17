@@ -24,7 +24,7 @@ function timestamp() {
   return new Date().toISOString();
 }
 
-function summary(id) {
+function summary(id, overrides = {}) {
   const now = timestamp();
   return {
     id,
@@ -37,6 +37,7 @@ function summary(id) {
     startedAt: now,
     updatedAt: now,
     queue: { pendingCount: 0, items: [] },
+    ...overrides,
   };
 }
 
@@ -122,6 +123,50 @@ test("control-plane UI applies an authoritative AI snapshot while recovery is in
   entry = queryClient.getQueryData(["control-plane-ai-sessions"]).instances[0];
   assert.equal(entry.revision, 3);
   assert.deepEqual(entry.aiSessions.sessions.map((session) => session.id), ["live"]);
+});
+
+test("control-plane UI preserves authoritative tool activity across snapshot and patch events", () => {
+  const queryClient = new QueryClient();
+  const streamId = "ai-tool-stream";
+  const startedAt = timestamp();
+  const initial = snapshotEvent(streamId, 1, [summary("tool", {
+    status: "running",
+    phase: "tool",
+    currentTool: { id: "tool_1", kind: "commandExecution", name: "Command", inputPreview: "pnpm test", startedAt },
+    toolCallsSinceLastMessage: 1,
+  })]);
+  queryClient.setQueryData(["control-plane-ai-sessions"], {
+    updatedAt: timestamp(),
+    instances: [{ instanceId: "instance-one", streamId, revision: 1, lastEventAt: initial.meta.generatedAt, aiSessions: initial.snapshot }],
+  });
+  const app = createApp({ render: () => null });
+  app.use(VueQueryPlugin, { queryClient });
+  const store = app.runWithContext(() => useAiSessionStore({ boardInstances: () => [], aiSessions: () => undefined }));
+
+  store.applyEvent({
+    type: AiSessionEventType.Patch,
+    payload: {
+      meta: {
+        streamId,
+        instanceId: "instance-one",
+        revision: 2,
+        previousRevision: 1,
+        traceId: "tool_patch_2",
+        generatedAt: timestamp(),
+        reason: "provider-event",
+      },
+      upserted: [summary("tool", {
+        status: "running",
+        phase: "thinking",
+        toolCallsSinceLastMessage: 2,
+      })],
+      removed: [],
+    },
+  });
+
+  const session = queryClient.getQueryData(["control-plane-ai-sessions"]).instances[0].aiSessions.sessions[0];
+  assert.equal(session.currentTool, undefined);
+  assert.equal(session.toolCallsSinceLastMessage, 2);
 });
 
 test("AI recovery stops on a mismatched snapshot and adopts the next live stream reset", async () => {

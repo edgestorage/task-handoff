@@ -66,11 +66,11 @@
               <MarkdownContent :content="displayAiSessionMessage(card.session, promptIndex)" />
             </section>
 
-            <div v-if="card.session.currentTool?.name" class="ai-board-floating-tool">
-              <span>Current Tool</span>
-              <strong>{{ card.session.currentTool.name }}</strong>
-              <small v-if="card.session.currentTool.inputPreview">{{ card.session.currentTool.inputPreview }}</small>
-            </div>
+            <AiSessionToolActivity
+              :current-tool="card.session.currentTool"
+              :tool-calls-since-last-message="card.session.toolCallsSinceLastMessage"
+              tone="board"
+            />
 
             <section v-if="card.session.queue?.items.length" class="ai-board-floating-block ai-board-floating-queue">
               <span>Queue · {{ card.session.queue.pendingCount }}</span>
@@ -132,6 +132,7 @@ import { Ban, Check, ChevronDown, ChevronUp, CircleHelp, ExternalLink, X } from 
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions } from "../../../api/types";
 import AiSessionComposer, { type AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
+import AiSessionToolActivity from "../../../components/ai-session/AiSessionToolActivity.vue";
 import AiSessionTurnNavigator from "../../../components/ai-session/AiSessionTurnNavigator.vue";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
@@ -431,9 +432,7 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 
-.ai-board-floating-head span,
-.ai-board-floating-tool span,
-.ai-board-floating-tool small {
+.ai-board-floating-head span {
   color: var(--ai-board-muted);
   font-size: 12px;
 }
@@ -492,8 +491,7 @@ onBeforeUnmount(() => {
   padding: 14px;
 }
 
-.ai-board-floating-block,
-.ai-board-floating-tool {
+.ai-board-floating-block {
   display: grid;
   gap: 7px;
   min-width: 0;
@@ -533,15 +531,6 @@ onBeforeUnmount(() => {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   font-size: 0.92em;
   padding: 1px 4px;
-}
-
-.ai-board-floating-tool strong {
-  color: var(--ai-board-title);
-  font-size: 13px;
-}
-
-.ai-board-floating-tool small {
-  overflow-wrap: anywhere;
 }
 
 .ai-board-floating-approval {

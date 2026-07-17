@@ -7,7 +7,7 @@ import { EventEmitter } from "node:events";
 import writeFileAtomic from "write-file-atomic";
 import { resolveStoragePaths } from "@task-handoff/core/storage/paths";
 import { findClaudeTranscriptPath, findCodexTranscriptPath, summarizeTranscriptLine } from "@task-handoff/core/core/transcript";
-import { AiSessionMessageAttachmentMetaSchema } from "@task-handoff/protocol/ai-sessions";
+import { AiSessionMessageAttachmentMetaSchema, AiSessionToolSchema } from "@task-handoff/protocol/ai-sessions";
 import type {
   AiSessionLifecycle,
   AiSessionMessageAttachment,
@@ -55,7 +55,7 @@ type AiSessionStartInput = {
 type AiSessionUpdateInput = Partial<
   Pick<
     AiSessionStatus,
-    "appSessionId" | "appId" | "providerSessionId" | "activeTurnId" | "title" | "cwd" | "userPrompt" | "turns" | "status" | "phase" | "summary" | "lastMessage" | "currentTool" | "transcriptPath" | "error"
+    "appSessionId" | "appId" | "providerSessionId" | "activeTurnId" | "title" | "cwd" | "userPrompt" | "turns" | "status" | "phase" | "summary" | "lastMessage" | "currentTool" | "toolCallsSinceLastMessage" | "transcriptPath" | "error"
     | "providerMeta"
     | "appBindingKeys"
     | "actions"
@@ -175,6 +175,49 @@ function normalizeCounters(counters?: Partial<AiSessionStatus["counters"]>): AiS
   };
 }
 
+function normalizeNonNegativeInteger(value: unknown) {
+  const numeric = Number(value);
+  return Number.isInteger(numeric) && numeric >= 0 ? numeric : 0;
+}
+
+function warnUnknownFields(record: Record<string, unknown>, allowed: ReadonlySet<string>, context: string) {
+  const unknown = Object.keys(record).filter((key) => !allowed.has(key));
+  if (unknown.length) {
+    console.warn(`[ai-session] Ignoring unknown ${context} fields: ${unknown.join(", ")}`);
+  }
+}
+
+const PERSISTED_SESSION_FIELDS = new Set([
+  "id", "agent", "appSessionId", "appId", "providerSessionId", "providerMeta", "appBindingKeys", "actions",
+  "activeTurnId", "title", "cwd", "userPrompt", "turns", "status", "phase", "summary", "lastMessage",
+  "currentTool", "toolCallsSinceLastMessage", "transcriptPath", "transcriptSize", "startedAt", "updatedAt",
+  "completedAt", "error", "counters", "queue",
+]);
+
+const PERSISTED_TOOL_FIELDS = new Set(["id", "kind", "name", "inputPreview", "startedAt"]);
+
+function normalizeTool(value: unknown): AiSessionStatus["currentTool"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  warnUnknownFields(record, PERSISTED_TOOL_FIELDS, "currentTool");
+  if (typeof record.name !== "string" || !record.name.trim()) {
+    return undefined;
+  }
+  const candidate = {
+    ...(typeof record.id === "string" && record.id.trim() ? { id: compact(record.id, 240) } : {}),
+    ...(typeof record.kind === "string" && record.kind.trim() ? { kind: compact(record.kind, 80) } : {}),
+    name: compact(record.name, 120),
+    ...(typeof record.inputPreview === "string" && record.inputPreview.trim() ? { inputPreview: compact(record.inputPreview, 500) } : {}),
+    ...(typeof record.startedAt === "string" && AiSessionToolSchema.shape.startedAt.safeParse(record.startedAt).success
+      ? { startedAt: record.startedAt }
+      : {}),
+  };
+  const parsed = AiSessionToolSchema.safeParse(candidate);
+  return parsed.success ? parsed.data : undefined;
+}
+
 function normalizeStringArray(value: unknown, maxItems: number, maxLength: number) {
   if (!Array.isArray(value)) {
     return undefined;
@@ -251,10 +294,11 @@ function attachmentMetas(attachments: AiSessionMessageAttachment[] = []): AiSess
 }
 
 function normalizeSession(value: unknown): AiSessionStatus | undefined {
-  const record = value && typeof value === "object" ? (value as Partial<AiSessionStatus>) : undefined;
+  const record = value && typeof value === "object" && !Array.isArray(value) ? (value as Partial<AiSessionStatus> & Record<string, unknown>) : undefined;
   if (!record?.id || !record.agent || !record.startedAt || !record.updatedAt) {
     return undefined;
   }
+  warnUnknownFields(record, PERSISTED_SESSION_FIELDS, "session");
   return {
     id: compact(record.id, 120),
     agent: compact(record.agent, 80),
@@ -273,13 +317,8 @@ function normalizeSession(value: unknown): AiSessionStatus | undefined {
     phase: normalizePhase(record.phase),
     summary: record.summary ? compact(record.summary, 1000) : undefined,
     lastMessage: record.lastMessage ? messageText(record.lastMessage) : undefined,
-    currentTool: record.currentTool?.name
-      ? {
-          name: compact(record.currentTool.name, 120),
-          inputPreview: record.currentTool.inputPreview ? compact(record.currentTool.inputPreview, 500) : undefined,
-          startedAt: record.currentTool.startedAt,
-        }
-      : undefined,
+    currentTool: normalizeTool(record.currentTool),
+    toolCallsSinceLastMessage: normalizeNonNegativeInteger(record.toolCallsSinceLastMessage),
     transcriptPath: record.transcriptPath ? compact(record.transcriptPath, 4096) : undefined,
     transcriptSize: Number.isInteger(record.transcriptSize) && Number(record.transcriptSize) >= 0 ? Number(record.transcriptSize) : undefined,
     startedAt: record.startedAt,
@@ -357,6 +396,7 @@ function summaryForHeartbeat(session: AiSessionStatus): AiSessionSummary {
     summary: session.summary,
     lastMessage: session.lastMessage,
     currentTool: session.currentTool,
+    toolCallsSinceLastMessage: session.toolCallsSinceLastMessage,
     queue: session.queue,
     startedAt: session.startedAt,
     updatedAt: session.updatedAt,
@@ -516,6 +556,7 @@ export class AiSessionRegistry {
       status: normalizeLifecycle(input.status || "idle"),
       phase: normalizePhase(input.phase || "unknown"),
       summary: input.summary ? compact(input.summary, 1000) : undefined,
+      toolCallsSinceLastMessage: 0,
       startedAt: timestamp,
       updatedAt: timestamp,
       counters: { toolCalls: 0, edits: 0, approvals: 0 },
@@ -724,6 +765,7 @@ export class AiSessionRegistry {
         activeTurnId: status === "running" || status === "waiting" ? event.activeTurnId || current.activeTurnId : current.activeTurnId,
         status,
         phase: event.phase || current.phase,
+        currentTool: status === "idle" || status === "failed" ? undefined : current.currentTool,
       }, { updatedAt: event.observedAt, meta });
     }
     if (event.kind === "turn-started") {
@@ -751,6 +793,8 @@ export class AiSessionRegistry {
         phase: event.phase || (completedFromTranscript ? "unknown" : "responding"),
         summary: event.text,
         lastMessage: event.text,
+        currentTool: undefined,
+        toolCallsSinceLastMessage: 0,
       }, { updatedAt: event.observedAt, meta });
     }
     if (event.kind === "approval-requested") {
@@ -763,6 +807,12 @@ export class AiSessionRegistry {
         counters: event.counters || { approvals: 1 },
       }, { updatedAt: event.observedAt, meta });
     }
+    if (event.kind === "tool-activity") {
+      return this.update(id, {
+        currentTool: event.currentTool || undefined,
+        toolCallsSinceLastMessage: event.toolCallsSinceLastMessage,
+      }, { updatedAt: event.observedAt, meta, suppressTurnUpdate: true });
+    }
     if (event.kind === "turn-completed") {
       const error = event.error ? compact(event.error, 4000) : undefined;
       const responseText = event.text || event.summary || (event.status === "failed" ? error : undefined);
@@ -774,6 +824,7 @@ export class AiSessionRegistry {
         summary: responseText,
         lastMessage: responseText,
         error,
+        currentTool: undefined,
       }, { updatedAt: event.observedAt, meta, clearResponse: !hasResponse });
     }
     return undefined;
@@ -810,6 +861,8 @@ export class AiSessionRegistry {
         actions: input.actions,
         activeTurnId: input.activeTurnId,
         lastMessage: input.lastMessage,
+        currentTool: input.status === "running" || input.status === "waiting" ? input.currentTool : undefined,
+        toolCallsSinceLastMessage: input.toolCallsSinceLastMessage ?? 0,
         transcriptPath: input.transcriptPath,
         transcriptSize: input.transcriptSize,
         status: input.status || session.status,
@@ -855,6 +908,16 @@ export class AiSessionRegistry {
       status: staleActivitySnapshot ? current.status : event.status || current.status,
       phase: staleActivitySnapshot ? current.phase : event.phase || current.phase,
       summary: staleActivitySnapshot ? current.summary : ignoreSnapshotTopLevelResponse ? undefined : event.replaceActivity ? event.summary : event.summary || current.summary,
+      currentTool: event.status === "idle" || event.status === "failed"
+        ? undefined
+        : staleActivitySnapshot
+        ? current.currentTool
+        : event.replaceActivity
+          ? event.currentTool
+          : event.currentTool || current.currentTool,
+      toolCallsSinceLastMessage: staleActivitySnapshot
+        ? current.toolCallsSinceLastMessage
+        : event.toolCallsSinceLastMessage ?? (event.replaceActivity ? 0 : current.toolCallsSinceLastMessage),
     }, {
       updatedAt: event.observedAt,
       meta,

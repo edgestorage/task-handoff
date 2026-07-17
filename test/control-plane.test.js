@@ -77,7 +77,7 @@ function testAppInventory(apps, observedAt = new Date().toISOString()) {
 }
 
 test("controlled instance heartbeat protocol rejects legacy receiver projection", () => {
-  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-07-17");
+  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-07-18");
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, receiver: { status: "running", pendingCount: 1 } }).success, false);
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, apps: { runningCount: 1 } }).success, false);
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, appInventory: emptyAppInventory(), apps: { runningCount: 1 } }).success, true);
@@ -415,6 +415,12 @@ test("session aggregators apply patch and removed events as one revisioned strea
   aiAggregator.onSnapshot((update) => aiUpdates.push({
     revision: update.revision,
     sessionIds: update.aiSessions.sessions.map((session) => session.id),
+    toolActivity: update.aiSessions.sessions[0]
+      ? {
+          currentTool: update.aiSessions.sessions[0].currentTool,
+          toolCallsSinceLastMessage: update.aiSessions.sessions[0].toolCallsSinceLastMessage,
+        }
+      : undefined,
   }));
   aiAggregator.applySnapshot(aiSessionSnapshotPayload(
     { sessions: [] },
@@ -422,7 +428,17 @@ test("session aggregators apply patch and removed events as one revisioned strea
   ));
   assert.equal(aiAggregator.applyPatch({
     meta: { instanceId: "inst_events", streamId: "ai_events_stream", revision: 2, previousRevision: 1, traceId: "ai_patch", generatedAt: timestamp, reason: "provider-event" },
-    upserted: [{ id: "ai_1", agent: "codex", status: "idle", phase: "unknown", startedAt: timestamp, updatedAt: timestamp, queue: { pendingCount: 0, items: [] } }],
+    upserted: [{
+      id: "ai_1",
+      agent: "codex",
+      status: "running",
+      phase: "tool",
+      currentTool: { id: "tool_1", kind: "commandExecution", name: "Command", inputPreview: "pnpm test", startedAt: timestamp },
+      toolCallsSinceLastMessage: 2,
+      startedAt: timestamp,
+      updatedAt: timestamp,
+      queue: { pendingCount: 0, items: [] },
+    }],
     removed: [],
   }), true);
   assert.equal(aiAggregator.applyRemoved({
@@ -439,9 +455,16 @@ test("session aggregators apply patch and removed events as one revisioned strea
   assert.equal(aiDeltaPastHead.syncRequired, true);
   assert.deepEqual(aiDeltaPastHead.events, []);
   assert.deepEqual(aiUpdates, [
-    { revision: 1, sessionIds: [] },
-    { revision: 2, sessionIds: ["ai_1"] },
-    { revision: 3, sessionIds: [] },
+    { revision: 1, sessionIds: [], toolActivity: undefined },
+    {
+      revision: 2,
+      sessionIds: ["ai_1"],
+      toolActivity: {
+        currentTool: { id: "tool_1", kind: "commandExecution", name: "Command", inputPreview: "pnpm test", startedAt: timestamp },
+        toolCallsSinceLastMessage: 2,
+      },
+    },
+    { revision: 3, sessionIds: [], toolActivity: undefined },
   ]);
 
   const normalizedAppSession = normalizeAppSessionRecord({
@@ -4219,10 +4242,10 @@ test("node agent starts localhost runtime as a host controlled-instance process"
       "    name: process.env.TASK_HANDOFF_INSTANCE_NAME,",
       "    nodeId: process.env.TASK_HANDOFF_NODE_ID,",
       "    runtimeId: process.env.TASK_HANDOFF_RUNTIME_ID,",
-      "    protocolVersion: '2026-07-17',",
+      "    protocolVersion: '2026-07-18',",
       "    build: { component: 'controlled-instance' },",
       "    controlMode: 'controlled',",
-      "    capabilities: { protocolVersion: '2026-07-17', features: {} },",
+      "    capabilities: { protocolVersion: '2026-07-18', features: {} },",
       "    appInventory: { items: [], observedAt: new Date().toISOString(), issues: [] },",
       "    target: { strategy: 'direct-port', web: `http://127.0.0.1:${port}`, api: `http://127.0.0.1:${port}/api`, status: 'reachable' },",
       "    workspace: { mode: 'local-bind', status: 'ready', path: process.env.TASK_HANDOFF_WORKSPACE, exists: true },",

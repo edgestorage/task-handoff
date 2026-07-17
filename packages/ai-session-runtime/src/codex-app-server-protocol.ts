@@ -33,6 +33,21 @@ export type CodexApprovalRequest = {
   params: JsonValue;
 };
 
+export type CodexToolDescriptor = {
+  id: string;
+  kind: string;
+  name: string;
+  inputPreview?: string;
+  startedAt?: string;
+};
+
+export type CodexToolActivityState = {
+  seenToolIds: string[];
+  activeTools: CodexToolDescriptor[];
+  toolCallsSinceLastMessage: number;
+  currentTool?: CodexToolDescriptor;
+};
+
 export type CodexAppServerEvent =
   | { type: "thread"; thread: CodexThread }
   | { type: "thread-status"; threadId: string; status: CodexThreadStatus }
@@ -40,6 +55,8 @@ export type CodexAppServerEvent =
   | { type: "turn-started"; threadId: string; turnId?: string }
   | { type: "turn-completed"; threadId: string; turnId?: string; status?: string; error?: string }
   | { type: "approval-request"; request: CodexApprovalRequest }
+  | { type: "tool-item-started"; threadId: string; turnId?: string; tool: CodexToolDescriptor }
+  | { type: "tool-item-completed"; threadId: string; turnId?: string; tool: CodexToolDescriptor }
   | { type: "user-message"; threadId: string; turnId?: string; text: string }
   | { type: "agent-message-delta"; threadId: string; turnId?: string; itemId?: string; delta: string }
   | { type: "agent-message-completed"; threadId: string; turnId?: string; text: string };
@@ -83,6 +100,18 @@ export function codexNotification(method: string, params: JsonValue): CodexAppSe
           }
         : undefined;
     }
+    const tool = codexToolDescriptor(
+      item,
+      method === "item/started" && typeof params.startedAtMs === "number" ? params.startedAtMs : undefined,
+    );
+    if (tool) {
+      return {
+        type: method === "item/started" ? "tool-item-started" : "tool-item-completed",
+        threadId: params.threadId,
+        turnId: typeof params.turnId === "string" ? params.turnId : undefined,
+        tool,
+      };
+    }
   }
   if (method === "item/agentMessage/delta" && typeof params.threadId === "string" && typeof params.delta === "string") {
     return {
@@ -105,6 +134,223 @@ export function codexNotification(method: string, params: JsonValue): CodexAppSe
     }
   }
   return undefined;
+}
+
+export function codexThreadItemKind(item: JsonValue): "tool" | "non-tool" | "unknown" {
+  switch (item.type) {
+    case "commandExecution":
+    case "fileChange":
+    case "mcpToolCall":
+    case "dynamicToolCall":
+    case "collabAgentToolCall":
+    case "webSearch":
+    case "imageView":
+    case "sleep":
+    case "imageGeneration":
+      return "tool";
+    case "userMessage":
+    case "hookPrompt":
+    case "agentMessage":
+    case "plan":
+    case "reasoning":
+    case "subAgentActivity":
+    case "enteredReviewMode":
+    case "exitedReviewMode":
+    case "contextCompaction":
+      return "non-tool";
+    default:
+      return "unknown";
+  }
+}
+
+export function codexToolDescriptor(item: JsonValue, startedAtMs?: number): CodexToolDescriptor | undefined {
+  const classification = codexThreadItemKind(item);
+  if (classification === "non-tool") return undefined;
+  if (classification === "unknown") {
+    if (typeof item.type === "string" && item.type) {
+      console.warn(`[codex-app-server] ignoring unknown ThreadItem.type: ${item.type}`);
+    }
+    return undefined;
+  }
+  const id = stringField(item, "id");
+  const kind = stringField(item, "type");
+  if (!id || !kind) return undefined;
+  const projected = projectCodexTool(item, kind);
+  return {
+    id,
+    kind,
+    name: projected.name,
+    inputPreview: compactToolPreview(projected.inputPreview),
+    startedAt: isoTimestampFromMs(startedAtMs),
+  };
+}
+
+function isoTimestampFromMs(value: number | undefined) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
+function projectCodexTool(item: JsonValue, kind: string): { name: string; inputPreview?: string } {
+  switch (kind) {
+    case "commandExecution":
+      return { name: "Command", inputPreview: stringField(item, "command") };
+    case "fileChange": {
+      const paths = Array.isArray(item.changes)
+        ? item.changes.map((change) => stringField(asRecord(change), "path")).filter((path): path is string => Boolean(path))
+        : [];
+      return { name: "File change", inputPreview: [...new Set(paths)].join(", ") || undefined };
+    }
+    case "mcpToolCall": {
+      const server = stringField(item, "server");
+      const tool = stringField(item, "tool") || "Tool";
+      return { name: server ? `${server} · ${tool}` : tool, inputPreview: safeJsonPreview(item.arguments) };
+    }
+    case "dynamicToolCall": {
+      const namespace = stringField(item, "namespace");
+      const tool = stringField(item, "tool") || "Tool";
+      return { name: namespace ? `${namespace} · ${tool}` : tool, inputPreview: safeJsonPreview(item.arguments) };
+    }
+    case "collabAgentToolCall": {
+      const tool = stringField(item, "tool") || "collabAgentToolCall";
+      const names: Record<string, string> = {
+        spawnAgent: "Spawn agent",
+        sendInput: "Send agent input",
+        resumeAgent: "Resume agent",
+        wait: "Wait for agents",
+        closeAgent: "Close agent",
+      };
+      return { name: names[tool] || tool, inputPreview: stringField(item, "prompt") };
+    }
+    case "webSearch":
+      return { name: "Web search", inputPreview: stringField(item, "query") };
+    case "imageView":
+      return { name: "View image", inputPreview: stringField(item, "path") };
+    case "sleep":
+      return { name: "Sleep", inputPreview: typeof item.durationMs === "number" ? `${item.durationMs} ms` : undefined };
+    case "imageGeneration":
+      return { name: "Image generation", inputPreview: stringField(item, "revisedPrompt") };
+    default:
+      return { name: kind };
+  }
+}
+
+function compactToolPreview(value: string | undefined) {
+  const compacted = value?.replace(/\s+/g, " ").trim();
+  if (!compacted) return undefined;
+  return compacted.length > 500 ? `${compacted.slice(0, 497)}...` : compacted;
+}
+
+function safeJsonPreview(value: unknown) {
+  if (value === undefined) return undefined;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function explicitToolActivity(item: JsonValue): "active" | "inactive" | "unknown" {
+  switch (item.type) {
+    case "commandExecution":
+    case "fileChange":
+    case "mcpToolCall":
+    case "dynamicToolCall":
+    case "collabAgentToolCall":
+    case "imageGeneration":
+      return item.status === "inProgress" ? "active" : typeof item.status === "string" ? "inactive" : "unknown";
+    case "webSearch":
+    case "imageView":
+    case "sleep":
+      return "unknown";
+    default:
+      return "inactive";
+  }
+}
+
+export class CodexToolActivityTracker {
+  private readonly seenToolIds = new Set<string>();
+  private readonly activeTools = new Map<string, CodexToolDescriptor>();
+
+  replace(state: CodexToolActivityState) {
+    this.seenToolIds.clear();
+    this.activeTools.clear();
+    for (const id of state.seenToolIds) this.seenToolIds.add(id);
+    for (const tool of state.activeTools) this.activeTools.set(tool.id, tool);
+    return this.snapshot();
+  }
+
+  started(tool: CodexToolDescriptor) {
+    if (this.seenToolIds.has(tool.id)) return this.snapshot();
+    this.seenToolIds.add(tool.id);
+    this.activeTools.set(tool.id, tool);
+    return this.snapshot();
+  }
+
+  completed(tool: CodexToolDescriptor) {
+    this.seenToolIds.add(tool.id);
+    this.activeTools.delete(tool.id);
+    return this.snapshot();
+  }
+
+  restoreActive(tool: CodexToolDescriptor) {
+    this.seenToolIds.add(tool.id);
+    this.activeTools.delete(tool.id);
+    this.activeTools.set(tool.id, tool);
+    return this.snapshot();
+  }
+
+  resetForAgentMessage() {
+    this.seenToolIds.clear();
+    this.activeTools.clear();
+    return this.snapshot();
+  }
+
+  clearActiveTools() {
+    this.activeTools.clear();
+    return this.snapshot();
+  }
+
+  snapshot(): CodexToolActivityState {
+    const activeTools = [...this.activeTools.values()];
+    return {
+      seenToolIds: [...this.seenToolIds],
+      activeTools,
+      toolCallsSinceLastMessage: this.seenToolIds.size,
+      currentTool: activeTools.at(-1),
+    };
+  }
+}
+
+export function rebuildCodexToolActivity(thread: CodexThread): CodexToolActivityState {
+  const tracker = new CodexToolActivityTracker();
+  let lastItemAfterBoundary: { item: JsonValue; tool?: CodexToolDescriptor } | undefined;
+  let lastTurnActive = false;
+  const turns = Array.isArray(thread.turns) ? thread.turns : [];
+  for (const rawTurn of turns) {
+    const turn = asRecord(rawTurn);
+    lastTurnActive = turn.status === "inProgress";
+    const items = Array.isArray(turn.items) ? turn.items : [];
+    for (const rawItem of items) {
+      const item = asRecord(rawItem);
+      if (item.type === "agentMessage") {
+        tracker.resetForAgentMessage();
+        lastItemAfterBoundary = undefined;
+        continue;
+      }
+      const tool = codexToolDescriptor(item);
+      lastItemAfterBoundary = { item, tool };
+      if (!tool) continue;
+      const activity = explicitToolActivity(item);
+      if (activity === "active") tracker.started(tool);
+      else tracker.completed(tool);
+    }
+  }
+  const threadActive = thread.status?.type === "active";
+  if (threadActive && lastTurnActive && lastItemAfterBoundary?.tool && explicitToolActivity(lastItemAfterBoundary.item) === "unknown") {
+    tracker.restoreActive(lastItemAfterBoundary.tool);
+  }
+  return tracker.snapshot();
 }
 
 export function codexApprovalRequest(id: number, method: string, params: JsonValue): CodexApprovalRequest | undefined {
@@ -222,6 +468,7 @@ export function summarizeThreadTurns(thread: CodexThread): {
   turns?: AiSessionStatus["turns"];
   summary?: string;
   lastMessage?: string;
+  toolActivity: CodexToolActivityState;
 } {
   let activeTurnId: string | undefined;
   let userPrompt: string | undefined;
@@ -265,6 +512,7 @@ export function summarizeThreadTurns(thread: CodexThread): {
     turns: historyTurns,
     summary: lastMessage,
     lastMessage,
+    toolActivity: rebuildCodexToolActivity(thread),
   };
 }
 

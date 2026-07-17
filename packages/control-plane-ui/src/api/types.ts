@@ -676,6 +676,14 @@ export type AiSessionQueue = {
   items: AiSessionQueuedMessage[];
 };
 
+export type AiSessionTool = {
+  id?: string;
+  kind?: string;
+  name: string;
+  inputPreview?: string;
+  startedAt?: string;
+};
+
 export type AiSessionSummary = {
   id: string;
   agent: string;
@@ -698,11 +706,8 @@ export type AiSessionSummary = {
   phase: AiSessionPhase;
   summary?: string;
   lastMessage?: string;
-  currentTool?: {
-    name: string;
-    inputPreview?: string;
-    startedAt?: string;
-  };
+  currentTool?: AiSessionTool;
+  toolCallsSinceLastMessage: number;
   queue: AiSessionQueue;
   startedAt: string;
   updatedAt: string;

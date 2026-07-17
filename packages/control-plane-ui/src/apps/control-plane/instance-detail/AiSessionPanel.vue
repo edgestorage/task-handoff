@@ -236,11 +236,10 @@
           <section class="session-ai-detail-block session-ai-detail-block-assistant">
             <MarkdownContent class="session-ai-detail-block-content" :content="displayAiSessionMessage(selectedSession, promptIndexFor(selectedSession))" />
           </section>
-          <div v-if="selectedSession.currentTool?.name" class="session-ai-tool">
-            <span>Current Tool</span>
-            <strong>{{ selectedSession.currentTool.name }}</strong>
-            <small v-if="selectedSession.currentTool.inputPreview">{{ selectedSession.currentTool.inputPreview }}</small>
-          </div>
+          <AiSessionToolActivity
+            :current-tool="selectedSession.currentTool"
+            :tool-calls-since-last-message="selectedSession.toolCallsSinceLastMessage"
+          />
           <section v-if="selectedSession.queue?.items.length" class="session-ai-detail-block session-ai-queue">
             <span>Queue · {{ selectedSession.queue.pendingCount }}</span>
             <div class="session-ai-queue-list">
@@ -296,6 +295,7 @@ import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import { bindAiSessionTrigger, interruptAiSession, removeAiSessionQueuedMessage, resolveAiSessionApproval, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, unbindAiSessionTrigger, uploadAiSessionAttachment, useControlPlaneTriggersQuery } from "../../../api/queries";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, TriggerConfig, TriggerDeployment, TriggerRuntimeState } from "../../../api/types";
 import AiSessionComposer, { type AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
+import AiSessionToolActivity from "../../../components/ai-session/AiSessionToolActivity.vue";
 import AiSessionTurnNavigator from "../../../components/ai-session/AiSessionTurnNavigator.vue";
 import { Button } from "../../../components/ui/button";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";

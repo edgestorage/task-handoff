@@ -1013,9 +1013,7 @@
   min-width: 0;
 }
 
-.session-ai-detail header span,
-.session-ai-tool span,
-.session-ai-tool small {
+.session-ai-detail header span {
   color: var(--text-muted);
   font-size: 12px;
 }
@@ -1077,19 +1075,6 @@
 .session-ai-detail-message :deep(strong) {
   color: var(--text-strong);
   font-weight: 800;
-}
-
-.session-ai-tool {
-  display: grid;
-  gap: 6px;
-  min-width: 0;
-  border-top: 1px solid var(--line-subtle);
-  padding-top: 10px;
-}
-
-.session-ai-tool strong {
-  color: var(--text-strong);
-  font-size: 13px;
 }
 
 .session-ai-approval-actions {

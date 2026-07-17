@@ -34,6 +34,8 @@ export const AiSessionPhaseSchema = z.enum([
 
 export const AiSessionToolSchema = z
   .object({
+    id: z.string().trim().min(1).max(240).optional(),
+    kind: z.string().trim().min(1).max(80).optional(),
     name: z.string().trim().min(1).max(120),
     inputPreview: z.string().trim().max(500).optional(),
     startedAt: z.string().datetime().optional(),
@@ -187,6 +189,7 @@ export const AiSessionStatusSchema = z
     summary: z.string().trim().max(1000).optional(),
     lastMessage: z.string().trim().optional(),
     currentTool: AiSessionToolSchema.optional(),
+    toolCallsSinceLastMessage: z.number().int().min(0).default(0),
     transcriptPath: z.string().trim().max(4096).optional(),
     transcriptSize: z.number().int().min(0).optional(),
     startedAt: z.string().datetime(),
@@ -227,6 +230,7 @@ export const AiSessionSummarySchema = AiSessionStatusSchema.pick({
   summary: true,
   lastMessage: true,
   currentTool: true,
+  toolCallsSinceLastMessage: true,
   queue: true,
   startedAt: true,
   updatedAt: true,
@@ -444,6 +448,8 @@ export const AiSessionSnapshotInputSchema = AiSessionInputBaseSchema.extend({
   phase: AiSessionPhaseSchema.optional(),
   summary: z.string().trim().max(1000).optional(),
   lastMessage: z.string().trim().optional(),
+  currentTool: AiSessionToolSchema.optional(),
+  toolCallsSinceLastMessage: z.number().int().min(0).optional(),
   transcriptPath: z.string().trim().max(4096).optional(),
   transcriptSize: z.number().int().min(0).optional(),
   replaceActivity: z.boolean().optional(),
@@ -452,7 +458,7 @@ export const AiSessionSnapshotInputSchema = AiSessionInputBaseSchema.extend({
 export const AiSessionRealtimeInputSchema = AiSessionInputBaseSchema.extend({
   type: z.literal("event"),
   sessionId: z.string().trim().min(1).max(120),
-  kind: z.enum(["lifecycle", "send-ack", "turn-started", "user-message", "assistant-message", "approval-requested", "turn-completed"]),
+  kind: z.enum(["lifecycle", "send-ack", "turn-started", "user-message", "assistant-message", "approval-requested", "turn-completed", "tool-activity"]),
   activeTurnId: z.string().trim().max(240).optional(),
   providerTurnId: z.string().trim().max(240).optional(),
   userPrompt: z.string().trim().optional(),
@@ -461,12 +467,30 @@ export const AiSessionRealtimeInputSchema = AiSessionInputBaseSchema.extend({
   phase: AiSessionPhaseSchema.optional(),
   summary: z.string().trim().max(1000).optional(),
   error: z.string().trim().max(4000).optional(),
+  currentTool: AiSessionToolSchema.nullable().optional(),
+  toolCallsSinceLastMessage: z.number().int().min(0).optional(),
   counters: z.object({
     toolCalls: z.number().int().min(0).optional(),
     edits: z.number().int().min(0).optional(),
     approvals: z.number().int().min(0).optional(),
   }).strict().optional(),
-}).strict();
+}).strict().superRefine((input, context) => {
+  if (input.kind !== "tool-activity") {
+    if (input.currentTool !== undefined) {
+      context.addIssue({ code: "custom", path: ["currentTool"], message: "currentTool is only valid for tool-activity events" });
+    }
+    if (input.toolCallsSinceLastMessage !== undefined) {
+      context.addIssue({ code: "custom", path: ["toolCallsSinceLastMessage"], message: "toolCallsSinceLastMessage is only valid for tool-activity events" });
+    }
+    return;
+  }
+  if (!("currentTool" in input)) {
+    context.addIssue({ code: "custom", path: ["currentTool"], message: "tool-activity events require currentTool" });
+  }
+  if (input.toolCallsSinceLastMessage === undefined) {
+    context.addIssue({ code: "custom", path: ["toolCallsSinceLastMessage"], message: "tool-activity events require toolCallsSinceLastMessage" });
+  }
+});
 
 export const AiSessionReducerInputSchema = z.discriminatedUnion("type", [
   AiSessionSnapshotInputSchema,
@@ -476,6 +500,7 @@ export const AiSessionReducerInputSchema = z.discriminatedUnion("type", [
 export type AiAgentKind = z.infer<typeof AiAgentKindSchema>;
 export type AiSessionLifecycle = z.infer<typeof AiSessionLifecycleSchema>;
 export type AiSessionPhase = z.infer<typeof AiSessionPhaseSchema>;
+export type AiSessionTool = z.infer<typeof AiSessionToolSchema>;
 export type AiSessionSource = z.infer<typeof AiSessionSourceSchema>;
 export type AiSessionMessageAttachment = z.infer<typeof AiSessionMessageAttachmentSchema>;
 export type AiSessionMessageAttachmentMeta = z.infer<typeof AiSessionMessageAttachmentMetaSchema>;

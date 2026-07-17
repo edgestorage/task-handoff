@@ -14,6 +14,7 @@ import {
   approvalResponseForRequest,
   codexApprovalRequest,
   codexNotification,
+  CodexToolActivityTracker,
   lifecycleForStatus,
   isNoActiveTurnError,
   summarizeThreadTurns,
@@ -23,6 +24,7 @@ import {
   type CodexApprovalRequest,
   type CodexThread,
   type CodexThreadStatus,
+  type CodexToolActivityState,
   type JsonValue,
 } from "./codex-app-server-protocol";
 
@@ -458,6 +460,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
   private readonly threadSubscriptionAttempts = new Map<string, Promise<CodexThread | undefined>>();
   private subscriptionEpoch = 0;
   private readonly approvals = new PendingAiSessionApprovalStore();
+  private readonly toolActivityByThread = new Map<string, CodexToolActivityTracker>();
   private readonly injectedClient?: CodexAppServerClientLike;
   private readonly options: CodexAppServerBridgeOptions;
 
@@ -828,6 +831,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
     }
     if (event.type === "thread-closed") {
       this.approvals.clearSession(session.id);
+      this.applyToolActivity(session.id, this.toolTracker(event.threadId).clearActiveTools());
       this.registry.applyRealtimeEvent(session.id, { kind: "turn-completed", activeTurnId: session.activeTurnId, status: "idle", phase: "unknown", text: "Codex thread closed.", source: "realtime" });
       return;
     }
@@ -850,12 +854,21 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       this.registry.applyRealtimeEvent(session.id, { kind: "turn-started", activeTurnId: event.turnId, providerTurnId: event.turnId, source: "realtime" });
       return;
     }
+    if (event.type === "tool-item-started") {
+      this.applyToolActivity(session.id, this.toolTracker(event.threadId).started(event.tool));
+      return;
+    }
+    if (event.type === "tool-item-completed") {
+      this.applyToolActivity(session.id, this.toolTracker(event.threadId).completed(event.tool));
+      return;
+    }
     if (event.type === "user-message") {
       this.registry.applyRealtimeEvent(session.id, { kind: "user-message", activeTurnId: event.turnId || session.activeTurnId, providerTurnId: event.turnId || session.activeTurnId, userPrompt: event.text, source: "realtime" });
       return;
     }
     if (event.type === "turn-completed") {
       this.approvals.clearSession(session.id);
+      this.applyToolActivity(session.id, this.toolTracker(event.threadId).clearActiveTools());
       this.registry.applyRealtimeEvent(session.id, {
         kind: "turn-completed",
         activeTurnId: event.turnId,
@@ -877,8 +890,27 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       return;
     }
     if (event.type === "agent-message-completed") {
+      this.applyToolActivity(session.id, this.toolTracker(event.threadId).resetForAgentMessage());
       this.registry.applyRealtimeEvent(session.id, { kind: "assistant-message", activeTurnId: event.turnId || session.activeTurnId, providerTurnId: event.turnId || session.activeTurnId, text: event.text, status: session.status, source: "realtime" });
     }
+  }
+
+  private toolTracker(threadId: string) {
+    let tracker = this.toolActivityByThread.get(threadId);
+    if (!tracker) {
+      tracker = new CodexToolActivityTracker();
+      this.toolActivityByThread.set(threadId, tracker);
+    }
+    return tracker;
+  }
+
+  private applyToolActivity(sessionId: string, state: CodexToolActivityState) {
+    this.registry.applyRealtimeEvent(sessionId, {
+      kind: "tool-activity",
+      currentTool: state.currentTool || null,
+      toolCallsSinceLastMessage: state.toolCallsSinceLastMessage,
+      source: "realtime",
+    });
   }
 
   private upsertThread(thread: CodexThread, options: { bindAppSession: boolean }) {
@@ -891,6 +923,9 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
     const lifecycle = this.lifecycleWithAttachedApproval(existing?.id, lifecycleForStatus(thread.status || {}));
     const appSessionId = options.bindAppSession ? this.appSessionIdForThread(id) : undefined;
     const history = summarizeThreadTurns(thread);
+    const toolActivity = Array.isArray(thread.turns)
+      ? this.toolTracker(id).replace(history.toolActivity)
+      : this.toolTracker(id).snapshot();
     this.registry.applyAdapterSnapshot({
       source: "adapter-snapshot",
       agent: "codex",
@@ -910,6 +945,8 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       turns: history.turns,
       summary: pendingApproval?.summary || history.summary,
       lastMessage: history.lastMessage,
+      currentTool: toolActivity.currentTool,
+      toolCallsSinceLastMessage: toolActivity.toolCallsSinceLastMessage,
       status: lifecycle.status,
       phase: lifecycle.phase,
       replaceActivity: true,
