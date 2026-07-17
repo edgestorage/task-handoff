@@ -41,6 +41,7 @@ const {
   scanRecentTranscripts,
 } = require("../packages/ai-session-runtime/src/ai-session-registry.ts");
 const {
+  codexApprovalRequest,
   codexNotification,
 } = require("../packages/ai-session-runtime/src/codex-app-server-protocol.ts");
 const { AiSessionController } = require("../packages/ai-session-runtime/src/ai-session-control.ts");
@@ -54,6 +55,18 @@ const { summarizeThreadTurns } = require("../packages/ai-session-runtime/src/cod
 const { AppRuntimeManager } = require("../packages/app-runtime/src/runtime.ts");
 const { AiSessionRefreshScheduler, createWebApp } = require("../packages/controlled-instance/src/web/server.ts");
 const { applyManagedCodexModelConfig } = require("../packages/controlled-instance/src/web/codex-model-config.ts");
+
+test("codex approval parser preserves the request reason", () => {
+  const request = codexApprovalRequest(42, "item/commandExecution/requestApproval", {
+    threadId: "thread_approval",
+    turnId: "turn_approval",
+    itemId: "cmd_1",
+    command: "pnpm test",
+    reason: "Tests need access to the local package cache.",
+  });
+
+  assert.equal(request?.summary, "Tests need access to the local package cache.");
+});
 
 test("telegram renderer escapes messages and progress payloads", () => {
   assert.equal(telegramMarkdownEscape("a_b"), "a\\_b");
@@ -120,6 +133,33 @@ test("telegram progress store rate limits direct edits", async () => {
     ["send", "working", "c1"],
     ["edit", 41, "done", "c1"],
   ]);
+});
+
+test("telegram progress store edits unchanged text when action rows change", async () => {
+  const calls = [];
+  const initialOptions = {
+    actionRows: [[{ text: "Steer queued message", callbackData: "steer:queue_1" }]],
+  };
+  const updatedOptions = {
+    actionRows: [[{ text: "Cancel", callbackData: "cancel" }]],
+  };
+  const store = new TelegramProgressStore({
+    updateIntervalMs: 25,
+    send: async () => ({ message_id: 41 }),
+    edit: async (messageId, text, _route, options) => {
+      calls.push([messageId, text, options]);
+    },
+  });
+
+  store.remember("k1", 41, "working", undefined, initialOptions);
+  await store.applyUpdate("k1", "working", undefined, updatedOptions);
+  assert.deepEqual(calls, []);
+
+  await store.wait(35);
+  await store.flush("k1");
+  await store.applyUpdate("k1", "working", undefined, updatedOptions);
+
+  assert.deepEqual(calls, [[41, "working", updatedOptions]]);
 });
 
 test("telegram progress store rekeys pending updates without recreating the old key", async () => {
@@ -446,6 +486,7 @@ test("codex app-server thread summary keeps assistant response on the real user 
       },
       {
         id: "turn_2",
+        status: "completed",
         items: [
           { type: "userMessage", content: [{ type: "text", text: "你是谁啊" }] },
           { type: "agentMessage", text: "我是 Claude Code，Anthropic 的 AI 助手。" },
@@ -1715,6 +1756,7 @@ test("codex app server bridge syncs loaded threads and status notifications", as
           turns: [
             {
               id: "turn_1",
+              status: "inProgress",
               items: [
                 { type: "userMessage", id: "item_user_1", clientId: null, content: [{ type: "text", text: "Implement the app-server sourced receiver", text_elements: [] }] },
                 { type: "agentMessage", id: "item_agent_1", text: "Working from app-server turns", phase: null, memoryCitation: null },
@@ -1757,7 +1799,8 @@ test("codex app server bridge syncs loaded threads and status notifications", as
   assert.equal(synced.lastMessage, "Working from app-server turns");
   assert.equal(synced.turns.length, 1);
   assert.equal(synced.turns[0].id, "turn_1");
-  assert.equal(synced.turns[0].status, "completed");
+  assert.equal(synced.activeTurnId, "turn_1");
+  assert.equal(synced.turns[0].status, "running");
   assert.equal(synced.turns[0].revision, 1);
   assert.equal(synced.turns[0].userPrompt, "Implement the app-server sourced receiver");
   assert.equal(synced.turns[0].summary, "Working from app-server turns");
@@ -1923,6 +1966,36 @@ test("codex app server protocol parses failed turn error details", () => {
     status: "failed",
     error: "The model request failed.\n\nHTTP 500 from provider.",
   });
+});
+
+test("codex app server bridge emits raw message deltas without persisting partial snapshots", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-message-delta-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  class FakeCodexAppServerClient extends EventEmitter {
+    async start() {}
+    async listLoadedThreadIds() {
+      return ["thread_delta"];
+    }
+    async readThread() {
+      return { id: "thread_delta", cwd: "/workspace", status: { type: "active" }, turns: [] };
+    }
+    stop() {}
+  }
+  const fake = new FakeCodexAppServerClient();
+  const deltas = [];
+  const bridge = new CodexAppServerSessionBridge(registry, fake, {
+    onMessageDelta: (event) => deltas.push(event),
+  });
+  await bridge.sync();
+  const session = registry.list()[0];
+  fake.emit("event", { type: "agent-message-delta", threadId: "thread_delta", turnId: "turn_delta", itemId: "item_delta", delta: "hel" });
+  fake.emit("event", { type: "agent-message-delta", threadId: "thread_delta", turnId: "turn_delta", itemId: "item_delta", delta: "lo" });
+
+  assert.deepEqual(deltas.map((event) => event.delta), ["hel", "lo"]);
+  assert.equal(registry.get(session.id).lastMessage, undefined);
+
+  fake.emit("event", { type: "agent-message-completed", threadId: "thread_delta", turnId: "turn_delta", itemId: "item_delta", text: "hello" });
+  assert.equal(registry.get(session.id).lastMessage, "hello");
 });
 
 test("codex app server bridge clears activity for empty idle thread snapshots", async () => {
@@ -3324,6 +3397,70 @@ test("codex app server bridge resumes thread to attach pending approval requests
   assert.deepEqual(fake.approvals.map((entry) => [entry.request.id, entry.decision]), [[88, "allow"]]);
   assert.equal(registry.get(waiting.id).activeTurnId, "turn_replayed");
   assert.equal(registry.get(waiting.id).summary, "Codex approval allowed.");
+});
+
+test("codex app server bridge subscribes each loaded thread once per connection epoch", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-thread-subscriptions-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  class FakeCodexAppServerClient extends EventEmitter {
+    constructor() {
+      super();
+      this.resumedThreads = [];
+    }
+    async start() {}
+    async listLoadedThreadIds() {
+      return ["thread_one", "thread_two"];
+    }
+    async readThread(threadId) {
+      return { id: threadId, cwd: "/workspace", status: { type: "active" }, turns: [] };
+    }
+    async resumeThread(threadId) {
+      this.resumedThreads.push(threadId);
+      return { id: threadId, cwd: "/workspace", status: { type: "active" }, turns: [] };
+    }
+    stop() {}
+  }
+
+  const fake = new FakeCodexAppServerClient();
+  const bridge = new CodexAppServerSessionBridge(registry, fake);
+  await bridge.sync();
+  await bridge.sync();
+  assert.deepEqual(fake.resumedThreads, ["thread_one", "thread_two"]);
+
+  bridge.stop();
+  await bridge.sync();
+  assert.deepEqual(fake.resumedThreads, ["thread_one", "thread_two", "thread_one", "thread_two"]);
+});
+
+test("codex app server bridge isolates thread subscription failures and retries only failures", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-thread-subscription-failure-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  class FakeCodexAppServerClient extends EventEmitter {
+    constructor() {
+      super();
+      this.resumedThreads = [];
+    }
+    async start() {}
+    async listLoadedThreadIds() {
+      return ["thread_failing", "thread_healthy"];
+    }
+    async readThread(threadId) {
+      return { id: threadId, cwd: "/workspace", status: { type: "active" }, turns: [] };
+    }
+    async resumeThread(threadId) {
+      this.resumedThreads.push(threadId);
+      if (threadId === "thread_failing") throw new Error("resume failed");
+      return { id: threadId, cwd: "/workspace", status: { type: "active" }, turns: [] };
+    }
+    stop() {}
+  }
+
+  const fake = new FakeCodexAppServerClient();
+  const bridge = new CodexAppServerSessionBridge(registry, fake);
+  await bridge.sync();
+  assert.deepEqual(registry.list().map((session) => session.providerSessionId).sort(), ["thread_failing", "thread_healthy"]);
+  await bridge.sync();
+  assert.deepEqual(fake.resumedThreads, ["thread_failing", "thread_healthy", "thread_failing"]);
 });
 
 test("codex app server client responds to permission approvals with granted permission profile", async () => {

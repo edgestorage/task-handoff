@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { WebSocket as WsClient } from "ws";
-import { CONTROL_PLANE_PROTOCOL_VERSION, type Node } from "@task-handoff/protocol/control-plane";
+import { CONTROL_PLANE_PROTOCOL_VERSION, InstanceResourceMetricsEventType, InstanceResourceMetricsSchema, type InstanceResourceMetrics, type Node } from "@task-handoff/protocol/control-plane";
 import { SessionStreamsHelloSchema, type SessionStreamsHello } from "@task-handoff/protocol/events";
 import { bridgeWebSockets, type WebSocketLike } from "@task-handoff/protocol/websocket-bridge";
 import type { ControlPlaneService } from "../application/service.ts";
@@ -126,10 +126,16 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
   private readonly sockets = new Map<string, { socket: { send: (data: string) => void; readyState?: number }; pending: Map<string, { resolve: (response: Response) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>; streams: Map<string, { downstream: WebSocketLike; upstream?: WebSocketLike; pendingFrames: Array<{ data: unknown; isBinary: boolean }> }> }>();
   private readonly events?: ControlPlaneEventBus;
   private readonly onStreamsHello?: (instanceId: string, hello: SessionStreamsHello) => void | Promise<void>;
+  private readonly validateInstanceScope?: (nodeId: string, instanceId: string) => boolean | Promise<boolean>;
+  private readonly validatedMetricScopes = new Map<string, number>();
 
-  constructor(events?: ControlPlaneEventBus, options: { onStreamsHello?: (instanceId: string, hello: SessionStreamsHello) => void | Promise<void> } = {}) {
+  constructor(events?: ControlPlaneEventBus, options: {
+    onStreamsHello?: (instanceId: string, hello: SessionStreamsHello) => void | Promise<void>;
+    validateInstanceScope?: (nodeId: string, instanceId: string) => boolean | Promise<boolean>;
+  } = {}) {
     this.events = events;
     this.onStreamsHello = options.onStreamsHello;
+    this.validateInstanceScope = options.validateInstanceScope;
   }
 
   attach(nodeId: string, socket: { send: (data: string) => void; readyState?: number; on?: (event: string, listener: (...args: unknown[]) => void) => void }) {
@@ -217,6 +223,13 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
     const payload = "payload" in event ? event.payload : {};
     const scope = event.scope && typeof event.scope === "object" && !Array.isArray(event.scope) ? event.scope as Record<string, unknown> : {};
     const forwardedInstanceId = typeof message.instanceId === "string" ? message.instanceId : undefined;
+    if (eventType === InstanceResourceMetricsEventType.Snapshot) {
+      const metrics = InstanceResourceMetricsSchema.safeParse(payload);
+      const scopeInstanceId = typeof scope.instanceId === "string" ? scope.instanceId : typeof event.instanceId === "string" ? event.instanceId : forwardedInstanceId;
+      if (!metrics.success || metrics.data.instanceId !== scopeInstanceId) return true;
+      void this.publishValidatedMetrics(nodeId, metrics.data, scope);
+      return true;
+    }
     this.events?.publish(eventType, payload, {
       topic: typeof event.topic === "string" ? event.topic : undefined,
       scope: {
@@ -226,6 +239,26 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
       },
     });
     return true;
+  }
+
+  private async publishValidatedMetrics(nodeId: string, metrics: InstanceResourceMetrics, scope: Record<string, unknown>) {
+    const cacheKey = `${nodeId}:${metrics.instanceId}`;
+    const now = Date.now();
+    const cachedUntil = this.validatedMetricScopes.get(cacheKey) || 0;
+    let valid = cachedUntil > now;
+    if (!valid) {
+      try {
+        valid = Boolean(await this.validateInstanceScope?.(nodeId, metrics.instanceId));
+      } catch {
+        valid = false;
+      }
+      if (valid) this.validatedMetricScopes.set(cacheKey, now + 30_000);
+    }
+    if (!valid) return;
+    this.events?.publish(InstanceResourceMetricsEventType.Snapshot, metrics, {
+      topic: "instances",
+      scope: { ...scope, nodeId, instanceId: metrics.instanceId },
+    });
   }
 
   async request(node: { id: string }, route: string, init: RequestInit = {}) {

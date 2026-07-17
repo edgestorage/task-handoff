@@ -8,6 +8,7 @@ import {
   type AiSessionSummary,
   type AiSessionDeltaResponse,
   type AiSessionEventMeta,
+  type AiSessionMessageDeltaEvent,
   type AiSessionPatchEvent,
   type AiSessionRemovedEvent,
   type AiSessionSnapshotEvent,
@@ -27,6 +28,7 @@ export function useAiSessionStore(input: {
   const apiLoader = input.apiLoader || getApiData;
   const advertised = new Map<string, SessionStreamDescriptor>();
   const recoveries = new Map<string, { promise: Promise<void>; highWater: number }>();
+  const messageDeltaBuffers = new Map<string, string>();
   const boardInstancesWithAiSessions = computed(() => mergeBoardAiSessions(input.boardInstances(), input.aiSessions()));
   const snapshotsByInstanceId = computed(() => {
     const snapshots = new Map<string, AiSessionsSnapshot>();
@@ -56,6 +58,36 @@ export function useAiSessionStore(input: {
     return applyEvent({ type: AiSessionEventType.Removed, payload });
   }
 
+  function applyMessageDelta(payload: AiSessionMessageDeltaEvent) {
+    if (!payload?.instanceId || !payload.sessionId || !payload.delta) return false;
+    const key = [payload.instanceId, payload.sessionId, payload.turnId || "", payload.itemId || ""].join("\u0000");
+    const text = `${messageDeltaBuffers.get(key) || ""}${payload.delta}`;
+    const phase: AiSessionSummary["phase"] = "responding";
+    messageDeltaBuffers.set(key, text);
+    let applied = false;
+    queryClient.setQueryData<ControlPlaneAiSessions>(["control-plane-ai-sessions"], (current) => {
+      if (!current) return current;
+      const instances = current.instances.map((entry) => {
+        if (entry.instanceId !== payload.instanceId) return entry;
+        const sessions = entry.aiSessions.sessions.map((session) => {
+          if (session.id !== payload.sessionId) return session;
+          applied = true;
+          const turns = [...(session.turns || [])];
+          const turnIndex = payload.turnId
+            ? turns.findIndex((turn) => turn.id === payload.turnId || turn.providerTurnId === payload.turnId)
+            : turns.length - 1;
+          if (turnIndex >= 0) {
+            turns[turnIndex] = { ...turns[turnIndex], lastMessage: text, summary: text, phase, updatedAt: payload.generatedAt };
+          }
+          return { ...session, lastMessage: text, summary: text, phase, updatedAt: payload.generatedAt, turns };
+        });
+        return { ...entry, aiSessions: { ...entry.aiSessions, sessions } };
+      });
+      return applied ? { ...current, instances } : current;
+    });
+    return applied;
+  }
+
   function applyEvent(event: AiSessionDeltaResponse["events"][number], fromRecovery = false) {
     const instanceId = event.payload.meta.instanceId;
     const advertisedStream = advertised.get(instanceId)?.streamId;
@@ -80,10 +112,21 @@ export function useAiSessionStore(input: {
       const result = applyAiSessionStreamEvent(projection, event as unknown as AiSessionStreamEvent);
       if (result.kind !== "applied") return current;
       applied = true;
+      clearSettledMessageDeltaBuffers(instanceId, result.projection.snapshot);
       return upsertInstanceAiSessions(current, instanceId, result.projection.snapshot, { streamId: result.projection.streamId, revision: result.projection.revision, lastEventAt: result.projection.lastEventAt });
     });
     if (!applied && !fromRecovery) void recoverDescriptor(descriptorThroughEvent(advertised.get(instanceId), event.payload.meta));
     return applied || advertised.has(instanceId);
+  }
+
+  function clearSettledMessageDeltaBuffers(instanceId: string, snapshot: AiSessionsSnapshot) {
+    for (const session of snapshot.sessions) {
+      if (session.status === "running") continue;
+      const prefix = `${instanceId}\u0000${session.id}\u0000`;
+      for (const key of messageDeltaBuffers.keys()) {
+        if (key.startsWith(prefix)) messageDeltaBuffers.delete(key);
+      }
+    }
   }
 
   function recoverDescriptor(descriptor?: SessionStreamDescriptor) {
@@ -138,6 +181,7 @@ export function useAiSessionStore(input: {
     boardInstancesWithAiSessions,
     instanceWithAiSessions,
     applySnapshotEvent,
+    applyMessageDelta,
     applyEvent,
     recoverDescriptor,
   };

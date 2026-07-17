@@ -8,6 +8,7 @@ const newInstanceModal = fs.readFileSync(new URL("../src/apps/control-plane/NewI
 test("new instances default to no model while preserving global default and explicit choices", () => {
   assert.match(runtimeStep, />Global default</);
   assert.match(runtimeStep, />No model</);
+  assert.ok(runtimeStep.indexOf(">No model<") < runtimeStep.indexOf(">Global default<"));
   assert.match(runtimeStep, /value === noModelValue \? null : value/);
   assert.match(newInstanceModal, /codexModelHash: null/);
   assert.match(newInstanceModal, /claudeModelHash: null/);

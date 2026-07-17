@@ -21,7 +21,7 @@ const snapshot = {
   streamId: "appstream_1",
   sequence: 1,
   capabilities: { platform: "linux", arch: "x64", installers: ["apt"], privilege: "passwordless-sudo" },
-  apps: [{ id: "chromium", name: "Browser", kind: "gui", state: "not-installed", canInstall: true, canUninstall: false }],
+  apps: [{ id: "chromium", name: "Browser", kind: "gui", state: "not-installed", managementSource: "none", canInstall: true, canUninstall: false }],
   activeJobs: [job],
   recentJobs: [],
   observedAt: now,

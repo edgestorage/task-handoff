@@ -48,6 +48,7 @@ test("controlled instance node agent client posts register and heartbeat payload
       method: init.method,
       authorization: init.headers.authorization,
       body: JSON.parse(init.body),
+      signal: init.signal,
     });
     const data = url.endsWith("/register") ? { id: "inst_registered" } : { ok: true };
     return new Response(JSON.stringify({ data }), {
@@ -77,6 +78,7 @@ test("controlled instance node agent client posts register and heartbeat payload
   assert.equal(requests.length, 3);
   assert.equal(requests[0].url, "http://node.local/api/node-agent/instances/inst_env/register");
   assert.equal(requests[0].authorization, "Bearer secret-token");
+  assert.equal(requests[0].signal instanceof AbortSignal, true);
   assert.equal(requests[0].body.instanceId, "inst_env");
   assert.equal(requests[0].body.name, "worker-1");
   assert.equal(requests[0].body.projectId, "proj_1");

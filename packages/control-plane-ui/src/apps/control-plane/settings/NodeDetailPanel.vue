@@ -50,18 +50,18 @@
                   <MoreHorizontal v-else :size="16" />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent class="min-w-44" align="end" :side-offset="6">
-                <DropdownMenuItem :disabled="headerActionState.rename.disabled" @select="actions.openNodeRename(selectedNode)">
+              <DropdownMenuContent class="node-detail-action-menu" align="end" :side-offset="6">
+                <DropdownMenuItem class="node-detail-action-item" :disabled="headerActionState.rename.disabled" @select="actions.openNodeRename(selectedNode)">
                   <Pencil :size="14" />
                   <span>{{ headerActionState.rename.label }}</span>
                 </DropdownMenuItem>
-                <DropdownMenuItem :disabled="headerActionState.pairingInvite.disabled" @select="actions.createPairingInviteForNode(selectedNode.id)">
+                <DropdownMenuItem class="node-detail-action-item" :disabled="headerActionState.pairingInvite.disabled" @select="actions.createPairingInviteForNode(selectedNode.id)">
                   <Plus :size="14" />
                   <span>{{ headerActionState.pairingInvite.label }}</span>
                 </DropdownMenuItem>
                 <template v-if="headerActionState.canDelete">
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem class="text-destructive focus:bg-destructive/10 focus:text-destructive" :disabled="headerActionState.remove.disabled" @select="actions.removeNode(selectedNode)">
+                  <DropdownMenuItem class="node-detail-action-item danger" :disabled="headerActionState.remove.disabled" @select="actions.removeNode(selectedNode)">
                     <Trash2 :size="14" />
                     <span>{{ headerActionState.remove.label }}</span>
                   </DropdownMenuItem>
@@ -661,6 +661,70 @@ watch(
   justify-content: flex-end;
   gap: 7px;
   white-space: nowrap;
+}
+
+:global(.node-detail-action-menu) {
+  display: grid;
+  width: 176px;
+  gap: 2px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface-inset);
+  box-shadow: var(--shadow-popover);
+  padding: 5px;
+}
+
+:global(.node-detail-action-item) {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-height: 30px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--control-plane-menu-text);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 0 8px;
+  text-align: left;
+}
+
+:global(.node-detail-action-item > svg) {
+  width: 14px;
+  height: 14px;
+}
+
+:global(.node-detail-action-item > span) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:global(.node-detail-action-item:hover),
+:global(.node-detail-action-item:focus-visible),
+:global(.node-detail-action-item[data-highlighted]) {
+  background: var(--surface-active);
+  color: var(--control-plane-menu-hover-text);
+  outline: none;
+}
+
+:global(.node-detail-action-item.danger) {
+  color: var(--status-danger);
+}
+
+:global(.node-detail-action-item.danger:hover),
+:global(.node-detail-action-item.danger:focus-visible),
+:global(.node-detail-action-item.danger[data-highlighted]) {
+  background: var(--status-danger-bg);
+  color: var(--status-danger);
+}
+
+:global(.node-detail-action-item[data-disabled]) {
+  cursor: default;
+  opacity: 0.52;
 }
 
 .node-detail-header strong,

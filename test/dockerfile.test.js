@@ -61,6 +61,13 @@ test("Docker fetches the Web Cap skill from its versioned upstream source", () =
   assert.doesNotMatch(dockerfile, /COPY \.agents\/skills\/web-cap/);
 });
 
+test("Docker installs Claude Code through the same canonical package managed at runtime", () => {
+  const dockerfile = fs.readFileSync(path.join(root, "Dockerfile"), "utf8");
+  assert.match(dockerfile, /npm install -g --include=optional[^\n]*\\\n\s+"@anthropic-ai\/claude-code@\$\{CLAUDE_CODE_VERSION\}"/);
+  assert.doesNotMatch(dockerfile, /@anthropic-ai\/claude-code-linux-/);
+  assert.doesNotMatch(dockerfile, /claude_native_package/);
+});
+
 test("Docker entrypoint passes only supported web CLI options", () => {
   const entrypoint = fs.readFileSync(path.join(root, "docker", "entrypoint.sh"), "utf8");
   const webCommand = entrypoint.slice(

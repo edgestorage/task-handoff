@@ -57,16 +57,16 @@
       <label v-if="codexModels.length">
         <span>Codex model</span>
         <ControlPlaneSelect v-model="instanceCodexModelValue" placeholder="No model">
-          <ControlPlaneSelectItem :value="defaultModelValue">Global default</ControlPlaneSelectItem>
           <ControlPlaneSelectItem :value="noModelValue">No model</ControlPlaneSelectItem>
+          <ControlPlaneSelectItem :value="defaultModelValue">Global default</ControlPlaneSelectItem>
           <ControlPlaneSelectItem v-for="model in codexModels" :key="`instance-codex-${model.id}`" :value="model.id">{{ modelOptionLabel(model) }}</ControlPlaneSelectItem>
         </ControlPlaneSelect>
       </label>
       <label v-if="claudeModels.length">
         <span>Claude model</span>
         <ControlPlaneSelect v-model="instanceClaudeModelValue" placeholder="No model">
-          <ControlPlaneSelectItem :value="defaultModelValue">Global default</ControlPlaneSelectItem>
           <ControlPlaneSelectItem :value="noModelValue">No model</ControlPlaneSelectItem>
+          <ControlPlaneSelectItem :value="defaultModelValue">Global default</ControlPlaneSelectItem>
           <ControlPlaneSelectItem v-for="model in claudeModels" :key="`instance-claude-${model.id}`" :value="model.id">{{ modelOptionLabel(model) }}</ControlPlaneSelectItem>
         </ControlPlaneSelect>
       </label>

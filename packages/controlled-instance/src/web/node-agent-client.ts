@@ -146,6 +146,7 @@ export class NodeAgentRegistrationClient {
     }
     const response = await this.fetchImpl(`${baseUrl}/api/${path}`, {
       method: "POST",
+      signal: AbortSignal.timeout(5_000),
       headers: {
         "content-type": "application/json",
         authorization: `Bearer ${this.config.registrationToken}`,

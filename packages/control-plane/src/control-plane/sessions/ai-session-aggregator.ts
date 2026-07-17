@@ -3,11 +3,13 @@ import {
   AiSessionDeltaResponseSchema,
   AiSessionEventType,
   AiSessionPatchEventSchema,
+  AiSessionMessageDeltaEventSchema,
   AiSessionRemovedEventSchema,
   AiSessionSnapshotEventSchema,
   applyAiSessionStreamEvent,
   type AiSessionDeltaResponse,
   type AiSessionPatchEvent,
+  type AiSessionMessageDeltaEvent,
   type AiSessionRemovedEvent,
   type AiSessionSnapshotEvent,
   type AiSessionsSnapshot,
@@ -48,6 +50,7 @@ export class ControlPlaneAiSessionAggregator {
   private readonly advertisedStreams = new Map<string, SessionStreamDescriptor>();
   private readonly recoveries = new Map<string, RecoveryRecord>();
   private readonly listeners = new Set<(update: ControlPlaneAiSessionSnapshotUpdate) => void>();
+  private readonly messageDeltaBuffers = new Map<string, string>();
   private readonly bootstrap: () => Promise<{ instances: BootstrapEntry[] }>;
   private readonly logger?: Logger;
   private readonly recoverDelta?: (instanceId: string, streamId: string, sinceRevision: number) => Promise<AiSessionDeltaResponse>;
@@ -65,6 +68,15 @@ export class ControlPlaneAiSessionAggregator {
   }
 
   handleEvent(event: EventEnvelope) {
+    if (event.type === AiSessionEventType.MessageDelta) {
+      const parsed = AiSessionMessageDeltaEventSchema.safeParse(event.payload);
+      if (!parsed.success) {
+        this.logger?.warn?.({ eventType: event.type, issues: parsed.error.issues, errorCode: "AI_SESSION_MESSAGE_DELTA_INVALID" }, "ai-session.aggregator.message-delta.invalid");
+        return true;
+      }
+      this.applyMessageDelta(parsed.data);
+      return true;
+    }
     const schema = event.type === AiSessionEventType.Snapshot
       ? AiSessionSnapshotEventSchema
       : event.type === AiSessionEventType.Patch
@@ -89,6 +101,38 @@ export class ControlPlaneAiSessionAggregator {
   onSnapshot(listener: (update: ControlPlaneAiSessionSnapshotUpdate) => void) {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  private applyMessageDelta(payload: AiSessionMessageDeltaEvent) {
+    const current = this.snapshots.get(payload.instanceId);
+    if (!current) return false;
+    const key = [payload.instanceId, payload.sessionId, payload.turnId || "", payload.itemId || ""].join("\u0000");
+    const text = `${this.messageDeltaBuffers.get(key) || ""}${payload.delta}`;
+    this.messageDeltaBuffers.set(key, text);
+    let matched = false;
+    const sessions = current.snapshot.sessions.map((session) => {
+      if (session.id !== payload.sessionId) return session;
+      matched = true;
+      const turns = [...(session.turns || [])];
+      const turnIndex = payload.turnId
+        ? turns.findIndex((turn) => turn.id === payload.turnId || turn.providerTurnId === payload.turnId)
+        : turns.length - 1;
+      if (turnIndex >= 0) {
+        turns[turnIndex] = { ...turns[turnIndex], lastMessage: text, summary: text, phase: "responding", updatedAt: payload.generatedAt };
+      }
+      return { ...session, lastMessage: text, summary: text, phase: "responding" as const, updatedAt: payload.generatedAt, turns };
+    });
+    if (!matched) return false;
+    const snapshot = { ...current.snapshot, sessions };
+    const update = { instanceId: payload.instanceId, streamId: current.streamId, aiSessions: snapshot, revision: current.revision, lastEventAt: payload.generatedAt };
+    for (const listener of this.listeners) {
+      try {
+        listener(update);
+      } catch {
+        this.listeners.delete(listener);
+      }
+    }
+    return true;
   }
 
   applySnapshot(payload: AiSessionSnapshotEvent) {
@@ -116,6 +160,10 @@ export class ControlPlaneAiSessionAggregator {
     this.snapshots.delete(instanceId);
     this.history.delete(instanceId);
     this.advertisedStreams.delete(instanceId);
+    const prefix = `${instanceId}\u0000`;
+    for (const key of this.messageDeltaBuffers.keys()) {
+      if (key.startsWith(prefix)) this.messageDeltaBuffers.delete(key);
+    }
   }
 
   applyPatch(payload: AiSessionPatchEvent) {
@@ -198,6 +246,13 @@ export class ControlPlaneAiSessionAggregator {
     }
     const projection = result.projection;
     this.snapshots.set(meta.instanceId, projection);
+    for (const session of projection.snapshot.sessions) {
+      if (session.status === "running") continue;
+      const prefix = `${meta.instanceId}\u0000${session.id}\u0000`;
+      for (const key of this.messageDeltaBuffers.keys()) {
+        if (key.startsWith(prefix)) this.messageDeltaBuffers.delete(key);
+      }
+    }
     this.rememberEvent(meta.instanceId, event);
     const update = { instanceId: meta.instanceId, streamId: projection.streamId, aiSessions: projection.snapshot, revision: projection.revision, lastEventAt: projection.lastEventAt };
     for (const listener of this.listeners) {

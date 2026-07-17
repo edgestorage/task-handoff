@@ -1021,6 +1021,17 @@ export class ControlPlaneService {
     };
   }
 
+  async instanceResourceMetrics(instanceId: string) {
+    const instance = await this.requireNodeInstance(instanceId);
+    return this.nodeAgentGateway.instanceResourceMetrics(this.requireNode(instance.nodeId), instance.id);
+  }
+
+  async nodeOwnsInstance(nodeId: string, instanceId: string) {
+    const node = this.requireNode(nodeId);
+    const instances = await this.nodeAgentGateway.listInstances(node);
+    return instances.some((instance) => instance.id === instanceId && instance.nodeId === nodeId);
+  }
+
   async createControlledInstance(input: unknown) {
     const parsedInput = CreateInstanceInputSchema.parse(input);
     const project = parsedInput.projectId ? this.requireProject(parsedInput.projectId) : undefined;

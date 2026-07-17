@@ -2,7 +2,6 @@
   <article
     class="ai-board-card"
     :data-state="card.session.status"
-    :data-expanded="expandedKind"
     :data-selected="selected ? 'true' : undefined"
     role="button"
     tabindex="0"
@@ -15,48 +14,27 @@
         <span class="ai-board-dot" />
         <span>
           <strong>{{ instanceDisplayName(card.instance) }}</strong>
-          <small>{{ aiSessionAppDisplayName(card.appTab, card.session.agent) }} · {{ aiSessionStatusLabel(card.session) }}</small>
+          <small>{{ aiSessionAppDisplayName(card.appTab, card.session.agent) }}</small>
         </span>
       </button>
     </div>
 
     <div class="ai-board-content">
-      <div class="ai-board-preview-field ai-board-preview-field-user" data-ai-preview-trigger @click.stop="handlePreviewClick('prompt')">
+      <div class="ai-board-preview-field ai-board-preview-field-user">
         <MarkdownContent class="ai-board-question" :content="displayAiSessionTitle(card.session, promptIndex)" />
-        <small>展开用户消息</small>
       </div>
-      <div class="ai-board-preview-field ai-board-preview-field-assistant" data-ai-preview-trigger @click.stop="handlePreviewClick('message')">
+      <div class="ai-board-preview-field ai-board-preview-field-assistant">
         <MarkdownContent class="ai-board-message" :content="displayAiSessionMessage(card.session, promptIndex)" />
-        <small>展开 AI 进展</small>
       </div>
-      <div class="ai-board-card-meta">
-        <small>{{ aiSessionContext(card.session) }}</small>
-        <span v-if="promptCount > 1" class="ai-board-turn-nav">
-          <button type="button" :aria-label="`Previous user message for ${card.session.agent}`" @click.stop="$emit('previousPrompt', card)">
-            <ChevronLeft :size="13" />
-          </button>
-          <small>{{ promptIndex + 1 }} / {{ promptCount }}</small>
-          <button type="button" :aria-label="`Next user message for ${card.session.agent}`" @click.stop="$emit('nextPrompt', card)">
-            <ChevronRight :size="13" />
-          </button>
-        </span>
-      </div>
-    </div>
-
-    <div v-if="expandedKind" class="ai-board-expanded-preview" @click.stop="$emit('collapseExpandedPreview')">
-      <div class="ai-board-expanded-head">
-        <strong>{{ expandedKind === "prompt" ? "User Message" : "AI Response / Progress" }}</strong>
-        <small>点击还原</small>
-      </div>
-      <ScrollArea class="ai-board-expanded-content">
-        <MarkdownContent
-          :content="
-            expandedKind === 'prompt'
-              ? displayAiSessionTitle(card.session, promptIndex)
-              : displayAiSessionMessage(card.session, promptIndex)
-          "
-        />
-      </ScrollArea>
+      <span v-if="promptCount > 1" class="ai-board-turn-nav">
+        <button type="button" :aria-label="`Previous user message for ${card.session.agent}`" :disabled="promptIndex <= 0" @click.stop="$emit('previousPrompt', card)">
+          <ChevronLeft :size="13" />
+        </button>
+        <small>{{ promptIndex + 1 }} / {{ promptCount }}</small>
+        <button type="button" :aria-label="`Next user message for ${card.session.agent}`" :disabled="promptIndex >= promptCount - 1" @click.stop="$emit('nextPrompt', card)">
+          <ChevronRight :size="13" />
+        </button>
+      </span>
     </div>
 
     <div class="ai-board-card-tools" aria-label="AI session card controls">
@@ -132,11 +110,8 @@ import { Ban, Check, ChevronLeft, ChevronRight, ExternalLink, MoreHorizontal, Sq
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import type { AiSessionSummary, ControlPlaneTrigger, InstanceBoardItem, InstanceWithAiSessions, TriggerDeployment } from "../../../api/types";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
-import { ScrollArea } from "../../../components/ui/scroll-area";
 import {
   aiSessionAppDisplayName,
-  aiSessionContext,
-  aiSessionStatusLabel,
   displayAiSessionMessage,
   displayAiSessionTitle,
 } from "../useInstanceSessions";
@@ -147,7 +122,6 @@ const props = defineProps<{
   boundTriggers: (card: AiBoardCard) => TriggerDeployment[];
   canResolveApproval: (session: AiSessionSummary) => boolean;
   card: AiBoardCard;
-  expandedKind?: "prompt" | "message";
   instanceDisplayName: (instance: InstanceBoardItem) => string;
   isTriggerBound: (card: AiBoardCard, configHash: string) => boolean;
   promptCount: number;
@@ -162,9 +136,6 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  collapseExpandedPreview: [];
-  expandMessage: [key: string];
-  expandPrompt: [key: string];
   nextPrompt: [card: AiBoardCard];
   openAiSessionApp: [instance: InstanceWithAiSessions, session?: AiSessionSummary];
   previousPrompt: [card: AiBoardCard];
@@ -177,18 +148,6 @@ const emit = defineEmits<{
 
 function approvalKey(card: AiBoardCard, decision: "allow" | "deny" | "skip") {
   return `${card.instance.id}:${card.session.id}:${decision}`;
-}
-
-function handlePreviewClick(kind: "prompt" | "message") {
-  if (!props.selected) {
-    emit("selectCard", props.card.key);
-    return;
-  }
-  if (kind === "prompt") {
-    emit("expandPrompt", props.card.key);
-    return;
-  }
-  emit("expandMessage", props.card.key);
 }
 
 const triggerSearch = ref("");
@@ -275,8 +234,7 @@ const filteredTriggerTemplates = computed(() => {
 }
 
 .ai-board-instance strong,
-.ai-board-instance small,
-.ai-board-card-meta > small {
+.ai-board-instance small {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -290,23 +248,9 @@ const filteredTriggerTemplates = computed(() => {
   line-height: 1.2;
 }
 
-.ai-board-instance small,
-.ai-board-card-meta > small {
+.ai-board-instance small {
   color: var(--ai-board-muted);
   font-size: 12px;
-}
-
-.ai-board-card-meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-width: 0;
-  min-height: 20px;
-}
-
-.ai-board-card-meta > small {
-  flex: 1 1 auto;
 }
 
 .ai-board-dot {
@@ -335,18 +279,24 @@ const filteredTriggerTemplates = computed(() => {
 
 .ai-board-content {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: max-content minmax(0, 1fr);
   gap: 6px;
   min-height: 0;
   min-width: 0;
-  padding: 0 14px 6px;
+  padding: 0 14px;
 }
 
 .ai-board-preview-field {
   display: grid;
   position: relative;
   min-width: 0;
-  cursor: zoom-in;
+}
+
+.ai-board-preview-field-user {
+  align-content: start;
+  max-height: 18px;
+  overflow: hidden;
+  padding-block: 0;
 }
 
 .ai-board-preview-field-assistant {
@@ -355,7 +305,7 @@ const filteredTriggerTemplates = computed(() => {
   margin: 2px -14px 0;
   min-height: 0;
   overflow: hidden;
-  padding: 10px 14px;
+  padding: 10px 14px 0;
 }
 
 .ai-board-preview-field-assistant::after {
@@ -374,39 +324,6 @@ const filteredTriggerTemplates = computed(() => {
   pointer-events: none;
 }
 
-.ai-board-preview-field > small {
-  position: absolute;
-  right: 8px;
-  bottom: 6px;
-  z-index: 1;
-  border: 1px solid var(--ai-board-preview-pill-border);
-  border-radius: 999px;
-  background: var(--ai-board-preview-pill-bg);
-  color: var(--ai-board-preview-pill-text);
-  font-size: 10px;
-  font-weight: 800;
-  line-height: 16px;
-  opacity: 0;
-  padding: 0 7px;
-  pointer-events: none;
-  transform: translateY(-2px);
-  transition:
-    opacity 120ms ease,
-    transform 120ms ease;
-}
-
-.ai-board-preview-field-assistant > small {
-  border-color: var(--ai-board-assistant-pill-border);
-  background: var(--ai-board-assistant-pill-bg);
-  color: var(--ai-board-assistant-pill-text);
-}
-
-.ai-board-preview-field:hover > small,
-.ai-board-preview-field:focus-within > small {
-  opacity: 1;
-  transform: translateY(0);
-}
-
 .ai-board-question {
   display: -webkit-box;
   min-width: 0;
@@ -414,11 +331,10 @@ const filteredTriggerTemplates = computed(() => {
   overflow-wrap: anywhere;
   color: var(--ai-board-title);
   font-size: 13px;
-  font-weight: 800;
   line-height: 1.35;
   word-break: break-word;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 1;
 }
 
 .ai-board-message {
@@ -439,6 +355,11 @@ const filteredTriggerTemplates = computed(() => {
   max-width: 100%;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.ai-board-question :deep(p),
+.ai-board-message :deep(p) {
+  margin: 0;
 }
 
 .ai-board-question :deep(code),
@@ -518,16 +439,22 @@ const filteredTriggerTemplates = computed(() => {
 
 .ai-board-turn-nav {
   display: inline-flex;
+  position: absolute;
+  right: 10px;
+  bottom: 8px;
+  z-index: 2;
   align-items: center;
   gap: 2px;
   flex: 0 0 auto;
   height: 20px;
   min-height: 20px;
-  border: 0;
+  border: 1px solid var(--ai-board-floating-border);
   border-radius: 6px;
-  background: transparent;
+  background: color-mix(in srgb, var(--ai-board-card-bg) 88%, transparent);
   color: var(--ai-board-floating-text);
-  padding: 0;
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  padding: 0 3px;
 }
 
 .ai-board-turn-nav button {
@@ -550,10 +477,15 @@ const filteredTriggerTemplates = computed(() => {
   text-align: center;
 }
 
-.ai-board-turn-nav button:hover {
+.ai-board-turn-nav button:not(:disabled):hover {
   border-color: var(--ai-board-active-border);
   background: var(--ai-board-turn-hover-bg);
   color: var(--ai-board-floating-hover-text);
+}
+
+.ai-board-turn-nav button:disabled {
+  cursor: default;
+  opacity: 0.32;
 }
 
 .ai-board-trigger-button {
@@ -713,49 +645,4 @@ const filteredTriggerTemplates = computed(() => {
   opacity: 0.55;
 }
 
-.ai-board-expanded-preview {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  position: absolute;
-  inset: 0;
-  z-index: 4;
-  gap: 8px;
-  border-radius: 8px;
-  background: var(--ai-board-expanded-bg);
-  color: var(--control-plane-cockpit-text);
-  cursor: default;
-  padding: 13px 14px;
-}
-
-.ai-board-expanded-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  min-width: 0;
-}
-
-.ai-board-expanded-head strong {
-  color: var(--ai-board-title);
-  font-size: 12px;
-  font-weight: 850;
-}
-
-.ai-board-expanded-head small {
-  color: var(--ai-board-muted);
-  font-size: 11px;
-}
-
-.ai-board-expanded-content {
-  min-height: 0;
-}
-
-.ai-board-expanded-content > :deep(div) {
-  color: var(--control-plane-cockpit-text);
-  font-size: 13px;
-  line-height: 1.48;
-  overflow-wrap: anywhere;
-  padding-right: 4px;
-  white-space: normal;
-}
 </style>

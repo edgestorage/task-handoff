@@ -74,8 +74,8 @@
                 <label v-for="app in modelApps" :key="app">
                   <span>{{ app === "codex" ? "Codex" : "Claude" }}</span>
                   <ControlPlaneSelect :model-value="modelDraftValue(app)" :disabled="savingModels" @update:model-value="setModelDraft(app, $event)">
-                    <ControlPlaneSelectItem :value="defaultModelValue">Global default</ControlPlaneSelectItem>
                     <ControlPlaneSelectItem :value="noModelValue">No model</ControlPlaneSelectItem>
+                    <ControlPlaneSelectItem :value="defaultModelValue">Global default</ControlPlaneSelectItem>
                     <ControlPlaneSelectItem v-if="invalidSelection(app)" :value="draftModelId(app)!">Unavailable · {{ draftModelId(app) }}</ControlPlaneSelectItem>
                     <ControlPlaneSelectItem v-for="model in selectableModels(app)" :key="`${app}-${model.id}`" :value="model.id">{{ modelOptionLabel(model) }}</ControlPlaneSelectItem>
                   </ControlPlaneSelect>
@@ -208,10 +208,10 @@
           </div>
           <AlertDialogFooter>
             <AlertDialogCancel :disabled="Boolean(operationSubmitting)">Cancel</AlertDialogCancel>
-            <AlertDialogAction :disabled="Boolean(operationSubmitting)" @click.prevent="confirmAppOperation">
+            <Button type="button" :disabled="Boolean(operationSubmitting)" @click="confirmAppOperation">
               <LoaderCircle v-if="operationSubmitting" class="animate-spin motion-reduce:animate-none" :size="14" />
               {{ operationSubmitting ? "Queuing…" : appConfirmation?.operation === "uninstall" ? "Confirm uninstall" : "Confirm install" }}
-            </AlertDialogAction>
+            </Button>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -223,7 +223,7 @@
 import { computed, ref, watch } from "vue";
 import { Bot, Boxes, Code2, Cpu, Globe2, LoaderCircle, Monitor, RefreshCw, SlidersHorizontal, TerminalSquare, X } from "@lucide/vue";
 import type { AppManagementJob, AppManagementOperation, AppManagementSnapshot, InstanceBoardItem, ManagedAppProjection, ModelApp, ModelConfig, ModelSelection, UpdateControlledInstanceInput } from "../../../api/types";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
+import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Checkbox } from "../../../components/ui/checkbox";
@@ -240,6 +240,7 @@ type AppFilter = "all" | "available" | "installed";
 
 const props = defineProps<{
   open: boolean;
+  initialSection?: InstanceSettingsSection;
   instance?: InstanceBoardItem;
   models: ModelConfig[];
   appManagement?: AppManagementSnapshot;
@@ -292,9 +293,10 @@ const filteredManagedApps = computed(() => {
 });
 
 watch(
-  () => [props.open, props.instance?.id] as const,
+  () => [props.open, props.instance?.id, props.initialSection] as const,
   ([open]) => {
     if (!open || !props.instance) return;
+    section.value = props.initialSection || "general";
     autoImportAgentConfigs.value = props.instance.config.autoImportAgentConfigs;
     modelSelection.value = { ...props.instance.modelSelection };
     error.value = "";

@@ -8,6 +8,7 @@ export const AiSessionEventType = {
   Snapshot: "ai-session.snapshot",
   Patch: "ai-session.patch",
   Removed: "ai-session.removed",
+  MessageDelta: "ai-session.message-delta",
   SyncRequired: "ai-session.sync-required",
 } as const;
 export const AI_SESSION_TOMBSTONE_RETENTION_MS = 60 * 60 * 1000;
@@ -323,6 +324,19 @@ export const AiSessionRemovedEventSchema = z
   })
   .strict();
 
+export const AiSessionMessageDeltaEventSchema = z
+  .object({
+    instanceId: z.string().trim().min(1).max(160),
+    nodeId: z.string().trim().min(1).max(160).optional(),
+    sessionId: z.string().trim().min(1).max(120),
+    providerSessionId: z.string().trim().min(1).max(240),
+    turnId: z.string().trim().min(1).max(240).optional(),
+    itemId: z.string().trim().min(1).max(240).optional(),
+    delta: z.string().min(1),
+    generatedAt: z.string().datetime(),
+  })
+  .strict();
+
 export const AiSessionDeltaResponseSchema = z
   .object({
     streamId: z.string().trim().min(1).max(240),
@@ -487,6 +501,7 @@ export type AiSessionEventMeta = z.infer<typeof AiSessionEventMetaSchema>;
 export type AiSessionSnapshotEvent = z.infer<typeof AiSessionSnapshotEventSchema>;
 export type AiSessionPatchEvent = z.infer<typeof AiSessionPatchEventSchema>;
 export type AiSessionRemovedEvent = z.infer<typeof AiSessionRemovedEventSchema>;
+export type AiSessionMessageDeltaEvent = z.infer<typeof AiSessionMessageDeltaEventSchema>;
 export type AiSessionDeltaResponse = z.infer<typeof AiSessionDeltaResponseSchema>;
 export type AiSessionSnapshotInput = z.infer<typeof AiSessionSnapshotInputSchema>;
 export type AiSessionRealtimeInput = z.infer<typeof AiSessionRealtimeInputSchema>;

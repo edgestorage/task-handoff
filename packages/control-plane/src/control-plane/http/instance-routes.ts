@@ -27,6 +27,7 @@ export function registerInstanceRoutes({ app, service, events }: RegisterInstanc
     return reply.code(201).send({ data: instance });
   });
   app.get("/api/controlled-instances/:id", async (request) => ({ data: await service.requireControlledInstance(IdParamsSchema.parse(request.params).id) }));
+  app.get("/api/controlled-instances/:id/metrics", async (request) => ({ data: await service.instanceResourceMetrics(IdParamsSchema.parse(request.params).id) }));
   app.get("/api/controlled-instances/:id/apps/management", async (request) => ({ data: await service.instanceAppManagement(IdParamsSchema.parse(request.params).id) }));
   app.post("/api/controlled-instances/:id/apps/:appId/install", async (request) => {
     const params = InstanceAppParamsSchema.parse(request.params);

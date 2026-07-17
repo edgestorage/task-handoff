@@ -1,6 +1,6 @@
 import WebSocket from "ws";
 import type { ControlledInstance } from "@task-handoff/protocol/control-plane";
-import { AiSessionEventTopic } from "@task-handoff/protocol/ai-sessions";
+import { AiSessionEventTopic, AiSessionEventType } from "@task-handoff/protocol/ai-sessions";
 import { AppSessionEventTopic } from "@task-handoff/protocol/app-sessions";
 import { SessionStreamsHelloEventType, SessionStreamsHelloSchema, eventTopic, type EventEnvelope } from "@task-handoff/protocol/events";
 import { EventConnectionRetryTimer, eventConnectionSafetyIntervalMs } from "../shared/events/connection-retry.ts";
@@ -35,6 +35,7 @@ export class NodeAgentInstanceEventForwarder {
   private timer: ReturnType<typeof setInterval> | undefined;
   private reconnectAttempts = 0;
   private safetyReconciliations = 0;
+  private localSequence = 0;
   private readonly createSocket: (url: string, options: { headers?: { authorization: string } }) => WebSocket;
   private readonly setIntervalFn: typeof setInterval;
   private readonly clearIntervalFn: typeof clearInterval;
@@ -80,6 +81,24 @@ export class NodeAgentInstanceEventForwarder {
     return () => {
       this.outputs.delete(socket);
     };
+  }
+
+  publish(type: string, payload: unknown, scope: Record<string, unknown> = {}) {
+    const sequence = ++this.localSequence;
+    const event: EventEnvelope = {
+      v: 1,
+      id: `node_evt_${Date.now().toString(36)}_${sequence.toString(36)}`,
+      seq: sequence,
+      type,
+      topic: eventTopic(type),
+      createdAt: new Date().toISOString(),
+      payload,
+      scope,
+    };
+    const encoded = JSON.stringify({ type: "node-agent.event.forwarded", event });
+    for (const output of this.outputs) {
+      if (output.readyState === WebSocket.OPEN) output.send(encoded);
+    }
   }
 
   syncNow() {
@@ -216,6 +235,9 @@ export class NodeAgentInstanceEventForwarder {
 
   private recordAiSessionEvent(instanceId: string, event: ForwardedInstanceEvent) {
     if (event.topic !== AiSessionEventTopic) {
+      return;
+    }
+    if (event.type === AiSessionEventType.MessageDelta) {
       return;
     }
     const meta = eventPayloadMeta(event.payload);

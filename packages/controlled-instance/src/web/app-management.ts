@@ -9,14 +9,18 @@ import {
   type AppManagementOperation,
   type AppManagementSnapshot,
   type FinalComputerCapabilities,
+  type ManagedAppManagementSource,
 } from "@task-handoff/protocol/control-plane";
 import {
   builtinManagedAppDefinitions,
   detectFinalComputerCapabilities,
+  detectFinalComputerCapabilitiesAsync,
   detectManagedApp,
+  detectManagedAppOwnership,
   managedAppProjection,
   selectInstallRecipe,
 } from "@task-handoff/app-runtime";
+import type { ManagedAppOwnershipResult } from "@task-handoff/app-runtime";
 import type { InstallRecipe, ManagedAppDefinition, ManagedAppDetectionResult } from "@task-handoff/app-runtime/types";
 import { AppRecipeExecutionError, createAppRecipeExecutor, type AppRecipeExecutionContext } from "./app-recipe-executor";
 
@@ -126,22 +130,34 @@ export type AppManagementManagerOptions = {
   definitions?: () => ManagedAppDefinition[];
   capabilities?: () => FinalComputerCapabilities;
   detection?: (definition: ManagedAppDefinition) => ManagedAppDetectionResult;
+  managementSource?: (definition: ManagedAppDefinition, detection: ManagedAppDetectionResult, capabilities: FinalComputerCapabilities) => ManagedAppManagementSource | Promise<ManagedAppManagementSource>;
+  ownership?: (definition: ManagedAppDefinition, detection: ManagedAppDetectionResult, capabilities: FinalComputerCapabilities) => ManagedAppOwnershipResult | Promise<ManagedAppOwnershipResult>;
   execute?: (operation: AppManagementOperation, recipe: InstallRecipe, context: AppRecipeExecutionContext) => Promise<unknown>;
   sessions?: () => Array<{ id: string; appId: string; status: string }>;
   publish?: (event: AppManagementEvent) => void;
   warn?: (message: string) => void;
   now?: () => string;
+  onTerminal?: (job: AppManagementJob) => void | Promise<void>;
 };
 
 export class AppManagementManager {
   private readonly store: AppManagementJobStore;
   private readonly definitions: () => ManagedAppDefinition[];
   private readonly capabilities: () => FinalComputerCapabilities;
+  private readonly refreshCapabilities: () => Promise<FinalComputerCapabilities>;
+  private capabilitiesSnapshot?: FinalComputerCapabilities;
+  private capabilitiesObservedAt = 0;
+  private capabilitiesRefresh?: Promise<FinalComputerCapabilities>;
   private readonly detection: (definition: ManagedAppDefinition) => ManagedAppDetectionResult;
+  private readonly ownership: NonNullable<AppManagementManagerOptions["ownership"]>;
   private readonly execute: AppManagementManagerOptions["execute"];
   private readonly sessions: NonNullable<AppManagementManagerOptions["sessions"]>;
   private readonly publishEvent: NonNullable<AppManagementManagerOptions["publish"]>;
   private readonly now: NonNullable<AppManagementManagerOptions["now"]>;
+  private readonly onTerminal: NonNullable<AppManagementManagerOptions["onTerminal"]>;
+  private readonly warn: NonNullable<AppManagementManagerOptions["warn"]>;
+  private readonly ownershipByApp = new Map<string, { fingerprint: string; source: ManagedAppManagementSource; recipe?: InstallRecipe }>();
+  private ownershipRefresh?: Promise<void>;
   private readonly streamId = `appstream_${crypto.randomUUID().replaceAll("-", "")}`;
   private sequence = 0;
   private queue = Promise.resolve();
@@ -149,12 +165,34 @@ export class AppManagementManager {
   constructor(options: AppManagementManagerOptions) {
     this.store = new AppManagementJobStore(path.join(options.stateDir, "jobs.json"), options.warn);
     this.definitions = options.definitions || (() => builtinManagedAppDefinitions());
-    this.capabilities = options.capabilities || (() => detectFinalComputerCapabilities());
+    this.capabilities = options.capabilities || (() => this.capabilitiesSnapshot || (this.capabilitiesSnapshot = detectFinalComputerCapabilities()));
+    this.refreshCapabilities = options.capabilities
+      ? async () => options.capabilities!()
+      : () => detectFinalComputerCapabilitiesAsync();
     this.detection = options.detection || ((definition) => detectManagedApp(definition));
+    const defaultOwnership = (definition: ManagedAppDefinition, detection: ManagedAppDetectionResult, capabilities: FinalComputerCapabilities) => detectManagedAppOwnership(definition, detection, capabilities, {
+      archiveManifestOwned: async (_definition, recipe, detected) => {
+        const expectedRoot = path.resolve(options.installBaseDir, recipe.installRoot);
+        const manifestFile = path.join(options.stateDir, "manifests", `${definition.launcher.id}.json`);
+        try {
+          const manifest = JSON.parse(await fs.promises.readFile(manifestFile, "utf8")) as { installRoot?: unknown; files?: unknown };
+          if (manifest.installRoot !== expectedRoot || !Array.isArray(manifest.files)) return false;
+          const owned = new Set(manifest.files.map((value) => path.resolve(expectedRoot, String(value))));
+          return detected.executablePaths.some((value) => owned.has(path.resolve(value)));
+        } catch {
+          return false;
+        }
+      },
+    });
+    this.ownership = options.ownership || (options.managementSource
+      ? async (definition, detection, capabilities) => ({ source: await options.managementSource!(definition, detection, capabilities) })
+      : defaultOwnership);
     this.execute = options.execute || createAppRecipeExecutor({ installBaseDir: options.installBaseDir, stateDir: options.stateDir });
     this.sessions = options.sessions || (() => []);
     this.publishEvent = options.publish || (() => undefined);
     this.now = options.now || (() => new Date().toISOString());
+    this.onTerminal = options.onTerminal || (() => undefined);
+    this.warn = options.warn || (() => undefined);
     this.recoverInterrupted();
   }
 
@@ -164,7 +202,14 @@ export class AppManagementManager {
     const activeJobs = jobs.filter((job) => ACTIVE_STATES.has(job.state));
     const activeByApp = new Map(activeJobs.map((job) => [job.appId, job]));
     const apps = this.definitions().map((definition) => {
-      const projection = managedAppProjection(definition, this.detection(definition), capabilities);
+      const detection = this.detection(definition);
+      const cached = this.ownershipByApp.get(definition.launcher.id);
+      const fingerprint = this.ownershipFingerprint(detection, capabilities);
+      const selected = selectInstallRecipe(definition, capabilities).recipe;
+      const source = detection.state === "not-installed" ? "none"
+        : selected?.type === "bundled" ? "bundled"
+          : cached?.fingerprint === fingerprint ? cached.source : "external";
+      const projection = managedAppProjection(definition, detection, capabilities, source);
       const active = activeByApp.get(projection.id);
       return active ? {
         ...projection,
@@ -184,6 +229,22 @@ export class AppManagementManager {
       recentJobs: jobs.filter((job) => !ACTIVE_STATES.has(job.state)).slice(0, 50),
       observedAt: this.now(),
     });
+  }
+
+  async refreshSnapshot(forceCapabilities = false) {
+    if (!this.ownershipRefresh) {
+      this.ownershipRefresh = (async () => {
+        const capabilities = await this.ensureCapabilities(forceCapabilities);
+        await Promise.all(this.definitions().map(async (definition) => {
+          const detection = this.detection(definition);
+          await this.refreshOwnership(definition, detection, capabilities);
+        }));
+      })().finally(() => {
+        this.ownershipRefresh = undefined;
+      });
+    }
+    await this.ownershipRefresh;
+    return this.snapshot();
   }
 
   getJob(jobId: string) {
@@ -220,8 +281,14 @@ export class AppManagementManager {
     const capabilities = this.capabilities();
     const selected = selectInstallRecipe(definition, capabilities);
     const detection = this.detection(definition);
-    const projection = managedAppProjection(definition, detection, capabilities);
-    if (!selected.recipe || (operation === "install" ? !projection.canInstall : !projection.canUninstall)) {
+    const cached = this.ownershipByApp.get(definition.launcher.id);
+    const fingerprint = this.ownershipFingerprint(detection, capabilities);
+    const source = detection.state === "not-installed" ? "none"
+      : selected.recipe?.type === "bundled" ? "bundled"
+        : cached?.fingerprint === fingerprint ? cached.source : "external";
+    const projection = managedAppProjection(definition, detection, capabilities, source);
+    const operationRecipe = operation === "uninstall" && cached?.fingerprint === fingerprint && cached.recipe ? cached.recipe : selected.recipe;
+    if (!operationRecipe || (operation === "install" ? !projection.canInstall : !projection.canUninstall)) {
       const reason = operation === "install" ? projection.installReason : projection.uninstallReason;
       throw new AppManagementRequestError("app_operation_unavailable", reason?.message || "The requested app operation is unavailable.", 409, { reason });
     }
@@ -236,7 +303,7 @@ export class AppManagementManager {
       updatedAt: timestamp,
     });
     this.emit(job, true);
-    this.queue = this.queue.then(() => this.run(job.id, definition, selected.recipe!)).catch(() => undefined);
+    this.queue = this.queue.then(() => this.run(job.id, definition, operationRecipe)).catch(() => undefined);
     return job;
   }
 
@@ -252,6 +319,18 @@ export class AppManagementManager {
       observedAt: this.now(),
       snapshot: this.snapshot(),
     };
+  }
+
+  publishSnapshot() {
+    const event: AppManagementEvent = {
+      type: "app-management",
+      streamId: this.streamId,
+      sequence: ++this.sequence,
+      observedAt: this.now(),
+      snapshot: this.snapshot(),
+    };
+    this.publishEvent(event);
+    return event;
   }
 
   private recoverInterrupted() {
@@ -325,6 +404,7 @@ export class AppManagementManager {
       const detection = this.detection(definition);
       const satisfied = job.operation === "install" ? detection.state === "installed" : detection.state === "not-installed";
       if (!satisfied) throw new AppRecipeExecutionError("postcondition_failed", `App ${job.operation} completed but detection did not confirm the required state.`, true);
+      await this.refreshOwnership(definition, detection, await this.ensureCapabilities(true));
       const finishedAt = this.now();
       job = this.store.save({ ...this.getJob(jobId), state: "succeeded", phase: "verify", progress: undefined, finishedAt, updatedAt: finishedAt });
     } catch (error) {
@@ -342,6 +422,42 @@ export class AppManagementManager {
       });
     }
     this.emit(job, true);
+    void Promise.resolve(this.onTerminal(job)).catch((error) => {
+      this.warn(`App inventory refresh failed after ${job.operation} for ${job.appId}: ${error instanceof Error ? error.message : String(error)}`);
+    });
+  }
+
+  private ownershipFingerprint(detection: ManagedAppDetectionResult, capabilities: FinalComputerCapabilities) {
+    return JSON.stringify({ state: detection.state, executablePaths: detection.executablePaths, platform: capabilities.platform, arch: capabilities.arch, privilege: capabilities.privilege });
+  }
+
+  private async ensureCapabilities(force = false) {
+    if (!force && this.capabilitiesSnapshot && Date.now() - this.capabilitiesObservedAt < 10_000) return this.capabilitiesSnapshot;
+    if (!this.capabilitiesRefresh) {
+      this.capabilitiesRefresh = this.refreshCapabilities().then((capabilities) => {
+        this.capabilitiesSnapshot = capabilities;
+        this.capabilitiesObservedAt = Date.now();
+        return capabilities;
+      }).finally(() => {
+        this.capabilitiesRefresh = undefined;
+      });
+    }
+    return this.capabilitiesRefresh;
+  }
+
+  private async refreshOwnership(definition: ManagedAppDefinition, detection: ManagedAppDetectionResult, capabilities: FinalComputerCapabilities) {
+    let source: ManagedAppManagementSource;
+    try {
+      const ownership = await this.ownership(definition, detection, capabilities);
+      source = ownership.source;
+      this.ownershipByApp.set(definition.launcher.id, { fingerprint: this.ownershipFingerprint(detection, capabilities), source, recipe: ownership.recipe });
+      return source;
+    } catch (error) {
+      source = detection.state === "not-installed" ? "none" : selectInstallRecipe(definition, capabilities).recipe?.type === "bundled" ? "bundled" : "external";
+      this.warn(`App ownership detection failed for ${definition.launcher.id}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    this.ownershipByApp.set(definition.launcher.id, { fingerprint: this.ownershipFingerprint(detection, capabilities), source });
+    return source;
   }
 
   private emit(job: AppManagementJob, includeSnapshot = false) {

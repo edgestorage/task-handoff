@@ -586,6 +586,9 @@
 
 .session-preview.expanded {
   margin-top: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .session-preview[data-state="online"] {
@@ -607,9 +610,41 @@
 
 .session-preview-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-start;
   border-top: 1px solid var(--line);
   border-bottom: 0;
+}
+
+.session-preview-status {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  margin: 0 0 0 auto;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-preview-status span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-preview-status span + span::before {
+  content: "·";
+  padding: 0 7px;
+  color: var(--text-muted);
+}
+
+.session-resource-metrics[data-state="stale"],
+.session-resource-metrics[data-state="unavailable"] {
+  color: var(--status-warning);
 }
 
 .session-preview-tools {
@@ -789,6 +824,11 @@
   .session-preview-frame,
   .session-terminal {
     min-height: 230px;
+  }
+
+  .session-preview-status {
+    width: 100%;
+    justify-content: flex-end;
   }
 }
 

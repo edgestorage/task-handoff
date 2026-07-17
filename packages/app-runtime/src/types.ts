@@ -58,6 +58,12 @@ export type SystemPackageInstallRecipe = ManagedAppRecipeConstraint & {
   packages: string[];
 };
 
+export type NodePackageInstallRecipe = ManagedAppRecipeConstraint & {
+  type: "node-package";
+  installer: "npm";
+  packages: string[];
+};
+
 export type ArchiveInstallRecipe = ManagedAppRecipeConstraint & {
   type: "archive";
   url: string;
@@ -66,7 +72,7 @@ export type ArchiveInstallRecipe = ManagedAppRecipeConstraint & {
   installRoot: string;
 };
 
-export type InstallRecipe = BundledInstallRecipe | SystemPackageInstallRecipe | ArchiveInstallRecipe;
+export type InstallRecipe = BundledInstallRecipe | SystemPackageInstallRecipe | NodePackageInstallRecipe | ArchiveInstallRecipe;
 
 export type ManagedAppDefinition = {
   launcher: AppCatalogItem;

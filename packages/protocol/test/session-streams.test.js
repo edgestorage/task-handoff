@@ -5,6 +5,7 @@ import {
   AiSessionEventMetaSchema,
   AiSessionEventType,
   AiSessionDeltaResponseSchema,
+  AiSessionMessageDeltaEventSchema,
   applyAiSessionStreamEvent,
   emptyAiSessionsSnapshot,
 } from "../src/ai-sessions.ts";
@@ -113,5 +114,28 @@ test("stream schemas reject legacy metadata and describe retained recovery histo
     latestRevision: 1,
     syncRequired: false,
     events: [],
+  }).success, false);
+});
+
+test("AI session message delta is an ephemeral event outside revision recovery", () => {
+  const payload = AiSessionMessageDeltaEventSchema.parse({
+    instanceId: "instance-a",
+    sessionId: "session-a",
+    providerSessionId: "thread-a",
+    turnId: "turn-a",
+    itemId: "item-a",
+    delta: "hello",
+    generatedAt: now,
+  });
+  assert.equal(AiSessionEventType.MessageDelta, "ai-session.message-delta");
+  assert.equal(payload.delta, "hello");
+  assert.equal(AiSessionDeltaResponseSchema.safeParse({
+    streamId: "stream-a",
+    instanceId: "instance-a",
+    sinceRevision: 1,
+    latestRevision: 1,
+    earliestRetainedRevision: 1,
+    syncRequired: false,
+    events: [{ type: AiSessionEventType.MessageDelta, payload }],
   }).success, false);
 });

@@ -115,14 +115,8 @@ RUN set -eux; \
   command -v vncserver; \
   dpkg-query -W kasmvncserver
 RUN set -eux; \
-  case "${TARGETOS:-linux}-${TARGETARCH:-amd64}" in \
-    linux-amd64) claude_native_package="@anthropic-ai/claude-code-linux-x64" ;; \
-    linux-arm64) claude_native_package="@anthropic-ai/claude-code-linux-arm64" ;; \
-    *) echo "Unsupported Claude Code Docker target: ${TARGETOS:-linux}-${TARGETARCH:-amd64}" >&2; exit 1 ;; \
-  esac; \
-  npm_config_update_notifier=false timeout 180s npm install -g --ignore-scripts --no-audit --no-fund --loglevel=verbose \
-    "${claude_native_package}@${CLAUDE_CODE_VERSION}"; \
-  ln -sf "$(npm root -g)/${claude_native_package}/claude" /usr/local/bin/claude; \
+  npm_config_update_notifier=false timeout 180s npm install -g --include=optional --no-audit --no-fund --loglevel=verbose \
+    "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"; \
   claude --version
 COPY docker/optional-apps.sh /tmp/task-handoff-optional-apps.sh
 RUN set -eux; \

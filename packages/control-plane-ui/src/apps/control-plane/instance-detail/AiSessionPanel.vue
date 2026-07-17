@@ -74,7 +74,6 @@
                   class="session-ai-row"
                   :data-state="session.status"
                   :data-selected="selectedSession?.id === session.id"
-                  :data-expanded="expandedPreview?.sessionId === session.id ? expandedPreview.kind : undefined"
                 >
                 <div
                   class="session-ai-select"
@@ -87,44 +86,22 @@
                   <div class="session-ai-state">
                     <span class="session-ai-dot" />
                     <strong>{{ aiSessionAppDisplayName(aiSessionAppTab(instance, session), session.agent) }}</strong>
-                    <small>{{ aiSessionStatusLabel(session) }}</small>
                   </div>
-                  <div class="session-ai-preview-field session-ai-preview-field-user" data-ai-preview-trigger @click.stop="expandPrompt(session.id)">
+                  <div class="session-ai-preview-field session-ai-preview-field-user">
                     <MarkdownContent class="session-ai-question" :content="displayAiSessionTitle(session, promptIndexFor(session))" />
-                    <small>展开用户消息</small>
                   </div>
-                  <div class="session-ai-preview-field session-ai-preview-field-assistant" data-ai-preview-trigger @click.stop="expandMessage(session.id)">
+                  <div class="session-ai-preview-field session-ai-preview-field-assistant">
                     <MarkdownContent class="session-ai-message" :content="displayAiSessionMessage(session, promptIndexFor(session))" />
-                    <small>展开 AI 进展</small>
                   </div>
-                  <div class="session-ai-card-meta">
-                    <small>{{ aiSessionContext(session) }}</small>
-                    <span v-if="promptCount(session) > 1" class="session-ai-turn-nav">
-                      <button type="button" :aria-label="`Previous user message for ${session.agent}`" @click.stop="previousPrompt(session)">
-                        <ChevronLeft :size="13" />
-                      </button>
-                      <small>{{ promptIndexFor(session) + 1 }} / {{ promptCount(session) }}</small>
-                      <button type="button" :aria-label="`Next user message for ${session.agent}`" @click.stop="nextPrompt(session)">
-                        <ChevronRight :size="13" />
-                      </button>
-                    </span>
-                  </div>
-                </div>
-                <div v-if="expandedPreview?.sessionId === session.id" class="session-ai-expanded-preview" @click.stop="collapseExpandedPreview">
-                  <div class="session-ai-expanded-head">
-                    <strong>{{ expandedPreview.kind === "prompt" ? "User Message" : "AI Response / Progress" }}</strong>
-                    <small>滚动查看完整内容</small>
-                  </div>
-                  <ScrollArea class="session-ai-expanded-content">
-                    <MarkdownContent
-                      class="session-ai-expanded-content-inner"
-                      :content="
-                        expandedPreview.kind === 'prompt'
-                          ? displayAiSessionTitle(session, promptIndexFor(session))
-                          : displayAiSessionMessage(session, promptIndexFor(session))
-                      "
-                    />
-                  </ScrollArea>
+                  <span v-if="promptCount(session) > 1" class="session-ai-turn-nav">
+                    <button type="button" :aria-label="`Previous user message for ${session.agent}`" :disabled="promptIndexFor(session) <= 0" @click.stop="previousPrompt(session)">
+                      <ChevronLeft :size="13" />
+                    </button>
+                    <small>{{ promptIndexFor(session) + 1 }} / {{ promptCount(session) }}</small>
+                    <button type="button" :aria-label="`Next user message for ${session.agent}`" :disabled="promptIndexFor(session) >= promptCount(session) - 1" @click.stop="nextPrompt(session)">
+                      <ChevronRight :size="13" />
+                    </button>
+                  </span>
                 </div>
                 <div class="session-ai-card-tools" aria-label="AI session card controls">
                   <DropdownMenu>
@@ -293,7 +270,6 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type CSSProperties } from "vue";
-import { useEventListener } from "@vueuse/core";
 import { Ban, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, ExternalLink, Filter, Folder, SlidersHorizontal, X, Zap } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
@@ -308,7 +284,6 @@ import { showControlPlaneToast } from "../useControlPlaneToasts";
 import {
   aiSessionAppDisplayName,
   aiSessionAppTab,
-  aiSessionContext,
   aiSessionStatusLabel,
   aiSessionUserPrompts,
   displayAiSessionMessage,
@@ -382,7 +357,6 @@ const selectedSession = computed(() => props.selectedAiSession(props.instance, f
 const queryClient = useQueryClient();
 const promptIndexes = ref<Record<string, { index: number; count: number }>>({});
 const collapsedPathGroups = reactive<Record<string, boolean>>({});
-const expandedPreview = ref<{ sessionId: string; kind: "prompt" | "message" }>();
 const messageDraft = ref("");
 const messageAttachments = ref<AiSessionComposerAttachment[]>([]);
 const detailEl = ref<HTMLElement>();
@@ -570,7 +544,7 @@ function setPromptIndex(session: AiSessionSummary, index: number) {
   }
   promptIndexes.value = {
     ...promptIndexes.value,
-    [session.id]: { index: (index + count) % count, count },
+    [session.id]: { index: Math.min(Math.max(index, 0), count - 1), count },
   };
 }
 
@@ -583,25 +557,7 @@ function nextPrompt(session: AiSessionSummary) {
 }
 
 function selectSession(sessionId: string) {
-  expandedPreview.value = undefined;
   emit("selectAiSession", props.instance.id, sessionId);
-}
-
-function toggleExpandedPreview(sessionId: string, kind: "prompt" | "message") {
-  const current = expandedPreview.value;
-  expandedPreview.value = current?.sessionId === sessionId && current.kind === kind ? undefined : { sessionId, kind };
-}
-
-function expandPrompt(sessionId: string) {
-  toggleExpandedPreview(sessionId, "prompt");
-}
-
-function expandMessage(sessionId: string) {
-  toggleExpandedPreview(sessionId, "message");
-}
-
-function collapseExpandedPreview() {
-  expandedPreview.value = undefined;
 }
 
 function canInterrupt(session: AiSessionSummary) {
@@ -870,14 +826,6 @@ function removeLocalTriggerBinding(session: AiSessionSummary, configHash: string
   }));
 }
 
-function closeExpandedPreview(event: MouseEvent) {
-  const target = event.target instanceof Element ? event.target : undefined;
-  if (!target || target.closest(".session-ai-expanded-preview") || target.closest("[data-ai-preview-trigger]")) {
-    return;
-  }
-  expandedPreview.value = undefined;
-}
-
 function syncComposerOffset() {
   const detail = detailEl.value;
   const composer = (composerEl.value?.$el instanceof HTMLElement ? composerEl.value.$el : undefined);
@@ -907,7 +855,6 @@ watch([selectedSession, messageAttachments, messageDraft], () => {
 onMounted(() => {
   void nextTick(observeComposerOffset);
 });
-useEventListener(document, "click", closeExpandedPreview, { capture: true });
 onBeforeUnmount(() => {
   composerResizeObserver?.disconnect();
   stopSidebarResize();

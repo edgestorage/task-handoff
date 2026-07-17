@@ -807,6 +807,7 @@ export class AiSessionRegistry {
         providerMeta: input.providerMeta,
         appBindingKeys: input.appBindingKeys,
         actions: input.actions,
+        activeTurnId: input.activeTurnId,
         lastMessage: input.lastMessage,
         transcriptPath: input.transcriptPath,
         transcriptSize: input.transcriptSize,

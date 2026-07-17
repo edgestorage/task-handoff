@@ -1,12 +1,15 @@
 import { onBeforeUnmount, onMounted } from "vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import { SessionStreamsHelloEventType, SessionStreamsHelloSchema } from "@task-handoff/protocol/events";
+import { InstanceResourceMetricsEventType, InstanceResourceMetricsSchema } from "@task-handoff/protocol/control-plane";
 import type { SessionStreamDescriptor } from "@task-handoff/protocol/events";
 import type { AppManagementEvent } from "../../api/types";
+import type { InstanceResourceMetrics } from "../../api/types";
 import {
   AiSessionEventType,
   AppSessionEventType,
   type AiSessionDeltaResponse,
+  type AiSessionMessageDeltaEvent,
   type AppSessionDeltaResponse,
 } from "../../api/types";
 
@@ -21,6 +24,7 @@ type EventMessage = {
 export function useControlPlaneEvents(input: {
   aiSessions: {
     applyEvent: (event: AiSessionDeltaResponse["events"][number]) => boolean;
+    applyMessageDelta: (payload: AiSessionMessageDeltaEvent) => boolean;
     recoverDescriptor: (descriptor: SessionStreamDescriptor) => Promise<void>;
   };
   appSessions: {
@@ -31,6 +35,10 @@ export function useControlPlaneEvents(input: {
   refresh: () => Promise<void>;
   appManagement?: {
     applyEvent: (instanceId: string, event: AppManagementEvent) => boolean;
+    recoverOpen: () => void | Promise<void>;
+  };
+  resourceMetrics?: {
+    applyEvent: (metrics: InstanceResourceMetrics) => boolean;
     recoverOpen: () => void | Promise<void>;
   };
 }) {
@@ -49,6 +57,7 @@ export function useControlPlaneEvents(input: {
     current.addEventListener("open", () => {
       reconnectAttempt = 0;
       void input.appManagement?.recoverOpen();
+      void input.resourceMetrics?.recoverOpen();
     });
     current.addEventListener("message", (event) => handleMessage(String(event.data)));
     current.addEventListener("close", () => {
@@ -91,6 +100,9 @@ export function useControlPlaneEvents(input: {
   }
 
   function applyToCache(event: EventMessage) {
+    if (event.type === AiSessionEventType.MessageDelta) {
+      return input.aiSessions.applyMessageDelta(event.payload as AiSessionMessageDeltaEvent);
+    }
     if (event.type === AiSessionEventType.Snapshot || event.type === AiSessionEventType.Patch || event.type === AiSessionEventType.Removed) {
       return input.aiSessions.applyEvent({ type: event.type, payload: event.payload } as AiSessionDeltaResponse["events"][number]);
     }
@@ -99,6 +111,11 @@ export function useControlPlaneEvents(input: {
     }
     if (event.type === "app.management" && event.scope?.instanceId && event.payload && typeof event.payload === "object") {
       return input.appManagement?.applyEvent(event.scope.instanceId, event.payload as AppManagementEvent) || false;
+    }
+    if (event.type === InstanceResourceMetricsEventType.Snapshot && event.payload && typeof event.payload === "object") {
+      const metrics = InstanceResourceMetricsSchema.safeParse(event.payload);
+      if (!metrics.success || event.scope?.instanceId !== metrics.data.instanceId) return false;
+      return input.resourceMetrics?.applyEvent(metrics.data) || false;
     }
     return false;
   }

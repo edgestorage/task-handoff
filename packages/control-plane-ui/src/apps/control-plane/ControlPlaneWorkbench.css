@@ -1,3 +1,11 @@
+:global(html.dark),
+:global(html[data-theme="dark"]) {
+  --text: hsl(192 18% 82%);
+  --ai-board-title: var(--text);
+  --ai-session-title: var(--text);
+  --text-strong: var(--text);
+}
+
 .control-plane-shell {
   height: 100vh;
   overflow: hidden;

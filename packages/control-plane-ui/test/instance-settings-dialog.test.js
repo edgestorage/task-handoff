@@ -23,12 +23,27 @@ test("instance settings is one top-level dialog with three independent entry poi
   assert.match(nodeDetail, /actions\.openInstanceSettings\(instance\.id\)/);
 });
 
+test("the instance App menu opens settings directly on app management", () => {
+  const workbench = read("src/apps/control-plane/ControlPlaneWorkbench.vue");
+  const detail = read("src/apps/control-plane/instance-detail/InstanceDetail.vue");
+  const preview = read("src/apps/control-plane/instance-detail/SessionPreview.vue");
+  const dialog = read("src/apps/control-plane/instance-settings/InstanceSettingsDialog.vue");
+
+  assert.match(preview, /Manage apps/);
+  assert.match(preview, /\$emit\('openSettings', instance\.id, 'apps'\)/);
+  assert.match(detail, /\$emit\('openSettings', instanceId, section\)/);
+  assert.match(workbench, /:initial-section="instanceSettingsSection"/);
+  assert.match(workbench, /function openInstanceSettings\(instanceId: string, section: "general" \| "models" \| "apps" = "general"\)/);
+  assert.match(dialog, /section\.value = props\.initialSection \|\| "general"/);
+});
+
 test("instance model controls live only in the settings dialog", () => {
   const detail = read("src/apps/control-plane/instance-detail/InstanceDetail.vue");
   const dialog = read("src/apps/control-plane/instance-settings/InstanceSettingsDialog.vue");
   assert.doesNotMatch(detail, /Codex model|Claude model|updateInstanceModels|detail-model-selectors/);
   assert.match(dialog, /Global default/);
   assert.match(dialog, /No model/);
+  assert.ok(dialog.indexOf(">No model<") < dialog.indexOf(">Global default<"));
   assert.match(dialog, /Unavailable/);
   assert.match(dialog, /next start or restart/);
   assert.doesNotMatch(dialog, /keyPreview|\.key\b|API key/);

@@ -78,6 +78,49 @@ test("system package recipes use fixed executable and argument arrays without sh
   assert.equal(commands.some((command) => Object.hasOwn(command, "shell")), false);
 });
 
+test("Codex npm recipes provide privilege-aware install and uninstall commands", async () => {
+  const commands = [];
+  const execute = createAppRecipeExecutor({
+    installBaseDir: "/managed",
+    stateDir: "/state",
+    commandRunner: async (command) => { commands.push(command); return { exitCode: 0, stdout: "ok", stderr: "" }; },
+  });
+  const recipe = { type: "node-package", platforms: ["linux"], installer: "npm", packages: ["@openai/codex"], privilege: "passwordless-sudo" };
+  const context = { appId: "codex", capabilities: { platform: "linux", arch: "x64", installers: ["npm"], privilege: "passwordless-sudo" } };
+
+  await execute("install", recipe, context);
+  await execute("uninstall", recipe, context);
+
+  assert.deepEqual(commands.map(({ executable, args }) => ({ executable, args })), [
+    { executable: "sudo", args: ["-n", "npm", "install", "--global", "--include=optional", "--no-audit", "--no-fund", "@openai/codex"] },
+    { executable: "sudo", args: ["-n", "npm", "uninstall", "--global", "@openai/codex"] },
+  ]);
+});
+
+test("Windows npm recipes run command shims through cmd.exe without shell mode", async () => {
+  const commands = [];
+  const execute = createAppRecipeExecutor({
+    installBaseDir: "C:\\managed",
+    stateDir: "C:\\state",
+    commandRunner: async (command) => { commands.push(command); return { exitCode: 0, stdout: "ok", stderr: "" }; },
+  });
+  const recipe = { type: "node-package", platforms: ["win32"], installer: "npm", packages: ["@anthropic-ai/claude-code"], privilege: "user" };
+  const context = { appId: "claude", capabilities: { platform: "win32", arch: "x64", installers: ["npm"], privilege: "user", installerAccess: { npmGlobalWritable: true } } };
+
+  await execute("install", recipe, context);
+  await execute("uninstall", recipe, context);
+
+  assert.equal(commands.length, 2);
+  for (const command of commands) {
+    assert.match(command.executable, /cmd\.exe$/i);
+    assert.deepEqual(command.args.slice(0, 4), ["/d", "/s", "/c", "call"]);
+    assert.match(command.args[4], /npm(?:\.cmd)?$/i);
+    assert.equal(Object.hasOwn(command, "shell"), false);
+  }
+  assert.deepEqual(commands[0].args.slice(5), ["install", "--global", "--include=optional", "--no-audit", "--no-fund", "@anthropic-ai/claude-code"]);
+  assert.deepEqual(commands[1].args.slice(5), ["uninstall", "--global", "@anthropic-ai/claude-code"]);
+});
+
 test("system package execution rejects invalid built-in package values and unavailable installers", async () => {
   const execute = createAppRecipeExecutor({ installBaseDir: "/managed", stateDir: "/state", commandRunner: async () => assert.fail("must not run") });
   await assert.rejects(
@@ -88,6 +131,75 @@ test("system package execution rejects invalid built-in package values and unava
     execute("install", { type: "system-package", platforms: ["linux"], installer: "dnf", packages: ["tool"], privilege: "user" }, { appId: "tool", capabilities }),
     (error) => error instanceof AppRecipeExecutionError && error.code === "installer_unavailable",
   );
+});
+
+test("Node package execution rejects unsafe package values", async () => {
+  const execute = createAppRecipeExecutor({ installBaseDir: "/managed", stateDir: "/state", commandRunner: async () => assert.fail("must not run") });
+  await assert.rejects(
+    execute("install", { type: "node-package", platforms: ["linux"], installer: "npm", packages: ["@openai/codex;touch-pwned"], privilege: "user" }, {
+      appId: "codex",
+      capabilities: { platform: "linux", arch: "x64", installers: ["npm"], privilege: "user" },
+    }),
+    (error) => error instanceof AppRecipeExecutionError && error.code === "invalid_builtin_recipe",
+  );
+});
+
+test("Codex npm uninstall removes only a validated stale retirement directory before one retry", async () => {
+  const commands = [];
+  let uninstallAttempts = 0;
+  const execute = createAppRecipeExecutor({
+    installBaseDir: "/managed",
+    stateDir: "/state",
+    commandRunner: async (command) => {
+      commands.push(command);
+      if (command.args.includes("uninstall") && uninstallAttempts++ === 0) {
+        return {
+          exitCode: 217,
+          stdout: "",
+          stderr: "npm ERR! code ENOTEMPTY\nnpm ERR! path /usr/local/lib/node_modules/@openai/codex\nnpm ERR! dest /usr/local/lib/node_modules/@openai/.codex-vdnmINeK\n",
+        };
+      }
+      return { exitCode: 0, stdout: "ok", stderr: "" };
+    },
+  });
+  await execute("uninstall", {
+    type: "node-package", platforms: ["linux"], installer: "npm", packages: ["@openai/codex"], privilege: "passwordless-sudo",
+  }, {
+    appId: "codex",
+    capabilities: { platform: "linux", arch: "x64", installers: ["npm"], privilege: "passwordless-sudo" },
+  });
+
+  assert.deepEqual(commands.map(({ executable, args }) => ({ executable, args })), [
+    { executable: "sudo", args: ["-n", "npm", "uninstall", "--global", "@openai/codex"] },
+    { executable: "sudo", args: ["-n", "rm", "-rf", "--", "/usr/local/lib/node_modules/@openai/.codex-vdnmINeK"] },
+    { executable: "sudo", args: ["-n", "npm", "uninstall", "--global", "@openai/codex"] },
+  ]);
+});
+
+test("Node package recovery rejects unrelated ENOTEMPTY destinations", async () => {
+  const commands = [];
+  const execute = createAppRecipeExecutor({
+    installBaseDir: "/managed",
+    stateDir: "/state",
+    commandRunner: async (command) => {
+      commands.push(command);
+      return {
+        exitCode: 217,
+        stdout: "",
+        stderr: "npm ERR! code ENOTEMPTY\nnpm ERR! path /usr/local/lib/node_modules/@openai/codex\nnpm ERR! dest /tmp/unrelated\n",
+      };
+    },
+  });
+  await assert.rejects(
+    execute("uninstall", {
+      type: "node-package", platforms: ["linux"], installer: "npm", packages: ["@openai/codex"], privilege: "passwordless-sudo",
+    }, {
+      appId: "codex",
+      capabilities: { platform: "linux", arch: "x64", installers: ["npm"], privilege: "passwordless-sudo" },
+    }),
+    (error) => error instanceof AppRecipeExecutionError && error.code === "package_manager_failed",
+  );
+  assert.equal(commands.length, 1);
 });
 
 test("archive validation rejects absolute paths, parent traversal, and links", () => {

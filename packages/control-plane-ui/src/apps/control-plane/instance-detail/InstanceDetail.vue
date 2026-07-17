@@ -123,8 +123,11 @@
         :instance-connecting="instanceConnecting"
         :launchable-apps="launchableApps"
         :launching-app="launchingApp"
+        :last-refresh-label="lastRefreshLabel"
         :node-local-folders="nodeLocalFolders"
         :preview-expanded="previewExpanded"
+        :resource-metrics="resourceMetrics"
+        :resource-metrics-error="resourceMetricsError"
         :rename-session="renameSession"
         :selected-ai-session="selectedAiSession"
         :ordered-session-tabs="orderedSessionTabs"
@@ -135,6 +138,7 @@
         @launch-app="(target, appId, cwdFolderId) => $emit('launchApp', target, appId, cwdFolderId)"
         @move-session-tab="(sourceKey, targetKey, placement) => $emit('moveSessionTab', sourceKey, targetKey, placement)"
         @open-ai-session-app="(target, session) => $emit('openAiSessionApp', target, session)"
+        @open-settings="(instanceId, section) => $emit('openSettings', instanceId, section)"
         @open-url="$emit('openUrl', $event)"
         @select-ai-session="(instanceId, sessionId) => $emit('selectAiSession', instanceId, sessionId)"
         @select-session="$emit('selectSession', $event)"
@@ -144,13 +148,6 @@
         @update:session-menu-open="$emit('update:sessionMenuOpen', $event)"
       />
 
-      <section v-if="!previewExpanded" class="detail-meta">
-        <p class="detail-meta-status">
-          <span>Health {{ instance.health }}</span>
-          <span>Workspace {{ instance.workspace.status }}</span>
-          <span>Last refresh {{ lastRefreshLabel }}</span>
-        </p>
-      </section>
     </div>
 
     <section v-else class="detail-empty">
@@ -167,7 +164,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
 import { Play, Plus, RotateCw, Settings, Square, Trash2 } from "@lucide/vue";
-import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, NodeLocalFolder } from "../../../api/types";
+import type { AiSessionSummary, InstanceBoardItem, InstanceResourceMetrics, InstanceWithAiSessions, NodeLocalFolder } from "../../../api/types";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
@@ -202,6 +199,8 @@ const props = defineProps<{
   nodeLocalFolders?: NodeLocalFolder[];
   loading: boolean;
   previewExpanded: boolean;
+  resourceMetrics?: InstanceResourceMetrics;
+  resourceMetricsError?: string;
   renameInstance: (instance: InstanceBoardItem, name: string) => Promise<void>;
   renameSession: (instance: InstanceBoardItem, session: SessionTab, title: string) => Promise<void>;
   selectedAiSession: (instance: InstanceBoardItem, sessions?: AiSessionSummary[]) => AiSessionSummary | undefined;
@@ -217,7 +216,7 @@ defineEmits<{
   moveSessionTab: [sourceKey: string, targetKey: string, placement: "before" | "after"];
   newInstance: [];
   openAiSessionApp: [instance: InstanceBoardItem, session?: AiSessionSummary];
-  openSettings: [instanceId: string];
+  openSettings: [instanceId: string, section?: "general" | "models" | "apps"];
   openUrl: [url: string];
   runAction: [action: InstanceAction, instance: InstanceBoardItem];
   selectAiSession: [instanceId: string, sessionId: string];

@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   CONTROL_PLANE_PROTOCOL_VERSION,
   ControlledInstanceSchema,
+  InstanceResourceMetricsSchema,
   LocalDockerImageSchema,
   NodeAgentDeleteResponseSchema,
   NodeAgentHealthSchema,
@@ -331,6 +332,10 @@ export class ControlPlaneNodeAgentGateway {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(input),
     });
+  }
+
+  instanceResourceMetrics(node: Node, instanceId: string) {
+    return this.client.requestSchema(node, `/instances/${encodeURIComponent(instanceId)}/metrics`, InstanceResourceMetricsSchema);
   }
 
   proxyRawInstance(node: Node, instanceId: string, input: unknown) {

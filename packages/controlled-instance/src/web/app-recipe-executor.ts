@@ -3,11 +3,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import type { AppManagementOperation, AppManagementProgress, FinalComputerCapabilities } from "@task-handoff/protocol/control-plane";
-import type { ArchiveInstallRecipe, InstallRecipe, SystemPackageInstallRecipe } from "@task-handoff/app-runtime/types";
+import { findManagedExecutable } from "@task-handoff/app-runtime";
+import type { ArchiveInstallRecipe, InstallRecipe, NodePackageInstallRecipe, SystemPackageInstallRecipe } from "@task-handoff/app-runtime/types";
 
 const MAX_LOG_CHARS = 8_192;
 const MAX_ARCHIVE_BYTES = 512 * 1024 * 1024;
 const PACKAGE_NAME = /^[a-zA-Z0-9][a-zA-Z0-9+._:@/-]{0,199}$/;
+const NODE_PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._-]{0,99}\/)?[a-z0-9][a-z0-9._-]{0,99}$/i;
 
 export class AppRecipeExecutionError extends Error {
   readonly code: string;
@@ -140,6 +142,56 @@ function aptRefreshCommand(capabilities: FinalComputerCapabilities, recipe: Syst
     return { executable: "sudo", args: ["-n", "apt-get", "update"], timeoutMs: 15 * 60_000 };
   }
   throw new AppRecipeExecutionError("insufficient_privilege", "The controlled instance cannot refresh the apt package index.");
+}
+
+function nodePackageCommand(recipe: NodePackageInstallRecipe, operation: AppManagementOperation, capabilities: FinalComputerCapabilities): AppRecipeCommand {
+  if (!recipe.packages.length || recipe.packages.some((item) => !NODE_PACKAGE_NAME.test(item))) {
+    throw new AppRecipeExecutionError("invalid_builtin_recipe", "The built-in Node package recipe contains an invalid package name.");
+  }
+  if (!capabilities.installers.includes(recipe.installer)) {
+    throw new AppRecipeExecutionError("installer_unavailable", `The ${recipe.installer} installer is unavailable.`);
+  }
+  const args = operation === "install"
+    ? ["install", "--global", "--include=optional", "--no-audit", "--no-fund", ...recipe.packages]
+    : ["uninstall", "--global", ...recipe.packages];
+  const installerExecutable = capabilities.platform === "win32"
+    ? findManagedExecutable(recipe.installer, { platform: "win32" }) || `${recipe.installer}.cmd`
+    : recipe.installer;
+  const command = capabilities.platform === "win32"
+    ? { executable: process.env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", "call", installerExecutable, ...args], timeoutMs: 15 * 60_000 }
+    : { executable: installerExecutable, args, timeoutMs: 15 * 60_000 };
+  if (capabilities.privilege === "root" || recipe.privilege === "user") {
+    return command;
+  }
+  if (capabilities.privilege === "passwordless-sudo") {
+    return { executable: "sudo", args: ["-n", recipe.installer, ...args], timeoutMs: 15 * 60_000 };
+  }
+  throw new AppRecipeExecutionError("insufficient_privilege", "The controlled instance cannot run this Node package recipe.");
+}
+
+function npmRetirementDirectory(stderr: string, recipe: NodePackageInstallRecipe) {
+  if (!/(?:^|\n)npm ERR! code ENOTEMPTY\r?$/m.test(stderr)) return undefined;
+  const source = stderr.match(/(?:^|\n)npm ERR! path (.+)\r?$/m)?.[1]?.trim();
+  const destination = stderr.match(/(?:^|\n)npm ERR! dest (.+)\r?$/m)?.[1]?.trim();
+  if (!source || !destination || !path.isAbsolute(source) || !path.isAbsolute(destination)) return undefined;
+  const packageName = recipe.packages.length === 1 ? recipe.packages[0] : undefined;
+  const segments = packageName?.split("/").filter(Boolean);
+  const leaf = segments?.at(-1);
+  if (!segments?.length || !leaf || !source.endsWith(path.join("node_modules", ...segments))) return undefined;
+  if (path.dirname(source) !== path.dirname(destination)) return undefined;
+  const escapedLeaf = leaf.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (!new RegExp(`^\\.${escapedLeaf}-[A-Za-z0-9_-]+$`).test(path.basename(destination))) return undefined;
+  return destination;
+}
+
+function npmRetirementCleanupCommand(command: AppRecipeCommand, destination: string, capabilities: FinalComputerCapabilities): AppRecipeCommand {
+  if (capabilities.platform === "win32") {
+    return { executable: process.env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", "rmdir", "/s", "/q", destination], timeoutMs: 60_000 };
+  }
+  const prefix = command.executable === "sudo" ? ["-n"] : [];
+  return command.executable === "sudo"
+    ? { executable: "sudo", args: [...prefix, "rm", "-rf", "--", destination], timeoutMs: 60_000 }
+    : { executable: "rm", args: ["-rf", "--", destination], timeoutMs: 60_000 };
 }
 
 function safeRelativeArchivePath(value: string) {
@@ -312,6 +364,20 @@ export function createAppRecipeExecutor(options: AppRecipeExecutorOptions) {
       }
       const result = await runCommand(command);
       if (result.exitCode !== 0) throw new AppRecipeExecutionError("package_manager_failed", bounded(result.stderr) || "The system package manager failed.", true);
+      return { log: bounded(result.stdout || result.stderr) };
+    }
+    if (recipe.type === "node-package") {
+      context.onPhase?.(operation === "install" ? "install-node-package" : "uninstall-node-package");
+      const command = nodePackageCommand(recipe, operation, context.capabilities);
+      let result = await runCommand(command);
+      const retirementDirectory = result.exitCode === 0 ? undefined : npmRetirementDirectory(result.stderr, recipe);
+      if (retirementDirectory) {
+        context.onPhase?.("cleanup-node-package");
+        const cleanup = await runCommand(npmRetirementCleanupCommand(command, retirementDirectory, context.capabilities));
+        if (cleanup.exitCode !== 0) throw new AppRecipeExecutionError("package_cleanup_failed", bounded(cleanup.stderr) || "The stale Node package directory could not be removed.", true);
+        result = await runCommand(command);
+      }
+      if (result.exitCode !== 0) throw new AppRecipeExecutionError("package_manager_failed", bounded(result.stderr) || "The Node package manager failed.", true);
       return { log: bounded(result.stdout || result.stderr) };
     }
     if (operation === "install") await installArchive(recipe, context, resolved);

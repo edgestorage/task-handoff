@@ -65,6 +65,7 @@ import {
   AiSessionApprovalInputSchema,
   AiSessionControlErrorSchema,
   AiSessionDeltaResponseSchema,
+  AiSessionMessageDeltaEventSchema,
   type AiSessionEventReason,
   type AiSessionSnapshotEvent,
   type AiSessionsSnapshot,
@@ -494,19 +495,23 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   const appRuntime = options.appRuntime || new AppRuntimeManager(storagePaths);
   appRuntime.replaceManagedEnvironment(managedModelEnvironment(managedModelEnv));
   const app = Fastify({ logger: options.logger ?? true, bodyLimit: 64 * 1024 * 1024 });
+  let nodeAgentClient!: NodeAgentRegistrationClient;
   const appManagement = options.appManagement || new AppManagementManager({
     stateDir: path.join(storagePaths.runtimeDir, "app-management"),
     installBaseDir: process.env.TASK_HANDOFF_MANAGED_APP_ROOT || path.join(storagePaths.dataDir, "managed-apps"),
     sessions: () => appRuntime.listSessions(),
     publish: (event) => events.publish("app.management", event),
     warn: (message) => app.log?.warn?.({ message }, "app management persistence warning"),
+    onTerminal: async () => {
+      if (nodeAgentClient.enabled()) await nodeAgentClient.heartbeat();
+    },
   });
   const aiSessions = options.aiSessionRegistry || createAiSessionRegistry();
   const aiSessionController = new AiSessionController(aiSessions);
   const triggers = new TriggerStore(storagePaths);
   const triggerExecutor = new TriggerExecutor(triggers, aiSessionController);
   const triggerManager = new TriggerManager(triggers, triggerExecutor, storagePaths, (type, payload) => events.publish(type, payload));
-  const nodeAgentClient = new NodeAgentRegistrationClient(nodeAgentRegistrationConfigFromEnv(), () => controlledInstanceSnapshot(appRuntime, storagePaths, aiSessions, triggers));
+  nodeAgentClient = new NodeAgentRegistrationClient(nodeAgentRegistrationConfigFromEnv(), () => controlledInstanceSnapshot(appRuntime, storagePaths, aiSessions, triggers));
 
   await app.register(websocket);
   registerAuth(app, auth);
@@ -547,7 +552,17 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   const appSessionEventHistory: Array<AppSessionRuntimeEvent & { createdAtMs: number }> = [];
   let lastAppSessionSnapshot = appSessionsSnapshotFromRecords([]);
   const aiSessionDiscovery = new AiSessionDiscoveryCoordinator();
-  const codexAppServer = new CodexAppServerSessionBridge(aiSessions);
+  const codexAppServer = new CodexAppServerSessionBridge(aiSessions, {
+    onMessageDelta: (delta) => {
+      const payload = AiSessionMessageDeltaEventSchema.parse({
+        instanceId,
+        nodeId: process.env.TASK_HANDOFF_NODE_ID,
+        ...delta,
+        generatedAt: new Date().toISOString(),
+      });
+      events.publish(AiSessionEventType.MessageDelta, payload);
+    },
+  });
   const claudeControlSock = new ClaudeControlSockSessionBridge(aiSessions);
   aiSessionController.register(codexAppServer);
   aiSessionController.register(claudeControlSock);
@@ -952,6 +967,9 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       ],
     });
     events.send(socket, "app.management", appManagement.snapshotEvent());
+    void appManagement.refreshSnapshot()
+      .then(() => appManagement.publishSnapshot())
+      .catch((error) => app.log.warn({ err: error }, "failed to refresh app management ownership for event snapshot"));
   });
 
   app.get("/api/status", async () => {
@@ -1264,7 +1282,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   }));
 
   app.get("/api/apps/management", async () => ({
-    data: appManagement.snapshot(),
+    data: await appManagement.refreshSnapshot(),
   }));
 
   const appManagementError = (reply: { code: (statusCode: number) => { send: (payload: unknown) => unknown } }, error: unknown) => {
@@ -1280,6 +1298,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   app.post<{ Params: { appId: string }; Body: unknown }>("/api/apps/:appId/install", async (request, reply) => {
     try {
       const input = AppManagementOperationRequestSchema.parse(request.body || {});
+      await appManagement.refreshSnapshot();
       return reply.code(202).send({ data: { job: appManagement.request(request.params.appId, "install", input.requestId) } });
     } catch (error) {
       return appManagementError(reply, error);
@@ -1289,6 +1308,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   app.post<{ Params: { appId: string }; Body: unknown }>("/api/apps/:appId/uninstall", async (request, reply) => {
     try {
       const input = AppManagementOperationRequestSchema.parse(request.body || {});
+      await appManagement.refreshSnapshot();
       return reply.code(202).send({ data: { job: appManagement.request(request.params.appId, "uninstall", input.requestId) } });
     } catch (error) {
       return appManagementError(reply, error);

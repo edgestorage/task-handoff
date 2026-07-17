@@ -13,6 +13,7 @@ type TelegramProgressEntry<Route> = {
   lastUpdateAt: number;
   route?: Route;
   options?: ChatProgressOptions;
+  lastOptions?: ChatProgressOptions;
   renderOptions?: unknown;
   timer?: ReturnType<typeof setTimeout>;
   pending?: Promise<unknown>;
@@ -52,6 +53,25 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function progressActionRows(options?: ChatProgressOptions) {
+  if (Array.isArray(options?.actionRows)) {
+    return options.actionRows;
+  }
+  return (Array.isArray(options?.actions) ? options.actions : []).map((action) => [action]);
+}
+
+function progressOptionsEqual(left?: ChatProgressOptions, right?: ChatProgressOptions) {
+  const leftRows = progressActionRows(left);
+  const rightRows = progressActionRows(right);
+  return leftRows.length === rightRows.length && leftRows.every((leftRow, rowIndex) => {
+    const rightRow = rightRows[rowIndex];
+    return leftRow.length === rightRow.length && leftRow.every((leftAction, actionIndex) => {
+      const rightAction = rightRow[actionIndex];
+      return leftAction.text === rightAction?.text && leftAction.callbackData === rightAction.callbackData;
+    });
+  });
+}
+
 class TelegramProgressStore<Route = unknown> {
   readonly entries: Map<string, TelegramProgressEntry<Route>>;
   private readonly updateIntervalMs: number;
@@ -88,6 +108,7 @@ class TelegramProgressStore<Route = unknown> {
       messageId,
       route,
       options,
+      lastOptions: options,
       renderOptions,
     });
     return previous;
@@ -158,7 +179,7 @@ class TelegramProgressStore<Route = unknown> {
         return false;
       }
       if (existing?.messageId) {
-        if (existing.lastText === value) {
+        if (existing.lastText === value && progressOptionsEqual(existing.lastOptions, progressOptions)) {
           return true;
         }
         const elapsed = Date.now() - (existing.lastUpdateAt || 0);
@@ -171,11 +192,12 @@ class TelegramProgressStore<Route = unknown> {
         }
         await this.edit(existing.messageId, value, targetRoute || existing.route, progressOptions);
         existing.lastText = value;
+        existing.lastOptions = progressOptions;
         existing.lastUpdateAt = Date.now();
         existing.rateLimitedUntil = undefined;
         return true;
       }
-      const entry: TelegramProgressEntry<Route> = { lastText: value, lastUpdateAt: Date.now(), route: targetRoute, options: progressOptions };
+      const entry: TelegramProgressEntry<Route> = { lastText: value, lastUpdateAt: Date.now(), route: targetRoute, options: progressOptions, lastOptions: progressOptions };
       entry.pending = this.send(value, targetRoute, progressOptions)
         .then((message) => {
           const messageId = this.messageIdFromResult(message);
@@ -213,7 +235,7 @@ class TelegramProgressStore<Route = unknown> {
       existing.route = route || existing.route;
       existing.options = options || existing.options;
     }
-    if (existing?.lastText === value && !existing.pending && !existing.pendingText) {
+    if (existing?.lastText === value && progressOptionsEqual(existing.lastOptions, options || existing.options) && !existing.pending && !existing.pendingText) {
       return;
     }
     const now = Date.now();
@@ -262,10 +284,11 @@ class TelegramProgressStore<Route = unknown> {
       if (!existing.messageId) {
         return false;
       }
-      if (existing.lastText === text) {
+      const progressOptions = options || existing.options;
+      if (existing.lastText === text && progressOptionsEqual(existing.lastOptions, progressOptions)) {
         return true;
       }
-      await this.edit(existing.messageId, text, route || existing.route, options || existing.options, renderOptions || existing.renderOptions);
+      await this.edit(existing.messageId, text, route || existing.route, progressOptions, renderOptions || existing.renderOptions);
       return true;
     } catch (error) {
       this.entries.delete(key);

@@ -162,6 +162,7 @@
 
       <InstanceDetail
         v-else-if="instanceViewMode && !settingsMode"
+        :class="{ 'preview-expanded': sessionPreviewExpanded }"
         v-model:app-launch-menu-open="appLaunchMenuOpen"
         v-model:preview-expanded="sessionPreviewExpanded"
         v-model:session-menu-open="sessionMenuOpen"
@@ -186,6 +187,8 @@
         :launchable-apps="launchableApps"
         :launching-app="launchingApp"
         :loading="board.isLoading.value"
+        :resource-metrics="activeInstanceResourceMetrics"
+        :resource-metrics-error="activeInstanceResourceMetricsError"
         :node-local-folders="activeNodeLocalFolders"
         :rename-instance="renameInstance"
         :rename-session="renameSession"
@@ -211,6 +214,7 @@
 
     <InstanceSettingsDialog
       v-model:open="instanceSettingsOpen"
+      :initial-section="instanceSettingsSection"
       :instance="instanceSettingsInstance"
       :models="models.data.value || []"
       :app-management="instanceSettingsAppManagement?.snapshot"
@@ -230,9 +234,9 @@ import { useQueryClient } from "@tanstack/vue-query";
 import { useEventListener } from "@vueuse/core";
 import { Bot, Download, House, LayoutGrid, LogOut, Maximize2, Minus, RefreshCw, Settings, X } from "@lucide/vue";
 import "@xterm/xterm/css/xterm.css";
-import { getInstanceAppManagement, installInstanceApp, logoutControlPlane, renameAppSession, resolveAiSessionApproval, uninstallInstanceApp, updateControlledInstance, useAuthSessionQuery, useConfigSyncPresetsQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useInstanceBoardQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
+import { getInstanceAppManagement, getInstanceResourceMetrics, installInstanceApp, logoutControlPlane, renameAppSession, resolveAiSessionApproval, uninstallInstanceApp, updateControlledInstance, useAuthSessionQuery, useConfigSyncPresetsQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useInstanceBoardQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
 import { getApiData } from "../../api/client";
-import { type AiSessionSummary, type AppManagementOperation, type InstanceBoardItem, type NodeLocalFolder, type UpdateControlledInstanceInput } from "../../api/types";
+import { type AiSessionSummary, type AppManagementOperation, type InstanceBoardItem, type InstanceResourceMetrics, type NodeLocalFolder, type UpdateControlledInstanceInput } from "../../api/types";
 import { Button } from "../../components/ui/button";
 import AiSessionBoardView from "./ai-board/AiSessionBoardView.vue";
 import InstanceBoardView from "./board/InstanceBoardView.vue";
@@ -309,6 +313,7 @@ const boardSize = ref<BoardSize>(storedBoardSize());
 const sessionPreviewExpanded = ref(storedSessionPreviewExpanded());
 const newInstanceOpen = ref(false);
 const instanceSettingsId = ref("");
+const instanceSettingsSection = ref<"general" | "models" | "apps">("general");
 const instanceSettingsOpen = computed({
   get: () => Boolean(instanceSettingsId.value),
   set: (open: boolean) => {
@@ -364,6 +369,10 @@ const {
   instances: boardInstancesWithAppSessions,
 });
 const activeInstanceWithAiSessions = computed(() => aiSessionStore.instanceWithAiSessions(activeInstance.value));
+const resourceMetricsByInstanceId = reactive<Record<string, InstanceResourceMetrics>>({});
+const resourceMetricsErrorByInstanceId = reactive<Record<string, string>>({});
+const activeInstanceResourceMetrics = computed(() => activeInstance.value?.runtime?.type === "docker" ? resourceMetricsByInstanceId[activeInstance.value.id] : undefined);
+const activeInstanceResourceMetricsError = computed(() => activeInstance.value?.runtime?.type === "docker" ? resourceMetricsErrorByInstanceId[activeInstance.value.id] : undefined);
 const boardSizeOptions: Array<{ value: BoardSize; label: string }> = [
   { value: "small", label: "Small" },
   { value: "medium", label: "Medium" },
@@ -433,6 +442,15 @@ useControlPlaneEvents({
   appManagement: {
     applyEvent: instanceAppManagement.applyEvent,
     recoverOpen: () => instanceSettingsId.value ? instanceAppManagement.recover(instanceSettingsId.value) : undefined,
+  },
+  resourceMetrics: {
+    applyEvent(metrics) {
+      if (!metrics.instanceId) return false;
+      resourceMetricsByInstanceId[metrics.instanceId] = metrics;
+      delete resourceMetricsErrorByInstanceId[metrics.instanceId];
+      return true;
+    },
+    recoverOpen: loadActiveInstanceResourceMetrics,
   },
 });
 const lastRefreshLabel = computed(() => new Date(lastRefreshAt.value).toLocaleTimeString());
@@ -563,6 +581,44 @@ async function loadNodeLocalFolders(nodeId: string) {
     nodeLocalFoldersByNodeId[nodeId] = [];
   } finally {
     nodeLocalFolderLoads[nodeId] = false;
+  }
+}
+
+watch(
+  () => [
+    activeInstanceId.value,
+    activeInstance.value?.runtime?.type,
+    activeInstance.value?.runtime?.containerId,
+    activeInstance.value?.runtime?.containerName,
+  ] as const,
+  () => void loadActiveInstanceResourceMetrics(),
+  { immediate: true },
+);
+
+watch(boardInstancesWithAppSessions, (instances) => {
+  const currentIds = new Set(instances.map((instance) => instance.id));
+  for (const instanceId of Object.keys(resourceMetricsByInstanceId)) {
+    if (!currentIds.has(instanceId)) delete resourceMetricsByInstanceId[instanceId];
+  }
+  for (const instanceId of Object.keys(resourceMetricsErrorByInstanceId)) {
+    if (!currentIds.has(instanceId)) delete resourceMetricsErrorByInstanceId[instanceId];
+  }
+});
+
+async function loadActiveInstanceResourceMetrics() {
+  const instance = activeInstance.value;
+  if (!instance || instance.runtime?.type !== "docker") return;
+  const requestedId = instance.id;
+  try {
+    const metrics = await getInstanceResourceMetrics(requestedId);
+    if (activeInstanceId.value === requestedId) {
+      resourceMetricsByInstanceId[requestedId] = metrics;
+      delete resourceMetricsErrorByInstanceId[requestedId];
+    }
+  } catch (error) {
+    if (activeInstanceId.value === requestedId && !resourceMetricsByInstanceId[requestedId]) {
+      resourceMetricsErrorByInstanceId[requestedId] = errorText(error);
+    }
   }
 }
 
@@ -758,8 +814,9 @@ async function manageInstanceApp(instanceId: string, appId: string, operation: A
   instanceAppManagement.applyJob(instanceId, response.job);
 }
 
-function openInstanceSettings(instanceId: string) {
+function openInstanceSettings(instanceId: string, section: "general" | "models" | "apps" = "general") {
   if (!boardInstancesWithAppSessions.value.some((instance) => instance.id === instanceId)) return;
+  instanceSettingsSection.value = section;
   instanceSettingsId.value = instanceId;
   closeFloatingLayers();
 }

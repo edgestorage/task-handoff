@@ -16,6 +16,7 @@ import {
   ControlledInstanceHeartbeatSchema,
   ControlledInstanceRegisterSchema,
   InstanceImageSnapshotSchema,
+  InstanceResourceMetricsEventType,
   ImageProfileSchema,
   CreateNodeModelSchema,
   DeployNodeModelSchema,
@@ -42,6 +43,7 @@ import {
   type ControlledInstanceHeartbeat,
   type ControlledInstanceRegister,
   type ImageProfile,
+  type InstanceResourceMetrics,
   type Node,
   type NodeModelAssignment,
   type NodeModelConfig,
@@ -57,6 +59,7 @@ import { bridgeWebSockets } from "@task-handoff/protocol/websocket-bridge";
 import { defaultCommandRunner, LocalDockerExecutor, listLocalDockerImages, type CommandRunner, type ExecutorContext, type ExecutorStartResult } from "./runtimes/docker.ts";
 import { DockerImageService, type DockerImagePhase, type ResolvedDockerImage } from "./docker-images.ts";
 import { NodeAgentInstanceEventForwarder } from "./events.ts";
+import { DockerRuntimeMetricsCollector } from "./runtime-metrics.ts";
 import { listFolderTree } from "./folders.ts";
 import {
   CreateLocalFolderSchema,
@@ -88,6 +91,7 @@ declare module "fastify" {
   interface FastifyInstance {
     nodeAgentState?: NodeAgentState;
     nodeAgentEventForwarder?: NodeAgentInstanceEventForwarder;
+    nodeAgentRuntimeMetrics?: DockerRuntimeMetricsCollector;
     nodeAgentReverseTunnels?: ReturnType<typeof createReverseTunnelManager>;
     nodeAgentListenerManager?: NodeAgentExternalListenerManager;
     nodeAgentRestoreLocalInstances?: () => Promise<void>;
@@ -1894,6 +1898,13 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   const eventForwarder = new NodeAgentInstanceEventForwarder(state, token, { logger: app.log, safetyIntervalMs: Number(process.env.TASK_HANDOFF_EVENT_CONNECTION_SAFETY_INTERVAL_MS) || undefined });
   eventForwarder.start();
   app.decorate("nodeAgentEventForwarder", eventForwarder);
+  const runtimeMetrics = new DockerRuntimeMetricsCollector(
+    dockerCommandRunner,
+    () => state.listInstances().filter((instance) => state.requireRuntime(instance.runtimeId).type === "docker"),
+    (metrics: InstanceResourceMetrics) => eventForwarder.publish(InstanceResourceMetricsEventType.Snapshot, metrics, { instanceId: metrics.instanceId }),
+  );
+  runtimeMetrics.start();
+  app.decorate("nodeAgentRuntimeMetrics", runtimeMetrics);
   const diagnosticLogsEnabled = nodeAgentDiagnosticLogsEnabled();
   const pairedHmac = new NodeAgentPairedHmacVerifier(identity, nodeId, remoteSecretOverride, remoteKeyIdOverride);
   const logDiagnostic = (data: Record<string, unknown>, message: string) => {
@@ -2021,6 +2032,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   });
 
   app.addHook("onClose", async () => {
+    runtimeMetrics.stop();
     eventForwarder.stop();
     await stopLocalInstancesForNodeAgentShutdown(state, runtimeAdapters);
   });
@@ -2341,6 +2353,17 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   app.get("/api/node-agent/docker/images", async () => ({
     data: await listLocalDockerImages(options.dockerCommandRunner),
   }));
+
+  app.get("/api/node-agent/instances/:id/metrics", async (request) => {
+    const id = (request.params as { id: string }).id;
+    const instance = state.requireInstance(id);
+    if (state.requireRuntime(instance.runtimeId).type !== "docker") {
+      const error = new Error(`Runtime type ${state.requireRuntime(instance.runtimeId).type} does not provide resource metrics.`);
+      Object.assign(error, { statusCode: 409, code: "INSTANCE_METRICS_UNSUPPORTED" });
+      throw error;
+    }
+    return { data: await runtimeMetrics.snapshot(id) };
+  });
 
   app.post("/api/node-agent/instances/:id/start", async (request) => {
     const id = (request.params as { id: string }).id;

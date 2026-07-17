@@ -14,6 +14,10 @@
       "types": "./src/catalog.ts",
       "default": "./src/catalog.ts"
     },
+    "./managed-app-definitions": {
+      "types": "./src/managed-app-definitions/index.ts",
+      "default": "./src/managed-app-definitions/index.ts"
+    },
     "./runtime": {
       "types": "./src/runtime.ts",
       "default": "./src/runtime.ts"

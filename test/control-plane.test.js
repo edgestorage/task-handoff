@@ -35,7 +35,7 @@ const { acquireNodeAgentSingletonLock } = require("../packages/control-plane/src
 const { EventConnectionRetryTimer, eventConnectionRetryDelay, eventConnectionSafetyIntervalMs } = require("../packages/control-plane/src/shared/events/connection-retry.ts");
 const { JsonCollection, JsonFile } = require("../packages/control-plane/src/shared/persistence/store.ts");
 const { nodeAgentStorePaths } = require("../packages/control-plane/src/node-agent/persistence/paths.ts");
-const { displayAiSessionMessage, displayAiSessionTitle, launchableAppsForInstance: uiLaunchableAppsForInstance } = require("../packages/control-plane-ui/src/apps/control-plane/useInstanceSessions.ts");
+const { aiSessionUserPrompts, displayAiSessionMessage, displayAiSessionTitle, launchableAppsForInstance: uiLaunchableAppsForInstance } = require("../packages/control-plane-ui/src/apps/control-plane/useInstanceSessions.ts");
 const { launchableAppsForInstance: chatLaunchableAppsForInstance } = require("../packages/control-plane/src/control-plane/chat/rendering.ts");
 const { appSessionStatus } = require("../packages/control-plane-ui/src/apps/control-plane/appSessionVisibility.ts");
 const { AiSessionEventType, AiSessionEventTopic } = require("../packages/protocol/src/ai-sessions.ts");
@@ -77,7 +77,7 @@ function testAppInventory(apps, observedAt = new Date().toISOString()) {
 }
 
 test("controlled instance heartbeat protocol rejects legacy receiver projection", () => {
-  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-07-16");
+  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-07-17");
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, receiver: { status: "running", pendingCount: 1 } }).success, false);
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, apps: { runningCount: 1 } }).success, false);
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, appInventory: emptyAppInventory(), apps: { runningCount: 1 } }).success, true);
@@ -502,6 +502,51 @@ test("AI session aggregator recovers advertised gaps from instance deltas and re
   await aggregator.list({ refresh: true });
   assert.equal((await aggregator.list()).instances[0].streamId, "ai_current_stream");
   bootstrapStreamId = "ai_current_stream";
+});
+
+test("AI session message deltas update listeners without advancing or mutating the recoverable snapshot", async () => {
+  const timestamp = new Date().toISOString();
+  const aggregator = new ControlPlaneAiSessionAggregator({ bootstrap: async () => ({ instances: [] }) });
+  const snapshot = aiSessionSnapshotPayload({
+    sessions: [{
+      id: "session_delta",
+      agent: "codex",
+      providerSessionId: "thread_delta",
+      activeTurnId: "turn_delta",
+      status: "running",
+      phase: "thinking",
+      startedAt: timestamp,
+      updatedAt: timestamp,
+      turns: [{ id: "turn_delta", providerTurnId: "turn_delta", status: "running", revision: 1 }],
+      queue: { pendingCount: 0, items: [] },
+    }],
+  }, { instanceId: "inst_delta", streamId: "stream_delta", revision: 7, generatedAt: timestamp });
+  aggregator.applySnapshot(snapshot);
+  const updates = [];
+  aggregator.onSnapshot((update) => updates.push(update));
+  aggregator.handleEvent({
+    v: 1,
+    id: "event_delta",
+    seq: 1,
+    type: AiSessionEventType.MessageDelta,
+    topic: "ai.sessions",
+    createdAt: timestamp,
+    payload: {
+      instanceId: "inst_delta",
+      sessionId: "session_delta",
+      providerSessionId: "thread_delta",
+      turnId: "turn_delta",
+      itemId: "item_delta",
+      delta: "hello",
+      generatedAt: timestamp,
+    },
+  });
+
+  assert.equal(updates[0].revision, 7);
+  assert.equal(updates[0].aiSessions.sessions[0].lastMessage, "hello");
+  const stored = (await aggregator.list()).instances[0];
+  assert.equal(stored.revision, 7);
+  assert.equal(stored.aiSessions.sessions[0].lastMessage, undefined);
 });
 
 test("app session aggregator clears retained history when a new stream snapshot is accepted", async () => {
@@ -1010,6 +1055,22 @@ function createMockNodeAgentFetch(options = {}) {
         assignment: { instanceId: id, codexModelHash: body.codexModelHash, claudeModelHash: body.claudeModelHash, updatedAt: timestamp },
         instance,
       });
+    }
+    const instanceMetrics = path.match(/^\/instances\/([^/]+)\/metrics$/);
+    if (instanceMetrics && (!init.method || init.method === "GET")) {
+      const id = decodeURIComponent(instanceMetrics[1]);
+      const current = instances.get(id);
+      if (!current) return errorResponse(`Instance ${id} was not found.`, 404, "NODE_INSTANCE_NOT_FOUND");
+      return options.metrics
+        ? options.metrics({ url, init, body, instance: current, requests, jsonResponse, errorResponse })
+        : jsonResponse({
+            instanceId: id,
+            runtimeKind: "docker",
+            state: "available",
+            sampledAt: timestamp,
+            cpu: { usagePercent: 1.25 },
+            memory: { usageBytes: 134_217_728, limitBytes: 536_870_912, usagePercent: 25 },
+          });
     }
     const proxyRaw = path.match(/^\/instances\/([^/]+)\/proxy\/raw$/);
     if (proxyRaw) {
@@ -1693,6 +1754,63 @@ test("control plane forwards node agent websocket events with instance scope", a
   assert.equal(event.topic, AiSessionEventTopic);
   assert.equal(event.scope.nodeId, "node_events");
   assert.equal(event.scope.instanceId, "inst_events");
+});
+
+test("control plane accepts metrics only for an instance owned by the forwarding node", async () => {
+  const events = new ControlPlaneEventBus();
+  const published = [];
+  events.on((event) => published.push(event));
+  const validations = [];
+  const tunnel = new ControlPlaneNodeAgentTunnelTransport(events, {
+    validateInstanceScope: async (nodeId, instanceId) => {
+      validations.push([nodeId, instanceId]);
+      return nodeId === "node_metrics" && instanceId === "inst_owned";
+    },
+  });
+  const metric = (instanceId) => ({
+    instanceId,
+    runtimeKind: "docker",
+    state: "available",
+    sampledAt: "2026-07-17T00:00:00.000Z",
+    cpu: { usagePercent: 2.5 },
+  });
+
+  tunnel.handleMessage("node_metrics", {
+    type: "node-agent.event.forwarded",
+    event: { type: "instance.metrics.snapshot", topic: "instances", payload: metric("inst_other"), scope: { instanceId: "inst_other" } },
+  });
+  tunnel.handleMessage("node_metrics", {
+    type: "node-agent.event.forwarded",
+    event: { type: "instance.metrics.snapshot", topic: "instances", payload: metric("inst_owned"), scope: { instanceId: "inst_owned" } },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(validations, [["node_metrics", "inst_other"], ["node_metrics", "inst_owned"]]);
+  assert.equal(published.length, 1);
+  assert.equal(published[0].payload.instanceId, "inst_owned");
+  assert.deepEqual(published[0].scope, { nodeId: "node_metrics", instanceId: "inst_owned" });
+});
+
+test("control plane rejects metrics whose payload and forwarded scope disagree", async () => {
+  const events = new ControlPlaneEventBus();
+  const published = [];
+  events.on((event) => published.push(event));
+  let validations = 0;
+  const tunnel = new ControlPlaneNodeAgentTunnelTransport(events, {
+    validateInstanceScope: async () => { validations += 1; return true; },
+  });
+  tunnel.handleMessage("node_metrics", {
+    type: "node-agent.event.forwarded",
+    event: {
+      type: "instance.metrics.snapshot",
+      payload: { instanceId: "inst_payload", runtimeKind: "docker", state: "unavailable", sampledAt: "2026-07-17T00:00:00.000Z" },
+      scope: { instanceId: "inst_scope" },
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(validations, 0);
+  assert.equal(published.length, 0);
 });
 
 test("control plane subscribes to direct node agent websocket events", async (t) => {
@@ -4101,10 +4219,10 @@ test("node agent starts localhost runtime as a host controlled-instance process"
       "    name: process.env.TASK_HANDOFF_INSTANCE_NAME,",
       "    nodeId: process.env.TASK_HANDOFF_NODE_ID,",
       "    runtimeId: process.env.TASK_HANDOFF_RUNTIME_ID,",
-      "    protocolVersion: '2026-07-16',",
+      "    protocolVersion: '2026-07-17',",
       "    build: { component: 'controlled-instance' },",
       "    controlMode: 'controlled',",
-      "    capabilities: { protocolVersion: '2026-07-16', features: {} },",
+      "    capabilities: { protocolVersion: '2026-07-17', features: {} },",
       "    appInventory: { items: [], observedAt: new Date().toISOString(), issues: [] },",
       "    target: { strategy: 'direct-port', web: `http://127.0.0.1:${port}`, api: `http://127.0.0.1:${port}/api`, status: 'reachable' },",
       "    workspace: { mode: 'local-bind', status: 'ready', path: process.env.TASK_HANDOFF_WORKSPACE, exists: true },",
@@ -6401,6 +6519,19 @@ test("control plane manages projects, instances, register, heartbeat, and board 
   });
   assert.equal(createdInstance.statusCode, 201);
   assert.match(createdInstance.body.data.registrationToken, /^[A-Za-z0-9_-]+$/);
+
+  const resourceMetrics = await json(app, "GET", `/api/controlled-instances/${createdInstance.body.data.id}/metrics`);
+  assert.equal(resourceMetrics.statusCode, 200);
+  const { sampledAt, ...resourceMetricsData } = resourceMetrics.body.data;
+  assert.equal(Number.isNaN(Date.parse(sampledAt)), false);
+  assert.deepEqual(resourceMetricsData, {
+    instanceId: createdInstance.body.data.id,
+    runtimeKind: "docker",
+    state: "available",
+    cpu: { usagePercent: 1.25 },
+    memory: { usageBytes: 134_217_728, limitBytes: 536_870_912, usagePercent: 25 },
+  });
+  assert.equal(mock.requests.some((request) => request.path === `/instances/${createdInstance.body.data.id}/metrics` && request.method === "GET"), true);
 
   const registeredResponse = await mock.fetchImpl(`http://127.0.0.1:8091/api/node-agent/instances/${createdInstance.body.data.id}/register`, {
     method: "POST",
@@ -10045,6 +10176,37 @@ test("control plane ai session delivery keeps response content inside the latest
   assert.equal(aiSessionDeliveryText(session, "instance-main · claude idle"), "instance-main · claude idle\nsecond answer");
 });
 
+test("control plane surfaces approval reasons over an earlier assistant message", () => {
+  const session = {
+    id: "ais_approval",
+    agent: "codex",
+    activeTurnId: "turn_approval",
+    status: "waiting",
+    phase: "approval",
+    summary: "Tests need access to the local package cache.",
+    lastMessage: "I will run the tests now.",
+    turns: [{
+      id: "turn_approval",
+      userPrompt: "Run the tests",
+      status: "waiting",
+      phase: "approval",
+      revision: 2,
+      summary: "Tests need access to the local package cache.",
+      lastMessage: "I will run the tests now.",
+      updatedAt: "2026-07-17T00:00:01.000Z",
+    }],
+    startedAt: "2026-07-17T00:00:00.000Z",
+    updatedAt: "2026-07-17T00:00:01.000Z",
+  };
+
+  assert.equal(displayAiSessionMessage(session), "Tests need access to the local package cache.");
+  assert.equal(displayAiSessionMessage(session, 0), "Tests need access to the local package cache.");
+  assert.equal(
+    aiSessionDeliveryText(session, "instance-main · codex waiting/approval"),
+    "instance-main · codex waiting/approval\nTests need access to the local package cache.",
+  );
+});
+
 test("control plane ai session delivery keys explicit turns by id and revision", () => {
   const session = {
     id: "ais_1",
@@ -10093,25 +10255,24 @@ test("control plane ai session delivery keys explicit turns by id and revision",
   assert.doesNotMatch(delivered, /first answer/);
 });
 
-test("control plane ai session UI does not pair a new prompt with the previous turn response", () => {
+test("control plane ai session UI only displays authoritative turns", () => {
   const session = {
     id: "ais_1",
     agent: "codex",
-    activeTurnId: "turn_6",
     providerSessionId: "thread_1",
-    userPrompt: "sixth prompt",
+    userPrompt: "current prompt",
     status: "running",
     phase: "thinking",
-    summary: "fifth answer",
-    lastMessage: "fifth answer",
+    summary: "current progress",
+    lastMessage: "current progress",
     turns: [
       {
-        id: "turn_5",
-        userPrompt: "fifth prompt",
+        id: "turn_current",
+        userPrompt: "current prompt",
         status: "completed",
         revision: 2,
-        summary: "fifth answer",
-        lastMessage: "fifth answer",
+        summary: "current progress",
+        lastMessage: "current progress",
         updatedAt: "2026-07-04T00:00:00.000Z",
       },
     ],
@@ -10119,9 +10280,10 @@ test("control plane ai session UI does not pair a new prompt with the previous t
     updatedAt: "2026-07-04T00:00:01.000Z",
   };
 
-  assert.equal(displayAiSessionTitle(session, 1), "sixth prompt");
-  assert.equal(displayAiSessionMessage(session, 1), "Running...");
-  assert.equal(displayAiSessionMessage(session), "Running...");
+  assert.equal(aiSessionUserPrompts(session).length, 1);
+  assert.equal(displayAiSessionTitle(session, 1), "current prompt");
+  assert.equal(displayAiSessionMessage(session, 1), "current progress");
+  assert.equal(displayAiSessionMessage(session), "current progress");
 });
 
 test("control plane chat gateway delivers canonical ai session updates without heartbeat polling", async () => {
@@ -10376,6 +10538,44 @@ test("control plane chat gateway delivers canonical ai session updates without h
   const steerAnswer = calls.filter((call) => call.url.includes("answerCallbackQuery")).at(-1);
   assert.equal(steerAnswer.body.text, "Steered queued message");
   steerCallbackData = "";
+
+  const editsBeforeQueueSnapshot = calls.filter((call) => call.url.includes("editMessageText")).length;
+  publishAiSessionSnapshotForTest(events, {
+    runningCount: 1,
+    waitingCount: 0,
+    staleCount: 0,
+    updatedAt: "2026-07-03T00:00:05.250Z",
+    sessions: [{
+      id: "ais_1",
+      agent: "codex",
+      activeTurnId: "turn_web_2",
+      status: "running",
+      phase: "thinking",
+      currentTool: {
+        name: "web_search",
+        inputPreview: "checking docs",
+      },
+      turns: [{
+        id: "turn_event_1",
+        userPrompt: "hello",
+        lastMessage: "event delivered answer again",
+        updatedAt: "2026-07-03T00:00:04.000Z",
+      }, {
+        id: "turn_web_2",
+        userPrompt: "web started another turn",
+        updatedAt: "2026-07-03T00:00:05.000Z",
+      }],
+      startedAt: "2026-07-03T00:00:00.000Z",
+      updatedAt: "2026-07-03T00:00:05.250Z",
+    }],
+  }, {
+    scope: { instanceId: "inst_1" },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const queueRemovedEdit = calls.filter((call) => call.url.includes("editMessageText")).at(-1);
+  assert.equal(calls.filter((call) => call.url.includes("editMessageText")).length, editsBeforeQueueSnapshot + 1);
+  assert.match(queueRemovedEdit.body.text, /Running web\\_search/);
+  assert.deepEqual(queueRemovedEdit.body.reply_markup.inline_keyboard.map((row) => row.map((button) => button.text)), [["Cancel"]]);
 
   publishAiSessionSnapshotForTest(events, {
     runningCount: 1,

@@ -216,18 +216,30 @@ function turnErrorMessage(value: unknown) {
   return message || details || undefined;
 }
 
-export function summarizeThreadTurns(thread: CodexThread): { userPrompt?: string; turns?: AiSessionStatus["turns"]; summary?: string; lastMessage?: string } {
+export function summarizeThreadTurns(thread: CodexThread): {
+  activeTurnId?: string;
+  userPrompt?: string;
+  turns?: AiSessionStatus["turns"];
+  summary?: string;
+  lastMessage?: string;
+} {
+  let activeTurnId: string | undefined;
   let userPrompt: string | undefined;
   let lastMessage: string | undefined;
   const historyTurns: NonNullable<AiSessionStatus["turns"]> = [];
   const turns = Array.isArray(thread.turns) ? thread.turns : [];
   for (const [index, turn] of turns.entries()) {
     const record = asRecord(turn);
+    const turnId = typeof record.id === "string" && record.id.trim() ? record.id.trim() : `turn_${index}`;
+    const providerStatus = typeof record.status === "string" ? record.status : "completed";
     const historyTurn: NonNullable<AiSessionStatus["turns"]>[number] = {
-      id: typeof record.id === "string" && record.id.trim() ? record.id.trim() : `turn_${index}`,
-      status: "completed",
+      id: turnId,
+      status: providerStatus === "inProgress" ? "running" : providerStatus === "failed" ? "failed" : "completed",
       revision: 0,
     };
+    if (providerStatus === "inProgress") {
+      activeTurnId = turnId;
+    }
     const items = Array.isArray(record.items) ? record.items as unknown[] : [];
     for (const rawItem of items) {
       const item = asRecord(rawItem);
@@ -248,6 +260,7 @@ export function summarizeThreadTurns(thread: CodexThread): { userPrompt?: string
     }
   }
   return {
+    activeTurnId,
     userPrompt,
     turns: historyTurns,
     summary: lastMessage,

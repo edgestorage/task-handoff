@@ -181,6 +181,14 @@
             </DropdownMenuTrigger>
             <DropdownMenuContent class="app-launch-menu" align="start" :side-offset="6">
               <AppLaunchMenuItems :apps="launchableApps" :folders="nodeLocalFolders" :instance="instance" :launching="launchingApp" @launch="(appId, cwdFolderId) => launchApp(appId, cwdFolderId)" />
+              <DropdownMenuSeparator />
+              <DropdownMenuItem class="app-launch-menu-item" @select="$emit('openSettings', instance.id, 'apps')">
+                <Boxes :size="14" />
+                <span>
+                  <strong>Manage apps</strong>
+                  <small>Install or uninstall apps</small>
+                </span>
+              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -221,6 +229,14 @@
         </DropdownMenuTrigger>
         <DropdownMenuContent class="app-launch-menu" align="center" :side-offset="6">
           <AppLaunchMenuItems :apps="launchableApps" :folders="nodeLocalFolders" :instance="instance" :launching="launchingApp" @launch="(appId, cwdFolderId) => launchApp(appId, cwdFolderId)" />
+          <DropdownMenuSeparator />
+          <DropdownMenuItem class="app-launch-menu-item" @select="$emit('openSettings', instance.id, 'apps')">
+            <Boxes :size="14" />
+            <span>
+              <strong>Manage apps</strong>
+              <small>Install or uninstall apps</small>
+            </span>
+          </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
       <span v-else>{{ previewDetail(instance) }}</span>
@@ -250,17 +266,31 @@
         <Copy :size="14" />
         <span>{{ copiedText === instance.id ? "Copied" : "Copy ID" }}</span>
       </Button>
+      <p class="session-preview-status" aria-label="Instance status">
+        <span>Health {{ instance.health }}</span>
+        <span>Workspace {{ instance.workspace.status }}</span>
+        <template v-if="resourceMetrics">
+          <span class="session-resource-metrics" :data-state="resourceMetricsDisplay.state" :title="resourceMetricsDisplay.title">
+            {{ resourceMetricsDisplay.compact }}
+          </span>
+        </template>
+        <span v-else-if="instance.runtime?.type === 'docker'" class="session-resource-metrics" :data-state="resourceMetricsError ? 'unavailable' : 'loading'" :title="resourceMetricsError || 'Waiting for the first resource sample.'">
+          {{ resourceMetricsError ? "Resources unavailable" : "Resources loading" }}
+        </span>
+        <span v-else>Last refresh {{ lastRefreshLabel }}</span>
+      </p>
     </div>
   </section>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, ref, type ComponentPublicInstance } from "vue";
-import { AppWindow, Bot, ChevronDown, Copy, ExternalLink, Folder, Maximize2, Minimize2, Monitor, Pencil, Plus, RefreshCw, Terminal, X } from "@lucide/vue";
-import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, NodeLocalFolder } from "../../../api/types";
+import { useNow } from "@vueuse/core";
+import { AppWindow, Bot, Boxes, ChevronDown, Copy, ExternalLink, Folder, Maximize2, Minimize2, Monitor, Pencil, Plus, RefreshCw, Terminal, X } from "@lucide/vue";
+import type { AiSessionSummary, InstanceBoardItem, InstanceResourceMetrics, InstanceWithAiSessions, NodeLocalFolder } from "../../../api/types";
 import { Button } from "../../../components/ui/button";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "../../../components/ui/context-menu";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import AiSessionPanel from "./AiSessionPanel.vue";
 import SessionTerminalPreview from "./SessionTerminalPreview.vue";
@@ -297,9 +327,12 @@ const props = defineProps<{
   instanceConnecting: boolean;
   launchableApps: LaunchableApp[];
   launchingApp: boolean;
+  lastRefreshLabel: string;
   nodeLocalFolders?: NodeLocalFolder[];
   orderedSessionTabs: SessionTab[];
   previewExpanded: boolean;
+  resourceMetrics?: InstanceResourceMetrics;
+  resourceMetricsError?: string;
   renameSession: (instance: InstanceBoardItem, session: SessionTab, title: string) => Promise<void>;
   selectedAiSession: (instance: InstanceBoardItem, sessions?: AiSessionSummary[]) => AiSessionSummary | undefined;
   sessionMenuOpen: boolean;
@@ -312,6 +345,7 @@ const emit = defineEmits<{
   launchApp: [instance: InstanceBoardItem, appId: string, cwdFolderId?: string];
   moveSessionTab: [sourceKey: string, targetKey: string, placement: "before" | "after"];
   openAiSessionApp: [instance: InstanceBoardItem, session?: AiSessionSummary];
+  openSettings: [instanceId: string, section?: "general" | "models" | "apps"];
   openUrl: [url: string];
   selectAiSession: [instanceId: string, sessionId: string];
   selectSession: [sessionKey: string];
@@ -320,6 +354,43 @@ const emit = defineEmits<{
   "update:previewExpanded": [expanded: boolean];
   "update:sessionMenuOpen": [open: boolean];
 }>();
+
+const resourceMetricsNow = useNow({ interval: 1_000 });
+const resourceMetricsDisplay = computed(() => formatResourceMetrics(props.resourceMetrics, resourceMetricsNow.value.getTime()));
+
+function formatResourceMetrics(metrics?: InstanceResourceMetrics, currentTime = Date.now()) {
+  if (!metrics) return { state: "loading", compact: "Resources loading", title: "Waiting for the first resource sample." };
+  const sampledAt = new Date(metrics.sampledAt);
+  const stale = currentTime - sampledAt.getTime() > 10_000;
+  if (metrics.state === "pending") return { state: "pending", compact: "Resources starting", title: `Waiting for the Docker container · sampled ${sampledAt.toLocaleTimeString()}` };
+  if (metrics.state === "stopped") return { state: "stopped", compact: "Resources stopped", title: `Container stopped · sampled ${sampledAt.toLocaleTimeString()}` };
+  if (metrics.state === "unavailable") return { state: "unavailable", compact: "Resources unavailable", title: `${metrics.error || "Docker metrics are unavailable."} · sampled ${sampledAt.toLocaleTimeString()}` };
+  const cpu = metrics.cpu ? `CPU ${formatPercent(metrics.cpu.usagePercent)}` : "CPU —";
+  const memory = metrics.memory
+    ? `Memory ${formatBytes(metrics.memory.usageBytes)}${metrics.memory.limitBytes ? ` / ${formatBytes(metrics.memory.limitBytes)}` : ""}${metrics.memory.usagePercent !== undefined ? ` (${formatPercent(metrics.memory.usagePercent)})` : ""}`
+    : "Memory —";
+  const details = [cpu, memory];
+  if (metrics.network) details.push(`Network ↓${formatBytes(metrics.network.rxBytes)} ↑${formatBytes(metrics.network.txBytes)}`);
+  if (metrics.pids !== undefined) details.push(`Processes ${metrics.pids}`);
+  details.push(`Sampled ${sampledAt.toLocaleTimeString()}`);
+  return { state: stale ? "stale" : "available", compact: stale ? "Resources stale" : `${cpu} · ${memory}`, title: details.join(" · ") };
+}
+
+function formatPercent(value: number) {
+  return `${value.toFixed(value >= 10 ? 0 : 1)}%`;
+}
+
+function formatBytes(value: number) {
+  if (value < 1024) return `${value} B`;
+  const units = ["KiB", "MiB", "GiB", "TiB"];
+  let amount = value;
+  let unit = -1;
+  do {
+    amount /= 1024;
+    unit += 1;
+  } while (amount >= 1024 && unit < units.length - 1);
+  return `${amount.toFixed(amount >= 10 ? 0 : 1)} ${units[unit]}`;
+}
 
 const previewLaunchMenuOpen = ref(false);
 const draggingSessionTabKey = ref("");

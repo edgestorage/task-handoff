@@ -2,34 +2,23 @@ import { z } from "zod";
 import { DomainStore } from "@task-handoff/core/storage/domain-store";
 import type { TaskHandoffStoragePaths } from "@task-handoff/core/storage/paths";
 import type { InstanceAppInventory, InstanceAppInventoryItem } from "@task-handoff/protocol/control-plane";
-import { detectManagedApp } from "./managed-apps";
-import type { AppCatalogItem, InstallRecipe, ManagedAppDefinition } from "./types";
+import {
+  builtinAppCatalog,
+  builtinManagedAppRegistry,
+} from "./managed-app-definitions";
+import type { AppCatalogItem } from "./types";
 import fs from "node:fs";
 import path from "node:path";
 
-function envFlag(name: string, fallback = false) {
-  const raw = process.env[name];
-  if (raw === undefined || raw === "") {
-    return fallback;
-  }
-  return ["1", "true", "yes", "on"].includes(raw.toLowerCase());
-}
-
-function modelArgs(...names: string[]) {
-  for (const name of names) {
-    const value = process.env[name]?.trim();
-    if (value) {
-      return ["--model", value];
-    }
-  }
-  return [];
-}
-
-function claudePermissionArgs() {
-  return envFlag("TASK_HANDOFF_CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS") || envFlag("TASK_HANDOFF_CLAUDE_SKIP_PERMISSIONS")
-    ? ["--dangerously-skip-permissions"]
-    : [];
-}
+export {
+  BUILTIN_APP_CATALOG,
+  builtinAppCatalog,
+  builtinManagedAppDefinition,
+  builtinManagedAppDefinitions,
+  builtinManagedAppRegistry,
+  detectBuiltinManagedApps,
+  publicManagedAppDefinitions,
+} from "./managed-app-definitions";
 
 const CommandSchema = z
   .string()
@@ -103,171 +92,6 @@ const CustomCatalogSchema = z.object({
 });
 
 export type CustomCatalog = z.infer<typeof CustomCatalogSchema>;
-
-const CWD_SELECTABLE_APP_IDS = new Set(["terminal-tty", "codex", "claude"]);
-const ALL_MANAGED_PLATFORMS = ["linux", "darwin", "win32", "freebsd", "openbsd", "aix", "sunos"] as const;
-
-function managedApp(launcher: AppCatalogItem, recipes: InstallRecipe[] = [{ type: "bundled", platforms: [...ALL_MANAGED_PLATFORMS] }]): ManagedAppDefinition {
-  return {
-    launcher,
-    detection: [{ type: "launcher-executable", versionArgs: ["--version"] }],
-    distribution: { recipes },
-  };
-}
-
-const CORE_BUILTIN_MANAGED_APPS: ManagedAppDefinition[] = [
-  managedApp({
-    id: "terminal-tty",
-    name: "Terminal",
-    kind: "tty",
-    description: "Interactive shell in the task workspace.",
-    command: process.env.SHELL || "/bin/bash",
-  }),
-  managedApp({
-    id: "codex",
-    name: "Codex",
-    kind: "tty",
-    description: "OpenAI Codex CLI in the task workspace.",
-    command: process.env.TASK_HANDOFF_CODEX_COMMAND || "codex",
-  }),
-  managedApp({
-    id: "claude",
-    name: "Claude",
-    kind: "tty",
-    description: "Claude Code CLI in the task workspace.",
-    command: process.env.TASK_HANDOFF_CLAUDE_COMMAND || "claude",
-  }),
-  managedApp({
-    id: "terminal-gui",
-    name: "GUI Terminal",
-    kind: "gui",
-    description: "xterm terminal in an isolated virtual desktop with VNC access.",
-    command: process.env.TASK_HANDOFF_XTERM_COMMAND || "xterm",
-    args: ["-geometry", "120x32"],
-    display: {
-      width: 1024,
-      height: 768,
-      depth: 24,
-    },
-  }, [{ type: "system-package", platforms: ["linux"], installer: "apt", packages: ["xterm"], privilege: "passwordless-sudo" }]),
-  managedApp({
-    id: "chromium",
-    name: "Browser",
-    kind: "gui",
-    description: "Chromium browser with VNC and CDP endpoints.",
-    command: process.env.TASK_HANDOFF_CHROMIUM_COMMAND || "chromium",
-    args: ["about:blank"],
-    display: {
-      width: 1440,
-      height: 900,
-      depth: 24,
-    },
-    automation: {
-      type: "cdp",
-      portArg: "--remote-debugging-port={port}",
-    },
-  }, [{ type: "system-package", platforms: ["linux"], installer: "apt", packages: ["chromium", "chromium-sandbox"], privilege: "passwordless-sudo" }]),
-  managedApp({
-    id: "vscode-web",
-    name: "VS Code",
-    kind: "web",
-    description: "VS Code Web in the task workspace.",
-    command: process.env.TASK_HANDOFF_VSCODE_WEB_COMMAND || "code-server",
-    args: [
-      "--auth",
-      "none",
-      "--bind-addr",
-      "127.0.0.1:{port}",
-      "--disable-telemetry",
-      "--user-data-dir",
-      "{sessionDir}/user-data",
-      "--extensions-dir",
-      "{sessionDir}/extensions",
-      "{cwd}",
-    ],
-    web: {
-      readyPath: "/",
-    },
-  }),
-];
-
-function optionalBuiltinManagedApps(): ManagedAppDefinition[] {
-  return [
-    managedApp({
-      id: "cc-switch",
-      name: "CC Switch",
-      kind: "gui",
-      description: "CC Switch desktop app in an isolated virtual desktop.",
-      command: process.env.TASK_HANDOFF_CC_SWITCH_COMMAND || "cc-switch",
-      display: {
-        width: 1440,
-        height: 900,
-        depth: 24,
-      },
-    }),
-  ];
-}
-
-function withRuntimeEnvArgs(app: AppCatalogItem): AppCatalogItem {
-  if (app.id === "codex") {
-    return { ...app, command: process.env.TASK_HANDOFF_CODEX_COMMAND || app.command, args: modelArgs("TASK_HANDOFF_CODEX_MODEL", "CODEX_MODEL") };
-  }
-  if (app.id === "claude") {
-    return { ...app, command: process.env.TASK_HANDOFF_CLAUDE_COMMAND || app.command, args: [...claudePermissionArgs(), ...modelArgs("TASK_HANDOFF_CLAUDE_MODEL", "CLAUDE_MODEL")] };
-  }
-  if (app.id === "terminal-tty") {
-    return { ...app, command: process.env.SHELL || app.command };
-  }
-  if (app.id === "terminal-gui") {
-    return { ...app, command: process.env.TASK_HANDOFF_XTERM_COMMAND || app.command };
-  }
-  if (app.id === "chromium") {
-    return { ...app, command: process.env.TASK_HANDOFF_CHROMIUM_COMMAND || app.command };
-  }
-  if (app.id === "vscode-web") {
-    return { ...app, command: process.env.TASK_HANDOFF_VSCODE_WEB_COMMAND || app.command };
-  }
-  return app;
-}
-
-export function builtinAppCatalog(options: { includeOptional?: boolean } = {}) {
-  return builtinManagedAppDefinitions(options).map((definition) => definition.launcher);
-}
-
-export function builtinManagedAppDefinitions(options: { includeOptional?: boolean } = {}) {
-  return [
-    ...CORE_BUILTIN_MANAGED_APPS,
-    ...(options.includeOptional || envFlag("TASK_HANDOFF_ENABLE_CC_SWITCH") ? optionalBuiltinManagedApps() : []),
-  ].map((definition) => ({
-    ...definition,
-    launcher: withRuntimeEnvArgs(definition.launcher),
-    detection: definition.detection.map((rule) => ({ ...rule, versionArgs: rule.versionArgs ? [...rule.versionArgs] : undefined })),
-    distribution: { recipes: definition.distribution.recipes.map((recipe) => ({ ...recipe })) },
-  }));
-}
-
-export function detectBuiltinManagedApps(options: { includeOptional?: boolean } = {}) {
-  return builtinManagedAppDefinitions(options).map((definition) => ({
-    definition,
-    detection: detectManagedApp(definition),
-  }));
-}
-
-export function builtinManagedAppDefinition(appId: string, options: { includeOptional?: boolean } = {}) {
-  return builtinManagedAppDefinitions(options).find((definition) => definition.launcher.id === appId);
-}
-
-export function publicManagedAppDefinitions(options: { includeOptional?: boolean } = {}) {
-  return builtinManagedAppDefinitions(options).map((definition) => ({
-    id: definition.launcher.id,
-    name: definition.launcher.name,
-    kind: definition.launcher.kind,
-    description: definition.launcher.description,
-    recipeTypes: [...new Set(definition.distribution.recipes.map((recipe) => recipe.type))],
-  }));
-}
-
-export const BUILTIN_APP_CATALOG: AppCatalogItem[] = builtinAppCatalog({ includeOptional: true });
 
 function isExecutable(filePath: string) {
   try {
@@ -372,7 +196,9 @@ export class AppCatalogRepository {
           availability: executable ? "available" : "missing-dependency",
           capabilities: {
             automation: app.automation?.type,
-            supportsCwdSelection: CWD_SELECTABLE_APP_IDS.has(app.id),
+            supportsCwdSelection: source === "builtin"
+              ? builtinManagedAppRegistry.provider(app.id)?.capabilities?.supportsCwdSelection === true
+              : false,
           },
           diagnosticCode: executable ? undefined : "APP_EXECUTABLE_NOT_FOUND",
         })),

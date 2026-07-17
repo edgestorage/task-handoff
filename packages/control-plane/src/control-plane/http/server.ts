@@ -258,6 +258,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   });
   const aiSessionAttachments = new AiSessionAttachmentStore();
   const nodeAgentTunnel = new ControlPlaneNodeAgentTunnelTransport(events, {
+    validateInstanceScope: (nodeId, instanceId) => service.nodeOwnsInstance(nodeId, instanceId),
     onStreamsHello: (instanceId, hello) => {
       for (const descriptor of hello.streams) {
         if (descriptor.topic === "ai.sessions") aiSessionAggregator.advertiseStream(instanceId, descriptor);

@@ -30,6 +30,7 @@ import type {
   CreateChatBridgeInput,
   ChatGatewayStatus,
   InstanceBoardItem,
+  InstanceResourceMetrics,
   InstanceBoardPayload,
   LaunchAppSessionInput,
   LocalDockerImage,
@@ -263,6 +264,10 @@ export function useInstanceBoardQuery() {
     queryFn: () => getApiData<InstanceBoardItem[]>("instance-board"),
     retry: false,
   });
+}
+
+export function getInstanceResourceMetrics(instanceId: string) {
+  return getApiData<InstanceResourceMetrics>(`controlled-instances/${encodeURIComponent(instanceId)}/metrics`);
 }
 
 export function useInstanceBoardPayloadQuery() {

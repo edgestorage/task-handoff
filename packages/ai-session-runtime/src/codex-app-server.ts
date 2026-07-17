@@ -39,6 +39,13 @@ type CodexAppServerClientOptions = {
 type CodexAppServerBridgeOptions = {
   allowSpawn?: boolean;
   createClient?: (options: CodexAppServerClientOptions) => CodexAppServerClientLike;
+  onMessageDelta?: (event: {
+    sessionId: string;
+    providerSessionId: string;
+    turnId?: string;
+    itemId?: string;
+    delta: string;
+  }) => void;
 };
 
 type CodexAppServerClientLike = EventEmitter & {
@@ -448,7 +455,9 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
   private retryAfter = 0;
   private activeSocketPath?: string;
   private appSessions: CodexAppSession[] = [];
-  private readonly agentMessageBuffers = new Map<string, string>();
+  private readonly subscribedThreadIds = new Set<string>();
+  private readonly threadSubscriptionAttempts = new Map<string, Promise<CodexThread | undefined>>();
+  private subscriptionEpoch = 0;
   private readonly approvals = new PendingAiSessionApprovalStore();
   private readonly injectedClient?: CodexAppServerClientLike;
   private readonly options: CodexAppServerBridgeOptions;
@@ -456,10 +465,11 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
   constructor(
     private readonly registry: AiSessionRegistry,
     clientOrOptions: CodexAppServerClientLike | CodexAppServerBridgeOptions = {},
+    injectedOptions: CodexAppServerBridgeOptions = {},
   ) {
     if ("start" in clientOrOptions && "listLoadedThreadIds" in clientOrOptions) {
       this.injectedClient = clientOrOptions;
-      this.options = { allowSpawn: true };
+      this.options = { allowSpawn: true, ...injectedOptions };
       this.attachClient(this.injectedClient);
     } else {
       this.options = clientOrOptions;
@@ -519,9 +529,21 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
           }
         }
         this.upsertThread(thread || { id: threadId }, { bindAppSession: true });
+        if (client.resumeThread) {
+          try {
+            const resumed = await this.ensureThreadSubscribed(client, threadId);
+            if (resumed) {
+              this.upsertThread(resumed, { bindAppSession: true });
+            }
+          } catch {
+            // A failed subscription is retried on the next discovery pass without
+            // preventing other loaded threads from being synchronized.
+          }
+        }
       }
     } catch {
       this.started = false;
+      this.resetThreadSubscriptions();
       client.stop();
     }
   }
@@ -537,7 +559,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
     }
     this.started = false;
     this.activeSocketPath = undefined;
-    this.agentMessageBuffers.clear();
+    this.resetThreadSubscriptions();
     this.retryAfter = 0;
   }
 
@@ -721,9 +743,37 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
     client.on("event", (event: CodexAppServerEvent) => this.applyProviderEvent(event));
     client.on("disconnect", () => {
       this.started = false;
+      this.resetThreadSubscriptions();
       this.retryAfter = Date.now() + 30_000;
     });
     this.client = client;
+  }
+
+  private ensureThreadSubscribed(client: CodexAppServerClientLike, threadId: string) {
+    if (!client.resumeThread || this.subscribedThreadIds.has(threadId)) {
+      return Promise.resolve(undefined);
+    }
+    const pending = this.threadSubscriptionAttempts.get(threadId);
+    if (pending) return pending;
+    const epoch = this.subscriptionEpoch;
+    const attempt = client.resumeThread(threadId).then((thread) => {
+      if (this.client === client && this.subscriptionEpoch === epoch) {
+        this.subscribedThreadIds.add(threadId);
+      }
+      return thread;
+    }).finally(() => {
+      if (this.threadSubscriptionAttempts.get(threadId) === attempt) {
+        this.threadSubscriptionAttempts.delete(threadId);
+      }
+    });
+    this.threadSubscriptionAttempts.set(threadId, attempt);
+    return attempt;
+  }
+
+  private resetThreadSubscriptions() {
+    this.subscriptionEpoch += 1;
+    this.subscribedThreadIds.clear();
+    this.threadSubscriptionAttempts.clear();
   }
 
   private createClient(options: CodexAppServerClientOptions) {
@@ -813,10 +863,13 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       return;
     }
     if (event.type === "agent-message-delta") {
-      const key = `${event.threadId}:${event.turnId || ""}:${event.itemId || ""}`;
-      const text = `${this.agentMessageBuffers.get(key) || ""}${event.delta}`;
-      this.agentMessageBuffers.set(key, text);
-      this.registry.applyRealtimeEvent(session.id, { kind: "assistant-message", activeTurnId: event.turnId || session.activeTurnId, providerTurnId: event.turnId || session.activeTurnId, text, source: "realtime" });
+      this.options.onMessageDelta?.({
+        sessionId: session.id,
+        providerSessionId: event.threadId,
+        turnId: event.turnId || session.activeTurnId,
+        itemId: event.itemId,
+        delta: event.delta,
+      });
       return;
     }
     if (event.type === "agent-message-completed") {
@@ -846,6 +899,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       },
       title: typeof thread.name === "string" ? thread.name : undefined,
       cwd: typeof thread.cwd === "string" ? thread.cwd : undefined,
+      activeTurnId: history.activeTurnId,
       userPrompt: history.userPrompt,
       turns: history.turns,
       summary: history.summary,

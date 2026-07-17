@@ -8,7 +8,7 @@ import {
 } from "./ai-sessions.ts";
 import { TriggerConfigSchema, TriggerDeploymentSchema, TriggerRunSchema, TriggerRuntimeStateSchema } from "./triggers.ts";
 
-export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-07-16";
+export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-07-17";
 // The local value follows the date-only convention. Parsing remains permissive
 // so persisted records written before that convention do not disappear.
 export const ProtocolVersionSchema = z.string();
@@ -120,18 +120,22 @@ export const InstanceAppInventorySchema = z
 
 export const FinalComputerPlatformSchema = z.enum(["linux", "darwin", "win32", "freebsd", "openbsd", "aix", "sunos", "unknown"]);
 export const FinalComputerArchSchema = z.enum(["x64", "arm64", "arm", "ia32", "ppc64", "s390x", "riscv64", "unknown"]);
-export const AppInstallerSchema = z.enum(["apt", "dnf", "brew"]);
+export const AppInstallerSchema = z.enum(["apt", "dnf", "brew", "npm"]);
 export const AppInstallPrivilegeSchema = z.enum(["user", "passwordless-sudo", "root"]);
 export const FinalComputerCapabilitiesSchema = z.object({
   platform: FinalComputerPlatformSchema,
   arch: FinalComputerArchSchema,
   installers: z.array(AppInstallerSchema).max(8),
   privilege: AppInstallPrivilegeSchema,
+  installerAccess: z.object({
+    npmGlobalWritable: z.boolean().optional(),
+  }).strict().optional(),
 }).strict();
 
 export const ManagedAppStateSchema = z.enum(["installed", "not-installed", "broken", "unsupported"]);
+export const ManagedAppManagementSourceSchema = z.enum(["recipe", "bundled", "external", "none"]);
 export const ManagedAppActionReasonSchema = z.object({
-  code: z.enum(["BUNDLED", "ALREADY_INSTALLED", "NOT_INSTALLED", "UNSUPPORTED_PLATFORM", "INSTALLER_UNAVAILABLE", "INSUFFICIENT_PRIVILEGE", "OPERATION_IN_PROGRESS"]),
+  code: z.enum(["BUNDLED", "EXTERNALLY_MANAGED", "ALREADY_INSTALLED", "NOT_INSTALLED", "UNSUPPORTED_PLATFORM", "INSTALLER_UNAVAILABLE", "INSTALLER_NOT_WRITABLE", "INSUFFICIENT_PRIVILEGE", "OPERATION_IN_PROGRESS"]),
   message: z.string().trim().min(1).max(500),
 }).strict();
 export const ManagedAppProjectionSchema = z.object({
@@ -140,6 +144,7 @@ export const ManagedAppProjectionSchema = z.object({
   kind: z.enum(["tty", "gui", "web"]),
   description: z.string().trim().max(500).optional(),
   state: ManagedAppStateSchema,
+  managementSource: ManagedAppManagementSourceSchema,
   version: z.string().trim().max(120).optional(),
   canInstall: z.boolean(),
   canUninstall: z.boolean(),
@@ -613,6 +618,33 @@ export const NodeRuntimeSchema = z
   })
   .strict();
 
+export const InstanceResourceMetricsSchema = z.object({
+  instanceId: IdSchema,
+  runtimeKind: z.literal("docker"),
+  state: z.enum(["pending", "available", "stopped", "unavailable"]),
+  sampledAt: TimestampSchema,
+  cpu: z.object({ usagePercent: z.number().nonnegative() }).strict().optional(),
+  memory: z.object({
+    usageBytes: z.number().nonnegative(),
+    limitBytes: z.number().nonnegative().optional(),
+    usagePercent: z.number().nonnegative().optional(),
+  }).strict().optional(),
+  network: z.object({
+    rxBytes: z.number().nonnegative(),
+    txBytes: z.number().nonnegative(),
+  }).strict().optional(),
+  blockIo: z.object({
+    readBytes: z.number().nonnegative(),
+    writeBytes: z.number().nonnegative(),
+  }).strict().optional(),
+  pids: z.number().int().nonnegative().optional(),
+  error: z.string().trim().max(2048).optional(),
+}).strict();
+
+export const InstanceResourceMetricsEventType = {
+  Snapshot: "instance.metrics.snapshot",
+} as const;
+
 export const NodeAgentHealthSchema = z
   .object({
     ok: z.boolean().optional(),
@@ -1079,6 +1111,7 @@ export type ImageProvisioning = z.infer<typeof ImageProvisioningSchema>;
 export type NodeImageAvailability = z.infer<typeof NodeImageAvailabilitySchema>;
 export type Node = z.infer<typeof NodeSchema>;
 export type NodeRuntime = z.infer<typeof NodeRuntimeSchema>;
+export type InstanceResourceMetrics = z.infer<typeof InstanceResourceMetricsSchema>;
 export type NodeAgentHealth = z.infer<typeof NodeAgentHealthSchema>;
 export type NodeAgentExternalListenerConfig = z.infer<typeof NodeAgentExternalListenerConfigSchema>;
 export type NodeAgentExternalListener = z.infer<typeof NodeAgentExternalListenerSchema>;
@@ -1104,6 +1137,7 @@ export type AppInstaller = z.infer<typeof AppInstallerSchema>;
 export type AppInstallPrivilege = z.infer<typeof AppInstallPrivilegeSchema>;
 export type FinalComputerCapabilities = z.infer<typeof FinalComputerCapabilitiesSchema>;
 export type ManagedAppState = z.infer<typeof ManagedAppStateSchema>;
+export type ManagedAppManagementSource = z.infer<typeof ManagedAppManagementSourceSchema>;
 export type ManagedAppActionReason = z.infer<typeof ManagedAppActionReasonSchema>;
 export type ManagedAppProjection = z.infer<typeof ManagedAppProjectionSchema>;
 export type AppManagementOperation = z.infer<typeof AppManagementOperationSchema>;

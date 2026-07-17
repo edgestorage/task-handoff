@@ -11,6 +11,7 @@ export const AiSessionEventType = {
   Snapshot: "ai-session.snapshot",
   Patch: "ai-session.patch",
   Removed: "ai-session.removed",
+  MessageDelta: "ai-session.message-delta",
   SyncRequired: "ai-session.sync-required",
 } as const;
 
@@ -465,6 +466,7 @@ export type {
   AppManagementJobResponse,
   AppManagementOperation,
   AppManagementSnapshot,
+  InstanceResourceMetrics,
   ManagedAppProjection,
 } from "@task-handoff/protocol/control-plane";
 
@@ -762,6 +764,17 @@ export type AiSessionRemovedEvent = {
   meta: AiSessionEventMeta;
   sessionIds: string[];
   expiresAt: string;
+};
+
+export type AiSessionMessageDeltaEvent = {
+  instanceId: string;
+  nodeId?: string;
+  sessionId: string;
+  providerSessionId: string;
+  turnId?: string;
+  itemId?: string;
+  delta: string;
+  generatedAt: string;
 };
 
 export type AiSessionDeltaResponse = {

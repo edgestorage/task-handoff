@@ -54,7 +54,6 @@
                 :bound-triggers="boundTriggers"
                 :can-resolve-approval="canResolveApproval"
                 :card="card"
-                :expanded-kind="expandedPreview?.key === card.key ? expandedPreview.kind : undefined"
                 :instance-display-name="instanceDisplayName"
                 :is-trigger-bound="isTriggerBound"
                 :prompt-count="promptCount(card.session)"
@@ -66,9 +65,6 @@
                 :trigger-busy-key="triggerBusyKey"
                 :trigger-button-title="triggerButtonTitle"
                 :trigger-templates="triggerTemplates"
-                @collapse-expanded-preview="collapseExpandedPreview"
-                @expand-message="expandMessage"
-                @expand-prompt="expandPrompt"
                 @next-prompt="nextPrompt"
                 @open-ai-session-app="(instance, session) => emit('openAiSessionApp', instance, session)"
                 @previous-prompt="previousPrompt"
@@ -96,7 +92,6 @@
             :bound-triggers="boundTriggers"
             :can-resolve-approval="canResolveApproval"
             :card="card"
-            :expanded-kind="expandedPreview?.key === card.key ? expandedPreview.kind : undefined"
             :instance-display-name="instanceDisplayName"
             :is-trigger-bound="isTriggerBound"
             :prompt-count="promptCount(card.session)"
@@ -108,9 +103,6 @@
             :trigger-busy-key="triggerBusyKey"
             :trigger-button-title="triggerButtonTitle"
             :trigger-templates="triggerTemplates"
-            @collapse-expanded-preview="collapseExpandedPreview"
-            @expand-message="expandMessage"
-            @expand-prompt="expandPrompt"
             @next-prompt="nextPrompt"
             @open-ai-session-app="(instance, session) => emit('openAiSessionApp', instance, session)"
             @previous-prompt="previousPrompt"
@@ -203,7 +195,6 @@ const emit = defineEmits<{
 }>();
 
 const promptIndexes = ref<Record<string, { index: number; count: number }>>({});
-const expandedPreview = ref<{ key: string; kind: "prompt" | "message" }>();
 const visibleColumnKeys = ref(loadVisibleColumnKeys());
 const layoutMode = ref<AiBoardLayoutMode>(loadLayoutMode());
 const selectedCardKey = ref("");
@@ -450,7 +441,7 @@ function setPromptIndex(card: AiBoardCard, index: number) {
   }
   promptIndexes.value = {
     ...promptIndexes.value,
-    [card.key]: { index: (index + count) % count, count },
+    [card.key]: { index: Math.min(Math.max(index, 0), count - 1), count },
   };
 }
 
@@ -472,24 +463,6 @@ function canInterrupt(session: AiSessionSummary) {
 
 function selectCard(key: string) {
   selectedCardKey.value = key;
-  expandedPreview.value = undefined;
-}
-
-function toggleExpandedPreview(key: string, kind: "prompt" | "message") {
-  const current = expandedPreview.value;
-  expandedPreview.value = current?.key === key && current.kind === kind ? undefined : { key, kind };
-}
-
-function expandPrompt(key: string) {
-  toggleExpandedPreview(key, "prompt");
-}
-
-function expandMessage(key: string) {
-  toggleExpandedPreview(key, "message");
-}
-
-function collapseExpandedPreview() {
-  expandedPreview.value = undefined;
 }
 
 function clearSelectedCard() {
@@ -502,9 +475,6 @@ function closeBoardOverlays(event: MouseEvent) {
   const target = event.target instanceof Element ? event.target : undefined;
   if (!target) {
     return;
-  }
-  if (!target.closest(".ai-board-expanded-preview") && !target.closest("[data-ai-preview-trigger]")) {
-    expandedPreview.value = undefined;
   }
   if (target.closest(".ai-board-card") || target.closest(".ai-board-floating-dock")) {
     return;

@@ -2145,6 +2145,9 @@ function aiSessionDeliveryHeading(instanceName: string, session: Partial<AiSessi
 
 function aiSessionDeliveryBody(session: AiSessionSummary, latestTurn: ReturnType<typeof latestAiSessionTurn>) {
   if (latestTurn) {
+    if (latestTurn.status === "waiting" && latestTurn.phase === "approval" && latestTurn.summary?.trim()) {
+      return latestTurn.summary.trim();
+    }
     if (latestTurn.lastMessage?.trim()) {
       return latestTurn.lastMessage.trim();
     }
@@ -2155,6 +2158,9 @@ function aiSessionDeliveryBody(session: AiSessionSummary, latestTurn: ReturnType
       return `Running ${session.currentTool.name}${session.currentTool.inputPreview ? `: ${session.currentTool.inputPreview}` : ""}`;
     }
     return "";
+  }
+  if (session.status === "waiting" && session.phase === "approval" && session.summary?.trim()) {
+    return session.summary.trim();
   }
   if (session.lastMessage?.trim()) {
     return session.lastMessage.trim();

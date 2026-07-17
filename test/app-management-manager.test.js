@@ -165,6 +165,128 @@ test("postcondition failure keeps detection authoritative", async () => {
   assert.equal(manager.snapshot().apps[0].state, "not-installed");
 });
 
+test("terminal app jobs refresh inventory without changing the authoritative job result", async () => {
+  const dirs = stateDirs("task-handoff-app-terminal-refresh-");
+  let state = "not-installed";
+  let refreshes = 0;
+  const manager = new AppManagementManager({
+    ...dirs,
+    definitions: () => [app()], capabilities: () => capabilities,
+    detection: () => ({ state, executablePaths: state === "installed" ? ["/bin/tool"] : [] }),
+    execute: async () => { state = "installed"; },
+    onTerminal: async () => { refreshes += 1; },
+  });
+  const job = manager.request("tool", "install");
+  await manager.waitForIdle();
+  assert.equal(manager.getJob(job.id).state, "succeeded");
+  assert.equal(refreshes, 1);
+});
+
+test("a hanging terminal inventory refresh does not hold the serialized app queue", async () => {
+  const dirs = stateDirs("task-handoff-app-terminal-refresh-hang-");
+  let state = "not-installed";
+  const manager = new AppManagementManager({
+    ...dirs,
+    definitions: () => [app()], capabilities: () => capabilities,
+    detection: () => ({ state, executablePaths: state === "installed" ? ["/bin/tool"] : [] }),
+    execute: async () => { state = "installed"; },
+    onTerminal: () => new Promise(() => undefined),
+  });
+  const job = manager.request("tool", "install");
+  await Promise.race([
+    manager.waitForIdle(),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("app queue remained blocked by inventory refresh")), 100)),
+  ]);
+  assert.equal(manager.getJob(job.id).state, "succeeded");
+});
+
+test("externally managed executables cannot be uninstalled by a package recipe", async () => {
+  const dirs = stateDirs("task-handoff-app-external-owner-");
+  const manager = new AppManagementManager({
+    ...dirs,
+    definitions: () => [app()], capabilities: () => capabilities,
+    detection: () => ({ state: "installed", executablePaths: ["/opt/external/tool"] }),
+    managementSource: () => "external",
+    execute: async () => assert.fail("must not execute"),
+  });
+  await manager.refreshSnapshot();
+  assert.equal(manager.snapshot().apps[0].uninstallReason.code, "EXTERNALLY_MANAGED");
+  assert.throws(() => manager.request("tool", "uninstall"), (error) => error.code === "app_operation_unavailable" && error.details.reason.code === "EXTERNALLY_MANAGED");
+});
+
+test("concurrent snapshot refreshes share one ownership probe", async () => {
+  const dirs = stateDirs("task-handoff-app-refresh-singleflight-");
+  let ownershipCalls = 0;
+  let releaseOwnership;
+  const ownershipGate = new Promise((resolve) => { releaseOwnership = resolve; });
+  const manager = new AppManagementManager({
+    ...dirs,
+    definitions: () => [app()],
+    capabilities: () => capabilities,
+    detection: () => ({ state: "installed", executablePaths: ["/bin/tool"] }),
+    ownership: async () => {
+      ownershipCalls += 1;
+      await ownershipGate;
+      return { source: "external" };
+    },
+    execute: async () => assert.fail("must not execute"),
+  });
+
+  const first = manager.refreshSnapshot();
+  const second = manager.refreshSnapshot();
+  releaseOwnership();
+  await Promise.all([first, second]);
+
+  assert.equal(ownershipCalls, 1);
+});
+
+test("uninstall executes the recipe that owns the detected executable", async () => {
+  const dirs = stateDirs("task-handoff-app-owning-recipe-");
+  let state = "installed";
+  let executedPrivilege = "";
+  const definition = {
+    launcher: { id: "tool", name: "tool", kind: "tty", command: "tool" },
+    detection: [{ type: "launcher-executable" }],
+    distribution: { recipes: [
+      { type: "node-package", platforms: ["linux"], installer: "npm", packages: ["tool"], privilege: "user" },
+      { type: "node-package", platforms: ["linux"], installer: "npm", packages: ["tool"], privilege: "passwordless-sudo" },
+    ] },
+  };
+  const owningRecipe = definition.distribution.recipes[1];
+  const manager = new AppManagementManager({
+    ...dirs,
+    definitions: () => [definition],
+    capabilities: () => ({ platform: "linux", arch: "x64", installers: ["npm"], privilege: "passwordless-sudo", installerAccess: { npmGlobalWritable: true } }),
+    detection: () => ({ state, executablePaths: state === "installed" ? ["/usr/local/bin/tool"] : [] }),
+    ownership: async (_definition, detection) => detection.state === "installed" ? { source: "recipe", recipe: owningRecipe } : { source: "none" },
+    execute: async (_operation, recipe) => { executedPrivilege = recipe.privilege; state = "not-installed"; },
+  });
+  await manager.refreshSnapshot();
+  const job = manager.request("tool", "uninstall");
+  await manager.waitForIdle();
+  assert.equal(manager.getJob(job.id).state, "succeeded");
+  assert.equal(executedPrivilege, "passwordless-sudo");
+});
+
+test("capabilities refresh after a terminal operation", async () => {
+  const dirs = stateDirs("task-handoff-app-capability-refresh-");
+  let state = "not-installed";
+  let capabilityReads = 0;
+  const manager = new AppManagementManager({
+    ...dirs,
+    definitions: () => [app()],
+    capabilities: () => { capabilityReads += 1; return capabilities; },
+    detection: () => ({ state, executablePaths: state === "installed" ? ["/bin/tool"] : [] }),
+    execute: async () => { state = "installed"; },
+  });
+  await manager.refreshSnapshot();
+  const readsAfterSnapshot = capabilityReads;
+  const job = manager.request("tool", "install");
+  await manager.waitForIdle();
+  assert.equal(manager.getJob(job.id).state, "succeeded");
+  assert.equal(capabilityReads > readsAfterSnapshot, true);
+});
+
 test("restart sanitizes stored jobs, interrupts active work, and re-detects without replay", () => {
   const dirs = stateDirs("task-handoff-app-recovery-");
   fs.mkdirSync(dirs.stateDir, { recursive: true });
@@ -229,8 +351,9 @@ test("controlled instance exposes strict management, operation, and job APIs", a
     detection: () => ({ state, executablePaths: state === "installed" ? ["/bin/tool"] : [] }),
     execute: async () => { state = "installed"; },
   });
-  const previous = Object.fromEntries(["TASK_HANDOFF_DATA_DIR", "TASK_HANDOFF_CONFIG", "TASK_HANDOFF_WEB_AUTH", "TASK_HANDOFF_AI_SESSION_SCAN", "TASK_HANDOFF_NODE_AGENT_URL"].map((key) => [key, process.env[key]]));
+  const previous = Object.fromEntries(["TASK_HANDOFF_DATA_DIR", "TASK_HANDOFF_LOG_DIR", "TASK_HANDOFF_CONFIG", "TASK_HANDOFF_WEB_AUTH", "TASK_HANDOFF_AI_SESSION_SCAN", "TASK_HANDOFF_NODE_AGENT_URL"].map((key) => [key, process.env[key]]));
   process.env.TASK_HANDOFF_DATA_DIR = path.dirname(dirs.stateDir);
+  process.env.TASK_HANDOFF_LOG_DIR = path.join(path.dirname(dirs.stateDir), "logs");
   process.env.TASK_HANDOFF_CONFIG = path.join(path.dirname(dirs.stateDir), "config.json");
   process.env.TASK_HANDOFF_WEB_AUTH = "off";
   process.env.TASK_HANDOFF_AI_SESSION_SCAN = "0";

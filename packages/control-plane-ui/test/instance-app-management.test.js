@@ -16,6 +16,7 @@ function app(overrides = {}) {
     name: "Chromium",
     kind: "gui",
     state: "not-installed",
+    managementSource: "none",
     canInstall: true,
     canUninstall: false,
     ...overrides,
@@ -145,6 +146,8 @@ test("Apps settings exposes capability states, task feedback, safe confirmation,
   assert.match(dialog, /filteredManagedApps/);
   assert.match(dialog, /Refresh managed apps/);
   assert.match(dialog, /Confirm install/);
+  assert.match(dialog, /<Button type="button" :disabled="Boolean\(operationSubmitting\)" @click="confirmAppOperation">/);
+  assert.doesNotMatch(dialog, /AlertDialogAction/);
   assert.match(dialog, /instance-app-confirmation-summary/);
   assert.match(protocol, /logTail/);
   assert.match(queries, /postApiData<AppManagementJobResponse>[^\n]+requestId \? \{ requestId \} : \{\}/);

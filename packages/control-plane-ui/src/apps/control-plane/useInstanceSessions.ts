@@ -1,4 +1,4 @@
-import type { AiSessionSummary, AiSessionTurn, InstanceBoardItem, InstanceWithAiSessions } from "../../api/types";
+import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions } from "../../api/types";
 import { appSessionBindingKeys, appSessionStatus, isVisibleAppSession } from "./appSessionVisibility.ts";
 
 export type SessionTab = {
@@ -426,6 +426,9 @@ export function displayAiSessionMessage(session?: AiSessionSummary, promptIndex?
   if (turns.length && promptIndex !== undefined) {
     const index = Math.min(Math.max(promptIndex, 0), turns.length - 1);
     const turn = turns[index];
+    if (turn?.status === "waiting" && turn.phase === "approval" && turn.summary?.trim()) {
+      return turn.summary;
+    }
     if (turn?.lastMessage?.trim()) {
       return turn.lastMessage;
     }
@@ -437,6 +440,9 @@ export function displayAiSessionMessage(session?: AiSessionSummary, promptIndex?
   const latestTurn = turns.at(-1);
   if (latestTurn && !latestTurn.lastMessage?.trim() && !latestTurn.summary?.trim()) {
     return aiSessionProgressText(session);
+  }
+  if (session.status === "waiting" && session.phase === "approval" && session.summary?.trim()) {
+    return session.summary;
   }
   if (session.lastMessage) {
     return session.lastMessage;
@@ -464,43 +470,7 @@ export function aiSessionTurns(session?: AiSessionSummary) {
 }
 
 function aiSessionDisplayTurns(session?: AiSessionSummary) {
-  if (!session) {
-    return [];
-  }
-  const turns: AiSessionTurn[] = aiSessionTurns(session);
-  const prompt = session.userPrompt?.trim();
-  if (!prompt) {
-    return turns;
-  }
-  const activeTurn = session.activeTurnId ? turns.find((turn) => turn.id === session.activeTurnId) : undefined;
-  if (activeTurn) {
-    if ((session.status === "running" || session.status === "waiting") && activeTurn.userPrompt?.trim() === prompt) {
-      return [
-        ...turns.filter((turn) => turn.id !== activeTurn.id),
-        activeTurn,
-      ];
-    }
-    return turns;
-  }
-  const latest = turns.at(-1);
-  if (latest?.userPrompt?.trim() === prompt && !latest.lastMessage?.trim() && !latest.summary?.trim()) {
-    return turns;
-  }
-  if (session.status === "running" || session.status === "waiting") {
-    const pendingTurn: AiSessionTurn = {
-      id: session.activeTurnId || `${session.id}:active`,
-      userPrompt: prompt,
-      status: session.status === "waiting" ? "waiting" : "running",
-      phase: session.phase,
-      revision: 0,
-      updatedAt: session.updatedAt,
-    };
-    return [
-      ...turns,
-      pendingTurn,
-    ];
-  }
-  return turns;
+  return aiSessionTurns(session);
 }
 
 function aiSessionProgressText(session: AiSessionSummary) {
