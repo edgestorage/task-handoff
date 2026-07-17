@@ -696,6 +696,47 @@
   z-index: 3;
 }
 
+.session-ai-card-approval-actions {
+  display: inline-flex;
+  position: absolute;
+  bottom: 8px;
+  left: 14px;
+  z-index: 3;
+  align-items: center;
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+  gap: 4px;
+}
+
+.session-ai-card-approval-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-width: 0;
+  height: 24px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 6px;
+  background: var(--surface-subtle);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 800;
+  padding: 0 6px;
+}
+
+.session-ai-card-approval-actions button:hover,
+.session-ai-card-approval-actions button:focus-visible {
+  border-color: var(--focus-ring);
+  color: var(--text-strong);
+  outline: none;
+}
+
+.session-ai-card-approval-actions button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
 .session-ai-row:hover .session-ai-card-tools,
 .session-ai-row:focus-within .session-ai-card-tools,
 .session-ai-row[data-selected="true"] .session-ai-card-tools {

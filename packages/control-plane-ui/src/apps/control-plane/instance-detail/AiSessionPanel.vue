@@ -103,6 +103,20 @@
                     </button>
                   </span>
                 </div>
+                <div v-if="canResolveApproval(session)" class="session-ai-card-approval-actions">
+                  <button type="button" :disabled="aiSessionActionBusy" title="Allow" @click.stop="resolveApproval(session, 'allow')">
+                    <Check :size="13" />
+                    <span>Allow</span>
+                  </button>
+                  <button type="button" :disabled="aiSessionActionBusy" title="Skip" @click.stop="resolveApproval(session, 'skip')">
+                    <Ban :size="13" />
+                    <span>Skip</span>
+                  </button>
+                  <button type="button" :disabled="aiSessionActionBusy" title="Deny" @click.stop="resolveApproval(session, 'deny')">
+                    <X :size="13" />
+                    <span>Deny</span>
+                  </button>
+                </div>
                 <div class="session-ai-card-tools" aria-label="AI session card controls">
                   <DropdownMenu>
                     <DropdownMenuTrigger as-child>
@@ -170,6 +184,14 @@
               <strong>{{ aiSessionStatusLabel(selectedSession) }}</strong>
             </div>
             <div class="session-ai-detail-head-actions">
+              <AiSessionTurnNavigator
+                :count="promptCount(selectedSession)"
+                :index="promptIndexFor(selectedSession)"
+                :previous-label="`Previous user message for ${selectedSession.agent}`"
+                :next-label="`Next user message for ${selectedSession.agent}`"
+                @previous="previousPrompt(selectedSession)"
+                @next="nextPrompt(selectedSession)"
+              />
               <TooltipProvider :delay-duration="120">
                 <Tooltip>
                   <TooltipTrigger as-child>
@@ -276,6 +298,7 @@ import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import { bindAiSessionTrigger, interruptAiSession, removeAiSessionQueuedMessage, resolveAiSessionApproval, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, unbindAiSessionTrigger, uploadAiSessionAttachment, useControlPlaneTriggersQuery } from "../../../api/queries";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, TriggerConfig, TriggerDeployment, TriggerRuntimeState } from "../../../api/types";
 import AiSessionComposer, { type AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
+import AiSessionTurnNavigator from "../../../components/ai-session/AiSessionTurnNavigator.vue";
 import { Button } from "../../../components/ui/button";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
 import { ScrollArea } from "../../../components/ui/scroll-area";
@@ -285,7 +308,7 @@ import {
   aiSessionAppDisplayName,
   aiSessionAppTab,
   aiSessionStatusLabel,
-  aiSessionUserPrompts,
+  aiSessionTurns,
   displayAiSessionMessage,
   displayAiSessionTitle,
   sortedAiSessions,
@@ -518,7 +541,7 @@ function startSidebarResize(event: PointerEvent) {
 }
 
 function promptCount(session: AiSessionSummary) {
-  return aiSessionUserPrompts(session).length;
+  return aiSessionTurns(session).length;
 }
 
 function promptIndexFor(session: AiSessionSummary) {
@@ -682,6 +705,12 @@ async function interruptSelectedSession() {
 
 async function resolveSelectedApproval(decision: "allow" | "deny" | "skip") {
   const session = selectedSession.value;
+  if (session) {
+    await resolveApproval(session, decision);
+  }
+}
+
+async function resolveApproval(session: AiSessionSummary, decision: "allow" | "deny" | "skip") {
   if (!session || !canResolveApproval(session) || aiSessionActionBusy.value) {
     return;
   }

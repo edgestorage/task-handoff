@@ -29,6 +29,12 @@ test("instance AI session cards replace the metadata footer with floating naviga
   assert.match(styles, /\.session-ai-turn-nav\s*\{[^}]*position: absolute;[^}]*right: 10px;[^}]*bottom: 8px;/s);
 });
 
+test("waiting approval actions float at the bottom left of instance AI session cards", () => {
+  assert.match(panel, /<div v-if="canResolveApproval\(session\)" class="session-ai-card-approval-actions">[\s\S]*?resolveApproval\(session, 'allow'\)/);
+  assert.match(styles, /\.session-ai-card-approval-actions\s*\{[^}]*position: absolute;[^}]*bottom: 8px;[^}]*left: 14px;/s);
+  assert.match(panel, /async function resolveApproval\(session: AiSessionSummary, decision:/);
+});
+
 test("instance AI session card previews do not open an expanded overlay", () => {
   assert.doesNotMatch(panel, /expandedPreview|data-ai-preview-trigger|expandPrompt|expandMessage|展开用户消息|展开 AI 进展/);
   assert.doesNotMatch(styles, /session-ai-expanded|cursor: zoom-in/);

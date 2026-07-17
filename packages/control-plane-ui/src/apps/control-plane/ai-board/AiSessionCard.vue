@@ -37,6 +37,21 @@
       </span>
     </div>
 
+    <span v-if="canResolveApproval(card.session)" class="ai-board-approval-actions">
+      <button type="button" :disabled="approvalBusyKey === approvalKey(card, 'allow')" title="Allow" @click.stop="$emit('resolveApproval', card.instance, card.session, 'allow')">
+        <Check :size="13" />
+        <span>Allow</span>
+      </button>
+      <button type="button" :disabled="approvalBusyKey === approvalKey(card, 'skip')" title="Skip" @click.stop="$emit('resolveApproval', card.instance, card.session, 'skip')">
+        <Ban :size="13" />
+        <span>Skip</span>
+      </button>
+      <button type="button" :disabled="approvalBusyKey === approvalKey(card, 'deny')" title="Deny" @click.stop="$emit('resolveApproval', card.instance, card.session, 'deny')">
+        <X :size="13" />
+        <span>Deny</span>
+      </button>
+    </span>
+
     <div class="ai-board-card-tools" aria-label="AI session card controls">
       <DropdownMenu>
         <DropdownMenuTrigger as-child>
@@ -70,20 +85,6 @@
           </template>
         </DropdownMenuContent>
       </DropdownMenu>
-      <span v-if="canResolveApproval(card.session)" class="ai-board-approval-actions">
-        <button type="button" :disabled="approvalBusyKey === approvalKey(card, 'allow')" title="Allow" @click.stop="$emit('resolveApproval', card.instance, card.session, 'allow')">
-          <Check :size="13" />
-          <span>Allow</span>
-        </button>
-        <button type="button" :disabled="approvalBusyKey === approvalKey(card, 'skip')" title="Skip" @click.stop="$emit('resolveApproval', card.instance, card.session, 'skip')">
-          <Ban :size="13" />
-          <span>Skip</span>
-        </button>
-        <button type="button" :disabled="approvalBusyKey === approvalKey(card, 'deny')" title="Deny" @click.stop="$emit('resolveApproval', card.instance, card.session, 'deny')">
-          <X :size="13" />
-          <span>Deny</span>
-        </button>
-      </span>
       <button type="button" class="ai-board-open" :aria-label="`Open app session for ${card.session.agent}`" title="Open app session" @click.stop="$emit('openAiSessionApp', card.instance, card.session)">
         <ExternalLink :size="14" />
       </button>
@@ -610,9 +611,13 @@ const filteredTriggerTemplates = computed(() => {
 
 .ai-board-approval-actions {
   display: inline-flex;
+  position: absolute;
+  bottom: 8px;
+  left: 14px;
+  z-index: 2;
   align-items: center;
-  flex-wrap: wrap;
-  justify-content: flex-end;
+  flex-wrap: nowrap;
+  justify-content: flex-start;
   gap: 4px;
 }
 

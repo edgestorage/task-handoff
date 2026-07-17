@@ -13,6 +13,15 @@
             <strong>{{ aiSessionAppDisplayName(card.appTab, card.session.agent) }} · {{ aiSessionStatusLabel(card.session) }}</strong>
           </div>
           <div class="ai-board-floating-head-actions">
+            <AiSessionTurnNavigator
+              :count="promptCount"
+              :index="promptIndex"
+              :previous-label="`Previous user message for ${card.session.agent}`"
+              :next-label="`Next user message for ${card.session.agent}`"
+              tone="board"
+              @previous="$emit('previousPrompt')"
+              @next="$emit('nextPrompt')"
+            />
             <TooltipProvider :delay-duration="120">
               <Tooltip>
                 <TooltipTrigger as-child>
@@ -125,6 +134,7 @@ import { Ban, Check, ChevronDown, ChevronUp, CircleHelp, ExternalLink, X } from 
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions } from "../../../api/types";
 import AiSessionComposer, { type AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
+import AiSessionTurnNavigator from "../../../components/ai-session/AiSessionTurnNavigator.vue";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
 import {
@@ -144,12 +154,15 @@ defineProps<{
   attachments: AiSessionComposerAttachment[];
   draft: string;
   instanceDisplayName: (instance: InstanceBoardItem) => string;
+  promptCount: number;
   promptIndex: number;
 }>();
 
 defineEmits<{
   addContext: [];
+  nextPrompt: [];
   openAiSessionApp: [instance: InstanceWithAiSessions, session?: AiSessionSummary];
+  previousPrompt: [];
   removeQueuedMessage: [queueId: string];
   resolveApproval: [decision: "allow" | "deny" | "skip"];
   retryQueuedMessage: [queueId: string];

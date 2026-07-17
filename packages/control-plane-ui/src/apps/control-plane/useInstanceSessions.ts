@@ -422,6 +422,9 @@ export function displayAiSessionMessage(session?: AiSessionSummary, promptIndex?
   if (!session) {
     return "No recent AI activity";
   }
+  if (session.status === "waiting" && session.phase === "approval" && session.summary?.trim()) {
+    return session.summary;
+  }
   const turns = aiSessionDisplayTurns(session);
   if (turns.length && promptIndex !== undefined) {
     const index = Math.min(Math.max(promptIndex, 0), turns.length - 1);
@@ -440,9 +443,6 @@ export function displayAiSessionMessage(session?: AiSessionSummary, promptIndex?
   const latestTurn = turns.at(-1);
   if (latestTurn && !latestTurn.lastMessage?.trim() && !latestTurn.summary?.trim()) {
     return aiSessionProgressText(session);
-  }
-  if (session.status === "waiting" && session.phase === "approval" && session.summary?.trim()) {
-    return session.summary;
   }
   if (session.lastMessage) {
     return session.lastMessage;
@@ -490,10 +490,10 @@ export function displayAiSessionTitle(session?: AiSessionSummary, promptIndex?: 
   if (!session) {
     return "No AI session selected";
   }
-  const prompts = aiSessionUserPrompts(session);
-  if (prompts.length) {
-    const index = promptIndex === undefined ? prompts.length - 1 : Math.min(Math.max(promptIndex, 0), prompts.length - 1);
-    return prompts[index];
+  const turns = aiSessionDisplayTurns(session);
+  if (turns.length) {
+    const index = promptIndex === undefined ? turns.length - 1 : Math.min(Math.max(promptIndex, 0), turns.length - 1);
+    return turns[index]?.userPrompt?.trim() || "-";
   }
   return "-";
 }

@@ -130,9 +130,12 @@
           :attachments="messageAttachments"
           :draft="messageDraft"
           :instance-display-name="instanceDisplayName"
+          :prompt-count="promptCount(selectedCard.session)"
           :prompt-index="promptIndexFor(selectedCard)"
+          @next-prompt="nextPrompt(selectedCard)"
           @add-context="openSelectedAiSessionApp"
           @open-ai-session-app="(instance, session) => emit('openAiSessionApp', instance, session)"
+          @previous-prompt="previousPrompt(selectedCard)"
           @remove-queued-message="removeSelectedQueuedMessage"
           @resolve-approval="resolveSelectedApproval"
           @retry-queued-message="retrySelectedQueuedMessage"
@@ -161,7 +164,7 @@ import {
   aiSessionAppTab,
   aiSessionPriority,
   aiSessionStableSortKey,
-  aiSessionUserPrompts,
+  aiSessionTurns,
   appDisplayName,
   displayAiSessionMessage,
   displayAiSessionTitle,
@@ -415,7 +418,7 @@ function setLayoutMode(mode: AiBoardLayoutMode) {
 }
 
 function promptCount(session: AiSessionSummary) {
-  return aiSessionUserPrompts(session).length;
+  return aiSessionTurns(session).length;
 }
 
 function promptIndexFor(card: AiBoardCard) {

@@ -10205,6 +10205,11 @@ test("control plane surfaces approval reasons over an earlier assistant message"
     aiSessionDeliveryText(session, "instance-main · codex waiting/approval"),
     "instance-main · codex waiting/approval\nTests need access to the local package cache.",
   );
+
+  session.turns[0].status = "completed";
+  session.turns[0].phase = "responding";
+  session.turns[0].summary = "I will run the tests now.";
+  assert.equal(displayAiSessionMessage(session, 0), "Tests need access to the local package cache.");
 });
 
 test("control plane ai session delivery keys explicit turns by id and revision", () => {
