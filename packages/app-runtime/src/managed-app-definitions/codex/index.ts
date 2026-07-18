@@ -11,7 +11,9 @@ export const codexProvider: ManagedAppProvider = {
       kind: "tty",
       description: "OpenAI Codex CLI in the task workspace.",
       command: env.TASK_HANDOFF_CODEX_COMMAND || "codex",
-      args: modelArgs(env, "TASK_HANDOFF_CODEX_MODEL", "CODEX_MODEL"),
+      // This is the interactive Codex CLI launch path. The app-server is a
+      // protocol backend and does not show the startup upgrade prompt.
+      args: ["-c", "check_for_update_on_startup=false", ...modelArgs(env, "TASK_HANDOFF_CODEX_MODEL", "CODEX_MODEL")],
     },
     detection: launcherDetection(),
     distribution: {

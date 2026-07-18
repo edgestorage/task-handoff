@@ -1,0 +1,92 @@
+import type {
+  AiSessionStatus,
+  AiSessionSubAgent,
+} from "@task-handoff/protocol/ai-sessions";
+import { isSyntheticUserTranscriptText } from "@task-handoff/core/core/transcript";
+import {
+  rebuildCodexSubAgents,
+  rebuildCodexToolActivity,
+} from "./activity";
+import type {
+  CodexThread,
+  CodexToolActivityState,
+  JsonValue,
+} from "./types";
+import { asRecord } from "./values";
+
+export function summarizeThreadTurns(thread: CodexThread): {
+  activeTurnId?: string;
+  userPrompt?: string;
+  turns?: AiSessionStatus["turns"];
+  summary?: string;
+  lastMessage?: string;
+  toolActivity: CodexToolActivityState;
+  subAgents: AiSessionSubAgent[];
+} {
+  let activeTurnId: string | undefined;
+  let userPrompt: string | undefined;
+  let lastMessage: string | undefined;
+  const historyTurns: NonNullable<AiSessionStatus["turns"]> = [];
+  const turns = Array.isArray(thread.turns) ? thread.turns : [];
+  for (const [index, turn] of turns.entries()) {
+    const record = asRecord(turn);
+    const turnId = typeof record.id === "string" && record.id.trim()
+      ? record.id.trim()
+      : `turn_${index}`;
+    const providerStatus = typeof record.status === "string" ? record.status : "completed";
+    const historyTurn: NonNullable<AiSessionStatus["turns"]>[number] = {
+      id: turnId,
+      status: providerStatus === "inProgress"
+        ? "running"
+        : providerStatus === "failed"
+          ? "failed"
+          : "completed",
+      revision: 0,
+    };
+    if (providerStatus === "inProgress") {
+      activeTurnId = turnId;
+    }
+    const items = Array.isArray(record.items) ? record.items as unknown[] : [];
+    for (const rawItem of items) {
+      const item = asRecord(rawItem);
+      if (item.type === "userMessage") {
+        const text = textFromUserMessageItem(item);
+        if (text && !isSyntheticUserTranscriptText(text)) {
+          userPrompt = text;
+          historyTurn.userPrompt = text;
+        }
+      } else if (item.type === "agentMessage" && typeof item.text === "string" && item.text.trim()) {
+        lastMessage = item.text.trim();
+        historyTurn.lastMessage = lastMessage;
+        historyTurn.summary = lastMessage.length > 1000
+          ? `${lastMessage.slice(0, 997)}...`
+          : lastMessage;
+      }
+    }
+    if (historyTurn.userPrompt || historyTurn.lastMessage || historyTurn.summary) {
+      historyTurns.push(historyTurn);
+    }
+  }
+  const updatedAt = new Date().toISOString();
+  return {
+    activeTurnId,
+    userPrompt,
+    turns: historyTurns,
+    summary: lastMessage,
+    lastMessage,
+    toolActivity: rebuildCodexToolActivity(thread),
+    subAgents: rebuildCodexSubAgents(thread, updatedAt),
+  };
+}
+
+function textFromUserMessageItem(item: JsonValue) {
+  const content = Array.isArray(item.content) ? item.content : [];
+  return content.map(textFromUserInput).filter(Boolean).join("\n").trim();
+}
+
+function textFromUserInput(value: unknown) {
+  const input = asRecord(value);
+  return input.type === "text" && typeof input.text === "string"
+    ? input.text.trim()
+    : "";
+}

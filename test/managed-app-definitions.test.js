@@ -273,7 +273,7 @@ test("built-in providers resolve commands and arguments from the supplied enviro
     kind: "tty",
     description: "OpenAI Codex CLI in the task workspace.",
     command: "custom-codex",
-    args: ["--model", "gpt-custom"],
+      args: ["-c", "check_for_update_on_startup=false", "--model", "gpt-custom"],
   });
   assert.deepEqual(definitions.find((entry) => entry.launcher.id === "claude").launcher.args, [
     "--dangerously-skip-permissions",

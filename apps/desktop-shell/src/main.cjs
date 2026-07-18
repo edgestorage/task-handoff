@@ -29,8 +29,6 @@ let ownsNodeAgentProcess = false;
 let desktopLogStream;
 const NODE_AGENT_IPC_ENDPOINT_PREFIX = "ipc://";
 
-app.disableHardwareAcceleration();
-
 function isMacOS() {
   return process.platform === "darwin";
 }

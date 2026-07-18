@@ -46,6 +46,16 @@ test("instance AI session list keeps status priority ahead of user message recen
   );
 });
 
+test("instance AI session list can sort directly by user message recency", () => {
+  const recentIdle = session("recent-idle", "idle", [userTurn("idle", "2026-07-18T12:00:00.000Z")]);
+  const oldWaiting = session("old-waiting", "waiting", [userTurn("waiting", "2026-07-17T12:00:00.000Z")]);
+
+  assert.deepEqual(
+    sortedAiSessionsByLastUserMessage([recentIdle, oldWaiting], false).map(({ id }) => id),
+    ["recent-idle", "old-waiting"],
+  );
+});
+
 test("instance AI sessions with the same status sort by the last user message descending", () => {
   const older = session("older", "idle", [userTurn("older", "2026-07-18T10:00:00.000Z")]);
   const newer = session("newer", "idle", [
@@ -83,5 +93,7 @@ test("missing user message timestamps sort after known timestamps with a stable 
 });
 
 test("instance detail sidebar uses the local user-message sorter", () => {
-  assert.match(panel, /sortedAiSessionsByLastUserMessage\(filteredSessions\.value\)/);
+  assert.match(panel, /sortedAiSessionsByLastUserMessage\(filteredSessions\.value, sortSessionsByStatus\.value\)/);
+  assert.match(panel, />\s*Sort by status\s*</);
+  assert.match(panel, /SORT_BY_STATUS_STORAGE_KEY/);
 });

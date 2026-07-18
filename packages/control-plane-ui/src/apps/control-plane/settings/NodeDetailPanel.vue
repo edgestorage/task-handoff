@@ -53,17 +53,26 @@
               <DropdownMenuContent class="node-detail-action-menu" align="end" :side-offset="6">
                 <DropdownMenuItem class="node-detail-action-item" :disabled="headerActionState.rename.disabled" @select="actions.openNodeRename(selectedNode)">
                   <Pencil :size="14" />
-                  <span>{{ headerActionState.rename.label }}</span>
+                  <span>
+                    <strong>{{ headerActionState.rename.label }}</strong>
+                    <small>Change this node's display name</small>
+                  </span>
                 </DropdownMenuItem>
                 <DropdownMenuItem class="node-detail-action-item" :disabled="headerActionState.pairingInvite.disabled" @select="actions.createPairingInviteForNode(selectedNode.id)">
-                  <Plus :size="14" />
-                  <span>{{ headerActionState.pairingInvite.label }}</span>
+                  <KeyRound :size="14" />
+                  <span>
+                    <strong>{{ headerActionState.pairingInvite.label }}</strong>
+                    <small>Connect this node to another control plane</small>
+                  </span>
                 </DropdownMenuItem>
                 <template v-if="headerActionState.canDelete">
                   <DropdownMenuSeparator />
                   <DropdownMenuItem class="node-detail-action-item danger" :disabled="headerActionState.remove.disabled" @select="actions.removeNode(selectedNode)">
                     <Trash2 :size="14" />
-                    <span>{{ headerActionState.remove.label }}</span>
+                    <span>
+                      <strong>{{ headerActionState.remove.label }}</strong>
+                      <small>Remove this node from the control plane</small>
+                    </span>
                   </DropdownMenuItem>
                 </template>
               </DropdownMenuContent>
@@ -426,7 +435,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch, type Component } from "vue";
-import { Box, Boxes, Download, FolderOpen, Gauge, Monitor, MoreHorizontal, Network, Pencil, Plus, RefreshCw, ServerCog, Settings, Trash2 } from "@lucide/vue";
+import { Box, Boxes, Download, FolderOpen, Gauge, KeyRound, Monitor, MoreHorizontal, Network, Pencil, Plus, RefreshCw, ServerCog, Settings, Trash2 } from "@lucide/vue";
 import { TooltipTrigger as RekaTooltipTrigger } from "reka-ui";
 import type { BuildInfo, InstanceBoardItem, LocalDockerImage, Node, NodeAgentExternalListener, NodeLocalFolder, NodeRemoteControlPlane, NodeRuntime, UpdateChannel, UpdateCheckResult, UpdateJob, UpdateTarget } from "../../../api/types";
 import { Badge } from "../../../components/ui/badge";
@@ -665,7 +674,7 @@ watch(
 
 :global(.node-detail-action-menu) {
   display: grid;
-  width: 176px;
+  width: 280px;
   gap: 2px;
   border: 1px solid var(--line-strong);
   border-radius: 8px;
@@ -676,31 +685,50 @@ watch(
 
 :global(.node-detail-action-item) {
   display: flex;
-  align-items: center;
-  gap: 7px;
+  align-items: flex-start;
+  gap: 10px;
   width: 100%;
-  min-height: 30px;
+  min-height: 50px;
   border: 0;
   border-radius: 6px;
   background: transparent;
   color: var(--control-plane-menu-text);
   cursor: pointer;
-  font-size: 12px;
-  font-weight: 700;
-  padding: 0 8px;
+  padding: 8px 10px;
   text-align: left;
 }
 
 :global(.node-detail-action-item > svg) {
+  flex: 0 0 auto;
   width: 14px;
   height: 14px;
+  margin-top: 2px;
 }
 
 :global(.node-detail-action-item > span) {
+  display: grid;
+  gap: 2px;
   min-width: 0;
+}
+
+:global(.node-detail-action-item strong),
+:global(.node-detail-action-item small) {
   overflow: hidden;
+  line-height: 1.25;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+:global(.node-detail-action-item strong) {
+  color: inherit;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+:global(.node-detail-action-item small) {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 400;
 }
 
 :global(.node-detail-action-item:hover),
@@ -713,6 +741,10 @@ watch(
 
 :global(.node-detail-action-item.danger) {
   color: var(--status-danger);
+}
+
+:global(.node-detail-action-item.danger small) {
+  color: color-mix(in srgb, var(--status-danger) 72%, var(--text-muted));
 }
 
 :global(.node-detail-action-item.danger:hover),

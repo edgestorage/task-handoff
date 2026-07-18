@@ -83,6 +83,7 @@ test("active tool activity sits directly below the assistant response", () => {
   assert.match(floatingDock, /'ai-board-floating-block-assistant-active': card\.session\.status === 'running' \|\| card\.session\.status === 'waiting'/);
   assert.match(floatingDock, /ai-board-floating-block-assistant \{[\s\S]*?background: transparent;/);
   assert.match(floatingDock, /ai-board-floating-block-assistant-active \{\s*padding-bottom: 4px;/);
+  assert.match(floatingDock, /ai-board-floating-block-assistant \+ :deep\(\.ai-session-tool-activity-board\) \{\s*margin-top: -8px;/);
   assert.match(activity, /ai-session-tool-activity-board \{[\s\S]*?margin-top: -12px;/);
 });
 
@@ -97,6 +98,18 @@ test("detail user prompts collapse to three lines with a local toggle", () => {
   assert.match(panelCss, /\.session-ai-detail-prompt-content \{[\s\S]*?font-size: 14px;[\s\S]*?line-height: 1\.55;/);
   assert.match(panelCss, /session-ai-detail-prompt-toggle/);
   assert.match(panelCss, /session-ai-detail\.is-scrolled \.session-ai-detail-prompt-toggle \{\s*display: none;/);
+});
+
+test("floating user prompts collapse to three lines and become compact when sticky", () => {
+  assert.match(floatingDock, /ref="promptContentEl"/);
+  assert.match(floatingDock, /class="ai-board-floating-prompt-toggle"/);
+  assert.match(floatingDock, /promptStickyPlaceholderHeight/);
+  assert.match(floatingDock, /scrollTop > 24/);
+  assert.match(floatingDock, /max-height: calc\(1\.55em \* 3\)/);
+  assert.match(floatingDock, /\.ai-board-floating-block-user \{[\s\S]*?position: sticky;[\s\S]*?top: 0;/);
+  assert.match(floatingDock, /ai-board-floating-detail\.is-scrolled \.ai-board-floating-block-user \{[\s\S]*?background: var\(--ai-board-column-head-bg\);/);
+  assert.match(floatingDock, /ai-board-floating-detail\.is-scrolled \.ai-board-floating-prompt-content \{\s*max-height: 1\.55em;/);
+  assert.match(floatingDock, /ai-board-floating-detail\.is-scrolled \.ai-board-floating-prompt-toggle \{\s*display: none;/);
 });
 
 test("running activity floats in the card without competing with approval or turn controls", () => {

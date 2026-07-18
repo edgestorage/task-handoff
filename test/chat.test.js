@@ -53,6 +53,9 @@ const {
 const { AiSessionController } = require("../packages/ai-session-runtime/src/ai-session-control.ts");
 const { AiSessionDiscoveryCoordinator } = require("../packages/ai-session-runtime/src/ai-session-discovery.ts");
 const { CodexAppServerClient, CodexAppServerSessionBridge } = require("../packages/ai-session-runtime/src/codex-app-server.ts");
+const { CodexAppServerApprovalCoordinator } = require("../packages/ai-session-runtime/src/codex-app-server/session/approval-coordinator.ts");
+const { CodexAppServerConnectionManager } = require("../packages/ai-session-runtime/src/codex-app-server/client/connection-manager.ts");
+const { CodexAppServerSessionDiscovery } = require("../packages/ai-session-runtime/src/codex-app-server/session/discovery.ts");
 const { ClaudeControlSockSessionBridge } = require("../packages/ai-session-runtime/src/claude-control-sock.ts");
 const { AiSessionEventType, AiSessionSummarySchema } = require("../packages/protocol/src/ai-sessions.ts");
 const { APP_SESSION_DELTA_RETENTION_MS } = require("../packages/protocol/src/app-sessions.ts");
@@ -603,6 +606,60 @@ test("ai session registry keeps distinct claude app sessions in the same cwd", (
   );
 });
 
+test("ai session registry indexes provider sessions without rescanning on every lookup", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-provider-index-"));
+  const dir = path.join(root, "ai-sessions");
+  const registry = createAiSessionRegistry({ dir });
+  const session = registry.start({ agent: "codex", providerSessionId: "thread-indexed" });
+
+  assert.equal(registry.getByProviderSessionId("codex", "thread-indexed")?.id, session.id);
+  fs.rmSync(registry.sessionPath(session.id));
+  assert.equal(registry.getByProviderSessionId("codex", "thread-indexed"), undefined);
+
+  const persisted = registry.start({ agent: "codex", providerSessionId: "thread-reloaded" });
+  const reloaded = createAiSessionRegistry({ dir });
+  const found = reloaded.getByProviderSessionId("codex", "thread-reloaded");
+  assert.equal(found?.id, persisted.id);
+});
+
+test("ai session registry treats unsafe read ids as missing without weakening path validation", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-unsafe-id-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+
+  assert.equal(registry.get(".."), undefined);
+  assert.equal(registry.get("parent/session"), undefined);
+  assert.equal(registry.get("parent\\session"), undefined);
+  assert.throws(() => registry.sessionPath("parent/session"), /Invalid AI session id/);
+});
+
+test("ai session registry migrates unknown sub-agent fields and caps after deduplication", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-sub-agent-migration-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const session = registry.start({ agent: "codex", providerSessionId: "thread-migration" });
+  const base = "2026-07-13T00:00:00.000Z";
+  const subAgents = Array.from({ length: 70 }, (_, index) => ({
+    threadId: `thread-${String(index).padStart(2, "2")}`,
+    status: "completed",
+    updatedAt: new Date(Date.parse(base) + index * 1000).toISOString(),
+    futureField: "ignored",
+  }));
+  // A duplicate appears after the first 50 entries and must still win.
+  subAgents.push({
+    threadId: "thread-00",
+    status: "running",
+    updatedAt: "2026-07-13T00:02:00.000Z",
+    futureField: "ignored",
+  });
+  const persisted = JSON.parse(fs.readFileSync(registry.sessionPath(session.id), "utf8"));
+  persisted.subAgents = subAgents;
+  fs.writeFileSync(registry.sessionPath(session.id), JSON.stringify(persisted));
+
+  const restored = registry.get(session.id);
+  assert.equal(restored?.subAgents.length, 50);
+  assert.equal(restored?.subAgents.find((agent) => agent.threadId === "thread-00")?.status, "running");
+  assert.equal(restored?.subAgents.some((agent) => "futureField" in agent), false);
+});
+
 test("ai session registry initializes empty app sessions as idle without placeholder messages", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-empty-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
@@ -1083,6 +1140,29 @@ test("ai session registry includes user prompt in snapshots", () => {
   assert.equal(snapshot.sessions[0].turns[0].summary, "AI board list updated");
   assert.equal(snapshot.sessions[0].turns[0].lastMessage, "AI board list updated");
   assert.equal(typeof snapshot.sessions[0].turns[0].updatedAt, "string");
+});
+
+test("ai session registry derives the top-level prompt from canonical turns", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-prompt-projection-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const session = registry.start({
+    agent: "codex",
+    providerSessionId: "thread_prompt_projection",
+    userPrompt: "stale prompt",
+  });
+
+  const updated = registry.applyAdapterSnapshot({
+    agent: "codex",
+    providerSessionId: session.providerSessionId,
+    userPrompt: "stale prompt",
+    turns: [{ id: "turn_1", userPrompt: "canonical prompt", status: "running" }],
+    activeTurnId: "turn_1",
+    status: "running",
+    phase: "thinking",
+  });
+
+  assert.equal(updated.userPrompt, "canonical prompt");
+  assert.equal(updated.turns.at(-1).userPrompt, "canonical prompt");
 });
 
 test("ai session registry clears previous response state when a new turn starts", () => {
@@ -2171,6 +2251,133 @@ test("ai session registry only treats transcript scans as active when file size 
   assert.notEqual(registry.get(first.id)?.updatedAt, firstUpdatedAt);
 });
 
+test("codex app server discovery continues when optional thread-list enrichment fails", async () => {
+  const applied = [];
+  const discovery = new CodexAppServerSessionDiscovery({
+    applyThreadSnapshot: (thread) => applied.push(thread),
+    ensureThreadSubscribed: async () => undefined,
+  });
+  const client = Object.assign(new EventEmitter(), {
+    async start() {},
+    stop() {},
+    async listLoadedThreadIds() { return ["thread_loaded"]; },
+    async listThreads() { throw new Error("thread/list is unavailable"); },
+    async readThread(threadId) { return { id: threadId, name: "Loaded thread" }; },
+  });
+
+  await discovery.sync(client);
+
+  assert.deepEqual(applied, [{ id: "thread_loaded", name: "Loaded thread" }]);
+});
+
+test("codex app server connection manager starts once for concurrent callers", async () => {
+  let starts = 0;
+  let releaseStart;
+  const client = Object.assign(new EventEmitter(), {
+    start() {
+      starts += 1;
+      return new Promise((resolve) => { releaseStart = resolve; });
+    },
+    stop() {},
+    async listLoadedThreadIds() { return []; },
+  });
+  const manager = new CodexAppServerConnectionManager({
+    injectedClient: client,
+    createClient: () => client,
+    onEvent() {},
+  });
+
+  const first = manager.ready();
+  const second = manager.ready();
+  assert.equal(starts, 1);
+  releaseStart();
+  const [firstConnection, secondConnection] = await Promise.all([first, second]);
+  assert.equal(firstConnection, secondConnection);
+});
+
+test("codex app server connection manager ignores stale client events and initialization", async () => {
+  const clients = [];
+  const events = [];
+  let releaseFirstStart;
+  const manager = new CodexAppServerConnectionManager({
+    createClient(options) {
+      const client = Object.assign(new EventEmitter(), {
+        options,
+        start() {
+          if (options.socketPath === "/tmp/first.sock") {
+            return new Promise((resolve) => { releaseFirstStart = resolve; });
+          }
+          return Promise.resolve();
+        },
+        stop() {},
+        async listLoadedThreadIds() { return []; },
+      });
+      clients.push(client);
+      return client;
+    },
+    onEvent(event) { events.push(event); },
+  });
+
+  manager.configure("/tmp/first.sock");
+  const staleStart = manager.ready();
+  manager.configure("/tmp/second.sock");
+  await manager.ready();
+  const staleStartRejected = assert.rejects(staleStart, /connection changed/);
+  releaseFirstStart();
+  await staleStartRejected;
+
+  clients[0].emit("event", { type: "thread", thread: { id: "old" } });
+  clients[0].emit("disconnect");
+  clients[0].emit("event", { type: "thread", thread: { id: "late-old" } });
+  clients[1].emit("event", { type: "thread", thread: { id: "new" } });
+  assert.deepEqual(events.map((event) => event.thread.id), ["new"]);
+  assert.equal(manager.client, clients[1]);
+  assert.ok(await manager.ready());
+});
+
+test("codex approval coordinator invalidates pending resolvers when the connection changes", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-approval-epoch-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const session = registry.applyAdapterSnapshot({
+    source: "adapter-snapshot",
+    agent: "codex",
+    appId: "codex-app-server",
+    providerSessionId: "thread_approval_epoch",
+    status: "waiting",
+    phase: "approval",
+  });
+  let responses = 0;
+  const client = Object.assign(new EventEmitter(), {
+    async start() {},
+    stop() {},
+    async listLoadedThreadIds() { return []; },
+    async respondToApproval() { responses += 1; },
+  });
+  const coordinator = new CodexAppServerApprovalCoordinator({
+    registry,
+    currentClient: () => client,
+    readyClient: async () => client,
+    findSession: () => session,
+    applyThreadSnapshot: () => undefined,
+  });
+  coordinator.register({
+    id: 7,
+    method: "item/commandExecution/requestApproval",
+    kind: "command",
+    threadId: "thread_approval_epoch",
+    summary: "Run tests",
+    params: {},
+  });
+  const pending = coordinator.latestForSession(session.id);
+  assert.ok(pending);
+
+  coordinator.resetConnection();
+
+  assert.equal(coordinator.latestForSession(session.id), undefined);
+  await assert.rejects(() => pending.resolve("allow"), (error) => error.code === "AI_SESSION_APPROVAL_CONNECTION_CHANGED");
+  assert.equal(responses, 0);
+});
+
 test("codex app server bridge syncs loaded threads and status notifications", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-app-server-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
@@ -2364,6 +2571,15 @@ test("codex app server bridge projects realtime tool activity and replaces it fr
   session = registry.list()[0];
   assert.equal(session.toolCallsSinceLastMessage, 1);
   assert.equal(session.currentTool, undefined);
+
+  fake.emit("event", { type: "thread-closed", threadId: "thread_tools" });
+  fake.emit("event", codexNotification("item/started", {
+    threadId: "thread_tools",
+    item: { type: "commandExecution", id: "new_connection_tool", command: "fresh" },
+  }));
+  session = registry.list()[0];
+  assert.equal(session.toolCallsSinceLastMessage, 1);
+  assert.equal(session.currentTool.id, "new_connection_tool");
 });
 
 test("codex app server bridge publishes sub-agent lifecycle independently from tool activity", async () => {
@@ -3893,11 +4109,6 @@ test("codex app server bridge updates user prompts from app-server item notifica
   const fake = new FakeCodexAppServerClient();
   const bridge = new CodexAppServerSessionBridge(registry, fake);
   await bridge.sync();
-  registry.applyRealtimeEvent(registry.list()[0].id, {
-    kind: "assistant-message",
-    text: "Existing assistant response",
-    source: "control",
-  });
   fake.emit("event", {
     type: "user-message",
     threadId: "thread_item",
@@ -4553,6 +4764,9 @@ test("web app ai session read routes do not refresh discovery state", async () =
     const detail = await app.inject({ method: "GET", url: "/api/ai-sessions/ais_existing" });
     assert.equal(detail.statusCode, 200);
     assert.equal(JSON.parse(detail.payload).data.providerSessionId, "thread_existing");
+
+    const unsafeDetail = await app.inject({ method: "GET", url: "/api/ai-sessions/parent%5Csession" });
+    assert.equal(unsafeDetail.statusCode, 404);
 
     const turns = await app.inject({ method: "GET", url: "/api/ai-sessions/ais_existing/turns" });
     assert.equal(turns.statusCode, 200);

@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { nodeDetailActionState } from "../src/apps/control-plane/settings/nodeDetailActions.ts";
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function state(overrides = {}) {
   return nodeDetailActionState({
@@ -32,7 +37,7 @@ test("selected node action state reports busy labels and prevents duplicate acti
   assert.deepEqual(actions.check, { busy: true, disabled: true, label: "Checking connection" });
   assert.deepEqual(actions.menu, { busy: true, label: "Node action in progress" });
   assert.deepEqual(actions.rename, { busy: true, disabled: true, label: "Renaming" });
-  assert.deepEqual(actions.pairingInvite, { busy: true, disabled: true, label: "Generating Join token" });
+  assert.deepEqual(actions.pairingInvite, { busy: true, disabled: true, label: "Generating join token" });
   assert.deepEqual(actions.remove, { busy: true, disabled: true, label: "Deleting node" });
 });
 
@@ -47,7 +52,7 @@ test("an action running on another node disables duplicates without showing the 
   assert.deepEqual(actions.check, { busy: false, disabled: true, label: "Check connection" });
   assert.deepEqual(actions.menu, { busy: false, label: "More node actions" });
   assert.deepEqual(actions.rename, { busy: false, disabled: true, label: "Rename" });
-  assert.deepEqual(actions.pairingInvite, { busy: false, disabled: true, label: "Generate Join token" });
+  assert.deepEqual(actions.pairingInvite, { busy: false, disabled: true, label: "Generate join token" });
   assert.deepEqual(actions.remove, { busy: false, disabled: true, label: "Delete node" });
 });
 
@@ -64,4 +69,15 @@ test("the exposed menu trigger stays visibly busy while a selected menu action i
     busy: false,
     label: "More node actions",
   });
+});
+
+test("node detail actions use icon, title, and description menu items", () => {
+  const source = fs.readFileSync(path.join(root, "src/apps/control-plane/settings/NodeDetailPanel.vue"), "utf8");
+  const menu = source.match(/<DropdownMenuContent class="node-detail-action-menu"[\s\S]*?<\/DropdownMenuContent>/)?.[0] || "";
+
+  assert.match(menu, /Change this node's display name/);
+  assert.match(menu, /Connect this node to another control plane/);
+  assert.match(menu, /Remove this node from the control plane/);
+  assert.equal((menu.match(/<strong>/g) || []).length, 3);
+  assert.equal((menu.match(/<small>/g) || []).length, 3);
 });

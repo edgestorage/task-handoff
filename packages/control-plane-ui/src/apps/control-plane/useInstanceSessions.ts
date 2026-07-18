@@ -308,15 +308,20 @@ export function sortedAiSessions(sessions?: AiSessionSummary[]) {
   });
 }
 
-export function sortedAiSessionsByLastUserMessage(sessions?: AiSessionSummary[]) {
+export function sortedAiSessionsByLastUserMessage(sessions?: AiSessionSummary[], sortByStatus = true) {
   return [...(sessions || [])].sort((a, b) => {
-    const priorityDelta = aiSessionPriority(b) - aiSessionPriority(a);
+    return compareAiSessionsByLastUserMessage(a, b, sortByStatus) || aiSessionStableSortKey(a).localeCompare(aiSessionStableSortKey(b));
+  });
+}
+
+export function compareAiSessionsByLastUserMessage(left: AiSessionSummary, right: AiSessionSummary, sortByStatus = true) {
+  if (sortByStatus) {
+    const priorityDelta = aiSessionPriority(right) - aiSessionPriority(left);
     if (priorityDelta) {
       return priorityDelta;
     }
-    const userMessageTimeDelta = aiSessionLastUserMessageTime(b) - aiSessionLastUserMessageTime(a);
-    return userMessageTimeDelta || aiSessionStableSortKey(a).localeCompare(aiSessionStableSortKey(b));
-  });
+  }
+  return aiSessionLastUserMessageTime(right) - aiSessionLastUserMessageTime(left);
 }
 
 export function aiSessionLastUserMessageTime(session: AiSessionSummary) {

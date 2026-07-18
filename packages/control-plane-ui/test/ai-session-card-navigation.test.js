@@ -16,6 +16,10 @@ test("ai session cards do not render lifecycle status text in their headers", ()
   assert.doesNotMatch(card, /aiSessionStatusLabel\(card\.session\)/);
 });
 
+test("reselecting the selected AI session card restores collapsed details", () => {
+  assert.match(board, /function selectCard\(key: string\) \{\s*if \(selectedCardKey\.value === key && detailCollapsed\.value\) \{\s*detailCollapsed\.value = false;\s*\}\s*selectedCardKey\.value = key;\s*\}/);
+});
+
 test("ai session board card markdown previews remove paragraph margins", () => {
   assert.match(card, /\.ai-board-question :deep\(p\),\s*\.ai-board-message :deep\(p\)\s*\{\s*margin: 0;/s);
   assert.doesNotMatch(card, /\.ai-board-question\s*\{[^}]*font-weight:\s*800;/s);

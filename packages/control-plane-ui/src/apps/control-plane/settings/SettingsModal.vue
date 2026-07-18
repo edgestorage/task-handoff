@@ -315,11 +315,7 @@
             <div class="section-head">
               <span>Execution nodes · {{ nodes.data.value?.length || 0 }}</span>
               <div class="section-head-actions">
-                <Button v-if="hasLocalNode" variant="outline" size="sm" @click="openRemoteNodeDialog">
-                  <Plus :size="14" />
-                  <span>Add node</span>
-                </Button>
-                <DropdownMenu v-else>
+                <DropdownMenu>
                   <DropdownMenuTrigger as-child>
                     <Button variant="outline" size="sm">
                       <Plus :size="14" />
@@ -328,11 +324,26 @@
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent class="node-add-menu" align="end" :side-offset="6">
-                    <DropdownMenuItem :disabled="syncingLocalNode" @select="addLocalNode">
-                      <span>{{ syncingLocalNode ? "Adding local node" : "Add local node" }}</span>
+                    <DropdownMenuItem v-if="!hasLocalNode" class="node-add-menu-item" :disabled="syncingLocalNode" @select="addLocalNode">
+                      <MonitorCog :size="16" aria-hidden="true" />
+                      <span>
+                        <strong>{{ syncingLocalNode ? "Adding local node" : "Add local node" }}</strong>
+                        <small>Use this control plane as a node</small>
+                      </span>
                     </DropdownMenuItem>
-                    <DropdownMenuItem @select="openRemoteNodeDialog">
-                      <span>Add remote node</span>
+                    <DropdownMenuItem class="node-add-menu-item" @select="openRemoteNodeDialog">
+                      <Server :size="16" aria-hidden="true" />
+                      <span>
+                        <strong>Add remote node</strong>
+                        <small>Connect an existing node by endpoint</small>
+                      </span>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem class="node-add-menu-item" :disabled="creatingJoinInvite" @select="createJoinInvite">
+                      <KeyRound :size="16" aria-hidden="true" />
+                      <span>
+                        <strong>{{ creatingJoinInvite ? "Generating join token" : "Generate join token" }}</strong>
+                        <small>Allow a node to connect securely</small>
+                      </span>
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
@@ -451,17 +462,6 @@
             </label>
             <p v-if="settingsNodeSuccess" class="settings-success">{{ settingsNodeSuccess }}</p>
 
-            <div class="remote-node-invite">
-              <div>
-                <strong>Allow a node to join this control-plane</strong>
-                <span>Generate a one-time token for node-agent pairing.</span>
-              </div>
-              <Button type="button" variant="outline" size="sm" :disabled="creatingJoinInvite" @click="createJoinInvite">
-                <Plus :size="14" />
-                <span>{{ creatingJoinInvite ? "Generating" : "Generate token" }}</span>
-              </Button>
-            </div>
-
             <DialogFooter>
               <Button type="button" variant="outline" @click="setRemoteNodeDialogOpen(false)">Cancel</Button>
               <Button type="submit" :disabled="!canCreateNode || creatingNode">
@@ -485,7 +485,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useQueryClient } from "@tanstack/vue-query";
-import { AlertTriangle, ArrowLeft, ChevronDown, ChevronUp, Layers, MapPin, Plus, RefreshCw, Settings, Trash2 } from "@lucide/vue";
+import { AlertTriangle, ArrowLeft, ChevronDown, ChevronUp, KeyRound, Layers, MapPin, MonitorCog, Plus, RefreshCw, Server, Settings, Trash2 } from "@lucide/vue";
 import { getNodeExternalListener, updateControlPlaneSettings, updateNodeExternalListener, useChatBridgesQuery, useChatGatewayStatusQuery, useControlPlaneSettingsQuery, useImagesQuery, useInstanceBoardPayloadQuery, useModelRegistryQuery, useModelsQuery, useNodeImageAvailabilityQuery, useNodeRuntimesPayloadQuery, useNodesQuery, useProjectsQuery, useServerUpdateCheckQuery } from "../../../api/queries";
 import type { BuildInfo, ControlPlaneSettings, InstanceBoardItem, ModelLocation, Node, NodeAgentExternalListener, UpdateChannel } from "../../../api/types";
 import { Badge } from "../../../components/ui/badge";
@@ -1467,7 +1467,44 @@ function errorText(error: unknown) {
 }
 
 :global(.node-add-menu) {
-  min-width: 180px;
+  width: 280px;
+}
+
+:global(.node-add-menu-item) {
+  align-items: flex-start !important;
+  gap: 10px !important;
+  min-height: 50px;
+  padding: 8px 10px !important;
+}
+
+:global(.node-add-menu-item > svg) {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+:global(.node-add-menu-item > span) {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+:global(.node-add-menu-item strong),
+:global(.node-add-menu-item small) {
+  overflow: hidden;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:global(.node-add-menu-item strong) {
+  color: inherit;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+:global(.node-add-menu-item small) {
+  color: var(--text-muted);
+  font-size: 11px;
 }
 
 .remote-node-dialog {
@@ -1503,30 +1540,10 @@ function errorText(error: unknown) {
   gap: 7px;
 }
 
-.remote-node-form label > span,
-.remote-node-invite span {
+.remote-node-form label > span {
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 750;
-}
-
-.remote-node-invite {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  border-top: 1px solid var(--line);
-  padding-top: 14px;
-}
-
-.remote-node-invite > div {
-  display: grid;
-  gap: 4px;
-}
-
-.remote-node-invite strong {
-  color: var(--text-strong);
-  font-size: 12px;
 }
 
 .modal-section {

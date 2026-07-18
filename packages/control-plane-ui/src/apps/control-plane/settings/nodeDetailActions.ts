@@ -31,7 +31,7 @@ export function nodeDetailActionState(input: NodeDetailActionStateInput) {
     pairingInvite: {
       busy: pairingInviteBusy,
       disabled: Boolean(input.creatingPairingInviteNodeId),
-      label: pairingInviteBusy ? "Generating Join token" : "Generate Join token",
+      label: pairingInviteBusy ? "Generating join token" : "Generate join token",
     },
     remove: {
       busy: removeBusy,

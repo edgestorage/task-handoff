@@ -4,6 +4,13 @@ import test from "node:test";
 
 const component = fs.readFileSync(new URL("../src/components/ai-session/AiSessionSubAgents.vue", import.meta.url), "utf8");
 const panel = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.vue", import.meta.url), "utf8");
+const apiTypes = fs.readFileSync(new URL("../src/api/types.ts", import.meta.url), "utf8");
+
+test("control-plane UI derives the sub-agent type from the protocol", () => {
+  assert.match(apiTypes, /import type \{ AiSessionSubAgent as ProtocolAiSessionSubAgent \} from "@task-handoff\/protocol\/ai-sessions"/);
+  assert.match(apiTypes, /export type AiSessionSubAgent = ProtocolAiSessionSubAgent/);
+  assert.doesNotMatch(apiTypes, /status: "pending-init" \| "running"/);
+});
 
 test("AI session detail renders sub-agents after the main tool activity", () => {
   assert.match(panel, /<AiSessionToolActivity[\s\S]*?\/>\s*<AiSessionSubAgents/);

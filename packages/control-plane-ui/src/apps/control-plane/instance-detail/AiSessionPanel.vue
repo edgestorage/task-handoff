@@ -40,6 +40,9 @@
                 <DropdownMenuCheckboxItem class="session-ai-options-item option-item" :model-value="groupSessionsByPath" @update:model-value="(value) => groupSessionsByPath = Boolean(value)">
                   Group by path
                 </DropdownMenuCheckboxItem>
+                <DropdownMenuCheckboxItem class="session-ai-options-item option-item" :model-value="sortSessionsByStatus" @update:model-value="(value) => sortSessionsByStatus = Boolean(value)">
+                  Sort by status
+                </DropdownMenuCheckboxItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
@@ -343,6 +346,7 @@ import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMe
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
+import { clearAiSessionDraft, loadAiSessionDraft, persistAiSessionDraft } from "../useAiSessionDraft";
 import {
   aiSessionAppDisplayName,
   aiSessionAppTab,
@@ -364,6 +368,7 @@ type AiSessionPathGroup = {
 };
 
 const GROUP_BY_PATH_STORAGE_KEY = "task-handoff.control-plane.ai-sessions-group-by-path";
+const SORT_BY_STATUS_STORAGE_KEY = "task-handoff.control-plane.ai-sessions-sort-by-status";
 const SIDEBAR_WIDTH_STORAGE_KEY = "task-handoff.control-plane.ai-sessions-sidebar-width";
 const SIDEBAR_WIDTH_DEFAULT = 360;
 const SIDEBAR_WIDTH_MIN = 320;
@@ -371,6 +376,10 @@ const SIDEBAR_WIDTH_MAX = 520;
 
 function storedGroupByPath() {
   return window.localStorage?.getItem(GROUP_BY_PATH_STORAGE_KEY) !== "false";
+}
+
+function storedSortByStatus() {
+  return window.localStorage?.getItem(SORT_BY_STATUS_STORAGE_KEY) !== "false";
 }
 
 function clampSidebarWidth(value: number) {
@@ -392,6 +401,7 @@ const props = defineProps<{
 const visibleAiSessions = computed(() => props.instance.aiSessions?.sessions || []);
 const sessionStatusFilter = ref<SessionStatusFilter>("all");
 const groupSessionsByPath = ref(storedGroupByPath());
+const sortSessionsByStatus = ref(storedSortByStatus());
 const statusFilterOptions = computed(() => {
   const sessions = visibleAiSessions.value;
   return [
@@ -409,7 +419,7 @@ const filteredSessions = computed(() => {
   }
   return visibleAiSessions.value.filter((session) => sessionStatusGroup(session) === sessionStatusFilter.value);
 });
-const sortedSessions = computed(() => sortedAiSessionsByLastUserMessage(filteredSessions.value));
+const sortedSessions = computed(() => sortedAiSessionsByLastUserMessage(filteredSessions.value, sortSessionsByStatus.value));
 const displayedSessionGroups = computed<AiSessionPathGroup[]>(() => groupSessionsByPath.value ? groupAiSessionsByPath(sortedSessions.value) : [{
   key: "all",
   label: "",
@@ -558,6 +568,10 @@ watch(groupSessionsByPath, (value) => {
   window.localStorage?.setItem(GROUP_BY_PATH_STORAGE_KEY, String(value));
 });
 
+watch(sortSessionsByStatus, (value) => {
+  window.localStorage?.setItem(SORT_BY_STATUS_STORAGE_KEY, String(value));
+});
+
 function togglePathGroup(key: string) {
   collapsedPathGroups[key] = !collapsedPathGroups[key];
 }
@@ -692,6 +706,7 @@ async function sendSelectedSessionMessage() {
   try {
     const attachments = await uploadMessageAttachments(props.instance.id, session.id);
     await sendAiSessionMessage(props.instance.id, session.id, message || "请查看附件图片。", undefined, attachments.map((attachment) => ({ id: attachment.id, kind: attachment.kind })));
+    clearAiSessionDraft(session.id);
     messageDraft.value = "";
     messageAttachments.value = [];
   } catch (error) {
@@ -711,6 +726,7 @@ async function steerMessageDraft() {
   try {
     const attachments = await uploadMessageAttachments(props.instance.id, session.id);
     await sendAiSessionMessage(props.instance.id, session.id, message || "请查看附件图片。", "steer", attachments.map((attachment) => ({ id: attachment.id, kind: attachment.kind })));
+    clearAiSessionDraft(session.id);
     messageDraft.value = "";
     messageAttachments.value = [];
     await refreshBoard();
@@ -1019,6 +1035,7 @@ watch([selectedSession, messageAttachments, messageDraft], () => {
 }, { immediate: true });
 
 watch(() => selectedSession.value?.id, () => {
+  messageDraft.value = selectedSession.value ? loadAiSessionDraft(selectedSession.value.id) : "";
   promptExpanded.value = false;
   promptHasOverflow.value = false;
   void nextTick(() => {
@@ -1032,6 +1049,12 @@ watch(() => selectedSession.value?.id, () => {
     observeDetailScroll();
   });
 }, { immediate: true });
+
+watch([() => selectedSession.value?.id, messageDraft], ([sessionId, draft]) => {
+  if (sessionId) {
+    persistAiSessionDraft(sessionId, draft);
+  }
+});
 
 onMounted(() => {
   void nextTick(() => {

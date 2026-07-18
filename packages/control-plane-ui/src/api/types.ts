@@ -1,3 +1,5 @@
+import type { AiSessionSubAgent as ProtocolAiSessionSubAgent } from "@task-handoff/protocol/ai-sessions";
+
 export type HealthResponse = {
   ok: boolean;
   role?: "control-plane" | string;
@@ -684,14 +686,7 @@ export type AiSessionTool = {
   startedAt?: string;
 };
 
-export type AiSessionSubAgent = {
-  threadId: string;
-  path?: string;
-  status: "pending-init" | "running" | "interrupted" | "completed" | "errored" | "shutdown" | "not-found";
-  activity?: "started" | "interacted" | "interrupted";
-  message?: string;
-  updatedAt: string;
-};
+export type AiSessionSubAgent = ProtocolAiSessionSubAgent;
 
 export type AiSessionSummary = {
   id: string;

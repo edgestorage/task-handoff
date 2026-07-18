@@ -266,7 +266,10 @@ export function updateTurns(
   meta: TurnMeta = {},
 ) {
   const turns = mergeTurns(current, patch.turns, meta);
-  const prompt = patch.userPrompt ? messageText(patch.userPrompt) : "";
+  const incomingPrompt = [...(patch.turns || [])]
+    .reverse()
+    .find((turn) => turn.userPrompt?.trim())?.userPrompt;
+  const prompt = messageText(incomingPrompt || patch.userPrompt);
   const activeTurnId = patch.activeTurnId ? compact(patch.activeTurnId, 240) : "";
   if (prompt) {
     const last = turns.at(-1);

@@ -67,6 +67,10 @@ export class PendingAiSessionApprovalStore {
       }
     }
   }
+
+  clear() {
+    this.approvals.clear();
+  }
 }
 
 export class AiSessionController {

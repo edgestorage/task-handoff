@@ -32,7 +32,31 @@
             <strong data-tone="online">{{ summary.instancesOnline }} Instances online</strong>
           </span>
         </div>
-        <small>{{ layoutVisibleCards.length }} bound sessions · {{ totalBoundSessions }} total</small>
+        <div class="ai-board-toolbar-actions">
+          <DropdownMenu v-if="layoutMode === 'grid'">
+            <DropdownMenuTrigger as-child>
+              <Button variant="outline" size="sm" class="ai-board-options-trigger" aria-label="AI board options" title="AI board options">
+                <SlidersHorizontal :size="16" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent class="ai-board-options-menu" align="end" :side-offset="6">
+              <DropdownMenuLabel class="ai-board-options-label">Sort</DropdownMenuLabel>
+              <DropdownMenuCheckboxItem class="ai-board-options-item option-item" :model-value="gridSortByStatus" @update:model-value="setGridSortByStatus(Boolean($event))">
+                Sort by status
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuSeparator class="ai-board-options-separator" />
+              <DropdownMenuLabel class="ai-board-options-label">Group</DropdownMenuLabel>
+              <DropdownMenuRadioGroup :model-value="gridGroupBy" @update:model-value="setGridGroupBy($event as AiBoardGridGroupBy)">
+                <DropdownMenuRadioItem class="ai-board-options-item option-item" value="none">No grouping</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem class="ai-board-options-item option-item" value="path">Group by path</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem class="ai-board-options-item option-item" value="instance">Group by instance</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem class="ai-board-options-item option-item" value="node">Group by node</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem class="ai-board-options-item option-item" value="agent">Group by agent</DropdownMenuRadioItem>
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <small>{{ layoutVisibleCards.length }} bound sessions · {{ totalBoundSessions }} total</small>
+        </div>
       </div>
 
       <ScrollArea v-if="layoutMode === 'columns'" class="ai-board-columns-scroll">
@@ -85,33 +109,39 @@
 
       <ScrollArea v-else class="ai-board-grid-scroll">
         <div class="ai-board-grid">
-          <AiSessionCard
-            v-for="card in layoutVisibleCards"
-            :key="card.key"
-            :approval-busy-key="approvalBusyKey"
-            :bound-triggers="boundTriggers"
-            :can-resolve-approval="canResolveApproval"
-            :card="card"
-            :instance-display-name="instanceDisplayName"
-            :is-trigger-bound="isTriggerBound"
-            :prompt-count="promptCount(card.session)"
-            :prompt-index="promptIndexFor(card)"
-            :selected="selectedCardKey === card.key"
-            :short-hash="shortHash"
-            :stopping-app-session-key="stoppingAppSessionKey"
-            :trigger-action-key="triggerActionKey"
-            :trigger-busy-key="triggerBusyKey"
-            :trigger-button-title="triggerButtonTitle"
-            :trigger-templates="triggerTemplates"
-            @next-prompt="nextPrompt"
-            @open-ai-session-app="(instance, session) => emit('openAiSessionApp', instance, session)"
-            @previous-prompt="previousPrompt"
-            @resolve-approval="(instance, session, decision) => emit('resolveApproval', instance, session, decision)"
-            @select-card="selectCard"
-            @select-instance="emit('selectInstance', $event)"
-            @stop-app-session="stopCardAppSession"
-            @toggle-trigger="toggleTrigger"
-          />
+          <template v-for="group in gridGroups" :key="group.key">
+            <div v-if="gridGroupBy !== 'none'" class="ai-board-grid-group-label">
+              <span>{{ group.label }}</span>
+              <strong>{{ group.cards.length }}</strong>
+            </div>
+            <AiSessionCard
+              v-for="card in group.cards"
+              :key="card.key"
+              :approval-busy-key="approvalBusyKey"
+              :bound-triggers="boundTriggers"
+              :can-resolve-approval="canResolveApproval"
+              :card="card"
+              :instance-display-name="instanceDisplayName"
+              :is-trigger-bound="isTriggerBound"
+              :prompt-count="promptCount(card.session)"
+              :prompt-index="promptIndexFor(card)"
+              :selected="selectedCardKey === card.key"
+              :short-hash="shortHash"
+              :stopping-app-session-key="stoppingAppSessionKey"
+              :trigger-action-key="triggerActionKey"
+              :trigger-busy-key="triggerBusyKey"
+              :trigger-button-title="triggerButtonTitle"
+              :trigger-templates="triggerTemplates"
+              @next-prompt="nextPrompt"
+              @open-ai-session-app="(instance, session) => emit('openAiSessionApp', instance, session)"
+              @previous-prompt="previousPrompt"
+              @resolve-approval="(instance, session, decision) => emit('resolveApproval', instance, session, decision)"
+              @select-card="selectCard"
+              @select-instance="emit('selectInstance', $event)"
+              @stop-app-session="stopCardAppSession"
+              @toggle-trigger="toggleTrigger"
+            />
+          </template>
 
           <div v-if="!layoutVisibleCards.length" class="ai-board-grid-empty">
             No matching AI sessions
@@ -153,22 +183,33 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useEventListener } from "@vueuse/core";
-import { Columns3, LayoutGrid, Search } from "@lucide/vue";
+import { Columns3, LayoutGrid, Search, SlidersHorizontal } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import { interruptAiSession, removeAiSessionQueuedMessage, resolveAiSessionApproval, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, stopAppSession, uploadAiSessionAttachment } from "../../../api/queries";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions } from "../../../api/types";
 import type { AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
+import { Button } from "../../../components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "../../../components/ui/dropdown-menu";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
+import { clearAiSessionDraft, loadAiSessionDraft, persistAiSessionDraft } from "../useAiSessionDraft";
 import {
   aiSessionAppTab,
-  aiSessionPriority,
   aiSessionStableSortKey,
   aiSessionTurns,
   appDisplayName,
+  compareAiSessionsByLastUserMessage,
   displayAiSessionMessage,
   displayAiSessionTitle,
-  sortedAiSessions,
   sessionDisplayName,
 } from "../useInstanceSessions";
 import AiSessionCard from "./AiSessionCard.vue";
@@ -178,8 +219,16 @@ import { useAiBoardTriggers } from "./useAiBoardTriggers";
 
 const AI_BOARD_VISIBLE_COLUMNS_STORAGE_KEY = "task-handoff.control-plane.ai-board.visible-columns";
 const AI_BOARD_LAYOUT_STORAGE_KEY = "task-handoff.control-plane.ai-board.layout";
+const AI_BOARD_GRID_GROUP_BY_STORAGE_KEY = "task-handoff.control-plane.ai-board.grid-group-by";
+const AI_BOARD_GRID_SORT_BY_STATUS_STORAGE_KEY = "task-handoff.control-plane.ai-board.grid-sort-by-status";
 const DEFAULT_VISIBLE_COLUMN_KEYS: AiBoardColumnKey[] = ["running", "waiting", "idle-open", "problem"];
 type AiBoardLayoutMode = "columns" | "grid";
+type AiBoardGridGroupBy = "none" | "path" | "instance" | "node" | "agent";
+type AiBoardGridGroup = {
+  cards: AiBoardCard[];
+  key: string;
+  label: string;
+};
 
 const props = defineProps<{
   error?: string;
@@ -200,6 +249,8 @@ const emit = defineEmits<{
 const promptIndexes = ref<Record<string, { index: number; count: number }>>({});
 const visibleColumnKeys = ref(loadVisibleColumnKeys());
 const layoutMode = ref<AiBoardLayoutMode>(loadLayoutMode());
+const gridGroupBy = ref<AiBoardGridGroupBy>(loadGridGroupBy());
+const gridSortByStatus = ref(loadGridSortByStatus());
 const selectedCardKey = ref("");
 const detailCollapsed = ref(false);
 const messageDraft = ref("");
@@ -221,7 +272,7 @@ const {
 const allCards = computed<AiBoardCard[]>(() => {
   const cards: AiBoardCard[] = [];
   for (const instance of props.instances) {
-    for (const session of sortedAiSessions(instance.aiSessions?.sessions)) {
+    for (const session of instance.aiSessions?.sessions || []) {
       const appTab = aiSessionAppTab(instance, session);
       cards.push({
         appTab: appTab || { key: "ai-sessions", label: "AI Sessions", status: session.status, kind: "ai" },
@@ -231,14 +282,7 @@ const allCards = computed<AiBoardCard[]>(() => {
       });
     }
   }
-  return cards.sort((a, b) => {
-    const priorityDelta = aiSessionPriority(b.session) - aiSessionPriority(a.session);
-    if (priorityDelta) {
-      return priorityDelta;
-    }
-    const instanceDelta = props.instanceDisplayName(a.instance).localeCompare(props.instanceDisplayName(b.instance)) || a.instance.id.localeCompare(b.instance.id);
-    return instanceDelta || aiSessionStableSortKey(a.session).localeCompare(aiSessionStableSortKey(b.session));
-  });
+  return cards;
 });
 
 const visibleCards = computed(() => {
@@ -268,7 +312,9 @@ const visibleCards = computed(() => {
 
 const totalBoundSessions = computed(() => allCards.value.length);
 const selectedCard = computed(() => allCards.value.find((card) => card.key === selectedCardKey.value));
-const layoutVisibleCards = computed(() => visibleCards.value.filter((card) => visibleColumnKeys.value.has(cardColumnKey(card))));
+const layoutVisibleCards = computed(() => visibleCards.value
+  .filter((card) => visibleColumnKeys.value.has(cardColumnKey(card)))
+  .sort((left, right) => compareAiBoardCards(left, right, layoutMode.value === "grid" && gridSortByStatus.value)));
 const summary = computed(() => ({
   idleOpen: allCards.value.filter((card) => cardColumnKey(card) === "idle-open").length,
   instancesOnline: props.instances.filter((instance) => instance.connectionStatus === "online").length,
@@ -327,10 +373,24 @@ const boardColumns = computed(() => {
     },
   ];
   const byKey = new Map(columns.map((column) => [column.key, column]));
-  for (const card of visibleCards.value) {
+  for (const card of layoutVisibleCards.value) {
     byKey.get(cardColumnKey(card))?.cards.push(card);
   }
   return columns.filter((column) => visibleColumnKeys.value.has(column.key));
+});
+
+const gridGroups = computed<AiBoardGridGroup[]>(() => {
+  if (gridGroupBy.value === "none") {
+    return [{ key: "__all__", label: "All sessions", cards: layoutVisibleCards.value }];
+  }
+  const groups = new Map<string, AiBoardGridGroup>();
+  for (const card of layoutVisibleCards.value) {
+    const { key, label } = aiBoardCardGroup(card, gridGroupBy.value);
+    const current = groups.get(key) || { key, label, cards: [] };
+    current.cards.push(card);
+    groups.set(key, current);
+  }
+  return [...groups.values()];
 });
 
 const visibleColumnKeysSignature = computed(() => Array.from(visibleColumnKeys.value).sort().join(":"));
@@ -350,6 +410,33 @@ function cardColumnKey(card: AiBoardCard): AiBoardColumnKey {
     return "running";
   }
   return "idle-open";
+}
+
+function compareAiBoardCards(left: AiBoardCard, right: AiBoardCard, sortByStatus: boolean) {
+  const sessionDelta = compareAiSessionsByLastUserMessage(left.session, right.session, sortByStatus);
+  if (sessionDelta) {
+    return sessionDelta;
+  }
+  const instanceDelta = props.instanceDisplayName(left.instance).localeCompare(props.instanceDisplayName(right.instance)) || left.instance.id.localeCompare(right.instance.id);
+  return instanceDelta || aiSessionStableSortKey(left.session).localeCompare(aiSessionStableSortKey(right.session));
+}
+
+function aiBoardCardPath(card: AiBoardCard) {
+  return card.session.cwd?.trim() || "Unknown path";
+}
+
+function aiBoardCardGroup(card: AiBoardCard, groupBy: Exclude<AiBoardGridGroupBy, "none">) {
+  if (groupBy === "instance") {
+    return { key: card.instance.id, label: props.instanceDisplayName(card.instance) };
+  }
+  if (groupBy === "node") {
+    return { key: card.instance.nodeId || "__unknown_node__", label: card.instance.node?.name || card.instance.nodeId || "Unknown node" };
+  }
+  if (groupBy === "agent") {
+    return { key: card.session.agent, label: appDisplayName(card.session.agent) };
+  }
+  const path = aiBoardCardPath(card);
+  return { key: path, label: path };
 }
 
 function toggleColumnVisibility(key: AiBoardColumnKey) {
@@ -417,6 +504,53 @@ function setLayoutMode(mode: AiBoardLayoutMode) {
   }
 }
 
+function loadGridGroupBy(): AiBoardGridGroupBy {
+  if (typeof window === "undefined") {
+    return "none";
+  }
+  try {
+    const stored = window.localStorage?.getItem(AI_BOARD_GRID_GROUP_BY_STORAGE_KEY);
+    return stored === "path" || stored === "instance" || stored === "node" || stored === "agent" ? stored : "none";
+  } catch {
+    return "none";
+  }
+}
+
+function setGridGroupBy(value: AiBoardGridGroupBy) {
+  gridGroupBy.value = value;
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    window.localStorage?.setItem(AI_BOARD_GRID_GROUP_BY_STORAGE_KEY, value);
+  } catch {
+    // Storage can be unavailable in restricted browser contexts; the current grouping still applies.
+  }
+}
+
+function loadGridSortByStatus() {
+  if (typeof window === "undefined") {
+    return true;
+  }
+  try {
+    return window.localStorage?.getItem(AI_BOARD_GRID_SORT_BY_STATUS_STORAGE_KEY) !== "false";
+  } catch {
+    return true;
+  }
+}
+
+function setGridSortByStatus(value: boolean) {
+  gridSortByStatus.value = value;
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    window.localStorage?.setItem(AI_BOARD_GRID_SORT_BY_STATUS_STORAGE_KEY, String(value));
+  } catch {
+    // Storage can be unavailable in restricted browser contexts; the current sorting still applies.
+  }
+}
+
 function promptCount(session: AiSessionSummary) {
   return aiSessionTurns(session).length;
 }
@@ -465,6 +599,9 @@ function canInterrupt(session: AiSessionSummary) {
 }
 
 function selectCard(key: string) {
+  if (selectedCardKey.value === key && detailCollapsed.value) {
+    detailCollapsed.value = false;
+  }
   selectedCardKey.value = key;
 }
 
@@ -525,6 +662,7 @@ async function sendSelectedSessionMessage() {
   try {
     const attachments = await uploadMessageAttachments(card.instance.id, card.session.id);
     await sendAiSessionMessage(card.instance.id, card.session.id, message || "请查看附件图片。", undefined, attachments.map((attachment) => ({ id: attachment.id, kind: attachment.kind })));
+    clearAiSessionDraft(card.session.id);
     messageDraft.value = "";
     messageAttachments.value = [];
     await refreshBoard();
@@ -545,6 +683,7 @@ async function steerMessageDraft() {
   try {
     const attachments = await uploadMessageAttachments(card.instance.id, card.session.id);
     await sendAiSessionMessage(card.instance.id, card.session.id, message || "请查看附件图片。", "steer", attachments.map((attachment) => ({ id: attachment.id, kind: attachment.kind })));
+    clearAiSessionDraft(card.session.id);
     messageDraft.value = "";
     messageAttachments.value = [];
     await refreshBoard();
@@ -660,6 +799,16 @@ watch(visibleColumnKeysSignature, () => {
 });
 
 useEventListener(document, "click", closeBoardOverlays, { capture: true });
+
+watch(() => selectedCard.value?.session.id, (sessionId) => {
+  messageDraft.value = sessionId ? loadAiSessionDraft(sessionId) : "";
+}, { immediate: true });
+
+watch([() => selectedCard.value?.session.id, messageDraft], ([sessionId, draft]) => {
+  if (sessionId) {
+    persistAiSessionDraft(sessionId, draft);
+  }
+});
 </script>
 
 <style scoped>
@@ -683,10 +832,95 @@ useEventListener(document, "click", closeBoardOverlays, { capture: true });
   padding: 0 0 2px;
 }
 
-.ai-board-toolbar > small {
+.ai-board-toolbar-actions {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.ai-board-toolbar-actions > small {
   flex: 0 0 auto;
   color: var(--ai-board-muted);
   font-size: 12px;
+}
+
+.ai-board-options-trigger {
+  width: 30px;
+  height: 30px;
+  min-height: 0;
+  border-color: var(--ai-board-control-border);
+  border-radius: 7px;
+  background: var(--ai-board-control-bg);
+  color: var(--ai-board-muted);
+  padding: 0;
+}
+
+.ai-board-options-trigger:hover,
+.ai-board-options-trigger:focus-visible,
+.ai-board-options-trigger[data-state="open"] {
+  border-color: var(--ai-board-active-border);
+  color: var(--ai-board-title);
+}
+
+.ai-board-options-menu {
+  display: grid;
+  width: 184px;
+  gap: 2px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface-inset);
+  box-shadow: var(--shadow-popover);
+  padding: 5px;
+}
+
+.ai-board-options-label {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 750;
+  line-height: 1;
+  padding: 7px 8px 5px;
+}
+
+.ai-board-options-separator {
+  margin: 4px -5px;
+  background: var(--surface-active);
+}
+
+.ai-board-options-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-height: 30px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--control-plane-menu-text);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 0 8px 0 28px;
+  text-align: left;
+}
+
+.ai-board-options-item:hover,
+.ai-board-options-item:focus-visible,
+.ai-board-options-item[data-highlighted] {
+  background: var(--surface-active);
+  color: var(--control-plane-menu-hover-text);
+  outline: none;
+}
+
+.ai-board-options-item :deep(.absolute) {
+  left: 8px;
+  width: 12px;
+  height: 12px;
+}
+
+.ai-board-options-item :deep(svg) {
+  width: 9px;
+  height: 9px;
 }
 
 .ai-board-filter-group,
@@ -969,6 +1203,31 @@ useEventListener(document, "click", closeBoardOverlays, { capture: true });
   min-width: 0;
   min-height: 100%;
   padding: 0 0 190px;
+}
+
+.ai-board-grid-group-label {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  border-bottom: 1px solid var(--ai-board-column-border);
+  color: var(--ai-board-title);
+  font-size: 12px;
+  font-weight: 800;
+  padding: 8px 2px 6px;
+}
+
+.ai-board-grid-group-label span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-board-grid-group-label strong {
+  flex: 0 0 auto;
+  color: var(--ai-board-muted);
+  font-size: 11px;
 }
 
 .ai-board-empty {
