@@ -4,6 +4,7 @@ import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { Readable, Transform } from "node:stream";
 import Fastify from "fastify";
 import websocket from "@fastify/websocket";
 import WebSocket from "ws";
@@ -157,6 +158,32 @@ function proxyResponseHeaders(headers: Headers) {
 
 function proxyRequestBody(parsed: { body?: string; bodyBase64?: string }) {
   return parsed.bodyBase64 ? Buffer.from(parsed.bodyBase64, "base64") : parsed.body;
+}
+
+const INSTANCE_PROXY_REQUEST_BODY_LIMIT = 64 * 1024 * 1024;
+const DEFAULT_INSTANCE_PROXY_RESPONSE_LIMIT = 64 * 1024 * 1024;
+
+function instanceProxyResponseLimit() {
+  const configured = Number(process.env.TASK_HANDOFF_INSTANCE_PROXY_MAX_RESPONSE_BYTES);
+  return Number.isSafeInteger(configured) && configured > 0 ? configured : DEFAULT_INSTANCE_PROXY_RESPONSE_LIMIT;
+}
+
+async function readResponseBodyWithLimit(response: Response, maxBytes: number) {
+  if (!response.body) return Buffer.alloc(0);
+  const chunks: Buffer[] = [];
+  let length = 0;
+  const reader = response.body.getReader();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    length += value.byteLength;
+    if (length > maxBytes) {
+      await reader.cancel("Instance proxy response limit exceeded.").catch(() => undefined);
+      throw Object.assign(new Error("Instance proxy response limit exceeded."), { code: "INSTANCE_PROXY_RESPONSE_TOO_LARGE" });
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks, length);
 }
 
 export type CreateNodeAgentAppOptions = {
@@ -1893,6 +1920,16 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   const updateDockerImageService = new DockerImageService(updateCommandRunner);
   const fetchImpl = options.fetchImpl || fetch;
   const app = Fastify({ logger: options.logger ?? true });
+  const instanceProxyMetrics = {
+    requests: 0,
+    active: 0,
+    completed: 0,
+    aborted: 0,
+    limitRejected: 0,
+    responseBytes: 0,
+    totalDurationMs: 0,
+    maxResponseBytes: instanceProxyResponseLimit(),
+  };
   app.decorate("nodeAgentState", state);
   await app.register(websocket);
   const eventForwarder = new NodeAgentInstanceEventForwarder(state, token, { logger: app.log, safetyIntervalMs: Number(process.env.TASK_HANDOFF_EVENT_CONNECTION_SAFETY_INTERVAL_MS) || undefined });
@@ -2071,6 +2108,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       nodeId,
       protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
       build: buildInfo("node-agent"),
+      instanceProxy: { ...instanceProxyMetrics },
       serverTime: new Date().toISOString(),
     },
   }));
@@ -2453,7 +2491,78 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     reply.code(response.status).type(contentType).send(text);
   });
 
-  app.post("/api/node-agent/instances/:id/proxy/raw", async (request) => {
+  app.post("/api/node-agent/instances/:id/proxy/stream", { bodyLimit: INSTANCE_PROXY_REQUEST_BODY_LIMIT }, async (request, reply) => {
+    const startedAt = Date.now();
+    instanceProxyMetrics.requests += 1;
+    instanceProxyMetrics.active += 1;
+    const controller = new AbortController();
+    let responseBytes = 0;
+    let streaming = false;
+    let finalized = false;
+    const finalize = (outcome: "completed" | "aborted") => {
+      if (finalized) return;
+      finalized = true;
+      instanceProxyMetrics.active -= 1;
+      instanceProxyMetrics.totalDurationMs += Date.now() - startedAt;
+      instanceProxyMetrics.responseBytes += responseBytes;
+      instanceProxyMetrics[outcome] += 1;
+    };
+    const abort = () => {
+      controller.abort();
+      if (streaming) finalize("aborted");
+    };
+    request.raw.once("aborted", abort);
+    reply.raw.once("close", abort);
+    try {
+      const id = (request.params as { id: string }).id;
+      const parsed = ProxyRequestSchema.parse(request.body);
+      const instanceBase = nodeLocalInstanceWebBase(state.requireInstance(id));
+      const proxyPath = parsed.path.startsWith("/") ? parsed.path : `/${parsed.path}`;
+      logDiagnostic({ instanceId: id, action: "proxy.stream", method: parsed.method, path: proxyPath, instanceBase }, "node instance streaming proxy requested");
+      const response = await fetchImpl(`${instanceBase}${proxyPath}`, {
+        method: parsed.method,
+        headers: { ...parsed.headers },
+        body: proxyRequestBody(parsed),
+        signal: controller.signal,
+      });
+      const declaredLength = Number(response.headers.get("content-length"));
+      if (Number.isFinite(declaredLength) && declaredLength > instanceProxyMetrics.maxResponseBytes) {
+        instanceProxyMetrics.limitRejected += 1;
+        controller.abort();
+        return reply.code(502).send({ error: { code: "INSTANCE_PROXY_RESPONSE_TOO_LARGE", message: `Instance response exceeds ${instanceProxyMetrics.maxResponseBytes} bytes.` } });
+      }
+      reply.code(response.status);
+      for (const [key, value] of Object.entries(proxyResponseHeaders(response.headers))) reply.header(key, value);
+      if (!response.body || parsed.method === "HEAD") {
+        finalize("completed");
+        return reply.send();
+      }
+      const limiter = new Transform({
+        transform(chunk: Buffer, _encoding, callback) {
+          responseBytes += chunk.length;
+          if (responseBytes > instanceProxyMetrics.maxResponseBytes) {
+            instanceProxyMetrics.limitRejected += 1;
+            controller.abort();
+            callback(Object.assign(new Error("Instance proxy response limit exceeded."), { code: "INSTANCE_PROXY_RESPONSE_TOO_LARGE" }));
+            return;
+          }
+          callback(null, chunk);
+        },
+      });
+      streaming = true;
+      limiter.once("end", () => finalize("completed"));
+      limiter.once("error", () => finalize("aborted"));
+      return reply.send(Readable.fromWeb(response.body as never).pipe(limiter));
+    } catch (error) {
+      finalize("aborted");
+      throw error;
+    } finally {
+      request.raw.off("aborted", abort);
+      if (!streaming) finalize("completed");
+    }
+  });
+
+  app.post("/api/node-agent/instances/:id/proxy/raw", { bodyLimit: INSTANCE_PROXY_REQUEST_BODY_LIMIT }, async (request, reply) => {
     const id = (request.params as { id: string }).id;
     const parsed = ProxyRequestSchema.parse(request.body);
     const instanceBase = nodeLocalInstanceWebBase(state.requireInstance(id));
@@ -2466,7 +2575,19 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       },
       body: proxyRequestBody(parsed),
     });
-    const bytes = Buffer.from(await response.arrayBuffer());
+    const declaredLength = Number(response.headers.get("content-length"));
+    if (Number.isFinite(declaredLength) && declaredLength > instanceProxyMetrics.maxResponseBytes) {
+      instanceProxyMetrics.limitRejected += 1;
+      return reply.code(502).send({ error: { code: "INSTANCE_PROXY_RESPONSE_TOO_LARGE", message: `Instance response exceeds ${instanceProxyMetrics.maxResponseBytes} bytes.` } });
+    }
+    let bytes: Buffer;
+    try {
+      bytes = await readResponseBodyWithLimit(response, instanceProxyMetrics.maxResponseBytes);
+    } catch (error) {
+      if (!(error instanceof Error) || (error as Error & { code?: string }).code !== "INSTANCE_PROXY_RESPONSE_TOO_LARGE") throw error;
+      instanceProxyMetrics.limitRejected += 1;
+      return reply.code(502).send({ error: { code: "INSTANCE_PROXY_RESPONSE_TOO_LARGE", message: `Instance response exceeds ${instanceProxyMetrics.maxResponseBytes} bytes.` } });
+    }
     logDiagnostic({ instanceId: id, action: "proxy.raw", method: parsed.method, path: proxyPath, statusCode: response.status, byteLength: bytes.length }, "node instance raw proxy completed");
     return {
       data: {
@@ -2560,6 +2681,7 @@ function connectReverseTunnel(app: Awaited<ReturnType<typeof createNodeAgentApp>
     : {};
   const socket = new WebSocket(url, { headers: tunnelHeaders });
   const streams = new Map<string, { upstream?: WebSocket; tunnel?: WebSocket; close: (code?: number, reason?: string) => void }>();
+  const httpStreams = new Map<string, { tunnel: WebSocket; controller: AbortController }>();
   let disposeEventForwarderOutput: (() => void) | undefined;
   const localNodeAgentWsUrl = (route: string) => {
     const path = route.startsWith("/") ? route : `/${route}`;
@@ -2568,9 +2690,19 @@ function connectReverseTunnel(app: Awaited<ReturnType<typeof createNodeAgentApp>
     localUrl.protocol = "ws:";
     return localUrl;
   };
+  const localNodeAgentHttpUrl = (route: string) => {
+    const path = route.startsWith("/") ? route : `/${route}`;
+    const port = typeof input.port === "function" ? input.port() : input.port;
+    return new URL(`/api/node-agent${path}`, `http://127.0.0.1:${port}`);
+  };
   const controlPlaneStreamUrl = (streamId: string) => {
     const streamUrl = new URL(url);
     streamUrl.pathname = `${streamUrl.pathname.replace(/\/$/, "")}/streams/${encodeURIComponent(streamId)}`;
+    return streamUrl;
+  };
+  const controlPlaneHttpStreamUrl = (streamId: string) => {
+    const streamUrl = new URL(url);
+    streamUrl.pathname = `${streamUrl.pathname.replace(/\/$/, "")}/http-streams/${encodeURIComponent(streamId)}`;
     return streamUrl;
   };
   const controlPlaneStreamHeaders = (streamUrl: URL) => input.secret
@@ -2588,6 +2720,9 @@ function connectReverseTunnel(app: Awaited<ReturnType<typeof createNodeAgentApp>
     stream?.upstream?.close(code, reason);
     stream?.tunnel?.close(code, reason);
   };
+  const sendHttpFrame = (tunnel: WebSocket, data: string | Buffer, binary = false) => new Promise<void>((resolve, reject) => {
+    tunnel.send(data, { binary }, (error) => error ? reject(error) : resolve());
+  });
   socket.on("open", () => {
     socket.send(JSON.stringify({ type: "node-agent.identify", nodeId: input.nodeId, serverTime: new Date().toISOString() }));
     disposeEventForwarderOutput = app.nodeAgentEventForwarder?.addOutput(socket);
@@ -2595,6 +2730,11 @@ function connectReverseTunnel(app: Awaited<ReturnType<typeof createNodeAgentApp>
   socket.on("close", () => {
     for (const streamId of streams.keys()) {
       closeStream(streamId, 1001, "Reverse tunnel disconnected.");
+    }
+    for (const [streamId, stream] of httpStreams) {
+      httpStreams.delete(streamId);
+      stream.controller.abort();
+      stream.tunnel.close(1001, "Reverse tunnel disconnected.");
     }
     disposeEventForwarderOutput?.();
     disposeEventForwarderOutput = undefined;
@@ -2608,6 +2748,50 @@ function connectReverseTunnel(app: Awaited<ReturnType<typeof createNodeAgentApp>
       return;
     }
     const record = message && typeof message === "object" ? message as Record<string, unknown> : {};
+    if (record.type === "control-plane.http.open") {
+      const streamId = typeof record.streamId === "string" ? record.streamId : "";
+      const route = typeof record.route === "string" && record.route.startsWith("/") ? record.route : "/health";
+      const init = record.init && typeof record.init === "object" ? record.init as Record<string, unknown> : {};
+      const requestHeaders = init.headers && typeof init.headers === "object" ? init.headers as Record<string, string> : {};
+      const controller = new AbortController();
+      const streamUrl = controlPlaneHttpStreamUrl(streamId);
+      const tunnel = new WebSocket(streamUrl, { headers: controlPlaneStreamHeaders(streamUrl) });
+      httpStreams.set(streamId, { tunnel, controller });
+      tunnel.on("open", async () => {
+        try {
+          const response = await fetch(localNodeAgentHttpUrl(route), {
+            method: nodeAgentProxyMethod(init.method),
+            headers: { ...requestHeaders, ...(input.token ? { authorization: `Bearer ${input.token}` } : {}) },
+            body: typeof init.body === "string" ? init.body : undefined,
+            signal: controller.signal,
+          });
+          await sendHttpFrame(tunnel, JSON.stringify({ type: "node-agent.http.head", streamId, status: response.status, headers: Object.fromEntries(response.headers.entries()) }));
+          if (response.body) {
+            const reader = response.body.getReader();
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              await sendHttpFrame(tunnel, Buffer.from(value), true);
+            }
+          }
+          await sendHttpFrame(tunnel, JSON.stringify({ type: "node-agent.http.end", streamId }));
+          tunnel.close(1000, "HTTP stream completed.");
+        } catch (error) {
+          if (tunnel.readyState === WebSocket.OPEN) {
+            await sendHttpFrame(tunnel, JSON.stringify({ type: "node-agent.http.error", streamId, message: error instanceof Error ? error.message : String(error) })).catch(() => undefined);
+            tunnel.close(1011, "HTTP stream failed.");
+          }
+        } finally {
+          httpStreams.delete(streamId);
+        }
+      });
+      tunnel.on("close", () => {
+        controller.abort();
+        httpStreams.delete(streamId);
+      });
+      tunnel.on("error", () => controller.abort());
+      return;
+    }
     if (record.type === "control-plane.websocket.open") {
       const streamId = typeof record.streamId === "string" ? record.streamId : "";
       const route = typeof record.route === "string" ? record.route : "";

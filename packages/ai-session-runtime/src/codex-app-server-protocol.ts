@@ -368,7 +368,9 @@ export function codexApprovalRequest(id: number, method: string, params: JsonVal
       threadId,
       turnId: stringField(params, "turnId"),
       itemId: stringField(params, "itemId"),
-      summary: reason || (command ? `Approve command: ${command}` : "Codex is requesting command approval."),
+      summary: [reason, command ? `Command: ${command}` : undefined]
+        .filter(Boolean)
+        .join(" · ") || "Codex is requesting command approval.",
       params,
     };
   }

@@ -527,7 +527,7 @@ test("AI session aggregator recovers advertised gaps from instance deltas and re
   bootstrapStreamId = "ai_current_stream";
 });
 
-test("AI session message deltas update listeners without advancing or mutating the recoverable snapshot", async () => {
+test("AI session message deltas do not notify snapshot listeners or mutate the recoverable snapshot", async () => {
   const timestamp = new Date().toISOString();
   const aggregator = new ControlPlaneAiSessionAggregator({ bootstrap: async () => ({ instances: [] }) });
   const snapshot = aiSessionSnapshotPayload({
@@ -565,8 +565,7 @@ test("AI session message deltas update listeners without advancing or mutating t
     },
   });
 
-  assert.equal(updates[0].revision, 7);
-  assert.equal(updates[0].aiSessions.sessions[0].lastMessage, "hello");
+  assert.equal(updates.length, 0);
   const stored = (await aggregator.list()).instances[0];
   assert.equal(stored.revision, 7);
   assert.equal(stored.aiSessions.sessions[0].lastMessage, undefined);
@@ -1101,6 +1100,17 @@ function createMockNodeAgentFetch(options = {}) {
       const current = instances.get(id);
       if (!current) return errorResponse(`Instance ${id} was not found.`);
       return options.proxy ? options.proxy({ url, init, body, instance: current, requests, jsonResponse, errorResponse }) : jsonResponse({ ok: true });
+    }
+    const proxyStream = path.match(/^\/instances\/([^/]+)\/proxy\/stream$/);
+    if (proxyStream) {
+      const id = decodeURIComponent(proxyStream[1]);
+      const current = instances.get(id);
+      if (!current) return errorResponse(`Instance ${id} was not found.`);
+      if (!options.proxy) return new Response("", { status: 200 });
+      const mocked = await options.proxy({ url, init, body, instance: current, requests, jsonResponse, errorResponse });
+      const payload = await mocked.json();
+      const data = payload.data || payload;
+      return new Response(Buffer.from(data.bodyBase64 || "", "base64"), { status: data.status || mocked.status, headers: data.headers || {} });
     }
     const lifecycle = path.match(/^\/instances\/([^/]+)\/(start|stop|restart|delete|proxy|register|heartbeat)$/);
     if (lifecycle) {
@@ -5245,7 +5255,7 @@ test("node agent proxies direct-port instances through the node-local host", asy
       });
       return new Response("<html>ok</html>", {
         status: 200,
-        headers: { "content-type": "text/html" },
+        headers: { "content-type": "text/html", ...(String(url).endsWith("/large") ? { "content-length": String(65 * 1024 * 1024) } : {}) },
       });
     },
   });
@@ -5306,7 +5316,7 @@ test("node agent proxies direct-port instances through the node-local host", asy
 
   const response = await app.inject({
     method: "POST",
-    url: "/api/node-agent/instances/inst_proxy/proxy/raw",
+    url: "/api/node-agent/instances/inst_proxy/proxy/stream",
     headers: { authorization: "Bearer agent-secret" },
     payload: {
       path: "/",
@@ -5316,7 +5326,7 @@ test("node agent proxies direct-port instances through the node-local host", asy
   });
 
   assert.equal(response.statusCode, 200);
-  assert.equal(response.json().data.status, 200);
+  assert.equal(response.body, "<html>ok</html>");
   assert.deepEqual(calls, [
     {
       url: "http://127.0.0.1:18080/",
@@ -5343,6 +5353,18 @@ test("node agent proxies direct-port instances through the node-local host", asy
     method: "POST",
     bodyBytes: [0, 1, 2, 255],
   });
+
+  const limited = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_proxy/proxy/stream",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: { path: "/large", method: "GET", headers: {} },
+  });
+  assert.equal(limited.statusCode, 502);
+  assert.equal(limited.json().error.code, "INSTANCE_PROXY_RESPONSE_TOO_LARGE");
+  const health = await app.inject({ method: "GET", url: "/api/node-agent/health", headers: { authorization: "Bearer agent-secret" } });
+  assert.equal(health.json().data.instanceProxy.limitRejected, 1);
+  assert.ok(health.json().data.instanceProxy.responseBytes >= Buffer.byteLength("<html>ok</html>"));
 });
 
 test("node agent proxies instance websocket subprotocols", async (t) => {
@@ -5806,6 +5828,39 @@ test("control plane accepts node agent reverse tunnel handshake", async (t) => {
   const runtimes = await runtimesPromise;
   assert.equal(runtimes.statusCode, 200);
   assert.equal(runtimes.body.data[0].id, "runtime_reverse");
+});
+
+test("reverse node tunnel streams HTTP response bodies as binary frames", async () => {
+  const transport = new ControlPlaneNodeAgentTunnelTransport();
+  const mainEvents = new EventEmitter();
+  const sent = [];
+  const main = {
+    readyState: 1,
+    send(data) { sent.push(JSON.parse(String(data))); },
+    on(event, listener) { mainEvents.on(event, listener); },
+  };
+  transport.attach("node_stream", main);
+  const responsePromise = transport.requestStream({ id: "node_stream" }, "/instances/inst/proxy/stream", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{}",
+  });
+  assert.equal(sent[0].type, "control-plane.http.open");
+
+  const secondaryEvents = new EventEmitter();
+  const secondary = {
+    readyState: 1,
+    send() {},
+    close() { this.readyState = 3; },
+    on(event, listener) { secondaryEvents.on(event, listener); },
+  };
+  assert.equal(transport.attachHttpStream("node_stream", sent[0].streamId, secondary), true);
+  secondaryEvents.emit("message", JSON.stringify({ type: "node-agent.http.head", status: 200, headers: { "content-type": "application/octet-stream" } }), false);
+  const response = await responsePromise;
+  secondaryEvents.emit("message", Buffer.from([0, 1, 2]), true);
+  secondaryEvents.emit("message", Buffer.from([3, 255]), true);
+  secondaryEvents.emit("message", JSON.stringify({ type: "node-agent.http.end" }), false);
+  assert.deepEqual([...Buffer.from(await response.arrayBuffer())], [0, 1, 2, 3, 255]);
 });
 
 test("control plane proxies instance websocket routes through reverse node tunnels", async (t) => {
@@ -7271,7 +7326,7 @@ test("control plane proxies instance websocket routes while preserving HTTP prox
   });
   assert.equal(uploaded.statusCode, 200);
   const uploadProxyRequest = mock.requests.find((request) =>
-    request.path.endsWith("/proxy/raw") &&
+    request.path.endsWith("/proxy/stream") &&
     request.body?.path === "/api/upload"
   );
   assert.deepEqual(uploadProxyRequest.body, {
@@ -7301,7 +7356,7 @@ test("control plane proxies instance websocket routes while preserving HTTP prox
   });
   assert.equal(urlencoded.statusCode, 200);
   const formProxyRequest = mock.requests.find((request) =>
-    request.path.endsWith("/proxy/raw") &&
+    request.path.endsWith("/proxy/stream") &&
     request.body?.path === "/api/form"
   );
   assert.deepEqual(formProxyRequest.body, {
@@ -10001,7 +10056,7 @@ test("control plane telegram queued ack replaces and deletes the previous progre
   const edit = calls.filter((call) => call.url.includes("editMessageText")).at(-1);
   assert.ok(edit);
   assert.equal(edit.body.message_id, 903);
-  assert.match(edit.body.text, /Running shell/);
+  assert.match(edit.body.text, /Thinking\\\.\\\.\\\. · shell · still working/);
   assert.deepEqual(edit.body.reply_markup.inline_keyboard.map((row) => row.map((button) => button.text)), [
     ["1. latest queued follow up"],
     ["Delete Queue", "Cancel"],
@@ -10197,6 +10252,41 @@ test("control plane ai session delivery keeps response content inside the latest
 
   session.turns[1].lastMessage = "second answer";
   assert.equal(aiSessionDeliveryText(session, "instance-main · claude idle"), "instance-main · claude idle\nsecond answer");
+});
+
+test("control plane ai session delivery appends authoritative tool activity after the latest response", () => {
+  const session = {
+    id: "ais_tool_progress",
+    agent: "codex",
+    status: "running",
+    phase: "tool",
+    currentTool: {
+      id: "tool_1",
+      name: "Command",
+      inputPreview: "/bin/zsh -lc 'node --test test/control-plane.test.js'",
+    },
+    toolCallsSinceLastMessage: 1,
+    turns: [{
+      id: "turn_1",
+      userPrompt: "检查未完成项",
+      lastMessage: "目前有 3 个未提交修改。",
+      updatedAt: "2026-07-18T00:00:01.000Z",
+    }],
+    startedAt: "2026-07-18T00:00:00.000Z",
+    updatedAt: "2026-07-18T00:00:01.000Z",
+  };
+
+  assert.equal(
+    aiSessionDeliveryText(session, "instance-main · codex running/tool"),
+    "instance-main · codex running/tool\n目前有 3 个未提交修改。\n\nThinking... · Command · /bin/zsh -lc 'node --test test/control-plane.test.js'",
+  );
+
+  session.currentTool = undefined;
+  session.toolCallsSinceLastMessage = 2;
+  assert.equal(
+    aiSessionDeliveryText(session, "instance-main · codex running/thinking"),
+    "instance-main · codex running/thinking\n目前有 3 个未提交修改。\n\nThinking... · 2 tools completed",
+  );
 });
 
 test("control plane surfaces approval reasons over an earlier assistant message", () => {
@@ -10529,7 +10619,7 @@ test("control plane chat gateway delivers canonical ai session updates without h
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(calls.filter((call) => call.url.includes("sendMessage")).length, 2);
   const runningProgress = calls.filter((call) => call.url.includes("sendMessage")).at(-1);
-  assert.match(runningProgress.body.text, /Running web\\_search/);
+  assert.match(runningProgress.body.text, /Thinking\\\.\\\.\\\. · web\\_search · checking docs/);
   steerCallbackData = runningProgress.body.reply_markup.inline_keyboard[0][0].callback_data;
   deleteQueueCallbackData = runningProgress.body.reply_markup.inline_keyboard[1][0].callback_data;
   cancelCallbackData = runningProgress.body.reply_markup.inline_keyboard[1][1].callback_data;
@@ -10602,7 +10692,7 @@ test("control plane chat gateway delivers canonical ai session updates without h
   await new Promise((resolve) => setTimeout(resolve, 20));
   const queueRemovedEdit = calls.filter((call) => call.url.includes("editMessageText")).at(-1);
   assert.equal(calls.filter((call) => call.url.includes("editMessageText")).length, editsBeforeQueueSnapshot + 1);
-  assert.match(queueRemovedEdit.body.text, /Running web\\_search/);
+  assert.match(queueRemovedEdit.body.text, /Thinking\\\.\\\.\\\. · web\\_search · checking docs/);
   assert.deepEqual(queueRemovedEdit.body.reply_markup.inline_keyboard.map((row) => row.map((button) => button.text)), [["Cancel"]]);
 
   publishAiSessionSnapshotForTest(events, {
@@ -10628,6 +10718,7 @@ test("control plane chat gateway delivers canonical ai session updates without h
       }, {
         id: "turn_web_2",
         userPrompt: "web started another turn",
+        lastMessage: "I found the relevant tests and will run them now.",
         updatedAt: "2026-07-03T00:00:05.500Z",
       }],
       startedAt: "2026-07-03T00:00:00.000Z",
@@ -10638,7 +10729,9 @@ test("control plane chat gateway delivers canonical ai session updates without h
   });
   await new Promise((resolve) => setTimeout(resolve, 20));
   const waitingEdit = calls.filter((call) => call.url.includes("editMessageText")).at(-1);
-  assert.match(waitingEdit.body.text, /Running shell/);
+  assert.match(waitingEdit.body.text, /I found the relevant tests and will run them now/);
+  assert.match(waitingEdit.body.text, /Thinking\\\.\\\.\\\. · shell · still running/);
+  assert.ok(waitingEdit.body.text.indexOf("I found the relevant tests") < waitingEdit.body.text.indexOf("Thinking"));
   assert.equal(waitingEdit.body.reply_markup.inline_keyboard[0][0].text, "Cancel");
   cancelCallbackData = waitingEdit.body.reply_markup.inline_keyboard[0][0].callback_data;
 
@@ -10675,7 +10768,7 @@ test("control plane chat gateway delivers canonical ai session updates without h
   });
   await new Promise((resolve) => setTimeout(resolve, 20));
   const approvalEdit = calls.filter((call) => call.url.includes("editMessageText")).at(-1);
-  assert.match(approvalEdit.body.text, /Running shell/);
+  assert.match(approvalEdit.body.text, /Thinking\\\.\\\.\\\. · shell · needs approval/);
   assert.deepEqual(approvalEdit.body.reply_markup.inline_keyboard.map((row) => row.map((button) => button.text)), [["Cancel"]]);
   const approvalCallbackData = approvalEdit.body.reply_markup.inline_keyboard.flatMap((row) => row.map((button) => button.callback_data));
   for (const callbackData of approvalCallbackData) {
@@ -10716,7 +10809,7 @@ test("control plane chat gateway delivers canonical ai session updates without h
   });
   await new Promise((resolve) => setTimeout(resolve, 20));
   const waitingApprovalEdit = calls.filter((call) => call.url.includes("editMessageText")).at(-1);
-  assert.match(waitingApprovalEdit.body.text, /Running shell/);
+  assert.match(waitingApprovalEdit.body.text, /Thinking\\\.\\\.\\\. · shell · needs approval/);
   assert.deepEqual(waitingApprovalEdit.body.reply_markup.inline_keyboard.map((row) => row.map((button) => button.text)), [["Allow", "Skip", "Deny"]]);
   const waitingApprovalCallbackData = waitingApprovalEdit.body.reply_markup.inline_keyboard.flatMap((row) => row.map((button) => button.callback_data));
   assert.deepEqual(waitingApprovalCallbackData, [
@@ -10964,7 +11057,7 @@ test("control plane telegram bridge keeps old progress message updating after se
   const switchedEdit = calls.filter((call) => call.url.includes("editMessageText")).at(-1);
   assert.ok(switchedEdit);
   assert.equal(switchedEdit.body.message_id, 901);
-  assert.match(switchedEdit.body.text, /Running shell/);
+  assert.match(switchedEdit.body.text, /Thinking\\\.\\\.\\\. · shell · still running/);
   assert.equal(calls.filter((call) => call.url.includes("sendMessage")).length, 1);
 
   const cancelCallbackData = switchedEdit.body.reply_markup.inline_keyboard[0][0].callback_data;
@@ -12427,7 +12520,7 @@ test("control plane dingding bridge renders ai session progress as cards", async
   const cardParams = cardCreate.body.cardData.cardParamMap;
   assert.equal(cardParams.biz_step, "progress");
   assert.equal(cardParams.biz_conversation_id, "dingding-chat");
-  assert.match(cardParams.description, /Running shell/);
+  assert.match(cardParams.description, /Thinking\.\.\. · shell · npm test/);
   assert.match(cardParams.list, /Cancel/);
   assert.equal(calls.some((call) => call.url === "https://dingding.example.test/webhook"), false);
 
@@ -12564,7 +12657,7 @@ test("control plane dingding progress cards update when only actions change", as
 
   const cardUpdate = calls.find((call) => call.type === "fetch" && call.body?.cardUpdateOptions && call.body?.outTrackId === cardCreate.body.outTrackId);
   assert.ok(cardUpdate);
-  assert.match(cardUpdate.body.cardData.cardParamMap.description, /Running shell/);
+  assert.match(cardUpdate.body.cardData.cardParamMap.description, /Thinking\.\.\. · shell · npm test/);
   assert.match(cardUpdate.body.cardData.cardParamMap.list, /Allow/);
   assert.match(cardUpdate.body.cardData.cardParamMap.list, /Deny/);
 

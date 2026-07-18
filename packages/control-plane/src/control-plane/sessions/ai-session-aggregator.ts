@@ -123,15 +123,10 @@ export class ControlPlaneAiSessionAggregator {
       return { ...session, lastMessage: text, summary: text, phase: "responding" as const, updatedAt: payload.generatedAt, turns };
     });
     if (!matched) return false;
-    const snapshot = { ...current.snapshot, sessions };
-    const update = { instanceId: payload.instanceId, streamId: current.streamId, aiSessions: snapshot, revision: current.revision, lastEventAt: payload.generatedAt };
-    for (const listener of this.listeners) {
-      try {
-        listener(update);
-      } catch {
-        this.listeners.delete(listener);
-      }
-    }
+    // Message deltas are a UI-only projection. Do not notify snapshot
+    // consumers here: the chat gateway subscribes to this listener and must
+    // wait for the authoritative assistant-message/turn completion snapshot
+    // before sending a Telegram message.
     return true;
   }
 

@@ -37,6 +37,16 @@
       </span>
     </div>
 
+    <AiSessionToolActivity
+      v-if="!canResolveApproval(card.session)"
+      class="ai-board-card-activity"
+      :current-tool="card.session.currentTool"
+      :phase="card.session.phase"
+      :status="card.session.status"
+      :summary="card.session.summary"
+      :tool-calls-since-last-message="card.session.toolCallsSinceLastMessage"
+      tone="board"
+    />
     <span v-if="canResolveApproval(card.session)" class="ai-board-approval-actions">
       <button type="button" :disabled="approvalBusyKey === approvalKey(card, 'allow')" title="Allow" @click.stop="$emit('resolveApproval', card.instance, card.session, 'allow')">
         <Check :size="13" />
@@ -109,6 +119,7 @@
 import { computed, ref } from "vue";
 import { Ban, Check, ChevronLeft, ChevronRight, ExternalLink, MoreHorizontal, Square, X, Zap } from "@lucide/vue";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
+import AiSessionToolActivity from "../../../components/ai-session/AiSessionToolActivity.vue";
 import type { AiSessionSummary, ControlPlaneTrigger, InstanceBoardItem, InstanceWithAiSessions, TriggerDeployment } from "../../../api/types";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
 import {
@@ -325,13 +336,23 @@ const filteredTriggerTemplates = computed(() => {
   pointer-events: none;
 }
 
+.ai-board-card[data-state="running"] .ai-board-preview-field-assistant::after {
+  height: 52px;
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--ai-board-assistant-bg) 0%, transparent),
+    var(--ai-board-assistant-bg) 70%,
+    var(--ai-board-assistant-bg) 100%
+  );
+}
+
 .ai-board-question {
   display: -webkit-box;
   min-width: 0;
   overflow: hidden;
   overflow-wrap: anywhere;
   color: var(--ai-board-title);
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.35;
   word-break: break-word;
   -webkit-box-orient: vertical;
@@ -345,7 +366,7 @@ const filteredTriggerTemplates = computed(() => {
   overflow: hidden;
   overflow-wrap: anywhere;
   color: var(--ai-board-title);
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 400;
   line-height: 1.35;
   word-break: break-word;
@@ -456,6 +477,16 @@ const filteredTriggerTemplates = computed(() => {
   -webkit-backdrop-filter: blur(6px);
   backdrop-filter: blur(6px);
   padding: 0 3px;
+}
+
+.ai-board-card-activity {
+  position: absolute;
+  right: 96px;
+  bottom: 8px;
+  left: 14px;
+  z-index: 3;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .ai-board-turn-nav button {

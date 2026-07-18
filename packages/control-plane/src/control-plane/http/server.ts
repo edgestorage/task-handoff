@@ -223,7 +223,7 @@ function actionForHttpMethod(method: string): ControlPlaneAction {
 
 export async function createControlPlaneApp(options: CreateControlPlaneAppOptions = {}) {
   const paths = controlPlaneStorePaths(options.dataDir);
-  const app = Fastify({ logger: options.logger ?? true, bodyLimit: 64 * 1024 * 1024 });
+  const app = Fastify({ logger: options.logger ?? true });
   const service = new ControlPlaneService(paths, { ...options.service, logger: app.log });
   const auth = new ControlPlaneAuth(paths, options.auth);
   const events = new ControlPlaneEventBus();
@@ -425,7 +425,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   app.get("/api/control-plane/settings", async () => ({ data: service.getSettings() }));
   app.patch("/api/control-plane/settings", async (request) => ({ data: service.updateSettings(request.body || {}) }));
 
-  app.post("/api/ai-session-attachments", async (request, reply) => {
+  app.post("/api/ai-session-attachments", { bodyLimit: 32 * 1024 * 1024 }, async (request, reply) => {
     try {
       return reply.code(201).send({ data: aiSessionAttachments.upload(request.body) });
     } catch (error) {

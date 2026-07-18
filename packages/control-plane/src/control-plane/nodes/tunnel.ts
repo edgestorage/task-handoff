@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { PassThrough, Readable } from "node:stream";
 import { WebSocket as WsClient } from "ws";
 import { CONTROL_PLANE_PROTOCOL_VERSION, InstanceResourceMetricsEventType, InstanceResourceMetricsSchema, type InstanceResourceMetrics, type Node } from "@task-handoff/protocol/control-plane";
 import { SessionStreamsHelloSchema, type SessionStreamsHello } from "@task-handoff/protocol/events";
@@ -17,7 +18,7 @@ const NodeAgentTunnelQuerySchema = z
   .strict();
 
 type NodeAgentSocket = {
-  send: (data: string) => void;
+  send: (data: string | Buffer) => void;
   close: (code?: number, reason?: string) => void;
   on: (event: string, listener: (...args: unknown[]) => void) => void;
   readyState: number;
@@ -123,7 +124,12 @@ function requestHeaders(headers: HeadersInit | undefined) {
 }
 
 export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport {
-  private readonly sockets = new Map<string, { socket: { send: (data: string) => void; readyState?: number }; pending: Map<string, { resolve: (response: Response) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>; streams: Map<string, { downstream: WebSocketLike; upstream?: WebSocketLike; pendingFrames: Array<{ data: unknown; isBinary: boolean }> }> }>();
+  private readonly sockets = new Map<string, {
+    socket: { send: (data: string) => void; readyState?: number };
+    pending: Map<string, { resolve: (response: Response) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>;
+    streams: Map<string, { downstream: WebSocketLike; upstream?: WebSocketLike; pendingFrames: Array<{ data: unknown; isBinary: boolean }> }>;
+    httpStreams: Map<string, { resolve: (response: Response) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout>; body?: PassThrough; socket?: NodeAgentSocket; settled: boolean }>;
+  }>();
   private readonly events?: ControlPlaneEventBus;
   private readonly onStreamsHello?: (instanceId: string, hello: SessionStreamsHello) => void | Promise<void>;
   private readonly validateInstanceScope?: (nodeId: string, instanceId: string) => boolean | Promise<boolean>;
@@ -149,9 +155,14 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
         current.streams.delete(streamId);
         stream.downstream.close(1011, "Reverse tunnel was replaced.");
       }
+      for (const stream of current.httpStreams.values()) {
+        clearTimeout(stream.timer);
+        stream.body?.destroy(new Error(`Reverse tunnel for node ${nodeId} was replaced.`));
+        if (!stream.settled) stream.reject(new Error(`Reverse tunnel for node ${nodeId} was replaced.`));
+      }
     }
     const pending = new Map<string, { resolve: (response: Response) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
-    this.sockets.set(nodeId, { socket, pending, streams: new Map() });
+    this.sockets.set(nodeId, { socket, pending, streams: new Map(), httpStreams: new Map() });
     socket.on?.("close", () => this.detach(nodeId, socket));
     socket.on?.("error", () => this.detach(nodeId, socket));
   }
@@ -169,6 +180,11 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
     for (const [streamId, stream] of current.streams) {
       current.streams.delete(streamId);
       stream.downstream.close(1011, "Reverse tunnel disconnected.");
+    }
+    for (const stream of current.httpStreams.values()) {
+      clearTimeout(stream.timer);
+      stream.body?.destroy(new Error(`Reverse tunnel for node ${nodeId} disconnected.`));
+      if (!stream.settled) stream.reject(new Error(`Reverse tunnel for node ${nodeId} disconnected.`));
     }
   }
 
@@ -290,6 +306,93 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
       current.pending.set(requestId, { resolve, reject, timer });
       current.socket.send(JSON.stringify(payload));
     });
+  }
+
+  async requestStream(node: { id: string }, route: string, init: RequestInit = {}) {
+    const current = this.sockets.get(node.id);
+    if (!current) {
+      throw Object.assign(new Error(`Reverse tunnel for node ${node.id} is not connected.`), { statusCode: 503, code: "NODE_AGENT_REVERSE_TUNNEL_OFFLINE" });
+    }
+    const streamId = createRequestId();
+    const body = typeof init.body === "string" ? init.body : init.body === undefined || init.body === null ? undefined : String(init.body);
+    return new Promise<Response>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        current.httpStreams.delete(streamId);
+        reject(Object.assign(new Error(`Reverse tunnel stream to ${node.id}${route} timed out.`), { statusCode: 504, code: "NODE_AGENT_REVERSE_STREAM_TIMEOUT" }));
+      }, 30_000);
+      current.httpStreams.set(streamId, { resolve, reject, timer, settled: false });
+      current.socket.send(JSON.stringify({
+        type: "control-plane.http.open",
+        streamId,
+        route,
+        init: { method: init.method || "GET", headers: requestHeaders(init.headers), body },
+      }));
+    });
+  }
+
+  attachHttpStream(nodeId: string, streamId: string, socket: NodeAgentSocket) {
+    const current = this.sockets.get(nodeId);
+    const stream = current?.httpStreams.get(streamId);
+    if (!current || !stream) {
+      socket.close(1008, "Unknown reverse HTTP stream.");
+      return false;
+    }
+    stream.socket = socket;
+    const fail = (error: Error) => {
+      clearTimeout(stream.timer);
+      current.httpStreams.delete(streamId);
+      if (!stream.settled) {
+        stream.settled = true;
+        stream.reject(error);
+      } else {
+        stream.body?.destroy(error);
+      }
+    };
+    socket.on("message", (raw: unknown, isBinary: unknown) => {
+      if (isBinary) {
+        if (!stream.body) return fail(new Error("Reverse HTTP stream received data before response headers."));
+        if (!stream.body.write(Buffer.isBuffer(raw) ? raw : Buffer.from(raw as ArrayBuffer))) {
+          (socket as NodeAgentSocket & { pause?: () => void }).pause?.();
+          stream.body.once("drain", () => (socket as NodeAgentSocket & { resume?: () => void }).resume?.());
+        }
+        return;
+      }
+      let message: Record<string, unknown>;
+      try {
+        message = JSON.parse(String(raw)) as Record<string, unknown>;
+      } catch {
+        fail(new Error("Reverse HTTP stream sent invalid JSON control data."));
+        return;
+      }
+      if (message.type === "node-agent.http.head") {
+        if (stream.settled) return;
+        clearTimeout(stream.timer);
+        const status = Number(message.status) || 502;
+        const headers = message.headers && typeof message.headers === "object" ? message.headers as Record<string, string> : {};
+        const body = new PassThrough({ highWaterMark: 64 * 1024 });
+        stream.body = body;
+        stream.settled = true;
+        body.once("close", () => {
+          if (current.httpStreams.delete(streamId) && socket.readyState === 1) socket.close(1000, "HTTP consumer closed.");
+        });
+        stream.resolve(new Response(Readable.toWeb(body) as ReadableStream<Uint8Array>, { status, headers }));
+        return;
+      }
+      if (message.type === "node-agent.http.end") {
+        current.httpStreams.delete(streamId);
+        stream.body?.end();
+        if (!stream.settled) fail(new Error("Reverse HTTP stream ended before response headers."));
+        return;
+      }
+      if (message.type === "node-agent.http.error") {
+        fail(new Error(typeof message.message === "string" ? message.message : "Reverse HTTP stream failed."));
+      }
+    });
+    socket.on("close", () => {
+      if (current.httpStreams.has(streamId)) fail(new Error("Reverse HTTP stream disconnected."));
+    });
+    socket.on("error", () => fail(new Error("Reverse HTTP stream failed.")));
+    return true;
   }
 
   proxyWebSocket(
@@ -620,6 +723,7 @@ export function registerNodeAgentTunnelRoutes(options: {
           serverTime: new Date().toISOString(),
           capabilities: {
             reverseTunnel: "request-response",
+            httpResponseStreaming: true,
             lifecycleCommands: true,
             instanceApiProxy: true,
           },
@@ -680,6 +784,19 @@ export function registerNodeAgentTunnelRoutes(options: {
       verifyTunnelHmac(node, request);
       const streamId = (request.params as { streamId: string }).streamId;
       nodeAgentTunnel.attachWebSocketStream(node.id, streamId, socket);
+    } catch (error) {
+      const payload = errorPayload(error);
+      socket.close(1008, payload.message);
+    }
+  });
+
+  app.get("/api/node-agent/tunnel/http-streams/:streamId", { websocket: true }, (socket, request) => {
+    try {
+      const parsed = NodeAgentTunnelQuerySchema.parse(request.query);
+      const node = service.requireNode(parsed.nodeId);
+      verifyTunnelHmac(node, request);
+      const streamId = (request.params as { streamId: string }).streamId;
+      nodeAgentTunnel.attachHttpStream(node.id, streamId, socket);
     } catch (error) {
       const payload = errorPayload(error);
       socket.close(1008, payload.message);

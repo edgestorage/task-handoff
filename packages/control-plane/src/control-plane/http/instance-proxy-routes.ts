@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
+import { Readable, Transform } from "node:stream";
 import type { ControlPlaneService } from "../application/service.ts";
 
 const HOP_BY_HOP_HEADERS = new Set(["connection", "content-length", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade"]);
@@ -79,7 +80,7 @@ export function registerInstanceProxyRoutes({ app, service }: RegisterInstancePr
     },
   });
 
-  app.all("/instances/:id", async (request, reply) => {
+  app.all("/instances/:id", { bodyLimit: 64 * 1024 * 1024 }, async (request, reply) => {
     const params = request.params as { id: string };
     if (request.method === "GET" || request.method === "HEAD") {
       return reply.redirect(`${instancePublicBase(params.id)}/`);
@@ -113,6 +114,7 @@ export function registerInstanceProxyRoutes({ app, service }: RegisterInstancePr
   app.route({
     method: ["POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     url: "/instances/:id/*",
+    bodyLimit: 64 * 1024 * 1024,
     handler: async (request, reply) => {
       const params = request.params as { id: string; "*": string };
       const suffix = params["*"] || "";
@@ -171,14 +173,19 @@ function proxyWebSocketProtocols(headers: Record<string, unknown>) {
   return protocols.length ? protocols : undefined;
 }
 
-function replyProxyResponse(reply: FastifyReply, response: { status: number; headers: Record<string, string>; body: Buffer }) {
+type StreamingProxyResponse = { status: number; headers: Record<string, string>; body: ReadableStream<Uint8Array> | null };
+
+function replyProxyResponse(reply: FastifyReply, response: StreamingProxyResponse, transform?: Transform) {
   for (const [key, value] of Object.entries(response.headers)) {
     const lower = key.toLowerCase();
     if (!HOP_BY_HOP_HEADERS.has(lower) && !DECODED_RESPONSE_HEADERS.has(lower)) {
       reply.header(key, value);
     }
   }
-  return reply.code(response.status).send(response.body);
+  if (!response.body) return reply.code(response.status).send();
+  const readable = Readable.fromWeb(response.body as never);
+  reply.raw.once("close", () => readable.destroy());
+  return reply.code(response.status).send(transform ? readable.pipe(transform) : readable);
 }
 
 function instancePublicBase(instanceId: string) {
@@ -195,17 +202,47 @@ function injectInstancePublicBase(html: string, publicBase: string) {
     : `${injection}\n${html}`;
 }
 
+function instancePublicBaseTransform(publicBase: string) {
+  const prefixChunks: Buffer[] = [];
+  let prefixLength = 0;
+  let decided = false;
+  const decide = (stream: Transform, final = false) => {
+    if (decided) return;
+    const prefix = Buffer.concat(prefixChunks, prefixLength).toString("utf8");
+    const head = /<head(\s[^>]*)?>/i.exec(prefix);
+    if (!head && !final && prefixLength < 64 * 1024) return;
+    decided = true;
+    stream.push(injectInstancePublicBase(prefix, publicBase));
+    prefixChunks.length = 0;
+    prefixLength = 0;
+  };
+  return new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      if (decided) {
+        this.push(chunk);
+      } else {
+        prefixChunks.push(Buffer.from(chunk));
+        prefixLength += chunk.length;
+        decide(this);
+      }
+      callback();
+    },
+    flush(callback) {
+      decide(this, true);
+      callback();
+    },
+  });
+}
+
 function shouldInjectInstancePublicBase(proxiedPath: string, contentType: string) {
   const pathname = proxiedPath.split("?", 1)[0] || "/";
   return contentType.toLowerCase().includes("text/html") && !pathname.startsWith("/api/");
 }
 
-function replyInstanceProxyResponse(reply: FastifyReply, response: { status: number; headers: Record<string, string>; body: Buffer }, instanceId: string, proxiedPath: string) {
+function replyInstanceProxyResponse(reply: FastifyReply, response: StreamingProxyResponse, instanceId: string, proxiedPath: string) {
   const contentType = Object.entries(response.headers).find(([key]) => key.toLowerCase() === "content-type")?.[1] || "";
-  const body = shouldInjectInstancePublicBase(proxiedPath, contentType)
-    ? Buffer.from(injectInstancePublicBase(response.body.toString("utf8"), instancePublicBase(instanceId)), "utf8")
-    : response.body;
-  return replyProxyResponse(reply, { ...response, body });
+  const transform = shouldInjectInstancePublicBase(proxiedPath, contentType) ? instancePublicBaseTransform(instancePublicBase(instanceId)) : undefined;
+  return replyProxyResponse(reply, response, transform);
 }
 
 function requestBody(body: unknown) {

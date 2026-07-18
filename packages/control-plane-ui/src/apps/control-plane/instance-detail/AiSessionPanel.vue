@@ -103,6 +103,15 @@
                     </button>
                   </span>
                 </div>
+                <AiSessionToolActivity
+                  v-if="!canResolveApproval(session)"
+                  class="session-ai-card-activity"
+                  :current-tool="session.currentTool"
+                  :phase="session.phase"
+                  :status="session.status"
+                  :summary="session.summary"
+                  :tool-calls-since-last-message="session.toolCallsSinceLastMessage"
+                />
                 <div v-if="canResolveApproval(session)" class="session-ai-card-approval-actions">
                   <button type="button" :disabled="aiSessionActionBusy" title="Allow" @click.stop="resolveApproval(session, 'allow')">
                     <Check :size="13" />
@@ -175,69 +184,96 @@
         title="Resize AI session list"
         @pointerdown="startSidebarResize"
       />
-      <section v-if="selectedSession" ref="detailEl" class="session-ai-detail">
+      <section v-if="selectedSession" ref="detailEl" class="session-ai-detail" :class="{ 'is-scrolled': detailScrolled }">
         <ScrollArea class="session-ai-detail-scroll">
           <section class="session-ai-detail-content">
-          <header>
+          <div ref="detailActionsEl" class="session-ai-detail-fixed-actions session-ai-detail-head-actions">
+            <AiSessionTurnNavigator
+              :count="promptCount(selectedSession)"
+              :index="promptIndexFor(selectedSession)"
+              :previous-label="`Previous user message for ${selectedSession.agent}`"
+              :next-label="`Next user message for ${selectedSession.agent}`"
+              @previous="previousPrompt(selectedSession)"
+              @next="nextPrompt(selectedSession)"
+            />
+            <TooltipProvider :delay-duration="120">
+              <Tooltip>
+                <TooltipTrigger as-child>
+                  <button type="button" title="Session details" aria-label="Session details">
+                    <CircleHelp :size="15" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent class="session-ai-info-tooltip" align="end" side="bottom" :side-offset="8">
+                  <dl>
+                    <div>
+                      <dt>Workspace</dt>
+                      <dd>{{ selectedSession.cwd || "Unknown" }}</dd>
+                    </div>
+                    <div>
+                      <dt>Session</dt>
+                      <dd>{{ selectedSession.providerSessionId || selectedSession.id }}</dd>
+                    </div>
+                    <div>
+                      <dt>App Binding</dt>
+                      <dd>{{ selectedSession.appSessionId || "Not bound" }}</dd>
+                    </div>
+                  </dl>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+            <button
+              v-if="aiSessionAppTab(instance, selectedSession)"
+              type="button"
+              title="Open app session"
+              aria-label="Open app session"
+              @click="$emit('openAiSessionApp', instance, selectedSession)"
+            >
+              <ExternalLink :size="15" />
+            </button>
+          </div>
+          <header ref="detailHeaderEl">
             <div>
               <span>{{ aiSessionAppDisplayName(aiSessionAppTab(instance, selectedSession), selectedSession.agent) }}</span>
               <strong>{{ aiSessionStatusLabel(selectedSession) }}</strong>
             </div>
-            <div class="session-ai-detail-head-actions">
-              <AiSessionTurnNavigator
-                :count="promptCount(selectedSession)"
-                :index="promptIndexFor(selectedSession)"
-                :previous-label="`Previous user message for ${selectedSession.agent}`"
-                :next-label="`Next user message for ${selectedSession.agent}`"
-                @previous="previousPrompt(selectedSession)"
-                @next="nextPrompt(selectedSession)"
-              />
-              <TooltipProvider :delay-duration="120">
-                <Tooltip>
-                  <TooltipTrigger as-child>
-                    <button type="button" title="Session details" aria-label="Session details">
-                      <CircleHelp :size="15" />
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent class="session-ai-info-tooltip" align="end" side="bottom" :side-offset="8">
-                    <dl>
-                      <div>
-                        <dt>Workspace</dt>
-                        <dd>{{ selectedSession.cwd || "Unknown" }}</dd>
-                      </div>
-                      <div>
-                        <dt>Session</dt>
-                        <dd>{{ selectedSession.providerSessionId || selectedSession.id }}</dd>
-                      </div>
-                      <div>
-                        <dt>App Binding</dt>
-                        <dd>{{ selectedSession.appSessionId || "Not bound" }}</dd>
-                      </div>
-                    </dl>
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-              <button
-                v-if="aiSessionAppTab(instance, selectedSession)"
-                type="button"
-                title="Open app session"
-                aria-label="Open app session"
-                @click="$emit('openAiSessionApp', instance, selectedSession)"
+            <section class="session-ai-detail-block session-ai-detail-block-user">
+              <div
+                ref="promptContentEl"
+                class="session-ai-detail-prompt-content"
+                :class="{ expanded: promptExpanded }"
               >
-                <ExternalLink :size="15" />
+                <MarkdownContent :content="displayAiSessionTitle(selectedSession, promptIndexFor(selectedSession))" />
+              </div>
+              <button
+                v-if="promptHasOverflow"
+                type="button"
+                class="session-ai-detail-prompt-toggle"
+                :aria-expanded="promptExpanded"
+                @click="promptExpanded = !promptExpanded"
+              >
+                <span>{{ promptExpanded ? "收起" : "展开" }}</span>
+                <ChevronDown :size="13" :class="{ open: promptExpanded }" />
               </button>
-            </div>
+            </section>
           </header>
-          <section class="session-ai-detail-block session-ai-detail-block-user">
-            <ScrollArea class="session-ai-detail-block-scroll">
-              <MarkdownContent :content="displayAiSessionTitle(selectedSession, promptIndexFor(selectedSession))" />
-            </ScrollArea>
-          </section>
-          <section class="session-ai-detail-block session-ai-detail-block-assistant">
-            <MarkdownContent class="session-ai-detail-block-content" :content="displayAiSessionMessage(selectedSession, promptIndexFor(selectedSession))" />
+          <div
+            v-if="detailScrolled && detailHeaderPlaceholderHeight > 0"
+            class="session-ai-detail-head-placeholder"
+            :style="{ height: `${detailHeaderPlaceholderHeight}px` }"
+            aria-hidden="true"
+          />
+          <section
+            v-if="displayAiSessionResponse(selectedSession, promptIndexFor(selectedSession))"
+            class="session-ai-detail-block session-ai-detail-block-assistant"
+            :class="{ 'session-ai-detail-block-assistant-active': selectedSession.status === 'running' || selectedSession.status === 'waiting' }"
+          >
+            <MarkdownContent class="session-ai-detail-block-content" :content="displayAiSessionResponse(selectedSession, promptIndexFor(selectedSession))" />
           </section>
           <AiSessionToolActivity
             :current-tool="selectedSession.currentTool"
+            :phase="selectedSession.phase"
+            :status="selectedSession.status"
+            :summary="selectedSession.summary"
             :tool-calls-since-last-message="selectedSession.toolCallsSinceLastMessage"
           />
           <section v-if="selectedSession.queue?.items.length" class="session-ai-detail-block session-ai-queue">
@@ -308,8 +344,9 @@ import {
   aiSessionStatusLabel,
   aiSessionTurns,
   displayAiSessionMessage,
+  displayAiSessionResponse,
   displayAiSessionTitle,
-  sortedAiSessions,
+  sortedAiSessionsByLastUserMessage,
   type SessionTab,
 } from "../useInstanceSessions";
 
@@ -367,7 +404,7 @@ const filteredSessions = computed(() => {
   }
   return visibleAiSessions.value.filter((session) => sessionStatusGroup(session) === sessionStatusFilter.value);
 });
-const sortedSessions = computed(() => sortedAiSessions(filteredSessions.value));
+const sortedSessions = computed(() => sortedAiSessionsByLastUserMessage(filteredSessions.value));
 const displayedSessionGroups = computed<AiSessionPathGroup[]>(() => groupSessionsByPath.value ? groupAiSessionsByPath(sortedSessions.value) : [{
   key: "all",
   label: "",
@@ -382,7 +419,19 @@ const messageDraft = ref("");
 const messageAttachments = ref<AiSessionComposerAttachment[]>([]);
 const detailEl = ref<HTMLElement>();
 const composerEl = ref<InstanceType<typeof AiSessionComposer>>();
+const detailScrolled = ref(false);
+const detailHeaderEl = ref<HTMLElement>();
+const detailActionsEl = ref<HTMLElement>();
+const detailHeaderPlaceholderHeight = ref(0);
+const promptContentEl = ref<HTMLElement>();
+const promptHasOverflow = ref(false);
+const promptExpanded = ref(false);
 let composerResizeObserver: ResizeObserver | undefined;
+let detailActionsResizeObserver: ResizeObserver | undefined;
+let detailScrollViewport: HTMLElement | undefined;
+let detailScrollLayoutRevision = 0;
+let detailScrollLayoutPending = false;
+let promptResizeObserver: ResizeObserver | undefined;
 let sidebarResizeCleanup: (() => void) | undefined;
 const aiSessionActionBusy = ref(false);
 const triggerBusyKey = ref("");
@@ -542,6 +591,12 @@ function promptCount(session: AiSessionSummary) {
   return aiSessionTurns(session).length;
 }
 
+function updatePromptOverflow() {
+  const element = promptContentEl.value;
+  if (promptExpanded.value) return;
+  promptHasOverflow.value = Boolean(element && element.scrollHeight > element.clientHeight + 1);
+}
+
 function promptIndexFor(session: AiSessionSummary) {
   const count = promptCount(session);
   if (!count) {
@@ -567,6 +622,9 @@ function setPromptIndex(session: AiSessionSummary, index: number) {
     ...promptIndexes.value,
     [session.id]: { index: Math.min(Math.max(index, 0), count - 1), count },
   };
+  promptExpanded.value = false;
+  promptHasOverflow.value = false;
+  void nextTick(updatePromptOverflow);
 }
 
 function previousPrompt(session: AiSessionSummary) {
@@ -875,15 +933,113 @@ function observeComposerOffset() {
   syncComposerOffset();
 }
 
+function syncDetailActionsWidth() {
+  const detail = detailEl.value;
+  const actions = detailActionsEl.value;
+  if (!detail || !actions) {
+    return;
+  }
+  detail.style.setProperty("--session-ai-fixed-actions-width", `${Math.ceil(actions.getBoundingClientRect().width)}px`);
+}
+
+function observeDetailActionsWidth() {
+  detailActionsResizeObserver?.disconnect();
+  detailActionsResizeObserver = undefined;
+  const actions = detailActionsEl.value;
+  if (!actions) {
+    syncDetailActionsWidth();
+    return;
+  }
+  detailActionsResizeObserver = new ResizeObserver(syncDetailActionsWidth);
+  detailActionsResizeObserver.observe(actions);
+  syncDetailActionsWidth();
+}
+
+function observeDetailScroll() {
+  detailScrollViewport?.removeEventListener("scroll", handleDetailScroll);
+  detailScrollViewport = undefined;
+  detailScrollLayoutRevision += 1;
+  detailScrollLayoutPending = false;
+  detailScrolled.value = false;
+  detailHeaderPlaceholderHeight.value = 0;
+  const viewport = detailEl.value?.querySelector<HTMLElement>(".session-ai-detail-scroll [data-reka-scroll-area-viewport]");
+  if (!viewport) {
+    return;
+  }
+  detailScrollViewport = viewport;
+  handleDetailScroll();
+  viewport.addEventListener("scroll", handleDetailScroll, { passive: true });
+}
+
+function handleDetailScroll() {
+  if (detailScrollLayoutPending) {
+    return;
+  }
+  const scrollTop = detailScrollViewport?.scrollTop || 0;
+  if (!detailScrolled.value && scrollTop > 64) {
+    void enterDetailStickyLayout();
+  } else if (detailScrolled.value && scrollTop <= 64) {
+    detailScrollLayoutRevision += 1;
+    detailHeaderPlaceholderHeight.value = 0;
+    detailScrolled.value = false;
+  }
+}
+
+async function enterDetailStickyLayout() {
+  const header = detailHeaderEl.value;
+  if (!header || detailScrolled.value) {
+    return;
+  }
+  const revision = ++detailScrollLayoutRevision;
+  const previousScrollTop = detailScrollViewport?.scrollTop || 0;
+  const expandedHeight = header.getBoundingClientRect().height;
+  detailScrollLayoutPending = true;
+  detailScrolled.value = true;
+  await nextTick();
+  if (revision !== detailScrollLayoutRevision || !detailScrolled.value || !detailHeaderEl.value) {
+    detailScrollLayoutPending = false;
+    return;
+  }
+  const stickyHeight = detailHeaderEl.value.getBoundingClientRect().height;
+  detailHeaderPlaceholderHeight.value = Math.max(0, Math.ceil(expandedHeight - stickyHeight));
+  await nextTick();
+  if (revision === detailScrollLayoutRevision && detailScrollViewport) {
+    detailScrollViewport.scrollTop = previousScrollTop;
+  }
+  detailScrollLayoutPending = false;
+}
+
 watch([selectedSession, messageAttachments, messageDraft], () => {
   void nextTick(observeComposerOffset);
 }, { immediate: true });
 
+watch(() => selectedSession.value?.id, () => {
+  promptExpanded.value = false;
+  promptHasOverflow.value = false;
+  void nextTick(() => {
+    updatePromptOverflow();
+    promptResizeObserver?.disconnect();
+    if (promptContentEl.value && typeof ResizeObserver !== "undefined") {
+      promptResizeObserver = new ResizeObserver(updatePromptOverflow);
+      promptResizeObserver.observe(promptContentEl.value);
+    }
+    observeDetailActionsWidth();
+    observeDetailScroll();
+  });
+}, { immediate: true });
+
 onMounted(() => {
-  void nextTick(observeComposerOffset);
+  void nextTick(() => {
+    observeComposerOffset();
+    observeDetailActionsWidth();
+    observeDetailScroll();
+  });
 });
 onBeforeUnmount(() => {
   composerResizeObserver?.disconnect();
+  detailActionsResizeObserver?.disconnect();
+  promptResizeObserver?.disconnect();
+  detailScrollViewport?.removeEventListener("scroll", handleDetailScroll);
   stopSidebarResize();
 });
 

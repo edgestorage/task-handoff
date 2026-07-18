@@ -69,15 +69,19 @@ defineEmits<{
 .ai-session-turn-navigator small {
   display: grid;
   align-self: stretch;
+  width: max-content;
   min-width: 42px;
   place-items: center;
   border-right: 1px solid var(--line-subtle);
   border-left: 1px solid var(--line-subtle);
+  box-sizing: border-box;
   color: inherit;
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   line-height: 1;
+  padding: 0 8px;
   text-align: center;
+  white-space: nowrap;
 }
 
 .ai-session-turn-navigator[data-tone="board"] small {

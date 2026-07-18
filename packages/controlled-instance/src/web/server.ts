@@ -494,7 +494,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   const events = new WebEventBus();
   const appRuntime = options.appRuntime || new AppRuntimeManager(storagePaths);
   appRuntime.replaceManagedEnvironment(managedModelEnvironment(managedModelEnv));
-  const app = Fastify({ logger: options.logger ?? true, bodyLimit: 64 * 1024 * 1024 });
+  const app = Fastify({ logger: options.logger ?? true });
   let nodeAgentClient!: NodeAgentRegistrationClient;
   const appManagement = options.appManagement || new AppManagementManager({
     stateDir: path.join(storagePaths.runtimeDir, "app-management"),
@@ -1175,7 +1175,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     }
   });
 
-  app.post<{ Params: { id: string }; Body: unknown }>("/api/ai-sessions/:id/messages", async (request, reply) => {
+  app.post<{ Params: { id: string }; Body: unknown }>("/api/ai-sessions/:id/messages", { bodyLimit: 64 * 1024 * 1024 }, async (request, reply) => {
     try {
       const body = AiSessionMessageInputSchema.parse(request.body || {});
       const result = AiSessionActionResultSchema.parse(await aiSessionController.sendMessage(request.params.id, body));
@@ -1656,6 +1656,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     app.route<{ Params: { id: string } }>({
       method,
       url: "/api/apps/sessions/:id/web/*",
+      bodyLimit: 64 * 1024 * 1024,
       handler: webProxyHandler,
     });
   }

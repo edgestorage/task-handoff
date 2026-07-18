@@ -238,8 +238,8 @@ export class ControlPlaneService {
     this.nodeAgentGateway = new ControlPlaneNodeAgentGateway(nodeAgentClient);
     this.controlledInstanceGateway = new ControlledInstanceGateway({
       requireNode: (nodeId) => this.requireNode(nodeId),
-      nodeAgentGateway: this.nodeAgentGateway,
       nodeAgentRequest: (node, route, init) => this.nodeAgentFetch(node, route, init),
+      nodeAgentStreamRequest: (node, route, init) => this.nodeAgentTransportFor(node).requestStream(node, route, init),
       fetchImpl: this.fetchImpl,
     });
     const storeOptions = <T,>(schema: z.ZodType<T>) => ({
@@ -1593,30 +1593,32 @@ export class ControlPlaneService {
   }
 
   private directNodeAgentTransport(): NodeAgentTransport {
+    const request = async (node: Node, route: string, init: RequestInit = {}) => {
+      const endpoint = node.controlEndpoint || node.endpoint;
+      if (!endpoint) {
+        const error = new Error("Node agent direct HTTP mode requires an endpoint.");
+        Object.assign(error, { statusCode: 400, code: "NODE_AGENT_ENDPOINT_REQUIRED" });
+        throw error;
+      }
+      const method = init.method || "GET";
+      const body = typeof init.body === "string" || init.body instanceof Buffer ? init.body : init.body === undefined || init.body === null ? undefined : String(init.body);
+      const authHeaders = createDirectNodeAgentAuthHeaders(node, {
+        method,
+        pathWithQuery: `/api/node-agent${route}`,
+        body: body || "",
+      });
+      return this.fetchNodeAgentEndpoint(endpoint, route, {
+        ...init,
+        body,
+        headers: {
+          ...(init.headers || {}),
+          ...authHeaders,
+        },
+      });
+    };
     return {
-      request: async (node, route, init = {}) => {
-        const endpoint = node.controlEndpoint || node.endpoint;
-        if (!endpoint) {
-          const error = new Error("Node agent direct HTTP mode requires an endpoint.");
-          Object.assign(error, { statusCode: 400, code: "NODE_AGENT_ENDPOINT_REQUIRED" });
-          throw error;
-        }
-        const method = init.method || "GET";
-        const body = typeof init.body === "string" || init.body instanceof Buffer ? init.body : init.body === undefined || init.body === null ? undefined : String(init.body);
-        const authHeaders = createDirectNodeAgentAuthHeaders(node, {
-          method,
-          pathWithQuery: `/api/node-agent${route}`,
-          body: body || "",
-        });
-        return this.fetchNodeAgentEndpoint(endpoint, route, {
-          ...init,
-          body,
-          headers: {
-            ...(init.headers || {}),
-            ...authHeaders,
-          },
-        });
-      },
+      request,
+      requestStream: request,
       proxyWebSocket: (node, socket, route, protocols, headers = {}) => {
         const endpoint = node.controlEndpoint || node.endpoint;
         if (!endpoint) {

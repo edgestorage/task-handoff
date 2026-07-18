@@ -605,13 +605,23 @@
   pointer-events: none;
 }
 
+.session-ai-row[data-state="running"] .session-ai-preview-field-assistant::after {
+  height: 52px;
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--surface-inset) 0%, transparent),
+    var(--surface-inset) 70%,
+    var(--surface-inset) 100%
+  );
+}
+
 .session-ai-message {
   display: block;
   min-width: 0;
   max-height: 100%;
   overflow: hidden;
   color: var(--ai-session-title);
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 400;
   line-height: 1.35;
 }
@@ -621,7 +631,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--ai-session-title);
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.35;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 1;
@@ -706,6 +716,20 @@
   flex-wrap: nowrap;
   justify-content: flex-start;
   gap: 4px;
+}
+
+.session-ai-card-activity {
+  position: absolute;
+  right: 104px;
+  bottom: 8px;
+  left: 14px;
+  z-index: 3;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.session-ai-card-activity :deep(.ai-session-tool-activity) {
+  max-width: 100%;
 }
 
 .session-ai-card-approval-actions button {
@@ -922,20 +946,24 @@
   gap: 7px;
   min-width: 0;
   border-bottom: 1px solid var(--line-subtle);
-  padding-bottom: 14px;
+  padding-bottom: 12px;
 }
 
 .session-ai-detail-block-assistant {
   border: 0;
   border-radius: 0;
-  background: color-mix(in srgb, var(--surface-inset) 64%, transparent);
+  background: transparent;
   margin-inline: -10px;
-  padding: 14px 10px;
+  padding: 12px 10px;
 }
 
 .session-ai-detail-block-assistant > div {
   color: var(--text-strong);
   font-weight: 400;
+}
+
+.session-ai-detail-block-assistant-active {
+  padding-bottom: 4px;
 }
 
 .session-ai-detail-block-assistant :is(strong, b) {
@@ -950,6 +978,51 @@
 
 .session-ai-detail-block-scroll {
   max-height: 260px;
+}
+
+.session-ai-detail-prompt-content {
+  min-width: 0;
+  max-height: calc(1.55em * 3);
+  overflow: hidden;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.55;
+  white-space: normal;
+}
+
+.session-ai-detail-prompt-content.expanded {
+  max-height: none;
+}
+
+.session-ai-detail-prompt-content :deep(.markdown-content),
+.session-ai-detail-prompt-content :deep(.markdown-content > *) {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.session-ai-detail-prompt-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: 3px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0;
+}
+
+.session-ai-detail-prompt-toggle:hover {
+  color: var(--text);
+}
+
+.session-ai-detail-prompt-toggle svg {
+  transition: transform 160ms ease;
+}
+
+.session-ai-detail-prompt-toggle svg.open {
+  transform: rotate(180deg);
 }
 
 .session-ai-detail-block-scroll :deep(div) {
@@ -993,18 +1066,102 @@
 .session-ai-detail-content {
   display: grid;
   align-content: start;
-  gap: 14px;
+  gap: 0;
   min-height: 100%;
-  padding: 12px 10px calc(var(--session-ai-compose-offset, 84px) + 28px);
+  padding: 0 10px calc(var(--session-ai-compose-offset, 84px) + 24px);
+}
+
+.session-ai-detail-content > * + * {
+  margin-top: 12px;
+}
+
+.session-ai-detail-content > .session-ai-detail-block-assistant {
+  margin-top: 0;
+}
+
+.session-ai-detail-content > .session-ai-detail-block-assistant + .ai-session-tool-activity-detail {
+  margin-top: 0;
+}
+
+.session-ai-detail-content > .session-ai-detail-head-placeholder {
+  min-height: 0;
+  margin-top: 0;
+  pointer-events: none;
 }
 
 .session-ai-detail header {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: flex-start;
-  justify-content: space-between;
   gap: 12px;
   border: 0;
   padding: 0;
+}
+
+.session-ai-detail-content > header {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.session-ai-detail-fixed-actions {
+  position: sticky;
+  top: 10px;
+  z-index: 6;
+  grid-column: 1;
+  grid-row: 1;
+  align-self: start;
+  justify-self: end;
+  pointer-events: none;
+}
+
+.session-ai-detail-fixed-actions > * {
+  pointer-events: auto;
+}
+
+.session-ai-detail.is-scrolled header {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  align-items: center;
+  grid-template-columns: minmax(0, 1fr);
+  border-bottom: 1px solid var(--line-subtle);
+  background: var(--workspace-bg);
+  padding: 12px 0 18px;
+  padding-right: calc(var(--session-ai-fixed-actions-width, 160px) + 12px);
+}
+
+.session-ai-detail header > .session-ai-detail-block-user {
+  grid-column: 1 / -1;
+}
+
+.session-ai-detail.is-scrolled header > div:first-child {
+  display: none;
+}
+
+.session-ai-detail.is-scrolled header > .session-ai-detail-block-user {
+  grid-column: 1;
+  min-width: 0;
+  border-bottom: 0;
+  padding: 0;
+}
+
+.session-ai-detail.is-scrolled .session-ai-detail-block-user .session-ai-detail-prompt-content {
+  max-height: 26px;
+  overflow: hidden;
+}
+
+.session-ai-detail.is-scrolled .session-ai-detail-block-user .session-ai-detail-prompt-content :deep(.markdown-content),
+.session-ai-detail.is-scrolled .session-ai-detail-block-user .session-ai-detail-prompt-content :deep(.markdown-content > *) {
+  display: block;
+  max-width: 100%;
+  margin-block: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-ai-detail.is-scrolled .session-ai-detail-prompt-toggle {
+  display: none;
 }
 
 .session-ai-detail header > div:first-child {
@@ -1029,6 +1186,13 @@
   align-items: center;
   flex: 0 0 auto;
   gap: 6px;
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.session-ai-detail-fixed-actions.session-ai-detail-head-actions {
+  grid-column: 1;
+  grid-row: 1;
 }
 
 .session-ai-detail-head-actions button {

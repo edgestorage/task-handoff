@@ -4,6 +4,7 @@ import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { WebSocket as WsClient } from "ws";
 
 export const NODE_AGENT_IPC_ENDPOINT_PREFIX = "ipc://";
@@ -78,16 +79,18 @@ export async function fetchNodeAgentIpc(socketPath: string, route: string, init:
       path: `/api/node-agent${route}`,
       headers: Object.fromEntries(headers.entries()),
     }, (response) => {
-      const chunks: Buffer[] = [];
-      response.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
-      response.on("end", () => {
-        resolve(new Response(Buffer.concat(chunks), {
-          status: response.statusCode || 500,
-          headers: response.headers as HeadersInit,
-        }));
-      });
+      const status = response.statusCode || 500;
+      const hasBody = method !== "HEAD" && status !== 204 && status !== 205 && status !== 304;
+      resolve(new Response(hasBody ? Readable.toWeb(response) as ReadableStream<Uint8Array> : null, {
+        status,
+        headers: response.headers as HeadersInit,
+      }));
     });
     request.on("error", reject);
+    const abort = () => request.destroy(new DOMException("The operation was aborted.", "AbortError"));
+    if (init.signal?.aborted) abort();
+    else init.signal?.addEventListener("abort", abort, { once: true });
+    request.once("close", () => init.signal?.removeEventListener("abort", abort));
     if (body !== undefined) {
       request.write(body);
     }

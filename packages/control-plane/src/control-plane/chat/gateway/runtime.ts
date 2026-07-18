@@ -2154,8 +2154,10 @@ export function aiSessionFingerprint(session: Partial<AiSessionSummary>, heading
     latestTurn?.summary || "",
     latestTurn?.userPrompt || "",
     session.error || "",
+    session.currentTool?.id || "",
     session.currentTool?.name || "",
     session.currentTool?.inputPreview || "",
+    String(session.toolCallsSinceLastMessage ?? 0),
     aiSessionQueueFingerprint(session),
   ].join("\u0000");
 }
@@ -2178,37 +2180,34 @@ function aiSessionDeliveryHeading(instanceName: string, session: Partial<AiSessi
 }
 
 function aiSessionDeliveryBody(session: AiSessionSummary, latestTurn: ReturnType<typeof latestAiSessionTurn>) {
+  let response = "";
   if (latestTurn) {
     if (latestTurn.status === "waiting" && latestTurn.phase === "approval" && latestTurn.summary?.trim()) {
-      return latestTurn.summary.trim();
+      response = latestTurn.summary.trim();
+    } else if (latestTurn.lastMessage?.trim()) {
+      response = latestTurn.lastMessage.trim();
+    } else if (latestTurn.summary?.trim()) {
+      response = latestTurn.summary.trim();
     }
-    if (latestTurn.lastMessage?.trim()) {
-      return latestTurn.lastMessage.trim();
-    }
-    if (latestTurn.summary?.trim()) {
-      return latestTurn.summary.trim();
-    }
-    if (session.currentTool?.name) {
-      return `Running ${session.currentTool.name}${session.currentTool.inputPreview ? `: ${session.currentTool.inputPreview}` : ""}`;
-    }
-    return "";
+  } else if (session.status === "waiting" && session.phase === "approval" && session.summary?.trim()) {
+    response = session.summary.trim();
+  } else if (session.lastMessage?.trim()) {
+    response = session.lastMessage.trim();
+  } else if (session.summary?.trim()) {
+    response = session.summary.trim();
+  } else if (session.error?.trim()) {
+    response = session.status === "failed" ? `${session.agent} session failed:\n${session.error.trim()}` : session.error.trim();
   }
-  if (session.status === "waiting" && session.phase === "approval" && session.summary?.trim()) {
-    return session.summary.trim();
-  }
-  if (session.lastMessage?.trim()) {
-    return session.lastMessage.trim();
-  }
-  if (session.summary?.trim()) {
-    return session.summary.trim();
-  }
-  if (session.error?.trim()) {
-    return session.status === "failed" ? `${session.agent} session failed:\n${session.error.trim()}` : session.error.trim();
-  }
+
+  return [response, aiSessionToolActivityText(session)].filter(Boolean).join("\n\n");
+}
+
+function aiSessionToolActivityText(session: Partial<AiSessionSummary>) {
   if (session.currentTool?.name) {
-    return `Running ${session.currentTool.name}${session.currentTool.inputPreview ? `: ${session.currentTool.inputPreview}` : ""}`;
+    return `Thinking... · ${session.currentTool.name}${session.currentTool.inputPreview ? ` · ${session.currentTool.inputPreview}` : ""}`;
   }
-  return "";
+  const count = session.toolCallsSinceLastMessage ?? 0;
+  return count > 0 ? `Thinking... · ${count} ${count === 1 ? "tool" : "tools"} completed` : "";
 }
 
 function latestAiSessionTurn(session: Partial<AiSessionSummary>) {

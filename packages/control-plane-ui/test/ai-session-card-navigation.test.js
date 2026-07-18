@@ -31,7 +31,7 @@ test("ai session board cards replace the metadata footer with floating navigatio
 });
 
 test("waiting approval actions float at the bottom left independently from card tools", () => {
-  assert.match(card, /<\/div>\s*<span v-if="canResolveApproval\(card\.session\)" class="ai-board-approval-actions">\s*<button/s);
+  assert.match(card, /<\/div>\s*<AiSessionToolActivity[\s\S]*?\/>\s*<span v-if="canResolveApproval\(card\.session\)" class="ai-board-approval-actions">\s*<button/s);
   assert.doesNotMatch(card, /<div class="ai-board-card-tools"[^>]*>[\s\S]*?<span v-if="canResolveApproval\(card\.session\)"/);
   assert.match(card, /\.ai-board-approval-actions\s*\{[^}]*position: absolute;[^}]*bottom: 8px;[^}]*left: 14px;/s);
   assert.match(board, /session\.status === "waiting" && session\.phase === "approval"/);

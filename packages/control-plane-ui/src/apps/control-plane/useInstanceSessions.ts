@@ -308,6 +308,26 @@ export function sortedAiSessions(sessions?: AiSessionSummary[]) {
   });
 }
 
+export function sortedAiSessionsByLastUserMessage(sessions?: AiSessionSummary[]) {
+  return [...(sessions || [])].sort((a, b) => {
+    const priorityDelta = aiSessionPriority(b) - aiSessionPriority(a);
+    if (priorityDelta) {
+      return priorityDelta;
+    }
+    const userMessageTimeDelta = aiSessionLastUserMessageTime(b) - aiSessionLastUserMessageTime(a);
+    return userMessageTimeDelta || aiSessionStableSortKey(a).localeCompare(aiSessionStableSortKey(b));
+  });
+}
+
+export function aiSessionLastUserMessageTime(session: AiSessionSummary) {
+  const lastUserTurn = [...(session.turns || [])].reverse().find((turn) => turn.userPrompt?.trim());
+  if (!lastUserTurn?.startedAt) {
+    return 0;
+  }
+  const timestamp = Date.parse(lastUserTurn.startedAt);
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
 export function aiSessionPriority(session: AiSessionSummary) {
   if (session.status === "waiting") return 4;
   if (session.status === "failed") return 3;
@@ -419,8 +439,16 @@ export function selectedAiSession(sessions: AiSessionSummary[] | undefined, sele
 }
 
 export function displayAiSessionMessage(session?: AiSessionSummary, promptIndex?: number) {
+  return displayAiSessionContent(session, promptIndex, true);
+}
+
+export function displayAiSessionResponse(session?: AiSessionSummary, promptIndex?: number) {
+  return displayAiSessionContent(session, promptIndex, false);
+}
+
+function displayAiSessionContent(session?: AiSessionSummary, promptIndex?: number, includeProgress = true) {
   if (!session) {
-    return "No recent AI activity";
+    return includeProgress ? "No recent AI activity" : "";
   }
   if (session.status === "waiting" && session.phase === "approval" && session.summary?.trim()) {
     return session.summary;
@@ -438,11 +466,11 @@ export function displayAiSessionMessage(session?: AiSessionSummary, promptIndex?
     if (turn?.summary?.trim()) {
       return turn.summary;
     }
-    return aiSessionProgressText(session);
+    return includeProgress ? aiSessionProgressText(session) : "";
   }
   const latestTurn = turns.at(-1);
   if (latestTurn && !latestTurn.lastMessage?.trim() && !latestTurn.summary?.trim()) {
-    return aiSessionProgressText(session);
+    return includeProgress ? aiSessionProgressText(session) : "";
   }
   if (session.lastMessage) {
     return session.lastMessage;
@@ -453,7 +481,7 @@ export function displayAiSessionMessage(session?: AiSessionSummary, promptIndex?
   if (session.error) {
     return session.error;
   }
-  return aiSessionProgressText(session);
+  return includeProgress ? aiSessionProgressText(session) : "";
 }
 
 export function aiSessionUserPrompts(session?: AiSessionSummary) {

@@ -1,12 +1,11 @@
 import type { ControlledInstance, ControlledInstanceHeartbeat, Node } from "@task-handoff/protocol/control-plane";
 import { plainHeaders } from "../common/helpers.ts";
-import type { ControlPlaneNodeAgentGateway } from "../nodes/gateway.ts";
 import type { NodeAgentTransport, NodeAgentWebSocket } from "../nodes/client.ts";
 
 export type ControlledInstanceGatewayOptions = {
   requireNode: (nodeId: string) => Node;
-  nodeAgentGateway: ControlPlaneNodeAgentGateway;
   nodeAgentRequest: (node: Node, route: string, init?: RequestInit) => Promise<Response>;
+  nodeAgentStreamRequest: (node: Node, route: string, init?: RequestInit) => Promise<Response>;
   fetchImpl: typeof fetch;
 };
 
@@ -16,14 +15,14 @@ export type ControlledInstanceProxyHttpInit = Omit<RequestInit, "body"> & {
 
 export class ControlledInstanceGateway {
   private readonly requireNode: ControlledInstanceGatewayOptions["requireNode"];
-  private readonly nodeAgentGateway: ControlPlaneNodeAgentGateway;
   private readonly nodeAgentRequest: ControlledInstanceGatewayOptions["nodeAgentRequest"];
+  private readonly nodeAgentStreamRequest: ControlledInstanceGatewayOptions["nodeAgentStreamRequest"];
   private readonly fetchImpl: typeof fetch;
 
   constructor(options: ControlledInstanceGatewayOptions) {
     this.requireNode = options.requireNode;
-    this.nodeAgentGateway = options.nodeAgentGateway;
     this.nodeAgentRequest = options.nodeAgentRequest;
+    this.nodeAgentStreamRequest = options.nodeAgentStreamRequest;
     this.fetchImpl = options.fetchImpl;
   }
 
@@ -69,16 +68,20 @@ export class ControlledInstanceGateway {
       throw error;
     }
     const node = this.requireNode(instance.nodeId);
-    const data = await this.nodeAgentGateway.proxyRawInstance(node, instance.id, {
-      path,
-      method: init.method || "GET",
-      headers: plainHeaders(init.headers),
-      ...rawProxyBody(init.body),
+    const response = await this.nodeAgentStreamRequest(node, `/instances/${encodeURIComponent(instance.id)}/proxy/stream`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        path,
+        method: init.method || "GET",
+        headers: plainHeaders(init.headers),
+        ...rawProxyBody(init.body),
+      }),
     });
     return {
-      status: data.status || 502,
-      headers: data.headers || {},
-      body: Buffer.from(data.bodyBase64 || "", "base64"),
+      status: response.status || 502,
+      headers: Object.fromEntries(response.headers.entries()),
+      body: response.body,
     };
   }
 

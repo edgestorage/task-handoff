@@ -10,6 +10,7 @@ export type NodeAgentWebSocket = {
 
 export type NodeAgentTransport = {
   request(node: Node, route: string, init?: RequestInit): Promise<Response>;
+  requestStream(node: Node, route: string, init?: RequestInit): Promise<Response>;
   proxyWebSocket(node: Node, socket: NodeAgentWebSocket, route: string, protocols?: string | string[], headers?: Record<string, string>): void;
 };
 

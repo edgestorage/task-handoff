@@ -62,12 +62,19 @@
               <MarkdownContent :content="displayAiSessionTitle(card.session, promptIndex)" />
             </section>
 
-            <section class="ai-board-floating-block ai-board-floating-block-assistant">
-              <MarkdownContent :content="displayAiSessionMessage(card.session, promptIndex)" />
+            <section
+              v-if="displayAiSessionResponse(card.session, promptIndex)"
+              class="ai-board-floating-block ai-board-floating-block-assistant"
+              :class="{ 'ai-board-floating-block-assistant-active': card.session.status === 'running' || card.session.status === 'waiting' }"
+            >
+              <MarkdownContent :content="displayAiSessionResponse(card.session, promptIndex)" />
             </section>
 
             <AiSessionToolActivity
               :current-tool="card.session.currentTool"
+              :phase="card.session.phase"
+              :status="card.session.status"
+              :summary="card.session.summary"
               :tool-calls-since-last-message="card.session.toolCallsSinceLastMessage"
               tone="board"
             />
@@ -140,6 +147,7 @@ import {
   aiSessionAppDisplayName,
   aiSessionStatusLabel,
   displayAiSessionMessage,
+  displayAiSessionResponse,
   displayAiSessionTitle,
 } from "../useInstanceSessions";
 import type { AiBoardCard } from "./aiBoardTypes";
@@ -508,20 +516,24 @@ onBeforeUnmount(() => {
 
 .ai-board-floating-block > div {
   color: var(--ai-board-title);
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
 
 .ai-board-floating-block-assistant {
   border: 0;
-  background: var(--ai-board-assistant-bg);
+  background: transparent;
   margin-inline: -14px;
   padding: 12px 14px;
 }
 
 .ai-board-floating-block-assistant > div {
   color: var(--ai-board-title);
+}
+
+.ai-board-floating-block-assistant-active {
+  padding-bottom: 4px;
 }
 
 .ai-board-floating-block :deep(code) {
