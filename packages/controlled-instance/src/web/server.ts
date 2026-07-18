@@ -31,6 +31,7 @@ import {
 } from "@task-handoff/ai-session-runtime";
 import { NodeAgentRegistrationClient, nodeAgentRegistrationConfigFromEnv } from "./node-agent-client";
 import { registerAuth, resolveWebAuth } from "./auth";
+import { AiSessionMessageDeltaCoalescer } from "./ai-session-message-delta-coalescer";
 import { WebEventBus } from "./events";
 import { AppManagementManager, AppManagementRequestError } from "./app-management";
 import { configSyncPresets, runConfigSync } from "./config-sync";
@@ -552,6 +553,13 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   const appSessionEventHistory: Array<AppSessionRuntimeEvent & { createdAtMs: number }> = [];
   let lastAppSessionSnapshot = appSessionsSnapshotFromRecords([]);
   const aiSessionDiscovery = new AiSessionDiscoveryCoordinator();
+  const configuredDeltaCoalescingWindow = process.env.TASK_HANDOFF_AI_SESSION_DELTA_COALESCE_MS;
+  const aiSessionMessageDeltas = new AiSessionMessageDeltaCoalescer({
+    emit: (payload) => events.publish(AiSessionEventType.MessageDelta, payload),
+    windowMs: configuredDeltaCoalescingWindow === undefined
+      ? undefined
+      : Number(configuredDeltaCoalescingWindow),
+  });
   const codexAppServer = new CodexAppServerSessionBridge(aiSessions, {
     onMessageDelta: (delta) => {
       const payload = AiSessionMessageDeltaEventSchema.parse({
@@ -560,8 +568,9 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
         ...delta,
         generatedAt: new Date().toISOString(),
       });
-      events.publish(AiSessionEventType.MessageDelta, payload);
+      aiSessionMessageDeltas.push(payload);
     },
+    onEventSourceClose: () => aiSessionMessageDeltas.flushAll("event-source-close"),
   });
   const claudeControlSock = new ClaudeControlSockSessionBridge(aiSessions);
   aiSessionController.register(codexAppServer);
@@ -626,6 +635,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     pruneAiSessionEventHistory();
   };
   const publishAiSessionSnapshot = (reason: AiSessionEventReason = "provider-event") => {
+    aiSessionMessageDeltas.flushAll("authoritative-event");
     const snapshot = aiSessions.boundSnapshot(appSessionsWithSharedCodexAppServer());
     const fingerprint = JSON.stringify(snapshot.sessions);
     if (fingerprint !== aiSessionsFingerprint) {
@@ -888,6 +898,10 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     }
     codexAppServer.stop();
     claudeControlSock.stop();
+  });
+  app.addHook("preClose", async () => {
+    codexAppServer.stop();
+    aiSessionMessageDeltas.close("service-close");
   });
   const publishAppSessionRuntimeChange = (reason: AppSessionEventReason, session: Record<string, unknown>) => {
     publishAppSessionSnapshot(reason);
@@ -1266,6 +1280,11 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
           retainedEventCount: aiSessionEventHistory.length,
           discoveryUnchanged: streamDiagnostics.aiDiscoveryUnchanged,
           discoveryCorrections: streamDiagnostics.aiDiscoveryCorrections,
+          messageDeltaCoalescing: {
+            windowMs: aiSessionMessageDeltas.windowMs,
+            pendingMessageCount: aiSessionMessageDeltas.pendingCount,
+            ...aiSessionMessageDeltas.diagnostics(),
+          },
         },
         app: {
           streamId: appSessionStreamId,

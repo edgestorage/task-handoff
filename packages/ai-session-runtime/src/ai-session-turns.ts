@@ -94,6 +94,7 @@ export function normalizeTurns(values?: unknown[], meta: TurnMeta = {}) {
       phase: record.phase,
       summary: record.summary ? compact(record.summary, 1000) : undefined,
       lastMessage: record.lastMessage ? messageText(record.lastMessage) : undefined,
+      lastMessageItemId: record.lastMessageItemId ? compact(record.lastMessageItemId, 240) : undefined,
       revision: Math.max(0, Number(record.revision) || 0),
       sourcePriority: Number.isInteger(record.sourcePriority) ? Number(record.sourcePriority) : meta.sourcePriority,
       snapshotVersion: Number.isInteger(record.snapshotVersion) ? Number(record.snapshotVersion) : meta.snapshotVersion,
@@ -140,7 +141,8 @@ function mergeTurnPatch(
   }
   const sameResponse = existing.userPrompt === (turn.userPrompt ?? existing.userPrompt) &&
     existing.summary === (turn.summary ?? existing.summary) &&
-    existing.lastMessage === (turn.lastMessage ?? existing.lastMessage);
+    existing.lastMessage === (turn.lastMessage ?? existing.lastMessage) &&
+    existing.lastMessageItemId === (turn.lastMessageItemId ?? existing.lastMessageItemId);
   const sameState = existing.status === (turn.status ?? existing.status) &&
     existing.phase === (turn.phase ?? existing.phase);
   if (sameResponse && sameState) {
@@ -257,6 +259,7 @@ export type TurnUpdatePatch = {
   phase?: AiSessionStatus["phase"];
   summary?: AiSessionStatus["summary"];
   lastMessage?: AiSessionStatus["lastMessage"];
+  lastMessageItemId?: AiSessionStatus["lastMessageItemId"];
 };
 
 export function updateTurns(
@@ -329,6 +332,7 @@ export function updateTurns(
     const response = {
       summary: patch.summary ? compact(patch.summary, 1000) : last?.summary,
       lastMessage: patch.lastMessage ? messageText(patch.lastMessage) : last?.lastMessage,
+      lastMessageItemId: patch.lastMessageItemId ? compact(patch.lastMessageItemId, 240) : last?.lastMessageItemId,
       status: patch.status === "idle" ? "completed" : patch.status === "waiting" ? "waiting" : patch.status === "failed" ? "failed" : last?.status || "running",
       phase: (patch.phase as AiSessionPhase | undefined) || last?.phase,
       updatedAt,
@@ -336,7 +340,9 @@ export function updateTurns(
       ...meta,
     };
     if (last) {
-      const isSameResponse = last.summary === response.summary && last.lastMessage === response.lastMessage;
+      const isSameResponse = last.summary === response.summary &&
+        last.lastMessage === response.lastMessage &&
+        last.lastMessageItemId === response.lastMessageItemId;
       const isSameState = last.status === response.status && last.phase === response.phase;
       const stableResponse = isSameResponse && isSameState;
       Object.assign(last, {

@@ -22,6 +22,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "ky": "^1.14.1",
+    "markstream-vue": "1.0.7-beta.4",
     "reka-ui": "^2.9.10",
     "tailwind-merge": "^3.4.0",
     "vue": "^3.5.25",

@@ -67,8 +67,9 @@ renderer.table = function (token) {
   const table = Reflect.apply(Renderer.prototype.table, this, [token]);
   return `<div class="markdown-table-wrapper">${table}</div>\n`;
 };
-renderer.code = ({ text, lang }) => {
-  const requestedLanguage = lang?.trim().split(/\s+/, 1)[0].toLowerCase();
+export function renderCodeBlock(value: unknown, language?: unknown) {
+  const text = String(value ?? "");
+  const requestedLanguage = String(language ?? "").trim().split(/\s+/, 1)[0].toLowerCase();
   if (requestedLanguage === "mermaid") {
     return `<div class="markdown-mermaid" data-mermaid-state="pending"><pre><code>${escapeHtml(text)}</code></pre></div>\n`;
   }
@@ -80,7 +81,9 @@ renderer.code = ({ text, lang }) => {
     ignoreIllegals: true,
   }).value;
   return `<pre><code class="hljs language-${escapeHtml(requestedLanguage)}">${highlighted}</code></pre>\n`;
-};
+}
+
+renderer.code = ({ text, lang }) => renderCodeBlock(text, lang);
 
 marked.use(markedKatex({
   nonStandard: true,

@@ -85,52 +85,20 @@
               aria-hidden="true"
             />
 
-            <section
-              v-if="displayAiSessionResponse(card.session, promptIndex)"
-              class="ai-board-floating-block ai-board-floating-block-assistant"
-              :class="{ 'ai-board-floating-block-assistant-active': card.session.status === 'running' || card.session.status === 'waiting' }"
-            >
-              <MarkdownContent :content="displayAiSessionResponse(card.session, promptIndex)" />
-            </section>
-
-            <AiSessionToolActivity
-              :current-tool="card.session.currentTool"
-              :phase="card.session.phase"
-              :status="card.session.status"
-              :summary="card.session.summary"
-              :tool-calls-since-last-message="card.session.toolCallsSinceLastMessage"
+            <AiSessionResult
+              :busy="busy"
+              :can-interrupt="canInterrupt"
+              :can-resolve-approval="canResolveApproval"
+              :instance-id="card.instance.id"
+              :is-latest="promptIndex >= promptCount - 1"
+              :response-content="displayAiSessionResponse(card.session, promptIndex)"
+              :session="card.session"
               tone="board"
+              @steer-queued-message="$emit('steerQueuedMessage', $event)"
+              @retry-queued-message="$emit('retryQueuedMessage', $event)"
+              @remove-queued-message="$emit('removeQueuedMessage', $event)"
+              @resolve-approval="$emit('resolveApproval', $event)"
             />
-
-            <section v-if="card.session.queue?.items.length" class="ai-board-floating-block ai-board-floating-queue">
-              <span>Queue · {{ card.session.queue.pendingCount }}</span>
-              <div class="ai-board-floating-queue-list">
-                <article v-for="item in card.session.queue.items" :key="item.id" class="ai-board-floating-queue-item" :data-state="item.status">
-                  <p>{{ item.message }}</p>
-                  <small v-if="item.error">{{ item.error }}</small>
-                  <div>
-                    <button type="button" :disabled="busy || !canInterrupt" @click="$emit('steerQueuedMessage', item.id)">Steer</button>
-                    <button v-if="item.status === 'failed'" type="button" :disabled="busy" @click="$emit('retryQueuedMessage', item.id)">Retry</button>
-                    <button type="button" :disabled="busy" @click="$emit('removeQueuedMessage', item.id)">Remove</button>
-                  </div>
-                </article>
-              </div>
-            </section>
-
-            <div v-if="canResolveApproval" class="ai-board-floating-approval">
-              <button type="button" :disabled="busy" @click="$emit('resolveApproval', 'allow')">
-                <Check :size="14" />
-                <span>Allow</span>
-              </button>
-              <button type="button" :disabled="busy" @click="$emit('resolveApproval', 'skip')">
-                <Ban :size="14" />
-                <span>Skip</span>
-              </button>
-              <button type="button" :disabled="busy" @click="$emit('resolveApproval', 'deny')">
-                <X :size="14" />
-                <span>Deny</span>
-              </button>
-            </div>
           </div>
         </ScrollArea>
       </section>
@@ -158,18 +126,17 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { Ban, Check, ChevronDown, ChevronUp, CircleHelp, ExternalLink, X } from "@lucide/vue";
+import { ChevronDown, ChevronUp, CircleHelp, ExternalLink } from "@lucide/vue";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions } from "../../../api/types";
 import AiSessionComposer, { type AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
-import AiSessionToolActivity from "../../../components/ai-session/AiSessionToolActivity.vue";
+import AiSessionResult from "../../../components/ai-session/AiSessionResult.vue";
 import AiSessionTurnNavigator from "../../../components/ai-session/AiSessionTurnNavigator.vue";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
 import {
   aiSessionAppDisplayName,
   aiSessionStatusLabel,
-  displayAiSessionMessage,
   displayAiSessionResponse,
   displayAiSessionTitle,
 } from "../useInstanceSessions";
@@ -641,8 +608,7 @@ onBeforeUnmount(() => {
   padding-bottom: 12px;
 }
 
-.ai-board-floating-block > span,
-.ai-board-floating-queue > span {
+.ai-board-floating-block > span {
   color: var(--ai-board-muted);
   font-size: 12px;
   font-weight: 800;
@@ -737,29 +703,6 @@ onBeforeUnmount(() => {
   pointer-events: none;
 }
 
-.ai-board-floating-block-assistant {
-  border: 0;
-  background: transparent;
-  margin-inline: -14px;
-  padding: 4px 14px 12px;
-}
-
-.ai-board-floating-block-assistant > div {
-  color: var(--ai-board-title);
-}
-
-.ai-board-floating-block-assistant-active {
-  padding-bottom: 4px;
-}
-
-.ai-board-floating-content :deep(.ai-session-tool-activity-board) {
-  margin-top: 0;
-}
-
-.ai-board-floating-block-assistant + :deep(.ai-session-tool-activity-board) {
-  margin-top: -8px;
-}
-
 .ai-board-floating-block :deep(code) {
   border-radius: 4px;
   background: var(--ai-board-code-bg);
@@ -767,93 +710,6 @@ onBeforeUnmount(() => {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   font-size: 0.92em;
   padding: 1px 4px;
-}
-
-.ai-board-floating-approval {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.ai-board-floating-approval button,
-.ai-board-floating-queue-item button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--ai-board-floating-border);
-  border-radius: 7px;
-  background: var(--ai-board-floating-bg);
-  color: var(--ai-board-floating-text);
-  cursor: pointer;
-}
-
-.ai-board-floating-approval button {
-  gap: 6px;
-  min-height: 30px;
-  font-size: 12px;
-  font-weight: 800;
-  padding: 0 10px;
-}
-
-.ai-board-floating-approval button:hover,
-.ai-board-floating-approval button:focus-visible,
-.ai-board-floating-queue-item button:hover,
-.ai-board-floating-queue-item button:focus-visible {
-  border-color: var(--ai-board-floating-hover-border);
-  color: var(--ai-board-floating-hover-text);
-  outline: none;
-}
-
-.ai-board-floating-approval button:disabled,
-.ai-board-floating-queue-item button:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-
-.ai-board-floating-queue-list {
-  display: grid;
-  gap: 8px;
-}
-
-.ai-board-floating-queue-item {
-  display: grid;
-  gap: 7px;
-  min-width: 0;
-  border: 1px solid var(--ai-board-column-border);
-  border-radius: 7px;
-  background: var(--ai-board-card-bg);
-  padding: 9px;
-}
-
-.ai-board-floating-queue-item[data-state="failed"] {
-  border-color: var(--ai-board-card-failed-border);
-}
-
-.ai-board-floating-queue-item p {
-  margin: 0;
-  color: var(--ai-board-title);
-  font-size: 12px;
-  line-height: 1.4;
-  overflow-wrap: anywhere;
-}
-
-.ai-board-floating-queue-item small {
-  color: var(--ai-board-stale-text);
-  font-size: 11px;
-  overflow-wrap: anywhere;
-}
-
-.ai-board-floating-queue-item div {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.ai-board-floating-queue-item button {
-  min-height: 26px;
-  font-size: 11px;
-  padding: 0 8px;
 }
 
 .ai-board-floating-restore {

@@ -14,8 +14,8 @@ type ProjectorOptions = {
   onMessageDelta?: (event: {
     sessionId: string;
     providerSessionId: string;
-    turnId?: string;
-    itemId?: string;
+    turnId: string;
+    itemId: string;
     delta: string;
   }) => void;
 };
@@ -105,7 +105,7 @@ export class CodexAppServerSessionProjector {
       this.options.onMessageDelta?.({
         sessionId: session.id,
         providerSessionId: event.threadId,
-        turnId: event.turnId || session.activeTurnId,
+        turnId: event.turnId,
         itemId: event.itemId,
         delta: event.delta,
       });
@@ -113,7 +113,7 @@ export class CodexAppServerSessionProjector {
     }
     if (event.type === "agent-message-completed") {
       this.applyToolActivity(session.id, this.toolTracker(event.threadId).resetForAgentMessage());
-      this.options.registry.applyRealtimeEvent(session.id, { kind: "assistant-message", activeTurnId: event.turnId || session.activeTurnId, providerTurnId: event.turnId || session.activeTurnId, text: event.text, status: session.status, source: "realtime" });
+      this.options.registry.applyRealtimeEvent(session.id, { kind: "assistant-message", activeTurnId: event.turnId || session.activeTurnId, providerTurnId: event.turnId || session.activeTurnId, itemId: event.itemId, text: event.text, status: session.status, source: "realtime" });
       return true;
     }
     return false;
@@ -149,6 +149,7 @@ export class CodexAppServerSessionProjector {
       turns: history.turns,
       summary: existing ? this.options.latestApprovalSummary(existing.id) || history.summary : history.summary,
       lastMessage: history.lastMessage,
+      lastMessageItemId: history.lastMessageItemId,
       currentTool: activity.toolActivity.currentTool,
       toolCallsSinceLastMessage: activity.toolActivity.toolCallsSinceLastMessage,
       subAgents: activity.subAgents,

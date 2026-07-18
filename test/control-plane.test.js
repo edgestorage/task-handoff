@@ -20,6 +20,7 @@ const { ControlPlaneEventBus } = require("../packages/control-plane/src/control-
 const { ControlPlaneAiSessionAggregator } = require("../packages/control-plane/src/control-plane/sessions/ai-session-aggregator.ts");
 const { ControlPlaneAppSessionAggregator } = require("../packages/control-plane/src/control-plane/sessions/app-session-aggregator.ts");
 const { NodeAgentInstanceEventForwarder } = require("../packages/control-plane/src/node-agent/events.ts");
+const { AiSessionMessageDeltaCoalescer } = require("../packages/controlled-instance/src/web/ai-session-message-delta-coalescer.ts");
 const { NodeAgentPairedHmacVerifier } = require("../packages/control-plane/src/node-agent/identity/hmac-verifier.ts");
 const { NodeAgentIdentityService } = require("../packages/control-plane/src/node-agent/identity/service.ts");
 const { NodeAgentIdentityStore } = require("../packages/control-plane/src/node-agent/identity/store.ts");
@@ -527,7 +528,7 @@ test("AI session aggregator recovers advertised gaps from instance deltas and re
   bootstrapStreamId = "ai_current_stream";
 });
 
-test("AI session message deltas do not notify snapshot listeners or mutate the recoverable snapshot", async () => {
+test("AI session aggregator validates message deltas without copying snapshots or notifying snapshot listeners", async () => {
   const timestamp = new Date().toISOString();
   const aggregator = new ControlPlaneAiSessionAggregator({ bootstrap: async () => ({ instances: [] }) });
   const snapshot = aiSessionSnapshotPayload({
@@ -545,6 +546,7 @@ test("AI session message deltas do not notify snapshot listeners or mutate the r
     }],
   }, { instanceId: "inst_delta", streamId: "stream_delta", revision: 7, generatedAt: timestamp });
   aggregator.applySnapshot(snapshot);
+  const storedBeforeDelta = (await aggregator.list()).instances[0];
   const updates = [];
   aggregator.onSnapshot((update) => updates.push(update));
   aggregator.handleEvent({
@@ -565,9 +567,11 @@ test("AI session message deltas do not notify snapshot listeners or mutate the r
     },
   });
 
-  assert.equal(updates.length, 0);
+  assert.deepEqual(updates, []);
   const stored = (await aggregator.list()).instances[0];
   assert.equal(stored.revision, 7);
+  assert.strictEqual(stored.aiSessions, storedBeforeDelta.aiSessions);
+  assert.strictEqual(stored.aiSessions.sessions[0], storedBeforeDelta.aiSessions.sessions[0]);
   assert.equal(stored.aiSessions.sessions[0].lastMessage, undefined);
 });
 
@@ -1884,6 +1888,26 @@ test("control plane subscribes to direct node agent websocket events", async (t)
           }],
         }, { instanceId: "inst_direct_events", streamId: "ai_direct_stream", revision: 1 }),
       }));
+      const rawDeltas = ["stream", "ed ", "text ", "stays ", "exact"];
+      const coalescer = new AiSessionMessageDeltaCoalescer({
+        emit: (payload) => socket.send(JSON.stringify({
+          type: AiSessionEventType.MessageDelta,
+          topic: AiSessionEventTopic,
+          payload,
+        })),
+      });
+      for (const delta of rawDeltas) {
+        coalescer.push({
+          instanceId: "inst_direct_events",
+          sessionId: "ai_1",
+          providerSessionId: "thread_1",
+          turnId: "turn_1",
+          itemId: "item_1",
+          delta,
+          generatedAt: timestamp,
+        });
+      }
+      coalescer.flushAll("authoritative-event");
     });
   });
   await new Promise((resolve) => instanceEvents.once("listening", resolve));
@@ -1988,6 +2012,15 @@ test("control plane subscribes to direct node agent websocket events", async (t)
   assert.equal(event.scope.instanceId, "inst_direct_events");
   assert.equal(event.payload.meta.revision, 1);
   assert.equal(event.payload.snapshot.sessions[0].id, "ai_1");
+
+  const messageDeltas = await waitForCondition(() => {
+    const matches = receivedEvents.filter((entry) => entry.type === AiSessionEventType.MessageDelta);
+    return matches.length ? matches : undefined;
+  }, "coalesced direct node agent AI message delta", 7000);
+  assert.equal(messageDeltas.length, 1);
+  assert.equal(messageDeltas[0].scope.nodeId, directNodeId);
+  assert.equal(messageDeltas[0].scope.instanceId, "inst_direct_events");
+  assert.equal(messageDeltas[0].payload.delta, "streamed text stays exact");
 
   const aggregated = await waitForCondition(async () => {
     const response = await json(controlPlane, "GET", "/api/ai-sessions");

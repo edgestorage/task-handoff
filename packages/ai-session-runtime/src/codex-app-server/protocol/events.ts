@@ -29,10 +29,10 @@ export function codexNotification(method: string, params: JsonValue): CodexAppSe
     const tool = codexToolDescriptor(item, method === "item/started" && typeof params.startedAtMs === "number" ? params.startedAtMs : undefined);
     if (tool) return { type: method === "item/started" ? "tool-item-started" : "tool-item-completed", threadId: params.threadId, turnId: typeof params.turnId === "string" ? params.turnId : undefined, tool, subAgents: subAgents.length ? subAgents : undefined };
   }
-  if (method === "item/agentMessage/delta" && typeof params.threadId === "string" && typeof params.delta === "string") return { type: "agent-message-delta", threadId: params.threadId, turnId: typeof params.turnId === "string" ? params.turnId : undefined, itemId: typeof params.itemId === "string" ? params.itemId : undefined, delta: params.delta };
+  if (method === "item/agentMessage/delta" && typeof params.threadId === "string" && typeof params.turnId === "string" && typeof params.itemId === "string" && typeof params.delta === "string") return { type: "agent-message-delta", threadId: params.threadId, turnId: params.turnId, itemId: params.itemId, delta: params.delta };
   if (method === "item/completed" && typeof params.threadId === "string") {
     const item = asRecord(params.item);
-    if (item.type === "agentMessage" && typeof item.text === "string") return { type: "agent-message-completed", threadId: params.threadId, turnId: typeof params.turnId === "string" ? params.turnId : undefined, text: item.text };
+    if (item.type === "agentMessage" && typeof params.turnId === "string" && typeof item.id === "string" && typeof item.text === "string") return { type: "agent-message-completed", threadId: params.threadId, turnId: params.turnId, itemId: item.id, text: item.text };
   }
   return undefined;
 }

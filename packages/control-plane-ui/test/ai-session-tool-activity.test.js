@@ -3,6 +3,7 @@ import fs from "node:fs";
 import test from "node:test";
 
 const activity = fs.readFileSync(new URL("../src/components/ai-session/AiSessionToolActivity.vue", import.meta.url), "utf8");
+const result = fs.readFileSync(new URL("../src/components/ai-session/AiSessionResult.vue", import.meta.url), "utf8");
 const panel = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.vue", import.meta.url), "utf8");
 const panelCss = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.css", import.meta.url), "utf8");
 const card = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionCard.vue", import.meta.url), "utf8");
@@ -62,29 +63,60 @@ test("running tool activity shimmers without adding a separator", () => {
   assert.doesNotMatch(activity, /border-(?:top|bottom):/);
 });
 
-test("both detail surfaces share tool activity while cards remain unchanged", () => {
-  assert.match(panel, /<AiSessionToolActivity[\s\S]*?:current-tool="selectedSession\.currentTool"[\s\S]*?:phase="selectedSession\.phase"[\s\S]*?:status="selectedSession\.status"[\s\S]*?:summary="selectedSession\.summary"[\s\S]*?:tool-calls-since-last-message="selectedSession\.toolCallsSinceLastMessage"/);
-  assert.match(floatingDock, /<AiSessionToolActivity[\s\S]*?:current-tool="card\.session\.currentTool"[\s\S]*?:phase="card\.session\.phase"[\s\S]*?:status="card\.session\.status"[\s\S]*?:summary="card\.session\.summary"[\s\S]*?:tool-calls-since-last-message="card\.session\.toolCallsSinceLastMessage"[\s\S]*?tone="board"/);
+test("both detail surfaces share the complete AI result while cards remain unchanged", () => {
+  for (const source of [panel, floatingDock]) {
+    assert.match(source, /<AiSessionResult/);
+    assert.match(source, /:busy=/);
+    assert.match(source, /:can-interrupt=/);
+    assert.match(source, /:can-resolve-approval=/);
+    assert.match(source, /:instance-id=/);
+    assert.match(source, /:is-latest=/);
+    assert.match(source, /:response-content=/);
+    assert.match(source, /:session=/);
+    assert.match(source, /@steer-queued-message=/);
+    assert.match(source, /@retry-queued-message=/);
+    assert.match(source, /@remove-queued-message=/);
+    assert.match(source, /@resolve-approval=/);
+    assert.doesNotMatch(source, /<AiSessionSubAgents/);
+  }
+  assert.match(result, /<AiSessionStreamingMarkdown/);
+  assert.match(result, /<AiSessionToolActivity[\s\S]*?:current-tool="session\.currentTool"[\s\S]*?:phase="session\.phase"[\s\S]*?:status="session\.status"[\s\S]*?:summary="session\.summary"[\s\S]*?:tool-calls-since-last-message="session\.toolCallsSinceLastMessage"[\s\S]*?:tone="tone"/);
+  assert.match(result, /<AiSessionSubAgents/);
+  assert.match(result, /v-for="item in session\.queue\.items"/);
+  assert.match(result, /v-if="canResolveApproval"/);
+  assert.match(result, /\$emit\('resolveApproval', 'allow'\)/);
+  assert.match(floatingDock, /tone="board"/);
   assert.doesNotMatch(panel, /session-ai-card[\s\S]{0,180}toolCallsSinceLastMessage/);
 });
 
 test("detail surfaces omit the legacy running response placeholder", () => {
   assert.match(sessions, /export function displayAiSessionResponse[\s\S]*?displayAiSessionContent\(session, promptIndex, false\)/);
-  assert.match(panel, /v-if="displayAiSessionResponse\(selectedSession, promptIndexFor\(selectedSession\)\)"/);
-  assert.match(floatingDock, /v-if="displayAiSessionResponse\(card\.session, promptIndex\)"/);
+  assert.match(result, /v-show="displayContent"/);
+  assert.match(result, /const displayContent = computed\(\(\) => streamingContent\.value \|\| props\.responseContent\)/);
+  assert.match(result, /props\.isLatest[\s\S]*?streamingMessages\.activeMessage\(props\.instanceId, props\.session\.id\)/);
+  assert.match(panel, /:response-content="displayAiSessionResponse\(selectedSession, promptIndexFor\(selectedSession\)\)"/);
+  assert.match(floatingDock, /:response-content="displayAiSessionResponse\(card\.session, promptIndex\)"/);
   assert.match(sessions, /includeProgress \? aiSessionProgressText\(session\) : ""/);
 });
 
 test("active tool activity sits directly below the assistant response", () => {
-  assert.match(panel, /'session-ai-detail-block-assistant-active': selectedSession\.status === 'running' \|\| selectedSession\.status === 'waiting'/);
-  assert.match(panelCss, /session-ai-detail-block-assistant \{[\s\S]*?background: transparent;/);
-  assert.match(panelCss, /session-ai-detail-block-assistant-active \{\s*padding-bottom: 4px;/);
-  assert.match(panelCss, /session-ai-detail-block-assistant \+ \.ai-session-tool-activity-detail \{\s*margin-top: 0;/);
-  assert.match(floatingDock, /'ai-board-floating-block-assistant-active': card\.session\.status === 'running' \|\| card\.session\.status === 'waiting'/);
-  assert.match(floatingDock, /ai-board-floating-block-assistant \{[\s\S]*?background: transparent;/);
-  assert.match(floatingDock, /ai-board-floating-block-assistant-active \{\s*padding-bottom: 4px;/);
-  assert.match(floatingDock, /ai-board-floating-block-assistant \+ :deep\(\.ai-session-tool-activity-board\) \{\s*margin-top: -8px;/);
+  assert.match(result, /'ai-session-detail-response-active': session\.status === 'running' \|\| session\.status === 'waiting'/);
+  assert.match(result, /ai-session-detail-response \{[\s\S]*?background: transparent;/);
+  assert.match(result, /ai-session-detail-response-active \{\s*padding-bottom: 4px;/);
+  assert.match(result, /ai-session-result\.has-response \.ai-session-detail-response \+ :deep\(\.ai-session-tool-activity\) \{\s*margin-top: calc\(-1 \* var\(--detail-activity-gap\)\);/);
   assert.match(activity, /ai-session-tool-activity-board \{[\s\S]*?margin-top: -12px;/);
+});
+
+test("shared detail responses preserve the previous 14px typography", () => {
+  assert.match(result, /--detail-response-line-height: 1\.55/);
+  assert.match(result, /ai-session-result-board \{[\s\S]*?--detail-response-line-height: 1\.5/);
+  assert.match(result, /ai-session-detail-response :deep\(> div\) \{[\s\S]*?font-size: 14px;[\s\S]*?line-height: var\(--detail-response-line-height\);/);
+});
+
+test("floating detail spacing below the prompt divider does not depend on response content", () => {
+  assert.match(floatingDock, /ai-board-floating-content \{[\s\S]*?gap: 8px;/);
+  assert.match(result, /ai-session-result-board \{[\s\S]*?--detail-activity-gap: 8px;[\s\S]*?padding-top: 4px;/);
+  assert.doesNotMatch(floatingDock, /ai-board-floating-block-assistant/);
 });
 
 test("detail user prompts collapse to three lines with a local toggle", () => {
@@ -92,7 +124,7 @@ test("detail user prompts collapse to three lines with a local toggle", () => {
   assert.match(panel, /promptHasOverflow/);
   assert.match(panel, /promptExpanded = !promptExpanded/);
   assert.match(panel, /if \(promptExpanded\.value\) return;/);
-  assert.match(panel, /watch\(\(\) => selectedSession\.value\?\.id/);
+  assert.match(panel, /watch\(\(\) => `\$\{props\.instance\.id\}\\u0000\$\{selectedSession\.value\?\.id \|\| ""\}`/);
   assert.doesNotMatch(panel, /watch\(selectedSession, \(\) => \{\s*promptExpanded\.value = false/);
   assert.match(panelCss, /max-height: calc\(1\.55em \* 3\)/);
   assert.match(panelCss, /\.session-ai-detail-prompt-content \{[\s\S]*?font-size: 14px;[\s\S]*?line-height: 1\.55;/);

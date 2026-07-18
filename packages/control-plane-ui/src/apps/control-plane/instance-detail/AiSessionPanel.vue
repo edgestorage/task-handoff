@@ -94,7 +94,13 @@
                     <MarkdownContent class="session-ai-question" :content="displayAiSessionTitle(session, promptIndexFor(session))" />
                   </div>
                   <div class="session-ai-preview-field session-ai-preview-field-assistant">
-                    <MarkdownContent class="session-ai-message" :content="displayAiSessionMessage(session, promptIndexFor(session))" />
+                    <AiSessionStreamingMarkdown
+                      class="session-ai-message"
+                      :content="displayAiSessionMessage(session, promptIndexFor(session))"
+                      :instance-id="instance.id"
+                      :is-latest="promptIndexFor(session) >= promptCount(session) - 1"
+                      :session-id="session.id"
+                    />
                   </div>
                   <span v-if="promptCount(session) > 1" class="session-ai-turn-nav">
                     <button type="button" :aria-label="`Previous user message for ${session.agent}`" :disabled="promptIndexFor(session) <= 0" @click.stop="previousPrompt(session)">
@@ -265,54 +271,32 @@
             :style="{ height: `${detailHeaderPlaceholderHeight}px` }"
             aria-hidden="true"
           />
-          <section
-            v-if="displayAiSessionResponse(selectedSession, promptIndexFor(selectedSession))"
-            class="session-ai-detail-block session-ai-detail-block-assistant"
-            :class="{ 'session-ai-detail-block-assistant-active': selectedSession.status === 'running' || selectedSession.status === 'waiting' }"
-          >
-            <MarkdownContent class="session-ai-detail-block-content" :content="displayAiSessionResponse(selectedSession, promptIndexFor(selectedSession))" />
-          </section>
-          <AiSessionToolActivity
-            :current-tool="selectedSession.currentTool"
-            :phase="selectedSession.phase"
-            :status="selectedSession.status"
-            :summary="selectedSession.summary"
-            :tool-calls-since-last-message="selectedSession.toolCallsSinceLastMessage"
+          <AiSessionResult
+            :busy="aiSessionActionBusy"
+            :can-interrupt="canInterrupt(selectedSession)"
+            :can-resolve-approval="canResolveApproval(selectedSession)"
+            :instance-id="instance.id"
+            :is-latest="promptIndexFor(selectedSession) >= promptCount(selectedSession) - 1"
+            :response-content="displayAiSessionResponse(selectedSession, promptIndexFor(selectedSession))"
+            :session="selectedSession"
+            @steer-queued-message="steerQueuedMessage(selectedSession.id, $event)"
+            @retry-queued-message="retryQueuedMessage(selectedSession.id, $event)"
+            @remove-queued-message="removeQueuedMessage(selectedSession.id, $event)"
+            @resolve-approval="resolveSelectedApproval"
           />
-          <AiSessionSubAgents
-            v-if="selectedSession.subAgents?.length"
-            :sub-agents="selectedSession.subAgents"
-          />
-          <section v-if="selectedSession.queue?.items.length" class="session-ai-detail-block session-ai-queue">
-            <span>Queue · {{ selectedSession.queue.pendingCount }}</span>
-            <div class="session-ai-queue-list">
-              <article v-for="item in selectedSession.queue.items" :key="item.id" class="session-ai-queue-item" :data-state="item.status">
-                <p>{{ item.message }}</p>
-                <small v-if="item.error">{{ item.error }}</small>
-                <div>
-                  <button type="button" :disabled="aiSessionActionBusy || !canInterrupt(selectedSession)" @click="steerQueuedMessage(selectedSession.id, item.id)">Steer</button>
-                  <button v-if="item.status === 'failed'" type="button" :disabled="aiSessionActionBusy" @click="retryQueuedMessage(selectedSession.id, item.id)">Retry</button>
-                  <button type="button" :disabled="aiSessionActionBusy" @click="removeQueuedMessage(selectedSession.id, item.id)">Remove</button>
-                </div>
-              </article>
-            </div>
-          </section>
-          <div v-if="canResolveApproval(selectedSession)" class="session-ai-approval-actions">
-            <button type="button" :disabled="aiSessionActionBusy" @click="resolveSelectedApproval('allow')">
-              <Check :size="14" />
-              <span>Allow</span>
-            </button>
-            <button type="button" :disabled="aiSessionActionBusy" @click="resolveSelectedApproval('skip')">
-              <Ban :size="14" />
-              <span>Skip</span>
-            </button>
-            <button type="button" :disabled="aiSessionActionBusy" @click="resolveSelectedApproval('deny')">
-              <X :size="14" />
-              <span>Deny</span>
-            </button>
-          </div>
           </section>
         </ScrollArea>
+        <Button
+          v-if="!isFollowingLatest"
+          class="session-ai-follow-latest"
+          size="icon"
+          variant="secondary"
+          aria-label="Back to latest"
+          title="Back to latest"
+          @click="followLatest"
+        >
+          <ArrowDown :size="16" />
+        </Button>
         <div class="session-ai-compose-gradient" aria-hidden="true" />
         <AiSessionComposer
           ref="composerEl"
@@ -332,14 +316,13 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type CSSProperties } from "vue";
-import { Ban, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, ExternalLink, Filter, Folder, SlidersHorizontal, X, Zap } from "@lucide/vue";
+import { ArrowDown, Ban, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, ExternalLink, Filter, Folder, SlidersHorizontal, X, Zap } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import { bindAiSessionTrigger, interruptAiSession, removeAiSessionQueuedMessage, resolveAiSessionApproval, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, unbindAiSessionTrigger, uploadAiSessionAttachment, useControlPlaneTriggersQuery } from "../../../api/queries";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, TriggerConfig, TriggerDeployment, TriggerRuntimeState } from "../../../api/types";
 import AiSessionComposer, { type AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
-import AiSessionSubAgents from "../../../components/ai-session/AiSessionSubAgents.vue";
-import AiSessionToolActivity from "../../../components/ai-session/AiSessionToolActivity.vue";
+import AiSessionResult from "../../../components/ai-session/AiSessionResult.vue";
 import AiSessionTurnNavigator from "../../../components/ai-session/AiSessionTurnNavigator.vue";
 import { Button } from "../../../components/ui/button";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
@@ -347,6 +330,7 @@ import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 import { clearAiSessionDraft, loadAiSessionDraft, persistAiSessionDraft } from "../useAiSessionDraft";
+import { createStreamingScrollFollow, type ScrollViewport } from "../../../lib/streaming-scroll-follow";
 import {
   aiSessionAppDisplayName,
   aiSessionAppTab,
@@ -448,6 +432,9 @@ let detailScrollViewport: HTMLElement | undefined;
 let detailScrollLayoutRevision = 0;
 let detailScrollLayoutPending = false;
 let promptResizeObserver: ResizeObserver | undefined;
+let streamingResizeObserver: ResizeObserver | undefined;
+let scrollFollow: ReturnType<typeof createStreamingScrollFollow> | undefined;
+const isFollowingLatest = ref(true);
 let sidebarResizeCleanup: (() => void) | undefined;
 const aiSessionActionBusy = ref(false);
 const triggerBusyKey = ref("");
@@ -919,6 +906,11 @@ function syncComposerOffset() {
     return;
   }
   detail.style.setProperty("--session-ai-compose-offset", `${Math.ceil(composer.getBoundingClientRect().height)}px`);
+  scrollFollow?.notifyContentResize();
+}
+
+function followLatest() {
+  scrollFollow?.followLatest();
 }
 
 function observeComposerOffset() {
@@ -958,21 +950,37 @@ function observeDetailActionsWidth() {
 
 function observeDetailScroll() {
   detailScrollViewport?.removeEventListener("scroll", handleDetailScroll);
+  streamingResizeObserver?.disconnect();
+  streamingResizeObserver = undefined;
+  scrollFollow?.dispose();
+  scrollFollow = undefined;
   detailScrollViewport = undefined;
   detailScrollLayoutRevision += 1;
   detailScrollLayoutPending = false;
   detailScrolled.value = false;
   detailHeaderPlaceholderHeight.value = 0;
-  const viewport = detailEl.value?.querySelector<HTMLElement>(".session-ai-detail-scroll [data-reka-scroll-area-viewport]");
+  const viewport = detailEl.value?.querySelector<HTMLElement>(".session-ai-detail-scroll [data-task-handoff-scroll-viewport]");
   if (!viewport) {
+    isFollowingLatest.value = true;
     return;
   }
   detailScrollViewport = viewport;
+  scrollFollow = createStreamingScrollFollow(
+    () => detailScrollViewport as (HTMLElement & ScrollViewport) | undefined,
+    { onFollowingChange: (value) => { isFollowingLatest.value = value; } },
+  );
+  const content = detailEl.value?.querySelector<HTMLElement>(".session-ai-detail-content");
+  if (content && typeof ResizeObserver !== "undefined") {
+    streamingResizeObserver = new ResizeObserver(() => scrollFollow?.notifyContentResize());
+    streamingResizeObserver.observe(content);
+  }
   handleDetailScroll();
   viewport.addEventListener("scroll", handleDetailScroll, { passive: true });
+  scrollFollow.followLatest();
 }
 
 function handleDetailScroll() {
+  scrollFollow?.handleScroll();
   if (detailScrollLayoutPending) {
     return;
   }
@@ -1014,7 +1022,7 @@ watch([selectedSession, messageAttachments, messageDraft], () => {
   void nextTick(observeComposerOffset);
 }, { immediate: true });
 
-watch(() => selectedSession.value?.id, () => {
+watch(() => `${props.instance.id}\u0000${selectedSession.value?.id || ""}`, () => {
   messageDraft.value = selectedSession.value ? loadAiSessionDraft(selectedSession.value.id) : "";
   promptExpanded.value = false;
   promptHasOverflow.value = false;
@@ -1048,6 +1056,8 @@ onBeforeUnmount(() => {
   detailActionsResizeObserver?.disconnect();
   promptResizeObserver?.disconnect();
   detailScrollViewport?.removeEventListener("scroll", handleDetailScroll);
+  streamingResizeObserver?.disconnect();
+  scrollFollow?.dispose();
   stopSidebarResize();
 });
 

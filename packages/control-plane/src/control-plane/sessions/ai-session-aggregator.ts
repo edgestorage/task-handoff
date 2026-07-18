@@ -9,7 +9,6 @@ import {
   applyAiSessionStreamEvent,
   type AiSessionDeltaResponse,
   type AiSessionPatchEvent,
-  type AiSessionMessageDeltaEvent,
   type AiSessionRemovedEvent,
   type AiSessionSnapshotEvent,
   type AiSessionsSnapshot,
@@ -50,7 +49,6 @@ export class ControlPlaneAiSessionAggregator {
   private readonly advertisedStreams = new Map<string, SessionStreamDescriptor>();
   private readonly recoveries = new Map<string, RecoveryRecord>();
   private readonly listeners = new Set<(update: ControlPlaneAiSessionSnapshotUpdate) => void>();
-  private readonly messageDeltaBuffers = new Map<string, string>();
   private readonly bootstrap: () => Promise<{ instances: BootstrapEntry[] }>;
   private readonly logger?: Logger;
   private readonly recoverDelta?: (instanceId: string, streamId: string, sinceRevision: number) => Promise<AiSessionDeltaResponse>;
@@ -74,7 +72,9 @@ export class ControlPlaneAiSessionAggregator {
         this.logger?.warn?.({ eventType: event.type, issues: parsed.error.issues, errorCode: "AI_SESSION_MESSAGE_DELTA_INVALID" }, "ai-session.aggregator.message-delta.invalid");
         return true;
       }
-      this.applyMessageDelta(parsed.data);
+      // Message deltas are forwarded directly by the event bus. They are intentionally
+      // excluded from the recoverable snapshot and snapshot listeners; the next
+      // revisioned snapshot/patch is the authoritative projection boundary.
       return true;
     }
     const schema = event.type === AiSessionEventType.Snapshot
@@ -103,33 +103,6 @@ export class ControlPlaneAiSessionAggregator {
     return () => this.listeners.delete(listener);
   }
 
-  private applyMessageDelta(payload: AiSessionMessageDeltaEvent) {
-    const current = this.snapshots.get(payload.instanceId);
-    if (!current) return false;
-    const key = [payload.instanceId, payload.sessionId, payload.turnId || "", payload.itemId || ""].join("\u0000");
-    const text = `${this.messageDeltaBuffers.get(key) || ""}${payload.delta}`;
-    this.messageDeltaBuffers.set(key, text);
-    let matched = false;
-    const sessions = current.snapshot.sessions.map((session) => {
-      if (session.id !== payload.sessionId) return session;
-      matched = true;
-      const turns = [...(session.turns || [])];
-      const turnIndex = payload.turnId
-        ? turns.findIndex((turn) => turn.id === payload.turnId || turn.providerTurnId === payload.turnId)
-        : turns.length - 1;
-      if (turnIndex >= 0) {
-        turns[turnIndex] = { ...turns[turnIndex], lastMessage: text, summary: text, phase: "responding", updatedAt: payload.generatedAt };
-      }
-      return { ...session, lastMessage: text, summary: text, phase: "responding" as const, updatedAt: payload.generatedAt, turns };
-    });
-    if (!matched) return false;
-    // Message deltas are a UI-only projection. Do not notify snapshot
-    // consumers here: the chat gateway subscribes to this listener and must
-    // wait for the authoritative assistant-message/turn completion snapshot
-    // before sending a Telegram message.
-    return true;
-  }
-
   applySnapshot(payload: AiSessionSnapshotEvent) {
     const advertisedStreamId = this.advertisedStreams.get(payload.meta.instanceId)?.streamId;
     if (advertisedStreamId && advertisedStreamId !== payload.meta.streamId) {
@@ -155,10 +128,6 @@ export class ControlPlaneAiSessionAggregator {
     this.snapshots.delete(instanceId);
     this.history.delete(instanceId);
     this.advertisedStreams.delete(instanceId);
-    const prefix = `${instanceId}\u0000`;
-    for (const key of this.messageDeltaBuffers.keys()) {
-      if (key.startsWith(prefix)) this.messageDeltaBuffers.delete(key);
-    }
   }
 
   applyPatch(payload: AiSessionPatchEvent) {
@@ -241,13 +210,6 @@ export class ControlPlaneAiSessionAggregator {
     }
     const projection = result.projection;
     this.snapshots.set(meta.instanceId, projection);
-    for (const session of projection.snapshot.sessions) {
-      if (session.status === "running") continue;
-      const prefix = `${meta.instanceId}\u0000${session.id}\u0000`;
-      for (const key of this.messageDeltaBuffers.keys()) {
-        if (key.startsWith(prefix)) this.messageDeltaBuffers.delete(key);
-      }
-    }
     this.rememberEvent(meta.instanceId, event);
     const update = { instanceId: meta.instanceId, streamId: projection.streamId, aiSessions: projection.snapshot, revision: projection.revision, lastEventAt: projection.lastEventAt };
     for (const listener of this.listeners) {

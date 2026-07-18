@@ -654,6 +654,7 @@ export type AiSessionTurn = {
   phase?: AiSessionPhase;
   summary?: string;
   lastMessage?: string;
+  lastMessageItemId?: string;
   revision: number;
   sourcePriority?: number;
   snapshotVersion?: number;
@@ -710,6 +711,7 @@ export type AiSessionSummary = {
   phase: AiSessionPhase;
   summary?: string;
   lastMessage?: string;
+  lastMessageItemId?: string;
   currentTool?: AiSessionTool;
   toolCallsSinceLastMessage: number;
   subAgents: AiSessionSubAgent[];
@@ -781,8 +783,8 @@ export type AiSessionMessageDeltaEvent = {
   nodeId?: string;
   sessionId: string;
   providerSessionId: string;
-  turnId?: string;
-  itemId?: string;
+  turnId: string;
+  itemId: string;
   delta: string;
   generatedAt: string;
 };

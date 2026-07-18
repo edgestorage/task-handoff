@@ -18,7 +18,7 @@ import { compact, messageText, normalizeTurns } from "../ai-session-turns";
 
 const PERSISTED_SESSION_FIELDS = new Set([
   "id", "agent", "appSessionId", "appId", "providerSessionId", "providerMeta", "appBindingKeys", "actions",
-  "activeTurnId", "title", "cwd", "userPrompt", "turns", "status", "phase", "summary", "lastMessage",
+  "activeTurnId", "title", "cwd", "userPrompt", "turns", "status", "phase", "summary", "lastMessage", "lastMessageItemId",
   "currentTool", "toolCallsSinceLastMessage", "subAgents", "transcriptPath", "transcriptSize", "startedAt", "updatedAt",
   "completedAt", "error", "counters", "queue",
 ]);

@@ -213,6 +213,13 @@ test("AI session message delta is an ephemeral event outside revision recovery",
   });
   assert.equal(AiSessionEventType.MessageDelta, "ai-session.message-delta");
   assert.equal(payload.delta, "hello");
+  assert.equal(AiSessionMessageDeltaEventSchema.safeParse({
+    instanceId: "instance-a",
+    sessionId: "session-a",
+    providerSessionId: "thread-a",
+    delta: "without identity",
+    generatedAt: now,
+  }).success, false);
   assert.equal(AiSessionDeltaResponseSchema.safeParse({
     streamId: "stream-a",
     instanceId: "instance-a",

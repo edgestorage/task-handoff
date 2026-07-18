@@ -54,5 +54,5 @@ export type CodexAppServerEvent =
   | { type: "tool-item-completed"; threadId: string; turnId?: string; tool: CodexToolDescriptor; subAgents?: CodexSubAgentUpdate[] }
   | { type: "sub-agent-activity"; threadId: string; turnId?: string; subAgent: CodexSubAgentUpdate }
   | { type: "user-message"; threadId: string; turnId?: string; text: string }
-  | { type: "agent-message-delta"; threadId: string; turnId?: string; itemId?: string; delta: string }
-  | { type: "agent-message-completed"; threadId: string; turnId?: string; text: string };
+  | { type: "agent-message-delta"; threadId: string; turnId: string; itemId: string; delta: string }
+  | { type: "agent-message-completed"; threadId: string; turnId?: string; itemId: string; text: string };

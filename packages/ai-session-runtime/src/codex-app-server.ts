@@ -17,11 +17,12 @@ export { CodexAppServerClient } from "./codex-app-server/client/client";
 type CodexAppServerBridgeOptions = {
   allowSpawn?: boolean;
   createClient?: (options: CodexAppServerClientOptions) => CodexAppServerClientLike;
+  onEventSourceClose?: () => void;
   onMessageDelta?: (event: {
     sessionId: string;
     providerSessionId: string;
-    turnId?: string;
-    itemId?: string;
+    turnId: string;
+    itemId: string;
     delta: string;
   }) => void;
 };
@@ -56,6 +57,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       createClient: (options) => this.createClient(options),
       onEvent: (event) => this.applyProviderEvent(event),
       onInvalidate: () => {
+        this.options.onEventSourceClose?.();
         this.approvalCoordinator?.resetConnection();
         this.projector?.resetConnection();
       },

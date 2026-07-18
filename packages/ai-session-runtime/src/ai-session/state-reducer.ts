@@ -42,6 +42,7 @@ export type AiSessionPatch = Partial<
     | "phase"
     | "summary"
     | "lastMessage"
+    | "lastMessageItemId"
     | "currentTool"
     | "toolCallsSinceLastMessage"
     | "subAgents"
@@ -201,6 +202,7 @@ export function reduceAiSessionRealtime(
       phase: event.phase || (completedFromTranscript ? "unknown" : "responding"),
       summary: event.text,
       lastMessage: event.text,
+      lastMessageItemId: event.itemId,
       currentTool: undefined,
       toolCallsSinceLastMessage: 0,
     }, { updatedAt, meta });
@@ -289,6 +291,9 @@ export function reduceAiSessionSnapshot(
     summary: staleActivitySnapshot
       ? current.summary
       : ignoreSnapshotTopLevelResponse ? undefined : event.replaceActivity ? event.summary : event.summary || current.summary,
+    lastMessageItemId: staleActivitySnapshot
+      ? current.lastMessageItemId
+      : ignoreSnapshotTopLevelResponse ? undefined : event.lastMessageItemId || current.lastMessageItemId,
     currentTool: event.status === "idle" || event.status === "failed"
       ? undefined
       : staleActivitySnapshot

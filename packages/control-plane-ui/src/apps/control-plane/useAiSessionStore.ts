@@ -1,4 +1,4 @@
-import { computed } from "vue";
+import { computed, watch } from "vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import { applyAiSessionStreamEvent, type AiSessionStreamEvent, type AiSessionsState } from "@task-handoff/protocol/ai-sessions";
 import type { SessionStreamDescriptor } from "@task-handoff/protocol/events";
@@ -18,6 +18,7 @@ import {
   type InstanceWithAiSessions,
 } from "../../api/types";
 import { appSessionBindingKeys, isVisibleAppSession } from "./appSessionVisibility.ts";
+import { useStreamingMessagesStore } from "./useStreamingMessagesStore.ts";
 
 export function useAiSessionStore(input: {
   boardInstances: () => InstanceBoardItem[];
@@ -27,8 +28,8 @@ export function useAiSessionStore(input: {
   const queryClient = useQueryClient();
   const apiLoader = input.apiLoader || getApiData;
   const advertised = new Map<string, SessionStreamDescriptor>();
-  const recoveries = new Map<string, { promise: Promise<void>; highWater: number }>();
-  const messageDeltaBuffers = new Map<string, string>();
+  const recoveries = new Map<string, { promise: Promise<void>; highWater: number; cancelled: boolean }>();
+  const streamingMessages = useStreamingMessagesStore();
   const boardInstancesWithAiSessions = computed(() => mergeBoardAiSessions(input.boardInstances(), input.aiSessions()));
   const snapshotsByInstanceId = computed(() => {
     const snapshots = new Map<string, AiSessionsSnapshot>();
@@ -37,6 +38,16 @@ export function useAiSessionStore(input: {
     }
     return snapshots;
   });
+  let knownInstanceIds = new Set<string>();
+
+  watch(input.aiSessions, (current) => {
+    if (!current) return;
+    const nextInstanceIds = new Set(current.instances.map((entry) => entry.instanceId));
+    for (const instanceId of knownInstanceIds) {
+      if (!nextInstanceIds.has(instanceId)) cleanupInstance(instanceId);
+    }
+    knownInstanceIds = nextInstanceIds;
+  }, { immediate: true });
 
   function instanceWithAiSessions(instance?: InstanceBoardItem): InstanceWithAiSessions | undefined {
     if (!instance) {
@@ -60,36 +71,29 @@ export function useAiSessionStore(input: {
 
   function applyMessageDelta(payload: AiSessionMessageDeltaEvent) {
     if (!payload?.instanceId || !payload.sessionId || !payload.delta) return false;
-    const key = [payload.instanceId, payload.sessionId, payload.turnId || "", payload.itemId || ""].join("\u0000");
-    const text = `${messageDeltaBuffers.get(key) || ""}${payload.delta}`;
-    const phase: AiSessionSummary["phase"] = "responding";
-    messageDeltaBuffers.set(key, text);
-    let applied = false;
-    queryClient.setQueryData<ControlPlaneAiSessions>(["control-plane-ai-sessions"], (current) => {
-      if (!current) return current;
-      const instances = current.instances.map((entry) => {
-        if (entry.instanceId !== payload.instanceId) return entry;
-        const sessions = entry.aiSessions.sessions.map((session) => {
-          if (session.id !== payload.sessionId) return session;
-          applied = true;
-          const turns = [...(session.turns || [])];
-          const turnIndex = payload.turnId
-            ? turns.findIndex((turn) => turn.id === payload.turnId || turn.providerTurnId === payload.turnId)
-            : turns.length - 1;
-          if (turnIndex >= 0) {
-            turns[turnIndex] = { ...turns[turnIndex], lastMessage: text, summary: text, phase, updatedAt: payload.generatedAt };
-          }
-          return { ...session, lastMessage: text, summary: text, phase, updatedAt: payload.generatedAt, turns };
-        });
-        return { ...entry, aiSessions: { ...entry.aiSessions, sessions } };
+    const instance = queryClient.getQueryData<ControlPlaneAiSessions>(["control-plane-ai-sessions"])
+      ?.instances.find((entry) => entry.instanceId === payload.instanceId);
+    const streamId = advertised.get(payload.instanceId)?.streamId || instance?.streamId;
+    if (streamId) {
+      streamingMessages.appendDelta({
+        identity: {
+          instanceId: payload.instanceId,
+          sessionId: payload.sessionId,
+          turnId: payload.turnId,
+          itemId: payload.itemId,
+        },
+        streamId,
+        delta: payload.delta,
+        generatedAt: payload.generatedAt,
       });
-      return applied ? { ...current, instances } : current;
-    });
-    return applied;
+      return true;
+    }
+    return false;
   }
 
   function applyEvent(event: AiSessionDeltaResponse["events"][number], fromRecovery = false) {
     const instanceId = event.payload.meta.instanceId;
+    streamingMessages.replaceStream(instanceId, event.payload.meta.streamId);
     const advertisedStream = advertised.get(instanceId)?.streamId;
     if (advertisedStream && advertisedStream !== event.payload.meta.streamId) {
       const descriptor = descriptorThroughEvent(advertised.get(instanceId), event.payload.meta);
@@ -112,27 +116,24 @@ export function useAiSessionStore(input: {
       const result = applyAiSessionStreamEvent(projection, event as unknown as AiSessionStreamEvent);
       if (result.kind !== "applied") return current;
       applied = true;
-      clearSettledMessageDeltaBuffers(instanceId, result.projection.snapshot);
       return upsertInstanceAiSessions(current, instanceId, result.projection.snapshot, { streamId: result.projection.streamId, revision: result.projection.revision, lastEventAt: result.projection.lastEventAt });
     });
+    if (applied) {
+      if (event.type === AiSessionEventType.Snapshot) streamingMessages.applySnapshot(event.payload);
+      if (event.type === AiSessionEventType.Patch) streamingMessages.applyPatch(event.payload);
+      if (event.type === AiSessionEventType.Removed) streamingMessages.applyRemoved(event.payload);
+    }
     if (!applied && !fromRecovery) void recoverDescriptor(descriptorThroughEvent(advertised.get(instanceId), event.payload.meta));
     return applied || advertised.has(instanceId);
-  }
-
-  function clearSettledMessageDeltaBuffers(instanceId: string, snapshot: AiSessionsSnapshot) {
-    for (const session of snapshot.sessions) {
-      if (session.status === "running") continue;
-      const prefix = `${instanceId}\u0000${session.id}\u0000`;
-      for (const key of messageDeltaBuffers.keys()) {
-        if (key.startsWith(prefix)) messageDeltaBuffers.delete(key);
-      }
-    }
   }
 
   function recoverDescriptor(descriptor?: SessionStreamDescriptor) {
     if (!descriptor) return Promise.resolve();
     const previous = advertised.get(descriptor.instanceId);
     advertised.set(descriptor.instanceId, descriptor);
+    if (previous?.streamId && previous.streamId !== descriptor.streamId) {
+      streamingMessages.replaceStream(descriptor.instanceId, descriptor.streamId);
+    }
     const existing = recoveries.get(descriptor.instanceId);
     if (existing) {
       existing.highWater = previous?.streamId === descriptor.streamId
@@ -140,9 +141,10 @@ export function useAiSessionStore(input: {
         : descriptor.latestRevision;
       return existing.promise;
     }
-    const record = { promise: Promise.resolve(), highWater: descriptor.latestRevision };
+    const record = { promise: Promise.resolve(), highWater: descriptor.latestRevision, cancelled: false };
     record.promise = (async () => {
       while (true) {
+        if (record.cancelled) return;
         const currentDescriptor = advertised.get(descriptor.instanceId);
         if (!currentDescriptor) return;
         const entry = queryClient.getQueryData<ControlPlaneAiSessions>(["control-plane-ai-sessions"])?.instances.find((candidate) => candidate.instanceId === currentDescriptor.instanceId);
@@ -150,18 +152,21 @@ export function useAiSessionStore(input: {
         const streamBeforeRequest = entry?.streamId;
         if (!entry || entry.streamId !== currentDescriptor.streamId) {
           const refreshed = await apiLoader<ControlPlaneAiSessions>("ai-sessions?refresh=true");
+          if (record.cancelled) return;
           const latestDescriptor = advertised.get(descriptor.instanceId);
           const snapshot = refreshed.instances.find((candidate) => candidate.instanceId === descriptor.instanceId);
           if (!latestDescriptor || snapshot?.streamId !== latestDescriptor.streamId) return;
-          queryClient.setQueryData<ControlPlaneAiSessions>(["control-plane-ai-sessions"], (current) => upsertInstanceAiSessions(current, descriptor.instanceId, snapshot.aiSessions, snapshot));
+          applyRecoveredSnapshot(snapshot);
         } else if ((entry.revision ?? 0) < record.highWater) {
           const delta = await apiLoader<AiSessionDeltaResponse>(`ai-sessions?instanceId=${encodeURIComponent(entry.instanceId)}&streamId=${encodeURIComponent(entry.streamId)}&sinceRevision=${encodeURIComponent(String(entry.revision ?? 0))}`);
+          if (record.cancelled) return;
           if (delta.syncRequired) {
             const refreshed = await apiLoader<ControlPlaneAiSessions>("ai-sessions?refresh=true");
+            if (record.cancelled) return;
             const latestDescriptor = advertised.get(descriptor.instanceId);
             const snapshot = refreshed.instances.find((candidate) => candidate.instanceId === descriptor.instanceId);
             if (!latestDescriptor || snapshot?.streamId !== latestDescriptor.streamId) return;
-            queryClient.setQueryData<ControlPlaneAiSessions>(["control-plane-ai-sessions"], (current) => upsertInstanceAiSessions(current, descriptor.instanceId, snapshot.aiSessions, snapshot));
+            applyRecoveredSnapshot(snapshot);
           } else {
             for (const event of delta.events) applyEvent(event, true);
             record.highWater = Math.max(record.highWater, delta.latestRevision);
@@ -172,9 +177,33 @@ export function useAiSessionStore(input: {
         if (latestDescriptor && latest?.streamId === latestDescriptor.streamId && (latest.revision ?? 0) >= record.highWater) return;
         if (latest?.streamId === streamBeforeRequest && (latest.revision ?? -1) === revisionBeforeRequest) return;
       }
-    })().finally(() => recoveries.delete(descriptor.instanceId));
+    })().finally(() => {
+      if (recoveries.get(descriptor.instanceId) === record) recoveries.delete(descriptor.instanceId);
+    });
     recoveries.set(descriptor.instanceId, record);
     return record.promise;
+  }
+
+  function cleanupInstance(instanceId: string) {
+    streamingMessages.cleanupInstance(instanceId);
+    advertised.delete(instanceId);
+    const recovery = recoveries.get(instanceId);
+    if (recovery) {
+      recovery.cancelled = true;
+      recoveries.delete(instanceId);
+    }
+  }
+
+  function applyRecoveredSnapshot(snapshot: ControlPlaneAiSessions["instances"][number]) {
+    queryClient.setQueryData<ControlPlaneAiSessions>(["control-plane-ai-sessions"], (current) => (
+      upsertInstanceAiSessions(current, snapshot.instanceId, snapshot.aiSessions, snapshot)
+    ));
+    streamingMessages.applyAuthoritativeSnapshot({
+      instanceId: snapshot.instanceId,
+      streamId: snapshot.streamId,
+      snapshot: snapshot.aiSessions,
+      generatedAt: snapshot.lastEventAt || snapshot.aiSessions.updatedAt,
+    });
   }
 
   return {

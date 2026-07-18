@@ -137,6 +137,42 @@ test("codex app-server parser excludes non-tools and diagnoses unknown items", (
   assert.deepEqual(warnings, ["[codex-app-server] ignoring unknown ThreadItem.type: futureTool"]);
 });
 
+test("codex app-server parser preserves assistant item identity on completion", () => {
+  const event = codexNotification("item/completed", {
+    threadId: "thread_messages",
+    turnId: "turn_1",
+    item: { type: "agentMessage", id: "item_2", text: "second response" },
+  });
+  assert.deepEqual(event, {
+    type: "agent-message-completed",
+    threadId: "thread_messages",
+    turnId: "turn_1",
+    itemId: "item_2",
+    text: "second response",
+  });
+});
+
+test("ai session reducer preserves assistant item identity on the active turn", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-item-id-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const session = registry.applyAdapterSnapshot({
+    agent: "codex",
+    providerSessionId: "thread_1",
+    activeTurnId: "turn_1",
+    status: "running",
+  });
+  const updated = registry.applyRealtimeEvent(session.id, {
+    kind: "assistant-message",
+    activeTurnId: "turn_1",
+    itemId: "item_1",
+    text: "complete response",
+    source: "realtime",
+  });
+
+  assert.equal(updated.lastMessageItemId, "item_1");
+  assert.equal(updated.turns.find((turn) => turn.id === "turn_1")?.lastMessageItemId, "item_1");
+});
+
 test("codex app-server projects sub-agent activity separately from tools", () => {
   const activity = codexNotification("item/completed", {
     threadId: "thread-parent",
@@ -2847,6 +2883,27 @@ test("codex app server bridge emits raw message deltas without persisting partia
   assert.equal(registry.get(session.id).lastMessage, "hello");
 });
 
+test("codex app server bridge reports event source closure before reconnect or stop", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-message-delta-close-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  class FakeCodexAppServerClient extends EventEmitter {
+    async start() {}
+    async listLoadedThreadIds() { return []; }
+    stop() {}
+  }
+  const fake = new FakeCodexAppServerClient();
+  const boundaries = [];
+  const bridge = new CodexAppServerSessionBridge(registry, fake, {
+    onEventSourceClose: () => boundaries.push("closed"),
+  });
+
+  await bridge.sync();
+  fake.emit("disconnect");
+  bridge.stop();
+
+  assert.deepEqual(boundaries, ["closed", "closed"]);
+});
+
 test("codex app server bridge clears activity for empty idle thread snapshots", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-empty-thread-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
@@ -4600,6 +4657,17 @@ test("web app serves core API routes with isolated storage", async () => {
     assert.equal(Number.isInteger(diagnosticsData.sessionStreams.app.revision), true);
     assert.equal(Number.isInteger(diagnosticsData.sessionStreams.ai.discoveryUnchanged), true);
     assert.equal(Number.isInteger(diagnosticsData.sessionStreams.ai.discoveryCorrections), true);
+    assert.deepEqual(diagnosticsData.sessionStreams.ai.messageDeltaCoalescing, {
+      windowMs: 32,
+      pendingMessageCount: 0,
+      rawDeltaCount: 0,
+      emittedEventCount: 0,
+      totalBatchSize: 0,
+      maxBatchSize: 0,
+      flushReasons: {},
+      totalFirstBatchWaitMs: 0,
+      maxFirstBatchWaitMs: 0,
+    });
 
     const catalog = await app.inject({ method: "GET", url: "/api/apps/catalog" });
     assert.equal(catalog.statusCode, 200);

@@ -20,12 +20,14 @@ export function summarizeThreadTurns(thread: CodexThread): {
   turns?: AiSessionStatus["turns"];
   summary?: string;
   lastMessage?: string;
+  lastMessageItemId?: string;
   toolActivity: CodexToolActivityState;
   subAgents: AiSessionSubAgent[];
 } {
   let activeTurnId: string | undefined;
   let userPrompt: string | undefined;
   let lastMessage: string | undefined;
+  let lastMessageItemId: string | undefined;
   const historyTurns: NonNullable<AiSessionStatus["turns"]> = [];
   const turns = Array.isArray(thread.turns) ? thread.turns : [];
   for (const [index, turn] of turns.entries()) {
@@ -57,7 +59,9 @@ export function summarizeThreadTurns(thread: CodexThread): {
         }
       } else if (item.type === "agentMessage" && typeof item.text === "string" && item.text.trim()) {
         lastMessage = item.text.trim();
+        lastMessageItemId = typeof item.id === "string" && item.id.trim() ? item.id.trim() : undefined;
         historyTurn.lastMessage = lastMessage;
+        historyTurn.lastMessageItemId = lastMessageItemId;
         historyTurn.summary = lastMessage.length > 1000
           ? `${lastMessage.slice(0, 997)}...`
           : lastMessage;
@@ -74,6 +78,7 @@ export function summarizeThreadTurns(thread: CodexThread): {
     turns: historyTurns,
     summary: lastMessage,
     lastMessage,
+    lastMessageItemId,
     toolActivity: rebuildCodexToolActivity(thread),
     subAgents: rebuildCodexSubAgents(thread, updatedAt),
   };

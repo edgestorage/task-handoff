@@ -14,10 +14,11 @@ require.extensions[".ts"] = (module, filename) => {
 };
 
 const { QueryClient, VueQueryPlugin } = require("@tanstack/vue-query");
-const { createApp } = require("vue");
+const { createApp, nextTick, ref } = require("vue");
 const { AiSessionEventType } = require("../packages/protocol/src/ai-sessions.ts");
 const { AppSessionEventType } = require("../packages/protocol/src/app-sessions.ts");
 const { useAiSessionStore } = require("../packages/control-plane-ui/src/apps/control-plane/useAiSessionStore.ts");
+const { useStreamingMessagesStore } = require("../packages/control-plane-ui/src/apps/control-plane/useStreamingMessagesStore.ts");
 const { useAppSessionStore } = require("../packages/control-plane-ui/src/apps/control-plane/useAppSessionStore.ts");
 
 function timestamp() {
@@ -224,6 +225,274 @@ test("AI recovery stops when a delta request makes no progress", async () => {
 
   await store.recoverDescriptor({ topic: "ai.sessions", instanceId: "instance-one", streamId: "ai-stream", latestRevision: 2, earliestRetainedRevision: 2 });
   assert.equal(requests, 1);
+});
+
+test("AI full-snapshot recovery settles the normalized streaming store", async () => {
+  const queryClient = new QueryClient();
+  const streamId = "ai-recovery-stream";
+  const running = summary("recovering", {
+    status: "running",
+    phase: "responding",
+    activeTurnId: "turn-recovering",
+    turns: [{ id: "turn-recovering", status: "running", revision: 1 }],
+  });
+  const initial = snapshotEvent(streamId, 1, [running]);
+  const recovered = snapshotEvent(streamId, 2, [{
+    ...running,
+    status: "idle",
+    phase: "unknown",
+    activeTurnId: undefined,
+    lastMessage: "authoritative response",
+    lastMessageItemId: "item-recovering",
+    turns: [{
+      id: "turn-recovering",
+      status: "completed",
+      revision: 2,
+      lastMessage: "authoritative response",
+      lastMessageItemId: "item-recovering",
+    }],
+  }]);
+  queryClient.setQueryData(["control-plane-ai-sessions"], {
+    updatedAt: timestamp(),
+    instances: [{ instanceId: "instance-one", streamId, revision: 1, lastEventAt: initial.meta.generatedAt, aiSessions: initial.snapshot }],
+  });
+  const apiLoader = async (url) => url.includes("sinceRevision")
+    ? { streamId, instanceId: "instance-one", sinceRevision: 1, latestRevision: 2, earliestRetainedRevision: 2, syncRequired: true, events: [] }
+    : { updatedAt: timestamp(), instances: [{ instanceId: "instance-one", streamId, revision: 2, lastEventAt: recovered.meta.generatedAt, aiSessions: recovered.snapshot }] };
+  const app = createApp({ render: () => null });
+  app.use(VueQueryPlugin, { queryClient });
+  const store = app.runWithContext(() => useAiSessionStore({ boardInstances: () => [], aiSessions: () => undefined, apiLoader }));
+  const streaming = useStreamingMessagesStore();
+  streaming.clear();
+
+  store.applyMessageDelta({
+    instanceId: "instance-one",
+    sessionId: "recovering",
+    providerSessionId: "thread_recovering",
+    turnId: "turn-recovering",
+    itemId: "item-recovering",
+    delta: "partial",
+    generatedAt: timestamp(),
+  });
+  const active = streaming.activeMessage("instance-one", "recovering").value;
+
+  await store.recoverDescriptor({ topic: "ai.sessions", instanceId: "instance-one", streamId, latestRevision: 2, earliestRetainedRevision: 2 });
+
+  assert.equal(active.value.receivedText, "authoritative response");
+  assert.equal(active.value.status, "complete");
+  streaming.clear();
+});
+
+test("removing an authoritative instance releases its streaming projection before the same id is recreated", async () => {
+  const queryClient = new QueryClient();
+  const streamId = "ai-instance-lifecycle";
+  const initial = snapshotEvent(streamId, 1, [summary("lifecycle", {
+    status: "running",
+    phase: "responding",
+    activeTurnId: "turn-lifecycle",
+    turns: [{ id: "turn-lifecycle", status: "running", revision: 1 }],
+  })]);
+  const authoritative = ref({
+    updatedAt: timestamp(),
+    instances: [{ instanceId: "instance-one", streamId, revision: 1, lastEventAt: initial.meta.generatedAt, aiSessions: initial.snapshot }],
+  });
+  queryClient.setQueryData(["control-plane-ai-sessions"], authoritative.value);
+  const app = createApp({ render: () => null });
+  app.use(VueQueryPlugin, { queryClient });
+  const store = app.runWithContext(() => useAiSessionStore({ boardInstances: () => [], aiSessions: () => authoritative.value }));
+  const streaming = useStreamingMessagesStore();
+  streaming.clear();
+
+  store.applyMessageDelta({
+    instanceId: "instance-one",
+    sessionId: "lifecycle",
+    providerSessionId: "thread_lifecycle",
+    turnId: "turn-lifecycle",
+    itemId: "item-lifecycle",
+    delta: "old text",
+    generatedAt: timestamp(),
+  });
+  const previousActive = streaming.activeMessage("instance-one", "lifecycle");
+
+  authoritative.value = { updatedAt: timestamp(), instances: [] };
+  queryClient.setQueryData(["control-plane-ai-sessions"], authoritative.value);
+  await nextTick();
+
+  assert.equal(previousActive.value, undefined);
+  assert.equal(streaming.size(), 0);
+
+  authoritative.value = {
+    updatedAt: timestamp(),
+    instances: [{ instanceId: "instance-one", streamId, revision: 1, lastEventAt: initial.meta.generatedAt, aiSessions: initial.snapshot }],
+  };
+  queryClient.setQueryData(["control-plane-ai-sessions"], authoritative.value);
+  await nextTick();
+  store.applyMessageDelta({
+    instanceId: "instance-one",
+    sessionId: "lifecycle",
+    providerSessionId: "thread_lifecycle",
+    turnId: "turn-lifecycle",
+    itemId: "item-lifecycle",
+    delta: "new text",
+    generatedAt: timestamp(),
+  });
+
+  const recreatedActive = streaming.activeMessage("instance-one", "lifecycle");
+  assert.notStrictEqual(recreatedActive, previousActive);
+  assert.equal(recreatedActive.value.value.receivedText, "new text");
+  streaming.clear();
+});
+
+test("removing an authoritative instance prevents an in-flight recovery from restoring it", async () => {
+  const queryClient = new QueryClient();
+  const streamId = "ai-instance-removal-recovery";
+  const initial = snapshotEvent(streamId, 1, [summary("removed")]);
+  const authoritative = ref({
+    updatedAt: timestamp(),
+    instances: [{ instanceId: "instance-one", streamId, revision: 1, lastEventAt: initial.meta.generatedAt, aiSessions: initial.snapshot }],
+  });
+  queryClient.setQueryData(["control-plane-ai-sessions"], authoritative.value);
+  let releaseDelta;
+  const deltaGate = new Promise((resolve) => { releaseDelta = resolve; });
+  const apiLoader = async () => {
+    await deltaGate;
+    return {
+      streamId,
+      instanceId: "instance-one",
+      sinceRevision: 1,
+      latestRevision: 2,
+      earliestRetainedRevision: 2,
+      syncRequired: false,
+      events: [{ type: AiSessionEventType.Snapshot, payload: snapshotEvent(streamId, 2, [summary("restored")]) }],
+    };
+  };
+  const app = createApp({ render: () => null });
+  app.use(VueQueryPlugin, { queryClient });
+  const store = app.runWithContext(() => useAiSessionStore({ boardInstances: () => [], aiSessions: () => authoritative.value, apiLoader }));
+  const streaming = useStreamingMessagesStore();
+  streaming.clear();
+
+  const recovery = store.recoverDescriptor({
+    topic: "ai.sessions",
+    instanceId: "instance-one",
+    streamId,
+    latestRevision: 2,
+    earliestRetainedRevision: 2,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  authoritative.value = { updatedAt: timestamp(), instances: [] };
+  queryClient.setQueryData(["control-plane-ai-sessions"], authoritative.value);
+  await nextTick();
+  releaseDelta();
+  await recovery;
+
+  assert.deepEqual(queryClient.getQueryData(["control-plane-ai-sessions"]).instances, []);
+  assert.equal(streaming.size(), 0);
+});
+
+test("AI message deltas and authoritative snapshots drive the normalized streaming store", () => {
+  const queryClient = new QueryClient();
+  const streamId = "ai-streaming";
+  const running = {
+    ...summary("streaming"),
+    status: "running",
+    phase: "responding",
+    activeTurnId: "turn-streaming",
+    turns: [{ id: "turn-streaming", status: "running", revision: 1 }],
+  };
+  const initial = snapshotEvent(streamId, 1, [running]);
+  queryClient.setQueryData(["control-plane-ai-sessions"], {
+    updatedAt: timestamp(),
+    instances: [{ instanceId: "instance-one", streamId, revision: 1, lastEventAt: initial.meta.generatedAt, aiSessions: initial.snapshot }],
+  });
+  const app = createApp({ render: () => null });
+  app.use(VueQueryPlugin, { queryClient });
+  const store = app.runWithContext(() => useAiSessionStore({ boardInstances: () => [], aiSessions: () => undefined }));
+  const streaming = useStreamingMessagesStore();
+  streaming.clear();
+  const queryBeforeDelta = queryClient.getQueryData(["control-plane-ai-sessions"]);
+  const instanceBeforeDelta = queryBeforeDelta.instances[0];
+  const sessionBeforeDelta = instanceBeforeDelta.aiSessions.sessions[0];
+  let queryUpdates = 0;
+  const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
+    if (event?.query?.queryHash === '["control-plane-ai-sessions"]' && event.type === "updated") queryUpdates += 1;
+  });
+
+  assert.equal(store.applyMessageDelta({
+    instanceId: "instance-one",
+    sessionId: "streaming",
+    providerSessionId: "thread_streaming",
+    turnId: "turn-streaming",
+    itemId: "item-streaming",
+    delta: "helo",
+    generatedAt: timestamp(),
+  }), true);
+  const active = streaming.activeMessage("instance-one", "streaming").value;
+  assert.equal(active.value.receivedText, "helo");
+  assert.equal(active.value.status, "streaming");
+  assert.strictEqual(queryClient.getQueryData(["control-plane-ai-sessions"]), queryBeforeDelta);
+  assert.strictEqual(queryBeforeDelta.instances[0], instanceBeforeDelta);
+  assert.strictEqual(instanceBeforeDelta.aiSessions.sessions[0], sessionBeforeDelta);
+  assert.equal(queryUpdates, 0);
+
+  store.applySnapshotEvent(snapshotEvent(streamId, 2, [{
+    ...running,
+    status: "idle",
+    activeTurnId: undefined,
+    lastMessage: "hello",
+    turns: [{ id: "turn-streaming", status: "completed", revision: 2, lastMessage: "hello" }],
+  }]));
+  assert.equal(active.value.receivedText, "hello");
+  assert.equal(active.value.status, "complete");
+  unsubscribe();
+  streaming.clear();
+});
+
+test("the first post-refresh assistant item does not inherit the snapshot item text", () => {
+  const queryClient = new QueryClient();
+  const streamId = "ai-refresh-stream";
+  const initial = snapshotEvent(streamId, 0, []);
+  queryClient.setQueryData(["control-plane-ai-sessions"], {
+    updatedAt: timestamp(),
+    instances: [{ instanceId: "instance-one", streamId, revision: 0, lastEventAt: initial.meta.generatedAt, aiSessions: initial.snapshot }],
+  });
+  const app = createApp({ render: () => null });
+  app.use(VueQueryPlugin, { queryClient });
+  const store = app.runWithContext(() => useAiSessionStore({ boardInstances: () => [], aiSessions: () => undefined }));
+  const streaming = useStreamingMessagesStore();
+  streaming.clear();
+
+  const running = summary("refreshing", {
+    status: "running",
+    phase: "tool",
+    activeTurnId: "turn-refreshing",
+    lastMessage: "message before refresh",
+    lastMessageItemId: "item-before-refresh",
+    turns: [{
+      id: "turn-refreshing",
+      status: "running",
+      revision: 2,
+      lastMessage: "message before refresh",
+      lastMessageItemId: "item-before-refresh",
+    }],
+  });
+  store.applySnapshotEvent(snapshotEvent(streamId, 1, [running]));
+
+  assert.equal(store.applyMessageDelta({
+    instanceId: "instance-one",
+    sessionId: "refreshing",
+    providerSessionId: "thread_refreshing",
+    turnId: "turn-refreshing",
+    itemId: "item-after-refresh",
+    delta: "message after refresh",
+    generatedAt: timestamp(),
+  }), true);
+
+  const active = streaming.activeMessage("instance-one", "refreshing").value;
+  assert.equal(active.value.itemId, "item-after-refresh");
+  assert.equal(active.value.receivedText, "message after refresh");
+  streaming.clear();
 });
 
 test("app recovery stops on a mismatched snapshot and adopts the next live stream reset", async () => {

@@ -24,7 +24,13 @@
         <MarkdownContent class="ai-board-question" :content="displayAiSessionTitle(card.session, promptIndex)" />
       </div>
       <div class="ai-board-preview-field ai-board-preview-field-assistant">
-        <MarkdownContent class="ai-board-message" :content="displayAiSessionMessage(card.session, promptIndex)" />
+        <AiSessionStreamingMarkdown
+          class="ai-board-message"
+          :content="displayAiSessionMessage(card.session, promptIndex)"
+          :instance-id="card.instance.id"
+          :is-latest="promptIndex >= promptCount - 1"
+          :session-id="card.session.id"
+        />
       </div>
       <span v-if="promptCount > 1" class="ai-board-turn-nav">
         <button type="button" :aria-label="`Previous user message for ${card.session.agent}`" :disabled="promptIndex <= 0" @click.stop="$emit('previousPrompt', card)">
@@ -122,6 +128,7 @@ import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import AiSessionToolActivity from "../../../components/ai-session/AiSessionToolActivity.vue";
 import type { AiSessionSummary, ControlPlaneTrigger, InstanceBoardItem, InstanceWithAiSessions, TriggerDeployment } from "../../../api/types";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
+import AiSessionStreamingMarkdown from "../../../components/ai-session/AiSessionStreamingMarkdown.vue";
 import {
   aiSessionAppDisplayName,
   displayAiSessionMessage,
