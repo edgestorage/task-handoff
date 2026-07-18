@@ -2199,7 +2199,14 @@ function aiSessionDeliveryBody(session: AiSessionSummary, latestTurn: ReturnType
     response = session.status === "failed" ? `${session.agent} session failed:\n${session.error.trim()}` : session.error.trim();
   }
 
-  return [response, aiSessionToolActivityText(session)].filter(Boolean).join("\n\n");
+  const toolActivity = aiSessionToolActivityText(session);
+  return [response, toolActivity && !toolActivityAlreadyDisplayed(response, session) ? toolActivity : ""].filter(Boolean).join("\n\n");
+}
+
+function toolActivityAlreadyDisplayed(response: string, session: Partial<AiSessionSummary>) {
+  if (session.status !== "waiting" || session.phase !== "approval") return false;
+  const preview = session.currentTool?.inputPreview?.trim();
+  return Boolean(preview && response.includes(preview));
 }
 
 function aiSessionToolActivityText(session: Partial<AiSessionSummary>) {

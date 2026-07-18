@@ -7,7 +7,7 @@ import { EventEmitter } from "node:events";
 import writeFileAtomic from "write-file-atomic";
 import { resolveStoragePaths } from "@task-handoff/core/storage/paths";
 import { findClaudeTranscriptPath, findCodexTranscriptPath, summarizeTranscriptLine } from "@task-handoff/core/core/transcript";
-import { AiSessionMessageAttachmentMetaSchema, AiSessionToolSchema } from "@task-handoff/protocol/ai-sessions";
+import { AiSessionMessageAttachmentMetaSchema, AiSessionSubAgentSchema, AiSessionToolSchema } from "@task-handoff/protocol/ai-sessions";
 import type {
   AiSessionLifecycle,
   AiSessionMessageAttachment,
@@ -55,7 +55,7 @@ type AiSessionStartInput = {
 type AiSessionUpdateInput = Partial<
   Pick<
     AiSessionStatus,
-    "appSessionId" | "appId" | "providerSessionId" | "activeTurnId" | "title" | "cwd" | "userPrompt" | "turns" | "status" | "phase" | "summary" | "lastMessage" | "currentTool" | "toolCallsSinceLastMessage" | "transcriptPath" | "error"
+    "appSessionId" | "appId" | "providerSessionId" | "activeTurnId" | "title" | "cwd" | "userPrompt" | "turns" | "status" | "phase" | "summary" | "lastMessage" | "currentTool" | "toolCallsSinceLastMessage" | "subAgents" | "transcriptPath" | "error"
     | "providerMeta"
     | "appBindingKeys"
     | "actions"
@@ -190,11 +190,12 @@ function warnUnknownFields(record: Record<string, unknown>, allowed: ReadonlySet
 const PERSISTED_SESSION_FIELDS = new Set([
   "id", "agent", "appSessionId", "appId", "providerSessionId", "providerMeta", "appBindingKeys", "actions",
   "activeTurnId", "title", "cwd", "userPrompt", "turns", "status", "phase", "summary", "lastMessage",
-  "currentTool", "toolCallsSinceLastMessage", "transcriptPath", "transcriptSize", "startedAt", "updatedAt",
+  "currentTool", "toolCallsSinceLastMessage", "subAgents", "transcriptPath", "transcriptSize", "startedAt", "updatedAt",
   "completedAt", "error", "counters", "queue",
 ]);
 
 const PERSISTED_TOOL_FIELDS = new Set(["id", "kind", "name", "inputPreview", "startedAt"]);
+const PERSISTED_SUB_AGENT_FIELDS = new Set(["threadId", "path", "status", "activity", "message", "updatedAt"]);
 
 function normalizeTool(value: unknown): AiSessionStatus["currentTool"] {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -216,6 +217,19 @@ function normalizeTool(value: unknown): AiSessionStatus["currentTool"] {
   };
   const parsed = AiSessionToolSchema.safeParse(candidate);
   return parsed.success ? parsed.data : undefined;
+}
+
+function normalizeSubAgents(value: unknown): AiSessionStatus["subAgents"] {
+  if (!Array.isArray(value)) return [];
+  const byThreadId = new Map<string, AiSessionStatus["subAgents"][number]>();
+  for (const item of value.slice(0, 50)) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const record = item as Record<string, unknown>;
+    warnUnknownFields(record, PERSISTED_SUB_AGENT_FIELDS, "subAgent");
+    const parsed = AiSessionSubAgentSchema.safeParse(record);
+    if (parsed.success) byThreadId.set(parsed.data.threadId, parsed.data);
+  }
+  return [...byThreadId.values()].sort((left, right) => left.threadId.localeCompare(right.threadId));
 }
 
 function normalizeStringArray(value: unknown, maxItems: number, maxLength: number) {
@@ -319,6 +333,7 @@ function normalizeSession(value: unknown): AiSessionStatus | undefined {
     lastMessage: record.lastMessage ? messageText(record.lastMessage) : undefined,
     currentTool: normalizeTool(record.currentTool),
     toolCallsSinceLastMessage: normalizeNonNegativeInteger(record.toolCallsSinceLastMessage),
+    subAgents: normalizeSubAgents(record.subAgents),
     transcriptPath: record.transcriptPath ? compact(record.transcriptPath, 4096) : undefined,
     transcriptSize: Number.isInteger(record.transcriptSize) && Number(record.transcriptSize) >= 0 ? Number(record.transcriptSize) : undefined,
     startedAt: record.startedAt,
@@ -397,6 +412,7 @@ function summaryForHeartbeat(session: AiSessionStatus): AiSessionSummary {
     lastMessage: session.lastMessage,
     currentTool: session.currentTool,
     toolCallsSinceLastMessage: session.toolCallsSinceLastMessage,
+    subAgents: session.subAgents,
     queue: session.queue,
     startedAt: session.startedAt,
     updatedAt: session.updatedAt,
@@ -557,6 +573,7 @@ export class AiSessionRegistry {
       phase: normalizePhase(input.phase || "unknown"),
       summary: input.summary ? compact(input.summary, 1000) : undefined,
       toolCallsSinceLastMessage: 0,
+      subAgents: [],
       startedAt: timestamp,
       updatedAt: timestamp,
       counters: { toolCalls: 0, edits: 0, approvals: 0 },
@@ -621,6 +638,7 @@ export class AiSessionRegistry {
       error: patch.error ? compact(patch.error, 4000) : current.error,
       counters,
       queue: patch.queue ? normalizeQueue(patch.queue) : current.queue,
+      subAgents: patch.subAgents !== undefined ? normalizeSubAgents(patch.subAgents) : current.subAgents,
     };
     return this.put(updated);
   }
@@ -813,6 +831,11 @@ export class AiSessionRegistry {
         toolCallsSinceLastMessage: event.toolCallsSinceLastMessage,
       }, { updatedAt: event.observedAt, meta, suppressTurnUpdate: true });
     }
+    if (event.kind === "sub-agent-activity") {
+      return this.update(id, {
+        subAgents: event.subAgents,
+      }, { updatedAt: event.observedAt, meta, suppressTurnUpdate: true });
+    }
     if (event.kind === "turn-completed") {
       const error = event.error ? compact(event.error, 4000) : undefined;
       const responseText = event.text || event.summary || (event.status === "failed" ? error : undefined);
@@ -863,6 +886,7 @@ export class AiSessionRegistry {
         lastMessage: input.lastMessage,
         currentTool: input.status === "running" || input.status === "waiting" ? input.currentTool : undefined,
         toolCallsSinceLastMessage: input.toolCallsSinceLastMessage ?? 0,
+        subAgents: input.subAgents || [],
         transcriptPath: input.transcriptPath,
         transcriptSize: input.transcriptSize,
         status: input.status || session.status,
@@ -918,6 +942,9 @@ export class AiSessionRegistry {
       toolCallsSinceLastMessage: staleActivitySnapshot
         ? current.toolCallsSinceLastMessage
         : event.toolCallsSinceLastMessage ?? (event.replaceActivity ? 0 : current.toolCallsSinceLastMessage),
+      subAgents: staleActivitySnapshot
+        ? current.subAgents
+        : event.subAgents !== undefined ? event.subAgents : current.subAgents,
     }, {
       updatedAt: event.observedAt,
       meta,

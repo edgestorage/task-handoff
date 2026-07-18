@@ -44,9 +44,11 @@ const {
 } = require("../packages/ai-session-runtime/src/ai-session-registry.ts");
 const {
   CodexToolActivityTracker,
+  CodexSubAgentTracker,
   codexApprovalRequest,
   codexNotification,
   rebuildCodexToolActivity,
+  rebuildCodexSubAgents,
 } = require("../packages/ai-session-runtime/src/codex-app-server-protocol.ts");
 const { AiSessionController } = require("../packages/ai-session-runtime/src/ai-session-control.ts");
 const { AiSessionDiscoveryCoordinator } = require("../packages/ai-session-runtime/src/ai-session-discovery.ts");
@@ -69,7 +71,7 @@ test("codex approval parser preserves the request reason", () => {
     reason: "Tests need access to the local package cache.",
   });
 
-  assert.equal(request?.summary, "Tests need access to the local package cache.");
+  assert.equal(request?.summary, "Tests need access to the local package cache. · Command: pnpm test");
 });
 
 test("codex app-server parser projects supported tool items without output fields", () => {
@@ -118,7 +120,7 @@ test("codex app-server parser projects supported tool items without output field
 });
 
 test("codex app-server parser excludes non-tools and diagnoses unknown items", () => {
-  for (const type of ["agentMessage", "reasoning", "plan", "hookPrompt", "subAgentActivity", "contextCompaction", "enteredReviewMode", "exitedReviewMode"]) {
+  for (const type of ["agentMessage", "reasoning", "plan", "hookPrompt", "contextCompaction", "enteredReviewMode", "exitedReviewMode"]) {
     assert.equal(codexNotification("item/started", { threadId: "thread_non_tools", item: { type, id: type } }), undefined);
   }
   const warnings = [];
@@ -130,6 +132,155 @@ test("codex app-server parser excludes non-tools and diagnoses unknown items", (
     console.warn = originalWarn;
   }
   assert.deepEqual(warnings, ["[codex-app-server] ignoring unknown ThreadItem.type: futureTool"]);
+});
+
+test("codex app-server projects sub-agent activity separately from tools", () => {
+  const activity = codexNotification("item/completed", {
+    threadId: "thread-parent",
+    turnId: "turn-parent",
+    item: {
+      type: "subAgentActivity",
+      id: "call-1",
+      kind: "interacted",
+      agentThreadId: "thread-child",
+      agentPath: "agent-a",
+    },
+  });
+  assert.deepEqual(activity, {
+    type: "sub-agent-activity",
+    threadId: "thread-parent",
+    turnId: "turn-parent",
+    subAgent: {
+      threadId: "thread-child",
+      path: "agent-a",
+      status: "running",
+      activity: "interacted",
+      observation: "activity",
+    },
+  });
+
+  const collab = codexNotification("item/completed", {
+    threadId: "thread-parent",
+    item: {
+      type: "collabAgentToolCall",
+      id: "call-1",
+      tool: "wait",
+      status: "completed",
+      agentsStates: {
+        "thread-child": { status: "completed", message: "Reviewed the tests" },
+      },
+    },
+  });
+  assert.equal(collab.type, "tool-item-completed");
+  assert.deepEqual(collab.subAgents, [{
+    threadId: "thread-child",
+    status: "completed",
+    message: "Reviewed the tests",
+    observation: "state",
+  }]);
+});
+
+test("codex sub-agent tracker merges lifecycle and activity without affecting tool counts", () => {
+  const tracker = new CodexSubAgentTracker();
+  tracker.apply([{ threadId: "thread-child", status: "pending-init", path: "agent-a", activity: "started", observation: "activity" }], "2026-07-13T00:00:01.000Z");
+  const completed = tracker.apply([{ threadId: "thread-child", status: "completed", message: "Done", observation: "state" }], "2026-07-13T00:00:02.000Z");
+  assert.deepEqual(completed, [{
+    threadId: "thread-child",
+    path: "agent-a",
+    status: "completed",
+    activity: "started",
+    message: "Done",
+    updatedAt: "2026-07-13T00:00:02.000Z",
+  }]);
+  const clearedMessage = tracker.apply([{ threadId: "thread-child", status: "running", observation: "state" }], "2026-07-13T00:00:03.000Z");
+  assert.equal(clearedMessage[0].message, undefined);
+});
+
+test("codex sub-agent tracker rejects lagging snapshots and delayed activity", () => {
+  const tracker = new CodexSubAgentTracker();
+  tracker.apply([{
+    threadId: "thread-child",
+    status: "completed",
+    message: "Done",
+    observation: "state",
+    observedAt: "2026-07-13T00:00:04.000Z",
+  }], "2026-07-13T00:00:04.000Z");
+  tracker.apply([{
+    threadId: "thread-child",
+    status: "interrupted",
+    path: "agent-a",
+    activity: "interrupted",
+    observation: "activity",
+    observedAt: "2026-07-13T00:00:03.000Z",
+  }], "2026-07-13T00:00:05.000Z");
+  tracker.apply([{
+    threadId: "thread-child",
+    status: "running",
+    activity: "interacted",
+    observation: "activity",
+    observedAt: "2026-07-13T00:00:02.000Z",
+  }], "2026-07-13T00:00:06.000Z");
+
+  const afterLaggingSnapshot = tracker.replace([{
+    threadId: "thread-child",
+    status: "running",
+    activity: "started",
+    updatedAt: "2026-07-13T00:00:07.000Z",
+  }]);
+  assert.equal(afterLaggingSnapshot[0].status, "completed");
+  assert.equal(afterLaggingSnapshot[0].message, "Done");
+  assert.equal(afterLaggingSnapshot[0].activity, "interrupted");
+  assert.equal(afterLaggingSnapshot[0].path, "agent-a");
+
+  const running = new CodexSubAgentTracker();
+  running.apply([{
+    threadId: "thread-child",
+    status: "running",
+    observation: "state",
+  }], "2026-07-13T00:00:04.000Z");
+  assert.equal(running.replace([{
+    threadId: "thread-child",
+    status: "pending-init",
+    updatedAt: "2026-07-13T00:00:07.000Z",
+  }])[0].status, "running");
+
+  const advancedSnapshot = new CodexSubAgentTracker();
+  advancedSnapshot.replace([{ threadId: "thread-child", status: "running", updatedAt: "2026-07-13T00:00:01.000Z" }]);
+  assert.equal(advancedSnapshot.replace([{
+    threadId: "thread-child",
+    status: "completed",
+    message: "Snapshot caught up",
+    updatedAt: "2026-07-13T00:00:08.000Z",
+  }])[0].status, "completed");
+});
+
+test("codex sub-agent tracker bounds snapshots while retaining active agents", () => {
+  const tracker = new CodexSubAgentTracker();
+  for (let index = 0; index < 55; index += 1) {
+    tracker.apply([{
+      threadId: `terminal-${String(index).padStart(2, "0")}`,
+      status: "completed",
+      observation: "state",
+    }], `2026-07-13T00:00:${String(index).padStart(2, "0")}.000Z`);
+  }
+  tracker.apply([{
+    threadId: "active-old",
+    status: "running",
+    observation: "state",
+  }], "2026-07-12T00:00:00.000Z");
+  const snapshot = tracker.snapshot();
+  assert.equal(snapshot.length, 50);
+  assert.equal(snapshot.some((agent) => agent.threadId === "active-old"), true);
+  assert.equal(snapshot.some((agent) => agent.threadId === "terminal-00"), false);
+});
+
+test("codex sub-agent snapshot rebuild keeps agents across parent turns", () => {
+  const rebuilt = rebuildCodexSubAgents({ turns: [{
+    items: [{ type: "collabAgentToolCall", agentsStates: { child_a: { status: "running" } } }],
+  }, {
+    items: [{ type: "collabAgentToolCall", agentsStates: { child_b: { status: "completed", message: "Done" } } }],
+  }] }, "2026-07-13T00:00:04.000Z");
+  assert.deepEqual(rebuilt.map((agent) => [agent.threadId, agent.status]), [["child_a", "running"], ["child_b", "completed"]]);
 });
 
 test("codex tool tracker deduplicates, backfills completed tools, and falls back across parallel tools", () => {
@@ -507,6 +658,33 @@ test("ai session registry atomically replaces and explicitly clears tool activit
   assert.equal(replaced.toolCallsSinceLastMessage, 1);
   assert.equal(replaced.counters.toolCalls, 0);
   stop();
+});
+
+test("ai session registry keeps sub-agent state independent from tool activity and responses", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-sub-agents-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const session = registry.start({ agent: "codex", providerSessionId: "thread-parent" });
+  const updated = registry.applyRealtimeEvent(session.id, {
+    kind: "sub-agent-activity",
+    subAgents: [{
+      threadId: "thread-child",
+      path: "agent-a",
+      status: "running",
+      activity: "interacted",
+      updatedAt: "2026-07-13T00:00:01.000Z",
+    }],
+  });
+  assert.equal(updated.currentTool, undefined);
+  assert.equal(updated.toolCallsSinceLastMessage, 0);
+  assert.equal(updated.subAgents[0].threadId, "thread-child");
+
+  const messaged = registry.applyRealtimeEvent(session.id, { kind: "assistant-message", text: "Main response" });
+  assert.equal(messaged.subAgents[0].status, "running");
+  const completed = registry.applyRealtimeEvent(session.id, { kind: "turn-completed", status: "idle", text: "Done" });
+  assert.equal(completed.subAgents[0].status, "running");
+
+  const cleared = registry.applyRealtimeEvent(session.id, { kind: "sub-agent-activity", subAgents: [] });
+  assert.deepEqual(cleared.subAgents, []);
 });
 
 test("ai session registry clears stale current tools at turn completion without clearing the window count", () => {
@@ -2186,6 +2364,67 @@ test("codex app server bridge projects realtime tool activity and replaces it fr
   session = registry.list()[0];
   assert.equal(session.toolCallsSinceLastMessage, 1);
   assert.equal(session.currentTool, undefined);
+});
+
+test("codex app server bridge publishes sub-agent lifecycle independently from tool activity", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-sub-agents-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  class FakeCodexAppServerClient extends EventEmitter {
+    async start() {}
+    async listLoadedThreadIds() { return ["thread_parent"]; }
+    async readThread() {
+      return {
+        id: "thread_parent",
+        status: { type: "active", activeFlags: [] },
+        turns: [{
+          id: "turn_parent",
+          status: "inProgress",
+          items: [{
+            type: "collabAgentToolCall",
+            id: "spawn-1",
+            tool: "spawnAgent",
+            status: "completed",
+            agentsStates: { thread_child: { status: "running" } },
+          }],
+        }],
+      };
+    }
+    stop() {}
+  }
+
+  const fake = new FakeCodexAppServerClient();
+  const bridge = new CodexAppServerSessionBridge(registry, fake);
+  await bridge.sync();
+  let session = registry.list()[0];
+  assert.deepEqual(session.subAgents.map((agent) => [agent.threadId, agent.status]), [["thread_child", "running"]]);
+
+  fake.emit("event", codexNotification("item/completed", {
+    threadId: "thread_parent",
+    turnId: "turn_parent",
+    item: { type: "subAgentActivity", id: "spawn-1", kind: "interacted", agentThreadId: "thread_child", agentPath: "agent-a" },
+  }));
+  session = registry.list()[0];
+  assert.equal(session.subAgents[0].path, "agent-a");
+  assert.equal(session.subAgents[0].activity, "interacted");
+  assert.equal(session.toolCallsSinceLastMessage, 1);
+
+  fake.emit("event", codexNotification("item/completed", {
+    threadId: "thread_parent",
+    item: {
+      type: "collabAgentToolCall",
+      id: "wait-1",
+      tool: "wait",
+      status: "completed",
+      agentsStates: { thread_child: { status: "completed", message: "Reviewed tests" } },
+    },
+  }));
+  session = registry.list()[0];
+  assert.equal(session.subAgents[0].status, "completed");
+  assert.equal(session.subAgents[0].message, "Reviewed tests");
+  assert.equal(session.subAgents[0].path, "agent-a");
+
+  fake.emit("event", { type: "agent-message-completed", threadId: "thread_parent", turnId: "turn_parent", text: "Main response" });
+  assert.equal(registry.list()[0].subAgents[0].status, "completed");
 });
 
 test("codex app server bridge repeated snapshots keep completed turns stable", async () => {

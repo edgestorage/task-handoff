@@ -9,6 +9,7 @@ import {
   AiSessionRealtimeInputSchema,
   AiSessionStatusSchema,
   AiSessionSummarySchema,
+  AiSessionSubAgentSchema,
   AiSessionToolSchema,
   applyAiSessionStreamEvent,
   emptyAiSessionsSnapshot,
@@ -73,6 +74,35 @@ test("AI session tool activity schemas remain strict and require atomic realtime
     currentTool: null,
     toolCallsSinceLastMessage: 0,
   }).success, false);
+});
+
+test("AI session sub-agent state defaults, stays strict, and updates atomically", () => {
+  const status = AiSessionStatusSchema.parse(session());
+  assert.deepEqual(status.subAgents, []);
+  assert.equal(AiSessionSubAgentSchema.safeParse({
+    threadId: "thread-child",
+    path: "agent-a",
+    status: "running",
+    activity: "interacted",
+    updatedAt: now,
+  }).success, true);
+  assert.equal(AiSessionSubAgentSchema.safeParse({
+    threadId: "thread-child",
+    status: "running",
+    updatedAt: now,
+    toolCount: 1,
+  }).success, false);
+
+  const event = {
+    type: "event",
+    source: "realtime",
+    sessionId: "session-a",
+    kind: "sub-agent-activity",
+    subAgents: [{ threadId: "thread-child", status: "completed", updatedAt: now }],
+  };
+  assert.equal(AiSessionRealtimeInputSchema.safeParse(event).success, true);
+  assert.equal(AiSessionRealtimeInputSchema.safeParse({ ...event, subAgents: undefined }).success, false);
+  assert.equal(AiSessionRealtimeInputSchema.safeParse({ ...event, kind: "turn-started" }).success, false);
 });
 
 function meta(overrides = {}) {

@@ -276,6 +276,10 @@
             :summary="selectedSession.summary"
             :tool-calls-since-last-message="selectedSession.toolCallsSinceLastMessage"
           />
+          <AiSessionSubAgents
+            v-if="selectedSession.subAgents?.length"
+            :sub-agents="selectedSession.subAgents"
+          />
           <section v-if="selectedSession.queue?.items.length" class="session-ai-detail-block session-ai-queue">
             <span>Queue · {{ selectedSession.queue.pendingCount }}</span>
             <div class="session-ai-queue-list">
@@ -331,6 +335,7 @@ import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import { bindAiSessionTrigger, interruptAiSession, removeAiSessionQueuedMessage, resolveAiSessionApproval, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, unbindAiSessionTrigger, uploadAiSessionAttachment, useControlPlaneTriggersQuery } from "../../../api/queries";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, TriggerConfig, TriggerDeployment, TriggerRuntimeState } from "../../../api/types";
 import AiSessionComposer, { type AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
+import AiSessionSubAgents from "../../../components/ai-session/AiSessionSubAgents.vue";
 import AiSessionToolActivity from "../../../components/ai-session/AiSessionToolActivity.vue";
 import AiSessionTurnNavigator from "../../../components/ai-session/AiSessionTurnNavigator.vue";
 import { Button } from "../../../components/ui/button";

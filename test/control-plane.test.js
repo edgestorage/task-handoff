@@ -10281,6 +10281,13 @@ test("control plane ai session delivery appends authoritative tool activity afte
     "instance-main · codex running/tool\n目前有 3 个未提交修改。\n\nThinking... · Command · /bin/zsh -lc 'node --test test/control-plane.test.js'",
   );
 
+  session.turns[0].lastMessage = "正在执行 /bin/zsh -lc 'node --test test/control-plane.test.js'";
+  assert.equal(
+    aiSessionDeliveryText(session, "instance-main · codex running/tool"),
+    "instance-main · codex running/tool\n正在执行 /bin/zsh -lc 'node --test test/control-plane.test.js'\n\nThinking... · Command · /bin/zsh -lc 'node --test test/control-plane.test.js'",
+  );
+
+  session.turns[0].lastMessage = "目前有 3 个未提交修改。";
   session.currentTool = undefined;
   session.toolCallsSinceLastMessage = 2;
   assert.equal(
@@ -10319,6 +10326,16 @@ test("control plane surfaces approval reasons over an earlier assistant message"
     "instance-main · codex waiting/approval\nTests need access to the local package cache.",
   );
 
+  session.summary = "Tests need access to the local package cache. · Command: pnpm test";
+  session.turns[0].summary = session.summary;
+  session.currentTool = { name: "Command", inputPreview: "pnpm test" };
+  assert.equal(
+    aiSessionDeliveryText(session, "instance-main · codex waiting/approval"),
+    "instance-main · codex waiting/approval\nTests need access to the local package cache. · Command: pnpm test",
+  );
+
+  session.summary = "Tests need access to the local package cache.";
+  session.turns[0].summary = session.summary;
   session.turns[0].status = "completed";
   session.turns[0].phase = "responding";
   session.turns[0].summary = "I will run the tests now.";

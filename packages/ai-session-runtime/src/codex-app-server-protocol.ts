@@ -1,4 +1,4 @@
-import type { AiSessionLifecycle, AiSessionPhase, AiSessionStatus } from "@task-handoff/protocol/ai-sessions";
+import type { AiSessionLifecycle, AiSessionPhase, AiSessionStatus, AiSessionSubAgent } from "@task-handoff/protocol/ai-sessions";
 import { isSyntheticUserTranscriptText } from "@task-handoff/core/core/transcript";
 import type { AiSessionApprovalDecision } from "./ai-session-control";
 
@@ -48,6 +48,11 @@ export type CodexToolActivityState = {
   currentTool?: CodexToolDescriptor;
 };
 
+export type CodexSubAgentUpdate = Omit<AiSessionSubAgent, "updatedAt"> & {
+  observation: "state" | "activity";
+  observedAt?: string;
+};
+
 export type CodexAppServerEvent =
   | { type: "thread"; thread: CodexThread }
   | { type: "thread-status"; threadId: string; status: CodexThreadStatus }
@@ -55,8 +60,9 @@ export type CodexAppServerEvent =
   | { type: "turn-started"; threadId: string; turnId?: string }
   | { type: "turn-completed"; threadId: string; turnId?: string; status?: string; error?: string }
   | { type: "approval-request"; request: CodexApprovalRequest }
-  | { type: "tool-item-started"; threadId: string; turnId?: string; tool: CodexToolDescriptor }
-  | { type: "tool-item-completed"; threadId: string; turnId?: string; tool: CodexToolDescriptor }
+  | { type: "tool-item-started"; threadId: string; turnId?: string; tool: CodexToolDescriptor; subAgents?: CodexSubAgentUpdate[] }
+  | { type: "tool-item-completed"; threadId: string; turnId?: string; tool: CodexToolDescriptor; subAgents?: CodexSubAgentUpdate[] }
+  | { type: "sub-agent-activity"; threadId: string; turnId?: string; subAgent: CodexSubAgentUpdate }
   | { type: "user-message"; threadId: string; turnId?: string; text: string }
   | { type: "agent-message-delta"; threadId: string; turnId?: string; itemId?: string; delta: string }
   | { type: "agent-message-completed"; threadId: string; turnId?: string; text: string };
@@ -100,6 +106,16 @@ export function codexNotification(method: string, params: JsonValue): CodexAppSe
           }
         : undefined;
     }
+    const observedAt = isoTimestampFromMs(method === "item/started" ? params.startedAtMs as number | undefined : params.completedAtMs as number | undefined);
+    const subAgents = codexSubAgentUpdates(item).map((subAgent) => observedAt ? { ...subAgent, observedAt } : subAgent);
+    if (item.type === "subAgentActivity" && subAgents[0]) {
+      return {
+        type: "sub-agent-activity",
+        threadId: params.threadId,
+        turnId: typeof params.turnId === "string" ? params.turnId : undefined,
+        subAgent: subAgents[0],
+      };
+    }
     const tool = codexToolDescriptor(
       item,
       method === "item/started" && typeof params.startedAtMs === "number" ? params.startedAtMs : undefined,
@@ -110,6 +126,7 @@ export function codexNotification(method: string, params: JsonValue): CodexAppSe
         threadId: params.threadId,
         turnId: typeof params.turnId === "string" ? params.turnId : undefined,
         tool,
+        subAgents: subAgents.length ? subAgents : undefined,
       };
     }
   }
@@ -250,6 +267,171 @@ function safeJsonPreview(value: unknown) {
   }
 }
 
+function codexSubAgentStatus(value: unknown): AiSessionSubAgent["status"] | undefined {
+  switch (value) {
+    case "pendingInit": return "pending-init";
+    case "running": return "running";
+    case "interrupted": return "interrupted";
+    case "completed": return "completed";
+    case "errored": return "errored";
+    case "shutdown": return "shutdown";
+    case "notFound": return "not-found";
+    default: return undefined;
+  }
+}
+
+export function codexSubAgentUpdates(item: JsonValue): CodexSubAgentUpdate[] {
+  if (item.type === "subAgentActivity") {
+    const threadId = stringField(item, "agentThreadId");
+    const activity = ["started", "interacted", "interrupted"].includes(String(item.kind))
+      ? item.kind as AiSessionSubAgent["activity"]
+      : undefined;
+    if (!threadId || !activity) return [];
+    return [{
+      threadId,
+      path: stringField(item, "agentPath"),
+      status: activity === "interrupted" ? "interrupted" : activity === "started" ? "pending-init" : "running",
+      activity,
+      observation: "activity",
+    }];
+  }
+  if (item.type !== "collabAgentToolCall") return [];
+  const states = asRecord(item.agentsStates);
+  return Object.entries(states).flatMap(([threadId, rawState]) => {
+    const state = asRecord(rawState);
+    const status = codexSubAgentStatus(state.status);
+    if (!threadId.trim() || !status) return [];
+    return [{
+      threadId,
+      status,
+      message: stringField(state, "message"),
+      observation: "state",
+    }];
+  });
+}
+
+export class CodexSubAgentTracker {
+  private readonly subAgents = new Map<string, AiSessionSubAgent>();
+  private readonly observations = new Map<string, { stateAt?: string; activityAt?: string; activityOrigin?: "snapshot" | "realtime" }>();
+
+  replace(subAgents: AiSessionSubAgent[]) {
+    for (const subAgent of subAgents) {
+      const current = this.subAgents.get(subAgent.threadId);
+      const observation = this.observations.get(subAgent.threadId) || {};
+      const preserveNewerState = Boolean(current && isSnapshotStateRegression(current.status, subAgent.status));
+      const preserveRealtimeActivity = observation.activityOrigin === "realtime";
+      const merged: AiSessionSubAgent = current ? {
+        ...current,
+        status: preserveNewerState ? current.status : subAgent.status,
+        message: preserveNewerState ? current.message : subAgent.message,
+        path: subAgent.path || current.path,
+        activity: preserveRealtimeActivity ? current.activity : subAgent.activity || current.activity,
+        updatedAt: current.updatedAt,
+      } : subAgent;
+      const changed = !current || current.path !== merged.path || current.status !== merged.status || current.activity !== merged.activity || current.message !== merged.message;
+      this.subAgents.set(subAgent.threadId, changed ? { ...merged, updatedAt: maxTimestamp(current?.updatedAt, subAgent.updatedAt) } : current);
+      this.observations.set(subAgent.threadId, {
+        ...observation,
+        stateAt: preserveNewerState ? observation.stateAt : maxTimestamp(observation.stateAt, subAgent.updatedAt),
+        activityAt: subAgent.activity && !preserveRealtimeActivity ? maxTimestamp(observation.activityAt, subAgent.updatedAt) : observation.activityAt,
+        activityOrigin: preserveRealtimeActivity ? "realtime" : subAgent.activity ? "snapshot" : observation.activityOrigin,
+      });
+    }
+    this.prune();
+    return this.snapshot();
+  }
+
+  apply(updates: CodexSubAgentUpdate[], updatedAt: string) {
+    for (const update of updates) {
+      const current = this.subAgents.get(update.threadId);
+      const observation = this.observations.get(update.threadId) || {};
+      const { observation: kind, observedAt, ...fields } = update;
+      const observationAt = observedAt || updatedAt;
+      const stateStale = kind === "state" && timestampBefore(observationAt, observation.stateAt);
+      const activityStale = kind === "activity" && timestampBefore(observationAt, observation.activityAt);
+      const next: AiSessionSubAgent = kind === "state"
+        ? {
+            ...(current || fields),
+            status: stateStale && current ? current.status : fields.status,
+            message: stateStale && current ? current.message : fields.message,
+            updatedAt: current?.updatedAt || observationAt,
+          }
+        : {
+            ...(current || fields),
+            status: current && observation.stateAt ? current.status : activityStale && current ? current.status : fields.status,
+            path: fields.path && (!activityStale || !current?.path) ? fields.path : current?.path,
+            activity: activityStale && current ? current.activity : fields.activity || current?.activity,
+            message: current?.message,
+            updatedAt: current?.updatedAt || observationAt,
+          };
+      const changed = !current ||
+        current.path !== next.path ||
+        current.status !== next.status ||
+        current.activity !== next.activity ||
+        current.message !== next.message;
+      this.subAgents.set(update.threadId, changed ? { ...next, updatedAt: maxTimestamp(current?.updatedAt, observationAt) } : current);
+      this.observations.set(update.threadId, kind === "state"
+        ? {
+            ...observation,
+            stateAt: stateStale ? observation.stateAt : observationAt,
+          }
+        : {
+            ...observation,
+            activityAt: activityStale ? observation.activityAt : observationAt,
+            activityOrigin: activityStale ? observation.activityOrigin : "realtime",
+          });
+    }
+    this.prune();
+    return this.snapshot();
+  }
+
+  clear() {
+    this.subAgents.clear();
+    this.observations.clear();
+    return this.snapshot();
+  }
+
+  snapshot() {
+    return [...this.subAgents.values()].sort((left, right) => left.threadId.localeCompare(right.threadId));
+  }
+
+  private prune() {
+    if (this.subAgents.size <= 50) return;
+    const active = new Set(["pending-init", "running", "interrupted", "errored"]);
+    const retained = [...this.subAgents.values()]
+      .sort((left, right) => Number(active.has(right.status)) - Number(active.has(left.status)) || Date.parse(right.updatedAt) - Date.parse(left.updatedAt) || left.threadId.localeCompare(right.threadId))
+      .slice(0, 50);
+    const retainedIds = new Set(retained.map((subAgent) => subAgent.threadId));
+    for (const threadId of this.subAgents.keys()) {
+      if (!retainedIds.has(threadId)) {
+        this.subAgents.delete(threadId);
+        this.observations.delete(threadId);
+      }
+    }
+  }
+}
+
+function timestampBefore(left: string, right: string | undefined) {
+  return Boolean(right && Date.parse(left) < Date.parse(right));
+}
+
+function isSnapshotStateRegression(current: AiSessionSubAgent["status"], incoming: AiSessionSubAgent["status"]) {
+  const rank: Record<AiSessionSubAgent["status"], number> = {
+    "pending-init": 0,
+    running: 1,
+    interrupted: 2,
+    completed: 3,
+    errored: 3,
+    shutdown: 3,
+    "not-found": 3,
+  };
+  return rank[incoming] < rank[current];
+}
+
+function maxTimestamp(left: string | undefined, right: string) {
+  return left && Date.parse(left) >= Date.parse(right) ? left : right;
+}
+
 function explicitToolActivity(item: JsonValue): "active" | "inactive" | "unknown" {
   switch (item.type) {
     case "commandExecution":
@@ -349,6 +531,19 @@ export function rebuildCodexToolActivity(thread: CodexThread): CodexToolActivity
   const threadActive = thread.status?.type === "active";
   if (threadActive && lastTurnActive && lastItemAfterBoundary?.tool && explicitToolActivity(lastItemAfterBoundary.item) === "unknown") {
     tracker.restoreActive(lastItemAfterBoundary.tool);
+  }
+  return tracker.snapshot();
+}
+
+export function rebuildCodexSubAgents(thread: CodexThread, updatedAt: string): AiSessionSubAgent[] {
+  const tracker = new CodexSubAgentTracker();
+  const turns = Array.isArray(thread.turns) ? thread.turns : [];
+  for (const rawTurn of turns) {
+    const turn = asRecord(rawTurn);
+    const items = Array.isArray(turn.items) ? turn.items : [];
+    for (const rawItem of items) {
+      tracker.apply(codexSubAgentUpdates(asRecord(rawItem)), updatedAt);
+    }
   }
   return tracker.snapshot();
 }
@@ -471,6 +666,7 @@ export function summarizeThreadTurns(thread: CodexThread): {
   summary?: string;
   lastMessage?: string;
   toolActivity: CodexToolActivityState;
+  subAgents: AiSessionSubAgent[];
 } {
   let activeTurnId: string | undefined;
   let userPrompt: string | undefined;
@@ -508,6 +704,7 @@ export function summarizeThreadTurns(thread: CodexThread): {
       historyTurns.push(historyTurn);
     }
   }
+  const updatedAt = new Date().toISOString();
   return {
     activeTurnId,
     userPrompt,
@@ -515,6 +712,7 @@ export function summarizeThreadTurns(thread: CodexThread): {
     summary: lastMessage,
     lastMessage,
     toolActivity: rebuildCodexToolActivity(thread),
+    subAgents: rebuildCodexSubAgents(thread, updatedAt),
   };
 }
 

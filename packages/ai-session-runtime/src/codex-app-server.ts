@@ -14,6 +14,7 @@ import {
   approvalResponseForRequest,
   codexApprovalRequest,
   codexNotification,
+  CodexSubAgentTracker,
   CodexToolActivityTracker,
   lifecycleForStatus,
   isNoActiveTurnError,
@@ -461,6 +462,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
   private subscriptionEpoch = 0;
   private readonly approvals = new PendingAiSessionApprovalStore();
   private readonly toolActivityByThread = new Map<string, CodexToolActivityTracker>();
+  private readonly subAgentsByThread = new Map<string, CodexSubAgentTracker>();
   private readonly injectedClient?: CodexAppServerClientLike;
   private readonly options: CodexAppServerBridgeOptions;
 
@@ -855,11 +857,17 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       return;
     }
     if (event.type === "tool-item-started") {
+      if (event.subAgents?.length) this.applySubAgentUpdates(session.id, event.threadId, event.subAgents);
       this.applyToolActivity(session.id, this.toolTracker(event.threadId).started(event.tool));
       return;
     }
     if (event.type === "tool-item-completed") {
+      if (event.subAgents?.length) this.applySubAgentUpdates(session.id, event.threadId, event.subAgents);
       this.applyToolActivity(session.id, this.toolTracker(event.threadId).completed(event.tool));
+      return;
+    }
+    if (event.type === "sub-agent-activity") {
+      this.applySubAgentUpdates(session.id, event.threadId, [event.subAgent]);
       return;
     }
     if (event.type === "user-message") {
@@ -904,11 +912,32 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
     return tracker;
   }
 
+  private subAgentTracker(threadId: string) {
+    let tracker = this.subAgentsByThread.get(threadId);
+    if (!tracker) {
+      tracker = new CodexSubAgentTracker();
+      this.subAgentsByThread.set(threadId, tracker);
+    }
+    return tracker;
+  }
+
   private applyToolActivity(sessionId: string, state: CodexToolActivityState) {
     this.registry.applyRealtimeEvent(sessionId, {
       kind: "tool-activity",
       currentTool: state.currentTool || null,
       toolCallsSinceLastMessage: state.toolCallsSinceLastMessage,
+      source: "realtime",
+    });
+  }
+
+  private applySubAgentUpdates(sessionId: string, threadId: string, updates: Parameters<CodexSubAgentTracker["apply"]>[0]) {
+    this.applySubAgentActivity(sessionId, this.subAgentTracker(threadId).apply(updates, new Date().toISOString()));
+  }
+
+  private applySubAgentActivity(sessionId: string, subAgents: ReturnType<CodexSubAgentTracker["snapshot"]>) {
+    this.registry.applyRealtimeEvent(sessionId, {
+      kind: "sub-agent-activity",
+      subAgents,
       source: "realtime",
     });
   }
@@ -926,6 +955,9 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
     const toolActivity = Array.isArray(thread.turns)
       ? this.toolTracker(id).replace(history.toolActivity)
       : this.toolTracker(id).snapshot();
+    const subAgents = Array.isArray(thread.turns)
+      ? this.subAgentTracker(id).replace(history.subAgents)
+      : this.subAgentTracker(id).snapshot();
     this.registry.applyAdapterSnapshot({
       source: "adapter-snapshot",
       agent: "codex",
@@ -947,6 +979,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       lastMessage: history.lastMessage,
       currentTool: toolActivity.currentTool,
       toolCallsSinceLastMessage: toolActivity.toolCallsSinceLastMessage,
+      subAgents,
       status: lifecycle.status,
       phase: lifecycle.phase,
       replaceActivity: true,

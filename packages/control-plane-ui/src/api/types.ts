@@ -684,6 +684,15 @@ export type AiSessionTool = {
   startedAt?: string;
 };
 
+export type AiSessionSubAgent = {
+  threadId: string;
+  path?: string;
+  status: "pending-init" | "running" | "interrupted" | "completed" | "errored" | "shutdown" | "not-found";
+  activity?: "started" | "interacted" | "interrupted";
+  message?: string;
+  updatedAt: string;
+};
+
 export type AiSessionSummary = {
   id: string;
   agent: string;
@@ -708,6 +717,7 @@ export type AiSessionSummary = {
   lastMessage?: string;
   currentTool?: AiSessionTool;
   toolCallsSinceLastMessage: number;
+  subAgents: AiSessionSubAgent[];
   queue: AiSessionQueue;
   startedAt: string;
   updatedAt: string;
