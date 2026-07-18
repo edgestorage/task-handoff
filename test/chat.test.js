@@ -4607,7 +4607,7 @@ test("web app serves core API routes with isolated storage", async () => {
     assert.equal(catalogItems.some((entry) => entry.id === "terminal-tty"), true);
     const codexApp = catalogItems.find((entry) => entry.id === "codex");
     assert.equal(codexApp.command, process.env.TASK_HANDOFF_CODEX_COMMAND || "codex");
-    assert.deepEqual(codexApp.args, ["--model", "gpt-codex-test"]);
+    assert.deepEqual(codexApp.args, ["-c", "check_for_update_on_startup=false", "--model", "gpt-codex-test"]);
     const claudeApp = catalogItems.find((entry) => entry.id === "claude");
     assert.equal(claudeApp.command, process.env.TASK_HANDOFF_CLAUDE_COMMAND || "claude");
     assert.deepEqual(claudeApp.args, ["--dangerously-skip-permissions", "--model", "claude-sonnet-test"]);

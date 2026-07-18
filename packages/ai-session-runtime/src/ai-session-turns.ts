@@ -266,11 +266,11 @@ export function updateTurns(
   meta: TurnMeta = {},
 ) {
   const turns = mergeTurns(current, patch.turns, meta);
-  const incomingPrompt = [...(patch.turns || [])]
-    .reverse()
-    .find((turn) => turn.userPrompt?.trim())?.userPrompt;
-  const prompt = messageText(incomingPrompt || patch.userPrompt);
   const activeTurnId = patch.activeTurnId ? compact(patch.activeTurnId, 240) : "";
+  const activeTurnPrompt = activeTurnId
+    ? patch.turns?.find((turn) => turn.id === activeTurnId)?.userPrompt
+    : undefined;
+  const prompt = messageText(activeTurnPrompt || patch.userPrompt);
   if (prompt) {
     const last = turns.at(-1);
     const activeTurn = activeTurnId ? turns.find((turn) => turn.id === activeTurnId) : undefined;
