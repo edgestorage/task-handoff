@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type {
   AiSessionMessageAttachment,
+  AiSessionReference,
   AiSessionQueuedMessage,
   AiSessionStatus,
 } from "@task-handoff/protocol/ai-sessions";
@@ -49,12 +50,14 @@ export class AiSessionQueueService {
     current: AiSessionStatus,
     message: string,
     attachments: AiSessionMessageAttachment[] = [],
+    references: AiSessionReference[] = [],
   ): AiSessionEnqueueResult | undefined {
     const timestamp = this.now();
     const item: AiSessionQueuedMessage = {
       id: this.generateQueueId(),
       message: messageText(message),
       attachments: aiSessionAttachmentMetas(attachments),
+      references,
       status: "queued",
       createdAt: timestamp,
       updatedAt: timestamp,

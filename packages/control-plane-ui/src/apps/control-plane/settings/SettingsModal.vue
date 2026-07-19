@@ -20,6 +20,11 @@
         :checking-server-update="checkingServerUpdate"
         v-model:public-base-url="publicBaseUrl"
         :public-base-url-message="publicBaseUrlMessage"
+        v-model:mention-trigger="mentionTrigger"
+        :mention-trigger-error="mentionTriggerError"
+        :mention-trigger-message="mentionTriggerMessage"
+        :mention-trigger-message-error="mentionTriggerMessageError"
+        :saving-mention-trigger="savingMentionTrigger"
         :saving-public-base-url="savingPublicBaseUrl"
         :server-current-version="serverCurrentVersion"
         :server-unavailable-reason="serverUnavailableReason"
@@ -32,6 +37,8 @@
         @check-server-update="checkServerUpdate"
         @detect-public-base-url="detectPublicBaseUrl"
         @save-public-base-url="savePublicBaseUrl"
+        @reset-mention-trigger="saveMentionTrigger('@')"
+        @save-mention-trigger="saveMentionTrigger()"
         @update:server-update-channel="setUpdateChannel"
         @update:theme-preference="setThemePreference"
       />
@@ -566,6 +573,11 @@ const themePreference = ref<ThemePreference>(getThemePreference());
 const publicBaseUrl = ref("");
 const publicBaseUrlMessage = ref("");
 const savingPublicBaseUrl = ref(false);
+const mentionTrigger = ref("@");
+const mentionTriggerMessage = ref("");
+const mentionTriggerMessageError = ref(false);
+const savingMentionTrigger = ref(false);
+const mentionTriggerError = computed(() => validMentionTrigger(mentionTrigger.value) ? "" : "Use one non-letter, non-number, non-space character except / or \\." );
 const remoteNodeDialogOpen = ref(false);
 const codexModels = computed(() => (models.data.value || []).filter((model) => model.app === "codex"));
 const claudeModels = computed(() => (models.data.value || []).filter((model) => model.app === "claude"));
@@ -611,6 +623,14 @@ watch(
   () => controlPlaneSettings.data.value?.publicBaseUrl,
   (value) => {
     publicBaseUrl.value = value || "";
+  },
+  { immediate: true },
+);
+
+watch(
+  () => controlPlaneSettings.data.value?.mentionTrigger,
+  (value) => {
+    mentionTrigger.value = value || "@";
   },
   { immediate: true },
 );
@@ -1110,6 +1130,29 @@ async function savePublicBaseUrl() {
   } finally {
     savingPublicBaseUrl.value = false;
   }
+}
+
+async function saveMentionTrigger(value = mentionTrigger.value) {
+  if (savingMentionTrigger.value || !validMentionTrigger(value)) return;
+  savingMentionTrigger.value = true;
+  mentionTriggerMessage.value = "";
+  mentionTriggerMessageError.value = false;
+  try {
+    const saved = await updateControlPlaneSettings({ mentionTrigger: value });
+    mentionTrigger.value = saved.mentionTrigger;
+    mentionTriggerMessage.value = "Mention trigger saved.";
+    queryClient.setQueryData<ControlPlaneSettings>(["control-plane-settings"], saved);
+  } catch (error) {
+    mentionTriggerMessage.value = errorText(error);
+    mentionTriggerMessageError.value = true;
+    showControlPlaneToast(mentionTriggerMessage.value);
+  } finally {
+    savingMentionTrigger.value = false;
+  }
+}
+
+function validMentionTrigger(value: string) {
+  return Array.from(value).length === 1 && !/[\p{L}\p{N}\s/\\]/u.test(value);
 }
 
 async function refreshChat() {

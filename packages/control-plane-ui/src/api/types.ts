@@ -1,4 +1,13 @@
+import type {
+  AiSessionMentionCandidate,
+  AiSessionMentionCatalog,
+  AiSessionMentionDiagnostic,
+  AiSessionMentionFileSearch,
+  AiSessionReference,
+} from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionSubAgent as ProtocolAiSessionSubAgent } from "@task-handoff/protocol/ai-sessions";
+
+export type { AiSessionMentionCandidate, AiSessionMentionCatalog, AiSessionMentionDiagnostic, AiSessionMentionFileSearch, AiSessionReference };
 
 export type HealthResponse = {
   ok: boolean;
@@ -37,6 +46,7 @@ export type ControlPlaneStatusResponse = {
 export type ControlPlaneSettings = {
   publicBaseUrl?: string;
   updateChannel: UpdateChannel;
+  mentionTrigger: string;
 };
 
 export type BuildInfo = {

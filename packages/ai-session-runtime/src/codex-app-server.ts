@@ -12,6 +12,7 @@ import { CodexAppServerSessionBinding, type CodexAppSession } from "./codex-app-
 import { CodexAppServerSessionControl } from "./codex-app-server/session/control";
 import { CodexAppServerSessionDiscovery } from "./codex-app-server/session/discovery";
 import { CodexAppServerSessionProjector } from "./codex-app-server/session/projector";
+import { CodexAppServerMentions } from "./codex-app-server/mentions";
 
 export { CodexAppServerClient } from "./codex-app-server/client/client";
 type CodexAppServerBridgeOptions = {
@@ -38,6 +39,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
   private readonly control: CodexAppServerSessionControl;
   private readonly discovery: CodexAppServerSessionDiscovery;
   private readonly projector: CodexAppServerSessionProjector;
+  private readonly mentions: CodexAppServerMentions;
   private readonly injectedClient?: CodexAppServerClientLike;
   private readonly options: CodexAppServerBridgeOptions;
 
@@ -60,6 +62,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
         this.options.onEventSourceClose?.();
         this.approvalCoordinator?.resetConnection();
         this.projector?.resetConnection();
+        this.mentions?.resetConnection();
       },
     });
     this.approvalCoordinator = new CodexAppServerApprovalCoordinator({
@@ -77,9 +80,14 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       latestApprovalSummary: (sessionId) => this.approvalCoordinator.latestForSession(sessionId)?.summary,
       onMessageDelta: (event) => this.options.onMessageDelta?.(event),
     });
+    this.mentions = new CodexAppServerMentions({
+      readyClient: () => this.requireReadyClient(),
+      connectionEpoch: () => this.connection.epoch,
+    });
     this.control = new CodexAppServerSessionControl({
       registry,
       readyClient: () => this.requireReadyClient(),
+      validateReferences: (session, references) => this.mentions.validateReferences(session, references),
     });
     this.discovery = new CodexAppServerSessionDiscovery({
       applyThreadSnapshot: (thread) => this.upsertThread(thread, { bindAppSession: true }),
@@ -148,6 +156,14 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
 
   async resolveApproval(session: AiSessionStatus, decision: AiSessionApprovalDecision): Promise<AiSessionActionResult> {
     return this.approvalCoordinator.resolve(session, decision);
+  }
+
+  mentionCatalog(session: AiSessionStatus) {
+    return this.mentions.catalog(session);
+  }
+
+  searchMentionFiles(session: AiSessionStatus, query: string) {
+    return this.mentions.searchFiles(session, query);
   }
 
   private createClient(options: CodexAppServerClientOptions) {

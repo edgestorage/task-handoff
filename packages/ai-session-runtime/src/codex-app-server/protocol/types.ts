@@ -1,6 +1,10 @@
 import type { AiSessionSubAgent } from "@task-handoff/protocol/ai-sessions";
 
 export type JsonValue = Record<string, unknown>;
+export type CodexUserInput =
+  | { type: "text"; text: string; text_elements: [] }
+  | { type: "skill"; name: string; path: string }
+  | { type: "mention"; name: string; path: string };
 export type CodexThreadStatus = {
   type?: unknown;
   activeFlags?: unknown;

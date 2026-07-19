@@ -36,12 +36,15 @@ import {
   AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES,
   AiSessionActionResultSchema,
   AiSessionDeltaResponseSchema,
+  AiSessionMentionCatalogSchema,
+  AiSessionMentionFileSearchSchema,
   AiSessionQueueSchema,
   AiSessionStatusSchema,
   AiSessionsStateSchema,
   type AiSessionActionResult,
   type AiSessionDeltaResponse,
   type AiSessionMessageAttachment,
+  type AiSessionReference,
   type AiSessionSendMode,
   type AiSessionsSnapshot,
 } from "@task-handoff/protocol/ai-sessions";
@@ -73,6 +76,7 @@ import {
   ConnectNodeRemoteInputSchema,
   ControlPlaneTriggerRecordSchema,
   ControlPlaneSettingsSchema,
+  sanitizeStoredControlPlaneSettings,
   CreateInstanceInputSchema,
   CreateModelInputSchema,
   CreateNodeJoinInviteInputSchema,
@@ -257,7 +261,10 @@ export class ControlPlaneService {
     this.chatBridges = new JsonCollection(paths.chatBridgesDir, storeOptions(ChatBridgeConfigSchema));
     this.triggers = new JsonCollection(paths.triggersDir, storeOptions(ControlPlaneTriggerRecordSchema));
     this.nodeJoinInvites = new JsonCollection(paths.nodeJoinInvitesDir, storeOptions(NodeJoinInviteSchema));
-    this.settings = new JsonFile(paths.settingsPath, () => ControlPlaneSettingsSchema.parse({}), storeOptions(ControlPlaneSettingsSchema));
+    this.settings = new JsonFile(paths.settingsPath, () => ControlPlaneSettingsSchema.parse({}), {
+      ...storeOptions(ControlPlaneSettingsSchema),
+      sanitize: sanitizeStoredControlPlaneSettings,
+    });
     this.catalogService = new ControlPlaneCatalogService({
       projects: this.projects,
       images: this.images,
@@ -1484,14 +1491,28 @@ export class ControlPlaneService {
     return session;
   }
 
-  async sendAiSessionMessage(instanceId: string, sessionId: string, message: string, mode?: AiSessionSendMode, attachments: AiSessionMessageAttachment[] = []): Promise<AiSessionActionResult> {
+  async sendAiSessionMessage(instanceId: string, sessionId: string, message: string, mode?: AiSessionSendMode, attachments: AiSessionMessageAttachment[] = [], references: AiSessionReference[] = []): Promise<AiSessionActionResult> {
     assertAiSessionAttachmentsWithinLimit(attachments);
     const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
-    const body = { message, ...(mode ? { mode } : {}), ...(attachments.length ? { attachments } : {}) };
+    const body = { message, ...(mode ? { mode } : {}), ...(attachments.length ? { attachments } : {}), ...(references.length ? { references } : {}) };
     return AiSessionActionResultSchema.parse(await this.instanceRequest(instance, `/ai-sessions/${encodeURIComponent(sessionId)}/messages`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
+    }));
+  }
+
+  async aiSessionMentionCatalog(instanceId: string, sessionId: string) {
+    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
+    return AiSessionMentionCatalogSchema.parse(await this.instanceRequest(instance, `/ai-sessions/${encodeURIComponent(sessionId)}/mentions`));
+  }
+
+  async searchAiSessionMentionFiles(instanceId: string, sessionId: string, query: string) {
+    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
+    return AiSessionMentionFileSearchSchema.parse(await this.instanceRequest(instance, `/ai-sessions/${encodeURIComponent(sessionId)}/mentions/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ query }),
     }));
   }
 

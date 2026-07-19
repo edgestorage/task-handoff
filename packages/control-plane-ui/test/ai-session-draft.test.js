@@ -13,7 +13,9 @@ global.window = { localStorage: storage };
 const {
   AI_SESSION_DRAFT_TTL_MS,
   loadAiSessionDraft,
+  loadAiSessionDraftPayload,
   persistAiSessionDraft,
+  persistAiSessionDraftPayload,
 } = await import("../src/apps/control-plane/useAiSessionDraft.ts");
 
 test("AI session drafts are isolated by session id and expire", () => {
@@ -34,4 +36,24 @@ test("AI session draft storage drops malformed data", () => {
   storage.setItem("task-handoff.control-plane.ai-session-drafts", "not-json");
   assert.equal(loadAiSessionDraft("session-a"), "");
   assert.equal(storage.getItem("task-handoff.control-plane.ai-session-drafts"), null);
+});
+
+test("AI session drafts migrate text-only records and preserve valid bindings", () => {
+  const now = Date.now();
+  storage.setItem("task-handoff.control-plane.ai-session-drafts", JSON.stringify({
+    legacy: { value: "@docs", updatedAt: now, future: true },
+  }));
+  assert.deepEqual(loadAiSessionDraftPayload("legacy", now + 1), { value: "@docs", bindings: [] });
+
+  const bindings = [{
+    id: "docs",
+    token: "@docs",
+    start: 0,
+    end: 5,
+    reference: { kind: "skill", name: "Docs", path: "/workspace/docs/SKILL.md" },
+  }];
+  persistAiSessionDraftPayload("modern", "@docs", bindings, now + 2);
+  assert.deepEqual(loadAiSessionDraftPayload("modern", now + 3), { value: "@docs", bindings });
+  persistAiSessionDraft("modern", "prefix @docs", now + 4);
+  assert.deepEqual(loadAiSessionDraftPayload("modern", now + 5), { value: "prefix @docs", bindings });
 });

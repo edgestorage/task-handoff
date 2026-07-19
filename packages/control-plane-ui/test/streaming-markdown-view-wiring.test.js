@@ -10,7 +10,7 @@ const message = fs.readFileSync(new URL("../src/components/ai-session/AiSessionS
 const animatedText = fs.readFileSync(new URL("../src/components/ai-session/AiSessionAnimatedTextNode.vue", import.meta.url), "utf8");
 const codeBlock = fs.readFileSync(new URL("../src/components/ai-session/AiSessionCodeBlock.vue", import.meta.url), "utf8");
 
-test("board, session cards, and floating dock use the streaming Markdown view", () => {
+test("board, instance session cards, and selected details use the streaming Markdown view", () => {
   for (const source of [card, result]) {
     assert.match(source, /AiSessionStreamingMarkdown/);
     assert.match(source, /:is-latest=/);
@@ -19,6 +19,10 @@ test("board, session cards, and floating dock use the streaming Markdown view", 
     assert.match(source, /AiSessionResult/);
     assert.match(source, /:is-latest=/);
   }
+  assert.match(panel, /<AiSessionStreamingMarkdown/);
+  assert.match(panel, /import AiSessionStreamingMarkdown from "\.\.\/\.\.\/\.\.\/components\/ai-session\/AiSessionStreamingMarkdown\.vue"/);
+  assert.match(panel, /<AiSessionToolActivity/);
+  assert.match(panel, /import AiSessionToolActivity from "\.\.\/\.\.\/\.\.\/components\/ai-session\/AiSessionToolActivity\.vue"/);
   assert.match(result, /v-show="displayContent"/);
   assert.match(result, /useStreamingMessagesStore/);
 });

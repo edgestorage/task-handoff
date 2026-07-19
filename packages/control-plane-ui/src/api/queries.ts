@@ -27,6 +27,9 @@ import type {
   ChatChannel,
   AiSessionAttachment,
   AiSessionAttachmentRef,
+  AiSessionMentionCatalog,
+  AiSessionMentionFileSearch,
+  AiSessionReference,
   CreateChatBridgeInput,
   ChatGatewayStatus,
   InstanceBoardItem,
@@ -427,8 +430,16 @@ export function uploadAiSessionAttachment(input: { instanceId: string; sessionId
   return postApiData<AiSessionAttachment>("ai-session-attachments", input);
 }
 
-export function sendAiSessionMessage(instanceId: string, sessionId: string, message: string, mode?: "auto" | "queue" | "steer" | "immediate", attachments: AiSessionAttachmentRef[] = []) {
-  return postApiData<Record<string, unknown>>(`controlled-instances/${instanceId}/ai-sessions/${sessionId}/messages`, { message, mode, attachments });
+export function sendAiSessionMessage(instanceId: string, sessionId: string, message: string, mode?: "auto" | "queue" | "steer" | "immediate", attachments: AiSessionAttachmentRef[] = [], references: AiSessionReference[] = []) {
+  return postApiData<Record<string, unknown>>(`controlled-instances/${instanceId}/ai-sessions/${sessionId}/messages`, { message, mode, attachments, references });
+}
+
+export function getAiSessionMentionCatalog(instanceId: string, sessionId: string, signal?: AbortSignal) {
+  return getApiData<AiSessionMentionCatalog>(`controlled-instances/${instanceId}/ai-sessions/${sessionId}/mentions`, { signal });
+}
+
+export function searchAiSessionMentionFiles(instanceId: string, sessionId: string, query: string, signal?: AbortSignal) {
+  return postApiData<AiSessionMentionFileSearch>(`controlled-instances/${instanceId}/ai-sessions/${sessionId}/mentions/files`, { query }, { signal });
 }
 
 export function steerAiSessionQueuedMessage(instanceId: string, sessionId: string, queueId: string) {

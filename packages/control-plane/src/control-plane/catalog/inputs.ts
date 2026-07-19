@@ -8,8 +8,36 @@ export const CreateProjectInputSchema = z.object({
   labels: ProjectSchema.shape.labels.optional(),
 }).strict();
 export const UpdateProjectInputSchema = CreateProjectInputSchema.omit({ id: true }).partial().strict();
-export const ControlPlaneSettingsSchema = z.object({ publicBaseUrl: z.string().trim().max(2048).optional(), updateChannel: UpdateChannelSchema.default("stable") }).strict();
-export const UpdateControlPlaneSettingsSchema = ControlPlaneSettingsSchema.partial().strict();
+export const DEFAULT_MENTION_TRIGGER = "@";
+
+export function isValidMentionTrigger(value: string) {
+  return Array.from(value).length === 1
+    && !/[\p{L}\p{N}\s]/u.test(value)
+    && value !== "/"
+    && value !== "\\";
+}
+
+export const MentionTriggerSchema = z.string().refine(isValidMentionTrigger, "Mention trigger must be one printable non-alphanumeric character other than / or \\.");
+
+export const ControlPlaneSettingsSchema = z.object({
+  publicBaseUrl: z.string().trim().max(2048).optional(),
+  updateChannel: UpdateChannelSchema.default("stable"),
+  mentionTrigger: MentionTriggerSchema.default(DEFAULT_MENTION_TRIGGER),
+}).strict();
+export const UpdateControlPlaneSettingsSchema = z.object({
+  publicBaseUrl: z.string().trim().max(2048).optional(),
+  updateChannel: UpdateChannelSchema.optional(),
+  mentionTrigger: MentionTriggerSchema.optional(),
+}).strict();
+
+export function sanitizeStoredControlPlaneSettings(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const record = { ...(value as Record<string, unknown>) };
+  if (typeof record.mentionTrigger !== "string" || !isValidMentionTrigger(record.mentionTrigger)) {
+    record.mentionTrigger = DEFAULT_MENTION_TRIGGER;
+  }
+  return record;
+}
 export const CreateImageInputSchema = z.object({
   id: ImageProfileSchema.shape.id.optional(), name: ImageProfileSchema.shape.name, reference: ImageProfileSchema.shape.reference,
   pullPolicy: ImageProfileSchema.shape.pullPolicy.optional(), capabilities: z.array(z.string().trim().min(1).max(80)).optional(),

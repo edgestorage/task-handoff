@@ -49,8 +49,8 @@ async function withApiError<T>(request: Promise<T>): Promise<T> {
   }
 }
 
-export async function getApiData<T>(path: string): Promise<T> {
-  const payload = await withApiError(api.get(path).json<{ data: T }>());
+export async function getApiData<T>(path: string, options?: { signal?: AbortSignal }): Promise<T> {
+  const payload = await withApiError(api.get(path, options).json<{ data: T }>());
   return payload.data;
 }
 
@@ -58,8 +58,8 @@ export async function getApiPayload<T, M = unknown>(path: string): Promise<{ dat
   return withApiError(api.get(path).json<{ data: T; meta?: M }>());
 }
 
-export async function postApiData<T>(path: string, body?: unknown): Promise<T> {
-  const payload = await withApiError(api.post(path, { json: body ?? {} }).json<{ data: T }>());
+export async function postApiData<T>(path: string, body?: unknown, options?: { signal?: AbortSignal }): Promise<T> {
+  const payload = await withApiError(api.post(path, { json: body ?? {}, ...options }).json<{ data: T }>());
   return payload.data;
 }
 

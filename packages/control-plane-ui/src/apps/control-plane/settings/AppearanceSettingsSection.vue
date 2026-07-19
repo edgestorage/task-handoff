@@ -70,6 +70,22 @@
         <p v-if="publicBaseUrlMessage" class="settings-success">{{ publicBaseUrlMessage }}</p>
       </div>
     </section>
+    <section class="modal-section appearance-panel">
+      <div class="section-head">
+        <span>Mention trigger</span>
+      </div>
+      <div class="mention-trigger-form">
+        <label>
+          <span>Character</span>
+          <ControlPlaneInput :model-value="mentionTrigger" aria-label="Mention trigger character" @update:model-value="emit('update:mentionTrigger', $event)" />
+        </label>
+        <div class="public-url-actions">
+          <Button variant="outline" size="sm" :disabled="savingMentionTrigger || mentionTrigger === '@'" @click="emit('resetMentionTrigger')">Reset</Button>
+          <Button variant="outline" size="sm" :disabled="savingMentionTrigger || Boolean(mentionTriggerError)" @click="emit('saveMentionTrigger')">{{ savingMentionTrigger ? "Saving" : "Save" }}</Button>
+        </div>
+        <p v-if="mentionTriggerError || mentionTriggerMessage" :class="mentionTriggerError || mentionTriggerMessageError ? 'settings-error' : 'settings-success'">{{ mentionTriggerError || mentionTriggerMessage }}</p>
+      </div>
+    </section>
   </div>
 </template>
 
@@ -86,6 +102,11 @@ import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
 defineProps<{
   publicBaseUrl: string;
   publicBaseUrlMessage?: string;
+  mentionTrigger: string;
+  mentionTriggerError?: string;
+  mentionTriggerMessage?: string;
+  mentionTriggerMessageError?: boolean;
+  savingMentionTrigger?: boolean;
   savingPublicBaseUrl?: boolean;
   serverUpdatesAvailable: boolean;
   serverUnavailableReason: string;
@@ -103,6 +124,9 @@ const emit = defineEmits<{
   checkServerUpdate: [];
   applyServerUpdate: [];
   savePublicBaseUrl: [];
+  resetMentionTrigger: [];
+  saveMentionTrigger: [];
+  "update:mentionTrigger": [value: string];
   "update:publicBaseUrl": [value: string];
   "update:serverUpdateChannel": [value: string];
   "update:themePreference": [theme: ThemePreference];
@@ -221,12 +245,14 @@ const emit = defineEmits<{
   margin: -4px 0 0;
 }
 
-.public-url-form {
+.public-url-form,
+.mention-trigger-form {
   display: grid;
   gap: 10px;
 }
 
-.public-url-form label {
+.public-url-form label,
+.mention-trigger-form label {
   display: grid;
   gap: 7px;
 }
@@ -241,6 +267,17 @@ const emit = defineEmits<{
   font-size: 12px;
   font-weight: 650;
   margin: 0;
+}
+
+.settings-error {
+  color: var(--status-danger);
+  font-size: 12px;
+  font-weight: 650;
+  margin: 0;
+}
+
+.mention-trigger-form label {
+  max-width: 120px;
 }
 
 .settings-success {

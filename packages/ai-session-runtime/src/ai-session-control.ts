@@ -2,6 +2,7 @@ import type {
   AiSessionActionResult,
   AiSessionApprovalInput,
   AiSessionMessageAttachment,
+  AiSessionReference,
   AiSessionSendMode,
   AiSessionStatus,
 } from "@task-handoff/protocol/ai-sessions";
@@ -11,6 +12,7 @@ export type AiSessionSendInput = {
   message: string;
   mode?: AiSessionSendMode;
   attachments?: AiSessionMessageAttachment[];
+  references?: AiSessionReference[];
 };
 
 export type AiSessionApprovalDecision = AiSessionApprovalInput["decision"];
@@ -88,24 +90,27 @@ export class AiSessionController {
     if (!message) {
       throw aiSessionControlError("AI_SESSION_MESSAGE_EMPTY", "Message is required.");
     }
+    if (input.references?.length && session.agent !== "codex") {
+      throw aiSessionControlError("AI_SESSION_REFERENCES_UNSUPPORTED", `${session.agent} sessions do not support Codex references.`, 400);
+    }
     const mode = input.mode || "auto";
     if (mode === "queue" || (mode === "auto" && isSessionBusy(session))) {
-      const queued = this.registry.enqueueMessage(session.id, message, input.attachments || []);
+      const queued = this.registry.enqueueMessage(session.id, message, input.attachments || [], input.references || []);
       if (!queued) {
         throw aiSessionControlError("AI_SESSION_NOT_FOUND", "AI session not found.", 404);
       }
       return { session: queued.session, provider: session.agent, action: "queue" as const, queueId: queued.item.id };
     }
     if (mode === "steer") {
-      return this.steerMessage(session.id, { message, attachments: input.attachments || [] });
+      return this.steerMessage(session.id, { message, attachments: input.attachments || [], references: input.references || [] });
     }
     if (isSessionBusy(session)) {
       throw aiSessionControlError("AI_SESSION_BUSY", "AI session is busy. Queue the message or steer it into the running turn.", 409);
     }
-    return this.startMessage(session.id, { message, attachments: input.attachments || [] });
+    return this.startMessage(session.id, { message, attachments: input.attachments || [], references: input.references || [] });
   }
 
-  async startMessage(sessionId: string, input: { message: string; attachments?: AiSessionMessageAttachment[] }) {
+  async startMessage(sessionId: string, input: { message: string; attachments?: AiSessionMessageAttachment[]; references?: AiSessionReference[] }) {
     const session = this.requireSession(sessionId);
     if (isSessionBusy(session)) {
       throw aiSessionControlError("AI_SESSION_BUSY", "AI session is busy. Queue the message or steer it into the running turn.", 409);
@@ -118,7 +123,7 @@ export class AiSessionController {
     return start.call(provider, session, input);
   }
 
-  async steerMessage(sessionId: string, input: string | { message: string; attachments?: AiSessionMessageAttachment[] }) {
+  async steerMessage(sessionId: string, input: string | { message: string; attachments?: AiSessionMessageAttachment[]; references?: AiSessionReference[] }) {
     const session = this.requireSession(sessionId);
     if (!isSessionBusy(session)) {
       throw aiSessionControlError("AI_SESSION_NOT_ACTIVE", "AI session is not active.", 409);
@@ -143,7 +148,7 @@ export class AiSessionController {
     }
     this.registry.markQueuedMessageSending(session.id, item.id);
     try {
-      const result = await this.startMessage(session.id, { message: item.message, attachments: this.registry.queuedMessageAttachments(item.id) });
+      const result = await this.startMessage(session.id, { message: item.message, attachments: this.registry.queuedMessageAttachments(item.id), references: item.references });
       const updated = this.registry.removeQueuedMessage(session.id, item.id);
       return { ...result, session: updated || result.session, queueId: item.id };
     } catch (error) {
@@ -158,7 +163,7 @@ export class AiSessionController {
     if (!item) {
       throw aiSessionControlError("AI_SESSION_QUEUE_ITEM_NOT_FOUND", "Queued message not found.", 404);
     }
-    const result = await this.steerMessage(session.id, { message: item.message, attachments: this.registry.queuedMessageAttachments(item.id) });
+    const result = await this.steerMessage(session.id, { message: item.message, attachments: this.registry.queuedMessageAttachments(item.id), references: item.references });
     const updated = this.registry.removeQueuedMessage(session.id, item.id);
     return { ...result, session: updated || result.session, action: "steer" as const, queueId: item.id };
   }

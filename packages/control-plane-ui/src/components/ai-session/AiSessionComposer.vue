@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
-import { ArrowUp, CornerDownRight, Plus, Square, X } from "@lucide/vue";
+import { AppWindow, ArrowUp, Box, CornerDownRight, File, Folder, Plus, Puzzle, Square, WandSparkles, X } from "@lucide/vue";
+import { PopoverAnchor } from "reka-ui";
+import type { AiSessionMentionCandidate } from "../../api/types";
+import { Popover, PopoverContent } from "../ui/popover";
 import { Textarea } from "../ui/textarea";
+import { mentionTokenAt, reconcileMentionBindings, replaceMentionToken, type AiSessionMentionBinding } from "./mentions";
+import { useAiSessionMentions, type AiSessionMentionContext } from "./useAiSessionMentions";
 
 export type AiSessionComposerAttachment = {
   id: string;
@@ -20,11 +25,15 @@ const props = defineProps<{
   canInterrupt?: boolean;
   error?: string;
   placeholder?: string;
+  mentionBindings?: AiSessionMentionBinding[];
+  mentionContext?: AiSessionMentionContext;
+  mentionTrigger?: string;
 }>();
 
 const emit = defineEmits<{
   (event: "update:modelValue", value: string): void;
   (event: "update:attachments", value: AiSessionComposerAttachment[]): void;
+  (event: "update:mentionBindings", value: AiSessionMentionBinding[]): void;
   (event: "add-context"): void;
   (event: "run"): void;
   (event: "steer"): void;
@@ -43,6 +52,19 @@ const attachmentError = ref("");
 const composerEl = ref<HTMLFormElement>();
 const inputEl = ref<unknown>();
 const attachments = computed(() => props.attachments || []);
+const mentionBindings = computed(() => props.mentionBindings || []);
+const mentionTrigger = computed(() => props.mentionTrigger || "@");
+const mentions = useAiSessionMentions(() => props.mentionContext);
+const activeMentionIndex = ref(0);
+const mentionPopoverRadius = ref("20px");
+const mentionKinds = ["plugin", "skill", "file", "directory", "app"] as const;
+const mentionLabels = { plugin: "Plugins", skill: "Skills", file: "Files", directory: "Directories", app: "Apps" } as const;
+const groupedMentionCandidates = computed(() => mentionKinds.map((kind) => ({
+  kind,
+  label: mentionLabels[kind],
+  candidates: mentions.candidates.value.filter((candidate) => candidate.kind === kind),
+  diagnostics: mentions.diagnostics.value.filter((diagnostic) => diagnostic.category === (kind === "skill" ? "skills" : kind === "plugin" ? "plugins" : kind === "app" ? "apps" : "files")),
+})).filter((group) => group.candidates.length || group.diagnostics.length));
 const hasDraft = computed(() => props.modelValue.trim().length > 0 || attachments.value.length > 0);
 const actionKind = computed(() => hasDraft.value || !props.canInterrupt ? "send" : "stop");
 const canRun = computed(() => hasDraft.value || (!props.busy && props.canInterrupt));
@@ -50,12 +72,7 @@ const canSteer = computed(() => props.busy && hasDraft.value);
 const actionTitle = computed(() => actionKind.value === "stop" ? "Stop current AI turn" : "Send message");
 
 function resizeInput() {
-  const value = inputEl.value as { $el?: Element } | HTMLTextAreaElement | undefined;
-  const element = value instanceof HTMLTextAreaElement
-    ? value
-    : value?.$el instanceof HTMLTextAreaElement
-      ? value.$el
-      : undefined;
+  const element = textareaElement();
   if (!element) {
     return;
   }
@@ -63,13 +80,22 @@ function resizeInput() {
   const maxComposerHeight = composer ? composerMaxHeight(composer) : 0;
   const minInputHeight = Number.parseFloat(getComputedStyle(element).minHeight) || 42;
   const reservedHeight = composer
-    ? Array.from(composer.children).reduce((sum, child) => child === element ? sum : sum + child.getBoundingClientRect().height, 0)
+    ? Array.from(composer.children).reduce((sum, child) => child === element || child.contains(element) ? sum : sum + child.getBoundingClientRect().height, 0)
     : 0;
   const availableHeight = maxComposerHeight > 0 ? Math.max(minInputHeight, maxComposerHeight - reservedHeight) : Number.POSITIVE_INFINITY;
   element.style.height = "auto";
   const nextHeight = Math.min(element.scrollHeight, availableHeight);
   element.style.height = `${nextHeight}px`;
   element.style.overflowY = element.scrollHeight > availableHeight ? "auto" : "hidden";
+}
+
+function textareaElement() {
+  const value = inputEl.value as { $el?: Element } | HTMLTextAreaElement | undefined;
+  return value instanceof HTMLTextAreaElement
+    ? value
+    : value?.$el instanceof HTMLTextAreaElement
+      ? value.$el
+      : undefined;
 }
 
 function composerMaxHeight(composer: HTMLFormElement) {
@@ -188,12 +214,105 @@ function submit() {
 }
 
 function handleInputKeydown(event: KeyboardEvent) {
+  if (event.isComposing) return;
+  if (mentions.open.value) {
+    if ((event.key === "Enter" || event.key === "Tab") && mentions.candidates.value[activeMentionIndex.value]) {
+      event.preventDefault();
+      selectMention(mentions.candidates.value[activeMentionIndex.value]!);
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      mentions.close();
+      return;
+    }
+  }
   if (event.key !== "Enter" || event.shiftKey || event.isComposing) {
     return;
   }
   event.preventDefault();
   submit();
 }
+
+function moveActiveMention(direction: 1 | -1) {
+  if (!mentions.open.value) return;
+  const length = mentions.candidates.value.length;
+  if (!length) return;
+  activeMentionIndex.value = (activeMentionIndex.value + direction + length) % length;
+  void nextTick(() => document.querySelector(".ai-session-mention-popover__item--active")?.scrollIntoView({ block: "nearest" }));
+}
+
+function handleComposerInput(event: Event) {
+  const element = event.target as HTMLTextAreaElement;
+  emit("update:mentionBindings", reconcileMentionBindings(element.value, mentionBindings.value));
+  updateMentionMenu(element.value, element.selectionStart);
+  resizeInput();
+}
+
+function handleInputKeyup(event: KeyboardEvent) {
+  if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
+    updateMentionMenu();
+  }
+}
+
+function updateMentionMenu(value = props.modelValue, cursor = textareaElement()?.selectionStart ?? value.length) {
+  const token = mentionTokenAt(value, cursor, mentionTrigger.value);
+  if (!token) {
+    mentions.close();
+    return;
+  }
+  activeMentionIndex.value = 0;
+  mentionPopoverRadius.value = composerEl.value ? getComputedStyle(composerEl.value).borderRadius : "20px";
+  void mentions.show(token.query);
+}
+
+function selectMention(candidate: AiSessionMentionCandidate, event?: Event) {
+  event?.preventDefault();
+  const element = textareaElement();
+  const result = replaceMentionToken({
+    value: element?.value ?? props.modelValue,
+    cursor: element?.selectionStart ?? props.modelValue.length,
+    trigger: mentionTrigger.value,
+    candidate,
+    bindings: mentionBindings.value,
+  });
+  if (!result) return;
+  emit("update:modelValue", result.value);
+  emit("update:mentionBindings", result.bindings);
+  mentions.close();
+  void nextTick(() => {
+    const textarea = textareaElement();
+    textarea?.focus();
+    textarea?.setSelectionRange(result.cursor, result.cursor);
+    resizeInput();
+  });
+}
+
+function mentionIcon(candidate: AiSessionMentionCandidate) {
+  if (candidate.kind === "plugin") return Puzzle;
+  if (candidate.kind === "skill") return WandSparkles;
+  if (candidate.kind === "file") return File;
+  if (candidate.kind === "directory") return Folder;
+  if (candidate.kind === "app") return AppWindow;
+  return Box;
+}
+
+function activateMentionCandidate(candidate: AiSessionMentionCandidate) {
+  const index = mentions.candidates.value.findIndex((item) => item.kind === candidate.kind && item.path === candidate.path);
+  if (index >= 0) activeMentionIndex.value = index;
+}
+
+function isActiveMention(candidate: AiSessionMentionCandidate) {
+  const active = mentions.candidates.value[activeMentionIndex.value];
+  return active?.kind === candidate.kind && active.path === candidate.path;
+}
+
+watch(() => mentions.candidates.value.length, (length) => {
+  if (!length) activeMentionIndex.value = 0;
+  else activeMentionIndex.value = Math.min(activeMentionIndex.value, length - 1);
+});
+
+watch(mentionTrigger, () => mentions.close());
 </script>
 
 <template>
@@ -206,16 +325,68 @@ function handleInputKeydown(event: KeyboardEvent) {
         </button>
       </figure>
     </div>
-    <Textarea
-      ref="inputEl"
-      v-model="draft"
-      class="ai-session-composer__input"
-      :placeholder="placeholder || 'Ask for follow-up changes'"
-      rows="3"
-      @keydown="handleInputKeydown"
-      @input="resizeInput"
-      @paste="handlePaste"
-    />
+    <Popover :open="mentions.open.value" @update:open="(open) => { if (!open) mentions.close(); }">
+      <PopoverAnchor as-child>
+        <div class="ai-session-composer__input-anchor">
+          <Textarea
+            ref="inputEl"
+            v-model="draft"
+            class="ai-session-composer__input"
+            :placeholder="placeholder || 'Ask for follow-up changes'"
+            rows="3"
+            @keydown.down.stop.prevent="moveActiveMention(1)"
+            @keydown.up.stop.prevent="moveActiveMention(-1)"
+            @keydown="handleInputKeydown"
+            @input="handleComposerInput"
+            @click="updateMentionMenu()"
+            @keyup="handleInputKeyup"
+            @paste="handlePaste"
+          />
+        </div>
+      </PopoverAnchor>
+      <PopoverContent
+        class="ai-session-mention-popover"
+        data-ai-session-composer-overlay
+        :data-active-index="activeMentionIndex"
+        side="top"
+        align="start"
+        :side-offset="8"
+        :style="{ width: 'var(--reka-popover-trigger-width)', borderRadius: mentionPopoverRadius, padding: '4px' }"
+        @open-auto-focus.prevent
+        @close-auto-focus.prevent
+      >
+        <div class="ai-session-mention-popover__list" role="listbox">
+          <div v-if="mentions.loading.value && !mentions.candidates.value.length" class="ai-session-mention-popover__state">Loading...</div>
+          <div v-else-if="mentions.error.value && !mentions.candidates.value.length" class="ai-session-mention-popover__state ai-session-mention-popover__state--error">{{ mentions.error.value }}</div>
+          <div v-else-if="!groupedMentionCandidates.length" class="ai-session-mention-popover__state">No matches</div>
+          <section v-for="group in groupedMentionCandidates" :key="group.kind" class="ai-session-mention-popover__group" role="group" :aria-label="group.label">
+            <div class="ai-session-mention-popover__group-label">{{ group.label }}</div>
+              <button
+                v-for="candidate in group.candidates"
+                :key="`${candidate.kind}:${candidate.path}`"
+                type="button"
+                role="option"
+                class="ai-session-mention-popover__item"
+                :class="{ 'ai-session-mention-popover__item--active': isActiveMention(candidate) }"
+                :aria-selected="isActiveMention(candidate)"
+                @mouseenter="activateMentionCandidate(candidate)"
+                @mousedown.prevent
+                @click="selectMention(candidate, $event)"
+              >
+                <span class="ai-session-mention-popover__icon">
+                  <img v-if="candidate.icon" :src="candidate.icon" alt="" />
+                  <component :is="mentionIcon(candidate)" v-else :size="12" />
+                </span>
+                <span class="ai-session-mention-popover__copy">
+                  <strong>{{ candidate.name }}</strong>
+                  <span>{{ candidate.description || candidate.path }}</span>
+                </span>
+              </button>
+            <p v-for="diagnostic in group.diagnostics" :key="diagnostic.code" class="ai-session-mention-popover__diagnostic">{{ diagnostic.message }}</p>
+          </section>
+        </div>
+      </PopoverContent>
+    </Popover>
     <div class="ai-session-composer__toolbar">
       <button
         type="button"
@@ -350,6 +521,11 @@ function handleInputKeydown(event: KeyboardEvent) {
   scrollbar-width: thin;
 }
 
+.ai-session-composer__input-anchor {
+  min-width: 0;
+  flex: 0 0 auto;
+}
+
 .ai-session-composer__input::-webkit-scrollbar {
   width: 10px;
 }
@@ -434,6 +610,101 @@ function handleInputKeydown(event: KeyboardEvent) {
   font-size: 12px;
   line-height: 1.4;
   overflow-wrap: anywhere;
+}
+
+:global(.ai-session-mention-popover) {
+  max-width: calc(100vw - 24px);
+  overflow: hidden;
+}
+
+:global(.ai-session-mention-popover__list) {
+  max-height: min(360px, 48vh);
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 0;
+}
+
+:global(.ai-session-mention-popover__group-label) {
+  padding: 8px 10px 4px;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  font-weight: 500;
+}
+
+:global(.ai-session-mention-popover__item) {
+  display: flex;
+  width: 100%;
+  min-height: 36px;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 16px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 5px 8px;
+  text-align: left;
+}
+
+:global(.ai-session-mention-popover__item--active) {
+  background: hsl(var(--accent));
+  color: hsl(var(--accent-foreground));
+}
+
+:global(.ai-session-mention-popover__icon) {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 6px;
+  color: hsl(var(--muted-foreground));
+}
+
+:global(.ai-session-mention-popover__icon img) {
+  width: 12px;
+  height: 12px;
+  object-fit: contain;
+}
+
+:global(.ai-session-mention-popover__copy) {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: baseline;
+  gap: 8px;
+}
+
+:global(.ai-session-mention-popover__copy strong) {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+}
+
+:global(.ai-session-mention-popover__copy > span) {
+  min-width: 0;
+  overflow: hidden;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:global(.ai-session-mention-popover__state),
+:global(.ai-session-mention-popover__diagnostic) {
+  margin: 0;
+  padding: 12px;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+:global(.ai-session-mention-popover__state--error),
+:global(.ai-session-mention-popover__diagnostic) {
+  color: var(--status-danger);
 }
 
 </style>

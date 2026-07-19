@@ -159,6 +159,9 @@
           :card="selectedCard"
           :attachments="messageAttachments"
           :draft="messageDraft"
+          :mention-bindings="messageMentionBindings"
+          :mention-context="mentionContext"
+          :mention-trigger="mentionTrigger"
           :instance-display-name="instanceDisplayName"
           :prompt-count="promptCount(selectedCard.session)"
           :prompt-index="promptIndexFor(selectedCard)"
@@ -174,6 +177,7 @@
           @steer-queued-message="steerSelectedQueuedMessage"
           @update:attachments="messageAttachments = $event"
           @update:draft="messageDraft = $event"
+          @update:mention-bindings="messageMentionBindings = $event"
         />
       </Transition>
     </template>
@@ -185,9 +189,10 @@ import { computed, ref, watch } from "vue";
 import { useEventListener } from "@vueuse/core";
 import { Columns3, LayoutGrid, Search, SlidersHorizontal } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
-import { interruptAiSession, removeAiSessionQueuedMessage, resolveAiSessionApproval, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, stopAppSession, uploadAiSessionAttachment } from "../../../api/queries";
+import { interruptAiSession, removeAiSessionQueuedMessage, resolveAiSessionApproval, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, stopAppSession, uploadAiSessionAttachment, useControlPlaneSettingsQuery } from "../../../api/queries";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions } from "../../../api/types";
 import type { AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
+import { referencesForBindings, type AiSessionMentionBinding } from "../../../components/ai-session/mentions";
 import { Button } from "../../../components/ui/button";
 import {
   DropdownMenu,
@@ -201,7 +206,7 @@ import {
 } from "../../../components/ui/dropdown-menu";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
-import { clearAiSessionDraft, loadAiSessionDraft, persistAiSessionDraft } from "../useAiSessionDraft";
+import { clearAiSessionDraft, loadAiSessionDraftPayload, persistAiSessionDraftPayload } from "../useAiSessionDraft";
 import {
   aiSessionAppTab,
   aiSessionStableSortKey,
@@ -255,9 +260,17 @@ const selectedCardKey = ref("");
 const detailCollapsed = ref(false);
 const messageDraft = ref("");
 const messageAttachments = ref<AiSessionComposerAttachment[]>([]);
+const messageMentionBindings = ref<AiSessionMentionBinding[]>([]);
 const aiSessionActionBusy = ref(false);
 const stoppingAppSessionKey = ref("");
 const queryClient = useQueryClient();
+const controlPlaneSettings = useControlPlaneSettingsQuery();
+const mentionTrigger = computed(() => controlPlaneSettings.data.value?.mentionTrigger || "@");
+const mentionContext = computed(() => {
+  const card = selectedCard.value;
+  if (!card?.session.cwd) return undefined;
+  return { instanceId: card.instance.id, sessionId: card.session.id, provider: card.session.agent, cwd: card.session.cwd };
+});
 const {
   boundTriggers,
   isTriggerBound,
@@ -616,7 +629,7 @@ function closeBoardOverlays(event: MouseEvent) {
   if (!target) {
     return;
   }
-  if (target.closest(".ai-board-card") || target.closest(".ai-board-floating-dock")) {
+  if (target.closest(".ai-board-card") || target.closest(".ai-board-floating-dock") || target.closest("[data-ai-session-composer-overlay]")) {
     return;
   }
   clearSelectedCard();
@@ -661,9 +674,10 @@ async function sendSelectedSessionMessage() {
   aiSessionActionBusy.value = true;
   try {
     const attachments = await uploadMessageAttachments(card.instance.id, card.session.id);
-    await sendAiSessionMessage(card.instance.id, card.session.id, message || "请查看附件图片。", undefined, attachments.map((attachment) => ({ id: attachment.id, kind: attachment.kind })));
+    await sendAiSessionMessage(card.instance.id, card.session.id, message || "请查看附件图片。", undefined, attachments.map((attachment) => ({ id: attachment.id, kind: attachment.kind })), referencesForBindings(messageDraft.value, messageMentionBindings.value));
     clearAiSessionDraft(card.session.id);
     messageDraft.value = "";
+    messageMentionBindings.value = [];
     messageAttachments.value = [];
     await refreshBoard();
   } catch (error) {
@@ -682,9 +696,10 @@ async function steerMessageDraft() {
   aiSessionActionBusy.value = true;
   try {
     const attachments = await uploadMessageAttachments(card.instance.id, card.session.id);
-    await sendAiSessionMessage(card.instance.id, card.session.id, message || "请查看附件图片。", "steer", attachments.map((attachment) => ({ id: attachment.id, kind: attachment.kind })));
+    await sendAiSessionMessage(card.instance.id, card.session.id, message || "请查看附件图片。", "steer", attachments.map((attachment) => ({ id: attachment.id, kind: attachment.kind })), referencesForBindings(messageDraft.value, messageMentionBindings.value));
     clearAiSessionDraft(card.session.id);
     messageDraft.value = "";
+    messageMentionBindings.value = [];
     messageAttachments.value = [];
     await refreshBoard();
   } catch (error) {
@@ -801,14 +816,16 @@ watch(visibleColumnKeysSignature, () => {
 useEventListener(document, "click", closeBoardOverlays, { capture: true });
 
 watch(() => selectedCard.value?.session.id, (sessionId) => {
-  messageDraft.value = sessionId ? loadAiSessionDraft(sessionId) : "";
+  const draft = sessionId ? loadAiSessionDraftPayload(sessionId) : { value: "", bindings: [] };
+  messageDraft.value = draft.value;
+  messageMentionBindings.value = draft.bindings;
 }, { immediate: true });
 
-watch([() => selectedCard.value?.session.id, messageDraft], ([sessionId, draft]) => {
+watch([() => selectedCard.value?.session.id, messageDraft, messageMentionBindings], ([sessionId, draft, bindings]) => {
   if (sessionId) {
-    persistAiSessionDraft(sessionId, draft);
+    persistAiSessionDraftPayload(sessionId, draft, bindings);
   }
-});
+}, { deep: true });
 </script>
 
 <style scoped>

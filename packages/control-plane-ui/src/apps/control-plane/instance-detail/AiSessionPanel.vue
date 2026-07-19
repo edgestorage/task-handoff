@@ -302,9 +302,12 @@
           ref="composerEl"
           v-model="messageDraft"
           v-model:attachments="messageAttachments"
+          v-model:mention-bindings="messageMentionBindings"
           class="session-ai-compose"
           :busy="aiSessionActionBusy"
           :can-interrupt="canInterrupt(selectedSession)"
+          :mention-context="mentionContext"
+          :mention-trigger="mentionTrigger"
           @run="runSelectedSessionAction"
           @steer="steerMessageDraft"
         />
@@ -319,17 +322,20 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, t
 import { ArrowDown, Ban, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, ExternalLink, Filter, Folder, SlidersHorizontal, X, Zap } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
-import { bindAiSessionTrigger, interruptAiSession, removeAiSessionQueuedMessage, resolveAiSessionApproval, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, unbindAiSessionTrigger, uploadAiSessionAttachment, useControlPlaneTriggersQuery } from "../../../api/queries";
+import { bindAiSessionTrigger, interruptAiSession, removeAiSessionQueuedMessage, resolveAiSessionApproval, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, unbindAiSessionTrigger, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery } from "../../../api/queries";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, TriggerConfig, TriggerDeployment, TriggerRuntimeState } from "../../../api/types";
 import AiSessionComposer, { type AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
 import AiSessionResult from "../../../components/ai-session/AiSessionResult.vue";
+import AiSessionStreamingMarkdown from "../../../components/ai-session/AiSessionStreamingMarkdown.vue";
+import AiSessionToolActivity from "../../../components/ai-session/AiSessionToolActivity.vue";
+import { referencesForBindings, type AiSessionMentionBinding } from "../../../components/ai-session/mentions";
 import AiSessionTurnNavigator from "../../../components/ai-session/AiSessionTurnNavigator.vue";
 import { Button } from "../../../components/ui/button";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
-import { clearAiSessionDraft, loadAiSessionDraft, persistAiSessionDraft } from "../useAiSessionDraft";
+import { clearAiSessionDraft, loadAiSessionDraftPayload, persistAiSessionDraftPayload } from "../useAiSessionDraft";
 import { createStreamingScrollFollow, type ScrollViewport } from "../../../lib/streaming-scroll-follow";
 import {
   aiSessionAppDisplayName,
@@ -417,6 +423,14 @@ const promptIndexes = ref<Record<string, { index: number; count: number }>>({});
 const collapsedPathGroups = reactive<Record<string, boolean>>({});
 const messageDraft = ref("");
 const messageAttachments = ref<AiSessionComposerAttachment[]>([]);
+const messageMentionBindings = ref<AiSessionMentionBinding[]>([]);
+const controlPlaneSettings = useControlPlaneSettingsQuery();
+const mentionTrigger = computed(() => controlPlaneSettings.data.value?.mentionTrigger || "@");
+const mentionContext = computed(() => {
+  const session = selectedSession.value;
+  if (!session?.cwd) return undefined;
+  return { instanceId: props.instance.id, sessionId: session.id, provider: session.agent, cwd: session.cwd };
+});
 const detailEl = ref<HTMLElement>();
 const composerEl = ref<InstanceType<typeof AiSessionComposer>>();
 const detailScrolled = ref(false);
@@ -672,9 +686,10 @@ async function sendSelectedSessionMessage() {
   aiSessionActionBusy.value = true;
   try {
     const attachments = await uploadMessageAttachments(props.instance.id, session.id);
-    await sendAiSessionMessage(props.instance.id, session.id, message || "请查看附件图片。", undefined, attachments.map((attachment) => ({ id: attachment.id, kind: attachment.kind })));
+    await sendAiSessionMessage(props.instance.id, session.id, message || "请查看附件图片。", undefined, attachments.map((attachment) => ({ id: attachment.id, kind: attachment.kind })), referencesForBindings(messageDraft.value, messageMentionBindings.value));
     clearAiSessionDraft(session.id);
     messageDraft.value = "";
+    messageMentionBindings.value = [];
     messageAttachments.value = [];
   } catch (error) {
     showControlPlaneToast(error instanceof Error ? error.message : "Failed to send message.");
@@ -692,9 +707,10 @@ async function steerMessageDraft() {
   aiSessionActionBusy.value = true;
   try {
     const attachments = await uploadMessageAttachments(props.instance.id, session.id);
-    await sendAiSessionMessage(props.instance.id, session.id, message || "请查看附件图片。", "steer", attachments.map((attachment) => ({ id: attachment.id, kind: attachment.kind })));
+    await sendAiSessionMessage(props.instance.id, session.id, message || "请查看附件图片。", "steer", attachments.map((attachment) => ({ id: attachment.id, kind: attachment.kind })), referencesForBindings(messageDraft.value, messageMentionBindings.value));
     clearAiSessionDraft(session.id);
     messageDraft.value = "";
+    messageMentionBindings.value = [];
     messageAttachments.value = [];
     await refreshBoard();
   } catch (error) {
@@ -1023,7 +1039,9 @@ watch([selectedSession, messageAttachments, messageDraft], () => {
 }, { immediate: true });
 
 watch(() => `${props.instance.id}\u0000${selectedSession.value?.id || ""}`, () => {
-  messageDraft.value = selectedSession.value ? loadAiSessionDraft(selectedSession.value.id) : "";
+  const draft = selectedSession.value ? loadAiSessionDraftPayload(selectedSession.value.id) : { value: "", bindings: [] };
+  messageDraft.value = draft.value;
+  messageMentionBindings.value = draft.bindings;
   promptExpanded.value = false;
   promptHasOverflow.value = false;
   void nextTick(() => {
@@ -1038,11 +1056,11 @@ watch(() => `${props.instance.id}\u0000${selectedSession.value?.id || ""}`, () =
   });
 }, { immediate: true });
 
-watch([() => selectedSession.value?.id, messageDraft], ([sessionId, draft]) => {
+watch([() => selectedSession.value?.id, messageDraft, messageMentionBindings], ([sessionId, draft, bindings]) => {
   if (sessionId) {
-    persistAiSessionDraft(sessionId, draft);
+    persistAiSessionDraftPayload(sessionId, draft, bindings);
   }
-});
+}, { deep: true });
 
 onMounted(() => {
   void nextTick(() => {

@@ -113,10 +113,14 @@
       class="ai-board-floating-compose"
       :model-value="draft"
       :attachments="attachments"
+      :mention-bindings="mentionBindings"
+      :mention-context="mentionContext"
+      :mention-trigger="mentionTrigger"
       :busy="busy"
       :can-interrupt="canInterrupt"
       @update:model-value="$emit('update:draft', $event)"
       @update:attachments="$emit('update:attachments', $event)"
+      @update:mention-bindings="$emit('update:mentionBindings', $event)"
       @add-context="$emit('addContext')"
       @run="$emit('run')"
       @steer="$emit('steer')"
@@ -131,6 +135,8 @@ import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions } from "../../../api/types";
 import AiSessionComposer, { type AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
 import AiSessionResult from "../../../components/ai-session/AiSessionResult.vue";
+import type { AiSessionMentionBinding } from "../../../components/ai-session/mentions";
+import type { AiSessionMentionContext } from "../../../components/ai-session/useAiSessionMentions";
 import AiSessionTurnNavigator from "../../../components/ai-session/AiSessionTurnNavigator.vue";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
@@ -150,6 +156,9 @@ const props = defineProps<{
   collapsed: boolean;
   attachments: AiSessionComposerAttachment[];
   draft: string;
+  mentionBindings: AiSessionMentionBinding[];
+  mentionContext?: AiSessionMentionContext;
+  mentionTrigger: string;
   instanceDisplayName: (instance: InstanceBoardItem) => string;
   promptCount: number;
   promptIndex: number;
@@ -169,6 +178,7 @@ defineEmits<{
   "update:collapsed": [value: boolean];
   "update:attachments": [value: AiSessionComposerAttachment[]];
   "update:draft": [value: string];
+  "update:mentionBindings": [value: AiSessionMentionBinding[]];
 }>();
 
 type ResizeHandle = "top" | "left" | "right" | "top-left" | "top-right";

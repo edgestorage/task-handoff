@@ -5,6 +5,7 @@ import { resolveStoragePaths } from "@task-handoff/core/storage/paths";
 import type {
   AiSessionLifecycle,
   AiSessionMessageAttachment,
+  AiSessionReference,
   AiSessionPhase,
   AiSessionReducerInput,
   AiSessionRealtimeInput,
@@ -263,10 +264,10 @@ export class AiSessionRegistry {
     }));
   }
 
-  enqueueMessage(id: string, message: string, attachments: AiSessionMessageAttachment[] = []) {
+  enqueueMessage(id: string, message: string, attachments: AiSessionMessageAttachment[] = [], references: AiSessionReference[] = []) {
     const current = this.get(id);
     if (!current) return undefined;
-    const result = this.queueService.enqueueMessage(current, message, attachments);
+    const result = this.queueService.enqueueMessage(current, message, attachments, references);
     return result ? { ...result, session: this.put(result.session) } : undefined;
   }
 

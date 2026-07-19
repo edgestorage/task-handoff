@@ -1,6 +1,7 @@
 import {
   AiSessionMessageAttachmentMetaSchema,
   AiSessionQueuedMessageSchema,
+  AiSessionReferenceSchema,
   AiSessionStatusSchema,
   AiSessionSubAgentSchema,
   AiSessionToolSchema,
@@ -12,6 +13,7 @@ import type {
   AiSessionMessageAttachmentMeta,
   AiSessionPhase,
   AiSessionQueuedMessage,
+  AiSessionReference,
   AiSessionStatus,
 } from "@task-handoff/protocol/ai-sessions";
 import { compact, messageText, normalizeTurns } from "../ai-session-turns";
@@ -25,7 +27,7 @@ const PERSISTED_SESSION_FIELDS = new Set([
 
 const PERSISTED_TOOL_FIELDS = new Set(["id", "kind", "name", "inputPreview", "startedAt"]);
 const PERSISTED_SUB_AGENT_FIELDS = new Set(["threadId", "path", "status", "activity", "message", "updatedAt"]);
-const PERSISTED_QUEUE_ITEM_FIELDS = new Set(["id", "message", "attachments", "status", "createdAt", "updatedAt", "error"]);
+const PERSISTED_QUEUE_ITEM_FIELDS = new Set(["id", "message", "attachments", "references", "status", "createdAt", "updatedAt", "error"]);
 const PERSISTED_ATTACHMENT_META_FIELDS = new Set(["id", "kind", "name", "mime", "size"]);
 
 function warnUnknownFields(record: Record<string, unknown>, allowed: ReadonlySet<string>, context: string) {
@@ -144,6 +146,7 @@ function normalizeQueuedMessage(value: unknown): AiSessionQueuedMessage | undefi
     id: compact(record.id, 120),
     message: messageText(record.message),
     attachments: normalizeAiSessionMessageAttachmentMetas(record.attachments),
+    references: normalizeAiSessionReferences(record.references),
     status: record.status === "sending" || record.status === "failed" ? record.status : "queued",
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
@@ -151,6 +154,14 @@ function normalizeQueuedMessage(value: unknown): AiSessionQueuedMessage | undefi
   };
   const parsed = AiSessionQueuedMessageSchema.safeParse(candidate);
   return parsed.success ? parsed.data : undefined;
+}
+
+export function normalizeAiSessionReferences(value: unknown): AiSessionReference[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    const parsed = AiSessionReferenceSchema.safeParse(item);
+    return parsed.success ? [parsed.data] : [];
+  }).slice(0, 20);
 }
 
 export function normalizeAiSessionMessageAttachmentMetas(value: unknown): AiSessionMessageAttachmentMeta[] {

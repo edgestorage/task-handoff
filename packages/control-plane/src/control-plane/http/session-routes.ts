@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { AiSessionApprovalInputSchema, AiSessionMessageRefInputSchema } from "@task-handoff/protocol/ai-sessions";
+import { AiSessionApprovalInputSchema, AiSessionMentionFileSearchInputSchema, AiSessionMessageRefInputSchema } from "@task-handoff/protocol/ai-sessions";
 import type { ControlPlaneService } from "../application/service.ts";
 import type { ControlPlaneEventBus } from "../events/bus.ts";
 import type { ControlPlaneAiSessionAggregator } from "../sessions/ai-session-aggregator.ts";
@@ -102,9 +102,18 @@ export function registerSessionRoutes({
     const params = InstanceSessionParamsSchema.parse(request.params);
     const parsed = AiSessionMessageRefInputSchema.parse(request.body || {});
     const attachments = aiSessionAttachments.resolveRefs(parsed.attachments, params.id, params.sessionId);
-    const result = await service.sendAiSessionMessage(params.id, params.sessionId, parsed.message, parsed.mode, attachments);
+    const result = await service.sendAiSessionMessage(params.id, params.sessionId, parsed.message, parsed.mode, attachments, parsed.references);
     events.publish("instance.ai-session.message-sent", { instanceId: params.id, sessionId: params.sessionId });
     return { data: result };
+  });
+  app.get("/api/controlled-instances/:id/ai-sessions/:sessionId/mentions", async (request) => {
+    const params = InstanceSessionParamsSchema.parse(request.params);
+    return { data: await service.aiSessionMentionCatalog(params.id, params.sessionId) };
+  });
+  app.post("/api/controlled-instances/:id/ai-sessions/:sessionId/mentions/files", async (request) => {
+    const params = InstanceSessionParamsSchema.parse(request.params);
+    const input = AiSessionMentionFileSearchInputSchema.parse(request.body || {});
+    return { data: await service.searchAiSessionMentionFiles(params.id, params.sessionId, input.query) };
   });
   app.get("/api/controlled-instances/:id/ai-sessions/:sessionId/queue", async (request) => {
     const params = InstanceSessionParamsSchema.parse(request.params);

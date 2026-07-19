@@ -77,6 +77,71 @@ test("codex approval parser preserves the request reason", () => {
   assert.equal(request?.summary, "Tests need access to the local package cache. · Command: pnpm test");
 });
 
+test("controlled instance mention routes preserve authoritative context and references", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-mention-routes-"));
+  const previousAutoStart = process.env.TASK_HANDOFF_CODEX_APP_SERVER;
+  process.env.TASK_HANDOFF_CODEX_APP_SERVER = "0";
+  t.after(() => {
+    if (previousAutoStart === undefined) delete process.env.TASK_HANDOFF_CODEX_APP_SERVER;
+    else process.env.TASK_HANDOFF_CODEX_APP_SERVER = previousAutoStart;
+  });
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const codex = registry.start({ agent: "codex", providerSessionId: "thread_routes", cwd: "/workspace/project", status: "idle", phase: "unknown" });
+  const sends = [];
+  const bridge = {
+    id: "codex-app-server-test",
+    agent: "codex",
+    refresh() {},
+    stop() {},
+    async mentionCatalog(session) {
+      if (session.agent !== "codex") throw Object.assign(new Error("Only Codex sessions support mentions."), { code: "AI_SESSION_MENTIONS_UNSUPPORTED", statusCode: 400 });
+      return {
+        sessionId: session.id,
+        providerSessionId: session.providerSessionId,
+        cwd: session.cwd,
+        candidates: [{ kind: "skill", name: "Docs / Exact", description: "Keep this name", path: "/workspace/project/.agents/skills/docs/SKILL.md" }],
+        diagnostics: [],
+      };
+    },
+    async searchMentionFiles(session, query) {
+      return { sessionId: session.id, cwd: session.cwd, query, requestId: "search_routes", candidates: [{ kind: "file", name: "Exact Name.ts", path: "src/Exact Name.ts" }], complete: true };
+    },
+    async startMessage(session, input) {
+      sends.push({ session, input });
+      return { session, provider: "codex", action: "send", turnId: "turn_routes", providerTurnId: "turn_routes" };
+    },
+    async interrupt(session) {
+      return { session, provider: "codex", action: "interrupt" };
+    },
+  };
+  const app = await createWebApp({ staticDir: path.join(root, "missing-static"), logger: false, aiSessionRegistry: registry, codexAppServer: bridge });
+  t.after(() => app.close());
+
+  const catalog = await app.inject({ method: "GET", url: `/api/ai-sessions/${codex.id}/mentions` });
+  assert.equal(catalog.statusCode, 200);
+  assert.deepEqual(JSON.parse(catalog.payload).data, {
+    sessionId: codex.id,
+    providerSessionId: "thread_routes",
+    cwd: "/workspace/project",
+    candidates: [{ kind: "skill", name: "Docs / Exact", description: "Keep this name", path: "/workspace/project/.agents/skills/docs/SKILL.md" }],
+    diagnostics: [],
+  });
+  const files = await app.inject({ method: "POST", url: `/api/ai-sessions/${codex.id}/mentions/files`, payload: { query: "Exact" } });
+  assert.equal(files.statusCode, 200);
+  assert.equal(JSON.parse(files.payload).data.candidates[0].path, "src/Exact Name.ts");
+  const claude = registry.start({ agent: "claude", providerSessionId: "claude_routes", cwd: "/workspace/project", status: "idle", phase: "unknown" });
+  const unsupported = await app.inject({ method: "GET", url: `/api/ai-sessions/${claude.id}/mentions` });
+  assert.equal(unsupported.statusCode, 400);
+  assert.equal(JSON.parse(unsupported.payload).error.code, "AI_SESSION_MENTIONS_UNSUPPORTED");
+  const missing = await app.inject({ method: "GET", url: "/api/ai-sessions/other-session/mentions" });
+  assert.equal(missing.statusCode, 404);
+
+  const references = [{ kind: "skill", name: "Docs / Exact", path: "/workspace/project/.agents/skills/docs/SKILL.md" }];
+  const sent = await app.inject({ method: "POST", url: `/api/ai-sessions/${codex.id}/messages`, payload: { message: "Use @Docs", references } });
+  assert.equal(sent.statusCode, 200);
+  assert.deepEqual(sends[0].input.references, references);
+});
+
 test("codex app-server parser projects supported tool items without output fields", () => {
   const cases = [
     [{ type: "commandExecution", id: "cmd", command: "pnpm test", aggregatedOutput: "secret output" }, "Command", "pnpm test"],
@@ -4095,6 +4160,142 @@ test("codex app server bridge controls turns through the ai session provider int
     { threadId: "thread_control", turnId: "actual_turn" },
   ]);
   assert.equal(registry.get(session.id).activeTurnId, "actual_turn");
+});
+
+test("codex mention facade filters catalogs, invalidates cache, searches cwd, and submits structured inputs", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-mentions-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  class FakeCodexMentionsClient extends EventEmitter {
+    catalogCalls = 0;
+    turns = [];
+    async start() {}
+    stop() {}
+    async listLoadedThreadIds() { return []; }
+    async listSkills(cwd) {
+      this.catalogCalls += 1;
+      return { data: [{ cwd, skills: [
+        { name: "docs", description: "Documentation", path: `${cwd}/.agents/skills/docs/SKILL.md`, enabled: true },
+        { name: "disabled", description: "Disabled", path: `${cwd}/disabled/SKILL.md`, enabled: false },
+      ] }] };
+    }
+    async listPlugins() {
+      return { marketplaces: [{ name: "curated", plugins: [
+        { id: "review@curated", name: "Review", installed: true, enabled: true, availability: "AVAILABLE" },
+        { id: "blocked@curated", name: "Blocked", installed: true, enabled: true, availability: "DISABLED_BY_ADMIN" },
+      ] }] };
+    }
+    async listApps() {
+      return { data: [
+        { id: "github", name: "GitHub", description: "Issues and pull requests", isAccessible: true, isEnabled: true },
+        { id: "hidden", name: "Hidden", isAccessible: false, isEnabled: true },
+      ] };
+    }
+    async startFuzzyFileSearch() {}
+    async updateFuzzyFileSearch(sessionId, query) {
+      queueMicrotask(() => {
+        this.emit("notification", { method: "fuzzyFileSearch/sessionUpdated", params: { sessionId, query, files: [
+          { path: "/workspace/src/index.ts", file_name: "index.ts", match_type: "file" },
+          { path: "/outside/secret", file_name: "secret", match_type: "file" },
+        ] } });
+        this.emit("notification", { method: "fuzzyFileSearch/sessionCompleted", params: { sessionId } });
+      });
+    }
+    async stopFuzzyFileSearch() {}
+    async startTurn(threadId, message, inputs) {
+      this.turns.push({ threadId, message, inputs });
+      return { turnId: "turn_mentions" };
+    }
+  }
+  const fake = new FakeCodexMentionsClient();
+  const bridge = new CodexAppServerSessionBridge(registry, fake);
+  const session = registry.start({ agent: "codex", providerSessionId: "thread_mentions", cwd: "/workspace", status: "idle", phase: "unknown" });
+
+  const catalog = await bridge.mentionCatalog(session);
+  assert.deepEqual(catalog.candidates.map((candidate) => [candidate.kind, candidate.name, candidate.path]), [
+    ["skill", "docs", "/workspace/.agents/skills/docs/SKILL.md"],
+    ["plugin", "Review", "plugin://review@curated"],
+    ["app", "GitHub", "app://github"],
+  ]);
+  await bridge.mentionCatalog(session);
+  assert.equal(fake.catalogCalls, 1);
+  fake.emit("notification", { method: "skills/changed", params: {} });
+  await bridge.mentionCatalog(session);
+  assert.equal(fake.catalogCalls, 2);
+
+  const files = await bridge.searchMentionFiles(session, "index");
+  assert.equal(files.complete, true);
+  assert.deepEqual(files.candidates.map((candidate) => candidate.path), ["src/index.ts"]);
+
+  await bridge.startMessage(session, { message: "Use these", references: [
+    { kind: "skill", name: "docs", path: "/workspace/.agents/skills/docs/SKILL.md" },
+    { kind: "app", name: "GitHub", path: "app://github" },
+    { kind: "app", name: "GitHub duplicate", path: "app://github" },
+  ] });
+  assert.deepEqual(fake.turns[0].inputs, [
+    { type: "text", text: "Use these", text_elements: [] },
+    { type: "skill", name: "docs", path: "/workspace/.agents/skills/docs/SKILL.md" },
+    { type: "mention", name: "GitHub", path: "app://github" },
+  ]);
+  await assert.rejects(
+    () => bridge.startMessage(registry.get(session.id), { message: "Bad", references: [{ kind: "app", name: "Missing", path: "app://missing" }] }),
+    (error) => error?.code === "AI_SESSION_REFERENCE_UNAVAILABLE",
+  );
+});
+
+test("AI session queue preserves references through steer and retry", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-reference-queue-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const session = registry.start({ agent: "codex", activeTurnId: "turn-running", status: "running", phase: "thinking" });
+  const reference = { kind: "plugin", name: "Review", path: "plugin://review@curated" };
+  const calls = [];
+  const controller = new AiSessionController(registry);
+  controller.register({
+    agent: "codex",
+    async steerMessage(current, input) {
+      calls.push(input);
+      return { session: current, provider: "codex", action: "steer", turnId: current.activeTurnId };
+    },
+    async interrupt(current) { return { session: current, provider: "codex", action: "interrupt" }; },
+  });
+  const queued = await controller.sendMessage(session.id, { message: "Review this", references: [reference] });
+  assert.deepEqual(registry.get(session.id).queue.items[0].references, [reference]);
+  registry.markQueuedMessageFailed(session.id, queued.queueId, new Error("temporary"));
+  controller.retryQueuedMessage(session.id, queued.queueId);
+  assert.deepEqual(registry.get(session.id).queue.items[0].references, [reference]);
+  await controller.steerQueuedMessage(session.id, queued.queueId);
+  assert.deepEqual(calls[0].references, [reference]);
+  assert.deepEqual(registry.get(session.id).queue.items, []);
+});
+
+test("AI session controller carries references through immediate and automatic dequeue and rejects non-Codex providers", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-reference-control-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const reference = { kind: "skill", name: "Docs", path: "/workspace/docs/SKILL.md" };
+  const calls = [];
+  const controller = new AiSessionController(registry);
+  controller.register({
+    agent: "codex",
+    async startMessage(current, input) {
+      calls.push(input);
+      return { session: current, provider: "codex", action: "send", turnId: "turn" };
+    },
+    async interrupt(current) { return { session: current, provider: "codex", action: "interrupt" }; },
+  });
+  const idle = registry.start({ agent: "codex", status: "idle", phase: "unknown" });
+  await controller.sendMessage(idle.id, { message: "Immediate", mode: "immediate", references: [reference] });
+  assert.deepEqual(calls[0].references, [reference]);
+
+  const busy = registry.start({ agent: "codex", activeTurnId: "running", status: "running", phase: "thinking" });
+  await controller.sendMessage(busy.id, { message: "Later", mode: "auto", references: [reference] });
+  registry.complete(busy.id, "Done");
+  await controller.sendNextQueuedMessage(busy.id);
+  assert.deepEqual(calls[1].references, [reference]);
+
+  const claude = registry.start({ agent: "claude", status: "idle", phase: "unknown" });
+  await assert.rejects(
+    () => controller.sendMessage(claude.id, { message: "No", references: [reference] }),
+    (error) => error?.code === "AI_SESSION_REFERENCES_UNSUPPORTED",
+  );
 });
 
 test("codex app server bridge records sent prompt even when provider omits turn id", async () => {

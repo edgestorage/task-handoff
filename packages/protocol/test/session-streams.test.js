@@ -6,6 +6,11 @@ import {
   AiSessionEventType,
   AiSessionDeltaResponseSchema,
   AiSessionMessageDeltaEventSchema,
+  AiSessionMentionCandidateSchema,
+  AiSessionMentionFileSearchSchema,
+  AiSessionMessageInputSchema,
+  AiSessionMessageRefInputSchema,
+  AiSessionReferenceSchema,
   AiSessionRealtimeInputSchema,
   AiSessionStatusSchema,
   AiSessionSummarySchema,
@@ -25,6 +30,24 @@ import {
 } from "../src/events.ts";
 
 const now = "2026-07-13T00:00:00.000Z";
+
+test("AI session mention schemas enforce canonical references and safe file results", () => {
+  const references = [
+    { kind: "skill", name: "Docs", path: "/workspace/.agents/skills/docs/SKILL.md" },
+    { kind: "app", name: "GitHub", path: "app://github" },
+    { kind: "plugin", name: "Review", path: "plugin://review@curated" },
+  ];
+  assert.deepEqual(AiSessionMessageInputSchema.parse({ message: "Use mentions" }).references, []);
+  assert.deepEqual(AiSessionMessageRefInputSchema.parse({ message: "Use mentions", references }).references, references);
+  assert.equal(AiSessionReferenceSchema.safeParse({ kind: "app", name: "GitHub", path: "plugin://github" }).success, false);
+  assert.equal(AiSessionReferenceSchema.safeParse({ kind: "skill", name: "Docs", path: "relative/SKILL.md" }).success, false);
+  assert.equal(AiSessionReferenceSchema.safeParse({ ...references[0], extra: true }).success, false);
+  assert.equal(AiSessionMessageInputSchema.safeParse({ message: "Too many", references: Array.from({ length: 21 }, (_, index) => ({ kind: "app", name: `App ${index}`, path: `app://app-${index}` })) }).success, false);
+
+  assert.equal(AiSessionMentionCandidateSchema.safeParse({ kind: "file", name: "index.ts", path: "src/index.ts" }).success, true);
+  assert.equal(AiSessionMentionCandidateSchema.safeParse({ kind: "file", name: "secret", path: "../secret" }).success, false);
+  assert.equal(AiSessionMentionFileSearchSchema.safeParse({ sessionId: "s", cwd: "/workspace", query: "src", requestId: "r", candidates: [{ kind: "skill", name: "Bad", path: "/tmp/SKILL.md" }] }).success, false);
+});
 
 function session(overrides = {}) {
   return {

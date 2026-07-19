@@ -10,6 +10,7 @@ import type {
   CodexAppServerEvent,
   CodexApprovalRequest,
   CodexThread,
+  CodexUserInput,
   JsonValue,
 } from "../protocol/types";
 
@@ -162,25 +163,49 @@ export class CodexAppServerClient extends EventEmitter {
     return threads;
   }
 
-  async startTurn(threadId: string, message: string) {
+  async startTurn(threadId: string, message: string, inputs?: CodexUserInput[]) {
     const result = await this.request("turn/start", {
       threadId,
-      input: [{ type: "text", text: message, text_elements: [] }],
+      input: inputs || [{ type: "text", text: message, text_elements: [] }],
     });
     return { turnId: turnIdFromResult(result) };
   }
 
-  async steerTurn(threadId: string, turnId: string, message: string) {
+  async steerTurn(threadId: string, turnId: string, message: string, inputs?: CodexUserInput[]) {
     const result = await this.request("turn/steer", {
       threadId,
       expectedTurnId: turnId,
-      input: [{ type: "text", text: message, text_elements: [] }],
+      input: inputs || [{ type: "text", text: message, text_elements: [] }],
     });
     return { turnId: typeof result.turnId === "string" ? result.turnId : turnId };
   }
 
   async interruptTurn(threadId: string, turnId: string) {
     await this.request("turn/interrupt", { threadId, turnId });
+  }
+
+  listSkills(cwd: string) {
+    return this.request("skills/list", { cwds: [cwd], forceReload: false });
+  }
+
+  listPlugins(cwd: string) {
+    return this.request("plugin/list", { cwds: [cwd], marketplaceKinds: null });
+  }
+
+  listApps(threadId: string) {
+    return this.request("app/list", { cursor: null, limit: 1000, threadId, forceRefetch: false });
+  }
+
+  async startFuzzyFileSearch(sessionId: string, cwd: string) {
+    await this.request("fuzzyFileSearch/sessionStart", { sessionId, roots: [cwd] });
+  }
+
+  async updateFuzzyFileSearch(sessionId: string, query: string) {
+    await this.request("fuzzyFileSearch/sessionUpdate", { sessionId, query });
+  }
+
+  async stopFuzzyFileSearch(sessionId: string) {
+    await this.request("fuzzyFileSearch/sessionStop", { sessionId });
   }
 
   async resumeThread(threadId: string) {
@@ -362,6 +387,7 @@ export class CodexAppServerClient extends EventEmitter {
       }
       return;
     }
+    this.emit("notification", { method, params });
     const event = codexNotification(method, params);
     if (event) {
       this.emit("event", event);

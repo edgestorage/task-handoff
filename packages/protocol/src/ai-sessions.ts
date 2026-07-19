@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 export const AI_SESSION_MAX_MESSAGE_ATTACHMENTS = 6;
+export const AI_SESSION_MAX_REFERENCES = 20;
 export const AI_SESSION_MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 export const AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES = 40 * 1024 * 1024;
 export const AiSessionEventTopic = "ai.sessions";
@@ -108,6 +109,80 @@ export const AiSessionMessageAttachmentRefSchema = z
 
 export const AiSessionSendModeSchema = z.enum(["auto", "queue", "steer", "immediate"]);
 
+export const AiSessionReferenceKindSchema = z.enum(["skill", "app", "plugin"]);
+
+const AiSessionReferenceBaseSchema = z.object({
+  name: z.string().trim().min(1).max(240),
+  path: z.string().trim().min(1).max(4096),
+});
+
+export const AiSessionReferenceSchema = z.discriminatedUnion("kind", [
+  AiSessionReferenceBaseSchema.extend({
+    kind: z.literal("skill"),
+    path: z.string().trim().min(1).max(4096).refine((value) => value.startsWith("/"), "Skill paths must be absolute."),
+  }).strict(),
+  AiSessionReferenceBaseSchema.extend({
+    kind: z.literal("app"),
+    path: z.string().trim().min(7).max(4096).regex(/^app:\/\/[^\s/]+$/, "App paths must use app://<id>."),
+  }).strict(),
+  AiSessionReferenceBaseSchema.extend({
+    kind: z.literal("plugin"),
+    path: z.string().trim().min(10).max(4096).regex(/^plugin:\/\/[^\s/]+$/, "Plugin paths must use plugin://<id>."),
+  }).strict(),
+]);
+
+export const AiSessionReferencesSchema = z.array(AiSessionReferenceSchema).max(AI_SESSION_MAX_REFERENCES).default([]);
+
+export const AiSessionMentionKindSchema = z.enum(["plugin", "skill", "file", "directory", "app"]);
+
+export const AiSessionMentionCandidateSchema = z.object({
+  kind: AiSessionMentionKindSchema,
+  name: z.string().trim().min(1).max(240),
+  description: z.string().trim().max(1000).optional(),
+  path: z.string().trim().min(1).max(4096),
+  icon: z.string().trim().max(4096).optional(),
+}).strict().superRefine((candidate, context) => {
+  if (candidate.kind === "skill" && !candidate.path.startsWith("/")) {
+    context.addIssue({ code: "custom", path: ["path"], message: "Skill paths must be absolute." });
+  }
+  if (candidate.kind === "app" && !/^app:\/\/[^\s/]+$/.test(candidate.path)) {
+    context.addIssue({ code: "custom", path: ["path"], message: "App paths must use app://<id>." });
+  }
+  if (candidate.kind === "plugin" && !/^plugin:\/\/[^\s/]+$/.test(candidate.path)) {
+    context.addIssue({ code: "custom", path: ["path"], message: "Plugin paths must use plugin://<id>." });
+  }
+  if ((candidate.kind === "file" || candidate.kind === "directory") && (candidate.path.startsWith("/") || candidate.path.split(/[\\/]+/).includes(".."))) {
+    context.addIssue({ code: "custom", path: ["path"], message: "File and directory paths must be relative to the session cwd." });
+  }
+});
+
+export const AiSessionMentionDiagnosticSchema = z.object({
+  category: z.enum(["skills", "plugins", "apps", "files"]),
+  code: z.string().trim().min(1).max(160),
+  message: z.string().trim().min(1).max(2000),
+}).strict();
+
+export const AiSessionMentionCatalogSchema = z.object({
+  sessionId: z.string().trim().min(1).max(120),
+  providerSessionId: z.string().trim().min(1).max(240),
+  cwd: z.string().trim().min(1).max(4096),
+  candidates: z.array(AiSessionMentionCandidateSchema).max(1000).default([]),
+  diagnostics: z.array(AiSessionMentionDiagnosticSchema).max(20).default([]),
+}).strict();
+
+export const AiSessionMentionFileSearchInputSchema = z.object({
+  query: z.string().trim().max(240).default(""),
+}).strict();
+
+export const AiSessionMentionFileSearchSchema = z.object({
+  sessionId: z.string().trim().min(1).max(120),
+  cwd: z.string().trim().min(1).max(4096),
+  query: z.string().trim().max(240),
+  requestId: z.string().trim().min(1).max(160),
+  candidates: z.array(AiSessionMentionCandidateSchema.refine((candidate) => candidate.kind === "file" || candidate.kind === "directory", "File search only returns files and directories.")).max(200).default([]),
+  complete: z.boolean().default(false),
+}).strict();
+
 const AiSessionMessageBaseSchema = z.object({
   message: z.string().trim().min(1).max(20000),
   mode: AiSessionSendModeSchema.optional(),
@@ -115,6 +190,7 @@ const AiSessionMessageBaseSchema = z.object({
 
 export const AiSessionMessageInputSchema = AiSessionMessageBaseSchema.extend({
   attachments: z.array(AiSessionMessageAttachmentSchema).max(AI_SESSION_MAX_MESSAGE_ATTACHMENTS).default([]),
+  references: AiSessionReferencesSchema,
 }).strict().superRefine((message, context) => {
   const totalBytes = message.attachments.reduce((sum, attachment) => sum + attachment.size, 0);
   if (totalBytes > AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES) {
@@ -128,6 +204,7 @@ export const AiSessionMessageInputSchema = AiSessionMessageBaseSchema.extend({
 
 export const AiSessionMessageRefInputSchema = AiSessionMessageBaseSchema.extend({
   attachments: z.array(AiSessionMessageAttachmentRefSchema).max(AI_SESSION_MAX_MESSAGE_ATTACHMENTS).default([]),
+  references: AiSessionReferencesSchema,
 }).strict();
 
 export const AiSessionApprovalInputSchema = z.object({
@@ -151,6 +228,7 @@ export const AiSessionQueuedMessageSchema = z
     id: z.string().trim().min(1).max(120),
     message: z.string().trim().min(1).max(20000),
     attachments: z.array(AiSessionMessageAttachmentMetaSchema).max(AI_SESSION_MAX_MESSAGE_ATTACHMENTS).default([]),
+    references: AiSessionReferencesSchema,
     status: z.enum(["queued", "sending", "failed"]).default("queued"),
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime(),
@@ -552,6 +630,14 @@ export type AiSessionMessageAttachment = z.infer<typeof AiSessionMessageAttachme
 export type AiSessionMessageAttachmentMeta = z.infer<typeof AiSessionMessageAttachmentMetaSchema>;
 export type AiSessionMessageAttachmentRef = z.infer<typeof AiSessionMessageAttachmentRefSchema>;
 export type AiSessionSendMode = z.infer<typeof AiSessionSendModeSchema>;
+export type AiSessionReferenceKind = z.infer<typeof AiSessionReferenceKindSchema>;
+export type AiSessionReference = z.infer<typeof AiSessionReferenceSchema>;
+export type AiSessionMentionKind = z.infer<typeof AiSessionMentionKindSchema>;
+export type AiSessionMentionCandidate = z.infer<typeof AiSessionMentionCandidateSchema>;
+export type AiSessionMentionDiagnostic = z.infer<typeof AiSessionMentionDiagnosticSchema>;
+export type AiSessionMentionCatalog = z.infer<typeof AiSessionMentionCatalogSchema>;
+export type AiSessionMentionFileSearchInput = z.infer<typeof AiSessionMentionFileSearchInputSchema>;
+export type AiSessionMentionFileSearch = z.infer<typeof AiSessionMentionFileSearchSchema>;
 export type AiSessionMessageInput = z.infer<typeof AiSessionMessageInputSchema>;
 export type AiSessionMessageRefInput = z.infer<typeof AiSessionMessageRefInputSchema>;
 export type AiSessionApprovalInput = z.infer<typeof AiSessionApprovalInputSchema>;

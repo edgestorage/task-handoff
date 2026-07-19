@@ -71,6 +71,7 @@ import {
   type AiSessionSnapshotEvent,
   type AiSessionsSnapshot,
   AiSessionMessageInputSchema,
+  AiSessionMentionFileSearchInputSchema,
   AiSessionQueueReorderInputSchema,
 } from "@task-handoff/protocol/ai-sessions";
 import {
@@ -160,6 +161,7 @@ type CreateWebAppOptions = {
   logger?: FastifyServerOptions["logger"];
   appRuntime?: AppRuntimeManager;
   aiSessionRegistry?: AiSessionRegistry;
+  codexAppServer?: CodexAppServerSessionBridge;
   appManagement?: AppManagementManager;
 };
 
@@ -560,7 +562,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       ? undefined
       : Number(configuredDeltaCoalescingWindow),
   });
-  const codexAppServer = new CodexAppServerSessionBridge(aiSessions, {
+  const codexAppServer = options.codexAppServer || new CodexAppServerSessionBridge(aiSessions, {
     onMessageDelta: (delta) => {
       const payload = AiSessionMessageDeltaEventSchema.parse({
         instanceId,
@@ -1195,6 +1197,27 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       const result = AiSessionActionResultSchema.parse(await aiSessionController.sendMessage(request.params.id, body));
       publishAiSessionSnapshot("control-action");
       return { data: result };
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
+  app.get<{ Params: { id: string } }>("/api/ai-sessions/:id/mentions", async (request, reply) => {
+    const session = aiSessions.get(request.params.id);
+    if (!session) return reply.code(404).send({ error: { code: "AI_SESSION_NOT_FOUND", message: "AI session not found." } });
+    try {
+      return { data: await codexAppServer.mentionCatalog(session) };
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
+  app.post<{ Params: { id: string }; Body: unknown }>("/api/ai-sessions/:id/mentions/files", async (request, reply) => {
+    const session = aiSessions.get(request.params.id);
+    if (!session) return reply.code(404).send({ error: { code: "AI_SESSION_NOT_FOUND", message: "AI session not found." } });
+    try {
+      const input = AiSessionMentionFileSearchInputSchema.parse(request.body || {});
+      return { data: await codexAppServer.searchMentionFiles(session, input.query) };
     } catch (error: unknown) {
       return sendAiSessionControlError(reply, error);
     }

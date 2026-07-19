@@ -1201,6 +1201,7 @@ test("control plane persists one update channel for server and node updates", as
     const defaults = await json(app, "GET", "/api/control-plane/settings");
     assert.equal(defaults.statusCode, 200);
     assert.equal(defaults.body.data.updateChannel, "stable");
+    assert.equal(defaults.body.data.mentionTrigger, "@");
     assert.equal(defaults.body.data.publicBaseUrl, "https://legacy-control.example.test");
 
     const publicUrl = await json(app, "PATCH", "/api/control-plane/settings", {
@@ -1213,6 +1214,14 @@ test("control plane persists one update channel for server and node updates", as
     assert.equal(channel.statusCode, 200);
     assert.equal(channel.body.data.updateChannel, "beta");
     assert.equal(channel.body.data.publicBaseUrl, "https://control.example.test");
+
+    const mention = await json(app, "PATCH", "/api/control-plane/settings", { mentionTrigger: "#" });
+    assert.equal(mention.statusCode, 200);
+    assert.equal(mention.body.data.mentionTrigger, "#");
+    for (const invalid of ["", "a", "12", "/", "\\", " "]) {
+      const rejected = await json(app, "PATCH", "/api/control-plane/settings", { mentionTrigger: invalid });
+      assert.equal(rejected.statusCode, 400);
+    }
   } finally {
     await app.close();
   }
@@ -1223,6 +1232,7 @@ test("control plane persists one update channel for server and node updates", as
     assert.equal(persisted.statusCode, 200);
     assert.equal(persisted.body.data.updateChannel, "beta");
     assert.equal(persisted.body.data.publicBaseUrl, "https://control.example.test");
+    assert.equal(persisted.body.data.mentionTrigger, "#");
   } finally {
     await app.close();
   }
@@ -13541,6 +13551,25 @@ test("control plane aggregates ai session pending routes and proxies ai session 
           headers: { "content-type": "application/json" },
         });
       }
+      if (body?.path === "/api/ai-sessions/ais_waiting/mentions" && body.method === "GET") {
+        return new Response(JSON.stringify({ data: {
+          sessionId: "ais_waiting",
+          providerSessionId: "thread_waiting",
+          cwd: "/workspace/exact",
+          candidates: [{ kind: "plugin", name: "Exact / Plugin", path: "plugin://exact-plugin" }],
+          diagnostics: [{ category: "apps", code: "APP_LIST_PARTIAL", message: "Apps unavailable." }],
+        } }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (body?.path === "/api/ai-sessions/ais_waiting/mentions/files" && body.method === "POST") {
+        return new Response(JSON.stringify({ data: {
+          sessionId: "ais_waiting",
+          cwd: "/workspace/exact",
+          query: JSON.parse(body.body).query,
+          requestId: "search_proxy",
+          candidates: [{ kind: "file", name: "Exact Name.ts", path: "src/Exact Name.ts" }],
+          complete: true,
+        } }), { status: 200, headers: { "content-type": "application/json" } });
+      }
       if (body?.path === "/api/ai-sessions/ais_waiting/messages") {
         const timestamp = new Date().toISOString();
         return new Response(JSON.stringify({ data: {
@@ -13660,6 +13689,23 @@ test("control plane aggregates ai session pending routes and proxies ai session 
   assert.equal(aiPending.kind, "approval");
   assert.match(aiPending.result, /npm install/);
 
+  const mentionCatalog = await json(app, "GET", `/api/controlled-instances/${created.body.data.id}/ai-sessions/ais_waiting/mentions`);
+  assert.equal(mentionCatalog.statusCode, 200);
+  assert.equal(mentionCatalog.body.data.candidates[0].name, "Exact / Plugin");
+  assert.equal(mentionCatalog.body.data.candidates[0].path, "plugin://exact-plugin");
+  const mentionFiles = await json(app, "POST", `/api/controlled-instances/${created.body.data.id}/ai-sessions/ais_waiting/mentions/files`, { query: "Exact Name" });
+  assert.equal(mentionFiles.statusCode, 200);
+  assert.equal(mentionFiles.body.data.candidates[0].path, "src/Exact Name.ts");
+  const references = [{ kind: "plugin", name: "Exact / Plugin", path: "plugin://exact-plugin" }];
+  const mentionMessage = await json(app, "POST", `/api/controlled-instances/${created.body.data.id}/ai-sessions/ais_waiting/messages`, { message: "Use @Exact", references });
+  assert.equal(mentionMessage.statusCode, 200);
+  const mentionForwards = requests.filter((request) => request.body.path.includes("/ai-sessions/ais_waiting/")).slice(-3);
+  assert.deepEqual(mentionForwards.map((request) => [request.body.method, request.body.path, request.body.body ? JSON.parse(request.body.body) : undefined]), [
+    ["GET", "/api/ai-sessions/ais_waiting/mentions", undefined],
+    ["POST", "/api/ai-sessions/ais_waiting/mentions/files", { query: "Exact Name" }],
+    ["POST", "/api/ai-sessions/ais_waiting/messages", { message: "Use @Exact", references }],
+  ]);
+
   const pendingCommand = await json(app, "POST", "/api/chat-gateway/messages", {
     source: {
       channel: "telegram",
@@ -13733,6 +13779,7 @@ test("control plane aggregates ai session pending routes and proxies ai session 
       request.body.body ? JSON.parse(request.body.body) : undefined,
     ]),
     [
+      ["POST", `http://127.0.0.1:8091/api/node-agent/instances/${created.body.data.id}/proxy`, "/api/ai-sessions/ais_waiting/messages", { message: "Use @Exact", references }],
       ["POST", `http://127.0.0.1:8091/api/node-agent/instances/${created.body.data.id}/proxy`, "/api/ai-sessions/ais_waiting/approval", { decision: "skip" }],
       ["POST", `http://127.0.0.1:8091/api/node-agent/instances/${created.body.data.id}/proxy`, "/api/ai-sessions/ais_waiting/approval", { decision: "allow" }],
       ["POST", `http://127.0.0.1:8091/api/node-agent/instances/${created.body.data.id}/proxy`, "/api/ai-sessions/ais_waiting/messages", { message: "continue" }],
