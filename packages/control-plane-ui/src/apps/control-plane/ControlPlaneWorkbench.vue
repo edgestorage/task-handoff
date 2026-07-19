@@ -180,7 +180,6 @@
         :copied-text="copiedText"
         :error="board.error.value ? errorText(board.error.value) : ''"
         :instance="activeInstanceWithAiSessions"
-        :instance-connecting="activeInstanceConnecting"
         :instance-display-name="instanceDisplayName"
         :is-instance-action-busy="isInstanceActionBusy"
         :last-refresh-label="lastRefreshLabel"
@@ -467,7 +466,6 @@ const {
 } = useInstanceBoardSessions({ boardSessionKeys, boardVisibleInstances });
 const {
   activeAttachUrl,
-  activeInstanceConnecting,
   activeInstanceWebUrl,
   activeOpenUrl,
   activeSession,

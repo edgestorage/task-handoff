@@ -6,7 +6,7 @@ export type SessionTab = {
   label: string;
   title?: string;
   status: string;
-  kind: "terminal" | "browser" | "logs" | "app" | "ai";
+  kind: "terminal" | "browser" | "logs" | "app" | "ai" | "status";
   source?: Record<string, unknown>;
   aiSessions?: AiSessionSummary[];
 };
@@ -82,7 +82,13 @@ export function buildSessionTabs(instance?: InstanceWithAiSessions): SessionTab[
     kind: "ai",
     aiSessions: visibleAiSessions,
   };
-  return [aiSessionTab, ...appSessions];
+  const statusTab: SessionTab | undefined = instance.status === "running" ? undefined : {
+    key: "overview",
+    label: "Status",
+    status: instance.status,
+    kind: "status",
+  };
+  return [...(statusTab ? [statusTab] : []), aiSessionTab, ...appSessions];
 }
 
 function appSessionTab(session: Record<string, unknown>, index: number): SessionTab | undefined {
@@ -227,7 +233,7 @@ export function sessionMeta(session: SessionTab) {
 }
 
 export function shouldGroupAppSessionTabs(instance: InstanceBoardItem, sessions: SessionTab[]) {
-  const appSessions = sessions.filter((session) => session.kind !== "ai");
+  const appSessions = sessions.filter((session) => session.kind !== "ai" && session.kind !== "status");
   if (appSessions.length < 2) {
     return false;
   }
@@ -235,7 +241,7 @@ export function shouldGroupAppSessionTabs(instance: InstanceBoardItem, sessions:
 }
 
 export function groupedAppSessionTabs(instance: InstanceBoardItem, sessions: SessionTab[], activeSessionKey = ""): SessionWorkspaceGroup[] {
-  const appSessions = sessions.filter((session) => session.kind !== "ai");
+  const appSessions = sessions.filter((session) => session.kind !== "ai" && session.kind !== "status");
   const groups = new Map<string, SessionTab[]>();
   for (const session of appSessions) {
     const workspace = sessionWorkspacePath(session, instance);
@@ -259,6 +265,9 @@ export function groupedAppSessionTabs(instance: InstanceBoardItem, sessions: Ses
 export function sessionWorkspacePath(session: SessionTab, instance: InstanceBoardItem) {
   if (session.kind === "ai") {
     return "AI Sessions";
+  }
+  if (session.kind === "status") {
+    return "Status";
   }
   const source = session.source || {};
   const tty = objectValue(source.tty);

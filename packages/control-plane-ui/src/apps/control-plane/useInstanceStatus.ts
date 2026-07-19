@@ -15,6 +15,14 @@ export function isInstanceConnecting(instance: InstanceBoardItem) {
   return ["created", "provisioning", "starting", "registering", "registered"].includes(instance.status) || instance.connectionStatus === "unknown";
 }
 
+export function hasInstanceStatusPage(instance: InstanceBoardItem) {
+  return instance.status !== "running";
+}
+
+export function isInstanceStatusPending(instance: InstanceBoardItem) {
+  return ["created", "provisioning", "starting", "registering", "registered", "stopping"].includes(instance.status);
+}
+
 export function isInstanceAppReady(instance: InstanceBoardItem) {
   return instance.connectionStatus === "online" || instance.access.status === "reachable";
 }
@@ -35,26 +43,23 @@ export function canShowInstanceAction(instance: InstanceBoardItem, action: Insta
   return isInstanceRunning(instance);
 }
 
-export function instanceConnectionTitle(instance?: InstanceBoardItem) {
-  if (!instance) {
-    return "Starting instance";
-  }
-  if (instance.status === "provisioning") {
-    return "Preparing runtime";
-  }
-  if (instance.status === "starting") {
-    return "Starting container";
-  }
-  if (instance.status === "registering" || instance.status === "registered") {
-    return "Connecting instance";
-  }
+export function instanceStatusTitle(instance: InstanceBoardItem) {
+  if (instance.status === "provisioning") return "Preparing runtime";
+  if (instance.status === "starting") return "Starting container";
+  if (instance.status === "registering" || instance.status === "registered") return "Connecting instance";
+  if (instance.status === "stopping") return "Stopping instance";
+  if (instance.status === "stopped") return "Instance stopped";
+  if (instance.status === "failed") return "Instance failed";
+  if (instance.status === "unhealthy") return "Instance unhealthy";
   return "Starting instance";
 }
 
-export function instanceConnectionDetail(instance?: InstanceBoardItem) {
-  if (!instance) {
-    return "Waiting for the controlled instance to connect...";
-  }
+export function instanceStatusDetail(instance: InstanceBoardItem) {
+  if (instance.status === "failed" && instance.imageProvisioning?.error) return instance.imageProvisioning.error;
+  if (instance.status === "failed") return "The instance could not be started. Retry the failed operation or inspect its runtime.";
+  if (instance.status === "stopped") return "The instance is stopped. Start it when you are ready to continue.";
+  if (instance.status === "unhealthy") return `The instance health check is ${instance.health}. Restart the instance or inspect its runtime.`;
+  if (instance.status === "stopping") return "Waiting for the instance runtime to stop safely.";
   return `Waiting for the controlled instance to connect · ${instance.status} · ${instance.connectionStatus}`;
 }
 

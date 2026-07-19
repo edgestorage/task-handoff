@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { canShowInstanceAction, imageProvisioningLabel } from "../src/apps/control-plane/useInstanceStatus.ts";
+import { canShowInstanceAction, hasInstanceStatusPage, imageProvisioningLabel, instanceStatusTitle } from "../src/apps/control-plane/useInstanceStatus.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
@@ -40,6 +40,32 @@ test("instance image phases have user-facing progress and retry only after failu
   assert.equal(imageProvisioningLabel(failed), "Image provisioning failed");
   assert.equal(canShowInstanceAction(failed, "retry-image"), true);
   assert.equal(canShowInstanceAction(instance("pulling-image"), "retry-image"), false);
+});
+
+test("instance status page exists for every lifecycle state except running", () => {
+  const statuses = ["created", "provisioning", "starting", "registering", "registered", "running", "stopping", "stopped", "failed", "unhealthy"];
+  for (const status of statuses) {
+    const value = {
+      status,
+      connectionStatus: status === "running" ? "unknown" : "online",
+    };
+    assert.equal(hasInstanceStatusPage(value), status !== "running", status);
+  }
+  const sessions = read("src/apps/control-plane/useInstanceSessions.ts");
+  const preview = read("src/apps/control-plane/instance-detail/SessionPreview.vue");
+  assert.match(sessions, /instance\.status === "running" \? undefined/);
+  assert.match(sessions, /key: "overview"[\s\S]*kind: "status"/);
+  assert.match(preview, /v-if="hasInstanceStatusPage\(instance\)"/);
+  assert.doesNotMatch(preview, /v-if="instanceConnecting"/);
+  const activeSessions = read("src/apps/control-plane/instance-detail/useActiveInstanceSessions.ts");
+  assert.match(activeSessions, /hasInstanceStatusPage\(activeInstance\.value\) \? "overview" : sessionKey/);
+});
+
+test("instance status page describes terminal lifecycle states", () => {
+  assert.equal(instanceStatusTitle(instance("ready", { status: "stopping" })), "Stopping instance");
+  assert.equal(instanceStatusTitle(instance("ready", { status: "stopped" })), "Instance stopped");
+  assert.equal(instanceStatusTitle(instance("failed", { status: "failed" })), "Instance failed");
+  assert.equal(instanceStatusTitle(instance("ready", { status: "unhealthy" })), "Instance unhealthy");
 });
 
 test("registry profiles remain selectable for pull-required and unknown nodes", () => {

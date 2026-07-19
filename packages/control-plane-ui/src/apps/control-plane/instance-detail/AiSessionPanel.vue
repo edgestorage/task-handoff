@@ -350,6 +350,7 @@ import { clearAiSessionDraft, loadAiSessionDraft, persistAiSessionDraft } from "
 import {
   aiSessionAppDisplayName,
   aiSessionAppTab,
+  aiSessionLastUserMessageTime,
   aiSessionStatusLabel,
   aiSessionTurns,
   displayAiSessionMessage,
@@ -502,8 +503,8 @@ function groupAiSessionsByPath(sessions: AiSessionSummary[]) {
       sessions: groupSessions,
     }))
     .sort((a, b) => {
-      const runningDelta = groupLastRunningAt(b.sessions) - groupLastRunningAt(a.sessions);
-      return runningDelta || a.key.localeCompare(b.key);
+      const messageTimeDelta = groupLastUserMessageTime(b.sessions) - groupLastUserMessageTime(a.sessions);
+      return messageTimeDelta || a.key.localeCompare(b.key);
     });
 }
 
@@ -526,29 +527,8 @@ function aiSessionPathLabel(path: string) {
   };
 }
 
-function groupLastRunningAt(sessions: AiSessionSummary[]) {
-  return Math.max(0, ...sessions.map(aiSessionActivityTime));
-}
-
-function aiSessionActivityTime(session: AiSessionSummary) {
-  return Math.max(
-    dateTimeValue(session.updatedAt),
-    dateTimeValue(session.startedAt),
-    ...(session.turns || []).map((turn) => Math.max(
-      dateTimeValue(turn.updatedAt),
-      dateTimeValue(turn.completedAt),
-      dateTimeValue(turn.startedAt),
-      dateTimeValue(turn.observedAt),
-    )),
-  );
-}
-
-function dateTimeValue(value?: string) {
-  if (!value) {
-    return 0;
-  }
-  const time = Date.parse(value);
-  return Number.isFinite(time) ? time : 0;
+function groupLastUserMessageTime(sessions: AiSessionSummary[]) {
+  return Math.max(0, ...sessions.map(aiSessionLastUserMessageTime));
 }
 
 watch(

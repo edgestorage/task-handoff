@@ -120,7 +120,6 @@
         :can-launch-app="canLaunchApp"
         :copied-text="copiedText"
         :instance="instance"
-        :instance-connecting="instanceConnecting"
         :launchable-apps="launchableApps"
         :launching-app="launchingApp"
         :last-refresh-label="lastRefreshLabel"
@@ -190,7 +189,6 @@ const props = defineProps<{
   copiedText: string;
   error?: string;
   instance?: InstanceWithAiSessions;
-  instanceConnecting: boolean;
   instanceDisplayName: (instance: InstanceBoardItem) => string;
   isInstanceActionBusy: (instance: InstanceBoardItem) => boolean;
   lastRefreshLabel: string;

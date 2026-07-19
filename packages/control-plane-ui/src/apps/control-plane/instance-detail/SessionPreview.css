@@ -703,7 +703,7 @@
   padding: 28px;
 }
 
-.session-preview-connecting {
+.session-preview-status-page {
   display: grid;
   place-items: center;
   align-content: center;
@@ -714,9 +714,17 @@
   padding: 28px;
 }
 
-.session-preview-connecting svg {
+.session-preview-status-page svg {
   color: var(--status-success);
+}
+
+.session-preview-status-page[data-pending="true"] svg {
   animation: control-plane-spin 1.1s linear infinite;
+}
+
+.session-preview-status-page[data-state="failed"] svg,
+.session-preview-status-page[data-state="unhealthy"] svg {
+  color: var(--status-danger);
 }
 
 .session-preview-live {
@@ -793,12 +801,12 @@
   text-overflow: clip;
 }
 
-.session-preview-connecting strong {
+.session-preview-status-page strong {
   font-size: 18px;
 }
 
 .session-preview-body span,
-.session-preview-connecting span {
+.session-preview-status-page span {
   max-width: 620px;
   overflow-wrap: anywhere;
   color: var(--text-muted);

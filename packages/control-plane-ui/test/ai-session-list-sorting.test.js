@@ -94,6 +94,9 @@ test("missing user message timestamps sort after known timestamps with a stable 
 
 test("instance detail sidebar uses the local user-message sorter", () => {
   assert.match(panel, /sortedAiSessionsByLastUserMessage\(filteredSessions\.value, sortSessionsByStatus\.value\)/);
+  assert.match(panel, /groupLastUserMessageTime\(b\.sessions\) - groupLastUserMessageTime\(a\.sessions\)/);
+  assert.match(panel, /sessions\.map\(aiSessionLastUserMessageTime\)/);
+  assert.doesNotMatch(panel, /aiSessionActivityTime|groupLastRunningAt/);
   assert.match(panel, />\s*Sort by status\s*</);
   assert.match(panel, /SORT_BY_STATUS_STORAGE_KEY/);
 });

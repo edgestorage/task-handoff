@@ -4,10 +4,22 @@
       <div class="session-preview-primary-tools">
         <div class="session-preview-selector" aria-label="Session views" @click.stop>
           <button
+            v-if="orderedStatusTab"
+            type="button"
+            class="session-ai-home"
+            :class="{ active: isSessionTabActive(orderedStatusTab) }"
+            :title="instanceStatusTitle(instance)"
+            @click="$emit('selectSession', orderedStatusTab.key)"
+          >
+            <Activity :size="15" />
+            <span>Status</span>
+          </button>
+          <span v-if="orderedStatusTab && (orderedAiSessionTab || orderedAppSessionTabs.length)" class="session-tab-divider" aria-hidden="true" />
+          <button
             v-if="orderedAiSessionTab"
             type="button"
             class="session-ai-home"
-            :class="{ active: orderedAiSessionTab.key === activeSessionKey, dragging: draggingSessionTabKey === orderedAiSessionTab.key }"
+            :class="{ active: isSessionTabActive(orderedAiSessionTab), dragging: draggingSessionTabKey === orderedAiSessionTab.key }"
             draggable="true"
             :title="sessionMeta(orderedAiSessionTab)"
             @click="$emit('selectSession', orderedAiSessionTab.key)"
@@ -30,7 +42,7 @@
                 <ContextMenuTrigger as-child>
                   <span
                     class="session-tab-item"
-                    :class="{ active: session.key === activeSessionKey, dragging: draggingSessionTabKey === session.key }"
+                    :class="{ active: isSessionTabActive(session), dragging: draggingSessionTabKey === session.key }"
                     :data-kind="session.kind"
                     role="tab"
                     tabindex="0"
@@ -96,10 +108,24 @@
             <DropdownMenuContent class="session-select-menu" align="end" :side-offset="8">
               <template v-if="groupSessionMenu">
                 <DropdownMenuItem
+                  v-if="statusTab"
+                  :key="statusTab.key"
+                  class="session-select-row"
+                  :class="{ active: isSessionTabActive(statusTab) }"
+                  @select="$emit('selectSession', statusTab.key)"
+                >
+                  <span class="session-select-option">
+                    <span>
+                      <strong>Status</strong>
+                      <small>{{ instanceStatusTitle(instance) }}</small>
+                    </span>
+                  </span>
+                </DropdownMenuItem>
+                <DropdownMenuItem
                   v-if="aiSessionTab"
                   :key="aiSessionTab.key"
                   class="session-select-row"
-                  :class="{ active: aiSessionTab.key === activeSessionKey }"
+                  :class="{ active: isSessionTabActive(aiSessionTab) }"
                   @select="$emit('selectSession', aiSessionTab.key)"
                 >
                   <span class="session-select-option">
@@ -118,7 +144,7 @@
                     v-for="session in group.sessions"
                     :key="session.key"
                     class="session-select-row nested"
-                    :class="{ active: session.key === activeSessionKey }"
+                    :class="{ active: isSessionTabActive(session) }"
                     @select="$emit('selectSession', session.key)"
                   >
                     <span class="session-select-option">
@@ -145,7 +171,7 @@
                   v-for="session in sessionTabs"
                   :key="session.key"
                   class="session-select-row"
-                  :class="{ active: session.key === activeSessionKey }"
+                  :class="{ active: isSessionTabActive(session) }"
                   @select="$emit('selectSession', session.key)"
                 >
                   <span class="session-select-option">
@@ -155,7 +181,7 @@
                     </span>
                   </span>
                   <button
-                    v-if="session.kind !== 'ai'"
+                    v-if="session.kind !== 'ai' && session.kind !== 'status'"
                     type="button"
                     class="session-select-close"
                     :disabled="Boolean(stoppingSessionId)"
@@ -200,10 +226,12 @@
         </button>
       </div>
     </div>
-    <div v-if="instanceConnecting" class="session-preview-connecting">
-      <RefreshCw :size="34" />
-      <strong>{{ instanceConnectionTitle(instance) }}</strong>
-      <span>{{ instanceConnectionDetail(instance) }}</span>
+    <div v-if="hasInstanceStatusPage(instance)" class="session-preview-status-page" :data-pending="isInstanceStatusPending(instance)" :data-state="instance.status">
+      <RefreshCw v-if="isInstanceStatusPending(instance)" :size="34" />
+      <CircleAlert v-else-if="instance.status === 'failed' || instance.status === 'unhealthy'" :size="34" />
+      <CircleStop v-else :size="34" />
+      <strong>{{ instanceStatusTitle(instance) }}</strong>
+      <span>{{ instanceStatusDetail(instance) }}</span>
     </div>
     <AiSessionPanel
       v-else-if="activeSession?.kind === 'ai'"
@@ -243,9 +271,9 @@
     </div>
     <SessionTerminalPreview
       v-for="terminalSession in terminalSessionPreviews"
-      v-show="!instanceConnecting && terminalSession.key === activeSessionKey"
+      v-show="!hasInstanceStatusPage(instance) && terminalSession.key === activeSessionKey"
       :key="terminalSession.key"
-      :active="!instanceConnecting && terminalSession.key === activeSessionKey"
+      :active="!hasInstanceStatusPage(instance) && terminalSession.key === activeSessionKey"
       :socket-url="terminalSession.socketUrl"
       class="session-preview-live session-terminal"
     />
@@ -286,7 +314,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, type ComponentPublicInstance } from "vue";
 import { useNow } from "@vueuse/core";
-import { AppWindow, Bot, Boxes, ChevronDown, Copy, ExternalLink, Folder, Maximize2, Minimize2, Monitor, Pencil, Plus, RefreshCw, Terminal, X } from "@lucide/vue";
+import { Activity, AppWindow, Bot, Boxes, ChevronDown, CircleAlert, CircleStop, Copy, ExternalLink, Folder, Maximize2, Minimize2, Monitor, Pencil, Plus, RefreshCw, Terminal, X } from "@lucide/vue";
 import type { AiSessionSummary, InstanceBoardItem, InstanceResourceMetrics, InstanceWithAiSessions, NodeLocalFolder } from "../../../api/types";
 import { Button } from "../../../components/ui/button";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "../../../components/ui/context-menu";
@@ -308,7 +336,7 @@ import {
   type LaunchableApp,
   type SessionTab,
 } from "../useInstanceSessions";
-import { instanceConnectionDetail, instanceConnectionTitle } from "../useInstanceStatus";
+import { hasInstanceStatusPage, instanceStatusDetail, instanceStatusTitle, isInstanceStatusPending } from "../useInstanceStatus";
 
 const props = defineProps<{
   activeAttachUrl: string;
@@ -324,7 +352,6 @@ const props = defineProps<{
   canLaunchApp: boolean;
   copiedText: string;
   instance: InstanceWithAiSessions;
-  instanceConnecting: boolean;
   launchableApps: LaunchableApp[];
   launchingApp: boolean;
   lastRefreshLabel: string;
@@ -400,8 +427,10 @@ const sessionRenameError = ref("");
 const renamingSession = ref(false);
 const renameInput = ref<HTMLInputElement>();
 const aiSessionTab = computed(() => props.sessionTabs.find((session) => session.kind === "ai"));
+const statusTab = computed(() => props.sessionTabs.find((session) => session.kind === "status"));
+const orderedStatusTab = computed(() => props.orderedSessionTabs.find((session) => session.kind === "status"));
 const orderedAiSessionTab = computed(() => props.orderedSessionTabs.find((session) => session.kind === "ai"));
-const orderedAppSessionTabs = computed(() => props.orderedSessionTabs.filter((session) => session.kind !== "ai"));
+const orderedAppSessionTabs = computed(() => props.orderedSessionTabs.filter((session) => session.kind !== "ai" && session.kind !== "status"));
 const terminalSessionPreviews = computed(() =>
   props.orderedSessionTabs
     .filter((session) => session.kind === "terminal")
@@ -410,6 +439,10 @@ const terminalSessionPreviews = computed(() =>
 );
 const groupSessionMenu = computed(() => shouldGroupAppSessionTabs(props.instance, props.sessionTabs));
 const groupedAppSessions = computed(() => groupedAppSessionTabs(props.instance, props.sessionTabs, props.activeSessionKey));
+
+function isSessionTabActive(session: SessionTab) {
+  return hasInstanceStatusPage(props.instance) ? session.kind === "status" : session.key === props.activeSessionKey;
+}
 
 function setRenameInput(element: Element | ComponentPublicInstance | null) {
   renameInput.value = element instanceof HTMLInputElement ? element : undefined;

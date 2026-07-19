@@ -13,7 +13,7 @@ import {
   uniqueLaunchableApps,
   type SessionTab,
 } from "../useInstanceSessions";
-import { isInstanceAppReady, isInstanceConnecting } from "../useInstanceStatus";
+import { hasInstanceStatusPage, isInstanceAppReady, isInstanceConnecting } from "../useInstanceStatus";
 
 type UseActiveInstanceSessionsInput = {
   activeInstance: ComputedRef<InstanceWithAiSessions | undefined>;
@@ -103,7 +103,20 @@ export function useActiveInstanceSessions({
   watch(
     () => activeInstance.value?.id,
     () => {
-      ensureActiveSessionKey();
+      if (activeInstance.value && hasInstanceStatusPage(activeInstance.value)) {
+        selectedSessionKeys[activeInstance.value.id] = "overview";
+      } else {
+        ensureActiveSessionKey();
+      }
+    },
+  );
+
+  watch(
+    () => Boolean(activeInstance.value && hasInstanceStatusPage(activeInstance.value)),
+    (hasStatusPage, hadStatusPage) => {
+      if (hasStatusPage && !hadStatusPage && activeInstance.value) {
+        selectedSessionKeys[activeInstance.value.id] = "overview";
+      }
     },
   );
 
@@ -176,8 +189,9 @@ export function useActiveInstanceSessions({
   function selectSession(sessionKey: string) {
     const instanceId = activeInstance.value?.id;
     if (instanceId) {
-      selectedSessionKeys[instanceId] = sessionKey;
-      rememberSessionKey(instanceId, sessionKey);
+      const nextSessionKey = activeInstance.value && hasInstanceStatusPage(activeInstance.value) ? "overview" : sessionKey;
+      selectedSessionKeys[instanceId] = nextSessionKey;
+      rememberSessionKey(instanceId, nextSessionKey);
     }
     sessionMenuOpen.value = false;
   }
@@ -245,7 +259,7 @@ export function useActiveInstanceSessions({
   }
 
   async function stopSelectedAppSession(instance: InstanceBoardItem, session: SessionTab) {
-    if (session.kind === "ai") {
+    if (session.kind === "ai" || session.kind === "status") {
       return;
     }
     const sessionId = typeof session.source?.id === "string" ? session.source.id : session.key;
