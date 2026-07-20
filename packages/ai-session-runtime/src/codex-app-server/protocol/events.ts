@@ -29,7 +29,7 @@ export function codexNotification(method: string, params: JsonValue): CodexAppSe
         type: "context-compaction",
         threadId: params.threadId,
         turnId: params.turnId,
-        itemId: item.id,
+        itemId: `context_compaction:${params.turnId}`,
         status: method === "item/started" ? "running" : "completed",
         observedAt,
       };

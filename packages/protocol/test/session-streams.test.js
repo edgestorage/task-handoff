@@ -5,6 +5,10 @@ import {
   AiSessionEventMetaSchema,
   AiSessionEventType,
   AiSessionDeltaResponseSchema,
+  AiSessionHistoryIndexSchema,
+  AiSessionHistoryDetailSchema,
+  AiSessionHistoryItemSchema,
+  AiSessionHistoryListSchema,
   AiSessionMessageDeltaEventSchema,
   AiSessionMentionCandidateSchema,
   AiSessionMentionFileSearchSchema,
@@ -14,6 +18,7 @@ import {
   AiSessionRealtimeInputSchema,
   AiSessionStatusSchema,
   AiSessionSummarySchema,
+  AiSessionResumeResultSchema,
   AiSessionSubAgentSchema,
   AiSessionToolSchema,
   applyAiSessionStreamEvent,
@@ -30,6 +35,48 @@ import {
 } from "../src/events.ts";
 
 const now = "2026-07-13T00:00:00.000Z";
+
+test("AI session history schemas expose bounded strict summaries and resume results", () => {
+  const item = {
+    id: "ai-history-1",
+    agent: "codex",
+    providerSessionId: "11111111-1111-4111-8111-111111111111",
+    title: "Continue the implementation",
+    userPrompt: "Build AI session history",
+    lastMessage: "The design is ready.",
+    cwd: "/workspace",
+    lastActiveAt: now,
+    archivedAt: now,
+  };
+  assert.deepEqual(AiSessionHistoryItemSchema.parse(item), item);
+  assert.equal(AiSessionHistoryItemSchema.safeParse({ ...item, transcriptPath: "/home/agent/.codex/session.jsonl" }).success, false);
+  assert.equal(AiSessionHistoryItemSchema.safeParse({ ...item, agent: "other" }).success, false);
+  assert.equal(AiSessionHistoryIndexSchema.safeParse({ schemaVersion: 1, items: Array.from({ length: 51 }, () => item) }).success, false);
+  assert.equal(AiSessionHistoryListSchema.safeParse({ items: [item], extra: true }).success, false);
+  assert.deepEqual(AiSessionHistoryDetailSchema.parse({
+    item,
+    turns: [{ id: "turn-history-1", userPrompt: "Build it", lastMessage: "Done", status: "completed", startedAt: now }],
+  }).turns[0], {
+    id: "turn-history-1",
+    userPrompt: "Build it",
+    lastMessage: "Done",
+    status: "completed",
+    startedAt: now,
+  });
+  assert.equal(AiSessionHistoryDetailSchema.safeParse({ item, turns: [{ id: "turn-history-1", status: "completed", currentTool: {} }] }).success, false);
+  assert.equal(AiSessionHistoryDetailSchema.safeParse({ item, turns: Array.from({ length: 51 }, (_, index) => ({ id: `turn-${index}`, status: "completed" })) }).success, false);
+  assert.deepEqual(AiSessionResumeResultSchema.parse({
+    disposition: "resumed",
+    aiSessionId: item.id,
+    providerSessionId: item.providerSessionId,
+    appSessionId: "app-1",
+  }), {
+    disposition: "resumed",
+    aiSessionId: item.id,
+    providerSessionId: item.providerSessionId,
+    appSessionId: "app-1",
+  });
+});
 
 test("AI session mention schemas enforce canonical references and safe file results", () => {
   const references = [

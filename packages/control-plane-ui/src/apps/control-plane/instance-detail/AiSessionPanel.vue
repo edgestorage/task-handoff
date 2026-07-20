@@ -1,9 +1,29 @@
 <template>
   <div class="session-ai-panel" :style="workspaceStyle">
     <div class="session-ai-workspace">
-      <aside class="session-ai-sidebar">
+      <aside ref="sidebarEl" class="session-ai-sidebar">
         <div class="session-ai-sidebar-head">
-          <div class="session-ai-sidebar-actions">
+          <div v-if="historyMode" class="session-ai-history-head">
+            <Button variant="ghost" size="sm" class="session-ai-history-back" @click="leaveHistoryMode">
+              <ArrowLeft :size="15" />
+              <span>返回当前对话</span>
+            </Button>
+            <strong>过往对话</strong>
+            <DropdownMenu>
+              <DropdownMenuTrigger as-child>
+                <Button variant="outline" size="sm" class="session-ai-options-trigger" aria-label="过往对话列表选项" title="过往对话列表选项">
+                  <SlidersHorizontal :size="16" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent class="session-ai-options-menu" align="end" :side-offset="6">
+                <DropdownMenuLabel class="session-ai-options-label">View</DropdownMenuLabel>
+                <DropdownMenuCheckboxItem class="session-ai-options-item option-item" :model-value="groupSessionsByPath" @update:model-value="(value) => groupSessionsByPath = Boolean(value)">
+                  Group by path
+                </DropdownMenuCheckboxItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+          <div v-else class="session-ai-sidebar-actions">
             <DropdownMenu>
               <DropdownMenuTrigger as-child>
                 <button type="button" class="session-ai-filter-trigger">
@@ -51,7 +71,7 @@
           </div>
         </div>
         <ScrollArea class="session-ai-list">
-          <div class="session-ai-list-content">
+          <div v-if="!historyMode" class="session-ai-list-content">
             <section
               v-for="group in displayedSessionGroups"
               :key="group.key"
@@ -198,9 +218,86 @@
                 </article>
               </template>
             </section>
-            <p v-if="!sortedSessions.length" class="session-ai-empty session-ai-filter-empty">No AI sessions match this status.</p>
+            <div v-if="!sortedSessions.length" class="session-ai-empty session-ai-filter-empty" role="status">
+              <span class="session-ai-empty-icon">
+                <MessageSquare :size="17" />
+              </span>
+              <strong>{{ visibleAiSessions.length ? "No matching sessions" : "No conversations yet" }}</strong>
+              <span>{{ visibleAiSessions.length ? "Try another status filter." : "Use the + button above to start a conversation." }}</span>
+            </div>
+          </div>
+          <div v-else class="session-ai-history-list" aria-live="polite">
+            <div v-if="historyLoading" class="session-ai-history-state">
+              <LoaderCircle class="session-ai-spin" :size="16" />
+              <span>正在读取过往对话…</span>
+            </div>
+            <div v-else-if="historyError" class="session-ai-history-state session-ai-history-error" role="alert">
+              <span>{{ historyError }}</span>
+              <Button variant="ghost" size="sm" @click="loadHistory">重试</Button>
+            </div>
+            <p v-else-if="!historyItems.length" class="session-ai-history-state">暂无过往对话</p>
+            <template v-else>
+              <section v-for="group in displayedHistoryGroups" :key="group.key" class="session-ai-path-group session-ai-history-group">
+                <button
+                  v-if="groupSessionsByPath"
+                  type="button"
+                  class="session-ai-path-group-head"
+                  :aria-expanded="!collapsedHistoryPathGroups[group.key]"
+                  :title="group.key"
+                  @click="toggleHistoryPathGroup(group.key)"
+                >
+                  <Folder class="session-ai-path-group-icon" :size="15" />
+                  <span class="session-ai-path-group-text">
+                    <span class="session-ai-path-group-title">{{ group.label }}</span>
+                    <small v-if="group.parentLabel">{{ group.parentLabel }}</small>
+                  </span>
+                  <ChevronRight class="session-ai-path-group-chevron" :class="{ open: !collapsedHistoryPathGroups[group.key] }" :size="15" />
+                  <strong>{{ group.items.length }}</strong>
+                </button>
+                <template v-if="!groupSessionsByPath || !collapsedHistoryPathGroups[group.key]">
+                  <article
+                    v-for="item in group.items"
+                    :key="item.id"
+                    class="session-ai-history-row"
+                    :data-selected="selectedHistoryId === item.id"
+                  >
+                    <div
+                      class="session-ai-history-select"
+                      role="button"
+                      tabindex="0"
+                      @click="selectHistoryItem(item)"
+                      @keydown.enter.prevent="selectHistoryItem(item)"
+                      @keydown.space.prevent="selectHistoryItem(item)"
+                    >
+                      <div class="session-ai-history-row-head">
+                        <strong>{{ item.agent === "claude" ? "Claude" : "Codex" }}</strong>
+                        <time :datetime="item.lastActiveAt">{{ relativeHistoryTime(item.lastActiveAt) }}</time>
+                      </div>
+                      <p>{{ historyItemTitle(item) }}</p>
+                      <small :title="item.cwd">{{ item.cwd }}</small>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      class="session-ai-history-resume"
+                      :disabled="Boolean(resumingHistoryId)"
+                      @click.stop="resumeHistoryItem(item)"
+                    >
+                      <LoaderCircle v-if="resumingHistoryId === item.id" class="session-ai-spin" :size="14" />
+                      <RotateCcw v-else :size="14" />
+                      <span>{{ resumingHistoryId === item.id ? "正在恢复" : "继续对话" }}</span>
+                    </Button>
+                  </article>
+                </template>
+              </section>
+            </template>
           </div>
         </ScrollArea>
+        <Button v-if="!historyMode" variant="ghost" class="session-ai-history-entry" @click="enterHistoryMode">
+          <History :size="15" />
+          <span>查看过往对话</span>
+          <ChevronRight :size="14" />
+        </Button>
       </aside>
       <button
         type="button"
@@ -209,7 +306,58 @@
         title="Resize AI session list"
         @pointerdown="startSidebarResize"
       />
-      <section v-if="showNewSession" class="session-ai-detail session-ai-new-detail">
+      <section v-if="historyMode" class="session-ai-detail session-ai-history-detail">
+        <ScrollArea class="session-ai-detail-scroll">
+          <div v-if="!selectedHistoryId" class="session-ai-history-detail-state">
+            <History :size="20" />
+            <strong>选择一条过往对话查看详情</strong>
+          </div>
+          <div v-else-if="historyDetailLoading" class="session-ai-history-detail-state">
+            <LoaderCircle class="session-ai-spin" :size="18" />
+            <span>正在读取对话详情…</span>
+          </div>
+          <div v-else-if="historyDetailError" class="session-ai-history-detail-state session-ai-history-error" role="alert">
+            <span>{{ historyDetailError }}</span>
+            <Button v-if="selectedHistoryItem" variant="ghost" size="sm" @click="selectHistoryItem(selectedHistoryItem)">重试</Button>
+          </div>
+          <section v-else-if="historyDetail" class="session-ai-history-detail-content">
+            <header class="session-ai-history-detail-head">
+              <div>
+                <span>{{ historyDetail.item.agent === "claude" ? "Claude" : "Codex" }}</span>
+                <time :datetime="historyDetail.item.lastActiveAt">{{ relativeHistoryTime(historyDetail.item.lastActiveAt) }}</time>
+              </div>
+              <h2>{{ historyItemTitle(historyDetail.item) }}</h2>
+              <small :title="historyDetail.item.cwd">{{ historyDetail.item.cwd }}</small>
+              <Button
+                variant="outline"
+                size="sm"
+                :disabled="Boolean(resumingHistoryId)"
+                @click="resumeHistoryItem(historyDetail.item)"
+              >
+                <LoaderCircle v-if="resumingHistoryId === historyDetail.item.id" class="session-ai-spin" :size="14" />
+                <RotateCcw v-else :size="14" />
+                <span>{{ resumingHistoryId === historyDetail.item.id ? "正在恢复" : "继续对话" }}</span>
+              </Button>
+            </header>
+            <div v-if="!historyDetail.turns.length" class="session-ai-history-detail-state">
+              <span>这条过往对话没有可展示的详情。</span>
+            </div>
+            <div v-else class="session-ai-history-turns">
+              <article v-for="turn in historyDetail.turns" :key="turn.id" class="session-ai-history-turn">
+                <section v-if="turn.userPrompt" class="session-ai-history-message session-ai-history-message-user">
+                  <small>你</small>
+                  <MarkdownContent :content="turn.userPrompt" />
+                </section>
+                <section v-if="turn.lastMessage || turn.summary" class="session-ai-history-message session-ai-history-message-assistant">
+                  <small>{{ historyDetail.item.agent === "claude" ? "Claude" : "Codex" }}</small>
+                  <MarkdownContent :content="turn.lastMessage || turn.summary || ''" />
+                </section>
+              </article>
+            </div>
+          </section>
+        </ScrollArea>
+      </section>
+      <section v-else-if="showNewSession" class="session-ai-detail session-ai-new-detail">
         <div class="session-ai-new-dialog" role="group" aria-label="New AI session">
           <div class="session-ai-new-pills">
             <DropdownMenu>
@@ -343,7 +491,6 @@
             :busy="aiSessionActionBusy"
             :can-interrupt="canInterrupt(selectedSession)"
             :can-resolve-approval="canResolveApproval(selectedSession)"
-            :context-compactions="displayAiSessionContextCompactions(selectedSession, promptIndexFor(selectedSession))"
             :instance-id="instance.id"
             :is-latest="promptIndexFor(selectedSession) >= promptCount(selectedSession) - 1"
             :response-content="displayAiSessionResponse(selectedSession, promptIndexFor(selectedSession))"
@@ -405,12 +552,12 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type CSSProperties } from "vue";
-import { ArrowDown, Ban, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Code2, ExternalLink, Filter, Folder, MoreHorizontal, Plus, SlidersHorizontal, Square, X, Zap } from "@lucide/vue";
+import { ArrowDown, ArrowLeft, Ban, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Code2, ExternalLink, Filter, Folder, History, LoaderCircle, MessageSquare, MoreHorizontal, Plus, RotateCcw, SlidersHorizontal, Square, X, Zap } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
-import { bindAiSessionTrigger, createNodeLocalFolder, interruptAiSession, launchAppSession, listNodeFolderTree, removeAiSessionQueuedMessage, resolveAiSessionApproval, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, stopAppSession, unbindAiSessionTrigger, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery } from "../../../api/queries";
+import { bindAiSessionTrigger, createNodeLocalFolder, getAiSessionHistory, getAiSessionHistoryDetail, interruptAiSession, launchAppSession, listNodeFolderTree, removeAiSessionQueuedMessage, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, stopAppSession, unbindAiSessionTrigger, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery } from "../../../api/queries";
 import { executeAiSessionCommand } from "../../../api/ai-session-commands";
-import type { AiSessionCommandInput } from "@task-handoff/protocol/ai-sessions";
+import type { AiSessionCommandInput, AiSessionHistoryDetail, AiSessionHistoryItem } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, NodeLocalFolder, TriggerConfig, TriggerDeployment, TriggerRuntimeState } from "../../../api/types";
 import type { LaunchableApp } from "../useInstanceSessions";
 import AiSessionComposer, { type AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
@@ -435,7 +582,6 @@ import {
   aiSessionStatusLabel,
   aiSessionTurns,
   displayAiSessionMessage,
-  displayAiSessionContextCompactions,
   displayAiSessionResponse,
   displayAiSessionTitle,
   sortedAiSessionsByLastUserMessage,
@@ -448,6 +594,12 @@ type AiSessionPathGroup = {
   label: string;
   parentLabel: string;
   sessions: AiSessionSummary[];
+};
+type AiSessionHistoryPathGroup = {
+  key: string;
+  label: string;
+  parentLabel: string;
+  items: AiSessionHistoryItem[];
 };
 
 const GROUP_BY_PATH_STORAGE_KEY = "task-handoff.control-plane.ai-sessions-group-by-path";
@@ -549,8 +701,21 @@ const newSessionProjectLabel = computed(() => {
   return sourcePath?.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "Choose project";
 });
 const queryClient = useQueryClient();
+const sidebarEl = ref<HTMLElement>();
+const historyMode = ref(false);
+const historyItems = ref<AiSessionHistoryItem[]>([]);
+const historyLoading = ref(false);
+const historyError = ref("");
+const selectedHistoryId = ref("");
+const historyDetail = ref<AiSessionHistoryDetail>();
+const historyDetailLoading = ref(false);
+const historyDetailError = ref("");
+const resumingHistoryId = ref("");
+let currentListScrollTop = 0;
+let historyDetailRevision = 0;
 const promptIndexes = ref<Record<string, { index: number; count: number }>>({});
 const collapsedPathGroups = reactive<Record<string, boolean>>({});
+const collapsedHistoryPathGroups = reactive<Record<string, boolean>>({});
 const messageDraft = ref("");
 const messageAttachments = ref<AiSessionComposerAttachment[]>([]);
 const messageMentionBindings = ref<AiSessionMentionBinding[]>([]);
@@ -641,6 +806,33 @@ function groupAiSessionsByPath(sessions: AiSessionSummary[]) {
     });
 }
 
+function groupAiSessionHistoryByPath(items: AiSessionHistoryItem[]) {
+  const groups = new Map<string, AiSessionHistoryItem[]>();
+  for (const item of items) {
+    const path = item.cwd?.trim() || "Unknown path";
+    groups.set(path, [...(groups.get(path) || []), item]);
+  }
+  return [...groups.entries()]
+    .map(([path, groupItems]) => ({
+      key: path,
+      ...aiSessionPathLabel(path),
+      items: groupItems,
+    }))
+    .sort((a, b) => {
+      const latestA = Math.max(0, ...a.items.map((item) => Date.parse(item.lastActiveAt) || 0));
+      const latestB = Math.max(0, ...b.items.map((item) => Date.parse(item.lastActiveAt) || 0));
+      return latestB - latestA || a.key.localeCompare(b.key);
+    });
+}
+
+const displayedHistoryGroups = computed<AiSessionHistoryPathGroup[]>(() => groupSessionsByPath.value ? groupAiSessionHistoryByPath(historyItems.value) : [{
+  key: "all",
+  label: "",
+  parentLabel: "",
+  items: historyItems.value,
+}]);
+const selectedHistoryItem = computed(() => historyItems.value.find((item) => item.id === selectedHistoryId.value));
+
 function aiSessionPath(session: AiSessionSummary) {
   return session.cwd?.trim() || "Unknown path";
 }
@@ -677,12 +869,34 @@ watch(
   { immediate: true },
 );
 
+watch(
+  displayedHistoryGroups,
+  (groups) => {
+    const activeKeys = new Set(groups.map((group) => group.key));
+    for (const key of Object.keys(collapsedHistoryPathGroups)) {
+      if (!activeKeys.has(key)) delete collapsedHistoryPathGroups[key];
+    }
+  },
+  { immediate: true },
+);
+
 watch(groupSessionsByPath, (value) => {
   window.localStorage?.setItem(GROUP_BY_PATH_STORAGE_KEY, String(value));
 });
 
 watch(sortSessionsByStatus, (value) => {
   window.localStorage?.setItem(SORT_BY_STATUS_STORAGE_KEY, String(value));
+});
+
+watch(() => props.instance.id, () => {
+  historyDetailRevision += 1;
+  historyItems.value = [];
+  historyError.value = "";
+  selectedHistoryId.value = "";
+  historyDetail.value = undefined;
+  historyDetailError.value = "";
+  for (const key of Object.keys(collapsedHistoryPathGroups)) delete collapsedHistoryPathGroups[key];
+  if (historyMode.value) void loadHistory();
 });
 
 watch(
@@ -695,6 +909,10 @@ watch(
 
 function togglePathGroup(key: string) {
   collapsedPathGroups[key] = !collapsedPathGroups[key];
+}
+
+function toggleHistoryPathGroup(key: string) {
+  collapsedHistoryPathGroups[key] = !collapsedHistoryPathGroups[key];
 }
 
 function stopSidebarResize() {
@@ -778,6 +996,105 @@ function nextPrompt(session: AiSessionSummary) {
 function selectSession(sessionId: string) {
   newSessionOpen.value = false;
   emit("selectAiSession", props.instance.id, sessionId);
+}
+
+function sidebarViewport() {
+  return sidebarEl.value?.querySelector<HTMLElement>("[data-reka-scroll-area-viewport]");
+}
+
+async function enterHistoryMode() {
+  currentListScrollTop = sidebarViewport()?.scrollTop || 0;
+  historyMode.value = true;
+  await loadHistory();
+}
+
+async function leaveHistoryMode() {
+  historyDetailRevision += 1;
+  historyMode.value = false;
+  await nextTick();
+  const viewport = sidebarViewport();
+  if (viewport) viewport.scrollTop = currentListScrollTop;
+}
+
+async function loadHistory() {
+  if (historyLoading.value) return;
+  historyLoading.value = true;
+  historyError.value = "";
+  try {
+    historyItems.value = (await getAiSessionHistory(props.instance.id)).items;
+    if (selectedHistoryId.value && !historyItems.value.some((item) => item.id === selectedHistoryId.value)) {
+      selectedHistoryId.value = "";
+      historyDetail.value = undefined;
+      historyDetailError.value = "";
+    }
+  } catch (error) {
+    historyError.value = error instanceof Error ? error.message : "无法读取过往对话。";
+  } finally {
+    historyLoading.value = false;
+  }
+}
+
+async function selectHistoryItem(item: AiSessionHistoryItem) {
+  const revision = ++historyDetailRevision;
+  selectedHistoryId.value = item.id;
+  historyDetail.value = undefined;
+  historyDetailError.value = "";
+  historyDetailLoading.value = true;
+  try {
+    const detail = await getAiSessionHistoryDetail(props.instance.id, item.id);
+    if (revision === historyDetailRevision && historyMode.value && selectedHistoryId.value === item.id) {
+      historyDetail.value = detail;
+    }
+  } catch (error) {
+    if (revision === historyDetailRevision && historyMode.value && selectedHistoryId.value === item.id) {
+      historyDetailError.value = error instanceof Error ? error.message : "无法读取对话详情。";
+    }
+  } finally {
+    if (revision === historyDetailRevision) historyDetailLoading.value = false;
+  }
+}
+
+function historyItemTitle(item: AiSessionHistoryItem) {
+  return item.title?.trim() || item.userPrompt?.trim() || item.lastMessage?.trim() || "未命名对话";
+}
+
+function relativeHistoryTime(value: string) {
+  const elapsed = Math.max(0, Date.now() - Date.parse(value));
+  const minutes = Math.floor(elapsed / 60_000);
+  if (minutes < 1) return "刚刚";
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days} 天前`;
+  return new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric" }).format(new Date(value));
+}
+
+async function resumeHistoryItem(item: AiSessionHistoryItem) {
+  if (resumingHistoryId.value) return;
+  resumingHistoryId.value = item.id;
+  try {
+    const result = await resumeAiSession(props.instance.id, item.id);
+    if (result.disposition === "resumed") {
+      let authoritative = visibleAiSessions.value.some((session) => session.id === item.id && session.appSessionId === result.appSessionId);
+      for (let attempt = 0; attempt < 12 && !authoritative; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 250));
+        authoritative = visibleAiSessions.value.some((session) => session.id === item.id && session.appSessionId === result.appSessionId);
+      }
+      if (!authoritative) {
+        await queryClient.refetchQueries({ queryKey: ["control-plane-ai-sessions"] });
+        await nextTick();
+        authoritative = visibleAiSessions.value.some((session) => session.id === item.id && session.appSessionId === result.appSessionId);
+      }
+      if (!authoritative) throw new Error("对话已经启动，但运行状态尚未确认，请稍后重试。");
+    }
+    emit("selectAiSession", props.instance.id, item.id);
+    await leaveHistoryMode();
+  } catch (error) {
+    showControlPlaneToast(error instanceof Error ? error.message : "无法继续该对话。");
+  } finally {
+    resumingHistoryId.value = "";
+  }
 }
 
 function openNewSession() {

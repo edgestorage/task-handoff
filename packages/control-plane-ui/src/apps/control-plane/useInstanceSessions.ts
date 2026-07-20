@@ -460,15 +460,6 @@ export function displayAiSessionResponse(session?: AiSessionSummary, promptIndex
   return displayAiSessionContent(session, promptIndex, false);
 }
 
-export function displayAiSessionContextCompactions(session?: AiSessionSummary, promptIndex?: number) {
-  const turns = aiSessionDisplayTurns(session);
-  if (!turns.length) return [];
-  const index = promptIndex === undefined
-    ? turns.length - 1
-    : Math.min(Math.max(promptIndex, 0), turns.length - 1);
-  return turns[index]?.contextCompactions || [];
-}
-
 function displayAiSessionContent(session?: AiSessionSummary, promptIndex?: number, includeProgress = true) {
   if (!session) {
     return includeProgress ? "No recent AI activity" : "";
@@ -488,10 +479,6 @@ function displayAiSessionContent(session?: AiSessionSummary, promptIndex?: numbe
     }
     if (turn?.summary?.trim()) {
       return turn.summary;
-    }
-    const compaction = turn?.contextCompactions?.at(-1);
-    if (includeProgress && compaction) {
-      return compaction.status === "completed" ? "Context compacted" : "Compacting context…";
     }
     return includeProgress ? aiSessionProgressText(session) : "";
   }

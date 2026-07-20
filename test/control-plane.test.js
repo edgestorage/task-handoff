@@ -13594,6 +13594,45 @@ test("control plane aggregates ai session pending routes and proxies ai session 
           headers: { "content-type": "application/json" },
         });
       }
+      if (body?.path === "/api/ai-sessions/history" && body.method === "GET") {
+        return new Response(JSON.stringify({ data: { items: [{
+          id: "ais_history_proxy",
+          agent: "claude",
+          providerSessionId: "claude_history_proxy",
+          title: "Proxy history",
+          cwd: "/workspace/proxy",
+          lastActiveAt: "2026-07-20T10:00:00.000Z",
+          archivedAt: "2026-07-20T10:01:00.000Z",
+        }] } }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (body?.path === "/api/ai-sessions/history/ais_history_proxy" && body.method === "GET") {
+        return new Response(JSON.stringify({ data: {
+          item: {
+            id: "ais_history_proxy",
+            agent: "claude",
+            providerSessionId: "claude_history_proxy",
+            title: "Proxy history",
+            cwd: "/workspace/proxy",
+            lastActiveAt: "2026-07-20T10:00:00.000Z",
+            archivedAt: "2026-07-20T10:01:00.000Z",
+          },
+          turns: [{ id: "turn_history_proxy", userPrompt: "Proxy prompt", lastMessage: "Proxy answer", status: "completed" }],
+        } }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (body?.path === "/api/ai-sessions/ais_history_proxy/resume" && body.method === "POST") {
+        return new Response(JSON.stringify({ data: {
+          disposition: "resumed",
+          aiSessionId: "ais_history_proxy",
+          providerSessionId: "claude_history_proxy",
+          appSessionId: "app_history_proxy",
+        } }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (body?.path === "/api/ai-sessions/ais_history_unavailable/resume" && body.method === "POST") {
+        return new Response(JSON.stringify({ error: {
+          code: "AI_SESSION_RESUME_UNAVAILABLE",
+          message: "Provider session no longer exists.",
+        } }), { status: 409, headers: { "content-type": "application/json" } });
+      }
       return new Response(JSON.stringify({ error: { message: "unexpected request" } }), {
         status: 404,
         headers: { "content-type": "application/json" },
@@ -13716,6 +13755,43 @@ test("control plane aggregates ai session pending routes and proxies ai session 
     ["POST", "/api/ai-sessions/ais_waiting/mentions/files", { query: "Exact Name" }],
     ["POST", "/api/ai-sessions/ais_waiting/messages", { message: "Use @Exact", references }],
   ]);
+
+  const history = await json(app, "GET", `/api/controlled-instances/${created.body.data.id}/ai-sessions/history`);
+  assert.equal(history.statusCode, 200);
+  assert.deepEqual(history.body.data.items.map((item) => [item.id, item.providerSessionId]), [["ais_history_proxy", "claude_history_proxy"]]);
+  const historyDetail = await json(app, "GET", `/api/controlled-instances/${created.body.data.id}/ai-sessions/history/ais_history_proxy`);
+  assert.equal(historyDetail.statusCode, 200);
+  assert.deepEqual(historyDetail.body.data.turns.map((turn) => [turn.id, turn.userPrompt, turn.lastMessage]), [["turn_history_proxy", "Proxy prompt", "Proxy answer"]]);
+  const resumed = await json(app, "POST", `/api/controlled-instances/${created.body.data.id}/ai-sessions/ais_history_proxy/resume`, {});
+  assert.equal(resumed.statusCode, 200);
+  assert.deepEqual(resumed.body.data, {
+    disposition: "resumed",
+    aiSessionId: "ais_history_proxy",
+    providerSessionId: "claude_history_proxy",
+    appSessionId: "app_history_proxy",
+  });
+  const historyForwards = requests.filter((request) => request.body.path === "/api/ai-sessions/history" || request.body.path === "/api/ai-sessions/history/ais_history_proxy" || request.body.path === "/api/ai-sessions/ais_history_proxy/resume");
+  assert.deepEqual(historyForwards.map((request) => [request.body.method, request.body.path, request.body.body ? JSON.parse(request.body.body) : undefined]), [
+    ["GET", "/api/ai-sessions/history", undefined],
+    ["GET", "/api/ai-sessions/history/ais_history_proxy", undefined],
+    ["POST", "/api/ai-sessions/ais_history_proxy/resume", {}],
+  ]);
+
+  const invalidResume = await json(app, "POST", `/api/controlled-instances/${created.body.data.id}/ai-sessions/ais_history_proxy/resume`, { providerSessionId: "untrusted" });
+  assert.equal(invalidResume.statusCode, 400);
+  const unavailableResume = await json(app, "POST", `/api/controlled-instances/${created.body.data.id}/ai-sessions/ais_history_unavailable/resume`, {});
+  assert.equal(unavailableResume.statusCode, 409);
+  assert.equal(unavailableResume.body.error.code, "AI_SESSION_RESUME_UNAVAILABLE");
+  const offline = await json(app, "POST", "/api/controlled-instances", {
+    name: "offline-history-worker",
+    projectId: project.body.data.id,
+    runtimeId: "runtime_local_docker",
+    imageId: "img_default",
+  });
+  assert.equal(offline.statusCode, 201);
+  const offlineHistory = await json(app, "GET", `/api/controlled-instances/${offline.body.data.id}/ai-sessions/history`);
+  assert.equal(offlineHistory.statusCode, 409);
+  assert.equal(offlineHistory.body.error.code, "INSTANCE_UNREACHABLE");
 
   const pendingCommand = await json(app, "POST", "/api/chat-gateway/messages", {
     source: {

@@ -136,16 +136,19 @@ export class CodexSubAgentTracker {
 export class CodexToolActivityTracker {
   private readonly seenToolIds = new Set<string>();
   private readonly activeTools = new Map<string, CodexToolDescriptor>();
+  private contextCompaction?: CodexToolDescriptor;
 
   replace(state: CodexToolActivityState) {
     this.seenToolIds.clear();
     this.activeTools.clear();
+    this.contextCompaction = state.currentTool?.kind === "context-compaction" ? state.currentTool : undefined;
     for (const id of state.seenToolIds) this.seenToolIds.add(id);
     for (const tool of state.activeTools) this.activeTools.set(tool.id, tool);
     return this.snapshot();
   }
 
   started(tool: CodexToolDescriptor) {
+    this.contextCompaction = undefined;
     if (this.seenToolIds.has(tool.id)) return this.snapshot();
     this.seenToolIds.add(tool.id);
     this.activeTools.set(tool.id, tool);
@@ -155,6 +158,16 @@ export class CodexToolActivityTracker {
   completed(tool: CodexToolDescriptor) {
     this.seenToolIds.add(tool.id);
     this.activeTools.delete(tool.id);
+    return this.snapshot();
+  }
+
+  compacting(turnId: string, status: "running" | "completed", observedAt?: string) {
+    this.contextCompaction = {
+      id: `context_compaction:${turnId}`,
+      kind: "context-compaction",
+      name: status === "completed" ? "Context compacted" : "Compacting context…",
+      ...(status === "running" && observedAt ? { startedAt: observedAt } : {}),
+    };
     return this.snapshot();
   }
 
@@ -168,11 +181,13 @@ export class CodexToolActivityTracker {
   resetForAgentMessage() {
     this.seenToolIds.clear();
     this.activeTools.clear();
+    this.contextCompaction = undefined;
     return this.snapshot();
   }
 
   clearActiveTools() {
     this.activeTools.clear();
+    this.contextCompaction = undefined;
     return this.snapshot();
   }
 
@@ -182,7 +197,7 @@ export class CodexToolActivityTracker {
       seenToolIds: [...this.seenToolIds],
       activeTools,
       toolCallsSinceLastMessage: this.seenToolIds.size,
-      currentTool: activeTools.at(-1),
+      currentTool: this.contextCompaction || activeTools.at(-1),
     };
   }
 }
@@ -200,6 +215,11 @@ export function rebuildCodexToolActivity(thread: CodexThread): CodexToolActivity
       const item = asRecord(rawItem);
       if (item.type === "agentMessage") {
         tracker.resetForAgentMessage();
+        lastItemAfterBoundary = undefined;
+        continue;
+      }
+      if (item.type === "contextCompaction") {
+        tracker.compacting(typeof turn.id === "string" ? turn.id : "unknown", "completed");
         lastItemAfterBoundary = undefined;
         continue;
       }

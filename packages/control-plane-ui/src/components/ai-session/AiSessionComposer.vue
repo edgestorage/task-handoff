@@ -66,7 +66,7 @@ const commandOpen = ref(false);
 const commandQuery = ref("");
 const activeCommandIndex = ref(0);
 const commandCandidates = computed(() => matchingCommands(commandQuery.value));
-const overlayOpen = computed(() => mentions.open.value || commandOpen.value);
+const overlayOpen = computed(() => !props.busy && (mentions.open.value || commandOpen.value));
 const mentionPopoverRadius = ref("20px");
 const mentionKinds = ["plugin", "skill", "file", "directory", "app"] as const;
 const mentionLabels = { plugin: "Plugins", skill: "Skills", file: "Files", directory: "Directories", app: "Apps" } as const;
@@ -161,6 +161,9 @@ function validateImageFiles(files: File[]) {
 }
 
 function addFiles(files: File[]) {
+  if (props.busy) {
+    return;
+  }
   const images = validateImageFiles(imageFiles(files));
   if (!images.length) {
     return;
@@ -191,11 +194,17 @@ function readAttachment(file: File): Promise<AiSessionComposerAttachment> {
 }
 
 function removeAttachment(id: string) {
+  if (props.busy) {
+    return;
+  }
   attachmentError.value = "";
   emit("update:attachments", attachments.value.filter((attachment) => attachment.id !== id));
 }
 
 function handlePaste(event: ClipboardEvent) {
+  if (props.busy) {
+    return;
+  }
   const files = Array.from(event.clipboardData?.files || []);
   if (!files.length) {
     return;
@@ -209,6 +218,9 @@ function handlePaste(event: ClipboardEvent) {
 }
 
 function handleDrop(event: DragEvent) {
+  if (props.busy) {
+    return;
+  }
   const files = Array.from(event.dataTransfer?.files || []);
   const images = imageFiles(files);
   if (!images.length) {
@@ -219,7 +231,7 @@ function handleDrop(event: DragEvent) {
 }
 
 function submit() {
-  if (canRun.value) {
+  if (!props.busy && canRun.value) {
     const command = parseAiSessionCommand(props.modelValue.trim(), commandTrigger.value, props.mentionContext?.provider);
     if (command) {
       emit("command", command);
@@ -230,6 +242,7 @@ function submit() {
 }
 
 function handleInputKeydown(event: KeyboardEvent) {
+  if (props.busy) return;
   if (event.isComposing) return;
   if (commandOpen.value) {
     const command = commandCandidates.value[activeCommandIndex.value];
@@ -264,6 +277,7 @@ function handleInputKeydown(event: KeyboardEvent) {
 }
 
 function moveActiveMention(direction: 1 | -1) {
+  if (props.busy) return;
   if (commandOpen.value) {
     const length = commandCandidates.value.length;
     if (!length) return;
@@ -292,6 +306,11 @@ function handleInputKeyup(event: KeyboardEvent) {
 }
 
 function updateOverlayMenu(value = props.modelValue, cursor = textareaElement()?.selectionStart ?? value.length) {
+  if (props.busy) {
+    mentions.close();
+    commandOpen.value = false;
+    return;
+  }
   const commandToken = commandTokenAt(value, cursor, commandTrigger.value);
   if (commandToken && props.mentionContext?.provider === "codex") {
     mentions.close();
@@ -314,6 +333,7 @@ function updateOverlayMenu(value = props.modelValue, cursor = textareaElement()?
 
 function selectCommand(command: AiSessionCommandCandidate, event?: Event) {
   event?.preventDefault();
+  if (props.busy) return;
   if (props.sessionBusy && command.requiresIdle) return;
   const element = textareaElement();
   const result = replaceCommandToken(element?.value ?? props.modelValue, element?.selectionStart ?? props.modelValue.length, commandTrigger.value, command);
@@ -337,6 +357,7 @@ function commandIcon(command: AiSessionCommandCandidate) {
 
 function selectMention(candidate: AiSessionMentionCandidate, event?: Event) {
   event?.preventDefault();
+  if (props.busy) return;
   const element = textareaElement();
   const result = replaceMentionToken({
     value: element?.value ?? props.modelValue,
@@ -383,14 +404,20 @@ watch(() => mentions.candidates.value.length, (length) => {
 
 watch(mentionTrigger, () => mentions.close());
 watch(commandTrigger, () => { commandOpen.value = false; });
+watch(() => props.busy, (busy) => {
+  if (busy) {
+    mentions.close();
+    commandOpen.value = false;
+  }
+});
 </script>
 
 <template>
-  <form ref="composerEl" class="ai-session-composer" @drop="handleDrop" @dragover.prevent @submit.prevent="submit">
+  <form ref="composerEl" class="ai-session-composer" :aria-busy="busy" @drop="handleDrop" @dragover.prevent @submit.prevent="submit">
     <div v-if="attachments.length" class="ai-session-composer__attachments">
       <figure v-for="attachment in attachments" :key="attachment.id">
         <img :alt="attachment.name" :src="attachment.dataUrl" />
-        <button type="button" title="Remove image" aria-label="Remove image" @click="removeAttachment(attachment.id)">
+        <button type="button" title="Remove image" aria-label="Remove image" :disabled="busy" @click="removeAttachment(attachment.id)">
           <X :size="14" />
         </button>
       </figure>
@@ -402,6 +429,7 @@ watch(commandTrigger, () => { commandOpen.value = false; });
             ref="inputEl"
             v-model="draft"
             class="ai-session-composer__input"
+            :disabled="busy"
             :placeholder="placeholder || 'Ask for follow-up changes'"
             rows="3"
             @keydown.down.stop.prevent="moveActiveMention(1)"
@@ -487,6 +515,7 @@ watch(commandTrigger, () => { commandOpen.value = false; });
         type="button"
         class="ai-session-composer__tool"
         title="Add context"
+        :disabled="busy"
         @click="emit('add-context')"
       >
         <Plus :size="18" />
@@ -497,6 +526,7 @@ watch(commandTrigger, () => { commandOpen.value = false; });
           type="button"
           class="ai-session-composer__tool"
           title="Steer current AI turn"
+          :disabled="busy"
           @click="emit('steer')"
         >
           <CornerDownRight :size="18" />
@@ -505,7 +535,7 @@ watch(commandTrigger, () => { commandOpen.value = false; });
           type="submit"
           class="ai-session-composer__primary"
           :data-action="actionKind"
-          :disabled="!canRun"
+          :disabled="busy || !canRun"
           :title="actionTitle"
         >
           <ArrowUp v-if="actionKind === 'send'" :size="18" />
@@ -599,6 +629,12 @@ watch(commandTrigger, () => { commandOpen.value = false; });
   padding: 0;
 }
 
+.ai-session-composer__attachments button:disabled,
+.ai-session-composer__tool:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .ai-session-composer__input {
   min-height: 72px;
   max-height: none;
@@ -678,6 +714,10 @@ watch(commandTrigger, () => { commandOpen.value = false; });
   height: 32px;
   background: transparent;
   color: var(--ai-composer-muted, currentColor);
+}
+
+.ai-session-composer[aria-busy="true"] {
+  cursor: wait;
 }
 
 .ai-session-composer__primary {

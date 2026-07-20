@@ -1,14 +1,18 @@
 import type {
+  AiSessionHistoryItem,
+  AiSessionHistoryList,
+  AiSessionHistoryDetail,
   AiSessionMentionCandidate,
   AiSessionMentionCatalog,
   AiSessionMentionDiagnostic,
   AiSessionMentionFileSearch,
   AiSessionReference,
+  AiSessionResumeResult,
 } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionContextCompaction as ProtocolAiSessionContextCompaction } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionSubAgent as ProtocolAiSessionSubAgent } from "@task-handoff/protocol/ai-sessions";
 
-export type { AiSessionMentionCandidate, AiSessionMentionCatalog, AiSessionMentionDiagnostic, AiSessionMentionFileSearch, AiSessionReference };
+export type { AiSessionHistoryDetail, AiSessionHistoryItem, AiSessionHistoryList, AiSessionMentionCandidate, AiSessionMentionCatalog, AiSessionMentionDiagnostic, AiSessionMentionFileSearch, AiSessionReference, AiSessionResumeResult };
 
 export type HealthResponse = {
   ok: boolean;

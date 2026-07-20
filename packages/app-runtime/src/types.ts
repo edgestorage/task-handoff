@@ -99,6 +99,10 @@ export type AppLaunchOptions = {
     depth?: number;
   };
   displayTarget?: AppDisplayTarget;
+  aiSessionResume?: {
+    aiSessionId: string;
+    providerSessionId: string;
+  };
 };
 
 export type AppSession = {

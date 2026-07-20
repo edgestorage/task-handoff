@@ -19,18 +19,6 @@
       />
     </section>
 
-    <section v-if="contextCompactions.length" class="ai-session-context-compactions" aria-live="polite">
-      <div
-        v-for="compaction in contextCompactions"
-        :key="compaction.id"
-        class="ai-session-context-compaction"
-        :data-state="compaction.status"
-      >
-        <Minimize2 :size="14" />
-        <span>{{ compaction.status === "completed" ? "Context compacted" : "Compacting context…" }}</span>
-      </div>
-    </section>
-
     <AiSessionToolActivity
       :current-tool="session.currentTool"
       :phase="session.phase"
@@ -83,9 +71,8 @@
 </template>
 
 <script setup lang="ts">
-import { Ban, Check, Minimize2, X } from "@lucide/vue";
+import { Ban, Check, X } from "@lucide/vue";
 import { computed } from "vue";
-import type { AiSessionContextCompaction } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionSummary } from "../../api/types";
 import { useStreamingMessagesStore } from "../../apps/control-plane/useStreamingMessagesStore";
 import AiSessionStreamingMarkdown from "./AiSessionStreamingMarkdown.vue";
@@ -96,7 +83,6 @@ const props = withDefaults(defineProps<{
   busy?: boolean;
   canInterrupt?: boolean;
   canResolveApproval?: boolean;
-  contextCompactions?: AiSessionContextCompaction[];
   instanceId: string;
   isLatest?: boolean;
   responseContent?: string;
@@ -106,7 +92,6 @@ const props = withDefaults(defineProps<{
   busy: false,
   canInterrupt: false,
   canResolveApproval: false,
-  contextCompactions: () => [],
   isLatest: false,
   responseContent: "",
   tone: "detail",
@@ -188,34 +173,6 @@ const displayContent = computed(() => streamingContent.value || props.responseCo
 
 .ai-session-result :deep(.ai-session-tool-activity) {
   margin-top: 0;
-}
-
-.ai-session-context-compactions {
-  display: grid;
-  gap: 6px;
-}
-
-.ai-session-context-compaction {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--detail-activity-muted);
-  font-size: 12px;
-  line-height: 1.4;
-}
-
-.ai-session-context-compaction[data-state="running"] svg {
-  animation: context-compaction-pulse 1.2s ease-in-out infinite;
-}
-
-@keyframes context-compaction-pulse {
-  50% { opacity: 0.35; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .ai-session-context-compaction[data-state="running"] svg {
-    animation: none;
-  }
 }
 
 .ai-session-result.has-response .ai-session-detail-response + :deep(.ai-session-tool-activity) {

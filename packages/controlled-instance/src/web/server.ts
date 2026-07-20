@@ -22,6 +22,9 @@ import type { AppCatalogItem, AppLaunchOptions } from "@task-handoff/app-runtime
 import {
   AiSessionController,
   AiSessionDiscoveryCoordinator,
+  AiSessionHistoryLifecycle,
+  AiSessionHistoryStore,
+  AiSessionResumeCoordinator,
   ClaudeAppSessionBindingProvider,
   ClaudeControlSockSessionBridge,
   CodexAppServerSessionBridge,
@@ -65,6 +68,8 @@ import {
   AiSessionActionResultSchema,
   AiSessionApprovalInputSchema,
   AiSessionControlErrorSchema,
+  AiSessionHistoryListSchema,
+  AiSessionHistoryDetailSchema,
   AiSessionDeltaResponseSchema,
   AiSessionMessageDeltaEventSchema,
   type AiSessionEventReason,
@@ -75,6 +80,7 @@ import {
   AiSessionCommandResultSchema,
   AiSessionMentionFileSearchInputSchema,
   AiSessionQueueReorderInputSchema,
+  AiSessionResumeResultSchema,
 } from "@task-handoff/protocol/ai-sessions";
 import {
   APP_SESSION_DELTA_RETENTION_MS,
@@ -512,6 +518,10 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     },
   });
   const aiSessions = options.aiSessionRegistry || createAiSessionRegistry();
+  const aiSessionHistory = new AiSessionHistoryStore(storagePaths, {
+    onWarning: (warning) => app.log.warn({ warning }, "AI session history entry was sanitized"),
+  });
+  const aiSessionHistoryLifecycle = new AiSessionHistoryLifecycle(aiSessionHistory);
   const aiSessionController = new AiSessionController(aiSessions);
   const triggers = new TriggerStore(storagePaths);
   const triggerExecutor = new TriggerExecutor(triggers, aiSessionController);
@@ -600,13 +610,27 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       },
     ];
   };
+  const aiSessionResume = new AiSessionResumeCoordinator({
+    history: aiSessionHistory,
+    registry: aiSessions,
+    appSessions: appSessionsWithSharedCodexAppServer,
+    startApp: (item) => appRuntime.start(item.agent, {
+      cwd: item.cwd,
+      aiSessionResume: {
+        aiSessionId: item.id,
+        providerSessionId: item.providerSessionId,
+      },
+    }),
+  });
   const refreshAiSessions = async () => {
     const appSessions = appSessionsWithSharedCodexAppServer();
+    aiSessionHistoryLifecycle.reconcile(aiSessions.all(), appSessions);
     aiSessions.reconcileAppSessionBindings(appSessions);
     await aiSessionDiscovery.refresh({
       registry: aiSessions,
       appSessions,
     });
+    aiSessionHistoryLifecycle.reconcile(aiSessions.all(), appSessions);
   };
   const aiSessionRefreshScheduler = new AiSessionRefreshScheduler(
     refreshAiSessions,
@@ -1144,6 +1168,32 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   app.get("/api/triggers/runs", async () => ({
     data: triggers.list().recentRuns,
   }));
+
+  app.get("/api/ai-sessions/history", async () => ({
+    data: AiSessionHistoryListSchema.parse({ items: aiSessionHistory.list() }),
+  }));
+
+  app.get<{ Params: { id: string } }>("/api/ai-sessions/history/:id", async (request, reply) => {
+    const detail = aiSessionHistory.detail(request.params.id);
+    if (!detail) {
+      return reply.code(404).send({ error: AiSessionControlErrorSchema.parse({
+        code: "AI_SESSION_HISTORY_NOT_FOUND",
+        message: "AI session history entry not found.",
+      }) });
+    }
+    return { data: AiSessionHistoryDetailSchema.parse(detail) };
+  });
+
+  app.post<{ Params: { id: string }; Body: unknown }>("/api/ai-sessions/:id/resume", async (request, reply) => {
+    try {
+      z.object({}).strict().parse(request.body || {});
+      const result = AiSessionResumeResultSchema.parse(await aiSessionResume.resume(request.params.id));
+      await refreshAndPublishAiSessions("control-action");
+      return { data: result };
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
 
   app.get<{ Params: { id: string } }>("/api/ai-sessions/:id", async (request, reply) => {
     const session = aiSessions.get(request.params.id);

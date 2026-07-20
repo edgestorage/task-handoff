@@ -52,6 +52,7 @@ const {
 } = require("../packages/ai-session-runtime/src/codex-app-server-protocol.ts");
 const { AiSessionController } = require("../packages/ai-session-runtime/src/ai-session-control.ts");
 const { AiSessionDiscoveryCoordinator } = require("../packages/ai-session-runtime/src/ai-session-discovery.ts");
+const { AiSessionHistoryStore } = require("../packages/ai-session-runtime/src/ai-session-history-store.ts");
 const { CodexAppServerClient, CodexAppServerSessionBridge } = require("../packages/ai-session-runtime/src/codex-app-server.ts");
 const { CodexAppServerApprovalCoordinator } = require("../packages/ai-session-runtime/src/codex-app-server/session/approval-coordinator.ts");
 const { CodexAppServerConnectionManager } = require("../packages/ai-session-runtime/src/codex-app-server/client/connection-manager.ts");
@@ -218,7 +219,7 @@ test("codex app-server parser projects canonical and deprecated context compacti
     type: "context-compaction",
     threadId: "thread_compact",
     turnId: "turn_compact",
-    itemId: "compact_1",
+    itemId: "context_compaction:turn_compact",
     status: "running",
     observedAt: "2025-06-15T15:06:40.000Z",
   });
@@ -231,7 +232,7 @@ test("codex app-server parser projects canonical and deprecated context compacti
     type: "context-compaction",
     threadId: "thread_compact",
     turnId: "turn_compact",
-    itemId: "compact_1",
+    itemId: "context_compaction:turn_compact",
     status: "completed",
     observedAt: "2025-06-15T15:06:40.100Z",
   });
@@ -1154,7 +1155,7 @@ test("codex app-server thread summary preserves context-compaction-only turns", 
     id: "turn_compact",
     status: "completed",
     revision: 0,
-    contextCompactions: [{ id: "compact_1", status: "completed" }],
+    contextCompactions: [{ id: "context_compaction:turn_compact", status: "completed" }],
   }]);
 });
 
@@ -2666,10 +2667,9 @@ test("codex app server bridge preserves context compaction results across realti
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-compaction-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
   class FakeCodexAppServerClient extends EventEmitter {
-    async start() {}
-    async listLoadedThreadIds() { return ["thread_compact"]; }
-    async readThread() {
-      return {
+    constructor() {
+      super();
+      this.thread = {
         id: "thread_compact",
         status: { type: "idle" },
         turns: [{
@@ -2679,6 +2679,9 @@ test("codex app server bridge preserves context compaction results across realti
         }],
       };
     }
+    async start() {}
+    async listLoadedThreadIds() { return ["thread_compact"]; }
+    async readThread() { return this.thread; }
     stop() {}
   }
 
@@ -2686,7 +2689,7 @@ test("codex app server bridge preserves context compaction results across realti
   const bridge = new CodexAppServerSessionBridge(registry, fake);
   await bridge.sync();
   let session = registry.list()[0];
-  assert.deepEqual(session.turns[0].contextCompactions, [{ id: "compact_snapshot", status: "completed" }]);
+  assert.deepEqual(session.turns[0].contextCompactions, [{ id: "context_compaction:turn_snapshot", status: "completed" }]);
 
   fake.emit("event", codexNotification("item/started", {
     threadId: "thread_compact",
@@ -2696,7 +2699,7 @@ test("codex app server bridge preserves context compaction results across realti
   }));
   session = registry.list()[0];
   assert.deepEqual(session.turns.at(-1).contextCompactions, [{
-    id: "compact_live",
+    id: "context_compaction:turn_live",
     status: "running",
     startedAt: "2025-06-15T15:06:40.000Z",
   }]);
@@ -2709,7 +2712,7 @@ test("codex app server bridge preserves context compaction results across realti
   }));
   session = registry.list()[0];
   assert.deepEqual(session.turns.at(-1).contextCompactions, [{
-    id: "compact_live",
+    id: "context_compaction:turn_live",
     status: "completed",
     startedAt: "2025-06-15T15:06:40.000Z",
     completedAt: "2025-06-15T15:06:40.100Z",
@@ -2722,6 +2725,34 @@ test("codex app server bridge preserves context compaction results across realti
     item: { type: "contextCompaction", id: "compact_live" },
   }));
   assert.equal(registry.list()[0].turns.at(-1).revision, completedRevision);
+
+  fake.thread = {
+    id: "thread_compact",
+    status: { type: "active" },
+    turns: [{
+      id: "turn_live",
+      status: "inProgress",
+      items: [{ type: "contextCompaction", id: "item-47" }],
+    }],
+  };
+  await bridge.sync();
+  session = registry.list()[0];
+  assert.deepEqual(session.turns.find((turn) => turn.id === "turn_live").contextCompactions, [{
+    id: "context_compaction:turn_live",
+    status: "completed",
+    startedAt: "2025-06-15T15:06:40.000Z",
+    completedAt: "2025-06-15T15:06:40.100Z",
+  }]);
+  assert.equal(session.currentTool?.kind, "context-compaction");
+  assert.equal(session.currentTool?.name, "Context compacted");
+
+  fake.emit("event", codexNotification("item/completed", {
+    threadId: "thread_compact",
+    turnId: "turn_live",
+    item: { type: "agentMessage", id: "message_after_compaction", text: "Continuing after compaction." },
+  }));
+  session = registry.list()[0];
+  assert.equal(session.currentTool, undefined);
 
   fake.emit("event", codexNotification("thread/compacted", {
     threadId: "thread_compact",
@@ -5767,6 +5798,79 @@ test("app runtime ignores persisted sessions by default", () => {
   }
 });
 
+test("controlled instance history routes use trusted Task Handoff entries for resume", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-history-routes-"));
+  const paths = appRuntimeTestPaths(root);
+  const restoreEnv = withWebStorageEnv(paths);
+  const history = new AiSessionHistoryStore(paths);
+  history.upsert({
+    id: "ais_history_route",
+    agent: "codex",
+    providerSessionId: "thread_history_route",
+    title: "Trusted history title",
+    cwd: "/workspace/trusted",
+    lastActiveAt: "2026-07-20T10:00:00.000Z",
+    archivedAt: "2026-07-20T10:01:00.000Z",
+  }, [{ id: "turn_history_route", userPrompt: "Trusted prompt", lastMessage: "Trusted answer", status: "completed" }]);
+  const runtime = new AppRuntimeManager(paths);
+  const starts = [];
+  const resumedApps = [];
+  runtime.start = (appId, options) => {
+    starts.push({ appId, options });
+    const session = { id: "app_history_route", appId, kind: "tty", status: "running", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    resumedApps.push(session);
+    return session;
+  };
+  runtime.listSessions = () => resumedApps;
+  const app = await createWebApp({
+    staticDir: path.join(root, "missing-static"),
+    logger: false,
+    appRuntime: runtime,
+  });
+  try {
+    const listed = await app.inject({ method: "GET", url: "/api/ai-sessions/history" });
+    assert.equal(listed.statusCode, 200);
+    assert.deepEqual(listed.json().data.items.map((item) => [item.id, item.providerSessionId]), [["ais_history_route", "thread_history_route"]]);
+    const detail = await app.inject({ method: "GET", url: "/api/ai-sessions/history/ais_history_route" });
+    assert.equal(detail.statusCode, 200);
+    assert.deepEqual(detail.json().data.turns.map((turn) => [turn.id, turn.userPrompt, turn.lastMessage]), [["turn_history_route", "Trusted prompt", "Trusted answer"]]);
+    const missingDetail = await app.inject({ method: "GET", url: "/api/ai-sessions/history/ais_missing" });
+    assert.equal(missingDetail.statusCode, 404);
+    assert.equal(missingDetail.json().error.code, "AI_SESSION_HISTORY_NOT_FOUND");
+
+    const rejected = await app.inject({
+      method: "POST",
+      url: "/api/ai-sessions/ais_history_route/resume",
+      payload: { providerSessionId: "thread_attacker", cwd: "/tmp/attacker", args: ["--new-session"] },
+    });
+    assert.equal(rejected.statusCode, 400);
+    assert.equal(starts.length, 0);
+
+    const resumed = await app.inject({ method: "POST", url: "/api/ai-sessions/ais_history_route/resume", payload: {} });
+    assert.equal(resumed.statusCode, 200);
+    assert.deepEqual(resumed.json().data, {
+      disposition: "resumed",
+      aiSessionId: "ais_history_route",
+      providerSessionId: "thread_history_route",
+      appSessionId: "app_history_route",
+    });
+    assert.deepEqual(starts, [{
+      appId: "codex",
+      options: {
+        cwd: "/workspace/trusted",
+        aiSessionResume: { aiSessionId: "ais_history_route", providerSessionId: "thread_history_route" },
+      },
+    }]);
+
+    const missing = await app.inject({ method: "POST", url: "/api/ai-sessions/ais_missing/resume", payload: {} });
+    assert.equal(missing.statusCode, 404);
+    assert.equal(missing.json().error.code, "AI_SESSION_HISTORY_NOT_FOUND");
+  } finally {
+    await app.close();
+    restoreEnv();
+  }
+});
+
 test("app runtime catalog reflects executable availability on every read", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-app-availability-"));
   const paths = appRuntimeTestPaths(root);
@@ -5857,7 +5961,7 @@ test("app runtime prepares vscode web sessions with a dark default theme", () =>
   assert.equal(preservedSettings["workbench.preferredDarkColorTheme"], "Default Dark Modern");
 });
 
-test("app runtime launches claude through background worker and attaches by short id", () => {
+test("app runtime resumes claude through the background worker and attaches by short id", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-claude-bg-"));
   const paths = appRuntimeTestPaths(root);
   const fakeClaude = path.join(root, "claude");
@@ -5888,7 +5992,10 @@ test("app runtime launches claude through background worker and attaches by shor
       return pty;
     };
 
-    const session = runtime.start("claude", { cwd: root });
+    const session = runtime.start("claude", {
+      cwd: root,
+      aiSessionResume: { aiSessionId: "ais_claude_resume", providerSessionId: "claude_provider_resume" },
+    });
 
     assert.equal(session.appId, "claude");
     assert.equal(session.tty.mode, "claude-attach");
@@ -5897,7 +6004,52 @@ test("app runtime launches claude through background worker and attaches by shor
     assert.equal(spawned[0].shell, fakeClaude);
     assert.deepEqual(spawned[0].args, ["attach", "ac8eaf94"]);
     const bgCall = fs.readFileSync(callsPath, "utf8").trim();
-    assert.equal(bgCall, "--bg --dangerously-skip-permissions --model sonnet-test");
+    assert.equal(bgCall, "--bg --dangerously-skip-permissions --model sonnet-test --resume claude_provider_resume");
+  } finally {
+    restoreEnv();
+  }
+});
+
+test("app runtime rejects structured AI session resume for unsupported apps", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-resume-unsupported-"));
+  const runtime = new AppRuntimeManager(appRuntimeTestPaths(root));
+  runtime.hasCommand = () => true;
+  assert.throws(
+    () => runtime.start("terminal-tty", {
+      aiSessionResume: { aiSessionId: "ais_unsupported", providerSessionId: "provider_unsupported" },
+    }),
+    (error) => error?.code === "APP_RESUME_UNSUPPORTED",
+  );
+});
+
+test("app runtime launches codex resume with the trusted provider session id", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-resume-"));
+  const paths = appRuntimeTestPaths(root);
+  const restoreEnv = withWebStorageEnv(paths, { TASK_HANDOFF_CODEX_APP_SERVER_DISABLED: "1" });
+  try {
+    const runtime = new AppRuntimeManager(paths);
+    let spawned;
+    runtime.hasCommand = () => true;
+    runtime.spawnTerminalPty = (shell, args, cwd) => {
+      spawned = { shell, args, cwd };
+      const pty = new EventEmitter();
+      pty.pid = 2469;
+      pty.onData = (listener) => pty.on("data", listener);
+      pty.onExit = (listener) => pty.on("exit", listener);
+      pty.write = () => {};
+      pty.resize = () => {};
+      pty.kill = () => {};
+      return pty;
+    };
+    const session = runtime.start("codex", {
+      cwd: "/workspace/codex-resume",
+      aiSessionResume: { aiSessionId: "ais_codex_resume", providerSessionId: "thread_codex_resume" },
+    });
+    assert.equal(session.appId, "codex");
+    assert.deepEqual(session.launch.aiSessionResume, { aiSessionId: "ais_codex_resume", providerSessionId: "thread_codex_resume" });
+    assert.deepEqual(spawned.args.slice(-2), ["resume", "thread_codex_resume"]);
+    assert.equal(spawned.args.includes("fork"), false);
+    assert.equal(spawned.cwd, "/workspace/codex-resume");
   } finally {
     restoreEnv();
   }
@@ -6720,6 +6872,9 @@ test("app runtime codex app-server proxy records thread bindings from the app co
       if (message.method === "thread/start") {
         socket.send(JSON.stringify({ id: message.id, result: { thread: { id: "thread_from_proxy", status: { type: "idle" } } } }));
       }
+      if (message.method === "thread/resume") {
+        socket.send(JSON.stringify({ id: message.id, result: { thread: { id: message.params.threadId, status: { type: "idle" } } } }));
+      }
     });
   });
 
@@ -6749,7 +6904,19 @@ test("app runtime codex app-server proxy records thread bindings from the app co
       });
       client.once("error", reject);
     });
-    assert.deepEqual(boundThreads, ["thread_from_proxy"]);
+    client.send(JSON.stringify({ id: 2, method: "thread/resume", params: { threadId: "thread_resumed_proxy" } }));
+    await new Promise((resolve, reject) => {
+      client.once("message", (data) => {
+        try {
+          assert.equal(JSON.parse(data.toString()).result.thread.id, "thread_resumed_proxy");
+          resolve();
+        } catch (error) {
+          reject(error);
+        }
+      });
+      client.once("error", reject);
+    });
+    assert.deepEqual(boundThreads, ["thread_from_proxy", "thread_resumed_proxy", "thread_resumed_proxy"]);
     client.close();
   } finally {
     proxy.stop();

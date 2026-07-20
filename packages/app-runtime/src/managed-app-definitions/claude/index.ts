@@ -3,7 +3,8 @@ import { envFlag, launcherDetection, modelArgs } from "../shared";
 
 export const claudeProvider: ManagedAppProvider = {
   id: "claude",
-  capabilities: { supportsCwdSelection: true },
+  capabilities: { supportsCwdSelection: true, supportsAiSessionResume: true },
+  aiSessionResumeArgs: (providerSessionId) => ["--resume", providerSessionId],
   definition: ({ env }) => {
     const skipPermissions = envFlag(env, "TASK_HANDOFF_CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS")
       || envFlag(env, "TASK_HANDOFF_CLAUDE_SKIP_PERMISSIONS");

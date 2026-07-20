@@ -9,6 +9,7 @@ import { claudeControlSock, killClaudeDaemonJob } from "@task-handoff/core/core/
 import type { TaskHandoffStoragePaths } from "@task-handoff/core/storage/paths";
 import { AppCatalogRepository, executablePath } from "./catalog";
 import { CodexAppServerConnectionProxy } from "./codex-app-server-proxy";
+import { builtinManagedAppRegistry } from "./managed-app-definitions";
 import { chromiumUserDataDir, claudeShortFromOutput, codexAppServerSocketPath, ensureNodePtySpawnHelperExecutable, formatGuiScale, guiAppHomeDir, guiScaleFromEnv, guiVncBackend, type GuiVncBackend } from "./runtime-utils";
 import type { AppAutomationStatus, AppCatalogItem, AppDisplayTarget, AppLaunchOptions, AppSession, AppSessionStatus } from "./types";
 
@@ -252,7 +253,8 @@ export class AppRuntimeManager extends EventEmitter {
     const shell = app.command || process.env.SHELL || "/bin/bash";
     const cwd = options.cwd || app.cwd || process.env.TASK_HANDOFF_WORKSPACE || process.cwd();
     const launch = this.normalizeLaunchOptions(options);
-    let args = [...(app.args || []), ...(launch.args || [])];
+    const resumeArgs = this.aiSessionResumeArgs(app.id, launch);
+    let args = [...(app.args || []), ...(launch.args || []), ...resumeArgs];
     let env: NodeJS.ProcessEnv = { ...process.env, ...app.env, ...launch.env, ...this.managedEnvironment, TERM: "xterm-256color" };
     const sessionDir = path.join(this.paths.appSessionsDir, id);
     const logDir = path.join(this.paths.logDir, "app-sessions", id);
@@ -270,7 +272,7 @@ export class AppRuntimeManager extends EventEmitter {
       codexAppServerProxy.start(proxyPort);
       codexProxyPort = proxyPort;
       codexRemoteEndpoint = codexAppServerProxy.endpoint || codexAppServer.endpoint;
-      args = [...(app.args || []), "--remote", codexRemoteEndpoint, "--cd", cwd, ...(launch.args || [])];
+      args = [...(app.args || []), "--remote", codexRemoteEndpoint, "--cd", cwd, ...(launch.args || []), ...resumeArgs];
       env = {
         ...env,
         TASK_HANDOFF_APP_SESSION_ID: id,
@@ -1937,7 +1939,24 @@ export class AppRuntimeManager extends EventEmitter {
     if (displayTarget) {
       launch.displayTarget = displayTarget;
     }
+    if (options.aiSessionResume) {
+      const aiSessionId = options.aiSessionResume.aiSessionId?.trim();
+      const providerSessionId = options.aiSessionResume.providerSessionId?.trim();
+      if (!aiSessionId || !providerSessionId) {
+        throw Object.assign(new Error("AI session resume requires both AI and provider session ids."), { code: "APP_RESUME_INVALID" });
+      }
+      launch.aiSessionResume = { aiSessionId, providerSessionId };
+    }
     return launch;
+  }
+
+  private aiSessionResumeArgs(appId: string, launch: AppLaunchOptions) {
+    if (!launch.aiSessionResume) return [];
+    const provider = builtinManagedAppRegistry.provider(appId);
+    if (!provider?.capabilities?.supportsAiSessionResume || !provider.aiSessionResumeArgs) {
+      throw Object.assign(new Error(`${appId} does not support AI session resume.`), { code: "APP_RESUME_UNSUPPORTED" });
+    }
+    return provider.aiSessionResumeArgs(launch.aiSessionResume.providerSessionId);
   }
 
   private normalizeDisplayTarget(target: AppLaunchOptions["displayTarget"] | AppCatalogItem["defaultDisplayTarget"]): AppDisplayTarget | undefined {

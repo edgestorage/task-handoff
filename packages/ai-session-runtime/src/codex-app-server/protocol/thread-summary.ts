@@ -68,7 +68,7 @@ export function summarizeThreadTurns(thread: CodexThread): {
       } else if (item.type === "contextCompaction" && typeof item.id === "string" && item.id.trim()) {
         historyTurn.contextCompactions = [
           ...(historyTurn.contextCompactions || []),
-          { id: item.id.trim(), status: "completed" },
+          { id: `context_compaction:${turnId}`, status: "completed" },
         ];
       }
     }

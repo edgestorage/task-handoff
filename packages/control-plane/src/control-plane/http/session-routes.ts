@@ -36,6 +36,8 @@ const AppSessionRenameRequestSchema = z
   })
   .strict();
 
+const EmptyRequestSchema = z.object({}).strict();
+
 export function registerSessionRoutes({
   app,
   service,
@@ -97,6 +99,27 @@ export function registerSessionRoutes({
     const view = await appSessionAggregator.list();
     const entry = view.instances.find((item) => item.instanceId === params.id);
     return { data: entry?.appSessions || { runningCount: 0, problemCount: 0, sessions: [], updatedAt: new Date().toISOString() } };
+  });
+  app.get("/api/controlled-instances/:id/ai-sessions/history", async (request) => {
+    const params = IdParamsSchema.parse(request.params);
+    return { data: await service.listAiSessionHistory(params.id) };
+  });
+  app.get("/api/controlled-instances/:id/ai-sessions/history/:sessionId", async (request) => {
+    const params = InstanceSessionParamsSchema.parse(request.params);
+    return { data: await service.getAiSessionHistoryDetail(params.id, params.sessionId) };
+  });
+  app.post("/api/controlled-instances/:id/ai-sessions/:sessionId/resume", async (request) => {
+    const params = InstanceSessionParamsSchema.parse(request.params);
+    EmptyRequestSchema.parse(request.body || {});
+    const result = await service.resumeAiSession(params.id, params.sessionId);
+    events.publish("instance.ai-session.resumed", {
+      instanceId: params.id,
+      sessionId: result.aiSessionId,
+      providerSessionId: result.providerSessionId,
+      appSessionId: result.appSessionId,
+      disposition: result.disposition,
+    });
+    return { data: result };
   });
   app.post("/api/controlled-instances/:id/ai-sessions/:sessionId/messages", async (request) => {
     const params = InstanceSessionParamsSchema.parse(request.params);

@@ -37,9 +37,12 @@ import {
   AiSessionActionResultSchema,
   AiSessionCommandResultSchema,
   AiSessionDeltaResponseSchema,
+  AiSessionHistoryListSchema,
+  AiSessionHistoryDetailSchema,
   AiSessionMentionCatalogSchema,
   AiSessionMentionFileSearchSchema,
   AiSessionQueueSchema,
+  AiSessionResumeResultSchema,
   AiSessionStatusSchema,
   AiSessionsStateSchema,
   type AiSessionActionResult,
@@ -47,7 +50,10 @@ import {
   type AiSessionCommandResult,
   type AiSessionDeltaResponse,
   type AiSessionMessageAttachment,
+  type AiSessionHistoryList,
+  type AiSessionHistoryDetail,
   type AiSessionReference,
+  type AiSessionResumeResult,
   type AiSessionSendMode,
   type AiSessionsSnapshot,
 } from "@task-handoff/protocol/ai-sessions";
@@ -1424,6 +1430,37 @@ export class ControlPlaneService {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ decision }),
     }));
+  }
+
+  async listAiSessionHistory(instanceId: string): Promise<AiSessionHistoryList> {
+    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
+    return AiSessionHistoryListSchema.parse(await this.instanceRequest(instance, "/ai-sessions/history"));
+  }
+
+  async getAiSessionHistoryDetail(instanceId: string, aiSessionId: string): Promise<AiSessionHistoryDetail> {
+    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
+    return AiSessionHistoryDetailSchema.parse(await this.instanceRequest(
+      instance,
+      `/ai-sessions/history/${encodeURIComponent(aiSessionId)}`,
+    ));
+  }
+
+  async resumeAiSession(instanceId: string, aiSessionId: string): Promise<AiSessionResumeResult> {
+    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
+    const result = AiSessionResumeResultSchema.parse(await this.instanceRequest(
+      instance,
+      `/ai-sessions/${encodeURIComponent(aiSessionId)}/resume`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      },
+    ));
+    await Promise.all([
+      this.listAppSessions({ refresh: true }),
+      this.listAiSessions({ refresh: true }),
+    ]);
+    return result;
   }
 
   async launchAppSession(instanceId: string, appId = "terminal-tty", options: Record<string, unknown> = {}) {

@@ -89,14 +89,13 @@ test("both detail surfaces share the complete AI result while cards remain uncha
   assert.doesNotMatch(panel, /session-ai-card[\s\S]{0,180}toolCallsSinceLastMessage/);
 });
 
-test("context compaction results are rendered from the selected structured turn", () => {
+test("context compaction uses the transient activity lane instead of a persistent turn result", () => {
   assert.match(sessions, /turn\.contextCompactions\?\.length/);
-  assert.match(sessions, /turns\[index\]\?\.contextCompactions \|\| \[\]/);
-  assert.match(result, /v-if="contextCompactions\.length"/);
-  assert.match(result, /Context compacted/);
-  assert.match(result, /Compacting context…/);
+  assert.doesNotMatch(result, /contextCompactions/);
+  assert.doesNotMatch(result, /ai-session-context-compaction/);
+  assert.match(result, /<AiSessionToolActivity/);
   for (const source of [panel, floatingDock]) {
-    assert.match(source, /:context-compactions="displayAiSessionContextCompactions/);
+    assert.doesNotMatch(source, /:context-compactions=/);
   }
 });
 

@@ -71,6 +71,7 @@ export class CodexAppServerSessionProjector {
       return true;
     }
     if (event.type === "context-compaction") {
+      this.applyToolActivity(session.id, this.toolTracker(event.threadId).compacting(event.turnId, event.status, event.observedAt));
       this.options.registry.applyRealtimeEvent(session.id, {
         kind: "context-compaction",
         activeTurnId: event.turnId,

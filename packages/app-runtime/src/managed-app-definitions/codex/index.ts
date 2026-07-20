@@ -3,7 +3,8 @@ import { launcherDetection, modelArgs } from "../shared";
 
 export const codexProvider: ManagedAppProvider = {
   id: "codex",
-  capabilities: { supportsCwdSelection: true },
+  capabilities: { supportsCwdSelection: true, supportsAiSessionResume: true },
+  aiSessionResumeArgs: (providerSessionId) => ["resume", providerSessionId],
   definition: ({ env }) => ({
     launcher: {
       id: "codex",

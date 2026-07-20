@@ -4,6 +4,7 @@ import { EventEmitter } from "node:events";
 import { resolveStoragePaths } from "@task-handoff/core/storage/paths";
 import type {
   AiSessionLifecycle,
+  AiSessionHistoryItem,
   AiSessionMessageAttachment,
   AiSessionReference,
   AiSessionPhase,
@@ -229,6 +230,34 @@ export class AiSessionRegistry {
 
   get(id: string) {
     return this.store.get(id);
+  }
+
+  restoreHistory(item: AiSessionHistoryItem) {
+    const current = this.get(item.id);
+    const session: AiSessionStatus = {
+      id: item.id,
+      agent: item.agent,
+      appId: item.agent,
+      providerSessionId: item.providerSessionId,
+      title: item.title,
+      cwd: item.cwd,
+      userPrompt: item.userPrompt,
+      turns: current?.turns || [],
+      status: "idle",
+      phase: "unknown",
+      lastMessage: item.lastMessage,
+      toolCallsSinceLastMessage: 0,
+      subAgents: [],
+      startedAt: current?.startedAt || item.lastActiveAt,
+      updatedAt: item.lastActiveAt,
+      counters: current?.counters || { toolCalls: 0, edits: 0, approvals: 0 },
+      queue: current?.queue || emptyQueue(),
+    };
+    return this.put(session);
+  }
+
+  discard(id: string) {
+    return this.removeStoredSession(id);
   }
 
   put(session: AiSessionStatus) {
@@ -459,6 +488,10 @@ export class AiSessionRegistry {
       .map((id) => byId.get(id))
       .filter((session): session is AiSessionStatus => Boolean(session));
     return result;
+  }
+
+  all() {
+    return this.readSessions();
   }
 
   private readSessions() {

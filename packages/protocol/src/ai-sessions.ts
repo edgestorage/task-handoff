@@ -305,6 +305,20 @@ export const AiSessionTurnSchema = z
   })
   .strict();
 
+export const AiSessionHistoryTurnSchema = AiSessionTurnSchema.pick({
+  id: true,
+  providerTurnId: true,
+  userPrompt: true,
+  status: true,
+  phase: true,
+  summary: true,
+  lastMessage: true,
+  contextCompactions: true,
+  startedAt: true,
+  updatedAt: true,
+  completedAt: true,
+}).strict();
+
 export const AiSessionStatusSchema = z
   .object({
     id: z.string().trim().min(1).max(120),
@@ -347,6 +361,41 @@ export const AiSessionActionResultSchema = z.object({
   turnId: z.string().trim().min(1).max(240).optional(),
   providerTurnId: z.string().trim().min(1).max(240).optional(),
   queueId: z.string().trim().min(1).max(120).optional(),
+}).strict();
+
+export const AI_SESSION_HISTORY_LIMIT = 50;
+
+export const AiSessionHistoryItemSchema = z.object({
+  id: z.string().trim().min(1).max(120),
+  agent: z.enum(["codex", "claude"]),
+  providerSessionId: z.string().trim().min(1).max(240),
+  title: z.string().trim().max(240).optional(),
+  userPrompt: z.string().trim().optional(),
+  lastMessage: z.string().trim().optional(),
+  cwd: z.string().trim().min(1).max(4096),
+  lastActiveAt: z.string().datetime(),
+  archivedAt: z.string().datetime(),
+}).strict();
+
+export const AiSessionHistoryIndexSchema = z.object({
+  schemaVersion: z.literal(1).default(1),
+  items: z.array(AiSessionHistoryItemSchema).max(AI_SESSION_HISTORY_LIMIT).default([]),
+}).strict();
+
+export const AiSessionHistoryListSchema = z.object({
+  items: z.array(AiSessionHistoryItemSchema).max(AI_SESSION_HISTORY_LIMIT).default([]),
+}).strict();
+
+export const AiSessionHistoryDetailSchema = z.object({
+  item: AiSessionHistoryItemSchema,
+  turns: z.array(AiSessionHistoryTurnSchema).max(50).default([]),
+}).strict();
+
+export const AiSessionResumeResultSchema = z.object({
+  disposition: z.enum(["resumed", "already-open"]),
+  aiSessionId: z.string().trim().min(1).max(120),
+  providerSessionId: z.string().trim().min(1).max(240),
+  appSessionId: z.string().trim().min(1).max(120),
 }).strict();
 
 export const AiSessionSummarySchema = AiSessionStatusSchema.pick({
@@ -690,6 +739,12 @@ export type AiSessionQueue = z.infer<typeof AiSessionQueueSchema>;
 export type AiSessionTurn = z.infer<typeof AiSessionTurnSchema>;
 export type AiSessionStatus = z.infer<typeof AiSessionStatusSchema>;
 export type AiSessionActionResult = z.infer<typeof AiSessionActionResultSchema>;
+export type AiSessionHistoryItem = z.infer<typeof AiSessionHistoryItemSchema>;
+export type AiSessionHistoryIndex = z.infer<typeof AiSessionHistoryIndexSchema>;
+export type AiSessionHistoryList = z.infer<typeof AiSessionHistoryListSchema>;
+export type AiSessionHistoryTurn = z.infer<typeof AiSessionHistoryTurnSchema>;
+export type AiSessionHistoryDetail = z.infer<typeof AiSessionHistoryDetailSchema>;
+export type AiSessionResumeResult = z.infer<typeof AiSessionResumeResultSchema>;
 export type AiSessionSummary = z.infer<typeof AiSessionSummarySchema>;
 export type AiSessionsSnapshot = z.infer<typeof AiSessionsSnapshotSchema>;
 export type AiSessionsState = z.infer<typeof AiSessionsStateSchema>;

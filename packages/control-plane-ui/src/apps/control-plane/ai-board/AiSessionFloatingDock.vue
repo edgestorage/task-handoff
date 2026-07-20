@@ -89,7 +89,6 @@
               :busy="busy"
               :can-interrupt="canInterrupt"
               :can-resolve-approval="canResolveApproval"
-              :context-compactions="displayAiSessionContextCompactions(card.session, promptIndex)"
               :instance-id="card.instance.id"
               :is-latest="promptIndex >= promptCount - 1"
               :response-content="displayAiSessionResponse(card.session, promptIndex)"
@@ -148,7 +147,6 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../
 import {
   aiSessionAppDisplayName,
   aiSessionStatusLabel,
-  displayAiSessionContextCompactions,
   displayAiSessionResponse,
   displayAiSessionTitle,
 } from "../useInstanceSessions";

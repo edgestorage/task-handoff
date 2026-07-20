@@ -27,9 +27,12 @@ import type {
   ChatChannel,
   AiSessionAttachment,
   AiSessionAttachmentRef,
+  AiSessionHistoryList,
+  AiSessionHistoryDetail,
   AiSessionMentionCatalog,
   AiSessionMentionFileSearch,
   AiSessionReference,
+  AiSessionResumeResult,
   CreateChatBridgeInput,
   ChatGatewayStatus,
   InstanceBoardItem,
@@ -287,6 +290,18 @@ export function useControlPlaneAiSessionsQuery() {
     queryFn: () => getApiData<ControlPlaneAiSessions>("ai-sessions"),
     retry: false,
   });
+}
+
+export function getAiSessionHistory(instanceId: string) {
+  return getApiData<AiSessionHistoryList>(`controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/history`);
+}
+
+export function getAiSessionHistoryDetail(instanceId: string, aiSessionId: string) {
+  return getApiData<AiSessionHistoryDetail>(`controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/history/${encodeURIComponent(aiSessionId)}`);
+}
+
+export function resumeAiSession(instanceId: string, aiSessionId: string) {
+  return postApiData<AiSessionResumeResult>(`controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/${encodeURIComponent(aiSessionId)}/resume`, {});
 }
 
 export function useControlPlaneAppSessionsQuery() {

@@ -27,8 +27,22 @@ const {
   publicManagedAppDefinitions,
 } = require("../packages/app-runtime/src/catalog.ts");
 const {
+  builtinManagedAppRegistry,
   createManagedAppRegistry,
 } = require("../packages/app-runtime/src/managed-app-definitions/index.ts");
+
+test("managed AI providers own their resume arguments", () => {
+  const codex = builtinManagedAppRegistry.provider("codex");
+  const claude = builtinManagedAppRegistry.provider("claude");
+  const terminal = builtinManagedAppRegistry.provider("terminal-tty");
+
+  assert.equal(codex.capabilities.supportsAiSessionResume, true);
+  assert.deepEqual(codex.aiSessionResumeArgs("codex-session"), ["resume", "codex-session"]);
+  assert.equal(claude.capabilities.supportsAiSessionResume, true);
+  assert.deepEqual(claude.aiSessionResumeArgs("claude-session"), ["--resume", "claude-session"]);
+  assert.equal(Boolean(terminal.capabilities?.supportsAiSessionResume), false);
+  assert.equal(terminal.aiSessionResumeArgs, undefined);
+});
 
 function definition(overrides = {}) {
   return {
