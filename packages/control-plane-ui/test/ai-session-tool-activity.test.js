@@ -89,6 +89,17 @@ test("both detail surfaces share the complete AI result while cards remain uncha
   assert.doesNotMatch(panel, /session-ai-card[\s\S]{0,180}toolCallsSinceLastMessage/);
 });
 
+test("context compaction results are rendered from the selected structured turn", () => {
+  assert.match(sessions, /turn\.contextCompactions\?\.length/);
+  assert.match(sessions, /turns\[index\]\?\.contextCompactions \|\| \[\]/);
+  assert.match(result, /v-if="contextCompactions\.length"/);
+  assert.match(result, /Context compacted/);
+  assert.match(result, /Compacting context…/);
+  for (const source of [panel, floatingDock]) {
+    assert.match(source, /:context-compactions="displayAiSessionContextCompactions/);
+  }
+});
+
 test("detail surfaces omit the legacy running response placeholder", () => {
   assert.match(sessions, /export function displayAiSessionResponse[\s\S]*?displayAiSessionContent\(session, promptIndex, false\)/);
   assert.match(result, /v-show="displayContent"/);

@@ -106,6 +106,9 @@ test("controlled instance mention routes preserve authoritative context and refe
     async searchMentionFiles(session, query) {
       return { sessionId: session.id, cwd: session.cwd, query, requestId: "search_routes", candidates: [{ kind: "file", name: "Exact Name.ts", path: "src/Exact Name.ts" }], complete: true };
     },
+    async executeCommand(_session, input) {
+      return { command: input.command, value: input.argument };
+    },
     async startMessage(session, input) {
       sends.push({ session, input });
       return { session, provider: "codex", action: "send", turnId: "turn_routes", providerTurnId: "turn_routes" };
@@ -129,6 +132,9 @@ test("controlled instance mention routes preserve authoritative context and refe
   const files = await app.inject({ method: "POST", url: `/api/ai-sessions/${codex.id}/mentions/files`, payload: { query: "Exact" } });
   assert.equal(files.statusCode, 200);
   assert.equal(JSON.parse(files.payload).data.candidates[0].path, "src/Exact Name.ts");
+  const renamed = await app.inject({ method: "POST", url: `/api/ai-sessions/${codex.id}/commands`, payload: { command: "rename", argument: "Exact title" } });
+  assert.equal(renamed.statusCode, 200);
+  assert.deepEqual(JSON.parse(renamed.payload).data, { command: "rename", value: "Exact title" });
   const claude = registry.start({ agent: "claude", providerSessionId: "claude_routes", cwd: "/workspace/project", status: "idle", phase: "unknown" });
   const unsupported = await app.inject({ method: "GET", url: `/api/ai-sessions/${claude.id}/mentions` });
   assert.equal(unsupported.statusCode, 400);
@@ -188,7 +194,7 @@ test("codex app-server parser projects supported tool items without output field
 });
 
 test("codex app-server parser excludes non-tools and diagnoses unknown items", () => {
-  for (const type of ["agentMessage", "reasoning", "plan", "hookPrompt", "contextCompaction", "enteredReviewMode", "exitedReviewMode"]) {
+  for (const type of ["agentMessage", "reasoning", "plan", "hookPrompt", "enteredReviewMode", "exitedReviewMode"]) {
     assert.equal(codexNotification("item/started", { threadId: "thread_non_tools", item: { type, id: type } }), undefined);
   }
   const warnings = [];
@@ -200,6 +206,45 @@ test("codex app-server parser excludes non-tools and diagnoses unknown items", (
     console.warn = originalWarn;
   }
   assert.deepEqual(warnings, ["[codex-app-server] ignoring unknown ThreadItem.type: futureTool"]);
+});
+
+test("codex app-server parser projects canonical and deprecated context compaction events", () => {
+  assert.deepEqual(codexNotification("item/started", {
+    threadId: "thread_compact",
+    turnId: "turn_compact",
+    startedAtMs: 1_750_000_000_000,
+    item: { type: "contextCompaction", id: "compact_1" },
+  }), {
+    type: "context-compaction",
+    threadId: "thread_compact",
+    turnId: "turn_compact",
+    itemId: "compact_1",
+    status: "running",
+    observedAt: "2025-06-15T15:06:40.000Z",
+  });
+  assert.deepEqual(codexNotification("item/completed", {
+    threadId: "thread_compact",
+    turnId: "turn_compact",
+    completedAtMs: 1_750_000_000_100,
+    item: { type: "contextCompaction", id: "compact_1" },
+  }), {
+    type: "context-compaction",
+    threadId: "thread_compact",
+    turnId: "turn_compact",
+    itemId: "compact_1",
+    status: "completed",
+    observedAt: "2025-06-15T15:06:40.100Z",
+  });
+  assert.deepEqual(codexNotification("thread/compacted", {
+    threadId: "thread_compact",
+    turnId: "turn_legacy",
+  }), {
+    type: "context-compaction",
+    threadId: "thread_compact",
+    turnId: "turn_legacy",
+    itemId: "context_compaction:turn_legacy",
+    status: "completed",
+  });
 });
 
 test("codex app-server parser preserves assistant item identity on completion", () => {
@@ -1093,6 +1138,24 @@ test("codex app-server thread summary keeps assistant response on the real user 
   assert.deepEqual(summary.turns.map((turn) => turn.id), ["turn_1", "turn_2"]);
   assert.deepEqual(summary.turns.map((turn) => turn.userPrompt), ["一点没有修复啊", "你是谁啊"]);
   assert.equal(summary.turns.at(-1).lastMessage, "我是 Claude Code，Anthropic 的 AI 助手。");
+});
+
+test("codex app-server thread summary preserves context-compaction-only turns", () => {
+  const summary = summarizeThreadTurns({
+    id: "thread_compact",
+    turns: [{
+      id: "turn_compact",
+      status: "completed",
+      items: [{ type: "contextCompaction", id: "compact_1" }],
+    }],
+  });
+
+  assert.deepEqual(summary.turns, [{
+    id: "turn_compact",
+    status: "completed",
+    revision: 0,
+    contextCompactions: [{ id: "compact_1", status: "completed" }],
+  }]);
 });
 
 test("ai session bind app snapshot does not replace real prompt with interrupt placeholder", () => {
@@ -2597,6 +2660,83 @@ test("codex app server bridge syncs loaded threads and status notifications", as
   assert.equal(registry.list()[0].status, "idle");
   bridge.stop();
   assert.equal(fake.stopped, true);
+});
+
+test("codex app server bridge preserves context compaction results across realtime and snapshots", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-compaction-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  class FakeCodexAppServerClient extends EventEmitter {
+    async start() {}
+    async listLoadedThreadIds() { return ["thread_compact"]; }
+    async readThread() {
+      return {
+        id: "thread_compact",
+        status: { type: "idle" },
+        turns: [{
+          id: "turn_snapshot",
+          status: "completed",
+          items: [{ type: "contextCompaction", id: "compact_snapshot" }],
+        }],
+      };
+    }
+    stop() {}
+  }
+
+  const fake = new FakeCodexAppServerClient();
+  const bridge = new CodexAppServerSessionBridge(registry, fake);
+  await bridge.sync();
+  let session = registry.list()[0];
+  assert.deepEqual(session.turns[0].contextCompactions, [{ id: "compact_snapshot", status: "completed" }]);
+
+  fake.emit("event", codexNotification("item/started", {
+    threadId: "thread_compact",
+    turnId: "turn_live",
+    startedAtMs: 1_750_000_000_000,
+    item: { type: "contextCompaction", id: "compact_live" },
+  }));
+  session = registry.list()[0];
+  assert.deepEqual(session.turns.at(-1).contextCompactions, [{
+    id: "compact_live",
+    status: "running",
+    startedAt: "2025-06-15T15:06:40.000Z",
+  }]);
+
+  fake.emit("event", codexNotification("item/completed", {
+    threadId: "thread_compact",
+    turnId: "turn_live",
+    completedAtMs: 1_750_000_000_100,
+    item: { type: "contextCompaction", id: "compact_live" },
+  }));
+  session = registry.list()[0];
+  assert.deepEqual(session.turns.at(-1).contextCompactions, [{
+    id: "compact_live",
+    status: "completed",
+    startedAt: "2025-06-15T15:06:40.000Z",
+    completedAt: "2025-06-15T15:06:40.100Z",
+  }]);
+  const completedRevision = session.turns.at(-1).revision;
+  fake.emit("event", codexNotification("item/completed", {
+    threadId: "thread_compact",
+    turnId: "turn_live",
+    completedAtMs: 1_750_000_000_100,
+    item: { type: "contextCompaction", id: "compact_live" },
+  }));
+  assert.equal(registry.list()[0].turns.at(-1).revision, completedRevision);
+
+  fake.emit("event", codexNotification("thread/compacted", {
+    threadId: "thread_compact",
+    turnId: "turn_legacy",
+  }));
+  session = registry.list()[0];
+  assert.deepEqual(session.turns.at(-1).contextCompactions, [{
+    id: "context_compaction:turn_legacy",
+    status: "completed",
+  }]);
+  const reloaded = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  assert.deepEqual(reloaded.get(session.id).turns.at(-1).contextCompactions, [{
+    id: "context_compaction:turn_legacy",
+    status: "completed",
+  }]);
 });
 
 test("codex app server bridge projects realtime tool activity and replaces it from thread snapshots", async () => {
@@ -4239,6 +4379,43 @@ test("codex mention facade filters catalogs, invalidates cache, searches cwd, an
   await assert.rejects(
     () => bridge.startMessage(registry.get(session.id), { message: "Bad", references: [{ kind: "app", name: "Missing", path: "app://missing" }] }),
     (error) => error?.code === "AI_SESSION_REFERENCE_UNAVAILABLE",
+  );
+});
+
+test("codex command facade invokes structured app-server methods", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-commands-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const calls = [];
+  class FakeCodexCommandsClient extends EventEmitter {
+    async start() {}
+    stop() {}
+    async listLoadedThreadIds() { return []; }
+    async startReview(threadId) { calls.push(["review", threadId]); return { turnId: "turn_review" }; }
+    async setThreadName(threadId, name) { calls.push(["rename", threadId, name]); }
+    async setThreadGoal(threadId, objective) { calls.push(["goal-set", threadId, objective]); return { goal: { objective } }; }
+    async getThreadGoal(threadId) { calls.push(["goal-get", threadId]); return { goal: { objective: "Ship it" } }; }
+    async compactThread(threadId) { calls.push(["compact", threadId]); }
+  }
+  const bridge = new CodexAppServerSessionBridge(registry, new FakeCodexCommandsClient());
+  const session = registry.start({ agent: "codex", providerSessionId: "thread_commands", cwd: "/workspace", status: "idle", phase: "unknown" });
+
+  assert.deepEqual(await bridge.executeCommand(session, { command: "review" }), { command: "review", turnId: "turn_review" });
+  assert.deepEqual(await bridge.executeCommand(session, { command: "rename", argument: "New name" }), { command: "rename", value: "New name" });
+  bridge["applyProviderEvent"]({ type: "thread-name", threadId: "thread_commands", name: "New name" });
+  assert.equal(registry.get(session.id).title, "New name");
+  assert.deepEqual(await bridge.executeCommand(session, { command: "goal", argument: "Ship it" }), { command: "goal", value: "Ship it" });
+  assert.deepEqual(await bridge.executeCommand(session, { command: "goal" }), { command: "goal", value: "Ship it" });
+  assert.deepEqual(await bridge.executeCommand(session, { command: "compact" }), { command: "compact" });
+  assert.deepEqual(calls, [
+    ["review", "thread_commands"],
+    ["rename", "thread_commands", "New name"],
+    ["goal-set", "thread_commands", "Ship it"],
+    ["goal-get", "thread_commands"],
+    ["compact", "thread_commands"],
+  ]);
+  await assert.rejects(
+    () => bridge.executeCommand({ ...session, status: "running" }, { command: "review" }),
+    (error) => error?.code === "AI_SESSION_BUSY",
   );
 });
 

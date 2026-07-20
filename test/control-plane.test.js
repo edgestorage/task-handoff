@@ -1202,6 +1202,7 @@ test("control plane persists one update channel for server and node updates", as
     assert.equal(defaults.statusCode, 200);
     assert.equal(defaults.body.data.updateChannel, "stable");
     assert.equal(defaults.body.data.mentionTrigger, "@");
+    assert.equal(defaults.body.data.commandTrigger, "/");
     assert.equal(defaults.body.data.publicBaseUrl, "https://legacy-control.example.test");
 
     const publicUrl = await json(app, "PATCH", "/api/control-plane/settings", {
@@ -1218,10 +1219,19 @@ test("control plane persists one update channel for server and node updates", as
     const mention = await json(app, "PATCH", "/api/control-plane/settings", { mentionTrigger: "#" });
     assert.equal(mention.statusCode, 200);
     assert.equal(mention.body.data.mentionTrigger, "#");
+    const command = await json(app, "PATCH", "/api/control-plane/settings", { commandTrigger: "!" });
+    assert.equal(command.statusCode, 200);
+    assert.equal(command.body.data.commandTrigger, "!");
     for (const invalid of ["", "a", "12", "/", "\\", " "]) {
       const rejected = await json(app, "PATCH", "/api/control-plane/settings", { mentionTrigger: invalid });
       assert.equal(rejected.statusCode, 400);
     }
+    for (const invalid of ["", "a", "12", "\\", " "]) {
+      const rejected = await json(app, "PATCH", "/api/control-plane/settings", { commandTrigger: invalid });
+      assert.equal(rejected.statusCode, 400);
+    }
+    const duplicateTrigger = await json(app, "PATCH", "/api/control-plane/settings", { commandTrigger: "#" });
+    assert.equal(duplicateTrigger.statusCode, 400);
   } finally {
     await app.close();
   }
@@ -1233,6 +1243,7 @@ test("control plane persists one update channel for server and node updates", as
     assert.equal(persisted.body.data.updateChannel, "beta");
     assert.equal(persisted.body.data.publicBaseUrl, "https://control.example.test");
     assert.equal(persisted.body.data.mentionTrigger, "#");
+    assert.equal(persisted.body.data.commandTrigger, "!");
   } finally {
     await app.close();
   }

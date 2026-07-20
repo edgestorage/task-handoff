@@ -109,6 +109,26 @@ export const AiSessionMessageAttachmentRefSchema = z
 
 export const AiSessionSendModeSchema = z.enum(["auto", "queue", "steer", "immediate"]);
 
+export const AiSessionCommandNameSchema = z.enum(["review", "rename", "goal", "compact"]);
+
+export const AiSessionCommandInputSchema = z.object({
+  command: AiSessionCommandNameSchema,
+  argument: z.string().trim().max(4000).optional(),
+}).strict().superRefine((input, context) => {
+  if (input.command === "rename" && !input.argument) {
+    context.addIssue({ code: "custom", path: ["argument"], message: "Rename requires a thread name." });
+  }
+  if ((input.command === "review" || input.command === "compact") && input.argument) {
+    context.addIssue({ code: "custom", path: ["argument"], message: `${input.command} does not accept an argument.` });
+  }
+});
+
+export const AiSessionCommandResultSchema = z.object({
+  command: AiSessionCommandNameSchema,
+  value: z.string().max(4000).optional(),
+  turnId: z.string().trim().min(1).max(240).optional(),
+}).strict();
+
 export const AiSessionReferenceKindSchema = z.enum(["skill", "app", "plugin"]);
 
 const AiSessionReferenceBaseSchema = z.object({
@@ -254,6 +274,15 @@ export const AiSessionSourceSchema = z.enum([
   "app-session",
 ]);
 
+export const AiSessionContextCompactionSchema = z
+  .object({
+    id: z.string().trim().min(1).max(240),
+    status: z.enum(["running", "completed"]),
+    startedAt: z.string().datetime().optional(),
+    completedAt: z.string().datetime().optional(),
+  })
+  .strict();
+
 export const AiSessionTurnSchema = z
   .object({
     id: z.string().trim().min(1).max(240),
@@ -265,6 +294,7 @@ export const AiSessionTurnSchema = z
     summary: z.string().trim().max(1000).optional(),
     lastMessage: z.string().trim().optional(),
     lastMessageItemId: z.string().trim().max(240).optional(),
+    contextCompactions: z.array(AiSessionContextCompactionSchema).max(20).optional(),
     revision: z.number().int().min(0).default(0),
     sourcePriority: z.number().int().min(0).max(100).optional(),
     snapshotVersion: z.number().int().min(0).optional(),
@@ -570,7 +600,7 @@ export const AiSessionSnapshotInputSchema = AiSessionInputBaseSchema.extend({
 export const AiSessionRealtimeInputSchema = AiSessionInputBaseSchema.extend({
   type: z.literal("event"),
   sessionId: z.string().trim().min(1).max(120),
-  kind: z.enum(["lifecycle", "send-ack", "turn-started", "user-message", "assistant-message", "approval-requested", "turn-completed", "tool-activity", "sub-agent-activity"]),
+  kind: z.enum(["lifecycle", "send-ack", "turn-started", "user-message", "assistant-message", "approval-requested", "turn-completed", "tool-activity", "sub-agent-activity", "context-compaction"]),
   activeTurnId: z.string().trim().max(240).optional(),
   providerTurnId: z.string().trim().max(240).optional(),
   userPrompt: z.string().trim().optional(),
@@ -583,12 +613,20 @@ export const AiSessionRealtimeInputSchema = AiSessionInputBaseSchema.extend({
   currentTool: AiSessionToolSchema.nullable().optional(),
   toolCallsSinceLastMessage: z.number().int().min(0).optional(),
   subAgents: z.array(AiSessionSubAgentSchema).max(50).optional(),
+  contextCompaction: AiSessionContextCompactionSchema.optional(),
   counters: z.object({
     toolCalls: z.number().int().min(0).optional(),
     edits: z.number().int().min(0).optional(),
     approvals: z.number().int().min(0).optional(),
   }).strict().optional(),
 }).strict().superRefine((input, context) => {
+  if (input.kind === "context-compaction") {
+    if (!input.contextCompaction) {
+      context.addIssue({ code: "custom", path: ["contextCompaction"], message: "context-compaction events require contextCompaction" });
+    }
+  } else if (input.contextCompaction !== undefined) {
+    context.addIssue({ code: "custom", path: ["contextCompaction"], message: "contextCompaction is only valid for context-compaction events" });
+  }
   if (input.kind === "sub-agent-activity") {
     if (!input.subAgents) {
       context.addIssue({ code: "custom", path: ["subAgents"], message: "sub-agent-activity events require subAgents" });
@@ -626,10 +664,14 @@ export type AiSessionSubAgentStatus = z.infer<typeof AiSessionSubAgentStatusSche
 export type AiSessionSubAgentActivity = z.infer<typeof AiSessionSubAgentActivitySchema>;
 export type AiSessionSubAgent = z.infer<typeof AiSessionSubAgentSchema>;
 export type AiSessionSource = z.infer<typeof AiSessionSourceSchema>;
+export type AiSessionContextCompaction = z.infer<typeof AiSessionContextCompactionSchema>;
 export type AiSessionMessageAttachment = z.infer<typeof AiSessionMessageAttachmentSchema>;
 export type AiSessionMessageAttachmentMeta = z.infer<typeof AiSessionMessageAttachmentMetaSchema>;
 export type AiSessionMessageAttachmentRef = z.infer<typeof AiSessionMessageAttachmentRefSchema>;
 export type AiSessionSendMode = z.infer<typeof AiSessionSendModeSchema>;
+export type AiSessionCommandName = z.infer<typeof AiSessionCommandNameSchema>;
+export type AiSessionCommandInput = z.infer<typeof AiSessionCommandInputSchema>;
+export type AiSessionCommandResult = z.infer<typeof AiSessionCommandResultSchema>;
 export type AiSessionReferenceKind = z.infer<typeof AiSessionReferenceKindSchema>;
 export type AiSessionReference = z.infer<typeof AiSessionReferenceSchema>;
 export type AiSessionMentionKind = z.infer<typeof AiSessionMentionKindSchema>;

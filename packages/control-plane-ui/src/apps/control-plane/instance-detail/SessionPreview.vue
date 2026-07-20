@@ -206,7 +206,7 @@
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent class="app-launch-menu" align="start" :side-offset="6">
-              <AppLaunchMenuItems :apps="launchableApps" :folders="nodeLocalFolders" :instance="instance" :launching="launchingApp" @launch="(appId, cwdFolderId) => launchApp(appId, cwdFolderId)" />
+              <AppLaunchMenuItems :apps="launchableApps" :folders="projectFolders" :instance="instance" :launching="launchingApp" @launch="(appId, cwdFolderId) => launchApp(appId, cwdFolderId)" @new-project="openProjectPicker" />
               <DropdownMenuSeparator />
               <DropdownMenuItem class="app-launch-menu-item" @select="$emit('openSettings', instance.id, 'apps')">
                 <Boxes :size="14" />
@@ -237,6 +237,8 @@
       v-else-if="activeSession?.kind === 'ai'"
       :active-session="activeSession"
       :instance="instance"
+      :launchable-apps="launchableApps"
+      :node-local-folders="nodeLocalFolders"
       :selected-ai-session="selectedAiSession"
       @open-ai-session-app="(target, session) => $emit('openAiSessionApp', target, session)"
       @select-ai-session="(instanceId, sessionId) => $emit('selectAiSession', instanceId, sessionId)"
@@ -256,7 +258,7 @@
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent class="app-launch-menu" align="center" :side-offset="6">
-          <AppLaunchMenuItems :apps="launchableApps" :folders="nodeLocalFolders" :instance="instance" :launching="launchingApp" @launch="(appId, cwdFolderId) => launchApp(appId, cwdFolderId)" />
+          <AppLaunchMenuItems :apps="launchableApps" :folders="projectFolders" :instance="instance" :launching="launchingApp" @launch="(appId, cwdFolderId) => launchApp(appId, cwdFolderId)" @new-project="openProjectPicker" />
           <DropdownMenuSeparator />
           <DropdownMenuItem class="app-launch-menu-item" @select="$emit('openSettings', instance.id, 'apps')">
             <Boxes :size="14" />
@@ -308,6 +310,13 @@
         <span v-else>Last refresh {{ lastRefreshLabel }}</span>
       </p>
     </div>
+    <ProjectFolderPicker
+      :node-id="instance.nodeId"
+      :node-name="instance.nodeId"
+      :open="projectPickerOpen"
+      @created="handleProjectCreated"
+      @update:open="projectPickerOpen = $event"
+    />
   </section>
 </template>
 
@@ -323,6 +332,7 @@ import { ScrollArea } from "../../../components/ui/scroll-area";
 import AiSessionPanel from "./AiSessionPanel.vue";
 import SessionTerminalPreview from "./SessionTerminalPreview.vue";
 import AppLaunchMenuItems from "../shared/AppLaunchMenuItems.vue";
+import ProjectFolderPicker from "../shared/ProjectFolderPicker.vue";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 import {
   appDisplayName,
@@ -420,6 +430,8 @@ function formatBytes(value: number) {
 }
 
 const previewLaunchMenuOpen = ref(false);
+const projectPickerOpen = ref(false);
+const createdProjectFolders = ref<NodeLocalFolder[]>([]);
 const draggingSessionTabKey = ref("");
 const editingSessionKey = ref("");
 const sessionTitleDraft = ref("");
@@ -439,6 +451,16 @@ const terminalSessionPreviews = computed(() =>
 );
 const groupSessionMenu = computed(() => shouldGroupAppSessionTabs(props.instance, props.sessionTabs));
 const groupedAppSessions = computed(() => groupedAppSessionTabs(props.instance, props.sessionTabs, props.activeSessionKey));
+const projectFolders = computed(() => [...new Map([...(props.nodeLocalFolders || []), ...createdProjectFolders.value].map((folder) => [folder.id, folder])).values()]);
+
+function openProjectPicker() {
+  projectPickerOpen.value = true;
+}
+
+function handleProjectCreated(folder: NodeLocalFolder) {
+  createdProjectFolders.value = [...createdProjectFolders.value, folder];
+  projectPickerOpen.value = false;
+}
 
 function isSessionTabActive(session: SessionTab) {
   return hasInstanceStatusPage(props.instance) ? session.kind === "status" : session.key === props.activeSessionKey;

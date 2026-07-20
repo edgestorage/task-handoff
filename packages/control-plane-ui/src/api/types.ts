@@ -5,6 +5,7 @@ import type {
   AiSessionMentionFileSearch,
   AiSessionReference,
 } from "@task-handoff/protocol/ai-sessions";
+import type { AiSessionContextCompaction as ProtocolAiSessionContextCompaction } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionSubAgent as ProtocolAiSessionSubAgent } from "@task-handoff/protocol/ai-sessions";
 
 export type { AiSessionMentionCandidate, AiSessionMentionCatalog, AiSessionMentionDiagnostic, AiSessionMentionFileSearch, AiSessionReference };
@@ -47,6 +48,7 @@ export type ControlPlaneSettings = {
   publicBaseUrl?: string;
   updateChannel: UpdateChannel;
   mentionTrigger: string;
+  commandTrigger: string;
 };
 
 export type BuildInfo = {
@@ -665,6 +667,7 @@ export type AiSessionTurn = {
   summary?: string;
   lastMessage?: string;
   lastMessageItemId?: string;
+  contextCompactions?: ProtocolAiSessionContextCompaction[];
   revision: number;
   sourcePriority?: number;
   snapshotVersion?: number;

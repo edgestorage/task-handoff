@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { AiSessionApprovalInputSchema, AiSessionMentionFileSearchInputSchema, AiSessionMessageRefInputSchema } from "@task-handoff/protocol/ai-sessions";
+import { AiSessionApprovalInputSchema, AiSessionCommandInputSchema, AiSessionMentionFileSearchInputSchema, AiSessionMessageRefInputSchema } from "@task-handoff/protocol/ai-sessions";
 import type { ControlPlaneService } from "../application/service.ts";
 import type { ControlPlaneEventBus } from "../events/bus.ts";
 import type { ControlPlaneAiSessionAggregator } from "../sessions/ai-session-aggregator.ts";
@@ -114,6 +114,13 @@ export function registerSessionRoutes({
     const params = InstanceSessionParamsSchema.parse(request.params);
     const input = AiSessionMentionFileSearchInputSchema.parse(request.body || {});
     return { data: await service.searchAiSessionMentionFiles(params.id, params.sessionId, input.query) };
+  });
+  app.post("/api/controlled-instances/:id/ai-sessions/:sessionId/commands", async (request) => {
+    const params = InstanceSessionParamsSchema.parse(request.params);
+    const input = AiSessionCommandInputSchema.parse(request.body || {});
+    const result = await service.executeAiSessionCommand(params.id, params.sessionId, input);
+    events.publish("instance.ai-session.command-executed", { instanceId: params.id, sessionId: params.sessionId, command: input.command });
+    return { data: result };
   });
   app.get("/api/controlled-instances/:id/ai-sessions/:sessionId/queue", async (request) => {
     const params = InstanceSessionParamsSchema.parse(request.params);

@@ -65,9 +65,14 @@ export function summarizeThreadTurns(thread: CodexThread): {
         historyTurn.summary = lastMessage.length > 1000
           ? `${lastMessage.slice(0, 997)}...`
           : lastMessage;
+      } else if (item.type === "contextCompaction" && typeof item.id === "string" && item.id.trim()) {
+        historyTurn.contextCompactions = [
+          ...(historyTurn.contextCompactions || []),
+          { id: item.id.trim(), status: "completed" },
+        ];
       }
     }
-    if (historyTurn.userPrompt || historyTurn.lastMessage || historyTurn.summary) {
+    if (historyTurn.userPrompt || historyTurn.lastMessage || historyTurn.summary || historyTurn.contextCompactions?.length) {
       historyTurns.push(historyTurn);
     }
   }

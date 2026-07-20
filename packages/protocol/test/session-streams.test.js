@@ -128,6 +128,24 @@ test("AI session sub-agent state defaults, stays strict, and updates atomically"
   assert.equal(AiSessionRealtimeInputSchema.safeParse({ ...event, kind: "turn-started" }).success, false);
 });
 
+test("AI session context compaction events are structured and turn-scoped", () => {
+  const event = {
+    type: "event",
+    source: "realtime",
+    sessionId: "session-a",
+    kind: "context-compaction",
+    activeTurnId: "turn-a",
+    contextCompaction: { id: "compact-a", status: "completed", completedAt: now },
+  };
+  assert.equal(AiSessionRealtimeInputSchema.safeParse(event).success, true);
+  assert.equal(AiSessionRealtimeInputSchema.safeParse({ ...event, contextCompaction: undefined }).success, false);
+  assert.equal(AiSessionRealtimeInputSchema.safeParse({ ...event, kind: "turn-started" }).success, false);
+  assert.equal(AiSessionRealtimeInputSchema.safeParse({
+    ...event,
+    contextCompaction: { ...event.contextCompaction, providerOutput: "not allowed" },
+  }).success, false);
+});
+
 function meta(overrides = {}) {
   return {
     streamId: "stream-a",

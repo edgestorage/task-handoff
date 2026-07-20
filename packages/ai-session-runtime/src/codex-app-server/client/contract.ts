@@ -20,5 +20,10 @@ export type CodexAppServerClientLike = EventEmitter & {
   stopFuzzyFileSearch?: (sessionId: string) => Promise<void>;
   interruptTurn?: (threadId: string, turnId: string) => Promise<void>;
   resumeThread?: (threadId: string) => Promise<CodexThread | undefined>;
+  startReview?: (threadId: string) => Promise<{ turnId?: string }>;
+  setThreadName?: (threadId: string, name: string) => Promise<void>;
+  setThreadGoal?: (threadId: string, objective: string) => Promise<JsonValue>;
+  getThreadGoal?: (threadId: string) => Promise<JsonValue>;
+  compactThread?: (threadId: string) => Promise<void>;
   respondToApproval?: (request: CodexApprovalRequest, decision: CodexApprovalDecision) => Promise<void>;
 };

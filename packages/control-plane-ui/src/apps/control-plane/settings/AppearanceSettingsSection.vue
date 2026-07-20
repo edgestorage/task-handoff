@@ -52,6 +52,20 @@
           <span>Dark</span>
         </Button>
       </div>
+      <div class="section-head">
+        <span>Command trigger</span>
+      </div>
+      <div class="mention-trigger-form">
+        <label>
+          <span>Character</span>
+          <ControlPlaneInput :model-value="commandTrigger" aria-label="Command trigger character" @update:model-value="emit('update:commandTrigger', $event)" />
+        </label>
+        <div class="public-url-actions">
+          <Button variant="outline" size="sm" :disabled="savingCommandTrigger || commandTrigger === '/'" @click="emit('resetCommandTrigger')">Reset</Button>
+          <Button variant="outline" size="sm" :disabled="savingCommandTrigger || Boolean(commandTriggerError)" @click="emit('saveCommandTrigger')">{{ savingCommandTrigger ? "Saving" : "Save" }}</Button>
+        </div>
+        <p v-if="commandTriggerError || commandTriggerMessage" :class="commandTriggerError || commandTriggerMessageError ? 'settings-error' : 'settings-success'">{{ commandTriggerError || commandTriggerMessage }}</p>
+      </div>
     </section>
     <section class="modal-section appearance-panel">
       <div class="section-head">
@@ -103,6 +117,11 @@ defineProps<{
   publicBaseUrl: string;
   publicBaseUrlMessage?: string;
   mentionTrigger: string;
+  commandTrigger: string;
+  commandTriggerError?: string;
+  commandTriggerMessage?: string;
+  commandTriggerMessageError?: boolean;
+  savingCommandTrigger?: boolean;
   mentionTriggerError?: string;
   mentionTriggerMessage?: string;
   mentionTriggerMessageError?: boolean;
@@ -126,6 +145,9 @@ const emit = defineEmits<{
   savePublicBaseUrl: [];
   resetMentionTrigger: [];
   saveMentionTrigger: [];
+  resetCommandTrigger: [];
+  saveCommandTrigger: [];
+  "update:commandTrigger": [value: string];
   "update:mentionTrigger": [value: string];
   "update:publicBaseUrl": [value: string];
   "update:serverUpdateChannel": [value: string];

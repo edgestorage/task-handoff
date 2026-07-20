@@ -55,6 +55,50 @@ export function turnMeta(input: {
 
 export type TurnMeta = Partial<ReturnType<typeof turnMeta>>;
 
+function normalizeContextCompactions(value: unknown) {
+  if (!Array.isArray(value)) return undefined;
+  const byId = new Map<string, NonNullable<NonNullable<AiSessionStatus["turns"]>[number]["contextCompactions"]>[number]>();
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const record = raw as Record<string, unknown>;
+    if (typeof record.id !== "string" || !record.id.trim() || (record.status !== "running" && record.status !== "completed")) continue;
+    const id = compact(record.id, 240);
+    const previous = byId.get(id);
+    const status = previous?.status === "completed" || record.status === "completed" ? "completed" : "running";
+    const startedAt = normalizeIsoTimestamp(record.startedAt) || previous?.startedAt;
+    const completedAt = normalizeIsoTimestamp(record.completedAt) || previous?.completedAt;
+    byId.set(id, {
+      id,
+      status,
+      ...(startedAt ? { startedAt } : {}),
+      ...(completedAt ? { completedAt } : {}),
+    });
+  }
+  const values = [...byId.values()].slice(-20);
+  return values.length ? values : undefined;
+}
+
+function normalizeIsoTimestamp(value: unknown) {
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : undefined;
+}
+
+function mergeContextCompactions(
+  current: NonNullable<AiSessionStatus["turns"]>[number]["contextCompactions"],
+  incoming: NonNullable<AiSessionStatus["turns"]>[number]["contextCompactions"],
+) {
+  return normalizeContextCompactions([...(current || []), ...(incoming || [])]);
+}
+
+function hasContextCompactionProgress(
+  existing: NonNullable<AiSessionStatus["turns"]>[number] | undefined,
+  incoming: NonNullable<AiSessionStatus["turns"]>[number],
+) {
+  const currentById = new Map((existing?.contextCompactions || []).map((item) => [item.id, item.status]));
+  return (incoming.contextCompactions || []).some((item) => !currentById.has(item.id) || currentById.get(item.id) === "running" && item.status === "completed");
+}
+
 function stableTurnPart(value: unknown) {
   const text = compact(value, 120);
   const slug = text.replace(/[^a-zA-Z0-9_.:-]+/g, "_").replace(/^_+|_+$/g, "");
@@ -95,6 +139,7 @@ export function normalizeTurns(values?: unknown[], meta: TurnMeta = {}) {
       summary: record.summary ? compact(record.summary, 1000) : undefined,
       lastMessage: record.lastMessage ? messageText(record.lastMessage) : undefined,
       lastMessageItemId: record.lastMessageItemId ? compact(record.lastMessageItemId, 240) : undefined,
+      contextCompactions: normalizeContextCompactions(record.contextCompactions),
       revision: Math.max(0, Number(record.revision) || 0),
       sourcePriority: Number.isInteger(record.sourcePriority) ? Number(record.sourcePriority) : meta.sourcePriority,
       snapshotVersion: Number.isInteger(record.snapshotVersion) ? Number(record.snapshotVersion) : meta.snapshotVersion,
@@ -103,7 +148,7 @@ export function normalizeTurns(values?: unknown[], meta: TurnMeta = {}) {
       updatedAt: record.updatedAt,
       completedAt: record.completedAt,
     };
-    if (turn.userPrompt || turn.summary || turn.lastMessage) {
+    if (turn.userPrompt || turn.summary || turn.lastMessage || turn.contextCompactions?.length) {
       turns.push(turn);
     }
   }
@@ -112,6 +157,9 @@ export function normalizeTurns(values?: unknown[], meta: TurnMeta = {}) {
 
 function shouldAcceptIncomingTurn(existing: NonNullable<AiSessionStatus["turns"]>[number] | undefined, incoming: NonNullable<AiSessionStatus["turns"]>[number]) {
   if (!existing) {
+    return true;
+  }
+  if (hasContextCompactionProgress(existing, incoming)) {
     return true;
   }
   const existingPriority = sourcePriority(existing.source, existing.sourcePriority);
@@ -136,13 +184,15 @@ function mergeTurnPatch(
   turn: NonNullable<AiSessionStatus["turns"]>[number],
 ) {
   const patch = definedTurnPatch(turn);
+  patch.contextCompactions = mergeContextCompactions(existing?.contextCompactions, turn.contextCompactions);
   if (!existing) {
     return patch;
   }
   const sameResponse = existing.userPrompt === (turn.userPrompt ?? existing.userPrompt) &&
     existing.summary === (turn.summary ?? existing.summary) &&
     existing.lastMessage === (turn.lastMessage ?? existing.lastMessage) &&
-    existing.lastMessageItemId === (turn.lastMessageItemId ?? existing.lastMessageItemId);
+    existing.lastMessageItemId === (turn.lastMessageItemId ?? existing.lastMessageItemId) &&
+    JSON.stringify(existing.contextCompactions || []) === JSON.stringify(patch.contextCompactions || []);
   const sameState = existing.status === (turn.status ?? existing.status) &&
     existing.phase === (turn.phase ?? existing.phase);
   if (sameResponse && sameState) {

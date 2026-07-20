@@ -35,6 +35,7 @@ import {
 import {
   AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES,
   AiSessionActionResultSchema,
+  AiSessionCommandResultSchema,
   AiSessionDeltaResponseSchema,
   AiSessionMentionCatalogSchema,
   AiSessionMentionFileSearchSchema,
@@ -42,6 +43,8 @@ import {
   AiSessionStatusSchema,
   AiSessionsStateSchema,
   type AiSessionActionResult,
+  type AiSessionCommandInput,
+  type AiSessionCommandResult,
   type AiSessionDeltaResponse,
   type AiSessionMessageAttachment,
   type AiSessionReference,
@@ -1513,6 +1516,15 @@ export class ControlPlaneService {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ query }),
+    }));
+  }
+
+  async executeAiSessionCommand(instanceId: string, sessionId: string, input: AiSessionCommandInput): Promise<AiSessionCommandResult> {
+    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
+    return AiSessionCommandResultSchema.parse(await this.instanceRequest(instance, `/ai-sessions/${encodeURIComponent(sessionId)}/commands`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
     }));
   }
 

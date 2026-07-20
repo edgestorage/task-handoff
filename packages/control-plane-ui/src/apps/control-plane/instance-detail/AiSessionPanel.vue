@@ -45,6 +45,9 @@
                 </DropdownMenuCheckboxItem>
               </DropdownMenuContent>
             </DropdownMenu>
+            <button type="button" class="session-ai-new-button" aria-label="New AI session" title="New AI session" @click="openNewSession">
+              <Plus :size="15" />
+            </button>
           </div>
         </div>
         <ScrollArea class="session-ai-list">
@@ -138,7 +141,7 @@
                 <div class="session-ai-card-tools" aria-label="AI session card controls">
                   <DropdownMenu>
                     <DropdownMenuTrigger as-child>
-                      <button type="button" class="session-ai-trigger-button" :data-bound="boundTriggers(session).length ? 'true' : undefined" :title="triggerButtonTitle(session)" @click.stop>
+                      <button type="button" class="session-ai-trigger-button ai-session-card-action" :data-bound="boundTriggers(session).length ? 'true' : undefined" :title="triggerButtonTitle(session)" @click.stop>
                         <Zap :size="13" />
                         <small v-if="boundTriggers(session).length">{{ boundTriggers(session).length }}</small>
                       </button>
@@ -171,13 +174,26 @@
                   <button
                     v-if="aiSessionAppTab(instance, session)"
                     type="button"
-                    class="session-ai-open"
+                    class="session-ai-open ai-session-card-action"
                     :aria-label="`Open app session for ${session.agent}`"
                     title="Open app session"
                     @click="$emit('openAiSessionApp', instance, session)"
                   >
                     <ExternalLink :size="14" />
                   </button>
+                  <DropdownMenu v-if="aiSessionAppTab(instance, session)">
+                    <DropdownMenuTrigger as-child>
+                      <button type="button" class="session-ai-more ai-session-card-action" :aria-label="`More actions for ${session.agent}`" title="More actions" @click.stop>
+                        <MoreHorizontal :size="14" />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent class="session-ai-card-menu" align="end" :side-offset="6" @click.stop>
+                      <DropdownMenuItem class="session-ai-card-menu-item danger" :disabled="stoppingAppSessionId === session.id" @select="closeAppSession(session)">
+                        <Square :size="13" />
+                        <span>{{ stoppingAppSessionId === session.id ? "Closing app session" : "Close app session" }}</span>
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </div>
                 </article>
               </template>
@@ -193,7 +209,59 @@
         title="Resize AI session list"
         @pointerdown="startSidebarResize"
       />
-      <section v-if="selectedSession" ref="detailEl" class="session-ai-detail" :class="{ 'is-scrolled': detailScrolled }">
+      <section v-if="showNewSession" class="session-ai-detail session-ai-new-detail">
+        <div class="session-ai-new-dialog" role="group" aria-label="New AI session">
+          <div class="session-ai-new-pills">
+            <DropdownMenu>
+              <DropdownMenuTrigger as-child>
+                <button type="button" class="session-ai-project-pill" :disabled="launchingNewSession">
+                  <Folder :size="14" />
+                  <strong>{{ newSessionProjectLabel }}</strong>
+                  <ChevronDown :size="13" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent class="session-ai-project-menu" align="start" :side-offset="8">
+                <input v-model="newSessionFolderQuery" class="session-ai-project-search" placeholder="Search projects" aria-label="Search projects" />
+                <DropdownMenuItem v-for="folder in filteredNewSessionFolders" :key="folder.id" class="session-ai-project-item" @select="newSessionFolderId = folder.id">
+                  <Folder :size="15" /><span>{{ folder.name }}</span><Check v-if="newSessionFolderId === folder.id" :size="15" />
+                </DropdownMenuItem>
+                <p v-if="!filteredNewSessionFolders.length" class="session-ai-project-empty">No projects found</p>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem class="session-ai-project-item" @select="openNewProject"><Plus :size="15" /><span>New project</span></DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <DropdownMenu>
+              <DropdownMenuTrigger as-child>
+                <button type="button" class="session-ai-app-pill" :disabled="launchingNewSession">
+                  <Bot v-if="newSessionApp === 'claude'" :size="14" />
+                  <Code2 v-else :size="14" />
+                  <strong>{{ newSessionApp === "claude" ? "Claude" : "Codex" }}</strong>
+                  <ChevronDown :size="13" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent class="session-ai-project-menu" align="start" :side-offset="8">
+                <DropdownMenuItem v-for="app in aiSessionLaunchableApps" :key="app.id" class="session-ai-project-item" @select="newSessionApp = app.id">
+                  <Bot v-if="app.id === 'claude'" :size="14" />
+                  <Code2 v-else :size="14" />
+                  <span>{{ app.label }}</span><Check v-if="newSessionApp === app.id" :size="15" />
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+          <AiSessionComposer
+            v-model="newSessionDraft"
+            v-model:attachments="messageAttachments"
+            class="session-ai-compose session-ai-new-composer"
+            :class="{ 'is-loading': launchingNewSession }"
+            :aria-busy="launchingNewSession"
+            :busy="launchingNewSession"
+            :can-interrupt="false"
+            placeholder="Do anything"
+            @run="createNewSession"
+          />
+        </div>
+      </section>
+      <section v-else-if="selectedSession" ref="detailEl" class="session-ai-detail" :class="{ 'is-scrolled': detailScrolled }">
         <ScrollArea class="session-ai-detail-scroll">
           <section class="session-ai-detail-content">
           <div ref="detailActionsEl" class="session-ai-detail-fixed-actions session-ai-detail-head-actions">
@@ -275,6 +343,7 @@
             :busy="aiSessionActionBusy"
             :can-interrupt="canInterrupt(selectedSession)"
             :can-resolve-approval="canResolveApproval(selectedSession)"
+            :context-compactions="displayAiSessionContextCompactions(selectedSession, promptIndexFor(selectedSession))"
             :instance-id="instance.id"
             :is-latest="promptIndexFor(selectedSession) >= promptCount(selectedSession) - 1"
             :response-content="displayAiSessionResponse(selectedSession, promptIndexFor(selectedSession))"
@@ -308,22 +377,42 @@
           :can-interrupt="canInterrupt(selectedSession)"
           :mention-context="mentionContext"
           :mention-trigger="mentionTrigger"
+          :command-trigger="commandTrigger"
+          :session-busy="selectedSession?.status === 'running' || selectedSession?.status === 'waiting'"
+          @command="executeSelectedSessionCommand"
           @run="runSelectedSessionAction"
           @steer="steerMessageDraft"
         />
       </section>
-      <p v-else class="session-ai-empty session-ai-detail-empty">No AI session selected.</p>
     </div>
+    <NodeStorageFolderPickerDialog
+      :can-confirm="newProjectPicker.canConfirm.value"
+      :error="newProjectPicker.error.value"
+      :loading="newProjectPicker.loading.value"
+      :node-name="newProjectPicker.targetNode.value?.name || instance.nodeId"
+      :open="newProjectPicker.dialogOpen.value"
+      :rows="newProjectPicker.rows.value"
+      :selected-path="newProjectPicker.selectedPath.value"
+      :submit-error="newProjectPicker.submitError.value"
+      :submitting="newProjectPicker.submitting.value"
+      @confirm="confirmNewProject"
+      @refresh="newProjectPicker.loadRoots(instance.nodeId)"
+      @select="newProjectPicker.selectFolder"
+      @update:open="newProjectPicker.setOpen"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type CSSProperties } from "vue";
-import { ArrowDown, Ban, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, ExternalLink, Filter, Folder, SlidersHorizontal, X, Zap } from "@lucide/vue";
+import { ArrowDown, Ban, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Code2, ExternalLink, Filter, Folder, MoreHorizontal, Plus, SlidersHorizontal, Square, X, Zap } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
-import { bindAiSessionTrigger, interruptAiSession, removeAiSessionQueuedMessage, resolveAiSessionApproval, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, unbindAiSessionTrigger, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery } from "../../../api/queries";
-import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, TriggerConfig, TriggerDeployment, TriggerRuntimeState } from "../../../api/types";
+import { bindAiSessionTrigger, createNodeLocalFolder, interruptAiSession, launchAppSession, listNodeFolderTree, removeAiSessionQueuedMessage, resolveAiSessionApproval, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, stopAppSession, unbindAiSessionTrigger, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery } from "../../../api/queries";
+import { executeAiSessionCommand } from "../../../api/ai-session-commands";
+import type { AiSessionCommandInput } from "@task-handoff/protocol/ai-sessions";
+import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, NodeLocalFolder, TriggerConfig, TriggerDeployment, TriggerRuntimeState } from "../../../api/types";
+import type { LaunchableApp } from "../useInstanceSessions";
 import AiSessionComposer, { type AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
 import AiSessionResult from "../../../components/ai-session/AiSessionResult.vue";
 import AiSessionStreamingMarkdown from "../../../components/ai-session/AiSessionStreamingMarkdown.vue";
@@ -331,10 +420,12 @@ import AiSessionToolActivity from "../../../components/ai-session/AiSessionToolA
 import { referencesForBindings, type AiSessionMentionBinding } from "../../../components/ai-session/mentions";
 import AiSessionTurnNavigator from "../../../components/ai-session/AiSessionTurnNavigator.vue";
 import { Button } from "../../../components/ui/button";
-import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
+import NodeStorageFolderPickerDialog from "../settings/NodeStorageFolderPickerDialog.vue";
+import { useNodeStorageFolderPicker } from "../settings/useNodeStorageFolderPicker";
 import { clearAiSessionDraft, loadAiSessionDraftPayload, persistAiSessionDraftPayload } from "../useAiSessionDraft";
 import { createStreamingScrollFollow, type ScrollViewport } from "../../../lib/streaming-scroll-follow";
 import {
@@ -344,6 +435,7 @@ import {
   aiSessionStatusLabel,
   aiSessionTurns,
   displayAiSessionMessage,
+  displayAiSessionContextCompactions,
   displayAiSessionResponse,
   displayAiSessionTitle,
   sortedAiSessionsByLastUserMessage,
@@ -386,6 +478,8 @@ function storedSidebarWidth() {
 const props = defineProps<{
   activeSession: SessionTab;
   instance: InstanceWithAiSessions;
+  launchableApps?: LaunchableApp[];
+  nodeLocalFolders?: NodeLocalFolder[];
   selectedAiSession: (instance: InstanceBoardItem, sessions?: AiSessionSummary[]) => AiSessionSummary | undefined;
 }>();
 
@@ -418,6 +512,42 @@ const displayedSessionGroups = computed<AiSessionPathGroup[]>(() => groupSession
   sessions: sortedSessions.value,
 }]);
 const selectedSession = computed(() => props.selectedAiSession(props.instance, filteredSessions.value));
+const newSessionOpen = ref(false);
+const showNewSession = computed(() => newSessionOpen.value || !selectedSession.value);
+const newSessionApp = ref("");
+const newSessionFolderId = ref("");
+const newSessionDraft = ref("");
+const newSessionFolderQuery = ref("");
+const launchingNewSession = ref(false);
+const aiSessionLaunchableApps = computed(() => (props.launchableApps || []).filter((app) => app.id === "codex" || app.id === "claude"));
+const createdNewSessionFolders = ref<NodeLocalFolder[]>([]);
+const newSessionFolders = computed(() => {
+  const folders = [...(props.nodeLocalFolders || []), ...createdNewSessionFolders.value];
+  return [...new Map(folders.map((folder) => [folder.id, folder])).values()];
+});
+const newProjectPicker = useNodeStorageFolderPicker({
+  createFolder: async (nodeId, input) => {
+    const folder = await createNodeLocalFolder(nodeId, input);
+    createdNewSessionFolders.value = [...createdNewSessionFolders.value, folder];
+    newSessionFolderId.value = folder.id;
+    return folder;
+  },
+  errorText: (error) => error instanceof Error ? error.message : String(error),
+  loadFolders: listNodeFolderTree,
+  refresh: async () => {
+    await queryClient.invalidateQueries({ queryKey: ["control-plane-node-local-folders", props.instance.nodeId] });
+  },
+});
+const filteredNewSessionFolders = computed(() => {
+  const query = newSessionFolderQuery.value.trim().toLowerCase();
+  return newSessionFolders.value.filter((folder) => !query || `${folder.name} ${folder.path}`.toLowerCase().includes(query));
+});
+const newSessionFolder = computed(() => newSessionFolders.value.find((folder) => folder.id === newSessionFolderId.value));
+const newSessionProjectLabel = computed(() => {
+  if (newSessionFolder.value?.name) return newSessionFolder.value.name;
+  const sourcePath = props.instance.source.type === "local-folder" ? props.instance.source.path : "";
+  return sourcePath?.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "Choose project";
+});
 const queryClient = useQueryClient();
 const promptIndexes = ref<Record<string, { index: number; count: number }>>({});
 const collapsedPathGroups = reactive<Record<string, boolean>>({});
@@ -426,6 +556,7 @@ const messageAttachments = ref<AiSessionComposerAttachment[]>([]);
 const messageMentionBindings = ref<AiSessionMentionBinding[]>([]);
 const controlPlaneSettings = useControlPlaneSettingsQuery();
 const mentionTrigger = computed(() => controlPlaneSettings.data.value?.mentionTrigger || "@");
+const commandTrigger = computed(() => controlPlaneSettings.data.value?.commandTrigger || "/");
 const mentionContext = computed(() => {
   const session = selectedSession.value;
   if (!session?.cwd) return undefined;
@@ -451,6 +582,7 @@ let scrollFollow: ReturnType<typeof createStreamingScrollFollow> | undefined;
 const isFollowingLatest = ref(true);
 let sidebarResizeCleanup: (() => void) | undefined;
 const aiSessionActionBusy = ref(false);
+const stoppingAppSessionId = ref("");
 const triggerBusyKey = ref("");
 const triggerSearch = ref("");
 const triggers = useControlPlaneTriggersQuery();
@@ -553,6 +685,14 @@ watch(sortSessionsByStatus, (value) => {
   window.localStorage?.setItem(SORT_BY_STATUS_STORAGE_KEY, String(value));
 });
 
+watch(
+  [showNewSession, aiSessionLaunchableApps, newSessionFolders],
+  ([show]) => {
+    if (show) initializeNewSessionDefaults();
+  },
+  { immediate: true },
+);
+
 function togglePathGroup(key: string) {
   collapsedPathGroups[key] = !collapsedPathGroups[key];
 }
@@ -636,7 +776,77 @@ function nextPrompt(session: AiSessionSummary) {
 }
 
 function selectSession(sessionId: string) {
+  newSessionOpen.value = false;
   emit("selectAiSession", props.instance.id, sessionId);
+}
+
+function openNewSession() {
+  newSessionOpen.value = true;
+  newSessionDraft.value = "";
+  messageAttachments.value = [];
+  messageMentionBindings.value = [];
+  initializeNewSessionDefaults();
+}
+
+function initializeNewSessionDefaults() {
+  if (!aiSessionLaunchableApps.value.some((app) => app.id === newSessionApp.value)) {
+    newSessionApp.value = aiSessionLaunchableApps.value[0]?.id || "";
+  }
+  if (!newSessionFolders.value.some((folder) => folder.id === newSessionFolderId.value)) {
+    const sourcePath = props.instance.source.type === "local-folder" ? props.instance.source.path : "";
+    newSessionFolderId.value = newSessionFolders.value.find((folder) => folder.path === sourcePath)?.id || "";
+  }
+}
+
+function closeNewSession() {
+  if (!launchingNewSession.value) newSessionOpen.value = false;
+}
+
+function openNewProject() {
+  void newProjectPicker.openForNode({ id: props.instance.nodeId, name: props.instance.nodeId });
+}
+
+async function confirmNewProject() {
+  await newProjectPicker.confirm();
+}
+
+async function createNewSession() {
+  const message = newSessionDraft.value.trim();
+  if (!newSessionApp.value || !message || launchingNewSession.value) return;
+  launchingNewSession.value = true;
+  try {
+    const appSession = await launchAppSession(props.instance.id, { appId: newSessionApp.value, ...(newSessionFolderId.value ? { cwdFolderId: newSessionFolderId.value } : {}) });
+    const providerBinding = appSession.bindings?.find((binding) => binding.type === "provider-session");
+    let session: AiSessionSummary | undefined;
+    for (let attempt = 0; attempt < 20 && !session; attempt += 1) {
+      await refreshBoard();
+      session = (props.instance.aiSessions?.sessions || []).find((candidate) =>
+        candidate.appSessionId === appSession.id ||
+        Boolean(providerBinding?.id && candidate.providerSessionId === providerBinding.id),
+      );
+      if (!session) await new Promise((resolve) => window.setTimeout(resolve, 500));
+    }
+    if (!session) throw new Error("The new AI session is still starting. Please try again in a moment.");
+    const attachments = await uploadMessageAttachments(props.instance.id, session.id);
+    await sendAiSessionMessage(
+      props.instance.id,
+      session.id,
+      message || "请查看附件图片。",
+      undefined,
+      attachments.map((attachment) => ({ id: attachment.id, kind: attachment.kind })),
+      referencesForBindings(newSessionDraft.value, messageMentionBindings.value),
+    );
+    await refreshBoard();
+    emit("selectAiSession", props.instance.id, session.id);
+    newSessionDraft.value = "";
+    messageMentionBindings.value = [];
+    messageAttachments.value = [];
+    newSessionOpen.value = false;
+  } catch (error) {
+    showControlPlaneToast(error instanceof Error ? error.message : "Failed to start AI session.");
+  } finally {
+    launchingNewSession.value = false;
+  }
 }
 
 function canInterrupt(session: AiSessionSummary) {
@@ -693,6 +903,24 @@ async function sendSelectedSessionMessage() {
     messageAttachments.value = [];
   } catch (error) {
     showControlPlaneToast(error instanceof Error ? error.message : "Failed to send message.");
+  } finally {
+    aiSessionActionBusy.value = false;
+  }
+}
+
+async function executeSelectedSessionCommand(input: AiSessionCommandInput) {
+  const session = selectedSession.value;
+  if (!session || aiSessionActionBusy.value) return;
+  aiSessionActionBusy.value = true;
+  try {
+    const result = await executeAiSessionCommand(props.instance.id, session.id, input);
+    clearAiSessionDraft(session.id);
+    messageDraft.value = "";
+    messageMentionBindings.value = [];
+    if (input.command === "goal" && !input.argument) showControlPlaneToast(result.value || "No active goal.");
+    await refreshBoard();
+  } catch (error) {
+    showControlPlaneToast(error instanceof Error ? error.message : "Failed to run command.");
   } finally {
     aiSessionActionBusy.value = false;
   }
@@ -782,6 +1010,29 @@ async function resolveApproval(session: AiSessionSummary, decision: "allow" | "d
     showControlPlaneToast(error instanceof Error ? error.message : "Failed to resolve approval.");
   } finally {
     aiSessionActionBusy.value = false;
+  }
+}
+
+function appSessionIdFor(session: AiSessionSummary) {
+  const appSession = aiSessionAppTab(props.instance, session);
+  if (!appSession) return undefined;
+  return typeof appSession.source?.id === "string" ? appSession.source.id : appSession.key;
+}
+
+async function closeAppSession(session: AiSessionSummary) {
+  const appSessionId = appSessionIdFor(session);
+  if (!appSessionId || stoppingAppSessionId.value) {
+    return;
+  }
+  stoppingAppSessionId.value = session.id;
+  try {
+    await stopAppSession(props.instance.id, appSessionId);
+    await refreshBoard();
+  } catch (error) {
+    showControlPlaneToast(error instanceof Error ? error.message : "Failed to close app session.");
+    await refreshBoard();
+  } finally {
+    stoppingAppSessionId.value = "";
   }
 }
 
@@ -1086,3 +1337,4 @@ const emit = defineEmits<{
 </script>
 
 <style scoped src="./AiSessionPanel.css"></style>
+<style scoped src="../../../components/ai-session/AiSessionCardAction.css"></style>

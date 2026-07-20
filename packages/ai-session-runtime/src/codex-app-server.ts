@@ -1,4 +1,4 @@
-import type { AiSessionStatus } from "@task-handoff/protocol/ai-sessions";
+import type { AiSessionCommandInput, AiSessionCommandResult, AiSessionStatus } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionActionResult, AiSessionApprovalDecision, AiSessionControlProvider, AiSessionSendInput } from "./ai-session-control";
 import { aiSessionControlError } from "./ai-session-control";
 import type { AiSessionDiscoveryContext, AiSessionDiscoveryProvider } from "./ai-session-discovery";
@@ -166,6 +166,41 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
     return this.mentions.searchFiles(session, query);
   }
 
+  async executeCommand(session: AiSessionStatus, input: AiSessionCommandInput): Promise<AiSessionCommandResult> {
+    if (session.agent !== "codex" || !session.providerSessionId) {
+      throw aiSessionControlError("AI_SESSION_COMMAND_UNSUPPORTED", "Only Codex app-server sessions support commands.", 400);
+    }
+    if ((input.command === "review" || input.command === "compact") && (session.status === "running" || session.status === "waiting")) {
+      throw aiSessionControlError("AI_SESSION_BUSY", `${input.command} is unavailable while the session is busy.`, 409);
+    }
+    const client = await this.requireReadyClient();
+    const threadId = session.providerSessionId;
+    if (input.command === "review") {
+      if (!client.startReview) throw aiSessionControlError("AI_SESSION_COMMAND_UNSUPPORTED", "Codex app-server does not support review.", 409);
+      const result = await client.startReview(threadId);
+      return { command: input.command, turnId: result.turnId };
+    }
+    if (input.command === "compact") {
+      if (!client.compactThread) throw aiSessionControlError("AI_SESSION_COMMAND_UNSUPPORTED", "Codex app-server does not support compaction.", 409);
+      await client.compactThread(threadId);
+      return { command: input.command };
+    }
+    if (input.command === "rename") {
+      if (!client.setThreadName) throw aiSessionControlError("AI_SESSION_COMMAND_UNSUPPORTED", "Codex app-server does not support renaming threads.", 409);
+      await client.setThreadName(threadId, input.argument || "");
+      return { command: input.command, value: input.argument };
+    }
+    if (input.argument) {
+      if (!client.setThreadGoal) throw aiSessionControlError("AI_SESSION_COMMAND_UNSUPPORTED", "Codex app-server does not support goals.", 409);
+      await client.setThreadGoal(threadId, input.argument);
+      return { command: input.command, value: input.argument };
+    }
+    if (!client.getThreadGoal) throw aiSessionControlError("AI_SESSION_COMMAND_UNSUPPORTED", "Codex app-server does not support goals.", 409);
+    const result = await client.getThreadGoal(threadId);
+    const goal = result.goal && typeof result.goal === "object" ? result.goal as Record<string, unknown> : undefined;
+    return { command: input.command, value: typeof goal?.objective === "string" ? goal.objective : "No active goal." };
+  }
+
   private createClient(options: CodexAppServerClientOptions) {
     return this.options.createClient ? this.options.createClient(options) : new CodexAppServerClient(options);
   }
@@ -177,6 +212,20 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
     }
     if (event.type === "approval-request") {
       this.approvalCoordinator.register(event.request);
+      return;
+    }
+    if (event.type === "thread-name") {
+      const session = this.registry.getByProviderSessionId("codex", event.threadId);
+      if (session) {
+        this.registry.applyAdapterSnapshot({
+          source: "adapter-snapshot",
+          agent: "codex",
+          appId: session.appId,
+          appSessionId: session.appSessionId,
+          providerSessionId: event.threadId,
+          title: event.name,
+        });
+      }
       return;
     }
     this.projector.apply(event);

@@ -213,6 +213,30 @@ export class CodexAppServerClient extends EventEmitter {
     return result.thread && typeof result.thread === "object" ? result.thread as CodexThread : undefined;
   }
 
+  async startReview(threadId: string) {
+    const result = await this.request("review/start", {
+      threadId,
+      target: { type: "uncommittedChanges" },
+    });
+    return { turnId: turnIdFromResult(result) };
+  }
+
+  async setThreadName(threadId: string, name: string) {
+    await this.request("thread/name/set", { threadId, name });
+  }
+
+  setThreadGoal(threadId: string, objective: string) {
+    return this.request("thread/goal/set", { threadId, objective });
+  }
+
+  getThreadGoal(threadId: string) {
+    return this.request("thread/goal/get", { threadId });
+  }
+
+  async compactThread(threadId: string) {
+    await this.request("thread/compact/start", { threadId });
+  }
+
   async respondToApproval(request: CodexApprovalRequest, decision: AiSessionApprovalDecision) {
     this.sendResponse(request.id, approvalResponseForRequest(request, decision));
   }

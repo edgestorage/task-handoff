@@ -4,6 +4,8 @@ import test from "node:test";
 
 const panel = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.vue", import.meta.url), "utf8");
 const styles = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.css", import.meta.url), "utf8");
+const boardCard = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionCard.vue", import.meta.url), "utf8");
+const sharedActionStyles = fs.readFileSync(new URL("../src/components/ai-session/AiSessionCardAction.css", import.meta.url), "utf8");
 
 test("instance AI session cards match board card status and navigation behavior", () => {
   assert.doesNotMatch(panel, /<small>\{\{ aiSessionStatusLabel\(session\) \}\}<\/small>/);
@@ -40,4 +42,34 @@ test("waiting approval actions float at the bottom left of instance AI session c
 test("instance AI session card previews do not open an expanded overlay", () => {
   assert.doesNotMatch(panel, /expandedPreview|data-ai-preview-trigger|expandPrompt|expandMessage|展开用户消息|展开 AI 进展/);
   assert.doesNotMatch(styles, /session-ai-expanded|cursor: zoom-in/);
+});
+
+test("bound instance AI sessions expose the same close menu as board cards", () => {
+  assert.match(panel, /<DropdownMenu v-if="aiSessionAppTab\(instance, session\)">[\s\S]*?More actions for \$\{session\.agent\}[\s\S]*?Close app session/);
+  assert.match(panel, /await stopAppSession\(props\.instance\.id, appSessionId\);/);
+  assert.match(panel, /const appSession = aiSessionAppTab\(props\.instance, session\);/);
+  assert.match(panel, /stoppingAppSessionId === session\.id \? "Closing app session" : "Close app session"/);
+  assert.match(styles, /:global\(\.session-ai-card-menu\)/);
+  assert.match(styles, /:global\(\.session-ai-card-menu-item\.danger\)/);
+});
+
+test("instance and board cards share one action button style", () => {
+  for (const source of [panel, boardCard]) {
+    assert.match(source, /trigger-button ai-session-card-action/);
+    assert.match(source, /open ai-session-card-action/);
+    assert.match(source, /more ai-session-card-action/);
+    assert.match(source, /<style scoped src="\.\.\/\.\.\/\.\.\/components\/ai-session\/AiSessionCardAction\.css"><\/style>/);
+  }
+  assert.match(sharedActionStyles, /border: 1px solid var\(--ai-board-floating-border\)/);
+  assert.match(sharedActionStyles, /background: var\(--ai-board-floating-bg\)/);
+  assert.match(sharedActionStyles, /border-color: var\(--ai-board-floating-hover-border\)/);
+  assert.match(styles, /\.session-ai-trigger-button\[data-bound="true"\] \{\s*border-color: var\(--ai-board-active-border\);\s*color: var\(--ai-board-active-text\);/);
+  assert.doesNotMatch(styles, /\.session-ai-open\s*\{/);
+});
+
+test("an unselected AI session defaults to the new-session surface", () => {
+  assert.match(panel, /const showNewSession = computed\(\(\) => newSessionOpen\.value \|\| !selectedSession\.value\);/);
+  assert.match(panel, /<section v-if="showNewSession" class="session-ai-detail session-ai-new-detail">/);
+  assert.match(panel, /watch\(\s*\[showNewSession, aiSessionLaunchableApps, newSessionFolders\]/);
+  assert.doesNotMatch(panel, /No AI session selected\./);
 });

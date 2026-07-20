@@ -226,6 +226,33 @@ export function reduceAiSessionRealtime(
   if (event.kind === "sub-agent-activity") {
     return applyAiSessionPatch(current, { subAgents: event.subAgents }, { updatedAt, meta, suppressTurnUpdate: true });
   }
+  if (event.kind === "context-compaction" && event.contextCompaction) {
+    const turnId = event.activeTurnId || current.activeTurnId;
+    if (!turnId) return current;
+    const existing = normalizeTurns(current.turns).find((turn) => turn.id === turnId);
+    const existingCompaction = existing?.contextCompactions?.find((item) => item.id === event.contextCompaction?.id);
+    if (
+      existingCompaction?.status === "completed" ||
+      existingCompaction?.status === event.contextCompaction.status &&
+        existingCompaction.startedAt === event.contextCompaction.startedAt &&
+        existingCompaction.completedAt === event.contextCompaction.completedAt
+    ) {
+      return current;
+    }
+    return applyAiSessionPatch(current, {
+      turns: [{
+        ...existing,
+        id: turnId,
+        providerTurnId: event.providerTurnId || existing?.providerTurnId || turnId,
+        source: event.source,
+        status: existing?.status || "running",
+        phase: existing?.phase || "thinking",
+        contextCompactions: [event.contextCompaction],
+        revision: (existing?.revision || 0) + 1,
+        updatedAt,
+      }],
+    }, { updatedAt, meta, suppressPromptTurn: true });
+  }
   if (event.kind === "turn-completed") {
     const error = event.error ? compact(event.error, 4000) : undefined;
     const responseText = event.text || event.summary || (event.status === "failed" ? error : undefined);

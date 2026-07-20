@@ -70,6 +70,22 @@ export class CodexAppServerSessionProjector {
       this.options.registry.applyRealtimeEvent(session.id, { kind: "turn-started", activeTurnId: event.turnId, providerTurnId: event.turnId, source: "realtime" });
       return true;
     }
+    if (event.type === "context-compaction") {
+      this.options.registry.applyRealtimeEvent(session.id, {
+        kind: "context-compaction",
+        activeTurnId: event.turnId,
+        providerTurnId: event.turnId,
+        contextCompaction: {
+          id: event.itemId,
+          status: event.status,
+          ...(event.status === "running" && event.observedAt ? { startedAt: event.observedAt } : {}),
+          ...(event.status === "completed" && event.observedAt ? { completedAt: event.observedAt } : {}),
+        },
+        observedAt: event.observedAt,
+        source: "realtime",
+      });
+      return true;
+    }
     if (event.type === "tool-item-started") {
       if (event.subAgents?.length) this.applySubAgentUpdates(session.id, event.threadId, event.subAgents);
       this.applyToolActivity(session.id, this.toolTracker(event.threadId).started(event.tool));

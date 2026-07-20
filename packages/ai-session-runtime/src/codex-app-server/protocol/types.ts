@@ -51,8 +51,10 @@ export type CodexAppServerEvent =
   | { type: "thread"; thread: CodexThread }
   | { type: "thread-status"; threadId: string; status: CodexThreadStatus }
   | { type: "thread-closed"; threadId: string }
+  | { type: "thread-name"; threadId: string; name: string }
   | { type: "turn-started"; threadId: string; turnId?: string }
   | { type: "turn-completed"; threadId: string; turnId?: string; status?: string; error?: string }
+  | { type: "context-compaction"; threadId: string; turnId: string; itemId: string; status: "running" | "completed"; observedAt?: string }
   | { type: "approval-request"; request: CodexApprovalRequest }
   | { type: "tool-item-started"; threadId: string; turnId?: string; tool: CodexToolDescriptor; subAgents?: CodexSubAgentUpdate[] }
   | { type: "tool-item-completed"; threadId: string; turnId?: string; tool: CodexToolDescriptor; subAgents?: CodexSubAgentUpdate[] }

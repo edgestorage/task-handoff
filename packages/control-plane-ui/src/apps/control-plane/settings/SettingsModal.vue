@@ -25,6 +25,11 @@
         :mention-trigger-message="mentionTriggerMessage"
         :mention-trigger-message-error="mentionTriggerMessageError"
         :saving-mention-trigger="savingMentionTrigger"
+        v-model:command-trigger="commandTrigger"
+        :command-trigger-error="commandTriggerError"
+        :command-trigger-message="commandTriggerMessage"
+        :command-trigger-message-error="commandTriggerMessageError"
+        :saving-command-trigger="savingCommandTrigger"
         :saving-public-base-url="savingPublicBaseUrl"
         :server-current-version="serverCurrentVersion"
         :server-unavailable-reason="serverUnavailableReason"
@@ -39,6 +44,8 @@
         @save-public-base-url="savePublicBaseUrl"
         @reset-mention-trigger="saveMentionTrigger('@')"
         @save-mention-trigger="saveMentionTrigger()"
+        @reset-command-trigger="saveCommandTrigger('/')"
+        @save-command-trigger="saveCommandTrigger()"
         @update:server-update-channel="setUpdateChannel"
         @update:theme-preference="setThemePreference"
       />
@@ -578,6 +585,11 @@ const mentionTriggerMessage = ref("");
 const mentionTriggerMessageError = ref(false);
 const savingMentionTrigger = ref(false);
 const mentionTriggerError = computed(() => validMentionTrigger(mentionTrigger.value) ? "" : "Use one non-letter, non-number, non-space character except / or \\." );
+const commandTrigger = ref("/");
+const commandTriggerMessage = ref("");
+const commandTriggerMessageError = ref(false);
+const savingCommandTrigger = ref(false);
+const commandTriggerError = computed(() => validCommandTrigger(commandTrigger.value) ? "" : "Use one non-letter, non-number, non-space character except \\. It must differ from the mention trigger." );
 const remoteNodeDialogOpen = ref(false);
 const codexModels = computed(() => (models.data.value || []).filter((model) => model.app === "codex"));
 const claudeModels = computed(() => (models.data.value || []).filter((model) => model.app === "claude"));
@@ -631,6 +643,14 @@ watch(
   () => controlPlaneSettings.data.value?.mentionTrigger,
   (value) => {
     mentionTrigger.value = value || "@";
+  },
+  { immediate: true },
+);
+
+watch(
+  () => controlPlaneSettings.data.value?.commandTrigger,
+  (value) => {
+    commandTrigger.value = value || "/";
   },
   { immediate: true },
 );
@@ -1153,6 +1173,29 @@ async function saveMentionTrigger(value = mentionTrigger.value) {
 
 function validMentionTrigger(value: string) {
   return Array.from(value).length === 1 && !/[\p{L}\p{N}\s/\\]/u.test(value);
+}
+
+async function saveCommandTrigger(value = commandTrigger.value) {
+  if (savingCommandTrigger.value || !validCommandTrigger(value)) return;
+  savingCommandTrigger.value = true;
+  commandTriggerMessage.value = "";
+  commandTriggerMessageError.value = false;
+  try {
+    const saved = await updateControlPlaneSettings({ commandTrigger: value });
+    commandTrigger.value = saved.commandTrigger;
+    commandTriggerMessage.value = "Command trigger saved.";
+    queryClient.setQueryData<ControlPlaneSettings>(["control-plane-settings"], saved);
+  } catch (error) {
+    commandTriggerMessage.value = errorText(error);
+    commandTriggerMessageError.value = true;
+    showControlPlaneToast(commandTriggerMessage.value);
+  } finally {
+    savingCommandTrigger.value = false;
+  }
+}
+
+function validCommandTrigger(value: string) {
+  return Array.from(value).length === 1 && !/[\p{L}\p{N}\s\\]/u.test(value) && value !== mentionTrigger.value;
 }
 
 async function refreshChat() {

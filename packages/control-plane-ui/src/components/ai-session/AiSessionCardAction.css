@@ -1,0 +1,27 @@
+.ai-session-card-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  border: 1px solid var(--ai-board-floating-border);
+  border-radius: 6px;
+  background: var(--ai-board-floating-bg);
+  color: var(--ai-board-floating-text);
+  cursor: pointer;
+  padding: 0;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
+}
+
+.ai-session-card-action:hover,
+.ai-session-card-action:focus-visible {
+  background: var(--ai-board-floating-bg);
+  border-color: var(--ai-board-floating-hover-border);
+  color: var(--ai-board-floating-hover-text);
+  outline: none;
+}

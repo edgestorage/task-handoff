@@ -89,6 +89,7 @@
               :busy="busy"
               :can-interrupt="canInterrupt"
               :can-resolve-approval="canResolveApproval"
+              :context-compactions="displayAiSessionContextCompactions(card.session, promptIndex)"
               :instance-id="card.instance.id"
               :is-latest="promptIndex >= promptCount - 1"
               :response-content="displayAiSessionResponse(card.session, promptIndex)"
@@ -116,6 +117,8 @@
       :mention-bindings="mentionBindings"
       :mention-context="mentionContext"
       :mention-trigger="mentionTrigger"
+      :command-trigger="commandTrigger"
+      :session-busy="sessionBusy"
       :busy="busy"
       :can-interrupt="canInterrupt"
       @update:model-value="$emit('update:draft', $event)"
@@ -124,6 +127,7 @@
       @add-context="$emit('addContext')"
       @run="$emit('run')"
       @steer="$emit('steer')"
+      @command="$emit('command', $event)"
     />
   </aside>
 </template>
@@ -136,6 +140,7 @@ import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions } from
 import AiSessionComposer, { type AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
 import AiSessionResult from "../../../components/ai-session/AiSessionResult.vue";
 import type { AiSessionMentionBinding } from "../../../components/ai-session/mentions";
+import type { AiSessionCommandInput } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionMentionContext } from "../../../components/ai-session/useAiSessionMentions";
 import AiSessionTurnNavigator from "../../../components/ai-session/AiSessionTurnNavigator.vue";
 import { ScrollArea } from "../../../components/ui/scroll-area";
@@ -143,6 +148,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../
 import {
   aiSessionAppDisplayName,
   aiSessionStatusLabel,
+  displayAiSessionContextCompactions,
   displayAiSessionResponse,
   displayAiSessionTitle,
 } from "../useInstanceSessions";
@@ -159,6 +165,8 @@ const props = defineProps<{
   mentionBindings: AiSessionMentionBinding[];
   mentionContext?: AiSessionMentionContext;
   mentionTrigger: string;
+  commandTrigger: string;
+  sessionBusy: boolean;
   instanceDisplayName: (instance: InstanceBoardItem) => string;
   promptCount: number;
   promptIndex: number;
@@ -173,6 +181,7 @@ defineEmits<{
   resolveApproval: [decision: "allow" | "deny" | "skip"];
   retryQueuedMessage: [queueId: string];
   run: [];
+  command: [input: AiSessionCommandInput];
   steer: [];
   steerQueuedMessage: [queueId: string];
   "update:collapsed": [value: boolean];

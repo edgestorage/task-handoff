@@ -162,6 +162,8 @@
           :mention-bindings="messageMentionBindings"
           :mention-context="mentionContext"
           :mention-trigger="mentionTrigger"
+          :command-trigger="commandTrigger"
+          :session-busy="selectedCard.session.status === 'running' || selectedCard.session.status === 'waiting'"
           :instance-display-name="instanceDisplayName"
           :prompt-count="promptCount(selectedCard.session)"
           :prompt-index="promptIndexFor(selectedCard)"
@@ -173,6 +175,7 @@
           @resolve-approval="resolveSelectedApproval"
           @retry-queued-message="retrySelectedQueuedMessage"
           @run="runSelectedSessionAction"
+          @command="executeSelectedSessionCommand"
           @steer="steerMessageDraft"
           @steer-queued-message="steerSelectedQueuedMessage"
           @update:attachments="messageAttachments = $event"
@@ -190,6 +193,8 @@ import { useEventListener } from "@vueuse/core";
 import { Columns3, LayoutGrid, Search, SlidersHorizontal } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import { interruptAiSession, removeAiSessionQueuedMessage, resolveAiSessionApproval, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, stopAppSession, uploadAiSessionAttachment, useControlPlaneSettingsQuery } from "../../../api/queries";
+import { executeAiSessionCommand } from "../../../api/ai-session-commands";
+import type { AiSessionCommandInput } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions } from "../../../api/types";
 import type { AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
 import { referencesForBindings, type AiSessionMentionBinding } from "../../../components/ai-session/mentions";
@@ -266,6 +271,7 @@ const stoppingAppSessionKey = ref("");
 const queryClient = useQueryClient();
 const controlPlaneSettings = useControlPlaneSettingsQuery();
 const mentionTrigger = computed(() => controlPlaneSettings.data.value?.mentionTrigger || "@");
+const commandTrigger = computed(() => controlPlaneSettings.data.value?.commandTrigger || "/");
 const mentionContext = computed(() => {
   const card = selectedCard.value;
   if (!card?.session.cwd) return undefined;
@@ -682,6 +688,24 @@ async function sendSelectedSessionMessage() {
     await refreshBoard();
   } catch (error) {
     showControlPlaneToast(error instanceof Error ? error.message : "Failed to send message.");
+  } finally {
+    aiSessionActionBusy.value = false;
+  }
+}
+
+async function executeSelectedSessionCommand(input: AiSessionCommandInput) {
+  const card = selectedCard.value;
+  if (!card || aiSessionActionBusy.value) return;
+  aiSessionActionBusy.value = true;
+  try {
+    const result = await executeAiSessionCommand(card.instance.id, card.session.id, input);
+    clearAiSessionDraft(card.session.id);
+    messageDraft.value = "";
+    messageMentionBindings.value = [];
+    if (input.command === "goal" && !input.argument) showControlPlaneToast(result.value || "No active goal.");
+    await refreshBoard();
+  } catch (error) {
+    showControlPlaneToast(error instanceof Error ? error.message : "Failed to run command.");
   } finally {
     aiSessionActionBusy.value = false;
   }

@@ -1,6 +1,6 @@
 <template>
   <template v-for="app in apps" :key="app.id">
-    <DropdownMenuSub v-if="app.supportsCwdSelection && cwdFolders.length">
+    <DropdownMenuSub v-if="app.supportsCwdSelection">
       <DropdownMenuSubTrigger class="app-launch-menu-item" :disabled="launching" @click.prevent.stop="$emit('launch', app.id)">
         <Play :size="14" />
         <span>
@@ -9,12 +9,22 @@
         </span>
       </DropdownMenuSubTrigger>
       <DropdownMenuSubContent class="app-launch-menu">
-        <DropdownMenuItem v-for="folder in cwdFolders" :key="`${app.id}-${folder.id}`" class="app-launch-menu-item" :disabled="launching" @select="$emit('launch', app.id, folder.id)">
+        <div class="app-launch-project-search" @click.stop @keydown.stop>
+          <Search :size="13" />
+          <input v-model="folderSearch" type="search" placeholder="Search projects" aria-label="Search projects" />
+        </div>
+        <DropdownMenuItem v-for="folder in filteredCwdFolders" :key="`${app.id}-${folder.id}`" class="app-launch-menu-item" :disabled="launching" @select="$emit('launch', app.id, folder.id)">
           <Folder :size="14" />
           <span>
             <strong>{{ folder.name }}</strong>
             <small>{{ folder.path }}</small>
           </span>
+        </DropdownMenuItem>
+        <p v-if="!filteredCwdFolders.length" class="app-launch-project-empty">No projects found</p>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem class="app-launch-menu-item" :disabled="launching" @select="$emit('new-project')">
+          <FolderPlus :size="14" />
+          <span><strong>New project</strong><small>Add a folder from this node</small></span>
         </DropdownMenuItem>
       </DropdownMenuSubContent>
     </DropdownMenuSub>
@@ -29,12 +39,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
-import { Folder, Play } from "@lucide/vue";
+import { computed, ref } from "vue";
+import { Folder, FolderPlus, Play, Search } from "@lucide/vue";
 import type { InstanceBoardItem, NodeLocalFolder } from "../../../api/types";
 import { isSameOrChildNodePath } from "../nodePath";
 import {
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
@@ -50,22 +61,59 @@ const props = defineProps<{
 
 defineEmits<{
   launch: [appId: string, cwdFolderId?: string];
+  "new-project": [];
 }>();
 
+const folderSearch = ref("");
 const cwdFolders = computed(() => {
-  const folders = props.folders || [];
+  const uniqueFolders = [...new Map((props.folders || []).map((folder) => [folder.id, folder])).values()];
   if (isLocalRuntime()) {
-    return folders;
+    return uniqueFolders;
   }
   const source = props.instance.source;
   if (source.type !== "local-folder") {
     return [];
   }
-  return folders.filter((folder) => isSameOrChildNodePath(folder.path, source.path));
+  return uniqueFolders.filter((folder) => isSameOrChildNodePath(folder.path, source.path));
 });
-
+const filteredCwdFolders = computed(() => {
+  const query = folderSearch.value.trim().toLowerCase();
+  return cwdFolders.value.filter((folder) => !query || `${folder.name} ${folder.path}`.toLowerCase().includes(query));
+});
 function isLocalRuntime() {
   return props.instance.runtime?.type === "local" || props.instance.runtime.kind === "local";
 }
 
 </script>
+
+<style scoped>
+:global(.app-launch-project-search) {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text-muted);
+  padding: 0 8px;
+}
+
+:global(.app-launch-project-search input) {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: var(--control-plane-menu-text);
+  font-size: 12px;
+  outline: none;
+}
+
+:global(.app-launch-project-empty) {
+  display: grid;
+  place-items: center;
+  min-height: 64px;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
+}
+</style>

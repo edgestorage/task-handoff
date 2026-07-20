@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
-import { AppWindow, ArrowUp, Box, CornerDownRight, File, Folder, Plus, Puzzle, Square, WandSparkles, X } from "@lucide/vue";
+import { AppWindow, ArrowUp, Box, CornerDownRight, File, Folder, Minimize2, Pencil, Plus, Puzzle, ScanSearch, Square, Target, WandSparkles, X } from "@lucide/vue";
 import { PopoverAnchor } from "reka-ui";
 import type { AiSessionMentionCandidate } from "../../api/types";
+import type { AiSessionCommandInput } from "@task-handoff/protocol/ai-sessions";
 import { Popover, PopoverContent } from "../ui/popover";
 import { Textarea } from "../ui/textarea";
 import { mentionTokenAt, reconcileMentionBindings, replaceMentionToken, type AiSessionMentionBinding } from "./mentions";
+import { commandTokenAt, matchingCommands, parseAiSessionCommand, replaceCommandToken, type AiSessionCommandCandidate } from "./commands";
 import { useAiSessionMentions, type AiSessionMentionContext } from "./useAiSessionMentions";
 
 export type AiSessionComposerAttachment = {
@@ -28,6 +30,8 @@ const props = defineProps<{
   mentionBindings?: AiSessionMentionBinding[];
   mentionContext?: AiSessionMentionContext;
   mentionTrigger?: string;
+  commandTrigger?: string;
+  sessionBusy?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -37,6 +41,7 @@ const emit = defineEmits<{
   (event: "add-context"): void;
   (event: "run"): void;
   (event: "steer"): void;
+  (event: "command", value: AiSessionCommandInput): void;
 }>();
 
 const draft = computed({
@@ -54,8 +59,14 @@ const inputEl = ref<unknown>();
 const attachments = computed(() => props.attachments || []);
 const mentionBindings = computed(() => props.mentionBindings || []);
 const mentionTrigger = computed(() => props.mentionTrigger || "@");
+const commandTrigger = computed(() => props.commandTrigger || "/");
 const mentions = useAiSessionMentions(() => props.mentionContext);
 const activeMentionIndex = ref(0);
+const commandOpen = ref(false);
+const commandQuery = ref("");
+const activeCommandIndex = ref(0);
+const commandCandidates = computed(() => matchingCommands(commandQuery.value));
+const overlayOpen = computed(() => mentions.open.value || commandOpen.value);
 const mentionPopoverRadius = ref("20px");
 const mentionKinds = ["plugin", "skill", "file", "directory", "app"] as const;
 const mentionLabels = { plugin: "Plugins", skill: "Skills", file: "Files", directory: "Directories", app: "Apps" } as const;
@@ -209,12 +220,30 @@ function handleDrop(event: DragEvent) {
 
 function submit() {
   if (canRun.value) {
+    const command = parseAiSessionCommand(props.modelValue.trim(), commandTrigger.value, props.mentionContext?.provider);
+    if (command) {
+      emit("command", command);
+      return;
+    }
     emit("run");
   }
 }
 
 function handleInputKeydown(event: KeyboardEvent) {
   if (event.isComposing) return;
+  if (commandOpen.value) {
+    const command = commandCandidates.value[activeCommandIndex.value];
+    if ((event.key === "Enter" || event.key === "Tab") && command && !(props.sessionBusy && command.requiresIdle)) {
+      event.preventDefault();
+      selectCommand(command);
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      commandOpen.value = false;
+      return;
+    }
+  }
   if (mentions.open.value) {
     if ((event.key === "Enter" || event.key === "Tab") && mentions.candidates.value[activeMentionIndex.value]) {
       event.preventDefault();
@@ -235,6 +264,13 @@ function handleInputKeydown(event: KeyboardEvent) {
 }
 
 function moveActiveMention(direction: 1 | -1) {
+  if (commandOpen.value) {
+    const length = commandCandidates.value.length;
+    if (!length) return;
+    activeCommandIndex.value = (activeCommandIndex.value + direction + length) % length;
+    void nextTick(() => document.querySelector(".ai-session-mention-popover__item--active")?.scrollIntoView({ block: "nearest" }));
+    return;
+  }
   if (!mentions.open.value) return;
   const length = mentions.candidates.value.length;
   if (!length) return;
@@ -245,17 +281,27 @@ function moveActiveMention(direction: 1 | -1) {
 function handleComposerInput(event: Event) {
   const element = event.target as HTMLTextAreaElement;
   emit("update:mentionBindings", reconcileMentionBindings(element.value, mentionBindings.value));
-  updateMentionMenu(element.value, element.selectionStart);
+  updateOverlayMenu(element.value, element.selectionStart);
   resizeInput();
 }
 
 function handleInputKeyup(event: KeyboardEvent) {
   if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
-    updateMentionMenu();
+    updateOverlayMenu();
   }
 }
 
-function updateMentionMenu(value = props.modelValue, cursor = textareaElement()?.selectionStart ?? value.length) {
+function updateOverlayMenu(value = props.modelValue, cursor = textareaElement()?.selectionStart ?? value.length) {
+  const commandToken = commandTokenAt(value, cursor, commandTrigger.value);
+  if (commandToken && props.mentionContext?.provider === "codex") {
+    mentions.close();
+    commandOpen.value = true;
+    commandQuery.value = commandToken.query;
+    activeCommandIndex.value = 0;
+    mentionPopoverRadius.value = composerEl.value ? getComputedStyle(composerEl.value).borderRadius : "20px";
+    return;
+  }
+  commandOpen.value = false;
   const token = mentionTokenAt(value, cursor, mentionTrigger.value);
   if (!token) {
     mentions.close();
@@ -264,6 +310,29 @@ function updateMentionMenu(value = props.modelValue, cursor = textareaElement()?
   activeMentionIndex.value = 0;
   mentionPopoverRadius.value = composerEl.value ? getComputedStyle(composerEl.value).borderRadius : "20px";
   void mentions.show(token.query);
+}
+
+function selectCommand(command: AiSessionCommandCandidate, event?: Event) {
+  event?.preventDefault();
+  if (props.sessionBusy && command.requiresIdle) return;
+  const element = textareaElement();
+  const result = replaceCommandToken(element?.value ?? props.modelValue, element?.selectionStart ?? props.modelValue.length, commandTrigger.value, command);
+  if (!result) return;
+  emit("update:modelValue", result.value);
+  commandOpen.value = false;
+  void nextTick(() => {
+    const textarea = textareaElement();
+    textarea?.focus();
+    textarea?.setSelectionRange(result.cursor, result.cursor);
+    resizeInput();
+  });
+}
+
+function commandIcon(command: AiSessionCommandCandidate) {
+  if (command.name === "review") return ScanSearch;
+  if (command.name === "rename") return Pencil;
+  if (command.name === "goal") return Target;
+  return Minimize2;
 }
 
 function selectMention(candidate: AiSessionMentionCandidate, event?: Event) {
@@ -313,6 +382,7 @@ watch(() => mentions.candidates.value.length, (length) => {
 });
 
 watch(mentionTrigger, () => mentions.close());
+watch(commandTrigger, () => { commandOpen.value = false; });
 </script>
 
 <template>
@@ -325,7 +395,7 @@ watch(mentionTrigger, () => mentions.close());
         </button>
       </figure>
     </div>
-    <Popover :open="mentions.open.value" @update:open="(open) => { if (!open) mentions.close(); }">
+    <Popover :open="overlayOpen" @update:open="(open) => { if (!open) { mentions.close(); commandOpen = false; } }">
       <PopoverAnchor as-child>
         <div class="ai-session-composer__input-anchor">
           <Textarea
@@ -338,7 +408,7 @@ watch(mentionTrigger, () => mentions.close());
             @keydown.up.stop.prevent="moveActiveMention(-1)"
             @keydown="handleInputKeydown"
             @input="handleComposerInput"
-            @click="updateMentionMenu()"
+            @click="updateOverlayMenu()"
             @keyup="handleInputKeyup"
             @paste="handlePaste"
           />
@@ -356,7 +426,32 @@ watch(mentionTrigger, () => mentions.close());
         @close-auto-focus.prevent
       >
         <div class="ai-session-mention-popover__list" role="listbox">
-          <div v-if="mentions.loading.value && !mentions.candidates.value.length" class="ai-session-mention-popover__state">Loading...</div>
+          <template v-if="commandOpen">
+            <div v-if="!commandCandidates.length" class="ai-session-mention-popover__state">No matches</div>
+            <section v-else class="ai-session-mention-popover__group" role="group" aria-label="Commands">
+              <div class="ai-session-mention-popover__group-label">Commands</div>
+              <button
+                v-for="(command, index) in commandCandidates"
+                :key="command.name"
+                type="button"
+                role="option"
+                class="ai-session-mention-popover__item"
+                :class="{ 'ai-session-mention-popover__item--active': activeCommandIndex === index }"
+                :disabled="sessionBusy && command.requiresIdle"
+                :aria-selected="activeCommandIndex === index"
+                @mouseenter="activeCommandIndex = index"
+                @mousedown.prevent
+                @click="selectCommand(command, $event)"
+              >
+                <span class="ai-session-mention-popover__icon"><component :is="commandIcon(command)" :size="12" /></span>
+                <span class="ai-session-mention-popover__copy">
+                  <strong>{{ commandTrigger }}{{ command.name }}<template v-if="command.argumentHint"> &lt;{{ command.argumentHint }}&gt;</template></strong>
+                  <span>{{ sessionBusy && command.requiresIdle ? `${command.description} · available when idle` : command.description }}</span>
+                </span>
+              </button>
+            </section>
+          </template>
+          <div v-else-if="mentions.loading.value && !mentions.candidates.value.length" class="ai-session-mention-popover__state">Loading...</div>
           <div v-else-if="mentions.error.value && !mentions.candidates.value.length" class="ai-session-mention-popover__state ai-session-mention-popover__state--error">{{ mentions.error.value }}</div>
           <div v-else-if="!groupedMentionCandidates.length" class="ai-session-mention-popover__state">No matches</div>
           <section v-for="group in groupedMentionCandidates" :key="group.kind" class="ai-session-mention-popover__group" role="group" :aria-label="group.label">

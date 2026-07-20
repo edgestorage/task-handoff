@@ -119,7 +119,7 @@
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent class="board-launch-menu" align="center" :side-offset="6">
-                    <AppLaunchMenuItems :apps="launchableAppsForInstance(instance)" :folders="nodeLocalFoldersByNodeId[instance.nodeId] || []" :instance="instance" :launching="launchingApp" @launch="(appId, cwdFolderId) => launchBoardApp(instance, appId, cwdFolderId)" />
+                    <AppLaunchMenuItems :apps="launchableAppsForInstance(instance)" :folders="projectFoldersForInstance(instance)" :instance="instance" :launching="launchingApp" @launch="(appId, cwdFolderId) => launchBoardApp(instance, appId, cwdFolderId)" @new-project="openProjectPicker(instance)" />
                   </DropdownMenuContent>
                 </DropdownMenu>
                 <span v-else>{{ boardCardDetail(instance) }}</span>
@@ -153,6 +153,14 @@
         </div>
       </ScrollArea>
     </template>
+    <ProjectFolderPicker
+      v-if="projectPickerInstance"
+      :node-id="projectPickerInstance.nodeId"
+      :node-name="instanceNodeLabel(projectPickerInstance)"
+      :open="true"
+      @created="handleProjectCreated"
+      @update:open="closeProjectPicker"
+    />
   </section>
 </template>
 
@@ -171,6 +179,7 @@ import { canShowInstanceAction, imageProvisioningLabel, instanceSourceLabel, isI
 import type { InstanceListSortMode } from "../instance-list/useWorkbenchInstances";
 import InstanceViewOptionsMenu from "../shared/InstanceViewOptionsMenu.vue";
 import AppLaunchMenuItems from "../shared/AppLaunchMenuItems.vue";
+import ProjectFolderPicker from "../shared/ProjectFolderPicker.vue";
 import {
   aiSessionHeadline,
   aiSessionStatusLabel,
@@ -236,10 +245,35 @@ const emit = defineEmits<{
 }>();
 
 const boardLaunchMenuId = ref("");
+const projectPickerInstance = ref<InstanceBoardItem>();
+const createdProjectFoldersByNodeId = ref<Record<string, NodeLocalFolder[]>>({});
 
 function launchBoardApp(instance: InstanceBoardItem, appId: string, cwdFolderId?: string) {
   boardLaunchMenuId.value = "";
   emit("launchApp", instance, appId, cwdFolderId);
+}
+
+function openProjectPicker(instance: InstanceBoardItem) {
+  projectPickerInstance.value = instance;
+}
+
+function closeProjectPicker(open: boolean) {
+  if (!open) projectPickerInstance.value = undefined;
+}
+
+function handleProjectCreated(folder: NodeLocalFolder) {
+  const nodeId = projectPickerInstance.value?.nodeId;
+  if (nodeId) {
+    createdProjectFoldersByNodeId.value = {
+      ...createdProjectFoldersByNodeId.value,
+      [nodeId]: [...(createdProjectFoldersByNodeId.value[nodeId] || []), folder],
+    };
+  }
+  projectPickerInstance.value = undefined;
+}
+
+function projectFoldersForInstance(instance: InstanceBoardItem) {
+  return [...new Map([...(props.nodeLocalFoldersByNodeId[instance.nodeId] || []), ...(createdProjectFoldersByNodeId.value[instance.nodeId] || [])].map((folder) => [folder.id, folder])).values()];
 }
 
 function instanceNodeLabel(instance: InstanceBoardItem) {

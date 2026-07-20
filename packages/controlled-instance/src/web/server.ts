@@ -71,6 +71,8 @@ import {
   type AiSessionSnapshotEvent,
   type AiSessionsSnapshot,
   AiSessionMessageInputSchema,
+  AiSessionCommandInputSchema,
+  AiSessionCommandResultSchema,
   AiSessionMentionFileSearchInputSchema,
   AiSessionQueueReorderInputSchema,
 } from "@task-handoff/protocol/ai-sessions";
@@ -1218,6 +1220,19 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     try {
       const input = AiSessionMentionFileSearchInputSchema.parse(request.body || {});
       return { data: await codexAppServer.searchMentionFiles(session, input.query) };
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
+  app.post<{ Params: { id: string }; Body: unknown }>("/api/ai-sessions/:id/commands", async (request, reply) => {
+    const session = aiSessions.get(request.params.id);
+    if (!session) return reply.code(404).send({ error: { code: "AI_SESSION_NOT_FOUND", message: "AI session not found." } });
+    try {
+      const input = AiSessionCommandInputSchema.parse(request.body || {});
+      const result = AiSessionCommandResultSchema.parse(await codexAppServer.executeCommand(session, input));
+      publishAiSessionSnapshot("control-action");
+      return { data: result };
     } catch (error: unknown) {
       return sendAiSessionControlError(reply, error);
     }

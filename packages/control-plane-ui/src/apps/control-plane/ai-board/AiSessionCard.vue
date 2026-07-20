@@ -71,7 +71,7 @@
     <div class="ai-board-card-tools" aria-label="AI session card controls">
       <DropdownMenu>
         <DropdownMenuTrigger as-child>
-          <button type="button" class="ai-board-trigger-button" :data-bound="boundTriggers(card).length ? 'true' : undefined" :title="triggerButtonTitle(card)" @click.stop>
+          <button type="button" class="ai-board-trigger-button ai-session-card-action" :data-bound="boundTriggers(card).length ? 'true' : undefined" :title="triggerButtonTitle(card)" @click.stop>
             <Zap :size="13" />
             <small v-if="boundTriggers(card).length">{{ boundTriggers(card).length }}</small>
           </button>
@@ -101,12 +101,12 @@
           </template>
         </DropdownMenuContent>
       </DropdownMenu>
-      <button type="button" class="ai-board-open" :aria-label="`Open app session for ${card.session.agent}`" title="Open app session" @click.stop="$emit('openAiSessionApp', card.instance, card.session)">
+      <button type="button" class="ai-board-open ai-session-card-action" :aria-label="`Open app session for ${card.session.agent}`" title="Open app session" @click.stop="$emit('openAiSessionApp', card.instance, card.session)">
         <ExternalLink :size="14" />
       </button>
       <DropdownMenu>
         <DropdownMenuTrigger as-child>
-          <button type="button" class="ai-board-more" :aria-label="`More actions for ${card.session.agent}`" title="More actions" @click.stop>
+          <button type="button" class="ai-board-more ai-session-card-action" :aria-label="`More actions for ${card.session.agent}`" title="More actions" @click.stop>
             <MoreHorizontal :size="14" />
           </button>
         </DropdownMenuTrigger>
@@ -408,28 +408,6 @@ const filteredTriggerTemplates = computed(() => {
   color: var(--ai-board-title);
 }
 
-.ai-board-open,
-.ai-board-more,
-.ai-board-trigger-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  width: 24px;
-  min-width: 24px;
-  height: 24px;
-  border: 1px solid var(--ai-board-floating-border);
-  border-radius: 6px;
-  background: var(--ai-board-floating-bg);
-  color: var(--ai-board-floating-text);
-  cursor: pointer;
-  padding: 0;
-  transition:
-    background-color 120ms ease,
-    border-color 120ms ease,
-    color 120ms ease;
-}
-
 .ai-board-card-tools {
   display: flex;
   position: absolute;
@@ -441,29 +419,16 @@ const filteredTriggerTemplates = computed(() => {
   gap: 5px;
   width: max-content;
   max-width: calc(100% - 20px);
-  opacity: 0.86;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
   z-index: 3;
-}
-
-.ai-board-card[data-state="waiting"] .ai-board-card-tools {
-  opacity: 1;
 }
 
 .ai-board-card:hover .ai-board-card-tools,
 .ai-board-card:focus-within .ai-board-card-tools {
   opacity: 1;
-}
-
-.ai-board-open:hover,
-.ai-board-open:focus-visible,
-.ai-board-more:hover,
-.ai-board-more:focus-visible,
-.ai-board-trigger-button:hover,
-.ai-board-trigger-button:focus-visible {
-  background: var(--ai-board-floating-bg);
-  border-color: var(--ai-board-floating-hover-border);
-  color: var(--ai-board-floating-hover-text);
-  outline: none;
+  pointer-events: auto;
 }
 
 .ai-board-turn-nav {
@@ -689,3 +654,4 @@ const filteredTriggerTemplates = computed(() => {
 }
 
 </style>
+<style scoped src="../../../components/ai-session/AiSessionCardAction.css"></style>

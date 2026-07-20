@@ -9,6 +9,7 @@ export const CreateProjectInputSchema = z.object({
 }).strict();
 export const UpdateProjectInputSchema = CreateProjectInputSchema.omit({ id: true }).partial().strict();
 export const DEFAULT_MENTION_TRIGGER = "@";
+export const DEFAULT_COMMAND_TRIGGER = "/";
 
 export function isValidMentionTrigger(value: string) {
   return Array.from(value).length === 1
@@ -19,15 +20,27 @@ export function isValidMentionTrigger(value: string) {
 
 export const MentionTriggerSchema = z.string().refine(isValidMentionTrigger, "Mention trigger must be one printable non-alphanumeric character other than / or \\.");
 
+export function isValidCommandTrigger(value: string) {
+  return Array.from(value).length === 1
+    && !/[\p{L}\p{N}\s]/u.test(value)
+    && value !== "\\";
+}
+
+export const CommandTriggerSchema = z.string().refine(isValidCommandTrigger, "Command trigger must be one printable non-alphanumeric character other than \\.");
+
 export const ControlPlaneSettingsSchema = z.object({
   publicBaseUrl: z.string().trim().max(2048).optional(),
   updateChannel: UpdateChannelSchema.default("stable"),
   mentionTrigger: MentionTriggerSchema.default(DEFAULT_MENTION_TRIGGER),
-}).strict();
+  commandTrigger: CommandTriggerSchema.default(DEFAULT_COMMAND_TRIGGER),
+}).strict().refine((settings) => settings.mentionTrigger !== settings.commandTrigger, {
+  path: ["commandTrigger"], message: "Command and mention triggers must be different.",
+});
 export const UpdateControlPlaneSettingsSchema = z.object({
   publicBaseUrl: z.string().trim().max(2048).optional(),
   updateChannel: UpdateChannelSchema.optional(),
   mentionTrigger: MentionTriggerSchema.optional(),
+  commandTrigger: CommandTriggerSchema.optional(),
 }).strict();
 
 export function sanitizeStoredControlPlaneSettings(value: unknown) {
@@ -35,6 +48,9 @@ export function sanitizeStoredControlPlaneSettings(value: unknown) {
   const record = { ...(value as Record<string, unknown>) };
   if (typeof record.mentionTrigger !== "string" || !isValidMentionTrigger(record.mentionTrigger)) {
     record.mentionTrigger = DEFAULT_MENTION_TRIGGER;
+  }
+  if (typeof record.commandTrigger !== "string" || !isValidCommandTrigger(record.commandTrigger) || record.commandTrigger === record.mentionTrigger) {
+    record.commandTrigger = DEFAULT_COMMAND_TRIGGER;
   }
   return record;
 }

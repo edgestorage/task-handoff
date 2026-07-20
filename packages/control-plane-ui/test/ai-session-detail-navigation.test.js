@@ -25,7 +25,7 @@ test("AI session details render messages without redundant section titles", () =
 test("cards and details count the same display turns", () => {
   assert.match(panel, /return aiSessionTurns\(session\)\.length;/);
   assert.match(board, /return aiSessionTurns\(session\)\.length;/);
-  assert.match(displayHelpers, /const turns = aiSessionDisplayTurns\(session\);[\s\S]*?return turns\[index\]\?\.userPrompt\?\.trim\(\) \|\| "-";/);
+  assert.match(displayHelpers, /const turns = aiSessionDisplayTurns\(session\);[\s\S]*?const turn = turns\[index\];[\s\S]*?turn\?\.contextCompactions\?\.length \? "\/compact" : "-"/);
 });
 
 test("current approval summary remains visible while navigating messages", () => {

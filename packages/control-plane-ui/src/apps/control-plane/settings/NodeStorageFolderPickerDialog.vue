@@ -2,15 +2,11 @@
   <Dialog :open="open" @update:open="$emit('update:open', $event)">
     <DialogContent class="node-storage-folder-picker-dialog">
       <DialogHeader>
-        <DialogTitle>Add local folder</DialogTitle>
+        <DialogTitle>Add local folder · {{ nodeName }}</DialogTitle>
         <DialogDescription>Select a directory exposed by the target node.</DialogDescription>
       </DialogHeader>
 
       <div class="node-storage-folder-picker-body">
-        <label>
-          <span>Node</span>
-          <ControlPlaneInput :model-value="nodeName" readonly />
-        </label>
         <label>
           <span>Selected path</span>
           <ControlPlaneInput :model-value="selectedPath" placeholder="Select a folder below" readonly />

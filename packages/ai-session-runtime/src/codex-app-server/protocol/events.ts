@@ -9,6 +9,10 @@ export function codexNotification(method: string, params: JsonValue): CodexAppSe
   }
   if (method === "thread/status/changed" && typeof params.threadId === "string") return { type: "thread-status", threadId: params.threadId, status: (params.status || {}) as CodexThreadStatus };
   if (method === "thread/closed" && typeof params.threadId === "string") return { type: "thread-closed", threadId: params.threadId };
+  if (method === "thread/name/updated" && typeof params.threadId === "string" && typeof params.threadName === "string") return { type: "thread-name", threadId: params.threadId, name: params.threadName };
+  if (method === "thread/compacted" && typeof params.threadId === "string" && typeof params.turnId === "string") {
+    return { type: "context-compaction", threadId: params.threadId, turnId: params.turnId, itemId: `context_compaction:${params.turnId}`, status: "completed" };
+  }
   if (method === "turn/started" && typeof params.threadId === "string") {
     const turn = asRecord(params.turn);
     return { type: "turn-started", threadId: params.threadId, turnId: typeof turn.id === "string" ? turn.id : undefined };
@@ -19,6 +23,17 @@ export function codexNotification(method: string, params: JsonValue): CodexAppSe
   }
   if ((method === "item/started" || method === "item/completed") && typeof params.threadId === "string") {
     const item = asRecord(params.item);
+    if (item.type === "contextCompaction" && typeof params.turnId === "string" && typeof item.id === "string") {
+      const observedAt = isoTimestampFromMs(method === "item/started" ? params.startedAtMs as number | undefined : params.completedAtMs as number | undefined);
+      return {
+        type: "context-compaction",
+        threadId: params.threadId,
+        turnId: params.turnId,
+        itemId: item.id,
+        status: method === "item/started" ? "running" : "completed",
+        observedAt,
+      };
+    }
     if (item.type === "userMessage") {
       const text = textFromUserMessageItem(item);
       return text ? { type: "user-message", threadId: params.threadId, turnId: typeof params.turnId === "string" ? params.turnId : undefined, text } : undefined;
