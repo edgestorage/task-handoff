@@ -1,8 +1,8 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import TOML from "@iarna/toml";
+import { atomicWriteFileSync } from "@task-handoff/core/storage/atomic-write";
 
 type ConfigObject = Record<string, unknown>;
 type TomlMap = ReturnType<typeof TOML.parse>;
@@ -42,16 +42,7 @@ function readConfig(configPath: string) {
 }
 
 function atomicWrite(filePath: string, contents: string) {
-  const directory = path.dirname(filePath);
-  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const temporaryPath = path.join(directory, `.${path.basename(filePath)}.${process.pid}.${crypto.randomUUID()}.tmp`);
-  try {
-    fs.writeFileSync(temporaryPath, contents, { encoding: "utf8", mode: 0o600 });
-    fs.renameSync(temporaryPath, filePath);
-    fs.chmodSync(filePath, 0o600);
-  } finally {
-    fs.rmSync(temporaryPath, { force: true });
-  }
+  atomicWriteFileSync(filePath, contents);
 }
 
 /**

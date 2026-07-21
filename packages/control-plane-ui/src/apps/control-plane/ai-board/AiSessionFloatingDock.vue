@@ -9,8 +9,23 @@
         <div class="ai-board-floating-resize ai-board-floating-resize-top-right" @pointerdown.stop.prevent="startResize('top-right', $event)" />
         <header class="ai-board-floating-head">
           <div>
-            <span>{{ instanceDisplayName(card.instance) }}</span>
-            <strong>{{ aiSessionAppDisplayName(card.appTab, card.session.agent) }} · {{ aiSessionStatusLabel(card.session) }}</strong>
+            <span class="ai-board-floating-primary-line">
+              <span>{{ instanceDisplayName(card.instance) }}</span>
+            </span>
+            <strong class="ai-board-floating-secondary-line">
+              <span>{{ aiSessionAppDisplayName(card.appTab, card.session.agent) }}</span>
+              <span aria-hidden="true">·</span>
+              <span class="ai-board-floating-workspace">
+                <TooltipProvider :delay-duration="120">
+                  <Tooltip>
+                    <TooltipTrigger as-child>
+                      <b>{{ aiSessionBasename(card.session.cwd) || "Unknown folder" }}</b>
+                    </TooltipTrigger>
+                    <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ card.session.cwd || "Unknown path" }}</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </span>
+            </strong>
           </div>
           <div class="ai-board-floating-head-actions">
             <AiSessionTurnNavigator
@@ -105,7 +120,7 @@
 
       <button v-else type="button" class="ai-board-floating-restore" @click="$emit('update:collapsed', false)">
         <ChevronUp :size="14" />
-        <span>{{ aiSessionAppDisplayName(card.appTab, card.session.agent) }} · {{ aiSessionStatusLabel(card.session) }}</span>
+        <span>{{ aiSessionAppDisplayName(card.appTab, card.session.agent) }} · {{ aiSessionBasename(card.session.cwd) || "Unknown folder" }}</span>
       </button>
     </Transition>
 
@@ -146,7 +161,7 @@ import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
 import {
   aiSessionAppDisplayName,
-  aiSessionStatusLabel,
+  aiSessionBasename,
   displayAiSessionResponse,
   displayAiSessionTitle,
 } from "../useInstanceSessions";
@@ -554,6 +569,7 @@ onBeforeUnmount(() => {
 
 .ai-board-floating-head > div:first-child {
   display: grid;
+  flex: 1 1 auto;
   gap: 3px;
   min-width: 0;
 }
@@ -571,6 +587,64 @@ onBeforeUnmount(() => {
   font-weight: 850;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.ai-board-floating-workspace {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.ai-board-floating-head .ai-board-floating-workspace {
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+}
+
+.ai-board-floating-secondary-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.ai-board-floating-head .ai-board-floating-secondary-line > span:first-child,
+.ai-board-floating-head .ai-board-floating-secondary-line > span:nth-child(2) {
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+}
+
+.ai-board-floating-primary-line {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.ai-board-floating-primary-line > span:first-child {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-board-floating-workspace b {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-board-floating-workspace b {
+  flex: 0 1 auto;
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
 }
 
 .ai-board-floating-head .ai-board-floating-head-actions {

@@ -4,6 +4,7 @@ import test from "node:test";
 
 const card = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionCard.vue", import.meta.url), "utf8");
 const board = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionBoardView.vue", import.meta.url), "utf8");
+const dock = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionFloatingDock.vue", import.meta.url), "utf8");
 
 test("ai session card navigation stops at the first and last messages", () => {
   assert.match(card, /:disabled="promptIndex <= 0"/);
@@ -14,6 +15,28 @@ test("ai session card navigation stops at the first and last messages", () => {
 
 test("ai session cards do not render lifecycle status text in their headers", () => {
   assert.doesNotMatch(card, /aiSessionStatusLabel\(card\.session\)/);
+  assert.doesNotMatch(dock, /aiSessionStatusLabel\(card\.session\)/);
+});
+
+test("ai session board cards show workspace context unless paths already group the grid", () => {
+  assert.match(card, /v-if="showWorkspace" class="ai-board-workspace"/);
+  assert.match(card, /aiSessionBasename\(card\.session\.cwd\)/);
+  assert.match(card, /class="ai-board-primary-line"/);
+  assert.match(card, /class="ai-board-secondary-line"[\s\S]*aiSessionAppDisplayName[\s\S]*class="ai-board-workspace"[\s\S]*aria-hidden="true">·</);
+  assert.match(board, /:show-workspace="true"/);
+  assert.match(board, /:show-workspace="gridGroupBy !== 'path'"/);
+  assert.match(board, /class="ai-board-grid-group-workspace"/);
+  assert.match(dock, /class="ai-board-floating-workspace"/);
+  assert.match(dock, /class="ai-board-floating-primary-line"/);
+  assert.match(dock, /class="ai-board-floating-secondary-line"[\s\S]*aiSessionAppDisplayName[\s\S]*aria-hidden="true">·<[\s\S]*class="ai-board-floating-workspace"/);
+  assert.match(dock, /aiSessionBasename\(card\.session\.cwd\)/);
+  assert.match(card, /<TooltipTrigger as-child>\s*<b>/);
+  assert.match(card, /<TooltipContent[^>]*>\{\{ card\.session\.cwd \|\| "Unknown path" \}\}<\/TooltipContent>/);
+  assert.match(dock, /<TooltipTrigger as-child>\s*<b>/);
+  assert.match(dock, /<TooltipContent[^>]*>\{\{ card\.session\.cwd \|\| "Unknown path" \}\}<\/TooltipContent>/);
+  assert.match(board, /:global\(\.ai-session-path-tooltip\)\s*\{[^}]*background: var\(--surface-overlay\) !important;[^}]*font-size: 11px;/s);
+  assert.match(card, /\.ai-board-workspace b\s*\{[^}]*color: inherit;[^}]*font-weight: inherit;/s);
+  assert.match(dock, /\.ai-board-floating-workspace b\s*\{[^}]*color: inherit;[^}]*font-weight: inherit;/s);
 });
 
 test("reselecting the selected AI session card restores collapsed details", () => {

@@ -1,5 +1,15 @@
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
 const test = require("node:test");
+const ts = require("typescript");
+
+require.extensions[".ts"] = (module, filename) => {
+  const output = ts.transpileModule(fs.readFileSync(filename, "utf8"), {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, esModuleInterop: true, allowSyntheticDefaultImports: true },
+    fileName: filename,
+  });
+  module._compile(output.outputText, filename);
+};
 
 const { eventTopic } = require("../packages/protocol/src/events.ts");
 const {
@@ -8,7 +18,37 @@ const {
   triggerConfigHash,
 } = require("../packages/protocol/src/triggers.ts");
 const { TriggerExecutor } = require("../packages/controlled-instance/src/triggers/executor.ts");
+const { fileTriggerMatcher, nextScheduleTime } = require("../packages/controlled-instance/src/triggers/manager.ts");
 const { sanitizeStoredTriggerIndex } = require("../packages/controlled-instance/src/triggers/store.ts");
+
+test("file trigger globs support root files, recursive directories, and ignores", () => {
+  const matches = fileTriggerMatcher(["**/*.ts"], ["generated/**"]);
+  assert.equal(matches("index.ts"), true);
+  assert.equal(matches("src/index.ts"), true);
+  assert.equal(matches("src/deep/index.ts"), true);
+  assert.equal(matches("src/index.js"), false);
+  assert.equal(matches("generated/index.ts"), false);
+  assert.equal(matches("node_modules/pkg/index.ts"), false);
+});
+
+test("scheduled trigger calculation observes timezone daylight-saving transitions", () => {
+  const next = nextScheduleTime({
+    type: "schedule",
+    scheduleKind: "daily",
+    timeOfDay: "02:30",
+    timezone: "America/New_York",
+  }, new Date("2026-03-08T06:00:00.000Z"));
+  assert.equal(next.toISOString(), "2026-03-08T07:30:00.000Z");
+
+  const weekly = nextScheduleTime({
+    type: "schedule",
+    scheduleKind: "weekly",
+    weekdays: [1],
+    timeOfDay: "09:15",
+    timezone: "Asia/Shanghai",
+  }, new Date("2026-07-19T00:00:00.000Z"));
+  assert.equal(weekly.toISOString(), "2026-07-20T01:15:00.000Z");
+});
 
 test("trigger config hash ignores display fields and object order", () => {
   const first = triggerConfigHash({

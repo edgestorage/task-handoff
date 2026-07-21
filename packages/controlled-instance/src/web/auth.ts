@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import crypto from "node:crypto";
-import path from "node:path";
 import type { FastifyInstance, FastifyRequest } from "fastify";
+import { atomicWriteFileSync } from "@task-handoff/core/storage/atomic-write";
 import type { TaskHandoffStoragePaths } from "@task-handoff/core/storage/paths";
 
 export type WebAuthState = {
@@ -24,8 +24,7 @@ function readTokenFile(filePath: string) {
 }
 
 function writeTokenFile(filePath: string, token: string) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, `${token}\n`, { mode: 0o600 });
+  atomicWriteFileSync(filePath, `${token}\n`);
 }
 
 export function resolveWebAuth(paths: TaskHandoffStoragePaths): WebAuthState {

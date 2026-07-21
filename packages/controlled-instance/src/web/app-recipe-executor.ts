@@ -2,12 +2,17 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { createGunzip } from "node:zlib";
 import type { AppManagementOperation, AppManagementProgress, FinalComputerCapabilities } from "@task-handoff/protocol/control-plane";
 import { findManagedExecutable } from "@task-handoff/app-runtime";
 import type { ArchiveInstallRecipe, InstallRecipe, NodePackageInstallRecipe, SystemPackageInstallRecipe } from "@task-handoff/app-runtime/types";
+import { atomicWriteJsonSync } from "@task-handoff/core/storage/atomic-write";
+import { extract as extractTar, list as listTar, type ReadEntry } from "tar";
 
 const MAX_LOG_CHARS = 8_192;
 const MAX_ARCHIVE_BYTES = 512 * 1024 * 1024;
+const MAX_ARCHIVE_ENTRIES = 100_000;
+const MAX_EXTRACTED_BYTES = 2 * 1024 * 1024 * 1024;
 const PACKAGE_NAME = /^[a-zA-Z0-9][a-zA-Z0-9+._:@/-]{0,199}$/;
 const NODE_PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._-]{0,99}\/)?[a-z0-9][a-z0-9._-]{0,99}$/i;
 
@@ -195,9 +200,9 @@ function npmRetirementCleanupCommand(command: AppRecipeCommand, destination: str
 }
 
 function safeRelativeArchivePath(value: string) {
-  const normalized = value.replaceAll("\\", "/").replace(/^\.\//, "");
+  const normalized = value.replaceAll("\\", "/").replace(/^(?:\.\/)+/, "");
   if (!normalized || normalized.startsWith("/") || /^[a-zA-Z]:\//.test(normalized)) return undefined;
-  const segments = normalized.split("/").filter(Boolean);
+  const segments = normalized.split("/").filter((segment) => segment && segment !== ".");
   if (!segments.length || segments.some((segment) => segment === "..")) return undefined;
   return segments.join("/");
 }
@@ -212,16 +217,6 @@ export function validateArchiveEntries(entries: Array<{ path: string; type?: "fi
     normalized.push(safePath);
   }
   return normalized;
-}
-
-function parseTarListing(output: string) {
-  return output.split(/\r?\n/).filter(Boolean).map((line) => {
-    const type = line[0] === "d" ? "directory" : line[0] === "l" ? "symlink" : line[0] === "h" ? "hardlink" : "file";
-    const columns = line.trim().split(/\s+/);
-    const marker = columns.findIndex((value) => /^\d{4}-\d{2}-\d{2}$/.test(value));
-    const pathStart = marker >= 0 ? marker + 2 : Math.max(0, columns.length - 1);
-    return { path: columns.slice(pathStart).join(" ").split(" -> ")[0], type } as const;
-  });
 }
 
 function controlledPath(baseDir: string, relativePath: string) {
@@ -265,13 +260,6 @@ function manifestPath(stateDir: string, appId: string) {
   return path.join(stateDir, "manifests", `${appId}.json`);
 }
 
-function atomicJson(filePath: string, value: unknown) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const temporary = `${filePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
-  fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-  fs.renameSync(temporary, filePath);
-}
-
 function walkOwnedFiles(root: string, current = root): string[] {
   const values: string[] = [];
   for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
@@ -286,11 +274,174 @@ function walkOwnedFiles(root: string, current = root): string[] {
   return values;
 }
 
-async function installArchive(recipe: ArchiveInstallRecipe, context: AppRecipeExecutionContext, options: Required<Pick<AppRecipeExecutorOptions, "commandRunner" | "fetcher">> & AppRecipeExecutorOptions) {
-  const runCommand = (command: AppRecipeCommand) => {
-    context.onCommand?.({ executable: command.executable, args: [...command.args] });
-    return options.commandRunner(command, { onOutput: context.onOutput });
+function archiveEntryKind(entry: ReadEntry) {
+  if (["File", "OldFile", "ContiguousFile"].includes(entry.type)) return "file" as const;
+  if (["Directory", "GNUDumpDir"].includes(entry.type)) return "directory" as const;
+  if (entry.type === "SymbolicLink") return "symlink" as const;
+  if (entry.type === "Link") return "hardlink" as const;
+  return undefined;
+}
+
+function createArchiveValidator() {
+  const paths = new Set<string>();
+  let entries = 0;
+  let extractedBytes = 0;
+  return (entry: ReadEntry) => {
+    if (entry.meta) return true;
+    const kind = archiveEntryKind(entry);
+    if (!kind) throw new AppRecipeExecutionError("unsafe_archive", `Archive contains unsupported entry type ${entry.type}.`);
+    if (entry.path.includes("\\") || entry.path.includes("\0")) {
+      throw new AppRecipeExecutionError("unsafe_archive", "The built-in artifact contains an unsafe path.");
+    }
+    const [safePath] = validateArchiveEntries([{ path: entry.path, type: kind }]);
+    if (paths.has(safePath)) throw new AppRecipeExecutionError("unsafe_archive", `Archive contains duplicate path: ${safePath}`);
+    paths.add(safePath);
+    entries += 1;
+    if (entries > MAX_ARCHIVE_ENTRIES) throw new AppRecipeExecutionError("archive_too_large", "Artifact contains too many entries.");
+    if (!Number.isSafeInteger(entry.size) || entry.size < 0) throw new AppRecipeExecutionError("unsafe_archive", "Artifact contains an invalid entry size.");
+    extractedBytes += entry.size;
+    if (extractedBytes > MAX_EXTRACTED_BYTES) throw new AppRecipeExecutionError("archive_too_large", "Extracted artifact exceeds the managed size limit.");
+    return true;
   };
+}
+
+async function pipeArchive(recipe: ArchiveInstallRecipe, artifact: string, target: NodeJS.WritableStream, timeoutMs: number) {
+  if (recipe.format === "zip") throw new AppRecipeExecutionError("unsupported_archive_format", "ZIP managed artifacts are not enabled by this controlled instance.");
+  if (recipe.format === "tar.gz") {
+    const source = fs.createReadStream(artifact).pipe(createGunzip());
+    const timer = setTimeout(() => source.destroy(new Error(`Archive decompression timed out after ${timeoutMs}ms.`)), timeoutMs);
+    timer.unref?.();
+    try {
+      await consumeArchiveStream(source, target);
+    } finally {
+      clearTimeout(timer);
+    }
+    return;
+  }
+  const child = spawn("xz", ["-dc", "--", artifact], { shell: false, stdio: ["ignore", "pipe", "pipe"] });
+  let stderr = "";
+  let timedOut = false;
+  child.stderr.on("data", (chunk) => { stderr = bounded(stderr + String(chunk)); });
+  const completed = new Promise<void>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (code) => code === 0
+      ? resolve()
+      : reject(new Error(timedOut ? `Archive decompression timed out after ${timeoutMs}ms.` : stderr || `xz exited with code ${code}`)));
+  });
+  const timer = setTimeout(() => {
+    timedOut = true;
+    child.kill("SIGKILL");
+  }, timeoutMs);
+  timer.unref?.();
+  try {
+    await Promise.all([consumeArchiveStream(child.stdout, target), completed]);
+  } catch (error) {
+    if (child.exitCode === null) child.kill("SIGKILL");
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function consumeArchiveStream(source: NodeJS.ReadableStream & AsyncIterable<Buffer>, target: NodeJS.WritableStream) {
+  let targetError: unknown;
+  let cleanupCompletionListeners = () => {};
+  const completed = new Promise<void>((resolve) => {
+    const complete = () => {
+      cleanupCompletionListeners();
+      resolve();
+    };
+    const fail = (error: unknown) => {
+      targetError = error;
+      destroyReadable(source, error);
+      complete();
+    };
+    cleanupCompletionListeners = () => {
+      target.off("error", fail);
+      target.off("close", complete);
+      target.off("finish", complete);
+      target.off("end", complete);
+    };
+    target.once("error", fail);
+    target.once("close", complete);
+    target.once("finish", complete);
+    target.once("end", complete);
+  });
+  try {
+    for await (const chunk of source) {
+      if (targetError) throw targetError;
+      if (!target.write(chunk)) await waitForDrain(target);
+    }
+    if (targetError) throw targetError;
+    target.end();
+    await completed;
+    if (targetError) throw targetError;
+  } catch (error) {
+    abortWritable(target, error);
+    throw error;
+  } finally {
+    cleanupCompletionListeners();
+  }
+}
+
+function waitForDrain(target: NodeJS.WritableStream) {
+  return new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      target.off("drain", drained);
+      target.off("error", failed);
+      target.off("close", closed);
+    };
+    const drained = () => {
+      cleanup();
+      resolve();
+    };
+    const failed = (error: unknown) => {
+      cleanup();
+      reject(error);
+    };
+    const closed = () => {
+      cleanup();
+      reject(new Error("Archive parser closed before accepting the complete stream."));
+    };
+    target.once("drain", drained);
+    target.once("error", failed);
+    target.once("close", closed);
+  });
+}
+
+function destroyReadable(source: NodeJS.ReadableStream, error: unknown) {
+  const destroy = (source as NodeJS.ReadableStream & { destroy?: (error?: Error) => void }).destroy;
+  if (typeof destroy === "function") destroy.call(source, error instanceof Error ? error : new Error(String(error)));
+}
+
+function abortWritable(target: NodeJS.WritableStream, error: unknown) {
+  const abort = (target as NodeJS.WritableStream & { abort?: (error?: Error) => void }).abort;
+  if (typeof abort === "function") abort.call(target, error instanceof Error ? error : new Error(String(error)));
+}
+
+async function inspectArchive(recipe: ArchiveInstallRecipe, artifact: string) {
+  const validate = createArchiveValidator();
+  const parser = listTar({ strict: true, maxMetaEntrySize: 1024 * 1024, filter: (_entryPath, entry) => validate(entry as ReadEntry) });
+  await pipeArchive(recipe, artifact, parser, 60_000);
+}
+
+async function extractArchive(recipe: ArchiveInstallRecipe, artifact: string, destination: string) {
+  const validate = createArchiveValidator();
+  const unpack = extractTar({
+    cwd: destination,
+    strict: true,
+    preservePaths: false,
+    preserveOwner: false,
+    chmod: false,
+    maxDepth: 100,
+    unlink: true,
+    maxMetaEntrySize: 1024 * 1024,
+    filter: (_entryPath, entry) => validate(entry as ReadEntry),
+  });
+  await pipeArchive(recipe, artifact, unpack, 5 * 60_000);
+}
+
+async function installArchive(recipe: ArchiveInstallRecipe, context: AppRecipeExecutionContext, options: Required<Pick<AppRecipeExecutorOptions, "commandRunner" | "fetcher">> & AppRecipeExecutorOptions) {
   const installRoot = controlledPath(options.installBaseDir, recipe.installRoot);
   if (fs.existsSync(installRoot)) throw new AppRecipeExecutionError("install_target_exists", "The managed install target already exists.");
   fs.mkdirSync(path.dirname(installRoot), { recursive: true });
@@ -301,23 +452,29 @@ async function installArchive(recipe: ArchiveInstallRecipe, context: AppRecipeEx
     context.onPhase?.("download");
     await downloadArtifact(recipe.url, artifact, recipe.sha256, options.fetcher, context.onPhase);
     context.onPhase?.("inspect");
-    if (recipe.format === "zip") throw new AppRecipeExecutionError("unsupported_archive_format", "ZIP managed artifacts are not enabled by this controlled instance.");
-    const compression = recipe.format === "tar.gz" ? "-tzvf" : "-tJvf";
-    const listing = await runCommand({ executable: "tar", args: [compression, artifact], timeoutMs: 60_000 });
-    if (listing.exitCode !== 0) throw new AppRecipeExecutionError("archive_inspection_failed", bounded(listing.stderr) || "Artifact could not be inspected.");
-    validateArchiveEntries(parseTarListing(listing.stdout));
+    try {
+      await inspectArchive(recipe, artifact);
+    } catch (error) {
+      if (error instanceof AppRecipeExecutionError) throw error;
+      throw new AppRecipeExecutionError("archive_inspection_failed", error instanceof Error ? error.message : "Artifact could not be inspected.");
+    }
     fs.mkdirSync(extracted, { recursive: true });
     context.onPhase?.("extract");
-    const extractCompression = recipe.format === "tar.gz" ? "-xzvf" : "-xJvf";
-    const extraction = await runCommand({
-      executable: "tar",
-      args: [extractCompression, artifact, "--no-same-owner", "--no-same-permissions", "-C", extracted],
-      timeoutMs: 5 * 60_000,
-    });
-    if (extraction.exitCode !== 0) throw new AppRecipeExecutionError("archive_extraction_failed", bounded(extraction.stderr) || "Artifact could not be extracted.");
+    try {
+      await extractArchive(recipe, artifact, extracted);
+    } catch (error) {
+      if (error instanceof AppRecipeExecutionError) throw error;
+      throw new AppRecipeExecutionError("archive_extraction_failed", error instanceof Error ? error.message : "Artifact could not be extracted.");
+    }
     const files = walkOwnedFiles(extracted);
-    fs.renameSync(extracted, installRoot);
-    atomicJson(manifestPath(options.stateDir, context.appId), { schemaVersion: 1, appId: context.appId, installRoot, files });
+    const ownershipManifest = manifestPath(options.stateDir, context.appId);
+    atomicWriteJsonSync(ownershipManifest, { schemaVersion: 1, appId: context.appId, installRoot, files });
+    try {
+      fs.renameSync(extracted, installRoot);
+    } catch (error) {
+      fs.rmSync(ownershipManifest, { force: true });
+      throw error;
+    }
   } finally {
     fs.rmSync(staging, { recursive: true, force: true });
   }

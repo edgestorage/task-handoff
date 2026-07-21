@@ -83,6 +83,7 @@
                 :prompt-count="promptCount(card.session)"
                 :prompt-index="promptIndexFor(card)"
                 :selected="selectedCardKey === card.key"
+                :show-workspace="true"
                 :short-hash="shortHash"
                 :stopping-app-session-key="stoppingAppSessionKey"
                 :trigger-action-key="triggerActionKey"
@@ -111,7 +112,17 @@
         <div class="ai-board-grid">
           <template v-for="group in gridGroups" :key="group.key">
             <div v-if="gridGroupBy !== 'none'" class="ai-board-grid-group-label">
-              <span>{{ group.label }}</span>
+              <span v-if="gridGroupBy === 'path'" class="ai-board-grid-group-workspace">
+                <TooltipProvider :delay-duration="120">
+                  <Tooltip>
+                    <TooltipTrigger as-child>
+                      <b>{{ aiSessionBasename(group.label) || group.label }}</b>
+                    </TooltipTrigger>
+                    <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ group.label }}</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </span>
+              <span v-else>{{ group.label }}</span>
               <strong>{{ group.cards.length }}</strong>
             </div>
             <AiSessionCard
@@ -126,6 +137,7 @@
               :prompt-count="promptCount(card.session)"
               :prompt-index="promptIndexFor(card)"
               :selected="selectedCardKey === card.key"
+              :show-workspace="gridGroupBy !== 'path'"
               :short-hash="shortHash"
               :stopping-app-session-key="stoppingAppSessionKey"
               :trigger-action-key="triggerActionKey"
@@ -210,10 +222,12 @@ import {
   DropdownMenuTrigger,
 } from "../../../components/ui/dropdown-menu";
 import { ScrollArea } from "../../../components/ui/scroll-area";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 import { clearAiSessionDraft, loadAiSessionDraftPayload, persistAiSessionDraftPayload } from "../useAiSessionDraft";
 import {
   aiSessionAppTab,
+  aiSessionBasename,
   aiSessionStableSortKey,
   aiSessionTurns,
   appDisplayName,
@@ -1265,10 +1279,43 @@ watch([() => selectedCard.value?.session.id, messageDraft, messageMentionBinding
   white-space: nowrap;
 }
 
+.ai-board-grid-group-workspace {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+}
+
+.ai-board-grid-group-workspace b {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ai-board-title);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .ai-board-grid-group-label strong {
   flex: 0 0 auto;
   color: var(--ai-board-muted);
   font-size: 11px;
+}
+
+:global(.ai-session-path-tooltip) {
+  max-width: min(480px, calc(100vw - 24px));
+  overflow-wrap: anywhere;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-overlay) !important;
+  box-shadow: var(--shadow-popover);
+  color: var(--text) !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  font-weight: 450;
+  line-height: 1.4;
+  padding: 6px 9px;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 .ai-board-empty {

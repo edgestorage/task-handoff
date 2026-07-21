@@ -82,13 +82,18 @@
                 type="button"
                 class="session-ai-path-group-head"
                 :aria-expanded="!collapsedPathGroups[group.key]"
-                :title="group.key"
                 @click="togglePathGroup(group.key)"
               >
                 <Folder class="session-ai-path-group-icon" :size="15" />
                 <span class="session-ai-path-group-text">
-                  <span class="session-ai-path-group-title">{{ group.label }}</span>
-                  <small v-if="group.parentLabel">{{ group.parentLabel }}</small>
+                  <TooltipProvider :delay-duration="120">
+                    <Tooltip>
+                      <TooltipTrigger as-child>
+                        <span class="session-ai-path-group-title">{{ group.label }}</span>
+                      </TooltipTrigger>
+                      <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ group.key }}</TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                 </span>
                 <ChevronRight class="session-ai-path-group-chevron" :class="{ open: !collapsedPathGroups[group.key] }" :size="15" />
                 <strong>{{ group.sessions.length }}</strong>
@@ -111,7 +116,20 @@
                 >
                   <div class="session-ai-state">
                     <span class="session-ai-dot" />
-                    <strong>{{ aiSessionAppDisplayName(aiSessionAppTab(instance, session), session.agent) }}</strong>
+                    <span class="session-ai-state-line">
+                      <strong>{{ aiSessionAppDisplayName(aiSessionAppTab(instance, session), session.agent) }}</strong>
+                      <span v-if="!groupSessionsByPath" class="session-ai-card-workspace">
+                        <span aria-hidden="true">·</span>
+                        <TooltipProvider :delay-duration="120">
+                          <Tooltip>
+                            <TooltipTrigger as-child>
+                              <b>{{ aiSessionBasename(session.cwd) || "Unknown folder" }}</b>
+                            </TooltipTrigger>
+                            <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ session.cwd || "Unknown path" }}</TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      </span>
+                    </span>
                   </div>
                   <div class="session-ai-preview-field session-ai-preview-field-user">
                     <MarkdownContent class="session-ai-question" :content="displayAiSessionTitle(session, promptIndexFor(session))" />
@@ -243,13 +261,18 @@
                   type="button"
                   class="session-ai-path-group-head"
                   :aria-expanded="!collapsedHistoryPathGroups[group.key]"
-                  :title="group.key"
                   @click="toggleHistoryPathGroup(group.key)"
                 >
                   <Folder class="session-ai-path-group-icon" :size="15" />
                   <span class="session-ai-path-group-text">
-                    <span class="session-ai-path-group-title">{{ group.label }}</span>
-                    <small v-if="group.parentLabel">{{ group.parentLabel }}</small>
+                    <TooltipProvider :delay-duration="120">
+                      <Tooltip>
+                        <TooltipTrigger as-child>
+                          <span class="session-ai-path-group-title">{{ group.label }}</span>
+                        </TooltipTrigger>
+                        <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ group.key }}</TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
                   </span>
                   <ChevronRight class="session-ai-path-group-chevron" :class="{ open: !collapsedHistoryPathGroups[group.key] }" :size="15" />
                   <strong>{{ group.items.length }}</strong>
@@ -578,6 +601,7 @@ import { createStreamingScrollFollow, type ScrollViewport } from "../../../lib/s
 import {
   aiSessionAppDisplayName,
   aiSessionAppTab,
+  aiSessionBasename,
   aiSessionLastUserMessageTime,
   aiSessionStatusLabel,
   aiSessionTurns,
@@ -841,8 +865,8 @@ function aiSessionPathLabel(path: string) {
   if (path === "Unknown path") {
     return { label: path, parentLabel: "" };
   }
-  const normalized = path.replace(/\/+$/, "");
-  const index = normalized.lastIndexOf("/");
+  const normalized = path.replace(/[\\/]+$/, "");
+  const index = Math.max(normalized.lastIndexOf("/"), normalized.lastIndexOf("\\"));
   if (index <= 0) {
     return { label: normalized || path, parentLabel: "" };
   }

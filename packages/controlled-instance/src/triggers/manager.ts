@@ -1,5 +1,7 @@
-import fs from "node:fs";
 import path from "node:path";
+import { watch, type FSWatcher } from "chokidar";
+import { CronExpressionParser } from "cron-parser";
+import picomatch from "picomatch";
 import type { AiSessionsSnapshot, AiSessionSummary } from "@task-handoff/protocol/ai-sessions";
 import type { TriggerConfig, TriggerDeployment, TriggerRun } from "@task-handoff/protocol/triggers";
 import type { TaskHandoffStoragePaths } from "@task-handoff/core/storage/paths";
@@ -9,7 +11,7 @@ import type { TriggerStore } from "./store.ts";
 type Timer = ReturnType<typeof setInterval> | ReturnType<typeof setTimeout>;
 
 type WatchState = {
-  watchers: fs.FSWatcher[];
+  watcher: FSWatcher;
   debounce?: ReturnType<typeof setTimeout>;
   changed: Set<string>;
 };
@@ -56,9 +58,7 @@ export class TriggerManager {
     }
     this.timers.clear();
     for (const state of this.watches.values()) {
-      for (const watcher of state.watchers) {
-        watcher.close();
-      }
+      void state.watcher.close();
       if (state.debounce) {
         clearTimeout(state.debounce);
       }
@@ -127,49 +127,38 @@ export class TriggerManager {
     }
     const source = config.source;
     const key = deploymentKey(deployment);
-    const state: WatchState = { watchers: [], changed: new Set() };
-    for (const root of config.source.roots) {
-      const resolved = path.resolve(root);
-      const workspace = workspacePath();
-      if (!resolved.startsWith(workspace)) {
-        continue;
-      }
-      if (!fs.existsSync(resolved)) {
-        continue;
-      }
-      for (const watchRoot of watchRoots(resolved)) {
-        const watcher = fs.watch(watchRoot, (_event, filename) => {
-          const file = filename ? path.join(watchRoot, String(filename)) : watchRoot;
-          if (!this.fileMatches(config, file)) {
-            return;
-          }
-          state.changed.add(path.relative(workspace, file));
-          if (state.debounce) {
-            clearTimeout(state.debounce);
-          }
-          state.debounce = setTimeout(() => {
-            const files = [...state.changed].sort();
-            state.changed.clear();
-            void this.execute(config, deployment, "file-change", `Changed files:\n${files.join("\n")}`);
-          }, source.debounceMs);
-        });
-        state.watchers.push(watcher);
-      }
-    }
-    if (state.watchers.length) {
-      this.watches.set(key, state);
-    }
-  }
-
-  private fileMatches(config: TriggerConfig, file: string) {
-    if (config.source.type !== "file-change") {
-      return false;
-    }
-    const relative = path.relative(workspacePath(), file).replaceAll(path.sep, "/");
-    if (defaultIgnored(relative) || (config.source.ignore || []).some((pattern) => globLike(pattern, relative))) {
-      return false;
-    }
-    return config.source.globs.some((pattern) => globLike(pattern, relative));
+    const workspace = workspacePath();
+    const roots = source.roots.map((root) => path.resolve(root)).filter((root) => pathWithin(workspace, root));
+    if (!roots.length) return;
+    const matches = fileTriggerMatcher(source.globs, source.ignore || []);
+    const watcher = watch(roots, {
+      atomic: true,
+      awaitWriteFinish: { stabilityThreshold: Math.min(source.debounceMs, 500), pollInterval: 50 },
+      followSymlinks: false,
+      ignoreInitial: true,
+      ignored: (file, stats) => {
+        if (!pathWithin(workspace, path.resolve(file))) return true;
+        const relative = relativeWorkspacePath(workspace, file);
+        return Boolean(relative && defaultIgnored(stats?.isDirectory() ? `${relative}/` : relative));
+      },
+    });
+    const state: WatchState = { watcher, changed: new Set() };
+    watcher.on("all", (event, file) => {
+      if (event !== "add" && event !== "change" && event !== "unlink") return;
+      const relative = relativeWorkspacePath(workspace, file);
+      if (!relative || !matches(relative)) return;
+      state.changed.add(relative);
+      if (state.debounce) clearTimeout(state.debounce);
+      state.debounce = setTimeout(() => {
+        const files = [...state.changed].sort();
+        state.changed.clear();
+        void this.execute(config, deployment, "file-change", `Changed files:\n${files.join("\n")}`);
+      }, source.debounceMs);
+    });
+    watcher.on("error", (error) => {
+      this.publish?.("trigger.watch.failed", { configHash: config.configHash, deploymentId: deployment.deploymentId, error: error instanceof Error ? error.message : String(error) });
+    });
+    this.watches.set(key, state);
   }
 
   private aiSessionMatches(config: TriggerConfig, session: AiSessionSummary) {
@@ -234,23 +223,16 @@ function deploymentKey(deployment: Pick<TriggerDeployment, "configHash" | "deplo
   return deployment.deploymentId || deployment.configHash;
 }
 
-function nextScheduleTime(source: Extract<TriggerConfig["source"], { type: "schedule" }>) {
+export function nextScheduleTime(source: Extract<TriggerConfig["source"], { type: "schedule" }>, now = new Date()) {
   if ("intervalMs" in source) {
-    return new Date(Date.now() + source.intervalMs);
+    return new Date(now.getTime() + source.intervalMs);
   }
   const [hour, minute] = source.timeOfDay.split(":").map(Number);
-  const now = new Date();
-  for (let dayOffset = 0; dayOffset <= 14; dayOffset += 1) {
-    const base = new Date(now.getTime() + dayOffset * 86_400_000);
-    if (source.scheduleKind === "weekly" && !source.weekdays.includes(zonedParts(base, source.timezone).weekday)) {
-      continue;
-    }
-    const candidate = zonedDateTime(base, source.timezone, hour, minute);
-    if (candidate.getTime() > now.getTime() + 500) {
-      return candidate;
-    }
-  }
-  return new Date(Date.now() + 86_400_000);
+  const weekdays = source.scheduleKind === "weekly" ? source.weekdays.join(",") : "*";
+  return CronExpressionParser
+    .parse(`0 ${minute} ${hour} * * ${weekdays}`, { currentDate: now, strict: true, tz: source.timezone })
+    .next()
+    .toDate();
 }
 
 function scheduleSummary(source: Extract<TriggerConfig["source"], { type: "schedule" }>) {
@@ -263,38 +245,6 @@ function scheduleSummary(source: Extract<TriggerConfig["source"], { type: "sched
   return `Weekly on ${source.weekdays.join(",")} at ${source.timeOfDay} ${source.timezone}`;
 }
 
-function zonedDateTime(day: Date, timeZone: string, hour: number, minute: number) {
-  const parts = zonedParts(day, timeZone);
-  const utcGuess = Date.UTC(parts.year, parts.month - 1, parts.day, hour, minute, 0, 0);
-  const guess = new Date(utcGuess);
-  const guessParts = zonedParts(guess, timeZone);
-  const offsetMinutes = (Date.UTC(guessParts.year, guessParts.month - 1, guessParts.day, guessParts.hour, guessParts.minute) - guess.getTime()) / 60_000;
-  return new Date(utcGuess - offsetMinutes * 60_000);
-}
-
-function zonedParts(date: Date, timeZone: string) {
-  const values = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    weekday: "short",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(date);
-  const value = (type: Intl.DateTimeFormatPartTypes) => values.find((part) => part.type === type)?.value || "";
-  const weekdayMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
-  return {
-    year: Number(value("year")),
-    month: Number(value("month")),
-    day: Number(value("day")),
-    hour: Number(value("hour")),
-    minute: Number(value("minute")),
-    weekday: weekdayMap[value("weekday")] ?? 0,
-  };
-}
-
 function workspacePath() {
   return path.resolve(process.env.TASK_HANDOFF_WORKSPACE || process.env.WORKSPACE || "/workspace");
 }
@@ -303,43 +253,19 @@ function defaultIgnored(relative: string) {
   return /(^|\/)(\.git|node_modules|dist|build)\//.test(relative) || /\.(log|tmp|swp)$/.test(relative);
 }
 
-function globLike(pattern: string, value: string) {
-  if (pattern === "**/*" || pattern === "**") {
-    return true;
-  }
-  const escaped = pattern
-    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-    .replaceAll("**", ".*")
-    .replaceAll("*", "[^/]*");
-  return new RegExp(`^${escaped}$`).test(value);
+export function fileTriggerMatcher(globs: string[], ignored: string[] = []) {
+  const included = picomatch(globs, { dot: true });
+  const excluded = ignored.length ? picomatch(ignored, { dot: true }) : () => false;
+  return (relative: string) => !defaultIgnored(relative) && !excluded(relative) && included(relative);
 }
 
-function watchRoots(root: string) {
-  if (process.platform === "darwin" || process.platform === "win32") {
-    return [root];
-  }
-  const roots = [root];
-  const stack = [root];
-  while (stack.length) {
-    const current = stack.pop() as string;
-    let entries: fs.Dirent[] = [];
-    try {
-      entries = fs.readdirSync(current, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      if (!entry.isDirectory()) {
-        continue;
-      }
-      const child = path.join(current, entry.name);
-      const relative = path.relative(workspacePath(), child).replaceAll(path.sep, "/");
-      if (defaultIgnored(`${relative}/`)) {
-        continue;
-      }
-      roots.push(child);
-      stack.push(child);
-    }
-  }
-  return roots;
+function pathWithin(root: string, candidate: string) {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
+}
+
+function relativeWorkspacePath(workspace: string, file: string) {
+  const resolved = path.resolve(file);
+  if (!pathWithin(workspace, resolved)) return "";
+  return path.relative(workspace, resolved).split(path.sep).join("/");
 }

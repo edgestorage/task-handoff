@@ -1,7 +1,6 @@
 import fs from "node:fs";
-import path from "node:path";
-import writeFileAtomic from "write-file-atomic";
 import { z } from "zod";
+import { atomicWriteJsonSync } from "./atomic-write.ts";
 
 const JsonObjectSchema = z.record(z.string(), z.unknown());
 
@@ -40,8 +39,7 @@ export class DomainStore<T> {
   }
 
   save(value: T) {
-    fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-    writeFileAtomic.sync(this.filePath, `${JSON.stringify(this.options.schema.parse(value), null, 2)}\n`, { mode: 0o600 });
+    atomicWriteJsonSync(this.filePath, this.options.schema.parse(value));
   }
 
   patch(patch: Record<string, unknown>) {

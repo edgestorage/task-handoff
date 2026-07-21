@@ -15,6 +15,16 @@ test("instance AI session cards match board card status and navigation behavior"
   assert.doesNotMatch(panel, /\(index \+ count\) % count/);
 });
 
+test("AI session path labels show only the folder and reveal the full path when hovered", () => {
+  assert.match(panel, /v-if="!groupSessionsByPath" class="session-ai-card-workspace"/);
+  assert.match(panel, /class="session-ai-card-workspace">\s*<span aria-hidden="true">·<\/span>/);
+  assert.match(panel, /aiSessionBasename\(session\.cwd\)/);
+  assert.match(panel, /<TooltipTrigger as-child>\s*<b>/);
+  assert.match(panel, /<TooltipContent[^>]*>\{\{ session\.cwd \|\| "Unknown path" \}\}<\/TooltipContent>/);
+  assert.match(panel, /<TooltipTrigger as-child>\s*<span class="session-ai-path-group-title">/);
+  assert.match(styles, /\.session-ai-card-workspace b\s*\{[^}]*color: inherit;[^}]*font-weight: inherit;/s);
+});
+
 test("instance AI session card user messages use a single unpadded line", () => {
   assert.match(styles, /\.session-ai-preview-field-user\s*\{[^}]*max-height: 18px;[^}]*padding-block: 0;/s);
   assert.match(styles, /\.session-ai-question\s*\{[^}]*-webkit-line-clamp: 1;/s);

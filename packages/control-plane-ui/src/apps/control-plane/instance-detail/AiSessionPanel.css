@@ -894,8 +894,7 @@
   min-width: 0;
 }
 
-.session-ai-path-group-title,
-.session-ai-path-group-text small {
+.session-ai-path-group-title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -907,14 +906,6 @@
   color: var(--terminal-text);
   font-size: 13px;
   font-weight: 650;
-}
-
-.session-ai-path-group-text small {
-  min-width: 28px;
-  flex: 1 1 auto;
-  color: var(--text-muted);
-  font-size: 11px;
-  font-weight: 400;
 }
 
 .session-ai-path-group-icon {
@@ -1013,6 +1004,58 @@
   gap: 8px;
   align-items: center;
   padding-right: 127px;
+}
+
+.session-ai-state-line,
+.session-ai-card-workspace {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.session-ai-state-line {
+  gap: 10px;
+}
+
+.session-ai-state-line > strong {
+  flex: 0 1 auto;
+}
+
+.session-ai-card-workspace {
+  flex: 1 1 auto;
+  gap: 6px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.session-ai-card-workspace b {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:global(.ai-session-path-tooltip) {
+  max-width: min(480px, calc(100vw - 24px));
+  overflow-wrap: anywhere;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-overlay) !important;
+  box-shadow: var(--shadow-popover);
+  color: var(--text) !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  font-weight: 450;
+  line-height: 1.4;
+  padding: 6px 9px;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.session-ai-card-workspace b {
+  flex: 0 1 auto;
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
 }
 
 .session-ai-select {

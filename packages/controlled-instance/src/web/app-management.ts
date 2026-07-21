@@ -22,6 +22,7 @@ import {
 } from "@task-handoff/app-runtime";
 import type { ManagedAppOwnershipResult } from "@task-handoff/app-runtime";
 import type { InstallRecipe, ManagedAppDefinition, ManagedAppDetectionResult } from "@task-handoff/app-runtime/types";
+import { atomicWriteJsonSync } from "@task-handoff/core/storage/atomic-write";
 import { AppRecipeExecutionError, createAppRecipeExecutor, type AppRecipeExecutionContext } from "./app-recipe-executor";
 
 const ACTIVE_STATES = new Set<AppManagementJob["state"]>(["queued", "running"]);
@@ -116,11 +117,8 @@ export class AppManagementJobStore {
   }
 
   private flush() {
-    fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
     const payload: StoredJobs = { schemaVersion: 1, jobs: this.list() };
-    const temporary = `${this.filePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
-    fs.writeFileSync(temporary, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
-    fs.renameSync(temporary, this.filePath);
+    atomicWriteJsonSync(this.filePath, payload);
   }
 }
 

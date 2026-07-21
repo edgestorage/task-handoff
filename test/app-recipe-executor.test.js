@@ -3,7 +3,9 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 const test = require("node:test");
+const tar = require("tar");
 const ts = require("typescript");
 const { registerWorkspaceRequire } = require("./workspace-require.js");
 
@@ -24,6 +26,17 @@ const {
 } = require("../packages/controlled-instance/src/web/app-recipe-executor.ts");
 
 const capabilities = { platform: "linux", arch: "x64", installers: ["apt"], privilege: "passwordless-sudo" };
+const hasXz = !spawnSync("xz", ["--version"], { stdio: "ignore" }).error;
+
+async function tarArchive(root, options = {}) {
+  const source = path.join(root, "archive-source");
+  fs.mkdirSync(path.join(source, "bin"), { recursive: true });
+  fs.writeFileSync(path.join(source, "bin", "tool"), "tool\n");
+  if (options.symlink) fs.symlinkSync("tool", path.join(source, "bin", "tool-link"));
+  const file = path.join(root, options.gzip === false ? "artifact.tar" : "artifact.tar.gz");
+  await tar.create({ cwd: source, file, gzip: options.gzip !== false, portable: true }, ["bin"]);
+  return fs.readFileSync(file);
+}
 
 test("timed out commands do not settle until an ignoring child process is killed", { skip: process.platform === "win32" }, async () => {
   const startedAt = Date.now();
@@ -218,22 +231,14 @@ test("archive install verifies checksum before extraction and uninstall preserve
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-app-recipe-"));
   const installBaseDir = path.join(root, "apps");
   const stateDir = path.join(root, "state");
-  const artifact = Buffer.from("trusted artifact bytes");
+  const artifact = await tarArchive(root);
   const sha256 = crypto.createHash("sha256").update(artifact).digest("hex");
   const phases = [];
   const execute = createAppRecipeExecutor({
     installBaseDir,
     stateDir,
     fetcher: async () => new Response(artifact, { status: 200, headers: { "content-length": String(artifact.length) } }),
-    commandRunner: async (command) => {
-      if (command.args[0] === "-tzvf") {
-        return { exitCode: 0, stdout: "-rw-r--r-- user group 5 2026-07-16 00:00 bin/tool\n", stderr: "" };
-      }
-      const destination = command.args[command.args.indexOf("-C") + 1];
-      fs.mkdirSync(path.join(destination, "bin"), { recursive: true });
-      fs.writeFileSync(path.join(destination, "bin", "tool"), "tool\n");
-      return { exitCode: 0, stdout: "bin/tool\n", stderr: "" };
-    },
+    commandRunner: async () => assert.fail("archive extraction must not invoke a system tar command"),
   });
   const recipe = { type: "archive", platforms: ["linux"], url: "https://downloads.example.test/tool.tar.gz", sha256, format: "tar.gz", installRoot: "tool" };
   await execute("install", recipe, { appId: "tool", capabilities, onPhase: (phase) => phases.push(phase) });
@@ -244,6 +249,55 @@ test("archive install verifies checksum before extraction and uninstall preserve
   assert.equal(fs.existsSync(path.join(installBaseDir, "tool", "bin", "tool")), false);
   assert.equal(fs.readFileSync(path.join(installBaseDir, "tool", "user-config.json"), "utf8"), "{}\n");
   assert.equal(fs.existsSync(path.join(stateDir, "manifests", "tool.json")), false);
+});
+
+test("archive install rejects links before extraction", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-app-link-"));
+  const artifact = await tarArchive(root, { symlink: true });
+  const sha256 = crypto.createHash("sha256").update(artifact).digest("hex");
+  const execute = createAppRecipeExecutor({
+    installBaseDir: path.join(root, "apps"),
+    stateDir: path.join(root, "state"),
+    fetcher: async () => new Response(artifact, { status: 200 }),
+  });
+  await assert.rejects(
+    execute("install", { type: "archive", platforms: ["linux"], url: "https://downloads.example.test/tool.tar.gz", sha256, format: "tar.gz", installRoot: "tool" }, { appId: "tool", capabilities }),
+    (error) => error instanceof AppRecipeExecutionError && error.code === "unsafe_archive",
+  );
+  assert.equal(fs.existsSync(path.join(root, "apps", "tool")), false);
+});
+
+test("tar.xz archives are streamed through structured tar validation", { skip: !hasXz }, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-app-xz-"));
+  await tarArchive(root, { gzip: false });
+  const compressed = spawnSync("xz", ["-c", path.join(root, "artifact.tar")], { maxBuffer: 32 * 1024 * 1024 });
+  assert.equal(compressed.status, 0, compressed.stderr?.toString());
+  const artifact = compressed.stdout;
+  const sha256 = crypto.createHash("sha256").update(artifact).digest("hex");
+  const execute = createAppRecipeExecutor({
+    installBaseDir: path.join(root, "apps"),
+    stateDir: path.join(root, "state"),
+    fetcher: async () => new Response(artifact, { status: 200 }),
+  });
+  await execute("install", { type: "archive", platforms: ["linux"], url: "https://downloads.example.test/tool.tar.xz", sha256, format: "tar.xz", installRoot: "tool" }, { appId: "tool", capabilities });
+  assert.equal(fs.readFileSync(path.join(root, "apps", "tool", "bin", "tool"), "utf8"), "tool\n");
+});
+
+test("archive install never activates files without an ownership manifest", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-app-manifest-"));
+  const artifact = await tarArchive(root);
+  const sha256 = crypto.createHash("sha256").update(artifact).digest("hex");
+  const blockedStateDir = path.join(root, "blocked-state");
+  fs.writeFileSync(blockedStateDir, "not a directory");
+  const execute = createAppRecipeExecutor({
+    installBaseDir: path.join(root, "apps"),
+    stateDir: blockedStateDir,
+    fetcher: async () => new Response(artifact, { status: 200 }),
+  });
+  await assert.rejects(
+    execute("install", { type: "archive", platforms: ["linux"], url: "https://downloads.example.test/tool.tar.gz", sha256, format: "tar.gz", installRoot: "tool" }, { appId: "tool", capabilities }),
+  );
+  assert.equal(fs.existsSync(path.join(root, "apps", "tool")), false);
 });
 
 test("archive checksum failure never inspects or activates the artifact", async () => {

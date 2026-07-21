@@ -9,12 +9,27 @@
     @keydown.enter.prevent="$emit('selectCard', card.key)"
     @keydown.space.prevent="$emit('selectCard', card.key)"
   >
-    <div class="ai-board-card-headline">
+    <div class="ai-board-card-headline" :data-show-workspace="showWorkspace ? 'true' : undefined">
       <button type="button" class="ai-board-instance" @click.stop="$emit('selectCard', card.key)">
         <span class="ai-board-dot" />
-        <span>
-          <strong>{{ instanceDisplayName(card.instance) }}</strong>
-          <small>{{ aiSessionAppDisplayName(card.appTab, card.session.agent) }}</small>
+        <span class="ai-board-identity">
+          <span class="ai-board-primary-line">
+            <strong>{{ instanceDisplayName(card.instance) }}</strong>
+          </span>
+          <small class="ai-board-secondary-line">
+            <span>{{ aiSessionAppDisplayName(card.appTab, card.session.agent) }}</span>
+            <span v-if="showWorkspace" class="ai-board-workspace">
+              <span aria-hidden="true">·</span>
+              <TooltipProvider :delay-duration="120">
+                <Tooltip>
+                  <TooltipTrigger as-child>
+                    <b>{{ aiSessionBasename(card.session.cwd) || "Unknown folder" }}</b>
+                  </TooltipTrigger>
+                  <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ card.session.cwd || "Unknown path" }}</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </span>
+          </small>
         </span>
       </button>
     </div>
@@ -128,9 +143,11 @@ import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import AiSessionToolActivity from "../../../components/ai-session/AiSessionToolActivity.vue";
 import type { AiSessionSummary, ControlPlaneTrigger, InstanceBoardItem, InstanceWithAiSessions, TriggerDeployment } from "../../../api/types";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
 import AiSessionStreamingMarkdown from "../../../components/ai-session/AiSessionStreamingMarkdown.vue";
 import {
   aiSessionAppDisplayName,
+  aiSessionBasename,
   displayAiSessionMessage,
   displayAiSessionTitle,
 } from "../useInstanceSessions";
@@ -146,6 +163,7 @@ const props = defineProps<{
   promptCount: number;
   promptIndex: number;
   selected?: boolean;
+  showWorkspace?: boolean;
   shortHash: (value: string) => string;
   stoppingAppSessionKey?: string;
   triggerActionKey: (card: AiBoardCard, configHash: string) => string;
@@ -242,18 +260,64 @@ const filteredTriggerTemplates = computed(() => {
   background: transparent;
   color: inherit;
   cursor: pointer;
-  padding: 10px 112px 8px 14px;
+  padding: 10px 0 8px 14px;
   text-align: left;
 }
 
-.ai-board-instance span:last-child {
+.ai-board-card-headline {
+  min-width: 0;
+  padding-right: 112px;
+}
+
+.ai-board-workspace {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.ai-board-workspace b {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-board-workspace b {
+  flex: 0 1 auto;
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+}
+
+.ai-board-identity {
   display: grid;
   gap: 3px;
   min-width: 0;
 }
 
-.ai-board-instance strong,
-.ai-board-instance small {
+.ai-board-primary-line {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.ai-board-primary-line > strong {
+  flex: 0 1 auto;
+}
+
+.ai-board-secondary-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.ai-board-identity strong,
+.ai-board-identity small {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

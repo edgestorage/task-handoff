@@ -4,7 +4,7 @@ const http = require("node:http");
 const net = require("node:net");
 const path = require("node:path");
 const { setTimeout: delay } = require("node:timers/promises");
-const { app, BrowserView, BrowserWindow, dialog, ipcMain, shell } = require("electron");
+const { app, BrowserView, BrowserWindow, dialog, ipcMain, nativeImage, shell } = require("electron");
 const {
   buildControlPlaneArgs,
   buildNodeAgentArgs,
@@ -31,6 +31,24 @@ const NODE_AGENT_IPC_ENDPOINT_PREFIX = "ipc://";
 
 function isMacOS() {
   return process.platform === "darwin";
+}
+
+function desktopIconPath() {
+  const iconPath = app.isPackaged
+    ? path.join(process.resourcesPath, "icon.png")
+    : path.join(repoRoot(), "build", "icon.png");
+  return fs.existsSync(iconPath) ? iconPath : undefined;
+}
+
+function applyDesktopDockIcon() {
+  const iconPath = desktopIconPath();
+  if (!iconPath || !app.dock) {
+    return;
+  }
+  const icon = nativeImage.createFromPath(iconPath);
+  if (!icon.isEmpty()) {
+    app.dock.setIcon(icon);
+  }
 }
 
 function nativeTitleBarWindowOptions() {
@@ -302,6 +320,7 @@ function createWindow(url) {
     ...nativeTitleBarWindowOptions(),
     show: false,
     title: "TaskHandoff Control Plane",
+    icon: desktopIconPath(),
     backgroundColor: "#eef3f4",
     webPreferences: {
       contextIsolation: true,
@@ -371,6 +390,7 @@ function createAppWindow(url) {
     parent: mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined,
     show: false,
     title: "TaskHandoff App",
+    icon: desktopIconPath(),
     backgroundColor: "#071013",
     webPreferences: {
       contextIsolation: true,
@@ -720,6 +740,7 @@ ipcMain.handle("task-handoff:window-action", (_event, action) => {
 });
 
 app.whenReady().then(() => {
+  applyDesktopDockIcon();
   void boot().catch((error) => {
     dialog.showErrorBox("TaskHandoff failed to start", error instanceof Error ? error.message : String(error));
     app.quit();

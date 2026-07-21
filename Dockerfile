@@ -71,6 +71,7 @@ RUN apt-get update \
     x11vnc \
     x11-xserver-utils \
     xterm \
+    xz-utils \
     xvfb \
     zsh \
   && rm -rf /var/lib/apt/lists/*
