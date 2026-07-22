@@ -169,7 +169,7 @@ COPY apps/cli/package.json ./apps/cli/package.json
 COPY apps/controlled-instance-image/package.json ./apps/controlled-instance-image/package.json
 COPY apps/control-plane-image/package.json ./apps/control-plane-image/package.json
 COPY apps/desktop-shell/package.json ./apps/desktop-shell/package.json
-RUN pnpm install --frozen-lockfile
+RUN pnpm install --frozen-lockfile --config.auto-install-peers=false
 
 FROM deps AS build
 COPY . .

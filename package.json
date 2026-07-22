@@ -66,9 +66,14 @@
     "appId": "com.taskhandoff.desktop",
     "productName": "TaskHandoff",
     "icon": "build/icon.png",
+    "npmRebuild": false,
+    "afterPack": "apps/desktop-shell/scripts/after-pack.cjs",
     "asar": true,
     "asarUnpack": [
-      "node_modules/node-pty/**/*"
+      "bin/**/*",
+      "dist/**/*",
+      "packages/control-plane-ui/dist/**/*",
+      "node_modules/**/*"
     ],
     "directories": {
       "output": "release"
@@ -84,6 +89,7 @@
       "bin/task-handoff.js",
       "dist/**/*",
       "packages/control-plane-ui/dist/**/*",
+      "!node_modules/node-pty/build{,/**/*}",
       "package.json",
       "LICENSE",
       "NOTICE"

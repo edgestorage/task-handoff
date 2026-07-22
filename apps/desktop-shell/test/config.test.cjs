@@ -10,6 +10,8 @@ const {
   resolveControlPlaneHost,
   resolveControlPlanePort,
   resolveDataDir,
+  resolveDesktopProcessCwd,
+  resolveDesktopRuntimeRoot,
   resolveNodeAgentControlEndpoint,
   resolveNodeAgentDataDir,
   resolveNodeAgentHost,
@@ -64,6 +66,24 @@ test("desktop config uses the Electron executable as Node in packaged builds", (
   assert.equal(resolveNodeCommand({}, { packaged: false, execPath: "/app/TaskHandoff" }), "node");
   assert.equal(resolveNodeCommand({}, { packaged: true, execPath: "/app/TaskHandoff" }), "/app/TaskHandoff");
   assert.equal(resolveNodeCommand({ TASK_HANDOFF_NODE: "/usr/local/bin/node" }, { packaged: true, execPath: "/app/TaskHandoff" }), "/usr/local/bin/node");
+});
+
+test("desktop child processes use a real writable cwd in packaged builds", () => {
+  assert.equal(resolveDesktopProcessCwd({}, { packaged: false, root: "/repo" }), path.resolve("/repo"));
+  assert.equal(resolveDesktopProcessCwd({}, { packaged: true, dataDir: "/tmp/task-handoff-data" }), path.resolve("/tmp/task-handoff-data"));
+  assert.equal(
+    resolveDesktopProcessCwd({ TASK_HANDOFF_DESKTOP_PROCESS_CWD: "/tmp/custom-cwd" }, { packaged: true, dataDir: "/tmp/task-handoff-data" }),
+    path.resolve("/tmp/custom-cwd"),
+  );
+});
+
+test("desktop packaged runtime resolves to real unpacked resources", () => {
+  assert.equal(resolveDesktopRuntimeRoot({ packaged: false, root: "/repo" }), path.resolve("/repo"));
+  assert.equal(
+    resolveDesktopRuntimeRoot({ packaged: true, resourcesPath: "/Applications/TaskHandoff.app/Contents/Resources" }),
+    path.join("/Applications/TaskHandoff.app/Contents/Resources", "app.asar.unpacked"),
+  );
+  assert.throws(() => resolveDesktopRuntimeRoot({ packaged: true }), /resources path is required/);
 });
 
 test("desktop config builds control plane cli args", () => {

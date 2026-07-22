@@ -10,6 +10,16 @@ function repoRoot() {
   return path.resolve(__dirname, "..", "..", "..");
 }
 
+function resolveDesktopRuntimeRoot(options = {}) {
+  if (!options.packaged) {
+    return path.resolve(options.root || repoRoot());
+  }
+  if (!options.resourcesPath) {
+    throw new Error("Electron resources path is required in packaged builds.");
+  }
+  return path.join(options.resourcesPath, "app.asar.unpacked");
+}
+
 function resolveControlPlanePort(env = process.env) {
   const value = Number(env.TASK_HANDOFF_DESKTOP_CONTROL_PLANE_PORT || env.TASK_HANDOFF_CONTROL_PLANE_PORT || DEFAULT_DESKTOP_CONTROL_PLANE_PORT);
   return Number.isInteger(value) && value > 0 && value <= 65535 ? value : DEFAULT_DESKTOP_CONTROL_PLANE_PORT;
@@ -70,6 +80,13 @@ function resolveCliEntry(root = repoRoot(), env = process.env) {
 
 function resolveNodeCommand(env = process.env, options = {}) {
   return env.TASK_HANDOFF_NODE || env.NODE || (options.packaged ? options.execPath || process.execPath : "node");
+}
+
+function resolveDesktopProcessCwd(env = process.env, options = {}) {
+  return path.resolve(
+    env.TASK_HANDOFF_DESKTOP_PROCESS_CWD
+      || (options.packaged ? options.dataDir || resolveDataDir(env) : options.root || repoRoot()),
+  );
 }
 
 function controlPlaneUrl(options = {}) {
@@ -155,6 +172,8 @@ module.exports = {
   resolveControlPlaneHost,
   resolveControlPlanePort,
   resolveDataDir,
+  resolveDesktopProcessCwd,
+  resolveDesktopRuntimeRoot,
   resolveNodeAgentControlEndpoint,
   resolveNodeAgentDataDir,
   resolveNodeAgentHost,

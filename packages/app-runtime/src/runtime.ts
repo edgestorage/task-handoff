@@ -251,8 +251,9 @@ export class AppRuntimeManager extends EventEmitter {
 
     const id = sessionId();
     const shell = app.command || process.env.SHELL || "/bin/bash";
-    const cwd = options.cwd || app.cwd || process.env.TASK_HANDOFF_WORKSPACE || process.cwd();
     const launch = this.normalizeLaunchOptions(options);
+    const cwd = this.resolveLaunchCwd(launch.cwd, app.cwd);
+    launch.cwd = cwd;
     const resumeArgs = this.aiSessionResumeArgs(app.id, launch);
     let args = [...(app.args || []), ...(launch.args || []), ...resumeArgs];
     let env: NodeJS.ProcessEnv = { ...process.env, ...app.env, ...launch.env, ...this.managedEnvironment, TERM: "xterm-256color" };
@@ -308,6 +309,7 @@ export class AppRuntimeManager extends EventEmitter {
       status: "running",
       createdAt: now(),
       updatedAt: now(),
+      workspace: { cwd },
       launch,
       tty: {
         webPath: `/api/apps/sessions/${id}/tty`,
@@ -457,7 +459,8 @@ export class AppRuntimeManager extends EventEmitter {
     fs.mkdirSync(logDir, { recursive: true });
 
     const launch = this.normalizeLaunchOptions(options);
-    const cwd = launch.cwd || app.cwd || process.env.TASK_HANDOFF_WORKSPACE || process.cwd();
+    const cwd = this.resolveLaunchCwd(launch.cwd, app.cwd);
+    launch.cwd = cwd;
     const port = this.allocatePort("web");
     const env = { ...process.env, ...app.env, ...launch.env, ...this.managedEnvironment };
     const args = this.webArgs(app, sessionDir, cwd, port, launch.args || []);
@@ -472,6 +475,7 @@ export class AppRuntimeManager extends EventEmitter {
       status: "running",
       createdAt: now(),
       updatedAt: now(),
+      workspace: { cwd },
       launch,
       web: {
         host: "127.0.0.1",
@@ -523,7 +527,8 @@ export class AppRuntimeManager extends EventEmitter {
     const launch = this.normalizeLaunchOptions(options);
     const displayTarget = launch.displayTarget || this.normalizeDisplayTarget(app.defaultDisplayTarget) || { mode: "isolated" as const };
     launch.displayTarget = displayTarget;
-    const cwd = launch.cwd || app.cwd || process.env.TASK_HANDOFF_WORKSPACE || process.cwd();
+    const cwd = this.resolveLaunchCwd(launch.cwd, app.cwd);
+    launch.cwd = cwd;
     const cdpPort = this.allocatePort("cdp");
     const args = this.guiArgs(app, sessionDir, cdpPort, launch.args || []);
 
@@ -547,6 +552,7 @@ export class AppRuntimeManager extends EventEmitter {
         status: "running",
         createdAt: now(),
         updatedAt: now(),
+        workspace: { cwd },
         launch,
         display: {
           display: sharedDisplay.display,
@@ -660,6 +666,7 @@ export class AppRuntimeManager extends EventEmitter {
       status: "running",
       createdAt: now(),
       updatedAt: now(),
+      workspace: { cwd },
       launch,
       display: {
         display,
@@ -1590,8 +1597,8 @@ export class AppRuntimeManager extends EventEmitter {
         continue;
       }
       try {
-        const parsed = JSON.parse(fs.readFileSync(metadataPath, "utf8")) as AppSession;
-        if (!parsed.id || !parsed.paths?.sessionDir || parsed.id !== entry.name) {
+        const parsed = this.sanitizePersistedSession(JSON.parse(fs.readFileSync(metadataPath, "utf8")), entry.name);
+        if (!parsed) {
           continue;
         }
         const metadata = this.recoverPersistedSession(parsed);
@@ -1623,6 +1630,41 @@ export class AppRuntimeManager extends EventEmitter {
         signal: metadata.process?.signal ?? null,
       },
     };
+  }
+
+  private sanitizePersistedSession(value: unknown, expectedId: string): AppSession | undefined {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    const record = value as Record<string, unknown>;
+    const paths = record.paths && typeof record.paths === "object" && !Array.isArray(record.paths)
+      ? record.paths as Record<string, unknown>
+      : undefined;
+    if (
+      record.id !== expectedId
+      || typeof record.appId !== "string"
+      || typeof record.title !== "string"
+      || !["tty", "gui", "web"].includes(String(record.kind))
+      || !["created", "running", "stopping", "stopped", "exited", "failed"].includes(String(record.status))
+      || typeof record.createdAt !== "string"
+      || typeof record.updatedAt !== "string"
+      || typeof paths?.sessionDir !== "string"
+      || typeof paths?.logDir !== "string"
+    ) {
+      return undefined;
+    }
+    const objectValue = (input: unknown) => input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : {};
+    const workspace = objectValue(record.workspace);
+    const tty = objectValue(record.tty);
+    const launch = objectValue(record.launch);
+    const ai = objectValue(record.ai);
+    const claude = objectValue(ai.claude);
+    const app = this.catalogRepository.find(record.appId);
+    const candidate = [workspace.cwd, tty.cwd, claude.cwd, launch.cwd, app?.cwd, process.env.TASK_HANDOFF_WORKSPACE, process.cwd()]
+      .find((item): item is string => typeof item === "string" && item.trim().length > 0);
+    if (!candidate) return undefined;
+    return {
+      ...record,
+      workspace: { cwd: path.resolve(candidate) },
+    } as AppSession;
   }
 
   private allocateDisplay() {
@@ -1706,7 +1748,15 @@ export class AppRuntimeManager extends EventEmitter {
       "server.once('error',()=>process.exit(1));",
       "server.listen(Number(process.argv[1]),'127.0.0.1',()=>server.close(()=>process.exit(0)));",
     ].join("");
-    return spawnSync(process.execPath, ["-e", script, String(port)], { stdio: "ignore" }).status === 0;
+    return spawnSync(process.execPath, ["-e", script, String(port)], {
+      stdio: "ignore",
+      env: {
+        ...process.env,
+        // In a packaged desktop build process.execPath is the Electron app binary.
+        // Force that executable to behave as Node for this synchronous probe.
+        ELECTRON_RUN_AS_NODE: "1",
+      },
+    }).status === 0;
   }
 
   private waitForUnixSocket(socketPath: string, timeoutMs: number, getError?: () => Error | undefined) {
@@ -1948,6 +1998,10 @@ export class AppRuntimeManager extends EventEmitter {
       launch.aiSessionResume = { aiSessionId, providerSessionId };
     }
     return launch;
+  }
+
+  private resolveLaunchCwd(launchCwd?: string, catalogCwd?: string) {
+    return path.resolve(launchCwd || catalogCwd || process.env.TASK_HANDOFF_WORKSPACE || process.cwd());
   }
 
   private aiSessionResumeArgs(appId: string, launch: AppLaunchOptions) {

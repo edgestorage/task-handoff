@@ -1,5 +1,3 @@
-import { CONTROL_PLANE_PROTOCOL_VERSION } from "@task-handoff/protocol/control-plane";
-
 export function now() {
   return new Date().toISOString();
 }
@@ -10,13 +8,6 @@ export function envFlag(value: string | undefined) {
 
 export function controlPlaneDiagnosticLogsEnabled() {
   return envFlag(process.env.TASK_HANDOFF_DIAGNOSTIC_LOGS);
-}
-
-export function protocolMismatchError(peer: string, actual: unknown) {
-  const version = typeof actual === "string" && actual.trim() ? actual : "missing";
-  const error = new Error(`${peer} protocol version ${version} is not compatible with ${CONTROL_PLANE_PROTOCOL_VERSION}.`);
-  Object.assign(error, { statusCode: 409, code: "PROTOCOL_VERSION_MISMATCH" });
-  return error;
 }
 
 export function plainHeaders(headers: HeadersInit | undefined) {

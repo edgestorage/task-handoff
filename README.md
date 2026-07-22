@@ -41,6 +41,13 @@ built-in catalog and persistent jobs on the final computer; see
 [docs/instance-app-management.md](docs/instance-app-management.md) for the
 catalog, custom-launcher, safety, event, and support boundaries.
 
+AI session and app session pages expose repository files, changes, worktrees,
+branches, and conservative remote delivery when their authoritative cwd is a
+Git worktree; see
+[docs/session-repository-management.md](docs/session-repository-management.md)
+for cwd ownership, editing limits, worktree safety, stale recovery, and the
+terminal fallback.
+
 For local Docker testing on this machine, use:
 
 ```sh

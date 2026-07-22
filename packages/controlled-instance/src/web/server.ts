@@ -97,6 +97,7 @@ import { TriggerSourceSchema, TriggerActionSchema, TriggerPolicySchema, TriggerT
 import { bridgeWebSockets } from "@task-handoff/protocol/websocket-bridge";
 import { SESSION_STREAM_PROTOCOL_VERSION, SessionStreamsHelloEventType } from "@task-handoff/protocol/events";
 import { AppManagementOperationRequestSchema } from "@task-handoff/protocol/control-plane";
+import { registerRepositoryRoutes, repositoryWorkspaceRootsFromEnv } from "../repository/routes";
 
 const WebSocketClient = require("ws");
 
@@ -518,6 +519,12 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     },
   });
   const aiSessions = options.aiSessionRegistry || createAiSessionRegistry();
+  registerRepositoryRoutes(app, {
+    appRuntime,
+    aiSessions,
+    managedWorktreesRoot: process.env.TASK_HANDOFF_MANAGED_WORKTREES_ROOT || path.join(storagePaths.dataDir, "managed-worktrees"),
+    workspaceRoots: repositoryWorkspaceRootsFromEnv(),
+  });
   const aiSessionHistory = new AiSessionHistoryStore(storagePaths, {
     onWarning: (warning) => app.log.warn({ warning }, "AI session history entry was sanitized"),
   });

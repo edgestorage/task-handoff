@@ -477,13 +477,15 @@ function throwForbidden(code: string, message: string): never {
   throw error;
 }
 
-function assertProtocolVersion(protocolVersion: string, peer: string) {
-  if (protocolVersion === CONTROL_PLANE_PROTOCOL_VERSION) {
-    return;
-  }
-  const error = new Error(`${peer} protocol version ${protocolVersion || "missing"} is not compatible with ${CONTROL_PLANE_PROTOCOL_VERSION}.`);
-  Object.assign(error, { statusCode: 409, code: "PROTOCOL_VERSION_MISMATCH" });
-  throw error;
+function warnProtocolVersion(protocolVersion: string, peer: string) {
+  if (protocolVersion === CONTROL_PLANE_PROTOCOL_VERSION) return;
+  console.warn(JSON.stringify({
+    message: "protocol version mismatch",
+    peer,
+    expectedProtocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+    actualProtocolVersion: protocolVersion || "missing",
+    errorCode: "PROTOCOL_VERSION_MISMATCH",
+  }));
 }
 
 function storedInstancePayloadError(id: string, issues: Array<{ path: PropertyKey[]; message: string }>) {
@@ -530,6 +532,23 @@ function localWorkspacePath(instance: ControlledInstance) {
 }
 
 function controlledInstanceCommand() {
+  const configuredArgv = process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV?.trim();
+  if (configuredArgv) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(configuredArgv);
+    } catch {
+      const error = new Error("TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV must be a JSON array of command arguments.");
+      Object.assign(error, { statusCode: 500, code: "LOCAL_CONTROLLED_COMMAND_INVALID" });
+      throw error;
+    }
+    if (!Array.isArray(parsed) || parsed.length === 0 || parsed.some((item) => typeof item !== "string" || item.length === 0)) {
+      const error = new Error("TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV must be a non-empty JSON array of non-empty strings.");
+      Object.assign(error, { statusCode: 500, code: "LOCAL_CONTROLLED_COMMAND_INVALID" });
+      throw error;
+    }
+    return parsed as string[];
+  }
   const configured = process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND?.trim();
   if (configured) {
     return configured.split(/\s+/);
@@ -538,7 +557,11 @@ function controlledInstanceCommand() {
   if (fs.existsSync(repositoryCli)) {
     return [process.execPath, repositoryCli, "web"];
   }
-  return ["task-handoff-controlled-instance", "web"];
+  const error = new Error(
+    "No local controlled-instance command is configured. Set TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV to an explicit command argv.",
+  );
+  Object.assign(error, { statusCode: 500, code: "LOCAL_CONTROLLED_COMMAND_MISSING" });
+  throw error;
 }
 
 async function allocateLocalPort() {
@@ -1444,7 +1467,7 @@ class NodeAgentState {
       throw error;
     }
     this.validateInstanceReport(existing, parsed, token);
-    assertProtocolVersion(parsed.protocolVersion, `Instance ${id}`);
+    warnProtocolVersion(parsed.protocolVersion, `Instance ${id}`);
     const updated = ControlledInstanceSchema.parse({
       ...existing,
       name: parsed.name,
@@ -1473,7 +1496,7 @@ class NodeAgentState {
     const current = this.requireInstance(id);
     this.validateInstanceToken(current, token);
     const parsed = ControlledInstanceHeartbeatSchema.parse(input);
-    assertProtocolVersion(parsed.protocolVersion, `Instance ${id}`);
+    warnProtocolVersion(parsed.protocolVersion, `Instance ${id}`);
     const timestamp = now();
     const mergedTarget = parsed.target ? { ...current.target, ...parsed.target } : current.target;
     const target = {

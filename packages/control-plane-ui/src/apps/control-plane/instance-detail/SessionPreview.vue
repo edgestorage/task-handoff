@@ -220,6 +220,13 @@
         </div>
       </div>
       <div class="session-preview-tools">
+        <RepositoryEnvironment
+          v-if="activeRepositorySessionId"
+          :connection-status="instance.connectionStatus"
+          :instance-id="instance.id"
+          :session-id="activeRepositorySessionId"
+          session-kind="app-session"
+        />
         <button type="button" class="preview-expand-button" :aria-label="previewExpanded ? 'Restore session preview' : 'Expand session preview'" :title="previewExpanded ? 'Restore preview' : 'Expand preview'" @click="$emit('update:previewExpanded', !previewExpanded)">
           <Minimize2 v-if="previewExpanded" :size="15" />
           <Maximize2 v-else :size="15" />
@@ -333,6 +340,7 @@ import AiSessionPanel from "./AiSessionPanel.vue";
 import SessionTerminalPreview from "./SessionTerminalPreview.vue";
 import AppLaunchMenuItems from "../shared/AppLaunchMenuItems.vue";
 import ProjectFolderPicker from "../shared/ProjectFolderPicker.vue";
+import RepositoryEnvironment from "./RepositoryEnvironment.vue";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 import {
   appDisplayName,
@@ -393,6 +401,10 @@ const emit = defineEmits<{
 }>();
 
 const resourceMetricsNow = useNow({ interval: 1_000 });
+const activeRepositorySessionId = computed(() => {
+  if (!props.activeSession || props.activeSession.kind === "ai" || props.activeSession.kind === "status") return "";
+  return typeof props.activeSession.source?.id === "string" ? props.activeSession.source.id : props.activeSession.key;
+});
 const resourceMetricsDisplay = computed(() => formatResourceMetrics(props.resourceMetrics, resourceMetricsNow.value.getTime()));
 
 function formatResourceMetrics(metrics?: InstanceResourceMetrics, currentTime = Date.now()) {

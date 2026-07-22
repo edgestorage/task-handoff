@@ -80,7 +80,7 @@ import { ControlPlaneChatSessionRuntime } from "../chat/sessions/runtime.ts";
 import { configSyncPresets, type ConfigSyncPreset } from "../instances/config-sync.ts";
 import { relativeNodePathSegments, resolveNodePath } from "../nodes/path.ts";
 import { normalizeModel, publicInstance, publicInstanceWithAccess, publicModel, publicNode, publicNodeAgentCapabilities, publicProject, workspacePolicyForSource } from "../public-records.ts";
-import { controlPlaneDiagnosticLogsEnabled, errorMessage, now, protocolMismatchError, throwNotFound } from "./helpers.ts";
+import { controlPlaneDiagnosticLogsEnabled, errorMessage, now, throwNotFound } from "./helpers.ts";
 import {
   ConnectNodeRemoteInputSchema,
   ControlPlaneTriggerRecordSchema,
@@ -408,9 +408,7 @@ export class ControlPlaneService {
       throw error;
     }
     if (payload.data?.protocolVersion !== CONTROL_PLANE_PROTOCOL_VERSION) {
-      const error = protocolMismatchError(`Node agent ${nodeId}`, payload.data?.protocolVersion);
       this.logWarn({ nodeId, nodeEndpoint: endpoint, expectedProtocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, actualProtocolVersion: payload.data?.protocolVersion, build: payload.data?.build, errorCode: "PROTOCOL_VERSION_MISMATCH" }, "node agent protocol version mismatch");
-      throw error;
     }
     const build = BuildInfoSchema.safeParse(payload.data?.build);
     this.logInfo({ nodeId, nodeEndpoint: endpoint, protocolVersion: payload.data.protocolVersion, build: build.success ? build.data : payload.data?.build }, "node agent health check ok");

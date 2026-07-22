@@ -78,7 +78,7 @@ function testAppInventory(apps, observedAt = new Date().toISOString()) {
 }
 
 test("controlled instance heartbeat protocol rejects legacy receiver projection", () => {
-  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-07-18");
+  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-07-23");
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, receiver: { status: "running", pendingCount: 1 } }).success, false);
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, apps: { runningCount: 1 } }).success, false);
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, appInventory: emptyAppInventory(), apps: { runningCount: 1 } }).success, true);
@@ -3947,11 +3947,10 @@ test("control plane node instance aggregation isolates invalid node protocol dat
   assert.equal(board.statusCode, 200, JSON.stringify(board.body));
   assert.deepEqual(board.body.data.map((instance) => instance.id), ["inst_good", "inst_old_protocol"]);
   assert.equal(board.body.data.find((instance) => instance.id === "inst_old_protocol").protocolCompatible, false);
-  assert.equal(board.body.meta.nodeErrors.length, 3);
+  assert.equal(board.body.meta.nodeErrors.length, 2);
   assert.deepEqual(board.body.meta.nodeErrors.map((error) => [error.nodeId, error.code]).sort(), [
     ["node_bad", "NODE_INSTANCE_PAYLOAD_INVALID"],
     ["node_good", "NODE_INSTANCE_PAYLOAD_INVALID"],
-    ["node_good", "PROTOCOL_VERSION_MISMATCH"],
   ]);
 });
 
@@ -4289,7 +4288,9 @@ test("node agent rejects unknown management request fields", async (t) => {
 
 test("node agent starts localhost runtime as a host controlled-instance process", async (t) => {
   const dataDir = tempDataDir("node-agent-localhost-process");
-  const webStub = path.join(dataDir, "controlled-web-stub.js");
+  const webStubDir = path.join(dataDir, "controlled runtime");
+  fs.mkdirSync(webStubDir, { recursive: true });
+  const webStub = path.join(webStubDir, "controlled-web-stub.js");
   const envLog = path.join(dataDir, "controlled-web-env.jsonl");
   fs.writeFileSync(
     webStub,
@@ -4306,10 +4307,10 @@ test("node agent starts localhost runtime as a host controlled-instance process"
       "    name: process.env.TASK_HANDOFF_INSTANCE_NAME,",
       "    nodeId: process.env.TASK_HANDOFF_NODE_ID,",
       "    runtimeId: process.env.TASK_HANDOFF_RUNTIME_ID,",
-      "    protocolVersion: '2026-07-18',",
+      `    protocolVersion: '${CONTROL_PLANE_PROTOCOL_VERSION}',`,
       "    build: { component: 'controlled-instance' },",
       "    controlMode: 'controlled',",
-      "    capabilities: { protocolVersion: '2026-07-18', features: {} },",
+      `    capabilities: { protocolVersion: '${CONTROL_PLANE_PROTOCOL_VERSION}', features: {} },`,
       "    appInventory: { items: [], observedAt: new Date().toISOString(), issues: [] },",
       "    target: { strategy: 'direct-port', web: `http://127.0.0.1:${port}`, api: `http://127.0.0.1:${port}/api`, status: 'reachable' },",
       "    workspace: { mode: 'local-bind', status: 'ready', path: process.env.TASK_HANDOFF_WORKSPACE, exists: true },",
@@ -4332,8 +4333,8 @@ test("node agent starts localhost runtime as a host controlled-instance process"
       "})().catch((error) => { console.error(error instanceof Error ? error.message : String(error)); process.exit(1); });",
     ].join("\n"),
   );
-  const previousCommand = process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND;
-  process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND = `${process.execPath} ${webStub}`;
+  const previousCommandArgv = process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV;
+  process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV = JSON.stringify([process.execPath, webStub]);
   const host = "127.0.0.1";
   const port = await freePort(host);
   const app = await createNodeAgentApp({
@@ -4344,10 +4345,10 @@ test("node agent starts localhost runtime as a host controlled-instance process"
     port,
   });
   t.after(async () => {
-    if (previousCommand === undefined) {
-      delete process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND;
+    if (previousCommandArgv === undefined) {
+      delete process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV;
     } else {
-      process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND = previousCommand;
+      process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV = previousCommandArgv;
     }
     await app.close();
   });
@@ -4941,7 +4942,7 @@ test("node agent restores active localhost runtime processes after unclean shutd
   );
 });
 
-test("node agent rejects incompatible controlled instance protocol versions", async (t) => {
+test("node agent accepts incompatible controlled instance protocol versions and keeps the reported version", async (t) => {
   const app = await createNodeAgentApp({
     dataDir: tempDataDir("node-agent-protocol-mismatch"),
     logger: false,
@@ -5001,8 +5002,8 @@ test("node agent rejects incompatible controlled instance protocol versions", as
       },
     },
   });
-  assert.equal(rejectedRegister.statusCode, 409);
-  assert.equal(rejectedRegister.json().error.code, "PROTOCOL_VERSION_MISMATCH");
+  assert.equal(rejectedRegister.statusCode, 201);
+  assert.equal(rejectedRegister.json().data.protocolVersion, "2026-01-01");
 
   const registered = await app.inject({
     method: "POST",
@@ -5050,8 +5051,8 @@ test("node agent rejects incompatible controlled instance protocol versions", as
       },
     },
   });
-  assert.equal(rejectedHeartbeat.statusCode, 409);
-  assert.equal(rejectedHeartbeat.json().error.code, "PROTOCOL_VERSION_MISMATCH");
+  assert.equal(rejectedHeartbeat.statusCode, 200);
+  assert.equal(rejectedHeartbeat.json().data.protocolVersion, "2026-01-01");
 });
 
 test("node agent migrates legacy local stored endpoint-shaped instances on startup", async (t) => {
@@ -5702,7 +5703,7 @@ test("control plane proxies manual localhost runtimes and creates local instance
   assert.equal(createRequest.body.source.path, "/tmp/local-workspace");
 });
 
-test("control plane rejects node agents with incompatible protocol versions", async (t) => {
+test("control plane accepts node agents with incompatible protocol versions and reports a warning", async (t) => {
   const mock = createMockNodeAgentFetch({
     nodeId: "node_old",
     health: {
@@ -5730,8 +5731,7 @@ test("control plane rejects node agents with incompatible protocol versions", as
       secret: "agent-secret",
     },
   });
-  assert.equal(node.statusCode, 409);
-  assert.equal(node.body.error.code, "PROTOCOL_VERSION_MISMATCH");
+  assert.equal(node.statusCode, 201);
 });
 
 test("control plane registers node connections with the agent node id", async (t) => {

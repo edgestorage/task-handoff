@@ -444,6 +444,14 @@
               @previous="previousPrompt(selectedSession)"
               @next="nextPrompt(selectedSession)"
             />
+            <RepositoryEnvironment
+              :ai-agent="repositoryAiAgent"
+              :connection-status="instance.connectionStatus"
+              :instance-id="instance.id"
+              :session-id="selectedSession.id"
+              session-kind="ai-session"
+              @ai-session-started="handleRepositoryAiSessionStarted"
+            />
             <TooltipProvider :delay-duration="120">
               <Tooltip>
                 <TooltipTrigger as-child>
@@ -581,6 +589,7 @@ import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import { bindAiSessionTrigger, createNodeLocalFolder, getAiSessionHistory, getAiSessionHistoryDetail, interruptAiSession, launchAppSession, listNodeFolderTree, removeAiSessionQueuedMessage, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, stopAppSession, unbindAiSessionTrigger, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery } from "../../../api/queries";
 import { executeAiSessionCommand } from "../../../api/ai-session-commands";
 import type { AiSessionCommandInput, AiSessionHistoryDetail, AiSessionHistoryItem } from "@task-handoff/protocol/ai-sessions";
+import type { RepositoryAiSessionLaunchResult } from "@task-handoff/protocol/repository";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, NodeLocalFolder, TriggerConfig, TriggerDeployment, TriggerRuntimeState } from "../../../api/types";
 import type { LaunchableApp } from "../useInstanceSessions";
 import AiSessionComposer, { type AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
@@ -595,6 +604,7 @@ import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 import NodeStorageFolderPickerDialog from "../settings/NodeStorageFolderPickerDialog.vue";
+import RepositoryEnvironment from "./RepositoryEnvironment.vue";
 import { useNodeStorageFolderPicker } from "../settings/useNodeStorageFolderPicker";
 import { clearAiSessionDraft, loadAiSessionDraftPayload, persistAiSessionDraftPayload } from "../useAiSessionDraft";
 import { createStreamingScrollFollow, type ScrollViewport } from "../../../lib/streaming-scroll-follow";
@@ -688,6 +698,33 @@ const displayedSessionGroups = computed<AiSessionPathGroup[]>(() => groupSession
   sessions: sortedSessions.value,
 }]);
 const selectedSession = computed(() => props.selectedAiSession(props.instance, filteredSessions.value));
+const repositoryAiAgent = computed<"codex" | "claude" | undefined>(() => {
+  const agent = selectedSession.value?.agent;
+  return agent === "codex" || agent === "claude" ? agent : undefined;
+});
+const pendingRepositoryAppSessionId = ref("");
+watch(() => props.instance.aiSessions?.sessions, (sessions) => {
+  if (!pendingRepositoryAppSessionId.value) return;
+  const session = sessions?.find((item) => item.appSessionId === pendingRepositoryAppSessionId.value);
+  if (!session) return;
+  pendingRepositoryAppSessionId.value = "";
+  emit("selectAiSession", props.instance.id, session.id);
+}, { deep: false });
+
+async function handleRepositoryAiSessionStarted(result: RepositoryAiSessionLaunchResult) {
+  pendingRepositoryAppSessionId.value = result.appSessionId;
+  showControlPlaneToast("AI session started in the selected worktree.", "success");
+  for (let attempt = 0; attempt < 20 && pendingRepositoryAppSessionId.value; attempt += 1) {
+    await refreshBoard();
+    const session = props.instance.aiSessions?.sessions.find((item) => item.appSessionId === result.appSessionId);
+    if (session) {
+      pendingRepositoryAppSessionId.value = "";
+      emit("selectAiSession", props.instance.id, session.id);
+      return;
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 500));
+  }
+}
 const newSessionOpen = ref(false);
 const showNewSession = computed(() => newSessionOpen.value || !selectedSession.value);
 const newSessionApp = ref("");

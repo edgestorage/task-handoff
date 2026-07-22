@@ -376,17 +376,7 @@ export class ControlPlaneNodeAgentGateway {
           actualProtocolVersion: parsed.data.protocolVersion,
           errorCode: "PROTOCOL_VERSION_MISMATCH",
         }, "node instance protocol version mismatch");
-        return {
-          instance: parsed.data,
-          error: {
-            nodeId: node.id,
-            route,
-            method,
-            code: "PROTOCOL_VERSION_MISMATCH",
-            message: `Node instance ${parsed.data.id} protocol version ${parsed.data.protocolVersion} does not match ${CONTROL_PLANE_PROTOCOL_VERSION}.`,
-            statusCode: 502,
-          },
-        };
+        return { instance: parsed.data };
       }
       return { instance: parsed.data };
     }

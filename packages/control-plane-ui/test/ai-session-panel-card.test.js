@@ -79,7 +79,7 @@ test("instance and board cards share one action button style", () => {
 
 test("an unselected AI session defaults to the new-session surface", () => {
   assert.match(panel, /const showNewSession = computed\(\(\) => newSessionOpen\.value \|\| !selectedSession\.value\);/);
-  assert.match(panel, /<section v-if="showNewSession" class="session-ai-detail session-ai-new-detail">/);
+  assert.match(panel, /<section v-else-if="showNewSession" class="session-ai-detail session-ai-new-detail">/);
   assert.match(panel, /watch\(\s*\[showNewSession, aiSessionLaunchableApps, newSessionFolders\]/);
   assert.doesNotMatch(panel, /No AI session selected\./);
 });

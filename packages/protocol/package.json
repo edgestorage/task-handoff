@@ -22,6 +22,10 @@
       "types": "./src/app-sessions.ts",
       "default": "./src/app-sessions.ts"
     },
+    "./repository": {
+      "types": "./src/repository.ts",
+      "default": "./src/repository.ts"
+    },
     "./triggers": {
       "types": "./src/triggers.ts",
       "default": "./src/triggers.ts"

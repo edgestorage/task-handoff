@@ -113,6 +113,9 @@ export type AppSession = {
   status: AppSessionStatus;
   createdAt: string;
   updatedAt: string;
+  workspace: {
+    cwd: string;
+  };
   launch?: AppLaunchOptions;
   tty?: {
     webPath: string;

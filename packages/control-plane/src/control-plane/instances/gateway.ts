@@ -62,6 +62,11 @@ export class ControlledInstanceGateway {
   }
 
   async proxyHttp(instance: ControlledInstance, path: string, init: ControlledInstanceProxyHttpInit = {}) {
+    if (instance.connectionStatus !== "online" && instance.agentStatus !== "online") {
+      const error = new Error(`Instance ${instance.name} is not reachable.`);
+      Object.assign(error, { statusCode: 409, code: "INSTANCE_UNREACHABLE" });
+      throw error;
+    }
     if (!instance.target.web) {
       const error = new Error(`Instance ${instance.name} web endpoint is not reachable.`);
       Object.assign(error, { statusCode: 409, code: "INSTANCE_WEB_UNREACHABLE" });

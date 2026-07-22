@@ -14,6 +14,8 @@ const {
   resolveControlPlaneHost,
   resolveControlPlanePort,
   resolveDataDir,
+  resolveDesktopProcessCwd,
+  resolveDesktopRuntimeRoot,
   resolveNodeAgentControlEndpoint,
   resolveNodeAgentHost,
   resolveNodeAgentPort,
@@ -27,6 +29,7 @@ let nodeAgentProcess;
 let ownsControlPlaneProcess = false;
 let ownsNodeAgentProcess = false;
 let desktopLogStream;
+const childProcessSpawnErrors = new WeakMap();
 const NODE_AGENT_IPC_ENDPOINT_PREFIX = "ipc://";
 
 function isMacOS() {
@@ -41,6 +44,12 @@ function desktopIconPath() {
 }
 
 function applyDesktopDockIcon() {
+  // Packaged macOS apps already get their Dock icon from the bundle's
+  // CFBundleIconFile. Setting the source PNG here bypasses macOS's app-icon
+  // presentation and exposes the square image canvas in the Dock.
+  if (isMacOS() && app.isPackaged) {
+    return;
+  }
   const iconPath = desktopIconPath();
   if (!iconPath || !app.dock) {
     return;
@@ -533,7 +542,7 @@ async function findAvailablePort(host, preferredPort, attempts = 20) {
 }
 
 function startControlPlane(options = {}) {
-  const root = repoRoot();
+  const root = resolveDesktopRuntimeRoot({ packaged: app.isPackaged, resourcesPath: process.resourcesPath, root: repoRoot() });
   const validation = validateDesktopInputs({ root });
   if (!validation.cliReady) {
     throw new Error(`TaskHandoff CLI entry was not found at ${validation.cliEntry}. Run the repository build first.`);
@@ -544,8 +553,10 @@ function startControlPlane(options = {}) {
 
   const nodeCommand = resolveNodeCommand(process.env, { packaged: app.isPackaged, execPath: process.execPath });
   const args = buildControlPlaneArgs({ root });
+  const processCwd = resolveDesktopProcessCwd(process.env, { packaged: app.isPackaged, root });
+  fs.mkdirSync(processCwd, { recursive: true });
   controlPlaneProcess = spawn(nodeCommand, args, {
-    cwd: root,
+    cwd: processCwd,
     env: {
       ...process.env,
       ...(app.isPackaged ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
@@ -557,14 +568,19 @@ function startControlPlane(options = {}) {
     stdio: ["ignore", "pipe", "pipe"],
   });
   ownsControlPlaneProcess = true;
+  const child = controlPlaneProcess;
 
-  controlPlaneProcess.stdout.on("data", (chunk) => {
+  child.stdout.on("data", (chunk) => {
     logInfo(`[control-plane] ${chunk.toString("utf8").trimEnd()}`);
   });
-  controlPlaneProcess.stderr.on("data", (chunk) => {
+  child.stderr.on("data", (chunk) => {
     logError(`[control-plane] ${chunk.toString("utf8").trimEnd()}`);
   });
-  controlPlaneProcess.on("exit", (code, signal) => {
+  child.on("error", (error) => {
+    childProcessSpawnErrors.set(child, error);
+    logError(`[control-plane] failed to spawn command=${nodeCommand} cwd=${processCwd}: ${error.message}`);
+  });
+  child.on("exit", (code, signal) => {
     if (code || signal) {
       logError(`[control-plane] exited code=${code ?? ""} signal=${signal ?? ""}`);
     }
@@ -572,11 +588,11 @@ function startControlPlane(options = {}) {
     ownsControlPlaneProcess = false;
   });
 
-  return controlPlaneProcess;
+  return child;
 }
 
 function startNodeAgent(options = {}) {
-  const root = repoRoot();
+  const root = resolveDesktopRuntimeRoot({ packaged: app.isPackaged, resourcesPath: process.resourcesPath, root: repoRoot() });
   const validation = validateDesktopInputs({ root });
   if (!validation.cliReady) {
     throw new Error(`TaskHandoff CLI entry was not found at ${validation.cliEntry}. Run the repository build first.`);
@@ -586,25 +602,33 @@ function startNodeAgent(options = {}) {
   const host = options.host || resolveNodeAgentHost();
   const port = options.port || resolveNodeAgentPort();
   const args = buildNodeAgentArgs({ root, host, port });
+  const processCwd = resolveDesktopProcessCwd(process.env, { packaged: app.isPackaged, root });
+  fs.mkdirSync(processCwd, { recursive: true });
   nodeAgentProcess = spawn(nodeCommand, args, {
-    cwd: root,
+    cwd: processCwd,
     env: {
       ...process.env,
       ...(app.isPackaged ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
       TASK_HANDOFF_NODE_AGENT_HOST: host,
       TASK_HANDOFF_NODE_AGENT_PORT: String(port),
+      TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV: JSON.stringify([nodeCommand, validation.cliEntry, "web"]),
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
   ownsNodeAgentProcess = true;
+  const child = nodeAgentProcess;
 
-  nodeAgentProcess.stdout.on("data", (chunk) => {
+  child.stdout.on("data", (chunk) => {
     logInfo(`[node-agent] ${chunk.toString("utf8").trimEnd()}`);
   });
-  nodeAgentProcess.stderr.on("data", (chunk) => {
+  child.stderr.on("data", (chunk) => {
     logError(`[node-agent] ${chunk.toString("utf8").trimEnd()}`);
   });
-  nodeAgentProcess.on("exit", (code, signal) => {
+  child.on("error", (error) => {
+    childProcessSpawnErrors.set(child, error);
+    logError(`[node-agent] failed to spawn command=${nodeCommand} cwd=${processCwd}: ${error.message}`);
+  });
+  child.on("exit", (code, signal) => {
     if (code || signal) {
       logError(`[node-agent] exited code=${code ?? ""} signal=${signal ?? ""}`);
     }
@@ -612,12 +636,16 @@ function startNodeAgent(options = {}) {
     ownsNodeAgentProcess = false;
   });
 
-  return nodeAgentProcess;
+  return child;
 }
 
 async function waitForControlPlane(url, child, attempts = 80) {
   const expectedDataDir = resolveDataDir();
   for (let index = 0; index < attempts; index += 1) {
+    const spawnError = childProcessSpawnErrors.get(child);
+    if (spawnError) {
+      throw new Error(`Control Plane failed to spawn: ${spawnError.message}`);
+    }
     if (child.exitCode !== null || child.signalCode !== null) {
       throw new Error(`Control Plane exited before becoming ready code=${child.exitCode ?? ""} signal=${child.signalCode ?? ""}.`);
     }
@@ -639,6 +667,10 @@ async function waitForControlPlane(url, child, attempts = 80) {
 
 async function waitForNodeAgent(endpoint, child, attempts = 80) {
   for (let index = 0; index < attempts; index += 1) {
+    const spawnError = childProcessSpawnErrors.get(child);
+    if (spawnError) {
+      throw new Error(`Node agent failed to spawn: ${spawnError.message}`);
+    }
     if (child.exitCode !== null || child.signalCode !== null) {
       throw new Error(`Node agent exited before becoming ready code=${child.exitCode ?? ""} signal=${child.signalCode ?? ""}.`);
     }
