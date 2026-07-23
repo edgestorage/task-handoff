@@ -12,8 +12,11 @@ import {
   sessionTerminalSocketUrl,
   uniqueLaunchableApps,
   type SessionTab,
+  type RepositoryWorkspaceTabTarget,
 } from "../useInstanceSessions";
 import { hasInstanceStatusPage, isInstanceAppReady, isInstanceConnecting } from "../useInstanceStatus";
+
+export type SessionPaneId = "left" | "right";
 
 type UseActiveInstanceSessionsInput = {
   activeInstance: ComputedRef<InstanceWithAiSessions | undefined>;
@@ -39,11 +42,19 @@ export function useActiveInstanceSessions({
   const launchingApp = ref(false);
   const stoppingSessionId = ref("");
   const selectedSessionKeys = reactive<Record<string, string>>({});
+  const rightSelectedSessionKeys = reactive<Record<string, string>>({});
+  const focusedSessionPanes = reactive<Record<string, SessionPaneId>>({});
+  const rightPaneSessionKeys = reactive<Record<string, Record<string, true>>>({});
+  const sessionSplitRatios = reactive<Record<string, number>>({});
   const recentSessionKeys = reactive<Record<string, string[]>>({});
   const sessionTabOrderKeys = reactive<Record<string, string[]>>({});
   const selectedAiSessionKeys = reactive<Record<string, string>>({});
+  const repositorySessionTabs = reactive<Record<string, SessionTab[]>>({});
 
-  const sessionTabs = computed(() => buildSessionTabs(activeInstance.value));
+  const sessionTabs = computed(() => {
+    const instanceId = activeInstance.value?.id;
+    return [...buildSessionTabs(activeInstance.value), ...(instanceId ? repositorySessionTabs[instanceId] || [] : [])];
+  });
   const orderedSessionTabs = computed(() => {
     const instanceId = activeInstance.value?.id;
     if (!instanceId) {
@@ -51,7 +62,7 @@ export function useActiveInstanceSessions({
     }
     return orderedTabsForInstance(instanceId, sessionTabs.value);
   });
-  const activeSessionKey = computed({
+  const leftSessionKey = computed({
     get() {
       const instanceId = activeInstance.value?.id;
       return instanceId ? selectedSessionKeys[instanceId] || "overview" : "overview";
@@ -63,6 +74,38 @@ export function useActiveInstanceSessions({
       }
     },
   });
+  const rightSessionKey = computed({
+    get() {
+      const instanceId = activeInstance.value?.id;
+      return instanceId ? rightSelectedSessionKeys[instanceId] || "" : "";
+    },
+    set(sessionKey: string) {
+      const instanceId = activeInstance.value?.id;
+      if (instanceId) rightSelectedSessionKeys[instanceId] = sessionKey;
+    },
+  });
+  const focusedSessionPane = computed<SessionPaneId>(() => {
+    const instanceId = activeInstance.value?.id;
+    return instanceId ? focusedSessionPanes[instanceId] || "left" : "left";
+  });
+  const activeSessionKey = computed({
+    get() {
+      return focusedSessionPane.value === "right" && rightSessionKey.value ? rightSessionKey.value : leftSessionKey.value;
+    },
+    set(sessionKey: string) {
+      if (focusedSessionPane.value === "right" && rightSessionKey.value) rightSessionKey.value = sessionKey;
+      else leftSessionKey.value = sessionKey;
+    },
+  });
+  const leftOrderedSessionTabs = computed(() => orderedSessionTabs.value.filter((session) => sessionPane(session) === "left"));
+  const rightOrderedSessionTabs = computed(() => orderedSessionTabs.value.filter((session) => sessionPane(session) === "right"));
+  const hasSessionSplit = computed(() => rightOrderedSessionTabs.value.length > 0);
+  const sessionSplitRatio = computed(() => {
+    const instanceId = activeInstance.value?.id;
+    return instanceId ? sessionSplitRatios[instanceId] || 0.5 : 0.5;
+  });
+  const leftSession = computed(() => sessionTabs.value.find((session) => session.key === leftSessionKey.value) || leftOrderedSessionTabs.value[0]);
+  const rightSession = computed(() => sessionTabs.value.find((session) => session.key === rightSessionKey.value));
   const activeSession = computed(() => sessionTabs.value.find((session) => session.key === activeSessionKey.value) || sessionTabs.value[0]);
   const activeSessionFrameUrl = computed(() => (activeInstance.value && activeSession.value ? sessionFrameUrl(activeInstance.value, activeSession.value) : ""));
   const activeTerminalSocketUrl = computed(() => (activeInstance.value && activeSession.value ? sessionTerminalSocketUrl(activeInstance.value, activeSession.value) : ""));
@@ -105,9 +148,9 @@ export function useActiveInstanceSessions({
     () => {
       if (activeInstance.value && hasInstanceStatusPage(activeInstance.value)) {
         selectedSessionKeys[activeInstance.value.id] = "overview";
-      } else {
-        ensureActiveSessionKey();
+        focusedSessionPanes[activeInstance.value.id] = "left";
       }
+      normalizeSessionLayout();
     },
   );
 
@@ -116,6 +159,8 @@ export function useActiveInstanceSessions({
     (hasStatusPage, hadStatusPage) => {
       if (hasStatusPage && !hadStatusPage && activeInstance.value) {
         selectedSessionKeys[activeInstance.value.id] = "overview";
+        focusedSessionPanes[activeInstance.value.id] = "left";
+        closeSessionSplit();
       }
     },
   );
@@ -124,37 +169,64 @@ export function useActiveInstanceSessions({
     () => sessionTabs.value.map((session) => session.key).join("\n"),
     () => {
       if (!sessionTabs.value.length) {
-        activeSessionKey.value = "overview";
+        leftSessionKey.value = "overview";
         sessionMenuOpen.value = false;
         pruneSessionTabOrder();
         return;
       }
       pruneSessionTabOrder();
-      if (!sessionTabs.value.some((session) => session.key === activeSessionKey.value)) {
-        ensureActiveSessionKey();
-      }
+      normalizeSessionLayout();
     },
   );
 
-  function ensureActiveSessionKey() {
+  function isPinnedLeft(session: SessionTab) {
+    return session.kind === "ai" || session.kind === "status";
+  }
+
+  function sessionPane(session: SessionTab): SessionPaneId {
     const instanceId = activeInstance.value?.id;
-    if (!instanceId) {
-      return;
+    if (!instanceId || isPinnedLeft(session)) return "left";
+    return rightPaneSessionKeys[instanceId]?.[session.key] ? "right" : "left";
+  }
+
+  function ensurePaneAssignments(instanceId: string) {
+    return rightPaneSessionKeys[instanceId] ||= reactive<Record<string, true>>({});
+  }
+
+  function normalizeSessionLayout() {
+    const instanceId = activeInstance.value?.id;
+    if (!instanceId) return;
+    const assignments = ensurePaneAssignments(instanceId);
+    const availableKeys = new Set(sessionTabs.value.map((session) => session.key));
+    for (const key of Object.keys(assignments)) {
+      const session = sessionTabs.value.find((item) => item.key === key);
+      if (!availableKeys.has(key) || !session || isPinnedLeft(session)) delete assignments[key];
     }
     if (!sessionTabs.value.length) {
       selectedSessionKeys[instanceId] = "overview";
+      delete rightSelectedSessionKeys[instanceId];
+      focusedSessionPanes[instanceId] = "left";
       sessionMenuOpen.value = false;
       return;
     }
-    if (!sessionTabs.value.some((session) => session.key === selectedSessionKeys[instanceId])) {
-      selectedSessionKeys[instanceId] = fallbackSessionKey(instanceId);
+    const leftTabs = orderedTabsForInstance(instanceId, sessionTabs.value).filter((session) => sessionPane(session) === "left");
+    const rightTabs = orderedTabsForInstance(instanceId, sessionTabs.value).filter((session) => sessionPane(session) === "right");
+    if (!leftTabs.some((session) => session.key === selectedSessionKeys[instanceId])) {
+      const recentLeft = (recentSessionKeys[instanceId] || []).find((key) => leftTabs.some((session) => session.key === key));
+      selectedSessionKeys[instanceId] = recentLeft || leftTabs.find((session) => session.kind === "ai")?.key || leftTabs[0]?.key || "overview";
+    }
+    if (!rightTabs.length) {
+      delete rightSelectedSessionKeys[instanceId];
+      focusedSessionPanes[instanceId] = "left";
+    } else if (!rightTabs.some((session) => session.key === rightSelectedSessionKeys[instanceId])) {
+      rightSelectedSessionKeys[instanceId] = rightTabs[0]!.key;
     }
   }
 
-  function fallbackSessionKey(instanceId: string) {
-    const availableKeys = new Set(sessionTabs.value.map((session) => session.key));
-    const recentKey = (recentSessionKeys[instanceId] || []).find((key) => availableKeys.has(key));
-    return recentKey || sessionTabs.value.find((session) => session.kind !== "ai")?.key || sessionTabs.value[0]?.key || "overview";
+  function focusSessionPane(pane: SessionPaneId) {
+    const instanceId = activeInstance.value?.id;
+    if (!instanceId || (pane === "right" && !rightOrderedSessionTabs.value.length)) return;
+    focusedSessionPanes[instanceId] = pane;
   }
 
   function rememberSessionKey(instanceId: string, sessionKey: string) {
@@ -186,14 +258,56 @@ export function useActiveInstanceSessions({
     sessionMenuOpen.value = open;
   }
 
-  function selectSession(sessionKey: string) {
+  function selectSession(sessionKey: string, requestedPane?: SessionPaneId) {
     const instanceId = activeInstance.value?.id;
-    if (instanceId) {
-      const nextSessionKey = activeInstance.value && hasInstanceStatusPage(activeInstance.value) ? "overview" : sessionKey;
-      selectedSessionKeys[instanceId] = nextSessionKey;
-      rememberSessionKey(instanceId, nextSessionKey);
-    }
+    if (!instanceId) return;
+    const nextSessionKey = activeInstance.value && hasInstanceStatusPage(activeInstance.value) ? "overview" : sessionKey;
+    const session = sessionTabs.value.find((item) => item.key === nextSessionKey);
+    if (!session) return;
+    if (requestedPane && requestedPane !== sessionPane(session) && !isPinnedLeft(session)) moveSessionToPane(session.key, requestedPane);
+    const pane = sessionPane(session);
+    if (pane === "right") rightSelectedSessionKeys[instanceId] = nextSessionKey;
+    else selectedSessionKeys[instanceId] = nextSessionKey;
+    focusedSessionPanes[instanceId] = pane;
+    rememberSessionKey(instanceId, nextSessionKey);
     sessionMenuOpen.value = false;
+  }
+
+  function moveSessionToPane(sessionKey: string, pane: SessionPaneId) {
+    const instanceId = activeInstance.value?.id;
+    const session = sessionTabs.value.find((item) => item.key === sessionKey);
+    if (!instanceId || !session || isPinnedLeft(session)) return;
+    const assignments = ensurePaneAssignments(instanceId);
+    if (pane === "right") assignments[sessionKey] = true;
+    else delete assignments[sessionKey];
+    if (pane === "right") rightSelectedSessionKeys[instanceId] = sessionKey;
+    else selectedSessionKeys[instanceId] = sessionKey;
+    focusedSessionPanes[instanceId] = pane;
+    rememberSessionKey(instanceId, sessionKey);
+    normalizeSessionLayout();
+  }
+
+  function openSessionSplit() {
+    const candidate = activeSession.value && !isPinnedLeft(activeSession.value) && sessionPane(activeSession.value) === "left"
+      ? activeSession.value
+      : [...leftOrderedSessionTabs.value].reverse().find((session) => !isPinnedLeft(session));
+    if (candidate) moveSessionToPane(candidate.key, "right");
+  }
+
+  function closeSessionSplit() {
+    const instanceId = activeInstance.value?.id;
+    if (!instanceId) return;
+    const focusedKey = focusedSessionPanes[instanceId] === "right" ? rightSelectedSessionKeys[instanceId] : selectedSessionKeys[instanceId];
+    for (const key of Object.keys(ensurePaneAssignments(instanceId))) delete rightPaneSessionKeys[instanceId]![key];
+    if (focusedKey) selectedSessionKeys[instanceId] = focusedKey;
+    delete rightSelectedSessionKeys[instanceId];
+    focusedSessionPanes[instanceId] = "left";
+    normalizeSessionLayout();
+  }
+
+  function setSessionSplitRatio(ratio: number) {
+    const instanceId = activeInstance.value?.id;
+    if (instanceId) sessionSplitRatios[instanceId] = Math.min(0.7, Math.max(0.3, ratio));
   }
 
   function orderedTabsForInstance(instanceId: string, tabs: SessionTab[]) {
@@ -219,7 +333,7 @@ export function useActiveInstanceSessions({
     }
   }
 
-  function moveSessionTab(sourceKey: string, targetKey: string, placement: "before" | "after") {
+  function moveSessionTab(sourceKey: string, targetKey: string, placement: "before" | "after", targetPane?: SessionPaneId) {
     const instanceId = activeInstance.value?.id;
     if (!instanceId || sourceKey === targetKey) {
       return;
@@ -230,6 +344,7 @@ export function useActiveInstanceSessions({
     if (sourceIndex < 0 || targetIndex < 0) {
       return;
     }
+    if (targetPane) moveSessionToPane(sourceKey, targetPane);
     const nextOrder = currentOrder.filter((key) => key !== sourceKey);
     const targetIndexAfterRemoval = nextOrder.indexOf(targetKey);
     if (targetIndexAfterRemoval < 0) {
@@ -247,7 +362,13 @@ export function useActiveInstanceSessions({
     appLaunchMenuOpen.value = false;
     try {
       const session = await launchAppSession(instance.id, { appId, ...(cwdFolderId ? { cwdFolderId } : {}) });
-      selectedSessionKeys[instance.id] = session.id;
+      const pane = focusedSessionPanes[instance.id] === "right" && rightSelectedSessionKeys[instance.id] ? "right" : "left";
+      if (pane === "right") {
+        ensurePaneAssignments(instance.id)[session.id] = true;
+        rightSelectedSessionKeys[instance.id] = session.id;
+      } else {
+        selectedSessionKeys[instance.id] = session.id;
+      }
       rememberSessionKey(instance.id, session.id);
       boardSessionKeys[instance.id] = session.id;
     } catch (error) {
@@ -262,6 +383,14 @@ export function useActiveInstanceSessions({
     if (session.kind === "ai" || session.kind === "status") {
       return;
     }
+    if (session.kind === "repository") {
+      repositorySessionTabs[instance.id] = (repositorySessionTabs[instance.id] || []).filter((tab) => tab.key !== session.key);
+      if (selectedSessionKeys[instance.id] === session.key) delete selectedSessionKeys[instance.id];
+      if (rightSelectedSessionKeys[instance.id] === session.key) delete rightSelectedSessionKeys[instance.id];
+      delete rightPaneSessionKeys[instance.id]?.[session.key];
+      normalizeSessionLayout();
+      return;
+    }
     const sessionId = typeof session.source?.id === "string" ? session.source.id : session.key;
     if (stoppingSessionId.value || !sessionId) {
       return;
@@ -270,10 +399,10 @@ export function useActiveInstanceSessions({
     sessionMenuOpen.value = false;
     try {
       await stopAppSession(instance.id, sessionId);
-      if (activeSessionKey.value === session.key) {
-        delete selectedSessionKeys[instance.id];
-        ensureActiveSessionKey();
-      }
+      if (selectedSessionKeys[instance.id] === session.key) delete selectedSessionKeys[instance.id];
+      if (rightSelectedSessionKeys[instance.id] === session.key) delete rightSelectedSessionKeys[instance.id];
+      delete rightPaneSessionKeys[instance.id]?.[session.key];
+      normalizeSessionLayout();
       if (boardSessionKeys[instance.id] === session.key) {
         delete boardSessionKeys[instance.id];
       }
@@ -297,8 +426,35 @@ export function useActiveInstanceSessions({
     const tab = aiSessionAppTab(instance, session);
     if (tab) {
       selectedSessionKeys[instance.id] = tab.key;
+      focusedSessionPanes[instance.id] = "left";
       rememberSessionKey(instance.id, tab.key);
     }
+  }
+
+  function openRepositoryWorkspace(target: RepositoryWorkspaceTabTarget) {
+    const instanceId = activeInstance.value?.id;
+    if (!instanceId) return;
+    const key = `repository:${target.sessionKind}:${target.sessionId}`;
+    const tabs = repositorySessionTabs[instanceId] ||= reactive<SessionTab[]>([]);
+    if (!tabs.some((tab) => tab.key === key)) {
+      tabs.push({
+        key,
+        kind: "repository",
+        label: "Repository",
+        status: "open",
+        source: { ...target },
+      });
+    }
+    const pane = focusedSessionPanes[instanceId] === "right" && rightSelectedSessionKeys[instanceId] ? "right" : "left";
+    if (pane === "right") {
+      ensurePaneAssignments(instanceId)[key] = true;
+      rightSelectedSessionKeys[instanceId] = key;
+    } else {
+      selectedSessionKeys[instanceId] = key;
+    }
+    focusedSessionPanes[instanceId] = pane;
+    rememberSessionKey(instanceId, key);
+    normalizeSessionLayout();
   }
 
   return {
@@ -316,13 +472,28 @@ export function useActiveInstanceSessions({
     launchableApps,
     launchingApp,
     launchSelectedApp,
+    leftOrderedSessionTabs,
+    leftSession,
+    leftSessionKey,
     moveSessionTab,
+    moveSessionToPane,
     openAiSessionApp,
+    openRepositoryWorkspace,
+    openSessionSplit,
     orderedSessionTabs,
+    focusSessionPane,
+    focusedSessionPane,
+    hasSessionSplit,
+    rightOrderedSessionTabs,
+    rightSession,
+    rightSessionKey,
     selectAiSession,
     selectSession,
     selectedAiSession,
     sessionTabs,
+    sessionSplitRatio,
+    setSessionSplitRatio,
+    closeSessionSplit,
     setAppLaunchMenuOpen,
     setSessionMenuOpen,
     stoppingSessionId,

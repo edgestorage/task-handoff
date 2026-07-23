@@ -140,16 +140,27 @@ test("branch selector groups, searches, tracks, checks out, and safely deletes s
   assert.doesNotMatch(`${panel}\n${repositoryApi}`, /\bforce\s*:/);
 });
 
-test("Repository workspace combines lazy Files, categorized Changes, text tabs, and scoped diffs", async () => {
-  const [environment, workspace, tree, repositoryApi] = await Promise.all([
+test("Repository workspace opens as a session tab with a resizable ScrollArea sidebar", async () => {
+  const [environment, workspace, workspaceTab, sessionState, tree, repositoryApi] = await Promise.all([
     source("apps/control-plane/instance-detail/RepositoryEnvironment.vue"),
     source("apps/control-plane/instance-detail/RepositoryWorkspace.vue"),
+    source("apps/control-plane/instance-detail/RepositoryWorkspaceTab.vue"),
+    source("apps/control-plane/instance-detail/useActiveInstanceSessions.ts"),
     source("apps/control-plane/instance-detail/RepositoryFileTree.vue"),
     source("api/repository.ts"),
   ]);
 
-  assert.match(environment, /<RepositoryWorkspace/);
+  assert.match(environment, /emit\("openWorkspace", \{ initialView: view, sessionId: props\.sessionId, sessionKind: props\.sessionKind \}\)/);
+  assert.match(workspaceTab, /<RepositoryWorkspace[\s\S]*embedded/);
+  assert.match(workspaceTab, /:embedded="!dialogOpen"/);
+  assert.match(workspace, /aria-label="Open repository workspace as dialog"/);
+  assert.match(workspace, /aria-label="Return repository workspace to tab"/);
+  assert.match(sessionState, /kind: "repository"/);
+  assert.match(sessionState, /function openRepositoryWorkspace\(target: RepositoryWorkspaceTabTarget\)/);
   assert.match(workspace, /RepositoryFileTree/);
+  assert.match(workspace, /<ScrollArea type="always" class="repository-workspace-sidebar-content">/);
+  assert.match(workspace, /role="separator" aria-label="Resize repository sidebar"/);
+  assert.match(workspace, /function startSidebarResize\(event: PointerEvent\)/);
   assert.match(workspace, /Conflicts/);
   assert.match(workspace, /Staged/);
   assert.match(workspace, /Unstaged/);
@@ -163,6 +174,29 @@ test("Repository workspace combines lazy Files, categorized Changes, text tabs, 
   assert.match(repositoryApi, /getRepositoryDirectory/);
   assert.match(repositoryApi, /getRepositoryFile/);
   assert.match(repositoryApi, /getRepositoryDiff/);
+});
+
+test("Repository workspace can move to a recoverable authenticated window", async () => {
+  const [app, workspace, page, windowHelper] = await Promise.all([
+    source("App.vue"),
+    source("apps/control-plane/instance-detail/RepositoryWorkspace.vue"),
+    source("apps/control-plane/instance-detail/RepositoryWorkspacePage.vue"),
+    source("apps/control-plane/instance-detail/repositoryWorkspaceWindow.ts"),
+  ]);
+
+  assert.match(app, /RepositoryWorkspacePage v-if="isRepositoryWorkspaceRoute"/);
+  assert.match(app, /<AuthGate v-else>/);
+  assert.match(workspace, /aria-label="Open repository workspace in new window"/);
+  assert.match(workspace, /openRepositoryWorkspaceWindow\(\{ \.\.\.target\.value, view: sidebarView\.value \}\)/);
+  assert.match(workspace, /Unsaved drafts remain in this window/);
+  assert.match(workspace, /repositoryWorkspaceChannelName/);
+  assert.match(workspace, /refreshRepositoryState\(\), refreshLoadedDirectories\(\)/);
+  assert.match(page, /getRepositoryContext\(route\)/);
+  assert.match(page, /standalone/);
+  assert.match(windowHelper, /location\.pathname !== "\/repository-workspace"/);
+  assert.match(windowHelper, /sessionKind !== "ai-session" && sessionKind !== "app-session"/);
+  assert.match(windowHelper, /new URLSearchParams\(\{[\s\S]*instanceId:[\s\S]*sessionKind:[\s\S]*sessionId:[\s\S]*view:/);
+  assert.doesNotMatch(windowHelper, /snapshotId|displayName|RepositoryContext/);
 });
 
 test("Repository file actions preserve drafts on stale and require an explicit comparison before retry", async () => {
@@ -296,8 +330,8 @@ test("Repository navigation keeps portal, keyboard, focus, draft, path, and conf
   assert.match(dialogContent, /DialogPortal/);
   assert.doesNotMatch(environment, /@open-auto-focus\.prevent/);
   assert.match(workspace, /@open-auto-focus="focusWorkspace"/);
-  assert.match(workspace, /DialogTitle class="sr-only"/);
-  assert.match(workspace, /DialogDescription class="sr-only"/);
+  assert.match(workspace, /DialogTitle v-if="!embedded" class="sr-only"/);
+  assert.match(workspace, /DialogDescription v-if="!embedded" class="sr-only"/);
   assert.match(workspace, /role="tablist"[\s\S]*@keydown="navigateSidebarTabs"/);
   assert.match(workspace, /\["ArrowLeft", "ArrowRight", "Home", "End"\]/);
   assert.match(workspace, /:tabindex="sidebarView === 'files' \? 0 : -1"/);

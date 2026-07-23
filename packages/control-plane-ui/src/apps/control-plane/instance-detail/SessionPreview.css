@@ -71,10 +71,9 @@
 
 .session-preview-selector {
   position: relative;
-  display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  display: flex;
   align-items: center;
-  column-gap: 4px;
+  gap: 4px;
   min-width: 0;
   flex: 1 1 auto;
   align-self: stretch;
@@ -86,6 +85,60 @@
   min-width: 0;
   flex: 1 1 auto;
   gap: 10px;
+}
+
+.session-preview-primary-tools.split {
+  display: grid;
+  grid-template-columns: minmax(0, var(--session-left-ratio)) 7px minmax(0, calc(100% - var(--session-left-ratio) - 7px));
+  gap: 0;
+}
+
+.session-preview-primary-tools.split .session-preview-selector[data-pane="left"] {
+  grid-column: 1;
+  padding-left: 8px;
+}
+
+.session-preview-primary-tools.split .session-preview-selector[data-pane="right"] {
+  grid-column: 3;
+  grid-row: 1;
+  padding-right: 116px;
+  padding-left: 8px;
+}
+
+.session-preview-primary-tools.split .session-preview-selector .app-launcher,
+.session-preview-primary-tools.split .session-preview-selector .session-tab-menu-trigger {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 180ms ease-in-out;
+}
+
+.session-preview-primary-tools.split .session-preview-selector:hover .app-launcher,
+.session-preview-primary-tools.split .session-preview-selector:hover .session-tab-menu-trigger,
+.session-preview-primary-tools.split .session-preview-selector:focus-within .app-launcher,
+.session-preview-primary-tools.split .session-preview-selector:focus-within .session-tab-menu-trigger,
+.session-preview:has(.session-pane[data-pane="left"]:hover) .session-preview-selector[data-pane="left"] .app-launcher,
+.session-preview:has(.session-pane[data-pane="left"]:hover) .session-preview-selector[data-pane="left"] .session-tab-menu-trigger,
+.session-preview:has(.session-pane[data-pane="right"]:hover) .session-preview-selector[data-pane="right"] .app-launcher,
+.session-preview:has(.session-pane[data-pane="right"]:hover) .session-preview-selector[data-pane="right"] .session-tab-menu-trigger {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.session-toolbar-split-divider {
+  position: relative;
+  grid-column: 2;
+  grid-row: 1;
+  background: transparent;
+}
+
+.session-toolbar-split-divider::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2.5px;
+  width: 2px;
+  background: var(--line);
+  content: "";
 }
 
 .session-select-empty {
@@ -102,14 +155,21 @@
 }
 
 .session-tab-strip {
-  width: 100%;
+  width: auto;
   min-width: 0;
+  max-width: 100%;
+  flex: 0 1 auto;
   align-self: stretch;
 }
 
-.session-tab-strip :deep([data-radix-scroll-area-viewport]) {
+.session-tab-strip :deep([data-reka-scroll-area-viewport]) {
   height: 100%;
-  max-height: 34px;
+}
+
+.session-tab-strip :deep([data-reka-scroll-area-viewport] > div) {
+  display: flex !important;
+  min-height: 100%;
+  align-items: center;
 }
 
 .session-tab-strip-content {
@@ -595,6 +655,66 @@
   border-color: var(--brand-accent-muted);
 }
 
+.session-pane-layout {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-columns: minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.session-pane-layout.split {
+  grid-template-columns: minmax(0, var(--session-left-ratio)) 7px minmax(0, calc(100% - var(--session-left-ratio) - 7px));
+}
+
+.session-pane {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: minmax(0, 1fr);
+  overflow: hidden;
+  background: var(--terminal-bg);
+}
+
+.session-pane[data-pane="left"] { grid-column: 1; }
+.session-pane[data-pane="right"] { grid-column: 3; }
+
+.session-pane-layout.split .session-pane,
+.session-pane-layout.split .session-pane-resize-handle {
+  grid-row: 1;
+}
+
+.session-pane.focused {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--focus-ring) 58%, transparent);
+}
+
+.session-pane-resize-handle {
+  position: relative;
+  z-index: 4;
+  grid-column: 2;
+  cursor: col-resize;
+  background: transparent;
+  touch-action: none;
+}
+
+.session-pane-resize-handle::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2.5px;
+  width: 2px;
+  background: var(--line);
+  content: "";
+}
+
+.session-pane-resize-handle:hover::after,
+.session-pane-layout.resizing .session-pane-resize-handle::after {
+  background: var(--focus-ring);
+}
+
+:global(body.session-pane-resizing) { cursor: col-resize; user-select: none; }
+:global(body.session-pane-resizing iframe) { pointer-events: none; }
+
 .session-preview-toolbar,
 .session-preview-actions {
   display: grid;
@@ -606,6 +726,24 @@
   color: var(--text-muted);
   font-size: 12px;
   padding: 0 8px;
+}
+
+.session-preview-toolbar.split {
+  position: relative;
+  display: block;
+  padding: 0;
+}
+
+.session-preview-toolbar.split .session-preview-primary-tools {
+  width: 100%;
+  min-height: 42px;
+}
+
+.session-preview-toolbar.split .session-preview-tools {
+  position: absolute;
+  z-index: 7;
+  top: 6px;
+  right: 8px;
 }
 
 .session-preview-actions {
@@ -669,6 +807,21 @@
   border-color: var(--control-plane-icon-button-hover-border);
   background: var(--control-plane-icon-button-hover-bg);
   color: var(--control-plane-icon-button-hover-text);
+}
+
+.session-preview-toolbar .app-launcher .session-tab-add-button {
+  width: 28px;
+  min-width: 28px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.session-preview-toolbar .app-launcher .session-tab-add-button:hover,
+.session-preview-toolbar .app-launcher .session-tab-add-button:focus-visible,
+.session-preview-toolbar .app-launcher.open .session-tab-add-button {
+  background: color-mix(in srgb, var(--surface-raised) 92%, var(--white) 4%);
+  color: var(--text-strong);
 }
 
 .preview-expand-button {

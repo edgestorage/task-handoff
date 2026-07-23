@@ -123,10 +123,19 @@
         :launchable-apps="launchableApps"
         :launching-app="launchingApp"
         :last-refresh-label="lastRefreshLabel"
+        :left-session="leftSession"
+        :left-session-key="leftSessionKey"
+        :left-session-tabs="leftSessionTabs"
         :node-local-folders="nodeLocalFolders"
         :preview-expanded="previewExpanded"
         :resource-metrics="resourceMetrics"
         :resource-metrics-error="resourceMetricsError"
+        :right-session="rightSession"
+        :right-session-key="rightSessionKey"
+        :right-session-tabs="rightSessionTabs"
+        :focused-session-pane="focusedSessionPane"
+        :has-session-split="hasSessionSplit"
+        :session-split-ratio="sessionSplitRatio"
         :rename-session="renameSession"
         :selected-ai-session="selectedAiSession"
         :ordered-session-tabs="orderedSessionTabs"
@@ -135,12 +144,18 @@
         :stopping-session-id="stoppingSessionId"
         @copy-registration="$emit('copyRegistration', $event)"
         @launch-app="(target, appId, cwdFolderId) => $emit('launchApp', target, appId, cwdFolderId)"
-        @move-session-tab="(sourceKey, targetKey, placement) => $emit('moveSessionTab', sourceKey, targetKey, placement)"
+        @move-session-tab="(sourceKey, targetKey, placement, targetPane) => $emit('moveSessionTab', sourceKey, targetKey, placement, targetPane)"
+        @move-session-to-pane="(sessionKey, pane) => $emit('moveSessionToPane', sessionKey, pane)"
+        @focus-session-pane="$emit('focusSessionPane', $event)"
+        @open-session-split="$emit('openSessionSplit')"
+        @close-session-split="$emit('closeSessionSplit')"
+        @set-session-split-ratio="$emit('setSessionSplitRatio', $event)"
         @open-ai-session-app="(target, session) => $emit('openAiSessionApp', target, session)"
+        @open-repository-workspace="$emit('openRepositoryWorkspace', $event)"
         @open-settings="(instanceId, section) => $emit('openSettings', instanceId, section)"
         @open-url="$emit('openUrl', $event)"
         @select-ai-session="(instanceId, sessionId) => $emit('selectAiSession', instanceId, sessionId)"
-        @select-session="$emit('selectSession', $event)"
+        @select-session="(sessionKey, pane) => $emit('selectSession', sessionKey, pane)"
         @stop-session="(target, session) => $emit('stopSession', target, session)"
         @update:app-launch-menu-open="$emit('update:appLaunchMenuOpen', $event)"
         @update:preview-expanded="$emit('update:previewExpanded', $event)"
@@ -170,7 +185,8 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../
 import SessionPreview from "./SessionPreview.vue";
 import type { InstanceAction } from "../useInstanceActions";
 import { canShowInstanceAction, imageProvisioningLabel, instanceSourceLabel } from "../useInstanceStatus";
-import type { LaunchableApp, SessionTab } from "../useInstanceSessions";
+import type { LaunchableApp, RepositoryWorkspaceTabTarget, SessionTab } from "../useInstanceSessions";
+import type { SessionPaneId } from "./useActiveInstanceSessions";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 
 const props = defineProps<{
@@ -192,6 +208,9 @@ const props = defineProps<{
   instanceDisplayName: (instance: InstanceBoardItem) => string;
   isInstanceActionBusy: (instance: InstanceBoardItem) => boolean;
   lastRefreshLabel: string;
+  leftSession?: SessionTab;
+  leftSessionKey: string;
+  leftSessionTabs: SessionTab[];
   launchableApps: LaunchableApp[];
   launchingApp: boolean;
   nodeLocalFolders?: NodeLocalFolder[];
@@ -199,6 +218,12 @@ const props = defineProps<{
   previewExpanded: boolean;
   resourceMetrics?: InstanceResourceMetrics;
   resourceMetricsError?: string;
+  rightSession?: SessionTab;
+  rightSessionKey: string;
+  rightSessionTabs: SessionTab[];
+  focusedSessionPane: SessionPaneId;
+  hasSessionSplit: boolean;
+  sessionSplitRatio: number;
   renameInstance: (instance: InstanceBoardItem, name: string) => Promise<void>;
   renameSession: (instance: InstanceBoardItem, session: SessionTab, title: string) => Promise<void>;
   selectedAiSession: (instance: InstanceBoardItem, sessions?: AiSessionSummary[]) => AiSessionSummary | undefined;
@@ -211,14 +236,20 @@ const props = defineProps<{
 defineEmits<{
   copyRegistration: [instance: InstanceBoardItem];
   launchApp: [instance: InstanceBoardItem, appId: string, cwdFolderId?: string];
-  moveSessionTab: [sourceKey: string, targetKey: string, placement: "before" | "after"];
+  moveSessionTab: [sourceKey: string, targetKey: string, placement: "before" | "after", targetPane?: SessionPaneId];
+  moveSessionToPane: [sessionKey: string, pane: SessionPaneId];
+  focusSessionPane: [pane: SessionPaneId];
+  openSessionSplit: [];
+  closeSessionSplit: [];
+  setSessionSplitRatio: [ratio: number];
   newInstance: [];
   openAiSessionApp: [instance: InstanceBoardItem, session?: AiSessionSummary];
+  openRepositoryWorkspace: [target: RepositoryWorkspaceTabTarget];
   openSettings: [instanceId: string, section?: "general" | "models" | "apps"];
   openUrl: [url: string];
   runAction: [action: InstanceAction, instance: InstanceBoardItem];
   selectAiSession: [instanceId: string, sessionId: string];
-  selectSession: [sessionKey: string];
+  selectSession: [sessionKey: string, pane?: SessionPaneId];
   stopSession: [instance: InstanceBoardItem, session: SessionTab];
   "update:appLaunchMenuOpen": [open: boolean];
   "update:previewExpanded": [expanded: boolean];

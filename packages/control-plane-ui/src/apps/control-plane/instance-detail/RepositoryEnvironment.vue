@@ -4,6 +4,7 @@
       <button
         type="button"
         class="repository-environment-trigger"
+        :class="{ 'repository-environment-trigger-detail': triggerAppearance === 'detail' }"
         aria-label="Environment"
         title="Environment"
       >
@@ -154,15 +155,6 @@
       </template>
     </PopoverContent>
   </Popover>
-  <RepositoryWorkspace
-    v-if="context"
-    v-model:open="workspaceOpen"
-    :context="context"
-    :initial-view="workspaceInitialView"
-    :instance-id="instanceId"
-    :session-id="sessionId"
-    :session-kind="sessionKind"
-  />
   <RepositoryDeliveryDialog
     v-if="context"
     v-model:open="deliveryOpen"
@@ -183,7 +175,6 @@ import RepositoryWorktreesPanel from "./RepositoryWorktreesPanel.vue";
 import RepositoryBranchesPanel from "./RepositoryBranchesPanel.vue";
 import RepositoryDeliveryDialog from "./RepositoryDeliveryDialog.vue";
 import RepositoryErrorNotice from "./RepositoryErrorNotice.vue";
-import RepositoryWorkspace from "./RepositoryWorkspace.vue";
 
 const props = defineProps<{
   aiAgent?: "codex" | "claude";
@@ -191,18 +182,18 @@ const props = defineProps<{
   instanceId: string;
   sessionId: string;
   sessionKind: RepositorySessionKind;
+  triggerAppearance?: "toolbar" | "detail";
 }>();
 
 const emit = defineEmits<{
   aiSessionStarted: [result: import("@task-handoff/protocol/repository").RepositoryAiSessionLaunchResult];
+  openWorkspace: [target: { initialView: "files" | "changes"; sessionId: string; sessionKind: RepositorySessionKind }];
 }>();
 
 const open = ref(false);
 const worktreesOpen = ref(false);
 const branchesOpen = ref(false);
-const workspaceOpen = ref(false);
 const deliveryOpen = ref(false);
-const workspaceInitialView = ref<"files" | "changes">("files");
 const canQuery = computed(() => props.connectionStatus === "online" && Boolean(props.instanceId && props.sessionId));
 const contextQuery = useRepositoryContextQuery(
   computed(() => ({
@@ -275,8 +266,7 @@ function toggleBranches() {
 }
 
 function openRepositoryWorkspace(view: "files" | "changes") {
-  workspaceInitialView.value = view;
-  workspaceOpen.value = true;
+  emit("openWorkspace", { initialView: view, sessionId: props.sessionId, sessionKind: props.sessionKind });
   open.value = false;
 }
 
@@ -310,6 +300,23 @@ function runPrimaryAction(action: RepositoryPrimaryAction) {
   border-color: var(--control-plane-icon-button-hover-border, var(--focus-ring));
   background: var(--control-plane-icon-button-hover-bg, var(--surface-elevated));
   color: var(--control-plane-icon-button-hover-text, var(--text));
+}
+
+.repository-environment-trigger-detail {
+  width: 26px;
+  height: 26px;
+  border-color: var(--line-subtle);
+  border-radius: 6px;
+  background: var(--surface-subtle);
+  color: var(--text-muted);
+}
+
+.repository-environment-trigger-detail:hover,
+.repository-environment-trigger-detail:focus-visible,
+.repository-environment-trigger-detail[data-state="open"] {
+  border-color: var(--focus-ring);
+  background: var(--surface-subtle);
+  color: var(--text);
 }
 
 :global([role="dialog"].repository-environment-popover) {

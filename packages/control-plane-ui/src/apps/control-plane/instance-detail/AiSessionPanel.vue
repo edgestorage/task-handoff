@@ -450,7 +450,9 @@
               :instance-id="instance.id"
               :session-id="selectedSession.id"
               session-kind="ai-session"
+              trigger-appearance="detail"
               @ai-session-started="handleRepositoryAiSessionStarted"
+              @open-workspace="emit('openRepositoryWorkspace', $event)"
             />
             <TooltipProvider :delay-duration="120">
               <Tooltip>
@@ -619,6 +621,7 @@ import {
   displayAiSessionResponse,
   displayAiSessionTitle,
   sortedAiSessionsByLastUserMessage,
+  type RepositoryWorkspaceTabTarget,
   type SessionTab,
 } from "../useInstanceSessions";
 
@@ -1710,6 +1713,7 @@ onBeforeUnmount(() => {
 
 const emit = defineEmits<{
   openAiSessionApp: [instance: InstanceBoardItem, session?: AiSessionSummary];
+  openRepositoryWorkspace: [target: RepositoryWorkspaceTabTarget];
   selectAiSession: [instanceId: string, sessionId: string];
 }>();
 </script>

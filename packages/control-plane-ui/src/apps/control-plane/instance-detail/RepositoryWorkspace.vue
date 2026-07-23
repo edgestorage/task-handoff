@@ -1,17 +1,23 @@
 <template>
-  <Dialog :open="open" @update:open="$emit('update:open', $event)">
-    <DialogContent class="repository-workspace-dialog" @open-auto-focus="focusWorkspace">
-      <DialogTitle class="sr-only">Repository workspace</DialogTitle>
-      <DialogDescription class="sr-only">Browse and edit repository files, inspect scoped changes, and perform confirmed Git mutations.</DialogDescription>
+  <component :is="embedded ? 'section' : Dialog" :open="embedded || open" :class="{ 'repository-workspace-embedded': embedded }" @update:open="$emit('update:open', $event)">
+    <component :is="embedded ? 'div' : DialogContent" :class="['repository-workspace-dialog', { 'repository-workspace-window': standalone, 'repository-workspace-embedded-content': embedded }]" @open-auto-focus="focusWorkspace">
+      <DialogTitle v-if="!embedded" class="sr-only">Repository workspace</DialogTitle>
+      <DialogDescription v-if="!embedded" class="sr-only">Browse and edit repository files, inspect scoped changes, and perform confirmed Git mutations.</DialogDescription>
       <header class="repository-workspace-head">
         <span class="repository-workspace-title">
           <FolderGit2 :size="17" />
           <span><strong>{{ context.displayName || "Repository" }}</strong><small>{{ workspaceSubtitle }}</small></span>
         </span>
-        <button type="button" aria-label="Close repository workspace" title="Close" @click="$emit('update:open', false)"><X :size="16" /></button>
+        <span class="repository-workspace-head-actions">
+          <small v-if="popoutMessage" class="repository-workspace-popout-message" role="status">{{ popoutMessage }}</small>
+          <button v-if="embedded" type="button" aria-label="Open repository workspace as dialog" title="Open as dialog" @click="emit('openDialog')"><Maximize2 :size="16" /></button>
+          <button v-else-if="!standalone" type="button" aria-label="Return repository workspace to tab" title="Return to tab" @click="emit('openTab')"><PanelTop :size="16" /></button>
+          <button v-if="!standalone" type="button" aria-label="Open repository workspace in new window" title="Open in new window" @click="openInNewWindow"><ExternalLink :size="16" /></button>
+          <button v-if="!embedded" type="button" aria-label="Close repository workspace" title="Close" @click="emit('update:open', false)"><X :size="16" /></button>
+        </span>
       </header>
 
-      <div class="repository-workspace-body">
+      <div ref="workspaceBody" class="repository-workspace-body" :style="{ '--repository-sidebar-width': `${sidebarWidth}px` }">
         <aside class="repository-workspace-sidebar">
           <div ref="workspaceSidebarTabs" class="repository-workspace-sidebar-tabs" role="tablist" aria-label="Repository navigation" @keydown="navigateSidebarTabs">
             <button type="button" role="tab" data-repository-view="files" :tabindex="sidebarView === 'files' ? 0 : -1" :aria-selected="sidebarView === 'files'" :class="{ active: sidebarView === 'files' }" @click="sidebarView = 'files'"><Files :size="14" /><span>Files</span></button>
@@ -27,7 +33,8 @@
               <Button variant="ghost" size="sm" :disabled="changeMutationPending || !stagedCount" title="Commit current index" @click="openCommitDialog"><GitCommitHorizontal :size="13" /> Commit</Button>
             </template>
           </div>
-          <div class="repository-workspace-sidebar-content">
+          <ScrollArea type="always" class="repository-workspace-sidebar-content">
+            <div class="repository-workspace-sidebar-content-inner">
             <RepositoryErrorNotice v-if="changeMutationError && sidebarView === 'changes'" :error="changeMutationError" fallback="Repository changes could not be updated." />
             <div v-if="changeMutationSuccess && sidebarView === 'changes'" class="repository-change-mutation-message success" role="status"><CheckCircle2 :size="14" /><span>{{ changeMutationSuccess }}</span></div>
             <div v-if="loadingWorkspace" class="repository-workspace-sidebar-state"><LoaderCircle class="repository-workspace-spin" :size="16" /> Loading repository…</div>
@@ -55,11 +62,14 @@
                 </div>
               </section>
             </div>
-          </div>
+            </div>
+          </ScrollArea>
         </aside>
 
+        <div class="repository-workspace-resize-handle" role="separator" aria-label="Resize repository sidebar" aria-orientation="vertical" :aria-valuenow="Math.round(sidebarWidth)" tabindex="0" @pointerdown="startSidebarResize" @dblclick="sidebarWidth = 320" @keydown.left.prevent="setSidebarWidth(sidebarWidth - 16)" @keydown.right.prevent="setSidebarWidth(sidebarWidth + 16)" />
+
         <main class="repository-workspace-main">
-          <div v-if="tabs.length" ref="workspaceOpenTabs" class="repository-workspace-tabs" role="tablist" aria-label="Open repository files" @keydown="navigateOpenTabs">
+          <div v-if="tabs.length" ref="workspaceOpenTabs" class="repository-workspace-tabs" role="tablist" aria-label="Open repository files" @keydown="navigateOpenTabs" @wheel="scrollOpenTabs">
             <div v-for="tab in tabs" :key="tab.id" class="repository-workspace-tab" :class="{ active: activeTabId === tab.id }">
               <button type="button" role="tab" :data-repository-tab="tab.id" :tabindex="activeTabId === tab.id ? 0 : -1" :aria-selected="activeTabId === tab.id" @click="activeTabId = tab.id">
                 <FileDiff v-if="tab.kind === 'diff'" :size="13" /><FileCode2 v-else :size="13" />
@@ -175,8 +185,8 @@
           </form>
         </DialogContent>
       </Dialog>
-    </DialogContent>
-  </Dialog>
+    </component>
+  </component>
 </template>
 
 <script setup lang="ts">
@@ -192,18 +202,20 @@ import type {
   RepositoryMutationResult,
   RepositorySessionKind,
 } from "@task-handoff/protocol/repository";
-import { CheckCircle2, CircleAlert, Columns2, FileCode2, FileDiff, FilePenLine, FilePlus2, Files, FileWarning, FolderGit2, FolderOpen, GitCommitHorizontal, GitCompareArrows, ListMinus, ListPlus, LoaderCircle, PencilLine, RefreshCw, RotateCcw, Save, Trash2, TriangleAlert, X } from "@lucide/vue";
+import { CheckCircle2, CircleAlert, Columns2, ExternalLink, FileCode2, FileDiff, FilePenLine, FilePlus2, Files, FileWarning, FolderGit2, FolderOpen, GitCommitHorizontal, GitCompareArrows, ListMinus, ListPlus, LoaderCircle, Maximize2, PanelTop, PencilLine, RefreshCw, RotateCcw, Save, Trash2, TriangleAlert, X } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { ApiError } from "../../../api/client";
 import { commitRepositoryIndex, createRepositoryFile, deleteRepositoryFile, discardRepositoryAllTracked, discardRepositoryWorktree, getRepositoryChanges, getRepositoryContext, getRepositoryDiff, getRepositoryDirectory, getRepositoryFile, renameRepositoryFile, stageRepositoryPaths, unstageRepositoryPaths, writeRepositoryFile } from "../../../api/repository";
 import { Button } from "../../../components/ui/button";
 import { Checkbox } from "../../../components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import { Input } from "../../../components/ui/input";
+import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Textarea } from "../../../components/ui/textarea";
 import RepositoryErrorNotice from "./RepositoryErrorNotice.vue";
 import RepositoryFileTree from "./RepositoryFileTree.vue";
+import { openRepositoryWorkspaceWindow, repositoryWorkspaceChannelName } from "./repositoryWorkspaceWindow";
 
 type FileTab = RepositoryFileContent & {
   id: string;
@@ -219,14 +231,20 @@ type WorkspaceTab = FileTab | DiffTab;
 
 const props = defineProps<{
   context: RepositoryContext;
+  embedded?: boolean;
   initialView: "files" | "changes";
   instanceId: string;
   open: boolean;
   sessionId: string;
   sessionKind: RepositorySessionKind;
+  standalone?: boolean;
 }>();
 
-defineEmits<{ "update:open": [open: boolean] }>();
+const emit = defineEmits<{
+  openDialog: [];
+  openTab: [];
+  "update:open": [open: boolean];
+}>();
 
 const queryClient = useQueryClient();
 const target = computed(() => ({ instanceId: props.instanceId, sessionKind: props.sessionKind, sessionId: props.sessionId }));
@@ -238,9 +256,12 @@ const tabs = ref<WorkspaceTab[]>([]);
 const activeTabId = ref("");
 const workspaceSidebarTabs = ref<HTMLElement>();
 const workspaceOpenTabs = ref<HTMLElement>();
+const workspaceBody = ref<HTMLElement>();
+const sidebarWidth = ref(320);
 const loadingWorkspace = ref(false);
 const workspaceError = ref<unknown>();
 const loadRevision = ref(0);
+const popoutMessage = ref("");
 const newFileDialogOpen = ref(false);
 const newFilePath = ref("");
 const newFileError = ref<unknown>();
@@ -276,10 +297,85 @@ const canDiscardWorktreeSelection = computed(() => selectedChanges.value.length 
 const canDiscardAllSelection = computed(() => selectedChanges.value.length > 0
   && props.context.head?.state !== "unborn"
   && selectedChanges.value.every((entry) => entry.scope === "staged" || entry.scope === "unstaged"));
+const hasUnsavedDrafts = computed(() => tabs.value.some((tab) => tab.kind === "file" && tab.draft !== tab.content));
 const workspaceSubtitle = computed(() => {
   const branch = props.context.head?.state === "branch" ? props.context.head.branch : props.context.head?.state === "detached" ? `detached ${props.context.head.oid?.slice(0, 8) || ""}` : "unborn";
   return [branch, props.context.cwdRelativePath ? `cwd: ${props.context.cwdRelativePath}` : "repository root"].filter(Boolean).join(" · ");
 });
+let repositoryChannel: BroadcastChannel | undefined;
+let stopSidebarResize: (() => void) | undefined;
+
+onMounted(() => {
+  connectRepositoryChannel();
+  window.addEventListener("focus", refreshFromExternalChange);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("focus", refreshFromExternalChange);
+  repositoryChannel?.close();
+  stopSidebarResize?.();
+});
+
+function setSidebarWidth(width: number) {
+  const maxWidth = Math.max(280, (workspaceBody.value?.clientWidth || 960) * 0.62);
+  sidebarWidth.value = Math.min(maxWidth, Math.max(220, width));
+}
+
+function startSidebarResize(event: PointerEvent) {
+  if (event.button !== 0 || !workspaceBody.value) return;
+  event.preventDefault();
+  const startX = event.clientX;
+  const startWidth = sidebarWidth.value;
+  document.body.classList.add("repository-sidebar-resizing");
+  const move = (moveEvent: PointerEvent) => setSidebarWidth(startWidth + moveEvent.clientX - startX);
+  const stop = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", stop);
+    window.removeEventListener("pointercancel", stop);
+    document.body.classList.remove("repository-sidebar-resizing");
+    stopSidebarResize = undefined;
+  };
+  stopSidebarResize?.();
+  stopSidebarResize = stop;
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", stop);
+  window.addEventListener("pointercancel", stop);
+}
+
+function connectRepositoryChannel() {
+  repositoryChannel?.close();
+  repositoryChannel = undefined;
+  if (typeof BroadcastChannel === "undefined") return;
+  repositoryChannel = new BroadcastChannel(repositoryWorkspaceChannelName(target.value));
+  repositoryChannel.addEventListener("message", refreshFromExternalChange);
+}
+
+async function openInNewWindow() {
+  popoutMessage.value = "";
+  try {
+    const opened = await openRepositoryWorkspaceWindow({ ...target.value, view: sidebarView.value });
+    if (!opened) {
+      popoutMessage.value = "New window was blocked.";
+      return;
+    }
+    if (hasUnsavedDrafts.value) {
+      popoutMessage.value = "Unsaved drafts remain in this window.";
+      return;
+    }
+    emit("update:open", false);
+  } catch (error) {
+    popoutMessage.value = error instanceof Error ? error.message : "New window could not be opened.";
+  }
+}
+
+function notifyRepositoryChanged() {
+  repositoryChannel?.postMessage({ type: "repository-invalidated" });
+}
+
+function refreshFromExternalChange() {
+  if (!props.open || loadingWorkspace.value) return;
+  void Promise.all([refreshRepositoryState(), refreshLoadedDirectories()]);
+}
 
 function focusWorkspace(event: Event) {
   event.preventDefault();
@@ -307,10 +403,24 @@ function navigateOpenTabs(event: KeyboardEvent) {
   void nextTick(() => workspaceOpenTabs.value?.querySelector<HTMLButtonElement>(`[data-repository-tab="${CSS.escape(activeTabId.value)}"]`)?.focus());
 }
 
+function scrollOpenTabs(event: WheelEvent) {
+  const tabList = workspaceOpenTabs.value;
+  if (!tabList || Math.abs(event.deltaX) >= Math.abs(event.deltaY) || tabList.scrollWidth <= tabList.clientWidth) return;
+  const nextScrollLeft = Math.max(0, Math.min(tabList.scrollWidth - tabList.clientWidth, tabList.scrollLeft + event.deltaY));
+  if (nextScrollLeft === tabList.scrollLeft) return;
+  event.preventDefault();
+  tabList.scrollLeft = nextScrollLeft;
+}
+
 watch(() => props.open, (open) => {
   if (!open) return;
   sidebarView.value = props.initialView;
   void loadWorkspace();
+}, { immediate: true });
+
+watch(() => `${props.instanceId}:${props.sessionKind}:${props.sessionId}`, () => {
+  connectRepositoryChannel();
+  if (props.open) void loadWorkspace();
 });
 
 async function loadWorkspace() {
@@ -503,6 +613,7 @@ async function applyRepositoryMutation(result: RepositoryMutationResult, affecte
     if (removedIds.has(activeTabId.value)) activeTabId.value = tabs.value.at(-1)?.id || "";
   }
   await refreshLoadedDirectories();
+  notifyRepositoryChanged();
 }
 
 function openNewFileDialog() {
@@ -672,6 +783,7 @@ async function applyFileMutation(result: RepositoryFileMutationResult) {
   changes.value = result.changes;
   queryClient.setQueryData(repositoryContextQueryKey(), result.context);
   await refreshLoadedDirectories();
+  notifyRepositoryChanged();
 }
 
 async function refreshLoadedDirectories() {
@@ -718,16 +830,25 @@ function statusLabel(status: RepositoryChangeEntry["status"]) {
 
 <style scoped>
 :global([role="dialog"].repository-workspace-dialog) { display: grid; top: calc(50% + 24px); width: min(1500px, calc(100vw - 32px)); max-width: none; height: min(920px, calc(100vh - 80px)); grid-template-rows: auto minmax(0, 1fr); gap: 0; overflow: hidden; border-color: var(--line-subtle); border-radius: 13px; background: var(--workspace-bg, var(--background)); padding: 0; color: var(--text); }
+:global([role="dialog"].repository-workspace-dialog.repository-workspace-window) { top: 50%; width: 100vw; height: 100vh; border: 0; border-radius: 0; box-shadow: none; }
+.repository-workspace-embedded { display: block; width: 100%; height: 100%; min-width: 0; min-height: 0; }
+.repository-workspace-embedded-content { display: grid; width: 100%; height: 100%; min-width: 0; min-height: 0; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; background: var(--workspace-bg, var(--background)); color: var(--text); }
 .repository-workspace-head { display: flex; min-height: 52px; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line-subtle); padding: 0 10px 0 15px; }
 .repository-workspace-title, .repository-workspace-title > span { display: flex; align-items: center; }
 .repository-workspace-title { gap: 9px; }
 .repository-workspace-title > span { align-items: flex-start; flex-direction: column; gap: 2px; }
 .repository-workspace-title strong { color: var(--text-strong); font-size: 13px; }
 .repository-workspace-title small { color: var(--text-muted); font-size: 10px; }
-.repository-workspace-head > button { display: grid; width: 30px; height: 30px; place-items: center; border: 0; border-radius: 7px; background: transparent; color: var(--text-muted); cursor: pointer; }
-.repository-workspace-head > button:hover, .repository-workspace-head > button:focus-visible { background: var(--surface-subtle); color: var(--text); }
-.repository-workspace-body { display: grid; min-height: 0; grid-template-columns: 320px minmax(0, 1fr); }
-.repository-workspace-sidebar { display: grid; min-height: 0; grid-template-rows: auto auto minmax(0, 1fr); border-right: 1px solid var(--line-subtle); background: var(--surface-raised, var(--background)); }
+.repository-workspace-head-actions { display: flex; min-width: 0; align-items: center; gap: 2px; }
+.repository-workspace-head-actions > button { display: grid; width: 30px; height: 30px; place-items: center; border: 0; border-radius: 7px; background: transparent; color: var(--text-muted); cursor: pointer; }
+.repository-workspace-head-actions > button:hover, .repository-workspace-head-actions > button:focus-visible { background: var(--surface-subtle); color: var(--text); }
+.repository-workspace-popout-message { max-width: 300px; overflow: hidden; margin-right: 6px; color: var(--status-warning); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.repository-workspace-body { display: grid; min-height: 0; grid-template-columns: minmax(220px, var(--repository-sidebar-width)) 7px minmax(0, 1fr); overflow: hidden; }
+.repository-workspace-sidebar { display: grid; min-width: 0; min-height: 0; grid-template-rows: auto auto minmax(0, 1fr); background: var(--surface-raised, var(--background)); }
+.repository-workspace-resize-handle { position: relative; z-index: 2; cursor: col-resize; background: transparent; touch-action: none; }
+.repository-workspace-resize-handle::after { position: absolute; top: 0; bottom: 0; left: 2.5px; width: 2px; background: var(--line-subtle); content: ""; }
+.repository-workspace-resize-handle:hover::after, :global(body.repository-sidebar-resizing) .repository-workspace-resize-handle::after { background: var(--focus-ring); }
+:global(body.repository-sidebar-resizing) { cursor: col-resize; user-select: none; }
 .repository-workspace-sidebar-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; border-bottom: 1px solid var(--line-subtle); padding: 7px; }
 .repository-workspace-sidebar-tabs button { display: flex; min-height: 31px; align-items: center; justify-content: center; gap: 6px; border: 0; border-radius: 6px; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 11px; }
 .repository-workspace-sidebar-tabs button.active { background: var(--surface-subtle); color: var(--text-strong); }
@@ -735,7 +856,10 @@ function statusLabel(status: RepositoryChangeEntry["status"]) {
 .repository-workspace-sidebar-actions { display: flex; min-height: 38px; align-items: center; justify-content: flex-end; border-bottom: 1px solid var(--line-subtle); padding: 4px 7px; }
 .repository-workspace-sidebar-actions > span { min-width: 0; margin-right: auto; overflow: hidden; color: var(--text-muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .repository-workspace-sidebar-actions :deep(button) { gap: 5px; height: 28px; padding: 0 8px; font-size: 10px; }
-.repository-workspace-sidebar-content { min-height: 0; overflow: auto; padding: 7px; }
+.repository-workspace-sidebar-content { min-width: 0; min-height: 0; }
+.repository-workspace-sidebar-content-inner { min-width: 0; padding: 7px; }
+.repository-workspace-sidebar-content :deep([data-task-handoff-scroll-viewport] > div) { width: 100%; min-width: 0 !important; }
+.repository-workspace-sidebar-content :deep([data-orientation="horizontal"]) { display: none; }
 .repository-workspace-sidebar-state { display: flex; min-height: 100px; align-items: center; justify-content: center; gap: 8px; color: var(--text-muted); font-size: 11px; }
 .repository-workspace-sidebar-state.error { color: var(--status-warning); }
 .repository-changes-tree { display: grid; gap: 9px; }
@@ -753,7 +877,8 @@ function statusLabel(status: RepositoryChangeEntry["status"]) {
 .repository-change-mutation-message.error { border-color: color-mix(in srgb, var(--status-danger) 35%, var(--line-subtle)); color: var(--status-danger); }
 .repository-change-mutation-message.success { border-color: color-mix(in srgb, var(--status-success) 35%, var(--line-subtle)); color: var(--status-success); }
 .repository-workspace-main { display: grid; min-width: 0; min-height: 0; grid-template-rows: auto minmax(0, 1fr); }
-.repository-workspace-tabs { display: flex; min-height: 38px; overflow-x: auto; border-bottom: 1px solid var(--line-subtle); background: var(--surface-raised, var(--background)); padding: 4px 5px 0; }
+.repository-workspace-tabs { display: flex; min-height: 38px; overflow-x: auto; overflow-y: hidden; border-bottom: 1px solid var(--line-subtle); background: var(--surface-raised, var(--background)); padding: 4px 5px 0; scrollbar-width: none; }
+.repository-workspace-tabs::-webkit-scrollbar { display: none; }
 .repository-workspace-tab { display: flex; min-width: 130px; max-width: 260px; align-items: stretch; border-bottom: 2px solid transparent; color: var(--text-muted); }
 .repository-workspace-tab.active { border-bottom-color: var(--focus-ring); color: var(--text-strong); }
 .repository-workspace-tab > [role="tab"] { display: flex; min-width: 0; flex: 1 1 auto; align-items: center; gap: 6px; border: 0; background: transparent; color: inherit; cursor: pointer; padding: 0 4px 0 9px; }
@@ -815,6 +940,6 @@ function statusLabel(status: RepositoryChangeEntry["status"]) {
 .repository-discard-options > button strong { font-size: 11px; }
 .repository-discard-options > button small { color: var(--text-muted); font-size: 9px; line-height: 1.4; }
 @keyframes repository-workspace-spin { to { transform: rotate(360deg); } }
-@media (max-width: 800px) { .repository-workspace-body { grid-template-columns: minmax(220px, 42%) minmax(0, 1fr); } }
+@media (max-width: 800px) { .repository-workspace-body { grid-template-columns: minmax(220px, var(--repository-sidebar-width)) 7px minmax(0, 1fr); } }
 @media (prefers-reduced-motion: reduce) { .repository-workspace-spin { animation: none; } }
 </style>

@@ -29,6 +29,7 @@ let nodeAgentProcess;
 let ownsControlPlaneProcess = false;
 let ownsNodeAgentProcess = false;
 let desktopLogStream;
+const controlPlaneWindows = new Set();
 const childProcessSpawnErrors = new WeakMap();
 const NODE_AGENT_IPC_ENDPOINT_PREFIX = "ipc://";
 
@@ -383,6 +384,50 @@ function createWindow(url) {
       logError(`[desktop-shell] failure page load failed ${loadError}`);
     });
   }
+}
+
+function resolveControlPlaneWindowUrl(url) {
+  const base = mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.getURL().startsWith("http")
+    ? mainWindow.webContents.getURL()
+    : controlPlaneUrl();
+  const parsedUrl = new URL(String(url || ""), base);
+  if (parsedUrl.origin !== new URL(base).origin || parsedUrl.pathname !== "/repository-workspace") {
+    throw new Error("Only same-origin repository workspace windows are supported.");
+  }
+  return parsedUrl;
+}
+
+function createControlPlaneWindow(url) {
+  const parsedUrl = resolveControlPlaneWindowUrl(url);
+  const controlPlaneWindow = new BrowserWindow({
+    width: 1280,
+    height: 820,
+    minWidth: 760,
+    minHeight: 520,
+    show: false,
+    title: "Repository · TaskHandoff",
+    icon: desktopIconPath(),
+    backgroundColor: "#071013",
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      preload: path.join(__dirname, "preload.cjs"),
+      sandbox: true,
+    },
+  });
+  controlPlaneWindows.add(controlPlaneWindow);
+  controlPlaneWindow.once("closed", () => controlPlaneWindows.delete(controlPlaneWindow));
+  controlPlaneWindow.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
+    void shell.openExternal(targetUrl);
+    return { action: "deny" };
+  });
+  controlPlaneWindow.once("ready-to-show", () => controlPlaneWindow.show());
+  void controlPlaneWindow.loadURL(parsedUrl.toString()).catch((error) => {
+    const detail = error instanceof Error ? error.stack || error.message : String(error);
+    logError(`[desktop-shell] control plane window loadURL failed ${detail}`);
+    if (!controlPlaneWindow.isDestroyed()) controlPlaneWindow.close();
+  });
+  return controlPlaneWindow;
 }
 
 function createAppWindow(url) {
@@ -749,6 +794,11 @@ ipcMain.handle("task-handoff:choose-project-folder", async () => {
 
 ipcMain.handle("task-handoff:open-app-window", (_event, url) => {
   createAppWindow(url);
+  return { ok: true };
+});
+
+ipcMain.handle("task-handoff:open-control-plane-window", (_event, url) => {
+  createControlPlaneWindow(url);
   return { ok: true };
 });
 

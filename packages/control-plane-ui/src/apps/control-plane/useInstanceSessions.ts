@@ -1,4 +1,5 @@
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions } from "../../api/types";
+import type { RepositorySessionKind } from "@task-handoff/protocol/repository";
 import { appSessionBindingKeys, appSessionStatus, isVisibleAppSession } from "./appSessionVisibility.ts";
 
 export type SessionTab = {
@@ -6,9 +7,15 @@ export type SessionTab = {
   label: string;
   title?: string;
   status: string;
-  kind: "terminal" | "browser" | "logs" | "app" | "ai" | "status";
+  kind: "terminal" | "browser" | "logs" | "app" | "ai" | "status" | "repository";
   source?: Record<string, unknown>;
   aiSessions?: AiSessionSummary[];
+};
+
+export type RepositoryWorkspaceTabTarget = {
+  initialView: "files" | "changes";
+  sessionId: string;
+  sessionKind: RepositorySessionKind;
 };
 
 export type SessionWorkspaceGroup = {

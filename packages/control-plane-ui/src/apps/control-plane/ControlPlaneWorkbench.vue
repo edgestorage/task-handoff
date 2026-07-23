@@ -183,11 +183,20 @@
         :instance-display-name="instanceDisplayName"
         :is-instance-action-busy="isInstanceActionBusy"
         :last-refresh-label="lastRefreshLabel"
+        :left-session="leftSession"
+        :left-session-key="leftSessionKey"
+        :left-session-tabs="leftOrderedSessionTabs"
         :launchable-apps="launchableApps"
         :launching-app="launchingApp"
         :loading="board.isLoading.value"
         :resource-metrics="activeInstanceResourceMetrics"
         :resource-metrics-error="activeInstanceResourceMetricsError"
+        :right-session="rightSession"
+        :right-session-key="rightSessionKey"
+        :right-session-tabs="rightOrderedSessionTabs"
+        :focused-session-pane="focusedSessionPane"
+        :has-session-split="hasSessionSplit"
+        :session-split-ratio="sessionSplitRatio"
         :node-local-folders="activeNodeLocalFolders"
         :rename-instance="renameInstance"
         :rename-session="renameSession"
@@ -199,9 +208,15 @@
         @launch-app="launchSelectedApp"
         @new-instance="newInstanceOpen = true"
         @open-ai-session-app="openAiSessionApp"
+        @open-repository-workspace="openRepositoryWorkspace"
         @open-settings="openInstanceSettings"
         @open-url="openAppUrl"
         @move-session-tab="moveSessionTab"
+        @move-session-to-pane="moveSessionToPane"
+        @focus-session-pane="focusSessionPane"
+        @open-session-split="openSessionSplit"
+        @close-session-split="closeSessionSplit"
+        @set-session-split-ratio="setSessionSplitRatio"
         @run-action="runInstanceAction"
         @select-ai-session="selectAiSession"
         @select-session="selectSession"
@@ -263,6 +278,7 @@ type ProjectFolderSelection = string | { path: string; ownerNodeId?: string };
 type DesktopBridge = {
   chooseProjectFolder?: () => Promise<ProjectFolderSelection | undefined>;
   openAppWindow?: (url: string) => Promise<{ ok: boolean }>;
+  openControlPlaneWindow?: (url: string) => Promise<{ ok: boolean }>;
   windowAction?: (action: "minimize" | "toggle-maximize" | "close") => Promise<{ ok: boolean; maximized?: boolean }>;
 };
 
@@ -478,13 +494,28 @@ const {
   launchableApps,
   launchingApp,
   launchSelectedApp,
+  leftOrderedSessionTabs,
+  leftSession,
+  leftSessionKey,
   moveSessionTab,
+  moveSessionToPane,
   openAiSessionApp,
+  openSessionSplit,
+  openRepositoryWorkspace,
   orderedSessionTabs,
+  closeSessionSplit,
+  focusSessionPane,
+  focusedSessionPane,
+  hasSessionSplit,
+  rightOrderedSessionTabs,
+  rightSession,
+  rightSessionKey,
   selectAiSession,
   selectSession,
   selectedAiSession,
   sessionTabs,
+  sessionSplitRatio,
+  setSessionSplitRatio,
   setAppLaunchMenuOpen,
   setSessionMenuOpen,
   stoppingSessionId,

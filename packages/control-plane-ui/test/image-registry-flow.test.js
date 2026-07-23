@@ -52,7 +52,10 @@ test("instance status page exists for every lifecycle state except running", () 
     assert.equal(hasInstanceStatusPage(value), status !== "running", status);
   }
   const sessions = read("src/apps/control-plane/useInstanceSessions.ts");
-  const preview = read("src/apps/control-plane/instance-detail/SessionPreview.vue");
+  const preview = [
+    read("src/apps/control-plane/instance-detail/SessionPreview.vue"),
+    read("src/apps/control-plane/instance-detail/SessionPaneContent.vue"),
+  ].join("\n");
   assert.match(sessions, /instance\.status === "running" \? undefined/);
   assert.match(sessions, /key: "overview"[\s\S]*kind: "status"/);
   assert.match(preview, /v-if="hasInstanceStatusPage\(instance\)"/);
