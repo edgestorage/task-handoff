@@ -18,6 +18,7 @@
       @open-repository-workspace="$emit('openRepositoryWorkspace', $event)"
       @select-ai-session="(instanceId, sessionId) => $emit('selectAiSession', instanceId, sessionId)"
     />
+    <RepositoryChangesReviewTab v-else-if="session?.kind === 'repository' && session.source?.page === 'changes-review'" :instance-id="instance.id" :session="session" @open-workspace="$emit('openRepositoryWorkspace', $event)" />
     <RepositoryWorkspaceTab v-else-if="session?.kind === 'repository'" :instance-id="instance.id" :session="session" />
     <div v-else-if="activeFrameUrl" class="session-preview-live">
       <iframe class="session-preview-frame" :src="activeFrameUrl" :title="session?.label || 'App session'" allow="clipboard-read; clipboard-write; fullscreen" />
@@ -53,6 +54,7 @@ import { previewDetail, previewTitle, sessionFrameUrl, sessionTerminalSocketUrl 
 import { hasInstanceStatusPage, instanceStatusDetail, instanceStatusTitle, isInstanceStatusPending } from "../useInstanceStatus";
 import AiSessionPanel from "./AiSessionPanel.vue";
 import SessionTerminalPreview from "./SessionTerminalPreview.vue";
+import RepositoryChangesReviewTab from "./RepositoryChangesReviewTab.vue";
 import RepositoryWorkspaceTab from "./RepositoryWorkspaceTab.vue";
 
 const props = defineProps<{

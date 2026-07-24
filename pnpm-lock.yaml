@@ -304,6 +304,9 @@ importers:
       '@tanstack/vue-query':
         specifier: ^5.91.2
         version: 5.101.0(vue@3.5.38(typescript@6.0.3))
+      '@tanstack/vue-virtual':
+        specifier: ^3.13.29
+        version: 3.13.29(vue@3.5.38(typescript@6.0.3))
       '@task-handoff/protocol':
         specifier: workspace:*
         version: link:../protocol

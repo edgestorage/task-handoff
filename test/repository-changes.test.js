@@ -52,6 +52,8 @@ test("change entries and diffs keep staged and unstaged versions independent", a
   const stagedDiff = await changes.diff("staged", "tracked.txt");
   const unstagedDiff = await changes.diff("unstaged", "tracked.txt");
   assert.match(stagedDiff.content, /staged content/);
+  assert.equal(stagedDiff.lines.some((line) => line.kind === "addition" && line.content === "staged content" && line.newLine === 1), true);
+  assert.equal(stagedDiff.lines.some((line) => line.kind === "deletion" && line.content === "initial" && line.oldLine === 1), true);
   assert.doesNotMatch(stagedDiff.content, /unstaged content/);
   assert.match(unstagedDiff.content, /unstaged content/);
   const untrackedDiff = await changes.diff("untracked", "new.txt");
@@ -61,6 +63,7 @@ test("change entries and diffs keep staged and unstaged versions independent", a
   assert.equal(binaryDiff.binary, true);
   assert.equal(binaryDiff.complete, false);
   assert.equal(binaryDiff.content, "");
+  assert.deepEqual(binaryDiff.lines, []);
   const truncated = await changes.diff("untracked", "large.txt", 80);
   assert.equal(truncated.truncated, true);
   assert.equal(truncated.complete, false);

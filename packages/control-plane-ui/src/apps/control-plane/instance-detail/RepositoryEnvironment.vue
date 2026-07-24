@@ -66,6 +66,22 @@
           <ChevronRight :size="15" />
         </button>
 
+        <button
+          type="button"
+          class="repository-environment-row repository-environment-review"
+          :disabled="context.availability !== 'available'"
+          @click="openChangesReview"
+        >
+          <span class="repository-environment-row-icon"><GitCompareArrows :size="16" /></span>
+          <span class="repository-environment-row-copy">
+            <strong>Review changes</strong>
+            <small v-if="context.availability === 'available'">Changed files only · continuous diff review</small>
+            <small v-else>Repository changes are unavailable</small>
+          </span>
+          <span v-if="changeCount" class="repository-environment-count">{{ changeCount }}</span>
+          <ChevronRight :size="15" />
+        </button>
+
         <div v-if="context.availability === 'available' && context.head?.state !== 'branch'" class="repository-environment-notice head-state" role="status">
           <GitCommitHorizontal :size="15" />
           <span v-if="context.head?.state === 'detached'">Detached HEAD at {{ context.head.oid?.slice(0, 8) || "unknown commit" }}. Create or checkout a branch before publishing.</span>
@@ -167,7 +183,7 @@
 
 <script setup lang="ts">
 import type { RepositoryContext, RepositoryPrimaryAction, RepositorySessionKind } from "@task-handoff/protocol/repository";
-import { ChevronRight, CircleAlert, Files, FolderGit2, GitBranch, GitCommitHorizontal, GitFork, LoaderCircle, RefreshCw } from "@lucide/vue";
+import { ChevronRight, CircleAlert, Files, FolderGit2, GitBranch, GitCommitHorizontal, GitCompareArrows, GitFork, LoaderCircle, RefreshCw } from "@lucide/vue";
 import { computed, ref } from "vue";
 import { useRepositoryContextQuery } from "../../../api/repository";
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "../../../components/ui/popover";
@@ -187,7 +203,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   aiSessionStarted: [result: import("@task-handoff/protocol/repository").RepositoryAiSessionLaunchResult];
-  openWorkspace: [target: { initialView: "files" | "changes"; sessionId: string; sessionKind: RepositorySessionKind }];
+  openWorkspace: [target: { initialView: "files" | "changes"; page?: "workspace" | "changes-review"; sessionId: string; sessionKind: RepositorySessionKind }];
 }>();
 
 const open = ref(false);
@@ -270,9 +286,14 @@ function openRepositoryWorkspace(view: "files" | "changes") {
   open.value = false;
 }
 
+function openChangesReview() {
+  emit("openWorkspace", { initialView: "changes", page: "changes-review", sessionId: props.sessionId, sessionKind: props.sessionKind });
+  open.value = false;
+}
+
 function runPrimaryAction(action: RepositoryPrimaryAction) {
   if (action === "review-changes" || action === "resolve-conflicts") {
-    openRepositoryWorkspace("changes");
+    openChangesReview();
     return;
   }
   deliveryOpen.value = true;

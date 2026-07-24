@@ -434,15 +434,18 @@ export function useActiveInstanceSessions({
   function openRepositoryWorkspace(target: RepositoryWorkspaceTabTarget) {
     const instanceId = activeInstance.value?.id;
     if (!instanceId) return;
-    const key = `repository:${target.sessionKind}:${target.sessionId}`;
+    const page = target.page === "changes-review" ? "changes-review" : "workspace";
+    const key = page === "changes-review"
+      ? `repository-changes:${target.sessionKind}:${target.sessionId}`
+      : `repository:${target.sessionKind}:${target.sessionId}`;
     const tabs = repositorySessionTabs[instanceId] ||= reactive<SessionTab[]>([]);
     if (!tabs.some((tab) => tab.key === key)) {
       tabs.push({
         key,
         kind: "repository",
-        label: "Repository",
+        label: page === "changes-review" ? "Changes" : "Repository",
         status: "open",
-        source: { ...target },
+        source: { ...target, page },
       });
     }
     const pane = focusedSessionPanes[instanceId] === "right" && rightSelectedSessionKeys[instanceId] ? "right" : "left";

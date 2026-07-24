@@ -138,6 +138,7 @@ test("repository API exposes Files, Changes, diff, and authoritative mutation re
     const unstaged = changes.entries.find((entry) => entry.path === "tracked.txt" && entry.scope === "unstaged");
     const diff = await app.inject({ method: "GET", url: `${base}/diff?scope=unstaged&path=tracked.txt&byteLimit=4096` });
     assert.match(diff.json().data.content, /changed/);
+    assert.equal(diff.json().data.lines.some((line) => line.kind === "addition" && line.content === "changed"), true);
 
     const staged = await app.inject({ method: "POST", url: `${base}/index/stage`, payload: { expectedSnapshotId: context.snapshotId, paths: [{ path: "tracked.txt", expectedVersion: unstaged.version }] } });
     assert.equal(staged.statusCode, 200);

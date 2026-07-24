@@ -186,6 +186,12 @@ export const RepositoryDiffSchema = z.object({
   truncated: z.boolean(),
   byteLimit: z.number().int().positive(),
   content: z.string(),
+  lines: z.array(z.object({
+    kind: z.enum(["metadata", "hunk", "context", "addition", "deletion"]),
+    content: z.string(),
+    oldLine: z.number().int().positive().optional(),
+    newLine: z.number().int().positive().optional(),
+  }).strict()).max(200_000),
   version: RepositoryFileVersionSchema,
   snapshotId: IdSchema,
 }).strict();

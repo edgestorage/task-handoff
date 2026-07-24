@@ -180,6 +180,41 @@ export function getRepositoryDiff(
   }), options);
 }
 
+export function useRepositoryDiffQuery(
+  target: MaybeRefOrGetter<RepositorySessionTarget>,
+  input: MaybeRefOrGetter<{ path: string; scope: RepositoryChangeScope; snapshotId: string; version: string }>,
+) {
+  const resolvedTarget = computed(() => toValue(target));
+  const resolvedInput = computed(() => toValue(input));
+  return useQuery({
+    queryKey: computed(() => [
+      "repository-diff",
+      resolvedTarget.value.instanceId,
+      resolvedTarget.value.sessionKind,
+      resolvedTarget.value.sessionId,
+      resolvedInput.value.snapshotId,
+      resolvedInput.value.scope,
+      resolvedInput.value.path,
+      resolvedInput.value.version,
+    ]),
+    queryFn: ({ signal }) => getRepositoryDiff(resolvedTarget.value, {
+      path: resolvedInput.value.path,
+      scope: resolvedInput.value.scope,
+    }, { signal }),
+    enabled: computed(() => Boolean(
+      resolvedTarget.value.instanceId
+      && resolvedTarget.value.sessionId
+      && resolvedInput.value.snapshotId
+      && resolvedInput.value.path
+      && resolvedInput.value.version
+    )),
+    gcTime: 30 * 60 * 1000,
+    retry: false,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+  });
+}
+
 function mutateRepositoryBranches(
   target: RepositorySessionTarget,
   action: "create" | "checkout" | "tracking" | "delete",

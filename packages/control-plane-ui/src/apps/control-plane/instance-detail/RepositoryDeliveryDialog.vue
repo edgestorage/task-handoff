@@ -177,7 +177,7 @@ async function run(kind: "fetch" | "primary", operation: () => Promise<Repositor
 </script>
 
 <style scoped>
-:global([role="dialog"].repository-delivery-dialog) { width: min(560px, calc(100vw - 32px)); gap: 14px; border-color: var(--line-subtle); background: var(--background); color: var(--text); }
+:global([role="dialog"].repository-delivery-dialog) { width: min(560px, calc(100vw - 32px)); gap: 14px; border-color: var(--line-subtle); background: hsl(var(--background)); color: var(--text); }
 .repository-delivery-form, .repository-delivery-summary { display: grid; gap: 8px; }
 .repository-delivery-form > label { color: var(--text-muted); font-size: 10px; font-weight: 700; }
 .repository-delivery-form :deep(input) { font: 11px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }

@@ -27,16 +27,19 @@ test("history mode preserves the current-list scroll position and renders all re
   assert.match(panel, /relativeHistoryTime\(item\.lastActiveAt\)/);
 });
 
-test("resume keeps one row busy, deduplicates clicks, and waits for authoritative session state", () => {
-  assert.match(panel, /if \(resumingHistoryId\.value\) return;/);
-  assert.match(panel, /resumingHistoryId === item\.id/);
+test("history detail composer resumes, waits for authoritative state, and then sends", () => {
+  assert.match(panel, /v-model="historyMessageDraft"/);
+  assert.match(panel, /v-model:attachments="historyMessageAttachments"/);
+  assert.match(panel, /@run="sendHistoryMessage"/);
+  assert.match(panel, /if \(!item \|\| resumingHistoryId\.value/);
   assert.match(panel, /const result = await resumeAiSession\(props\.instance\.id, item\.id\);/);
-  assert.match(panel, /result\.disposition === "resumed"/);
-  assert.match(panel, /session\.id === item\.id && session\.appSessionId === result\.appSessionId/);
-  assert.match(panel, /for \(let attempt = 0; attempt < 12 && !authoritative; attempt \+= 1\)/);
+  assert.match(panel, /session\.id === result\.aiSessionId && session\.appSessionId === result\.appSessionId/);
+  assert.match(panel, /for \(let attempt = 0; attempt < 12 && !session; attempt \+= 1\)/);
   assert.match(panel, /refetchQueries\(\{ queryKey: \["control-plane-ai-sessions"\] \}\)/);
-  assert.match(panel, /emit\("selectAiSession", props\.instance\.id, item\.id\);/);
+  assert.match(panel, /await sendAiSessionMessage\([\s\S]*session\.id[\s\S]*message \|\| "请查看附件图片。"/);
+  assert.match(panel, /emit\("selectAiSession", props\.instance\.id, session\.id\);/);
   assert.match(panel, /showControlPlaneToast/);
+  assert.doesNotMatch(panel, />继续对话</);
   assert.doesNotMatch(panel, /historyItems\.value\s*=\s*historyItems\.value\.filter/);
 });
 
@@ -57,6 +60,7 @@ test("history reuses path grouping and opens stored turn details without resumin
   assert.match(panel, /v-for="turn in historyDetail\.turns"/);
   assert.match(panel, /turn\.userPrompt/);
   assert.match(panel, /turn\.lastMessage \|\| turn\.summary/);
+  assert.doesNotMatch(panel, /<small>你<\/small>/);
   assert.match(panel, /选择一条过往对话查看详情/);
   assert.doesNotMatch(panel, /selectHistoryItem[\s\S]{0,500}resumeAiSession/);
   assert.match(styles, /\.session-ai-history-row\[data-selected="true"\]/);

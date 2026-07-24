@@ -921,7 +921,7 @@ function statusLabel(status: RepositoryChangeEntry["status"]) {
 .repository-workspace-empty strong { color: var(--text-strong); font-size: 13px; }
 .repository-workspace-empty span { font-size: 10px; }
 .repository-workspace-spin { animation: repository-workspace-spin 0.9s linear infinite; }
-:global([role="dialog"].repository-file-action-dialog) { width: min(480px, calc(100vw - 32px)); gap: 14px; border-color: var(--line-subtle); background: var(--background); color: var(--text); }
+:global([role="dialog"].repository-file-action-dialog) { width: min(480px, calc(100vw - 32px)); gap: 14px; border-color: var(--line-subtle); background: hsl(var(--background)); color: var(--text); }
 .repository-file-action-form { display: grid; gap: 9px; }
 .repository-file-action-form > label { color: var(--text-muted); font-size: 10px; font-weight: 700; }
 .repository-file-action-form > p, .repository-file-action-error { margin: 0; color: var(--status-danger); font-size: 10px; }

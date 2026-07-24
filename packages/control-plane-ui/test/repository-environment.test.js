@@ -301,6 +301,9 @@ test("Repository UI preserves edge states and structured recovery guidance", asy
   assert.match(workspace, /Only the first \{\{ activeTab\.byteLimit \}\} bytes are shown/);
   assert.match(workspace, /Inspect the complete patch in the session terminal/);
   assert.match(delivery, /Credentials are never entered in this UI|RepositoryErrorNotice/);
+  assert.match(workspace, /repository-file-action-dialog[^}]*background: hsl\(var\(--background\)\)/);
+  assert.match(delivery, /repository-delivery-dialog[^}]*background: hsl\(var\(--background\)\)/);
+  assert.doesNotMatch(`${workspace}\n${delivery}`, /background: var\(--background\)/);
   assert.match(errorNotice, /presentation\.code/);
   assert.match(errorNotice, /presentation\.recovery/);
   assert.match(errorNotice, /presentation\.retryable/);

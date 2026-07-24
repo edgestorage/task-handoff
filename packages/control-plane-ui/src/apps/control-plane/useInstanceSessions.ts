@@ -14,6 +14,7 @@ export type SessionTab = {
 
 export type RepositoryWorkspaceTabTarget = {
   initialView: "files" | "changes";
+  page?: "workspace" | "changes-review";
   sessionId: string;
   sessionKind: RepositorySessionKind;
 };

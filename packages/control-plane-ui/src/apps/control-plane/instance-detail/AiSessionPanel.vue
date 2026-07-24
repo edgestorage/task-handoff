@@ -299,17 +299,6 @@
                       <p>{{ historyItemTitle(item) }}</p>
                       <small :title="item.cwd">{{ item.cwd }}</small>
                     </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      class="session-ai-history-resume"
-                      :disabled="Boolean(resumingHistoryId)"
-                      @click.stop="resumeHistoryItem(item)"
-                    >
-                      <LoaderCircle v-if="resumingHistoryId === item.id" class="session-ai-spin" :size="14" />
-                      <RotateCcw v-else :size="14" />
-                      <span>{{ resumingHistoryId === item.id ? "正在恢复" : "继续对话" }}</span>
-                    </Button>
                   </article>
                 </template>
               </section>
@@ -329,7 +318,7 @@
         title="Resize AI session list"
         @pointerdown="startSidebarResize"
       />
-      <section v-if="historyMode" class="session-ai-detail session-ai-history-detail">
+      <section v-if="historyMode" ref="detailEl" class="session-ai-detail session-ai-history-detail">
         <ScrollArea class="session-ai-detail-scroll">
           <div v-if="!selectedHistoryId" class="session-ai-history-detail-state">
             <History :size="20" />
@@ -351,16 +340,6 @@
               </div>
               <h2>{{ historyItemTitle(historyDetail.item) }}</h2>
               <small :title="historyDetail.item.cwd">{{ historyDetail.item.cwd }}</small>
-              <Button
-                variant="outline"
-                size="sm"
-                :disabled="Boolean(resumingHistoryId)"
-                @click="resumeHistoryItem(historyDetail.item)"
-              >
-                <LoaderCircle v-if="resumingHistoryId === historyDetail.item.id" class="session-ai-spin" :size="14" />
-                <RotateCcw v-else :size="14" />
-                <span>{{ resumingHistoryId === historyDetail.item.id ? "正在恢复" : "继续对话" }}</span>
-              </Button>
             </header>
             <div v-if="!historyDetail.turns.length" class="session-ai-history-detail-state">
               <span>这条过往对话没有可展示的详情。</span>
@@ -368,7 +347,6 @@
             <div v-else class="session-ai-history-turns">
               <article v-for="turn in historyDetail.turns" :key="turn.id" class="session-ai-history-turn">
                 <section v-if="turn.userPrompt" class="session-ai-history-message session-ai-history-message-user">
-                  <small>你</small>
                   <MarkdownContent :content="turn.userPrompt" />
                 </section>
                 <section v-if="turn.lastMessage || turn.summary" class="session-ai-history-message session-ai-history-message-assistant">
@@ -379,6 +357,19 @@
             </div>
           </section>
         </ScrollArea>
+        <template v-if="historyDetail">
+          <div class="session-ai-compose-gradient" aria-hidden="true" />
+          <AiSessionComposer
+            ref="composerEl"
+            v-model="historyMessageDraft"
+            v-model:attachments="historyMessageAttachments"
+            class="session-ai-compose session-ai-history-composer"
+            :busy="resumingHistoryId === historyDetail.item.id"
+            :can-interrupt="false"
+            placeholder="发送消息以继续这条对话"
+            @run="sendHistoryMessage"
+          />
+        </template>
       </section>
       <section v-else-if="showNewSession" class="session-ai-detail session-ai-new-detail">
         <div class="session-ai-new-dialog" role="group" aria-label="New AI session">
@@ -585,7 +576,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type CSSProperties } from "vue";
-import { ArrowDown, ArrowLeft, Ban, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Code2, ExternalLink, Filter, Folder, History, LoaderCircle, MessageSquare, MoreHorizontal, Plus, RotateCcw, SlidersHorizontal, Square, X, Zap } from "@lucide/vue";
+import { ArrowDown, ArrowLeft, Ban, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Code2, ExternalLink, Filter, Folder, History, LoaderCircle, MessageSquare, MoreHorizontal, Plus, SlidersHorizontal, Square, X, Zap } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import { bindAiSessionTrigger, createNodeLocalFolder, getAiSessionHistory, getAiSessionHistoryDetail, interruptAiSession, launchAppSession, listNodeFolderTree, removeAiSessionQueuedMessage, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, stopAppSession, unbindAiSessionTrigger, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery } from "../../../api/queries";
@@ -775,6 +766,8 @@ const historyDetail = ref<AiSessionHistoryDetail>();
 const historyDetailLoading = ref(false);
 const historyDetailError = ref("");
 const resumingHistoryId = ref("");
+const historyMessageDraft = ref("");
+const historyMessageAttachments = ref<AiSessionComposerAttachment[]>([]);
 let currentListScrollTop = 0;
 let historyDetailRevision = 0;
 const promptIndexes = ref<Record<string, { index: number; count: number }>>({});
@@ -959,6 +952,8 @@ watch(() => props.instance.id, () => {
   selectedHistoryId.value = "";
   historyDetail.value = undefined;
   historyDetailError.value = "";
+  historyMessageDraft.value = "";
+  historyMessageAttachments.value = [];
   for (const key of Object.keys(collapsedHistoryPathGroups)) delete collapsedHistoryPathGroups[key];
   if (historyMode.value) void loadHistory();
 });
@@ -1075,6 +1070,8 @@ async function enterHistoryMode() {
 async function leaveHistoryMode() {
   historyDetailRevision += 1;
   historyMode.value = false;
+  historyMessageDraft.value = "";
+  historyMessageAttachments.value = [];
   await nextTick();
   const viewport = sidebarViewport();
   if (viewport) viewport.scrollTop = currentListScrollTop;
@@ -1099,6 +1096,11 @@ async function loadHistory() {
 }
 
 async function selectHistoryItem(item: AiSessionHistoryItem) {
+  if (resumingHistoryId.value) return;
+  if (selectedHistoryId.value !== item.id) {
+    historyMessageDraft.value = "";
+    historyMessageAttachments.value = [];
+  }
   const revision = ++historyDetailRevision;
   selectedHistoryId.value = item.id;
   historyDetail.value = undefined;
@@ -1134,25 +1136,43 @@ function relativeHistoryTime(value: string) {
   return new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric" }).format(new Date(value));
 }
 
-async function resumeHistoryItem(item: AiSessionHistoryItem) {
-  if (resumingHistoryId.value) return;
+async function resumeHistorySession(item: AiSessionHistoryItem) {
+  const result = await resumeAiSession(props.instance.id, item.id);
+  const findAuthoritativeSession = () => visibleAiSessions.value.find((session) => (
+    session.id === result.aiSessionId && session.appSessionId === result.appSessionId
+  ));
+  let session = findAuthoritativeSession();
+  for (let attempt = 0; attempt < 12 && !session; attempt += 1) {
+    await new Promise((resolve) => window.setTimeout(resolve, 250));
+    session = findAuthoritativeSession();
+  }
+  if (!session) {
+    await queryClient.refetchQueries({ queryKey: ["control-plane-ai-sessions"] });
+    await nextTick();
+    session = findAuthoritativeSession();
+  }
+  if (!session) throw new Error("对话已经启动，但运行状态尚未确认，请稍后重试。");
+  return session;
+}
+
+async function sendHistoryMessage() {
+  const item = historyDetail.value?.item;
+  const message = historyMessageDraft.value.trim();
+  if (!item || resumingHistoryId.value || (!message && !historyMessageAttachments.value.length)) return;
   resumingHistoryId.value = item.id;
   try {
-    const result = await resumeAiSession(props.instance.id, item.id);
-    if (result.disposition === "resumed") {
-      let authoritative = visibleAiSessions.value.some((session) => session.id === item.id && session.appSessionId === result.appSessionId);
-      for (let attempt = 0; attempt < 12 && !authoritative; attempt += 1) {
-        await new Promise((resolve) => window.setTimeout(resolve, 250));
-        authoritative = visibleAiSessions.value.some((session) => session.id === item.id && session.appSessionId === result.appSessionId);
-      }
-      if (!authoritative) {
-        await queryClient.refetchQueries({ queryKey: ["control-plane-ai-sessions"] });
-        await nextTick();
-        authoritative = visibleAiSessions.value.some((session) => session.id === item.id && session.appSessionId === result.appSessionId);
-      }
-      if (!authoritative) throw new Error("对话已经启动，但运行状态尚未确认，请稍后重试。");
-    }
-    emit("selectAiSession", props.instance.id, item.id);
+    const session = await resumeHistorySession(item);
+    const attachments = await uploadAttachments(props.instance.id, session.id, historyMessageAttachments.value);
+    await sendAiSessionMessage(
+      props.instance.id,
+      session.id,
+      message || "请查看附件图片。",
+      undefined,
+      attachments.map((attachment) => ({ id: attachment.id, kind: attachment.kind })),
+    );
+    historyMessageDraft.value = "";
+    historyMessageAttachments.value = [];
+    emit("selectAiSession", props.instance.id, session.id);
     await leaveHistoryMode();
   } catch (error) {
     showControlPlaneToast(error instanceof Error ? error.message : "无法继续该对话。");
@@ -1257,8 +1277,8 @@ async function runSelectedSessionAction() {
   await interruptSelectedSession();
 }
 
-async function uploadMessageAttachments(instanceId: string, sessionId: string) {
-  return Promise.all(messageAttachments.value.map((attachment) => uploadAiSessionAttachment({
+async function uploadAttachments(instanceId: string, sessionId: string, attachments: AiSessionComposerAttachment[]) {
+  return Promise.all(attachments.map((attachment) => uploadAiSessionAttachment({
     instanceId,
     sessionId,
     kind: "image",
@@ -1266,6 +1286,10 @@ async function uploadMessageAttachments(instanceId: string, sessionId: string) {
     mime: attachment.mime,
     data: attachment.dataUrl,
   })));
+}
+
+async function uploadMessageAttachments(instanceId: string, sessionId: string) {
+  return uploadAttachments(instanceId, sessionId, messageAttachments.value);
 }
 
 async function sendSelectedSessionMessage() {
@@ -1666,7 +1690,7 @@ async function enterDetailStickyLayout() {
   detailScrollLayoutPending = false;
 }
 
-watch([selectedSession, messageAttachments, messageDraft], () => {
+watch([selectedSession, messageAttachments, messageDraft, historyMessageAttachments, historyMessageDraft, historyDetail], () => {
   void nextTick(observeComposerOffset);
 }, { immediate: true });
 

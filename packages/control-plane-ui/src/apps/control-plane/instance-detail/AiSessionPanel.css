@@ -620,15 +620,13 @@
 
 .session-ai-history-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: end;
-  gap: 7px;
+  grid-template-columns: minmax(0, 1fr);
   min-width: 0;
   border: 1px solid var(--line);
   border-radius: 9px;
   background: color-mix(in srgb, var(--surface) 88%, transparent);
   overflow: hidden;
-  padding: 0 6px 6px 0;
+  padding: 0;
 }
 
 .session-ai-history-row[data-selected="true"] {
@@ -655,7 +653,7 @@
   background: transparent;
   color: inherit;
   cursor: pointer;
-  padding: 10px 10px 2px;
+  padding: 10px;
   text-align: left;
 }
 
@@ -707,16 +705,6 @@
   font-size: 11px;
 }
 
-.session-ai-history-resume {
-  grid-column: 2;
-  justify-self: end;
-  gap: 5px;
-  min-height: 28px;
-  color: var(--brand-accent);
-  font-size: 12px;
-  padding: 0 7px;
-}
-
 .session-ai-history-group {
   flex: 0 0 auto;
 }
@@ -750,12 +738,12 @@
   width: min(820px, calc(100% - 48px));
   margin: 0 auto;
   gap: 22px;
-  padding: 28px 0 56px;
+  padding: 28px 0 calc(var(--session-ai-compose-offset, 84px) + 32px);
 }
 
 .session-ai-history-detail-head {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
   gap: 8px 16px;
   border-bottom: 1px solid var(--line);
@@ -797,12 +785,6 @@
   white-space: nowrap;
 }
 
-.session-ai-history-detail-head > button {
-  grid-column: 2;
-  grid-row: 1 / 4;
-  gap: 6px;
-}
-
 .session-ai-history-turns,
 .session-ai-history-turn {
   display: grid;
@@ -832,6 +814,10 @@
   border-radius: 14px;
   background: var(--surface-hover);
   padding: 12px 14px;
+}
+
+.session-ai-history-composer {
+  --ai-composer-bg: color-mix(in srgb, var(--workspace-bg) 88%, transparent);
 }
 
 .session-ai-history-message-assistant {

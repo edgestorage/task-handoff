@@ -76,11 +76,15 @@ export function renderCodeBlock(value: unknown, language?: unknown) {
   if (!requestedLanguage || !hljs.getLanguage(requestedLanguage)) {
     return `<pre><code>${escapeHtml(text)}</code></pre>\n`;
   }
-  const highlighted = hljs.highlight(text, {
-    language: requestedLanguage,
-    ignoreIllegals: true,
-  }).value;
+  const highlighted = highlightSource(text, requestedLanguage);
   return `<pre><code class="hljs language-${escapeHtml(requestedLanguage)}">${highlighted}</code></pre>\n`;
+}
+
+export function highlightSource(value: unknown, language?: unknown) {
+  const text = String(value ?? "");
+  const requestedLanguage = String(language ?? "").trim().toLowerCase();
+  if (!requestedLanguage || !hljs.getLanguage(requestedLanguage)) return escapeHtml(text);
+  return hljs.highlight(text, { language: requestedLanguage, ignoreIllegals: true }).value;
 }
 
 renderer.code = ({ text, lang }) => renderCodeBlock(text, lang);

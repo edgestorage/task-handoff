@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { renderMarkdown } from "./markdown.ts";
+import { highlightSource, renderMarkdown } from "./markdown.ts";
 
 test("renderMarkdown renders block Markdown and GFM consistently", () => {
   const html = renderMarkdown([
@@ -50,6 +50,11 @@ test("renderMarkdown highlights registered fenced code languages", () => {
   assert.match(html, /class="hljs language-javascript"/);
   assert.match(html, /<span class="hljs-keyword">const<\/span>/);
   assert.match(html, /<span class="hljs-number">42<\/span>/);
+});
+
+test("highlightSource exposes safe reusable syntax highlighting", () => {
+  assert.match(highlightSource("const answer = 42;", "typescript"), /hljs-keyword/);
+  assert.equal(highlightSource("<script>alert(1)</script>", "unknown"), "&lt;script&gt;alert(1)&lt;/script&gt;");
 });
 
 test("renderMarkdown leaves untyped and unknown code blocks as escaped plain text", () => {

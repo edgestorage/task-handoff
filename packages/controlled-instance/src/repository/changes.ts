@@ -66,6 +66,7 @@ export class RepositoryChangesService {
       truncated: truncated.truncated,
       byteLimit,
       content: binary ? "" : truncated.content,
+      lines: binary ? [] : structuredDiffLines(truncated.content),
       version: entry.version,
       snapshotId: state.context.snapshotId!,
     };
@@ -190,6 +191,53 @@ export class RepositoryChangesService {
       ...(commitOid ? { commitOid } : {}),
     };
   }
+}
+
+export function structuredDiffLines(raw: string) {
+  const lines: Array<{
+    kind: "metadata" | "hunk" | "context" | "addition" | "deletion";
+    content: string;
+    oldLine?: number;
+    newLine?: number;
+  }> = [];
+  let oldLine: number | undefined;
+  let newLine: number | undefined;
+  const rawLines = raw ? raw.split("\n") : [];
+  if (raw.endsWith("\n")) rawLines.pop();
+  for (const rawLine of rawLines) {
+    const hunk = rawLine.match(/^@@ -(?<old>\d+)(?:,\d+)? \+(?<next>\d+)(?:,\d+)? @@/);
+    if (hunk?.groups) {
+      oldLine = Number(hunk.groups.old);
+      newLine = Number(hunk.groups.next);
+      lines.push({ kind: "hunk", content: rawLine });
+      continue;
+    }
+    if (rawLine.startsWith("@@@")) {
+      oldLine = undefined;
+      newLine = undefined;
+      lines.push({ kind: "hunk", content: rawLine });
+      continue;
+    }
+    if (oldLine === undefined || newLine === undefined || rawLine.startsWith("diff --git ") || rawLine.startsWith("index ") || rawLine.startsWith("--- ") || rawLine.startsWith("+++ ") || rawLine.startsWith("\\ No newline")) {
+      lines.push({ kind: "metadata", content: rawLine });
+      continue;
+    }
+    if (rawLine.startsWith("+")) {
+      lines.push({ kind: "addition", content: rawLine.slice(1), newLine });
+      newLine += 1;
+      continue;
+    }
+    if (rawLine.startsWith("-")) {
+      lines.push({ kind: "deletion", content: rawLine.slice(1), oldLine });
+      oldLine += 1;
+      continue;
+    }
+    const content = rawLine.startsWith(" ") ? rawLine.slice(1) : rawLine;
+    lines.push({ kind: "context", content, oldLine, newLine });
+    oldLine += 1;
+    newLine += 1;
+  }
+  return lines;
 }
 
 function structuredGitError(error: unknown, current: ResolvedRepository) {
