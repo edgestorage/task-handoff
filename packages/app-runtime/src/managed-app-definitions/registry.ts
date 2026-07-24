@@ -1,5 +1,5 @@
 import { detectManagedApp } from "../managed-apps";
-import type { ManagedAppDefinition } from "../types";
+import type { AppCatalogItem, ManagedAppDefinition } from "../types";
 import { ccSwitchProvider } from "./cc-switch";
 import { chromiumProvider } from "./chromium";
 import { claudeProvider } from "./claude";
@@ -23,6 +23,16 @@ export class ManagedAppRegistry {
 
   provider(appId: string) {
     return this.providersById.get(appId);
+  }
+
+  runtimeProvider(app: AppCatalogItem) {
+    const exact = this.provider(app.id);
+    if (exact) return exact;
+    const matches = this.providers.filter((provider) => provider.matchesRuntime?.(app));
+    if (matches.length > 1) {
+      throw new Error(`Multiple managed app providers match runtime for ${app.id}: ${matches.map(({ id }) => id).join(", ")}`);
+    }
+    return matches[0];
   }
 
   definitions(options: ManagedAppRegistryOptions = {}): ManagedAppDefinition[] {

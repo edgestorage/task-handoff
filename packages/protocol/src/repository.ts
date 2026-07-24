@@ -177,6 +177,19 @@ export const RepositoryFileMutationResultSchema = z.object({
   context: RepositoryContextSchema,
   changes: RepositoryChangesSchema,
 }).strict();
+const RepositoryDiffLineSchema = z.object({
+  kind: z.enum(["metadata", "hunk", "context", "addition", "deletion"]),
+  content: z.string(),
+  oldLine: z.number().int().positive().optional(),
+  newLine: z.number().int().positive().optional(),
+  oldStart: z.number().int().nonnegative().optional(),
+  oldCount: z.number().int().nonnegative().optional(),
+  newStart: z.number().int().nonnegative().optional(),
+  newCount: z.number().int().nonnegative().optional(),
+  heading: z.string().optional(),
+  hunkId: z.string().min(1).max(200).optional(),
+}).strict();
+
 export const RepositoryDiffSchema = z.object({
   path: RelativePathSchema,
   oldPath: RelativePathSchema.optional(),
@@ -186,12 +199,15 @@ export const RepositoryDiffSchema = z.object({
   truncated: z.boolean(),
   byteLimit: z.number().int().positive(),
   content: z.string(),
-  lines: z.array(z.object({
-    kind: z.enum(["metadata", "hunk", "context", "addition", "deletion"]),
-    content: z.string(),
-    oldLine: z.number().int().positive().optional(),
-    newLine: z.number().int().positive().optional(),
-  }).strict()).max(200_000),
+  lines: z.array(RepositoryDiffLineSchema).max(200_000),
+  contextGaps: z.array(z.object({
+    gapId: z.string().min(1).max(500),
+    beforeHunkId: z.string().min(1).max(200).optional(),
+    afterHunkId: z.string().min(1).max(200).optional(),
+    lines: z.array(RepositoryDiffLineSchema).max(6_000),
+    startLineCount: z.number().int().nonnegative().max(3_000),
+    hasMore: z.boolean(),
+  }).strict()).max(20_000),
   version: RepositoryFileVersionSchema,
   snapshotId: IdSchema,
 }).strict();

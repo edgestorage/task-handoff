@@ -1,8 +1,12 @@
+import path from "node:path";
 import type { ManagedAppProvider } from "../types";
 import { launcherDetection } from "../shared";
+import { createTerminalGuiRuntime } from "./runtime";
 
 export const terminalGuiProvider: ManagedAppProvider = {
   id: "terminal-gui",
+  matchesRuntime: (app) => app.kind === "gui" && path.basename(app.command || "") === "xterm",
+  createRuntime: () => createTerminalGuiRuntime(),
   definition: ({ env }) => ({
     launcher: {
       id: "terminal-gui",

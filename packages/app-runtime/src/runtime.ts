@@ -5,12 +5,12 @@ import { EventEmitter } from "node:events";
 import type { IPty } from "node-pty";
 import { spawn as spawnPty } from "node-pty";
 import writeFileAtomic from "write-file-atomic";
-import { claudeControlSock, killClaudeDaemonJob } from "@task-handoff/core/core/claude-control-sock";
 import type { TaskHandoffStoragePaths } from "@task-handoff/core/storage/paths";
 import { AppCatalogRepository, executablePath } from "./catalog";
-import { CodexAppServerConnectionProxy } from "./codex-app-server-proxy";
 import { builtinManagedAppRegistry } from "./managed-app-definitions";
-import { chromiumUserDataDir, claudeShortFromOutput, codexAppServerSocketPath, ensureNodePtySpawnHelperExecutable, formatGuiScale, guiAppHomeDir, guiScaleFromEnv, guiVncBackend, type GuiVncBackend } from "./runtime-utils";
+import type { ManagedAppRegistry } from "./managed-app-definitions/registry";
+import type { ManagedAppPreparedTtyLaunch, ManagedAppRuntimeExtension, ManagedAppRuntimeHost } from "./managed-app-definitions/types";
+import { ensureNodePtySpawnHelperExecutable, formatGuiScale, guiAppHomeDir, guiScaleFromEnv, guiVncBackend, type GuiVncBackend } from "./runtime-utils";
 import type { AppAutomationStatus, AppCatalogItem, AppDisplayTarget, AppLaunchOptions, AppSession, AppSessionStatus } from "./types";
 
 type TtyClient = {
@@ -22,7 +22,7 @@ type TtyClient = {
 type RuntimeSession = {
   metadata: AppSession;
   processes: ChildProcessWithoutNullStreams[];
-  codexAppServerProxy?: CodexAppServerConnectionProxy;
+  appLifecycle?: ManagedAppPreparedTtyLaunch;
   pty?: IPty;
   ttyDimensions?: { cols: number; rows: number };
   ttyLogStream?: fs.WriteStream;
@@ -48,16 +48,6 @@ type SharedDisplayRuntimeSession = {
   sessionDir: string;
   logDir: string;
   processes: ChildProcessWithoutNullStreams[];
-  appSessionIds: Set<string>;
-};
-
-type SharedCodexAppServerRuntimeSession = {
-  command: string;
-  args: string[];
-  socketPath: string;
-  endpoint: string;
-  logPath: string;
-  child: ChildProcessWithoutNullStreams;
   appSessionIds: Set<string>;
 };
 
@@ -90,11 +80,6 @@ const CDP_PORT_END = 9299;
 const APP_PROCESS_STOP_TIMEOUT_MS = 5_000;
 const APP_PROCESS_KILL_TIMEOUT_MS = 1_000;
 const CLEANABLE_SESSION_STATUSES = new Set<AppSessionStatus>(["stopped", "exited", "failed"]);
-const VSCODE_WEB_DEFAULT_SETTINGS: Record<string, unknown> = {
-  "workbench.colorTheme": "Default Dark Modern",
-  "workbench.preferredDarkColorTheme": "Default Dark Modern",
-};
-const DEFAULT_CHROMIUM_EXTENSION_DIR = "/opt/task-handoff/chromium-extensions";
 
 export class AppRuntimeManager extends EventEmitter {
   private readonly sessions = new Map<string, RuntimeSession>();
@@ -105,14 +90,25 @@ export class AppRuntimeManager extends EventEmitter {
   private nextWebPort = WEB_PORT_START;
   private nextCdpPort = CDP_PORT_START;
   private readonly sharedDisplays = new Map<string, SharedDisplayRuntimeSession>();
-  private sharedCodexAppServer?: SharedCodexAppServerRuntimeSession;
+  private readonly appRuntimeExtensions = new Map<string, ManagedAppRuntimeExtension>();
   private readonly catalogRepository: AppCatalogRepository;
   private readonly persistSessionMetadata: boolean;
   private managedEnvironment: NodeJS.ProcessEnv = {};
 
-  constructor(private readonly paths: TaskHandoffStoragePaths) {
+  constructor(private readonly paths: TaskHandoffStoragePaths, private readonly registry: ManagedAppRegistry = builtinManagedAppRegistry) {
     super();
-    this.catalogRepository = new AppCatalogRepository(paths);
+    this.catalogRepository = new AppCatalogRepository(paths, registry);
+    const host: ManagedAppRuntimeHost = {
+      paths,
+      allocatePort: (kind) => this.allocatePort(kind),
+      hasCommand: (command, env, cwd) => this.hasCommand(command, env, cwd),
+      spawnLogged: (command, args, env, logDir, logName, cwd) => this.spawnLogged(command, args, env, logDir, logName, cwd),
+      waitForUnixSocket: (socketPath, timeoutMs, getError) => this.waitForUnixSocket(socketPath, timeoutMs, getError),
+      patchSession: (sessionId, patch) => this.patchSessionMetadata(sessionId, patch),
+    };
+    for (const provider of registry.providers) {
+      if (provider.createRuntime) this.appRuntimeExtensions.set(provider.id, provider.createRuntime(host));
+    }
     this.persistSessionMetadata = envFlag("TASK_HANDOFF_APP_SESSION_PERSIST");
     if (this.persistSessionMetadata) {
       this.loadPersistedSessions();
@@ -145,43 +141,57 @@ export class AppRuntimeManager extends EventEmitter {
   replaceManagedEnvironment(env: NodeJS.ProcessEnv) {
     const changed = JSON.stringify(this.managedEnvironment) !== JSON.stringify(env);
     this.managedEnvironment = { ...env };
-    if (changed) this.stopSharedCodexAppServer();
+    if (changed) for (const extension of this.appRuntimeExtensions.values()) extension.managedEnvironmentChanged?.();
   }
 
   listSessions() {
     return Array.from(this.persistedSessions.values()).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
-  sharedCodexAppServerInfo() {
-    const appServer = this.sharedCodexAppServer;
-    if (!appServer || appServer.child.killed || appServer.child.exitCode !== null || !fs.existsSync(appServer.socketPath)) {
-      return undefined;
-    }
-    return {
-      transport: "unix" as const,
-      endpoint: appServer.endpoint,
-      socketPath: appServer.socketPath,
-      pid: appServer.child.pid,
-      command: appServer.command,
-      args: appServer.args,
-      logPath: appServer.logPath,
-      status: "running" as const,
-    };
+  sharedResourceInfo(appId: string) {
+    return this.sharedAppResource(appId)?.info();
   }
 
-  ensureSharedCodexAppServer() {
-    const app = this.catalogRepository.find("codex");
-    const command = app?.command || process.env.TASK_HANDOFF_CODEX_COMMAND || "codex";
-    if (!this.hasCommand(command)) {
-      throw Object.assign(new Error(`Missing required command: ${command}`), { code: "APP_DEPENDENCY_MISSING" });
-    }
-    const cwd = app?.cwd || process.env.TASK_HANDOFF_WORKSPACE || process.cwd();
-    const env = { ...process.env, ...app?.env, ...this.managedEnvironment, TERM: "xterm-256color" };
-    return this.acquireSharedCodexAppServer(command, cwd, env, "__shared_codex_app_server__");
+  sharedResourceSessionAi(appId: string) {
+    return this.sharedAppResource(appId)?.projectSessionAi?.();
   }
 
-  _createCodexAppServerConnectionProxyForTest(socketPath: string, onThreadBound: (threadId: string) => void) {
-    return new CodexAppServerConnectionProxy(socketPath, onThreadBound);
+  ensureSharedResource(appId: string) {
+    const resource = this.sharedAppResource(appId);
+    if (!resource) throw Object.assign(new Error(`${appId} does not provide a shared resource.`), { code: "APP_SHARED_RESOURCE_UNAVAILABLE" });
+    const app = this.catalogRepository.find(appId);
+    if (!app) throw Object.assign(new Error("Shared backend app is unavailable."), { code: "APP_NOT_FOUND" });
+    const cwd = app.cwd || process.env.TASK_HANDOFF_WORKSPACE || process.cwd();
+    const env = { ...process.env, ...app.env, ...this.managedEnvironment, TERM: "xterm-256color" };
+    return resource.ensure({ app, cwd, env });
+  }
+
+  acquireSharedResource(appId: string, command: string, cwd: string, env: NodeJS.ProcessEnv, consumerId: string) {
+    const resource = this.sharedAppResource(appId);
+    if (!resource) throw Object.assign(new Error(`${appId} does not provide a shared resource.`), { code: "APP_SHARED_RESOURCE_UNAVAILABLE" });
+    return resource.acquire(command, cwd, env, consumerId);
+  }
+
+  releaseSharedResource(appId: string, consumerId: string) {
+    this.sharedAppResource(appId)?.release(consumerId);
+  }
+
+  private sharedAppResource(appId: string) {
+    return this.appRuntimeExtensions.get(appId)?.sharedResource;
+  }
+
+  private appRuntimeExtension(app: AppCatalogItem) {
+    const provider = this.registry.runtimeProvider(app);
+    return provider ? this.appRuntimeExtensions.get(provider.id) : undefined;
+  }
+
+  private patchSessionMetadata(sessionId: string, patch: { ai: AppSession["ai"] }) {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    session.metadata.ai = patch.ai;
+    session.metadata.updatedAt = now();
+    this.persist(session.metadata);
+    this.emit("updated", session.metadata);
   }
 
   getSession(id: string) {
@@ -261,45 +271,21 @@ export class AppRuntimeManager extends EventEmitter {
     const logDir = path.join(this.paths.logDir, "app-sessions", id);
     fs.mkdirSync(sessionDir, { recursive: true });
     fs.mkdirSync(logDir, { recursive: true });
-    const codexAppServer = app.id === "codex" && !envFlag("TASK_HANDOFF_CODEX_APP_SERVER_DISABLED")
-      ? this.acquireSharedCodexAppServer(shell, cwd, env, id)
-      : undefined;
-    let codexAppServerProxy: CodexAppServerConnectionProxy | undefined;
-    let codexRemoteEndpoint = codexAppServer?.endpoint;
-    let codexProxyPort: number | undefined;
-    if (codexAppServer) {
-      const proxyPort = this.allocatePort("web");
-      codexAppServerProxy = new CodexAppServerConnectionProxy(codexAppServer.socketPath, (threadId) => this.bindCodexThreadToAppSession(id, threadId));
-      codexAppServerProxy.start(proxyPort);
-      codexProxyPort = proxyPort;
-      codexRemoteEndpoint = codexAppServerProxy.endpoint || codexAppServer.endpoint;
-      args = [...(app.args || []), "--remote", codexRemoteEndpoint, "--cd", cwd, ...(launch.args || []), ...resumeArgs];
-      env = {
-        ...env,
-        TASK_HANDOFF_APP_SESSION_ID: id,
-        TASK_HANDOFF_CODEX_APP_SERVER_SOCKET: codexAppServer.socketPath,
-        TASK_HANDOFF_CODEX_APP_SERVER_URL: codexAppServer.endpoint,
-        TASK_HANDOFF_CODEX_APP_SERVER_PROXY_URL: codexRemoteEndpoint,
-      };
-    }
-    let claudeDaemon:
-      | {
-          short: string;
-          controlSock: string;
-          command: string;
-          bgArgs: string[];
-        }
-      | undefined;
-    if (app.id === "claude" && !envFlag("TASK_HANDOFF_CLAUDE_BG_DISABLED")) {
-      claudeDaemon = this.launchClaudeBackground(shell, args, cwd, env);
-      args = ["attach", claudeDaemon.short];
-      env = {
-        ...env,
-        TASK_HANDOFF_APP_SESSION_ID: id,
-        TASK_HANDOFF_CLAUDE_SHORT: claudeDaemon.short,
-        TASK_HANDOFF_CLAUDE_CONTROL_SOCK: claudeDaemon.controlSock,
-      };
-    }
+    const appLifecycle = this.appRuntimeExtension(app)?.prepareTtyLaunch?.({
+      app,
+      sessionId: id,
+      sessionDir,
+      logDir,
+      command: shell,
+      cwd,
+      env,
+      args,
+      catalogArgs: app.args || [],
+      launchArgs: launch.args || [],
+      resumeArgs,
+    });
+    args = appLifecycle?.args || args;
+    env = appLifecycle?.env || env;
 
     const metadata: AppSession = {
       id,
@@ -315,37 +301,12 @@ export class AppRuntimeManager extends EventEmitter {
         webPath: `/api/apps/sessions/${id}/tty`,
         shell,
         cwd,
-        mode: claudeDaemon ? "claude-attach" : "pty",
+        mode: appLifecycle?.ttyMode || "pty",
       },
       process: {
         command: shell,
       },
-      ai: claudeDaemon
-        ? {
-            agent: "claude",
-            claude: {
-              short: claudeDaemon.short,
-              controlSock: claudeDaemon.controlSock,
-              cwd,
-            },
-          }
-        : codexAppServer
-        ? {
-            agent: "codex",
-            appServer: {
-              transport: "unix",
-              endpoint: codexAppServer.endpoint,
-              socketPath: codexAppServer.socketPath,
-              proxyEndpoint: codexRemoteEndpoint,
-              proxyPort: codexProxyPort,
-              pid: codexAppServer.child.pid,
-              command: codexAppServer.command,
-              args: codexAppServer.args,
-              logPath: codexAppServer.logPath,
-              status: "running",
-            },
-          }
-        : undefined,
+      ai: appLifecycle?.ai,
       paths: {
         sessionDir,
         logDir,
@@ -353,7 +314,7 @@ export class AppRuntimeManager extends EventEmitter {
     };
 
     const ttyLogStream = fs.createWriteStream(path.join(logDir, "tty.log"), { flags: "a" });
-    const runtimeSession: RuntimeSession = { metadata, processes: [], codexAppServerProxy, ttyDimensions: { cols: 120, rows: 32 }, ttyLogStream, outputBacklog: "", clients: new Set() };
+    const runtimeSession: RuntimeSession = { metadata, processes: [], appLifecycle, ttyDimensions: { cols: 120, rows: 32 }, ttyLogStream, outputBacklog: "", clients: new Set() };
     ttyLogStream.on("error", () => {
       runtimeSession.ttyLogClosed = true;
     });
@@ -373,10 +334,7 @@ export class AppRuntimeManager extends EventEmitter {
         this.persist(metadata);
         this.emit("updated", metadata);
       }
-      if (app.id === "codex") {
-        runtimeSession.codexAppServerProxy?.stop();
-        this.releaseSharedCodexAppServer(id);
-      }
+      runtimeSession.appLifecycle?.lifecycle?.processExited?.();
       this.broadcast(runtimeSession, { type: "exit", code: exitCode, signal });
       this.closeTtyLog(runtimeSession);
     };
@@ -384,13 +342,7 @@ export class AppRuntimeManager extends EventEmitter {
     try {
       pty = this.spawnTerminalPty(shell, args, cwd, env);
     } catch (error) {
-      if (app.id === "codex") {
-        codexAppServerProxy?.stop();
-        this.releaseSharedCodexAppServer(id);
-      }
-      if (claudeDaemon) {
-        this.stopClaudeBackgroundLaunch(claudeDaemon.command, claudeDaemon.short, cwd, env);
-      }
+      appLifecycle?.lifecycle?.spawnFailed?.();
       throw error;
     }
     metadata.process = { ...metadata.process, pid: pty.pid };
@@ -402,48 +354,6 @@ export class AppRuntimeManager extends EventEmitter {
 
     this.emit("created", metadata);
     return metadata;
-  }
-
-  private launchClaudeBackground(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv) {
-    const bgArgs = ["--bg", ...args];
-    const result = spawnSync(command, bgArgs, {
-      cwd,
-      env,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: Number(process.env.TASK_HANDOFF_CLAUDE_BG_TIMEOUT_MS) || 15_000,
-    });
-    const output = `${result.stdout || ""}\n${result.stderr || ""}`;
-    if (result.error) {
-      throw Object.assign(new Error(`Claude background launch failed: ${result.error.message}`), { code: "APP_LAUNCH_FAILED" });
-    }
-    if (result.status !== 0) {
-      throw Object.assign(new Error(`Claude background launch exited with code ${result.status}: ${output.trim()}`), { code: "APP_LAUNCH_FAILED" });
-    }
-    const short = claudeShortFromOutput(output);
-    if (!short) {
-      throw Object.assign(new Error("Claude background launch did not report a worker id."), { code: "APP_LAUNCH_FAILED" });
-    }
-    return {
-      short,
-      controlSock: claudeControlSock(env),
-      command,
-      bgArgs,
-    };
-  }
-
-  private stopClaudeBackgroundLaunch(command: string, short: string, cwd: string, env: NodeJS.ProcessEnv) {
-    try {
-      spawnSync(command, ["stop", short], {
-        cwd,
-        env,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-        timeout: Number(process.env.TASK_HANDOFF_CLAUDE_BG_TIMEOUT_MS) || 15_000,
-      });
-    } catch {
-      // Preserve the original launch failure; this is a best-effort cleanup.
-    }
   }
 
   private startWebApp(app: AppCatalogItem, options: AppLaunchOptions) {
@@ -464,7 +374,7 @@ export class AppRuntimeManager extends EventEmitter {
     const port = this.allocatePort("web");
     const env = { ...process.env, ...app.env, ...launch.env, ...this.managedEnvironment };
     const args = this.webArgs(app, sessionDir, cwd, port, launch.args || []);
-    this.prepareWebAppSession(app, sessionDir);
+    this.prepareWebAppSession(app, sessionDir, cwd, port, launch);
     const child = this.spawnLogged(appCommand, args, env, logDir, `${app.id}.log`, cwd);
 
     const metadata: AppSession = {
@@ -843,132 +753,6 @@ export class AppRuntimeManager extends EventEmitter {
     }
   }
 
-  private acquireSharedCodexAppServer(command: string, cwd: string, env: NodeJS.ProcessEnv, appSessionId: string) {
-    const existing = this.sharedCodexAppServer;
-    if (existing && existing.child.exitCode === null && !existing.child.killed && fs.existsSync(existing.socketPath)) {
-      existing.appSessionIds.add(appSessionId);
-      return existing;
-    }
-    if (existing && !existing.child.killed) {
-      existing.child.kill("SIGTERM");
-    }
-
-    if (process.platform === "win32") {
-      throw Object.assign(new Error("Codex shared app-server uses unix sockets, which are unavailable on Windows."), { code: "CODEX_APP_SERVER_UNSUPPORTED" });
-    }
-
-    const runtimeDir = path.join(this.paths.runtimeDir, "codex-app-server");
-    const logDir = path.join(this.paths.logDir, "app-sessions", "codex-app-server");
-    const socketPath = codexAppServerSocketPath(runtimeDir);
-    const endpoint = `unix://${socketPath}`;
-    const appServerCommand = process.env.TASK_HANDOFF_CODEX_APP_SERVER_COMMAND || command;
-    const args = ["app-server", "--listen", endpoint];
-    fs.mkdirSync(runtimeDir, { recursive: true });
-    fs.mkdirSync(logDir, { recursive: true });
-    fs.mkdirSync(path.dirname(socketPath), { recursive: true, mode: 0o700 });
-    fs.rmSync(socketPath, { force: true });
-
-    const child = this.spawnLogged(appServerCommand, args, env, logDir, "codex-app-server.log", cwd);
-    const logPath = path.join(logDir, "codex-app-server.log");
-    const appServer: SharedCodexAppServerRuntimeSession = {
-      command: appServerCommand,
-      args,
-      socketPath,
-      endpoint,
-      logPath,
-      child,
-      appSessionIds: new Set([appSessionId]),
-    };
-    this.sharedCodexAppServer = appServer;
-
-    let spawnError: Error | undefined;
-    child.once("error", (error) => {
-      spawnError = error;
-    });
-    child.on("exit", (exitCode, signal) => {
-      if (this.sharedCodexAppServer?.child !== child) {
-        return;
-      }
-      const status = exitCode === 0 ? "exited" : "failed";
-      for (const sessionId of appServer.appSessionIds) {
-        this.updateCodexAppServerMetadata(sessionId, status, exitCode, signal);
-      }
-      this.sharedCodexAppServer = undefined;
-    });
-
-    try {
-      this.waitForUnixSocket(socketPath, 5_000, () => spawnError);
-    } catch (error) {
-      if (!child.killed) {
-        child.kill("SIGTERM");
-      }
-      this.sharedCodexAppServer = undefined;
-      throw Object.assign(error instanceof Error ? error : new Error(String(error)), { code: "CODEX_APP_SERVER_START_FAILED" });
-    }
-
-    return appServer;
-  }
-
-  private releaseSharedCodexAppServer(appSessionId: string) {
-    const appServer = this.sharedCodexAppServer;
-    if (!appServer) {
-      return;
-    }
-    appServer.appSessionIds.delete(appSessionId);
-    if (appServer.appSessionIds.size > 0) {
-      return;
-    }
-    this.sharedCodexAppServer = undefined;
-    if (!appServer.child.killed && appServer.child.exitCode === null) {
-      appServer.child.kill("SIGTERM");
-    }
-    fs.rmSync(appServer.socketPath, { force: true });
-  }
-
-  private stopSharedCodexAppServer() {
-    const appServer = this.sharedCodexAppServer;
-    if (!appServer) {
-      return;
-    }
-    this.sharedCodexAppServer = undefined;
-    if (!appServer.child.killed && appServer.child.exitCode === null) {
-      appServer.child.kill("SIGTERM");
-    }
-    fs.rmSync(appServer.socketPath, { force: true });
-  }
-
-  private updateCodexAppServerMetadata(sessionId: string, status: "exited" | "failed", exitCode: number | null, signal: NodeJS.Signals | null) {
-    const session = this.sessions.get(sessionId);
-    if (!session?.metadata.ai?.appServer) {
-      return;
-    }
-    session.metadata.ai.appServer = {
-      ...session.metadata.ai.appServer,
-      status,
-      exitCode,
-      signal,
-    };
-    session.metadata.updatedAt = now();
-    this.persist(session.metadata);
-    this.emit("updated", session.metadata);
-  }
-
-  private bindCodexThreadToAppSession(sessionId: string, threadId: string) {
-    const session = this.sessions.get(sessionId);
-    if (!session?.metadata.ai || session.metadata.appId !== "codex") {
-      return;
-    }
-    const existing = Array.isArray(session.metadata.ai.threadIds) ? session.metadata.ai.threadIds : [];
-    session.metadata.ai = {
-      ...session.metadata.ai,
-      activeThreadId: threadId,
-      threadIds: existing.includes(threadId) ? existing : [...existing, threadId],
-    };
-    session.metadata.updatedAt = now();
-    this.persist(session.metadata);
-    this.emit("updated", session.metadata);
-  }
-
   private watchSharedDisplayProcess(displaySession: SharedDisplayRuntimeSession, child: ChildProcessWithoutNullStreams) {
     child.on("exit", (exitCode, signal) => {
       if (!this.sharedDisplays.has(displaySession.id) || exitCode === 0 || displaySession.appSessionIds.size === 0) {
@@ -1230,7 +1014,6 @@ export class AppRuntimeManager extends EventEmitter {
     session.metadata.updatedAt = now();
     session.stopping = true;
     this.persist(session.metadata);
-    this.stopClaudeDaemonForSession(session.metadata);
     session.pty?.kill("SIGTERM");
     this.closeTtyLog(session);
     for (const client of session.clients) {
@@ -1243,10 +1026,7 @@ export class AppRuntimeManager extends EventEmitter {
         process.kill("SIGTERM");
       }
     }
-    session.codexAppServerProxy?.stop();
-    if (session.metadata.appId === "codex") {
-      this.releaseSharedCodexAppServer(id);
-    }
+    session.appLifecycle?.lifecycle?.stop?.();
     if (session.metadata.display?.mode === "shared" && session.metadata.display.displaySessionId) {
       this.releaseSharedDisplaySession(session.metadata.display.displaySessionId, id);
     }
@@ -1256,17 +1036,6 @@ export class AppRuntimeManager extends EventEmitter {
     this.sessions.delete(id);
     this.emit("updated", session.metadata);
     return session.metadata;
-  }
-
-  private stopClaudeDaemonForSession(metadata: AppSession) {
-    const short = metadata.ai?.claude?.short;
-    if (!short) {
-      return;
-    }
-    void killClaudeDaemonJob(short, "SIGTERM", {
-      sockPath: metadata.ai?.claude?.controlSock,
-      timeoutMs: Number(process.env.TASK_HANDOFF_CLAUDE_CONTROL_TIMEOUT_MS) || 5000,
-    });
   }
 
   restart(id: string) {
@@ -1455,7 +1224,7 @@ export class AppRuntimeManager extends EventEmitter {
       session.metadata.status = "stopped";
       session.metadata.updatedAt = now();
       this.persist(session.metadata);
-      this.stopClaudeDaemonForSession(session.metadata);
+      session.appLifecycle?.lifecycle?.stop?.();
       session.pty?.kill("SIGTERM");
       this.closeTtyLog(session);
       for (const process of session.processes) {
@@ -1465,7 +1234,7 @@ export class AppRuntimeManager extends EventEmitter {
     for (const displayId of Array.from(this.sharedDisplays.keys())) {
       this.stopSharedDisplay(displayId);
     }
-    this.stopSharedCodexAppServer();
+    for (const extension of this.appRuntimeExtensions.values()) extension.stopAll?.();
     this.sessions.clear();
   }
 
@@ -1854,63 +1623,12 @@ export class AppRuntimeManager extends EventEmitter {
 
   private guiArgs(app: AppCatalogItem, sessionDir: string, cdpPort: number, launchArgs: string[]) {
     const args = [...(app.args || []), ...launchArgs].map((arg) => arg.replaceAll("{sessionDir}", sessionDir).replaceAll("{cdpPort}", String(cdpPort)));
-    if (app.id === "chromium") {
-      const sandboxArgs = envFlag("TASK_HANDOFF_CHROMIUM_NO_SANDBOX") ? ["--no-sandbox"] : [];
-      const userDataDir = chromiumUserDataDir(sessionDir);
-      return [
-        ...sandboxArgs,
-        "--disable-dev-shm-usage",
-        "--no-first-run",
-        ...this.chromiumExtensionArgs(),
-        "--remote-debugging-address=127.0.0.1",
-        ...(userDataDir ? [`--user-data-dir=${userDataDir}`] : []),
-        ...(app.automation?.portArg ? [app.automation.portArg.replaceAll("{port}", String(cdpPort))] : [`--remote-debugging-port=${cdpPort}`]),
-        ...args,
-      ];
-    }
+    const extensionArgs = this.appRuntimeExtension(app)?.prepareGuiArgs?.({ app, sessionDir, automationPort: cdpPort, launchArgs, defaultArgs: args });
+    if (extensionArgs) return extensionArgs;
     if (app.automation?.portArg) {
       args.unshift(app.automation.portArg.replaceAll("{port}", String(cdpPort)));
     }
-    if (this.isXtermApp(app)) {
-      return [
-        "-fa",
-        process.env.TASK_HANDOFF_XTERM_FONT_FAMILY || "Monospace",
-        "-fs",
-        process.env.TASK_HANDOFF_XTERM_FONT_SIZE || "11",
-        ...args,
-      ];
-    }
     return args;
-  }
-
-  private chromiumExtensionArgs() {
-    const extensionDirs = this.chromiumExtensionDirs();
-    return extensionDirs.length > 0 ? [`--load-extension=${extensionDirs.join(",")}`] : [];
-  }
-
-  private chromiumExtensionDirs() {
-    const configured = process.env.TASK_HANDOFF_CHROMIUM_EXTENSION_DIRS;
-    if (configured) {
-      return configured.split(/[,;]/).map((entry) => entry.trim()).filter((entry) => this.isChromiumExtensionDir(entry));
-    }
-    const root = process.env.TASK_HANDOFF_CHROMIUM_EXTENSION_DIR || DEFAULT_CHROMIUM_EXTENSION_DIR;
-    if (!fs.existsSync(root)) {
-      return [];
-    }
-    return fs.readdirSync(root, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => path.join(root, entry.name))
-      .filter((entry) => this.isChromiumExtensionDir(entry))
-      .sort();
-  }
-
-  private isChromiumExtensionDir(extensionDir: string) {
-    return fs.existsSync(path.join(extensionDir, "manifest.json"));
-  }
-
-  private isXtermApp(app: AppCatalogItem) {
-    const command = path.basename(app.command || app.id);
-    return app.id === "terminal-gui" || command === "xterm";
   }
 
   private webArgs(app: AppCatalogItem, sessionDir: string, cwd: string, port: number, launchArgs: string[]) {
@@ -1926,26 +1644,10 @@ export class AppRuntimeManager extends EventEmitter {
     return args;
   }
 
-  private prepareWebAppSession(app: AppCatalogItem, sessionDir: string) {
-    if (app.id !== "vscode-web") {
-      return;
-    }
-    const settingsDir = path.join(sessionDir, "user-data", "User");
-    const settingsPath = path.join(settingsDir, "settings.json");
-    let existingSettings: Record<string, unknown> = {};
-    fs.mkdirSync(settingsDir, { recursive: true });
-    if (fs.existsSync(settingsPath)) {
-      try {
-        const parsed = JSON.parse(fs.readFileSync(settingsPath, "utf8")) as unknown;
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-          existingSettings = parsed as Record<string, unknown>;
-        }
-      } catch {
-        existingSettings = {};
-      }
-    }
-    writeFileAtomic.sync(settingsPath, `${JSON.stringify({ ...VSCODE_WEB_DEFAULT_SETTINGS, ...existingSettings }, null, 2)}\n`, { mode: 0o600 });
+  private prepareWebAppSession(app: AppCatalogItem, sessionDir: string, cwd = process.cwd(), port = 0, launch: AppLaunchOptions = {}) {
+    this.appRuntimeExtension(app)?.prepareWebSession?.({ app, sessionDir, cwd, port, launch });
   }
+
 
   private async fetchCdpVersion(endpoint: string): Promise<Record<string, unknown>> {
     const url = new URL(endpoint);
@@ -2006,7 +1708,7 @@ export class AppRuntimeManager extends EventEmitter {
 
   private aiSessionResumeArgs(appId: string, launch: AppLaunchOptions) {
     if (!launch.aiSessionResume) return [];
-    const provider = builtinManagedAppRegistry.provider(appId);
+    const provider = this.registry.provider(appId);
     if (!provider?.capabilities?.supportsAiSessionResume || !provider.aiSessionResumeArgs) {
       throw Object.assign(new Error(`${appId} does not support AI session resume.`), { code: "APP_RESUME_UNSUPPORTED" });
     }

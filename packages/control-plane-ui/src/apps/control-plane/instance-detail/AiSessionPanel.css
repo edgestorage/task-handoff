@@ -8,7 +8,7 @@
 
 .session-ai-workspace {
   display: grid;
-  grid-template-columns: minmax(320px, var(--session-ai-sidebar-width, 360px)) 2px minmax(0, 1fr);
+  grid-template-columns: minmax(260px, var(--session-ai-sidebar-width, 360px)) 2px minmax(0, 1fr);
   column-gap: 0;
   min-height: 0;
   overflow: hidden;
@@ -123,9 +123,25 @@
   background: transparent;
 }
 
-.session-ai-new-dialog {
+.session-ai-new-start {
   display: grid;
   width: min(760px, 100%);
+  gap: 28px;
+}
+
+.session-ai-new-title {
+  margin: 0;
+  color: var(--text);
+  font-size: clamp(32px, 3.2vw, 44px);
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  line-height: 1.1;
+  text-align: center;
+}
+
+.session-ai-new-dialog {
+  display: grid;
+  width: 100%;
   gap: 0;
   border: 1px solid var(--line-strong);
   border-radius: 20px;
@@ -800,6 +816,7 @@
   display: grid;
   gap: 7px;
   min-width: 0;
+  font-size: 14px;
 }
 
 .session-ai-history-message > small {

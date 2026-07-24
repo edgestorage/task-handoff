@@ -1,10 +1,12 @@
 import type { ManagedAppProvider } from "../types";
 import { envFlag, launcherDetection, modelArgs } from "../shared";
+import { createClaudeRuntime } from "./runtime";
 
 export const claudeProvider: ManagedAppProvider = {
   id: "claude",
   capabilities: { supportsCwdSelection: true, supportsAiSessionResume: true },
   aiSessionResumeArgs: (providerSessionId) => ["--resume", providerSessionId],
+  createRuntime: () => createClaudeRuntime(),
   definition: ({ env }) => {
     const skipPermissions = envFlag(env, "TASK_HANDOFF_CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS")
       || envFlag(env, "TASK_HANDOFF_CLAUDE_SKIP_PERMISSIONS");

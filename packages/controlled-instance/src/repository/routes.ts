@@ -47,6 +47,8 @@ const DiffQuerySchema = z.object({
   path: z.string().min(1).max(4096),
   scope: z.enum(["conflict", "staged", "unstaged", "untracked"]),
   byteLimit: z.coerce.number().int().min(1).max(2 * 1024 * 1024).default(512 * 1024),
+  includeContext: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
+  contextLines: z.coerce.number().int().min(1).max(3_000).default(20),
 }).strict();
 
 export function registerRepositoryRoutes(app: FastifyInstance, options: RegisterRepositoryRoutesOptions) {
@@ -161,7 +163,7 @@ export function registerRepositoryRoutes(app: FastifyInstance, options: Register
     app.get<{ Params: { id: string }; Querystring: unknown }>(`${base}/diff`, async (request, reply) => {
       try {
         const query = DiffQuerySchema.parse(request.query || {});
-        return { data: await servicesFor(kind, request.params.id).changes.diff(query.scope, query.path, query.byteLimit) };
+        return { data: await servicesFor(kind, request.params.id).changes.diff(query.scope, query.path, query.byteLimit, query.includeContext, query.contextLines) };
       } catch (error) { return sendRepositoryError(reply, error); }
     });
 

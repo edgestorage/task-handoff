@@ -18,7 +18,7 @@
           <PopoverTrigger as-child>
             <Button variant="outline" size="sm" class="repository-review-files-trigger"><PanelLeftOpen :size="13" /> Files <b>{{ logicalFileCount }}</b></Button>
           </PopoverTrigger>
-          <PopoverContent class="repository-review-files-popover" align="start" :side-offset="6">
+          <PopoverContent class="repository-review-files-popover p-0" align="start" :collision-padding="12" :side-offset="6">
             <aside class="repository-review-tree-panel">
               <label class="repository-review-filter"><Search :size="13" /><input v-model="filter" type="search" placeholder="Filter changed files…" aria-label="Filter changed files" /></label>
               <div class="repository-review-tree" role="tree" aria-label="Changed files">
@@ -45,7 +45,10 @@
           </button>
         </div>
       </div>
-      <span class="repository-review-view-options"><Button variant="ghost" size="sm" disabled><Rows3 :size="13" /> Unified</Button></span>
+      <ToggleGroup :model-value="viewMode" class="repository-review-view-options" type="single" aria-label="Diff layout" @update:model-value="setViewMode">
+        <ToggleGroupItem value="unified" aria-label="Unified diff"><Rows3 :size="13" /> Unified</ToggleGroupItem>
+        <ToggleGroupItem value="split" aria-label="Split diff" :disabled="!splitAvailable" :title="splitAvailable ? undefined : 'Split view requires a wider window'"><Columns2 :size="13" /> Split</ToggleGroupItem>
+      </ToggleGroup>
     </div>
 
     <div v-if="loading && !changes" class="repository-review-page-state"><LoaderCircle class="spin" :size="20" /> Loading repository changes…</div>
@@ -70,11 +73,15 @@
               :id="cardDomId(filteredEntries[virtualRow.index])"
               :entry="filteredEntries[virtualRow.index]"
               :instance-id="instanceId"
+              :expanded-gaps="expandedGapsFor(filteredEntries[virtualRow.index])"
               :pending="mutationPending === changeId(filteredEntries[virtualRow.index])"
               :session-id="sessionId"
               :session-kind="sessionKind"
               :snapshot-id="changes?.snapshotId || ''"
+              :view-mode="viewMode"
+              @collapse-contexts="collapseContexts"
               @discard="confirmDiscard"
+              @expand-context="expandContext"
               @open-files="openFiles"
               @stage="stageEntry"
               @unstage="unstageEntry"
@@ -97,8 +104,9 @@
 
 <script setup lang="ts">
 import type { RepositoryChangeEntry, RepositoryChanges, RepositoryContext, RepositoryMutationResult, RepositorySessionKind } from "@task-handoff/protocol/repository";
-import { CheckCircle2, ChevronRight, FileDiff, Folder, GitCompareArrows, LoaderCircle, PanelLeftOpen, RefreshCw, RotateCcw, Rows3, Search } from "@lucide/vue";
+import { CheckCircle2, ChevronRight, Columns2, FileDiff, Folder, GitCompareArrows, LoaderCircle, PanelLeftOpen, RefreshCw, RotateCcw, Rows3, Search } from "@lucide/vue";
 import { useVirtualizer } from "@tanstack/vue-virtual";
+import { useMediaQuery } from "@vueuse/core";
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import { ApiError } from "../../../api/client";
@@ -106,11 +114,14 @@ import { discardRepositoryWorktree, getRepositoryChanges, getRepositoryContext, 
 import { Button } from "../../../components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "../../../components/ui/popover";
+import { ToggleGroup, ToggleGroupItem } from "../../../components/ui/toggle-group";
 import RepositoryChangeDiffCard from "./RepositoryChangeDiffCard.vue";
 import RepositoryErrorNotice from "./RepositoryErrorNotice.vue";
+import type { ContextDirection, GapExpansion } from "./repositoryDiffPresentation";
 import { repositoryWorkspaceChannelName } from "./repositoryWorkspaceWindow";
 
 type ReviewScope = "all" | "working" | "staged" | "conflict";
+type DiffViewMode = "unified" | "split";
 type ReviewTreeNode = {
   key: string;
   kind: "directory" | "file";
@@ -137,11 +148,14 @@ const mutationMessage = ref("");
 const scope = ref<ReviewScope>("all");
 const filter = ref("");
 const filesOpen = ref(false);
+const viewMode = ref<DiffViewMode>("unified");
+const splitAvailable = useMediaQuery("(min-width: 900px)");
 const expandedDirectories = reactive(new Set<string>());
 const activeChangeId = ref("");
 const discardOpen = ref(false);
 const discardTarget = ref<RepositoryChangeEntry>();
 const scrollElement = ref<HTMLElement>();
+const expandedGaps = reactive(new Map<string, GapExpansion>());
 let repositoryChannel: BroadcastChannel | undefined;
 
 const allEntries = computed(() => changes.value?.entries || []);
@@ -190,6 +204,9 @@ onBeforeUnmount(() => repositoryChannel?.close());
 watch([() => props.instanceId, sessionId, sessionKind], () => {
   connectRepositoryChannel();
   void refresh();
+});
+watch(splitAvailable, (available) => {
+  if (!available && viewMode.value === "split") viewMode.value = "unified";
 });
 
 async function refresh() {
@@ -285,6 +302,25 @@ function treeIndent(depth: number) {
 
 function changeId(entry: RepositoryChangeEntry) { return `${entry.scope}:${entry.path}`; }
 function cardDomId(entry: RepositoryChangeEntry) { return `repository-review-${encodeURIComponent(changeId(entry))}`; }
+function expandedGapKey(entry: RepositoryChangeEntry, gapId: string) { return `${changeId(entry)}\0${entry.version}\0${gapId}`; }
+function expandedGapsFor(entry: RepositoryChangeEntry) {
+  const prefix = `${changeId(entry)}\0${entry.version}\0`;
+  return new Map([...expandedGaps].filter(([key]) => key.startsWith(prefix)).map(([key, expansion]) => [key.slice(prefix.length), expansion]));
+}
+function setViewMode(value: unknown) {
+  if (value === "unified" || value === "split") viewMode.value = value;
+}
+function expandContext(entry: RepositoryChangeEntry, gapId: string, direction: ContextDirection, lineCount: number) {
+  const key = expandedGapKey(entry, gapId);
+  const current = expandedGaps.get(key) || { fromStart: 0, fromEnd: 0 };
+  expandedGaps.set(key, direction === "up"
+    ? { ...current, fromEnd: Math.min(3_000, current.fromEnd + lineCount) }
+    : { ...current, fromStart: Math.min(3_000, current.fromStart + lineCount) });
+}
+function collapseContexts(entry: RepositoryChangeEntry) {
+  const prefix = `${changeId(entry)}\0${entry.version}\0`;
+  for (const key of expandedGaps.keys()) if (key.startsWith(prefix)) expandedGaps.delete(key);
+}
 function measureVirtualRow(element: unknown) {
   if (element instanceof HTMLElement) rowVirtualizer.value.measureElement(element);
 }
@@ -380,47 +416,49 @@ function connectRepositoryChannel() {
 .repository-review-title > svg { flex: 0 0 auto; color: var(--brand-accent); }
 .repository-review-title > span { display: grid; min-width: 0; gap: 1px; }
 .repository-review-title strong { color: var(--text-strong); font-size: 13px; }
-.repository-review-title small, .repository-review-summary small { overflow: hidden; color: var(--text-muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.repository-review-title small, .repository-review-summary small { overflow: hidden; color: var(--text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .repository-review-summary { flex: 0 0 auto; }
-.repository-review-summary b { color: var(--text); font-size: 10px; }
-.repository-review-summary :deep(button) { height: 28px; gap: 5px; font-size: 9px; }
+.repository-review-summary b { color: var(--text); font-size: 12px; }
+.repository-review-summary :deep(button) { height: 28px; gap: 5px; font-size: 12px; }
 .repository-review-toolbar { display: flex; min-height: 42px; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line-subtle); background: var(--surface-raised); padding: 5px 9px; }
 .repository-review-toolbar-left { display: flex; min-width: 0; align-items: center; gap: 7px; }
-.repository-review-files-trigger { height: 29px; gap: 6px; font-size: 10px; }
-.repository-review-files-trigger b { min-width: 17px; border-radius: 999px; background: var(--workspace-bg); padding: 1px 5px; font-size: 8px; }
+.repository-review-files-trigger { height: 29px; gap: 6px; font-size: 12px; }
+.repository-review-files-trigger b { min-width: 17px; border-radius: 999px; background: var(--workspace-bg); padding: 1px 5px; font-size: 10px; }
 .repository-review-scopes { display: flex; align-items: center; gap: 4px; }
-.repository-review-scopes button { display: flex; height: 29px; align-items: center; gap: 6px; border: 0; border-radius: 6px; background: transparent; color: var(--text-muted); cursor: pointer; padding: 0 9px; font-size: 10px; }
+.repository-review-scopes button { display: flex; height: 29px; align-items: center; gap: 6px; border: 0; border-radius: 6px; background: transparent; color: var(--text-muted); cursor: pointer; padding: 0 9px; font-size: 12px; }
 .repository-review-scopes button:hover, .repository-review-scopes button.active { background: var(--surface-active); color: var(--text-strong); }
-.repository-review-scopes b { min-width: 17px; border-radius: 999px; background: var(--workspace-bg); padding: 1px 5px; font-size: 8px; }
-.repository-review-view-options :deep(button) { height: 28px; gap: 5px; font-size: 9px; }
+.repository-review-scopes b { min-width: 17px; border-radius: 999px; background: var(--workspace-bg); padding: 1px 5px; font-size: 10px; }
+.repository-review-view-options { gap: 2px; border: 1px solid var(--line-subtle); border-radius: 6px; background: var(--surface-inset); padding: 2px; }
+.repository-review-view-options :deep(button) { height: 24px; min-width: 0; gap: 5px; border-radius: 4px; color: var(--text-muted); padding: 0 7px; font-size: 12px; }
+.repository-review-view-options :deep(button[data-state="on"]) { background: var(--surface); color: var(--text-strong); box-shadow: var(--shadow-soft); }
 .repository-review-body { display: grid; min-width: 0; min-height: 0; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
-:global(.repository-review-files-popover) { display: grid; width: min(360px, calc(100vw - 24px)); height: min(680px, calc(100vh - 150px)); overflow: hidden; border-color: var(--line-subtle); background: var(--surface-raised); padding: 0; color: var(--text); }
+:global(.repository-review-files-popover) { display: grid; width: min(360px, calc(100vw - 24px)); height: min(680px, var(--reka-popover-content-available-height, calc(100vh - 24px))); overflow: hidden; border-color: var(--line-subtle); background: var(--surface-raised); padding: 0; color: var(--text); }
 .repository-review-tree-panel { display: grid; width: 100%; height: 100%; min-width: 0; min-height: 0; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; background: var(--surface-raised); padding-top: 7px; }
 .repository-review-filter { display: flex; height: 30px; align-items: center; gap: 6px; margin: 0 7px 7px; border: 1px solid var(--line-subtle); border-radius: 6px; background: var(--surface-inset); color: var(--text-muted); padding: 0 8px; }
-.repository-review-filter input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 10px; }
+.repository-review-filter input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 12px; }
 .repository-review-filter input::placeholder { color: var(--text-subtle); }
-.repository-review-message { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; border-radius: 6px; padding: 7px; font-size: 9px; }
+.repository-review-message { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; border-radius: 6px; padding: 7px; font-size: 12px; }
 .repository-review-message.success { background: var(--status-success-bg); color: var(--status-success); }
 .repository-review-notices { display: grid; gap: 6px; padding: 8px 13px 0; }
 .repository-review-tree { min-height: 0; overflow: auto; padding: 1px 5px 10px; }
 .repository-review-tree button { display: flex; width: 100%; min-width: 0; height: 28px; align-items: center; gap: 5px; border: 0; border-radius: 5px; background: transparent; color: var(--text-muted); cursor: pointer; padding-right: 6px; text-align: left; }
 .repository-review-tree button:hover, .repository-review-tree-file[data-active="true"] { background: var(--surface-active); color: var(--text-strong); }
 .repository-review-tree button > svg { flex: 0 0 auto; }
-.repository-review-tree button > span { min-width: 0; flex: 1 1 auto; overflow: hidden; font: 10px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+.repository-review-tree button > span { min-width: 0; flex: 1 1 auto; overflow: hidden; font: 12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
 .repository-review-tree-directory > svg:first-child { transition: transform 120ms ease; }
 .repository-review-tree-directory > svg:first-child.expanded { transform: rotate(90deg); }
-.repository-review-tree-directory > b { color: var(--text-subtle); font-size: 8px; }
+.repository-review-tree-directory > b { color: var(--text-subtle); font-size: 12px; }
 .repository-review-tree-file > small { display: flex; flex: 0 0 auto; align-items: center; gap: 3px; }
-.repository-review-tree-file > small b { min-width: 16px; border-radius: 4px; padding: 1px 4px; color: var(--text-muted); font-size: 8px; text-align: center; }
+.repository-review-tree-file > small b { min-width: 16px; border-radius: 4px; padding: 1px 4px; color: var(--text-muted); font-size: 12px; text-align: center; }
 .repository-review-tree-file > small b[data-scope="conflict"] { background: var(--status-danger-bg); color: var(--status-danger); }
 .repository-review-tree-file > small b[data-scope="staged"] { background: var(--status-success-bg); color: var(--status-success); }
 .repository-review-tree-file > small b[data-scope="unstaged"], .repository-review-tree-file > small b[data-scope="untracked"] { background: var(--status-warning-bg); color: var(--status-warning); }
 .repository-review-tree-file > small > svg { color: var(--status-success); }
-.repository-review-tree-empty { color: var(--text-muted); padding: 18px 12px; font-size: 10px; text-align: center; }
+.repository-review-tree-empty { color: var(--text-muted); padding: 18px 12px; font-size: 12px; text-align: center; }
 .repository-review-content { min-width: 0; min-height: 0; overflow: auto; scroll-padding-top: 13px; }
 .repository-review-virtual-list { position: relative; width: calc(100% - 26px); min-width: 0; margin: 0 13px; }
 .repository-review-virtual-row { position: absolute; top: 0; left: 0; width: 100%; }
-.repository-review-empty, .repository-review-page-state { display: flex; min-height: 0; flex: 1 1 auto; align-items: center; justify-content: center; flex-direction: column; gap: 7px; color: var(--text-muted); font-size: 10px; }
+.repository-review-empty, .repository-review-page-state { display: flex; min-height: 0; flex: 1 1 auto; align-items: center; justify-content: center; flex-direction: column; gap: 7px; color: var(--text-muted); font-size: 12px; }
 .repository-review-empty strong { color: var(--text-strong); font-size: 13px; }
 :global([role="dialog"].repository-review-discard-dialog) { width: min(480px, calc(100vw - 32px)); border-color: var(--line-subtle); background: hsl(var(--background)); color: var(--text); }
 .spin { animation: repository-review-spin 0.9s linear infinite; }

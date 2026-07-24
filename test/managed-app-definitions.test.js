@@ -44,6 +44,26 @@ test("managed AI providers own their resume arguments", () => {
   assert.equal(terminal.aiSessionResumeArgs, undefined);
 });
 
+test("managed app providers own their program-specific runtime hooks", () => {
+  const host = {
+    paths: {},
+    allocatePort: () => 8101,
+    hasCommand: () => true,
+    spawnLogged: () => { throw new Error("not used"); },
+    waitForUnixSocket: () => {},
+    patchSession: () => {},
+  };
+  const runtimeFor = (id) => builtinManagedAppRegistry.provider(id).createRuntime?.(host);
+
+  assert.equal(typeof runtimeFor("codex").prepareTtyLaunch, "function");
+  assert.equal(typeof runtimeFor("codex").sharedResource.ensure, "function");
+  assert.equal(typeof runtimeFor("claude").prepareTtyLaunch, "function");
+  assert.equal(typeof runtimeFor("chromium").prepareGuiArgs, "function");
+  assert.equal(typeof runtimeFor("terminal-gui").prepareGuiArgs, "function");
+  assert.equal(typeof runtimeFor("vscode-web").prepareWebSession, "function");
+  assert.equal(runtimeFor("terminal-tty"), undefined);
+});
+
 function definition(overrides = {}) {
   return {
     launcher: { id: "tool", name: "Tool", kind: "tty", command: "tool" },
@@ -267,6 +287,19 @@ test("managed app registry rejects duplicate and inconsistent provider ids", () 
     definition: () => definition(),
   }]);
   assert.throws(() => registry.definitions(), /returned launcher id tool/);
+});
+
+test("managed app registry rejects ambiguous runtime provider matches", () => {
+  const matchingProvider = (id) => ({
+    id,
+    matchesRuntime: () => true,
+    definition: () => definition({ launcher: { id, name: id, kind: "gui", command: id } }),
+  });
+  const registry = createManagedAppRegistry([matchingProvider("first"), matchingProvider("second")]);
+  assert.throws(
+    () => registry.runtimeProvider({ id: "custom", name: "Custom", kind: "gui", command: "custom" }),
+    /Multiple managed app providers match runtime for custom/,
+  );
 });
 
 test("built-in providers resolve commands and arguments from the supplied environment", () => {

@@ -24,18 +24,23 @@
         </div>
       </div>
       <div class="control-plane-actions">
-        <Button
-          v-if="serverUpdateAvailable"
-          variant="outline"
-          size="sm"
-          class="control-plane-update-indicator"
-          :aria-label="`Update available: ${serverUpdateVersion}`"
-          :title="`Update available: ${serverUpdateVersion}`"
-          @click="openSettings('basic')"
-        >
-          <Download :size="15" />
-          <span>Update available · {{ serverUpdateVersion }}</span>
-        </Button>
+        <TooltipProvider v-if="serverUpdateAvailable" :delay-duration="120">
+          <Tooltip>
+            <TooltipTrigger as-child>
+              <Button
+                variant="outline"
+                size="sm"
+                class="control-plane-update-indicator"
+                :aria-label="`Update available: ${serverUpdateVersion}`"
+                @click="openSettings('basic')"
+              >
+                <Download :size="15" />
+                <span>Update</span>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" :side-offset="8">Update available · {{ serverUpdateVersion }}</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
         <div class="workbench-view-switcher" :data-active-view="workbenchView" aria-label="Workbench view">
           <button
             v-for="option in workbenchViewOptions"
@@ -252,6 +257,7 @@ import { getInstanceAppManagement, getInstanceResourceMetrics, installInstanceAp
 import { getApiData } from "../../api/client";
 import { type AiSessionSummary, type AppManagementOperation, type InstanceBoardItem, type InstanceResourceMetrics, type NodeLocalFolder, type UpdateControlledInstanceInput } from "../../api/types";
 import { Button } from "../../components/ui/button";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../components/ui/tooltip";
 import AiSessionBoardView from "./ai-board/AiSessionBoardView.vue";
 import InstanceBoardView from "./board/InstanceBoardView.vue";
 import InstanceDetail from "./instance-detail/InstanceDetail.vue";

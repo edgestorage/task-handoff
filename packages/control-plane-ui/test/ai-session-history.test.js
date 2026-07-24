@@ -68,4 +68,5 @@ test("history reuses path grouping and opens stored turn details without resumin
   assert.match(styles, /\.session-ai-history-head\s*\{[^}]*grid-template-columns: minmax\(0, 1fr\) auto minmax\(0, 1fr\);/s);
   assert.match(styles, /\.session-ai-history-head \.session-ai-options-trigger\s*\{[^}]*justify-self: end;/s);
   assert.match(styles, /\.session-ai-history-detail-content/);
+  assert.match(styles, /\.session-ai-history-message\s*\{[^}]*font-size: 14px;/s);
 });

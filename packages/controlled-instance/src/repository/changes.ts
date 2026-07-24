@@ -30,9 +30,12 @@ export class RepositoryChangesService {
     private readonly gitOptions: GitProcessOptions = {},
   ) {}
 
-  async diff(scope: ChangeEntry["scope"], relativePath: string, byteLimit = 512 * 1024) {
+  async diff(scope: ChangeEntry["scope"], relativePath: string, byteLimit = 512 * 1024, includeContext = false, contextLines = 20) {
     if (!Number.isInteger(byteLimit) || byteLimit < 1 || byteLimit > 2 * 1024 * 1024) {
       throw new RepositoryOperationError("REPOSITORY_PATH_INVALID", "Diff byte limit is invalid.");
+    }
+    if (!Number.isInteger(contextLines) || contextLines < 1 || contextLines > 3_000) {
+      throw new RepositoryOperationError("REPOSITORY_PATH_INVALID", "Diff context line limit is invalid.");
     }
     validateRepositoryRelativePath(relativePath);
     const state = await this.requireAvailable();
@@ -48,15 +51,28 @@ export class RepositoryChangesService {
     } else {
       const git = new GitProcess(root, this.gitOptions);
       const args = scope === "staged"
-        ? ["--cached", "--", relativePath]
+        ? ["--cached", "--unified=3", "--", relativePath]
         : scope === "conflict"
-          ? ["--cc", "--", relativePath]
-          : ["--", relativePath];
+          ? ["--base", "--unified=3", "--", relativePath]
+          : ["--unified=3", "--", relativePath];
       const result = await git.run("diff", args, { outputLimitBytes: Math.max(byteLimit * 8, 8 * 1024 * 1024) });
       raw = result.stdout;
       binary = /(?:Binary files .* differ|GIT binary patch)/.test(raw);
     }
     const truncated = truncateUtf8(raw, byteLimit);
+    const lines = binary ? [] : structuredDiffLines(truncated.content);
+    let contextGaps: ReturnType<typeof buildContextGaps> = [];
+    if (includeContext && !binary && !truncated.truncated && scope !== "untracked" && lines.some((line) => line.kind === "hunk" && line.hunkId)) {
+      const git = new GitProcess(root, this.gitOptions);
+      const expandedContext = contextLines + 4;
+      const args = scope === "staged"
+        ? ["--cached", `--unified=${expandedContext}`, "--", relativePath]
+        : scope === "conflict"
+          ? ["--base", `--unified=${expandedContext}`, "--", relativePath]
+          : [`--unified=${expandedContext}`, "--", relativePath];
+      const expanded = await git.run("diff", args, { outputLimitBytes: Math.max(byteLimit * 8, 8 * 1024 * 1024) });
+      contextGaps = buildContextGaps(lines, structuredDiffLines(expanded.stdout), contextLines);
+    }
     return {
       path: entry.path,
       oldPath: entry.oldPath,
@@ -66,7 +82,8 @@ export class RepositoryChangesService {
       truncated: truncated.truncated,
       byteLimit,
       content: binary ? "" : truncated.content,
-      lines: binary ? [] : structuredDiffLines(truncated.content),
+      lines,
+      contextGaps,
       version: entry.version,
       snapshotId: state.context.snapshotId!,
     };
@@ -199,17 +216,29 @@ export function structuredDiffLines(raw: string) {
     content: string;
     oldLine?: number;
     newLine?: number;
+    oldStart?: number;
+    oldCount?: number;
+    newStart?: number;
+    newCount?: number;
+    heading?: string;
+    hunkId?: string;
   }> = [];
   let oldLine: number | undefined;
   let newLine: number | undefined;
   const rawLines = raw ? raw.split("\n") : [];
   if (raw.endsWith("\n")) rawLines.pop();
   for (const rawLine of rawLines) {
-    const hunk = rawLine.match(/^@@ -(?<old>\d+)(?:,\d+)? \+(?<next>\d+)(?:,\d+)? @@/);
+    const hunk = rawLine.match(/^@@ -(?<oldStart>\d+)(?:,(?<oldCount>\d+))? \+(?<newStart>\d+)(?:,(?<newCount>\d+))? @@(?: ?(?<heading>.*))?$/);
     if (hunk?.groups) {
-      oldLine = Number(hunk.groups.old);
-      newLine = Number(hunk.groups.next);
-      lines.push({ kind: "hunk", content: rawLine });
+      const oldStart = Number(hunk.groups.oldStart);
+      const oldCount = hunk.groups.oldCount === undefined ? 1 : Number(hunk.groups.oldCount);
+      const newStart = Number(hunk.groups.newStart);
+      const newCount = hunk.groups.newCount === undefined ? 1 : Number(hunk.groups.newCount);
+      const heading = hunk.groups.heading || undefined;
+      const hunkId = `hunk:${oldStart}:${oldCount}:${newStart}:${newCount}`;
+      oldLine = oldStart;
+      newLine = newStart;
+      lines.push({ kind: "hunk", content: rawLine, oldStart, oldCount, newStart, newCount, hunkId, ...(heading ? { heading } : {}) });
       continue;
     }
     if (rawLine.startsWith("@@@")) {
@@ -238,6 +267,70 @@ export function structuredDiffLines(raw: string) {
     newLine += 1;
   }
   return lines;
+}
+
+export function buildContextGaps(baseLines: ReturnType<typeof structuredDiffLines>, expandedLines: ReturnType<typeof structuredDiffLines>, lineLimit = 20) {
+  const hunks = baseLines.filter((line) => line.kind === "hunk" && line.hunkId && line.newStart !== undefined && line.newCount !== undefined);
+  if (!hunks.length) return [];
+  const visibleContext = new Set(baseLines.filter((line) => line.kind === "context").map(contextLineKey));
+  const directionalSegments = new Map<string, { hunkIndex: number; position: "before" | "after"; lines: typeof baseLines }>();
+  for (const line of expandedLines) {
+    if (line.kind !== "context" || line.newLine === undefined || visibleContext.has(contextLineKey(line))) continue;
+    let nearestIndex = 0;
+    let nearestDistance = Number.POSITIVE_INFINITY;
+    for (const [index, hunk] of hunks.entries()) {
+      const start = hunk.newStart!;
+      const end = start + hunk.newCount! - 1;
+      const distance = line.newLine < start ? start - line.newLine : line.newLine > end ? line.newLine - end : 0;
+      if (distance < nearestDistance) {
+        nearestIndex = index;
+        nearestDistance = distance;
+      }
+    }
+    const nearest = hunks[nearestIndex];
+    const position = line.newLine < nearest.newStart! ? "before" : "after";
+    const key = `${nearest.hunkId}:${position}`;
+    const segment = directionalSegments.get(key) || { hunkIndex: nearestIndex, position, lines: [] };
+    segment.lines.push(line);
+    directionalSegments.set(key, segment);
+  }
+  const gaps = new Map<string, {
+    gapId: string;
+    beforeHunkId?: string;
+    afterHunkId?: string;
+    lines: typeof baseLines;
+    startLineKeys: Set<string>;
+    hasMore: boolean;
+  }>();
+  for (const segment of directionalSegments.values()) {
+    const sorted = segment.lines.sort((left, right) => (left.newLine || 0) - (right.newLine || 0));
+    const hasMore = lineLimit < 3_000 && sorted.length > lineLimit;
+    const lines = segment.position === "before" ? sorted.slice(-lineLimit) : sorted.slice(0, lineLimit);
+    const beforeHunkId = segment.position === "before" ? hunks[segment.hunkIndex - 1]?.hunkId : hunks[segment.hunkIndex]?.hunkId;
+    const afterHunkId = segment.position === "before" ? hunks[segment.hunkIndex]?.hunkId : hunks[segment.hunkIndex + 1]?.hunkId;
+    const gapId = `gap:${beforeHunkId || "start"}:${afterHunkId || "end"}`;
+    const gap = gaps.get(gapId) || { gapId, beforeHunkId, afterHunkId, lines: [], startLineKeys: new Set<string>(), hasMore: false };
+    gap.lines.push(...lines);
+    if (segment.position === "after") lines.forEach((line) => gap.startLineKeys.add(contextLineKey(line)));
+    gap.hasMore ||= hasMore;
+    gaps.set(gapId, gap);
+  }
+  return [...gaps.values()].map((gap) => {
+    const lines = [...new Map(gap.lines.map((line) => [contextLineKey(line), line])).values()]
+      .sort((left, right) => (left.newLine || 0) - (right.newLine || 0));
+    return {
+      gapId: gap.gapId,
+      beforeHunkId: gap.beforeHunkId,
+      afterHunkId: gap.afterHunkId,
+      lines,
+      startLineCount: lines.filter((line) => gap.startLineKeys.has(contextLineKey(line))).length,
+      hasMore: gap.hasMore,
+    };
+  });
+}
+
+function contextLineKey(line: { oldLine?: number; newLine?: number }) {
+  return `${line.oldLine || 0}:${line.newLine || 0}`;
 }
 
 function structuredGitError(error: unknown, current: ResolvedRepository) {

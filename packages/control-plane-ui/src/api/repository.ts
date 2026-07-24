@@ -170,36 +170,43 @@ export function commitRepositoryIndex(target: RepositorySessionTarget, input: { 
 
 export function getRepositoryDiff(
   target: RepositorySessionTarget,
-  input: { path: string; scope: RepositoryChangeScope; byteLimit?: number },
+  input: { path: string; scope: RepositoryChangeScope; byteLimit?: number; includeContext?: boolean; contextLines?: number },
   options?: { signal?: AbortSignal },
 ) {
   return getUrlData<RepositoryDiff>(repositoryUrlWithQuery(target, "diff", {
     path: input.path,
     scope: input.scope,
     byteLimit: input.byteLimit || 512 * 1024,
+    ...(input.includeContext ? { includeContext: "true" } : {}),
+    ...(input.contextLines ? { contextLines: input.contextLines } : {}),
   }), options);
 }
 
 export function useRepositoryDiffQuery(
   target: MaybeRefOrGetter<RepositorySessionTarget>,
-  input: MaybeRefOrGetter<{ path: string; scope: RepositoryChangeScope; snapshotId: string; version: string }>,
+  input: MaybeRefOrGetter<{ path: string; scope: RepositoryChangeScope; snapshotId: string; version: string; contextLines?: number }>,
 ) {
   const resolvedTarget = computed(() => toValue(target));
   const resolvedInput = computed(() => toValue(input));
+  const queryKey = computed(() => [
+    "repository-diff",
+    resolvedTarget.value.instanceId,
+    resolvedTarget.value.sessionKind,
+    resolvedTarget.value.sessionId,
+    resolvedInput.value.snapshotId,
+    resolvedInput.value.scope,
+    resolvedInput.value.path,
+    resolvedInput.value.version,
+    "with-context",
+    resolvedInput.value.contextLines || 20,
+  ] as const);
   return useQuery({
-    queryKey: computed(() => [
-      "repository-diff",
-      resolvedTarget.value.instanceId,
-      resolvedTarget.value.sessionKind,
-      resolvedTarget.value.sessionId,
-      resolvedInput.value.snapshotId,
-      resolvedInput.value.scope,
-      resolvedInput.value.path,
-      resolvedInput.value.version,
-    ]),
+    queryKey,
     queryFn: ({ signal }) => getRepositoryDiff(resolvedTarget.value, {
       path: resolvedInput.value.path,
       scope: resolvedInput.value.scope,
+      includeContext: true,
+      contextLines: resolvedInput.value.contextLines || 20,
     }, { signal }),
     enabled: computed(() => Boolean(
       resolvedTarget.value.instanceId
@@ -208,11 +215,18 @@ export function useRepositoryDiffQuery(
       && resolvedInput.value.path
       && resolvedInput.value.version
     )),
+    placeholderData: (previousData, previousQuery) => sameDiffContext(previousQuery?.queryKey, queryKey.value) ? previousData : undefined,
     gcTime: 30 * 60 * 1000,
     retry: false,
     staleTime: Infinity,
     refetchOnWindowFocus: false,
   });
+}
+
+function sameDiffContext(previousKey: readonly unknown[] | undefined, currentKey: readonly unknown[]) {
+  return Boolean(previousKey
+    && previousKey.length === currentKey.length
+    && previousKey.slice(0, -1).every((value, index) => value === currentKey[index]));
 }
 
 function mutateRepositoryBranches(

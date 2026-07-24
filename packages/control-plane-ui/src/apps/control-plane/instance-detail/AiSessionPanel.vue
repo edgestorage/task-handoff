@@ -372,55 +372,58 @@
         </template>
       </section>
       <section v-else-if="showNewSession" class="session-ai-detail session-ai-new-detail">
-        <div class="session-ai-new-dialog" role="group" aria-label="New AI session">
-          <div class="session-ai-new-pills">
-            <DropdownMenu>
-              <DropdownMenuTrigger as-child>
-                <button type="button" class="session-ai-project-pill" :disabled="launchingNewSession">
-                  <Folder :size="14" />
-                  <strong>{{ newSessionProjectLabel }}</strong>
-                  <ChevronDown :size="13" />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent class="session-ai-project-menu" align="start" :side-offset="8">
-                <input v-model="newSessionFolderQuery" class="session-ai-project-search" placeholder="Search projects" aria-label="Search projects" />
-                <DropdownMenuItem v-for="folder in filteredNewSessionFolders" :key="folder.id" class="session-ai-project-item" @select="newSessionFolderId = folder.id">
-                  <Folder :size="15" /><span>{{ folder.name }}</span><Check v-if="newSessionFolderId === folder.id" :size="15" />
-                </DropdownMenuItem>
-                <p v-if="!filteredNewSessionFolders.length" class="session-ai-project-empty">No projects found</p>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem class="session-ai-project-item" @select="openNewProject"><Plus :size="15" /><span>New project</span></DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <DropdownMenu>
-              <DropdownMenuTrigger as-child>
-                <button type="button" class="session-ai-app-pill" :disabled="launchingNewSession">
-                  <Bot v-if="newSessionApp === 'claude'" :size="14" />
-                  <Code2 v-else :size="14" />
-                  <strong>{{ newSessionApp === "claude" ? "Claude" : "Codex" }}</strong>
-                  <ChevronDown :size="13" />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent class="session-ai-project-menu" align="start" :side-offset="8">
-                <DropdownMenuItem v-for="app in aiSessionLaunchableApps" :key="app.id" class="session-ai-project-item" @select="newSessionApp = app.id">
-                  <Bot v-if="app.id === 'claude'" :size="14" />
-                  <Code2 v-else :size="14" />
-                  <span>{{ app.label }}</span><Check v-if="newSessionApp === app.id" :size="15" />
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+        <div class="session-ai-new-start">
+          <h1 class="session-ai-new-title">Start with an idea</h1>
+          <div class="session-ai-new-dialog" role="group" aria-label="New AI session">
+            <div class="session-ai-new-pills">
+              <DropdownMenu>
+                <DropdownMenuTrigger as-child>
+                  <button type="button" class="session-ai-project-pill" :disabled="launchingNewSession">
+                    <Folder :size="14" />
+                    <strong>{{ newSessionProjectLabel }}</strong>
+                    <ChevronDown :size="13" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent class="session-ai-project-menu" align="start" :side-offset="8">
+                  <input v-model="newSessionFolderQuery" class="session-ai-project-search" placeholder="Search projects" aria-label="Search projects" />
+                  <DropdownMenuItem v-for="folder in filteredNewSessionFolders" :key="folder.id" class="session-ai-project-item" @select="newSessionFolderId = folder.id">
+                    <Folder :size="15" /><span>{{ folder.name }}</span><Check v-if="newSessionFolderId === folder.id" :size="15" />
+                  </DropdownMenuItem>
+                  <p v-if="!filteredNewSessionFolders.length" class="session-ai-project-empty">No projects found</p>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem class="session-ai-project-item" @select="openNewProject"><Plus :size="15" /><span>New project</span></DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <DropdownMenu>
+                <DropdownMenuTrigger as-child>
+                  <button type="button" class="session-ai-app-pill" :disabled="launchingNewSession">
+                    <Bot v-if="newSessionApp === 'claude'" :size="14" />
+                    <Code2 v-else :size="14" />
+                    <strong>{{ newSessionApp === "claude" ? "Claude" : "Codex" }}</strong>
+                    <ChevronDown :size="13" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent class="session-ai-project-menu" align="start" :side-offset="8">
+                  <DropdownMenuItem v-for="app in aiSessionLaunchableApps" :key="app.id" class="session-ai-project-item" @select="newSessionApp = app.id">
+                    <Bot v-if="app.id === 'claude'" :size="14" />
+                    <Code2 v-else :size="14" />
+                    <span>{{ app.label }}</span><Check v-if="newSessionApp === app.id" :size="15" />
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+            <AiSessionComposer
+              v-model="newSessionDraft"
+              v-model:attachments="messageAttachments"
+              class="session-ai-compose session-ai-new-composer"
+              :class="{ 'is-loading': launchingNewSession }"
+              :aria-busy="launchingNewSession"
+              :busy="launchingNewSession"
+              :can-interrupt="false"
+              placeholder="Do anything"
+              @run="createNewSession"
+            />
           </div>
-          <AiSessionComposer
-            v-model="newSessionDraft"
-            v-model:attachments="messageAttachments"
-            class="session-ai-compose session-ai-new-composer"
-            :class="{ 'is-loading': launchingNewSession }"
-            :aria-busy="launchingNewSession"
-            :busy="launchingNewSession"
-            :can-interrupt="false"
-            placeholder="Do anything"
-            @run="createNewSession"
-          />
         </div>
       </section>
       <section v-else-if="selectedSession" ref="detailEl" class="session-ai-detail" :class="{ 'is-scrolled': detailScrolled }">
@@ -634,7 +637,7 @@ const GROUP_BY_PATH_STORAGE_KEY = "task-handoff.control-plane.ai-sessions-group-
 const SORT_BY_STATUS_STORAGE_KEY = "task-handoff.control-plane.ai-sessions-sort-by-status";
 const SIDEBAR_WIDTH_STORAGE_KEY = "task-handoff.control-plane.ai-sessions-sidebar-width";
 const SIDEBAR_WIDTH_DEFAULT = 360;
-const SIDEBAR_WIDTH_MIN = 320;
+const SIDEBAR_WIDTH_MIN = 260;
 const SIDEBAR_WIDTH_MAX = 520;
 
 function storedGroupByPath() {

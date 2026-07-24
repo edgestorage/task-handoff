@@ -1,8 +1,10 @@
 import type { ManagedAppProvider } from "../types";
 import { launcherDetection } from "../shared";
+import { createChromiumRuntime } from "./runtime";
 
 export const chromiumProvider: ManagedAppProvider = {
   id: "chromium",
+  createRuntime: () => createChromiumRuntime(),
   definition: ({ env }) => ({
     launcher: {
       id: "chromium",

@@ -63,6 +63,7 @@ const { APP_SESSION_DELTA_RETENTION_MS } = require("../packages/protocol/src/app
 const { summarizeTranscriptLine } = require("../packages/core/src/core/transcript.ts");
 const { summarizeThreadTurns } = require("../packages/ai-session-runtime/src/codex-app-server-protocol.ts");
 const { AppRuntimeManager } = require("../packages/app-runtime/src/runtime.ts");
+const { CodexAppServerConnectionProxy } = require("../packages/app-runtime/src/codex-app-server-proxy.ts");
 const { AiSessionRefreshScheduler, createWebApp } = require("../packages/controlled-instance/src/web/server.ts");
 const { applyManagedCodexModelConfig } = require("../packages/controlled-instance/src/web/codex-model-config.ts");
 
@@ -5224,7 +5225,7 @@ test("web app ai session read routes do not refresh discovery state", async () =
 	    replaceManagedEnvironment: () => undefined,
 	    listSessions: () => [{ id: "app_existing", appId: "codex", status: "running", ai: { threadIds: ["thread_existing"] } }],
 	    runningSessionCount: () => 1,
-	    sharedCodexAppServerInfo: () => undefined,
+	    sharedResourceSessionAi: () => undefined,
 	    on: () => undefined,
 	    stopAll: () => undefined,
 	  };
@@ -5344,7 +5345,7 @@ test("controlled instance publishes provider changes immediately and discovery c
     replaceManagedEnvironment: () => undefined,
     listSessions: () => [{ id: "app_discovery", appId: "codex", status: "running" }],
     runningSessionCount: () => 1,
-    sharedCodexAppServerInfo: () => undefined,
+    sharedResourceSessionAi: () => undefined,
     on: () => undefined,
     stopAll: () => undefined,
   };
@@ -6800,19 +6801,19 @@ test("codex app server uses a short unix socket path outside deep runtime direct
     return child;
   };
 
-  const session = runtime.acquireSharedCodexAppServer("codex", root, process.env, "app_test");
+  const session = runtime.acquireSharedResource("codex", "codex", root, process.env, "app_test");
   try {
     assert.equal(spawned.length, 1);
     assert.equal(spawned[0].command, "codex");
     assert.equal(spawned[0].args[0], "app-server");
     assert.equal(spawned[0].args[1], "--listen");
-    assert.equal(spawned[0].args[2], `unix://${session.socketPath}`);
-    assert.equal(session.socketPath.startsWith(path.join(paths.runtimeDir, "codex-app-server")), false);
+    assert.equal(spawned[0].args[2], `unix://${session.details.socketPath}`);
+    assert.equal(session.details.socketPath.startsWith(path.join(paths.runtimeDir, "codex-app-server")), false);
     const socketRoot = process.platform === "darwin" ? "/private/tmp" : fs.realpathSync(os.tmpdir());
-    assert.equal(session.socketPath.startsWith(`${socketRoot}/task-handoff-codex-`), true);
-    assert.ok(session.socketPath.length < 100);
+    assert.equal(session.details.socketPath.startsWith(`${socketRoot}/task-handoff-codex-`), true);
+    assert.ok(session.details.socketPath.length < 100);
   } finally {
-    runtime.releaseSharedCodexAppServer("app_test");
+    runtime.releaseSharedResource("codex", "app_test");
     await Promise.all(servers.map((server) => new Promise((resolve) => server.close(resolve))));
   }
 });
@@ -6845,12 +6846,12 @@ test("app runtime reuses an already running shared codex app server", async () =
     return child;
   };
 
-  const first = runtime.ensureSharedCodexAppServer();
-  const second = runtime.ensureSharedCodexAppServer();
+  const first = runtime.ensureSharedResource("codex");
+  const second = runtime.ensureSharedResource("codex");
   try {
     assert.equal(spawned.length, 1);
-    assert.equal(second.socketPath, first.socketPath);
-    assert.equal(runtime.sharedCodexAppServerInfo().socketPath, first.socketPath);
+    assert.equal(second.details.socketPath, first.details.socketPath);
+    assert.equal(runtime.sharedResourceInfo("codex").details.socketPath, first.details.socketPath);
   } finally {
     runtime.stopAll();
     await Promise.all(servers.map((server) => new Promise((resolve) => server.close(resolve))));
@@ -6883,7 +6884,7 @@ test("app runtime codex app-server proxy records thread bindings from the app co
     unixServer.listen(upstreamSocketPath, resolve);
   });
 
-  const proxy = runtime._createCodexAppServerConnectionProxyForTest(upstreamSocketPath, (threadId) => boundThreads.push(threadId));
+  const proxy = new CodexAppServerConnectionProxy(upstreamSocketPath, (threadId) => boundThreads.push(threadId));
   const port = runtime.allocatePort("web");
   proxy.start(port);
   try {

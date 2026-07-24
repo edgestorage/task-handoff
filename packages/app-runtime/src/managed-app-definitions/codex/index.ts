@@ -1,10 +1,12 @@
 import type { ManagedAppProvider } from "../types";
 import { launcherDetection, modelArgs } from "../shared";
+import { createCodexRuntime } from "./runtime";
 
 export const codexProvider: ManagedAppProvider = {
   id: "codex",
   capabilities: { supportsCwdSelection: true, supportsAiSessionResume: true },
   aiSessionResumeArgs: (providerSessionId) => ["resume", providerSessionId],
+  createRuntime: createCodexRuntime,
   definition: ({ env }) => ({
     launcher: {
       id: "codex",

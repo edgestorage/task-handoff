@@ -1,8 +1,10 @@
 import type { ManagedAppProvider } from "../types";
 import { bundledDistribution, launcherDetection } from "../shared";
+import { createVscodeWebRuntime } from "./runtime";
 
 export const vscodeWebProvider: ManagedAppProvider = {
   id: "vscode-web",
+  createRuntime: () => createVscodeWebRuntime(),
   definition: ({ env }) => ({
     launcher: {
       id: "vscode-web",

@@ -15,8 +15,9 @@ require.extensions[".ts"] = (module, filename) => {
   module._compile(output.outputText, filename);
 };
 
-const { RepositoryChangesService, RepositoryOperationError } = require("../packages/controlled-instance/src/repository/changes.ts");
+const { RepositoryChangesService, RepositoryOperationError, structuredDiffLines } = require("../packages/controlled-instance/src/repository/changes.ts");
 const { RepositorySessionResolver } = require("../packages/controlled-instance/src/repository/context.ts");
+const { RepositoryDiffSchema } = require("@task-handoff/protocol/repository");
 
 function services(fixture) {
   const resolver = new RepositorySessionResolver({
@@ -70,6 +71,61 @@ test("change entries and diffs keep staged and unstaged versions independent", a
   assert.ok(Buffer.byteLength(truncated.content) <= 80);
 });
 
+test("diff hunks expose ranges and bounded authoritative context gaps", async () => {
+  const parsed = structuredDiffLines("@@ -707,16 +705,6 @@ render section\n-old\n+new\n");
+  assert.deepEqual(parsed[0], {
+    kind: "hunk",
+    content: "@@ -707,16 +705,6 @@ render section",
+    oldStart: 707,
+    oldCount: 16,
+    newStart: 705,
+    newCount: 6,
+    hunkId: "hunk:707:16:705:6",
+    heading: "render section",
+  });
+
+  const fixture = createGitFixture({ initialCommit: false });
+  const original = Array.from({ length: 60 }, (_, index) => `line ${index + 1}`);
+  fixture.write("context.txt", `${original.join("\n")}\n`);
+  fixture.commit("context base");
+  const changed = [...original];
+  changed[29] = "changed line 30";
+  fixture.write("context.txt", `${changed.join("\n")}\n`);
+  const { changes } = services(fixture);
+  const diff = await changes.diff("unstaged", "context.txt", 512 * 1024, true);
+  assert.equal(RepositoryDiffSchema.safeParse(diff).success, true);
+  const hunk = diff.lines.find((line) => line.kind === "hunk");
+  assert.ok(hunk.hunkId);
+  assert.equal(diff.contextGaps.some((gap) => (gap.beforeHunkId === hunk.hunkId || gap.afterHunkId === hunk.hunkId) && gap.lines.length > 0), true);
+  assert.equal(diff.contextGaps.every((gap) => gap.lines.length <= 20 && typeof gap.hasMore === "boolean" && gap.lines.every((line) => line.kind === "context")), true);
+  assert.equal(diff.contextGaps.some((gap) => gap.hasMore), true);
+  const expandedAgain = await changes.diff("unstaged", "context.txt", 512 * 1024, true, 40);
+  assert.equal(expandedAgain.contextGaps.some((gap) => gap.lines.length > 20), true);
+  assert.equal(expandedAgain.contextGaps.every((gap) => !gap.hasMore), true);
+});
+
+test("context between adjacent hunks is one authoritative shared gap", async () => {
+  const fixture = createGitFixture({ initialCommit: false });
+  const original = Array.from({ length: 40 }, (_, index) => `line ${index + 1}`);
+  fixture.write("shared-gap.txt", `${original.join("\n")}\n`);
+  fixture.commit("shared gap base");
+  const changed = [...original];
+  changed[9] = "changed line 10";
+  changed[23] = "changed line 24";
+  fixture.write("shared-gap.txt", `${changed.join("\n")}\n`);
+
+  const { changes } = services(fixture);
+  const diff = await changes.diff("unstaged", "shared-gap.txt", 512 * 1024, true);
+  const hunks = diff.lines.filter((line) => line.kind === "hunk");
+  assert.equal(hunks.length, 2);
+  const middleGap = diff.contextGaps.find((gap) => gap.beforeHunkId === hunks[0].hunkId && gap.afterHunkId === hunks[1].hunkId);
+  assert.ok(middleGap);
+  assert.equal(middleGap.lines.length, 7);
+  assert.equal(middleGap.startLineCount > 0 && middleGap.startLineCount < middleGap.lines.length, true);
+  assert.equal(middleGap.hasMore, false);
+  assert.equal(new Set(diff.contextGaps.map((gap) => gap.gapId)).size, diff.contextGaps.length);
+});
+
 test("conflicted paths remain a distinct change and provide a safe diff", async () => {
   const fixture = createGitFixture();
   fixture.createConflict();
@@ -80,6 +136,29 @@ test("conflicted paths remain a distinct change and provide a safe diff", async 
   const diff = await changes.diff("conflict", "conflict.txt");
   assert.equal(diff.scope, "conflict");
   assert.match(diff.content, /conflict.txt/);
+  assert.equal(diff.content.includes("@@@"), false);
+  assert.equal(diff.lines.some((line) => line.kind === "addition" && line.content.includes("<<<<<<<")), true);
+});
+
+test("delete-modify conflicts provide reviewable content instead of only an unmerged-path marker", async () => {
+  const fixture = createGitFixture({ initialCommit: false });
+  fixture.write("delete-modify.txt", "base\n");
+  fixture.commit("delete-modify base");
+  fixture.git(["checkout", "-b", "fixture/delete-modify"]);
+  fixture.write("delete-modify.txt", "modified on branch\n");
+  fixture.commit("modify conflict side");
+  fixture.git(["checkout", "main"]);
+  fixture.git(["rm", "--", "delete-modify.txt"]);
+  fixture.commit("delete conflict side");
+  try {
+    fixture.git(["merge", "fixture/delete-modify"]);
+  } catch {}
+
+  const { changes } = services(fixture);
+  const diff = await changes.diff("conflict", "delete-modify.txt");
+  assert.match(diff.content, /modified on branch/);
+  assert.equal(diff.lines.some((line) => line.kind === "hunk"), true);
+  assert.equal(diff.lines.some((line) => line.kind === "addition" && line.content === "modified on branch"), true);
 });
 
 test("stage and unstage affect only selected paths and return fresh authority", async () => {

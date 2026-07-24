@@ -601,7 +601,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   aiSessionDiscovery.register(new TranscriptTailDiscoveryProvider());
   aiSessionDiscovery.register(codexAppServer);
   const appSessionsWithSharedCodexAppServer = () => {
-    const appServer = appRuntime.sharedCodexAppServerInfo();
+    const appServer = appRuntime.sharedResourceSessionAi("codex")?.appServer;
     if (!appServer) {
       return appRuntime.listSessions();
     }
@@ -909,7 +909,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     triggerManager.start();
     if (envFlag("TASK_HANDOFF_CODEX_APP_SERVER", false)) {
       try {
-        appRuntime.ensureSharedCodexAppServer();
+        appRuntime.ensureSharedResource("codex");
       } catch (error) {
         app.log.warn({ err: error }, "failed to start shared Codex app-server");
       }

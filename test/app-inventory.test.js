@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { EventEmitter } = require("node:events");
 const test = require("node:test");
 const ts = require("typescript");
 const { registerWorkspaceRequire } = require("./workspace-require.js");
@@ -16,6 +17,8 @@ require.extensions[".ts"] = (module, filename) => {
 };
 
 const { AppCatalogRepository } = require("../packages/app-runtime/src/catalog.ts");
+const { AppRuntimeManager } = require("../packages/app-runtime/src/runtime.ts");
+const { createManagedAppRegistry } = require("../packages/app-runtime/src/managed-app-definitions/index.ts");
 
 function storagePaths(root) {
   return {
@@ -31,6 +34,68 @@ function storagePaths(root) {
     webTokenPath: path.join(root, "web-token"),
   };
 }
+
+test("catalog and runtime consume the same injected managed app registry", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-app-registry-"));
+  let runtimeCreated = 0;
+  const lifecycleEvents = [];
+  const registry = createManagedAppRegistry([{
+    id: "fake-tool",
+    capabilities: { supportsCwdSelection: true },
+    definition: () => ({
+      launcher: { id: "fake-tool", name: "Fake Tool", kind: "tty", command: "/bin/sh" },
+      detection: [{ type: "launcher-executable" }],
+      distribution: { recipes: [] },
+    }),
+    createRuntime: () => {
+      runtimeCreated += 1;
+      return {
+        prepareTtyLaunch: ({ args }) => ({
+          args: [...args, "--from-provider"],
+          lifecycle: {
+            processExited: () => lifecycleEvents.push("exit"),
+            spawnFailed: () => lifecycleEvents.push("spawn-failure"),
+            stop: () => lifecycleEvents.push("stop"),
+          },
+        }),
+      };
+    },
+  }]);
+  const runtime = new AppRuntimeManager(storagePaths(root), registry);
+  const pty = new EventEmitter();
+  let spawnedArgs;
+  pty.pid = 1234;
+  pty.onData = () => {};
+  pty.onExit = (listener) => pty.on("exit", listener);
+  pty.write = () => {};
+  pty.resize = () => {};
+  pty.kill = () => {};
+  runtime.spawnTerminalPty = (_command, args) => {
+    spawnedArgs = args;
+    return pty;
+  };
+
+  assert.deepEqual(runtime.catalog().map((app) => app.id), ["fake-tool"]);
+  assert.equal(runtime.appInventory().items[0].capabilities.supportsCwdSelection, true);
+  assert.equal(runtimeCreated, 1);
+  const session = runtime.start("fake-tool", { cwd: root });
+  assert.equal(spawnedArgs.at(-1), "--from-provider");
+  pty.emit("exit", { exitCode: 0, signal: 0 });
+  runtime.stop(session.id);
+  assert.deepEqual(lifecycleEvents, ["exit", "stop"]);
+  assert.throws(() => runtime.saveCustomCatalog([
+    { id: "fake-tool", name: "Override", kind: "tty", command: "/bin/sh" },
+  ]), /cannot override built-in app ids/);
+  runtime.stopAll();
+});
+
+test("terminal GUI provider applies xterm behavior to matching custom launchers", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-xterm-provider-"));
+  const runtime = new AppRuntimeManager(storagePaths(root));
+  const args = runtime.guiArgs({ id: "custom-xterm", name: "Custom Xterm", kind: "gui", command: "/usr/bin/xterm" }, root, 0, []);
+  assert.deepEqual(args.slice(0, 4), ["-fa", process.env.TASK_HANDOFF_XTERM_FONT_FAMILY || "Monospace", "-fs", process.env.TASK_HANDOFF_XTERM_FONT_SIZE || "11"]);
+  runtime.stopAll();
+});
 
 test("app inventory keeps available and missing custom apps without exposing launch configuration", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-app-inventory-"));
