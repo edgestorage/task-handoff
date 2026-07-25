@@ -342,6 +342,7 @@ export class AppRuntimeManager extends EventEmitter {
     try {
       pty = this.spawnTerminalPty(shell, args, cwd, env);
     } catch (error) {
+      this.closeTtyLog(runtimeSession);
       appLifecycle?.lifecycle?.spawnFailed?.();
       throw error;
     }
@@ -1014,10 +1015,10 @@ export class AppRuntimeManager extends EventEmitter {
     session.metadata.updatedAt = now();
     session.stopping = true;
     this.persist(session.metadata);
-    session.pty?.kill("SIGTERM");
+    session.pty?.kill();
     this.closeTtyLog(session);
     for (const client of session.clients) {
-      client.send(JSON.stringify({ type: "exit", code: null, signal: "SIGTERM" }));
+      client.send(JSON.stringify({ type: "exit", code: null, signal: "SIGHUP" }));
       client.close?.();
     }
     session.clients.clear();
@@ -1225,7 +1226,7 @@ export class AppRuntimeManager extends EventEmitter {
       session.metadata.updatedAt = now();
       this.persist(session.metadata);
       session.appLifecycle?.lifecycle?.stop?.();
-      session.pty?.kill("SIGTERM");
+      session.pty?.kill();
       this.closeTtyLog(session);
       for (const process of session.processes) {
         process.kill("SIGTERM");

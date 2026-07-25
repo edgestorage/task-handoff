@@ -5962,7 +5962,7 @@ test("app runtime prepares vscode web sessions with a dark default theme", () =>
   assert.equal(preservedSettings["workbench.preferredDarkColorTheme"], "Default Dark Modern");
 });
 
-test("app runtime resumes claude through the background worker and attaches by short id", () => {
+test("app runtime resumes claude through the background worker and attaches by short id", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-claude-bg-"));
   const paths = appRuntimeTestPaths(root);
   const fakeClaude = path.join(root, "claude");
@@ -5979,6 +5979,7 @@ test("app runtime resumes claude through the background worker and attaches by s
   });
   try {
     const runtime = new AppRuntimeManager(paths);
+    t.after(() => runtime.stopAll());
     const spawned = [];
     runtime.hasCommand = () => true;
     runtime.spawnTerminalPty = (shell, args, cwd, env) => {
@@ -6023,12 +6024,13 @@ test("app runtime rejects structured AI session resume for unsupported apps", ()
   );
 });
 
-test("app runtime launches codex resume with the trusted provider session id", () => {
+test("app runtime launches codex resume with the trusted provider session id", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-resume-"));
   const paths = appRuntimeTestPaths(root);
   const restoreEnv = withWebStorageEnv(paths, { TASK_HANDOFF_CODEX_APP_SERVER_DISABLED: "1" });
   try {
     const runtime = new AppRuntimeManager(paths);
+    t.after(() => runtime.stopAll());
     let spawned;
     runtime.hasCommand = () => true;
     runtime.spawnTerminalPty = (shell, args, cwd) => {
@@ -6056,10 +6058,11 @@ test("app runtime launches codex resume with the trusted provider session id", (
   }
 });
 
-test("app runtime injects managed model credentials without persisting them in session metadata", () => {
+test("app runtime injects managed model credentials without persisting them in session metadata", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-managed-app-env-"));
   const paths = appRuntimeTestPaths(root);
   const runtime = new AppRuntimeManager(paths);
+  t.after(() => runtime.stopAll());
   runtime.replaceManagedEnvironment({ OPENAI_API_KEY: "runtime-managed-key" });
   runtime.hasCommand = () => true;
   let spawnedEnv;

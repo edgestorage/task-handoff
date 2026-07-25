@@ -5,6 +5,11 @@ const test = require("node:test");
 
 const root = path.resolve(__dirname, "..");
 
+test("Docker runtime uses the supported Node.js 24 release line", () => {
+  const dockerfile = fs.readFileSync(path.join(root, "Dockerfile"), "utf8");
+  assert.match(dockerfile, /^FROM node:24-bookworm-slim AS base$/m);
+});
+
 test("Docker dependency layer includes every workspace manifest", () => {
   const dockerfile = fs.readFileSync(path.join(root, "Dockerfile"), "utf8");
   const dependencyLayer = dockerfile.slice(0, dockerfile.indexOf("RUN pnpm install --frozen-lockfile"));

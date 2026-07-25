@@ -59,7 +59,7 @@
     "test": "node --test"
   },
   "engines": {
-    "node": ">=22.22.2"
+    "node": ">=24.15.0 <25"
   },
   "license": "Apache-2.0",
   "build": {

@@ -4472,18 +4472,18 @@ test("localhost process spawn failures fail the instance without crashing node a
   const dataDir = tempDataDir("node-agent-localhost-spawn-failure");
   const inaccessibleCommand = path.join(dataDir, "controlled-instance-no-exec");
   fs.writeFileSync(inaccessibleCommand, "#!/bin/sh\nexit 0\n", { mode: 0o644 });
-  const previousCommand = process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND;
-  process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND = inaccessibleCommand;
+  const previousCommandArgv = process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV;
+  process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV = JSON.stringify([inaccessibleCommand]);
   const app = await createNodeAgentApp({
     dataDir,
     logger: false,
     token: "agent-secret",
   });
   t.after(async () => {
-    if (previousCommand === undefined) {
-      delete process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND;
+    if (previousCommandArgv === undefined) {
+      delete process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV;
     } else {
-      process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND = previousCommand;
+      process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV = previousCommandArgv;
     }
     await app.close();
   });
@@ -4544,8 +4544,8 @@ test("node agent shutdown stops localhost processes while preserving active rest
       "});",
     ].join("\n"),
   );
-  const previousCommand = process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND;
-  process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND = `${process.execPath} ${webStub}`;
+  const previousCommandArgv = process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV;
+  process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV = JSON.stringify([process.execPath, webStub]);
   const host = "127.0.0.1";
   const port = await freePort(host);
   const app = await createNodeAgentApp({
@@ -4556,10 +4556,10 @@ test("node agent shutdown stops localhost processes while preserving active rest
     port,
   });
   t.after(async () => {
-    if (previousCommand === undefined) {
-      delete process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND;
+    if (previousCommandArgv === undefined) {
+      delete process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV;
     } else {
-      process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND = previousCommand;
+      process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV = previousCommandArgv;
     }
     try {
       await app.close();
@@ -4681,8 +4681,8 @@ test("node agent restores localhost runtime processes after graceful shutdown", 
       "process.on('SIGTERM', () => server.close(() => process.exit(0)));",
     ].join("\n"),
   );
-  const previousCommand = process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND;
-  process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND = `${process.execPath} ${webStub}`;
+  const previousCommandArgv = process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV;
+  process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV = JSON.stringify([process.execPath, webStub]);
   const host = "127.0.0.1";
   const port = await freePort(host);
   let app = await createNodeAgentApp({
@@ -4693,10 +4693,10 @@ test("node agent restores localhost runtime processes after graceful shutdown", 
     port,
   });
   t.after(async () => {
-    if (previousCommand === undefined) {
-      delete process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND;
+    if (previousCommandArgv === undefined) {
+      delete process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV;
     } else {
-      process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND = previousCommand;
+      process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV = previousCommandArgv;
     }
     await app.close();
   });
@@ -4819,8 +4819,8 @@ test("node agent restores active localhost runtime processes after unclean shutd
       "process.on('SIGTERM', () => server.close(() => process.exit(0)));",
     ].join("\n"),
   );
-  const previousCommand = process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND;
-  process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND = `${process.execPath} ${webStub}`;
+  const previousCommandArgv = process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV;
+  process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV = JSON.stringify([process.execPath, webStub]);
   const host = "127.0.0.1";
   const port = await freePort(host);
   let app = await createNodeAgentApp({
@@ -4831,10 +4831,10 @@ test("node agent restores active localhost runtime processes after unclean shutd
     port,
   });
   t.after(async () => {
-    if (previousCommand === undefined) {
-      delete process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND;
+    if (previousCommandArgv === undefined) {
+      delete process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV;
     } else {
-      process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND = previousCommand;
+      process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV = previousCommandArgv;
     }
     await app.close();
   });

@@ -203,7 +203,7 @@ secrets. `DOCKERHUB_IMAGE_NAME` can optionally override the default
 
 ### Desktop releases
 
-With Node.js 22.22.2 or newer, pushing a semantic version tag such as `v1.2.3`
+With Node.js 24.15.0 or newer within the Node.js 24 release line, pushing a semantic version tag such as `v1.2.3`
 builds signed and notarized macOS arm64/x64 installers plus unsigned Windows
 x64 and Linux x64 installers, then attaches them to a GitHub Release. Tags with
 a prerelease suffix, such as `v1.2.3-rc.1`, create a GitHub prerelease.

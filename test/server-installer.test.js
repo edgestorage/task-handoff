@@ -9,11 +9,11 @@ const root = path.resolve(__dirname, "..");
 test("server bootstrap owns the complete Debian and Ubuntu install path", () => {
   const bootstrap = fs.readFileSync(path.join(root, "scripts", "install-server.sh"), "utf8");
 
-  assert.match(bootstrap, /MIN_NODE_VERSION="22\.22\.2"/);
+  assert.match(bootstrap, /MIN_NODE_VERSION="24\.15\.0"/);
   assert.match(bootstrap, /CHANNEL="stable"/);
   assert.match(bootstrap, /\[ "\$CHANNEL" = "stable" \]/);
   assert.match(bootstrap, /PACKAGE_TARGET="latest"/);
-  assert.match(bootstrap, /nodejs\.org\/dist\/latest-v22\.x\/SHASUMS256\.txt/);
+  assert.match(bootstrap, /nodejs\.org\/dist\/latest-v24\.x\/SHASUMS256\.txt/);
   assert.match(bootstrap, /Node\.js archive checksum verification failed/);
   assert.match(bootstrap, /apt-get install -y docker\.io/);
   assert.match(bootstrap, /npm install -g/);

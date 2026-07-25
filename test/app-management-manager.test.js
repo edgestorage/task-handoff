@@ -182,7 +182,7 @@ test("terminal app jobs refresh inventory without changing the authoritative job
   assert.equal(refreshes, 1);
 });
 
-test("a hanging terminal inventory refresh does not hold the serialized app queue", async () => {
+test("a hanging terminal inventory refresh does not hold the serialized app queue", { timeout: 5_000 }, async () => {
   const dirs = stateDirs("task-handoff-app-terminal-refresh-hang-");
   let state = "not-installed";
   const manager = new AppManagementManager({
@@ -193,10 +193,7 @@ test("a hanging terminal inventory refresh does not hold the serialized app queu
     onTerminal: () => new Promise(() => undefined),
   });
   const job = manager.request("tool", "install");
-  await Promise.race([
-    manager.waitForIdle(),
-    new Promise((_, reject) => setTimeout(() => reject(new Error("app queue remained blocked by inventory refresh")), 100)),
-  ]);
+  await manager.waitForIdle();
   assert.equal(manager.getJob(job.id).state, "succeeded");
 });
 

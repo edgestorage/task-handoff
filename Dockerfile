@@ -1,4 +1,4 @@
-FROM node:22-bookworm-slim AS base
+FROM node:24-bookworm-slim AS base
 
 ARG CODEX_CLI_PACKAGE=@openai/codex@latest
 ARG CLAUDE_CODE_VERSION=2.1.183

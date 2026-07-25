@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-MIN_NODE_VERSION="22.22.2"
+MIN_NODE_VERSION="24.15.0"
 VERSION=""
 CHANNEL="stable"
 ARTIFACTS_DIR=""
@@ -20,7 +20,7 @@ usage() {
 Usage: install-server.sh [options]
 
 Installs everything needed by a local TaskHandoff server on Debian or Ubuntu:
-  - Node.js 22.22.2 or newer
+  - Node.js 24.15.0 or newer within the Node.js 24 release line
   - Docker (unless --skip-docker is used)
   - control-plane, node-agent, and controlled-instance runtime packages
   - task-handoff-control-plane.service and task-handoff-node-agent.service
@@ -91,7 +91,7 @@ node_is_compatible() {
 }
 
 if ! node_is_compatible || ! command -v npm >/dev/null 2>&1; then
-  echo "Installing the current official Node.js 22 build with its bundled npm."
+  echo "Installing the current official Node.js 24 build with its bundled npm."
   apt-get install -y ca-certificates curl xz-utils
   case "$(dpkg --print-architecture)" in
     amd64) node_arch="x64" ;;
@@ -100,10 +100,10 @@ if ! node_is_compatible || ! command -v npm >/dev/null 2>&1; then
   esac
   node_tmp="$(mktemp -d)"
   trap 'rm -rf "$node_tmp"' EXIT HUP INT TERM
-  curl -fsSL https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt -o "$node_tmp/SHASUMS256.txt"
+  curl -fsSL https://nodejs.org/dist/latest-v24.x/SHASUMS256.txt -o "$node_tmp/SHASUMS256.txt"
   node_archive="$(awk -v suffix="linux-$node_arch.tar.xz" '$2 ~ suffix "$" { print $2; exit }' "$node_tmp/SHASUMS256.txt")"
-  [ -n "$node_archive" ] || die "could not find the official Node.js 22 archive for $node_arch"
-  curl -fsSL "https://nodejs.org/dist/latest-v22.x/$node_archive" -o "$node_tmp/$node_archive"
+  [ -n "$node_archive" ] || die "could not find the official Node.js 24 archive for $node_arch"
+  curl -fsSL "https://nodejs.org/dist/latest-v24.x/$node_archive" -o "$node_tmp/$node_archive"
   expected_checksum="$(awk -v archive="$node_archive" '$2 == archive { print $1; exit }' "$node_tmp/SHASUMS256.txt")"
   actual_checksum="$(sha256sum "$node_tmp/$node_archive" | awk '{ print $1 }')"
   [ "$actual_checksum" = "$expected_checksum" ] || die "Node.js archive checksum verification failed"
