@@ -27,8 +27,8 @@ const PERSISTED_SESSION_FIELDS = new Set([
 
 const PERSISTED_TOOL_FIELDS = new Set(["id", "kind", "name", "inputPreview", "startedAt"]);
 const PERSISTED_SUB_AGENT_FIELDS = new Set(["threadId", "path", "status", "activity", "message", "updatedAt"]);
-const PERSISTED_QUEUE_ITEM_FIELDS = new Set(["id", "message", "attachments", "references", "status", "createdAt", "updatedAt", "error"]);
-const PERSISTED_ATTACHMENT_META_FIELDS = new Set(["id", "kind", "name", "mime", "size"]);
+const PERSISTED_QUEUE_ITEM_FIELDS = new Set(["id", "message", "attachments", "references", "permissionMode", "status", "createdAt", "updatedAt", "error"]);
+const PERSISTED_ATTACHMENT_META_FIELDS = new Set(["id", "kind", "name", "mime", "size", "sourceType"]);
 
 function warnUnknownFields(record: Record<string, unknown>, allowed: ReadonlySet<string>, context: string) {
   const unknown = Object.keys(record).filter((key) => !allowed.has(key));
@@ -147,6 +147,9 @@ function normalizeQueuedMessage(value: unknown): AiSessionQueuedMessage | undefi
     message: messageText(record.message),
     attachments: normalizeAiSessionMessageAttachmentMetas(record.attachments),
     references: normalizeAiSessionReferences(record.references),
+    ...(record.permissionMode === "ask" || record.permissionMode === "auto-review" || record.permissionMode === "full-access"
+      ? { permissionMode: record.permissionMode }
+      : {}),
     status: record.status === "sending" || record.status === "failed" ? record.status : "queued",
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
@@ -177,6 +180,7 @@ export function normalizeAiSessionMessageAttachmentMetas(value: unknown): AiSess
         ...(typeof record.name === "string" ? { name: record.name } : {}),
         ...(typeof record.mime === "string" ? { mime: record.mime } : {}),
         ...(typeof record.size === "number" ? { size: record.size } : {}),
+        sourceType: record.sourceType === "runtime-path" ? "runtime-path" : "inline",
       };
       const parsed = AiSessionMessageAttachmentMetaSchema.safeParse(candidate);
       return parsed.success ? parsed.data : undefined;
@@ -192,6 +196,7 @@ export function aiSessionAttachmentMetas(attachments: AiSessionMessageAttachment
     name: attachment.name,
     mime: attachment.mime,
     size: attachment.size,
+    sourceType: attachment.source.type,
   }));
 }
 

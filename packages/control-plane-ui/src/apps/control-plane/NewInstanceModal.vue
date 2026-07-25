@@ -60,6 +60,8 @@
             v-model:new-image-open="newImageOpen"
             :can-create-image="canCreateImage"
             :creating-image="creatingImage"
+            :docker-runtime-check-message="dockerRuntimeCheck.message"
+            :docker-runtime-check-state="dockerRuntimeCheck.state"
             :images="images.data.value || []"
             :image-availability="imageAvailability.data.value || []"
             :instance-draft="instanceDraft"
@@ -70,7 +72,9 @@
             :runtimes-for-selected-node="runtimesForSelectedNode"
             :selected-runtime="selectedRuntime"
             :selected-runtime-requires-image="selectedRuntimeRequiresImage"
+            :selected-node-platform="dockerRuntimeCheck.platform || selectedNodePlatform"
             :source-summary="sourceSummary"
+            @check-docker-runtime="checkSelectedDockerRuntime"
             @create-image="createQuickImage"
           />
         </div>
@@ -98,13 +102,14 @@
 import { computed, nextTick, reactive, ref, watch } from "vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import { ArrowRight, Plus, X } from "@lucide/vue";
-import { createControlledInstance, createImage, createProject, listNodeFolderTree, useImagesQuery, useModelsQuery, useNodeImageAvailabilityQuery, useNodeLocalFoldersQuery, useNodeRuntimesQuery, useNodesQuery, useProjectsQuery } from "../../api/queries";
-import type { InstanceBoardItem } from "../../api/types";
+import { checkNodeRuntime, createControlledInstance, createImage, createProject, listNodeFolderTree, useImagesQuery, useModelsQuery, useNodeImageAvailabilityQuery, useNodeLocalFoldersQuery, useNodeRuntimesQuery, useNodesQuery, useProjectsQuery } from "../../api/queries";
+import type { CreateControlledInstanceResult, InstanceBoardItem } from "../../api/types";
 import { Button } from "../../components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "../../components/ui/dialog";
 import { ScrollArea } from "../../components/ui/scroll-area";
 import RuntimeStep from "./new-instance/RuntimeStep.vue";
 import SourceStep from "./new-instance/SourceStep.vue";
+import { dockerDaemonDetails, nodePlatform, type DockerRuntimeCheckState } from "./new-instance/dockerRuntimeGuidance";
 import type { NodeFolderTreeNode } from "./new-instance/nodeFolderTree";
 import type { InstanceDraft, NewImageDraft, NewProjectDraft, ProjectFolderSelection, RuntimeDraft, SourceDraft, SourceMode, WizardStep } from "./new-instance/newInstanceTypes";
 import { nodeFolderSelectionMode, nodePathName } from "./nodePath";
@@ -143,6 +148,12 @@ const creatingProject = ref(false);
 const creatingImage = ref(false);
 const creatingLocalFolder = ref(false);
 const localPathOpen = ref(false);
+const dockerRuntimeCheck = reactive<{ key: string; state: DockerRuntimeCheckState; message: string; platform: string }>({
+  key: "",
+  state: "idle",
+  message: "",
+  platform: "",
+});
 
 const sourceDraft = reactive<SourceDraft>({
   mode: "project" as SourceMode,
@@ -197,7 +208,10 @@ const canBrowseProjectFolder = computed(() => folderSelectionMode.value === "nat
 const showNodeFolderTree = computed(() => sourceDraft.mode === "local-folder" && localPathOpen.value && Boolean(sourceDraft.localNodeId) && folderSelectionMode.value === "node");
 const localPathPlaceholder = computed(() => (folderSelectionMode.value === "native" ? "/Users/me/project" : "/path/to/project/on-node"));
 const runtimesForSelectedNode = computed(() => (nodeRuntimes.data.value || []).filter((runtime) => runtime.nodeId === runtimeDraft.nodeId));
+const selectedNode = computed(() => (nodes.data.value || []).find((node) => node.id === runtimeDraft.nodeId));
+const selectedNodePlatform = computed(() => nodePlatform(selectedNode.value));
 const selectedRuntime = computed(() => runtimesForSelectedNode.value.find((runtime) => runtime.id === runtimeDraft.runtimeId));
+const selectedDockerRuntimeKey = computed(() => selectedRuntime.value?.type === "docker" ? `${runtimeDraft.nodeId}:${selectedRuntime.value.id}` : "");
 const selectedRuntimeRequiresImage = computed(() => {
   if (!selectedRuntime.value) {
     return true;
@@ -232,6 +246,14 @@ const runtimeBlockedReason = computed(() => {
   }
   if (!runtimeDraft.runtimeId) {
     return "Select a runtime.";
+  }
+  if (selectedRuntime.value?.type === "docker") {
+    if (dockerRuntimeCheck.key !== selectedDockerRuntimeKey.value || dockerRuntimeCheck.state === "idle" || dockerRuntimeCheck.state === "checking") {
+      return "Checking the Docker daemon on the selected node.";
+    }
+    if (dockerRuntimeCheck.state !== "online") {
+      return "Docker must be available on the selected node before creating an instance.";
+    }
   }
   if (selectedRuntimeRequiresImage.value && !runtimeDraft.imageId) {
     return "Select an image.";
@@ -374,6 +396,20 @@ watch(
 );
 
 watch(
+  [() => step.value, selectedDockerRuntimeKey],
+  ([currentStep, key]) => {
+    dockerRuntimeCheck.key = key;
+    dockerRuntimeCheck.state = "idle";
+    dockerRuntimeCheck.message = "";
+    dockerRuntimeCheck.platform = "";
+    if (currentStep === "runtime" && key) {
+      void checkSelectedDockerRuntime();
+    }
+  },
+  { immediate: true },
+);
+
+watch(
   () => models.data.value,
   (items) => {
     const modelIds = new Set((items || []).map((model) => model.id));
@@ -481,6 +517,37 @@ function runtimeIdForNode(nodeId: string, preferredId?: string) {
   return runtimeItems.find((runtime) => runtime.nodeId === nodeId)?.id || "";
 }
 
+async function checkSelectedDockerRuntime() {
+  const runtime = selectedRuntime.value;
+  const key = selectedDockerRuntimeKey.value;
+  if (!runtime || runtime.type !== "docker" || !key || dockerRuntimeCheck.state === "checking") {
+    return;
+  }
+  dockerRuntimeCheck.key = key;
+  dockerRuntimeCheck.state = "checking";
+  dockerRuntimeCheck.message = "Checking the Docker daemon on the selected node…";
+  try {
+    const checked = await checkNodeRuntime(runtimeDraft.nodeId, runtime.id);
+    if (selectedDockerRuntimeKey.value !== key) return;
+    const details = dockerDaemonDetails(checked);
+    dockerRuntimeCheck.platform = details.hostPlatform || "";
+    if (checked.status === "online") {
+      dockerRuntimeCheck.state = "online";
+      dockerRuntimeCheck.message = details.serverVersion
+        ? `Docker daemon ${details.serverVersion} is available.`
+        : "Docker daemon is available.";
+    } else {
+      dockerRuntimeCheck.state = "offline";
+      dockerRuntimeCheck.message = details.error || "Docker daemon is not available.";
+    }
+    await queryClient.invalidateQueries({ queryKey: ["control-plane-node-runtimes"] });
+  } catch (error) {
+    if (selectedDockerRuntimeKey.value !== key) return;
+    dockerRuntimeCheck.state = "error";
+    dockerRuntimeCheck.message = errorText(error);
+  }
+}
+
 async function refresh() {
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: ["control-plane-status"] }),
@@ -507,7 +574,7 @@ async function createInstance() {
     return;
   }
   creating.value = true;
-  let created: InstanceBoardItem;
+  let created: CreateControlledInstanceResult;
   try {
     created = await createControlledInstance({
       ...(sourceDraft.mode === "project"
@@ -536,6 +603,7 @@ async function createInstance() {
         ...(instanceDraft.codexModelHash !== undefined ? { codexModelHash: instanceDraft.codexModelHash } : {}),
         ...(instanceDraft.claudeModelHash !== undefined ? { claudeModelHash: instanceDraft.claudeModelHash } : {}),
       },
+      start: true,
       ...(instanceDraft.name.trim() ? { name: instanceDraft.name.trim() } : {}),
     });
     instanceDraft.name = "";
@@ -551,6 +619,9 @@ async function createInstance() {
   emit("created", created);
   emit("close");
   await refreshAfterMutation("Instance created");
+  if (created.startOutcome.status === "failed") {
+    showControlPlaneToast(`Instance created, but failed to start: ${created.startOutcome.error?.message || "Unknown error"}`);
+  }
 }
 
 async function createQuickProject() {

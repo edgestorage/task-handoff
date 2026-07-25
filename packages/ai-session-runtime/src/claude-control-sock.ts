@@ -119,7 +119,7 @@ export class ClaudeControlSockSessionBridge implements AiSessionControlProvider,
 
   async startMessage(session: AiSessionStatus, input: AiSessionSendInput): Promise<AiSessionActionResult> {
     const short = this.requireShort(session);
-    const response = await withAttachmentPathFallback(input.message, input.attachments, (providerMessage) => this.client.reply(
+    const response = await withAttachmentPathFallback(input.message, input.attachments, session.cwd, (providerMessage) => this.client.reply(
       short,
       providerMessage.endsWith("\n") ? providerMessage : `${providerMessage}\n`,
       {

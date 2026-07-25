@@ -3,6 +3,7 @@ import { z } from "zod";
 export const AI_SESSION_MAX_MESSAGE_ATTACHMENTS = 6;
 export const AI_SESSION_MAX_REFERENCES = 20;
 export const AI_SESSION_MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+export const AI_SESSION_MAX_INLINE_FILE_BYTES = 500 * 1024;
 export const AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES = 40 * 1024 * 1024;
 export const AiSessionEventTopic = "ai.sessions";
 export const AiSessionEventType = {
@@ -11,6 +12,9 @@ export const AiSessionEventType = {
   Removed: "ai-session.removed",
   MessageDelta: "ai-session.message-delta",
   SyncRequired: "ai-session.sync-required",
+} as const;
+export const AiSessionUnreadEventType = {
+  Updated: "ai-session.unread.updated",
 } as const;
 export const AI_SESSION_TOMBSTONE_RETENTION_MS = 60 * 60 * 1000;
 export const AI_SESSION_DELTA_RETENTION_MS = AI_SESSION_TOMBSTONE_RETENTION_MS;
@@ -23,6 +27,14 @@ export const AiSessionLifecycleSchema = z.enum([
   "idle",
   "failed",
 ]);
+
+export const AiSessionUnreadStateSchema = z.object({
+  instanceId: z.string().trim().min(1).max(160),
+  sessionId: z.string().trim().min(1).max(120),
+  unread: z.boolean(),
+  sessionUpdatedAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+}).strict();
 
 export const AiSessionPhaseSchema = z.enum([
   "thinking",
@@ -87,27 +99,66 @@ export const AiSessionActionsSchema = z
   })
   .strict();
 
-export const AiSessionMessageAttachmentSchema = z
-  .object({
+export const AiSessionAttachmentKindSchema = z.enum(["image", "file"]);
+
+const AiSessionMessageAttachmentBaseSchema = z.object({
+  id: z.string().trim().min(1).max(120),
+  kind: AiSessionAttachmentKindSchema,
+  name: z.string().trim().min(1).max(240),
+  mime: z.string().trim().min(1).max(120),
+  size: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+});
+
+export const AiSessionMessageAttachmentSchema = z.union([
+  AiSessionMessageAttachmentBaseSchema.extend({
+    // A runtime path is an absolute path in the target controlled instance's
+    // filesystem namespace. It is never a browser or node-host path by implication.
+    source: z.object({
+      type: z.literal("inline"),
+      encoding: z.literal("base64"),
+      data: z.string().min(1).max(30 * 1024 * 1024),
+    }).strict(),
+  }).strict().superRefine((attachment, context) => {
+    const maxBytes = attachment.kind === "image" ? AI_SESSION_MAX_ATTACHMENT_BYTES : AI_SESSION_MAX_INLINE_FILE_BYTES;
+    if (attachment.size <= 0 || (attachment.kind === "file" ? attachment.size >= maxBytes : attachment.size > maxBytes)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["size"], message: `Inline ${attachment.kind} must be between 1 byte and ${maxBytes} bytes.` });
+    }
+  }),
+  AiSessionMessageAttachmentBaseSchema.extend({
+    source: z.object({
+      type: z.literal("runtime-path"),
+      path: z.string().trim().min(1).max(4096),
+    }).strict(),
+  }).strict(),
+]);
+
+export const AiSessionMessageAttachmentMetaSchema = AiSessionMessageAttachmentBaseSchema.extend({
+  sourceType: z.enum(["inline", "runtime-path"]),
+}).strict();
+
+export const AiSessionMessageAttachmentRefSchema = z.union([
+  z.object({
     id: z.string().trim().min(1).max(120),
-    kind: z.enum(["image"]),
+    kind: AiSessionAttachmentKindSchema.optional(),
+    source: z.object({ type: z.literal("upload-ref") }).strict().default({ type: "upload-ref" }),
+  }).strict(),
+  z.object({
+    id: z.string().trim().min(1).max(120),
+    kind: AiSessionAttachmentKindSchema,
     name: z.string().trim().min(1).max(240),
     mime: z.string().trim().min(1).max(120),
-    size: z.number().int().min(0).max(AI_SESSION_MAX_ATTACHMENT_BYTES),
-    data: z.string().min(1).max(30 * 1024 * 1024),
-  })
-  .strict();
-
-export const AiSessionMessageAttachmentMetaSchema = AiSessionMessageAttachmentSchema.omit({ data: true });
-
-export const AiSessionMessageAttachmentRefSchema = z
-  .object({
-    id: z.string().trim().min(1).max(120),
-    kind: z.enum(["image"]).optional(),
-  })
-  .strict();
+    size: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+    // Server-side file pickers resolve their selection to this same instance path form.
+    source: z.object({
+      type: z.literal("runtime-path"),
+      path: z.string().trim().min(1).max(4096),
+    }).strict(),
+  }).strict(),
+]);
 
 export const AiSessionSendModeSchema = z.enum(["auto", "queue", "steer", "immediate"]);
+
+export const AiSessionPermissionModeSchema = z.enum(["ask", "auto-review", "full-access"]);
 
 export const AiSessionCommandNameSchema = z.enum(["review", "rename", "goal", "compact"]);
 
@@ -206,18 +257,19 @@ export const AiSessionMentionFileSearchSchema = z.object({
 const AiSessionMessageBaseSchema = z.object({
   message: z.string().trim().min(1).max(20000),
   mode: AiSessionSendModeSchema.optional(),
+  permissionMode: AiSessionPermissionModeSchema.optional(),
 });
 
 export const AiSessionMessageInputSchema = AiSessionMessageBaseSchema.extend({
   attachments: z.array(AiSessionMessageAttachmentSchema).max(AI_SESSION_MAX_MESSAGE_ATTACHMENTS).default([]),
   references: AiSessionReferencesSchema,
 }).strict().superRefine((message, context) => {
-  const totalBytes = message.attachments.reduce((sum, attachment) => sum + attachment.size, 0);
+  const totalBytes = message.attachments.reduce((sum, attachment) => sum + (attachment.source.type === "inline" ? attachment.size : 0), 0);
   if (totalBytes > AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["attachments"],
-      message: `Images must be ${AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES} bytes or less in total.`,
+      message: `Inline attachments must be ${AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES} bytes or less in total.`,
     });
   }
 });
@@ -249,6 +301,7 @@ export const AiSessionQueuedMessageSchema = z
     message: z.string().trim().min(1).max(20000),
     attachments: z.array(AiSessionMessageAttachmentMetaSchema).max(AI_SESSION_MAX_MESSAGE_ATTACHMENTS).default([]),
     references: AiSessionReferencesSchema,
+    permissionMode: AiSessionPermissionModeSchema.optional(),
     status: z.enum(["queued", "sending", "failed"]).default("queued"),
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime(),
@@ -707,6 +760,7 @@ export const AiSessionReducerInputSchema = z.discriminatedUnion("type", [
 
 export type AiAgentKind = z.infer<typeof AiAgentKindSchema>;
 export type AiSessionLifecycle = z.infer<typeof AiSessionLifecycleSchema>;
+export type AiSessionUnreadState = z.infer<typeof AiSessionUnreadStateSchema>;
 export type AiSessionPhase = z.infer<typeof AiSessionPhaseSchema>;
 export type AiSessionTool = z.infer<typeof AiSessionToolSchema>;
 export type AiSessionSubAgentStatus = z.infer<typeof AiSessionSubAgentStatusSchema>;
@@ -718,6 +772,7 @@ export type AiSessionMessageAttachment = z.infer<typeof AiSessionMessageAttachme
 export type AiSessionMessageAttachmentMeta = z.infer<typeof AiSessionMessageAttachmentMetaSchema>;
 export type AiSessionMessageAttachmentRef = z.infer<typeof AiSessionMessageAttachmentRefSchema>;
 export type AiSessionSendMode = z.infer<typeof AiSessionSendModeSchema>;
+export type AiSessionPermissionMode = z.infer<typeof AiSessionPermissionModeSchema>;
 export type AiSessionCommandName = z.infer<typeof AiSessionCommandNameSchema>;
 export type AiSessionCommandInput = z.infer<typeof AiSessionCommandInputSchema>;
 export type AiSessionCommandResult = z.infer<typeof AiSessionCommandResultSchema>;

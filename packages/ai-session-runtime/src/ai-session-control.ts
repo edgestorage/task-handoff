@@ -2,6 +2,7 @@ import type {
   AiSessionActionResult,
   AiSessionApprovalInput,
   AiSessionMessageAttachment,
+  AiSessionPermissionMode,
   AiSessionReference,
   AiSessionSendMode,
   AiSessionStatus,
@@ -13,6 +14,7 @@ export type AiSessionSendInput = {
   mode?: AiSessionSendMode;
   attachments?: AiSessionMessageAttachment[];
   references?: AiSessionReference[];
+  permissionMode?: AiSessionPermissionMode;
 };
 
 export type AiSessionApprovalDecision = AiSessionApprovalInput["decision"];
@@ -93,24 +95,27 @@ export class AiSessionController {
     if (input.references?.length && session.agent !== "codex") {
       throw aiSessionControlError("AI_SESSION_REFERENCES_UNSUPPORTED", `${session.agent} sessions do not support Codex references.`, 400);
     }
+    if (input.permissionMode && session.agent !== "codex") {
+      throw aiSessionControlError("AI_SESSION_PERMISSION_MODE_UNSUPPORTED", `${session.agent} sessions do not support Codex permission modes.`, 400);
+    }
     const mode = input.mode || "auto";
     if (mode === "queue" || (mode === "auto" && isSessionBusy(session))) {
-      const queued = this.registry.enqueueMessage(session.id, message, input.attachments || [], input.references || []);
+      const queued = this.registry.enqueueMessage(session.id, message, input.attachments || [], input.references || [], input.permissionMode);
       if (!queued) {
         throw aiSessionControlError("AI_SESSION_NOT_FOUND", "AI session not found.", 404);
       }
       return { session: queued.session, provider: session.agent, action: "queue" as const, queueId: queued.item.id };
     }
     if (mode === "steer") {
-      return this.steerMessage(session.id, { message, attachments: input.attachments || [], references: input.references || [] });
+      return this.steerMessage(session.id, { message, attachments: input.attachments || [], references: input.references || [], permissionMode: input.permissionMode });
     }
     if (isSessionBusy(session)) {
       throw aiSessionControlError("AI_SESSION_BUSY", "AI session is busy. Queue the message or steer it into the running turn.", 409);
     }
-    return this.startMessage(session.id, { message, attachments: input.attachments || [], references: input.references || [] });
+    return this.startMessage(session.id, { message, attachments: input.attachments || [], references: input.references || [], permissionMode: input.permissionMode });
   }
 
-  async startMessage(sessionId: string, input: { message: string; attachments?: AiSessionMessageAttachment[]; references?: AiSessionReference[] }) {
+  async startMessage(sessionId: string, input: AiSessionSendInput) {
     const session = this.requireSession(sessionId);
     if (isSessionBusy(session)) {
       throw aiSessionControlError("AI_SESSION_BUSY", "AI session is busy. Queue the message or steer it into the running turn.", 409);
@@ -123,7 +128,7 @@ export class AiSessionController {
     return start.call(provider, session, input);
   }
 
-  async steerMessage(sessionId: string, input: string | { message: string; attachments?: AiSessionMessageAttachment[]; references?: AiSessionReference[] }) {
+  async steerMessage(sessionId: string, input: string | AiSessionSendInput) {
     const session = this.requireSession(sessionId);
     if (!isSessionBusy(session)) {
       throw aiSessionControlError("AI_SESSION_NOT_ACTIVE", "AI session is not active.", 409);
@@ -148,7 +153,7 @@ export class AiSessionController {
     }
     this.registry.markQueuedMessageSending(session.id, item.id);
     try {
-      const result = await this.startMessage(session.id, { message: item.message, attachments: this.registry.queuedMessageAttachments(item.id), references: item.references });
+      const result = await this.startMessage(session.id, { message: item.message, attachments: this.registry.queuedMessageAttachments(item.id), references: item.references, permissionMode: item.permissionMode });
       const updated = this.registry.removeQueuedMessage(session.id, item.id);
       return { ...result, session: updated || result.session, queueId: item.id };
     } catch (error) {

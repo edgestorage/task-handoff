@@ -650,6 +650,7 @@ export const NodeAgentHealthSchema = z
     ok: z.boolean().optional(),
     role: z.string().optional(),
     nodeId: IdSchema.optional(),
+    platform: FinalComputerPlatformSchema.optional(),
   })
   .passthrough();
 
@@ -803,6 +804,7 @@ export const ControlledInstanceSchema = z
     imageId: IdSchema.optional(),
     imageSnapshot: InstanceImageSnapshotSchema.optional(),
     imageProvisioning: ImageProvisioningSchema.optional(),
+    stateRevision: z.number().int().min(0).default(0),
     status: z.enum(["created", "provisioning", "starting", "registering", "registered", "running", "stopping", "stopped", "failed", "unhealthy"]).default("created"),
     health: z.enum(["unknown", "ok", "degraded", "failed"]).default("unknown"),
     connectionStatus: z.enum(["unknown", "online", "offline", "endpoint-unreachable"]).default("unknown"),
@@ -873,6 +875,26 @@ export const ControlledInstanceSchema = z
     updatedAt: TimestampSchema,
   })
   .strict();
+
+export const InstanceLifecycleEventType = {
+  Snapshot: "instance.lifecycle.snapshot",
+} as const;
+
+export const InstanceLifecycleSnapshotSchema = z.object({
+  instanceId: ControlledInstanceSchema.shape.id,
+  revision: z.number().int().min(0),
+  updatedAt: TimestampSchema,
+  status: ControlledInstanceSchema.shape.status.unwrap(),
+  health: ControlledInstanceSchema.shape.health.unwrap(),
+  connectionStatus: ControlledInstanceSchema.shape.connectionStatus.unwrap(),
+  accessStatus: z.enum(["reachable", "endpoint-unreachable"]),
+  imageProvisioning: ImageProvisioningSchema.optional(),
+  workspace: WorkspaceStatusSchema,
+  runtime: ControlledInstanceSchema.shape.runtime.unwrap(),
+  lastHeartbeatAt: TimestampSchema.optional(),
+}).strict();
+
+export type InstanceLifecycleSnapshot = z.infer<typeof InstanceLifecycleSnapshotSchema>;
 
 export function parseStoredControlledInstance(input: unknown, onWarning?: (warning: { instanceId?: string; field: string }) => void) {
   return ControlledInstanceSchema.parse(sanitizeStoredControlledInstance(input, onWarning));
@@ -1058,12 +1080,12 @@ export const ChatGatewayMessageSchema = z
       })
       .strict()
       .superRefine((message, context) => {
-        const totalBytes = message.attachments.reduce((sum, attachment) => sum + attachment.size, 0);
+        const totalBytes = message.attachments.reduce((sum, attachment) => sum + (attachment.source.type === "inline" ? attachment.size : 0), 0);
         if (totalBytes > AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES) {
           context.addIssue({
             code: z.ZodIssueCode.custom,
             path: ["attachments"],
-            message: `Images must be ${AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES} bytes or less in total.`,
+            message: `Inline attachments must be ${AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES} bytes or less in total.`,
           });
         }
       }),

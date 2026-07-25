@@ -1,7 +1,16 @@
 import { z } from "zod";
 import { PassThrough, Readable } from "node:stream";
 import { WebSocket as WsClient } from "ws";
-import { CONTROL_PLANE_PROTOCOL_VERSION, InstanceResourceMetricsEventType, InstanceResourceMetricsSchema, type InstanceResourceMetrics, type Node } from "@task-handoff/protocol/control-plane";
+import {
+  CONTROL_PLANE_PROTOCOL_VERSION,
+  InstanceLifecycleEventType,
+  InstanceLifecycleSnapshotSchema,
+  InstanceResourceMetricsEventType,
+  InstanceResourceMetricsSchema,
+  type InstanceLifecycleSnapshot,
+  type InstanceResourceMetrics,
+  type Node,
+} from "@task-handoff/protocol/control-plane";
 import { SessionStreamsHelloSchema, type SessionStreamsHello } from "@task-handoff/protocol/events";
 import { bridgeWebSockets, type WebSocketLike } from "@task-handoff/protocol/websocket-bridge";
 import type { ControlPlaneService } from "../application/service.ts";
@@ -133,7 +142,7 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
   private readonly events?: ControlPlaneEventBus;
   private readonly onStreamsHello?: (instanceId: string, hello: SessionStreamsHello) => void | Promise<void>;
   private readonly validateInstanceScope?: (nodeId: string, instanceId: string) => boolean | Promise<boolean>;
-  private readonly validatedMetricScopes = new Map<string, number>();
+  private readonly validatedInstanceScopes = new Map<string, number>();
 
   constructor(events?: ControlPlaneEventBus, options: {
     onStreamsHello?: (instanceId: string, hello: SessionStreamsHello) => void | Promise<void>;
@@ -246,6 +255,13 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
       void this.publishValidatedMetrics(nodeId, metrics.data, scope);
       return true;
     }
+    if (eventType === InstanceLifecycleEventType.Snapshot) {
+      const lifecycle = InstanceLifecycleSnapshotSchema.safeParse(payload);
+      const scopeInstanceId = typeof scope.instanceId === "string" ? scope.instanceId : typeof event.instanceId === "string" ? event.instanceId : forwardedInstanceId;
+      if (!lifecycle.success || lifecycle.data.instanceId !== scopeInstanceId) return true;
+      void this.publishValidatedLifecycle(nodeId, lifecycle.data, scope);
+      return true;
+    }
     this.events?.publish(eventType, payload, {
       topic: typeof event.topic === "string" ? event.topic : undefined,
       scope: {
@@ -258,23 +274,35 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
   }
 
   private async publishValidatedMetrics(nodeId: string, metrics: InstanceResourceMetrics, scope: Record<string, unknown>) {
-    const cacheKey = `${nodeId}:${metrics.instanceId}`;
-    const now = Date.now();
-    const cachedUntil = this.validatedMetricScopes.get(cacheKey) || 0;
-    let valid = cachedUntil > now;
-    if (!valid) {
-      try {
-        valid = Boolean(await this.validateInstanceScope?.(nodeId, metrics.instanceId));
-      } catch {
-        valid = false;
-      }
-      if (valid) this.validatedMetricScopes.set(cacheKey, now + 30_000);
-    }
+    const valid = await this.isValidatedInstanceScope(nodeId, metrics.instanceId);
     if (!valid) return;
     this.events?.publish(InstanceResourceMetricsEventType.Snapshot, metrics, {
       topic: "instances",
       scope: { ...scope, nodeId, instanceId: metrics.instanceId },
     });
+  }
+
+  private async publishValidatedLifecycle(nodeId: string, lifecycle: InstanceLifecycleSnapshot, scope: Record<string, unknown>) {
+    const valid = await this.isValidatedInstanceScope(nodeId, lifecycle.instanceId);
+    if (!valid) return;
+    this.events?.publish(InstanceLifecycleEventType.Snapshot, lifecycle, {
+      topic: "instances",
+      scope: { ...scope, nodeId, instanceId: lifecycle.instanceId },
+    });
+  }
+
+  private async isValidatedInstanceScope(nodeId: string, instanceId: string) {
+    const cacheKey = `${nodeId}:${instanceId}`;
+    const now = Date.now();
+    if ((this.validatedInstanceScopes.get(cacheKey) || 0) > now) return true;
+    let valid = false;
+    try {
+      valid = Boolean(await this.validateInstanceScope?.(nodeId, instanceId));
+    } catch {
+      valid = false;
+    }
+    if (valid) this.validatedInstanceScopes.set(cacheKey, now + 30_000);
+    return valid;
   }
 
   async request(node: { id: string }, route: string, init: RequestInit = {}) {

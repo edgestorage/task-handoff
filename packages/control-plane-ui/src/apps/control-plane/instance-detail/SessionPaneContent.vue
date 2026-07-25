@@ -3,7 +3,7 @@
     <div v-if="hasInstanceStatusPage(instance)" class="session-preview-status-page" :data-pending="isInstanceStatusPending(instance)" :data-state="instance.status">
       <RefreshCw v-if="isInstanceStatusPending(instance)" :size="34" />
       <CircleAlert v-else-if="instance.status === 'failed' || instance.status === 'unhealthy'" :size="34" />
-      <CircleStop v-else :size="34" />
+      <PowerOff v-else :size="34" />
       <strong>{{ instanceStatusTitle(instance) }}</strong>
       <span>{{ instanceStatusDetail(instance) }}</span>
     </div>
@@ -19,7 +19,7 @@
       @select-ai-session="(instanceId, sessionId) => $emit('selectAiSession', instanceId, sessionId)"
     />
     <RepositoryChangesReviewTab v-else-if="session?.kind === 'repository' && session.source?.page === 'changes-review'" :instance-id="instance.id" :session="session" @open-workspace="$emit('openRepositoryWorkspace', $event)" />
-    <RepositoryWorkspaceTab v-else-if="session?.kind === 'repository'" :instance-id="instance.id" :session="session" />
+    <RepositoryWorkspaceTab v-else-if="session?.kind === 'repository'" :instance-id="instance.id" :session="session" @open-workspace="$emit('openRepositoryWorkspace', $event)" />
     <div v-else-if="activeFrameUrl" class="session-preview-live">
       <iframe class="session-preview-frame" :src="activeFrameUrl" :title="session?.label || 'App session'" allow="clipboard-read; clipboard-write; fullscreen" />
     </div>
@@ -46,7 +46,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { CircleAlert, CircleStop, Monitor, Plus, RefreshCw, Terminal } from "@lucide/vue";
+import { CircleAlert, Monitor, Plus, PowerOff, RefreshCw, Terminal } from "@lucide/vue";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, NodeLocalFolder } from "../../../api/types";
 import { Button } from "../../../components/ui/button";
 import type { LaunchableApp, RepositoryWorkspaceTabTarget, SessionTab } from "../useInstanceSessions";

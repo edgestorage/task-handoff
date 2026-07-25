@@ -184,7 +184,11 @@ export async function telegramMessageAttachmentsWithDownloadedImages(input: {
       name: path.basename(filePath) || `telegram-image-${index + 1}`,
       mime: mimeForImagePath(filePath),
       size: bytes.length,
-      data: bytes.toString("base64"),
+      source: {
+        type: "inline",
+        encoding: "base64",
+        data: bytes.toString("base64"),
+      },
     };
   });
 }

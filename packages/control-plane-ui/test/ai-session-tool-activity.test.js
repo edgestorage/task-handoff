@@ -146,12 +146,28 @@ test("floating user prompts collapse to three lines and become compact when stic
   assert.match(floatingDock, /ref="promptContentEl"/);
   assert.match(floatingDock, /class="ai-board-floating-prompt-toggle"/);
   assert.match(floatingDock, /promptStickyPlaceholderHeight/);
-  assert.match(floatingDock, /scrollTop > 24/);
+  assert.match(floatingDock, /\.ai-board-floating-scroll \[data-task-handoff-scroll-viewport\]/);
+  assert.doesNotMatch(floatingDock, /data-reka-scroll-area-viewport/);
+  assert.match(floatingDock, /viewport\.addEventListener\("scroll", handleDetailScroll, \{ passive: true \}\);\s*handleDetailScroll\(\);/);
+  assert.match(floatingDock, /expandedDividerOffset - stickyHeight/);
+  assert.match(floatingDock, /scrollTop > promptStickyThreshold/);
+  assert.match(floatingDock, /scrollTop <= promptStickyThreshold/);
   assert.match(floatingDock, /max-height: calc\(1\.55em \* 3\)/);
-  assert.match(floatingDock, /\.ai-board-floating-block-user \{[\s\S]*?position: sticky;[\s\S]*?top: 0;/);
+  assert.match(floatingDock, /\.ai-board-floating-block-user \{\s*position: relative;/);
+  assert.match(floatingDock, /ai-board-floating-detail\.is-scrolled \.ai-board-floating-block-user \{[\s\S]*?position: sticky;[\s\S]*?top: 0;/);
   assert.match(floatingDock, /ai-board-floating-detail\.is-scrolled \.ai-board-floating-block-user \{[\s\S]*?background: var\(--ai-board-column-head-bg\);/);
   assert.match(floatingDock, /ai-board-floating-detail\.is-scrolled \.ai-board-floating-prompt-content \{\s*max-height: 1\.55em;/);
   assert.match(floatingDock, /ai-board-floating-detail\.is-scrolled \.ai-board-floating-prompt-toggle \{\s*display: none;/);
+});
+
+test("detail sticky thresholds follow the complete user prompt height", () => {
+  assert.doesNotMatch(floatingDock, /scrollTop > 24|scrollTop <= 24/);
+  assert.doesNotMatch(panel, /scrollTop > 64|scrollTop <= 64/);
+  assert.match(panel, /ref="detailPromptSectionEl"/);
+  assert.match(panelCss, /--session-ai-sticky-prompt-height: 26px/);
+  assert.match(panel, /expandedDividerOffset - stickyHeaderHeight/);
+  assert.match(panel, /scrollTop > detailStickyThreshold/);
+  assert.match(panel, /scrollTop <= detailStickyThreshold/);
 });
 
 test("running activity floats in the card without competing with approval or turn controls", () => {

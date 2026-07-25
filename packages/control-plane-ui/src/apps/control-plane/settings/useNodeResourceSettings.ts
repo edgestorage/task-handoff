@@ -1,5 +1,5 @@
 import { computed, ref, watch, type Ref } from "vue";
-import { checkNodeRuntime, createNodeLocalFolder, createNodeRuntime, deleteNodeLocalFolder, deleteNodeRuntime, listNodeFolderTree, useNodeLocalFoldersQuery } from "../../../api/queries";
+import { checkNodeRuntime, createNodeLocalFolder, deleteNodeLocalFolder, deleteNodeRuntime, listNodeFolderTree, useNodeLocalFoldersQuery } from "../../../api/queries";
 import type { InstanceBoardItem, Node, NodeRuntime } from "../../../api/types";
 import { nativeNodeFolderSelectionResult, nodeFolderSelectionMode, nodePathName } from "../nodePath";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
@@ -24,7 +24,6 @@ export function useNodeResourceSettings({ chooseProjectFolder, clearDefaultRunti
   const selectedNodeId = ref("");
   const creatingNodeLocalFolder = ref(false);
   const deletingNodeLocalFolderId = ref("");
-  const creatingLocalhostRuntime = ref(false);
   const checkingRuntimeId = ref("");
   const deletingRuntimeId = ref("");
   const nodeLocalFolders = useNodeLocalFoldersQuery(() => selectedNodeId.value);
@@ -33,7 +32,6 @@ export function useNodeResourceSettings({ chooseProjectFolder, clearDefaultRunti
   const selectedNode = computed(() => (nodes.value || []).find((node) => node.id === selectedNodeId.value) || orderedNodes.value[0]);
   const localNodeId = computed(() => (nodes.value || []).find(isControlPlaneLocalNode)?.id || orderedNodes.value[0]?.id || "");
   const selectedNodeRuntimes = computed(() => selectedNode.value ? (runtimes.value || []).filter((runtime) => runtime.nodeId === selectedNode.value?.id) : []);
-  const selectedNodeHasLocalRuntime = computed(() => selectedNodeRuntimes.value.some((runtime) => runtime.type === "local"));
   const selectedNodeInstances = computed(() => selectedNode.value ? (instances.value || []).filter((instance) => instance.nodeId === selectedNode.value?.id) : []);
   const selectedNodeIsLocal = computed(() => Boolean(selectedNode.value && isControlPlaneLocalNode(selectedNode.value)));
   const folderSelectionMode = computed(() => nodeFolderSelectionMode(Boolean(selectedNode.value && isControlPlaneLocalNode(selectedNode.value) && isControlPlaneBuiltinNode(selectedNode.value)), Boolean(chooseProjectFolder)));
@@ -59,25 +57,6 @@ export function useNodeResourceSettings({ chooseProjectFolder, clearDefaultRunti
   watch(selectedNodeId, (nodeId, previousNodeId) => {
     if (previousNodeId && nodeId !== previousNodeId) storageFolderPicker.close();
   });
-
-  async function addLocalhostRuntime() {
-    if (!selectedNode.value || selectedNodeHasLocalRuntime.value || creatingLocalhostRuntime.value) {
-      return;
-    }
-    creatingLocalhostRuntime.value = true;
-    try {
-      await createNodeRuntime(selectedNode.value.id, {
-        id: "runtime_local_host",
-        name: "Localhost",
-        type: "local",
-      });
-      await refresh();
-    } catch (error) {
-      showControlPlaneToast(errorText(error));
-    } finally {
-      creatingLocalhostRuntime.value = false;
-    }
-  }
 
   async function checkRuntime(runtime: NodeRuntime) {
     if (!selectedNode.value || checkingRuntimeId.value) {
@@ -185,11 +164,9 @@ export function useNodeResourceSettings({ chooseProjectFolder, clearDefaultRunti
   }
 
   return {
-    addLocalhostRuntime,
     checkingRuntimeId,
     closeNodeStorageFolderPicker: storageFolderPicker.close,
     confirmNodeStorageFolder: storageFolderPicker.confirm,
-    creatingLocalhostRuntime,
     creatingNodeLocalFolder,
     deletingNodeLocalFolderId,
     deletingRuntimeId,
@@ -213,7 +190,6 @@ export function useNodeResourceSettings({ chooseProjectFolder, clearDefaultRunti
     runtimeName,
     checkRuntime,
     selectedNode,
-    selectedNodeHasLocalRuntime,
     selectedNodeId,
     selectedNodeInstances,
     selectedNodeIsLocal,

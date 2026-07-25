@@ -106,6 +106,17 @@ declare module "fastify" {
 const DECODED_RESPONSE_HEADERS = new Set(["content-encoding", "content-length", "transfer-encoding"]);
 const AUTO_IMPORT_AGENT_CONFIG_PRESETS = ["codex", "claude"] as const;
 const DEFAULT_AUTO_IMPORT_AGENT_CONFIG_TIMEOUT_MS = 5_000;
+const BUILTIN_LOCAL_RUNTIME_ID = "runtime_local_host";
+const BUILTIN_RUNTIME_LABEL = "task-handoff.node-agent.builtin";
+const FINAL_COMPUTER_PLATFORMS = new Set(["linux", "darwin", "win32", "freebsd", "openbsd", "aix", "sunos"]);
+function finalComputerPlatform(platform: string) {
+  return FINAL_COMPUTER_PLATFORMS.has(platform) ? platform : "unknown";
+}
+function userRuntimeLabels(labels: Record<string, string> | undefined) {
+  const sanitized = { ...labels };
+  delete sanitized[BUILTIN_RUNTIME_LABEL];
+  return sanitized;
+}
 const NodeAgentRuntimeSettingsSchema = z.object({
   version: z.literal(1),
   externalListener: NodeAgentExternalListenerConfigSchema,
@@ -200,6 +211,7 @@ export type CreateNodeAgentAppOptions = {
   dockerCommandRunner?: CommandRunner;
   updateCommandRunner?: CommandRunner;
   fetchImpl?: typeof fetch;
+  platform?: NodeJS.Platform;
 };
 
 export type RunNodeAgentServerOptions = CreateNodeAgentAppOptions & {
@@ -694,9 +706,13 @@ type RuntimeAdapter = {
 
 class DockerRuntimeAdapter implements RuntimeAdapter {
   private readonly executor: LocalDockerExecutor;
+  private readonly platform: string;
+  private readonly runCommand: CommandRunner;
 
-  constructor(executor: LocalDockerExecutor) {
+  constructor(executor: LocalDockerExecutor, runCommand: CommandRunner, platform: string) {
     this.executor = executor;
+    this.runCommand = runCommand;
+    this.platform = platform;
   }
 
   start(context: ExecutorContext) {
@@ -713,6 +729,36 @@ class DockerRuntimeAdapter implements RuntimeAdapter {
 
   delete(context: ExecutorContext) {
     return this.executor.delete(context);
+  }
+
+  async check(runtime: NodeRuntime): Promise<Partial<NodeRuntime>> {
+    try {
+      const result = await this.runCommand("docker", ["version", "--format", "{{.Server.Version}}"], { timeoutMs: 5_000 });
+      const serverVersion = result.stdout.trim();
+      return {
+        status: "online",
+        capabilities: {
+          ...runtime.capabilities,
+          daemon: {
+            status: "online",
+            hostPlatform: finalComputerPlatform(this.platform),
+            ...(serverVersion ? { serverVersion } : {}),
+          },
+        },
+      };
+    } catch (error) {
+      return {
+        status: "offline",
+        capabilities: {
+          ...runtime.capabilities,
+          daemon: {
+            status: "offline",
+            hostPlatform: finalComputerPlatform(this.platform),
+            error: error instanceof Error ? error.message : String(error),
+          },
+        },
+      };
+    }
   }
 }
 
@@ -921,12 +967,30 @@ class RuntimeAdapterRegistry {
   }
 }
 
+class ControlledInstanceCollection extends JsonCollection<ControlledInstance> {
+  private onStored?: (instance: ControlledInstance) => void;
+
+  setOnStored(listener: (instance: ControlledInstance) => void) {
+    this.onStored = listener;
+  }
+
+  override put(record: ControlledInstance) {
+    const persistedRevision = super.get(record.id)?.stateRevision || 0;
+    const stored = super.put(ControlledInstanceSchema.parse({
+      ...record,
+      stateRevision: Math.max(record.stateRevision || 0, persistedRevision) + 1,
+    }));
+    this.onStored?.(stored);
+    return stored;
+  }
+}
+
 class NodeAgentState {
   readonly nodeId: string;
   readonly paths: NodeAgentStorePaths;
   readonly localFolders: JsonCollection<NodeLocalFolder>;
   readonly nodeRuntimes: JsonCollection<NodeRuntime>;
-  readonly controlledInstances: JsonCollection<ControlledInstance>;
+  readonly controlledInstances: ControlledInstanceCollection;
   readonly models: NodeModelStore;
   readonly modelAssignments: InstanceModelAssignmentStore;
   readonly modelEnvironments: InstanceModelEnvironmentStore;
@@ -934,13 +998,14 @@ class NodeAgentState {
   readonly node: Node;
   private listenerPort: number;
   private readonly containerUrlOverride?: string;
+  private readonly platform: NodeJS.Platform;
 
-  constructor(paths: NodeAgentStorePaths, nodeId: string, endpoint: string | undefined, containerUrl: string | undefined, listenerPort: number) {
+  constructor(paths: NodeAgentStorePaths, nodeId: string, endpoint: string | undefined, containerUrl: string | undefined, listenerPort: number, platform: NodeJS.Platform) {
     this.paths = paths;
     this.nodeId = nodeId;
     this.localFolders = new JsonCollection(paths.localFoldersDir, { schema: NodeLocalFolderSchema });
     this.nodeRuntimes = new JsonCollection(paths.nodeRuntimesDir, { schema: NodeRuntimeSchema });
-    this.controlledInstances = new JsonCollection(paths.controlledInstancesDir, {
+    this.controlledInstances = new ControlledInstanceCollection(paths.controlledInstancesDir, {
       schema: ControlledInstanceSchema,
       sanitize: (value) => sanitizeStoredControlledInstance(value, (warning) => {
         console.warn(JSON.stringify({
@@ -954,6 +1019,7 @@ class NodeAgentState {
     this.modelEnvironments = new InstanceModelEnvironmentStore(paths.modelEnvironmentsDir);
     this.updateJobs = new NodeUpdateJobs(paths);
     this.listenerPort = listenerPort;
+    this.platform = platform;
     this.containerUrlOverride = containerUrl;
     const timestamp = now();
     this.node = NodeSchema.parse({
@@ -997,6 +1063,22 @@ class NodeAgentState {
           updatedAt: timestamp,
         }),
       );
+    }
+    if (this.platform !== "win32") {
+      const current = this.nodeRuntimes.get(BUILTIN_LOCAL_RUNTIME_ID);
+      const timestamp = now();
+      this.nodeRuntimes.put(NodeRuntimeSchema.parse({
+        id: BUILTIN_LOCAL_RUNTIME_ID,
+        nodeId: this.nodeId,
+        name: "Local Runtime",
+        type: "local",
+        status: current?.status || "unknown",
+        accessStrategy: "node-proxy",
+        capabilities: localRuntimeCapabilities(current?.capabilities),
+        labels: { ...current?.labels, [BUILTIN_RUNTIME_LABEL]: "true" },
+        createdAt: current?.createdAt || timestamp,
+        updatedAt: current?.updatedAt || timestamp,
+      }));
     }
     for (const runtime of this.nodeRuntimes.list()) {
       if (runtime.nodeId !== this.nodeId) {
@@ -1047,14 +1129,22 @@ class NodeAgentState {
   }
 
   createRuntime(input: z.infer<typeof CreateNodeRuntimeSchema>) {
+    if (input.type === "local") {
+      const unsupported = this.platform === "win32";
+      const error = new Error(unsupported
+        ? "Local Runtime is not supported on Windows."
+        : "Local Runtime is built in and cannot be added manually.");
+      Object.assign(error, { statusCode: unsupported ? 400 : 409, code: unsupported ? "LOCAL_RUNTIME_UNSUPPORTED" : "LOCAL_RUNTIME_BUILTIN" });
+      throw error;
+    }
     const timestamp = now();
     const runtime = NodeRuntimeSchema.parse({
       ...input,
       id: input.id || createId("runtime"),
       nodeId: this.nodeId,
       accessStrategy: input.accessStrategy || defaultAccessStrategyForRuntime(input.type),
-      capabilities: input.type === "local" ? localRuntimeCapabilities(input.capabilities) : input.capabilities || {},
-      labels: input.labels || {},
+      capabilities: input.capabilities || {},
+      labels: userRuntimeLabels(input.labels),
       createdAt: timestamp,
       updatedAt: timestamp,
     });
@@ -1063,13 +1153,27 @@ class NodeAgentState {
 
   updateRuntime(id: string, input: z.infer<typeof UpdateNodeRuntimeSchema>) {
     const current = this.requireRuntime(id);
+    if (current.labels[BUILTIN_RUNTIME_LABEL] === "true") {
+      const error = new Error(`Built-in runtime ${id} cannot be modified.`);
+      Object.assign(error, { statusCode: 400, code: "NODE_RUNTIME_BUILTIN" });
+      throw error;
+    }
+    if (current.type === "local" || input.type === "local") {
+      const unsupported = this.platform === "win32";
+      const error = new Error(unsupported
+        ? "Local Runtime is not supported on Windows."
+        : "Local Runtime is built in and cannot be configured manually.");
+      Object.assign(error, { statusCode: unsupported ? 400 : 409, code: unsupported ? "LOCAL_RUNTIME_UNSUPPORTED" : "LOCAL_RUNTIME_BUILTIN" });
+      throw error;
+    }
     const updated = NodeRuntimeSchema.parse({
       ...current,
       ...input,
       id: current.id,
       nodeId: this.nodeId,
       accessStrategy: input.accessStrategy || current.accessStrategy,
-      capabilities: (input.type || current.type) === "local" ? localRuntimeCapabilities(input.capabilities || current.capabilities) : input.capabilities || current.capabilities,
+      capabilities: input.capabilities || current.capabilities,
+      labels: input.labels ? userRuntimeLabels(input.labels) : current.labels,
       createdAt: current.createdAt,
       updatedAt: now(),
     });
@@ -1077,7 +1181,12 @@ class NodeAgentState {
   }
 
   deleteRuntime(id: string) {
-    this.requireRuntime(id);
+    const runtime = this.requireRuntime(id);
+    if (runtime.labels[BUILTIN_RUNTIME_LABEL] === "true") {
+      const error = new Error(`Built-in runtime ${id} cannot be deleted.`);
+      Object.assign(error, { statusCode: 400, code: "NODE_RUNTIME_BUILTIN" });
+      throw error;
+    }
     const references = this.listInstances().filter((instance) => instance.runtimeId === id);
     if (references.length) {
       const error = new Error(`Runtime ${id} is used by ${references.length} instance${references.length === 1 ? "" : "s"}.`);
@@ -1709,13 +1818,14 @@ async function provisionNodeInstanceImage(
   generation: number,
   sync: () => void,
   loggers: NodeAgentLifecycleLoggers,
+  onReadyToStart?: () => Promise<void>,
 ) {
   const updatePhase = (phase: DockerImagePhase) => {
     const current = state.controlledInstances.get(id);
     if (!current || current.imageProvisioning?.generation !== generation || !current.imageSnapshot) return;
     state.controlledInstances.put(ControlledInstanceSchema.parse({
       ...current,
-      status: "provisioning",
+      status: current.status === "starting" ? "starting" : "provisioning",
       imageProvisioning: { ...current.imageProvisioning, phase, error: undefined, updatedAt: now() },
       updatedAt: now(),
     }));
@@ -1729,7 +1839,7 @@ async function provisionNodeInstanceImage(
     if (!current?.imageSnapshot || current.imageProvisioning?.generation !== generation) return;
     state.controlledInstances.put(ControlledInstanceSchema.parse({
       ...current,
-      status: "created",
+      status: current.status === "starting" ? "starting" : "created",
       health: "unknown",
       imageSnapshot: {
         ...current.imageSnapshot,
@@ -1742,6 +1852,9 @@ async function provisionNodeInstanceImage(
     }));
     sync();
     loggers.diagnostic({ instanceId: id, action: "image.provision", reference: resolved.requestedReference, digest: resolved.resolvedDigest, pulled: resolved.pulled }, "node instance image provisioning completed");
+    if (current.status === "starting") {
+      await onReadyToStart?.();
+    }
   } catch (error) {
     const current = state.controlledInstances.get(id);
     if (!current?.imageProvisioning || current.imageProvisioning.generation !== generation) return;
@@ -1797,12 +1910,15 @@ async function startNodeInstance(
 ) {
   const current = state.requireInstance(id);
   if (current.imageProvisioning && current.imageProvisioning.phase !== "ready" && state.requireRuntime(current.runtimeId).type === "docker") {
-    const error = new Error(`Instance ${id} image is not ready.`);
-    Object.assign(error, { statusCode: 409, code: "INSTANCE_IMAGE_NOT_READY" });
-    throw error;
+    loggers.diagnostic({ instanceId: id, action: "start", reason, runtimeId: current.runtimeId, imageId: current.imageId, imagePhase: current.imageProvisioning.phase }, "node instance start queued until image provisioning completes");
+    return state.controlledInstances.put(ControlledInstanceSchema.parse({
+      ...current,
+      status: "starting",
+      updatedAt: now(),
+    }));
   }
   loggers.diagnostic({ instanceId: id, action: "start", reason, runtimeId: current.runtimeId, imageId: current.imageId }, "node instance start requested");
-  const starting = state.controlledInstances.put(ControlledInstanceSchema.parse({ ...current, status: "provisioning", updatedAt: now() }));
+  const starting = state.controlledInstances.put(ControlledInstanceSchema.parse({ ...current, status: "starting", updatedAt: now() }));
   const adapter = runtimeAdapters.forRuntime(state.requireRuntime(starting.runtimeId));
   const result = await adapter.start(state.context(starting));
   const probedEndpointStatus = await probeInstanceEndpoint(fetchImpl, ControlledInstanceSchema.parse({
@@ -1927,7 +2043,8 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   const connectionMode = options.connectionMode || (process.env.TASK_HANDOFF_NODE_AGENT_CONNECTION_MODE === "local-ipc" ? "local-ipc" : "local-loopback");
   const ipcPath = options.ipcPath || process.env.TASK_HANDOFF_NODE_AGENT_IPC_PATH || nodeAgentIpcPath(paths.dataDir);
   const controlEndpoint = connectionMode === "local-ipc" ? nodeAgentIpcEndpoint(ipcPath) : endpoint;
-  const state = new NodeAgentState(paths, nodeId, endpoint, containerUrl, port);
+  const platform = options.platform || process.platform;
+  const state = new NodeAgentState(paths, nodeId, endpoint, containerUrl, port, platform);
   state.node.connectionMode = connectionMode;
   state.node.controlEndpoint = controlEndpoint;
   state.node.endpoint = controlEndpoint;
@@ -1938,7 +2055,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     publishHost: "127.0.0.1",
     imageService: dockerImageService,
   });
-  const runtimeAdapters = new RuntimeAdapterRegistry(new DockerRuntimeAdapter(dockerExecutor), new LocalhostRuntimeAdapter(options.dockerCommandRunner || defaultCommandRunner, paths, () => state.localNodeAgentUrl));
+  const runtimeAdapters = new RuntimeAdapterRegistry(new DockerRuntimeAdapter(dockerExecutor, dockerCommandRunner, platform), new LocalhostRuntimeAdapter(options.dockerCommandRunner || defaultCommandRunner, paths, () => state.localNodeAgentUrl));
   const updateCommandRunner = options.updateCommandRunner || options.dockerCommandRunner || defaultCommandRunner;
   const updateDockerImageService = new DockerImageService(updateCommandRunner);
   const fetchImpl = options.fetchImpl || fetch;
@@ -1956,6 +2073,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   app.decorate("nodeAgentState", state);
   await app.register(websocket);
   const eventForwarder = new NodeAgentInstanceEventForwarder(state, token, { logger: app.log, safetyIntervalMs: Number(process.env.TASK_HANDOFF_EVENT_CONNECTION_SAFETY_INTERVAL_MS) || undefined });
+  state.controlledInstances.setOnStored((instance) => eventForwarder.publishInstanceLifecycle(instance));
   eventForwarder.start();
   app.decorate("nodeAgentEventForwarder", eventForwarder);
   const runtimeMetrics = new DockerRuntimeMetricsCollector(
@@ -1975,6 +2093,37 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   const lifecycleLoggers: NodeAgentLifecycleLoggers = {
     diagnostic: logDiagnostic,
     warn: (data, message) => app.log.warn(data, message),
+  };
+
+  const startInstanceWithFailureState = async (id: string, reason: "request" | "image-ready") => {
+    try {
+      const instance = await startNodeInstance(state, runtimeAdapters, fetchImpl, id, lifecycleLoggers);
+      eventForwarder.syncNow();
+      return instance;
+    } catch (error) {
+      const failed = restoreFailurePatch(state.requireInstance(id), error);
+      state.controlledInstances.put(failed);
+      eventForwarder.syncNow();
+      lifecycleLoggers.warn({ instanceId: id, action: "start", reason, error: error instanceof Error ? error.message : String(error) }, "node instance start failed");
+      throw error;
+    }
+  };
+
+  const startProvisionedInstance = async (id: string) => {
+    await startInstanceWithFailureState(id, "image-ready").catch(() => undefined);
+  };
+
+  const provisionInstanceImage = (instance: ControlledInstance) => {
+    if (!instance.imageProvisioning) return;
+    void provisionNodeInstanceImage(
+      state,
+      dockerImageService,
+      instance.id,
+      instance.imageProvisioning.generation,
+      () => eventForwarder.syncNow(),
+      lifecycleLoggers,
+      () => startProvisionedInstance(instance.id),
+    );
   };
 
   const checkUpdate = async (input: z.infer<typeof UpdateCheckRequestSchema>) => {
@@ -2098,8 +2247,8 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   });
 
   const restoreLocalInstances = async () => {
-    for (const instance of state.listInstances().filter((item) => item.status === "provisioning" && item.imageProvisioning && state.requireRuntime(item.runtimeId).type === "docker")) {
-      void provisionNodeInstanceImage(state, dockerImageService, instance.id, instance.imageProvisioning!.generation, () => eventForwarder.syncNow(), lifecycleLoggers);
+    for (const instance of state.listInstances().filter((item) => ["provisioning", "starting"].includes(item.status) && item.imageProvisioning?.phase !== "ready" && state.requireRuntime(item.runtimeId).type === "docker")) {
+      provisionInstanceImage(instance);
     }
     const instances = state.listInstances().filter((instance) => {
       const runtime = state.requireRuntime(instance.runtimeId);
@@ -2129,6 +2278,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       ok: true,
       role: "node-agent",
       nodeId,
+      platform: finalComputerPlatform(platform),
       protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
       build: buildInfo("node-agent"),
       instanceProxy: { ...instanceProxyMetrics },
@@ -2358,7 +2508,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     const instance = state.createInstance(CreateNodeInstanceSchema.parse(request.body));
     eventForwarder.syncNow();
     if (instance.imageProvisioning) {
-      void provisionNodeInstanceImage(state, dockerImageService, instance.id, instance.imageProvisioning.generation, () => eventForwarder.syncNow(), lifecycleLoggers);
+      provisionInstanceImage(instance);
     }
     return reply.code(201).send({ data: instance });
   });
@@ -2366,7 +2516,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   app.post("/api/node-agent/instances/:id/image-provisioning/retry", async (request) => {
     const instance = retryNodeInstanceImageProvisioning(state, (request.params as { id: string }).id);
     eventForwarder.syncNow();
-    void provisionNodeInstanceImage(state, dockerImageService, instance.id, instance.imageProvisioning!.generation, () => eventForwarder.syncNow(), lifecycleLoggers);
+    provisionInstanceImage(instance);
     return { data: instance };
   });
 
@@ -2429,8 +2579,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   app.post("/api/node-agent/instances/:id/start", async (request) => {
     const id = (request.params as { id: string }).id;
     NodeInstanceLifecycleRequestSchema.parse(request.body);
-    const instance = await startNodeInstance(state, runtimeAdapters, fetchImpl, id, lifecycleLoggers);
-    eventForwarder.syncNow();
+    const instance = await startInstanceWithFailureState(id, "request");
     return { data: instance };
   });
 

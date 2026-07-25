@@ -11,6 +11,7 @@ import type {
   ConfigSyncPreset,
   ConnectNodeRemoteInput,
   CreateControlledInstanceInput,
+  CreateControlledInstanceResult,
   CreateImageInput,
   CreateModelInput,
   CreateNodeInput,
@@ -292,6 +293,10 @@ export function useControlPlaneAiSessionsQuery() {
   });
 }
 
+export function markAiSessionRead(instanceId: string, sessionId: string, sessionUpdatedAt: string) {
+  return postApiData<import("./types").AiSessionUnreadState>(`controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/${encodeURIComponent(sessionId)}/read`, { sessionUpdatedAt });
+}
+
 export function getAiSessionHistory(instanceId: string) {
   return getApiData<AiSessionHistoryList>(`controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/history`);
 }
@@ -390,7 +395,7 @@ export function useConfigSyncPresetsQuery() {
 }
 
 export function createControlledInstance(input: CreateControlledInstanceInput) {
-  return postApiData<InstanceBoardItem & { registrationToken?: string }>("controlled-instances", input);
+  return postApiData<CreateControlledInstanceResult>("controlled-instances", input);
 }
 
 export function updateControlledInstance(id: string, input: UpdateControlledInstanceInput) {
@@ -441,12 +446,12 @@ export function getInstanceAppManagementJob(instanceId: string, jobId: string) {
   return getApiData<AppManagementJobResponse>(`controlled-instances/${instanceId}/apps/jobs/${encodeURIComponent(jobId)}`);
 }
 
-export function uploadAiSessionAttachment(input: { instanceId: string; sessionId: string; kind: "image"; name: string; mime: string; data: string }) {
+export function uploadAiSessionAttachment(input: { instanceId: string; sessionId: string; kind: "image" | "file"; name: string; mime: string; data: string }) {
   return postApiData<AiSessionAttachment>("ai-session-attachments", input);
 }
 
-export function sendAiSessionMessage(instanceId: string, sessionId: string, message: string, mode?: "auto" | "queue" | "steer" | "immediate", attachments: AiSessionAttachmentRef[] = [], references: AiSessionReference[] = []) {
-  return postApiData<Record<string, unknown>>(`controlled-instances/${instanceId}/ai-sessions/${sessionId}/messages`, { message, mode, attachments, references });
+export function sendAiSessionMessage(instanceId: string, sessionId: string, message: string, mode?: "auto" | "queue" | "steer" | "immediate", attachments: AiSessionAttachmentRef[] = [], references: AiSessionReference[] = [], permissionMode?: import("@task-handoff/protocol/ai-sessions").AiSessionPermissionMode) {
+  return postApiData<Record<string, unknown>>(`controlled-instances/${instanceId}/ai-sessions/${sessionId}/messages`, { message, mode, attachments, references, permissionMode });
 }
 
 export function getAiSessionMentionCatalog(instanceId: string, sessionId: string, signal?: AbortSignal) {

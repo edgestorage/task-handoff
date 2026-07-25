@@ -36,7 +36,7 @@ test("history detail composer resumes, waits for authoritative state, and then s
   assert.match(panel, /session\.id === result\.aiSessionId && session\.appSessionId === result\.appSessionId/);
   assert.match(panel, /for \(let attempt = 0; attempt < 12 && !session; attempt \+= 1\)/);
   assert.match(panel, /refetchQueries\(\{ queryKey: \["control-plane-ai-sessions"\] \}\)/);
-  assert.match(panel, /await sendAiSessionMessage\([\s\S]*session\.id[\s\S]*message \|\| "请查看附件图片。"/);
+  assert.match(panel, /await sendAiSessionMessage\([\s\S]*session\.id[\s\S]*message \|\| "请查看附件。"/);
   assert.match(panel, /emit\("selectAiSession", props\.instance\.id, session\.id\);/);
   assert.match(panel, /showControlPlaneToast/);
   assert.doesNotMatch(panel, />继续对话</);

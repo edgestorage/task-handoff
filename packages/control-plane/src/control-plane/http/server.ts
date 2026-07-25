@@ -7,6 +7,7 @@ import websocket from "@fastify/websocket";
 import type { FastifyReply } from "fastify";
 import type { FastifyServerOptions } from "fastify";
 import { z } from "zod";
+import { AiSessionUnreadEventType } from "@task-handoff/protocol/ai-sessions";
 import { CONTROL_PLANE_PROTOCOL_VERSION, type BuildInfo } from "@task-handoff/protocol/control-plane";
 import { SESSION_STREAM_PROTOCOL_VERSION, SessionStreamsHelloEventType } from "@task-handoff/protocol/events";
 import { CONTROL_PLANE_SESSION_COOKIE, ControlPlaneAuth, type ControlPlaneAuthOptions } from "../auth/service.ts";
@@ -21,6 +22,7 @@ import { assertCan, type ControlPlaneAction, type ControlPlaneActor, type Contro
 import { registerControlPlaneManagementRoutes } from "./management-routes.ts";
 import { registerInstanceProxyRoutes } from "./instance-proxy-routes.ts";
 import { ControlPlaneAiSessionAggregator } from "../sessions/ai-session-aggregator.ts";
+import { AiSessionUnreadStore } from "../sessions/ai-session-unread-store.ts";
 import { ControlPlaneAppSessionAggregator } from "../sessions/app-session-aggregator.ts";
 import { nodeAgentInstallScript } from "../nodes/install-script.ts";
 
@@ -227,6 +229,13 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   const service = new ControlPlaneService(paths, { ...options.service, logger: app.log });
   const auth = new ControlPlaneAuth(paths, options.auth);
   const events = new ControlPlaneEventBus();
+  const aiSessionUnread = new AiSessionUnreadStore(paths, {
+    onChanged: (state) => queueMicrotask(() => events.publish(AiSessionUnreadEventType.Updated, state, {
+      topic: "ai.sessions",
+      scope: { instanceId: state.instanceId, sessionId: state.sessionId },
+    })),
+  });
+  aiSessionUnread.init();
   const aiSessionAggregator = new ControlPlaneAiSessionAggregator({
     bootstrap: () => service.bootstrapAiSessionsFromInstances(),
     logger: app.log,
@@ -234,6 +243,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     recoverSnapshot: (instanceId) => service.recoverAiSessionSnapshot(instanceId),
     onRecoveredEvent: (event) => events.publish(event.type, event.payload),
   });
+  aiSessionAggregator.onSnapshot((update) => aiSessionUnread.reconcile(update.instanceId, update.aiSessions));
   const appSessionAggregator = new ControlPlaneAppSessionAggregator({
     bootstrap: () => service.bootstrapAppSessionsFromInstances(),
     logger: app.log,
@@ -251,6 +261,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       if (instanceId) {
         appSessionAggregator.removeInstance(instanceId);
         aiSessionAggregator.removeInstance(instanceId);
+        aiSessionUnread.removeInstance(instanceId);
       }
     }
     appSessionAggregator.handleEvent(event);
@@ -444,6 +455,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     events,
     appSessionAggregator,
     aiSessionAggregator,
+    aiSessionUnread,
     chatGateway,
     aiSessionAttachments,
     nodeAgentTunnel,

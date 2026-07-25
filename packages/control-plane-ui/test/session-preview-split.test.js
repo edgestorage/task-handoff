@@ -21,6 +21,8 @@ test("session split follows the focused pane for selection and new app sessions"
   assert.match(state, /focusedSessionPanes\[instanceId\] = pane/);
   assert.match(state, /focusedSessionPanes\[instance\.id\] === "right" && rightSelectedSessionKeys\[instance\.id\]/);
   assert.match(state, /ensurePaneAssignments\(instance\.id\)\[session\.id\] = true/);
+  assert.match(state, /\.\.\.tabs\.filter\(\(session\) => !order\.includes\(session\.key\)\)/);
+  assert.match(state, /rightSelectedSessionKeys\[instance\.id\] = session\.id[\s\S]*selectedSessionKeys\[instance\.id\] = session\.id/);
   assert.match(state, /function closeSessionSplit\(\)[\s\S]*delete rightSelectedSessionKeys\[instanceId\][\s\S]*focusedSessionPanes\[instanceId\] = "left"/);
 });
 
@@ -42,7 +44,7 @@ test("session preview splits the original tab row into pane-aligned tab groups",
   assert.match(preview, /Move to right/);
   assert.match(preview, /session\.key === props\.leftSessionKey \|\| session\.key === props\.rightSessionKey/);
   assert.match(preview, /:data-pane="hasSessionSplit \? sessionPaneId\(session\) : undefined"/);
-  assert.match(preview, /<div class="app-launcher" :class="\{ open: appLaunchMenuOpen && appLaunchMenuPane === tabGroup\.id \}"/);
+  assert.match(preview, /<div v-if="!tabGroup\.statusTab" class="app-launcher" :class="\{ open: appLaunchMenuOpen && appLaunchMenuPane === tabGroup\.id \}"/);
   assert.match(preview, /class="session-tab-add-button"[\s\S]*<Plus :size="16"/);
   assert.doesNotMatch(preview, /\{\{ appLaunchButtonLabel \}\}/);
   assert.match(preview, /:open="sessionMenuOpen && sessionMenuPane === tabGroup\.id"/);
@@ -60,7 +62,19 @@ test("session preview splits the original tab row into pane-aligned tab groups",
   assert.match(styles, /\.session-preview:has\(\.session-pane\[data-pane="left"\]:hover\) \.session-preview-selector\[data-pane="left"\] \.app-launcher/);
   assert.match(styles, /\.session-preview:has\(\.session-pane\[data-pane="right"\]:hover\) \.session-preview-selector\[data-pane="right"\] \.session-tab-menu-trigger/);
   assert.match(styles, /\.session-toolbar-split-divider::after\s*\{[\s\S]*width:\s*2px/);
-  assert.match(styles, /\.session-tab-strip :deep\(\[data-reka-scroll-area-viewport\] > div\)\s*\{[\s\S]*align-items:\s*center/);
+  assert.match(preview, /class="session-tab-strip-frame"[\s\S]*v-session-tab-overflow class="session-tab-strip" @scroll="updateSessionTabOverflowFromEvent" @wheel="scrollSessionTabs"/);
+  assert.match(preview, /function scrollSessionTabs\(event: WheelEvent\)[\s\S]*tabList\.scrollLeft \+ event\.deltaY/);
+  assert.match(preview, /event\.preventDefault\(\);[\s\S]*tabList\.scrollLeft = nextScrollLeft/);
+  assert.match(preview, /tabList\.dataset\.overflowStart = String\(tabList\.scrollLeft > 1\)/);
+  assert.match(preview, /tabList\.dataset\.overflowEnd = String\(tabList\.scrollLeft < maxScrollLeft - 1\)/);
+  assert.match(preview, /querySelector<HTMLElement>\('\[role="tab"\]\[aria-selected="true"\]'\)/);
+  assert.match(preview, /tabBounds\.right > viewportBounds\.right[\s\S]*tabList\.scrollLeft = Math\.max\(0, Math\.min\(tabList\.scrollWidth - tabList\.clientWidth, nextScrollLeft\)\)/);
+  assert.match(preview, /new ResizeObserver\(\(\) => syncSessionTabViewport\(tabList\)\)/);
+  assert.match(preview, /updated\(tabList\) \{[\s\S]*nextTick\(\(\) => syncSessionTabViewport\(tabList\)\)/);
+  assert.match(styles, /\.session-tab-strip \{[^}]*overflow-x:\s*auto;[^}]*overflow-y:\s*hidden;[^}]*scrollbar-width:\s*none;/);
+  assert.match(styles, /\.session-tab-strip::-webkit-scrollbar\s*\{[\s\S]*display:\s*none;/);
+  assert.match(styles, /\.session-tab-strip-frame::before,[\s\S]*\.session-tab-strip-frame::after[\s\S]*transition:\s*opacity 140ms ease/);
+  assert.match(styles, /data-overflow-start="true"[\s\S]*data-overflow-end="true"[\s\S]*opacity:\s*1/);
   assert.match(styles, /\.app-launcher\.open \.session-tab-add-button\s*\{[\s\S]*background:\s*color-mix\(in srgb, var\(--surface-raised\) 92%, var\(--white\) 4%\)/);
   assert.match(preview, /hasSessionSplit \? 'Close split view' : 'Split session view'/);
   assert.match(preview, /role="separator"/);

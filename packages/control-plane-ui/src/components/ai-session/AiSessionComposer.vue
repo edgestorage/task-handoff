@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
-import { AppWindow, ArrowUp, Box, CornerDownRight, File, Folder, Minimize2, Pencil, Plus, Puzzle, ScanSearch, Square, Target, WandSparkles, X } from "@lucide/vue";
+import { AppWindow, ArrowUp, Box, Check, CornerDownRight, File, Folder, Hand, Minimize2, Pencil, Plus, Puzzle, ScanSearch, ShieldAlert, ShieldCheck, Square, Target, WandSparkles, X } from "@lucide/vue";
 import { PopoverAnchor } from "reka-ui";
 import type { AiSessionMentionCandidate } from "../../api/types";
-import type { AiSessionCommandInput } from "@task-handoff/protocol/ai-sessions";
+import type { AiSessionCommandInput, AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { Popover, PopoverContent } from "../ui/popover";
 import { Textarea } from "../ui/textarea";
 import { mentionTokenAt, reconcileMentionBindings, replaceMentionToken, type AiSessionMentionBinding } from "./mentions";
@@ -12,12 +13,18 @@ import { useAiSessionMentions, type AiSessionMentionContext } from "./useAiSessi
 
 export type AiSessionComposerAttachment = {
   id: string;
-  kind: "image";
+  kind: "image" | "file";
   name: string;
   mime: string;
   size: number;
-  dataUrl: string;
-  file: File;
+  source: { type: "inline" } | { type: "runtime-path"; path: string };
+  dataUrl?: string;
+  previewUrl?: string;
+  file?: File;
+};
+
+type DesktopFileBridge = {
+  getPathForFile?: (file: File) => string;
 };
 
 const props = defineProps<{
@@ -32,14 +39,15 @@ const props = defineProps<{
   mentionTrigger?: string;
   commandTrigger?: string;
   sessionBusy?: boolean;
+  provider?: string;
+  permissionKey?: string;
 }>();
 
 const emit = defineEmits<{
   (event: "update:modelValue", value: string): void;
   (event: "update:attachments", value: AiSessionComposerAttachment[]): void;
   (event: "update:mentionBindings", value: AiSessionMentionBinding[]): void;
-  (event: "add-context"): void;
-  (event: "run"): void;
+  (event: "run", permissionMode?: AiSessionPermissionMode): void;
   (event: "steer"): void;
   (event: "command", value: AiSessionCommandInput): void;
 }>();
@@ -51,6 +59,7 @@ const draft = computed({
 
 const MAX_ATTACHMENTS = 6;
 const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+const MAX_INLINE_FILE_BYTES = 500 * 1024;
 const MAX_TOTAL_ATTACHMENT_BYTES = 40 * 1024 * 1024;
 const SUPPORTED_IMAGE_MIME = new Set(["image/bmp", "image/gif", "image/jpeg", "image/png", "image/webp"]);
 const attachmentError = ref("");
@@ -81,6 +90,15 @@ const actionKind = computed(() => hasDraft.value || !props.canInterrupt ? "send"
 const canRun = computed(() => hasDraft.value || (!props.busy && props.canInterrupt));
 const canSteer = computed(() => props.busy && hasDraft.value);
 const actionTitle = computed(() => actionKind.value === "stop" ? "Stop current AI turn" : "Send message");
+const commandLauncherDisabled = computed(() => Boolean(props.busy || props.modelValue.length || props.mentionContext?.provider !== "codex"));
+const permissionProvider = computed(() => props.provider || props.mentionContext?.provider);
+const permissionMode = ref<AiSessionPermissionMode>("ask");
+const permissionOptions = [
+  { value: "ask", label: "Ask for approval", description: "Ask before accessing the internet or editing files outside the workspace.", icon: Hand },
+  { value: "auto-review", label: "Approve for me", description: "Only ask for actions detected as potentially unsafe.", icon: ShieldCheck },
+  { value: "full-access", label: "Full access", description: "Unrestricted internet and file access without approval.", icon: ShieldAlert, danger: true },
+] satisfies Array<{ value: AiSessionPermissionMode; label: string; description: string; icon: typeof Hand; danger?: boolean }>;
+const selectedPermission = computed(() => permissionOptions.find((option) => option.value === permissionMode.value) || permissionOptions[0]);
 
 function resizeInput() {
   const element = textareaElement();
@@ -124,71 +142,131 @@ watch(() => props.modelValue, () => {
   void nextTick(resizeInput);
 }, { immediate: true });
 
-watch(attachments, () => {
+watch(attachments, (next, previous) => {
+  for (const attachment of previous || []) {
+    if (attachment.previewUrl && !next.some((item) => item.id === attachment.id)) URL.revokeObjectURL(attachment.previewUrl);
+  }
   void nextTick(resizeInput);
 });
 
-function imageFiles(files: File[]) {
-  return files.filter((file) => file.type.startsWith("image/") || !file.type);
+function attachmentKind(file: File): "image" | "file" {
+  return file.type.startsWith("image/") || /\.(?:bmp|gif|jpe?g|png|webp)$/i.test(file.name) ? "image" : "file";
 }
 
-function validateImageFiles(files: File[]) {
+function validateFiles(files: File[], runtimePathFiles: Set<File>, outsideWorkspaceFiles: Set<File> = new Set()) {
   const accepted: File[] = [];
-  const currentBytes = attachments.value.reduce((sum, attachment) => sum + attachment.size, 0);
+  const currentBytes = attachments.value.reduce((sum, attachment) => sum + (attachment.source.type === "inline" ? attachment.size : 0), 0);
   let nextBytes = currentBytes;
   for (const file of files) {
-    const mime = file.type || "image/png";
-    if (!SUPPORTED_IMAGE_MIME.has(mime)) {
+    const kind = attachmentKind(file);
+    const mime = file.type || (kind === "image" ? "image/png" : "application/octet-stream");
+    const usesRuntimePath = runtimePathFiles.has(file);
+    if (kind === "image" && !SUPPORTED_IMAGE_MIME.has(mime)) {
       attachmentError.value = "仅支持 PNG、JPG、WEBP、GIF、BMP 图片。";
       continue;
     }
-    if (file.size <= 0 || file.size > MAX_ATTACHMENT_BYTES) {
+    if (file.size <= 0) {
+      attachmentError.value = "不能添加空文件。";
+      continue;
+    }
+    if (!usesRuntimePath && kind === "image" && file.size > MAX_ATTACHMENT_BYTES) {
       attachmentError.value = "单张图片不能超过 20MB。";
       continue;
     }
+    if (!usesRuntimePath && kind === "file" && file.size >= MAX_INLINE_FILE_BYTES) {
+      attachmentError.value = outsideWorkspaceFiles.has(file)
+        ? "Local Runtime 路径附件必须位于当前 AI session 工作区内；请将文件移入工作区后重试。"
+        : props.mentionContext?.runtimeType === "local"
+          ? "当前浏览器无法取得本地文件路径；请使用桌面端直接传入路径，或选择小于 500 KiB 的文件。"
+        : "文件过大：文件必须小于 500 KiB。";
+      continue;
+    }
     if (attachments.value.length + accepted.length >= MAX_ATTACHMENTS) {
-      attachmentError.value = "最多只能添加 6 张图片。";
+      attachmentError.value = "最多只能添加 6 个附件。";
       continue;
     }
-    if (nextBytes + file.size > MAX_TOTAL_ATTACHMENT_BYTES) {
-      attachmentError.value = "单条消息图片总大小不能超过 40MB。";
+    if (!usesRuntimePath && nextBytes + file.size > MAX_TOTAL_ATTACHMENT_BYTES) {
+      attachmentError.value = "单条消息内联附件总大小不能超过 40MB。";
       continue;
     }
-    nextBytes += file.size;
+    if (!usesRuntimePath) nextBytes += file.size;
     accepted.push(file);
   }
   return accepted;
 }
 
-function addFiles(files: File[]) {
+async function addFiles(files: File[]) {
   if (props.busy) {
     return;
   }
-  const images = validateImageFiles(imageFiles(files));
-  if (!images.length) {
+  const bridge = (window as Window & { taskHandoffDesktop?: DesktopFileBridge }).taskHandoffDesktop;
+  const runtimePaths = new Map<File, string>();
+  const outsideWorkspaceFiles = new Set<File>();
+  if (props.mentionContext?.runtimePathAccess === "desktop-local" && bridge?.getPathForFile) {
+    for (const file of files) {
+      try {
+        const filePath = await Promise.resolve(bridge.getPathForFile(file));
+        if (filePath && runtimePathWithinWorkspace(filePath, props.mentionContext.cwd)) runtimePaths.set(file, filePath);
+        else if (filePath) outsideWorkspaceFiles.add(file);
+      } catch {
+        // Files synthesized by the browser do not have a filesystem path and use inline rules.
+      }
+    }
+  }
+  const accepted = validateFiles(files, new Set(runtimePaths.keys()), outsideWorkspaceFiles);
+  if (!accepted.length) {
     return;
   }
-  void Promise.all(images.map(readAttachment)).then((items) => {
+  void Promise.all(accepted.map((file) => readAttachment(file, runtimePaths.get(file)))).then((items) => {
     attachmentError.value = "";
     emit("update:attachments", [...attachments.value, ...items]);
   });
 }
 
-function readAttachment(file: File): Promise<AiSessionComposerAttachment> {
+function runtimePathWithinWorkspace(filePath: string, workspacePath: string) {
+  const candidate = normalizeAbsoluteRuntimePath(filePath);
+  const root = normalizeAbsoluteRuntimePath(workspacePath);
+  return Boolean(candidate && root && (root === "/" || candidate === root || candidate.startsWith(`${root}/`)));
+}
+
+function normalizeAbsoluteRuntimePath(value: string) {
+  if (!value.startsWith("/")) return "";
+  const segments: string[] = [];
+  for (const segment of value.split("/")) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") segments.pop();
+    else segments.push(segment);
+  }
+  return `/${segments.join("/")}`;
+}
+
+function readAttachment(file: File, runtimePath?: string): Promise<AiSessionComposerAttachment> {
+  const kind = attachmentKind(file);
+  const common = {
+    id: `local_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+    kind,
+    name: file.name || (kind === "image" ? "image.png" : "attachment"),
+    mime: file.type || (kind === "image" ? "image/png" : "application/octet-stream"),
+    size: file.size,
+  };
+  if (runtimePath) {
+    return Promise.resolve({
+      ...common,
+      source: { type: "runtime-path", path: runtimePath },
+      ...(kind === "image" ? { previewUrl: URL.createObjectURL(file) } : {}),
+    });
+  }
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.addEventListener("load", () => {
       resolve({
-        id: `local_${Date.now()}_${Math.random().toString(16).slice(2)}`,
-        kind: "image",
-        name: file.name || "image.png",
-        mime: file.type || "image/png",
-        size: file.size,
+        ...common,
+        source: { type: "inline" },
         dataUrl: String(reader.result || ""),
         file,
       });
     });
-    reader.addEventListener("error", () => reject(reader.error || new Error("Failed to read image.")));
+    reader.addEventListener("error", () => reject(reader.error || new Error("Failed to read attachment.")));
     reader.readAsDataURL(file);
   });
 }
@@ -201,6 +279,12 @@ function removeAttachment(id: string) {
   emit("update:attachments", attachments.value.filter((attachment) => attachment.id !== id));
 }
 
+function formatAttachmentSize(size: number) {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${Math.ceil(size / 1024)} KiB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
 function handlePaste(event: ClipboardEvent) {
   if (props.busy) {
     return;
@@ -209,12 +293,8 @@ function handlePaste(event: ClipboardEvent) {
   if (!files.length) {
     return;
   }
-  const images = imageFiles(files);
-  if (!images.length) {
-    return;
-  }
   event.preventDefault();
-  addFiles(images);
+  void addFiles(files);
 }
 
 function handleDrop(event: DragEvent) {
@@ -222,12 +302,11 @@ function handleDrop(event: DragEvent) {
     return;
   }
   const files = Array.from(event.dataTransfer?.files || []);
-  const images = imageFiles(files);
-  if (!images.length) {
+  if (!files.length) {
     return;
   }
   event.preventDefault();
-  addFiles(images);
+  void addFiles(files);
 }
 
 function submit() {
@@ -237,7 +316,7 @@ function submit() {
       emit("command", command);
       return;
     }
-    emit("run");
+    emit("run", permissionProvider.value === "codex" ? permissionMode.value : undefined);
   }
 }
 
@@ -331,6 +410,24 @@ function updateOverlayMenu(value = props.modelValue, cursor = textareaElement()?
   void mentions.show(token.query);
 }
 
+function openCommandMenu() {
+  if (commandLauncherDisabled.value) return;
+  const trigger = commandTrigger.value;
+  emit("update:modelValue", trigger);
+  emit("update:mentionBindings", []);
+  mentions.close();
+  commandOpen.value = true;
+  commandQuery.value = "";
+  activeCommandIndex.value = 0;
+  mentionPopoverRadius.value = composerEl.value ? getComputedStyle(composerEl.value).borderRadius : "20px";
+  void nextTick(() => {
+    const textarea = textareaElement();
+    textarea?.focus();
+    textarea?.setSelectionRange(trigger.length, trigger.length);
+    resizeInput();
+  });
+}
+
 function selectCommand(command: AiSessionCommandCandidate, event?: Event) {
   event?.preventDefault();
   if (props.busy) return;
@@ -404,6 +501,9 @@ watch(() => mentions.candidates.value.length, (length) => {
 
 watch(mentionTrigger, () => mentions.close());
 watch(commandTrigger, () => { commandOpen.value = false; });
+watch(() => [permissionProvider.value, props.permissionKey || props.mentionContext?.sessionId], () => {
+  permissionMode.value = "ask";
+});
 watch(() => props.busy, (busy) => {
   if (busy) {
     mentions.close();
@@ -415,9 +515,16 @@ watch(() => props.busy, (busy) => {
 <template>
   <form ref="composerEl" class="ai-session-composer" :aria-busy="busy" @drop="handleDrop" @dragover.prevent @submit.prevent="submit">
     <div v-if="attachments.length" class="ai-session-composer__attachments">
-      <figure v-for="attachment in attachments" :key="attachment.id">
-        <img :alt="attachment.name" :src="attachment.dataUrl" />
-        <button type="button" title="Remove image" aria-label="Remove image" :disabled="busy" @click="removeAttachment(attachment.id)">
+      <figure v-for="attachment in attachments" :key="attachment.id" :class="{ 'ai-session-composer__file': attachment.kind === 'file' }">
+        <img v-if="attachment.kind === 'image'" :alt="attachment.name" :src="attachment.previewUrl || attachment.dataUrl" />
+        <template v-else>
+          <span class="ai-session-composer__file-icon"><File :size="22" /></span>
+          <figcaption>
+            <strong :title="attachment.name">{{ attachment.name }}</strong>
+            <span>{{ formatAttachmentSize(attachment.size) }}<template v-if="attachment.source.type === 'runtime-path'"> · Local path</template></span>
+          </figcaption>
+        </template>
+        <button type="button" title="Remove attachment" aria-label="Remove attachment" :disabled="busy" @click="removeAttachment(attachment.id)">
           <X :size="14" />
         </button>
       </figure>
@@ -511,15 +618,49 @@ watch(() => props.busy, (busy) => {
       </PopoverContent>
     </Popover>
     <div class="ai-session-composer__toolbar">
-      <button
-        type="button"
-        class="ai-session-composer__tool"
-        title="Add context"
-        :disabled="busy"
-        @click="emit('add-context')"
-      >
-        <Plus :size="18" />
-      </button>
+      <div class="ai-session-composer__leading">
+        <button
+          type="button"
+          class="ai-session-composer__tool"
+          title="Commands"
+          aria-label="Open command menu"
+          :disabled="commandLauncherDisabled"
+          @click="openCommandMenu"
+        >
+          <Plus :size="18" />
+        </button>
+        <DropdownMenu v-if="permissionProvider === 'codex'">
+          <DropdownMenuTrigger as-child>
+            <button
+              type="button"
+              class="ai-session-composer__permission-trigger"
+              :data-danger="selectedPermission.danger || undefined"
+              :disabled="busy || sessionBusy"
+              :aria-label="`Permission mode: ${selectedPermission.label}`"
+              title="Choose permission mode"
+            >
+              <component :is="selectedPermission.icon" :size="16" />
+              <span>{{ selectedPermission.label }}</span>
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent class="ai-session-permission-menu" side="top" align="start" :side-offset="8">
+            <DropdownMenuItem
+              v-for="option in permissionOptions"
+              :key="option.value"
+              class="ai-session-permission-menu__item"
+              :data-danger="option.danger || undefined"
+              @select="permissionMode = option.value"
+            >
+              <component :is="option.icon" :size="18" />
+              <span class="ai-session-permission-menu__copy">
+                <strong>{{ option.label }}</strong>
+                <small>{{ option.description }}</small>
+              </span>
+              <Check v-if="permissionMode === option.value" class="ai-session-permission-menu__check" :size="16" />
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
       <div class="ai-session-composer__actions">
         <button
           v-if="canSteer"
@@ -605,6 +746,48 @@ watch(() => props.busy, (busy) => {
   border-radius: 12px;
   background: color-mix(in srgb, var(--ai-composer-bg, var(--background)) 80%, var(--ai-composer-text, currentColor));
   margin: 0;
+}
+
+.ai-session-composer__attachments .ai-session-composer__file {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: min(240px, 62vw);
+  padding: 10px 34px 10px 10px;
+}
+
+.ai-session-composer__file-icon {
+  display: grid;
+  flex: 0 0 auto;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--ai-composer-text, currentColor) 9%, transparent);
+}
+
+.ai-session-composer__file figcaption {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  text-align: left;
+}
+
+.ai-session-composer__file strong,
+.ai-session-composer__file figcaption span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-session-composer__file strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.ai-session-composer__file figcaption span {
+  color: var(--muted-foreground);
+  font-size: 11px;
 }
 
 .ai-session-composer__attachments img {
@@ -700,6 +883,94 @@ watch(() => props.busy, (busy) => {
   gap: 8px;
 }
 
+.ai-session-composer__leading {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+}
+
+.ai-session-composer__permission-trigger {
+  display: inline-flex;
+  max-width: min(220px, 45vw);
+  height: 32px;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ai-composer-muted, currentColor);
+  cursor: pointer;
+  padding: 0 11px;
+  font-size: 12px;
+  font-weight: 500;
+  transition: background-color 140ms ease;
+}
+
+.ai-session-composer__permission-trigger span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-session-composer__permission-trigger[data-danger="true"] {
+  color: var(--status-danger);
+}
+
+.ai-session-composer__permission-trigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+:global(.ai-session-permission-menu) {
+  width: min(460px, calc(100vw - 24px));
+  padding: 6px;
+}
+
+:global(.ai-session-permission-menu__item) {
+  min-height: 58px;
+  align-items: flex-start;
+  gap: 10px;
+  border-radius: 10px;
+  padding: 9px 10px;
+}
+
+:global(.ai-session-permission-menu__item[data-danger="true"]) {
+  color: var(--status-danger);
+}
+
+:global(.ai-session-permission-menu__item[data-danger="true"]:is(:hover, :focus, [data-highlighted])) {
+  color: var(--status-danger) !important;
+}
+
+:global(.ai-session-permission-menu__copy) {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 2px;
+}
+
+:global(.ai-session-permission-menu__copy strong) {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+}
+
+:global(.ai-session-permission-menu__copy small) {
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 16px;
+}
+
+:global(.ai-session-permission-menu__item[data-danger="true"] .ai-session-permission-menu__copy small) {
+  color: color-mix(in srgb, var(--status-danger) 72%, hsl(var(--muted-foreground)));
+}
+
+:global(.ai-session-permission-menu__check) {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
 .ai-session-composer__tool,
 .ai-session-composer__primary {
   display: inline-grid;
@@ -714,6 +985,13 @@ watch(() => props.busy, (busy) => {
   height: 32px;
   background: transparent;
   color: var(--ai-composer-muted, currentColor);
+  transition: background-color 140ms ease;
+}
+
+.ai-session-composer__tool:not(:disabled):is(:hover, :focus-visible),
+.ai-session-composer__permission-trigger:not(:disabled):is(:hover, :focus-visible) {
+  background: color-mix(in srgb, var(--ai-composer-muted, currentColor) 10%, transparent);
+  outline: none;
 }
 
 .ai-session-composer[aria-busy="true"] {

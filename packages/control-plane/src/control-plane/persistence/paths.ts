@@ -16,6 +16,7 @@ export type ControlPlaneStorePaths = {
   nodeJoinInvitesDir: string;
   authUsersDir: string;
   authSessionsDir: string;
+  aiSessionUnreadDir: string;
   logsDir: string;
 };
 
@@ -40,6 +41,7 @@ export function controlPlaneStorePaths(dataDir = defaultControlPlaneDataDir()): 
     nodeJoinInvitesDir: path.join(root, "node-join-invites"),
     authUsersDir: path.join(root, "auth-users"),
     authSessionsDir: path.join(root, "auth-sessions"),
+    aiSessionUnreadDir: path.join(root, "ai-session-unread"),
     logsDir: path.join(root, "logs"),
   };
 }

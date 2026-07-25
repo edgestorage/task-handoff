@@ -3,7 +3,6 @@
     <RepositoryWorkspace
       v-if="context && route"
       :context="context"
-      :initial-view="route.view"
       :instance-id="route.instanceId"
       :open="true"
       :session-id="route.sessionId"

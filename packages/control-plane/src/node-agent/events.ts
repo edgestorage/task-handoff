@@ -1,5 +1,9 @@
 import WebSocket from "ws";
-import type { ControlledInstance } from "@task-handoff/protocol/control-plane";
+import {
+  InstanceLifecycleEventType,
+  InstanceLifecycleSnapshotSchema,
+  type ControlledInstance,
+} from "@task-handoff/protocol/control-plane";
 import { AiSessionEventTopic, AiSessionEventType } from "@task-handoff/protocol/ai-sessions";
 import { AppSessionEventTopic } from "@task-handoff/protocol/app-sessions";
 import { SessionStreamsHelloEventType, SessionStreamsHelloSchema, eventTopic, type EventEnvelope } from "@task-handoff/protocol/events";
@@ -77,6 +81,18 @@ export class NodeAgentInstanceEventForwarder {
     this.outputs.add(socket);
     socket.on("close", () => this.outputs.delete(socket));
     socket.on("error", () => this.outputs.delete(socket));
+    for (const instance of this.state.listInstances()) {
+      const snapshot = tryInstanceLifecycleSnapshot(instance);
+      if (!snapshot) {
+        this.logger?.warn?.({ instanceId: instance.id }, "instance.lifecycle.snapshot.invalid");
+        continue;
+      }
+      this.sendForwarded(socket, this.createEvent(
+        InstanceLifecycleEventType.Snapshot,
+        snapshot,
+        { instanceId: instance.id },
+      ));
+    }
     this.syncNow();
     return () => {
       this.outputs.delete(socket);
@@ -84,8 +100,21 @@ export class NodeAgentInstanceEventForwarder {
   }
 
   publish(type: string, payload: unknown, scope: Record<string, unknown> = {}) {
+    const event = this.createEvent(type, payload, scope);
+    for (const output of this.outputs) this.sendForwarded(output, event);
+  }
+
+  publishInstanceLifecycle(instance: ControlledInstance) {
+    this.publish(
+      InstanceLifecycleEventType.Snapshot,
+      instanceLifecycleSnapshot(instance),
+      { instanceId: instance.id },
+    );
+  }
+
+  private createEvent(type: string, payload: unknown, scope: Record<string, unknown>): EventEnvelope {
     const sequence = ++this.localSequence;
-    const event: EventEnvelope = {
+    return {
       v: 1,
       id: `node_evt_${Date.now().toString(36)}_${sequence.toString(36)}`,
       seq: sequence,
@@ -95,10 +124,11 @@ export class NodeAgentInstanceEventForwarder {
       payload,
       scope,
     };
+  }
+
+  private sendForwarded(output: WebSocket, event: EventEnvelope) {
     const encoded = JSON.stringify({ type: "node-agent.event.forwarded", event });
-    for (const output of this.outputs) {
-      if (output.readyState === WebSocket.OPEN) output.send(encoded);
-    }
+    if (output.readyState === WebSocket.OPEN) output.send(encoded);
   }
 
   syncNow() {
@@ -291,6 +321,31 @@ export class NodeAgentInstanceEventForwarder {
       revision: meta.revision,
     }, "app-session.event.forward.message");
   }
+}
+
+function instanceLifecycleSnapshot(instance: ControlledInstance) {
+  return InstanceLifecycleSnapshotSchema.parse(instanceLifecycleSnapshotInput(instance));
+}
+
+function tryInstanceLifecycleSnapshot(instance: ControlledInstance) {
+  const snapshot = InstanceLifecycleSnapshotSchema.safeParse(instanceLifecycleSnapshotInput(instance));
+  return snapshot.success ? snapshot.data : undefined;
+}
+
+function instanceLifecycleSnapshotInput(instance: ControlledInstance) {
+  return {
+    instanceId: instance.id,
+    revision: instance.stateRevision,
+    updatedAt: instance.updatedAt,
+    status: instance.status,
+    health: instance.health,
+    connectionStatus: instance.connectionStatus,
+    accessStatus: instance.connectionStatus === "online" || instance.agentStatus === "online" ? "reachable" : "endpoint-unreachable",
+    imageProvisioning: instance.imageProvisioning,
+    workspace: instance.workspace,
+    runtime: instance.runtime,
+    lastHeartbeatAt: instance.lastHeartbeatAt,
+  };
 }
 
 function eventPayloadMeta(payload: unknown) {

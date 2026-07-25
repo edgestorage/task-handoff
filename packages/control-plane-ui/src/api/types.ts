@@ -30,6 +30,9 @@ export const AiSessionEventType = {
   MessageDelta: "ai-session.message-delta",
   SyncRequired: "ai-session.sync-required",
 } as const;
+export const AiSessionUnreadEventType = {
+  Updated: "ai-session.unread.updated",
+} as const;
 
 export type AiSessionEventType = (typeof AiSessionEventType)[keyof typeof AiSessionEventType];
 
@@ -423,6 +426,7 @@ export type ControlledInstance = {
   imageId?: string;
   imageSnapshot?: InstanceImageSnapshot;
   imageProvisioning?: ImageProvisioning;
+  stateRevision: number;
   status: "created" | "provisioning" | "starting" | "registering" | "registered" | "running" | "stopping" | "stopped" | "failed" | "unhealthy";
   health: "unknown" | "ok" | "degraded" | "failed";
   connectionStatus: "unknown" | "online" | "offline" | "endpoint-unreachable";
@@ -649,7 +653,7 @@ export type AiSessionSource = "control" | "realtime" | "adapter-snapshot" | "tra
 
 export type AiSessionAttachment = {
   id: string;
-  kind: "image";
+  kind: "image" | "file";
   name: string;
   mime: string;
   size: number;
@@ -658,7 +662,15 @@ export type AiSessionAttachment = {
 
 export type AiSessionAttachmentRef = {
   id: string;
-  kind?: "image";
+  kind?: "image" | "file";
+  source?: { type: "upload-ref" };
+} | {
+  id: string;
+  kind: "image" | "file";
+  name: string;
+  mime: string;
+  size: number;
+  source: { type: "runtime-path"; path: string };
 };
 
 export type AiSessionTurn = {
@@ -736,6 +748,15 @@ export type AiSessionSummary = {
   startedAt: string;
   updatedAt: string;
   error?: string;
+  unread: boolean;
+};
+
+export type AiSessionUnreadState = {
+  instanceId: string;
+  sessionId: string;
+  unread: boolean;
+  sessionUpdatedAt: string;
+  updatedAt: string;
 };
 
 export type AiSessionsSnapshot = {
@@ -935,6 +956,15 @@ export type CreateControlledInstanceInput = {
     autoImportAgentConfigs?: boolean;
   };
   modelSelection?: ModelSelection;
+  start?: boolean;
+};
+
+export type CreateControlledInstanceResult = InstanceBoardItem & {
+  registrationToken?: string;
+  startOutcome: {
+    status: "not-requested" | "started" | "failed";
+    error?: { code: string; message: string };
+  };
 };
 
 export type UpdateControlledInstanceInput = {

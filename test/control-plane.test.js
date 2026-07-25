@@ -39,9 +39,9 @@ const { nodeAgentStorePaths } = require("../packages/control-plane/src/node-agen
 const { aiSessionUserPrompts, displayAiSessionMessage, displayAiSessionTitle, launchableAppsForInstance: uiLaunchableAppsForInstance } = require("../packages/control-plane-ui/src/apps/control-plane/useInstanceSessions.ts");
 const { launchableAppsForInstance: chatLaunchableAppsForInstance } = require("../packages/control-plane/src/control-plane/chat/rendering.ts");
 const { appSessionStatus } = require("../packages/control-plane-ui/src/apps/control-plane/appSessionVisibility.ts");
-const { AiSessionEventType, AiSessionEventTopic } = require("../packages/protocol/src/ai-sessions.ts");
+const { AiSessionEventType, AiSessionEventTopic, AiSessionUnreadEventType } = require("../packages/protocol/src/ai-sessions.ts");
 const { AppSessionEventType, normalizeAppSessionRecord } = require("../packages/protocol/src/app-sessions.ts");
-const { CONTROL_PLANE_PROTOCOL_VERSION, ControlledInstanceHeartbeatSchema, InstanceAppInventorySchema, modelConfigHash, parseStoredControlledInstance } = require("../packages/protocol/src/control-plane.ts");
+const { CONTROL_PLANE_PROTOCOL_VERSION, ControlledInstanceHeartbeatSchema, InstanceAppInventorySchema, InstanceLifecycleEventType, modelConfigHash, parseStoredControlledInstance } = require("../packages/protocol/src/control-plane.ts");
 const { ChatActionTokenService, parsePendingDecisionCallbackData, pendingDecisionRouteFingerprint } = require("../packages/control-plane/src/control-plane/chat/action-token-service.ts");
 
 test("pending decision callbacks are stable and resolved from the current route", () => {
@@ -773,20 +773,13 @@ test("local IPC can rebind the node agent TCP listener without changing the sock
   assert.equal((await fetchNodeAgentIpc(ipcPath, "/settings/external-listener")).status, 200);
   assert.equal((await fetch(`http://127.0.0.1:${secondPort}/api/node-agent/health`)).status, 200);
 
-  const localRuntime = await app.inject({
-    method: "POST",
-    url: "/api/node-agent/runtimes",
-    payload: { id: "runtime_localhost", name: "Localhost", type: "local" },
-  });
-  assert.equal(localRuntime.statusCode, 201, localRuntime.body);
-
   const created = await app.inject({
     method: "POST",
     url: "/api/node-agent/instances",
     payload: {
       id: "inst_listener_blocker",
       name: "listener blocker",
-      runtimeId: "runtime_localhost",
+      runtimeId: "runtime_local_host",
       source: { type: "local-folder", path: "/tmp/listener-blocker" },
     },
   });
@@ -1122,6 +1115,17 @@ function createMockNodeAgentFetch(options = {}) {
       const action = lifecycle[2];
       const current = instances.get(id);
       if (!current) return errorResponse(`Instance ${id} was not found.`);
+      if ((action === "start" || action === "restart") && options.startError) {
+        instances.set(id, {
+          ...current,
+          status: "failed",
+          health: "failed",
+          connectionStatus: "offline",
+          workspace: { ...current.workspace, error: options.startError.message },
+          updatedAt: timestamp,
+        });
+        return errorResponse(options.startError.message, options.startError.status || 503, options.startError.code || "NODE_INSTANCE_START_FAILED");
+      }
       if (action === "delete") {
         instances.delete(id);
         return jsonResponse({ deleted: true });
@@ -1871,10 +1875,56 @@ test("control plane rejects metrics whose payload and forwarded scope disagree",
   assert.equal(published.length, 0);
 });
 
+test("control plane forwards lifecycle snapshots only for instances owned by the node", async () => {
+  const events = new ControlPlaneEventBus();
+  const published = [];
+  events.on((event) => published.push(event));
+  const validations = [];
+  const tunnel = new ControlPlaneNodeAgentTunnelTransport(events, {
+    validateInstanceScope: async (nodeId, instanceId) => {
+      validations.push([nodeId, instanceId]);
+      return nodeId === "node_lifecycle" && instanceId === "inst_owned";
+    },
+  });
+  const lifecycle = (instanceId, revision) => ({
+    instanceId,
+    revision,
+    updatedAt: "2026-07-25T00:00:00.000Z",
+    status: "starting",
+    health: "unknown",
+    connectionStatus: "unknown",
+    accessStatus: "endpoint-unreachable",
+    workspace: { status: "pending" },
+    runtime: { labels: {} },
+  });
+
+  tunnel.handleMessage("node_lifecycle", {
+    type: "node-agent.event.forwarded",
+    event: { type: InstanceLifecycleEventType.Snapshot, topic: "instances", payload: lifecycle("inst_other", 1), scope: { instanceId: "inst_other" } },
+  });
+  tunnel.handleMessage("node_lifecycle", {
+    type: "node-agent.event.forwarded",
+    event: { type: InstanceLifecycleEventType.Snapshot, topic: "instances", payload: lifecycle("inst_owned", 2), scope: { instanceId: "inst_owned" } },
+  });
+  tunnel.handleMessage("node_lifecycle", {
+    type: "node-agent.event.forwarded",
+    event: { type: InstanceLifecycleEventType.Snapshot, topic: "instances", payload: lifecycle("inst_owned", 3), scope: { instanceId: "inst_mismatch" } },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(validations, [["node_lifecycle", "inst_other"], ["node_lifecycle", "inst_owned"]]);
+  assert.equal(published.length, 1);
+  assert.equal(published[0].type, InstanceLifecycleEventType.Snapshot);
+  assert.equal(published[0].payload.revision, 2);
+  assert.deepEqual(published[0].scope, { nodeId: "node_lifecycle", instanceId: "inst_owned" });
+});
+
 test("control plane subscribes to direct node agent websocket events", async (t) => {
   const instanceEvents = new WebSocket.Server({ host: "127.0.0.1", port: 0 });
+  let instanceEventSocket;
   t.after(() => instanceEvents.close());
   instanceEvents.on("connection", (socket) => {
+    instanceEventSocket = socket;
     socket.on("message", () => {
       const timestamp = new Date().toISOString();
       socket.send(JSON.stringify({
@@ -2026,6 +2076,34 @@ test("control plane subscribes to direct node agent websocket events", async (t)
   const hello = await waitForCondition(() => receivedEvents.find((entry) => entry.type === "streams.hello"), "control plane streams hello");
   assert.equal(hello.type, "streams.hello");
 
+  const lifecycle = await waitForCondition(() => receivedEvents.find((entry) => entry.type === InstanceLifecycleEventType.Snapshot), "direct node agent lifecycle snapshot", 7000);
+  assert.equal(lifecycle.topic, "instances");
+  assert.equal(lifecycle.scope.nodeId, directNodeId);
+  assert.equal(lifecycle.scope.instanceId, "inst_direct_events");
+  assert.equal(lifecycle.payload.instanceId, "inst_direct_events");
+  assert.ok(lifecycle.payload.revision >= 1);
+
+  const heartbeat = await nodeAgent.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_direct_events/heartbeat",
+    headers: { authorization: `Bearer ${createdInstance.json().data.registrationToken}` },
+    payload: {
+      protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+      status: "running",
+      health: "ok",
+      appInventory: emptyAppInventory(),
+      target: { status: "reachable" },
+    },
+  });
+  assert.equal(heartbeat.statusCode, 200);
+  const runningLifecycle = await waitForCondition(() => receivedEvents.find((entry) => (
+    entry.type === InstanceLifecycleEventType.Snapshot
+    && entry.payload.status === "running"
+    && entry.payload.revision > lifecycle.payload.revision
+  )), "live node agent lifecycle update", 7000);
+  assert.equal(runningLifecycle.payload.health, "ok");
+  assert.equal(runningLifecycle.payload.accessStatus, "reachable");
+
   const event = await waitForCondition(() => receivedEvents.find((entry) => entry.type === AiSessionEventType.Snapshot), "direct node agent ai session event", 7000);
   assert.equal(event.type, AiSessionEventType.Snapshot);
   assert.equal(event.topic, AiSessionEventTopic);
@@ -2051,6 +2129,48 @@ test("control plane subscribes to direct node agent websocket events", async (t)
   const aggregatedEntry = aggregated.body.data.instances.find((entry) => entry.instanceId === "inst_direct_events");
   assert.ok(aggregatedEntry);
   assert.equal(aggregatedEntry.revision, 1);
+  assert.equal(aggregatedEntry.aiSessions.sessions[0].unread, false);
+
+  const sendAiSessionStatus = (status, revision, updatedAt) => instanceEventSocket.send(JSON.stringify({
+    type: AiSessionEventType.Snapshot,
+    topic: AiSessionEventTopic,
+    payload: aiSessionSnapshotPayload({
+      runningCount: status === "running" ? 1 : 0,
+      waitingCount: status === "waiting" ? 1 : 0,
+      sessions: [{
+        id: "ai_1",
+        agent: "codex",
+        appId: "codex",
+        appSessionId: "app_1",
+        status,
+        phase: "unknown",
+        startedAt: updatedAt,
+        updatedAt,
+      }],
+    }, { instanceId: "inst_direct_events", streamId: "ai_direct_stream", revision, generatedAt: updatedAt }),
+  }));
+  sendAiSessionStatus("running", 2, "2026-07-25T01:00:00.000Z");
+  sendAiSessionStatus("idle", 3, "2026-07-25T01:00:01.000Z");
+  const unreadEvent = await waitForCondition(() => receivedEvents.find((entry) => entry.type === AiSessionUnreadEventType.Updated && entry.payload.unread), "completed AI session unread event");
+  assert.equal(unreadEvent.payload.sessionId, "ai_1");
+  const unreadView = await waitForCondition(async () => {
+    const response = await json(controlPlane, "GET", "/api/ai-sessions");
+    const session = response.body.data.instances.find((entry) => entry.instanceId === "inst_direct_events")?.aiSessions.sessions[0];
+    return session?.unread ? response : undefined;
+  }, "completed AI session unread projection");
+  assert.equal(unreadView.statusCode, 200);
+
+  sendAiSessionStatus("running", 4, "2026-07-25T01:00:02.000Z");
+  const clearedForNewRound = await waitForCondition(() => receivedEvents.find((entry) => entry.type === AiSessionUnreadEventType.Updated && entry.payload.sessionUpdatedAt === "2026-07-25T01:00:02.000Z" && !entry.payload.unread), "new AI session round clears unread");
+  assert.equal(clearedForNewRound.payload.unread, false);
+  sendAiSessionStatus("failed", 5, "2026-07-25T01:00:03.000Z");
+  await waitForCondition(() => receivedEvents.find((entry) => entry.type === AiSessionUnreadEventType.Updated && entry.payload.sessionUpdatedAt === "2026-07-25T01:00:03.000Z" && entry.payload.unread), "failed AI session unread event");
+  const read = await json(controlPlane, "POST", "/api/controlled-instances/inst_direct_events/ai-sessions/ai_1/read", {
+    sessionUpdatedAt: "2026-07-25T01:00:03.000Z",
+  });
+  assert.equal(read.statusCode, 200);
+  assert.equal(read.body.data.unread, false);
+  await waitForCondition(() => receivedEvents.find((entry) => entry.type === AiSessionUnreadEventType.Updated && entry.payload.updatedAt === read.body.data.updatedAt && !entry.payload.unread), "AI session read event");
 
   const delta = await waitForCondition(async () => {
     const response = await json(controlPlane, "GET", "/api/ai-sessions?instanceId=inst_direct_events&streamId=ai_direct_stream&sinceRevision=0");
@@ -2059,11 +2179,11 @@ test("control plane subscribes to direct node agent websocket events", async (t)
   assert.equal(delta.statusCode, 200);
   assert.equal(delta.body.data.instanceId, "inst_direct_events");
   assert.equal(delta.body.data.syncRequired, false);
-  assert.equal(delta.body.data.events.length, 1);
+  assert.equal(delta.body.data.events.length, 5);
   assert.equal(delta.body.data.events[0].type, AiSessionEventType.Snapshot);
   assert.equal(delta.body.data.events[0].payload.snapshot.sessions[0].id, "ai_1");
 
-  const currentDelta = await json(controlPlane, "GET", `/api/ai-sessions?instanceId=inst_direct_events&streamId=ai_direct_stream&sinceRevision=${event.payload.meta.revision}`);
+  const currentDelta = await json(controlPlane, "GET", "/api/ai-sessions?instanceId=inst_direct_events&streamId=ai_direct_stream&sinceRevision=5");
   assert.equal(currentDelta.statusCode, 200);
   assert.equal(currentDelta.body.data.syncRequired, false);
   assert.deepEqual(currentDelta.body.data.events, []);
@@ -2867,6 +2987,7 @@ test("node agent runs local docker behind node-local target and auto-imports age
     dataDir: tempDataDir("node-agent-local-endpoint"),
     logger: false,
     token: "agent-secret",
+    platform: "linux",
     port: 18091,
     fetchImpl: async (url, init = {}) => {
       fetchCalls.push({ url: String(url), method: init.method || "GET" });
@@ -2903,6 +3024,7 @@ test("node agent runs local docker behind node-local target and auto-imports age
   });
   assert.equal(health.statusCode, 200);
   assert.equal(health.json().data.role, "node-agent");
+  assert.equal(health.json().data.platform, "linux");
   assert.equal(health.json().data.protocolVersion, CONTROL_PLANE_PROTOCOL_VERSION);
   assert.equal(health.json().data.build.component, "node-agent");
   assert.equal(health.json().data.build.protocolVersion, CONTROL_PLANE_PROTOCOL_VERSION);
@@ -3679,6 +3801,7 @@ test("control plane creates remote direct http nodes with node-agent join tokens
     nodeId: "node_joined",
     token: "agent-secret",
     port,
+    platform: "darwin",
   });
   await nodeAgent.listen({ host: "127.0.0.1", port });
   t.after(() => nodeAgent.close());
@@ -3707,6 +3830,7 @@ test("control plane creates remote direct http nodes with node-agent join tokens
   });
   assert.equal(created.statusCode, 201, JSON.stringify(created.body));
   assert.equal(created.body.data.id, "node_joined");
+  assert.equal(created.body.data.capabilities.agent.platform, "darwin");
   assert.equal(created.body.data.auth.mode, "paired-hmac");
   assert.ok(created.body.data.auth.keyId);
   assert.equal(created.body.data.auth.secret, undefined);
@@ -4101,11 +4225,12 @@ test("node agent only accepts local static key from loopback clients", async (t)
   assert.equal(remote.json().error.code, "NODE_AGENT_LOCAL_TOKEN_REQUIRES_LOOPBACK");
 });
 
-test("node agent keeps localhost runtime manual and creates local instances without images", async (t) => {
+test("node agent provisions one built-in local runtime and creates local instances without images", async (t) => {
   const app = await createNodeAgentApp({
     dataDir: tempDataDir("node-agent-localhost-runtime"),
     logger: false,
     token: "agent-secret",
+    platform: "linux",
     dockerCommandRunner: async (command) => {
       if (command === "codex") {
         return { stdout: "codex 1.2.3", stderr: "" };
@@ -4121,22 +4246,26 @@ test("node agent keeps localhost runtime manual and creates local instances with
     headers: { authorization: "Bearer agent-secret" },
   });
   assert.equal(initialRuntimes.statusCode, 200);
-  assert.deepEqual(initialRuntimes.json().data.map((runtime) => runtime.id), ["runtime_local_docker"]);
+  assert.deepEqual(initialRuntimes.json().data.map((runtime) => runtime.id), ["runtime_local_docker", "runtime_local_host"]);
+  const localRuntime = initialRuntimes.json().data.find((runtime) => runtime.id === "runtime_local_host");
+  assert.equal(localRuntime.name, "Local Runtime");
+  assert.equal(localRuntime.type, "local");
+  assert.equal(localRuntime.capabilities.requiresImage, false);
+  assert.equal(localRuntime.accessStrategy, "node-proxy");
+  assert.equal(localRuntime.labels["task-handoff.node-agent.builtin"], "true");
 
-  const createdRuntime = await app.inject({
+  const manualRuntime = await app.inject({
     method: "POST",
     url: "/api/node-agent/runtimes",
     headers: { authorization: "Bearer agent-secret" },
     payload: {
-      id: "runtime_local_host",
-      name: "Localhost",
+      id: "runtime_manual_local",
+      name: "Manual Local Runtime",
       type: "local",
     },
   });
-  assert.equal(createdRuntime.statusCode, 201);
-  assert.equal(createdRuntime.json().data.type, "local");
-  assert.equal(createdRuntime.json().data.capabilities.requiresImage, false);
-  assert.equal(createdRuntime.json().data.accessStrategy, "node-proxy");
+  assert.equal(manualRuntime.statusCode, 409);
+  assert.equal(manualRuntime.json().error.code, "LOCAL_RUNTIME_BUILTIN");
 
   const checkedRuntime = await app.inject({
     method: "POST",
@@ -4191,42 +4320,132 @@ test("node agent keeps localhost runtime manual and creates local instances with
   assert.equal(duplicateInstance.statusCode, 409);
   assert.equal(duplicateInstance.json().error.code, "LOCAL_RUNTIME_INSTANCE_EXISTS");
 
-  const secondRuntime = await app.inject({
-    method: "POST",
-    url: "/api/node-agent/runtimes",
-    headers: { authorization: "Bearer agent-secret" },
-    payload: {
-      id: "runtime_local_host_2",
-      name: "Localhost 2",
-      type: "local",
-    },
-  });
-  assert.equal(secondRuntime.statusCode, 201);
-
-  const duplicateAcrossLocalRuntimes = await app.inject({
-    method: "POST",
-    url: "/api/node-agent/instances",
-    headers: { authorization: "Bearer agent-secret" },
-    payload: {
-      id: "inst_local_duplicate_2",
-      name: "second local runtime duplicate",
-      runtimeId: "runtime_local_host_2",
-      source: {
-        type: "local-folder",
-        path: "/tmp/task-handoff-localhost-workspace-3",
-      },
-    },
-  });
-  assert.equal(duplicateAcrossLocalRuntimes.statusCode, 409);
-  assert.equal(duplicateAcrossLocalRuntimes.json().error.code, "LOCAL_RUNTIME_INSTANCE_EXISTS");
-
   const deleteRuntime = await app.inject({
     method: "DELETE",
     url: "/api/node-agent/runtimes/runtime_local_host",
     headers: { authorization: "Bearer agent-secret" },
   });
-  assert.equal(deleteRuntime.statusCode, 409);
-  assert.equal(deleteRuntime.json().error.code, "NODE_RUNTIME_IN_USE");
+  assert.equal(deleteRuntime.statusCode, 400);
+  assert.equal(deleteRuntime.json().error.code, "NODE_RUNTIME_BUILTIN");
+});
+
+test("node agent omits local runtime on Windows and rejects manual creation", async (t) => {
+  const app = await createNodeAgentApp({
+    dataDir: tempDataDir("node-agent-windows-local-runtime"),
+    logger: false,
+    token: "agent-secret",
+    platform: "win32",
+  });
+  t.after(() => app.close());
+
+  const runtimes = await app.inject({
+    method: "GET",
+    url: "/api/node-agent/runtimes",
+    headers: { authorization: "Bearer agent-secret" },
+  });
+  assert.deepEqual(runtimes.json().data.map((runtime) => runtime.id), ["runtime_local_docker"]);
+
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/runtimes",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: { id: "runtime_windows_local", name: "Local Runtime", type: "local" },
+  });
+  assert.equal(created.statusCode, 400);
+  assert.equal(created.json().error.code, "LOCAL_RUNTIME_UNSUPPORTED");
+});
+
+test("node agent reserves the built-in runtime marker", async (t) => {
+  const app = await createNodeAgentApp({
+    dataDir: tempDataDir("node-agent-reserved-runtime-label"),
+    logger: false,
+    token: "agent-secret",
+    platform: "linux",
+  });
+  t.after(() => app.close());
+
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/runtimes",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: "runtime_user_docker",
+      name: "User Docker",
+      type: "docker",
+      labels: { "task-handoff.node-agent.builtin": "true", owner: "user" },
+    },
+  });
+  assert.equal(created.statusCode, 201);
+  assert.deepEqual(created.json().data.labels, { owner: "user" });
+
+  const updated = await app.inject({
+    method: "PATCH",
+    url: "/api/node-agent/runtimes/runtime_user_docker",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: { labels: { "task-handoff.node-agent.builtin": "true", owner: "updated" } },
+  });
+  assert.equal(updated.statusCode, 200);
+  assert.deepEqual(updated.json().data.labels, { owner: "updated" });
+
+  const deleted = await app.inject({
+    method: "DELETE",
+    url: "/api/node-agent/runtimes/runtime_user_docker",
+    headers: { authorization: "Bearer agent-secret" },
+  });
+  assert.equal(deleted.statusCode, 200);
+});
+
+test("node agent checks the real Docker daemon and persists its current status", async (t) => {
+  const calls = [];
+  let daemonError;
+  const app = await createNodeAgentApp({
+    dataDir: tempDataDir("node-agent-docker-runtime-check"),
+    logger: false,
+    token: "agent-secret",
+    platform: "linux",
+    dockerCommandRunner: async (command, args, options) => {
+      calls.push({ command, args, options });
+      if (daemonError) throw daemonError;
+      return { stdout: "27.5.1", stderr: "" };
+    },
+  });
+  t.after(() => app.close());
+
+  const online = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/runtimes/runtime_local_docker/check",
+    headers: { authorization: "Bearer agent-secret" },
+  });
+  assert.equal(online.statusCode, 200);
+  assert.equal(online.json().data.status, "online");
+  assert.deepEqual(online.json().data.capabilities.daemon, { status: "online", hostPlatform: "linux", serverVersion: "27.5.1" });
+  assert.deepEqual(calls, [{
+    command: "docker",
+    args: ["version", "--format", "{{.Server.Version}}"],
+    options: { timeoutMs: 5_000 },
+  }]);
+
+  daemonError = new Error("Cannot connect to the Docker daemon");
+  const offline = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/runtimes/runtime_local_docker/check",
+    headers: { authorization: "Bearer agent-secret" },
+  });
+  assert.equal(offline.statusCode, 200);
+  assert.equal(offline.json().data.status, "offline");
+  assert.deepEqual(offline.json().data.capabilities.daemon, {
+    status: "offline",
+    hostPlatform: "linux",
+    error: "Cannot connect to the Docker daemon",
+  });
+
+  const runtimes = await app.inject({
+    method: "GET",
+    url: "/api/node-agent/runtimes",
+    headers: { authorization: "Bearer agent-secret" },
+  });
+  assert.equal(runtimes.statusCode, 200);
+  assert.equal(runtimes.json().data.find((runtime) => runtime.id === "runtime_local_docker").status, "offline");
 });
 
 test("node agent rejects unknown management request fields", async (t) => {
@@ -4244,7 +4463,7 @@ test("node agent rejects unknown management request fields", async (t) => {
     payload: {
       id: "runtime_unknown_fields",
       name: "Unknown fields runtime",
-      type: "local",
+      type: "docker",
       defaultRuntimeTargetId: "ignored",
     },
   });
@@ -4257,7 +4476,7 @@ test("node agent rejects unknown management request fields", async (t) => {
     payload: {
       id: "runtime_unknown_fields",
       name: "Unknown fields runtime",
-      type: "local",
+      type: "docker",
     },
   });
   assert.equal(cleanRuntime.statusCode, 201);
@@ -4353,18 +4572,6 @@ test("node agent starts localhost runtime as a host controlled-instance process"
     await app.close();
   });
   await app.listen({ host, port });
-
-  const runtime = await app.inject({
-    method: "POST",
-    url: "/api/node-agent/runtimes",
-    headers: { authorization: "Bearer agent-secret" },
-    payload: {
-      id: "runtime_local_host",
-      name: "Localhost",
-      type: "local",
-    },
-  });
-  assert.equal(runtime.statusCode, 201);
 
   const created = await app.inject({
     method: "POST",
@@ -4490,18 +4697,12 @@ test("localhost process spawn failures fail the instance without crashing node a
 
   await app.inject({
     method: "POST",
-    url: "/api/node-agent/runtimes",
-    headers: { authorization: "Bearer agent-secret" },
-    payload: { id: "runtime_local_spawn_failure", name: "Localhost", type: "local" },
-  });
-  await app.inject({
-    method: "POST",
     url: "/api/node-agent/instances",
     headers: { authorization: "Bearer agent-secret" },
     payload: {
       id: "inst_local_spawn_failure",
       name: "local spawn failure",
-      runtimeId: "runtime_local_spawn_failure",
+      runtimeId: "runtime_local_host",
       source: { type: "local-folder", path: dataDir },
     },
   });
@@ -4514,6 +4715,17 @@ test("localhost process spawn failures fail the instance without crashing node a
   });
   assert.equal(started.statusCode, 500);
   assert.equal(started.json().error.code, "LOCAL_INSTANCE_PROCESS_SPAWN_FAILED");
+
+  const failedInstance = await app.inject({
+    method: "GET",
+    url: "/api/node-agent/instances",
+    headers: { authorization: "Bearer agent-secret" },
+  });
+  assert.equal(failedInstance.statusCode, 200);
+  const failed = failedInstance.json().data.find((instance) => instance.id === "inst_local_spawn_failure");
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.health, "failed");
+  assert.equal(failed.workspace.error, started.json().error.message);
 
   const health = await app.inject({
     method: "GET",
@@ -4568,18 +4780,6 @@ test("node agent shutdown stops localhost processes while preserving active rest
     }
   });
   await app.listen({ host, port });
-
-  const runtime = await app.inject({
-    method: "POST",
-    url: "/api/node-agent/runtimes",
-    headers: { authorization: "Bearer agent-secret" },
-    payload: {
-      id: "runtime_local_host",
-      name: "Localhost",
-      type: "local",
-    },
-  });
-  assert.equal(runtime.statusCode, 201);
 
   const localCreated = await app.inject({
     method: "POST",
@@ -4701,18 +4901,6 @@ test("node agent restores localhost runtime processes after graceful shutdown", 
     await app.close();
   });
   await app.listen({ host, port });
-
-  const runtime = await app.inject({
-    method: "POST",
-    url: "/api/node-agent/runtimes",
-    headers: { authorization: "Bearer agent-secret" },
-    payload: {
-      id: "runtime_local_host",
-      name: "Localhost",
-      type: "local",
-    },
-  });
-  assert.equal(runtime.statusCode, 201);
 
   const created = await app.inject({
     method: "POST",
@@ -4840,18 +5028,6 @@ test("node agent restores active localhost runtime processes after unclean shutd
   });
   await app.listen({ host, port });
   await app.nodeAgentRestoreLocalInstances();
-
-  const runtime = await app.inject({
-    method: "POST",
-    url: "/api/node-agent/runtimes",
-    headers: { authorization: "Bearer agent-secret" },
-    payload: {
-      id: "runtime_local_host",
-      name: "Localhost",
-      type: "local",
-    },
-  });
-  assert.equal(runtime.statusCode, 201);
 
   const created = await app.inject({
     method: "POST",
@@ -5639,9 +5815,30 @@ test("control plane checks node agent runtime targets and lists their images", a
   ]);
 });
 
-test("control plane proxies manual localhost runtimes and creates local instances without images", async (t) => {
+test("control plane consumes the built-in local runtime and creates local instances without images", async (t) => {
+  const timestamp = new Date().toISOString();
   const mock = createMockNodeAgentFetch({
     nodeId: "node_agent",
+    runtimes: [{
+      id: "runtime_local_host",
+      nodeId: "node_agent",
+      name: "Local Runtime",
+      type: "local",
+      status: "unknown",
+      accessStrategy: "node-proxy",
+      capabilities: {
+        requiresImage: false,
+        supportsControlledInstanceApi: true,
+        supportsContainerLifecycle: false,
+        supportsAppSessions: true,
+        supportsHostSessions: true,
+        artifactKind: "none",
+        isolation: "none",
+      },
+      labels: { "task-handoff.node-agent.builtin": "true" },
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }],
   });
   const app = await createControlPlaneApp({
     dataDir: tempDataDir("control-plane-localhost-runtime"),
@@ -5666,14 +5863,10 @@ test("control plane proxies manual localhost runtimes and creates local instance
   });
   assert.equal(node.statusCode, 201);
 
-  const runtime = await json(app, "POST", "/api/nodes/node_agent/runtimes", {
-    id: "runtime_local_host",
-    name: "Localhost",
-    type: "local",
-  });
-  assert.equal(runtime.statusCode, 201);
-  assert.equal(runtime.body.data.type, "local");
-  assert.equal(runtime.body.data.capabilities.requiresImage, false);
+  const runtimes = await json(app, "GET", "/api/nodes/node_agent/runtimes");
+  assert.equal(runtimes.statusCode, 200);
+  assert.equal(runtimes.body.data[0].type, "local");
+  assert.equal(runtimes.body.data[0].capabilities.requiresImage, false);
 
   const checked = await json(app, "POST", "/api/nodes/node_agent/runtimes/runtime_local_host/check");
   assert.equal(checked.statusCode, 200);
@@ -5683,6 +5876,7 @@ test("control plane proxies manual localhost runtimes and creates local instance
     name: "Local Workspace",
     nodeId: "node_agent",
     runtimeId: "runtime_local_host",
+    start: true,
     source: {
       type: "local-folder",
       path: "/tmp/local-workspace",
@@ -5694,6 +5888,8 @@ test("control plane proxies manual localhost runtimes and creates local instance
   });
   assert.equal(instance.statusCode, 201);
   assert.equal(instance.body.data.imageId, undefined);
+  assert.equal(instance.body.data.status, "registering");
+  assert.deepEqual(instance.body.data.startOutcome, { status: "started" });
 
   const createRequest = mock.requests.find((request) => request.path === "/instances" && request.method === "POST");
   assert.ok(createRequest);
@@ -5701,6 +5897,63 @@ test("control plane proxies manual localhost runtimes and creates local instance
   assert.equal(createRequest.body.image, undefined);
   assert.equal(createRequest.body.runtimeId, "runtime_local_host");
   assert.equal(createRequest.body.source.path, "/tmp/local-workspace");
+  const assignmentRequestIndex = mock.requests.findIndex((request) => request.path === `/instances/${instance.body.data.id}/model-assignment`);
+  const startRequestIndex = mock.requests.findIndex((request) => request.path === `/instances/${instance.body.data.id}/start`);
+  assert.ok(assignmentRequestIndex >= 0);
+  assert.ok(startRequestIndex > assignmentRequestIndex);
+});
+
+test("creating with start returns the persisted instance when start fails", async (t) => {
+  const timestamp = new Date().toISOString();
+  const mock = createMockNodeAgentFetch({
+    nodeId: "node_start_failure",
+    startError: { status: 503, code: "LOCAL_INSTANCE_PROCESS_SPAWN_FAILED", message: "Local process could not be started." },
+    runtimes: [{
+      id: "runtime_local_host",
+      nodeId: "node_start_failure",
+      name: "Local Runtime",
+      type: "local",
+      status: "online",
+      accessStrategy: "node-proxy",
+      capabilities: { requiresImage: false, supportsControlledInstanceApi: true, supportsHostSessions: true, artifactKind: "none", isolation: "none" },
+      labels: { "task-handoff.node-agent.builtin": "true" },
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }],
+  });
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-create-start-failure"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: { fetchImpl: mock.fetchImpl },
+  });
+  t.after(() => app.close());
+
+  await json(app, "POST", "/api/nodes", {
+    id: "node_start_failure",
+    name: "Start Failure Node",
+    connectionMode: "direct-http",
+    endpoint: "http://agent.example:8091",
+    auth: { mode: "paired-hmac", keyId: "key_start_failure", secret: "agent-secret" },
+  });
+  const created = await json(app, "POST", "/api/controlled-instances", {
+    name: "Created Before Start Failure",
+    nodeId: "node_start_failure",
+    runtimeId: "runtime_local_host",
+    start: true,
+    source: { type: "local-folder", path: "/tmp/start-failure-workspace", ownerNodeId: "node_start_failure" },
+    sourceSnapshot: { name: "start-failure-workspace" },
+  });
+
+  assert.equal(created.statusCode, 201);
+  assert.equal(created.body.data.status, "failed");
+  assert.equal(created.body.data.workspace.error, "Local process could not be started.");
+  assert.deepEqual(created.body.data.startOutcome, {
+    status: "failed",
+    error: { code: "LOCAL_INSTANCE_PROCESS_SPAWN_FAILED", message: "Local process could not be started." },
+  });
+  const instances = await json(app, "GET", "/api/controlled-instances");
+  assert.equal(instances.body.data.find((instance) => instance.id === created.body.data.id)?.status, "failed");
 });
 
 test("control plane accepts node agents with incompatible protocol versions and reports a warning", async (t) => {
@@ -9437,7 +9690,7 @@ test("control plane telegram bridge appends downloaded image paths to messages",
   assert.equal(receivedMessages[0].message.attachments[0].kind, "image");
   assert.equal(receivedMessages[0].message.attachments[0].mime, "image/jpeg");
   assert.equal(receivedMessages[0].message.attachments[0].size, 11);
-  assert.equal(receivedMessages[0].message.attachments[0].data, Buffer.from("image-bytes").toString("base64"));
+  assert.equal(receivedMessages[0].message.attachments[0].source.data, Buffer.from("image-bytes").toString("base64"));
   assert.match(receivedMessages[0].message.attachments[0].name, /^telegram-/);
   assert.ok(calls.some((call) => call.url.includes("getFile")));
   assert.ok(calls.some((call) => call.url.includes("/file/bottelegram-token/photos/large.jpg")));
@@ -9588,7 +9841,7 @@ test("control plane telegram bridge auto begins collection for a single image wi
   assert.equal(receivedMessages[0].message.attachments[0].kind, "image");
   assert.equal(receivedMessages[0].message.attachments[0].mime, "image/jpeg");
   assert.equal(receivedMessages[0].message.attachments[0].size, 11);
-  assert.equal(receivedMessages[0].message.attachments[0].data, Buffer.from("image-bytes").toString("base64"));
+  assert.equal(receivedMessages[0].message.attachments[0].source.data, Buffer.from("image-bytes").toString("base64"));
 });
 
 test("control plane telegram bridge aggregates adjacent messages and explicit begin end batches", async () => {

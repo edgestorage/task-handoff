@@ -180,7 +180,6 @@
           :prompt-count="promptCount(selectedCard.session)"
           :prompt-index="promptIndexFor(selectedCard)"
           @next-prompt="nextPrompt(selectedCard)"
-          @add-context="openSelectedAiSessionApp"
           @open-ai-session-app="(instance, session) => emit('openAiSessionApp', instance, session)"
           @previous-prompt="previousPrompt(selectedCard)"
           @remove-queued-message="removeSelectedQueuedMessage"
@@ -204,12 +203,13 @@ import { computed, ref, watch } from "vue";
 import { useEventListener } from "@vueuse/core";
 import { Columns3, LayoutGrid, Search, SlidersHorizontal } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
-import { interruptAiSession, removeAiSessionQueuedMessage, resolveAiSessionApproval, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, stopAppSession, uploadAiSessionAttachment, useControlPlaneSettingsQuery } from "../../../api/queries";
+import { interruptAiSession, markAiSessionRead, removeAiSessionQueuedMessage, resolveAiSessionApproval, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, stopAppSession, uploadAiSessionAttachment, useControlPlaneSettingsQuery } from "../../../api/queries";
 import { executeAiSessionCommand } from "../../../api/ai-session-commands";
-import type { AiSessionCommandInput } from "@task-handoff/protocol/ai-sessions";
+import type { AiSessionCommandInput, AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions } from "../../../api/types";
 import type { AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
 import { referencesForBindings, type AiSessionMentionBinding } from "../../../components/ai-session/mentions";
+import { desktopRuntimePathAccess } from "../../../components/ai-session/useAiSessionMentions";
 import { Button } from "../../../components/ui/button";
 import {
   DropdownMenu,
@@ -289,7 +289,14 @@ const commandTrigger = computed(() => controlPlaneSettings.data.value?.commandTr
 const mentionContext = computed(() => {
   const card = selectedCard.value;
   if (!card?.session.cwd) return undefined;
-  return { instanceId: card.instance.id, sessionId: card.session.id, provider: card.session.agent, cwd: card.session.cwd };
+  return {
+    instanceId: card.instance.id,
+    sessionId: card.session.id,
+    provider: card.session.agent,
+    cwd: card.session.cwd,
+    runtimeType: card.instance.runtime?.type,
+    runtimePathAccess: desktopRuntimePathAccess(card.instance),
+  };
 });
 const {
   boundTriggers,
@@ -662,30 +669,30 @@ async function refreshBoard() {
   ]);
 }
 
-async function runSelectedSessionAction() {
+async function runSelectedSessionAction(permissionMode?: AiSessionPermissionMode) {
   const card = selectedCard.value;
   if (!card || aiSessionActionBusy.value || (!messageDraft.value.trim() && !messageAttachments.value.length && !canInterrupt(card.session))) {
     return;
   }
   if (messageDraft.value.trim() || messageAttachments.value.length) {
-    await sendSelectedSessionMessage();
+    await sendSelectedSessionMessage(permissionMode);
     return;
   }
   await interruptSelectedSession();
 }
 
 async function uploadMessageAttachments(instanceId: string, sessionId: string) {
-  return Promise.all(messageAttachments.value.map((attachment) => uploadAiSessionAttachment({
-    instanceId,
-    sessionId,
-    kind: "image",
-    name: attachment.name,
-    mime: attachment.mime,
-    data: attachment.dataUrl,
-  })));
+  return Promise.all(messageAttachments.value.map(async (attachment) => {
+    if (attachment.source.type === "runtime-path") {
+      return { id: attachment.id, kind: attachment.kind, name: attachment.name, mime: attachment.mime, size: attachment.size, source: attachment.source };
+    }
+    if (!attachment.dataUrl) throw new Error(`Attachment content is unavailable: ${attachment.name}`);
+    const uploaded = await uploadAiSessionAttachment({ instanceId, sessionId, kind: attachment.kind, name: attachment.name, mime: attachment.mime, data: attachment.dataUrl });
+    return { id: uploaded.id, kind: uploaded.kind, source: { type: "upload-ref" as const } };
+  }));
 }
 
-async function sendSelectedSessionMessage() {
+async function sendSelectedSessionMessage(permissionMode?: AiSessionPermissionMode) {
   const card = selectedCard.value;
   const message = messageDraft.value.trim();
   if (!card || (!message && !messageAttachments.value.length) || aiSessionActionBusy.value) {
@@ -694,7 +701,7 @@ async function sendSelectedSessionMessage() {
   aiSessionActionBusy.value = true;
   try {
     const attachments = await uploadMessageAttachments(card.instance.id, card.session.id);
-    await sendAiSessionMessage(card.instance.id, card.session.id, message || "请查看附件图片。", undefined, attachments.map((attachment) => ({ id: attachment.id, kind: attachment.kind })), referencesForBindings(messageDraft.value, messageMentionBindings.value));
+    await sendAiSessionMessage(card.instance.id, card.session.id, message || "请查看附件。", undefined, attachments, referencesForBindings(messageDraft.value, messageMentionBindings.value), permissionMode);
     clearAiSessionDraft(card.session.id);
     messageDraft.value = "";
     messageMentionBindings.value = [];
@@ -734,7 +741,7 @@ async function steerMessageDraft() {
   aiSessionActionBusy.value = true;
   try {
     const attachments = await uploadMessageAttachments(card.instance.id, card.session.id);
-    await sendAiSessionMessage(card.instance.id, card.session.id, message || "请查看附件图片。", "steer", attachments.map((attachment) => ({ id: attachment.id, kind: attachment.kind })), referencesForBindings(messageDraft.value, messageMentionBindings.value));
+    await sendAiSessionMessage(card.instance.id, card.session.id, message || "请查看附件。", "steer", attachments, referencesForBindings(messageDraft.value, messageMentionBindings.value));
     clearAiSessionDraft(card.session.id);
     messageDraft.value = "";
     messageMentionBindings.value = [];
@@ -858,6 +865,25 @@ watch(() => selectedCard.value?.session.id, (sessionId) => {
   messageDraft.value = draft.value;
   messageMentionBindings.value = draft.bindings;
 }, { immediate: true });
+
+watch(() => ({
+  key: selectedCard.value?.key,
+  unread: selectedCard.value?.session.unread,
+  updatedAt: selectedCard.value?.session.updatedAt,
+}), (current, previous) => {
+  const card = selectedCard.value;
+  if (!card || detailCollapsed.value || !current.unread) return;
+  if (current.key !== previous?.key || !previous.unread || current.updatedAt !== previous.updatedAt) {
+    void markAiSessionRead(card.instance.id, card.session.id, card.session.updatedAt).catch(() => undefined);
+  }
+});
+
+watch(detailCollapsed, (collapsed, previous) => {
+  const card = selectedCard.value;
+  if (previous && !collapsed && card?.session.unread) {
+    void markAiSessionRead(card.instance.id, card.session.id, card.session.updatedAt).catch(() => undefined);
+  }
+});
 
 watch([() => selectedCard.value?.session.id, messageDraft, messageMentionBindings], ([sessionId, draft, bindings]) => {
   if (sessionId) {

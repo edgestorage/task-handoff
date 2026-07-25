@@ -19,7 +19,7 @@ test("repository changes review opens as an independent reusable session tab", a
   assert.match(environment, /page: "changes-review"/);
   assert.match(environment, /runPrimaryAction[\s\S]*openChangesReview\(\)/);
   assert.match(sessions, /repository-changes:\$\{target\.sessionKind\}:\$\{target\.sessionId\}/);
-  assert.match(sessions, /label: page === "changes-review" \? "Changes" : "Repository"/);
+  assert.match(sessions, /label: page === "changes-review" \? "Changes" : "File Explorer"/);
   assert.match(pane, /RepositoryChangesReviewTab[\s\S]*session\.source\?\.page === 'changes-review'/);
   assert.match(pane, /RepositoryWorkspaceTab v-else-if="session\?\.kind === 'repository'"/);
 });

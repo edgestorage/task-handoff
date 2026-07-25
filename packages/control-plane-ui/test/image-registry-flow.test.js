@@ -4,6 +4,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { canShowInstanceAction, hasInstanceStatusPage, imageProvisioningLabel, instanceStatusTitle } from "../src/apps/control-plane/useInstanceStatus.ts";
+import { dockerInstallGuidance, nodePlatform } from "../src/apps/control-plane/new-instance/dockerRuntimeGuidance.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
@@ -56,7 +57,7 @@ test("instance status page exists for every lifecycle state except running", () 
     read("src/apps/control-plane/instance-detail/SessionPreview.vue"),
     read("src/apps/control-plane/instance-detail/SessionPaneContent.vue"),
   ].join("\n");
-  assert.match(sessions, /instance\.status === "running" \? undefined/);
+  assert.match(sessions, /if \(instance\.status !== "running"\) \{[\s\S]*return \[\{[\s\S]*kind: "status"/);
   assert.match(sessions, /key: "overview"[\s\S]*kind: "status"/);
   assert.match(preview, /v-if="hasInstanceStatusPage\(instance\)"/);
   assert.doesNotMatch(preview, /v-if="instanceConnecting"/);
@@ -65,6 +66,7 @@ test("instance status page exists for every lifecycle state except running", () 
 });
 
 test("instance status page describes terminal lifecycle states", () => {
+  assert.equal(instanceStatusTitle(instance("ready", { status: "created" })), "Instance created");
   assert.equal(instanceStatusTitle(instance("ready", { status: "stopping" })), "Stopping instance");
   assert.equal(instanceStatusTitle(instance("ready", { status: "stopped" })), "Instance stopped");
   assert.equal(instanceStatusTitle(instance("failed", { status: "failed" })), "Instance failed");
@@ -76,6 +78,26 @@ test("registry profiles remain selectable for pull-required and unknown nodes", 
   assert.match(runtimeStep, /v-for="image in images"/);
   assert.match(runtimeStep, /status === "available" \? "Available" : status === "pull-required" \? "Will be pulled" : "Availability unknown"/);
   assert.doesNotMatch(runtimeStep, /:disabled="[^\"]*availability/);
+});
+
+test("Docker runtime creation guidance follows the selected node platform", () => {
+  assert.equal(nodePlatform({ capabilities: { agent: { platform: "darwin" } } }), "darwin");
+  assert.equal(nodePlatform({ capabilities: {} }), "unknown");
+  assert.deepEqual(dockerInstallGuidance("darwin"), {
+    label: "Install OrbStack",
+    message: "Install and start OrbStack on the selected macOS node, then retry the check.",
+    url: "https://orbstack.dev/download",
+  });
+  assert.match(dockerInstallGuidance("win32").url, /docker\.com\/desktop\/setup\/install\/windows-install/);
+  assert.match(dockerInstallGuidance("linux").url, /docker\.com\/engine\/install/);
+
+  const modal = read("src/apps/control-plane/NewInstanceModal.vue");
+  const runtimeStep = read("src/apps/control-plane/new-instance/RuntimeStep.vue");
+  assert.match(modal, /checkNodeRuntime/);
+  assert.match(modal, /Docker must be available on the selected node before creating an instance/);
+  assert.match(modal, /created\.startOutcome\.status === "failed"/);
+  assert.match(modal, /Instance created, but failed to start/);
+  assert.match(runtimeStep, /Retry check/);
 });
 
 test("image settings use registry creation and server-owned deletion conflicts", () => {

@@ -4,13 +4,19 @@ import type { CodexApprovalRequest, CodexThread, CodexUserInput, JsonValue } fro
 
 type CodexApprovalDecision = AiSessionApprovalInput["decision"];
 
+export type CodexTurnPermissionOverrides = {
+  approvalPolicy: "on-request" | "never";
+  approvalsReviewer: "user" | "auto_review";
+  permissions: ":workspace" | ":danger-full-access";
+};
+
 export type CodexAppServerClientLike = EventEmitter & {
   start: () => Promise<void>;
   stop: () => void;
   listLoadedThreadIds: () => Promise<string[]>;
   readThread?: (threadId: string, options?: { includeTurns?: boolean }) => Promise<CodexThread | undefined>;
   listThreads?: () => Promise<CodexThread[]>;
-  startTurn?: (threadId: string, message: string, inputs?: CodexUserInput[]) => Promise<{ turnId?: string }>;
+  startTurn?: (threadId: string, message: string, inputs?: CodexUserInput[], permissions?: CodexTurnPermissionOverrides) => Promise<{ turnId?: string }>;
   steerTurn?: (threadId: string, turnId: string, message: string, inputs?: CodexUserInput[]) => Promise<{ turnId?: string }>;
   listSkills?: (cwd: string) => Promise<JsonValue>;
   listPlugins?: (cwd: string) => Promise<JsonValue>;

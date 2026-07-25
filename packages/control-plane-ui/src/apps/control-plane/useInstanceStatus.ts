@@ -12,7 +12,7 @@ export function isInstanceConnecting(instance: InstanceBoardItem) {
   if (instance.connectionStatus === "online") {
     return false;
   }
-  return ["created", "provisioning", "starting", "registering", "registered"].includes(instance.status) || instance.connectionStatus === "unknown";
+  return ["provisioning", "starting", "registering", "registered"].includes(instance.status);
 }
 
 export function hasInstanceStatusPage(instance: InstanceBoardItem) {
@@ -20,7 +20,7 @@ export function hasInstanceStatusPage(instance: InstanceBoardItem) {
 }
 
 export function isInstanceStatusPending(instance: InstanceBoardItem) {
-  return ["created", "provisioning", "starting", "registering", "registered", "stopping"].includes(instance.status);
+  return ["provisioning", "starting", "registering", "registered", "stopping"].includes(instance.status);
 }
 
 export function isInstanceAppReady(instance: InstanceBoardItem) {
@@ -44,6 +44,7 @@ export function canShowInstanceAction(instance: InstanceBoardItem, action: Insta
 }
 
 export function instanceStatusTitle(instance: InstanceBoardItem) {
+  if (instance.status === "created") return "Instance created";
   if (instance.status === "provisioning") return "Preparing runtime";
   if (instance.status === "starting") return "Starting container";
   if (instance.status === "registering" || instance.status === "registered") return "Connecting instance";
@@ -55,6 +56,7 @@ export function instanceStatusTitle(instance: InstanceBoardItem) {
 }
 
 export function instanceStatusDetail(instance: InstanceBoardItem) {
+  if (instance.status === "created") return "The instance is ready to start.";
   if (instance.status === "failed" && instance.imageProvisioning?.error) return instance.imageProvisioning.error;
   if (instance.status === "failed") return "The instance could not be started. Retry the failed operation or inspect its runtime.";
   if (instance.status === "stopped") return "The instance is stopped. Start it when you are ready to continue.";

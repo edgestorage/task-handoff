@@ -9,12 +9,12 @@
       v-else-if="contextQuery.data.value"
       :embedded="!dialogOpen"
       :context="contextQuery.data.value"
-      :initial-view="initialView"
       :instance-id="instanceId"
       :open="true"
       :session-id="sessionId"
       :session-kind="sessionKind"
       @open-dialog="dialogOpen = true"
+      @open-changes="$emit('openWorkspace', $event)"
       @open-tab="dialogOpen = false"
       @update:open="dialogOpen = $event"
     />
@@ -31,10 +31,10 @@ import RepositoryErrorNotice from "./RepositoryErrorNotice.vue";
 import RepositoryWorkspace from "./RepositoryWorkspace.vue";
 
 const props = defineProps<{ instanceId: string; session: SessionTab }>();
+defineEmits<{ openWorkspace: [target: { initialView: "files" | "changes"; page?: "workspace" | "changes-review"; sessionId: string; sessionKind: RepositorySessionKind }] }>();
 const dialogOpen = ref(false);
 const sessionId = computed(() => typeof props.session.source?.sessionId === "string" ? props.session.source.sessionId : "");
 const sessionKind = computed<RepositorySessionKind>(() => props.session.source?.sessionKind === "ai-session" ? "ai-session" : "app-session");
-const initialView = computed<"files" | "changes">(() => props.session.source?.initialView === "changes" ? "changes" : "files");
 const contextQuery = useRepositoryContextQuery(
   computed(() => ({ instanceId: props.instanceId, sessionId: sessionId.value, sessionKind: sessionKind.value })),
   computed(() => Boolean(props.instanceId && sessionId.value)),

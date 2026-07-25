@@ -6,6 +6,7 @@
         <span><strong>Changes</strong><small>{{ repositorySubtitle }}</small></span>
       </span>
       <span class="repository-review-summary">
+        <Button variant="ghost" size="icon" aria-label="Open File Explorer" title="File Explorer" @click="openFiles"><Files :size="14" /></Button>
         <b>{{ logicalFileCount }} file{{ logicalFileCount === 1 ? "" : "s" }}</b>
         <small>{{ summaryLabel }}</small>
         <Button variant="outline" size="sm" :disabled="loading || mutationPending" @click="refresh"><RefreshCw :class="{ spin: loading }" :size="13" /> Refresh</Button>
@@ -104,7 +105,7 @@
 
 <script setup lang="ts">
 import type { RepositoryChangeEntry, RepositoryChanges, RepositoryContext, RepositoryMutationResult, RepositorySessionKind } from "@task-handoff/protocol/repository";
-import { CheckCircle2, ChevronRight, Columns2, FileDiff, Folder, GitCompareArrows, LoaderCircle, PanelLeftOpen, RefreshCw, RotateCcw, Rows3, Search } from "@lucide/vue";
+import { CheckCircle2, ChevronRight, Columns2, FileDiff, Files, Folder, GitCompareArrows, LoaderCircle, PanelLeftOpen, RefreshCw, RotateCcw, Rows3, Search } from "@lucide/vue";
 import { useVirtualizer } from "@tanstack/vue-virtual";
 import { useMediaQuery } from "@vueuse/core";
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";

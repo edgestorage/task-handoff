@@ -50,6 +50,7 @@ import {
   type AiSessionCommandResult,
   type AiSessionDeltaResponse,
   type AiSessionMessageAttachment,
+  type AiSessionPermissionMode,
   type AiSessionHistoryList,
   type AiSessionHistoryDetail,
   type AiSessionReference,
@@ -1118,9 +1119,22 @@ export class ControlPlaneService {
       await this.nodeAgentGateway.deleteInstance(node, instance.id).catch(() => undefined);
       throw error;
     }
+    let startOutcome: { status: "not-requested" | "started" | "failed"; error?: { code: string; message: string } } = { status: "not-requested" };
+    if (parsedInput.start) {
+      try {
+        assigned = await this.nodeAgentGateway.startInstance(node, assigned.id);
+        startOutcome = { status: "started" };
+      } catch (error) {
+        startOutcome = { status: "failed", error: publicOperationError(error, "INSTANCE_START_FAILED") };
+        assigned = await this.nodeAgentGateway.listInstances(node)
+          .then((instances) => instances.find((candidate) => candidate.id === assigned.id) || assigned)
+          .catch(() => assigned);
+      }
+    }
     return {
       ...publicInstanceWithAccess(assigned),
       registrationToken: assigned.registrationToken,
+      startOutcome,
     };
   }
 
@@ -1529,10 +1543,14 @@ export class ControlPlaneService {
     return session;
   }
 
-  async sendAiSessionMessage(instanceId: string, sessionId: string, message: string, mode?: AiSessionSendMode, attachments: AiSessionMessageAttachment[] = [], references: AiSessionReference[] = []): Promise<AiSessionActionResult> {
+  async sendAiSessionMessage(instanceId: string, sessionId: string, message: string, mode?: AiSessionSendMode, attachments: AiSessionMessageAttachment[] = [], references: AiSessionReference[] = [], permissionMode?: AiSessionPermissionMode): Promise<AiSessionActionResult> {
     assertAiSessionAttachmentsWithinLimit(attachments);
     const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
-    const body = { message, ...(mode ? { mode } : {}), ...(attachments.length ? { attachments } : {}), ...(references.length ? { references } : {}) };
+    if (attachments.some((attachment) => attachment.source.type === "runtime-path")) {
+      const runtime = await this.requireNodeRuntimeOnNode(instance.nodeId, instance.runtimeId);
+      assertAiSessionRuntimePathSupport(attachments, runtime.type);
+    }
+    const body = { message, ...(mode ? { mode } : {}), ...(attachments.length ? { attachments } : {}), ...(references.length ? { references } : {}), ...(permissionMode ? { permissionMode } : {}) };
     return AiSessionActionResultSchema.parse(await this.instanceRequest(instance, `/ai-sessions/${encodeURIComponent(sessionId)}/messages`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -1937,17 +1955,32 @@ type ProxyHttpInit = Omit<RequestInit, "body"> & {
 };
 
 function assertAiSessionAttachmentsWithinLimit(attachments: AiSessionMessageAttachment[]) {
-  const totalBytes = attachments.reduce((sum, attachment) => sum + attachment.size, 0);
+  const totalBytes = attachments.reduce((sum, attachment) => sum + (attachment.source.type === "inline" ? attachment.size : 0), 0);
   if (totalBytes <= AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES) {
     return;
   }
-  const error = new Error(`Images must be ${AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES} bytes or less in total.`);
+  const error = new Error(`Inline attachments must be ${AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES} bytes or less in total.`);
   Object.assign(error, { statusCode: 400, code: "AI_SESSION_ATTACHMENTS_TOO_LARGE" });
+  throw error;
+}
+
+export function assertAiSessionRuntimePathSupport(attachments: AiSessionMessageAttachment[], runtimeType: "docker" | "kubernetes" | "local") {
+  if (runtimeType === "local" || !attachments.some((attachment) => attachment.source.type === "runtime-path")) return;
+  const error = new Error("Runtime path attachments are currently available only for Local Runtime instances.");
+  Object.assign(error, { statusCode: 400, code: "AI_SESSION_RUNTIME_PATH_UNSUPPORTED" });
   throw error;
 }
 
 function objectRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function publicOperationError(error: unknown, fallbackCode: string) {
+  const record = objectRecord(error);
+  return {
+    code: typeof record.code === "string" && record.code.trim() ? record.code.trim() : fallbackCode,
+    message: error instanceof Error && error.message.trim() ? error.message : "The operation failed.",
+  };
 }
 
 function stringValue(value: unknown) {

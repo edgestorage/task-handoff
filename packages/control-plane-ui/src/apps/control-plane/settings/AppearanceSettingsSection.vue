@@ -52,20 +52,6 @@
           <span>Dark</span>
         </Button>
       </div>
-      <div class="section-head">
-        <span>Command trigger</span>
-      </div>
-      <div class="mention-trigger-form">
-        <label>
-          <span>Character</span>
-          <ControlPlaneInput :model-value="commandTrigger" aria-label="Command trigger character" @update:model-value="emit('update:commandTrigger', $event)" />
-        </label>
-        <div class="public-url-actions">
-          <Button variant="outline" size="sm" :disabled="savingCommandTrigger || commandTrigger === '/'" @click="emit('resetCommandTrigger')">Reset</Button>
-          <Button variant="outline" size="sm" :disabled="savingCommandTrigger || Boolean(commandTriggerError)" @click="emit('saveCommandTrigger')">{{ savingCommandTrigger ? "Saving" : "Save" }}</Button>
-        </div>
-        <p v-if="commandTriggerError || commandTriggerMessage" :class="commandTriggerError || commandTriggerMessageError ? 'settings-error' : 'settings-success'">{{ commandTriggerError || commandTriggerMessage }}</p>
-      </div>
     </section>
     <section class="modal-section appearance-panel">
       <div class="section-head">
@@ -84,20 +70,27 @@
         <p v-if="publicBaseUrlMessage" class="settings-success">{{ publicBaseUrlMessage }}</p>
       </div>
     </section>
-    <section class="modal-section appearance-panel">
+    <section class="modal-section appearance-panel composer-shortcuts-panel">
       <div class="section-head">
-        <span>Mention trigger</span>
+        <span>Composer shortcuts</span>
       </div>
-      <div class="mention-trigger-form">
+      <p class="section-description">Configure the characters that open commands and context mentions in every AI composer.</p>
+      <div class="composer-shortcuts-form">
         <label>
-          <span>Character</span>
-          <ControlPlaneInput :model-value="mentionTrigger" aria-label="Mention trigger character" @update:model-value="emit('update:mentionTrigger', $event)" />
+          <span>Command trigger</span>
+          <ControlPlaneInput :model-value="commandTrigger" aria-label="Command trigger character" @update:model-value="emit('update:commandTrigger', $event)" />
+          <small v-if="commandTriggerError" class="settings-error">{{ commandTriggerError }}</small>
         </label>
-        <div class="public-url-actions">
-          <Button variant="outline" size="sm" :disabled="savingMentionTrigger || mentionTrigger === '@'" @click="emit('resetMentionTrigger')">Reset</Button>
-          <Button variant="outline" size="sm" :disabled="savingMentionTrigger || Boolean(mentionTriggerError)" @click="emit('saveMentionTrigger')">{{ savingMentionTrigger ? "Saving" : "Save" }}</Button>
+        <label>
+          <span>Mention trigger</span>
+          <ControlPlaneInput :model-value="mentionTrigger" aria-label="Mention trigger character" @update:model-value="emit('update:mentionTrigger', $event)" />
+          <small v-if="mentionTriggerError" class="settings-error">{{ mentionTriggerError }}</small>
+        </label>
+        <div class="public-url-actions composer-shortcuts-actions">
+          <Button variant="outline" size="sm" :disabled="savingTriggerSettings || triggerSettingsAtDefaults" @click="emit('resetTriggers')">Reset</Button>
+          <Button variant="outline" size="sm" :disabled="savingTriggerSettings || !triggerSettingsDirty || Boolean(commandTriggerError || mentionTriggerError)" @click="emit('saveTriggers')">{{ savingTriggerSettings ? "Saving" : "Save" }}</Button>
         </div>
-        <p v-if="mentionTriggerError || mentionTriggerMessage" :class="mentionTriggerError || mentionTriggerMessageError ? 'settings-error' : 'settings-success'">{{ mentionTriggerError || mentionTriggerMessage }}</p>
+        <p v-if="triggerSettingsMessage" :class="triggerSettingsMessageError ? 'settings-error' : 'settings-success'">{{ triggerSettingsMessage }}</p>
       </div>
     </section>
   </div>
@@ -119,13 +112,12 @@ defineProps<{
   mentionTrigger: string;
   commandTrigger: string;
   commandTriggerError?: string;
-  commandTriggerMessage?: string;
-  commandTriggerMessageError?: boolean;
-  savingCommandTrigger?: boolean;
   mentionTriggerError?: string;
-  mentionTriggerMessage?: string;
-  mentionTriggerMessageError?: boolean;
-  savingMentionTrigger?: boolean;
+  savingTriggerSettings?: boolean;
+  triggerSettingsAtDefaults: boolean;
+  triggerSettingsDirty: boolean;
+  triggerSettingsMessage?: string;
+  triggerSettingsMessageError?: boolean;
   savingPublicBaseUrl?: boolean;
   serverUpdatesAvailable: boolean;
   serverUnavailableReason: string;
@@ -143,10 +135,8 @@ const emit = defineEmits<{
   checkServerUpdate: [];
   applyServerUpdate: [];
   savePublicBaseUrl: [];
-  resetMentionTrigger: [];
-  saveMentionTrigger: [];
-  resetCommandTrigger: [];
-  saveCommandTrigger: [];
+  resetTriggers: [];
+  saveTriggers: [];
   "update:commandTrigger": [value: string];
   "update:mentionTrigger": [value: string];
   "update:publicBaseUrl": [value: string];
@@ -226,6 +216,10 @@ const emit = defineEmits<{
   align-content: start;
 }
 
+.composer-shortcuts-panel {
+  grid-column: 1 / -1;
+}
+
 .modal-section {
   display: grid;
   gap: 12px;
@@ -248,7 +242,8 @@ const emit = defineEmits<{
 }
 
 .section-head span,
-.public-url-form label span {
+.public-url-form label span,
+.composer-shortcuts-form label > span {
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 750;
@@ -268,15 +263,28 @@ const emit = defineEmits<{
 }
 
 .public-url-form,
-.mention-trigger-form {
+.composer-shortcuts-form {
   display: grid;
   gap: 10px;
 }
 
 .public-url-form label,
-.mention-trigger-form label {
+.composer-shortcuts-form label {
   display: grid;
   gap: 7px;
+}
+
+.composer-shortcuts-form {
+  grid-template-columns: repeat(2, minmax(120px, 1fr)) auto;
+  align-items: end;
+}
+
+.composer-shortcuts-form > p {
+  grid-column: 1 / -1;
+}
+
+.composer-shortcuts-actions {
+  align-self: end;
 }
 
 .public-url-actions {
@@ -296,10 +304,6 @@ const emit = defineEmits<{
   font-size: 12px;
   font-weight: 650;
   margin: 0;
-}
-
-.mention-trigger-form label {
-  max-width: 120px;
 }
 
 .settings-success {
@@ -337,6 +341,14 @@ const emit = defineEmits<{
 
   .server-update-state {
     grid-template-columns: 1fr;
+  }
+
+  .composer-shortcuts-form {
+    grid-template-columns: 1fr;
+  }
+
+  .composer-shortcuts-form > p {
+    grid-column: auto;
   }
 }
 </style>

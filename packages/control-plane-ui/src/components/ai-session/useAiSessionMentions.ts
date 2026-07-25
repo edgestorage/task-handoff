@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/vue-query";
 import { computed, onBeforeUnmount, ref, toValue, watch, type MaybeRefOrGetter } from "vue";
-import type { AiSessionMentionCandidate, AiSessionMentionCatalog, AiSessionMentionDiagnostic } from "../../api/types";
+import type { AiSessionMentionCandidate, AiSessionMentionCatalog, AiSessionMentionDiagnostic, InstanceBoardItem } from "../../api/types";
 import { getAiSessionMentionCatalog, searchAiSessionMentionFiles } from "../../api/queries";
 import { sortMentionCandidates } from "./mentions";
 
@@ -9,7 +9,17 @@ export type AiSessionMentionContext = {
   sessionId: string;
   provider: string;
   cwd: string;
+  runtimeType?: "docker" | "kubernetes" | "local";
+  runtimePathAccess?: "desktop-local";
 };
+
+const CONTROL_PLANE_LOCAL_NODE_LABEL = "task-handoff.control-plane.local";
+
+export function desktopRuntimePathAccess(instance: Pick<InstanceBoardItem, "node" | "runtime">) {
+  return instance.runtime?.type === "local" && instance.node?.labels[CONTROL_PLANE_LOCAL_NODE_LABEL] === "true"
+    ? "desktop-local" as const
+    : undefined;
+}
 
 export function useAiSessionMentions(context: MaybeRefOrGetter<AiSessionMentionContext | undefined>) {
   const queryClient = useQueryClient();

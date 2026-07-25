@@ -161,13 +161,11 @@ test("Repository workspace opens as a session tab with a resizable ScrollArea si
   assert.match(workspace, /<ScrollArea type="always" class="repository-workspace-sidebar-content">/);
   assert.match(workspace, /role="separator" aria-label="Resize repository sidebar"/);
   assert.match(workspace, /function startSidebarResize\(event: PointerEvent\)/);
-  assert.match(workspace, /Conflicts/);
-  assert.match(workspace, /Staged/);
-  assert.match(workspace, /Unstaged/);
-  assert.match(workspace, /Untracked/);
+  assert.match(workspace, />File Explorer</);
+  assert.match(workspace, /@click="openChangesReview"/);
+  assert.match(workspace, /emit\("openChanges", \{ initialView: "changes", page: "changes-review"/);
   assert.match(workspace, /<textarea[^>]*v-model="activeTab\.draft"/);
-  assert.match(workspace, /<pre>\{\{ activeTab\.content \}\}<\/pre>/);
-  assert.match(workspace, /Binary diff cannot be displayed/);
+  assert.doesNotMatch(workspace, /stageRepositoryPaths|unstageRepositoryPaths|discardRepositoryWorktree|commitRepositoryIndex/);
   assert.match(workspace, /repository-workspace-dialog[^}]*top: calc\(50% \+ 24px\)[^}]*height: min\(920px, calc\(100vh - 80px\)\)/);
   assert.match(workspace, /repository-workspace-empty[^}]*grid-row: 2/);
   assert.match(tree, /entry\.traversable/);
@@ -187,7 +185,7 @@ test("Repository workspace can move to a recoverable authenticated window", asyn
   assert.match(app, /RepositoryWorkspacePage v-if="isRepositoryWorkspaceRoute"/);
   assert.match(app, /<AuthGate v-else>/);
   assert.match(workspace, /aria-label="Open repository workspace in new window"/);
-  assert.match(workspace, /openRepositoryWorkspaceWindow\(\{ \.\.\.target\.value, view: sidebarView\.value \}\)/);
+  assert.match(workspace, /openRepositoryWorkspaceWindow\(\{ \.\.\.target\.value, view: "files" \}\)/);
   assert.match(workspace, /Unsaved drafts remain in this window/);
   assert.match(workspace, /repositoryWorkspaceChannelName/);
   assert.match(workspace, /refreshRepositoryState\(\), refreshLoadedDirectories\(\)/);
@@ -205,7 +203,6 @@ test("Repository file actions preserve drafts on stale and require an explicit c
     source("api/repository.ts"),
   ]);
 
-  assert.match(workspace, /Open working file/);
   assert.match(workspace, /New repository file/);
   assert.match(workspace, /Rename repository file/);
   assert.match(workspace, /Delete repository file\?/);
@@ -221,26 +218,21 @@ test("Repository file actions preserve drafts on stale and require an explicit c
   assert.match(repositoryApi, /deleteUrlData<RepositoryFileMutationResult>/);
 });
 
-test("Changes mutations use selected path versions, explicit discard confirmation, and the server result", async () => {
-  const [workspace, repositoryApi] = await Promise.all([
+test("Changes review owns versioned stage, unstage, and discard mutations", async () => {
+  const [review, workspace, repositoryApi] = await Promise.all([
+    source("apps/control-plane/instance-detail/RepositoryChangesReviewTab.vue"),
     source("apps/control-plane/instance-detail/RepositoryWorkspace.vue"),
     source("api/repository.ts"),
   ]);
 
-  assert.match(workspace, /expectedVersion: entry\.version/);
-  assert.match(workspace, /stageRepositoryPaths\(target\.value/);
-  assert.match(workspace, /unstageRepositoryPaths\(target\.value/);
-  assert.match(workspace, /Discard worktree changes/);
-  assert.match(workspace, /Existing staged content is retained/);
-  assert.match(workspace, /Discard all tracked changes/);
-  assert.match(workspace, /index and worktree content from HEAD/);
-  assert.match(workspace, /confirm: true/);
-  assert.match(workspace, /This does not delete untracked files or create a stash/);
-  assert.match(workspace, /This commits the current index only/);
-  assert.match(workspace, /commitRepositoryIndex\(target\.value, \{ message: commitMessage\.value, expectedSnapshotId: requireSnapshotId\(\) \}\)/);
-  assert.match(workspace, /changes\.value = result\.changes/);
-  assert.match(workspace, /queryClient\.setQueryData\(repositoryContextQueryKey\(\), result\.context\)/);
-  assert.doesNotMatch(workspace, /commitIndex[\s\S]{0,1000}stageRepositoryPaths/);
+  assert.match(review, /expectedVersion: entry\.version/);
+  assert.match(review, /stageRepositoryPaths\(target\.value/);
+  assert.match(review, /unstageRepositoryPaths\(target\.value/);
+  assert.match(review, /discardRepositoryWorktree\(target\.value/);
+  assert.match(review, /confirm: true/);
+  assert.match(review, /if \(result\.changes\) changes\.value = result\.changes/);
+  assert.match(review, /queryClient\.setQueryData\(\["repository-context"/);
+  assert.doesNotMatch(workspace, /stageRepositoryPaths|unstageRepositoryPaths|discardRepositoryWorktree|commitRepositoryIndex/);
   assert.match(repositoryApi, /"index\/stage"/);
   assert.match(repositoryApi, /"index\/unstage"/);
   assert.match(repositoryApi, /"discard\/worktree"/);
@@ -278,10 +270,11 @@ test("Repository delivery follows the server primary action and uses explicit no
 });
 
 test("Repository UI preserves edge states and structured recovery guidance", async () => {
-  const [environment, worktrees, workspace, delivery, errorNotice, errorPresentation, apiClient] = await Promise.all([
+  const [environment, worktrees, workspace, reviewCard, delivery, errorNotice, errorPresentation, apiClient] = await Promise.all([
     source("apps/control-plane/instance-detail/RepositoryEnvironment.vue"),
     source("apps/control-plane/instance-detail/RepositoryWorktreesPanel.vue"),
     source("apps/control-plane/instance-detail/RepositoryWorkspace.vue"),
+    source("apps/control-plane/instance-detail/RepositoryChangeDiffCard.vue"),
     source("apps/control-plane/instance-detail/RepositoryDeliveryDialog.vue"),
     source("apps/control-plane/instance-detail/RepositoryErrorNotice.vue"),
     source("apps/control-plane/instance-detail/repositoryErrorPresentation.ts"),
@@ -296,10 +289,9 @@ test("Repository UI preserves edge states and structured recovery guidance", asy
   assert.match(environment, /Unborn branch with no commit yet/);
   assert.match(worktrees, /session-occupied/);
   assert.match(worktrees, /Prunable worktree record/);
-  assert.match(workspace, /Resolve conflicts before commit, pull, or push/);
-  assert.match(workspace, /Binary diff cannot be displayed/);
-  assert.match(workspace, /Only the first \{\{ activeTab\.byteLimit \}\} bytes are shown/);
-  assert.match(workspace, /Inspect the complete patch in the session terminal/);
+  assert.match(reviewCard, /Binary file/);
+  assert.match(reviewCard, /This change cannot be rendered as text/);
+  assert.match(reviewCard, /Only the first \{\{ diff\.byteLimit \}\} bytes are shown/);
   assert.match(delivery, /Credentials are never entered in this UI|RepositoryErrorNotice/);
   assert.match(workspace, /repository-file-action-dialog[^}]*background: hsl\(var\(--background\)\)/);
   assert.match(delivery, /repository-delivery-dialog[^}]*background: hsl\(var\(--background\)\)/);
@@ -335,9 +327,10 @@ test("Repository navigation keeps portal, keyboard, focus, draft, path, and conf
   assert.match(workspace, /@open-auto-focus="focusWorkspace"/);
   assert.match(workspace, /DialogTitle v-if="!embedded" class="sr-only"/);
   assert.match(workspace, /DialogDescription v-if="!embedded" class="sr-only"/);
-  assert.match(workspace, /role="tablist"[\s\S]*@keydown="navigateSidebarTabs"/);
+  assert.match(workspace, /class="repository-workspace-tabs" role="tablist"[\s\S]*@keydown="navigateOpenTabs"/);
   assert.match(workspace, /\["ArrowLeft", "ArrowRight", "Home", "End"\]/);
-  assert.match(workspace, /:tabindex="sidebarView === 'files' \? 0 : -1"/);
+  assert.match(workspace, /tabindex="-1"/);
+  assert.match(workspace, /workspaceBody\.value\?\.focus\(\)/);
   assert.match(workspace, /:tabindex="activeTabId === tab\.id \? 0 : -1"/);
   assert.match(workspace, /class="repository-workspace-tab-close" :aria-label="`Close \$\{tab\.path\}`"/);
   assert.doesNotMatch(workspace, /<button[^>]*role="tab"[\s\S]{0,500}<X[^>]*role="button"/);
@@ -346,13 +339,12 @@ test("Repository navigation keeps portal, keyboard, focus, draft, path, and conf
   assert.match(repositoryApi, /encodeURIComponent\(target\.sessionId\)/);
   assert.doesNotMatch(repositoryApi, /\?path=\$\{/);
   assert.match(workspace, /const id = `file:\$\{entry\.path\}`/);
-  assert.match(workspace, /const id = `diff:\$\{entry\.scope\}:\$\{entry\.path\}`/);
+  assert.doesNotMatch(workspace, /const id = `diff:|getRepositoryDiff/);
   assert.match(workspace, /const draft = tab\.draft;[\s\S]*tab\.draft = draft/);
   assert.match(workspace, /tabs\.value\.push\(\{ \.\.\.file, id, kind: "file", draft: file\.content/);
 
   assert.match(worktrees, /workspaceSelection:[\s\S]*repositoryContextId:[\s\S]*worktreeId:/);
   assert.match(worktrees, /The current session stays in this worktree/);
   assert.match(workspace, /confirm: true/);
-  assert.match(workspace, /data-discard-cancel/);
-  assert.match(workspace, /This commits the current index only/);
+  assert.doesNotMatch(workspace, /data-discard-cancel|This commits the current index only/);
 });

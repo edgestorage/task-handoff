@@ -1,6 +1,6 @@
 import { computed, ref, watch, type Ref } from "vue";
-import type { InstanceBoardItem } from "../../../api/types";
-import { instanceDisplayName as formatInstanceDisplayName } from "../useInstanceStatus";
+import type { InstanceBoardItem } from "../../../api/types.ts";
+import { instanceDisplayName as formatInstanceDisplayName } from "../useInstanceStatus.ts";
 
 type UseWorkbenchInstancesInput = {
   instances: Ref<InstanceBoardItem[] | undefined>;
@@ -9,6 +9,7 @@ type UseWorkbenchInstancesInput = {
 export type InstanceListSortMode = "created-desc" | "name-asc" | "node-asc" | "status-asc";
 
 const GROUP_BY_NODE_STORAGE_KEY = "task-handoff.control-plane.instances-group-by-node";
+export const ACTIVE_INSTANCE_STORAGE_KEY = "task-handoff.control-plane.active-instance-id";
 
 function nodeLabel(instance: InstanceBoardItem) {
   return instance.node?.name || instance.nodeId;
@@ -18,8 +19,28 @@ function storedGroupByNode() {
   return window.localStorage?.getItem(GROUP_BY_NODE_STORAGE_KEY) !== "false";
 }
 
+function storedActiveInstanceId() {
+  try {
+    return window.localStorage?.getItem(ACTIVE_INSTANCE_STORAGE_KEY)?.trim() || "";
+  } catch {
+    return "";
+  }
+}
+
+function persistActiveInstanceId(id: string) {
+  try {
+    if (id) {
+      window.localStorage?.setItem(ACTIVE_INSTANCE_STORAGE_KEY, id);
+      return;
+    }
+    window.localStorage?.removeItem(ACTIVE_INSTANCE_STORAGE_KEY);
+  } catch {
+    // Storage can be unavailable in privacy-restricted browser contexts.
+  }
+}
+
 export function useWorkbenchInstances({ instances }: UseWorkbenchInstancesInput) {
-  const activeInstanceId = ref("");
+  const activeInstanceId = ref(storedActiveInstanceId());
   const instanceFilter = ref("");
   const instanceSortMode = ref<InstanceListSortMode>("created-desc");
   const groupInstancesByNode = ref(storedGroupByNode());
@@ -64,11 +85,13 @@ export function useWorkbenchInstances({ instances }: UseWorkbenchInstancesInput)
 
   const activeInstance = computed(() => sortedInstances.value.find((instance) => instance.id === activeInstanceId.value) || sortedInstances.value[0]);
 
+  watch(activeInstanceId, persistActiveInstanceId, { flush: "sync" });
+
   watch(
-    () => sortedInstances.value[0]?.id,
-    (id) => {
-      if ((!activeInstanceId.value || !sortedInstances.value.some((instance) => instance.id === activeInstanceId.value)) && id) {
-        activeInstanceId.value = id;
+    sortedInstances,
+    (list) => {
+      if ((!activeInstanceId.value || !list.some((instance) => instance.id === activeInstanceId.value)) && list[0]) {
+        activeInstanceId.value = list[0].id;
       }
     },
     { immediate: true },

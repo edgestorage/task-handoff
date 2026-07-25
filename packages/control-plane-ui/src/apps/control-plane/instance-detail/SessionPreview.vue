@@ -36,8 +36,9 @@
             <span>AI</span>
           </button>
           <span v-if="tabGroup.aiTab && tabGroup.appTabs.length" class="session-tab-divider" aria-hidden="true" />
-          <ScrollArea v-if="tabGroup.appTabs.length" class="session-tab-strip">
-            <div class="session-tab-strip-content" role="tablist" :aria-label="hasSessionSplit ? `${tabGroup.id} session tabs` : 'Session views'">
+          <div v-if="tabGroup.appTabs.length" class="session-tab-strip-frame">
+            <div v-session-tab-overflow class="session-tab-strip" @scroll="updateSessionTabOverflowFromEvent" @wheel="scrollSessionTabs">
+              <div class="session-tab-strip-content" role="tablist" :aria-label="hasSessionSplit ? `${tabGroup.id} session tabs` : 'Session views'">
               <ContextMenu v-for="session in tabGroup.appTabs" :key="session.key">
                 <ContextMenuTrigger as-child>
                   <span
@@ -107,9 +108,10 @@
                   </ContextMenuItem>
                 </ContextMenuContent>
               </ContextMenu>
+              </div>
             </div>
-          </ScrollArea>
-          <div class="app-launcher" :class="{ open: appLaunchMenuOpen && appLaunchMenuPane === tabGroup.id }" @click.stop>
+          </div>
+          <div v-if="!tabGroup.statusTab" class="app-launcher" :class="{ open: appLaunchMenuOpen && appLaunchMenuPane === tabGroup.id }" @click.stop>
             <DropdownMenu :open="appLaunchMenuOpen && appLaunchMenuPane === tabGroup.id" @update:open="updateAppLaunchMenuOpen(tabGroup.id, $event)">
               <DropdownMenuTrigger as-child>
                 <Button class="session-tab-add-button" variant="ghost" size="icon" :disabled="!canLaunchApp || launchingApp" :aria-expanded="appLaunchMenuOpen && appLaunchMenuPane === tabGroup.id" :aria-label="appLaunchButtonTitle" :title="appLaunchButtonTitle">
@@ -129,7 +131,7 @@
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
-          <DropdownMenu :open="sessionMenuOpen && sessionMenuPane === tabGroup.id" @update:open="updateSessionMenuOpen(tabGroup.id, $event)">
+          <DropdownMenu v-if="!tabGroup.statusTab" :open="sessionMenuOpen && sessionMenuPane === tabGroup.id" @update:open="updateSessionMenuOpen(tabGroup.id, $event)">
             <DropdownMenuTrigger as-child>
               <button type="button" class="session-tab-menu-trigger" :aria-expanded="sessionMenuOpen && sessionMenuPane === tabGroup.id" title="Sessions in this pane" aria-label="Sessions in this pane">
                 <ChevronDown :size="15" />
@@ -284,22 +286,6 @@
       <div v-if="hasSessionSplit" class="session-pane-resize-handle" role="separator" aria-label="Resize session panes" aria-orientation="vertical" :aria-valuenow="Math.round(sessionSplitRatio * 100)" tabindex="0" @pointerdown="startSplitResize" @dblclick="$emit('setSessionSplitRatio', 0.5)" @keydown.left.prevent="$emit('setSessionSplitRatio', sessionSplitRatio - 0.02)" @keydown.right.prevent="$emit('setSessionSplitRatio', sessionSplitRatio + 0.02)" />
     </div>
     <div class="session-preview-actions">
-      <Button v-if="activeOpenUrl" variant="outline" size="sm" @click="$emit('openUrl', activeOpenUrl)">
-        <ExternalLink :size="14" />
-        <span>Open</span>
-      </Button>
-      <Button v-if="activeInstanceWebUrl && activeInstanceWebUrl !== activeOpenUrl" variant="outline" size="sm" @click="$emit('openUrl', activeInstanceWebUrl)">
-        <Monitor :size="14" />
-        <span>Instance</span>
-      </Button>
-      <Button v-if="activeAttachUrl && activeAttachUrl !== activeOpenUrl && activeAttachUrl !== activeInstanceWebUrl" variant="outline" size="sm" as="a" :href="activeAttachUrl" target="_blank" rel="noreferrer">
-        <Terminal :size="14" />
-        <span>Attach</span>
-      </Button>
-      <Button variant="outline" size="sm" @click="$emit('copyRegistration', instance)">
-        <Copy :size="14" />
-        <span>{{ copiedText === instance.id ? "Copied" : "Copy ID" }}</span>
-      </Button>
       <p class="session-preview-status" aria-label="Instance status">
         <span>Health {{ instance.health }}</span>
         <span>Workspace {{ instance.workspace.status }}</span>
@@ -325,15 +311,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, type ComponentPublicInstance } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, type ComponentPublicInstance, type ObjectDirective } from "vue";
 import { useNow } from "@vueuse/core";
-import { Activity, AppWindow, Bot, Boxes, ChevronDown, Columns2, Copy, ExternalLink, Folder, FolderGit2, Maximize2, Minimize2, Monitor, PanelLeft, PanelRight, PanelRightClose, Pencil, Plus, Terminal, X } from "@lucide/vue";
+import { Activity, AppWindow, Bot, Boxes, ChevronDown, Columns2, Folder, FolderGit2, Maximize2, Minimize2, PanelLeft, PanelRight, PanelRightClose, Pencil, Plus, X } from "@lucide/vue";
 import type { RepositorySessionKind } from "@task-handoff/protocol/repository";
 import type { AiSessionSummary, InstanceBoardItem, InstanceResourceMetrics, InstanceWithAiSessions, NodeLocalFolder } from "../../../api/types";
 import { Button } from "../../../components/ui/button";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "../../../components/ui/context-menu";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
-import { ScrollArea } from "../../../components/ui/scroll-area";
 import SessionPaneContent from "./SessionPaneContent.vue";
 import AppLaunchMenuItems from "../shared/AppLaunchMenuItems.vue";
 import ProjectFolderPicker from "../shared/ProjectFolderPicker.vue";
@@ -416,6 +401,60 @@ const activeRepositorySessionId = computed(() => {
   return typeof props.activeSession.source?.id === "string" ? props.activeSession.source.id : props.activeSession.key;
 });
 const resourceMetricsDisplay = computed(() => formatResourceMetrics(props.resourceMetrics, resourceMetricsNow.value.getTime()));
+const sessionTabOverflowObservers = new WeakMap<HTMLElement, ResizeObserver>();
+
+function updateSessionTabOverflow(tabList: HTMLElement) {
+  const maxScrollLeft = Math.max(0, tabList.scrollWidth - tabList.clientWidth);
+  tabList.dataset.overflowStart = String(tabList.scrollLeft > 1);
+  tabList.dataset.overflowEnd = String(tabList.scrollLeft < maxScrollLeft - 1);
+}
+
+function updateSessionTabOverflowFromEvent(event: Event) {
+  if (event.currentTarget instanceof HTMLElement) updateSessionTabOverflow(event.currentTarget);
+}
+
+function revealSelectedSessionTab(tabList: HTMLElement) {
+  const selectedTab = tabList.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+  if (!selectedTab) return;
+  const viewportBounds = tabList.getBoundingClientRect();
+  const tabBounds = selectedTab.getBoundingClientRect();
+  let nextScrollLeft = tabList.scrollLeft;
+  if (tabBounds.left < viewportBounds.left) nextScrollLeft -= viewportBounds.left - tabBounds.left;
+  else if (tabBounds.right > viewportBounds.right) nextScrollLeft += tabBounds.right - viewportBounds.right;
+  tabList.scrollLeft = Math.max(0, Math.min(tabList.scrollWidth - tabList.clientWidth, nextScrollLeft));
+}
+
+function syncSessionTabViewport(tabList: HTMLElement) {
+  revealSelectedSessionTab(tabList);
+  updateSessionTabOverflow(tabList);
+}
+
+const vSessionTabOverflow: ObjectDirective<HTMLElement> = {
+  mounted(tabList) {
+    const observer = new ResizeObserver(() => syncSessionTabViewport(tabList));
+    observer.observe(tabList);
+    if (tabList.firstElementChild instanceof HTMLElement) observer.observe(tabList.firstElementChild);
+    sessionTabOverflowObservers.set(tabList, observer);
+    syncSessionTabViewport(tabList);
+  },
+  updated(tabList) {
+    void nextTick(() => syncSessionTabViewport(tabList));
+  },
+  unmounted(tabList) {
+    sessionTabOverflowObservers.get(tabList)?.disconnect();
+    sessionTabOverflowObservers.delete(tabList);
+  },
+};
+
+function scrollSessionTabs(event: WheelEvent) {
+  const tabList = event.currentTarget as HTMLElement | null;
+  if (!tabList || Math.abs(event.deltaX) >= Math.abs(event.deltaY) || tabList.scrollWidth <= tabList.clientWidth) return;
+  const nextScrollLeft = Math.max(0, Math.min(tabList.scrollWidth - tabList.clientWidth, tabList.scrollLeft + event.deltaY));
+  if (nextScrollLeft === tabList.scrollLeft) return;
+  event.preventDefault();
+  tabList.scrollLeft = nextScrollLeft;
+  updateSessionTabOverflow(tabList);
+}
 
 function formatResourceMetrics(metrics?: InstanceResourceMetrics, currentTime = Date.now()) {
   if (!metrics) return { state: "loading", compact: "Resources loading", title: "Waiting for the first resource sample." };

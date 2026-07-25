@@ -1,5 +1,6 @@
 import {
   BuildInfoSchema,
+  FinalComputerPlatformSchema,
   ModelConfigSchema,
   ProjectSchema,
   type ControlledInstance,
@@ -14,11 +15,13 @@ export function publicNodeAgentCapabilities(data: unknown) {
   }
   const record = data as Record<string, unknown>;
   const build = BuildInfoSchema.safeParse(record.build);
+  const platform = FinalComputerPlatformSchema.safeParse(record.platform);
   return {
     ...(typeof record.ok === "boolean" ? { ok: record.ok } : {}),
     ...(typeof record.role === "string" ? { role: record.role } : {}),
     ...(typeof record.nodeId === "string" ? { nodeId: record.nodeId } : {}),
     ...(typeof record.protocolVersion === "string" ? { protocolVersion: record.protocolVersion } : {}),
+    ...(platform.success ? { platform: platform.data } : {}),
     ...(build.success ? { build: build.data } : {}),
     ...(typeof record.serverTime === "string" ? { serverTime: record.serverTime } : {}),
   };

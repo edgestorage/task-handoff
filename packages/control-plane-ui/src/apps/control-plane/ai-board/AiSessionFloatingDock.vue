@@ -135,10 +135,11 @@
       :session-busy="sessionBusy"
       :busy="busy"
       :can-interrupt="canInterrupt"
+      :provider="card.session.agent"
+      :permission-key="card.session.id"
       @update:model-value="$emit('update:draft', $event)"
       @update:attachments="$emit('update:attachments', $event)"
       @update:mention-bindings="$emit('update:mentionBindings', $event)"
-      @add-context="$emit('addContext')"
       @run="$emit('run')"
       @steer="$emit('steer')"
       @command="$emit('command', $event)"
@@ -154,7 +155,7 @@ import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions } from
 import AiSessionComposer, { type AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
 import AiSessionResult from "../../../components/ai-session/AiSessionResult.vue";
 import type { AiSessionMentionBinding } from "../../../components/ai-session/mentions";
-import type { AiSessionCommandInput } from "@task-handoff/protocol/ai-sessions";
+import type { AiSessionCommandInput, AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionMentionContext } from "../../../components/ai-session/useAiSessionMentions";
 import AiSessionTurnNavigator from "../../../components/ai-session/AiSessionTurnNavigator.vue";
 import { ScrollArea } from "../../../components/ui/scroll-area";
@@ -186,14 +187,13 @@ const props = defineProps<{
 }>();
 
 defineEmits<{
-  addContext: [];
   nextPrompt: [];
   openAiSessionApp: [instance: InstanceWithAiSessions, session?: AiSessionSummary];
   previousPrompt: [];
   removeQueuedMessage: [queueId: string];
   resolveApproval: [decision: "allow" | "deny" | "skip"];
   retryQueuedMessage: [queueId: string];
-  run: [];
+  run: [permissionMode?: AiSessionPermissionMode];
   command: [input: AiSessionCommandInput];
   steer: [];
   steerQueuedMessage: [queueId: string];
@@ -225,6 +225,7 @@ const promptStickyPlaceholderHeight = ref(0);
 let detailScrollViewport: HTMLElement | undefined;
 let detailScrollLayoutRevision = 0;
 let detailScrollLayoutPending = false;
+let promptStickyThreshold = 0;
 let promptResizeObserver: ResizeObserver | undefined;
 let activeResize:
   | {
@@ -350,6 +351,34 @@ function togglePrompt() {
   }
 }
 
+function updatePromptStickyThreshold() {
+  if (detailScrolled.value) return;
+  const prompt = promptSectionEl.value;
+  const content = promptContentEl.value;
+  const viewport = detailScrollViewport;
+  if (!prompt || !content || !viewport) {
+    promptStickyThreshold = 0;
+    return;
+  }
+  const detail = dockRoot.value?.querySelector<HTMLElement>(".ai-board-floating-detail");
+  if (!detail) {
+    promptStickyThreshold = 0;
+    return;
+  }
+  const expandedDividerOffset = prompt.getBoundingClientRect().bottom
+    - viewport.getBoundingClientRect().top
+    + viewport.scrollTop;
+  detail.classList.add("is-scrolled");
+  const stickyHeight = prompt.getBoundingClientRect().height;
+  detail.classList.remove("is-scrolled");
+  promptStickyThreshold = Math.max(0, Math.ceil(expandedDividerOffset - stickyHeight));
+}
+
+function updatePromptLayout() {
+  updatePromptOverflow();
+  updatePromptStickyThreshold();
+}
+
 function stopObservingDetailScroll() {
   detailScrollViewport?.removeEventListener("scroll", handleDetailScroll);
   detailScrollViewport = undefined;
@@ -357,22 +386,28 @@ function stopObservingDetailScroll() {
   detailScrollLayoutPending = false;
   detailScrolled.value = false;
   promptStickyPlaceholderHeight.value = 0;
+  promptStickyThreshold = 0;
 }
 
 function observeDetailScroll() {
   stopObservingDetailScroll();
-  const viewport = dockRoot.value?.querySelector<HTMLElement>(".ai-board-floating-scroll [data-reka-scroll-area-viewport]");
+  const viewport = dockRoot.value?.querySelector<HTMLElement>(".ai-board-floating-scroll [data-task-handoff-scroll-viewport]");
   if (!viewport) return;
   detailScrollViewport = viewport;
+  updatePromptStickyThreshold();
   viewport.addEventListener("scroll", handleDetailScroll, { passive: true });
+  handleDetailScroll();
 }
 
 function handleDetailScroll() {
   if (detailScrollLayoutPending) return;
   const scrollTop = detailScrollViewport?.scrollTop || 0;
-  if (!detailScrolled.value && scrollTop > 24) {
+  if (!detailScrolled.value && promptStickyThreshold <= 0) {
+    updatePromptStickyThreshold();
+  }
+  if (!detailScrolled.value && promptStickyThreshold > 0 && scrollTop > promptStickyThreshold) {
     void enterDetailStickyLayout();
-  } else if (detailScrolled.value && scrollTop <= 24) {
+  } else if (detailScrolled.value && scrollTop <= promptStickyThreshold) {
     detailScrollLayoutRevision += 1;
     promptStickyPlaceholderHeight.value = 0;
     detailScrolled.value = false;
@@ -385,6 +420,7 @@ async function enterDetailStickyLayout() {
   const revision = ++detailScrollLayoutRevision;
   const previousScrollTop = detailScrollViewport?.scrollTop || 0;
   const expandedHeight = prompt.getBoundingClientRect().height;
+  updatePromptStickyThreshold();
   detailScrollLayoutPending = true;
   detailScrolled.value = true;
   await nextTick();
@@ -404,11 +440,12 @@ async function enterDetailStickyLayout() {
 function observePrompt() {
   promptResizeObserver?.disconnect();
   promptResizeObserver = undefined;
-  if (promptContentEl.value && typeof ResizeObserver !== "undefined") {
-    promptResizeObserver = new ResizeObserver(updatePromptOverflow);
-    promptResizeObserver.observe(promptContentEl.value);
+  if (typeof ResizeObserver !== "undefined") {
+    promptResizeObserver = new ResizeObserver(updatePromptLayout);
+    if (promptContentEl.value) promptResizeObserver.observe(promptContentEl.value);
+    if (promptSectionEl.value) promptResizeObserver.observe(promptSectionEl.value);
   }
-  updatePromptOverflow();
+  updatePromptLayout();
 }
 
 watch(
@@ -474,6 +511,11 @@ onBeforeUnmount(() => {
   -webkit-backdrop-filter: blur(16px) saturate(1.24);
   backdrop-filter: blur(16px) saturate(1.24);
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.34);
+}
+
+.ai-board-floating-detail {
+  --ai-board-floating-sticky-padding-block: 10px;
+  --ai-board-floating-sticky-border-width: 1px;
 }
 
 .ai-board-floating-detail {
@@ -713,9 +755,7 @@ onBeforeUnmount(() => {
 }
 
 .ai-board-floating-block-user {
-  position: sticky;
-  top: 0;
-  z-index: 3;
+  position: relative;
 }
 
 .ai-board-floating-prompt-content {
@@ -764,10 +804,13 @@ onBeforeUnmount(() => {
 }
 
 .ai-board-floating-detail.is-scrolled .ai-board-floating-block-user {
+  position: sticky;
+  top: 0;
+  z-index: 3;
   margin-inline: -14px;
-  border-bottom: 1px solid var(--ai-board-column-border);
+  border-bottom: var(--ai-board-floating-sticky-border-width) solid var(--ai-board-column-border);
   background: var(--ai-board-column-head-bg);
-  padding: 10px 14px;
+  padding: var(--ai-board-floating-sticky-padding-block) 14px;
 }
 
 .ai-board-floating-detail.is-scrolled .ai-board-floating-prompt-content {

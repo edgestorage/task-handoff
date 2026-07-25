@@ -68,7 +68,7 @@ export class ControlPlaneChatMessageSender {
       return {
         ok: true as const,
         binding,
-        aiSession: await this.deps.sendAiSessionMessage(instanceId, sessionId, message || "请查看附件图片。", undefined, attachments),
+        aiSession: await this.deps.sendAiSessionMessage(instanceId, sessionId, message || "请查看附件。", undefined, attachments),
       };
     } catch (error) {
       if (isMissingAiSessionError(error)) {

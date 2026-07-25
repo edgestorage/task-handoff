@@ -762,7 +762,6 @@ const {
   runInstanceAction,
   runRowConfigSync,
   runRowInstanceAction,
-  startCreatedInstance,
 } = useInstanceActions({
   clearActiveInstance(instanceId) {
     if (activeInstanceId.value === instanceId) {
@@ -820,9 +819,6 @@ function settingsSectionTitle(section: typeof settingsSection.value) {
 
 function handleInstanceCreated(instance: InstanceBoardItem) {
   activeInstanceId.value = instance.id;
-  if (instance.status === "created") {
-    void startCreatedInstance(instance.id);
-  }
 }
 
 async function renameInstance(instance: InstanceBoardItem, name: string) {

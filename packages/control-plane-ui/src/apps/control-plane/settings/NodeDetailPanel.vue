@@ -173,10 +173,6 @@
             <div class="node-detail-section flush-section">
               <div class="section-head">
                 <span>Runtimes</span>
-                <Button variant="outline" size="sm" :disabled="resources.selectedNodeHasLocalRuntime || busy.creatingLocalhostRuntime" @click="actions.addLocalhostRuntime">
-                  <Plus :size="14" />
-                  <span>{{ busy.creatingLocalhostRuntime ? "Adding" : "Add Localhost" }}</span>
-                </Button>
               </div>
               <div class="node-resource-list">
                 <div v-for="runtime in resources.runtimes" :key="runtime.id" class="node-resource-row">
@@ -190,7 +186,7 @@
                       <RefreshCw :size="14" />
                       <span>{{ busy.checkingRuntimeId === runtime.id ? "Checking" : "Check" }}</span>
                     </Button>
-                    <Button variant="outline" size="sm" :disabled="busy.deletingRuntimeId === runtime.id" @click="actions.removeRuntime(runtime)">
+                    <Button v-if="runtime.labels['task-handoff.node-agent.builtin'] !== 'true'" variant="outline" size="sm" :disabled="busy.deletingRuntimeId === runtime.id" @click="actions.removeRuntime(runtime)">
                       <Trash2 :size="14" />
                       <span>{{ busy.deletingRuntimeId === runtime.id ? "Deleting" : "Delete" }}</span>
                     </Button>
@@ -474,7 +470,6 @@ type NodeDiagnosticLog = {
 };
 
 type NodeDetailActions = {
-  addLocalhostRuntime: () => void | Promise<void>;
   checkRuntime: (runtime: NodeRuntime) => void | Promise<void>;
   checkSettingsNode: (nodeId: string) => void | Promise<void>;
   checkManagedUpdate: (nodeId: string, target: UpdateTarget) => void | Promise<void>;
@@ -503,7 +498,6 @@ type NodeDetailBusy = {
   checkingUpdateTarget: string;
   applyingUpdateTarget: string;
   connectingRemoteNodeId: string;
-  creatingLocalhostRuntime: boolean;
   creatingNodeLocalFolder: boolean;
   creatingPairingInviteNodeId: string;
   deletingNodeId: string;
@@ -535,7 +529,6 @@ type NodeDetailResources = {
   externalListenerPort: string;
   runtimes: NodeRuntime[];
   selectedImageNodeId: string;
-  selectedNodeHasLocalRuntime: boolean;
   selectedNodeIsLocal: boolean;
   updateChannel: UpdateChannel;
   updateChecks: Record<string, UpdateCheckResult>;

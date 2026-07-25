@@ -118,6 +118,7 @@
                     <span class="session-ai-dot" />
                     <span class="session-ai-state-line">
                       <strong>{{ aiSessionAppDisplayName(aiSessionAppTab(instance, session), session.agent) }}</strong>
+                      <span v-if="session.unread" class="ai-session-unread-dot" aria-label="Unread AI session" title="Unread" />
                       <span v-if="!groupSessionsByPath" class="session-ai-card-workspace">
                         <span aria-hidden="true">·</span>
                         <TooltipProvider :delay-duration="120">
@@ -366,6 +367,8 @@
             class="session-ai-compose session-ai-history-composer"
             :busy="resumingHistoryId === historyDetail.item.id"
             :can-interrupt="false"
+            :provider="historyDetail.item.agent"
+            :permission-key="historyDetail.item.id"
             placeholder="发送消息以继续这条对话"
             @run="sendHistoryMessage"
           />
@@ -420,6 +423,8 @@
               :aria-busy="launchingNewSession"
               :busy="launchingNewSession"
               :can-interrupt="false"
+              :provider="newSessionApp === 'claude' ? 'claude' : 'codex'"
+              :permission-key="newSessionApp"
               placeholder="Do anything"
               @run="createNewSession"
             />
@@ -488,7 +493,7 @@
               <span>{{ aiSessionAppDisplayName(aiSessionAppTab(instance, selectedSession), selectedSession.agent) }}</span>
               <strong>{{ aiSessionStatusLabel(selectedSession) }}</strong>
             </div>
-            <section class="session-ai-detail-block session-ai-detail-block-user">
+            <section ref="detailPromptSectionEl" class="session-ai-detail-block session-ai-detail-block-user">
               <div
                 ref="promptContentEl"
                 class="session-ai-detail-prompt-content"
@@ -549,6 +554,8 @@
           class="session-ai-compose"
           :busy="aiSessionActionBusy"
           :can-interrupt="canInterrupt(selectedSession)"
+          :provider="selectedSession.agent"
+          :permission-key="selectedSession.id"
           :mention-context="mentionContext"
           :mention-trigger="mentionTrigger"
           :command-trigger="commandTrigger"
@@ -582,9 +589,9 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, t
 import { ArrowDown, ArrowLeft, Ban, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Code2, ExternalLink, Filter, Folder, History, LoaderCircle, MessageSquare, MoreHorizontal, Plus, SlidersHorizontal, Square, X, Zap } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
-import { bindAiSessionTrigger, createNodeLocalFolder, getAiSessionHistory, getAiSessionHistoryDetail, interruptAiSession, launchAppSession, listNodeFolderTree, removeAiSessionQueuedMessage, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, stopAppSession, unbindAiSessionTrigger, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery } from "../../../api/queries";
+import { bindAiSessionTrigger, createNodeLocalFolder, getAiSessionHistory, getAiSessionHistoryDetail, interruptAiSession, launchAppSession, listNodeFolderTree, markAiSessionRead, removeAiSessionQueuedMessage, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, stopAppSession, unbindAiSessionTrigger, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery } from "../../../api/queries";
 import { executeAiSessionCommand } from "../../../api/ai-session-commands";
-import type { AiSessionCommandInput, AiSessionHistoryDetail, AiSessionHistoryItem } from "@task-handoff/protocol/ai-sessions";
+import type { AiSessionCommandInput, AiSessionHistoryDetail, AiSessionHistoryItem, AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
 import type { RepositoryAiSessionLaunchResult } from "@task-handoff/protocol/repository";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, NodeLocalFolder, TriggerConfig, TriggerDeployment, TriggerRuntimeState } from "../../../api/types";
 import type { LaunchableApp } from "../useInstanceSessions";
@@ -593,6 +600,7 @@ import AiSessionResult from "../../../components/ai-session/AiSessionResult.vue"
 import AiSessionStreamingMarkdown from "../../../components/ai-session/AiSessionStreamingMarkdown.vue";
 import AiSessionToolActivity from "../../../components/ai-session/AiSessionToolActivity.vue";
 import { referencesForBindings, type AiSessionMentionBinding } from "../../../components/ai-session/mentions";
+import { desktopRuntimePathAccess } from "../../../components/ai-session/useAiSessionMentions";
 import AiSessionTurnNavigator from "../../../components/ai-session/AiSessionTurnNavigator.vue";
 import { Button } from "../../../components/ui/button";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
@@ -695,6 +703,15 @@ const displayedSessionGroups = computed<AiSessionPathGroup[]>(() => groupSession
   sessions: sortedSessions.value,
 }]);
 const selectedSession = computed(() => props.selectedAiSession(props.instance, filteredSessions.value));
+watch(() => ({
+  id: selectedSession.value?.id,
+  unread: selectedSession.value?.unread,
+  updatedAt: selectedSession.value?.updatedAt,
+}), (current) => {
+  if (current.id && current.unread && current.updatedAt) {
+    void markAiSessionRead(props.instance.id, current.id, current.updatedAt).catch(() => undefined);
+  }
+}, { immediate: true });
 const repositoryAiAgent = computed<"codex" | "claude" | undefined>(() => {
   const agent = selectedSession.value?.agent;
   return agent === "codex" || agent === "claude" ? agent : undefined;
@@ -785,12 +802,20 @@ const commandTrigger = computed(() => controlPlaneSettings.data.value?.commandTr
 const mentionContext = computed(() => {
   const session = selectedSession.value;
   if (!session?.cwd) return undefined;
-  return { instanceId: props.instance.id, sessionId: session.id, provider: session.agent, cwd: session.cwd };
+  return {
+    instanceId: props.instance.id,
+    sessionId: session.id,
+    provider: session.agent,
+    cwd: session.cwd,
+    runtimeType: props.instance.runtime?.type,
+    runtimePathAccess: desktopRuntimePathAccess(props.instance),
+  };
 });
 const detailEl = ref<HTMLElement>();
 const composerEl = ref<InstanceType<typeof AiSessionComposer>>();
 const detailScrolled = ref(false);
 const detailHeaderEl = ref<HTMLElement>();
+const detailPromptSectionEl = ref<HTMLElement>();
 const detailActionsEl = ref<HTMLElement>();
 const detailHeaderPlaceholderHeight = ref(0);
 const promptContentEl = ref<HTMLElement>();
@@ -801,6 +826,7 @@ let detailActionsResizeObserver: ResizeObserver | undefined;
 let detailScrollViewport: HTMLElement | undefined;
 let detailScrollLayoutRevision = 0;
 let detailScrollLayoutPending = false;
+let detailStickyThreshold = 0;
 let promptResizeObserver: ResizeObserver | undefined;
 let streamingResizeObserver: ResizeObserver | undefined;
 let scrollFollow: ReturnType<typeof createStreamingScrollFollow> | undefined;
@@ -812,6 +838,28 @@ const triggerBusyKey = ref("");
 const triggerSearch = ref("");
 const triggers = useControlPlaneTriggersQuery();
 const triggerTemplates = computed(() => triggers.data.value?.triggers || []);
+
+function updateDetailStickyThreshold() {
+  if (detailScrolled.value) return;
+  const header = detailHeaderEl.value;
+  const detail = detailEl.value;
+  const viewport = detailScrollViewport;
+  if (!header || !detail || !viewport) {
+    detailStickyThreshold = 0;
+    return;
+  }
+  const style = window.getComputedStyle(detail);
+  const stickyHeaderHeight = [
+    "--session-ai-sticky-prompt-height",
+    "--session-ai-sticky-padding-top",
+    "--session-ai-sticky-padding-bottom",
+    "--session-ai-sticky-border-width",
+  ].reduce((height, property) => height + (Number.parseFloat(style.getPropertyValue(property)) || 0), 0);
+  const expandedDividerOffset = header.getBoundingClientRect().bottom
+    - viewport.getBoundingClientRect().top
+    + viewport.scrollTop;
+  detailStickyThreshold = Math.max(0, Math.ceil(expandedDividerOffset - stickyHeaderHeight));
+}
 const filteredTriggerTemplates = computed(() => {
   const query = triggerSearch.value.trim().toLowerCase();
   if (!query) {
@@ -1158,7 +1206,7 @@ async function resumeHistorySession(item: AiSessionHistoryItem) {
   return session;
 }
 
-async function sendHistoryMessage() {
+async function sendHistoryMessage(permissionMode?: AiSessionPermissionMode) {
   const item = historyDetail.value?.item;
   const message = historyMessageDraft.value.trim();
   if (!item || resumingHistoryId.value || (!message && !historyMessageAttachments.value.length)) return;
@@ -1169,9 +1217,11 @@ async function sendHistoryMessage() {
     await sendAiSessionMessage(
       props.instance.id,
       session.id,
-      message || "请查看附件图片。",
+      message || "请查看附件。",
       undefined,
-      attachments.map((attachment) => ({ id: attachment.id, kind: attachment.kind })),
+      attachments,
+      [],
+      permissionMode,
     );
     historyMessageDraft.value = "";
     historyMessageAttachments.value = [];
@@ -1214,7 +1264,7 @@ async function confirmNewProject() {
   await newProjectPicker.confirm();
 }
 
-async function createNewSession() {
+async function createNewSession(permissionMode?: AiSessionPermissionMode) {
   const message = newSessionDraft.value.trim();
   if (!newSessionApp.value || !message || launchingNewSession.value) return;
   launchingNewSession.value = true;
@@ -1235,10 +1285,11 @@ async function createNewSession() {
     await sendAiSessionMessage(
       props.instance.id,
       session.id,
-      message || "请查看附件图片。",
+      message || "请查看附件。",
       undefined,
-      attachments.map((attachment) => ({ id: attachment.id, kind: attachment.kind })),
+      attachments,
       referencesForBindings(newSessionDraft.value, messageMentionBindings.value),
+      permissionMode,
     );
     await refreshBoard();
     emit("selectAiSession", props.instance.id, session.id);
@@ -1268,34 +1319,34 @@ async function refreshBoard() {
   ]);
 }
 
-async function runSelectedSessionAction() {
+async function runSelectedSessionAction(permissionMode?: AiSessionPermissionMode) {
   const session = selectedSession.value;
   if (!session || aiSessionActionBusy.value || (!messageDraft.value.trim() && !messageAttachments.value.length && !canInterrupt(session))) {
     return;
   }
   if (messageDraft.value.trim() || messageAttachments.value.length) {
-    await sendSelectedSessionMessage();
+    await sendSelectedSessionMessage(permissionMode);
     return;
   }
   await interruptSelectedSession();
 }
 
 async function uploadAttachments(instanceId: string, sessionId: string, attachments: AiSessionComposerAttachment[]) {
-  return Promise.all(attachments.map((attachment) => uploadAiSessionAttachment({
-    instanceId,
-    sessionId,
-    kind: "image",
-    name: attachment.name,
-    mime: attachment.mime,
-    data: attachment.dataUrl,
-  })));
+  return Promise.all(attachments.map(async (attachment) => {
+    if (attachment.source.type === "runtime-path") {
+      return { id: attachment.id, kind: attachment.kind, name: attachment.name, mime: attachment.mime, size: attachment.size, source: attachment.source };
+    }
+    if (!attachment.dataUrl) throw new Error(`Attachment content is unavailable: ${attachment.name}`);
+    const uploaded = await uploadAiSessionAttachment({ instanceId, sessionId, kind: attachment.kind, name: attachment.name, mime: attachment.mime, data: attachment.dataUrl });
+    return { id: uploaded.id, kind: uploaded.kind, source: { type: "upload-ref" as const } };
+  }));
 }
 
 async function uploadMessageAttachments(instanceId: string, sessionId: string) {
   return uploadAttachments(instanceId, sessionId, messageAttachments.value);
 }
 
-async function sendSelectedSessionMessage() {
+async function sendSelectedSessionMessage(permissionMode?: AiSessionPermissionMode) {
   const session = selectedSession.value;
   const message = messageDraft.value.trim();
   if (!session || (!message && !messageAttachments.value.length) || aiSessionActionBusy.value) {
@@ -1304,7 +1355,7 @@ async function sendSelectedSessionMessage() {
   aiSessionActionBusy.value = true;
   try {
     const attachments = await uploadMessageAttachments(props.instance.id, session.id);
-    await sendAiSessionMessage(props.instance.id, session.id, message || "请查看附件图片。", undefined, attachments.map((attachment) => ({ id: attachment.id, kind: attachment.kind })), referencesForBindings(messageDraft.value, messageMentionBindings.value));
+    await sendAiSessionMessage(props.instance.id, session.id, message || "请查看附件。", undefined, attachments, referencesForBindings(messageDraft.value, messageMentionBindings.value), permissionMode);
     clearAiSessionDraft(session.id);
     messageDraft.value = "";
     messageMentionBindings.value = [];
@@ -1343,7 +1394,7 @@ async function steerMessageDraft() {
   aiSessionActionBusy.value = true;
   try {
     const attachments = await uploadMessageAttachments(props.instance.id, session.id);
-    await sendAiSessionMessage(props.instance.id, session.id, message || "请查看附件图片。", "steer", attachments.map((attachment) => ({ id: attachment.id, kind: attachment.kind })), referencesForBindings(messageDraft.value, messageMentionBindings.value));
+    await sendAiSessionMessage(props.instance.id, session.id, message || "请查看附件。", "steer", attachments, referencesForBindings(messageDraft.value, messageMentionBindings.value));
     clearAiSessionDraft(session.id);
     messageDraft.value = "";
     messageMentionBindings.value = [];
@@ -1630,12 +1681,14 @@ function observeDetailScroll() {
   scrollFollow?.dispose();
   scrollFollow = undefined;
   detailScrollViewport = undefined;
-  detailScrollLayoutRevision += 1;
-  detailScrollLayoutPending = false;
+  const layoutRevision = ++detailScrollLayoutRevision;
+  detailScrollLayoutPending = true;
   detailScrolled.value = false;
   detailHeaderPlaceholderHeight.value = 0;
+  detailStickyThreshold = 0;
   const viewport = detailEl.value?.querySelector<HTMLElement>(".session-ai-detail-scroll [data-task-handoff-scroll-viewport]");
   if (!viewport) {
+    detailScrollLayoutPending = false;
     isFollowingLatest.value = true;
     return;
   }
@@ -1649,9 +1702,14 @@ function observeDetailScroll() {
     streamingResizeObserver = new ResizeObserver(() => scrollFollow?.notifyContentResize());
     streamingResizeObserver.observe(content);
   }
-  handleDetailScroll();
   viewport.addEventListener("scroll", handleDetailScroll, { passive: true });
-  scrollFollow.followLatest();
+  void nextTick(() => {
+    if (layoutRevision !== detailScrollLayoutRevision || detailScrollViewport !== viewport) return;
+    updateDetailStickyThreshold();
+    detailScrollLayoutPending = false;
+    handleDetailScroll();
+    scrollFollow?.followLatest();
+  });
 }
 
 function handleDetailScroll() {
@@ -1660,9 +1718,12 @@ function handleDetailScroll() {
     return;
   }
   const scrollTop = detailScrollViewport?.scrollTop || 0;
-  if (!detailScrolled.value && scrollTop > 64) {
+  if (!detailScrolled.value && detailStickyThreshold <= 0) {
+    updateDetailStickyThreshold();
+  }
+  if (!detailScrolled.value && detailStickyThreshold > 0 && scrollTop > detailStickyThreshold) {
     void enterDetailStickyLayout();
-  } else if (detailScrolled.value && scrollTop <= 64) {
+  } else if (detailScrolled.value && scrollTop <= detailStickyThreshold) {
     detailScrollLayoutRevision += 1;
     detailHeaderPlaceholderHeight.value = 0;
     detailScrolled.value = false;
@@ -1677,6 +1738,7 @@ async function enterDetailStickyLayout() {
   const revision = ++detailScrollLayoutRevision;
   const previousScrollTop = detailScrollViewport?.scrollTop || 0;
   const expandedHeight = header.getBoundingClientRect().height;
+  updateDetailStickyThreshold();
   detailScrollLayoutPending = true;
   detailScrolled.value = true;
   await nextTick();
@@ -1706,9 +1768,16 @@ watch(() => `${props.instance.id}\u0000${selectedSession.value?.id || ""}`, () =
   void nextTick(() => {
     updatePromptOverflow();
     promptResizeObserver?.disconnect();
-    if (promptContentEl.value && typeof ResizeObserver !== "undefined") {
-      promptResizeObserver = new ResizeObserver(updatePromptOverflow);
-      promptResizeObserver.observe(promptContentEl.value);
+    if (typeof ResizeObserver !== "undefined") {
+      promptResizeObserver = new ResizeObserver(() => {
+        updatePromptOverflow();
+        if (!detailScrolled.value) {
+          updateDetailStickyThreshold();
+        }
+      });
+      if (promptContentEl.value) promptResizeObserver.observe(promptContentEl.value);
+      if (detailPromptSectionEl.value) promptResizeObserver.observe(detailPromptSectionEl.value);
+      if (detailHeaderEl.value) promptResizeObserver.observe(detailHeaderEl.value);
     }
     observeDetailActionsWidth();
     observeDetailScroll();

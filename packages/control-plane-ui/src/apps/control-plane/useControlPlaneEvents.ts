@@ -1,10 +1,17 @@
 import { onBeforeUnmount, onMounted } from "vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import { SessionStreamsHelloEventType, SessionStreamsHelloSchema } from "@task-handoff/protocol/events";
-import { InstanceResourceMetricsEventType, InstanceResourceMetricsSchema } from "@task-handoff/protocol/control-plane";
+import {
+  InstanceLifecycleEventType,
+  InstanceLifecycleSnapshotSchema,
+  InstanceResourceMetricsEventType,
+  InstanceResourceMetricsSchema,
+} from "@task-handoff/protocol/control-plane";
+import { AiSessionUnreadEventType, AiSessionUnreadStateSchema, type AiSessionUnreadState } from "@task-handoff/protocol/ai-sessions";
 import type { SessionStreamDescriptor } from "@task-handoff/protocol/events";
 import type { AppManagementEvent } from "../../api/types";
 import type { InstanceResourceMetrics } from "../../api/types";
+import { applyInstanceLifecycle } from "./instanceLifecycleCache.ts";
 import {
   AiSessionEventType,
   AppSessionEventType,
@@ -21,9 +28,17 @@ type EventMessage = {
   scope?: { instanceId?: string; nodeId?: string; [key: string]: unknown };
 };
 
+const LIFECYCLE_COMMAND_NOTIFICATIONS = new Set([
+  "instance.started",
+  "instance.stopped",
+  "instance.restarted",
+  "instance.image-provisioning-retried",
+]);
+
 export function useControlPlaneEvents(input: {
   aiSessions: {
     applyEvent: (event: AiSessionDeltaResponse["events"][number]) => boolean;
+    applyUnreadEvent: (state: AiSessionUnreadState) => boolean;
     applyMessageDelta: (payload: AiSessionMessageDeltaEvent) => boolean;
     recoverDescriptor: (descriptor: SessionStreamDescriptor) => Promise<void>;
   };
@@ -55,6 +70,8 @@ export function useControlPlaneEvents(input: {
     socket = current;
     current.addEventListener("open", () => {
       reconnectAttempt = 0;
+      void queryClient.invalidateQueries({ queryKey: ["instance-board"] });
+      void queryClient.invalidateQueries({ queryKey: ["instance-board-payload"] });
       void input.appManagement?.recoverOpen();
       void input.resourceMetrics?.recoverOpen();
     });
@@ -99,8 +116,16 @@ export function useControlPlaneEvents(input: {
   }
 
   function applyToCache(event: EventMessage) {
+    if (event.type && LIFECYCLE_COMMAND_NOTIFICATIONS.has(event.type)) {
+      return true;
+    }
     if (event.type === AiSessionEventType.MessageDelta) {
       return input.aiSessions.applyMessageDelta(event.payload as AiSessionMessageDeltaEvent);
+    }
+    if (event.type === AiSessionUnreadEventType.Updated) {
+      const state = AiSessionUnreadStateSchema.safeParse(event.payload);
+      if (!state.success || event.scope?.instanceId !== state.data.instanceId) return false;
+      return input.aiSessions.applyUnreadEvent(state.data);
     }
     if (event.type === AiSessionEventType.Snapshot || event.type === AiSessionEventType.Patch || event.type === AiSessionEventType.Removed) {
       return input.aiSessions.applyEvent({ type: event.type, payload: event.payload } as AiSessionDeltaResponse["events"][number]);
@@ -115,6 +140,11 @@ export function useControlPlaneEvents(input: {
       const metrics = InstanceResourceMetricsSchema.safeParse(event.payload);
       if (!metrics.success || event.scope?.instanceId !== metrics.data.instanceId) return false;
       return input.resourceMetrics?.applyEvent(metrics.data) || false;
+    }
+    if (event.type === InstanceLifecycleEventType.Snapshot) {
+      const lifecycle = InstanceLifecycleSnapshotSchema.safeParse(event.payload);
+      if (!lifecycle.success || event.scope?.instanceId !== lifecycle.data.instanceId) return false;
+      return applyInstanceLifecycle(queryClient, lifecycle.data);
     }
     return false;
   }

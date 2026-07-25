@@ -6,6 +6,7 @@ import type {
   AiSessionLifecycle,
   AiSessionHistoryItem,
   AiSessionMessageAttachment,
+  AiSessionPermissionMode,
   AiSessionReference,
   AiSessionPhase,
   AiSessionReducerInput,
@@ -293,10 +294,10 @@ export class AiSessionRegistry {
     }));
   }
 
-  enqueueMessage(id: string, message: string, attachments: AiSessionMessageAttachment[] = [], references: AiSessionReference[] = []) {
+  enqueueMessage(id: string, message: string, attachments: AiSessionMessageAttachment[] = [], references: AiSessionReference[] = [], permissionMode?: AiSessionPermissionMode) {
     const current = this.get(id);
     if (!current) return undefined;
-    const result = this.queueService.enqueueMessage(current, message, attachments, references);
+    const result = this.queueService.enqueueMessage(current, message, attachments, references, permissionMode);
     return result ? { ...result, session: this.put(result.session) } : undefined;
   }
 

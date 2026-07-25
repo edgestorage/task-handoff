@@ -37,10 +37,10 @@ export function useInstanceActions({ clearActiveInstance, closeInstanceMenu, err
       await startControlledInstance(id);
     } catch (error) {
       reportActionError(`Instance created, but failed to start: ${errorText(error)}`);
+      await refresh();
     } finally {
       activeInstanceAction.value = "";
       activeInstanceActionId.value = "";
-      await refresh();
     }
   }
 
@@ -65,8 +65,8 @@ export function useInstanceActions({ clearActiveInstance, closeInstanceMenu, err
       } else {
         await deleteControlledInstance(instance.id);
         clearActiveInstance(instance.id);
+        await refresh();
       }
-      await refresh();
     } catch (error) {
       reportActionError(errorText(error));
       await refresh();

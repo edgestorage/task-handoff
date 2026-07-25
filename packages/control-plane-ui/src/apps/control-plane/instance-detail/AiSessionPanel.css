@@ -133,7 +133,7 @@
   margin: 0;
   color: var(--text);
   font-size: clamp(32px, 3.2vw, 44px);
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: -0.035em;
   line-height: 1.1;
   text-align: center;
@@ -1024,6 +1024,15 @@
   flex: 0 1 auto;
 }
 
+.ai-session-unread-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--brand-accent);
+  box-shadow: 0 0 0 3px var(--brand-accent-soft);
+}
+
 .session-ai-card-workspace {
   flex: 1 1 auto;
   gap: 6px;
@@ -1579,6 +1588,10 @@
 
 .session-ai-detail {
   --session-ai-detail-left-inset: 12px;
+  --session-ai-sticky-prompt-height: 26px;
+  --session-ai-sticky-padding-top: 12px;
+  --session-ai-sticky-padding-bottom: 18px;
+  --session-ai-sticky-border-width: 1px;
   position: relative;
   min-width: 0;
   min-height: 0;
@@ -1653,9 +1666,9 @@
   z-index: 4;
   align-items: center;
   grid-template-columns: minmax(0, 1fr);
-  border-bottom: 1px solid var(--line-subtle);
+  border-bottom: var(--session-ai-sticky-border-width) solid var(--line-subtle);
   background: var(--workspace-bg);
-  padding: 12px 0 18px;
+  padding: var(--session-ai-sticky-padding-top) 0 var(--session-ai-sticky-padding-bottom);
   padding-right: calc(var(--session-ai-fixed-actions-width, 160px) + 12px);
 }
 
@@ -1675,7 +1688,7 @@
 }
 
 .session-ai-detail.is-scrolled .session-ai-detail-block-user .session-ai-detail-prompt-content {
-  max-height: 26px;
+  max-height: var(--session-ai-sticky-prompt-height);
   overflow: hidden;
 }
 

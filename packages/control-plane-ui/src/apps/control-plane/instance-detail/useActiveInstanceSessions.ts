@@ -1,5 +1,5 @@
 import { computed, reactive, ref, watch, type ComputedRef, type Ref } from "vue";
-import { launchAppSession, stopAppSession } from "../../../api/queries";
+import { launchAppSession, markAiSessionRead, stopAppSession } from "../../../api/queries";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions } from "../../../api/types";
 import {
   aiSessionAppTab,
@@ -53,7 +53,10 @@ export function useActiveInstanceSessions({
 
   const sessionTabs = computed(() => {
     const instanceId = activeInstance.value?.id;
-    return [...buildSessionTabs(activeInstance.value), ...(instanceId ? repositorySessionTabs[instanceId] || [] : [])];
+    const instanceTabs = buildSessionTabs(activeInstance.value);
+    return instanceTabs.some((session) => session.kind === "status")
+      ? instanceTabs
+      : [...instanceTabs, ...(instanceId ? repositorySessionTabs[instanceId] || [] : [])];
   });
   const orderedSessionTabs = computed(() => {
     const instanceId = activeInstance.value?.id;
@@ -428,6 +431,7 @@ export function useActiveInstanceSessions({
       selectedSessionKeys[instance.id] = tab.key;
       focusedSessionPanes[instance.id] = "left";
       rememberSessionKey(instance.id, tab.key);
+      if (session?.unread) void markAiSessionRead(instance.id, session.id, session.updatedAt).catch(() => undefined);
     }
   }
 
@@ -443,7 +447,7 @@ export function useActiveInstanceSessions({
       tabs.push({
         key,
         kind: "repository",
-        label: page === "changes-review" ? "Changes" : "Repository",
+        label: page === "changes-review" ? "Changes" : "File Explorer",
         status: "open",
         source: { ...target, page },
       });

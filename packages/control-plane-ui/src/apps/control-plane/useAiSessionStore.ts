@@ -12,6 +12,7 @@ import {
   type AiSessionPatchEvent,
   type AiSessionRemovedEvent,
   type AiSessionSnapshotEvent,
+  type AiSessionUnreadState,
   type AiSessionsSnapshot,
   type ControlPlaneAiSessions,
   type InstanceBoardItem,
@@ -112,11 +113,19 @@ export function useAiSessionStore(input: {
     let applied = false;
     queryClient.setQueryData<ControlPlaneAiSessions>(["control-plane-ai-sessions"], (current) => {
       const entry = current?.instances.find((candidate) => candidate.instanceId === instanceId);
-      const projection = entry ? { streamId: entry.streamId, revision: entry.revision ?? 0, lastEventAt: entry.lastEventAt || entry.aiSessions.updatedAt, snapshot: entry.aiSessions } as AiSessionsState : undefined;
+      const projection = entry ? { streamId: entry.streamId, revision: entry.revision ?? 0, lastEventAt: entry.lastEventAt || entry.aiSessions.updatedAt, snapshot: entry.aiSessions } as unknown as AiSessionsState : undefined;
       const result = applyAiSessionStreamEvent(projection, event as unknown as AiSessionStreamEvent);
       if (result.kind !== "applied") return current;
       applied = true;
-      return upsertInstanceAiSessions(current, instanceId, result.projection.snapshot, { streamId: result.projection.streamId, revision: result.projection.revision, lastEventAt: result.projection.lastEventAt });
+      const previousUnread = new Map(entry?.aiSessions.sessions.map((session) => [session.id, session.unread]) || []);
+      const snapshot = {
+        ...result.projection.snapshot,
+        sessions: result.projection.snapshot.sessions.map((session) => ({
+          ...session,
+          unread: session.status === "running" || session.status === "waiting" ? false : previousUnread.get(session.id) || false,
+        })),
+      };
+      return upsertInstanceAiSessions(current, instanceId, snapshot, { streamId: result.projection.streamId, revision: result.projection.revision, lastEventAt: result.projection.lastEventAt });
     });
     if (applied) {
       if (event.type === AiSessionEventType.Snapshot) streamingMessages.applySnapshot(event.payload);
@@ -184,6 +193,24 @@ export function useAiSessionStore(input: {
     return record.promise;
   }
 
+  function applyUnreadEvent(state: AiSessionUnreadState) {
+    let applied = false;
+    queryClient.setQueryData<ControlPlaneAiSessions>(["control-plane-ai-sessions"], (current) => {
+      if (!current) return current;
+      const instances = current.instances.map((entry) => {
+        if (entry.instanceId !== state.instanceId) return entry;
+        const sessions = entry.aiSessions.sessions.map((session) => {
+          if (session.id !== state.sessionId || session.updatedAt !== state.sessionUpdatedAt) return session;
+          applied = true;
+          return { ...session, unread: state.unread };
+        });
+        return applied ? { ...entry, aiSessions: { ...entry.aiSessions, sessions } } : entry;
+      });
+      return applied ? { ...current, updatedAt: state.updatedAt, instances } : current;
+    });
+    return applied;
+  }
+
   function cleanupInstance(instanceId: string) {
     streamingMessages.cleanupInstance(instanceId);
     advertised.delete(instanceId);
@@ -212,6 +239,7 @@ export function useAiSessionStore(input: {
     applySnapshotEvent,
     applyMessageDelta,
     applyEvent,
+    applyUnreadEvent,
     recoverDescriptor,
   };
 }

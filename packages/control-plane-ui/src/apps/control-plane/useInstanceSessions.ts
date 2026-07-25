@@ -77,6 +77,14 @@ export function buildSessionTabs(instance?: InstanceWithAiSessions): SessionTab[
   if (!instance) {
     return [];
   }
+  if (instance.status !== "running") {
+    return [{
+      key: "overview",
+      label: "Status",
+      status: instance.status,
+      kind: "status",
+    }];
+  }
   const appSessions = buildAppSessionTabs(instance);
   const visibleAiSessions = aiSessionSnapshotSessions(instance.aiSessions);
   const aiSessionTab: SessionTab = {
@@ -90,13 +98,7 @@ export function buildSessionTabs(instance?: InstanceWithAiSessions): SessionTab[
     kind: "ai",
     aiSessions: visibleAiSessions,
   };
-  const statusTab: SessionTab | undefined = instance.status === "running" ? undefined : {
-    key: "overview",
-    label: "Status",
-    status: instance.status,
-    kind: "status",
-  };
-  return [...(statusTab ? [statusTab] : []), aiSessionTab, ...appSessions];
+  return [aiSessionTab, ...appSessions];
 }
 
 function appSessionTab(session: Record<string, unknown>, index: number): SessionTab | undefined {

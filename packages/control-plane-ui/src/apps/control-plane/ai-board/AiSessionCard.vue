@@ -15,6 +15,7 @@
         <span class="ai-board-identity">
           <span class="ai-board-primary-line">
             <strong>{{ instanceDisplayName(card.instance) }}</strong>
+            <span v-if="card.session.unread" class="ai-session-unread-dot" aria-label="Unread AI session" title="Unread" />
           </span>
           <small class="ai-board-secondary-line">
             <span>{{ aiSessionAppDisplayName(card.appTab, card.session.agent) }}</span>
@@ -308,6 +309,15 @@ const filteredTriggerTemplates = computed(() => {
 
 .ai-board-primary-line > strong {
   flex: 0 1 auto;
+}
+
+.ai-session-unread-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--brand-accent);
+  box-shadow: 0 0 0 3px var(--brand-accent-soft);
 }
 
 .ai-board-secondary-line {

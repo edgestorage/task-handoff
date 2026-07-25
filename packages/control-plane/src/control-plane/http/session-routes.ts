@@ -1,11 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { AiSessionApprovalInputSchema, AiSessionCommandInputSchema, AiSessionMentionFileSearchInputSchema, AiSessionMessageRefInputSchema } from "@task-handoff/protocol/ai-sessions";
+import { AiSessionApprovalInputSchema, AiSessionCommandInputSchema, AiSessionMentionFileSearchInputSchema, AiSessionMessageRefInputSchema, AiSessionUnreadEventType } from "@task-handoff/protocol/ai-sessions";
 import type { ControlPlaneService } from "../application/service.ts";
 import type { ControlPlaneEventBus } from "../events/bus.ts";
 import type { ControlPlaneAiSessionAggregator } from "../sessions/ai-session-aggregator.ts";
 import type { ControlPlaneAppSessionAggregator } from "../sessions/app-session-aggregator.ts";
 import type { AiSessionAttachmentStore } from "../sessions/ai-session-attachments.ts";
+import type { AiSessionUnreadStore } from "../sessions/ai-session-unread-store.ts";
 import {
   IdParamsSchema,
   InstanceSessionParamsSchema,
@@ -18,6 +19,7 @@ export type RegisterSessionRoutesOptions = {
   events: ControlPlaneEventBus;
   appSessionAggregator: ControlPlaneAppSessionAggregator;
   aiSessionAggregator: ControlPlaneAiSessionAggregator;
+  aiSessionUnread: AiSessionUnreadStore;
   aiSessionAttachments: AiSessionAttachmentStore;
 };
 
@@ -44,6 +46,7 @@ export function registerSessionRoutes({
   events,
   appSessionAggregator,
   aiSessionAggregator,
+  aiSessionUnread,
   aiSessionAttachments,
 }: RegisterSessionRoutesOptions) {
   app.get("/api/app-sessions", async (request) => {
@@ -125,7 +128,7 @@ export function registerSessionRoutes({
     const params = InstanceSessionParamsSchema.parse(request.params);
     const parsed = AiSessionMessageRefInputSchema.parse(request.body || {});
     const attachments = aiSessionAttachments.resolveRefs(parsed.attachments, params.id, params.sessionId);
-    const result = await service.sendAiSessionMessage(params.id, params.sessionId, parsed.message, parsed.mode, attachments, parsed.references);
+    const result = await service.sendAiSessionMessage(params.id, params.sessionId, parsed.message, parsed.mode, attachments, parsed.references, parsed.permissionMode);
     events.publish("instance.ai-session.message-sent", { instanceId: params.id, sessionId: params.sessionId });
     return { data: result };
   });
@@ -194,6 +197,28 @@ export function registerSessionRoutes({
         throw error;
       }
     }
-    return { data: await aiSessionAggregator.list({ refresh: query.refresh === "true" || query.refresh === "1" }) };
+    const view = await aiSessionAggregator.list({ refresh: query.refresh === "true" || query.refresh === "1" });
+    for (const entry of view.instances) aiSessionUnread.reconcile(entry.instanceId, entry.aiSessions);
+    return { data: {
+      ...view,
+      instances: view.instances.map((entry) => ({ ...entry, aiSessions: aiSessionUnread.decorate(entry.instanceId, entry.aiSessions) })),
+    } };
+  });
+
+  app.post("/api/controlled-instances/:id/ai-sessions/:sessionId/read", async (request, reply) => {
+    const params = InstanceSessionParamsSchema.parse(request.params);
+    const input = z.object({ sessionUpdatedAt: z.string().datetime() }).strict().parse(request.body || {});
+    const view = await aiSessionAggregator.list();
+    const entry = view.instances.find((item) => item.instanceId === params.id);
+    const session = entry?.aiSessions.sessions.find((item) => item.id === params.sessionId);
+    if (!entry || !session) return reply.code(404).send({ error: { code: "AI_SESSION_NOT_FOUND", message: "AI session was not found." } });
+    aiSessionUnread.reconcile(params.id, entry.aiSessions);
+    const state = aiSessionUnread.markRead(params.id, params.sessionId, input.sessionUpdatedAt);
+    if (!state) return reply.code(404).send({ error: { code: "AI_SESSION_NOT_FOUND", message: "AI session was not found." } });
+    events.publish(AiSessionUnreadEventType.Updated, state, {
+      topic: "ai.sessions",
+      scope: { instanceId: params.id, sessionId: params.sessionId },
+    });
+    return { data: state };
   });
 }

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type {
   AiSessionMessageAttachment,
+  AiSessionPermissionMode,
   AiSessionReference,
   AiSessionQueuedMessage,
   AiSessionStatus,
@@ -51,6 +52,7 @@ export class AiSessionQueueService {
     message: string,
     attachments: AiSessionMessageAttachment[] = [],
     references: AiSessionReference[] = [],
+    permissionMode?: AiSessionPermissionMode,
   ): AiSessionEnqueueResult | undefined {
     const timestamp = this.now();
     const item: AiSessionQueuedMessage = {
@@ -58,6 +60,7 @@ export class AiSessionQueueService {
       message: messageText(message),
       attachments: aiSessionAttachmentMetas(attachments),
       references,
+      ...(permissionMode ? { permissionMode } : {}),
       status: "queued",
       createdAt: timestamp,
       updatedAt: timestamp,

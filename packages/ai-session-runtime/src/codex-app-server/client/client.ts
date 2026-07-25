@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { Duplex } from "node:stream";
 import WebSocket from "ws";
 import type { AiSessionApprovalDecision } from "../../ai-session-control";
+import type { CodexTurnPermissionOverrides } from "./contract";
 import { approvalResponseForRequest, codexApprovalRequest } from "../protocol/approvals";
 import { codexNotification } from "../protocol/events";
 import { turnIdFromResult } from "../protocol/turn-control";
@@ -163,10 +164,11 @@ export class CodexAppServerClient extends EventEmitter {
     return threads;
   }
 
-  async startTurn(threadId: string, message: string, inputs?: CodexUserInput[]) {
+  async startTurn(threadId: string, message: string, inputs?: CodexUserInput[], permissions?: CodexTurnPermissionOverrides) {
     const result = await this.request("turn/start", {
       threadId,
       input: inputs || [{ type: "text", text: message, text_elements: [] }],
+      ...permissions,
     });
     return { turnId: turnIdFromResult(result) };
   }

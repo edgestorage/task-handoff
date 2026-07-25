@@ -22,14 +22,13 @@
         :public-base-url-message="publicBaseUrlMessage"
         v-model:mention-trigger="mentionTrigger"
         :mention-trigger-error="mentionTriggerError"
-        :mention-trigger-message="mentionTriggerMessage"
-        :mention-trigger-message-error="mentionTriggerMessageError"
-        :saving-mention-trigger="savingMentionTrigger"
         v-model:command-trigger="commandTrigger"
         :command-trigger-error="commandTriggerError"
-        :command-trigger-message="commandTriggerMessage"
-        :command-trigger-message-error="commandTriggerMessageError"
-        :saving-command-trigger="savingCommandTrigger"
+        :saving-trigger-settings="savingTriggerSettings"
+        :trigger-settings-at-defaults="triggerSettingsAtDefaults"
+        :trigger-settings-dirty="triggerSettingsDirty"
+        :trigger-settings-message="triggerSettingsMessage"
+        :trigger-settings-message-error="triggerSettingsMessageError"
         :saving-public-base-url="savingPublicBaseUrl"
         :server-current-version="serverCurrentVersion"
         :server-unavailable-reason="serverUnavailableReason"
@@ -42,10 +41,8 @@
         @check-server-update="checkServerUpdate"
         @detect-public-base-url="detectPublicBaseUrl"
         @save-public-base-url="savePublicBaseUrl"
-        @reset-mention-trigger="saveMentionTrigger('@')"
-        @save-mention-trigger="saveMentionTrigger()"
-        @reset-command-trigger="saveCommandTrigger('/')"
-        @save-command-trigger="saveCommandTrigger()"
+        @reset-triggers="resetTriggerSettings"
+        @save-triggers="saveTriggerSettings"
         @update:server-update-channel="setUpdateChannel"
         @update:theme-preference="setThemePreference"
       />
@@ -581,15 +578,14 @@ const publicBaseUrl = ref("");
 const publicBaseUrlMessage = ref("");
 const savingPublicBaseUrl = ref(false);
 const mentionTrigger = ref("@");
-const mentionTriggerMessage = ref("");
-const mentionTriggerMessageError = ref(false);
-const savingMentionTrigger = ref(false);
 const mentionTriggerError = computed(() => validMentionTrigger(mentionTrigger.value) ? "" : "Use one non-letter, non-number, non-space character except / or \\." );
 const commandTrigger = ref("/");
-const commandTriggerMessage = ref("");
-const commandTriggerMessageError = ref(false);
-const savingCommandTrigger = ref(false);
+const triggerSettingsMessage = ref("");
+const triggerSettingsMessageError = ref(false);
+const savingTriggerSettings = ref(false);
 const commandTriggerError = computed(() => validCommandTrigger(commandTrigger.value) ? "" : "Use one non-letter, non-number, non-space character except \\. It must differ from the mention trigger." );
+const triggerSettingsAtDefaults = computed(() => commandTrigger.value === "/" && mentionTrigger.value === "@");
+const triggerSettingsDirty = computed(() => mentionTrigger.value !== (controlPlaneSettings.data.value?.mentionTrigger || "@") || commandTrigger.value !== (controlPlaneSettings.data.value?.commandTrigger || "/"));
 const remoteNodeDialogOpen = ref(false);
 const codexModels = computed(() => (models.data.value || []).filter((model) => model.app === "codex"));
 const claudeModels = computed(() => (models.data.value || []).filter((model) => model.app === "claude"));
@@ -714,11 +710,9 @@ const {
   refresh,
 });
 const {
-  addLocalhostRuntime,
   checkingRuntimeId,
   closeNodeStorageFolderPicker,
   confirmNodeStorageFolder,
-  creatingLocalhostRuntime,
   creatingNodeLocalFolder,
   deletingNodeLocalFolderId,
   deletingRuntimeId,
@@ -741,7 +735,6 @@ const {
   runtimeName,
   checkRuntime,
   selectedNode,
-  selectedNodeHasLocalRuntime,
   selectedNodeId,
   selectedNodeInstances,
   selectedNodeIsLocal,
@@ -1013,7 +1006,6 @@ async function applyServerUpdate() {
 }
 
 const nodeDetailActions = computed(() => ({
-  addLocalhostRuntime,
   checkRuntime,
   checkSettingsNode,
   checkManagedUpdate,
@@ -1042,7 +1034,6 @@ const nodeDetailBusy = computed(() => ({
   applyingUpdateTarget: applyingUpdateTarget.value,
   checkingRuntimeId: checkingRuntimeId.value,
   connectingRemoteNodeId: connectingRemoteNodeId.value,
-  creatingLocalhostRuntime: creatingLocalhostRuntime.value,
   creatingNodeLocalFolder: creatingNodeLocalFolder.value,
   creatingPairingInviteNodeId: creatingPairingInviteNodeId.value,
   deletingNodeId: deletingNodeId.value,
@@ -1074,7 +1065,6 @@ const nodeDetailResources = computed(() => ({
   externalListenerPort: externalListenerPort.value,
   runtimes: selectedNodeRuntimes.value,
   selectedImageNodeId: selectedImageNodeId.value,
-  selectedNodeHasLocalRuntime: selectedNodeHasLocalRuntime.value,
   selectedNodeIsLocal: selectedNodeIsLocal.value,
   updateChannel: updateChannel.value,
   updateChecks,
@@ -1152,45 +1142,37 @@ async function savePublicBaseUrl() {
   }
 }
 
-async function saveMentionTrigger(value = mentionTrigger.value) {
-  if (savingMentionTrigger.value || !validMentionTrigger(value)) return;
-  savingMentionTrigger.value = true;
-  mentionTriggerMessage.value = "";
-  mentionTriggerMessageError.value = false;
-  try {
-    const saved = await updateControlPlaneSettings({ mentionTrigger: value });
-    mentionTrigger.value = saved.mentionTrigger;
-    mentionTriggerMessage.value = "Mention trigger saved.";
-    queryClient.setQueryData<ControlPlaneSettings>(["control-plane-settings"], saved);
-  } catch (error) {
-    mentionTriggerMessage.value = errorText(error);
-    mentionTriggerMessageError.value = true;
-    showControlPlaneToast(mentionTriggerMessage.value);
-  } finally {
-    savingMentionTrigger.value = false;
-  }
-}
-
 function validMentionTrigger(value: string) {
   return Array.from(value).length === 1 && !/[\p{L}\p{N}\s/\\]/u.test(value);
 }
 
-async function saveCommandTrigger(value = commandTrigger.value) {
-  if (savingCommandTrigger.value || !validCommandTrigger(value)) return;
-  savingCommandTrigger.value = true;
-  commandTriggerMessage.value = "";
-  commandTriggerMessageError.value = false;
+function resetTriggerSettings() {
+  commandTrigger.value = "/";
+  mentionTrigger.value = "@";
+  triggerSettingsMessage.value = "Defaults ready. Save to apply them.";
+  triggerSettingsMessageError.value = false;
+}
+
+async function saveTriggerSettings() {
+  if (savingTriggerSettings.value || !triggerSettingsDirty.value || !validMentionTrigger(mentionTrigger.value) || !validCommandTrigger(commandTrigger.value)) return;
+  savingTriggerSettings.value = true;
+  triggerSettingsMessage.value = "";
+  triggerSettingsMessageError.value = false;
   try {
-    const saved = await updateControlPlaneSettings({ commandTrigger: value });
+    const saved = await updateControlPlaneSettings({
+      commandTrigger: commandTrigger.value,
+      mentionTrigger: mentionTrigger.value,
+    });
     commandTrigger.value = saved.commandTrigger;
-    commandTriggerMessage.value = "Command trigger saved.";
+    mentionTrigger.value = saved.mentionTrigger;
+    triggerSettingsMessage.value = "Composer shortcuts saved.";
     queryClient.setQueryData<ControlPlaneSettings>(["control-plane-settings"], saved);
   } catch (error) {
-    commandTriggerMessage.value = errorText(error);
-    commandTriggerMessageError.value = true;
-    showControlPlaneToast(commandTriggerMessage.value);
+    triggerSettingsMessage.value = errorText(error);
+    triggerSettingsMessageError.value = true;
+    showControlPlaneToast(triggerSettingsMessage.value);
   } finally {
-    savingCommandTrigger.value = false;
+    savingTriggerSettings.value = false;
   }
 }
 

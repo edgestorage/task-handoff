@@ -67,7 +67,7 @@ jobs:
           pnpm runtime:pack
           cp scripts/install-server.sh release/npm/artifacts/install-server.sh
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: task-handoff-runtime-packages-${{ steps.version.outputs.value }}
           path: |

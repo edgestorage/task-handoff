@@ -5,6 +5,7 @@ const path = require("node:path");
 const test = require("node:test");
 const {
   ImageProfileSchema,
+  InstanceLifecycleEventType,
   normalizeDockerImageReference,
   sanitizeStoredImageProfile,
 } = require("../packages/protocol/src/control-plane.ts");
@@ -184,6 +185,85 @@ test("node-agent creates immediately, provisions the image, and blocks stale wor
   assert.equal(app.nodeAgentState.controlledInstances.get("inst_pull"), undefined);
 });
 
+test("node-agent queues start while pulling and runs the container when the image is ready", async (t) => {
+  let releasePull;
+  let available = false;
+  const calls = [];
+  const pullGate = new Promise((resolve) => { releasePull = resolve; });
+  const app = await createNodeAgentApp({
+    dataDir: tempDataDir("node-image-queued-start"),
+    logger: false,
+    token: "agent-secret",
+    fetchImpl: async () => ({ ok: false }),
+    dockerCommandRunner: async (_command, args) => {
+      calls.push(args);
+      if (args[0] === "image") {
+        if (!available) throw new Error("missing");
+        return { stdout: JSON.stringify({ Id: digest("f"), RepoDigests: [`docker.io/example/controlled@${digest("f")}`] }), stderr: "" };
+      }
+      if (args[0] === "pull") {
+        await pullGate;
+        available = true;
+        return { stdout: "pulled", stderr: "" };
+      }
+      if (args[0] === "start") throw new Error("missing container");
+      if (args[0] === "run") return { stdout: "container-queued", stderr: "" };
+      if (args[0] === "port") return { stdout: "127.0.0.1:18080", stderr: "" };
+      return { stdout: "", stderr: "" };
+    },
+  });
+  t.after(() => app.close());
+  const lifecycleEvents = [];
+  app.nodeAgentEventForwarder.addOutput({
+    readyState: 1,
+    OPEN: 1,
+    send: (value) => {
+      const message = JSON.parse(value);
+      if (message.event?.type === InstanceLifecycleEventType.Snapshot) lifecycleEvents.push(message.event.payload);
+    },
+    on: () => undefined,
+  });
+
+  await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: "inst_queued_start",
+      runtimeId: "runtime_local_docker",
+      imageId: "img_test",
+      image: imageProfile(),
+      source: { type: "local-folder", path: "/tmp/project" },
+    },
+  });
+  await waitFor(() => app.nodeAgentState.controlledInstances.get("inst_queued_start")?.imageProvisioning?.phase === "pulling-image", "pull phase");
+
+  const start = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_queued_start/start",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {},
+  });
+  assert.equal(start.statusCode, 200, start.body);
+  assert.equal(start.json().data.status, "starting");
+  assert.equal(calls.some((args) => args[0] === "run"), false);
+
+  releasePull();
+  const started = await waitFor(() => {
+    const instance = app.nodeAgentState.controlledInstances.get("inst_queued_start");
+    return instance?.runtime.containerId === "container-queued" ? instance : undefined;
+  }, "queued container start");
+  assert.equal(started.status, "registering");
+  assert.equal(started.imageProvisioning.phase, "ready");
+  assert.equal(calls.filter((args) => args[0] === "run").length, 1);
+  const instanceEvents = lifecycleEvents.filter((event) => event.instanceId === "inst_queued_start");
+  assert.ok(instanceEvents.some((event) => event.imageProvisioning?.phase === "pulling-image"));
+  assert.ok(instanceEvents.some((event) => event.status === "starting" && event.imageProvisioning?.phase === "pulling-image"));
+  assert.ok(instanceEvents.some((event) => event.status === "starting" && event.imageProvisioning?.phase === "ready"));
+  assert.ok(instanceEvents.some((event) => event.status === "registering" && event.imageProvisioning?.phase === "ready"));
+  assert.deepEqual(instanceEvents.map((event) => event.revision), [...instanceEvents.map((event) => event.revision)].sort((a, b) => a - b));
+});
+
 test("failed node-agent image provisioning is persisted and can be retried", async (t) => {
   let failPull = true;
   let available = false;
@@ -274,7 +354,7 @@ test("node-agent restart migrates and resumes persisted image provisioning witho
     registry: "legacy-local",
     futureSnapshotField: true,
   };
-  stored.status = "provisioning";
+  stored.status = "starting";
   stored.health = "unknown";
   stored.imageProvisioning = {
     phase: "checking-image",
@@ -292,6 +372,7 @@ test("node-agent restart migrates and resumes persisted image provisioning witho
     dataDir,
     logger: false,
     token: "agent-secret",
+    fetchImpl: async () => ({ ok: false }),
     dockerCommandRunner: async (_command, args) => {
       if (args[0] === "image") {
         if (!available) throw new Error("missing");
@@ -301,6 +382,9 @@ test("node-agent restart migrates and resumes persisted image provisioning witho
         available = true;
         return { stdout: "pulled", stderr: "" };
       }
+      if (args[0] === "start") throw new Error("missing container");
+      if (args[0] === "run") return { stdout: "container-restored", stderr: "" };
+      if (args[0] === "port") return { stdout: "127.0.0.1:18081", stderr: "" };
       return { stdout: "", stderr: "" };
     },
   });
@@ -308,8 +392,9 @@ test("node-agent restart migrates and resumes persisted image provisioning witho
   await restored.nodeAgentRestoreLocalInstances();
   const ready = await waitFor(() => {
     const instance = restored.nodeAgentState.controlledInstances.get("inst_restore");
-    return instance?.status === "created" ? instance : undefined;
+    return instance?.runtime.containerId === "container-restored" ? instance : undefined;
   }, "restored provisioning");
+  assert.equal(ready.status, "registering");
   assert.equal(ready.imageProvisioning.phase, "ready");
   assert.equal(ready.imageSnapshot.requestedReference, "docker.io/example/controlled:latest");
   assert.equal(ready.imageSnapshot.resolvedDigest, digest("e"));

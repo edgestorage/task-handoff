@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import {
   AI_SESSION_MAX_ATTACHMENT_BYTES,
+  AI_SESSION_MAX_INLINE_FILE_BYTES,
   AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES,
   AI_SESSION_MAX_MESSAGE_ATTACHMENTS,
   AiSessionMessageAttachmentRefSchema,
@@ -27,7 +28,7 @@ const UploadSchema = z
   .object({
     instanceId: z.string().trim().min(1).max(120),
     sessionId: z.string().trim().min(1).max(120),
-    kind: z.literal("image").default("image"),
+    kind: z.enum(["image", "file"]),
     name: z.string().trim().min(1).max(240),
     mime: z.string().trim().min(1).max(120),
     data: z.string().min(1).max(30 * 1024 * 1024),
@@ -50,7 +51,7 @@ function attachmentRoot() {
 
 function safeName(name: string) {
   const cleaned = path.basename(name).replace(/[^\w.\- ()\u4e00-\u9fff]/g, "_").slice(0, 160);
-  return cleaned || "image";
+  return cleaned || "attachment";
 }
 
 function decodeDataUrlOrBase64(data: string, fallbackMime: string) {
@@ -73,12 +74,17 @@ export class AiSessionAttachmentStore {
     const parsed = UploadSchema.parse(input);
     const decoded = decodeDataUrlOrBase64(parsed.data, parsed.mime);
     const mime = decoded.mime.toLowerCase();
-    const ext = IMAGE_MIME_EXTENSIONS[mime];
-    if (!ext) {
+    const ext = IMAGE_MIME_EXTENSIONS[mime] || "";
+    if (parsed.kind === "image" && !ext) {
       throw new Error(`Unsupported image type: ${mime}`);
     }
-    if (!decoded.buffer.length || decoded.buffer.length > AI_SESSION_MAX_ATTACHMENT_BYTES) {
-      throw new Error(`Image must be between 1 byte and ${AI_SESSION_MAX_ATTACHMENT_BYTES} bytes.`);
+    const tooLarge = parsed.kind === "image"
+      ? decoded.buffer.length > AI_SESSION_MAX_ATTACHMENT_BYTES
+      : decoded.buffer.length >= AI_SESSION_MAX_INLINE_FILE_BYTES;
+    if (!decoded.buffer.length || tooLarge) {
+      throw new Error(parsed.kind === "image"
+        ? `Image must be between 1 byte and ${AI_SESSION_MAX_ATTACHMENT_BYTES} bytes.`
+        : `File must be smaller than ${AI_SESSION_MAX_INLINE_FILE_BYTES} bytes.`);
     }
     const id = `att_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
     const now = new Date();
@@ -92,11 +98,15 @@ export class AiSessionAttachmentStore {
       id,
       instanceId: parsed.instanceId,
       sessionId: parsed.sessionId,
-      kind: "image",
+      kind: parsed.kind,
       name,
       mime,
       size: decoded.buffer.length,
-      data: decoded.buffer.toString("base64"),
+      source: {
+        type: "inline",
+        encoding: "base64",
+        data: decoded.buffer.toString("base64"),
+      },
       path: filePath,
       createdAt: now.toISOString(),
       expiresAt: expiresAt.toISOString(),
@@ -108,18 +118,21 @@ export class AiSessionAttachmentStore {
   resolveRefs(input: unknown, instanceId: string, sessionId: string): AiSessionMessageAttachment[] {
     this.pruneExpired();
     const refs = z.array(AiSessionMessageAttachmentRefSchema).max(AI_SESSION_MAX_MESSAGE_ATTACHMENTS).default([]).parse(input);
-    const attachments = refs.map((ref) => this.requireAttachment(ref, instanceId, sessionId));
-    const totalBytes = attachments.reduce((sum, attachment) => sum + attachment.size, 0);
+    const attachments = refs.map((ref) => {
+      if (ref.source.type === "runtime-path") return AiSessionMessageAttachmentSchema.parse(ref);
+      return this.requireAttachment(ref as Extract<AiSessionMessageAttachmentRef, { source: { type: "upload-ref" } }>, instanceId, sessionId);
+    });
+    const totalBytes = attachments.reduce((sum, attachment) => sum + (attachment.source.type === "inline" ? attachment.size : 0), 0);
     if (totalBytes > AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES) {
-      throw new Error(`Images must be ${AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES} bytes or less in total.`);
+      throw new Error(`Inline attachments must be ${AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES} bytes or less in total.`);
     }
     for (const ref of refs) {
-      this.consumeAttachment(ref.id);
+      if (ref.source.type === "upload-ref") this.consumeAttachment(ref.id);
     }
     return attachments;
   }
 
-  private requireAttachment(ref: AiSessionMessageAttachmentRef, instanceId: string, sessionId: string) {
+  private requireAttachment(ref: Extract<AiSessionMessageAttachmentRef, { source: { type: "upload-ref" } }>, instanceId: string, sessionId: string) {
     const attachment = this.items.get(ref.id);
     if (!attachment) {
       throw new Error(`AI session attachment not found or expired: ${ref.id}`);
@@ -136,7 +149,7 @@ export class AiSessionAttachmentStore {
       name: attachment.name,
       mime: attachment.mime,
       size: attachment.size,
-      data: attachment.data,
+      source: attachment.source,
     });
   }
 

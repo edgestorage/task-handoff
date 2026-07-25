@@ -4334,6 +4334,41 @@ test("codex app server bridge controls turns through the ai session provider int
   assert.equal(registry.get(session.id).activeTurnId, "actual_turn");
 });
 
+test("codex permission modes map to authoritative app-server turn settings", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-permissions-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const turns = [];
+  class FakeCodexPermissionsClient extends EventEmitter {
+    async start() {}
+    stop() {}
+    async listLoadedThreadIds() { return []; }
+    async startTurn(threadId, message, inputs, permissions) {
+      turns.push({ threadId, message, inputs, permissions });
+      return { turnId: `turn_${turns.length}` };
+    }
+  }
+  const bridge = new CodexAppServerSessionBridge(registry, new FakeCodexPermissionsClient());
+  const modes = ["ask", "auto-review", "full-access"];
+  for (const [index, permissionMode] of modes.entries()) {
+    const session = registry.start({ agent: "codex", providerSessionId: `thread_permission_${index}`, cwd: "/workspace", status: "idle", phase: "unknown" });
+    await bridge.startMessage(session, { message: permissionMode, permissionMode });
+  }
+  assert.deepEqual(turns.map((turn) => turn.permissions), [
+    { approvalPolicy: "on-request", approvalsReviewer: "user", permissions: ":workspace" },
+    { approvalPolicy: "on-request", approvalsReviewer: "auto_review", permissions: ":workspace" },
+    { approvalPolicy: "never", approvalsReviewer: "user", permissions: ":danger-full-access" },
+  ]);
+});
+
+test("queued AI messages preserve their permission mode", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-queued-permissions-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const controller = new AiSessionController(registry);
+  const session = registry.start({ agent: "codex", providerSessionId: "thread_busy", cwd: "/workspace", status: "running", phase: "thinking" });
+  await controller.sendMessage(session.id, { message: "queued full access", permissionMode: "full-access" });
+  assert.equal(registry.get(session.id).queue.items[0].permissionMode, "full-access");
+});
+
 test("codex mention facade filters catalogs, invalidates cache, searches cwd, and submits structured inputs", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-mentions-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
