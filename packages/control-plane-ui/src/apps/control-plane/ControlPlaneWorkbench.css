@@ -29,7 +29,7 @@
   display: flex;
   align-items: center;
   min-width: 0;
-  gap: 12px;
+  gap: 0;
 }
 
 .desktop-window-controls {
@@ -43,6 +43,19 @@
 
 .native-window-control-space {
   pointer-events: none;
+}
+
+.topbar-left > .desktop-window-controls:not(.macos-native-window-control-space) {
+  margin-right: 12px;
+}
+
+.macos-native-window-control-space {
+  --macos-native-window-control-width: max(
+    0px,
+    calc(env(titlebar-area-x, 16px) - 16px)
+  );
+  width: var(--macos-native-window-control-width);
+  flex: 0 0 var(--macos-native-window-control-width);
 }
 
 .window-control {
@@ -107,6 +120,15 @@
   flex: 0 0 auto;
   align-items: center;
   gap: 8px;
+}
+
+.windows-native-window-control-space {
+  --windows-native-window-control-width: max(
+    0px,
+    calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw))
+  );
+  width: var(--windows-native-window-control-width);
+  flex: 0 0 var(--windows-native-window-control-width);
 }
 
 .control-plane-actions .inline-flex,

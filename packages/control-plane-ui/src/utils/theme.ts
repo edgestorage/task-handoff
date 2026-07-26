@@ -18,6 +18,10 @@ export function getThemePreference(): ThemePreference {
 export function applyThemePreference(theme: ThemePreference) {
   document.documentElement.dataset.theme = theme;
   document.documentElement.classList.toggle("dark", theme === "dark");
+  const desktopBridge = (window as Window & {
+    taskHandoffDesktop?: { setWindowChromeTheme?: (theme: ThemePreference) => Promise<{ ok: boolean }> };
+  }).taskHandoffDesktop;
+  void desktopBridge?.setWindowChromeTheme?.(theme);
 }
 
 export function saveThemePreference(theme: ThemePreference) {

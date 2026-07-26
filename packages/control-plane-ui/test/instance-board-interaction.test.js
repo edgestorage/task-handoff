@@ -51,3 +51,8 @@ test("board VNC URLs follow the same authoritative interaction state", () => {
   assert.equal(interactiveUrl.searchParams.get("path"), "instances/instance%2Fvnc/api/apps/sessions/gui/session/web/websockify");
   assert.match(workbench, /useInstanceBoardSessions\(\{ boardInteractive, boardSessionKeys, boardVisibleInstances, locale, t \}\)/);
 });
+
+test("board empty states use the themed inset surface", () => {
+  assert.match(board, /\.board-empty \{[\s\S]*?background: var\(--surface-inset\);/);
+  assert.doesNotMatch(board, /\.board-empty \{[\s\S]*?background: var\(--white\);/);
+});

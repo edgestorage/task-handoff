@@ -1,6 +1,16 @@
 const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
+const windowChromeMode = process.platform === "darwin"
+  ? "macos-overlay"
+  : process.platform === "win32"
+    ? "windows-overlay"
+    : "custom";
+
 contextBridge.exposeInMainWorld("taskHandoffDesktop", {
+  windowChrome: {
+    mode: windowChromeMode,
+  },
+  setWindowChromeTheme: (theme) => ipcRenderer.invoke("task-handoff:set-window-chrome-theme", theme),
   chooseProjectFolder: () => ipcRenderer.invoke("task-handoff:choose-project-folder"),
   getPathForFile: (file) => webUtils.getPathForFile(file),
   openAppWindow: (url) => ipcRenderer.invoke("task-handoff:open-app-window", url),

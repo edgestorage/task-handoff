@@ -157,7 +157,7 @@
                   </span>
                 </div>
                 <AiSessionToolActivity
-                  v-if="!canResolveApproval(session)"
+                  v-if="promptIndexFor(session) >= promptCount(session) - 1 && !canResolveApproval(session)"
                   class="session-ai-card-activity"
                   :current-tool="session.currentTool"
                   :phase="session.phase"

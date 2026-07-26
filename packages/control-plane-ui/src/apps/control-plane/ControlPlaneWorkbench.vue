@@ -17,7 +17,11 @@
             <Maximize2 :size="10" />
           </button>
         </div>
-        <div v-else-if="showNativeWindowControlSpace" class="desktop-window-controls native-window-control-space" aria-hidden="true" />
+        <div
+          v-else-if="showNativeWindowControlSpace"
+          class="desktop-window-controls native-window-control-space macos-native-window-control-space"
+          aria-hidden="true"
+        />
         <div class="control-plane-title">
           <span class="control-plane-kicker">{{ topbarKicker }}</span>
           <strong>{{ topbarTitle }}</strong>
@@ -67,6 +71,11 @@
           <LogOut :size="15" />
           <span>{{ signingOut ? t("auth.signingOut") : t("auth.signOut") }}</span>
         </Button>
+        <div
+          v-if="showWindowsNativeWindowControlSpace"
+          class="desktop-window-controls native-window-control-space windows-native-window-control-space"
+          aria-hidden="true"
+        />
       </div>
     </header>
 
@@ -292,6 +301,7 @@ type DesktopBridge = {
   chooseProjectFolder?: () => Promise<ProjectFolderSelection | undefined>;
   openAppWindow?: (url: string) => Promise<{ ok: boolean }>;
   openControlPlaneWindow?: (url: string) => Promise<{ ok: boolean }>;
+  windowChrome?: { mode: "custom" | "macos-overlay" | "windows-overlay" };
   windowAction?: (action: "minimize" | "toggle-maximize" | "close") => Promise<{ ok: boolean; maximized?: boolean }>;
 };
 
@@ -372,9 +382,10 @@ const serverUpdateQuery = useServerUpdateCheckQuery(serverUpdateNodeId);
 const serverUpdateAvailable = computed(() => Boolean(serverUpdateQuery.data.value?.supported && serverUpdateQuery.data.value.updateAvailable));
 const serverUpdateVersion = computed(() => serverUpdateQuery.data.value?.availableVersion || "");
 const hasDesktopWindowControls = Boolean(desktopBridge?.windowAction);
-const isMacOS = navigator.platform.toLowerCase().includes("mac");
-const showCustomWindowControls = hasDesktopWindowControls && !isMacOS;
-const showNativeWindowControlSpace = hasDesktopWindowControls && isMacOS;
+const windowChromeMode = desktopBridge?.windowChrome?.mode;
+const showCustomWindowControls = hasDesktopWindowControls && windowChromeMode === "custom";
+const showNativeWindowControlSpace = hasDesktopWindowControls && windowChromeMode === "macos-overlay";
+const showWindowsNativeWindowControlSpace = hasDesktopWindowControls && windowChromeMode === "windows-overlay";
 const { collapseInstances, expandInstances, instancesCollapsed, startInstanceResize, stopInstanceResize, workbenchStyle } = useResizableInstancesSidebar();
 const imagePullProgress = useImagePullProgress();
 const boardInstances = computed(() => (board.data.value || []).map((instance) => {

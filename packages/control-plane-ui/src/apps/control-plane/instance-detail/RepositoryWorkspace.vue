@@ -37,15 +37,20 @@
           <ScrollArea type="always" class="repository-workspace-sidebar-content">
             <div class="repository-workspace-sidebar-content-inner">
             <div v-if="loadingWorkspace" class="repository-workspace-sidebar-state"><LoaderCircle class="repository-workspace-spin" :size="16" /> {{ t("repository.workspace.loading") }}</div>
-            <RepositoryErrorNotice v-else-if="workspaceError" :error="workspaceError" :fallback="t('repository.errors.workspaceLoad')" />
-            <RepositoryFileTree
-              v-else
-              :directories="directories"
-              :expanded-paths="expandedPaths"
-              path=""
-              @open-file="openFile"
-              @toggle-directory="toggleDirectory"
-            />
+            <RepositoryErrorNotice v-else-if="workspaceLoadError" :error="workspaceLoadError" :fallback="t('repository.errors.workspaceLoad')" />
+            <template v-else>
+              <div v-if="directoryLoadError" class="repository-workspace-directory-error">
+                <small>{{ directoryLoadError.path }}</small>
+                <RepositoryErrorNotice :error="directoryLoadError.error" :fallback="t('repository.errors.directoryLoad')" />
+              </div>
+              <RepositoryFileTree
+                :directories="directories"
+                :expanded-paths="expandedPaths"
+                path=""
+                @open-file="openFile"
+                @toggle-directory="toggleDirectory"
+              />
+            </template>
             </div>
           </ScrollArea>
         </aside>
@@ -55,14 +60,20 @@
         <main class="repository-workspace-main">
           <div v-if="tabs.length" ref="workspaceOpenTabs" class="repository-workspace-tabs" role="tablist" :aria-label="t('repository.workspace.openFiles')" @keydown="navigateOpenTabs" @wheel="scrollOpenTabs">
             <div v-for="tab in tabs" :key="tab.id" class="repository-workspace-tab" :class="{ active: activeTabId === tab.id }">
-              <button type="button" role="tab" :data-repository-tab="tab.id" :tabindex="activeTabId === tab.id ? 0 : -1" :aria-selected="activeTabId === tab.id" @click="activeTabId = tab.id">
+              <button type="button" role="tab" :data-repository-tab="tab.id" :tabindex="activeTabId === tab.id ? 0 : -1" :aria-selected="activeTabId === tab.id" @click="selectTab(tab.id)">
                 <FileCode2 :size="13" />
                 <span>{{ tab.path }}</span>
               </button>
               <button type="button" class="repository-workspace-tab-close" :aria-label="t('repository.workspace.closeFile', { path: tab.path })" @click="closeTab(tab.id)"><X :size="12" /></button>
             </div>
           </div>
-          <section v-if="activeTab" class="repository-workspace-editor">
+          <section v-if="fileOpenError" class="repository-workspace-editor repository-workspace-file-error">
+            <header><span><strong>{{ fileOpenError.path }}</strong></span></header>
+            <div class="repository-workspace-editor-body repository-workspace-file-error-body">
+              <RepositoryErrorNotice :error="fileOpenError.error" :fallback="t('repository.errors.fileLoad')" />
+            </div>
+          </section>
+          <section v-else-if="activeTab" class="repository-workspace-editor">
             <header>
               <span><strong>{{ activeTab.path }}</strong><small>{{ formatBytes(activeTab.byteLength, locale as SupportedLocale) }} · {{ t(activeTab.mode.executable ? "repository.workspace.executable" : "repository.workspace.text") }}</small></span>
               <span class="repository-workspace-editor-actions">
@@ -152,6 +163,11 @@ type FileTab = RepositoryFileContent & {
   line?: number;
 };
 
+type ScopedRepositoryError = {
+  path: string;
+  error: unknown;
+};
+
 const props = defineProps<{
   context: RepositoryContext;
   embedded?: boolean;
@@ -187,8 +203,11 @@ const workspaceOpenTabs = ref<HTMLElement>();
 const workspaceBody = ref<HTMLElement>();
 const sidebarWidth = ref(320);
 const loadingWorkspace = ref(false);
-const workspaceError = ref<unknown>();
+const workspaceLoadError = ref<unknown>();
+const directoryLoadError = ref<ScopedRepositoryError>();
+const fileOpenError = ref<ScopedRepositoryError>();
 const loadRevision = ref(0);
+let fileOpenRevision = 0;
 const popoutRawMessage = ref("");
 const popoutBlocked = ref(false);
 const popoutFailed = ref(false);
@@ -328,7 +347,10 @@ watch(() => `${props.instanceId}:${props.sessionKind}:${props.sessionId}`, () =>
 async function loadWorkspace() {
   const revision = ++loadRevision.value;
   loadingWorkspace.value = true;
-  workspaceError.value = undefined;
+  workspaceLoadError.value = undefined;
+  directoryLoadError.value = undefined;
+  fileOpenError.value = undefined;
+  fileOpenRevision += 1;
   try {
     const [root, nextChanges] = await Promise.all([
       getRepositoryDirectory(target.value, ""),
@@ -339,13 +361,14 @@ async function loadWorkspace() {
     expandedPaths.value = new Set();
     changes.value = nextChanges;
   } catch (error) {
-    if (revision === loadRevision.value) workspaceError.value = error;
+    if (revision === loadRevision.value) workspaceLoadError.value = error;
   } finally {
     if (revision === loadRevision.value) loadingWorkspace.value = false;
   }
 }
 
 async function toggleDirectory(entry: RepositoryDirectoryEntry) {
+  directoryLoadError.value = undefined;
   const next = new Set(expandedPaths.value);
   if (next.has(entry.path)) {
     next.delete(entry.path);
@@ -357,7 +380,7 @@ async function toggleDirectory(entry: RepositoryDirectoryEntry) {
       const listing = await getRepositoryDirectory(target.value, entry.path);
       directories.value = new Map(directories.value).set(entry.path, listing);
     } catch (error) {
-      workspaceError.value = error;
+      directoryLoadError.value = { path: entry.path, error };
       return;
     }
   }
@@ -366,21 +389,32 @@ async function toggleDirectory(entry: RepositoryDirectoryEntry) {
 }
 
 async function openFile(entry: RepositoryDirectoryEntry | { path: string; line?: number }) {
+  const revision = ++fileOpenRevision;
   const id = `file:${entry.path}`;
   const line = "line" in entry ? entry.line : undefined;
+  fileOpenError.value = undefined;
   const existing = tabs.value.find((tab) => tab.id === id);
   if (existing) {
     existing.line = line;
-    activeTabId.value = id;
+    selectTab(id, revision);
     return;
   }
   try {
     const file = await getRepositoryFile(target.value, entry.path);
+    if (revision !== fileOpenRevision) return;
     tabs.value.push({ ...file, id, kind: "file", line });
     activeTabId.value = id;
   } catch (error) {
-    workspaceError.value = error;
+    if (revision !== fileOpenRevision) return;
+    activeTabId.value = "";
+    fileOpenError.value = { path: entry.path, error };
   }
+}
+
+function selectTab(id: string, revision = ++fileOpenRevision) {
+  if (revision !== fileOpenRevision) return;
+  fileOpenError.value = undefined;
+  activeTabId.value = id;
 }
 
 watch(
@@ -415,7 +449,7 @@ async function createFile() {
     await applyFileMutation(result);
     const id = `file:${file.path}`;
     tabs.value.push({ ...file, id, kind: "file" });
-    activeTabId.value = id;
+    selectTab(id);
     newFileDialogOpen.value = false;
   } catch (error) {
     newFileError.value = error;
@@ -585,6 +619,8 @@ function closeTab(id: string) {
 .repository-workspace-sidebar-actions :deep(button) { gap: 5px; height: 30px; padding: 0 8px; font-size: 12px; }
 .repository-workspace-sidebar-content { min-width: 0; min-height: 0; }
 .repository-workspace-sidebar-content-inner { min-width: 0; padding: 7px; }
+.repository-workspace-directory-error { display: grid; gap: 5px; margin-bottom: 7px; }
+.repository-workspace-directory-error > small { overflow: hidden; color: var(--text-muted); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .repository-workspace-sidebar-content :deep([data-task-handoff-scroll-viewport] > div) { width: 100%; min-width: 0 !important; }
 .repository-workspace-sidebar-content :deep([data-orientation="horizontal"]) { display: none; }
 .repository-workspace-sidebar-state { display: flex; min-height: 100px; align-items: center; justify-content: center; gap: 8px; color: var(--text-muted); font-size: 12px; }
@@ -607,6 +643,9 @@ function closeTab(id: string) {
 .repository-workspace-editor-actions { display: flex; align-items: center; gap: 6px; }
 .repository-workspace-editor-actions :deep(button) { gap: 5px; height: 30px; padding: 0 9px; font-size: 12px; }
 .repository-workspace-editor-body { display: flex; min-height: 0; overflow: hidden; flex-direction: column; background: var(--workspace-bg); }
+.repository-workspace-file-error { grid-row: 2; }
+.repository-workspace-file-error-body { align-items: center; justify-content: center; padding: 24px; }
+.repository-workspace-file-error-body :deep(.repository-error-notice) { width: min(680px, 100%); }
 .repository-workspace-empty { display: flex; min-height: 0; grid-row: 2; align-items: center; justify-content: center; flex-direction: column; gap: 8px; color: var(--text-muted); }
 .repository-workspace-empty strong { color: var(--text-strong); font-size: 13px; }
 .repository-workspace-empty span { font-size: 12px; }

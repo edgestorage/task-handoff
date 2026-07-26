@@ -22,6 +22,7 @@
     </section>
 
     <AiSessionToolActivity
+      v-if="isLatest"
       :current-tool="session.currentTool"
       :phase="session.phase"
       :status="session.status"

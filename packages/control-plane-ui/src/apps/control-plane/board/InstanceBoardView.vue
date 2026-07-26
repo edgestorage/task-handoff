@@ -710,7 +710,7 @@ function canLaunchBoardApp(instance: InstanceBoardItem) {
   min-height: 300px;
   border: 1px dashed var(--line-strong);
   border-radius: 8px;
-  background: var(--white);
+  background: var(--surface-inset);
   color: var(--text-muted);
   padding: 28px;
 }

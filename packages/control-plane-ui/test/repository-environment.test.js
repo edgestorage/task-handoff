@@ -180,6 +180,22 @@ test("Repository workspace opens as a session tab with a resizable ScrollArea si
   assert.match(repositoryApi, /getRepositoryDiff/);
 });
 
+test("Repository file and directory failures preserve the file tree", async () => {
+  const workspace = await source("apps/control-plane/instance-detail/RepositoryWorkspace.vue");
+  const openFile = workspace.slice(workspace.indexOf("async function openFile"), workspace.indexOf("watch(\n  [() => props.initialFileRequestId"));
+  const toggleDirectory = workspace.slice(workspace.indexOf("async function toggleDirectory"), workspace.indexOf("async function openFile"));
+
+  assert.match(workspace, /<RepositoryErrorNotice v-else-if="workspaceLoadError"/);
+  assert.match(workspace, /<template v-else>[\s\S]*directoryLoadError[\s\S]*<RepositoryFileTree/);
+  assert.match(workspace, /<section v-if="fileOpenError" class="repository-workspace-editor repository-workspace-file-error">[\s\S]*fileOpenError\.path[\s\S]*RepositoryErrorNotice/);
+  assert.match(workspace, /\.repository-workspace-file-error \{ grid-row: 2; \}/);
+  assert.match(workspace, /<section v-else-if="activeTab" class="repository-workspace-editor">/);
+  assert.match(openFile, /fileOpenError\.value = \{ path: entry\.path, error \}/);
+  assert.doesNotMatch(openFile, /workspaceLoadError/);
+  assert.match(toggleDirectory, /directoryLoadError\.value = \{ path: entry\.path, error \}/);
+  assert.doesNotMatch(toggleDirectory, /workspaceLoadError/);
+});
+
 test("Repository workspace can move to a recoverable authenticated window", async () => {
   const [app, workspace, page, windowHelper] = await Promise.all([
     source("App.vue"),

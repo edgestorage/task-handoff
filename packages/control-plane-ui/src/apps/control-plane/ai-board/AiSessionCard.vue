@@ -60,7 +60,7 @@
     </div>
 
     <AiSessionToolActivity
-      v-if="!canResolveApproval(card.session)"
+      v-if="promptIndex >= promptCount - 1 && !canResolveApproval(card.session)"
       class="ai-board-card-activity"
       :current-tool="card.session.currentTool"
       :phase="card.session.phase"

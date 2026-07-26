@@ -4,7 +4,7 @@ const http = require("node:http");
 const net = require("node:net");
 const path = require("node:path");
 const { setTimeout: delay } = require("node:timers/promises");
-const { app, BrowserView, BrowserWindow, dialog, ipcMain, nativeImage, shell } = require("electron");
+const { app, BrowserView, BrowserWindow, dialog, ipcMain, nativeImage, nativeTheme, shell } = require("electron");
 const { autoUpdater } = require("electron-updater");
 const {
   buildControlPlaneArgs,
@@ -24,6 +24,7 @@ const {
   validateDesktopInputs,
 } = require("./config.cjs");
 const { createDesktopUpdater } = require("./updater.cjs");
+const { desktopTitleBarOptions, desktopWindowChromeMode, windowsTitleBarOverlayOptions } = require("./window-chrome.cjs");
 
 let mainWindow;
 let controlPlaneProcess;
@@ -34,6 +35,7 @@ let desktopLogStream;
 let desktopUpdater;
 let desktopServicesStopPromise;
 const controlPlaneWindows = new Set();
+const windowsTitleBarOverlayHeights = new WeakMap();
 const childProcessSpawnErrors = new WeakMap();
 const NODE_AGENT_IPC_ENDPOINT_PREFIX = "ipc://";
 
@@ -66,24 +68,17 @@ function applyDesktopDockIcon() {
 }
 
 function nativeTitleBarWindowOptions() {
-  if (!isMacOS()) {
-    return { frame: false };
-  }
-  return {
-    frame: false,
-    titleBarStyle: "hiddenInset",
+  return desktopTitleBarOptions({
+    height: 56,
     trafficLightPosition: { x: 16, y: 21 },
-  };
+  });
 }
 
 function appWindowTitleBarWindowOptions() {
-  if (!isMacOS()) {
-    return nativeTitleBarWindowOptions();
-  }
-  return {
-    ...nativeTitleBarWindowOptions(),
+  return desktopTitleBarOptions({
+    height: 42,
     trafficLightPosition: { x: 16, y: 15 },
-  };
+  });
 }
 
 function envFlag(value) {
@@ -212,6 +207,9 @@ function renderFailurePage(title, detail) {
 
 function renderAppWindowPage(targetUrl) {
   const escapedTitle = escapeHtml(new URL(targetUrl).hostname || "TaskHandoff App");
+  const windowChromeMode = desktopWindowChromeMode();
+  const hasHostTitleBar = windowChromeMode !== "macos-overlay";
+  const hasCustomWindowControls = windowChromeMode === "custom";
   return `<!doctype html>
 <html>
   <head>
@@ -230,7 +228,7 @@ function renderAppWindowPage(targetUrl) {
       }
       body {
         display: grid;
-        grid-template-rows: ${isMacOS() ? "1fr" : "42px minmax(0, 1fr)"};
+        grid-template-rows: ${hasHostTitleBar ? "42px minmax(0, 1fr)" : "1fr"};
       }
       header {
         -webkit-app-region: drag;
@@ -241,6 +239,14 @@ function renderAppWindowPage(targetUrl) {
         border-bottom: 1px solid #1d2d35;
         background: rgb(11 20 24 / 94%);
         padding: 0 12px;
+      }
+      .windows-native-window-control-space {
+        --windows-native-window-control-width: max(
+          0px,
+          calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw))
+        );
+        width: var(--windows-native-window-control-width);
+        flex: 0 0 var(--windows-native-window-control-width);
       }
       .window-controls {
         -webkit-app-region: no-drag;
@@ -287,15 +293,19 @@ function renderAppWindowPage(targetUrl) {
     </style>
   </head>
   <body>
-    ${isMacOS() ? "" : `<header>
-      <div class="window-controls" aria-label="Window controls">
+    ${hasHostTitleBar ? `<header>
+      ${hasCustomWindowControls ? `<div class="window-controls" aria-label="Window controls">
         <button type="button" class="window-control close" aria-label="Close" title="Close" data-action="close">×</button>
         <button type="button" class="window-control minimize" aria-label="Minimize" title="Minimize" data-action="minimize">−</button>
         <button type="button" class="window-control maximize" aria-label="Maximize" title="Maximize" data-action="toggle-maximize">+</button>
-      </div>
+      </div>` : ""}
       <div class="title">${escapedTitle}</div>
-      <div class="spacer" aria-hidden="true"></div>
-    </header>`}
+      ${hasCustomWindowControls
+        ? `<div class="spacer" aria-hidden="true"></div>`
+        : windowChromeMode === "windows-overlay"
+          ? `<div class="windows-native-window-control-space" aria-hidden="true"></div>`
+          : ""}
+    </header>` : ""}
     <script>
       document.querySelectorAll("[data-action]").forEach((button) => {
         button.addEventListener("click", () => {
@@ -343,6 +353,7 @@ function createWindow(url) {
       sandbox: true,
     },
   });
+  if (process.platform === "win32") windowsTitleBarOverlayHeights.set(mainWindow, 56);
 
   mainWindow.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
     void shell.openExternal(targetUrl);
@@ -457,6 +468,7 @@ function createAppWindow(url) {
       sandbox: true,
     },
   });
+  if (process.platform === "win32") windowsTitleBarOverlayHeights.set(appWindow, 42);
 
   appWindow.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
     void shell.openExternal(targetUrl);
@@ -474,7 +486,7 @@ function createAppWindow(url) {
       return;
     }
     const [width, height] = appWindow.getContentSize();
-    const headerHeight = isMacOS() ? 0 : 42;
+    const headerHeight = desktopWindowChromeMode() === "macos-overlay" ? 0 : 42;
     appView.setBounds({ x: 0, y: headerHeight, width, height: Math.max(0, height - headerHeight) });
   };
   appWindow.setBrowserView(appView);
@@ -850,6 +862,17 @@ ipcMain.handle("task-handoff:window-action", (_event, action) => {
     targetWindow.close();
   }
   return { ok: true, maximized: !targetWindow.isDestroyed() ? targetWindow.isMaximized() : false };
+});
+
+ipcMain.handle("task-handoff:set-window-chrome-theme", (_event, theme) => {
+  const targetWindow = BrowserWindow.fromWebContents(_event.sender);
+  const height = targetWindow ? windowsTitleBarOverlayHeights.get(targetWindow) : undefined;
+  if (process.platform !== "win32" || !targetWindow || targetWindow.isDestroyed() || !height || !["light", "dark"].includes(theme)) {
+    return { ok: false };
+  }
+  nativeTheme.themeSource = theme;
+  targetWindow.setTitleBarOverlay(windowsTitleBarOverlayOptions({ height, theme }));
+  return { ok: true };
 });
 
 ipcMain.handle("task-handoff:desktop-update-get-state", () => desktopUpdater?.getState());
