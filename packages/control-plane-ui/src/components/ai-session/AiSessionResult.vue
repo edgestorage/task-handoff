@@ -13,9 +13,11 @@
     >
       <AiSessionStreamingMarkdown
         :content="responseContent"
+        :file-links="fileLinks"
         :instance-id="instanceId"
         :is-latest="isLatest"
         :session-id="session.id"
+        @open-file="$emit('openFile', $event)"
       />
     </section>
 
@@ -83,6 +85,7 @@ const props = withDefaults(defineProps<{
   busy?: boolean;
   canInterrupt?: boolean;
   canResolveApproval?: boolean;
+  fileLinks?: boolean;
   instanceId: string;
   isLatest?: boolean;
   responseContent?: string;
@@ -92,12 +95,14 @@ const props = withDefaults(defineProps<{
   busy: false,
   canInterrupt: false,
   canResolveApproval: false,
+  fileLinks: false,
   isLatest: false,
   responseContent: "",
   tone: "detail",
 });
 
 defineEmits<{
+  openFile: [href: string];
   removeQueuedMessage: [queueId: string];
   resolveApproval: [decision: "allow" | "deny" | "skip"];
   retryQueuedMessage: [queueId: string];

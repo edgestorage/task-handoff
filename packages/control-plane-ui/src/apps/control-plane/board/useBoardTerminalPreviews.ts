@@ -10,9 +10,10 @@ function terminalTheme() {
   };
 }
 
-export function useBoardTerminalPreviews(boardMode: Ref<boolean>) {
+export function useBoardTerminalPreviews(boardMode: Ref<boolean>, interactive: Ref<boolean>) {
   const boardTerminalHosts = new Map<string, { url: string; element: HTMLElement }>();
-  const boardTerminalCleanups = new Map<string, { url: string; cleanup: () => void }>();
+  const boardTerminalCleanups = new Map<string, { url: string; interactive: boolean; cleanup: () => void }>();
+  const boardTerminalGenerations = new Map<string, number>();
 
   function setBoardTerminalHost(instanceId: string, url: string, element: unknown) {
     if (element instanceof HTMLElement && url) {
@@ -41,15 +42,22 @@ export function useBoardTerminalPreviews(boardMode: Ref<boolean>) {
       return;
     }
     const existing = boardTerminalCleanups.get(instanceId);
-    if (existing?.url === target.url) {
+    if (existing?.url === target.url && existing.interactive === interactive.value) {
       return;
     }
     disposeBoardTerminalPreview(instanceId);
+    const generation = boardTerminalGenerations.get(instanceId) || 0;
+    const terminalInteractive = interactive.value;
     if (!boardMode.value || boardTerminalHosts.get(instanceId)?.url !== target.url) {
       return;
     }
     const { Terminal: XTermTerminal } = await import("@xterm/xterm");
-    if (!boardMode.value || boardTerminalHosts.get(instanceId)?.url !== target.url) {
+    if (
+      generation !== boardTerminalGenerations.get(instanceId)
+      || !boardMode.value
+      || interactive.value !== terminalInteractive
+      || boardTerminalHosts.get(instanceId)?.url !== target.url
+    ) {
       return;
     }
     const surface = document.createElement("div");
@@ -62,8 +70,8 @@ export function useBoardTerminalPreviews(boardMode: Ref<boolean>) {
     let terminalRows = 32;
     const terminal = new XTermTerminal({
       convertEol: true,
-      cursorBlink: false,
-      disableStdin: true,
+      cursorBlink: terminalInteractive,
+      disableStdin: !terminalInteractive,
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace",
       fontSize: 10,
       lineHeight: 1.12,
@@ -160,9 +168,17 @@ export function useBoardTerminalPreviews(boardMode: Ref<boolean>) {
         terminal.write(event.data);
       }
     });
+    if (terminalInteractive) {
+      terminal.onData((data) => {
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: "input", data }));
+        }
+      });
+    }
     scheduleResize();
     boardTerminalCleanups.set(instanceId, {
       url: target.url,
+      interactive: terminalInteractive,
       cleanup: () => {
         if (refreshFrame !== undefined) {
           window.cancelAnimationFrame(refreshFrame);
@@ -179,6 +195,7 @@ export function useBoardTerminalPreviews(boardMode: Ref<boolean>) {
   }
 
   function disposeBoardTerminalPreview(instanceId: string) {
+    boardTerminalGenerations.set(instanceId, (boardTerminalGenerations.get(instanceId) || 0) + 1);
     boardTerminalCleanups.get(instanceId)?.cleanup();
     boardTerminalCleanups.delete(instanceId);
   }

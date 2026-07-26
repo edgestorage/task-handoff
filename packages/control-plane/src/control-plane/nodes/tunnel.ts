@@ -7,8 +7,9 @@ import {
   InstanceLifecycleSnapshotSchema,
   InstanceResourceMetricsEventType,
   InstanceResourceMetricsSchema,
-  type InstanceLifecycleSnapshot,
-  type InstanceResourceMetrics,
+  ImagePullTerminalEventType,
+  ImagePullTerminalFinishedSchema,
+  ImagePullTerminalOutputSchema,
   type Node,
 } from "@task-handoff/protocol/control-plane";
 import { SessionStreamsHelloSchema, type SessionStreamsHello } from "@task-handoff/protocol/events";
@@ -143,6 +144,8 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
   private readonly onStreamsHello?: (instanceId: string, hello: SessionStreamsHello) => void | Promise<void>;
   private readonly validateInstanceScope?: (nodeId: string, instanceId: string) => boolean | Promise<boolean>;
   private readonly validatedInstanceScopes = new Map<string, number>();
+  private readonly validatingInstanceScopes = new Map<string, Promise<boolean>>();
+  private readonly instanceEventQueues = new Map<string, Promise<void>>();
 
   constructor(events?: ControlPlaneEventBus, options: {
     onStreamsHello?: (instanceId: string, hello: SessionStreamsHello) => void | Promise<void>;
@@ -252,14 +255,38 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
       const metrics = InstanceResourceMetricsSchema.safeParse(payload);
       const scopeInstanceId = typeof scope.instanceId === "string" ? scope.instanceId : typeof event.instanceId === "string" ? event.instanceId : forwardedInstanceId;
       if (!metrics.success || metrics.data.instanceId !== scopeInstanceId) return true;
-      void this.publishValidatedMetrics(nodeId, metrics.data, scope);
+      this.enqueueValidatedInstanceEvent(nodeId, metrics.data.instanceId, () => {
+        this.events?.publish(InstanceResourceMetricsEventType.Snapshot, metrics.data, {
+          topic: "instances",
+          scope: { ...scope, nodeId, instanceId: metrics.data.instanceId },
+        });
+      });
       return true;
     }
     if (eventType === InstanceLifecycleEventType.Snapshot) {
       const lifecycle = InstanceLifecycleSnapshotSchema.safeParse(payload);
       const scopeInstanceId = typeof scope.instanceId === "string" ? scope.instanceId : typeof event.instanceId === "string" ? event.instanceId : forwardedInstanceId;
       if (!lifecycle.success || lifecycle.data.instanceId !== scopeInstanceId) return true;
-      void this.publishValidatedLifecycle(nodeId, lifecycle.data, scope);
+      this.enqueueValidatedInstanceEvent(nodeId, lifecycle.data.instanceId, () => {
+        this.events?.publish(InstanceLifecycleEventType.Snapshot, lifecycle.data, {
+          topic: "instances",
+          scope: { ...scope, nodeId, instanceId: lifecycle.data.instanceId },
+        });
+      });
+      return true;
+    }
+    if (eventType === ImagePullTerminalEventType.Output || eventType === ImagePullTerminalEventType.Finished) {
+      const parsed = eventType === ImagePullTerminalEventType.Output
+        ? ImagePullTerminalOutputSchema.safeParse(payload)
+        : ImagePullTerminalFinishedSchema.safeParse(payload);
+      const scopeInstanceId = typeof scope.instanceId === "string" ? scope.instanceId : typeof event.instanceId === "string" ? event.instanceId : forwardedInstanceId;
+      if (!parsed.success || parsed.data.instanceId !== scopeInstanceId) return true;
+      this.enqueueValidatedInstanceEvent(nodeId, parsed.data.instanceId, () => {
+        this.events?.publish(eventType, parsed.data, {
+          topic: "instances",
+          scope: { ...scope, nodeId, instanceId: parsed.data.instanceId },
+        });
+      });
       return true;
     }
     this.events?.publish(eventType, payload, {
@@ -273,21 +300,15 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
     return true;
   }
 
-  private async publishValidatedMetrics(nodeId: string, metrics: InstanceResourceMetrics, scope: Record<string, unknown>) {
-    const valid = await this.isValidatedInstanceScope(nodeId, metrics.instanceId);
-    if (!valid) return;
-    this.events?.publish(InstanceResourceMetricsEventType.Snapshot, metrics, {
-      topic: "instances",
-      scope: { ...scope, nodeId, instanceId: metrics.instanceId },
+  private enqueueValidatedInstanceEvent(nodeId: string, instanceId: string, publish: () => void) {
+    const queueKey = `${nodeId}:${instanceId}`;
+    const previous = this.instanceEventQueues.get(queueKey) || Promise.resolve();
+    const queued = previous.then(async () => {
+      if (await this.isValidatedInstanceScope(nodeId, instanceId)) publish();
     });
-  }
-
-  private async publishValidatedLifecycle(nodeId: string, lifecycle: InstanceLifecycleSnapshot, scope: Record<string, unknown>) {
-    const valid = await this.isValidatedInstanceScope(nodeId, lifecycle.instanceId);
-    if (!valid) return;
-    this.events?.publish(InstanceLifecycleEventType.Snapshot, lifecycle, {
-      topic: "instances",
-      scope: { ...scope, nodeId, instanceId: lifecycle.instanceId },
+    this.instanceEventQueues.set(queueKey, queued);
+    void queued.finally(() => {
+      if (this.instanceEventQueues.get(queueKey) === queued) this.instanceEventQueues.delete(queueKey);
     });
   }
 
@@ -295,14 +316,22 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
     const cacheKey = `${nodeId}:${instanceId}`;
     const now = Date.now();
     if ((this.validatedInstanceScopes.get(cacheKey) || 0) > now) return true;
-    let valid = false;
-    try {
-      valid = Boolean(await this.validateInstanceScope?.(nodeId, instanceId));
-    } catch {
-      valid = false;
-    }
-    if (valid) this.validatedInstanceScopes.set(cacheKey, now + 30_000);
-    return valid;
+    const existing = this.validatingInstanceScopes.get(cacheKey);
+    if (existing) return existing;
+    const validation = (async () => {
+      let valid = false;
+      try {
+        valid = Boolean(await this.validateInstanceScope?.(nodeId, instanceId));
+      } catch {
+        valid = false;
+      }
+      if (valid) this.validatedInstanceScopes.set(cacheKey, Date.now() + 30_000);
+      return valid;
+    })();
+    this.validatingInstanceScopes.set(cacheKey, validation);
+    return validation.finally(() => {
+      if (this.validatingInstanceScopes.get(cacheKey) === validation) this.validatingInstanceScopes.delete(cacheKey);
+    });
   }
 
   async request(node: { id: string }, route: string, init: RequestInit = {}) {

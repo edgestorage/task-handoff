@@ -73,6 +73,19 @@ async function checkBundledRuntime(packageDir, manifest, name, definition) {
     if (!packageVersion || packageVersion === "unknown" || packageVersion !== manifest.version) {
       throw new Error(`${name} bundled runtime reported package version ${JSON.stringify(packageVersion)}; expected ${manifest.version}.`);
     }
+    if (name === "node-agent") {
+      const invite = spawnSync(process.execPath, [binPath, "invite", "--data-dir", tempDir, "--json"], {
+        cwd: packageDir,
+        encoding: "utf8",
+      });
+      if (invite.status !== 0) {
+        throw new Error(`node-agent bundled invite command failed:\n${invite.stderr || invite.stdout}`);
+      }
+      const invitePayload = JSON.parse(invite.stdout);
+      if (!invitePayload.nodeId || !invitePayload.joinToken || !invitePayload.expiresAt) {
+        throw new Error(`node-agent bundled invite command returned an invalid payload: ${invite.stdout}`);
+      }
+    }
   } finally {
     child.kill("SIGTERM");
     await Promise.race([

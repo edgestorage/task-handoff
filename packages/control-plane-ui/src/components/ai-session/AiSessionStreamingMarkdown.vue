@@ -1,5 +1,5 @@
 <template>
-  <div class="ai-session-streaming-markdown">
+  <div class="ai-session-streaming-markdown" @click="handleLinkClick">
     <MarkdownRender
       :content="displayContent"
       :custom-id="markdownScopeId"
@@ -34,12 +34,34 @@ setCustomComponents(markdownScopeId, {
 
 const props = withDefaults(defineProps<{
   content?: unknown;
+  fileLinks?: boolean;
   instanceId: string;
   isLatest?: boolean;
   sessionId: string;
 }>(), {
+  fileLinks: false,
   isLatest: false,
 });
+
+const emit = defineEmits<{
+  openFile: [href: string];
+}>();
+
+function isFileHref(href: string) {
+  if (!href || href.startsWith("#") || href.startsWith("?") || href.startsWith("//")) return false;
+  if (/^[a-z]:[\\/]/i.test(href)) return true;
+  const scheme = /^([a-z][a-z\d+.-]*):/i.exec(href)?.[1]?.toLowerCase();
+  return !scheme || scheme === "file";
+}
+
+function handleLinkClick(event: MouseEvent) {
+  if (!props.fileLinks || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  const target = event.target instanceof Element ? event.target.closest("a") : undefined;
+  const href = target?.getAttribute("href")?.trim();
+  if (!href || !isFileHref(href)) return;
+  event.preventDefault();
+  emit("openFile", href);
+}
 
 const streamingMessages = useStreamingMessagesStore();
 const activeMessage = computed(() => streamingMessages.activeMessage(props.instanceId, props.sessionId));

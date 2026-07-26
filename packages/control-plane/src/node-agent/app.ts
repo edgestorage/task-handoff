@@ -18,6 +18,7 @@ import {
   ControlledInstanceRegisterSchema,
   InstanceImageSnapshotSchema,
   InstanceResourceMetricsEventType,
+  ImagePullTerminalEventType,
   ImageProfileSchema,
   CreateNodeModelSchema,
   DeployNodeModelSchema,
@@ -58,7 +59,7 @@ import {
 } from "@task-handoff/protocol/control-plane";
 import { bridgeWebSockets } from "@task-handoff/protocol/websocket-bridge";
 import { defaultCommandRunner, LocalDockerExecutor, listLocalDockerImages, type CommandRunner, type ExecutorContext, type ExecutorStartResult } from "./runtimes/docker.ts";
-import { DockerImageService, type DockerImagePhase, type ResolvedDockerImage } from "./docker-images.ts";
+import { DockerImageService, type DockerImagePhase, type DockerImageTerminalOutput, type ResolvedDockerImage } from "./docker-images.ts";
 import { NodeAgentInstanceEventForwarder } from "./events.ts";
 import { DockerRuntimeMetricsCollector } from "./runtime-metrics.ts";
 import { listFolderTree } from "./folders.ts";
@@ -74,6 +75,7 @@ import {
 import { nodeAgentStorePaths, type NodeAgentStorePaths } from "./persistence/paths.ts";
 import { createId, createSecret, JsonCollection, JsonFile } from "../shared/persistence/store.ts";
 import { acquireNodeAgentSingletonLock, defaultNodeAgentSingletonLockPath } from "./process/singleton-lock.ts";
+import type { TerminalCommandRunner } from "../shared/process/terminal-command-runner.ts";
 import { nodeAgentIpcEndpoint, nodeAgentIpcPath, prepareNodeAgentIpcPath } from "../shared/transport/node-agent-ipc.ts";
 import { createNodeAgentHmacHeaders } from "../shared/security/node-agent-auth.ts";
 import { nodeAgentProxyMethod, type NodeAgentInjectResponse, websocketPayload } from "./transport/proxy-utils.ts";
@@ -209,6 +211,7 @@ export type CreateNodeAgentAppOptions = {
   dataDir?: string;
   logger?: FastifyServerOptions["logger"];
   dockerCommandRunner?: CommandRunner;
+  dockerTerminalCommandRunner?: TerminalCommandRunner;
   updateCommandRunner?: CommandRunner;
   fetchImpl?: typeof fetch;
   platform?: NodeJS.Platform;
@@ -300,6 +303,12 @@ function isPairingCompleteRoute(url: string) {
 
 function now() {
   return new Date().toISOString();
+}
+
+function splitTerminalOutput(data: string, maxLength = 60_000) {
+  const chunks: string[] = [];
+  for (let offset = 0; offset < data.length; offset += maxLength) chunks.push(data.slice(offset, offset + maxLength));
+  return chunks;
 }
 
 function listenerHost(bindScope: NodeAgentExternalListenerConfig["bindScope"]) {
@@ -1531,7 +1540,7 @@ class NodeAgentState {
     const workspacePath = runtime.type === "local" && source.type === "local-folder" ? path.resolve(source.path) : undefined;
     const instance = ControlledInstanceSchema.parse({
       id,
-      name: input.name || `instance-${timestamp.replace(/[-:.TZ]/g, "").slice(0, 14)}-${id.replace(/^inst_?/, "").slice(0, 4)}`,
+      name: input.name || `instance-${id.replace(/^inst_?/, "").slice(0, 6)}`,
       source,
       sourceSnapshot: input.sourceSnapshot || {},
       modelSelection: input.modelSelection,
@@ -1821,6 +1830,7 @@ async function provisionNodeInstanceImage(
   generation: number,
   sync: () => void,
   loggers: NodeAgentLifecycleLoggers,
+  publishTerminal?: (event: DockerImageTerminalOutput | { sequence: number; outcome: "succeeded" | "failed" }) => void,
   onReadyToStart?: () => Promise<void>,
 ) {
   const updatePhase = (phase: DockerImagePhase) => {
@@ -1836,8 +1846,15 @@ async function provisionNodeInstanceImage(
   };
   const initial = state.controlledInstances.get(id);
   if (!initial?.imageSnapshot || initial.imageProvisioning?.generation !== generation) return;
+  let terminalSequence = 0;
+  let terminalStarted = false;
   try {
-    const resolved = await images.ensure(initial.imageSnapshot.requestedReference!, updatePhase);
+    const resolved = await images.ensure(initial.imageSnapshot.requestedReference!, updatePhase, (output) => {
+      terminalStarted = true;
+      terminalSequence = output.sequence;
+      publishTerminal?.(output);
+    });
+    if (terminalStarted) publishTerminal?.({ sequence: terminalSequence + 1, outcome: "succeeded" });
     const current = state.controlledInstances.get(id);
     if (!current?.imageSnapshot || current.imageProvisioning?.generation !== generation) return;
     state.controlledInstances.put(ControlledInstanceSchema.parse({
@@ -1859,6 +1876,7 @@ async function provisionNodeInstanceImage(
       await onReadyToStart?.();
     }
   } catch (error) {
+    if (terminalStarted) publishTerminal?.({ sequence: terminalSequence + 1, outcome: "failed" });
     const current = state.controlledInstances.get(id);
     if (!current?.imageProvisioning || current.imageProvisioning.generation !== generation) return;
     const message = error instanceof Error ? error.message : String(error);
@@ -2053,7 +2071,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   state.node.endpoint = controlEndpoint;
   state.init();
   const dockerCommandRunner = options.dockerCommandRunner || defaultCommandRunner;
-  const dockerImageService = new DockerImageService(dockerCommandRunner);
+  const dockerImageService = new DockerImageService(dockerCommandRunner, options.dockerTerminalCommandRunner);
   const dockerExecutor = new LocalDockerExecutor(dockerCommandRunner, {
     publishHost: "127.0.0.1",
     imageService: dockerImageService,
@@ -2125,6 +2143,21 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       instance.imageProvisioning.generation,
       () => eventForwarder.syncNow(),
       lifecycleLoggers,
+      (terminalEvent) => {
+        const base = {
+          instanceId: instance.id,
+          generation: instance.imageProvisioning!.generation,
+          requestedReference: instance.imageProvisioning!.requestedReference,
+          observedAt: now(),
+        };
+        if ("outcome" in terminalEvent) {
+          eventForwarder.publish(ImagePullTerminalEventType.Finished, { ...base, sequence: terminalEvent.sequence * 1000, outcome: terminalEvent.outcome }, { instanceId: instance.id });
+          return;
+        }
+        for (const [index, data] of splitTerminalOutput(terminalEvent.data).entries()) {
+          eventForwarder.publish(ImagePullTerminalEventType.Output, { ...base, sequence: terminalEvent.sequence * 1000 + index, data, ...(terminalEvent.replay ? { replay: true } : {}) }, { instanceId: instance.id });
+        }
+      },
       () => startProvisionedInstance(instance.id),
     );
   };

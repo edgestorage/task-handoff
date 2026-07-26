@@ -10,6 +10,8 @@
       :embedded="!dialogOpen"
       :context="contextQuery.data.value"
       :instance-id="instanceId"
+      :initial-file-path="initialFilePath"
+      :initial-file-request-id="initialFileRequestId"
       :open="true"
       :session-id="sessionId"
       :session-kind="sessionKind"
@@ -35,6 +37,8 @@ defineEmits<{ openWorkspace: [target: { initialView: "files" | "changes"; page?:
 const dialogOpen = ref(false);
 const sessionId = computed(() => typeof props.session.source?.sessionId === "string" ? props.session.source.sessionId : "");
 const sessionKind = computed<RepositorySessionKind>(() => props.session.source?.sessionKind === "ai-session" ? "ai-session" : "app-session");
+const initialFilePath = computed(() => typeof props.session.source?.filePath === "string" ? props.session.source.filePath : undefined);
+const initialFileRequestId = computed(() => typeof props.session.source?.fileRequestId === "number" ? props.session.source.fileRequestId : 0);
 const contextQuery = useRepositoryContextQuery(
   computed(() => ({ instanceId: props.instanceId, sessionId: sessionId.value, sessionKind: sessionKind.value })),
   computed(() => Boolean(props.instanceId && sessionId.value)),

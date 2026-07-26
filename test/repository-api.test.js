@@ -120,6 +120,8 @@ test("repository API exposes Files, Changes, diff, and authoritative mutation re
   const fixture = createGitFixture();
   fixture.write("tracked.txt", "changed\n");
   fixture.write("new file.txt", "new\n");
+  fs.mkdirSync(path.join(fixture.root, "nested", ".git"), { recursive: true });
+  fixture.write("nested/inside.txt", "nested repository file\n");
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-repository-api-mutations-"));
   const paths = pathsFor(dataRoot);
   const restore = setEnvironment(paths, fixture.base);
@@ -132,6 +134,12 @@ test("repository API exposes Files, Changes, diff, and authoritative mutation re
     const directory = await app.inject({ method: "GET", url: `${base}/directories` });
     assert.equal(directory.statusCode, 200);
     assert.equal(directory.json().data.entries.some((entry) => entry.name === "new file.txt"), true);
+    const nestedEntry = directory.json().data.entries.find((entry) => entry.name === "nested");
+    assert.equal(nestedEntry.kind, "nested-repository");
+    assert.equal(nestedEntry.traversable, true);
+    const nestedDirectory = await app.inject({ method: "GET", url: `${base}/directories?path=nested` });
+    assert.equal(nestedDirectory.statusCode, 200);
+    assert.deepEqual(nestedDirectory.json().data.entries.map((entry) => entry.name), ["inside.txt"]);
     const file = await app.inject({ method: "GET", url: `${base}/files?path=${encodeURIComponent("tracked.txt")}` });
     assert.equal(file.json().data.content, "changed\n");
     const changes = (await app.inject({ method: "GET", url: `${base}/changes` })).json().data;

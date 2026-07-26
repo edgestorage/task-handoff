@@ -16,9 +16,14 @@ test("node creation actions live in the Add node menu", () => {
   assert.match(addMenu, /Use this control plane as a node/);
   assert.match(addMenu, /Add remote node/);
   assert.match(addMenu, /Connect an existing node by endpoint/);
+  assert.match(addMenu, /Install with script/);
+  assert.match(addMenu, /Install and connect a remote node/);
   assert.match(addMenu, /Generate join token/);
   assert.match(addMenu, /Allow a node to connect securely/);
-  assert.equal((addMenu.match(/class="node-add-menu-item"/g) || []).length, 3);
+  assert.equal((addMenu.match(/class="node-add-menu-item"/g) || []).length, 4);
+  assert.match(addMenu, /@select="openNodeAgentInstallGuide"/);
   assert.match(addMenu, /@select="createJoinInvite"/);
+  assert.ok(addMenu.indexOf("Generate join token") < addMenu.indexOf("Install with script"));
+  assert.match(addMenu, /Install with script[\s\S]*<\/DropdownMenuItem>\s*<\/DropdownMenuContent>$/);
   assert.doesNotMatch(remoteDialog, /createJoinInvite|Generate join token|Allow a node to join/);
 });

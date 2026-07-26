@@ -149,6 +149,18 @@ curl -fsSL https://CONTROL_PLANE_HOST/install-node-agent.sh | sudo sh -s -- \
   --version 1.0.0
 ```
 
+When only the node-agent package is installed, generate a one-time token for
+adding that node to a control plane directly from the node host:
+
+```sh
+sudo task-handoff-node-agent invite --ipc-path /run/task-handoff/node-agent.sock
+```
+
+Use `--json` for automation. The command talks to the agent through its private
+local IPC socket and does not require the aggregate `task-handoff` CLI. The
+explicit socket path matches the systemd installation; an agent started without
+an explicit IPC path can use the command's default user data directory instead.
+
 See [docs/server-install.md](docs/server-install.md) for install options and
 the upgrade flow.
 
@@ -205,10 +217,14 @@ secrets. `DOCKERHUB_IMAGE_NAME` can optionally override the default
 
 With Node.js 24.15.0 or newer within the Node.js 24 release line, pushing a semantic version tag such as `v1.2.3`
 builds signed and notarized macOS arm64/x64 installers plus unsigned Windows
-x64 and Linux x64 installers, then attaches them to a GitHub Release. Tags with
-a prerelease suffix, such as `v1.2.3-rc.1`, create a GitHub prerelease.
+x64 and Linux x64 installers, then attaches them and the desktop update
+manifests to the public GitHub Release. Tags with an `alpha` or `beta`
+prerelease suffix, such as `v1.2.3-beta.1`, create a GitHub prerelease.
+Each release starts with a platform and architecture download table, followed
+by generated release notes; technical updater assets remain in the collapsed
+GitHub Assets section.
 The workflow can also be run manually to validate installers without publishing
-a release. Both macOS jobs require these GitHub Actions repository secrets:
+a release. The macOS build requires these GitHub Actions repository secrets:
 
 - `MAC_CSC_LINK`: base64-encoded Developer ID Application `.p12` certificate
 - `MAC_CSC_KEY_PASSWORD`: password used when exporting the `.p12` certificate
@@ -219,7 +235,9 @@ a release. Both macOS jobs require these GitHub Actions repository secrets:
 The workflow rejects missing credentials, signs with hardened runtime, submits
 the app to Apple's notary service, staples the resulting ticket, and verifies
 the signature, ticket, and Gatekeeper assessment before uploading artifacts.
-Windows code signing is not enabled yet.
+Windows code signing is not enabled yet. Releases are published to the public
+`edgestorage/task-handoff` repository; workflows running from another repository
+must provide `DESKTOP_RELEASE_TOKEN` with permission to publish there.
 
 ## Package Map
 

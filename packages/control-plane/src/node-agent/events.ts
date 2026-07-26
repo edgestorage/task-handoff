@@ -2,6 +2,11 @@ import WebSocket from "ws";
 import {
   InstanceLifecycleEventType,
   InstanceLifecycleSnapshotSchema,
+  ImagePullTerminalEventType,
+  ImagePullTerminalFinishedSchema,
+  ImagePullTerminalOutputSchema,
+  type ImagePullTerminalFinished,
+  type ImagePullTerminalOutput,
   type ControlledInstance,
 } from "@task-handoff/protocol/control-plane";
 import { AiSessionEventTopic, AiSessionEventType } from "@task-handoff/protocol/ai-sessions";
@@ -25,11 +30,18 @@ type Logger = {
   warn?: (data: Record<string, unknown>, message?: string) => void;
 };
 
+function splitTerminalReplay(data: string, maxLength = 60_000) {
+  const chunks: string[] = [];
+  for (let offset = 0; offset < data.length; offset += maxLength) chunks.push(data.slice(offset, offset + maxLength));
+  return chunks;
+}
+
 export class NodeAgentInstanceEventForwarder {
   private readonly sockets = new Map<string, WebSocket>();
   private readonly socketUrls = new Map<string, string>();
   private readonly retries = new Map<string, { timer: EventConnectionRetryTimer; url?: string }>();
   private readonly outputs = new Set<WebSocket>();
+  private readonly imagePullTerminalByInstance = new Map<string, { output: ImagePullTerminalOutput; tail: string; finished?: ImagePullTerminalFinished }>();
   private readonly state: NodeAgentInstanceEventState;
   private readonly token?: string;
   private readonly logger?: Logger;
@@ -93,6 +105,17 @@ export class NodeAgentInstanceEventForwarder {
         { instanceId: instance.id },
       ));
     }
+    for (const [instanceId, terminal] of this.imagePullTerminalByInstance) {
+      const chunks = splitTerminalReplay(terminal.tail);
+      chunks.forEach((data, index) => this.sendForwarded(socket, this.createEvent(
+        ImagePullTerminalEventType.Output,
+        { ...terminal.output, sequence: terminal.output.sequence + index, data, ...(index === 0 ? { replay: true } : {}) },
+        { instanceId },
+      )));
+      if (terminal.finished) {
+        this.sendForwarded(socket, this.createEvent(ImagePullTerminalEventType.Finished, terminal.finished, { instanceId }));
+      }
+    }
     this.syncNow();
     return () => {
       this.outputs.delete(socket);
@@ -100,8 +123,30 @@ export class NodeAgentInstanceEventForwarder {
   }
 
   publish(type: string, payload: unknown, scope: Record<string, unknown> = {}) {
+    this.rememberImagePullTerminal(type, payload);
     const event = this.createEvent(type, payload, scope);
     for (const output of this.outputs) this.sendForwarded(output, event);
+  }
+
+  private rememberImagePullTerminal(type: string, payload: unknown) {
+    if (type === ImagePullTerminalEventType.Output) {
+      const parsed = ImagePullTerminalOutputSchema.safeParse(payload);
+      if (!parsed.success) return;
+      const output = parsed.data;
+      const current = this.imagePullTerminalByInstance.get(output.instanceId);
+      if (current && output.generation < current.output.generation) return;
+      const sameGeneration = current?.output.generation === output.generation;
+      const tail = output.replay || !sameGeneration ? output.data : `${current.tail}${output.data}`.slice(-(256 * 1024));
+      this.imagePullTerminalByInstance.set(output.instanceId, { output, tail });
+      return;
+    }
+    if (type === ImagePullTerminalEventType.Finished) {
+      const parsed = ImagePullTerminalFinishedSchema.safeParse(payload);
+      if (!parsed.success) return;
+      const finished = parsed.data;
+      const current = this.imagePullTerminalByInstance.get(finished.instanceId);
+      if (current?.output.generation === finished.generation) current.finished = finished;
+    }
   }
 
   publishInstanceLifecycle(instance: ControlledInstance) {
@@ -110,6 +155,10 @@ export class NodeAgentInstanceEventForwarder {
       instanceLifecycleSnapshot(instance),
       { instanceId: instance.id },
     );
+    const terminal = this.imagePullTerminalByInstance.get(instance.id);
+    if (instance.imageProvisioning?.phase === "ready" && terminal?.finished?.outcome === "succeeded") {
+      this.imagePullTerminalByInstance.delete(instance.id);
+    }
   }
 
   private createEvent(type: string, payload: unknown, scope: Record<string, unknown>): EventEnvelope {
@@ -140,6 +189,10 @@ export class NodeAgentInstanceEventForwarder {
   }
 
   private sync() {
+    const instanceIds = new Set(this.state.listInstances().map((instance) => instance.id));
+    for (const instanceId of this.imagePullTerminalByInstance.keys()) {
+      if (!instanceIds.has(instanceId)) this.imagePullTerminalByInstance.delete(instanceId);
+    }
     if (!this.outputs.size) {
       for (const socket of this.sockets.values()) {
         socket.close();

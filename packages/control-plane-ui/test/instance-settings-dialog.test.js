@@ -37,6 +37,14 @@ test("the instance App menu opens settings directly on app management", () => {
   assert.match(dialog, /section\.value = props\.initialSection \|\| "general"/);
 });
 
+test("instance refreshes do not reset the selected settings tab", () => {
+  const dialog = read("src/apps/control-plane/instance-settings/InstanceSettingsDialog.vue");
+
+  assert.match(dialog, /\[\(\) => props\.open, \(\) => props\.instance\?\.id, \(\) => props\.initialSection\]/);
+  assert.match(dialog, /\[\(\) => props\.open, \(\) => props\.instance\?\.id, \(\) => section\.value\]/);
+  assert.doesNotMatch(dialog, /\(\) => \[props\.open, props\.instance\?\.id/);
+});
+
 test("instance model controls live only in the settings dialog", () => {
   const detail = read("src/apps/control-plane/instance-detail/InstanceDetail.vue");
   const dialog = read("src/apps/control-plane/instance-settings/InstanceSettingsDialog.vue");
@@ -59,6 +67,15 @@ test("instance settings exposes general, models, apps, and inventory freshness s
   assert.match(dialog, /New Codex session permissions/);
   assert.match(dialog, /defaultCodexPermissionMode/);
   assert.match(dialog, /Existing sessions keep their own selection/);
+});
+
+test("instance settings edits the instance name through the general settings update", () => {
+  const dialog = read("src/apps/control-plane/instance-settings/InstanceSettingsDialog.vue");
+
+  assert.match(dialog, /<strong>Instance name<\/strong>/);
+  assert.match(dialog, /<ControlPlaneInput v-model="instanceName"/);
+  assert.match(dialog, /name: instanceName\.value\.trim\(\)/);
+  assert.match(dialog, /instanceName\.value\.trim\(\) !== props\.instance\.name/);
 });
 
 test("instance settings keeps a stable height within the viewport", () => {

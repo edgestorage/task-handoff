@@ -44,6 +44,11 @@ export function canShowInstanceAction(instance: InstanceBoardItem, action: Insta
 }
 
 export function instanceStatusTitle(instance: InstanceBoardItem) {
+  if (instance.status !== "stopping" && instance.status !== "stopped") {
+    const imagePhase = instance.imageProvisioning?.phase;
+    if (["checking-image", "pulling-image", "resolving-image"].includes(imagePhase || "")) return "Preparing instance";
+    if (imagePhase === "failed") return "Image preparation failed";
+  }
   if (instance.status === "created") return "Instance created";
   if (instance.status === "provisioning") return "Preparing runtime";
   if (instance.status === "starting") return "Starting container";
@@ -56,6 +61,12 @@ export function instanceStatusTitle(instance: InstanceBoardItem) {
 }
 
 export function instanceStatusDetail(instance: InstanceBoardItem) {
+  if (instance.status !== "stopping" && instance.status !== "stopped") {
+    const imagePhase = instance.imageProvisioning?.phase;
+    if (imagePhase === "checking-image") return "Checking whether the image is already available on the node.";
+    if (imagePhase === "pulling-image") return "The Docker image is being prepared before the container can start.";
+    if (imagePhase === "resolving-image") return "Resolving the pulled image to its repository digest.";
+  }
   if (instance.status === "created") return "The instance is ready to start.";
   if (instance.status === "failed" && instance.imageProvisioning?.error) return instance.imageProvisioning.error;
   if (instance.status === "failed") return "The instance could not be started. Retry the failed operation or inspect its runtime.";
@@ -67,8 +78,9 @@ export function instanceStatusDetail(instance: InstanceBoardItem) {
 
 export function imageProvisioningLabel(instance: InstanceBoardItem) {
   const phase = instance.imageProvisioning?.phase;
+  const progress = instance.imagePullProgress;
   if (phase === "checking-image") return "Checking image";
-  if (phase === "pulling-image") return "Pulling image";
+  if (phase === "pulling-image") return progress ? `Pulling image · ${progress.message}` : "Pulling image";
   if (phase === "resolving-image") return "Resolving image digest";
   if (phase === "failed") return "Image provisioning failed";
   return phase === "ready" ? "Image ready" : "";

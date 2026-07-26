@@ -507,6 +507,49 @@ export const ImageProvisioningSchema = z.object({
   updatedAt: TimestampSchema,
 }).strict();
 
+export const ImagePullTerminalEventType = {
+  Output: "image.pull.terminal.output",
+  Finished: "image.pull.terminal.finished",
+  Progress: "image.pull.progress",
+  Snapshot: "image.pull.snapshot",
+} as const;
+
+const ImagePullEventIdentitySchema = z.object({
+  instanceId: IdSchema,
+  generation: z.number().int().nonnegative(),
+  requestedReference: DockerImageReferenceSchema,
+  sequence: z.number().int().nonnegative(),
+  observedAt: TimestampSchema,
+}).strict();
+
+export const ImagePullTerminalOutputSchema = ImagePullEventIdentitySchema.extend({
+  data: z.string().min(1).max(65536),
+  replay: z.boolean().optional(),
+}).strict();
+
+export const ImagePullTerminalFinishedSchema = ImagePullEventIdentitySchema.extend({
+  outcome: z.enum(["succeeded", "failed"]),
+}).strict();
+
+export const ImagePullProgressSchema = ImagePullEventIdentitySchema.extend({
+  status: z.enum(["connecting", "pulling", "extracting", "complete", "failed"]),
+  layers: z.object({
+    total: z.number().int().nonnegative(),
+    completed: z.number().int().nonnegative(),
+    downloaded: z.number().int().nonnegative(),
+    downloading: z.number().int().nonnegative(),
+    extracting: z.number().int().nonnegative(),
+  }).strict(),
+  bytes: z.object({
+    current: z.number().finite().nonnegative(),
+    total: z.number().finite().positive(),
+  }).strict().optional(),
+  percent: z.number().finite().min(0).max(100).optional(),
+  message: z.string().trim().min(1).max(500),
+  terminalTail: z.string().max(262144).optional(),
+  terminalTruncated: z.boolean().optional(),
+}).strict();
+
 export function sanitizeStoredImageProfile(
   input: unknown,
   onWarning?: (warning: { imageId?: string; field: string }) => void,
@@ -1132,6 +1175,9 @@ export type FederatedModelRegistry = z.infer<typeof FederatedModelRegistrySchema
 export type ImageProfile = z.infer<typeof ImageProfileSchema>;
 export type InstanceImageSnapshot = z.infer<typeof InstanceImageSnapshotSchema>;
 export type ImageProvisioning = z.infer<typeof ImageProvisioningSchema>;
+export type ImagePullTerminalOutput = z.infer<typeof ImagePullTerminalOutputSchema>;
+export type ImagePullTerminalFinished = z.infer<typeof ImagePullTerminalFinishedSchema>;
+export type ImagePullProgress = z.infer<typeof ImagePullProgressSchema>;
 export type NodeImageAvailability = z.infer<typeof NodeImageAvailabilitySchema>;
 export type Node = z.infer<typeof NodeSchema>;
 export type NodeRuntime = z.infer<typeof NodeRuntimeSchema>;

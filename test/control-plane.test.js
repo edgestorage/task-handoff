@@ -1017,7 +1017,7 @@ function createMockNodeAgentFetch(options = {}) {
       const id = body.id || `inst_${instances.size + 1}`;
       const instance = {
         id,
-        name: body.name || `instance-${timestamp.replace(/[-:.TZ]/g, "").slice(0, 14)}-${id.replace(/^inst_?/, "").slice(0, 4)}`,
+        name: body.name || `instance-${id.replace(/^inst_?/, "").slice(0, 6)}`,
         projectId: body.projectId,
         source: body.source,
         sourceSnapshot: body.sourceSnapshot || {},
@@ -4292,7 +4292,6 @@ test("node agent provisions one built-in local runtime and creates local instanc
     headers: { authorization: "Bearer agent-secret" },
     payload: {
       id: "inst_local",
-      name: "local workspace",
       runtimeId: "runtime_local_host",
       source: {
         type: "local-folder",
@@ -4304,6 +4303,7 @@ test("node agent provisions one built-in local runtime and creates local instanc
     },
   });
   assert.equal(createdInstance.statusCode, 201);
+  assert.equal(createdInstance.json().data.name, "instance-local");
   assert.equal(createdInstance.json().data.imageId, undefined);
   assert.equal(createdInstance.json().data.status, "created");
   assert.equal(createdInstance.json().data.connectionStatus, "unknown");
@@ -7711,7 +7711,7 @@ test("control plane proxies instance websocket routes while preserving HTTP prox
   });
 });
 
-test("control plane generated instance names include seconds and id suffix", async (t) => {
+test("control plane generated instance names use a short id suffix", async (t) => {
   const mock = createMockNodeAgentFetch();
   const app = await createControlPlaneApp({
     dataDir: tempDataDir("control-plane-generated-name"),
@@ -7738,7 +7738,7 @@ test("control plane generated instance names include seconds and id suffix", asy
     imageId: "img_default",
   });
   assert.equal(created.statusCode, 201);
-  assert.match(created.body.data.name, /^instance-\d{14}-[A-Za-z0-9_-]{1,4}$/);
+  assert.equal(created.body.data.name, `instance-${created.body.data.id.replace(/^inst_?/, "").slice(0, 6)}`);
 });
 
 test("control plane starts, stops, and restarts instances through runtime executors", async (t) => {

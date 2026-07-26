@@ -18,6 +18,8 @@
         v-else-if="settingsSection === 'basic'"
         :applying-server-update="applyingServerUpdate"
         :checking-server-update="checkingServerUpdate"
+        :desktop-update-state="desktopUpdates.state.value"
+        :desktop-updates-available="desktopUpdates.available"
         v-model:public-base-url="publicBaseUrl"
         :public-base-url-message="publicBaseUrlMessage"
         v-model:mention-trigger="mentionTrigger"
@@ -39,11 +41,16 @@
         :theme-preference="themePreference"
         @apply-server-update="applyServerUpdate"
         @check-server-update="checkServerUpdate"
+        @check-desktop-update="runDesktopUpdateAction(desktopUpdates.check)"
+        @download-desktop-update="runDesktopUpdateAction(desktopUpdates.download)"
         @detect-public-base-url="detectPublicBaseUrl"
         @save-public-base-url="savePublicBaseUrl"
         @reset-triggers="resetTriggerSettings"
+        @install-desktop-update="runDesktopUpdateAction(desktopUpdates.install)"
+        @open-desktop-release="runDesktopUpdateAction(desktopUpdates.openReleasePage)"
         @save-triggers="saveTriggerSettings"
         @update:server-update-channel="setUpdateChannel"
+        @update:desktop-update-channel="setDesktopUpdateChannel"
         @update:theme-preference="setThemePreference"
       />
 
@@ -356,6 +363,13 @@
                         <small>Allow a node to connect securely</small>
                       </span>
                     </DropdownMenuItem>
+                    <DropdownMenuItem class="node-add-menu-item" :disabled="creatingJoinInvite" @select="openNodeAgentInstallGuide">
+                      <Download :size="16" aria-hidden="true" />
+                      <span>
+                        <strong>{{ creatingNodeAgentInstall ? "Preparing install guide" : "Install with script" }}</strong>
+                        <small>Install and connect a remote node</small>
+                      </span>
+                    </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
                 <Button variant="outline" size="sm" :disabled="nodes.isFetching.value" @click="refresh">
@@ -490,13 +504,22 @@
         :token="generatedToken.token"
         @close="generatedToken = undefined"
       />
+      <NodeAgentInstallDialog
+        v-if="nodeAgentInstallInvite"
+        :expires-at="nodeAgentInstallInvite.expiresAt"
+        :initial-control-plane-url="nodeAgentInstallControlPlaneUrl"
+        :join-token="nodeAgentInstallInvite.joinToken"
+        :open="Boolean(nodeAgentInstallInvite)"
+        :version="nodeAgentInstallVersion"
+        @close="nodeAgentInstallInvite = undefined"
+      />
   </section>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useQueryClient } from "@tanstack/vue-query";
-import { AlertTriangle, ArrowLeft, ChevronDown, ChevronUp, KeyRound, Layers, MapPin, MonitorCog, Plus, RefreshCw, Server, Settings, Trash2 } from "@lucide/vue";
+import { AlertTriangle, ArrowLeft, ChevronDown, ChevronUp, Download, KeyRound, Layers, MapPin, MonitorCog, Plus, RefreshCw, Server, Settings, Trash2 } from "@lucide/vue";
 import { getNodeExternalListener, updateControlPlaneSettings, updateNodeExternalListener, useChatBridgesQuery, useChatGatewayStatusQuery, useControlPlaneSettingsQuery, useImagesQuery, useInstanceBoardPayloadQuery, useModelRegistryQuery, useModelsQuery, useNodeImageAvailabilityQuery, useNodeRuntimesPayloadQuery, useNodesQuery, useProjectsQuery, useServerUpdateCheckQuery } from "../../../api/queries";
 import type { BuildInfo, ControlPlaneSettings, InstanceBoardItem, ModelLocation, Node, NodeAgentExternalListener, UpdateChannel } from "../../../api/types";
 import { Badge } from "../../../components/ui/badge";
@@ -519,7 +542,9 @@ import { useModelSettings } from "./useModelSettings";
 import { useProjectSettings } from "./useProjectSettings";
 import { useNodeResourceSettings } from "./useNodeResourceSettings";
 import { useNodeSettings } from "./useNodeSettings";
+import { useDesktopUpdates, type DesktopUpdateChannel } from "./useDesktopUpdates";
 import NodeDetailPanel from "./NodeDetailPanel.vue";
+import NodeAgentInstallDialog from "./NodeAgentInstallDialog.vue";
 import NodeStorageFolderPickerDialog from "./NodeStorageFolderPickerDialog.vue";
 import GeneratedTokenDialog from "./GeneratedTokenDialog.vue";
 import { nodeEndpointDisplay } from "./nodeEndpointDisplay";
@@ -570,6 +595,7 @@ const board = useInstanceBoardPayloadQuery();
 const chatBridges = useChatBridgesQuery();
 const chatGatewayStatus = useChatGatewayStatusQuery();
 const controlPlaneSettings = useControlPlaneSettingsQuery();
+const desktopUpdates = useDesktopUpdates();
 const updateChannel = computed<UpdateChannel>(() => controlPlaneSettings.data.value?.updateChannel || "stable");
 
 const settingsSection = ref<SettingsSection>(props.initialSection || "nodes");
@@ -587,6 +613,9 @@ const commandTriggerError = computed(() => validCommandTrigger(commandTrigger.va
 const triggerSettingsAtDefaults = computed(() => commandTrigger.value === "/" && mentionTrigger.value === "@");
 const triggerSettingsDirty = computed(() => mentionTrigger.value !== (controlPlaneSettings.data.value?.mentionTrigger || "@") || commandTrigger.value !== (controlPlaneSettings.data.value?.commandTrigger || "/"));
 const remoteNodeDialogOpen = ref(false);
+const creatingNodeAgentInstall = ref(false);
+const nodeAgentInstallInvite = ref<{ joinToken: string; expiresAt: string }>();
+const nodeAgentInstallControlPlaneUrl = computed(() => publicBaseUrl.value.trim() || window.location.origin);
 const codexModels = computed(() => (models.data.value || []).filter((model) => model.app === "codex"));
 const claudeModels = computed(() => (models.data.value || []).filter((model) => model.app === "claude"));
 const nodeRuntimeItems = computed(() => nodeRuntimes.data.value?.data || []);
@@ -957,6 +986,17 @@ function openRemoteNodeDialog() {
   remoteNodeDialogOpen.value = true;
 }
 
+async function openNodeAgentInstallGuide() {
+  if (creatingNodeAgentInstall.value) return;
+  creatingNodeAgentInstall.value = true;
+  try {
+    const invite = await createJoinInvite(false);
+    if (invite) nodeAgentInstallInvite.value = invite;
+  } finally {
+    creatingNodeAgentInstall.value = false;
+  }
+}
+
 function setRemoteNodeDialogOpen(open: boolean) {
   remoteNodeDialogOpen.value = open;
   if (!open) {
@@ -993,6 +1033,10 @@ const serverUpdateQueryNodeId = computed(() => serverUpdatesAvailable.value ? se
 const serverUpdateQuery = useServerUpdateCheckQuery(serverUpdateQueryNodeId, updateChannel);
 const serverUpdateCheck = computed(() => serverUpdateQuery.data.value);
 const serverCurrentVersion = computed(() => serverUpdateNodeId.value ? nodeBuild(serverUpdateNodeId.value)?.packageVersion : undefined);
+const nodeAgentInstallVersion = computed(() => {
+  const version = serverCurrentVersion.value?.trim();
+  return version && version !== "unknown" ? version : undefined;
+});
 const serverUpdateJob = computed(() => updateJobs.value.find((job) => job.nodeId === serverUpdateNodeId.value && job.target.component === "node-agent"));
 const checkingServerUpdate = computed(() => serverUpdateQuery.isFetching.value);
 const applyingServerUpdate = computed(() => applyingUpdateTarget.value === serverUpdateStateKey.value);
@@ -1003,6 +1047,19 @@ async function checkServerUpdate() {
 
 async function applyServerUpdate() {
   if (serverUpdatesAvailable.value) await applyManagedUpdate(serverUpdateNodeId.value, serverUpdateTarget, serverUpdateCheck.value);
+}
+
+async function runDesktopUpdateAction(action: () => Promise<void>) {
+  try {
+    await action();
+  } catch (error) {
+    showControlPlaneToast(errorText(error));
+  }
+}
+
+async function setDesktopUpdateChannel(value: string) {
+  if (value !== "stable" && value !== "beta" && value !== "alpha") return;
+  await runDesktopUpdateAction(() => desktopUpdates.setChannel(value as DesktopUpdateChannel));
 }
 
 const nodeDetailActions = computed(() => ({

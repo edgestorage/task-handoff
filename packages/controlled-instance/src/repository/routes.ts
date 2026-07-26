@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
@@ -112,7 +113,7 @@ export function registerRepositoryRoutes(app: FastifyInstance, options: Register
       try {
         const query = DirectoryQuerySchema.parse(request.query || {});
         const state = await requireRepository(servicesFor(kind, request.params.id).resolve);
-        return { data: new RepositoryFileService(state.worktreeRoot!).list(query.path) };
+        return { data: repositoryFiles(state, options.workspaceRoots).list(query.path) };
       } catch (error) { return sendRepositoryError(reply, error); }
     });
 
@@ -120,35 +121,35 @@ export function registerRepositoryRoutes(app: FastifyInstance, options: Register
       try {
         const query = FileQuerySchema.parse(request.query || {});
         const state = await requireRepository(servicesFor(kind, request.params.id).resolve);
-        return { data: new RepositoryFileService(state.worktreeRoot!).read(query.path) };
+        return { data: repositoryFiles(state, options.workspaceRoots).read(query.path) };
       } catch (error) { return sendRepositoryError(reply, error); }
     });
 
     app.post<{ Params: { id: string }; Body: unknown }>(`${base}/files`, { bodyLimit: 5 * 1024 * 1024 }, async (request, reply) => {
       try {
         const body = RepositoryCreateFileRequestSchema.parse(request.body || {});
-        return { data: await fileMutation(servicesFor(kind, request.params.id).resolve, queue, body.expectedSnapshotId, (files) => files.create(body.path, body.content)) };
+        return { data: await fileMutation(servicesFor(kind, request.params.id).resolve, queue, options.workspaceRoots, body.expectedSnapshotId, (files) => files.create(body.path, body.content)) };
       } catch (error) { return sendRepositoryError(reply, error); }
     });
 
     app.put<{ Params: { id: string }; Body: unknown }>(`${base}/files`, { bodyLimit: 5 * 1024 * 1024 }, async (request, reply) => {
       try {
         const body = RepositoryWriteFileRequestSchema.parse(request.body || {});
-        return { data: await fileMutation(servicesFor(kind, request.params.id).resolve, queue, body.expectedSnapshotId, (files) => files.write(body.path, body.content, body.expectedVersion)) };
+        return { data: await fileMutation(servicesFor(kind, request.params.id).resolve, queue, options.workspaceRoots, body.expectedSnapshotId, (files) => files.write(body.path, body.content, body.expectedVersion)) };
       } catch (error) { return sendRepositoryError(reply, error); }
     });
 
     app.post<{ Params: { id: string }; Body: unknown }>(`${base}/files/rename`, async (request, reply) => {
       try {
         const body = RepositoryRenameFileRequestSchema.parse(request.body || {});
-        return { data: await fileMutation(servicesFor(kind, request.params.id).resolve, queue, body.expectedSnapshotId, (files) => files.rename(body.path, body.destination, body.expectedVersion)) };
+        return { data: await fileMutation(servicesFor(kind, request.params.id).resolve, queue, options.workspaceRoots, body.expectedSnapshotId, (files) => files.rename(body.path, body.destination, body.expectedVersion)) };
       } catch (error) { return sendRepositoryError(reply, error); }
     });
 
     app.delete<{ Params: { id: string }; Body: unknown }>(`${base}/files`, async (request, reply) => {
       try {
         const body = RepositoryDeleteFileRequestSchema.parse(request.body || {});
-        return { data: await fileMutation(servicesFor(kind, request.params.id).resolve, queue, body.expectedSnapshotId, (files) => files.delete(body.path, body.expectedVersion)) };
+        return { data: await fileMutation(servicesFor(kind, request.params.id).resolve, queue, options.workspaceRoots, body.expectedSnapshotId, (files) => files.delete(body.path, body.expectedVersion)) };
       } catch (error) { return sendRepositoryError(reply, error); }
     });
 
@@ -292,15 +293,30 @@ function sanitizeAiSessionLaunchError(error: unknown) {
   return new RepositoryOperationError("REPOSITORY_OPERATION_FAILED", "AI session could not be started.");
 }
 
-async function fileMutation<T>(resolve: () => Promise<ResolvedRepository>, queue: RepositoryMutationQueue, expectedSnapshotId: string, operation: (files: RepositoryFileService) => T) {
+async function fileMutation<T>(resolve: () => Promise<ResolvedRepository>, queue: RepositoryMutationQueue, workspaceRoots: string[], expectedSnapshotId: string, operation: (files: RepositoryFileService) => T) {
   const initial = await requireRepository(resolve);
   return queue.withWorktree(initial.worktreeRoot!, async () => {
     const state = await requireRepository(resolve);
     if (state.context.snapshotId !== expectedSnapshotId) throw new RepositoryOperationError("REPOSITORY_STATE_STALE", "Repository state changed after the file was loaded.", state);
-    const file = operation(new RepositoryFileService(state.worktreeRoot!));
+    const file = operation(repositoryFiles(state, workspaceRoots));
     const current = await requireRepository(resolve);
     return { file, snapshotId: current.context.snapshotId, context: current.context, changes: current.changes };
   });
+}
+
+function repositoryFiles(state: ResolvedRepository, workspaceRoots: string[]) {
+  const worktreeRoot = state.worktreeRoot!;
+  const boundaryRoot = workspaceRoots
+    .flatMap((root) => {
+      try { return [fs.realpathSync(root)]; } catch { return []; }
+    })
+    .find((root) => withinRoot(worktreeRoot, root)) || worktreeRoot;
+  return new RepositoryFileService(worktreeRoot, undefined, boundaryRoot);
+}
+
+function withinRoot(candidate: string, root: string) {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 async function requireRepository(resolve: () => Promise<ResolvedRepository>) {

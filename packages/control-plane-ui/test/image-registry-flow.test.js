@@ -3,8 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { canShowInstanceAction, hasInstanceStatusPage, imageProvisioningLabel, instanceStatusTitle } from "../src/apps/control-plane/useInstanceStatus.ts";
+import { canShowInstanceAction, hasInstanceStatusPage, imageProvisioningLabel, instanceStatusDetail, instanceStatusTitle } from "../src/apps/control-plane/useInstanceStatus.ts";
 import { dockerInstallGuidance, nodePlatform } from "../src/apps/control-plane/new-instance/dockerRuntimeGuidance.ts";
+import { ImagePullTerminalEventType } from "@task-handoff/protocol/control-plane";
+import { useImagePullProgress } from "../src/apps/control-plane/useImagePullProgress.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
@@ -36,11 +38,79 @@ test("node image availability queries are isolated by node id", () => {
 test("instance image phases have user-facing progress and retry only after failure", () => {
   assert.equal(imageProvisioningLabel(instance("checking-image")), "Checking image");
   assert.equal(imageProvisioningLabel(instance("pulling-image")), "Pulling image");
+  assert.equal(imageProvisioningLabel({
+    ...instance("pulling-image"),
+    imagePullProgress: {
+      instanceId: "inst_1",
+      generation: 1,
+      requestedReference: "docker.io/example/app:v1",
+      sequence: 1,
+      observedAt: new Date().toISOString(),
+      status: "pulling",
+      layers: { total: 12, completed: 7, downloaded: 1, downloading: 2, extracting: 1 },
+      percent: 63,
+      message: "7/12 layers ready · 63%",
+    },
+  }), "Pulling image · 7/12 layers ready · 63%");
   assert.equal(imageProvisioningLabel(instance("resolving-image")), "Resolving image digest");
   const failed = instance("failed");
   assert.equal(imageProvisioningLabel(failed), "Image provisioning failed");
   assert.equal(canShowInstanceAction(failed, "retry-image"), true);
   assert.equal(canShowInstanceAction(instance("pulling-image"), "retry-image"), false);
+});
+
+test("image pull UI state accepts raw TTY before the first summary and restores a reconnect snapshot", () => {
+  const pulls = useImagePullProgress();
+  const identity = {
+    instanceId: "inst_stream",
+    generation: 3,
+    requestedReference: "docker.io/example/app:v1",
+    sequence: 1,
+    observedAt: new Date().toISOString(),
+  };
+  assert.equal(pulls.applyEvent(ImagePullTerminalEventType.Output, { ...identity, data: "live output\r\n" }), true);
+  assert.match(pulls.state(identity.instanceId).terminalTail, /live output/);
+  assert.equal(pulls.applyEvent(ImagePullTerminalEventType.Snapshot, {
+    ...identity,
+    sequence: 2,
+    status: "pulling",
+    layers: { total: 2, completed: 1, downloaded: 0, downloading: 1, extracting: 0 },
+    message: "1/2 layers",
+    terminalTail: "restored output\r\n",
+  }), true);
+  assert.equal(pulls.state(identity.instanceId).terminalTail, "restored output\r\n");
+});
+
+test("image pull UI drops diagnostics from an older provisioning generation", () => {
+  const pulls = useImagePullProgress();
+  const observedAt = new Date().toISOString();
+  pulls.applyEvent(ImagePullTerminalEventType.Output, {
+    instanceId: "inst_retry",
+    generation: 3,
+    requestedReference: "docker.io/example/app:v1",
+    sequence: 1,
+    observedAt,
+    data: "failed pull\r\n",
+  });
+  pulls.reconcileLifecycle({
+    instanceId: "inst_retry",
+    revision: 2,
+    updatedAt: observedAt,
+    status: "provisioning",
+    health: "unknown",
+    connectionStatus: "unknown",
+    accessStatus: "endpoint-unreachable",
+    imageProvisioning: {
+      phase: "checking-image",
+      requestedReference: "docker.io/example/app:v1",
+      generation: 4,
+      startedAt: observedAt,
+      updatedAt: observedAt,
+    },
+    workspace: { status: "pending" },
+    runtime: { labels: {} },
+  });
+  assert.equal(pulls.state("inst_retry"), undefined);
 });
 
 test("instance status page exists for every lifecycle state except running", () => {
@@ -60,6 +130,8 @@ test("instance status page exists for every lifecycle state except running", () 
   assert.match(sessions, /if \(instance\.status !== "running"\) \{[\s\S]*return \[\{[\s\S]*kind: "status"/);
   assert.match(sessions, /key: "overview"[\s\S]*kind: "status"/);
   assert.match(preview, /v-if="hasInstanceStatusPage\(instance\)"/);
+  assert.match(preview, /<ImagePullStatus/);
+  assert.doesNotMatch(read("src/apps/control-plane/instance-detail/InstanceDetail.vue"), /ImagePullStatus/);
   assert.doesNotMatch(preview, /v-if="instanceConnecting"/);
   const activeSessions = read("src/apps/control-plane/instance-detail/useActiveInstanceSessions.ts");
   assert.match(activeSessions, /hasInstanceStatusPage\(activeInstance\.value\) \? "overview" : sessionKey/);
@@ -69,8 +141,23 @@ test("instance status page describes terminal lifecycle states", () => {
   assert.equal(instanceStatusTitle(instance("ready", { status: "created" })), "Instance created");
   assert.equal(instanceStatusTitle(instance("ready", { status: "stopping" })), "Stopping instance");
   assert.equal(instanceStatusTitle(instance("ready", { status: "stopped" })), "Instance stopped");
-  assert.equal(instanceStatusTitle(instance("failed", { status: "failed" })), "Instance failed");
+  assert.equal(instanceStatusTitle(instance("failed", { status: "failed" })), "Image preparation failed");
   assert.equal(instanceStatusTitle(instance("ready", { status: "unhealthy" })), "Instance unhealthy");
+  const pulling = instance("pulling-image", {
+    status: "starting",
+    imagePullProgress: {
+      instanceId: "inst_image",
+      generation: 1,
+      requestedReference: "docker.io/example/app:v1",
+      sequence: 1,
+      observedAt: new Date().toISOString(),
+      status: "pulling",
+      layers: { total: 21, completed: 1, downloaded: 4, downloading: 4, extracting: 0 },
+      message: "1/21 layers ready",
+    },
+  });
+  assert.equal(instanceStatusTitle(pulling), "Preparing instance");
+  assert.equal(instanceStatusDetail(pulling), "The Docker image is being prepared before the container can start.");
 });
 
 test("registry profiles remain selectable for pull-required and unknown nodes", () => {

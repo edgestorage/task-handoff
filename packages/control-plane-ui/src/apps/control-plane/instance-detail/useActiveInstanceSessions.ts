@@ -446,14 +446,20 @@ export function useActiveInstanceSessions({
       ? `repository-changes:${target.sessionKind}:${target.sessionId}`
       : `repository:${target.sessionKind}:${target.sessionId}`;
     const tabs = repositorySessionTabs[instanceId] ||= reactive<SessionTab[]>([]);
-    if (!tabs.some((tab) => tab.key === key)) {
+    const existingTab = tabs.find((tab) => tab.key === key);
+    const source = target.filePath
+      ? { ...target, page, fileRequestId: (Number(existingTab?.source?.fileRequestId) || 0) + 1 }
+      : { ...target, page };
+    if (!existingTab) {
       tabs.push({
         key,
         kind: "repository",
         label: page === "changes-review" ? "Changes" : "File Explorer",
         status: "open",
-        source: { ...target, page },
+        source,
       });
+    } else {
+      existingTab.source = source;
     }
     const pane = focusedSessionPanes[instanceId] === "right" && rightSelectedSessionKeys[instanceId] ? "right" : "left";
     if (pane === "right") {

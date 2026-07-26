@@ -12,6 +12,7 @@ import type {
 } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionContextCompaction as ProtocolAiSessionContextCompaction } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionSubAgent as ProtocolAiSessionSubAgent } from "@task-handoff/protocol/ai-sessions";
+import type { ImagePullProgress } from "@task-handoff/protocol/control-plane";
 
 export type { AiSessionHistoryDetail, AiSessionHistoryItem, AiSessionHistoryList, AiSessionMentionCandidate, AiSessionMentionCatalog, AiSessionMentionDiagnostic, AiSessionMentionFileSearch, AiSessionReference, AiSessionResumeResult };
 
@@ -935,6 +936,7 @@ export type InstanceBoardItem = Omit<ControlledInstance, "aiSessions"> & {
   node?: Node;
   runtime?: NodeRuntime;
   protocolCompatible: boolean;
+  imagePullProgress?: ImagePullProgress;
 };
 
 export type InstanceWithAiSessions = Omit<InstanceBoardItem, "aiSessions"> & {

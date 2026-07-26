@@ -123,6 +123,7 @@
         :board-terminal-socket-url="boardTerminalSocketUrl"
         :error="board.error.value ? errorText(board.error.value) : ''"
         :instance-display-name="instanceDisplayName"
+        :interactive="boardInteractive"
         :is-instance-action-busy="isInstanceActionBusy"
         :launching-app="launchingApp"
         :loading="board.isLoading.value"
@@ -140,6 +141,7 @@
         @select-board-session="selectBoardSession"
         @select-instance="selectInstance"
         @set-size="setBoardSize"
+        @update:interactive="boardInteractive = $event"
       />
 
       <AiSessionBoardView
@@ -278,6 +280,7 @@ import { useAiSessionStore } from "./useAiSessionStore";
 import { useAppSessionStore } from "./useAppSessionStore";
 import { useControlPlaneEvents } from "./useControlPlaneEvents";
 import { useControlPlaneToasts } from "./useControlPlaneToasts";
+import { useImagePullProgress } from "./useImagePullProgress";
 
 type ProjectFolderSelection = string | { path: string; ownerNodeId?: string };
 
@@ -291,6 +294,7 @@ type DesktopBridge = {
 type BoardSize = "small" | "medium" | "large";
 type WorkbenchView = "instance" | "board" | "ai";
 const BOARD_SIZE_STORAGE_KEY = "task-handoff.control-plane.board-size";
+const BOARD_INTERACTIVE_STORAGE_KEY = "task-handoff.control-plane.board-interactive";
 const SESSION_PREVIEW_EXPANDED_STORAGE_KEY = "task-handoff.control-plane.session-preview-expanded";
 const ALL_BOARD_FILTER_VALUE = "__all__";
 const BOARD_SIZE_VALUES = new Set<BoardSize>(["small", "medium", "large"]);
@@ -298,6 +302,10 @@ const BOARD_SIZE_VALUES = new Set<BoardSize>(["small", "medium", "large"]);
 function storedBoardSize(): BoardSize {
   const stored = window.localStorage?.getItem(BOARD_SIZE_STORAGE_KEY);
   return BOARD_SIZE_VALUES.has(stored as BoardSize) ? (stored as BoardSize) : "medium";
+}
+
+function storedBoardInteractive() {
+  return window.localStorage?.getItem(BOARD_INTERACTIVE_STORAGE_KEY) === "true";
 }
 
 function storedSessionPreviewExpanded() {
@@ -331,6 +339,7 @@ const boardProjectFilter = ref(ALL_BOARD_FILTER_VALUE);
 const boardStatusFilter = ref(ALL_BOARD_FILTER_VALUE);
 const boardBulkAppFilter = ref(ALL_BOARD_FILTER_VALUE);
 const boardSize = ref<BoardSize>(storedBoardSize());
+const boardInteractive = ref(storedBoardInteractive());
 const sessionPreviewExpanded = ref(storedSessionPreviewExpanded());
 const newInstanceOpen = ref(false);
 const instanceSettingsId = ref("");
@@ -362,7 +371,13 @@ const isMacOS = navigator.platform.toLowerCase().includes("mac");
 const showCustomWindowControls = hasDesktopWindowControls && !isMacOS;
 const showNativeWindowControlSpace = hasDesktopWindowControls && isMacOS;
 const { collapseInstances, expandInstances, instancesCollapsed, startInstanceResize, stopInstanceResize, workbenchStyle } = useResizableInstancesSidebar();
-const boardInstances = computed(() => board.data.value || []);
+const imagePullProgress = useImagePullProgress();
+const boardInstances = computed(() => (board.data.value || []).map((instance) => {
+  const progress = imagePullProgress.state(instance.id);
+  return progress && progress.generation === instance.imageProvisioning?.generation
+    ? { ...instance, imagePullProgress: progress }
+    : instance;
+}));
 const appSessionStore = useAppSessionStore({
   boardInstances: () => boardInstances.value,
   appSessions: () => controlPlaneAppSessions.data.value,
@@ -471,6 +486,7 @@ useControlPlaneEvents({
     },
     recoverOpen: loadActiveInstanceResourceMetrics,
   },
+  imagePullProgress,
 });
 const lastRefreshLabel = computed(() => new Date(lastRefreshAt.value).toLocaleTimeString());
 const connectingInstanceIds = computed(() => sortedInstances.value.filter(isInstanceConnecting).map((instance) => instance.id).join("\n"));
@@ -485,7 +501,7 @@ const {
   boardSessions,
   boardTerminalSocketUrl,
   selectBoardSession,
-} = useInstanceBoardSessions({ boardSessionKeys, boardVisibleInstances });
+} = useInstanceBoardSessions({ boardInteractive, boardSessionKeys, boardVisibleInstances });
 const {
   activeAttachUrl,
   activeInstanceWebUrl,
@@ -536,7 +552,7 @@ const {
   refresh,
   sessionMenuOpen,
 });
-const { disposeBoardTerminalPreviews, disposeHiddenBoardTerminalPreviews, mountBoardTerminalPreviews, setBoardTerminalHost } = useBoardTerminalPreviews(boardMode);
+const { disposeBoardTerminalPreviews, disposeHiddenBoardTerminalPreviews, mountBoardTerminalPreviews, setBoardTerminalHost } = useBoardTerminalPreviews(boardMode, boardInteractive);
 
 let connectingRefreshTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -579,8 +595,12 @@ watch(sessionPreviewExpanded, (expanded) => {
   window.localStorage?.setItem(SESSION_PREVIEW_EXPANDED_STORAGE_KEY, String(expanded));
 });
 
+watch(boardInteractive, (interactive) => {
+  window.localStorage?.setItem(BOARD_INTERACTIVE_STORAGE_KEY, String(interactive));
+});
+
 watch(
-  () => (boardMode.value ? boardVisibleInstances.value.map((instance) => `${instance.id}:${boardTerminalSocketUrl(instance)}`).join("\n") : ""),
+  () => (boardMode.value ? `${boardInteractive.value}\n${boardVisibleInstances.value.map((instance) => `${instance.id}:${boardTerminalSocketUrl(instance)}`).join("\n")}` : ""),
   () => {
     if (!boardMode.value) {
       disposeBoardTerminalPreviews();

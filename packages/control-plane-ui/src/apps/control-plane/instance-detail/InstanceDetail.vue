@@ -34,7 +34,7 @@
             </button>
           </div>
           <span>{{ instance.image?.name || instance.imageId }} · {{ instance.node?.name || instance.nodeId }} / {{ instance.runtime?.name || instance.runtimeId }}</span>
-          <span v-if="instance.imageProvisioning && instance.imageProvisioning.phase !== 'ready'" class="image-provisioning-status">
+          <span v-if="instance.imageProvisioning && instance.imageProvisioning.phase !== 'ready' && !instance.imagePullProgress" class="image-provisioning-status">
             {{ imageProvisioningLabel(instance) }}<template v-if="instance.imageProvisioning.error"> · {{ instance.imageProvisioning.error }}</template>
           </span>
         </div>

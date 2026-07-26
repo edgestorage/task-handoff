@@ -115,6 +115,29 @@ test("server package owns the unified management command and runtimes stay indep
   assert.match(runtimeCli, /new Command\(\)/);
 });
 
+test("standalone node-agent CLI can create pairing invites over local IPC", () => {
+  const runtimeCli = fs.readFileSync(path.join(root, "apps", "cli", "src", "runtime", "node-agent.ts"), "utf8");
+  const remoteInstaller = fs.readFileSync(path.join(root, "packages", "control-plane", "src", "control-plane", "nodes", "install-script.ts"), "utf8");
+
+  assert.match(runtimeCli, /\.command\("invite"\)/);
+  assert.match(runtimeCli, /fetchNodeAgentIpc/);
+  assert.match(runtimeCli, /options\.endpoint\s*\? undefined\s*:\s*explicitIpcPath \|\| nodeAgentIpcPath/);
+  assert.match(runtimeCli, /Join token:/);
+  assert.match(runtimeCli, /\.option\("--json"/);
+  assert.match(remoteInstaller, /TASK_HANDOFF_NODE_AGENT_CONNECTION_MODE=local-ipc/);
+  assert.match(remoteInstaller, /TASK_HANDOFF_NODE_AGENT_IPC_PATH=\$IPC_PATH/);
+  assert.match(remoteInstaller, /invite --ipc-path \$IPC_PATH/);
+});
+
+test("node-agent installer honors an explicit npm package before an ambient binary", () => {
+  const installer = fs.readFileSync(path.join(root, "packages", "control-plane", "src", "control-plane", "nodes", "install-script.ts"), "utf8");
+  const explicitPackage = installer.indexOf('elif [ -n "$NPM_PACKAGE" ]; then');
+  const ambientBinary = installer.indexOf("elif command -v task-handoff-node-agent");
+
+  assert.ok(explicitPackage >= 0);
+  assert.ok(ambientBinary > explicitPackage);
+});
+
 test("server update CLI preserves configuration and restart ordering", () => {
   const updater = fs.readFileSync(path.join(root, "apps", "cli", "src", "runtime", "server.ts"), "utf8");
   const updateCommand = updater.slice(updater.indexOf('program.command("update")'));

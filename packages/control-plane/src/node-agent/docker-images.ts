@@ -1,6 +1,7 @@
 import type { LocalDockerImage } from "@task-handoff/protocol/control-plane";
 import { normalizeDockerImageReference } from "@task-handoff/protocol/control-plane";
 import { defaultCommandRunner, type CommandRunner } from "../shared/process/command-runner.ts";
+import { defaultTerminalCommandRunner, type TerminalCommandRunner } from "../shared/process/terminal-command-runner.ts";
 
 export type DockerImagePhase = "checking-image" | "pulling-image" | "resolving-image";
 export type ResolvedDockerImage = {
@@ -12,47 +13,78 @@ export type ResolvedDockerImage = {
 
 type InFlightImage = {
   promise: Promise<ResolvedDockerImage>;
-  listeners: Set<(phase: DockerImagePhase) => void>;
+  phaseListeners: Set<(phase: DockerImagePhase) => void>;
+  terminalListeners: Set<(output: DockerImageTerminalOutput) => void>;
   phase?: DockerImagePhase;
+  terminalSequence: number;
+  terminalTail: string;
 };
+
+export type DockerImageTerminalOutput = {
+  sequence: number;
+  data: string;
+  replay?: boolean;
+};
+
+const MAX_TERMINAL_TAIL = 256 * 1024;
 
 export class DockerImageService {
   private readonly inFlight = new Map<string, InFlightImage>();
   private readonly runCommand: CommandRunner;
+  private readonly runTerminalCommand: TerminalCommandRunner;
 
-  constructor(runCommand: CommandRunner = defaultCommandRunner) {
+  constructor(runCommand: CommandRunner = defaultCommandRunner, runTerminalCommand?: TerminalCommandRunner) {
     this.runCommand = runCommand;
+    this.runTerminalCommand = runTerminalCommand || terminalRunnerFromCommandRunner(runCommand);
   }
 
-  ensure(referenceInput: string, onPhase?: (phase: DockerImagePhase) => void) {
+  ensure(referenceInput: string, onPhase?: (phase: DockerImagePhase) => void, onTerminal?: (output: DockerImageTerminalOutput) => void) {
     const reference = normalizeDockerImageReference(referenceInput);
     const existing = this.inFlight.get(reference);
     if (existing) {
       if (onPhase) {
-        existing.listeners.add(onPhase);
+        existing.phaseListeners.add(onPhase);
         if (existing.phase) onPhase(existing.phase);
+      }
+      if (onTerminal) {
+        existing.terminalListeners.add(onTerminal);
+        if (existing.terminalTail) onTerminal({ sequence: existing.terminalSequence, data: existing.terminalTail, replay: true });
       }
       return existing.promise;
     }
-    const listeners = new Set<(phase: DockerImagePhase) => void>();
-    if (onPhase) listeners.add(onPhase);
-    const entry: InFlightImage = { promise: Promise.resolve(undefined as never), listeners };
+    const phaseListeners = new Set<(phase: DockerImagePhase) => void>();
+    const terminalListeners = new Set<(output: DockerImageTerminalOutput) => void>();
+    if (onPhase) phaseListeners.add(onPhase);
+    if (onTerminal) terminalListeners.add(onTerminal);
+    const entry: InFlightImage = {
+      promise: Promise.resolve(undefined as never),
+      phaseListeners,
+      terminalListeners,
+      terminalSequence: 0,
+      terminalTail: "",
+    };
     const notify = (phase: DockerImagePhase) => {
       entry.phase = phase;
-      listeners.forEach((listener) => listener(phase));
+      phaseListeners.forEach((listener) => listener(phase));
     };
-    entry.promise = this.ensureOnce(reference, notify).finally(() => this.inFlight.delete(reference));
+    const notifyTerminal = (data: string) => {
+      entry.terminalSequence += 1;
+      entry.terminalTail = `${entry.terminalTail}${data}`.slice(-MAX_TERMINAL_TAIL);
+      const output = { sequence: entry.terminalSequence, data };
+      terminalListeners.forEach((listener) => listener(output));
+    };
+    entry.promise = this.ensureOnce(reference, notify, notifyTerminal).finally(() => this.inFlight.delete(reference));
     this.inFlight.set(reference, entry);
     return entry.promise;
   }
 
-  private async ensureOnce(reference: string, notify: (phase: DockerImagePhase) => void) {
+  private async ensureOnce(reference: string, notify: (phase: DockerImagePhase) => void, notifyTerminal: (data: string) => void) {
     notify("checking-image");
     let inspected = await this.inspect(reference).catch(() => undefined);
     let pulled = false;
     if (!inspected) {
       notify("pulling-image");
-      await this.runCommand("docker", ["pull", reference]);
+      await this.runTerminalCommand("docker", ["pull", reference], { cols: 120, rows: 40, onData: notifyTerminal });
       pulled = true;
       inspected = await this.inspect(reference);
     }
@@ -71,6 +103,16 @@ export class DockerImageService {
     const result = await this.runCommand("docker", ["image", "inspect", reference, "--format", "{{json .}}"]);
     return JSON.parse(result.stdout.trim() || "{}") as Record<string, unknown>;
   }
+}
+
+function terminalRunnerFromCommandRunner(runCommand: CommandRunner): TerminalCommandRunner {
+  if (runCommand === defaultCommandRunner) return defaultTerminalCommandRunner;
+  return async (command, args, options = {}) => {
+    const result = await runCommand(command, args, { timeoutMs: options.timeoutMs });
+    if (result.stdout) options.onData?.(result.stdout);
+    if (result.stderr) options.onData?.(result.stderr);
+    return result;
+  };
 }
 
 function dockerRepoDigests(record: Record<string, unknown>) {

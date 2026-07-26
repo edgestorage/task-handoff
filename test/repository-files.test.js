@@ -1,5 +1,6 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 const ts = require("typescript");
@@ -30,7 +31,7 @@ test("repository files list one level and preserve special names", () => {
   assert.deepEqual(service.list("src").entries.map((entry) => entry.name), ["nested.ts"]);
 });
 
-test("repository files reject traversal, metadata, symlinks, submodules, and nested repositories", () => {
+test("repository files use the workspace boundary while traversing nested repositories", () => {
   const fixture = createGitFixture();
   const external = path.join(fixture.base, "external.txt");
   fs.writeFileSync(external, "secret\n");
@@ -38,16 +39,22 @@ test("repository files reject traversal, metadata, symlinks, submodules, and nes
   fs.mkdirSync(path.join(fixture.root, "submodule"));
   fs.writeFileSync(path.join(fixture.root, "submodule", ".git"), "gitdir: ../.git/modules/submodule\n");
   fs.mkdirSync(path.join(fixture.root, "nested", ".git"), { recursive: true });
-  const service = new RepositoryFileService(fixture.root);
+  fs.writeFileSync(path.join(fixture.root, "nested", "inside.txt"), "nested\n");
+  fs.writeFileSync(path.join(fixture.root, "submodule", "inside.txt"), "submodule\n");
+  const service = new RepositoryFileService(fixture.root, undefined, fixture.base);
   const invalid = ["/etc/passwd", "../external.txt", "src/../tracked.txt", ".git/config", ".GIT/config", "src//file"];
   for (const value of invalid) assert.throws(() => service.read(value), (error) => error instanceof RepositoryFileError);
   assert.throws(() => service.read("external-link"), (error) => error.code === "REPOSITORY_PATH_FORBIDDEN");
-  assert.throws(() => service.list("submodule"), (error) => error.code === "REPOSITORY_PATH_FORBIDDEN");
-  assert.throws(() => service.list("nested"), (error) => error.code === "REPOSITORY_PATH_FORBIDDEN");
+  assert.deepEqual(service.list("submodule").entries.map((entry) => entry.name), ["inside.txt"]);
+  assert.deepEqual(service.list("nested").entries.map((entry) => entry.name), ["inside.txt"]);
   const listing = service.list();
   assert.equal(listing.entries.find((entry) => entry.name === "external-link").kind, "symlink");
   assert.equal(listing.entries.find((entry) => entry.name === "submodule").kind, "submodule");
   assert.equal(listing.entries.find((entry) => entry.name === "nested").kind, "nested-repository");
+  assert.equal(listing.entries.find((entry) => entry.name === "submodule").traversable, true);
+  assert.equal(listing.entries.find((entry) => entry.name === "nested").traversable, true);
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-outside-workspace-"));
+  assert.throws(() => new RepositoryFileService(fixture.root, undefined, outside), (error) => error.code === "REPOSITORY_PATH_FORBIDDEN");
 });
 
 test("repository text reads enforce UTF-8, binary, and size boundaries", () => {

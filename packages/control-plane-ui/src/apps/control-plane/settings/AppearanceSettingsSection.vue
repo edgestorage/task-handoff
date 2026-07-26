@@ -1,6 +1,50 @@
 <template>
   <div class="basic-settings-grid">
-    <section class="modal-section basic-panel server-update-panel">
+    <section v-if="desktopUpdatesAvailable" class="modal-section basic-panel server-update-panel desktop-update-panel">
+      <div class="section-head">
+        <span>Desktop updates</span>
+        <div class="update-channel-select">
+          <ControlPlaneSelect :model-value="desktopUpdateState?.channel || 'stable'" :disabled="desktopUpdateBusy" @update:model-value="emit('update:desktopUpdateChannel', $event)">
+            <ControlPlaneSelectItem value="stable">Stable</ControlPlaneSelectItem>
+            <ControlPlaneSelectItem value="beta">Beta</ControlPlaneSelectItem>
+            <ControlPlaneSelectItem value="alpha">Alpha</ControlPlaneSelectItem>
+          </ControlPlaneSelect>
+        </div>
+      </div>
+      <div class="server-update-state">
+        <div>
+          <strong>TaskHandoff desktop</strong>
+          <code v-if="!desktopUpdateState">Loading update state</code>
+          <code v-else>{{ desktopUpdateSummary }}</code>
+          <small v-if="desktopUpdateState?.capabilities.reason" class="desktop-update-reason">{{ desktopUpdateState.capabilities.reason }}</small>
+          <small v-if="desktopUpdateState?.error" class="settings-error">{{ desktopUpdateState.error.message }}</small>
+        </div>
+        <div class="server-update-actions">
+          <Button variant="outline" size="sm" :disabled="desktopUpdateCheckDisabled" @click="emit('checkDesktopUpdate')">
+            <RefreshCw :size="14" />
+            <span>{{ desktopUpdateState?.phase === 'checking' ? "Checking" : "Check" }}</span>
+          </Button>
+          <Button v-if="desktopUpdateState?.phase === 'available' && desktopUpdateState.capabilities.download" variant="outline" size="sm" @click="emit('downloadDesktopUpdate')">
+            <Download :size="14" />
+            <span>Download</span>
+          </Button>
+          <Button v-if="desktopUpdateState?.phase === 'downloaded' && desktopUpdateState.capabilities.install" variant="outline" size="sm" @click="emit('installDesktopUpdate')">
+            <RotateCw :size="14" />
+            <span>Restart and install</span>
+          </Button>
+          <Button v-if="showDesktopReleaseButton" variant="outline" size="sm" @click="emit('openDesktopRelease')">
+            <ExternalLink :size="14" />
+            <span>Open release</span>
+          </Button>
+        </div>
+      </div>
+      <div v-if="desktopUpdateState?.phase === 'downloading'" class="desktop-update-progress" role="progressbar" :aria-valuenow="desktopUpdatePercent" aria-valuemin="0" aria-valuemax="100">
+        <span :style="{ width: `${desktopUpdatePercent}%` }"></span>
+        <code>{{ desktopUpdatePercent }}%</code>
+      </div>
+      <p v-if="desktopUpdateState?.releaseName" class="section-description">{{ desktopUpdateState.releaseName }}</p>
+    </section>
+    <section v-else class="modal-section basic-panel server-update-panel">
       <div class="section-head">
         <span>Server updates</span>
         <div class="update-channel-select">
@@ -97,7 +141,8 @@
 </template>
 
 <script setup lang="ts">
-import { Download, Moon, RefreshCw, Sun } from "@lucide/vue";
+import { computed } from "vue";
+import { Download, ExternalLink, Moon, RefreshCw, RotateCw, Sun } from "@lucide/vue";
 import type { UpdateChannel, UpdateCheckResult, UpdateJob } from "../../../api/types";
 import { Badge } from "../../../components/ui/badge";
 import type { ThemePreference } from "../../../utils/theme";
@@ -105,8 +150,9 @@ import { Button } from "../../../components/ui/button";
 import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
+import type { DesktopUpdateState } from "./useDesktopUpdates";
 
-defineProps<{
+const props = defineProps<{
   publicBaseUrl: string;
   publicBaseUrlMessage?: string;
   mentionTrigger: string;
@@ -127,6 +173,8 @@ defineProps<{
   serverUpdateJob?: UpdateJob;
   checkingServerUpdate: boolean;
   applyingServerUpdate: boolean;
+  desktopUpdatesAvailable: boolean;
+  desktopUpdateState?: DesktopUpdateState;
   themePreference: ThemePreference;
 }>();
 
@@ -134,6 +182,10 @@ const emit = defineEmits<{
   detectPublicBaseUrl: [];
   checkServerUpdate: [];
   applyServerUpdate: [];
+  checkDesktopUpdate: [];
+  downloadDesktopUpdate: [];
+  installDesktopUpdate: [];
+  openDesktopRelease: [];
   savePublicBaseUrl: [];
   resetTriggers: [];
   saveTriggers: [];
@@ -141,8 +193,32 @@ const emit = defineEmits<{
   "update:mentionTrigger": [value: string];
   "update:publicBaseUrl": [value: string];
   "update:serverUpdateChannel": [value: string];
+  "update:desktopUpdateChannel": [value: string];
   "update:themePreference": [theme: ThemePreference];
 }>();
+
+const desktopUpdateBusy = computed(() => ["checking", "downloading", "installing"].includes(props.desktopUpdateState?.phase || ""));
+const desktopUpdateCheckDisabled = computed(() => !props.desktopUpdateState?.capabilities.check
+  || desktopUpdateBusy.value
+  || props.desktopUpdateState?.phase === "downloaded");
+const desktopUpdatePercent = computed(() => Math.max(0, Math.min(100, Math.round(props.desktopUpdateState?.progress?.percent || 0))));
+const showDesktopReleaseButton = computed(() => Boolean(
+  props.desktopUpdateState
+  && (!props.desktopUpdateState.capabilities.check
+    || (props.desktopUpdateState.phase === "available" && !props.desktopUpdateState.capabilities.download)
+    || props.desktopUpdateState.phase === "error"),
+));
+const desktopUpdateSummary = computed(() => {
+  const state = props.desktopUpdateState;
+  if (!state) return "Loading update state";
+  if (state.phase === "available") return `${state.currentVersion} → ${state.availableVersion || "unknown"} · update available`;
+  if (state.phase === "downloaded") return `${state.availableVersion || "Update"} downloaded · restart required`;
+  if (state.phase === "downloading") return `${state.currentVersion} → ${state.availableVersion || "update"} · downloading`;
+  if (state.phase === "checking") return `Current ${state.currentVersion} · checking for updates`;
+  if (state.phase === "up-to-date") return `Current ${state.currentVersion} · up to date`;
+  if (state.phase === "installing") return `${state.availableVersion || "Update"} · preparing to restart`;
+  return `Current ${state.currentVersion} · ${state.phase === "unsupported" ? "manual updates only" : "not checked"}`;
+});
 </script>
 
 <style scoped>
@@ -204,6 +280,36 @@ const emit = defineEmits<{
   gap: 8px;
   border-top: 1px solid var(--line);
   padding-top: 10px;
+}
+
+.desktop-update-reason {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.desktop-update-progress {
+  position: relative;
+  overflow: hidden;
+  height: 20px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-muted);
+}
+
+.desktop-update-progress > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 180ms ease;
+}
+
+.desktop-update-progress > code {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--text-strong);
+  font-size: 10px;
 }
 
 .server-update-job > span {

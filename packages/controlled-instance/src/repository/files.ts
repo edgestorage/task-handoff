@@ -16,17 +16,22 @@ export class RepositoryFileError extends Error {
 
 export class RepositoryFileService {
   readonly root: string;
+  readonly boundaryRoot: string;
 
-  constructor(root: string, private readonly maxFileBytes = 4 * 1024 * 1024) {
+  constructor(root: string, private readonly maxFileBytes = 4 * 1024 * 1024, boundaryRoot = root) {
     this.root = fs.realpathSync(root);
     if (!fs.statSync(this.root).isDirectory()) throw new RepositoryFileError("REPOSITORY_CWD_INACCESSIBLE", "Repository root is not a directory.");
+    this.boundaryRoot = fs.realpathSync(boundaryRoot);
+    if (!fs.statSync(this.boundaryRoot).isDirectory()) throw new RepositoryFileError("REPOSITORY_CWD_INACCESSIBLE", "Workspace boundary is not a directory.");
+    if (!withinRoot(this.root, this.boundaryRoot)) {
+      throw new RepositoryFileError("REPOSITORY_PATH_FORBIDDEN", "Repository root is outside the instance workspace boundary.");
+    }
   }
 
   list(relativePath = ""): RepositoryDirectoryListing {
     const resolved = this.resolve(relativePath, { allowRoot: true, mustExist: true });
     const stat = fs.lstatSync(resolved.absolutePath);
     if (!stat.isDirectory()) throw new RepositoryFileError("REPOSITORY_PATH_INVALID", "Directory path does not identify a directory.");
-    this.assertRepositoryBoundary(resolved.absolutePath, relativePath);
     const entries = fs.readdirSync(resolved.absolutePath, { withFileTypes: true })
       .filter((entry) => entry.name.toLowerCase() !== ".git")
       .map((entry) => {
@@ -38,7 +43,7 @@ export class RepositoryFileService {
           name: entry.name,
           path: entryPath,
           kind,
-          traversable: kind === "directory",
+          traversable: entryStat.isDirectory(),
           editable: kind === "file" && entryStat.size <= this.maxFileBytes,
           ...(kind === "file" ? { size: entryStat.size, mode: fileMode(entryStat) } : {}),
         };
@@ -140,19 +145,11 @@ export class RepositoryFileService {
       const stat = fs.lstatSync(current);
       if (stat.isSymbolicLink()) throw new RepositoryFileError("REPOSITORY_PATH_FORBIDDEN", "Symbolic links are outside the repository file boundary.");
       if (!isTarget && !stat.isDirectory()) throw new RepositoryFileError("REPOSITORY_PATH_INVALID", "A parent path is not a directory.");
-      if (stat.isDirectory()) this.assertRepositoryBoundary(current, segments.slice(0, index + 1).join("/"));
     }
-    const relative = path.relative(this.root, current);
-    if (relative.startsWith("..") || path.isAbsolute(relative)) throw new RepositoryFileError("REPOSITORY_PATH_FORBIDDEN", "Path escapes the repository root.");
+    if (!withinRoot(current, this.root) || !withinRoot(current, this.boundaryRoot)) {
+      throw new RepositoryFileError("REPOSITORY_PATH_FORBIDDEN", "Path escapes the instance workspace boundary.");
+    }
     return { absolutePath: current };
-  }
-
-  private assertRepositoryBoundary(absolutePath: string, relativePath: string) {
-    if (absolutePath === this.root) return;
-    const dotGit = path.join(absolutePath, ".git");
-    if (!fs.existsSync(dotGit)) return;
-    const kind = fs.lstatSync(dotGit).isFile() ? "submodule" : "nested repository";
-    throw new RepositoryFileError("REPOSITORY_PATH_FORBIDDEN", `Cannot enter ${kind}: ${relativePath}.`);
   }
 
   private kind(absolutePath: string, stat: fs.Stats) {
@@ -183,6 +180,11 @@ export function validateRepositoryRelativePath(relativePath: string) {
 }
 
 const safeSegments = validateRepositoryRelativePath;
+
+function withinRoot(candidate: string, root: string) {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
 
 function textBuffer(content: string, maxBytes: number) {
   if (content.includes("\0")) throw new RepositoryFileError("REPOSITORY_FILE_BINARY", "Text content cannot contain NUL bytes.");

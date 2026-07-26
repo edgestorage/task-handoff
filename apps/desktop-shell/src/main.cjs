@@ -5,6 +5,7 @@ const net = require("node:net");
 const path = require("node:path");
 const { setTimeout: delay } = require("node:timers/promises");
 const { app, BrowserView, BrowserWindow, dialog, ipcMain, nativeImage, shell } = require("electron");
+const { autoUpdater } = require("electron-updater");
 const {
   buildControlPlaneArgs,
   buildNodeAgentArgs,
@@ -22,6 +23,7 @@ const {
   resolveNodeCommand,
   validateDesktopInputs,
 } = require("./config.cjs");
+const { createDesktopUpdater } = require("./updater.cjs");
 
 let mainWindow;
 let controlPlaneProcess;
@@ -29,6 +31,8 @@ let nodeAgentProcess;
 let ownsControlPlaneProcess = false;
 let ownsNodeAgentProcess = false;
 let desktopLogStream;
+let desktopUpdater;
+let desktopServicesStopPromise;
 const controlPlaneWindows = new Set();
 const childProcessSpawnErrors = new WeakMap();
 const NODE_AGENT_IPC_ENDPOINT_PREFIX = "ipc://";
@@ -732,34 +736,61 @@ async function waitForNodeAgent(endpoint, child, attempts = 80) {
   throw new Error(`Node agent did not become ready at ${endpoint}.`);
 }
 
+function stopOwnedChild(child, label) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(forceTimer);
+      clearTimeout(giveUpTimer);
+      resolve();
+    };
+    const forceTimer = setTimeout(() => {
+      if (child.exitCode === null && child.signalCode === null) {
+        logError(`[desktop-shell] forcing ${label} to stop`);
+        child.kill("SIGKILL");
+      }
+    }, 3000);
+    const giveUpTimer = setTimeout(finish, 5000);
+    child.once("exit", finish);
+    child.kill("SIGTERM");
+  });
+}
+
 function stopControlPlane() {
   if (!controlPlaneProcess || !ownsControlPlaneProcess) {
-    return;
+    return Promise.resolve();
   }
   const child = controlPlaneProcess;
   controlPlaneProcess = undefined;
   ownsControlPlaneProcess = false;
-  child.kill("SIGTERM");
-  setTimeout(() => {
-    if (!child.killed) {
-      child.kill("SIGKILL");
-    }
-  }, 3000).unref();
+  return stopOwnedChild(child, "control plane");
 }
 
 function stopNodeAgent() {
   if (!nodeAgentProcess || !ownsNodeAgentProcess) {
-    return;
+    return Promise.resolve();
   }
   const child = nodeAgentProcess;
   nodeAgentProcess = undefined;
   ownsNodeAgentProcess = false;
-  child.kill("SIGTERM");
-  setTimeout(() => {
-    if (!child.killed) {
-      child.kill("SIGKILL");
-    }
-  }, 3000).unref();
+  return stopOwnedChild(child, "node agent");
+}
+
+async function stopDesktopServices() {
+  if (!desktopServicesStopPromise) {
+    desktopServicesStopPromise = (async () => {
+      await stopControlPlane();
+      await stopNodeAgent();
+    })().finally(() => {
+      desktopServicesStopPromise = undefined;
+    });
+  }
+  return desktopServicesStopPromise;
 }
 
 async function boot() {
@@ -821,8 +852,27 @@ ipcMain.handle("task-handoff:window-action", (_event, action) => {
   return { ok: true, maximized: !targetWindow.isDestroyed() ? targetWindow.isMaximized() : false };
 });
 
+ipcMain.handle("task-handoff:desktop-update-get-state", () => desktopUpdater?.getState());
+ipcMain.handle("task-handoff:desktop-update-check", () => desktopUpdater?.check());
+ipcMain.handle("task-handoff:desktop-update-download", () => desktopUpdater?.download());
+ipcMain.handle("task-handoff:desktop-update-install", () => desktopUpdater?.install());
+ipcMain.handle("task-handoff:desktop-update-set-channel", (_event, channel) => desktopUpdater?.setChannel(channel));
+ipcMain.handle("task-handoff:desktop-update-open-release", () => {
+  const url = desktopUpdater?.getState().releaseUrl || "https://github.com/edgestorage/task-handoff/releases";
+  return shell.openExternal(url);
+});
+
 app.whenReady().then(() => {
   applyDesktopDockIcon();
+  desktopUpdater = createDesktopUpdater({
+    app,
+    autoUpdater,
+    BrowserWindow,
+    logInfo,
+    logError,
+    install: stopDesktopServices,
+  });
+  desktopUpdater.start();
   void boot().catch((error) => {
     dialog.showErrorBox("TaskHandoff failed to start", error instanceof Error ? error.message : String(error));
     app.quit();
@@ -836,8 +886,8 @@ app.on("activate", () => {
 });
 
 app.on("before-quit", () => {
-  stopControlPlane();
-  stopNodeAgent();
+  desktopUpdater?.stop();
+  void stopDesktopServices();
   if (desktopLogStream) {
     desktopLogStream.end();
     desktopLogStream = undefined;

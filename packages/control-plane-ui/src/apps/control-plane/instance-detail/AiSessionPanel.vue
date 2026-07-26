@@ -140,8 +140,10 @@
                       class="session-ai-message"
                       :content="displayAiSessionMessage(session, promptIndexFor(session))"
                       :instance-id="instance.id"
+                      file-links
                       :is-latest="promptIndexFor(session) >= promptCount(session) - 1"
                       :session-id="session.id"
+                      @open-file="openMarkdownFile(session, $event)"
                     />
                   </div>
                   <span v-if="promptCount(session) > 1" class="session-ai-turn-nav">
@@ -527,9 +529,11 @@
             :can-interrupt="canInterrupt(selectedSession)"
             :can-resolve-approval="canResolveApproval(selectedSession)"
             :instance-id="instance.id"
+            file-links
             :is-latest="promptIndexFor(selectedSession) >= promptCount(selectedSession) - 1"
             :response-content="displayAiSessionResponse(selectedSession, promptIndexFor(selectedSession))"
             :session="selectedSession"
+            @open-file="openMarkdownFile(selectedSession, $event)"
             @steer-queued-message="steerQueuedMessage(selectedSession.id, $event)"
             @retry-queued-message="retryQueuedMessage(selectedSession.id, $event)"
             @remove-queued-message="removeQueuedMessage(selectedSession.id, $event)"
@@ -1858,6 +1862,15 @@ const emit = defineEmits<{
   openRepositoryWorkspace: [target: RepositoryWorkspaceTabTarget];
   selectAiSession: [instanceId: string, sessionId: string];
 }>();
+
+function openMarkdownFile(session: AiSessionSummary, filePath: string) {
+  emit("openRepositoryWorkspace", {
+    initialView: "files",
+    filePath,
+    sessionId: session.id,
+    sessionKind: "ai-session",
+  });
+}
 </script>
 
 <style scoped src="./AiSessionPanel.css"></style>

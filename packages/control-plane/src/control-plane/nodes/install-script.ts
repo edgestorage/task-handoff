@@ -13,6 +13,7 @@ DATA_DIR="/var/lib/task-handoff/node-agent"
 ENV_DIR="/etc/task-handoff"
 HOST="127.0.0.1"
 PORT="8091"
+IPC_PATH="/run/task-handoff/node-agent.sock"
 TASK_HANDOFF_BIN="\${TASK_HANDOFF_BIN:-}"
 PACKAGE_URL="\${TASK_HANDOFF_PACKAGE_URL:-}"
 NPM_PACKAGE="\${TASK_HANDOFF_NPM_PACKAGE:-}"
@@ -121,10 +122,10 @@ elif [ -n "$TASK_HANDOFF_BIN" ]; then
     echo "--task-handoff-bin must point to an executable file." >&2
     exit 1
   fi
-elif command -v task-handoff-node-agent >/dev/null 2>&1; then
-  TASK_HANDOFF_BIN="$(command -v task-handoff-node-agent)"
 elif [ -n "$NPM_PACKAGE" ]; then
   install_from_npm
+elif command -v task-handoff-node-agent >/dev/null 2>&1; then
+  TASK_HANDOFF_BIN="$(command -v task-handoff-node-agent)"
 elif command -v task-handoff >/dev/null 2>&1; then
   TASK_HANDOFF_BIN="$(command -v task-handoff)"
 else
@@ -161,6 +162,8 @@ TASK_HANDOFF_CONTROL_PLANE_URL=$CONTROL_PLANE_URL
 TASK_HANDOFF_NODE_AGENT_HOST=$HOST
 TASK_HANDOFF_NODE_AGENT_PORT=$PORT
 TASK_HANDOFF_NODE_AGENT_DATA_DIR=$DATA_DIR
+TASK_HANDOFF_NODE_AGENT_CONNECTION_MODE=local-ipc
+TASK_HANDOFF_NODE_AGENT_IPC_PATH=$IPC_PATH
 TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND=$CONTROLLED_INSTANCE_COMMAND
 TASK_HANDOFF_NPM_COMMAND=$NPM_COMMAND
 EOF
@@ -175,8 +178,10 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=$SERVICE_USER
+RuntimeDirectory=task-handoff
+RuntimeDirectoryMode=0750
 EnvironmentFile=-$ENV_DIR/node-agent.env
-ExecStart=$NODE_AGENT_COMMAND --host $HOST --port $PORT --data-dir $DATA_DIR
+ExecStart=$NODE_AGENT_COMMAND --host $HOST --port $PORT --data-dir $DATA_DIR --connection-mode local-ipc --ipc-path $IPC_PATH
 Restart=always
 RestartSec=3
 KillSignal=SIGTERM
@@ -219,5 +224,6 @@ fi
 
 echo "TaskHandoff node-agent is installed and running."
 echo "Service: task-handoff-node-agent.service"
+echo "Pairing token: sudo task-handoff-node-agent invite --ipc-path $IPC_PATH"
 `;
 }

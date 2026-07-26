@@ -13,6 +13,8 @@ export type SessionTab = {
 };
 
 export type RepositoryWorkspaceTabTarget = {
+  filePath?: string;
+  fileRequestId?: number;
   initialView: "files" | "changes";
   page?: "workspace" | "changes-review";
   sessionId: string;
@@ -138,7 +140,7 @@ export function sessionKind(appId: string, session?: Record<string, unknown>): S
   return "app";
 }
 
-export function sessionFrameUrl(instance: InstanceBoardItem, session: SessionTab, options: { compact?: boolean } = {}) {
+export function sessionFrameUrl(instance: InstanceBoardItem, session: SessionTab, options: { compact?: boolean; interactive?: boolean } = {}) {
   if (!instanceWebBase(instance) || !session.source || session.kind === "terminal" || session.kind === "ai") {
     return "";
   }
@@ -162,7 +164,9 @@ export function sessionFrameUrl(instance: InstanceBoardItem, session: SessionTab
     if (compact) {
       query.set("quality", "1");
       query.set("compression", "9");
-      query.set("view_only", "1");
+      if (!options.interactive) {
+        query.set("view_only", "1");
+      }
       query.set("show_dot", "1");
     } else {
       query.set("show_control_bar", "1");

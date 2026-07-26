@@ -6,6 +6,7 @@ import {
   InstanceLifecycleSnapshotSchema,
   InstanceResourceMetricsEventType,
   InstanceResourceMetricsSchema,
+  type InstanceLifecycleSnapshot,
 } from "@task-handoff/protocol/control-plane";
 import { AiSessionUnreadEventType, AiSessionUnreadStateSchema, type AiSessionUnreadState } from "@task-handoff/protocol/ai-sessions";
 import type { SessionStreamDescriptor } from "@task-handoff/protocol/events";
@@ -53,6 +54,11 @@ export function useControlPlaneEvents(input: {
   resourceMetrics?: {
     applyEvent: (metrics: InstanceResourceMetrics) => boolean;
     recoverOpen: () => void | Promise<void>;
+  };
+  imagePullProgress?: {
+    applyEvent: (type: string, payload: unknown) => boolean;
+    clear?: (instanceId: string) => void;
+    reconcileLifecycle?: (lifecycle: InstanceLifecycleSnapshot) => void;
   };
 }) {
   const queryClient = useQueryClient();
@@ -119,6 +125,9 @@ export function useControlPlaneEvents(input: {
     if (event.type && LIFECYCLE_COMMAND_NOTIFICATIONS.has(event.type)) {
       return true;
     }
+    if (event.type?.startsWith("image.pull.")) {
+      return input.imagePullProgress?.applyEvent(event.type, event.payload) || false;
+    }
     if (event.type === AiSessionEventType.MessageDelta) {
       return input.aiSessions.applyMessageDelta(event.payload as AiSessionMessageDeltaEvent);
     }
@@ -144,6 +153,7 @@ export function useControlPlaneEvents(input: {
     if (event.type === InstanceLifecycleEventType.Snapshot) {
       const lifecycle = InstanceLifecycleSnapshotSchema.safeParse(event.payload);
       if (!lifecycle.success || event.scope?.instanceId !== lifecycle.data.instanceId) return false;
+      input.imagePullProgress?.reconcileLifecycle?.(lifecycle.data);
       return applyInstanceLifecycle(queryClient, lifecycle.data);
     }
     return false;

@@ -25,22 +25,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-arm64
+          - platform: macos-arm64-x64
             os: macos-latest
             target: mac
-            arch: arm64
-          - platform: macos-x64
-            os: macos-latest
-            target: mac
-            arch: x64
+            arch_args: --arm64 --x64
           - platform: windows-x64
             os: windows-latest
             target: win
-            arch: x64
+            arch_args: --x64
           - platform: linux-x64
             os: ubuntu-latest
             target: linux
-            arch: x64
+            arch_args: --x64
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
@@ -63,7 +59,14 @@ jobs:
         run: |
           version="${INPUT_VERSION:-${GITHUB_REF_NAME#v}}"
           node -e 'if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(process.argv[1])) process.exit(1)' "$version"
+          node -e 'const p=process.argv[1].split("-")[1]; if (p && !/^(?:alpha|beta)\./.test(p)) process.exit(1)' "$version"
+          channel="latest"
+          if [[ "$version" == *-* ]]; then
+            channel="${version#*-}"
+            channel="${channel%%.*}"
+          fi
           echo "value=$version" >> "$GITHUB_OUTPUT"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
 
       - name: Configure macOS signing and notarization
         if: matrix.target == 'mac'
@@ -98,27 +101,29 @@ jobs:
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-        run: pnpm exec electron-builder --${{ matrix.target }} --${{ matrix.arch }} --publish never --config.extraMetadata.version=${{ steps.version.outputs.value }}
+        run: pnpm exec electron-builder --${{ matrix.target }} ${{ matrix.arch_args }} --publish never --config.extraMetadata.version=${{ steps.version.outputs.value }} --config.publish.channel=${{ steps.version.outputs.channel }}
 
       - name: Verify macOS signing and notarization
         if: matrix.target == 'mac'
         shell: bash
         run: |
-          app_path="$(find release -maxdepth 2 -type d -name 'TaskHandoff.app' -print -quit)"
-          if [[ -z "$app_path" ]]; then
-            echo "::error::Packaged TaskHandoff.app was not found"
+          set -- release/mac*/TaskHandoff.app
+          if [[ "$#" -ne 2 || ! -d "$1" || ! -d "$2" ]]; then
+            echo "::error::Expected signed arm64 and x64 TaskHandoff.app bundles"
             exit 1
           fi
-          codesign --verify --deep --strict --verbose=2 "$app_path"
-          xcrun stapler validate "$app_path"
-          spctl --assess --type execute --verbose=4 "$app_path"
+          for app_path in "$@"; do
+            codesign --verify --deep --strict --verbose=2 "$app_path"
+            xcrun stapler validate "$app_path"
+            spctl --assess --type execute --verbose=4 "$app_path"
+          done
 
       - name: Build unsigned Windows or Linux installer
         if: matrix.target != 'mac'
         shell: bash
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-        run: pnpm exec electron-builder --${{ matrix.target }} --${{ matrix.arch }} --publish never --config.extraMetadata.version=${{ steps.version.outputs.value }}
+        run: pnpm exec electron-builder --${{ matrix.target }} ${{ matrix.arch_args }} --publish never --config.extraMetadata.version=${{ steps.version.outputs.value }} --config.publish.channel=${{ steps.version.outputs.channel }}
 
       - name: Remove App Store Connect API key
         if: always() && matrix.target == 'mac'
@@ -135,6 +140,16 @@ jobs:
             release/*.dmg
             release/*.exe
             release/*.zip
+            release/*.blockmap
+            release/latest.yml
+            release/latest-mac.yml
+            release/latest-linux.yml
+            release/beta.yml
+            release/beta-mac.yml
+            release/beta-linux.yml
+            release/alpha.yml
+            release/alpha-mac.yml
+            release/alpha-linux.yml
 
   release:
     name: Publish GitHub Release
@@ -151,9 +166,61 @@ jobs:
           path: release-artifacts
           merge-multiple: true
 
+      - name: Compose user-facing release notes
+        env:
+          GH_TOKEN: ${{ secrets.DESKTOP_RELEASE_TOKEN || github.token }}
+          GH_REPO: edgestorage/task-handoff
+        shell: bash
+        run: |
+          gh api --method POST "repos/${GH_REPO}/releases/generate-notes" \
+            -f tag_name="$GITHUB_REF_NAME" \
+            --jq '.body' > generated-release-notes.md
+
+          append_installers() {
+            local extension="$1"
+            local platform="$2"
+            local format="$3"
+            local file name architecture url
+            for file in release-artifacts/*."$extension"; do
+              [[ -e "$file" ]] || continue
+              name="${file##*/}"
+              architecture="x64"
+              if [[ "$name" == *-arm64.* ]]; then
+                architecture="Apple Silicon"
+              elif [[ "$name" == *-x64.* && "$platform" == "macOS" ]]; then
+                architecture="Intel"
+              fi
+              url="https://github.com/${GH_REPO}/releases/download/${GITHUB_REF_NAME}/${name}"
+              printf '| %s | %s | [%s](%s) |\n' "$platform" "$architecture" "$format" "$url"
+            done
+          }
+
+          {
+            echo "## Download TaskHandoff ${GITHUB_REF_NAME#v}"
+            echo
+            echo '| Platform | Architecture | Installer |'
+            echo '| --- | --- | --- |'
+            append_installers dmg macOS DMG
+            append_installers exe Windows Installer
+            append_installers AppImage Linux AppImage
+            append_installers deb Linux DEB
+            echo
+            echo '> Windows builds are currently unsigned. macOS builds are signed and notarized.'
+            echo
+            echo '<details>'
+            echo '<summary>Automatic update files</summary>'
+            echo
+            echo 'The Assets section also contains update manifests, blockmaps, and updater archives consumed automatically by the desktop application.'
+            echo
+            echo '</details>'
+            echo
+            cat generated-release-notes.md
+          } > release-notes.md
+
       - name: Create or update release
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.DESKTOP_RELEASE_TOKEN || github.token }}
+          GH_REPO: edgestorage/task-handoff
         run: |
           prerelease_flag=()
           if [[ "$GITHUB_REF_NAME" == *-* ]]; then
@@ -162,10 +229,29 @@ jobs:
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" release-artifacts/* --clobber
             if [[ "$GITHUB_REF_NAME" == *-* ]]; then
-              gh release edit "$GITHUB_REF_NAME" --prerelease
+              gh release edit "$GITHUB_REF_NAME" --prerelease --notes-file release-notes.md
             else
-              gh release edit "$GITHUB_REF_NAME" --prerelease=false
+              gh release edit "$GITHUB_REF_NAME" --prerelease=false --notes-file release-notes.md
             fi
           else
-            gh release create "$GITHUB_REF_NAME" release-artifacts/* --verify-tag --generate-notes --title "TaskHandoff $GITHUB_REF_NAME" "${prerelease_flag[@]}"
+            gh release create "$GITHUB_REF_NAME" release-artifacts/* --verify-tag --notes-file release-notes.md --title "TaskHandoff $GITHUB_REF_NAME" "${prerelease_flag[@]}"
           fi
+
+      - name: Verify published update manifests
+        env:
+          GH_TOKEN: ${{ secrets.DESKTOP_RELEASE_TOKEN || github.token }}
+          GH_REPO: edgestorage/task-handoff
+        run: |
+          assets="$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name')"
+          version="${GITHUB_REF_NAME#v}"
+          channel="latest"
+          if [[ "$version" == *-* ]]; then
+            channel="${version#*-}"
+            channel="${channel%%.*}"
+          fi
+          for pattern in '.+\.blockmap$' "^${channel}\\.yml$" "^${channel}-mac\\.yml$" "^${channel}-linux\\.yml$"; do
+            if ! grep -Eq "$pattern" <<<"$assets"; then
+              echo "::error::Published release is missing an update asset matching $pattern"
+              exit 1
+            fi
+          done

@@ -8,7 +8,7 @@ import type { FastifyReply } from "fastify";
 import type { FastifyServerOptions } from "fastify";
 import { z } from "zod";
 import { AiSessionUnreadEventType } from "@task-handoff/protocol/ai-sessions";
-import { CONTROL_PLANE_PROTOCOL_VERSION, type BuildInfo } from "@task-handoff/protocol/control-plane";
+import { CONTROL_PLANE_PROTOCOL_VERSION, ImagePullTerminalEventType, type BuildInfo } from "@task-handoff/protocol/control-plane";
 import { SESSION_STREAM_PROTOCOL_VERSION, SessionStreamsHelloEventType } from "@task-handoff/protocol/events";
 import { CONTROL_PLANE_SESSION_COOKIE, ControlPlaneAuth, type ControlPlaneAuthOptions } from "../auth/service.ts";
 import { ControlPlaneService, type ControlPlaneServiceOptions } from "../application/service.ts";
@@ -25,6 +25,7 @@ import { ControlPlaneAiSessionAggregator } from "../sessions/ai-session-aggregat
 import { AiSessionUnreadStore } from "../sessions/ai-session-unread-store.ts";
 import { ControlPlaneAppSessionAggregator } from "../sessions/app-session-aggregator.ts";
 import { nodeAgentInstallScript } from "../nodes/install-script.ts";
+import { ImagePullProgressProjector } from "../images/image-pull-progress.ts";
 
 export type CreateControlPlaneAppOptions = {
   dataDir?: string;
@@ -229,6 +230,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   const service = new ControlPlaneService(paths, { ...options.service, logger: app.log });
   const auth = new ControlPlaneAuth(paths, options.auth);
   const events = new ControlPlaneEventBus();
+  const imagePullProgress = new ImagePullProgressProjector(events);
   const aiSessionUnread = new AiSessionUnreadStore(paths, {
     onChanged: (state) => queueMicrotask(() => events.publish(AiSessionUnreadEventType.Updated, state, {
       topic: "ai.sessions",
@@ -254,6 +256,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   service.setAppSessionSnapshotProvider((options) => appSessionAggregator.list(options));
   service.setAiSessionSnapshotProvider((options) => aiSessionAggregator.list(options));
   events.on((event) => {
+    imagePullProgress.handle(event);
     if (event.type === "instance.deleted") {
       const instanceId = event.payload && typeof event.payload === "object" && "instanceId" in event.payload
         ? String((event.payload as { instanceId?: unknown }).instanceId || "")
@@ -288,6 +291,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   await app.register(cookie);
   await app.register(websocket);
   app.addHook("onClose", async () => {
+    imagePullProgress.close();
     nodeEventSubscriber.stop();
     chatGateway.stopAll();
   });
@@ -403,6 +407,12 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     });
     handshakeSent = true;
     for (const frame of pendingFrames) socket.send(frame);
+    for (const snapshot of imagePullProgress.snapshots()) {
+      events.send(socket, ImagePullTerminalEventType.Snapshot, snapshot, {
+        topic: "instances",
+        scope: { instanceId: snapshot.instanceId },
+      });
+    }
   });
 
   app.get("/api/auth/session", async (request) => ({ data: await auth.currentSession(request.cookies[CONTROL_PLANE_SESSION_COOKIE]) }));

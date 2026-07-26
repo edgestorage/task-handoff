@@ -25,7 +25,16 @@
           </ControlPlaneSelect>
         </div>
         <div class="board-toolbar-actions">
-          <InstanceViewOptionsMenu :group-by-node="groupByNode" label="Board options" :sort-mode="sortMode" @update:group-by-node="$emit('update:groupByNode', $event)" @update:sort-mode="$emit('update:sortMode', $event)" />
+          <InstanceViewOptionsMenu
+            :group-by-node="groupByNode"
+            label="Board options"
+            :preview-interactive="interactive"
+            :show-preview-interaction="true"
+            :sort-mode="sortMode"
+            @update:group-by-node="$emit('update:groupByNode', $event)"
+            @update:preview-interactive="$emit('update:interactive', $event)"
+            @update:sort-mode="$emit('update:sortMode', $event)"
+          />
           <div class="board-size-toggle" aria-label="Board card size">
             <button v-for="option in sizeOptions" :key="option.value" type="button" :class="{ active: size === option.value }" @click="$emit('setSize', option.value)">
               {{ option.label }}
@@ -62,7 +71,7 @@
             <p v-if="instance.imageProvisioning && instance.imageProvisioning.phase !== 'ready'" class="image-provisioning-status">
               {{ imageProvisioningLabel(instance) }}<template v-if="instance.imageProvisioning.error"> · {{ instance.imageProvisioning.error }}</template>
             </p>
-            <div class="board-card-preview" :data-state="boardPreviewState(instance)">
+            <div class="board-card-preview" :data-interactive="interactive" :data-state="boardPreviewState(instance)">
               <div v-if="boardSessions(instance).length > 1" class="board-session-switcher" @click.stop>
                 <DropdownMenu>
                   <DropdownMenuTrigger as-child>
@@ -213,6 +222,7 @@ const props = defineProps<{
   filter: string;
   groupByNode: boolean;
   instanceDisplayName: (instance: InstanceBoardItem) => string;
+  interactive: boolean;
   isInstanceActionBusy: (instance: InstanceBoardItem) => boolean;
   launchingApp: boolean;
   loading: boolean;
@@ -237,6 +247,7 @@ const emit = defineEmits<{
   selectInstance: [instanceId: string];
   setSize: [size: BoardSize];
   "update:groupByNode": [value: boolean];
+  "update:interactive": [value: boolean];
   "update:appFilter": [value: string];
   "update:filter": [value: string];
   "update:projectFilter": [value: string];
@@ -639,6 +650,12 @@ function canLaunchBoardApp(instance: InstanceBoardItem) {
   min-height: 0;
   border: 0;
   background: var(--terminal-bg);
+}
+
+.board-card-preview[data-interactive="false"] .board-card-frame,
+.board-card-preview[data-interactive="false"] .board-terminal-preview {
+  pointer-events: none;
+  user-select: none;
 }
 
 .board-terminal-preview {

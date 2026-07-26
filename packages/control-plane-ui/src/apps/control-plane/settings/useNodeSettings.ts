@@ -125,18 +125,21 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
     }
   }
 
-  async function createJoinInvite() {
+  async function createJoinInvite(showToken = true) {
     if (creatingJoinInvite.value) {
       return;
     }
     creatingJoinInvite.value = true;
     try {
       const invite = await createNodeJoinInvite();
-      generatedToken.value = {
-        title: "Control-plane join token",
-        token: invite.joinToken,
-        expiresAt: invite.expiresAt,
-      };
+      if (showToken) {
+        generatedToken.value = {
+          title: "Control-plane join token",
+          token: invite.joinToken,
+          expiresAt: invite.expiresAt,
+        };
+      }
+      return invite;
     } catch (error) {
       showControlPlaneToast(errorText(error));
     } finally {

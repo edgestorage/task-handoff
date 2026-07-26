@@ -71,7 +71,7 @@
               </span>
             </header>
             <div class="repository-workspace-editor-body">
-              <RepositoryFilePreview :content="activeTab.content" :path="activeTab.path" />
+              <RepositoryFilePreview :content="activeTab.content" :line="activeTab.line" :path="activeTab.path" />
             </div>
           </section>
           <section v-else class="repository-workspace-empty">
@@ -139,17 +139,21 @@ import { ScrollArea } from "../../../components/ui/scroll-area";
 import RepositoryErrorNotice from "./RepositoryErrorNotice.vue";
 import RepositoryFilePreview from "./RepositoryFilePreview.vue";
 import RepositoryFileTree from "./RepositoryFileTree.vue";
+import { repositoryFileLocation } from "./repositoryFilePath";
 import { openRepositoryWorkspaceWindow, repositoryWorkspaceChannelName } from "./repositoryWorkspaceWindow";
 
 type FileTab = RepositoryFileContent & {
   id: string;
   kind: "file";
+  line?: number;
 };
 
 const props = defineProps<{
   context: RepositoryContext;
   embedded?: boolean;
   instanceId: string;
+  initialFilePath?: string;
+  initialFileRequestId?: number;
   open: boolean;
   sessionId: string;
   sessionKind: RepositorySessionKind;
@@ -346,18 +350,33 @@ async function toggleDirectory(entry: RepositoryDirectoryEntry) {
   expandedPaths.value = next;
 }
 
-async function openFile(entry: RepositoryDirectoryEntry | { path: string }) {
+async function openFile(entry: RepositoryDirectoryEntry | { path: string; line?: number }) {
   const id = `file:${entry.path}`;
+  const line = "line" in entry ? entry.line : undefined;
   const existing = tabs.value.find((tab) => tab.id === id);
-  if (existing) { activeTabId.value = id; return; }
+  if (existing) {
+    existing.line = line;
+    activeTabId.value = id;
+    return;
+  }
   try {
     const file = await getRepositoryFile(target.value, entry.path);
-    tabs.value.push({ ...file, id, kind: "file" });
+    tabs.value.push({ ...file, id, kind: "file", line });
     activeTabId.value = id;
   } catch (error) {
     workspaceError.value = error;
   }
 }
+
+watch(
+  [() => props.initialFileRequestId, () => props.initialFilePath, () => props.context.repositoryRoot, () => props.context.cwdRelativePath],
+  ([, href]) => {
+    if (!href) return;
+    const location = repositoryFileLocation(href, props.context);
+    if (location) void openFile(location);
+  },
+  { immediate: true },
+);
 
 function openNewFileDialog() {
   newFilePath.value = "";

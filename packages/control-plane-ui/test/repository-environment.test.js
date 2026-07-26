@@ -166,10 +166,10 @@ test("Repository workspace opens as a session tab with a resizable ScrollArea si
   assert.match(workspace, />File Explorer</);
   assert.match(workspace, /@click="openChangesReview"/);
   assert.match(workspace, /emit\("openChanges", \{ initialView: "changes", page: "changes-review"/);
-  assert.match(workspace, /<RepositoryFilePreview :content="activeTab\.content" :path="activeTab\.path"/);
+  assert.match(workspace, /<RepositoryFilePreview :content="activeTab\.content" :line="activeTab\.line" :path="activeTab\.path"/);
   assert.doesNotMatch(workspace, /<textarea|writeRepositoryFile|saveFile\(|activeTab\.draft/);
   assert.match(fileEditor, /highlightSource\(props\.content, language\.value\)/);
-  assert.match(fileEditor, /<pre class="repository-file-preview repository-syntax-highlight"/);
+  assert.match(fileEditor, /<pre ref="preview" class="repository-file-preview repository-syntax-highlight"/);
   assert.match(fileEditor, /overflow: auto/);
   assert.match(syntaxHighlight, /tsx: "typescript"/);
   assert.doesNotMatch(workspace, /stageRepositoryPaths|unstageRepositoryPaths|discardRepositoryWorktree|commitRepositoryIndex/);

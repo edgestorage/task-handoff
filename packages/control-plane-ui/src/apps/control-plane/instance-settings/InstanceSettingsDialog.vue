@@ -53,6 +53,13 @@
               </div>
               <div class="instance-settings-control-row">
                 <div class="instance-settings-general-controls">
+                  <label class="instance-settings-name-control">
+                    <span>
+                      <strong>Instance name</strong>
+                      <small>Used to identify this instance throughout the control plane.</small>
+                    </span>
+                    <ControlPlaneInput v-model="instanceName" :disabled="savingGeneral" maxlength="160" placeholder="Instance name" />
+                  </label>
                   <label class="instance-settings-checkbox">
                     <Checkbox :model-value="autoImportAgentConfigs" :disabled="savingGeneral" @update:model-value="autoImportAgentConfigs = $event === true" />
                     <span>
@@ -72,7 +79,7 @@
                     </ControlPlaneSelect>
                   </label>
                 </div>
-                <Button size="sm" :disabled="savingGeneral || !generalChanged" @click="saveGeneral">
+                <Button size="sm" :disabled="savingGeneral || !generalChanged || !validInstanceName" @click="saveGeneral">
                   {{ savingGeneral ? "Saving" : "Save changes" }}
                 </Button>
               </div>
@@ -245,6 +252,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Progress } from "../../../components/ui/progress";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../../components/ui/tabs";
+import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
 import { effectiveInstanceModel, invalidInstanceModelSelection, selectableInstanceModels } from "./instanceSettingsState";
@@ -267,6 +275,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{ "update:open": [open: boolean] }>();
 const section = ref<InstanceSettingsSection>("general");
+const instanceName = ref("");
 const autoImportAgentConfigs = ref(true);
 const defaultCodexPermissionMode = ref<AiSessionPermissionMode>("ask");
 const modelSelection = ref<ModelSelection>({});
@@ -282,9 +291,11 @@ const noModelValue = "__none__";
 const modelApps: ModelApp[] = ["codex", "claude"];
 
 const generalChanged = computed(() => Boolean(props.instance && (
-  autoImportAgentConfigs.value !== props.instance.config.autoImportAgentConfigs
+  instanceName.value.trim() !== props.instance.name
+  || autoImportAgentConfigs.value !== props.instance.config.autoImportAgentConfigs
   || defaultCodexPermissionMode.value !== props.instance.config.defaultCodexPermissionMode
 )));
+const validInstanceName = computed(() => instanceName.value.trim().length > 0);
 const modelsChanged = computed(() => JSON.stringify(normalizedSelection(modelSelection.value)) !== JSON.stringify(normalizedSelection(props.instance?.modelSelection || {})));
 const inventoryState = computed<"current" | "stale" | "not-reported" | "empty" | "degraded">(() => {
   const inventory = props.instance?.appInventory;
@@ -311,10 +322,11 @@ const filteredManagedApps = computed(() => {
 });
 
 watch(
-  () => [props.open, props.instance?.id, props.initialSection] as const,
+  [() => props.open, () => props.instance?.id, () => props.initialSection],
   ([open]) => {
     if (!open || !props.instance) return;
     section.value = props.initialSection || "general";
+    instanceName.value = props.instance.name;
     autoImportAgentConfigs.value = props.instance.config.autoImportAgentConfigs;
     defaultCodexPermissionMode.value = props.instance.config.defaultCodexPermissionMode;
     modelSelection.value = { ...props.instance.modelSelection };
@@ -330,7 +342,7 @@ watch(() => props.instance, (instance) => {
 });
 
 watch(
-  () => [props.open, props.instance?.id, section.value] as const,
+  [() => props.open, () => props.instance?.id, () => section.value],
   ([open, instanceId, activeSection]) => {
     if (open && instanceId && activeSection === "apps") void props.refreshAppManagement(instanceId);
   },
@@ -391,17 +403,22 @@ function normalizedSelection(value: ModelSelection): ModelSelection {
 }
 
 async function saveGeneral() {
-  if (!props.instance || savingGeneral.value) return;
+  if (!props.instance || savingGeneral.value || !validInstanceName.value) return;
   savingGeneral.value = true;
   error.value = "";
   success.value = "";
   try {
-    await props.updateInstance(props.instance, { config: {
-      autoImportAgentConfigs: autoImportAgentConfigs.value,
-      defaultCodexPermissionMode: defaultCodexPermissionMode.value,
-    } });
+    await props.updateInstance(props.instance, {
+      name: instanceName.value.trim(),
+      config: {
+        autoImportAgentConfigs: autoImportAgentConfigs.value,
+        defaultCodexPermissionMode: defaultCodexPermissionMode.value,
+      },
+    });
+    instanceName.value = instanceName.value.trim();
     success.value = "General settings saved.";
   } catch (cause) {
+    instanceName.value = props.instance.name;
     autoImportAgentConfigs.value = props.instance.config.autoImportAgentConfigs;
     defaultCodexPermissionMode.value = props.instance.config.defaultCodexPermissionMode;
     error.value = cause instanceof Error ? cause.message : String(cause);
@@ -757,6 +774,7 @@ async function confirmAppOperation() {
 }
 
 .instance-settings-checkbox span,
+.instance-settings-name-control > span,
 .instance-settings-select-control > span,
 .instance-model-grid label {
   display: grid;
@@ -764,6 +782,7 @@ async function confirmAppOperation() {
 }
 
 .instance-settings-checkbox small,
+.instance-settings-name-control small,
 .instance-settings-select-control small,
 .instance-model-grid small,
 .instance-app-row small,
@@ -775,6 +794,18 @@ async function confirmAppOperation() {
 }
 
 .instance-settings-checkbox strong {
+  color: var(--text-strong);
+  font-size: 12px;
+}
+
+.instance-settings-name-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 240px);
+  align-items: center;
+  gap: 16px;
+}
+
+.instance-settings-name-control strong {
   color: var(--text-strong);
   font-size: 12px;
 }
@@ -1068,6 +1099,7 @@ async function confirmAppOperation() {
     flex-direction: column;
   }
 
+  .instance-settings-name-control,
   .instance-settings-select-control {
     grid-template-columns: 1fr;
     gap: 8px;

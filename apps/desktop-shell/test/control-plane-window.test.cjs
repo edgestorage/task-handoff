@@ -17,3 +17,12 @@ test("Electron opens repository workspaces in a restricted same-origin control p
   assert.match(mainSource, /task-handoff:open-control-plane-window/);
   assert.match(preloadSource, /openControlPlaneWindow: \(url\) => ipcRenderer\.invoke\("task-handoff:open-control-plane-window", url\)/);
 });
+
+test("Electron exposes desktop updates only through the preload bridge", () => {
+  assert.match(mainSource, /createDesktopUpdater/);
+  assert.match(mainSource, /task-handoff:desktop-update-get-state/);
+  assert.match(mainSource, /install: stopDesktopServices/);
+  assert.match(preloadSource, /desktopUpdates:/);
+  assert.match(preloadSource, /onStateChanged: \(listener\)/);
+  assert.match(preloadSource, /removeListener\("task-handoff:desktop-update-state", handler\)/);
+});

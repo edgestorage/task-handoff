@@ -1,13 +1,14 @@
-import type { ComputedRef } from "vue";
+import type { ComputedRef, Ref } from "vue";
 import type { InstanceBoardItem } from "../../../api/types";
 import { absoluteInstanceUrl, buildAppSessionTabs, previewDetail, previewTitle, sessionDisplayName, sessionFrameUrl, sessionMeta, sessionTerminalSocketUrl } from "../useInstanceSessions";
 
 type UseInstanceBoardSessionsInput = {
+  boardInteractive: Ref<boolean>;
   boardSessionKeys: Record<string, string>;
   boardVisibleInstances: ComputedRef<InstanceBoardItem[]>;
 };
 
-export function useInstanceBoardSessions({ boardSessionKeys, boardVisibleInstances }: UseInstanceBoardSessionsInput) {
+export function useInstanceBoardSessions({ boardInteractive, boardSessionKeys, boardVisibleInstances }: UseInstanceBoardSessionsInput) {
   function boardPrimarySession(instance: InstanceBoardItem) {
     const sessions = boardSessions(instance);
     const selectedKey = boardSessionKeys[instance.id];
@@ -33,7 +34,7 @@ export function useInstanceBoardSessions({ boardSessionKeys, boardVisibleInstanc
 
   function boardSessionFrameUrl(instance: InstanceBoardItem) {
     const session = boardPrimarySession(instance);
-    return session ? sessionFrameUrl(instance, session, { compact: true }) : "";
+    return session ? sessionFrameUrl(instance, session, { compact: true, interactive: boardInteractive.value }) : "";
   }
 
   function boardTerminalSocketUrl(instance: InstanceBoardItem) {

@@ -17,6 +17,13 @@
       <DropdownMenuCheckboxItem class="instance-view-options-item option-item" :model-value="groupByNode" @update:model-value="(value) => $emit('update:groupByNode', Boolean(value))">
         Group by node
       </DropdownMenuCheckboxItem>
+      <template v-if="showPreviewInteraction">
+        <DropdownMenuSeparator class="instance-view-options-separator" />
+        <DropdownMenuLabel class="instance-view-options-label">Interaction</DropdownMenuLabel>
+        <DropdownMenuCheckboxItem class="instance-view-options-item option-item" :model-value="previewInteractive" @update:model-value="(value) => $emit('update:previewInteractive', Boolean(value))">
+          Interact with previews
+        </DropdownMenuCheckboxItem>
+      </template>
     </DropdownMenuContent>
   </DropdownMenu>
 </template>
@@ -40,15 +47,20 @@ withDefaults(
   defineProps<{
     groupByNode: boolean;
     label?: string;
+    previewInteractive?: boolean;
+    showPreviewInteraction?: boolean;
     sortMode: InstanceListSortMode;
   }>(),
   {
     label: "Instance view options",
+    previewInteractive: false,
+    showPreviewInteraction: false,
   },
 );
 
 defineEmits<{
   "update:groupByNode": [value: boolean];
+  "update:previewInteractive": [value: boolean];
   "update:sortMode": [value: InstanceListSortMode];
 }>();
 </script>

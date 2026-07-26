@@ -15,6 +15,18 @@ const { createNodeAgentApp } = require("../packages/control-plane/src/node-agent
 const digest = (letter) => `sha256:${letter.repeat(64)}`;
 const tempDataDir = (name) => fs.mkdtempSync(path.join(os.tmpdir(), `${name}-`));
 
+function eventSocket(events) {
+  return {
+    readyState: 1,
+    OPEN: 1,
+    send: (value) => {
+      const message = JSON.parse(value);
+      if (message.event) events.push(message.event);
+    },
+    on: () => undefined,
+  };
+}
+
 async function waitFor(check, label) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < 2_000) {
@@ -214,12 +226,14 @@ test("node-agent queues start while pulling and runs the container when the imag
   });
   t.after(() => app.close());
   const lifecycleEvents = [];
+  const imagePullEvents = [];
   app.nodeAgentEventForwarder.addOutput({
     readyState: 1,
     OPEN: 1,
     send: (value) => {
       const message = JSON.parse(value);
       if (message.event?.type === InstanceLifecycleEventType.Snapshot) lifecycleEvents.push(message.event.payload);
+      if (message.event?.type?.startsWith("image.pull.terminal.")) imagePullEvents.push(message.event);
     },
     on: () => undefined,
   });
@@ -262,6 +276,56 @@ test("node-agent queues start while pulling and runs the container when the imag
   assert.ok(instanceEvents.some((event) => event.status === "starting" && event.imageProvisioning?.phase === "ready"));
   assert.ok(instanceEvents.some((event) => event.status === "registering" && event.imageProvisioning?.phase === "ready"));
   assert.deepEqual(instanceEvents.map((event) => event.revision), [...instanceEvents.map((event) => event.revision)].sort((a, b) => a - b));
+  assert.deepEqual(imagePullEvents.map((event) => event.type), ["image.pull.terminal.output", "image.pull.terminal.finished"]);
+  assert.equal(imagePullEvents[0].payload.data, "pulled");
+  assert.equal(imagePullEvents[1].payload.outcome, "succeeded");
+});
+
+test("node-agent streams Docker pull TTY output live and replays its bounded tail to a reconnected control plane", async (t) => {
+  let releasePull;
+  let available = false;
+  const pullGate = new Promise((resolve) => { releasePull = resolve; });
+  const app = await createNodeAgentApp({
+    dataDir: tempDataDir("node-image-tty"),
+    logger: false,
+    token: "agent-secret",
+    dockerCommandRunner: async (_command, args) => {
+      if (args[0] === "image") {
+        if (!available) throw new Error("missing");
+        return { stdout: JSON.stringify({ Id: digest("a"), RepoDigests: [`docker.io/example/controlled@${digest("a")}`] }), stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    },
+    dockerTerminalCommandRunner: async (_command, _args, options) => {
+      options.onData("aaaaaa111111: Downloading  5 MiB/10 MiB\r\n");
+      await pullGate;
+      available = true;
+      return { stdout: "", stderr: "" };
+    },
+  });
+  t.after(() => app.close());
+  const first = [];
+  app.nodeAgentEventForwarder.addOutput(eventSocket(first));
+  await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: "inst_tty_pull",
+      runtimeId: "runtime_local_docker",
+      imageId: "img_test",
+      image: imageProfile(),
+      source: { type: "local-folder", path: "/tmp/project" },
+    },
+  });
+  await waitFor(() => first.some((event) => event.type === "image.pull.terminal.output"), "live TTY output");
+  const reconnected = [];
+  app.nodeAgentEventForwarder.addOutput(eventSocket(reconnected));
+  const replay = reconnected.find((event) => event.type === "image.pull.terminal.output");
+  assert.equal(replay.payload.replay, true);
+  assert.match(replay.payload.data, /Downloading/);
+  releasePull();
+  await waitFor(() => app.nodeAgentState.controlledInstances.get("inst_tty_pull")?.imageProvisioning?.phase === "ready", "TTY pull ready");
 });
 
 test("failed node-agent image provisioning is persisted and can be retried", async (t) => {
