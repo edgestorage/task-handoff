@@ -4,11 +4,12 @@ import {
   AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES,
   AI_SESSION_MAX_MESSAGE_ATTACHMENTS,
   AiSessionMessageAttachmentSchema,
+  AiSessionPermissionModeSchema,
   AiSessionsSnapshotSchema,
 } from "./ai-sessions.ts";
 import { TriggerConfigSchema, TriggerDeploymentSchema, TriggerRunSchema, TriggerRuntimeStateSchema } from "./triggers.ts";
 
-export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-07-25";
+export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-07-26";
 // The local value follows the date-only convention. Parsing remains permissive
 // so persisted records written before that convention do not disappear.
 export const ProtocolVersionSchema = z.string();
@@ -820,9 +821,10 @@ export const ControlledInstanceSchema = z
     config: z
       .object({
         autoImportAgentConfigs: z.boolean().default(true),
+        defaultCodexPermissionMode: AiSessionPermissionModeSchema.default("ask"),
       })
       .strict()
-      .default({ autoImportAgentConfigs: true }),
+      .default({ autoImportAgentConfigs: true, defaultCodexPermissionMode: "ask" }),
     workspace: WorkspaceStatusSchema.default({ status: "unknown" }),
     target: InstanceTargetSchema.default({ strategy: "direct-port", status: "unknown" }),
     access: InstanceAccessSchema,
@@ -937,7 +939,7 @@ export function sanitizeStoredControlledInstance(
   }
   next.appInventory = sanitizeStoredAppInventory(source.appInventory);
   next.apps = pickObjectFields(source.apps, ["runningCount", "problemCount", "updatedAt", "revision"]);
-  next.config = pickObjectFields(source.config, ["autoImportAgentConfigs"]);
+  next.config = pickObjectFields(source.config, ["autoImportAgentConfigs", "defaultCodexPermissionMode"]);
   next.modelSelection = pickObjectFields(source.modelSelection, ["codexModelHash", "claudeModelHash"]);
   next.imageSnapshot = sanitizeStoredInstanceImageSnapshot(
     source.imageSnapshot,

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import test from "node:test";
+import { reorderSessionTabKeys } from "../src/apps/control-plane/instance-detail/sessionTabOrder.ts";
 
 const source = async (path) => fs.readFile(new URL(`../src/${path}`, import.meta.url), "utf8");
 
@@ -85,4 +86,39 @@ test("session preview splits the original tab row into pane-aligned tab groups",
   assert.match(styles, /\.session-pane-layout\.split \.session-pane,[\s\S]*\.session-pane-layout\.split \.session-pane-resize-handle\s*\{[\s\S]*grid-row:\s*1/);
   assert.match(styles, /\.session-pane-resize-handle::after\s*\{[\s\S]*width:\s*2px/);
   assert.match(styles, /body\.session-pane-resizing iframe/);
+});
+
+test("session tab dragging follows the pointer, reorders live, and accepts pane whitespace", async () => {
+  const [preview, state, styles] = await Promise.all([
+    source("apps/control-plane/instance-detail/SessionPreview.vue"),
+    source("apps/control-plane/instance-detail/useActiveInstanceSessions.ts"),
+    source("apps/control-plane/instance-detail/SessionPreview.css"),
+  ]);
+
+  assert.match(preview, /@pointerdown="startSessionTabPointer\(\$event, session, tabGroup\.id\)"/);
+  assert.match(preview, /window\.addEventListener\("pointermove", moveSessionTabPointer, true\)/);
+  assert.match(preview, /Math\.hypot\(event\.clientX - pending\.startX, event\.clientY - pending\.startY\) < 5/);
+  assert.match(preview, /<Teleport to="body">[\s\S]*class="session-tab-pointer-overlay"/);
+  assert.match(preview, /<TransitionGroup name="session-tab-reorder"[\s\S]*previewSessionTabs\(tabGroup\.id, tabGroup\.appTabs\)/);
+  assert.match(preview, /function previewSessionTabs\([\s\S]*nextTabs\.splice\(target\.placement === "after" \? targetIndex \+ 1 : targetIndex, 0, drag\.session\)/);
+  assert.match(preview, /document\.elementFromPoint\(clientX, clientY\)/);
+  assert.match(preview, /querySelectorAll<HTMLElement>\("\[data-session-tab-key\]"\)/);
+  assert.match(preview, /targetKey: "", placement: "after"/);
+  assert.doesNotMatch(preview, /draggable="true"|setDragImage|@dragstart/);
+  assert.match(state, /isPinnedLeft\(sourceSession\)/);
+  assert.match(state, /if \(!targetKey\)[\s\S]*targetPaneKeys[\s\S]*reorderSessionTabKeys\(currentOrder, sourceKey, "", placement, targetPaneKeys\)/);
+  assert.match(styles, /\.session-tab-item\.drag-placeholder[\s\S]*border: 1px dashed/);
+  assert.match(styles, /\.session-tab-reorder-move[\s\S]*transition: transform 160ms/);
+  assert.match(styles, /:global\(\.session-tab-pointer-overlay\)[\s\S]*will-change: transform/);
+  assert.match(styles, /body\.session-tab-pointer-dragging iframe[\s\S]*pointer-events: none/);
+});
+
+test("session tab ordering uses the same insertion invariant for tabs and pane whitespace", () => {
+  const order = ["ai", "left-a", "right-a", "left-b", "right-b"];
+
+  assert.deepEqual(reorderSessionTabKeys(order, "left-b", "left-a", "before"), ["ai", "left-b", "left-a", "right-a", "right-b"]);
+  assert.deepEqual(reorderSessionTabKeys(order, "left-a", "left-b", "after"), ["ai", "right-a", "left-b", "left-a", "right-b"]);
+  assert.deepEqual(reorderSessionTabKeys(order, "right-a", "", "after", ["left-a", "left-b"]), ["ai", "left-a", "left-b", "right-a", "right-b"]);
+  assert.deepEqual(reorderSessionTabKeys(order, "left-a", "", "after", []), ["ai", "right-a", "left-b", "right-b", "left-a"]);
+  assert.equal(reorderSessionTabKeys(order, "missing", "left-a", "before"), order);
 });

@@ -86,3 +86,15 @@ test("an unselected AI session defaults to the new-session surface", () => {
   assert.match(panel, /watch\(\s*\[showNewSession, aiSessionLaunchableApps, newSessionFolders\]/);
   assert.doesNotMatch(panel, /No AI session selected\./);
 });
+
+test("opening the already-visible new-session surface preserves its draft", () => {
+  assert.match(panel, /function openNewSession\(\) \{\s*const wasVisible = showNewSession\.value;\s*newSessionOpen\.value = true;\s*if \(wasVisible\) return;/);
+});
+
+test("new-session permission edits update the authoritative instance default", () => {
+  assert.match(panel, /:permission-mode="newSessionPermissionMode"/);
+  assert.match(panel, /@update:permission-mode="updateNewSessionPermissionMode"/);
+  assert.match(panel, /updateControlledInstance\(props\.instance\.id, \{ config: \{ defaultCodexPermissionMode: permissionMode \} \}\)/);
+  assert.match(panel, /newSessionPermissionMode\.value = previousPermissionMode/);
+  assert.doesNotMatch(panel, /newAiSessionPermissionKey/);
+});

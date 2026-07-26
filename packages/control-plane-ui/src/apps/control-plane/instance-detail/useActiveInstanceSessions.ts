@@ -15,6 +15,7 @@ import {
   type RepositoryWorkspaceTabTarget,
 } from "../useInstanceSessions";
 import { hasInstanceStatusPage, isInstanceAppReady, isInstanceConnecting } from "../useInstanceStatus";
+import { reorderSessionTabKeys } from "./sessionTabOrder";
 
 export type SessionPaneId = "left" | "right";
 
@@ -338,23 +339,25 @@ export function useActiveInstanceSessions({
 
   function moveSessionTab(sourceKey: string, targetKey: string, placement: "before" | "after", targetPane?: SessionPaneId) {
     const instanceId = activeInstance.value?.id;
-    if (!instanceId || sourceKey === targetKey) {
+    const sourceSession = sessionTabs.value.find((session) => session.key === sourceKey);
+    if (!instanceId || !sourceSession || isPinnedLeft(sourceSession) || sourceKey === targetKey) {
       return;
     }
     const currentOrder = orderedTabsForInstance(instanceId, sessionTabs.value).map((session) => session.key);
     const sourceIndex = currentOrder.indexOf(sourceKey);
-    const targetIndex = currentOrder.indexOf(targetKey);
-    if (sourceIndex < 0 || targetIndex < 0) {
+    if (sourceIndex < 0) {
       return;
     }
     if (targetPane) moveSessionToPane(sourceKey, targetPane);
-    const nextOrder = currentOrder.filter((key) => key !== sourceKey);
-    const targetIndexAfterRemoval = nextOrder.indexOf(targetKey);
-    if (targetIndexAfterRemoval < 0) {
+    if (!targetKey) {
+      const targetPaneKeys = currentOrder.filter((key) => {
+        const session = sessionTabs.value.find((item) => item.key === key);
+        return session && !isPinnedLeft(session) && sessionPane(session) === targetPane;
+      });
+      sessionTabOrderKeys[instanceId] = reorderSessionTabKeys(currentOrder, sourceKey, "", placement, targetPaneKeys);
       return;
     }
-    nextOrder.splice(placement === "after" ? targetIndexAfterRemoval + 1 : targetIndexAfterRemoval, 0, sourceKey);
-    sessionTabOrderKeys[instanceId] = nextOrder;
+    sessionTabOrderKeys[instanceId] = reorderSessionTabKeys(currentOrder, sourceKey, targetKey, placement);
   }
 
   async function launchSelectedApp(instance: InstanceBoardItem, appId: string, cwdFolderId?: string) {

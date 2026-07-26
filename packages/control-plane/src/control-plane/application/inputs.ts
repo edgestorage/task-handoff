@@ -5,6 +5,7 @@ import {
   ProjectSourceSchema,
 } from "@task-handoff/protocol/control-plane";
 import { z } from "zod";
+import { AiSessionPermissionModeSchema } from "@task-handoff/protocol/ai-sessions";
 
 export * from "../catalog/inputs.ts";
 export * from "../chat/bridges/inputs.ts";
@@ -22,6 +23,11 @@ const NodeAuthInputSchema = z.object({
   }).strict().optional(),
 }).strict();
 
+export const InstanceConfigInputSchema = z.object({
+  autoImportAgentConfigs: z.boolean().optional(),
+  defaultCodexPermissionMode: AiSessionPermissionModeSchema.optional(),
+}).strict();
+
 export const CreateInstanceInputSchema = z.object({
   id: ControlledInstanceSchema.shape.id.optional(),
   name: ControlledInstanceSchema.shape.name.optional(),
@@ -31,14 +37,14 @@ export const CreateInstanceInputSchema = z.object({
   nodeId: ControlledInstanceSchema.shape.nodeId.optional(),
   runtimeId: ControlledInstanceSchema.shape.runtimeId.optional(),
   imageId: ControlledInstanceSchema.shape.imageId,
-  config: ControlledInstanceSchema.shape.config.optional(),
+  config: InstanceConfigInputSchema.optional(),
   modelSelection: ControlledInstanceSchema.shape.modelSelection.optional(),
   start: z.boolean().default(false),
 }).strict();
 
 export const UpdateInstanceInputSchema = z.object({
   name: ControlledInstanceSchema.shape.name.optional(),
-  config: ControlledInstanceSchema.shape.config.optional(),
+  config: InstanceConfigInputSchema.optional(),
   modelSelection: ControlledInstanceSchema.shape.modelSelection.optional(),
 }).strict();
 

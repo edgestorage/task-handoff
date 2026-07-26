@@ -8,6 +8,7 @@ import type {
   AiSessionMentionFileSearch,
   AiSessionReference,
   AiSessionResumeResult,
+  AiSessionPermissionMode,
 } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionContextCompaction as ProtocolAiSessionContextCompaction } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionSubAgent as ProtocolAiSessionSubAgent } from "@task-handoff/protocol/ai-sessions";
@@ -438,6 +439,7 @@ export type ControlledInstance = {
   appInventory?: InstanceAppInventory;
   config: {
     autoImportAgentConfigs: boolean;
+    defaultCodexPermissionMode: AiSessionPermissionMode;
   };
   workspace: {
     mode?: WorkspacePolicy["mode"];
@@ -954,6 +956,7 @@ export type CreateControlledInstanceInput = {
   runtimeId: string;
   config?: {
     autoImportAgentConfigs?: boolean;
+    defaultCodexPermissionMode?: AiSessionPermissionMode;
   };
   modelSelection?: ModelSelection;
   start?: boolean;
@@ -970,7 +973,8 @@ export type CreateControlledInstanceResult = InstanceBoardItem & {
 export type UpdateControlledInstanceInput = {
   name?: string;
   config?: {
-    autoImportAgentConfigs: boolean;
+    autoImportAgentConfigs?: boolean;
+    defaultCodexPermissionMode?: AiSessionPermissionMode;
   };
   modelSelection?: ModelSelection;
 };

@@ -1,0 +1,8 @@
+.repository-syntax-highlight :deep(.hljs-comment), .repository-syntax-highlight :deep(.hljs-quote) { color: var(--text-muted); font-style: italic; }
+.repository-syntax-highlight :deep(.hljs-keyword), .repository-syntax-highlight :deep(.hljs-selector-tag), .repository-syntax-highlight :deep(.hljs-doctag) { color: var(--status-danger); font-weight: 650; }
+.repository-syntax-highlight :deep(.hljs-string), .repository-syntax-highlight :deep(.hljs-regexp), .repository-syntax-highlight :deep(.hljs-attribute) { color: var(--status-success); }
+.repository-syntax-highlight :deep(.hljs-number), .repository-syntax-highlight :deep(.hljs-literal), .repository-syntax-highlight :deep(.hljs-symbol) { color: var(--status-warning); }
+.repository-syntax-highlight :deep(.hljs-title), .repository-syntax-highlight :deep(.hljs-section), .repository-syntax-highlight :deep(.hljs-selector-id), .repository-syntax-highlight :deep(.hljs-selector-class) { color: var(--status-info); font-weight: 650; }
+.repository-syntax-highlight :deep(.hljs-built_in), .repository-syntax-highlight :deep(.hljs-type), .repository-syntax-highlight :deep(.hljs-class .hljs-title) { color: var(--brand-accent); }
+.repository-syntax-highlight :deep(.hljs-meta), .repository-syntax-highlight :deep(.hljs-meta .hljs-keyword) { color: var(--text-muted); }
+.repository-syntax-highlight :deep(.hljs-variable), .repository-syntax-highlight :deep(.hljs-template-variable), .repository-syntax-highlight :deep(.hljs-params), .repository-syntax-highlight :deep(.hljs-property) { color: inherit; }

@@ -10,6 +10,7 @@ import { Textarea } from "../ui/textarea";
 import { mentionTokenAt, reconcileMentionBindings, replaceMentionToken, type AiSessionMentionBinding } from "./mentions";
 import { commandTokenAt, matchingCommands, parseAiSessionCommand, replaceCommandToken, type AiSessionCommandCandidate } from "./commands";
 import { useAiSessionMentions, type AiSessionMentionContext } from "./useAiSessionMentions";
+import { useAiSessionPermissionMode } from "../../apps/control-plane/useAiSessionPermissionMode";
 
 export type AiSessionComposerAttachment = {
   id: string;
@@ -41,12 +42,15 @@ const props = defineProps<{
   sessionBusy?: boolean;
   provider?: string;
   permissionKey?: string;
+  permissionMode?: AiSessionPermissionMode;
+  defaultPermissionMode?: AiSessionPermissionMode;
 }>();
 
 const emit = defineEmits<{
   (event: "update:modelValue", value: string): void;
   (event: "update:attachments", value: AiSessionComposerAttachment[]): void;
   (event: "update:mentionBindings", value: AiSessionMentionBinding[]): void;
+  (event: "update:permissionMode", value: AiSessionPermissionMode): void;
   (event: "run", permissionMode?: AiSessionPermissionMode): void;
   (event: "steer"): void;
   (event: "command", value: AiSessionCommandInput): void;
@@ -92,7 +96,17 @@ const canSteer = computed(() => props.busy && hasDraft.value);
 const actionTitle = computed(() => actionKind.value === "stop" ? "Stop current AI turn" : "Send message");
 const commandLauncherDisabled = computed(() => Boolean(props.busy || props.modelValue.length || props.mentionContext?.provider !== "codex"));
 const permissionProvider = computed(() => props.provider || props.mentionContext?.provider);
-const permissionMode = ref<AiSessionPermissionMode>("ask");
+const storedPermissionMode = useAiSessionPermissionMode(
+  () => props.permissionKey || props.mentionContext?.sessionId || "",
+  () => props.defaultPermissionMode || "ask",
+);
+const permissionMode = computed<AiSessionPermissionMode>({
+  get: () => props.permissionMode ?? storedPermissionMode.value,
+  set: (value) => {
+    if (props.permissionMode !== undefined) emit("update:permissionMode", value);
+    else storedPermissionMode.value = value;
+  },
+});
 const permissionOptions = [
   { value: "ask", label: "Ask for approval", description: "Ask before accessing the internet or editing files outside the workspace.", icon: Hand },
   { value: "auto-review", label: "Approve for me", description: "Only ask for actions detected as potentially unsafe.", icon: ShieldCheck },
@@ -501,9 +515,6 @@ watch(() => mentions.candidates.value.length, (length) => {
 
 watch(mentionTrigger, () => mentions.close());
 watch(commandTrigger, () => { commandOpen.value = false; });
-watch(() => [permissionProvider.value, props.permissionKey || props.mentionContext?.sessionId], () => {
-  permissionMode.value = "ask";
-});
 watch(() => props.busy, (busy) => {
   if (busy) {
     mentions.close();

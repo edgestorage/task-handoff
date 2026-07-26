@@ -141,13 +141,15 @@ test("branch selector groups, searches, tracks, checks out, and safely deletes s
 });
 
 test("Repository workspace opens as a session tab with a resizable ScrollArea sidebar", async () => {
-  const [environment, workspace, workspaceTab, sessionState, tree, repositoryApi] = await Promise.all([
+  const [environment, workspace, workspaceTab, sessionState, tree, repositoryApi, fileEditor, syntaxHighlight] = await Promise.all([
     source("apps/control-plane/instance-detail/RepositoryEnvironment.vue"),
     source("apps/control-plane/instance-detail/RepositoryWorkspace.vue"),
     source("apps/control-plane/instance-detail/RepositoryWorkspaceTab.vue"),
     source("apps/control-plane/instance-detail/useActiveInstanceSessions.ts"),
     source("apps/control-plane/instance-detail/RepositoryFileTree.vue"),
     source("api/repository.ts"),
+    source("apps/control-plane/instance-detail/RepositoryFilePreview.vue"),
+    source("apps/control-plane/instance-detail/repositorySyntaxHighlight.ts"),
   ]);
 
   assert.match(environment, /emit\("openWorkspace", \{ initialView: view, sessionId: props\.sessionId, sessionKind: props\.sessionKind \}\)/);
@@ -164,7 +166,12 @@ test("Repository workspace opens as a session tab with a resizable ScrollArea si
   assert.match(workspace, />File Explorer</);
   assert.match(workspace, /@click="openChangesReview"/);
   assert.match(workspace, /emit\("openChanges", \{ initialView: "changes", page: "changes-review"/);
-  assert.match(workspace, /<textarea[^>]*v-model="activeTab\.draft"/);
+  assert.match(workspace, /<RepositoryFilePreview :content="activeTab\.content" :path="activeTab\.path"/);
+  assert.doesNotMatch(workspace, /<textarea|writeRepositoryFile|saveFile\(|activeTab\.draft/);
+  assert.match(fileEditor, /highlightSource\(props\.content, language\.value\)/);
+  assert.match(fileEditor, /<pre class="repository-file-preview repository-syntax-highlight"/);
+  assert.match(fileEditor, /overflow: auto/);
+  assert.match(syntaxHighlight, /tsx: "typescript"/);
   assert.doesNotMatch(workspace, /stageRepositoryPaths|unstageRepositoryPaths|discardRepositoryWorktree|commitRepositoryIndex/);
   assert.match(workspace, /repository-workspace-dialog[^}]*top: calc\(50% \+ 24px\)[^}]*height: min\(920px, calc\(100vh - 80px\)\)/);
   assert.match(workspace, /repository-workspace-empty[^}]*grid-row: 2/);
@@ -186,7 +193,7 @@ test("Repository workspace can move to a recoverable authenticated window", asyn
   assert.match(app, /<AuthGate v-else>/);
   assert.match(workspace, /aria-label="Open repository workspace in new window"/);
   assert.match(workspace, /openRepositoryWorkspaceWindow\(\{ \.\.\.target\.value, view: "files" \}\)/);
-  assert.match(workspace, /Unsaved drafts remain in this window/);
+  assert.doesNotMatch(workspace, /Unsaved drafts remain in this window/);
   assert.match(workspace, /repositoryWorkspaceChannelName/);
   assert.match(workspace, /refreshRepositoryState\(\), refreshLoadedDirectories\(\)/);
   assert.match(page, /getRepositoryContext\(route\)/);
@@ -197,7 +204,7 @@ test("Repository workspace can move to a recoverable authenticated window", asyn
   assert.doesNotMatch(windowHelper, /snapshotId|displayName|RepositoryContext/);
 });
 
-test("Repository file actions preserve drafts on stale and require an explicit comparison before retry", async () => {
+test("Repository file actions keep previews read-only and refresh stale server content", async () => {
   const [workspace, repositoryApi] = await Promise.all([
     source("apps/control-plane/instance-detail/RepositoryWorkspace.vue"),
     source("api/repository.ts"),
@@ -207,11 +214,9 @@ test("Repository file actions preserve drafts on stale and require an explicit c
   assert.match(workspace, /Rename repository file/);
   assert.match(workspace, /Delete repository file\?/);
   assert.match(workspace, /confirm: true/);
-  assert.match(workspace, /const draft = tab\.draft;[\s\S]*tab\.draft = draft;[\s\S]*tab\.staleServer = server/);
-  assert.match(workspace, /Compare versions/);
-  assert.match(workspace, /:disabled="!activeTab\.staleCompared \|\| activeTab\.saving"/);
-  assert.match(workspace, /saveFile\(tab, tab\.staleServer\.version\)/);
-  assert.doesNotMatch(workspace, /staleServer\.content[\s\S]{0,80}tab\.draft\s*=/);
+  assert.match(workspace, /refreshOpenFiles\(\)/);
+  assert.match(workspace, /Object\.assign\(tab, await getRepositoryFile\(target\.value, tab\.path\)\)/);
+  assert.doesNotMatch(workspace, /draft|staleServer|writeRepositoryFile/);
   assert.match(repositoryApi, /postUrlData<RepositoryFileMutationResult>\(`\$\{repositoryTargetBasePath\(target\)\}\/files`/);
   assert.match(repositoryApi, /putUrlData<RepositoryFileMutationResult>/);
   assert.match(repositoryApi, /\/files\/rename/);
@@ -311,7 +316,7 @@ test("Repository UI preserves edge states and structured recovery guidance", asy
   assert.match(apiClient, /payload\.error\?\.retryable/);
 });
 
-test("Repository navigation keeps portal, keyboard, focus, draft, path, and confirmation contracts", async () => {
+test("Repository navigation keeps portal, keyboard, focus, path, and confirmation contracts", async () => {
   const [environment, workspace, worktrees, popoverContent, dialogContent, repositoryApi] = await Promise.all([
     source("apps/control-plane/instance-detail/RepositoryEnvironment.vue"),
     source("apps/control-plane/instance-detail/RepositoryWorkspace.vue"),
@@ -340,8 +345,8 @@ test("Repository navigation keeps portal, keyboard, focus, draft, path, and conf
   assert.doesNotMatch(repositoryApi, /\?path=\$\{/);
   assert.match(workspace, /const id = `file:\$\{entry\.path\}`/);
   assert.doesNotMatch(workspace, /const id = `diff:|getRepositoryDiff/);
-  assert.match(workspace, /const draft = tab\.draft;[\s\S]*tab\.draft = draft/);
-  assert.match(workspace, /tabs\.value\.push\(\{ \.\.\.file, id, kind: "file", draft: file\.content/);
+  assert.match(workspace, /tabs\.value\.push\(\{ \.\.\.file, id, kind: "file" \}\)/);
+  assert.match(workspace, /<RepositoryFilePreview :content="activeTab\.content"/);
 
   assert.match(worktrees, /workspaceSelection:[\s\S]*repositoryContextId:[\s\S]*worktreeId:/);
   assert.match(worktrees, /The current session stays in this worktree/);

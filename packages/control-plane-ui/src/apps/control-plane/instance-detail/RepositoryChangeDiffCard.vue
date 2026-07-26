@@ -1,5 +1,5 @@
 <template>
-  <article ref="card" class="repository-review-diff-card" :data-change-id="changeId">
+  <article ref="card" class="repository-review-diff-card repository-syntax-highlight" :data-change-id="changeId">
     <header class="repository-review-diff-head">
       <span class="repository-review-diff-title">
         <FileDiff :size="15" />
@@ -87,6 +87,7 @@ import { useRepositoryDiffQuery } from "../../../api/repository";
 import { Button } from "../../../components/ui/button";
 import RepositoryErrorNotice from "./RepositoryErrorNotice.vue";
 import { createSplitRows, diffPresentationRows, highlightedLine, type ContextControl, type ContextDirection, type GapExpansion } from "./repositoryDiffPresentation";
+import { repositoryLanguageForPath } from "./repositorySyntaxHighlight";
 
 const props = defineProps<{
   entry: RepositoryChangeEntry;
@@ -122,7 +123,7 @@ const { data: diff, error, isPending: diffPending } = useRepositoryDiffQuery(
 const changeId = computed(() => `${props.entry.scope}:${props.entry.path}`);
 const scopeLabel = computed(() => ({ conflict: "Conflict", staged: "Staged", unstaged: "Working tree", untracked: "Untracked" }[props.entry.scope]));
 const statusLabel = computed(() => ({ added: "Added", modified: "Modified", deleted: "Deleted", renamed: "Renamed", copied: "Copied", "type-changed": "Type changed", untracked: "Untracked", unmerged: "Unmerged" }[props.entry.status]));
-const language = computed(() => languageForPath(props.entry.path));
+const language = computed(() => repositoryLanguageForPath(props.entry.path));
 const hasExpandedContexts = computed(() => [...props.expandedGaps.values()].some((gap) => gap.fromStart > 0 || gap.fromEnd > 0));
 const displaySourceLines = computed(() => diffPresentationRows(diff.value, props.expandedGaps).filter((line) => line.kind === "context-control" || !isPatchHeader(line)));
 const renderLimitReached = computed(() => displaySourceLines.value.length > maxRenderedLines);
@@ -203,19 +204,6 @@ function isPatchHeader(line: RepositoryDiff["lines"][number]) {
   return /^(?:diff --git |index |--- |\+\+\+ |new file mode |deleted file mode |old mode |new mode |similarity index |dissimilarity index |rename from |rename to |copy from |copy to )/.test(line.content);
 }
 
-function languageForPath(path: string) {
-  const name = path.split("/").at(-1)?.toLowerCase() || "";
-  if (name === "dockerfile") return "dockerfile";
-  const extension = name.includes(".") ? name.split(".").at(-1) || "" : "";
-  return ({
-    bash: "bash", c: "cpp", cc: "cpp", cpp: "cpp", cs: "csharp", css: "css", cxx: "cpp",
-    go: "go", h: "cpp", hpp: "cpp", htm: "xml", html: "xml", java: "java", js: "javascript",
-    json: "json", jsonc: "json", jsx: "javascript", kt: "kotlin", kts: "kotlin", less: "css",
-    md: "markdown", mjs: "javascript", php: "php", py: "python", rb: "ruby", rs: "rust",
-    sass: "css", scss: "css", sh: "bash", sql: "sql", svg: "xml", swift: "swift", ts: "typescript",
-    tsx: "typescript", vue: "xml", xml: "xml", yaml: "yaml", yml: "yaml", zsh: "bash",
-  } as Record<string, string>)[extension] || "";
-}
 </script>
 
 <style scoped>
@@ -261,15 +249,8 @@ function languageForPath(path: string) {
 .repository-review-split-side[data-kind="addition"] { background: color-mix(in srgb, var(--status-success) 13%, var(--surface)); }
 .repository-review-split-side[data-empty="true"] { background: var(--surface-inset); }
 .repository-review-split-side code { min-width: 0; overflow: hidden; padding-right: 18px; color: inherit; white-space: pre; }
-.repository-review-diff-card code :deep(.hljs-comment), .repository-review-diff-card code :deep(.hljs-quote) { color: var(--text-muted); font-style: italic; }
-.repository-review-diff-card code :deep(.hljs-keyword), .repository-review-diff-card code :deep(.hljs-selector-tag), .repository-review-diff-card code :deep(.hljs-doctag) { color: var(--status-danger); font-weight: 650; }
-.repository-review-diff-card code :deep(.hljs-string), .repository-review-diff-card code :deep(.hljs-regexp), .repository-review-diff-card code :deep(.hljs-attribute) { color: var(--status-success); }
-.repository-review-diff-card code :deep(.hljs-number), .repository-review-diff-card code :deep(.hljs-literal), .repository-review-diff-card code :deep(.hljs-symbol) { color: var(--status-warning); }
-.repository-review-diff-card code :deep(.hljs-title), .repository-review-diff-card code :deep(.hljs-section), .repository-review-diff-card code :deep(.hljs-selector-id), .repository-review-diff-card code :deep(.hljs-selector-class) { color: var(--status-info); font-weight: 650; }
-.repository-review-diff-card code :deep(.hljs-built_in), .repository-review-diff-card code :deep(.hljs-type), .repository-review-diff-card code :deep(.hljs-class .hljs-title) { color: var(--brand-accent); }
-.repository-review-diff-card code :deep(.hljs-meta), .repository-review-diff-card code :deep(.hljs-meta .hljs-keyword) { color: var(--text-muted); }
-.repository-review-diff-card code :deep(.hljs-variable), .repository-review-diff-card code :deep(.hljs-template-variable), .repository-review-diff-card code :deep(.hljs-params), .repository-review-diff-card code :deep(.hljs-property) { color: inherit; }
 .spin { animation: repository-review-spin 0.9s linear infinite; }
 @keyframes repository-review-spin { to { transform: rotate(360deg); } }
 @media (max-width: 900px) { .repository-review-diff-actions :deep(button) { justify-content: center; gap: 0; padding: 0 6px; font-size: 0; } }
 </style>
+<style scoped src="./RepositorySyntaxHighlight.css"></style>

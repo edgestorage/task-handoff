@@ -1,8 +1,16 @@
 <template>
-  <section class="session-preview" :class="{ expanded: previewExpanded }" :data-state="instance.connectionStatus">
+  <section ref="sessionPreview" class="session-preview" :class="{ expanded: previewExpanded }" :data-state="instance.connectionStatus">
     <div class="session-preview-toolbar" :class="{ split: hasSessionSplit }">
       <div class="session-preview-primary-tools" :class="{ split: hasSessionSplit }" :style="hasSessionSplit ? { '--session-left-ratio': `${sessionSplitRatio * 100}%` } : undefined">
-        <div v-for="tabGroup in visibleTabGroups" :key="tabGroup.id" class="session-preview-selector" :data-pane="tabGroup.id" :aria-label="hasSessionSplit ? `${tabGroup.id} session views` : 'Session views'" @click.stop>
+        <div
+          v-for="tabGroup in visibleTabGroups"
+          :key="tabGroup.id"
+          class="session-preview-selector"
+          :class="{ 'drop-target': sessionTabDropTarget?.pane === tabGroup.id }"
+          :data-pane="tabGroup.id"
+          :aria-label="hasSessionSplit ? `${tabGroup.id} session views` : 'Session views'"
+          @click.stop
+        >
           <button
             v-if="tabGroup.statusTab"
             type="button"
@@ -19,15 +27,9 @@
             v-if="tabGroup.aiTab"
             type="button"
             class="session-ai-home"
-            :class="{ active: isSessionTabActive(tabGroup.aiTab), focused: isSessionTabFocused(tabGroup.aiTab), dragging: draggingSessionTabKey === tabGroup.aiTab.key }"
-            draggable="true"
+            :class="{ active: isSessionTabActive(tabGroup.aiTab), focused: isSessionTabFocused(tabGroup.aiTab) }"
             :title="sessionMeta(tabGroup.aiTab)"
             @click="$emit('selectSession', tabGroup.aiTab.key, tabGroup.id)"
-            @dragstart="startSessionTabDrag($event, tabGroup.aiTab)"
-            @dragover.prevent
-            @dragenter.prevent
-            @drop.prevent="dropSessionTab($event, tabGroup.aiTab, tabGroup.id)"
-            @dragend="endSessionTabDrag"
           >
             <span class="session-ai-icon">
               <Bot :size="15" />
@@ -35,80 +37,78 @@
             </span>
             <span>AI</span>
           </button>
-          <span v-if="tabGroup.aiTab && tabGroup.appTabs.length" class="session-tab-divider" aria-hidden="true" />
-          <div v-if="tabGroup.appTabs.length" class="session-tab-strip-frame">
+          <span v-if="tabGroup.aiTab && previewSessionTabs(tabGroup.id, tabGroup.appTabs).length" class="session-tab-divider" aria-hidden="true" />
+          <div v-if="previewSessionTabs(tabGroup.id, tabGroup.appTabs).length" class="session-tab-strip-frame">
             <div v-session-tab-overflow class="session-tab-strip" @scroll="updateSessionTabOverflowFromEvent" @wheel="scrollSessionTabs">
-              <div class="session-tab-strip-content" role="tablist" :aria-label="hasSessionSplit ? `${tabGroup.id} session tabs` : 'Session views'">
-              <ContextMenu v-for="session in tabGroup.appTabs" :key="session.key">
-                <ContextMenuTrigger as-child>
-                  <span
-                    class="session-tab-item"
-                    :class="{ active: isSessionTabActive(session), focused: isSessionTabFocused(session), dragging: draggingSessionTabKey === session.key }"
-                    :data-kind="session.kind"
-                    :data-pane="hasSessionSplit ? sessionPaneId(session) : undefined"
-                    role="tab"
-                    tabindex="0"
-                    :draggable="editingSessionKey !== session.key"
-                    :aria-selected="isSessionTabActive(session)"
-                    :title="`${sessionDisplayName(session)} · ${stoppingSessionId === session.key ? 'stopping' : session.status}`"
-                    @click="$emit('selectSession', session.key)"
-                    @dragstart="startSessionTabDrag($event, session)"
-                    @dragover.prevent
-                    @dragenter.prevent
-                    @drop.prevent="dropSessionTab($event, session, tabGroup.id)"
-                    @dragend="endSessionTabDrag"
-                    @keydown.enter.prevent="$emit('selectSession', session.key)"
-                    @keydown.space.prevent="$emit('selectSession', session.key)"
-                  >
-                    <span class="session-tab-button">
-                      <FolderGit2 v-if="session.kind === 'repository'" :size="14" class="session-tab-icon" />
-                      <AppWindow v-else :size="14" class="session-tab-icon" />
-                      <input
-                        v-if="editingSessionKey === session.key"
-                        :ref="setRenameInput"
-                        v-model="sessionTitleDraft"
-                        class="session-tab-title-input"
-                        :aria-invalid="Boolean(sessionRenameError)"
-                        :disabled="renamingSession"
-                        :title="sessionRenameError"
-                        maxlength="120"
-                        @click.stop
-                        @blur="commitSessionRename(session)"
-                        @keydown.enter.stop.prevent="commitSessionRename(session)"
-                        @keydown.escape.stop.prevent="cancelSessionRename"
-                      />
-                      <span v-else class="session-tab-text">
-                        <strong>{{ sessionDisplayName(session) }}</strong>
+              <TransitionGroup name="session-tab-reorder" tag="div" class="session-tab-strip-content" role="tablist" :aria-label="hasSessionSplit ? `${tabGroup.id} session tabs` : 'Session views'">
+                <span v-for="session in previewSessionTabs(tabGroup.id, tabGroup.appTabs)" :key="session.key" class="session-tab-sortable-shell">
+                  <ContextMenu>
+                    <ContextMenuTrigger as-child>
+                      <span
+                        class="session-tab-item"
+                        :class="{ active: isSessionTabActive(session), focused: isSessionTabFocused(session), 'drag-placeholder': draggingSessionTabKey === session.key }"
+                        :data-kind="session.kind"
+                        :data-pane="hasSessionSplit ? sessionPaneId(session) : undefined"
+                        :data-session-tab-key="session.key"
+                        role="tab"
+                        tabindex="0"
+                        :aria-selected="isSessionTabActive(session)"
+                        :title="`${sessionDisplayName(session)} · ${stoppingSessionId === session.key ? 'stopping' : session.status}`"
+                        @click="selectSessionFromTab($event, session.key)"
+                        @pointerdown="startSessionTabPointer($event, session, tabGroup.id)"
+                        @keydown.enter.prevent="$emit('selectSession', session.key)"
+                        @keydown.space.prevent="$emit('selectSession', session.key)"
+                      >
+                        <span class="session-tab-button">
+                          <FolderGit2 v-if="session.kind === 'repository'" :size="14" class="session-tab-icon" />
+                          <AppWindow v-else :size="14" class="session-tab-icon" />
+                          <input
+                            v-if="editingSessionKey === session.key"
+                            :ref="setRenameInput"
+                            v-model="sessionTitleDraft"
+                            class="session-tab-title-input"
+                            :aria-invalid="Boolean(sessionRenameError)"
+                            :disabled="renamingSession"
+                            :title="sessionRenameError"
+                            maxlength="120"
+                            @click.stop
+                            @blur="commitSessionRename(session)"
+                            @keydown.enter.stop.prevent="commitSessionRename(session)"
+                            @keydown.escape.stop.prevent="cancelSessionRename"
+                          />
+                          <span v-else class="session-tab-text">
+                            <strong>{{ sessionDisplayName(session) }}</strong>
+                          </span>
+                        </span>
+                        <button
+                          type="button"
+                          class="session-tab-close"
+                          :disabled="Boolean(stoppingSessionId)"
+                          :aria-label="`Close ${sessionDisplayName(session)}`"
+                          title="Close session"
+                          @click.stop="$emit('stopSession', instance, session)"
+                        >
+                          <X :size="13" />
+                        </button>
                       </span>
-                    </span>
-                    <button
-                      type="button"
-                      class="session-tab-close"
-                      :disabled="Boolean(stoppingSessionId)"
-                      :aria-label="`Close ${sessionDisplayName(session)}`"
-                      title="Close session"
-                      @click.stop="$emit('stopSession', instance, session)"
-                    >
-                      <X :size="13" />
-                    </button>
-                  </span>
-                </ContextMenuTrigger>
-                <ContextMenuContent class="instance-action-menu">
-                  <ContextMenuItem v-if="session.kind !== 'repository'" class="instance-action-item" @select="beginSessionRename(session)">
-                    <Pencil :size="14" />
-                    <span>Rename session</span>
-                  </ContextMenuItem>
-                  <ContextMenuItem v-if="sessionPaneId(session) === 'right'" class="instance-action-item" @select="$emit('moveSessionToPane', session.key, 'left')">
-                    <PanelLeft :size="14" />
-                    <span>Move to left</span>
-                  </ContextMenuItem>
-                  <ContextMenuItem v-else class="instance-action-item" @select="$emit('moveSessionToPane', session.key, 'right')">
-                    <PanelRight :size="14" />
-                    <span>Move to right</span>
-                  </ContextMenuItem>
-                </ContextMenuContent>
-              </ContextMenu>
-              </div>
+                    </ContextMenuTrigger>
+                    <ContextMenuContent class="instance-action-menu">
+                      <ContextMenuItem v-if="session.kind !== 'repository'" class="instance-action-item" @select="beginSessionRename(session)">
+                        <Pencil :size="14" />
+                        <span>Rename session</span>
+                      </ContextMenuItem>
+                      <ContextMenuItem v-if="sessionPaneId(session) === 'right'" class="instance-action-item" @select="$emit('moveSessionToPane', session.key, 'left')">
+                        <PanelLeft :size="14" />
+                        <span>Move to left</span>
+                      </ContextMenuItem>
+                      <ContextMenuItem v-else class="instance-action-item" @select="$emit('moveSessionToPane', session.key, 'right')">
+                        <PanelRight :size="14" />
+                        <span>Move to right</span>
+                      </ContextMenuItem>
+                    </ContextMenuContent>
+                  </ContextMenu>
+                </span>
+              </TransitionGroup>
             </div>
           </div>
           <div v-if="!tabGroup.statusTab" class="app-launcher" :class="{ open: appLaunchMenuOpen && appLaunchMenuPane === tabGroup.id }" @click.stop>
@@ -252,6 +252,19 @@
         </button>
       </div>
     </div>
+    <Teleport to="body">
+      <div
+        v-if="sessionTabPointerDrag"
+        class="session-tab-pointer-overlay"
+        :data-kind="sessionTabPointerDrag.session.kind"
+        :style="sessionTabPointerOverlayStyle"
+        aria-hidden="true"
+      >
+        <FolderGit2 v-if="sessionTabPointerDrag.session.kind === 'repository'" :size="14" class="session-tab-icon" />
+        <AppWindow v-else :size="14" class="session-tab-icon" />
+        <strong>{{ sessionDisplayName(sessionTabPointerDrag.session) }}</strong>
+      </div>
+    </Teleport>
     <div
       ref="sessionPaneLayout"
       class="session-pane-layout"
@@ -493,6 +506,28 @@ function formatBytes(value: number) {
 const projectPickerOpen = ref(false);
 const createdProjectFolders = ref<NodeLocalFolder[]>([]);
 const draggingSessionTabKey = ref("");
+const sessionTabDropTarget = ref<{ pane: SessionPaneId; targetKey: string; placement: "before" | "after" }>();
+const sessionPreview = ref<HTMLElement>();
+const sessionTabPointerDrag = ref<{
+  pointerId: number;
+  session: SessionTab;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}>();
+let pendingSessionTabPointer: {
+  pointerId: number;
+  session: SessionTab;
+  pane: SessionPaneId;
+  startX: number;
+  startY: number;
+  offsetX: number;
+  offsetY: number;
+  width: number;
+  height: number;
+} | undefined;
+let suppressSessionTabClickUntil = 0;
 const editingSessionKey = ref("");
 const sessionTitleDraft = ref("");
 const sessionRenameError = ref("");
@@ -619,22 +654,153 @@ function launchApp(appId: string, cwdFolderId?: string) {
   emit("launchApp", props.instance, appId, cwdFolderId);
 }
 
-function startSessionTabDrag(event: DragEvent, session: SessionTab) {
-  draggingSessionTabKey.value = session.key;
-  event.dataTransfer?.setData("text/plain", session.key);
-  if (event.dataTransfer) {
-    event.dataTransfer.effectAllowed = "move";
-  }
+const sessionTabPointerOverlayStyle = computed(() => {
+  const drag = sessionTabPointerDrag.value;
+  return drag
+    ? {
+        width: `${drag.width}px`,
+        height: `${drag.height}px`,
+        transform: `translate3d(${drag.x}px, ${drag.y}px, 0)`,
+      }
+    : undefined;
+});
+
+function previewSessionTabs(pane: SessionPaneId, tabs: SessionTab[]) {
+  const drag = sessionTabPointerDrag.value;
+  const target = sessionTabDropTarget.value;
+  if (!drag || !target) return tabs;
+  const nextTabs = tabs.filter((session) => session.key !== drag.session.key);
+  if (target.pane !== pane) return nextTabs;
+  if (!target.targetKey) return [...nextTabs, drag.session];
+  const targetIndex = nextTabs.findIndex((session) => session.key === target.targetKey);
+  if (targetIndex < 0) return [...nextTabs, drag.session];
+  nextTabs.splice(target.placement === "after" ? targetIndex + 1 : targetIndex, 0, drag.session);
+  return nextTabs;
 }
 
-function dropSessionTab(event: DragEvent, targetSession: SessionTab, targetPane?: SessionPaneId) {
-  if (draggingSessionTabKey.value) {
-    const target = event.currentTarget instanceof HTMLElement ? event.currentTarget : undefined;
-    const bounds = target?.getBoundingClientRect();
-    const placement = bounds && event.clientX > bounds.left + bounds.width / 2 ? "after" : "before";
-    emit("moveSessionTab", draggingSessionTabKey.value, targetSession.key, placement, targetPane);
+function selectSessionFromTab(event: MouseEvent, sessionKey: string) {
+  if (Date.now() < suppressSessionTabClickUntil) {
+    event.preventDefault();
+    event.stopPropagation();
+    return;
   }
-  endSessionTabDrag();
+  emit("selectSession", sessionKey);
+}
+
+function startSessionTabPointer(event: PointerEvent, session: SessionTab, pane: SessionPaneId) {
+  if (event.button !== 0 || editingSessionKey.value === session.key) return;
+  const target = event.target instanceof Element ? event.target : undefined;
+  if (target?.closest("button, input")) return;
+  const tab = event.currentTarget instanceof HTMLElement ? event.currentTarget : undefined;
+  if (!tab) return;
+  cancelSessionTabPointerDrag();
+  const bounds = tab.getBoundingClientRect();
+  pendingSessionTabPointer = {
+    pointerId: event.pointerId,
+    session,
+    pane,
+    startX: event.clientX,
+    startY: event.clientY,
+    offsetX: event.clientX - bounds.left,
+    offsetY: event.clientY - bounds.top,
+    width: bounds.width,
+    height: bounds.height,
+  };
+  window.addEventListener("pointermove", moveSessionTabPointer, true);
+  window.addEventListener("pointerup", finishSessionTabPointer, true);
+  window.addEventListener("pointercancel", cancelSessionTabPointerDrag, true);
+  window.addEventListener("keydown", cancelSessionTabPointerDragOnEscape, true);
+  window.addEventListener("blur", cancelSessionTabPointerDrag);
+}
+
+function moveSessionTabPointer(event: PointerEvent) {
+  const pending = pendingSessionTabPointer;
+  if (!pending || event.pointerId !== pending.pointerId) return;
+  if (!sessionTabPointerDrag.value && Math.hypot(event.clientX - pending.startX, event.clientY - pending.startY) < 5) return;
+  event.preventDefault();
+  if (!sessionTabPointerDrag.value) {
+    draggingSessionTabKey.value = pending.session.key;
+    sessionTabPointerDrag.value = {
+      pointerId: pending.pointerId,
+      session: pending.session,
+      x: event.clientX - pending.offsetX,
+      y: event.clientY - pending.offsetY,
+      width: pending.width,
+      height: pending.height,
+    };
+    document.body.classList.add("session-tab-pointer-dragging");
+  } else {
+    sessionTabPointerDrag.value.x = event.clientX - pending.offsetX;
+    sessionTabPointerDrag.value.y = event.clientY - pending.offsetY;
+  }
+  updateSessionTabPointerTarget(event.clientX, event.clientY);
+}
+
+function updateSessionTabPointerTarget(clientX: number, clientY: number) {
+  const root = sessionPreview.value;
+  const hit = document.elementFromPoint(clientX, clientY);
+  const selector = hit instanceof Element ? hit.closest<HTMLElement>(".session-preview-selector") : null;
+  if (!root || !selector || !root.contains(selector)) {
+    sessionTabDropTarget.value = undefined;
+    return;
+  }
+  const pane = selector.dataset.pane === "right" ? "right" : "left";
+  const tabs = [...selector.querySelectorAll<HTMLElement>("[data-session-tab-key]")]
+    .filter((tab) => tab.dataset.sessionTabKey !== draggingSessionTabKey.value);
+  const target = tabs.find((tab) => clientX < tab.getBoundingClientRect().left + tab.getBoundingClientRect().width / 2);
+  const last = tabs.at(-1);
+  sessionTabDropTarget.value = target
+    ? { pane, targetKey: target.dataset.sessionTabKey || "", placement: "before" }
+    : last
+      ? { pane, targetKey: last.dataset.sessionTabKey || "", placement: "after" }
+      : { pane, targetKey: "", placement: "after" };
+  scrollSessionTabDragViewport(selector, clientX);
+}
+
+function scrollSessionTabDragViewport(selector: HTMLElement, clientX: number) {
+  const tabList = selector.querySelector<HTMLElement>(".session-tab-strip");
+  if (!tabList || tabList.scrollWidth <= tabList.clientWidth) return;
+  const bounds = tabList.getBoundingClientRect();
+  const edge = Math.min(36, bounds.width / 4);
+  const delta = clientX < bounds.left + edge ? -12 : clientX > bounds.right - edge ? 12 : 0;
+  if (!delta) return;
+  tabList.scrollLeft = Math.max(0, Math.min(tabList.scrollWidth - tabList.clientWidth, tabList.scrollLeft + delta));
+  updateSessionTabOverflow(tabList);
+}
+
+function finishSessionTabPointer(event: PointerEvent) {
+  if (!pendingSessionTabPointer || event.pointerId !== pendingSessionTabPointer.pointerId) return;
+  const wasDragging = Boolean(sessionTabPointerDrag.value);
+  if (wasDragging) updateSessionTabPointerTarget(event.clientX, event.clientY);
+  const target = sessionTabDropTarget.value;
+  if (wasDragging && draggingSessionTabKey.value && target) {
+    emit("moveSessionTab", draggingSessionTabKey.value, target.targetKey, target.placement, target.pane);
+  }
+  cleanupSessionTabPointerDrag(wasDragging);
+}
+
+function cancelSessionTabPointerDragOnEscape(event: KeyboardEvent) {
+  if (event.key !== "Escape") return;
+  event.preventDefault();
+  cancelSessionTabPointerDrag();
+}
+
+function cancelSessionTabPointerDrag() {
+  cleanupSessionTabPointerDrag(Boolean(sessionTabPointerDrag.value));
+}
+
+function cleanupSessionTabPointerDrag(suppressClick: boolean) {
+  window.removeEventListener("pointermove", moveSessionTabPointer, true);
+  window.removeEventListener("pointerup", finishSessionTabPointer, true);
+  window.removeEventListener("pointercancel", cancelSessionTabPointerDrag, true);
+  window.removeEventListener("keydown", cancelSessionTabPointerDragOnEscape, true);
+  window.removeEventListener("blur", cancelSessionTabPointerDrag);
+  pendingSessionTabPointer = undefined;
+  sessionTabPointerDrag.value = undefined;
+  draggingSessionTabKey.value = "";
+  sessionTabDropTarget.value = undefined;
+  document.body.classList.remove("session-tab-pointer-dragging");
+  if (suppressClick) suppressSessionTabClickUntil = Date.now() + 250;
 }
 
 function startSplitResize(event: PointerEvent) {
@@ -662,12 +828,9 @@ function startSplitResize(event: PointerEvent) {
 
 onBeforeUnmount(() => {
   stopSplitResize?.();
+  cancelSessionTabPointerDrag();
   document.body.classList.remove("session-pane-resizing");
 });
-
-function endSessionTabDrag() {
-  draggingSessionTabKey.value = "";
-}
 </script>
 
 <style scoped src="./SessionPreview.css"></style>

@@ -56,6 +56,9 @@ test("instance settings exposes general, models, apps, and inventory freshness s
   assert.match(dialog, /aria-label="Instance settings sections"/);
   assert.match(dialog, /DialogContent/);
   assert.match(dialog, /ScrollArea/);
+  assert.match(dialog, /New Codex session permissions/);
+  assert.match(dialog, /defaultCodexPermissionMode/);
+  assert.match(dialog, /Existing sessions keep their own selection/);
 });
 
 test("instance settings keeps a stable height within the viewport", () => {

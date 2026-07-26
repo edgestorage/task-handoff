@@ -46,6 +46,9 @@ test("the Codex composer exposes exactly three permission modes beside the plus 
   assert.match(composer, /value: "full-access", label: "Full access"/);
   assert.doesNotMatch(composer, /How should ChatGPT actions be approved|Learn more|Custom \(config\.toml\)/);
   assert.match(composer, /emit\("run", permissionProvider\.value === "codex" \? permissionMode\.value : undefined\)/);
+  assert.match(composer, /useAiSessionPermissionMode/);
+  assert.match(composer, /props\.permissionMode !== undefined[\s\S]*emit\("update:permissionMode", value\)/);
+  assert.doesNotMatch(composer, /permissionMode\.value = "ask"/);
   assert.match(composer, /\.ai-session-composer__permission-trigger\s*\{[^}]*background: transparent;/s);
   assert.match(composer, /\.ai-session-composer__tool:not\(:disabled\):is\(:hover, :focus-visible\),\s*\.ai-session-composer__permission-trigger:not\(:disabled\):is\(:hover, :focus-visible\)\s*\{[^}]*background: color-mix/s);
   assert.match(composer, /\.ai-session-permission-menu__item\[data-danger="true"\]:is\(:hover, :focus, \[data-highlighted\]\)\)\s*\{[^}]*color: var\(--status-danger\) !important;/s);

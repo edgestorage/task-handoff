@@ -1550,7 +1550,9 @@ export class ControlPlaneService {
       const runtime = await this.requireNodeRuntimeOnNode(instance.nodeId, instance.runtimeId);
       assertAiSessionRuntimePathSupport(attachments, runtime.type);
     }
-    const body = { message, ...(mode ? { mode } : {}), ...(attachments.length ? { attachments } : {}), ...(references.length ? { references } : {}), ...(permissionMode ? { permissionMode } : {}) };
+    const session = instance.aiSessions.sessions.find((candidate) => candidate.id === sessionId);
+    const effectivePermissionMode = permissionMode || (session?.agent === "codex" ? instance.config.defaultCodexPermissionMode : undefined);
+    const body = { message, ...(mode ? { mode } : {}), ...(attachments.length ? { attachments } : {}), ...(references.length ? { references } : {}), ...(effectivePermissionMode ? { permissionMode: effectivePermissionMode } : {}) };
     return AiSessionActionResultSchema.parse(await this.instanceRequest(instance, `/ai-sessions/${encodeURIComponent(sessionId)}/messages`, {
       method: "POST",
       headers: { "content-type": "application/json" },

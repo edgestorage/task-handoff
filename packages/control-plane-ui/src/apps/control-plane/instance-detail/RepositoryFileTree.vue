@@ -65,10 +65,10 @@ function emitOpen(entry: RepositoryDirectoryEntry) { emit("openFile", entry); }
 
 <style scoped>
 .repository-file-tree { display: grid; }
-.repository-file-tree-row { display: flex; width: 100%; min-height: 29px; align-items: center; gap: 6px; border: 0; border-radius: 5px; background: transparent; color: var(--text-muted); cursor: pointer; padding: 3px 6px 3px calc(5px + var(--repository-tree-depth) * 14px); text-align: left; }
+.repository-file-tree-row { display: flex; width: 100%; min-height: 31px; align-items: center; gap: 6px; border: 0; border-radius: 5px; background: transparent; color: var(--text-muted); cursor: pointer; padding: 3px 6px 3px calc(5px + var(--repository-tree-depth) * 14px); text-align: left; }
 .repository-file-tree-row:hover:not(:disabled), .repository-file-tree-row:focus-visible { background: var(--surface-subtle); color: var(--text); }
 .repository-file-tree-row:disabled { cursor: not-allowed; opacity: 0.55; }
-.repository-file-tree-row > span:last-child { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.repository-file-tree-row > span:last-child { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .repository-file-tree-chevron { transition: transform 120ms ease; }
 .repository-file-tree-chevron.open { transform: rotate(90deg); }
 .repository-file-tree-spacer { width: 13px; }

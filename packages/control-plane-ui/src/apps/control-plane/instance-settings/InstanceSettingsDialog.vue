@@ -49,16 +49,29 @@
             <section class="instance-settings-card">
               <div class="instance-settings-section-heading">
                 <h3>Configuration</h3>
-                <p>Applied the next time this instance starts.</p>
+                <p>Instance-level defaults for agent configuration and newly created sessions.</p>
               </div>
               <div class="instance-settings-control-row">
-                <label class="instance-settings-checkbox">
-                  <Checkbox :model-value="autoImportAgentConfigs" :disabled="savingGeneral" @update:model-value="autoImportAgentConfigs = $event === true" />
-                  <span>
-                    <strong>Automatically import agent configuration</strong>
-                    <small>Import supported agent configuration when this instance starts.</small>
-                  </span>
-                </label>
+                <div class="instance-settings-general-controls">
+                  <label class="instance-settings-checkbox">
+                    <Checkbox :model-value="autoImportAgentConfigs" :disabled="savingGeneral" @update:model-value="autoImportAgentConfigs = $event === true" />
+                    <span>
+                      <strong>Automatically import agent configuration</strong>
+                      <small>Import supported agent configuration when this instance starts.</small>
+                    </span>
+                  </label>
+                  <label class="instance-settings-select-control">
+                    <span>
+                      <strong>New Codex session permissions</strong>
+                      <small>Used to initialize new session composers. Existing sessions keep their own selection.</small>
+                    </span>
+                    <ControlPlaneSelect v-model="defaultCodexPermissionMode" :disabled="savingGeneral">
+                      <ControlPlaneSelectItem value="ask">Ask for approval</ControlPlaneSelectItem>
+                      <ControlPlaneSelectItem value="auto-review">Approve for me</ControlPlaneSelectItem>
+                      <ControlPlaneSelectItem value="full-access">Full access</ControlPlaneSelectItem>
+                    </ControlPlaneSelect>
+                  </label>
+                </div>
                 <Button size="sm" :disabled="savingGeneral || !generalChanged" @click="saveGeneral">
                   {{ savingGeneral ? "Saving" : "Save changes" }}
                 </Button>
@@ -222,6 +235,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { Bot, Boxes, Code2, Cpu, Globe2, LoaderCircle, Monitor, RefreshCw, SlidersHorizontal, TerminalSquare, X } from "@lucide/vue";
+import type { AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
 import type { AppManagementJob, AppManagementOperation, AppManagementSnapshot, InstanceBoardItem, ManagedAppProjection, ModelApp, ModelConfig, ModelSelection, UpdateControlledInstanceInput } from "../../../api/types";
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
 import { Badge } from "../../../components/ui/badge";
@@ -254,6 +268,7 @@ const props = defineProps<{
 const emit = defineEmits<{ "update:open": [open: boolean] }>();
 const section = ref<InstanceSettingsSection>("general");
 const autoImportAgentConfigs = ref(true);
+const defaultCodexPermissionMode = ref<AiSessionPermissionMode>("ask");
 const modelSelection = ref<ModelSelection>({});
 const savingGeneral = ref(false);
 const savingModels = ref(false);
@@ -266,7 +281,10 @@ const defaultModelValue = "__default__";
 const noModelValue = "__none__";
 const modelApps: ModelApp[] = ["codex", "claude"];
 
-const generalChanged = computed(() => Boolean(props.instance && autoImportAgentConfigs.value !== props.instance.config.autoImportAgentConfigs));
+const generalChanged = computed(() => Boolean(props.instance && (
+  autoImportAgentConfigs.value !== props.instance.config.autoImportAgentConfigs
+  || defaultCodexPermissionMode.value !== props.instance.config.defaultCodexPermissionMode
+)));
 const modelsChanged = computed(() => JSON.stringify(normalizedSelection(modelSelection.value)) !== JSON.stringify(normalizedSelection(props.instance?.modelSelection || {})));
 const inventoryState = computed<"current" | "stale" | "not-reported" | "empty" | "degraded">(() => {
   const inventory = props.instance?.appInventory;
@@ -298,6 +316,7 @@ watch(
     if (!open || !props.instance) return;
     section.value = props.initialSection || "general";
     autoImportAgentConfigs.value = props.instance.config.autoImportAgentConfigs;
+    defaultCodexPermissionMode.value = props.instance.config.defaultCodexPermissionMode;
     modelSelection.value = { ...props.instance.modelSelection };
     error.value = "";
     success.value = "";
@@ -377,10 +396,14 @@ async function saveGeneral() {
   error.value = "";
   success.value = "";
   try {
-    await props.updateInstance(props.instance, { config: { autoImportAgentConfigs: autoImportAgentConfigs.value } });
+    await props.updateInstance(props.instance, { config: {
+      autoImportAgentConfigs: autoImportAgentConfigs.value,
+      defaultCodexPermissionMode: defaultCodexPermissionMode.value,
+    } });
     success.value = "General settings saved.";
   } catch (cause) {
     autoImportAgentConfigs.value = props.instance.config.autoImportAgentConfigs;
+    defaultCodexPermissionMode.value = props.instance.config.defaultCodexPermissionMode;
     error.value = cause instanceof Error ? cause.message : String(cause);
   } finally {
     savingGeneral.value = false;
@@ -720,6 +743,12 @@ async function confirmAppOperation() {
   padding: 12px;
 }
 
+.instance-settings-general-controls {
+  display: grid;
+  flex: 1;
+  gap: 14px;
+}
+
 .instance-settings-checkbox {
   display: flex;
   min-width: 0;
@@ -728,12 +757,14 @@ async function confirmAppOperation() {
 }
 
 .instance-settings-checkbox span,
+.instance-settings-select-control > span,
 .instance-model-grid label {
   display: grid;
   gap: 5px;
 }
 
 .instance-settings-checkbox small,
+.instance-settings-select-control small,
 .instance-model-grid small,
 .instance-app-row small,
 .instance-settings-help,
@@ -744,6 +775,18 @@ async function confirmAppOperation() {
 }
 
 .instance-settings-checkbox strong {
+  color: var(--text-strong);
+  font-size: 12px;
+}
+
+.instance-settings-select-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 240px);
+  align-items: center;
+  gap: 16px;
+}
+
+.instance-settings-select-control strong {
   color: var(--text-strong);
   font-size: 12px;
 }
@@ -1023,6 +1066,11 @@ async function confirmAppOperation() {
   .instance-settings-control-row {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .instance-settings-select-control {
+    grid-template-columns: 1fr;
+    gap: 8px;
   }
 
   .instance-managed-app-row {

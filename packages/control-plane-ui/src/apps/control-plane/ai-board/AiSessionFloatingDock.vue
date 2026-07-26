@@ -136,11 +136,12 @@
       :busy="busy"
       :can-interrupt="canInterrupt"
       :provider="card.session.agent"
-      :permission-key="card.session.id"
+      :permission-key="aiSessionPermissionKey(card.instance.id, card.session.id)"
+      :default-permission-mode="card.instance.config.defaultCodexPermissionMode"
       @update:model-value="$emit('update:draft', $event)"
       @update:attachments="$emit('update:attachments', $event)"
       @update:mention-bindings="$emit('update:mentionBindings', $event)"
-      @run="$emit('run')"
+      @run="$emit('run', $event)"
       @steer="$emit('steer')"
       @command="$emit('command', $event)"
     />
@@ -157,6 +158,7 @@ import AiSessionResult from "../../../components/ai-session/AiSessionResult.vue"
 import type { AiSessionMentionBinding } from "../../../components/ai-session/mentions";
 import type { AiSessionCommandInput, AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionMentionContext } from "../../../components/ai-session/useAiSessionMentions";
+import { aiSessionPermissionKey } from "../useAiSessionPermissionMode";
 import AiSessionTurnNavigator from "../../../components/ai-session/AiSessionTurnNavigator.vue";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";

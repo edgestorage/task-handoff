@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { AiSessionPermissionModeSchema } from "@task-handoff/protocol/ai-sessions";
 import {
   ControlledInstanceSchema,
   ImageProfileSchema,
@@ -42,7 +43,10 @@ export const CreateNodeInstanceSchema = z
     image: ImageProfileSchema.optional(),
     source: ProjectSourceSchema,
     sourceSnapshot: z.record(z.string(), z.unknown()).default({}),
-    config: ControlledInstanceSchema.shape.config.optional(),
+    config: z.object({
+      autoImportAgentConfigs: z.boolean().optional(),
+      defaultCodexPermissionMode: AiSessionPermissionModeSchema.optional(),
+    }).strict().optional(),
     modelSelection: ControlledInstanceSchema.shape.modelSelection,
   })
   .strict();
@@ -50,7 +54,10 @@ export const CreateNodeInstanceSchema = z
 export const UpdateNodeInstanceSchema = z
   .object({
     name: z.string().trim().min(1).max(160).optional(),
-    config: ControlledInstanceSchema.shape.config.optional(),
+    config: z.object({
+      autoImportAgentConfigs: z.boolean().optional(),
+      defaultCodexPermissionMode: AiSessionPermissionModeSchema.optional(),
+    }).strict().optional(),
     modelSelection: ControlledInstanceSchema.shape.modelSelection.optional(),
   })
   .strict();

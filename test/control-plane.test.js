@@ -78,7 +78,7 @@ function testAppInventory(apps, observedAt = new Date().toISOString()) {
 }
 
 test("controlled instance heartbeat protocol rejects legacy receiver projection", () => {
-  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-07-25");
+  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-07-26");
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, receiver: { status: "running", pendingCount: 1 } }).success, false);
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, apps: { runningCount: 1 } }).success, false);
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, appInventory: emptyAppInventory(), apps: { runningCount: 1 } }).success, true);
@@ -1052,7 +1052,14 @@ function createMockNodeAgentFetch(options = {}) {
       const current = instances.get(id);
       if (!current) return errorResponse(`Instance ${id} was not found.`);
       const { modelEnv: _modelEnv, ...instancePatch } = body;
-      const updated = { ...current, ...instancePatch, id, nodeId, updatedAt: timestamp };
+      const updated = {
+        ...current,
+        ...instancePatch,
+        ...(instancePatch.config ? { config: { ...current.config, ...instancePatch.config } } : {}),
+        id,
+        nodeId,
+        updatedAt: timestamp,
+      };
       instances.set(id, updated);
       return jsonResponse(updated);
     }
@@ -3067,6 +3074,7 @@ test("node agent runs local docker behind node-local target and auto-imports age
     },
   });
   assert.equal(created.statusCode, 201, JSON.stringify(created.body));
+  assert.equal(created.json().data.config.defaultCodexPermissionMode, "full-access");
   await waitForCondition(
     () => app.nodeAgentState.controlledInstances.get("inst_1")?.status === "created",
     "image provisioning",
@@ -4302,6 +4310,31 @@ test("node agent provisions one built-in local runtime and creates local instanc
   assert.equal(createdInstance.json().data.workspace.status, "unknown");
   assert.equal(createdInstance.json().data.workspace.path, "/tmp/task-handoff-localhost-workspace");
   assert.equal(createdInstance.json().data.runtime.kind, "local");
+  assert.equal(createdInstance.json().data.config.defaultCodexPermissionMode, "ask");
+
+  const updatedPermissionDefault = await app.inject({
+    method: "PATCH",
+    url: "/api/node-agent/instances/inst_local",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: { config: { defaultCodexPermissionMode: "auto-review" } },
+  });
+  assert.equal(updatedPermissionDefault.statusCode, 200);
+  assert.deepEqual(updatedPermissionDefault.json().data.config, {
+    autoImportAgentConfigs: true,
+    defaultCodexPermissionMode: "auto-review",
+  });
+
+  const mergedConfigUpdate = await app.inject({
+    method: "PATCH",
+    url: "/api/node-agent/instances/inst_local",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: { config: { autoImportAgentConfigs: false } },
+  });
+  assert.equal(mergedConfigUpdate.statusCode, 200);
+  assert.deepEqual(mergedConfigUpdate.json().data.config, {
+    autoImportAgentConfigs: false,
+    defaultCodexPermissionMode: "auto-review",
+  });
 
   const duplicateInstance = await app.inject({
     method: "POST",
@@ -6635,7 +6668,7 @@ test("control plane models deploy to the target node and instances store assignm
     config: { autoImportAgentConfigs: false },
   });
   assert.equal(generalUpdated.statusCode, 200);
-  assert.deepEqual(generalUpdated.body.data.config, { autoImportAgentConfigs: false });
+  assert.deepEqual(generalUpdated.body.data.config, { autoImportAgentConfigs: false, defaultCodexPermissionMode: "ask" });
   const generalUpdateRequest = mock.requests.findLast((request) => request.path === `/instances/${instance.body.data.id}` && request.method === "PATCH" && request.body.config);
   assert.deepEqual(generalUpdateRequest.body.config, { autoImportAgentConfigs: false });
 
@@ -8855,7 +8888,7 @@ test("control plane chat gateway binds sessions and forwards messages to active 
   assert.equal(aiForwardsAfterContinue.length, 2);
   assert.equal(aiForwardsAfterContinue[1].body.path, "/api/ai-sessions/ais_1/messages");
   assert.equal(aiForwardsAfterContinue[1].body.method, "POST");
-  assert.deepEqual(JSON.parse(aiForwardsAfterContinue[1].body.body), { message: "continue" });
+  assert.deepEqual(JSON.parse(aiForwardsAfterContinue[1].body.body), { message: "continue", permissionMode: "ask" });
 
   const interrupted = await json(app, "POST", "/api/chat-gateway/messages", {
     source: {
@@ -14006,7 +14039,7 @@ test("control plane aggregates ai session pending routes and proxies ai session 
   assert.deepEqual(mentionForwards.map((request) => [request.body.method, request.body.path, request.body.body ? JSON.parse(request.body.body) : undefined]), [
     ["GET", "/api/ai-sessions/ais_waiting/mentions", undefined],
     ["POST", "/api/ai-sessions/ais_waiting/mentions/files", { query: "Exact Name" }],
-    ["POST", "/api/ai-sessions/ais_waiting/messages", { message: "Use @Exact", references }],
+    ["POST", "/api/ai-sessions/ais_waiting/messages", { message: "Use @Exact", references, permissionMode: "ask" }],
   ]);
 
   const history = await json(app, "GET", `/api/controlled-instances/${created.body.data.id}/ai-sessions/history`);
@@ -14119,10 +14152,10 @@ test("control plane aggregates ai session pending routes and proxies ai session 
       request.body.body ? JSON.parse(request.body.body) : undefined,
     ]),
     [
-      ["POST", `http://127.0.0.1:8091/api/node-agent/instances/${created.body.data.id}/proxy`, "/api/ai-sessions/ais_waiting/messages", { message: "Use @Exact", references }],
+      ["POST", `http://127.0.0.1:8091/api/node-agent/instances/${created.body.data.id}/proxy`, "/api/ai-sessions/ais_waiting/messages", { message: "Use @Exact", references, permissionMode: "ask" }],
       ["POST", `http://127.0.0.1:8091/api/node-agent/instances/${created.body.data.id}/proxy`, "/api/ai-sessions/ais_waiting/approval", { decision: "skip" }],
       ["POST", `http://127.0.0.1:8091/api/node-agent/instances/${created.body.data.id}/proxy`, "/api/ai-sessions/ais_waiting/approval", { decision: "allow" }],
-      ["POST", `http://127.0.0.1:8091/api/node-agent/instances/${created.body.data.id}/proxy`, "/api/ai-sessions/ais_waiting/messages", { message: "continue" }],
+      ["POST", `http://127.0.0.1:8091/api/node-agent/instances/${created.body.data.id}/proxy`, "/api/ai-sessions/ais_waiting/messages", { message: "continue", permissionMode: "ask" }],
     ],
   );
 });

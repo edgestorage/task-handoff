@@ -1555,7 +1555,10 @@ class NodeAgentState {
       uiAccessStatus: "unknown",
       controlMode: "controlled",
       capabilities: {},
-      config: input.config,
+      config: {
+        autoImportAgentConfigs: input.config?.autoImportAgentConfigs ?? true,
+        defaultCodexPermissionMode: input.config?.defaultCodexPermissionMode ?? (runtime.type === "docker" ? "full-access" : "ask"),
+      },
       workspace: runtime.type === "local" ? { mode: "local-bind", status: "unknown", path: workspacePath } : { status: "unknown" },
       target: { strategy: "node-proxy", status: "unknown" },
       runtime: runtime.type === "local" ? { kind: "local", workspacePath, labels: { "task-handoff.runtime-kind": "local" } } : { labels: {} },
@@ -2524,7 +2527,12 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     const id = (request.params as { id: string }).id;
     const current = state.requireInstance(id);
     const parsed = UpdateNodeInstanceSchema.parse(request.body);
-    const updated = ControlledInstanceSchema.parse({ ...current, ...parsed, updatedAt: now() });
+    const updated = ControlledInstanceSchema.parse({
+      ...current,
+      ...parsed,
+      ...(parsed.config ? { config: { ...current.config, ...parsed.config } } : {}),
+      updatedAt: now(),
+    });
     const stored = state.controlledInstances.put(updated);
     eventForwarder.syncNow();
     return { data: stored };

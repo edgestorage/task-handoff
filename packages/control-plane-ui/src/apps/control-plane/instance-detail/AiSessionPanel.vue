@@ -368,7 +368,8 @@
             :busy="resumingHistoryId === historyDetail.item.id"
             :can-interrupt="false"
             :provider="historyDetail.item.agent"
-            :permission-key="historyDetail.item.id"
+            :permission-key="historyAiSessionPermissionKey(instance.id, historyDetail.item.id)"
+            :default-permission-mode="instance.config.defaultCodexPermissionMode"
             placeholder="发送消息以继续这条对话"
             @run="sendHistoryMessage"
           />
@@ -419,13 +420,15 @@
               v-model="newSessionDraft"
               v-model:attachments="messageAttachments"
               class="session-ai-compose session-ai-new-composer"
-              :class="{ 'is-loading': launchingNewSession }"
-              :aria-busy="launchingNewSession"
-              :busy="launchingNewSession"
+              :class="{ 'is-loading': newSessionComposerBusy }"
+              :aria-busy="newSessionComposerBusy"
+              :busy="newSessionComposerBusy"
               :can-interrupt="false"
               :provider="newSessionApp === 'claude' ? 'claude' : 'codex'"
-              :permission-key="newSessionApp"
+              :permission-mode="newSessionPermissionMode"
+              :default-permission-mode="instance.config.defaultCodexPermissionMode"
               placeholder="Do anything"
+              @update:permission-mode="updateNewSessionPermissionMode"
               @run="createNewSession"
             />
           </div>
@@ -555,7 +558,8 @@
           :busy="aiSessionActionBusy"
           :can-interrupt="canInterrupt(selectedSession)"
           :provider="selectedSession.agent"
-          :permission-key="selectedSession.id"
+          :permission-key="aiSessionPermissionKey(instance.id, selectedSession.id)"
+          :default-permission-mode="instance.config.defaultCodexPermissionMode"
           :mention-context="mentionContext"
           :mention-trigger="mentionTrigger"
           :command-trigger="commandTrigger"
@@ -589,7 +593,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, t
 import { ArrowDown, ArrowLeft, Ban, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Code2, ExternalLink, Filter, Folder, History, LoaderCircle, MessageSquare, MoreHorizontal, Plus, SlidersHorizontal, Square, X, Zap } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
-import { bindAiSessionTrigger, createNodeLocalFolder, getAiSessionHistory, getAiSessionHistoryDetail, interruptAiSession, launchAppSession, listNodeFolderTree, markAiSessionRead, removeAiSessionQueuedMessage, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, stopAppSession, unbindAiSessionTrigger, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery } from "../../../api/queries";
+import { bindAiSessionTrigger, createNodeLocalFolder, getAiSessionHistory, getAiSessionHistoryDetail, interruptAiSession, launchAppSession, listNodeFolderTree, markAiSessionRead, removeAiSessionQueuedMessage, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, stopAppSession, unbindAiSessionTrigger, updateControlledInstance, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery } from "../../../api/queries";
 import { executeAiSessionCommand } from "../../../api/ai-session-commands";
 import type { AiSessionCommandInput, AiSessionHistoryDetail, AiSessionHistoryItem, AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
 import type { RepositoryAiSessionLaunchResult } from "@task-handoff/protocol/repository";
@@ -611,6 +615,12 @@ import NodeStorageFolderPickerDialog from "../settings/NodeStorageFolderPickerDi
 import RepositoryEnvironment from "./RepositoryEnvironment.vue";
 import { useNodeStorageFolderPicker } from "../settings/useNodeStorageFolderPicker";
 import { clearAiSessionDraft, loadAiSessionDraftPayload, persistAiSessionDraftPayload } from "../useAiSessionDraft";
+import {
+  aiSessionPermissionKey,
+  clearAiSessionPermissionMode,
+  historyAiSessionPermissionKey,
+  persistAiSessionPermissionMode,
+} from "../useAiSessionPermissionMode";
 import { createStreamingScrollFollow, type ScrollViewport } from "../../../lib/streaming-scroll-follow";
 import {
   aiSessionAppDisplayName,
@@ -746,6 +756,9 @@ const newSessionFolderId = ref("");
 const newSessionDraft = ref("");
 const newSessionFolderQuery = ref("");
 const launchingNewSession = ref(false);
+const savingNewSessionPermission = ref(false);
+const newSessionPermissionMode = ref<AiSessionPermissionMode>(props.instance.config.defaultCodexPermissionMode);
+const newSessionComposerBusy = computed(() => launchingNewSession.value || savingNewSessionPermission.value);
 const aiSessionLaunchableApps = computed(() => (props.launchableApps || []).filter((app) => app.id === "codex" || app.id === "claude"));
 const createdNewSessionFolders = ref<NodeLocalFolder[]>([]);
 const newSessionFolders = computed(() => {
@@ -1010,6 +1023,14 @@ watch(() => props.instance.id, () => {
 });
 
 watch(
+  () => [props.instance.id, props.instance.config.defaultCodexPermissionMode] as const,
+  ([, permissionMode]) => {
+    newSessionPermissionMode.value = permissionMode;
+  },
+  { immediate: true },
+);
+
+watch(
   [showNewSession, aiSessionLaunchableApps, newSessionFolders],
   ([show]) => {
     if (show) initializeNewSessionDefaults();
@@ -1223,6 +1244,10 @@ async function sendHistoryMessage(permissionMode?: AiSessionPermissionMode) {
       [],
       permissionMode,
     );
+    if (permissionMode) {
+      persistAiSessionPermissionMode(aiSessionPermissionKey(props.instance.id, session.id), permissionMode);
+      clearAiSessionPermissionMode(historyAiSessionPermissionKey(props.instance.id, item.id));
+    }
     historyMessageDraft.value = "";
     historyMessageAttachments.value = [];
     emit("selectAiSession", props.instance.id, session.id);
@@ -1235,7 +1260,9 @@ async function sendHistoryMessage(permissionMode?: AiSessionPermissionMode) {
 }
 
 function openNewSession() {
+  const wasVisible = showNewSession.value;
   newSessionOpen.value = true;
+  if (wasVisible) return;
   newSessionDraft.value = "";
   messageAttachments.value = [];
   messageMentionBindings.value = [];
@@ -1253,7 +1280,23 @@ function initializeNewSessionDefaults() {
 }
 
 function closeNewSession() {
-  if (!launchingNewSession.value) newSessionOpen.value = false;
+  if (!newSessionComposerBusy.value) newSessionOpen.value = false;
+}
+
+async function updateNewSessionPermissionMode(permissionMode: AiSessionPermissionMode) {
+  if (savingNewSessionPermission.value || permissionMode === newSessionPermissionMode.value) return;
+  const previousPermissionMode = newSessionPermissionMode.value;
+  newSessionPermissionMode.value = permissionMode;
+  savingNewSessionPermission.value = true;
+  try {
+    await updateControlledInstance(props.instance.id, { config: { defaultCodexPermissionMode: permissionMode } });
+    await refreshBoard();
+  } catch (error) {
+    newSessionPermissionMode.value = previousPermissionMode;
+    showControlPlaneToast(error instanceof Error ? error.message : "Failed to update the default Codex permission mode.");
+  } finally {
+    savingNewSessionPermission.value = false;
+  }
 }
 
 function openNewProject() {
@@ -1266,7 +1309,7 @@ async function confirmNewProject() {
 
 async function createNewSession(permissionMode?: AiSessionPermissionMode) {
   const message = newSessionDraft.value.trim();
-  if (!newSessionApp.value || !message || launchingNewSession.value) return;
+  if (!newSessionApp.value || !message || newSessionComposerBusy.value) return;
   launchingNewSession.value = true;
   try {
     const appSession = await launchAppSession(props.instance.id, { appId: newSessionApp.value, ...(newSessionFolderId.value ? { cwdFolderId: newSessionFolderId.value } : {}) });
@@ -1291,6 +1334,9 @@ async function createNewSession(permissionMode?: AiSessionPermissionMode) {
       referencesForBindings(newSessionDraft.value, messageMentionBindings.value),
       permissionMode,
     );
+    if (permissionMode) {
+      persistAiSessionPermissionMode(aiSessionPermissionKey(props.instance.id, session.id), permissionMode);
+    }
     await refreshBoard();
     emit("selectAiSession", props.instance.id, session.id);
     newSessionDraft.value = "";

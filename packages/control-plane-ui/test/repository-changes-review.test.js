@@ -25,10 +25,11 @@ test("repository changes review opens as an independent reusable session tab", a
 });
 
 test("changes review keeps a changed-file tree beside continuous authoritative diffs", async () => {
-  const [review, card, presentation, repositoryApi] = await Promise.all([
+  const [review, card, presentation, syntaxHighlight, repositoryApi] = await Promise.all([
     source("RepositoryChangesReviewTab.vue"),
     source("RepositoryChangeDiffCard.vue"),
     source("repositoryDiffPresentation.ts"),
+    source("repositorySyntaxHighlight.ts"),
     readFile(new URL("../src/api/repository.ts", import.meta.url), "utf8"),
   ]);
 
@@ -104,7 +105,8 @@ test("changes review keeps a changed-file tree beside continuous authoritative d
   assert.match(card, /v-for="\(line, index\) in visibleLines"/);
   assert.match(card, /function isPatchHeader[\s\S]*diff --git[\s\S]*index[\s\S]*---[\s\S]*\\\+\\\+\\\+/);
   assert.match(card, /highlightedLine\(line, language\.value\)/);
-  assert.match(card, /function languageForPath[\s\S]*tsx: "typescript"[\s\S]*vue: "xml"/);
+  assert.match(card, /repositoryLanguageForPath\(props\.entry\.path\)/);
+  assert.match(syntaxHighlight, /tsx: "typescript"[\s\S]*vue: "xml"/);
   assert.match(card, /v-html="line\.highlighted/);
   assert.match(card, /\.repository-review-diff-card \{[^}]*flex: 0 0 auto;/);
   assert.doesNotMatch(card, /split\("\\n"\)|parseUnified|content\.split/);
