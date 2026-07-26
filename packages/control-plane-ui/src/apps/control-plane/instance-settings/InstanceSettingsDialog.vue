@@ -3,84 +3,84 @@
     <DialogContent class="instance-settings-dialog" aria-describedby="instance-settings-description">
       <DialogHeader class="instance-settings-header">
         <div class="instance-settings-heading">
-          <span>Instance settings</span>
+          <span>{{ t("instances.settings.eyebrow") }}</span>
           <div class="instance-settings-title-row">
-            <DialogTitle>{{ instance?.name || "Instance unavailable" }}</DialogTitle>
+            <DialogTitle>{{ instance?.name || t("instances.settings.unavailableTitle") }}</DialogTitle>
             <Badge v-if="instance" :variant="instance.connectionStatus === 'online' ? 'default' : 'secondary'">
-              {{ instance.status }} · {{ instance.connectionStatus }}
+              {{ instanceStatusLabel(instance.status) }} · {{ connectionStatusLabel(instance.connectionStatus) }}
             </Badge>
           </div>
           <DialogDescription id="instance-settings-description">
-            Configure this instance. Model credentials remain in control-plane Settings.
+            {{ t("instances.settings.description") }}
           </DialogDescription>
         </div>
-        <button type="button" class="instance-settings-close" aria-label="Close instance settings" @click="handleOpenChange(false)">
+        <button type="button" class="instance-settings-close" :aria-label="t('instances.settings.close')" @click="handleOpenChange(false)">
           <X :size="16" />
         </button>
       </DialogHeader>
 
-      <div v-if="!instance" class="instance-settings-empty">This instance is no longer available.</div>
+      <div v-if="!instance" class="instance-settings-empty">{{ t("instances.settings.unavailable") }}</div>
       <Tabs v-else v-model="section" class="instance-settings-tabs">
-        <TabsList class="instance-settings-tabs-list" aria-label="Instance settings sections">
-          <TabsTrigger value="general"><SlidersHorizontal :size="14" />General</TabsTrigger>
-          <TabsTrigger value="models"><Cpu :size="14" />Models</TabsTrigger>
-          <TabsTrigger value="apps"><Boxes :size="14" />Apps</TabsTrigger>
+        <TabsList class="instance-settings-tabs-list" :aria-label="t('instances.settings.sections')">
+          <TabsTrigger value="general"><SlidersHorizontal :size="14" />{{ t("instances.settings.general") }}</TabsTrigger>
+          <TabsTrigger value="models"><Cpu :size="14" />{{ t("instances.settings.models") }}</TabsTrigger>
+          <TabsTrigger value="apps"><Boxes :size="14" />{{ t("instances.settings.apps") }}</TabsTrigger>
         </TabsList>
 
         <ScrollArea class="instance-settings-scroll">
           <TabsContent value="general" class="instance-settings-section">
             <section class="instance-settings-card">
               <div class="instance-settings-section-heading">
-                <h3>Instance details</h3>
-                <p>Runtime and workspace information reported by the node.</p>
+                <h3>{{ t("instances.settings.detailsTitle") }}</h3>
+                <p>{{ t("instances.settings.detailsDescription") }}</p>
               </div>
               <dl class="instance-settings-grid">
-                <div><dt>ID</dt><dd><code>{{ instance.id }}</code></dd></div>
-                <div><dt>State</dt><dd>{{ instance.status }} · {{ instance.connectionStatus }}</dd></div>
-                <div><dt>Node</dt><dd>{{ instance.node?.name || instance.nodeId }}</dd></div>
-                <div><dt>Runtime</dt><dd>{{ instance.runtime?.name || instance.runtimeId }}</dd></div>
-                <div><dt>Image</dt><dd>{{ instance.image?.name || instance.imageId || "None" }}</dd></div>
-                <div><dt>Workspace</dt><dd>{{ instance.workspace.path || instance.runtime?.workspacePath || "Not reported" }} · {{ instance.workspace.status }}</dd></div>
-                <div><dt>Protocol</dt><dd>{{ instance.protocolVersion || instance.build?.protocolVersion || "Not reported" }}</dd></div>
-                <div><dt>Build</dt><dd>{{ instance.build?.packageVersion || instance.instanceVersion || "Not reported" }}</dd></div>
+                <div><dt>{{ t("instances.settings.id") }}</dt><dd><code>{{ instance.id }}</code></dd></div>
+                <div><dt>{{ t("instances.settings.state") }}</dt><dd>{{ instanceStatusLabel(instance.status) }} · {{ connectionStatusLabel(instance.connectionStatus) }}</dd></div>
+                <div><dt>{{ t("instances.settings.node") }}</dt><dd>{{ instance.node?.name || instance.nodeId }}</dd></div>
+                <div><dt>{{ t("instances.settings.runtime") }}</dt><dd>{{ instance.runtime?.name || instance.runtimeId }}</dd></div>
+                <div><dt>{{ t("instances.settings.image") }}</dt><dd>{{ instance.image?.name || instance.imageId || t("instances.settings.none") }}</dd></div>
+                <div><dt>{{ t("instances.settings.workspace") }}</dt><dd>{{ instance.workspace.path || instance.runtime?.workspacePath || t("instances.settings.notReported") }} · {{ instance.workspace.status }}</dd></div>
+                <div><dt>{{ t("instances.settings.protocol") }}</dt><dd>{{ instance.protocolVersion || instance.build?.protocolVersion || t("instances.settings.notReported") }}</dd></div>
+                <div><dt>{{ t("instances.settings.build") }}</dt><dd>{{ instance.build?.packageVersion || instance.instanceVersion || t("instances.settings.notReported") }}</dd></div>
               </dl>
             </section>
 
             <section class="instance-settings-card">
               <div class="instance-settings-section-heading">
-                <h3>Configuration</h3>
-                <p>Instance-level defaults for agent configuration and newly created sessions.</p>
+                <h3>{{ t("instances.settings.configurationTitle") }}</h3>
+                <p>{{ t("instances.settings.configurationDescription") }}</p>
               </div>
               <div class="instance-settings-control-row">
                 <div class="instance-settings-general-controls">
                   <label class="instance-settings-name-control">
                     <span>
-                      <strong>Instance name</strong>
-                      <small>Used to identify this instance throughout the control plane.</small>
+                      <strong>{{ t("instances.settings.instanceName") }}</strong>
+                      <small>{{ t("instances.settings.instanceNameDescription") }}</small>
                     </span>
-                    <ControlPlaneInput v-model="instanceName" :disabled="savingGeneral" maxlength="160" placeholder="Instance name" />
+                    <ControlPlaneInput v-model="instanceName" :disabled="savingGeneral" maxlength="160" :placeholder="t('instances.settings.instanceName')" />
                   </label>
                   <label class="instance-settings-checkbox">
                     <Checkbox :model-value="autoImportAgentConfigs" :disabled="savingGeneral" @update:model-value="autoImportAgentConfigs = $event === true" />
                     <span>
-                      <strong>Automatically import agent configuration</strong>
-                      <small>Import supported agent configuration when this instance starts.</small>
+                      <strong>{{ t("instances.settings.autoImport") }}</strong>
+                      <small>{{ t("instances.settings.autoImportDescription") }}</small>
                     </span>
                   </label>
                   <label class="instance-settings-select-control">
                     <span>
-                      <strong>New Codex session permissions</strong>
-                      <small>Used to initialize new session composers. Existing sessions keep their own selection.</small>
+                      <strong>{{ t("instances.settings.sessionPermissions") }}</strong>
+                      <small>{{ t("instances.settings.sessionPermissionsDescription") }}</small>
                     </span>
                     <ControlPlaneSelect v-model="defaultCodexPermissionMode" :disabled="savingGeneral">
-                      <ControlPlaneSelectItem value="ask">Ask for approval</ControlPlaneSelectItem>
-                      <ControlPlaneSelectItem value="auto-review">Approve for me</ControlPlaneSelectItem>
-                      <ControlPlaneSelectItem value="full-access">Full access</ControlPlaneSelectItem>
+                      <ControlPlaneSelectItem value="ask">{{ t("instances.settings.askApproval") }}</ControlPlaneSelectItem>
+                      <ControlPlaneSelectItem value="auto-review">{{ t("instances.settings.approveForMe") }}</ControlPlaneSelectItem>
+                      <ControlPlaneSelectItem value="full-access">{{ t("instances.settings.fullAccess") }}</ControlPlaneSelectItem>
                     </ControlPlaneSelect>
                   </label>
                 </div>
                 <Button size="sm" :disabled="savingGeneral || !generalChanged || !validInstanceName" @click="saveGeneral">
-                  {{ savingGeneral ? "Saving" : "Save changes" }}
+                  {{ savingGeneral ? t("instances.settings.saving") : t("instances.settings.saveChanges") }}
                 </Button>
               </div>
             </section>
@@ -88,24 +88,24 @@
 
           <TabsContent value="models" class="instance-settings-section">
             <section class="instance-settings-card">
-              <h3>Model selection</h3>
-              <p class="instance-settings-help">Control-plane models are deployed to this instance's node before assignment. Node-local models are available only on their owner node. Changes apply on the next start or restart.</p>
+              <h3>{{ t("instances.settings.modelSelection") }}</h3>
+              <p class="instance-settings-help">{{ t("instances.settings.modelSelectionDescription") }}</p>
               <div class="instance-model-grid">
                 <label v-for="app in modelApps" :key="app">
-                  <span>{{ app === "codex" ? "Codex" : "Claude" }}</span>
+                  <span>{{ app === "codex" ? t("common.products.codex") : t("common.products.claude") }}</span>
                   <ControlPlaneSelect :model-value="modelDraftValue(app)" :disabled="savingModels" @update:model-value="setModelDraft(app, $event)">
-                    <ControlPlaneSelectItem :value="noModelValue">No model</ControlPlaneSelectItem>
-                    <ControlPlaneSelectItem :value="defaultModelValue">Global default</ControlPlaneSelectItem>
-                    <ControlPlaneSelectItem v-if="invalidSelection(app)" :value="draftModelId(app)!">Unavailable · {{ draftModelId(app) }}</ControlPlaneSelectItem>
+                    <ControlPlaneSelectItem :value="noModelValue">{{ t("instances.settings.noModel") }}</ControlPlaneSelectItem>
+                    <ControlPlaneSelectItem :value="defaultModelValue">{{ t("instances.settings.globalDefault") }}</ControlPlaneSelectItem>
+                    <ControlPlaneSelectItem v-if="invalidSelection(app)" :value="draftModelId(app)!">{{ t("instances.settings.unavailableModel", { id: draftModelId(app) }) }}</ControlPlaneSelectItem>
                     <ControlPlaneSelectItem v-for="model in selectableModels(app)" :key="`${app}-${model.id}`" :value="model.id">{{ modelOptionLabel(model) }}</ControlPlaneSelectItem>
                   </ControlPlaneSelect>
-                  <small v-if="invalidSelection(app)" class="instance-settings-error">The stored selection is deleted, disabled, or belongs to another app. Choose a model or Global default.</small>
-                  <small v-else>Effective: {{ effectiveModelLabel(app) }}</small>
+                  <small v-if="invalidSelection(app)" class="instance-settings-error">{{ t("instances.settings.invalidModel") }}</small>
+                  <small v-else>{{ t("instances.settings.effectiveModel", { name: effectiveModelLabel(app) }) }}</small>
                 </label>
               </div>
               <div class="instance-settings-actions">
                 <Button size="sm" :disabled="savingModels || !modelsChanged" @click="saveModels">
-                  {{ savingModels ? "Saving" : "Save model settings" }}
+                  {{ savingModels ? t("instances.settings.saving") : t("instances.settings.saveModels") }}
                 </Button>
               </div>
             </section>
@@ -115,35 +115,35 @@
             <section class="instance-settings-card">
               <div class="instance-app-heading">
                 <div>
-                  <h3>Managed apps</h3>
-                  <p class="instance-settings-help">Install and remove trusted built-in apps on this controlled computer.</p>
+                  <h3>{{ t("instances.settings.managedApps") }}</h3>
+                  <p class="instance-settings-help">{{ t("instances.settings.managedAppsDescription") }}</p>
                 </div>
                 <div v-if="appManagement" class="instance-app-heading-actions">
                   <Badge variant="secondary">{{ appManagement.capabilities.platform }} · {{ appManagement.capabilities.arch }}</Badge>
-                  <Button size="icon" variant="ghost" aria-label="Refresh managed apps" :disabled="appManagementLoading" @click="refreshApps">
+                  <Button size="icon" variant="ghost" :aria-label="t('instances.settings.refreshApps')" :disabled="appManagementLoading" @click="refreshApps">
                     <RefreshCw :class="{ 'animate-spin motion-reduce:animate-none': appManagementLoading }" :size="14" />
                   </Button>
                 </div>
               </div>
-              <p v-if="appManagement" class="instance-settings-observed">Observed {{ formatObservedAt(appManagement.observedAt) }} · Privilege {{ appManagement.capabilities.privilege }}</p>
-              <div v-if="appManagementLoading && !appManagement" class="instance-settings-empty">Loading the controlled computer's app capabilities…</div>
+              <p v-if="appManagement" class="instance-settings-observed">{{ t("instances.settings.observed", { time: formatObservedAt(appManagement.observedAt), privilege: appManagement.capabilities.privilege }) }}</p>
+              <div v-if="appManagementLoading && !appManagement" class="instance-settings-empty">{{ t("instances.settings.appsLoading") }}</div>
               <div v-else-if="appManagementError" class="instance-app-issues" role="alert">
-                <strong>App management unavailable</strong>
+                <strong>{{ t("instances.settings.appsUnavailable") }}</strong>
                 <p>{{ appManagementError }}</p>
-                <Button size="sm" variant="outline" @click="refreshApps">Retry</Button>
+                <Button size="sm" variant="outline" @click="refreshApps">{{ t("instances.settings.retry") }}</Button>
               </div>
-              <p v-else-if="!appManagement" class="instance-settings-empty">No authoritative app management snapshot is available.</p>
-              <p v-else-if="!appManagement.apps.length" class="instance-settings-empty">This controlled instance does not publish any managed apps.</p>
+              <p v-else-if="!appManagement" class="instance-settings-empty">{{ t("instances.settings.noSnapshot") }}</p>
+              <p v-else-if="!appManagement.apps.length" class="instance-settings-empty">{{ t("instances.settings.noManagedApps") }}</p>
               <template v-else>
-                <div class="instance-app-toolbar" aria-label="Managed app filters">
+                <div class="instance-app-toolbar" :aria-label="t('instances.settings.appFilters')">
                   <div class="instance-app-filters">
                     <Button v-for="filter in appFilters" :key="filter.value" size="sm" :variant="appFilter === filter.value ? 'secondary' : 'ghost'" :aria-pressed="appFilter === filter.value" @click="appFilter = filter.value">
                       {{ filter.label }} <span>{{ filter.count }}</span>
                     </Button>
                   </div>
-                  <small>{{ installableAppCount ? `${installableAppCount} ready to install` : "No installs available" }}</small>
+                  <small>{{ installableAppCount ? t("instances.settings.readyToInstall", { count: installableAppCount }) : t("instances.settings.noInstalls") }}</small>
                 </div>
-                <p v-if="!filteredManagedApps.length" class="instance-settings-empty">No apps match this filter.</p>
+                <p v-if="!filteredManagedApps.length" class="instance-settings-empty">{{ t("instances.settings.noFilterMatches") }}</p>
                 <div v-else class="instance-app-list">
                   <article v-for="app in filteredManagedApps" :key="app.id" class="instance-app-row instance-managed-app-row">
                     <div class="instance-app-main">
@@ -160,21 +160,21 @@
                         <Badge :variant="managedAppBadgeVariant(app.state)">{{ managedAppStateLabel(app.state) }}</Badge>
                         <Button v-if="activeJob(app)" size="sm" disabled>
                           <LoaderCircle class="animate-spin motion-reduce:animate-none" :size="13" />
-                          {{ activeJob(app)?.operation === "install" ? "Installing" : "Uninstalling" }}
+                          {{ activeJob(app)?.operation === "install" ? t("instances.settings.installing") : t("instances.settings.uninstalling") }}
                         </Button>
-                        <Button v-else-if="app.canInstall" size="sm" :disabled="operationSubmitting === app.id" @click="openAppConfirmation(app, 'install')">Install</Button>
-                        <Button v-else-if="app.canUninstall" size="sm" variant="destructive" :disabled="operationSubmitting === app.id" @click="openAppConfirmation(app, 'uninstall')">Uninstall</Button>
+                        <Button v-else-if="app.canInstall" size="sm" :disabled="operationSubmitting === app.id" @click="openAppConfirmation(app, 'install')">{{ t("instances.settings.install") }}</Button>
+                        <Button v-else-if="app.canUninstall" size="sm" variant="destructive" :disabled="operationSubmitting === app.id" @click="openAppConfirmation(app, 'uninstall')">{{ t("instances.settings.uninstall") }}</Button>
                       </div>
                     </div>
                     <div v-if="activeJob(app) || executionJob(app)?.command || executionJob(app)?.logTail || terminalJob(app)" class="instance-app-activity">
                       <small v-if="activeJob(app)" class="instance-app-job-line">{{ jobLabel(activeJob(app)!) }}</small>
                       <Progress v-if="progressPercent(activeJob(app)) !== undefined" :model-value="progressPercent(activeJob(app))" class="instance-app-progress" />
                       <details v-if="executionJob(app)?.command || executionJob(app)?.logTail" class="instance-app-terminal" :open="Boolean(activeJob(app))">
-                        <summary>{{ activeJob(app) ? "Live installer output" : "Installer output" }}<template v-if="executionJob(app)?.logTruncated"> · latest 32 KB</template></summary>
+                        <summary>{{ activeJob(app) ? t("instances.settings.liveInstallerOutput") : t("instances.settings.installerOutput") }}<template v-if="executionJob(app)?.logTruncated"> · {{ t("instances.settings.latestLog") }}</template></summary>
                         <pre aria-live="polite">{{ executionOutput(executionJob(app)!) }}</pre>
                       </details>
                       <small v-if="terminalJob(app)" :class="terminalJob(app)?.state === 'succeeded' ? 'instance-settings-success' : 'instance-settings-error'" role="status">
-                        {{ terminalJobLabel(terminalJob(app)!) }}<template v-if="terminalJob(app)?.error"> · {{ terminalJob(app)?.error?.message }}</template><template v-if="terminalJob(app)?.error?.retryable"> You can retry from the current detected state.</template>
+                        {{ terminalJobLabel(terminalJob(app)!) }}<template v-if="terminalJob(app)?.error"> · {{ terminalJob(app)?.error?.message }}</template><template v-if="terminalJob(app)?.error?.retryable"> {{ t("instances.settings.retryDetected") }}</template>
                       </small>
                     </div>
                   </article>
@@ -185,21 +185,21 @@
             <section class="instance-settings-card">
               <div class="instance-app-heading">
                 <div>
-                  <h3>Custom launchers</h3>
-                  <p class="instance-settings-help">Launcher entries only. They register programs already present on the computer and cannot install software.</p>
+                  <h3>{{ t("instances.settings.customLaunchers") }}</h3>
+                  <p class="instance-settings-help">{{ t("instances.settings.customLaunchersDescription") }}</p>
                 </div>
                 <Badge :variant="inventoryBadgeVariant">{{ inventoryStateLabel }}</Badge>
               </div>
-              <p v-if="instance.appInventory" class="instance-settings-observed">Inventory observed {{ formatObservedAt(instance.appInventory.observedAt) }}</p>
-              <p v-if="!customInventoryApps.length" class="instance-settings-empty">No custom launchers are registered on this instance.</p>
+              <p v-if="instance.appInventory" class="instance-settings-observed">{{ t("instances.settings.inventoryObserved", { time: formatObservedAt(instance.appInventory.observedAt) }) }}</p>
+              <p v-if="!customInventoryApps.length" class="instance-settings-empty">{{ t("instances.settings.noCustomLaunchers") }}</p>
               <div v-else class="instance-app-list">
                 <article v-for="app in customInventoryApps" :key="app.id" class="instance-app-row">
-                  <div><strong>{{ app.name }}</strong><code>{{ app.id }} · {{ app.kind }}</code><small v-if="app.diagnosticCode">Executable not found on the controlled computer.</small></div>
+                  <div><strong>{{ app.name }}</strong><code>{{ app.id }} · {{ app.kind }}</code><small v-if="app.diagnosticCode">{{ t("instances.settings.executableMissing") }}</small></div>
                   <Badge :variant="app.availability === 'available' ? 'default' : 'secondary'">{{ app.availability }}</Badge>
                 </article>
               </div>
               <div v-if="instance.appInventory?.issues.length" class="instance-app-issues" role="status">
-                <strong>Inventory diagnostics</strong>
+                <strong>{{ t("instances.settings.inventoryDiagnostics") }}</strong>
                 <p v-for="issue in instance.appInventory.issues" :key="issue.code">{{ issue.message }} <code>{{ issue.code }}</code></p>
               </div>
             </section>
@@ -213,24 +213,24 @@
       <AlertDialog :open="Boolean(appConfirmation)" @update:open="(value) => { if (!value && !operationSubmitting) appConfirmation = undefined; }">
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>{{ appConfirmation?.operation === "uninstall" ? "Uninstall" : "Install" }} {{ appConfirmation?.app.name }}?</AlertDialogTitle>
+            <AlertDialogTitle>{{ t("instances.settings.operationQuestion", { operation: appConfirmation?.operation === "uninstall" ? t("instances.settings.uninstall") : t("instances.settings.install"), name: appConfirmation?.app.name }) }}</AlertDialogTitle>
             <AlertDialogDescription v-if="appConfirmation?.operation === 'uninstall'">
-              The program files owned by the built-in recipe will be removed. User configuration, AI sessions, and workspaces are preserved. Running app sessions must be stopped first.
+              {{ t("instances.settings.uninstallDescription") }}
             </AlertDialogDescription>
             <AlertDialogDescription v-else>
-              The controlled instance will execute its trusted built-in recipe on the final computer. The request cannot provide a custom package, URL, or command.
+              {{ t("instances.settings.installDescription") }}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div v-if="appConfirmation" class="instance-app-confirmation-summary">
-            <span><small>App</small><strong>{{ appConfirmation.app.name }}</strong></span>
-            <span><small>Target</small><strong>{{ instance?.name }}</strong></span>
-            <span><small>Privilege</small><strong>{{ appManagement?.capabilities.privilege || "Not reported" }}</strong></span>
+            <span><small>{{ t("instances.settings.app") }}</small><strong>{{ appConfirmation.app.name }}</strong></span>
+            <span><small>{{ t("instances.settings.target") }}</small><strong>{{ instance?.name }}</strong></span>
+            <span><small>{{ t("instances.settings.privilege") }}</small><strong>{{ appManagement?.capabilities.privilege || t("instances.settings.notReported") }}</strong></span>
           </div>
           <AlertDialogFooter>
-            <AlertDialogCancel :disabled="Boolean(operationSubmitting)">Cancel</AlertDialogCancel>
+            <AlertDialogCancel :disabled="Boolean(operationSubmitting)">{{ t("instances.settings.cancel") }}</AlertDialogCancel>
             <Button type="button" :disabled="Boolean(operationSubmitting)" @click="confirmAppOperation">
               <LoaderCircle v-if="operationSubmitting" class="animate-spin motion-reduce:animate-none" :size="14" />
-              {{ operationSubmitting ? "Queuing…" : appConfirmation?.operation === "uninstall" ? "Confirm uninstall" : "Confirm install" }}
+              {{ operationSubmitting ? t("instances.settings.queuing") : appConfirmation?.operation === "uninstall" ? t("instances.settings.confirmUninstall") : t("instances.settings.confirmInstall") }}
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -241,6 +241,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import { Bot, Boxes, Code2, Cpu, Globe2, LoaderCircle, Monitor, RefreshCw, SlidersHorizontal, TerminalSquare, X } from "@lucide/vue";
 import type { AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
 import type { AppManagementJob, AppManagementOperation, AppManagementSnapshot, InstanceBoardItem, ManagedAppProjection, ModelApp, ModelConfig, ModelSelection, UpdateControlledInstanceInput } from "../../../api/types";
@@ -256,6 +257,15 @@ import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
 import { effectiveInstanceModel, invalidInstanceModelSelection, selectableInstanceModels } from "./instanceSettingsState";
+import { useControlPlaneLocale } from "../../../i18n/index";
+import { formatDateTime } from "../../../i18n/presentation";
+import { connectionStatusKeys, instanceStatusKeys, translateStatus } from "../../../i18n/status";
+import { translateApiError } from "../../../i18n/apiError";
+
+const { t } = useI18n();
+const { locale } = useControlPlaneLocale();
+const instanceStatusLabel = (status: string) => translateStatus(instanceStatusKeys, status, t);
+const connectionStatusLabel = (status: string) => translateStatus(connectionStatusKeys, status, t);
 
 type InstanceSettingsSection = "general" | "models" | "apps";
 type AppFilter = "all" | "available" | "installed";
@@ -304,15 +314,21 @@ const inventoryState = computed<"current" | "stale" | "not-reported" | "empty" |
   if (props.instance?.connectionStatus !== "online") return "stale";
   return inventory.items.length ? "current" : "empty";
 });
-const inventoryStateLabel = computed(() => ({ current: "Current", stale: "Stale", "not-reported": "Not reported", empty: "Empty", degraded: "Degraded" })[inventoryState.value]);
+const inventoryStateLabel = computed(() => ({
+  current: t("instances.settings.inventoryCurrent"),
+  stale: t("instances.settings.inventoryStale"),
+  "not-reported": t("instances.settings.notReported"),
+  empty: t("instances.settings.inventoryEmpty"),
+  degraded: t("instances.settings.inventoryDegraded"),
+})[inventoryState.value]);
 const inventoryBadgeVariant = computed<"default" | "secondary" | "destructive">(() => inventoryState.value === "current" ? "default" : inventoryState.value === "degraded" ? "destructive" : "secondary");
 const customInventoryApps = computed(() => props.instance?.appInventory?.items.filter((app) => app.source === "custom") || []);
 const installableAppCount = computed(() => props.appManagement?.apps.filter((app) => app.canInstall).length || 0);
 const installedAppCount = computed(() => props.appManagement?.apps.filter((app) => app.state === "installed").length || 0);
 const appFilters = computed(() => [
-  { value: "all" as const, label: "All", count: props.appManagement?.apps.length || 0 },
-  { value: "available" as const, label: "Available", count: installableAppCount.value },
-  { value: "installed" as const, label: "Installed", count: installedAppCount.value },
+  { value: "all" as const, label: t("instances.settings.filterAll"), count: props.appManagement?.apps.length || 0 },
+  { value: "available" as const, label: t("instances.settings.filterAvailable"), count: installableAppCount.value },
+  { value: "installed" as const, label: t("instances.settings.filterInstalled"), count: installedAppCount.value },
 ]);
 const filteredManagedApps = computed(() => {
   const apps = props.appManagement?.apps || [];
@@ -364,7 +380,7 @@ function selectableModels(app: ModelApp) {
 
 function modelOptionLabel(model: ModelConfig) {
   const availableFromControlPlane = model.locations?.some((location) => location.type === "control-plane" && location.enabled);
-  return `${model.name} · ${model.model} · ${availableFromControlPlane ? "copy to node" : "this node"}`;
+  return t(availableFromControlPlane ? "instances.create.modelCopyToNode" : "instances.create.modelOnNode", { name: `${model.name} · ${model.model}` });
 }
 
 function draftModelId(app: ModelApp) {
@@ -380,9 +396,9 @@ function invalidSelection(app: ModelApp) {
 }
 
 function effectiveModelLabel(app: ModelApp) {
-  if (draftModelId(app) === null) return "No model";
+  if (draftModelId(app) === null) return t("instances.settings.noModel");
   const match = effectiveInstanceModel(props.models, app, props.instance?.nodeId || "", draftModelId(app));
-  return match ? `${match.name} · ${match.model}` : "No enabled global model";
+  return match ? `${match.name} · ${match.model}` : t("instances.settings.noEnabledGlobalModel");
 }
 
 function setModelDraft(app: ModelApp, value: string) {
@@ -416,12 +432,12 @@ async function saveGeneral() {
       },
     });
     instanceName.value = instanceName.value.trim();
-    success.value = "General settings saved.";
+    success.value = t("instances.settings.generalSaved");
   } catch (cause) {
     instanceName.value = props.instance.name;
     autoImportAgentConfigs.value = props.instance.config.autoImportAgentConfigs;
     defaultCodexPermissionMode.value = props.instance.config.defaultCodexPermissionMode;
-    error.value = cause instanceof Error ? cause.message : String(cause);
+    error.value = translateApiError(cause, t);
   } finally {
     savingGeneral.value = false;
   }
@@ -434,10 +450,10 @@ async function saveModels() {
   success.value = "";
   try {
     await props.updateInstance(props.instance, { modelSelection: normalizedSelection(modelSelection.value) });
-    success.value = "Model settings saved. They will apply on the next start or restart.";
+    success.value = t("instances.settings.modelsSaved");
   } catch (cause) {
     modelSelection.value = { ...props.instance.modelSelection };
-    error.value = cause instanceof Error ? cause.message : String(cause);
+    error.value = translateApiError(cause, t);
   } finally {
     savingModels.value = false;
   }
@@ -445,7 +461,7 @@ async function saveModels() {
 
 function formatObservedAt(value: string) {
   const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
+  return Number.isNaN(parsed.getTime()) ? value : formatDateTime(parsed, locale.value);
 }
 
 function refreshApps() {
@@ -466,7 +482,7 @@ function executionJob(app: ManagedAppProjection) {
 
 function executionOutput(job: AppManagementJob) {
   if (job.logTail) return job.logTail;
-  if (!job.command) return "Waiting for the installer to start…";
+  if (!job.command) return t("instances.settings.waitingInstaller");
   return `$ ${[job.command.executable, ...job.command.args].map(commandArgument).join(" ")}\n`;
 }
 
@@ -480,8 +496,8 @@ function progressPercent(job?: AppManagementJob) {
 }
 
 function jobLabel(job: AppManagementJob) {
-  const operation = job.operation === "install" ? "Installing" : "Uninstalling";
-  return `${job.state === "queued" ? "Queued" : operation}${job.phase ? ` · ${humanizeJobPhase(job.phase)}` : ""}`;
+  const operation = job.operation === "install" ? t("instances.settings.installing") : t("instances.settings.uninstalling");
+  return `${job.state === "queued" ? t("instances.settings.queued") : operation}${job.phase ? ` · ${humanizeJobPhase(job.phase)}` : ""}`;
 }
 
 function humanizeJobPhase(phase: string) {
@@ -489,11 +505,11 @@ function humanizeJobPhase(phase: string) {
 }
 
 function terminalJobLabel(job: AppManagementJob) {
-  const operation = job.operation === "install" ? "Installation" : "Uninstallation";
-  if (job.state === "succeeded") return `${operation} succeeded`;
-  if (job.state === "cancelled") return `${operation} cancelled`;
-  if (job.state === "interrupted") return `${operation} interrupted`;
-  return `${operation} failed`;
+  const operation = job.operation === "install" ? t("instances.settings.installation") : t("instances.settings.uninstallation");
+  if (job.state === "succeeded") return t("instances.settings.succeeded", { operation });
+  if (job.state === "cancelled") return t("instances.settings.cancelled", { operation });
+  if (job.state === "interrupted") return t("instances.settings.interrupted", { operation });
+  return t("instances.settings.failed", { operation });
 }
 
 function managedAppBadgeVariant(state: ManagedAppProjection["state"]): "default" | "secondary" | "destructive" {
@@ -501,7 +517,12 @@ function managedAppBadgeVariant(state: ManagedAppProjection["state"]): "default"
 }
 
 function managedAppStateLabel(state: ManagedAppProjection["state"]) {
-  return ({ installed: "Installed", "not-installed": "Not installed", broken: "Needs attention", unsupported: "Unsupported" })[state];
+  return ({
+    installed: t("instances.settings.stateInstalled"),
+    "not-installed": t("instances.settings.stateNotInstalled"),
+    broken: t("instances.settings.stateBroken"),
+    unsupported: t("instances.settings.stateUnsupported"),
+  })[state];
 }
 
 function managedAppIcon(app: ManagedAppProjection) {
@@ -514,8 +535,8 @@ function managedAppIcon(app: ManagedAppProjection) {
 function appActionHint(app: ManagedAppProjection) {
   if (activeJob(app) || app.canInstall || app.canUninstall) return "";
   const reason = app.state === "installed" ? app.uninstallReason : app.installReason;
-  if (reason?.code === "BUNDLED" && app.state === "not-installed") return "Not included in this controlled computer build.";
-  return reason?.message || "No app management action is available.";
+  if (reason?.code === "BUNDLED" && app.state === "not-installed") return t("instances.settings.bundledUnavailable");
+  return reason?.message || t("instances.settings.noAction");
 }
 
 function openAppConfirmation(app: ManagedAppProjection, operation: AppManagementOperation) {
@@ -532,10 +553,13 @@ async function confirmAppOperation() {
   success.value = "";
   try {
     await props.manageApp(props.instance.id, app.id, operation);
-    success.value = `${operation === "install" ? "Installation" : "Uninstallation"} queued for ${app.name}.`;
+    success.value = t("instances.settings.operationQueued", {
+      operation: operation === "install" ? t("instances.settings.installation") : t("instances.settings.uninstallation"),
+      name: app.name,
+    });
     appConfirmation.value = undefined;
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : String(cause);
+    error.value = translateApiError(cause, t);
   } finally {
     operationSubmitting.value = "";
   }

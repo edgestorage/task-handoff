@@ -1,14 +1,14 @@
 <template>
   <Dialog :open="true" @update:open="(open) => !open && $emit('close')">
     <DialogContent class="new-instance-modal" style="width: min(900px, calc(100vw - 36px)); max-width: calc(100vw - 36px)">
-      <DialogDescription class="sr-only">Choose a workspace and runtime for the controlled instance.</DialogDescription>
+      <DialogDescription class="sr-only">{{ t("instances.create.description") }}</DialogDescription>
       <div class="modal-head">
         <div>
-          <span>New instance</span>
-          <DialogTitle>Create controlled instance</DialogTitle>
+          <span>{{ t("instances.create.eyebrow") }}</span>
+          <DialogTitle>{{ t("instances.create.title") }}</DialogTitle>
         </div>
         <DialogClose as-child>
-          <button type="button" class="panel-close" aria-label="Close setup panel">
+          <button type="button" class="panel-close" :aria-label="t('instances.create.close')">
             <X :size="16" />
           </button>
         </DialogClose>
@@ -17,7 +17,7 @@
       <ScrollArea class="new-instance-body">
         <div class="new-instance-body-content">
       <div class="wizard-layout">
-        <nav class="wizard-steps" aria-label="Create instance steps">
+        <nav class="wizard-steps" :aria-label="t('instances.create.stepsLabel')">
           <button v-for="item in wizardSteps" :key="item.id" type="button" :class="{ active: step === item.id, complete: stepIndex(item.id) < activeStepIndex }" @click="goToStep(item.id)">
             <span>{{ stepIndex(item.id) + 1 }}</span>
             <strong>{{ item.label }}</strong>
@@ -60,7 +60,7 @@
             v-model:new-image-open="newImageOpen"
             :can-create-image="canCreateImage"
             :creating-image="creatingImage"
-            :docker-runtime-check-message="dockerRuntimeCheck.message"
+            :docker-runtime-check-message="dockerRuntimeCheckMessage"
             :docker-runtime-check-state="dockerRuntimeCheck.state"
             :images="images.data.value || []"
             :image-availability="imageAvailability.data.value || []"
@@ -82,14 +82,14 @@
 
       <div class="modal-actions">
         <span v-if="currentBlockedReason" class="create-blocked-reason">{{ currentBlockedReason }}</span>
-        <Button variant="outline" size="sm" @click="step === 'source' ? $emit('close') : previousStep()">{{ step === "source" ? "Cancel" : "Back" }}</Button>
+        <Button variant="outline" size="sm" @click="step === 'source' ? $emit('close') : previousStep()">{{ step === "source" ? t("instances.create.cancel") : t("instances.create.back") }}</Button>
         <Button v-if="step === 'source'" size="sm" :disabled="!canContinue" @click="nextStep">
           <ArrowRight :size="15" />
-          <span>Continue</span>
+          <span>{{ t("instances.create.continue") }}</span>
         </Button>
         <Button v-else size="sm" :disabled="!canCreateInstance || creating" @click="createInstance">
           <Plus :size="15" />
-          <span>{{ creating ? "Creating" : "Create" }}</span>
+          <span>{{ creating ? t("instances.create.creating") : t("instances.create.create") }}</span>
         </Button>
       </div>
         </div>
@@ -102,6 +102,8 @@
 import { computed, nextTick, reactive, ref, watch } from "vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import { ArrowRight, Plus, X } from "@lucide/vue";
+import { useI18n } from "vue-i18n";
+import { translateApiError } from "../../i18n/apiError";
 import { checkNodeRuntime, createControlledInstance, createImage, createProject, listNodeFolderTree, useImagesQuery, useModelsQuery, useNodeImageAvailabilityQuery, useNodeLocalFoldersQuery, useNodeRuntimesQuery, useNodesQuery, useProjectsQuery } from "../../api/queries";
 import type { CreateControlledInstanceResult, InstanceBoardItem } from "../../api/types";
 import { Button } from "../../components/ui/button";
@@ -116,6 +118,8 @@ import { nodeFolderSelectionMode, nodePathName } from "./nodePath";
 import { useNodeFolderBrowser } from "./useNodeFolderBrowser";
 import { showControlPlaneToast } from "./useControlPlaneToasts";
 
+const { t } = useI18n();
+
 const emit = defineEmits<{
   close: [];
   created: [instance: InstanceBoardItem];
@@ -125,10 +129,10 @@ const props = defineProps<{
   chooseProjectFolder?: () => Promise<ProjectFolderSelection | undefined>;
 }>();
 
-const wizardSteps: Array<{ id: WizardStep; label: string }> = [
-  { id: "source", label: "Workspace" },
-  { id: "runtime", label: "Runtime" },
-];
+const wizardSteps = computed<Array<{ id: WizardStep; label: string }>>(() => [
+  { id: "source", label: t("instances.create.workspace") },
+  { id: "runtime", label: t("instances.create.runtime") },
+]);
 const chooseFolderValue = "__choose_folder__";
 const CONTROL_PLANE_LOCAL_NODE_LABEL = "task-handoff.control-plane.local";
 
@@ -148,10 +152,11 @@ const creatingProject = ref(false);
 const creatingImage = ref(false);
 const creatingLocalFolder = ref(false);
 const localPathOpen = ref(false);
-const dockerRuntimeCheck = reactive<{ key: string; state: DockerRuntimeCheckState; message: string; platform: string }>({
+const dockerRuntimeCheck = reactive<{ key: string; state: DockerRuntimeCheckState; rawMessage: string; serverVersion: string; platform: string }>({
   key: "",
   state: "idle",
-  message: "",
+  rawMessage: "",
+  serverVersion: "",
   platform: "",
 });
 
@@ -212,6 +217,17 @@ const selectedNode = computed(() => (nodes.data.value || []).find((node) => node
 const selectedNodePlatform = computed(() => nodePlatform(selectedNode.value));
 const selectedRuntime = computed(() => runtimesForSelectedNode.value.find((runtime) => runtime.id === runtimeDraft.runtimeId));
 const selectedDockerRuntimeKey = computed(() => selectedRuntime.value?.type === "docker" ? `${runtimeDraft.nodeId}:${selectedRuntime.value.id}` : "");
+const dockerRuntimeCheckMessage = computed(() => {
+  if (dockerRuntimeCheck.rawMessage) return dockerRuntimeCheck.rawMessage;
+  if (dockerRuntimeCheck.state === "checking") return t("instances.create.docker.checkingDaemon");
+  if (dockerRuntimeCheck.state === "online") {
+    return dockerRuntimeCheck.serverVersion
+      ? t("instances.create.docker.daemonVersionAvailable", { version: dockerRuntimeCheck.serverVersion })
+      : t("instances.create.docker.daemonAvailable");
+  }
+  if (dockerRuntimeCheck.state === "offline") return t("instances.create.docker.daemonUnavailable");
+  return "";
+});
 const selectedRuntimeRequiresImage = computed(() => {
   if (!selectedRuntime.value) {
     return true;
@@ -221,42 +237,42 @@ const selectedRuntimeRequiresImage = computed(() => {
 });
 const sourceSummary = computed(() => {
   if (sourceDraft.mode === "project") {
-    return selectedProject.value?.name || "Repository";
+    return selectedProject.value?.name || t("instances.create.repository");
   }
   if (selectedLocalFolder.value) {
     return selectedLocalFolder.value.name || selectedLocalFolder.value.path;
   }
-  return localFolderPath.value || "Local folder";
+  return localFolderPath.value || t("instances.create.localFolder");
 });
 const sourceBlockedReason = computed(() => {
   if (sourceDraft.mode === "project") {
-    return sourceDraft.projectId ? "" : "Select a repository.";
+    return sourceDraft.projectId ? "" : t("instances.create.blocked.repository");
   }
   if (!sourceDraft.localNodeId) {
-    return "Select a node.";
+    return t("instances.create.blocked.node");
   }
   if (!sourceDraft.localFolderId && !localFolderPath.value) {
-    return "Select or choose a local folder.";
+    return t("instances.create.blocked.localFolder");
   }
   return "";
 });
 const runtimeBlockedReason = computed(() => {
   if (!runtimeDraft.nodeId) {
-    return "Select a node.";
+    return t("instances.create.blocked.node");
   }
   if (!runtimeDraft.runtimeId) {
-    return "Select a runtime.";
+    return t("instances.create.blocked.runtime");
   }
   if (selectedRuntime.value?.type === "docker") {
     if (dockerRuntimeCheck.key !== selectedDockerRuntimeKey.value || dockerRuntimeCheck.state === "idle" || dockerRuntimeCheck.state === "checking") {
-      return "Checking the Docker daemon on the selected node.";
+      return t("instances.create.blocked.dockerChecking");
     }
     if (dockerRuntimeCheck.state !== "online") {
-      return "Docker must be available on the selected node before creating an instance.";
+      return t("instances.create.blocked.dockerUnavailable");
     }
   }
   if (selectedRuntimeRequiresImage.value && !runtimeDraft.imageId) {
-    return "Select an image.";
+    return t("instances.create.blocked.image");
   }
   return "";
 });
@@ -400,7 +416,8 @@ watch(
   ([currentStep, key]) => {
     dockerRuntimeCheck.key = key;
     dockerRuntimeCheck.state = "idle";
-    dockerRuntimeCheck.message = "";
+    dockerRuntimeCheck.rawMessage = "";
+    dockerRuntimeCheck.serverVersion = "";
     dockerRuntimeCheck.platform = "";
     if (currentStep === "runtime" && key) {
       void checkSelectedDockerRuntime();
@@ -424,7 +441,7 @@ watch(
 );
 
 function stepIndex(value: WizardStep) {
-  return wizardSteps.findIndex((item) => item.id === value);
+  return wizardSteps.value.findIndex((item) => item.id === value);
 }
 
 function selectSourceMode(mode: SourceMode) {
@@ -478,7 +495,7 @@ function nextStep() {
 function previousStep() {
   const index = activeStepIndex.value;
   if (index > 0) {
-    step.value = wizardSteps[index - 1].id;
+    step.value = wizardSteps.value[index - 1].id;
   }
 }
 
@@ -525,7 +542,8 @@ async function checkSelectedDockerRuntime() {
   }
   dockerRuntimeCheck.key = key;
   dockerRuntimeCheck.state = "checking";
-  dockerRuntimeCheck.message = "Checking the Docker daemon on the selected node…";
+  dockerRuntimeCheck.rawMessage = "";
+  dockerRuntimeCheck.serverVersion = "";
   try {
     const checked = await checkNodeRuntime(runtimeDraft.nodeId, runtime.id);
     if (selectedDockerRuntimeKey.value !== key) return;
@@ -533,18 +551,16 @@ async function checkSelectedDockerRuntime() {
     dockerRuntimeCheck.platform = details.hostPlatform || "";
     if (checked.status === "online") {
       dockerRuntimeCheck.state = "online";
-      dockerRuntimeCheck.message = details.serverVersion
-        ? `Docker daemon ${details.serverVersion} is available.`
-        : "Docker daemon is available.";
+      dockerRuntimeCheck.serverVersion = details.serverVersion || "";
     } else {
       dockerRuntimeCheck.state = "offline";
-      dockerRuntimeCheck.message = details.error || "Docker daemon is not available.";
+      dockerRuntimeCheck.rawMessage = details.error || "";
     }
     await queryClient.invalidateQueries({ queryKey: ["control-plane-node-runtimes"] });
   } catch (error) {
     if (selectedDockerRuntimeKey.value !== key) return;
     dockerRuntimeCheck.state = "error";
-    dockerRuntimeCheck.message = errorText(error);
+    dockerRuntimeCheck.rawMessage = errorText(error);
   }
 }
 
@@ -565,7 +581,7 @@ async function refreshAfterMutation(description: string) {
   try {
     await refresh();
   } catch (error) {
-    showControlPlaneToast(`${description}, but the control-plane view could not refresh: ${errorText(error)}`);
+    showControlPlaneToast(t("instances.create.feedback.refreshFailed", { description, error: errorText(error) }));
   }
 }
 
@@ -618,9 +634,9 @@ async function createInstance() {
   }
   emit("created", created);
   emit("close");
-  await refreshAfterMutation("Instance created");
+  await refreshAfterMutation(t("instances.create.feedback.instanceCreated"));
   if (created.startOutcome.status === "failed") {
-    showControlPlaneToast(`Instance created, but failed to start: ${created.startOutcome.error?.message || "Unknown error"}`);
+    showControlPlaneToast(t("instances.create.feedback.createdButStartFailed", { error: created.startOutcome.error?.message || t("common.status.unknown") }));
   }
 }
 
@@ -630,7 +646,7 @@ async function createQuickProject() {
   }
   creatingProject.value = true;
   projectCreateError.value = "";
-  let createdProjectName = "Project created";
+  let createdProjectName = t("instances.create.feedback.projectCreated");
   try {
     const firstNodeId = nodes.data.value?.[0]?.id;
     const project = await createProject({
@@ -654,7 +670,7 @@ async function createQuickProject() {
     runtimeDraft.imageId = project.defaultImageId || images.data.value?.[0]?.id || "";
     runtimeDraft.nodeId = project.defaultNodeId || nodes.data.value?.[0]?.id || "";
     runtimeDraft.runtimeId = project.defaultRuntimeId || runtimeIdForNode(runtimeDraft.nodeId);
-    createdProjectName = `${project.name} created`;
+    createdProjectName = t("instances.create.feedback.namedCreated", { name: project.name });
   } catch (error) {
     showControlPlaneToast(errorText(error));
     return;
@@ -676,7 +692,7 @@ async function chooseProjectFolderPath() {
   const path = typeof selected === "string" ? selected : selected.path;
   const ownerNodeId = typeof selected === "string" ? sourceDraft.localNodeId : selected.ownerNodeId || sourceDraft.localNodeId;
   if (!ownerNodeId) {
-    projectCreateError.value = "Select a node.";
+    projectCreateError.value = t("instances.create.blocked.node");
     return;
   }
   creatingLocalFolder.value = true;
@@ -715,7 +731,7 @@ async function createQuickImage() {
     return;
   }
   creatingImage.value = true;
-  let createdImageName = "Image created";
+  let createdImageName = t("instances.create.feedback.imageCreated");
   try {
     const image = await createImage({
       name: newImage.name.trim(),
@@ -730,7 +746,7 @@ async function createQuickImage() {
     newImage.reference = "";
     newImageOpen.value = false;
     runtimeDraft.imageId = image.id;
-    createdImageName = `${image.name} created`;
+    createdImageName = t("instances.create.feedback.namedCreated", { name: image.name });
   } catch (error) {
     showControlPlaneToast(errorText(error));
     return;
@@ -741,7 +757,7 @@ async function createQuickImage() {
 }
 
 function errorText(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
+  return translateApiError(error, t);
 }
 </script>
 

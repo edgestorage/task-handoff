@@ -1,23 +1,23 @@
 <template>
-  <section class="ai-board-view" aria-label="AI session board">
-    <div v-if="loading" class="ai-board-empty">Loading AI sessions...</div>
+  <section class="ai-board-view" :aria-label="t('sessions.board.label')">
+    <div v-if="loading" class="ai-board-empty">{{ t("sessions.board.loading") }}</div>
     <div v-else-if="error" class="ai-board-empty error">{{ error }}</div>
     <template v-else>
       <div class="ai-board-toolbar">
         <div class="ai-board-filter-group">
-          <span class="ai-board-layout-toggle" aria-label="AI board layout">
-            <button type="button" :aria-pressed="layoutMode === 'columns'" title="Column layout" @click="setLayoutMode('columns')">
+          <span class="ai-board-layout-toggle" :aria-label="t('sessions.board.layout')">
+            <button type="button" :aria-pressed="layoutMode === 'columns'" :title="t('sessions.board.columns')" @click="setLayoutMode('columns')">
               <Columns3 :size="14" />
             </button>
-            <button type="button" :aria-pressed="layoutMode === 'grid'" title="Grid layout" @click="setLayoutMode('grid')">
+            <button type="button" :aria-pressed="layoutMode === 'grid'" :title="t('sessions.board.grid')" @click="setLayoutMode('grid')">
               <LayoutGrid :size="14" />
             </button>
           </span>
           <label class="ai-board-search">
             <Search :size="14" />
-            <input :value="filter" placeholder="Search AI sessions" @input="emit('update:filter', ($event.target as HTMLInputElement).value)" />
+            <input :value="filter" :placeholder="t('sessions.board.search')" @input="emit('update:filter', ($event.target as HTMLInputElement).value)" />
           </label>
-          <span class="ai-board-chips" aria-label="AI session counts">
+          <span class="ai-board-chips" :aria-label="t('sessions.board.counts')">
             <button
               v-for="filterOption in statusFilterOptions"
               :key="filterOption.key"
@@ -29,33 +29,33 @@
             >
               {{ filterOption.count }} {{ filterOption.label }}
             </button>
-            <strong data-tone="online">{{ summary.instancesOnline }} Instances online</strong>
+            <strong data-tone="online">{{ t("sessions.board.instancesOnline", { count: summary.instancesOnline }) }}</strong>
           </span>
         </div>
         <div class="ai-board-toolbar-actions">
           <DropdownMenu v-if="layoutMode === 'grid'">
             <DropdownMenuTrigger as-child>
-              <Button variant="outline" size="sm" class="ai-board-options-trigger" aria-label="AI board options" title="AI board options">
+              <Button variant="outline" size="sm" class="ai-board-options-trigger" :aria-label="t('sessions.board.options')" :title="t('sessions.board.options')">
                 <SlidersHorizontal :size="16" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent class="ai-board-options-menu" align="end" :side-offset="6">
-              <DropdownMenuLabel class="ai-board-options-label">Sort</DropdownMenuLabel>
+              <DropdownMenuLabel class="ai-board-options-label">{{ t("sessions.board.sort") }}</DropdownMenuLabel>
               <DropdownMenuCheckboxItem class="ai-board-options-item option-item" :model-value="gridSortByStatus" @update:model-value="setGridSortByStatus(Boolean($event))">
-                Sort by status
+                {{ t("sessions.board.sortByStatus") }}
               </DropdownMenuCheckboxItem>
               <DropdownMenuSeparator class="ai-board-options-separator" />
-              <DropdownMenuLabel class="ai-board-options-label">Group</DropdownMenuLabel>
+              <DropdownMenuLabel class="ai-board-options-label">{{ t("sessions.board.group") }}</DropdownMenuLabel>
               <DropdownMenuRadioGroup :model-value="gridGroupBy" @update:model-value="setGridGroupBy($event as AiBoardGridGroupBy)">
-                <DropdownMenuRadioItem class="ai-board-options-item option-item" value="none">No grouping</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem class="ai-board-options-item option-item" value="path">Group by path</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem class="ai-board-options-item option-item" value="instance">Group by instance</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem class="ai-board-options-item option-item" value="node">Group by node</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem class="ai-board-options-item option-item" value="agent">Group by agent</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem class="ai-board-options-item option-item" value="none">{{ t("sessions.board.noGrouping") }}</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem class="ai-board-options-item option-item" value="path">{{ t("sessions.board.groupPath") }}</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem class="ai-board-options-item option-item" value="instance">{{ t("sessions.board.groupInstance") }}</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem class="ai-board-options-item option-item" value="node">{{ t("sessions.board.groupNode") }}</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem class="ai-board-options-item option-item" value="agent">{{ t("sessions.board.groupAgent") }}</DropdownMenuRadioItem>
               </DropdownMenuRadioGroup>
             </DropdownMenuContent>
           </DropdownMenu>
-          <small>{{ layoutVisibleCards.length }} bound sessions · {{ totalBoundSessions }} total</small>
+          <small>{{ t("sessions.board.boundTotal", { visible: layoutVisibleCards.length, total: totalBoundSessions }) }}</small>
         </div>
       </div>
 
@@ -156,7 +156,7 @@
           </template>
 
           <div v-if="!layoutVisibleCards.length" class="ai-board-grid-empty">
-            No matching AI sessions
+            {{ t("sessions.board.noMatches") }}
           </div>
         </div>
       </ScrollArea>
@@ -200,6 +200,10 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
+import { compareNaturalText, compareTechnicalIdentifiers } from "../../../i18n/presentation";
+import type { SupportedLocale } from "../../../i18n/locale";
+import { translateApiError } from "../../../i18n/apiError";
 import { useEventListener } from "@vueuse/core";
 import { Columns3, LayoutGrid, Search, SlidersHorizontal } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
@@ -224,7 +228,7 @@ import {
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
-import { clearAiSessionDraft, loadAiSessionDraftPayload, persistAiSessionDraftPayload } from "../useAiSessionDraft";
+import { aiSessionMessageText, clearAiSessionDraft, loadAiSessionDraftPayload, persistAiSessionDraftPayload } from "../useAiSessionDraft";
 import {
   aiSessionAppTab,
   aiSessionBasename,
@@ -269,6 +273,7 @@ const emit = defineEmits<{
   selectInstance: [instanceId: string];
   "update:filter": [value: string];
 }>();
+const { locale, t } = useI18n();
 
 const promptIndexes = ref<Record<string, { index: number; count: number }>>({});
 const visibleColumnKeys = ref(loadVisibleColumnKeys());
@@ -307,7 +312,7 @@ const {
   triggerBusyKey,
   triggerButtonTitle,
   triggerTemplates,
-} = useAiBoardTriggers();
+} = useAiBoardTriggers(t);
 
 const allCards = computed<AiBoardCard[]>(() => {
   const cards: AiBoardCard[] = [];
@@ -315,7 +320,7 @@ const allCards = computed<AiBoardCard[]>(() => {
     for (const session of instance.aiSessions?.sessions || []) {
       const appTab = aiSessionAppTab(instance, session);
       cards.push({
-        appTab: appTab || { key: "ai-sessions", label: "AI Sessions", status: session.status, kind: "ai" },
+        appTab: appTab || { key: "ai-sessions", label: t("sessions.title"), status: session.status, kind: "ai" },
         instance,
         key: `${instance.id}:${session.id}`,
         session,
@@ -339,9 +344,9 @@ const visibleCards = computed(() => {
       card.session.status,
       card.session.phase,
       card.session.cwd,
-      displayAiSessionTitle(card.session, promptIndexFor(card)),
-      displayAiSessionMessage(card.session, promptIndexFor(card)),
-      sessionDisplayName(card.appTab),
+      displayAiSessionTitle(card.session, promptIndexFor(card), t),
+      displayAiSessionMessage(card.session, promptIndexFor(card), t),
+      sessionDisplayName(card.appTab, t),
     ]
       .filter(Boolean)
       .join(" ")
@@ -364,10 +369,10 @@ const summary = computed(() => ({
 }));
 
 const statusFilterOptions = computed<Array<{ count: number; key: AiBoardColumnKey; label: string; tone: string }>>(() => [
-  { count: summary.value.running, key: "running", label: "Running", tone: "active" },
-  { count: summary.value.waiting, key: "waiting", label: "Waiting approval", tone: "waiting" },
-  { count: summary.value.idleOpen, key: "idle-open", label: "Idle with shell open", tone: "idle" },
-  { count: summary.value.problem, key: "problem", label: "Problem", tone: "problem" },
+  { count: summary.value.running, key: "running", label: t("sessions.board.running"), tone: "active" },
+  { count: summary.value.waiting, key: "waiting", label: t("sessions.board.waitingApproval"), tone: "waiting" },
+  { count: summary.value.idleOpen, key: "idle-open", label: t("sessions.board.idleOpen"), tone: "idle" },
+  { count: summary.value.problem, key: "problem", label: t("sessions.board.problem"), tone: "problem" },
 ]);
 
 const boardColumns = computed(() => {
@@ -381,34 +386,34 @@ const boardColumns = computed(() => {
   }> = [
     {
       cards: [],
-      description: "正在执行、思考、调用工具或编辑文件",
-      empty: "No running AI sessions",
+      description: t("sessions.board.runningDescription"),
+      empty: t("sessions.board.noRunning"),
       key: "running",
-      title: "Running",
+      title: t("sessions.board.running"),
       tone: "active",
     },
     {
       cards: [],
-      description: "等审批或等用户输入，优先处理",
-      empty: "No sessions waiting",
+      description: t("sessions.board.waitingDescription"),
+      empty: t("sessions.board.noWaiting"),
       key: "waiting",
-      title: "Waiting",
+      title: t("sessions.board.waiting"),
       tone: "waiting",
     },
     {
       cards: [],
-      description: "AI 空闲，但 app session 仍打开",
-      empty: "No idle open sessions",
+      description: t("sessions.board.idleDescription"),
+      empty: t("sessions.board.noIdle"),
       key: "idle-open",
-      title: "Idle / Open",
+      title: t("sessions.board.idleOpenTitle"),
       tone: "idle",
     },
     {
       cards: [],
-      description: "失败但 app session 仍存在",
-      empty: "No problem sessions",
+      description: t("sessions.board.problemDescription"),
+      empty: t("sessions.board.noProblem"),
       key: "problem",
-      title: "Problem",
+      title: t("sessions.board.problem"),
       tone: "problem",
     },
   ];
@@ -421,7 +426,7 @@ const boardColumns = computed(() => {
 
 const gridGroups = computed<AiBoardGridGroup[]>(() => {
   if (gridGroupBy.value === "none") {
-    return [{ key: "__all__", label: "All sessions", cards: layoutVisibleCards.value }];
+    return [{ key: "__all__", label: t("sessions.board.all"), cards: layoutVisibleCards.value }];
   }
   const groups = new Map<string, AiBoardGridGroup>();
   for (const card of layoutVisibleCards.value) {
@@ -457,12 +462,14 @@ function compareAiBoardCards(left: AiBoardCard, right: AiBoardCard, sortByStatus
   if (sessionDelta) {
     return sessionDelta;
   }
-  const instanceDelta = props.instanceDisplayName(left.instance).localeCompare(props.instanceDisplayName(right.instance)) || left.instance.id.localeCompare(right.instance.id);
-  return instanceDelta || aiSessionStableSortKey(left.session).localeCompare(aiSessionStableSortKey(right.session));
+  const instanceDelta = compareNaturalText(props.instanceDisplayName(left.instance), props.instanceDisplayName(right.instance), locale.value as SupportedLocale)
+    || compareTechnicalIdentifiers(left.instance.id, right.instance.id);
+  return instanceDelta || compareTechnicalIdentifiers(aiSessionStableSortKey(left.session), aiSessionStableSortKey(right.session));
 }
 
 function aiBoardCardPath(card: AiBoardCard) {
-  return card.session.cwd?.trim() || "Unknown path";
+  const path = card.session.cwd?.trim();
+  return { key: path || "__unknown_path__", label: path || t("sessions.board.unknownPath") };
 }
 
 function aiBoardCardGroup(card: AiBoardCard, groupBy: Exclude<AiBoardGridGroupBy, "none">) {
@@ -470,13 +477,12 @@ function aiBoardCardGroup(card: AiBoardCard, groupBy: Exclude<AiBoardGridGroupBy
     return { key: card.instance.id, label: props.instanceDisplayName(card.instance) };
   }
   if (groupBy === "node") {
-    return { key: card.instance.nodeId || "__unknown_node__", label: card.instance.node?.name || card.instance.nodeId || "Unknown node" };
+    return { key: card.instance.nodeId || "__unknown_node__", label: card.instance.node?.name || card.instance.nodeId || t("sessions.board.unknownNode") };
   }
   if (groupBy === "agent") {
-    return { key: card.session.agent, label: appDisplayName(card.session.agent) };
+    return { key: card.session.agent, label: appDisplayName(card.session.agent, t) };
   }
-  const path = aiBoardCardPath(card);
-  return { key: path, label: path };
+  return aiBoardCardPath(card);
 }
 
 function toggleColumnVisibility(key: AiBoardColumnKey) {
@@ -686,7 +692,7 @@ async function uploadMessageAttachments(instanceId: string, sessionId: string) {
     if (attachment.source.type === "runtime-path") {
       return { id: attachment.id, kind: attachment.kind, name: attachment.name, mime: attachment.mime, size: attachment.size, source: attachment.source };
     }
-    if (!attachment.dataUrl) throw new Error(`Attachment content is unavailable: ${attachment.name}`);
+    if (!attachment.dataUrl) throw new Error(t("sessions.panel.attachmentUnavailable", { name: attachment.name }));
     const uploaded = await uploadAiSessionAttachment({ instanceId, sessionId, kind: attachment.kind, name: attachment.name, mime: attachment.mime, data: attachment.dataUrl });
     return { id: uploaded.id, kind: uploaded.kind, source: { type: "upload-ref" as const } };
   }));
@@ -701,14 +707,14 @@ async function sendSelectedSessionMessage(permissionMode?: AiSessionPermissionMo
   aiSessionActionBusy.value = true;
   try {
     const attachments = await uploadMessageAttachments(card.instance.id, card.session.id);
-    await sendAiSessionMessage(card.instance.id, card.session.id, message || "请查看附件。", undefined, attachments, referencesForBindings(messageDraft.value, messageMentionBindings.value), permissionMode);
+    await sendAiSessionMessage(card.instance.id, card.session.id, aiSessionMessageText(message), undefined, attachments, referencesForBindings(messageDraft.value, messageMentionBindings.value), permissionMode);
     clearAiSessionDraft(card.session.id);
     messageDraft.value = "";
     messageMentionBindings.value = [];
     messageAttachments.value = [];
     await refreshBoard();
   } catch (error) {
-    showControlPlaneToast(error instanceof Error ? error.message : "Failed to send message.");
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.sendFailed")));
   } finally {
     aiSessionActionBusy.value = false;
   }
@@ -723,10 +729,10 @@ async function executeSelectedSessionCommand(input: AiSessionCommandInput) {
     clearAiSessionDraft(card.session.id);
     messageDraft.value = "";
     messageMentionBindings.value = [];
-    if (input.command === "goal" && !input.argument) showControlPlaneToast(result.value || "No active goal.");
+    if (input.command === "goal" && !input.argument) showControlPlaneToast(result.value || t("sessions.panel.noGoal"));
     await refreshBoard();
   } catch (error) {
-    showControlPlaneToast(error instanceof Error ? error.message : "Failed to run command.");
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.commandFailed")));
   } finally {
     aiSessionActionBusy.value = false;
   }
@@ -741,14 +747,14 @@ async function steerMessageDraft() {
   aiSessionActionBusy.value = true;
   try {
     const attachments = await uploadMessageAttachments(card.instance.id, card.session.id);
-    await sendAiSessionMessage(card.instance.id, card.session.id, message || "请查看附件。", "steer", attachments, referencesForBindings(messageDraft.value, messageMentionBindings.value));
+    await sendAiSessionMessage(card.instance.id, card.session.id, aiSessionMessageText(message), "steer", attachments, referencesForBindings(messageDraft.value, messageMentionBindings.value));
     clearAiSessionDraft(card.session.id);
     messageDraft.value = "";
     messageMentionBindings.value = [];
     messageAttachments.value = [];
     await refreshBoard();
   } catch (error) {
-    showControlPlaneToast(error instanceof Error ? error.message : "Failed to steer message.");
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.steerFailed")));
   } finally {
     aiSessionActionBusy.value = false;
   }
@@ -764,7 +770,7 @@ async function interruptSelectedSession() {
     await interruptAiSession(card.instance.id, card.session.id);
     await refreshBoard();
   } catch (error) {
-    showControlPlaneToast(error instanceof Error ? error.message : "Failed to stop AI session.");
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.stopFailed")));
   } finally {
     aiSessionActionBusy.value = false;
   }
@@ -780,22 +786,22 @@ async function resolveSelectedApproval(decision: "allow" | "deny" | "skip") {
     await resolveAiSessionApproval(card.instance.id, card.session.id, decision);
     await refreshBoard();
   } catch (error) {
-    showControlPlaneToast(error instanceof Error ? error.message : "Failed to resolve approval.");
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.approvalFailed")));
   } finally {
     aiSessionActionBusy.value = false;
   }
 }
 
 async function steerSelectedQueuedMessage(queueId: string) {
-  await runSelectedQueueAction((card) => steerAiSessionQueuedMessage(card.instance.id, card.session.id, queueId), "Failed to steer queued message.");
+  await runSelectedQueueAction((card) => steerAiSessionQueuedMessage(card.instance.id, card.session.id, queueId), t("sessions.panel.steerQueuedFailed"));
 }
 
 async function retrySelectedQueuedMessage(queueId: string) {
-  await runSelectedQueueAction((card) => retryAiSessionQueuedMessage(card.instance.id, card.session.id, queueId), "Failed to retry queued message.");
+  await runSelectedQueueAction((card) => retryAiSessionQueuedMessage(card.instance.id, card.session.id, queueId), t("sessions.panel.retryQueuedFailed"));
 }
 
 async function removeSelectedQueuedMessage(queueId: string) {
-  await runSelectedQueueAction((card) => removeAiSessionQueuedMessage(card.instance.id, card.session.id, queueId), "Failed to remove queued message.");
+  await runSelectedQueueAction((card) => removeAiSessionQueuedMessage(card.instance.id, card.session.id, queueId), t("sessions.panel.removeQueuedFailed"));
 }
 
 async function stopCardAppSession(card: AiBoardCard) {
@@ -811,7 +817,7 @@ async function stopCardAppSession(card: AiBoardCard) {
       clearSelectedCard();
     }
   } catch (error) {
-    showControlPlaneToast(error instanceof Error ? error.message : "Failed to close app session.");
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.closeAppFailed")));
     await refreshBoard();
   } finally {
     stoppingAppSessionKey.value = "";
@@ -832,7 +838,7 @@ async function runSelectedQueueAction(action: (card: AiBoardCard) => Promise<unk
     await action(card);
     await refreshBoard();
   } catch (error) {
-    showControlPlaneToast(error instanceof Error ? error.message : message);
+    showControlPlaneToast(translateApiError(error, t, message));
   } finally {
     aiSessionActionBusy.value = false;
   }

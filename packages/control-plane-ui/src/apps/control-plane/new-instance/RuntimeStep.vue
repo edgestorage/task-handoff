@@ -1,33 +1,33 @@
 <template>
   <section class="wizard-section">
     <div class="section-head">
-      <span>Runtime</span>
-      <button v-if="selectedRuntimeRequiresImage" type="button" @click="$emit('update:newImageOpen', !newImageOpen)">{{ newImageOpen ? "Use existing" : "Add image" }}</button>
+      <span>{{ t("instances.create.runtime") }}</span>
+      <button v-if="selectedRuntimeRequiresImage" type="button" @click="$emit('update:newImageOpen', !newImageOpen)">{{ newImageOpen ? t("instances.create.useExisting") : t("instances.create.addImage") }}</button>
     </div>
 
     <div class="runtime-summary">
-      <span>Source</span>
+      <span>{{ t("instances.create.source") }}</span>
       <strong>{{ sourceSummary }}</strong>
-      <span v-if="selectedRuntime && !selectedRuntimeRequiresImage">Runtime</span>
-      <strong v-if="selectedRuntime && !selectedRuntimeRequiresImage">{{ selectedRuntime.name }} · no container</strong>
+      <span v-if="selectedRuntime && !selectedRuntimeRequiresImage">{{ t("instances.create.runtime") }}</span>
+      <strong v-if="selectedRuntime && !selectedRuntimeRequiresImage">{{ selectedRuntime.name }} · {{ t("instances.create.noContainer") }}</strong>
     </div>
 
     <div class="step-fields runtime-fields">
       <label>
-        <span>Node</span>
-        <ControlPlaneSelect v-model="runtimeDraft.nodeId" placeholder="Select node">
+        <span>{{ t("instances.create.node") }}</span>
+        <ControlPlaneSelect v-model="runtimeDraft.nodeId" :placeholder="t('instances.create.selectNode')">
           <ControlPlaneSelectItem v-for="node in nodes" :key="node.id" :value="node.id">{{ node.name }}</ControlPlaneSelectItem>
         </ControlPlaneSelect>
       </label>
       <label>
-        <span>Runtime</span>
-        <ControlPlaneSelect v-model="runtimeDraft.runtimeId" placeholder="Select runtime">
+        <span>{{ t("instances.create.runtime") }}</span>
+        <ControlPlaneSelect v-model="runtimeDraft.runtimeId" :placeholder="t('instances.create.selectRuntime')">
           <ControlPlaneSelectItem v-for="runtime in runtimesForSelectedNode" :key="runtime.id" :value="runtime.id">{{ runtime.name }}</ControlPlaneSelectItem>
         </ControlPlaneSelect>
       </label>
       <label v-if="selectedRuntimeRequiresImage && !newImageOpen">
-        <span>Image</span>
-        <ControlPlaneSelect v-model="runtimeDraft.imageId" placeholder="Select image">
+        <span>{{ t("instances.create.image") }}</span>
+        <ControlPlaneSelect v-model="runtimeDraft.imageId" :placeholder="t('instances.create.selectImage')">
           <ControlPlaneSelectItem v-for="image in images" :key="image.id" :value="image.id">{{ image.name }} · {{ availabilityLabel(image.id) }}</ControlPlaneSelectItem>
         </ControlPlaneSelect>
       </label>
@@ -41,55 +41,56 @@
         <div>
           <strong>{{ dockerCheckTitle }}</strong>
           <span>{{ dockerRuntimeCheckMessage || dockerCheckFallback }}</span>
-          <span v-if="dockerRuntimeCheckState === 'offline'">{{ installGuidance.message }}</span>
+          <span v-if="dockerRuntimeCheckState === 'offline'">{{ installGuidanceMessage }}</span>
         </div>
         <Button v-if="dockerRuntimeCheckState === 'offline'" as-child variant="outline" size="sm">
           <a :href="installGuidance.url" target="_blank" rel="noopener noreferrer">
             <ExternalLink :size="14" />
-            <span>{{ installGuidance.label }}</span>
+            <span>{{ installGuidanceLabel }}</span>
           </a>
         </Button>
         <Button v-if="dockerRuntimeCheckState === 'idle' || dockerRuntimeCheckState === 'offline' || dockerRuntimeCheckState === 'error'" variant="outline" size="sm" @click="$emit('check-docker-runtime')">
           <RefreshCw :size="14" />
-          <span>{{ dockerRuntimeCheckState === "idle" ? "Check Docker" : "Retry check" }}</span>
+          <span>{{ dockerRuntimeCheckState === "idle" ? t("instances.create.docker.check") : t("instances.create.docker.retry") }}</span>
         </Button>
       </CardContent>
     </Card>
 
     <div v-if="selectedRuntimeRequiresImage && newImageOpen" class="step-fields inline-create">
       <label>
-        <span>Name</span>
-        <ControlPlaneInput v-model="newImage.name" placeholder="Image name" />
+        <span>{{ t("instances.create.name") }}</span>
+        <ControlPlaneInput v-model="newImage.name" :placeholder="t('instances.create.imageName')" />
       </label>
       <label>
-        <span>Image ref</span>
+        <span>{{ t("instances.create.imageReference") }}</span>
+        <!-- i18n-audit-allow-next-line code-token: example OCI image reference -->
         <ControlPlaneInput v-model="newImage.reference" placeholder="docker.io/example/image:v1" />
       </label>
       <Button variant="outline" size="sm" :disabled="!canCreateImage || creatingImage" @click="$emit('create-image')">
         <Plus :size="15" />
-        <span>{{ creatingImage ? "Creating" : "Create image" }}</span>
+        <span>{{ creatingImage ? t("instances.create.creating") : t("instances.create.createImage") }}</span>
       </Button>
     </div>
 
     <label class="instance-name-field">
-      <span>Name</span>
-      <ControlPlaneInput v-model="instanceDraft.name" placeholder="Optional instance name" />
+      <span>{{ t("instances.create.name") }}</span>
+      <ControlPlaneInput v-model="instanceDraft.name" :placeholder="t('instances.create.optionalInstanceName')" />
     </label>
 
     <div v-if="codexModels.length || claudeModels.length" class="step-fields instance-model-fields">
       <label v-if="codexModels.length">
-        <span>Codex model</span>
-        <ControlPlaneSelect v-model="instanceCodexModelValue" placeholder="No model">
-          <ControlPlaneSelectItem :value="noModelValue">No model</ControlPlaneSelectItem>
-          <ControlPlaneSelectItem :value="defaultModelValue">Global default</ControlPlaneSelectItem>
+        <span>{{ t("instances.create.codexModel") }}</span>
+        <ControlPlaneSelect v-model="instanceCodexModelValue" :placeholder="t('instances.create.noModel')">
+          <ControlPlaneSelectItem :value="noModelValue">{{ t("instances.create.noModel") }}</ControlPlaneSelectItem>
+          <ControlPlaneSelectItem :value="defaultModelValue">{{ t("instances.create.globalDefault") }}</ControlPlaneSelectItem>
           <ControlPlaneSelectItem v-for="model in codexModels" :key="`instance-codex-${model.id}`" :value="model.id">{{ modelOptionLabel(model) }}</ControlPlaneSelectItem>
         </ControlPlaneSelect>
       </label>
       <label v-if="claudeModels.length">
-        <span>Claude model</span>
-        <ControlPlaneSelect v-model="instanceClaudeModelValue" placeholder="No model">
-          <ControlPlaneSelectItem :value="noModelValue">No model</ControlPlaneSelectItem>
-          <ControlPlaneSelectItem :value="defaultModelValue">Global default</ControlPlaneSelectItem>
+        <span>{{ t("instances.create.claudeModel") }}</span>
+        <ControlPlaneSelect v-model="instanceClaudeModelValue" :placeholder="t('instances.create.noModel')">
+          <ControlPlaneSelectItem :value="noModelValue">{{ t("instances.create.noModel") }}</ControlPlaneSelectItem>
+          <ControlPlaneSelectItem :value="defaultModelValue">{{ t("instances.create.globalDefault") }}</ControlPlaneSelectItem>
           <ControlPlaneSelectItem v-for="model in claudeModels" :key="`instance-claude-${model.id}`" :value="model.id">{{ modelOptionLabel(model) }}</ControlPlaneSelectItem>
         </ControlPlaneSelect>
       </label>
@@ -97,7 +98,7 @@
 
     <label class="config-check-field">
       <Checkbox :model-value="instanceDraft.autoImportAgentConfigs" @update:model-value="(value) => instanceDraft.autoImportAgentConfigs = value === true" />
-      <span>Auto-import Codex and Claude config whenever this instance becomes reachable</span>
+      <span>{{ t("instances.create.autoImportConfigs") }}</span>
     </label>
 
   </section>
@@ -106,6 +107,7 @@
 <script setup lang="ts">
 import { CircleAlert, CircleCheck, ExternalLink, LoaderCircle, Plus, RefreshCw } from "@lucide/vue";
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 import type { ImageProfile, ModelConfig, Node, NodeImageAvailability, NodeRuntime } from "../../../api/types";
 import { Button } from "../../../components/ui/button";
 import { Card, CardContent } from "../../../components/ui/card";
@@ -115,6 +117,8 @@ import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
 import type { InstanceDraft, NewImageDraft, RuntimeDraft } from "./newInstanceTypes";
 import { dockerInstallGuidance, type DockerRuntimeCheckState } from "./dockerRuntimeGuidance";
+
+const { t } = useI18n();
 
 const props = defineProps<{
   canCreateImage: boolean;
@@ -139,28 +143,34 @@ const props = defineProps<{
 const defaultModelValue = "__default__";
 const noModelValue = "__none__";
 const installGuidance = computed(() => dockerInstallGuidance(props.selectedNodePlatform));
+const installGuidanceLabel = computed(() => t(`instances.create.docker.install.${installGuidance.value.kind}Label`));
+const installGuidanceMessage = computed(() => t(`instances.create.docker.install.${installGuidance.value.kind}Message`));
 const dockerCheckTitle = computed(() => props.dockerRuntimeCheckState === "online"
-  ? "Docker is ready"
+  ? t("instances.create.docker.ready")
   : props.dockerRuntimeCheckState === "checking"
-    ? "Checking Docker"
+    ? t("instances.create.docker.checking")
     : props.dockerRuntimeCheckState === "offline"
-      ? "Docker is not available"
+      ? t("instances.create.docker.unavailable")
       : props.dockerRuntimeCheckState === "error"
-        ? "Docker check failed"
-        : "Docker must be checked");
+        ? t("instances.create.docker.failed")
+        : t("instances.create.docker.required"));
 const dockerCheckFallback = computed(() => props.dockerRuntimeCheckState === "idle"
-  ? "The Docker daemon must be checked before this instance can be created."
-  : "Docker could not be verified on the selected node.");
+  ? t("instances.create.docker.mustCheck")
+  : t("instances.create.docker.unverified"));
 const availabilityLabel = (imageId: string) => {
   const status = props.imageAvailability.find((item) => item.image.id === imageId)?.status || "unknown";
-  return status === "available" ? "Available" : status === "pull-required" ? "Will be pulled" : "Availability unknown";
+  return status === "available"
+    ? t("instances.create.availability.available")
+    : status === "pull-required"
+      ? t("instances.create.availability.pullRequired")
+      : t("instances.create.availability.unknown");
 };
 const eligibleModels = computed(() => props.models.filter((model) => model.locations?.some((location) => location.type === "control-plane" || (location.type === "node" && location.nodeId === props.runtimeDraft.nodeId))));
 const codexModels = computed(() => eligibleModels.value.filter((model) => model.app === "codex"));
 const claudeModels = computed(() => eligibleModels.value.filter((model) => model.app === "claude"));
 const modelOptionLabel = (model: ModelConfig) => model.locations?.some((location) => location.type === "control-plane")
-  ? `${model.name} · copy to node`
-  : `${model.name} · this node`;
+  ? t("instances.create.modelCopyToNode", { name: model.name })
+  : t("instances.create.modelOnNode", { name: model.name });
 const instanceCodexModelValue = computed({
   get: () => props.instanceDraft.codexModelHash === null ? noModelValue : props.instanceDraft.codexModelHash || defaultModelValue,
   set: (value: string) => { props.instanceDraft.codexModelHash = value === defaultModelValue ? undefined : value === noModelValue ? null : value; },

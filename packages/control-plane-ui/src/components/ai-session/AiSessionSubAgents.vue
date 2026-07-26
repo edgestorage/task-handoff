@@ -1,5 +1,5 @@
 <template>
-  <section v-if="subAgents.length" class="ai-session-sub-agents" aria-label="Sub-agent activity">
+  <section v-if="subAgents.length" class="ai-session-sub-agents" :aria-label="t('sessions.subAgents.label')">
     <button
       type="button"
       class="ai-session-sub-agents-toggle"
@@ -33,11 +33,16 @@
 <script setup lang="ts">
 import { ChevronDown } from "@lucide/vue";
 import { computed, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import type { AiSessionSubAgent } from "../../api/types";
+import { useControlPlaneLocale } from "../../i18n/index.ts";
+import { formatTime } from "../../i18n/presentation.ts";
 
 const props = defineProps<{
   subAgents: AiSessionSubAgent[];
 }>();
+const { t } = useI18n();
+const { locale } = useControlPlaneLocale();
 
 function isActiveOrProblem(agent: AiSessionSubAgent) {
   return ["pending-init", "running", "interrupted", "errored"].includes(agent.status);
@@ -74,37 +79,33 @@ const summary = computed(() => {
   const parts = statusOrder
     .filter((status) => counts.has(status))
     .map((status) => `${counts.get(status)} ${statusLabel(status).toLowerCase()}`);
-  return `Sub-agents · ${parts.join(" · ")}`;
+  return t("sessions.subAgents.summary", { details: parts.join(" · ") });
 });
 
 function statusLabel(status: AiSessionSubAgent["status"]) {
   switch (status) {
-    case "pending-init": return "Pending";
-    case "running": return "Running";
-    case "interrupted": return "Interrupted";
-    case "completed": return "Completed";
-    case "errored": return "Errored";
-    case "shutdown": return "Shutdown";
-    case "not-found": return "Not found";
+    case "pending-init": return t("sessions.subAgents.pending");
+    case "running": return t("sessions.subAgents.running");
+    case "interrupted": return t("sessions.subAgents.interrupted");
+    case "completed": return t("sessions.subAgents.completed");
+    case "errored": return t("sessions.subAgents.errored");
+    case "shutdown": return t("sessions.subAgents.shutdown");
+    case "not-found": return t("sessions.subAgents.notFound");
   }
 }
 
 function activityLabel(activity: NonNullable<AiSessionSubAgent["activity"]>) {
   switch (activity) {
-    case "started": return "Started";
-    case "interacted": return "Interacted";
-    case "interrupted": return "Interrupted";
+    case "started": return t("sessions.subAgents.started");
+    case "interacted": return t("sessions.subAgents.interacted");
+    case "interrupted": return t("sessions.subAgents.interrupted");
   }
 }
 
 function formatUpdatedAt(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  }).format(date);
+  return formatTime(date, locale.value);
 }
 </script>
 

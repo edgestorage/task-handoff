@@ -23,7 +23,7 @@ test("AI session detail renders sub-agents after the main tool activity", () => 
 
 test("sub-agent activity is independent from tool activity", () => {
   assert.match(component, /import type \{ AiSessionSubAgent \}/);
-  assert.match(component, /Sub-agents · \$\{parts\.join\(" · "\)\}/);
+  assert.match(component, /t\("sessions\.subAgents\.summary", \{ details: parts\.join\(" · "\) \}\)/);
   assert.match(component, /:key="agent\.threadId"/);
   assert.match(component, /agent\.path \|\| agent\.threadId/);
   assert.doesNotMatch(component, /Thinking/);

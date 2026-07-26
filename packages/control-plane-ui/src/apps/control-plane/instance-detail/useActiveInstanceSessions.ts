@@ -16,6 +16,7 @@ import {
 } from "../useInstanceSessions";
 import { hasInstanceStatusPage, isInstanceAppReady, isInstanceConnecting } from "../useInstanceStatus";
 import { reorderSessionTabKeys } from "./sessionTabOrder";
+import type { Translate } from "../../../i18n/status";
 
 export type SessionPaneId = "left" | "right";
 
@@ -28,6 +29,7 @@ type UseActiveInstanceSessionsInput = {
   refresh: () => Promise<void>;
   appLaunchMenuOpen: Ref<boolean>;
   sessionMenuOpen: Ref<boolean>;
+  t: Translate;
 };
 
 export function useActiveInstanceSessions({
@@ -39,6 +41,7 @@ export function useActiveInstanceSessions({
   notifyError,
   refresh,
   sessionMenuOpen,
+  t,
 }: UseActiveInstanceSessionsInput) {
   const launchingApp = ref(false);
   const stoppingSessionId = ref("");
@@ -54,7 +57,7 @@ export function useActiveInstanceSessions({
 
   const sessionTabs = computed(() => {
     const instanceId = activeInstance.value?.id;
-    const instanceTabs = buildSessionTabs(activeInstance.value);
+    const instanceTabs = buildSessionTabs(activeInstance.value, t);
     return instanceTabs.some((session) => session.kind === "status")
       ? instanceTabs
       : [...instanceTabs, ...(instanceId ? repositorySessionTabs[instanceId] || [] : [])];
@@ -120,31 +123,31 @@ export function useActiveInstanceSessions({
   const canLaunchApp = computed(() => Boolean(activeInstance.value && isInstanceAppReady(activeInstance.value)));
   const appLaunchButtonLabel = computed(() => {
     if (launchingApp.value) {
-      return "Launching";
+      return t("sessions.tabs.launching");
     }
     if (activeInstanceConnecting.value) {
-      return "Connecting";
+      return t("sessions.tabs.connecting");
     }
     if (activeInstance.value && activeInstance.value.connectionStatus !== "online") {
-      return "Offline";
+      return t("sessions.tabs.offline");
     }
-    return "App";
+    return t("sessions.tabs.app");
   });
   const appLaunchButtonTitle = computed(() =>
     activeInstance.value && !isInstanceAppReady(activeInstance.value)
-      ? "Instance is still starting. Apps can be launched after it connects."
-      : "Launch app",
+      ? t("sessions.tabs.launchUnavailable")
+      : t("sessions.tabs.launchApp"),
   );
   const launchableApps = computed(() => {
     if (!activeInstance.value) {
       return [];
     }
-    const catalogApps = launchableAppsForInstance(activeInstance.value);
+    const catalogApps = launchableAppsForInstance(activeInstance.value, t);
     if (catalogApps.length) {
       return catalogApps;
     }
     const ids = activeInstance.value.image?.optionalApps?.length ? activeInstance.value.image.optionalApps : ["terminal-tty"];
-    return uniqueLaunchableApps(ids.map((id) => ({ id, label: appDisplayName(id) })));
+    return uniqueLaunchableApps(ids.map((id) => ({ id, label: appDisplayName(id, t) })));
   });
 
   watch(
@@ -454,7 +457,7 @@ export function useActiveInstanceSessions({
       tabs.push({
         key,
         kind: "repository",
-        label: page === "changes-review" ? "Changes" : "File Explorer",
+        label: page === "changes-review" ? t("repository.review.title") : t("repository.workspace.explorer"),
         status: "open",
         source,
       });

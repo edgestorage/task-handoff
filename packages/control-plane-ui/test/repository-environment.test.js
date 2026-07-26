@@ -27,9 +27,9 @@ test("Environment uses a portal popover and authoritative repository context", a
 
   assert.match(component, /PopoverContent/);
   assert.match(component, /context\.primaryAction/);
-  assert.match(component, /Files \/ Changes/);
-  assert.match(component, /Worktree/);
-  assert.match(component, /Branch/);
+  assert.match(component, /repository\.environment\.filesChanges/);
+  assert.match(component, /repository\.environment\.worktree/);
+  assert.match(component, /repository\.environment\.branch/);
   assert.doesNotMatch(component, /executionLocation|<Laptop/);
   assert.match(repositoryApi, /\/instances\/\$\{encodeURIComponent\(target\.instanceId\)\}\/api\/\$\{sessionCollection\}\/\$\{encodeURIComponent\(target\.sessionId\)\}\/repository/);
   assert.match(repositoryApi, /RepositoryWorktreesSchema\.safeParse/);
@@ -46,12 +46,12 @@ test("Worktrees use opaque server ids and expose AI-session creation without cwd
   ]);
 
   assert.match(environment, /class="repository-worktrees-popover"/);
-  assert.match(panel, /Current/);
-  assert.match(panel, /Managed/);
-  assert.match(panel, /Dirty/);
-  assert.match(panel, /Locked/);
-  assert.match(panel, /active session/);
-  assert.match(panel, /New AI session here/);
+  assert.match(panel, /repository\.worktreesPanel\.current/);
+  assert.match(panel, /repository\.worktreesPanel\.managed/);
+  assert.match(panel, /repository\.worktreesPanel\.dirty/);
+  assert.match(panel, /repository\.worktreesPanel\.locked/);
+  assert.match(panel, /repository\.environmentExtra\.activeSessions/);
+  assert.match(panel, /repository\.worktreesPanel\.newHere/);
   assert.match(panel, /<strong :title="worktreeLabel\(worktree\)">/);
   assert.match(panel, /\.repository-worktree-list \{[\s\S]*overflow-x: hidden/);
   assert.match(panel, /\.repository-worktree-branch \{[\s\S]*flex: 1 1 auto;[\s\S]*overflow: hidden/);
@@ -70,9 +70,9 @@ test("managed worktree creation launches a new session without a client filesyst
     source("api/repository.ts"),
   ]);
 
-  assert.match(panel, /New isolated AI session/);
+  assert.match(panel, /repository\.worktreesPanel\.newTitle/);
   assert.match(panel, /mode: "new-branch", branchName, startRef, expectedSnapshotId/);
-  assert.match(panel, /The current session stays in this worktree/);
+  assert.match(panel, /repository\.worktreesPanel\.newHint/);
   assert.match(panel, /worktreeRemoved/);
   assert.match(panel, /recoverable/);
   assert.match(panel, /\.repository-worktree-list \{[\s\S]*gap: 2px/);
@@ -93,8 +93,7 @@ test("managed worktree removal is AI-only, confirmed, non-force, and retains the
   ]);
 
   assert.match(panel, /canManageWorktrees = computed\(\(\) => props\.sessionKind === "ai-session"\)/);
-  assert.match(panel, /This deletes the managed worktree directory/);
-  assert.match(panel, /The Git branch is retained/);
+  assert.match(panel, /repository\.worktreeRemoveDescription/);
   assert.match(panel, /confirm: true/);
   assert.match(panel, /expectedSnapshotId: worktrees\.value\.snapshotId/);
   assert.match(panel, /worktree\.removeBlockers/);
@@ -110,8 +109,8 @@ test("branch selector groups, searches, tracks, checks out, and safely deletes s
   ]);
 
   assert.match(environment, /repository-branches-popover/);
-  assert.match(panel, /Search branches/);
-  assert.match(panel, /Remote-tracking/);
+  assert.match(panel, /repository\.branchesPanel\.search/);
+  assert.match(panel, /repository\.branchesPanel\.remote/);
   assert.match(panel, /\.repository-branches-panel \{ display: flex;[\s\S]*flex-direction: column;[\s\S]*overflow: hidden/);
   assert.match(panel, /\.repository-branch-groups \{[\s\S]*flex: 1 1 auto;[\s\S]*min-height: 0;[\s\S]*overflow-y: auto/);
   assert.match(panel, /scrollbar-gutter: stable/);
@@ -132,7 +131,7 @@ test("branch selector groups, searches, tracks, checks out, and safely deletes s
   assert.match(panel, /checkedOutWorktreeIds/);
   assert.match(panel, /remoteTrackingRef: trackingTarget\.value!\.name/);
   assert.match(panel, /confirm: true/);
-  assert.match(panel, /Force deletion is not available/);
+  assert.match(panel, /repository\.branchesPanel\.deleteDescription/);
   assert.match(panel, /queryClient\.setQueryData\(\["repository-context"/);
   assert.match(repositoryApi, /mutateRepositoryBranches\(target, "checkout"/);
   assert.match(repositoryApi, /mutateRepositoryBranches\(target, "tracking"/);
@@ -155,15 +154,15 @@ test("Repository workspace opens as a session tab with a resizable ScrollArea si
   assert.match(environment, /emit\("openWorkspace", \{ initialView: view, sessionId: props\.sessionId, sessionKind: props\.sessionKind \}\)/);
   assert.match(workspaceTab, /<RepositoryWorkspace[\s\S]*embedded/);
   assert.match(workspaceTab, /:embedded="!dialogOpen"/);
-  assert.match(workspace, /aria-label="Open repository workspace as dialog"/);
-  assert.match(workspace, /aria-label="Return repository workspace to tab"/);
+  assert.match(workspace, /repository\.workspace\.openDialog/);
+  assert.match(workspace, /repository\.workspace\.returnTab/);
   assert.match(sessionState, /kind: "repository"/);
   assert.match(sessionState, /function openRepositoryWorkspace\(target: RepositoryWorkspaceTabTarget\)/);
   assert.match(workspace, /RepositoryFileTree/);
   assert.match(workspace, /<ScrollArea type="always" class="repository-workspace-sidebar-content">/);
-  assert.match(workspace, /role="separator" aria-label="Resize repository sidebar"/);
+  assert.match(workspace, /role="separator" :aria-label="t\('repository\.workspace\.resizeSidebar'\)"/);
   assert.match(workspace, /function startSidebarResize\(event: PointerEvent\)/);
-  assert.match(workspace, />File Explorer</);
+  assert.match(workspace, /repository\.workspace\.explorer/);
   assert.match(workspace, /@click="openChangesReview"/);
   assert.match(workspace, /emit\("openChanges", \{ initialView: "changes", page: "changes-review"/);
   assert.match(workspace, /<RepositoryFilePreview :content="activeTab\.content" :line="activeTab\.line" :path="activeTab\.path"/);
@@ -191,7 +190,7 @@ test("Repository workspace can move to a recoverable authenticated window", asyn
 
   assert.match(app, /RepositoryWorkspacePage v-if="isRepositoryWorkspaceRoute"/);
   assert.match(app, /<AuthGate v-else>/);
-  assert.match(workspace, /aria-label="Open repository workspace in new window"/);
+  assert.match(workspace, /repository\.workspace\.openWindow/);
   assert.match(workspace, /openRepositoryWorkspaceWindow\(\{ \.\.\.target\.value, view: "files" \}\)/);
   assert.doesNotMatch(workspace, /Unsaved drafts remain in this window/);
   assert.match(workspace, /repositoryWorkspaceChannelName/);
@@ -210,9 +209,9 @@ test("Repository file actions keep previews read-only and refresh stale server c
     source("api/repository.ts"),
   ]);
 
-  assert.match(workspace, /New repository file/);
-  assert.match(workspace, /Rename repository file/);
-  assert.match(workspace, /Delete repository file\?/);
+  assert.match(workspace, /repository\.workspace\.newFileTitle/);
+  assert.match(workspace, /repository\.workspace\.renameTitle/);
+  assert.match(workspace, /repository\.workspace\.deleteTitle/);
   assert.match(workspace, /confirm: true/);
   assert.match(workspace, /refreshOpenFiles\(\)/);
   assert.match(workspace, /Object\.assign\(tab, await getRepositoryFile\(target\.value, tab\.path\)\)/);
@@ -260,10 +259,10 @@ test("Repository delivery follows the server primary action and uses explicit no
   assert.match(delivery, /context\.primaryAction === 'diverged'/);
   assert.match(delivery, /context\.primaryAction === 'up-to-date'/);
   assert.match(delivery, /confirmSetUpstream: true as const/);
-  assert.match(delivery, /Push uses an explicit refspec and never uses force/);
-  assert.match(delivery, /Fast-forward only/);
-  assert.match(delivery, /No merge commit or rebase will be created/);
-  assert.match(delivery, /Resolve it in the session terminal/);
+  assert.match(delivery, /repository\.delivery\.explicitRefspec/);
+  assert.match(delivery, /repository\.delivery\.ffOnly/);
+  assert.match(delivery, /repository\.delivery\.noMerge/);
+  assert.match(delivery, /repository\.delivery\.divergedHint/);
   assert.match(delivery, /fetchRepositoryRemote/);
   assert.match(delivery, /queryClient\.setQueryData\(\["repository-context"/);
   assert.match(delivery, /<RepositoryErrorNotice v-if="errorCause"/);
@@ -290,13 +289,13 @@ test("Repository UI preserves edge states and structured recovery guidance", asy
     assert.match(environment, new RegExp(`"${availability}"`));
   }
   assert.match(environment, /connectionStatus !== 'online'/);
-  assert.match(environment, /Detached HEAD at/);
-  assert.match(environment, /Unborn branch with no commit yet/);
+  assert.match(environment, /repository\.environment\.detachedNotice/);
+  assert.match(environment, /repository\.environment\.unbornNotice/);
   assert.match(worktrees, /session-occupied/);
-  assert.match(worktrees, /Prunable worktree record/);
-  assert.match(reviewCard, /Binary file/);
-  assert.match(reviewCard, /This change cannot be rendered as text/);
-  assert.match(reviewCard, /Only the first \{\{ diff\.byteLimit \}\} bytes are shown/);
+  assert.match(worktrees, /repository\.worktreesPanel\.blockers\.prunable/);
+  assert.match(reviewCard, /repository\.diff\.binary/);
+  assert.match(reviewCard, /repository\.diff\.binaryHint/);
+  assert.match(reviewCard, /repository\.diff\.truncatedBytes/);
   assert.match(delivery, /Credentials are never entered in this UI|RepositoryErrorNotice/);
   assert.match(workspace, /repository-file-action-dialog[^}]*background: hsl\(var\(--background\)\)/);
   assert.match(delivery, /repository-delivery-dialog[^}]*background: hsl\(var\(--background\)\)/);
@@ -337,7 +336,7 @@ test("Repository navigation keeps portal, keyboard, focus, path, and confirmatio
   assert.match(workspace, /tabindex="-1"/);
   assert.match(workspace, /workspaceBody\.value\?\.focus\(\)/);
   assert.match(workspace, /:tabindex="activeTabId === tab\.id \? 0 : -1"/);
-  assert.match(workspace, /class="repository-workspace-tab-close" :aria-label="`Close \$\{tab\.path\}`"/);
+  assert.match(workspace, /class="repository-workspace-tab-close" :aria-label="t\('repository\.workspace\.closeFile'/);
   assert.doesNotMatch(workspace, /<button[^>]*role="tab"[\s\S]{0,500}<X[^>]*role="button"/);
 
   assert.match(repositoryApi, /new URLSearchParams/);
@@ -349,7 +348,7 @@ test("Repository navigation keeps portal, keyboard, focus, path, and confirmatio
   assert.match(workspace, /<RepositoryFilePreview :content="activeTab\.content"/);
 
   assert.match(worktrees, /workspaceSelection:[\s\S]*repositoryContextId:[\s\S]*worktreeId:/);
-  assert.match(worktrees, /The current session stays in this worktree/);
+  assert.match(worktrees, /repository\.worktreesPanel\.newHint/);
   assert.match(workspace, /confirm: true/);
   assert.doesNotMatch(workspace, /data-discard-cancel|This commits the current index only/);
 });

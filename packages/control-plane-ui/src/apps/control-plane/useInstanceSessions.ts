@@ -1,6 +1,9 @@
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions } from "../../api/types";
 import type { RepositorySessionKind } from "@task-handoff/protocol/repository";
 import { appSessionBindingKeys, appSessionStatus, isVisibleAppSession } from "./appSessionVisibility.ts";
+import { aiSessionStatusKeys, translateStatus, type Translate } from "../../i18n/status.ts";
+import { formatRelativeTime, formatTime } from "../../i18n/presentation.ts";
+import type { SupportedLocale } from "../../i18n/locale.ts";
 
 export type SessionTab = {
   key: string;
@@ -68,30 +71,30 @@ function proxiedWebSocketUrl(instance: InstanceBoardItem, path: string) {
   return url.toString();
 }
 
-export function buildAppSessionTabs(instance?: InstanceBoardItem): SessionTab[] {
+export function buildAppSessionTabs(instance: InstanceBoardItem | undefined, t: Translate): SessionTab[] {
   if (!instance) {
     return [];
   }
-  return instance.apps.sessions.map(appSessionTab).filter((session): session is SessionTab => Boolean(session));
+  return instance.apps.sessions.map((session, index) => appSessionTab(session, index, t)).filter((session): session is SessionTab => Boolean(session));
 }
 
-export function buildSessionTabs(instance?: InstanceWithAiSessions): SessionTab[] {
+export function buildSessionTabs(instance: InstanceWithAiSessions | undefined, t: Translate): SessionTab[] {
   if (!instance) {
     return [];
   }
   if (instance.status !== "running") {
     return [{
       key: "overview",
-      label: "Status",
+      label: t("sessions.tabs.status"),
       status: instance.status,
       kind: "status",
     }];
   }
-  const appSessions = buildAppSessionTabs(instance);
+  const appSessions = buildAppSessionTabs(instance, t);
   const visibleAiSessions = aiSessionSnapshotSessions(instance.aiSessions);
   const aiSessionTab: SessionTab = {
     key: "ai-sessions",
-    label: "AI Sessions",
+    label: t("sessions.title"),
     status: visibleAiSessions.some((session) => session.status === "waiting")
       ? "waiting"
       : visibleAiSessions.some((session) => session.status === "running")
@@ -103,11 +106,11 @@ export function buildSessionTabs(instance?: InstanceWithAiSessions): SessionTab[
   return [aiSessionTab, ...appSessions];
 }
 
-function appSessionTab(session: Record<string, unknown>, index: number): SessionTab | undefined {
+function appSessionTab(session: Record<string, unknown>, index: number, t?: Translate): SessionTab | undefined {
   if (!isVisibleAppSession(session)) {
     return undefined;
   }
-  const appId = typeof session.appId === "string" ? session.appId : `App ${index + 1}`;
+  const appId = typeof session.appId === "string" ? session.appId : t ? t("sessions.tabs.appFallback", { number: index + 1 }) : `app-${index + 1}`;
   const status = typeof session.status === "string" ? session.status : "running";
   const key = typeof session.id === "string" ? session.id : `${appId}-${index}`;
   return {
@@ -186,26 +189,26 @@ export function sessionTerminalSocketUrl(instance: InstanceBoardItem, session: S
   return proxiedWebSocketUrl(instance, path);
 }
 
-export function appDisplayName(id: string) {
+export function appDisplayName(id: string, t: Translate) {
   const names: Record<string, string> = {
-    "terminal-tty": "Terminal",
-    "gui-terminal": "GUI Terminal",
+    "terminal-tty": t("sessions.tabs.terminal"),
+    "gui-terminal": `GUI ${t("sessions.tabs.terminal")}`,
     chromium: "Chromium",
-    browser: "Browser",
+    browser: t("sessions.tabs.browser"),
     "vscode-web": "VS Code",
   };
   return names[id] || id.replace(/[-_]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
-export function sessionDisplayName(session?: SessionTab) {
-  return session ? session.title || appDisplayName(session.label) : "Session";
+export function sessionDisplayName(session: SessionTab | undefined, t: Translate) {
+  return session ? session.title || appDisplayName(session.label, t) : t("sessions.tabs.session");
 }
 
-export function aiSessionAppDisplayName(appTab: SessionTab | undefined, fallback: string) {
-  return appTab?.source ? sessionDisplayName(appTab) : fallback;
+export function aiSessionAppDisplayName(appTab: SessionTab | undefined, fallback: string, t: Translate) {
+  return appTab?.source ? sessionDisplayName(appTab, t) : fallback;
 }
 
-export function launchableAppsForInstance(instance: InstanceBoardItem): LaunchableApp[] {
+export function launchableAppsForInstance(instance: InstanceBoardItem, t: Translate): LaunchableApp[] {
   if (instance.connectionStatus !== "online" || !instance.appInventory) {
     return [];
   }
@@ -215,7 +218,7 @@ export function launchableAppsForInstance(instance: InstanceBoardItem): Launchab
       .map((app): LaunchableApp | undefined => {
         return {
           id: app.id,
-          label: app.name || appDisplayName(app.id),
+          label: app.name || appDisplayName(app.id, t),
           supportsCwdSelection: app.capabilities.supportsCwdSelection,
         };
       })
@@ -237,11 +240,11 @@ export function uniqueLaunchableApps(apps: LaunchableApp[]) {
   return [...byId.values()];
 }
 
-export function sessionMeta(session: SessionTab) {
+export function sessionMeta(session: SessionTab, t: Translate) {
   if (session.kind === "ai") {
-    return aiSessionListHeadline(session.aiSessions || []);
+    return aiSessionListHeadline(session.aiSessions || [], t);
   }
-  const kind = sessionKindDisplayName(typeof session.source?.kind === "string" ? session.source.kind : session.kind);
+  const kind = sessionKindDisplayName(typeof session.source?.kind === "string" ? session.source.kind : session.kind, t);
   const id = typeof session.source?.id === "string" ? session.source.id : session.key;
   return [kind, id].filter(Boolean).join(" · ");
 }
@@ -254,20 +257,20 @@ export function shouldGroupAppSessionTabs(instance: InstanceBoardItem, sessions:
   return new Set(appSessions.map((session) => sessionWorkspacePath(session, instance))).size > 1;
 }
 
-export function groupedAppSessionTabs(instance: InstanceBoardItem, sessions: SessionTab[], activeSessionKey = ""): SessionWorkspaceGroup[] {
+export function groupedAppSessionTabs(instance: InstanceBoardItem, sessions: SessionTab[], activeSessionKey: string, t: Translate): SessionWorkspaceGroup[] {
   const appSessions = sessions.filter((session) => session.kind !== "ai" && session.kind !== "status");
   const groups = new Map<string, SessionTab[]>();
   for (const session of appSessions) {
-    const workspace = sessionWorkspacePath(session, instance);
+    const workspace = sessionWorkspaceKey(session, instance);
     groups.set(workspace, [...(groups.get(workspace) || []), session]);
   }
   const activeWorkspace = appSessions.find((session) => session.key === activeSessionKey)
-    ? sessionWorkspacePath(appSessions.find((session) => session.key === activeSessionKey) as SessionTab, instance)
+    ? sessionWorkspaceKey(appSessions.find((session) => session.key === activeSessionKey) as SessionTab, instance)
     : "";
   return [...groups.entries()]
-    .map(([label, groupSessions]) => ({
-      key: label,
-      label,
+    .map(([key, groupSessions]) => ({
+      key,
+      label: sessionWorkspaceLabel(key, t),
       sessions: [...groupSessions].sort((a, b) => Number(b.key === activeSessionKey) - Number(a.key === activeSessionKey)),
     }))
     .sort((a, b) => {
@@ -277,11 +280,15 @@ export function groupedAppSessionTabs(instance: InstanceBoardItem, sessions: Ses
 }
 
 export function sessionWorkspacePath(session: SessionTab, instance: InstanceBoardItem) {
+  return sessionWorkspaceKey(session, instance);
+}
+
+function sessionWorkspaceKey(session: SessionTab, instance: InstanceBoardItem) {
   if (session.kind === "ai") {
-    return "AI Sessions";
+    return "__ai_sessions__";
   }
   if (session.kind === "status") {
-    return "Status";
+    return "__status__";
   }
   const source = session.source || {};
   const tty = objectValue(source.tty);
@@ -295,7 +302,14 @@ export function sessionWorkspacePath(session: SessionTab, instance: InstanceBoar
     || stringValue(launch?.cwd)
     || stringValue(instance.runtime?.workspacePath)
     || stringValue(instance.workspace?.path)
-    || "Unknown workspace";
+    || "__unknown_workspace__";
+}
+
+function sessionWorkspaceLabel(key: string, t: Translate) {
+  if (key === "__ai_sessions__") return t("sessions.title");
+  if (key === "__status__") return t("sessions.tabs.status");
+  if (key === "__unknown_workspace__") return t("sessions.tabs.unknownWorkspace");
+  return key;
 }
 
 function objectValue(value: unknown): Record<string, unknown> | undefined {
@@ -306,18 +320,18 @@ function stringValue(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : "";
 }
 
-export function sessionKindDisplayName(kind: string) {
+export function sessionKindDisplayName(kind: string, t: Translate) {
   const labels: Record<string, string> = {
-    tty: "Terminal",
-    terminal: "Terminal",
+    tty: t("sessions.tabs.terminal"),
+    terminal: t("sessions.tabs.terminal"),
     gui: "GUI",
     web: "Web",
-    browser: "Browser",
-    app: "App",
-    logs: "Logs",
+    browser: t("sessions.tabs.browser"),
+    app: t("sessions.tabs.app"),
+    logs: t("sessions.tabs.logs"),
     ai: "AI",
   };
-  return labels[kind] || appDisplayName(kind);
+  return labels[kind] || appDisplayName(kind, t);
 }
 
 export function primaryAiSession(instance: InstanceWithAiSessions): AiSessionSummary | undefined {
@@ -372,43 +386,41 @@ export function aiSessionStableSortKey(session: AiSessionSummary) {
   ].join("\u0000");
 }
 
-export function primaryAiSessionMessage(instance: InstanceWithAiSessions) {
-  return displayAiSessionMessage(primaryAiSession(instance));
+export function primaryAiSessionMessage(instance: InstanceWithAiSessions, t: Translate) {
+  return displayAiSessionMessage(primaryAiSession(instance), undefined, t);
 }
 
-export function aiSessionHeadline(instance: InstanceBoardItem | InstanceWithAiSessions) {
+export function aiSessionHeadline(instance: InstanceBoardItem | InstanceWithAiSessions, t: Translate) {
   const snapshot = instance.aiSessions;
   if (snapshot) {
-    const headline = aiSessionSnapshotHeadline(snapshot);
-    return headline === "0 active · 0 idle · 0 waiting" ? "AI activity" : `AI ${headline}`;
+    const counts = aiSessionCounts(snapshot);
+    if (!counts.active && !counts.idle && !counts.waiting) return t("sessions.board.activity");
+    return `AI ${aiSessionSnapshotHeadline(snapshot, t)}`;
   }
-  return "AI activity";
+  return t("sessions.board.activity");
 }
 
-export function aiSessionSnapshotHeadline(snapshot: InstanceBoardItem["aiSessions"] | InstanceWithAiSessions["aiSessions"]) {
-  if (!snapshot) {
-    return "0 active · 0 idle · 0 waiting";
-  }
+export function aiSessionSnapshotHeadline(snapshot: InstanceBoardItem["aiSessions"] | InstanceWithAiSessions["aiSessions"], t: Translate) {
   const counts = aiSessionCounts(snapshot);
   const parts = [];
   if (counts.active) {
-    parts.push(`${counts.active} active`);
+    parts.push(t("sessions.board.countActive", { count: counts.active }));
   }
   if (counts.idle) {
-    parts.push(`${counts.idle} idle`);
+    parts.push(t("sessions.board.countIdle", { count: counts.idle }));
   }
   if (counts.waiting) {
-    parts.push(`${counts.waiting} waiting`);
+    parts.push(t("sessions.board.countWaiting", { count: counts.waiting }));
   }
-  return parts.length ? parts.join(" · ") : "0 active · 0 idle · 0 waiting";
+  return parts.length ? parts.join(" · ") : [t("sessions.board.countActive", { count: 0 }), t("sessions.board.countIdle", { count: 0 }), t("sessions.board.countWaiting", { count: 0 })].join(" · ");
 }
 
-export function aiSessionListHeadline(sessions: AiSessionSummary[]) {
+export function aiSessionListHeadline(sessions: AiSessionSummary[], t: Translate) {
   const counts = aiSessionCounts({ sessions });
   return [
-    `${counts.active} active`,
-    counts.idle ? `${counts.idle} idle` : "",
-    `${counts.waiting} waiting`,
+    t("sessions.board.countActive", { count: counts.active }),
+    counts.idle ? t("sessions.board.countIdle", { count: counts.idle }) : "",
+    t("sessions.board.countWaiting", { count: counts.waiting }),
   ].filter(Boolean).join(" · ");
 }
 
@@ -433,32 +445,36 @@ function aiSessionSnapshotSessions(snapshot?: { sessions?: AiSessionSummary[] } 
   return Array.isArray(record?.sessions) ? record.sessions as AiSessionSummary[] : [];
 }
 
-export function aiSessionStatusLabel(session?: AiSessionSummary) {
+export function aiSessionStatusLabel(session: AiSessionSummary | undefined, t: Translate) {
   if (!session) {
-    return "idle";
+    return t("sessions.status.idle");
   }
   if (session.status === "waiting") {
-    return session.phase === "approval" ? "waiting for approval" : "waiting";
+    return session.phase === "approval" ? t("sessions.status.waitingApproval") : t("sessions.status.waiting");
   }
   if (session.status === "running") {
     if (session.currentTool?.name) {
-      return `running · ${session.currentTool.name}`;
+      return `${t("sessions.status.running")} · ${session.currentTool.name}`;
     }
     if (session.phase === "tool") {
-      return "running · tool";
+      return t("sessions.status.runningWith", { detail: t("sessions.status.tool") });
     }
     if (session.phase === "editing") {
-      return "running · editing";
+      return t("sessions.status.runningWith", { detail: t("sessions.status.editing") });
     }
     if (session.phase === "responding") {
-      return "running · responding";
+      return t("sessions.status.runningWith", { detail: t("sessions.status.responding") });
     }
-    return "running";
+    return t("sessions.status.running");
   }
   if (session.status === "failed") {
-    return "failed";
+    return t("sessions.status.failed");
   }
-  return "idle";
+  return t("sessions.status.idle");
+}
+
+export function sessionStatusLabel(status: string, t: Translate) {
+  return translateStatus(aiSessionStatusKeys, status, t);
 }
 
 export function selectedAiSession(sessions: AiSessionSummary[] | undefined, selectedId?: string) {
@@ -466,17 +482,17 @@ export function selectedAiSession(sessions: AiSessionSummary[] | undefined, sele
   return sorted.find((session) => session.id === selectedId) || sorted[0];
 }
 
-export function displayAiSessionMessage(session?: AiSessionSummary, promptIndex?: number) {
-  return displayAiSessionContent(session, promptIndex, true);
+export function displayAiSessionMessage(session: AiSessionSummary | undefined, promptIndex: number | undefined, t: Translate) {
+  return displayAiSessionContent(session, promptIndex, true, t);
 }
 
-export function displayAiSessionResponse(session?: AiSessionSummary, promptIndex?: number) {
-  return displayAiSessionContent(session, promptIndex, false);
+export function displayAiSessionResponse(session: AiSessionSummary | undefined, promptIndex: number | undefined, t: Translate) {
+  return displayAiSessionContent(session, promptIndex, false, t);
 }
 
-function displayAiSessionContent(session?: AiSessionSummary, promptIndex?: number, includeProgress = true) {
+function displayAiSessionContent(session: AiSessionSummary | undefined, promptIndex: number | undefined, includeProgress: boolean, t: Translate) {
   if (!session) {
-    return includeProgress ? "No recent AI activity" : "";
+    return includeProgress ? t("sessions.activity.noRecent") : "";
   }
   if (session.status === "waiting" && session.phase === "approval" && session.summary?.trim()) {
     return session.summary;
@@ -494,11 +510,11 @@ function displayAiSessionContent(session?: AiSessionSummary, promptIndex?: numbe
     if (turn?.summary?.trim()) {
       return turn.summary;
     }
-    return includeProgress ? aiSessionProgressText(session) : "";
+    return includeProgress ? aiSessionProgressText(session, t) : "";
   }
   const latestTurn = turns.at(-1);
   if (latestTurn && !latestTurn.lastMessage?.trim() && !latestTurn.summary?.trim()) {
-    return includeProgress ? aiSessionProgressText(session) : "";
+    return includeProgress ? aiSessionProgressText(session, t) : "";
   }
   if (session.lastMessage) {
     return session.lastMessage;
@@ -509,7 +525,7 @@ function displayAiSessionContent(session?: AiSessionSummary, promptIndex?: numbe
   if (session.error) {
     return session.error;
   }
-  return includeProgress ? aiSessionProgressText(session) : "";
+  return includeProgress ? aiSessionProgressText(session, t) : "";
 }
 
 export function aiSessionUserPrompts(session?: AiSessionSummary) {
@@ -529,22 +545,22 @@ function aiSessionDisplayTurns(session?: AiSessionSummary) {
   return aiSessionTurns(session);
 }
 
-function aiSessionProgressText(session: AiSessionSummary) {
+function aiSessionProgressText(session: AiSessionSummary, t: Translate) {
   if (session.currentTool?.name) {
-    return `Running ${session.currentTool.name}${session.currentTool.inputPreview ? `: ${session.currentTool.inputPreview}` : ""}`;
+    return `${t("sessions.status.running")} ${session.currentTool.name}${session.currentTool.inputPreview ? `: ${session.currentTool.inputPreview}` : ""}`;
   }
   if (session.status === "running") {
-    return "Running...";
+    return t("sessions.activity.running");
   }
   if (session.status === "waiting") {
-    return session.phase === "approval" ? "Waiting for approval." : "Waiting...";
+    return session.phase === "approval" ? t("sessions.activity.waitingApproval") : t("sessions.activity.waiting");
   }
   return "-";
 }
 
-export function displayAiSessionTitle(session?: AiSessionSummary, promptIndex?: number) {
+export function displayAiSessionTitle(session: AiSessionSummary | undefined, promptIndex: number | undefined, t: Translate) {
   if (!session) {
-    return "No AI session selected";
+    return t("sessions.detail.noSelected");
   }
   const turns = aiSessionDisplayTurns(session);
   if (turns.length) {
@@ -568,7 +584,7 @@ export function aiSessionAppTab(instance: InstanceBoardItem | InstanceWithAiSess
   if (!session) {
     return undefined;
   }
-  const tabs = instance.apps.sessions.map(appSessionTab).filter((tab): tab is SessionTab => Boolean(tab));
+  const tabs = instance.apps.sessions.map((entry, index) => appSessionTab(entry, index)).filter((tab): tab is SessionTab => Boolean(tab));
   if (session.appSessionId) {
     const match = tabs.find((tab) => tab.key === session.appSessionId);
     if (match) {
@@ -593,19 +609,11 @@ export function shortAiSessionId(value?: string) {
   return value.length > 12 ? value.slice(0, 12) : value;
 }
 
-export function relativeTime(value?: string) {
+export function relativeTime(value: string | undefined, locale: SupportedLocale) {
   if (!value) {
-    return "unknown";
+    return "-";
   }
-  const ageSeconds = Math.max(0, Math.round((Date.now() - Date.parse(value)) / 1000));
-  if (ageSeconds < 60) {
-    return `${ageSeconds}s ago`;
-  }
-  const ageMinutes = Math.round(ageSeconds / 60);
-  if (ageMinutes < 60) {
-    return `${ageMinutes}m ago`;
-  }
-  return `${Math.round(ageMinutes / 60)}h ago`;
+  return formatRelativeTime(value, Date.now(), locale);
 }
 
 export function absoluteInstanceUrl(instance: InstanceBoardItem, path: string) {
@@ -616,36 +624,36 @@ export function absoluteInstanceUrl(instance: InstanceBoardItem, path: string) {
   return joinInstancePath(instance, path);
 }
 
-export function activeAppLabel(instance: InstanceBoardItem) {
+export function activeAppLabel(instance: InstanceBoardItem, t: Translate) {
   const visibleSessions = instance.apps.sessions.filter(isVisibleAppSession);
   const session = visibleSessions[0];
   if (session && typeof session === "object" && "appId" in session && typeof session.appId === "string") {
     return session.appId;
   }
-  return visibleSessions.length ? `${visibleSessions.length} app sessions` : "No active app";
+  return visibleSessions.length ? t("sessions.tabs.appSessions", { count: visibleSessions.length }) : t("sessions.tabs.noActiveApp");
 }
 
-export function previewTitle(instance: InstanceBoardItem) {
+export function previewTitle(instance: InstanceBoardItem, t: Translate) {
   if (instance.connectionStatus === "online") {
-    return "Ready to attach";
+    return t("sessions.tabs.readyAttach");
   }
   if (instance.status === "registering") {
-    return "Waiting for registration";
+    return t("sessions.tabs.waitingRegistration");
   }
   if (instance.status === "created") {
-    return "Created, not started";
+    return t("sessions.tabs.createdNotStarted");
   }
   return instance.status;
 }
 
-export function previewDetail(instance: InstanceBoardItem) {
+export function previewDetail(instance: InstanceBoardItem, t: Translate, locale: SupportedLocale) {
   if (instanceWebBase(instance)) {
     return instanceWebBase(instance);
   }
   if (instance.lastHeartbeatAt) {
-    return `last heartbeat ${new Date(instance.lastHeartbeatAt).toLocaleTimeString()}`;
+    return t("sessions.tabs.lastHeartbeat", { time: formatTime(instance.lastHeartbeatAt, locale) });
   }
-  return "Create or register a controlled instance to make this workbench live.";
+  return t("sessions.tabs.workbenchHint");
 }
 
 export function heartbeatLabel(ageMs?: number) {

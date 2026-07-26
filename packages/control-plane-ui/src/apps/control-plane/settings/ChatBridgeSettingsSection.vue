@@ -2,10 +2,10 @@
   <div class="chat-settings-grid">
     <section class="modal-section">
       <div class="section-head">
-        <span>Chat bridges · {{ orderedChatBridges.length }}</span>
+        <span>{{ t("settings.chatBridge.count", { count: orderedChatBridges.length }) }}</span>
         <Button variant="outline" size="sm" :disabled="isRefreshing" @click="refreshChat">
           <RefreshCw :size="14" />
-          <span>{{ isRefreshing ? "Refreshing" : "Refresh" }}</span>
+          <span>{{ isRefreshing ? t("common.actions.refreshing") : t("common.actions.refresh") }}</span>
         </Button>
       </div>
       <div class="settings-row-actions chat-create-actions">
@@ -22,9 +22,9 @@
               <strong>{{ bridge.name }}</strong>
               <small>{{ chatChannelLabel(bridge.channel) }} · {{ chatBridgeRuntimeLine(bridge.id) }}</small>
             </span>
-            <Badge :variant="chatBridgeRunning(bridge.id) ? 'default' : 'secondary'">{{ chatBridgeRunning(bridge.id) ? "Running" : bridge.enabled ? "Enabled" : "Off" }}</Badge>
+            <Badge :variant="chatBridgeRunning(bridge.id) ? 'default' : 'secondary'">{{ chatBridgeRunning(bridge.id) ? t("common.status.running") : bridge.enabled ? t("common.status.enabled") : t("common.status.off") }}</Badge>
           </button>
-          <p v-if="!orderedChatBridges.length" class="settings-empty">No chat bridges configured.</p>
+          <p v-if="!orderedChatBridges.length" class="settings-empty">{{ t("settings.chatBridge.empty") }}</p>
         </div>
       </ScrollArea>
       <p v-if="gatewayError" class="control-plane-error">{{ errorText(gatewayError) }}</p>
@@ -32,84 +32,85 @@
 
     <section class="modal-section">
       <div v-if="selectedChatBridge" class="section-head">
-        <span>{{ selectedChatBridge.name }} settings</span>
+        <span>{{ t("settings.chatBridge.settings", { name: selectedChatBridge.name }) }}</span>
         <div class="settings-row-actions">
-          <Badge :variant="chatBridgeRunning(selectedChatBridge.id) ? 'default' : 'secondary'">{{ chatBridgeRunning(selectedChatBridge.id) ? "Running" : "Stopped" }}</Badge>
+          <Badge :variant="chatBridgeRunning(selectedChatBridge.id) ? 'default' : 'secondary'">{{ chatBridgeRunning(selectedChatBridge.id) ? t("common.status.running") : t("common.status.stopped") }}</Badge>
           <Button variant="outline" size="sm" :disabled="chatBridgeBusy" @click="toggleSelectedChatBridge">
             <Power :size="14" />
-            <span>{{ chatBridgeRunning(selectedChatBridge.id) ? "Stop" : "Start" }}</span>
+            <span>{{ chatBridgeRunning(selectedChatBridge.id) ? t("instances.actions.stop") : t("instances.actions.start") }}</span>
           </Button>
           <Button variant="outline" size="sm" :disabled="chatBridgeBusy" @click="removeSelectedChatBridge">
             <Trash2 :size="14" />
-            <span>Delete</span>
+            <span>{{ t("common.actions.delete") }}</span>
           </Button>
         </div>
       </div>
       <div v-if="selectedChatBridge" class="inline-create">
         <label>
-          <span>Name</span>
-          <ControlPlaneInput v-model="chatForm.name" placeholder="Bridge name" />
+          <span>{{ t("settings.chatBridge.name") }}</span>
+          <ControlPlaneInput v-model="chatForm.name" :placeholder="t('settings.chatBridge.bridgeName')" />
         </label>
         <label>
-          <span>{{ selectedChatBridge.channel === 'dingding' ? 'Client ID' : 'Token' }}</span>
-          <ControlPlaneInput v-model="chatForm.token" type="password" :placeholder="selectedChatBridge?.tokenSet ? 'Leave blank to keep current secret' : chatTokenPlaceholder" />
+          <span>{{ selectedChatBridge.channel === 'dingding' ? t('settings.chatBridge.clientId') : t('settings.chatBridge.token') }}</span>
+          <ControlPlaneInput v-model="chatForm.token" type="password" :placeholder="selectedChatBridge?.tokenSet ? t('settings.chatBridge.keepSecret') : chatTokenPlaceholder" />
         </label>
         <div v-if="selectedChatBridge.channel === 'telegram'" class="settings-form-grid">
           <label>
-            <span>Default chat ID</span>
+            <span>{{ t("settings.chatBridge.defaultChatId") }}</span>
             <ControlPlaneInput v-model="chatForm.defaultChatId" placeholder="123456789" />
           </label>
           <label>
-            <span>Poll interval ms</span>
+            <span>{{ t("settings.chatBridge.pollInterval") }}</span>
             <ControlPlaneInput v-model="chatForm.pollIntervalMs" type="number" placeholder="3000" />
           </label>
         </div>
         <div v-else-if="selectedChatBridge.channel === 'wechat'" class="settings-form-grid">
           <label>
-            <span>Default chat ID</span>
-            <ControlPlaneInput v-model="chatForm.defaultChatId" placeholder="wxid or room id" />
+            <span>{{ t("settings.chatBridge.defaultChatId") }}</span>
+            <ControlPlaneInput v-model="chatForm.defaultChatId" :placeholder="t('settings.chatBridge.wechatIdPlaceholder')" />
           </label>
           <label>
-            <span>Context token</span>
-            <ControlPlaneInput v-model="chatForm.settings.contextToken" type="password" placeholder="context token" />
+            <span>{{ t("settings.chatBridge.contextToken") }}</span>
+            <ControlPlaneInput v-model="chatForm.settings.contextToken" type="password" :placeholder="t('settings.chatBridge.contextTokenPlaceholder')" />
           </label>
           <label>
-            <span>Base URL</span>
+            <span>{{ t("settings.chatBridge.baseUrl") }}</span>
+            <!-- i18n-audit-allow-next-line code-token: WeChat API endpoint example -->
             <ControlPlaneInput v-model="chatForm.settings.baseUrl" placeholder="https://ilinkai.weixin.qq.com" />
           </label>
           <label>
-            <span>Updates cursor</span>
-            <ControlPlaneInput v-model="chatForm.settings.updatesBuf" placeholder="saved automatically" />
+            <span>{{ t("settings.chatBridge.updatesCursor") }}</span>
+            <ControlPlaneInput v-model="chatForm.settings.updatesBuf" :placeholder="t('settings.chatBridge.savedAutomatically')" />
           </label>
         </div>
         <div v-else-if="selectedChatBridge.channel === 'dingding'" class="settings-form-grid">
           <label>
-            <span>Client secret</span>
-            <ControlPlaneInput v-model="chatForm.settings.clientSecret" type="password" :placeholder="selectedChatBridge?.settings.clientSecretSet ? 'Leave blank to keep current secret' : 'client secret'" />
+            <span>{{ t("settings.chatBridge.clientSecret") }}</span>
+            <ControlPlaneInput v-model="chatForm.settings.clientSecret" type="password" :placeholder="selectedChatBridge?.settings.clientSecretSet ? t('settings.chatBridge.keepSecret') : t('settings.chatBridge.clientSecret')" />
           </label>
           <label>
-            <span>Robot code</span>
-            <ControlPlaneInput v-model="chatForm.settings.robotCode" placeholder="robot code" />
+            <span>{{ t("settings.chatBridge.robotCode") }}</span>
+            <ControlPlaneInput v-model="chatForm.settings.robotCode" :placeholder="t('settings.chatBridge.robotCodePlaceholder')" />
           </label>
           <label>
-            <span>Default conversation ID</span>
-            <ControlPlaneInput v-model="chatForm.defaultChatId" placeholder="open conversation id" />
+            <span>{{ t("settings.chatBridge.conversationId") }}</span>
+            <ControlPlaneInput v-model="chatForm.defaultChatId" :placeholder="t('settings.chatBridge.conversationIdPlaceholder')" />
           </label>
           <label>
-            <span>Corp ID</span>
-            <ControlPlaneInput v-model="chatForm.settings.corpId" placeholder="optional" />
+            <span>{{ t("settings.chatBridge.corpId") }}</span>
+            <ControlPlaneInput v-model="chatForm.settings.corpId" :placeholder="t('settings.chatBridge.optional')" />
           </label>
         </div>
         <label>
-          <span>Allowed user IDs</span>
-          <ControlPlaneInput v-model="chatAllowedUsersText" placeholder="comma or newline separated" />
+          <span>{{ t("settings.chatBridge.allowedUsers") }}</span>
+          <ControlPlaneInput v-model="chatAllowedUsersText" :placeholder="t('settings.chatBridge.allowedUsersPlaceholder')" />
         </label>
         <Button variant="outline" size="sm" :disabled="chatBridgeBusy" @click="saveSelectedChatBridge">
           <Settings :size="14" />
-          <span>{{ savingChatBridge ? "Saving" : "Save bridge" }}</span>
+          <span>{{ t("settings.chatBridge.save") }}</span>
         </Button>
       </div>
-      <p v-else class="settings-empty">Create or select a chat bridge.</p>
+      <p v-else class="settings-empty">{{ t("settings.chatBridge.createOrSelect") }}</p>
       <p v-if="selectedChatStatus?.error" class="control-plane-error">{{ selectedChatStatus.error }}</p>
       <p v-if="chatBridgeSuccess" class="settings-success">{{ chatBridgeSuccess }}</p>
     </section>
@@ -117,12 +118,15 @@
 </template>
 
 <script setup lang="ts">
+import { useI18n } from "vue-i18n";
 import { Plus, Power, RefreshCw, Settings, Trash2 } from "@lucide/vue";
 import type { useChatBridgeSettings } from "./useChatBridgeSettings";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
+
+const { t } = useI18n();
 
 const props = defineProps<{
   chat: ReturnType<typeof useChatBridgeSettings>;

@@ -1,5 +1,7 @@
 import { computed, ref } from "vue";
 import type { Node, UpdateNodeInput } from "../../../api/types.ts";
+import type { Translate } from "../../../i18n/status.ts";
+import { translateApiError } from "../../../i18n/apiError.ts";
 
 export const NODE_NAME_MAX_LENGTH = 160;
 
@@ -8,10 +10,12 @@ type UseNodeRenameInput = {
   nodes: () => Node[];
   notify: (message: string, kind?: "error" | "success") => void;
   onNodeRenamed: (node: Node) => void | Promise<void>;
+  translate: Translate;
   updateNode: (id: string, input: UpdateNodeInput) => Promise<Node>;
 };
 
-export function useNodeRename({ errorText, nodes, notify, onNodeRenamed, updateNode }: UseNodeRenameInput) {
+export function useNodeRename({ errorText, nodes, notify, onNodeRenamed, translate: t, updateNode }: UseNodeRenameInput) {
+  const translateError = (error: unknown) => translateApiError(error, t, errorText(error));
   const nodeRenameOpen = ref(false);
   const nodeRenameTargetId = ref("");
   const nodeRenameDraft = ref("");
@@ -55,20 +59,20 @@ export function useNodeRename({ errorText, nodes, notify, onNodeRenamed, updateN
     if (!nodeRenameOpen.value || renamingNodeId.value) return;
     const target = nodes().find((node) => node.id === nodeRenameTargetId.value);
     if (!target) {
-      nodeRenameError.value = "The selected node is no longer available.";
+      nodeRenameError.value = t("settings.nodeDetail.renameUnavailable");
       return;
     }
     const name = nodeRenameDraft.value.trim();
     if (!name) {
-      nodeRenameError.value = "Node name is required.";
+      nodeRenameError.value = t("settings.nodeDetail.nameRequired");
       return;
     }
     if (name.length > NODE_NAME_MAX_LENGTH) {
-      nodeRenameError.value = `Node name must be ${NODE_NAME_MAX_LENGTH} characters or fewer.`;
+      nodeRenameError.value = t("settings.nodeDetail.nameTooLong", { max: NODE_NAME_MAX_LENGTH });
       return;
     }
     if (name === target.name) {
-      nodeRenameError.value = "Enter a different node name.";
+      nodeRenameError.value = t("settings.nodeDetail.nameUnchanged");
       return;
     }
 
@@ -78,9 +82,9 @@ export function useNodeRename({ errorText, nodes, notify, onNodeRenamed, updateN
       const renamed = await updateNode(target.id, { name });
       await onNodeRenamed(renamed);
       resetNodeRename();
-      notify(`${renamed.name} renamed.`, "success");
+      notify(t("settings.nodeDetail.nodeRenamed", { name: renamed.name }), "success");
     } catch (error) {
-      nodeRenameError.value = errorText(error);
+      nodeRenameError.value = translateError(error);
     } finally {
       renamingNodeId.value = "";
     }

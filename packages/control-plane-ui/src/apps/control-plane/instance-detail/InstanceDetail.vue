@@ -1,11 +1,11 @@
 <template>
-  <section class="instance-detail" aria-label="Instance detail">
-    <div v-if="loading" class="detail-empty">Loading control plane...</div>
+  <section class="instance-detail" :aria-label="t('instances.detail.label')">
+    <div v-if="loading" class="detail-empty">{{ t("instances.detail.loading") }}</div>
     <div v-else-if="error" class="detail-empty error">{{ error }}</div>
     <div v-else-if="instance" class="instance-detail-layout" :class="{ 'preview-expanded': previewExpanded }">
       <header v-if="!previewExpanded" class="detail-head">
         <div>
-          <p>{{ instanceSourceLabel(instance) }}</p>
+          <p>{{ instanceSourceLabel(instance, t) }}</p>
           <div
             class="detail-name-field"
             :class="{ editing: editingNameId === instance.id }"
@@ -16,7 +16,7 @@
               ref="nameInput"
               v-model="instanceNameDraft"
               class="detail-name-input"
-              :aria-label="`Edit name for ${instanceDisplayName(instance)}`"
+              :aria-label="t('instances.detail.editName', { name: instanceDisplayName(instance) })"
               :disabled="savingName"
               @blur="commitNameEdit"
               @keydown.enter.prevent="commitNameEdit"
@@ -26,8 +26,8 @@
               v-else
               type="button"
               class="detail-name-button"
-              :aria-label="`Edit name for ${instanceDisplayName(instance)}`"
-              title="Edit instance name"
+              :aria-label="t('instances.detail.editName', { name: instanceDisplayName(instance) })"
+              :title="t('instances.detail.editNameTitle')"
               @click="beginNameEdit(instance, $event)"
             >
               <span class="detail-name-button-label">{{ instanceDisplayName(instance) }}</span>
@@ -35,7 +35,7 @@
           </div>
           <span>{{ instance.image?.name || instance.imageId }} · {{ instance.node?.name || instance.nodeId }} / {{ instance.runtime?.name || instance.runtimeId }}</span>
           <span v-if="instance.imageProvisioning && instance.imageProvisioning.phase !== 'ready' && !instance.imagePullProgress" class="image-provisioning-status">
-            {{ imageProvisioningLabel(instance) }}<template v-if="instance.imageProvisioning.error"> · {{ instance.imageProvisioning.error }}</template>
+            {{ imageProvisioningLabel(instance, t) }}<template v-if="instance.imageProvisioning.error"> · {{ instance.imageProvisioning.error }}</template>
           </span>
         </div>
         <div class="detail-side">
@@ -44,64 +44,64 @@
               <Tooltip>
                 <TooltipTrigger as-child>
                   <span class="diagnostic-badge" :aria-label="buildTitle(instance)">
-                    <Badge :variant="instance.access.status === 'reachable' || instance.connectionStatus === 'online' ? 'default' : 'secondary'">{{ instance.connectionStatus }}</Badge>
+                <Badge :variant="instance.access.status === 'reachable' || instance.connectionStatus === 'online' ? 'default' : 'secondary'">{{ connectionStatusLabel(instance.connectionStatus) }}</Badge>
                   </span>
                 </TooltipTrigger>
                 <TooltipContent class="diagnostic-tooltip" align="end" side="bottom">
                   <div class="diagnostic-tooltip-grid">
-                    <span><b>Protocol</b><em>{{ instance.protocolVersion || instance.build?.protocolVersion || "unknown" }}</em></span>
-                    <span><b>Build</b><em>{{ buildLabel(instance) }}</em></span>
-                    <span><b>Package</b><em>{{ packageLabel(instance) }}</em></span>
-                    <span v-if="instance.build?.imageRef"><b>Image</b><em>{{ instance.build.imageRef }}</em></span>
-                    <span v-if="instance.build?.builtAt"><b>Built</b><em>{{ instance.build.builtAt }}</em></span>
+                    <span><b>{{ t("instances.detail.protocol") }}</b><em>{{ instance.protocolVersion || instance.build?.protocolVersion || t("common.status.unknown") }}</em></span>
+                    <span><b>{{ t("instances.detail.build") }}</b><em>{{ buildLabel(instance) }}</em></span>
+                    <span><b>{{ t("instances.detail.package") }}</b><em>{{ packageLabel(instance) }}</em></span>
+                    <span v-if="instance.build?.imageRef"><b>{{ t("instances.detail.image") }}</b><em>{{ instance.build.imageRef }}</em></span>
+                    <span v-if="instance.build?.builtAt"><b>{{ t("instances.detail.built") }}</b><em>{{ instance.build.builtAt }}</em></span>
                   </div>
                 </TooltipContent>
               </Tooltip>
-              <Badge variant="secondary">{{ instance.status }}</Badge>
+              <Badge variant="secondary">{{ instanceStatusLabel(instance.status) }}</Badge>
               <Tooltip>
                 <TooltipTrigger as-child>
                   <span class="diagnostic-badge" :aria-label="buildTitle(instance)">
                     <Badge :variant="instance.protocolCompatible ? 'secondary' : 'destructive'">
-                      {{ instance.protocolCompatible ? "protocol ok" : "protocol mismatch" }}
+                      {{ instance.protocolCompatible ? t("instances.detail.protocolOk") : t("instances.detail.protocolMismatch") }}
                     </Badge>
                   </span>
                 </TooltipTrigger>
                 <TooltipContent class="diagnostic-tooltip" align="end" side="bottom">
                   <div class="diagnostic-tooltip-grid">
-                    <span><b>Protocol</b><em>{{ instance.protocolVersion || instance.build?.protocolVersion || "unknown" }}</em></span>
-                    <span><b>Build</b><em>{{ buildLabel(instance) }}</em></span>
-                    <span><b>Package</b><em>{{ packageLabel(instance) }}</em></span>
-                    <span v-if="instance.build?.imageRef"><b>Image</b><em>{{ instance.build.imageRef }}</em></span>
-                    <span v-if="instance.build?.builtAt"><b>Built</b><em>{{ instance.build.builtAt }}</em></span>
+                    <span><b>{{ t("instances.detail.protocol") }}</b><em>{{ instance.protocolVersion || instance.build?.protocolVersion || t("common.status.unknown") }}</em></span>
+                    <span><b>{{ t("instances.detail.build") }}</b><em>{{ buildLabel(instance) }}</em></span>
+                    <span><b>{{ t("instances.detail.package") }}</b><em>{{ packageLabel(instance) }}</em></span>
+                    <span v-if="instance.build?.imageRef"><b>{{ t("instances.detail.image") }}</b><em>{{ instance.build.imageRef }}</em></span>
+                    <span v-if="instance.build?.builtAt"><b>{{ t("instances.detail.built") }}</b><em>{{ instance.build.builtAt }}</em></span>
                   </div>
                 </TooltipContent>
               </Tooltip>
             </div>
           </TooltipProvider>
-          <div class="instance-controls" aria-label="Instance controls">
+          <div class="instance-controls" :aria-label="t('instances.detail.controls')">
             <Button v-if="canShowInstanceAction(instance, 'start')" variant="outline" size="sm" :disabled="isInstanceActionBusy(instance)" @click="$emit('runAction', 'start', instance)">
               <Play :size="14" />
-              <span>{{ activeActionLabel(instance, "start", "Start") }}</span>
+              <span>{{ activeActionLabel(instance, "start", t("instances.actions.start")) }}</span>
             </Button>
             <Button v-if="canShowInstanceAction(instance, 'stop')" variant="outline" size="sm" :disabled="isInstanceActionBusy(instance)" @click="$emit('runAction', 'stop', instance)">
               <Square :size="14" />
-              <span>{{ activeActionLabel(instance, "stop", "Stop") }}</span>
+              <span>{{ activeActionLabel(instance, "stop", t("instances.actions.stop")) }}</span>
             </Button>
             <Button v-if="canShowInstanceAction(instance, 'restart')" variant="outline" size="sm" :disabled="isInstanceActionBusy(instance)" @click="$emit('runAction', 'restart', instance)">
               <RotateCw :size="14" />
-              <span>{{ activeActionLabel(instance, "restart", "Restart") }}</span>
+              <span>{{ activeActionLabel(instance, "restart", t("instances.actions.restart")) }}</span>
             </Button>
             <Button v-if="canShowInstanceAction(instance, 'retry-image')" variant="outline" size="sm" :disabled="isInstanceActionBusy(instance)" @click="$emit('runAction', 'retry-image', instance)">
               <RotateCw :size="14" />
-              <span>{{ activeActionLabel(instance, "retry-image", "Retry image") }}</span>
+              <span>{{ activeActionLabel(instance, "retry-image", t("instances.actions.retryImage")) }}</span>
             </Button>
             <Button variant="outline" size="sm" @click="$emit('openSettings', instance.id)">
               <Settings :size="14" />
-              <span>Settings</span>
+              <span>{{ t("instances.actions.settings") }}</span>
             </Button>
             <Button variant="destructive" size="sm" :disabled="isInstanceActionBusy(instance)" @click="$emit('runAction', 'delete', instance)">
               <Trash2 :size="14" />
-              <span>{{ activeActionLabel(instance, "delete", "Delete") }}</span>
+              <span>{{ activeActionLabel(instance, "delete", t("instances.actions.delete")) }}</span>
             </Button>
           </div>
         </div>
@@ -165,11 +165,11 @@
     </div>
 
     <section v-else class="detail-empty">
-      <h1>Ready for a first instance</h1>
-      <p>Create a project-backed controlled instance to register a worker into this control plane.</p>
+      <h1>{{ t("instances.detail.emptyTitle") }}</h1>
+      <p>{{ t("instances.detail.emptyDescription") }}</p>
       <Button size="sm" @click="$emit('newInstance')">
         <Plus :size="15" />
-        <span>New instance</span>
+        <span>{{ t("instances.list.new") }}</span>
       </Button>
     </section>
   </section>
@@ -178,6 +178,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
 import { Play, Plus, RotateCw, Settings, Square, Trash2 } from "@lucide/vue";
+import { useI18n } from "vue-i18n";
 import type { AiSessionSummary, InstanceBoardItem, InstanceResourceMetrics, InstanceWithAiSessions, NodeLocalFolder } from "../../../api/types";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
@@ -188,6 +189,12 @@ import { canShowInstanceAction, imageProvisioningLabel, instanceSourceLabel } fr
 import type { LaunchableApp, RepositoryWorkspaceTabTarget, SessionTab } from "../useInstanceSessions";
 import type { SessionPaneId } from "./useActiveInstanceSessions";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
+import { connectionStatusKeys, instanceStatusKeys, translateStatus } from "../../../i18n/status";
+import { translateApiError } from "../../../i18n/apiError";
+
+const { t } = useI18n();
+const instanceStatusLabel = (status: string) => translateStatus(instanceStatusKeys, status, t);
+const connectionStatusLabel = (status: string) => translateStatus(connectionStatusKeys, status, t);
 
 const props = defineProps<{
   activeActionLabel: (instance: InstanceBoardItem, action: InstanceAction, idleLabel: string) => string;
@@ -313,7 +320,7 @@ async function commitNameEdit() {
     await props.renameInstance(props.instance, nextName);
     cancelNameEdit();
   } catch (error) {
-    showControlPlaneToast(error instanceof Error ? error.message : "Failed to rename instance.");
+    showControlPlaneToast(translateApiError(error, t, t("instances.detail.renameFailed")));
     await nextTick();
     nameInput.value?.focus();
   } finally {
@@ -322,21 +329,21 @@ async function commitNameEdit() {
 }
 
 function buildLabel(instance: InstanceBoardItem) {
-  return instance.build?.buildId || instance.build?.gitCommit?.slice(0, 12) || "unknown";
+  return instance.build?.buildId || instance.build?.gitCommit?.slice(0, 12) || t("common.status.unknown");
 }
 
 function packageLabel(instance: InstanceBoardItem) {
-  return instance.build?.packageVersion || instance.instanceVersion || "unknown";
+  return instance.build?.packageVersion || instance.instanceVersion || t("common.status.unknown");
 }
 
 function buildTitle(instance: InstanceBoardItem) {
   const build = instance.build;
   return [
-    `Protocol: ${instance.protocolVersion || build?.protocolVersion || "unknown"}`,
-    `Build: ${buildLabel(instance)}`,
-    `Package: ${packageLabel(instance)}`,
-    build?.imageRef ? `Image: ${build.imageRef}` : undefined,
-    build?.builtAt ? `Built: ${build.builtAt}` : undefined,
+    `${t("instances.detail.protocol")}: ${instance.protocolVersion || build?.protocolVersion || t("common.status.unknown")}`,
+    `${t("instances.detail.build")}: ${buildLabel(instance)}`,
+    `${t("instances.detail.package")}: ${packageLabel(instance)}`,
+    build?.imageRef ? `${t("instances.detail.image")}: ${build.imageRef}` : undefined,
+    build?.builtAt ? `${t("instances.detail.built")}: ${build.builtAt}` : undefined,
   ].filter(Boolean).join("\n");
 }
 </script>

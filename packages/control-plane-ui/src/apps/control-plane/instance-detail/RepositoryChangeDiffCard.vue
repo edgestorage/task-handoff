@@ -6,23 +6,23 @@
         <span><strong>{{ entry.path }}</strong><small>{{ scopeLabel }} · {{ statusLabel }}</small></span>
       </span>
       <span class="repository-review-diff-actions">
-        <Button v-if="hasExpandedContexts" variant="ghost" size="sm" @click="$emit('collapseContexts', entry)"><FoldVertical :size="13" /> Collapse context</Button>
-        <Button variant="outline" size="sm" @click="$emit('openFiles', entry)"><FileCode2 :size="13" /> Open files</Button>
-        <Button v-if="entry.scope === 'staged'" variant="outline" size="sm" :disabled="pending" @click="$emit('unstage', entry)"><ListMinus :size="13" /> Unstage</Button>
-        <Button v-else-if="entry.scope !== 'conflict' || entry.status !== 'unmerged'" size="sm" :disabled="pending" @click="$emit('stage', entry)"><ListPlus :size="13" /> Stage</Button>
-        <Button v-else size="sm" :disabled="pending" @click="$emit('stage', entry)"><CheckCircle2 :size="13" /> Mark resolved</Button>
-        <Button v-if="entry.scope === 'unstaged'" variant="ghost" size="sm" class="repository-review-discard" :disabled="pending" @click="$emit('discard', entry)"><RotateCcw :size="13" /> Discard</Button>
+        <Button v-if="hasExpandedContexts" variant="ghost" size="sm" @click="$emit('collapseContexts', entry)"><FoldVertical :size="13" /> {{ t("repository.diff.collapse") }}</Button>
+        <Button variant="outline" size="sm" @click="$emit('openFiles', entry)"><FileCode2 :size="13" /> {{ t("repository.diff.openFiles") }}</Button>
+        <Button v-if="entry.scope === 'staged'" variant="outline" size="sm" :disabled="pending" @click="$emit('unstage', entry)"><ListMinus :size="13" /> {{ t("repository.diff.unstage") }}</Button>
+        <Button v-else-if="entry.scope !== 'conflict' || entry.status !== 'unmerged'" size="sm" :disabled="pending" @click="$emit('stage', entry)"><ListPlus :size="13" /> {{ t("repository.diff.stage") }}</Button>
+        <Button v-else size="sm" :disabled="pending" @click="$emit('stage', entry)"><CheckCircle2 :size="13" /> {{ t("repository.diff.resolved") }}</Button>
+        <Button v-if="entry.scope === 'unstaged'" variant="ghost" size="sm" class="repository-review-discard" :disabled="pending" @click="$emit('discard', entry)"><RotateCcw :size="13" /> {{ t("repository.diff.discard") }}</Button>
       </span>
     </header>
 
-    <div v-if="pending" class="repository-review-diff-state"><LoaderCircle class="spin" :size="16" /> Updating repository…</div>
-    <div v-else-if="diffPending" class="repository-review-diff-state"><LoaderCircle class="spin" :size="16" /> Loading diff…</div>
-    <RepositoryErrorNotice v-else-if="error" :error="error" fallback="The file diff could not be loaded." />
-    <div v-else-if="diff?.binary" class="repository-review-diff-state"><FileWarning :size="22" /><span><strong>Binary file</strong><small>This change cannot be rendered as text.</small></span></div>
+    <div v-if="pending" class="repository-review-diff-state"><LoaderCircle class="spin" :size="16" /> {{ t("repository.diff.updating") }}</div>
+    <div v-else-if="diffPending" class="repository-review-diff-state"><LoaderCircle class="spin" :size="16" /> {{ t("repository.diff.loading") }}</div>
+    <RepositoryErrorNotice v-else-if="error" :error="error" :fallback="t('repository.errors.diffLoad')" />
+    <div v-else-if="diff?.binary" class="repository-review-diff-state"><FileWarning :size="22" /><span><strong>{{ t("repository.diff.binary") }}</strong><small>{{ t("repository.diff.binaryHint") }}</small></span></div>
     <template v-else-if="diff">
-      <div v-if="diff.truncated" class="repository-review-diff-warning"><FileWarning :size="14" /><span>Only the first {{ diff.byteLimit }} bytes are shown.</span></div>
-      <div v-if="renderLimitReached" class="repository-review-diff-warning"><FileWarning :size="14" /><span>Only the first {{ maxRenderedLines }} rendered lines are shown.</span></div>
-      <div v-if="viewMode === 'unified'" class="repository-review-diff-table" role="table" :aria-label="`${entry.path} ${scopeLabel} unified diff`">
+      <div v-if="diff.truncated" class="repository-review-diff-warning"><FileWarning :size="14" /><span>{{ t("repository.diff.truncatedBytes", { count: diff.byteLimit }) }}</span></div>
+      <div v-if="renderLimitReached" class="repository-review-diff-warning"><FileWarning :size="14" /><span>{{ t("repository.diff.truncatedLines", { count: maxRenderedLines }) }}</span></div>
+      <div v-if="viewMode === 'unified'" class="repository-review-diff-table" role="table" :aria-label="t('repository.diff.unifiedAria', { path: entry.path, scope: scopeLabel })">
         <template v-for="(line, index) in visibleLines" :key="index">
           <div v-if="line.kind === 'context-control'" class="repository-review-diff-line repository-review-context-tail" :data-kind="line.hunk ? 'hunk' : undefined" :data-hunk-id="line.hunk?.hunkId" role="row">
             <span class="repository-review-hunk-controls" role="cell">
@@ -42,7 +42,7 @@
           </div>
         </template>
       </div>
-      <div v-else class="repository-review-diff-table repository-review-split-table" role="table" :aria-label="`${entry.path} ${scopeLabel} split diff`">
+      <div v-else class="repository-review-diff-table repository-review-split-table" role="table" :aria-label="t('repository.diff.splitAria', { path: entry.path, scope: scopeLabel })">
         <template v-for="(row, index) in splitRows" :key="index">
           <div v-if="row.kind === 'control'" class="repository-review-diff-line repository-review-context-tail repository-review-split-full" :data-kind="row.control.hunk ? 'hunk' : undefined" :data-hunk-id="row.control.hunk?.hunkId" role="row">
             <span class="repository-review-hunk-controls" role="cell">
@@ -74,7 +74,7 @@
           </div>
         </template>
       </div>
-      <div v-if="!visibleLines.length" class="repository-review-diff-state">No textual diff is available.</div>
+      <div v-if="!visibleLines.length" class="repository-review-diff-state">{{ t("repository.diff.noText") }}</div>
     </template>
   </article>
 </template>
@@ -83,6 +83,7 @@
 import type { RepositoryChangeEntry, RepositoryDiff, RepositorySessionKind } from "@task-handoff/protocol/repository";
 import { CheckCircle2, ChevronDown, ChevronUp, FileCode2, FileDiff, FileWarning, FoldVertical, ListMinus, ListPlus, LoaderCircle, RotateCcw } from "@lucide/vue";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { useRepositoryDiffQuery } from "../../../api/repository";
 import { Button } from "../../../components/ui/button";
 import RepositoryErrorNotice from "./RepositoryErrorNotice.vue";
@@ -99,6 +100,7 @@ const props = defineProps<{
   snapshotId: string;
   viewMode: "unified" | "split";
 }>();
+const { t } = useI18n();
 
 const emit = defineEmits<{
   collapseContexts: [entry: RepositoryChangeEntry];
@@ -121,8 +123,8 @@ const { data: diff, error, isPending: diffPending } = useRepositoryDiffQuery(
 );
 
 const changeId = computed(() => `${props.entry.scope}:${props.entry.path}`);
-const scopeLabel = computed(() => ({ conflict: "Conflict", staged: "Staged", unstaged: "Working tree", untracked: "Untracked" }[props.entry.scope]));
-const statusLabel = computed(() => ({ added: "Added", modified: "Modified", deleted: "Deleted", renamed: "Renamed", copied: "Copied", "type-changed": "Type changed", untracked: "Untracked", unmerged: "Unmerged" }[props.entry.status]));
+const scopeLabel = computed(() => t(`repository.diff.scope.${props.entry.scope}`));
+const statusLabel = computed(() => t(`repository.diff.status.${props.entry.status === "type-changed" ? "typeChanged" : props.entry.status}`));
 const language = computed(() => repositoryLanguageForPath(props.entry.path));
 const hasExpandedContexts = computed(() => [...props.expandedGaps.values()].some((gap) => gap.fromStart > 0 || gap.fromEnd > 0));
 const displaySourceLines = computed(() => diffPresentationRows(diff.value, props.expandedGaps).filter((line) => line.kind === "context-control" || !isPatchHeader(line)));
@@ -153,7 +155,7 @@ function lineMarker(kind: RepositoryDiff["lines"][number]["kind"]) {
 }
 
 function contextControlLabel(control: ContextControl) {
-  return `Expand ${control.lineCount} ${control.direction === "up" ? "earlier" : "later"} lines`;
+  return t(control.direction === "up" ? "repository.diff.expandEarlier" : "repository.diff.expandLater", { count: control.lineCount });
 }
 
 function contextControlKey(control: ContextControl) {
@@ -191,11 +193,11 @@ function diffHunkElement(hunkId: string) {
 
 function hunkTitle(line: RepositoryDiff["lines"][number]) {
   if (line.kind !== "hunk" || line.oldStart === undefined || line.oldCount === undefined || line.newStart === undefined || line.newCount === undefined) return line.content;
-  return `Old lines ${rangeLabel(line.oldStart, line.oldCount)}; new lines ${rangeLabel(line.newStart, line.newCount)}`;
+  return t("repository.diff.hunk", { old: rangeLabel(line.oldStart, line.oldCount), new: rangeLabel(line.newStart, line.newCount) });
 }
 
 function rangeLabel(start: number, count: number) {
-  if (!count) return "none";
+  if (!count) return t("repository.diff.none");
   return count === 1 ? `${start}` : `${start}-${start + count - 1}`;
 }
 

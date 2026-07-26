@@ -4,6 +4,8 @@ import type { InstanceBoardItem, Node, NodeRuntime } from "../../../api/types";
 import { nativeNodeFolderSelectionResult, nodeFolderSelectionMode, nodePathName } from "../nodePath";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 import { useNodeStorageFolderPicker } from "./useNodeStorageFolderPicker";
+import type { Translate } from "../../../i18n/status.ts";
+import { translateApiError } from "../../../i18n/apiError.ts";
 
 type ChooseProjectFolder = () => Promise<string | { path: string; ownerNodeId?: string } | undefined>;
 
@@ -15,12 +17,14 @@ type UseNodeResourceSettingsInput = {
   nodes: Ref<Node[] | undefined>;
   refresh: () => Promise<void>;
   runtimes: Ref<NodeRuntime[] | undefined>;
+  translate: Translate;
 };
 
 const CONTROL_PLANE_LOCAL_NODE_LABEL = "task-handoff.control-plane.local";
 const CONTROL_PLANE_BUILTIN_NODE_LABEL = "task-handoff.control-plane.builtin";
 
-export function useNodeResourceSettings({ chooseProjectFolder, clearDefaultRuntime, errorText, instances, nodes, refresh, runtimes }: UseNodeResourceSettingsInput) {
+export function useNodeResourceSettings({ chooseProjectFolder, clearDefaultRuntime, errorText, instances, nodes, refresh, runtimes, translate: t }: UseNodeResourceSettingsInput) {
+  const translateError = (error: unknown) => translateApiError(error, t, errorText(error));
   const selectedNodeId = ref("");
   const creatingNodeLocalFolder = ref(false);
   const deletingNodeLocalFolderId = ref("");
@@ -40,6 +44,7 @@ export function useNodeResourceSettings({ chooseProjectFolder, clearDefaultRunti
     errorText,
     loadFolders: listNodeFolderTree,
     refresh,
+    translate: t,
   });
 
   watch(
@@ -67,7 +72,7 @@ export function useNodeResourceSettings({ chooseProjectFolder, clearDefaultRunti
       await checkNodeRuntime(selectedNode.value.id, runtime.id);
       await refresh();
     } catch (error) {
-      showControlPlaneToast(errorText(error));
+      showControlPlaneToast(translateError(error));
     } finally {
       checkingRuntimeId.value = "";
     }
@@ -83,7 +88,7 @@ export function useNodeResourceSettings({ chooseProjectFolder, clearDefaultRunti
       clearDefaultRuntime(runtime.id);
       await refresh();
     } catch (error) {
-      showControlPlaneToast(errorText(error));
+      showControlPlaneToast(translateError(error));
     } finally {
       deletingRuntimeId.value = "";
     }
@@ -111,7 +116,7 @@ export function useNodeResourceSettings({ chooseProjectFolder, clearDefaultRunti
       const result = nativeNodeFolderSelectionResult(selected, node.id);
       if (result.status === "cancelled") return;
       if (result.status === "invalid-owner") {
-        showControlPlaneToast("The selected folder does not belong to the built-in local node.");
+        showControlPlaneToast(t("settings.nodeDetail.invalidLocalFolderOwner"));
         return;
       }
       const folderPath = result.path;
@@ -121,7 +126,7 @@ export function useNodeResourceSettings({ chooseProjectFolder, clearDefaultRunti
       });
       await refresh();
     } catch (error) {
-      showControlPlaneToast(errorText(error));
+      showControlPlaneToast(translateError(error));
     } finally {
       creatingNodeLocalFolder.value = false;
     }
@@ -136,7 +141,7 @@ export function useNodeResourceSettings({ chooseProjectFolder, clearDefaultRunti
       await deleteNodeLocalFolder(selectedNode.value.id, folderId);
       await refresh();
     } catch (error) {
-      showControlPlaneToast(errorText(error));
+      showControlPlaneToast(translateError(error));
     } finally {
       deletingNodeLocalFolderId.value = "";
     }
@@ -160,7 +165,7 @@ export function useNodeResourceSettings({ chooseProjectFolder, clearDefaultRunti
   }
 
   function nodeLocationLabel(node: { id: string; labels: Record<string, string> }) {
-    return isControlPlaneLocalNode(node) ? "Built-in local" : "Remote node";
+    return isControlPlaneLocalNode(node) ? t("settings.nodeDetail.builtinLocal") : t("settings.nodeDetail.remoteNode");
   }
 
   return {

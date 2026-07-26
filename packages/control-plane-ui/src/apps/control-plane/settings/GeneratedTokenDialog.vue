@@ -4,7 +4,7 @@
       <DialogHeader>
         <DialogTitle>{{ title }}</DialogTitle>
         <DialogDescription>
-          This token is shown only once. Copy it before closing this dialog.
+          {{ t("settings.nodeDialogs.tokenOnce") }}
         </DialogDescription>
       </DialogHeader>
 
@@ -13,14 +13,14 @@
         <Button size="sm" @click="copyToken">
           <Check v-if="copied" :size="15" />
           <Copy v-else :size="15" />
-          <span>{{ copied ? "Copied" : "Copy token" }}</span>
+          <span>{{ copied ? t("settings.nodeDialogs.copied") : t("settings.nodeDialogs.copyToken") }}</span>
         </Button>
       </div>
 
-      <p class="generated-token-expiry">Expires {{ formattedExpiry }}</p>
+      <p class="generated-token-expiry">{{ t("settings.nodeDialogs.expires", { time: formattedExpiry }) }}</p>
 
       <DialogFooter>
-        <Button variant="outline" @click="emit('close')">Close</Button>
+        <Button variant="outline" @click="emit('close')">{{ t("settings.nodeDialogs.close") }}</Button>
       </DialogFooter>
     </DialogContent>
   </Dialog>
@@ -28,10 +28,16 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import { Check, Copy } from "@lucide/vue";
 import { Button } from "../../../components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
+import { useControlPlaneLocale } from "../../../i18n/index";
+import { formatDateTime } from "../../../i18n/presentation";
+
+const { t } = useI18n();
+const { locale } = useControlPlaneLocale();
 
 const props = defineProps<{
   expiresAt: string;
@@ -46,7 +52,7 @@ const emit = defineEmits<{
 const copied = ref(false);
 const formattedExpiry = computed(() => {
   const expiresAt = new Date(props.expiresAt);
-  return Number.isNaN(expiresAt.getTime()) ? props.expiresAt : expiresAt.toLocaleString();
+  return Number.isNaN(expiresAt.getTime()) ? props.expiresAt : formatDateTime(expiresAt, locale.value);
 });
 
 watch(() => props.token, () => {
@@ -56,12 +62,12 @@ watch(() => props.token, () => {
 async function copyToken() {
   try {
     if (!navigator.clipboard?.writeText) {
-      throw new Error("Clipboard access is unavailable.");
+      throw new Error(t("settings.nodeDialogs.clipboardUnavailable"));
     }
     await navigator.clipboard.writeText(props.token);
     copied.value = true;
   } catch (error) {
-    showControlPlaneToast(error instanceof Error ? error.message : "Could not copy token.");
+    showControlPlaneToast(error instanceof Error ? error.message : t("settings.nodeDialogs.copyTokenFailed"));
   }
 }
 </script>

@@ -9,17 +9,17 @@
     </header>
 
     <section class="app-access-surface">
-      <div v-if="loading" class="app-access-state">Loading session...</div>
+      <div v-if="loading" class="app-access-state">{{ t("common.appAccess.loading") }}</div>
       <div v-else-if="error" class="app-access-state">{{ error }}</div>
       <div v-else-if="mode === 'tty'" ref="terminalHost" class="app-access-terminal" />
       <iframe
         v-else-if="vncFrameUrl"
         class="app-access-frame"
         :src="vncFrameUrl"
-        title="VNC session"
+        :title="t('common.appAccess.vncSession')"
         allow="clipboard-read; clipboard-write; fullscreen"
       />
-      <div v-else class="app-access-state">This app session does not expose a direct view.</div>
+      <div v-else class="app-access-state">{{ t("common.appAccess.noDirectView") }}</div>
     </section>
   </main>
 </template>
@@ -27,9 +27,13 @@
 <script setup lang="ts">
 import "@xterm/xterm/css/xterm.css";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { useI18n } from "vue-i18n";
+import { formatTime } from "../../../i18n/presentation";
+import type { SupportedLocale } from "../../../i18n/locale";
 import { getApiData } from "../../../api/client";
 import type { AppSession } from "../../../api/types";
 import "./app-access.css";
+import { translateApiError } from "../../../i18n/apiError";
 
 type AppAccessSession = {
   mode: "tty" | "vnc" | "web";
@@ -49,20 +53,21 @@ const error = ref("");
 const access = ref<AppAccessSession | undefined>();
 const terminalHost = ref<HTMLElement | null>(null);
 let cleanupTerminal: (() => void) | undefined;
+const { locale, t } = useI18n();
 
 const mode = computed(() => (window.location.pathname.includes("/vnc") ? "vnc" : window.location.pathname.includes("/web") ? "web" : "tty"));
 const token = computed(() => new URLSearchParams(window.location.search).get("token") || "");
 const title = computed(() => {
   const session = access.value?.session;
   const instance = access.value?.instance;
-  return [instance?.name, session?.title || session?.appId || session?.id].filter(Boolean).join(" / ") || "App session";
+  return [instance?.name, session?.title || session?.appId || session?.id].filter(Boolean).join(" / ") || t("common.appAccess.appSession");
 });
 const accessModeLabel = computed(() => (mode.value === "vnc" ? "VNC" : mode.value === "web" ? "Web" : "TTY"));
 const statusText = computed(() => {
-  if (loading.value) return "connecting";
-  if (error.value) return "unavailable";
-  const expiresAt = access.value?.expiresAt ? new Date(access.value.expiresAt).toLocaleTimeString() : "";
-  return expiresAt ? `link expires ${expiresAt}` : "connected";
+  if (loading.value) return t("common.appAccess.connecting");
+  if (error.value) return t("common.appAccess.unavailable");
+  const expiresAt = access.value?.expiresAt ? formatTime(access.value.expiresAt, locale.value as SupportedLocale) : "";
+  return expiresAt ? t("common.appAccess.linkExpires", { time: expiresAt }) : t("common.appAccess.connected");
 });
 const vncFrameUrl = computed(() => access.value?.vncFramePath || "");
 
@@ -150,7 +155,7 @@ onMounted(async () => {
     }
   } catch (err) {
     loading.value = false;
-    error.value = err instanceof Error ? err.message : String(err);
+    error.value = translateApiError(err, t, t("common.appAccess.unavailable"));
   }
 });
 

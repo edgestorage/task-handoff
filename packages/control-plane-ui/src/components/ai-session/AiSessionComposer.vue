@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
+import { formatBytes } from "../../i18n/presentation";
+import type { SupportedLocale } from "../../i18n/locale";
 import { AppWindow, ArrowUp, Box, Check, CornerDownRight, File, Folder, Hand, Minimize2, Pencil, Plus, Puzzle, ScanSearch, ShieldAlert, ShieldCheck, Square, Target, WandSparkles, X } from "@lucide/vue";
 import { PopoverAnchor } from "reka-ui";
 import type { AiSessionMentionCandidate } from "../../api/types";
@@ -55,6 +58,7 @@ const emit = defineEmits<{
   (event: "steer"): void;
   (event: "command", value: AiSessionCommandInput): void;
 }>();
+const { locale, t } = useI18n();
 
 const draft = computed({
   get: () => props.modelValue,
@@ -73,7 +77,7 @@ const attachments = computed(() => props.attachments || []);
 const mentionBindings = computed(() => props.mentionBindings || []);
 const mentionTrigger = computed(() => props.mentionTrigger || "@");
 const commandTrigger = computed(() => props.commandTrigger || "/");
-const mentions = useAiSessionMentions(() => props.mentionContext);
+const mentions = useAiSessionMentions(() => props.mentionContext, t);
 const activeMentionIndex = ref(0);
 const commandOpen = ref(false);
 const commandQuery = ref("");
@@ -82,10 +86,9 @@ const commandCandidates = computed(() => matchingCommands(commandQuery.value));
 const overlayOpen = computed(() => !props.busy && (mentions.open.value || commandOpen.value));
 const mentionPopoverRadius = ref("20px");
 const mentionKinds = ["plugin", "skill", "file", "directory", "app"] as const;
-const mentionLabels = { plugin: "Plugins", skill: "Skills", file: "Files", directory: "Directories", app: "Apps" } as const;
 const groupedMentionCandidates = computed(() => mentionKinds.map((kind) => ({
   kind,
-  label: mentionLabels[kind],
+  label: t(`sessions.composer.${kind === "plugin" ? "plugins" : kind === "skill" ? "skills" : kind === "file" ? "files" : kind === "directory" ? "directories" : "apps"}`),
   candidates: mentions.candidates.value.filter((candidate) => candidate.kind === kind),
   diagnostics: mentions.diagnostics.value.filter((diagnostic) => diagnostic.category === (kind === "skill" ? "skills" : kind === "plugin" ? "plugins" : kind === "app" ? "apps" : "files")),
 })).filter((group) => group.candidates.length || group.diagnostics.length));
@@ -93,7 +96,7 @@ const hasDraft = computed(() => props.modelValue.trim().length > 0 || attachment
 const actionKind = computed(() => hasDraft.value || !props.canInterrupt ? "send" : "stop");
 const canRun = computed(() => hasDraft.value || (!props.busy && props.canInterrupt));
 const canSteer = computed(() => props.busy && hasDraft.value);
-const actionTitle = computed(() => actionKind.value === "stop" ? "Stop current AI turn" : "Send message");
+const actionTitle = computed(() => actionKind.value === "stop" ? t("sessions.composer.stopTurn") : t("sessions.composer.send"));
 const commandLauncherDisabled = computed(() => Boolean(props.busy || props.modelValue.length || props.mentionContext?.provider !== "codex"));
 const permissionProvider = computed(() => props.provider || props.mentionContext?.provider);
 const storedPermissionMode = useAiSessionPermissionMode(
@@ -107,12 +110,12 @@ const permissionMode = computed<AiSessionPermissionMode>({
     else storedPermissionMode.value = value;
   },
 });
-const permissionOptions = [
-  { value: "ask", label: "Ask for approval", description: "Ask before accessing the internet or editing files outside the workspace.", icon: Hand },
-  { value: "auto-review", label: "Approve for me", description: "Only ask for actions detected as potentially unsafe.", icon: ShieldCheck },
-  { value: "full-access", label: "Full access", description: "Unrestricted internet and file access without approval.", icon: ShieldAlert, danger: true },
-] satisfies Array<{ value: AiSessionPermissionMode; label: string; description: string; icon: typeof Hand; danger?: boolean }>;
-const selectedPermission = computed(() => permissionOptions.find((option) => option.value === permissionMode.value) || permissionOptions[0]);
+const permissionOptions = computed(() => [
+  { value: "ask", label: t("sessions.permission.ask"), description: t("sessions.composer.askDescription"), icon: Hand },
+  { value: "auto-review", label: t("sessions.permission.autoReview"), description: t("sessions.composer.autoReviewDescription"), icon: ShieldCheck },
+  { value: "full-access", label: t("sessions.permission.fullAccess"), description: t("sessions.composer.fullAccessDescription"), icon: ShieldAlert, danger: true },
+] satisfies Array<{ value: AiSessionPermissionMode; label: string; description: string; icon: typeof Hand; danger?: boolean }>);
+const selectedPermission = computed(() => permissionOptions.value.find((option) => option.value === permissionMode.value) || permissionOptions.value[0]);
 
 function resizeInput() {
   const element = textareaElement();
@@ -176,31 +179,31 @@ function validateFiles(files: File[], runtimePathFiles: Set<File>, outsideWorksp
     const mime = file.type || (kind === "image" ? "image/png" : "application/octet-stream");
     const usesRuntimePath = runtimePathFiles.has(file);
     if (kind === "image" && !SUPPORTED_IMAGE_MIME.has(mime)) {
-      attachmentError.value = "仅支持 PNG、JPG、WEBP、GIF、BMP 图片。";
+      attachmentError.value = t("sessions.composer.supportedImages");
       continue;
     }
     if (file.size <= 0) {
-      attachmentError.value = "不能添加空文件。";
+      attachmentError.value = t("sessions.composer.emptyFile");
       continue;
     }
     if (!usesRuntimePath && kind === "image" && file.size > MAX_ATTACHMENT_BYTES) {
-      attachmentError.value = "单张图片不能超过 20MB。";
+      attachmentError.value = t("sessions.composer.imageTooLarge");
       continue;
     }
     if (!usesRuntimePath && kind === "file" && file.size >= MAX_INLINE_FILE_BYTES) {
       attachmentError.value = outsideWorkspaceFiles.has(file)
-        ? "Local Runtime 路径附件必须位于当前 AI session 工作区内；请将文件移入工作区后重试。"
+        ? t("sessions.composer.runtimePathOutside")
         : props.mentionContext?.runtimeType === "local"
-          ? "当前浏览器无法取得本地文件路径；请使用桌面端直接传入路径，或选择小于 500 KiB 的文件。"
-        : "文件过大：文件必须小于 500 KiB。";
+          ? t("sessions.composer.browserPathUnavailable")
+        : t("sessions.composer.fileTooLarge");
       continue;
     }
     if (attachments.value.length + accepted.length >= MAX_ATTACHMENTS) {
-      attachmentError.value = "最多只能添加 6 个附件。";
+      attachmentError.value = t("sessions.composer.tooManyAttachments");
       continue;
     }
     if (!usesRuntimePath && nextBytes + file.size > MAX_TOTAL_ATTACHMENT_BYTES) {
-      attachmentError.value = "单条消息内联附件总大小不能超过 40MB。";
+      attachmentError.value = t("sessions.composer.totalTooLarge");
       continue;
     }
     if (!usesRuntimePath) nextBytes += file.size;
@@ -280,7 +283,7 @@ function readAttachment(file: File, runtimePath?: string): Promise<AiSessionComp
         file,
       });
     });
-    reader.addEventListener("error", () => reject(reader.error || new Error("Failed to read attachment.")));
+    reader.addEventListener("error", () => reject(reader.error || new Error(t("sessions.composer.readFailed"))));
     reader.readAsDataURL(file);
   });
 }
@@ -294,9 +297,7 @@ function removeAttachment(id: string) {
 }
 
 function formatAttachmentSize(size: number) {
-  if (size < 1024) return `${size} B`;
-  if (size < 1024 * 1024) return `${Math.ceil(size / 1024)} KiB`;
-  return `${(size / (1024 * 1024)).toFixed(1)} MiB`;
+  return formatBytes(size, locale.value as SupportedLocale);
 }
 
 function handlePaste(event: ClipboardEvent) {
@@ -532,10 +533,10 @@ watch(() => props.busy, (busy) => {
           <span class="ai-session-composer__file-icon"><File :size="22" /></span>
           <figcaption>
             <strong :title="attachment.name">{{ attachment.name }}</strong>
-            <span>{{ formatAttachmentSize(attachment.size) }}<template v-if="attachment.source.type === 'runtime-path'"> · Local path</template></span>
+            <span>{{ formatAttachmentSize(attachment.size) }}<template v-if="attachment.source.type === 'runtime-path'"> · {{ t("sessions.composer.localPath") }}</template></span>
           </figcaption>
         </template>
-        <button type="button" title="Remove attachment" aria-label="Remove attachment" :disabled="busy" @click="removeAttachment(attachment.id)">
+        <button type="button" :title="t('sessions.composer.removeAttachment')" :aria-label="t('sessions.composer.removeAttachment')" :disabled="busy" @click="removeAttachment(attachment.id)">
           <X :size="14" />
         </button>
       </figure>
@@ -548,7 +549,7 @@ watch(() => props.busy, (busy) => {
             v-model="draft"
             class="ai-session-composer__input"
             :disabled="busy"
-            :placeholder="placeholder || 'Ask for follow-up changes'"
+            :placeholder="placeholder || t('sessions.composer.followUp')"
             rows="3"
             @keydown.down.stop.prevent="moveActiveMention(1)"
             @keydown.up.stop.prevent="moveActiveMention(-1)"
@@ -573,9 +574,9 @@ watch(() => props.busy, (busy) => {
       >
         <div class="ai-session-mention-popover__list" role="listbox">
           <template v-if="commandOpen">
-            <div v-if="!commandCandidates.length" class="ai-session-mention-popover__state">No matches</div>
-            <section v-else class="ai-session-mention-popover__group" role="group" aria-label="Commands">
-              <div class="ai-session-mention-popover__group-label">Commands</div>
+            <div v-if="!commandCandidates.length" class="ai-session-mention-popover__state">{{ t("sessions.composer.noMatches") }}</div>
+            <section v-else class="ai-session-mention-popover__group" role="group" :aria-label="t('sessions.composer.commands')">
+              <div class="ai-session-mention-popover__group-label">{{ t("sessions.composer.commands") }}</div>
               <button
                 v-for="(command, index) in commandCandidates"
                 :key="command.name"
@@ -591,15 +592,15 @@ watch(() => props.busy, (busy) => {
               >
                 <span class="ai-session-mention-popover__icon"><component :is="commandIcon(command)" :size="12" /></span>
                 <span class="ai-session-mention-popover__copy">
-                  <strong>{{ commandTrigger }}{{ command.name }}<template v-if="command.argumentHint"> &lt;{{ command.argumentHint }}&gt;</template></strong>
-                  <span>{{ sessionBusy && command.requiresIdle ? `${command.description} · available when idle` : command.description }}</span>
+                  <strong>{{ commandTrigger }}{{ command.name }}<template v-if="command.argumentHintKey"> &lt;{{ t(command.argumentHintKey) }}&gt;</template></strong>
+                  <span>{{ t(command.descriptionKey) }}<template v-if="sessionBusy && command.requiresIdle"> · {{ t("sessions.composer.availableIdle") }}</template></span>
                 </span>
               </button>
             </section>
           </template>
-          <div v-else-if="mentions.loading.value && !mentions.candidates.value.length" class="ai-session-mention-popover__state">Loading...</div>
+          <div v-else-if="mentions.loading.value && !mentions.candidates.value.length" class="ai-session-mention-popover__state">{{ t("sessions.composer.loading") }}</div>
           <div v-else-if="mentions.error.value && !mentions.candidates.value.length" class="ai-session-mention-popover__state ai-session-mention-popover__state--error">{{ mentions.error.value }}</div>
-          <div v-else-if="!groupedMentionCandidates.length" class="ai-session-mention-popover__state">No matches</div>
+          <div v-else-if="!groupedMentionCandidates.length" class="ai-session-mention-popover__state">{{ t("sessions.composer.noMatches") }}</div>
           <section v-for="group in groupedMentionCandidates" :key="group.kind" class="ai-session-mention-popover__group" role="group" :aria-label="group.label">
             <div class="ai-session-mention-popover__group-label">{{ group.label }}</div>
               <button
@@ -633,8 +634,8 @@ watch(() => props.busy, (busy) => {
         <button
           type="button"
           class="ai-session-composer__tool"
-          title="Commands"
-          aria-label="Open command menu"
+          :title="t('sessions.composer.commands')"
+          :aria-label="t('sessions.composer.openCommands')"
           :disabled="commandLauncherDisabled"
           @click="openCommandMenu"
         >
@@ -647,8 +648,8 @@ watch(() => props.busy, (busy) => {
               class="ai-session-composer__permission-trigger"
               :data-danger="selectedPermission.danger || undefined"
               :disabled="busy || sessionBusy"
-              :aria-label="`Permission mode: ${selectedPermission.label}`"
-              title="Choose permission mode"
+              :aria-label="t('sessions.composer.permissionMode', { mode: selectedPermission.label })"
+              :title="t('sessions.composer.choosePermission')"
             >
               <component :is="selectedPermission.icon" :size="16" />
               <span>{{ selectedPermission.label }}</span>
@@ -677,7 +678,7 @@ watch(() => props.busy, (busy) => {
           v-if="canSteer"
           type="button"
           class="ai-session-composer__tool"
-          title="Steer current AI turn"
+          :title="t('sessions.composer.steerTurn')"
           :disabled="busy"
           @click="emit('steer')"
         >

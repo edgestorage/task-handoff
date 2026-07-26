@@ -9,6 +9,7 @@ import {
 } from "../../api/queries";
 import type { InstanceBoardItem } from "../../api/types";
 import { canShowInstanceAction } from "./useInstanceStatus";
+import type { Translate } from "../../i18n/status.ts";
 
 export type InstanceAction = "start" | "stop" | "restart" | "retry-image" | "delete";
 export type ConfigSyncDirection = "import" | "export";
@@ -19,9 +20,10 @@ type UseInstanceActionsInput = {
   errorText: (error: unknown) => string;
   notifyError?: (message: string) => void;
   refresh: () => Promise<void>;
+  translate: Translate;
 };
 
-export function useInstanceActions({ clearActiveInstance, closeInstanceMenu, errorText, notifyError, refresh }: UseInstanceActionsInput) {
+export function useInstanceActions({ clearActiveInstance, closeInstanceMenu, errorText, notifyError, refresh, translate: t }: UseInstanceActionsInput) {
   const activeInstanceAction = ref<InstanceAction | "">("");
   const activeInstanceActionId = ref("");
   const activeConfigSyncKey = ref("");
@@ -36,7 +38,7 @@ export function useInstanceActions({ clearActiveInstance, closeInstanceMenu, err
     try {
       await startControlledInstance(id);
     } catch (error) {
-      reportActionError(`Instance created, but failed to start: ${errorText(error)}`);
+      reportActionError(t("instances.create.feedback.createdButStartFailed", { error: errorText(error) }));
       await refresh();
     } finally {
       activeInstanceAction.value = "";
@@ -48,7 +50,7 @@ export function useInstanceActions({ clearActiveInstance, closeInstanceMenu, err
     if (isInstanceActionBusy(instance) || !canShowInstanceAction(instance, action)) {
       return;
     }
-    if (action === "delete" && !window.confirm(`Delete ${instance.name}? This removes the instance record and stops its runtime container if it is running.`)) {
+    if (action === "delete" && !window.confirm(t("instances.actions.deleteConfirm", { name: instance.name }))) {
       return;
     }
     activeInstanceAction.value = action;
@@ -116,12 +118,21 @@ export function useInstanceActions({ clearActiveInstance, closeInstanceMenu, err
   }
 
   function configSyncLabel(instance: InstanceBoardItem, direction: ConfigSyncDirection, preset: string, label: string) {
-    return activeConfigSyncKey.value === configSyncKey(instance, direction, preset) ? `${direction === "import" ? "Importing" : "Exporting"} ${label}` : label;
+    return activeConfigSyncKey.value === configSyncKey(instance, direction, preset)
+      ? t(direction === "import" ? "instances.actions.importing" : "instances.actions.exporting", { name: label })
+      : label;
   }
 
   function activeActionLabel(instance: InstanceBoardItem, action: InstanceAction, idleLabel: string) {
     if (activeInstanceActionId.value !== instance.id || activeInstanceAction.value !== action) return idleLabel;
-    return action === "retry-image" ? "Retrying image" : `${idleLabel}ing`;
+    const key: Record<InstanceAction, string> = {
+      start: "instances.actions.starting",
+      stop: "instances.actions.stopping",
+      restart: "instances.actions.restarting",
+      "retry-image": "instances.actions.retryingImage",
+      delete: "instances.actions.deleting",
+    };
+    return t(key[action]);
   }
 
   return {

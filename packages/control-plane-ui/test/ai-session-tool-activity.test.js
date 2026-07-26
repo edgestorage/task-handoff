@@ -22,11 +22,11 @@ test("tool activity uses the authoritative API projection", () => {
 
 test("tool activity projects the current execution into one line", () => {
   assert.match(activity, /`\$\{props\.currentTool\.name\} · \$\{props\.currentTool\.inputPreview\}`/);
-  assert.match(activity, /"Thinking\.\.\."/);
-  assert.match(activity, /`Thinking\.\.\. · \$\{count\.value\} \$\{count\.value === 1 \? "tool" : "tools"\} completed`/);
-  assert.match(activity, /"Waiting for approval\.\.\."/);
-  assert.match(activity, /`Waiting for approval · \$\{props\.summary\}`/);
-  assert.match(activity, /"Responding\.\.\."/);
+  assert.match(activity, /t\("sessions\.activity\.thinking"\)/);
+  assert.match(activity, /t\("sessions\.activity\.thinkingTools", \{ count: count\.value \}\)/);
+  assert.match(activity, /t\("sessions\.activity\.waitingApproval"\)/);
+  assert.match(activity, /`\$\{t\("sessions\.status\.waitingApproval"\)\} · \$\{props\.summary\}`/);
+  assert.match(activity, /t\("sessions\.activity\.responding"\)/);
   assert.match(activity, /text-overflow: ellipsis/);
   assert.match(activity, /white-space: nowrap/);
   assert.match(activity, /ai-session-tool-activity-detail \{[\s\S]*?font-size: 14px/);
@@ -100,13 +100,13 @@ test("context compaction uses the transient activity lane instead of a persisten
 });
 
 test("detail surfaces omit the legacy running response placeholder", () => {
-  assert.match(sessions, /export function displayAiSessionResponse[\s\S]*?displayAiSessionContent\(session, promptIndex, false\)/);
+  assert.match(sessions, /export function displayAiSessionResponse[\s\S]*?displayAiSessionContent\(session, promptIndex, false, t\)/);
   assert.match(result, /v-show="displayContent"/);
   assert.match(result, /const displayContent = computed\(\(\) => streamingContent\.value \|\| props\.responseContent\)/);
   assert.match(result, /props\.isLatest[\s\S]*?streamingMessages\.activeMessage\(props\.instanceId, props\.session\.id\)/);
-  assert.match(panel, /:response-content="displayAiSessionResponse\(selectedSession, promptIndexFor\(selectedSession\)\)"/);
-  assert.match(floatingDock, /:response-content="displayAiSessionResponse\(card\.session, promptIndex\)"/);
-  assert.match(sessions, /includeProgress \? aiSessionProgressText\(session\) : ""/);
+  assert.match(panel, /:response-content="displayAiSessionResponse\(selectedSession, promptIndexFor\(selectedSession\), t\)"/);
+  assert.match(floatingDock, /:response-content="displayAiSessionResponse\(card\.session, promptIndex, t\)"/);
+  assert.match(sessions, /includeProgress \? aiSessionProgressText\(session, t\) : ""/);
 });
 
 test("active tool activity sits directly below the assistant response", () => {

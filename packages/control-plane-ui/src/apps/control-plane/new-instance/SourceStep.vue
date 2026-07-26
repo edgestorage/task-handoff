@@ -1,25 +1,25 @@
 <template>
   <section class="wizard-section">
     <div class="section-head">
-      <span>Workspace</span>
-      <button v-if="sourceDraft.mode === 'project'" type="button" @click="$emit('update:newProjectOpen', !newProjectOpen)">{{ newProjectOpen ? "Use existing" : "Add repository" }}</button>
+      <span>{{ t("instances.create.workspace") }}</span>
+      <button v-if="sourceDraft.mode === 'project'" type="button" @click="$emit('update:newProjectOpen', !newProjectOpen)">{{ newProjectOpen ? t("instances.create.useExisting") : t("instances.create.addRepository") }}</button>
     </div>
 
-    <div class="choice-grid" aria-label="Workspace source">
+    <div class="choice-grid" :aria-label="t('instances.create.workspaceSource')">
       <button type="button" class="choice-tile" :class="{ active: sourceDraft.mode === 'project' }" @click="$emit('select-source-mode', 'project')">
         <GitBranch :size="17" />
-        <span>Repository</span>
+        <span>{{ t("instances.create.repository") }}</span>
       </button>
       <button type="button" class="choice-tile" :class="{ active: sourceDraft.mode === 'local-folder' }" @click="$emit('select-source-mode', 'local-folder')">
         <Folder :size="17" />
-        <span>Local folder</span>
+        <span>{{ t("instances.create.localFolder") }}</span>
       </button>
     </div>
 
     <div v-if="sourceDraft.mode === 'project' && !newProjectOpen" class="step-fields">
       <label>
-        <span>Repository</span>
-        <ControlPlaneSelect v-model="sourceDraft.projectId" placeholder="Select project">
+        <span>{{ t("instances.create.repository") }}</span>
+        <ControlPlaneSelect v-model="sourceDraft.projectId" :placeholder="t('instances.create.selectProject')">
           <ControlPlaneSelectItem v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</ControlPlaneSelectItem>
         </ControlPlaneSelect>
       </label>
@@ -27,38 +27,39 @@
 
     <div v-else-if="sourceDraft.mode === 'project'" class="step-fields">
       <label>
-        <span>Name</span>
-        <ControlPlaneInput v-model="newProject.name" placeholder="Repository name" />
+        <span>{{ t("instances.create.name") }}</span>
+        <ControlPlaneInput v-model="newProject.name" :placeholder="t('instances.create.repositoryName')" />
       </label>
       <label>
-        <span>Git URL</span>
+        <span>{{ t("instances.create.gitUrl") }}</span>
+        <!-- i18n-audit-allow-next-line code-token: example Git remote URL -->
         <ControlPlaneInput v-model="newProject.url" placeholder="https://github.com/org/repo" />
       </label>
       <Button variant="outline" size="sm" :disabled="!canCreateProject || creatingProject" @click="$emit('create-project')">
         <Plus :size="15" />
-        <span>{{ creatingProject ? "Creating" : "Create repository" }}</span>
+        <span>{{ creatingProject ? t("instances.create.creating") : t("instances.create.createRepository") }}</span>
       </Button>
     </div>
 
     <div v-else class="step-fields">
       <label>
-        <span>Node</span>
-        <ControlPlaneSelect v-model="sourceDraft.localNodeId" placeholder="Select node">
+        <span>{{ t("instances.create.node") }}</span>
+        <ControlPlaneSelect v-model="sourceDraft.localNodeId" :placeholder="t('instances.create.selectNode')">
           <ControlPlaneSelectItem v-for="node in nodes" :key="node.id" :value="node.id">{{ node.name }}</ControlPlaneSelectItem>
         </ControlPlaneSelect>
       </label>
       <label>
-        <span>Node folder</span>
-        <ControlPlaneSelect :model-value="localFolderSelectValue" placeholder="Select local folder" @update:model-value="$emit('select-local-folder', $event)">
+        <span>{{ t("instances.create.nodeFolder") }}</span>
+        <ControlPlaneSelect :model-value="localFolderSelectValue" :placeholder="t('instances.create.selectLocalFolder')" @update:model-value="$emit('select-local-folder', $event)">
           <ControlPlaneSelectItem v-for="folder in localFolders" :key="folder.id" :value="folder.id">{{ folder.name }} · {{ folder.path }}</ControlPlaneSelectItem>
-          <ControlPlaneSelectItem :value="chooseFolderValue">Choose folder...</ControlPlaneSelectItem>
+          <ControlPlaneSelectItem :value="chooseFolderValue">{{ t("instances.create.chooseFolder") }}</ControlPlaneSelectItem>
         </ControlPlaneSelect>
       </label>
       <span v-if="localPathOpen || sourceDraft.localPath" class="field-with-action">
         <ControlPlaneInput :model-value="sourceDraft.localPath" :placeholder="localPathPlaceholder" @update:model-value="$emit('set-local-folder-path', $event)" />
         <Button v-if="canBrowseProjectFolder" variant="outline" size="sm" :disabled="creatingLocalFolder || !sourceDraft.localNodeId" @click="$emit('choose-project-folder-path')">
           <FolderOpen :size="14" />
-          <span>{{ creatingLocalFolder ? "Choosing" : "Browse" }}</span>
+          <span>{{ creatingLocalFolder ? t("instances.create.choosing") : t("instances.create.browse") }}</span>
         </Button>
       </span>
       <NodeFolderTree
@@ -78,6 +79,7 @@
 
 <script setup lang="ts">
 import { Folder, FolderOpen, GitBranch, Plus } from "@lucide/vue";
+import { useI18n } from "vue-i18n";
 import type { Node, NodeLocalFolder, Project } from "../../../api/types";
 import { Button } from "../../../components/ui/button";
 import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
@@ -86,6 +88,8 @@ import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
 import NodeFolderTree from "./NodeFolderTree.vue";
 import type { NodeFolderTreeNode } from "./nodeFolderTree";
 import type { NewProjectDraft, SourceDraft, SourceMode } from "./newInstanceTypes";
+
+const { t } = useI18n();
 
 const props = defineProps<{
   canBrowseProjectFolder: boolean;

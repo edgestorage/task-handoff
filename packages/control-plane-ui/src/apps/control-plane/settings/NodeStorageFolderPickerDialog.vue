@@ -2,14 +2,14 @@
   <Dialog :open="open" @update:open="$emit('update:open', $event)">
     <DialogContent class="node-storage-folder-picker-dialog">
       <DialogHeader>
-        <DialogTitle>Add local folder · {{ nodeName }}</DialogTitle>
-        <DialogDescription>Select a directory exposed by the target node.</DialogDescription>
+        <DialogTitle>{{ t("settings.nodeDialogs.addLocalFolder", { name: nodeName }) }}</DialogTitle>
+        <DialogDescription>{{ t("settings.nodeDialogs.selectDirectory") }}</DialogDescription>
       </DialogHeader>
 
       <div class="node-storage-folder-picker-body">
         <label>
-          <span>Selected path</span>
-          <ControlPlaneInput :model-value="selectedPath" placeholder="Select a folder below" readonly />
+          <span>{{ t("settings.nodeDialogs.selectedPath") }}</span>
+          <ControlPlaneInput :model-value="selectedPath" :placeholder="t('settings.nodeDialogs.selectFolderBelow')" readonly />
         </label>
         <NodeFolderTree
           :error="error"
@@ -23,10 +23,10 @@
       </div>
 
       <DialogFooter>
-        <Button type="button" variant="outline" :disabled="submitting" @click="$emit('update:open', false)">Cancel</Button>
+        <Button type="button" variant="outline" :disabled="submitting" @click="$emit('update:open', false)">{{ t("settings.nodeDialogs.cancel") }}</Button>
         <Button type="button" :disabled="!canConfirm" @click="$emit('confirm')">
           <FolderPlus :size="15" />
-          <span>{{ submitting ? "Adding" : "Add folder" }}</span>
+          <span>{{ submitting ? t("settings.nodeDialogs.adding") : t("settings.nodeDialogs.addFolder") }}</span>
         </Button>
       </DialogFooter>
     </DialogContent>
@@ -35,11 +35,14 @@
 
 <script setup lang="ts">
 import { FolderPlus } from "@lucide/vue";
+import { useI18n } from "vue-i18n";
 import { Button } from "../../../components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
 import NodeFolderTree from "../new-instance/NodeFolderTree.vue";
 import type { NodeFolderTreeNode } from "../new-instance/nodeFolderTree";
+
+const { t } = useI18n();
 
 defineProps<{
   canConfirm: boolean;

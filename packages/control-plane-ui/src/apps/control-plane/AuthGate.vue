@@ -1,29 +1,29 @@
 <template>
   <div v-if="authSession.isLoading.value" class="auth-shell">
     <div class="auth-panel compact">
-      <span class="auth-kicker">Control Plane</span>
-      <h1>Loading</h1>
+      <span class="auth-kicker">{{ t("auth.controlPlane") }}</span>
+      <h1>{{ t("auth.loading") }}</h1>
     </div>
   </div>
   <slot v-else-if="authSession.data.value?.authenticated" />
   <div v-else class="auth-shell">
     <form class="auth-panel" @submit.prevent="submit">
-      <span class="auth-kicker">Control Plane</span>
-      <h1>{{ authSession.data.value?.requiresBootstrap ? "Create admin" : "Sign in" }}</h1>
-      <p>{{ authSession.data.value?.requiresBootstrap ? "Set the first administrator for this Web control plane." : "Use your control plane account to continue." }}</p>
+      <span class="auth-kicker">{{ t("auth.controlPlane") }}</span>
+      <h1>{{ authSession.data.value?.requiresBootstrap ? t("auth.createAdmin") : t("auth.signIn") }}</h1>
+      <p>{{ authSession.data.value?.requiresBootstrap ? t("auth.bootstrapDescription") : t("auth.signInDescription") }}</p>
 
       <label>
-        <span>Username</span>
+        <span>{{ t("auth.username") }}</span>
         <Input v-model="username" autocomplete="username" :disabled="busy" />
       </label>
       <label>
-        <span>Password</span>
+        <span>{{ t("auth.password") }}</span>
         <Input v-model="password" type="password" :autocomplete="authSession.data.value?.requiresBootstrap ? 'new-password' : 'current-password'" :disabled="busy" />
       </label>
 
       <p v-if="errorText" class="auth-error">{{ errorText }}</p>
       <Button class="auth-submit" type="submit" :disabled="busy || !username.trim() || password.length < 1">
-        {{ busy ? "Working" : authSession.data.value?.requiresBootstrap ? "Create admin" : "Sign in" }}
+        {{ busy ? t("auth.working") : authSession.data.value?.requiresBootstrap ? t("auth.createAdmin") : t("auth.signIn") }}
       </Button>
     </form>
   </div>
@@ -31,24 +31,21 @@
 
 <script setup lang="ts">
 import { computed, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { useQueryClient } from "@tanstack/vue-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ApiError } from "@/api/client";
 import { bootstrapAdmin, loginControlPlane, useAuthSessionQuery } from "@/api/queries";
+import { translateApiError } from "@/i18n/apiError";
 
 const queryClient = useQueryClient();
+const { t } = useI18n();
 const authSession = useAuthSessionQuery();
 const username = ref("");
 const password = ref("");
 const errorText = ref("");
 const submitting = ref(false);
 const busy = computed(() => submitting.value || authSession.isFetching.value);
-
-function errorMessage(error: unknown) {
-  if (error instanceof ApiError) return error.message;
-  return error instanceof Error ? error.message : String(error);
-}
 
 async function submit() {
   if (busy.value) return;
@@ -63,7 +60,7 @@ async function submit() {
     password.value = "";
     await queryClient.invalidateQueries({ queryKey: ["auth-session"] });
   } catch (error) {
-    errorText.value = errorMessage(error);
+    errorText.value = translateApiError(error, t);
   } finally {
     submitting.value = false;
   }

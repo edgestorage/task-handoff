@@ -5,8 +5,10 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { nodeDetailActionState } from "../src/apps/control-plane/settings/nodeDetailActions.ts";
+import { createControlPlaneI18nForTest } from "../src/i18n/testing.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const t = createControlPlaneI18nForTest("en-US").global.t;
 
 function state(overrides = {}) {
   return nodeDetailActionState({
@@ -17,7 +19,7 @@ function state(overrides = {}) {
     deletingNodeId: "",
     renamingNodeId: "",
     ...overrides,
-  });
+  }, t);
 }
 
 test("remote node detail exposes delete while builtin node detail omits it", () => {
@@ -75,9 +77,9 @@ test("node detail actions use icon, title, and description menu items", () => {
   const source = fs.readFileSync(path.join(root, "src/apps/control-plane/settings/NodeDetailPanel.vue"), "utf8");
   const menu = source.match(/<DropdownMenuContent class="node-detail-action-menu"[\s\S]*?<\/DropdownMenuContent>/)?.[0] || "";
 
-  assert.match(menu, /Change this node's display name/);
-  assert.match(menu, /Connect this node to another control plane/);
-  assert.match(menu, /Remove this node from the control plane/);
+  assert.match(menu, /settings\.nodeDetail\.renameDescription/);
+  assert.match(menu, /settings\.nodeDetail\.pairingDescription/);
+  assert.match(menu, /settings\.nodeDetail\.removeDescription/);
   assert.equal((menu.match(/<strong>/g) || []).length, 3);
   assert.equal((menu.match(/<small>/g) || []).length, 3);
 });

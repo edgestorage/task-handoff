@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/vue-query";
 import { bindAiSessionTrigger, unbindAiSessionTrigger, useControlPlaneTriggersQuery } from "../../../api/queries";
 import type { InstanceBoardItem, TriggerConfig, TriggerDeployment, TriggerRuntimeState } from "../../../api/types";
 import type { AiBoardCard } from "./aiBoardTypes";
+import type { Translate } from "../../../i18n/status.ts";
 
 type TriggerMutationResult = {
   config?: TriggerConfig;
@@ -12,7 +13,7 @@ type TriggerMutationResult = {
 
 type InstanceTriggerSnapshot = NonNullable<InstanceBoardItem["triggers"]>;
 
-export function useAiBoardTriggers() {
+export function useAiBoardTriggers(t: Translate) {
   const queryClient = useQueryClient();
   const triggerBusyKey = ref("");
   const triggers = useControlPlaneTriggersQuery();
@@ -32,7 +33,7 @@ export function useAiBoardTriggers() {
 
   function triggerButtonTitle(card: AiBoardCard) {
     const count = boundTriggers(card).length;
-    return count ? `${count} triggers bound` : "Add trigger";
+    return count ? t("sessions.actions.triggersBound", { count }) : t("sessions.actions.addTrigger");
   }
 
   async function toggleTrigger(card: AiBoardCard, configHash: string) {
@@ -152,4 +153,3 @@ function emptyTriggerSnapshot(): InstanceTriggerSnapshot {
     updatedAt: new Date().toISOString(),
   };
 }
-

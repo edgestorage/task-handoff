@@ -31,9 +31,9 @@ test("ai session board cards show workspace context unless paths already group t
   assert.match(dock, /class="ai-board-floating-secondary-line"[\s\S]*aiSessionAppDisplayName[\s\S]*aria-hidden="true">·<[\s\S]*class="ai-board-floating-workspace"/);
   assert.match(dock, /aiSessionBasename\(card\.session\.cwd\)/);
   assert.match(card, /<TooltipTrigger as-child>\s*<b>/);
-  assert.match(card, /<TooltipContent[^>]*>\{\{ card\.session\.cwd \|\| "Unknown path" \}\}<\/TooltipContent>/);
+  assert.match(card, /<TooltipContent[^>]*>\{\{ card\.session\.cwd \|\| t\("sessions\.board\.unknownPath"\) \}\}<\/TooltipContent>/);
   assert.match(dock, /<TooltipTrigger as-child>\s*<b>/);
-  assert.match(dock, /<TooltipContent[^>]*>\{\{ card\.session\.cwd \|\| "Unknown path" \}\}<\/TooltipContent>/);
+  assert.match(dock, /<TooltipContent[^>]*>\{\{ card\.session\.cwd \|\| t\("sessions\.board\.unknownPath"\) \}\}<\/TooltipContent>/);
   assert.match(board, /:global\(\.ai-session-path-tooltip\)\s*\{[^}]*background: var\(--surface-overlay\) !important;[^}]*font-size: 11px;/s);
   assert.match(card, /\.ai-board-workspace b\s*\{[^}]*color: inherit;[^}]*font-weight: inherit;/s);
   assert.match(dock, /\.ai-board-floating-workspace b\s*\{[^}]*color: inherit;[^}]*font-weight: inherit;/s);
@@ -66,5 +66,5 @@ test("waiting approval actions float at the bottom left independently from card 
 });
 
 test("ai session board card previews do not open an expanded overlay", () => {
-  assert.doesNotMatch(card, /expandedKind|data-ai-preview-trigger|handlePreviewClick|展开用户消息|展开 AI 进展|cursor: zoom-in/);
+  assert.doesNotMatch(card, /expandedKind|data-ai-preview-trigger|handlePreviewClick|cursor: zoom-in/);
 });

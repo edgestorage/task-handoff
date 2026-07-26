@@ -1,5 +1,5 @@
 <template>
-  <Select v-model="model" :disabled="disabled">
+  <Select :key="locale" v-model="model" :disabled="disabled">
     <SelectTrigger :class="['control-plane-select', triggerClass]" :disabled="disabled">
       <SelectValue :placeholder="placeholder" />
     </SelectTrigger>
@@ -11,6 +11,7 @@
 
 <script setup lang="ts">
 import type { HTMLAttributes } from "vue";
+import { useI18n } from "vue-i18n";
 import { Select, SelectContent, SelectTrigger, SelectValue } from "../../../components/ui/select";
 
 defineProps<{
@@ -20,6 +21,7 @@ defineProps<{
 }>();
 
 const model = defineModel<string>({ default: "" });
+const { locale } = useI18n();
 </script>
 
 <style scoped>

@@ -3,8 +3,7 @@ import type { Node, NodeRuntime } from "../../../api/types";
 export type DockerRuntimeCheckState = "idle" | "checking" | "online" | "offline" | "error";
 
 export type DockerInstallGuidance = {
-  label: string;
-  message: string;
+  kind: "windows" | "mac" | "linux" | "generic";
   url: string;
 };
 
@@ -18,28 +17,24 @@ export function nodePlatform(node?: Node) {
 export function dockerInstallGuidance(platform: string): DockerInstallGuidance {
   if (platform === "win32") {
     return {
-      label: "Install Docker Desktop",
-      message: "Install Docker Desktop on the selected Windows node, start it, then retry the check.",
+      kind: "windows",
       url: "https://docs.docker.com/desktop/setup/install/windows-install/",
     };
   }
   if (platform === "darwin") {
     return {
-      label: "Install OrbStack",
-      message: "Install and start OrbStack on the selected macOS node, then retry the check.",
+      kind: "mac",
       url: "https://orbstack.dev/download",
     };
   }
   if (platform === "linux") {
     return {
-      label: "Open Docker Engine installation guide",
-      message: "Install Docker Engine using Docker's official instructions for the selected Linux distribution, start the daemon, then retry the check.",
+      kind: "linux",
       url: "https://docs.docker.com/engine/install/",
     };
   }
   return {
-    label: "Open Docker installation guide",
-    message: "Install and start Docker on the selected node, then retry the check.",
+    kind: "generic",
     url: "https://docs.docker.com/engine/install/",
   };
 }

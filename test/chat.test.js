@@ -2897,6 +2897,16 @@ test("codex app server bridge publishes sub-agent lifecycle independently from t
   assert.equal(session.subAgents[0].activity, "interacted");
   assert.equal(session.toolCallsSinceLastMessage, 1);
 
+  fake.emit("event", {
+    type: "turn-completed",
+    threadId: "thread_child",
+    turnId: "turn_child",
+    status: "completed",
+  });
+  session = registry.list()[0];
+  assert.equal(session.subAgents[0].status, "completed");
+  assert.equal(session.subAgents[0].path, "agent-a");
+
   fake.emit("event", codexNotification("item/completed", {
     threadId: "thread_parent",
     item: {
@@ -2914,6 +2924,88 @@ test("codex app server bridge publishes sub-agent lifecycle independently from t
 
   fake.emit("event", { type: "agent-message-completed", threadId: "thread_parent", turnId: "turn_parent", text: "Main response" });
   assert.equal(registry.list()[0].subAgents[0].status, "completed");
+});
+
+test("codex app server bridge reconciles out-of-order child lifecycle with parent sub-agent activity", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-sub-agent-order-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  class FakeCodexAppServerClient extends EventEmitter {
+    async start() {}
+    async listLoadedThreadIds() { return ["thread_parent"]; }
+    async readThread() {
+      return { id: "thread_parent", status: { type: "active", activeFlags: [] }, turns: [] };
+    }
+    stop() {}
+  }
+
+  const fake = new FakeCodexAppServerClient();
+  const bridge = new CodexAppServerSessionBridge(registry, fake);
+  await bridge.sync();
+
+  fake.emit("event", {
+    type: "turn-completed",
+    threadId: "thread_child",
+    turnId: "turn_child_1",
+    status: "completed",
+  });
+  fake.emit("event", codexNotification("item/completed", {
+    threadId: "thread_parent",
+    turnId: "turn_parent",
+    item: { type: "subAgentActivity", id: "spawn-1", kind: "started", agentThreadId: "thread_child", agentPath: "/root/child" },
+  }));
+  let parent = registry.getByProviderSessionId("codex", "thread_parent");
+  assert.equal(parent.subAgents[0].status, "completed");
+
+  fake.emit("event", { type: "turn-started", threadId: "thread_child", turnId: "turn_child_2" });
+  parent = registry.getByProviderSessionId("codex", "thread_parent");
+  assert.equal(parent.subAgents[0].status, "running");
+
+  fake.emit("event", {
+    type: "turn-completed",
+    threadId: "thread_child",
+    turnId: "turn_child_2",
+    status: "failed",
+    error: "child failed",
+  });
+  parent = registry.getByProviderSessionId("codex", "thread_parent");
+  assert.equal(parent.subAgents[0].status, "errored");
+  assert.equal(parent.subAgents[0].message, "child failed");
+});
+
+test("codex app server bridge restores child completion from thread snapshots", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-sub-agent-snapshot-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  class FakeCodexAppServerClient extends EventEmitter {
+    async start() {}
+    async listLoadedThreadIds() { return ["thread_child", "thread_parent"]; }
+    async readThread(threadId) {
+      if (threadId === "thread_child") {
+        return {
+          id: threadId,
+          status: { type: "idle" },
+          turns: [{ id: "turn_child", status: "completed", items: [] }],
+        };
+      }
+      return {
+        id: threadId,
+        status: { type: "active", activeFlags: [] },
+        turns: [{
+          id: "turn_parent",
+          status: "inProgress",
+          items: [{ type: "subAgentActivity", id: "message-1", kind: "interacted", agentThreadId: "thread_child", agentPath: "/root/child" }],
+        }],
+      };
+    }
+    stop() {}
+  }
+
+  const bridge = new CodexAppServerSessionBridge(registry, new FakeCodexAppServerClient());
+  await bridge.sync();
+
+  const parent = registry.getByProviderSessionId("codex", "thread_parent");
+  assert.equal(parent.subAgents[0].status, "completed");
+  assert.equal(parent.subAgents[0].activity, "interacted");
+  assert.equal(parent.subAgents[0].path, "/root/child");
 });
 
 test("codex app server bridge repeated snapshots keep completed turns stable", async () => {

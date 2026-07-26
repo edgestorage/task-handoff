@@ -36,7 +36,7 @@
     />
 
     <section v-if="session.queue?.items.length" class="ai-session-detail-queue">
-      <span>Queue · {{ session.queue.pendingCount }}</span>
+      <span>{{ t("sessions.activity.queue", { count: session.queue.pendingCount }) }}</span>
       <div class="ai-session-detail-queue-list">
         <article
           v-for="item in session.queue.items"
@@ -47,9 +47,9 @@
           <p>{{ item.message }}</p>
           <small v-if="item.error">{{ item.error }}</small>
           <div>
-            <button type="button" :disabled="busy || !canInterrupt" @click="$emit('steerQueuedMessage', item.id)">Steer</button>
-            <button v-if="item.status === 'failed'" type="button" :disabled="busy" @click="$emit('retryQueuedMessage', item.id)">Retry</button>
-            <button type="button" :disabled="busy" @click="$emit('removeQueuedMessage', item.id)">Remove</button>
+            <button type="button" :disabled="busy || !canInterrupt" @click="$emit('steerQueuedMessage', item.id)">{{ t("sessions.activity.steer") }}</button>
+            <button v-if="item.status === 'failed'" type="button" :disabled="busy" @click="$emit('retryQueuedMessage', item.id)">{{ t("sessions.activity.retry") }}</button>
+            <button type="button" :disabled="busy" @click="$emit('removeQueuedMessage', item.id)">{{ t("sessions.activity.remove") }}</button>
           </div>
         </article>
       </div>
@@ -58,15 +58,15 @@
     <div v-if="canResolveApproval" class="ai-session-detail-approval">
       <button type="button" :disabled="busy" @click="$emit('resolveApproval', 'allow')">
         <Check :size="14" />
-        <span>Allow</span>
+        <span>{{ t("sessions.actions.allow") }}</span>
       </button>
       <button type="button" :disabled="busy" @click="$emit('resolveApproval', 'skip')">
         <Ban :size="14" />
-        <span>Skip</span>
+        <span>{{ t("sessions.actions.skip") }}</span>
       </button>
       <button type="button" :disabled="busy" @click="$emit('resolveApproval', 'deny')">
         <X :size="14" />
-        <span>Deny</span>
+        <span>{{ t("sessions.actions.deny") }}</span>
       </button>
     </div>
   </div>
@@ -75,11 +75,14 @@
 <script setup lang="ts">
 import { Ban, Check, X } from "@lucide/vue";
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 import type { AiSessionSummary } from "../../api/types";
 import { useStreamingMessagesStore } from "../../apps/control-plane/useStreamingMessagesStore";
 import AiSessionStreamingMarkdown from "./AiSessionStreamingMarkdown.vue";
 import AiSessionSubAgents from "./AiSessionSubAgents.vue";
 import AiSessionToolActivity from "./AiSessionToolActivity.vue";
+
+const { t } = useI18n();
 
 const props = withDefaults(defineProps<{
   busy?: boolean;

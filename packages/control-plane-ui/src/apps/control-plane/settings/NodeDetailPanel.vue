@@ -18,11 +18,11 @@
                 </RekaTooltipTrigger>
                 <TooltipContent class="node-diagnostic-tooltip" align="start" side="bottom">
                   <div class="node-diagnostic-tooltip-grid">
-                    <span><b>Protocol</b><em>{{ status.protocolLabel(selectedNode.id) }}</em></span>
-                    <span><b>Build</b><em>{{ status.buildLabel(selectedNode.id) }}</em></span>
-                    <span><b>Package</b><em>{{ status.packageLabel(selectedNode.id) }}</em></span>
-                    <span v-if="status.build(selectedNode.id)?.imageRef"><b>Image</b><em>{{ status.build(selectedNode.id)?.imageRef }}</em></span>
-                    <span v-if="status.build(selectedNode.id)?.builtAt"><b>Built</b><em>{{ status.build(selectedNode.id)?.builtAt }}</em></span>
+                    <span><b>{{ t("settings.nodeDetail.protocol") }}</b><em>{{ status.protocolLabel(selectedNode.id) }}</em></span>
+                    <span><b>{{ t("settings.nodeDetail.build") }}</b><em>{{ status.buildLabel(selectedNode.id) }}</em></span>
+                    <span><b>{{ t("settings.nodeDetail.package") }}</b><em>{{ status.packageLabel(selectedNode.id) }}</em></span>
+                    <span v-if="status.build(selectedNode.id)?.imageRef"><b>{{ t("settings.nodeDetail.image") }}</b><em>{{ status.build(selectedNode.id)?.imageRef }}</em></span>
+                    <span v-if="status.build(selectedNode.id)?.builtAt"><b>{{ t("settings.nodeDetail.built") }}</b><em>{{ status.build(selectedNode.id)?.builtAt }}</em></span>
                   </div>
                 </TooltipContent>
               </Tooltip>
@@ -30,7 +30,7 @@
             <div class="node-detail-meta">
               <code v-if="nodeEndpointDisplay(selectedNode.endpoint)" :title="nodeEndpointDisplay(selectedNode.endpoint)">{{ nodeEndpointDisplay(selectedNode.endpoint) }}</code>
               <span v-if="nodeEndpointDisplay(selectedNode.endpoint)" aria-hidden="true">·</span>
-              <span class="node-connection-mode">{{ selectedNode.connectionMode }}</span>
+              <span class="node-connection-mode">{{ localizedStatus(nodeConnectionModeKeys, selectedNode.connectionMode) }}</span>
             </div>
           </div>
           <div class="node-detail-header-actions">
@@ -55,14 +55,14 @@
                   <Pencil :size="14" />
                   <span>
                     <strong>{{ headerActionState.rename.label }}</strong>
-                    <small>Change this node's display name</small>
+                    <small>{{ t("settings.nodeDetail.renameDescription") }}</small>
                   </span>
                 </DropdownMenuItem>
                 <DropdownMenuItem class="node-detail-action-item" :disabled="headerActionState.pairingInvite.disabled" @select="actions.createPairingInviteForNode(selectedNode.id)">
                   <KeyRound :size="14" />
                   <span>
                     <strong>{{ headerActionState.pairingInvite.label }}</strong>
-                    <small>Connect this node to another control plane</small>
+                    <small>{{ t("settings.nodeDetail.pairingDescription") }}</small>
                   </span>
                 </DropdownMenuItem>
                 <template v-if="headerActionState.canDelete">
@@ -71,7 +71,7 @@
                     <Trash2 :size="14" />
                     <span>
                       <strong>{{ headerActionState.remove.label }}</strong>
-                      <small>Remove this node from the control plane</small>
+                      <small>{{ t("settings.nodeDetail.removeDescription") }}</small>
                     </span>
                   </DropdownMenuItem>
                 </template>
@@ -81,7 +81,7 @@
         </div>
 
         <Tabs v-model="activeTab" class="node-detail-tabs">
-          <TabsList class="node-detail-tab-list" aria-label="Node detail sections">
+          <TabsList class="node-detail-tab-list" :aria-label="t('settings.nodeDetail.sections')">
             <TabsTrigger v-for="tab in tabs" :key="tab.value" class="node-detail-tab-trigger" :value="tab.value">
               <component :is="tab.icon" :size="14" />
               <span>{{ tab.label }}</span>
@@ -91,79 +91,82 @@
           <TabsContent class="node-detail-tab-content" value="overview">
             <div class="node-metrics">
               <div>
-                <span>Runtimes</span>
+                <span>{{ t("settings.nodeDetail.runtimes") }}</span>
                 <strong>{{ resources.runtimes.length }}</strong>
               </div>
               <div>
-                <span>Instances</span>
+                <span>{{ t("settings.nodeDetail.instances") }}</span>
                 <strong>{{ resources.instances.length }}</strong>
               </div>
               <div>
-                <span>Local folders</span>
+                <span>{{ t("settings.nodeDetail.localFolders") }}</span>
                 <strong>{{ resources.localFolders.length }}</strong>
               </div>
             </div>
             <div class="node-detail-section">
               <div class="section-head">
-                <span>Agent diagnostics</span>
+                <span>{{ t("settings.nodeDetail.diagnostics") }}</span>
               </div>
               <div class="node-diagnostic-grid">
-                <span><b>Protocol</b><em>{{ status.protocolLabel(selectedNode.id) }}</em></span>
-                <span><b>Build</b><em>{{ status.buildLabel(selectedNode.id) }}</em></span>
-                <span><b>Package</b><em>{{ status.packageLabel(selectedNode.id) }}</em></span>
-                <span v-if="status.build(selectedNode.id)?.imageRef"><b>Image</b><em>{{ status.build(selectedNode.id)?.imageRef }}</em></span>
-                <span v-if="status.build(selectedNode.id)?.builtAt"><b>Built</b><em>{{ status.build(selectedNode.id)?.builtAt }}</em></span>
+                <span><b>{{ t("settings.nodeDetail.protocol") }}</b><em>{{ status.protocolLabel(selectedNode.id) }}</em></span>
+                <span><b>{{ t("settings.nodeDetail.build") }}</b><em>{{ status.buildLabel(selectedNode.id) }}</em></span>
+                <span><b>{{ t("settings.nodeDetail.package") }}</b><em>{{ status.packageLabel(selectedNode.id) }}</em></span>
+                <span v-if="status.build(selectedNode.id)?.imageRef"><b>{{ t("settings.nodeDetail.image") }}</b><em>{{ status.build(selectedNode.id)?.imageRef }}</em></span>
+                <span v-if="status.build(selectedNode.id)?.builtAt"><b>{{ t("settings.nodeDetail.built") }}</b><em>{{ status.build(selectedNode.id)?.builtAt }}</em></span>
               </div>
             </div>
             <div class="node-detail-section">
               <div class="section-head">
-                <span>Diagnostic log · {{ resources.diagnostics.length }}</span>
+                <span>{{ t("settings.nodeDetail.diagnosticLog", { count: resources.diagnostics.length }) }}</span>
               </div>
               <div v-if="resources.diagnostics.length" class="node-diagnostic-log">
                 <div v-for="entry in resources.diagnostics" :key="`${entry.method}-${entry.route}-${entry.code}-${entry.message}`" class="node-diagnostic-log-entry">
                   <div>
                     <Badge variant="secondary">{{ entry.code }}</Badge>
                     <code>{{ entry.method }} {{ entry.route }}</code>
+                    <!-- i18n-audit-allow-next-line protocol-name: HTTP status code label -->
                     <small v-if="entry.statusCode">HTTP {{ entry.statusCode }}</small>
                   </div>
                   <p>{{ entry.message }}</p>
                   <ul v-if="entry.issues?.length">
                     <li v-for="issue in entry.issues" :key="`${issue.path}-${issue.message}`">
+                      <!-- i18n-audit-allow-next-line code-token: protocol issue path fallback -->
                       <code>{{ issue.path || "payload" }}</code>
                       <span>{{ issue.message }}</span>
                     </li>
                   </ul>
                 </div>
               </div>
-              <p v-else class="settings-empty">No node protocol errors recorded from the latest refresh.</p>
+              <p v-else class="settings-empty">{{ t("settings.nodeDetail.noDiagnostics") }}</p>
             </div>
             <div v-if="status.isBuiltinNode(selectedNode)" class="node-detail-section">
               <div class="section-head">
-                <span>TCP listener</span>
+                <span>{{ t("settings.nodeDetail.tcpListener") }}</span>
                 <Badge v-if="resources.externalListener" :variant="resources.externalListener.status === 'listening' ? 'default' : 'secondary'">
-                  {{ resources.externalListener.status }} · {{ resources.externalListener.source }}
+                  {{ localizedStatus(externalListenerStatusKeys, resources.externalListener.status) }} · {{ localizedStatus(externalListenerSourceKeys, resources.externalListener.source) }}
                 </Badge>
               </div>
               <div class="node-listener-form">
                 <label>
-                  <span>Listen on</span>
+                  <span>{{ t("settings.nodeDetail.listenOn") }}</span>
                   <ControlPlaneSelect :model-value="resources.externalListenerBindScope" @update:model-value="actions.updateExternalListenerDraft('bindScope', $event)">
-                    <ControlPlaneSelectItem value="loopback">127.0.0.1 only</ControlPlaneSelectItem>
-                    <ControlPlaneSelectItem value="all-ipv4">All IPv4 interfaces</ControlPlaneSelectItem>
+                    <ControlPlaneSelectItem value="loopback">{{ t("settings.nodeDetail.loopback") }}</ControlPlaneSelectItem>
+                    <ControlPlaneSelectItem value="all-ipv4">{{ t("settings.nodeDetail.allIpv4") }}</ControlPlaneSelectItem>
                   </ControlPlaneSelect>
                 </label>
                 <label>
-                  <span>Port</span>
+                  <span>{{ t("settings.nodeDetail.port") }}</span>
                   <ControlPlaneInput :model-value="resources.externalListenerPort" inputmode="numeric" placeholder="8091" @update:model-value="actions.updateExternalListenerDraft('port', $event)" />
                 </label>
                 <Button variant="outline" size="sm" :disabled="busy.loadingExternalListener || busy.savingExternalListener" @click="actions.saveExternalListener">
                   <ServerCog :size="14" />
-                  <span>{{ busy.savingExternalListener ? "Applying" : busy.loadingExternalListener ? "Loading" : "Apply" }}</span>
+                  <span>{{ busy.savingExternalListener ? t("settings.nodeDetail.applying") : busy.loadingExternalListener ? t("settings.nodeDetail.loading") : t("settings.nodeDetail.apply") }}</span>
                 </Button>
               </div>
               <p v-if="resources.externalListenerBindScope === 'all-ipv4'" class="node-listener-warning">
-                The node-agent API will be reachable on host IPv4 interfaces. Remote control-planes still require invite pairing and HMAC. Configure firewall, NAT, DNS, and TLS termination separately.
+                {{ t("settings.nodeDetail.listenerWarning") }}
               </p>
+              <!-- i18n-audit-allow-next-line code-token: listener endpoint template -->
               <code v-if="resources.externalListener" class="node-listener-endpoint">http://&lt;host-ip-or-dns&gt;:{{ resources.externalListener.port }}</code>
               <p v-if="resources.externalListener?.error || resources.externalListenerError" class="control-plane-error">{{ resources.externalListenerError || resources.externalListener?.error }}</p>
             </div>
@@ -172,27 +175,27 @@
           <TabsContent class="node-detail-tab-content" value="runtimes">
             <div class="node-detail-section flush-section">
               <div class="section-head">
-                <span>Runtimes</span>
+                <span>{{ t("settings.nodeDetail.runtimes") }}</span>
               </div>
               <div class="node-resource-list">
                 <div v-for="runtime in resources.runtimes" :key="runtime.id" class="node-resource-row">
                   <div>
                     <strong>{{ runtime.name }}</strong>
-                    <code>{{ runtime.type }} · {{ runtime.accessStrategy }}</code>
+                    <code>{{ localizedStatus(runtimeTypeKeys, runtime.type) }} · {{ localizedStatus(runtimeAccessStrategyKeys, runtime.accessStrategy) }}</code>
                   </div>
                   <div class="settings-row-actions">
-                    <Badge variant="secondary">{{ runtime.status }}</Badge>
+                    <Badge variant="secondary">{{ localizedStatus(nodeRuntimeStatusKeys, runtime.status) }}</Badge>
                     <Button variant="outline" size="sm" :disabled="busy.checkingRuntimeId === runtime.id" @click="actions.checkRuntime(runtime)">
                       <RefreshCw :size="14" />
-                      <span>{{ busy.checkingRuntimeId === runtime.id ? "Checking" : "Check" }}</span>
+                      <span>{{ busy.checkingRuntimeId === runtime.id ? t("settings.nodeDetail.checking") : t("settings.nodeDetail.check") }}</span>
                     </Button>
                     <Button v-if="runtime.labels['task-handoff.node-agent.builtin'] !== 'true'" variant="outline" size="sm" :disabled="busy.deletingRuntimeId === runtime.id" @click="actions.removeRuntime(runtime)">
                       <Trash2 :size="14" />
-                      <span>{{ busy.deletingRuntimeId === runtime.id ? "Deleting" : "Delete" }}</span>
+                      <span>{{ busy.deletingRuntimeId === runtime.id ? t("settings.nodeDetail.deleting") : t("settings.nodeDetail.delete") }}</span>
                     </Button>
                   </div>
                 </div>
-                <p v-if="!resources.runtimes.length" class="settings-empty">No runtimes reported by this node.</p>
+                <p v-if="!resources.runtimes.length" class="settings-empty">{{ t("settings.nodeDetail.noRuntimes") }}</p>
               </div>
             </div>
           </TabsContent>
@@ -200,12 +203,12 @@
           <TabsContent class="node-detail-tab-content" value="updates">
             <div class="node-detail-section flush-section">
               <div class="section-head">
-                <span>Managed updates</span>
+                <span>{{ t("settings.nodeDetail.managedUpdates") }}</span>
                 <div class="update-channel-select">
                   <ControlPlaneSelect :model-value="resources.updateChannel" @update:model-value="actions.setUpdateChannel">
-                    <ControlPlaneSelectItem value="stable">Stable</ControlPlaneSelectItem>
-                    <ControlPlaneSelectItem value="beta">Beta</ControlPlaneSelectItem>
-                    <ControlPlaneSelectItem value="alpha">Alpha</ControlPlaneSelectItem>
+                    <ControlPlaneSelectItem value="stable">{{ t("settings.nodeDetail.stable") }}</ControlPlaneSelectItem>
+                    <ControlPlaneSelectItem value="beta">{{ t("settings.nodeDetail.beta") }}</ControlPlaneSelectItem>
+                    <ControlPlaneSelectItem value="alpha">{{ t("settings.nodeDetail.alpha") }}</ControlPlaneSelectItem>
                   </ControlPlaneSelect>
                 </div>
               </div>
@@ -214,8 +217,8 @@
                   <div class="managed-update-group-head">
                     <ServerCog :size="18" />
                     <div>
-                      <strong>Node agent</strong>
-                      <span>Updates the service that manages this node and its instances.</span>
+                      <strong>{{ t("settings.nodeDetail.nodeAgent") }}</strong>
+                      <span>{{ t("settings.nodeDetail.nodeAgentUpdateDescription") }}</span>
                     </div>
                   </div>
                   <div class="node-resource-row">
@@ -226,11 +229,11 @@
                     <div class="settings-row-actions">
                       <Button variant="outline" size="sm" :disabled="busy.checkingUpdateTarget === updateKey('node-agent')" @click="actions.checkManagedUpdate(selectedNode.id, { component: 'node-agent' })">
                         <RefreshCw :size="14" />
-                        <span>{{ busy.checkingUpdateTarget === updateKey("node-agent") ? "Checking" : "Check" }}</span>
+                        <span>{{ busy.checkingUpdateTarget === updateKey("node-agent") ? t("settings.nodeDetail.checking") : t("settings.nodeDetail.check") }}</span>
                       </Button>
                       <Button variant="outline" size="sm" :disabled="!canApplyUpdate('node-agent') || busy.applyingUpdateTarget === updateKey('node-agent')" @click="actions.applyManagedUpdate(selectedNode.id, { component: 'node-agent' })">
                         <Download :size="14" />
-                        <span>{{ busy.applyingUpdateTarget === updateKey("node-agent") ? "Queuing" : "Update" }}</span>
+                        <span>{{ busy.applyingUpdateTarget === updateKey("node-agent") ? t("settings.nodeDetail.queuing") : t("settings.nodeDetail.update") }}</span>
                       </Button>
                     </div>
                   </div>
@@ -240,8 +243,8 @@
                   <div class="managed-update-group-head">
                     <Boxes :size="18" />
                     <div>
-                      <strong>Controlled instances · {{ resources.instances.length }}</strong>
-                      <span>Updates each managed instance independently.</span>
+                      <strong>{{ t("settings.nodeDetail.controlledInstances", { count: resources.instances.length }) }}</strong>
+                      <span>{{ t("settings.nodeDetail.instanceUpdateDescription") }}</span>
                     </div>
                   </div>
                   <div class="node-resource-list compact-list">
@@ -253,39 +256,39 @@
                       <div class="settings-row-actions">
                         <Button variant="outline" size="sm" :disabled="busy.checkingUpdateTarget === updateKey(`instance:${instance.id}`)" @click="actions.checkManagedUpdate(selectedNode.id, { component: 'controlled-instance', instanceId: instance.id })">
                           <RefreshCw :size="14" />
-                          <span>{{ busy.checkingUpdateTarget === updateKey(`instance:${instance.id}`) ? "Checking" : "Check" }}</span>
+                          <span>{{ busy.checkingUpdateTarget === updateKey(`instance:${instance.id}`) ? t("settings.nodeDetail.checking") : t("settings.nodeDetail.check") }}</span>
                         </Button>
                         <Button variant="outline" size="sm" :disabled="!canApplyUpdate(`instance:${instance.id}`) || busy.applyingUpdateTarget === updateKey(`instance:${instance.id}`)" @click="actions.applyManagedUpdate(selectedNode.id, { component: 'controlled-instance', instanceId: instance.id })">
                           <Download :size="14" />
-                          <span>{{ busy.applyingUpdateTarget === updateKey(`instance:${instance.id}`) ? "Queuing" : "Update" }}</span>
+                          <span>{{ busy.applyingUpdateTarget === updateKey(`instance:${instance.id}`) ? t("settings.nodeDetail.queuing") : t("settings.nodeDetail.update") }}</span>
                         </Button>
                       </div>
                     </div>
-                    <p v-if="!resources.instances.length" class="settings-empty">No controlled instances on this node.</p>
+                    <p v-if="!resources.instances.length" class="settings-empty">{{ t("settings.nodeDetail.noControlledInstances") }}</p>
                   </div>
                 </section>
               </div>
             </div>
             <div class="node-detail-section">
               <div class="section-head">
-                <span>Update jobs · {{ resources.updateJobs.length }}</span>
+                <span>{{ t("settings.nodeDetail.updateJobs", { count: resources.updateJobs.length }) }}</span>
                 <Button variant="outline" size="sm" @click="actions.loadManagedUpdateJobs(selectedNode.id)">
                   <RefreshCw :size="14" />
-                  <span>Refresh</span>
+                  <span>{{ t("settings.nodeDetail.refresh") }}</span>
                 </Button>
               </div>
               <div class="node-resource-list compact-list">
                 <div v-for="job in resources.updateJobs" :key="job.id" class="node-resource-row">
                   <div>
                     <span class="update-job-title">
-                      <Badge variant="outline">{{ job.target.component === "node-agent" ? "Agent" : "Instance" }}</Badge>
+                      <Badge variant="outline">{{ job.target.component === "node-agent" ? t("settings.nodeDetail.agent") : t("settings.nodeDetail.instance") }}</Badge>
                       <strong>{{ job.target.component === "node-agent" ? selectedNode.name : job.target.instanceId }}</strong>
                     </span>
-                    <code>{{ job.fromVersion || "unknown" }} → {{ job.toVersion }}<span v-if="job.error"> · {{ job.error }}</span></code>
+                    <code>{{ job.fromVersion || t("settings.nodeDetail.unknown") }} → {{ job.toVersion }}<span v-if="job.error"> · {{ job.error }}</span></code>
                   </div>
-                  <Badge :variant="job.status === 'succeeded' ? 'default' : 'secondary'">{{ job.status }}</Badge>
+                  <Badge :variant="job.status === 'succeeded' ? 'default' : 'secondary'">{{ localizedStatus(updateJobStatusKeys, job.status) }}</Badge>
                 </div>
-                <p v-if="!resources.updateJobs.length" class="settings-empty">No managed update jobs on this node.</p>
+                <p v-if="!resources.updateJobs.length" class="settings-empty">{{ t("settings.nodeDetail.noUpdateJobs") }}</p>
               </div>
             </div>
           </TabsContent>
@@ -293,10 +296,10 @@
           <TabsContent class="node-detail-tab-content fill-tab-content" value="storage">
             <div class="node-detail-section flush-section fill-section">
               <div class="section-head">
-                <span>Local folders · {{ resources.localFolders.length }}</span>
+                <span>{{ t("settings.nodeDetail.localFolderCount", { count: resources.localFolders.length }) }}</span>
                 <Button variant="outline" size="sm" :disabled="busy.creatingNodeLocalFolder" @click="actions.submitNodeLocalFolder">
                   <FolderOpen :size="14" />
-                  <span>{{ busy.creatingNodeLocalFolder ? "Adding" : "Add" }}</span>
+                  <span>{{ busy.creatingNodeLocalFolder ? t("settings.nodeDetail.adding") : t("settings.nodeDetail.add") }}</span>
                 </Button>
               </div>
               <ScrollArea class="node-resource-list compact-list">
@@ -308,10 +311,10 @@
                     </div>
                     <Button variant="outline" size="sm" :disabled="busy.deletingNodeLocalFolderId === folder.id" @click="actions.removeNodeLocalFolder(folder.id)">
                       <Trash2 :size="14" />
-                      <span>{{ busy.deletingNodeLocalFolderId === folder.id ? "Deleting" : "Delete" }}</span>
+                      <span>{{ busy.deletingNodeLocalFolderId === folder.id ? t("settings.nodeDetail.deleting") : t("settings.nodeDetail.delete") }}</span>
                     </Button>
                   </div>
-                  <p v-if="!resources.localFolders.length" class="settings-empty">No local folders on this node.</p>
+                  <p v-if="!resources.localFolders.length" class="settings-empty">{{ t("settings.nodeDetail.noLocalFolders") }}</p>
                 </div>
               </ScrollArea>
               <p v-if="resources.localFoldersError" class="control-plane-error">{{ resources.localFoldersError }}</p>
@@ -321,10 +324,10 @@
           <TabsContent class="node-detail-tab-content" value="inventory">
             <div class="node-detail-section flush-section">
               <div class="section-head">
-                <span>{{ status.nameById(resources.selectedImageNodeId || selectedNode.id) }} Docker images · {{ resources.images.length }}</span>
+                <span>{{ t("settings.nodeDetail.dockerImages", { name: status.nameById(resources.selectedImageNodeId || selectedNode.id), count: resources.images.length }) }}</span>
                 <Button variant="outline" size="sm" :disabled="busy.loadingNodeImagesId === selectedNode.id" @click="actions.loadNodeImages(selectedNode.id)">
                   <Monitor :size="14" />
-                  <span>{{ busy.loadingNodeImagesId === selectedNode.id ? "Loading" : "Refresh" }}</span>
+                  <span>{{ busy.loadingNodeImagesId === selectedNode.id ? t("settings.nodeDetail.loading") : t("settings.nodeDetail.refresh") }}</span>
                 </Button>
               </div>
               <ScrollArea class="node-resource-list image-inventory-list">
@@ -332,10 +335,10 @@
                   <div v-for="image in resources.images" :key="`${selectedNode.id}-${image.reference}-${image.id}`" class="node-resource-row">
                     <div>
                       <strong>{{ image.reference }}</strong>
-                      <code>{{ image.id }} · {{ image.size || "unknown size" }} · {{ image.createdSince || "unknown age" }}</code>
+                      <code>{{ image.id }} · {{ image.size || t("settings.nodeDetail.unknownSize") }} · {{ image.createdSince || t("settings.nodeDetail.unknownAge") }}</code>
                     </div>
                   </div>
-                  <p v-if="!resources.images.length" class="settings-empty">No images loaded for this node.</p>
+                  <p v-if="!resources.images.length" class="settings-empty">{{ t("settings.nodeDetail.noImages") }}</p>
                 </div>
               </ScrollArea>
               <p v-if="resources.imagesError" class="control-plane-error">{{ resources.imagesError }}</p>
@@ -343,7 +346,7 @@
 
             <div class="node-detail-section">
               <div class="section-head">
-                <span>Instances · {{ resources.instances.length }}</span>
+                <span>{{ t("settings.nodeDetail.instanceCount", { count: resources.instances.length }) }}</span>
               </div>
               <ScrollArea class="node-resource-list compact-list">
                 <div class="settings-scroll-content">
@@ -353,14 +356,14 @@
                       <code>{{ instance.source.type }} · {{ instance.image?.name || instance.imageId }}</code>
                     </div>
                     <div class="node-resource-row-actions">
-                      <Badge :variant="instance.connectionStatus === 'online' ? 'default' : 'secondary'">{{ instance.status }}</Badge>
-                      <Button variant="outline" size="sm" :aria-label="`Settings for ${instance.name}`" @click="actions.openInstanceSettings(instance.id)">
+                      <Badge :variant="instance.connectionStatus === 'online' ? 'default' : 'secondary'">{{ localizedStatus(instanceStatusKeys, instance.status) }}</Badge>
+                      <Button variant="outline" size="sm" :aria-label="t('settings.nodeDetail.instanceSettings', { name: instance.name })" @click="actions.openInstanceSettings(instance.id)">
                         <Settings :size="14" />
-                        <span>Settings</span>
+                        <span>{{ t("settings.nodeDetail.settings") }}</span>
                       </Button>
                     </div>
                   </div>
-                  <p v-if="!resources.instances.length" class="settings-empty">No instances on this node.</p>
+                  <p v-if="!resources.instances.length" class="settings-empty">{{ t("settings.nodeDetail.noInstances") }}</p>
                 </div>
               </ScrollArea>
             </div>
@@ -369,55 +372,56 @@
           <TabsContent class="node-detail-tab-content" value="remote">
             <div class="node-remote-panel">
               <div class="section-head compact-head">
-                <span>Paired control-plane keys · {{ resources.remoteKeys.length }}</span>
+                <span>{{ t("settings.nodeDetail.pairedKeys", { count: resources.remoteKeys.length }) }}</span>
                 <Button variant="outline" size="sm" :disabled="busy.loadingRemoteKeysNodeId === selectedNode.id" @click="actions.loadRemoteKeys(selectedNode.id)">
                   <RefreshCw :size="14" />
-                  <span>{{ busy.loadingRemoteKeysNodeId === selectedNode.id ? "Loading" : "Refresh" }}</span>
+                  <span>{{ busy.loadingRemoteKeysNodeId === selectedNode.id ? t("settings.nodeDetail.loading") : t("settings.nodeDetail.refresh") }}</span>
                 </Button>
               </div>
               <div class="node-resource-list">
                 <div v-for="remote in resources.remoteKeys" :key="remote.keyId" class="node-resource-row">
                   <div>
                     <strong>{{ remote.name || remote.url || remote.id }}</strong>
-                    <code>{{ remote.keyId }} · paired {{ remote.pairedAt }}</code>
+                    <code>{{ remote.keyId }} · {{ t("settings.nodeDetail.pairedAt", { time: localizedDateTime(remote.pairedAt) }) }}</code>
                   </div>
                   <div class="settings-row-actions">
-                    <Badge :variant="remote.current ? 'default' : 'secondary'">{{ remote.current ? "Current" : remote.active === false ? "Inactive" : "Paired" }}</Badge>
+                    <Badge :variant="remote.current ? 'default' : 'secondary'">{{ remote.current ? t("settings.nodeDetail.current") : remote.active === false ? t("settings.nodeDetail.inactive") : t("settings.nodeDetail.paired") }}</Badge>
                     <Button variant="outline" size="sm" :disabled="remote.current || busy.deletingRemoteKeyId === remote.keyId" @click="actions.removeRemoteKey(selectedNode.id, remote.keyId)">
                       <Trash2 :size="14" />
-                      <span>{{ busy.deletingRemoteKeyId === remote.keyId ? "Deleting" : "Delete" }}</span>
+                      <span>{{ busy.deletingRemoteKeyId === remote.keyId ? t("settings.nodeDetail.deleting") : t("settings.nodeDetail.delete") }}</span>
                     </Button>
                   </div>
                 </div>
-                <p v-if="!resources.remoteKeys.length" class="settings-empty">No paired control-plane keys reported by this node.</p>
+                <p v-if="!resources.remoteKeys.length" class="settings-empty">{{ t("settings.nodeDetail.noPairedKeys") }}</p>
               </div>
               <p v-if="resources.remoteKeysError" class="control-plane-error">{{ resources.remoteKeysError }}</p>
             </div>
 
             <div class="node-remote-panel">
               <div class="section-head compact-head">
-                <span>Connect this node to another control-plane</span>
+                <span>{{ t("settings.nodeDetail.connectRemote") }}</span>
               </div>
               <div class="inline-create compact-create">
                 <label>
-                  <span>Control-plane URL</span>
+                  <span>{{ t("settings.nodeDetail.controlPlaneUrl") }}</span>
+                  <!-- i18n-audit-allow-next-line code-token: example control-plane URL -->
                   <ControlPlaneInput :model-value="resources.remoteConnect.controlPlaneUrl" placeholder="https://control-plane.example.com" @update:model-value="actions.updateRemoteConnect('controlPlaneUrl', $event)" />
                 </label>
                 <label>
-                  <span>Join token</span>
-                  <ControlPlaneInput :model-value="resources.remoteConnect.joinToken" placeholder="token from target control-plane" @update:model-value="actions.updateRemoteConnect('joinToken', $event)" />
+                  <span>{{ t("settings.nodeDetail.joinToken") }}</span>
+                  <ControlPlaneInput :model-value="resources.remoteConnect.joinToken" :placeholder="t('settings.nodeDetail.tokenPlaceholder')" @update:model-value="actions.updateRemoteConnect('joinToken', $event)" />
                 </label>
                 <label>
-                  <span>Name</span>
-                  <ControlPlaneInput :model-value="resources.remoteConnect.controlPlaneName" placeholder="Optional" @update:model-value="actions.updateRemoteConnect('controlPlaneName', $event)" />
+                  <span>{{ t("settings.nodeDetail.name") }}</span>
+                  <ControlPlaneInput :model-value="resources.remoteConnect.controlPlaneName" :placeholder="t('settings.nodeDetail.optional')" @update:model-value="actions.updateRemoteConnect('controlPlaneName', $event)" />
                 </label>
                 <Button variant="outline" size="sm" :disabled="!resources.canConnectRemote || busy.connectingRemoteNodeId === selectedNode.id" @click="actions.connectSelectedNodeToRemote(selectedNode.id)">
                   <Plus :size="15" />
-                  <span>{{ busy.connectingRemoteNodeId === selectedNode.id ? "Connecting" : "Connect" }}</span>
+                  <span>{{ busy.connectingRemoteNodeId === selectedNode.id ? t("settings.nodeDetail.connecting") : t("settings.nodeDetail.connect") }}</span>
                 </Button>
               </div>
               <p v-if="resources.remoteConnectResultByNodeId[selectedNode.id]" class="settings-success">
-                Remote connection: {{ resources.remoteConnectResultByNodeId[selectedNode.id].status }}
+                {{ t("settings.nodeDetail.remoteResult", { status: localizedStatus(remoteConnectStatusKeys, resources.remoteConnectResultByNodeId[selectedNode.id].status) }) }}
                 <span v-if="resources.remoteConnectResultByNodeId[selectedNode.id].error"> · {{ resources.remoteConnectResultByNodeId[selectedNode.id].error }}</span>
               </p>
             </div>
@@ -425,12 +429,13 @@
         </Tabs>
       </div>
     </ScrollArea>
-    <p v-else class="settings-empty">Select a node to inspect its local resources.</p>
+    <p v-else class="settings-empty">{{ t("settings.nodeDetail.selectNode") }}</p>
   </section>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, watch, type Component } from "vue";
+import { useI18n } from "vue-i18n";
 import { Box, Boxes, Download, FolderOpen, Gauge, KeyRound, Monitor, MoreHorizontal, Network, Pencil, Plus, RefreshCw, ServerCog, Settings, Trash2 } from "@lucide/vue";
 import { TooltipTrigger as RekaTooltipTrigger } from "reka-ui";
 import type { BuildInfo, InstanceBoardItem, LocalDockerImage, Node, NodeAgentExternalListener, NodeLocalFolder, NodeRemoteControlPlane, NodeRuntime, UpdateChannel, UpdateCheckResult, UpdateJob, UpdateTarget } from "../../../api/types";
@@ -445,6 +450,11 @@ import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
 import { nodeEndpointDisplay } from "./nodeEndpointDisplay";
 import { nodeDetailActionState } from "./nodeDetailActions";
+import { externalListenerSourceKeys, externalListenerStatusKeys, instanceStatusKeys, nodeConnectionModeKeys, nodeRuntimeStatusKeys, remoteConnectStatusKeys, runtimeAccessStrategyKeys, runtimeTypeKeys, translateStatus, updateJobStatusKeys } from "../../../i18n/status";
+import { formatDateTime } from "../../../i18n/presentation";
+import type { SupportedLocale } from "../../../i18n/locale";
+
+const { locale, t } = useI18n();
 
 type NodeDetailTab = "overview" | "runtimes" | "updates" | "storage" | "inventory" | "remote";
 
@@ -557,6 +567,11 @@ const props = defineProps<{
 }>();
 
 const activeTab = ref<NodeDetailTab>("overview");
+const localizedStatus = (keys: Record<string, string>, value: string) => translateStatus(keys, value, t);
+const localizedDateTime = (value: string) => {
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? value : formatDateTime(parsed, locale.value as SupportedLocale);
+};
 const headerActionState = computed(() => nodeDetailActionState({
   nodeId: props.selectedNode?.id || "",
   isBuiltinNode: props.selectedNode ? props.status.isBuiltinNode(props.selectedNode) : false,
@@ -564,22 +579,22 @@ const headerActionState = computed(() => nodeDetailActionState({
   creatingPairingInviteNodeId: props.busy.creatingPairingInviteNodeId,
   deletingNodeId: props.busy.deletingNodeId,
   renamingNodeId: props.busy.renamingNodeId,
-}));
+}, t));
 const tabs = computed(() => [
-  { value: "overview", label: "Overview", icon: Gauge },
-  { value: "runtimes", label: `Runtimes ${props.resources.runtimes.length}`, icon: Box },
-  { value: "updates", label: "Updates", icon: Download },
-  { value: "storage", label: `Storage ${props.resources.localFolders.length}`, icon: FolderOpen },
-  { value: "inventory", label: "Inventory", icon: Monitor },
-  { value: "remote", label: "Remote", icon: Network },
+  { value: "overview", label: t("settings.nodeDetail.overview"), icon: Gauge },
+  { value: "runtimes", label: `${t("settings.nodeDetail.runtimes")} ${props.resources.runtimes.length}`, icon: Box },
+  { value: "updates", label: t("settings.nodeDetail.updates"), icon: Download },
+  { value: "storage", label: `${t("settings.nodeDetail.storage")} ${props.resources.localFolders.length}`, icon: FolderOpen },
+  { value: "inventory", label: t("settings.nodeDetail.inventory"), icon: Monitor },
+  { value: "remote", label: t("settings.nodeDetail.remote"), icon: Network },
 ] satisfies Array<{ value: NodeDetailTab; label: string; icon: Component }>);
 
 function updateSummary(key: string, fallback?: string) {
   const check = props.resources.updateChecks[updateKey(key)];
-  if (!check) return `Current ${fallback || "unknown"} · not checked`;
-  if (!check.supported) return check.reason || "Managed update unsupported";
+  if (!check) return t("settings.nodeDetail.currentNotChecked", { version: fallback || t("settings.nodeDetail.unknown") });
+  if (!check.supported) return check.reason || t("settings.nodeDetail.updateUnsupported");
   if (!check.updateAvailable && check.reason) return check.reason;
-  return `${check.currentVersion || fallback || "unknown"} → ${check.availableVersion} · ${check.updateAvailable ? "update available" : "up to date"}`;
+  return `${check.currentVersion || fallback || t("settings.nodeDetail.unknown")} → ${check.availableVersion} · ${check.updateAvailable ? t("settings.nodeDetail.updateAvailable") : t("settings.nodeDetail.upToDate")}`;
 }
 
 function canApplyUpdate(key: string) {

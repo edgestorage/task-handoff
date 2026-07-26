@@ -4,8 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "audit:i18n": "node scripts/i18n-audit.mjs",
     "build": "vite build --config vite.config.ts",
-    "check": "pnpm run typecheck && pnpm run build",
+    "check": "pnpm run typecheck && pnpm run audit:i18n && pnpm run build",
     "dev": "vite --config vite.config.ts",
     "preview": "vite preview --config vite.config.ts",
     "test": "node --test",
@@ -27,6 +28,7 @@
     "reka-ui": "^2.9.10",
     "tailwind-merge": "^3.4.0",
     "vue": "^3.5.25",
+    "vue-i18n": "^11",
     "vue-sonner": "^2.0.9"
   },
   "devDependencies": {

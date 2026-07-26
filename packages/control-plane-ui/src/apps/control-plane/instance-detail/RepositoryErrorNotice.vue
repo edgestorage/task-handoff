@@ -2,7 +2,7 @@
   <div class="repository-error-notice" role="alert">
     <CircleAlert :size="15" />
     <span>
-      <span class="repository-error-title"><strong>{{ presentation.message }}</strong><code v-if="presentation.code">{{ presentation.code }}</code><em v-if="presentation.retryable !== undefined">{{ presentation.retryable ? "Retryable" : "Action required" }}</em></span>
+      <span class="repository-error-title"><strong>{{ presentation.message }}</strong><code v-if="presentation.code">{{ presentation.code }}</code><em v-if="presentation.retryable !== undefined">{{ presentation.retryable ? t("repository.errorNotice.retryable") : t("repository.errorNotice.actionRequired") }}</em></span>
       <small v-if="presentation.recovery">{{ presentation.recovery }}</small>
     </span>
   </div>
@@ -11,14 +11,16 @@
 <script setup lang="ts">
 import { CircleAlert } from "@lucide/vue";
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 import { repositoryErrorPresentation } from "./repositoryErrorPresentation";
 
 const props = defineProps<{
   error: unknown;
   fallback: string;
 }>();
+const { t } = useI18n();
 
-const presentation = computed(() => repositoryErrorPresentation(props.error, props.fallback));
+const presentation = computed(() => repositoryErrorPresentation(props.error, props.fallback, t));
 </script>
 
 <style scoped>

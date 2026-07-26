@@ -3,6 +3,8 @@ import { applyNodeUpdate, checkNode, checkNodeUpdate, connectNodeRemote, createN
 import type { LocalDockerImage, Node, NodeRemoteControlPlane, NodeRuntime, NodeStatus, UpdateChannel, UpdateCheckResult, UpdateJob, UpdateTarget } from "../../../api/types";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 import { useNodeRename } from "./useNodeRename";
+import type { Translate } from "../../../i18n/status.ts";
+import { translateApiError } from "../../../i18n/apiError.ts";
 
 type UseNodeSettingsInput = {
   errorText: (error: unknown) => string;
@@ -14,10 +16,12 @@ type UseNodeSettingsInput = {
   runtimes: () => NodeRuntime[];
   updateNodeAction?: typeof updateNode;
   updateChannel: () => UpdateChannel;
+  translate: Translate;
 };
 
 const CONTROL_PLANE_BUILTIN_NODE_LABEL = "task-handoff.control-plane.builtin";
-export function useNodeSettings({ errorText, notify = showControlPlaneToast, onNodeDeleted, onNodeRenamed, refresh, nodes, runtimes, updateNodeAction = updateNode, updateChannel }: UseNodeSettingsInput) {
+export function useNodeSettings({ errorText, notify = showControlPlaneToast, onNodeDeleted, onNodeRenamed, refresh, nodes, runtimes, updateNodeAction = updateNode, updateChannel, translate: t }: UseNodeSettingsInput) {
+  const translateError = (error: unknown) => translateApiError(error, t, errorText(error));
   const creatingNode = ref(false);
   const syncingLocalNode = ref(false);
   const deletingNodeId = ref("");
@@ -31,7 +35,7 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
   const selectedImageNodeId = ref("");
   const nodeImages = ref<LocalDockerImage[]>([]);
   const nodeImageError = ref("");
-  const generatedToken = ref<{ title: string; token: string; expiresAt: string }>();
+  const generatedToken = ref<{ titleKey: string; token: string; expiresAt: string }>();
   const remoteConnectResultByNodeId = reactive<Record<string, { status: string; error?: string; checkedAt: string }>>({});
   const remoteKeysByNodeId = reactive<Record<string, NodeRemoteControlPlane[]>>({});
   const remoteKeysErrorByNodeId = reactive<Record<string, string>>({});
@@ -54,7 +58,7 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
 
   const canCreateNode = computed(() => Boolean(settingsNode.name.trim() && settingsNode.endpoint.trim()));
   const canConnectRemote = computed(() => Boolean(remoteConnect.controlPlaneUrl.trim() && remoteConnect.joinToken.trim()));
-  const nodeRename = useNodeRename({ errorText, nodes, notify, onNodeRenamed, updateNode: updateNodeAction });
+  const nodeRename = useNodeRename({ errorText, nodes, notify, onNodeRenamed, translate: t, updateNode: updateNodeAction });
 
   function clearNodeFeedback() {
     settingsNodeSuccess.value = "";
@@ -73,13 +77,13 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
         endpoint: settingsNode.endpoint.trim(),
         joinToken: settingsNode.joinToken.trim(),
       });
-      settingsNodeSuccess.value = `${node.name} created.`;
+      settingsNodeSuccess.value = t("settings.nodeDetail.nodeCreated", { name: node.name });
       settingsNode.name = "";
       settingsNode.endpoint = "";
       settingsNode.joinToken = "";
       await refresh();
     } catch (error) {
-      notify(errorText(error));
+      notify(translateError(error));
     } finally {
       creatingNode.value = false;
     }
@@ -95,12 +99,12 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
       const node = await syncLocalNode();
       try {
         await refresh();
-        notify(`${node.name} added.`, "success");
+        notify(t("settings.nodeDetail.nodeAdded", { name: node.name }), "success");
       } catch (error) {
-        notify(`${node.name} was added, but the control-plane view could not refresh: ${errorText(error)}`);
+        notify(t("settings.nodeDetail.nodeAddedRefreshFailed", { name: node.name, error: translateError(error) }));
       }
     } catch (error) {
-      notify(errorText(error));
+      notify(translateError(error));
     } finally {
       syncingLocalNode.value = false;
     }
@@ -114,12 +118,12 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
     try {
       const invite = await createNodePairingInvite(id);
       generatedToken.value = {
-        title: "Node join token",
+        titleKey: "settings.nodeDetail.nodeJoinToken",
         token: invite.joinToken,
         expiresAt: invite.expiresAt,
       };
     } catch (error) {
-      showControlPlaneToast(errorText(error));
+      showControlPlaneToast(translateError(error));
     } finally {
       creatingPairingInviteNodeId.value = "";
     }
@@ -134,14 +138,14 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
       const invite = await createNodeJoinInvite();
       if (showToken) {
         generatedToken.value = {
-          title: "Control-plane join token",
+          titleKey: "settings.nodeDetail.controlPlaneJoinToken",
           token: invite.joinToken,
           expiresAt: invite.expiresAt,
         };
       }
       return invite;
     } catch (error) {
-      showControlPlaneToast(errorText(error));
+      showControlPlaneToast(translateError(error));
     } finally {
       creatingJoinInvite.value = false;
     }
@@ -168,7 +172,7 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
       await loadRemoteKeys(id);
       await refresh();
     } catch (error) {
-      showControlPlaneToast(errorText(error));
+      showControlPlaneToast(translateError(error));
     } finally {
       connectingRemoteNodeId.value = "";
     }
@@ -182,7 +186,7 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
     try {
       nodeStatusById[id] = await checkNode(id);
     } catch (error) {
-      showControlPlaneToast(errorText(error));
+      showControlPlaneToast(translateError(error));
     } finally {
       checkingNodeId.value = "";
     }
@@ -199,7 +203,7 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
       nodeImages.value = await listNodeDockerImages(id);
     } catch (error) {
       nodeImages.value = [];
-      nodeImageError.value = errorText(error);
+      nodeImageError.value = translateError(error);
     } finally {
       loadingNodeImagesId.value = "";
     }
@@ -215,7 +219,7 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
       remoteKeysByNodeId[id] = await listNodeRemoteControlPlanes(id);
     } catch (error) {
       remoteKeysByNodeId[id] = [];
-      remoteKeysErrorByNodeId[id] = errorText(error);
+      remoteKeysErrorByNodeId[id] = translateError(error);
     } finally {
       loadingRemoteKeysNodeId.value = "";
     }
@@ -232,7 +236,7 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
     try {
       updateChecks[key] = await checkNodeUpdate(nodeId, target, updateChannel());
     } catch (error) {
-      showControlPlaneToast(errorText(error));
+      showControlPlaneToast(translateError(error));
     } finally {
       checkingUpdateTarget.value = "";
     }
@@ -242,14 +246,14 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
     const key = managedUpdateKey(nodeId, target);
     const check = checkOverride || updateChecks[key];
     if (!check?.supported || !check.updateAvailable || applyingUpdateTarget.value) return;
-    if (!window.confirm(`Update ${key} from ${check.currentVersion || "unknown"} to ${check.availableVersion}?`)) return;
+    if (!window.confirm(t("settings.nodeDetail.updateConfirm", { target: key, current: check.currentVersion || t("settings.nodeDetail.unknown"), available: check.availableVersion }))) return;
     applyingUpdateTarget.value = key;
     try {
       await applyNodeUpdate(nodeId, target, updateChannel());
       updateJobs.value = await listNodeUpdateJobs(nodeId);
-      showControlPlaneToast("Update queued on node agent.", "success");
+      showControlPlaneToast(t("settings.nodeDetail.updateQueued"), "success");
     } catch (error) {
-      showControlPlaneToast(errorText(error));
+      showControlPlaneToast(translateError(error));
     } finally {
       applyingUpdateTarget.value = "";
     }
@@ -262,7 +266,7 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
       for (const key of succeededTargets) delete updateChecks[key];
       await Promise.all([checkSettingsNode(nodeId), refresh()]);
     } catch (error) {
-      showControlPlaneToast(errorText(error));
+      showControlPlaneToast(translateError(error));
     }
   }
 
@@ -275,7 +279,7 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
       await deleteNodeRemoteControlPlane(nodeId, keyId);
       await loadRemoteKeys(nodeId);
     } catch (error) {
-      showControlPlaneToast(errorText(error));
+      showControlPlaneToast(translateError(error));
     } finally {
       deletingRemoteKeyId.value = "";
     }
@@ -289,7 +293,7 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
     if (target.labels[CONTROL_PLANE_BUILTIN_NODE_LABEL] === "true" || deletingNodeId.value) {
       return;
     }
-    if (!window.confirm(`Delete node ${target.name}?`)) {
+    if (!window.confirm(t("settings.nodeDetail.deleteConfirm", { name: target.name }))) {
       return;
     }
     deletingNodeId.value = target.id;
@@ -300,7 +304,7 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
       await deleteNode(target.id);
       await refresh();
     } catch (error) {
-      showControlPlaneToast(errorText(error));
+      showControlPlaneToast(translateError(error));
     } finally {
       deletingNodeId.value = "";
     }

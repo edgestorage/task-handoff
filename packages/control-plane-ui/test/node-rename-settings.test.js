@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { NODE_NAME_MAX_LENGTH, useNodeRename } from "../src/apps/control-plane/settings/useNodeRename.ts";
+import { createControlPlaneI18nForTest } from "../src/i18n/testing.ts";
+
+const t = createControlPlaneI18nForTest("en-US").global.t;
 
 function node(id = "node_rename", name = "Original node") {
   return {
@@ -36,6 +39,7 @@ function settingsHarness(overrides = {}) {
       if (index >= 0) currentNodes[index] = renamed;
     },
     nodes: () => currentNodes,
+    translate: t,
     updateNode: async (id, input) => {
       if (overrides.updateNodeAction) calls.push({ id, input });
       return updateNodeAction(id, input);

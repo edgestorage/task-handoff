@@ -1,10 +1,10 @@
 <template>
-  <aside class="instance-list" :class="{ collapsed }" aria-label="Controlled instances">
+  <aside class="instance-list" :class="{ collapsed }" :aria-label="t('instances.list.controlledInstances')">
     <Popover v-if="collapsed" v-model:open="temporaryListOpen">
       <PopoverTrigger as-child>
-        <button type="button" class="instances-expand-rail" aria-label="Switch instance" title="Switch instance" @dblclick.prevent="expandTemporaryList">
+        <button type="button" class="instances-expand-rail" :aria-label="t('instances.list.switchInstance')" :title="t('instances.list.switchInstance')" @dblclick.prevent="expandTemporaryList">
           <PanelLeftOpen :size="16" />
-          <span>Instances</span>
+          <span>{{ t("instances.title") }}</span>
           <strong>{{ totalInstances }}</strong>
         </button>
       </PopoverTrigger>
@@ -48,7 +48,7 @@
     <template v-else>
       <div class="list-head">
         <div>
-          <span>Instances</span>
+          <span>{{ t("instances.title") }}</span>
           <strong>{{ totalInstances }}</strong>
         </div>
         <div class="list-head-actions">
@@ -56,15 +56,15 @@
             variant="outline"
             size="sm"
             class="icon-button"
-            :aria-label="embedded ? 'Expand instances list' : 'Collapse instances list'"
-            :title="embedded ? 'Expand instances list' : 'Collapse instances list'"
+            :aria-label="embedded ? t('instances.list.expand') : t('instances.list.collapse')"
+            :title="embedded ? t('instances.list.expand') : t('instances.list.collapse')"
             @click="embedded ? $emit('expand') : $emit('collapse')"
           >
             <PanelLeftOpen v-if="embedded" :size="16" />
             <PanelLeftClose v-else :size="16" />
           </Button>
-          <InstanceViewOptionsMenu :group-by-node="groupByNode" label="Instance list options" :sort-mode="sortMode" @update:group-by-node="$emit('update:groupByNode', $event)" @update:sort-mode="$emit('update:sortMode', $event)" />
-          <Button size="sm" class="icon-button" aria-label="New instance" @click="$emit('newInstance')">
+          <InstanceViewOptionsMenu :group-by-node="groupByNode" :label="t('instances.list.options')" :sort-mode="sortMode" @update:group-by-node="$emit('update:groupByNode', $event)" @update:sort-mode="$emit('update:sortMode', $event)" />
+          <Button size="sm" class="icon-button" :aria-label="t('instances.list.new')" @click="$emit('newInstance')">
             <Plus :size="16" />
           </Button>
         </div>
@@ -72,10 +72,10 @@
 
       <label class="list-filter">
         <Search :size="14" />
-        <input :value="filter" placeholder="Search instances" @input="$emit('update:filter', ($event.target as HTMLInputElement).value)" />
+        <input :value="filter" :placeholder="t('instances.list.search')" @input="$emit('update:filter', ($event.target as HTMLInputElement).value)" />
       </label>
 
-      <div v-if="loading" class="list-empty">Loading instances...</div>
+      <div v-if="loading" class="list-empty">{{ t("instances.list.loading") }}</div>
       <div v-else-if="error" class="list-empty error">{{ error }}</div>
       <ScrollArea v-else class="instance-rows">
         <div class="instance-rows-content">
@@ -114,9 +114,9 @@
                       </span>
                       <strong>{{ instanceDisplayName(instance) }}</strong>
                     </span>
-                    <small>{{ instanceSourceLabel(instance) }}</small>
+                    <small>{{ instanceSourceLabel(instance, t) }}</small>
                     <small v-if="instance.imageProvisioning && instance.imageProvisioning.phase !== 'ready'" class="image-provisioning-status">
-                      {{ imageProvisioningLabel(instance) }}<template v-if="instance.imageProvisioning.error"> · {{ instance.imageProvisioning.error }}</template>
+                      {{ imageProvisioningLabel(instance, t) }}<template v-if="instance.imageProvisioning.error"> · {{ instance.imageProvisioning.error }}</template>
                     </small>
                   </span>
                   <span v-if="!groupByNode" class="instance-row-session">{{ instanceNodeLabel(instance) }}</span>
@@ -124,31 +124,31 @@
                 <div class="instance-row-actions" :class="{ open: openMenuId === instance.id }" @click.stop>
                   <DropdownMenu :open="openMenuId === instance.id" @update:open="(open) => $emit('setMenuOpen', instance.id, open)">
                     <DropdownMenuTrigger as-child>
-                      <button type="button" class="instance-menu-trigger" :aria-expanded="openMenuId === instance.id" :aria-label="`Open controls for ${instance.name}`">
+                      <button type="button" class="instance-menu-trigger" :aria-expanded="openMenuId === instance.id" :aria-label="t('instances.list.openControls', { name: instance.name })">
                         <MoreHorizontal :size="16" />
                       </button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent class="instance-action-menu" align="end" :side-offset="6">
                       <DropdownMenuItem v-if="canShowInstanceAction(instance, 'start')" class="instance-action-item" :disabled="isInstanceActionBusy(instance)" @select="$emit('runAction', 'start', instance)">
                         <Play :size="14" />
-                        <span>{{ activeActionLabel(instance, "start", "Start") }}</span>
+                        <span>{{ activeActionLabel(instance, "start", t("instances.actions.start")) }}</span>
                       </DropdownMenuItem>
                       <DropdownMenuItem v-if="canShowInstanceAction(instance, 'stop')" class="instance-action-item" :disabled="isInstanceActionBusy(instance)" @select="$emit('runAction', 'stop', instance)">
                         <Square :size="14" />
-                        <span>{{ activeActionLabel(instance, "stop", "Stop") }}</span>
+                        <span>{{ activeActionLabel(instance, "stop", t("instances.actions.stop")) }}</span>
                       </DropdownMenuItem>
                       <DropdownMenuItem v-if="canShowInstanceAction(instance, 'restart')" class="instance-action-item" :disabled="isInstanceActionBusy(instance)" @select="$emit('runAction', 'restart', instance)">
                         <RotateCw :size="14" />
-                        <span>{{ activeActionLabel(instance, "restart", "Restart") }}</span>
+                        <span>{{ activeActionLabel(instance, "restart", t("instances.actions.restart")) }}</span>
                       </DropdownMenuItem>
                       <DropdownMenuItem v-if="canShowInstanceAction(instance, 'retry-image')" class="instance-action-item" :disabled="isInstanceActionBusy(instance)" @select="$emit('runAction', 'retry-image', instance)">
                         <RotateCw :size="14" />
-                        <span>{{ activeActionLabel(instance, "retry-image", "Retry image") }}</span>
+                        <span>{{ activeActionLabel(instance, "retry-image", t("instances.actions.retryImage")) }}</span>
                       </DropdownMenuItem>
                       <DropdownMenuSub>
                         <DropdownMenuSubTrigger class="instance-action-item">
                           <Download :size="14" />
-                          <span>Import config</span>
+                          <span>{{ t("instances.actions.importConfig") }}</span>
                         </DropdownMenuSubTrigger>
                         <DropdownMenuSubContent class="instance-action-submenu" :side-offset="7">
                           <DropdownMenuItem v-for="preset in configSyncPresets" :key="`import-${preset.id}`" class="instance-action-item" :disabled="isConfigSyncBusy(instance)" @select="$emit('runConfigSync', 'import', preset.id, instance)">
@@ -159,7 +159,7 @@
                       <DropdownMenuSub>
                         <DropdownMenuSubTrigger class="instance-action-item">
                           <Upload :size="14" />
-                          <span>Export config</span>
+                          <span>{{ t("instances.actions.exportConfig") }}</span>
                         </DropdownMenuSubTrigger>
                         <DropdownMenuSubContent class="instance-action-submenu" :side-offset="7">
                           <DropdownMenuItem v-for="preset in configSyncPresets" :key="`export-${preset.id}`" class="instance-action-item" :disabled="isConfigSyncBusy(instance) || !canExportConfig(instance)" @select="$emit('runConfigSync', 'export', preset.id, instance)">
@@ -169,11 +169,11 @@
                       </DropdownMenuSub>
                       <DropdownMenuItem class="instance-action-item" @select="$emit('openSettings', instance.id)">
                         <Settings :size="14" />
-                        <span>Settings</span>
+                        <span>{{ t("navigation.settings") }}</span>
                       </DropdownMenuItem>
                       <DropdownMenuItem class="instance-action-item danger" :disabled="isInstanceActionBusy(instance)" @select="$emit('runAction', 'delete', instance)">
                         <Trash2 :size="14" />
-                        <span>{{ activeActionLabel(instance, "delete", "Delete") }}</span>
+                        <span>{{ activeActionLabel(instance, "delete", t("instances.actions.delete")) }}</span>
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
@@ -183,24 +183,24 @@
             <ContextMenuContent class="instance-action-menu">
               <ContextMenuItem v-if="canShowInstanceAction(instance, 'start')" class="instance-action-item" :disabled="isInstanceActionBusy(instance)" @select="$emit('runAction', 'start', instance)">
                 <Play :size="14" />
-                <span>{{ activeActionLabel(instance, "start", "Start") }}</span>
+                <span>{{ activeActionLabel(instance, "start", t("instances.actions.start")) }}</span>
               </ContextMenuItem>
               <ContextMenuItem v-if="canShowInstanceAction(instance, 'stop')" class="instance-action-item" :disabled="isInstanceActionBusy(instance)" @select="$emit('runAction', 'stop', instance)">
                 <Square :size="14" />
-                <span>{{ activeActionLabel(instance, "stop", "Stop") }}</span>
+                <span>{{ activeActionLabel(instance, "stop", t("instances.actions.stop")) }}</span>
               </ContextMenuItem>
               <ContextMenuItem v-if="canShowInstanceAction(instance, 'restart')" class="instance-action-item" :disabled="isInstanceActionBusy(instance)" @select="$emit('runAction', 'restart', instance)">
                 <RotateCw :size="14" />
-                <span>{{ activeActionLabel(instance, "restart", "Restart") }}</span>
+                <span>{{ activeActionLabel(instance, "restart", t("instances.actions.restart")) }}</span>
               </ContextMenuItem>
               <ContextMenuItem v-if="canShowInstanceAction(instance, 'retry-image')" class="instance-action-item" :disabled="isInstanceActionBusy(instance)" @select="$emit('runAction', 'retry-image', instance)">
                 <RotateCw :size="14" />
-                <span>{{ activeActionLabel(instance, "retry-image", "Retry image") }}</span>
+                <span>{{ activeActionLabel(instance, "retry-image", t("instances.actions.retryImage")) }}</span>
               </ContextMenuItem>
               <ContextMenuSub>
                 <ContextMenuSubTrigger class="instance-action-item">
                   <Download :size="14" />
-                  <span>Import config</span>
+                  <span>{{ t("instances.actions.importConfig") }}</span>
                 </ContextMenuSubTrigger>
                 <ContextMenuSubContent class="instance-action-submenu" :side-offset="7">
                   <ContextMenuItem v-for="preset in configSyncPresets" :key="`context-import-${preset.id}`" class="instance-action-item" :disabled="isConfigSyncBusy(instance)" @select="$emit('runConfigSync', 'import', preset.id, instance)">
@@ -211,7 +211,7 @@
               <ContextMenuSub>
                 <ContextMenuSubTrigger class="instance-action-item">
                   <Upload :size="14" />
-                  <span>Export config</span>
+                  <span>{{ t("instances.actions.exportConfig") }}</span>
                 </ContextMenuSubTrigger>
                 <ContextMenuSubContent class="instance-action-submenu" :side-offset="7">
                   <ContextMenuItem v-for="preset in configSyncPresets" :key="`context-export-${preset.id}`" class="instance-action-item" :disabled="isConfigSyncBusy(instance) || !canExportConfig(instance)" @select="$emit('runConfigSync', 'export', preset.id, instance)">
@@ -221,26 +221,27 @@
               </ContextMenuSub>
               <ContextMenuItem class="instance-action-item" @select="$emit('openSettings', instance.id)">
                 <Settings :size="14" />
-                <span>Settings</span>
+                <span>{{ t("instances.actions.settings") }}</span>
               </ContextMenuItem>
               <ContextMenuItem class="instance-action-item danger" :disabled="isInstanceActionBusy(instance)" @select="$emit('runAction', 'delete', instance)">
                 <Trash2 :size="14" />
-                <span>{{ activeActionLabel(instance, "delete", "Delete") }}</span>
+                <span>{{ activeActionLabel(instance, "delete", t("instances.actions.delete")) }}</span>
               </ContextMenuItem>
             </ContextMenuContent>
           </ContextMenu>
           </template>
         </template>
-        <div v-if="!instances.length" class="list-empty">No matching instances</div>
+        <div v-if="!instances.length" class="list-empty">{{ t("instances.list.noMatches") }}</div>
         </div>
       </ScrollArea>
     </template>
-    <button v-if="!collapsed && !embedded" type="button" class="instance-resize-handle" aria-label="Resize instances sidebar" title="Resize instances" @pointerdown="$emit('resizeStart', $event)" />
+    <button v-if="!collapsed && !embedded" type="button" class="instance-resize-handle" :aria-label="t('instances.list.resizeSidebar')" :title="t('instances.list.resize')" @pointerdown="$emit('resizeStart', $event)" />
   </aside>
 </template>
 
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import { Boxes, ChevronRight, Container, Download, Laptop, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Play, Plus, RotateCw, Search, Server, Settings, Square, Trash2, Upload } from "@lucide/vue";
 import type { InstanceBoardItem } from "../../../api/types";
 import { Button } from "../../../components/ui/button";
@@ -252,6 +253,8 @@ import type { ConfigSyncDirection, InstanceAction } from "../useInstanceActions"
 import { canShowInstanceAction, imageProvisioningLabel, instanceSourceLabel } from "../useInstanceStatus";
 import type { InstanceListSortMode } from "./useWorkbenchInstances";
 import InstanceViewOptionsMenu from "../shared/InstanceViewOptionsMenu.vue";
+
+const { t } = useI18n();
 
 defineOptions({ name: "InstanceList" });
 
@@ -304,19 +307,19 @@ function instanceNodeLabel(instance: InstanceBoardItem) {
 
 function instanceRuntimeLabel(instance: InstanceBoardItem) {
   if (instance.runtime?.type === "local") {
-    return "Local runtime";
+    return t("instances.list.localRuntime");
   }
   if (instance.runtime?.type === "docker") {
-    return "Docker runtime";
+    return t("instances.list.dockerRuntime");
   }
-  return "Kubernetes runtime";
+  return t("instances.list.kubernetesRuntime");
 }
 
 const collapsedGroups = reactive<Record<string, boolean>>({});
 
 const instanceGroups = computed(() => {
   if (!props.groupByNode) {
-    return [{ key: "__all__", label: "All nodes", instances: props.instances }];
+    return [{ key: "__all__", label: t("instances.board.allNodes"), instances: props.instances }];
   }
   const groups = new Map<string, { key: string; label: string; instances: InstanceBoardItem[] }>();
   for (const instance of props.instances) {

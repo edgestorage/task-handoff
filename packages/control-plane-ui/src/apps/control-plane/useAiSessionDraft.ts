@@ -3,6 +3,12 @@ import type { AiSessionMentionBinding } from "../../components/ai-session/mentio
 
 const AI_SESSION_DRAFT_STORAGE_KEY = "task-handoff.control-plane.ai-session-drafts";
 export const AI_SESSION_DRAFT_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
+// Provider-bound content is intentionally locale-neutral and must not use UI translation resources.
+export const AI_SESSION_ATTACHMENT_ONLY_MESSAGE = "Please review the attached files.";
+
+export function aiSessionMessageText(message: string) {
+  return message || AI_SESSION_ATTACHMENT_ONLY_MESSAGE;
+}
 
 type StoredDraft = {
   value: string;

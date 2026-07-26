@@ -16,11 +16,11 @@ test("instance detail consumes resource snapshots in the existing footer", () =>
   assert.match(workbench, /<InstanceDetail[\s\S]*?:resource-metrics="activeInstanceResourceMetrics"/);
   assert.match(workbench, /:resource-metrics-error="activeInstanceResourceMetricsError"/);
   assert.match(detail, /:resource-metrics="resourceMetrics"/);
-  assert.match(preview, /CPU \$\{formatPercent/);
-  assert.match(preview, /Memory \$\{formatBytes/);
-  assert.match(preview, /Resources starting/);
-  assert.match(preview, /Resources stale/);
-  assert.match(preview, /Resources unavailable/);
+  assert.match(preview, /translate\("sessions\.tabs\.cpu", \{ value: metrics\.cpu \? formatPercent/);
+  assert.match(preview, /translate\("sessions\.tabs\.memory", \{ value: `\$\{formatBytes/);
+  assert.match(preview, /translate\("sessions\.tabs\.resourcesStarting"\)/);
+  assert.match(preview, /translate\("sessions\.tabs\.resourcesStale"\)/);
+  assert.match(preview, /translate\("sessions\.tabs\.resourcesUnavailable"\)/);
   assert.match(workbench, /activeInstance\.value\?\.runtime\?\.type === "docker"/);
   assert.match(workbench, /if \(!currentIds\.has\(instanceId\)\) delete resourceMetricsByInstanceId\[instanceId\]/);
   assert.match(events, /InstanceResourceMetricsEventType\.Snapshot/);

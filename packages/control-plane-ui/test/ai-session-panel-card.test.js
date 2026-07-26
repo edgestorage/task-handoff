@@ -20,7 +20,7 @@ test("AI session path labels show only the folder and reveal the full path when 
   assert.match(panel, /class="session-ai-card-workspace">\s*<span aria-hidden="true">·<\/span>/);
   assert.match(panel, /aiSessionBasename\(session\.cwd\)/);
   assert.match(panel, /<TooltipTrigger as-child>\s*<b>/);
-  assert.match(panel, /<TooltipContent[^>]*>\{\{ session\.cwd \|\| "Unknown path" \}\}<\/TooltipContent>/);
+  assert.match(panel, /<TooltipContent[^>]*>\{\{ session\.cwd \|\| t\("sessions\.board\.unknownPath"\) \}\}<\/TooltipContent>/);
   assert.match(panel, /<TooltipTrigger as-child>\s*<span class="session-ai-path-group-title">/);
   assert.match(styles, /\.session-ai-card-workspace b\s*\{[^}]*color: inherit;[^}]*font-weight: inherit;/s);
 });
@@ -50,15 +50,15 @@ test("waiting approval actions float at the bottom left of instance AI session c
 });
 
 test("instance AI session card previews do not open an expanded overlay", () => {
-  assert.doesNotMatch(panel, /expandedPreview|data-ai-preview-trigger|expandPrompt|expandMessage|展开用户消息|展开 AI 进展/);
+  assert.doesNotMatch(panel, /expandedPreview|data-ai-preview-trigger|expandPrompt|expandMessage/);
   assert.doesNotMatch(styles, /session-ai-expanded|cursor: zoom-in/);
 });
 
 test("bound instance AI sessions expose the same close menu as board cards", () => {
-  assert.match(panel, /<DropdownMenu v-if="aiSessionAppTab\(instance, session\)">[\s\S]*?More actions for \$\{session\.agent\}[\s\S]*?Close app session/);
+  assert.match(panel, /<DropdownMenu v-if="aiSessionAppTab\(instance, session\)">[\s\S]*?t\('sessions\.actions\.moreFor', \{ agent: session\.agent \}\)[\s\S]*?t\("sessions\.actions\.closeApp"\)/);
   assert.match(panel, /await stopAppSession\(props\.instance\.id, appSessionId\);/);
   assert.match(panel, /const appSession = aiSessionAppTab\(props\.instance, session\);/);
-  assert.match(panel, /stoppingAppSessionId === session\.id \? "Closing app session" : "Close app session"/);
+  assert.match(panel, /stoppingAppSessionId === session\.id \? t\("sessions\.actions\.closingApp"\) : t\("sessions\.actions\.closeApp"\)/);
   assert.match(styles, /:global\(\.session-ai-card-menu\)/);
   assert.match(styles, /:global\(\.session-ai-card-menu-item\.danger\)/);
 });
@@ -80,11 +80,11 @@ test("instance and board cards share one action button style", () => {
 test("an unselected AI session defaults to the new-session surface", () => {
   assert.match(panel, /const showNewSession = computed\(\(\) => newSessionOpen\.value \|\| !selectedSession\.value\);/);
   assert.match(panel, /<section v-else-if="showNewSession" class="session-ai-detail session-ai-new-detail">/);
-  assert.match(panel, /<h1 class="session-ai-new-title">Start with an idea<\/h1>/);
+  assert.match(panel, /<h1 class="session-ai-new-title">\{\{ t\("sessions\.panel\.startIdea"\) \}\}<\/h1>/);
   assert.match(styles, /\.session-ai-new-start\s*\{[^}]*width: min\(760px, 100%\);[^}]*gap: 28px;/s);
   assert.match(styles, /\.session-ai-new-title\s*\{[^}]*text-align: center;/s);
   assert.match(panel, /watch\(\s*\[showNewSession, aiSessionLaunchableApps, newSessionFolders\]/);
-  assert.doesNotMatch(panel, /No AI session selected\./);
+  assert.doesNotMatch(panel, /session-ai-no-selection/);
 });
 
 test("opening the already-visible new-session surface preserves its draft", () => {

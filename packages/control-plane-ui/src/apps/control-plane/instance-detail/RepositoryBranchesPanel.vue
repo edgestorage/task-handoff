@@ -1,13 +1,13 @@
 <template>
-  <section class="repository-branches-panel" aria-label="Repository branches">
+  <section class="repository-branches-panel" :aria-label="t('repository.branchesPanel.region')">
     <header>
-      <span><GitBranch :size="16" /><strong>Branches</strong></span>
+      <span><GitBranch :size="16" /><strong>{{ t("repository.branches") }}</strong></span>
       <span class="repository-branch-header-actions">
-        <button type="button" aria-label="Create branch" title="Create branch" :aria-expanded="createOpen" @click="toggleCreate">
+        <button type="button" :aria-label="t('repository.branchesPanel.create')" :title="t('repository.branchesPanel.create')" :aria-expanded="createOpen" @click="toggleCreate">
           <X v-if="createOpen" :size="14" />
           <Plus v-else :size="14" />
         </button>
-        <button type="button" aria-label="Refresh branches" title="Refresh branches" :disabled="branchesQuery.isFetching.value" @click="branchesQuery.refetch()">
+        <button type="button" :aria-label="t('repository.branchesPanel.refresh')" :title="t('repository.branchesPanel.refresh')" :disabled="branchesQuery.isFetching.value" @click="branchesQuery.refetch()">
           <LoaderCircle v-if="branchesQuery.isFetching.value" class="repository-branch-spin" :size="14" />
           <RefreshCw v-else :size="14" />
         </button>
@@ -16,37 +16,38 @@
 
     <form v-if="createOpen" class="repository-branch-create" @submit.prevent="createBranch">
       <label>
-        <span>New branch from current HEAD</span>
+        <span>{{ t("repository.branchesPanel.newFromHead") }}</span>
+        <!-- i18n-audit-allow-next-line code-token: example Git branch name -->
         <input v-model="createName" name="branchName" autocomplete="off" placeholder="feature/my-change" :disabled="mutating" />
       </label>
       <button type="submit" :disabled="mutating || !branches?.snapshotId || !createName.trim()">
         <LoaderCircle v-if="mutationAction === 'create'" class="repository-branch-spin" :size="14" />
         <GitBranch v-else :size="14" />
-        <span>Create and checkout</span>
+        <span>{{ t("repository.branchesPanel.createCheckout") }}</span>
       </button>
     </form>
 
     <label class="repository-branch-search">
       <Search :size="14" />
-      <input v-model="search" type="search" placeholder="Search branches" aria-label="Search branches" />
+      <input v-model="search" type="search" :placeholder="t('repository.branchesPanel.search')" :aria-label="t('repository.branchesPanel.search')" />
     </label>
 
-    <RepositoryErrorNotice v-if="mutationError" :error="mutationError" fallback="The branch operation failed." />
+    <RepositoryErrorNotice v-if="mutationError" :error="mutationError" :fallback="t('repository.errors.branchOperation')" />
     <div v-if="branchesQuery.isPending.value" class="repository-branch-state" role="status">
-      <LoaderCircle class="repository-branch-spin" :size="17" /><span>Reading branches…</span>
+      <LoaderCircle class="repository-branch-spin" :size="17" /><span>{{ t("repository.branchesPanel.reading") }}</span>
     </div>
-    <RepositoryErrorNotice v-else-if="branchesQuery.error.value" :error="branchesQuery.error.value" fallback="The instance did not return branches." />
+    <RepositoryErrorNotice v-else-if="branchesQuery.error.value" :error="branchesQuery.error.value" :fallback="t('repository.errors.branchesLoad')" />
     <div v-else class="repository-branch-groups">
       <section>
-        <h3>Local <span>{{ filteredLocal.length }}</span></h3>
-        <div v-if="!filteredLocal.length" class="repository-branch-empty">No matching local branches.</div>
+        <h3>{{ t("repository.branchesPanel.local") }} <span>{{ filteredLocal.length }}</span></h3>
+        <div v-if="!filteredLocal.length" class="repository-branch-empty">{{ t("repository.branchesPanel.noLocal") }}</div>
         <template v-for="node in visibleLocal" :key="node.id">
           <button
             v-if="node.kind === 'folder'"
             type="button"
             class="repository-branch-folder"
             :style="branchTreeLayout(node.depth)"
-            :aria-label="`${node.label} folder, ${node.count} ${node.count === 1 ? 'branch' : 'branches'}`"
+            :aria-label="t('repository.branchesPanel.folder', { name: node.label, count: node.count })"
             :aria-expanded="node.expanded"
             @click="toggleFolder(node.id)"
           >
@@ -59,16 +60,16 @@
           <article v-else class="repository-branch-row" :data-current="node.branch.current ? 'true' : undefined" :style="branchTreeLayout(node.depth)">
             <button type="button" class="repository-branch-select" :disabled="node.branch.current || mutating" @click="checkoutBranch(node.branch)">
               <span class="repository-branch-name" :title="node.branch.name"><Check v-if="node.branch.current" :size="14" /><GitBranch v-else :size="14" /><strong>{{ node.label }}</strong></span>
-              <small v-if="node.branch.current && currentChangeCount">{{ currentChangeCount }} uncommitted file{{ currentChangeCount === 1 ? "" : "s" }}</small>
-              <small v-else-if="node.branch.checkedOutWorktreeIds.length">Checked out in {{ node.branch.checkedOutWorktreeIds.length }} worktree{{ node.branch.checkedOutWorktreeIds.length === 1 ? "" : "s" }}</small>
-              <small v-else-if="node.branch.upstream">{{ node.branch.upstream }}<template v-if="node.branch.ahead || node.branch.behind"> · {{ node.branch.ahead || 0 }} ahead, {{ node.branch.behind || 0 }} behind</template></small>
+              <small v-if="node.branch.current && currentChangeCount">{{ t("repository.branchesPanel.uncommitted", { count: currentChangeCount }) }}</small>
+              <small v-else-if="node.branch.checkedOutWorktreeIds.length">{{ t("repository.branchesPanel.checkedOut", { count: node.branch.checkedOutWorktreeIds.length }) }}</small>
+              <small v-else-if="node.branch.upstream">{{ node.branch.upstream }}<template v-if="node.branch.ahead || node.branch.behind"> · {{ t("repository.branchesPanel.sync", { ahead: node.branch.ahead || 0, behind: node.branch.behind || 0 }) }}</template></small>
             </button>
             <button
               v-if="!node.branch.current"
               type="button"
               class="repository-branch-delete"
-              aria-label="Delete branch"
-              title="Delete branch"
+              :aria-label="t('repository.branchesPanel.delete')"
+              :title="t('repository.branchesPanel.delete')"
               :disabled="mutating || node.branch.checkedOutWorktreeIds.length > 0"
               @click="confirmDelete(node.branch)"
             >
@@ -79,15 +80,15 @@
       </section>
 
       <section>
-        <h3>Remote-tracking <span>{{ filteredRemote.length }}</span></h3>
-        <div v-if="!filteredRemote.length" class="repository-branch-empty">No matching remote-tracking branches.</div>
+        <h3>{{ t("repository.branchesPanel.remote") }} <span>{{ filteredRemote.length }}</span></h3>
+        <div v-if="!filteredRemote.length" class="repository-branch-empty">{{ t("repository.branchesPanel.noRemote") }}</div>
         <template v-for="node in visibleRemote" :key="node.id">
           <button
             v-if="node.kind === 'folder'"
             type="button"
             class="repository-branch-folder"
             :style="branchTreeLayout(node.depth)"
-            :aria-label="`${node.label} folder, ${node.count} ${node.count === 1 ? 'branch' : 'branches'}`"
+            :aria-label="t('repository.branchesPanel.folder', { name: node.label, count: node.count })"
             :aria-expanded="node.expanded"
             @click="toggleFolder(node.id)"
           >
@@ -100,9 +101,9 @@
           <article v-else class="repository-branch-row remote" :style="branchTreeLayout(node.depth)">
             <div class="repository-branch-select static">
               <span class="repository-branch-name" :title="node.branch.name"><Cloud :size="14" /><strong>{{ node.label }}</strong></span>
-              <small v-if="node.branch.checkedOutWorktreeIds.length">Tracked in {{ node.branch.checkedOutWorktreeIds.length }} worktree{{ node.branch.checkedOutWorktreeIds.length === 1 ? "" : "s" }}</small>
+              <small v-if="node.branch.checkedOutWorktreeIds.length">{{ t("repository.branchesPanel.tracked", { count: node.branch.checkedOutWorktreeIds.length }) }}</small>
             </div>
-            <button type="button" class="repository-branch-track" :disabled="mutating" @click="beginTracking(node.branch)">Track</button>
+            <button type="button" class="repository-branch-track" :disabled="mutating" @click="beginTracking(node.branch)">{{ t("repository.branchesPanel.track") }}</button>
           </article>
         </template>
       </section>
@@ -111,20 +112,20 @@
     <Dialog v-model:open="trackingDialogOpen">
       <DialogContent class="repository-branch-dialog">
         <DialogHeader>
-          <DialogTitle>Create tracking branch</DialogTitle>
-          <DialogDescription>Create a local branch that explicitly tracks {{ trackingTarget?.name }}.</DialogDescription>
+          <DialogTitle>{{ t("repository.branchesPanel.trackingTitle") }}</DialogTitle>
+          <DialogDescription>{{ t("repository.branchesPanel.trackingDescription", { branch: trackingTarget?.name }) }}</DialogDescription>
         </DialogHeader>
         <label class="repository-branch-dialog-field">
-          <span>Local branch name</span>
+          <span>{{ t("repository.branchesPanel.localName") }}</span>
           <input v-model="trackingName" autocomplete="off" :disabled="mutating" />
         </label>
-        <RepositoryErrorNotice v-if="mutationError" :error="mutationError" fallback="The tracking branch could not be created." />
+        <RepositoryErrorNotice v-if="mutationError" :error="mutationError" :fallback="t('repository.branchesPanel.trackingError')" />
         <DialogFooter>
-          <Button variant="outline" :disabled="mutating" @click="trackingDialogOpen = false">Cancel</Button>
+          <Button variant="outline" :disabled="mutating" @click="trackingDialogOpen = false">{{ t("repository.common.cancel") }}</Button>
           <Button :disabled="mutating || !trackingName.trim()" @click="createTrackingBranch">
             <LoaderCircle v-if="mutationAction === 'tracking'" class="repository-branch-spin" :size="14" />
             <GitBranch v-else :size="14" />
-            <span>Create and checkout</span>
+            <span>{{ t("repository.branchesPanel.createCheckout") }}</span>
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -133,17 +134,17 @@
     <Dialog v-model:open="deleteDialogOpen">
       <DialogContent class="repository-branch-dialog">
         <DialogHeader>
-          <DialogTitle>Delete local branch?</DialogTitle>
-          <DialogDescription>Only a merged branch that is not current or checked out in another worktree can be deleted. Force deletion is not available.</DialogDescription>
+          <DialogTitle>{{ t("repository.branchesPanel.deleteTitle") }}</DialogTitle>
+          <DialogDescription>{{ t("repository.branchesPanel.deleteDescription") }}</DialogDescription>
         </DialogHeader>
         <div v-if="deleteTarget" class="repository-branch-delete-summary"><GitBranch :size="15" /><strong>{{ deleteTarget.name }}</strong></div>
-        <RepositoryErrorNotice v-if="mutationError" :error="mutationError" fallback="The branch could not be deleted." />
+        <RepositoryErrorNotice v-if="mutationError" :error="mutationError" :fallback="t('repository.branchesPanel.deleteError')" />
         <DialogFooter>
-          <Button variant="outline" :disabled="mutating" @click="deleteDialogOpen = false">Cancel</Button>
+          <Button variant="outline" :disabled="mutating" @click="deleteDialogOpen = false">{{ t("repository.common.cancel") }}</Button>
           <Button variant="destructive" :disabled="mutating || !deleteTarget" @click="deleteBranch">
             <LoaderCircle v-if="mutationAction === 'delete'" class="repository-branch-spin" :size="14" />
             <Trash2 v-else :size="14" />
-            <span>Delete branch</span>
+            <span>{{ t("repository.branchesPanel.delete") }}</span>
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -156,6 +157,7 @@ import type { RepositoryBranch, RepositoryBranchMutationResult, RepositorySessio
 import { Check, ChevronRight, Cloud, Folder, FolderOpen, GitBranch, LoaderCircle, Plus, RefreshCw, Search, Trash2, X } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import { computed, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import {
   checkoutRepositoryBranch,
   createRepositoryBranch,
@@ -174,6 +176,7 @@ const props = defineProps<{
   sessionId: string;
   sessionKind: RepositorySessionKind;
 }>();
+const { t } = useI18n();
 
 const target = computed(() => ({ instanceId: props.instanceId, sessionKind: props.sessionKind, sessionId: props.sessionId }));
 const queryClient = useQueryClient();

@@ -1,12 +1,12 @@
 <template>
-  <section class="control-settings-page" aria-label="Settings">
+  <section class="control-settings-page" :aria-label="t('settings.title')">
       <div class="control-settings-page-actions">
         <Button variant="outline" size="sm" @click="emit('back')">
           <ArrowLeft :size="14" />
-          <span>Back</span>
+          <span>{{ t("common.actions.back") }}</span>
         </Button>
         <Tabs :model-value="settingsSection" @update:model-value="(value) => setSettingsSection(value as SettingsSection)">
-          <TabsList class="control-settings-tabs" aria-label="Settings sections">
+          <TabsList class="control-settings-tabs" :aria-label="t('settings.sections')">
             <TabsTrigger v-for="item in settingsSections" :key="item.id" :value="item.id">{{ item.label }}</TabsTrigger>
           </TabsList>
         </Tabs>
@@ -66,7 +66,7 @@
       <div v-else-if="settingsSection === 'models'" class="project-management-grid">
         <section class="modal-section">
           <div class="section-head">
-            <span>Models · {{ models.data.value?.length || 0 }}</span>
+            <span>{{ t("settings.modelRegistry.count", { count: models.data.value?.length || 0 }) }}</span>
           </div>
           <ScrollArea class="registered-project-list">
             <div class="settings-scroll-content">
@@ -78,37 +78,37 @@
                 </div>
                 <div class="model-card-badges">
                   <Badge variant="secondary">{{ model.app }}</Badge>
-                  <Badge :variant="model.enabled ? 'default' : 'secondary'">{{ model.enabled ? "Enabled" : "Disabled" }}</Badge>
+                  <Badge :variant="model.enabled ? 'default' : 'secondary'">{{ model.enabled ? t("settings.modelRegistry.enabled") : t("settings.modelRegistry.disabled") }}</Badge>
                 </div>
               </header>
               <div class="model-card-endpoint" :title="model.endpoint">{{ model.endpoint }}</div>
               <div class="model-card-meta">
-                <span>Credential {{ model.keyPreview || (model.keySet ? "set" : "missing") }}</span>
-                <span>{{ model.referenceCount || 0 }} {{ (model.referenceCount || 0) === 1 ? "reference" : "references" }}</span>
+                <span>{{ t("settings.modelRegistry.credential", { value: model.keyPreview || (model.keySet ? t("settings.modelRegistry.set") : t("settings.modelRegistry.missing")) }) }}</span>
+                <span>{{ t("settings.modelRegistry.references", { count: model.referenceCount || 0 }) }}</span>
               </div>
-              <div class="model-location-list" aria-label="Model locations">
+              <div class="model-location-list" :aria-label="t('settings.modelRegistry.locations')">
                 <div v-for="location in model.locations || []" :key="modelLocationKey(location)" class="model-location-row">
                   <MapPin :size="13" aria-hidden="true" />
                   <span>{{ modelLocationLabel(location) }}</span>
-                  <small v-if="location.type === 'node'">{{ location.referenceCount }} {{ location.referenceCount === 1 ? "ref" : "refs" }}</small>
+                  <small v-if="location.type === 'node'">{{ t("settings.modelRegistry.references", { count: location.referenceCount }) }}</small>
                 </div>
               </div>
               <footer class="settings-row-actions model-card-actions">
-                <Button variant="outline" size="sm" class="icon-button" :disabled="!model.locations?.some((location) => location.type === 'control-plane') || savingModelId === model.id || !canMoveModel(model.id, -1)" aria-label="Move model up" title="Move up" @click="moveModel(model.id, -1)">
+                <Button variant="outline" size="sm" class="icon-button" :disabled="!model.locations?.some((location) => location.type === 'control-plane') || savingModelId === model.id || !canMoveModel(model.id, -1)" :aria-label="t('settings.modelRegistry.moveUp')" :title="t('settings.modelRegistry.moveUp')" @click="moveModel(model.id, -1)">
                   <ChevronUp :size="14" />
                 </Button>
-                <Button variant="outline" size="sm" class="icon-button" :disabled="!model.locations?.some((location) => location.type === 'control-plane') || savingModelId === model.id || !canMoveModel(model.id, 1)" aria-label="Move model down" title="Move down" @click="moveModel(model.id, 1)">
+                <Button variant="outline" size="sm" class="icon-button" :disabled="!model.locations?.some((location) => location.type === 'control-plane') || savingModelId === model.id || !canMoveModel(model.id, 1)" :aria-label="t('settings.modelRegistry.moveDown')" :title="t('settings.modelRegistry.moveDown')" @click="moveModel(model.id, 1)">
                   <ChevronDown :size="14" />
                 </Button>
                 <Button variant="outline" size="sm" class="model-edit-button" :disabled="savingModelId === model.id" @click="editModel(model)">
                   <Settings :size="14" />
-                  <span>Edit all</span>
+                  <span>{{ t("settings.modelRegistry.editAll") }}</span>
                 </Button>
                 <DropdownMenu>
                   <DropdownMenuTrigger as-child>
                     <Button variant="outline" size="sm" class="model-delete-trigger" :disabled="deletingModelId === model.id || !model.locations?.length">
                       <Trash2 :size="14" />
-                      <span>{{ deletingModelId === model.id ? "Deleting" : "Delete from" }}</span>
+                      <span>{{ deletingModelId === model.id ? t("settings.modelRegistry.deleting") : t("settings.modelRegistry.deleteFrom") }}</span>
                       <ChevronDown :size="13" />
                     </Button>
                   </DropdownMenuTrigger>
@@ -123,24 +123,24 @@
                       <Trash2 :size="14" />
                       <span>
                         <strong>{{ modelLocationLabel(location) }}</strong>
-                        <small v-if="location.type === 'node' && location.referenceCount > 0">In use by {{ location.referenceCount }} {{ location.referenceCount === 1 ? "instance" : "instances" }}</small>
-                        <small v-else>Delete this location only</small>
+                        <small v-if="location.type === 'node' && location.referenceCount > 0">{{ t("settings.modelRegistry.inUseBy", { count: location.referenceCount }) }}</small>
+                        <small v-else>{{ t("settings.modelRegistry.deleteLocation") }}</small>
                       </span>
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
               </footer>
             </article>
-            <p v-if="!(models.data.value || []).length" class="settings-empty">No models configured.</p>
+            <p v-if="!(models.data.value || []).length" class="settings-empty">{{ t("settings.modelRegistry.empty") }}</p>
             </div>
           </ScrollArea>
           <div v-if="modelRegistry.data.value?.nodeDiagnostics.length" class="model-node-diagnostics" role="status" aria-live="polite">
             <div class="model-node-diagnostics-head">
               <AlertTriangle :size="15" aria-hidden="true" />
-              <strong>Some node models could not be loaded</strong>
+              <strong>{{ t("settings.modelRegistry.diagnostics") }}</strong>
               <Button variant="ghost" size="sm" :disabled="modelRegistry.isFetching.value" @click="modelRegistry.refetch()">
                 <RefreshCw :size="13" />
-                <span>{{ modelRegistry.isFetching.value ? "Retrying" : "Retry" }}</span>
+                <span>{{ modelRegistry.isFetching.value ? t("settings.modelRegistry.retrying") : t("common.actions.retry") }}</span>
               </Button>
             </div>
             <div v-for="diagnostic in modelRegistry.data.value.nodeDiagnostics" :key="`${diagnostic.nodeId}:${diagnostic.code}`" class="model-node-diagnostic-row">
@@ -155,43 +155,45 @@
         <section class="modal-section">
           <div class="section-head model-form-head">
             <div>
-              <span>{{ editingModelId ? "Edit model" : "Add model" }}</span>
-              <small>{{ editingModelId ? `Changes apply to all ${editingModelLocationCount} locations; the old configuration remains available.` : "Create a private model configuration at one location." }}</small>
+              <span>{{ editingModelId ? t("settings.modelRegistry.edit") : t("settings.modelRegistry.add") }}</span>
+              <small>{{ editingModelId ? t("settings.modelRegistry.editDescription", { count: editingModelLocationCount }) : t("settings.modelRegistry.addDescription") }}</small>
             </div>
-            <button v-if="editingModelId" type="button" @click="resetModelForm">New model</button>
+            <button v-if="editingModelId" type="button" @click="resetModelForm">{{ t("settings.modelRegistry.new") }}</button>
           </div>
           <div class="inline-create">
             <label v-if="!editingModelId">
-              <span>Location</span>
-              <ControlPlaneSelect v-model="settingsModel.locationScope" placeholder="Select location">
-                <ControlPlaneSelectItem value="control-plane">Control plane</ControlPlaneSelectItem>
-                <ControlPlaneSelectItem v-for="node in nodes.data.value || []" :key="node.id" :value="node.id">Node · {{ node.name }}</ControlPlaneSelectItem>
+              <span>{{ t("settings.fields.location") }}</span>
+              <ControlPlaneSelect v-model="settingsModel.locationScope" :placeholder="t('settings.modelRegistry.selectLocation')">
+                <ControlPlaneSelectItem value="control-plane">{{ t("settings.modelRegistry.controlPlane") }}</ControlPlaneSelectItem>
+                <ControlPlaneSelectItem v-for="node in nodes.data.value || []" :key="node.id" :value="node.id">{{ t("settings.modelRegistry.nodeLocation", { name: node.name }) }}</ControlPlaneSelectItem>
               </ControlPlaneSelect>
             </label>
             <div v-else class="model-edit-scope">
-              <span>Location</span>
-              <div><Layers :size="15" /><strong>All {{ editingModelLocationCount }} locations</strong></div>
+              <span>{{ t("settings.fields.location") }}</span>
+              <div><Layers :size="15" /><strong>{{ t("settings.modelRegistry.allLocations", { count: editingModelLocationCount }) }}</strong></div>
             </div>
             <label>
-              <span>Name</span>
-              <ControlPlaneInput v-model="settingsModel.name" placeholder="OpenAI primary" />
+              <span>{{ t("settings.fields.name") }}</span>
+              <ControlPlaneInput v-model="settingsModel.name" :placeholder="t('settings.modelRegistry.namePlaceholder')" />
             </label>
             <label>
-              <span>Endpoint</span>
+              <span>{{ t("settings.fields.endpoint") }}</span>
+              <!-- i18n-audit-allow-next-line code-token: example model API endpoint -->
               <ControlPlaneInput v-model="settingsModel.endpoint" placeholder="https://api.openai.com/v1" />
             </label>
             <label>
-              <span>Model</span>
+              <span>{{ t("settings.modelRegistry.model") }}</span>
+              <!-- i18n-audit-allow-next-line product-name: example model identifier -->
               <ControlPlaneInput v-model="settingsModel.model" placeholder="gpt-5-codex" />
             </label>
             <label>
-              <span>API key</span>
-              <ControlPlaneInput v-model="settingsModel.key" type="password" :placeholder="editingModelId ? 'Leave blank to keep current key' : 'API key'" />
-              <small v-if="editingModelId">Leave blank to keep the current credential at every location.</small>
+              <span>{{ t("settings.fields.apiKey") }}</span>
+              <ControlPlaneInput v-model="settingsModel.key" type="password" :placeholder="editingModelId ? t('settings.modelRegistry.keepKey') : t('settings.fields.apiKey')" />
+              <small v-if="editingModelId">{{ t("settings.modelRegistry.keepCredential") }}</small>
             </label>
             <label>
-              <span>App</span>
-              <ControlPlaneSelect v-model="settingsModel.app" placeholder="Select app">
+              <span>{{ t("settings.fields.app") }}</span>
+              <ControlPlaneSelect v-model="settingsModel.app" :placeholder="t('settings.modelRegistry.selectApp')">
                 <ControlPlaneSelectItem value="codex">Codex</ControlPlaneSelectItem>
                 <ControlPlaneSelectItem value="claude">Claude</ControlPlaneSelectItem>
               </ControlPlaneSelect>
@@ -199,12 +201,12 @@
             <div class="checkbox-row">
               <label>
                 <Checkbox :model-value="settingsModel.enabled" @update:model-value="(value) => settingsModel.enabled = value === true" />
-                <span>Enabled</span>
+                <span>{{ t("common.status.enabled") }}</span>
               </label>
             </div>
             <Button size="sm" class="model-submit" :disabled="!canSaveModel || savingModelId === formModelBusyId" @click="saveModel">
               <Plus :size="15" />
-              <span>{{ savingModelId === formModelBusyId ? "Saving" : editingModelId ? "Save model" : "Create model" }}</span>
+              <span>{{ savingModelId === formModelBusyId ? t("settings.modelRegistry.saving") : editingModelId ? t("settings.modelRegistry.save") : t("settings.modelRegistry.create") }}</span>
             </Button>
           </div>
         </section>
@@ -213,8 +215,8 @@
       <div v-else-if="settingsSection === 'images'" class="image-management-grid">
         <section class="modal-section">
           <div class="section-head">
-            <span>Registered images · {{ images.data.value?.length || 0 }}</span>
-            <ControlPlaneSelect v-model="imageCatalogNodeId" placeholder="Select node">
+            <span>{{ t("settings.imageRegistry.count", { count: images.data.value?.length || 0 }) }}</span>
+            <ControlPlaneSelect v-model="imageCatalogNodeId" :placeholder="t('settings.imageRegistry.selectNode')">
               <ControlPlaneSelectItem v-for="node in nodes.data.value || []" :key="node.id" :value="node.id">{{ node.name }}</ControlPlaneSelectItem>
             </ControlPlaneSelect>
           </div>
@@ -225,39 +227,40 @@
                 <strong>{{ image.name }}</strong>
                 <code>{{ image.reference }}</code>
                 <span class="image-meta-line">
-                  {{ catalogAvailabilityLabel(image.id) }} · {{ image.capabilities.length ? image.capabilities.join(", ") : "no expected capabilities" }}
+                  {{ catalogAvailabilityLabel(image.id) }} · {{ image.capabilities.length ? image.capabilities.join(", ") : t("settings.imageRegistry.noCapabilities") }}
                 </span>
               </div>
               <div class="settings-row-actions">
-                <Badge variant="secondary">{{ image.pullPolicy }}</Badge>
+                <Badge variant="secondary">{{ imagePullPolicyLabel(image.pullPolicy) }}</Badge>
                 <Button variant="outline" size="sm" :disabled="deletingImageId === image.id" @click="removeImageProfile(image)">
                   <Trash2 :size="14" />
-                  <span>{{ deletingImageId === image.id ? "Deleting" : "Delete" }}</span>
+                  <span>{{ deletingImageId === image.id ? t("settings.imageRegistry.deleting") : t("common.actions.delete") }}</span>
                 </Button>
               </div>
             </div>
-            <p v-if="!(images.data.value || []).length" class="settings-empty">No image profiles yet.</p>
+            <p v-if="!(images.data.value || []).length" class="settings-empty">{{ t("settings.imageRegistry.empty") }}</p>
             </div>
           </ScrollArea>
         </section>
 
         <section class="modal-section">
           <div class="section-head">
-            <span>Add public registry image</span>
+            <span>{{ t("settings.imageRegistry.addTitle") }}</span>
           </div>
           <div class="inline-create">
             <label>
-              <span>Name</span>
-              <ControlPlaneInput v-model="settingsImage.name" placeholder="Controlled instance" />
+              <span>{{ t("settings.fields.name") }}</span>
+              <ControlPlaneInput v-model="settingsImage.name" :placeholder="t('settings.imageRegistry.namePlaceholder')" />
             </label>
             <label>
-              <span>Image reference</span>
+              <span>{{ t("settings.imageRegistry.reference") }}</span>
+              <!-- i18n-audit-allow-next-line code-token: example OCI image reference -->
               <ControlPlaneInput v-model="settingsImage.reference" placeholder="docker.io/org/image:v1" />
-              <small>Use an explicit tag or sha256 digest. Private registry credentials are not configured here.</small>
+              <small>{{ t("settings.imageRegistry.referenceDescription") }}</small>
             </label>
             <Button variant="outline" size="sm" :disabled="!canCreateImage || savingImage" @click="createRegistryImage">
               <Plus :size="14" />
-              <span>{{ savingImage ? "Adding" : "Add image" }}</span>
+              <span>{{ savingImage ? t("settings.imageRegistry.adding") : t("settings.imageRegistry.add") }}</span>
             </Button>
           </div>
           <p v-if="imageCreateSuccess" class="settings-success">{{ imageCreateSuccess }}</p>
@@ -267,7 +270,7 @@
       <div v-else-if="settingsSection === 'projects'" class="project-management-grid">
         <section class="modal-section">
           <div class="section-head">
-            <span>Git repositories · {{ projects.data.value?.length || 0 }}</span>
+            <span>{{ t("settings.projectRegistry.count", { count: projects.data.value?.length || 0 }) }}</span>
           </div>
           <ScrollArea class="registered-project-list">
             <div class="settings-scroll-content">
@@ -277,50 +280,51 @@
                 <code>{{ projectSourceLabel(project) }}</code>
               </div>
               <div class="settings-row-actions">
-                <Badge variant="secondary">{{ projectInUse(project.id) ? "In use" : project.workspacePolicy.mode }}</Badge>
+                <Badge variant="secondary">{{ projectInUse(project.id) ? t("settings.projectRegistry.inUse") : project.workspacePolicy.mode }}</Badge>
                 <Button variant="outline" size="sm" :disabled="projectInUse(project.id) || deletingProjectId === project.id" @click="removeProject(project)">
                   <Trash2 :size="14" />
-                  <span>{{ deletingProjectId === project.id ? "Deleting" : "Delete" }}</span>
+                  <span>{{ deletingProjectId === project.id ? t("settings.projectRegistry.deleting") : t("common.actions.delete") }}</span>
                 </Button>
               </div>
             </div>
-            <p v-if="!(projects.data.value || []).length" class="settings-empty">No Git repositories yet.</p>
+            <p v-if="!(projects.data.value || []).length" class="settings-empty">{{ t("settings.projectRegistry.empty") }}</p>
             </div>
           </ScrollArea>
         </section>
 
         <section class="modal-section">
           <div class="section-head">
-            <span>Add Git repository</span>
+            <span>{{ t("settings.projectRegistry.addTitle") }}</span>
           </div>
           <div class="inline-create">
             <label>
-              <span>Name</span>
-              <ControlPlaneInput v-model="settingsProject.name" placeholder="Repository name" />
+              <span>{{ t("settings.fields.name") }}</span>
+              <ControlPlaneInput v-model="settingsProject.name" :placeholder="t('settings.projectRegistry.namePlaceholder')" />
             </label>
             <label>
-              <span>Git URL</span>
+              <span>{{ t("settings.projectRegistry.gitUrl") }}</span>
+              <!-- i18n-audit-allow-next-line code-token: example Git remote URL -->
               <ControlPlaneInput v-model="settingsProject.url" placeholder="https://github.com/org/repo" />
             </label>
             <div class="settings-form-grid">
               <label>
-                <span>Default image</span>
-                <ControlPlaneSelect v-model="settingsDefaultImageSelectValue" placeholder="Use default">
-                  <ControlPlaneSelectItem :value="DEFAULT_SELECT_VALUE">Use default</ControlPlaneSelectItem>
+                <span>{{ t("settings.projectRegistry.defaultImage") }}</span>
+                <ControlPlaneSelect v-model="settingsDefaultImageSelectValue" :placeholder="t('settings.projectRegistry.useDefault')">
+                  <ControlPlaneSelectItem :value="DEFAULT_SELECT_VALUE">{{ t("settings.projectRegistry.useDefault") }}</ControlPlaneSelectItem>
                   <ControlPlaneSelectItem v-for="image in images.data.value || []" :key="image.id" :value="image.id">{{ image.name }}</ControlPlaneSelectItem>
                 </ControlPlaneSelect>
               </label>
               <label>
-                <span>Default runtime</span>
-                <ControlPlaneSelect v-model="settingsDefaultRuntimeSelectValue" placeholder="Use default">
-                  <ControlPlaneSelectItem :value="DEFAULT_SELECT_VALUE">Use default</ControlPlaneSelectItem>
+                <span>{{ t("settings.projectRegistry.defaultRuntime") }}</span>
+                <ControlPlaneSelect v-model="settingsDefaultRuntimeSelectValue" :placeholder="t('settings.projectRegistry.useDefault')">
+                  <ControlPlaneSelectItem :value="DEFAULT_SELECT_VALUE">{{ t("settings.projectRegistry.useDefault") }}</ControlPlaneSelectItem>
                   <ControlPlaneSelectItem v-for="runtime in nodeRuntimeItems" :key="runtime.id" :value="runtime.id">{{ runtimeName(runtime) }}</ControlPlaneSelectItem>
                 </ControlPlaneSelect>
               </label>
             </div>
             <Button variant="outline" size="sm" :disabled="!canCreateSettingsProject || creatingSettingsProject" @click="createSettingsProject">
               <Plus :size="15" />
-              <span>{{ creatingSettingsProject ? "Creating" : "Create repository" }}</span>
+              <span>{{ creatingSettingsProject ? t("settings.projectRegistry.creating") : t("settings.projectRegistry.create") }}</span>
             </Button>
           </div>
           <p v-if="settingsProjectSuccess" class="settings-success">{{ settingsProjectSuccess }}</p>
@@ -331,13 +335,13 @@
         <TooltipProvider :delay-duration="120">
           <section class="modal-section node-list-panel">
             <div class="section-head">
-              <span>Execution nodes · {{ nodes.data.value?.length || 0 }}</span>
+              <span>{{ t("settings.nodeRegistry.count", { count: nodes.data.value?.length || 0 }) }}</span>
               <div class="section-head-actions">
                 <DropdownMenu>
                   <DropdownMenuTrigger as-child>
                     <Button variant="outline" size="sm">
                       <Plus :size="14" />
-                      <span>Add node</span>
+                      <span>{{ t("settings.nodeRegistry.add") }}</span>
                       <ChevronDown :size="13" />
                     </Button>
                   </DropdownMenuTrigger>
@@ -345,36 +349,36 @@
                     <DropdownMenuItem v-if="!hasLocalNode" class="node-add-menu-item" :disabled="syncingLocalNode" @select="addLocalNode">
                       <MonitorCog :size="16" aria-hidden="true" />
                       <span>
-                        <strong>{{ syncingLocalNode ? "Adding local node" : "Add local node" }}</strong>
-                        <small>Use this control plane as a node</small>
+                        <strong>{{ syncingLocalNode ? t("settings.nodeRegistry.addingLocal") : t("settings.nodeRegistry.addLocal") }}</strong>
+                        <small>{{ t("settings.nodeRegistry.localDescription") }}</small>
                       </span>
                     </DropdownMenuItem>
                     <DropdownMenuItem class="node-add-menu-item" @select="openRemoteNodeDialog">
                       <Server :size="16" aria-hidden="true" />
                       <span>
-                        <strong>Add remote node</strong>
-                        <small>Connect an existing node by endpoint</small>
+                        <strong>{{ t("settings.nodeRegistry.addRemote") }}</strong>
+                        <small>{{ t("settings.nodeRegistry.remoteDescription") }}</small>
                       </span>
                     </DropdownMenuItem>
                     <DropdownMenuItem class="node-add-menu-item" :disabled="creatingJoinInvite" @select="createJoinInvite">
                       <KeyRound :size="16" aria-hidden="true" />
                       <span>
-                        <strong>{{ creatingJoinInvite ? "Generating join token" : "Generate join token" }}</strong>
-                        <small>Allow a node to connect securely</small>
+                        <strong>{{ creatingJoinInvite ? t("settings.nodeRegistry.generatingToken") : t("settings.nodeRegistry.generateToken") }}</strong>
+                        <small>{{ t("settings.nodeRegistry.tokenDescription") }}</small>
                       </span>
                     </DropdownMenuItem>
                     <DropdownMenuItem class="node-add-menu-item" :disabled="creatingJoinInvite" @select="openNodeAgentInstallGuide">
                       <Download :size="16" aria-hidden="true" />
                       <span>
-                        <strong>{{ creatingNodeAgentInstall ? "Preparing install guide" : "Install with script" }}</strong>
-                        <small>Install and connect a remote node</small>
+                        <strong>{{ creatingNodeAgentInstall ? t("settings.nodeRegistry.preparingGuide") : t("settings.nodeRegistry.installScript") }}</strong>
+                        <small>{{ t("settings.nodeRegistry.installDescription") }}</small>
                       </span>
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
                 <Button variant="outline" size="sm" :disabled="nodes.isFetching.value" @click="refresh">
                   <RefreshCw :size="14" />
-                  <span>{{ nodes.isFetching.value ? "Refreshing" : "Refresh" }}</span>
+                  <span>{{ nodes.isFetching.value ? t("common.actions.refreshing") : t("common.actions.refresh") }}</span>
                 </Button>
               </div>
             </div>
@@ -395,18 +399,18 @@
                     </TooltipTrigger>
                     <TooltipContent class="node-diagnostic-tooltip" align="end" side="bottom">
                       <div class="node-diagnostic-tooltip-grid">
-                        <span><b>Protocol</b><em>{{ nodeProtocolLabel(target.id) }}</em></span>
-                        <span><b>Build</b><em>{{ nodeBuildLabel(target.id) }}</em></span>
-                        <span><b>Package</b><em>{{ nodePackageLabel(target.id) }}</em></span>
-                        <span v-if="nodeBuild(target.id)?.imageRef"><b>Image</b><em>{{ nodeBuild(target.id)?.imageRef }}</em></span>
-                        <span v-if="nodeBuild(target.id)?.builtAt"><b>Built</b><em>{{ nodeBuild(target.id)?.builtAt }}</em></span>
+                        <span><b>{{ t("settings.nodeRegistry.protocol") }}</b><em>{{ nodeProtocolLabel(target.id) }}</em></span>
+                        <span><b>{{ t("settings.nodeRegistry.build") }}</b><em>{{ nodeBuildLabel(target.id) }}</em></span>
+                        <span><b>{{ t("settings.nodeRegistry.package") }}</b><em>{{ nodePackageLabel(target.id) }}</em></span>
+                        <span v-if="nodeBuild(target.id)?.imageRef"><b>{{ t("settings.nodeRegistry.image") }}</b><em>{{ nodeBuild(target.id)?.imageRef }}</em></span>
+                        <span v-if="nodeBuild(target.id)?.builtAt"><b>{{ t("settings.nodeRegistry.built") }}</b><em>{{ nodeBuild(target.id)?.builtAt }}</em></span>
                       </div>
                     </TooltipContent>
                   </Tooltip>
                   <small>{{ nodeRuntimeSummary(target.id) }} · {{ nodeInstanceSummary(target.id) }}</small>
                 </span>
               </button>
-              <p v-if="!orderedNodes.length" class="settings-empty">No nodes yet.</p>
+              <p v-if="!orderedNodes.length" class="settings-empty">{{ t("settings.nodeRegistry.empty") }}</p>
               </div>
             </ScrollArea>
           </section>
@@ -438,12 +442,12 @@
       <Dialog :open="nodeRenameOpen" @update:open="setNodeRenameOpen">
         <DialogContent class="node-rename-dialog">
           <DialogHeader>
-            <DialogTitle>Rename node</DialogTitle>
-            <DialogDescription>Change the display name used across the control plane. The node ID and connection settings will not change.</DialogDescription>
+            <DialogTitle>{{ t("settings.nodeRegistry.rename") }}</DialogTitle>
+            <DialogDescription>{{ t("settings.nodeRegistry.renameDescription") }}</DialogDescription>
           </DialogHeader>
 
           <form class="node-rename-form" @submit.prevent="submitNodeRename">
-            <label for="node-rename-name">Name</label>
+            <label for="node-rename-name">{{ t("settings.fields.name") }}</label>
             <ControlPlaneInput
               id="node-rename-name"
               :model-value="nodeRenameDraft"
@@ -457,9 +461,9 @@
             <p v-if="nodeRenameError" id="node-rename-error" class="control-plane-error" role="alert">{{ nodeRenameError }}</p>
 
             <DialogFooter>
-              <Button type="button" variant="outline" :disabled="Boolean(renamingNodeId)" @click="setNodeRenameOpen(false)">Cancel</Button>
+              <Button type="button" variant="outline" :disabled="Boolean(renamingNodeId)" @click="setNodeRenameOpen(false)">{{ t("common.actions.cancel") }}</Button>
               <Button type="submit" :disabled="!canSubmitNodeRename">
-                <span>{{ renamingNodeId ? "Saving" : "Save" }}</span>
+                <span>{{ t("common.actions.save") }}</span>
               </Button>
             </DialogFooter>
           </form>
@@ -468,30 +472,31 @@
       <Dialog :open="remoteNodeDialogOpen" @update:open="setRemoteNodeDialogOpen">
         <DialogContent class="remote-node-dialog">
           <DialogHeader>
-            <DialogTitle>Add remote node</DialogTitle>
-            <DialogDescription>Connect a node-agent that is running on another machine.</DialogDescription>
+            <DialogTitle>{{ t("settings.nodeRegistry.addRemote") }}</DialogTitle>
+            <DialogDescription>{{ t("settings.nodeRegistry.remoteDialogDescription") }}</DialogDescription>
           </DialogHeader>
 
           <form class="remote-node-form" @submit.prevent="submitRemoteNode">
             <label>
-              <span>Name</span>
-              <ControlPlaneInput v-model="settingsNode.name" placeholder="Remote build host" />
+              <span>{{ t("settings.fields.name") }}</span>
+              <ControlPlaneInput v-model="settingsNode.name" :placeholder="t('settings.nodeDetail.remoteNamePlaceholder')" />
             </label>
             <label>
-              <span>Endpoint</span>
+              <span>{{ t("settings.fields.endpoint") }}</span>
+              <!-- i18n-audit-allow-next-line code-token: example node endpoint -->
               <ControlPlaneInput v-model="settingsNode.endpoint" placeholder="http://10.0.0.12:8091" />
             </label>
             <label>
-              <span>Join token</span>
-              <ControlPlaneInput v-model="settingsNode.joinToken" placeholder="node-agent pairing token" />
+              <span>{{ t("settings.nodeRegistry.joinToken") }}</span>
+              <ControlPlaneInput v-model="settingsNode.joinToken" :placeholder="t('settings.nodeDetail.pairingTokenPlaceholder')" />
             </label>
             <p v-if="settingsNodeSuccess" class="settings-success">{{ settingsNodeSuccess }}</p>
 
             <DialogFooter>
-              <Button type="button" variant="outline" @click="setRemoteNodeDialogOpen(false)">Cancel</Button>
+              <Button type="button" variant="outline" @click="setRemoteNodeDialogOpen(false)">{{ t("common.actions.cancel") }}</Button>
               <Button type="submit" :disabled="!canCreateNode || creatingNode">
                 <Plus :size="15" />
-                <span>{{ creatingNode ? "Creating" : "Create node" }}</span>
+                <span>{{ creatingNode ? t("settings.nodeRegistry.creating") : t("settings.nodeRegistry.create") }}</span>
               </Button>
             </DialogFooter>
           </form>
@@ -500,7 +505,7 @@
       <GeneratedTokenDialog
         v-if="generatedToken"
         :expires-at="generatedToken.expiresAt"
-        :title="generatedToken.title"
+        :title="t(generatedToken.titleKey)"
         :token="generatedToken.token"
         @close="generatedToken = undefined"
       />
@@ -518,6 +523,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import { useQueryClient } from "@tanstack/vue-query";
 import { AlertTriangle, ArrowLeft, ChevronDown, ChevronUp, Download, KeyRound, Layers, MapPin, MonitorCog, Plus, RefreshCw, Server, Settings, Trash2 } from "@lucide/vue";
 import { getNodeExternalListener, updateControlPlaneSettings, updateNodeExternalListener, useChatBridgesQuery, useChatGatewayStatusQuery, useControlPlaneSettingsQuery, useImagesQuery, useInstanceBoardPayloadQuery, useModelRegistryQuery, useModelsQuery, useNodeImageAvailabilityQuery, useNodeRuntimesPayloadQuery, useNodesQuery, useProjectsQuery, useServerUpdateCheckQuery } from "../../../api/queries";
@@ -550,6 +556,8 @@ import GeneratedTokenDialog from "./GeneratedTokenDialog.vue";
 import { nodeEndpointDisplay } from "./nodeEndpointDisplay";
 import { getThemePreference, saveThemePreference, type ThemePreference } from "../../../utils/theme";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
+import { connectionStatusKeys, translateStatus } from "../../../i18n/status";
+import { translateApiError } from "../../../i18n/apiError";
 
 type SettingsSection = "basic" | "chat" | "images" | "projects" | "nodes" | "models" | "triggers";
 type NodeDiagnosticLog = {
@@ -573,16 +581,18 @@ const emit = defineEmits<{
   "section-change": [section: SettingsSection];
 }>();
 
+const { t } = useI18n();
+
 const DEFAULT_SELECT_VALUE = "__default__";
-const settingsSections: Array<{ id: SettingsSection; label: string }> = [
-  { id: "nodes", label: "Nodes" },
-  { id: "images", label: "Images" },
-  { id: "projects", label: "Projects" },
-  { id: "models", label: "Models" },
-  { id: "triggers", label: "Triggers" },
-  { id: "chat", label: "Chat" },
-  { id: "basic", label: "Basic" },
-];
+const settingsSections = computed<Array<{ id: SettingsSection; label: string }>>(() => [
+  { id: "nodes", label: t("settings.nodes") },
+  { id: "images", label: t("settings.images") },
+  { id: "projects", label: t("settings.projects") },
+  { id: "models", label: t("settings.models") },
+  { id: "triggers", label: t("triggers.title") },
+  { id: "chat", label: t("settings.chat") },
+  { id: "basic", label: t("settings.basic") },
+]);
 
 const queryClient = useQueryClient();
 const projects = useProjectsQuery();
@@ -604,12 +614,12 @@ const publicBaseUrl = ref("");
 const publicBaseUrlMessage = ref("");
 const savingPublicBaseUrl = ref(false);
 const mentionTrigger = ref("@");
-const mentionTriggerError = computed(() => validMentionTrigger(mentionTrigger.value) ? "" : "Use one non-letter, non-number, non-space character except / or \\." );
+const mentionTriggerError = computed(() => validMentionTrigger(mentionTrigger.value) ? "" : t("settings.composer.mentionInvalid"));
 const commandTrigger = ref("/");
 const triggerSettingsMessage = ref("");
 const triggerSettingsMessageError = ref(false);
 const savingTriggerSettings = ref(false);
-const commandTriggerError = computed(() => validCommandTrigger(commandTrigger.value) ? "" : "Use one non-letter, non-number, non-space character except \\. It must differ from the mention trigger." );
+const commandTriggerError = computed(() => validCommandTrigger(commandTrigger.value) ? "" : t("settings.composer.commandInvalid"));
 const triggerSettingsAtDefaults = computed(() => commandTrigger.value === "/" && mentionTrigger.value === "@");
 const triggerSettingsDirty = computed(() => mentionTrigger.value !== (controlPlaneSettings.data.value?.mentionTrigger || "@") || commandTrigger.value !== (controlPlaneSettings.data.value?.commandTrigger || "/"));
 const remoteNodeDialogOpen = ref(false);
@@ -716,6 +726,7 @@ const chatSettings = useChatBridgeSettings({
   errorText,
   gatewayStatus: chatGatewayStatus.data,
   refresh: refreshChat,
+  translate: t,
 });
 const { clearChatFeedback } = chatSettings;
 const {
@@ -737,6 +748,7 @@ const {
   onProjectDeleted() {},
   projectInUse,
   refresh,
+  translate: t,
 });
 const {
   checkingRuntimeId,
@@ -781,6 +793,7 @@ const {
   nodes: nodes.data,
   refresh,
   runtimes: nodeRuntimeItems,
+  translate: t,
 });
 const externalListener = ref<NodeAgentExternalListener>();
 const externalListenerBindScope = ref<NodeAgentExternalListener["bindScope"]>("loopback");
@@ -823,22 +836,22 @@ async function saveExternalListener() {
   if (!node || !isControlPlaneBuiltinNode(node) || savingExternalListener.value) return;
   const port = Number(externalListenerPort.value);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    externalListenerError.value = "Port must be an integer from 1 to 65535.";
+    externalListenerError.value = t("settings.nodeDetail.invalidListenerPort");
     return;
   }
   const scopeChangedToAll = externalListener.value?.bindScope !== "all-ipv4" && externalListenerBindScope.value === "all-ipv4";
   const portChanged = externalListener.value?.port !== port;
   const warnings = [
-    scopeChangedToAll ? "This exposes the node-agent TCP API on every IPv4 interface. Firewall, NAT, DNS, and TLS termination remain your responsibility." : "",
-    portChanged ? "Paired remote control-planes keep their old endpoint and must be updated manually." : "",
+    scopeChangedToAll ? t("settings.nodeDetail.listenerExposeWarning") : "",
+    portChanged ? t("settings.nodeDetail.listenerEndpointWarning") : "",
   ].filter(Boolean);
-  if (warnings.length && !window.confirm(`${warnings.join("\n\n")}\n\nApply this listener change?`)) return;
+  if (warnings.length && !window.confirm(`${warnings.join("\n\n")}\n\n${t("settings.nodeDetail.listenerApplyConfirm")}`)) return;
 
   savingExternalListener.value = true;
   externalListenerError.value = "";
   try {
     externalListener.value = await updateNodeExternalListener(node.id, { bindScope: externalListenerBindScope.value, port });
-    showControlPlaneToast("Node-agent TCP listener updated.", "success");
+    showControlPlaneToast(t("settings.nodeDetail.listenerUpdated"), "success");
   } catch (error) {
     externalListenerError.value = errorText(error);
     showControlPlaneToast(externalListenerError.value);
@@ -878,6 +891,7 @@ const {
   images: images.data,
   onImageDeleted: clearDefaultImage,
   refresh,
+  translate: t,
 });
 const {
   canSaveModel,
@@ -900,6 +914,7 @@ const {
   nodes: () => nodes.data.value || [],
   onModelDeleted() {},
   refresh,
+  translate: t,
 });
 const editingModelLocationCount = computed(() => {
   const model = (models.data.value || []).find((item) => item.id === editingModelId.value);
@@ -915,7 +930,7 @@ function modelLocationKey(location: ModelLocation) {
 }
 
 function modelLocationLabel(location: ModelLocation) {
-  return location.type === "control-plane" ? "Control plane" : nodeName(location.nodeId);
+  return location.type === "control-plane" ? t("settings.modelRegistry.controlPlane") : nodeName(location.nodeId);
 }
 const {
   addLocalNode,
@@ -979,6 +994,7 @@ const {
   nodes: () => nodes.data.value || [],
   runtimes: () => nodeRuntimeItems.value,
   updateChannel: () => updateChannel.value,
+  translate: t,
 });
 
 function openRemoteNodeDialog() {
@@ -1027,7 +1043,7 @@ const serverUpdateNode = computed(() => (nodes.data.value || []).find((node) => 
 const serverUpdateNodeId = computed(() => serverUpdateNode.value?.id || "");
 const isDesktopApp = Boolean((window as Window & { taskHandoffDesktop?: unknown }).taskHandoffDesktop);
 const serverUpdatesAvailable = computed(() => Boolean(serverUpdateNodeId.value && !isDesktopApp));
-const serverUnavailableReason = computed(() => isDesktopApp ? "Desktop updates use the desktop release channel." : "The built-in server node is unavailable.");
+const serverUnavailableReason = computed(() => isDesktopApp ? t("settings.appearance.desktopReleaseOnly") : t("settings.appearance.builtinServerUnavailable"));
 const serverUpdateStateKey = computed(() => serverUpdateNodeId.value ? managedUpdateKey(serverUpdateNodeId.value, serverUpdateTarget) : "");
 const serverUpdateQueryNodeId = computed(() => serverUpdatesAvailable.value ? serverUpdateNodeId.value : "");
 const serverUpdateQuery = useServerUpdateCheckQuery(serverUpdateQueryNodeId, updateChannel);
@@ -1178,7 +1194,7 @@ function setThemePreference(theme: ThemePreference) {
 
 function detectPublicBaseUrl() {
   publicBaseUrl.value = window.location.origin;
-  publicBaseUrlMessage.value = "Current URL filled in.";
+  publicBaseUrlMessage.value = t("settings.publicAccess.currentFilled");
 }
 
 async function savePublicBaseUrl() {
@@ -1190,7 +1206,7 @@ async function savePublicBaseUrl() {
   try {
     const saved = await updateControlPlaneSettings({ publicBaseUrl: publicBaseUrl.value.trim() || undefined });
     publicBaseUrl.value = saved.publicBaseUrl || "";
-    publicBaseUrlMessage.value = "Public URL saved.";
+    publicBaseUrlMessage.value = t("settings.publicAccess.saved");
     await queryClient.invalidateQueries({ queryKey: ["control-plane-settings"] });
   } catch (error) {
     showControlPlaneToast(errorText(error));
@@ -1206,7 +1222,7 @@ function validMentionTrigger(value: string) {
 function resetTriggerSettings() {
   commandTrigger.value = "/";
   mentionTrigger.value = "@";
-  triggerSettingsMessage.value = "Defaults ready. Save to apply them.";
+  triggerSettingsMessage.value = t("settings.composer.defaultsReady");
   triggerSettingsMessageError.value = false;
 }
 
@@ -1222,7 +1238,7 @@ async function saveTriggerSettings() {
     });
     commandTrigger.value = saved.commandTrigger;
     mentionTrigger.value = saved.mentionTrigger;
-    triggerSettingsMessage.value = "Composer shortcuts saved.";
+    triggerSettingsMessage.value = t("settings.composer.saved");
     queryClient.setQueryData<ControlPlaneSettings>(["control-plane-settings"], saved);
   } catch (error) {
     triggerSettingsMessage.value = errorText(error);
@@ -1246,9 +1262,16 @@ async function refreshChat() {
 
 function catalogAvailabilityLabel(imageId: string) {
   const availability = imageAvailability.data.value?.find((item) => item.image.id === imageId);
-  if (!imageCatalogNodeId.value) return "select a node";
-  if (!availability || availability.status === "unknown") return "availability unknown";
-  return availability.status === "available" ? "available on node" : "will be pulled when an instance is created";
+  if (!imageCatalogNodeId.value) return t("settings.imageRegistry.selectNodeHint");
+  if (!availability || availability.status === "unknown") return t("settings.imageRegistry.availabilityUnknown");
+  return availability.status === "available" ? t("settings.imageRegistry.availableOnNode") : t("settings.imageRegistry.pullOnCreate");
+}
+
+function imagePullPolicyLabel(policy: string) {
+  if (policy === "if-not-present") return t("settings.imageRegistry.pullIfMissing");
+  if (policy === "always") return t("settings.imageRegistry.pullAlways");
+  if (policy === "never") return t("settings.imageRegistry.pullNever");
+  return t("common.status.unknownValue", { value: policy });
 }
 
 function projectInUse(projectId: string) {
@@ -1274,51 +1297,55 @@ function nodeBuild(nodeId: string): Partial<BuildInfo> | undefined {
 
 function nodeProtocolLabel(nodeId: string) {
   const protocolVersion = nodeAgent(nodeId)?.protocolVersion;
-  return typeof protocolVersion === "string" && protocolVersion ? protocolVersion : nodeBuild(nodeId)?.protocolVersion || "unknown";
+  return typeof protocolVersion === "string" && protocolVersion ? protocolVersion : nodeBuild(nodeId)?.protocolVersion || t("common.status.unknown");
 }
 
 function nodeBuildLabel(nodeId: string) {
   const build = nodeBuild(nodeId);
-  return build?.buildId || build?.gitCommit?.slice(0, 12) || "unknown";
+  return build?.buildId || build?.gitCommit?.slice(0, 12) || t("common.status.unknown");
 }
 
 function nodePackageLabel(nodeId: string) {
-  return nodeBuild(nodeId)?.packageVersion || "unknown";
+  return nodeBuild(nodeId)?.packageVersion || t("common.status.unknown");
 }
 
 function nodeBuildTitle(nodeId: string) {
   const build = nodeBuild(nodeId);
   return [
-    `Protocol: ${nodeProtocolLabel(nodeId)}`,
-    `Build: ${nodeBuildLabel(nodeId)}`,
-    `Package: ${nodePackageLabel(nodeId)}`,
-    build?.imageRef ? `Image: ${build.imageRef}` : undefined,
-    build?.builtAt ? `Built: ${build.builtAt}` : undefined,
+    `${t("settings.nodeDetail.protocol")}: ${nodeProtocolLabel(nodeId)}`,
+    `${t("settings.nodeDetail.build")}: ${nodeBuildLabel(nodeId)}`,
+    `${t("settings.nodeDetail.package")}: ${nodePackageLabel(nodeId)}`,
+    build?.imageRef ? `${t("settings.nodeDetail.image")}: ${build.imageRef}` : undefined,
+    build?.builtAt ? `${t("settings.nodeDetail.built")}: ${build.builtAt}` : undefined,
   ].filter(Boolean).join("\n");
 }
 
 function nodeRuntimeSummary(nodeId: string) {
   const count = nodeRuntimeItems.value.filter((runtime) => runtime.nodeId === nodeId).length;
-  return `${count} runtime${count === 1 ? "" : "s"}`;
+  return t("settings.nodeDetail.runtimeCount", { count });
 }
 
 function nodeInstanceSummary(nodeId: string) {
   const instances = boardItems.value.filter((instance) => instance.nodeId === nodeId);
   const running = instances.filter((instance) => instance.status === "running").length;
-  return `${running}/${instances.length} running`;
+  return t("settings.nodeDetail.runningCount", { running, total: instances.length });
 }
 
-function nodeStatusLabel(nodeId: string) {
+function nodeStatusValue(nodeId: string) {
   const node = (nodes.data.value || []).find((item) => item.id === nodeId);
   return nodeStatusById[nodeId]?.status || node?.status || "unknown";
 }
 
+function nodeStatusLabel(nodeId: string) {
+  return translateStatus(connectionStatusKeys, nodeStatusValue(nodeId), t);
+}
+
 function nodeStatusVariant(nodeId: string) {
-  return nodeStatusLabel(nodeId) === "online" ? "default" : "secondary";
+  return nodeStatusValue(nodeId) === "online" ? "default" : "secondary";
 }
 
 function nodeStatusClass(nodeId: string) {
-  return `status-${nodeStatusLabel(nodeId)}`;
+  return `status-${nodeStatusValue(nodeId)}`;
 }
 
 function updateRemoteConnect(field: "controlPlaneUrl" | "joinToken" | "controlPlaneName", value: string) {
@@ -1326,7 +1353,8 @@ function updateRemoteConnect(field: "controlPlaneUrl" | "joinToken" | "controlPl
 }
 
 function errorText(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
+  const fallback = error instanceof Error ? error.message : String(error);
+  return translateApiError(error, t, fallback);
 }
 </script>
 

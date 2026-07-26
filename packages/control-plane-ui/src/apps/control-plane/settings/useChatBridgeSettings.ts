@@ -2,17 +2,21 @@ import { computed, ref, watch, type Ref } from "vue";
 import { createChatBridge, deleteChatBridge, startChatBridge, stopChatBridge, updateChatBridge } from "../../../api/queries";
 import type { ChatBridgeConfig, ChatChannel, ChatGatewayStatus } from "../../../api/types";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
+import type { Translate } from "../../../i18n/status.ts";
+import { translateApiError } from "../../../i18n/apiError.ts";
 
 type UseChatBridgeSettingsInput = {
   bridges: Ref<ChatBridgeConfig[] | undefined>;
   errorText: (error: unknown) => string;
   gatewayStatus: Ref<ChatGatewayStatus | undefined>;
   refresh: () => Promise<void>;
+  translate: Translate;
 };
 
 const chatChannels: ChatChannel[] = ["telegram", "wechat", "dingding"];
 
-export function useChatBridgeSettings({ bridges, errorText, gatewayStatus, refresh }: UseChatBridgeSettingsInput) {
+export function useChatBridgeSettings({ bridges, errorText, gatewayStatus, refresh, translate: t }: UseChatBridgeSettingsInput) {
+  const translateError = (error: unknown) => translateApiError(error, t, errorText(error));
   const selectedChatBridgeId = ref("");
   const creatingChatBridge = ref(false);
   const savingChatBridge = ref(false);
@@ -40,7 +44,7 @@ export function useChatBridgeSettings({ bridges, errorText, gatewayStatus, refre
   const selectedChatBridge = computed(() => orderedChatBridges.value.find((bridge) => bridge.id === selectedChatBridgeId.value) || orderedChatBridges.value[0]);
   const selectedChatStatus = computed(() => selectedChatBridge.value ? gatewayStatus.value?.bridges.find((bridge) => bridge.id === selectedChatBridge.value?.id) : undefined);
   const chatBridgeBusy = computed(() => creatingChatBridge.value || savingChatBridge.value || togglingChatBridge.value);
-  const chatTokenPlaceholder = computed(() => selectedChatBridge.value?.channel === "wechat" ? "bot token" : selectedChatBridge.value?.channel === "dingding" ? "client id" : "bot token");
+  const chatTokenPlaceholder = computed(() => selectedChatBridge.value?.channel === "dingding" ? t("settings.chatBridge.clientIdPlaceholder") : t("settings.chatBridge.botTokenPlaceholder"));
 
   watch(
     selectedChatBridge,
@@ -90,10 +94,10 @@ export function useChatBridgeSettings({ bridges, errorText, gatewayStatus, refre
     try {
       const bridge = await createChatBridge({ channel });
       selectedChatBridgeId.value = bridge.id;
-      chatBridgeSuccess.value = `${bridge.name} bridge created.`;
+      chatBridgeSuccess.value = t("settings.chatBridge.created", { name: bridge.name });
       await refresh();
     } catch (error) {
-      showControlPlaneToast(errorText(error));
+      showControlPlaneToast(translateError(error));
     } finally {
       creatingChatBridge.value = false;
     }
@@ -126,12 +130,12 @@ export function useChatBridgeSettings({ bridges, errorText, gatewayStatus, refre
         pollIntervalMs: Math.max(1000, Number(chatForm.value.pollIntervalMs) || 3000),
         settings,
       });
-      chatBridgeSuccess.value = `${chatForm.value.name || bridge.name} bridge saved.`;
+      chatBridgeSuccess.value = t("settings.chatBridge.saved", { name: chatForm.value.name || bridge.name });
       await refresh();
       syncChatForm();
       return true;
     } catch (error) {
-      showControlPlaneToast(errorText(error));
+      showControlPlaneToast(translateError(error));
       return false;
     } finally {
       savingChatBridge.value = false;
@@ -148,18 +152,18 @@ export function useChatBridgeSettings({ bridges, errorText, gatewayStatus, refre
     try {
       if (chatBridgeRunning(bridge.id)) {
         await stopChatBridge(bridge.id);
-        chatBridgeSuccess.value = `${bridge.name} bridge stopped.`;
+        chatBridgeSuccess.value = t("settings.chatBridge.stopped", { name: bridge.name });
       } else {
         const saved = await saveSelectedChatBridge();
         if (!saved) {
           return;
         }
         await startChatBridge(bridge.id);
-        chatBridgeSuccess.value = `${bridge.name} bridge started.`;
+        chatBridgeSuccess.value = t("settings.chatBridge.started", { name: bridge.name });
       }
       await refresh();
     } catch (error) {
-      showControlPlaneToast(errorText(error));
+      showControlPlaneToast(translateError(error));
     } finally {
       togglingChatBridge.value = false;
     }
@@ -175,10 +179,10 @@ export function useChatBridgeSettings({ bridges, errorText, gatewayStatus, refre
     try {
       await deleteChatBridge(bridge.id);
       selectedChatBridgeId.value = "";
-      chatBridgeSuccess.value = `${bridge.name} bridge deleted.`;
+      chatBridgeSuccess.value = t("settings.chatBridge.deleted", { name: bridge.name });
       await refresh();
     } catch (error) {
-      showControlPlaneToast(errorText(error));
+      showControlPlaneToast(translateError(error));
     } finally {
       togglingChatBridge.value = false;
     }
@@ -212,8 +216,8 @@ export function useChatBridgeSettings({ bridges, errorText, gatewayStatus, refre
       return status.error;
     }
     return [
-      status?.tokenSet || bridge?.tokenSet ? "secret set" : "secret missing",
-      bridge?.defaultChatId ? `chat ${bridge.defaultChatId}` : "no default chat",
+      status?.tokenSet || bridge?.tokenSet ? t("settings.chatBridge.secretSet") : t("settings.chatBridge.secretMissing"),
+      bridge?.defaultChatId ? t("settings.chatBridge.chatId", { id: bridge.defaultChatId }) : t("settings.chatBridge.noDefaultChat"),
     ].join(" · ");
   }
 

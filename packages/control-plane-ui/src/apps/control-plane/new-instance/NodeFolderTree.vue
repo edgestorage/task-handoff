@@ -1,13 +1,13 @@
 <template>
   <div class="node-folder-tree">
     <div class="node-folder-tree-head">
-      <span>Node folders</span>
+      <span>{{ t("instances.create.folders.title") }}</span>
       <Button variant="outline" size="sm" :disabled="loading" @click="$emit('refresh')">
         <FolderOpen :size="14" />
-        <span>{{ loading ? "Loading" : "Refresh" }}</span>
+        <span>{{ loading ? t("instances.create.folders.loading") : t("instances.create.folders.refresh") }}</span>
       </Button>
     </div>
-    <div v-if="loading" class="node-folder-tree-empty">Loading folders...</div>
+    <div v-if="loading" class="node-folder-tree-empty">{{ t("instances.create.folders.loadingFolders") }}</div>
     <div v-else-if="error" class="node-folder-tree-empty error">{{ error }}</div>
     <ScrollArea v-else-if="rows.length" class="node-folder-tree-list">
       <div class="node-folder-tree-list-content">
@@ -28,15 +28,18 @@
         </button>
       </div>
     </ScrollArea>
-    <div v-else class="node-folder-tree-empty">No folders reported by this node.</div>
+    <div v-else class="node-folder-tree-empty">{{ t("instances.create.folders.empty") }}</div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ChevronDown, ChevronRight, Folder, FolderOpen } from "@lucide/vue";
+import { useI18n } from "vue-i18n";
 import { Button } from "../../../components/ui/button";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import type { NodeFolderTreeNode } from "./nodeFolderTree";
+
+const { t } = useI18n();
 
 defineProps<{
   error: string;

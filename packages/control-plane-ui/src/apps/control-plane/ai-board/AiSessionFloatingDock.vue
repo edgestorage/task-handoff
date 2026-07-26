@@ -1,5 +1,5 @@
 <template>
-  <aside ref="dockRoot" class="ai-board-floating-dock" aria-label="Selected AI session" :style="dockStyle" @click.stop>
+  <aside ref="dockRoot" class="ai-board-floating-dock" :aria-label="t('sessions.detail.selected')" :style="dockStyle" @click.stop>
     <Transition name="ai-board-floating-panel-fade" mode="out-in">
       <section v-if="!collapsed" class="ai-board-floating-detail" :class="{ 'is-scrolled': detailScrolled }">
         <div class="ai-board-floating-resize ai-board-floating-resize-top" @pointerdown.stop.prevent="startResize('top', $event)" />
@@ -13,15 +13,15 @@
               <span>{{ instanceDisplayName(card.instance) }}</span>
             </span>
             <strong class="ai-board-floating-secondary-line">
-              <span>{{ aiSessionAppDisplayName(card.appTab, card.session.agent) }}</span>
+              <span>{{ aiSessionAppDisplayName(card.appTab, card.session.agent, t) }}</span>
               <span aria-hidden="true">·</span>
               <span class="ai-board-floating-workspace">
                 <TooltipProvider :delay-duration="120">
                   <Tooltip>
                     <TooltipTrigger as-child>
-                      <b>{{ aiSessionBasename(card.session.cwd) || "Unknown folder" }}</b>
+                      <b>{{ aiSessionBasename(card.session.cwd) || t("sessions.board.unknownFolder") }}</b>
                     </TooltipTrigger>
-                    <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ card.session.cwd || "Unknown path" }}</TooltipContent>
+                    <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ card.session.cwd || t("sessions.board.unknownPath") }}</TooltipContent>
                   </Tooltip>
                 </TooltipProvider>
               </span>
@@ -31,8 +31,9 @@
             <AiSessionTurnNavigator
               :count="promptCount"
               :index="promptIndex"
-              :previous-label="`Previous user message for ${card.session.agent}`"
-              :next-label="`Next user message for ${card.session.agent}`"
+              :aria-label="t('sessions.composer.navigation')"
+              :previous-label="t('sessions.actions.previousMessage', { agent: card.session.agent })"
+              :next-label="t('sessions.actions.nextMessage', { agent: card.session.agent })"
               tone="board"
               @previous="$emit('previousPrompt')"
               @next="$emit('nextPrompt')"
@@ -40,32 +41,32 @@
             <TooltipProvider :delay-duration="120">
               <Tooltip>
                 <TooltipTrigger as-child>
-                  <button type="button" title="Session details" aria-label="Session details">
+                  <button type="button" :title="t('sessions.detail.sessionDetails')" :aria-label="t('sessions.detail.sessionDetails')">
                     <CircleHelp :size="15" />
                   </button>
                 </TooltipTrigger>
                 <TooltipContent class="ai-board-session-info-tooltip" align="end" side="bottom" :side-offset="8">
                   <dl>
                     <div>
-                      <dt>Workspace</dt>
-                      <dd>{{ card.session.cwd || "Unknown" }}</dd>
+                      <dt>{{ t("sessions.detail.workspace") }}</dt>
+                      <dd>{{ card.session.cwd || t("sessions.detail.unknown") }}</dd>
                     </div>
                     <div>
-                      <dt>Session</dt>
+                      <dt>{{ t("sessions.detail.session") }}</dt>
                       <dd>{{ card.session.providerSessionId || card.session.id }}</dd>
                     </div>
                     <div>
-                      <dt>App Binding</dt>
-                      <dd>{{ card.session.appSessionId || "Not bound" }}</dd>
+                      <dt>{{ t("sessions.detail.appBinding") }}</dt>
+                      <dd>{{ card.session.appSessionId || t("sessions.detail.notBound") }}</dd>
                     </div>
                   </dl>
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
-            <button type="button" title="Open app session" aria-label="Open app session" @click="$emit('openAiSessionApp', card.instance, card.session)">
+            <button type="button" :title="t('sessions.actions.openApp')" :aria-label="t('sessions.actions.openApp')" @click="$emit('openAiSessionApp', card.instance, card.session)">
               <ExternalLink :size="15" />
             </button>
-            <button type="button" title="Collapse details" @click="$emit('update:collapsed', true)">
+            <button type="button" :title="t('sessions.detail.collapse')" @click="$emit('update:collapsed', true)">
               <ChevronDown :size="15" />
             </button>
           </div>
@@ -79,7 +80,7 @@
                 class="ai-board-floating-prompt-content"
                 :class="{ expanded: promptExpanded }"
               >
-                <MarkdownContent :content="displayAiSessionTitle(card.session, promptIndex)" />
+                <MarkdownContent :content="displayAiSessionTitle(card.session, promptIndex, t)" />
               </div>
               <button
                 v-if="promptHasOverflow"
@@ -88,7 +89,7 @@
                 :aria-expanded="promptExpanded"
                 @click="togglePrompt"
               >
-                <span>{{ promptExpanded ? "收起" : "展开" }}</span>
+                <span>{{ promptExpanded ? t("sessions.detail.collapsePrompt") : t("sessions.detail.expand") }}</span>
                 <ChevronDown :size="13" :class="{ open: promptExpanded }" />
               </button>
             </section>
@@ -106,7 +107,7 @@
               :can-resolve-approval="canResolveApproval"
               :instance-id="card.instance.id"
               :is-latest="promptIndex >= promptCount - 1"
-              :response-content="displayAiSessionResponse(card.session, promptIndex)"
+              :response-content="displayAiSessionResponse(card.session, promptIndex, t)"
               :session="card.session"
               tone="board"
               @steer-queued-message="$emit('steerQueuedMessage', $event)"
@@ -120,7 +121,7 @@
 
       <button v-else type="button" class="ai-board-floating-restore" @click="$emit('update:collapsed', false)">
         <ChevronUp :size="14" />
-        <span>{{ aiSessionAppDisplayName(card.appTab, card.session.agent) }} · {{ aiSessionBasename(card.session.cwd) || "Unknown folder" }}</span>
+        <span>{{ aiSessionAppDisplayName(card.appTab, card.session.agent, t) }} · {{ aiSessionBasename(card.session.cwd) || t("sessions.board.unknownFolder") }}</span>
       </button>
     </Transition>
 
@@ -150,6 +151,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import { ChevronDown, ChevronUp, CircleHelp, ExternalLink } from "@lucide/vue";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions } from "../../../api/types";
@@ -169,6 +171,8 @@ import {
   displayAiSessionTitle,
 } from "../useInstanceSessions";
 import type { AiBoardCard } from "./aiBoardTypes";
+
+const { t } = useI18n();
 
 const props = defineProps<{
   busy: boolean;
@@ -454,7 +458,7 @@ watch(
   [
     () => props.card.session.id,
     () => props.promptIndex,
-    () => displayAiSessionTitle(props.card.session, props.promptIndex),
+    () => displayAiSessionTitle(props.card.session, props.promptIndex, t),
   ],
   () => {
     promptExpanded.value = false;

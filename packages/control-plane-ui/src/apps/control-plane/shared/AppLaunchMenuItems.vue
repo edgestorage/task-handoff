@@ -11,7 +11,7 @@
       <DropdownMenuSubContent class="app-launch-menu">
         <div class="app-launch-project-search" @click.stop @keydown.stop>
           <Search :size="13" />
-          <input v-model="folderSearch" type="search" placeholder="Search projects" aria-label="Search projects" />
+          <input v-model="folderSearch" type="search" :placeholder="t('sessions.tabs.searchProjects')" :aria-label="t('sessions.tabs.searchProjects')" />
         </div>
         <DropdownMenuItem v-for="folder in filteredCwdFolders" :key="`${app.id}-${folder.id}`" class="app-launch-menu-item" :disabled="launching" @select="$emit('launch', app.id, folder.id)">
           <Folder :size="14" />
@@ -20,11 +20,11 @@
             <small>{{ folder.path }}</small>
           </span>
         </DropdownMenuItem>
-        <p v-if="!filteredCwdFolders.length" class="app-launch-project-empty">No projects found</p>
+        <p v-if="!filteredCwdFolders.length" class="app-launch-project-empty">{{ t("sessions.tabs.noProjects") }}</p>
         <DropdownMenuSeparator />
         <DropdownMenuItem class="app-launch-menu-item" :disabled="launching" @select="$emit('new-project')">
           <FolderPlus :size="14" />
-          <span><strong>New project</strong><small>Add a folder from this node</small></span>
+          <span><strong>{{ t("sessions.tabs.newProject") }}</strong><small>{{ t("sessions.tabs.addFolderFromNode") }}</small></span>
         </DropdownMenuItem>
       </DropdownMenuSubContent>
     </DropdownMenuSub>
@@ -40,6 +40,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { Folder, FolderPlus, Play, Search } from "@lucide/vue";
 import type { InstanceBoardItem, NodeLocalFolder } from "../../../api/types";
 import { isSameOrChildNodePath } from "../nodePath";
@@ -58,6 +59,7 @@ const props = defineProps<{
   instance: InstanceBoardItem;
   launching: boolean;
 }>();
+const { t } = useI18n();
 
 defineEmits<{
   launch: [appId: string, cwdFolderId?: string];

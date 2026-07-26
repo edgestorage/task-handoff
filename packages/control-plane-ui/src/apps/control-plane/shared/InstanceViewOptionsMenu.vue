@@ -1,27 +1,27 @@
 <template>
   <DropdownMenu>
     <DropdownMenuTrigger as-child>
-      <Button variant="outline" size="sm" class="instance-view-options-trigger" :aria-label="label" :title="label">
+      <Button variant="outline" size="sm" class="instance-view-options-trigger" :aria-label="label || t('instances.viewOptions.label')" :title="label || t('instances.viewOptions.label')">
         <SlidersHorizontal :size="16" />
       </Button>
     </DropdownMenuTrigger>
     <DropdownMenuContent class="instance-view-options-menu" align="end" :side-offset="6">
-      <DropdownMenuLabel class="instance-view-options-label">Sort</DropdownMenuLabel>
+      <DropdownMenuLabel class="instance-view-options-label">{{ t("instances.viewOptions.sort") }}</DropdownMenuLabel>
       <DropdownMenuRadioGroup :model-value="sortMode" @update:model-value="(value) => $emit('update:sortMode', value as InstanceListSortMode)">
-        <DropdownMenuRadioItem class="instance-view-options-item option-item" value="created-desc">Newest first</DropdownMenuRadioItem>
-        <DropdownMenuRadioItem class="instance-view-options-item option-item" value="name-asc">Name</DropdownMenuRadioItem>
-        <DropdownMenuRadioItem class="instance-view-options-item option-item" value="node-asc">Node</DropdownMenuRadioItem>
-        <DropdownMenuRadioItem class="instance-view-options-item option-item" value="status-asc">Status</DropdownMenuRadioItem>
+        <DropdownMenuRadioItem class="instance-view-options-item option-item" value="created-desc">{{ t("instances.viewOptions.newestFirst") }}</DropdownMenuRadioItem>
+        <DropdownMenuRadioItem class="instance-view-options-item option-item" value="name-asc">{{ t("instances.viewOptions.name") }}</DropdownMenuRadioItem>
+        <DropdownMenuRadioItem class="instance-view-options-item option-item" value="node-asc">{{ t("instances.viewOptions.node") }}</DropdownMenuRadioItem>
+        <DropdownMenuRadioItem class="instance-view-options-item option-item" value="status-asc">{{ t("instances.viewOptions.status") }}</DropdownMenuRadioItem>
       </DropdownMenuRadioGroup>
       <DropdownMenuSeparator class="instance-view-options-separator" />
       <DropdownMenuCheckboxItem class="instance-view-options-item option-item" :model-value="groupByNode" @update:model-value="(value) => $emit('update:groupByNode', Boolean(value))">
-        Group by node
+        {{ t("instances.viewOptions.groupByNode") }}
       </DropdownMenuCheckboxItem>
       <template v-if="showPreviewInteraction">
         <DropdownMenuSeparator class="instance-view-options-separator" />
-        <DropdownMenuLabel class="instance-view-options-label">Interaction</DropdownMenuLabel>
+        <DropdownMenuLabel class="instance-view-options-label">{{ t("instances.viewOptions.interaction") }}</DropdownMenuLabel>
         <DropdownMenuCheckboxItem class="instance-view-options-item option-item" :model-value="previewInteractive" @update:model-value="(value) => $emit('update:previewInteractive', Boolean(value))">
-          Interact with previews
+          {{ t("instances.viewOptions.interactWithPreviews") }}
         </DropdownMenuCheckboxItem>
       </template>
     </DropdownMenuContent>
@@ -30,6 +30,7 @@
 
 <script setup lang="ts">
 import { SlidersHorizontal } from "@lucide/vue";
+import { useI18n } from "vue-i18n";
 import { Button } from "../../../components/ui/button";
 import {
   DropdownMenu,
@@ -43,6 +44,8 @@ import {
 } from "../../../components/ui/dropdown-menu";
 import type { InstanceListSortMode } from "../instance-list/useWorkbenchInstances";
 
+const { t } = useI18n();
+
 withDefaults(
   defineProps<{
     groupByNode: boolean;
@@ -52,7 +55,7 @@ withDefaults(
     sortMode: InstanceListSortMode;
   }>(),
   {
-    label: "Instance view options",
+    label: undefined,
     previewInteractive: false,
     showPreviewInteraction: false,
   },

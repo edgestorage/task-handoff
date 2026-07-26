@@ -1,77 +1,77 @@
 <template>
   <section class="trigger-board modal-section">
     <header class="section-head trigger-board-head">
-      <span>Trigger Library · {{ triggers.data.value?.triggers.length || 0 }}</span>
+      <span>{{ t("triggers.libraryTitle", { count: triggers.data.value?.triggers.length || 0 }) }}</span>
       <div class="settings-row-actions trigger-board-head-actions">
-        <Input v-model="filter" class="trigger-board-filter" placeholder="Filter templates" />
+        <Input v-model="filter" class="trigger-board-filter" :placeholder="t('triggers.filter')" />
         <Dialog v-model:open="createDialogOpen">
           <DialogTrigger as-child>
             <Button size="sm">
               <Plus :size="14" />
-              <span>New trigger</span>
+              <span>{{ t("triggers.create.action") }}</span>
             </Button>
           </DialogTrigger>
           <DialogContent class="trigger-create-dialog">
             <DialogClose as-child>
-              <Button variant="ghost" size="icon" class="trigger-create-close" aria-label="Close create trigger dialog">
+              <Button variant="ghost" size="icon" class="trigger-create-close" :aria-label="t('triggers.create.close')">
                 <X :size="16" />
               </Button>
             </DialogClose>
             <DialogHeader>
-              <DialogTitle>Create trigger template</DialogTitle>
-              <DialogDescription>Configure the event source and prompt that should run when it fires.</DialogDescription>
+              <DialogTitle>{{ t("triggers.create.title") }}</DialogTitle>
+              <DialogDescription>{{ t("triggers.create.description") }}</DialogDescription>
             </DialogHeader>
             <div class="trigger-create-dialog-body">
               <section class="trigger-create-group">
                 <div class="trigger-board-create-main">
                   <label>
-                    <span>Name</span>
-                    <Input v-model="createForm.name" placeholder="Trigger name" />
+                    <span>{{ t("triggers.create.name") }}</span>
+                    <Input v-model="createForm.name" :placeholder="t('triggers.create.namePlaceholder')" />
                   </label>
                   <label>
-                    <span>Type</span>
-                    <ControlPlaneSelect v-model="createForm.sourceType" trigger-class="trigger-board-select" placeholder="Trigger type">
-                      <ControlPlaneSelectItem value="schedule">Schedule</ControlPlaneSelectItem>
-                      <ControlPlaneSelectItem value="file-change">File change</ControlPlaneSelectItem>
-                      <ControlPlaneSelectItem value="ai-session">AI session</ControlPlaneSelectItem>
+                    <span>{{ t("triggers.create.type") }}</span>
+                    <ControlPlaneSelect v-model="createForm.sourceType" trigger-class="trigger-board-select" :placeholder="t('triggers.create.typePlaceholder')">
+                      <ControlPlaneSelectItem value="schedule">{{ t("triggers.sourceType.schedule") }}</ControlPlaneSelectItem>
+                      <ControlPlaneSelectItem value="file-change">{{ t("triggers.sourceType.fileChange") }}</ControlPlaneSelectItem>
+                      <ControlPlaneSelectItem value="ai-session">{{ t("triggers.sourceType.aiSession") }}</ControlPlaneSelectItem>
                     </ControlPlaneSelect>
                   </label>
                 </div>
 
                 <div class="trigger-create-group-head">
-                  <strong>Source</strong>
+                  <strong>{{ t("triggers.create.source") }}</strong>
                   <span>{{ sourceSectionHint }}</span>
                 </div>
                 <div v-if="createForm.sourceType === 'schedule'" class="trigger-board-source-grid">
                   <label>
-                    <span>Mode</span>
-                    <ControlPlaneSelect v-model="createForm.scheduleKind" trigger-class="trigger-board-select" placeholder="Schedule mode">
-                      <ControlPlaneSelectItem value="interval">Every interval</ControlPlaneSelectItem>
-                      <ControlPlaneSelectItem value="daily">Daily at time</ControlPlaneSelectItem>
-                      <ControlPlaneSelectItem value="weekly">Weekly at time</ControlPlaneSelectItem>
+                    <span>{{ t("triggers.create.mode") }}</span>
+                    <ControlPlaneSelect v-model="createForm.scheduleKind" trigger-class="trigger-board-select" :placeholder="t('triggers.create.modePlaceholder')">
+                      <ControlPlaneSelectItem value="interval">{{ t("triggers.scheduleMode.interval") }}</ControlPlaneSelectItem>
+                      <ControlPlaneSelectItem value="daily">{{ t("triggers.scheduleMode.daily") }}</ControlPlaneSelectItem>
+                      <ControlPlaneSelectItem value="weekly">{{ t("triggers.scheduleMode.weekly") }}</ControlPlaneSelectItem>
                     </ControlPlaneSelect>
                   </label>
                   <label class="trigger-interval-field">
-                    <span>{{ createForm.scheduleKind === "interval" ? "Every" : "Time" }}</span>
+                    <span>{{ createForm.scheduleKind === "interval" ? t("triggers.create.every") : t("triggers.create.time") }}</span>
                     <div v-if="createForm.scheduleKind === 'interval'" class="trigger-interval-control">
                       <Input v-model="createForm.intervalValue" type="number" min="1" step="1" inputmode="numeric" placeholder="1" />
-                      <ControlPlaneSelect v-model="createForm.intervalUnit" trigger-class="trigger-board-select trigger-interval-unit" placeholder="Unit">
-                        <ControlPlaneSelectItem value="minute">Minute</ControlPlaneSelectItem>
-                        <ControlPlaneSelectItem value="hour">Hour</ControlPlaneSelectItem>
-                        <ControlPlaneSelectItem value="day">Day</ControlPlaneSelectItem>
-                        <ControlPlaneSelectItem value="week">Week</ControlPlaneSelectItem>
+                      <ControlPlaneSelect v-model="createForm.intervalUnit" trigger-class="trigger-board-select trigger-interval-unit" :placeholder="t('triggers.create.unit')">
+                        <ControlPlaneSelectItem value="minute">{{ t("triggers.intervalUnit.minute") }}</ControlPlaneSelectItem>
+                        <ControlPlaneSelectItem value="hour">{{ t("triggers.intervalUnit.hour") }}</ControlPlaneSelectItem>
+                        <ControlPlaneSelectItem value="day">{{ t("triggers.intervalUnit.day") }}</ControlPlaneSelectItem>
+                        <ControlPlaneSelectItem value="week">{{ t("triggers.intervalUnit.week") }}</ControlPlaneSelectItem>
                       </ControlPlaneSelect>
                     </div>
                     <Input v-else v-model="createForm.timeOfDay" type="time" />
                   </label>
                   <label v-if="createForm.scheduleKind !== 'interval'">
-                    <span>Timezone</span>
-                    <ControlPlaneSelect v-model="createForm.timezone" trigger-class="trigger-board-select" placeholder="Timezone">
+                    <span>{{ t("triggers.create.timezone") }}</span>
+                    <ControlPlaneSelect v-model="createForm.timezone" trigger-class="trigger-board-select" :placeholder="t('triggers.create.timezone')">
                       <ControlPlaneSelectItem v-for="timezone in timezoneOptions" :key="timezone" :value="timezone">{{ timezone }}</ControlPlaneSelectItem>
                     </ControlPlaneSelect>
                   </label>
                   <div v-if="createForm.scheduleKind === 'weekly'" class="trigger-weekday-field">
-                    <span>Days</span>
+                    <span>{{ t("triggers.create.days") }}</span>
                     <div class="trigger-weekday-grid">
                       <label v-for="day in weekdayOptions" :key="day.value" class="trigger-weekday-option">
                         <Checkbox :model-value="createForm.weekdays.includes(day.value)" @update:model-value="toggleWeekday(day.value, Boolean($event))" />
@@ -82,29 +82,32 @@
                 </div>
                 <div v-else-if="createForm.sourceType === 'file-change'" class="trigger-board-source-grid">
                   <label>
-                    <span>Roots</span>
+                    <span>{{ t("triggers.create.roots") }}</span>
+                    <!-- i18n-audit-allow-next-line code-token: example watched runtime paths -->
                     <Input v-model="createForm.roots" placeholder="/workspace, /workspace/docs" />
                   </label>
                   <label>
-                    <span>Globs</span>
+                    <span>{{ t("triggers.create.globs") }}</span>
+                    <!-- i18n-audit-allow-next-line code-token: example file glob patterns -->
                     <Input v-model="createForm.globs" placeholder="**/*, docs/**/*.md" />
                   </label>
                   <label>
-                    <span>Ignore</span>
+                    <span>{{ t("triggers.create.ignore") }}</span>
+                    <!-- i18n-audit-allow-next-line code-token: example ignored glob patterns -->
                     <Input v-model="createForm.ignore" placeholder="node_modules/**, .git/**" />
                   </label>
                   <label>
-                    <span>Debounce ms</span>
+                    <span>{{ t("triggers.create.debounceMs") }}</span>
                     <Input v-model="createForm.debounceMs" placeholder="1500" />
                   </label>
                 </div>
                 <div v-else class="trigger-board-source-grid">
                   <label>
-                    <span>Statuses</span>
+                    <span>{{ t("triggers.create.statuses") }}</span>
                     <DropdownMenu>
                       <DropdownMenuTrigger as-child>
                         <Button variant="outline" class="trigger-multi-select" type="button">
-                          <span>{{ selectedOptionText(createForm.statuses, aiStatusOptions, "Any status") }}</span>
+                          <span>{{ selectedOptionText(createForm.statuses, aiStatusOptions, t("triggers.create.anyStatus")) }}</span>
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent class="trigger-multi-select-menu" align="start" :side-offset="6" @click.stop>
@@ -122,11 +125,11 @@
                     </DropdownMenu>
                   </label>
                   <label>
-                    <span>Phases</span>
+                    <span>{{ t("triggers.create.phases") }}</span>
                     <DropdownMenu>
                       <DropdownMenuTrigger as-child>
                         <Button variant="outline" class="trigger-multi-select" type="button">
-                          <span>{{ selectedOptionText(createForm.phases, aiPhaseOptions, "Any phase") }}</span>
+                          <span>{{ selectedOptionText(createForm.phases, aiPhaseOptions, t("triggers.create.anyPhase")) }}</span>
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent class="trigger-multi-select-menu" align="start" :side-offset="6" @click.stop>
@@ -148,60 +151,60 @@
 
               <section class="trigger-create-group">
                 <div class="trigger-create-group-head">
-                  <strong>Run policy</strong>
-                  <span>Control repeated events and overlapping runs.</span>
+                  <strong>{{ t("triggers.create.runPolicy") }}</strong>
+                  <span>{{ t("triggers.create.runPolicyHint") }}</span>
                 </div>
                 <div class="trigger-board-create-main">
                   <label>
-                    <span>Cooldown</span>
-                    <ControlPlaneSelect v-model="createForm.cooldownPreset" trigger-class="trigger-board-select" placeholder="Cooldown">
+                    <span>{{ t("triggers.create.cooldown") }}</span>
+                    <ControlPlaneSelect v-model="createForm.cooldownPreset" trigger-class="trigger-board-select" :placeholder="t('triggers.create.cooldown')">
                       <ControlPlaneSelectItem v-for="option in cooldownPresetOptions" :key="option.value" :value="option.value">{{ option.label }}</ControlPlaneSelectItem>
                     </ControlPlaneSelect>
                   </label>
                   <label>
-                    <span>Busy policy</span>
-                    <ControlPlaneSelect v-model="createForm.whenBusy" trigger-class="trigger-board-select" placeholder="Busy policy">
-                      <ControlPlaneSelectItem value="skip">Skip</ControlPlaneSelectItem>
-                      <ControlPlaneSelectItem value="queue">Queue</ControlPlaneSelectItem>
+                    <span>{{ t("triggers.create.busyPolicy") }}</span>
+                    <ControlPlaneSelect v-model="createForm.whenBusy" trigger-class="trigger-board-select" :placeholder="t('triggers.create.busyPolicy')">
+                      <ControlPlaneSelectItem value="skip">{{ t("triggers.busyPolicy.skip") }}</ControlPlaneSelectItem>
+                      <ControlPlaneSelectItem value="queue">{{ t("triggers.busyPolicy.queue") }}</ControlPlaneSelectItem>
                     </ControlPlaneSelect>
                   </label>
                   <label v-if="createForm.cooldownPreset === 'custom'" class="trigger-interval-field">
-                    <span>Custom cooldown</span>
+                    <span>{{ t("triggers.create.customCooldown") }}</span>
                     <div class="trigger-interval-control">
                       <Input v-model="createForm.customCooldownValue" type="number" min="1" step="1" inputmode="numeric" placeholder="5" />
-                      <ControlPlaneSelect v-model="createForm.customCooldownUnit" trigger-class="trigger-board-select trigger-interval-unit" placeholder="Unit">
-                        <ControlPlaneSelectItem value="second">Second</ControlPlaneSelectItem>
-                        <ControlPlaneSelectItem value="minute">Minute</ControlPlaneSelectItem>
-                        <ControlPlaneSelectItem value="hour">Hour</ControlPlaneSelectItem>
+                      <ControlPlaneSelect v-model="createForm.customCooldownUnit" trigger-class="trigger-board-select trigger-interval-unit" :placeholder="t('triggers.create.unit')">
+                        <ControlPlaneSelectItem value="second">{{ t("triggers.intervalUnit.second") }}</ControlPlaneSelectItem>
+                        <ControlPlaneSelectItem value="minute">{{ t("triggers.intervalUnit.minute") }}</ControlPlaneSelectItem>
+                        <ControlPlaneSelectItem value="hour">{{ t("triggers.intervalUnit.hour") }}</ControlPlaneSelectItem>
                       </ControlPlaneSelect>
                     </div>
                   </label>
                 </div>
 
                 <div class="trigger-create-group-head">
-                  <strong>Prompt</strong>
-                  <span>This prompt is sent to the target session when the trigger runs.</span>
+                  <strong>{{ t("triggers.create.prompt") }}</strong>
+                  <span>{{ t("triggers.create.promptHint") }}</span>
                 </div>
                 <label class="trigger-board-prompt">
-                  <span>Prompt template</span>
+                  <span>{{ t("triggers.create.promptTemplate") }}</span>
                   <Textarea v-model="createForm.promptTemplate" rows="5" />
                 </label>
               </section>
             </div>
             <DialogFooter class="trigger-create-footer">
               <DialogClose as-child>
-                <Button variant="outline" size="sm">Cancel</Button>
+                <Button variant="outline" size="sm">{{ t("triggers.create.cancel") }}</Button>
               </DialogClose>
               <Button size="sm" :disabled="creating" @click="createTemplate">
                 <Plus :size="14" />
-                <span>{{ creating ? "Creating" : "Create template" }}</span>
+                <span>{{ creating ? t("triggers.create.creating") : t("triggers.create.submit") }}</span>
               </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
       </div>
     </header>
-    <p class="trigger-board-description">Templates aggregated from control plane and controlled instances.</p>
+    <p class="trigger-board-description">{{ t("triggers.description") }}</p>
 
     <p v-if="triggers.error.value" class="form-error">{{ errorText }}</p>
     <div v-else-if="filteredTriggers.length" class="trigger-board-list">
@@ -210,28 +213,28 @@
           <div>
             <div class="trigger-board-title">
               {{ trigger.config.name }}
-              <Badge variant="secondary">{{ trigger.config.source.type }}</Badge>
+              <Badge variant="secondary">{{ sourceTypeLabel(trigger.config.source.type) }}</Badge>
               <Badge>{{ shortHash(trigger.configHash) }}</Badge>
-              <Badge v-if="!trigger.ownedByControlPlane" variant="secondary">instance local</Badge>
+              <Badge v-if="!trigger.ownedByControlPlane" variant="secondary">{{ t("triggers.ownership.instanceLocal") }}</Badge>
             </div>
             <p v-if="trigger.config.description">{{ trigger.config.description }}</p>
             <div class="trigger-board-meta">
               <span>{{ sourceText(trigger.config.source) }}</span>
-              <span>{{ trigger.deploymentCount }} session bindings</span>
-              <span>{{ trigger.enabledCount }} enabled</span>
-              <span>{{ trigger.runningCount }} running</span>
-              <span>{{ trigger.errorCount }} errors</span>
+              <span>{{ t(trigger.deploymentCount === 1 ? "triggers.counts.bindingOne" : "triggers.counts.bindings", { count: trigger.deploymentCount }) }}</span>
+              <span>{{ t("triggers.counts.enabled", { count: trigger.enabledCount }) }}</span>
+              <span>{{ t("triggers.counts.running", { count: trigger.runningCount }) }}</span>
+              <span>{{ t(trigger.errorCount === 1 ? "triggers.counts.errorOne" : "triggers.counts.errors", { count: trigger.errorCount }) }}</span>
             </div>
           </div>
           <Button
             variant="outline"
             size="sm"
             :disabled="deletingHash === trigger.configHash || !trigger.ownedByControlPlane"
-            :title="trigger.ownedByControlPlane ? 'Delete trigger template' : 'This trigger is owned by a controlled instance'"
+            :title="trigger.ownedByControlPlane ? t('triggers.actions.deleteTitle') : t('triggers.ownership.deleteOwnedElsewhere')"
             @click="deleteTemplate(trigger.configHash)"
           >
             <Trash2 :size="14" />
-            <span>Delete</span>
+            <span>{{ t("triggers.actions.delete") }}</span>
           </Button>
         </header>
 
@@ -240,29 +243,30 @@
             <div>
               <strong>{{ entry.instanceName }}</strong>
               <span>{{ targetText(entry.deployment.target) }}</span>
-              <span>{{ entry.runtime?.status || (entry.deployment.enabled ? "idle" : "disabled") }}</span>
-              <span>{{ entry.deployment.origin }}</span>
+              <span :title="entry.runtime?.lastError">{{ runtimeStatusLabel(entry.runtime?.status || (entry.deployment.enabled ? "idle" : "disabled")) }}</span>
+              <span>{{ originLabel(entry.deployment.origin) }}</span>
             </div>
-            <Button variant="outline" size="sm" @click="run(entry.instanceId, trigger.configHash, entry.deployment.deploymentId || entry.deployment.configHash)">Run</Button>
+            <Button variant="outline" size="sm" @click="run(entry.instanceId, trigger.configHash, entry.deployment.deploymentId || entry.deployment.configHash)">{{ t("triggers.actions.run") }}</Button>
           </div>
         </div>
 
         <div v-if="trigger.recentRuns.length" class="trigger-board-runs">
           <div v-for="run in trigger.recentRuns.slice(0, 3)" :key="run.id" class="trigger-board-run">
-            <Badge :variant="run.status === 'failed' ? 'destructive' : 'secondary'">{{ run.status }}</Badge>
+            <Badge :variant="run.status === 'failed' ? 'destructive' : 'secondary'" :title="run.error">{{ runStatusLabel(run.status) }}</Badge>
             <span>{{ run.instanceName || run.instanceId }}</span>
             <span>{{ formatDate(run.startedAt) }}</span>
           </div>
         </div>
       </section>
     </div>
-    <p v-else class="settings-empty">No trigger templates yet.</p>
+    <p v-else class="settings-empty">{{ t("triggers.empty") }}</p>
   </section>
 </template>
 
 <script setup lang="ts">
 import { computed, reactive, ref } from "vue";
 import { useQueryClient } from "@tanstack/vue-query";
+import { useI18n } from "vue-i18n";
 import { Plus, Trash2, X } from "@lucide/vue";
 import { createControlPlaneTrigger, deleteControlPlaneTrigger, runControlledInstanceTrigger, useControlPlaneTriggersQuery } from "../../../api/queries";
 import type { InstanceBoardItem, TriggerSource, TriggerTarget } from "../../../api/types";
@@ -276,10 +280,14 @@ import { Textarea } from "../../../components/ui/textarea";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
+import { formatDateTime } from "../../../i18n/presentation";
+import { translateApiError } from "../../../i18n/apiError";
+import type { SupportedLocale } from "../../../i18n";
 
 type AiSessionTriggerSource = Extract<TriggerSource, { type: "ai-session" }>;
 
 const queryClient = useQueryClient();
+const { locale, t } = useI18n();
 defineProps<{ instances: InstanceBoardItem[] }>();
 const triggers = useControlPlaneTriggersQuery();
 const filter = ref("");
@@ -332,41 +340,41 @@ const timezoneOptions = Array.from(new Set([
   "Asia/Singapore",
 ])).filter(Boolean);
 
-const weekdayOptions = [
-  { value: 1, label: "Mon" },
-  { value: 2, label: "Tue" },
-  { value: 3, label: "Wed" },
-  { value: 4, label: "Thu" },
-  { value: 5, label: "Fri" },
-  { value: 6, label: "Sat" },
-  { value: 0, label: "Sun" },
-];
+const weekdayOptions = computed(() => [
+  { value: 1, label: t("triggers.weekday.monday") },
+  { value: 2, label: t("triggers.weekday.tuesday") },
+  { value: 3, label: t("triggers.weekday.wednesday") },
+  { value: 4, label: t("triggers.weekday.thursday") },
+  { value: 5, label: t("triggers.weekday.friday") },
+  { value: 6, label: t("triggers.weekday.saturday") },
+  { value: 0, label: t("triggers.weekday.sunday") },
+]);
 
-const aiStatusOptions: Array<{ value: NonNullable<AiSessionTriggerSource["statuses"]>[number]; label: string }> = [
-  { value: "running", label: "Running" },
-  { value: "waiting", label: "Waiting" },
-  { value: "idle", label: "Idle" },
-  { value: "failed", label: "Failed" },
-];
+const aiStatusOptions = computed<Array<{ value: NonNullable<AiSessionTriggerSource["statuses"]>[number]; label: string }>>(() => [
+  { value: "running", label: t("triggers.sessionStatus.running") },
+  { value: "waiting", label: t("triggers.sessionStatus.waiting") },
+  { value: "idle", label: t("triggers.sessionStatus.idle") },
+  { value: "failed", label: t("triggers.sessionStatus.failed") },
+]);
 
-const aiPhaseOptions: Array<{ value: NonNullable<AiSessionTriggerSource["phases"]>[number]; label: string }> = [
-  { value: "thinking", label: "Thinking" },
-  { value: "tool", label: "Tool" },
-  { value: "editing", label: "Editing" },
-  { value: "approval", label: "Approval" },
-  { value: "responding", label: "Responding" },
-  { value: "unknown", label: "Unknown" },
-];
+const aiPhaseOptions = computed<Array<{ value: NonNullable<AiSessionTriggerSource["phases"]>[number]; label: string }>>(() => [
+  { value: "thinking", label: t("triggers.sessionPhase.thinking") },
+  { value: "tool", label: t("triggers.sessionPhase.tool") },
+  { value: "editing", label: t("triggers.sessionPhase.editing") },
+  { value: "approval", label: t("triggers.sessionPhase.approval") },
+  { value: "responding", label: t("triggers.sessionPhase.responding") },
+  { value: "unknown", label: t("triggers.sessionPhase.unknown") },
+]);
 
-const cooldownPresetOptions: Array<{ value: CooldownPreset; label: string; ms: number | null }> = [
-  { value: "none", label: "None", ms: 0 },
-  { value: "30s", label: "30 seconds", ms: 30_000 },
-  { value: "1m", label: "1 minute", ms: 60_000 },
-  { value: "5m", label: "5 minutes", ms: 5 * 60_000 },
-  { value: "15m", label: "15 minutes", ms: 15 * 60_000 },
-  { value: "1h", label: "1 hour", ms: 60 * 60_000 },
-  { value: "custom", label: "Custom", ms: null },
-];
+const cooldownPresetOptions = computed<Array<{ value: CooldownPreset; label: string; ms: number | null }>>(() => [
+  { value: "none", label: t("triggers.cooldownPreset.none"), ms: 0 },
+  { value: "30s", label: t("triggers.cooldownPreset.seconds30"), ms: 30_000 },
+  { value: "1m", label: t("triggers.cooldownPreset.minute1"), ms: 60_000 },
+  { value: "5m", label: t("triggers.cooldownPreset.minutes5"), ms: 5 * 60_000 },
+  { value: "15m", label: t("triggers.cooldownPreset.minutes15"), ms: 15 * 60_000 },
+  { value: "1h", label: t("triggers.cooldownPreset.hour1"), ms: 60 * 60_000 },
+  { value: "custom", label: t("triggers.cooldownPreset.custom"), ms: null },
+]);
 
 const cooldownUnitMs: Record<CooldownUnit, number> = {
   second: 1000,
@@ -377,15 +385,15 @@ const cooldownUnitMs: Record<CooldownUnit, number> = {
 const errorText = computed(() => (triggers.error.value instanceof Error ? triggers.error.value.message : String(triggers.error.value || "")));
 const sourceSectionHint = computed(() => {
   if (createForm.sourceType === "file-change") {
-    return "Watch workspace paths and debounce matching file changes.";
+    return t("triggers.sourceHint.fileChange");
   }
   if (createForm.sourceType === "ai-session") {
-    return "React to AI session lifecycle and phase changes.";
+    return t("triggers.sourceHint.aiSession");
   }
   if (createForm.scheduleKind === "interval") {
-    return "Run this trigger repeatedly on a fixed interval.";
+    return t("triggers.sourceHint.interval");
   }
-  return "Run this trigger at a wall-clock time in the selected timezone.";
+  return t("triggers.sourceHint.wallClock");
 });
 const filteredTriggers = computed(() => {
   const value = filter.value.trim().toLowerCase();
@@ -401,7 +409,7 @@ async function run(instanceId: string, configHash: string, deploymentId?: string
     await runControlledInstanceTrigger(instanceId, configHash, { deploymentId });
     await refresh();
   } catch (error) {
-    showControlPlaneToast(error instanceof Error ? error.message : String(error));
+    showControlPlaneToast(translateApiError(error, t));
   }
 }
 
@@ -422,7 +430,7 @@ async function createTemplate() {
     createDialogOpen.value = false;
     await refresh();
   } catch (error) {
-    showControlPlaneToast(error instanceof Error ? error.message : String(error));
+    showControlPlaneToast(translateApiError(error, t));
   } finally {
     creating.value = false;
   }
@@ -437,7 +445,7 @@ async function deleteTemplate(configHash: string) {
     await deleteControlPlaneTrigger(configHash);
     await refresh();
   } catch (error) {
-    showControlPlaneToast(error instanceof Error ? error.message : String(error));
+    showControlPlaneToast(translateApiError(error, t));
   } finally {
     deletingHash.value = "";
   }
@@ -503,7 +511,7 @@ function cooldownMsFromForm() {
     const value = positiveNumber(createForm.customCooldownValue, 5);
     return Math.round(value * cooldownUnitMs[createForm.customCooldownUnit]);
   }
-  return cooldownPresetOptions.find((option) => option.value === createForm.cooldownPreset)?.ms || 0;
+  return cooldownPresetOptions.value.find((option) => option.value === createForm.cooldownPreset)?.ms || 0;
 }
 
 function listFromCsv(value: string, fallback: string[] = []) {
@@ -522,22 +530,69 @@ function shortHash(value: string) {
 function sourceText(source: TriggerSource) {
   if (source.type === "schedule") {
     if ("intervalMs" in source) {
-      return `every ${formatInterval(source.intervalMs)}`;
+      return t("triggers.sourceSummary.interval", { interval: formatInterval(source.intervalMs) });
     }
     if (source.scheduleKind === "daily") {
-      return `daily at ${source.timeOfDay} · ${source.timezone}`;
+      return t("triggers.sourceSummary.daily", { time: source.timeOfDay, timezone: source.timezone });
     }
-    return `weekly ${formatWeekdays(source.weekdays)} at ${source.timeOfDay} · ${source.timezone}`;
+    return t("triggers.sourceSummary.weekly", { weekdays: formatWeekdays(source.weekdays), time: source.timeOfDay, timezone: source.timezone });
   }
   if (source.type === "file-change") {
     return `${source.roots.join(", ")} · ${source.globs.join(", ")}`;
   }
   const filters = [
-    source.agent ? `agent ${source.agent}` : undefined,
-    source.statuses?.length ? `status ${source.statuses.join(", ")}` : undefined,
-    source.phases?.length ? `phase ${source.phases.join(", ")}` : undefined,
+    source.agent ? t("triggers.sourceSummary.agent", { value: source.agent }) : undefined,
+    source.statuses?.length ? t("triggers.sourceSummary.statuses", { value: source.statuses.map(sessionStatusLabel).join(", ") }) : undefined,
+    source.phases?.length ? t("triggers.sourceSummary.phases", { value: source.phases.map(sessionPhaseLabel).join(", ") }) : undefined,
   ].filter(Boolean);
-  return filters.join(" · ") || "any AI session update";
+  return filters.join(" · ") || t("triggers.sourceSummary.anyAiSessionUpdate");
+}
+
+function sourceTypeLabel(value: TriggerSource["type"]) {
+  if (value === "schedule") return t("triggers.sourceType.schedule");
+  if (value === "file-change") return t("triggers.sourceType.fileChange");
+  if (value === "ai-session") return t("triggers.sourceType.aiSession");
+  return value;
+}
+
+function sessionStatusLabel(value: string) {
+  if (value === "running") return t("triggers.sessionStatus.running");
+  if (value === "waiting") return t("triggers.sessionStatus.waiting");
+  if (value === "idle") return t("triggers.sessionStatus.idle");
+  if (value === "failed") return t("triggers.sessionStatus.failed");
+  return value;
+}
+
+function sessionPhaseLabel(value: string) {
+  if (value === "thinking") return t("triggers.sessionPhase.thinking");
+  if (value === "tool") return t("triggers.sessionPhase.tool");
+  if (value === "editing") return t("triggers.sessionPhase.editing");
+  if (value === "approval") return t("triggers.sessionPhase.approval");
+  if (value === "responding") return t("triggers.sessionPhase.responding");
+  if (value === "unknown") return t("triggers.sessionPhase.unknown");
+  return value;
+}
+
+function runtimeStatusLabel(value: string) {
+  if (value === "idle") return t("triggers.status.idle");
+  if (value === "running") return t("triggers.status.running");
+  if (value === "disabled") return t("triggers.status.disabled");
+  if (value === "error") return t("triggers.status.error");
+  return t("triggers.status.unknown", { value });
+}
+
+function runStatusLabel(value: string) {
+  if (value === "started") return t("triggers.status.started");
+  if (value === "completed") return t("triggers.status.completed");
+  if (value === "failed") return t("triggers.status.failed");
+  if (value === "skipped") return t("triggers.status.skipped");
+  return t("triggers.status.unknown", { value });
+}
+
+function originLabel(value: string) {
+  if (value === "control-plane") return t("triggers.origin.controlPlane");
+  if (value === "controlled-instance") return t("triggers.origin.controlledInstance");
+  return t("triggers.origin.unknown", { value });
 }
 
 function toggleWeekday(value: number, checked: boolean) {
@@ -569,7 +624,7 @@ function selectedOptionText<T extends string>(values: T[] | undefined, options: 
 }
 
 function formatWeekdays(values: number[]) {
-  const labels = new Map(weekdayOptions.map((day) => [day.value, day.label]));
+  const labels = new Map(weekdayOptions.value.map((day) => [day.value, day.label]));
   return values.map((value) => labels.get(value) || String(value)).join(", ");
 }
 
@@ -578,29 +633,25 @@ function defaultTimezone() {
 }
 
 function formatInterval(value: number) {
-  const units: Array<[IntervalUnit, string]> = [
-    ["week", "week"],
-    ["day", "day"],
-    ["hour", "hour"],
-    ["minute", "minute"],
-  ];
-  for (const [unit, label] of units) {
+  const units: IntervalUnit[] = ["week", "day", "hour", "minute"];
+  for (const unit of units) {
     const unitMs = intervalUnitMs[unit];
     if (value >= unitMs && value % unitMs === 0) {
       const count = value / unitMs;
-      return `${count} ${label}${count === 1 ? "" : "s"}`;
+      const suffix = count === 1 ? "One" : "Many";
+      return t(`triggers.interval.${unit}${suffix}`, { count });
     }
   }
-  return `${value} ms`;
+  return t("triggers.interval.milliseconds", { count: value });
 }
 
 function targetText(target: TriggerTarget) {
-  return `AI session ${target.aiSessionId}`;
+  return t("triggers.target.aiSession", { id: target.aiSessionId });
 }
 
 function formatDate(value: string) {
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+  return Number.isNaN(date.getTime()) ? value : formatDateTime(date, locale.value as SupportedLocale);
 }
 </script>
 

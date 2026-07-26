@@ -1,5 +1,5 @@
 <template>
-  <section class="image-pull-panel" aria-label="Image pull progress">
+  <section class="image-pull-panel" :aria-label="t('instances.imagePull.progress')">
     <div class="image-pull-summary">
       <div>
         <strong>{{ title }}</strong>
@@ -7,14 +7,14 @@
       </div>
       <Button variant="ghost" size="sm" :aria-expanded="expanded" @click="toggleExpanded">
         <TerminalSquare :size="14" />
-        <span>{{ expanded ? "Hide details" : "Show details" }}</span>
+        <span>{{ expanded ? t("instances.imagePull.hideDetails") : t("instances.imagePull.showDetails") }}</span>
         <ChevronDown class="image-pull-chevron" :class="{ expanded }" :size="14" />
       </Button>
     </div>
     <Progress v-if="progress.percent !== undefined" :model-value="progress.percent" class="image-pull-progress" />
     <div v-show="expanded" class="image-pull-terminal-wrap">
       <div ref="terminalHost" class="image-pull-terminal" />
-      <small v-if="progress.terminalTruncated">Earlier terminal output was truncated.</small>
+      <small v-if="progress.terminalTruncated">{{ t("instances.imagePull.terminalTruncated") }}</small>
     </div>
   </section>
 </template>
@@ -26,8 +26,14 @@ import { ChevronDown, SquareTerminal as TerminalSquare } from "@lucide/vue";
 import type { ImagePullProgress } from "@task-handoff/protocol/control-plane";
 import { Button } from "../../../components/ui/button";
 import { Progress } from "../../../components/ui/progress";
+import { useControlPlaneLocale } from "../../../i18n/index.ts";
+import { formatBytes } from "../../../i18n/presentation.ts";
+import { imagePullStatusKeys, translateStatus } from "../../../i18n/status.ts";
+import { useI18n } from "vue-i18n";
 
 const props = defineProps<{ progress: ImagePullProgress }>();
+const { locale } = useControlPlaneLocale();
+const { t } = useI18n();
 const expanded = ref(false);
 const terminalHost = ref<HTMLElement>();
 let terminal: import("@xterm/xterm").Terminal | undefined;
@@ -35,16 +41,14 @@ let fit: import("@xterm/addon-fit").FitAddon | undefined;
 let resizeObserver: ResizeObserver | undefined;
 let renderedTail = "";
 
-const title = computed(() => props.progress.status === "failed" ? "Docker image pull failed"
-  : props.progress.status === "complete" ? "Image pull complete"
-    : props.progress.status === "extracting" ? "Extracting image layers" : "Pulling Docker image");
+const title = computed(() => translateStatus(imagePullStatusKeys, props.progress.status, t));
 const detail = computed(() => {
   const { layers, bytes, percent } = props.progress;
-  const parts = [layers.total ? `${layers.completed} / ${layers.total} ready` : "Waiting for layer metadata"];
-  if (layers.downloaded) parts.push(`${layers.downloaded} downloaded`);
-  if (layers.downloading) parts.push(`${layers.downloading} downloading`);
-  if (layers.extracting) parts.push(`${layers.extracting} extracting`);
-  if (bytes) parts.push(`${formatBytes(bytes.current)} / ${formatBytes(bytes.total)}`);
+  const parts = [layers.total ? t("instances.imagePull.layersReady", { completed: layers.completed, total: layers.total }) : t("instances.imagePull.waitingForLayers")];
+  if (layers.downloaded) parts.push(t("instances.imagePull.downloaded", { count: layers.downloaded }));
+  if (layers.downloading) parts.push(t("instances.imagePull.downloading", { count: layers.downloading }));
+  if (layers.extracting) parts.push(t("instances.imagePull.extractingLayers", { count: layers.extracting }));
+  if (bytes) parts.push(`${formatBytes(bytes.current, locale.value)} / ${formatBytes(bytes.total, locale.value)}`);
   if (percent !== undefined) parts.push(`${Math.round(percent)}%`);
   return parts.join(" · ");
 });
@@ -92,14 +96,6 @@ function terminalTheme() {
     background: styles.getPropertyValue("--terminal-bg").trim() || "#050505",
     foreground: styles.getPropertyValue("--terminal-text").trim() || "#e8e8e8",
   };
-}
-
-function formatBytes(value: number) {
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let current = value;
-  let unit = 0;
-  while (current >= 1024 && unit < units.length - 1) { current /= 1024; unit += 1; }
-  return `${current >= 10 || unit === 0 ? current.toFixed(0) : current.toFixed(1)} ${units[unit]}`;
 }
 
 watch(() => props.progress.terminalTail || "", syncTerminal);

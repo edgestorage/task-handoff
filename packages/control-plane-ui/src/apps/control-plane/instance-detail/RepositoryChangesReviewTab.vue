@@ -3,13 +3,13 @@
     <header class="repository-review-head">
       <span class="repository-review-title">
         <GitCompareArrows :size="17" />
-        <span><strong>Changes</strong><small>{{ repositorySubtitle }}</small></span>
+        <span><strong>{{ t("repository.review.title") }}</strong><small>{{ repositorySubtitle }}</small></span>
       </span>
       <span class="repository-review-summary">
-        <Button variant="ghost" size="icon" aria-label="Open File Explorer" title="File Explorer" @click="openFiles"><Files :size="14" /></Button>
-        <b>{{ logicalFileCount }} file{{ logicalFileCount === 1 ? "" : "s" }}</b>
+        <Button variant="ghost" size="icon" :aria-label="t('repository.review.openExplorer')" :title="t('repository.review.explorer')" @click="openFiles"><Files :size="14" /></Button>
+        <b>{{ t("repository.reviewExtra.fileCount", { count: logicalFileCount }) }}</b>
         <small>{{ summaryLabel }}</small>
-        <Button variant="outline" size="sm" :disabled="loading || mutationPending" @click="refresh"><RefreshCw :class="{ spin: loading }" :size="13" /> Refresh</Button>
+        <Button variant="outline" size="sm" :disabled="loading || mutationPending" @click="refresh"><RefreshCw :class="{ spin: loading }" :size="13" /> {{ t("repository.common.refresh") }}</Button>
       </span>
     </header>
 
@@ -17,12 +17,12 @@
       <div class="repository-review-toolbar-left">
         <Popover v-model:open="filesOpen">
           <PopoverTrigger as-child>
-            <Button variant="outline" size="sm" class="repository-review-files-trigger"><PanelLeftOpen :size="13" /> Files <b>{{ logicalFileCount }}</b></Button>
+            <Button variant="outline" size="sm" class="repository-review-files-trigger"><PanelLeftOpen :size="13" /> {{ t("repository.review.files") }} <b>{{ logicalFileCount }}</b></Button>
           </PopoverTrigger>
           <PopoverContent class="repository-review-files-popover p-0" align="start" :collision-padding="12" :side-offset="6">
             <aside class="repository-review-tree-panel">
-              <label class="repository-review-filter"><Search :size="13" /><input v-model="filter" type="search" placeholder="Filter changed files…" aria-label="Filter changed files" /></label>
-              <div class="repository-review-tree" role="tree" aria-label="Changed files">
+              <label class="repository-review-filter"><Search :size="13" /><input v-model="filter" type="search" :placeholder="t('repository.review.filter')" :aria-label="t('repository.review.filter')" /></label>
+              <div class="repository-review-tree" role="tree" :aria-label="t('repository.review.changedFiles')">
                 <template v-for="node in flatTree" :key="node.key">
                   <button v-if="node.kind === 'directory'" type="button" class="repository-review-tree-directory" role="treeitem" :aria-expanded="expandedDirectories.has(node.path)" :style="treeIndent(node.depth)" @click="toggleDirectory(node.path)">
                     <ChevronRight :class="{ expanded: expandedDirectories.has(node.path) }" :size="13" />
@@ -35,32 +35,32 @@
                     <small><b v-for="entry in node.entries" :key="changeId(entry)" :data-scope="entry.scope">{{ scopeBadge(entry.scope) }}</b></small>
                   </button>
                 </template>
-                <div v-if="!flatTree.length" class="repository-review-tree-empty">No changed files match this view.</div>
+                <div v-if="!flatTree.length" class="repository-review-tree-empty">{{ t("repository.review.noMatch") }}</div>
               </div>
             </aside>
           </PopoverContent>
         </Popover>
-        <div class="repository-review-scopes" role="tablist" aria-label="Change scope">
+        <div class="repository-review-scopes" role="tablist" :aria-label="t('repository.review.scope')">
           <button v-for="option in scopeOptions" :key="option.value" type="button" role="tab" :aria-selected="scope === option.value" :class="{ active: scope === option.value }" @click="scope = option.value">
             {{ option.label }} <b>{{ option.count }}</b>
           </button>
         </div>
       </div>
-      <ToggleGroup :model-value="viewMode" class="repository-review-view-options" type="single" aria-label="Diff layout" @update:model-value="setViewMode">
-        <ToggleGroupItem value="unified" aria-label="Unified diff"><Rows3 :size="13" /> Unified</ToggleGroupItem>
-        <ToggleGroupItem value="split" aria-label="Split diff" :disabled="!splitAvailable" :title="splitAvailable ? undefined : 'Split view requires a wider window'"><Columns2 :size="13" /> Split</ToggleGroupItem>
+      <ToggleGroup :model-value="viewMode" class="repository-review-view-options" type="single" :aria-label="t('repository.review.layout')" @update:model-value="setViewMode">
+        <ToggleGroupItem value="unified" :aria-label="t('repository.review.unifiedDiff')"><Rows3 :size="13" /> {{ t("repository.review.unified") }}</ToggleGroupItem>
+        <ToggleGroupItem value="split" :aria-label="t('repository.review.splitDiff')" :disabled="!splitAvailable" :title="splitAvailable ? undefined : t('repository.review.splitWide')"><Columns2 :size="13" /> {{ t("repository.review.split") }}</ToggleGroupItem>
       </ToggleGroup>
     </div>
 
-    <div v-if="loading && !changes" class="repository-review-page-state"><LoaderCircle class="spin" :size="20" /> Loading repository changes…</div>
-    <RepositoryErrorNotice v-else-if="pageError && !changes" :error="pageError" fallback="Repository changes could not be loaded." />
+    <div v-if="loading && !changes" class="repository-review-page-state"><LoaderCircle class="spin" :size="20" /> {{ t("repository.review.loading") }}</div>
+    <RepositoryErrorNotice v-else-if="pageError && !changes" :error="pageError" :fallback="t('repository.errors.changesLoad')" />
     <div v-else class="repository-review-body">
-      <div v-if="mutationMessage || pageError" class="repository-review-notices">
-        <div v-if="mutationMessage" class="repository-review-message success"><CheckCircle2 :size="13" />{{ mutationMessage }}</div>
-        <RepositoryErrorNotice v-if="pageError" :error="pageError" fallback="Repository operation failed." />
+      <div v-if="mutationMessageKey || pageError" class="repository-review-notices">
+        <div v-if="mutationMessageKey" class="repository-review-message success"><CheckCircle2 :size="13" />{{ t(mutationMessageKey) }}</div>
+        <RepositoryErrorNotice v-if="pageError" :error="pageError" :fallback="t('repository.errors.operation')" />
       </div>
       <main ref="scrollElement" class="repository-review-content">
-        <div v-if="!filteredEntries.length" class="repository-review-empty"><CheckCircle2 :size="32" /><strong>No changes in this scope</strong><span>Choose another scope or refresh the repository snapshot.</span></div>
+        <div v-if="!filteredEntries.length" class="repository-review-empty"><CheckCircle2 :size="32" /><strong>{{ t("repository.review.noScope") }}</strong><span>{{ t("repository.review.noScopeHint") }}</span></div>
         <div v-else class="repository-review-virtual-list" :style="{ height: `${virtualTotalSize}px` }">
           <div
             v-for="virtualRow in virtualRows"
@@ -95,9 +95,9 @@
 
     <Dialog v-model:open="discardOpen">
       <DialogContent class="repository-review-discard-dialog">
-        <DialogHeader><DialogTitle>Discard working tree change?</DialogTitle><DialogDescription>This restores <strong>{{ discardTarget?.path }}</strong> from the index. Existing staged content is retained.</DialogDescription></DialogHeader>
-        <RepositoryErrorNotice v-if="pageError" :error="pageError" fallback="The working tree change could not be discarded." />
-        <DialogFooter><Button variant="outline" :disabled="Boolean(mutationPending)" @click="discardOpen = false">Cancel</Button><Button variant="destructive" :disabled="Boolean(mutationPending)" @click="discardEntry"><RotateCcw :size="13" /> Discard change</Button></DialogFooter>
+        <DialogHeader><DialogTitle>{{ t("repository.review.discardTitle") }}</DialogTitle><DialogDescription>{{ t("repository.review.discardDescription", { path: discardTarget?.path }) }}</DialogDescription></DialogHeader>
+        <RepositoryErrorNotice v-if="pageError" :error="pageError" :fallback="t('repository.review.discardError')" />
+        <DialogFooter><Button variant="outline" :disabled="Boolean(mutationPending)" @click="discardOpen = false">{{ t("repository.common.cancel") }}</Button><Button variant="destructive" :disabled="Boolean(mutationPending)" @click="discardEntry"><RotateCcw :size="13" /> {{ t("repository.review.discard") }}</Button></DialogFooter>
       </DialogContent>
     </Dialog>
   </section>
@@ -109,6 +109,7 @@ import { CheckCircle2, ChevronRight, Columns2, FileDiff, Files, Folder, GitCompa
 import { useVirtualizer } from "@tanstack/vue-virtual";
 import { useMediaQuery } from "@vueuse/core";
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import { useQueryClient } from "@tanstack/vue-query";
 import { ApiError } from "../../../api/client";
 import { discardRepositoryWorktree, getRepositoryChanges, getRepositoryContext, stageRepositoryPaths, unstageRepositoryPaths } from "../../../api/repository";
@@ -135,6 +136,7 @@ type ReviewTreeNode = {
 };
 
 const props = defineProps<{ instanceId: string; session: { source?: Record<string, unknown> } }>();
+const { t } = useI18n();
 const emit = defineEmits<{ openWorkspace: [target: { initialView: "files" | "changes"; page?: "workspace" | "changes-review"; sessionId: string; sessionKind: RepositorySessionKind }] }>();
 const queryClient = useQueryClient();
 const sessionId = computed(() => typeof props.session.source?.sessionId === "string" ? props.session.source.sessionId : "");
@@ -145,7 +147,7 @@ const changes = ref<RepositoryChanges>();
 const loading = ref(false);
 const pageError = ref<unknown>();
 const mutationPending = ref("");
-const mutationMessage = ref("");
+const mutationMessageKey = ref("");
 const scope = ref<ReviewScope>("all");
 const filter = ref("");
 const filesOpen = ref(false);
@@ -166,21 +168,21 @@ const filteredEntries = computed(() => allEntries.value
   .sort(compareEntries));
 const logicalFileCount = computed(() => new Set(allEntries.value.map((entry) => entry.path)).size);
 const repositorySubtitle = computed(() => {
-  const branch = context.value?.head?.state === "branch" ? context.value.head.branch : context.value?.head?.state === "detached" ? `detached ${context.value.head.oid?.slice(0, 8)}` : "unborn branch";
-  return [context.value?.displayName || "Repository", branch, context.value?.cwdRelativePath ? `cwd: ${context.value.cwdRelativePath}` : "repository root"].filter(Boolean).join(" · ");
+  const branch = context.value?.head?.state === "branch" ? context.value.head.branch : context.value?.head?.state === "detached" ? t("repository.workspace.detached", { commit: context.value.head.oid?.slice(0, 8) }) : t("repository.common.unbornBranch");
+  return [context.value?.displayName || t("repository.title"), branch, context.value?.cwdRelativePath ? t("repository.common.cwd", { path: context.value.cwdRelativePath }) : t("repository.common.repositoryRoot")].filter(Boolean).join(" · ");
 });
 const summaryLabel = computed(() => {
   const summary = changes.value?.summary;
-  if (!summary) return "No snapshot";
-  return [`${summary.conflicts} conflicts`, `${summary.staged} staged`, `${summary.unstaged + summary.untracked} working`].join(" · ");
+  if (!summary) return t("repository.review.noSnapshot");
+  return t("repository.reviewExtra.summary", { conflicts: summary.conflicts, staged: summary.staged, working: summary.unstaged + summary.untracked });
 });
 const scopeOptions = computed(() => {
   const summary = changes.value?.summary || { conflicts: 0, staged: 0, unstaged: 0, untracked: 0 };
   return [
-    { value: "all" as const, label: "All", count: allEntries.value.length },
-    { value: "working" as const, label: "Working", count: summary.unstaged + summary.untracked },
-    { value: "staged" as const, label: "Staged", count: summary.staged },
-    { value: "conflict" as const, label: "Conflicts", count: summary.conflicts },
+    { value: "all" as const, label: t("repository.reviewExtra.all"), count: allEntries.value.length },
+    { value: "working" as const, label: t("repository.review.working"), count: summary.unstaged + summary.untracked },
+    { value: "staged" as const, label: t("repository.review.staged"), count: summary.staged },
+    { value: "conflict" as const, label: t("repository.review.conflicts"), count: summary.conflicts },
   ];
 });
 const flatTree = computed(() => flattenTree(buildTree(filteredEntries.value)));
@@ -214,7 +216,7 @@ async function refresh() {
   if (!props.instanceId || !sessionId.value || loading.value) return;
   loading.value = true;
   pageError.value = undefined;
-  mutationMessage.value = "";
+  mutationMessageKey.value = "";
   try {
     const [nextContext, nextChanges] = await Promise.all([getRepositoryContext(target.value), getRepositoryChanges(target.value)]);
     context.value = nextContext;
@@ -335,11 +337,11 @@ function setActiveChange(entry: RepositoryChangeEntry) { activeChangeId.value = 
 function scopeBadge(value: RepositoryChangeEntry["scope"]) { return ({ conflict: "C", staged: "S", unstaged: "W", untracked: "U" }[value]); }
 
 async function stageEntry(entry: RepositoryChangeEntry) {
-  await mutateEntry(entry, () => stageRepositoryPaths(target.value, { paths: [{ path: entry.path, expectedVersion: entry.version }], expectedSnapshotId: requireSnapshotId() }), entry.scope === "conflict" ? "Marked conflict as resolved and staged it." : "Staged change.");
+  await mutateEntry(entry, () => stageRepositoryPaths(target.value, { paths: [{ path: entry.path, expectedVersion: entry.version }], expectedSnapshotId: requireSnapshotId() }), entry.scope === "conflict" ? "repository.review.markedResolved" : "repository.review.stagedSuccess");
 }
 
 async function unstageEntry(entry: RepositoryChangeEntry) {
-  await mutateEntry(entry, () => unstageRepositoryPaths(target.value, { paths: [{ path: entry.path, expectedVersion: entry.version }], expectedSnapshotId: requireSnapshotId() }), "Unstaged change.");
+  await mutateEntry(entry, () => unstageRepositoryPaths(target.value, { paths: [{ path: entry.path, expectedVersion: entry.version }], expectedSnapshotId: requireSnapshotId() }), "repository.review.unstagedSuccess");
 }
 
 function confirmDiscard(entry: RepositoryChangeEntry) {
@@ -351,22 +353,22 @@ function confirmDiscard(entry: RepositoryChangeEntry) {
 async function discardEntry() {
   const entry = discardTarget.value;
   if (!entry) return;
-  await mutateEntry(entry, () => discardRepositoryWorktree(target.value, { paths: [{ path: entry.path, expectedVersion: entry.version }], expectedSnapshotId: requireSnapshotId(), confirm: true }), "Discarded working tree change.");
+  await mutateEntry(entry, () => discardRepositoryWorktree(target.value, { paths: [{ path: entry.path, expectedVersion: entry.version }], expectedSnapshotId: requireSnapshotId(), confirm: true }), "repository.review.discardedSuccess");
   if (!pageError.value) discardOpen.value = false;
 }
 
-async function mutateEntry(entry: RepositoryChangeEntry, operation: () => Promise<RepositoryMutationResult>, success: string) {
+async function mutateEntry(entry: RepositoryChangeEntry, operation: () => Promise<RepositoryMutationResult>, successKey: string) {
   if (mutationPending.value) return;
   mutationPending.value = changeId(entry);
   pageError.value = undefined;
-  mutationMessage.value = "";
+  mutationMessageKey.value = "";
   try {
     const result = await operation();
     context.value = result.context;
     if (result.changes) changes.value = result.changes;
     else await refresh();
     queryClient.setQueryData(["repository-context", props.instanceId, sessionKind.value, sessionId.value], result.context);
-    mutationMessage.value = success;
+    mutationMessageKey.value = successKey;
     repositoryChannel?.postMessage({ type: "repository-invalidated" });
   } catch (cause) {
     pageError.value = cause;

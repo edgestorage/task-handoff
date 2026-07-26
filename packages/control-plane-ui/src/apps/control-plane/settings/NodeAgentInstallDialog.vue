@@ -2,9 +2,9 @@
   <Dialog :open="open" @update:open="(nextOpen) => !nextOpen && emit('close')">
     <DialogContent class="node-agent-install-dialog">
       <DialogHeader>
-        <DialogTitle>Install a remote node</DialogTitle>
+        <DialogTitle>{{ t("settings.nodeDialogs.installTitle") }}</DialogTitle>
         <DialogDescription>
-          Run the generated command on the remote host. The node-agent will install as a systemd service and connect back to this control plane.
+          {{ t("settings.nodeDialogs.installDescription") }}
         </DialogDescription>
       </DialogHeader>
 
@@ -12,17 +12,18 @@
         <section class="node-agent-install-step">
           <span class="node-agent-install-step-number">1</span>
           <div>
-            <strong>Check the remote host</strong>
-            <p>Requires Linux with systemd, Node.js 24 with npm, and curl. Docker is only required for Docker runtimes.</p>
+            <strong>{{ t("settings.nodeDialogs.checkHost") }}</strong>
+            <p>{{ t("settings.nodeDialogs.requirements") }}</p>
           </div>
         </section>
 
         <section class="node-agent-install-step">
           <span class="node-agent-install-step-number">2</span>
           <div class="node-agent-install-step-content">
-            <label for="node-agent-install-base-url">Control-plane public URL</label>
+            <label for="node-agent-install-base-url">{{ t("settings.nodeDialogs.publicUrl") }}</label>
+            <!-- i18n-audit-allow-next-line code-token: example control-plane URL -->
             <ControlPlaneInput id="node-agent-install-base-url" v-model="controlPlaneUrl" placeholder="https://control-plane.example.com" />
-            <p>The remote host must be able to reach this URL.</p>
+            <p>{{ t("settings.nodeDialogs.reachableUrl") }}</p>
           </div>
         </section>
 
@@ -30,21 +31,21 @@
           <span class="node-agent-install-step-number">3</span>
           <div class="node-agent-install-step-content">
             <div class="node-agent-install-command-head">
-              <strong>Run the install command</strong>
+              <strong>{{ t("settings.nodeDialogs.runCommand") }}</strong>
               <Button size="sm" :disabled="!installCommand" @click="copyCommand">
                 <Check v-if="copied" :size="15" />
                 <Copy v-else :size="15" />
-                <span>{{ copied ? "Copied" : "Copy command" }}</span>
+                <span>{{ copied ? t("settings.nodeDialogs.copied") : t("settings.nodeDialogs.copyCommand") }}</span>
               </Button>
             </div>
-            <pre :class="{ empty: !installCommand }"><code>{{ installCommand || "Enter the public URL to generate the command." }}</code></pre>
-            <p>This one-time token expires {{ formattedExpiry }}. Generate a new command if it expires.</p>
+            <pre :class="{ empty: !installCommand }"><code>{{ installCommand || t("settings.nodeDialogs.enterUrl") }}</code></pre>
+            <p>{{ t("settings.nodeDialogs.expiresHint", { time: formattedExpiry }) }}</p>
           </div>
         </section>
       </div>
 
       <DialogFooter>
-        <Button variant="outline" @click="emit('close')">Close</Button>
+        <Button variant="outline" @click="emit('close')">{{ t("settings.nodeDialogs.close") }}</Button>
       </DialogFooter>
     </DialogContent>
   </Dialog>
@@ -52,12 +53,18 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import { Check, Copy } from "@lucide/vue";
 import { Button } from "../../../components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 import { nodeAgentInstallCommand } from "./nodeAgentInstallCommand";
+import { useControlPlaneLocale } from "../../../i18n/index";
+import { formatDateTime } from "../../../i18n/presentation";
+
+const { t } = useI18n();
+const { locale } = useControlPlaneLocale();
 
 const props = defineProps<{
   expiresAt: string;
@@ -77,7 +84,7 @@ const installCommand = computed(() => nodeAgentInstallCommand({
 }));
 const formattedExpiry = computed(() => {
   const expiresAt = new Date(props.expiresAt);
-  return Number.isNaN(expiresAt.getTime()) ? props.expiresAt : expiresAt.toLocaleString();
+  return Number.isNaN(expiresAt.getTime()) ? props.expiresAt : formatDateTime(expiresAt, locale.value);
 });
 
 watch(() => [props.joinToken, props.initialControlPlaneUrl], () => {
@@ -91,11 +98,11 @@ watch(controlPlaneUrl, () => {
 
 async function copyCommand() {
   try {
-    if (!installCommand.value || !navigator.clipboard?.writeText) throw new Error("Clipboard access is unavailable.");
+    if (!installCommand.value || !navigator.clipboard?.writeText) throw new Error(t("settings.nodeDialogs.clipboardUnavailable"));
     await navigator.clipboard.writeText(installCommand.value);
     copied.value = true;
   } catch (error) {
-    showControlPlaneToast(error instanceof Error ? error.message : "Could not copy the install command.");
+    showControlPlaneToast(error instanceof Error ? error.message : t("settings.nodeDialogs.copyCommandFailed"));
   }
 }
 </script>

@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { buildSessionTabs } from "../src/apps/control-plane/useInstanceSessions.ts";
 
+const t = (key) => ({ "sessions.tabs.status": "Status", "sessions.title": "AI Sessions" })[key] || key;
+
 function instance(status) {
   return {
     id: "inst_status_tabs",
@@ -16,7 +18,7 @@ function instance(status) {
 }
 
 test("status lifecycle exposes only the Status tab", () => {
-  assert.deepEqual(buildSessionTabs(instance("stopped")), [{
+  assert.deepEqual(buildSessionTabs(instance("stopped"), t), [{
     key: "overview",
     label: "Status",
     status: "stopped",
@@ -25,6 +27,6 @@ test("status lifecycle exposes only the Status tab", () => {
 });
 
 test("running lifecycle exposes session tabs without Status", () => {
-  const tabs = buildSessionTabs(instance("running"));
+  const tabs = buildSessionTabs(instance("running"), t);
   assert.deepEqual(tabs.map((tab) => tab.kind), ["ai", "terminal"]);
 });

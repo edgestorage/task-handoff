@@ -2,9 +2,9 @@
   <div class="repository-workspace-tab-surface">
     <div v-if="contextQuery.isPending.value" class="repository-workspace-tab-state">
       <LoaderCircle :size="18" />
-      <span>Loading repository workspace…</span>
+      <span>{{ t("repository.workspace.loading") }}</span>
     </div>
-    <RepositoryErrorNotice v-else-if="contextQuery.error.value" :error="contextQuery.error.value" fallback="The repository workspace could not be loaded." />
+    <RepositoryErrorNotice v-else-if="contextQuery.error.value" :error="contextQuery.error.value" :fallback="t('repository.errors.workspaceLoad')" />
     <RepositoryWorkspace
       v-else-if="contextQuery.data.value"
       :embedded="!dialogOpen"
@@ -27,12 +27,14 @@
 import type { RepositorySessionKind } from "@task-handoff/protocol/repository";
 import { LoaderCircle } from "@lucide/vue";
 import { computed, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { useRepositoryContextQuery } from "../../../api/repository";
 import type { SessionTab } from "../useInstanceSessions";
 import RepositoryErrorNotice from "./RepositoryErrorNotice.vue";
 import RepositoryWorkspace from "./RepositoryWorkspace.vue";
 
 const props = defineProps<{ instanceId: string; session: SessionTab }>();
+const { t } = useI18n();
 defineEmits<{ openWorkspace: [target: { initialView: "files" | "changes"; page?: "workspace" | "changes-review"; sessionId: string; sessionKind: RepositorySessionKind }] }>();
 const dialogOpen = ref(false);
 const sessionId = computed(() => typeof props.session.source?.sessionId === "string" ? props.session.source.sessionId : "");

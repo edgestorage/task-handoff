@@ -8,7 +8,7 @@
           class="session-preview-selector"
           :class="{ 'drop-target': sessionTabDropTarget?.pane === tabGroup.id }"
           :data-pane="tabGroup.id"
-          :aria-label="hasSessionSplit ? `${tabGroup.id} session views` : 'Session views'"
+          :aria-label="hasSessionSplit ? t('sessions.tabs.paneViews', { pane: tabGroup.id }) : t('sessions.tabs.views')"
           @click.stop
         >
           <button
@@ -16,11 +16,11 @@
             type="button"
             class="session-ai-home"
             :class="{ active: isSessionTabActive(tabGroup.statusTab), focused: isSessionTabFocused(tabGroup.statusTab) }"
-            :title="instanceStatusTitle(instance)"
+            :title="instanceStatusTitle(instance, t)"
             @click="$emit('selectSession', tabGroup.statusTab.key, tabGroup.id)"
           >
             <Activity :size="15" />
-            <span>Status</span>
+            <span>{{ t("sessions.tabs.status") }}</span>
           </button>
           <span v-if="tabGroup.statusTab && (tabGroup.aiTab || tabGroup.appTabs.length)" class="session-tab-divider" aria-hidden="true" />
           <button
@@ -28,19 +28,20 @@
             type="button"
             class="session-ai-home"
             :class="{ active: isSessionTabActive(tabGroup.aiTab), focused: isSessionTabFocused(tabGroup.aiTab) }"
-            :title="sessionMeta(tabGroup.aiTab)"
+            :title="sessionMeta(tabGroup.aiTab, t)"
             @click="$emit('selectSession', tabGroup.aiTab.key, tabGroup.id)"
           >
             <span class="session-ai-icon">
               <Bot :size="15" />
               <span class="session-tab-dot" :data-state="tabGroup.aiTab.status" />
             </span>
+            <!-- i18n-audit-allow-next-line protocol-name: AI is the protocol-facing agent category label -->
             <span>AI</span>
           </button>
           <span v-if="tabGroup.aiTab && previewSessionTabs(tabGroup.id, tabGroup.appTabs).length" class="session-tab-divider" aria-hidden="true" />
           <div v-if="previewSessionTabs(tabGroup.id, tabGroup.appTabs).length" class="session-tab-strip-frame">
             <div v-session-tab-overflow class="session-tab-strip" @scroll="updateSessionTabOverflowFromEvent" @wheel="scrollSessionTabs">
-              <TransitionGroup name="session-tab-reorder" tag="div" class="session-tab-strip-content" role="tablist" :aria-label="hasSessionSplit ? `${tabGroup.id} session tabs` : 'Session views'">
+              <TransitionGroup name="session-tab-reorder" tag="div" class="session-tab-strip-content" role="tablist" :aria-label="hasSessionSplit ? t('sessions.tabs.paneTabs', { pane: tabGroup.id }) : t('sessions.tabs.views')">
                 <span v-for="session in previewSessionTabs(tabGroup.id, tabGroup.appTabs)" :key="session.key" class="session-tab-sortable-shell">
                   <ContextMenu>
                     <ContextMenuTrigger as-child>
@@ -53,7 +54,7 @@
                         role="tab"
                         tabindex="0"
                         :aria-selected="isSessionTabActive(session)"
-                        :title="`${sessionDisplayName(session)} · ${stoppingSessionId === session.key ? 'stopping' : session.status}`"
+                        :title="`${sessionDisplayName(session, t)} · ${stoppingSessionId === session.key ? t('sessions.tabs.stopping') : sessionStatusLabel(session.status, t)}`"
                         @click="selectSessionFromTab($event, session.key)"
                         @pointerdown="startSessionTabPointer($event, session, tabGroup.id)"
                         @keydown.enter.prevent="$emit('selectSession', session.key)"
@@ -77,15 +78,15 @@
                             @keydown.escape.stop.prevent="cancelSessionRename"
                           />
                           <span v-else class="session-tab-text">
-                            <strong>{{ sessionDisplayName(session) }}</strong>
+                            <strong>{{ sessionDisplayName(session, t) }}</strong>
                           </span>
                         </span>
                         <button
                           type="button"
                           class="session-tab-close"
                           :disabled="Boolean(stoppingSessionId)"
-                          :aria-label="`Close ${sessionDisplayName(session)}`"
-                          title="Close session"
+                          :aria-label="t('sessions.tabs.closeNamed', { name: sessionDisplayName(session, t) })"
+                          :title="t('sessions.tabs.close')"
                           @click.stop="$emit('stopSession', instance, session)"
                         >
                           <X :size="13" />
@@ -95,15 +96,15 @@
                     <ContextMenuContent class="instance-action-menu">
                       <ContextMenuItem v-if="session.kind !== 'repository'" class="instance-action-item" @select="beginSessionRename(session)">
                         <Pencil :size="14" />
-                        <span>Rename session</span>
+                        <span>{{ t("sessions.tabs.rename") }}</span>
                       </ContextMenuItem>
                       <ContextMenuItem v-if="sessionPaneId(session) === 'right'" class="instance-action-item" @select="$emit('moveSessionToPane', session.key, 'left')">
                         <PanelLeft :size="14" />
-                        <span>Move to left</span>
+                        <span>{{ t("sessions.tabs.moveLeft") }}</span>
                       </ContextMenuItem>
                       <ContextMenuItem v-else class="instance-action-item" @select="$emit('moveSessionToPane', session.key, 'right')">
                         <PanelRight :size="14" />
-                        <span>Move to right</span>
+                        <span>{{ t("sessions.tabs.moveRight") }}</span>
                       </ContextMenuItem>
                     </ContextMenuContent>
                   </ContextMenu>
@@ -124,8 +125,8 @@
                 <DropdownMenuItem class="app-launch-menu-item" @select="$emit('openSettings', instance.id, 'apps')">
                   <Boxes :size="14" />
                   <span>
-                    <strong>Manage apps</strong>
-                    <small>Install or uninstall apps</small>
+                    <strong>{{ t("sessions.tabs.manageApps") }}</strong>
+                    <small>{{ t("sessions.tabs.manageAppsDescription") }}</small>
                   </span>
                 </DropdownMenuItem>
               </DropdownMenuContent>
@@ -133,7 +134,7 @@
           </div>
           <DropdownMenu v-if="!tabGroup.statusTab" :open="sessionMenuOpen && sessionMenuPane === tabGroup.id" @update:open="updateSessionMenuOpen(tabGroup.id, $event)">
             <DropdownMenuTrigger as-child>
-              <button type="button" class="session-tab-menu-trigger" :aria-expanded="sessionMenuOpen && sessionMenuPane === tabGroup.id" title="Sessions in this pane" aria-label="Sessions in this pane">
+              <button type="button" class="session-tab-menu-trigger" :aria-expanded="sessionMenuOpen && sessionMenuPane === tabGroup.id" :title="t('sessions.tabs.paneMenu')" :aria-label="t('sessions.tabs.paneMenu')">
                 <ChevronDown :size="15" />
               </button>
             </DropdownMenuTrigger>
@@ -148,8 +149,8 @@
                 >
                   <span class="session-select-option">
                     <span>
-                      <strong>Status</strong>
-                      <small>{{ instanceStatusTitle(instance) }}</small>
+                      <strong>{{ t("sessions.tabs.status") }}</strong>
+                      <small>{{ instanceStatusTitle(instance, t) }}</small>
                     </span>
                   </span>
                 </DropdownMenuItem>
@@ -162,8 +163,8 @@
                 >
                   <span class="session-select-option">
                     <span>
-                      <strong>{{ appDisplayName(tabGroup.aiTab.label) }}</strong>
-                      <small>{{ sessionMeta(tabGroup.aiTab) }}</small>
+                      <strong>{{ appDisplayName(tabGroup.aiTab.label, t) }}</strong>
+                      <small>{{ sessionMeta(tabGroup.aiTab, t) }}</small>
                     </span>
                   </span>
                 </DropdownMenuItem>
@@ -181,16 +182,16 @@
                   >
                     <span class="session-select-option">
                       <span>
-                        <strong>{{ sessionDisplayName(session) }}</strong>
-                        <small>{{ sessionMeta(session) }}</small>
+                        <strong>{{ sessionDisplayName(session, t) }}</strong>
+                        <small>{{ sessionMeta(session, t) }}</small>
                       </span>
                     </span>
                     <button
                       type="button"
                       class="session-select-close"
                       :disabled="Boolean(stoppingSessionId)"
-                      :aria-label="`Close ${session.label}`"
-                      title="Close session"
+                      :aria-label="t('sessions.tabs.closeNamed', { name: sessionDisplayName(session, t) })"
+                      :title="t('sessions.tabs.close')"
                       @click.stop="$emit('stopSession', instance, session)"
                     >
                       <X :size="13" />
@@ -208,8 +209,8 @@
                 >
                   <span class="session-select-option">
                     <span>
-                      <strong>{{ sessionDisplayName(session) }}</strong>
-                      <small>{{ sessionMeta(session) }}</small>
+                      <strong>{{ sessionDisplayName(session, t) }}</strong>
+                      <small>{{ sessionMeta(session, t) }}</small>
                     </span>
                   </span>
                   <button
@@ -217,8 +218,8 @@
                     type="button"
                     class="session-select-close"
                     :disabled="Boolean(stoppingSessionId)"
-                    :aria-label="`Close ${session.label}`"
-                    title="Close session"
+                    :aria-label="t('sessions.tabs.closeNamed', { name: sessionDisplayName(session, t) })"
+                    :title="t('sessions.tabs.close')"
                     @click.stop="$emit('stopSession', instance, session)"
                   >
                     <X :size="13" />
@@ -226,7 +227,7 @@
                 </DropdownMenuItem>
               </template>
               <DropdownMenuItem v-if="!tabGroup.tabs.length" class="session-select-row" disabled>
-                <span class="session-select-option"><span><strong>No sessions in this pane</strong></span></span>
+                <span class="session-select-option"><span><strong>{{ t("sessions.tabs.emptyPane") }}</strong></span></span>
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -242,11 +243,11 @@
           session-kind="app-session"
           @open-workspace="$emit('openRepositoryWorkspace', $event)"
         />
-        <button type="button" class="preview-expand-button" :disabled="!hasSessionSplit && !canOpenSessionSplit" :aria-label="hasSessionSplit ? 'Close split view' : 'Split session view'" :title="hasSessionSplit ? 'Close split view' : 'Split session view'" @click="hasSessionSplit ? $emit('closeSessionSplit') : $emit('openSessionSplit')">
+        <button type="button" class="preview-expand-button" :disabled="!hasSessionSplit && !canOpenSessionSplit" :aria-label="hasSessionSplit ? t('sessions.tabs.closeSplit') : t('sessions.tabs.split')" :title="hasSessionSplit ? t('sessions.tabs.closeSplit') : t('sessions.tabs.split')" @click="hasSessionSplit ? $emit('closeSessionSplit') : $emit('openSessionSplit')">
           <PanelRightClose v-if="hasSessionSplit" :size="15" />
           <Columns2 v-else :size="15" />
         </button>
-        <button type="button" class="preview-expand-button" :aria-label="previewExpanded ? 'Restore session preview' : 'Expand session preview'" :title="previewExpanded ? 'Restore preview' : 'Expand preview'" @click="$emit('update:previewExpanded', !previewExpanded)">
+        <button type="button" class="preview-expand-button" :aria-label="previewExpanded ? t('sessions.tabs.restore') : t('sessions.tabs.expand')" :title="previewExpanded ? t('sessions.tabs.restoreShort') : t('sessions.tabs.expandShort')" @click="$emit('update:previewExpanded', !previewExpanded)">
           <Minimize2 v-if="previewExpanded" :size="15" />
           <Maximize2 v-else :size="15" />
         </button>
@@ -262,7 +263,7 @@
       >
         <FolderGit2 v-if="sessionTabPointerDrag.session.kind === 'repository'" :size="14" class="session-tab-icon" />
         <AppWindow v-else :size="14" class="session-tab-icon" />
-        <strong>{{ sessionDisplayName(sessionTabPointerDrag.session) }}</strong>
+        <strong>{{ sessionDisplayName(sessionTabPointerDrag.session, t) }}</strong>
       </div>
     </Teleport>
     <div
@@ -296,21 +297,21 @@
           @select-ai-session="(instanceId, sessionId) => $emit('selectAiSession', instanceId, sessionId)"
         />
       </section>
-      <div v-if="hasSessionSplit" class="session-pane-resize-handle" role="separator" aria-label="Resize session panes" aria-orientation="vertical" :aria-valuenow="Math.round(sessionSplitRatio * 100)" tabindex="0" @pointerdown="startSplitResize" @dblclick="$emit('setSessionSplitRatio', 0.5)" @keydown.left.prevent="$emit('setSessionSplitRatio', sessionSplitRatio - 0.02)" @keydown.right.prevent="$emit('setSessionSplitRatio', sessionSplitRatio + 0.02)" />
+      <div v-if="hasSessionSplit" class="session-pane-resize-handle" role="separator" :aria-label="t('sessions.tabs.resizePanes')" aria-orientation="vertical" :aria-valuenow="Math.round(sessionSplitRatio * 100)" tabindex="0" @pointerdown="startSplitResize" @dblclick="$emit('setSessionSplitRatio', 0.5)" @keydown.left.prevent="$emit('setSessionSplitRatio', sessionSplitRatio - 0.02)" @keydown.right.prevent="$emit('setSessionSplitRatio', sessionSplitRatio + 0.02)" />
     </div>
     <div class="session-preview-actions">
-      <p class="session-preview-status" aria-label="Instance status">
-        <span>Health {{ instance.health }}</span>
-        <span>Workspace {{ instance.workspace.status }}</span>
+      <p class="session-preview-status" :aria-label="t('sessions.tabs.instanceStatus')">
+        <span>{{ t("sessions.tabs.health", { status: instance.health }) }}</span>
+        <span>{{ t("sessions.tabs.workspace", { status: instance.workspace.status }) }}</span>
         <template v-if="resourceMetrics">
           <span class="session-resource-metrics" :data-state="resourceMetricsDisplay.state" :title="resourceMetricsDisplay.title">
             {{ resourceMetricsDisplay.compact }}
           </span>
         </template>
-        <span v-else-if="instance.runtime?.type === 'docker'" class="session-resource-metrics" :data-state="resourceMetricsError ? 'unavailable' : 'loading'" :title="resourceMetricsError || 'Waiting for the first resource sample.'">
-          {{ resourceMetricsError ? "Resources unavailable" : "Resources loading" }}
+        <span v-else-if="instance.runtime?.type === 'docker'" class="session-resource-metrics" :data-state="resourceMetricsError ? 'unavailable' : 'loading'" :title="resourceMetricsError || t('sessions.tabs.waitingMetrics')">
+          {{ resourceMetricsError ? t("sessions.tabs.resourcesUnavailable") : t("sessions.tabs.resourcesLoading") }}
         </span>
-        <span v-else>Last refresh {{ lastRefreshLabel }}</span>
+        <span v-else>{{ t("sessions.tabs.lastRefresh", { time: lastRefreshLabel }) }}</span>
       </p>
     </div>
     <ProjectFolderPicker
@@ -325,6 +326,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, type ComponentPublicInstance, type ObjectDirective } from "vue";
+import { useI18n } from "vue-i18n";
 import { useNow } from "@vueuse/core";
 import { Activity, AppWindow, Bot, Boxes, ChevronDown, Columns2, Folder, FolderGit2, Maximize2, Minimize2, PanelLeft, PanelRight, PanelRightClose, Pencil, Plus, X } from "@lucide/vue";
 import type { RepositorySessionKind } from "@task-handoff/protocol/repository";
@@ -332,6 +334,9 @@ import type { AiSessionSummary, InstanceBoardItem, InstanceResourceMetrics, Inst
 import { Button } from "../../../components/ui/button";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "../../../components/ui/context-menu";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
+import { useControlPlaneLocale, type SupportedLocale } from "../../../i18n/index.ts";
+import { formatBytes, formatPercent, formatTime } from "../../../i18n/presentation.ts";
+import { translateApiError } from "../../../i18n/apiError";
 import SessionPaneContent from "./SessionPaneContent.vue";
 import AppLaunchMenuItems from "../shared/AppLaunchMenuItems.vue";
 import ProjectFolderPicker from "../shared/ProjectFolderPicker.vue";
@@ -342,12 +347,15 @@ import {
   groupedAppSessionTabs,
   sessionMeta,
   sessionDisplayName,
+  sessionStatusLabel,
   shouldGroupAppSessionTabs,
   type LaunchableApp,
   type SessionTab,
 } from "../useInstanceSessions";
 import { hasInstanceStatusPage, instanceStatusTitle } from "../useInstanceStatus";
 import type { SessionPaneId } from "./useActiveInstanceSessions";
+
+const { t } = useI18n();
 
 const props = defineProps<{
   activeAttachUrl: string;
@@ -409,11 +417,12 @@ const emit = defineEmits<{
 }>();
 
 const resourceMetricsNow = useNow({ interval: 1_000 });
+const { locale } = useControlPlaneLocale();
 const activeRepositorySessionId = computed(() => {
   if (!props.activeSession || props.activeSession.kind === "ai" || props.activeSession.kind === "status" || props.activeSession.kind === "repository") return "";
   return typeof props.activeSession.source?.id === "string" ? props.activeSession.source.id : props.activeSession.key;
 });
-const resourceMetricsDisplay = computed(() => formatResourceMetrics(props.resourceMetrics, resourceMetricsNow.value.getTime()));
+const resourceMetricsDisplay = computed(() => formatResourceMetrics(props.resourceMetrics, resourceMetricsNow.value.getTime(), locale.value, t));
 const sessionTabOverflowObservers = new WeakMap<HTMLElement, ResizeObserver>();
 
 function updateSessionTabOverflow(tabList: HTMLElement) {
@@ -469,38 +478,22 @@ function scrollSessionTabs(event: WheelEvent) {
   updateSessionTabOverflow(tabList);
 }
 
-function formatResourceMetrics(metrics?: InstanceResourceMetrics, currentTime = Date.now()) {
-  if (!metrics) return { state: "loading", compact: "Resources loading", title: "Waiting for the first resource sample." };
+function formatResourceMetrics(metrics: InstanceResourceMetrics | undefined, currentTime: number, locale: SupportedLocale, translate: typeof t) {
+  if (!metrics) return { state: "loading", compact: translate("sessions.tabs.resourcesLoading"), title: translate("sessions.tabs.waitingMetrics") };
   const sampledAt = new Date(metrics.sampledAt);
   const stale = currentTime - sampledAt.getTime() > 10_000;
-  if (metrics.state === "pending") return { state: "pending", compact: "Resources starting", title: `Waiting for the Docker container · sampled ${sampledAt.toLocaleTimeString()}` };
-  if (metrics.state === "stopped") return { state: "stopped", compact: "Resources stopped", title: `Container stopped · sampled ${sampledAt.toLocaleTimeString()}` };
-  if (metrics.state === "unavailable") return { state: "unavailable", compact: "Resources unavailable", title: `${metrics.error || "Docker metrics are unavailable."} · sampled ${sampledAt.toLocaleTimeString()}` };
-  const cpu = metrics.cpu ? `CPU ${formatPercent(metrics.cpu.usagePercent)}` : "CPU —";
+  if (metrics.state === "pending") return { state: "pending", compact: translate("sessions.tabs.resourcesStarting"), title: translate("sessions.tabs.waitingContainer", { time: formatTime(sampledAt, locale) }) };
+  if (metrics.state === "stopped") return { state: "stopped", compact: translate("sessions.tabs.resourcesStopped"), title: translate("sessions.tabs.containerStopped", { time: formatTime(sampledAt, locale) }) };
+  if (metrics.state === "unavailable") return { state: "unavailable", compact: translate("sessions.tabs.resourcesUnavailable"), title: translate("sessions.tabs.sampledError", { error: metrics.error || translate("sessions.tabs.metricsUnavailable"), time: formatTime(sampledAt, locale) }) };
+  const cpu = translate("sessions.tabs.cpu", { value: metrics.cpu ? formatPercent(metrics.cpu.usagePercent / 100, locale) : "—" });
   const memory = metrics.memory
-    ? `Memory ${formatBytes(metrics.memory.usageBytes)}${metrics.memory.limitBytes ? ` / ${formatBytes(metrics.memory.limitBytes)}` : ""}${metrics.memory.usagePercent !== undefined ? ` (${formatPercent(metrics.memory.usagePercent)})` : ""}`
-    : "Memory —";
+    ? translate("sessions.tabs.memory", { value: `${formatBytes(metrics.memory.usageBytes, locale)}${metrics.memory.limitBytes ? ` / ${formatBytes(metrics.memory.limitBytes, locale)}` : ""}${metrics.memory.usagePercent !== undefined ? ` (${formatPercent(metrics.memory.usagePercent / 100, locale)})` : ""}` })
+    : translate("sessions.tabs.memory", { value: "—" });
   const details = [cpu, memory];
-  if (metrics.network) details.push(`Network ↓${formatBytes(metrics.network.rxBytes)} ↑${formatBytes(metrics.network.txBytes)}`);
-  if (metrics.pids !== undefined) details.push(`Processes ${metrics.pids}`);
-  details.push(`Sampled ${sampledAt.toLocaleTimeString()}`);
-  return { state: stale ? "stale" : "available", compact: stale ? "Resources stale" : `${cpu} · ${memory}`, title: details.join(" · ") };
-}
-
-function formatPercent(value: number) {
-  return `${value.toFixed(value >= 10 ? 0 : 1)}%`;
-}
-
-function formatBytes(value: number) {
-  if (value < 1024) return `${value} B`;
-  const units = ["KiB", "MiB", "GiB", "TiB"];
-  let amount = value;
-  let unit = -1;
-  do {
-    amount /= 1024;
-    unit += 1;
-  } while (amount >= 1024 && unit < units.length - 1);
-  return `${amount.toFixed(amount >= 10 ? 0 : 1)} ${units[unit]}`;
+  if (metrics.network) details.push(translate("sessions.tabs.network", { rx: formatBytes(metrics.network.rxBytes, locale), tx: formatBytes(metrics.network.txBytes, locale) }));
+  if (metrics.pids !== undefined) details.push(translate("sessions.tabs.processes", { count: metrics.pids }));
+  details.push(translate("sessions.tabs.sampled", { time: formatTime(sampledAt, locale) }));
+  return { state: stale ? "stale" : "available", compact: stale ? translate("sessions.tabs.resourcesStale") : `${cpu} · ${memory}`, title: details.join(" · ") };
 }
 
 const projectPickerOpen = ref(false);
@@ -548,7 +541,7 @@ const visibleTabGroups = computed(() => {
       aiTab: tabs.find((session) => session.kind === "ai"),
       appTabs: tabs.filter((session) => session.kind !== "ai" && session.kind !== "status"),
       groupSessionMenu: shouldGroupAppSessionTabs(props.instance, tabs),
-      groupedAppSessions: groupedAppSessionTabs(props.instance, tabs, activeKey),
+      groupedAppSessions: groupedAppSessionTabs(props.instance, tabs, activeKey, t),
     };
   });
 });
@@ -607,7 +600,7 @@ function setRenameInput(element: Element | ComponentPublicInstance | null) {
 
 async function beginSessionRename(session: SessionTab) {
   editingSessionKey.value = session.key;
-  sessionTitleDraft.value = sessionDisplayName(session);
+  sessionTitleDraft.value = sessionDisplayName(session, t);
   sessionRenameError.value = "";
   await nextTick();
   renameInput.value?.focus();
@@ -627,12 +620,12 @@ async function commitSessionRename(session: SessionTab) {
   }
   const title = sessionTitleDraft.value.trim();
   if (!title) {
-    sessionRenameError.value = "Session title is required.";
+    sessionRenameError.value = t("sessions.tabs.titleRequired");
     await nextTick();
     renameInput.value?.focus();
     return;
   }
-  if (title === sessionDisplayName(session)) {
+  if (title === sessionDisplayName(session, t)) {
     cancelSessionRename();
     return;
   }
@@ -643,7 +636,7 @@ async function commitSessionRename(session: SessionTab) {
     cancelSessionRename();
   } catch (error) {
     renamingSession.value = false;
-    showControlPlaneToast(error instanceof Error ? error.message : "Failed to rename session.");
+    showControlPlaneToast(translateApiError(error, t, t("sessions.tabs.renameFailed")));
     await nextTick();
     renameInput.value?.focus();
   }

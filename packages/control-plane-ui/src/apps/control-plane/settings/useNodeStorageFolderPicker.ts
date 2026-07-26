@@ -2,6 +2,8 @@ import { computed, ref } from "vue";
 import type { NodeFolderTreeEntry, NodeLocalFolder } from "../../../api/types";
 import { nodePathName } from "../nodePath.ts";
 import { useNodeFolderBrowser } from "../useNodeFolderBrowser.ts";
+import { translateApiError } from "../../../i18n/apiError.ts";
+import type { Translate } from "../../../i18n/status.ts";
 
 type NodeFolderTreeLoader = (nodeId: string, input: { path?: string; depth?: number }) => Promise<NodeFolderTreeEntry[]>;
 type CreateNodeFolder = (nodeId: string, input: { name: string; path: string }) => Promise<NodeLocalFolder>;
@@ -11,9 +13,13 @@ type UseNodeStorageFolderPickerOptions = {
   errorText: (error: unknown) => string;
   loadFolders: NodeFolderTreeLoader;
   refresh: () => Promise<void>;
+  translate?: Translate;
 };
 
 export function useNodeStorageFolderPicker(options: UseNodeStorageFolderPickerOptions) {
+  const translateError = (error: unknown) => options.translate
+    ? translateApiError(error, options.translate, options.errorText(error))
+    : options.errorText(error);
   const dialogOpen = ref(false);
   const targetNode = ref<{ id: string; name: string }>();
   const submitting = ref(false);
@@ -22,6 +28,7 @@ export function useNodeStorageFolderPicker(options: UseNodeStorageFolderPickerOp
   const browser = useNodeFolderBrowser({
     errorText: options.errorText,
     load: options.loadFolders,
+    translate: options.translate,
   });
 
   const canConfirm = computed(() => Boolean(targetNode.value && browser.selectedPath.value.trim() && !submitting.value));
@@ -63,7 +70,7 @@ export function useNodeStorageFolderPicker(options: UseNodeStorageFolderPickerOp
       });
     } catch (error) {
       if (generation === dialogGeneration) {
-        submitError.value = options.errorText(error);
+        submitError.value = translateError(error);
         submitting.value = false;
       }
       return false;

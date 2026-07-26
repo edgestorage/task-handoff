@@ -40,6 +40,17 @@ export type RunControlPlaneServerOptions = CreateControlPlaneAppOptions & {
   port: number;
 };
 
+export const ControlPlaneHttpErrorSchema = z.object({
+  code: z.string().trim().min(1),
+  message: z.string(),
+  details: z.record(z.string(), z.unknown()).optional(),
+  retryable: z.boolean().optional(),
+}).strict();
+
+export const ControlPlaneHttpErrorResponseSchema = z.object({
+  error: ControlPlaneHttpErrorSchema,
+}).strict();
+
 function defaultStaticDir() {
   return path.resolve(process.cwd(), "packages", "control-plane-ui", "dist");
 }
@@ -123,7 +134,7 @@ function sendStaticFile(reply: FastifyReply, staticDir: string, relativePath: st
   return reply.send(fs.createReadStream(filePath));
 }
 
-function errorPayload(error: unknown) {
+export function controlPlaneErrorPayload(error: unknown) {
   if (error instanceof z.ZodError) {
     return {
       statusCode: 400,
@@ -137,6 +148,7 @@ function errorPayload(error: unknown) {
     code: typeof record.code === "string" ? record.code : "CONTROL_PLANE_ERROR",
     message: error instanceof Error ? error.message : String(error),
     ...(record.details && typeof record.details === "object" && !Array.isArray(record.details) ? { details: record.details } : {}),
+    ...(typeof record.retryable === "boolean" ? { retryable: record.retryable } : {}),
   };
 }
 
@@ -299,7 +311,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   const diagnosticLogsEnabled = controlPlaneDiagnosticLogsEnabled();
 
   app.setErrorHandler((error, request, reply) => {
-    const payload = errorPayload(error);
+    const payload = controlPlaneErrorPayload(error);
     if (diagnosticLogsEnabled || payload.statusCode >= 500) {
       const log = payload.statusCode >= 500 ? app.log.error.bind(app.log) : app.log.warn.bind(app.log);
       log(
@@ -313,12 +325,14 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
         "control plane request failed",
       );
     }
-    reply.code(payload.statusCode).send({
+    reply.code(payload.statusCode).send(ControlPlaneHttpErrorResponseSchema.parse({
       error: {
         code: payload.code,
         message: payload.message,
+        ...(payload.details ? { details: payload.details } : {}),
+        ...(payload.retryable !== undefined ? { retryable: payload.retryable } : {}),
       },
-    });
+    }));
   });
 
   app.addHook("preHandler", async (request, reply) => {
@@ -470,7 +484,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     aiSessionAttachments,
     nodeAgentTunnel,
     nodeEventSubscriber,
-    errorPayload,
+    errorPayload: controlPlaneErrorPayload,
   });
 
   registerInstanceProxyRoutes({ app, service });

@@ -12,9 +12,9 @@
     />
     <section v-else class="repository-workspace-page-state" role="status">
       <FolderGit2 :size="34" />
-      <strong>{{ loading ? "Loading repository" : "Repository workspace unavailable" }}</strong>
-      <span>{{ loading ? "Resolving the session repository context." : errorMessage }}</span>
-      <Button v-if="!loading" variant="outline" @click="closeWindow">Close window</Button>
+      <strong>{{ loading ? t("repository.page.loading") : t("repository.page.unavailable") }}</strong>
+      <span>{{ loading ? t("repository.page.resolving") : errorMessage }}</span>
+      <Button v-if="!loading" variant="outline" @click="closeWindow">{{ t("repository.common.close") }}</Button>
     </section>
   </main>
 </template>
@@ -22,30 +22,37 @@
 <script setup lang="ts">
 import type { RepositoryContext } from "@task-handoff/protocol/repository";
 import { FolderGit2 } from "@lucide/vue";
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { getRepositoryContext } from "../../../api/repository";
 import { Button } from "../../../components/ui/button";
+import { translateApiError } from "../../../i18n/apiError";
 import RepositoryWorkspace from "./RepositoryWorkspace.vue";
 import { parseRepositoryWorkspaceRoute } from "./repositoryWorkspaceWindow";
 
 const route = parseRepositoryWorkspaceRoute(window.location);
+const { t } = useI18n();
 const context = ref<RepositoryContext>();
 const loading = ref(Boolean(route));
-const errorMessage = ref(route ? "The repository context could not be loaded." : "The workspace link is missing a valid instance or session target.");
+const rawErrorMessage = ref("");
+const unavailableState = ref("");
+const errorMessage = computed(() => rawErrorMessage.value || (unavailableState.value
+  ? t("repository.page.availability", { availability: unavailableState.value })
+  : t(route ? "repository.page.contextLoad" : "repository.page.contextMissing")));
 
 onMounted(async () => {
   if (!route) return;
-  document.title = "Repository · TaskHandoff";
+  document.title = `${t("repository.title")} · TaskHandoff`;
   try {
     const result = await getRepositoryContext(route);
     if (result.availability !== "available") {
-      errorMessage.value = `Repository unavailable: ${result.availability}.`;
+      unavailableState.value = result.availability;
       return;
     }
     context.value = result;
-    document.title = `${result.displayName || "Repository"} · TaskHandoff`;
+    document.title = `${result.displayName || t("repository.title")} · TaskHandoff`;
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : String(error);
+    rawErrorMessage.value = translateApiError(error, t, t("repository.page.contextLoad"));
   } finally {
     loading.value = false;
   }

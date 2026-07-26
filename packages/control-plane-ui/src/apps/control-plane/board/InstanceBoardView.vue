@@ -1,33 +1,33 @@
 <template>
-  <section class="instance-board-view" aria-label="Instance board">
-    <div v-if="loading" class="board-empty">Loading control plane...</div>
+  <section class="instance-board-view" :aria-label="t('instances.board.label')">
+    <div v-if="loading" class="board-empty">{{ t("instances.board.loading") }}</div>
     <div v-else-if="error" class="board-empty error">{{ error }}</div>
     <template v-else>
       <div class="instance-board-toolbar">
         <div class="board-filter-group">
           <label class="board-search">
             <Search :size="14" />
-            <input :value="filter" placeholder="Search board" @input="$emit('update:filter', ($event.target as HTMLInputElement).value)" />
+            <input :value="filter" :placeholder="t('instances.board.search')" @input="$emit('update:filter', ($event.target as HTMLInputElement).value)" />
           </label>
-          <ControlPlaneSelect :model-value="projectFilter" placeholder="All projects" trigger-class="board-select" @update:model-value="$emit('update:projectFilter', $event)">
-            <ControlPlaneSelectItem :value="allFilterValue">All projects</ControlPlaneSelectItem>
+          <ControlPlaneSelect :model-value="projectFilter" :placeholder="t('instances.board.allProjects')" trigger-class="board-select" @update:model-value="$emit('update:projectFilter', $event)">
+            <ControlPlaneSelectItem :value="allFilterValue">{{ t("instances.board.allProjects") }}</ControlPlaneSelectItem>
             <ControlPlaneSelectItem v-for="project in projectOptions" :key="project.id" :value="project.id">{{ project.name }}</ControlPlaneSelectItem>
           </ControlPlaneSelect>
-          <ControlPlaneSelect :model-value="statusFilter" placeholder="All status" trigger-class="board-select" @update:model-value="$emit('update:statusFilter', $event)">
-            <ControlPlaneSelectItem :value="allFilterValue">All status</ControlPlaneSelectItem>
-            <ControlPlaneSelectItem v-for="status in statusOptions" :key="status" :value="status">{{ status }}</ControlPlaneSelectItem>
+          <ControlPlaneSelect :model-value="statusFilter" :placeholder="t('instances.board.allStatuses')" trigger-class="board-select" @update:model-value="$emit('update:statusFilter', $event)">
+            <ControlPlaneSelectItem :value="allFilterValue">{{ t("instances.board.allStatuses") }}</ControlPlaneSelectItem>
+            <ControlPlaneSelectItem v-for="status in statusOptions" :key="status" :value="status">{{ instanceStatusLabel(status) }}</ControlPlaneSelectItem>
           </ControlPlaneSelect>
-          <ControlPlaneSelect :model-value="appFilter" placeholder="Show app" trigger-class="board-select board-app-select" :disabled="!appOptions.length" @update:model-value="$emit('update:appFilter', $event)">
-            <ControlPlaneSelectItem :value="allFilterValue">Mixed apps</ControlPlaneSelectItem>
+          <ControlPlaneSelect :model-value="appFilter" :placeholder="t('instances.board.showApp')" trigger-class="board-select board-app-select" :disabled="!appOptions.length" @update:model-value="$emit('update:appFilter', $event)">
+            <ControlPlaneSelectItem :value="allFilterValue">{{ t("instances.board.mixedApps") }}</ControlPlaneSelectItem>
             <ControlPlaneSelectItem v-for="app in appOptions" :key="app.appId" :value="app.appId">
-              {{ appDisplayName(app.appId) }} · {{ app.count }}
+              {{ appDisplayName(app.appId, t) }} · {{ app.count }}
             </ControlPlaneSelectItem>
           </ControlPlaneSelect>
         </div>
         <div class="board-toolbar-actions">
           <InstanceViewOptionsMenu
             :group-by-node="groupByNode"
-            label="Board options"
+            :label="t('instances.board.options')"
             :preview-interactive="interactive"
             :show-preview-interaction="true"
             :sort-mode="sortMode"
@@ -35,7 +35,7 @@
             @update:preview-interactive="$emit('update:interactive', $event)"
             @update:sort-mode="$emit('update:sortMode', $event)"
           />
-          <div class="board-size-toggle" aria-label="Board card size">
+          <div class="board-size-toggle" :aria-label="t('instances.board.cardSize')">
             <button v-for="option in sizeOptions" :key="option.value" type="button" :class="{ active: size === option.value }" @click="$emit('setSize', option.value)">
               {{ option.label }}
             </button>
@@ -60,23 +60,23 @@
                 <span class="status-dot" :data-state="instance.connectionStatus" />
                 <span>
                   <strong>{{ instanceDisplayName(instance) }}</strong>
-                  <small>{{ instanceSourceLabel(instance) }}</small>
+                  <small>{{ instanceSourceLabel(instance, t) }}</small>
                 </span>
               </button>
               <div class="board-card-badges">
-                <Badge :variant="instance.connectionStatus === 'online' ? 'default' : 'secondary'">{{ instance.connectionStatus }}</Badge>
-                <Badge variant="secondary">{{ instance.status }}</Badge>
+                <Badge :variant="instance.connectionStatus === 'online' ? 'default' : 'secondary'">{{ connectionStatusLabel(instance.connectionStatus) }}</Badge>
+                <Badge variant="secondary">{{ instanceStatusLabel(instance.status) }}</Badge>
               </div>
             </header>
             <p v-if="instance.imageProvisioning && instance.imageProvisioning.phase !== 'ready'" class="image-provisioning-status">
-              {{ imageProvisioningLabel(instance) }}<template v-if="instance.imageProvisioning.error"> · {{ instance.imageProvisioning.error }}</template>
+              {{ imageProvisioningLabel(instance, t) }}<template v-if="instance.imageProvisioning.error"> · {{ instance.imageProvisioning.error }}</template>
             </p>
             <div class="board-card-preview" :data-interactive="interactive" :data-state="boardPreviewState(instance)">
               <div v-if="boardSessions(instance).length > 1" class="board-session-switcher" @click.stop>
                 <DropdownMenu>
                   <DropdownMenuTrigger as-child>
-                    <button type="button" class="board-session-trigger" :aria-label="`Switch session for ${instanceDisplayName(instance)}`">
-                      <span>{{ sessionDisplayName(boardPrimarySession(instance)) }}</span>
+                    <button type="button" class="board-session-trigger" :aria-label="t('instances.board.switchSession', { name: instanceDisplayName(instance) })">
+                      <span>{{ sessionDisplayName(boardPrimarySession(instance), t) }}</span>
                       <ChevronDown :size="13" />
                     </button>
                   </DropdownMenuTrigger>
@@ -89,23 +89,23 @@
                       @select="$emit('selectBoardSession', instance.id, session.key)"
                     >
                       <span>
-                        <strong>{{ sessionDisplayName(session) }}</strong>
-                        <small>{{ sessionMeta(session) }}</small>
+                        <strong>{{ sessionDisplayName(session, t) }}</strong>
+                        <small>{{ sessionMeta(session, t) }}</small>
                       </span>
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
               <div v-if="boardPrimarySession(instance)?.kind === 'ai'" class="board-ai-preview">
-                <span>{{ aiSessionHeadline(instance) }}</span>
-                <span class="board-ai-message">{{ aiSessionHeadline(instance) }}</span>
-                <small>AI · {{ relativeTime(instance.aiSessions.updatedAt) }}</small>
+                <span>{{ aiSessionHeadline(instance, t) }}</span>
+                <span class="board-ai-message">{{ aiSessionHeadline(instance, t) }}</span>
+                <small>{{ t("sessions.board.updated", { time: relativeTime(instance.aiSessions.updatedAt, locale as SupportedLocale) }) }}</small>
               </div>
               <iframe
                 v-else-if="boardSessionFrameUrl(instance)"
                 class="board-card-frame"
                 :src="boardSessionFrameUrl(instance)"
-                :title="`${instanceDisplayName(instance)} session`"
+                :title="t('instances.board.sessionFrame', { name: instanceDisplayName(instance) })"
                 allow="clipboard-read; clipboard-write; fullscreen"
               />
               <div
@@ -122,13 +122,13 @@
                   @update:open="(open) => boardLaunchMenuId = open ? instance.id : ''"
                 >
                   <DropdownMenuTrigger as-child>
-                    <Button variant="outline" size="sm" class="board-launch-button" :disabled="launchingApp" :aria-expanded="boardLaunchMenuId === instance.id" title="Launch app">
+                    <Button variant="outline" size="sm" class="board-launch-button" :disabled="launchingApp" :aria-expanded="boardLaunchMenuId === instance.id" :title="t('instances.actions.launchApp')">
                       <Plus :size="14" />
-                      <span>App</span>
+                      <span>{{ t("instances.actions.app") }}</span>
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent class="board-launch-menu" align="center" :side-offset="6">
-                    <AppLaunchMenuItems :apps="launchableAppsForInstance(instance)" :folders="projectFoldersForInstance(instance)" :instance="instance" :launching="launchingApp" @launch="(appId, cwdFolderId) => launchBoardApp(instance, appId, cwdFolderId)" @new-project="openProjectPicker(instance)" />
+                    <AppLaunchMenuItems :apps="launchableAppsForInstance(instance, t)" :folders="projectFoldersForInstance(instance)" :instance="instance" :launching="launchingApp" @launch="(appId, cwdFolderId) => launchBoardApp(instance, appId, cwdFolderId)" @new-project="openProjectPicker(instance)" />
                   </DropdownMenuContent>
                 </DropdownMenu>
                 <span v-else>{{ boardCardDetail(instance) }}</span>
@@ -137,28 +137,28 @@
             <footer class="board-card-actions">
               <Button v-if="canShowInstanceAction(instance, 'start')" variant="outline" size="sm" :disabled="isInstanceActionBusy(instance)" @click="$emit('runAction', 'start', instance)">
                 <Play :size="14" />
-                <span>{{ activeActionLabel(instance, "start", "Start") }}</span>
+                <span>{{ activeActionLabel(instance, "start", t("instances.actions.start")) }}</span>
               </Button>
               <Button v-if="canShowInstanceAction(instance, 'stop')" variant="outline" size="sm" :disabled="isInstanceActionBusy(instance)" @click="$emit('runAction', 'stop', instance)">
                 <Square :size="14" />
-                <span>{{ activeActionLabel(instance, "stop", "Stop") }}</span>
+                <span>{{ activeActionLabel(instance, "stop", t("instances.actions.stop")) }}</span>
               </Button>
               <Button v-if="canShowInstanceAction(instance, 'restart')" variant="outline" size="sm" :disabled="isInstanceActionBusy(instance)" @click="$emit('runAction', 'restart', instance)">
                 <RotateCw :size="14" />
-                <span>{{ activeActionLabel(instance, "restart", "Restart") }}</span>
+                <span>{{ activeActionLabel(instance, "restart", t("instances.actions.restart")) }}</span>
               </Button>
               <Button v-if="canShowInstanceAction(instance, 'retry-image')" variant="outline" size="sm" :disabled="isInstanceActionBusy(instance)" @click="$emit('runAction', 'retry-image', instance)">
                 <RotateCw :size="14" />
-                <span>{{ activeActionLabel(instance, "retry-image", "Retry image") }}</span>
+                <span>{{ activeActionLabel(instance, "retry-image", t("instances.actions.retryImage")) }}</span>
               </Button>
               <Button v-if="boardOpenUrl(instance)" variant="outline" size="sm" @click="$emit('openUrl', boardOpenUrl(instance))">
                 <ExternalLink :size="14" />
-                <span>Open</span>
+                <span>{{ t("instances.actions.open") }}</span>
               </Button>
             </footer>
             </article>
           </template>
-          <div v-if="!visibleInstances.length" class="board-empty">{{ totalInstances ? "No matching instances" : "No instances yet" }}</div>
+          <div v-if="!visibleInstances.length" class="board-empty">{{ totalInstances ? t("instances.board.noMatches") : t("instances.board.empty") }}</div>
         </div>
       </ScrollArea>
     </template>
@@ -176,6 +176,8 @@
 <script setup lang="ts">
 import { ChevronDown, ExternalLink, Monitor, Play, Plus, RotateCw, Search, Square } from "@lucide/vue";
 import { computed, ref, type ComponentPublicInstance } from "vue";
+import { useI18n } from "vue-i18n";
+import type { SupportedLocale } from "../../../i18n/locale";
 import type { InstanceBoardItem, NodeLocalFolder } from "../../../api/types";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
@@ -189,6 +191,7 @@ import type { InstanceListSortMode } from "../instance-list/useWorkbenchInstance
 import InstanceViewOptionsMenu from "../shared/InstanceViewOptionsMenu.vue";
 import AppLaunchMenuItems from "../shared/AppLaunchMenuItems.vue";
 import ProjectFolderPicker from "../shared/ProjectFolderPicker.vue";
+import { connectionStatusKeys, instanceStatusKeys, translateStatus } from "../../../i18n/status";
 import {
   aiSessionHeadline,
   aiSessionStatusLabel,
@@ -203,6 +206,10 @@ import {
 } from "../useInstanceSessions";
 
 type BoardSize = "small" | "medium" | "large";
+
+const { locale, t } = useI18n();
+const instanceStatusLabel = (status: string) => translateStatus(instanceStatusKeys, status, t);
+const connectionStatusLabel = (status: string) => translateStatus(connectionStatusKeys, status, t);
 
 const props = defineProps<{
   activeActionLabel: (instance: InstanceBoardItem, action: InstanceAction, idleLabel: string) => string;
@@ -293,7 +300,7 @@ function instanceNodeLabel(instance: InstanceBoardItem) {
 
 const boardGroups = computed(() => {
   if (!props.groupByNode) {
-    return [{ key: "__all__", label: "All nodes", instances: props.visibleInstances }];
+    return [{ key: "__all__", label: t("instances.board.allNodes"), instances: props.visibleInstances }];
   }
   const groups = new Map<string, { key: string; label: string; instances: InstanceBoardItem[] }>();
   for (const instance of props.visibleInstances) {
@@ -306,7 +313,7 @@ const boardGroups = computed(() => {
 });
 
 function canLaunchBoardApp(instance: InstanceBoardItem) {
-  return isInstanceAppReady(instance) && launchableAppsForInstance(instance).length > 0;
+  return isInstanceAppReady(instance) && launchableAppsForInstance(instance, t).length > 0;
 }
 </script>
 

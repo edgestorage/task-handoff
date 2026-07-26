@@ -34,15 +34,15 @@ test("session preview splits the original tab row into pane-aligned tab groups",
     source("apps/control-plane/instance-detail/SessionPreview.css"),
   ]);
 
-  assert.match(preview, /:aria-label="hasSessionSplit \? 'Close split view' : 'Split session view'"/);
+  assert.match(preview, /:aria-label="hasSessionSplit \? t\('sessions\.tabs\.closeSplit'\) : t\('sessions\.tabs\.split'\)"/);
   assert.match(preview, /v-for="pane in visiblePanes"/);
   assert.match(preview, /v-for="tabGroup in visibleTabGroups"/);
   assert.match(preview, /props\.hasSessionSplit[\s\S]*id: "left"[\s\S]*props\.leftSessionTabs[\s\S]*id: "right"[\s\S]*props\.rightSessionTabs/);
   assert.doesNotMatch(preview, /v-if="!hasSessionSplit" class="session-preview-selector"/);
   assert.doesNotMatch(preview, /class="session-pane-tabs"/);
   assert.doesNotMatch(styles, /\.session-pane-tabs|\.session-pane-tab/);
-  assert.match(preview, /Move to left/);
-  assert.match(preview, /Move to right/);
+  assert.match(preview, /t\("sessions\.tabs\.moveLeft"\)/);
+  assert.match(preview, /t\("sessions\.tabs\.moveRight"\)/);
   assert.match(preview, /session\.key === props\.leftSessionKey \|\| session\.key === props\.rightSessionKey/);
   assert.match(preview, /:data-pane="hasSessionSplit \? sessionPaneId\(session\) : undefined"/);
   assert.match(preview, /<div v-if="!tabGroup\.statusTab" class="app-launcher" :class="\{ open: appLaunchMenuOpen && appLaunchMenuPane === tabGroup\.id \}"/);
@@ -77,7 +77,7 @@ test("session preview splits the original tab row into pane-aligned tab groups",
   assert.match(styles, /\.session-tab-strip-frame::before,[\s\S]*\.session-tab-strip-frame::after[\s\S]*transition:\s*opacity 140ms ease/);
   assert.match(styles, /data-overflow-start="true"[\s\S]*data-overflow-end="true"[\s\S]*opacity:\s*1/);
   assert.match(styles, /\.app-launcher\.open \.session-tab-add-button\s*\{[\s\S]*background:\s*color-mix\(in srgb, var\(--surface-raised\) 92%, var\(--white\) 4%\)/);
-  assert.match(preview, /hasSessionSplit \? 'Close split view' : 'Split session view'/);
+  assert.match(preview, /hasSessionSplit \? t\('sessions\.tabs\.closeSplit'\) : t\('sessions\.tabs\.split'\)/);
   assert.match(preview, /role="separator"/);
   assert.match(preview, /Math\.round\(sessionSplitRatio \* 100\)/);
   assert.match(pane, /v-for="terminalSession in terminalSessions"/);

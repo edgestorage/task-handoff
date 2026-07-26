@@ -5,8 +5,8 @@
         type="button"
         class="repository-environment-trigger"
         :class="{ 'repository-environment-trigger-detail': triggerAppearance === 'detail' }"
-        aria-label="Environment"
-        title="Environment"
+        :aria-label="t('repository.environment.title')"
+        :title="t('repository.environment.title')"
       >
         <FolderGit2 :size="15" />
       </button>
@@ -19,13 +19,13 @@
       <header class="repository-environment-head">
         <span class="repository-environment-title">
           <FolderGit2 :size="16" />
-          <strong>Environment</strong>
+          <strong>{{ t("repository.environment.title") }}</strong>
         </span>
         <button
           type="button"
           class="repository-environment-refresh"
-          aria-label="Refresh environment"
-          title="Refresh environment"
+          :aria-label="t('repository.environment.refresh')"
+          :title="t('repository.environment.refresh')"
           :disabled="contextQuery.isFetching.value || !canQuery"
           @click="contextQuery.refetch()"
         >
@@ -37,18 +37,18 @@
       <div v-if="connectionStatus !== 'online'" class="repository-environment-state" role="status">
         <CircleAlert :size="17" />
         <span>
-          <strong>Instance offline</strong>
-          <small>Reconnect the instance to inspect this session environment.</small>
+          <strong>{{ t("repository.environment.offline") }}</strong>
+          <small>{{ t("repository.environment.offlineHint") }}</small>
         </span>
       </div>
       <div v-else-if="contextQuery.isPending.value" class="repository-environment-state" role="status">
         <LoaderCircle class="repository-environment-spin" :size="17" />
         <span>
-          <strong>Reading environment</strong>
-          <small>Resolving the session cwd and repository state.</small>
+          <strong>{{ t("repository.environment.reading") }}</strong>
+          <small>{{ t("repository.environment.readingHint") }}</small>
         </span>
       </div>
-      <RepositoryErrorNotice v-else-if="contextQuery.error.value" :error="contextQuery.error.value" fallback="The instance did not return repository context." />
+      <RepositoryErrorNotice v-else-if="contextQuery.error.value" :error="contextQuery.error.value" :fallback="t('repository.errors.contextLoad')" />
       <template v-else-if="context">
         <button
           type="button"
@@ -58,9 +58,9 @@
         >
           <span class="repository-environment-row-icon"><Files :size="16" /></span>
           <span class="repository-environment-row-copy">
-            <strong>Files / Changes</strong>
+            <strong>{{ t("repository.environment.filesChanges") }}</strong>
             <small v-if="context.availability === 'available'">{{ changeSummary }}</small>
-            <small v-else>Repository files are unavailable</small>
+            <small v-else>{{ t("repository.environment.filesUnavailable") }}</small>
           </span>
           <span v-if="changeCount" class="repository-environment-count">{{ changeCount }}</span>
           <ChevronRight :size="15" />
@@ -74,9 +74,9 @@
         >
           <span class="repository-environment-row-icon"><GitCompareArrows :size="16" /></span>
           <span class="repository-environment-row-copy">
-            <strong>Review changes</strong>
-            <small v-if="context.availability === 'available'">Changed files only · continuous diff review</small>
-            <small v-else>Repository changes are unavailable</small>
+            <strong>{{ t("repository.environment.review") }}</strong>
+            <small v-if="context.availability === 'available'">{{ t("repository.environment.reviewHint") }}</small>
+            <small v-else>{{ t("repository.environment.changesUnavailable") }}</small>
           </span>
           <span v-if="changeCount" class="repository-environment-count">{{ changeCount }}</span>
           <ChevronRight :size="15" />
@@ -84,8 +84,8 @@
 
         <div v-if="context.availability === 'available' && context.head?.state !== 'branch'" class="repository-environment-notice head-state" role="status">
           <GitCommitHorizontal :size="15" />
-          <span v-if="context.head?.state === 'detached'">Detached HEAD at {{ context.head.oid?.slice(0, 8) || "unknown commit" }}. Create or checkout a branch before publishing.</span>
-          <span v-else>Unborn branch with no commit yet. Create the first commit before delivery actions become available.</span>
+          <span v-if="context.head?.state === 'detached'">{{ t("repository.environment.detachedNotice", { commit: context.head.oid?.slice(0, 8) || t("repository.environmentExtra.unknownCommit") }) }}</span>
+          <span v-else>{{ t("repository.environment.unbornNotice") }}</span>
         </div>
 
         <Popover v-model:open="worktreesOpen">
@@ -100,7 +100,7 @@
             >
               <span class="repository-environment-row-icon"><GitFork :size="16" /></span>
               <span class="repository-environment-row-copy">
-                <strong>Worktree</strong>
+                <strong>{{ t("repository.environment.worktree") }}</strong>
                 <small v-if="context.currentWorktree">{{ worktreeSummary }}</small>
                 <small v-else>{{ unavailableMessage }}</small>
               </span>
@@ -136,7 +136,7 @@
             >
               <span class="repository-environment-row-icon"><GitBranch :size="16" /></span>
               <span class="repository-environment-row-copy">
-                <strong>Branch</strong>
+                <strong>{{ t("repository.environment.branch") }}</strong>
                 <small class="repository-environment-branch-summary" :title="branchSummary">{{ branchSummary }}</small>
               </span>
               <ChevronRight v-if="context.availability === 'available'" :size="15" />
@@ -185,6 +185,7 @@
 import type { RepositoryContext, RepositoryPrimaryAction, RepositorySessionKind } from "@task-handoff/protocol/repository";
 import { ChevronRight, CircleAlert, Files, FolderGit2, GitBranch, GitCommitHorizontal, GitCompareArrows, GitFork, LoaderCircle, RefreshCw } from "@lucide/vue";
 import { computed, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { useRepositoryContextQuery } from "../../../api/repository";
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "../../../components/ui/popover";
 import RepositoryWorktreesPanel from "./RepositoryWorktreesPanel.vue";
@@ -200,6 +201,7 @@ const props = defineProps<{
   sessionKind: RepositorySessionKind;
   triggerAppearance?: "toolbar" | "detail";
 }>();
+const { t } = useI18n();
 
 const emit = defineEmits<{
   aiSessionStarted: [result: import("@task-handoff/protocol/repository").RepositoryAiSessionLaunchResult];
@@ -226,12 +228,12 @@ const changeCount = computed(() => {
 });
 const changeSummary = computed(() => {
   const summary = context.value?.changes;
-  if (!summary || changeCount.value === 0) return "No local changes";
+  if (!summary || changeCount.value === 0) return t("repository.environment.noChanges");
   const parts = [
-    summary.conflicts ? `${summary.conflicts} conflict${summary.conflicts === 1 ? "" : "s"}` : "",
-    summary.staged ? `${summary.staged} staged` : "",
-    summary.unstaged ? `${summary.unstaged} unstaged` : "",
-    summary.untracked ? `${summary.untracked} untracked` : "",
+    summary.conflicts ? t("repository.environmentExtra.conflict", { count: summary.conflicts }) : "",
+    summary.staged ? t("repository.environmentExtra.staged", { count: summary.staged }) : "",
+    summary.unstaged ? t("repository.environmentExtra.unstaged", { count: summary.unstaged }) : "",
+    summary.untracked ? t("repository.environmentExtra.untracked", { count: summary.untracked }) : "",
   ].filter(Boolean);
   return parts.join(" · ");
 });
@@ -239,9 +241,9 @@ const worktreeSummary = computed(() => {
   const worktree = context.value?.currentWorktree;
   if (!worktree) return unavailableMessage.value;
   const occupied = worktree.activeAiSessionIds.length + worktree.activeAppSessionIds.length;
-  const flags = [worktree.isMain ? "main" : worktree.managed ? "managed" : "external"];
-  if (worktree.dirty) flags.push("dirty");
-  if (occupied) flags.push(`${occupied} active session${occupied === 1 ? "" : "s"}`);
+  const flags = [t(worktree.isMain ? "repository.environmentExtra.main" : worktree.managed ? "repository.environmentExtra.managed" : "repository.environmentExtra.external")];
+  if (worktree.dirty) flags.push(t("repository.environmentExtra.dirty"));
+  if (occupied) flags.push(t("repository.environmentExtra.activeSessions", { count: occupied }));
   return flags.join(" · ");
 });
 const branchSummary = computed(() => {
@@ -249,31 +251,29 @@ const branchSummary = computed(() => {
   if (!head) return unavailableMessage.value;
   if (head.state === "branch") {
     const tracking = context.value?.upstream;
-    const sync = tracking && (tracking.ahead || tracking.behind)
-      ? ` · ${tracking.ahead} ahead, ${tracking.behind} behind`
-      : "";
-    return `${head.branch || "Unknown branch"}${sync}`;
+    if (tracking && (tracking.ahead || tracking.behind)) return t("repository.environment.branchSync", { branch: head.branch || t("repository.common.unknownBranch"), ahead: tracking.ahead, behind: tracking.behind });
+    return head.branch || t("repository.common.unknownBranch");
   }
-  if (head.state === "unborn") return "Unborn branch";
-  return `Detached at ${head.oid?.slice(0, 8) || "unknown commit"}`;
+  if (head.state === "unborn") return t("repository.common.unbornBranch");
+  return t("repository.common.detachedAt", { commit: head.oid?.slice(0, 8) || t("repository.environmentExtra.unknownCommit") });
 });
-const unavailableMessage = computed(() => ({
-  "session-not-found": "This session no longer exists.",
-  "session-inactive": "This session is no longer active.",
-  "cwd-missing": "This session has no recorded working directory.",
-  "cwd-inaccessible": "The session working directory is inaccessible.",
-  "git-unavailable": "Git is unavailable in this instance.",
-  "not-worktree": "The current directory is not a Git repository.",
-  available: "Repository available",
+const unavailableMessage = computed(() => t({
+  "session-not-found": "repository.environment.unavailable.sessionNotFound",
+  "session-inactive": "repository.environment.unavailable.sessionInactive",
+  "cwd-missing": "repository.environmentExtra.availability.cwdMissing",
+  "cwd-inaccessible": "repository.environmentExtra.availability.cwdInaccessible",
+  "git-unavailable": "repository.environmentExtra.availability.gitUnavailable",
+  "not-worktree": "repository.environmentExtra.availability.notWorktree",
+  available: "repository.environmentExtra.availability.available",
 }[context.value?.availability || "cwd-missing"]));
-const primaryActionLabel = computed(() => ({
-  "review-changes": "Review changes",
-  "resolve-conflicts": "Resolve conflicts",
-  "publish-branch": "Publish branch",
-  push: "Push",
-  pull: "Pull",
-  diverged: "Branch diverged",
-  "up-to-date": "Up to date",
+const primaryActionLabel = computed(() => t({
+  "review-changes": "repository.environmentExtra.actions.review",
+  "resolve-conflicts": "repository.environmentExtra.actions.resolve",
+  "publish-branch": "repository.environmentExtra.actions.publish",
+  push: "repository.environmentExtra.actions.push",
+  pull: "repository.environmentExtra.actions.pull",
+  diverged: "repository.environmentExtra.actions.diverged",
+  "up-to-date": "repository.environmentExtra.actions.upToDate",
 }[context.value?.primaryAction || "up-to-date"]));
 
 function toggleBranches() {

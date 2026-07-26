@@ -20,8 +20,8 @@ test("models settings exposes location scope, references, and node diagnostics",
   const settings = read("src/apps/control-plane/settings/SettingsModal.vue");
   for (const contract of [
     /v-model="settingsModel\.locationScope"/,
-    /Control plane/,
-    /Node · \{\{ node\.name \}\}/,
+    /t\("settings\.modelRegistry\.controlPlane"\)/,
+    /t\("settings\.modelRegistry\.nodeLocation", \{ name: node\.name \}\)/,
     /model\.locations/,
     /referenceCount/,
     /nodeDiagnostics/,
@@ -44,8 +44,8 @@ test("model location operations route to the selected store and reset busy state
 
 test("models settings edits aggregate entries and deletes explicit locations through a portal menu", () => {
   const settings = read("src/apps/control-plane/settings/SettingsModal.vue");
-  assert.match(settings, />Edit all</);
-  assert.match(settings, /All \{\{ editingModelLocationCount \}\} locations/);
+  assert.match(settings, /t\("settings\.modelRegistry\.editAll"\)/);
+  assert.match(settings, /t\("settings\.modelRegistry\.allLocations", \{ count: editingModelLocationCount \}\)/);
   assert.match(settings, /<DropdownMenuContent class="model-location-menu"/);
   assert.match(settings, /v-for="location in model\.locations/);
   assert.match(settings, /@select="removeModel\(model, location\)"/);

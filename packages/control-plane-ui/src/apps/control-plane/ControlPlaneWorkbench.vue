@@ -5,15 +5,15 @@
         <div
           v-if="showCustomWindowControls"
           class="desktop-window-controls"
-          aria-label="Window controls"
+          :aria-label="t('navigation.windowControls')"
         >
-          <button type="button" class="window-control close" aria-label="Close window" title="Close" @click.stop="controlWindow('close')">
+          <button type="button" class="window-control close" :aria-label="t('common.actions.close')" :title="t('common.actions.close')" @click.stop="controlWindow('close')">
             <X :size="11" />
           </button>
-          <button type="button" class="window-control minimize" aria-label="Minimize window" title="Minimize" @click.stop="controlWindow('minimize')">
+          <button type="button" class="window-control minimize" :aria-label="t('common.actions.minimize')" :title="t('common.actions.minimize')" @click.stop="controlWindow('minimize')">
             <Minus :size="11" />
           </button>
-          <button type="button" class="window-control maximize" aria-label="Maximize window" title="Maximize" @click.stop="controlWindow('toggle-maximize')">
+          <button type="button" class="window-control maximize" :aria-label="t('common.actions.maximize')" :title="t('common.actions.maximize')" @click.stop="controlWindow('toggle-maximize')">
             <Maximize2 :size="10" />
           </button>
         </div>
@@ -31,17 +31,17 @@
                 variant="outline"
                 size="sm"
                 class="control-plane-update-indicator"
-                :aria-label="`Update available: ${serverUpdateVersion}`"
+                :aria-label="t('settings.appearance.updateAvailableVersion', { version: serverUpdateVersion })"
                 @click="openSettings('basic')"
               >
                 <Download :size="15" />
-                <span>Update</span>
+                <span>{{ t("common.actions.update") }}</span>
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="bottom" :side-offset="8">Update available · {{ serverUpdateVersion }}</TooltipContent>
+            <TooltipContent side="bottom" :side-offset="8">{{ t("settings.appearance.updateAvailableVersion", { version: serverUpdateVersion }) }}</TooltipContent>
           </Tooltip>
         </TooltipProvider>
-        <div class="workbench-view-switcher" :data-active-view="workbenchView" aria-label="Workbench view">
+        <div class="workbench-view-switcher" :data-active-view="workbenchView" :aria-label="t('navigation.workbenchView')">
           <button
             v-for="option in workbenchViewOptions"
             :key="option.value"
@@ -55,17 +55,17 @@
             <span>{{ option.label }}</span>
           </button>
         </div>
-        <Button variant="outline" size="sm" aria-label="Refresh" title="Refresh" :disabled="refreshing" @click="refresh">
+        <Button variant="outline" size="sm" :aria-label="t('common.actions.refresh')" :title="t('common.actions.refresh')" :disabled="refreshing" @click="refresh">
           <RefreshCw :size="15" />
-          <span>Refresh</span>
+          <span>{{ t("common.actions.refresh") }}</span>
         </Button>
-        <Button :variant="settingsMode ? 'default' : 'outline'" size="sm" aria-label="Settings" title="Settings" :aria-pressed="settingsMode" @click="toggleSettings">
+        <Button :variant="settingsMode ? 'default' : 'outline'" size="sm" :aria-label="t('navigation.settings')" :title="t('navigation.settings')" :aria-pressed="settingsMode" @click="toggleSettings">
           <Settings :size="15" />
-          <span>Settings</span>
+          <span>{{ t("navigation.settings") }}</span>
         </Button>
-        <Button v-if="authSession.data.value?.enabled" variant="outline" size="sm" aria-label="Sign out" title="Sign out" :disabled="signingOut" @click="signOut">
+        <Button v-if="authSession.data.value?.enabled" variant="outline" size="sm" :aria-label="t('auth.signOut')" :title="t('auth.signOut')" :disabled="signingOut" @click="signOut">
           <LogOut :size="15" />
-          <span>{{ signingOut ? "Signing out" : "Sign out" }}</span>
+          <span>{{ signingOut ? t("auth.signingOut") : t("auth.signOut") }}</span>
         </Button>
       </div>
     </header>
@@ -251,6 +251,10 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
+import { formatTime } from "../../i18n/presentation";
+import type { SupportedLocale } from "../../i18n/locale";
+import { translateApiError } from "../../i18n/apiError";
 import { useQueryClient } from "@tanstack/vue-query";
 import { useEventListener } from "@vueuse/core";
 import { Bot, Download, House, LayoutGrid, LogOut, Maximize2, Minus, RefreshCw, Settings, X } from "@lucide/vue";
@@ -313,6 +317,7 @@ function storedSessionPreviewExpanded() {
 }
 
 const queryClient = useQueryClient();
+const { locale, t } = useI18n();
 const authSession = useAuthSessionQuery();
 const controlPlane = useControlPlaneStatusQuery();
 const board = useInstanceBoardQuery();
@@ -323,11 +328,11 @@ const configSyncPresetsQuery = useConfigSyncPresetsQuery();
 const nodes = useNodesQuery();
 
 const workbenchView = ref<WorkbenchView>("instance");
-const workbenchViewOptions: Array<{ value: WorkbenchView; label: string; icon: typeof LayoutGrid }> = [
-  { value: "instance", label: "Home", icon: House },
-  { value: "board", label: "Board", icon: LayoutGrid },
-  { value: "ai", label: "AI", icon: Bot },
-];
+const workbenchViewOptions = computed<Array<{ value: WorkbenchView; label: string; icon: typeof LayoutGrid }>>(() => [
+  { value: "instance", label: t("navigation.home"), icon: House },
+  { value: "board", label: t("navigation.board"), icon: LayoutGrid },
+  { value: "ai", label: t("navigation.ai"), icon: Bot },
+]);
 const instanceViewMode = computed(() => workbenchView.value === "instance");
 const boardMode = computed(() => workbenchView.value === "board");
 const aiBoardMode = computed(() => workbenchView.value === "ai");
@@ -409,11 +414,11 @@ const resourceMetricsByInstanceId = reactive<Record<string, InstanceResourceMetr
 const resourceMetricsErrorByInstanceId = reactive<Record<string, string>>({});
 const activeInstanceResourceMetrics = computed(() => activeInstance.value?.runtime?.type === "docker" ? resourceMetricsByInstanceId[activeInstance.value.id] : undefined);
 const activeInstanceResourceMetricsError = computed(() => activeInstance.value?.runtime?.type === "docker" ? resourceMetricsErrorByInstanceId[activeInstance.value.id] : undefined);
-const boardSizeOptions: Array<{ value: BoardSize; label: string }> = [
-  { value: "small", label: "Small" },
-  { value: "medium", label: "Medium" },
-  { value: "large", label: "Large" },
-];
+const boardSizeOptions = computed<Array<{ value: BoardSize; label: string }>>(() => [
+  { value: "small", label: t("instances.board.small") },
+  { value: "medium", label: t("instances.board.medium") },
+  { value: "large", label: t("instances.board.large") },
+]);
 
 const boardProjectOptions = computed(() => {
   const byId = new Map<string, { id: string; name: string }>();
@@ -438,7 +443,7 @@ const boardVisibleInstances = computed(() => {
     if (!term) {
       return true;
     }
-    const sessionLabels = buildAppSessionTabs(instance)
+    const sessionLabels = buildAppSessionTabs(instance, t)
       .map((session) => session.label)
       .join(" ");
     const haystack = [instance.name, instance.project?.name, instance.projectId, instance.image?.name, instance.imageId, instance.node?.name, instance.nodeId, instance.status, instance.connectionStatus, sessionLabels]
@@ -451,21 +456,21 @@ const boardVisibleInstances = computed(() => {
 const boardAppOptions = computed(() => {
   const counts = new Map<string, number>();
   for (const instance of boardVisibleInstances.value) {
-    const appIds = new Set(buildAppSessionTabs(instance).map((session) => session.label).filter(Boolean));
+    const appIds = new Set(buildAppSessionTabs(instance, t).map((session) => session.label).filter(Boolean));
     for (const appId of appIds) {
       counts.set(appId, (counts.get(appId) || 0) + 1);
     }
   }
   return [...counts.entries()]
     .map(([appId, count]) => ({ appId, count }))
-    .sort((a, b) => appDisplayName(a.appId).localeCompare(appDisplayName(b.appId)));
+    .sort((a, b) => appDisplayName(a.appId, t).localeCompare(appDisplayName(b.appId, t)));
 });
 const activeNodeLocalFolders = computed(() => activeInstance.value ? nodeLocalFoldersByNodeId[activeInstance.value.nodeId] || [] : []);
 const configSyncPresets = computed(() => configSyncPresetsQuery.data.value || []);
-const topbarKicker = computed(() => (settingsMode.value ? "Settings" : "TaskHandoff"));
+const topbarKicker = computed(() => (settingsMode.value ? t("navigation.settings") : t("common.productName")));
 const topbarTitle = computed(() => {
   if (!settingsMode.value) {
-    return activeInstance.value?.name || "Control plane";
+    return activeInstance.value?.name || t("navigation.controlPlane");
   }
   return settingsSectionTitle(settingsSection.value);
 });
@@ -488,7 +493,7 @@ useControlPlaneEvents({
   },
   imagePullProgress,
 });
-const lastRefreshLabel = computed(() => new Date(lastRefreshAt.value).toLocaleTimeString());
+const lastRefreshLabel = computed(() => formatTime(lastRefreshAt.value, locale.value as SupportedLocale));
 const connectingInstanceIds = computed(() => sortedInstances.value.filter(isInstanceConnecting).map((instance) => instance.id).join("\n"));
 const {
   applyBoardAppSelection,
@@ -501,7 +506,7 @@ const {
   boardSessions,
   boardTerminalSocketUrl,
   selectBoardSession,
-} = useInstanceBoardSessions({ boardInteractive, boardSessionKeys, boardVisibleInstances });
+} = useInstanceBoardSessions({ boardInteractive, boardSessionKeys, boardVisibleInstances, locale, t });
 const {
   activeAttachUrl,
   activeInstanceWebUrl,
@@ -551,6 +556,7 @@ const {
   notifyError: showToast,
   refresh,
   sessionMenuOpen,
+  t,
 });
 const { disposeBoardTerminalPreviews, disposeHiddenBoardTerminalPreviews, mountBoardTerminalPreviews, setBoardTerminalHost } = useBoardTerminalPreviews(boardMode, boardInteractive);
 
@@ -794,6 +800,7 @@ const {
   errorText,
   notifyError: showToast,
   refresh,
+  translate: t,
 });
 
 function openSettings(section: typeof settingsSection.value = "nodes") {
@@ -817,24 +824,24 @@ function closeSettings() {
 
 function settingsSectionTitle(section: typeof settingsSection.value) {
   if (section === "basic") {
-    return "Basic";
+    return t("settings.basic");
   }
   if (section === "images") {
-    return "Image management";
+    return t("settings.images");
   }
   if (section === "nodes") {
-    return "Nodes";
+    return t("settings.nodes");
   }
   if (section === "models") {
-    return "Models";
+    return t("settings.models");
   }
   if (section === "chat") {
-    return "Chat bridges";
+    return t("settings.chatBridges");
   }
   if (section === "triggers") {
-    return "Triggers";
+    return t("triggers.title");
   }
-  return "Git repositories";
+  return t("settings.projects");
 }
 
 function handleInstanceCreated(instance: InstanceBoardItem) {
@@ -944,7 +951,7 @@ async function copyText(value: string) {
 }
 
 function errorText(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
+  return translateApiError(error, t);
 }
 </script>
 

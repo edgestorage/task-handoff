@@ -15,18 +15,18 @@
         <span class="ai-board-identity">
           <span class="ai-board-primary-line">
             <strong>{{ instanceDisplayName(card.instance) }}</strong>
-            <span v-if="card.session.unread" class="ai-session-unread-dot" aria-label="Unread AI session" title="Unread" />
+            <span v-if="card.session.unread" class="ai-session-unread-dot" :aria-label="t('sessions.actions.unread')" :title="t('sessions.actions.unread')" />
           </span>
           <small class="ai-board-secondary-line">
-            <span>{{ aiSessionAppDisplayName(card.appTab, card.session.agent) }}</span>
+            <span>{{ aiSessionAppDisplayName(card.appTab, card.session.agent, t) }}</span>
             <span v-if="showWorkspace" class="ai-board-workspace">
               <span aria-hidden="true">·</span>
               <TooltipProvider :delay-duration="120">
                 <Tooltip>
                   <TooltipTrigger as-child>
-                    <b>{{ aiSessionBasename(card.session.cwd) || "Unknown folder" }}</b>
+                    <b>{{ aiSessionBasename(card.session.cwd) || t("sessions.board.unknownFolder") }}</b>
                   </TooltipTrigger>
-                  <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ card.session.cwd || "Unknown path" }}</TooltipContent>
+                  <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ card.session.cwd || t("sessions.board.unknownPath") }}</TooltipContent>
                 </Tooltip>
               </TooltipProvider>
             </span>
@@ -37,23 +37,23 @@
 
     <div class="ai-board-content">
       <div class="ai-board-preview-field ai-board-preview-field-user">
-        <MarkdownContent class="ai-board-question" :content="displayAiSessionTitle(card.session, promptIndex)" />
+        <MarkdownContent class="ai-board-question" :content="displayAiSessionTitle(card.session, promptIndex, t)" />
       </div>
       <div class="ai-board-preview-field ai-board-preview-field-assistant">
         <AiSessionStreamingMarkdown
           class="ai-board-message"
-          :content="displayAiSessionMessage(card.session, promptIndex)"
+          :content="displayAiSessionMessage(card.session, promptIndex, t)"
           :instance-id="card.instance.id"
           :is-latest="promptIndex >= promptCount - 1"
           :session-id="card.session.id"
         />
       </div>
       <span v-if="promptCount > 1" class="ai-board-turn-nav">
-        <button type="button" :aria-label="`Previous user message for ${card.session.agent}`" :disabled="promptIndex <= 0" @click.stop="$emit('previousPrompt', card)">
+        <button type="button" :aria-label="t('sessions.actions.previousMessage', { agent: card.session.agent })" :disabled="promptIndex <= 0" @click.stop="$emit('previousPrompt', card)">
           <ChevronLeft :size="13" />
         </button>
         <small>{{ promptIndex + 1 }} / {{ promptCount }}</small>
-        <button type="button" :aria-label="`Next user message for ${card.session.agent}`" :disabled="promptIndex >= promptCount - 1" @click.stop="$emit('nextPrompt', card)">
+        <button type="button" :aria-label="t('sessions.actions.nextMessage', { agent: card.session.agent })" :disabled="promptIndex >= promptCount - 1" @click.stop="$emit('nextPrompt', card)">
           <ChevronRight :size="13" />
         </button>
       </span>
@@ -70,21 +70,21 @@
       tone="board"
     />
     <span v-if="canResolveApproval(card.session)" class="ai-board-approval-actions">
-      <button type="button" :disabled="approvalBusyKey === approvalKey(card, 'allow')" title="Allow" @click.stop="$emit('resolveApproval', card.instance, card.session, 'allow')">
+      <button type="button" :disabled="approvalBusyKey === approvalKey(card, 'allow')" :title="t('sessions.actions.allow')" @click.stop="$emit('resolveApproval', card.instance, card.session, 'allow')">
         <Check :size="13" />
-        <span>Allow</span>
+        <span>{{ t("sessions.actions.allow") }}</span>
       </button>
-      <button type="button" :disabled="approvalBusyKey === approvalKey(card, 'skip')" title="Skip" @click.stop="$emit('resolveApproval', card.instance, card.session, 'skip')">
+      <button type="button" :disabled="approvalBusyKey === approvalKey(card, 'skip')" :title="t('sessions.actions.skip')" @click.stop="$emit('resolveApproval', card.instance, card.session, 'skip')">
         <Ban :size="13" />
-        <span>Skip</span>
+        <span>{{ t("sessions.actions.skip") }}</span>
       </button>
-      <button type="button" :disabled="approvalBusyKey === approvalKey(card, 'deny')" title="Deny" @click.stop="$emit('resolveApproval', card.instance, card.session, 'deny')">
+      <button type="button" :disabled="approvalBusyKey === approvalKey(card, 'deny')" :title="t('sessions.actions.deny')" @click.stop="$emit('resolveApproval', card.instance, card.session, 'deny')">
         <X :size="13" />
-        <span>Deny</span>
+        <span>{{ t("sessions.actions.deny") }}</span>
       </button>
     </span>
 
-    <div class="ai-board-card-tools" aria-label="AI session card controls">
+    <div class="ai-board-card-tools" :aria-label="t('sessions.actions.controls')">
       <DropdownMenu>
         <DropdownMenuTrigger as-child>
           <button type="button" class="ai-board-trigger-button ai-session-card-action" :data-bound="boundTriggers(card).length ? 'true' : undefined" :title="triggerButtonTitle(card)" @click.stop>
@@ -94,10 +94,10 @@
         </DropdownMenuTrigger>
         <DropdownMenuContent class="ai-board-trigger-menu" align="end" :side-offset="6" @click.stop>
           <div class="ai-board-trigger-search" @click.stop @keydown.stop>
-            <input v-model="triggerSearch" type="search" placeholder="Search triggers" aria-label="Search triggers" />
+            <input v-model="triggerSearch" type="search" :placeholder="t('sessions.actions.searchTriggers')" :aria-label="t('sessions.actions.searchTriggers')" />
           </div>
-          <DropdownMenuItem v-if="!triggerTemplates.length" class="ai-board-trigger-menu-empty" disabled>No trigger templates</DropdownMenuItem>
-          <DropdownMenuItem v-else-if="!filteredTriggerTemplates.length" class="ai-board-trigger-menu-empty" disabled>No matching triggers</DropdownMenuItem>
+          <DropdownMenuItem v-if="!triggerTemplates.length" class="ai-board-trigger-menu-empty" disabled>{{ t("sessions.actions.noTriggers") }}</DropdownMenuItem>
+          <DropdownMenuItem v-else-if="!filteredTriggerTemplates.length" class="ai-board-trigger-menu-empty" disabled>{{ t("sessions.actions.noMatchingTriggers") }}</DropdownMenuItem>
           <template v-else>
             <DropdownMenuItem
               v-for="trigger in filteredTriggerTemplates"
@@ -112,24 +112,24 @@
                 <strong>{{ trigger.config.name }}</strong>
                 <small>{{ trigger.config.source.type }} · {{ shortHash(trigger.configHash) }}</small>
               </span>
-              <small>{{ isTriggerBound(card, trigger.configHash) ? "Remove" : "Add" }}</small>
+              <small>{{ isTriggerBound(card, trigger.configHash) ? t("sessions.actions.remove") : t("sessions.actions.add") }}</small>
             </DropdownMenuItem>
           </template>
         </DropdownMenuContent>
       </DropdownMenu>
-      <button type="button" class="ai-board-open ai-session-card-action" :aria-label="`Open app session for ${card.session.agent}`" title="Open app session" @click.stop="$emit('openAiSessionApp', card.instance, card.session)">
+      <button type="button" class="ai-board-open ai-session-card-action" :aria-label="t('sessions.actions.openAppFor', { agent: card.session.agent })" :title="t('sessions.actions.openApp')" @click.stop="$emit('openAiSessionApp', card.instance, card.session)">
         <ExternalLink :size="14" />
       </button>
       <DropdownMenu>
         <DropdownMenuTrigger as-child>
-          <button type="button" class="ai-board-more ai-session-card-action" :aria-label="`More actions for ${card.session.agent}`" title="More actions" @click.stop>
+          <button type="button" class="ai-board-more ai-session-card-action" :aria-label="t('sessions.actions.moreFor', { agent: card.session.agent })" :title="t('sessions.actions.more')" @click.stop>
             <MoreHorizontal :size="14" />
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent class="ai-board-card-menu" align="end" :side-offset="6" @click.stop>
           <DropdownMenuItem class="ai-board-card-menu-item danger" :disabled="isStoppingAppSession" @select="$emit('stopAppSession', card)">
             <Square :size="13" />
-            <span>{{ isStoppingAppSession ? "Closing app session" : "Close app session" }}</span>
+            <span>{{ isStoppingAppSession ? t("sessions.actions.closingApp") : t("sessions.actions.closeApp") }}</span>
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -139,6 +139,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { Ban, Check, ChevronLeft, ChevronRight, ExternalLink, MoreHorizontal, Square, X, Zap } from "@lucide/vue";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import AiSessionToolActivity from "../../../components/ai-session/AiSessionToolActivity.vue";
@@ -153,6 +154,8 @@ import {
   displayAiSessionTitle,
 } from "../useInstanceSessions";
 import type { AiBoardCard } from "./aiBoardTypes";
+
+const { t } = useI18n();
 
 const props = defineProps<{
   approvalBusyKey?: string;

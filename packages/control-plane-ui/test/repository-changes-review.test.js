@@ -15,11 +15,11 @@ test("repository changes review opens as an independent reusable session tab", a
     source("SessionPaneContent.vue"),
   ]);
 
-  assert.match(environment, />Review changes</);
+  assert.match(environment, /repository\.environment\.review/);
   assert.match(environment, /page: "changes-review"/);
   assert.match(environment, /runPrimaryAction[\s\S]*openChangesReview\(\)/);
   assert.match(sessions, /repository-changes:\$\{target\.sessionKind\}:\$\{target\.sessionId\}/);
-  assert.match(sessions, /label: page === "changes-review" \? "Changes" : "File Explorer"/);
+  assert.match(sessions, /page === "changes-review"/);
   assert.match(pane, /RepositoryChangesReviewTab[\s\S]*session\.source\?\.page === 'changes-review'/);
   assert.match(pane, /RepositoryWorkspaceTab v-else-if="session\?\.kind === 'repository'"/);
 });
@@ -46,7 +46,7 @@ test("changes review keeps a changed-file tree beside continuous authoritative d
   assert.match(review, /:ref="measureVirtualRow"/);
   assert.match(review, /rowVirtualizer\.value\.measureElement/);
   assert.match(review, /overscan: 3/);
-  assert.match(review, /All[\s\S]*Working[\s\S]*Staged[\s\S]*Conflicts/);
+  assert.match(review, /repository\.reviewExtra\.all[\s\S]*repository\.review\.working[\s\S]*repository\.review\.staged[\s\S]*repository\.review\.conflicts/);
   assert.match(review, /stageRepositoryPaths/);
   assert.match(review, /unstageRepositoryPaths/);
   assert.match(review, /discardRepositoryWorktree/);
@@ -68,7 +68,7 @@ test("changes review keeps a changed-file tree beside continuous authoritative d
   assert.match(card, /line\.hunk\.content/);
   assert.match(card, /class="repository-review-diff-line repository-review-context-tail"/);
   assert.match(card, /\.repository-review-diff-line\[data-kind="hunk"\] code \{ grid-column: 4; \}/);
-  assert.match(card, /v-if="hasExpandedContexts"[\s\S]*Collapse context/);
+  assert.match(card, /v-if="hasExpandedContexts"[\s\S]*repository\.diff\.collapse/);
   assert.match(card, /contextControlLabel[\s\S]*emit\("expandContext", props\.entry, control\.gapId, control\.direction, control\.lineCount\)/);
   assert.doesNotMatch(card, /repository-review-context-control|data-expanded/);
   assert.match(card, /containingHunkId = anchor\?\.closest<HTMLElement>\("\[data-hunk-id\]"\)/);
@@ -110,6 +110,6 @@ test("changes review keeps a changed-file tree beside continuous authoritative d
   assert.match(card, /v-html="line\.highlighted/);
   assert.match(card, /\.repository-review-diff-card \{[^}]*flex: 0 0 auto;/);
   assert.doesNotMatch(card, /split\("\\n"\)|parseUnified|content\.split/);
-  assert.match(card, /entry\.scope === 'staged'[\s\S]*Unstage/);
-  assert.match(card, /entry\.scope === 'unstaged'[\s\S]*Discard/);
+  assert.match(card, /entry\.scope === 'staged'[\s\S]*repository\.diff\.unstage/);
+  assert.match(card, /entry\.scope === 'unstaged'[\s\S]*repository\.diff\.discard/);
 });

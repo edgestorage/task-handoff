@@ -18,6 +18,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import type { AiSessionLifecycle, AiSessionPhase, AiSessionTool } from "../../api/types";
 
 const props = withDefaults(defineProps<{
@@ -35,6 +36,7 @@ const props = withDefaults(defineProps<{
   toolCallsSinceLastMessage: 0,
   tone: "detail",
 });
+const { t } = useI18n();
 
 const count = computed(() => Math.max(0, props.toolCallsSinceLastMessage));
 const visible = computed(() => props.status === "running" || props.status === "waiting");
@@ -66,7 +68,7 @@ watch(activityTextEl, (element) => {
 onBeforeUnmount(() => resizeObserver?.disconnect());
 const statusText = computed(() => {
   if (props.phase === "approval") {
-    return props.summary ? `Waiting for approval · ${props.summary}` : "Waiting for approval...";
+    return props.summary ? `${t("sessions.status.waitingApproval")} · ${props.summary}` : t("sessions.activity.waitingApproval");
   }
   if (props.currentTool?.name) {
     return props.currentTool.inputPreview
@@ -74,17 +76,17 @@ const statusText = computed(() => {
       : props.currentTool.name;
   }
   if (props.phase === "responding") {
-    return "Responding...";
+    return t("sessions.activity.responding");
   }
   if (props.phase === "editing") {
-    return "Editing...";
+    return t("sessions.activity.editing");
   }
   if (props.status === "waiting") {
-    return "Waiting...";
+    return t("sessions.activity.waiting");
   }
   return count.value > 0
-    ? `Thinking... · ${count.value} ${count.value === 1 ? "tool" : "tools"} completed`
-    : "Thinking...";
+    ? t("sessions.activity.thinkingTools", { count: count.value })
+    : t("sessions.activity.thinking");
 });
 </script>
 

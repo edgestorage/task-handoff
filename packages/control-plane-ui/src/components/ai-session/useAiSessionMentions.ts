@@ -3,6 +3,8 @@ import { computed, onBeforeUnmount, ref, toValue, watch, type MaybeRefOrGetter }
 import type { AiSessionMentionCandidate, AiSessionMentionCatalog, AiSessionMentionDiagnostic, InstanceBoardItem } from "../../api/types";
 import { getAiSessionMentionCatalog, searchAiSessionMentionFiles } from "../../api/queries";
 import { sortMentionCandidates } from "./mentions";
+import type { Translate } from "../../i18n/status.ts";
+import { translateApiError } from "../../i18n/apiError.ts";
 
 export type AiSessionMentionContext = {
   instanceId: string;
@@ -21,7 +23,7 @@ export function desktopRuntimePathAccess(instance: Pick<InstanceBoardItem, "node
     : undefined;
 }
 
-export function useAiSessionMentions(context: MaybeRefOrGetter<AiSessionMentionContext | undefined>) {
+export function useAiSessionMentions(context: MaybeRefOrGetter<AiSessionMentionContext | undefined>, t: Translate) {
   const queryClient = useQueryClient();
   const open = ref(false);
   const query = ref("");
@@ -63,7 +65,7 @@ export function useAiSessionMentions(context: MaybeRefOrGetter<AiSessionMentionC
       diagnostics.value = nextCatalog.diagnostics;
     } catch (caught) {
       if (!isCurrent(requestRevision, signature)) return;
-      error.value = caught instanceof Error ? caught.message : "Mention catalog unavailable.";
+      error.value = translateApiError(caught, t, t("sessions.composer.mentionUnavailable"));
       catalog.value = undefined;
       diagnostics.value = [];
     } finally {
@@ -90,7 +92,7 @@ export function useAiSessionMentions(context: MaybeRefOrGetter<AiSessionMentionC
           diagnostics.value = [...diagnostics.value.filter((item) => item.category !== "files"), {
             category: "files",
             code: "FILE_SEARCH_FAILED",
-            message: caught instanceof Error ? caught.message : "File search unavailable.",
+            message: translateApiError(caught, t, t("sessions.composer.fileSearchUnavailable")),
           }];
         }
       } finally {

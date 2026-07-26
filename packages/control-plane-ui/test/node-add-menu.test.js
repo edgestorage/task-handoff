@@ -12,18 +12,18 @@ test("node creation actions live in the Add node menu", () => {
   const addMenu = settings.match(/<DropdownMenuContent class="node-add-menu"[\s\S]*?<\/DropdownMenuContent>/)?.[0] || "";
   const remoteDialog = settings.match(/<Dialog :open="remoteNodeDialogOpen"[\s\S]*?<\/Dialog>/)?.[0] || "";
 
-  assert.match(addMenu, /Add local node/);
-  assert.match(addMenu, /Use this control plane as a node/);
-  assert.match(addMenu, /Add remote node/);
-  assert.match(addMenu, /Connect an existing node by endpoint/);
-  assert.match(addMenu, /Install with script/);
-  assert.match(addMenu, /Install and connect a remote node/);
-  assert.match(addMenu, /Generate join token/);
-  assert.match(addMenu, /Allow a node to connect securely/);
+  assert.match(addMenu, /settings\.nodeRegistry\.addLocal/);
+  assert.match(addMenu, /settings\.nodeRegistry\.localDescription/);
+  assert.match(addMenu, /settings\.nodeRegistry\.addRemote/);
+  assert.match(addMenu, /settings\.nodeRegistry\.remoteDescription/);
+  assert.match(addMenu, /settings\.nodeRegistry\.installScript/);
+  assert.match(addMenu, /settings\.nodeRegistry\.installDescription/);
+  assert.match(addMenu, /settings\.nodeRegistry\.generateToken/);
+  assert.match(addMenu, /settings\.nodeRegistry\.tokenDescription/);
   assert.equal((addMenu.match(/class="node-add-menu-item"/g) || []).length, 4);
   assert.match(addMenu, /@select="openNodeAgentInstallGuide"/);
   assert.match(addMenu, /@select="createJoinInvite"/);
-  assert.ok(addMenu.indexOf("Generate join token") < addMenu.indexOf("Install with script"));
-  assert.match(addMenu, /Install with script[\s\S]*<\/DropdownMenuItem>\s*<\/DropdownMenuContent>$/);
+  assert.ok(addMenu.indexOf("settings.nodeRegistry.generateToken") < addMenu.indexOf("settings.nodeRegistry.installScript"));
+  assert.match(addMenu, /settings\.nodeRegistry\.installScript[\s\S]*<\/DropdownMenuItem>\s*<\/DropdownMenuContent>$/);
   assert.doesNotMatch(remoteDialog, /createJoinInvite|Generate join token|Allow a node to join/);
 });

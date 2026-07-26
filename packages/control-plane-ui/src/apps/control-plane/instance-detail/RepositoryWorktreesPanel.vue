@@ -1,16 +1,16 @@
 <template>
-  <section class="repository-worktrees-panel" aria-label="Repository worktrees">
+  <section class="repository-worktrees-panel" :aria-label="t('repository.worktreesPanel.region')">
     <header>
       <span>
         <GitFork :size="16" />
-        <strong>Worktrees</strong>
+        <strong>{{ t("repository.worktreesPanel.title") }}</strong>
       </span>
       <span class="repository-worktree-header-actions">
         <button
           v-if="canStartAiSession"
           type="button"
-          aria-label="New managed worktree AI session"
-          title="New managed worktree AI session"
+          :aria-label="t('repository.worktreesPanel.createSession')"
+          :title="t('repository.worktreesPanel.createSession')"
           :aria-expanded="createOpen"
           @click="toggleCreate"
         >
@@ -19,8 +19,8 @@
         </button>
         <button
           type="button"
-          aria-label="Refresh worktrees"
-          title="Refresh worktrees"
+          :aria-label="t('repository.worktreesPanel.refresh')"
+          :title="t('repository.worktreesPanel.refresh')"
           :disabled="worktreesQuery.isFetching.value"
           @click="worktreesQuery.refetch()"
         >
@@ -32,31 +32,21 @@
 
     <form v-if="createOpen" class="repository-worktree-create" @submit.prevent="createManagedWorktreeSession">
       <div>
-        <strong>New isolated AI session</strong>
-        <small>A managed worktree is created first. The current session stays in this worktree.</small>
+        <strong>{{ t("repository.worktreesPanel.newTitle") }}</strong>
+        <small>{{ t("repository.worktreesPanel.newHint") }}</small>
       </div>
       <label>
-        <span>New branch</span>
-        <input
-          v-model="createBranchName"
-          name="branchName"
-          autocomplete="off"
-          placeholder="feature/my-change"
-          :disabled="creatingManagedSession"
-        />
+        <span>{{ t("repository.worktreesPanel.newBranch") }}</span>
+        <!-- i18n-audit-allow-next-line code-token: example Git branch name -->
+        <input v-model="createBranchName" name="branchName" autocomplete="off" placeholder="feature/my-change" :disabled="creatingManagedSession" />
       </label>
       <label>
-        <span>Start ref</span>
-        <input
-          v-model="createStartRef"
-          name="startRef"
-          autocomplete="off"
-          placeholder="HEAD"
-          :disabled="creatingManagedSession"
-        />
+        <span>{{ t("repository.worktreesPanel.startRef") }}</span>
+        <!-- i18n-audit-allow-next-line code-token: Git revision token -->
+        <input v-model="createStartRef" name="startRef" autocomplete="off" placeholder="HEAD" :disabled="creatingManagedSession" />
       </label>
-      <RepositoryErrorNotice v-if="createError" :error="createError" fallback="Failed to create the managed worktree AI session." />
-      <small v-if="createRecovery" class="repository-worktree-recovery">{{ createRecovery }}</small>
+      <RepositoryErrorNotice v-if="createError" :error="createError" :fallback="t('repository.worktreesPanel.createError')" />
+      <small v-if="createRecoveryKey" class="repository-worktree-recovery">{{ t(createRecoveryKey) }}</small>
       <button
         type="submit"
         class="repository-worktree-create-submit"
@@ -64,25 +54,25 @@
       >
         <LoaderCircle v-if="creatingManagedSession" class="repository-worktree-spin" :size="14" />
         <GitFork v-else :size="14" />
-        <span>{{ creatingManagedSession ? "Creating worktree and starting…" : "Create worktree and AI session" }}</span>
+        <span>{{ t(creatingManagedSession ? "repository.worktreesPanel.creating" : "repository.worktreesPanel.create") }}</span>
       </button>
     </form>
 
     <div v-if="worktreesQuery.isPending.value" class="repository-worktree-state" role="status">
       <LoaderCircle class="repository-worktree-spin" :size="17" />
-      <span>Reading worktrees…</span>
+      <span>{{ t("repository.worktreesPanel.reading") }}</span>
     </div>
-    <RepositoryErrorNotice v-else-if="worktreesQuery.error.value" :error="worktreesQuery.error.value" fallback="The instance did not return worktrees." />
+    <RepositoryErrorNotice v-else-if="worktreesQuery.error.value" :error="worktreesQuery.error.value" :fallback="t('repository.errors.worktreesLoad')" />
     <div v-else-if="!worktrees?.items.length" class="repository-worktree-state" role="status">
       <GitFork :size="17" />
-      <span>No worktrees were returned.</span>
+      <span>{{ t("repository.worktreesPanel.empty") }}</span>
     </div>
     <div v-else class="repository-worktree-list">
-      <div v-if="removeSuccess" class="repository-worktree-mutation-success" role="status">
+      <div v-if="removeSuccessKey" class="repository-worktree-mutation-success" role="status">
         <Check :size="14" />
-        <span>{{ removeSuccess }}</span>
+        <span>{{ t(removeSuccessKey) }}</span>
       </div>
-      <RepositoryErrorNotice v-if="startError" :error="startError" fallback="Failed to start an AI session in this worktree." />
+      <RepositoryErrorNotice v-if="startError" :error="startError" :fallback="t('repository.worktreesPanel.startError')" />
       <article
         v-for="worktree in orderedWorktrees"
         :key="worktree.id"
@@ -95,14 +85,14 @@
             <GitCommitHorizontal v-else :size="15" />
             <strong :title="worktreeLabel(worktree)">{{ worktreeLabel(worktree) }}</strong>
           </span>
-          <span v-if="worktree.isCurrent" class="repository-worktree-current"><Check :size="12" /> Current</span>
+          <span v-if="worktree.isCurrent" class="repository-worktree-current"><Check :size="12" /> {{ t("repository.worktreesPanel.current") }}</span>
         </div>
         <div class="repository-worktree-badges">
-          <span>{{ worktree.isMain ? "Main" : worktree.managed ? "Managed" : "External" }}</span>
-          <span v-if="worktree.dirty" class="warning">Dirty</span>
-          <span v-if="worktree.locked" class="warning">Locked</span>
-          <span v-if="worktree.prunable" class="warning">Prunable</span>
-          <span v-if="activeSessionCount(worktree)">{{ activeSessionCount(worktree) }} active session{{ activeSessionCount(worktree) === 1 ? "" : "s" }}</span>
+          <span>{{ t(worktree.isMain ? "repository.worktreesPanel.main" : worktree.managed ? "repository.worktreesPanel.managed" : "repository.worktreesPanel.external") }}</span>
+          <span v-if="worktree.dirty" class="warning">{{ t("repository.worktreesPanel.dirty") }}</span>
+          <span v-if="worktree.locked" class="warning">{{ t("repository.worktreesPanel.locked") }}</span>
+          <span v-if="worktree.prunable" class="warning">{{ t("repository.worktreesPanel.prunable") }}</span>
+          <span v-if="activeSessionCount(worktree)">{{ t("repository.environmentExtra.activeSessions", { count: activeSessionCount(worktree) }) }}</span>
         </div>
         <small v-if="worktree.lockReason" class="repository-worktree-reason">{{ worktree.lockReason }}</small>
         <button
@@ -114,7 +104,7 @@
         >
           <LoaderCircle v-if="startingWorktreeId === worktree.id" class="repository-worktree-spin" :size="14" />
           <Plus v-else :size="14" />
-          <span>{{ startingWorktreeId === worktree.id ? "Starting AI session…" : "New AI session here" }}</span>
+          <span>{{ t(startingWorktreeId === worktree.id ? "repository.worktreesPanel.starting" : "repository.worktreesPanel.newHere") }}</span>
         </button>
         <small v-else-if="canStartAiSession && !worktree.canCreateAiSession" class="repository-worktree-blocked">
           {{ blockerSummary(worktree) }}
@@ -127,11 +117,11 @@
           type="button"
           class="repository-worktree-remove"
           :disabled="!worktree.canRemove || removingWorktree"
-          :title="worktree.canRemove ? 'Remove managed worktree' : removeBlockerSummary(worktree)"
+          :title="worktree.canRemove ? t('repository.worktreesPanel.removeManaged') : removeBlockerSummary(worktree)"
           @click="confirmRemove(worktree)"
         >
           <Trash2 :size="13" />
-          <span>Remove worktree</span>
+          <span>{{ t("repository.worktreesPanel.remove") }}</span>
         </button>
       </article>
     </div>
@@ -139,25 +129,23 @@
     <Dialog v-model:open="removeDialogOpen">
       <DialogContent class="repository-worktree-remove-dialog">
         <DialogHeader>
-          <DialogTitle>Remove managed worktree?</DialogTitle>
-          <DialogDescription>
-            This deletes the managed worktree directory. The Git branch is retained, and this action cannot be undone.
-          </DialogDescription>
+          <DialogTitle>{{ t("repository.worktreesPanel.removeTitle") }}</DialogTitle>
+          <DialogDescription>{{ t("repository.worktreeRemoveDescription") }}</DialogDescription>
         </DialogHeader>
         <div v-if="removeTarget" class="repository-worktree-remove-summary">
           <span><GitBranch :size="15" /><strong>{{ worktreeLabel(removeTarget) }}</strong></span>
-          <small>The current AI session and its working directory will not change.</small>
+          <small>{{ t("repository.worktreesPanel.removeHint") }}</small>
           <div v-if="removeTarget.removeBlockers.length" class="repository-worktree-blockers">
             <span v-for="blocker in removeTarget.removeBlockers" :key="blocker">{{ blockerLabel(blocker) }}</span>
           </div>
         </div>
-        <RepositoryErrorNotice v-if="removeError" :error="removeError" fallback="Failed to remove the managed worktree." />
+        <RepositoryErrorNotice v-if="removeError" :error="removeError" :fallback="t('repository.worktreesPanel.removeError')" />
         <DialogFooter>
-          <Button variant="outline" :disabled="removingWorktree" @click="removeDialogOpen = false">Cancel</Button>
+          <Button variant="outline" :disabled="removingWorktree" @click="removeDialogOpen = false">{{ t("repository.common.cancel") }}</Button>
           <Button variant="destructive" :disabled="removingWorktree || !removeTarget?.canRemove" @click="removeSelectedWorktree">
             <LoaderCircle v-if="removingWorktree" class="repository-worktree-spin" :size="14" />
             <Trash2 v-else :size="14" />
-            <span>{{ removingWorktree ? "Removing…" : "Remove worktree" }}</span>
+            <span>{{ t(removingWorktree ? "repository.worktreesPanel.removing" : "repository.worktreesPanel.remove") }}</span>
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -169,6 +157,7 @@
 import type { RepositoryAiSessionLaunchResult, RepositorySessionKind, RepositoryWorktree, RepositoryWorktreeBlocker } from "@task-handoff/protocol/repository";
 import { Check, GitBranch, GitCommitHorizontal, GitFork, LoaderCircle, Plus, RefreshCw, Trash2, X } from "@lucide/vue";
 import { computed, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { ApiError } from "../../../api/client";
 import { createRepositoryWorktreeAiSession, removeRepositoryWorktree, startRepositoryAiSession, useRepositoryWorktreesQuery } from "../../../api/repository";
 import { Button } from "../../../components/ui/button";
@@ -182,6 +171,7 @@ const props = defineProps<{
   sessionId: string;
   sessionKind: RepositorySessionKind;
 }>();
+const { t } = useI18n();
 
 const emit = defineEmits<{
   aiSessionStarted: [result: RepositoryAiSessionLaunchResult];
@@ -208,17 +198,17 @@ const createBranchName = ref("");
 const createStartRef = ref("HEAD");
 const creatingManagedSession = ref(false);
 const createError = ref<unknown>();
-const createRecovery = ref("");
+const createRecoveryKey = ref("");
 const removeDialogOpen = ref(false);
 const removeTarget = ref<RepositoryWorktree>();
 const removingWorktree = ref(false);
 const removeError = ref<unknown>();
-const removeSuccess = ref("");
+const removeSuccessKey = ref("");
 
 function worktreeLabel(worktree: RepositoryWorktree) {
-  if (worktree.head.state === "branch") return worktree.head.branch || "Unknown branch";
-  if (worktree.head.state === "unborn") return "Unborn branch";
-  return `Detached at ${worktree.head.oid?.slice(0, 8) || "unknown"}`;
+  if (worktree.head.state === "branch") return worktree.head.branch || t("repository.common.unknownBranch");
+  if (worktree.head.state === "unborn") return t("repository.common.unbornBranch");
+  return t("repository.common.detachedAt", { commit: worktree.head.oid?.slice(0, 8) || t("repository.environmentExtra.unknownCommit") });
 }
 
 function activeSessionCount(worktree: RepositoryWorktree) {
@@ -226,28 +216,28 @@ function activeSessionCount(worktree: RepositoryWorktree) {
 }
 
 function blockerSummary(worktree: RepositoryWorktree) {
-  if (worktree.locked) return "Locked worktree";
-  if (worktree.prunable) return "Prunable worktree record";
-  if (worktree.createAiSessionBlockers.includes("outside-workspace-roots")) return "Outside authorized workspace roots";
-  if (worktree.createAiSessionBlockers.includes("path-inaccessible")) return "Worktree directory is inaccessible";
-  return "Unavailable for a new AI session";
+  if (worktree.locked) return t("repository.worktreesPanel.blockers.locked");
+  if (worktree.prunable) return t("repository.worktreesPanel.blockers.prunable");
+  if (worktree.createAiSessionBlockers.includes("outside-workspace-roots")) return t("repository.worktreesPanel.blockers.outside");
+  if (worktree.createAiSessionBlockers.includes("path-inaccessible")) return t("repository.worktreesPanel.blockers.inaccessible");
+  return t("repository.worktreesPanel.blockers.unavailable");
 }
 
 function removeBlockerSummary(worktree: RepositoryWorktree) {
-  return worktree.removeBlockers.map(blockerLabel).join(", ") || "Worktree cannot be removed";
+  return worktree.removeBlockers.map(blockerLabel).join(", ") || t("repository.worktreesPanel.blockers.cannotRemove");
 }
 
 function blockerLabel(blocker: RepositoryWorktreeBlocker) {
-  return ({
-    "main-worktree": "Main worktree",
-    "external-worktree": "External worktree",
-    "outside-workspace-roots": "Outside authorized roots",
-    dirty: "Uncommitted changes",
-    locked: "Locked",
-    prunable: "Prunable record",
-    "session-occupied": "Active session",
-    "path-inaccessible": "Directory inaccessible",
-  })[blocker];
+  return t({
+    "main-worktree": "repository.worktreesPanel.blockers.main",
+    "external-worktree": "repository.worktreesPanel.blockers.external",
+    "outside-workspace-roots": "repository.worktreesPanel.blockers.outsideRoots",
+    dirty: "repository.worktreesPanel.blockers.uncommitted",
+    locked: "repository.worktreesPanel.locked",
+    prunable: "repository.worktreesPanel.blockers.prunable",
+    "session-occupied": "repository.worktreesPanel.blockers.activeSession",
+    "path-inaccessible": "repository.worktreesPanel.blockers.directoryInaccessible",
+  }[blocker]);
 }
 
 function confirmRemove(worktree: RepositoryWorktree) {
@@ -261,16 +251,16 @@ async function removeSelectedWorktree() {
   if (!removeTarget.value?.canRemove || !worktrees.value?.snapshotId || removingWorktree.value) return;
   removingWorktree.value = true;
   removeError.value = undefined;
-  removeSuccess.value = "";
+  removeSuccessKey.value = "";
   try {
     const result = await removeRepositoryWorktree(target.value, {
       worktreeId: removeTarget.value.id,
       expectedSnapshotId: worktrees.value.snapshotId,
       confirm: true,
     });
-    removeSuccess.value = result.branchRetained
-      ? "Managed worktree removed. Its branch was retained."
-      : "Managed worktree removed.";
+    removeSuccessKey.value = result.branchRetained
+      ? "repository.worktreesPanel.removedRetained"
+      : "repository.worktreesPanel.removed";
     removeDialogOpen.value = false;
     removeTarget.value = undefined;
     await worktreesQuery.refetch();
@@ -285,7 +275,7 @@ async function removeSelectedWorktree() {
 function toggleCreate() {
   createOpen.value = !createOpen.value;
   createError.value = undefined;
-  createRecovery.value = "";
+  createRecoveryKey.value = "";
   if (createOpen.value && createStartRef.value === "HEAD") {
     const current = worktrees.value?.items.find((item) => item.isCurrent);
     createStartRef.value = current?.head.branch || current?.head.oid || "HEAD";
@@ -298,7 +288,7 @@ async function createManagedWorktreeSession() {
   const startRef = createStartRef.value.trim();
   if (!branchName || !startRef) return;
   createError.value = undefined;
-  createRecovery.value = "";
+  createRecoveryKey.value = "";
   creatingManagedSession.value = true;
   try {
     const result = await createRepositoryWorktreeAiSession(target.value, {
@@ -313,9 +303,9 @@ async function createManagedWorktreeSession() {
     createError.value = error;
     if (error instanceof ApiError) {
       if (error.details?.worktreeRemoved === true) {
-        createRecovery.value = "The new worktree directory was removed; its branch was retained.";
+        createRecoveryKey.value = "repository.worktreeDirectoryRemoved";
       } else if (error.details?.recoverable === true) {
-        createRecovery.value = "The new worktree was retained so its state can be recovered safely.";
+        createRecoveryKey.value = "repository.worktreesPanel.recovery";
       }
     }
     await worktreesQuery.refetch();

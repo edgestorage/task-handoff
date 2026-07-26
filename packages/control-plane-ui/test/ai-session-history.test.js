@@ -7,8 +7,8 @@ const styles = fs.readFileSync(new URL("../src/apps/control-plane/instance-detai
 const queries = fs.readFileSync(new URL("../src/api/queries.ts", import.meta.url), "utf8");
 
 test("AI session history is an on-demand sidebar mode entered from the current-list footer", () => {
-  const emptyIndex = panel.indexOf("No conversations yet");
-  const entryIndex = panel.indexOf("查看过往对话");
+  const emptyIndex = panel.indexOf('t("sessions.panel.noConversations")');
+  const entryIndex = panel.indexOf('t("sessions.panel.viewHistory")');
   assert.ok(emptyIndex >= 0 && entryIndex > emptyIndex);
   assert.match(panel, /<Button v-if="!historyMode" variant="ghost" class="session-ai-history-entry" @click="enterHistoryMode">/);
   assert.match(panel, /<History :size="15" \/>/);
@@ -21,7 +21,7 @@ test("AI session history is an on-demand sidebar mode entered from the current-l
 test("history mode preserves the current-list scroll position and renders all request states", () => {
   assert.match(panel, /currentListScrollTop = sidebarViewport\(\)\?\.scrollTop \|\| 0;/);
   assert.match(panel, /if \(viewport\) viewport\.scrollTop = currentListScrollTop;/);
-  assert.match(panel, /historyLoading[\s\S]*historyError[\s\S]*暂无过往对话[\s\S]*v-for="group in displayedHistoryGroups"/);
+  assert.match(panel, /historyLoading[\s\S]*historyError[\s\S]*t\("sessions\.panel\.noHistory"\)[\s\S]*v-for="group in displayedHistoryGroups"/);
   assert.match(panel, /historyItemTitle\(item\)/);
   assert.match(panel, /item\.cwd/);
   assert.match(panel, /relativeHistoryTime\(item\.lastActiveAt\)/);
@@ -36,7 +36,7 @@ test("history detail composer resumes, waits for authoritative state, and then s
   assert.match(panel, /session\.id === result\.aiSessionId && session\.appSessionId === result\.appSessionId/);
   assert.match(panel, /for \(let attempt = 0; attempt < 12 && !session; attempt \+= 1\)/);
   assert.match(panel, /refetchQueries\(\{ queryKey: \["control-plane-ai-sessions"\] \}\)/);
-  assert.match(panel, /await sendAiSessionMessage\([\s\S]*session\.id[\s\S]*message \|\| "请查看附件。"/);
+  assert.match(panel, /await sendAiSessionMessage\([\s\S]*session\.id[\s\S]*aiSessionMessageText\(message\)[\s\S]*attachments/);
   assert.match(panel, /emit\("selectAiSession", props\.instance\.id, session\.id\);/);
   assert.match(panel, /showControlPlaneToast/);
   assert.doesNotMatch(panel, />继续对话</);
@@ -51,7 +51,7 @@ test("history API clients send only instance and AI session identities", () => {
 });
 
 test("history reuses path grouping and opens stored turn details without resuming", () => {
-  assert.match(panel, /Group by path/);
+  assert.match(panel, /t\("sessions\.panel\.groupByPath"\)/);
   assert.match(panel, /v-for="group in displayedHistoryGroups"/);
   assert.match(panel, /collapsedHistoryPathGroups\[group\.key\]/);
   assert.match(panel, /groupAiSessionHistoryByPath\(historyItems\.value\)/);
@@ -61,7 +61,7 @@ test("history reuses path grouping and opens stored turn details without resumin
   assert.match(panel, /turn\.userPrompt/);
   assert.match(panel, /turn\.lastMessage \|\| turn\.summary/);
   assert.doesNotMatch(panel, /<small>你<\/small>/);
-  assert.match(panel, /选择一条过往对话查看详情/);
+  assert.match(panel, /t\("sessions\.panel\.selectHistory"\)/);
   assert.doesNotMatch(panel, /selectHistoryItem[\s\S]{0,500}resumeAiSession/);
   assert.match(styles, /\.session-ai-history-row\[data-selected="true"\]/);
   assert.match(styles, /\.session-ai-history-row:hover\s*\{[^}]*background: var\(--surface-hover\);/s);

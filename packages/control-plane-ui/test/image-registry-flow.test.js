@@ -7,9 +7,11 @@ import { canShowInstanceAction, hasInstanceStatusPage, imageProvisioningLabel, i
 import { dockerInstallGuidance, nodePlatform } from "../src/apps/control-plane/new-instance/dockerRuntimeGuidance.ts";
 import { ImagePullTerminalEventType } from "@task-handoff/protocol/control-plane";
 import { useImagePullProgress } from "../src/apps/control-plane/useImagePullProgress.ts";
+import { createControlPlaneI18nForTest } from "../src/i18n/testing.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
+const t = createControlPlaneI18nForTest("en-US").global.t;
 
 function instance(phase, overrides = {}) {
   return {
@@ -36,8 +38,8 @@ test("node image availability queries are isolated by node id", () => {
 });
 
 test("instance image phases have user-facing progress and retry only after failure", () => {
-  assert.equal(imageProvisioningLabel(instance("checking-image")), "Checking image");
-  assert.equal(imageProvisioningLabel(instance("pulling-image")), "Pulling image");
+  assert.equal(imageProvisioningLabel(instance("checking-image"), t), "Checking image");
+  assert.equal(imageProvisioningLabel(instance("pulling-image"), t), "Pulling image");
   assert.equal(imageProvisioningLabel({
     ...instance("pulling-image"),
     imagePullProgress: {
@@ -51,10 +53,10 @@ test("instance image phases have user-facing progress and retry only after failu
       percent: 63,
       message: "7/12 layers ready · 63%",
     },
-  }), "Pulling image · 7/12 layers ready · 63%");
-  assert.equal(imageProvisioningLabel(instance("resolving-image")), "Resolving image digest");
+  }, t), "Pulling image · 7 / 12 ready · 63%");
+  assert.equal(imageProvisioningLabel(instance("resolving-image"), t), "Resolving image digest");
   const failed = instance("failed");
-  assert.equal(imageProvisioningLabel(failed), "Image provisioning failed");
+  assert.equal(imageProvisioningLabel(failed, t), "Image provisioning failed");
   assert.equal(canShowInstanceAction(failed, "retry-image"), true);
   assert.equal(canShowInstanceAction(instance("pulling-image"), "retry-image"), false);
 });
@@ -138,11 +140,11 @@ test("instance status page exists for every lifecycle state except running", () 
 });
 
 test("instance status page describes terminal lifecycle states", () => {
-  assert.equal(instanceStatusTitle(instance("ready", { status: "created" })), "Instance created");
-  assert.equal(instanceStatusTitle(instance("ready", { status: "stopping" })), "Stopping instance");
-  assert.equal(instanceStatusTitle(instance("ready", { status: "stopped" })), "Instance stopped");
-  assert.equal(instanceStatusTitle(instance("failed", { status: "failed" })), "Image preparation failed");
-  assert.equal(instanceStatusTitle(instance("ready", { status: "unhealthy" })), "Instance unhealthy");
+  assert.equal(instanceStatusTitle(instance("ready", { status: "created" }), t), "Instance created");
+  assert.equal(instanceStatusTitle(instance("ready", { status: "stopping" }), t), "Stopping instance");
+  assert.equal(instanceStatusTitle(instance("ready", { status: "stopped" }), t), "Instance stopped");
+  assert.equal(instanceStatusTitle(instance("failed", { status: "failed" }), t), "Image preparation failed");
+  assert.equal(instanceStatusTitle(instance("ready", { status: "unhealthy" }), t), "Instance unhealthy");
   const pulling = instance("pulling-image", {
     status: "starting",
     imagePullProgress: {
@@ -156,14 +158,16 @@ test("instance status page describes terminal lifecycle states", () => {
       message: "1/21 layers ready",
     },
   });
-  assert.equal(instanceStatusTitle(pulling), "Preparing instance");
-  assert.equal(instanceStatusDetail(pulling), "The Docker image is being prepared before the container can start.");
+  assert.equal(instanceStatusTitle(pulling, t), "Preparing instance");
+  assert.equal(instanceStatusDetail(pulling, t), "The Docker image is being prepared before the container can start.");
 });
 
 test("registry profiles remain selectable for pull-required and unknown nodes", () => {
   const runtimeStep = read("src/apps/control-plane/new-instance/RuntimeStep.vue");
   assert.match(runtimeStep, /v-for="image in images"/);
-  assert.match(runtimeStep, /status === "available" \? "Available" : status === "pull-required" \? "Will be pulled" : "Availability unknown"/);
+  assert.match(runtimeStep, /instances\.create\.availability\.available/);
+  assert.match(runtimeStep, /instances\.create\.availability\.pullRequired/);
+  assert.match(runtimeStep, /instances\.create\.availability\.unknown/);
   assert.doesNotMatch(runtimeStep, /:disabled="[^\"]*availability/);
 });
 
@@ -171,8 +175,7 @@ test("Docker runtime creation guidance follows the selected node platform", () =
   assert.equal(nodePlatform({ capabilities: { agent: { platform: "darwin" } } }), "darwin");
   assert.equal(nodePlatform({ capabilities: {} }), "unknown");
   assert.deepEqual(dockerInstallGuidance("darwin"), {
-    label: "Install OrbStack",
-    message: "Install and start OrbStack on the selected macOS node, then retry the check.",
+    kind: "mac",
     url: "https://orbstack.dev/download",
   });
   assert.match(dockerInstallGuidance("win32").url, /docker\.com\/desktop\/setup\/install\/windows-install/);
@@ -181,10 +184,10 @@ test("Docker runtime creation guidance follows the selected node platform", () =
   const modal = read("src/apps/control-plane/NewInstanceModal.vue");
   const runtimeStep = read("src/apps/control-plane/new-instance/RuntimeStep.vue");
   assert.match(modal, /checkNodeRuntime/);
-  assert.match(modal, /Docker must be available on the selected node before creating an instance/);
+  assert.match(modal, /instances\.create\.blocked\.dockerUnavailable/);
   assert.match(modal, /created\.startOutcome\.status === "failed"/);
-  assert.match(modal, /Instance created, but failed to start/);
-  assert.match(runtimeStep, /Retry check/);
+  assert.match(modal, /instances\.create\.feedback\.createdButStartFailed/);
+  assert.match(runtimeStep, /instances\.create\.docker\.retry/);
 });
 
 test("image settings use registry creation and server-owned deletion conflicts", () => {
@@ -195,7 +198,7 @@ test("image settings use registry creation and server-owned deletion conflicts",
   assert.match(settings, /await deleteImage\(image\.id\)/);
   assert.doesNotMatch(settings, /imageInUse/);
   assert.match(modal, /useNodeImageAvailabilityQuery\(\(\) => imageCatalogNodeId\.value\)/);
-  assert.match(modal, /Image reference/);
+  assert.match(modal, /settings\.imageRegistry\.reference/);
 });
 
 test("instance list, board, and detail expose image failure retry", () => {

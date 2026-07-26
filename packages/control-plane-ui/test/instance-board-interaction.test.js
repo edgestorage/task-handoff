@@ -29,7 +29,7 @@ test("board preview interaction defaults to read-only and persists the explicit 
 test("board options expose one interaction switch and apply it to every live preview", () => {
   assert.match(board, /:preview-interactive="interactive"/);
   assert.match(board, /@update:preview-interactive="\$emit\('update:interactive', \$event\)"/);
-  assert.match(options, />\s*Interact with previews\s*</);
+  assert.match(options, /t\("instances\.viewOptions\.interactWithPreviews"\)/);
   assert.match(board, /class="board-card-preview" :data-interactive="interactive"/);
   assert.match(board, /data-interactive="false"\][\s\S]*\.board-card-frame,[\s\S]*data-interactive="false"\][\s\S]*\.board-terminal-preview[\s\S]*pointer-events: none/);
 });
@@ -49,5 +49,5 @@ test("board VNC URLs follow the same authoritative interaction state", () => {
   assert.equal(readOnlyUrl.searchParams.get("view_only"), "1");
   assert.equal(interactiveUrl.searchParams.has("view_only"), false);
   assert.equal(interactiveUrl.searchParams.get("path"), "instances/instance%2Fvnc/api/apps/sessions/gui/session/web/websockify");
-  assert.match(workbench, /useInstanceBoardSessions\(\{ boardInteractive, boardSessionKeys, boardVisibleInstances \}\)/);
+  assert.match(workbench, /useInstanceBoardSessions\(\{ boardInteractive, boardSessionKeys, boardVisibleInstances, locale, t \}\)/);
 });

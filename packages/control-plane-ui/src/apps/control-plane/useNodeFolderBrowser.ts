@@ -1,6 +1,8 @@
 import { computed, ref } from "vue";
 import type { NodeFolderTreeEntry } from "../../api/types";
 import { flattenFolderTree, folderTreeNode, type NodeFolderTreeNode } from "./new-instance/nodeFolderTree.ts";
+import { translateApiError } from "../../i18n/apiError.ts";
+import type { Translate } from "../../i18n/status.ts";
 
 type NodeFolderTreeLoader = (nodeId: string, input: { path?: string; depth?: number }) => Promise<NodeFolderTreeEntry[]>;
 
@@ -8,6 +10,7 @@ type UseNodeFolderBrowserOptions = {
   errorText?: (error: unknown) => string;
   load: NodeFolderTreeLoader;
   onSelect?: (path: string) => void;
+  translate?: Translate;
 };
 
 export function useNodeFolderBrowser(options: UseNodeFolderBrowserOptions) {
@@ -19,6 +22,15 @@ export function useNodeFolderBrowser(options: UseNodeFolderBrowserOptions) {
   const rows = computed(() => flattenFolderTree(roots.value));
   let activeNodeId = "";
   let requestGeneration = 0;
+
+  function displayError(cause: unknown) {
+    const fallback = options.errorText
+      ? options.errorText(cause)
+      : cause instanceof Error
+        ? cause.message
+        : String(cause);
+    return options.translate ? translateApiError(cause, options.translate, fallback) : fallback;
+  }
 
   function reset() {
     requestGeneration += 1;
@@ -44,7 +56,7 @@ export function useNodeFolderBrowser(options: UseNodeFolderBrowserOptions) {
       roots.value = entries.map((entry) => folderTreeNode(entry, 0));
     } catch (cause) {
       if (generation !== requestGeneration || activeNodeId !== nodeId) return;
-      error.value = options.errorText ? options.errorText(cause) : cause instanceof Error ? cause.message : String(cause);
+      error.value = displayError(cause);
     } finally {
       if (generation === requestGeneration && activeNodeId === nodeId) {
         loading.value = false;
@@ -74,7 +86,7 @@ export function useNodeFolderBrowser(options: UseNodeFolderBrowserOptions) {
       folder.expanded = true;
     } catch (cause) {
       if (generation !== requestGeneration || activeNodeId !== nodeId) return;
-      error.value = options.errorText ? options.errorText(cause) : cause instanceof Error ? cause.message : String(cause);
+      error.value = displayError(cause);
     } finally {
       if (generation === requestGeneration && activeNodeId === nodeId) {
         folder.loading = false;

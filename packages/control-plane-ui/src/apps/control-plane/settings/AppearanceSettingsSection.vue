@@ -2,19 +2,19 @@
   <div class="basic-settings-grid">
     <section v-if="desktopUpdatesAvailable" class="modal-section basic-panel server-update-panel desktop-update-panel">
       <div class="section-head">
-        <span>Desktop updates</span>
+        <span>{{ t("settings.appearance.desktopUpdates") }}</span>
         <div class="update-channel-select">
           <ControlPlaneSelect :model-value="desktopUpdateState?.channel || 'stable'" :disabled="desktopUpdateBusy" @update:model-value="emit('update:desktopUpdateChannel', $event)">
-            <ControlPlaneSelectItem value="stable">Stable</ControlPlaneSelectItem>
-            <ControlPlaneSelectItem value="beta">Beta</ControlPlaneSelectItem>
-            <ControlPlaneSelectItem value="alpha">Alpha</ControlPlaneSelectItem>
+            <ControlPlaneSelectItem value="stable">{{ t("settings.appearance.stable") }}</ControlPlaneSelectItem>
+            <ControlPlaneSelectItem value="beta">{{ t("settings.appearance.beta") }}</ControlPlaneSelectItem>
+            <ControlPlaneSelectItem value="alpha">{{ t("settings.appearance.alpha") }}</ControlPlaneSelectItem>
           </ControlPlaneSelect>
         </div>
       </div>
       <div class="server-update-state">
         <div>
-          <strong>TaskHandoff desktop</strong>
-          <code v-if="!desktopUpdateState">Loading update state</code>
+          <strong>{{ t("settings.appearance.desktopProduct") }}</strong>
+          <code v-if="!desktopUpdateState">{{ t("settings.appearance.loadingUpdateState") }}</code>
           <code v-else>{{ desktopUpdateSummary }}</code>
           <small v-if="desktopUpdateState?.capabilities.reason" class="desktop-update-reason">{{ desktopUpdateState.capabilities.reason }}</small>
           <small v-if="desktopUpdateState?.error" class="settings-error">{{ desktopUpdateState.error.message }}</small>
@@ -22,19 +22,19 @@
         <div class="server-update-actions">
           <Button variant="outline" size="sm" :disabled="desktopUpdateCheckDisabled" @click="emit('checkDesktopUpdate')">
             <RefreshCw :size="14" />
-            <span>{{ desktopUpdateState?.phase === 'checking' ? "Checking" : "Check" }}</span>
+            <span>{{ desktopUpdateState?.phase === 'checking' ? t("settings.appearance.checking") : t("settings.appearance.check") }}</span>
           </Button>
           <Button v-if="desktopUpdateState?.phase === 'available' && desktopUpdateState.capabilities.download" variant="outline" size="sm" @click="emit('downloadDesktopUpdate')">
             <Download :size="14" />
-            <span>Download</span>
+            <span>{{ t("settings.appearance.download") }}</span>
           </Button>
           <Button v-if="desktopUpdateState?.phase === 'downloaded' && desktopUpdateState.capabilities.install" variant="outline" size="sm" @click="emit('installDesktopUpdate')">
             <RotateCw :size="14" />
-            <span>Restart and install</span>
+            <span>{{ t("settings.appearance.restartInstall") }}</span>
           </Button>
           <Button v-if="showDesktopReleaseButton" variant="outline" size="sm" @click="emit('openDesktopRelease')">
             <ExternalLink :size="14" />
-            <span>Open release</span>
+            <span>{{ t("settings.appearance.openRelease") }}</span>
           </Button>
         </div>
       </div>
@@ -46,93 +46,107 @@
     </section>
     <section v-else class="modal-section basic-panel server-update-panel">
       <div class="section-head">
-        <span>Server updates</span>
+        <span>{{ t("settings.appearance.serverUpdates") }}</span>
         <div class="update-channel-select">
           <ControlPlaneSelect :model-value="serverUpdateChannel" :disabled="!serverUpdatesAvailable" @update:model-value="emit('update:serverUpdateChannel', $event)">
-            <ControlPlaneSelectItem value="stable">Stable</ControlPlaneSelectItem>
-            <ControlPlaneSelectItem value="beta">Beta</ControlPlaneSelectItem>
-            <ControlPlaneSelectItem value="alpha">Alpha</ControlPlaneSelectItem>
+            <ControlPlaneSelectItem value="stable">{{ t("settings.appearance.stable") }}</ControlPlaneSelectItem>
+            <ControlPlaneSelectItem value="beta">{{ t("settings.appearance.beta") }}</ControlPlaneSelectItem>
+            <ControlPlaneSelectItem value="alpha">{{ t("settings.appearance.alpha") }}</ControlPlaneSelectItem>
           </ControlPlaneSelect>
         </div>
       </div>
       <div class="server-update-state">
         <div>
-          <strong>TaskHandoff server</strong>
+          <strong>{{ t("settings.appearance.serverProduct") }}</strong>
           <code v-if="serverUpdateCheck?.reason && !serverUpdateCheck.updateAvailable">{{ serverUpdateCheck.reason }}</code>
           <code v-else-if="serverUpdateCheck">
-            {{ serverUpdateCheck.currentVersion || serverCurrentVersion || "unknown" }} → {{ serverUpdateCheck.availableVersion }} · {{ serverUpdateCheck.updateAvailable ? "update available" : "up to date" }}
+            {{ serverUpdateCheck.currentVersion || serverCurrentVersion || t("settings.appearance.unknown") }} → {{ serverUpdateCheck.availableVersion }} · {{ serverUpdateCheck.updateAvailable ? t("settings.appearance.updateAvailable") : t("settings.appearance.upToDate") }}
           </code>
-          <code v-else>{{ serverUpdatesAvailable ? `Current ${serverCurrentVersion || "unknown"} · not checked` : serverUnavailableReason }}</code>
+          <code v-else>{{ serverUpdatesAvailable ? t("settings.appearance.currentNotChecked", { version: serverCurrentVersion || t("settings.appearance.unknown") }) : serverUnavailableReason }}</code>
         </div>
         <div class="server-update-actions">
           <Button variant="outline" size="sm" :disabled="!serverUpdatesAvailable || checkingServerUpdate" @click="emit('checkServerUpdate')">
             <RefreshCw :size="14" />
-            <span>{{ checkingServerUpdate ? "Checking" : "Check" }}</span>
+            <span>{{ checkingServerUpdate ? t("settings.appearance.checking") : t("settings.appearance.check") }}</span>
           </Button>
           <Button variant="outline" size="sm" :disabled="!serverUpdateCheck?.supported || !serverUpdateCheck.updateAvailable || applyingServerUpdate" @click="emit('applyServerUpdate')">
             <Download :size="14" />
-            <span>{{ applyingServerUpdate ? "Queuing" : "Update" }}</span>
+            <span>{{ applyingServerUpdate ? t("settings.appearance.queuing") : t("settings.appearance.update") }}</span>
           </Button>
         </div>
       </div>
       <div v-if="serverUpdateJob" class="server-update-job">
-        <span>Latest job</span>
-        <code>{{ serverUpdateJob.fromVersion || "unknown" }} → {{ serverUpdateJob.toVersion }}</code>
-        <Badge :variant="serverUpdateJob.status === 'succeeded' ? 'default' : 'secondary'">{{ serverUpdateJob.status }}</Badge>
+        <span>{{ t("settings.appearance.latestJob") }}</span>
+        <code>{{ serverUpdateJob.fromVersion || t("settings.appearance.unknown") }} → {{ serverUpdateJob.toVersion }}</code>
+        <Badge :variant="serverUpdateJob.status === 'succeeded' ? 'default' : 'secondary'">{{ translateStatus(updateJobStatusKeys, serverUpdateJob.status, t) }}</Badge>
       </div>
     </section>
     <section class="modal-section appearance-panel">
       <div class="section-head">
-        <span>Theme</span>
+        <span>{{ t("common.language.label") }}</span>
+        <div class="language-select">
+          <ControlPlaneSelect :model-value="preference" @update:model-value="updateLocalePreference">
+            <ControlPlaneSelectItem value="system">{{ t("common.language.system") }}</ControlPlaneSelectItem>
+            <ControlPlaneSelectItem value="en-US">{{ t("common.language.enUS") }}</ControlPlaneSelectItem>
+            <ControlPlaneSelectItem value="zh-CN">{{ t("common.language.zhCN") }}</ControlPlaneSelectItem>
+          </ControlPlaneSelect>
+        </div>
       </div>
-      <p class="section-description">Choose the color scheme used throughout the control plane.</p>
-      <div class="theme-choice-group" aria-label="Color theme">
+      <p class="section-description">{{ t("settings.appearance.languageDescription") }}</p>
+    </section>
+    <section class="modal-section appearance-panel">
+      <div class="section-head">
+        <span>{{ t("settings.appearance.theme") }}</span>
+      </div>
+      <p class="section-description">{{ t("settings.appearance.themeDescription") }}</p>
+      <div class="theme-choice-group" :aria-label="t('settings.appearance.colorTheme')">
         <Button variant="outline" :class="{ active: themePreference === 'light' }" :aria-pressed="themePreference === 'light'" @click="emit('update:themePreference', 'light')">
           <Sun :size="16" />
-          <span>Light</span>
+          <span>{{ t("settings.appearance.light") }}</span>
         </Button>
         <Button variant="outline" :class="{ active: themePreference === 'dark' }" :aria-pressed="themePreference === 'dark'" @click="emit('update:themePreference', 'dark')">
           <Moon :size="16" />
-          <span>Dark</span>
+          <span>{{ t("settings.appearance.dark") }}</span>
         </Button>
       </div>
     </section>
     <section class="modal-section appearance-panel">
       <div class="section-head">
-        <span>Public access URL</span>
+        <span>{{ t("settings.publicAccess.title") }}</span>
       </div>
-      <p class="section-description">Set the external address used to open control plane sessions from chat.</p>
+      <p class="section-description">{{ t("settings.publicAccess.description") }}</p>
       <div class="public-url-form">
         <label>
-          <span>Control Plane URL</span>
+          <span>{{ t("settings.publicAccess.field") }}</span>
+          <!-- i18n-audit-allow-next-line code-token: example control-plane URL -->
           <ControlPlaneInput :model-value="publicBaseUrl" placeholder="https://control.example.com" @update:model-value="emit('update:publicBaseUrl', $event)" />
         </label>
         <div class="public-url-actions">
-          <Button variant="outline" size="sm" @click="emit('detectPublicBaseUrl')">Use current URL</Button>
-          <Button variant="outline" size="sm" :disabled="savingPublicBaseUrl" @click="emit('savePublicBaseUrl')">{{ savingPublicBaseUrl ? "Saving" : "Save" }}</Button>
+          <Button variant="outline" size="sm" @click="emit('detectPublicBaseUrl')">{{ t("settings.publicAccess.useCurrent") }}</Button>
+          <Button variant="outline" size="sm" :disabled="savingPublicBaseUrl" @click="emit('savePublicBaseUrl')">{{ t("common.actions.save") }}</Button>
         </div>
         <p v-if="publicBaseUrlMessage" class="settings-success">{{ publicBaseUrlMessage }}</p>
       </div>
     </section>
     <section class="modal-section appearance-panel composer-shortcuts-panel">
       <div class="section-head">
-        <span>Composer shortcuts</span>
+        <span>{{ t("settings.composer.title") }}</span>
       </div>
-      <p class="section-description">Configure the characters that open commands and context mentions in every AI composer.</p>
+      <p class="section-description">{{ t("settings.composer.description") }}</p>
       <div class="composer-shortcuts-form">
         <label>
-          <span>Command trigger</span>
-          <ControlPlaneInput :model-value="commandTrigger" aria-label="Command trigger character" @update:model-value="emit('update:commandTrigger', $event)" />
+          <span>{{ t("settings.composer.commandTrigger") }}</span>
+          <ControlPlaneInput :model-value="commandTrigger" :aria-label="t('settings.composer.commandTriggerAria')" @update:model-value="emit('update:commandTrigger', $event)" />
           <small v-if="commandTriggerError" class="settings-error">{{ commandTriggerError }}</small>
         </label>
         <label>
-          <span>Mention trigger</span>
-          <ControlPlaneInput :model-value="mentionTrigger" aria-label="Mention trigger character" @update:model-value="emit('update:mentionTrigger', $event)" />
+          <span>{{ t("settings.composer.mentionTrigger") }}</span>
+          <ControlPlaneInput :model-value="mentionTrigger" :aria-label="t('settings.composer.mentionTriggerAria')" @update:model-value="emit('update:mentionTrigger', $event)" />
           <small v-if="mentionTriggerError" class="settings-error">{{ mentionTriggerError }}</small>
         </label>
         <div class="public-url-actions composer-shortcuts-actions">
-          <Button variant="outline" size="sm" :disabled="savingTriggerSettings || triggerSettingsAtDefaults" @click="emit('resetTriggers')">Reset</Button>
-          <Button variant="outline" size="sm" :disabled="savingTriggerSettings || !triggerSettingsDirty || Boolean(commandTriggerError || mentionTriggerError)" @click="emit('saveTriggers')">{{ savingTriggerSettings ? "Saving" : "Save" }}</Button>
+          <Button variant="outline" size="sm" :disabled="savingTriggerSettings || triggerSettingsAtDefaults" @click="emit('resetTriggers')">{{ t("settings.composer.reset") }}</Button>
+          <Button variant="outline" size="sm" :disabled="savingTriggerSettings || !triggerSettingsDirty || Boolean(commandTriggerError || mentionTriggerError)" @click="emit('saveTriggers')">{{ t("common.actions.save") }}</Button>
         </div>
         <p v-if="triggerSettingsMessage" :class="triggerSettingsMessageError ? 'settings-error' : 'settings-success'">{{ triggerSettingsMessage }}</p>
       </div>
@@ -142,15 +156,18 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 import { Download, ExternalLink, Moon, RefreshCw, RotateCw, Sun } from "@lucide/vue";
 import type { UpdateChannel, UpdateCheckResult, UpdateJob } from "../../../api/types";
 import { Badge } from "../../../components/ui/badge";
 import type { ThemePreference } from "../../../utils/theme";
 import { Button } from "../../../components/ui/button";
+import { useControlPlaneLocale, type LocalePreference } from "../../../i18n/index.ts";
 import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
 import type { DesktopUpdateState } from "./useDesktopUpdates";
+import { translateStatus, updateJobStatusKeys } from "../../../i18n/status.ts";
 
 const props = defineProps<{
   publicBaseUrl: string;
@@ -177,6 +194,15 @@ const props = defineProps<{
   desktopUpdateState?: DesktopUpdateState;
   themePreference: ThemePreference;
 }>();
+
+const { t } = useI18n();
+const { preference, setPreference } = useControlPlaneLocale();
+
+function updateLocalePreference(value: string) {
+  if (value === "system" || value === "en-US" || value === "zh-CN") {
+    setPreference(value satisfies LocalePreference);
+  }
+}
 
 const emit = defineEmits<{
   detectPublicBaseUrl: [];
@@ -210,14 +236,16 @@ const showDesktopReleaseButton = computed(() => Boolean(
 ));
 const desktopUpdateSummary = computed(() => {
   const state = props.desktopUpdateState;
-  if (!state) return "Loading update state";
-  if (state.phase === "available") return `${state.currentVersion} → ${state.availableVersion || "unknown"} · update available`;
-  if (state.phase === "downloaded") return `${state.availableVersion || "Update"} downloaded · restart required`;
-  if (state.phase === "downloading") return `${state.currentVersion} → ${state.availableVersion || "update"} · downloading`;
-  if (state.phase === "checking") return `Current ${state.currentVersion} · checking for updates`;
-  if (state.phase === "up-to-date") return `Current ${state.currentVersion} · up to date`;
-  if (state.phase === "installing") return `${state.availableVersion || "Update"} · preparing to restart`;
-  return `Current ${state.currentVersion} · ${state.phase === "unsupported" ? "manual updates only" : "not checked"}`;
+  if (!state) return t("settings.appearance.loadingUpdateState");
+  if (state.phase === "available") return `${state.currentVersion} → ${state.availableVersion || t("settings.appearance.unknown")} · ${t("settings.appearance.updateAvailable")}`;
+  if (state.phase === "downloaded") return t("settings.appearance.downloadedRestart", { version: state.availableVersion || t("settings.appearance.update") });
+  if (state.phase === "downloading") return t("settings.appearance.versionDownloading", { current: state.currentVersion, available: state.availableVersion || t("settings.appearance.update") });
+  if (state.phase === "checking") return t("settings.appearance.currentChecking", { version: state.currentVersion });
+  if (state.phase === "up-to-date") return `${state.currentVersion} · ${t("settings.appearance.upToDate")}`;
+  if (state.phase === "installing") return t("settings.appearance.preparingRestart", { version: state.availableVersion || t("settings.appearance.update") });
+  return state.phase === "unsupported"
+    ? t("settings.appearance.currentManual", { version: state.currentVersion })
+    : t("settings.appearance.currentNotChecked", { version: state.currentVersion });
 });
 </script>
 
@@ -237,6 +265,10 @@ const desktopUpdateSummary = computed(() => {
 
 .update-channel-select {
   width: 150px;
+}
+
+.language-select {
+  width: 170px;
 }
 
 .server-update-state {

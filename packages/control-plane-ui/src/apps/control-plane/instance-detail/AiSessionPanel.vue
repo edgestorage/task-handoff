@@ -6,19 +6,19 @@
           <div v-if="historyMode" class="session-ai-history-head">
             <Button variant="ghost" size="sm" class="session-ai-history-back" @click="leaveHistoryMode">
               <ArrowLeft :size="15" />
-              <span>返回当前对话</span>
+              <span>{{ t("sessions.panel.backCurrent") }}</span>
             </Button>
-            <strong>过往对话</strong>
+            <strong>{{ t("sessions.panel.history") }}</strong>
             <DropdownMenu>
               <DropdownMenuTrigger as-child>
-                <Button variant="outline" size="sm" class="session-ai-options-trigger" aria-label="过往对话列表选项" title="过往对话列表选项">
+                <Button variant="outline" size="sm" class="session-ai-options-trigger" :aria-label="t('sessions.panel.historyOptions')" :title="t('sessions.panel.historyOptions')">
                   <SlidersHorizontal :size="16" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent class="session-ai-options-menu" align="end" :side-offset="6">
-                <DropdownMenuLabel class="session-ai-options-label">View</DropdownMenuLabel>
+                <DropdownMenuLabel class="session-ai-options-label">{{ t("sessions.panel.view") }}</DropdownMenuLabel>
                 <DropdownMenuCheckboxItem class="session-ai-options-item option-item" :model-value="groupSessionsByPath" @update:model-value="(value) => groupSessionsByPath = Boolean(value)">
-                  Group by path
+                  {{ t("sessions.panel.groupByPath") }}
                 </DropdownMenuCheckboxItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -34,7 +34,7 @@
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent class="session-ai-filter-menu" align="end" :side-offset="6">
-                <DropdownMenuLabel class="session-ai-filter-label">Status</DropdownMenuLabel>
+                <DropdownMenuLabel class="session-ai-filter-label">{{ t("sessions.panel.status") }}</DropdownMenuLabel>
                 <DropdownMenuItem
                   v-for="option in statusFilterOptions"
                   :key="option.key"
@@ -51,21 +51,21 @@
             </DropdownMenu>
             <DropdownMenu>
               <DropdownMenuTrigger as-child>
-                <Button variant="outline" size="sm" class="session-ai-options-trigger" aria-label="AI session list options" title="AI session list options">
+                <Button variant="outline" size="sm" class="session-ai-options-trigger" :aria-label="t('sessions.panel.listOptions')" :title="t('sessions.panel.listOptions')">
                   <SlidersHorizontal :size="16" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent class="session-ai-options-menu" align="end" :side-offset="6">
-                <DropdownMenuLabel class="session-ai-options-label">View</DropdownMenuLabel>
+                <DropdownMenuLabel class="session-ai-options-label">{{ t("sessions.panel.view") }}</DropdownMenuLabel>
                 <DropdownMenuCheckboxItem class="session-ai-options-item option-item" :model-value="groupSessionsByPath" @update:model-value="(value) => groupSessionsByPath = Boolean(value)">
-                  Group by path
+                  {{ t("sessions.panel.groupByPath") }}
                 </DropdownMenuCheckboxItem>
                 <DropdownMenuCheckboxItem class="session-ai-options-item option-item" :model-value="sortSessionsByStatus" @update:model-value="(value) => sortSessionsByStatus = Boolean(value)">
-                  Sort by status
+                  {{ t("sessions.panel.sortByStatus") }}
                 </DropdownMenuCheckboxItem>
               </DropdownMenuContent>
             </DropdownMenu>
-            <button type="button" class="session-ai-new-button" aria-label="New AI session" title="New AI session" @click="openNewSession">
+            <button type="button" class="session-ai-new-button" :aria-label="t('sessions.panel.newSession')" :title="t('sessions.panel.newSession')" @click="openNewSession">
               <Plus :size="15" />
             </button>
           </div>
@@ -117,28 +117,28 @@
                   <div class="session-ai-state">
                     <span class="session-ai-dot" />
                     <span class="session-ai-state-line">
-                      <strong>{{ aiSessionAppDisplayName(aiSessionAppTab(instance, session), session.agent) }}</strong>
-                      <span v-if="session.unread" class="ai-session-unread-dot" aria-label="Unread AI session" title="Unread" />
+                      <strong>{{ aiSessionAppDisplayName(aiSessionAppTab(instance, session), session.agent, t) }}</strong>
+                      <span v-if="session.unread" class="ai-session-unread-dot" :aria-label="t('sessions.actions.unread')" :title="t('sessions.actions.unread')" />
                       <span v-if="!groupSessionsByPath" class="session-ai-card-workspace">
                         <span aria-hidden="true">·</span>
                         <TooltipProvider :delay-duration="120">
                           <Tooltip>
                             <TooltipTrigger as-child>
-                              <b>{{ aiSessionBasename(session.cwd) || "Unknown folder" }}</b>
+                              <b>{{ aiSessionBasename(session.cwd) || t("sessions.board.unknownFolder") }}</b>
                             </TooltipTrigger>
-                            <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ session.cwd || "Unknown path" }}</TooltipContent>
+                            <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ session.cwd || t("sessions.board.unknownPath") }}</TooltipContent>
                           </Tooltip>
                         </TooltipProvider>
                       </span>
                     </span>
                   </div>
                   <div class="session-ai-preview-field session-ai-preview-field-user">
-                    <MarkdownContent class="session-ai-question" :content="displayAiSessionTitle(session, promptIndexFor(session))" />
+                    <MarkdownContent class="session-ai-question" :content="displayAiSessionTitle(session, promptIndexFor(session), t)" />
                   </div>
                   <div class="session-ai-preview-field session-ai-preview-field-assistant">
                     <AiSessionStreamingMarkdown
                       class="session-ai-message"
-                      :content="displayAiSessionMessage(session, promptIndexFor(session))"
+                      :content="displayAiSessionMessage(session, promptIndexFor(session), t)"
                       :instance-id="instance.id"
                       file-links
                       :is-latest="promptIndexFor(session) >= promptCount(session) - 1"
@@ -147,11 +147,11 @@
                     />
                   </div>
                   <span v-if="promptCount(session) > 1" class="session-ai-turn-nav">
-                    <button type="button" :aria-label="`Previous user message for ${session.agent}`" :disabled="promptIndexFor(session) <= 0" @click.stop="previousPrompt(session)">
+                    <button type="button" :aria-label="t('sessions.actions.previousMessage', { agent: session.agent })" :disabled="promptIndexFor(session) <= 0" @click.stop="previousPrompt(session)">
                       <ChevronLeft :size="13" />
                     </button>
                     <small>{{ promptIndexFor(session) + 1 }} / {{ promptCount(session) }}</small>
-                    <button type="button" :aria-label="`Next user message for ${session.agent}`" :disabled="promptIndexFor(session) >= promptCount(session) - 1" @click.stop="nextPrompt(session)">
+                    <button type="button" :aria-label="t('sessions.actions.nextMessage', { agent: session.agent })" :disabled="promptIndexFor(session) >= promptCount(session) - 1" @click.stop="nextPrompt(session)">
                       <ChevronRight :size="13" />
                     </button>
                   </span>
@@ -166,20 +166,20 @@
                   :tool-calls-since-last-message="session.toolCallsSinceLastMessage"
                 />
                 <div v-if="canResolveApproval(session)" class="session-ai-card-approval-actions">
-                  <button type="button" :disabled="aiSessionActionBusy" title="Allow" @click.stop="resolveApproval(session, 'allow')">
+                  <button type="button" :disabled="aiSessionActionBusy" :title="t('sessions.actions.allow')" @click.stop="resolveApproval(session, 'allow')">
                     <Check :size="13" />
-                    <span>Allow</span>
+                    <span>{{ t("sessions.actions.allow") }}</span>
                   </button>
-                  <button type="button" :disabled="aiSessionActionBusy" title="Skip" @click.stop="resolveApproval(session, 'skip')">
+                  <button type="button" :disabled="aiSessionActionBusy" :title="t('sessions.actions.skip')" @click.stop="resolveApproval(session, 'skip')">
                     <Ban :size="13" />
-                    <span>Skip</span>
+                    <span>{{ t("sessions.actions.skip") }}</span>
                   </button>
-                  <button type="button" :disabled="aiSessionActionBusy" title="Deny" @click.stop="resolveApproval(session, 'deny')">
+                  <button type="button" :disabled="aiSessionActionBusy" :title="t('sessions.actions.deny')" @click.stop="resolveApproval(session, 'deny')">
                     <X :size="13" />
-                    <span>Deny</span>
+                    <span>{{ t("sessions.actions.deny") }}</span>
                   </button>
                 </div>
-                <div class="session-ai-card-tools" aria-label="AI session card controls">
+                <div class="session-ai-card-tools" :aria-label="t('sessions.actions.controls')">
                   <DropdownMenu>
                     <DropdownMenuTrigger as-child>
                       <button type="button" class="session-ai-trigger-button ai-session-card-action" :data-bound="boundTriggers(session).length ? 'true' : undefined" :title="triggerButtonTitle(session)" @click.stop>
@@ -189,10 +189,10 @@
                     </DropdownMenuTrigger>
                     <DropdownMenuContent class="session-ai-trigger-menu" align="end" :side-offset="6" @click.stop>
                       <div class="session-ai-trigger-search" @click.stop @keydown.stop>
-                        <input v-model="triggerSearch" type="search" placeholder="Search triggers" aria-label="Search triggers" />
+                        <input v-model="triggerSearch" type="search" :placeholder="t('sessions.actions.searchTriggers')" :aria-label="t('sessions.actions.searchTriggers')" />
                       </div>
-                      <DropdownMenuItem v-if="!triggerTemplates.length" class="session-ai-trigger-menu-empty" disabled>No trigger templates</DropdownMenuItem>
-                      <DropdownMenuItem v-else-if="!filteredTriggerTemplates.length" class="session-ai-trigger-menu-empty" disabled>No matching triggers</DropdownMenuItem>
+                      <DropdownMenuItem v-if="!triggerTemplates.length" class="session-ai-trigger-menu-empty" disabled>{{ t("sessions.actions.noTriggers") }}</DropdownMenuItem>
+                      <DropdownMenuItem v-else-if="!filteredTriggerTemplates.length" class="session-ai-trigger-menu-empty" disabled>{{ t("sessions.actions.noMatchingTriggers") }}</DropdownMenuItem>
                       <template v-else>
                         <DropdownMenuItem
                           v-for="trigger in filteredTriggerTemplates"
@@ -207,7 +207,7 @@
                             <strong>{{ trigger.config.name }}</strong>
                             <small>{{ trigger.config.source.type }} · {{ shortHash(trigger.configHash) }}</small>
                           </span>
-                          <small>{{ isTriggerBound(session, trigger.configHash) ? "Remove" : "Add" }}</small>
+                          <small>{{ isTriggerBound(session, trigger.configHash) ? t("sessions.actions.remove") : t("sessions.actions.add") }}</small>
                         </DropdownMenuItem>
                       </template>
                     </DropdownMenuContent>
@@ -216,22 +216,22 @@
                     v-if="aiSessionAppTab(instance, session)"
                     type="button"
                     class="session-ai-open ai-session-card-action"
-                    :aria-label="`Open app session for ${session.agent}`"
-                    title="Open app session"
+                    :aria-label="t('sessions.actions.openAppFor', { agent: session.agent })"
+                    :title="t('sessions.actions.openApp')"
                     @click="$emit('openAiSessionApp', instance, session)"
                   >
                     <ExternalLink :size="14" />
                   </button>
                   <DropdownMenu v-if="aiSessionAppTab(instance, session)">
                     <DropdownMenuTrigger as-child>
-                      <button type="button" class="session-ai-more ai-session-card-action" :aria-label="`More actions for ${session.agent}`" title="More actions" @click.stop>
+                      <button type="button" class="session-ai-more ai-session-card-action" :aria-label="t('sessions.actions.moreFor', { agent: session.agent })" :title="t('sessions.actions.more')" @click.stop>
                         <MoreHorizontal :size="14" />
                       </button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent class="session-ai-card-menu" align="end" :side-offset="6" @click.stop>
                       <DropdownMenuItem class="session-ai-card-menu-item danger" :disabled="stoppingAppSessionId === session.id" @select="closeAppSession(session)">
                         <Square :size="13" />
-                        <span>{{ stoppingAppSessionId === session.id ? "Closing app session" : "Close app session" }}</span>
+                        <span>{{ stoppingAppSessionId === session.id ? t("sessions.actions.closingApp") : t("sessions.actions.closeApp") }}</span>
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
@@ -243,20 +243,20 @@
               <span class="session-ai-empty-icon">
                 <MessageSquare :size="17" />
               </span>
-              <strong>{{ visibleAiSessions.length ? "No matching sessions" : "No conversations yet" }}</strong>
-              <span>{{ visibleAiSessions.length ? "Try another status filter." : "Use the + button above to start a conversation." }}</span>
+              <strong>{{ visibleAiSessions.length ? t("sessions.panel.noMatching") : t("sessions.panel.noConversations") }}</strong>
+              <span>{{ visibleAiSessions.length ? t("sessions.panel.tryFilter") : t("sessions.panel.startHint") }}</span>
             </div>
           </div>
           <div v-else class="session-ai-history-list" aria-live="polite">
             <div v-if="historyLoading" class="session-ai-history-state">
               <LoaderCircle class="session-ai-spin" :size="16" />
-              <span>正在读取过往对话…</span>
+              <span>{{ t("sessions.panel.loadingHistory") }}</span>
             </div>
             <div v-else-if="historyError" class="session-ai-history-state session-ai-history-error" role="alert">
               <span>{{ historyError }}</span>
-              <Button variant="ghost" size="sm" @click="loadHistory">重试</Button>
+              <Button variant="ghost" size="sm" @click="loadHistory">{{ t("sessions.panel.retry") }}</Button>
             </div>
-            <p v-else-if="!historyItems.length" class="session-ai-history-state">暂无过往对话</p>
+            <p v-else-if="!historyItems.length" class="session-ai-history-state">{{ t("sessions.panel.noHistory") }}</p>
             <template v-else>
               <section v-for="group in displayedHistoryGroups" :key="group.key" class="session-ai-path-group session-ai-history-group">
                 <button
@@ -296,7 +296,7 @@
                       @keydown.space.prevent="selectHistoryItem(item)"
                     >
                       <div class="session-ai-history-row-head">
-                        <strong>{{ item.agent === "claude" ? "Claude" : "Codex" }}</strong>
+                        <strong>{{ item.agent === "claude" ? t("common.products.claude") : t("common.products.codex") }}</strong>
                         <time :datetime="item.lastActiveAt">{{ relativeHistoryTime(item.lastActiveAt) }}</time>
                       </div>
                       <p>{{ historyItemTitle(item) }}</p>
@@ -310,42 +310,42 @@
         </ScrollArea>
         <Button v-if="!historyMode" variant="ghost" class="session-ai-history-entry" @click="enterHistoryMode">
           <History :size="15" />
-          <span>查看过往对话</span>
+          <span>{{ t("sessions.panel.viewHistory") }}</span>
           <ChevronRight :size="14" />
         </Button>
       </aside>
       <button
         type="button"
         class="session-ai-sidebar-resize-handle"
-        aria-label="Resize AI session list"
-        title="Resize AI session list"
+        :aria-label="t('sessions.panel.resizeList')"
+        :title="t('sessions.panel.resizeList')"
         @pointerdown="startSidebarResize"
       />
       <section v-if="historyMode" ref="detailEl" class="session-ai-detail session-ai-history-detail">
         <ScrollArea class="session-ai-detail-scroll">
           <div v-if="!selectedHistoryId" class="session-ai-history-detail-state">
             <History :size="20" />
-            <strong>选择一条过往对话查看详情</strong>
+            <strong>{{ t("sessions.panel.selectHistory") }}</strong>
           </div>
           <div v-else-if="historyDetailLoading" class="session-ai-history-detail-state">
             <LoaderCircle class="session-ai-spin" :size="18" />
-            <span>正在读取对话详情…</span>
+            <span>{{ t("sessions.panel.loadingHistoryDetail") }}</span>
           </div>
           <div v-else-if="historyDetailError" class="session-ai-history-detail-state session-ai-history-error" role="alert">
             <span>{{ historyDetailError }}</span>
-            <Button v-if="selectedHistoryItem" variant="ghost" size="sm" @click="selectHistoryItem(selectedHistoryItem)">重试</Button>
+            <Button v-if="selectedHistoryItem" variant="ghost" size="sm" @click="selectHistoryItem(selectedHistoryItem)">{{ t("sessions.panel.retry") }}</Button>
           </div>
           <section v-else-if="historyDetail" class="session-ai-history-detail-content">
             <header class="session-ai-history-detail-head">
               <div>
-                <span>{{ historyDetail.item.agent === "claude" ? "Claude" : "Codex" }}</span>
+                <span>{{ historyDetail.item.agent === "claude" ? t("common.products.claude") : t("common.products.codex") }}</span>
                 <time :datetime="historyDetail.item.lastActiveAt">{{ relativeHistoryTime(historyDetail.item.lastActiveAt) }}</time>
               </div>
               <h2>{{ historyItemTitle(historyDetail.item) }}</h2>
               <small :title="historyDetail.item.cwd">{{ historyDetail.item.cwd }}</small>
             </header>
             <div v-if="!historyDetail.turns.length" class="session-ai-history-detail-state">
-              <span>这条过往对话没有可展示的详情。</span>
+              <span>{{ t("sessions.panel.noHistoryDetail") }}</span>
             </div>
             <div v-else class="session-ai-history-turns">
               <article v-for="turn in historyDetail.turns" :key="turn.id" class="session-ai-history-turn">
@@ -353,7 +353,7 @@
                   <MarkdownContent :content="turn.userPrompt" />
                 </section>
                 <section v-if="turn.lastMessage || turn.summary" class="session-ai-history-message session-ai-history-message-assistant">
-                  <small>{{ historyDetail.item.agent === "claude" ? "Claude" : "Codex" }}</small>
+                  <small>{{ historyDetail.item.agent === "claude" ? t("common.products.claude") : t("common.products.codex") }}</small>
                   <MarkdownContent :content="turn.lastMessage || turn.summary || ''" />
                 </section>
               </article>
@@ -372,15 +372,15 @@
             :provider="historyDetail.item.agent"
             :permission-key="historyAiSessionPermissionKey(instance.id, historyDetail.item.id)"
             :default-permission-mode="instance.config.defaultCodexPermissionMode"
-            placeholder="发送消息以继续这条对话"
+            :placeholder="t('sessions.panel.continueConversation')"
             @run="sendHistoryMessage"
           />
         </template>
       </section>
       <section v-else-if="showNewSession" class="session-ai-detail session-ai-new-detail">
         <div class="session-ai-new-start">
-          <h1 class="session-ai-new-title">Start with an idea</h1>
-          <div class="session-ai-new-dialog" role="group" aria-label="New AI session">
+          <h1 class="session-ai-new-title">{{ t("sessions.panel.startIdea") }}</h1>
+          <div class="session-ai-new-dialog" role="group" :aria-label="t('sessions.panel.newSession')">
             <div class="session-ai-new-pills">
               <DropdownMenu>
                 <DropdownMenuTrigger as-child>
@@ -391,13 +391,13 @@
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent class="session-ai-project-menu" align="start" :side-offset="8">
-                  <input v-model="newSessionFolderQuery" class="session-ai-project-search" placeholder="Search projects" aria-label="Search projects" />
+                  <input v-model="newSessionFolderQuery" class="session-ai-project-search" :placeholder="t('sessions.panel.searchProjects')" :aria-label="t('sessions.panel.searchProjects')" />
                   <DropdownMenuItem v-for="folder in filteredNewSessionFolders" :key="folder.id" class="session-ai-project-item" @select="newSessionFolderId = folder.id">
                     <Folder :size="15" /><span>{{ folder.name }}</span><Check v-if="newSessionFolderId === folder.id" :size="15" />
                   </DropdownMenuItem>
-                  <p v-if="!filteredNewSessionFolders.length" class="session-ai-project-empty">No projects found</p>
+                  <p v-if="!filteredNewSessionFolders.length" class="session-ai-project-empty">{{ t("sessions.panel.noProjects") }}</p>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem class="session-ai-project-item" @select="openNewProject"><Plus :size="15" /><span>New project</span></DropdownMenuItem>
+                  <DropdownMenuItem class="session-ai-project-item" @select="openNewProject"><Plus :size="15" /><span>{{ t("sessions.panel.newProject") }}</span></DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
               <DropdownMenu>
@@ -405,7 +405,7 @@
                   <button type="button" class="session-ai-app-pill" :disabled="launchingNewSession">
                     <Bot v-if="newSessionApp === 'claude'" :size="14" />
                     <Code2 v-else :size="14" />
-                    <strong>{{ newSessionApp === "claude" ? "Claude" : "Codex" }}</strong>
+                    <strong>{{ newSessionApp === "claude" ? t("common.products.claude") : t("common.products.codex") }}</strong>
                     <ChevronDown :size="13" />
                   </button>
                 </DropdownMenuTrigger>
@@ -429,7 +429,7 @@
               :provider="newSessionApp === 'claude' ? 'claude' : 'codex'"
               :permission-mode="newSessionPermissionMode"
               :default-permission-mode="instance.config.defaultCodexPermissionMode"
-              placeholder="Do anything"
+              :placeholder="t('sessions.panel.promptPlaceholder')"
               @update:permission-mode="updateNewSessionPermissionMode"
               @run="createNewSession"
             />
@@ -443,8 +443,9 @@
             <AiSessionTurnNavigator
               :count="promptCount(selectedSession)"
               :index="promptIndexFor(selectedSession)"
-              :previous-label="`Previous user message for ${selectedSession.agent}`"
-              :next-label="`Next user message for ${selectedSession.agent}`"
+              :aria-label="t('sessions.composer.navigation')"
+              :previous-label="t('sessions.actions.previousMessage', { agent: selectedSession.agent })"
+              :next-label="t('sessions.actions.nextMessage', { agent: selectedSession.agent })"
               @previous="previousPrompt(selectedSession)"
               @next="nextPrompt(selectedSession)"
             />
@@ -461,23 +462,23 @@
             <TooltipProvider :delay-duration="120">
               <Tooltip>
                 <TooltipTrigger as-child>
-                  <button type="button" title="Session details" aria-label="Session details">
+                  <button type="button" :title="t('sessions.detail.sessionDetails')" :aria-label="t('sessions.detail.sessionDetails')">
                     <CircleHelp :size="15" />
                   </button>
                 </TooltipTrigger>
                 <TooltipContent class="session-ai-info-tooltip" align="end" side="bottom" :side-offset="8">
                   <dl>
                     <div>
-                      <dt>Workspace</dt>
-                      <dd>{{ selectedSession.cwd || "Unknown" }}</dd>
+                      <dt>{{ t("sessions.detail.workspace") }}</dt>
+                      <dd>{{ selectedSession.cwd || t("sessions.detail.unknown") }}</dd>
                     </div>
                     <div>
-                      <dt>Session</dt>
+                      <dt>{{ t("sessions.detail.session") }}</dt>
                       <dd>{{ selectedSession.providerSessionId || selectedSession.id }}</dd>
                     </div>
                     <div>
-                      <dt>App Binding</dt>
-                      <dd>{{ selectedSession.appSessionId || "Not bound" }}</dd>
+                      <dt>{{ t("sessions.detail.appBinding") }}</dt>
+                      <dd>{{ selectedSession.appSessionId || t("sessions.detail.notBound") }}</dd>
                     </div>
                   </dl>
                 </TooltipContent>
@@ -486,8 +487,8 @@
             <button
               v-if="aiSessionAppTab(instance, selectedSession)"
               type="button"
-              title="Open app session"
-              aria-label="Open app session"
+              :title="t('sessions.actions.openApp')"
+              :aria-label="t('sessions.actions.openApp')"
               @click="$emit('openAiSessionApp', instance, selectedSession)"
             >
               <ExternalLink :size="15" />
@@ -495,8 +496,8 @@
           </div>
           <header ref="detailHeaderEl">
             <div>
-              <span>{{ aiSessionAppDisplayName(aiSessionAppTab(instance, selectedSession), selectedSession.agent) }}</span>
-              <strong>{{ aiSessionStatusLabel(selectedSession) }}</strong>
+              <span>{{ aiSessionAppDisplayName(aiSessionAppTab(instance, selectedSession), selectedSession.agent, t) }}</span>
+              <strong>{{ aiSessionStatusLabel(selectedSession, t) }}</strong>
             </div>
             <section ref="detailPromptSectionEl" class="session-ai-detail-block session-ai-detail-block-user">
               <div
@@ -504,7 +505,7 @@
                 class="session-ai-detail-prompt-content"
                 :class="{ expanded: promptExpanded }"
               >
-                <MarkdownContent :content="displayAiSessionTitle(selectedSession, promptIndexFor(selectedSession))" />
+                <MarkdownContent :content="displayAiSessionTitle(selectedSession, promptIndexFor(selectedSession), t)" />
               </div>
               <button
                 v-if="promptHasOverflow"
@@ -513,7 +514,7 @@
                 :aria-expanded="promptExpanded"
                 @click="promptExpanded = !promptExpanded"
               >
-                <span>{{ promptExpanded ? "收起" : "展开" }}</span>
+                <span>{{ promptExpanded ? t("sessions.detail.collapsePrompt") : t("sessions.detail.expand") }}</span>
                 <ChevronDown :size="13" :class="{ open: promptExpanded }" />
               </button>
             </section>
@@ -531,7 +532,7 @@
             :instance-id="instance.id"
             file-links
             :is-latest="promptIndexFor(selectedSession) >= promptCount(selectedSession) - 1"
-            :response-content="displayAiSessionResponse(selectedSession, promptIndexFor(selectedSession))"
+            :response-content="displayAiSessionResponse(selectedSession, promptIndexFor(selectedSession), t)"
             :session="selectedSession"
             @open-file="openMarkdownFile(selectedSession, $event)"
             @steer-queued-message="steerQueuedMessage(selectedSession.id, $event)"
@@ -546,8 +547,8 @@
           class="session-ai-follow-latest"
           size="icon"
           variant="secondary"
-          aria-label="Back to latest"
-          title="Back to latest"
+          :aria-label="t('sessions.panel.backLatest')"
+          :title="t('sessions.panel.backLatest')"
           @click="followLatest"
         >
           <ArrowDown :size="16" />
@@ -594,6 +595,10 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type CSSProperties } from "vue";
+import { useI18n } from "vue-i18n";
+import { formatRelativeTime } from "../../../i18n/presentation";
+import type { SupportedLocale } from "../../../i18n/locale";
+import { translateApiError } from "../../../i18n/apiError";
 import { ArrowDown, ArrowLeft, Ban, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Code2, ExternalLink, Filter, Folder, History, LoaderCircle, MessageSquare, MoreHorizontal, Plus, SlidersHorizontal, Square, X, Zap } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
@@ -618,7 +623,7 @@ import { showControlPlaneToast } from "../useControlPlaneToasts";
 import NodeStorageFolderPickerDialog from "../settings/NodeStorageFolderPickerDialog.vue";
 import RepositoryEnvironment from "./RepositoryEnvironment.vue";
 import { useNodeStorageFolderPicker } from "../settings/useNodeStorageFolderPicker";
-import { clearAiSessionDraft, loadAiSessionDraftPayload, persistAiSessionDraftPayload } from "../useAiSessionDraft";
+import { aiSessionMessageText, clearAiSessionDraft, loadAiSessionDraftPayload, persistAiSessionDraftPayload } from "../useAiSessionDraft";
 import {
   aiSessionPermissionKey,
   clearAiSessionPermissionMode,
@@ -687,6 +692,7 @@ const props = defineProps<{
   nodeLocalFolders?: NodeLocalFolder[];
   selectedAiSession: (instance: InstanceBoardItem, sessions?: AiSessionSummary[]) => AiSessionSummary | undefined;
 }>();
+const { locale, t } = useI18n();
 
 const visibleAiSessions = computed(() => props.instance.aiSessions?.sessions || []);
 const sessionStatusFilter = ref<SessionStatusFilter>("all");
@@ -695,11 +701,11 @@ const sortSessionsByStatus = ref(storedSortByStatus());
 const statusFilterOptions = computed(() => {
   const sessions = visibleAiSessions.value;
   return [
-    { key: "all", label: "All statuses", count: sessions.length },
-    { key: "active", label: "Active", count: sessions.filter((session) => sessionStatusGroup(session) === "active").length },
-    { key: "waiting", label: "Waiting", count: sessions.filter((session) => sessionStatusGroup(session) === "waiting").length },
-    { key: "idle", label: "Idle", count: sessions.filter((session) => sessionStatusGroup(session) === "idle").length },
-    { key: "problem", label: "Problem", count: sessions.filter((session) => sessionStatusGroup(session) === "problem").length },
+    { key: "all", label: t("sessions.panel.allStatuses"), count: sessions.length },
+    { key: "active", label: t("sessions.panel.active"), count: sessions.filter((session) => sessionStatusGroup(session) === "active").length },
+    { key: "waiting", label: t("sessions.panel.waiting"), count: sessions.filter((session) => sessionStatusGroup(session) === "waiting").length },
+    { key: "idle", label: t("sessions.status.idle"), count: sessions.filter((session) => sessionStatusGroup(session) === "idle").length },
+    { key: "problem", label: t("sessions.panel.problem"), count: sessions.filter((session) => sessionStatusGroup(session) === "problem").length },
   ] satisfies Array<{ key: SessionStatusFilter; label: string; count: number }>;
 });
 const selectedStatusFilter = computed(() => statusFilterOptions.value.find((option) => option.key === sessionStatusFilter.value) || statusFilterOptions.value[0]);
@@ -741,7 +747,7 @@ watch(() => props.instance.aiSessions?.sessions, (sessions) => {
 
 async function handleRepositoryAiSessionStarted(result: RepositoryAiSessionLaunchResult) {
   pendingRepositoryAppSessionId.value = result.appSessionId;
-  showControlPlaneToast("AI session started in the selected worktree.", "success");
+  showControlPlaneToast(t("sessions.panel.startedWorktree"), "success");
   for (let attempt = 0; attempt < 20 && pendingRepositoryAppSessionId.value; attempt += 1) {
     await refreshBoard();
     const session = props.instance.aiSessions?.sessions.find((item) => item.appSessionId === result.appSessionId);
@@ -776,7 +782,7 @@ const newProjectPicker = useNodeStorageFolderPicker({
     newSessionFolderId.value = folder.id;
     return folder;
   },
-  errorText: (error) => error instanceof Error ? error.message : String(error),
+  errorText: (error) => translateApiError(error, t),
   loadFolders: listNodeFolderTree,
   refresh: async () => {
     await queryClient.invalidateQueries({ queryKey: ["control-plane-node-local-folders", props.instance.nodeId] });
@@ -790,7 +796,7 @@ const newSessionFolder = computed(() => newSessionFolders.value.find((folder) =>
 const newSessionProjectLabel = computed(() => {
   if (newSessionFolder.value?.name) return newSessionFolder.value.name;
   const sourcePath = props.instance.source.type === "local-folder" ? props.instance.source.path : "";
-  return sourcePath?.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "Choose project";
+  return sourcePath?.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || t("sessions.panel.chooseProject");
 });
 const queryClient = useQueryClient();
 const sidebarEl = ref<HTMLElement>();
@@ -934,7 +940,7 @@ function groupAiSessionsByPath(sessions: AiSessionSummary[]) {
 function groupAiSessionHistoryByPath(items: AiSessionHistoryItem[]) {
   const groups = new Map<string, AiSessionHistoryItem[]>();
   for (const item of items) {
-    const path = item.cwd?.trim() || "Unknown path";
+    const path = item.cwd?.trim() || "";
     groups.set(path, [...(groups.get(path) || []), item]);
   }
   return [...groups.entries()]
@@ -959,12 +965,12 @@ const displayedHistoryGroups = computed<AiSessionHistoryPathGroup[]>(() => group
 const selectedHistoryItem = computed(() => historyItems.value.find((item) => item.id === selectedHistoryId.value));
 
 function aiSessionPath(session: AiSessionSummary) {
-  return session.cwd?.trim() || "Unknown path";
+  return session.cwd?.trim() || "";
 }
 
 function aiSessionPathLabel(path: string) {
-  if (path === "Unknown path") {
-    return { label: path, parentLabel: "" };
+  if (!path) {
+    return { label: t("sessions.board.unknownPath"), parentLabel: "" };
   }
   const normalized = path.replace(/[\\/]+$/, "");
   const index = Math.max(normalized.lastIndexOf("/"), normalized.lastIndexOf("\\"));
@@ -1165,7 +1171,7 @@ async function loadHistory() {
       historyDetailError.value = "";
     }
   } catch (error) {
-    historyError.value = error instanceof Error ? error.message : "无法读取过往对话。";
+    historyError.value = translateApiError(error, t, t("sessions.panel.historyLoadFailed"));
   } finally {
     historyLoading.value = false;
   }
@@ -1189,7 +1195,7 @@ async function selectHistoryItem(item: AiSessionHistoryItem) {
     }
   } catch (error) {
     if (revision === historyDetailRevision && historyMode.value && selectedHistoryId.value === item.id) {
-      historyDetailError.value = error instanceof Error ? error.message : "无法读取对话详情。";
+      historyDetailError.value = translateApiError(error, t, t("sessions.panel.historyDetailFailed"));
     }
   } finally {
     if (revision === historyDetailRevision) historyDetailLoading.value = false;
@@ -1197,19 +1203,11 @@ async function selectHistoryItem(item: AiSessionHistoryItem) {
 }
 
 function historyItemTitle(item: AiSessionHistoryItem) {
-  return item.title?.trim() || item.userPrompt?.trim() || item.lastMessage?.trim() || "未命名对话";
+  return item.title?.trim() || item.userPrompt?.trim() || item.lastMessage?.trim() || t("sessions.panel.unnamedConversation");
 }
 
 function relativeHistoryTime(value: string) {
-  const elapsed = Math.max(0, Date.now() - Date.parse(value));
-  const minutes = Math.floor(elapsed / 60_000);
-  if (minutes < 1) return "刚刚";
-  if (minutes < 60) return `${minutes} 分钟前`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} 小时前`;
-  const days = Math.floor(hours / 24);
-  if (days < 30) return `${days} 天前`;
-  return new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric" }).format(new Date(value));
+  return formatRelativeTime(value, Date.now(), locale.value as SupportedLocale);
 }
 
 async function resumeHistorySession(item: AiSessionHistoryItem) {
@@ -1227,7 +1225,7 @@ async function resumeHistorySession(item: AiSessionHistoryItem) {
     await nextTick();
     session = findAuthoritativeSession();
   }
-  if (!session) throw new Error("对话已经启动，但运行状态尚未确认，请稍后重试。");
+  if (!session) throw new Error(t("sessions.panel.resumePending"));
   return session;
 }
 
@@ -1242,7 +1240,7 @@ async function sendHistoryMessage(permissionMode?: AiSessionPermissionMode) {
     await sendAiSessionMessage(
       props.instance.id,
       session.id,
-      message || "请查看附件。",
+      aiSessionMessageText(message),
       undefined,
       attachments,
       [],
@@ -1257,7 +1255,7 @@ async function sendHistoryMessage(permissionMode?: AiSessionPermissionMode) {
     emit("selectAiSession", props.instance.id, session.id);
     await leaveHistoryMode();
   } catch (error) {
-    showControlPlaneToast(error instanceof Error ? error.message : "无法继续该对话。");
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.continueFailed")));
   } finally {
     resumingHistoryId.value = "";
   }
@@ -1297,7 +1295,7 @@ async function updateNewSessionPermissionMode(permissionMode: AiSessionPermissio
     await refreshBoard();
   } catch (error) {
     newSessionPermissionMode.value = previousPermissionMode;
-    showControlPlaneToast(error instanceof Error ? error.message : "Failed to update the default Codex permission mode.");
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.defaultPermissionFailed")));
   } finally {
     savingNewSessionPermission.value = false;
   }
@@ -1327,12 +1325,12 @@ async function createNewSession(permissionMode?: AiSessionPermissionMode) {
       );
       if (!session) await new Promise((resolve) => window.setTimeout(resolve, 500));
     }
-    if (!session) throw new Error("The new AI session is still starting. Please try again in a moment.");
+    if (!session) throw new Error(t("sessions.panel.starting"));
     const attachments = await uploadMessageAttachments(props.instance.id, session.id);
     await sendAiSessionMessage(
       props.instance.id,
       session.id,
-      message || "请查看附件。",
+      aiSessionMessageText(message),
       undefined,
       attachments,
       referencesForBindings(newSessionDraft.value, messageMentionBindings.value),
@@ -1348,7 +1346,7 @@ async function createNewSession(permissionMode?: AiSessionPermissionMode) {
     messageAttachments.value = [];
     newSessionOpen.value = false;
   } catch (error) {
-    showControlPlaneToast(error instanceof Error ? error.message : "Failed to start AI session.");
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.startFailed")));
   } finally {
     launchingNewSession.value = false;
   }
@@ -1386,7 +1384,7 @@ async function uploadAttachments(instanceId: string, sessionId: string, attachme
     if (attachment.source.type === "runtime-path") {
       return { id: attachment.id, kind: attachment.kind, name: attachment.name, mime: attachment.mime, size: attachment.size, source: attachment.source };
     }
-    if (!attachment.dataUrl) throw new Error(`Attachment content is unavailable: ${attachment.name}`);
+    if (!attachment.dataUrl) throw new Error(t("sessions.panel.attachmentUnavailable", { name: attachment.name }));
     const uploaded = await uploadAiSessionAttachment({ instanceId, sessionId, kind: attachment.kind, name: attachment.name, mime: attachment.mime, data: attachment.dataUrl });
     return { id: uploaded.id, kind: uploaded.kind, source: { type: "upload-ref" as const } };
   }));
@@ -1405,13 +1403,13 @@ async function sendSelectedSessionMessage(permissionMode?: AiSessionPermissionMo
   aiSessionActionBusy.value = true;
   try {
     const attachments = await uploadMessageAttachments(props.instance.id, session.id);
-    await sendAiSessionMessage(props.instance.id, session.id, message || "请查看附件。", undefined, attachments, referencesForBindings(messageDraft.value, messageMentionBindings.value), permissionMode);
+    await sendAiSessionMessage(props.instance.id, session.id, aiSessionMessageText(message), undefined, attachments, referencesForBindings(messageDraft.value, messageMentionBindings.value), permissionMode);
     clearAiSessionDraft(session.id);
     messageDraft.value = "";
     messageMentionBindings.value = [];
     messageAttachments.value = [];
   } catch (error) {
-    showControlPlaneToast(error instanceof Error ? error.message : "Failed to send message.");
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.sendFailed")));
   } finally {
     aiSessionActionBusy.value = false;
   }
@@ -1426,10 +1424,10 @@ async function executeSelectedSessionCommand(input: AiSessionCommandInput) {
     clearAiSessionDraft(session.id);
     messageDraft.value = "";
     messageMentionBindings.value = [];
-    if (input.command === "goal" && !input.argument) showControlPlaneToast(result.value || "No active goal.");
+    if (input.command === "goal" && !input.argument) showControlPlaneToast(result.value || t("sessions.panel.noGoal"));
     await refreshBoard();
   } catch (error) {
-    showControlPlaneToast(error instanceof Error ? error.message : "Failed to run command.");
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.commandFailed")));
   } finally {
     aiSessionActionBusy.value = false;
   }
@@ -1444,29 +1442,29 @@ async function steerMessageDraft() {
   aiSessionActionBusy.value = true;
   try {
     const attachments = await uploadMessageAttachments(props.instance.id, session.id);
-    await sendAiSessionMessage(props.instance.id, session.id, message || "请查看附件。", "steer", attachments, referencesForBindings(messageDraft.value, messageMentionBindings.value));
+    await sendAiSessionMessage(props.instance.id, session.id, aiSessionMessageText(message), "steer", attachments, referencesForBindings(messageDraft.value, messageMentionBindings.value));
     clearAiSessionDraft(session.id);
     messageDraft.value = "";
     messageMentionBindings.value = [];
     messageAttachments.value = [];
     await refreshBoard();
   } catch (error) {
-    showControlPlaneToast(error instanceof Error ? error.message : "Failed to steer message.");
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.steerFailed")));
   } finally {
     aiSessionActionBusy.value = false;
   }
 }
 
 async function steerQueuedMessage(sessionId: string, queueId: string) {
-  await runQueueAction(() => steerAiSessionQueuedMessage(props.instance.id, sessionId, queueId), "Failed to steer queued message.");
+  await runQueueAction(() => steerAiSessionQueuedMessage(props.instance.id, sessionId, queueId), t("sessions.panel.steerQueuedFailed"));
 }
 
 async function retryQueuedMessage(sessionId: string, queueId: string) {
-  await runQueueAction(() => retryAiSessionQueuedMessage(props.instance.id, sessionId, queueId), "Failed to retry queued message.");
+  await runQueueAction(() => retryAiSessionQueuedMessage(props.instance.id, sessionId, queueId), t("sessions.panel.retryQueuedFailed"));
 }
 
 async function removeQueuedMessage(sessionId: string, queueId: string) {
-  await runQueueAction(() => removeAiSessionQueuedMessage(props.instance.id, sessionId, queueId), "Failed to remove queued message.");
+  await runQueueAction(() => removeAiSessionQueuedMessage(props.instance.id, sessionId, queueId), t("sessions.panel.removeQueuedFailed"));
 }
 
 async function runQueueAction(action: () => Promise<unknown>, message: string) {
@@ -1478,7 +1476,7 @@ async function runQueueAction(action: () => Promise<unknown>, message: string) {
     await action();
     await refreshBoard();
   } catch (error) {
-    showControlPlaneToast(error instanceof Error ? error.message : message);
+    showControlPlaneToast(translateApiError(error, t, message));
   } finally {
     aiSessionActionBusy.value = false;
   }
@@ -1494,7 +1492,7 @@ async function interruptSelectedSession() {
     await interruptAiSession(props.instance.id, session.id);
     await refreshBoard();
   } catch (error) {
-    showControlPlaneToast(error instanceof Error ? error.message : "Failed to stop AI session.");
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.stopFailed")));
   } finally {
     aiSessionActionBusy.value = false;
   }
@@ -1516,7 +1514,7 @@ async function resolveApproval(session: AiSessionSummary, decision: "allow" | "d
     await resolveAiSessionApproval(props.instance.id, session.id, decision);
     await refreshBoard();
   } catch (error) {
-    showControlPlaneToast(error instanceof Error ? error.message : "Failed to resolve approval.");
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.approvalFailed")));
   } finally {
     aiSessionActionBusy.value = false;
   }
@@ -1538,7 +1536,7 @@ async function closeAppSession(session: AiSessionSummary) {
     await stopAppSession(props.instance.id, appSessionId);
     await refreshBoard();
   } catch (error) {
-    showControlPlaneToast(error instanceof Error ? error.message : "Failed to close app session.");
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.closeAppFailed")));
     await refreshBoard();
   } finally {
     stoppingAppSessionId.value = "";
@@ -1563,7 +1561,7 @@ function triggerActionKey(session: AiSessionSummary, configHash: string) {
 
 function triggerButtonTitle(session: AiSessionSummary) {
   const count = boundTriggers(session).length;
-  return count ? `${count} triggers bound` : "Add trigger";
+  return count ? t("sessions.actions.triggersBound", { count }) : t("sessions.actions.addTrigger");
 }
 
 async function toggleTrigger(session: AiSessionSummary, configHash: string) {

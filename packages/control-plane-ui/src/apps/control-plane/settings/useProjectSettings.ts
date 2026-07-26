@@ -2,6 +2,8 @@ import { computed, reactive, ref } from "vue";
 import { createProject, deleteProject } from "../../../api/queries";
 import type { Project } from "../../../api/types";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
+import type { Translate } from "../../../i18n/status.ts";
+import { translateApiError } from "../../../i18n/apiError.ts";
 
 const DEFAULT_SELECT_VALUE = "__default__";
 
@@ -10,9 +12,11 @@ type UseProjectSettingsInput = {
   onProjectDeleted: (projectId: string) => void;
   projectInUse: (projectId: string) => boolean;
   refresh: () => Promise<void>;
+  translate: Translate;
 };
 
-export function useProjectSettings({ errorText, onProjectDeleted, projectInUse, refresh }: UseProjectSettingsInput) {
+export function useProjectSettings({ errorText, onProjectDeleted, projectInUse, refresh, translate: t }: UseProjectSettingsInput) {
+  const translateError = (error: unknown) => translateApiError(error, t, errorText(error));
   const creatingSettingsProject = ref(false);
   const deletingProjectId = ref("");
   const settingsProjectSuccess = ref("");
@@ -77,14 +81,14 @@ export function useProjectSettings({ errorText, onProjectDeleted, projectInUse, 
         ...(settingsProject.defaultImageId ? { defaultImageId: settingsProject.defaultImageId } : {}),
         ...(settingsProject.defaultRuntimeId ? { defaultRuntimeId: settingsProject.defaultRuntimeId } : {}),
       });
-      settingsProjectSuccess.value = `${project.name} created.`;
+      settingsProjectSuccess.value = t("settings.projectRegistry.created", { name: project.name });
       settingsProject.name = "";
       settingsProject.url = "";
       settingsProject.defaultImageId = "";
       settingsProject.defaultRuntimeId = "";
       await refresh();
     } catch (error) {
-      showControlPlaneToast(errorText(error));
+      showControlPlaneToast(translateError(error));
     } finally {
       creatingSettingsProject.value = false;
     }
@@ -94,7 +98,7 @@ export function useProjectSettings({ errorText, onProjectDeleted, projectInUse, 
     if (projectInUse(project.id) || deletingProjectId.value) {
       return;
     }
-    if (!window.confirm(`Delete project ${project.name}?`)) {
+    if (!window.confirm(t("settings.projectRegistry.deleteConfirm", { name: project.name }))) {
       return;
     }
     deletingProjectId.value = project.id;
@@ -103,14 +107,14 @@ export function useProjectSettings({ errorText, onProjectDeleted, projectInUse, 
       onProjectDeleted(project.id);
       await refresh();
     } catch (error) {
-      showControlPlaneToast(errorText(error));
+      showControlPlaneToast(translateError(error));
     } finally {
       deletingProjectId.value = "";
     }
   }
 
   function projectSourceLabel(project: { source: { type: string; path?: string; url?: string } }) {
-    return project.source.type === "local-folder" ? project.source.path || "local folder" : project.source.url || project.source.type;
+    return project.source.type === "local-folder" ? project.source.path || t("settings.projectRegistry.localFolder") : project.source.url || project.source.type;
   }
 
   return {

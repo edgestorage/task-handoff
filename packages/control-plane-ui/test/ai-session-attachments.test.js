@@ -9,7 +9,7 @@ test("composer supports generic files and Local Runtime path references", () => 
   assert.match(composer, /file\.size >= MAX_INLINE_FILE_BYTES/);
   assert.match(composer, /runtimePathAccess === "desktop-local"/);
   assert.match(composer, /runtimePathWithinWorkspace\(filePath, props\.mentionContext\.cwd\)/);
-  assert.match(composer, /Local Runtime 路径附件必须位于当前 AI session 工作区内/);
+  assert.match(composer, /t\("sessions\.composer\.runtimePathOutside"\)/);
   assert.match(composer, /source: \{ type: "runtime-path", path: runtimePath \}/);
   assert.match(composer, /attachment\.kind === 'file'/);
 });

@@ -16,10 +16,11 @@ test("AI session details expose compact message navigation without a visible lab
 });
 
 test("AI session details render messages without redundant section titles", () => {
-  for (const detail of [panel, floatingDock]) {
-    assert.doesNotMatch(detail, />\s*User Message\s*</);
-    assert.doesNotMatch(detail, />\s*AI Response \/ Progress\s*</);
-  }
+  assert.match(panel, /class="session-ai-detail-prompt-content"[\s\S]*?<MarkdownContent :content="displayAiSessionTitle/);
+  assert.match(panel, /<AiSessionResult[\s\S]*?:response-content="displayAiSessionResponse/);
+  assert.match(floatingDock, /class="ai-board-floating-prompt-content"[\s\S]*?<MarkdownContent :content="displayAiSessionTitle/);
+  assert.match(floatingDock, /<AiSessionResult[\s\S]*?:response-content="displayAiSessionResponse/);
+  for (const detail of [panel, floatingDock]) assert.doesNotMatch(detail, /message-section-title|response-section-title/);
 });
 
 test("cards and details count the same display turns", () => {

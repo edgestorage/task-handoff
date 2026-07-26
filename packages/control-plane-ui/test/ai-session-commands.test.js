@@ -35,16 +35,16 @@ test("command parsing is disabled for non-Codex sessions", () => {
 
 test("the composer plus button opens the same command menu as the command trigger", () => {
   assert.match(composer, /function openCommandMenu\(\)[\s\S]*emit\("update:modelValue", trigger\)[\s\S]*commandOpen\.value = true/);
-  assert.match(composer, /aria-label="Open command menu"[\s\S]*@click="openCommandMenu"/);
-  assert.doesNotMatch(composer, /add-context|Add context/);
+  assert.match(composer, /:aria-label="t\('sessions\.composer\.openCommands'\)"[\s\S]*@click="openCommandMenu"/);
+  assert.doesNotMatch(composer, /add-context/);
 });
 
 test("the Codex composer exposes exactly three permission modes beside the plus button", () => {
   assert.match(composer, /class="ai-session-composer__leading">[\s\S]*<Plus :size="18" \/>[\s\S]*<DropdownMenu v-if="permissionProvider === 'codex'">/);
-  assert.match(composer, /value: "ask", label: "Ask for approval"/);
-  assert.match(composer, /value: "auto-review", label: "Approve for me"/);
-  assert.match(composer, /value: "full-access", label: "Full access"/);
-  assert.doesNotMatch(composer, /How should ChatGPT actions be approved|Learn more|Custom \(config\.toml\)/);
+  assert.match(composer, /value: "ask", label: t\("sessions\.permission\.ask"\)/);
+  assert.match(composer, /value: "auto-review", label: t\("sessions\.permission\.autoReview"\)/);
+  assert.match(composer, /value: "full-access", label: t\("sessions\.permission\.fullAccess"\)/);
+  assert.doesNotMatch(composer, /config\.toml|permissionOptions\.value\.push/);
   assert.match(composer, /emit\("run", permissionProvider\.value === "codex" \? permissionMode\.value : undefined\)/);
   assert.match(composer, /useAiSessionPermissionMode/);
   assert.match(composer, /props\.permissionMode !== undefined[\s\S]*emit\("update:permissionMode", value\)/);
@@ -55,7 +55,7 @@ test("the Codex composer exposes exactly three permission modes beside the plus 
 });
 
 test("command and mention triggers share one settings save", () => {
-  assert.match(appearance, />Composer shortcuts</);
+  assert.match(appearance, /t\("settings\.composer\.title"\)/);
   assert.match(appearance, /@click="emit\('saveTriggers'\)"/);
   assert.match(settings, /updateControlPlaneSettings\(\{[\s\S]*commandTrigger: commandTrigger\.value,[\s\S]*mentionTrigger: mentionTrigger\.value/);
   assert.doesNotMatch(settings, /saveMentionTrigger|saveCommandTrigger/);

@@ -1,10 +1,10 @@
 <template>
-  <span v-if="count > 1" class="ai-session-turn-navigator" :data-tone="tone" role="group" :aria-label="ariaLabel">
-    <button type="button" :aria-label="previousLabel" :disabled="index <= 0" @click="$emit('previous')">
+  <span v-if="count > 1" class="ai-session-turn-navigator" :data-tone="tone" role="group" :aria-label="ariaLabel || t('sessions.composer.navigation')">
+    <button type="button" :aria-label="previousLabel || t('sessions.actions.previousMessage', { agent: 'AI' })" :disabled="index <= 0" @click="$emit('previous')">
       <ChevronLeft :size="13" />
     </button>
     <small>{{ index + 1 }} / {{ count }}</small>
-    <button type="button" :aria-label="nextLabel" :disabled="index >= count - 1" @click="$emit('next')">
+    <button type="button" :aria-label="nextLabel || t('sessions.actions.nextMessage', { agent: 'AI' })" :disabled="index >= count - 1" @click="$emit('next')">
       <ChevronRight :size="13" />
     </button>
   </span>
@@ -12,6 +12,9 @@
 
 <script setup lang="ts">
 import { ChevronLeft, ChevronRight } from "@lucide/vue";
+import { useI18n } from "vue-i18n";
+
+const { t } = useI18n();
 
 withDefaults(defineProps<{
   ariaLabel?: string;
@@ -21,9 +24,9 @@ withDefaults(defineProps<{
   previousLabel?: string;
   tone?: "board" | "panel";
 }>(), {
-  ariaLabel: "AI session message navigation",
-  nextLabel: "Next user message",
-  previousLabel: "Previous user message",
+  ariaLabel: undefined,
+  nextLabel: undefined,
+  previousLabel: undefined,
   tone: "panel",
 });
 

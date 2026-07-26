@@ -6,9 +6,9 @@ const runtimeStep = fs.readFileSync(new URL("../src/apps/control-plane/new-insta
 const newInstanceModal = fs.readFileSync(new URL("../src/apps/control-plane/NewInstanceModal.vue", import.meta.url), "utf8");
 
 test("new instances default to no model while preserving global default and explicit choices", () => {
-  assert.match(runtimeStep, />Global default</);
-  assert.match(runtimeStep, />No model</);
-  assert.ok(runtimeStep.indexOf(">No model<") < runtimeStep.indexOf(">Global default<"));
+  assert.match(runtimeStep, /instances\.create\.globalDefault/);
+  assert.match(runtimeStep, /instances\.create\.noModel/);
+  assert.ok(runtimeStep.indexOf('t("instances.create.noModel")') < runtimeStep.indexOf('t("instances.create.globalDefault")'));
   assert.match(runtimeStep, /value === noModelValue \? null : value/);
   assert.match(newInstanceModal, /codexModelHash: null/);
   assert.match(newInstanceModal, /claudeModelHash: null/);

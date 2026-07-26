@@ -134,18 +134,17 @@ test("Apps settings exposes capability states, task feedback, safe confirmation,
   for (const value of ["queued", "succeeded", "failed", "cancelled", "interrupted"])
     assert.match(dialog, new RegExp(value));
   assert.match(dialog, /insufficient|Privilege|installReason|uninstallReason/i);
-  assert.match(dialog, /Running app sessions must be stopped first/);
-  assert.match(dialog, /User configuration, AI sessions, and workspaces are preserved/);
-  assert.match(dialog, /Custom launchers/);
-  assert.match(dialog, /cannot install software/);
+  assert.match(dialog, /t\("instances\.settings\.uninstallDescription"\)/);
+  assert.match(dialog, /t\("instances\.settings\.customLaunchers"\)/);
+  assert.match(dialog, /t\("instances\.settings\.customLaunchersDescription"\)/);
   assert.match(dialog, /AlertDialogContent/);
   assert.match(dialog, /Progress/);
-  assert.match(dialog, /Live installer output/);
+  assert.match(dialog, /t\("instances\.settings\.liveInstallerOutput"\)/);
   assert.match(dialog, /executionOutput/);
-  assert.match(dialog, /Managed app filters/);
+  assert.match(dialog, /t\('instances\.settings\.appFilters'\)/);
   assert.match(dialog, /filteredManagedApps/);
-  assert.match(dialog, /Refresh managed apps/);
-  assert.match(dialog, /Confirm install/);
+  assert.match(dialog, /t\('instances\.settings\.refreshApps'\)/);
+  assert.match(dialog, /t\("instances\.settings\.confirmInstall"\)/);
   assert.match(dialog, /<Button type="button" :disabled="Boolean\(operationSubmitting\)" @click="confirmAppOperation">/);
   assert.doesNotMatch(dialog, /AlertDialogAction/);
   assert.match(dialog, /instance-app-confirmation-summary/);

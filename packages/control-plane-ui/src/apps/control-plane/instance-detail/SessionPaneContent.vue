@@ -6,11 +6,11 @@
           <RefreshCw v-if="instance.imageProvisioning?.phase !== 'failed'" :size="34" />
           <CircleAlert v-else :size="34" />
           <div>
-            <strong>{{ instanceStatusTitle(instance) }}</strong>
-            <span>{{ instanceStatusDetail(instance) }}</span>
+            <strong>{{ instanceStatusTitle(instance, t) }}</strong>
+            <span>{{ instanceStatusDetail(instance, t) }}</span>
           </div>
         </div>
-        <ol class="image-preparation-steps" aria-label="Image preparation stages">
+        <ol class="image-preparation-steps" :aria-label="t('instances.imagePull.preparationStages')">
           <li v-for="(step, index) in imagePreparationSteps" :key="step" :data-state="imagePreparationStepState(index)">
             <i>{{ index + 1 }}</i>
             <span>{{ step }}</span>
@@ -21,14 +21,14 @@
           class="session-status-image-pull"
           :progress="instance.imagePullProgress"
         />
-        <span v-else class="session-status-image-note">Waiting for detailed Docker output…</span>
+        <span v-else class="session-status-image-note">{{ t("instances.imagePull.waitingForOutput") }}</span>
       </div>
       <template v-else>
         <RefreshCw v-if="isInstanceStatusPending(instance)" :size="34" />
         <CircleAlert v-else-if="instance.status === 'failed' || instance.status === 'unhealthy'" :size="34" />
         <PowerOff v-else :size="34" />
-        <strong>{{ instanceStatusTitle(instance) }}</strong>
-        <span>{{ instanceStatusDetail(instance) }}</span>
+        <strong>{{ instanceStatusTitle(instance, t) }}</strong>
+        <span>{{ instanceStatusDetail(instance, t) }}</span>
       </template>
     </div>
     <AiSessionPanel
@@ -45,17 +45,17 @@
     <RepositoryChangesReviewTab v-else-if="session?.kind === 'repository' && session.source?.page === 'changes-review'" :instance-id="instance.id" :session="session" @open-workspace="$emit('openRepositoryWorkspace', $event)" />
     <RepositoryWorkspaceTab v-else-if="session?.kind === 'repository'" :instance-id="instance.id" :session="session" @open-workspace="$emit('openRepositoryWorkspace', $event)" />
     <div v-else-if="activeFrameUrl" class="session-preview-live">
-      <iframe class="session-preview-frame" :src="activeFrameUrl" :title="session?.label || 'App session'" allow="clipboard-read; clipboard-write; fullscreen" />
+      <iframe class="session-preview-frame" :src="activeFrameUrl" :title="session?.label || t('sessions.tabs.appSession')" allow="clipboard-read; clipboard-write; fullscreen" />
     </div>
     <div v-else-if="!activeTerminalSocketUrl" class="session-preview-body">
       <Terminal v-if="session?.kind === 'terminal'" :size="34" />
       <Monitor v-else :size="34" />
-      <strong>{{ previewTitle(instance) }}</strong>
+      <strong>{{ previewTitle(instance, t) }}</strong>
       <Button v-if="canLaunchApp" variant="outline" size="sm" class="session-preview-launch-button" :disabled="launchingApp" :title="appLaunchButtonTitle" @click="$emit('openLaunchMenu')">
         <Plus :size="15" />
-        <span>App</span>
+        <span>{{ t("sessions.tabs.app") }}</span>
       </Button>
-      <span v-else>{{ previewDetail(instance) }}</span>
+      <span v-else>{{ previewDetail(instance, t, locale as SupportedLocale) }}</span>
     </div>
     <SessionTerminalPreview
       v-for="terminalSession in terminalSessions"
@@ -70,6 +70,8 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
+import type { SupportedLocale } from "../../../i18n/locale";
 import { CircleAlert, Monitor, Plus, PowerOff, RefreshCw, Terminal } from "@lucide/vue";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, NodeLocalFolder } from "../../../api/types";
 import { Button } from "../../../components/ui/button";
@@ -81,6 +83,8 @@ import SessionTerminalPreview from "./SessionTerminalPreview.vue";
 import RepositoryChangesReviewTab from "./RepositoryChangesReviewTab.vue";
 import RepositoryWorkspaceTab from "./RepositoryWorkspaceTab.vue";
 import ImagePullStatus from "./ImagePullStatus.vue";
+
+const { locale, t } = useI18n();
 
 const props = defineProps<{
   appLaunchButtonTitle: string;
@@ -108,7 +112,11 @@ const terminalSessions = computed(() => props.tabs
   .filter((session) => session.kind === "terminal")
   .map((session) => ({ key: session.key, socketUrl: sessionTerminalSocketUrl(props.instance, session) }))
   .filter((session) => Boolean(session.socketUrl)));
-const imagePreparationSteps = ["Check image", "Pull layers", "Resolve digest"];
+const imagePreparationSteps = computed(() => [
+  t("instances.imagePull.checkImage"),
+  t("instances.imagePull.pullLayers"),
+  t("instances.imagePull.resolveDigest"),
+]);
 const showImagePreparation = computed(() => Boolean(
   props.instance.status !== "stopping"
   && props.instance.status !== "stopped"

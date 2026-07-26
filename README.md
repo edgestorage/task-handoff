@@ -59,6 +59,31 @@ before running `pnpm run docker:up:all`, so the container sees that host
 directory as `/workspace`. Keep this script local/ignored and do not change the
 default `compose.yml` workspace mount for this machine path.
 
+## Control Plane Language
+
+The control-plane UI supports English (`en-US`) and Simplified Chinese
+(`zh-CN`). To change the language, open **Settings → Appearance → Language**
+and choose **Follow system**, **English**, or **简体中文**. The interface updates
+immediately without reloading its control-plane data.
+
+The language choice is a browser-local preference. It is stored in
+`localStorage` under `task-handoff.control-plane.locale` and is not written to
+the control-plane server or shared with other browsers. An explicit English or
+Simplified Chinese choice takes precedence over browser language settings.
+
+With **Follow system** selected (the default), the UI checks
+`navigator.languages` in order and uses the first supported match. English
+language variants resolve to `en-US`; `zh`, Simplified Chinese, and mainland
+Chinese variants resolve to `zh-CN`. If no browser language is supported, the
+UI uses `en-US`. A browser language change is applied automatically while
+**Follow system** remains selected.
+
+English is also the translation fallback. If a Simplified Chinese translation
+is unexpectedly unavailable, the UI displays the corresponding English text
+instead of a translation key. Terminal output, logs, AI messages, repository
+content, and other user- or provider-supplied data remain unchanged regardless
+of the interface language.
+
 ## Server Web Install
 
 Server deployments run the control plane and the server-local node-agent as

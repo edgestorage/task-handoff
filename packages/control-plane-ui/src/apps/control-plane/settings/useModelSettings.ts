@@ -2,6 +2,8 @@ import { computed, reactive, ref } from "vue";
 import { createModel, createNodeModel, deleteModel, deleteNodeModel, reorderModels, updateModel, updateNodeModel } from "../../../api/queries";
 import type { ModelApp, ModelConfig, ModelLocation, Node } from "../../../api/types";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
+import type { Translate } from "../../../i18n/status.ts";
+import { translateApiError } from "../../../i18n/apiError.ts";
 
 type UseModelSettingsInput = {
   errorText: (error: unknown) => string;
@@ -9,9 +11,11 @@ type UseModelSettingsInput = {
   nodes: () => Node[];
   onModelDeleted: (modelId: string) => void;
   refresh: () => Promise<void>;
+  translate: Translate;
 };
 
-export function useModelSettings({ errorText, models, nodes, onModelDeleted, refresh }: UseModelSettingsInput) {
+export function useModelSettings({ errorText, models, nodes, onModelDeleted, refresh, translate: t }: UseModelSettingsInput) {
+  const translateError = (error: unknown) => translateApiError(error, t, errorText(error));
   const editingModelId = ref("");
   const savingModelId = ref("");
   const deletingModelId = ref("");
@@ -104,11 +108,11 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
           ? await createModel({ ...payload, key: settingsModel.key.trim() })
           : await createNodeModel(settingsModel.locationScope, { ...payload, key: settingsModel.key.trim() });
       }
-      modelSaveSuccess.value = `${saved.name} saved.`;
+      modelSaveSuccess.value = t("settings.modelRegistry.saved", { name: saved.name });
       resetModelForm();
       if (!refreshed) await refresh();
     } catch (error) {
-      showControlPlaneToast(errorText(error));
+      showControlPlaneToast(translateError(error));
     } finally {
       savingModelId.value = "";
     }
@@ -119,9 +123,9 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
       return;
     }
     const locationName = location.type === "control-plane"
-      ? "Control plane"
+      ? t("settings.modelRegistry.controlPlane")
       : nodes().find((node) => node.id === location.nodeId)?.name || location.nodeId;
-    if (!window.confirm(`Delete ${model.name} from ${locationName}? Other locations will be kept.`)) {
+    if (!window.confirm(t("settings.modelRegistry.deleteConfirm", { name: model.name, location: locationName }))) {
       return;
     }
     deletingModelId.value = model.id;
@@ -135,7 +139,7 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
       onModelDeleted(model.id);
       await refresh();
     } catch (error) {
-      showControlPlaneToast(errorText(error));
+      showControlPlaneToast(translateError(error));
     } finally {
       deletingModelId.value = "";
     }
@@ -155,7 +159,7 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
       await reorderModels(reordered.map((model) => model.id));
       await refresh();
     } catch (error) {
-      showControlPlaneToast(errorText(error));
+      showControlPlaneToast(translateError(error));
     } finally {
       savingModelId.value = "";
     }

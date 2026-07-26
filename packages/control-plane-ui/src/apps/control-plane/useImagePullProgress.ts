@@ -29,7 +29,7 @@ export function useImagePullProgress() {
         observedAt: output.observedAt,
         status: "connecting" as const,
         layers: { total: 0, completed: 0, downloaded: 0, downloading: 0, extracting: 0 },
-        message: "Connecting to image registry",
+        message: "connecting",
       } : previous;
       const terminalTail = output.replay ? output.data : `${current.terminalTail || ""}${output.data}`.slice(-MAX_TERMINAL_TAIL);
       byInstanceId[output.instanceId] = { ...current, sequence: Math.max(current.sequence, output.sequence), observedAt: output.observedAt, terminalTail };

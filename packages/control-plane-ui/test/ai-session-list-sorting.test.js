@@ -97,6 +97,6 @@ test("instance detail sidebar uses the local user-message sorter", () => {
   assert.match(panel, /groupLastUserMessageTime\(b\.sessions\) - groupLastUserMessageTime\(a\.sessions\)/);
   assert.match(panel, /sessions\.map\(aiSessionLastUserMessageTime\)/);
   assert.doesNotMatch(panel, /aiSessionActivityTime|groupLastRunningAt/);
-  assert.match(panel, />\s*Sort by status\s*</);
+  assert.match(panel, /t\("sessions\.panel\.sortByStatus"\)/);
   assert.match(panel, /SORT_BY_STATUS_STORAGE_KEY/);
 });

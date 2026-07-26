@@ -1,12 +1,12 @@
 <template>
   <component :is="embedded ? 'section' : Dialog" :open="embedded || open" :class="{ 'repository-workspace-embedded': embedded }" @update:open="$emit('update:open', $event)">
     <component :is="embedded ? 'div' : DialogContent" :class="['repository-workspace-dialog', { 'repository-workspace-window': standalone, 'repository-workspace-embedded-content': embedded }]" @open-auto-focus="focusWorkspace">
-      <DialogTitle v-if="!embedded" class="sr-only">File Explorer</DialogTitle>
-      <DialogDescription v-if="!embedded" class="sr-only">Browse and edit repository files.</DialogDescription>
+      <DialogTitle v-if="!embedded" class="sr-only">{{ t("repository.workspace.explorer") }}</DialogTitle>
+      <DialogDescription v-if="!embedded" class="sr-only">{{ t("repository.workspace.description") }}</DialogDescription>
       <header class="repository-workspace-head">
         <span class="repository-workspace-title">
           <FolderGit2 :size="17" />
-          <span><strong>File Explorer</strong><small>{{ workspaceSubtitle }}</small></span>
+          <span><strong>{{ t("repository.workspace.explorer") }}</strong><small>{{ workspaceSubtitle }}</small></span>
         </span>
         <span class="repository-workspace-head-actions">
           <Button
@@ -14,30 +14,30 @@
             variant="ghost"
             size="icon"
             class="repository-workspace-view-switch"
-            :aria-label="changeCount ? `Open Changes (${changeCount})` : 'Open Changes'"
-            :title="changeCount ? `Changes · ${changeCount}` : 'Changes'"
+            :aria-label="t('repository.workspace.openChanges')"
+            :title="changeCount ? t('repository.workspace.changesCount', { count: changeCount }) : t('repository.changes')"
             @click="openChangesReview"
           >
             <GitCompareArrows :size="14" />
             <span v-if="changeCount" class="repository-workspace-view-count">{{ changeCount }}</span>
           </Button>
           <small v-if="popoutMessage" class="repository-workspace-popout-message" role="status">{{ popoutMessage }}</small>
-          <button v-if="embedded" type="button" aria-label="Open repository workspace as dialog" title="Open as dialog" @click="emit('openDialog')"><Maximize2 :size="16" /></button>
-          <button v-else-if="!standalone" type="button" aria-label="Return repository workspace to tab" title="Return to tab" @click="emit('openTab')"><PanelTop :size="16" /></button>
-          <button v-if="!standalone" type="button" aria-label="Open repository workspace in new window" title="Open in new window" @click="openInNewWindow"><ExternalLink :size="16" /></button>
-          <button v-if="!embedded" type="button" aria-label="Close repository workspace" title="Close" @click="emit('update:open', false)"><X :size="16" /></button>
+          <button v-if="embedded" type="button" :aria-label="t('repository.workspace.openDialog')" :title="t('repository.workspace.openAsDialog')" @click="emit('openDialog')"><Maximize2 :size="16" /></button>
+          <button v-else-if="!standalone" type="button" :aria-label="t('repository.workspace.returnTab')" :title="t('repository.workspace.returnToTab')" @click="emit('openTab')"><PanelTop :size="16" /></button>
+          <button v-if="!standalone" type="button" :aria-label="t('repository.workspace.openWindow')" :title="t('repository.workspace.openWindow')" @click="openInNewWindow"><ExternalLink :size="16" /></button>
+          <button v-if="!embedded" type="button" :aria-label="t('repository.common.close')" :title="t('repository.common.close')" @click="emit('update:open', false)"><X :size="16" /></button>
         </span>
       </header>
 
       <div ref="workspaceBody" class="repository-workspace-body" :style="{ '--repository-sidebar-width': `${sidebarWidth}px` }" tabindex="-1">
         <aside class="repository-workspace-sidebar">
           <div class="repository-workspace-sidebar-actions">
-            <Button variant="ghost" size="sm" @click="openNewFileDialog"><FilePlus2 :size="13" /> New file</Button>
+            <Button variant="ghost" size="sm" @click="openNewFileDialog"><FilePlus2 :size="13" /> {{ t("repository.workspace.newFile") }}</Button>
           </div>
           <ScrollArea type="always" class="repository-workspace-sidebar-content">
             <div class="repository-workspace-sidebar-content-inner">
-            <div v-if="loadingWorkspace" class="repository-workspace-sidebar-state"><LoaderCircle class="repository-workspace-spin" :size="16" /> Loading repository…</div>
-            <RepositoryErrorNotice v-else-if="workspaceError" :error="workspaceError" fallback="Failed to load repository workspace." />
+            <div v-if="loadingWorkspace" class="repository-workspace-sidebar-state"><LoaderCircle class="repository-workspace-spin" :size="16" /> {{ t("repository.workspace.loading") }}</div>
+            <RepositoryErrorNotice v-else-if="workspaceError" :error="workspaceError" :fallback="t('repository.errors.workspaceLoad')" />
             <RepositoryFileTree
               v-else
               :directories="directories"
@@ -50,24 +50,24 @@
           </ScrollArea>
         </aside>
 
-        <div class="repository-workspace-resize-handle" role="separator" aria-label="Resize repository sidebar" aria-orientation="vertical" :aria-valuenow="Math.round(sidebarWidth)" tabindex="0" @pointerdown="startSidebarResize" @dblclick="sidebarWidth = 320" @keydown.left.prevent="setSidebarWidth(sidebarWidth - 16)" @keydown.right.prevent="setSidebarWidth(sidebarWidth + 16)" />
+        <div class="repository-workspace-resize-handle" role="separator" :aria-label="t('repository.workspace.resizeSidebar')" aria-orientation="vertical" :aria-valuenow="Math.round(sidebarWidth)" tabindex="0" @pointerdown="startSidebarResize" @dblclick="sidebarWidth = 320" @keydown.left.prevent="setSidebarWidth(sidebarWidth - 16)" @keydown.right.prevent="setSidebarWidth(sidebarWidth + 16)" />
 
         <main class="repository-workspace-main">
-          <div v-if="tabs.length" ref="workspaceOpenTabs" class="repository-workspace-tabs" role="tablist" aria-label="Open repository files" @keydown="navigateOpenTabs" @wheel="scrollOpenTabs">
+          <div v-if="tabs.length" ref="workspaceOpenTabs" class="repository-workspace-tabs" role="tablist" :aria-label="t('repository.workspace.openFiles')" @keydown="navigateOpenTabs" @wheel="scrollOpenTabs">
             <div v-for="tab in tabs" :key="tab.id" class="repository-workspace-tab" :class="{ active: activeTabId === tab.id }">
               <button type="button" role="tab" :data-repository-tab="tab.id" :tabindex="activeTabId === tab.id ? 0 : -1" :aria-selected="activeTabId === tab.id" @click="activeTabId = tab.id">
                 <FileCode2 :size="13" />
                 <span>{{ tab.path }}</span>
               </button>
-              <button type="button" class="repository-workspace-tab-close" :aria-label="`Close ${tab.path}`" @click="closeTab(tab.id)"><X :size="12" /></button>
+              <button type="button" class="repository-workspace-tab-close" :aria-label="t('repository.workspace.closeFile', { path: tab.path })" @click="closeTab(tab.id)"><X :size="12" /></button>
             </div>
           </div>
           <section v-if="activeTab" class="repository-workspace-editor">
             <header>
-              <span><strong>{{ activeTab.path }}</strong><small>{{ activeTab.byteLength }} bytes · {{ activeTab.mode.executable ? "executable" : "text" }}</small></span>
+              <span><strong>{{ activeTab.path }}</strong><small>{{ formatBytes(activeTab.byteLength, locale as SupportedLocale) }} · {{ t(activeTab.mode.executable ? "repository.workspace.executable" : "repository.workspace.text") }}</small></span>
               <span class="repository-workspace-editor-actions">
-                <Button variant="ghost" size="sm" :disabled="fileActionPending" @click="openRenameDialog(activeTab)"><PencilLine :size="13" /> Rename</Button>
-                <Button variant="ghost" size="sm" :disabled="fileActionPending" @click="openDeleteDialog(activeTab)"><Trash2 :size="13" /> Delete</Button>
+                <Button variant="ghost" size="sm" :disabled="fileActionPending" @click="openRenameDialog(activeTab)"><PencilLine :size="13" /> {{ t("repository.workspace.rename") }}</Button>
+                <Button variant="ghost" size="sm" :disabled="fileActionPending" @click="openDeleteDialog(activeTab)"><Trash2 :size="13" /> {{ t("repository.workspace.delete") }}</Button>
               </span>
             </header>
             <div class="repository-workspace-editor-body">
@@ -76,41 +76,42 @@
           </section>
           <section v-else class="repository-workspace-empty">
             <FolderOpen :size="38" />
-            <strong>Open a file</strong>
-            <span>Browse repository-relative files from the explorer.</span>
+            <strong>{{ t("repository.workspace.openFile") }}</strong>
+            <span>{{ t("repository.workspace.browseHint") }}</span>
           </section>
         </main>
       </div>
 
       <Dialog v-model:open="newFileDialogOpen">
         <DialogContent class="repository-file-action-dialog">
-          <DialogHeader><DialogTitle>New repository file</DialogTitle><DialogDescription>Create an empty UTF-8 text file using a repository-relative path.</DialogDescription></DialogHeader>
+          <DialogHeader><DialogTitle>{{ t("repository.workspace.newFileTitle") }}</DialogTitle><DialogDescription>{{ t("repository.workspace.newFileDescription") }}</DialogDescription></DialogHeader>
           <form class="repository-file-action-form" @submit.prevent="createFile">
-            <label for="repository-new-file-path">File path</label>
+            <label for="repository-new-file-path">{{ t("repository.workspace.filePath") }}</label>
+            <!-- i18n-audit-allow-next-line code-token: example repository-relative path -->
             <Input id="repository-new-file-path" v-model="newFilePath" autocomplete="off" placeholder="src/new-file.ts" />
-            <RepositoryErrorNotice v-if="newFileError" :error="newFileError" fallback="File could not be created." />
-            <DialogFooter><Button type="button" variant="outline" :disabled="fileActionPending" @click="newFileDialogOpen = false">Cancel</Button><Button type="submit" :disabled="fileActionPending || !newFilePath.trim()"><LoaderCircle v-if="fileActionPending" class="repository-workspace-spin" :size="13" /><FilePlus2 v-else :size="13" />{{ fileActionPending ? "Creating…" : "Create file" }}</Button></DialogFooter>
+            <RepositoryErrorNotice v-if="newFileError" :error="newFileError" :fallback="t('repository.workspace.createError')" />
+            <DialogFooter><Button type="button" variant="outline" :disabled="fileActionPending" @click="newFileDialogOpen = false">{{ t("repository.common.cancel") }}</Button><Button type="submit" :disabled="fileActionPending || !newFilePath.trim()"><LoaderCircle v-if="fileActionPending" class="repository-workspace-spin" :size="13" /><FilePlus2 v-else :size="13" />{{ t(fileActionPending ? "repository.workspace.creating" : "repository.workspace.create") }}</Button></DialogFooter>
           </form>
         </DialogContent>
       </Dialog>
 
       <Dialog v-model:open="renameDialogOpen">
         <DialogContent class="repository-file-action-dialog">
-          <DialogHeader><DialogTitle>Rename repository file</DialogTitle><DialogDescription>The destination must not already exist.</DialogDescription></DialogHeader>
+          <DialogHeader><DialogTitle>{{ t("repository.workspace.renameTitle") }}</DialogTitle><DialogDescription>{{ t("repository.workspace.renameDescription") }}</DialogDescription></DialogHeader>
           <form class="repository-file-action-form" @submit.prevent="renameFile">
-            <label for="repository-rename-file-path">New path</label>
+            <label for="repository-rename-file-path">{{ t("repository.workspace.newPath") }}</label>
             <Input id="repository-rename-file-path" v-model="renameDestination" autocomplete="off" />
-            <RepositoryErrorNotice v-if="renameError" :error="renameError" fallback="File could not be renamed." />
-            <DialogFooter><Button type="button" variant="outline" :disabled="fileActionPending" @click="renameDialogOpen = false">Cancel</Button><Button type="submit" :disabled="fileActionPending || !renameDestination.trim()"><LoaderCircle v-if="fileActionPending" class="repository-workspace-spin" :size="13" /><PencilLine v-else :size="13" />{{ fileActionPending ? "Renaming…" : "Rename file" }}</Button></DialogFooter>
+            <RepositoryErrorNotice v-if="renameError" :error="renameError" :fallback="t('repository.workspace.renameError')" />
+            <DialogFooter><Button type="button" variant="outline" :disabled="fileActionPending" @click="renameDialogOpen = false">{{ t("repository.common.cancel") }}</Button><Button type="submit" :disabled="fileActionPending || !renameDestination.trim()"><LoaderCircle v-if="fileActionPending" class="repository-workspace-spin" :size="13" /><PencilLine v-else :size="13" />{{ t(fileActionPending ? "repository.workspace.renaming" : "repository.workspace.renameFile") }}</Button></DialogFooter>
           </form>
         </DialogContent>
       </Dialog>
 
       <Dialog v-model:open="deleteDialogOpen">
         <DialogContent class="repository-file-action-dialog">
-          <DialogHeader><DialogTitle>Delete repository file?</DialogTitle><DialogDescription>This permanently removes <strong>{{ deleteTarget?.path }}</strong>.</DialogDescription></DialogHeader>
-          <RepositoryErrorNotice v-if="deleteError" :error="deleteError" fallback="File could not be deleted." />
-          <DialogFooter><Button variant="outline" :disabled="fileActionPending" @click="deleteDialogOpen = false">Cancel</Button><Button variant="destructive" :disabled="fileActionPending" @click="deleteFile"><LoaderCircle v-if="fileActionPending" class="repository-workspace-spin" :size="13" /><Trash2 v-else :size="13" />{{ fileActionPending ? "Deleting…" : "Delete file" }}</Button></DialogFooter>
+          <DialogHeader><DialogTitle>{{ t("repository.workspace.deleteTitle") }}</DialogTitle><DialogDescription>{{ t("repository.workspace.deleteDescription", { path: deleteTarget?.path }) }}</DialogDescription></DialogHeader>
+          <RepositoryErrorNotice v-if="deleteError" :error="deleteError" :fallback="t('repository.workspace.deleteError')" />
+          <DialogFooter><Button variant="outline" :disabled="fileActionPending" @click="deleteDialogOpen = false">{{ t("repository.common.cancel") }}</Button><Button variant="destructive" :disabled="fileActionPending" @click="deleteFile"><LoaderCircle v-if="fileActionPending" class="repository-workspace-spin" :size="13" /><Trash2 v-else :size="13" />{{ t(fileActionPending ? "repository.workspace.deleting" : "repository.workspace.deleteFile") }}</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -130,12 +131,15 @@ import type {
 import { ExternalLink, FileCode2, FilePlus2, FolderGit2, FolderOpen, GitCompareArrows, LoaderCircle, Maximize2, PanelTop, PencilLine, Trash2, X } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import { ApiError } from "../../../api/client";
 import { createRepositoryFile, deleteRepositoryFile, getRepositoryChanges, getRepositoryContext, getRepositoryDirectory, getRepositoryFile, renameRepositoryFile } from "../../../api/repository";
 import { Button } from "../../../components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import { Input } from "../../../components/ui/input";
 import { ScrollArea } from "../../../components/ui/scroll-area";
+import type { SupportedLocale } from "../../../i18n/locale";
+import { formatBytes } from "../../../i18n/presentation";
 import RepositoryErrorNotice from "./RepositoryErrorNotice.vue";
 import RepositoryFilePreview from "./RepositoryFilePreview.vue";
 import RepositoryFileTree from "./RepositoryFileTree.vue";
@@ -159,6 +163,7 @@ const props = defineProps<{
   sessionKind: RepositorySessionKind;
   standalone?: boolean;
 }>();
+const { locale, t } = useI18n();
 
 const emit = defineEmits<{
   openChanges: [target: { initialView: "changes"; page: "changes-review"; sessionId: string; sessionKind: RepositorySessionKind }];
@@ -184,7 +189,12 @@ const sidebarWidth = ref(320);
 const loadingWorkspace = ref(false);
 const workspaceError = ref<unknown>();
 const loadRevision = ref(0);
-const popoutMessage = ref("");
+const popoutRawMessage = ref("");
+const popoutBlocked = ref(false);
+const popoutFailed = ref(false);
+const popoutMessage = computed(() => popoutRawMessage.value || (popoutBlocked.value
+  ? t("repository.workspace.popoutBlocked")
+  : popoutFailed.value ? t("repository.workspacePopoutFailed") : ""));
 const newFileDialogOpen = ref(false);
 const newFilePath = ref("");
 const newFileError = ref<unknown>();
@@ -199,8 +209,10 @@ const fileActionPending = ref(false);
 const activeTab = computed(() => tabs.value.find((tab) => tab.id === activeTabId.value));
 const changeCount = computed(() => changes.value?.entries.length || 0);
 const workspaceSubtitle = computed(() => {
-  const branch = props.context.head?.state === "branch" ? props.context.head.branch : props.context.head?.state === "detached" ? `detached ${props.context.head.oid?.slice(0, 8) || ""}` : "unborn";
-  return [branch, props.context.cwdRelativePath ? `cwd: ${props.context.cwdRelativePath}` : "repository root"].filter(Boolean).join(" · ");
+  const branch = props.context.head?.state === "branch" ? props.context.head.branch : props.context.head?.state === "detached"
+    ? t("repository.workspace.detached", { commit: props.context.head.oid?.slice(0, 8) || "" })
+    : t("repository.workspace.unborn");
+  return [branch, props.context.cwdRelativePath ? t("repository.common.cwd", { path: props.context.cwdRelativePath }) : t("repository.common.repositoryRoot")].filter(Boolean).join(" · ");
 });
 let repositoryChannel: BroadcastChannel | undefined;
 let stopSidebarResize: (() => void) | undefined;
@@ -251,16 +263,19 @@ function connectRepositoryChannel() {
 }
 
 async function openInNewWindow() {
-  popoutMessage.value = "";
+  popoutRawMessage.value = "";
+  popoutBlocked.value = false;
+  popoutFailed.value = false;
   try {
     const opened = await openRepositoryWorkspaceWindow({ ...target.value, view: "files" });
     if (!opened) {
-      popoutMessage.value = "New window was blocked.";
+      popoutBlocked.value = true;
       return;
     }
     emit("update:open", false);
   } catch (error) {
-    popoutMessage.value = error instanceof Error ? error.message : "New window could not be opened.";
+    if (error instanceof Error) popoutRawMessage.value = error.message;
+    else popoutFailed.value = true;
   }
 }
 

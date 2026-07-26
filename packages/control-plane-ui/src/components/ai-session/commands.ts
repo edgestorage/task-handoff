@@ -2,16 +2,16 @@ import type { AiSessionCommandInput, AiSessionCommandName } from "@task-handoff/
 
 export type AiSessionCommandCandidate = {
   name: AiSessionCommandName;
-  description: string;
-  argumentHint?: string;
+  descriptionKey: string;
+  argumentHintKey?: string;
   requiresIdle?: boolean;
 };
 
 export const AI_SESSION_COMMANDS: AiSessionCommandCandidate[] = [
-  { name: "review", description: "Review uncommitted changes", requiresIdle: true },
-  { name: "rename", description: "Rename the current thread", argumentHint: "thread name" },
-  { name: "goal", description: "Set or view the long-running goal", argumentHint: "objective" },
-  { name: "compact", description: "Summarize conversation context", requiresIdle: true },
+  { name: "review", descriptionKey: "sessions.composer.review", requiresIdle: true },
+  { name: "rename", descriptionKey: "sessions.composer.rename", argumentHintKey: "sessions.composer.threadName" },
+  { name: "goal", descriptionKey: "sessions.composer.goal", argumentHintKey: "sessions.composer.objective" },
+  { name: "compact", descriptionKey: "sessions.composer.compact", requiresIdle: true },
 ];
 
 export function commandTokenAt(value: string, cursor: number, trigger: string) {
@@ -31,7 +31,7 @@ export function matchingCommands(query: string) {
 export function replaceCommandToken(value: string, cursor: number, trigger: string, command: AiSessionCommandCandidate) {
   const active = commandTokenAt(value, cursor, trigger);
   if (!active) return undefined;
-  const inserted = `${trigger}${command.name}${command.argumentHint ? " " : ""}`;
+  const inserted = `${trigger}${command.name}${command.argumentHintKey ? " " : ""}`;
   return { value: `${inserted}${value.slice(active.end)}`, cursor: inserted.length };
 }
 
