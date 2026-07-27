@@ -84,15 +84,16 @@ start_web_cap_daemon() {
 if [ "${1:-}" = "task-handoff" ] && [ "${2:-}" = "web" ]; then
   bootstrap_workspace
   start_web_cap_daemon
-
-  exec task-handoff-controlled-instance web \
-    --host "${TASK_HANDOFF_WEB_HOST:-0.0.0.0}" \
-    --port "${TASK_HANDOFF_WEB_PORT:-8080}"
+  exec task-handoff-instance-launcher
 fi
 
 if [ "${1:-}" = "task-handoff" ]; then
   shift
-  exec task-handoff-controlled-instance "$@"
+  if [ "$#" -eq 0 ] || { [ "${1:-}" = "web" ] && [ "$#" -eq 1 ]; }; then
+    exec task-handoff-instance-launcher
+  fi
+  echo "Managed container commands must be launched through the active controlled-instance runtime." >&2
+  exit 64
 fi
 
 exec "$@"

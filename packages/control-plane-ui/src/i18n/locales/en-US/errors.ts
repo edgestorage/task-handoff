@@ -18,7 +18,6 @@ export const errors = {
   INSTANCE_APP_MANAGEMENT_UNSUPPORTED: "This instance does not support managed apps.",
   INSTANCE_SOURCE_REQUIRED: "Select an instance source.",
   INSTANCE_START_FAILED: "The instance could not be started.",
-  INSTANCE_UPDATE_UNSUPPORTED: "This instance does not support managed updates.",
   LOCAL_RUNTIME_REQUIRES_LOCAL_FOLDER: "Local Runtime requires a local folder source.",
   LOCAL_FOLDER_REQUIRES_OWNER_NODE: "Select the node that owns this local folder.",
   LOCAL_FOLDER_REQUIRES_INSTANCE_NODE: "Select a local folder owned by the instance node.",

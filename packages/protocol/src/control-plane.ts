@@ -5,11 +5,12 @@ import {
   AI_SESSION_MAX_MESSAGE_ATTACHMENTS,
   AiSessionMessageAttachmentSchema,
   AiSessionPermissionModeSchema,
+  AiSessionSummarySchema,
   AiSessionsSnapshotSchema,
 } from "./ai-sessions.ts";
 import { TriggerConfigSchema, TriggerDeploymentSchema, TriggerRunSchema, TriggerRuntimeStateSchema } from "./triggers.ts";
 
-export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-07-26";
+export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-07-27";
 // The local value follows the date-only convention. Parsing remains permissive
 // so persisted records written before that convention do not disappear.
 export const ProtocolVersionSchema = z.string();
@@ -232,43 +233,103 @@ export const BuildInfoSchema = z
   .strict();
 
 export const UpdateChannelSchema = z.enum(["stable", "beta", "alpha"]);
-export const UpdateTargetSchema = z.discriminatedUnion("component", [
-  z.object({ component: z.literal("node-agent") }).strict(),
-  z.object({ component: z.literal("controlled-instance"), instanceId: IdSchema }).strict(),
-]);
+export const RuntimeArtifactIdentitySchema = z.object({
+  packageName: z.literal("@task-handoff/controlled-instance"),
+  version: z.string().trim().min(1).max(80),
+  platform: z.string().trim().min(1).max(40),
+  arch: z.string().trim().min(1).max(40),
+  formatVersion: z.number().int().positive(),
+  launcherAbi: z.number().int().positive(),
+  entrypoint: z.string().trim().min(1).max(512),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+}).strict();
+export const RuntimeConvergenceErrorSchema = z.object({
+  code: z.enum([
+    "INSTANCE_RUNTIME_VERSION_MISMATCH",
+    "INSTANCE_RUNTIME_ARTIFACT_UNAVAILABLE",
+    "INSTANCE_RUNTIME_ARTIFACT_INVALID",
+    "INSTANCE_RUNTIME_INSTALL_FAILED",
+    "INSTANCE_RUNTIME_RESTART_FAILED",
+    "INSTANCE_RUNTIME_VERIFICATION_FAILED",
+    "INSTANCE_BASE_RUNTIME_INCOMPATIBLE",
+    "NODE_UPDATE_PREFLIGHT_FAILED",
+    "NODE_UPDATE_FAILED",
+    "LEGACY_INSTANCE_UPDATE_RETIRED",
+  ]),
+  message: z.string().trim().min(1).max(4096),
+  expectedVersion: z.string().trim().min(1).max(80).optional(),
+  actualVersion: z.string().trim().min(1).max(80).optional(),
+  retryable: z.boolean().default(false),
+}).strict();
+export const RuntimeVersionStateSchema = z.object({
+  desiredVersion: z.string().trim().min(1).max(80),
+  actualVersion: z.string().trim().min(1).max(80).optional(),
+  phase: z.enum(["pending", "draining", "installing", "restarting", "verifying", "matched", "failed"]),
+  attempt: z.number().int().nonnegative().default(0),
+  lastAttemptAt: TimestampSchema.optional(),
+  matchedAt: TimestampSchema.optional(),
+  error: RuntimeConvergenceErrorSchema.optional(),
+}).strict();
+export const NodeUpdateImpactSchema = z.object({
+  runningInstanceCount: z.number().int().nonnegative(),
+  stoppedInstanceCount: z.number().int().nonnegative(),
+  activeInstanceCount: z.number().int().nonnegative(),
+  restartInstanceCount: z.number().int().nonnegative(),
+  runningInstanceIds: z.array(IdSchema).max(1024).default([]),
+  stoppedInstanceIds: z.array(IdSchema).max(1024).default([]),
+  activeInstanceIds: z.array(IdSchema).max(1024).default([]),
+}).strict();
+export const NodeRolloutSummarySchema = z.object({
+  phase: z.enum(["queued", "updating-node", "restarting-node", "converging-instances", "succeeded", "degraded", "failed"]),
+  desiredVersion: z.string().trim().min(1).max(80),
+  nodeVersion: z.string().trim().min(1).max(80).optional(),
+  expectedInstanceIds: z.array(IdSchema).max(1024).default([]),
+  expectedInstanceCount: z.number().int().nonnegative(),
+  matchedInstanceCount: z.number().int().nonnegative(),
+  pendingInstanceCount: z.number().int().nonnegative(),
+  failedInstanceCount: z.number().int().nonnegative(),
+  deferredInstanceCount: z.number().int().nonnegative().default(0),
+}).strict();
 export const UpdateCheckRequestSchema = z.object({
-  target: UpdateTargetSchema,
   channel: UpdateChannelSchema.default("stable"),
 }).strict();
 export const UpdateCheckResultSchema = z.object({
-  target: UpdateTargetSchema,
-  source: z.enum(["npm", "docker-registry"]),
+  source: z.literal("npm"),
   channel: UpdateChannelSchema,
   currentVersion: z.string().trim().max(240).optional(),
   availableVersion: z.string().trim().min(1).max(240),
   artifactRef: z.string().trim().min(1).max(512).optional(),
+  runtimeArtifacts: z.array(RuntimeArtifactIdentitySchema).default([]),
+  impact: NodeUpdateImpactSchema,
   updateAvailable: z.boolean(),
   supported: z.boolean().default(true),
   reason: z.string().trim().max(2048).optional(),
   checkedAt: TimestampSchema,
+  preflightToken: z.string().trim().min(16).max(240).optional(),
 }).strict();
 export const UpdateJobSchema = z.object({
   id: IdSchema,
   nodeId: IdSchema,
-  target: UpdateTargetSchema,
-  source: z.enum(["npm", "docker-registry"]),
+  source: z.literal("npm"),
   channel: UpdateChannelSchema,
   fromVersion: z.string().trim().max(240).optional(),
   toVersion: z.string().trim().min(1).max(240),
   artifactRef: z.string().trim().min(1).max(512).optional(),
-  status: z.enum(["queued", "updating", "restarting", "succeeded", "failed"]),
-  error: z.string().trim().max(4096).optional(),
+  runtimeArtifacts: z.array(RuntimeArtifactIdentitySchema).default([]),
+  impact: NodeUpdateImpactSchema,
+  rollout: NodeRolloutSummarySchema,
+  status: z.enum(["queued", "updating-node", "restarting-node", "converging-instances", "succeeded", "degraded", "failed"]),
+  error: RuntimeConvergenceErrorSchema.optional(),
   startedAt: TimestampSchema.optional(),
   completedAt: TimestampSchema.optional(),
   createdAt: TimestampSchema,
   updatedAt: TimestampSchema,
 }).strict();
-export const ApplyUpdateRequestSchema = UpdateCheckRequestSchema;
+export const ApplyUpdateRequestSchema = z.object({
+  channel: UpdateChannelSchema,
+  targetVersion: z.string().trim().min(1).max(240),
+  preflightToken: z.string().trim().min(16).max(240),
+}).strict();
 
 export const GitRefSchema = z
   .object({
@@ -859,6 +920,8 @@ export const ControlledInstanceSchema = z
     protocolVersion: ProtocolVersionSchema.optional(),
     instanceVersion: z.string().trim().max(80).optional(),
     build: BuildInfoSchema.optional(),
+    runtimeVersion: RuntimeVersionStateSchema.optional(),
+    ready: z.boolean().default(false),
     capabilities: z.record(z.string(), z.unknown()).default({}),
     appInventory: InstanceAppInventorySchema.optional(),
     config: z
@@ -936,6 +999,8 @@ export const InstanceLifecycleSnapshotSchema = z.object({
   imageProvisioning: ImageProvisioningSchema.optional(),
   workspace: WorkspaceStatusSchema,
   runtime: ControlledInstanceSchema.shape.runtime.unwrap(),
+  runtimeVersion: RuntimeVersionStateSchema.optional(),
+  ready: z.boolean(),
   lastHeartbeatAt: TimestampSchema.optional(),
 }).strict();
 
@@ -979,31 +1044,301 @@ export function sanitizeStoredControlledInstance(
       delete capabilities.apps;
     }
     next.capabilities = capabilities;
+  } else {
+    next.capabilities = {};
   }
-  next.appInventory = sanitizeStoredAppInventory(source.appInventory);
-  next.apps = pickObjectFields(source.apps, ["runningCount", "problemCount", "updatedAt", "revision"]);
-  next.config = pickObjectFields(source.config, ["autoImportAgentConfigs", "defaultCodexPermissionMode"]);
-  next.modelSelection = pickObjectFields(source.modelSelection, ["codexModelHash", "claudeModelHash"]);
+  next.appInventory = sanitizeStoredAppInventory(source.appInventory, onWarning, typeof source.id === "string" ? source.id : undefined);
+  next.source = sanitizeStoredProjectSource(source.source, onWarning, typeof source.id === "string" ? source.id : undefined);
+  next.sourceSnapshot = source.sourceSnapshot && typeof source.sourceSnapshot === "object" && !Array.isArray(source.sourceSnapshot) ? source.sourceSnapshot : {};
+  next.build = sanitizeStoredStrictObject(BuildInfoSchema, source.build, "build", onWarning, typeof source.id === "string" ? source.id : undefined);
+  next.aiSessions = sanitizeStoredAiSessions(source.aiSessions, onWarning, typeof source.id === "string" ? source.id : undefined);
+  next.triggers = sanitizeStoredTriggers(source.triggers, onWarning, typeof source.id === "string" ? source.id : undefined);
+  next.apps = sanitizeStoredStrictObject(ControlledInstanceSchema.shape.apps.unwrap(), pickObjectFields(source.apps, ["runningCount", "problemCount", "updatedAt", "revision"]), "apps", onWarning, typeof source.id === "string" ? source.id : undefined) || { runningCount: 0, problemCount: 0 };
+  next.config = sanitizeStoredStrictObject(ControlledInstanceSchema.shape.config.unwrap(), pickObjectFields(source.config, ["autoImportAgentConfigs", "defaultCodexPermissionMode"]), "config", onWarning, typeof source.id === "string" ? source.id : undefined) || { autoImportAgentConfigs: true, defaultCodexPermissionMode: "ask" };
+  next.modelSelection = sanitizeStoredStrictObject(ModelSelectionSchema.unwrap(), pickObjectFields(source.modelSelection, ["codexModelHash", "claudeModelHash"]), "modelSelection", onWarning, typeof source.id === "string" ? source.id : undefined) || {};
   next.imageSnapshot = sanitizeStoredInstanceImageSnapshot(
     source.imageSnapshot,
     source.imageId,
     onWarning,
     typeof source.id === "string" ? source.id : undefined,
   );
-  next.imageProvisioning = pickObjectFields(source.imageProvisioning, ["phase", "requestedReference", "generation", "error", "startedAt", "updatedAt"]);
-  next.runtime = pickObjectFields(source.runtime, ["kind", "containerName", "containerId", "workspacePath", "pid", "port", "labels"]);
-  next.target = pickObjectFields(source.target ?? source.endpoints, ["strategy", "web", "api", "status"]);
-  next.access = pickObjectFields(source.access, ["strategy", "web", "api", "ws", "status"]);
+  next.imageProvisioning = sanitizeStoredStrictObject(ImageProvisioningSchema, pickObjectFields(source.imageProvisioning, ["phase", "requestedReference", "generation", "error", "startedAt", "updatedAt"]), "imageProvisioning", onWarning, typeof source.id === "string" ? source.id : undefined);
+  next.runtimeVersion = sanitizeStoredRuntimeVersion(source.runtimeVersion, onWarning, typeof source.id === "string" ? source.id : undefined);
+  next.workspace = sanitizeStoredStrictObject(WorkspaceStatusSchema, source.workspace, "workspace", onWarning, typeof source.id === "string" ? source.id : undefined) || { status: "unknown" };
+  next.runtime = sanitizeStoredStrictObject(ControlledInstanceSchema.shape.runtime.unwrap(), pickObjectFields(source.runtime, ["kind", "containerName", "containerId", "workspacePath", "pid", "port", "labels"]), "runtime", onWarning, typeof source.id === "string" ? source.id : undefined) || { labels: {} };
+  next.target = sanitizeStoredStrictObject(InstanceTargetSchema, pickObjectFields(source.target ?? source.endpoints, ["strategy", "web", "api", "vnc", "tty", "logs", "status"]), "target", onWarning, typeof source.id === "string" ? source.id : undefined) || { strategy: "direct-port", status: "unknown" };
+  next.access = sanitizeStoredStrictObject(InstanceAccessSchema, pickObjectFields(source.access, ["strategy", "web", "api", "ws", "status"]), "access", onWarning, typeof source.id === "string" ? source.id : undefined) || { strategy: "control-plane-proxy", status: "unknown" };
+  for (const [key, schema] of Object.entries(ControlledInstanceSchema.shape)) {
+    if (!Object.prototype.hasOwnProperty.call(next, key)) continue;
+    if (schema.safeParse(next[key]).success || !schema.safeParse(undefined).success) continue;
+    delete next[key];
+    onWarning?.({ instanceId: typeof source.id === "string" ? source.id : undefined, field: key });
+  }
   return next;
 }
 
-function sanitizeStoredAppInventory(input: unknown) {
+function sanitizeStoredStrictObject<T>(
+  schema: z.ZodType<T>,
+  input: unknown,
+  field: string,
+  onWarning?: (warning: { instanceId?: string; field: string }) => void,
+  instanceId?: string,
+): T | undefined {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return undefined;
+  let candidate = structuredClone(input);
+  let changed = false;
+  for (let pass = 0; pass < 20; pass += 1) {
+    const parsed = schema.safeParse(candidate);
+    if (parsed.success) {
+      if (changed) onWarning?.({ instanceId, field });
+      return parsed.data;
+    }
+    let removedUnknown = false;
+    for (const issue of parsed.error.issues) {
+      if (issue.code !== "unrecognized_keys") continue;
+      const parent = valueAtPath(candidate, issue.path);
+      if (!parent || typeof parent !== "object" || Array.isArray(parent)) continue;
+      for (const key of issue.keys) {
+        if (Object.prototype.hasOwnProperty.call(parent, key)) {
+          delete (parent as Record<string, unknown>)[key];
+          removedUnknown = true;
+          changed = true;
+        }
+      }
+    }
+    if (!removedUnknown) {
+      const withoutBadOptionalFields = structuredClone(candidate);
+      let removedInvalid = false;
+      for (const issue of parsed.error.issues) {
+        if (!issue.path.length || typeof issue.path.at(-1) !== "string") continue;
+        const parent = valueAtPath(withoutBadOptionalFields, issue.path.slice(0, -1));
+        const key = issue.path.at(-1) as string;
+        if (parent && typeof parent === "object" && !Array.isArray(parent) && Object.prototype.hasOwnProperty.call(parent, key)) {
+          delete (parent as Record<string, unknown>)[key];
+          removedInvalid = true;
+        }
+      }
+      if (removedInvalid) {
+        const recovered = schema.safeParse(withoutBadOptionalFields);
+        if (recovered.success) {
+          onWarning?.({ instanceId, field });
+          return recovered.data;
+        }
+      }
+      break;
+    }
+  }
+  onWarning?.({ instanceId, field });
+  return undefined;
+}
+
+function valueAtPath(root: unknown, path: PropertyKey[]) {
+  let value = root;
+  for (const key of path) {
+    if (!value || typeof value !== "object") return undefined;
+    value = (value as Record<PropertyKey, unknown>)[key];
+  }
+  return value;
+}
+
+function sanitizeStoredProjectSource(input: unknown, onWarning?: (warning: { instanceId?: string; field: string }) => void, instanceId?: string) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+  const source = input as Record<string, unknown>;
+  const type = source.type;
+  const option = ProjectSourceSchema.options.find((candidate) => candidate.shape.type.value === type);
+  if (!option) return input;
+  const allowed = type === "local-folder"
+    ? ["type", "localFolderId", "path", "ownerNodeId"]
+    : type === "git-template"
+      ? ["type", "url", "templateId", "ref", "auth", "clone"]
+      : ["type", "repositoryId", "url", "provider", "ref", "auth", "clone"];
+  const candidate = pickObjectFields(source, allowed) as Record<string, unknown>;
+  if (type !== "local-folder") {
+    const ref = sanitizeStoredStrictObject(GitRefSchema, pickObjectFields(source.ref, ["type", "name", "commit"]), "source.ref", onWarning, instanceId);
+    const auth = sanitizeStoredStrictObject(GitAuthSchema, pickObjectFields(source.auth, ["type", "secretId"]), "source.auth", onWarning, instanceId);
+    const clone = sanitizeStoredStrictObject(GitCloneOptionsSchema, pickObjectFields(source.clone, ["depth", "submodules", "lfs", "subdirectory"]), "source.clone", onWarning, instanceId);
+    if (ref) candidate.ref = ref; else delete candidate.ref;
+    if (auth) candidate.auth = auth; else delete candidate.auth;
+    if (clone) candidate.clone = clone; else delete candidate.clone;
+  }
+  const parsed = sanitizeStoredStrictObject(option as z.ZodType<unknown>, candidate, "source", onWarning, instanceId);
+  if (parsed) {
+    if (Object.keys(source).some((key) => !allowed.includes(key))) onWarning?.({ instanceId, field: "source" });
+    return parsed;
+  }
+  return candidate;
+}
+
+function sanitizeStoredAiSessions(input: unknown, onWarning?: (warning: { instanceId?: string; field: string }) => void, instanceId?: string) {
   if (!input || typeof input !== "object" || Array.isArray(input)) return undefined;
   const source = input as Record<string, unknown>;
+  const sessions = Array.isArray(source.sessions)
+    ? source.sessions.flatMap((session, index) => {
+      const parsed = sanitizeStoredStrictObject(AiSessionSummarySchema, session, `aiSessions.sessions.${index}`, onWarning, instanceId);
+      return parsed ? [parsed] : [];
+    })
+    : [];
+  const candidate = {
+    runningCount: typeof source.runningCount === "number" && Number.isInteger(source.runningCount) && source.runningCount >= 0 ? source.runningCount : 0,
+    waitingCount: typeof source.waitingCount === "number" && Number.isInteger(source.waitingCount) && source.waitingCount >= 0 ? source.waitingCount : 0,
+    staleCount: typeof source.staleCount === "number" && Number.isInteger(source.staleCount) && source.staleCount >= 0 ? source.staleCount : 0,
+    sessions,
+    updatedAt: TimestampSchema.safeParse(source.updatedAt).success ? source.updatedAt : new Date().toISOString(),
+  };
+  if (Object.keys(source).some((key) => !["runningCount", "waitingCount", "staleCount", "sessions", "updatedAt"].includes(key))) onWarning?.({ instanceId, field: "aiSessions" });
+  return AiSessionsSnapshotSchema.parse(candidate);
+}
+
+function sanitizeStoredTriggers(input: unknown, onWarning?: (warning: { instanceId?: string; field: string }) => void, instanceId?: string) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return undefined;
+  const source = input as Record<string, unknown>;
+  if (Object.keys(source).some((key) => !["enabledCount", "runningCount", "errorCount", "configs", "recentRuns"].includes(key))) onWarning?.({ instanceId, field: "triggers" });
+  const sanitizeArray = <T>(value: unknown, schema: z.ZodType<T>, field: string) => Array.isArray(value)
+    ? value.flatMap((entry, index) => {
+      const parsed = sanitizeStoredStrictObject(schema, entry, `${field}.${index}`, onWarning, instanceId);
+      return parsed ? [parsed] : [];
+    })
+    : [];
+  const configs = Array.isArray(source.configs) ? source.configs.flatMap((entry, index) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+    const record = entry as Record<string, unknown>;
+    if (Object.keys(record).some((key) => !["configHash", "config", "deployments", "runtime"].includes(key))) onWarning?.({ instanceId, field: `triggers.configs.${index}` });
+    const config = sanitizeStoredTriggerConfig(record.config, `triggers.configs.${index}.config`, onWarning, instanceId);
+    if (typeof record.configHash !== "string" || !config) return [];
+    return [{
+      configHash: record.configHash,
+      config,
+      deployments: sanitizeArray(record.deployments, TriggerDeploymentSchema, `triggers.configs.${index}.deployments`),
+      runtime: sanitizeArray(record.runtime, TriggerRuntimeStateSchema, `triggers.configs.${index}.runtime`),
+    }];
+  }) : [];
+  return {
+    enabledCount: typeof source.enabledCount === "number" && Number.isInteger(source.enabledCount) && source.enabledCount >= 0 ? source.enabledCount : 0,
+    runningCount: typeof source.runningCount === "number" && Number.isInteger(source.runningCount) && source.runningCount >= 0 ? source.runningCount : 0,
+    errorCount: typeof source.errorCount === "number" && Number.isInteger(source.errorCount) && source.errorCount >= 0 ? source.errorCount : 0,
+    configs,
+    recentRuns: sanitizeArray(source.recentRuns, TriggerRunSchema, "triggers.recentRuns"),
+  };
+}
+
+function sanitizeStoredTriggerConfig(
+  input: unknown,
+  field: string,
+  onWarning?: (warning: { instanceId?: string; field: string }) => void,
+  instanceId?: string,
+) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return undefined;
+  const source = input as Record<string, unknown>;
+  const candidate = pickObjectFields(source, ["configHash", "name", "description", "createdAt", "updatedAt"]) as Record<string, unknown>;
+  if (source.source && typeof source.source === "object" && !Array.isArray(source.source)) {
+    const triggerSource = source.source as Record<string, unknown>;
+    const sourceKeys = triggerSource.type === "schedule"
+      ? triggerSource.scheduleKind === "interval"
+        ? ["type", "scheduleKind", "intervalMs"]
+        : triggerSource.scheduleKind === "daily"
+          ? ["type", "scheduleKind", "timeOfDay", "timezone"]
+          : ["type", "scheduleKind", "weekdays", "timeOfDay", "timezone"]
+      : triggerSource.type === "file-change"
+        ? ["type", "roots", "globs", "ignore", "debounceMs"]
+        : ["type", "agent", "statuses", "phases"];
+    candidate.source = pickObjectFields(triggerSource, sourceKeys);
+  }
+  candidate.action = pickObjectFields(source.action, ["promptTemplate"]);
+  candidate.policy = pickObjectFields(source.policy, ["cooldownMs", "maxConcurrentRuns", "whenBusy"]);
+  return sanitizeStoredStrictObject(TriggerConfigSchema, candidate, field, onWarning, instanceId);
+}
+
+function sanitizeStoredRuntimeVersion(
+  input: unknown,
+  onWarning?: (warning: { instanceId?: string; field: string }) => void,
+  instanceId?: string,
+) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return undefined;
+  const source = input as Record<string, unknown>;
+  const storedVersion = (value: unknown) => {
+    if (typeof value !== "string") return undefined;
+    const trimmed = value.trim();
+    return trimmed && trimmed.length <= 80 ? trimmed : undefined;
+  };
+  const desiredVersion = storedVersion(source.desiredVersion);
+  if (!desiredVersion) {
+    onWarning?.({ instanceId, field: "runtimeVersion.desiredVersion" });
+    return undefined;
+  }
+  const phaseAliases: Record<string, RuntimeVersionState["phase"]> = {
+    idle: "pending",
+    queued: "pending",
+    checking: "pending",
+    downloading: "installing",
+    updating: "installing",
+    completed: "matched",
+    succeeded: "matched",
+    ready: "matched",
+    error: "failed",
+  };
+  const validPhases = new Set(RuntimeVersionStateSchema.shape.phase.options);
+  const rawPhase = typeof source.phase === "string" ? source.phase : "pending";
+  const phase = validPhases.has(rawPhase as RuntimeVersionState["phase"])
+    ? rawPhase as RuntimeVersionState["phase"]
+    : phaseAliases[rawPhase] || "pending";
+  if (phase !== rawPhase) onWarning?.({ instanceId, field: "runtimeVersion.phase" });
+  let error: RuntimeConvergenceError | undefined;
+  if (source.error && typeof source.error === "object" && !Array.isArray(source.error)) {
+    const storedError = source.error as Record<string, unknown>;
+    const message = typeof storedError.message === "string" ? storedError.message.trim().slice(0, 4096) : "";
+    if (message) {
+      const validCodes = new Set(RuntimeConvergenceErrorSchema.shape.code.options);
+      const code = typeof storedError.code === "string" && validCodes.has(storedError.code as RuntimeConvergenceError["code"])
+        ? storedError.code as RuntimeConvergenceError["code"]
+        : "INSTANCE_RUNTIME_INSTALL_FAILED";
+      if (code !== storedError.code) onWarning?.({ instanceId, field: "runtimeVersion.error.code" });
+      const expectedVersion = storedVersion(storedError.expectedVersion);
+      const errorActualVersion = storedVersion(storedError.actualVersion);
+      error = {
+        code,
+        message,
+        ...(expectedVersion ? { expectedVersion } : {}),
+        ...(errorActualVersion ? { actualVersion: errorActualVersion } : {}),
+        retryable: storedError.retryable === true,
+      };
+    } else {
+      onWarning?.({ instanceId, field: "runtimeVersion.error" });
+    }
+  }
+  if (typeof source.error === "string" && source.error.trim()) {
+    error = {
+      code: "INSTANCE_RUNTIME_INSTALL_FAILED",
+      message: source.error.trim().slice(0, 4096),
+      expectedVersion: desiredVersion,
+      ...(storedVersion(source.actualVersion) ? { actualVersion: storedVersion(source.actualVersion) } : {}),
+      retryable: false,
+    };
+  }
+  const actualVersion = storedVersion(source.actualVersion);
+  const lastAttemptAt = TimestampSchema.safeParse(source.lastAttemptAt);
+  const matchedAt = TimestampSchema.safeParse(source.matchedAt);
+  if (source.lastAttemptAt !== undefined && !lastAttemptAt.success) onWarning?.({ instanceId, field: "runtimeVersion.lastAttemptAt" });
+  if (source.matchedAt !== undefined && !matchedAt.success) onWarning?.({ instanceId, field: "runtimeVersion.matchedAt" });
+  return {
+    desiredVersion,
+    ...(actualVersion ? { actualVersion } : {}),
+    phase,
+    attempt: typeof source.attempt === "number" && Number.isInteger(source.attempt) && source.attempt >= 0 ? source.attempt : 0,
+    ...(lastAttemptAt.success ? { lastAttemptAt: lastAttemptAt.data } : {}),
+    ...(matchedAt.success ? { matchedAt: matchedAt.data } : {}),
+    ...(error ? { error } : {}),
+  };
+}
+
+function sanitizeStoredAppInventory(input: unknown, onWarning?: (warning: { instanceId?: string; field: string }) => void, instanceId?: string) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return undefined;
+  const source = input as Record<string, unknown>;
+  if (Object.keys(source).some((key) => !["observedAt", "items", "issues"].includes(key))) onWarning?.({ instanceId, field: "appInventory" });
   const candidate = {
     observedAt: source.observedAt,
     items: Array.isArray(source.items)
       ? source.items.map((item) => {
+          if (item && typeof item === "object" && !Array.isArray(item) && Object.keys(item).some((key) => !["id", "name", "kind", "source", "availability", "capabilities", "diagnosticCode"].includes(key))) onWarning?.({ instanceId, field: "appInventory.items" });
           const picked = pickObjectFields(item, ["id", "name", "kind", "source", "availability", "diagnosticCode"]);
           if (!picked || typeof picked !== "object" || Array.isArray(picked)) return picked;
           return {
@@ -1194,8 +1529,13 @@ export type LocalDockerImage = z.infer<typeof LocalDockerImageSchema>;
 export type NodeAgentInstanceProxyRawResponse = z.infer<typeof NodeAgentInstanceProxyRawResponseSchema>;
 export type BuildInfo = z.infer<typeof BuildInfoSchema>;
 export type UpdateChannel = z.infer<typeof UpdateChannelSchema>;
-export type UpdateTarget = z.infer<typeof UpdateTargetSchema>;
+export type RuntimeArtifactIdentity = z.infer<typeof RuntimeArtifactIdentitySchema>;
+export type RuntimeConvergenceError = z.infer<typeof RuntimeConvergenceErrorSchema>;
+export type RuntimeVersionState = z.infer<typeof RuntimeVersionStateSchema>;
+export type NodeUpdateImpact = z.infer<typeof NodeUpdateImpactSchema>;
+export type NodeRolloutSummary = z.infer<typeof NodeRolloutSummarySchema>;
 export type UpdateCheckRequest = z.infer<typeof UpdateCheckRequestSchema>;
+export type ApplyUpdateRequest = z.infer<typeof ApplyUpdateRequestSchema>;
 export type UpdateCheckResult = z.infer<typeof UpdateCheckResultSchema>;
 export type UpdateJob = z.infer<typeof UpdateJobSchema>;
 export type ControlledInstance = z.infer<typeof ControlledInstanceSchema>;

@@ -71,10 +71,22 @@ export const runtimeAccessStrategyKeys: Record<string, string> = {
 
 export const updateJobStatusKeys: Record<string, string> = {
   queued: "settings.nodeDetail.jobQueued",
-  updating: "settings.nodeDetail.jobUpdating",
-  restarting: "settings.nodeDetail.jobRestarting",
+  "updating-node": "settings.nodeDetail.jobUpdatingNode",
+  "restarting-node": "settings.nodeDetail.jobRestartingNode",
+  "converging-instances": "settings.nodeDetail.jobConvergingInstances",
   succeeded: "settings.nodeDetail.jobSucceeded",
+  degraded: "settings.nodeDetail.jobDegraded",
   failed: "settings.nodeDetail.jobFailed",
+};
+
+export const runtimeVersionStatusKeys: Record<string, string> = {
+  pending: "settings.nodeDetail.runtimePending",
+  draining: "settings.nodeDetail.runtimeDraining",
+  installing: "settings.nodeDetail.runtimeInstalling",
+  restarting: "settings.nodeDetail.runtimeRestarting",
+  verifying: "settings.nodeDetail.runtimeVerifying",
+  matched: "settings.nodeDetail.runtimeMatched",
+  failed: "settings.nodeDetail.runtimeFailed",
 };
 
 export const externalListenerStatusKeys: Record<string, string> = {

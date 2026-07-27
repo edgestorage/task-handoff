@@ -1,6 +1,8 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const os = require("node:os");
+const { spawnSync } = require("node:child_process");
 const test = require("node:test");
 
 const root = path.resolve(__dirname, "..");
@@ -11,11 +13,168 @@ test("runtime releases map stable to latest and isolate prerelease dist-tags", (
   assert.match(workflow, /npm_tag="latest"/);
   assert.match(workflow, /npm_tag="\$\{prerelease%%\.\*\}"/);
   assert.match(workflow, /"\$npm_tag" != "alpha" && "\$npm_tag" != "beta"/);
-  assert.match(workflow, /NPM_DIST_TAG: \$\{\{ steps\.version\.outputs\.npm_tag \}\}/);
-  assert.equal((workflow.match(/npm publish .* --tag "\$NPM_DIST_TAG"/g) || []).length, 4);
+  assert.match(workflow, /NPM_DIST_TAG: \$\{\{ needs\.runtime-packages\.outputs\.npm_tag \}\}/);
+  assert.match(workflow, /publish_or_verify\(\)/);
+  assert.equal((workflow.match(/publish_or_verify release\/npm\/[a-z-]+ "release\/npm\/artifacts\//g) || []).length, 4);
+  assert.match(workflow, /Published \$package@\$version integrity does not match/);
+  assert.match(workflow, /npm publish "\$archive" --access public --tag "\$NPM_DIST_TAG"/);
+  assert.doesNotMatch(workflow, /npm pack "\$directory"/);
   assert.match(workflow, /Keep prereleases out of the latest dist-tag/);
   assert.match(workflow, /if \[\[ "\$latest" == "\$RELEASE_VERSION" \]\]/);
   assert.match(workflow, /npm dist-tag rm "\$package" latest/);
   assert.doesNotMatch(workflow, /npm_tag="stable"/);
-  assert.doesNotMatch(workflow, /npm dist-tag add/);
+  assert.doesNotMatch(workflow, /npm dist-tag add .* latest/);
+});
+
+test("runtime release builds one Linux controlled-instance artifact from supported node-pty prebuilds", () => {
+  const workflow = fs.readFileSync(path.join(root, ".github", "workflows", "runtime-release.yml"), "utf8");
+
+  for (const identity of ["linux-x64", "linux-arm64"]) {
+    const [platform, arch] = identity.split("-");
+    assert.match(workflow, new RegExp(`platform: ${platform}\\n\\s+arch: ${arch}`));
+  }
+  assert.doesNotMatch(workflow, /platform: (?:darwin|win32)/);
+  assert.doesNotMatch(workflow, /Collect packaged node-pty prebuild/);
+  assert.match(workflow, /node scripts\/node-pty-prebuild\.mjs build/);
+  assert.match(workflow, /node:24-bullseye/);
+  assert.match(workflow, /npm_config_nodedir=\/usr\/local/);
+  assert.match(workflow, /pattern: node-pty-prebuild-\*/);
+  assert.match(workflow, /Build Linux controlled instance production runtime/);
+  assert.equal((workflow.match(/pnpm runtime:artifact -- --version/g) || []).length, 1);
+  assert.match(workflow, /--prebuilds-dir release\/node-pty-prebuilds/);
+  assert.match(workflow, /release\/runtime-artifacts\/\*/);
+  assert.match(workflow, /needs: node-pty-prebuilds/);
+  assert.match(workflow, /runtime-packages:\n\s+needs: controlled-instance-artifact/);
+  assert.ok(workflow.indexOf("name: controlled-instance-runtime-${{ needs.controlled-instance-artifact.outputs.version }}") < workflow.indexOf("name: Build npm tarballs"));
+  assert.match(workflow, /needs: \[controlled-instance-artifact, runtime-packages\]/);
+  assert.match(workflow, /publish:\n[\s\S]*?env:\n\s+GH_REPO: \$\{\{ github\.repository \}\}/);
+  assert.match(workflow, /merge-multiple: true/);
+  assert.match(workflow, /gh release create[\s\S]*release\/runtime-artifacts\/\*/);
+  assert.match(workflow, /gh release create .*--draft/);
+  assert.match(workflow, /gh release edit .*--draft=false/);
+  assert.doesNotMatch(workflow, /--clobber/);
+  assert.ok(workflow.indexOf("Publish or verify immutable npm packages") < workflow.indexOf("gh release edit \"$GITHUB_REF_NAME\" --draft=false"));
+  assert.match(workflow, /permissions:\n  contents: read/);
+  assert.match(workflow, /persist-credentials: false/);
+});
+
+test("detached node update worker does not overwrite rollout completion after service restart", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "node-update-worker-race-"));
+  const jobFile = path.join(directory, "job.json");
+  const targetVersion = require(path.join(root, "package.json")).version;
+  const timestamp = new Date().toISOString();
+  fs.writeFileSync(jobFile, `${JSON.stringify({
+    id: "update_race",
+    nodeId: "node_1",
+    source: "npm",
+    channel: "stable",
+    toVersion: targetVersion,
+    artifactRef: `npm:@task-handoff/node-agent@${targetVersion}#sha512-worker-test`,
+    runtimeArtifacts: [],
+    impact: {
+      runningInstanceCount: 0,
+      stoppedInstanceCount: 0,
+      activeInstanceCount: 0,
+      restartInstanceCount: 0,
+      runningInstanceIds: [],
+      stoppedInstanceIds: [],
+      activeInstanceIds: [],
+    },
+    status: "queued",
+    rollout: {
+      phase: "queued",
+      desiredVersion: targetVersion,
+      expectedInstanceIds: [],
+      expectedInstanceCount: 0,
+      matchedInstanceCount: 0,
+      pendingInstanceCount: 0,
+      failedInstanceCount: 0,
+      deferredInstanceCount: 0,
+    },
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  }, null, 2)}\n`);
+  const npm = path.join(directory, "npm");
+  const npmLog = path.join(directory, "npm.log");
+  fs.writeFileSync(npm, `#!/bin/sh\nprintf '%s\\n' "$*" >> "${npmLog}"\nif [ "$1" = "view" ]; then echo '"sha512-worker-test"'; elif [ "$1" = "prefix" ]; then echo "${directory}"; fi\nexit 0\n`, { mode: 0o755 });
+  const systemctl = path.join(directory, "systemctl");
+  fs.writeFileSync(systemctl, `#!/bin/sh\n"${process.execPath}" -e 'const fs=require("fs");const p=process.env.JOB_FILE;const j=JSON.parse(fs.readFileSync(p,"utf8"));j.status="succeeded";j.rollout={...j.rollout,phase:"succeeded",nodeVersion:j.toVersion};j.completedAt=new Date().toISOString();fs.writeFileSync(p,JSON.stringify(j));'\n`, { mode: 0o755 });
+
+  const result = spawnSync(process.execPath, [
+    path.join(root, "scripts", "node-update-worker.cjs"),
+    "--job-file", jobFile,
+    "--target-version", targetVersion,
+    "--npm-command", npm,
+  ], {
+    encoding: "utf8",
+    env: { ...process.env, PATH: `${directory}:${process.env.PATH}`, JOB_FILE: jobFile },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(fs.readFileSync(jobFile, "utf8")).status, "succeeded");
+  const npmCalls = fs.readFileSync(npmLog, "utf8");
+  assert.match(npmCalls, new RegExp(`view @task-handoff/node-agent@${targetVersion.replaceAll(".", "\\.")} dist\\.integrity --json`));
+  assert.match(npmCalls, new RegExp(`install --global --prefix .* @task-handoff/node-agent@${targetVersion.replaceAll(".", "\\.")}`));
+});
+
+test("detached node update worker CAS preserves a terminal write between observation and commit", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "node-update-worker-cas-"));
+  const jobFile = path.join(directory, "job.json");
+  const targetVersion = require(path.join(root, "package.json")).version;
+  const timestamp = new Date().toISOString();
+  fs.writeFileSync(jobFile, `${JSON.stringify({
+    id: "update_cas",
+    nodeId: "node_1",
+    source: "npm",
+    channel: "stable",
+    toVersion: targetVersion,
+    artifactRef: `npm:@task-handoff/node-agent@${targetVersion}#sha512-worker-test`,
+    runtimeArtifacts: [],
+    impact: {
+      runningInstanceCount: 0,
+      stoppedInstanceCount: 0,
+      activeInstanceCount: 0,
+      restartInstanceCount: 0,
+      runningInstanceIds: [],
+      stoppedInstanceIds: [],
+      activeInstanceIds: [],
+    },
+    status: "queued",
+    rollout: {
+      phase: "queued",
+      desiredVersion: targetVersion,
+      expectedInstanceIds: [],
+      expectedInstanceCount: 0,
+      matchedInstanceCount: 0,
+      pendingInstanceCount: 0,
+      failedInstanceCount: 0,
+      deferredInstanceCount: 0,
+    },
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  }, null, 2)}\n`);
+  const npm = path.join(directory, "npm");
+  fs.writeFileSync(npm, `#!/bin/sh\nif [ "$1" = "view" ]; then echo '"sha512-worker-test"'; elif [ "$1" = "prefix" ]; then echo "${directory}"; fi\nexit 0\n`, { mode: 0o755 });
+  const systemctlMarker = path.join(directory, "systemctl-called");
+  const systemctl = path.join(directory, "systemctl");
+  fs.writeFileSync(systemctl, `#!/bin/sh\ntouch "${systemctlMarker}"\nexit 0\n`, { mode: 0o755 });
+  const hook = path.join(directory, "cas-hook.cjs");
+  fs.writeFileSync(hook, `const fs=require("node:fs");module.exports=({jobFile,observed})=>{if(observed.status!=="updating-node")return;const current=JSON.parse(fs.readFileSync(jobFile,"utf8"));current.status="succeeded";current.rollout={...current.rollout,phase:"succeeded",nodeVersion:current.toVersion};current.completedAt=new Date().toISOString();fs.writeFileSync(jobFile,JSON.stringify(current));};\n`);
+
+  const result = spawnSync(process.execPath, [
+    path.join(root, "scripts", "node-update-worker.cjs"),
+    "--job-file", jobFile,
+    "--target-version", targetVersion,
+    "--npm-command", npm,
+  ], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      PATH: `${directory}:${process.env.PATH}`,
+      TASK_HANDOFF_UPDATE_WORKER_TEST_CAS_HOOK: hook,
+    },
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(fs.readFileSync(jobFile, "utf8")).status, "succeeded");
+  assert.equal(fs.existsSync(systemctlMarker), false, "a superseded worker must stop before restarting the service");
 });

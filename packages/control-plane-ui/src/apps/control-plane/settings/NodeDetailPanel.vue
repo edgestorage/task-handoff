@@ -224,19 +224,22 @@
                   <div class="node-resource-row">
                     <div>
                       <strong>{{ selectedNode.name }}</strong>
-                      <code>{{ updateSummary("node-agent", status.build(selectedNode.id)?.packageVersion) }}</code>
+                      <code>{{ updateSummary(status.build(selectedNode.id)?.packageVersion) }}</code>
                     </div>
                     <div class="settings-row-actions">
-                      <Button variant="outline" size="sm" :disabled="busy.checkingUpdateTarget === updateKey('node-agent')" @click="actions.checkManagedUpdate(selectedNode.id, { component: 'node-agent' })">
+                      <Button variant="outline" size="sm" :disabled="busy.checkingUpdateNodeId === selectedNode.id" @click="actions.checkManagedUpdate(selectedNode.id)">
                         <RefreshCw :size="14" />
-                        <span>{{ busy.checkingUpdateTarget === updateKey("node-agent") ? t("settings.nodeDetail.checking") : t("settings.nodeDetail.check") }}</span>
+                        <span>{{ busy.checkingUpdateNodeId === selectedNode.id ? t("settings.nodeDetail.checking") : t("settings.nodeDetail.check") }}</span>
                       </Button>
-                      <Button variant="outline" size="sm" :disabled="!canApplyUpdate('node-agent') || busy.applyingUpdateTarget === updateKey('node-agent')" @click="actions.applyManagedUpdate(selectedNode.id, { component: 'node-agent' })">
+                      <Button variant="outline" size="sm" :disabled="!canApplyUpdate() || busy.applyingUpdateNodeId === selectedNode.id" @click="actions.applyManagedUpdate(selectedNode.id)">
                         <Download :size="14" />
-                        <span>{{ busy.applyingUpdateTarget === updateKey("node-agent") ? t("settings.nodeDetail.queuing") : t("settings.nodeDetail.update") }}</span>
+                        <span>{{ busy.applyingUpdateNodeId === selectedNode.id ? t("settings.nodeDetail.queuing") : t("settings.nodeDetail.update") }}</span>
                       </Button>
                     </div>
                   </div>
+                  <p v-if="nodeUpdateCheck" class="section-description">
+                    {{ t("settings.nodeDetail.updateImpact", { restarting: nodeUpdateCheck.impact.restartInstanceCount, active: nodeUpdateCheck.impact.activeInstanceCount, stopped: nodeUpdateCheck.impact.stoppedInstanceCount }) }}
+                  </p>
                 </section>
 
                 <section class="managed-update-group instance-update-group">
@@ -244,24 +247,18 @@
                     <Boxes :size="18" />
                     <div>
                       <strong>{{ t("settings.nodeDetail.controlledInstances", { count: resources.instances.length }) }}</strong>
-                      <span>{{ t("settings.nodeDetail.instanceUpdateDescription") }}</span>
+                      <span>{{ t("settings.nodeDetail.instanceConvergenceDescription") }}</span>
                     </div>
                   </div>
                   <div class="node-resource-list compact-list">
                     <div v-for="instance in resources.instances" :key="`update-${instance.id}`" class="node-resource-row">
                       <div>
                         <strong>{{ instance.name }}</strong>
-                        <code>{{ updateSummary(`instance:${instance.id}`, instance.build?.packageVersion || instance.build?.imageDigest) }}</code>
+                        <code>{{ runtimeVersionSummary(instance) }}</code>
+                        <small v-if="instance.runtimeVersion?.error" class="settings-error">{{ instance.runtimeVersion.error.message }}</small>
                       </div>
                       <div class="settings-row-actions">
-                        <Button variant="outline" size="sm" :disabled="busy.checkingUpdateTarget === updateKey(`instance:${instance.id}`)" @click="actions.checkManagedUpdate(selectedNode.id, { component: 'controlled-instance', instanceId: instance.id })">
-                          <RefreshCw :size="14" />
-                          <span>{{ busy.checkingUpdateTarget === updateKey(`instance:${instance.id}`) ? t("settings.nodeDetail.checking") : t("settings.nodeDetail.check") }}</span>
-                        </Button>
-                        <Button variant="outline" size="sm" :disabled="!canApplyUpdate(`instance:${instance.id}`) || busy.applyingUpdateTarget === updateKey(`instance:${instance.id}`)" @click="actions.applyManagedUpdate(selectedNode.id, { component: 'controlled-instance', instanceId: instance.id })">
-                          <Download :size="14" />
-                          <span>{{ busy.applyingUpdateTarget === updateKey(`instance:${instance.id}`) ? t("settings.nodeDetail.queuing") : t("settings.nodeDetail.update") }}</span>
-                        </Button>
+                        <Badge :variant="instance.runtimeVersion?.phase === 'matched' ? 'default' : 'secondary'">{{ runtimeVersionPhase(instance) }}</Badge>
                       </div>
                     </div>
                     <p v-if="!resources.instances.length" class="settings-empty">{{ t("settings.nodeDetail.noControlledInstances") }}</p>
@@ -281,10 +278,11 @@
                 <div v-for="job in resources.updateJobs" :key="job.id" class="node-resource-row">
                   <div>
                     <span class="update-job-title">
-                      <Badge variant="outline">{{ job.target.component === "node-agent" ? t("settings.nodeDetail.agent") : t("settings.nodeDetail.instance") }}</Badge>
-                      <strong>{{ job.target.component === "node-agent" ? selectedNode.name : job.target.instanceId }}</strong>
+                      <Badge variant="outline">{{ t("settings.nodeDetail.nodeRollout") }}</Badge>
+                      <strong>{{ selectedNode.name }}</strong>
                     </span>
-                    <code>{{ job.fromVersion || t("settings.nodeDetail.unknown") }} → {{ job.toVersion }}<span v-if="job.error"> · {{ job.error }}</span></code>
+                    <code>{{ job.fromVersion || t("settings.nodeDetail.unknown") }} → {{ job.toVersion }}<span v-if="job.error"> · {{ job.error.message }}</span></code>
+                    <small>{{ t("settings.nodeDetail.rolloutProgress", { matched: job.rollout.matchedInstanceCount, expected: job.rollout.expectedInstanceCount, failed: job.rollout.failedInstanceCount, deferred: job.rollout.deferredInstanceCount }) }}</small>
                   </div>
                   <Badge :variant="job.status === 'succeeded' ? 'default' : 'secondary'">{{ localizedStatus(updateJobStatusKeys, job.status) }}</Badge>
                 </div>
@@ -438,7 +436,7 @@ import { computed, ref, watch, type Component } from "vue";
 import { useI18n } from "vue-i18n";
 import { Box, Boxes, Download, FolderOpen, Gauge, KeyRound, Monitor, MoreHorizontal, Network, Pencil, Plus, RefreshCw, ServerCog, Settings, Trash2 } from "@lucide/vue";
 import { TooltipTrigger as RekaTooltipTrigger } from "reka-ui";
-import type { BuildInfo, InstanceBoardItem, LocalDockerImage, Node, NodeAgentExternalListener, NodeLocalFolder, NodeRemoteControlPlane, NodeRuntime, UpdateChannel, UpdateCheckResult, UpdateJob, UpdateTarget } from "../../../api/types";
+import type { BuildInfo, InstanceBoardItem, LocalDockerImage, Node, NodeAgentExternalListener, NodeLocalFolder, NodeRemoteControlPlane, NodeRuntime, UpdateChannel, UpdateCheckResult, UpdateJob } from "../../../api/types";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
@@ -450,7 +448,7 @@ import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
 import { nodeEndpointDisplay } from "./nodeEndpointDisplay";
 import { nodeDetailActionState } from "./nodeDetailActions";
-import { externalListenerSourceKeys, externalListenerStatusKeys, instanceStatusKeys, nodeConnectionModeKeys, nodeRuntimeStatusKeys, remoteConnectStatusKeys, runtimeAccessStrategyKeys, runtimeTypeKeys, translateStatus, updateJobStatusKeys } from "../../../i18n/status";
+import { externalListenerSourceKeys, externalListenerStatusKeys, instanceStatusKeys, nodeConnectionModeKeys, nodeRuntimeStatusKeys, remoteConnectStatusKeys, runtimeAccessStrategyKeys, runtimeTypeKeys, runtimeVersionStatusKeys, translateStatus, updateJobStatusKeys } from "../../../i18n/status";
 import { formatDateTime } from "../../../i18n/presentation";
 import type { SupportedLocale } from "../../../i18n/locale";
 
@@ -482,8 +480,8 @@ type NodeDiagnosticLog = {
 type NodeDetailActions = {
   checkRuntime: (runtime: NodeRuntime) => void | Promise<void>;
   checkSettingsNode: (nodeId: string) => void | Promise<void>;
-  checkManagedUpdate: (nodeId: string, target: UpdateTarget) => void | Promise<void>;
-  applyManagedUpdate: (nodeId: string, target: UpdateTarget) => void | Promise<void>;
+  checkManagedUpdate: (nodeId: string) => void | Promise<void>;
+  applyManagedUpdate: (nodeId: string) => void | Promise<void>;
   connectSelectedNodeToRemote: (nodeId: string) => void | Promise<void>;
   createPairingInviteForNode: (nodeId: string) => void | Promise<void>;
   loadNodeImages: (nodeId: string) => void | Promise<void>;
@@ -505,8 +503,8 @@ type NodeDetailActions = {
 type NodeDetailBusy = {
   checkingNodeId: string;
   checkingRuntimeId: string;
-  checkingUpdateTarget: string;
-  applyingUpdateTarget: string;
+  checkingUpdateNodeId: string;
+  applyingUpdateNodeId: string;
   connectingRemoteNodeId: string;
   creatingNodeLocalFolder: boolean;
   creatingPairingInviteNodeId: string;
@@ -589,21 +587,34 @@ const tabs = computed(() => [
   { value: "remote", label: t("settings.nodeDetail.remote"), icon: Network },
 ] satisfies Array<{ value: NodeDetailTab; label: string; icon: Component }>);
 
-function updateSummary(key: string, fallback?: string) {
-  const check = props.resources.updateChecks[updateKey(key)];
+const nodeUpdateCheck = computed(() => props.resources.updateChecks[props.selectedNode?.id || ""]);
+
+function updateSummary(fallback?: string) {
+  const check = nodeUpdateCheck.value;
   if (!check) return t("settings.nodeDetail.currentNotChecked", { version: fallback || t("settings.nodeDetail.unknown") });
   if (!check.supported) return check.reason || t("settings.nodeDetail.updateUnsupported");
   if (!check.updateAvailable && check.reason) return check.reason;
   return `${check.currentVersion || fallback || t("settings.nodeDetail.unknown")} → ${check.availableVersion} · ${check.updateAvailable ? t("settings.nodeDetail.updateAvailable") : t("settings.nodeDetail.upToDate")}`;
 }
 
-function canApplyUpdate(key: string) {
-  const check = props.resources.updateChecks[updateKey(key)];
-  return Boolean(check?.supported && check.updateAvailable);
+function canApplyUpdate() {
+  const check = nodeUpdateCheck.value;
+  return Boolean(check?.supported && check.updateAvailable && check.preflightToken);
 }
 
-function updateKey(targetKey: string) {
-  return `${props.selectedNode?.id || ""}:${targetKey}`;
+function runtimeVersionSummary(instance: InstanceBoardItem) {
+  const state = instance.runtimeVersion;
+  if (!state) return t("settings.nodeDetail.runtimeVersionUnavailable");
+  return t("settings.nodeDetail.runtimeVersionSummary", {
+    actual: state.actualVersion || t("settings.nodeDetail.unknown"),
+    desired: state.desiredVersion,
+    attempt: state.attempt,
+  });
+}
+
+function runtimeVersionPhase(instance: InstanceBoardItem) {
+  const phase = instance.runtimeVersion?.phase;
+  return phase ? localizedStatus(runtimeVersionStatusKeys, phase) : t("settings.nodeDetail.unknown");
 }
 
 watch(

@@ -76,6 +76,7 @@ test("a newer lifecycle generation removes retained pull diagnostics", () => {
     health: "unknown",
     connectionStatus: "unknown",
     accessStatus: "endpoint-unreachable",
+    ready: false,
     imageProvisioning: {
       phase: "checking-image",
       requestedReference: "docker.io/example/app:v1",

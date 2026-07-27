@@ -20,6 +20,18 @@ const externalFrom = (dependencies) => {
 };
 
 const plugins = [
+  {
+    name: "json-modules",
+    transform(source, id) {
+      if (!id.endsWith(".json")) return null;
+      const value = JSON.parse(source);
+      const named = Object.entries(value)
+        .filter(([key]) => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) && key !== "default")
+        .map(([key, entry]) => `export const ${key} = ${JSON.stringify(entry)};`)
+        .join("\n");
+      return `${named}\nexport default ${JSON.stringify(value)};`;
+    },
+  },
   nodeResolve({ preferBuiltins: true }),
   typescript({
     tsconfig: "./tsconfig.json",
@@ -28,7 +40,7 @@ const plugins = [
       rewriteRelativeImportExtensions: true,
     },
   }),
-  commonjs({ transformMixedEsModules: true }),
+  commonjs({ transformMixedEsModules: true, extensions: [".js", ".ts"] }),
 ];
 
 let cleaned = false;

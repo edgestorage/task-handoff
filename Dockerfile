@@ -17,6 +17,7 @@ ARG WEB_CAP_EXTENSION_VERSION=0.0.7
 ARG WEB_CAP_EXTENSION_URL=
 ARG WEB_CAP_SKILL_REPOSITORY=https://github.com/edgestorage/web-cap.git
 ARG WEB_CAP_SKILL_REF=v0.0.7
+ARG TASK_HANDOFF_VERSION=0.0.1
 ARG TASK_HANDOFF_BUILD_ID=local
 ARG TASK_HANDOFF_BUILT_AT=unknown
 ARG TASK_HANDOFF_GIT_COMMIT=
@@ -62,7 +63,6 @@ RUN apt-get update \
     openbox \
     picom \
     python3 \
-    sudo \
     ssl-cert \
     tini \
     unzip \
@@ -85,9 +85,7 @@ RUN if id -u agent >/dev/null 2>&1; then \
   else \
     useradd -m -u 1000 -s /bin/bash agent; \
   fi \
-  && mkdir -p /home/agent/.codex /home/agent/.claude \
-  && echo "agent ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/agent \
-  && chmod 0440 /etc/sudoers.d/agent
+  && mkdir -p /home/agent/.codex /home/agent/.claude
 RUN npm_config_update_notifier=false npm install -g --include=optional --no-audit --no-fund --loglevel=warn "$CODEX_CLI_PACKAGE" \
   && codex --version
 ARG TARGETOS
@@ -172,31 +170,42 @@ COPY apps/desktop-shell/package.json ./apps/desktop-shell/package.json
 RUN pnpm install --frozen-lockfile --config.auto-install-peers=false
 
 FROM deps AS build
+ARG TASK_HANDOFF_VERSION=0.0.1
 COPY . .
 RUN pnpm exec node --test --test-concurrency=1
 RUN pnpm run check:controlled-instance
-RUN pnpm run runtime:pack:controlled-instance
+RUN TASK_HANDOFF_VERSION="${TASK_HANDOFF_VERSION}" pnpm run runtime:pack:controlled-instance
 
 FROM base AS runtime
 ENV NODE_ENV=production
+ENV TASK_HANDOFF_INSTANCE_RUNTIME_ROOT=/opt/task-handoff/instance-runtime
+
+ARG TASK_HANDOFF_VERSION=0.0.1
+LABEL org.opencontainers.image.version=${TASK_HANDOFF_VERSION}
 
 COPY --from=build /app/release/npm/artifacts/task-handoff-controlled-instance-[0-9]*.tgz /tmp/
 RUN npm install -g --omit=dev --no-audit --no-fund /tmp/task-handoff-controlled-instance-[0-9]*.tgz \
   && rm -f /tmp/task-handoff-controlled-instance-[0-9]*.tgz
 COPY docker/entrypoint.sh /usr/local/bin/task-handoff-entrypoint
+COPY docker/instance-launcher.sh /usr/local/bin/task-handoff-instance-launcher
+COPY docker/runtime-installer.mjs /usr/local/lib/task-handoff/runtime-installer.mjs
 COPY docker/healthcheck.sh /usr/local/bin/task-handoff-healthcheck
 
-RUN chmod +x /usr/local/bin/task-handoff-entrypoint /usr/local/bin/task-handoff-healthcheck \
+RUN chmod +x /usr/local/bin/task-handoff-entrypoint /usr/local/bin/task-handoff-instance-launcher /usr/local/lib/task-handoff/runtime-installer.mjs /usr/local/bin/task-handoff-healthcheck \
+  && ln -s /usr/local/lib/task-handoff/runtime-installer.mjs /usr/local/bin/task-handoff-runtime \
   && mkdir -p \
     /workspace \
     /data/task-handoff/app-catalog \
     /data/task-handoff/app-sessions \
     /data/task-handoff/runtime \
+    /opt/task-handoff/instance-runtime/releases \
+    /opt/task-handoff/instance-runtime/staging \
     /data/artifacts \
     /data/logs \
     /home/agent/.codex \
     /home/agent/.claude \
-  && chown -R agent:agent /workspace /data /home/agent /app
+  && chown -R agent:agent /workspace /data /home/agent /app \
+  && chmod 0755 /opt/task-handoff/instance-runtime /opt/task-handoff/instance-runtime/releases /opt/task-handoff/instance-runtime/staging
 RUN rm -rf /tmp/.X11-unix \
   && mkdir -p /tmp/.X11-unix \
   && chmod 1777 /tmp/.X11-unix

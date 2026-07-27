@@ -1,4 +1,7 @@
-import type { ControlledInstance, InstanceImageSnapshot, LocalDockerImage, Node, NodeRuntime, Project } from "@task-handoff/protocol/control-plane";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { RuntimeArtifactIdentitySchema, type ControlledInstance, type InstanceImageSnapshot, type LocalDockerImage, type Node, type NodeRuntime, type Project, type RuntimeArtifactIdentity } from "@task-handoff/protocol/control-plane";
 import { defaultCommandRunner, type CommandRunner } from "../../shared/process/command-runner.ts";
 import { DockerImageService, listDockerImages } from "../docker-images.ts";
 
@@ -36,17 +39,47 @@ export type NodeRuntimeExecutor = {
 export type DockerExecutorOptions = {
   publishHost?: string;
   imageService?: DockerImageService;
+  launcherAssetsDir?: string;
+};
+
+export type DockerRuntimeInstallRequest = {
+  containerName: string;
+  artifactPath: string;
+  identity: RuntimeArtifactIdentity;
+  expectedContainerId?: string;
+};
+
+export type DockerRuntimeInspection = Partial<RuntimeArtifactIdentity> & {
+  containerId?: string;
+};
+
+export type DockerRuntimeTarget = {
+  platform: string;
+  arch: string;
+  launcherAbi: number;
+};
+
+export type DockerLegacyBootstrapResult = {
+  migrated: boolean;
+  containerId?: string;
+  audit: {
+    operation: "legacy-launcher-bootstrap";
+    rootExec: boolean;
+    subsequentInstallUser: "root";
+  };
 };
 
 export class LocalDockerExecutor implements NodeRuntimeExecutor {
   private readonly runCommand: CommandRunner;
   private readonly publishHost: string;
   private readonly images: DockerImageService;
+  private readonly launcherAssetsDir: string;
 
   constructor(runCommand: CommandRunner = defaultCommandRunner, options: DockerExecutorOptions = {}) {
     this.runCommand = runCommand;
     this.images = options.imageService || new DockerImageService(runCommand);
     this.publishHost = options.publishHost || "127.0.0.1";
+    this.launcherAssetsDir = options.launcherAssetsDir || defaultLauncherAssetsDir();
   }
 
   async start(context: ExecutorContext): Promise<ExecutorStartResult> {
@@ -114,11 +147,17 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
     };
   }
 
-  async restart(context: ExecutorContext): Promise<ExecutorStartResult> {
+  async restart(context: ExecutorContext, expectedContainerId?: string): Promise<ExecutorStartResult> {
     validateStartContext(context);
     const containerName = context.instance.runtime.containerName || containerNameForInstance(context.instance.id);
+    const before = await this.inspectContainerId(containerName);
+    if (!before) throw runtimeExecutorError("INSTANCE_RUNTIME_RESTART_FAILED", `Docker container ${containerName} does not exist.`);
+    assertExpectedContainerId(containerName, before, expectedContainerId, "before restart", "INSTANCE_RUNTIME_RESTART_FAILED");
     await this.runCommand("docker", ["restart", containerName]);
-    return this.runningResult(context, containerName, context.instance.runtime.containerId);
+    const after = await this.inspectContainerId(containerName);
+    if (!after || after !== before) throw runtimeExecutorError("INSTANCE_RUNTIME_RESTART_FAILED", `Docker container identity changed while restarting ${containerName}.`);
+    assertExpectedContainerId(containerName, after, expectedContainerId, "after restart", "INSTANCE_RUNTIME_RESTART_FAILED");
+    return this.runningResult(context, containerName, after);
   }
 
   async delete(context: ExecutorContext): Promise<ExecutorStartResult> {
@@ -135,6 +174,169 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
     };
   }
 
+  /**
+   * Installs an application release into an already-running container and
+   * restarts that same container. This path intentionally contains no image
+   * pull, container remove, or container create operation.
+   */
+  async installRuntime(request: DockerRuntimeInstallRequest): Promise<DockerRuntimeInspection> {
+    const before = await this.installRuntimeRelease(request);
+    assertExpectedContainerId(request.containerName, before, request.expectedContainerId, "before runtime restart", "INSTANCE_RUNTIME_RESTART_FAILED");
+    try {
+      await this.runCommand("docker", ["restart", request.containerName]);
+    } catch (cause) {
+      throw runtimeExecutorError("INSTANCE_RUNTIME_RESTART_FAILED", `Could not restart Docker container ${request.containerName}.`, cause);
+    }
+    const after = await this.inspectContainerId(request.containerName);
+    if (!after || after !== before) {
+      throw runtimeExecutorError("INSTANCE_RUNTIME_RESTART_FAILED", `Docker container identity changed while updating ${request.containerName}.`);
+    }
+    assertExpectedContainerId(request.containerName, after, request.expectedContainerId, "after runtime restart", "INSTANCE_RUNTIME_RESTART_FAILED");
+    return this.inspectRuntimeVersion(request.containerName);
+  }
+
+  /** Installs and activates a release without changing container lifecycle. */
+  async installRuntimeRelease(request: DockerRuntimeInstallRequest): Promise<string> {
+    const before = await this.inspectContainerId(request.containerName);
+    if (!before) throw runtimeExecutorError("INSTANCE_RUNTIME_INSTALL_FAILED", `Docker container ${request.containerName} does not exist.`);
+    assertExpectedContainerId(request.containerName, before, request.expectedContainerId, "before runtime install", "INSTANCE_RUNTIME_INSTALL_FAILED");
+    const remoteArtifact = `/opt/task-handoff/instance-runtime/incoming/task-handoff-runtime-${safePathSegment(request.identity.version)}-${request.identity.sha256.slice(0, 12)}.tar.gz`;
+    await this.runCommand("docker", ["exec", "--user", "0", request.containerName, "install", "-d", "-o", "root", "-g", "root", "-m", "0755", "/opt/task-handoff/instance-runtime/incoming"]);
+    await this.runCommand("docker", ["cp", request.artifactPath, `${request.containerName}:${remoteArtifact}`]);
+    try {
+      await this.runCommand("docker", [
+        "exec",
+        "--user",
+        "0",
+        request.containerName,
+        "task-handoff-runtime",
+        "install",
+        "--artifact",
+        remoteArtifact,
+        "--version",
+        request.identity.version,
+        "--sha256",
+        request.identity.sha256,
+        "--platform",
+        request.identity.platform,
+        "--arch",
+        request.identity.arch,
+        "--launcher-abi",
+        String(request.identity.launcherAbi),
+      ]);
+    } catch (cause) {
+      throw runtimeExecutorError("INSTANCE_RUNTIME_INSTALL_FAILED", `Could not install controlled-instance ${request.identity.version} in ${request.containerName}.`, cause);
+    } finally {
+      await this.runCommand("docker", ["exec", "--user", "0", request.containerName, "rm", "-f", remoteArtifact]).catch(() => ({ stdout: "", stderr: "" }));
+    }
+
+    const after = await this.inspectContainerId(request.containerName);
+    if (!after || after !== before) throw runtimeExecutorError("INSTANCE_RUNTIME_INSTALL_FAILED", `Docker container identity changed while installing ${request.containerName}.`);
+    assertExpectedContainerId(request.containerName, after, request.expectedContainerId, "after runtime install", "INSTANCE_RUNTIME_INSTALL_FAILED");
+    return before;
+  }
+
+  async inspectRuntimeVersion(containerName: string): Promise<DockerRuntimeInspection> {
+    const containerId = await this.inspectContainerId(containerName);
+    if (!containerId) return {};
+    const result = await this.runCommand("docker", [
+      "exec",
+      "--user",
+      "agent",
+      containerName,
+      "task-handoff-runtime",
+      "verify-active",
+    ]).catch(() => undefined);
+    if (!result?.stdout) return { containerId };
+    try {
+      const parsed = RuntimeArtifactIdentitySchema.safeParse(JSON.parse(result.stdout));
+      return parsed.success ? { containerId, ...parsed.data } : { containerId };
+    } catch {
+      return { containerId };
+    }
+  }
+
+  async inspectRuntimeTarget(containerName?: string): Promise<DockerRuntimeTarget> {
+    let platform: unknown;
+    let arch: unknown;
+    if (containerName) {
+      const container = await this.runCommand("docker", ["inspect", "--format", "{{json .}}", containerName]).then((result) => JSON.parse(result.stdout.trim() || "{}") as Record<string, unknown>).catch(() => undefined);
+      platform = container?.Platform;
+      if (typeof container?.Image === "string" && container.Image) {
+        const image = await this.runCommand("docker", ["image", "inspect", "--format", "{{json .}}", container.Image]).then((result) => JSON.parse(result.stdout.trim() || "{}") as Record<string, unknown>).catch(() => undefined);
+        platform = image?.Os || platform;
+        arch = image?.Architecture;
+      }
+    }
+    if (!platform || !arch) {
+      const info = await this.runCommand("docker", ["info", "--format", "{{json .}}"])
+        .then((result) => JSON.parse(result.stdout.trim() || "{}") as Record<string, unknown>)
+        .catch((cause) => {
+          throw runtimeExecutorError("INSTANCE_BASE_RUNTIME_INCOMPATIBLE", "Could not inspect the Docker runtime target.", cause);
+        });
+      platform ||= info.OSType;
+      arch ||= info.Architecture;
+    }
+    const normalizedPlatform = normalizeDockerPlatform(platform);
+    const normalizedArch = normalizeDockerArchitecture(arch);
+    if (!normalizedPlatform || !normalizedArch) {
+      throw runtimeExecutorError("INSTANCE_BASE_RUNTIME_INCOMPATIBLE", `Docker reported an unsupported runtime target ${String(platform || "unknown")}/${String(arch || "unknown")}.`);
+    }
+    return { platform: normalizedPlatform, arch: normalizedArch, launcherAbi: 1 };
+  }
+
+  async rollbackRuntime(containerName: string): Promise<DockerRuntimeInspection> {
+    const before = await this.inspectContainerId(containerName);
+    if (!before) throw runtimeExecutorError("INSTANCE_RUNTIME_RESTART_FAILED", `Docker container ${containerName} does not exist.`);
+    try {
+      await this.runCommand("docker", ["exec", "--user", "0", containerName, "task-handoff-runtime", "rollback"]);
+      await this.runCommand("docker", ["restart", containerName]);
+    } catch (cause) {
+      throw runtimeExecutorError("INSTANCE_RUNTIME_RESTART_FAILED", `Could not roll back ${containerName} to its previous controlled-instance release.`, cause);
+    }
+    const after = await this.inspectContainerId(containerName);
+    if (!after || after !== before) throw runtimeExecutorError("INSTANCE_RUNTIME_RESTART_FAILED", `Docker container identity changed while rolling back ${containerName}.`);
+    return this.inspectRuntimeVersion(containerName);
+  }
+
+  /** One-time migration for the former root-owned global npm layout. */
+  async bootstrapLegacyLauncher(containerName: string): Promise<DockerLegacyBootstrapResult> {
+    const containerId = await this.inspectContainerId(containerName);
+    if (!containerId) throw runtimeExecutorError("INSTANCE_BASE_RUNTIME_INCOMPATIBLE", `Docker container ${containerName} does not exist.`);
+    const present = await this.runCommand("docker", ["exec", containerName, "test", "-x", "/usr/local/bin/task-handoff-runtime"]).then(() => true).catch(() => false);
+    if (present) {
+      return { migrated: false, containerId, audit: { operation: "legacy-launcher-bootstrap", rootExec: false, subsequentInstallUser: "root" } };
+    }
+
+    const assets = [
+      [path.join(this.launcherAssetsDir, "entrypoint.sh"), "/root/.task-handoff-entrypoint.bootstrap"],
+      [path.join(this.launcherAssetsDir, "instance-launcher.sh"), "/root/.task-handoff-instance-launcher.bootstrap"],
+      [path.join(this.launcherAssetsDir, "runtime-installer.mjs"), "/root/.task-handoff-runtime-installer.bootstrap"],
+    ] as const;
+    for (const [source, target] of assets) await this.runCommand("docker", ["cp", source, `${containerName}:${target}`]);
+    try {
+      await this.runCommand("docker", [
+        "exec",
+        "--user",
+        "0",
+        containerName,
+        "bash",
+        "-ceu",
+        "install -d -o root -g root -m 0755 /opt/task-handoff/instance-runtime /opt/task-handoff/instance-runtime/releases /opt/task-handoff/instance-runtime/staging /opt/task-handoff/instance-runtime/incoming; chown -R root:root /opt/task-handoff/instance-runtime; chmod -R go-w /opt/task-handoff/instance-runtime; install -m 0755 /root/.task-handoff-entrypoint.bootstrap /usr/local/bin/task-handoff-entrypoint; install -m 0755 /root/.task-handoff-instance-launcher.bootstrap /usr/local/bin/task-handoff-instance-launcher; install -d /usr/local/lib/task-handoff; install -m 0755 /root/.task-handoff-runtime-installer.bootstrap /usr/local/lib/task-handoff/runtime-installer.mjs; ln -sfn /usr/local/lib/task-handoff/runtime-installer.mjs /usr/local/bin/task-handoff-runtime; rm -f /root/.task-handoff-entrypoint.bootstrap /root/.task-handoff-instance-launcher.bootstrap /root/.task-handoff-runtime-installer.bootstrap",
+      ]);
+    } catch (cause) {
+      throw runtimeExecutorError("INSTANCE_BASE_RUNTIME_INCOMPATIBLE", `Could not bootstrap the stable runtime launcher in ${containerName}.`, cause);
+    }
+    const after = await this.inspectContainerId(containerName);
+    if (after !== containerId) throw runtimeExecutorError("INSTANCE_BASE_RUNTIME_INCOMPATIBLE", `Docker container identity changed while bootstrapping ${containerName}.`);
+    return { migrated: true, containerId, audit: { operation: "legacy-launcher-bootstrap", rootExec: true, subsequentInstallUser: "root" } };
+  }
+
+  private async inspectContainerId(containerName: string) {
+    const result = await this.runCommand("docker", ["inspect", "--format", "{{.Id}}", containerName]).catch(() => undefined);
+    return result?.stdout.trim() || undefined;
+  }
+
   private async containerPort(containerName: string, containerPort: string) {
     const result = await this.runCommand("docker", ["port", containerName, containerPort]).catch(() => ({ stdout: "", stderr: "" }));
     const line = result.stdout.split(/\r?\n/).find(Boolean);
@@ -142,6 +344,53 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
     return match?.[1];
   }
 
+}
+
+function safePathSegment(value: string) {
+  return value.replace(/[^0-9A-Za-z.+_-]/g, "-");
+}
+
+function normalizeDockerPlatform(value: unknown) {
+  if (value === "linux" || value === "darwin") return value;
+  if (value === "windows" || value === "win32") return "win32";
+  return undefined;
+}
+
+function normalizeDockerArchitecture(value: unknown) {
+  if (value === "amd64" || value === "x86_64" || value === "x64") return "x64";
+  if (value === "arm64" || value === "aarch64") return "arm64";
+  return undefined;
+}
+
+function defaultLauncherAssetsDir() {
+  const moduleDir = import.meta.url ? path.dirname(fileURLToPath(import.meta.url)) : __dirname;
+  const candidates = [
+    path.resolve(moduleDir, "../../../../../docker"),
+    path.resolve(moduleDir, "../docker"),
+    path.resolve(moduleDir, "../../docker"),
+  ];
+  return candidates.find((candidate) => fs.existsSync(path.join(candidate, "runtime-installer.mjs"))) || candidates[0];
+}
+
+function runtimeExecutorError(code: string, message: string, cause?: unknown) {
+  const detail = commandFailureDetail(cause);
+  const error = new Error(detail ? `${message} Cause: ${detail}` : message, cause === undefined ? undefined : { cause });
+  Object.assign(error, { statusCode: 502, code });
+  return error;
+}
+
+function commandFailureDetail(cause: unknown) {
+  if (!cause || typeof cause !== "object") return cause === undefined ? undefined : String(cause);
+  const candidate = cause as { message?: unknown; details?: { stderr?: unknown; stdout?: unknown } };
+  const output = candidate.details?.stderr || candidate.details?.stdout;
+  if (typeof output === "string" && output.trim()) return output.trim();
+  return typeof candidate.message === "string" && candidate.message.trim() ? candidate.message.trim() : undefined;
+}
+
+function assertExpectedContainerId(containerName: string, actual: string, expected: string | undefined, phase: string, code: string) {
+  if (expected && actual !== expected) {
+    throw runtimeExecutorError(code, `Docker container ${containerName} identity mismatch ${phase}: expected ${expected}, got ${actual}.`);
+  }
 }
 
 export async function listLocalDockerImages(runCommand: CommandRunner = defaultCommandRunner): Promise<LocalDockerImage[]> {

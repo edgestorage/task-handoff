@@ -672,6 +672,7 @@ function startNodeAgent(options = {}) {
       ...(app.isPackaged ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
       TASK_HANDOFF_NODE_AGENT_HOST: host,
       TASK_HANDOFF_NODE_AGENT_PORT: String(port),
+      TASK_HANDOFF_BUNDLED_RUNTIME_DIR: process.env.TASK_HANDOFF_BUNDLED_RUNTIME_DIR || path.join(root, "release", "runtime-artifacts"),
       TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV: JSON.stringify([nodeCommand, validation.cliEntry, "web"]),
     },
     stdio: ["ignore", "pipe", "pipe"],

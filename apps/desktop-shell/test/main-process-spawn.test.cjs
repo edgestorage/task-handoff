@@ -24,4 +24,8 @@ test("node agent receives the bundled controlled-instance command as structured 
     main,
     /TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV: JSON\.stringify\(\[nodeCommand, validation\.cliEntry, "web"\]\)/,
   );
+  assert.match(
+    main,
+    /TASK_HANDOFF_BUNDLED_RUNTIME_DIR: process\.env\.TASK_HANDOFF_BUNDLED_RUNTIME_DIR \|\| path\.join\(root, "release", "runtime-artifacts"\)/,
+  );
 });

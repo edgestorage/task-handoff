@@ -52,6 +52,21 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Resolve image version
+        id: image-version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+            node -e 'if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(process.argv[1])) process.exit(1)' "$version"
+            image_ref="${DOCKERHUB_IMAGE_NAME}:${GITHUB_REF_NAME}"
+          else
+            version="$(node -p "require('./package.json').version")"
+            image_ref="task-handoff-controlled-instance:ci-${{ matrix.arch }}"
+          fi
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+          echo "image-ref=$image_ref" >> "$GITHUB_OUTPUT"
+
       - uses: docker/setup-buildx-action@v4
 
       - name: Build controlled instance image
@@ -62,15 +77,26 @@ jobs:
           platforms: ${{ matrix.platform }}
           tags: task-handoff-controlled-instance:ci-${{ matrix.arch }}
           build-args: |
+            TASK_HANDOFF_VERSION=${{ steps.image-version.outputs.value }}
             TASK_HANDOFF_BUILD_ID=${{ github.run_id }}
             TASK_HANDOFF_BUILT_AT=${{ github.event.repository.updated_at }}
             TASK_HANDOFF_GIT_COMMIT=${{ github.sha }}
-            TASK_HANDOFF_IMAGE_REF=task-handoff-controlled-instance:ci-${{ matrix.arch }}
+            TASK_HANDOFF_IMAGE_REF=${{ steps.image-version.outputs.image-ref }}
           cache-from: type=gha,scope=controlled-instance-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=controlled-instance-${{ matrix.arch }}
 
+      - name: Verify image version
+        env:
+          EXPECTED_VERSION: ${{ steps.image-version.outputs.value }}
+        run: |
+          actual="$(docker image inspect task-handoff-controlled-instance:ci-${{ matrix.arch }} --format '{{ index .Config.Labels "org.opencontainers.image.version" }}')"
+          test "$actual" = "$EXPECTED_VERSION"
+
       - name: Smoke test
         if: ${{ matrix.arch == 'amd64' }}
+        env:
+          EXPECTED_VERSION: ${{ steps.image-version.outputs.value }}
+          EXPECTED_IMAGE_REF: ${{ steps.image-version.outputs.image-ref }}
         run: |
           docker run --rm -d \
             --name task-handoff-web-ci \
@@ -89,22 +115,30 @@ jobs:
             fi
             sleep 1
           done
+          status_response="$(curl -fsS http://127.0.0.1:18080/api/instance/status)"
           diagnostics_response="$(curl -fsS http://127.0.0.1:18080/api/diagnostics)"
+          echo "$status_response"
           echo "$diagnostics_response"
-          printf '%s\n' "$diagnostics_response" | node -e '
-          const fs = require("node:fs");
-          const payload = JSON.parse(fs.readFileSync(0, "utf8")).data;
+          STATUS_RESPONSE="$status_response" DIAGNOSTICS_RESPONSE="$diagnostics_response" node -e '
+          const status = JSON.parse(process.env.STATUS_RESPONSE).data;
+          const diagnostics = JSON.parse(process.env.DIAGNOSTICS_RESPONSE).data;
           const requiredCommands = new Set(["Xvfb", "openbox", "x11vnc", "websockify", "chromium", "xterm", "import", "codex", "claude"]);
-          if (!payload.ok) {
+          if (!diagnostics.ok) {
             throw new Error("diagnostics ok=false");
           }
-          if (!payload.runtime.linuxRuntime) {
+          if (status.build.packageVersion !== process.env.EXPECTED_VERSION) {
+            throw new Error(`controlled-instance version mismatch: expected ${process.env.EXPECTED_VERSION}, got ${status.build.packageVersion}`);
+          }
+          if (status.build.imageRef !== process.env.EXPECTED_IMAGE_REF) {
+            throw new Error(`controlled-instance image ref mismatch: expected ${process.env.EXPECTED_IMAGE_REF}, got ${status.build.imageRef}`);
+          }
+          if (!diagnostics.runtime.linuxRuntime) {
             throw new Error("diagnostics did not detect linux runtime");
           }
-          if (!payload.noVnc.available) {
+          if (!diagnostics.noVnc.available) {
             throw new Error("noVNC is not available");
           }
-          for (const command of payload.commands) {
+          for (const command of diagnostics.commands) {
             requiredCommands.delete(command.name);
             if (!command.available) {
               throw new Error(`${command.name} is unavailable`);
@@ -113,7 +147,7 @@ jobs:
           if (requiredCommands.size > 0) {
             throw new Error(`missing command diagnostics: ${Array.from(requiredCommands).join(", ")}`);
           }
-          const notWritable = payload.storage.filter((entry) => !entry.writable);
+          const notWritable = diagnostics.storage.filter((entry) => !entry.writable);
           if (notWritable.length > 0) {
             throw new Error(`storage not writable: ${notWritable.map((entry) => entry.key).join(", ")}`);
           }

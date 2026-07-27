@@ -9,6 +9,7 @@ const result = fs.readFileSync(new URL("../src/components/ai-session/AiSessionRe
 const message = fs.readFileSync(new URL("../src/components/ai-session/AiSessionStreamingMarkdown.vue", import.meta.url), "utf8");
 const animatedText = fs.readFileSync(new URL("../src/components/ai-session/AiSessionAnimatedTextNode.vue", import.meta.url), "utf8");
 const codeBlock = fs.readFileSync(new URL("../src/components/ai-session/AiSessionCodeBlock.vue", import.meta.url), "utf8");
+const markdownNode = fs.readFileSync(new URL("../src/components/ai-session/AiSessionMarkdownNode.vue", import.meta.url), "utf8");
 
 test("board, instance session cards, and selected details use the streaming Markdown view", () => {
   for (const source of [card, result]) {
@@ -57,7 +58,8 @@ test("streaming Markdown uses markstream pacing with independent character revea
   assert.match(message, /:final="isFinal"/);
   assert.match(message, /:fade="false"/);
   assert.match(message, /activeCharacterAnimations\.value === 0/);
-  assert.match(message, /text: AiSessionAnimatedTextNode/);
+  assert.match(message, /text: AiSessionMarkdownNode/);
+  assert.match(markdownNode, /<AiSessionAnimatedTextNode/);
   assert.match(animatedText, /new Intl\.Segmenter\(undefined, \{ granularity: "grapheme" \}\)/);
   assert.match(animatedText, /v-for="segment in pendingSegments"/);
   assert.match(animatedText, /:key="segment\.id"/);
@@ -78,7 +80,11 @@ test("streaming Markdown keeps the existing session typography, semantic colors,
   assert.match(message, /--link-color: var\(--markdown-link-color, var\(--brand-accent, currentColor\)\)/);
   assert.match(message, /--footnote-border: var\(--markdown-border-color, var\(--line, currentColor\)\)/);
   assert.match(message, /setCustomComponents\(markdownScopeId/);
-  assert.match(message, /code_block: AiSessionCodeBlock/);
+  assert.match(message, /text: AiSessionMarkdownNode/);
+  assert.match(message, /code_block: AiSessionMarkdownNode/);
+  assert.match(markdownNode, /node\.type === 'code_block'/);
+  assert.match(markdownNode, /<AiSessionCodeBlock/);
+  assert.match(markdownNode, /<AiSessionAnimatedTextNode/);
   assert.match(codeBlock, /renderCodeBlock/);
   assert.match(message, /\.hljs-keyword/);
   assert.match(message, /:deep\(pre code\)/);

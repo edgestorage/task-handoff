@@ -69,17 +69,24 @@
             <RefreshCw :size="14" />
             <span>{{ checkingServerUpdate ? t("settings.appearance.checking") : t("settings.appearance.check") }}</span>
           </Button>
-          <Button variant="outline" size="sm" :disabled="!serverUpdateCheck?.supported || !serverUpdateCheck.updateAvailable || applyingServerUpdate" @click="emit('applyServerUpdate')">
+          <Button variant="outline" size="sm" :disabled="!serverUpdateCheck?.supported || !serverUpdateCheck.updateAvailable || !serverUpdateCheck.preflightToken || applyingServerUpdate" @click="emit('applyServerUpdate')">
             <Download :size="14" />
             <span>{{ applyingServerUpdate ? t("settings.appearance.queuing") : t("settings.appearance.update") }}</span>
           </Button>
         </div>
       </div>
+      <p v-if="serverUpdateCheck" class="section-description">
+        {{ t("settings.nodeDetail.updateImpact", { restarting: serverUpdateCheck.impact.restartInstanceCount, active: serverUpdateCheck.impact.activeInstanceCount, stopped: serverUpdateCheck.impact.stoppedInstanceCount }) }}
+      </p>
       <div v-if="serverUpdateJob" class="server-update-job">
         <span>{{ t("settings.appearance.latestJob") }}</span>
         <code>{{ serverUpdateJob.fromVersion || t("settings.appearance.unknown") }} → {{ serverUpdateJob.toVersion }}</code>
         <Badge :variant="serverUpdateJob.status === 'succeeded' ? 'default' : 'secondary'">{{ translateStatus(updateJobStatusKeys, serverUpdateJob.status, t) }}</Badge>
       </div>
+      <p v-if="serverUpdateJob" class="section-description">
+        {{ t("settings.nodeDetail.rolloutProgress", { matched: serverUpdateJob.rollout.matchedInstanceCount, expected: serverUpdateJob.rollout.expectedInstanceCount, failed: serverUpdateJob.rollout.failedInstanceCount, deferred: serverUpdateJob.rollout.deferredInstanceCount }) }}
+        <span v-if="serverUpdateJob.error"> · {{ serverUpdateJob.error.message }}</span>
+      </p>
     </section>
     <section class="modal-section appearance-panel">
       <div class="section-head">

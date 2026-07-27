@@ -4,6 +4,7 @@ import { appSessionBindingKeys, appSessionStatus, isVisibleAppSession } from "./
 import { aiSessionStatusKeys, translateStatus, type Translate } from "../../i18n/status.ts";
 import { formatRelativeTime, formatTime } from "../../i18n/presentation.ts";
 import type { SupportedLocale } from "../../i18n/locale.ts";
+import { hasInstanceStatusPage } from "./useInstanceStatus.ts";
 
 export type SessionTab = {
   key: string;
@@ -82,7 +83,7 @@ export function buildSessionTabs(instance: InstanceWithAiSessions | undefined, t
   if (!instance) {
     return [];
   }
-  if (instance.status !== "running") {
+  if (hasInstanceStatusPage(instance)) {
     return [{
       key: "overview",
       label: t("sessions.tabs.status"),

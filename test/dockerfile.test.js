@@ -10,23 +10,17 @@ test("Docker runtime uses the supported Node.js 24 release line", () => {
   assert.match(dockerfile, /^FROM node:24-bookworm-slim AS base$/m);
 });
 
-test("Docker dependency layer includes every workspace manifest", () => {
+test("Docker image bakes a versioned bootstrap runtime and retains the managed runtime launcher", () => {
   const dockerfile = fs.readFileSync(path.join(root, "Dockerfile"), "utf8");
-  const dependencyLayer = dockerfile.slice(0, dockerfile.indexOf("RUN pnpm install --frozen-lockfile"));
-  const manifests = ["apps", "packages"].flatMap((directory) =>
-    fs
-      .readdirSync(path.join(root, directory), { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => `${directory}/${entry.name}/package.json`)
-      .filter((manifest) => fs.existsSync(path.join(root, manifest))),
-  );
 
-  for (const manifest of manifests) {
-    assert.ok(
-      dependencyLayer.split("\n").includes(`COPY ${manifest} ./${manifest}`),
-      `Docker dependency layer must copy ${manifest} before pnpm install`,
-    );
-  }
+  assert.match(dockerfile, /ARG TASK_HANDOFF_VERSION=0\.0\.1[\s\S]*TASK_HANDOFF_VERSION="\$\{TASK_HANDOFF_VERSION\}" pnpm run runtime:pack:controlled-instance/);
+  assert.match(dockerfile, /npm install -g --omit=dev[\s\S]*task-handoff-controlled-instance-/);
+  assert.match(dockerfile, /COPY docker\/instance-launcher\.sh/);
+  assert.match(dockerfile, /COPY docker\/runtime-installer\.mjs/);
+  const launcher = fs.readFileSync(path.join(root, "docker", "instance-launcher.sh"), "utf8");
+  assert.match(launcher, /command -v task-handoff-controlled-instance/);
+  assert.match(launcher, /exec task-handoff-controlled-instance web/);
+  assert.match(launcher, /await import\(pathToFileURL\(entrypoint\)\.href\)/);
 });
 
 test("Docker build context includes files read by the test suite", () => {
@@ -56,6 +50,28 @@ test("Docker CI builds amd64 and arm64 concurrently and publishes a multi-archit
   assert.doesNotMatch(workflow, /Immutable source image was not published within/);
 });
 
+test("Docker tag builds inject the release version while branch builds keep the package version", () => {
+  const dockerfile = fs.readFileSync(path.join(root, "Dockerfile"), "utf8");
+  const workflow = fs.readFileSync(path.join(root, ".github", "workflows", "docker.yml"), "utf8");
+
+  assert.match(workflow, /if \[\[ "\$GITHUB_REF" == refs\/tags\/v\* \]\]; then/);
+  assert.match(workflow, /version="\$\{GITHUB_REF_NAME#v\}"/);
+  assert.match(workflow, /image_ref="\$\{DOCKERHUB_IMAGE_NAME\}:\$\{GITHUB_REF_NAME\}"/);
+  assert.match(workflow, /version="\$\(node -p "require\('\.\/package\.json'\)\.version"\)"/);
+  assert.match(workflow, /image_ref="task-handoff-controlled-instance:ci-\$\{\{ matrix\.arch \}\}"/);
+  assert.match(workflow, /TASK_HANDOFF_VERSION=\$\{\{ steps\.image-version\.outputs\.value \}\}/);
+  assert.match(workflow, /TASK_HANDOFF_IMAGE_REF=\$\{\{ steps\.image-version\.outputs\.image-ref \}\}/);
+  assert.match(workflow, /Verify image version[\s\S]*org\.opencontainers\.image\.version[\s\S]*EXPECTED_VERSION/);
+  assert.match(workflow, /status_response="\$\(curl -fsS http:\/\/127\.0\.0\.1:18080\/api\/instance\/status\)"/);
+  assert.match(workflow, /diagnostics_response="\$\(curl -fsS http:\/\/127\.0\.0\.1:18080\/api\/diagnostics\)"/);
+  assert.match(workflow, /status\.build\.packageVersion !== process\.env\.EXPECTED_VERSION/);
+  assert.match(workflow, /status\.build\.imageRef !== process\.env\.EXPECTED_IMAGE_REF/);
+  assert.match(workflow, /diagnostics\.runtime\.linuxRuntime/);
+  assert.doesNotMatch(workflow, /payload\.build/);
+  assert.match(dockerfile, /ARG TASK_HANDOFF_VERSION=0\.0\.1/);
+  assert.match(dockerfile, /LABEL org\.opencontainers\.image\.version=\$\{TASK_HANDOFF_VERSION\}/);
+});
+
 test("Docker fetches the Web Cap skill from its versioned upstream source", () => {
   const dockerfile = fs.readFileSync(path.join(root, "Dockerfile"), "utf8");
 
@@ -75,10 +91,9 @@ test("Docker installs Claude Code through the same canonical package managed at 
 
 test("Docker entrypoint passes only supported web CLI options", () => {
   const entrypoint = fs.readFileSync(path.join(root, "docker", "entrypoint.sh"), "utf8");
-  const webCommand = entrypoint.slice(
-    entrypoint.indexOf("exec task-handoff-controlled-instance web"),
-    entrypoint.indexOf("fi", entrypoint.indexOf("exec task-handoff-controlled-instance web")),
-  );
+  const launcher = fs.readFileSync(path.join(root, "docker", "instance-launcher.sh"), "utf8");
+  assert.match(entrypoint, /exec task-handoff-instance-launcher/);
+  const webCommand = launcher.slice(launcher.indexOf("process.argv ="));
   assert.match(webCommand, /--host/);
   assert.match(webCommand, /--port/);
   assert.doesNotMatch(webCommand, /--socket/);

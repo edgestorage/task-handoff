@@ -17,14 +17,120 @@ on:
         type: boolean
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  release:
-    runs-on: ubuntu-latest
+  node-pty-prebuilds:
+    name: node-pty prebuild (${{ matrix.platform }}-${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            platform: linux
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.3
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build and collect Linux node-pty prebuild on the glibc baseline
+        shell: bash
+        run: |
+          docker run --rm \
+            -v "$PWD:/workspace" \
+            -w /workspace \
+            node:24-bullseye \
+            bash -lc 'set -euo pipefail; cd node_modules/node-pty; rm -rf build; npm_config_nodedir=/usr/local node /usr/local/lib/node_modules/npm/node_modules/node-gyp/bin/node-gyp.js rebuild; cd /workspace; node scripts/node-pty-prebuild.mjs build --output release/node-pty-prebuilds --platform "${{ matrix.platform }}" --arch "${{ matrix.arch }}"'
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: node-pty-prebuild-${{ matrix.platform }}-${{ matrix.arch }}
+          path: release/node-pty-prebuilds/*
+          if-no-files-found: error
+
+  controlled-instance-artifact:
+    name: Linux controlled instance artifact
+    needs: node-pty-prebuilds
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.3
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            version="${{ inputs.version }}"
+          else
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          node -e 'if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(process.argv[1])) process.exit(1)' "$version"
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: node-pty-prebuild-*
+          path: release/node-pty-prebuilds
+          merge-multiple: true
+
+      - name: Build Linux controlled instance production runtime
+        shell: bash
+        env:
+          TASK_HANDOFF_VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          pnpm runtime:build -- --target controlled-instance
+          pnpm runtime:artifact -- --version "$TASK_HANDOFF_VERSION" --prebuilds-dir release/node-pty-prebuilds
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: controlled-instance-runtime-${{ steps.version.outputs.value }}
+          path: release/runtime-artifacts/*
+          if-no-files-found: error
+
+  runtime-packages:
+    needs: controlled-instance-artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+      npm_tag: ${{ steps.version.outputs.npm_tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - uses: pnpm/action-setup@v6
         with:
@@ -60,6 +166,11 @@ jobs:
           echo "value=$version" >> "$GITHUB_OUTPUT"
           echo "npm_tag=$npm_tag" >> "$GITHUB_OUTPUT"
 
+      - uses: actions/download-artifact@v7
+        with:
+          name: controlled-instance-runtime-${{ needs.controlled-instance-artifact.outputs.version }}
+          path: release/runtime-artifacts
+
       - name: Build npm tarballs
         env:
           TASK_HANDOFF_VERSION: ${{ steps.version.outputs.value }}
@@ -70,38 +181,101 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: task-handoff-runtime-packages-${{ steps.version.outputs.value }}
-          path: |
-            release/npm/artifacts/*.tgz
-            release/npm/artifacts/install-server.sh
+          path: release/npm
           if-no-files-found: error
 
-      - name: Attach packages to GitHub Release
+  publish:
+    needs: [controlled-instance-artifact, runtime-packages]
+    if: github.event_name == 'push' || inputs.publish_npm
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: controlled-instance-runtime-${{ needs.runtime-packages.outputs.version }}
+          path: release/runtime-artifacts
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: task-handoff-runtime-packages-${{ needs.runtime-packages.outputs.version }}
+          path: release/npm
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.15.0
+          registry-url: https://registry.npmjs.org
+
+      - name: Prepare immutable draft GitHub Release
         if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes --title "TaskHandoff $GITHUB_REF_NAME" || true
+            gh release create "$GITHUB_REF_NAME" --draft --verify-tag --generate-notes --title "TaskHandoff $GITHUB_REF_NAME" \
+              release/runtime-artifacts/* release/npm/artifacts/*.tgz release/npm/artifacts/install-server.sh
+          elif [[ "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" == "true" ]]; then
+            published_assets="$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name')"
+            for asset in release/runtime-artifacts/* release/npm/artifacts/*.tgz release/npm/artifacts/install-server.sh; do
+              name="$(basename "$asset")"
+              if ! grep -Fxq "$name" <<<"$published_assets"; then
+                gh release upload "$GITHUB_REF_NAME" "$asset"
+              fi
+            done
+          else
+            published_assets="$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name')"
+            for asset in release/runtime-artifacts/* release/npm/artifacts/*.tgz release/npm/artifacts/install-server.sh; do
+              name="$(basename "$asset")"
+              if ! grep -Fxq "$name" <<<"$published_assets"; then
+                echo "Public release $GITHUB_REF_NAME is missing immutable asset $name." >&2
+                exit 1
+              fi
+            done
+            echo "Release $GITHUB_REF_NAME is already public; verified its asset set before npm recovery."
           fi
-          gh release upload "$GITHUB_REF_NAME" release/npm/artifacts/*.tgz release/npm/artifacts/install-server.sh --clobber
 
-      - name: Publish npm packages
-        if: github.event_name == 'push' || inputs.publish_npm
+      - name: Publish or verify immutable npm packages
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_DIST_TAG: ${{ steps.version.outputs.npm_tag }}
+          NPM_DIST_TAG: ${{ needs.runtime-packages.outputs.npm_tag }}
+          RELEASE_VERSION: ${{ needs.runtime-packages.outputs.version }}
+        shell: bash
         run: |
-          npm publish release/npm/control-plane --access public --tag "$NPM_DIST_TAG"
-          npm publish release/npm/node-agent --access public --tag "$NPM_DIST_TAG"
-          npm publish release/npm/controlled-instance --access public --tag "$NPM_DIST_TAG"
-          npm publish release/npm/server --access public --tag "$NPM_DIST_TAG"
+          set -euo pipefail
+          publish_or_verify() {
+            local directory="$1"
+            local archive="$2"
+            local package version local_integrity remote_integrity
+            package="$(node -p "require('./$directory/package.json').name")"
+            version="$(node -p "require('./$directory/package.json').version")"
+            [[ "$version" == "$RELEASE_VERSION" ]]
+            [[ -f "$archive" ]]
+            local_integrity="sha512-$(node -e 'const fs=require("node:fs"),crypto=require("node:crypto"); process.stdout.write(crypto.createHash("sha512").update(fs.readFileSync(process.argv[1])).digest("base64"))' "$archive")"
+            remote_integrity="$(npm view "$package@$version" dist.integrity --json 2>/dev/null | node -e 'let value=""; try { value=JSON.parse(require("node:fs").readFileSync(0,"utf8")) } catch {}; process.stdout.write(typeof value==="string"?value:"")' || true)"
+            if [[ -n "$remote_integrity" ]]; then
+              if [[ "$remote_integrity" != "$local_integrity" ]]; then
+                echo "Published $package@$version integrity does not match this release build." >&2
+                exit 1
+              fi
+              npm dist-tag add "$package@$version" "$NPM_DIST_TAG"
+              return
+            fi
+            npm publish "$archive" --access public --tag "$NPM_DIST_TAG"
+          }
+          publish_or_verify release/npm/control-plane "release/npm/artifacts/task-handoff-control-plane-$RELEASE_VERSION.tgz"
+          publish_or_verify release/npm/node-agent "release/npm/artifacts/task-handoff-node-agent-$RELEASE_VERSION.tgz"
+          publish_or_verify release/npm/controlled-instance "release/npm/artifacts/task-handoff-controlled-instance-$RELEASE_VERSION.tgz"
+          publish_or_verify release/npm/server "release/npm/artifacts/task-handoff-server-$RELEASE_VERSION.tgz"
 
       - name: Keep prereleases out of the latest dist-tag
-        if: steps.version.outputs.npm_tag != 'latest'
+        if: needs.runtime-packages.outputs.npm_tag != 'latest'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          RELEASE_VERSION: ${{ steps.version.outputs.value }}
+          RELEASE_VERSION: ${{ needs.runtime-packages.outputs.version }}
         shell: bash
         run: |
           packages=(
@@ -116,3 +290,13 @@ jobs:
               npm dist-tag rm "$package" latest
             fi
           done
+
+      - name: Publish GitHub Release after npm is complete
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if [[ "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" == "true" ]]; then
+            gh release edit "$GITHUB_REF_NAME" --draft=false
+          fi
