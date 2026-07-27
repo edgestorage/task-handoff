@@ -35,6 +35,7 @@ export function applyInstanceLifecycle(queryClient: QueryClient, lifecycle: Inst
       health: lifecycle.health,
       connectionStatus: lifecycle.connectionStatus,
       imageProvisioning,
+      runtimeVersion: lifecycle.runtimeVersion,
       workspace: lifecycle.workspace,
       lastHeartbeatAt: lifecycle.lastHeartbeatAt,
       access: { ...instance.access, status: lifecycle.accessStatus },

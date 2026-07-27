@@ -21,7 +21,6 @@ export const errors = {
   INSTANCE_APP_MANAGEMENT_UNSUPPORTED: "此实例不支持托管 App。",
   INSTANCE_SOURCE_REQUIRED: "请选择实例来源。",
   INSTANCE_START_FAILED: "无法启动实例。",
-  INSTANCE_UPDATE_UNSUPPORTED: "此实例不支持托管更新。",
   LOCAL_RUNTIME_REQUIRES_LOCAL_FOLDER: "本地运行环境需要使用本地文件夹来源。",
   LOCAL_FOLDER_REQUIRES_OWNER_NODE: "请选择此本地文件夹所属的节点。",
   LOCAL_FOLDER_REQUIRES_INSTANCE_NODE: "请选择实例所属节点上的本地文件夹。",

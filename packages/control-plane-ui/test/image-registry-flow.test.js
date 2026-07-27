@@ -129,7 +129,7 @@ test("instance status page exists for every lifecycle state except running", () 
     read("src/apps/control-plane/instance-detail/SessionPreview.vue"),
     read("src/apps/control-plane/instance-detail/SessionPaneContent.vue"),
   ].join("\n");
-  assert.match(sessions, /if \(instance\.status !== "running"\) \{[\s\S]*return \[\{[\s\S]*kind: "status"/);
+  assert.match(sessions, /if \(hasInstanceStatusPage\(instance\)\) \{[\s\S]*return \[\{[\s\S]*kind: "status"/);
   assert.match(sessions, /key: "overview"[\s\S]*kind: "status"/);
   assert.match(preview, /v-if="hasInstanceStatusPage\(instance\)"/);
   assert.match(preview, /<ImagePullStatus/);

@@ -25,6 +25,7 @@ import {
   type NodeModelPublicRecord,
   type NodeRuntime,
   type UpdateCheckRequest,
+  type ApplyUpdateRequest,
 } from "@task-handoff/protocol/control-plane";
 import { ControlPlaneNodeAgentClient, nodeAgentScopedError, type NodeAgentScopedError } from "./client.ts";
 
@@ -63,7 +64,7 @@ export class ControlPlaneNodeAgentGateway {
     });
   }
 
-  applyUpdate(node: Node, input: UpdateCheckRequest) {
+  applyUpdate(node: Node, input: ApplyUpdateRequest) {
     return this.client.requestSchema(node, "/updates/apply", UpdateJobSchema, {
       method: "POST",
       headers: { "content-type": "application/json" },

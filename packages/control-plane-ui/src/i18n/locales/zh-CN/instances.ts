@@ -226,7 +226,12 @@ export const instances = {
   lifecycle: {
     preparing: "正在准备实例", imageFailed: "镜像准备失败", created: "实例已创建", preparingRuntime: "正在准备运行环境",
     startingContainer: "正在启动容器", connecting: "正在连接实例", stopping: "正在停止实例", stopped: "实例已停止", failed: "实例失败",
-    unhealthy: "实例不健康", starting: "正在启动实例", checkingImageDetail: "正在检查节点上是否已有该镜像。",
+    unhealthy: "实例不健康", starting: "正在启动实例", updatingRuntime: "正在升级实例运行时",
+    runtimeDrainingDetail: "正在停止实例内的活动进程，为运行时升级做准备。",
+    runtimeInstallingDetail: "正在安装新的实例运行时。",
+    runtimeRestartingDetail: "运行时已安装，正在重新启动实例服务。",
+    runtimeVerifyingDetail: "实例服务已重新启动，正在验证运行时版本和健康状态。",
+    checkingImageDetail: "正在检查节点上是否已有该镜像。",
     pullingImageDetail: "正在准备 Docker 镜像，完成后容器才能启动。", resolvingImageDetail: "正在将拉取的镜像解析为仓库 digest。",
     readyToStart: "实例已可启动。", failedDetail: "实例无法启动。请重试失败操作或检查其运行环境。",
     stoppedDetail: "实例已停止，可在准备好后重新启动。", unhealthyDetail: "实例健康检查状态为 {health}。请重启实例或检查其运行环境。",

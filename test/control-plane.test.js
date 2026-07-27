@@ -10,7 +10,7 @@ const WebSocket = require("ws");
 const { z } = require("zod");
 
 const { createControlPlaneApp } = require("../packages/control-plane/src/server.ts");
-const { createNodeAgentApp, listenNodeAgentIpcServer, NodeAgentExternalListenerManager, resolvedDockerImageUpdatePatch } = require("../packages/control-plane/src/node-agent.ts");
+const { createNodeAgentApp, listenNodeAgentIpcServer, mergeRuntimeLifecycleResult, NodeAgentExternalListenerManager, resolvedDockerImageUpdatePatch } = require("../packages/control-plane/src/node-agent.ts");
 const { ControlPlaneChatGatewayRuntime, aiSessionDeliveryText, createDingdingStreamClient } = require("../packages/control-plane/src/chat-gateway.ts");
 const { ControlledInstanceGateway } = require("../packages/control-plane/src/control-plane/instances/gateway.ts");
 const { parseDingdingCardEvent, sendDingdingActionsCard } = require("../packages/control-plane/src/control-plane/chat/adapters/dingding.ts");
@@ -29,7 +29,7 @@ const { createNodeAgentHmacHeaders, NODE_AGENT_HMAC_TIMESTAMP_WINDOW_MS } = requ
 const { fetchNodeAgentIpc, nodeAgentIpcEndpoint, nodeAgentIpcPath, prepareNodeAgentIpcPath } = require("../packages/control-plane/src/shared/transport/node-agent-ipc.ts");
 const { can } = require("../packages/control-plane/src/control-plane/auth/authorization.ts");
 const { LocalDockerExecutor, dockerRunArgs } = require("../packages/control-plane/src/node-agent/runtimes/docker.ts");
-const { assertInstalledPackageVersion, checkControlledInstanceUpdate, checkNodeAgentUpdate, dockerImageRefForChannel, dockerManifestDigestForArchitecture, isNewerVersion, managedNpmPackageInstall, resolveNodeAgentUpdateWorker } = require("../packages/control-plane/src/node-agent/updates.ts");
+const { checkNodeAgentUpdate, isNewerVersion, resolveNodeAgentUpdateWorker, sanitizeStoredUpdateJob } = require("../packages/control-plane/src/node-agent/updates.ts");
 const { ProcessSingletonError, acquireProcessSingletonLock } = require("../packages/control-plane/src/shared/process/singleton-lock.ts");
 const { acquireControlPlaneSingletonLock } = require("../packages/control-plane/src/control-plane/process/singleton-lock.ts");
 const { acquireNodeAgentSingletonLock } = require("../packages/control-plane/src/node-agent/process/singleton-lock.ts");
@@ -41,7 +41,7 @@ const { launchableAppsForInstance: chatLaunchableAppsForInstance } = require("..
 const { appSessionStatus } = require("../packages/control-plane-ui/src/apps/control-plane/appSessionVisibility.ts");
 const { AiSessionEventType, AiSessionEventTopic, AiSessionUnreadEventType } = require("../packages/protocol/src/ai-sessions.ts");
 const { AppSessionEventType, normalizeAppSessionRecord } = require("../packages/protocol/src/app-sessions.ts");
-const { CONTROL_PLANE_PROTOCOL_VERSION, ControlledInstanceHeartbeatSchema, InstanceAppInventorySchema, InstanceLifecycleEventType, modelConfigHash, parseStoredControlledInstance } = require("../packages/protocol/src/control-plane.ts");
+const { ApplyUpdateRequestSchema, CONTROL_PLANE_PROTOCOL_VERSION, ControlledInstanceHeartbeatSchema, ControlledInstanceSchema, InstanceAppInventorySchema, InstanceLifecycleEventType, RuntimeArtifactIdentitySchema, RuntimeVersionStateSchema, UpdateCheckRequestSchema, UpdateJobSchema, modelConfigHash, parseStoredControlledInstance, sanitizeStoredControlledInstance } = require("../packages/protocol/src/control-plane.ts");
 const { ChatActionTokenService, parsePendingDecisionCallbackData, pendingDecisionRouteFingerprint } = require("../packages/control-plane/src/control-plane/chat/action-token-service.ts");
 
 test("pending decision callbacks are stable and resolved from the current route", () => {
@@ -62,6 +62,113 @@ function emptyAppInventory(observedAt = new Date().toISOString()) {
   return { items: [], observedAt, issues: [] };
 }
 
+const npmIntegrityFixture = `sha512-${Buffer.from("task-handoff-node-agent-integrity").toString("base64")}`;
+
+test("runtime lifecycle result preserves a newer registration heartbeat", () => {
+  const baseline = ControlledInstanceSchema.parse({
+    id: "inst_start_race",
+    name: "start race",
+    source: { type: "local-folder", path: "/workspace" },
+    sourceSnapshot: {},
+    modelSelection: {},
+    nodeId: "node_1",
+    runtimeId: "runtime_1",
+    status: "starting",
+    health: "unknown",
+    connectionStatus: "offline",
+    agentStatus: "offline",
+    targetStatus: "unknown",
+    uiAccessStatus: "unknown",
+    controlMode: "controlled",
+    ready: false,
+    capabilities: {},
+    config: {},
+    workspace: { status: "pending" },
+    target: { strategy: "node-proxy", status: "unknown" },
+    apps: { runningCount: 0, problemCount: 0 },
+    aiSessions: { runningCount: 0, waitingCount: 0, sessions: [], updatedAt: "2026-07-28T00:00:00.000Z" },
+    runtime: { kind: "docker", containerId: "container_1", labels: {} },
+    stateRevision: 4,
+    createdAt: "2026-07-28T00:00:00.000Z",
+    updatedAt: "2026-07-28T00:00:00.000Z",
+  });
+  const running = ControlledInstanceSchema.parse({
+    ...baseline,
+    status: "running",
+    health: "ok",
+    connectionStatus: "online",
+    agentStatus: "online",
+    targetStatus: "reachable",
+    uiAccessStatus: "reachable",
+    ready: true,
+    target: { ...baseline.target, status: "reachable", web: "http://instance:8080" },
+    workspace: { status: "ready", path: "/workspace" },
+    stateRevision: 6,
+    lastHeartbeatAt: "2026-07-28T00:00:01.000Z",
+  });
+
+  const merged = mergeRuntimeLifecycleResult(baseline, running, {
+    status: "registering",
+    health: "unknown",
+    connectionStatus: "online",
+    agentStatus: "unknown",
+    targetStatus: "reachable",
+    uiAccessStatus: "unknown",
+    target: { strategy: "direct-port", status: "reachable", web: "http://127.0.0.1:32000" },
+    workspace: { status: "pending" },
+    runtime: { containerName: "task-handoff-inst_start_race", containerId: "container_1" },
+  });
+
+  assert.equal(merged.status, "running");
+  assert.equal(merged.health, "ok");
+  assert.equal(merged.agentStatus, "online");
+  assert.equal(merged.ready, true);
+  assert.equal(merged.target.web, "http://instance:8080");
+  assert.equal(merged.workspace.status, "ready");
+  assert.equal(merged.runtime.containerName, "task-handoff-inst_start_race");
+});
+
+function resolvedRuntimeArtifact(version, platform, arch) {
+  return {
+    archivePath: "/cache/controlled-instance-runtime.tar.gz",
+    cacheHit: true,
+    identity: {
+      packageName: "@task-handoff/controlled-instance",
+      version,
+      platform,
+      arch,
+      formatVersion: 1,
+      launcherAbi: 1,
+      entrypoint: "dist/controlled-instance-cli.js",
+      sha256: "a".repeat(64),
+    },
+  };
+}
+
+function managedDockerRuntimeCommand(app, instanceId, web, args) {
+  if (args[0] === "inspect" && args.includes("{{json .}}")) return { stdout: JSON.stringify({ Platform: "linux", Image: "sha256:image" }), stderr: "" };
+  if (args[0] === "image" && args[1] === "inspect") return { stdout: JSON.stringify({ Os: "linux", Architecture: "amd64" }), stderr: "" };
+  if (args[0] === "inspect") return { stdout: "container-1", stderr: "" };
+  if (args[0] === "exec" && args.includes("verify-active")) {
+    return { stdout: JSON.stringify(resolvedRuntimeArtifact("1.0.0", "linux", "x64").identity), stderr: "" };
+  }
+  if (args[0] === "restart" && app) {
+    const instance = app.nodeAgentState.controlledInstances.get(instanceId);
+    setImmediate(() => app.nodeAgentState.registerInstance(instanceId, {
+      instanceId,
+      name: instance.name,
+      protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+      appInventory: emptyAppInventory(),
+      controlMode: "controlled",
+      capabilities: {},
+      build: { component: "controlled-instance", packageVersion: "1.0.0" },
+      target: { strategy: "direct-port", status: "reachable", web },
+      workspace: { status: "ready" },
+    }, instance.registrationToken));
+  }
+  return undefined;
+}
+
 function testAppInventory(apps, observedAt = new Date().toISOString()) {
   return {
     observedAt,
@@ -78,10 +185,127 @@ function testAppInventory(apps, observedAt = new Date().toISOString()) {
 }
 
 test("controlled instance heartbeat protocol rejects legacy receiver projection", () => {
-  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-07-26");
+  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-07-27");
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, receiver: { status: "running", pendingCount: 1 } }).success, false);
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, apps: { runningCount: 1 } }).success, false);
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, appInventory: emptyAppInventory(), apps: { runningCount: 1 } }).success, true);
+});
+
+test("managed runtime convergence protocol is strict and Node-scoped", () => {
+  const sha256 = "a".repeat(64);
+  const artifact = {
+    packageName: "@task-handoff/controlled-instance",
+    version: "1.2.3",
+    platform: "linux",
+    arch: "x64",
+    formatVersion: 1,
+    launcherAbi: 1,
+    entrypoint: "dist/controlled-instance.js",
+    sha256,
+  };
+  assert.equal(RuntimeArtifactIdentitySchema.safeParse(artifact).success, true);
+  assert.equal(RuntimeArtifactIdentitySchema.safeParse({ ...artifact, registryToken: "secret" }).success, false);
+  assert.equal(RuntimeArtifactIdentitySchema.safeParse({ ...artifact, sha256: `sha256:${sha256}` }).success, false);
+  const apply = { channel: "stable", targetVersion: "1.2.3", preflightToken: "preflight_1234567890" };
+  assert.equal(ApplyUpdateRequestSchema.safeParse(apply).success, true);
+  assert.equal(ApplyUpdateRequestSchema.safeParse({ channel: "stable" }).success, false);
+  assert.equal(ApplyUpdateRequestSchema.safeParse({ ...apply, target: { component: "controlled-instance", instanceId: "inst_old" } }).success, false);
+
+  const versionState = {
+    desiredVersion: "1.2.3",
+    actualVersion: "1.2.2",
+    phase: "pending",
+    attempt: 0,
+    error: {
+      code: "INSTANCE_RUNTIME_VERSION_MISMATCH",
+      message: "Expected 1.2.3, received 1.2.2.",
+      expectedVersion: "1.2.3",
+      actualVersion: "1.2.2",
+      retryable: true,
+    },
+  };
+  assert.equal(RuntimeVersionStateSchema.safeParse(versionState).success, true);
+  assert.equal(RuntimeVersionStateSchema.safeParse({ ...versionState, displayStatus: "warning" }).success, false);
+  assert.deepEqual(UpdateCheckRequestSchema.parse({}), { channel: "stable" });
+  assert.equal(UpdateCheckRequestSchema.safeParse({ target: { component: "controlled-instance", instanceId: "inst_1" } }).success, false);
+});
+
+test("stored legacy instance update jobs are retained as retired failures", () => {
+  const timestamp = new Date().toISOString();
+  const migrated = sanitizeStoredUpdateJob({
+    id: "update_legacy",
+    nodeId: "node_1",
+    target: { component: "controlled-instance", instanceId: "inst_1" },
+    source: "docker-registry",
+    channel: "stable",
+    fromVersion: "1.0.0",
+    toVersion: "1.1.0",
+    status: "updating",
+    error: "old error",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    futureField: true,
+  });
+  const parsed = UpdateJobSchema.strip().parse(migrated);
+  assert.equal(parsed.status, "failed");
+  assert.equal(parsed.error.code, "LEGACY_INSTANCE_UPDATE_RETIRED");
+  assert.equal(parsed.rollout.phase, "failed");
+  assert.equal(parsed.source, "npm");
+  assert.equal("target" in migrated, false);
+});
+
+test("stored update jobs sanitize nested future fields without dropping the job", () => {
+  const timestamp = new Date().toISOString();
+  const sanitized = sanitizeStoredUpdateJob({
+    id: "update_future",
+    nodeId: "node_1",
+    source: "npm",
+    channel: "stable",
+    fromVersion: "1.0.0",
+    toVersion: "1.1.0",
+    status: "converging-instances",
+    impact: {
+      runningInstanceCount: 0,
+      stoppedInstanceCount: 0,
+      activeInstanceCount: 0,
+      restartInstanceCount: 0,
+      runningInstanceIds: [],
+      stoppedInstanceIds: [],
+      activeInstanceIds: [],
+      futureImpactField: true,
+    },
+    runtimeArtifacts: [{
+      packageName: "@task-handoff/controlled-instance",
+      version: "1.1.0",
+      platform: "linux",
+      arch: "x64",
+      formatVersion: 1,
+      launcherAbi: 1,
+      entrypoint: "dist/controlled-instance.js",
+      sha256: "a".repeat(64),
+      futureArtifactField: true,
+    }],
+    rollout: {
+      phase: "converging-instances",
+      desiredVersion: "1.1.0",
+      expectedInstanceIds: [],
+      expectedInstanceCount: 0,
+      matchedInstanceCount: 0,
+      pendingInstanceCount: 0,
+      failedInstanceCount: 0,
+      futureRolloutField: true,
+    },
+    error: { code: "FUTURE_UPDATE_ERROR", message: "future failure", retryable: true, futureErrorField: true },
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+
+  const parsed = UpdateJobSchema.parse(sanitized);
+  assert.equal(parsed.id, "update_future");
+  assert.equal(parsed.runtimeArtifacts.length, 1);
+  assert.equal(parsed.error.code, "NODE_UPDATE_FAILED");
+  assert.equal(parsed.error.message, "future failure");
+  assert.equal("futureRolloutField" in parsed.rollout, false);
 });
 
 test("app inventory protocol is strict and stored legacy app capability is discarded", () => {
@@ -113,7 +337,7 @@ test("app inventory protocol is strict and stored legacy app capability is disca
     modelSelection: {},
     nodeId: "node_1",
     runtimeId: "runtime_1",
-    status: "stopped",
+    status: "running",
     capabilities: { apps: [{ id: "codex" }], features: { tty: true } },
     config: { autoImportAgentConfigs: true },
     workspace: { status: "ready" },
@@ -1334,7 +1558,7 @@ test("control plane serves the remote node-agent installer without auth", async 
     url: "/install-node-agent.sh",
   });
 
-  assert.equal(response.statusCode, 200);
+  assert.equal(response.statusCode, 200, response.body);
   assert.match(response.headers["content-type"], /text\/x-shellscript/);
   assert.match(response.body, /task-handoff-node-agent\.service/);
   assert.match(response.body, /--control-plane <url>/);
@@ -1901,6 +2125,7 @@ test("control plane forwards lifecycle snapshots only for instances owned by the
     health: "unknown",
     connectionStatus: "unknown",
     accessStatus: "endpoint-unreachable",
+    ready: false,
     workspace: { status: "pending" },
     runtime: { labels: {} },
   });
@@ -2039,6 +2264,7 @@ test("control plane subscribes to direct node agent websocket events", async (t)
       name: "direct events",
       protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
       appInventory: emptyAppInventory(),
+      build: { component: "controlled-instance", packageVersion: "1.0.0" },
       target: {
         strategy: "direct-port",
         web: `http://127.0.0.1:${instanceEventsAddress.port}`,
@@ -2295,47 +2521,13 @@ test("local docker run args include controlled metadata and disable local chat b
   assert.ok(args.includes("/tmp/workspace:/workspace:rw"));
 });
 
-test("managed Docker updates resolve the selected channel and registry digest", async () => {
-  assert.equal(dockerImageRefForChannel("ghcr.io/task-handoff/server:beta", "stable"), "ghcr.io/task-handoff/server:latest");
-  assert.equal(dockerImageRefForChannel("ghcr.io/task-handoff/server:stable", "beta"), "ghcr.io/task-handoff/server:beta");
-  assert.equal(dockerImageRefForChannel("registry.example:5000/task-handoff/server@sha256:old", "alpha"), "registry.example:5000/task-handoff/server:alpha");
+test("Node updates compare exact release versions without deriving Docker image updates", () => {
   assert.equal(isNewerVersion("1.2.3", "1.2.4"), true);
   assert.equal(isNewerVersion("1.2.3", "1.2.3-beta.1"), false);
   assert.equal(isNewerVersion("1.2.3-alpha.2", "1.2.3-alpha.10"), true);
   assert.equal(isNewerVersion("1.2.3-alpha.10", "1.2.3-alpha.2"), false);
   assert.equal(isNewerVersion("1.2.3-alpha.1", "1.2.3-alpha.beta"), true);
   assert.equal(isNewerVersion("1.2.3+build.1", "1.2.3+build.2"), false);
-
-  const calls = [];
-  const checked = await checkControlledInstanceUpdate({
-    channel: "beta",
-    runtime: { type: "docker" },
-    instance: {
-      id: "inst_update",
-      build: { imageDigest: "sha256:old" },
-      imageSnapshot: {
-        requestedReference: "ghcr.io/task-handoff/server:stable",
-      },
-    },
-    runCommand: async (command, args) => {
-      calls.push([command, args]);
-      return { stdout: JSON.stringify({ Descriptor: { digest: "sha256:new" } }), stderr: "" };
-    },
-  });
-
-  assert.deepEqual(calls, [["docker", ["manifest", "inspect", "--verbose", "ghcr.io/task-handoff/server:beta"]]]);
-  assert.equal(checked.artifactRef, "ghcr.io/task-handoff/server:beta");
-  assert.equal(checked.currentVersion, "sha256:old");
-  assert.equal(checked.availableVersion, "sha256:new");
-  assert.equal(checked.updateAvailable, true);
-
-  const multiarch = [
-    { Descriptor: { digest: "sha256:amd64", platform: { architecture: "amd64", os: "linux" } } },
-    { Descriptor: { digest: "sha256:arm64", platform: { architecture: "arm64", os: "linux" } } },
-  ];
-  assert.equal(dockerManifestDigestForArchitecture(multiarch, "x64"), "sha256:amd64");
-  assert.equal(dockerManifestDigestForArchitecture(multiarch, "arm64"), "sha256:arm64");
-  assert.equal(dockerManifestDigestForArchitecture(multiarch, "s390x"), undefined);
 
   const timestamp = new Date().toISOString();
   const updatedImage = resolvedDockerImageUpdatePatch({
@@ -2352,36 +2544,6 @@ test("managed Docker updates resolve the selected channel and registry digest", 
   assert.equal(updatedImage.imageSnapshot.resolvedReference, `example/app@sha256:${"c".repeat(64)}`);
   assert.equal(updatedImage.imageProvisioning.requestedReference, "example/app:latest");
   assert.equal(updatedImage.imageProvisioning.generation, 5);
-});
-
-test("managed npm updates replace the package behind an aggregate server executable", () => {
-  const root = tempDataDir("managed-npm-aggregate");
-  const serverRoot = path.join(root, "lib", "node_modules", "@task-handoff", "server");
-  const packageRoot = path.join(serverRoot, "node_modules", "@task-handoff", "controlled-instance");
-  const executable = path.join(packageRoot, "bin", "task-handoff-controlled-instance");
-  fs.mkdirSync(path.dirname(executable), { recursive: true });
-  fs.writeFileSync(path.join(serverRoot, "package.json"), JSON.stringify({ name: "@task-handoff/server", version: "1.0.0" }));
-  fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ name: "@task-handoff/controlled-instance", version: "1.0.0" }));
-  fs.writeFileSync(executable, "#!/usr/bin/env node\n");
-
-  const install = managedNpmPackageInstall({
-    executable,
-    globalPrefix: root,
-    packageName: "@task-handoff/controlled-instance",
-    targetVersion: "1.1.0",
-  });
-
-  assert.deepEqual(install.args, ["install", "--prefix", fs.realpathSync(serverRoot), "--no-save", "@task-handoff/controlled-instance@1.1.0"]);
-  assert.equal(install.manifestPath, path.join(fs.realpathSync(packageRoot), "package.json"));
-});
-
-test("managed npm update verification rejects commands that left the old package installed", () => {
-  const root = tempDataDir("managed-npm-verification");
-  const manifest = path.join(root, "package.json");
-  fs.writeFileSync(manifest, JSON.stringify({ name: "@task-handoff/controlled-instance", version: "1.0.0" }));
-
-  assert.doesNotThrow(() => assertInstalledPackageVersion(manifest, "1.0.0"));
-  assert.throws(() => assertInstalledPackageVersion(manifest, "1.1.0"), /expected 1\.1\.0, found 1\.0\.0/);
 });
 
 test("missing npm channel releases are reported as no update", async () => {
@@ -2405,15 +2567,6 @@ test("missing npm channel releases are reported as no update", async () => {
   assert.equal(agent.availableVersion, "1.0.0");
   assert.equal(agent.reason, "No beta release is currently published.");
 
-  const instance = await checkControlledInstanceUpdate({
-    channel: "alpha",
-    runtime: { type: "local" },
-    instance: { id: "inst_no_prerelease", instanceVersion: "1.0.0" },
-    runCommand,
-  });
-  assert.equal(instance.supported, true);
-  assert.equal(instance.updateAvailable, false);
-  assert.equal(instance.reason, "No alpha release is currently published.");
 });
 
 test("npm update checks preserve non-404 registry failures", async () => {
@@ -2430,6 +2583,20 @@ test("npm update checks preserve non-404 registry failures", async () => {
       },
     }),
     /E401/,
+  );
+});
+
+test("node update preflight requires immutable npm integrity metadata", async () => {
+  await assert.rejects(
+    checkNodeAgentUpdate({
+      channel: "stable",
+      currentVersion: "1.0.0",
+      runCommand: async (_command, args) => ({
+        stdout: JSON.stringify(args.includes("dist.integrity") ? null : "1.1.0"),
+        stderr: "",
+      }),
+    }),
+    (error) => error?.code === "NODE_UPDATE_PREFLIGHT_FAILED",
   );
 });
 
@@ -2450,7 +2617,7 @@ test("node agent update API treats a missing npm channel as no update", async (t
     method: "POST",
     url: "/api/node-agent/updates/check",
     headers: { authorization: "Bearer agent-secret" },
-    payload: { target: { component: "node-agent" }, channel: "beta" },
+    payload: { channel: "beta" },
   });
   assert.equal(check.statusCode, 200);
   assert.equal(check.json().data.updateAvailable, false);
@@ -2460,10 +2627,48 @@ test("node agent update API treats a missing npm channel as no update", async (t
     method: "POST",
     url: "/api/node-agent/updates/apply",
     headers: { authorization: "Bearer agent-secret" },
-    payload: { target: { component: "node-agent" }, channel: "beta" },
+    payload: { channel: "beta", targetVersion: "1.0.0", preflightToken: "missing_preflight_token" },
   });
   assert.equal(apply.statusCode, 409);
-  assert.equal(apply.json().error.code, "UPDATE_NOT_AVAILABLE");
+  assert.equal(apply.json().error.code, "UPDATE_PREFLIGHT_EXPIRED");
+});
+
+test("retired per-instance update endpoints return 404 without creating jobs", async (t) => {
+  const app = await createNodeAgentApp({
+    dataDir: tempDataDir("node-agent-retired-instance-update"),
+    logger: false,
+    token: "agent-secret",
+  });
+  t.after(() => app.close());
+  for (const suffix of ["check", "apply"]) {
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/node-agent/instances/inst_old/updates/${suffix}`,
+      headers: { authorization: "Bearer agent-secret" },
+      payload: {},
+    });
+    assert.equal(response.statusCode, 404);
+  }
+  const jobs = await app.inject({
+    method: "GET",
+    url: "/api/node-agent/updates/jobs",
+    headers: { authorization: "Bearer agent-secret" },
+  });
+  assert.deepEqual(jobs.json().data, []);
+});
+
+test("control plane rejects the real legacy target-based instance update API as retired", async (t) => {
+  const app = await createControlPlaneApp({ dataDir: tempDataDir("control-plane-retired-target-update"), authMode: "disabled" });
+  t.after(() => app.close());
+  for (const suffix of ["check", "apply"]) {
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/nodes/node_missing/updates/${suffix}`,
+      payload: { target: { component: "controlled-instance", instanceId: "inst_old" }, channel: "stable" },
+    });
+    assert.equal(response.statusCode, 404);
+    assert.equal(response.json().error.code, "LEGACY_INSTANCE_UPDATE_RETIRED");
+  }
 });
 
 test("node agent update checks default to the stable npm channel", async (t) => {
@@ -2474,8 +2679,26 @@ test("node agent update checks default to the stable npm channel", async (t) => 
     token: "agent-secret",
     updateCommandRunner: async (command, args) => {
       calls.push([command, args]);
-      return { stdout: JSON.stringify("9.8.7"), stderr: "" };
+      return { stdout: JSON.stringify(args.includes("dist.integrity") ? npmIntegrityFixture : "9.8.7"), stderr: "" };
     },
+    dockerCommandRunner: async (_command, args) => {
+      if (args[0] === "info") return { stdout: JSON.stringify({ OSType: "linux", Architecture: "x86_64" }), stderr: "" };
+      throw new Error("unexpected Docker command");
+    },
+    resolveRuntimeArtifact: async (version, platform, arch) => ({
+      archivePath: "/cache/runtime.tar.gz",
+      cacheHit: false,
+      identity: {
+        packageName: "@task-handoff/controlled-instance",
+        version,
+        platform,
+        arch,
+        formatVersion: 1,
+        launcherAbi: 1,
+        entrypoint: "dist/controlled-instance-cli.js",
+        sha256: "b".repeat(64),
+      },
+    }),
   });
   t.after(() => app.close());
 
@@ -2483,13 +2706,175 @@ test("node agent update checks default to the stable npm channel", async (t) => 
     method: "POST",
     url: "/api/node-agent/updates/check",
     headers: { authorization: "Bearer agent-secret" },
-    payload: { target: { component: "node-agent" } },
+    payload: {},
   });
 
   assert.equal(response.statusCode, 200);
   assert.equal(response.json().data.channel, "stable");
   assert.equal(response.json().data.availableVersion, "9.8.7");
-  assert.deepEqual(calls, [["npm", ["view", "@task-handoff/node-agent@latest", "version", "--json"]]]);
+  assert.deepEqual(calls, [
+    ["npm", ["view", "@task-handoff/node-agent@latest", "version", "--json"]],
+    ["npm", ["view", "@task-handoff/node-agent@9.8.7", "dist.integrity", "--json"]],
+  ]);
+});
+
+test("node update preflight resolves exact runtime artifacts and reports stopped impact", async (t) => {
+  const resolved = [];
+  const updateCommands = [];
+  let failArtifact = false;
+  let artifactSha = "c".repeat(64);
+  const app = await createNodeAgentApp({
+    dataDir: tempDataDir("node-agent-update-runtime-preflight"),
+    logger: false,
+    token: "agent-secret",
+    platform: "linux",
+    arch: "x64",
+    dockerCommandRunner: async (_command, args) => {
+      if (args[0] === "info") return { stdout: JSON.stringify({ OSType: "linux", Architecture: "x86_64" }), stderr: "" };
+      throw new Error("unexpected Docker command");
+    },
+    updateCommandRunner: async (command, args) => {
+      updateCommands.push(command);
+      return { stdout: JSON.stringify(args.includes("dist.integrity") ? npmIntegrityFixture : "9.8.7"), stderr: "" };
+    },
+    resolveRuntimeArtifact: async (version, platform, arch) => {
+      if (failArtifact) throw Object.assign(new Error("runtime artifact missing"), { code: "INSTANCE_RUNTIME_ARTIFACT_UNAVAILABLE", retryable: false });
+      resolved.push([version, platform, arch]);
+      return {
+        archivePath: "/cache/runtime.tar.gz",
+        cacheHit: false,
+        identity: {
+          packageName: "@task-handoff/controlled-instance",
+          version,
+          platform,
+          arch,
+          formatVersion: 1,
+          launcherAbi: 1,
+          entrypoint: "dist/controlled-instance-cli.js",
+          sha256: artifactSha,
+        },
+      };
+    },
+  });
+  t.after(() => app.close());
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: "inst_preflight",
+      runtimeId: "runtime_local_host",
+      projectId: "proj_preflight",
+      source: { type: "local-folder", path: "/workspace" },
+      sourceSnapshot: {},
+    },
+  });
+  assert.equal(created.statusCode, 201, created.body);
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/updates/check",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: { channel: "stable" },
+  });
+  assert.equal(response.statusCode, 200, response.body);
+  assert.deepEqual(resolved, [["9.8.7", "linux", "x64"]]);
+  assert.equal(response.json().data.impact.stoppedInstanceCount, 1);
+  assert.equal(response.json().data.impact.restartInstanceCount, 0);
+  assert.deepEqual(response.json().data.runtimeArtifacts.map((artifact) => artifact.version), ["9.8.7"]);
+  assert.ok(response.json().data.preflightToken);
+
+  const apply = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/updates/apply",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      channel: "stable",
+      targetVersion: response.json().data.availableVersion,
+      preflightToken: response.json().data.preflightToken,
+    },
+  });
+  assert.equal(apply.statusCode, 202, apply.body);
+  assert.equal(resolved.length, 2);
+  assert.equal(updateCommands.includes("systemd-run"), true);
+
+  const replay = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/updates/apply",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      channel: "stable",
+      targetVersion: response.json().data.availableVersion,
+      preflightToken: response.json().data.preflightToken,
+    },
+  });
+  assert.equal(replay.statusCode, 409);
+  assert.equal(replay.json().error.code, "UPDATE_PREFLIGHT_EXPIRED");
+
+  failArtifact = false;
+  const secondCheck = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/updates/check",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: { channel: "stable" },
+  });
+  const staleTarget = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/updates/apply",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      channel: "stable",
+      targetVersion: "9.8.8",
+      preflightToken: secondCheck.json().data.preflightToken,
+    },
+  });
+  assert.equal(staleTarget.statusCode, 409);
+  assert.equal(staleTarget.json().error.code, "UPDATE_PREFLIGHT_STALE");
+
+  const thirdCheck = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/updates/check",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: { channel: "stable" },
+  });
+  const beforeImpactChange = app.nodeAgentState.controlledInstances.get("inst_preflight");
+  app.nodeAgentState.controlledInstances.put(ControlledInstanceSchema.parse({
+    ...beforeImpactChange,
+    status: "running",
+    updatedAt: new Date().toISOString(),
+  }));
+  const staleImpact = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/updates/apply",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      channel: "stable",
+      targetVersion: thirdCheck.json().data.availableVersion,
+      preflightToken: thirdCheck.json().data.preflightToken,
+    },
+  });
+  assert.equal(staleImpact.statusCode, 409);
+  assert.equal(staleImpact.json().error.code, "UPDATE_PREFLIGHT_STALE");
+
+  const artifactCheck = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/updates/check",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: { channel: "stable" },
+  });
+  artifactSha = "e".repeat(64);
+  const staleArtifact = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/updates/apply",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      channel: "stable",
+      targetVersion: artifactCheck.json().data.availableVersion,
+      preflightToken: artifactCheck.json().data.preflightToken,
+    },
+  });
+  assert.equal(staleArtifact.statusCode, 409);
+  assert.equal(staleArtifact.json().error.code, "UPDATE_PREFLIGHT_STALE");
 });
 
 test("node agent update checks use the configured absolute npm command", async (t) => {
@@ -2506,12 +2891,15 @@ test("node agent update checks use the configured absolute npm command", async (
     currentVersion: "1.0.0",
     runCommand: async (command, args) => {
       calls.push([command, args]);
-      return { stdout: JSON.stringify("1.1.0-beta.1"), stderr: "" };
+      return { stdout: JSON.stringify(args.includes("dist.integrity") ? npmIntegrityFixture : "1.1.0-beta.1"), stderr: "" };
     },
   });
 
   assert.equal(result.updateAvailable, true);
-  assert.deepEqual(calls, [["/opt/node/bin/npm", ["view", "@task-handoff/node-agent@beta", "version", "--json"]]]);
+  assert.deepEqual(calls, [
+    ["/opt/node/bin/npm", ["view", "@task-handoff/node-agent@beta", "version", "--json"]],
+    ["/opt/node/bin/npm", ["view", "@task-handoff/node-agent@1.1.0-beta.1", "dist.integrity", "--json"]],
+  ]);
 });
 
 test("node agent resolves update workers in source and bundled runtime layouts", () => {
@@ -2548,21 +2936,52 @@ test("node agent update apply launches the resolved worker through systemd-run",
     token: "agent-secret",
     updateCommandRunner: async (command, args) => {
       calls.push([command, args]);
-      return command === "npm" ? { stdout: JSON.stringify("9.8.7"), stderr: "" } : { stdout: "", stderr: "" };
+      return command === "npm" ? { stdout: JSON.stringify(args.includes("dist.integrity") ? npmIntegrityFixture : "9.8.7"), stderr: "" } : { stdout: "", stderr: "" };
     },
+    platform: "linux",
+    arch: "x64",
+    dockerCommandRunner: async (_command, args) => {
+      if (args[0] === "info") return { stdout: JSON.stringify({ OSType: "linux", Architecture: "x86_64" }), stderr: "" };
+      throw new Error("unexpected Docker command");
+    },
+    resolveRuntimeArtifact: async (version, platform, arch) => ({
+      archivePath: "/cache/runtime.tar.gz",
+      cacheHit: false,
+      identity: {
+        packageName: "@task-handoff/controlled-instance",
+        version,
+        platform,
+        arch,
+        formatVersion: 1,
+        launcherAbi: 1,
+        entrypoint: "dist/controlled-instance-cli.js",
+        sha256: "d".repeat(64),
+      },
+    }),
   });
   t.after(() => app.close());
 
+  const check = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/updates/check",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: { channel: "stable" },
+  });
+  assert.equal(check.statusCode, 200, check.body);
   const response = await app.inject({
     method: "POST",
     url: "/api/node-agent/updates/apply",
     headers: { authorization: "Bearer agent-secret" },
-    payload: { target: { component: "node-agent" } },
+    payload: {
+      channel: "stable",
+      targetVersion: check.json().data.availableVersion,
+      preflightToken: check.json().data.preflightToken,
+    },
   });
   assert.equal(response.statusCode, 202);
-  assert.equal(calls.length, 2);
-  assert.equal(calls[1][0], "systemd-run");
-  const args = calls[1][1];
+  assert.equal(calls.length, 3);
+  assert.equal(calls[2][0], "systemd-run");
+  const args = calls[2][1];
   const propertyIndex = args.indexOf("--property=Type=exec");
   assert.equal(args[propertyIndex + 1], process.execPath);
   assert.equal(args[propertyIndex + 2], path.resolve(__dirname, "..", "scripts", "node-update-worker.cjs"));
@@ -2950,6 +3369,9 @@ test("local docker executor checks local images and pulls registry images before
   const restartCalls = [];
   const restartExecutor = new LocalDockerExecutor(async (command, args) => {
     restartCalls.push([command, args]);
+    if (args[0] === "inspect") {
+      return { stdout: "container-1", stderr: "" };
+    }
     if (args[0] === "port") {
       return { stdout: "127.0.0.1:19090", stderr: "" };
     }
@@ -2982,7 +3404,9 @@ test("local docker executor checks local images and pulls registry images before
   assert.equal(restarted.runtime.containerId, "container-1");
   assert.equal(restarted.target.web, "http://127.0.0.1:19090");
   assert.deepEqual(restartCalls, [
+    ["docker", ["inspect", "--format", "{{.Id}}", "task-handoff-inst_1"]],
     ["docker", ["restart", "task-handoff-inst_1"]],
+    ["docker", ["inspect", "--format", "{{.Id}}", "task-handoff-inst_1"]],
     ["docker", ["port", "task-handoff-inst_1", "8080/tcp"]],
   ]);
 });
@@ -2990,12 +3414,28 @@ test("local docker executor checks local images and pulls registry images before
 test("node agent runs local docker behind node-local target and auto-imports agent config on start and restart", async (t) => {
   const calls = [];
   const fetchCalls = [];
-  const app = await createNodeAgentApp({
+  let app;
+  app = await createNodeAgentApp({
     dataDir: tempDataDir("node-agent-local-endpoint"),
     logger: false,
     token: "agent-secret",
     platform: "linux",
+    arch: "arm64",
     port: 18091,
+    resolveRuntimeArtifact: async (version, platform, arch) => ({
+      archivePath: "/cache/controlled-instance-runtime.tar.gz",
+      cacheHit: true,
+      identity: {
+        packageName: "@task-handoff/controlled-instance",
+        version,
+        platform,
+        arch,
+        formatVersion: 1,
+        launcherAbi: 1,
+        entrypoint: "dist/controlled-instance-cli.js",
+        sha256: "a".repeat(64),
+      },
+    }),
     fetchImpl: async (url, init = {}) => {
       fetchCalls.push({ url: String(url), method: init.method || "GET" });
       return new Response(JSON.stringify({ data: { ok: true } }), {
@@ -3009,13 +3449,36 @@ test("node agent runs local docker behind node-local target and auto-imports age
         throw new Error("missing container");
       }
       if (args[0] === "image" && args[1] === "inspect") {
-        return { stdout: JSON.stringify({ Id: `sha256:${"b".repeat(64)}`, RepoDigests: [`task-handoff-web@sha256:${"b".repeat(64)}`] }), stderr: "" };
+        return { stdout: JSON.stringify({ Id: `sha256:${"b".repeat(64)}`, RepoDigests: [`task-handoff-web@sha256:${"b".repeat(64)}`], Os: "linux", Architecture: "arm64" }), stderr: "" };
       }
       if (args[0] === "run") {
         return { stdout: "container-1", stderr: "" };
       }
       if (args[0] === "port") {
         return { stdout: "0.0.0.0:18080", stderr: "" };
+      }
+      if (args[0] === "inspect" && args.includes("{{json .}}")) {
+        return { stdout: JSON.stringify({ Platform: "linux", Image: "sha256:image" }), stderr: "" };
+      }
+      if (args[0] === "inspect") {
+        return { stdout: "container-1", stderr: "" };
+      }
+      if (args[0] === "exec" && args.includes("verify-active")) {
+        return { stdout: JSON.stringify(resolvedRuntimeArtifact("1.0.0", "linux", "arm64").identity), stderr: "" };
+      }
+      if (args[0] === "restart" && app) {
+        const instance = app.nodeAgentState.controlledInstances.get("inst_1");
+        setImmediate(() => app.nodeAgentState.registerInstance("inst_1", {
+            instanceId: "inst_1",
+            name: "worker",
+            protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+            appInventory: emptyAppInventory(),
+            controlMode: "controlled",
+            capabilities: {},
+            build: { component: "controlled-instance", packageVersion: "1.0.0" },
+            target: { strategy: "direct-port", status: "reachable", web: "http://127.0.0.1:18080" },
+            workspace: { status: "ready" },
+          }, instance.registrationToken));
       }
       return { stdout: "", stderr: "" };
     },
@@ -3089,7 +3552,7 @@ test("node agent runs local docker behind node-local target and auto-imports age
     payload: {},
   });
 
-  assert.equal(response.statusCode, 200);
+  assert.equal(response.statusCode, 200, response.body);
   const body = response.json();
   assert.equal(body.data.target.web, "http://127.0.0.1:18080");
   assert.deepEqual(
@@ -3125,16 +3588,18 @@ test("node agent runs local docker behind node-local target and auto-imports age
 
 test("node agent skips start config auto-import when disabled on the instance", async (t) => {
   const fetchCalls = [];
-  const app = await createNodeAgentApp({
+  let app;
+  app = await createNodeAgentApp({
     dataDir: tempDataDir("node-agent-config-auto-import-disabled"),
     logger: false,
     token: "agent-secret",
+    resolveRuntimeArtifact: resolvedRuntimeArtifact,
     dockerCommandRunner: async (_command, args) => {
       if (args[0] === "start") {
         throw new Error("missing container");
       }
       if (args[0] === "image" && args[1] === "inspect") {
-        return { stdout: JSON.stringify({ Id: `sha256:${"c".repeat(64)}`, RepoDigests: [`task-handoff-web@sha256:${"c".repeat(64)}`] }), stderr: "" };
+        return { stdout: JSON.stringify({ Id: `sha256:${"c".repeat(64)}`, RepoDigests: [`task-handoff-web@sha256:${"c".repeat(64)}`], Os: "linux", Architecture: "amd64" }), stderr: "" };
       }
       if (args[0] === "run") {
         return { stdout: "container-1", stderr: "" };
@@ -3142,6 +3607,8 @@ test("node agent skips start config auto-import when disabled on the instance", 
       if (args[0] === "port") {
         return { stdout: "0.0.0.0:18180", stderr: "" };
       }
+      const convergence = managedDockerRuntimeCommand(app, "inst_no_auto_import", "http://127.0.0.1:18180", args);
+      if (convergence) return convergence;
       return { stdout: "", stderr: "" };
     },
     fetchImpl: async (url, init = {}) => {
@@ -3194,22 +3661,24 @@ test("node agent skips start config auto-import when disabled on the instance", 
     headers: { authorization: "Bearer agent-secret" },
     payload: {},
   });
-  assert.equal(started.statusCode, 200);
+  assert.equal(started.statusCode, 200, started.body);
   assert.deepEqual(fetchCalls.map((call) => `${call.method} ${new URL(call.url).pathname}`), ["GET /api/health"]);
 });
 
 test("node agent config auto-import failure does not fail start", async (t) => {
   const fetchCalls = [];
-  const app = await createNodeAgentApp({
+  let app;
+  app = await createNodeAgentApp({
     dataDir: tempDataDir("node-agent-config-auto-import-failure"),
     logger: false,
     token: "agent-secret",
+    resolveRuntimeArtifact: resolvedRuntimeArtifact,
     dockerCommandRunner: async (_command, args) => {
       if (args[0] === "start") {
         throw new Error("missing container");
       }
       if (args[0] === "image" && args[1] === "inspect") {
-        return { stdout: JSON.stringify({ Id: `sha256:${"d".repeat(64)}`, RepoDigests: [`task-handoff-web@sha256:${"d".repeat(64)}`] }), stderr: "" };
+        return { stdout: JSON.stringify({ Id: `sha256:${"d".repeat(64)}`, RepoDigests: [`task-handoff-web@sha256:${"d".repeat(64)}`], Os: "linux", Architecture: "amd64" }), stderr: "" };
       }
       if (args[0] === "run") {
         return { stdout: "container-1", stderr: "" };
@@ -3217,6 +3686,8 @@ test("node agent config auto-import failure does not fail start", async (t) => {
       if (args[0] === "port") {
         return { stdout: "0.0.0.0:18181", stderr: "" };
       }
+      const convergence = managedDockerRuntimeCommand(app, "inst_auto_import_fails", "http://127.0.0.1:18181", args);
+      if (convergence) return convergence;
       return { stdout: "", stderr: "" };
     },
     fetchImpl: async (url, init = {}) => {
@@ -3290,16 +3761,18 @@ test("node agent config auto-import timeout does not hang start", async (t) => {
       process.env.TASK_HANDOFF_CONFIG_AUTO_IMPORT_TIMEOUT_MS = previousTimeout;
     }
   });
-  const app = await createNodeAgentApp({
+  let app;
+  app = await createNodeAgentApp({
     dataDir: tempDataDir("node-agent-config-auto-import-timeout"),
     logger: false,
     token: "agent-secret",
+    resolveRuntimeArtifact: resolvedRuntimeArtifact,
     dockerCommandRunner: async (_command, args) => {
       if (args[0] === "start") {
         throw new Error("missing container");
       }
       if (args[0] === "image" && args[1] === "inspect") {
-        return { stdout: JSON.stringify({ Id: `sha256:${"e".repeat(64)}`, RepoDigests: [`task-handoff-web@sha256:${"e".repeat(64)}`] }), stderr: "" };
+        return { stdout: JSON.stringify({ Id: `sha256:${"e".repeat(64)}`, RepoDigests: [`task-handoff-web@sha256:${"e".repeat(64)}`], Os: "linux", Architecture: "amd64" }), stderr: "" };
       }
       if (args[0] === "run") {
         return { stdout: "container-1", stderr: "" };
@@ -3307,6 +3780,8 @@ test("node agent config auto-import timeout does not hang start", async (t) => {
       if (args[0] === "port") {
         return { stdout: "0.0.0.0:18182", stderr: "" };
       }
+      const convergence = managedDockerRuntimeCommand(app, "inst_auto_import_timeout", "http://127.0.0.1:18182", args);
+      if (convergence) return convergence;
       return { stdout: "", stderr: "" };
     },
     fetchImpl: async (url, init = {}) => {
@@ -4569,6 +5044,21 @@ test("node agent starts localhost runtime as a host controlled-instance process"
       "  }),",
       "});",
       "if (!registered.ok) { throw new Error(`register failed ${registered.status}: ${await registered.text()}`); }",
+      "const heartbeat = await fetch(`${process.env.TASK_HANDOFF_NODE_AGENT_URL}/api/node-agent/instances/${process.env.TASK_HANDOFF_INSTANCE_ID}/heartbeat`, {",
+      "  method: 'POST',",
+      "  headers: { 'content-type': 'application/json', authorization: `Bearer ${process.env.TASK_HANDOFF_REGISTRATION_TOKEN}` },",
+      "  body: JSON.stringify({",
+      "    status: 'running',",
+      "    health: 'ok',",
+      `    protocolVersion: '${CONTROL_PLANE_PROTOCOL_VERSION}',`,
+      "    build: { component: 'controlled-instance' },",
+      "    appInventory: { items: [], observedAt: new Date().toISOString(), issues: [] },",
+      "    apps: { runningCount: 0, problemCount: 0 },",
+      "    target: { status: 'reachable' },",
+      "    workspace: { mode: 'local-bind', status: 'ready', path: process.env.TASK_HANDOFF_WORKSPACE, exists: true },",
+      "  }),",
+      "});",
+      "if (!heartbeat.ok) { throw new Error(`heartbeat failed ${heartbeat.status}: ${await heartbeat.text()}`); }",
       `fs.appendFileSync(${JSON.stringify(envLog)}, JSON.stringify({`,
       "  persist: process.env.TASK_HANDOFF_APP_SESSION_PERSIST,",
       "  dataDir: process.env.TASK_HANDOFF_DATA_DIR,",
@@ -4593,6 +5083,7 @@ test("node agent starts localhost runtime as a host controlled-instance process"
     dataDir,
     logger: false,
     token: "agent-secret",
+    allowUnmanagedLocalCommandOverride: true,
     host,
     port,
   });
@@ -4633,7 +5124,7 @@ test("node agent starts localhost runtime as a host controlled-instance process"
     payload: {},
   });
   assert.equal(started.statusCode, 200);
-  assert.equal(started.json().data.status, "registering");
+  assert.equal(started.json().data.status, "running");
   assert.equal(started.json().data.runtime.kind, "local");
   assert.equal(typeof started.json().data.runtime.pid, "number");
   assert.equal(typeof started.json().data.runtime.port, "number");
@@ -4669,6 +5160,7 @@ test("node agent starts localhost runtime as a host controlled-instance process"
     payload: {},
   });
   assert.equal(restarted.statusCode, 200);
+  assert.equal(restarted.json().data.status, "running");
   assert.notEqual(restarted.json().data.runtime.pid, firstPid);
   await waitForProcessExit(firstPid, "replaced localhost controlled instance");
   const restartedEnvLines = fs.readFileSync(envLog, "utf8").trim().split(/\n/).map((line) => JSON.parse(line));
@@ -4693,6 +5185,7 @@ test("node agent starts localhost runtime as a host controlled-instance process"
     payload: {},
   });
   assert.equal(restartedWithoutModel.statusCode, 200);
+  assert.equal(restartedWithoutModel.json().data.status, "running");
   const noModelEnvLines = fs.readFileSync(envLog, "utf8").trim().split(/\n/).map((line) => JSON.parse(line));
   assert.equal(noModelEnvLines.length, 3);
   assert.equal(noModelEnvLines[2].openaiKey, process.env.OPENAI_API_KEY);
@@ -4718,6 +5211,7 @@ test("localhost process spawn failures fail the instance without crashing node a
     dataDir,
     logger: false,
     token: "agent-secret",
+    allowUnmanagedLocalCommandOverride: true,
   });
   t.after(async () => {
     if (previousCommandArgv === undefined) {
@@ -4797,6 +5291,7 @@ test("node agent shutdown stops localhost processes while preserving active rest
     dataDir,
     logger: false,
     token: "agent-secret",
+    allowUnmanagedLocalCommandOverride: true,
     host,
     port,
   });
@@ -4922,6 +5417,7 @@ test("node agent restores localhost runtime processes after graceful shutdown", 
     dataDir,
     logger: false,
     token: "agent-secret",
+    allowUnmanagedLocalCommandOverride: true,
     host,
     port,
   });
@@ -4975,6 +5471,7 @@ test("node agent restores localhost runtime processes after graceful shutdown", 
     dataDir,
     logger: false,
     token: "agent-secret",
+    allowUnmanagedLocalCommandOverride: true,
     host,
     port,
   });
@@ -5048,6 +5545,7 @@ test("node agent restores active localhost runtime processes after unclean shutd
     dataDir,
     logger: false,
     token: "agent-secret",
+    allowUnmanagedLocalCommandOverride: true,
     host,
     port,
   });
@@ -5099,6 +5597,7 @@ test("node agent restores active localhost runtime processes after unclean shutd
     dataDir,
     logger: false,
     token: "agent-secret",
+    allowUnmanagedLocalCommandOverride: true,
     host,
     port,
   });
@@ -5264,6 +5763,77 @@ test("node agent accepts incompatible controlled instance protocol versions and 
   assert.equal(rejectedHeartbeat.json().data.protocolVersion, "2026-01-01");
 });
 
+test("register and heartbeat preserve authoritative convergence attempts and failures", async (t) => {
+  const app = await createNodeAgentApp({
+    dataDir: tempDataDir("node-agent-convergence-report-preservation"),
+    logger: false,
+    token: "agent-secret",
+  });
+  t.after(() => app.close());
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: "inst_attempts",
+      runtimeId: "runtime_local_host",
+      projectId: "proj_attempts",
+      source: { type: "local-folder", path: "/workspace" },
+      sourceSnapshot: {},
+    },
+  });
+  assert.equal(created.statusCode, 201, created.body);
+  const original = app.nodeAgentState.controlledInstances.get("inst_attempts");
+  app.nodeAgentState.controlledInstances.put(ControlledInstanceSchema.parse({
+    ...original,
+    status: "running",
+    build: { component: "controlled-instance", packageVersion: "0.9.0" },
+    runtimeVersion: {
+      desiredVersion: "1.0.0",
+      actualVersion: "0.9.0",
+      phase: "failed",
+      attempt: 3,
+      error: {
+        code: "INSTANCE_RUNTIME_INSTALL_FAILED",
+        message: "bounded retries exhausted",
+        expectedVersion: "1.0.0",
+        actualVersion: "0.9.0",
+        retryable: false,
+      },
+    },
+  }));
+  const registrationToken = created.json().data.registrationToken;
+  const report = {
+    protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+    appInventory: emptyAppInventory(),
+    build: { component: "controlled-instance", packageVersion: "0.9.0" },
+    target: { strategy: "node-proxy", status: "reachable", web: "http://127.0.0.1:18080" },
+    workspace: { status: "ready" },
+  };
+  const registered = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_attempts/register",
+    headers: { authorization: `Bearer ${registrationToken}` },
+    payload: { ...report, instanceId: "inst_attempts", name: "worker" },
+  });
+  assert.equal(registered.statusCode, 201, registered.body);
+  assert.equal(registered.json().data.ready, false);
+  assert.equal(registered.json().data.runtimeVersion.phase, "failed");
+  assert.equal(registered.json().data.runtimeVersion.attempt, 3);
+  assert.equal(registered.json().data.runtimeVersion.error.message, "bounded retries exhausted");
+
+  const heartbeat = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_attempts/heartbeat",
+    headers: { authorization: `Bearer ${registrationToken}` },
+    payload: { protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, appInventory: emptyAppInventory(), health: "ok", build: report.build },
+  });
+  assert.equal(heartbeat.statusCode, 200, heartbeat.body);
+  assert.equal(heartbeat.json().data.ready, false);
+  assert.equal(heartbeat.json().data.runtimeVersion.phase, "failed");
+  assert.equal(heartbeat.json().data.runtimeVersion.attempt, 3);
+});
+
 test("node agent migrates legacy local stored endpoint-shaped instances on startup", async (t) => {
   const dataDir = tempDataDir("node-agent-invalid-stored-instance");
   const timestamp = new Date().toISOString();
@@ -5278,6 +5848,7 @@ test("node agent migrates legacy local stored endpoint-shaped instances on start
         source: {
           type: "local-folder",
           path: "/workspace",
+          futureSourceField: true,
         },
         sourceSnapshot: {},
         nodeId: "node_old",
@@ -5334,9 +5905,10 @@ test("node agent tolerates extra fields in stored controlled instances", async (
   const dataDir = tempDataDir("node-agent-stored-instance-extra-fields");
   const timestamp = new Date().toISOString();
   const instanceDir = path.join(dataDir, "controlled-instances");
+  const instanceFile = path.join(instanceDir, "inst_extra.json");
   fs.mkdirSync(instanceDir, { recursive: true });
   fs.writeFileSync(
-    path.join(instanceDir, "inst_extra.json"),
+    instanceFile,
     `${JSON.stringify(
       {
         id: "inst_extra",
@@ -5349,17 +5921,97 @@ test("node agent tolerates extra fields in stored controlled instances", async (
         nodeId: "node_current",
         runtimeId: "runtime_local_docker",
         imageId: "img_default",
-        status: "running",
+        status: "stopped",
         health: "ok",
         connectionStatus: "online",
         controlMode: "controlled",
+        build: {
+          component: "controlled-instance",
+          packageVersion: "0.9.0",
+          gitCommit: "x".repeat(121),
+          futureBuildField: true,
+        },
         capabilities: {},
+        modelSelection: { futureModelSelectionField: true },
+        aiSessions: {
+          runningCount: 1,
+          waitingCount: 0,
+          staleCount: 0,
+          updatedAt: timestamp,
+          futureSnapshotField: true,
+          sessions: [{
+            id: "ai_extra",
+            agent: "codex",
+            status: "running",
+            phase: "thinking",
+            title: "x".repeat(241),
+            startedAt: timestamp,
+            updatedAt: timestamp,
+            actions: { send: true, futureActionField: true },
+            futureSessionField: true,
+          }],
+        },
+        triggers: {
+          enabledCount: 1,
+          runningCount: 0,
+          errorCount: 0,
+          futureTriggersField: true,
+          configs: [{
+            configHash: "trg_12345678",
+            futureConfigRecordField: true,
+            config: {
+              configHash: "trg_12345678",
+              name: "Nightly",
+              description: "x".repeat(1001),
+              source: { type: "schedule", scheduleKind: "interval", intervalMs: 1000, futureSourceField: true },
+              action: { promptTemplate: "Run", futureActionField: true },
+              policy: { maxConcurrentRuns: 1, whenBusy: "skip", futurePolicyField: true },
+              createdAt: timestamp,
+              updatedAt: timestamp,
+              futureTriggerConfigField: true,
+            },
+            deployments: [{
+              configHash: "trg_12345678",
+              deploymentId: "dep_1",
+              instanceId: "inst_extra",
+              target: { type: "ai-session", aiSessionId: "ai_extra", futureTargetField: true },
+              createdAt: timestamp,
+              updatedAt: timestamp,
+              futureDeploymentField: true,
+            }],
+            runtime: [{
+              configHash: "trg_12345678",
+              deploymentId: "dep_1",
+              instanceId: "inst_extra",
+              status: "idle",
+              runCount: 0,
+              skippedCount: 0,
+              futureRuntimeStateField: true,
+            }],
+          }],
+          recentRuns: [{
+            id: "run_1",
+            configHash: "trg_12345678",
+            deploymentId: "dep_1",
+            instanceId: "inst_extra",
+            eventType: "manual",
+            status: "completed",
+            target: { type: "ai-session", aiSessionId: "ai_extra", futureTargetField: true },
+            promptPreview: "Run",
+            startedAt: timestamp,
+            completedAt: timestamp,
+            futureRunField: true,
+          }],
+        },
         workspace: { status: "ready", futureWorkspaceField: true },
         target: {
           strategy: "direct-port",
           status: "reachable",
           web: "http://127.0.0.1:18080",
+          logs: "x".repeat(2049),
+          futureTargetField: true,
         },
+        access: { strategy: "node-proxy", status: "reachable", futureAccessField: true },
         receiver: { status: "running", pendingCount: 0, legacyReceiverField: true },
         apps: {
           runningCount: 1,
@@ -5367,6 +6019,21 @@ test("node agent tolerates extra fields in stored controlled instances", async (
           legacyAppsField: true,
         },
         runtime: { labels: {}, legacyRuntimeField: true },
+        runtimeVersion: {
+          desiredVersion: "1.0.0",
+          actualVersion: "0.9.0",
+          phase: "updating",
+          attempt: 2,
+          lastAttemptAt: "not-a-timestamp",
+          matchedAt: "also-invalid",
+          error: {
+            code: "FUTURE_RUNTIME_ERROR",
+            message: "legacy install failed",
+            retryable: true,
+            futureErrorField: true,
+          },
+          futureRuntimeField: true,
+        },
         legacyTopLevelField: true,
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -5376,24 +6043,54 @@ test("node agent tolerates extra fields in stored controlled instances", async (
     )}\n`,
   );
 
-  const app = await createNodeAgentApp({
-    dataDir,
-    logger: false,
-    nodeId: "node_current",
-    token: "agent-secret",
-  });
-  t.after(() => app.close());
-
   const warnings = [];
   const originalWarn = console.warn;
   console.warn = (...args) => warnings.push(args.map(String).join(" "));
-  const listed = await app.inject({
-    method: "GET",
-    url: "/api/node-agent/instances",
-    headers: { authorization: "Bearer agent-secret" },
-  }).finally(() => {
+  const sanitizedStored = sanitizeStoredControlledInstance(JSON.parse(fs.readFileSync(instanceFile, "utf8")), () => {});
+  assert.equal(sanitizedStored.runtimeVersion.error.code, "INSTANCE_RUNTIME_INSTALL_FAILED");
+  assert.equal(sanitizedStored.runtimeVersion.error.retryable, true);
+  assert.equal("lastAttemptAt" in sanitizedStored.runtimeVersion, false);
+  assert.equal("matchedAt" in sanitizedStored.runtimeVersion, false);
+  assert.equal(sanitizedStored.source.path, "/workspace");
+  assert.equal("futureSourceField" in sanitizedStored.source, false);
+  assert.equal(sanitizedStored.build.packageVersion, "0.9.0");
+  assert.equal("futureBuildField" in sanitizedStored.build, false);
+  assert.equal("gitCommit" in sanitizedStored.build, false);
+  assert.equal(sanitizedStored.aiSessions.sessions.length, 1);
+  assert.deepEqual(sanitizedStored.aiSessions.sessions[0].actions, { send: true });
+  assert.equal("futureSessionField" in sanitizedStored.aiSessions.sessions[0], false);
+  assert.equal("title" in sanitizedStored.aiSessions.sessions[0], false);
+  assert.equal(sanitizedStored.triggers.configs.length, 1);
+  assert.deepEqual(sanitizedStored.triggers.configs[0].config.action, { promptTemplate: "Run" });
+  assert.equal("futurePolicyField" in sanitizedStored.triggers.configs[0].config.policy, false);
+  assert.equal("description" in sanitizedStored.triggers.configs[0].config, false);
+  assert.equal(sanitizedStored.triggers.configs[0].deployments.length, 1);
+  assert.equal("futureTargetField" in sanitizedStored.triggers.configs[0].deployments[0].target, false);
+  assert.equal(sanitizedStored.triggers.configs[0].runtime.length, 1);
+  assert.equal("futureRuntimeStateField" in sanitizedStored.triggers.configs[0].runtime[0], false);
+  assert.equal(sanitizedStored.triggers.recentRuns.length, 1);
+  assert.equal("futureTargetField" in sanitizedStored.triggers.recentRuns[0].target, false);
+  assert.equal("futureTargetField" in sanitizedStored.target, false);
+  assert.equal("logs" in sanitizedStored.target, false);
+  assert.equal("futureAccessField" in sanitizedStored.access, false);
+  let app;
+  let listed;
+  try {
+    app = await createNodeAgentApp({
+      dataDir,
+      logger: false,
+      nodeId: "node_current",
+      token: "agent-secret",
+    });
+    listed = await app.inject({
+      method: "GET",
+      url: "/api/node-agent/instances",
+      headers: { authorization: "Bearer agent-secret" },
+    });
+  } finally {
     console.warn = originalWarn;
-  });
+  }
+  t.after(() => app?.close());
   assert.equal(listed.statusCode, 200);
   assert.equal(listed.json().data.length, 1);
   assert.equal(listed.json().data[0].id, "inst_extra");
@@ -5401,10 +6098,13 @@ test("node agent tolerates extra fields in stored controlled instances", async (
   assert.deepEqual(listed.json().data[0].apps, { runningCount: 1, problemCount: 0 });
   assert.equal("legacyTopLevelField" in listed.json().data[0], false);
   assert.equal("sessions" in listed.json().data[0].apps, false);
+  assert.equal(listed.json().data[0].runtimeVersion.phase, "pending");
+  assert.equal(listed.json().data[0].runtimeVersion.attempt, 2);
+  assert.equal(listed.json().data[0].runtimeVersion.error.code, "INSTANCE_RUNTIME_VERSION_MISMATCH");
   assert.ok(warnings.some((warning) => warning.includes("legacy controlled instance field was ignored") && warning.includes("inst_extra") && warning.includes("receiver")));
 });
 
-test("node agent proxies instance API requests", async (t) => {
+test("node agent proxies mutating instance API requests while runtime convergence is pending", async (t) => {
   const calls = [];
   const app = await createNodeAgentApp({
     dataDir: tempDataDir("node-agent-proxy"),
@@ -5466,6 +6166,7 @@ test("node agent proxies instance API requests", async (t) => {
       appInventory: emptyAppInventory(),
       controlMode: "controlled",
       capabilities: {},
+      build: { component: "controlled-instance", packageVersion: "1.0.0" },
       target: {
         strategy: "direct-port",
         web: "http://127.0.0.1:18080",
@@ -5484,7 +6185,7 @@ test("node agent proxies instance API requests", async (t) => {
     headers: { authorization: "Bearer agent-secret" },
     payload: {
       path: "/api/status",
-      method: "GET",
+      method: "POST",
       headers: {
         "content-type": "application/json",
       },
@@ -5496,7 +6197,7 @@ test("node agent proxies instance API requests", async (t) => {
   assert.deepEqual(calls, [
     {
       url: "http://127.0.0.1:18080/api/status",
-      method: "GET",
+      method: "POST",
       headers: {
         "content-type": "application/json",
       },
@@ -5566,6 +6267,7 @@ test("node agent proxies direct-port instances through the node-local host", asy
       appInventory: emptyAppInventory(),
       controlMode: "controlled",
       capabilities: {},
+      build: { component: "controlled-instance", packageVersion: "1.0.0" },
       target: {
         strategy: "direct-port",
         web: "http://127.0.0.1:18080",
@@ -5700,6 +6402,7 @@ test("node agent proxies instance websocket subprotocols", async (t) => {
       appInventory: emptyAppInventory(),
       controlMode: "controlled",
       capabilities: {},
+      build: { component: "controlled-instance", packageVersion: "1.0.0" },
       target: {
         strategy: "direct-port",
         web: `http://127.0.0.1:${upstreamAddress.port}`,

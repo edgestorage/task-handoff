@@ -1,6 +1,6 @@
-import { computed, reactive, ref } from "vue";
+import { computed, onScopeDispose, reactive, ref } from "vue";
 import { applyNodeUpdate, checkNode, checkNodeUpdate, connectNodeRemote, createNode, createNodeJoinInvite, createNodePairingInvite, deleteNode, deleteNodeRemoteControlPlane, listNodeDockerImages, listNodeRemoteControlPlanes, listNodeUpdateJobs, syncLocalNode, updateNode } from "../../../api/queries";
-import type { LocalDockerImage, Node, NodeRemoteControlPlane, NodeRuntime, NodeStatus, UpdateChannel, UpdateCheckResult, UpdateJob, UpdateTarget } from "../../../api/types";
+import type { LocalDockerImage, Node, NodeRemoteControlPlane, NodeRuntime, NodeStatus, UpdateChannel, UpdateCheckResult, UpdateJob } from "../../../api/types";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 import { useNodeRename } from "./useNodeRename";
 import type { Translate } from "../../../i18n/status.ts";
@@ -43,8 +43,10 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
   const settingsNodeSuccess = ref("");
   const updateChecks = reactive<Record<string, UpdateCheckResult>>({});
   const updateJobs = ref<UpdateJob[]>([]);
-  const checkingUpdateTarget = ref("");
-  const applyingUpdateTarget = ref("");
+  const checkingUpdateNodeId = ref("");
+  const applyingUpdateNodeId = ref("");
+  let updateJobsRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+  let updateJobsLoadRevision = 0;
   const settingsNode = reactive({
     name: "",
     endpoint: "",
@@ -225,50 +227,71 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
     }
   }
 
-  function managedUpdateKey(nodeId: string, target: UpdateTarget) {
-    const targetKey = target.component === "node-agent" ? "node-agent" : `instance:${target.instanceId}`;
-    return `${nodeId}:${targetKey}`;
-  }
-
-  async function checkManagedUpdate(nodeId: string, target: UpdateTarget) {
-    const key = managedUpdateKey(nodeId, target);
-    checkingUpdateTarget.value = key;
+  async function checkManagedUpdate(nodeId: string) {
+    checkingUpdateNodeId.value = nodeId;
     try {
-      updateChecks[key] = await checkNodeUpdate(nodeId, target, updateChannel());
+      updateChecks[nodeId] = await checkNodeUpdate(nodeId, updateChannel());
     } catch (error) {
       showControlPlaneToast(translateError(error));
     } finally {
-      checkingUpdateTarget.value = "";
+      checkingUpdateNodeId.value = "";
     }
   }
 
-  async function applyManagedUpdate(nodeId: string, target: UpdateTarget, checkOverride?: UpdateCheckResult) {
-    const key = managedUpdateKey(nodeId, target);
-    const check = checkOverride || updateChecks[key];
-    if (!check?.supported || !check.updateAvailable || applyingUpdateTarget.value) return;
-    if (!window.confirm(t("settings.nodeDetail.updateConfirm", { target: key, current: check.currentVersion || t("settings.nodeDetail.unknown"), available: check.availableVersion }))) return;
-    applyingUpdateTarget.value = key;
+  async function applyManagedUpdate(nodeId: string, checkOverride?: UpdateCheckResult) {
+    const check = checkOverride || updateChecks[nodeId];
+    if (!check?.supported || !check.updateAvailable || !check.preflightToken || applyingUpdateNodeId.value) return;
+    if (!window.confirm(t("settings.nodeDetail.updateConfirm", {
+      current: check.currentVersion || t("settings.nodeDetail.unknown"),
+      available: check.availableVersion,
+      restarting: check.impact.restartInstanceCount,
+      active: check.impact.activeInstanceCount,
+      stopped: check.impact.stoppedInstanceCount,
+    }))) return;
+    applyingUpdateNodeId.value = nodeId;
     try {
-      await applyNodeUpdate(nodeId, target, updateChannel());
-      updateJobs.value = await listNodeUpdateJobs(nodeId);
+      await applyNodeUpdate(nodeId, {
+        channel: check.channel,
+        targetVersion: check.availableVersion,
+        preflightToken: check.preflightToken,
+      });
+      await loadManagedUpdateJobs(nodeId, true);
       showControlPlaneToast(t("settings.nodeDetail.updateQueued"), "success");
     } catch (error) {
       showControlPlaneToast(translateError(error));
     } finally {
-      applyingUpdateTarget.value = "";
+      applyingUpdateNodeId.value = "";
     }
   }
 
-  async function loadManagedUpdateJobs(nodeId: string) {
+  function scheduleManagedUpdateJobsRefresh(nodeId: string) {
+    if (updateJobsRefreshTimer) clearTimeout(updateJobsRefreshTimer);
+    const active = updateJobs.value.some((job) => ["queued", "updating-node", "restarting-node", "converging-instances"].includes(job.status));
+    if (!active) return;
+    updateJobsRefreshTimer = setTimeout(() => void loadManagedUpdateJobs(nodeId, true), 2_000);
+  }
+
+  async function loadManagedUpdateJobs(nodeId: string, silent = false) {
+    const revision = ++updateJobsLoadRevision;
+    if (updateJobsRefreshTimer) clearTimeout(updateJobsRefreshTimer);
+    updateJobsRefreshTimer = undefined;
     try {
-      updateJobs.value = await listNodeUpdateJobs(nodeId);
-      const succeededTargets = updateJobs.value.filter((job) => job.status === "succeeded").map((job) => managedUpdateKey(nodeId, job.target));
-      for (const key of succeededTargets) delete updateChecks[key];
+      const jobs = await listNodeUpdateJobs(nodeId);
+      if (revision !== updateJobsLoadRevision) return;
+      updateJobs.value = jobs;
+      const latest = jobs[0];
+      if (latest && ["succeeded", "degraded", "failed"].includes(latest.status)) delete updateChecks[nodeId];
       await Promise.all([checkSettingsNode(nodeId), refresh()]);
     } catch (error) {
-      showControlPlaneToast(translateError(error));
+      if (!silent) showControlPlaneToast(translateError(error));
+    } finally {
+      if (revision === updateJobsLoadRevision) scheduleManagedUpdateJobsRefresh(nodeId);
     }
   }
+
+  onScopeDispose(() => {
+    if (updateJobsRefreshTimer) clearTimeout(updateJobsRefreshTimer);
+  });
 
   async function removeRemoteKey(nodeId: string, keyId: string) {
     if (!nodeId || !keyId || deletingRemoteKeyId.value) {
@@ -314,12 +337,12 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
     ...nodeRename,
     addLocalNode,
     applyManagedUpdate,
-    applyingUpdateTarget,
+    applyingUpdateNodeId,
     canConnectRemote,
     canCreateNode,
     checkSettingsNode,
     checkManagedUpdate,
-    checkingUpdateTarget,
+    checkingUpdateNodeId,
     checkingNodeId,
     clearNodeFeedback,
     connectSelectedNodeToRemote,
@@ -338,7 +361,6 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
     loadNodeImages,
     loadingRemoteKeysNodeId,
     loadingNodeImagesId,
-    managedUpdateKey,
     removeNode,
     removeRemoteKey,
     nodeImageError,

@@ -27,11 +27,30 @@ const targetVersion = options.targetVersion;
 const service = options.service;
 const npmCommand = options.npmCommand;
 const nodeAgentManifest = path.resolve(__dirname, "..", "package.json");
+const terminalStatuses = new Set(["succeeded", "degraded", "failed"]);
 
-function updateJob(patch) {
-  const current = JSON.parse(fs.readFileSync(jobFile, "utf8"));
-  const next = { ...current, ...patch, updatedAt: new Date().toISOString() };
-  writeFileAtomic.sync(jobFile, `${JSON.stringify(next, null, 2)}\n`, { encoding: "utf8" });
+function updateJob(expectedStatuses, createPatch) {
+  const observed = JSON.parse(fs.readFileSync(jobFile, "utf8"));
+  // Test-only synchronization point used to prove that the value is checked
+  // again after another process changes it between observation and commit.
+  if (process.env.TASK_HANDOFF_UPDATE_WORKER_TEST_CAS_HOOK) {
+    require(path.resolve(process.env.TASK_HANDOFF_UPDATE_WORKER_TEST_CAS_HOOK))({ jobFile, observed });
+  }
+
+  const lockPath = `${jobFile}.worker-lock`;
+  fs.mkdirSync(lockPath);
+  try {
+    const current = JSON.parse(fs.readFileSync(jobFile, "utf8"));
+    if (terminalStatuses.has(current.status) || !expectedStatuses.includes(current.status)) {
+      return false;
+    }
+    const patch = typeof createPatch === "function" ? createPatch(current) : createPatch;
+    const next = { ...current, ...patch, updatedAt: new Date().toISOString() };
+    writeFileAtomic.sync(jobFile, `${JSON.stringify(next, null, 2)}\n`, { encoding: "utf8" });
+    return true;
+  } finally {
+    fs.rmdirSync(lockPath);
+  }
 }
 
 function run(command, args) {
@@ -46,31 +65,63 @@ function verifyInstalledVersion() {
   }
 }
 
+function verifyNpmArtifactIntegrity() {
+  const job = JSON.parse(fs.readFileSync(jobFile, "utf8"));
+  const prefix = `npm:@task-handoff/node-agent@${targetVersion}#`;
+  if (typeof job.artifactRef !== "string" || !job.artifactRef.startsWith(prefix) || job.artifactRef.length === prefix.length) {
+    throw new Error(`Update job does not pin npm integrity for @task-handoff/node-agent@${targetVersion}.`);
+  }
+  const expectedIntegrity = job.artifactRef.slice(prefix.length);
+  const result = spawnSync(npmCommand, ["view", `@task-handoff/node-agent@${targetVersion}`, "dist.integrity", "--json"], { encoding: "utf8" });
+  if (result.status !== 0) throw new Error("Could not verify the node-agent npm artifact integrity.");
+  let actualIntegrity;
+  try {
+    actualIntegrity = JSON.parse(result.stdout);
+  } catch {
+    throw new Error("npm returned invalid node-agent artifact integrity metadata.");
+  }
+  if (actualIntegrity !== expectedIntegrity) {
+    throw new Error(`Node-agent npm artifact integrity mismatch: expected ${expectedIntegrity}, found ${String(actualIntegrity || "unknown")}.`);
+  }
+}
+
+let restartAttempted = false;
+
 try {
-  updateJob({ status: "updating", startedAt: new Date().toISOString(), error: undefined });
+  const claimed = updateJob(["queued"], (current) => ({
+    status: "updating-node",
+    rollout: { ...current.rollout, phase: "updating-node" },
+    startedAt: new Date().toISOString(),
+    error: undefined,
+  }));
+  if (!claimed) process.exit(0);
+  verifyNpmArtifactIntegrity();
   const prefixResult = spawnSync(npmCommand, ["prefix", "--global"], { encoding: "utf8" });
   if (prefixResult.status !== 0) throw new Error("Could not determine the npm global prefix.");
   const prefix = prefixResult.stdout.trim();
-  const taskHandoff = path.join(prefix, "bin", "task-handoff");
-  const serverPackage = path.join(prefix, "lib", "node_modules", "@task-handoff", "server", "package.json");
-  if (fs.existsSync(taskHandoff) && fs.existsSync(serverPackage)) {
-    run(taskHandoff, ["update", "--to", targetVersion]);
-  } else {
-    run(npmCommand, [
-      "install",
-      "--global",
-      "--prefix",
-      prefix,
-      `@task-handoff/node-agent@${targetVersion}`,
-      `@task-handoff/controlled-instance@${targetVersion}`,
-    ]);
-    updateJob({ status: "restarting" });
-    run("systemctl", ["restart", service]);
-  }
+  run(npmCommand, [
+    "install",
+    "--global",
+    "--prefix",
+    prefix,
+    `@task-handoff/node-agent@${targetVersion}`,
+  ]);
+  const handedOff = updateJob(["updating-node"], (current) => ({ status: "restarting-node", rollout: { ...current.rollout, phase: "restarting-node" } }));
+  if (!handedOff) process.exit(0);
+  // Once restart is attempted, the new node-agent exclusively owns all later
+  // rollout transitions. The old worker must never write this job again.
+  restartAttempted = true;
+  run("systemctl", ["restart", service]);
   verifyInstalledVersion();
-  updateJob({ status: "succeeded", completedAt: new Date().toISOString() });
 } catch (error) {
-  updateJob({ status: "failed", error: error instanceof Error ? error.message : String(error), completedAt: new Date().toISOString() });
+  if (!restartAttempted) {
+    updateJob(["queued", "updating-node"], (current) => ({
+      status: "failed",
+      rollout: { ...current.rollout, phase: "failed" },
+      error: { code: "NODE_UPDATE_FAILED", message: error instanceof Error ? error.message : String(error), retryable: false },
+      completedAt: new Date().toISOString(),
+    }));
+  }
   console.error(error);
   process.exit(1);
 }

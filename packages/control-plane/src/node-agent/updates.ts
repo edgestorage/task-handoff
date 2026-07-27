@@ -1,8 +1,10 @@
 import {
+  NodeRolloutSummarySchema,
+  NodeUpdateImpactSchema,
+  RuntimeArtifactIdentitySchema,
+  RuntimeConvergenceErrorSchema,
   UpdateCheckResultSchema,
   UpdateJobSchema,
-  type ControlledInstance,
-  type NodeRuntime,
   type UpdateChannel,
   type UpdateCheckResult,
   type UpdateJob,
@@ -38,6 +40,19 @@ async function npmVersion(runCommand: CommandRunner, packageName: string, channe
   return parsed;
 }
 
+async function npmIntegrity(runCommand: CommandRunner, packageName: string, version: string) {
+  const result = await runCommand(npmCommand(), ["view", `${packageName}@${version}`, "dist.integrity", "--json"]);
+  const parsed = JSON.parse(result.stdout);
+  if (typeof parsed !== "string" || !/^sha(?:256|384|512)-[A-Za-z0-9+/=]+$/.test(parsed)) {
+    throw Object.assign(new Error(`npm did not return immutable integrity metadata for ${packageName}@${version}.`), {
+      statusCode: 502,
+      code: "NODE_UPDATE_PREFLIGHT_FAILED",
+      retryable: true,
+    });
+  }
+  return parsed;
+}
+
 export function npmCommand() {
   return process.env.TASK_HANDOFF_NPM_COMMAND || "npm";
 }
@@ -56,66 +71,6 @@ export function resolveNodeAgentUpdateWorker(moduleDir: string, exists: (candida
   return { worker: undefined, packaged: false, expectedWorker: packagedCandidates[0] };
 }
 
-function packageRootFromExecutable(executable: string, packageName: string) {
-  if (!path.isAbsolute(executable) || !fs.existsSync(executable)) return undefined;
-  const resolved = fs.realpathSync(executable);
-  let current = fs.statSync(resolved).isDirectory() ? resolved : path.dirname(resolved);
-  while (current !== path.dirname(current)) {
-    try {
-      const manifest = JSON.parse(fs.readFileSync(path.join(current, "package.json"), "utf8"));
-      if (manifest.name === packageName) return current;
-    } catch {}
-    current = path.dirname(current);
-  }
-  return undefined;
-}
-
-function ancestorPackageRoot(start: string, packageName: string) {
-  let current = path.dirname(start);
-  while (current !== path.dirname(current)) {
-    try {
-      const manifest = JSON.parse(fs.readFileSync(path.join(current, "package.json"), "utf8"));
-      if (manifest.name === packageName) return current;
-    } catch {}
-    current = path.dirname(current);
-  }
-  return undefined;
-}
-
-export function managedNpmPackageInstall(input: {
-  executable: string;
-  globalPrefix: string;
-  packageName: string;
-  targetVersion: string;
-}) {
-  const currentPackageRoot = packageRootFromExecutable(input.executable, input.packageName);
-  const aggregateRoot = currentPackageRoot && ancestorPackageRoot(currentPackageRoot, "@task-handoff/server");
-  if (aggregateRoot) {
-    return {
-      args: ["install", "--prefix", aggregateRoot, "--no-save", `${input.packageName}@${input.targetVersion}`],
-      manifestPath: path.join(currentPackageRoot, "package.json"),
-    };
-  }
-  return {
-    args: ["install", "--global", "--prefix", input.globalPrefix, `${input.packageName}@${input.targetVersion}`],
-    manifestPath: currentPackageRoot
-      ? path.join(currentPackageRoot, "package.json")
-      : path.join(input.globalPrefix, "lib", "node_modules", ...input.packageName.split("/"), "package.json"),
-  };
-}
-
-export function assertInstalledPackageVersion(manifestPath: string, expectedVersion: string) {
-  let installedVersion: unknown;
-  try {
-    installedVersion = JSON.parse(fs.readFileSync(manifestPath, "utf8")).version;
-  } catch (error) {
-    throw new Error(`Could not verify the updated package at ${manifestPath}: ${error instanceof Error ? error.message : String(error)}`);
-  }
-  if (installedVersion !== expectedVersion) {
-    throw new Error(`Updated package verification failed: expected ${expectedVersion}, found ${String(installedVersion || "unknown")}.`);
-  }
-}
-
 function isNpmNotFoundError(error: unknown) {
   if (!error || typeof error !== "object") return false;
   const record = error as { message?: unknown; details?: { stdout?: unknown; stderr?: unknown } };
@@ -126,16 +81,16 @@ function isNpmNotFoundError(error: unknown) {
 }
 
 function unavailableNpmRelease(input: {
-  target: UpdateCheckResult["target"];
   channel: UpdateChannel;
   currentVersion?: string;
+  impact?: UpdateCheckResult["impact"];
 }) {
   return UpdateCheckResultSchema.parse({
-    target: input.target,
     source: "npm",
     channel: input.channel,
     currentVersion: input.currentVersion,
     availableVersion: input.currentVersion || "unavailable",
+    impact: input.impact || emptyUpdateImpact(),
     updateAvailable: false,
     reason: `No ${input.channel} release is currently published.`,
     checkedAt: now(),
@@ -146,154 +101,121 @@ export function registryTagForChannel(channel: UpdateChannel) {
   return channel === "stable" ? "latest" : channel;
 }
 
-function findDigest(value: unknown): string | undefined {
-  if (Array.isArray(value)) {
-    return value.map(findDigest).find(Boolean);
-  }
-  if (!value || typeof value !== "object") return undefined;
-  const record = value as Record<string, unknown>;
-  if (typeof record.digest === "string" && record.digest.startsWith("sha256:")) return record.digest;
-  if (typeof record.Digest === "string" && record.Digest.startsWith("sha256:")) return record.Digest;
-  return Object.values(record).map(findDigest).find(Boolean);
-}
-
-function dockerArchitecture(arch: NodeJS.Architecture) {
-  const architectures: Partial<Record<NodeJS.Architecture, string>> = {
-    x64: "amd64",
-    ia32: "386",
-    arm: "arm",
-    arm64: "arm64",
-    ppc64: "ppc64le",
-    s390x: "s390x",
-    riscv64: "riscv64",
-  };
-  return architectures[arch] || arch;
-}
-
-function manifestPlatformArchitecture(value: unknown): string | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const record = value as Record<string, unknown>;
-  const descriptor = (record.Descriptor || record.descriptor || record) as Record<string, unknown>;
-  const platform = (descriptor.platform || descriptor.Platform) as Record<string, unknown> | undefined;
-  return typeof platform?.architecture === "string"
-    ? platform.architecture
-    : typeof platform?.Architecture === "string"
-      ? platform.Architecture
-      : undefined;
-}
-
-export function dockerManifestDigestForArchitecture(value: unknown, arch: NodeJS.Architecture = process.arch) {
-  const record = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
-  const entries = Array.isArray(value) ? value : Array.isArray(record?.manifests) ? record.manifests : undefined;
-  if (!entries) return findDigest(value);
-  const platformEntries = entries.filter((entry) => manifestPlatformArchitecture(entry));
-  if (!platformEntries.length) return findDigest(value);
-  const selected = platformEntries.find((entry) => manifestPlatformArchitecture(entry) === dockerArchitecture(arch));
-  return selected ? findDigest(selected) : undefined;
-}
-
-export function dockerImageRefForChannel(imageRef: string, channel: UpdateChannel) {
-  const withoutDigest = imageRef.split("@", 1)[0];
-  const lastSlash = withoutDigest.lastIndexOf("/");
-  const lastColon = withoutDigest.lastIndexOf(":");
-  const repository = lastColon > lastSlash ? withoutDigest.slice(0, lastColon) : withoutDigest;
-  return `${repository}:${registryTagForChannel(channel)}`;
-}
-
 export async function checkNodeAgentUpdate(input: {
   channel: UpdateChannel;
   currentVersion?: string;
   runCommand: CommandRunner;
+  impact?: UpdateCheckResult["impact"];
+  runtimeArtifacts?: UpdateCheckResult["runtimeArtifacts"];
 }): Promise<UpdateCheckResult> {
   const availableVersion = await npmVersion(input.runCommand, "@task-handoff/node-agent", input.channel);
   if (!availableVersion) {
     return unavailableNpmRelease({
-      target: { component: "node-agent" },
       channel: input.channel,
       currentVersion: input.currentVersion,
+      impact: input.impact,
     });
   }
+  const updateAvailable = isNewerVersion(input.currentVersion, availableVersion);
+  const integrity = updateAvailable ? await npmIntegrity(input.runCommand, "@task-handoff/node-agent", availableVersion) : undefined;
   return UpdateCheckResultSchema.parse({
-    target: { component: "node-agent" },
     source: "npm",
     channel: input.channel,
     currentVersion: input.currentVersion,
     availableVersion,
-    updateAvailable: isNewerVersion(input.currentVersion, availableVersion),
+    ...(integrity ? { artifactRef: `npm:@task-handoff/node-agent@${availableVersion}#${integrity}` } : {}),
+    runtimeArtifacts: input.runtimeArtifacts || [],
+    impact: input.impact || emptyUpdateImpact(),
+    updateAvailable,
     checkedAt: now(),
   });
 }
 
-export async function checkControlledInstanceUpdate(input: {
-  channel: UpdateChannel;
-  instance: ControlledInstance;
-  runtime: NodeRuntime;
-  runCommand: CommandRunner;
-  arch?: NodeJS.Architecture;
-}): Promise<UpdateCheckResult> {
-  const target = { component: "controlled-instance" as const, instanceId: input.instance.id };
-  if (input.runtime.type === "local") {
-    const availableVersion = await npmVersion(input.runCommand, "@task-handoff/controlled-instance", input.channel);
-    const currentVersion = input.instance.build?.packageVersion || input.instance.instanceVersion;
-    if (!availableVersion) return unavailableNpmRelease({ target, channel: input.channel, currentVersion });
-    return UpdateCheckResultSchema.parse({
-      target,
-      source: "npm",
-      channel: input.channel,
-      currentVersion,
-      availableVersion,
-      updateAvailable: isNewerVersion(currentVersion, availableVersion),
-      checkedAt: now(),
-    });
-  }
-  if (input.runtime.type === "docker") {
-    const imageRef = input.instance.imageSnapshot?.requestedReference;
-    if (!imageRef) {
-      return UpdateCheckResultSchema.parse({
-        target,
-        source: "docker-registry",
-        channel: input.channel,
-        currentVersion: input.instance.build?.imageDigest,
-        availableVersion: input.instance.build?.imageDigest || "unavailable",
-        updateAvailable: false,
-        supported: false,
-        reason: "The instance does not use a remote Docker image.",
-        checkedAt: now(),
-      });
-    }
-    const artifactRef = dockerImageRefForChannel(imageRef, input.channel);
-    const result = await input.runCommand("docker", ["manifest", "inspect", "--verbose", artifactRef]);
-    const availableVersion = dockerManifestDigestForArchitecture(JSON.parse(result.stdout), input.arch);
-    if (!availableVersion) throw new Error(`Docker registry did not return a digest for ${artifactRef} matching ${dockerArchitecture(input.arch || process.arch)}.`);
-    const currentVersion = input.instance.build?.imageDigest;
-    return UpdateCheckResultSchema.parse({
-      target,
-      source: "docker-registry",
-      channel: input.channel,
-      currentVersion,
-      availableVersion,
-      artifactRef,
-      updateAvailable: currentVersion !== availableVersion,
-      checkedAt: now(),
-    });
-  }
-  return UpdateCheckResultSchema.parse({
-    target,
+function emptyUpdateImpact(): UpdateCheckResult["impact"] {
+  return {
+    runningInstanceCount: 0,
+    stoppedInstanceCount: 0,
+    activeInstanceCount: 0,
+    restartInstanceCount: 0,
+    runningInstanceIds: [],
+    stoppedInstanceIds: [],
+    activeInstanceIds: [],
+  };
+}
+
+export function sanitizeStoredUpdateJob(input: unknown) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+  const source = input as Record<string, unknown>;
+  const timestamp = typeof source.updatedAt === "string" ? source.updatedAt : now();
+  const target = source.target && typeof source.target === "object" && !Array.isArray(source.target)
+    ? source.target as Record<string, unknown>
+    : undefined;
+  const legacyInstanceJob = target?.component === "controlled-instance";
+  const statusMap: Record<string, UpdateJob["status"]> = {
+    updating: "updating-node",
+    downloading: "updating-node",
+    installing: "updating-node",
+    restarting: "restarting-node",
+    completed: "succeeded",
+    success: "succeeded",
+    error: "failed",
+  };
+  const knownStatuses = new Set<UpdateJob["status"]>(["queued", "updating-node", "restarting-node", "converging-instances", "succeeded", "degraded", "failed"]);
+  const rawStatus = typeof source.status === "string" ? source.status : "queued";
+  const status = legacyInstanceJob
+    ? "failed"
+    : knownStatuses.has(rawStatus as UpdateJob["status"])
+      ? rawStatus as UpdateJob["status"]
+      : statusMap[rawStatus] || "failed";
+  const desiredVersion = typeof source.toVersion === "string" && source.toVersion ? source.toVersion : "unknown";
+  const impact = NodeUpdateImpactSchema.strip().safeParse(source.impact).success
+    ? NodeUpdateImpactSchema.strip().parse(source.impact)
+    : emptyUpdateImpact();
+  const error = legacyInstanceJob
+    ? { code: "LEGACY_INSTANCE_UPDATE_RETIRED", message: "Independent controlled-instance update jobs were retired in favor of Node reconciliation.", retryable: false }
+    : status === "failed" && !source.error && !knownStatuses.has(rawStatus as UpdateJob["status"]) && !(rawStatus in statusMap)
+      ? { code: "NODE_UPDATE_FAILED", message: `Stored update job used an unknown status: ${rawStatus}.`, retryable: false }
+    : typeof source.error === "string"
+      ? { code: "NODE_UPDATE_FAILED", message: source.error, retryable: false }
+    : RuntimeConvergenceErrorSchema.strip().safeParse(source.error).success
+      ? RuntimeConvergenceErrorSchema.strip().parse(source.error)
+      : source.error && typeof source.error === "object"
+        ? { code: "NODE_UPDATE_FAILED", message: typeof (source.error as Record<string, unknown>).message === "string" ? (source.error as Record<string, unknown>).message : "Stored update job contained an unknown error.", retryable: false }
+        : undefined;
+  const { target: _legacyTarget, error: _storedError, ...rest } = source;
+  const fallbackRollout = {
+    phase: status === "succeeded" ? "succeeded" : status === "failed" ? "failed" : status || "queued",
+    desiredVersion,
+    expectedInstanceIds: [],
+    expectedInstanceCount: 0,
+    matchedInstanceCount: 0,
+    pendingInstanceCount: 0,
+    failedInstanceCount: legacyInstanceJob || status === "failed" ? 1 : 0,
+    deferredInstanceCount: 0,
+  };
+  const parsedRollout = NodeRolloutSummarySchema.strip().safeParse(source.rollout);
+  return {
+    ...rest,
     source: "npm",
-    channel: input.channel,
-    availableVersion: "unsupported",
-    updateAvailable: false,
-    supported: false,
-    reason: `Runtime type ${input.runtime.type} does not support managed updates.`,
-    checkedAt: now(),
-  });
+    status,
+    impact,
+    runtimeArtifacts: Array.isArray(source.runtimeArtifacts)
+      ? source.runtimeArtifacts.flatMap((artifact) => {
+          const parsed = RuntimeArtifactIdentitySchema.strip().safeParse(artifact);
+          return parsed.success ? [parsed.data] : [];
+        })
+      : [],
+    rollout: parsedRollout.success ? parsedRollout.data : fallbackRollout,
+    ...(error ? { error } : {}),
+    ...(legacyInstanceJob ? { completedAt: source.completedAt || timestamp } : {}),
+  };
 }
 
 export class NodeUpdateJobs {
   readonly records: JsonCollection<UpdateJob>;
 
   constructor(paths: NodeAgentStorePaths) {
-    this.records = new JsonCollection(paths.updatesDir, { schema: UpdateJobSchema });
+    this.records = new JsonCollection(paths.updatesDir, { schema: UpdateJobSchema, sanitize: sanitizeStoredUpdateJob });
   }
 
   init() {
@@ -309,13 +231,24 @@ export class NodeUpdateJobs {
     return this.records.put(UpdateJobSchema.parse({
       id: createId("update"),
       nodeId,
-      target: check.target,
       source: check.source,
       channel: check.channel,
       fromVersion: check.currentVersion,
       toVersion: check.availableVersion,
       artifactRef: check.artifactRef,
+      runtimeArtifacts: check.runtimeArtifacts,
+      impact: check.impact,
       status: "queued",
+      rollout: {
+        phase: "queued",
+        desiredVersion: check.availableVersion,
+        expectedInstanceIds: check.impact.runningInstanceIds,
+        expectedInstanceCount: check.impact.runningInstanceCount,
+        matchedInstanceCount: 0,
+        pendingInstanceCount: check.impact.runningInstanceCount,
+        failedInstanceCount: 0,
+        deferredInstanceCount: check.impact.stoppedInstanceCount,
+      },
       createdAt: timestamp,
       updatedAt: timestamp,
     }));
@@ -327,14 +260,53 @@ export class NodeUpdateJobs {
     return this.records.put(UpdateJobSchema.parse({ ...current, ...patch, id, createdAt: current.createdAt, updatedAt: now() }));
   }
 
+  reconcileRollouts(instances: Array<{ id: string; status?: string; ready: boolean; runtimeVersion?: { actualVersion?: string; desiredVersion: string; phase: string } }>, nodeVersion: string) {
+    const byId = new Map(instances.map((instance) => [instance.id, instance]));
+    for (const persisted of this.list().filter((candidate) => ["updating-node", "restarting-node", "converging-instances"].includes(candidate.status))) {
+      const job = persisted.status !== "converging-instances" && nodeVersion === persisted.toVersion
+        ? this.patch(persisted.id, {
+            status: "converging-instances",
+            rollout: { ...persisted.rollout, phase: "converging-instances", nodeVersion },
+          })
+        : persisted;
+      if (job.status !== "converging-instances") continue;
+      const expectedIds = job.rollout.expectedInstanceIds;
+      const expected = expectedIds.map((id) => byId.get(id));
+      const matched = expected.filter((instance) => instance?.ready && instance.runtimeVersion?.phase === "matched" && instance.runtimeVersion.actualVersion === job.toVersion).length;
+      const deferred = expected.filter((instance) => instance && ["created", "stopped", "failed"].includes(instance.status || "") && instance.runtimeVersion?.phase !== "failed").length;
+      const failed = expected.filter((instance) => !instance || instance.runtimeVersion?.phase === "failed").length;
+      const pending = Math.max(0, expectedIds.length - matched - failed - deferred);
+      const phase = failed > 0 ? "degraded" : pending === 0 ? "succeeded" : "converging-instances";
+      this.patch(job.id, {
+        status: phase,
+        rollout: {
+          ...job.rollout,
+          phase,
+          nodeVersion,
+          expectedInstanceCount: expectedIds.length,
+          matchedInstanceCount: matched,
+          pendingInstanceCount: pending,
+          failedInstanceCount: failed,
+          deferredInstanceCount: job.impact.stoppedInstanceCount + deferred,
+        },
+        ...(phase === "succeeded" || phase === "degraded" ? { completedAt: now() } : {}),
+      });
+    }
+  }
+
   run(job: UpdateJob, execute: (job: UpdateJob) => Promise<void>) {
     void (async () => {
-      this.patch(job.id, { status: "updating", startedAt: now(), error: undefined });
+      this.patch(job.id, { status: "updating-node", rollout: { ...job.rollout, phase: "updating-node" }, startedAt: now(), error: undefined });
       try {
         await execute(job);
         this.patch(job.id, { status: "succeeded", completedAt: now() });
       } catch (error) {
-        this.patch(job.id, { status: "failed", error: error instanceof Error ? error.message : String(error), completedAt: now() });
+        this.patch(job.id, {
+          status: "failed",
+          rollout: { ...job.rollout, phase: "failed" },
+          error: { code: "NODE_UPDATE_FAILED", message: error instanceof Error ? error.message : String(error), retryable: false },
+          completedAt: now(),
+        });
       }
     })();
   }

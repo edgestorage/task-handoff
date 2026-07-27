@@ -935,13 +935,13 @@ function modelLocationLabel(location: ModelLocation) {
 const {
   addLocalNode,
   applyManagedUpdate,
-  applyingUpdateTarget,
+  applyingUpdateNodeId,
   canConnectRemote,
   canCreateNode,
   canSubmitNodeRename,
   checkSettingsNode,
   checkManagedUpdate,
-  checkingUpdateTarget,
+  checkingUpdateNodeId,
   checkingNodeId,
   clearNodeFeedback,
   connectSelectedNodeToRemote,
@@ -960,7 +960,6 @@ const {
   loadNodeImages,
   loadingRemoteKeysNodeId,
   loadingNodeImagesId,
-  managedUpdateKey,
   nodeRenameDraft,
   nodeRenameError,
   nodeRenameOpen,
@@ -1038,13 +1037,11 @@ async function setUpdateChannel(value: string) {
   }
 }
 
-const serverUpdateTarget = { component: "node-agent" as const };
 const serverUpdateNode = computed(() => (nodes.data.value || []).find((node) => isControlPlaneBuiltinNode(node)));
 const serverUpdateNodeId = computed(() => serverUpdateNode.value?.id || "");
 const isDesktopApp = Boolean((window as Window & { taskHandoffDesktop?: unknown }).taskHandoffDesktop);
 const serverUpdatesAvailable = computed(() => Boolean(serverUpdateNodeId.value && !isDesktopApp));
 const serverUnavailableReason = computed(() => isDesktopApp ? t("settings.appearance.desktopReleaseOnly") : t("settings.appearance.builtinServerUnavailable"));
-const serverUpdateStateKey = computed(() => serverUpdateNodeId.value ? managedUpdateKey(serverUpdateNodeId.value, serverUpdateTarget) : "");
 const serverUpdateQueryNodeId = computed(() => serverUpdatesAvailable.value ? serverUpdateNodeId.value : "");
 const serverUpdateQuery = useServerUpdateCheckQuery(serverUpdateQueryNodeId, updateChannel);
 const serverUpdateCheck = computed(() => serverUpdateQuery.data.value);
@@ -1053,16 +1050,16 @@ const nodeAgentInstallVersion = computed(() => {
   const version = serverCurrentVersion.value?.trim();
   return version && version !== "unknown" ? version : undefined;
 });
-const serverUpdateJob = computed(() => updateJobs.value.find((job) => job.nodeId === serverUpdateNodeId.value && job.target.component === "node-agent"));
+const serverUpdateJob = computed(() => updateJobs.value.find((job) => job.nodeId === serverUpdateNodeId.value));
 const checkingServerUpdate = computed(() => serverUpdateQuery.isFetching.value);
-const applyingServerUpdate = computed(() => applyingUpdateTarget.value === serverUpdateStateKey.value);
+const applyingServerUpdate = computed(() => applyingUpdateNodeId.value === serverUpdateNodeId.value);
 
 async function checkServerUpdate() {
   if (serverUpdatesAvailable.value) await serverUpdateQuery.refetch();
 }
 
 async function applyServerUpdate() {
-  if (serverUpdatesAvailable.value) await applyManagedUpdate(serverUpdateNodeId.value, serverUpdateTarget, serverUpdateCheck.value);
+  if (serverUpdatesAvailable.value) await applyManagedUpdate(serverUpdateNodeId.value, serverUpdateCheck.value);
 }
 
 async function runDesktopUpdateAction(action: () => Promise<void>) {
@@ -1103,8 +1100,8 @@ const nodeDetailActions = computed(() => ({
 
 const nodeDetailBusy = computed(() => ({
   checkingNodeId: checkingNodeId.value,
-  checkingUpdateTarget: checkingUpdateTarget.value,
-  applyingUpdateTarget: applyingUpdateTarget.value,
+  checkingUpdateNodeId: checkingUpdateNodeId.value,
+  applyingUpdateNodeId: applyingUpdateNodeId.value,
   checkingRuntimeId: checkingRuntimeId.value,
   connectingRemoteNodeId: connectingRemoteNodeId.value,
   creatingNodeLocalFolder: creatingNodeLocalFolder.value,

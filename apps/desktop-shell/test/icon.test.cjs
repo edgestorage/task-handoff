@@ -72,8 +72,10 @@ test("Electron unpacks the server runtime needed by its bundled Node process", (
     "bin/**/*",
     "dist/**/*",
     "packages/control-plane-ui/dist/**/*",
+    "release/runtime-artifacts/**/*",
     "node_modules/**/*",
   ]);
+  assert.ok(packageJson.build.files.includes("release/runtime-artifacts/**/*"));
 });
 
 test("Electron icon is a standard 1024px RGBA source for transparent macOS corners", () => {

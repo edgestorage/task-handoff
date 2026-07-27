@@ -397,6 +397,8 @@ function instanceLifecycleSnapshotInput(instance: ControlledInstance) {
     imageProvisioning: instance.imageProvisioning,
     workspace: instance.workspace,
     runtime: instance.runtime,
+    runtimeVersion: instance.runtimeVersion,
+    ready: instance.ready,
     lastHeartbeatAt: instance.lastHeartbeatAt,
   };
 }

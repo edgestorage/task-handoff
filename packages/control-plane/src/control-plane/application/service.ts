@@ -30,6 +30,7 @@ import {
   type PendingRoute,
   type Project,
   type UpdateCheckRequest,
+  type ApplyUpdateRequest,
   type AppManagementOperationRequest,
 } from "@task-handoff/protocol/control-plane";
 import {
@@ -728,19 +729,8 @@ export class ControlPlaneService {
     return this.nodeAgentGateway.checkUpdate(this.requireNode(id), input);
   }
 
-  async applyNodeUpdate(id: string, input: UpdateCheckRequest) {
-    const node = this.requireNode(id);
-    if (input.target.component === "controlled-instance") {
-      const instance = await this.requireNodeInstance(input.target.instanceId);
-      if (instance.nodeId !== node.id) {
-        const error = new Error(`Instance ${instance.id} does not belong to node ${node.id}.`);
-        Object.assign(error, { statusCode: 400, code: "UPDATE_TARGET_NODE_MISMATCH" });
-        throw error;
-      }
-      await this.ensureInstanceModelAssignment(instance);
-      return this.nodeAgentGateway.applyUpdate(node, input);
-    }
-    return this.nodeAgentGateway.applyUpdate(node, input);
+  async applyNodeUpdate(id: string, input: ApplyUpdateRequest) {
+    return this.nodeAgentGateway.applyUpdate(this.requireNode(id), input);
   }
 
   async listNodeUpdateJobs(id: string) {

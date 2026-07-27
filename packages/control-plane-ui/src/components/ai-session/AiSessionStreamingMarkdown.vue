@@ -20,16 +20,15 @@ import { computed, nextTick, provide, ref, watch } from "vue";
 import MarkdownRender, { enableKatex, enableMermaid, setCustomComponents, useSmoothMarkdownStream } from "markstream-vue";
 import "markstream-vue/index.css";
 import { useStreamingMessagesStore } from "../../apps/control-plane/useStreamingMessagesStore";
-import AiSessionAnimatedTextNode from "./AiSessionAnimatedTextNode.vue";
-import AiSessionCodeBlock from "./AiSessionCodeBlock.vue";
+import AiSessionMarkdownNode from "./AiSessionMarkdownNode.vue";
 
 enableKatex();
 enableMermaid();
 
 const markdownScopeId = "ai-session-streaming-markdown";
 setCustomComponents(markdownScopeId, {
-  text: AiSessionAnimatedTextNode,
-  code_block: AiSessionCodeBlock,
+  text: AiSessionMarkdownNode,
+  code_block: AiSessionMarkdownNode,
 });
 
 const props = withDefaults(defineProps<{

@@ -115,6 +115,22 @@ test("server package owns the unified management command and runtimes stay indep
   assert.match(runtimeCli, /new Command\(\)/);
 });
 
+test("runtime package archives verify every directly executed helper", () => {
+  const builder = fs.readFileSync(path.join(root, "scripts", "build-runtime-packages.mjs"), "utf8");
+  for (const executable of [
+    "bin/task-handoff-install-server",
+    "bin/task-handoff-install-server-services",
+    "bin/task-handoff-node-update-worker",
+    "docker/entrypoint.sh",
+    "docker/instance-launcher.sh",
+    "docker/runtime-installer.mjs",
+  ]) {
+    assert.ok(builder.includes(executable), `missing archive executable assertion for ${executable}`);
+  }
+  assert.match(builder, /\(entry\.mode & 0o111\) === 0/);
+  assert.match(builder, /verifyArchiveExecutables/);
+});
+
 test("standalone node-agent CLI can create pairing invites over local IPC", () => {
   const runtimeCli = fs.readFileSync(path.join(root, "apps", "cli", "src", "runtime", "node-agent.ts"), "utf8");
   const remoteInstaller = fs.readFileSync(path.join(root, "packages", "control-plane", "src", "control-plane", "nodes", "install-script.ts"), "utf8");
@@ -231,9 +247,9 @@ test("runtime releases map stable to latest and isolate beta and alpha", () => {
 
   assert.match(workflow, /npm_tag="latest"/);
   assert.match(workflow, /"alpha" && "\$npm_tag" != "beta"/);
-  assert.match(workflow, /npm publish release\/npm\/server --access public --tag "\$NPM_DIST_TAG"/);
+  assert.match(workflow, /publish_or_verify release\/npm\/server/);
   assert.doesNotMatch(workflow, /npm_tag="stable"/);
-  assert.doesNotMatch(workflow, /npm dist-tag add/);
+  assert.doesNotMatch(workflow, /npm dist-tag add .* latest/);
 });
 
 test("Docker releases map stable to latest and isolate preview tags", () => {

@@ -6,6 +6,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { Command, Option } from "commander";
+import { list } from "tar";
 import { runtimePackages } from "../runtime-packages.config.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -28,6 +29,36 @@ function run(command, args, options = {}) {
   if (result.status !== 0) {
     process.exit(result.status || 1);
   }
+}
+
+function requiredExecutablePaths(name, definition) {
+  return [
+    `bin/${definition.binName}`,
+    ...(name === "server" ? ["bin/task-handoff-install-server", "bin/task-handoff-install-server-services"] : []),
+    ...(name === "node-agent" ? [
+      "bin/task-handoff-node-update-worker",
+      "docker/entrypoint.sh",
+      "docker/instance-launcher.sh",
+      "docker/runtime-installer.mjs",
+    ] : []),
+  ];
+}
+
+async function verifyArchiveExecutables(name, definition, archivePath) {
+  const missing = new Set(requiredExecutablePaths(name, definition));
+  await list({
+    file: archivePath,
+    strict: true,
+    onReadEntry(entry) {
+      const relativePath = entry.path.replace(/^package\//, "");
+      if (!missing.has(relativePath)) return;
+      if (!entry.mode || (entry.mode & 0o111) === 0) {
+        throw new Error(`Runtime package ${name} archive entry is not executable: ${relativePath}`);
+      }
+      missing.delete(relativePath);
+    },
+  });
+  if (missing.size) throw new Error(`Runtime package ${name} archive is missing executables: ${[...missing].join(", ")}`);
 }
 
 for (const name of selected) {
@@ -66,5 +97,7 @@ if (shouldPack) {
     run("npm", ["pack", "--pack-destination", artifactDir, path.join(root, "release", "npm", name)], {
       env: { ...process.env, npm_config_cache: npmCache },
     });
+    const version = JSON.parse(fs.readFileSync(path.join(root, "release", "npm", name, "package.json"), "utf8")).version;
+    await verifyArchiveExecutables(name, runtimePackages[name], path.join(artifactDir, `${prefix}-${version}.tgz`));
   }
 }

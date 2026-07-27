@@ -19,8 +19,104 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  node-pty-prebuilds:
+    name: node-pty prebuild (${{ matrix.platform }}-${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            platform: linux
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.3
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build and collect Linux node-pty prebuild on the glibc baseline
+        shell: bash
+        run: |
+          docker run --rm \
+            -v "$PWD:/workspace" \
+            -w /workspace \
+            node:24-bullseye \
+            bash -lc 'set -euo pipefail; cd node_modules/node-pty; rm -rf build; npm_config_nodedir=/usr/local node /usr/local/lib/node_modules/npm/node_modules/node-gyp/bin/node-gyp.js rebuild; cd /workspace; node scripts/node-pty-prebuild.mjs build --output release/node-pty-prebuilds --platform "${{ matrix.platform }}" --arch "${{ matrix.arch }}"'
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-node-pty-prebuild-${{ matrix.platform }}-${{ matrix.arch }}
+          path: release/node-pty-prebuilds/*
+          if-no-files-found: error
+
+  controlled-instance-artifact:
+    name: Linux controlled instance artifact
+    needs: node-pty-prebuilds
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.3
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Resolve release version
+        id: version
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          version="${INPUT_VERSION:-${GITHUB_REF_NAME#v}}"
+          node -e 'if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(process.argv[1])) process.exit(1)' "$version"
+          node -e 'const p=process.argv[1].split("-")[1]; if (p && !/^(?:alpha|beta)\./.test(p)) process.exit(1)' "$version"
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: desktop-node-pty-prebuild-*
+          path: release/node-pty-prebuilds
+          merge-multiple: true
+
+      - name: Build Linux controlled instance production runtime
+        shell: bash
+        env:
+          TASK_HANDOFF_VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          pnpm runtime:build -- --target controlled-instance
+          pnpm runtime:artifact -- --version "$TASK_HANDOFF_VERSION" --prebuilds-dir release/node-pty-prebuilds
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-controlled-instance-runtime-${{ steps.version.outputs.value }}
+          path: release/runtime-artifacts/*
+          if-no-files-found: error
+
   build:
     name: Build ${{ matrix.platform }}
+    needs: controlled-instance-artifact
     strategy:
       fail-fast: false
       matrix:
@@ -91,7 +187,15 @@ jobs:
           echo "APPLE_API_KEY=$key_path" >> "$GITHUB_ENV"
 
       - run: pnpm install --frozen-lockfile
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: desktop-controlled-instance-runtime-${{ needs.controlled-instance-artifact.outputs.version }}
+          path: release/runtime-artifacts
+
       - run: pnpm desktop:prepare
+        env:
+          TASK_HANDOFF_VERSION: ${{ steps.version.outputs.value }}
 
       - name: Build signed and notarized macOS installer
         if: matrix.target == 'mac'
