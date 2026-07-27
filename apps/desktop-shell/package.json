@@ -10,6 +10,7 @@
     "test": "node --test"
   },
   "dependencies": {
-    "electron": "catalog:"
+    "electron": "catalog:",
+    "electron-updater": "^6.8.9"
   }
 }
