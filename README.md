@@ -144,11 +144,16 @@ This npm updater is only for server runtimes and systemd services. Desktop
 application updates use the separate signed desktop release channel.
 
 The control plane provides the fleet update entry under each node's **Updates**
-tab. It checks and triggers node-agent and controlled-instance updates through
-that node-agent, defaults every operation to `stable`, and records update jobs
-on the node. Docker instances follow the selected registry channel and preserve
-their per-instance data and agent-home volumes when recreated. Desktop updates
-remain separate.
+tab. A check resolves one exact node-agent version, pre-downloads the matching
+controlled-instance runtime artifacts, and shows how many running instances will
+restart, which active work may be interrupted, and which stopped instances will
+update on their next start. Applying the rollout updates only node-agent; after
+it restarts, its local reconciliation converges every managed instance to that
+same exact version. Docker application updates install inside and restart the
+existing container without image pull, remove, or recreate. Desktop updates
+remain separate. Managed containers run workloads as the unprivileged `agent`
+user and do not grant that user passwordless sudo; the root-owned runtime
+release tree is changed only through the node-agent's constrained installer.
 
 The aggregate server update is exposed at **Settings → Basic → Server updates**,
 with stable, beta, and alpha channel selection. Theme and public URL settings

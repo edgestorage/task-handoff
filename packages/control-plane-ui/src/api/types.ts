@@ -12,7 +12,15 @@ import type {
 } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionContextCompaction as ProtocolAiSessionContextCompaction } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionSubAgent as ProtocolAiSessionSubAgent } from "@task-handoff/protocol/ai-sessions";
-import type { ImagePullProgress } from "@task-handoff/protocol/control-plane";
+import type {
+  ImagePullProgress,
+  ApplyUpdateRequest,
+  NodeRolloutSummary,
+  NodeUpdateImpact,
+  RuntimeVersionState,
+  UpdateCheckResult as ProtocolUpdateCheckResult,
+  UpdateJob as ProtocolUpdateJob,
+} from "@task-handoff/protocol/control-plane";
 
 export type { AiSessionHistoryDetail, AiSessionHistoryItem, AiSessionHistoryList, AiSessionMentionCandidate, AiSessionMentionCatalog, AiSessionMentionDiagnostic, AiSessionMentionFileSearch, AiSessionReference, AiSessionResumeResult };
 
@@ -73,37 +81,10 @@ export type BuildInfo = {
 };
 
 export type UpdateChannel = "stable" | "beta" | "alpha";
-export type UpdateTarget =
-  | { component: "node-agent" }
-  | { component: "controlled-instance"; instanceId: string };
-export type UpdateCheckResult = {
-  target: UpdateTarget;
-  source: "npm" | "docker-registry";
-  channel: UpdateChannel;
-  currentVersion?: string;
-  availableVersion: string;
-  artifactRef?: string;
-  updateAvailable: boolean;
-  supported: boolean;
-  reason?: string;
-  checkedAt: string;
-};
-export type UpdateJob = {
-  id: string;
-  nodeId: string;
-  target: UpdateTarget;
-  source: "npm" | "docker-registry";
-  channel: UpdateChannel;
-  fromVersion?: string;
-  toVersion: string;
-  artifactRef?: string;
-  status: "queued" | "updating" | "restarting" | "succeeded" | "failed";
-  error?: string;
-  startedAt?: string;
-  completedAt?: string;
-  createdAt: string;
-  updatedAt: string;
-};
+export type UpdateCheckResult = ProtocolUpdateCheckResult;
+export type UpdateJob = ProtocolUpdateJob;
+export type { NodeRolloutSummary, NodeUpdateImpact, RuntimeVersionState };
+export type { ApplyUpdateRequest };
 
 export type AuthUser = {
   id: string;
@@ -436,6 +417,7 @@ export type ControlledInstance = {
   protocolVersion?: string;
   instanceVersion?: string;
   build?: BuildInfo;
+  runtimeVersion?: RuntimeVersionState;
   capabilities: Record<string, unknown>;
   appInventory?: InstanceAppInventory;
   config: {

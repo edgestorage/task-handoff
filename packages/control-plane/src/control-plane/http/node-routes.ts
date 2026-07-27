@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { UpdateCheckRequestSchema } from "@task-handoff/protocol/control-plane";
+import { ApplyUpdateRequestSchema, UpdateCheckRequestSchema } from "@task-handoff/protocol/control-plane";
 import { ControlPlaneEventBus } from "../events/bus.ts";
 import { ControlPlaneService } from "../application/service.ts";
 import {
@@ -38,6 +38,14 @@ export function registerNodeRoutes({
   nodeEventSubscriber,
   errorPayload,
 }: RegisterNodeRoutesOptions) {
+  const rejectRetiredInstanceUpdate = (body: unknown) => {
+    if (!body || typeof body !== "object" || Array.isArray(body) || !("target" in body)) return;
+    const target = (body as { target?: unknown }).target;
+    if (!target || typeof target !== "object" || Array.isArray(target) || (target as { component?: unknown }).component !== "controlled-instance") return;
+    const error = new Error("Independent controlled-instance updates were retired; update the Node rollout instead.");
+    Object.assign(error, { statusCode: 404, code: "LEGACY_INSTANCE_UPDATE_RETIRED" });
+    throw error;
+  };
   app.get("/api/nodes", async () => ({ data: service.listPublicNodes() }));
   app.post("/api/nodes/local/sync", async () => {
     const node = await service.syncLocalNodeConnection();
@@ -69,15 +77,17 @@ export function registerNodeRoutes({
     return { data: listener };
   });
   app.post("/api/nodes/:id/updates/check", async (request) => {
+    rejectRetiredInstanceUpdate(request.body);
     const id = IdParamsSchema.parse(request.params).id;
     const result = await service.checkNodeUpdate(id, UpdateCheckRequestSchema.parse(request.body));
-    events.publish("node.update.checked", { nodeId: id, target: result.target });
+    events.publish("node.update.checked", { nodeId: id, availableVersion: result.availableVersion, impact: result.impact });
     return { data: result };
   });
   app.post("/api/nodes/:id/updates/apply", async (request, reply) => {
+    rejectRetiredInstanceUpdate(request.body);
     const id = IdParamsSchema.parse(request.params).id;
-    const job = await service.applyNodeUpdate(id, UpdateCheckRequestSchema.parse(request.body));
-    events.publish("node.update.queued", { nodeId: id, updateJobId: job.id, target: job.target });
+    const job = await service.applyNodeUpdate(id, ApplyUpdateRequestSchema.parse(request.body));
+    events.publish("node.update.queued", { nodeId: id, updateJobId: job.id, desiredVersion: job.toVersion, impact: job.impact });
     return reply.code(202).send({ data: job });
   });
   app.post("/api/nodes/:id/pairing/invites", async (request, reply) => {

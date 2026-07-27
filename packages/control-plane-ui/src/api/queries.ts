@@ -60,9 +60,9 @@ import type {
   UpdateModelInput,
   UpdateProjectInput,
   UpdateChannel,
+  ApplyUpdateRequest,
   UpdateCheckResult,
   UpdateJob,
-  UpdateTarget,
   UpdateNodeAgentExternalListener,
   UpdateNodeInput,
   AppManagementJobResponse,
@@ -172,8 +172,8 @@ export function useNodesQuery() {
   });
 }
 
-export function checkNodeUpdate(nodeId: string, target: UpdateTarget, channel: UpdateChannel) {
-  return postApiData<UpdateCheckResult>(`nodes/${nodeId}/updates/check`, { target, channel });
+export function checkNodeUpdate(nodeId: string, channel: UpdateChannel) {
+  return postApiData<UpdateCheckResult>(`nodes/${nodeId}/updates/check`, { channel });
 }
 
 export function useServerUpdateCheckQuery(
@@ -184,15 +184,15 @@ export function useServerUpdateCheckQuery(
   const resolvedChannel = computed(() => toValue(channel));
   return useQuery({
     queryKey: computed(() => ["server-update-check", resolvedNodeId.value, resolvedChannel.value]),
-    queryFn: () => checkNodeUpdate(resolvedNodeId.value, { component: "node-agent" }, resolvedChannel.value),
+    queryFn: () => checkNodeUpdate(resolvedNodeId.value, resolvedChannel.value),
     enabled: computed(() => Boolean(resolvedNodeId.value)),
     staleTime: 15 * 60 * 1000,
     retry: false,
   });
 }
 
-export function applyNodeUpdate(nodeId: string, target: UpdateTarget, channel: UpdateChannel) {
-  return postApiData<UpdateJob>(`nodes/${nodeId}/updates/apply`, { target, channel });
+export function applyNodeUpdate(nodeId: string, input: ApplyUpdateRequest) {
+  return postApiData<UpdateJob>(`nodes/${nodeId}/updates/apply`, input);
 }
 
 export function listNodeUpdateJobs(nodeId: string) {

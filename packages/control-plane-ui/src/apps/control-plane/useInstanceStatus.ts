@@ -17,11 +17,16 @@ export function isInstanceConnecting(instance: InstanceBoardItem) {
 }
 
 export function hasInstanceStatusPage(instance: InstanceBoardItem) {
-  return instance.status !== "running";
+  return instance.status !== "running" || isInstanceRuntimeUpdating(instance);
 }
 
 export function isInstanceStatusPending(instance: InstanceBoardItem) {
-  return ["provisioning", "starting", "registering", "registered", "stopping"].includes(instance.status);
+  return isInstanceRuntimeUpdating(instance)
+    || ["provisioning", "starting", "registering", "registered", "stopping"].includes(instance.status);
+}
+
+export function isInstanceRuntimeUpdating(instance: InstanceBoardItem) {
+  return ["draining", "installing", "restarting", "verifying"].includes(instance.runtimeVersion?.phase || "");
 }
 
 export function isInstanceAppReady(instance: InstanceBoardItem) {
@@ -45,6 +50,7 @@ export function canShowInstanceAction(instance: InstanceBoardItem, action: Insta
 }
 
 export function instanceStatusTitle(instance: InstanceBoardItem, t: Translate) {
+  if (isInstanceRuntimeUpdating(instance)) return t("instances.lifecycle.updatingRuntime");
   if (instance.status !== "stopping" && instance.status !== "stopped") {
     const imagePhase = instance.imageProvisioning?.phase;
     if (["checking-image", "pulling-image", "resolving-image"].includes(imagePhase || "")) return t("instances.lifecycle.preparing");
@@ -62,6 +68,11 @@ export function instanceStatusTitle(instance: InstanceBoardItem, t: Translate) {
 }
 
 export function instanceStatusDetail(instance: InstanceBoardItem, t: Translate) {
+  const runtimePhase = instance.runtimeVersion?.phase;
+  if (runtimePhase === "draining") return t("instances.lifecycle.runtimeDrainingDetail");
+  if (runtimePhase === "installing") return t("instances.lifecycle.runtimeInstallingDetail");
+  if (runtimePhase === "restarting") return t("instances.lifecycle.runtimeRestartingDetail");
+  if (runtimePhase === "verifying") return t("instances.lifecycle.runtimeVerifyingDetail");
   if (instance.status !== "stopping" && instance.status !== "stopped") {
     const imagePhase = instance.imageProvisioning?.phase;
     if (imagePhase === "checking-image") return t("instances.lifecycle.checkingImageDetail");

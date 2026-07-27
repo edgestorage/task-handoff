@@ -32,6 +32,15 @@ function lifecycle(revision, status) {
   };
 }
 
+function runtimeVersion(phase) {
+  return {
+    desiredVersion: "0.0.1",
+    actualVersion: "0.0.1",
+    phase,
+    attempt: 1,
+  };
+}
+
 test("instance lifecycle snapshots patch one board item and reject stale revisions", () => {
   const queryClient = new QueryClient();
   const target = boardInstance("inst_target", 1);
@@ -54,4 +63,35 @@ test("instance lifecycle snapshots patch one board item and reject stale revisio
   const registering = queryClient.getQueryData(["instance-board"])[0];
   assert.equal(registering.status, "registering");
   assert.equal(registering.access.status, "reachable");
+});
+
+test("instance lifecycle snapshots converge runtime upgrade phases in every board cache", () => {
+  const queryClient = new QueryClient();
+  const target = {
+    ...boardInstance("inst_target", 1, "running"),
+    runtimeVersion: runtimeVersion("installing"),
+  };
+  queryClient.setQueryData(["instance-board"], [target]);
+  queryClient.setQueryData(["instance-board-payload"], { data: [target], meta: { nodeErrors: [] } });
+
+  assert.equal(applyInstanceLifecycle(queryClient, {
+    ...lifecycle(2, "running"),
+    runtimeVersion: runtimeVersion("restarting"),
+  }), true);
+  assert.equal(queryClient.getQueryData(["instance-board"])[0].runtimeVersion.phase, "restarting");
+  assert.equal(queryClient.getQueryData(["instance-board-payload"]).data[0].runtimeVersion.phase, "restarting");
+
+  assert.equal(applyInstanceLifecycle(queryClient, {
+    ...lifecycle(3, "running"),
+    runtimeVersion: runtimeVersion("matched"),
+  }), true);
+  assert.equal(queryClient.getQueryData(["instance-board"])[0].runtimeVersion.phase, "matched");
+  assert.equal(queryClient.getQueryData(["instance-board-payload"]).data[0].runtimeVersion.phase, "matched");
+
+  assert.equal(applyInstanceLifecycle(queryClient, {
+    ...lifecycle(4, "running"),
+    runtimeVersion: undefined,
+  }), true);
+  assert.equal(queryClient.getQueryData(["instance-board"])[0].runtimeVersion, undefined);
+  assert.equal(queryClient.getQueryData(["instance-board-payload"]).data[0].runtimeVersion, undefined);
 });

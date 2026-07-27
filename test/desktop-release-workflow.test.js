@@ -31,6 +31,28 @@ test("macOS updater metadata is generated from one dual-architecture build", () 
   assert.match(workflow, /Expected signed arm64 and x64 TaskHandoff\.app bundles/);
 });
 
+test("desktop builds embed one Linux-container controlled-instance artifact assembled from native node-pty prebuilds", () => {
+  for (const identity of ["linux-x64", "linux-arm64"]) {
+    const [platform, arch] = identity.split("-");
+    assert.match(workflow, new RegExp(`platform: ${platform}\\n\\s+arch: ${arch}`));
+  }
+  assert.doesNotMatch(workflow, /platform: (?:darwin|win32)/);
+  assert.doesNotMatch(workflow, /Collect packaged node-pty prebuild/);
+  assert.match(workflow, /node scripts\/node-pty-prebuild\.mjs build/);
+  assert.match(workflow, /node:24-bullseye/);
+  assert.match(workflow, /npm_config_nodedir=\/usr\/local/);
+  assert.match(workflow, /pattern: desktop-node-pty-prebuild-\*/);
+  assert.match(workflow, /controlled-instance-artifact:\n\s+name: Linux controlled instance artifact\n\s+needs: node-pty-prebuilds/);
+  assert.equal((workflow.match(/pnpm runtime:artifact -- --version/g) || []).length, 1);
+  assert.match(workflow, /--prebuilds-dir release\/node-pty-prebuilds/);
+  assert.match(workflow, /build:\n\s+name: Build \$\{\{ matrix\.platform \}\}\n\s+needs: controlled-instance-artifact/);
+  const download = workflow.indexOf("name: desktop-controlled-instance-runtime-${{ needs.controlled-instance-artifact.outputs.version }}");
+  const prepare = workflow.indexOf("run: pnpm desktop:prepare");
+  assert.ok(download >= 0 && download < prepare, "desktop build must download the runtime artifact before packaging");
+  assert.match(workflow, /path: release\/runtime-artifacts/);
+  assert.match(workflow, /run: pnpm desktop:prepare\n\s+env:\n\s+TASK_HANDOFF_VERSION: \$\{\{ steps\.version\.outputs\.value \}\}/);
+});
+
 test("desktop release notes present installers before generated changelog", () => {
   assert.match(workflow, /Compose user-facing release notes/);
   assert.match(workflow, /## Download TaskHandoff/);

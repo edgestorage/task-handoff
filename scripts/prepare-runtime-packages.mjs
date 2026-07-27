@@ -66,13 +66,32 @@ for (const [name, definition] of selected) {
     fs.chmodSync(serviceInstallerPath, 0o755);
   } else {
     const wrapperPath = path.join(binDir, definition.binName);
-    fs.writeFileSync(wrapperPath, `#!/usr/bin/env node\nrequire("../dist/${definition.entryFile}");\n`, { mode: 0o755 });
+    const bundledRuntimeBootstrap = name === "node-agent"
+      ? 'process.env.TASK_HANDOFF_BUNDLED_RUNTIME_DIR ||= require("node:path").join(__dirname, "..", "runtime-artifacts");\n'
+      : "";
+    fs.writeFileSync(wrapperPath, `#!/usr/bin/env node\n${bundledRuntimeBootstrap}require("../dist/${definition.entryFile}");\n`, { mode: 0o755 });
     bin[definition.binName] = `bin/${definition.binName}`;
   }
   if (name === "node-agent") {
     const updateWorkerPath = path.join(binDir, "task-handoff-node-update-worker");
     fs.copyFileSync(path.join(root, "scripts", "node-update-worker.cjs"), updateWorkerPath);
     fs.chmodSync(updateWorkerPath, 0o755);
+    const dockerAssetsDir = path.join(packageDir, "docker");
+    fs.mkdirSync(dockerAssetsDir, { recursive: true });
+    for (const asset of ["entrypoint.sh", "instance-launcher.sh", "runtime-installer.mjs"]) {
+      fs.copyFileSync(path.join(root, "docker", asset), path.join(dockerAssetsDir, asset));
+      fs.chmodSync(path.join(dockerAssetsDir, asset), 0o755);
+    }
+    const bundledRuntimeDir = path.join(packageDir, "runtime-artifacts");
+    fs.rmSync(bundledRuntimeDir, { recursive: true, force: true });
+    const runtimeArtifactSource = path.join(root, "release", "runtime-artifacts");
+    const runtimeVersion = process.env.TASK_HANDOFF_VERSION || rootPackage.version;
+    const runtimeStem = `controlled-instance-runtime-${runtimeVersion}-linux-universal`;
+    const runtimeFiles = [`${runtimeStem}.tar.gz`, `${runtimeStem}.manifest.json`, `${runtimeStem}.tar.gz.sha256`];
+    if (runtimeFiles.every((file) => fs.existsSync(path.join(runtimeArtifactSource, file)))) {
+      fs.mkdirSync(bundledRuntimeDir, { recursive: true });
+      for (const file of runtimeFiles) fs.copyFileSync(path.join(runtimeArtifactSource, file), path.join(bundledRuntimeDir, file));
+    }
   }
   const manifest = {
     name: definition.packageName,
@@ -85,6 +104,8 @@ for (const [name, definition] of selected) {
       "bin",
       ...(definition.input ? ["dist"] : []),
       ...(definition.uiDir ? ["ui"] : []),
+      ...(name === "node-agent" ? ["docker"] : []),
+      ...(name === "node-agent" && fs.existsSync(path.join(packageDir, "runtime-artifacts")) ? ["runtime-artifacts"] : []),
       "README.md",
       "LICENSE",
       "NOTICE",

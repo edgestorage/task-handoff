@@ -83,6 +83,12 @@ export const runtimePackages = {
     entryFile: "controlled-instance-cli.js",
     binName: "task-handoff-controlled-instance",
     uiDir: "packages/controlled-instance-ui/dist",
-    dependencies: runtimeDependencies(["@task-handoff/controlled-instance-image"]),
+    // The controlled-instance application is shipped by node-agent as one
+    // portable bundle. Keep only the native dependency external; Rollup owns
+    // the complete JavaScript dependency graph so the artifact does not carry
+    // a workspace-wide pnpm virtual store.
+    dependencies: {
+      "node-pty": rootPackage.dependencies["node-pty"],
+    },
   },
 };
