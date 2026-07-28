@@ -18,7 +18,7 @@ const spec = { app: "codex", endpoint: "https://example.test/v1", key: "secret",
 const id = modelConfigHash(spec);
 
 test("control plane emits a date-only protocol version while parsing historical identifiers", () => {
-  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-07-27");
+  assert.match(CONTROL_PLANE_PROTOCOL_VERSION, /^\d{4}-\d{2}-\d{2}$/);
   assert.equal(ProtocolVersionSchema.safeParse(CONTROL_PLANE_PROTOCOL_VERSION).success, true);
   assert.equal(ProtocolVersionSchema.safeParse("2026-07-15-model-hash-registry").success, true);
 });

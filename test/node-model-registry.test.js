@@ -39,9 +39,10 @@ function instancePayload(id, timestamp) {
     id,
     name: id,
     runtimeId: "runtime_local_docker",
-    imageId: "img_models",
+    imageSelection: { imageId: "img_models" },
     image: {
-      id: "img_models", name: "Models image", reference: "example/models:latest", pullPolicy: "if-not-present",
+      id: "img_models", origin: "custom", name: "Models image", repository: "example/models", tag: "latest",
+      requestedReference: "example/models:latest", pullPolicy: "if-not-present",
       capabilities: [], optionalApps: [], defaultEnv: {}, labels: {}, createdAt: timestamp, updatedAt: timestamp,
     },
     source: { type: "local-folder", path: "/tmp/models" },

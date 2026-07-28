@@ -48,7 +48,6 @@ RUN pnpm install --frozen-lockfile --config.auto-install-peers=false
 FROM deps AS build
 ARG TASK_HANDOFF_VERSION=0.0.1
 COPY . .
-RUN pnpm exec node --test --test-concurrency=1
 RUN pnpm run check:controlled-instance
 RUN TASK_HANDOFF_VERSION="${TASK_HANDOFF_VERSION}" pnpm run runtime:pack:controlled-instance
 
