@@ -1,4 +1,4 @@
-import type { InstanceAppInventory } from "@task-handoff/protocol/control-plane";
+import type { ImageSelection, InstanceAppInventory } from "@task-handoff/protocol/control-plane";
 
 export type NodeAgentRegistrationConfig = {
   controlMode: "standalone" | "controlled";
@@ -9,7 +9,7 @@ export type NodeAgentRegistrationConfig = {
   projectId?: string;
   nodeId?: string;
   runtimeId?: string;
-  imageId?: string;
+  imageSelection?: ImageSelection;
   heartbeatIntervalMs: number;
 };
 
@@ -51,7 +51,10 @@ export function nodeAgentRegistrationConfigFromEnv(env: NodeJS.ProcessEnv = proc
     projectId: env.TASK_HANDOFF_PROJECT_ID,
     nodeId: env.TASK_HANDOFF_NODE_ID,
     runtimeId: env.TASK_HANDOFF_RUNTIME_ID,
-    imageId: env.TASK_HANDOFF_IMAGE_ID,
+    imageSelection: env.TASK_HANDOFF_IMAGE_ID ? {
+      imageId: env.TASK_HANDOFF_IMAGE_ID,
+      ...(env.TASK_HANDOFF_IMAGE_TAG ? { tag: env.TASK_HANDOFF_IMAGE_TAG } : {}),
+    } : undefined,
     heartbeatIntervalMs: Number(env.TASK_HANDOFF_HEARTBEAT_INTERVAL_MS) || 10_000,
   };
 }
@@ -105,7 +108,7 @@ export class NodeAgentRegistrationClient {
       projectId: this.config.projectId,
       nodeId: this.config.nodeId,
       runtimeId: this.config.runtimeId,
-      imageId: this.config.imageId,
+      imageSelection: this.config.imageSelection,
       instanceVersion: snapshot.instanceVersion,
       protocolVersion: snapshot.protocolVersion,
       build: snapshot.build,

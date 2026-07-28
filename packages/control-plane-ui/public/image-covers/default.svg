@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" role="img" aria-labelledby="title description">
+  <title id="title">TaskHandoff image</title>
+  <desc id="description">Default cover for a runtime image</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#172554"/>
+      <stop offset="0.55" stop-color="#312e81"/>
+      <stop offset="1" stop-color="#0f766e"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="45%" r="60%">
+      <stop offset="0" stop-color="#67e8f9" stop-opacity=".35"/>
+      <stop offset="1" stop-color="#67e8f9" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="640" height="360" rx="28" fill="url(#background)"/>
+  <rect width="640" height="360" rx="28" fill="url(#glow)"/>
+  <g transform="translate(230 85)" fill="none" stroke="#e0f2fe" stroke-width="12" stroke-linejoin="round">
+    <path d="M90 4 176 52v96l-86 48L4 148V52z" opacity=".95"/>
+    <path d="m4 52 86 49 86-49M90 101v95" opacity=".7"/>
+    <path d="m47 28 86 49" opacity=".45"/>
+  </g>
+  <text x="320" y="320" fill="#f8fafc" font-family="ui-sans-serif,system-ui,sans-serif" font-size="24" font-weight="650" text-anchor="middle" letter-spacing="2">TASKHANDOFF IMAGE</text>
+</svg>

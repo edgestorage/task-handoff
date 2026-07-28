@@ -36,7 +36,7 @@ export const CreateInstanceInputSchema = z.object({
   sourceSnapshot: z.record(z.string(), z.unknown()).optional(),
   nodeId: ControlledInstanceSchema.shape.nodeId.optional(),
   runtimeId: ControlledInstanceSchema.shape.runtimeId.optional(),
-  imageId: ControlledInstanceSchema.shape.imageId,
+  imageSelection: ControlledInstanceSchema.shape.imageSelection,
   config: InstanceConfigInputSchema.optional(),
   modelSelection: ControlledInstanceSchema.shape.modelSelection.optional(),
   start: z.boolean().default(false),

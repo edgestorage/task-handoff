@@ -83,6 +83,9 @@ export const settings = {
   },
   imageRegistry: {
     count: "已注册镜像 · {count}", selectNode: "选择节点", noCapabilities: "无预期能力", deleting: "正在删除", empty: "尚无镜像配置。",
+    marketTitle: "官方镜像", marketDescription: "由 TaskHandoff 维护的精选运行环境。", official: "官方",
+    customTitle: "自定义镜像", customDescription: "由当前控制面板管理的 {count} 个仓库镜像。",
+    marketCount: "{count} 个镜像", customCount: "自定义镜像 · {count}", marketReadonly: "只读",
     addTitle: "添加公开仓库镜像", namePlaceholder: "受管实例", reference: "镜像引用",
     referenceDescription: "使用明确的 tag 或 sha256 digest。此处不配置私有仓库凭据。", adding: "正在添加", add: "添加镜像",
     added: "{name} 已添加。", deleteConfirm: "确认删除镜像配置 {name}？", selectNodeHint: "请选择节点", availabilityUnknown: "可用性未知",
@@ -110,7 +113,7 @@ export const settings = {
     noDiagnostics: "最近一次刷新未记录节点协议错误。", tcpListener: "TCP 监听器", listenOn: "监听地址", loopback: "仅 127.0.0.1",
     allIpv4: "所有 IPv4 接口", port: "端口", applying: "正在应用", loading: "正在加载", apply: "应用",
     listenerWarning: "node-agent API 将可通过宿主机 IPv4 接口访问。远程控制面板仍需邀请配对和 HMAC。请另行配置防火墙、NAT、DNS 和 TLS 终止。",
-    checking: "正在检查", check: "检查", deleting: "正在删除", delete: "删除", noRuntimes: "此节点未报告运行环境。",
+    checking: "正在检查", check: "检查", deleting: "正在删除", delete: "删除", noRuntimes: "此节点未报告运行环境。", defaultImage: "默认镜像", noDefaultImage: "无默认镜像",
     managedUpdates: "托管更新", stable: "稳定版", beta: "测试版", alpha: "预览版", nodeAgent: "节点 agent",
     nodeAgentUpdateDescription: "更新管理此节点及其实例的服务。", queuing: "正在排队", update: "更新",
     controlledInstances: "受管实例 · {count}", instanceConvergenceDescription: "实例由节点自动收敛到同一产品版本。", noControlledInstances: "此节点上没有受管实例。",

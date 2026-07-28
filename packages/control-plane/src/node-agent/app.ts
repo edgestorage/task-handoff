@@ -19,7 +19,6 @@ import {
   InstanceImageSnapshotSchema,
   InstanceResourceMetricsEventType,
   ImagePullTerminalEventType,
-  ImageProfileSchema,
   CreateNodeModelSchema,
   DeployNodeModelSchema,
   modelConfigHash,
@@ -29,11 +28,14 @@ import {
   NodeAgentExternalListenerConfigSchema,
   NodeAgentExternalListenerSchema,
   NodeLocalFolderSchema,
+  sanitizeStoredNodeLocalFolder,
   NodeRuntimeSchema,
   NodeSchema,
   ProjectSchema,
   ProjectSourceSchema,
   RuntimeVersionStateSchema,
+  sanitizeCrossVersionControlledInstanceHeartbeat,
+  sanitizeCrossVersionControlledInstanceRegister,
   WorkspacePolicySchema,
   UpdateCheckRequestSchema,
   UpdateNodeModelAssignmentSchema,
@@ -45,7 +47,6 @@ import {
   type ControlledInstance,
   type ControlledInstanceHeartbeat,
   type ControlledInstanceRegister,
-  type ImageProfile,
   type InstanceResourceMetrics,
   type Node,
   type NodeModelAssignment,
@@ -82,7 +83,7 @@ import { nodeAgentIpcEndpoint, nodeAgentIpcPath, prepareNodeAgentIpcPath } from 
 import { createNodeAgentHmacHeaders } from "../shared/security/node-agent-auth.ts";
 import { nodeAgentProxyMethod, type NodeAgentInjectResponse, websocketPayload } from "./transport/proxy-utils.ts";
 import { checkNodeAgentUpdate, npmCommand, NodeUpdateJobs, resolveNodeAgentUpdateWorker } from "./updates.ts";
-import { installRuntimeArtifact, rollbackRuntimeRelease, RuntimeArtifactResolver, type ResolvedRuntimeArtifact } from "./runtime-artifacts.ts";
+import { RuntimeArtifactResolver, type ResolvedRuntimeArtifact } from "./runtime-artifacts.ts";
 import { resolvePublishedRuntimeArtifact, type PublishedRuntimeArtifact } from "./runtime-release-source.ts";
 import { RuntimeConvergenceCoordinator, reportedVersion } from "./runtime-convergence.ts";
 import {
@@ -197,7 +198,8 @@ export function runtimeVersionStateForActual(actualVersion?: string) {
   };
 }
 
-function runtimeVersionStateForReport(instance: ControlledInstance, actualVersion?: string) {
+function runtimeVersionStateForReport(instance: ControlledInstance, actualVersion?: string, managedArtifacts = true) {
+  if (!managedArtifacts) return runtimeVersionStateForActual(actualVersion);
   const desiredVersion = packageVersion();
   const current = instance.runtimeVersion;
   if (!current || current.desiredVersion !== desiredVersion) return runtimeVersionStateForActual(actualVersion);
@@ -272,7 +274,6 @@ export type CreateNodeAgentAppOptions = {
   arch?: NodeJS.Architecture;
   resolveRuntimeArtifactRelease?: (version: string, platform: string, arch: string) => Promise<PublishedRuntimeArtifact>;
   resolveRuntimeArtifact?: (version: string, platform: string, arch: string) => Promise<ResolvedRuntimeArtifact>;
-  allowUnmanagedLocalCommandOverride?: boolean;
 };
 
 export type RunNodeAgentServerOptions = CreateNodeAgentAppOptions & {
@@ -438,7 +439,7 @@ function projectForInstance(instance: ControlledInstance): Project {
     id: projectId,
     name: typeof instance.sourceSnapshot.name === "string" ? instance.sourceSnapshot.name : instance.name,
     source,
-    defaultImageId: instance.imageId,
+    defaultImageSelection: instance.imageSelection,
     defaultNodeId: instance.nodeId,
     defaultRuntimeId: instance.runtimeId,
     workspacePolicy: workspacePolicyForSource(source),
@@ -581,8 +582,13 @@ function runtimeRequiresImage(runtime: NodeRuntime) {
   return runtime.type !== "local";
 }
 
+function runtimeUsesManagedArtifacts(runtime: NodeRuntime) {
+  return runtime.capabilities.artifactKind !== "none";
+}
+
 function localRuntimeCapabilities(capabilities: Record<string, unknown> = {}) {
   return {
+    ...capabilities,
     requiresImage: false,
     supportsControlledInstanceApi: true,
     supportsContainerLifecycle: false,
@@ -590,7 +596,6 @@ function localRuntimeCapabilities(capabilities: Record<string, unknown> = {}) {
     supportsHostSessions: true,
     artifactKind: "none",
     isolation: "none",
-    ...capabilities,
   };
 }
 
@@ -612,7 +617,10 @@ function localWorkspacePath(instance: ControlledInstance) {
 
 function configuredLocalControlledCommand() {
   const value = process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV?.trim();
-  if (!value) return undefined;
+  if (!value) {
+    const command = process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND?.trim();
+    return command ? command.split(/\s+/) : undefined;
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(value);
@@ -623,6 +631,16 @@ function configuredLocalControlledCommand() {
     throw Object.assign(new Error("TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV must be a non-empty string array."), { code: "LOCAL_CONTROLLED_COMMAND_INVALID" });
   }
   return parsed as string[];
+}
+
+function localControlledInstanceCommand(configured?: string[]) {
+  if (configured) return configured;
+  const repositoryCli = path.resolve(process.cwd(), "bin", "task-handoff.js");
+  if (fs.existsSync(repositoryCli)) return [process.execPath, repositoryCli, "web"];
+  throw Object.assign(
+    new Error("The bundled controlled-instance command is unavailable."),
+    { statusCode: 500, code: "LOCAL_CONTROLLED_COMMAND_MISSING" },
+  );
 }
 
 async function allocateLocalPort() {
@@ -761,15 +779,24 @@ type RuntimeAdapter = {
   stop(context: ExecutorContext): Promise<ExecutorStartResult>;
   restart(context: ExecutorContext): Promise<ExecutorStartResult>;
   delete(context: ExecutorContext): Promise<ExecutorStartResult>;
+  managedArtifacts?: boolean;
+  check?(runtime: NodeRuntime): Promise<Partial<NodeRuntime>>;
+};
+
+type ManagedRuntimeAdapter = RuntimeAdapter & {
+  managedArtifacts: true;
   artifactTarget(context?: ExecutorContext): Promise<{ platform: string; arch: string; launcherAbi: number }>;
   installRuntime(context: ExecutorContext, artifact: ResolvedRuntimeArtifact): Promise<void>;
   inspectRuntime(context: ExecutorContext, expected: RuntimeArtifactIdentity): Promise<boolean>;
   rollbackRuntime(context: ExecutorContext, previousVersion?: string): Promise<void>;
-  usesManagedArtifact?(): boolean;
-  check?(runtime: NodeRuntime): Promise<Partial<NodeRuntime>>;
 };
 
+function isManagedRuntimeAdapter(adapter: RuntimeAdapter): adapter is ManagedRuntimeAdapter {
+  return adapter.managedArtifacts === true;
+}
+
 class DockerRuntimeAdapter implements RuntimeAdapter {
+  readonly managedArtifacts = true as const;
   private readonly executor: LocalDockerExecutor;
   private readonly platform: string;
   private readonly arch: string;
@@ -789,7 +816,7 @@ class DockerRuntimeAdapter implements RuntimeAdapter {
   async installRuntime(context: ExecutorContext, artifact: ResolvedRuntimeArtifact) {
     const containerName = context.instance.runtime.containerName;
     if (!containerName) throw Object.assign(new Error(`Instance ${context.instance.id} does not have a Docker container.`), { code: "INSTANCE_RUNTIME_INSTALL_FAILED" });
-    await this.executor.bootstrapLegacyLauncher(containerName);
+    await this.executor.installRuntimeLauncher(containerName);
     await this.executor.installRuntimeRelease({
       containerName,
       expectedContainerId: context.instance.runtime.containerId,
@@ -862,54 +889,13 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
   private readonly paths: NodeAgentStorePaths;
   private readonly nodeAgentUrl: () => string;
   private readonly processByInstanceId = new Map<string, ChildProcessWithoutNullStreams>();
-  private readonly platform: string;
-  private readonly arch: string;
   private readonly commandOverride?: string[];
 
-  constructor(runCommand: CommandRunner, paths: NodeAgentStorePaths, nodeAgentUrl: () => string, platform: string, arch: string, commandOverride?: string[]) {
+  constructor(runCommand: CommandRunner, paths: NodeAgentStorePaths, nodeAgentUrl: () => string, commandOverride?: string[]) {
     this.runCommand = runCommand;
     this.paths = paths;
     this.nodeAgentUrl = nodeAgentUrl;
-    this.platform = platform;
-    this.arch = arch;
     this.commandOverride = commandOverride;
-  }
-
-  async artifactTarget() {
-    return { platform: this.platform, arch: this.arch, launcherAbi: 1 };
-  }
-
-  usesManagedArtifact() {
-    return !this.commandOverride;
-  }
-
-  private runtimeRoot(instanceId: string) {
-    return path.join(this.paths.dataDir, "local-instances", instanceId, "runtime");
-  }
-
-  async installRuntime(context: ExecutorContext, artifact: ResolvedRuntimeArtifact) {
-    await installRuntimeArtifact({
-      archivePath: artifact.archivePath,
-      identity: artifact.identity,
-      runtimeRoot: this.runtimeRoot(context.instance.id),
-      launcherAbi: 1,
-      platform: this.platform,
-      arch: this.arch,
-    });
-  }
-
-  async inspectRuntime(context: ExecutorContext, expected: RuntimeArtifactIdentity) {
-    try {
-      const manifest = JSON.parse(fs.readFileSync(path.join(this.runtimeRoot(context.instance.id), "current", "runtime-manifest.json"), "utf8")) as RuntimeArtifactIdentity;
-      return runtimeArtifactIdentityMatches(manifest, expected);
-    } catch {
-      return false;
-    }
-  }
-
-  async rollbackRuntime(context: ExecutorContext, _previousVersion?: string) {
-    await rollbackRuntimeRelease(this.runtimeRoot(context.instance.id));
-    await this.restart(context);
   }
 
   async start(context: ExecutorContext): Promise<ExecutorStartResult> {
@@ -918,18 +904,8 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
     const dataDir = path.join(this.paths.dataDir, "local-instances", context.instance.id);
     const logDir = path.join(dataDir, "logs");
     fs.mkdirSync(logDir, { recursive: true });
-    let command: string;
-    let args: string[];
-    if (this.commandOverride) {
-      [command, ...args] = this.commandOverride;
-      args = [...args, "--host", "127.0.0.1", "--port", String(port)];
-    } else {
-      const runtimeRoot = this.runtimeRoot(context.instance.id);
-      const manifest = JSON.parse(fs.readFileSync(path.join(runtimeRoot, "current", "runtime-manifest.json"), "utf8")) as RuntimeArtifactIdentity;
-      const entrypoint = path.resolve(runtimeRoot, "current", manifest.entrypoint);
-      command = process.execPath;
-      args = [entrypoint, "web", "--host", "127.0.0.1", "--port", String(port)];
-    }
+    const [command, ...baseArgs] = localControlledInstanceCommand(this.commandOverride);
+    const args = [...baseArgs, "--host", "127.0.0.1", "--port", String(port)];
     const out = fs.openSync(path.join(logDir, "controlled-instance.out.log"), "a");
     const err = fs.openSync(path.join(logDir, "controlled-instance.err.log"), "a");
     const child = spawn(command, args, {
@@ -1109,7 +1085,7 @@ class RuntimeAdapterRegistry {
   }
 
   managedAdapters() {
-    return [this.docker, this.local].filter((adapter) => adapter.usesManagedArtifact?.() !== false);
+    return [this.docker, this.local].filter(isManagedRuntimeAdapter);
   }
 
   async stopAll() {
@@ -1155,7 +1131,7 @@ class NodeAgentState {
   constructor(paths: NodeAgentStorePaths, nodeId: string, endpoint: string | undefined, containerUrl: string | undefined, listenerPort: number, platform: NodeJS.Platform) {
     this.paths = paths;
     this.nodeId = nodeId;
-    this.localFolders = new JsonCollection(paths.localFoldersDir, { schema: NodeLocalFolderSchema });
+    this.localFolders = new JsonCollection(paths.localFoldersDir, { schema: NodeLocalFolderSchema, sanitize: sanitizeStoredNodeLocalFolder });
     this.nodeRuntimes = new JsonCollection(paths.nodeRuntimesDir, { schema: NodeRuntimeSchema });
     this.controlledInstances = new ControlledInstanceCollection(paths.controlledInstancesDir, {
       schema: ControlledInstanceSchema,
@@ -1193,9 +1169,9 @@ class NodeAgentState {
 
   init() {
     this.localFolders.init();
+    for (const folder of this.localFolders.list()) this.localFolders.put(folder);
     this.nodeRuntimes.init();
     this.controlledInstances.init();
-    this.normalizeInstanceRuntimeVersions();
     this.models.init();
     this.modelAssignments.init();
     this.migrateLegacyModelEnvironments();
@@ -1244,15 +1220,19 @@ class NodeAgentState {
         this.localFolders.put(NodeLocalFolderSchema.parse({ ...folder, nodeId: this.nodeId, updatedAt: now() }));
       }
     }
+    this.normalizeInstanceRuntimeVersions();
   }
 
   private normalizeInstanceRuntimeVersions() {
     for (const instance of this.controlledInstances.list()) {
       const actualVersion = instance.build?.packageVersion || instance.instanceVersion;
       const derived = runtimeVersionStateForActual(actualVersion);
+      const managedArtifacts = runtimeUsesManagedArtifacts(this.requireRuntime(instance.runtimeId));
       const stopped = ["created", "stopped", "failed"].includes(instance.status);
-      const previous = instance.runtimeVersion?.desiredVersion === derived.desiredVersion ? instance.runtimeVersion : undefined;
-      const runtimeVersion = derived.phase === "matched"
+      const previous = managedArtifacts && instance.runtimeVersion?.desiredVersion === derived.desiredVersion ? instance.runtimeVersion : undefined;
+      const runtimeVersion = !managedArtifacts
+        ? derived
+        : derived.phase === "matched"
         ? (stopped ? derived : { ...derived, phase: "verifying" as const, matchedAt: undefined })
         : previous?.phase === "failed" && previous.error?.retryable === false
           ? { ...derived, phase: "failed" as const, attempt: previous.attempt, lastAttemptAt: previous.lastAttemptAt, error: previous.error }
@@ -1682,7 +1662,7 @@ class NodeAgentState {
     const timestamp = now();
     const id = input.id || createId("inst");
     const source = ProjectSourceSchema.parse(input.source);
-    if (runtimeRequiresImage(runtime) && (!input.imageId || !input.image)) {
+    if (runtimeRequiresImage(runtime) && (!input.imageSelection || !input.image)) {
       const error = new Error(`Runtime ${runtime.name} requires an image.`);
       Object.assign(error, { statusCode: 400, code: "NODE_RUNTIME_IMAGE_REQUIRED" });
       throw error;
@@ -1697,11 +1677,7 @@ class NodeAgentState {
       Object.assign(error, { statusCode: 409, code: "LOCAL_RUNTIME_INSTANCE_EXISTS" });
       throw error;
     }
-    const image = input.image ? ImageProfileSchema.parse(input.image) : undefined;
-    const imageSnapshot = image ? (() => {
-      const { reference, ...profile } = image;
-      return InstanceImageSnapshotSchema.parse({ ...profile, requestedReference: reference });
-    })() : undefined;
+    const imageSnapshot = input.image ? InstanceImageSnapshotSchema.parse(input.image) : undefined;
     const workspacePath = runtime.type === "local" && source.type === "local-folder" ? path.resolve(source.path) : undefined;
     const instance = ControlledInstanceSchema.parse({
       id,
@@ -1712,7 +1688,7 @@ class NodeAgentState {
       projectId: input.projectId,
       nodeId: this.nodeId,
       runtimeId: runtime.id,
-      imageId: image?.id,
+      imageSelection: input.imageSelection,
       imageSnapshot,
       imageProvisioning: imageSnapshot && runtime.type === "docker" ? {
         phase: "checking-image",
@@ -1757,15 +1733,16 @@ class NodeAgentState {
     this.validateInstanceReport(existing, parsed, token);
     warnProtocolVersion(parsed.protocolVersion, `Instance ${id}`);
     const actualVersion = parsed.build?.packageVersion || parsed.instanceVersion;
-    const runtimeVersion = runtimeVersionStateForReport(existing, actualVersion);
+    const managedArtifacts = runtimeUsesManagedArtifacts(this.requireRuntime(existing.runtimeId));
+    const runtimeVersion = runtimeVersionStateForReport(existing, actualVersion, managedArtifacts);
     const updated = ControlledInstanceSchema.parse({
       ...existing,
       name: parsed.name,
       status: "registered",
       health: actualVersion === packageVersion() ? "ok" : "degraded",
-      // A fresh process registration is not authoritative proof that the
-      // managed release is active. Reconciliation inspects it before ready.
-      ready: false,
+      // Managed releases require inspection before they are ready. A Local
+      // Runtime process is the controlled instance bundled with this program.
+      ready: !managedArtifacts && actualVersion === packageVersion(),
       connectionStatus: "online",
       agentStatus: "online",
       targetStatus: parsed.target.status === "endpoint-unreachable" ? "endpoint-unreachable" : parsed.target.status === "reachable" ? "reachable" : existing.targetStatus,
@@ -1799,10 +1776,10 @@ class NodeAgentState {
     };
     const targetStatus = target.status === "endpoint-unreachable" ? "endpoint-unreachable" : target.status === "reachable" ? "reachable" : current.targetStatus;
     const actualVersion = parsed.build?.packageVersion || current.build?.packageVersion || current.instanceVersion;
-    const runtimeVersion = runtimeVersionStateForReport(current, actualVersion);
-    const authoritativeReady = current.ready
-      && current.runtimeVersion?.phase === "matched"
-      && actualVersion === packageVersion();
+    const managedArtifacts = runtimeUsesManagedArtifacts(this.requireRuntime(current.runtimeId));
+    const runtimeVersion = runtimeVersionStateForReport(current, actualVersion, managedArtifacts);
+    const authoritativeReady = actualVersion === packageVersion()
+      && (!managedArtifacts || (current.ready && current.runtimeVersion?.phase === "matched"));
     const updated = ControlledInstanceSchema.parse({
       ...current,
       ...parsed,
@@ -1832,8 +1809,8 @@ class NodeAgentState {
     if (input.runtimeId && input.runtimeId !== existing.runtimeId) {
       throwForbidden("INSTANCE_RUNTIME_MISMATCH", `Instance ${existing.id} belongs to runtime ${existing.runtimeId}.`);
     }
-    if (input.imageId && input.imageId !== existing.imageId) {
-      throwForbidden("INSTANCE_IMAGE_MISMATCH", `Instance ${existing.id} belongs to image ${existing.imageId}.`);
+    if (input.imageSelection && input.imageSelection.imageId !== existing.imageSelection?.imageId) {
+      throwForbidden("INSTANCE_IMAGE_MISMATCH", `Instance ${existing.id} belongs to image ${existing.imageSelection?.imageId}.`);
     }
   }
 
@@ -1844,7 +1821,7 @@ class NodeAgentState {
   }
 
   context(instance: ControlledInstance, modelEnv: Record<string, string> = this.resolvedAssignedModelEnvironment(instance.id)): ExecutorContext {
-    const image = instance.imageSnapshot || InstanceImageSnapshotSchema.parse({ id: instance.imageId || "img_localhost", name: instance.imageId || "Localhost", requestedReference: "localhost:local", pullPolicy: "if-not-present", capabilities: [], optionalApps: [], defaultEnv: {}, labels: {}, createdAt: instance.createdAt, updatedAt: instance.updatedAt });
+    const image = instance.imageSnapshot || InstanceImageSnapshotSchema.parse({ id: "img_localhost", origin: "custom", name: "Localhost", repository: "localhost", tag: "local", requestedReference: "localhost:local", pullPolicy: "if-not-present", capabilities: [], optionalApps: [], defaultEnv: {}, labels: {}, createdAt: instance.createdAt, updatedAt: instance.updatedAt });
     return {
       project: projectForInstance(instance),
       image,
@@ -2112,14 +2089,14 @@ async function startNodeInstance(
 ) {
   const current = state.requireInstance(id);
   if (current.imageProvisioning && current.imageProvisioning.phase !== "ready" && state.requireRuntime(current.runtimeId).type === "docker") {
-    loggers.diagnostic({ instanceId: id, action: "start", reason, runtimeId: current.runtimeId, imageId: current.imageId, imagePhase: current.imageProvisioning.phase }, "node instance start queued until image provisioning completes");
+    loggers.diagnostic({ instanceId: id, action: "start", reason, runtimeId: current.runtimeId, imageId: current.imageSelection?.imageId, imagePhase: current.imageProvisioning.phase }, "node instance start queued until image provisioning completes");
     return state.controlledInstances.put(ControlledInstanceSchema.parse({
       ...current,
       status: "starting",
       updatedAt: now(),
     }));
   }
-  loggers.diagnostic({ instanceId: id, action: "start", reason, runtimeId: current.runtimeId, imageId: current.imageId }, "node instance start requested");
+  loggers.diagnostic({ instanceId: id, action: "start", reason, runtimeId: current.runtimeId, imageId: current.imageSelection?.imageId }, "node instance start requested");
   const starting = state.controlledInstances.put(ControlledInstanceSchema.parse({ ...current, status: "starting", ready: false, updatedAt: now() }));
   const adapter = runtimeAdapters.forRuntime(state.requireRuntime(starting.runtimeId));
   const result = await adapter.start(state.context(starting));
@@ -2293,9 +2270,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       options.dockerCommandRunner || defaultCommandRunner,
       paths,
       () => state.localNodeAgentUrl,
-      platform,
-      arch,
-      options.allowUnmanagedLocalCommandOverride ? configuredLocalControlledCommand() : undefined,
+      configuredLocalControlledCommand(),
     ),
   );
   const updateCommandRunner = options.updateCommandRunner || options.dockerCommandRunner || defaultCommandRunner;
@@ -2304,7 +2279,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   const artifactResolver = new RuntimeArtifactResolver({ cacheDir: path.join(paths.dataDir, "runtime-artifacts"), fetchImpl });
   const releaseResolver = options.resolveRuntimeArtifactRelease
     || ((version: string, targetPlatform: string, targetArch: string) => resolvePublishedRuntimeArtifact(version, targetPlatform, targetArch, fetchImpl));
-  const resolveArtifactForAdapter = async (version: string, adapter: RuntimeAdapter, context?: ExecutorContext) => {
+  const resolveArtifactForAdapter = async (version: string, adapter: ManagedRuntimeAdapter, context?: ExecutorContext) => {
     const target = await adapter.artifactTarget(context);
     if (options.resolveRuntimeArtifact) return options.resolveRuntimeArtifact(version, target.platform, target.arch);
     const published = await releaseResolver(version, target.platform, target.arch);
@@ -2317,10 +2292,22 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     return artifactResolver.resolve(published.identity, published.source);
   };
   const adapterForInstance = (instance: ControlledInstance) => runtimeAdapters.forRuntime(state.requireRuntime(instance.runtimeId));
-  const usesManagedArtifact = (instance: ControlledInstance) => adapterForInstance(instance).usesManagedArtifact?.() !== false;
+  const managedAdapterForInstance = (instance: ControlledInstance) => {
+    const adapter = adapterForInstance(instance);
+    return isManagedRuntimeAdapter(adapter) ? adapter : undefined;
+  };
+  const requireManagedAdapterForInstance = (instance: ControlledInstance) => {
+    const adapter = managedAdapterForInstance(instance);
+    if (adapter) return adapter;
+    throw Object.assign(new Error(`Runtime for instance ${instance.id} does not use managed artifacts.`), {
+      code: "INSTANCE_RUNTIME_ARTIFACT_UNMANAGED",
+      retryable: false,
+    });
+  };
+  const usesManagedArtifact = (instance: ControlledInstance) => Boolean(managedAdapterForInstance(instance));
   const resolveArtifactForInstance = (instance: ControlledInstance, version: string) => {
     const context = state.context(instance);
-    return resolveArtifactForAdapter(version, adapterForInstance(instance), context);
+    return resolveArtifactForAdapter(version, requireManagedAdapterForInstance(instance), context);
   };
   const app = Fastify({ logger: options.logger ?? true });
   const instanceProxyMetrics = {
@@ -2339,10 +2326,10 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   const convergence = new RuntimeConvergenceCoordinator(state.controlledInstances, packageVersion, {
     isInstalled: async (instance, desiredVersion) => {
       const artifact = await resolveArtifactForInstance(instance, desiredVersion);
-      return adapterForInstance(instance).inspectRuntime(state.context(instance), artifact.identity);
+      return requireManagedAdapterForInstance(instance).inspectRuntime(state.context(instance), artifact.identity);
     },
     install: async (instance, desiredVersion) => {
-      const adapter = adapterForInstance(instance);
+      const adapter = requireManagedAdapterForInstance(instance);
       await adapter.installRuntime(state.context(instance), await resolveArtifactForInstance(instance, desiredVersion));
     },
     restart: async (instance) => {
@@ -2359,7 +2346,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       const current = state.requireInstance(instance.id);
       state.controlledInstances.put(mergeRuntimeLifecycleResult(restartBoundary, current, result));
     },
-    rollback: async (instance) => adapterForInstance(instance).rollbackRuntime(state.context(instance)),
+    rollback: async (instance) => requireManagedAdapterForInstance(instance).rollbackRuntime(state.context(instance)),
     onForcedDrain: (instance) => app.log.warn({ instanceId: instance.id }, "runtime convergence drain deadline reached; restarting instance"),
   }, {
     drainTimeoutMs: Number(process.env.TASK_HANDOFF_RUNTIME_DRAIN_TIMEOUT_MS) || undefined,
@@ -2395,6 +2382,25 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     diagnostic: logDiagnostic,
     warn: (data, message) => app.log.warn(data, message),
   };
+  const sanitizeCrossVersionInstanceReport = (instanceId: string, report: "register" | "heartbeat", input: unknown) => {
+    const protocolVersion = input && typeof input === "object" && !Array.isArray(input)
+      ? (input as Record<string, unknown>).protocolVersion
+      : undefined;
+    if (typeof protocolVersion !== "string" || protocolVersion === CONTROL_PLANE_PROTOCOL_VERSION) {
+      return input;
+    }
+    const onWarning = ({ field, action }: { field: string; action: "ignored" | "migrated" }) => app.log.warn({
+      instanceId,
+      report,
+      protocolVersion,
+      expectedProtocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+      field,
+      action,
+    }, "cross-version controlled instance report sanitized");
+    return report === "register"
+      ? sanitizeCrossVersionControlledInstanceRegister(input, onWarning)
+      : sanitizeCrossVersionControlledInstanceHeartbeat(input, onWarning);
+  };
 
   const startInstanceWithFailureState = async (id: string, reason: "request" | "image-ready") => {
     try {
@@ -2408,11 +2414,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
         }));
       }
       const runtime = state.requireRuntime(current.runtimeId);
-      if (runtime.type === "local" && usesManagedArtifact(current)) {
-        state.controlledInstances.put(ControlledInstanceSchema.parse({ ...current, status: "starting", ready: false, updatedAt: now() }));
-      } else {
-        await startNodeInstance(state, runtimeAdapters, fetchImpl, id, lifecycleLoggers);
-      }
+      await startNodeInstance(state, runtimeAdapters, fetchImpl, id, lifecycleLoggers);
       const started = state.requireInstance(id);
       if (runtime.type === "docker" && started.imageProvisioning?.phase !== "ready") {
         eventForwarder.syncNow();
@@ -2421,7 +2423,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       const instance = usesManagedArtifact(state.requireInstance(id))
         ? await convergence.schedule(id, { startRequested: true })
         : state.requireInstance(id);
-      if (instance.runtimeVersion?.phase === "failed") {
+      if (usesManagedArtifact(instance) && instance.runtimeVersion?.phase === "failed") {
         throw Object.assign(new Error(instance.runtimeVersion.error?.message || `Instance ${id} runtime convergence failed.`), {
           statusCode: 503,
           ...(instance.runtimeVersion.error || { code: "INSTANCE_RUNTIME_INSTALL_FAILED", retryable: true }),
@@ -2472,14 +2474,14 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   };
 
   const resolvePreflightRuntimeArtifacts = async (version: string) => {
-    const adapters = new Map<string, { adapter: RuntimeAdapter; context?: ExecutorContext }>();
+    const adapters = new Map<string, { adapter: ManagedRuntimeAdapter; context?: ExecutorContext }>();
     for (const adapter of runtimeAdapters.managedAdapters()) {
       const target = await adapter.artifactTarget();
       adapters.set(`${target.platform}-${target.arch}`, { adapter });
     }
     for (const instance of state.listInstances()) {
-      if (!usesManagedArtifact(instance)) continue;
-      const adapter = adapterForInstance(instance);
+      const adapter = managedAdapterForInstance(instance);
+      if (!adapter) continue;
       const context = state.context(instance);
       const target = await adapter.artifactTarget(context);
       adapters.set(`${target.platform}-${target.arch}`, { adapter, context });
@@ -2643,12 +2645,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     });
     for (const instance of instances) {
       try {
-        if (usesManagedArtifact(instance)) {
-          state.controlledInstances.put(ControlledInstanceSchema.parse({ ...instance, status: "starting", ready: false, updatedAt: now() }));
-          await convergence.schedule(instance.id, { startRequested: true });
-        } else {
-          await startNodeInstance(state, runtimeAdapters, fetchImpl, instance.id, lifecycleLoggers, "restore");
-        }
+        await startNodeInstance(state, runtimeAdapters, fetchImpl, instance.id, lifecycleLoggers, "restore");
         await autoImportAgentConfig(fetchImpl, state.requireInstance(instance.id), "start", lifecycleLoggers);
       } catch (error) {
         state.controlledInstances.put(restoreFailurePatch(state.requireInstance(instance.id), error));
@@ -2665,6 +2662,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       role: "node-agent",
       nodeId,
       platform: finalComputerPlatform(platform),
+      arch: process.arch,
       protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
       build: buildInfo("node-agent"),
       instanceProxy: { ...instanceProxyMetrics },
@@ -2931,7 +2929,8 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
 
   app.post("/api/node-agent/instances/:id/register", async (request, reply) => {
     const id = (request.params as { id: string }).id;
-    const registered = state.registerInstance(id, ControlledInstanceRegisterSchema.parse(request.body), bearerToken(request.headers));
+    const payload = sanitizeCrossVersionInstanceReport(id, "register", request.body);
+    const registered = state.registerInstance(id, ControlledInstanceRegisterSchema.parse(payload), bearerToken(request.headers));
     eventForwarder.syncNow();
     logDiagnostic({ instanceId: id, action: "register", protocolVersion: registered.protocolVersion, build: registered.build, targetStatus: registered.targetStatus, targetStrategy: registered.target.strategy }, "node instance registered");
     if (usesManagedArtifact(registered) && (!registered.ready || registered.runtimeVersion?.phase !== "matched")) {
@@ -2942,7 +2941,8 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
 
   app.post("/api/node-agent/instances/:id/heartbeat", async (request) => {
     const id = (request.params as { id: string }).id;
-    const updated = state.heartbeatInstance(id, ControlledInstanceHeartbeatSchema.parse(request.body), bearerToken(request.headers));
+    const payload = sanitizeCrossVersionInstanceReport(id, "heartbeat", request.body);
+    const updated = state.heartbeatInstance(id, ControlledInstanceHeartbeatSchema.parse(payload), bearerToken(request.headers));
     eventForwarder.syncNow();
     logDiagnostic({ instanceId: id, action: "heartbeat", status: updated.status, health: updated.health, protocolVersion: updated.protocolVersion, build: updated.build, targetStatus: updated.targetStatus, apps: updated.apps.runningCount }, "node instance heartbeat accepted");
     if (usesManagedArtifact(updated) && (!updated.ready || updated.runtimeVersion?.phase !== "matched")) {
@@ -3030,7 +3030,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       eventForwarder.syncNow();
       return { data: instance };
     }
-    logDiagnostic({ instanceId: id, action: "restart", runtimeId: current.runtimeId, imageId: current.imageId, containerName: current.runtime.containerName }, "node instance restart requested");
+    logDiagnostic({ instanceId: id, action: "restart", runtimeId: current.runtimeId, imageId: current.imageSelection?.imageId, containerName: current.runtime.containerName }, "node instance restart requested");
     const adapter = runtimeAdapters.forRuntime(state.requireRuntime(current.runtimeId));
     const result = await adapter.restart(state.context(current));
     const probeTarget = ControlledInstanceSchema.parse({ ...current, ...result, target: result.target ? { ...current.target, ...result.target } : current.target, updatedAt: now() });

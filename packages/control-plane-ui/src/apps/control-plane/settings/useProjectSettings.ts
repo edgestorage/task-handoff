@@ -23,14 +23,14 @@ export function useProjectSettings({ errorText, onProjectDeleted, projectInUse, 
   const settingsProject = reactive({
     name: "",
     url: "",
-    defaultImageId: "",
+    defaultImageSelection: undefined as { imageId: string; tag?: string } | undefined,
     defaultRuntimeId: "",
   });
 
   const settingsDefaultImageSelectValue = computed({
-    get: () => settingsProject.defaultImageId || DEFAULT_SELECT_VALUE,
+    get: () => settingsProject.defaultImageSelection?.imageId || DEFAULT_SELECT_VALUE,
     set: (value: string) => {
-      settingsProject.defaultImageId = value === DEFAULT_SELECT_VALUE ? "" : value;
+      settingsProject.defaultImageSelection = value === DEFAULT_SELECT_VALUE ? undefined : { imageId: value };
     },
   });
   const settingsDefaultRuntimeSelectValue = computed({
@@ -51,8 +51,8 @@ export function useProjectSettings({ errorText, onProjectDeleted, projectInUse, 
   }
 
   function clearDefaultImage(imageId: string) {
-    if (settingsProject.defaultImageId === imageId) {
-      settingsProject.defaultImageId = "";
+    if (settingsProject.defaultImageSelection?.imageId === imageId) {
+      settingsProject.defaultImageSelection = undefined;
     }
   }
 
@@ -78,13 +78,13 @@ export function useProjectSettings({ errorText, onProjectDeleted, projectInUse, 
           auth: { type: "none" },
           clone: { submodules: false, lfs: false, subdirectory: "" },
         },
-        ...(settingsProject.defaultImageId ? { defaultImageId: settingsProject.defaultImageId } : {}),
+        ...(settingsProject.defaultImageSelection ? { defaultImageSelection: settingsProject.defaultImageSelection } : {}),
         ...(settingsProject.defaultRuntimeId ? { defaultRuntimeId: settingsProject.defaultRuntimeId } : {}),
       });
       settingsProjectSuccess.value = t("settings.projectRegistry.created", { name: project.name });
       settingsProject.name = "";
       settingsProject.url = "";
-      settingsProject.defaultImageId = "";
+      settingsProject.defaultImageSelection = undefined;
       settingsProject.defaultRuntimeId = "";
       await refresh();
     } catch (error) {

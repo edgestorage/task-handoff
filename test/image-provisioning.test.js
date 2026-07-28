@@ -39,10 +39,15 @@ async function waitFor(check, label) {
 
 function imageProfile(reference = "docker.io/example/controlled:v1") {
   const timestamp = new Date().toISOString();
+  const tag = reference.includes(":") ? reference.slice(reference.lastIndexOf(":") + 1) : undefined;
+  const repository = tag ? reference.slice(0, reference.lastIndexOf(":")) : reference.split("@")[0];
   return {
     id: "img_test",
+    origin: "custom",
     name: "Test image",
-    reference,
+    repository,
+    tag,
+    requestedReference: reference,
     pullPolicy: "if-not-present",
     capabilities: [],
     optionalApps: [],
@@ -83,7 +88,7 @@ test("stored legacy image profiles migrate before strict parsing", () => {
   const parsed = ImageProfileSchema.parse(migrated);
   assert.equal(parsed.reference, "example/legacy:latest");
   assert.equal(parsed.pullPolicy, "if-not-present");
-  assert.deepEqual(warnings, ["image", "registry", "reference:implicit-latest"]);
+  assert.deepEqual(warnings, ["futureField", "image", "registry", "reference:implicit-latest"]);
   assert.equal("futureField" in parsed, false);
 
   const invalid = sanitizeStoredImageProfile({ ...migrated, reference: "https://invalid/repository" });
@@ -177,7 +182,7 @@ test("node-agent creates immediately, provisions the image, and blocks stale wor
     payload: {
       id: "inst_pull",
       runtimeId: "runtime_local_docker",
-      imageId: "img_test",
+      imageSelection: { imageId: "img_test" },
       image: imageProfile(),
       source: { type: "local-folder", path: "/tmp/project" },
     },
@@ -245,7 +250,7 @@ test("node-agent queues start while pulling and runs the container when the imag
     payload: {
       id: "inst_queued_start",
       runtimeId: "runtime_local_docker",
-      imageId: "img_test",
+      imageSelection: { imageId: "img_test" },
       image: imageProfile(),
       source: { type: "local-folder", path: "/tmp/project" },
     },
@@ -313,7 +318,7 @@ test("node-agent streams Docker pull TTY output live and replays its bounded tai
     payload: {
       id: "inst_tty_pull",
       runtimeId: "runtime_local_docker",
-      imageId: "img_test",
+      imageSelection: { imageId: "img_test" },
       image: imageProfile(),
       source: { type: "local-folder", path: "/tmp/project" },
     },
@@ -356,7 +361,7 @@ test("failed node-agent image provisioning is persisted and can be retried", asy
     payload: {
       id: "inst_retry",
       runtimeId: "runtime_local_docker",
-      imageId: "img_test",
+      imageSelection: { imageId: "img_test" },
       image: imageProfile(),
       source: { type: "local-folder", path: "/tmp/project" },
     },
@@ -401,7 +406,7 @@ test("node-agent restart migrates and resumes persisted image provisioning witho
     payload: {
       id: "inst_restore",
       runtimeId: "runtime_local_docker",
-      imageId: "img_test",
+      imageSelection: { imageId: "img_test" },
       image: imageProfile("docker.io/example/controlled:v1"),
       source: { type: "local-folder", path: "/tmp/project" },
     },

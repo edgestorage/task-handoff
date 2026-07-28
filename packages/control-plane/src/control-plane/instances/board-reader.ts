@@ -1,7 +1,7 @@
 import {
   CONTROL_PLANE_PROTOCOL_VERSION,
   type ControlledInstance,
-  type ImageProfile,
+  type SelectableImage,
   type InstanceImageSnapshot,
   type Node,
   type NodeRuntime,
@@ -13,7 +13,7 @@ import type { NodeAgentScopedError } from "../nodes/client.ts";
 
 export type InstanceBoardReaderInput = {
   projects: Project[];
-  images: ImageProfile[];
+  images: SelectableImage[];
   nodes: Node[];
   runtimes: NodeRuntime[];
   instances: ControlledInstance[];
@@ -37,7 +37,7 @@ export class InstanceBoardReader {
         instance,
         currentTime,
         project: instance.projectId ? projects.get(instance.projectId) : undefined,
-        image: instance.imageSnapshot || (instance.imageId ? images.get(instance.imageId) : undefined),
+        image: instance.imageSnapshot || (instance.imageSelection ? images.get(instance.imageSelection.imageId) : undefined),
         node: nodes.get(instance.nodeId),
         runtime: runtimes.get(`${instance.nodeId}:${instance.runtimeId}`),
       })),
@@ -50,7 +50,7 @@ function boardInstance(input: {
   instance: ControlledInstance;
   currentTime: number;
   project?: Project;
-  image?: ImageProfile | InstanceImageSnapshot;
+  image?: SelectableImage | InstanceImageSnapshot;
   node?: Node;
   runtime?: NodeRuntime;
 }) {

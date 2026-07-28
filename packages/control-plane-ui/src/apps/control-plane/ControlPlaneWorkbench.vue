@@ -457,7 +457,7 @@ const boardVisibleInstances = computed(() => {
     const sessionLabels = buildAppSessionTabs(instance, t)
       .map((session) => session.label)
       .join(" ");
-    const haystack = [instance.name, instance.project?.name, instance.projectId, instance.image?.name, instance.imageId, instance.node?.name, instance.nodeId, instance.status, instance.connectionStatus, sessionLabels]
+    const haystack = [instance.name, instance.project?.name, instance.projectId, instance.image?.name, instance.imageSelection?.imageId, instance.node?.name, instance.nodeId, instance.status, instance.connectionStatus, sessionLabels]
       .filter(Boolean)
       .join(" ")
       .toLowerCase();

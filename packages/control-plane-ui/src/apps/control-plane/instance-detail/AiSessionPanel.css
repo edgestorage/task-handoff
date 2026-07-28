@@ -126,7 +126,7 @@
 .session-ai-new-start {
   display: grid;
   width: min(760px, 100%);
-  gap: 28px;
+  gap: 48px;
 }
 
 .session-ai-new-title {

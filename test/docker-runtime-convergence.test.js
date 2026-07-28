@@ -131,7 +131,7 @@ test("Docker runtime target falls back to daemon architecture and normalizes ali
   assert.deepEqual(await executor.inspectRuntimeTarget(), { platform: "linux", arch: "arm64", launcherAbi: 1 });
 });
 
-test("legacy launcher bootstrap confines root exec to one auditable operation", async () => {
+test("runtime launcher installation refreshes node-agent assets with one root exec", async () => {
   const calls = [];
   const executor = new LocalDockerExecutor(async (_command, args) => {
     calls.push(args);
@@ -139,9 +139,7 @@ test("legacy launcher bootstrap confines root exec to one auditable operation", 
     if (args[0] === "exec" && args[1] !== "--user") throw new Error("launcher absent");
     return { stdout: "", stderr: "" };
   }, { launcherAssetsDir: "/assets" });
-  const result = await executor.bootstrapLegacyLauncher("instance-1");
-  assert.equal(result.migrated, true);
-  assert.deepEqual(result.audit, { operation: "legacy-launcher-bootstrap", rootExec: true, subsequentInstallUser: "root" });
+  await executor.installRuntimeLauncher("instance-1");
   const rootExec = calls.filter((args) => args[0] === "exec" && args[1] === "--user" && args[2] === "0");
   assert.equal(rootExec.length, 1);
   assert.match(rootExec[0].at(-1), /install -d -o root/);
@@ -149,7 +147,7 @@ test("legacy launcher bootstrap confines root exec to one auditable operation", 
   assert.equal(calls.some((args) => args[0] === "rm" || args[0] === "run" || args[0] === "pull"), false);
 });
 
-test("legacy launcher bootstrap preserves the root command stderr", async () => {
+test("runtime launcher installation preserves the root command stderr", async () => {
   const executor = new LocalDockerExecutor(async (_command, args) => {
     if (args[0] === "inspect") return { stdout: "container-abc", stderr: "" };
     if (args[0] === "exec" && args[1] !== "--user") throw new Error("launcher absent");
@@ -159,7 +157,7 @@ test("legacy launcher bootstrap preserves the root command stderr", async () => 
     return { stdout: "", stderr: "" };
   }, { launcherAssetsDir: "/assets" });
   await assert.rejects(
-    () => executor.bootstrapLegacyLauncher("instance-1"),
+    () => executor.installRuntimeLauncher("instance-1"),
     (error) => error.code === "INSTANCE_BASE_RUNTIME_INCOMPATIBLE" && /Cause: install: permission denied/.test(error.message),
   );
 });

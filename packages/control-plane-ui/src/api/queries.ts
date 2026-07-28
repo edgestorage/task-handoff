@@ -20,7 +20,9 @@ import type {
   CreateNodeRuntimeInput,
   CreateProjectInput,
   HealthResponse,
+  MarketCatalog,
   ImageProfile,
+  SelectableImage,
   ControlPlaneAiSessions,
   ControlPlaneTriggers,
   CreateControlPlaneTriggerInput,
@@ -129,6 +131,22 @@ export function useImagesQuery() {
   return useQuery({
     queryKey: ["control-plane-images"],
     queryFn: () => getApiData<ImageProfile[]>("images"),
+    retry: false,
+  });
+}
+
+export function useMarketCatalogQuery() {
+  return useQuery({
+    queryKey: ["control-plane-market-catalog"],
+    queryFn: () => getApiData<MarketCatalog>("market/catalog"),
+    retry: false,
+  });
+}
+
+export function useImageOptionsQuery() {
+  return useQuery({
+    queryKey: ["control-plane-image-options"],
+    queryFn: () => getApiData<SelectableImage[]>("image-options"),
     retry: false,
   });
 }
@@ -251,7 +269,7 @@ export function useNodeImageAvailabilityQuery(nodeId: MaybeRefOrGetter<string>) 
   const resolvedNodeId = computed(() => toValue(nodeId));
   return useQuery({
     queryKey: computed(() => ["node-image-catalog", resolvedNodeId.value]),
-    queryFn: () => getApiData<NodeImageAvailability[]>(`nodes/${resolvedNodeId.value}/images/catalog`),
+    queryFn: () => getApiData<NodeImageAvailability[]>(`nodes/${resolvedNodeId.value}/image-options`),
     enabled: computed(() => Boolean(resolvedNodeId.value)),
     retry: false,
   });

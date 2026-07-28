@@ -164,7 +164,10 @@ test("instance status page describes terminal lifecycle states", () => {
 
 test("registry profiles remain selectable for pull-required and unknown nodes", () => {
   const runtimeStep = read("src/apps/control-plane/new-instance/RuntimeStep.vue");
-  assert.match(runtimeStep, /v-for="image in images"/);
+  assert.match(runtimeStep, /image\.origin === "market"/);
+  assert.match(runtimeStep, /image\.origin === "custom"/);
+  assert.match(runtimeStep, /v-for="image in group\.images"/);
+  assert.match(runtimeStep, /@click="selectImage\(image\.id\)"/);
   assert.match(runtimeStep, /instances\.create\.availability\.available/);
   assert.match(runtimeStep, /instances\.create\.availability\.pullRequired/);
   assert.match(runtimeStep, /instances\.create\.availability\.unknown/);

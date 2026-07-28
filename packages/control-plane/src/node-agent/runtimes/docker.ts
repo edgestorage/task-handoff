@@ -59,16 +59,6 @@ export type DockerRuntimeTarget = {
   launcherAbi: number;
 };
 
-export type DockerLegacyBootstrapResult = {
-  migrated: boolean;
-  containerId?: string;
-  audit: {
-    operation: "legacy-launcher-bootstrap";
-    rootExec: boolean;
-    subsequentInstallUser: "root";
-  };
-};
-
 export class LocalDockerExecutor implements NodeRuntimeExecutor {
   private readonly runCommand: CommandRunner;
   private readonly publishHost: string;
@@ -299,15 +289,10 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
     return this.inspectRuntimeVersion(containerName);
   }
 
-  /** One-time migration for the former root-owned global npm layout. */
-  async bootstrapLegacyLauncher(containerName: string): Promise<DockerLegacyBootstrapResult> {
+  /** Installs the launcher bundle shipped by this node-agent before updating the application runtime. */
+  async installRuntimeLauncher(containerName: string): Promise<void> {
     const containerId = await this.inspectContainerId(containerName);
     if (!containerId) throw runtimeExecutorError("INSTANCE_BASE_RUNTIME_INCOMPATIBLE", `Docker container ${containerName} does not exist.`);
-    const present = await this.runCommand("docker", ["exec", containerName, "test", "-x", "/usr/local/bin/task-handoff-runtime"]).then(() => true).catch(() => false);
-    if (present) {
-      return { migrated: false, containerId, audit: { operation: "legacy-launcher-bootstrap", rootExec: false, subsequentInstallUser: "root" } };
-    }
-
     const assets = [
       [path.join(this.launcherAssetsDir, "entrypoint.sh"), "/root/.task-handoff-entrypoint.bootstrap"],
       [path.join(this.launcherAssetsDir, "instance-launcher.sh"), "/root/.task-handoff-instance-launcher.bootstrap"],
@@ -325,11 +310,10 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
         "install -d -o root -g root -m 0755 /opt/task-handoff/instance-runtime /opt/task-handoff/instance-runtime/releases /opt/task-handoff/instance-runtime/staging /opt/task-handoff/instance-runtime/incoming; chown -R root:root /opt/task-handoff/instance-runtime; chmod -R go-w /opt/task-handoff/instance-runtime; install -m 0755 /root/.task-handoff-entrypoint.bootstrap /usr/local/bin/task-handoff-entrypoint; install -m 0755 /root/.task-handoff-instance-launcher.bootstrap /usr/local/bin/task-handoff-instance-launcher; install -d /usr/local/lib/task-handoff; install -m 0755 /root/.task-handoff-runtime-installer.bootstrap /usr/local/lib/task-handoff/runtime-installer.mjs; ln -sfn /usr/local/lib/task-handoff/runtime-installer.mjs /usr/local/bin/task-handoff-runtime; rm -f /root/.task-handoff-entrypoint.bootstrap /root/.task-handoff-instance-launcher.bootstrap /root/.task-handoff-runtime-installer.bootstrap",
       ]);
     } catch (cause) {
-      throw runtimeExecutorError("INSTANCE_BASE_RUNTIME_INCOMPATIBLE", `Could not bootstrap the stable runtime launcher in ${containerName}.`, cause);
+      throw runtimeExecutorError("INSTANCE_BASE_RUNTIME_INCOMPATIBLE", `Could not install the runtime launcher in ${containerName}.`, cause);
     }
     const after = await this.inspectContainerId(containerName);
-    if (after !== containerId) throw runtimeExecutorError("INSTANCE_BASE_RUNTIME_INCOMPATIBLE", `Docker container identity changed while bootstrapping ${containerName}.`);
-    return { migrated: true, containerId, audit: { operation: "legacy-launcher-bootstrap", rootExec: true, subsequentInstallUser: "root" } };
+    if (after !== containerId) throw runtimeExecutorError("INSTANCE_BASE_RUNTIME_INCOMPATIBLE", `Docker container identity changed while installing the runtime launcher in ${containerName}.`);
   }
 
   private async inspectContainerId(containerName: string) {
@@ -454,6 +438,7 @@ export function dockerRunArgs(context: ExecutorContext, containerName: string, o
     `TASK_HANDOFF_RUNTIME_ID=${runtimeId}`,
     "-e",
     `TASK_HANDOFF_IMAGE_ID=${context.image.id}`,
+    ...(context.image.tag ? [`TASK_HANDOFF_IMAGE_TAG=${context.image.tag}`] : []),
     "-e",
     "TASK_HANDOFF_CHAT_BRIDGES=none",
     "-e",

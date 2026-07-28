@@ -219,7 +219,7 @@ function routeAuthorization(method: string, url: string): { action: ControlPlane
   if (path.startsWith("/api/projects")) {
     return { action, resource: { type: "project" } };
   }
-  if (path.startsWith("/api/images")) {
+  if (path.startsWith("/api/images") || path.startsWith("/api/image-options") || path.startsWith("/api/market")) {
     return { action, resource: { type: "runtime" } };
   }
   if (path.startsWith("/api/triggers")) {

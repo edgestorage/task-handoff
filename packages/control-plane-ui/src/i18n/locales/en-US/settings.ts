@@ -81,6 +81,9 @@ export const settings = {
   },
   imageRegistry: {
     count: "Registered images · {count}", selectNode: "Select node", noCapabilities: "no expected capabilities", deleting: "Deleting",
+    marketTitle: "Official images", marketDescription: "Curated runtime environments maintained by TaskHandoff.", official: "Official",
+    customTitle: "Custom images", customDescription: "{count} registry images managed by this control plane.",
+    marketCount: "{count} images", customCount: "Custom images · {count}", marketReadonly: "Read only",
     empty: "No image profiles yet.", addTitle: "Add public registry image", namePlaceholder: "Controlled instance", reference: "Image reference",
     referenceDescription: "Use an explicit tag or sha256 digest. Private registry credentials are not configured here.", adding: "Adding", add: "Add image",
     added: "{name} added.", deleteConfirm: "Delete image profile {name}?", selectNodeHint: "Select a node", availabilityUnknown: "Availability unknown",
@@ -108,7 +111,7 @@ export const settings = {
     noDiagnostics: "No node protocol errors recorded from the latest refresh.", tcpListener: "TCP listener", listenOn: "Listen on", loopback: "127.0.0.1 only",
     allIpv4: "All IPv4 interfaces", port: "Port", applying: "Applying", loading: "Loading", apply: "Apply",
     listenerWarning: "The node-agent API will be reachable on host IPv4 interfaces. Remote control planes still require invite pairing and HMAC. Configure firewall, NAT, DNS, and TLS termination separately.",
-    checking: "Checking", check: "Check", deleting: "Deleting", delete: "Delete", noRuntimes: "No runtimes reported by this node.",
+    checking: "Checking", check: "Check", deleting: "Deleting", delete: "Delete", noRuntimes: "No runtimes reported by this node.", defaultImage: "Default image", noDefaultImage: "No default image",
     managedUpdates: "Managed updates", stable: "Stable", beta: "Beta", alpha: "Alpha", nodeAgent: "Node agent",
     nodeAgentUpdateDescription: "Updates the service that manages this node and its instances.", queuing: "Queuing", update: "Update",
     controlledInstances: "Controlled instances · {count}", instanceConvergenceDescription: "The node automatically converges every instance to the same product version.", noControlledInstances: "No controlled instances on this node.",

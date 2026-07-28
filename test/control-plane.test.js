@@ -41,7 +41,7 @@ const { launchableAppsForInstance: chatLaunchableAppsForInstance } = require("..
 const { appSessionStatus } = require("../packages/control-plane-ui/src/apps/control-plane/appSessionVisibility.ts");
 const { AiSessionEventType, AiSessionEventTopic, AiSessionUnreadEventType } = require("../packages/protocol/src/ai-sessions.ts");
 const { AppSessionEventType, normalizeAppSessionRecord } = require("../packages/protocol/src/app-sessions.ts");
-const { ApplyUpdateRequestSchema, CONTROL_PLANE_PROTOCOL_VERSION, ControlledInstanceHeartbeatSchema, ControlledInstanceSchema, InstanceAppInventorySchema, InstanceLifecycleEventType, RuntimeArtifactIdentitySchema, RuntimeVersionStateSchema, UpdateCheckRequestSchema, UpdateJobSchema, modelConfigHash, parseStoredControlledInstance, sanitizeStoredControlledInstance } = require("../packages/protocol/src/control-plane.ts");
+const { ApplyUpdateRequestSchema, CONTROL_PLANE_PROTOCOL_VERSION, ControlledInstanceHeartbeatSchema, ControlledInstanceRegisterSchema, ControlledInstanceSchema, InstanceAppInventorySchema, InstanceLifecycleEventType, RuntimeArtifactIdentitySchema, RuntimeVersionStateSchema, UpdateCheckRequestSchema, UpdateJobSchema, modelConfigHash, parseStoredControlledInstance, sanitizeStoredControlledInstance } = require("../packages/protocol/src/control-plane.ts");
 const { ChatActionTokenService, parsePendingDecisionCallbackData, pendingDecisionRouteFingerprint } = require("../packages/control-plane/src/control-plane/chat/action-token-service.ts");
 
 test("pending decision callbacks are stable and resolved from the current route", () => {
@@ -63,6 +63,33 @@ function emptyAppInventory(observedAt = new Date().toISOString()) {
 }
 
 const npmIntegrityFixture = `sha512-${Buffer.from("task-handoff-node-agent-integrity").toString("base64")}`;
+
+function testInstanceImage(reference = "task-handoff-web:local", id = "img_1", name = "Image") {
+  const timestamp = new Date().toISOString();
+  const at = reference.indexOf("@");
+  const digest = at >= 0 ? reference.slice(at + 1) : undefined;
+  const base = at >= 0 ? reference.slice(0, at) : reference;
+  const slash = base.lastIndexOf("/");
+  const colon = base.lastIndexOf(":");
+  const tag = colon > slash ? base.slice(colon + 1) : undefined;
+  const repository = tag ? base.slice(0, colon) : base;
+  return {
+    id,
+    origin: "custom",
+    name,
+    repository,
+    ...(tag ? { tag } : {}),
+    requestedReference: reference,
+    ...(digest ? { resolvedDigest: digest } : {}),
+    pullPolicy: "if-not-present",
+    capabilities: [],
+    optionalApps: [],
+    defaultEnv: {},
+    labels: {},
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+}
 
 test("runtime lifecycle result preserves a newer registration heartbeat", () => {
   const baseline = ControlledInstanceSchema.parse({
@@ -185,10 +212,16 @@ function testAppInventory(apps, observedAt = new Date().toISOString()) {
 }
 
 test("controlled instance heartbeat protocol rejects legacy receiver projection", () => {
-  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-07-27");
+  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-07-28");
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, receiver: { status: "running", pendingCount: 1 } }).success, false);
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, apps: { runningCount: 1 } }).success, false);
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, appInventory: emptyAppInventory(), apps: { runningCount: 1 } }).success, true);
+  assert.equal(ControlledInstanceRegisterSchema.safeParse({
+    name: "worker",
+    protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+    appInventory: emptyAppInventory(),
+    imageId: "img_legacy",
+  }).success, false);
 });
 
 test("managed runtime convergence protocol is strict and Node-scoped", () => {
@@ -1158,7 +1191,7 @@ function createMockNodeAgentFetch(options = {}) {
         nodeId,
         name: body.name,
         path: body.path,
-        defaultImageId: body.defaultImageId,
+        defaultImageSelection: body.defaultImageSelection,
         labels: body.labels || {},
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -1248,11 +1281,8 @@ function createMockNodeAgentFetch(options = {}) {
         modelSelection: body.modelSelection || {},
         nodeId,
         runtimeId: body.runtimeId,
-        imageId: body.imageId,
-        imageSnapshot: body.image ? (() => {
-          const { reference, ...profile } = body.image;
-          return { ...profile, requestedReference: reference };
-        })() : undefined,
+        imageSelection: body.imageSelection,
+        imageSnapshot: body.image,
         status: "created",
         health: "unknown",
         connectionStatus: "unknown",
@@ -2236,22 +2266,12 @@ test("control plane subscribes to direct node agent websocket events", async (t)
       id: "inst_direct_events",
       name: "direct events",
       runtimeId: "runtime_local_docker",
-      imageId: "img_default",
+      imageSelection: { imageId: "market_taskhandoff_browser" },
       source: {
         type: "local-folder",
         path: "/tmp/direct-events",
       },
-      image: {
-        id: "img_default",
-        name: "Default",
-        reference: "task-handoff/default:latest",
-        capabilities: [],
-        optionalApps: [],
-        defaultEnv: {},
-        labels: {},
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      },
+      image: testInstanceImage("task-handoff/default:latest", "img_default", "Default"),
     },
   });
   assert.equal(createdInstance.statusCode, 201);
@@ -2484,7 +2504,7 @@ test("local docker run args include controlled metadata and disable local chat b
         name: "worker",
         projectId: "proj_1",
         runtimeId: "runtime_local_docker",
-        imageId: "img_1",
+        imageSelection: { imageId: "img_1" },
         status: "created",
         health: "unknown",
         connectionStatus: "unknown",
@@ -2718,7 +2738,7 @@ test("node agent update checks default to the stable npm channel", async (t) => 
   ]);
 });
 
-test("node update preflight resolves exact runtime artifacts and reports stopped impact", async (t) => {
+test("node update preflight excludes Local Runtime artifacts on macOS and reports stopped impact", async (t) => {
   const resolved = [];
   const updateCommands = [];
   let failArtifact = false;
@@ -2727,8 +2747,8 @@ test("node update preflight resolves exact runtime artifacts and reports stopped
     dataDir: tempDataDir("node-agent-update-runtime-preflight"),
     logger: false,
     token: "agent-secret",
-    platform: "linux",
-    arch: "x64",
+    platform: "darwin",
+    arch: "arm64",
     dockerCommandRunner: async (_command, args) => {
       if (args[0] === "info") return { stdout: JSON.stringify({ OSType: "linux", Architecture: "x86_64" }), stderr: "" };
       throw new Error("unexpected Docker command");
@@ -3019,17 +3039,7 @@ test("local docker run args include resolved model environment", () => {
         createdAt: timestamp,
         updatedAt: timestamp,
       },
-      image: {
-        id: "img_1",
-        name: "Image",
-        reference: "task-handoff-web:latest",
-        capabilities: [],
-        optionalApps: [],
-        defaultEnv: {},
-        labels: {},
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      },
+      image: testInstanceImage("task-handoff-web:latest", "img_1", "Image"),
       runtime: {
         id: "runtime_local_docker",
         type: "docker",
@@ -3045,7 +3055,7 @@ test("local docker run args include resolved model environment", () => {
         name: "worker",
         projectId: "proj_1",
         runtimeId: "runtime_local_docker",
-        imageId: "img_1",
+        imageSelection: { imageId: "img_1" },
         status: "created",
         health: "unknown",
         connectionStatus: "unknown",
@@ -3096,17 +3106,7 @@ test("local docker run args expose git workspace bootstrap environment", () => {
         createdAt: timestamp,
         updatedAt: timestamp,
       },
-      image: {
-        id: "img_1",
-        name: "Image",
-        reference: "task-handoff-web:latest",
-        capabilities: [],
-        optionalApps: [],
-        defaultEnv: {},
-        labels: {},
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      },
+      image: testInstanceImage("task-handoff-web:latest", "img_1", "Image"),
       runtime: {
         id: "runtime_local_docker",
         type: "docker",
@@ -3122,7 +3122,7 @@ test("local docker run args expose git workspace bootstrap environment", () => {
         name: "git-worker",
         projectId: "proj_git",
         runtimeId: "runtime_local_docker",
-        imageId: "img_1",
+        imageSelection: { imageId: "img_1" },
         status: "created",
         health: "unknown",
         connectionStatus: "unknown",
@@ -3184,7 +3184,7 @@ test("local docker executor checks local images and pulls registry images before
       name: "worker",
       projectId: "proj_1",
       runtimeId: "runtime_local_docker",
-      imageId: "img_1",
+      imageSelection: { imageId: "img_1" },
       status: "created",
       health: "unknown",
       connectionStatus: "unknown",
@@ -3514,18 +3514,8 @@ test("node agent runs local docker behind node-local target and auto-imports age
       id: "inst_1",
       name: "worker",
       runtimeId: "runtime_local_docker",
-      imageId: "img_1",
-      image: {
-        id: "img_1",
-        name: "Image",
-        reference: "task-handoff-web:local",
-        capabilities: [],
-        optionalApps: [],
-        defaultEnv: {},
-        labels: {},
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      },
+      imageSelection: { imageId: "img_1" },
+      image: testInstanceImage("task-handoff-web:local", "img_1", "Image"),
       source: {
         type: "git-repository",
         url: "https://github.com/example/repo.git",
@@ -3630,18 +3620,8 @@ test("node agent skips start config auto-import when disabled on the instance", 
       id: "inst_no_auto_import",
       name: "worker",
       runtimeId: "runtime_local_docker",
-      imageId: "img_1",
-      image: {
-        id: "img_1",
-        name: "Image",
-        reference: "task-handoff-web:local",
-        capabilities: [],
-        optionalApps: [],
-        defaultEnv: {},
-        labels: {},
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      },
+      imageSelection: { imageId: "img_1" },
+      image: testInstanceImage("task-handoff-web:local", "img_1", "Image"),
       source: {
         type: "git-repository",
         url: "https://github.com/example/repo.git",
@@ -3713,18 +3693,8 @@ test("node agent config auto-import failure does not fail start", async (t) => {
       id: "inst_auto_import_fails",
       name: "worker",
       runtimeId: "runtime_local_docker",
-      imageId: "img_1",
-      image: {
-        id: "img_1",
-        name: "Image",
-        reference: "task-handoff-web:local",
-        capabilities: [],
-        optionalApps: [],
-        defaultEnv: {},
-        labels: {},
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      },
+      imageSelection: { imageId: "img_1" },
+      image: testInstanceImage("task-handoff-web:local", "img_1", "Image"),
       source: {
         type: "git-repository",
         url: "https://github.com/example/repo.git",
@@ -3810,18 +3780,8 @@ test("node agent config auto-import timeout does not hang start", async (t) => {
       id: "inst_auto_import_timeout",
       name: "worker",
       runtimeId: "runtime_local_docker",
-      imageId: "img_1",
-      image: {
-        id: "img_1",
-        name: "Image",
-        reference: "task-handoff-web:local",
-        capabilities: [],
-        optionalApps: [],
-        defaultEnv: {},
-        labels: {},
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      },
+      imageSelection: { imageId: "img_1" },
+      image: testInstanceImage("task-handoff-web:local", "img_1", "Image"),
       source: {
         type: "git-repository",
         url: "https://github.com/example/repo.git",
@@ -5083,7 +5043,6 @@ test("node agent starts localhost runtime as a host controlled-instance process"
     dataDir,
     logger: false,
     token: "agent-secret",
-    allowUnmanagedLocalCommandOverride: true,
     host,
     port,
   });
@@ -5211,7 +5170,6 @@ test("localhost process spawn failures fail the instance without crashing node a
     dataDir,
     logger: false,
     token: "agent-secret",
-    allowUnmanagedLocalCommandOverride: true,
   });
   t.after(async () => {
     if (previousCommandArgv === undefined) {
@@ -5291,9 +5249,12 @@ test("node agent shutdown stops localhost processes while preserving active rest
     dataDir,
     logger: false,
     token: "agent-secret",
-    allowUnmanagedLocalCommandOverride: true,
     host,
     port,
+    dockerCommandRunner: async (_command, args) => {
+      if (args[0] === "image") return { stdout: JSON.stringify({ Id: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", RepoDigests: [] }), stderr: "" };
+      return { stdout: "", stderr: "" };
+    },
   });
   t.after(async () => {
     if (previousCommandArgv === undefined) {
@@ -5334,18 +5295,8 @@ test("node agent shutdown stops localhost processes while preserving active rest
       id: "inst_docker_shutdown",
       name: "docker shutdown",
       runtimeId: "runtime_local_docker",
-      imageId: "img_1",
-      image: {
-        id: "img_1",
-        name: "Image",
-        reference: "task-handoff-web:local",
-        capabilities: [],
-        optionalApps: [],
-        defaultEnv: {},
-        labels: {},
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      },
+      imageSelection: { imageId: "img_1" },
+      image: testInstanceImage("task-handoff-web:local", "img_1", "Image"),
       source: {
         type: "git-repository",
         url: "https://example.com/repo.git",
@@ -5417,7 +5368,6 @@ test("node agent restores localhost runtime processes after graceful shutdown", 
     dataDir,
     logger: false,
     token: "agent-secret",
-    allowUnmanagedLocalCommandOverride: true,
     host,
     port,
   });
@@ -5471,7 +5421,6 @@ test("node agent restores localhost runtime processes after graceful shutdown", 
     dataDir,
     logger: false,
     token: "agent-secret",
-    allowUnmanagedLocalCommandOverride: true,
     host,
     port,
   });
@@ -5545,7 +5494,6 @@ test("node agent restores active localhost runtime processes after unclean shutd
     dataDir,
     logger: false,
     token: "agent-secret",
-    allowUnmanagedLocalCommandOverride: true,
     host,
     port,
   });
@@ -5597,7 +5545,6 @@ test("node agent restores active localhost runtime processes after unclean shutd
     dataDir,
     logger: false,
     token: "agent-secret",
-    allowUnmanagedLocalCommandOverride: true,
     host,
     port,
   });
@@ -5669,18 +5616,8 @@ test("node agent accepts incompatible controlled instance protocol versions and 
       id: "inst_protocol",
       name: "worker",
       runtimeId: "runtime_local_docker",
-      imageId: "img_1",
-      image: {
-        id: "img_1",
-        name: "Image",
-        reference: "task-handoff-web:local",
-        capabilities: [],
-        optionalApps: [],
-        defaultEnv: {},
-        labels: {},
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      },
+      imageSelection: { imageId: "img_1" },
+      image: testInstanceImage("task-handoff-web:local", "img_1", "Image"),
       source: {
         type: "git-repository",
         url: "https://github.com/example/repo.git",
@@ -5700,6 +5637,8 @@ test("node agent accepts incompatible controlled instance protocol versions and 
       instanceId: "inst_protocol",
       name: "worker",
       protocolVersion: "2026-01-01",
+      imageId: "img_1",
+      legacyRegistrationField: true,
       target: {
         strategy: "direct-port",
         status: "reachable",
@@ -5754,6 +5693,7 @@ test("node agent accepts incompatible controlled instance protocol versions and 
       protocolVersion: "2026-01-01",
       status: "running",
       health: "ok",
+      receiver: { status: "running", pendingCount: 1 },
       target: {
         status: "reachable",
       },
@@ -5786,6 +5726,7 @@ test("register and heartbeat preserve authoritative convergence attempts and fai
   const original = app.nodeAgentState.controlledInstances.get("inst_attempts");
   app.nodeAgentState.controlledInstances.put(ControlledInstanceSchema.parse({
     ...original,
+    runtimeId: "runtime_local_docker",
     status: "running",
     build: { component: "controlled-instance", packageVersion: "0.9.0" },
     runtimeVersion: {
@@ -5853,7 +5794,7 @@ test("node agent migrates legacy local stored endpoint-shaped instances on start
         sourceSnapshot: {},
         nodeId: "node_old",
         runtimeId: "runtime_local_docker",
-        imageId: "img_default",
+        imageSelection: { imageId: "market_taskhandoff_browser" },
         status: "running",
         health: "ok",
         connectionStatus: "online",
@@ -5920,7 +5861,7 @@ test("node agent tolerates extra fields in stored controlled instances", async (
         sourceSnapshot: {},
         nodeId: "node_current",
         runtimeId: "runtime_local_docker",
-        imageId: "img_default",
+        imageSelection: { imageId: "market_taskhandoff_browser" },
         status: "stopped",
         health: "ok",
         connectionStatus: "online",
@@ -6134,18 +6075,8 @@ test("node agent proxies mutating instance API requests while runtime convergenc
       id: "inst_1",
       name: "proxy-worker",
       runtimeId: "runtime_local_docker",
-      imageId: "img_1",
-      image: {
-        id: "img_1",
-        name: "Image",
-        reference: "task-handoff-web:local",
-        capabilities: [],
-        optionalApps: [],
-        defaultEnv: {},
-        labels: {},
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      },
+      imageSelection: { imageId: "img_1" },
+      image: testInstanceImage("task-handoff-web:local", "img_1", "Image"),
       source: {
         type: "local-folder",
         path: "/workspace",
@@ -6235,18 +6166,8 @@ test("node agent proxies direct-port instances through the node-local host", asy
       id: "inst_proxy",
       name: "proxy-worker",
       runtimeId: "runtime_local_docker",
-      imageId: "img_1",
-      image: {
-        id: "img_1",
-        name: "Image",
-        reference: "task-handoff-web:local",
-        capabilities: [],
-        optionalApps: [],
-        defaultEnv: {},
-        labels: {},
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      },
+      imageSelection: { imageId: "img_1" },
+      image: testInstanceImage("task-handoff-web:local", "img_1", "Image"),
       source: {
         type: "local-folder",
         path: "/workspace",
@@ -6370,18 +6291,8 @@ test("node agent proxies instance websocket subprotocols", async (t) => {
       id: "inst_ws",
       name: "ws-worker",
       runtimeId: "runtime_local_docker",
-      imageId: "img_1",
-      image: {
-        id: "img_1",
-        name: "Image",
-        reference: "task-handoff-web:local",
-        capabilities: [],
-        optionalApps: [],
-        defaultEnv: {},
-        labels: {},
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      },
+      imageSelection: { imageId: "img_1" },
+      image: testInstanceImage("task-handoff-web:local", "img_1", "Image"),
       source: {
         type: "local-folder",
         path: "/workspace",
@@ -6931,7 +6842,7 @@ test("control plane proxies instance websocket routes through reverse node tunne
     name: "reverse-worker",
     projectId: project.body.data.id,
     runtimeId: "runtime_local_docker",
-    imageId: "img_default",
+    imageSelection: { imageId: "market_taskhandoff_browser" },
   });
   assert.equal(created.statusCode, 201);
   await mock.fetchImpl(`http://127.0.0.1:8091/api/node-agent/instances/${created.body.data.id}/register`, {
@@ -7250,7 +7161,7 @@ test("control plane models deploy to the target node and instances store assignm
     name: "wrong-app-instance",
     projectId: project.body.data.id,
     runtimeId: "runtime_local_docker",
-    imageId: "img_default",
+    imageSelection: { imageId: "market_taskhandoff_browser" },
     modelSelection: { claudeModelHash: selectedCodex.body.data.id },
   });
   assert.equal(wrongAppInstance.statusCode, 400);
@@ -7260,7 +7171,7 @@ test("control plane models deploy to the target node and instances store assignm
     name: "disabled-model-instance",
     projectId: project.body.data.id,
     runtimeId: "runtime_local_docker",
-    imageId: "img_default",
+    imageSelection: { imageId: "market_taskhandoff_browser" },
     modelSelection: { codexModelHash: disabledCodex.body.data.id },
   });
   assert.equal(disabledModelInstance.statusCode, 400);
@@ -7270,7 +7181,7 @@ test("control plane models deploy to the target node and instances store assignm
     name: "scoped-1",
     projectId: project.body.data.id,
     runtimeId: "runtime_local_docker",
-    imageId: "img_default",
+    imageSelection: { imageId: "market_taskhandoff_browser" },
     modelSelection: {
       codexModelHash: selectedCodex.body.data.id,
       claudeModelHash: selectedClaude.body.data.id,
@@ -7295,7 +7206,7 @@ test("control plane models deploy to the target node and instances store assignm
     name: "no-managed-model",
     projectId: project.body.data.id,
     runtimeId: "runtime_local_docker",
-    imageId: "img_default",
+    imageSelection: { imageId: "market_taskhandoff_browser" },
     modelSelection: {
       codexModelHash: null,
       claudeModelHash: null,
@@ -7456,7 +7367,7 @@ test("federated model registry groups one control-plane model across multiple no
       projectId: project.body.data.id,
       nodeId,
       runtimeId: "runtime_local_docker",
-      imageId: "img_default",
+      imageSelection: { imageId: "market_taskhandoff_browser" },
       modelSelection: { codexModelHash: model.body.data.id },
     });
     assert.equal(instance.statusCode, 201, JSON.stringify(instance.body));
@@ -7526,7 +7437,7 @@ test("failed assignment leaves an unreferenced hash entry without deployment sta
   const failed = await json(app, "POST", "/api/controlled-instances", {
     projectId: project.body.data.id,
     runtimeId: "runtime_local_docker",
-    imageId: "img_default",
+    imageSelection: { imageId: "market_taskhandoff_browser" },
     modelSelection: { codexModelHash: model.body.data.id },
   });
   assert.notEqual(failed.statusCode, 201);
@@ -7541,7 +7452,7 @@ test("failed assignment leaves an unreferenced hash entry without deployment sta
   const offline = await json(app, "POST", "/api/controlled-instances", {
     projectId: project.body.data.id,
     runtimeId: "runtime_local_docker",
-    imageId: "img_default",
+    imageSelection: { imageId: "market_taskhandoff_browser" },
     modelSelection: { codexModelHash: model.body.data.id },
   });
   assert.notEqual(offline.statusCode, 201);
@@ -7636,7 +7547,7 @@ test("control plane manages projects, instances, register, heartbeat, and board 
     name: "local-1",
     projectId: project.body.data.id,
     runtimeId: "runtime_local_docker",
-    imageId: "img_default",
+    imageSelection: { imageId: "market_taskhandoff_browser" },
   });
   assert.equal(createdInstance.statusCode, 201);
   assert.match(createdInstance.body.data.registrationToken, /^[A-Za-z0-9_-]+$/);
@@ -7733,7 +7644,7 @@ test("control plane manages projects, instances, register, heartbeat, and board 
   assert.equal(board.statusCode, 200);
   assert.equal(board.body.data.length, 1);
   assert.equal(board.body.data[0].project.name, "Local Project");
-  assert.equal(board.body.data[0].image.id, "img_default");
+  assert.equal(board.body.data[0].image.id, "market_taskhandoff_browser");
   assert.deepEqual(board.body.data[0].appInventory.items.map(({ id, availability }) => ({ id, availability })), [
     { id: "terminal-tty", availability: "available" },
     { id: "cc-switch", availability: "available" },
@@ -7809,7 +7720,7 @@ test("control plane rejects unknown controlled instance request fields", async (
   const instance = await json(app, "POST", "/api/controlled-instances", {
     name: "unknown-field-instance",
     projectId: project.body.data.id,
-    imageId: "img_default",
+    imageSelection: { imageId: "market_taskhandoff_browser" },
     defaultRuntimeTargetId: "runtime_should_be_ignored",
   });
   assert.equal(instance.statusCode, 400);
@@ -7839,7 +7750,7 @@ test("control plane forwards instance config auto-import setting to node agent",
   const instance = await json(app, "POST", "/api/controlled-instances", {
     name: "config-instance",
     projectId: project.body.data.id,
-    imageId: "img_default",
+    imageSelection: { imageId: "market_taskhandoff_browser" },
     config: {
       autoImportAgentConfigs: false,
     },
@@ -7893,17 +7804,17 @@ test("control plane reports node-scoped image availability and preserves unknown
     assert.equal(created.statusCode, 201, JSON.stringify(created.body));
   }
 
-  const available = await json(app, "GET", "/api/nodes/node_mock/images/catalog");
+  const available = await json(app, "GET", "/api/nodes/node_mock/image-options");
   assert.equal(available.statusCode, 200);
   const availableBrowser = available.body.data.find((entry) => entry.image.reference === reference);
   assert.equal(availableBrowser.status, "available");
   assert.equal(availableBrowser.localImage.reference, reference);
 
-  const missing = await json(app, "GET", "/api/nodes/node_missing/images/catalog");
+  const missing = await json(app, "GET", "/api/nodes/node_missing/image-options");
   assert.equal(missing.statusCode, 200);
   assert.equal(missing.body.data[0].status, "pull-required");
 
-  const offline = await json(app, "GET", "/api/nodes/node_offline/images/catalog");
+  const offline = await json(app, "GET", "/api/nodes/node_offline/image-options");
   assert.equal(offline.statusCode, 200);
   assert.equal(offline.body.data[0].status, "unknown");
   assert.ok(offline.body.data[0].error);
@@ -7916,7 +7827,7 @@ test("control plane protects referenced images and keeps instance image snapshot
       nodeId: "node_mock",
       name: "Guarded folder",
       path: "/tmp/guarded-folder",
-      defaultImageId: "img_folder_guard",
+      defaultImageSelection: { imageId: "img_folder_guard" },
       labels: {},
       createdAt: "2026-07-16T00:00:00.000Z",
       updatedAt: "2026-07-16T00:00:00.000Z",
@@ -7942,13 +7853,13 @@ test("control plane protects referenced images and keeps instance image snapshot
   const project = await json(app, "POST", "/api/projects", {
     name: "Image guard project",
     source: { type: "local-folder", path: "/tmp/image-guard" },
-    defaultImageId: "img_project_guard",
+    defaultImageSelection: { imageId: "img_project_guard" },
   });
   assert.equal(project.statusCode, 201);
   const instance = await json(app, "POST", "/api/controlled-instances", {
     name: "snapshot-instance",
     projectId: project.body.data.id,
-    imageId: "img_instance_guard",
+    imageSelection: { imageId: "img_instance_guard" },
   });
   assert.equal(instance.statusCode, 201);
   assert.equal(instance.body.data.imageSnapshot.requestedReference, "docker.io/example/img_instance_guard:v1");
@@ -8170,7 +8081,7 @@ test("control plane preserves a renamed built-in node across sync and instance p
     name: "renamed-node-instance",
     projectId: project.body.data.id,
     runtimeId: "runtime_local_docker",
-    imageId: "img_default",
+    imageSelection: { imageId: "market_taskhandoff_browser" },
   });
   assert.equal(instance.statusCode, 201);
   assert.equal(instance.body.data.nodeId, "node_mock");
@@ -8276,7 +8187,7 @@ test("control plane proxies instance websocket routes while preserving HTTP prox
   const createdInstance = await json(app, "POST", "/api/controlled-instances", {
     projectId: project.body.data.id,
     runtimeId: "runtime_local_docker",
-    imageId: "img_default",
+    imageSelection: { imageId: "market_taskhandoff_browser" },
   });
   assert.equal(createdInstance.statusCode, 201);
 
@@ -8439,7 +8350,7 @@ test("control plane generated instance names use a short id suffix", async (t) =
   const created = await json(app, "POST", "/api/controlled-instances", {
     projectId: project.body.data.id,
     runtimeId: "runtime_local_docker",
-    imageId: "img_default",
+    imageSelection: { imageId: "market_taskhandoff_browser" },
   });
   assert.equal(created.statusCode, 201);
   assert.equal(created.body.data.name, `instance-${created.body.data.id.replace(/^inst_?/, "").slice(0, 6)}`);
@@ -8470,7 +8381,7 @@ test("control plane starts, stops, and restarts instances through runtime execut
     name: "git-1",
     projectId: project.body.data.id,
     runtimeId: "runtime_local_docker",
-    imageId: "img_default",
+    imageSelection: { imageId: "market_taskhandoff_browser" },
   });
   assert.equal(created.statusCode, 201);
 
@@ -8643,7 +8554,7 @@ test("control plane launches app sessions through the controlled instance API", 
     name: "app-worker",
     projectId: project.body.data.id,
     runtimeId: "runtime_local_docker",
-    imageId: "img_default",
+    imageSelection: { imageId: "market_taskhandoff_browser" },
   });
   assert.equal(created.statusCode, 201);
 
@@ -8850,7 +8761,7 @@ test("control plane launches app sessions through the controlled instance API", 
     name: "git-app-worker",
     projectId: gitProject.body.data.id,
     runtimeId: "runtime_local_docker",
-    imageId: "img_default",
+    imageSelection: { imageId: "market_taskhandoff_browser" },
   });
   assert.equal(gitInstance.statusCode, 201);
   await mock.fetchImpl(`http://127.0.0.1:8091/api/node-agent/instances/${gitInstance.body.data.id}/register`, {
@@ -8910,7 +8821,7 @@ test("control plane app session launch succeeds when board heartbeat sync fails"
     name: "heartbeat-worker",
     projectId: project.body.data.id,
     runtimeId: "runtime_local_docker",
-    imageId: "img_default",
+    imageSelection: { imageId: "market_taskhandoff_browser" },
   });
   assert.equal(created.statusCode, 201);
   await mock.fetchImpl(`http://127.0.0.1:8091/api/node-agent/instances/${created.body.data.id}/register`, {
@@ -9001,7 +8912,7 @@ test("control plane rejects local folder projects on non-local runtimes before e
     projectId: project.body.data.id,
     nodeId: "node_remote",
     runtimeId: "runtime_remote",
-    imageId: "img_default",
+    imageSelection: { imageId: "market_taskhandoff_browser" },
   });
   assert.equal(rejected.statusCode, 400);
   assert.equal(rejected.body.error.code, "LOCAL_FOLDER_REQUIRES_OWNER_NODE");
@@ -9106,7 +9017,7 @@ test("control plane chat gateway binds sessions and forwards messages to active 
     name: "chat-worker",
     projectId: project.body.data.id,
     runtimeId: "runtime_local_docker",
-    imageId: "img_default",
+    imageSelection: { imageId: "market_taskhandoff_browser" },
   });
   assert.equal(created.statusCode, 201);
   chatWorkerInstanceId = created.body.data.id;
@@ -9253,7 +9164,7 @@ test("control plane chat gateway binds sessions and forwards messages to active 
     name: "other-chat-worker",
     projectId: otherProject.body.data.id,
     runtimeId: "runtime_local_docker",
-    imageId: "img_default",
+    imageSelection: { imageId: "market_taskhandoff_browser" },
   });
   assert.equal(otherCreated.statusCode, 201);
 
@@ -9684,7 +9595,7 @@ test("control plane chat gateway clears stale ai session bindings instead of cra
     name: "chat-worker",
     projectId: project.body.data.id,
     runtimeId: "runtime_local_docker",
-    imageId: "img_default",
+    imageSelection: { imageId: "market_taskhandoff_browser" },
   });
   assert.equal(created.statusCode, 201);
 
@@ -14652,7 +14563,7 @@ test("control plane aggregates ai session pending routes and proxies ai session 
     name: "pending-worker",
     projectId: project.body.data.id,
     runtimeId: "runtime_local_docker",
-    imageId: "img_default",
+    imageSelection: { imageId: "market_taskhandoff_browser" },
   });
   assert.equal(created.statusCode, 201);
 
@@ -14776,7 +14687,7 @@ test("control plane aggregates ai session pending routes and proxies ai session 
     name: "offline-history-worker",
     projectId: project.body.data.id,
     runtimeId: "runtime_local_docker",
-    imageId: "img_default",
+    imageSelection: { imageId: "market_taskhandoff_browser" },
   });
   assert.equal(offline.statusCode, 201);
   const offlineHistory = await json(app, "GET", `/api/controlled-instances/${offline.body.data.id}/ai-sessions/history`);

@@ -1,6 +1,6 @@
 import { computed, ref, watch, type Ref } from "vue";
 import { checkNodeRuntime, createNodeLocalFolder, deleteNodeLocalFolder, deleteNodeRuntime, listNodeFolderTree, useNodeLocalFoldersQuery } from "../../../api/queries";
-import type { InstanceBoardItem, Node, NodeRuntime } from "../../../api/types";
+import type { InstanceBoardItem, Node, NodeRuntime, SelectableImage } from "../../../api/types";
 import { nativeNodeFolderSelectionResult, nodeFolderSelectionMode, nodePathName } from "../nodePath";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 import { useNodeStorageFolderPicker } from "./useNodeStorageFolderPicker";
@@ -14,6 +14,7 @@ type UseNodeResourceSettingsInput = {
   clearDefaultRuntime: (runtimeId: string) => void;
   errorText: (error: unknown) => string;
   instances: Ref<InstanceBoardItem[] | undefined>;
+  imageOptions: Ref<SelectableImage[] | undefined>;
   nodes: Ref<Node[] | undefined>;
   refresh: () => Promise<void>;
   runtimes: Ref<NodeRuntime[] | undefined>;
@@ -23,13 +24,14 @@ type UseNodeResourceSettingsInput = {
 const CONTROL_PLANE_LOCAL_NODE_LABEL = "task-handoff.control-plane.local";
 const CONTROL_PLANE_BUILTIN_NODE_LABEL = "task-handoff.control-plane.builtin";
 
-export function useNodeResourceSettings({ chooseProjectFolder, clearDefaultRuntime, errorText, instances, nodes, refresh, runtimes, translate: t }: UseNodeResourceSettingsInput) {
+export function useNodeResourceSettings({ chooseProjectFolder, clearDefaultRuntime, errorText, imageOptions, instances, nodes, refresh, runtimes, translate: t }: UseNodeResourceSettingsInput) {
   const translateError = (error: unknown) => translateApiError(error, t, errorText(error));
   const selectedNodeId = ref("");
   const creatingNodeLocalFolder = ref(false);
   const deletingNodeLocalFolderId = ref("");
   const checkingRuntimeId = ref("");
   const deletingRuntimeId = ref("");
+  const nodeFolderDefaultImageId = ref("");
   const nodeLocalFolders = useNodeLocalFoldersQuery(() => selectedNodeId.value);
 
   const orderedNodes = computed(() => [...(nodes.value || [])].sort((a, b) => Number(isControlPlaneLocalNode(b)) - Number(isControlPlaneLocalNode(a)) || a.name.localeCompare(b.name)));
@@ -40,7 +42,10 @@ export function useNodeResourceSettings({ chooseProjectFolder, clearDefaultRunti
   const selectedNodeIsLocal = computed(() => Boolean(selectedNode.value && isControlPlaneLocalNode(selectedNode.value)));
   const folderSelectionMode = computed(() => nodeFolderSelectionMode(Boolean(selectedNode.value && isControlPlaneLocalNode(selectedNode.value) && isControlPlaneBuiltinNode(selectedNode.value)), Boolean(chooseProjectFolder)));
   const storageFolderPicker = useNodeStorageFolderPicker({
-    createFolder: createNodeLocalFolder,
+    createFolder: (nodeId, input) => createNodeLocalFolder(nodeId, {
+      ...input,
+      ...(nodeFolderDefaultImageId.value ? { defaultImageSelection: { imageId: nodeFolderDefaultImageId.value } } : {}),
+    }),
     errorText,
     loadFolders: listNodeFolderTree,
     refresh,
@@ -123,6 +128,7 @@ export function useNodeResourceSettings({ chooseProjectFolder, clearDefaultRunti
       await createNodeLocalFolder(node.id, {
         name: nodePathName(folderPath),
         path: folderPath,
+        ...(nodeFolderDefaultImageId.value ? { defaultImageSelection: { imageId: nodeFolderDefaultImageId.value } } : {}),
       });
       await refresh();
     } catch (error) {
@@ -188,6 +194,8 @@ export function useNodeResourceSettings({ chooseProjectFolder, clearDefaultRunti
     nodeStorageFolderSubmitting: storageFolderPicker.submitting,
     nodeStorageFolderTarget: storageFolderPicker.targetNode,
     nodeLocalFolders,
+    nodeFolderDefaultImageId,
+    nodeFolderImageOptions: imageOptions,
     nodeLocationLabel,
     orderedNodes,
     removeNodeLocalFolder,

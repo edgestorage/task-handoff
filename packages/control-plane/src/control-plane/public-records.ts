@@ -1,8 +1,10 @@
 import {
   BuildInfoSchema,
   FinalComputerPlatformSchema,
+  FinalComputerArchSchema,
   ModelConfigSchema,
   ProjectSchema,
+  sanitizeStoredProject,
   type ControlledInstance,
   type ModelConfig,
   type Node,
@@ -16,12 +18,14 @@ export function publicNodeAgentCapabilities(data: unknown) {
   const record = data as Record<string, unknown>;
   const build = BuildInfoSchema.safeParse(record.build);
   const platform = FinalComputerPlatformSchema.safeParse(record.platform);
+  const arch = FinalComputerArchSchema.safeParse(record.arch);
   return {
     ...(typeof record.ok === "boolean" ? { ok: record.ok } : {}),
     ...(typeof record.role === "string" ? { role: record.role } : {}),
     ...(typeof record.nodeId === "string" ? { nodeId: record.nodeId } : {}),
     ...(typeof record.protocolVersion === "string" ? { protocolVersion: record.protocolVersion } : {}),
     ...(platform.success ? { platform: platform.data } : {}),
+    ...(arch.success ? { arch: arch.data } : {}),
     ...(build.success ? { build: build.data } : {}),
     ...(typeof record.serverTime === "string" ? { serverTime: record.serverTime } : {}),
   };
@@ -68,7 +72,7 @@ export function publicProject(project: Project) {
 
 export function normalizeProject(project: unknown) {
   if (project && typeof project === "object" && !Array.isArray(project)) {
-    const record = { ...(project as Record<string, unknown>) };
+    const record = { ...(sanitizeStoredProject(project) as Record<string, unknown>) };
     if (!("defaultRuntimeId" in record)) {
       record.defaultRuntimeId = "runtime_local_docker";
     }

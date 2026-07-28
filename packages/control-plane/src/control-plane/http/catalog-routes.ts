@@ -85,6 +85,13 @@ export function registerCatalogRoutes({ app, service, events }: RegisterCatalogR
     return { data: result };
   });
 
+  app.get("/api/market/catalog", async () => ({ data: service.getMarketCatalog() }));
+  app.post("/api/market/refresh", async () => {
+    const result = await service.refreshMarketCatalog();
+    events.publish("market.catalog.updated", { revision: result.catalog.revision, source: result.catalog.source });
+    return { data: result };
+  });
+  app.get("/api/image-options", async () => ({ data: service.listImageOptions() }));
   app.get("/api/images", async () => ({ data: service.listImages() }));
   app.post("/api/images", async (request, reply) => {
     const image = service.createImage(request.body);

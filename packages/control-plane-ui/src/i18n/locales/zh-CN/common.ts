@@ -7,6 +7,14 @@ export const common = {
     codex: "Codex",
     claude: "Claude",
   },
+  imageCapabilities: {
+    browser: "浏览器",
+    terminal: "终端",
+    "gui-terminal": "桌面终端",
+    "vscode-web": "VS Code",
+    codex: "Codex",
+    claude: "Claude",
+  },
   actions: {
     add: "添加",
     back: "返回",

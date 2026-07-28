@@ -75,7 +75,7 @@ export function useWorkbenchInstances({ instances }: UseWorkbenchInstancesInput)
       return sortedInstances.value;
     }
     return sortedInstances.value.filter((instance) => {
-      const haystack = [instance.name, instance.project?.name, instance.projectId, instance.image?.name, instance.imageId, nodeLabel(instance), instance.nodeId]
+      const haystack = [instance.name, instance.project?.name, instance.projectId, instance.image?.name, instance.imageSelection?.imageId, nodeLabel(instance), instance.nodeId]
         .filter(Boolean)
         .join(" ")
         .toLowerCase();

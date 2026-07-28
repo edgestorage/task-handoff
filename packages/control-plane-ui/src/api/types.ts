@@ -126,7 +126,7 @@ export type Project = {
   id: string;
   name: string;
   source: ProjectSource;
-  defaultImageId?: string;
+  defaultImageSelection?: ImageSelection;
   defaultNodeId?: string;
   defaultRuntimeId?: string;
   workspacePolicy: WorkspacePolicy;
@@ -169,10 +169,26 @@ export type FederatedModelRegistry = {
   updatedAt: string;
 };
 
-export type ImageProfile = {
+export type ImageSelection = {
+  imageId: string;
+  tag?: string;
+};
+
+export type ImageCover =
+  | { kind: "builtin"; key: string }
+  | { kind: "remote"; url: string; sha256?: string };
+
+export type CustomImageProfile = {
   id: string;
+  origin: "custom";
   name: string;
+  description?: string;
+  localizedDescriptions?: Record<string, string>;
+  cover?: ImageCover;
   reference: string;
+  repository: string;
+  tag?: string;
+  digest?: string;
   pullPolicy: "if-not-present";
   capabilities: string[];
   optionalApps: string[];
@@ -182,27 +198,128 @@ export type ImageProfile = {
   updatedAt: string;
 };
 
+/** @deprecated Use CustomImageProfile for editable records or SelectableImage for choices. */
+export type ImageProfile = CustomImageProfile;
+
+export type MarketImageTag = {
+  name: string;
+  reference: string;
+  platforms: Array<{
+    os: string;
+    architecture: string;
+    variant?: string;
+    digest?: string;
+    downloadSizeBytes?: number;
+    unpackedSizeBytes?: number;
+  }>;
+  status: "active" | "deprecated" | "yanked";
+};
+
+export type MarketImage = {
+  id: string;
+  publisher: string;
+  slug: string;
+  name: string;
+  description: string;
+  localizedDescriptions?: Record<string, string>;
+  cover?: ImageCover;
+  repository: string;
+  defaultTag: string;
+  tags: MarketImageTag[];
+  capabilities: string[];
+  optionalApps: string[];
+  defaultEnv: Record<string, string>;
+  labels: Record<string, string>;
+  status: "active" | "deprecated" | "yanked";
+};
+
+export type MarketCatalog = {
+  catalog: {
+    protocolVersion: string;
+    catalogId: string;
+    revision: string;
+    source: "embedded" | "remote" | "cache";
+    generatedAt: string;
+    items: MarketImage[];
+  };
+  status: {
+    source: "embedded" | "remote" | "cache";
+    state: "ready" | "stale" | "failed";
+    revision?: string;
+    updatedAt: string;
+    error?: string;
+  };
+};
+
+export type SelectableImage = {
+  id: string;
+  origin: "market" | "custom";
+  name: string;
+  description?: string;
+  localizedDescriptions?: Record<string, string>;
+  cover?: ImageCover;
+  repository: string;
+  tag?: string;
+  reference: string;
+  digest?: string;
+  lifecycleStatus?: "active" | "deprecated" | "yanked";
+  availableTags: Array<{
+    name: string;
+    version?: string;
+    reference: string;
+    manifestDigest?: string;
+    status: "active" | "deprecated" | "yanked";
+  }>;
+  downloadSizeBytes?: number;
+  unpackedSizeBytes?: number;
+  capabilities: string[];
+  optionalApps: string[];
+  defaultEnv: Record<string, string>;
+  labels: Record<string, string>;
+  readOnly: boolean;
+  market?: { catalogId: string; catalogRevision: string; publisher: string; version?: string };
+};
+
 export type LocalDockerImage = {
   repository: string;
   tag: string;
   id: string;
   createdSince?: string;
   size?: string;
+  sizeBytes?: number;
   reference: string;
   repoDigests: string[];
 };
 
 export type NodeImageAvailability = {
-  image: ImageProfile;
+  image: SelectableImage;
   status: "available" | "pull-required" | "unknown";
   localImage?: LocalDockerImage;
+  localSizeBytes?: number;
+  downloadSizeBytes?: number;
+  unpackedSizeBytes?: number;
   error?: string;
 };
 
-export type InstanceImageSnapshot = Omit<ImageProfile, "reference"> & {
+export type InstanceImageSnapshot = {
+  id: string;
+  origin: "market" | "custom";
+  name: string;
+  description?: string;
+  localizedDescriptions?: Record<string, string>;
+  cover?: ImageCover;
+  repository: string;
+  tag?: string;
+  pullPolicy: "if-not-present";
+  capabilities: string[];
+  optionalApps: string[];
+  defaultEnv: Record<string, string>;
+  labels: Record<string, string>;
   requestedReference: string;
   resolvedDigest?: string;
   resolvedReference?: string;
+  catalogId?: string;
+  catalogRevision?: string;
 };
 
 export type ImageProvisioning = {
@@ -291,7 +408,7 @@ export type NodeLocalFolder = {
   nodeId: string;
   name: string;
   path: string;
-  defaultImageId?: string;
+  defaultImageSelection?: ImageSelection;
   labels: Record<string, string>;
   createdAt: string;
   updatedAt: string;
@@ -406,7 +523,7 @@ export type ControlledInstance = {
   modelSelection: ModelSelection;
   nodeId: string;
   runtimeId: string;
-  imageId?: string;
+  imageSelection?: ImageSelection;
   imageSnapshot?: InstanceImageSnapshot;
   imageProvisioning?: ImageProvisioning;
   stateRevision: number;
@@ -914,7 +1031,7 @@ export type InstanceBoardItem = Omit<ControlledInstance, "aiSessions"> & {
   aiSessions: InstanceBoardAiSummary;
   heartbeatAgeMs?: number;
   project?: Project;
-  image?: ImageProfile | InstanceImageSnapshot;
+  image?: SelectableImage | InstanceImageSnapshot;
   node?: Node;
   runtime?: NodeRuntime;
   protocolCompatible: boolean;
@@ -935,7 +1052,7 @@ export type CreateControlledInstanceInput = {
   projectId?: string;
   source?: ProjectSource;
   sourceSnapshot?: Record<string, unknown>;
-  imageId?: string;
+  imageSelection?: ImageSelection;
   nodeId: string;
   runtimeId: string;
   config?: {
@@ -966,7 +1083,7 @@ export type UpdateControlledInstanceInput = {
 export type CreateProjectInput = {
   name: string;
   source: ProjectSource;
-  defaultImageId?: string;
+  defaultImageSelection?: ImageSelection;
   defaultNodeId?: string;
   defaultRuntimeId?: string;
 };
@@ -1012,7 +1129,7 @@ export type UpdateNodeInput = Pick<Node, "name">;
 export type CreateNodeLocalFolderInput = {
   name: string;
   path: string;
-  defaultImageId?: string;
+  defaultImageSelection?: ImageSelection;
   labels?: Record<string, string>;
 };
 

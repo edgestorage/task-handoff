@@ -25,10 +25,85 @@
           <ControlPlaneSelectItem v-for="runtime in runtimesForSelectedNode" :key="runtime.id" :value="runtime.id">{{ runtime.name }}</ControlPlaneSelectItem>
         </ControlPlaneSelect>
       </label>
-      <label v-if="selectedRuntimeRequiresImage && !newImageOpen">
+      <div v-if="selectedRuntimeRequiresImage && !newImageOpen" class="image-picker-field">
         <span>{{ t("instances.create.image") }}</span>
-        <ControlPlaneSelect v-model="runtimeDraft.imageId" :placeholder="t('instances.create.selectImage')">
-          <ControlPlaneSelectItem v-for="image in images" :key="image.id" :value="image.id">{{ image.name }} · {{ availabilityLabel(image.id) }}</ControlPlaneSelectItem>
+        <Popover v-model:open="imagePickerOpen">
+          <PopoverTrigger as-child>
+            <button type="button" class="image-picker-trigger">
+              <template v-if="selectedImage">
+                <ImageArtwork compact class="image-picker-trigger-artwork" :cover="selectedImage.cover" :icon-size="18" :name="selectedImage.name" />
+                <span class="image-picker-trigger-copy">
+                  <strong>{{ selectedImage.name }}</strong>
+                  <small>{{ availabilityLabel(selectedImage.id) }}</small>
+                </span>
+              </template>
+              <span v-else class="image-picker-placeholder">{{ t("instances.create.selectImage") }}</span>
+              <ChevronDown :size="16" />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent
+            class="image-picker-popover"
+            align="start"
+            :collision-padding="12"
+            :side-offset="6"
+            :style="{ width: 'var(--reka-popover-trigger-width)', padding: '4px' }"
+          >
+            <label class="image-picker-search">
+              <Search :size="14" />
+              <input
+                ref="imageSearchInput"
+                v-model="imageSearch"
+                type="search"
+                :placeholder="t('instances.create.searchImages')"
+                :aria-label="t('instances.create.searchImages')"
+              />
+            </label>
+            <ScrollArea class="image-picker-list">
+              <div class="image-picker-list-content" role="listbox" :aria-label="t('instances.create.image')">
+                <section v-for="group in filteredImageGroups" :key="group.key" class="image-picker-group" role="group" :aria-label="group.label">
+                  <div class="image-picker-group-label">{{ group.label }} · {{ group.images.length }}</div>
+                  <div class="image-picker-options">
+                    <button
+                      v-for="image in group.images"
+                      :key="image.id"
+                      type="button"
+                      role="option"
+                      class="image-picker-option"
+                      :class="{ selected: image.id === runtimeDraft.imageId }"
+                      :aria-selected="image.id === runtimeDraft.imageId"
+                      @click="selectImage(image.id)"
+                    >
+                      <ImageArtwork compact class="image-picker-option-artwork" :cover="image.cover" :icon-size="16" :name="image.name" />
+                      <span class="image-picker-option-copy">
+                        <span class="image-picker-option-head">
+                          <strong>{{ image.name }}</strong>
+                          <small :data-status="availabilityStatus(image.id)">{{ availabilityLabel(image.id) }}</small>
+                        </span>
+                        <span v-if="localizedImageDescription(image)" class="image-picker-option-description">{{ localizedImageDescription(image) }}</span>
+                        <span class="image-picker-option-meta">
+                          <code>{{ image.reference }}</code>
+                          <span class="image-picker-option-capabilities">
+                            <small v-for="capability in image.capabilities.slice(0, 3)" :key="capability">{{ capabilityLabel(capability) }}</small>
+                            <small v-if="image.capabilities.length > 3">+{{ image.capabilities.length - 3 }}</small>
+                          </span>
+                        </span>
+                      </span>
+                      <Check v-if="image.id === runtimeDraft.imageId" :size="15" />
+                    </button>
+                  </div>
+                </section>
+                <div v-if="!filteredImageGroups.length" class="image-picker-empty">{{ t("instances.create.noImagesFound") }}</div>
+              </div>
+            </ScrollArea>
+          </PopoverContent>
+        </Popover>
+      </div>
+      <label v-if="selectedImage?.origin === 'market' && selectedImage.availableTags.length > 1 && !newImageOpen">
+        <span>{{ t("instances.create.imageTag") }}</span>
+        <ControlPlaneSelect v-model="runtimeDraft.imageTag" :placeholder="t('instances.create.selectImageTag')">
+          <ControlPlaneSelectItem v-for="tag in selectableTags" :key="tag.name" :value="tag.name">
+            {{ tag.name }}<template v-if="tag.status !== 'active'"> · {{ lifecycleLabel(tag.status) }}</template>
+          </ControlPlaneSelectItem>
         </ControlPlaneSelect>
       </label>
     </div>
@@ -105,27 +180,31 @@
 </template>
 
 <script setup lang="ts">
-import { CircleAlert, CircleCheck, ExternalLink, LoaderCircle, Plus, RefreshCw } from "@lucide/vue";
-import { computed } from "vue";
+import { Check, ChevronDown, CircleAlert, CircleCheck, ExternalLink, LoaderCircle, Plus, RefreshCw, Search } from "@lucide/vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import type { ImageProfile, ModelConfig, Node, NodeImageAvailability, NodeRuntime } from "../../../api/types";
+import type { ModelConfig, Node, NodeImageAvailability, NodeRuntime, SelectableImage } from "../../../api/types";
 import { Button } from "../../../components/ui/button";
 import { Card, CardContent } from "../../../components/ui/card";
 import { Checkbox } from "../../../components/ui/checkbox";
+import { Popover, PopoverContent, PopoverTrigger } from "../../../components/ui/popover";
+import { ScrollArea } from "../../../components/ui/scroll-area";
+import ImageArtwork from "../shared/ImageArtwork.vue";
+import { resolveImageDescription } from "../shared/imageDescription";
 import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
 import type { InstanceDraft, NewImageDraft, RuntimeDraft } from "./newInstanceTypes";
 import { dockerInstallGuidance, type DockerRuntimeCheckState } from "./dockerRuntimeGuidance";
 
-const { t } = useI18n();
+const { locale, t } = useI18n();
 
 const props = defineProps<{
   canCreateImage: boolean;
   creatingImage: boolean;
   dockerRuntimeCheckMessage: string;
   dockerRuntimeCheckState: DockerRuntimeCheckState;
-  images: ImageProfile[];
+  images: SelectableImage[];
   imageAvailability: NodeImageAvailability[];
   instanceDraft: InstanceDraft;
   models: ModelConfig[];
@@ -142,6 +221,35 @@ const props = defineProps<{
 
 const defaultModelValue = "__default__";
 const noModelValue = "__none__";
+const imagePickerOpen = ref(false);
+const imageSearch = ref("");
+const imageSearchInput = ref<HTMLInputElement>();
+const normalizedImageSearch = computed(() => imageSearch.value.trim().toLocaleLowerCase());
+const imageMatchesSearch = (image: SelectableImage) => !normalizedImageSearch.value || [
+  image.name,
+  image.description,
+  ...Object.values(image.localizedDescriptions || {}),
+  image.reference,
+  image.repository,
+  image.market?.publisher,
+  ...image.capabilities,
+  ...image.optionalApps,
+].filter(Boolean).join(" ").toLocaleLowerCase().includes(normalizedImageSearch.value);
+const imageGroups = computed(() => [
+  { key: "market", label: t("instances.create.marketImages"), images: props.images.filter((image) => image.origin === "market") },
+  { key: "custom", label: t("instances.create.customImages"), images: props.images.filter((image) => image.origin === "custom") },
+]);
+const filteredImageGroups = computed(() => imageGroups.value
+  .map((group) => ({ ...group, images: group.images.filter(imageMatchesSearch) }))
+  .filter((group) => group.images.length));
+const selectedImage = computed(() => props.images.find((image) => image.id === props.runtimeDraft.imageId));
+const localizedImageDescription = (image: SelectableImage) => resolveImageDescription(image, locale.value);
+const selectableTags = computed(() => selectedImage.value?.availableTags.filter((tag) => tag.status !== "yanked") || []);
+const lifecycleLabel = (status: string) => t(`instances.create.lifecycle.${status}`);
+const selectImage = (imageId: string) => {
+  props.runtimeDraft.imageId = imageId;
+  imagePickerOpen.value = false;
+};
 const installGuidance = computed(() => dockerInstallGuidance(props.selectedNodePlatform));
 const installGuidanceLabel = computed(() => t(`instances.create.docker.install.${installGuidance.value.kind}Label`));
 const installGuidanceMessage = computed(() => t(`instances.create.docker.install.${installGuidance.value.kind}Message`));
@@ -157,14 +265,24 @@ const dockerCheckTitle = computed(() => props.dockerRuntimeCheckState === "onlin
 const dockerCheckFallback = computed(() => props.dockerRuntimeCheckState === "idle"
   ? t("instances.create.docker.mustCheck")
   : t("instances.create.docker.unverified"));
+const availabilityStatus = (imageId: string) => props.imageAvailability.find((item) => item.image.id === imageId)?.status || "unknown";
 const availabilityLabel = (imageId: string) => {
-  const status = props.imageAvailability.find((item) => item.image.id === imageId)?.status || "unknown";
+  const status = availabilityStatus(imageId);
   return status === "available"
     ? t("instances.create.availability.available")
     : status === "pull-required"
       ? t("instances.create.availability.pullRequired")
       : t("instances.create.availability.unknown");
 };
+const capabilityLabel = (capability: string) => t(`common.imageCapabilities.${capability}`, capability);
+watch(imagePickerOpen, async (open) => {
+  if (!open) {
+    imageSearch.value = "";
+    return;
+  }
+  await nextTick();
+  imageSearchInput.value?.focus();
+});
 const eligibleModels = computed(() => props.models.filter((model) => model.locations?.some((location) => location.type === "control-plane" || (location.type === "node" && location.nodeId === props.runtimeDraft.nodeId))));
 const codexModels = computed(() => eligibleModels.value.filter((model) => model.app === "codex"));
 const claudeModels = computed(() => eligibleModels.value.filter((model) => model.app === "claude"));
@@ -218,6 +336,262 @@ defineEmits<{
   padding: 0;
 }
 
+.image-picker-field {
+  display: grid;
+  grid-column: 1 / -1;
+  min-width: 0;
+  gap: 7px;
+}
+
+.image-picker-field > span {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.image-picker-trigger {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  min-height: 56px;
+  gap: 11px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-raised);
+  color: var(--text);
+  cursor: pointer;
+  padding: 6px 12px 6px 7px;
+  text-align: left;
+}
+
+.image-picker-trigger:hover,
+.image-picker-trigger:focus-visible,
+.image-picker-trigger[data-state="open"] {
+  border-color: var(--line-strong);
+  background: var(--surface-hover);
+  outline: none;
+}
+
+.image-picker-trigger-artwork {
+  width: 42px;
+  height: 42px;
+  min-height: 42px;
+  border-radius: 8px;
+}
+
+.image-picker-trigger-copy,
+.image-picker-option > span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.image-picker-trigger-copy strong,
+.image-picker-trigger-copy small,
+.image-picker-option strong,
+.image-picker-option small,
+.image-picker-placeholder {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.image-picker-trigger-copy strong {
+  color: var(--text-strong);
+  font-size: 12px;
+}
+
+.image-picker-trigger-copy small,
+.image-picker-placeholder {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+:global(.image-picker-popover) {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: var(--reka-popover-trigger-width);
+  max-width: calc(100vw - 24px);
+  max-height: min(440px, var(--reka-popover-content-available-height));
+  overflow: hidden;
+  border-color: var(--line);
+  background: var(--surface-raised);
+  padding: 4px;
+}
+
+.image-picker-search {
+  display: flex;
+  height: 34px;
+  align-items: center;
+  gap: 7px;
+  margin: 2px 2px 4px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 7px;
+  background: var(--surface-inset);
+  color: var(--text-muted);
+  padding: 0 9px;
+}
+
+.image-picker-search:focus-within {
+  border-color: var(--focus-ring);
+}
+
+.image-picker-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.image-picker-search input::placeholder {
+  color: var(--text-subtle);
+}
+
+.image-picker-list {
+  min-height: 0;
+  max-height: none;
+}
+
+.image-picker-list-content {
+  min-width: 0;
+  padding-right: 8px;
+}
+
+.image-picker-group {
+  display: grid;
+}
+
+.image-picker-group + .image-picker-group {
+  border-top: 1px solid var(--line-subtle);
+}
+
+.image-picker-group-label {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 650;
+  padding: 7px 8px 3px;
+}
+
+.image-picker-options {
+  display: grid;
+  gap: 2px;
+}
+
+.image-picker-option {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) 15px;
+  align-items: center;
+  min-width: 0;
+  min-height: 66px;
+  gap: 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  padding: 7px 9px;
+  text-align: left;
+}
+
+.image-picker-option:hover,
+.image-picker-option:focus-visible {
+  background: var(--surface-active);
+  outline: none;
+}
+
+.image-picker-option.selected {
+  background: var(--surface-active);
+  color: var(--status-success);
+}
+
+.image-picker-option-artwork {
+  width: 36px;
+  height: 36px;
+  min-height: 36px;
+  border-radius: 7px;
+}
+
+.image-picker-option-copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.image-picker-option-head,
+.image-picker-option-meta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
+
+.image-picker-option-head strong {
+  min-width: 0;
+  flex: 1 1 auto;
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.image-picker-option-head small {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--surface-subtle);
+  color: var(--text-muted);
+  font-size: 10px;
+  padding: 2px 6px;
+}
+
+.image-picker-option-head small[data-status="available"] {
+  background: var(--status-success-bg);
+  color: var(--status-success);
+}
+
+.image-picker-option-description {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.image-picker-option-meta code {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: var(--text-subtle);
+  font: 12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.image-picker-option-capabilities {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 3px;
+}
+
+.image-picker-option-capabilities small {
+  border: 1px solid var(--line-subtle);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 16px;
+  padding: 0 4px;
+}
+
+.image-picker-empty {
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 24px 12px;
+  text-align: center;
+}
+
 .section-head button:not(.inline-flex):hover,
 .section-head button:not(.inline-flex):focus-visible {
   color: var(--white);
@@ -232,7 +606,7 @@ defineEmits<{
 }
 
 .runtime-fields {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .docker-runtime-check {
@@ -268,7 +642,7 @@ defineEmits<{
 
 .docker-runtime-check-content span {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .docker-runtime-check-spin {

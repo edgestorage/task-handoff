@@ -62,7 +62,7 @@
             :creating-image="creatingImage"
             :docker-runtime-check-message="dockerRuntimeCheckMessage"
             :docker-runtime-check-state="dockerRuntimeCheck.state"
-            :images="images.data.value || []"
+            :images="imageOptions.data.value || []"
             :image-availability="imageAvailability.data.value || []"
             :instance-draft="instanceDraft"
             :models="models.data.value || []"
@@ -104,7 +104,7 @@ import { useQueryClient } from "@tanstack/vue-query";
 import { ArrowRight, Plus, X } from "@lucide/vue";
 import { useI18n } from "vue-i18n";
 import { translateApiError } from "../../i18n/apiError";
-import { checkNodeRuntime, createControlledInstance, createImage, createProject, listNodeFolderTree, useImagesQuery, useModelsQuery, useNodeImageAvailabilityQuery, useNodeLocalFoldersQuery, useNodeRuntimesQuery, useNodesQuery, useProjectsQuery } from "../../api/queries";
+import { checkNodeRuntime, createControlledInstance, createImage, createProject, listNodeFolderTree, useImageOptionsQuery, useModelsQuery, useNodeImageAvailabilityQuery, useNodeLocalFoldersQuery, useNodeRuntimesQuery, useNodesQuery, useProjectsQuery } from "../../api/queries";
 import type { CreateControlledInstanceResult, InstanceBoardItem } from "../../api/types";
 import { Button } from "../../components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "../../components/ui/dialog";
@@ -139,7 +139,7 @@ const CONTROL_PLANE_LOCAL_NODE_LABEL = "task-handoff.control-plane.local";
 const queryClient = useQueryClient();
 const projects = useProjectsQuery();
 const models = useModelsQuery();
-const images = useImagesQuery();
+const imageOptions = useImageOptionsQuery();
 const nodes = useNodesQuery();
 const nodeRuntimes = useNodeRuntimesQuery();
 
@@ -183,6 +183,7 @@ const runtimeDraft = reactive<RuntimeDraft>({
   nodeId: "",
   runtimeId: "",
   imageId: "",
+  imageTag: "",
 });
 const imageAvailability = useNodeImageAvailabilityQuery(() => runtimeDraft.nodeId);
 const instanceDraft = reactive<InstanceDraft>({
@@ -338,7 +339,7 @@ watch(
 );
 
 watch(
-  () => images.data.value,
+  () => imageOptions.data.value,
   (items) => {
     const imageItems = items || [];
     if (runtimeDraft.imageId && !imageItems.some((image) => image.id === runtimeDraft.imageId)) {
@@ -347,8 +348,24 @@ watch(
     if (!runtimeDraft.imageId && imageItems[0]) {
       runtimeDraft.imageId = imageItems[0].id;
     }
+    const selected = imageItems.find((image) => image.id === runtimeDraft.imageId);
+    if (selected?.origin === "market" && !selected.availableTags.some((tag) => tag.name === runtimeDraft.imageTag && tag.status !== "yanked")) {
+      runtimeDraft.imageTag = selected.tag || selected.availableTags.find((tag) => tag.status !== "yanked")?.name || "";
+    } else if (selected?.origin !== "market") {
+      runtimeDraft.imageTag = "";
+    }
   },
   { immediate: true },
+);
+
+watch(
+  () => runtimeDraft.imageId,
+  (imageId) => {
+    const selected = imageOptions.data.value?.find((image) => image.id === imageId);
+    runtimeDraft.imageTag = selected?.origin === "market"
+      ? selected.tag || selected.availableTags.find((tag) => tag.status !== "yanked")?.name || ""
+      : "";
+  },
 );
 
 watch(
@@ -406,7 +423,7 @@ watch(
       return;
     }
     if (!runtimeDraft.imageId) {
-      runtimeDraft.imageId = images.data.value?.[0]?.id || "";
+      runtimeDraft.imageId = imageOptions.data.value?.[0]?.id || "";
     }
   },
 );
@@ -501,18 +518,18 @@ function previousStep() {
 
 function deriveRuntimeDefaults() {
   const firstNodeId = nodes.data.value?.[0]?.id || "";
-  const firstImageId = images.data.value?.[0]?.id || "";
+  const firstImageId = imageOptions.data.value?.[0]?.id || "";
   if (sourceDraft.mode === "project") {
     const project = selectedProject.value;
     const nodeId = project?.defaultNodeId || runtimeDraft.nodeId || firstNodeId;
     runtimeDraft.nodeId = nodeId;
     runtimeDraft.runtimeId = runtimeIdForNode(nodeId, project?.defaultRuntimeId || runtimeDraft.runtimeId);
-    runtimeDraft.imageId = selectedRuntimeRequiresImage.value ? project?.defaultImageId || runtimeDraft.imageId || firstImageId : "";
+    runtimeDraft.imageId = selectedRuntimeRequiresImage.value ? project?.defaultImageSelection?.imageId || runtimeDraft.imageId || firstImageId : "";
     return;
   }
   runtimeDraft.nodeId = sourceDraft.localNodeId || runtimeDraft.nodeId || firstNodeId;
   runtimeDraft.runtimeId = runtimeIdForNode(runtimeDraft.nodeId, runtimeDraft.runtimeId);
-  runtimeDraft.imageId = selectedRuntimeRequiresImage.value ? selectedLocalFolder.value?.defaultImageId || runtimeDraft.imageId || firstImageId : "";
+  runtimeDraft.imageId = selectedRuntimeRequiresImage.value ? selectedLocalFolder.value?.defaultImageSelection?.imageId || runtimeDraft.imageId || firstImageId : "";
 }
 
 function ensureRuntimeForNode() {
@@ -609,7 +626,7 @@ async function createInstance() {
                   path: localFolderPath.value,
                 },
           }),
-      ...(selectedRuntimeRequiresImage.value ? { imageId: runtimeDraft.imageId } : {}),
+      ...(selectedRuntimeRequiresImage.value ? { imageSelection: { imageId: runtimeDraft.imageId, ...(runtimeDraft.imageTag ? { tag: runtimeDraft.imageTag } : {}) } } : {}),
       nodeId: runtimeDraft.nodeId,
       runtimeId: runtimeDraft.runtimeId,
       config: {
@@ -658,7 +675,7 @@ async function createQuickProject() {
         auth: { type: "none" },
         clone: { submodules: false, lfs: false, subdirectory: "" },
       },
-      defaultImageId: images.data.value?.[0]?.id,
+      defaultImageSelection: imageOptions.data.value?.[0] ? { imageId: imageOptions.data.value[0].id } : undefined,
       defaultNodeId: firstNodeId,
       defaultRuntimeId: nodeRuntimes.data.value?.find((runtime) => runtime.nodeId === firstNodeId)?.id,
     });
@@ -667,7 +684,7 @@ async function createQuickProject() {
     newProjectOpen.value = false;
     sourceDraft.mode = "project";
     sourceDraft.projectId = project.id;
-    runtimeDraft.imageId = project.defaultImageId || images.data.value?.[0]?.id || "";
+    runtimeDraft.imageId = project.defaultImageSelection?.imageId || imageOptions.data.value?.[0]?.id || "";
     runtimeDraft.nodeId = project.defaultNodeId || nodes.data.value?.[0]?.id || "";
     runtimeDraft.runtimeId = project.defaultRuntimeId || runtimeIdForNode(runtimeDraft.nodeId);
     createdProjectName = t("instances.create.feedback.namedCreated", { name: project.name });

@@ -10,7 +10,8 @@ import {
 } from "./ai-sessions.ts";
 import { TriggerConfigSchema, TriggerDeploymentSchema, TriggerRunSchema, TriggerRuntimeStateSchema } from "./triggers.ts";
 
-export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-07-27";
+export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-07-28";
+export const MARKET_CATALOG_PROTOCOL_VERSION = "2026-07-29";
 // The local value follows the date-only convention. Parsing remains permissive
 // so persisted records written before that convention do not disappear.
 export const ProtocolVersionSchema = z.string();
@@ -19,6 +20,7 @@ const IdSchema = z.string().trim().min(1).max(120).regex(/^[a-zA-Z0-9][a-zA-Z0-9
 const TimestampSchema = z.string().datetime();
 const LabelsSchema = z.record(z.string(), z.string()).default({});
 const StringRecordSchema = z.record(z.string(), z.string()).default({});
+const DateProtocolVersionSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Protocol version must use YYYY-MM-DD format.");
 
 const DockerTagPattern = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/;
 const DockerDigestPattern = /^sha256:([a-fA-F0-9]{64})$/;
@@ -59,6 +61,22 @@ export function normalizeDockerImageReference(input: string) {
   return `${normalizedName}${tag ? `:${tag}` : ""}${normalizedDigest ? `@${normalizedDigest}` : ""}`;
 }
 
+export function parseDockerImageReference(input: string) {
+  const reference = normalizeDockerImageReference(input);
+  const at = reference.indexOf("@");
+  const digest = at === -1 ? undefined : reference.slice(at + 1);
+  const base = at === -1 ? reference : reference.slice(0, at);
+  const lastSlash = base.lastIndexOf("/");
+  const lastColon = base.lastIndexOf(":");
+  const hasTag = lastColon > lastSlash;
+  return {
+    reference,
+    repository: hasTag ? base.slice(0, lastColon) : base,
+    tag: hasTag ? base.slice(lastColon + 1) : undefined,
+    digest,
+  };
+}
+
 export const DockerImageReferenceSchema = z.string().trim().min(1).max(512).transform((value, context) => {
   try {
     return normalizeDockerImageReference(value);
@@ -86,6 +104,47 @@ export const ModelSelectionSchema = z
   })
   .strict()
   .default({});
+
+export const ImageSelectionSchema = z.object({
+  imageId: IdSchema,
+  tag: z.string().trim().min(1).max(128).regex(DockerTagPattern).optional(),
+}).strict();
+
+export const LEGACY_MARKET_IMAGE_IDS: Record<string, string> = {
+  img_default: "market_taskhandoff_browser",
+  img_codex: "market_taskhandoff_codex",
+  img_ai: "market_taskhandoff_ai",
+};
+
+export function migrateLegacyImageSelection(input: unknown, legacyImageId?: unknown) {
+  if (input && typeof input === "object" && !Array.isArray(input)) {
+    const source = input as Record<string, unknown>;
+    const imageId = typeof source.imageId === "string" ? (LEGACY_MARKET_IMAGE_IDS[source.imageId] || source.imageId) : source.imageId;
+    return { imageId, ...(typeof source.tag === "string" ? { tag: source.tag } : {}) };
+  }
+  if (typeof legacyImageId === "string") return { imageId: LEGACY_MARKET_IMAGE_IDS[legacyImageId] || legacyImageId };
+  return undefined;
+}
+
+export function sanitizeStoredProject(input: unknown) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+  const source = input as Record<string, unknown>;
+  const { defaultImageId, ...record } = source;
+  return {
+    ...record,
+    defaultImageSelection: migrateLegacyImageSelection(source.defaultImageSelection, defaultImageId),
+  };
+}
+
+export function sanitizeStoredNodeLocalFolder(input: unknown) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+  const source = input as Record<string, unknown>;
+  const { defaultImageId, ...record } = source;
+  return {
+    ...record,
+    defaultImageSelection: migrateLegacyImageSelection(source.defaultImageSelection, defaultImageId),
+  };
+}
 
 export const InstanceAppInventoryItemSchema = z
   .object({
@@ -364,7 +423,7 @@ export const GitRepositorySchema = z
     ref: GitRefSchema.default({ type: "branch", name: "main" }),
     auth: GitAuthSchema.default({ type: "none" }),
     clone: GitCloneOptionsSchema.default({ submodules: false, lfs: false, subdirectory: "" }),
-    defaultImageId: IdSchema.optional(),
+    defaultImageSelection: ImageSelectionSchema.optional(),
     labels: LabelsSchema,
     createdAt: TimestampSchema,
     updatedAt: TimestampSchema,
@@ -377,7 +436,7 @@ export const NodeLocalFolderSchema = z
     nodeId: IdSchema,
     name: z.string().trim().min(1).max(160),
     path: z.string().trim().min(1).max(4096),
-    defaultImageId: IdSchema.optional(),
+    defaultImageSelection: ImageSelectionSchema.optional(),
     labels: LabelsSchema,
     createdAt: TimestampSchema,
     updatedAt: TimestampSchema,
@@ -432,7 +491,7 @@ export const ProjectSchema = z
     id: IdSchema,
     name: z.string().trim().min(1).max(160),
     source: ProjectSourceSchema,
-    defaultImageId: IdSchema.optional(),
+    defaultImageSelection: ImageSelectionSchema.optional(),
     defaultNodeId: IdSchema.optional(),
     defaultRuntimeId: IdSchema.optional(),
     workspacePolicy: WorkspacePolicySchema,
@@ -538,25 +597,199 @@ export function modelConfigHash(input: Pick<z.infer<typeof ModelConfigSchema>, "
   return `mdl_${crypto.createHash("sha256").update(JSON.stringify(canonical)).digest("hex")}`;
 }
 
-export const ImageProfileSchema = z
-  .object({
-    id: IdSchema,
-    name: z.string().trim().min(1).max(160),
-    reference: DockerImageReferenceSchema,
-    pullPolicy: z.literal("if-not-present").default("if-not-present"),
-    capabilities: z.array(z.string().trim().min(1).max(80)).default([]),
-    optionalApps: z.array(z.string().trim().min(1).max(120)).default([]),
-    defaultEnv: StringRecordSchema,
-    labels: LabelsSchema,
-    createdAt: TimestampSchema,
-    updatedAt: TimestampSchema,
-  })
-  .strict();
+export const ImageOriginSchema = z.enum(["market", "custom"]);
+export const MarketLifecycleStatusSchema = z.enum(["active", "deprecated", "yanked"]);
 
-export const InstanceImageSnapshotSchema = ImageProfileSchema.omit({ reference: true }).extend({
+export const ImageCoverSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("builtin"),
+    key: z.string().trim().min(1).max(120),
+  }).strict(),
+  z.object({
+    kind: z.literal("remote"),
+    url: z.string().trim().url().max(2048),
+    mediaType: z.enum(["image/png", "image/jpeg", "image/webp"]).optional(),
+    digest: DockerImageDigestSchema.optional(),
+  }).strict(),
+]);
+
+export const DEFAULT_IMAGE_COVER = { kind: "builtin", key: "default-image-cover" } as const;
+
+const ImageCapabilitiesSchema = z.array(z.string().trim().min(1).max(80)).default([]);
+const ImageOptionalAppsSchema = z.array(z.string().trim().min(1).max(120)).default([]);
+const LocalizedImageDescriptionsSchema = z.record(
+  z.string().trim().min(2).max(35),
+  z.string().trim().min(1).max(4096),
+);
+
+export const MarketImagePlatformArtifactSchema = z.object({
+  os: z.string().trim().min(1).max(40),
+  architecture: z.string().trim().min(1).max(40),
+  digest: DockerImageDigestSchema.optional(),
+  downloadSizeBytes: z.number().int().positive().optional(),
+  unpackedSizeBytes: z.number().int().positive().optional(),
+}).strict();
+
+export const MarketImageTagSchema = z.object({
+  name: z.string().trim().min(1).max(128).regex(DockerTagPattern),
+  version: z.string().trim().min(1).max(160).optional(),
+  reference: DockerImageReferenceSchema,
+  manifestDigest: DockerImageDigestSchema.optional(),
+  publishedAt: TimestampSchema.optional(),
+  platforms: z.array(MarketImagePlatformArtifactSchema).default([]),
+  status: MarketLifecycleStatusSchema.default("active"),
+}).strict();
+
+export const MarketImageSchema = z.object({
+  id: IdSchema,
+  publisher: z.string().trim().min(1).max(160),
+  slug: z.string().trim().min(1).max(160),
+  name: z.string().trim().min(1).max(160),
+  description: z.string().trim().min(1).max(4096),
+  localizedDescriptions: LocalizedImageDescriptionsSchema.optional(),
+  cover: ImageCoverSchema.optional(),
+  repository: z.string().trim().min(1).max(512),
+  defaultTag: z.string().trim().min(1).max(128).regex(DockerTagPattern),
+  tags: z.array(MarketImageTagSchema).min(1),
+  capabilities: ImageCapabilitiesSchema,
+  optionalApps: ImageOptionalAppsSchema,
+  defaultEnv: StringRecordSchema,
+  labels: LabelsSchema,
+  status: MarketLifecycleStatusSchema.default("active"),
+}).strict().superRefine((image, context) => {
+  if (!image.tags.some((tag) => tag.name === image.defaultTag)) {
+    context.addIssue({ code: "custom", path: ["defaultTag"], message: "Market defaultTag must identify one of the image tags." });
+  }
+});
+
+export const MarketCatalogSnapshotSchema = z.object({
+  protocolVersion: DateProtocolVersionSchema,
+  catalogId: IdSchema,
+  revision: z.string().trim().min(1).max(240),
+  source: z.enum(["embedded", "remote", "cache"]),
+  generatedAt: TimestampSchema,
+  expiresAt: TimestampSchema.optional(),
+  items: z.array(MarketImageSchema),
+}).strict();
+
+export const MarketCatalogStatusSchema = z.object({
+  source: z.enum(["embedded", "remote", "cache"]),
+  state: z.enum(["ready", "refreshing", "stale", "failed"]),
+  revision: z.string().trim().min(1).max(240),
+  updatedAt: TimestampSchema,
+  error: z.string().trim().max(4096).optional(),
+}).strict();
+
+export function sanitizeStoredMarketCatalogSnapshot(
+  input: unknown,
+  onWarning?: (warning: { itemId?: string; field: string }) => void,
+) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+  const source = input as Record<string, unknown>;
+  const topLevelKeys = ["protocolVersion", "catalogId", "revision", "source", "generatedAt", "expiresAt", "items"];
+  for (const key of Object.keys(source)) if (!topLevelKeys.includes(key)) onWarning?.({ field: key });
+  const items = Array.isArray(source.items) ? source.items.flatMap((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      onWarning?.({ field: "items" });
+      return [];
+    }
+    const record = item as Record<string, unknown>;
+    const itemKeys = ["id", "publisher", "slug", "name", "description", "localizedDescriptions", "cover", "repository", "defaultTag", "tags", "capabilities", "optionalApps", "defaultEnv", "labels", "status"];
+    for (const key of Object.keys(record)) if (!itemKeys.includes(key)) onWarning?.({ itemId: typeof record.id === "string" ? record.id : undefined, field: key });
+    const parsed = MarketImageSchema.safeParse(pickObjectFields(record, itemKeys));
+    if (!parsed.success) {
+      onWarning?.({ itemId: typeof record.id === "string" ? record.id : undefined, field: "invalid-record" });
+      return [];
+    }
+    return [parsed.data];
+  }) : source.items;
+  return { ...(pickObjectFields(source, topLevelKeys) as Record<string, unknown>), items };
+}
+
+export const CustomImageProfileSchema = z.object({
+  id: IdSchema,
+  origin: z.literal("custom"),
+  name: z.string().trim().min(1).max(160),
+  description: z.string().trim().max(4096).optional(),
+  localizedDescriptions: LocalizedImageDescriptionsSchema.optional(),
+  cover: ImageCoverSchema.optional(),
+  reference: DockerImageReferenceSchema,
+  repository: z.string().trim().min(1).max(512),
+  tag: z.string().trim().min(1).max(128).regex(DockerTagPattern).optional(),
+  pullPolicy: z.literal("if-not-present").default("if-not-present"),
+  capabilities: ImageCapabilitiesSchema,
+  optionalApps: ImageOptionalAppsSchema,
+  defaultEnv: StringRecordSchema,
+  labels: LabelsSchema,
+  createdAt: TimestampSchema,
+  updatedAt: TimestampSchema,
+}).strict();
+
+// Kept as a source-level alias while consumers move to the explicit Custom type.
+export const ImageProfileSchema = CustomImageProfileSchema;
+
+export const SelectableImageTagSchema = z.object({
+  name: z.string().trim().min(1).max(128).regex(DockerTagPattern),
+  version: z.string().trim().min(1).max(160).optional(),
+  reference: DockerImageReferenceSchema,
+  manifestDigest: DockerImageDigestSchema.optional(),
+  status: MarketLifecycleStatusSchema,
+}).strict();
+
+export const SelectableImageSchema = z.object({
+  id: IdSchema,
+  origin: ImageOriginSchema,
+  name: z.string().trim().min(1).max(160),
+  description: z.string().trim().max(4096).optional(),
+  localizedDescriptions: LocalizedImageDescriptionsSchema.optional(),
+  cover: ImageCoverSchema,
+  repository: z.string().trim().min(1).max(512),
+  tag: z.string().trim().min(1).max(128).regex(DockerTagPattern).optional(),
+  availableTags: z.array(SelectableImageTagSchema),
+  reference: DockerImageReferenceSchema,
+  digest: DockerImageDigestSchema.optional(),
+  downloadSizeBytes: z.number().int().positive().optional(),
+  unpackedSizeBytes: z.number().int().positive().optional(),
+  capabilities: ImageCapabilitiesSchema,
+  optionalApps: ImageOptionalAppsSchema,
+  defaultEnv: StringRecordSchema,
+  labels: LabelsSchema,
+  readOnly: z.boolean(),
+  lifecycleStatus: MarketLifecycleStatusSchema.optional(),
+  market: z.object({
+    catalogId: IdSchema,
+    catalogRevision: z.string().trim().min(1).max(240),
+    publisher: z.string().trim().min(1).max(160),
+    version: z.string().trim().min(1).max(160).optional(),
+  }).strict().optional(),
+}).strict();
+
+export const InstanceImageSnapshotSchema = z.object({
+  id: IdSchema,
+  origin: ImageOriginSchema,
+  name: z.string().trim().min(1).max(160),
+  description: z.string().trim().max(4096).optional(),
+  localizedDescriptions: LocalizedImageDescriptionsSchema.optional(),
+  cover: ImageCoverSchema.optional(),
+  repository: z.string().trim().min(1).max(512),
+  tag: z.string().trim().min(1).max(128).regex(DockerTagPattern).optional(),
   requestedReference: DockerImageReferenceSchema,
   resolvedDigest: DockerImageDigestSchema.optional(),
   resolvedReference: DockerImageReferenceSchema.optional(),
+  downloadSizeBytes: z.number().int().positive().optional(),
+  pullPolicy: z.literal("if-not-present").default("if-not-present"),
+  capabilities: ImageCapabilitiesSchema,
+  optionalApps: ImageOptionalAppsSchema,
+  defaultEnv: StringRecordSchema,
+  labels: LabelsSchema,
+  market: z.object({
+    catalogId: IdSchema,
+    catalogRevision: z.string().trim().min(1).max(240),
+    publisher: z.string().trim().min(1).max(160),
+    version: z.string().trim().min(1).max(160).optional(),
+  }).strict().optional(),
+  createdAt: TimestampSchema,
+  updatedAt: TimestampSchema,
 }).strict();
 
 export const ImageProvisioningSchema = z.object({
@@ -617,6 +850,8 @@ export function sanitizeStoredImageProfile(
 ) {
   if (!input || typeof input !== "object" || Array.isArray(input)) return input;
   const source = input as Record<string, unknown>;
+  const knownKeys = new Set(["id", "origin", "name", "description", "localizedDescriptions", "cover", "reference", "repository", "tag", "image", "registry", "pullPolicy", "capabilities", "optionalApps", "defaultEnv", "labels", "createdAt", "updatedAt"]);
+  for (const key of Object.keys(source)) if (!knownKeys.has(key)) onWarning?.({ imageId: typeof source.id === "string" ? source.id : undefined, field: key });
   const imageId = typeof source.id === "string" ? source.id : undefined;
   const legacyReference = typeof source.image === "string" ? source.image : undefined;
   if (legacyReference !== undefined) onWarning?.({ imageId, field: "image" });
@@ -636,10 +871,22 @@ export function sanitizeStoredImageProfile(
       }
     }
   }
+  let parsedReference: ReturnType<typeof parseDockerImageReference> | undefined;
+  try {
+    parsedReference = reference ? parseDockerImageReference(reference) : undefined;
+  } catch {
+    // Leave invalid historical values for record-level schema isolation.
+  }
   return {
     id: source.id,
+    origin: "custom",
     name: source.name,
-    reference,
+    description: source.description,
+    localizedDescriptions: source.localizedDescriptions,
+    cover: pickObjectFields(source.cover, ["kind", "key", "url", "mediaType", "digest"]),
+    reference: parsedReference?.reference ?? reference,
+    repository: parsedReference?.repository ?? source.repository,
+    tag: parsedReference?.tag ?? source.tag,
     pullPolicy: source.pullPolicy ?? "if-not-present",
     capabilities: source.capabilities,
     optionalApps: source.optionalApps,
@@ -661,13 +908,37 @@ function sanitizeStoredInstanceImageSnapshot(
   const sanitizedProfile = sanitizeStoredImageProfile(source) as Record<string, unknown>;
   const { reference: profileReference, ...profile } = sanitizedProfile;
   const requestedReference = source.requestedReference ?? profileReference;
+  let parsedReference: ReturnType<typeof parseDockerImageReference> | undefined;
+  try {
+    parsedReference = typeof requestedReference === "string" ? parseDockerImageReference(requestedReference) : undefined;
+  } catch {
+    // Leave invalid historical values for record-level schema isolation.
+  }
+  const legacyMarketIds: Record<string, string> = {
+    img_default: "market_taskhandoff_browser",
+    img_codex: "market_taskhandoff_codex",
+    img_ai: "market_taskhandoff_ai",
+  };
+  const rawId = typeof source.id === "string" ? source.id : typeof imageId === "string" ? imageId : undefined;
+  const origin = source.origin === "market" || (rawId && legacyMarketIds[rawId]) ? "market" : "custom";
   if (source.image !== undefined || source.reference !== undefined) onWarning?.({ instanceId, field: "imageSnapshot.reference" });
   return {
     ...profile,
-    id: source.id ?? imageId,
-    requestedReference,
+    id: rawId && legacyMarketIds[rawId] ? legacyMarketIds[rawId] : rawId,
+    origin,
+    repository: parsedReference?.repository ?? source.repository,
+    tag: parsedReference?.tag ?? source.tag,
+    requestedReference: parsedReference?.reference ?? requestedReference,
     resolvedDigest: source.resolvedDigest,
     resolvedReference: source.resolvedReference,
+    downloadSizeBytes: source.downloadSizeBytes,
+    market: origin === "market"
+      ? pickObjectFields(source.market, ["catalogId", "catalogRevision", "publisher", "version"]) ?? {
+          catalogId: "task_handoff_embedded",
+          catalogRevision: "legacy",
+          publisher: "task-handoff",
+        }
+      : undefined,
   };
 }
 
@@ -829,15 +1100,19 @@ export const LocalDockerImageSchema = z
     id: z.string().trim(),
     createdSince: z.string().trim().optional(),
     size: z.string().trim().optional(),
+    sizeBytes: z.number().int().nonnegative().optional(),
     reference: z.string().trim().min(1),
     repoDigests: z.array(z.string().trim().min(1).max(512)).default([]),
   })
   .passthrough();
 
 export const NodeImageAvailabilitySchema = z.object({
-  image: ImageProfileSchema,
+  image: SelectableImageSchema,
   status: z.enum(["available", "pull-required", "unknown"]),
   localImage: LocalDockerImageSchema.optional(),
+  localSizeBytes: z.number().int().nonnegative().optional(),
+  downloadSizeBytes: z.number().int().positive().optional(),
+  unpackedSizeBytes: z.number().int().positive().optional(),
   error: z.string().trim().max(2048).optional(),
 }).strict();
 
@@ -906,7 +1181,7 @@ export const ControlledInstanceSchema = z
     modelSelection: ModelSelectionSchema,
     nodeId: IdSchema,
     runtimeId: IdSchema,
-    imageId: IdSchema.optional(),
+    imageSelection: ImageSelectionSchema.optional(),
     imageSnapshot: InstanceImageSnapshotSchema.optional(),
     imageProvisioning: ImageProvisioningSchema.optional(),
     stateRevision: z.number().int().min(0).default(0),
@@ -1062,6 +1337,16 @@ export function sanitizeStoredControlledInstance(
     onWarning,
     typeof source.id === "string" ? source.id : undefined,
   );
+  const legacyImageIds: Record<string, string> = {
+    img_default: "market_taskhandoff_browser",
+    img_codex: "market_taskhandoff_codex",
+    img_ai: "market_taskhandoff_ai",
+  };
+  const requestedImageId = typeof source.imageId === "string" ? (legacyImageIds[source.imageId] || source.imageId) : undefined;
+  const existingSelection = pickObjectFields(source.imageSelection, ["imageId", "tag"]);
+  next.imageSelection = existingSelection || (requestedImageId
+    ? { imageId: requestedImageId, tag: (next.imageSnapshot as Record<string, unknown> | undefined)?.tag }
+    : undefined);
   next.imageProvisioning = sanitizeStoredStrictObject(ImageProvisioningSchema, pickObjectFields(source.imageProvisioning, ["phase", "requestedReference", "generation", "error", "startedAt", "updatedAt"]), "imageProvisioning", onWarning, typeof source.id === "string" ? source.id : undefined);
   next.runtimeVersion = sanitizeStoredRuntimeVersion(source.runtimeVersion, onWarning, typeof source.id === "string" ? source.id : undefined);
   next.workspace = sanitizeStoredStrictObject(WorkspaceStatusSchema, source.workspace, "workspace", onWarning, typeof source.id === "string" ? source.id : undefined) || { status: "unknown" };
@@ -1369,7 +1654,7 @@ export const ControlledInstanceRegisterSchema = z
     source: ProjectSourceSchema.optional(),
     nodeId: IdSchema.optional(),
     runtimeId: IdSchema.optional(),
-    imageId: IdSchema.optional(),
+    imageSelection: ImageSelectionSchema.optional(),
     instanceVersion: z.string().trim().max(80).optional(),
     protocolVersion: ProtocolVersionSchema,
     build: BuildInfoSchema.optional(),
@@ -1407,6 +1692,51 @@ export const ControlledInstanceHeartbeatSchema = z
       context.addIssue({ code: "custom", path: ["appInventory"], message: "Current protocol heartbeat payload requires appInventory." });
     }
   });
+
+export type CrossVersionInstanceReportWarning = {
+  field: string;
+  action: "ignored" | "migrated";
+};
+
+export function sanitizeCrossVersionControlledInstanceRegister(
+  input: unknown,
+  onWarning?: (warning: CrossVersionInstanceReportWarning) => void,
+) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+  const source = input as Record<string, unknown>;
+  const knownKeys = [
+    "instanceId", "name", "projectId", "source", "nodeId", "runtimeId", "imageSelection",
+    "instanceVersion", "protocolVersion", "build", "controlMode", "capabilities", "appInventory",
+    "target", "workspace", "registrationToken",
+  ];
+  const acceptedKeys = new Set([...knownKeys, "imageId"]);
+  for (const key of Object.keys(source)) {
+    if (!acceptedKeys.has(key)) onWarning?.({ field: key, action: "ignored" });
+  }
+  if (Object.prototype.hasOwnProperty.call(source, "imageId")) {
+    onWarning?.({ field: "imageId", action: "migrated" });
+  }
+  return {
+    ...(pickObjectFields(source, knownKeys) as Record<string, unknown>),
+    imageSelection: migrateLegacyImageSelection(source.imageSelection, source.imageId),
+  };
+}
+
+export function sanitizeCrossVersionControlledInstanceHeartbeat(
+  input: unknown,
+  onWarning?: (warning: CrossVersionInstanceReportWarning) => void,
+) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+  const knownKeys = [
+    "status", "health", "protocolVersion", "build", "capabilities", "appInventory", "apps",
+    "aiSessions", "triggers", "workspace", "target",
+  ];
+  const acceptedKeys = new Set(knownKeys);
+  for (const key of Object.keys(input)) {
+    if (!acceptedKeys.has(key)) onWarning?.({ field: key, action: "ignored" });
+  }
+  return pickObjectFields(input, knownKeys);
+}
 
 export const ChatChannelSchema = z.enum(["web", "telegram", "wechat", "dingding"]);
 
@@ -1507,7 +1837,16 @@ export type NodeModelAssignment = z.infer<typeof NodeModelAssignmentSchema>;
 export type ModelLocation = z.infer<typeof ModelLocationSchema>;
 export type FederatedModelGroup = z.infer<typeof FederatedModelGroupSchema>;
 export type FederatedModelRegistry = z.infer<typeof FederatedModelRegistrySchema>;
-export type ImageProfile = z.infer<typeof ImageProfileSchema>;
+export type ImageSelection = z.infer<typeof ImageSelectionSchema>;
+export type ImageCover = z.infer<typeof ImageCoverSchema>;
+export type MarketImagePlatformArtifact = z.infer<typeof MarketImagePlatformArtifactSchema>;
+export type MarketImageTag = z.infer<typeof MarketImageTagSchema>;
+export type MarketImage = z.infer<typeof MarketImageSchema>;
+export type MarketCatalogSnapshot = z.infer<typeof MarketCatalogSnapshotSchema>;
+export type MarketCatalogStatus = z.infer<typeof MarketCatalogStatusSchema>;
+export type CustomImageProfile = z.infer<typeof CustomImageProfileSchema>;
+export type ImageProfile = CustomImageProfile;
+export type SelectableImage = z.infer<typeof SelectableImageSchema>;
 export type InstanceImageSnapshot = z.infer<typeof InstanceImageSnapshotSchema>;
 export type ImageProvisioning = z.infer<typeof ImageProvisioningSchema>;
 export type ImagePullTerminalOutput = z.infer<typeof ImagePullTerminalOutputSchema>;

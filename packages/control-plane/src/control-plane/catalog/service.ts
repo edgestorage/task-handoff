@@ -1,10 +1,16 @@
 import {
-  ImageProfileSchema,
+  CustomImageProfileSchema,
+  DEFAULT_IMAGE_COVER,
+  SelectableImageSchema,
   ProjectSchema,
   ProjectSourceSchema,
   WorkspacePolicySchema,
-  type ImageProfile,
+  parseDockerImageReference,
+  type CustomImageProfile,
+  type ImageSelection,
+  type MarketImage,
   type Project,
+  type SelectableImage,
 } from "@task-handoff/protocol/control-plane";
 import { createId, type JsonCollection, type JsonFile } from "../../shared/persistence/store.ts";
 import {
@@ -20,10 +26,12 @@ import {
 } from "./inputs.ts";
 import { now, throwNotFound } from "../common/helpers.ts";
 import { normalizeProject, workspacePolicyForSource } from "../public-records.ts";
+import { MarketCatalogService } from "./market.ts";
 
 export type ControlPlaneCatalogServiceOptions = {
   projects: JsonCollection<Project>;
-  images: JsonCollection<ImageProfile>;
+  images: JsonCollection<CustomImageProfile>;
+  market: MarketCatalogService;
   settings: JsonFile<ControlPlaneSettings>;
   defaultNodeId: () => string | undefined;
 };
@@ -50,43 +58,8 @@ export class ControlPlaneCatalogService {
   }
 
   seedDefaults() {
-    const timestamp = now();
-    const defaults = [
-      {
-        id: "img_default",
-        name: "TaskHandoff Browser",
-        reference: process.env.TASK_HANDOFF_CONTROLLED_BROWSER_IMAGE || "huadream/task-handoff-controlled-browser:latest",
-        capabilities: ["browser", "terminal", "gui-terminal", "vscode-web", "codex", "claude"],
-        optionalApps: ["chromium", "terminal-tty", "gui-terminal", "vscode-web"],
-        labels: { "task-handoff.image.kind": "controlled-instance", "task-handoff.image.profile": "browser" },
-      },
-      {
-        id: "img_codex",
-        name: "TaskHandoff Codex",
-        reference: process.env.TASK_HANDOFF_CONTROLLED_CODEX_IMAGE || "huadream/task-handoff-controlled-codex:latest",
-        capabilities: ["terminal", "codex"],
-        optionalApps: ["terminal-tty"],
-        labels: { "task-handoff.image.kind": "controlled-instance", "task-handoff.image.profile": "codex" },
-      },
-      {
-        id: "img_ai",
-        name: "TaskHandoff Codex + Claude",
-        reference: process.env.TASK_HANDOFF_CONTROLLED_AI_IMAGE || "huadream/task-handoff-controlled-ai:latest",
-        capabilities: ["terminal", "codex", "claude"],
-        optionalApps: ["terminal-tty"],
-        labels: { "task-handoff.image.kind": "controlled-instance", "task-handoff.image.profile": "ai" },
-      },
-    ];
-    for (const image of defaults) {
-      if (this.options.images.get(image.id)) continue;
-      this.options.images.put(ImageProfileSchema.parse({
-        ...image,
-        pullPolicy: "if-not-present",
-        defaultEnv: {},
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      }));
-    }
+    // Embedded Market images are owned by MarketCatalogService and never
+    // persisted in the user-managed Custom Image collection.
   }
 
   listProjects() {
@@ -106,7 +79,7 @@ export class ControlPlaneCatalogService {
       ...parsedInput,
       id: parsedInput.id || createId("proj"),
       source,
-      defaultImageId: parsedInput.defaultImageId || "img_default",
+      defaultImageSelection: parsedInput.defaultImageSelection || { imageId: "market_taskhandoff_browser" },
       defaultNodeId: parsedInput.defaultNodeId || this.options.defaultNodeId(),
       defaultRuntimeId: parsedInput.defaultRuntimeId || "runtime_local_docker",
       workspacePolicy: WorkspacePolicySchema.parse(parsedInput.workspacePolicy || workspacePolicyForSource(source)),
@@ -145,12 +118,40 @@ export class ControlPlaneCatalogService {
     return this.options.images.list();
   }
 
+  getMarketCatalog() {
+    return { catalog: this.options.market.getCatalog(), status: this.options.market.getStatus() };
+  }
+
+  listImageOptions(platform?: { os?: string; architecture?: string }) {
+    const market = this.options.market.getCatalog();
+    return [
+      ...market.items.map((image) => this.marketImageOption(image, undefined, platform, true)),
+      ...this.listImages().map((image) => this.customImageOption(image)),
+    ];
+  }
+
+  resolveImageSelection(selection: ImageSelection, platform?: { os?: string; architecture?: string }): SelectableImage {
+    const marketImage = this.options.market.getCatalog().items.find((image) => image.id === selection.imageId);
+    if (marketImage) return this.marketImageOption(marketImage, selection.tag, platform);
+    const custom = this.options.images.get(selection.imageId);
+    if (!custom) throwNotFound("IMAGE_NOT_FOUND", `Image ${selection.imageId} was not found.`);
+    if (selection.tag && selection.tag !== custom.tag) {
+      throw Object.assign(new Error(`Custom image ${custom.id} cannot override its stored tag.`), { statusCode: 400, code: "CUSTOM_IMAGE_TAG_OVERRIDE" });
+    }
+    return this.customImageOption(custom);
+  }
+
   createImage(input: unknown) {
     const parsedInput = CreateImageInputSchema.parse(input);
     const timestamp = now();
-    return this.options.images.put(ImageProfileSchema.parse({
+    const reference = parseDockerImageReference(parsedInput.reference);
+    return this.options.images.put(CustomImageProfileSchema.parse({
       ...parsedInput,
       id: parsedInput.id || createId("img"),
+      origin: "custom",
+      reference: reference.reference,
+      repository: reference.repository,
+      tag: reference.tag,
       pullPolicy: parsedInput.pullPolicy || "if-not-present",
       capabilities: parsedInput.capabilities || [],
       optionalApps: parsedInput.optionalApps || [],
@@ -164,10 +165,15 @@ export class ControlPlaneCatalogService {
   updateImage(id: string, input: unknown) {
     const parsedInput: UpdateImageInput = UpdateImageInputSchema.parse(input);
     const current = this.requireImage(id);
-    return this.options.images.put(ImageProfileSchema.parse({
+    const reference = parseDockerImageReference(parsedInput.reference || current.reference);
+    return this.options.images.put(CustomImageProfileSchema.parse({
       ...current,
       ...parsedInput,
       id,
+      origin: "custom",
+      reference: reference.reference,
+      repository: reference.repository,
+      tag: reference.tag,
       createdAt: current.createdAt,
       updatedAt: now(),
     }));
@@ -178,6 +184,9 @@ export class ControlPlaneCatalogService {
   }
 
   requireImage(id: string) {
+    if (this.options.market.getCatalog().items.some((image) => image.id === id)) {
+      throw Object.assign(new Error(`Market image ${id} is read-only.`), { statusCode: 403, code: "MARKET_IMAGE_READ_ONLY" });
+    }
     const record = this.options.images.get(id);
     if (!record) throwNotFound("IMAGE_NOT_FOUND", `Image ${id} was not found.`);
     return record;
@@ -187,5 +196,73 @@ export class ControlPlaneCatalogService {
     const project = normalizeProject(record);
     if (project !== record) this.options.projects.put(project);
     return project;
+  }
+
+  private customImageOption(image: CustomImageProfile): SelectableImage {
+    return SelectableImageSchema.parse({
+      id: image.id,
+      origin: "custom",
+      name: image.name,
+      description: image.description,
+      localizedDescriptions: image.localizedDescriptions,
+      cover: image.cover || DEFAULT_IMAGE_COVER,
+      repository: image.repository,
+      tag: image.tag,
+      availableTags: image.tag ? [{ name: image.tag, reference: image.reference, status: "active" }] : [],
+      reference: image.reference,
+      capabilities: image.capabilities,
+      optionalApps: image.optionalApps,
+      defaultEnv: image.defaultEnv,
+      labels: image.labels,
+      readOnly: false,
+    });
+  }
+
+  private marketImageOption(image: MarketImage, requestedTag?: string, platform?: { os?: string; architecture?: string }, includeYanked = false): SelectableImage {
+    if (image.status === "yanked" && !includeYanked) {
+      throw Object.assign(new Error(`Market image ${image.id} is no longer selectable.`), { statusCode: 409, code: "MARKET_IMAGE_YANKED" });
+    }
+    const tagName = requestedTag || image.defaultTag;
+    const tag = image.tags.find((candidate) => candidate.name === tagName);
+    if (!tag) throw Object.assign(new Error(`Market image ${image.id} does not provide tag ${tagName}.`), { statusCode: 400, code: "MARKET_IMAGE_TAG_NOT_FOUND" });
+    if (tag.status === "yanked" && !includeYanked) throw Object.assign(new Error(`Market image tag ${image.id}:${tagName} is no longer selectable.`), { statusCode: 409, code: "MARKET_IMAGE_TAG_YANKED" });
+    const artifact = tag.platforms.find((candidate) =>
+      (!platform?.os || candidate.os === platform.os) && (!platform?.architecture || candidate.architecture === platform.architecture));
+    const catalog = this.options.market.getCatalog();
+    return SelectableImageSchema.parse({
+      id: image.id,
+      origin: "market",
+      name: image.name,
+      description: image.description,
+      localizedDescriptions: image.localizedDescriptions,
+      cover: image.cover || DEFAULT_IMAGE_COVER,
+      repository: image.repository,
+      tag: tag.name,
+      availableTags: image.tags.map((candidate) => ({
+        name: candidate.name,
+        version: candidate.version,
+        reference: candidate.reference,
+        manifestDigest: candidate.manifestDigest,
+        status: candidate.status,
+      })),
+      reference: tag.reference,
+      digest: artifact?.digest || tag.manifestDigest,
+      downloadSizeBytes: artifact?.downloadSizeBytes,
+      unpackedSizeBytes: artifact?.unpackedSizeBytes,
+      capabilities: image.capabilities,
+      optionalApps: image.optionalApps,
+      defaultEnv: image.defaultEnv,
+      labels: image.labels,
+      readOnly: true,
+      lifecycleStatus: tag.status === "yanked" || image.status === "yanked"
+        ? "yanked"
+        : tag.status === "deprecated" || image.status === "deprecated" ? "deprecated" : "active",
+      market: {
+        catalogId: catalog.catalogId,
+        catalogRevision: catalog.revision,
+        publisher: image.publisher,
+        version: tag.version,
+      },
+    });
   }
 }

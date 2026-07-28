@@ -4,6 +4,14 @@ export const common = {
     codex: "Codex",
     claude: "Claude",
   },
+  imageCapabilities: {
+    browser: "Browser",
+    terminal: "Terminal",
+    "gui-terminal": "Desktop terminal",
+    "vscode-web": "VS Code",
+    codex: "Codex",
+    claude: "Claude",
+  },
   actions: {
     add: "Add",
     back: "Back",

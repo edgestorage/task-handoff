@@ -81,7 +81,7 @@ test("an unselected AI session defaults to the new-session surface", () => {
   assert.match(panel, /const showNewSession = computed\(\(\) => newSessionOpen\.value \|\| !selectedSession\.value\);/);
   assert.match(panel, /<section v-else-if="showNewSession" class="session-ai-detail session-ai-new-detail">/);
   assert.match(panel, /<h1 class="session-ai-new-title">\{\{ t\("sessions\.panel\.startIdea"\) \}\}<\/h1>/);
-  assert.match(styles, /\.session-ai-new-start\s*\{[^}]*width: min\(760px, 100%\);[^}]*gap: 28px;/s);
+  assert.match(styles, /\.session-ai-new-start\s*\{[^}]*width: min\(760px, 100%\);[^}]*gap: 48px;/s);
   assert.match(styles, /\.session-ai-new-title\s*\{[^}]*text-align: center;/s);
   assert.match(panel, /watch\(\s*\[showNewSession, aiSessionLaunchableApps, newSessionFolders\]/);
   assert.doesNotMatch(panel, /session-ai-no-selection/);

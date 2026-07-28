@@ -17,8 +17,6 @@ const {
   switchCurrentRuntime,
   validateExtractedRuntimeArtifact,
 } = require("../packages/control-plane/src/node-agent/runtime-artifacts.ts");
-const { LocalhostRuntimeAdapter } = require("../packages/control-plane/src/node-agent/app.ts");
-const { nodeAgentStorePaths } = require("../packages/control-plane/src/node-agent/persistence/paths.ts");
 
 async function fixture(version = "1.2.3", overrides = {}) {
   const { payloadMarker = version, ...identityOverrides } = overrides;
@@ -357,22 +355,5 @@ test("same-version development artifacts install and roll back by exact SHA-256 
     await first.cleanup();
     await second.cleanup();
     await fs.rm(runtimeRoot, { recursive: true, force: true });
-  }
-});
-
-test("Local Runtime adapter installs into an instance-private current release", async () => {
-  const item = await fixture("2.0.0");
-  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "local-runtime-adapter-"));
-  try {
-    const adapter = new LocalhostRuntimeAdapter(async () => ({ stdout: "", stderr: "" }), nodeAgentStorePaths(dataDir), () => "http://127.0.0.1:8091", "linux", "x64");
-    const context = { instance: { id: "inst_private" } };
-    await adapter.installRuntime(context, { archivePath: item.archivePath, identity: item.identity, cacheHit: false });
-    assert.equal(await adapter.inspectRuntime(context, item.identity), true);
-    assert.equal(await adapter.inspectRuntime(context, { ...item.identity, version: "1.0.0" }), false);
-    const manifest = JSON.parse(await fs.readFile(path.join(dataDir, "local-instances", "inst_private", "runtime", "current", "runtime-manifest.json"), "utf8"));
-    assert.equal(manifest.version, "2.0.0");
-  } finally {
-    await item.cleanup();
-    await fs.rm(dataDir, { recursive: true, force: true });
   }
 });

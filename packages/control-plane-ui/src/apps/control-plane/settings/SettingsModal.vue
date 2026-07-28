@@ -213,57 +213,103 @@
       </div>
 
       <div v-else-if="settingsSection === 'images'" class="image-management-grid">
-        <section class="modal-section">
-          <div class="section-head">
-            <span>{{ t("settings.imageRegistry.count", { count: images.data.value?.length || 0 }) }}</span>
-            <ControlPlaneSelect v-model="imageCatalogNodeId" :placeholder="t('settings.imageRegistry.selectNode')">
-              <ControlPlaneSelectItem v-for="node in nodes.data.value || []" :key="node.id" :value="node.id">{{ node.name }}</ControlPlaneSelectItem>
-            </ControlPlaneSelect>
+        <section class="modal-section image-market-section">
+          <div class="image-market-head">
+            <div>
+              <strong>{{ t("settings.imageRegistry.marketTitle") }}</strong>
+              <span>{{ t("settings.imageRegistry.marketDescription") }}</span>
+            </div>
+            <Badge variant="secondary">{{ t("settings.imageRegistry.marketCount", { count: marketCatalog.data.value?.catalog.items.length || 0 }) }}</Badge>
           </div>
-          <ScrollArea class="registered-image-list">
-            <div class="settings-scroll-content">
-            <div v-for="image in images.data.value || []" :key="image.id" class="registered-image-row">
-              <div>
-                <strong>{{ image.name }}</strong>
-                <code>{{ image.reference }}</code>
-                <span class="image-meta-line">
-                  {{ catalogAvailabilityLabel(image.id) }} · {{ image.capabilities.length ? image.capabilities.join(", ") : t("settings.imageRegistry.noCapabilities") }}
-                </span>
+          <div class="market-image-grid">
+            <article v-for="image in marketCatalog.data.value?.catalog.items || []" :key="image.id" class="market-image-card">
+              <ImageArtwork compact class="market-image-artwork" :cover="image.cover" :icon-size="18" :name="image.name" />
+              <div class="market-image-content">
+                <div class="market-image-title">
+                  <strong>{{ image.name }}</strong>
+                  <Badge variant="secondary">{{ t("settings.imageRegistry.official") }}</Badge>
+                </div>
+                <p>{{ resolveImageDescription(image, locale) }}</p>
+                <div class="market-capability-list">
+                  <span v-for="capability in image.capabilities.slice(0, 3)" :key="capability">{{ capabilityLabel(capability) }}</span>
+                  <span v-if="image.capabilities.length > 3">+{{ image.capabilities.length - 3 }}</span>
+                </div>
+                <div class="market-image-footer">
+                  <span :data-status="catalogAvailabilityStatus(image.id)"><i />{{ catalogAvailabilityLabel(image.id) }}</span>
+                  <code :title="`${image.repository}:${image.defaultTag}`">{{ image.repository }}:{{ image.defaultTag }}</code>
+                </div>
               </div>
-              <div class="settings-row-actions">
-                <Badge variant="secondary">{{ imagePullPolicyLabel(image.pullPolicy) }}</Badge>
-                <Button variant="outline" size="sm" :disabled="deletingImageId === image.id" @click="removeImageProfile(image)">
-                  <Trash2 :size="14" />
-                  <span>{{ deletingImageId === image.id ? t("settings.imageRegistry.deleting") : t("common.actions.delete") }}</span>
-                </Button>
-              </div>
-            </div>
-            <p v-if="!(images.data.value || []).length" class="settings-empty">{{ t("settings.imageRegistry.empty") }}</p>
-            </div>
-          </ScrollArea>
+            </article>
+          </div>
+          <p v-if="marketCatalog.data.value?.status.error" class="settings-empty">{{ marketCatalog.data.value.status.error }}</p>
         </section>
 
-        <section class="modal-section">
-          <div class="section-head">
-            <span>{{ t("settings.imageRegistry.addTitle") }}</span>
+        <section class="modal-section image-custom-section">
+          <div class="image-registry-head">
+            <div>
+              <strong>{{ t("settings.imageRegistry.customTitle") }}</strong>
+              <span>{{ t("settings.imageRegistry.customDescription", { count: images.data.value?.length || 0 }) }}</span>
+            </div>
+            <div class="image-registry-actions">
+              <ControlPlaneSelect v-model="imageCatalogNodeId" :placeholder="t('settings.imageRegistry.selectNode')">
+                <ControlPlaneSelectItem v-for="node in nodes.data.value || []" :key="node.id" :value="node.id">{{ node.name }}</ControlPlaneSelectItem>
+              </ControlPlaneSelect>
+              <Button size="sm" @click="imageCreateOpen = !imageCreateOpen">
+                <Plus :size="14" />
+                <span>{{ t("settings.imageRegistry.add") }}</span>
+              </Button>
+            </div>
           </div>
-          <div class="inline-create">
-            <label>
-              <span>{{ t("settings.fields.name") }}</span>
-              <ControlPlaneInput v-model="settingsImage.name" :placeholder="t('settings.imageRegistry.namePlaceholder')" />
-            </label>
-            <label>
-              <span>{{ t("settings.imageRegistry.reference") }}</span>
-              <!-- i18n-audit-allow-next-line code-token: example OCI image reference -->
-              <ControlPlaneInput v-model="settingsImage.reference" placeholder="docker.io/org/image:v1" />
-              <small>{{ t("settings.imageRegistry.referenceDescription") }}</small>
-            </label>
-            <Button variant="outline" size="sm" :disabled="!canCreateImage || savingImage" @click="createRegistryImage">
-              <Plus :size="14" />
-              <span>{{ savingImage ? t("settings.imageRegistry.adding") : t("settings.imageRegistry.add") }}</span>
-            </Button>
-          </div>
+
           <p v-if="imageCreateSuccess" class="settings-success">{{ imageCreateSuccess }}</p>
+
+          <ScrollArea class="registered-image-list">
+            <div class="settings-scroll-content image-registry-list">
+              <div v-for="image in images.data.value || []" :key="image.id" class="registered-image-row">
+                <ImageArtwork compact class="registered-image-artwork" :cover="image.cover" :icon-size="15" :name="image.name" />
+                <div class="registered-image-copy">
+                  <strong>{{ image.name }}</strong>
+                  <code>{{ image.reference }}</code>
+                </div>
+                <span class="registered-image-availability">{{ catalogAvailabilityLabel(image.id) }}</span>
+                <div class="settings-row-actions">
+                  <Badge variant="secondary">{{ imagePullPolicyLabel(image.pullPolicy) }}</Badge>
+                  <Button variant="outline" size="sm" :disabled="deletingImageId === image.id" @click="removeImageProfile(image)">
+                    <Trash2 :size="14" />
+                    <span>{{ deletingImageId === image.id ? t("settings.imageRegistry.deleting") : t("common.actions.delete") }}</span>
+                  </Button>
+                </div>
+              </div>
+              <p v-if="!(images.data.value || []).length" class="settings-empty">{{ t("settings.imageRegistry.empty") }}</p>
+            </div>
+          </ScrollArea>
+
+          <Dialog v-model:open="imageCreateOpen">
+            <DialogContent class="registry-image-dialog">
+              <DialogHeader>
+                <DialogTitle>{{ t("settings.imageRegistry.addTitle") }}</DialogTitle>
+                <DialogDescription>{{ t("settings.imageRegistry.referenceDescription") }}</DialogDescription>
+              </DialogHeader>
+              <div class="registry-dialog-fields">
+                <label>
+                  <span>{{ t("settings.fields.name") }}</span>
+                  <ControlPlaneInput v-model="settingsImage.name" :placeholder="t('settings.imageRegistry.namePlaceholder')" />
+                </label>
+                <label>
+                  <span>{{ t("settings.imageRegistry.reference") }}</span>
+                  <!-- i18n-audit-allow-next-line code-token: example OCI image reference -->
+                  <ControlPlaneInput v-model="settingsImage.reference" placeholder="docker.io/org/image:v1" />
+                </label>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" @click="closeImageCreate">{{ t("common.actions.cancel") }}</Button>
+                <Button :disabled="!canCreateImage || savingImage" @click="submitRegistryImage">
+                  <Plus :size="14" />
+                  <span>{{ savingImage ? t("settings.imageRegistry.adding") : t("settings.imageRegistry.add") }}</span>
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </section>
       </div>
 
@@ -311,7 +357,7 @@
                 <span>{{ t("settings.projectRegistry.defaultImage") }}</span>
                 <ControlPlaneSelect v-model="settingsDefaultImageSelectValue" :placeholder="t('settings.projectRegistry.useDefault')">
                   <ControlPlaneSelectItem :value="DEFAULT_SELECT_VALUE">{{ t("settings.projectRegistry.useDefault") }}</ControlPlaneSelectItem>
-                  <ControlPlaneSelectItem v-for="image in images.data.value || []" :key="image.id" :value="image.id">{{ image.name }}</ControlPlaneSelectItem>
+                  <ControlPlaneSelectItem v-for="image in imageOptions.data.value || []" :key="image.id" :value="image.id">{{ image.name }}</ControlPlaneSelectItem>
                 </ControlPlaneSelect>
               </label>
               <label>
@@ -526,7 +572,7 @@ import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useQueryClient } from "@tanstack/vue-query";
 import { AlertTriangle, ArrowLeft, ChevronDown, ChevronUp, Download, KeyRound, Layers, MapPin, MonitorCog, Plus, RefreshCw, Server, Settings, Trash2 } from "@lucide/vue";
-import { getNodeExternalListener, updateControlPlaneSettings, updateNodeExternalListener, useChatBridgesQuery, useChatGatewayStatusQuery, useControlPlaneSettingsQuery, useImagesQuery, useInstanceBoardPayloadQuery, useModelRegistryQuery, useModelsQuery, useNodeImageAvailabilityQuery, useNodeRuntimesPayloadQuery, useNodesQuery, useProjectsQuery, useServerUpdateCheckQuery } from "../../../api/queries";
+import { getNodeExternalListener, updateControlPlaneSettings, updateNodeExternalListener, useChatBridgesQuery, useChatGatewayStatusQuery, useControlPlaneSettingsQuery, useImageOptionsQuery, useImagesQuery, useInstanceBoardPayloadQuery, useMarketCatalogQuery, useModelRegistryQuery, useModelsQuery, useNodeImageAvailabilityQuery, useNodeRuntimesPayloadQuery, useNodesQuery, useProjectsQuery, useServerUpdateCheckQuery } from "../../../api/queries";
 import type { BuildInfo, ControlPlaneSettings, InstanceBoardItem, ModelLocation, Node, NodeAgentExternalListener, UpdateChannel } from "../../../api/types";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
@@ -546,6 +592,8 @@ import { useChatBridgeSettings } from "./useChatBridgeSettings";
 import { useImageSettings } from "./useImageSettings";
 import { useModelSettings } from "./useModelSettings";
 import { useProjectSettings } from "./useProjectSettings";
+import ImageArtwork from "../shared/ImageArtwork.vue";
+import { resolveImageDescription } from "../shared/imageDescription";
 import { useNodeResourceSettings } from "./useNodeResourceSettings";
 import { useNodeSettings } from "./useNodeSettings";
 import { useDesktopUpdates, type DesktopUpdateChannel } from "./useDesktopUpdates";
@@ -581,7 +629,7 @@ const emit = defineEmits<{
   "section-change": [section: SettingsSection];
 }>();
 
-const { t } = useI18n();
+const { locale, t } = useI18n();
 
 const DEFAULT_SELECT_VALUE = "__default__";
 const settingsSections = computed<Array<{ id: SettingsSection; label: string }>>(() => [
@@ -599,6 +647,8 @@ const projects = useProjectsQuery();
 const models = useModelsQuery();
 const modelRegistry = useModelRegistryQuery();
 const images = useImagesQuery();
+const imageOptions = useImageOptionsQuery();
+const marketCatalog = useMarketCatalogQuery();
 const nodes = useNodesQuery();
 const nodeRuntimes = useNodeRuntimesPayloadQuery();
 const board = useInstanceBoardPayloadQuery();
@@ -697,6 +747,8 @@ async function refresh() {
     queryClient.invalidateQueries({ queryKey: ["control-plane-projects"] }),
     queryClient.invalidateQueries({ queryKey: ["control-plane-models"] }),
     queryClient.invalidateQueries({ queryKey: ["control-plane-images"] }),
+    queryClient.invalidateQueries({ queryKey: ["control-plane-image-options"] }),
+    queryClient.invalidateQueries({ queryKey: ["control-plane-market-catalog"] }),
     queryClient.invalidateQueries({ queryKey: ["node-image-catalog"] }),
     queryClient.invalidateQueries({ queryKey: ["control-plane-nodes"] }),
     queryClient.invalidateQueries({ queryKey: ["control-plane-node-local-folders"] }),
@@ -760,6 +812,8 @@ const {
   isControlPlaneBuiltinNode,
   isControlPlaneLocalNode,
   nodeLocalFolders,
+  nodeFolderDefaultImageId,
+  nodeFolderImageOptions,
   nodeStorageFolderCanConfirm,
   nodeStorageFolderDialogOpen,
   nodeStorageFolderError,
@@ -789,6 +843,7 @@ const {
   chooseProjectFolder: props.chooseProjectFolder,
   clearDefaultRuntime,
   errorText,
+  imageOptions: imageOptions.data,
   instances: boardItems,
   nodes: nodes.data,
   refresh,
@@ -867,6 +922,7 @@ watch(
   { immediate: true },
 );
 const imageCatalogNodeId = ref("");
+const imageCreateOpen = ref(false);
 const imageAvailability = useNodeImageAvailabilityQuery(() => imageCatalogNodeId.value);
 const hasLocalNode = computed(() => (nodes.data.value || []).some(isControlPlaneLocalNode));
 watch(
@@ -880,7 +936,7 @@ watch(
 const {
   canCreateImage,
   clearImageFeedback,
-  createRegistryImage,
+  createRegistryImage: createRegistryImageAction,
   deletingImageId,
   imageCreateSuccess,
   removeImageProfile,
@@ -893,6 +949,15 @@ const {
   refresh,
   translate: t,
 });
+function closeImageCreate() {
+  imageCreateOpen.value = false;
+  clearImageFeedback();
+}
+
+async function submitRegistryImage() {
+  await createRegistryImageAction();
+  if (imageCreateSuccess.value) imageCreateOpen.value = false;
+}
 const {
   canSaveModel,
   canMoveModel,
@@ -1093,6 +1158,7 @@ const nodeDetailActions = computed(() => ({
   removeRuntime,
   saveExternalListener,
   submitNodeLocalFolder,
+  updateNodeFolderDefaultImage: (value: string) => { nodeFolderDefaultImageId.value = value === "__none__" ? "" : value; },
   setUpdateChannel,
   updateExternalListenerDraft,
   updateRemoteConnect,
@@ -1124,6 +1190,8 @@ const nodeDetailResources = computed(() => ({
   instances: selectedNodeInstances.value,
   localFoldersError: nodeLocalFolders.error.value ? errorText(nodeLocalFolders.error.value) : "",
   localFolders: nodeLocalFolders.data.value || [],
+  nodeFolderDefaultImageId: nodeFolderDefaultImageId.value,
+  nodeFolderImageOptions: nodeFolderImageOptions.value || [],
   remoteConnect,
   remoteConnectResultByNodeId,
   remoteKeys: selectedNode.value ? remoteKeysByNodeId[selectedNode.value.id] || [] : [],
@@ -1257,11 +1325,22 @@ async function refreshChat() {
   ]);
 }
 
-function catalogAvailabilityLabel(imageId: string) {
+function catalogAvailabilityStatus(imageId: string) {
   const availability = imageAvailability.data.value?.find((item) => item.image.id === imageId);
+  if (!imageCatalogNodeId.value || !availability) return "unknown";
+  return availability.status;
+}
+
+function catalogAvailabilityLabel(imageId: string) {
+  const status = catalogAvailabilityStatus(imageId);
   if (!imageCatalogNodeId.value) return t("settings.imageRegistry.selectNodeHint");
-  if (!availability || availability.status === "unknown") return t("settings.imageRegistry.availabilityUnknown");
-  return availability.status === "available" ? t("settings.imageRegistry.availableOnNode") : t("settings.imageRegistry.pullOnCreate");
+  if (status === "unknown") return t("settings.imageRegistry.availabilityUnknown");
+  return status === "available" ? t("settings.imageRegistry.availableOnNode") : t("settings.imageRegistry.pullOnCreate");
+}
+
+function capabilityLabel(capability: string) {
+  const key = `common.imageCapabilities.${capability}`;
+  return t(key, capability);
 }
 
 function imagePullPolicyLabel(policy: string) {
@@ -1440,7 +1519,7 @@ function errorText(error: unknown) {
 
 .image-management-grid {
   display: grid;
-  grid-template-columns: minmax(260px, 0.8fr) minmax(0, 1.2fr);
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
   gap: 12px;
   min-height: 0;
@@ -1829,7 +1908,7 @@ function errorText(error: unknown) {
 .image-meta-line {
   overflow: hidden;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2205,6 +2284,258 @@ function errorText(error: unknown) {
   gap: 9px;
 }
 
+.image-market-section {
+  grid-column: 1 / -1;
+}
+
+.image-custom-section {
+  min-height: 0;
+}
+
+.image-registry-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.image-registry-head > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.image-registry-head > div:first-child > strong {
+  color: var(--text-strong);
+  font-size: 13px;
+}
+
+.image-registry-head > div:first-child > span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.image-registry-actions {
+  display: grid;
+  grid-template-columns: minmax(170px, 220px) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+:global(.registry-image-dialog) {
+  width: min(520px, calc(100vw - 32px));
+  max-width: 520px;
+}
+
+.registry-dialog-fields {
+  display: grid;
+  gap: 12px;
+}
+
+.registry-dialog-fields label {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.registry-dialog-fields label > span {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.image-registry-list {
+  display: grid;
+  gap: 6px;
+}
+
+.registered-image-row {
+  grid-template-columns: 36px minmax(0, 1fr) minmax(120px, auto) auto;
+  gap: 10px;
+  border-color: var(--line-subtle);
+  background: var(--surface);
+  padding: 6px;
+}
+
+.registered-image-row:hover {
+  border-color: var(--line);
+  background: var(--surface-hover);
+}
+
+.registered-image-artwork {
+  width: 36px;
+  height: 36px;
+  min-height: 36px;
+  border-radius: 7px;
+}
+
+.registered-image-copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.registered-image-availability {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.image-market-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.image-market-head > div {
+  display: grid;
+  gap: 3px;
+}
+
+.image-market-head strong {
+  color: var(--text-strong);
+  font-size: 13px;
+}
+
+.image-market-head span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.market-image-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.market-image-card {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  align-items: start;
+  min-height: 112px;
+  min-width: 0;
+  overflow: hidden;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-raised);
+  padding: 10px;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.market-image-card:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-hover);
+}
+
+.market-image-artwork {
+  width: 40px;
+  height: 40px;
+  min-height: 40px;
+  border-radius: 8px;
+}
+
+.market-image-content {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  gap: 5px;
+}
+
+.market-image-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.market-image-title strong {
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.market-image-content p {
+  overflow: hidden;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.market-capability-list {
+  display: flex;
+  min-width: 0;
+  gap: 4px;
+  overflow: hidden;
+}
+
+.market-capability-list span {
+  flex: 0 0 auto;
+  border: 1px solid var(--line-subtle);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 17px;
+  padding: 0 5px;
+}
+
+.market-image-footer {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line-subtle);
+}
+
+.market-image-footer span,
+.market-image-footer code {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.market-image-footer span {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+}
+
+.market-image-footer span i {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--text-subtle);
+}
+
+.market-image-footer span[data-status="available"] i {
+  background: var(--status-success);
+}
+
+.market-image-footer span[data-status="pull-required"] i {
+  background: var(--status-warning);
+}
+
+.market-image-footer code {
+  min-width: 0;
+  flex: 1 1 auto;
+  text-align: right;
+}
+
 .modal-section label,
 .inline-create {
   display: grid;
@@ -2272,7 +2603,16 @@ function errorText(error: unknown) {
   margin-top: 2px;
 }
 
+@media (max-width: 1080px) {
+  .market-image-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 780px) {
+  .market-image-grid {
+    grid-template-columns: 1fr;
+  }
   .image-management-grid,
   .project-management-grid,
   .node-management-grid,
@@ -2282,6 +2622,23 @@ function errorText(error: unknown) {
 
   .control-settings-page {
     padding: 12px;
+  }
+
+  .image-registry-head {
+    display: grid;
+  }
+
+  .image-registry-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .registered-image-row {
+    grid-template-columns: 36px minmax(0, 1fr);
+  }
+
+  .registered-image-availability,
+  .registered-image-row .settings-row-actions {
+    grid-column: 2;
   }
 }
 </style>

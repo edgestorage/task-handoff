@@ -175,7 +175,14 @@ export function useControlPlaneEvents(input: {
     if (topics.has("models")) queueInvalidation(["control-plane-models"]);
     if (topics.has("images")) {
       queueInvalidation(["control-plane-images"]);
+      queueInvalidation(["control-plane-image-options"]);
+      queueInvalidation(["node-image-catalog"]);
       queueInvalidation(["instance-board"]);
+    }
+    if (topics.has("market")) {
+      queueInvalidation(["control-plane-market-catalog"]);
+      queueInvalidation(["control-plane-image-options"]);
+      queueInvalidation(["node-image-catalog"]);
     }
   }
 

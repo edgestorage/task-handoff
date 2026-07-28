@@ -1,9 +1,9 @@
-import { ImageProfileSchema, ProjectSchema, ProjectSourceSchema, UpdateChannelSchema, WorkspacePolicySchema } from "@task-handoff/protocol/control-plane";
+import { CustomImageProfileSchema, ProjectSchema, ProjectSourceSchema, UpdateChannelSchema, WorkspacePolicySchema } from "@task-handoff/protocol/control-plane";
 import { z } from "zod";
 
 export const CreateProjectInputSchema = z.object({
   id: ProjectSchema.shape.id.optional(), name: ProjectSchema.shape.name, source: ProjectSourceSchema,
-  defaultImageId: ProjectSchema.shape.defaultImageId, defaultNodeId: ProjectSchema.shape.defaultNodeId,
+  defaultImageSelection: ProjectSchema.shape.defaultImageSelection, defaultNodeId: ProjectSchema.shape.defaultNodeId,
   defaultRuntimeId: ProjectSchema.shape.defaultRuntimeId, workspacePolicy: WorkspacePolicySchema.optional(),
   labels: ProjectSchema.shape.labels.optional(),
 }).strict();
@@ -55,10 +55,12 @@ export function sanitizeStoredControlPlaneSettings(value: unknown) {
   return record;
 }
 export const CreateImageInputSchema = z.object({
-  id: ImageProfileSchema.shape.id.optional(), name: ImageProfileSchema.shape.name, reference: ImageProfileSchema.shape.reference,
-  pullPolicy: ImageProfileSchema.shape.pullPolicy.optional(), capabilities: z.array(z.string().trim().min(1).max(80)).optional(),
-  optionalApps: z.array(z.string().trim().min(1).max(120)).optional(), defaultEnv: ImageProfileSchema.shape.defaultEnv.optional(),
-  labels: ImageProfileSchema.shape.labels.optional(),
+  id: CustomImageProfileSchema.shape.id.optional(), name: CustomImageProfileSchema.shape.name,
+  description: CustomImageProfileSchema.shape.description, cover: CustomImageProfileSchema.shape.cover,
+  reference: CustomImageProfileSchema.shape.reference,
+  pullPolicy: CustomImageProfileSchema.shape.pullPolicy.optional(), capabilities: z.array(z.string().trim().min(1).max(80)).optional(),
+  optionalApps: z.array(z.string().trim().min(1).max(120)).optional(), defaultEnv: CustomImageProfileSchema.shape.defaultEnv.optional(),
+  labels: CustomImageProfileSchema.shape.labels.optional(),
 }).strict();
 export const UpdateImageInputSchema = CreateImageInputSchema.omit({ id: true }).partial().strict();
 export type CreateProjectInput = z.infer<typeof CreateProjectInputSchema>;

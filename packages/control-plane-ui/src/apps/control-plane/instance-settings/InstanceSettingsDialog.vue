@@ -39,7 +39,7 @@
                 <div><dt>{{ t("instances.settings.state") }}</dt><dd>{{ instanceStatusLabel(instance.status) }} · {{ connectionStatusLabel(instance.connectionStatus) }}</dd></div>
                 <div><dt>{{ t("instances.settings.node") }}</dt><dd>{{ instance.node?.name || instance.nodeId }}</dd></div>
                 <div><dt>{{ t("instances.settings.runtime") }}</dt><dd>{{ instance.runtime?.name || instance.runtimeId }}</dd></div>
-                <div><dt>{{ t("instances.settings.image") }}</dt><dd>{{ instance.image?.name || instance.imageId || t("instances.settings.none") }}</dd></div>
+                <div><dt>{{ t("instances.settings.image") }}</dt><dd>{{ instance.image?.name || instance.imageSelection?.imageId || t("instances.settings.none") }}</dd></div>
                 <div><dt>{{ t("instances.settings.workspace") }}</dt><dd>{{ instance.workspace.path || instance.runtime?.workspacePath || t("instances.settings.notReported") }} · {{ instance.workspace.status }}</dd></div>
                 <div><dt>{{ t("instances.settings.protocol") }}</dt><dd>{{ instance.protocolVersion || instance.build?.protocolVersion || t("instances.settings.notReported") }}</dd></div>
                 <div><dt>{{ t("instances.settings.build") }}</dt><dd>{{ instance.build?.packageVersion || instance.instanceVersion || t("instances.settings.notReported") }}</dd></div>

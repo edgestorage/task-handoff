@@ -2,7 +2,8 @@ import { z } from "zod";
 import { AiSessionPermissionModeSchema } from "@task-handoff/protocol/ai-sessions";
 import {
   ControlledInstanceSchema,
-  ImageProfileSchema,
+  ImageSelectionSchema,
+  InstanceImageSnapshotSchema,
   ProjectSourceSchema,
 } from "@task-handoff/protocol/control-plane";
 
@@ -21,7 +22,7 @@ export const CreateLocalFolderSchema = z
     id: z.string().trim().min(1).max(120).optional(),
     name: z.string().trim().min(1).max(160),
     path: z.string().trim().min(1).max(4096),
-    defaultImageId: z.string().trim().min(1).max(120).optional(),
+    defaultImageSelection: ImageSelectionSchema.optional(),
     labels: z.record(z.string(), z.string()).default({}),
   })
   .strict();
@@ -38,9 +39,9 @@ export const CreateNodeInstanceSchema = z
     id: z.string().trim().min(1).max(120).optional(),
     name: z.string().trim().min(1).max(160).optional(),
     runtimeId: z.string().trim().min(1).max(120),
-    imageId: z.string().trim().min(1).max(120).optional(),
+    imageSelection: ImageSelectionSchema.optional(),
     projectId: z.string().trim().min(1).max(120).optional(),
-    image: ImageProfileSchema.optional(),
+    image: InstanceImageSnapshotSchema.optional(),
     source: ProjectSourceSchema,
     sourceSnapshot: z.record(z.string(), z.unknown()).default({}),
     config: z.object({

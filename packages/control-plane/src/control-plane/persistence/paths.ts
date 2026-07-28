@@ -7,6 +7,10 @@ export type ControlPlaneStorePaths = {
   projectsDir: string;
   modelsDir: string;
   imagesDir: string;
+  marketDir: string;
+  marketCachePath: string;
+  marketStatePath: string;
+  marketMigrationBackupPath: string;
   nodesDir: string;
   nodeRuntimesDir: string;
   controlledInstancesDir: string;
@@ -32,6 +36,10 @@ export function controlPlaneStorePaths(dataDir = defaultControlPlaneDataDir()): 
     projectsDir: path.join(root, "projects"),
     modelsDir: path.join(root, "models"),
     imagesDir: path.join(root, "images"),
+    marketDir: path.join(root, "market"),
+    marketCachePath: path.join(root, "market", "catalog-cache.json"),
+    marketStatePath: path.join(root, "market", "catalog-state.json"),
+    marketMigrationBackupPath: path.join(root, "market", "legacy-image-migration-backup.json"),
     nodesDir: path.join(root, "nodes"),
     nodeRuntimesDir: path.join(root, "node-runtimes"),
     controlledInstancesDir: path.join(root, "controlled-instances"),

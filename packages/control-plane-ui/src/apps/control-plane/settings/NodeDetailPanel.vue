@@ -295,10 +295,16 @@
             <div class="node-detail-section flush-section fill-section">
               <div class="section-head">
                 <span>{{ t("settings.nodeDetail.localFolderCount", { count: resources.localFolders.length }) }}</span>
-                <Button variant="outline" size="sm" :disabled="busy.creatingNodeLocalFolder" @click="actions.submitNodeLocalFolder">
-                  <FolderOpen :size="14" />
-                  <span>{{ busy.creatingNodeLocalFolder ? t("settings.nodeDetail.adding") : t("settings.nodeDetail.add") }}</span>
-                </Button>
+                <div class="node-folder-add-controls">
+                  <ControlPlaneSelect :model-value="resources.nodeFolderDefaultImageId || '__none__'" :placeholder="t('settings.nodeDetail.defaultImage')" @update:model-value="actions.updateNodeFolderDefaultImage">
+                    <ControlPlaneSelectItem value="__none__">{{ t("settings.nodeDetail.noDefaultImage") }}</ControlPlaneSelectItem>
+                    <ControlPlaneSelectItem v-for="image in resources.nodeFolderImageOptions" :key="image.id" :value="image.id">{{ image.name }}</ControlPlaneSelectItem>
+                  </ControlPlaneSelect>
+                  <Button variant="outline" size="sm" :disabled="busy.creatingNodeLocalFolder" @click="actions.submitNodeLocalFolder">
+                    <FolderOpen :size="14" />
+                    <span>{{ busy.creatingNodeLocalFolder ? t("settings.nodeDetail.adding") : t("settings.nodeDetail.add") }}</span>
+                  </Button>
+                </div>
               </div>
               <ScrollArea class="node-resource-list compact-list">
                 <div class="settings-scroll-content">
@@ -351,7 +357,7 @@
                   <div v-for="instance in resources.instances" :key="instance.id" class="node-resource-row">
                     <div>
                       <strong>{{ instance.name }}</strong>
-                      <code>{{ instance.source.type }} · {{ instance.image?.name || instance.imageId }}</code>
+                      <code>{{ instance.source.type }} · {{ instance.image?.name || instance.imageSelection?.imageId }}</code>
                     </div>
                     <div class="node-resource-row-actions">
                       <Badge :variant="instance.connectionStatus === 'online' ? 'default' : 'secondary'">{{ localizedStatus(instanceStatusKeys, instance.status) }}</Badge>
@@ -436,7 +442,7 @@ import { computed, ref, watch, type Component } from "vue";
 import { useI18n } from "vue-i18n";
 import { Box, Boxes, Download, FolderOpen, Gauge, KeyRound, Monitor, MoreHorizontal, Network, Pencil, Plus, RefreshCw, ServerCog, Settings, Trash2 } from "@lucide/vue";
 import { TooltipTrigger as RekaTooltipTrigger } from "reka-ui";
-import type { BuildInfo, InstanceBoardItem, LocalDockerImage, Node, NodeAgentExternalListener, NodeLocalFolder, NodeRemoteControlPlane, NodeRuntime, UpdateChannel, UpdateCheckResult, UpdateJob } from "../../../api/types";
+import type { BuildInfo, InstanceBoardItem, LocalDockerImage, Node, NodeAgentExternalListener, NodeLocalFolder, NodeRemoteControlPlane, NodeRuntime, SelectableImage, UpdateChannel, UpdateCheckResult, UpdateJob } from "../../../api/types";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
@@ -495,6 +501,7 @@ type NodeDetailActions = {
   removeRuntime: (runtime: NodeRuntime) => void | Promise<void>;
   saveExternalListener: () => void | Promise<void>;
   submitNodeLocalFolder: () => void | Promise<void>;
+  updateNodeFolderDefaultImage: (value: string) => void;
   setUpdateChannel: (value: string) => void;
   updateExternalListenerDraft: (field: "bindScope" | "port", value: string) => void;
   updateRemoteConnect: (field: keyof RemoteConnectDraft, value: string) => void;
@@ -526,6 +533,8 @@ type NodeDetailResources = {
   instances: InstanceBoardItem[];
   localFoldersError: string;
   localFolders: NodeLocalFolder[];
+  nodeFolderDefaultImageId: string;
+  nodeFolderImageOptions: SelectableImage[];
   remoteConnect: RemoteConnectDraft;
   remoteConnectResultByNodeId: Record<string, RemoteConnectResult>;
   remoteKeys: NodeRemoteControlPlane[];
@@ -1238,6 +1247,13 @@ watch(
 
 .node-resource-row-actions {
   display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.node-folder-add-controls {
+  display: grid;
+  grid-template-columns: minmax(150px, 220px) auto;
   align-items: center;
   gap: 8px;
 }

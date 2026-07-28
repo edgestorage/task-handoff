@@ -119,6 +119,15 @@ function dockerRepoDigests(record: Record<string, unknown>) {
   return Array.isArray(record.RepoDigests) ? record.RepoDigests.filter((item): item is string => typeof item === "string") : [];
 }
 
+export function parseDockerImageSize(input: string | undefined) {
+  if (!input) return undefined;
+  const match = /^([0-9]+(?:\.[0-9]+)?)\s*(B|kB|MB|GB|TB)$/i.exec(input.trim());
+  if (!match) return undefined;
+  const multipliers: Record<string, number> = { b: 1, kb: 1_000, mb: 1_000_000, gb: 1_000_000_000, tb: 1_000_000_000_000 };
+  const value = Number(match[1]) * multipliers[match[2].toLowerCase()];
+  return Number.isSafeInteger(Math.round(value)) ? Math.round(value) : undefined;
+}
+
 export async function listDockerImages(runCommand: CommandRunner = defaultCommandRunner): Promise<LocalDockerImage[]> {
   const result = await runCommand("docker", ["images", "--digests", "--format", "{{json .}}"]);
   return result.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
@@ -128,6 +137,6 @@ export async function listDockerImages(runCommand: CommandRunner = defaultComman
     const id = record.ID || record.IDShort || "";
     const reference = repository !== "<none>" && tag !== "<none>" ? `${repository}:${tag}` : id;
     const repoDigests = repository !== "<none>" && record.Digest && record.Digest !== "<none>" ? [`${repository}@${record.Digest}`] : [];
-    return { repository, tag, id, createdSince: record.CreatedSince, size: record.Size, reference, repoDigests };
+    return { repository, tag, id, createdSince: record.CreatedSince, size: record.Size, sizeBytes: parseDockerImageSize(record.Size), reference, repoDigests };
   }).filter((image) => Boolean(image.reference));
 }

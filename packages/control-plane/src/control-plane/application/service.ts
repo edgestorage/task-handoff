@@ -6,9 +6,11 @@ import {
   AppManagementJobResponseSchema,
   AppManagementSnapshotSchema,
   ControlledInstanceSchema,
-  ImageProfileSchema,
+  CustomImageProfileSchema,
+  LEGACY_MARKET_IMAGE_IDS,
   NodeImageAvailabilitySchema,
   sanitizeStoredImageProfile,
+  sanitizeStoredProject,
   FederatedModelRegistrySchema,
   ModelConfigSchema,
   modelConfigHash,
@@ -21,7 +23,7 @@ import {
   type ChatSessionBinding,
   type ControlledInstance,
   type ControlledInstanceHeartbeat,
-  type ImageProfile,
+  type CustomImageProfile,
   type ModelConfig,
   type NodeModelPublicRecord,
   type Node,
@@ -64,7 +66,9 @@ import {
   TriggerIndexSchema,
 } from "@task-handoff/protocol/triggers";
 import crypto from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
+import writeFileAtomic from "write-file-atomic";
 import { WebSocket as WsClient } from "ws";
 import { z } from "zod";
 import type { CommandRunner } from "../../shared/process/command-runner.ts";
@@ -74,6 +78,7 @@ import { ControlledInstanceGateway } from "../instances/gateway.ts";
 import { InstanceBoardReader } from "../instances/board-reader.ts";
 import { ControlPlaneTriggerService } from "../triggers/service.ts";
 import { ControlPlaneCatalogService } from "../catalog/service.ts";
+import { EmbeddedMarketCatalogProvider, MarketCatalogService } from "../catalog/market.ts";
 import { AppAccessService, type AppAccessMode } from "../instances/app-access-service.ts";
 import { ChatActionTokenService, type ChatActionToken } from "../chat/action-token-service.ts";
 import { ChatBridgeService } from "../chat/bridges/service.ts";
@@ -215,7 +220,7 @@ function localConnectionModeForEndpoint(endpoint: string): Node["connectionMode"
 export class ControlPlaneService {
   private readonly projects: JsonCollection<Project>;
   readonly models: JsonCollection<ModelConfig>;
-  private readonly images: JsonCollection<ImageProfile>;
+  private readonly images: JsonCollection<CustomImageProfile>;
   readonly nodes: JsonCollection<Node>;
   readonly chatSessions: JsonCollection<ChatSessionBinding>;
   readonly chatBridges: JsonCollection<ChatBridgeConfig>;
@@ -234,6 +239,7 @@ export class ControlPlaneService {
   private readonly instanceBoardReader = new InstanceBoardReader();
   private readonly controlPlaneTriggerService: ControlPlaneTriggerService;
   private readonly catalogService: ControlPlaneCatalogService;
+  private readonly marketCatalogService: MarketCatalogService;
   private readonly chatBridgeService: ChatBridgeService;
   private readonly chatSessionService: ChatSessionService;
   private readonly chatSessionRuntime: ControlPlaneChatSessionRuntime;
@@ -261,10 +267,10 @@ export class ControlPlaneService {
       schema,
       logger: (message: string, details: Record<string, unknown>) => this.logWarn(details, message),
     });
-    this.projects = new JsonCollection(paths.projectsDir, storeOptions(ProjectSchema));
+    this.projects = new JsonCollection(paths.projectsDir, { ...storeOptions(ProjectSchema), sanitize: sanitizeStoredProject });
     this.models = new JsonCollection(paths.modelsDir, storeOptions(ModelConfigSchema));
     this.images = new JsonCollection(paths.imagesDir, {
-      ...storeOptions(ImageProfileSchema),
+      ...storeOptions(CustomImageProfileSchema),
       sanitize: (value) => sanitizeStoredImageProfile(value, (warning) => this.logWarn(warning, "legacy image profile field was migrated")),
     });
     this.nodes = new JsonCollection(paths.nodesDir, storeOptions(NodeSchema));
@@ -276,9 +282,11 @@ export class ControlPlaneService {
       ...storeOptions(ControlPlaneSettingsSchema),
       sanitize: sanitizeStoredControlPlaneSettings,
     });
+    this.marketCatalogService = new MarketCatalogService();
     this.catalogService = new ControlPlaneCatalogService({
       projects: this.projects,
       images: this.images,
+      market: this.marketCatalogService,
       settings: this.settings,
       defaultNodeId: () => this.defaultNodeId(),
     });
@@ -363,7 +371,75 @@ export class ControlPlaneService {
     this.triggers.init();
     this.nodeJoinInvites.init();
     this.settings.init();
+    this.migrateLegacyImageCatalog();
     this.seedDefaults();
+  }
+
+  private migrateLegacyImageCatalog() {
+    const legacyIds = Object.keys(LEGACY_MARKET_IMAGE_IDS);
+    const legacyFiles = [] as Array<{ id: string; filePath: string; record: unknown }>;
+    for (const legacyId of legacyIds) {
+      const filePath = this.images.filePath(legacyId);
+      if (!fs.existsSync(filePath)) continue;
+      try {
+        legacyFiles.push({ id: legacyId, filePath, record: JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown });
+      } catch (error) {
+        this.writeMarketMigrationState("failed", { code: "LEGACY_IMAGE_BACKUP_READ_FAILED", legacyId, error: errorMessage(error) });
+        this.logWarn({ legacyId, error: errorMessage(error) }, "legacy embedded image migration was not applied");
+        return;
+      }
+    }
+    if (!legacyFiles.length) return;
+
+    const projectFiles = fs.readdirSync(this.paths.projectsDir)
+      .filter((name) => name.endsWith(".json"))
+      .sort()
+      .map((name) => path.join(this.paths.projectsDir, name));
+    const projects = [] as Array<{ filePath: string; raw: unknown; migrated: Project }>;
+    for (const filePath of projectFiles) {
+      try {
+        const raw = JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
+        const migrated = ProjectSchema.parse(sanitizeStoredProject(raw));
+        projects.push({ filePath, raw, migrated });
+      } catch (error) {
+        this.writeMarketMigrationState("failed", { code: "PROJECT_REFERENCE_VALIDATION_FAILED", filePath, error: errorMessage(error) });
+        this.logWarn({ filePath, error: errorMessage(error) }, "legacy embedded image migration was not applied");
+        return;
+      }
+    }
+
+    const unresolved = projects.find(({ migrated }) => {
+      const selectedId = migrated.defaultImageSelection?.imageId;
+      return selectedId ? legacyIds.includes(selectedId) : false;
+    });
+    if (unresolved) {
+      this.writeMarketMigrationState("failed", { code: "PROJECT_REFERENCE_MIGRATION_INCOMPLETE", filePath: unresolved.filePath });
+      return;
+    }
+
+    fs.mkdirSync(this.paths.marketDir, { recursive: true });
+    writeFileAtomic.sync(this.paths.marketMigrationBackupPath, `${JSON.stringify({
+      version: CONTROL_PLANE_PROTOCOL_VERSION,
+      createdAt: now(),
+      images: legacyFiles.map(({ id, record }) => ({ id, record })),
+      projects: projects.map(({ filePath, raw }) => ({ file: path.basename(filePath), record: raw })),
+    }, null, 2)}\n`, { encoding: "utf8" });
+
+    for (const { migrated } of projects) this.projects.put(migrated);
+    for (const { id } of legacyFiles) {
+      this.images.delete(id);
+      this.logWarn({ legacyId: id, marketId: LEGACY_MARKET_IMAGE_IDS[id] }, "embedded image profile migrated to Market");
+    }
+    this.writeMarketMigrationState("complete", {
+      code: "LEGACY_IMAGE_MIGRATION_COMPLETE",
+      migratedImageIds: legacyFiles.map(({ id }) => id),
+      backupPath: this.paths.marketMigrationBackupPath,
+    });
+  }
+
+  private writeMarketMigrationState(status: "complete" | "failed", details: Record<string, unknown>) {
+    fs.mkdirSync(this.paths.marketDir, { recursive: true });
+    writeFileAtomic.sync(this.paths.marketStatePath, `${JSON.stringify({ status, updatedAt: now(), ...details }, null, 2)}\n`, { encoding: "utf8" });
   }
 
   getSettings() {
@@ -639,6 +715,19 @@ export class ControlPlaneService {
     return this.catalogService.listImages();
   }
 
+  getMarketCatalog() {
+    return this.catalogService.getMarketCatalog();
+  }
+
+  async refreshMarketCatalog() {
+    await this.marketCatalogService.refresh(new EmbeddedMarketCatalogProvider());
+    return this.getMarketCatalog();
+  }
+
+  listImageOptions() {
+    return this.catalogService.listImageOptions();
+  }
+
   createImage(input: unknown) {
     return this.catalogService.createImage(input);
   }
@@ -650,12 +739,28 @@ export class ControlPlaneService {
 
   async listNodeImageAvailability(nodeId: string) {
     const node = this.requireNode(nodeId);
-    const images = this.listImages();
+    const agent = node.capabilities.agent && typeof node.capabilities.agent === "object"
+      ? node.capabilities.agent as Record<string, unknown>
+      : {};
+    const platform = {
+      os: typeof agent.platform === "string" ? agent.platform : undefined,
+      architecture: typeof agent.arch === "string" ? (agent.arch === "x64" ? "amd64" : agent.arch) : undefined,
+    };
+    const images = this.catalogService.listImageOptions(platform);
     try {
       const localImages = await this.nodeAgentGateway.listDockerImages(node);
       return images.map((image) => {
-        const localImage = localImages.find((local) => local.reference === image.reference || local.repoDigests.includes(image.reference!));
-        return NodeImageAvailabilitySchema.parse({ image, status: localImage ? "available" : "pull-required", localImage });
+        const localImage = localImages.find((local) => local.reference === image.reference
+          || (image.digest ? local.repoDigests.some((digest) => digest.endsWith(`@${image.digest}`)) : false)
+          || local.repoDigests.includes(image.reference));
+        return NodeImageAvailabilitySchema.parse({
+          image,
+          status: localImage ? "available" : "pull-required",
+          localImage,
+          localSizeBytes: localImage?.sizeBytes,
+          downloadSizeBytes: localImage ? undefined : image.downloadSizeBytes,
+          unpackedSizeBytes: localImage ? undefined : image.unpackedSizeBytes,
+        });
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -858,13 +963,13 @@ export class ControlPlaneService {
 
   async deleteImage(id: string) {
     this.catalogService.requireImage(id);
-    const project = this.listProjects().find((item) => item.defaultImageId === id);
+    const project = this.listProjects().find((item) => item.defaultImageSelection?.imageId === id);
     if (project) throw Object.assign(new Error(`Image ${id} is the default for project ${project.name}.`), { statusCode: 409, code: "IMAGE_IN_USE" });
     const folders = (await Promise.all(this.listNodes().map((node) => this.nodeAgentGateway.listLocalFolders(node)))).flat();
-    const folder = folders.find((item) => item.defaultImageId === id);
+    const folder = folders.find((item) => item.defaultImageSelection?.imageId === id);
     if (folder) throw Object.assign(new Error(`Image ${id} is the default for local folder ${folder.name}.`), { statusCode: 409, code: "IMAGE_IN_USE" });
     const instances = await this.listNodeInstances();
-    const instance = instances.find((item) => item.imageId === id);
+    const instance = instances.find((item) => item.imageSelection?.imageId === id);
     if (instance) throw Object.assign(new Error(`Image ${id} is used by instance ${instance.name}.`), { statusCode: 409, code: "IMAGE_IN_USE" });
     return this.catalogService.deleteImage(id);
   }
@@ -1050,9 +1155,9 @@ export class ControlPlaneService {
     const node = this.requireNode(nodeId);
     const runtime = await this.requireNodeRuntimeOnNode(node.id, runtimeId);
     const requiresImage = typeof runtime.capabilities.requiresImage === "boolean" ? runtime.capabilities.requiresImage : runtime.type !== "local";
-    const imageId = parsedInput.imageId || (requiresImage ? project?.defaultImageId : undefined);
-    const image = imageId ? this.requireImage(imageId) : undefined;
-    if (requiresImage && !image) {
+    const imageSelection = parsedInput.imageSelection || (requiresImage ? project?.defaultImageSelection : undefined);
+    const imageOption = imageSelection ? this.catalogService.resolveImageSelection(imageSelection) : undefined;
+    if (requiresImage && !imageOption) {
       const error = new Error(`Runtime ${runtime.name} requires an image.`);
       Object.assign(error, { statusCode: 400, code: "RUNTIME_IMAGE_REQUIRED" });
       throw error;
@@ -1083,7 +1188,7 @@ export class ControlPlaneService {
         const folder = await this.nodeAgentGateway.createLocalFolder(node, {
             name: typeof sourceSnapshot.name === "string" ? sourceSnapshot.name : "Local folder",
             path: source.path,
-            defaultImageId: image?.id,
+            defaultImageSelection: imageOption ? { imageId: imageOption.id, tag: imageOption.tag } : undefined,
           });
         source = { ...source, localFolderId: folder.id, ownerNodeId: folder.nodeId, path: folder.path };
         sourceSnapshot = folder as Record<string, unknown>;
@@ -1091,11 +1196,37 @@ export class ControlPlaneService {
     }
 
     const preparedModels = await this.prepareInstanceModels(node, parsedInput.modelSelection || {});
+    const imageTimestamp = now();
+    const imageSnapshot = imageOption ? {
+      id: imageOption.id,
+      origin: imageOption.origin,
+      name: imageOption.name,
+      description: imageOption.description,
+      localizedDescriptions: imageOption.localizedDescriptions,
+      cover: imageOption.cover,
+      repository: imageOption.repository,
+      tag: imageOption.tag,
+      requestedReference: imageOption.reference,
+      resolvedDigest: imageOption.digest,
+      resolvedReference: imageOption.digest ? `${imageOption.repository}@${imageOption.digest}` : undefined,
+      downloadSizeBytes: imageOption.downloadSizeBytes,
+      pullPolicy: "if-not-present" as const,
+      capabilities: imageOption.capabilities,
+      optionalApps: imageOption.optionalApps,
+      defaultEnv: imageOption.defaultEnv,
+      labels: imageOption.labels,
+      market: imageOption.market,
+      createdAt: imageTimestamp,
+      updatedAt: imageTimestamp,
+    } : undefined;
     const instance = await this.nodeAgentGateway.createInstance(node, {
       id: parsedInput.id,
       name: parsedInput.name,
       runtimeId,
-      ...(image ? { imageId: image.id, image } : {}),
+      ...(imageOption && imageSnapshot ? {
+        imageSelection: { imageId: imageOption.id, tag: imageOption.tag },
+        image: imageSnapshot,
+      } : {}),
       projectId: project?.id,
       source,
       sourceSnapshot,
@@ -1188,7 +1319,7 @@ export class ControlPlaneService {
     const instanceResult = await this.listNodeInstancesWithDiagnostics();
     return this.instanceBoardReader.read({
       projects: this.listProjects(),
-      images: this.listImages(),
+      images: this.listImageOptions(),
       nodes: this.nodes.list(),
       runtimes: runtimeResult.items,
       instances: instanceResult.items,

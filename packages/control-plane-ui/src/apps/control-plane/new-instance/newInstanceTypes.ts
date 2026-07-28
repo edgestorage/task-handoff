@@ -14,6 +14,7 @@ export type RuntimeDraft = {
   nodeId: string;
   runtimeId: string;
   imageId: string;
+  imageTag: string;
 };
 
 export type InstanceDraft = {

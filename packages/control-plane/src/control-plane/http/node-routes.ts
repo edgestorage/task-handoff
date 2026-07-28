@@ -149,7 +149,7 @@ export function registerNodeRoutes({
     return { data: runtime };
   });
   app.get("/api/nodes/:id/docker/images", async (request) => ({ data: await service.listNodeDockerImages(IdParamsSchema.parse(request.params).id) }));
-  app.get("/api/nodes/:id/images/catalog", async (request) => ({ data: await service.listNodeImageAvailability(IdParamsSchema.parse(request.params).id) }));
+  app.get("/api/nodes/:id/image-options", async (request) => ({ data: await service.listNodeImageAvailability(IdParamsSchema.parse(request.params).id) }));
   app.get("/api/nodes/:id/local-folders", async (request) => ({ data: await service.listNodeLocalFolders(IdParamsSchema.parse(request.params).id) }));
   app.get("/api/nodes/:id/folders/tree", async (request) => {
     const params = IdParamsSchema.parse(request.params);

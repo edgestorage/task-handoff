@@ -53,6 +53,9 @@ export function eventTopic(type: string) {
   if (type.startsWith("image.")) {
     return "images";
   }
+  if (type.startsWith("market.")) {
+    return "market";
+  }
   return "system";
 }
 import { z } from "zod";
