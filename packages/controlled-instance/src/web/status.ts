@@ -81,38 +81,58 @@ function storageDiagnostic(paths: TaskHandoffStoragePaths) {
 }
 
 export function runtimeDiagnostics(paths: TaskHandoffStoragePaths, noVncRoot: string | undefined) {
+  const imageProfile = optionalEnv("TASK_HANDOFF_IMAGE_PROFILE");
+  const declaredCapabilities = optionalEnv("TASK_HANDOFF_IMAGE_CAPABILITIES")
+    ?.split(",")
+    .map((capability) => capability.trim())
+    .filter(Boolean);
+  const requiredCapabilities = declaredCapabilities ? new Set(declaredCapabilities) : undefined;
   const commands = [
-    { name: "Xvfb", requiredFor: ["gui-display"] },
-    { name: "openbox", requiredFor: ["gui-window-manager"] },
-    { name: "picom", requiredFor: ["gui-compositor"] },
-    { name: "x11vnc", requiredFor: ["vnc"] },
-    { name: "websockify", requiredFor: ["novnc-proxy"] },
-    { name: "vncserver", requiredFor: ["kasmvnc"] },
-    { name: "vncpasswd", requiredFor: ["kasmvnc-auth"] },
-    { name: "openssl", requiredFor: ["kasmvnc-cert"] },
-    { name: "xrdb", requiredFor: ["kasmvnc-hidpi"] },
-    { name: "xrandr", requiredFor: ["kasmvnc-resize"] },
+    { name: "Xvfb", requiredFor: ["browser", "gui-terminal", "vscode-web"] },
+    { name: "openbox", requiredFor: ["browser", "gui-terminal", "vscode-web"] },
+    { name: "picom", requiredFor: ["browser", "gui-terminal", "vscode-web"] },
+    { name: "x11vnc", requiredFor: ["browser", "gui-terminal", "vscode-web"] },
+    { name: "websockify", requiredFor: ["browser", "gui-terminal", "vscode-web"] },
+    { name: "vncserver", requiredFor: ["browser", "gui-terminal", "vscode-web"] },
+    { name: "vncpasswd", requiredFor: ["browser", "gui-terminal", "vscode-web"] },
+    { name: "openssl", requiredFor: ["browser", "gui-terminal", "vscode-web"] },
+    { name: "xrdb", requiredFor: ["browser", "gui-terminal", "vscode-web"] },
+    { name: "xrandr", requiredFor: ["browser", "gui-terminal", "vscode-web"] },
     { name: process.env.TASK_HANDOFF_CHROMIUM_COMMAND || "chromium", label: "chromium", requiredFor: ["browser"] },
     { name: process.env.TASK_HANDOFF_VSCODE_WEB_COMMAND || "code-server", label: "code-server", requiredFor: ["vscode-web"] },
     { name: process.env.TASK_HANDOFF_XTERM_COMMAND || "xterm", label: "xterm", requiredFor: ["gui-terminal"] },
-    { name: "import", requiredFor: ["screenshot"] },
-    { name: process.env.TASK_HANDOFF_CODEX_COMMAND || "codex", label: "codex", requiredFor: ["active-codex-agent"] },
-    { name: process.env.TASK_HANDOFF_CLAUDE_COMMAND || process.env.CLAUDE_CLI_PATH || "claude", label: "claude", requiredFor: ["active-claude-agent"] },
+    { name: "import", requiredFor: ["browser", "gui-terminal", "vscode-web"] },
+    { name: process.env.TASK_HANDOFF_CODEX_COMMAND || "codex", label: "codex", requiredFor: ["codex"] },
+    { name: process.env.TASK_HANDOFF_CLAUDE_COMMAND || process.env.CLAUDE_CLI_PATH || "claude", label: "claude", requiredFor: ["claude"] },
   ].map((command) => {
     const resolvedPath = executablePath(command.name);
+    const required = requiredCapabilities
+      ? command.requiredFor.some((capability) => requiredCapabilities.has(capability))
+      : true;
     return {
       name: command.label || command.name,
       command: command.name,
       available: Boolean(resolvedPath),
       path: resolvedPath,
       requiredFor: command.requiredFor,
+      required,
     };
   });
   const storage = storageDiagnostic(paths);
   const linuxRuntime = process.platform === "linux";
-  const requiredRuntimeReady = linuxRuntime && commands.every((command) => command.available) && Boolean(noVncRoot) && storage.every((entry) => entry.writable);
+  const guiRequired = requiredCapabilities
+    ? ["browser", "gui-terminal", "vscode-web"].some((capability) => requiredCapabilities.has(capability))
+    : true;
+  const requiredRuntimeReady = linuxRuntime
+    && commands.every((command) => !command.required || command.available)
+    && (!guiRequired || Boolean(noVncRoot))
+    && storage.every((entry) => entry.writable);
   return {
     ok: requiredRuntimeReady,
+    image: {
+      profile: imageProfile,
+      capabilities: declaredCapabilities || [],
+    },
     runtime: {
       platform: process.platform,
       arch: process.arch,
@@ -163,15 +183,16 @@ export function workspaceStatus(paths: TaskHandoffStoragePaths) {
 }
 
 export function controlledInstanceCapabilities(appRuntime: AppRuntimeManager) {
-  const catalog = appRuntime.catalog();
+  const inventory = appRuntime.appInventory();
+  const available = inventory.items.filter((item) => item.availability === "available");
   return {
     protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
     features: {
       appRuntime: true,
-      tty: catalog.some((item) => item.kind === "tty"),
-      gui: catalog.some((item) => item.kind === "gui"),
-      browser: catalog.some((item) => item.id === "browser" || item.id === "chromium"),
-      screenshots: true,
+      tty: available.some((item) => item.kind === "tty"),
+      gui: available.some((item) => item.kind === "gui"),
+      browser: available.some((item) => item.id === "browser" || item.id === "chromium"),
+      screenshots: available.some((item) => item.kind === "gui") && Boolean(executablePath("import")),
       logs: true,
     },
   };

@@ -7853,14 +7853,14 @@ test("control plane forwards instance config auto-import setting to node agent",
 });
 
 test("control plane reports node-scoped image availability and preserves unknown inventory failures", async (t) => {
-  const reference = "huadream/task-handoff-controlled-instance:latest";
+  const reference = "huadream/task-handoff-controlled-browser:latest";
   const availableAgent = createMockNodeAgentFetch({
     dockerImages: [{
-      repository: "huadream/task-handoff-controlled-instance",
+      repository: "huadream/task-handoff-controlled-browser",
       tag: "latest",
       id: "sha256:local",
       reference,
-      repoDigests: ["huadream/task-handoff-controlled-instance@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+      repoDigests: ["huadream/task-handoff-controlled-browser@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
     }],
   });
   const missingAgent = createMockNodeAgentFetch({ nodeId: "node_missing", dockerImages: [] });
@@ -7895,8 +7895,9 @@ test("control plane reports node-scoped image availability and preserves unknown
 
   const available = await json(app, "GET", "/api/nodes/node_mock/images/catalog");
   assert.equal(available.statusCode, 200);
-  assert.equal(available.body.data[0].status, "available");
-  assert.equal(available.body.data[0].localImage.reference, reference);
+  const availableBrowser = available.body.data.find((entry) => entry.image.reference === reference);
+  assert.equal(availableBrowser.status, "available");
+  assert.equal(availableBrowser.localImage.reference, reference);
 
   const missing = await json(app, "GET", "/api/nodes/node_missing/images/catalog");
   assert.equal(missing.statusCode, 200);

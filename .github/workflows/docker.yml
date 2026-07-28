@@ -33,7 +33,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  DOCKERHUB_IMAGE_NAME: ${{ vars.DOCKERHUB_IMAGE_NAME || 'task-handoff-controlled-instance' }}
+  DOCKERHUB_CODEX_IMAGE_NAME: ${{ vars.DOCKERHUB_CODEX_IMAGE_NAME || 'task-handoff-controlled-codex' }}
+  DOCKERHUB_AI_IMAGE_NAME: ${{ vars.DOCKERHUB_AI_IMAGE_NAME || 'task-handoff-controlled-ai' }}
+  DOCKERHUB_BROWSER_IMAGE_NAME: ${{ vars.DOCKERHUB_BROWSER_IMAGE_NAME || 'task-handoff-controlled-browser' }}
 
 jobs:
   docker-build:
@@ -59,29 +61,70 @@ jobs:
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             version="${GITHUB_REF_NAME#v}"
             node -e 'if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(process.argv[1])) process.exit(1)' "$version"
-            image_ref="${DOCKERHUB_IMAGE_NAME}:${GITHUB_REF_NAME}"
+            codex_image_ref="${DOCKERHUB_CODEX_IMAGE_NAME}:${GITHUB_REF_NAME}"
+            ai_image_ref="${DOCKERHUB_AI_IMAGE_NAME}:${GITHUB_REF_NAME}"
+            browser_image_ref="${DOCKERHUB_BROWSER_IMAGE_NAME}:${GITHUB_REF_NAME}"
           else
             version="$(node -p "require('./package.json').version")"
-            image_ref="task-handoff-controlled-instance:ci-${{ matrix.arch }}"
+            codex_image_ref="task-handoff-controlled-codex:ci-${{ matrix.arch }}"
+            ai_image_ref="task-handoff-controlled-ai:ci-${{ matrix.arch }}"
+            browser_image_ref="task-handoff-controlled-browser:ci-${{ matrix.arch }}"
           fi
           echo "value=$version" >> "$GITHUB_OUTPUT"
-          echo "image-ref=$image_ref" >> "$GITHUB_OUTPUT"
+          echo "codex-image-ref=$codex_image_ref" >> "$GITHUB_OUTPUT"
+          echo "ai-image-ref=$ai_image_ref" >> "$GITHUB_OUTPUT"
+          echo "browser-image-ref=$browser_image_ref" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v4
 
-      - name: Build controlled instance image
+      - name: Build Codex image
         uses: docker/build-push-action@v7
         with:
           context: .
           load: true
           platforms: ${{ matrix.platform }}
-          tags: task-handoff-controlled-instance:ci-${{ matrix.arch }}
+          target: profile-codex
+          tags: task-handoff-controlled-codex:ci-${{ matrix.arch }}
           build-args: |
             TASK_HANDOFF_VERSION=${{ steps.image-version.outputs.value }}
             TASK_HANDOFF_BUILD_ID=${{ github.run_id }}
             TASK_HANDOFF_BUILT_AT=${{ github.event.repository.updated_at }}
             TASK_HANDOFF_GIT_COMMIT=${{ github.sha }}
-            TASK_HANDOFF_IMAGE_REF=${{ steps.image-version.outputs.image-ref }}
+            TASK_HANDOFF_IMAGE_REF=${{ steps.image-version.outputs.codex-image-ref }}
+          cache-from: type=gha,scope=controlled-instance-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=controlled-instance-${{ matrix.arch }}
+
+      - name: Build AI image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          platforms: ${{ matrix.platform }}
+          target: profile-ai
+          tags: task-handoff-controlled-ai:ci-${{ matrix.arch }}
+          build-args: |
+            TASK_HANDOFF_VERSION=${{ steps.image-version.outputs.value }}
+            TASK_HANDOFF_BUILD_ID=${{ github.run_id }}
+            TASK_HANDOFF_BUILT_AT=${{ github.event.repository.updated_at }}
+            TASK_HANDOFF_GIT_COMMIT=${{ github.sha }}
+            TASK_HANDOFF_IMAGE_REF=${{ steps.image-version.outputs.ai-image-ref }}
+          cache-from: type=gha,scope=controlled-instance-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=controlled-instance-${{ matrix.arch }}
+
+      - name: Build Browser image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          platforms: ${{ matrix.platform }}
+          target: profile-browser
+          tags: task-handoff-controlled-browser:ci-${{ matrix.arch }}
+          build-args: |
+            TASK_HANDOFF_VERSION=${{ steps.image-version.outputs.value }}
+            TASK_HANDOFF_BUILD_ID=${{ github.run_id }}
+            TASK_HANDOFF_BUILT_AT=${{ github.event.repository.updated_at }}
+            TASK_HANDOFF_GIT_COMMIT=${{ github.sha }}
+            TASK_HANDOFF_IMAGE_REF=${{ steps.image-version.outputs.browser-image-ref }}
           cache-from: type=gha,scope=controlled-instance-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=controlled-instance-${{ matrix.arch }}
 
@@ -89,14 +132,59 @@ jobs:
         env:
           EXPECTED_VERSION: ${{ steps.image-version.outputs.value }}
         run: |
-          actual="$(docker image inspect task-handoff-controlled-instance:ci-${{ matrix.arch }} --format '{{ index .Config.Labels "org.opencontainers.image.version" }}')"
-          test "$actual" = "$EXPECTED_VERSION"
+          for profile in codex ai browser; do
+            actual="$(docker image inspect "task-handoff-controlled-${profile}:ci-${{ matrix.arch }}" --format '{{ index .Config.Labels "org.opencontainers.image.version" }}')"
+            declared_profile="$(docker image inspect "task-handoff-controlled-${profile}:ci-${{ matrix.arch }}" --format '{{ index .Config.Labels "io.task-handoff.image.profile" }}')"
+            test "$actual" = "$EXPECTED_VERSION"
+            test "$declared_profile" = "$profile"
+          done
 
-      - name: Smoke test
+      - name: Smoke test lightweight profiles
+        if: ${{ matrix.arch == 'amd64' }}
+        run: |
+          for profile in codex ai; do
+            if [ "$profile" = codex ]; then
+              port=18081
+            else
+              port=18082
+            fi
+            docker run --rm -d \
+              --name "task-handoff-${profile}-ci" \
+              -p "${port}:8080" \
+              -e TASK_HANDOFF_WEB_AUTH=off \
+              "task-handoff-controlled-${profile}:ci-amd64"
+            for i in $(seq 1 30); do
+              if curl -fsS "http://127.0.0.1:${port}/api/health"; then
+                break
+              fi
+              if [ "$i" = 30 ]; then
+                docker logs "task-handoff-${profile}-ci"
+                exit 1
+              fi
+              sleep 1
+            done
+            diagnostics_response="$(curl -fsS "http://127.0.0.1:${port}/api/diagnostics")"
+            printf '%s\n' "$diagnostics_response" | EXPECTED_PROFILE="$profile" node -e '
+            const fs = require("node:fs");
+            const payload = JSON.parse(fs.readFileSync(0, "utf8")).data;
+            if (!payload.ok) throw new Error(`${process.env.EXPECTED_PROFILE} diagnostics ok=false`);
+            if (payload.image.profile !== process.env.EXPECTED_PROFILE) throw new Error("image profile mismatch");
+            const requiredMissing = payload.commands.filter((command) => command.required && !command.available);
+            if (requiredMissing.length) throw new Error(`required commands missing: ${requiredMissing.map((command) => command.name).join(", ")}`);
+            '
+          done
+          docker exec task-handoff-codex-ci codex --version
+          ! docker exec task-handoff-codex-ci sh -lc 'command -v claude'
+          ! docker exec task-handoff-codex-ci sh -lc 'command -v chromium'
+          docker exec task-handoff-ai-ci codex --version
+          docker exec task-handoff-ai-ci claude --version
+          ! docker exec task-handoff-ai-ci sh -lc 'command -v chromium'
+
+      - name: Smoke test Browser profile
         if: ${{ matrix.arch == 'amd64' }}
         env:
           EXPECTED_VERSION: ${{ steps.image-version.outputs.value }}
-          EXPECTED_IMAGE_REF: ${{ steps.image-version.outputs.image-ref }}
+          EXPECTED_IMAGE_REF: ${{ steps.image-version.outputs.browser-image-ref }}
         run: |
           docker run --rm -d \
             --name task-handoff-web-ci \
@@ -104,7 +192,7 @@ jobs:
             --shm-size=1g \
             --security-opt seccomp=unconfined \
             -e TASK_HANDOFF_WEB_AUTH=off \
-            task-handoff-controlled-instance:ci-amd64
+            task-handoff-controlled-browser:ci-amd64
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:18080/api/health; then
               break
@@ -313,7 +401,7 @@ jobs:
 
       - name: Cleanup
         if: ${{ always() && matrix.arch == 'amd64' }}
-        run: docker rm -f task-handoff-web-ci 2>/dev/null || true
+        run: docker rm -f task-handoff-web-ci task-handoff-codex-ci task-handoff-ai-ci 2>/dev/null || true
 
       - name: Login to Docker Hub
         if: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
@@ -327,10 +415,18 @@ jobs:
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
-          image="${DOCKERHUB_USERNAME}/${DOCKERHUB_IMAGE_NAME}"
           sha_tag="sha-${GITHUB_SHA::7}-${{ matrix.arch }}"
-          docker tag "task-handoff-controlled-instance:ci-${{ matrix.arch }}" "${image}:${sha_tag}"
-          docker push "${image}:${sha_tag}"
+          for entry in \
+            "codex:${DOCKERHUB_CODEX_IMAGE_NAME}" \
+            "ai:${DOCKERHUB_AI_IMAGE_NAME}" \
+            "browser:${DOCKERHUB_BROWSER_IMAGE_NAME}"
+          do
+            profile="${entry%%:*}"
+            image_name="${entry#*:}"
+            image="${DOCKERHUB_USERNAME}/${image_name}"
+            docker tag "task-handoff-controlled-${profile}:ci-${{ matrix.arch }}" "${image}:${sha_tag}"
+            docker push "${image}:${sha_tag}"
+          done
 
   publish-multiarch-image:
     if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
@@ -350,13 +446,19 @@ jobs:
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
-          image="${DOCKERHUB_USERNAME}/${DOCKERHUB_IMAGE_NAME}"
           sha_tag="sha-${GITHUB_SHA::7}"
-          docker buildx imagetools create \
-            --tag "${image}:${sha_tag}" \
-            "${image}:${sha_tag}-amd64" \
-            "${image}:${sha_tag}-arm64"
-          docker buildx imagetools inspect "${image}:${sha_tag}"
+          for image_name in \
+            "${DOCKERHUB_CODEX_IMAGE_NAME}" \
+            "${DOCKERHUB_AI_IMAGE_NAME}" \
+            "${DOCKERHUB_BROWSER_IMAGE_NAME}"
+          do
+            image="${DOCKERHUB_USERNAME}/${image_name}"
+            docker buildx imagetools create \
+              --tag "${image}:${sha_tag}" \
+              "${image}:${sha_tag}-amd64" \
+              "${image}:${sha_tag}-arm64"
+            docker buildx imagetools inspect "${image}:${sha_tag}"
+          done
 
   promote-release:
     if: ${{ startsWith(github.ref, 'refs/tags/v') }}
@@ -382,19 +484,28 @@ jobs:
             exit 1
           fi
 
-          image="${DOCKERHUB_USERNAME}/${DOCKERHUB_IMAGE_NAME}"
-          source="${image}:sha-${GITHUB_SHA::7}"
-          tags=(--tag "${image}:${version}")
-          if [[ "$version" != *-* ]]; then
-            tags+=(--tag "${image}:latest")
-          else
+          if [[ "$version" == *-* ]]; then
             prerelease="${version#*-}"
             channel="${prerelease%%.*}"
             if [[ "$channel" != "alpha" && "$channel" != "beta" ]]; then
               echo "::error::Only alpha and beta prerelease channels are supported: $version"
               exit 1
             fi
-            tags+=(--tag "${image}:${channel}")
           fi
-          docker buildx imagetools create --prefer-index=false "${tags[@]}" "$source"
-          docker buildx imagetools inspect "${image}:${version}"
+
+          for image_name in \
+            "${DOCKERHUB_CODEX_IMAGE_NAME}" \
+            "${DOCKERHUB_AI_IMAGE_NAME}" \
+            "${DOCKERHUB_BROWSER_IMAGE_NAME}"
+          do
+            image="${DOCKERHUB_USERNAME}/${image_name}"
+            source="${image}:sha-${GITHUB_SHA::7}"
+            tags=(--tag "${image}:${version}")
+            if [[ "$version" != *-* ]]; then
+              tags+=(--tag "${image}:latest")
+            else
+              tags+=(--tag "${image}:${channel}")
+            fi
+            docker buildx imagetools create --prefer-index=false "${tags[@]}" "$source"
+            docker buildx imagetools inspect "${image}:${version}"
+          done

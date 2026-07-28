@@ -232,16 +232,15 @@ pnpm run pack:dry
 
 ### Docker releases
 
-Every push to `main` builds and smoke-tests the controlled-instance image, then
-publishes it to Docker Hub under the immutable `sha-<commit>` tag. Pushing a
-semantic version tag such as `v1.2.3` does not rebuild the image: the Docker
-workflow waits for that commit image and promotes it to `v1.2.3` in the
-registry. Stable releases also update `latest`; prerelease tags such as
-`v1.2.3-rc.1` do not.
+Every push to `main` builds and smoke-tests three cumulative controlled-instance
+images: `task-handoff-controlled-codex`, `task-handoff-controlled-ai`, and
+`task-handoff-controlled-browser`. Each repository receives the same immutable
+`sha-<commit>` tag. Pushing a semantic version tag such as `v1.2.3` promotes the
+corresponding commit images to `v1.2.3`; stable releases also update `latest`.
 
 Publishing requires the `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` repository
-secrets. `DOCKERHUB_IMAGE_NAME` can optionally override the default
-`task-handoff-controlled-instance` repository name.
+secrets. `DOCKERHUB_CODEX_IMAGE_NAME`, `DOCKERHUB_AI_IMAGE_NAME`, and
+`DOCKERHUB_BROWSER_IMAGE_NAME` can override the three repository names.
 
 ### Desktop releases
 

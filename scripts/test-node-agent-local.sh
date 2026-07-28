@@ -6,7 +6,7 @@ DATA_DIR="$(mktemp -d "${TMPDIR:-/tmp}/task-handoff-control-plane.XXXXXX")"
 CONTROL_PORT="${TASK_HANDOFF_TEST_CONTROL_PORT:-18081}"
 AGENT_PORT="${TASK_HANDOFF_TEST_AGENT_PORT:-18091}"
 AGENT_TOKEN="${TASK_HANDOFF_TEST_AGENT_TOKEN:-dev-token}"
-IMAGE_REF="${TASK_HANDOFF_TEST_IMAGE:-task-handoff-web:local}"
+IMAGE_REF="${TASK_HANDOFF_TEST_IMAGE:-task-handoff-controlled-browser:local}"
 PULL_IMAGE_REF="${TASK_HANDOFF_TEST_PULL_IMAGE:-alpine:3.20}"
 GIT_URL="${TASK_HANDOFF_TEST_GIT_URL:-https://github.com/openai/codex.git}"
 

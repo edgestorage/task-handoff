@@ -3,7 +3,26 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
-IMAGE_REF="${TASK_HANDOFF_IMAGE_REF:-task-handoff-web:local}"
+IMAGE_PROFILE="${TASK_HANDOFF_IMAGE_PROFILE:-browser}"
+case "${IMAGE_PROFILE}" in
+  codex)
+    BUILD_TARGET="profile-codex"
+    DEFAULT_IMAGE_REF="task-handoff-controlled-codex:local"
+    ;;
+  ai)
+    BUILD_TARGET="profile-ai"
+    DEFAULT_IMAGE_REF="task-handoff-controlled-ai:local"
+    ;;
+  browser)
+    BUILD_TARGET="profile-browser"
+    DEFAULT_IMAGE_REF="task-handoff-controlled-browser:local"
+    ;;
+  *)
+    echo "Unsupported TASK_HANDOFF_IMAGE_PROFILE: ${IMAGE_PROFILE} (expected codex, ai, or browser)" >&2
+    exit 1
+    ;;
+esac
+IMAGE_REF="${TASK_HANDOFF_IMAGE_REF:-${DEFAULT_IMAGE_REF}}"
 DOCKERFILE="${TASK_HANDOFF_DOCKERFILE:-Dockerfile}"
 CONTEXT_DIR="${TASK_HANDOFF_DOCKER_CONTEXT:-.}"
 BUILD_ID="${TASK_HANDOFF_BUILD_ID:-$(git rev-parse --short=12 HEAD 2>/dev/null || date -u +%Y%m%d%H%M%S)}"
@@ -12,6 +31,7 @@ GIT_COMMIT="${TASK_HANDOFF_GIT_COMMIT:-$(git rev-parse HEAD 2>/dev/null || true)
 
 set -- \
   --file "${DOCKERFILE}" \
+  --target "${BUILD_TARGET}" \
   --tag "${IMAGE_REF}" \
   --build-arg "CODEX_CLI_PACKAGE=${CODEX_CLI_PACKAGE:-@openai/codex@latest}" \
   --build-arg "CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION:-2.1.183}" \
@@ -40,5 +60,5 @@ if [ "${TASK_HANDOFF_DOCKER_PULL:-0}" = "1" ]; then
   set -- "$@" --pull
 fi
 
-echo "Building ${IMAGE_REF} from ${DOCKERFILE}"
+echo "Building ${IMAGE_PROFILE} profile as ${IMAGE_REF} from ${DOCKERFILE}"
 exec docker build "$@" "${CONTEXT_DIR}"

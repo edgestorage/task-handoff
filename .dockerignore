@@ -4,6 +4,7 @@
 .DS_Store
 node_modules
 dist
+release
 src/web/ui/dist
 coverage
 *.log

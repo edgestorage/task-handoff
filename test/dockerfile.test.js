@@ -7,7 +7,22 @@ const root = path.resolve(__dirname, "..");
 
 test("Docker runtime uses the supported Node.js 24 release line", () => {
   const dockerfile = fs.readFileSync(path.join(root, "Dockerfile"), "utf8");
-  assert.match(dockerfile, /^FROM node:24-bookworm-slim AS base$/m);
+  assert.match(dockerfile, /^FROM node:24-bookworm-slim AS build-base$/m);
+  assert.match(dockerfile, /^FROM node:24-bookworm-slim AS runtime-base$/m);
+});
+
+test("Docker exports cumulative Codex, AI, and Browser image profiles", () => {
+  const dockerfile = fs.readFileSync(path.join(root, "Dockerfile"), "utf8");
+
+  assert.match(dockerfile, /FROM runtime-core AS profile-codex-root/);
+  assert.match(dockerfile, /FROM profile-codex-root AS profile-ai-root/);
+  assert.match(dockerfile, /FROM profile-ai-root AS profile-browser-root/);
+  assert.match(dockerfile, /FROM profile-codex-root AS profile-codex[\s\S]*TASK_HANDOFF_IMAGE_PROFILE=codex/);
+  assert.match(dockerfile, /FROM profile-ai-root AS profile-ai[\s\S]*TASK_HANDOFF_IMAGE_PROFILE=ai/);
+  assert.match(dockerfile, /FROM profile-browser-root AS profile-browser[\s\S]*TASK_HANDOFF_IMAGE_PROFILE=browser/);
+  assert.match(dockerfile, /io\.task-handoff\.image\.capabilities=terminal,codex/);
+  assert.match(dockerfile, /io\.task-handoff\.image\.capabilities=terminal,codex,claude/);
+  assert.match(dockerfile, /io\.task-handoff\.image\.capabilities=terminal,gui-terminal,browser,vscode-web,codex,claude/);
 });
 
 test("Docker image bakes a versioned bootstrap runtime and retains the managed runtime launcher", () => {
@@ -15,6 +30,9 @@ test("Docker image bakes a versioned bootstrap runtime and retains the managed r
 
   assert.match(dockerfile, /ARG TASK_HANDOFF_VERSION=0\.0\.1[\s\S]*TASK_HANDOFF_VERSION="\$\{TASK_HANDOFF_VERSION\}" pnpm run runtime:pack:controlled-instance/);
   assert.match(dockerfile, /npm install -g --omit=dev[\s\S]*task-handoff-controlled-instance-/);
+  assert.match(dockerfile, /FROM runtime-base AS runtime-package-install[\s\S]*apt-get install -y --no-install-recommends g\+\+ make/);
+  assert.match(dockerfile, /FROM runtime-base AS runtime-core[\s\S]*COPY --from=runtime-package-install \/usr\/local\/lib\/node_modules\/@task-handoff\/controlled-instance/);
+  assert.match(dockerfile, /ln -s \.\.\/lib\/node_modules\/@task-handoff\/controlled-instance\/bin\/task-handoff-controlled-instance \/usr\/local\/bin\/task-handoff-controlled-instance/);
   assert.match(dockerfile, /COPY docker\/instance-launcher\.sh/);
   assert.match(dockerfile, /COPY docker\/runtime-installer\.mjs/);
   const launcher = fs.readFileSync(path.join(root, "docker", "instance-launcher.sh"), "utf8");
@@ -42,6 +60,9 @@ test("Docker CI builds amd64 and arm64 concurrently and publishes a multi-archit
   assert.match(workflow, /arch: arm64\n\s+platform: linux\/arm64\n\s+runner: ubuntu-24\.04-arm/);
   assert.doesNotMatch(workflow, /docker\/setup-qemu-action/);
   assert.match(workflow, /scope=controlled-instance-\$\{\{ matrix\.arch \}\}/);
+  assert.match(workflow, /target: profile-codex/);
+  assert.match(workflow, /target: profile-ai/);
+  assert.match(workflow, /target: profile-browser/);
   assert.match(workflow, /sha_tag="sha-\$\{GITHUB_SHA::7\}-\$\{\{ matrix\.arch \}\}"/);
   assert.match(workflow, /"\$\{image\}:\$\{sha_tag\}-amd64"/);
   assert.match(workflow, /"\$\{image\}:\$\{sha_tag\}-arm64"/);
@@ -56,11 +77,17 @@ test("Docker tag builds inject the release version while branch builds keep the 
 
   assert.match(workflow, /if \[\[ "\$GITHUB_REF" == refs\/tags\/v\* \]\]; then/);
   assert.match(workflow, /version="\$\{GITHUB_REF_NAME#v\}"/);
-  assert.match(workflow, /image_ref="\$\{DOCKERHUB_IMAGE_NAME\}:\$\{GITHUB_REF_NAME\}"/);
+  assert.match(workflow, /codex_image_ref="\$\{DOCKERHUB_CODEX_IMAGE_NAME\}:\$\{GITHUB_REF_NAME\}"/);
+  assert.match(workflow, /ai_image_ref="\$\{DOCKERHUB_AI_IMAGE_NAME\}:\$\{GITHUB_REF_NAME\}"/);
+  assert.match(workflow, /browser_image_ref="\$\{DOCKERHUB_BROWSER_IMAGE_NAME\}:\$\{GITHUB_REF_NAME\}"/);
   assert.match(workflow, /version="\$\(node -p "require\('\.\/package\.json'\)\.version"\)"/);
-  assert.match(workflow, /image_ref="task-handoff-controlled-instance:ci-\$\{\{ matrix\.arch \}\}"/);
+  assert.match(workflow, /codex_image_ref="task-handoff-controlled-codex:ci-\$\{\{ matrix\.arch \}\}"/);
+  assert.match(workflow, /ai_image_ref="task-handoff-controlled-ai:ci-\$\{\{ matrix\.arch \}\}"/);
+  assert.match(workflow, /browser_image_ref="task-handoff-controlled-browser:ci-\$\{\{ matrix\.arch \}\}"/);
   assert.match(workflow, /TASK_HANDOFF_VERSION=\$\{\{ steps\.image-version\.outputs\.value \}\}/);
-  assert.match(workflow, /TASK_HANDOFF_IMAGE_REF=\$\{\{ steps\.image-version\.outputs\.image-ref \}\}/);
+  assert.match(workflow, /TASK_HANDOFF_IMAGE_REF=\$\{\{ steps\.image-version\.outputs\.codex-image-ref \}\}/);
+  assert.match(workflow, /TASK_HANDOFF_IMAGE_REF=\$\{\{ steps\.image-version\.outputs\.ai-image-ref \}\}/);
+  assert.match(workflow, /TASK_HANDOFF_IMAGE_REF=\$\{\{ steps\.image-version\.outputs\.browser-image-ref \}\}/);
   assert.match(workflow, /Verify image version[\s\S]*org\.opencontainers\.image\.version[\s\S]*EXPECTED_VERSION/);
   assert.match(workflow, /status_response="\$\(curl -fsS http:\/\/127\.0\.0\.1:18080\/api\/instance\/status\)"/);
   assert.match(workflow, /diagnostics_response="\$\(curl -fsS http:\/\/127\.0\.0\.1:18080\/api\/diagnostics\)"/);

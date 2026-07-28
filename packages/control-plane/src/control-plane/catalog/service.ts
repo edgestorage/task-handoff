@@ -50,22 +50,43 @@ export class ControlPlaneCatalogService {
   }
 
   seedDefaults() {
-    if (this.options.images.get("img_default")) return;
     const timestamp = now();
-    this.options.images.put(
-      ImageProfileSchema.parse({
+    const defaults = [
+      {
         id: "img_default",
-        name: "TaskHandoff Browser + Terminal",
-        reference: process.env.TASK_HANDOFF_CONTROLLED_IMAGE || "huadream/task-handoff-controlled-instance:latest",
-        pullPolicy: "if-not-present",
-        capabilities: ["browser", "terminal", "gui-terminal", "codex", "claude"],
+        name: "TaskHandoff Browser",
+        reference: process.env.TASK_HANDOFF_CONTROLLED_BROWSER_IMAGE || "huadream/task-handoff-controlled-browser:latest",
+        capabilities: ["browser", "terminal", "gui-terminal", "vscode-web", "codex", "claude"],
         optionalApps: ["chromium", "terminal-tty", "gui-terminal", "vscode-web"],
+        labels: { "task-handoff.image.kind": "controlled-instance", "task-handoff.image.profile": "browser" },
+      },
+      {
+        id: "img_codex",
+        name: "TaskHandoff Codex",
+        reference: process.env.TASK_HANDOFF_CONTROLLED_CODEX_IMAGE || "huadream/task-handoff-controlled-codex:latest",
+        capabilities: ["terminal", "codex"],
+        optionalApps: ["terminal-tty"],
+        labels: { "task-handoff.image.kind": "controlled-instance", "task-handoff.image.profile": "codex" },
+      },
+      {
+        id: "img_ai",
+        name: "TaskHandoff Codex + Claude",
+        reference: process.env.TASK_HANDOFF_CONTROLLED_AI_IMAGE || "huadream/task-handoff-controlled-ai:latest",
+        capabilities: ["terminal", "codex", "claude"],
+        optionalApps: ["terminal-tty"],
+        labels: { "task-handoff.image.kind": "controlled-instance", "task-handoff.image.profile": "ai" },
+      },
+    ];
+    for (const image of defaults) {
+      if (this.options.images.get(image.id)) continue;
+      this.options.images.put(ImageProfileSchema.parse({
+        ...image,
+        pullPolicy: "if-not-present",
         defaultEnv: {},
-        labels: { "task-handoff.image.kind": "controlled-instance" },
         createdAt: timestamp,
         updatedAt: timestamp,
-      }),
-    );
+      }));
+    }
   }
 
   listProjects() {

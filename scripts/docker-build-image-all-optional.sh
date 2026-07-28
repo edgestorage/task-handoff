@@ -3,6 +3,8 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
+export TASK_HANDOFF_IMAGE_PROFILE=browser
+
 enable_flags="$(
   awk '
     {

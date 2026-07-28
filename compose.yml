@@ -2,6 +2,7 @@ services:
   task-handoff-web:
     build:
       context: .
+      target: profile-browser
       args:
         CODEX_CLI_PACKAGE: ${CODEX_CLI_PACKAGE:-@openai/codex@latest}
         CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:-2.1.183}
@@ -18,7 +19,7 @@ services:
         WEB_CAP_EXTENSION_URL: ${WEB_CAP_EXTENSION_URL:-}
         WEB_CAP_SKILL_REPOSITORY: ${WEB_CAP_SKILL_REPOSITORY:-https://github.com/edgestorage/web-cap.git}
         WEB_CAP_SKILL_REF: ${WEB_CAP_SKILL_REF:-v0.0.7}
-    image: task-handoff-web:local
+    image: task-handoff-controlled-browser:local
     shm_size: "1gb"
     security_opt:
       - seccomp=unconfined
