@@ -146,7 +146,7 @@ function optionalEnv(name: string) {
   return value || undefined;
 }
 
-const packageVersion = packageVersionResolver("@task-handoff/control-plane");
+const packageVersion = packageVersionResolver("@task-handoff/node-agent");
 
 function buildInfo(component: BuildInfo["component"]): BuildInfo {
   return {
