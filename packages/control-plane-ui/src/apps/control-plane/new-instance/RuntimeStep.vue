@@ -594,7 +594,7 @@ defineEmits<{
 
 .section-head button:not(.inline-flex):hover,
 .section-head button:not(.inline-flex):focus-visible {
-  color: var(--white);
+  color: var(--brand-accent);
   outline: none;
 }
 

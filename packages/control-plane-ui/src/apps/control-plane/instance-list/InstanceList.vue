@@ -452,7 +452,7 @@ function openNewInstanceFromTemporaryList() {
   border: 1px solid var(--line-strong);
   border-radius: 8px;
   background: var(--surface-hover);
-  color: var(--terminal-text);
+  color: var(--text-muted);
   cursor: pointer;
   padding: 10px 0;
 }

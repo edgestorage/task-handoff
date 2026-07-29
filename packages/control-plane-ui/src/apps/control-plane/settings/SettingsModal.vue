@@ -64,7 +64,7 @@
       />
 
       <div v-else-if="settingsSection === 'models'" class="project-management-grid">
-        <section class="modal-section">
+        <section class="modal-section settings-panel-surface">
           <div class="section-head">
             <span>{{ t("settings.modelRegistry.count", { count: models.data.value?.length || 0 }) }}</span>
           </div>
@@ -152,7 +152,7 @@
           <p v-if="modelSaveSuccess" class="settings-success">{{ modelSaveSuccess }}</p>
         </section>
 
-        <section class="modal-section">
+        <section class="modal-section settings-panel-surface">
           <div class="section-head model-form-head">
             <div>
               <span>{{ editingModelId ? t("settings.modelRegistry.edit") : t("settings.modelRegistry.add") }}</span>
@@ -213,7 +213,7 @@
       </div>
 
       <div v-else-if="settingsSection === 'images'" class="image-management-grid">
-        <section class="modal-section image-market-section">
+        <section class="modal-section settings-panel-surface image-market-section">
           <div class="image-market-head">
             <div>
               <strong>{{ t("settings.imageRegistry.marketTitle") }}</strong>
@@ -244,7 +244,7 @@
           <p v-if="marketCatalog.data.value?.status.error" class="settings-empty">{{ marketCatalog.data.value.status.error }}</p>
         </section>
 
-        <section class="modal-section image-custom-section">
+        <section class="modal-section settings-panel-surface image-custom-section">
           <div class="image-registry-head">
             <div>
               <strong>{{ t("settings.imageRegistry.customTitle") }}</strong>
@@ -314,7 +314,7 @@
       </div>
 
       <div v-else-if="settingsSection === 'projects'" class="project-management-grid">
-        <section class="modal-section">
+        <section class="modal-section settings-panel-surface">
           <div class="section-head">
             <span>{{ t("settings.projectRegistry.count", { count: projects.data.value?.length || 0 }) }}</span>
           </div>
@@ -338,7 +338,7 @@
           </ScrollArea>
         </section>
 
-        <section class="modal-section">
+        <section class="modal-section settings-panel-surface">
           <div class="section-head">
             <span>{{ t("settings.projectRegistry.addTitle") }}</span>
           </div>
@@ -379,7 +379,7 @@
 
       <div v-else class="node-management-grid">
         <TooltipProvider :delay-duration="120">
-          <section class="modal-section node-list-panel">
+          <section class="modal-section settings-panel-surface node-list-panel">
             <div class="section-head">
               <span>{{ t("settings.nodeRegistry.count", { count: nodes.data.value?.length || 0 }) }}</span>
               <div class="section-head-actions">
@@ -1513,7 +1513,7 @@ function errorText(error: unknown) {
 .source-toggle button:focus-visible,
 .source-toggle button.active {
   background: var(--surface-active);
-  color: var(--white);
+  color: var(--text-strong);
   outline: none;
 }
 
@@ -1775,19 +1775,6 @@ function errorText(error: unknown) {
   font-weight: 750;
 }
 
-.modal-section {
-  display: grid;
-  gap: 12px;
-  min-height: 0;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
-  box-shadow:
-    var(--shadow-panel),
-    inset 0 1px 0 var(--workspace-grid);
-  padding: 12px;
-}
-
 .section-head {
   display: flex;
   align-items: center;
@@ -1833,7 +1820,7 @@ function errorText(error: unknown) {
 
 .section-head button:not(.inline-flex):hover,
 .section-head button:not(.inline-flex):focus-visible {
-  color: var(--white);
+  color: var(--brand-accent);
   outline: none;
 }
 
@@ -2642,3 +2629,4 @@ function errorText(error: unknown) {
   }
 }
 </style>
+<style src="./SettingsPanelSurface.css"></style>

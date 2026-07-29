@@ -220,32 +220,14 @@ const filteredTriggerTemplates = computed(() => {
   height: 214px;
   min-width: 0;
   overflow: hidden;
-  border: 1px solid var(--ai-board-column-border);
+  border: 1px solid var(--ai-session-card-border);
   border-radius: 8px;
   background: var(--ai-board-card-bg);
 }
 
-.ai-board-card[data-state="running"] {
-  border-color: var(--ai-board-card-active-border);
-}
-
-.ai-board-card[data-state="waiting"] {
-  border-color: var(--ai-board-card-waiting-border);
-}
-
-.ai-board-card[data-state="idle"] {
-  border-color: var(--ai-board-card-idle-border);
-}
-
-.ai-board-card[data-state="failed"] {
-  border-color: var(--ai-board-card-failed-border);
-}
-
 .ai-board-card[data-selected="true"] {
-  border-color: var(--ai-board-active-border);
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--ai-board-active-border) 72%, transparent),
-    0 14px 34px color-mix(in srgb, var(--ai-board-active-border) 18%, transparent);
+  border-color: var(--ai-session-card-selected-border);
+  background: var(--ai-session-card-selected-bg);
   outline: none;
 }
 
@@ -397,7 +379,8 @@ const filteredTriggerTemplates = computed(() => {
 
 .ai-board-preview-field-assistant {
   align-content: start;
-  background: var(--ai-board-assistant-bg);
+  border-top: 1px solid var(--ai-session-card-divider);
+  background: var(--ai-session-card-content-bg);
   margin: 2px -14px 0;
   min-height: 0;
   overflow: hidden;
@@ -413,9 +396,9 @@ const filteredTriggerTemplates = computed(() => {
   height: 34px;
   background: linear-gradient(
     to bottom,
-    color-mix(in srgb, var(--ai-board-assistant-bg) 0%, transparent),
-    color-mix(in srgb, var(--ai-board-assistant-bg) 84%, transparent) 58%,
-    var(--ai-board-assistant-bg)
+    color-mix(in srgb, var(--ai-session-card-content-bg) 0%, transparent),
+    color-mix(in srgb, var(--ai-session-card-content-bg) 84%, transparent) 58%,
+    var(--ai-session-card-content-bg)
   );
   pointer-events: none;
 }
@@ -424,9 +407,9 @@ const filteredTriggerTemplates = computed(() => {
   height: 52px;
   background: linear-gradient(
     to bottom,
-    color-mix(in srgb, var(--ai-board-assistant-bg) 0%, transparent),
-    var(--ai-board-assistant-bg) 70%,
-    var(--ai-board-assistant-bg) 100%
+    color-mix(in srgb, var(--ai-session-card-content-bg) 0%, transparent),
+    var(--ai-session-card-content-bg) 70%,
+    var(--ai-session-card-content-bg) 100%
   );
 }
 

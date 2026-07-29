@@ -186,6 +186,23 @@ test("runtime package versions use one resolver for explicit, bundled, and works
   assert.equal(resolvePackageVersion("@task-handoff/cli", { TASK_HANDOFF_VERSION: " 9.8.7 " }), "9.8.7");
   assert.equal(resolvePackageVersion("@task-handoff/cli", {}), "0.0.1");
   assert.equal(resolvePackageVersion("@task-handoff/controlled-instance", {}), "1.0.0");
+
+  const packagedRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-package-version-"));
+  const packagedBin = path.join(packagedRoot, "bin", "task-handoff-control-plane");
+  fs.mkdirSync(path.dirname(packagedBin), { recursive: true });
+  fs.writeFileSync(path.join(packagedRoot, "package.json"), JSON.stringify({
+    name: "@task-handoff/control-plane",
+    version: "2.3.4-alpha.1",
+  }));
+  fs.writeFileSync(packagedBin, "#!/usr/bin/env node\n");
+  const previousEntry = process.argv[1];
+  try {
+    process.argv[1] = packagedBin;
+    assert.equal(resolvePackageVersion("@task-handoff/control-plane", {}), "2.3.4-alpha.1");
+  } finally {
+    process.argv[1] = previousEntry;
+    fs.rmSync(packagedRoot, { recursive: true, force: true });
+  }
 });
 
 test("server update lock rejects a live owner and recovers after it exits", async () => {

@@ -600,7 +600,7 @@
 
 .session-ai-history-head {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-columns: 30px minmax(0, 1fr) 30px;
   align-items: center;
   gap: 8px;
   width: 100%;
@@ -620,11 +620,11 @@
 }
 
 .session-ai-history-back {
-  gap: 5px;
+  width: 30px;
+  height: 30px;
   min-height: 30px;
   color: var(--text-muted);
-  font-size: 12px;
-  padding: 0 7px;
+  padding: 0;
 }
 
 .session-ai-history-list {
@@ -921,7 +921,7 @@
 .session-ai-path-group-title {
   min-width: 0;
   flex: 0 1 auto;
-  color: var(--terminal-text);
+  color: var(--text-strong);
   font-size: 13px;
   font-weight: 650;
 }
@@ -992,27 +992,15 @@
   flex: 0 0 auto;
   height: 162px;
   min-width: 0;
-  border: 1px solid var(--ai-board-column-border);
+  border: 1px solid var(--ai-session-card-border);
   border-radius: 8px;
   background: var(--ai-board-card-bg);
   overflow: hidden;
 }
 
 .session-ai-row[data-selected="true"] {
-  border-color: var(--ai-board-card-active-border);
-  background: var(--ai-session-row-selected-bg);
-}
-
-.session-ai-row[data-state="waiting"] {
-  border-color: var(--ai-board-card-waiting-border);
-}
-
-.session-ai-row[data-state="idle"] {
-  border-color: var(--ai-board-card-idle-border);
-}
-
-.session-ai-row[data-state="failed"] {
-  border-color: var(--ai-board-card-failed-border);
+  border-color: var(--ai-session-card-selected-border);
+  background: var(--ai-session-card-selected-bg);
 }
 
 .session-ai-state {
@@ -1174,7 +1162,8 @@
 
 .session-ai-preview-field-assistant {
   align-content: start;
-  background: var(--surface-inset);
+  border-top: 1px solid var(--ai-session-card-divider);
+  background: var(--ai-session-card-content-bg);
   margin: 2px -14px 0;
   min-height: 0;
   overflow: hidden;
@@ -1190,9 +1179,9 @@
   height: 34px;
   background: linear-gradient(
     to bottom,
-    color-mix(in srgb, var(--surface-inset) 0%, transparent),
-    color-mix(in srgb, var(--surface-inset) 84%, transparent) 58%,
-    var(--surface-inset)
+    color-mix(in srgb, var(--ai-session-card-content-bg) 0%, transparent),
+    color-mix(in srgb, var(--ai-session-card-content-bg) 84%, transparent) 58%,
+    var(--ai-session-card-content-bg)
   );
   pointer-events: none;
 }
@@ -1201,9 +1190,9 @@
   height: 52px;
   background: linear-gradient(
     to bottom,
-    color-mix(in srgb, var(--surface-inset) 0%, transparent),
-    var(--surface-inset) 70%,
-    var(--surface-inset) 100%
+    color-mix(in srgb, var(--ai-session-card-content-bg) 0%, transparent),
+    var(--ai-session-card-content-bg) 70%,
+    var(--ai-session-card-content-bg) 100%
   );
 }
 

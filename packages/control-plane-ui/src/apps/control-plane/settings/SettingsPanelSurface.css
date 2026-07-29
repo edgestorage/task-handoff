@@ -1,0 +1,9 @@
+.settings-panel-surface {
+  display: grid;
+  gap: 12px;
+  min-height: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  padding: 12px;
+}

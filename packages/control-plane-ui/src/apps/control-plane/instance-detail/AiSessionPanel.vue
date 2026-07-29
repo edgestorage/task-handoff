@@ -4,9 +4,15 @@
       <aside ref="sidebarEl" class="session-ai-sidebar">
         <div class="session-ai-sidebar-head">
           <div v-if="historyMode" class="session-ai-history-head">
-            <Button variant="ghost" size="sm" class="session-ai-history-back" @click="leaveHistoryMode">
+            <Button
+              variant="ghost"
+              size="icon"
+              class="session-ai-history-back"
+              :aria-label="t('sessions.panel.backCurrent')"
+              :title="t('sessions.panel.backCurrent')"
+              @click="leaveHistoryMode"
+            >
               <ArrowLeft :size="15" />
-              <span>{{ t("sessions.panel.backCurrent") }}</span>
             </Button>
             <strong>{{ t("sessions.panel.history") }}</strong>
             <DropdownMenu>

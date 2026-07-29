@@ -16,8 +16,23 @@ export function resolvePackageVersion(packageName: string, env: NodeJS.ProcessEn
   if (explicitVersion) return explicitVersion;
 
   const packageDirectory = packageName.split("/").at(-1);
-  const starts = [process.cwd(), process.argv[1] ? path.dirname(path.resolve(process.argv[1])) : undefined]
+  const entryDirectory = process.argv[1] ? path.dirname(path.resolve(process.argv[1])) : undefined;
+  const starts = [entryDirectory, process.cwd()]
     .filter((value): value is string => Boolean(value));
+
+  // A packaged runtime must take its version from the manifest that owns the
+  // actual executable, even when it is launched with the monorepo as cwd.
+  for (const start of new Set(starts)) {
+    let directory = start;
+    while (true) {
+      const directVersion = manifestVersion(path.join(directory, "package.json"), packageName);
+      if (directVersion) return directVersion;
+      const parent = path.dirname(directory);
+      if (parent === directory) break;
+      directory = parent;
+    }
+  }
+
   let fallback: string | undefined;
   for (const start of new Set(starts)) {
     let directory = start;

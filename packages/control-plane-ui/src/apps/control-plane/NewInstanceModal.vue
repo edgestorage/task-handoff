@@ -846,7 +846,7 @@ function errorText(error: unknown) {
 .panel-close:hover,
 .panel-close:focus-visible {
   background: var(--surface-active);
-  color: var(--white);
+  color: var(--text-strong);
   outline: none;
 }
 
@@ -889,7 +889,7 @@ function errorText(error: unknown) {
 .wizard-steps button.active {
   border-color: var(--line-strong);
   background: var(--surface-raised);
-  color: var(--white);
+  color: var(--text-strong);
   outline: none;
 }
 

@@ -158,7 +158,7 @@ defineEmits<{
 
 .section-head button:not(.inline-flex):hover,
 .section-head button:not(.inline-flex):focus-visible {
-  color: var(--white);
+  color: var(--brand-accent);
   outline: none;
 }
 
@@ -188,7 +188,7 @@ defineEmits<{
 .choice-tile.active {
   border-color: var(--brand-accent);
   background: var(--surface-active);
-  color: var(--white);
+  color: var(--text-strong);
   outline: none;
 }
 
