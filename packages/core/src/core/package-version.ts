@@ -11,11 +11,15 @@ function manifestVersion(manifestPath: string, expectedName?: string) {
   }
 }
 
-export function resolvePackageVersion(packageName: string, env: NodeJS.ProcessEnv = process.env) {
+export function resolvePackageVersion(
+  packageName: string,
+  env: NodeJS.ProcessEnv = process.env,
+  workspacePackageName = packageName,
+) {
   const explicitVersion = env.TASK_HANDOFF_VERSION?.trim();
   if (explicitVersion) return explicitVersion;
 
-  const packageDirectory = packageName.split("/").at(-1);
+  const packageDirectory = workspacePackageName.split("/").at(-1);
   const entryDirectory = process.argv[1] ? path.dirname(path.resolve(process.argv[1])) : undefined;
   const starts = [entryDirectory, process.cwd()]
     .filter((value): value is string => Boolean(value));
@@ -38,7 +42,10 @@ export function resolvePackageVersion(packageName: string, env: NodeJS.ProcessEn
     let directory = start;
     while (true) {
       if (packageDirectory) {
-        const workspaceVersion = manifestVersion(path.join(directory, "packages", packageDirectory, "package.json"), packageName);
+        const workspaceVersion = manifestVersion(
+          path.join(directory, "packages", packageDirectory, "package.json"),
+          workspacePackageName,
+        );
         if (workspaceVersion) return workspaceVersion;
       }
       fallback ||= manifestVersion(path.join(directory, "package.json"));
@@ -50,12 +57,16 @@ export function resolvePackageVersion(packageName: string, env: NodeJS.ProcessEn
   return fallback || "unknown";
 }
 
-export function packageVersionResolver(packageName: string, env: NodeJS.ProcessEnv = process.env) {
+export function packageVersionResolver(
+  packageName: string,
+  env: NodeJS.ProcessEnv = process.env,
+  workspacePackageName = packageName,
+) {
   let resolvedVersion: string | undefined;
   return () => {
     const explicitVersion = env.TASK_HANDOFF_VERSION?.trim();
     if (explicitVersion) return explicitVersion;
-    resolvedVersion ||= resolvePackageVersion(packageName, env);
+    resolvedVersion ||= resolvePackageVersion(packageName, env, workspacePackageName);
     return resolvedVersion;
   };
 }

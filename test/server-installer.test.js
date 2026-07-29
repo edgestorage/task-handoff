@@ -184,10 +184,11 @@ test("server update CLI preserves configuration and restart ordering", () => {
 test("runtime package versions use one resolver for explicit, bundled, and workspace builds", async () => {
   const { packageVersionResolver, resolvePackageVersion } = await import("../packages/core/src/core/package-version.ts");
   const nodeAgent = fs.readFileSync(path.join(root, "packages", "control-plane", "src", "node-agent", "app.ts"), "utf8");
-  assert.match(nodeAgent, /packageVersionResolver\("@task-handoff\/node-agent"\)/);
+  assert.match(nodeAgent, /packageVersionResolver\([\s\S]*?"@task-handoff\/node-agent"[\s\S]*?"@task-handoff\/control-plane"[\s\S]*?\);/);
   assert.equal(resolvePackageVersion("@task-handoff/cli", { TASK_HANDOFF_VERSION: " 9.8.7 " }), "9.8.7");
   assert.equal(resolvePackageVersion("@task-handoff/cli", {}), "0.0.1");
   assert.equal(resolvePackageVersion("@task-handoff/controlled-instance", {}), "1.0.0");
+  assert.equal(resolvePackageVersion("@task-handoff/node-agent", {}, "@task-handoff/control-plane"), "1.0.0");
   const resolverEnv = {};
   const cachedResolver = packageVersionResolver("@task-handoff/cli", resolverEnv);
   assert.equal(cachedResolver(), "0.0.1");
