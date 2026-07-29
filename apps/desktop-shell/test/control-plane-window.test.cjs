@@ -2,27 +2,76 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
+const vm = require("node:vm");
+const { resolveControlPlaneWindowUrl } = require("../src/config.cjs");
 
-const root = path.resolve(__dirname, "../../..");
-const mainSource = fs.readFileSync(path.join(root, "apps/desktop-shell/src/main.cjs"), "utf8");
-const preloadSource = fs.readFileSync(path.join(root, "apps/desktop-shell/src/preload.cjs"), "utf8");
+const preloadSource = fs.readFileSync(path.join(__dirname, "../src/preload.cjs"), "utf8");
 
-test("Electron opens repository workspaces in a restricted same-origin control plane window", () => {
-  assert.match(mainSource, /function resolveControlPlaneWindowUrl\(url\)/);
-  assert.match(mainSource, /parsedUrl\.origin !== new URL\(base\)\.origin/);
-  assert.match(mainSource, /parsedUrl\.pathname !== "\/repository-workspace"/);
-  assert.match(mainSource, /function createControlPlaneWindow\(url\)[\s\S]*new BrowserWindow/);
-  assert.match(mainSource, /controlPlaneWindows\.add\(controlPlaneWindow\)/);
-  assert.match(mainSource, /controlPlaneWindow\.once\("closed", \(\) => controlPlaneWindows\.delete\(controlPlaneWindow\)\)/);
-  assert.match(mainSource, /task-handoff:open-control-plane-window/);
-  assert.match(preloadSource, /openControlPlaneWindow: \(url\) => ipcRenderer\.invoke\("task-handoff:open-control-plane-window", url\)/);
+test("repository workspace windows are restricted to the control plane origin and route", () => {
+  const baseUrl = "http://127.0.0.1:18081/dashboard";
+  assert.equal(
+    resolveControlPlaneWindowUrl("/repository-workspace?project=one", { baseUrl }).toString(),
+    "http://127.0.0.1:18081/repository-workspace?project=one",
+  );
+  assert.throws(
+    () => resolveControlPlaneWindowUrl("http://example.com/repository-workspace", { baseUrl }),
+    /same-origin repository workspace/,
+  );
+  assert.throws(
+    () => resolveControlPlaneWindowUrl("/settings", { baseUrl }),
+    /same-origin repository workspace/,
+  );
 });
 
-test("Electron exposes desktop updates only through the preload bridge", () => {
-  assert.match(mainSource, /createDesktopUpdater/);
-  assert.match(mainSource, /task-handoff:desktop-update-get-state/);
-  assert.match(mainSource, /install: stopDesktopServices/);
-  assert.match(preloadSource, /desktopUpdates:/);
-  assert.match(preloadSource, /onStateChanged: \(listener\)/);
-  assert.match(preloadSource, /removeListener\("task-handoff:desktop-update-state", handler\)/);
+test("preload API delegates privileged desktop operations through IPC", async () => {
+  const invocations = [];
+  const listeners = new Map();
+  let exposedApi;
+  const ipcRenderer = {
+    invoke: async (...args) => {
+      invocations.push(args);
+      return args;
+    },
+    on: (channel, listener) => listeners.set(channel, listener),
+    removeListener: (channel, listener) => {
+      if (listeners.get(channel) === listener) listeners.delete(channel);
+    },
+  };
+  const electron = {
+    contextBridge: {
+      exposeInMainWorld: (name, value) => {
+        assert.equal(name, "taskHandoffDesktop");
+        exposedApi = value;
+      },
+    },
+    ipcRenderer,
+    webUtils: { getPathForFile: (file) => `/files/${file.name}` },
+  };
+  vm.runInNewContext(preloadSource, {
+    process: { platform: "darwin" },
+    require: (specifier) => {
+      assert.equal(specifier, "electron", "sandbox preload must only load Electron's supported module");
+      return electron;
+    },
+  });
+  const api = exposedApi;
+
+  assert.equal(api.windowChrome.mode, "macos-overlay");
+  assert.equal(api.getPathForFile({ name: "project" }), "/files/project");
+  await api.openControlPlaneWindow("/repository-workspace");
+  await api.desktopUpdates.check();
+  await api.desktopUpdates.install();
+  assert.deepEqual(invocations, [
+    ["task-handoff:open-control-plane-window", "/repository-workspace"],
+    ["task-handoff:desktop-update-check"],
+    ["task-handoff:desktop-update-install"],
+  ]);
+
+  let state;
+  const unsubscribe = api.desktopUpdates.onStateChanged((next) => { state = next; });
+  const channel = "task-handoff:desktop-update-state";
+  listeners.get(channel)({}, { status: "ready" });
+  assert.deepEqual(state, { status: "ready" });
+  unsubscribe();
+  assert.equal(listeners.has(channel), false);
 });

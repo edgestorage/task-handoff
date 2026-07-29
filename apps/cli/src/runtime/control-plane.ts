@@ -1,6 +1,6 @@
 import { Command } from "commander";
-import fs from "node:fs";
 import path from "node:path";
+import { resolvePackageVersion } from "@task-handoff/core/core/package-version";
 import { runControlPlaneServer } from "@task-handoff/control-plane/server";
 
 function parsePort(value: string) {
@@ -18,20 +18,12 @@ function parseAuthMode(value: string) {
   return value;
 }
 
-function packageVersion() {
-  try {
-    return JSON.parse(fs.readFileSync(path.resolve(__dirname, "..", "package.json"), "utf8")).version || "unknown";
-  } catch {
-    return "unknown";
-  }
-}
-
 async function main() {
   const program = new Command();
   program
     .name("task-handoff-control-plane")
     .description("Run the TaskHandoff control plane.")
-    .version(packageVersion())
+    .version(resolvePackageVersion("@task-handoff/cli"))
     .option("--host <host>", "Control plane host", process.env.TASK_HANDOFF_CONTROL_PLANE_HOST || "127.0.0.1")
     .option("-p, --port <port>", "Control plane port", parsePort, Number(process.env.TASK_HANDOFF_CONTROL_PLANE_PORT) || 8081)
     .option("--data-dir <path>", "Control plane data directory")

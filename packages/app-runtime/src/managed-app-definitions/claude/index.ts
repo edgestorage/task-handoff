@@ -17,7 +17,10 @@ export const claudeProvider: ManagedAppProvider = {
         kind: "tty",
         description: "Claude Code CLI in the task workspace.",
         command: env.TASK_HANDOFF_CLAUDE_COMMAND || "claude",
-        args: [...(skipPermissions ? ["--dangerously-skip-permissions"] : []), ...modelArgs(env, "TASK_HANDOFF_CLAUDE_MODEL", "CLAUDE_MODEL")],
+        args: [
+          ...(skipPermissions ? ["--dangerously-skip-permissions"] : []),
+          ...(env.TASK_HANDOFF_CONTROL_MODE === "controlled" ? [] : modelArgs(env, "TASK_HANDOFF_CLAUDE_MODEL", "CLAUDE_MODEL")),
+        ],
       },
       detection: launcherDetection(),
       distribution: {

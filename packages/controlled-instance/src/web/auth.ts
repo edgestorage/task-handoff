@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import crypto from "node:crypto";
-import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import { atomicWriteFileSync } from "@task-handoff/core/storage/atomic-write";
 import type { TaskHandoffStoragePaths } from "@task-handoff/core/storage/paths";
 
@@ -10,6 +10,33 @@ export type WebAuthState = {
   tokenFile?: string;
   token?: string;
 };
+
+declare module "fastify" {
+  interface FastifyContextConfig {
+    taskHandoffAuth?: "public" | "web" | "node-agent";
+  }
+}
+
+export const publicApiRoute = { config: { taskHandoffAuth: "public" as const } };
+
+function sameToken(actual: string | undefined, expected: string) {
+  if (!actual) return false;
+  const actualBytes = Buffer.from(actual);
+  const expectedBytes = Buffer.from(expected);
+  return actualBytes.length === expectedBytes.length && crypto.timingSafeEqual(actualBytes, expectedBytes);
+}
+
+export function nodeAgentApiRoute(error: { code: string; message: string; requireControlled?: boolean }) {
+  return {
+    config: { taskHandoffAuth: "node-agent" as const },
+    preHandler: async (request: FastifyRequest, reply: FastifyReply) => {
+      const expectedToken = process.env.TASK_HANDOFF_REGISTRATION_TOKEN?.trim();
+      if ((error.requireControlled && process.env.TASK_HANDOFF_CONTROL_MODE !== "controlled") || !expectedToken || !sameToken(requestToken(request), expectedToken)) {
+        return reply.code(403).send({ error: { code: error.code, message: error.message } });
+      }
+    },
+  };
+}
 
 function readTokenFile(filePath: string) {
   try {
@@ -63,7 +90,8 @@ export function requestToken(request: FastifyRequest) {
 
 export function registerAuth(app: FastifyInstance, auth: WebAuthState) {
   app.addHook("preHandler", async (request, reply) => {
-    if (!auth.enabled || request.url === "/api/health" || request.url === "/api/auth/status" || request.url === "/api/internal/model-environment" || !request.url.startsWith("/api/")) {
+    const policy = request.routeOptions.config.taskHandoffAuth;
+    if (!auth.enabled || policy === "public" || policy === "node-agent" || !request.url.startsWith("/api/")) {
       return;
     }
     if (requestToken(request) === auth.token) {

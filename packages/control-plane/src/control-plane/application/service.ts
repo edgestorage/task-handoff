@@ -9,6 +9,7 @@ import {
   CustomImageProfileSchema,
   LEGACY_MARKET_IMAGE_IDS,
   NodeImageAvailabilitySchema,
+  NodeFolderTreeEntrySchema,
   sanitizeStoredImageProfile,
   sanitizeStoredProject,
   FederatedModelRegistrySchema,
@@ -35,6 +36,13 @@ import {
   type ApplyUpdateRequest,
   type AppManagementOperationRequest,
 } from "@task-handoff/protocol/control-plane";
+import {
+  ConfigSyncBatchResultSchema,
+  ConfigSyncProgramSchema,
+  ConfigSyncRequestSchema,
+  ConfigSyncStateSchema,
+  type ConfigSyncRequest,
+} from "@task-handoff/protocol/config-sync";
 import {
   AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES,
   AiSessionActionResultSchema,
@@ -84,7 +92,13 @@ import { ChatActionTokenService, type ChatActionToken } from "../chat/action-tok
 import { ChatBridgeService } from "../chat/bridges/service.ts";
 import { ChatSessionService } from "../chat/sessions/service.ts";
 import { ControlPlaneChatSessionRuntime } from "../chat/sessions/runtime.ts";
-import { configSyncPresets, type ConfigSyncPreset } from "../instances/config-sync.ts";
+import {
+  ConfigSyncPreferenceRecordSchema,
+  defaultConfigSyncPreferences,
+  normalizeConfigSyncWorkspaceFolder,
+  sanitizeStoredConfigSyncPreferenceRecord,
+  type ConfigSyncPreferenceRecord,
+} from "../instances/config-sync.ts";
 import { relativeNodePathSegments, resolveNodePath } from "../nodes/path.ts";
 import { normalizeModel, publicInstance, publicInstanceWithAccess, publicModel, publicNode, publicNodeAgentCapabilities, publicProject, workspacePolicyForSource } from "../public-records.ts";
 import { controlPlaneDiagnosticLogsEnabled, errorMessage, now, throwNotFound } from "./helpers.ts";
@@ -226,6 +240,7 @@ export class ControlPlaneService {
   readonly chatBridges: JsonCollection<ChatBridgeConfig>;
   readonly triggers: JsonCollection<ControlPlaneTriggerRecord>;
   readonly nodeJoinInvites: JsonCollection<NodeJoinInvite>;
+  private readonly configSyncPreferences: JsonCollection<ConfigSyncPreferenceRecord>;
   private readonly settings: JsonFile<ControlPlaneSettings>;
   readonly paths: ControlPlaneStorePaths;
   private readonly fetchImpl: FetchImpl;
@@ -278,6 +293,10 @@ export class ControlPlaneService {
     this.chatBridges = new JsonCollection(paths.chatBridgesDir, storeOptions(ChatBridgeConfigSchema));
     this.triggers = new JsonCollection(paths.triggersDir, storeOptions(ControlPlaneTriggerRecordSchema));
     this.nodeJoinInvites = new JsonCollection(paths.nodeJoinInvitesDir, storeOptions(NodeJoinInviteSchema));
+    this.configSyncPreferences = new JsonCollection(path.join(paths.dataDir, "config-sync-preferences"), {
+      ...storeOptions(ConfigSyncPreferenceRecordSchema),
+      sanitize: sanitizeStoredConfigSyncPreferenceRecord,
+    });
     this.settings = new JsonFile(paths.settingsPath, () => ControlPlaneSettingsSchema.parse({}), {
       ...storeOptions(ControlPlaneSettingsSchema),
       sanitize: sanitizeStoredControlPlaneSettings,
@@ -1278,6 +1297,7 @@ export class ControlPlaneService {
     const current = await this.requireNodeInstance(id);
     const node = this.requireNode(current.nodeId);
     const result = await this.nodeAgentGateway.deleteInstance(node, id);
+    this.configSyncPreferences.delete(id);
     return Boolean(result.deleted);
   }
 
@@ -1753,28 +1773,52 @@ export class ControlPlaneService {
     this.controlledInstanceGateway.proxyWebSocket(instance, this.nodeAgentTransportFor(this.requireNode(instance.nodeId)), socket, path, protocols, headers);
   }
 
-  listConfigSyncPresets() {
-    return configSyncPresets();
+  async instanceConfigSyncState(instanceId: string) {
+    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
+    const programs = z.array(ConfigSyncProgramSchema).parse(await this.instanceRequest(instance, "/config-sync/programs"));
+    return ConfigSyncStateSchema.parse({
+      programs,
+      preferences: this.configSyncPreferences.get(instanceId)?.preferences || defaultConfigSyncPreferences(),
+    });
   }
 
-  async syncInstanceConfig(instanceId: string, direction: "import" | "export", preset: string) {
+  async listInstanceConfigSyncFolders(instanceId: string, input: { path?: string; depth?: number } = {}) {
     const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
-    if (direction === "export" && instance.source.type !== "local-folder") {
+    const params = new URLSearchParams();
+    if (input.path) params.set("path", input.path);
+    if (input.depth !== undefined) params.set("depth", String(input.depth));
+    return z.array(NodeFolderTreeEntrySchema).parse(
+      await this.instanceRequest(instance, `/config-sync/folders${params.size ? `?${params}` : ""}`),
+    );
+  }
+
+  async syncInstanceConfigs(instanceId: string, input: unknown) {
+    const request: ConfigSyncRequest = ConfigSyncRequestSchema.parse(input);
+    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
+    if (request.direction === "export" && instance.source.type !== "local-folder") {
       const error = new Error("Exporting instance config is only available for local folder projects.");
       Object.assign(error, { statusCode: 400, code: "CONFIG_SYNC_EXPORT_REQUIRES_LOCAL_PROJECT" });
       throw error;
     }
-    const presetConfig = configSyncPresets().find((item) => item.id === preset);
-    if (!presetConfig) {
-      const error = new Error(`Config sync preset ${preset} was not found.`);
-      Object.assign(error, { statusCode: 404, code: "CONFIG_SYNC_PRESET_NOT_FOUND" });
-      throw error;
-    }
-    return this.instanceRequest(instance, `/config-sync/${encodeURIComponent(direction)}/${encodeURIComponent(preset)}`, {
+    const workspaceFolder = normalizeConfigSyncWorkspaceFolder(request.workspaceFolder);
+    const normalizedRequest = { ...request, workspaceFolder };
+    const result = ConfigSyncBatchResultSchema.parse(await this.instanceRequest(instance, "/config-sync", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ preset: presetConfig }),
+      body: JSON.stringify(normalizedRequest),
+    }));
+    const timestamp = now();
+    const current = this.configSyncPreferences.get(instanceId);
+    this.configSyncPreferences.put({
+      id: instanceId,
+      preferences: {
+        ...(current?.preferences || defaultConfigSyncPreferences()),
+        [request.direction]: workspaceFolder,
+      },
+      createdAt: current?.createdAt || timestamp,
+      updatedAt: timestamp,
     });
+    return result;
   }
 
   private async instanceRequest(instance: ControlledInstance, route: string, init: RequestInit = {}) {

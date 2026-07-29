@@ -40,6 +40,15 @@ export const instances = {
     exporting: "正在导出 {name}",
     deleteConfirm: "确认删除 {name}？这会移除实例记录，并在运行容器仍在运行时将其停止。",
   },
+  configSync: {
+    description: "选择要传输的程序，以及 {name} 工作区内的配置文件夹。",
+    programs: "程序",
+    folder: "配置文件夹",
+    loading: "正在加载配置选项...",
+    running: "正在传输配置...",
+    completed: "已完成 {count} 个程序的配置传输。",
+    resultSummary: "已复制 {copied} · 已跳过 {skipped} · 失败 {failed}",
+  },
   status: {
     created: "已创建",
     provisioning: "准备中",

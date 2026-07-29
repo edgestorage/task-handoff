@@ -15,15 +15,12 @@
           :active-instance-id="activeInstanceId"
           :can-export-config="canExportConfig"
           :collapsed="false"
-          :config-sync-label="configSyncLabel"
-          :config-sync-presets="configSyncPresets"
           :embedded="true"
           :error="error"
           :filter="filter"
           :group-by-node="groupByNode"
           :instance-display-name="instanceDisplayName"
           :instances="instances"
-          :is-config-sync-busy="isConfigSyncBusy"
           :is-instance-action-busy="isInstanceActionBusy"
           :loading="loading"
           :open-menu-id="openMenuId"
@@ -35,7 +32,7 @@
           @open-settings="(instanceId) => $emit('openSettings', instanceId)"
           @resize-start="$emit('resizeStart', $event)"
           @run-action="(action, instance) => $emit('runAction', action, instance)"
-          @run-config-sync="(direction, presetId, instance) => $emit('runConfigSync', direction, presetId, instance)"
+          @open-config-sync="(direction, instance) => $emit('openConfigSync', direction, instance)"
           @select-instance="selectTemporaryInstance"
           @set-menu-open="(instanceId, open) => $emit('setMenuOpen', instanceId, open)"
           @update:filter="$emit('update:filter', $event)"
@@ -145,28 +142,14 @@
                         <RotateCw :size="14" />
                         <span>{{ activeActionLabel(instance, "retry-image", t("instances.actions.retryImage")) }}</span>
                       </DropdownMenuItem>
-                      <DropdownMenuSub>
-                        <DropdownMenuSubTrigger class="instance-action-item">
-                          <Download :size="14" />
-                          <span>{{ t("instances.actions.importConfig") }}</span>
-                        </DropdownMenuSubTrigger>
-                        <DropdownMenuSubContent class="instance-action-submenu" :side-offset="7">
-                          <DropdownMenuItem v-for="preset in configSyncPresets" :key="`import-${preset.id}`" class="instance-action-item" :disabled="isConfigSyncBusy(instance)" @select="$emit('runConfigSync', 'import', preset.id, instance)">
-                            <span>{{ configSyncLabel(instance, "import", preset.id, preset.label) }}</span>
-                          </DropdownMenuItem>
-                        </DropdownMenuSubContent>
-                      </DropdownMenuSub>
-                      <DropdownMenuSub>
-                        <DropdownMenuSubTrigger class="instance-action-item">
-                          <Upload :size="14" />
-                          <span>{{ t("instances.actions.exportConfig") }}</span>
-                        </DropdownMenuSubTrigger>
-                        <DropdownMenuSubContent class="instance-action-submenu" :side-offset="7">
-                          <DropdownMenuItem v-for="preset in configSyncPresets" :key="`export-${preset.id}`" class="instance-action-item" :disabled="isConfigSyncBusy(instance) || !canExportConfig(instance)" @select="$emit('runConfigSync', 'export', preset.id, instance)">
-                            <span>{{ configSyncLabel(instance, "export", preset.id, preset.label) }}</span>
-                          </DropdownMenuItem>
-                        </DropdownMenuSubContent>
-                      </DropdownMenuSub>
+                      <DropdownMenuItem class="instance-action-item" @select="$emit('openConfigSync', 'import', instance)">
+                        <Download :size="14" />
+                        <span>{{ t("instances.actions.importConfig") }}</span>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem class="instance-action-item" :disabled="!canExportConfig(instance)" @select="$emit('openConfigSync', 'export', instance)">
+                        <Upload :size="14" />
+                        <span>{{ t("instances.actions.exportConfig") }}</span>
+                      </DropdownMenuItem>
                       <DropdownMenuItem class="instance-action-item" @select="$emit('openSettings', instance.id)">
                         <Settings :size="14" />
                         <span>{{ t("navigation.settings") }}</span>
@@ -197,28 +180,14 @@
                 <RotateCw :size="14" />
                 <span>{{ activeActionLabel(instance, "retry-image", t("instances.actions.retryImage")) }}</span>
               </ContextMenuItem>
-              <ContextMenuSub>
-                <ContextMenuSubTrigger class="instance-action-item">
-                  <Download :size="14" />
-                  <span>{{ t("instances.actions.importConfig") }}</span>
-                </ContextMenuSubTrigger>
-                <ContextMenuSubContent class="instance-action-submenu" :side-offset="7">
-                  <ContextMenuItem v-for="preset in configSyncPresets" :key="`context-import-${preset.id}`" class="instance-action-item" :disabled="isConfigSyncBusy(instance)" @select="$emit('runConfigSync', 'import', preset.id, instance)">
-                    <span>{{ configSyncLabel(instance, "import", preset.id, preset.label) }}</span>
-                  </ContextMenuItem>
-                </ContextMenuSubContent>
-              </ContextMenuSub>
-              <ContextMenuSub>
-                <ContextMenuSubTrigger class="instance-action-item">
-                  <Upload :size="14" />
-                  <span>{{ t("instances.actions.exportConfig") }}</span>
-                </ContextMenuSubTrigger>
-                <ContextMenuSubContent class="instance-action-submenu" :side-offset="7">
-                  <ContextMenuItem v-for="preset in configSyncPresets" :key="`context-export-${preset.id}`" class="instance-action-item" :disabled="isConfigSyncBusy(instance) || !canExportConfig(instance)" @select="$emit('runConfigSync', 'export', preset.id, instance)">
-                    <span>{{ configSyncLabel(instance, "export", preset.id, preset.label) }}</span>
-                  </ContextMenuItem>
-                </ContextMenuSubContent>
-              </ContextMenuSub>
+              <ContextMenuItem class="instance-action-item" @select="$emit('openConfigSync', 'import', instance)">
+                <Download :size="14" />
+                <span>{{ t("instances.actions.importConfig") }}</span>
+              </ContextMenuItem>
+              <ContextMenuItem class="instance-action-item" :disabled="!canExportConfig(instance)" @select="$emit('openConfigSync', 'export', instance)">
+                <Upload :size="14" />
+                <span>{{ t("instances.actions.exportConfig") }}</span>
+              </ContextMenuItem>
               <ContextMenuItem class="instance-action-item" @select="$emit('openSettings', instance.id)">
                 <Settings :size="14" />
                 <span>{{ t("instances.actions.settings") }}</span>
@@ -244,12 +213,13 @@ import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { Boxes, ChevronRight, Container, Download, Laptop, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Play, Plus, RotateCw, Search, Server, Settings, Square, Trash2, Upload } from "@lucide/vue";
 import type { InstanceBoardItem } from "../../../api/types";
+import type { ConfigSyncDirection } from "@task-handoff/protocol/config-sync";
 import { Button } from "../../../components/ui/button";
-import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger, ContextMenuTrigger } from "../../../components/ui/context-menu";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "../../../components/ui/context-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "../../../components/ui/popover";
 import { ScrollArea } from "../../../components/ui/scroll-area";
-import type { ConfigSyncDirection, InstanceAction } from "../useInstanceActions";
+import type { InstanceAction } from "../useInstanceActions";
 import { canShowInstanceAction, imageProvisioningLabel, instanceSourceLabel } from "../useInstanceStatus";
 import type { InstanceListSortMode } from "./useWorkbenchInstances";
 import InstanceViewOptionsMenu from "../shared/InstanceViewOptionsMenu.vue";
@@ -258,25 +228,17 @@ const { t } = useI18n();
 
 defineOptions({ name: "InstanceList" });
 
-type ConfigSyncPreset = {
-  id: string;
-  label: string;
-};
-
 const props = defineProps<{
   activeActionLabel: (instance: InstanceBoardItem, action: InstanceAction, idleLabel: string) => string;
   activeInstanceId?: string;
   canExportConfig: (instance: InstanceBoardItem) => boolean;
   collapsed: boolean;
-  configSyncLabel: (instance: InstanceBoardItem, direction: ConfigSyncDirection, preset: string, label: string) => string;
-  configSyncPresets: ConfigSyncPreset[];
   embedded?: boolean;
   error?: string;
   filter: string;
   groupByNode: boolean;
   instanceDisplayName: (instance: InstanceBoardItem) => string;
   instances: InstanceBoardItem[];
-  isConfigSyncBusy: (instance: InstanceBoardItem) => boolean;
   isInstanceActionBusy: (instance: InstanceBoardItem) => boolean;
   loading: boolean;
   openMenuId: string;
@@ -291,7 +253,7 @@ const emit = defineEmits<{
   openSettings: [instanceId: string];
   resizeStart: [event: PointerEvent];
   runAction: [action: InstanceAction, instance: InstanceBoardItem];
-  runConfigSync: [direction: ConfigSyncDirection, presetId: string, instance: InstanceBoardItem];
+  openConfigSync: [direction: ConfigSyncDirection, instance: InstanceBoardItem];
   selectInstance: [instanceId: string, source?: "click" | "contextmenu"];
   setMenuOpen: [instanceId: string, open: boolean];
   "update:filter": [value: string];
@@ -490,7 +452,7 @@ function openNewInstanceFromTemporaryList() {
   border: 1px solid var(--line-strong);
   border-radius: 8px;
   background: var(--surface-hover);
-  color: var(--terminal-text);
+  color: var(--text-muted);
   cursor: pointer;
   padding: 10px 0;
 }

@@ -3,7 +3,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
-const { normalizeNodePtyRuntime } = require("../scripts/after-pack.cjs");
+const { normalizeNodePtyRuntime, validateDesktopServerRuntime } = require("../scripts/after-pack.cjs");
 
 test("afterPack forces node-pty to use its prebuild without doubling app.asar.unpacked", () => {
   const appOutDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-after-pack-"));
@@ -27,4 +27,20 @@ test("afterPack forces node-pty to use its prebuild without doubling app.asar.un
 
   assert.equal(fs.existsSync(path.join(nodePtyRoot, "build")), false);
   assert.match(fs.readFileSync(path.join(libDir, "unixTerminal.js"), "utf8"), /app\\\.asar\(\?!\\\.unpacked\)/);
+});
+
+test("afterPack rejects an incomplete unpacked desktop server runtime", () => {
+  const appOutDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-after-pack-runtime-"));
+  const runtimeRoot = path.join(appOutDir, "TaskHandoff.app", "Contents", "Resources", "app.asar.unpacked");
+  fs.mkdirSync(path.join(runtimeRoot, "bin"), { recursive: true });
+  fs.writeFileSync(path.join(runtimeRoot, "bin", "task-handoff.js"), "require('../dist/cli');\n");
+  const context = {
+    appOutDir,
+    electronPlatformName: "darwin",
+    packager: { appInfo: { productFilename: "TaskHandoff" } },
+  };
+  assert.throws(
+    () => validateDesktopServerRuntime(context),
+    /dist\/cli\.js, node_modules\/fastify\/package\.json/,
+  );
 });

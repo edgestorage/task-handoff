@@ -3,6 +3,7 @@ const path = require("node:path");
 const test = require("node:test");
 const {
   buildControlPlaneArgs,
+  buildDesktopChildProcessEnv,
   buildNodeAgentArgs,
   controlPlaneUrl,
   nodeAgentUrl,
@@ -11,6 +12,7 @@ const {
   resolveControlPlanePort,
   resolveDataDir,
   resolveDesktopProcessCwd,
+  resolveDesktopProcessEnv,
   resolveDesktopRuntimeRoot,
   resolveNodeAgentControlEndpoint,
   resolveNodeAgentDataDir,
@@ -75,6 +77,67 @@ test("desktop child processes use a real writable cwd in packaged builds", () =>
     resolveDesktopProcessCwd({ TASK_HANDOFF_DESKTOP_PROCESS_CWD: "/tmp/custom-cwd" }, { packaged: true, dataDir: "/tmp/task-handoff-data" }),
     path.resolve("/tmp/custom-cwd"),
   );
+});
+
+test("desktop child process environment preserves inherited paths and adds macOS executable locations", () => {
+  const env = resolveDesktopProcessEnv({ PATH: "/custom/bin:/usr/bin", TOKEN: "kept" }, { platform: "darwin" });
+  assert.equal(env.TOKEN, "kept");
+  assert.deepEqual(env.PATH.split(path.delimiter), [
+    "/custom/bin",
+    "/usr/bin",
+    "/usr/local/bin",
+    "/opt/homebrew/bin",
+    "/bin",
+    "/usr/sbin",
+    "/sbin",
+  ]);
+});
+
+test("desktop child process environment adds Linux executable locations without duplicates", () => {
+  const env = resolveDesktopProcessEnv({ PATH: "/usr/bin:/custom/bin:/usr/local/bin" }, { platform: "linux" });
+  assert.deepEqual(env.PATH.split(path.delimiter), [
+    "/usr/bin",
+    "/custom/bin",
+    "/usr/local/bin",
+    "/usr/local/sbin",
+    "/usr/sbin",
+    "/sbin",
+    "/bin",
+    "/snap/bin",
+  ]);
+});
+
+test("desktop child process environment does not rewrite PATH on unsupported platforms", () => {
+  const source = { Path: "C:\\custom", CUSTOM: "kept" };
+  assert.deepEqual(resolveDesktopProcessEnv(source, { platform: "win32" }), source);
+});
+
+test("Windows desktop child processes receive the packaged application version", () => {
+  const env = buildDesktopChildProcessEnv({ Path: "C:\\custom", KEEP: "yes" }, {
+    platform: "win32",
+    packaged: true,
+    version: "0.0.9",
+  });
+  assert.equal(env.Path, "C:\\custom");
+  assert.equal(env.KEEP, "yes");
+  assert.equal(env.ELECTRON_RUN_AS_NODE, "1");
+  assert.equal(env.TASK_HANDOFF_VERSION, "0.0.9");
+});
+
+test("desktop child process environment materializes packaged runtime identity and structured overrides", () => {
+  const env = buildDesktopChildProcessEnv({ PATH: "/custom/bin", KEEP: "yes" }, {
+    platform: "darwin",
+    packaged: true,
+    version: "2.3.4",
+    overrides: {
+      TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV: JSON.stringify(["/app/TaskHandoff", "/runtime/bin/task-handoff.js", "web"]),
+    },
+  });
+  assert.equal(env.KEEP, "yes");
+  assert.equal(env.ELECTRON_RUN_AS_NODE, "1");
+  assert.equal(env.TASK_HANDOFF_VERSION, "2.3.4");
+  assert.deepEqual(JSON.parse(env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV), ["/app/TaskHandoff", "/runtime/bin/task-handoff.js", "web"]);
+  assert.ok(env.PATH.includes("/opt/homebrew/bin"));
 });
 
 test("desktop packaged runtime resolves to real unpacked resources", () => {

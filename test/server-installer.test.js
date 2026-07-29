@@ -1,7 +1,10 @@
 const assert = require("node:assert/strict");
-const { spawnSync } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
+const { once } = require("node:events");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
+const { pathToFileURL } = require("node:url");
 const test = require("node:test");
 
 const root = path.resolve(__dirname, "..");
@@ -156,6 +159,7 @@ test("node-agent installer honors an explicit npm package before an ambient bina
 
 test("server update CLI preserves configuration and restart ordering", () => {
   const updater = fs.readFileSync(path.join(root, "apps", "cli", "src", "runtime", "server.ts"), "utf8");
+  const updateLock = fs.readFileSync(path.join(root, "apps", "cli", "src", "runtime", "update-lock.mjs"), "utf8");
   const updateCommand = updater.slice(updater.indexOf('program.command("update")'));
   const nodeRestart = updateCommand.indexOf('"restart", "task-handoff-node-agent.service"');
   const socketReady = updateCommand.indexOf("waitForSocket(nodeSocket)");
@@ -171,10 +175,128 @@ test("server update CLI preserves configuration and restart ordering", () => {
   assert.match(updater, /currentInstallOptions\(\)/);
   assert.match(updater, /--control-plane-data-dir/);
   assert.match(updater, /--node-agent-data-dir/);
-  assert.match(updater, /task-handoff-server-update\.lock/);
+  assert.match(updateLock, /task-handoff-server-update\.lock/);
   assert.match(updater, /\["install", \.\.\.preserved\]/);
   assert.ok(nodeRestart < socketReady);
   assert.ok(socketReady < controlPlaneRestart);
+});
+
+test("runtime package versions use one resolver for explicit, bundled, and workspace builds", async () => {
+  const { packageVersionResolver, resolvePackageVersion } = await import("../packages/core/src/core/package-version.ts");
+  const nodeAgent = fs.readFileSync(path.join(root, "packages", "control-plane", "src", "node-agent", "app.ts"), "utf8");
+  assert.match(nodeAgent, /packageVersionResolver\([\s\S]*?"@task-handoff\/node-agent"[\s\S]*?"@task-handoff\/control-plane"[\s\S]*?\);/);
+  assert.equal(resolvePackageVersion("@task-handoff/cli", { TASK_HANDOFF_VERSION: " 9.8.7 " }), "9.8.7");
+  assert.equal(resolvePackageVersion("@task-handoff/cli", {}), "0.0.1");
+  assert.equal(resolvePackageVersion("@task-handoff/controlled-instance", {}), "1.0.0");
+  assert.equal(resolvePackageVersion("@task-handoff/node-agent", {}, "@task-handoff/control-plane"), "1.0.0");
+  const resolverEnv = {};
+  const cachedResolver = packageVersionResolver("@task-handoff/cli", resolverEnv);
+  assert.equal(cachedResolver(), "0.0.1");
+  resolverEnv.TASK_HANDOFF_VERSION = " 9.8.7 ";
+  assert.equal(cachedResolver(), "9.8.7");
+  delete resolverEnv.TASK_HANDOFF_VERSION;
+  assert.equal(cachedResolver(), "0.0.1");
+
+  const packagedRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-package-version-"));
+  const packagedBin = path.join(packagedRoot, "bin", "task-handoff-control-plane");
+  fs.mkdirSync(path.dirname(packagedBin), { recursive: true });
+  fs.writeFileSync(path.join(packagedRoot, "package.json"), JSON.stringify({
+    name: "@task-handoff/control-plane",
+    version: "2.3.4-alpha.1",
+  }));
+  fs.writeFileSync(packagedBin, "#!/usr/bin/env node\n");
+  const previousEntry = process.argv[1];
+  try {
+    process.argv[1] = packagedBin;
+    assert.equal(resolvePackageVersion("@task-handoff/control-plane", {}), "2.3.4-alpha.1");
+  } finally {
+    process.argv[1] = previousEntry;
+    fs.rmSync(packagedRoot, { recursive: true, force: true });
+  }
+});
+
+test("server update lock rejects a live owner and recovers after it exits", async () => {
+  const { acquireUpdateLock } = await import("../apps/cli/src/runtime/update-lock.mjs");
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-update-lock-"));
+  const lockPath = path.join(temp, "update.lock");
+  const release = acquireUpdateLock(lockPath);
+
+  assert.throws(() => acquireUpdateLock(lockPath), /already running/);
+  release();
+
+  fs.mkdirSync(lockPath);
+  fs.writeFileSync(path.join(lockPath, "owner.json"), JSON.stringify({ pid: 2147483647, startTime: "missing" }));
+  const releaseRecovered = acquireUpdateLock(lockPath);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(lockPath, "owner.json"), "utf8")).pid, process.pid);
+  releaseRecovered();
+
+  fs.mkdirSync(lockPath);
+  fs.utimesSync(lockPath, new Date(0), new Date(0));
+  const releaseLegacy = acquireUpdateLock(lockPath);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(lockPath, "owner.json"), "utf8")).pid, process.pid);
+  releaseLegacy();
+  fs.rmSync(temp, { recursive: true, force: true });
+});
+
+test("server update lock does not steal a slow live initializer", async () => {
+  const { acquireUpdateLock } = await import("../apps/cli/src/runtime/update-lock.mjs");
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-update-initializing-"));
+  const lockPath = path.join(temp, "update.lock");
+  fs.mkdirSync(lockPath);
+  fs.writeFileSync(path.join(lockPath, "initializing.json"), JSON.stringify({
+    token: "still-initializing",
+    pid: process.pid,
+    startedAt: new Date(0).toISOString(),
+  }));
+  assert.throws(() => acquireUpdateLock(lockPath, { legacyGraceMs: 0 }), /already running/);
+  fs.rmSync(temp, { recursive: true, force: true });
+});
+
+test("concurrent server updaters have exactly one lock owner", async () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-update-race-"));
+  const lockPath = path.join(temp, "update.lock");
+  const modulePath = path.join(root, "apps", "cli", "src", "runtime", "update-lock.mjs");
+  const script = [
+    `import { acquireUpdateLock } from ${JSON.stringify(pathToFileURL(modulePath).href)};`,
+    "process.stdin.once('data', () => {",
+    `  try { const release = acquireUpdateLock(${JSON.stringify(lockPath)}); console.log('acquired'); process.stdin.once('data', () => { release(); process.exit(0); }); }`,
+    "  catch { console.log('rejected'); process.exit(0); }",
+    "});",
+  ].join("\n");
+  const children = [0, 1].map(() => spawn(process.execPath, ["--input-type=module", "--eval", script], {
+    stdio: ["pipe", "pipe", "inherit"],
+  }));
+  const outcomes = children.map((child) => once(child.stdout, "data").then(([chunk]) => String(chunk).trim()));
+  for (const child of children) child.stdin.write("go\n");
+  const result = await Promise.all(outcomes);
+  assert.deepEqual([...result].sort(), ["acquired", "rejected"]);
+  const owner = result.indexOf("acquired");
+  children[owner].stdin.write("release\n");
+  await Promise.all(children.map((child) => child.exitCode === null ? once(child, "exit") : undefined));
+  assert.equal(fs.existsSync(lockPath), false);
+  fs.rmSync(temp, { recursive: true, force: true });
+});
+
+test("server update lock cleans up when interrupted", async () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-update-signal-"));
+  const lockPath = path.join(temp, "update.lock");
+  const modulePath = path.join(root, "apps", "cli", "src", "runtime", "update-lock.mjs");
+  const script = [
+    `import { acquireUpdateLock, cleanUpLockOnSignals } from ${JSON.stringify(pathToFileURL(modulePath).href)};`,
+    `const release = acquireUpdateLock(${JSON.stringify(lockPath)});`,
+    "cleanUpLockOnSignals(release);",
+    "console.log('ready');",
+    "setInterval(() => {}, 1000);",
+  ].join("\n");
+  const child = spawn(process.execPath, ["--input-type=module", "--eval", script], { stdio: ["ignore", "pipe", "inherit"] });
+  await once(child.stdout, "data");
+  child.kill("SIGINT");
+  const [code, signal] = await once(child, "exit");
+
+  assert.equal(code, null);
+  assert.equal(signal, "SIGINT");
+  assert.equal(fs.existsSync(lockPath), false);
+  fs.rmSync(temp, { recursive: true, force: true });
 });
 
 test("server management CLI supports ordered start, stop, and restart", () => {

@@ -4,6 +4,7 @@ import http from "node:http";
 import path from "node:path";
 import { spawnSync, type SpawnSyncOptions } from "node:child_process";
 import { isExactSemanticVersion, updateChannelForVersion } from "./update-channel.mjs";
+import { acquireUpdateLock, cleanUpLockOnSignals } from "./update-lock.mjs";
 
 const packageRoot = path.resolve(__dirname, "..");
 const manifest = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8")) as { version: string };
@@ -148,17 +149,6 @@ function waitForHttp(port: number, timeoutMs = 30_000) {
   });
 }
 
-function acquireLock() {
-  const lock = "/run/task-handoff-server-update.lock";
-  try {
-    fs.mkdirSync(lock);
-  } catch (error: any) {
-    if (error?.code === "EEXIST") throw new Error("Another TaskHandoff server update is already running.");
-    throw error;
-  }
-  return () => fs.rmSync(lock, { recursive: true, force: true });
-}
-
 function installArgs(options: Record<string, string | undefined>) {
   return [
     ["--service-user", options.serviceUser],
@@ -252,7 +242,8 @@ async function main() {
         console.log(`@task-handoff/server ${manifest.version} is already installed.`);
         return;
       }
-      const releaseLock = acquireLock();
+      const releaseLock = acquireUpdateLock();
+      const removeSignalCleanup = cleanUpLockOnSignals(releaseLock);
       try {
         const prefix = findGlobalPrefix();
         const preserved = currentInstallOptions();
@@ -272,6 +263,7 @@ async function main() {
         console.error(`Update failed. To reinstall the previous version, run: npm install -g @task-handoff/server@${manifest.version}`);
         throw error;
       } finally {
+        removeSignalCleanup();
         releaseLock();
       }
     });

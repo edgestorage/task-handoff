@@ -10,6 +10,7 @@ import type { ManagedAppRegistry } from "./managed-app-definitions/registry";
 import type { AppCatalogItem } from "./types";
 import fs from "node:fs";
 import path from "node:path";
+import { resolveExecutable } from "./executable-resolver";
 
 export {
   BUILTIN_APP_CATALOG,
@@ -98,40 +99,20 @@ function customCatalogSchema(registry: ManagedAppRegistry) {
 
 export type CustomCatalog = z.infer<typeof CustomCatalogBaseSchema>;
 
-function isExecutable(filePath: string) {
-  try {
-    fs.accessSync(filePath, fs.constants.X_OK);
-    return fs.statSync(filePath).isFile();
-  } catch {
-    return false;
-  }
+export function executablePath(command: string, env: NodeJS.ProcessEnv = process.env, cwd = process.cwd()) {
+  return resolveExecutable(command, { env, cwd })?.executable;
 }
 
-export function executablePath(command: string, env: NodeJS.ProcessEnv = process.env, cwd = process.cwd()) {
-  const extensions = process.platform === "win32"
-    ? (env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)
-    : [""];
-
-  const executableCandidate = (candidate: string) => {
-    for (const extension of extensions) {
-      const withExtension = process.platform === "win32" && !path.extname(candidate)
-        ? `${candidate}${extension}`
-        : candidate;
-      if (isExecutable(withExtension)) return withExtension;
-    }
-    return undefined;
+export function resolveAppExecutable(app: AppCatalogItem, baseEnv: NodeJS.ProcessEnv = process.env): AppCatalogItem {
+  const command = app.command?.trim();
+  if (!command) return app;
+  const resolution = resolveExecutable(command, { env: { ...baseEnv, ...app.env }, cwd: app.cwd });
+  if (!resolution) return app;
+  return {
+    ...app,
+    command: resolution.executable,
+    env: { ...app.env, ...resolution.env },
   };
-
-  if (path.isAbsolute(command)) return executableCandidate(command);
-  if (command.includes("/") || command.includes("\\")) {
-    return executableCandidate(path.resolve(cwd, command));
-  }
-
-  for (const directory of (env.PATH || "").split(path.delimiter).filter(Boolean)) {
-    const resolved = executableCandidate(path.join(directory, command));
-    if (resolved) return resolved;
-  }
-  return undefined;
 }
 
 export function isAppAvailable(app: AppCatalogItem) {
@@ -156,12 +137,12 @@ export class AppCatalogRepository {
   list() {
     const merged = new Map<string, AppCatalogItem>();
     for (const { launcher: app } of this.registry.definitions()) {
-      merged.set(app.id, app);
+      merged.set(app.id, resolveAppExecutable(app));
     }
     const custom = this.safeCustom();
     if (custom.data) {
       for (const app of custom.data.items) {
-        merged.set(app.id, app);
+        merged.set(app.id, resolveAppExecutable(app));
       }
     }
     return Array.from(merged.values());
@@ -178,7 +159,10 @@ export class AppCatalogRepository {
     for (const entry of builtin) merged.set(entry.app.id, entry);
     for (const app of custom.data?.items || []) merged.set(app.id, { app, source: "custom" });
 
-    const resolved = [...merged.values()].map(({ app, source }) => ({
+    const resolved = [...merged.values()].map(({ app: unresolvedApp, source }) => ({
+      app: resolveAppExecutable(unresolvedApp),
+      source,
+    })).map(({ app, source }) => ({
       app,
       source,
       executable: app.command?.trim() ? executablePath(app.command.trim(), { ...process.env, ...app.env }, app.cwd) : undefined,

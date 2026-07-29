@@ -1,5 +1,5 @@
 <template>
-  <section class="trigger-board modal-section">
+  <section class="trigger-board modal-section settings-panel-surface">
     <header class="section-head trigger-board-head">
       <span>{{ t("triggers.libraryTitle", { count: triggers.data.value?.triggers.length || 0 }) }}</span>
       <div class="settings-row-actions trigger-board-head-actions">

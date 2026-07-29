@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFile, spawnSync } from "node:child_process";
+import { resolveExecutable } from "./executable-resolver";
 import type {
   FinalComputerCapabilities,
   ManagedAppActionReason,
@@ -21,31 +22,8 @@ const PLATFORM_VALUES = new Set(["linux", "darwin", "win32", "freebsd", "openbsd
 const ARCH_VALUES = new Set(["x64", "arm64", "arm", "ia32", "ppc64", "s390x", "riscv64"]);
 const PRIVILEGE_RANK: Record<ManagedAppRecipePrivilege, number> = { user: 0, "passwordless-sudo": 1, root: 2 };
 
-function executableCandidate(candidate: string, platform: NodeJS.Platform, env: NodeJS.ProcessEnv) {
-  const extensions = platform === "win32" ? (env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean) : [""];
-  for (const extension of extensions) {
-    const resolved = platform === "win32" && !path.extname(candidate) ? `${candidate}${extension}` : candidate;
-    try {
-      fs.accessSync(resolved, fs.constants.X_OK);
-      if (fs.statSync(resolved).isFile()) return resolved;
-    } catch {
-      // Continue searching PATH.
-    }
-  }
-  return undefined;
-}
-
 export function findManagedExecutable(command: string, options: { env?: NodeJS.ProcessEnv; cwd?: string; platform?: NodeJS.Platform } = {}) {
-  const env = options.env || process.env;
-  const cwd = options.cwd || process.cwd();
-  const platform = options.platform || process.platform;
-  if (path.isAbsolute(command)) return executableCandidate(command, platform, env);
-  if (command.includes("/") || command.includes("\\")) return executableCandidate(path.resolve(cwd, command), platform, env);
-  for (const directory of (env.PATH || "").split(path.delimiter).filter(Boolean)) {
-    const resolved = executableCandidate(path.join(directory, command), platform, env);
-    if (resolved) return resolved;
-  }
-  return undefined;
+  return resolveExecutable(command, options)?.executable;
 }
 
 export function normalizeManagedPlatform(value: string) {
@@ -57,10 +35,12 @@ export function normalizeManagedArch(value: string) {
 }
 
 function syncCommandInvocation(command: string, args: string[], options: { env: NodeJS.ProcessEnv; platform: NodeJS.Platform }) {
-  const resolvedExecutable = findManagedExecutable(command, options) || command;
+  const resolution = resolveExecutable(command, options);
+  const resolvedExecutable = resolution?.executable || command;
+  const env = { ...options.env, ...resolution?.env };
   return options.platform === "win32" && /\.(?:cmd|bat)$/i.test(resolvedExecutable)
-    ? { executable: options.env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", "call", resolvedExecutable, ...args] }
-    : { executable: resolvedExecutable, args };
+    ? { executable: env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", "call", resolvedExecutable, ...args], env }
+    : { executable: resolvedExecutable, args, env };
 }
 
 export function detectFinalComputerCapabilities(options: {
@@ -81,13 +61,13 @@ export function detectFinalComputerCapabilities(options: {
   const canPasswordlessSudo = options.canPasswordlessSudo || (() => {
     if (!executable("sudo")) return false;
     const invocation = syncCommandInvocation("sudo", ["-n", "true"], { env, platform: options.platform || process.platform });
-    return spawnSync(invocation.executable, invocation.args, { env, stdio: "ignore", timeout: 2_000 }).status === 0;
+    return spawnSync(invocation.executable, invocation.args, { env: invocation.env, stdio: "ignore", timeout: 2_000 }).status === 0;
   });
   const npmGlobalWritable = options.npmGlobalWritable || (() => {
     const prefixInvocation = syncCommandInvocation("npm", ["prefix", "--global"], { env, platform: options.platform || process.platform });
     const rootInvocation = syncCommandInvocation("npm", ["root", "--global"], { env, platform: options.platform || process.platform });
-    const prefixResult = spawnSync(prefixInvocation.executable, prefixInvocation.args, { env, encoding: "utf8", timeout: 2_000 });
-    const rootResult = spawnSync(rootInvocation.executable, rootInvocation.args, { env, encoding: "utf8", timeout: 2_000 });
+    const prefixResult = spawnSync(prefixInvocation.executable, prefixInvocation.args, { env: prefixInvocation.env, encoding: "utf8", timeout: 2_000 });
+    const rootResult = spawnSync(rootInvocation.executable, rootInvocation.args, { env: rootInvocation.env, encoding: "utf8", timeout: 2_000 });
     const prefix = prefixResult.status === 0 ? prefixResult.stdout.trim() : "";
     const root = rootResult.status === 0 ? rootResult.stdout.trim() : "";
     if (!prefix || !root || !path.isAbsolute(prefix) || !path.isAbsolute(root)) return false;
@@ -239,9 +219,11 @@ export type ManagedAppOwnershipResult = {
 };
 
 function runOwnershipCommand(executable: string, args: string[], options: { env?: NodeJS.ProcessEnv; platform?: NodeJS.Platform } = {}): Promise<OwnershipCommandResult> {
-  const env = options.env || process.env;
+  const baseEnv = options.env || process.env;
   const platform = options.platform || process.platform;
-  const resolvedExecutable = platform === "win32" ? findManagedExecutable(executable, { env, platform }) || executable : executable;
+  const resolution = resolveExecutable(executable, { env: baseEnv, platform });
+  const env = { ...baseEnv, ...resolution?.env };
+  const resolvedExecutable = resolution?.executable || executable;
   const invocation = platform === "win32" && /\.(?:cmd|bat)$/i.test(resolvedExecutable)
     ? { executable: env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", "call", resolvedExecutable, ...args] }
     : { executable: resolvedExecutable, args };

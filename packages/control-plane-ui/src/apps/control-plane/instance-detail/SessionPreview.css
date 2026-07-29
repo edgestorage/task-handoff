@@ -316,12 +316,12 @@
 .session-tab-item:not(.drag-placeholder):focus-within,
 .session-tab-item:not(.drag-placeholder):hover,
 .session-tab-item:not(.drag-placeholder):focus-visible {
-  background: color-mix(in srgb, var(--white) 6%, transparent);
+  background: var(--surface-hover);
   outline: none;
 }
 
 .session-tab-item.active:not(.drag-placeholder) {
-  background: color-mix(in srgb, var(--surface-raised) 92%, var(--white) 4%);
+  background: var(--surface-active);
   color: var(--text-strong);
 }
 
@@ -453,12 +453,12 @@
 
 .session-ai-home:hover,
 .session-ai-home:focus-visible {
-  background: color-mix(in srgb, var(--white) 6%, transparent);
+  background: var(--surface-hover);
   outline: none;
 }
 
 .session-ai-home.active {
-  background: color-mix(in srgb, var(--brand-accent) 10%, transparent);
+  background: var(--surface-active);
   color: var(--text-strong);
 }
 
@@ -530,7 +530,7 @@
 
 .session-tab-close:hover,
 .session-tab-close:focus-visible {
-  background: color-mix(in srgb, var(--white) 10%, transparent);
+  background: var(--surface-hover);
   color: var(--text-strong);
   outline: none;
 }

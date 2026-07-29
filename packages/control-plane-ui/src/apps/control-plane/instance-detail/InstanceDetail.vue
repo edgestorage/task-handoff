@@ -107,6 +107,7 @@
         </div>
       </header>
       <SessionPreview
+        :active-action-label="activeActionLabel"
         :active-attach-url="activeAttachUrl"
         :active-instance-web-url="activeInstanceWebUrl"
         :active-open-url="activeOpenUrl"
@@ -120,6 +121,7 @@
         :can-launch-app="canLaunchApp"
         :copied-text="copiedText"
         :instance="instance"
+        :is-instance-action-busy="isInstanceActionBusy"
         :launchable-apps="launchableApps"
         :launching-app="launchingApp"
         :last-refresh-label="lastRefreshLabel"
@@ -154,6 +156,7 @@
         @open-repository-workspace="$emit('openRepositoryWorkspace', $event)"
         @open-settings="(instanceId, section) => $emit('openSettings', instanceId, section)"
         @open-url="$emit('openUrl', $event)"
+        @run-action="(action, target) => $emit('runAction', action, target)"
         @select-ai-session="(instanceId, sessionId) => $emit('selectAiSession', instanceId, sessionId)"
         @select-session="(sessionKey, pane) => $emit('selectSession', sessionKey, pane)"
         @stop-session="(target, session) => $emit('stopSession', target, session)"

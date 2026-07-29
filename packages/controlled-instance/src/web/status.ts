@@ -5,17 +5,11 @@ import { executablePath } from "@task-handoff/app-runtime/catalog";
 import { AppRuntimeManager } from "@task-handoff/app-runtime/runtime";
 import { createAiSessionRegistry } from "@task-handoff/ai-session-runtime";
 import type { TaskHandoffStoragePaths } from "@task-handoff/core/storage/paths";
+import { packageVersionResolver } from "@task-handoff/core/core/package-version";
 import { CONTROL_PLANE_PROTOCOL_VERSION } from "@task-handoff/protocol/control-plane";
 import { TriggerStore } from "../triggers/store";
 
-export function packageVersion() {
-  try {
-    const packagePath = path.resolve(__dirname, "..", "package.json");
-    return JSON.parse(fs.readFileSync(packagePath, "utf8")).version || "unknown";
-  } catch {
-    return "unknown";
-  }
-}
+export const packageVersion = packageVersionResolver("@task-handoff/controlled-instance");
 
 function optionalEnv(name: string) {
   const value = process.env[name]?.trim();

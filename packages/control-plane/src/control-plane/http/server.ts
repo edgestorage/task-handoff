@@ -1,6 +1,5 @@
 import path from "node:path";
 import fs from "node:fs";
-import { fileURLToPath } from "node:url";
 import Fastify from "fastify";
 import cookie from "@fastify/cookie";
 import websocket from "@fastify/websocket";
@@ -9,6 +8,7 @@ import type { FastifyServerOptions } from "fastify";
 import { z } from "zod";
 import { AiSessionUnreadEventType } from "@task-handoff/protocol/ai-sessions";
 import { CONTROL_PLANE_PROTOCOL_VERSION, ImagePullTerminalEventType, type BuildInfo } from "@task-handoff/protocol/control-plane";
+import { packageVersionResolver } from "@task-handoff/core/core/package-version";
 import { SESSION_STREAM_PROTOCOL_VERSION, SessionStreamsHelloEventType } from "@task-handoff/protocol/events";
 import { CONTROL_PLANE_SESSION_COOKIE, ControlPlaneAuth, type ControlPlaneAuthOptions } from "../auth/service.ts";
 import { ControlPlaneService, type ControlPlaneServiceOptions } from "../application/service.ts";
@@ -68,21 +68,7 @@ function optionalEnv(name: string) {
   return value || undefined;
 }
 
-function packageVersion() {
-  try {
-    const moduleDir = import.meta.url ? path.dirname(fileURLToPath(import.meta.url)) : __dirname;
-    const packagePath = [
-      // Runtime releases bundle this module into <package>/dist/cli.js.
-      path.resolve(moduleDir, "..", "package.json"),
-      // Node's strip-only TypeScript loader executes this source in place.
-      path.resolve(moduleDir, "..", "..", "..", "package.json"),
-    ].find((candidate) => fs.existsSync(candidate));
-    if (!packagePath) return "unknown";
-    return JSON.parse(fs.readFileSync(packagePath, "utf8")).version || "unknown";
-  } catch {
-    return "unknown";
-  }
-}
+const packageVersion = packageVersionResolver("@task-handoff/control-plane");
 
 function buildInfo(): BuildInfo {
   return {
@@ -213,7 +199,7 @@ function routeAuthorization(method: string, url: string): { action: ControlPlane
     if (path.includes("/start")) return { action: "start", resource: { type: "instance" } };
     if (path.includes("/stop")) return { action: "stop", resource: { type: "instance" } };
     if (path.includes("/restart")) return { action: "restart", resource: { type: "instance" } };
-    if (path.includes("/config-sync/")) return { action: "update", resource: { type: "instance" } };
+    if (/\/config-sync(?:\/|$)/.test(path)) return { action: "update", resource: { type: "instance" } };
     return { action, resource: { type: "instance" } };
   }
   if (path.startsWith("/api/projects")) {

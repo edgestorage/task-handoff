@@ -67,6 +67,10 @@ function envFlag(name: string, fallback = false) {
   return ["1", "true", "yes", "on"].includes(raw.toLowerCase());
 }
 
+function definedEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+}
+
 const DISPLAY_START = 101;
 const DISPLAY_END = 199;
 const VNC_PORT_START = 6101;
@@ -266,7 +270,7 @@ export class AppRuntimeManager extends EventEmitter {
     launch.cwd = cwd;
     const resumeArgs = this.aiSessionResumeArgs(app.id, launch);
     let args = [...(app.args || []), ...(launch.args || []), ...resumeArgs];
-    let env: NodeJS.ProcessEnv = { ...process.env, ...app.env, ...launch.env, ...this.managedEnvironment, TERM: "xterm-256color" };
+    let env: NodeJS.ProcessEnv = definedEnvironment({ ...process.env, ...app.env, ...launch.env, ...this.managedEnvironment, TERM: "xterm-256color" });
     const sessionDir = path.join(this.paths.appSessionsDir, id);
     const logDir = path.join(this.paths.logDir, "app-sessions", id);
     fs.mkdirSync(sessionDir, { recursive: true });

@@ -11,11 +11,10 @@ export type RegisterInstanceRoutesOptions = {
   events: ControlPlaneEventBus;
 };
 
-const ConfigSyncParamsSchema = z.object({
-  id: z.string().trim().min(1),
-  direction: z.enum(["import", "export"]),
-  preset: z.string().trim().min(1).max(120),
-});
+const ConfigSyncFolderQuerySchema = z.object({
+  path: z.string().trim().max(1000).optional(),
+  depth: z.coerce.number().int().min(0).max(2).optional(),
+}).strict();
 const InstanceAppParamsSchema = z.object({ id: z.string().trim().min(1), appId: z.string().trim().min(1) }).strict();
 const InstanceAppJobParamsSchema = z.object({ id: z.string().trim().min(1), jobId: z.string().trim().min(1) }).strict();
 
@@ -74,11 +73,19 @@ export function registerInstanceRoutes({ app, service, events }: RegisterInstanc
     events.publish("instance.image-provisioning-retried", { instanceId: instance.id });
     return { data: instance };
   });
-  app.get("/api/config-sync/presets", async () => ({ data: service.listConfigSyncPresets() }));
-  app.post("/api/controlled-instances/:id/config-sync/:direction/:preset", async (request) => {
-    const params = ConfigSyncParamsSchema.parse(request.params);
-    const result = await service.syncInstanceConfig(params.id, params.direction, params.preset);
-    events.publish("instance.config-synced", { instanceId: params.id, direction: params.direction, preset: params.preset });
+  app.get("/api/controlled-instances/:id/config-sync", async (request) => ({
+    data: await service.instanceConfigSyncState(IdParamsSchema.parse(request.params).id),
+  }));
+  app.get("/api/controlled-instances/:id/config-sync/folders", async (request) => ({
+    data: await service.listInstanceConfigSyncFolders(
+      IdParamsSchema.parse(request.params).id,
+      ConfigSyncFolderQuerySchema.parse(request.query),
+    ),
+  }));
+  app.post("/api/controlled-instances/:id/config-sync", async (request) => {
+    const id = IdParamsSchema.parse(request.params).id;
+    const result = await service.syncInstanceConfigs(id, request.body);
+    events.publish("instance.config-synced", { instanceId: id });
     return { data: result };
   });
   app.get("/api/instance-board", async () => {

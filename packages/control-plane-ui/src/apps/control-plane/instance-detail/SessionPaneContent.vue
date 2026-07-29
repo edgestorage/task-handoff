@@ -29,6 +29,24 @@
         <PowerOff v-else :size="34" />
         <strong>{{ instanceStatusTitle(instance, t) }}</strong>
         <span>{{ instanceStatusDetail(instance, t) }}</span>
+        <div v-if="hasStatusActions" class="session-status-actions" :aria-label="t('instances.detail.controls')">
+          <Button v-if="canShowInstanceAction(instance, 'start')" size="sm" :disabled="isInstanceActionBusy(instance)" @click="$emit('runAction', 'start', instance)">
+            <Play :size="14" />
+            <span>{{ activeActionLabel(instance, "start", t("instances.actions.start")) }}</span>
+          </Button>
+          <Button v-if="canShowInstanceAction(instance, 'stop')" variant="outline" size="sm" :disabled="isInstanceActionBusy(instance)" @click="$emit('runAction', 'stop', instance)">
+            <Square :size="14" />
+            <span>{{ activeActionLabel(instance, "stop", t("instances.actions.stop")) }}</span>
+          </Button>
+          <Button v-if="canShowInstanceAction(instance, 'restart')" variant="outline" size="sm" :disabled="isInstanceActionBusy(instance)" @click="$emit('runAction', 'restart', instance)">
+            <RotateCw :size="14" />
+            <span>{{ activeActionLabel(instance, "restart", t("instances.actions.restart")) }}</span>
+          </Button>
+          <Button v-if="canShowInstanceAction(instance, 'retry-image')" size="sm" :disabled="isInstanceActionBusy(instance)" @click="$emit('runAction', 'retry-image', instance)">
+            <RotateCw :size="14" />
+            <span>{{ activeActionLabel(instance, "retry-image", t("instances.actions.retryImage")) }}</span>
+          </Button>
+        </div>
       </template>
     </div>
     <AiSessionPanel
@@ -72,12 +90,13 @@
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import type { SupportedLocale } from "../../../i18n/locale";
-import { CircleAlert, Monitor, Plus, PowerOff, RefreshCw, Terminal } from "@lucide/vue";
+import { CircleAlert, Monitor, Play, Plus, PowerOff, RefreshCw, RotateCw, Square, Terminal } from "@lucide/vue";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, NodeLocalFolder } from "../../../api/types";
 import { Button } from "../../../components/ui/button";
+import type { InstanceAction } from "../useInstanceActions";
 import type { LaunchableApp, RepositoryWorkspaceTabTarget, SessionTab } from "../useInstanceSessions";
 import { previewDetail, previewTitle, sessionFrameUrl, sessionTerminalSocketUrl } from "../useInstanceSessions";
-import { hasInstanceStatusPage, instanceStatusDetail, instanceStatusTitle, isInstanceStatusPending } from "../useInstanceStatus";
+import { canShowInstanceAction, hasInstanceStatusPage, instanceStatusDetail, instanceStatusTitle, isInstanceStatusPending } from "../useInstanceStatus";
 import AiSessionPanel from "./AiSessionPanel.vue";
 import SessionTerminalPreview from "./SessionTerminalPreview.vue";
 import RepositoryChangesReviewTab from "./RepositoryChangesReviewTab.vue";
@@ -87,9 +106,11 @@ import ImagePullStatus from "./ImagePullStatus.vue";
 const { locale, t } = useI18n();
 
 const props = defineProps<{
+  activeActionLabel: (instance: InstanceBoardItem, action: InstanceAction, idleLabel: string) => string;
   appLaunchButtonTitle: string;
   canLaunchApp: boolean;
   instance: InstanceWithAiSessions;
+  isInstanceActionBusy: (instance: InstanceBoardItem) => boolean;
   launchableApps: LaunchableApp[];
   launchingApp: boolean;
   nodeLocalFolders?: NodeLocalFolder[];
@@ -103,11 +124,14 @@ defineEmits<{
   openAiSessionApp: [instance: InstanceBoardItem, session?: AiSessionSummary];
   openRepositoryWorkspace: [target: RepositoryWorkspaceTabTarget];
   openLaunchMenu: [];
+  runAction: [action: InstanceAction, instance: InstanceBoardItem];
   selectAiSession: [instanceId: string, sessionId: string];
 }>();
 
 const activeFrameUrl = computed(() => props.session ? sessionFrameUrl(props.instance, props.session) : "");
 const activeTerminalSocketUrl = computed(() => props.session ? sessionTerminalSocketUrl(props.instance, props.session) : "");
+const hasStatusActions = computed(() => (["start", "stop", "restart", "retry-image"] as const)
+  .some((action) => canShowInstanceAction(props.instance, action)));
 const terminalSessions = computed(() => props.tabs
   .filter((session) => session.kind === "terminal")
   .map((session) => ({ key: session.key, socketUrl: sessionTerminalSocketUrl(props.instance, session) }))
@@ -146,6 +170,9 @@ function imagePreparationStepState(index: number) {
 .session-preview-status-page[data-state="failed"] > svg, .session-preview-status-page[data-state="unhealthy"] > svg, .session-status-overview > .lucide-circle-alert { color: var(--status-danger); animation: none; }
 .session-preview-body strong, .session-preview-status-page strong { font-size: 18px; }
 .session-preview-body > span, .session-preview-status-page span { max-width: 620px; overflow-wrap: anywhere; color: var(--text-muted); font-size: 12px; }
+.session-status-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 8px; }
+.session-status-actions button { gap: 7px; }
+.session-status-actions button > span { color: inherit; }
 .session-status-image-layout { display: grid; box-sizing: border-box; width: min(840px, 100%); min-height: 0; gap: 18px; text-align: left; }
 .session-status-overview { display: flex; align-items: center; gap: 14px; }
 .session-status-overview > div { display: grid; gap: 4px; }

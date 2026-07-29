@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@task-handoff/controlled-instance": "workspace:*",
+    "@task-handoff/core": "workspace:*",
     "commander": "^14.0.3"
   }
 }

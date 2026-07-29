@@ -10,7 +10,7 @@ import {
 } from "./ai-sessions.ts";
 import { TriggerConfigSchema, TriggerDeploymentSchema, TriggerRunSchema, TriggerRuntimeStateSchema } from "./triggers.ts";
 
-export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-07-28";
+export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-07-29";
 export const MARKET_CATALOG_PROTOCOL_VERSION = "2026-07-29";
 // The local value follows the date-only convention. Parsing remains permissive
 // so persisted records written before that convention do not disappear.
@@ -1649,7 +1649,6 @@ function pickObjectFields(input: unknown, keys: string[]) {
 export const ControlledInstanceRegisterSchema = z
   .object({
     instanceId: IdSchema.optional(),
-    name: z.string().trim().min(1).max(160),
     projectId: IdSchema.optional(),
     source: ProjectSourceSchema.optional(),
     nodeId: IdSchema.optional(),
@@ -1705,7 +1704,7 @@ export function sanitizeCrossVersionControlledInstanceRegister(
   if (!input || typeof input !== "object" || Array.isArray(input)) return input;
   const source = input as Record<string, unknown>;
   const knownKeys = [
-    "instanceId", "name", "projectId", "source", "nodeId", "runtimeId", "imageSelection",
+    "instanceId", "projectId", "source", "nodeId", "runtimeId", "imageSelection",
     "instanceVersion", "protocolVersion", "build", "controlMode", "capabilities", "appInventory",
     "target", "workspace", "registrationToken",
   ];

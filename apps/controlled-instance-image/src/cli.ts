@@ -1,6 +1,6 @@
 import { Command } from "commander";
-import fs from "node:fs";
 import path from "node:path";
+import { resolvePackageVersion } from "@task-handoff/core/core/package-version";
 import { runWebServer } from "@task-handoff/controlled-instance/web/server";
 
 function parsePort(value: string) {
@@ -17,19 +17,11 @@ function normalizeArgs(argv: string[]) {
   }
 }
 
-function packageVersion() {
-  try {
-    return JSON.parse(fs.readFileSync(path.resolve(__dirname, "..", "package.json"), "utf8")).version || "unknown";
-  } catch {
-    return "unknown";
-  }
-}
-
 async function main() {
   process.env.TASK_HANDOFF_CLI_PATH ||= __filename;
   const program = new Command();
 
-  program.name("task-handoff-controlled-instance").description("Run a TaskHandoff controlled instance.").version(packageVersion());
+  program.name("task-handoff-controlled-instance").description("Run a TaskHandoff controlled instance.").version(resolvePackageVersion("@task-handoff/controlled-instance-image"));
 
   program
     .command("web")

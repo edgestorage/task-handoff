@@ -37,6 +37,15 @@ export const instances = {
     exporting: "Exporting {name}",
     deleteConfirm: "Delete {name}? This removes the instance record and stops its runtime container if it is running.",
   },
+  configSync: {
+    description: "Choose the programs and a folder inside {name}'s workspace.",
+    programs: "Programs",
+    folder: "Configuration folder",
+    loading: "Loading configuration options...",
+    running: "Transferring configuration...",
+    completed: "Configuration transfer completed for {count} program(s).",
+    resultSummary: "{copied} copied · {skipped} skipped · {failed} failed",
+  },
   status: {
     created: "Created",
     provisioning: "Provisioning",

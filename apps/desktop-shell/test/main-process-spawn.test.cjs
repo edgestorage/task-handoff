@@ -1,31 +1,51 @@
 const assert = require("node:assert/strict");
+const { EventEmitter } = require("node:events");
 const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
+const { superviseDesktopChild } = require("../src/child-process.cjs");
 
-const main = fs.readFileSync(path.join(__dirname, "../src/main.cjs"), "utf8");
+function fakeChild() {
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  return child;
+}
 
-test("packaged child processes do not use app.asar as their cwd", () => {
-  assert.equal((main.match(/resolveDesktopRuntimeRoot\(\{ packaged: app\.isPackaged, resourcesPath: process\.resourcesPath, root: repoRoot\(\) \}\)/g) || []).length, 2);
-  assert.match(main, /resolveDesktopProcessCwd\(process\.env, \{ packaged: app\.isPackaged, root \}\)/);
-  assert.match(main, /fs\.mkdirSync\(processCwd, \{ recursive: true \}\)/);
-  assert.doesNotMatch(main, /spawn\(nodeCommand, args, \{\s*cwd: root,/);
-  assert.equal((main.match(/cwd: processCwd,/g) || []).length, 2);
+test("desktop passes its authoritative package version to both server child processes", () => {
+  const main = fs.readFileSync(path.join(__dirname, "../src/main.cjs"), "utf8");
+  assert.equal((main.match(/buildDesktopChildProcessEnv\(process\.env,/g) || []).length, 2);
+  assert.equal((main.match(/version: app\.getVersion\(\),/g) || []).length, 2);
 });
 
-test("desktop child process spawn failures are handled and surfaced", () => {
-  assert.equal((main.match(/child\.on\("error"/g) || []).length, 2);
-  assert.match(main, /Control Plane failed to spawn/);
-  assert.match(main, /Node agent failed to spawn/);
-});
+test("desktop child supervision reports output, spawn failures, and exits", () => {
+  const child = fakeChild();
+  const info = [];
+  const errors = [];
+  const spawnErrors = [];
+  const exits = [];
+  assert.equal(superviseDesktopChild(child, {
+    label: "node-agent",
+    command: "/app/TaskHandoff",
+    cwd: "/tmp/task-handoff",
+    logInfo: (message) => info.push(message),
+    logError: (message) => errors.push(message),
+    onError: (error) => spawnErrors.push(error),
+    onExit: (code, signal) => exits.push([code, signal]),
+  }), child);
 
-test("node agent receives the bundled controlled-instance command as structured argv", () => {
-  assert.match(
-    main,
-    /TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV: JSON\.stringify\(\[nodeCommand, validation\.cliEntry, "web"\]\)/,
-  );
-  assert.match(
-    main,
-    /TASK_HANDOFF_BUNDLED_RUNTIME_DIR: process\.env\.TASK_HANDOFF_BUNDLED_RUNTIME_DIR \|\| path\.join\(root, "release", "runtime-artifacts"\)/,
-  );
+  child.stdout.emit("data", Buffer.from("ready\n"));
+  child.stderr.emit("data", Buffer.from("warning\n"));
+  const failure = new Error("ENOENT");
+  child.emit("error", failure);
+  child.emit("exit", 1, null);
+
+  assert.deepEqual(info, ["[node-agent] ready"]);
+  assert.deepEqual(spawnErrors, [failure]);
+  assert.deepEqual(exits, [[1, null]]);
+  assert.deepEqual(errors, [
+    "[node-agent] warning",
+    "[node-agent] failed to spawn command=/app/TaskHandoff cwd=/tmp/task-handoff: ENOENT",
+    "[node-agent] exited code=1 signal=",
+  ]);
 });

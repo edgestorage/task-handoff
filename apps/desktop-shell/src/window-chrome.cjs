@@ -39,7 +39,13 @@ function desktopTitleBarOptions({
   return { frame: false };
 }
 
+function applyWindowsTitleBarTheme(targetWindow, nativeTheme, { height, theme }) {
+  nativeTheme.themeSource = theme;
+  targetWindow.setTitleBarOverlay(windowsTitleBarOverlayOptions({ height, theme }));
+}
+
 module.exports = {
+  applyWindowsTitleBarTheme,
   desktopTitleBarOptions,
   desktopWindowChromeMode,
   windowsTitleBarOverlayOptions,

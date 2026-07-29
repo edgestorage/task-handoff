@@ -5,6 +5,10 @@ const path = require("node:path");
 const DEFAULT_DESKTOP_CONTROL_PLANE_PORT = 18081;
 const DEFAULT_DESKTOP_NODE_AGENT_PORT = 18091;
 const NODE_AGENT_IPC_ENDPOINT_PREFIX = "ipc://";
+const POSIX_DESKTOP_EXECUTABLE_PATHS = {
+  darwin: ["/usr/local/bin", "/opt/homebrew/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"],
+  linux: ["/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin", "/snap/bin"],
+};
 
 function repoRoot() {
   return path.resolve(__dirname, "..", "..", "..");
@@ -89,10 +93,39 @@ function resolveDesktopProcessCwd(env = process.env, options = {}) {
   );
 }
 
+function resolveDesktopProcessEnv(env = process.env, options = {}) {
+  const resolved = { ...env };
+  const platformPaths = POSIX_DESKTOP_EXECUTABLE_PATHS[options.platform || process.platform];
+  if (!platformPaths) {
+    return resolved;
+  }
+  const inheritedPaths = typeof env.PATH === "string" ? env.PATH.split(path.delimiter) : [];
+  resolved.PATH = [...new Set([...inheritedPaths, ...platformPaths].filter(Boolean))].join(path.delimiter);
+  return resolved;
+}
+
+function buildDesktopChildProcessEnv(env = process.env, options = {}) {
+  return {
+    ...resolveDesktopProcessEnv(env, options),
+    ...(options.packaged ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
+    ...(options.version ? { TASK_HANDOFF_VERSION: options.version } : {}),
+    ...(options.overrides || {}),
+  };
+}
+
 function controlPlaneUrl(options = {}) {
   const host = options.host || resolveControlPlaneHost(options.env);
   const port = options.port || resolveControlPlanePort(options.env);
   return `http://${host}:${port}`;
+}
+
+function resolveControlPlaneWindowUrl(url, options = {}) {
+  const base = options.baseUrl || controlPlaneUrl(options);
+  const parsedUrl = new URL(String(url || ""), base);
+  if (parsedUrl.origin !== new URL(base).origin || parsedUrl.pathname !== "/repository-workspace") {
+    throw new Error("Only same-origin repository workspace windows are supported.");
+  }
+  return parsedUrl;
 }
 
 function nodeAgentUrl(options = {}) {
@@ -163,6 +196,7 @@ function validateDesktopInputs(options = {}) {
 
 module.exports = {
   buildControlPlaneArgs,
+  buildDesktopChildProcessEnv,
   buildNodeAgentArgs,
   controlPlaneUrl,
   nodeAgentUrl,
@@ -171,8 +205,10 @@ module.exports = {
   resolveControlPlaneAuthMode,
   resolveControlPlaneHost,
   resolveControlPlanePort,
+  resolveControlPlaneWindowUrl,
   resolveDataDir,
   resolveDesktopProcessCwd,
+  resolveDesktopProcessEnv,
   resolveDesktopRuntimeRoot,
   resolveNodeAgentControlEndpoint,
   resolveNodeAgentDataDir,

@@ -1,14 +1,11 @@
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
 const test = require("node:test");
 const {
+  applyWindowsTitleBarTheme,
   desktopTitleBarOptions,
   desktopWindowChromeMode,
   windowsTitleBarOverlayOptions,
 } = require("../src/window-chrome.cjs");
-
-const mainSource = fs.readFileSync(path.join(__dirname, "../src/main.cjs"), "utf8");
 
 test("Windows uses native window controls overlay", () => {
   assert.equal(desktopWindowChromeMode("win32"), "windows-overlay");
@@ -36,7 +33,11 @@ test("Windows overlay stays transparent and follows the content theme", () => {
 });
 
 test("Windows native caption hover follows the renderer theme", () => {
-  assert.match(mainSource, /nativeTheme\.themeSource = theme;\s*targetWindow\.setTitleBarOverlay/);
+  const nativeTheme = { themeSource: "system" };
+  const overlays = [];
+  applyWindowsTitleBarTheme({ setTitleBarOverlay: (value) => overlays.push(value) }, nativeTheme, { height: 42, theme: "light" });
+  assert.equal(nativeTheme.themeSource, "light");
+  assert.deepEqual(overlays, [{ color: "#00000000", symbolColor: "#17232a", height: 42 }]);
 });
 
 test("macOS keeps its native inset traffic lights", () => {

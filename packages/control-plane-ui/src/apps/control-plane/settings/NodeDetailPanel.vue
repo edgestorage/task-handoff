@@ -1,5 +1,5 @@
 <template>
-  <section class="modal-section node-detail-panel">
+  <section class="modal-section settings-panel-surface node-detail-panel">
     <ScrollArea v-if="selectedNode" class="node-detail-content">
       <div class="node-detail-content-inner">
         <div class="node-detail-header">
@@ -914,7 +914,7 @@ watch(
 
 .node-detail-tab-trigger[data-state="active"] {
   background: var(--surface-active);
-  color: var(--white);
+  color: var(--text-strong);
   box-shadow: none;
 }
 

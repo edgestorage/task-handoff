@@ -472,18 +472,6 @@ export type NodeRemoteControlPlane = {
   current: boolean;
 };
 
-export type ConfigSyncPreset = {
-  id: string;
-  label: string;
-  projectRoot: string;
-  items: Array<{
-    id: string;
-    type: "file" | "dir";
-    projectPath: string;
-    containerPath: string;
-  }>;
-};
-
 export type InstanceAccess = {
   strategy: "control-plane-proxy" | "direct-port" | "node-proxy" | "kubernetes-ingress" | "kubernetes-port-forward" | string;
   web?: string;

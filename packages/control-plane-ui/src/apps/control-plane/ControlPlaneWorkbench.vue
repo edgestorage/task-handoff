@@ -87,13 +87,10 @@
         :active-instance-id="activeInstance?.id"
         :can-export-config="canExportConfig"
         :collapsed="instancesCollapsed"
-        :config-sync-label="configSyncLabel"
-        :config-sync-presets="configSyncPresets"
         :error="board.error.value ? errorText(board.error.value) : ''"
         v-model:group-by-node="groupInstancesByNode"
         :instance-display-name="instanceDisplayName"
         :instances="filteredInstances"
-        :is-config-sync-busy="isConfigSyncBusy"
         :is-instance-action-busy="isInstanceActionBusy"
         :loading="board.isLoading.value"
         :open-menu-id="openInstanceMenuId"
@@ -105,7 +102,7 @@
         @open-settings="openInstanceSettings"
         @resize-start="startInstanceResize"
         @run-action="runRowInstanceAction"
-        @run-config-sync="runRowConfigSync"
+        @open-config-sync="openConfigSync"
         @select-instance="selectInstance"
         @set-menu-open="setInstanceMenuOpen"
       />
@@ -242,6 +239,13 @@
 
     <NewInstanceModal v-if="newInstanceOpen" :choose-project-folder="desktopBridge?.chooseProjectFolder" @close="newInstanceOpen = false" @created="handleInstanceCreated" />
 
+    <ConfigSyncDialog
+      v-model:open="configSyncDialogOpen"
+      :direction="configSyncDirection"
+      :instance="configSyncInstance"
+      @completed="refresh"
+    />
+
     <InstanceSettingsDialog
       v-model:open="instanceSettingsOpen"
       :initial-section="instanceSettingsSection"
@@ -268,7 +272,8 @@ import { useQueryClient } from "@tanstack/vue-query";
 import { useEventListener } from "@vueuse/core";
 import { Bot, Download, House, LayoutGrid, LogOut, Maximize2, Minus, RefreshCw, Settings, X } from "@lucide/vue";
 import "@xterm/xterm/css/xterm.css";
-import { getInstanceAppManagement, getInstanceResourceMetrics, installInstanceApp, logoutControlPlane, renameAppSession, resolveAiSessionApproval, uninstallInstanceApp, updateControlledInstance, useAuthSessionQuery, useConfigSyncPresetsQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useInstanceBoardQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
+import { getInstanceAppManagement, getInstanceResourceMetrics, installInstanceApp, logoutControlPlane, renameAppSession, resolveAiSessionApproval, uninstallInstanceApp, updateControlledInstance, useAuthSessionQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useInstanceBoardQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
+import type { ConfigSyncDirection } from "@task-handoff/protocol/config-sync";
 import { getApiData } from "../../api/client";
 import { type AiSessionSummary, type AppManagementOperation, type InstanceBoardItem, type InstanceResourceMetrics, type NodeLocalFolder, type UpdateControlledInstanceInput } from "../../api/types";
 import { Button } from "../../components/ui/button";
@@ -277,6 +282,7 @@ import AiSessionBoardView from "./ai-board/AiSessionBoardView.vue";
 import InstanceBoardView from "./board/InstanceBoardView.vue";
 import InstanceDetail from "./instance-detail/InstanceDetail.vue";
 import InstanceList from "./instance-list/InstanceList.vue";
+import ConfigSyncDialog from "./instance-list/ConfigSyncDialog.vue";
 import InstanceSettingsDialog from "./instance-settings/InstanceSettingsDialog.vue";
 import { useInstanceAppManagement } from "./instance-settings/useInstanceAppManagement";
 import NewInstanceModal from "./NewInstanceModal.vue";
@@ -334,7 +340,6 @@ const board = useInstanceBoardQuery();
 const models = useModelsQuery();
 const controlPlaneAiSessions = useControlPlaneAiSessionsQuery();
 const controlPlaneAppSessions = useControlPlaneAppSessionsQuery();
-const configSyncPresetsQuery = useConfigSyncPresetsQuery();
 const nodes = useNodesQuery();
 
 const workbenchView = ref<WorkbenchView>("instance");
@@ -357,6 +362,14 @@ const boardSize = ref<BoardSize>(storedBoardSize());
 const boardInteractive = ref(storedBoardInteractive());
 const sessionPreviewExpanded = ref(storedSessionPreviewExpanded());
 const newInstanceOpen = ref(false);
+const configSyncInstanceId = ref("");
+const configSyncDirection = ref<ConfigSyncDirection>("import");
+const configSyncDialogOpen = computed({
+  get: () => Boolean(configSyncInstanceId.value),
+  set: (open: boolean) => {
+    if (!open) configSyncInstanceId.value = "";
+  },
+});
 const instanceSettingsId = ref("");
 const instanceSettingsSection = ref<"general" | "models" | "apps">("general");
 const instanceSettingsOpen = computed({
@@ -477,7 +490,7 @@ const boardAppOptions = computed(() => {
     .sort((a, b) => appDisplayName(a.appId, t).localeCompare(appDisplayName(b.appId, t)));
 });
 const activeNodeLocalFolders = computed(() => activeInstance.value ? nodeLocalFoldersByNodeId[activeInstance.value.nodeId] || [] : []);
-const configSyncPresets = computed(() => configSyncPresetsQuery.data.value || []);
+const configSyncInstance = computed(() => sortedInstances.value.find((instance) => instance.id === configSyncInstanceId.value));
 const topbarKicker = computed(() => (settingsMode.value ? t("navigation.settings") : t("common.productName")));
 const topbarTitle = computed(() => {
   if (!settingsMode.value) {
@@ -793,11 +806,8 @@ async function resolveAiSessionApprovalAction(instance: InstanceBoardItem, sessi
 const {
   activeActionLabel,
   canExportConfig,
-  configSyncLabel,
-  isConfigSyncBusy,
   isInstanceActionBusy,
   runInstanceAction,
-  runRowConfigSync,
   runRowInstanceAction,
 } = useInstanceActions({
   clearActiveInstance(instanceId) {
@@ -813,6 +823,12 @@ const {
   refresh,
   translate: t,
 });
+
+function openConfigSync(direction: ConfigSyncDirection, instance: InstanceBoardItem) {
+  configSyncDirection.value = direction;
+  configSyncInstanceId.value = instance.id;
+  openInstanceMenuId.value = "";
+}
 
 function openSettings(section: typeof settingsSection.value = "nodes") {
   settingsSection.value = section;

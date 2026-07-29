@@ -1,6 +1,6 @@
 <template>
   <div class="chat-settings-grid">
-    <section class="modal-section">
+    <section class="modal-section settings-panel-surface">
       <div class="section-head">
         <span>{{ t("settings.chatBridge.count", { count: orderedChatBridges.length }) }}</span>
         <Button variant="outline" size="sm" :disabled="isRefreshing" @click="refreshChat">
@@ -30,7 +30,7 @@
       <p v-if="gatewayError" class="control-plane-error">{{ errorText(gatewayError) }}</p>
     </section>
 
-    <section class="modal-section">
+    <section class="modal-section settings-panel-surface">
       <div v-if="selectedChatBridge" class="section-head">
         <span>{{ t("settings.chatBridge.settings", { name: selectedChatBridge.name }) }}</span>
         <div class="settings-row-actions">
@@ -249,19 +249,6 @@ const {
 .node-status-dot.status-failed {
   background: var(--status-danger);
   box-shadow: 0 0 0 3px var(--status-danger-bg);
-}
-
-.modal-section {
-  display: grid;
-  gap: 12px;
-  min-height: 0;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
-  box-shadow:
-    var(--shadow-panel),
-    inset 0 1px 0 var(--workspace-grid);
-  padding: 12px;
 }
 
 .section-head {

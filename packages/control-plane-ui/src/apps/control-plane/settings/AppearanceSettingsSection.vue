@@ -1,6 +1,6 @@
 <template>
   <div class="basic-settings-grid">
-    <section v-if="desktopUpdatesAvailable" class="modal-section basic-panel server-update-panel desktop-update-panel">
+    <section v-if="desktopUpdatesAvailable" class="modal-section settings-panel-surface basic-panel server-update-panel desktop-update-panel">
       <div class="section-head">
         <span>{{ t("settings.appearance.desktopUpdates") }}</span>
         <div class="update-channel-select">
@@ -44,7 +44,7 @@
       </div>
       <p v-if="desktopUpdateState?.releaseName" class="section-description">{{ desktopUpdateState.releaseName }}</p>
     </section>
-    <section v-else class="modal-section basic-panel server-update-panel">
+    <section v-else class="modal-section settings-panel-surface basic-panel server-update-panel">
       <div class="section-head">
         <span>{{ t("settings.appearance.serverUpdates") }}</span>
         <div class="update-channel-select">
@@ -88,7 +88,7 @@
         <span v-if="serverUpdateJob.error"> · {{ serverUpdateJob.error.message }}</span>
       </p>
     </section>
-    <section class="modal-section appearance-panel">
+    <section class="modal-section settings-panel-surface appearance-panel">
       <div class="section-head">
         <span>{{ t("common.language.label") }}</span>
         <div class="language-select">
@@ -101,7 +101,7 @@
       </div>
       <p class="section-description">{{ t("settings.appearance.languageDescription") }}</p>
     </section>
-    <section class="modal-section appearance-panel">
+    <section class="modal-section settings-panel-surface appearance-panel">
       <div class="section-head">
         <span>{{ t("settings.appearance.theme") }}</span>
       </div>
@@ -117,7 +117,7 @@
         </Button>
       </div>
     </section>
-    <section class="modal-section appearance-panel">
+    <section class="modal-section settings-panel-surface appearance-panel">
       <div class="section-head">
         <span>{{ t("settings.publicAccess.title") }}</span>
       </div>
@@ -135,7 +135,7 @@
         <p v-if="publicBaseUrlMessage" class="settings-success">{{ publicBaseUrlMessage }}</p>
       </div>
     </section>
-    <section class="modal-section appearance-panel composer-shortcuts-panel">
+    <section class="modal-section settings-panel-surface appearance-panel composer-shortcuts-panel">
       <div class="section-head">
         <span>{{ t("settings.composer.title") }}</span>
       </div>
@@ -363,19 +363,6 @@ const desktopUpdateSummary = computed(() => {
 
 .composer-shortcuts-panel {
   grid-column: 1 / -1;
-}
-
-.modal-section {
-  display: grid;
-  gap: 12px;
-  min-height: 0;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
-  box-shadow:
-    var(--shadow-panel),
-    inset 0 1px 0 var(--workspace-grid);
-  padding: 12px;
 }
 
 .section-head {

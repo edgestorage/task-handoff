@@ -110,6 +110,35 @@ test("Codex npm recipes provide privilege-aware install and uninstall commands",
   ]);
 });
 
+test("NVM npm recipes execute with the resolved Node bin environment", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "app-recipe-nvm-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const nvmDir = path.join(root, "nvm");
+  const nvmBin = path.join(nvmDir, "versions", "node", "v24.1.0", "bin");
+  fs.mkdirSync(nvmBin, { recursive: true });
+  const npm = path.join(nvmBin, "npm");
+  fs.writeFileSync(npm, "#!/usr/bin/env node\n", { mode: 0o755 });
+  const commands = [];
+  const execute = createAppRecipeExecutor({
+    installBaseDir: "/managed",
+    stateDir: "/state",
+    env: { PATH: "/missing", NVM_DIR: nvmDir },
+    commandRunner: async (command) => { commands.push(command); return { exitCode: 0, stdout: "ok", stderr: "" }; },
+  });
+
+  await execute("install", {
+    type: "node-package", platforms: ["linux"], installer: "npm", packages: ["@openai/codex"], privilege: "user",
+  }, {
+    appId: "codex",
+    capabilities: { platform: "linux", arch: "x64", installers: ["npm"], privilege: "user", installerAccess: { npmGlobalWritable: true } },
+  });
+
+  assert.equal(commands[0].executable, npm);
+  assert.equal(commands[0].env.NVM_BIN, nvmBin);
+  assert.equal(commands[0].env.NVM_DIR, nvmDir);
+  assert.equal(commands[0].env.PATH, `${nvmBin}${path.delimiter}/missing`);
+});
+
 test("Windows npm recipes run command shims through cmd.exe without shell mode", async () => {
   const commands = [];
   const execute = createAppRecipeExecutor({

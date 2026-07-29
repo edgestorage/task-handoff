@@ -118,6 +118,11 @@
     --ai-board-column-waiting-count-bg: var(--status-warning-bg);
     --ai-board-column-problem-count-bg: var(--status-danger-bg);
     --ai-board-card-bg: var(--surface-raised);
+    --ai-session-card-border: color-mix(in srgb, var(--ai-board-column-border) 55%, var(--ai-board-card-bg));
+    --ai-session-card-content-bg: color-mix(in srgb, var(--ai-board-assistant-bg) 72%, var(--ai-board-card-bg));
+    --ai-session-card-divider: color-mix(in srgb, var(--ai-board-column-border) 32%, transparent);
+    --ai-session-card-selected-border: color-mix(in srgb, var(--brand-accent) 58%, var(--ai-session-card-border));
+    --ai-session-card-selected-bg: color-mix(in srgb, var(--brand-accent) 5%, var(--ai-board-card-bg));
     --ai-board-card-active-border: color-mix(in srgb, var(--brand-accent) 58%, transparent);
     --ai-board-card-waiting-border: color-mix(in srgb, var(--status-warning) 58%, transparent);
     --ai-board-card-idle-border: color-mix(in srgb, var(--text-subtle) 34%, transparent);
@@ -371,6 +376,11 @@
     --ai-board-column-waiting-count-bg: rgb(245 158 11 / 16%);
     --ai-board-column-problem-count-bg: rgb(248 113 113 / 14%);
     --ai-board-card-bg: #0c1a20;
+    --ai-session-card-border: color-mix(in srgb, var(--ai-board-column-border) 55%, var(--ai-board-card-bg));
+    --ai-session-card-content-bg: color-mix(in srgb, var(--ai-board-assistant-bg) 72%, var(--ai-board-card-bg));
+    --ai-session-card-divider: color-mix(in srgb, var(--ai-board-column-border) 32%, transparent);
+    --ai-session-card-selected-border: color-mix(in srgb, var(--brand-accent) 58%, var(--ai-session-card-border));
+    --ai-session-card-selected-bg: color-mix(in srgb, var(--brand-accent) 5%, var(--ai-board-card-bg));
     --ai-board-card-active-border: rgb(45 212 191 / 58%);
     --ai-board-card-waiting-border: rgb(245 158 11 / 58%);
     --ai-board-card-idle-border: rgb(148 163 184 / 34%);

@@ -185,7 +185,7 @@ test("running activity floats in the card without competing with approval or tur
 
 test("card footer gradients provide an opaque backdrop for floating controls", () => {
   assert.match(panelCss, /session-ai-preview-field-assistant::after \{[\s\S]*?height: 34px;[\s\S]*?84%[\s\S]*?58%/);
-  assert.match(panelCss, /session-ai-row\[data-state="running"\][\s\S]*?height: 52px;[\s\S]*?var\(--surface-inset\) 70%/);
+  assert.match(panelCss, /session-ai-row\[data-state="running"\][\s\S]*?height: 52px;[\s\S]*?var\(--ai-session-card-content-bg\) 70%/);
   assert.match(card, /ai-board-preview-field-assistant::after \{[\s\S]*?height: 34px;[\s\S]*?84%[\s\S]*?58%/);
-  assert.match(card, /ai-board-card\[data-state="running"\][\s\S]*?height: 52px;[\s\S]*?var\(--ai-board-assistant-bg\) 70%/);
+  assert.match(card, /ai-board-card\[data-state="running"\][\s\S]*?height: 52px;[\s\S]*?var\(--ai-session-card-content-bg\) 70%/);
 });
