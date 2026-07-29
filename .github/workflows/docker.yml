@@ -19,8 +19,6 @@ on:
       - "tsconfig.controlled-instance.json"
       - "tsconfig.workspace.json"
   push:
-    branches:
-      - main
     tags:
       - "v*"
   workflow_dispatch:
@@ -404,14 +402,14 @@ jobs:
         run: docker rm -f task-handoff-web-ci task-handoff-codex-ci task-handoff-ai-ci 2>/dev/null || true
 
       - name: Login to Docker Hub
-        if: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
         uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Publish immutable commit image
-        if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
@@ -429,7 +427,7 @@ jobs:
           done
 
   publish-multiarch-image:
-    if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
     needs: docker-build
     runs-on: ubuntu-latest
     timeout-minutes: 10

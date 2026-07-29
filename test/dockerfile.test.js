@@ -66,7 +66,9 @@ test("Docker CI builds amd64 and arm64 concurrently and publishes a multi-archit
   assert.match(workflow, /sha_tag="sha-\$\{GITHUB_SHA::7\}-\$\{\{ matrix\.arch \}\}"/);
   assert.match(workflow, /"\$\{image\}:\$\{sha_tag\}-amd64"/);
   assert.match(workflow, /"\$\{image\}:\$\{sha_tag\}-arm64"/);
-  assert.match(workflow, /Publish immutable commit image\n\s+if: \$\{\{ github\.ref == 'refs\/heads\/main' \|\| startsWith\(github\.ref, 'refs\/tags\/v'\) \}\}/);
+  assert.doesNotMatch(workflow, /branches:\s*\n\s+- main/);
+  assert.doesNotMatch(workflow, /refs\/heads\/main/);
+  assert.match(workflow, /Publish immutable commit image\n\s+if: \$\{\{ startsWith\(github\.ref, 'refs\/tags\/v'\) \}\}/);
   assert.match(workflow, /promote-release:\n\s+if:.*refs\/tags\/v.*\n\s+needs: publish-multiarch-image/);
   assert.doesNotMatch(workflow, /Immutable source image was not published within/);
 });
