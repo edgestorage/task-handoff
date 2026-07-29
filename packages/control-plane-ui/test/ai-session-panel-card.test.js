@@ -91,6 +91,14 @@ test("opening the already-visible new-session surface preserves its draft", () =
   assert.match(panel, /function openNewSession\(\) \{\s*const wasVisible = showNewSession\.value;\s*newSessionOpen\.value = true;\s*if \(wasVisible\) return;/);
 });
 
+test("new-session folder picker keeps actions visible while long folder lists scroll", () => {
+  assert.match(panel, /<DropdownMenuContent class="session-ai-project-menu session-ai-project-picker-menu"[^>]*:collision-padding="12"/);
+  assert.match(panel, /<ScrollArea type="always" class="session-ai-project-list">[\s\S]*?filteredNewSessionFolders[\s\S]*?<\/ScrollArea>\s*<DropdownMenuSeparator \/>[\s\S]*?openNewProject/);
+  assert.match(styles, /:global\(\.session-ai-project-picker-menu\)\s*\{[^}]*--reka-dropdown-menu-content-available-height[^}]*grid-template-rows: auto minmax\(0, 1fr\) auto auto;[^}]*overflow: hidden;/s);
+  assert.match(styles, /\.session-ai-project-list\s*\{[^}]*min-height: 0;/s);
+  assert.doesNotMatch(styles, /\.session-ai-project-list\s*\{[^}]*overflow-y: auto;/s);
+});
+
 test("new-session permission edits update the authoritative instance default", () => {
   assert.match(panel, /:permission-mode="newSessionPermissionMode"/);
   assert.match(panel, /@update:permission-mode="updateNewSessionPermissionMode"/);

@@ -5,7 +5,6 @@ export type NodeAgentRegistrationConfig = {
   nodeAgentUrl?: string;
   registrationToken?: string;
   instanceId?: string;
-  instanceName: string;
   projectId?: string;
   nodeId?: string;
   runtimeId?: string;
@@ -47,7 +46,6 @@ export function nodeAgentRegistrationConfigFromEnv(env: NodeJS.ProcessEnv = proc
     nodeAgentUrl: env.TASK_HANDOFF_NODE_AGENT_URL,
     registrationToken: env.TASK_HANDOFF_REGISTRATION_TOKEN,
     instanceId: env.TASK_HANDOFF_INSTANCE_ID,
-    instanceName: env.TASK_HANDOFF_INSTANCE_NAME || env.HOSTNAME || "controlled-instance",
     projectId: env.TASK_HANDOFF_PROJECT_ID,
     nodeId: env.TASK_HANDOFF_NODE_ID,
     runtimeId: env.TASK_HANDOFF_RUNTIME_ID,
@@ -104,7 +102,6 @@ export class NodeAgentRegistrationClient {
     const instanceId = this.requiredInstanceId();
     const response = await this.request(`node-agent/instances/${encodeURIComponent(instanceId)}/register`, {
       instanceId: this.config.instanceId,
-      name: this.config.instanceName,
       projectId: this.config.projectId,
       nodeId: this.config.nodeId,
       runtimeId: this.config.runtimeId,

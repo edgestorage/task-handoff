@@ -390,12 +390,14 @@
                     <ChevronDown :size="13" />
                   </button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent class="session-ai-project-menu" align="start" :side-offset="8">
+                <DropdownMenuContent class="session-ai-project-menu session-ai-project-picker-menu" align="start" :collision-padding="12" :side-offset="8">
                   <input v-model="newSessionFolderQuery" class="session-ai-project-search" :placeholder="t('sessions.panel.searchProjects')" :aria-label="t('sessions.panel.searchProjects')" />
-                  <DropdownMenuItem v-for="folder in filteredNewSessionFolders" :key="folder.id" class="session-ai-project-item" @select="newSessionFolderId = folder.id">
-                    <Folder :size="15" /><span>{{ folder.name }}</span><Check v-if="newSessionFolderId === folder.id" :size="15" />
-                  </DropdownMenuItem>
-                  <p v-if="!filteredNewSessionFolders.length" class="session-ai-project-empty">{{ t("sessions.panel.noProjects") }}</p>
+                  <ScrollArea type="always" class="session-ai-project-list">
+                    <DropdownMenuItem v-for="folder in filteredNewSessionFolders" :key="folder.id" class="session-ai-project-item" @select="newSessionFolderId = folder.id">
+                      <Folder :size="15" /><span>{{ folder.name }}</span><Check v-if="newSessionFolderId === folder.id" :size="15" />
+                    </DropdownMenuItem>
+                    <p v-if="!filteredNewSessionFolders.length" class="session-ai-project-empty">{{ t("sessions.panel.noProjects") }}</p>
+                  </ScrollArea>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem class="session-ai-project-item" @select="openNewProject"><Plus :size="15" /><span>{{ t("sessions.panel.newProject") }}</span></DropdownMenuItem>
                 </DropdownMenuContent>

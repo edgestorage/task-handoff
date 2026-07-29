@@ -8,12 +8,14 @@ const { app, BrowserView, BrowserWindow, dialog, ipcMain, nativeImage, nativeThe
 const { autoUpdater } = require("electron-updater");
 const {
   buildControlPlaneArgs,
+  buildDesktopChildProcessEnv,
   buildNodeAgentArgs,
   controlPlaneUrl,
   nodeAgentUrl,
   repoRoot,
   resolveControlPlaneHost,
   resolveControlPlanePort,
+  resolveControlPlaneWindowUrl: validateControlPlaneWindowUrl,
   resolveDataDir,
   resolveDesktopProcessCwd,
   resolveDesktopRuntimeRoot,
@@ -24,7 +26,9 @@ const {
   validateDesktopInputs,
 } = require("./config.cjs");
 const { createDesktopUpdater } = require("./updater.cjs");
-const { desktopTitleBarOptions, desktopWindowChromeMode, windowsTitleBarOverlayOptions } = require("./window-chrome.cjs");
+const { superviseDesktopChild } = require("./child-process.cjs");
+const { applyDesktopDockIcon, desktopIconPath: resolveDesktopIconPath } = require("./icon.cjs");
+const { applyWindowsTitleBarTheme, desktopTitleBarOptions, desktopWindowChromeMode } = require("./window-chrome.cjs");
 
 let mainWindow;
 let controlPlaneProcess;
@@ -39,32 +43,22 @@ const windowsTitleBarOverlayHeights = new WeakMap();
 const childProcessSpawnErrors = new WeakMap();
 const NODE_AGENT_IPC_ENDPOINT_PREFIX = "ipc://";
 
-function isMacOS() {
-  return process.platform === "darwin";
-}
-
 function desktopIconPath() {
-  const iconPath = app.isPackaged
-    ? path.join(process.resourcesPath, "icon.png")
-    : path.join(repoRoot(), "build", "icon.png");
-  return fs.existsSync(iconPath) ? iconPath : undefined;
+  return resolveDesktopIconPath({
+    packaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    root: repoRoot(),
+  });
 }
 
-function applyDesktopDockIcon() {
-  // Packaged macOS apps already get their Dock icon from the bundle's
-  // CFBundleIconFile. Setting the source PNG here bypasses macOS's app-icon
-  // presentation and exposes the square image canvas in the Dock.
-  if (isMacOS() && app.isPackaged) {
-    return;
-  }
-  const iconPath = desktopIconPath();
-  if (!iconPath || !app.dock) {
-    return;
-  }
-  const icon = nativeImage.createFromPath(iconPath);
-  if (!icon.isEmpty()) {
-    app.dock.setIcon(icon);
-  }
+function setDesktopDockIcon() {
+  return applyDesktopDockIcon({
+    platform: process.platform,
+    packaged: app.isPackaged,
+    dock: app.dock,
+    nativeImage,
+    iconPath: desktopIconPath(),
+  });
 }
 
 function nativeTitleBarWindowOptions() {
@@ -402,14 +396,10 @@ function createWindow(url) {
 }
 
 function resolveControlPlaneWindowUrl(url) {
-  const base = mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.getURL().startsWith("http")
+  const baseUrl = mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.getURL().startsWith("http")
     ? mainWindow.webContents.getURL()
     : controlPlaneUrl();
-  const parsedUrl = new URL(String(url || ""), base);
-  if (parsedUrl.origin !== new URL(base).origin || parsedUrl.pathname !== "/repository-workspace") {
-    throw new Error("Only same-origin repository workspace windows are supported.");
-  }
-  return parsedUrl;
+  return validateControlPlaneWindowUrl(url, { baseUrl });
 }
 
 function createControlPlaneWindow(url) {
@@ -619,34 +609,33 @@ function startControlPlane(options = {}) {
   controlPlaneProcess = spawn(nodeCommand, args, {
     cwd: processCwd,
     env: {
-      ...process.env,
-      ...(app.isPackaged ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
-      TASK_HANDOFF_CONTROL_PLANE_HOST: resolveControlPlaneHost(),
-      TASK_HANDOFF_CONTROL_PLANE_PORT: String(resolveControlPlanePort()),
-      TASK_HANDOFF_NODE_AGENT_CONTROL_ENDPOINT: options.nodeAgentControlEndpoint || resolveNodeAgentControlEndpoint(),
-      TASK_HANDOFF_NODE_AGENT_ENDPOINT: options.nodeAgentEndpoint || nodeAgentUrl(),
+      ...buildDesktopChildProcessEnv(process.env, {
+        packaged: app.isPackaged,
+        version: app.getVersion(),
+        overrides: {
+          TASK_HANDOFF_CONTROL_PLANE_HOST: resolveControlPlaneHost(),
+          TASK_HANDOFF_CONTROL_PLANE_PORT: String(resolveControlPlanePort()),
+          TASK_HANDOFF_NODE_AGENT_CONTROL_ENDPOINT: options.nodeAgentControlEndpoint || resolveNodeAgentControlEndpoint(),
+          TASK_HANDOFF_NODE_AGENT_ENDPOINT: options.nodeAgentEndpoint || nodeAgentUrl(),
+        },
+      }),
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
   ownsControlPlaneProcess = true;
   const child = controlPlaneProcess;
 
-  child.stdout.on("data", (chunk) => {
-    logInfo(`[control-plane] ${chunk.toString("utf8").trimEnd()}`);
-  });
-  child.stderr.on("data", (chunk) => {
-    logError(`[control-plane] ${chunk.toString("utf8").trimEnd()}`);
-  });
-  child.on("error", (error) => {
-    childProcessSpawnErrors.set(child, error);
-    logError(`[control-plane] failed to spawn command=${nodeCommand} cwd=${processCwd}: ${error.message}`);
-  });
-  child.on("exit", (code, signal) => {
-    if (code || signal) {
-      logError(`[control-plane] exited code=${code ?? ""} signal=${signal ?? ""}`);
-    }
-    controlPlaneProcess = undefined;
-    ownsControlPlaneProcess = false;
+  superviseDesktopChild(child, {
+    label: "control-plane",
+    command: nodeCommand,
+    cwd: processCwd,
+    logInfo,
+    logError,
+    onError: (error) => childProcessSpawnErrors.set(child, error),
+    onExit: () => {
+      controlPlaneProcess = undefined;
+      ownsControlPlaneProcess = false;
+    },
   });
 
   return child;
@@ -668,34 +657,33 @@ function startNodeAgent(options = {}) {
   nodeAgentProcess = spawn(nodeCommand, args, {
     cwd: processCwd,
     env: {
-      ...process.env,
-      ...(app.isPackaged ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
-      TASK_HANDOFF_NODE_AGENT_HOST: host,
-      TASK_HANDOFF_NODE_AGENT_PORT: String(port),
-      TASK_HANDOFF_BUNDLED_RUNTIME_DIR: process.env.TASK_HANDOFF_BUNDLED_RUNTIME_DIR || path.join(root, "release", "runtime-artifacts"),
-      TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV: JSON.stringify([nodeCommand, validation.cliEntry, "web"]),
+      ...buildDesktopChildProcessEnv(process.env, {
+        packaged: app.isPackaged,
+        version: app.getVersion(),
+        overrides: {
+          TASK_HANDOFF_NODE_AGENT_HOST: host,
+          TASK_HANDOFF_NODE_AGENT_PORT: String(port),
+          TASK_HANDOFF_BUNDLED_RUNTIME_DIR: process.env.TASK_HANDOFF_BUNDLED_RUNTIME_DIR || path.join(root, "release", "runtime-artifacts"),
+          TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV: JSON.stringify([nodeCommand, validation.cliEntry, "web"]),
+        },
+      }),
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
   ownsNodeAgentProcess = true;
   const child = nodeAgentProcess;
 
-  child.stdout.on("data", (chunk) => {
-    logInfo(`[node-agent] ${chunk.toString("utf8").trimEnd()}`);
-  });
-  child.stderr.on("data", (chunk) => {
-    logError(`[node-agent] ${chunk.toString("utf8").trimEnd()}`);
-  });
-  child.on("error", (error) => {
-    childProcessSpawnErrors.set(child, error);
-    logError(`[node-agent] failed to spawn command=${nodeCommand} cwd=${processCwd}: ${error.message}`);
-  });
-  child.on("exit", (code, signal) => {
-    if (code || signal) {
-      logError(`[node-agent] exited code=${code ?? ""} signal=${signal ?? ""}`);
-    }
-    nodeAgentProcess = undefined;
-    ownsNodeAgentProcess = false;
+  superviseDesktopChild(child, {
+    label: "node-agent",
+    command: nodeCommand,
+    cwd: processCwd,
+    logInfo,
+    logError,
+    onError: (error) => childProcessSpawnErrors.set(child, error),
+    onExit: () => {
+      nodeAgentProcess = undefined;
+      ownsNodeAgentProcess = false;
+    },
   });
 
   return child;
@@ -871,8 +859,7 @@ ipcMain.handle("task-handoff:set-window-chrome-theme", (_event, theme) => {
   if (process.platform !== "win32" || !targetWindow || targetWindow.isDestroyed() || !height || !["light", "dark"].includes(theme)) {
     return { ok: false };
   }
-  nativeTheme.themeSource = theme;
-  targetWindow.setTitleBarOverlay(windowsTitleBarOverlayOptions({ height, theme }));
+  applyWindowsTitleBarTheme(targetWindow, nativeTheme, { height, theme });
   return { ok: true };
 });
 
@@ -887,7 +874,7 @@ ipcMain.handle("task-handoff:desktop-update-open-release", () => {
 });
 
 app.whenReady().then(() => {
-  applyDesktopDockIcon();
+  setDesktopDockIcon();
   desktopUpdater = createDesktopUpdater({
     app,
     autoUpdater,

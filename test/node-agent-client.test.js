@@ -63,7 +63,6 @@ test("controlled instance node agent client posts register and heartbeat payload
       nodeAgentUrl: "http://node.local",
       registrationToken: "secret-token",
       instanceId: "inst_env",
-      instanceName: "worker-1",
       projectId: "proj_1",
       heartbeatIntervalMs: 10_000,
     },
@@ -80,7 +79,7 @@ test("controlled instance node agent client posts register and heartbeat payload
   assert.equal(requests[0].authorization, "Bearer secret-token");
   assert.equal(requests[0].signal instanceof AbortSignal, true);
   assert.equal(requests[0].body.instanceId, "inst_env");
-  assert.equal(requests[0].body.name, "worker-1");
+  assert.equal(requests[0].body.name, undefined);
   assert.equal(requests[0].body.projectId, "proj_1");
   assert.equal(requests[0].body.protocolVersion, "2026-06-23");
   assert.equal(requests[0].body.build.buildId, "build-test");
@@ -120,12 +119,10 @@ test("controlled instance node agent config reads env and stays disabled for sta
     TASK_HANDOFF_REGISTRATION_TOKEN: "secret",
     TASK_HANDOFF_PROJECT_ID: "proj_1",
     TASK_HANDOFF_INSTANCE_ID: "inst_1",
-    TASK_HANDOFF_INSTANCE_NAME: "worker",
     TASK_HANDOFF_HEARTBEAT_INTERVAL_MS: "1234",
   });
   assert.equal(controlled.controlMode, "controlled");
   assert.equal(controlled.instanceId, "inst_1");
-  assert.equal(controlled.instanceName, "worker");
   assert.equal(controlled.heartbeatIntervalMs, 1234);
   assert.equal(new NodeAgentRegistrationClient(controlled, async () => snapshot()).enabled(), true);
 });

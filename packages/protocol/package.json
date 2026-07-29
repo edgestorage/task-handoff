@@ -14,6 +14,10 @@
       "types": "./src/control-plane.ts",
       "default": "./src/control-plane.ts"
     },
+    "./config-sync": {
+      "types": "./src/config-sync.ts",
+      "default": "./src/config-sync.ts"
+    },
     "./ai-sessions": {
       "types": "./src/ai-sessions.ts",
       "default": "./src/ai-sessions.ts"

@@ -1,6 +1,9 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { EventEmitter } = require("node:events");
 const ts = require("typescript");
 const { registerWorkspaceRequire } = require("./workspace-require.js");
 
@@ -30,6 +33,162 @@ const {
   builtinManagedAppRegistry,
   createManagedAppRegistry,
 } = require("../packages/app-runtime/src/managed-app-definitions/index.ts");
+const {
+  resolveExecutable,
+} = require("../packages/app-runtime/src/executable-resolver.ts");
+const {
+  resolveAppExecutable,
+} = require("../packages/app-runtime/src/catalog.ts");
+const {
+  createCodexRuntime,
+} = require("../packages/app-runtime/src/managed-app-definitions/codex/runtime.ts");
+const {
+  codexAppServerSocketPath,
+} = require("../packages/app-runtime/src/runtime-utils.ts");
+
+function executable(directory, name) {
+  fs.mkdirSync(directory, { recursive: true });
+  const filePath = path.join(directory, name);
+  fs.writeFileSync(filePath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  return filePath;
+}
+
+test("executable resolvers stop at PATH before NVM and Homebrew", (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "app-resolver-path-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const pathBin = path.join(root, "path-bin");
+  const nvmDir = path.join(root, "nvm");
+  const nvmBin = path.join(nvmDir, "versions", "node", "v24.1.0", "bin");
+  const brewBin = path.join(root, "brew", "bin");
+  const expected = executable(pathBin, "codex");
+  executable(nvmBin, "codex");
+  executable(brewBin, "codex");
+
+  const resolution = resolveExecutable("codex", {
+    env: { PATH: pathBin, NVM_DIR: nvmDir },
+    platform: "darwin",
+    homeDir: root,
+    homebrewBinDirectories: [brewBin],
+  });
+
+  assert.equal(resolution.resolver, "path");
+  assert.equal(resolution.executable, expected);
+  assert.equal(resolution.env, undefined);
+});
+
+test("NVM resolver uses the default Node version and binds its bin directory to launch env", (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "app-resolver-nvm-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const nvmDir = path.join(root, "nvm");
+  const olderBin = path.join(nvmDir, "versions", "node", "v20.1.0", "bin");
+  const defaultBin = path.join(nvmDir, "versions", "node", "v22.2.0", "bin");
+  executable(olderBin, "codex");
+  const expected = executable(defaultBin, "codex");
+  fs.mkdirSync(path.join(nvmDir, "alias"), { recursive: true });
+  fs.writeFileSync(path.join(nvmDir, "alias", "default"), "22.2.0\n");
+
+  const resolution = resolveExecutable("codex", {
+    env: { PATH: "/missing", NVM_DIR: nvmDir },
+    platform: "darwin",
+    homeDir: root,
+    homebrewBinDirectories: [],
+  });
+
+  assert.equal(resolution.resolver, "nvm");
+  assert.equal(resolution.executable, expected);
+  assert.equal(resolution.env.NVM_BIN, defaultBin);
+  assert.equal(resolution.env.NVM_DIR, nvmDir);
+  assert.equal(resolution.env.PATH, `${defaultBin}${path.delimiter}/missing`);
+});
+
+test("Homebrew resolver runs only after PATH and NVM miss", (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "app-resolver-brew-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const brewBin = path.join(root, "brew", "bin");
+  const expected = executable(brewBin, "codex");
+
+  const resolution = resolveExecutable("codex", {
+    env: { PATH: "/missing", NVM_DIR: path.join(root, "missing-nvm") },
+    platform: "darwin",
+    homeDir: root,
+    homebrewBinDirectories: [brewBin],
+  });
+
+  assert.equal(resolution.resolver, "homebrew");
+  assert.equal(resolution.executable, expected);
+  assert.equal(resolution.env.PATH, `${brewBin}${path.delimiter}/missing`);
+});
+
+test("catalog launchers retain the resolved executable environment", (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "app-resolver-launch-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const nvmDir = path.join(root, "nvm");
+  const nvmBin = path.join(nvmDir, "versions", "node", "v24.1.0", "bin");
+  const expected = executable(nvmBin, "codex");
+  const app = resolveAppExecutable(
+    { id: "codex", name: "Codex", kind: "tty", command: "codex", env: { NVM_DIR: nvmDir } },
+    { PATH: "/missing" },
+  );
+
+  assert.equal(app.command, expected);
+  assert.equal(app.env.NVM_BIN, nvmBin);
+  assert.equal(app.env.PATH, `${nvmBin}${path.delimiter}/missing`);
+});
+
+test("Codex runtime removes a pre-existing fixed socket and only reuses its own child", (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-owned-app-server-"));
+  const socketRoot = path.join(root, "sockets");
+  const runtimeDir = path.join(root, "runtime");
+  const logDir = path.join(root, "logs");
+  fs.mkdirSync(socketRoot, { recursive: true });
+  const previousSocketDir = process.env.TASK_HANDOFF_CODEX_APP_SERVER_SOCKET_DIR;
+  process.env.TASK_HANDOFF_CODEX_APP_SERVER_SOCKET_DIR = socketRoot;
+  context.after(() => {
+    if (previousSocketDir === undefined) delete process.env.TASK_HANDOFF_CODEX_APP_SERVER_SOCKET_DIR;
+    else process.env.TASK_HANDOFF_CODEX_APP_SERVER_SOCKET_DIR = previousSocketDir;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  const socketPath = codexAppServerSocketPath(path.join(runtimeDir, "codex-app-server"));
+  fs.mkdirSync(path.dirname(socketPath), { recursive: true });
+  fs.writeFileSync(socketPath, "external-stale-socket");
+  let spawnCount = 0;
+  let staleSocketRemovedBeforeSpawn = false;
+  const child = new EventEmitter();
+  Object.assign(child, {
+    pid: 4242,
+    killed: false,
+    exitCode: null,
+    kill() {
+      this.killed = true;
+      this.exitCode = 0;
+      return true;
+    },
+  });
+  const runtime = createCodexRuntime({
+    paths: { runtimeDir, logDir },
+    allocatePort: () => 8101,
+    hasCommand: () => true,
+    spawnLogged: (_command, args) => {
+      spawnCount += 1;
+      assert.equal(args.at(-1), `unix://${socketPath}`);
+      staleSocketRemovedBeforeSpawn = !fs.existsSync(socketPath);
+      fs.writeFileSync(socketPath, "controlled-instance-socket");
+      return child;
+    },
+    waitForUnixSocket: (candidate) => assert.equal(fs.readFileSync(candidate, "utf8"), "controlled-instance-socket"),
+    patchSession: () => {},
+  });
+
+  const first = runtime.sharedResource.acquire("codex", root, process.env, "consumer-one");
+  const second = runtime.sharedResource.acquire("codex", root, process.env, "consumer-two");
+
+  assert.equal(staleSocketRemovedBeforeSpawn, true);
+  assert.equal(spawnCount, 1);
+  assert.equal(second.details.pid, first.details.pid);
+  assert.equal(second.details.socketPath, first.details.socketPath);
+  runtime.stopAll();
+});
 
 test("managed AI providers own their resume arguments", () => {
   const codex = builtinManagedAppRegistry.provider("codex");
@@ -327,4 +486,15 @@ test("built-in providers resolve commands and arguments from the supplied enviro
     "--model",
     "claude-custom",
   ]);
+});
+
+test("controlled Claude launch relies on materialized settings instead of a model argument", () => {
+  const definitions = builtinManagedAppDefinitions({
+    includeOptional: true,
+    env: {
+      TASK_HANDOFF_CONTROL_MODE: "controlled",
+      TASK_HANDOFF_CLAUDE_MODEL: "claude-managed",
+    },
+  });
+  assert.deepEqual(definitions.find((entry) => entry.launcher.id === "claude").launcher.args, []);
 });

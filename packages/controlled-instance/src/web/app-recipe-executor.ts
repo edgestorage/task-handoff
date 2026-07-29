@@ -4,7 +4,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { createGunzip } from "node:zlib";
 import type { AppManagementOperation, AppManagementProgress, FinalComputerCapabilities } from "@task-handoff/protocol/control-plane";
-import { findManagedExecutable } from "@task-handoff/app-runtime";
+import { resolveExecutable } from "@task-handoff/app-runtime";
 import type { ArchiveInstallRecipe, InstallRecipe, NodePackageInstallRecipe, SystemPackageInstallRecipe } from "@task-handoff/app-runtime/types";
 import { atomicWriteJsonSync } from "@task-handoff/core/storage/atomic-write";
 import { extract as extractTar, list as listTar, type ReadEntry } from "tar";
@@ -31,6 +31,7 @@ export class AppRecipeExecutionError extends Error {
 export type AppRecipeCommand = {
   executable: string;
   args: string[];
+  env?: NodeJS.ProcessEnv;
   timeoutMs: number;
   terminationGraceMs?: number;
 };
@@ -56,6 +57,7 @@ export type AppRecipeExecutionContext = {
 export type AppRecipeExecutorOptions = {
   installBaseDir: string;
   stateDir: string;
+  env?: NodeJS.ProcessEnv;
   commandRunner?: (command: AppRecipeCommand, hooks?: AppRecipeCommandHooks) => Promise<AppRecipeCommandResult>;
   fetcher?: typeof fetch;
 };
@@ -67,7 +69,12 @@ function bounded(value: string) {
 export function runAppRecipeCommand(command: AppRecipeCommand, hooks: AppRecipeCommandHooks = {}): Promise<AppRecipeCommandResult> {
   return new Promise((resolve, reject) => {
     const detached = process.platform !== "win32";
-    const child = spawn(command.executable, command.args, { shell: false, detached, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(command.executable, command.args, {
+      shell: false,
+      detached,
+      stdio: ["ignore", "pipe", "pipe"],
+      ...(command.env ? { env: command.env } : {}),
+    });
     let stdout = "";
     let stderr = "";
     let timedOut = false;
@@ -116,7 +123,14 @@ function signalChildProcess(child: { pid?: number; kill: (signal?: NodeJS.Signal
   }
 }
 
-function packageCommand(recipe: SystemPackageInstallRecipe, operation: AppManagementOperation, capabilities: FinalComputerCapabilities): AppRecipeCommand {
+function resolvedCommand(executable: string, args: string[], timeoutMs: number, env: NodeJS.ProcessEnv, platform: NodeJS.Platform): AppRecipeCommand {
+  const resolution = resolveExecutable(executable, { env, platform });
+  return resolution?.env
+    ? { executable: resolution.executable, args, timeoutMs, env: { ...env, ...resolution.env } }
+    : { executable, args, timeoutMs };
+}
+
+function packageCommand(recipe: SystemPackageInstallRecipe, operation: AppManagementOperation, capabilities: FinalComputerCapabilities, env: NodeJS.ProcessEnv): AppRecipeCommand {
   if (!recipe.packages.length || recipe.packages.some((item) => !PACKAGE_NAME.test(item))) {
     throw new AppRecipeExecutionError("invalid_builtin_recipe", "The built-in system package recipe contains an invalid package name.");
   }
@@ -131,7 +145,7 @@ function packageCommand(recipe: SystemPackageInstallRecipe, operation: AppManage
   const selected = definitions[recipe.installer];
   const args = [...selected[operation], ...recipe.packages];
   if (capabilities.privilege === "root" || recipe.privilege === "user") {
-    return { executable: selected.executable, args, timeoutMs: 15 * 60_000 };
+    return resolvedCommand(selected.executable, args, 15 * 60_000, env, capabilities.platform as NodeJS.Platform);
   }
   if (capabilities.privilege === "passwordless-sudo") {
     return { executable: "sudo", args: ["-n", selected.executable, ...args], timeoutMs: 15 * 60_000 };
@@ -149,7 +163,7 @@ function aptRefreshCommand(capabilities: FinalComputerCapabilities, recipe: Syst
   throw new AppRecipeExecutionError("insufficient_privilege", "The controlled instance cannot refresh the apt package index.");
 }
 
-function nodePackageCommand(recipe: NodePackageInstallRecipe, operation: AppManagementOperation, capabilities: FinalComputerCapabilities): AppRecipeCommand {
+function nodePackageCommand(recipe: NodePackageInstallRecipe, operation: AppManagementOperation, capabilities: FinalComputerCapabilities, env: NodeJS.ProcessEnv): AppRecipeCommand {
   if (!recipe.packages.length || recipe.packages.some((item) => !NODE_PACKAGE_NAME.test(item))) {
     throw new AppRecipeExecutionError("invalid_builtin_recipe", "The built-in Node package recipe contains an invalid package name.");
   }
@@ -159,12 +173,13 @@ function nodePackageCommand(recipe: NodePackageInstallRecipe, operation: AppMana
   const args = operation === "install"
     ? ["install", "--global", "--include=optional", "--no-audit", "--no-fund", ...recipe.packages]
     : ["uninstall", "--global", ...recipe.packages];
+  const resolution = resolveExecutable(recipe.installer, { env, platform: capabilities.platform as NodeJS.Platform });
   const installerExecutable = capabilities.platform === "win32"
-    ? findManagedExecutable(recipe.installer, { platform: "win32" }) || `${recipe.installer}.cmd`
-    : recipe.installer;
+    ? resolution?.executable || `${recipe.installer}.cmd`
+    : resolution?.env ? resolution.executable : recipe.installer;
   const command = capabilities.platform === "win32"
-    ? { executable: process.env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", "call", installerExecutable, ...args], timeoutMs: 15 * 60_000 }
-    : { executable: installerExecutable, args, timeoutMs: 15 * 60_000 };
+    ? { executable: env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", "call", installerExecutable, ...args], timeoutMs: 15 * 60_000, ...(resolution?.env ? { env: { ...env, ...resolution.env } } : {}) }
+    : { executable: installerExecutable, args, timeoutMs: 15 * 60_000, ...(resolution?.env ? { env: { ...env, ...resolution.env } } : {}) };
   if (capabilities.privilege === "root" || recipe.privilege === "user") {
     return command;
   }
@@ -503,6 +518,7 @@ function uninstallArchive(recipe: ArchiveInstallRecipe, context: AppRecipeExecut
 export function createAppRecipeExecutor(options: AppRecipeExecutorOptions) {
   const resolved = {
     ...options,
+    env: options.env || process.env,
     commandRunner: options.commandRunner || runAppRecipeCommand,
     fetcher: options.fetcher || fetch,
   };
@@ -514,7 +530,7 @@ export function createAppRecipeExecutor(options: AppRecipeExecutorOptions) {
     if (recipe.type === "bundled") throw new AppRecipeExecutionError("bundled_app", "Bundled apps do not support managed installation or removal.");
     if (recipe.type === "system-package") {
       context.onPhase?.(operation === "install" ? "install-package" : "uninstall-package");
-      const command = packageCommand(recipe, operation, context.capabilities);
+      const command = packageCommand(recipe, operation, context.capabilities, resolved.env);
       if (operation === "install" && recipe.installer === "apt") {
         const refresh = await runCommand(aptRefreshCommand(context.capabilities, recipe));
         if (refresh.exitCode !== 0) throw new AppRecipeExecutionError("package_manager_failed", bounded(refresh.stderr) || "The apt package index could not be refreshed.", true);
@@ -525,7 +541,7 @@ export function createAppRecipeExecutor(options: AppRecipeExecutorOptions) {
     }
     if (recipe.type === "node-package") {
       context.onPhase?.(operation === "install" ? "install-node-package" : "uninstall-node-package");
-      const command = nodePackageCommand(recipe, operation, context.capabilities);
+      const command = nodePackageCommand(recipe, operation, context.capabilities, resolved.env);
       let result = await runCommand(command);
       const retirementDirectory = result.exitCode === 0 ? undefined : npmRetirementDirectory(result.stderr, recipe);
       if (retirementDirectory) {

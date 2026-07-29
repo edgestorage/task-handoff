@@ -222,13 +222,28 @@
 
 :global(.session-ai-project-menu) {
   display: grid;
-  width: 244px;
+  width: min(244px, var(--reka-dropdown-menu-content-available-width, calc(100vw - 24px)));
   gap: 2px;
   border: 1px solid var(--line-strong);
   border-radius: 8px;
   background: var(--surface-inset);
   box-shadow: var(--shadow-popover);
   padding: 5px;
+}
+
+:global(.session-ai-project-picker-menu) {
+  max-height: min(420px, var(--reka-dropdown-menu-content-available-height, calc(100vh - 16px)));
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  overflow: hidden;
+}
+
+.session-ai-project-list {
+  min-height: 0;
+  overscroll-behavior: contain;
+}
+
+.session-ai-project-list :deep([data-task-handoff-scroll-viewport]) {
+  padding-right: 8px;
 }
 
 .session-ai-project-search {

@@ -13,6 +13,8 @@ import type { FastifyServerOptions } from "fastify";
 import { proxyFetch } from "httpxy";
 import { z } from "zod";
 import { appendJsonl, processSnapshot } from "@task-handoff/core/core/diagnostics";
+import { acquireLocalControlledInstanceLock } from "@task-handoff/core/core/local-controlled-instance-lock";
+import { processStartIdentity } from "@task-handoff/core/core/process-singleton-lock";
 import { TriggerExecutor } from "../triggers/executor";
 import { TriggerManager } from "../triggers/manager";
 import { TriggerStore, type TriggerCreateInput } from "../triggers/store";
@@ -33,12 +35,14 @@ import {
   type AiSessionRegistry,
 } from "@task-handoff/ai-session-runtime";
 import { NodeAgentRegistrationClient, nodeAgentRegistrationConfigFromEnv } from "./node-agent-client";
-import { registerAuth, resolveWebAuth } from "./auth";
+import { nodeAgentApiRoute, publicApiRoute, registerAuth, resolveWebAuth } from "./auth";
 import { AiSessionMessageDeltaCoalescer } from "./ai-session-message-delta-coalescer";
 import { WebEventBus } from "./events";
 import { AppManagementManager, AppManagementRequestError } from "./app-management";
-import { configSyncPresets, runConfigSync } from "./config-sync";
+import { configSyncPresets, configSyncPrograms, listConfigSyncFolders, runConfigSync, runConfigSyncBatch } from "./config-sync";
+import { ConfigSyncRequestSchema } from "@task-handoff/protocol/config-sync";
 import { applyManagedCodexModelConfig } from "./codex-model-config";
+import { applyManagedClaudeModelConfig } from "./claude-model-config";
 import {
   controlledInstanceCapabilities,
   controlledInstanceSnapshot,
@@ -259,7 +263,7 @@ const ConfigSyncPresetSchema = z
   })
   .strip();
 
-const ConfigSyncRequestSchema = z
+const ConfigSyncLegacyRequestSchema = z
   .object({
     preset: ConfigSyncPresetSchema.optional(),
   })
@@ -316,6 +320,21 @@ function managedModelEnvironment(env: NodeJS.ProcessEnv) {
   return ManagedModelEnvironmentSchema.parse(Object.fromEntries(
     MANAGED_MODEL_ENV_KEYS.flatMap((key) => typeof env[key] === "string" ? [[key, env[key]]] : []),
   ));
+}
+
+function managedAppEnvironment(env: NodeJS.ProcessEnv) {
+  const managed = managedModelEnvironment(env);
+  return {
+    ...managed,
+    // Explicit undefined values shadow the controlled-instance process
+    // environment and are omitted by child_process when Claude is launched.
+    ANTHROPIC_AUTH_TOKEN: undefined,
+    ANTHROPIC_API_KEY: undefined,
+    ANTHROPIC_BASE_URL: undefined,
+    ANTHROPIC_MODEL: undefined,
+    CLAUDE_MODEL: undefined,
+    TASK_HANDOFF_CLAUDE_MODEL: undefined,
+  };
 }
 
 const AppDisplaySchema = z
@@ -502,10 +521,11 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   const managedModelEnv = { ...process.env };
   logControlledInstanceStart(storagePaths.logDir, storagePaths.dataDir);
   applyManagedCodexModelConfig(managedModelEnv);
+  applyManagedClaudeModelConfig(managedModelEnv);
   const auth = resolveWebAuth(storagePaths);
   const events = new WebEventBus();
   const appRuntime = options.appRuntime || new AppRuntimeManager(storagePaths);
-  appRuntime.replaceManagedEnvironment(managedModelEnvironment(managedModelEnv));
+  appRuntime.replaceManagedEnvironment(managedAppEnvironment(managedModelEnv));
   const app = Fastify({ logger: options.logger ?? true });
   let nodeAgentClient!: NodeAgentRegistrationClient;
   const appManagement = options.appManagement || new AppManagementManager({
@@ -978,7 +998,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     });
   }
 
-  app.get("/api/health", async () => ({
+  app.get("/api/health", publicApiRoute, async () => ({
     data: {
       ok: true,
       version: packageVersion(),
@@ -986,7 +1006,26 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     },
   }));
 
-  app.get("/api/auth/status", async () => ({
+  const nodeAgentProcessRoute = nodeAgentApiRoute({
+    code: "MANAGED_INSTANCE_CONTROL_FORBIDDEN",
+    message: "Instance registration token is required.",
+    requireControlled: true,
+  });
+  app.get("/api/internal/node-agent/process-identity", nodeAgentProcessRoute, async () => ({
+    data: {
+      instanceId,
+      pid: process.pid,
+      processNonce: process.env.TASK_HANDOFF_LOCAL_PROCESS_NONCE || "",
+      startIdentity: processStartIdentity(process.pid),
+    },
+  }));
+
+  app.post("/api/internal/node-agent/shutdown", nodeAgentProcessRoute, async (_request, reply) => {
+    setImmediate(() => process.kill(process.pid, "SIGTERM"));
+    return reply.code(202).send({ data: { accepted: true, instanceId } });
+  });
+
+  app.get("/api/auth/status", publicApiRoute, async () => ({
     data: {
       enabled: auth.enabled,
       source: auth.source,
@@ -1437,23 +1476,69 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     }
   });
 
-  app.put<{ Body: unknown }>("/api/internal/model-environment", async (request, reply) => {
-    const expectedToken = process.env.TASK_HANDOFF_REGISTRATION_TOKEN?.trim();
-    const authorization = request.headers.authorization || "";
-    if (!expectedToken || authorization !== `Bearer ${expectedToken}`) {
-      return reply.code(403).send({ error: { code: "MANAGED_MODEL_ENVIRONMENT_FORBIDDEN", message: "Instance registration token is required." } });
-    }
+  app.put<{ Body: unknown }>("/api/internal/model-environment", nodeAgentApiRoute({
+    code: "MANAGED_MODEL_ENVIRONMENT_FORBIDDEN",
+    message: "Instance registration token is required.",
+  }), async (request) => {
     const next = ManagedModelEnvironmentSchema.parse(request.body || {});
     for (const key of MANAGED_MODEL_ENV_KEYS) delete managedModelEnv[key];
     Object.assign(managedModelEnv, next);
-    appRuntime.replaceManagedEnvironment(next);
     const codex = applyManagedCodexModelConfig(managedModelEnv);
-    return { data: { applied: true, codexAuthConfigured: Boolean(next.OPENAI_API_KEY), configUpdated: codex.applied } };
+    const claude = applyManagedClaudeModelConfig(managedModelEnv);
+    appRuntime.replaceManagedEnvironment(managedAppEnvironment(managedModelEnv));
+    return { data: {
+      applied: true,
+      codexAuthConfigured: Boolean(next.OPENAI_API_KEY),
+      claudeAuthConfigured: Boolean(next.ANTHROPIC_API_KEY),
+      configUpdated: codex.applied || claude.applied,
+    } };
   });
 
   app.get("/api/config-sync/presets", async () => ({
     data: configSyncPresets(),
   }));
+
+  app.get("/api/config-sync/programs", async () => ({
+    data: configSyncPrograms(),
+  }));
+
+  app.get<{ Querystring: unknown }>("/api/config-sync/folders", async (request, reply) => {
+    const query = z.object({
+      path: z.string().trim().max(1000).optional(),
+      depth: z.coerce.number().int().min(0).max(2).default(0),
+    }).strict().parse(request.query || {});
+    try {
+      return { data: listConfigSyncFolders(query.path, query.depth) };
+    } catch (error: unknown) {
+      const record = error && typeof error === "object" ? error as Record<string, unknown> : {};
+      return reply.code(typeof record.statusCode === "number" ? record.statusCode : 500).send({
+        error: {
+          code: typeof record.code === "string" ? record.code : "CONFIG_SYNC_FOLDER_LIST_FAILED",
+          message: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+  });
+
+  app.post<{ Body: unknown }>("/api/config-sync", async (request, reply) => {
+    try {
+      const input = ConfigSyncRequestSchema.parse(request.body || {});
+      const result = runConfigSyncBatch(input);
+      if (input.direction === "import") {
+        if (input.programIds.includes("codex")) applyManagedCodexModelConfig(managedModelEnv);
+        if (input.programIds.includes("claude")) applyManagedClaudeModelConfig(managedModelEnv);
+      }
+      return { data: result };
+    } catch (error: unknown) {
+      const record = error && typeof error === "object" ? error as Record<string, unknown> : {};
+      return reply.code(typeof record.statusCode === "number" ? record.statusCode : 500).send({
+        error: {
+          code: typeof record.code === "string" ? record.code : "CONFIG_SYNC_FAILED",
+          message: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+  });
 
   app.post<{ Params: { direction: "import" | "export"; preset: string } }>("/api/config-sync/:direction/:preset", async (request, reply) => {
     const direction = request.params.direction;
@@ -1461,10 +1546,13 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       return reply.code(400).send({ error: { code: "CONFIG_SYNC_DIRECTION_INVALID", message: "Config sync direction must be import or export." } });
     }
     try {
-      const body = ConfigSyncRequestSchema.parse(request.body || {});
+      const body = ConfigSyncLegacyRequestSchema.parse(request.body || {});
       const result = runConfigSync(direction, request.params.preset, body.preset);
       if (direction === "import" && request.params.preset === "codex") {
         applyManagedCodexModelConfig(managedModelEnv);
+      }
+      if (direction === "import" && request.params.preset === "claude") {
+        applyManagedClaudeModelConfig(managedModelEnv);
       }
       return { data: result };
     } catch (error: unknown) {
@@ -1806,8 +1894,22 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
 export async function runWebServer(options: Partial<RunWebServerOptions> = {}) {
   const host = options.host || process.env.TASK_HANDOFF_WEB_HOST || "127.0.0.1";
   const port = Number(options.port || process.env.TASK_HANDOFF_WEB_PORT || 8080);
-  const app = await createWebApp(options);
-  installGracefulShutdown(app);
-  await app.listen({ host, port });
-  return app;
+  const localLock = process.env.TASK_HANDOFF_CONTROL_MODE === "controlled" && process.env.TASK_HANDOFF_RUNTIME_KIND === "local"
+    ? acquireLocalControlledInstanceLock({
+        instanceId: process.env.TASK_HANDOFF_INSTANCE_ID || "unknown",
+        dataDir: process.env.TASK_HANDOFF_DATA_DIR,
+        host,
+        port,
+      }, process.env.TASK_HANDOFF_LOCAL_CONTROLLED_INSTANCE_LOCK_PATH)
+    : undefined;
+  try {
+    const app = await createWebApp(options);
+    if (localLock) app.addHook("onClose", async () => localLock.release());
+    installGracefulShutdown(app);
+    await app.listen({ host, port });
+    return app;
+  } catch (error) {
+    localLock?.release();
+    throw error;
+  }
 }

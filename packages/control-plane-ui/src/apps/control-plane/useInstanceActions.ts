@@ -5,14 +5,13 @@ import {
   retryInstanceImageProvisioning,
   startControlledInstance,
   stopControlledInstance,
-  syncControlledInstanceConfig,
 } from "../../api/queries";
 import type { InstanceBoardItem } from "../../api/types";
+import { canExportInstanceConfig } from "./instanceConfigSync";
 import { canShowInstanceAction } from "./useInstanceStatus";
 import type { Translate } from "../../i18n/status.ts";
 
 export type InstanceAction = "start" | "stop" | "restart" | "retry-image" | "delete";
-export type ConfigSyncDirection = "import" | "export";
 
 type UseInstanceActionsInput = {
   clearActiveInstance: (instanceId: string) => void;
@@ -26,7 +25,6 @@ type UseInstanceActionsInput = {
 export function useInstanceActions({ clearActiveInstance, closeInstanceMenu, errorText, notifyError, refresh, translate: t }: UseInstanceActionsInput) {
   const activeInstanceAction = ref<InstanceAction | "">("");
   const activeInstanceActionId = ref("");
-  const activeConfigSyncKey = ref("");
 
   function reportActionError(message: string) {
     notifyError?.(message);
@@ -83,44 +81,12 @@ export function useInstanceActions({ clearActiveInstance, closeInstanceMenu, err
     closeInstanceMenu();
   }
 
-  async function runRowConfigSync(direction: ConfigSyncDirection, preset: string, instance: InstanceBoardItem) {
-    const key = configSyncKey(instance, direction, preset);
-    if (activeConfigSyncKey.value || isInstanceActionBusy(instance)) {
-      return;
-    }
-    activeConfigSyncKey.value = key;
-    try {
-      await syncControlledInstanceConfig(instance.id, direction, preset);
-      await refresh();
-    } catch (error) {
-      reportActionError(errorText(error));
-      await refresh();
-    } finally {
-      activeConfigSyncKey.value = "";
-      closeInstanceMenu();
-    }
-  }
-
   function isInstanceActionBusy(instance: InstanceBoardItem) {
     return activeInstanceActionId.value === instance.id;
   }
 
-  function configSyncKey(instance: InstanceBoardItem, direction: ConfigSyncDirection, preset: string) {
-    return `${instance.id}:${direction}:${preset}`;
-  }
-
-  function isConfigSyncBusy(instance: InstanceBoardItem) {
-    return activeConfigSyncKey.value.startsWith(`${instance.id}:`);
-  }
-
   function canExportConfig(instance: InstanceBoardItem) {
-    return instance.project?.source.type === "local-folder";
-  }
-
-  function configSyncLabel(instance: InstanceBoardItem, direction: ConfigSyncDirection, preset: string, label: string) {
-    return activeConfigSyncKey.value === configSyncKey(instance, direction, preset)
-      ? t(direction === "import" ? "instances.actions.importing" : "instances.actions.exporting", { name: label })
-      : label;
+    return canExportInstanceConfig(instance);
   }
 
   function activeActionLabel(instance: InstanceBoardItem, action: InstanceAction, idleLabel: string) {
@@ -138,11 +104,8 @@ export function useInstanceActions({ clearActiveInstance, closeInstanceMenu, err
   return {
     activeActionLabel,
     canExportConfig,
-    configSyncLabel,
-    isConfigSyncBusy,
     isInstanceActionBusy,
     runInstanceAction,
-    runRowConfigSync,
     runRowInstanceAction,
     startCreatedInstance,
   };

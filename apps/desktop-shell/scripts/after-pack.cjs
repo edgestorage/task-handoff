@@ -26,9 +26,24 @@ function normalizeNodePtyRuntime(context) {
   fs.writeFileSync(unixTerminalPath, source.replace(NODE_PTY_HELPER_REWRITE, NODE_PTY_HELPER_REWRITE_SAFE));
 }
 
+function validateDesktopServerRuntime(context) {
+  const runtimeRoot = path.join(resourcesDirectory(context), "app.asar.unpacked");
+  const requiredFiles = [
+    "bin/task-handoff.js",
+    "dist/cli.js",
+    "node_modules/fastify/package.json",
+  ];
+  const missing = requiredFiles.filter((relativePath) => !fs.existsSync(path.join(runtimeRoot, relativePath)));
+  if (missing.length > 0) {
+    throw new Error(`Packaged desktop server runtime is incomplete: ${missing.join(", ")}`);
+  }
+}
+
 async function afterPack(context) {
+  validateDesktopServerRuntime(context);
   normalizeNodePtyRuntime(context);
 }
 
 module.exports = afterPack;
 module.exports.normalizeNodePtyRuntime = normalizeNodePtyRuntime;
+module.exports.validateDesktopServerRuntime = validateDesktopServerRuntime;

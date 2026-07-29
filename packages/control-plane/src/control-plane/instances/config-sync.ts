@@ -1,48 +1,55 @@
-export type ConfigSyncPreset = {
-  id: string;
-  label: string;
-  projectRoot: string;
-  items: Array<{
-    id: string;
-    type: "file" | "dir";
-    projectPath: string;
-    containerPath: string;
-  }>;
-};
+import { ConfigSyncPreferencesSchema, type ConfigSyncPreferences } from "@task-handoff/protocol/config-sync";
+import { z } from "zod";
 
-export function configSyncPresets(): ConfigSyncPreset[] {
-  return [
-    {
-      id: "codex",
-      label: "Codex",
-      projectRoot: ".task-handoff/configs/codex",
-      items: [
-        { id: "config", type: "file", projectPath: "config.toml", containerPath: "${CODEX_HOME}/config.toml" },
-        { id: "auth", type: "file", projectPath: "auth.json", containerPath: "${CODEX_HOME}/auth.json" },
-        { id: "agents", type: "file", projectPath: "AGENTS.md", containerPath: "${CODEX_HOME}/AGENTS.md" },
-        { id: "skills", type: "dir", projectPath: "skills", containerPath: "${CODEX_HOME}/skills" },
-      ],
+export const ConfigSyncPreferenceRecordSchema = z.object({
+  id: z.string().trim().min(1),
+  preferences: ConfigSyncPreferencesSchema,
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+}).strict();
+
+export type ConfigSyncPreferenceRecord = z.infer<typeof ConfigSyncPreferenceRecordSchema>;
+
+export function sanitizeStoredConfigSyncPreferenceRecord(input: unknown) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+  const record = input as Record<string, unknown>;
+  const preferences = record.preferences && typeof record.preferences === "object" && !Array.isArray(record.preferences)
+    ? record.preferences as Record<string, unknown>
+    : {};
+  return {
+    id: record.id,
+    preferences: {
+      import: typeof preferences.import === "string" && preferences.import.trim() ? preferences.import : ".",
+      export: typeof preferences.export === "string" && preferences.export.trim() ? preferences.export : ".",
     },
-    {
-      id: "claude",
-      label: "Claude",
-      projectRoot: ".task-handoff/configs/claude",
-      items: [
-        { id: "claude-json", type: "file", projectPath: ".claude.json", containerPath: "${HOME}/.claude.json" },
-        { id: "settings", type: "file", projectPath: "settings.json", containerPath: "${CLAUDE_HOME}/settings.json" },
-        { id: "claude-md", type: "file", projectPath: "CLAUDE.md", containerPath: "${CLAUDE_HOME}/CLAUDE.md" },
-        { id: "commands", type: "dir", projectPath: "commands", containerPath: "${CLAUDE_HOME}/commands" },
-        { id: "agents", type: "dir", projectPath: "agents", containerPath: "${CLAUDE_HOME}/agents" },
-        { id: "skills", type: "dir", projectPath: "skills", containerPath: "${CLAUDE_HOME}/skills" },
-      ],
-    },
-    {
-      id: "browser",
-      label: "Browser",
-      projectRoot: ".task-handoff/configs/browser",
-      items: [
-        { id: "chromium-profile", type: "dir", projectPath: "chromium", containerPath: "${HOME}/.config/chromium" },
-      ],
-    },
-  ];
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+  };
+}
+
+export function defaultConfigSyncPreferences(): ConfigSyncPreferences {
+  return ConfigSyncPreferencesSchema.parse({});
+}
+
+export function normalizeConfigSyncWorkspaceFolder(input: string) {
+  const value = input.trim().replace(/\\/g, "/");
+  const normalized = pathPosixNormalize(value || ".");
+  if (normalized.startsWith("/") || normalized === ".." || normalized.startsWith("../")) {
+    const error = new Error("Config sync folder must stay inside the instance workspace.");
+    Object.assign(error, { statusCode: 400, code: "CONFIG_SYNC_FOLDER_INVALID" });
+    throw error;
+  }
+  return normalized || ".";
+}
+
+function pathPosixNormalize(value: string) {
+  const result: string[] = [];
+  for (const segment of value.split("/")) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") {
+      if (!result.length) return "..";
+      result.pop();
+    } else result.push(segment);
+  }
+  return result.join("/") || ".";
 }

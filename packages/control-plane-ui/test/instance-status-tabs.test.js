@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { buildSessionTabs } from "../src/apps/control-plane/useInstanceSessions.ts";
 import { hasInstanceStatusPage, instanceStatusDetail, instanceStatusTitle, isInstanceStatusPending } from "../src/apps/control-plane/useInstanceStatus.ts";
 import { createControlPlaneI18nForTest } from "../src/i18n/testing.ts";
 
 const t = (key) => ({ "sessions.tabs.status": "Status", "sessions.title": "AI Sessions" })[key] || key;
+const source = (path) => readFileSync(fileURLToPath(new URL(`../src/${path}`, import.meta.url)), "utf8");
 
 function instance(status, runtimePhase) {
   return {
@@ -31,6 +34,17 @@ test("status lifecycle exposes only the Status tab", () => {
     status: "stopped",
     kind: "status",
   }]);
+});
+
+test("status page exposes the lifecycle actions in the active pane", () => {
+  const pane = source("apps/control-plane/instance-detail/SessionPaneContent.vue");
+  const preview = source("apps/control-plane/instance-detail/SessionPreview.vue");
+  const detail = source("apps/control-plane/instance-detail/InstanceDetail.vue");
+
+  assert.match(pane, /canShowInstanceAction\(instance, 'start'\)[\s\S]*\$emit\('runAction', 'start', instance\)/);
+  assert.match(pane, /canShowInstanceAction\(instance, 'retry-image'\)[\s\S]*\$emit\('runAction', 'retry-image', instance\)/);
+  assert.match(preview, /@run-action="\(action, target\) => \$emit\('runAction', action, target\)"/);
+  assert.match(detail, /@run-action="\(action, target\) => \$emit\('runAction', action, target\)"/);
 });
 
 test("running lifecycle exposes session tabs without Status", () => {

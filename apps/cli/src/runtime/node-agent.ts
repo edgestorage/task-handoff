@@ -1,6 +1,6 @@
 import { Command } from "commander";
-import fs from "node:fs";
 import path from "node:path";
+import { resolvePackageVersion } from "@task-handoff/core/core/package-version";
 import {
   defaultNodeAgentDataDir,
   fetchNodeAgentIpc,
@@ -21,14 +21,6 @@ function parseConnectionMode(value: string) {
     throw new Error("Connection mode must be local-ipc or local-loopback.");
   }
   return value;
-}
-
-function packageVersion() {
-  try {
-    return JSON.parse(fs.readFileSync(path.resolve(__dirname, "..", "package.json"), "utf8")).version || "unknown";
-  } catch {
-    return "unknown";
-  }
 }
 
 function parsePositiveInteger(value: string) {
@@ -78,7 +70,7 @@ async function main() {
   program
     .name("task-handoff-node-agent")
     .description("Run a TaskHandoff node agent.")
-    .version(packageVersion())
+    .version(resolvePackageVersion("@task-handoff/cli"))
     .option("--host <host>", "Node agent host", process.env.TASK_HANDOFF_NODE_AGENT_HOST || "127.0.0.1")
     .option("-p, --port <port>", "Node agent port", parsePort, Number(process.env.TASK_HANDOFF_NODE_AGENT_PORT) || 8091)
     .option("--data-dir <path>", "Node agent data directory")

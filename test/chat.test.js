@@ -66,6 +66,7 @@ const { AppRuntimeManager } = require("../packages/app-runtime/src/runtime.ts");
 const { CodexAppServerConnectionProxy } = require("../packages/app-runtime/src/codex-app-server-proxy.ts");
 const { AiSessionRefreshScheduler, createWebApp } = require("../packages/controlled-instance/src/web/server.ts");
 const { applyManagedCodexModelConfig } = require("../packages/controlled-instance/src/web/codex-model-config.ts");
+const { applyManagedClaudeModelConfig } = require("../packages/controlled-instance/src/web/claude-model-config.ts");
 
 test("codex approval parser preserves the request reason", () => {
   const request = codexApprovalRequest(42, "item/commandExecution/requestApproval", {
@@ -5650,6 +5651,9 @@ test("web app imports and exports built-in config sync presets", async () => {
   );
   fs.mkdirSync(path.join(home, ".config", "chromium", "Default"), { recursive: true });
   fs.writeFileSync(path.join(home, ".config", "chromium", "Default", "Bookmarks"), "{}");
+  const configuredChromium = path.join(home, "configured-chromium");
+  fs.mkdirSync(path.join(configuredChromium, "Profile 1"), { recursive: true });
+  fs.writeFileSync(path.join(configuredChromium, "Profile 1", "Bookmarks"), "configured");
 
   const restoreEnv = withWebStorageEnv(paths, {
     HOME: home,
@@ -5657,6 +5661,7 @@ test("web app imports and exports built-in config sync presets", async () => {
     TASK_HANDOFF_WEB_AUTH: "off",
     TASK_HANDOFF_NOVNC_ROOT: path.join(root, "missing-novnc"),
     TASK_HANDOFF_CONTROL_MODE: "controlled",
+    TASK_HANDOFF_CHROMIUM_USER_DATA_DIR: configuredChromium,
     TASK_HANDOFF_CODEX_MODEL: "instance-model",
     TASK_HANDOFF_CODEX_BASE_URL: "https://instance.example/v1",
     OPENAI_API_KEY: "instance-api-key",
@@ -5666,6 +5671,8 @@ test("web app imports and exports built-in config sync presets", async () => {
     const presets = await app.inject({ method: "GET", url: "/api/config-sync/presets" });
     assert.equal(presets.statusCode, 200);
     assert.equal(JSON.parse(presets.payload).data.some((preset) => preset.id === "browser"), true);
+    const programs = await app.inject({ method: "GET", url: "/api/config-sync/programs" });
+    assert.deepEqual(JSON.parse(programs.payload).data.map((program) => program.id), ["codex", "claude", "browser"]);
 
     const imported = await app.inject({ method: "POST", url: "/api/config-sync/import/claude" });
     assert.equal(imported.statusCode, 200);
@@ -5684,6 +5691,56 @@ test("web app imports and exports built-in config sync presets", async () => {
     const exported = await app.inject({ method: "POST", url: "/api/config-sync/export/browser" });
     assert.equal(exported.statusCode, 200);
     assert.equal(fs.readFileSync(path.join(workspace, ".task-handoff", "configs", "browser", "chromium", "Default", "Bookmarks"), "utf8"), "{}");
+
+    fs.mkdirSync(path.join(workspace, "backups"), { recursive: true });
+    const folders = await app.inject({ method: "GET", url: "/api/config-sync/folders?path=backups&depth=1" });
+    assert.equal(folders.statusCode, 200);
+    assert.equal(JSON.parse(folders.payload).data[0].path, "backups");
+
+    const batchExported = await app.inject({
+      method: "POST",
+      url: "/api/config-sync",
+      payload: { direction: "export", programIds: ["browser"], workspaceFolder: "backups" },
+    });
+    assert.equal(batchExported.statusCode, 200);
+    assert.equal(fs.readFileSync(path.join(workspace, "backups", "browser", "chromium", "Default", "Bookmarks"), "utf8"), "{}");
+    assert.equal(fs.readFileSync(path.join(workspace, "backups", "browser", "chromium-2", "Profile 1", "Bookmarks"), "utf8"), "configured");
+
+    const escapedBatch = await app.inject({
+      method: "POST",
+      url: "/api/config-sync",
+      payload: { direction: "export", programIds: ["browser"], workspaceFolder: "../outside" },
+    });
+    assert.equal(escapedBatch.statusCode, 400);
+    assert.equal(JSON.parse(escapedBatch.payload).error.code, "CONFIG_SYNC_FOLDER_INVALID");
+
+    const symlinkExportRoot = path.join(workspace, "symlink-export", "browser");
+    const outsideExport = path.join(root, "outside-export");
+    fs.mkdirSync(symlinkExportRoot, { recursive: true });
+    fs.mkdirSync(outsideExport, { recursive: true });
+    fs.symlinkSync(path.join(outsideExport, "chromium"), path.join(symlinkExportRoot, "chromium"));
+    const symlinkExport = await app.inject({
+      method: "POST",
+      url: "/api/config-sync",
+      payload: { direction: "export", programIds: ["browser"], workspaceFolder: "symlink-export" },
+    });
+    assert.equal(symlinkExport.statusCode, 400);
+    assert.equal(fs.existsSync(path.join(outsideExport, "chromium")), false);
+
+    const symlinkImportRoot = path.join(workspace, "symlink-import", "codex");
+    const outsideImport = path.join(root, "outside-import");
+    fs.mkdirSync(symlinkImportRoot, { recursive: true });
+    fs.writeFileSync(path.join(symlinkImportRoot, "config.toml"), 'model = "unsafe"\n');
+    fs.rmSync(path.join(home, ".codex"), { recursive: true, force: true });
+    fs.mkdirSync(outsideImport, { recursive: true });
+    fs.symlinkSync(outsideImport, path.join(home, ".codex"));
+    const symlinkImport = await app.inject({
+      method: "POST",
+      url: "/api/config-sync",
+      payload: { direction: "import", programIds: ["codex"], workspaceFolder: "symlink-import" },
+    });
+    assert.equal(symlinkImport.statusCode, 400);
+    assert.equal(fs.existsSync(path.join(outsideImport, "config.toml")), false);
 
     fs.mkdirSync(path.join(workspace, ".task-handoff", "configs", "custom"), { recursive: true });
     fs.writeFileSync(path.join(workspace, ".task-handoff", "configs", "custom", "token.txt"), "custom-token");
@@ -5763,18 +5820,93 @@ test("controlled instance leaves user Codex files unchanged when no managed mode
   assert.deepEqual(fs.readdirSync(codexHome).sort(), ["auth.json", "config.toml"]);
 });
 
+test("controlled instance materializes its selected Claude model in settings.json", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-claude-model-config-"));
+  const claudeHome = path.join(root, ".claude");
+  const settingsPath = path.join(claudeHome, "settings.json");
+  fs.mkdirSync(claudeHome, { recursive: true });
+  fs.writeFileSync(settingsPath, `${JSON.stringify({
+    env: { ANTHROPIC_AUTH_TOKEN: "old-token", ENABLE_TOOL_SEARCH: "true" },
+    permissions: { defaultMode: "acceptEdits" },
+  }, null, 2)}\n`);
+
+  const result = applyManagedClaudeModelConfig({
+    TASK_HANDOFF_CONTROL_MODE: "controlled",
+    CLAUDE_HOME: claudeHome,
+    TASK_HANDOFF_CLAUDE_MODEL: "selected-claude-model",
+    ANTHROPIC_BASE_URL: "https://anthropic-proxy.example",
+    ANTHROPIC_API_KEY: "managed-claude-key",
+  });
+
+  assert.equal(result.applied, true);
+  assert.equal(fs.existsSync(result.backupPath), true);
+  assert.match(fs.readFileSync(result.backupPath, "utf8"), /old-token/);
+  const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+  assert.deepEqual(settings.env, {
+    ENABLE_TOOL_SEARCH: "true",
+    ANTHROPIC_API_KEY: "managed-claude-key",
+    ANTHROPIC_BASE_URL: "https://anthropic-proxy.example",
+    ANTHROPIC_MODEL: "selected-claude-model",
+  });
+  assert.deepEqual(settings.permissions, { defaultMode: "acceptEdits" });
+  assert.equal(fs.statSync(settingsPath).mode & 0o777, 0o600);
+});
+
+test("controlled instance leaves user Claude settings unchanged when no managed model is assigned", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-claude-no-model-"));
+  const claudeHome = path.join(root, ".claude");
+  const settingsPath = path.join(claudeHome, "settings.json");
+  const contents = `${JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: "user-token" }, theme: "dark" }, null, 2)}\n`;
+  fs.mkdirSync(claudeHome, { recursive: true });
+  fs.writeFileSync(settingsPath, contents);
+
+  assert.deepEqual(applyManagedClaudeModelConfig({
+    TASK_HANDOFF_CONTROL_MODE: "controlled",
+    CLAUDE_HOME: claudeHome,
+  }), { applied: false });
+  assert.equal(fs.readFileSync(settingsPath, "utf8"), contents);
+});
+
 test("controlled instance refreshes managed model auth through its registration-token endpoint", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-managed-model-env-"));
   const paths = appRuntimeTestPaths(root);
   const codexHome = path.join(root, ".codex");
+  const claudeHome = path.join(root, ".claude");
   const restoreEnv = withWebStorageEnv(paths, {
     TASK_HANDOFF_WEB_AUTH: "off",
     TASK_HANDOFF_CONTROL_MODE: "controlled",
+    TASK_HANDOFF_INSTANCE_ID: "inst_managed_model",
+    TASK_HANDOFF_LOCAL_PROCESS_NONCE: "nonce_managed_model",
     TASK_HANDOFF_REGISTRATION_TOKEN: "instance-registration-token",
     CODEX_HOME: codexHome,
+    CLAUDE_HOME: claudeHome,
   });
-  const app = await createWebApp({ staticDir: path.join(root, "missing-static"), logger: false });
+  const runtime = new AppRuntimeManager(paths);
+  const managedEnvironments = [];
+  const replaceManagedEnvironment = runtime.replaceManagedEnvironment.bind(runtime);
+  runtime.replaceManagedEnvironment = (environment) => {
+    managedEnvironments.push(environment);
+    replaceManagedEnvironment(environment);
+  };
+  const app = await createWebApp({ staticDir: path.join(root, "missing-static"), logger: false, appRuntime: runtime });
   try {
+    const health = await app.inject({ method: "GET", url: "/api/health" });
+    assert.equal(health.statusCode, 200);
+    assert.equal(health.json().data.pid, undefined);
+    assert.equal(health.json().data.processNonce, undefined);
+    assert.equal(health.json().data.instanceId, undefined);
+    const forbiddenIdentity = await app.inject({ method: "GET", url: "/api/internal/node-agent/process-identity" });
+    assert.equal(forbiddenIdentity.statusCode, 403);
+    const identity = await app.inject({
+      method: "GET",
+      url: "/api/internal/node-agent/process-identity",
+      headers: { authorization: "Bearer instance-registration-token" },
+    });
+    assert.equal(identity.statusCode, 200);
+    assert.equal(identity.json().data.instanceId, "inst_managed_model");
+    assert.equal(identity.json().data.pid, process.pid);
+    assert.equal(identity.json().data.processNonce, "nonce_managed_model");
+    assert.ok(["string", "undefined"].includes(typeof identity.json().data.startIdentity));
     const forbidden = await app.inject({ method: "PUT", url: "/api/internal/model-environment", payload: { OPENAI_API_KEY: "should-not-apply" } });
     assert.equal(forbidden.statusCode, 403);
     const applied = await app.inject({
@@ -5786,15 +5918,38 @@ test("controlled instance refreshes managed model auth through its registration-
         OPENAI_BASE_URL: "https://proxy.example/v1",
         TASK_HANDOFF_CODEX_BASE_URL: "https://proxy.example/v1",
         TASK_HANDOFF_CODEX_MODEL: "gpt-managed",
+        ANTHROPIC_API_KEY: "managed-claude-key",
+        ANTHROPIC_BASE_URL: "https://anthropic-proxy.example",
+        TASK_HANDOFF_CLAUDE_MODEL: "claude-managed",
       },
     });
     assert.equal(applied.statusCode, 200);
-    assert.deepEqual(applied.json().data, { applied: true, codexAuthConfigured: true, configUpdated: true });
+    assert.deepEqual(applied.json().data, {
+      applied: true,
+      codexAuthConfigured: true,
+      claudeAuthConfigured: true,
+      configUpdated: true,
+    });
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(codexHome, "auth.json"), "utf8")), {
       auth_mode: "apikey",
       OPENAI_API_KEY: "rotated-managed-key",
     });
     assert.equal(applied.payload.includes("rotated-managed-key"), false);
+    assert.equal(applied.payload.includes("managed-claude-key"), false);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(claudeHome, "settings.json"), "utf8")), {
+      env: {
+        ANTHROPIC_API_KEY: "managed-claude-key",
+        ANTHROPIC_BASE_URL: "https://anthropic-proxy.example",
+        ANTHROPIC_MODEL: "claude-managed",
+      },
+    });
+    assert.equal(Object.hasOwn(managedEnvironments.at(-1), "ANTHROPIC_API_KEY"), true);
+    assert.equal(managedEnvironments.at(-1).ANTHROPIC_AUTH_TOKEN, undefined);
+    assert.equal(managedEnvironments.at(-1).ANTHROPIC_API_KEY, undefined);
+    assert.equal(managedEnvironments.at(-1).ANTHROPIC_BASE_URL, undefined);
+    assert.equal(managedEnvironments.at(-1).ANTHROPIC_MODEL, undefined);
+    assert.equal(managedEnvironments.at(-1).CLAUDE_MODEL, undefined);
+    assert.equal(managedEnvironments.at(-1).TASK_HANDOFF_CLAUDE_MODEL, undefined);
     const configBeforeNoModel = fs.readFileSync(path.join(codexHome, "config.toml"), "utf8");
     const authBeforeNoModel = fs.readFileSync(path.join(codexHome, "auth.json"), "utf8");
     const noModel = await app.inject({
@@ -5804,7 +5959,12 @@ test("controlled instance refreshes managed model auth through its registration-
       payload: {},
     });
     assert.equal(noModel.statusCode, 200);
-    assert.deepEqual(noModel.json().data, { applied: true, codexAuthConfigured: false, configUpdated: false });
+    assert.deepEqual(noModel.json().data, {
+      applied: true,
+      codexAuthConfigured: false,
+      claudeAuthConfigured: false,
+      configUpdated: false,
+    });
     assert.equal(fs.readFileSync(path.join(codexHome, "config.toml"), "utf8"), configBeforeNoModel);
     assert.equal(fs.readFileSync(path.join(codexHome, "auth.json"), "utf8"), authBeforeNoModel);
   } finally {
@@ -6190,7 +6350,13 @@ test("app runtime injects managed model credentials without persisting them in s
   const paths = appRuntimeTestPaths(root);
   const runtime = new AppRuntimeManager(paths);
   t.after(() => runtime.stopAll());
-  runtime.replaceManagedEnvironment({ OPENAI_API_KEY: "runtime-managed-key" });
+  const previousAnthropicKey = process.env.ANTHROPIC_API_KEY;
+  process.env.ANTHROPIC_API_KEY = "inherited-claude-key";
+  t.after(() => {
+    if (previousAnthropicKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = previousAnthropicKey;
+  });
+  runtime.replaceManagedEnvironment({ OPENAI_API_KEY: "runtime-managed-key", ANTHROPIC_API_KEY: undefined });
   runtime.hasCommand = () => true;
   let spawnedEnv;
   runtime.spawnTerminalPty = (_shell, _args, _cwd, env) => {
@@ -6206,6 +6372,7 @@ test("app runtime injects managed model credentials without persisting them in s
   };
   const session = runtime.start("terminal-tty", { cwd: root });
   assert.equal(spawnedEnv.OPENAI_API_KEY, "runtime-managed-key");
+  assert.equal(Object.hasOwn(spawnedEnv, "ANTHROPIC_API_KEY"), false);
   assert.equal(JSON.stringify(session).includes("runtime-managed-key"), false);
 });
 

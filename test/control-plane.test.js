@@ -10,7 +10,7 @@ const WebSocket = require("ws");
 const { z } = require("zod");
 
 const { createControlPlaneApp } = require("../packages/control-plane/src/server.ts");
-const { createNodeAgentApp, listenNodeAgentIpcServer, mergeRuntimeLifecycleResult, NodeAgentExternalListenerManager, resolvedDockerImageUpdatePatch } = require("../packages/control-plane/src/node-agent.ts");
+const { createNodeAgentApp, listenNodeAgentIpcServer, mergeRuntimeLifecycleResult, NodeAgentExternalListenerManager, resolvedDockerImageUpdatePatch, runtimeVersionStateForActual } = require("../packages/control-plane/src/node-agent.ts");
 const { ControlPlaneChatGatewayRuntime, aiSessionDeliveryText, createDingdingStreamClient } = require("../packages/control-plane/src/chat-gateway.ts");
 const { ControlledInstanceGateway } = require("../packages/control-plane/src/control-plane/instances/gateway.ts");
 const { parseDingdingCardEvent, sendDingdingActionsCard } = require("../packages/control-plane/src/control-plane/chat/adapters/dingding.ts");
@@ -31,6 +31,8 @@ const { can } = require("../packages/control-plane/src/control-plane/auth/author
 const { LocalDockerExecutor, dockerRunArgs } = require("../packages/control-plane/src/node-agent/runtimes/docker.ts");
 const { checkNodeAgentUpdate, isNewerVersion, resolveNodeAgentUpdateWorker, sanitizeStoredUpdateJob } = require("../packages/control-plane/src/node-agent/updates.ts");
 const { ProcessSingletonError, acquireProcessSingletonLock } = require("../packages/control-plane/src/shared/process/singleton-lock.ts");
+const { processStartIdentity, verifiedProcessLockOwnerPid } = require("../packages/core/src/core/process-singleton-lock.ts");
+const { acquireLocalControlledInstanceLock, localControlledInstanceLockPath, readLocalControlledInstanceLockOwner } = require("../packages/core/src/core/local-controlled-instance-lock.ts");
 const { acquireControlPlaneSingletonLock } = require("../packages/control-plane/src/control-plane/process/singleton-lock.ts");
 const { acquireNodeAgentSingletonLock } = require("../packages/control-plane/src/node-agent/process/singleton-lock.ts");
 const { EventConnectionRetryTimer, eventConnectionRetryDelay, eventConnectionSafetyIntervalMs } = require("../packages/control-plane/src/shared/events/connection-retry.ts");
@@ -43,6 +45,47 @@ const { AiSessionEventType, AiSessionEventTopic, AiSessionUnreadEventType } = re
 const { AppSessionEventType, normalizeAppSessionRecord } = require("../packages/protocol/src/app-sessions.ts");
 const { ApplyUpdateRequestSchema, CONTROL_PLANE_PROTOCOL_VERSION, ControlledInstanceHeartbeatSchema, ControlledInstanceRegisterSchema, ControlledInstanceSchema, InstanceAppInventorySchema, InstanceLifecycleEventType, RuntimeArtifactIdentitySchema, RuntimeVersionStateSchema, UpdateCheckRequestSchema, UpdateJobSchema, modelConfigHash, parseStoredControlledInstance, sanitizeStoredControlledInstance } = require("../packages/protocol/src/control-plane.ts");
 const { ChatActionTokenService, parsePendingDecisionCallbackData, pendingDecisionRouteFingerprint } = require("../packages/control-plane/src/control-plane/chat/action-token-service.ts");
+
+const controlledProcessIdentityRouteStubLines = [
+  "  if (req.url === '/api/health') { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ data: { ok: true } })); return; }",
+  "  if (req.url === '/api/internal/node-agent/process-identity' && req.headers.authorization === `Bearer ${process.env.TASK_HANDOFF_REGISTRATION_TOKEN}`) {",
+  "    let startIdentity;",
+  "    try {",
+  "      if (process.platform === 'linux') { const stat = require('node:fs').readFileSync(`/proc/${process.pid}/stat`, 'utf8'); startIdentity = `linux:${stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\\s+/)[19]}`; }",
+  "      else { startIdentity = `${process.platform}:${require('node:child_process').execFileSync('ps', ['-o', 'lstart=', '-p', String(process.pid)], { encoding: 'utf8' }).trim().replace(/\\s+/g, ' ')}`; }",
+  "    } catch {}",
+  "    res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ data: { instanceId: process.env.TASK_HANDOFF_INSTANCE_ID, pid: process.pid, processNonce: process.env.TASK_HANDOFF_LOCAL_PROCESS_NONCE, startIdentity } })); return;",
+  "  }",
+];
+
+test("node agent uses an explicit packaged version as the runtime convergence target", () => {
+  const previousVersion = process.env.TASK_HANDOFF_VERSION;
+  process.env.TASK_HANDOFF_VERSION = "9.8.7";
+  try {
+    const state = runtimeVersionStateForActual("9.8.7");
+    assert.equal(state.desiredVersion, "9.8.7");
+    assert.equal(state.actualVersion, "9.8.7");
+    assert.equal(state.phase, "matched");
+    assert.equal(state.attempt, 0);
+  } finally {
+    if (previousVersion === undefined) delete process.env.TASK_HANDOFF_VERSION;
+    else process.env.TASK_HANDOFF_VERSION = previousVersion;
+  }
+});
+
+test("control plane reports the explicit packaged version in health", async (t) => {
+  const previousVersion = process.env.TASK_HANDOFF_VERSION;
+  process.env.TASK_HANDOFF_VERSION = "9.8.7";
+  const app = await createControlPlaneApp({ dataDir: tempDataDir("control-plane-explicit-version"), logger: false });
+  t.after(async () => {
+    if (previousVersion === undefined) delete process.env.TASK_HANDOFF_VERSION;
+    else process.env.TASK_HANDOFF_VERSION = previousVersion;
+    await app.close();
+  });
+  const health = await app.inject({ method: "GET", url: "/api/health" });
+  assert.equal(health.statusCode, 200);
+  assert.equal(health.json().data.build.packageVersion, "9.8.7");
+});
 
 test("pending decision callbacks are stable and resolved from the current route", () => {
   const first = new ChatActionTokenService();
@@ -183,7 +226,6 @@ function managedDockerRuntimeCommand(app, instanceId, web, args) {
     const instance = app.nodeAgentState.controlledInstances.get(instanceId);
     setImmediate(() => app.nodeAgentState.registerInstance(instanceId, {
       instanceId,
-      name: instance.name,
       protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
       appInventory: emptyAppInventory(),
       controlMode: "controlled",
@@ -212,12 +254,16 @@ function testAppInventory(apps, observedAt = new Date().toISOString()) {
 }
 
 test("controlled instance heartbeat protocol rejects legacy receiver projection", () => {
-  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-07-28");
+  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-07-29");
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, receiver: { status: "running", pendingCount: 1 } }).success, false);
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, apps: { runningCount: 1 } }).success, false);
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, appInventory: emptyAppInventory(), apps: { runningCount: 1 } }).success, true);
   assert.equal(ControlledInstanceRegisterSchema.safeParse({
-    name: "worker",
+    name: "runtime-owned-name",
+    protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+    appInventory: emptyAppInventory(),
+  }).success, false);
+  assert.equal(ControlledInstanceRegisterSchema.safeParse({
     protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
     appInventory: emptyAppInventory(),
     imageId: "img_legacy",
@@ -1752,6 +1798,45 @@ test("node agent process lock enforces one owner independent of port", () => {
   first.release();
 });
 
+test("local controlled instance lock is host-user scoped instead of node-agent data scoped", () => {
+  const root = tempDataDir("local-controlled-instance-lock");
+  const lockPath = path.join(root, "host-user.lock");
+  const first = acquireLocalControlledInstanceLock({
+    instanceId: "inst_first",
+    dataDir: path.join(root, "node-agent-a", "local-instances", "inst_first"),
+    host: "127.0.0.1",
+    port: 19001,
+  }, lockPath);
+
+  assert.throws(
+    () => acquireLocalControlledInstanceLock({
+      instanceId: "inst_second",
+      dataDir: path.join(root, "node-agent-b", "local-instances", "inst_second"),
+      host: "127.0.0.1",
+      port: 19002,
+    }, lockPath),
+    (error) => {
+      assert.equal(error.code, "LOCAL_CONTROLLED_INSTANCE_ALREADY_RUNNING");
+      assert.equal(error.owner.instanceId, "inst_first");
+      assert.equal(error.owner.port, 19001);
+      return true;
+    },
+  );
+
+  if (process.platform !== "win32") {
+    assert.equal(localControlledInstanceLockPath(), `/tmp/task-handoff-local-controlled-instance-${process.getuid()}.lock`);
+  }
+  first.release();
+});
+
+test("process termination identity rejects a reused pid", () => {
+  const currentIdentity = processStartIdentity(process.pid);
+  assert.equal(verifiedProcessLockOwnerPid({ pid: process.pid, startIdentity: "definitely-not-this-process" }), undefined);
+  if (currentIdentity) {
+    assert.equal(verifiedProcessLockOwnerPid({ pid: process.pid, startIdentity: currentIdentity }), process.pid);
+  }
+});
+
 test("control plane process lock recovers stale owners", () => {
   const dataDir = tempDataDir("control-plane-stale-lock");
   const lockPath = path.join(dataDir, "control-plane.lock");
@@ -2281,7 +2366,6 @@ test("control plane subscribes to direct node agent websocket events", async (t)
     headers: { authorization: `Bearer ${createdInstance.json().data.registrationToken}` },
     payload: {
       instanceId: "inst_direct_events",
-      name: "direct events",
       protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
       appInventory: emptyAppInventory(),
       build: { component: "controlled-instance", packageVersion: "1.0.0" },
@@ -2477,17 +2561,10 @@ test("local docker run args include controlled metadata and disable local chat b
         updatedAt: timestamp,
       },
       image: {
-        id: "img_1",
-        name: "Image",
-        reference: "task-handoff-web:latest",
-        capabilities: [],
-        optionalApps: [],
+        ...testInstanceImage("task-handoff-web:latest", "img_1", "Image"),
         defaultEnv: {
           EXTRA_FLAG: "1",
         },
-        labels: {},
-        createdAt: timestamp,
-        updatedAt: timestamp,
       },
       runtime: {
         id: "runtime_local_docker",
@@ -2521,6 +2598,14 @@ test("local docker run args include controlled metadata and disable local chat b
     },
     "task-handoff-inst_1",
   );
+
+  const imageTagIndex = args.indexOf("TASK_HANDOFF_IMAGE_TAG=latest");
+  assert.ok(imageTagIndex > 0);
+  assert.equal(args[imageTagIndex - 1], "-e");
+  assert.equal(args.at(-1), "task-handoff-web:latest");
+  for (const [index, arg] of args.entries()) {
+    if (/^[A-Z][A-Z0-9_]*=/.test(arg)) assert.equal(args[index - 1], "-e", `${arg} must be passed as a Docker environment variable`);
+  }
 
   assert.ok(args.includes("task-handoff.node-id=node_exec"));
   assert.ok(args.includes("task-handoff.runtime-id=runtime_local_docker"));
@@ -3468,9 +3553,8 @@ test("node agent runs local docker behind node-local target and auto-imports age
       }
       if (args[0] === "restart" && app) {
         const instance = app.nodeAgentState.controlledInstances.get("inst_1");
-        setImmediate(() => app.nodeAgentState.registerInstance("inst_1", {
+          setImmediate(() => app.nodeAgentState.registerInstance("inst_1", {
             instanceId: "inst_1",
-            name: "worker",
             protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
             appInventory: emptyAppInventory(),
             controlMode: "controlled",
@@ -3574,6 +3658,73 @@ test("node agent runs local docker behind node-local target and auto-imports age
       "POST /api/config-sync/import/claude",
     ],
   );
+});
+
+test("node agent keeps a managed instance started when startup runtime convergence fails", async (t) => {
+  const calls = [];
+  const app = await createNodeAgentApp({
+    dataDir: tempDataDir("node-agent-start-runtime-convergence-failure"),
+    logger: false,
+    token: "agent-secret",
+    resolveRuntimeArtifact: async () => {
+      throw Object.assign(new Error("runtime artifact unavailable"), {
+        code: "INSTANCE_RUNTIME_ARTIFACT_UNAVAILABLE",
+        retryable: false,
+      });
+    },
+    dockerCommandRunner: async (_command, args) => {
+      calls.push(args);
+      if (args[0] === "start") throw new Error("missing container");
+      if (args[0] === "image" && args[1] === "inspect") {
+        return { stdout: JSON.stringify({ Id: `sha256:${"f".repeat(64)}`, RepoDigests: [`task-handoff-web@sha256:${"f".repeat(64)}`], Os: "linux", Architecture: "amd64" }), stderr: "" };
+      }
+      if (args[0] === "run") return { stdout: "container-start-fallback", stderr: "" };
+      if (args[0] === "port") return { stdout: "0.0.0.0:18183", stderr: "" };
+      if (args[0] === "inspect" && args.includes("{{json .}}")) {
+        return { stdout: JSON.stringify({ Platform: "linux", Image: "sha256:image" }), stderr: "" };
+      }
+      return { stdout: "container-start-fallback", stderr: "" };
+    },
+    fetchImpl: async () => new Response(JSON.stringify({ data: { ok: true } }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+  });
+  t.after(() => app.close());
+
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: "inst_start_fallback",
+      name: "worker",
+      runtimeId: "runtime_local_docker",
+      imageSelection: { imageId: "img_1" },
+      image: testInstanceImage("task-handoff-web:local", "img_1", "Image"),
+      source: { type: "git-repository", url: "https://github.com/example/repo.git" },
+    },
+  });
+  assert.equal(created.statusCode, 201, created.body);
+  await waitForCondition(
+    () => app.nodeAgentState.controlledInstances.get("inst_start_fallback")?.status === "created",
+    "runtime convergence fallback image provisioning",
+  );
+
+  const started = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_start_fallback/start",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {},
+  });
+
+  assert.equal(started.statusCode, 200, started.body);
+  assert.equal(started.json().data.status, "registering");
+  assert.equal(started.json().data.target.status, "reachable");
+  assert.equal(started.json().data.workspace.error, undefined);
+  assert.equal(started.json().data.runtimeVersion.phase, "failed");
+  assert.equal(started.json().data.runtimeVersion.error.code, "INSTANCE_RUNTIME_ARTIFACT_UNAVAILABLE");
+  assert.ok(calls.some((args) => args[0] === "run"), "the instance container must remain started");
 });
 
 test("node agent skips start config auto-import when disabled on the instance", async (t) => {
@@ -4991,7 +5142,6 @@ test("node agent starts localhost runtime as a host controlled-instance process"
       "  headers: { 'content-type': 'application/json', authorization: `Bearer ${process.env.TASK_HANDOFF_REGISTRATION_TOKEN}` },",
       "  body: JSON.stringify({",
       "    instanceId: process.env.TASK_HANDOFF_INSTANCE_ID,",
-      "    name: process.env.TASK_HANDOFF_INSTANCE_NAME,",
       "    nodeId: process.env.TASK_HANDOFF_NODE_ID,",
       "    runtimeId: process.env.TASK_HANDOFF_RUNTIME_ID,",
       `    protocolVersion: '${CONTROL_PLANE_PROTOCOL_VERSION}',`,
@@ -5023,11 +5173,12 @@ test("node agent starts localhost runtime as a host controlled-instance process"
       "  persist: process.env.TASK_HANDOFF_APP_SESSION_PERSIST,",
       "  dataDir: process.env.TASK_HANDOFF_DATA_DIR,",
       "  logDir: process.env.TASK_HANDOFF_LOG_DIR,",
+      "  runtimeKind: process.env.TASK_HANDOFF_RUNTIME_KIND,",
       "  openaiKey: process.env.OPENAI_API_KEY,",
       "  argv: process.argv.slice(2),",
       "}) + '\\n');",
       "const server = http.createServer((req, res) => {",
-      "  if (req.url === '/api/health') { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ ok: true })); return; }",
+      ...controlledProcessIdentityRouteStubLines,
       "  res.end('ok');",
       "});",
       "server.listen(port, '127.0.0.1');",
@@ -5092,6 +5243,7 @@ test("node agent starts localhost runtime as a host controlled-instance process"
   const firstPid = started.json().data.runtime.pid;
   const envLines = fs.readFileSync(envLog, "utf8").trim().split(/\n/).map((line) => JSON.parse(line));
   assert.equal(envLines[0].argv.includes("--receiver-auto-start"), false);
+  assert.equal(envLines[0].runtimeKind, "local");
   assert.equal(envLines[0].openaiKey, "instance-codex-key");
 
   const updatedModel = await app.inject({
@@ -5220,6 +5372,293 @@ test("localhost process spawn failures fail the instance without crashing node a
   assert.equal(health.statusCode, 200);
 });
 
+test("localhost startup rejects a stale healthy process already bound to the instance port", async (t) => {
+  const dataDir = tempDataDir("node-agent-localhost-stale-port");
+  const webStub = path.join(dataDir, "controlled-web-stub.js");
+  fs.writeFileSync(
+    webStub,
+    [
+      "const http = require('node:http');",
+      "const port = Number(process.env.TASK_HANDOFF_WEB_PORT);",
+      "http.createServer((_req, res) => res.end('ok')).listen(port, '127.0.0.1');",
+    ].join("\n"),
+  );
+  const stalePort = await freePort("127.0.0.1");
+  const staleServer = net.createServer((socket) => {
+    const body = JSON.stringify({ data: { ok: true, version: "old", startedAt: "2026-07-26T00:00:00.000Z" } });
+    socket.end(`HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body)}\r\nconnection: close\r\n\r\n${body}`);
+  });
+  await new Promise((resolve, reject) => {
+    staleServer.once("error", reject);
+    staleServer.listen(stalePort, "127.0.0.1", resolve);
+  });
+  const previousCommandArgv = process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV;
+  process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV = JSON.stringify([process.execPath, webStub]);
+  const app = await createNodeAgentApp({ dataDir, logger: false, token: "agent-secret" });
+  t.after(async () => {
+    staleServer.close();
+    if (previousCommandArgv === undefined) delete process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV;
+    else process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV = previousCommandArgv;
+    await app.close();
+  });
+
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: "inst_local_stale_port",
+      name: "local stale port",
+      runtimeId: "runtime_local_host",
+      source: { type: "local-folder", path: dataDir },
+    },
+  });
+  const instance = app.nodeAgentState.controlledInstances.get(created.json().data.id);
+  app.nodeAgentState.controlledInstances.put({
+    ...instance,
+    runtime: { ...instance.runtime, port: stalePort },
+  });
+
+  const started = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_local_stale_port/start",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {},
+  });
+  assert.equal(started.statusCode, 503);
+  assert.equal(started.json().error.code, "LOCAL_INSTANCE_PROCESS_NOT_READY");
+  const failed = app.nodeAgentState.controlledInstances.get("inst_local_stale_port");
+  assert.equal(failed.status, "failed");
+  assert.notEqual(failed.runtime.pid, process.pid);
+});
+
+test("localhost stop uses authenticated process identity after node agent process ownership is lost", async (t) => {
+  const dataDir = tempDataDir("node-agent-localhost-detached-stop");
+  const webStub = path.join(dataDir, "controlled-web-stub.js");
+  fs.writeFileSync(
+    webStub,
+    [
+      "const http = require('node:http');",
+      "const port = Number(process.env.TASK_HANDOFF_WEB_PORT);",
+      "const server = http.createServer((req, res) => {",
+      "  res.setHeader('content-type', 'application/json');",
+      ...controlledProcessIdentityRouteStubLines,
+      "  if (req.url === '/api/internal/node-agent/shutdown' && req.method === 'POST' && req.headers.authorization === `Bearer ${process.env.TASK_HANDOFF_REGISTRATION_TOKEN}`) {",
+      "    res.statusCode = 202; res.end(JSON.stringify({ data: { accepted: true } }));",
+      "    setImmediate(() => server.close(() => process.exit(0))); return;",
+      "  }",
+      "  res.statusCode = 403; res.end(JSON.stringify({ error: { code: 'FORBIDDEN' } }));",
+      "});",
+      "server.listen(port, '127.0.0.1');",
+    ].join("\n"),
+  );
+  const app = await createNodeAgentApp({ dataDir, logger: false, token: "agent-secret" });
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: "inst_local_detached_stop",
+      name: "local detached stop",
+      runtimeId: "runtime_local_host",
+      source: { type: "local-folder", path: dataDir },
+    },
+  });
+  assert.equal(created.statusCode, 201);
+  const instance = app.nodeAgentState.controlledInstances.get("inst_local_detached_stop");
+  const runtimePort = await freePort("127.0.0.1");
+  const processNonce = "detached-process-nonce";
+  const child = spawn(process.execPath, [webStub], {
+    env: {
+      ...process.env,
+      TASK_HANDOFF_WEB_PORT: String(runtimePort),
+      TASK_HANDOFF_INSTANCE_ID: instance.id,
+      TASK_HANDOFF_LOCAL_PROCESS_NONCE: processNonce,
+      TASK_HANDOFF_REGISTRATION_TOKEN: instance.registrationToken,
+    },
+    stdio: "ignore",
+  });
+  t.after(async () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    await app.close();
+  });
+  await waitForCondition(async () => {
+    try {
+      const response = await fetch(`http://127.0.0.1:${runtimePort}/api/health`);
+      return response.ok || undefined;
+    } catch {
+      return undefined;
+    }
+  }, "detached localhost process health");
+  app.nodeAgentState.controlledInstances.put({
+    ...instance,
+    status: "running",
+    connectionStatus: "online",
+    target: {
+      ...instance.target,
+      web: `http://127.0.0.1:${runtimePort}`,
+      api: `http://127.0.0.1:${runtimePort}/api`,
+      status: "reachable",
+    },
+    runtime: {
+      ...instance.runtime,
+      pid: child.pid,
+      port: runtimePort,
+      labels: {
+        ...instance.runtime.labels,
+        "task-handoff.local-process-nonce": processNonce,
+      },
+    },
+  });
+
+  const stopped = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_local_detached_stop/stop",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {},
+  });
+  assert.equal(stopped.statusCode, 200);
+  assert.equal(stopped.json().data.status, "stopped");
+  await waitForProcessExit(child.pid, "detached localhost controlled instance exit");
+});
+
+test("localhost stop refuses to kill an unverifiable residual lock pid", async (t) => {
+  const dataDir = tempDataDir("node-agent-localhost-residual-lock-stop");
+  const lockPath = path.join(dataDir, "host-user-local-instance.lock");
+  const lockModule = path.resolve(__dirname, "../packages/core/src/core/local-controlled-instance-lock.ts");
+  const instanceId = "inst_local_residual_lock_stop";
+  const child = spawn(process.execPath, ["-e", String.raw`
+    const { acquireLocalControlledInstanceLock } = require(process.argv[1]);
+    const instanceId = process.argv[2];
+    const lockPath = process.argv[3];
+    const lock = acquireLocalControlledInstanceLock({ instanceId, dataDir: process.argv[4] }, lockPath);
+    const close = () => { lock.release(); process.exit(0); };
+    process.once("SIGTERM", close);
+    setInterval(() => {}, 1000);
+  `, lockModule, instanceId, lockPath, path.join(dataDir, "other-node-agent-config")], {
+    stdio: "ignore",
+  });
+  const app = await createNodeAgentApp({
+    dataDir,
+    logger: false,
+    token: "agent-secret",
+    localControlledInstanceLockPath: lockPath,
+  });
+  t.after(async () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    await app.close();
+  });
+
+  await waitForCondition(() => readLocalControlledInstanceLockOwner(lockPath)?.pid === child.pid || undefined, "residual local instance lock owner");
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: instanceId,
+      name: "residual local instance",
+      runtimeId: "runtime_local_host",
+      source: { type: "local-folder", path: dataDir },
+    },
+  });
+  assert.equal(created.statusCode, 201);
+  const instance = app.nodeAgentState.controlledInstances.get(instanceId);
+  app.nodeAgentState.controlledInstances.put({
+    ...instance,
+    status: "running",
+    runtime: { ...instance.runtime, pid: 99999999 },
+  });
+
+  const stopped = await app.inject({
+    method: "POST",
+    url: `/api/node-agent/instances/${instanceId}/stop`,
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {},
+  });
+  assert.equal(stopped.statusCode, 503);
+  assert.equal(stopped.json().error.code, "LOCAL_INSTANCE_STOP_UNCONFIRMED");
+  assert.equal(child.exitCode, null);
+  assert.equal(app.nodeAgentState.controlledInstances.get(instanceId).status, "running");
+});
+
+test("localhost stop migrates a legacy residual process using its reported instance identity and pid", async (t) => {
+  const dataDir = tempDataDir("node-agent-localhost-legacy-residual-stop");
+  const lockPath = path.join(dataDir, "unused-new-lock.lock");
+  const runtimePort = await freePort("127.0.0.1");
+  const instanceId = "inst_local_legacy_residual_stop";
+  const child = spawn(process.execPath, ["-e", String.raw`
+    const http = require("node:http");
+    const port = Number(process.argv[1]);
+    const instanceId = process.argv[2];
+    const server = http.createServer((request, response) => {
+      response.setHeader("content-type", "application/json");
+      if (request.url === "/api/instance/status") {
+        response.end(JSON.stringify({ data: { id: instanceId, controlMode: "controlled" } }));
+        return;
+      }
+      if (request.url === "/api/diagnostics") {
+        response.end(JSON.stringify({ data: { runtime: { pid: process.pid } } }));
+        return;
+      }
+      response.statusCode = 404;
+      response.end(JSON.stringify({ error: { code: "NOT_FOUND" } }));
+    });
+    server.listen(port, "127.0.0.1");
+    process.once("SIGTERM", () => server.close(() => process.exit(0)));
+  `, String(runtimePort), instanceId], { stdio: "ignore" });
+  const app = await createNodeAgentApp({
+    dataDir,
+    logger: false,
+    token: "agent-secret",
+    localControlledInstanceLockPath: lockPath,
+  });
+  t.after(async () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    await app.close();
+  });
+  await waitForCondition(async () => {
+    try {
+      return (await fetch(`http://127.0.0.1:${runtimePort}/api/instance/status`)).ok || undefined;
+    } catch {
+      return undefined;
+    }
+  }, "legacy residual local instance status");
+
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: instanceId,
+      name: "legacy residual local instance",
+      runtimeId: "runtime_local_host",
+      source: { type: "local-folder", path: dataDir },
+    },
+  });
+  assert.equal(created.statusCode, 201);
+  const instance = app.nodeAgentState.controlledInstances.get(instanceId);
+  app.nodeAgentState.controlledInstances.put({
+    ...instance,
+    status: "running",
+    target: {
+      ...instance.target,
+      web: `http://127.0.0.1:${runtimePort}`,
+      api: `http://127.0.0.1:${runtimePort}/api`,
+    },
+    runtime: { ...instance.runtime, pid: 99999999, port: runtimePort },
+  });
+
+  const stopped = await app.inject({
+    method: "POST",
+    url: `/api/node-agent/instances/${instanceId}/stop`,
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {},
+  });
+  assert.equal(stopped.statusCode, 200);
+  assert.equal(stopped.json().data.status, "stopped");
+  await waitForProcessExit(child.pid, "legacy residual local controlled instance");
+});
+
 test("node agent shutdown stops localhost processes while preserving active restore state", async (t) => {
   const dataDir = tempDataDir("node-agent-localhost-shutdown");
   const webStub = path.join(dataDir, "controlled-web-stub.js");
@@ -5231,7 +5670,7 @@ test("node agent shutdown stops localhost processes while preserving active rest
       "const http = require('node:http');",
       "const port = Number(process.env.TASK_HANDOFF_WEB_PORT);",
       "const server = http.createServer((req, res) => {",
-      "  if (req.url === '/api/health') { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ ok: true })); return; }",
+      ...controlledProcessIdentityRouteStubLines,
       "  res.end('ok');",
       "});",
       "server.listen(port, '127.0.0.1');",
@@ -5353,7 +5792,7 @@ test("node agent restores localhost runtime processes after graceful shutdown", 
       "  baseUrl: process.env.OPENAI_BASE_URL,",
       "}) + '\\n');",
       "const server = http.createServer((req, res) => {",
-      "  if (req.url === '/api/health') { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ ok: true })); return; }",
+      ...controlledProcessIdentityRouteStubLines,
       "  res.end('ok');",
       "});",
       "server.listen(port, '127.0.0.1');",
@@ -5478,7 +5917,7 @@ test("node agent restores active localhost runtime processes after unclean shutd
       "}) + '\\n');",
       "const server = http.createServer((req, res) => {",
       `  fs.appendFileSync(${JSON.stringify(requestLog)}, JSON.stringify({ method: req.method, url: req.url }) + '\\n');`,
-      "  if (req.url === '/api/health') { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ ok: true })); return; }",
+      ...controlledProcessIdentityRouteStubLines,
       "  if (req.url && req.url.startsWith('/api/config-sync/import/')) { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ data: { ok: true } })); return; }",
       "  res.end('ok');",
       "});",
@@ -5660,7 +6099,6 @@ test("node agent accepts incompatible controlled instance protocol versions and 
     },
     payload: {
       instanceId: "inst_protocol",
-      name: "worker",
       protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
       appInventory: emptyAppInventory(),
       build: {
@@ -5701,6 +6139,56 @@ test("node agent accepts incompatible controlled instance protocol versions and 
   });
   assert.equal(rejectedHeartbeat.statusCode, 200);
   assert.equal(rejectedHeartbeat.json().data.protocolVersion, "2026-01-01");
+});
+
+test("controlled instance registration preserves the node-owned name after rename", async (t) => {
+  const app = await createNodeAgentApp({
+    dataDir: tempDataDir("node-agent-instance-name-authority"),
+    logger: false,
+    token: "agent-secret",
+  });
+  t.after(() => app.close());
+
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: "inst_renamed",
+      name: "Original name",
+      runtimeId: "runtime_local_host",
+      source: { type: "local-folder", path: "/workspace" },
+    },
+  });
+  assert.equal(created.statusCode, 201);
+
+  const renamed = await app.inject({
+    method: "PATCH",
+    url: "/api/node-agent/instances/inst_renamed",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: { name: "Renamed in control plane" },
+  });
+  assert.equal(renamed.statusCode, 200);
+  assert.equal(renamed.json().data.name, "Renamed in control plane");
+
+  const registered = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_renamed/register",
+    headers: { authorization: `Bearer ${created.json().data.registrationToken}` },
+    payload: {
+      instanceId: "inst_renamed",
+      name: "Original name",
+      protocolVersion: "2026-07-28",
+      controlMode: "controlled",
+      capabilities: {},
+      appInventory: emptyAppInventory(),
+      target: { strategy: "direct-port", status: "reachable" },
+      workspace: { status: "ready" },
+    },
+  });
+  assert.equal(registered.statusCode, 201);
+  assert.equal(registered.json().data.name, "Renamed in control plane");
+  assert.equal(app.nodeAgentState.controlledInstances.get("inst_renamed").name, "Renamed in control plane");
 });
 
 test("register and heartbeat preserve authoritative convergence attempts and failures", async (t) => {
@@ -5755,7 +6243,7 @@ test("register and heartbeat preserve authoritative convergence attempts and fai
     method: "POST",
     url: "/api/node-agent/instances/inst_attempts/register",
     headers: { authorization: `Bearer ${registrationToken}` },
-    payload: { ...report, instanceId: "inst_attempts", name: "worker" },
+    payload: { ...report, instanceId: "inst_attempts" },
   });
   assert.equal(registered.statusCode, 201, registered.body);
   assert.equal(registered.json().data.ready, false);
@@ -6092,7 +6580,6 @@ test("node agent proxies mutating instance API requests while runtime convergenc
     },
     payload: {
       instanceId: "inst_1",
-      name: "proxy-worker",
       protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
       appInventory: emptyAppInventory(),
       controlMode: "controlled",
@@ -6183,7 +6670,6 @@ test("node agent proxies direct-port instances through the node-local host", asy
     },
     payload: {
       instanceId: "inst_proxy",
-      name: "proxy-worker",
       protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
       appInventory: emptyAppInventory(),
       controlMode: "controlled",
@@ -6308,7 +6794,6 @@ test("node agent proxies instance websocket subprotocols", async (t) => {
     },
     payload: {
       instanceId: "inst_ws",
-      name: "ws-worker",
       protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
       appInventory: emptyAppInventory(),
       controlMode: "controlled",
@@ -6850,7 +7335,6 @@ test("control plane proxies instance websocket routes through reverse node tunne
     headers: { "content-type": "application/json", authorization: `Bearer ${created.body.data.registrationToken}` },
     body: JSON.stringify({
       instanceId: created.body.data.id,
-      name: "reverse-worker",
       target: {
         strategy: "direct-port",
         web: "http://controlled.internal:8080",
@@ -7573,7 +8057,6 @@ test("control plane manages projects, instances, register, heartbeat, and board 
     },
     body: JSON.stringify({
       instanceId: createdInstance.body.data.id,
-      name: "local-1",
       projectId: project.body.data.id,
       instanceVersion: "0.1.0",
       protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
@@ -8199,7 +8682,6 @@ test("control plane proxies instance websocket routes while preserving HTTP prox
     },
     body: JSON.stringify({
       instanceId: createdInstance.body.data.id,
-      name: "ws-proxy-instance",
       projectId: project.body.data.id,
       instanceVersion: "0.1.0",
       protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
@@ -8468,6 +8950,7 @@ test("control plane lists local Docker images for image management", async (t) =
 test("control plane launches app sessions through the controlled instance API", async (t) => {
   const appSessionsById = new Map();
   let appSessionRevision = 0;
+  let malformedConfigSyncResponse = false;
   const appSessionPayload = (status = "running", title = "Claude") => ({
     id: "app_1",
     appId: "claude",
@@ -8498,6 +8981,26 @@ test("control plane launches app sessions through the controlled instance API", 
   });
   const mock = createMockNodeAgentFetch({
     proxy: ({ body, jsonResponse }) => {
+      if (body.path === "/api/config-sync/programs") {
+        return jsonResponse([
+          { id: "codex", label: "Codex", directoryName: "codex" },
+          { id: "claude", label: "Claude", directoryName: "claude" },
+          { id: "browser", label: "Browser", directoryName: "browser" },
+        ]);
+      }
+      if (body.path === "/api/config-sync" && body.method === "POST") {
+        if (malformedConfigSyncResponse) return jsonResponse({ accepted: true });
+        const request = JSON.parse(body.body);
+        return jsonResponse({
+          direction: request.direction,
+          workspaceFolder: request.workspaceFolder,
+          programs: request.programIds.map((programId) => ({
+            preset: { id: programId, label: programId, projectRoot: `${request.workspaceFolder}/${programId}` },
+            direction: request.direction,
+            items: [],
+          })),
+        });
+      }
       if (body.path === "/api/apps/sessions/state") {
         const updatedAt = new Date().toISOString();
         const sessions = [...appSessionsById.values()];
@@ -8523,8 +9026,9 @@ test("control plane launches app sessions through the controlled instance API", 
       return jsonResponse(session);
     },
   });
+  const dataDir = tempDataDir("control-plane-app-session");
   const app = await createControlPlaneApp({
-    dataDir: tempDataDir("control-plane-app-session"),
+    dataDir,
     logger: false,
     staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
     service: {
@@ -8563,7 +9067,6 @@ test("control plane launches app sessions through the controlled instance API", 
     headers: { "content-type": "application/json", authorization: `Bearer ${created.body.data.registrationToken}` },
     body: JSON.stringify({
       instanceId: created.body.data.id,
-      name: "app-worker",
       projectId: project.body.data.id,
       target: {
         strategy: "direct-port",
@@ -8717,37 +9220,49 @@ test("control plane launches app sessions through the controlled instance API", 
     });
   }
 
-  const synced = await json(app, "POST", `/api/controlled-instances/${created.body.data.id}/config-sync/export/browser`);
-  assert.equal(synced.statusCode, 200);
-  {
-    const syncProxy = mock.requests.find((request) => request.path.endsWith("/proxy") && request.body?.path === "/api/config-sync/export/browser");
-    assert.deepEqual({ url: syncProxy.url, method: syncProxy.method, body: syncProxy.body }, {
-    url: `http://127.0.0.1:8091/api/node-agent/instances/${created.body.data.id}/proxy`,
-    method: "POST",
-    body: {
-      path: "/api/config-sync/export/browser",
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        preset: {
-          id: "browser",
-          label: "Browser",
-          projectRoot: ".task-handoff/configs/browser",
-          items: [
-            {
-              id: "chromium-profile",
-              type: "dir",
-              projectPath: "chromium",
-              containerPath: "${HOME}/.config/chromium",
-            },
-          ],
-        },
-      }),
-    },
+  const batchSynced = await json(app, "POST", `/api/controlled-instances/${created.body.data.id}/config-sync`, {
+    direction: "export",
+    programIds: ["codex", "claude"],
+    workspaceFolder: "config-backups",
   });
-  }
+  assert.equal(batchSynced.statusCode, 200);
+  const batchSyncProxy = mock.requests.find((request) => request.path.endsWith("/proxy") && request.body?.path === "/api/config-sync");
+  const batchSyncBody = JSON.parse(batchSyncProxy.body.body);
+  assert.deepEqual(batchSyncBody, {
+    direction: "export",
+    programIds: ["codex", "claude"],
+    workspaceFolder: "config-backups",
+  });
+  assert.deepEqual(batchSynced.body.data.programs.map((program) => program.preset.id), ["codex", "claude"]);
+
+  const configSyncState = await json(app, "GET", `/api/controlled-instances/${created.body.data.id}/config-sync`);
+  assert.equal(configSyncState.statusCode, 200);
+  assert.equal(configSyncState.body.data.preferences.export, "config-backups");
+  assert.deepEqual(configSyncState.body.data.programs.map((program) => program.id), ["codex", "claude", "browser"]);
+  assert.equal(
+    JSON.parse(fs.readFileSync(path.join(dataDir, "config-sync-preferences", `${created.body.data.id}.json`), "utf8")).preferences.export,
+    "config-backups",
+  );
+
+  const invalidBatchFolder = await json(app, "POST", `/api/controlled-instances/${created.body.data.id}/config-sync`, {
+    direction: "export",
+    programIds: ["codex"],
+    workspaceFolder: "../../outside",
+  });
+  assert.equal(invalidBatchFolder.statusCode, 400);
+  assert.equal(invalidBatchFolder.body.error.code, "CONFIG_SYNC_FOLDER_INVALID");
+
+  malformedConfigSyncResponse = true;
+  const malformedBatch = await json(app, "POST", `/api/controlled-instances/${created.body.data.id}/config-sync`, {
+    direction: "export",
+    programIds: ["codex"],
+    workspaceFolder: ".",
+  });
+  malformedConfigSyncResponse = false;
+  assert.equal(malformedBatch.statusCode, 400);
+  assert.equal(malformedBatch.body.error.code, "VALIDATION_ERROR");
+  const stateAfterMalformedBatch = await json(app, "GET", `/api/controlled-instances/${created.body.data.id}/config-sync`);
+  assert.equal(stateAfterMalformedBatch.body.data.preferences.export, "config-backups");
 
   const gitProject = await json(app, "POST", "/api/projects", {
     name: "Git App Project",
@@ -8769,7 +9284,6 @@ test("control plane launches app sessions through the controlled instance API", 
     headers: { "content-type": "application/json", authorization: `Bearer ${gitInstance.body.data.registrationToken}` },
     body: JSON.stringify({
       instanceId: gitInstance.body.data.id,
-      name: "git-app-worker",
       projectId: gitProject.body.data.id,
       target: {
         strategy: "direct-port",
@@ -8782,9 +9296,13 @@ test("control plane launches app sessions through the controlled instance API", 
       },
     }),
   });
-  const rejectedExport = await json(app, "POST", `/api/controlled-instances/${gitInstance.body.data.id}/config-sync/export/browser`);
-  assert.equal(rejectedExport.statusCode, 400);
-  assert.equal(rejectedExport.body.error.code, "CONFIG_SYNC_EXPORT_REQUIRES_LOCAL_PROJECT");
+  const rejectedBatchExport = await json(app, "POST", `/api/controlled-instances/${gitInstance.body.data.id}/config-sync`, {
+    direction: "export",
+    programIds: ["browser"],
+    workspaceFolder: ".",
+  });
+  assert.equal(rejectedBatchExport.statusCode, 400);
+  assert.equal(rejectedBatchExport.body.error.code, "CONFIG_SYNC_EXPORT_REQUIRES_LOCAL_PROJECT");
 });
 
 test("control plane app session launch succeeds when board heartbeat sync fails", async (t) => {
@@ -8829,7 +9347,6 @@ test("control plane app session launch succeeds when board heartbeat sync fails"
     headers: { "content-type": "application/json", authorization: `Bearer ${created.body.data.registrationToken}` },
     body: JSON.stringify({
       instanceId: created.body.data.id,
-      name: "heartbeat-worker",
       target: {
         strategy: "direct-port",
         web: "http://127.0.0.1:18083",
@@ -9027,7 +9544,6 @@ test("control plane chat gateway binds sessions and forwards messages to active 
     headers: { "content-type": "application/json", authorization: `Bearer ${created.body.data.registrationToken}` },
     body: JSON.stringify({
       instanceId: created.body.data.id,
-      name: "chat-worker",
       projectId: project.body.data.id,
       target: {
         strategy: "direct-port",
@@ -9173,7 +9689,6 @@ test("control plane chat gateway binds sessions and forwards messages to active 
     headers: { "content-type": "application/json", authorization: `Bearer ${otherCreated.body.data.registrationToken}` },
     body: JSON.stringify({
       instanceId: otherCreated.body.data.id,
-      name: "other-chat-worker",
       projectId: otherProject.body.data.id,
       target: {
         strategy: "direct-port",
@@ -9604,7 +10119,6 @@ test("control plane chat gateway clears stale ai session bindings instead of cra
     headers: { "content-type": "application/json", authorization: `Bearer ${created.body.data.registrationToken}` },
     body: JSON.stringify({
       instanceId: created.body.data.id,
-      name: "chat-worker",
       projectId: project.body.data.id,
       target: {
         strategy: "direct-port",
@@ -14575,7 +15089,6 @@ test("control plane aggregates ai session pending routes and proxies ai session 
     },
     body: JSON.stringify({
       instanceId: created.body.data.id,
-      name: "pending-worker",
       projectId: project.body.data.id,
       target: {
         strategy: "direct-port",

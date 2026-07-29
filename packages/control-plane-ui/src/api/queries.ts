@@ -8,7 +8,6 @@ import type {
   AppSession,
   AuthSession,
   AuthUser,
-  ConfigSyncPreset,
   ConnectNodeRemoteInput,
   CreateControlledInstanceInput,
   CreateControlledInstanceResult,
@@ -404,14 +403,6 @@ export function deleteChatBridge(id: string) {
   return deleteApiData<{ deleted: boolean }>(`chat-gateway/bridges/${id}`);
 }
 
-export function useConfigSyncPresetsQuery() {
-  return useQuery({
-    queryKey: ["config-sync-presets"],
-    queryFn: () => getApiData<ConfigSyncPreset[]>("config-sync/presets"),
-    retry: false,
-  });
-}
-
 export function createControlledInstance(input: CreateControlledInstanceInput) {
   return postApiData<CreateControlledInstanceResult>("controlled-instances", input);
 }
@@ -500,8 +491,20 @@ export function resolveAiSessionApproval(instanceId: string, sessionId: string, 
   return postApiData<Record<string, unknown>>(`controlled-instances/${instanceId}/ai-sessions/${sessionId}/approval`, { decision });
 }
 
-export function syncControlledInstanceConfig(instanceId: string, direction: "import" | "export", preset: string) {
-  return postApiData<Record<string, unknown>>(`controlled-instances/${instanceId}/config-sync/${direction}/${preset}`);
+export function getControlledInstanceConfigSyncState(instanceId: string) {
+  return getApiData<import("@task-handoff/protocol/config-sync").ConfigSyncState>(`controlled-instances/${instanceId}/config-sync`);
+}
+
+export function listControlledInstanceConfigSyncFolders(instanceId: string, input: { path?: string; depth?: number } = {}) {
+  const params = new URLSearchParams();
+  if (input.path) params.set("path", input.path);
+  if (input.depth !== undefined) params.set("depth", String(input.depth));
+  const query = params.toString();
+  return getApiData<NodeFolderTreeEntry[]>(`controlled-instances/${instanceId}/config-sync/folders${query ? `?${query}` : ""}`);
+}
+
+export function syncControlledInstanceConfigs(instanceId: string, input: import("@task-handoff/protocol/config-sync").ConfigSyncRequest) {
+  return postApiData<import("@task-handoff/protocol/config-sync").ConfigSyncBatchResult>(`controlled-instances/${instanceId}/config-sync`, input);
 }
 
 export function createProject(input: CreateProjectInput) {

@@ -3,10 +3,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 const zlib = require("node:zlib");
+const { applyDesktopDockIcon, desktopIconPath } = require("../src/icon.cjs");
 
 const root = path.resolve(__dirname, "../../..");
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-const mainSource = fs.readFileSync(path.join(root, "apps/desktop-shell/src/main.cjs"), "utf8");
 const icon = fs.readFileSync(path.join(root, "build/icon.png"));
 
 function pngAlphaBounds(png, width, height) {
@@ -59,12 +59,28 @@ function pngAlphaBounds(png, width, height) {
 test("Electron uses the TaskHandoff icon for packaging and runtime windows", () => {
   assert.equal(packageJson.build.icon, "build/icon.png");
   assert.deepEqual(packageJson.build.extraResources, [{ from: "build/icon.png", to: "icon.png" }]);
-  assert.match(mainSource, /icon: desktopIconPath\(\)/);
-  assert.match(mainSource, /app\.dock\.setIcon\(icon\)/);
+  assert.equal(desktopIconPath({ packaged: false, root, resourcesPath: "/unused" }), path.join(root, "build", "icon.png"));
+  const applied = [];
+  assert.equal(applyDesktopDockIcon({
+    platform: "darwin",
+    packaged: false,
+    dock: { setIcon: (value) => applied.push(value) },
+    nativeImage: { createFromPath: (value) => ({ value, isEmpty: () => false }) },
+    iconPath: path.join(root, "build", "icon.png"),
+  }), true);
+  assert.equal(applied[0].value, path.join(root, "build", "icon.png"));
 });
 
 test("packaged macOS apps keep the bundle-managed rounded Dock icon", () => {
-  assert.match(mainSource, /if \(isMacOS\(\) && app\.isPackaged\) \{\s+return;\s+\}/);
+  let created = false;
+  assert.equal(applyDesktopDockIcon({
+    platform: "darwin",
+    packaged: true,
+    dock: { setIcon: () => assert.fail("packaged macOS must keep its bundle icon") },
+    nativeImage: { createFromPath: () => { created = true; } },
+    iconPath: "/Resources/icon.png",
+  }), false);
+  assert.equal(created, false);
 });
 
 test("Electron unpacks the server runtime needed by its bundled Node process", () => {
@@ -76,6 +92,7 @@ test("Electron unpacks the server runtime needed by its bundled Node process", (
     "node_modules/**/*",
   ]);
   assert.ok(packageJson.build.files.includes("release/runtime-artifacts/**/*"));
+  assert.equal(packageJson.build.extraResources.some((entry) => entry.from === "dist"), false);
 });
 
 test("Electron icon is a standard 1024px RGBA source for transparent macOS corners", () => {

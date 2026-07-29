@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import crypto from "node:crypto";
 import http from "node:http";
 import net from "node:net";
 import path from "node:path";
@@ -10,6 +11,9 @@ import websocket from "@fastify/websocket";
 import WebSocket from "ws";
 import type { FastifyServerOptions } from "fastify";
 import { z } from "zod";
+import { readLocalControlledInstanceLockOwner } from "@task-handoff/core/core/local-controlled-instance-lock";
+import { processStartIdentity } from "@task-handoff/core/core/process-singleton-lock";
+import { packageVersionResolver } from "@task-handoff/core/core/package-version";
 import {
   CONTROL_PLANE_PROTOCOL_VERSION,
   ApplyUpdateRequestSchema,
@@ -142,21 +146,7 @@ function optionalEnv(name: string) {
   return value || undefined;
 }
 
-function packageVersion() {
-  try {
-    const moduleDir = import.meta.url ? path.dirname(fileURLToPath(import.meta.url)) : __dirname;
-    const packagePath = [
-      // Runtime releases bundle this module into <package>/dist/cli.js.
-      path.resolve(moduleDir, "..", "package.json"),
-      // Node's strip-only TypeScript loader executes this source in place.
-      path.resolve(moduleDir, "..", "..", "package.json"),
-    ].find((candidate) => fs.existsSync(candidate));
-    if (!packagePath) return "unknown";
-    return JSON.parse(fs.readFileSync(packagePath, "utf8")).version || "unknown";
-  } catch {
-    return "unknown";
-  }
-}
+const packageVersion = packageVersionResolver("@task-handoff/control-plane");
 
 function buildInfo(component: BuildInfo["component"]): BuildInfo {
   return {
@@ -272,6 +262,8 @@ export type CreateNodeAgentAppOptions = {
   fetchImpl?: typeof fetch;
   platform?: NodeJS.Platform;
   arch?: NodeJS.Architecture;
+  /** Test-only lock-path injection. Production always uses the host-user global lock. */
+  localControlledInstanceLockPath?: string;
   resolveRuntimeArtifactRelease?: (version: string, platform: string, arch: string) => Promise<PublishedRuntimeArtifact>;
   resolveRuntimeArtifact?: (version: string, platform: string, arch: string) => Promise<ResolvedRuntimeArtifact>;
 };
@@ -700,7 +692,133 @@ function waitForChildSpawn(child: ChildProcessWithoutNullStreams) {
   });
 }
 
-async function stopLocalProcess(instance: ControlledInstance, processByInstanceId: Map<string, ChildProcessWithoutNullStreams>) {
+const LOCAL_PROCESS_NONCE_LABEL = "task-handoff.local-process-nonce";
+const LOCAL_PROCESS_REQUEST_TIMEOUT_MS = 1_000;
+
+type LocalProcessIdentity = {
+  instanceId: string;
+  pid: number;
+  processNonce: string;
+  startIdentity?: string;
+};
+
+function localProcessWeb(instance: ControlledInstance) {
+  return instance.runtime.port ? `http://127.0.0.1:${instance.runtime.port}` : instance.target.web;
+}
+
+async function fetchLocalProcessIdentity(web: string, registrationToken: string): Promise<LocalProcessIdentity | undefined> {
+  try {
+    const response = await fetch(`${web}/api/internal/node-agent/process-identity`, {
+      headers: { authorization: `Bearer ${registrationToken}` },
+      signal: AbortSignal.timeout(LOCAL_PROCESS_REQUEST_TIMEOUT_MS),
+    });
+    if (!response.ok) return undefined;
+    const body = await response.json() as { data?: { instanceId?: unknown; pid?: unknown; processNonce?: unknown; startIdentity?: unknown } };
+    const identity = body.data;
+    if (
+      typeof identity?.instanceId !== "string"
+      || typeof identity.pid !== "number"
+      || typeof identity.processNonce !== "string"
+    ) {
+      return undefined;
+    }
+    return {
+      instanceId: identity.instanceId,
+      pid: identity.pid,
+      processNonce: identity.processNonce,
+      startIdentity: typeof identity.startIdentity === "string" ? identity.startIdentity : undefined,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+async function requestLocalProcessShutdown(instance: ControlledInstance) {
+  const web = localProcessWeb(instance);
+  const processNonce = instance.runtime.labels?.[LOCAL_PROCESS_NONCE_LABEL];
+  if (!web || !processNonce || !instance.registrationToken) return undefined;
+  const identity = await fetchLocalProcessIdentity(web, instance.registrationToken);
+  if (!identity || identity.instanceId !== instance.id || identity.processNonce !== processNonce) return undefined;
+  try {
+    const response = await fetch(`${web}/api/internal/node-agent/shutdown`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${instance.registrationToken}` },
+      signal: AbortSignal.timeout(LOCAL_PROCESS_REQUEST_TIMEOUT_MS),
+    });
+    return response.ok ? identity : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function fetchLegacyLocalProcessIdentity(instance: ControlledInstance) {
+  const web = localProcessWeb(instance);
+  if (!web) return undefined;
+  try {
+    const [statusResponse, diagnosticsResponse] = await Promise.all([
+      fetch(`${web}/api/instance/status`, { signal: AbortSignal.timeout(LOCAL_PROCESS_REQUEST_TIMEOUT_MS) }),
+      fetch(`${web}/api/diagnostics`, { signal: AbortSignal.timeout(LOCAL_PROCESS_REQUEST_TIMEOUT_MS) }),
+    ]);
+    if (!statusResponse.ok || !diagnosticsResponse.ok) return undefined;
+    const status = await statusResponse.json() as { data?: { id?: unknown; controlMode?: unknown } };
+    const diagnostics = await diagnosticsResponse.json() as { data?: { runtime?: { pid?: unknown } } };
+    const pid = diagnostics.data?.runtime?.pid;
+    if (status.data?.id !== instance.id || status.data.controlMode !== "controlled" || typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) {
+      return undefined;
+    }
+    const startIdentity = processStartIdentity(pid);
+    return startIdentity ? { pid, startIdentity } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function terminateLocalProcess(pid: number, expectedStartIdentity: string) {
+  if (processStartIdentity(pid) !== expectedStartIdentity) return false;
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch {
+    return true;
+  }
+  const deadline = Date.now() + 3_000;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    // Process exited after the final liveness check.
+  }
+  const killDeadline = Date.now() + 1_000;
+  while (Date.now() < killDeadline) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return false;
+}
+
+function localProcessStopError(instance: ControlledInstance, message: string) {
+  return Object.assign(new Error(message), {
+    statusCode: 503,
+    code: "LOCAL_INSTANCE_STOP_UNCONFIRMED",
+    instanceId: instance.id,
+  });
+}
+
+async function stopLocalProcess(
+  instance: ControlledInstance,
+  processByInstanceId: Map<string, ChildProcessWithoutNullStreams>,
+  lockPath?: string,
+) {
   const child = processByInstanceId.get(instance.id);
   if (child && !child.killed) {
     child.kill("SIGTERM");
@@ -708,43 +826,56 @@ async function stopLocalProcess(instance: ControlledInstance, processByInstanceI
     await waitForChildExit(child);
     return;
   }
-  if (instance.runtime.pid) {
-    try {
-      process.kill(instance.runtime.pid, "SIGTERM");
-    } catch {
-      // Process already exited.
-      return;
-    }
+  const shutdownIdentity = await requestLocalProcessShutdown(instance);
+  if (shutdownIdentity) {
+    const web = localProcessWeb(instance);
     const deadline = Date.now() + 3_000;
-    while (Date.now() < deadline) {
-      try {
-        process.kill(instance.runtime.pid, 0);
-      } catch {
-        return;
-      }
+    while (web && Date.now() < deadline) {
+      if (!await fetchLocalProcessIdentity(web, instance.registrationToken!)) return;
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
-    try {
-      process.kill(instance.runtime.pid, "SIGKILL");
-    } catch {
-      // Process exited after the final liveness check.
-    }
+    const remaining = web ? await fetchLocalProcessIdentity(web, instance.registrationToken!) : undefined;
+    if (remaining
+      && remaining.instanceId === shutdownIdentity.instanceId
+      && remaining.pid === shutdownIdentity.pid
+      && remaining.processNonce === shutdownIdentity.processNonce
+      && remaining.startIdentity === shutdownIdentity.startIdentity
+      && remaining.startIdentity
+      && await terminateLocalProcess(remaining.pid, remaining.startIdentity)) return;
+    throw localProcessStopError(instance, `Controlled instance ${instance.id} accepted shutdown but its exit could not be confirmed.`);
+  }
+  const lockOwner = readLocalControlledInstanceLockOwner(lockPath);
+  const legacyIdentity = await fetchLegacyLocalProcessIdentity(instance);
+  if (legacyIdentity) {
+    if (await terminateLocalProcess(legacyIdentity.pid, legacyIdentity.startIdentity)) return;
+    throw localProcessStopError(instance, `Legacy controlled instance ${instance.id} did not exit after termination.`);
+  }
+  if (lockOwner?.instanceId === instance.id) {
+    throw localProcessStopError(
+      instance,
+      `Local controlled instance ${instance.id} is still owned by pid ${lockOwner.pid}, but its process identity could not be verified.`,
+    );
   }
 }
 
 const RESTORABLE_LOCAL_INSTANCE_STATUSES = new Set<ControlledInstance["status"]>(["provisioning", "starting", "registering", "registered", "running"]);
 
-async function waitForLocalInstanceHealth(web: string, timeoutMs = 3_000) {
+async function waitForLocalInstanceHealth(
+  web: string,
+  expected: LocalProcessIdentity,
+  child: ChildProcessWithoutNullStreams,
+  registrationToken: string,
+  timeoutMs = 3_000,
+) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    try {
-      const response = await fetch(`${web}/api/health`);
-      if (response.ok) {
-        return true;
-      }
-    } catch {
-      // Keep waiting until the controlled-instance process has bound its port.
-    }
+    if (child.exitCode !== null || child.signalCode !== null) return false;
+    const identity = await fetchLocalProcessIdentity(web, registrationToken);
+    if (identity
+      && identity.instanceId === expected.instanceId
+      && identity.pid === expected.pid
+      && identity.processNonce === expected.processNonce
+      && identity.startIdentity === expected.startIdentity) return true;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   return false;
@@ -890,12 +1021,14 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
   private readonly nodeAgentUrl: () => string;
   private readonly processByInstanceId = new Map<string, ChildProcessWithoutNullStreams>();
   private readonly commandOverride?: string[];
+  private readonly lockPath?: string;
 
-  constructor(runCommand: CommandRunner, paths: NodeAgentStorePaths, nodeAgentUrl: () => string, commandOverride?: string[]) {
+  constructor(runCommand: CommandRunner, paths: NodeAgentStorePaths, nodeAgentUrl: () => string, commandOverride?: string[], lockPath?: string) {
     this.runCommand = runCommand;
     this.paths = paths;
     this.nodeAgentUrl = nodeAgentUrl;
     this.commandOverride = commandOverride;
+    this.lockPath = lockPath;
   }
 
   async start(context: ExecutorContext): Promise<ExecutorStartResult> {
@@ -906,6 +1039,7 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
     fs.mkdirSync(logDir, { recursive: true });
     const [command, ...baseArgs] = localControlledInstanceCommand(this.commandOverride);
     const args = [...baseArgs, "--host", "127.0.0.1", "--port", String(port)];
+    const processNonce = crypto.randomUUID();
     const out = fs.openSync(path.join(logDir, "controlled-instance.out.log"), "a");
     const err = fs.openSync(path.join(logDir, "controlled-instance.err.log"), "a");
     const child = spawn(command, args, {
@@ -915,6 +1049,8 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
       env: {
         ...process.env,
         TASK_HANDOFF_CONTROL_MODE: "controlled",
+        TASK_HANDOFF_RUNTIME_KIND: "local",
+        ...(this.lockPath ? { TASK_HANDOFF_LOCAL_CONTROLLED_INSTANCE_LOCK_PATH: this.lockPath } : {}),
         TASK_HANDOFF_NODE_AGENT_URL: this.nodeAgentUrl(),
         TASK_HANDOFF_INSTANCE_ID: context.instance.id,
         TASK_HANDOFF_INSTANCE_NAME: context.instance.name,
@@ -922,6 +1058,7 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
         TASK_HANDOFF_PROJECT_ID: context.project.id,
         TASK_HANDOFF_NODE_ID: context.node.id,
         TASK_HANDOFF_RUNTIME_ID: context.runtime.id,
+        TASK_HANDOFF_LOCAL_PROCESS_NONCE: processNonce,
         TASK_HANDOFF_WORKSPACE: workspacePath,
         TASK_HANDOFF_WORKSPACE_MODE: "local-bind",
         TASK_HANDOFF_DATA_DIR: dataDir,
@@ -975,7 +1112,24 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
       }
     });
     const web = `http://127.0.0.1:${port}`;
-    await waitForLocalInstanceHealth(web);
+    const childStartIdentity = child.pid ? processStartIdentity(child.pid) : undefined;
+    const ready = child.pid && context.instance.registrationToken
+      ? await waitForLocalInstanceHealth(
+          web,
+          { instanceId: context.instance.id, pid: child.pid, processNonce, startIdentity: childStartIdentity },
+          child,
+          context.instance.registrationToken,
+        )
+      : false;
+    if (!ready) {
+      if (this.processByInstanceId.get(context.instance.id) === child) this.processByInstanceId.delete(context.instance.id);
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+      await waitForChildExit(child);
+      throw Object.assign(
+        new Error(`Controlled instance process did not become ready for instance ${context.instance.id} on ${web}.`),
+        { statusCode: 503, code: "LOCAL_INSTANCE_PROCESS_NOT_READY" },
+      );
+    }
     return {
       status: "registering",
       health: "unknown",
@@ -1002,13 +1156,14 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
         labels: {
           ...context.instance.runtime.labels,
           "task-handoff.runtime-kind": "local",
+          [LOCAL_PROCESS_NONCE_LABEL]: processNonce,
         },
       },
     };
   }
 
   async stop(context: ExecutorContext): Promise<ExecutorStartResult> {
-    await stopLocalProcess(context.instance, this.processByInstanceId);
+    await stopLocalProcess(context.instance, this.processByInstanceId, this.lockPath);
     return {
       status: "stopped",
       health: "unknown",
@@ -1025,7 +1180,7 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
   }
 
   async restart(context: ExecutorContext): Promise<ExecutorStartResult> {
-    await stopLocalProcess(context.instance, this.processByInstanceId);
+    await stopLocalProcess(context.instance, this.processByInstanceId, this.lockPath);
     return this.start(context);
   }
 
@@ -1737,7 +1892,6 @@ class NodeAgentState {
     const runtimeVersion = runtimeVersionStateForReport(existing, actualVersion, managedArtifacts);
     const updated = ControlledInstanceSchema.parse({
       ...existing,
-      name: parsed.name,
       status: "registered",
       health: actualVersion === packageVersion() ? "ok" : "degraded",
       // Managed releases require inspection before they are ready. A Local
@@ -2271,6 +2425,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       paths,
       () => state.localNodeAgentUrl,
       configuredLocalControlledCommand(),
+      options.localControlledInstanceLockPath,
     ),
   );
   const updateCommandRunner = options.updateCommandRunner || options.dockerCommandRunner || defaultCommandRunner;
@@ -2420,14 +2575,27 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
         eventForwarder.syncNow();
         return started;
       }
-      const instance = usesManagedArtifact(state.requireInstance(id))
-        ? await convergence.schedule(id, { startRequested: true })
-        : state.requireInstance(id);
-      if (usesManagedArtifact(instance) && instance.runtimeVersion?.phase === "failed") {
-        throw Object.assign(new Error(instance.runtimeVersion.error?.message || `Instance ${id} runtime convergence failed.`), {
-          statusCode: 503,
-          ...(instance.runtimeVersion.error || { code: "INSTANCE_RUNTIME_INSTALL_FAILED", retryable: true }),
-        });
+      let instance = state.requireInstance(id);
+      if (usesManagedArtifact(instance)) {
+        try {
+          instance = await convergence.schedule(id, { startRequested: true });
+        } catch (error) {
+          instance = state.requireInstance(id);
+          lifecycleLoggers.warn({
+            instanceId: id,
+            action: "runtime.converge",
+            reason,
+            error: error instanceof Error ? error.message : String(error),
+          }, "node instance runtime convergence failed after start");
+        }
+        if (instance.runtimeVersion?.phase === "failed") {
+          lifecycleLoggers.warn({
+            instanceId: id,
+            action: "runtime.converge",
+            reason,
+            error: instance.runtimeVersion.error,
+          }, "node instance started with failed runtime convergence");
+        }
       }
       await autoImportAgentConfig(fetchImpl, instance, "start", lifecycleLoggers);
       eventForwarder.syncNow();

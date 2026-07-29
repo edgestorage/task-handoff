@@ -281,9 +281,11 @@
         @pointerdown.capture="$emit('focusSessionPane', pane.id)"
       >
         <SessionPaneContent
+          :active-action-label="activeActionLabel"
           :app-launch-button-title="appLaunchButtonTitle"
           :can-launch-app="canLaunchApp"
           :instance="instance"
+          :is-instance-action-busy="isInstanceActionBusy"
           :launchable-apps="launchableApps"
           :launching-app="launchingApp"
           :node-local-folders="nodeLocalFolders"
@@ -294,6 +296,7 @@
           @open-ai-session-app="(target, session) => $emit('openAiSessionApp', target, session)"
           @open-repository-workspace="$emit('openRepositoryWorkspace', $event)"
           @open-launch-menu="updateAppLaunchMenuOpen(pane.id, true)"
+          @run-action="(action, target) => $emit('runAction', action, target)"
           @select-ai-session="(instanceId, sessionId) => $emit('selectAiSession', instanceId, sessionId)"
         />
       </section>
@@ -353,11 +356,13 @@ import {
   type SessionTab,
 } from "../useInstanceSessions";
 import { hasInstanceStatusPage, instanceStatusTitle } from "../useInstanceStatus";
+import type { InstanceAction } from "../useInstanceActions";
 import type { SessionPaneId } from "./useActiveInstanceSessions";
 
 const { t } = useI18n();
 
 const props = defineProps<{
+  activeActionLabel: (instance: InstanceBoardItem, action: InstanceAction, idleLabel: string) => string;
   activeAttachUrl: string;
   activeInstanceWebUrl: string;
   activeOpenUrl: string;
@@ -371,6 +376,7 @@ const props = defineProps<{
   canLaunchApp: boolean;
   copiedText: string;
   instance: InstanceWithAiSessions;
+  isInstanceActionBusy: (instance: InstanceBoardItem) => boolean;
   launchableApps: LaunchableApp[];
   launchingApp: boolean;
   lastRefreshLabel: string;
@@ -408,6 +414,7 @@ const emit = defineEmits<{
   openRepositoryWorkspace: [target: { initialView: "files" | "changes"; sessionId: string; sessionKind: RepositorySessionKind }];
   openSettings: [instanceId: string, section?: "general" | "models" | "apps"];
   openUrl: [url: string];
+  runAction: [action: InstanceAction, instance: InstanceBoardItem];
   selectAiSession: [instanceId: string, sessionId: string];
   selectSession: [sessionKey: string, pane?: SessionPaneId];
   stopSession: [instance: InstanceBoardItem, session: SessionTab];

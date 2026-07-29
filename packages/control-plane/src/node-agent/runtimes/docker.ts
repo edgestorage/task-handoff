@@ -385,6 +385,10 @@ export function containerNameForInstance(instanceId: string) {
   return `task-handoff-${instanceId.replace(/[^a-zA-Z0-9_.-]/g, "-")}`;
 }
 
+function appendDockerEnv(args: string[], key: string, value: string) {
+  args.push("-e", `${key}=${value}`);
+}
+
 export function dockerRunArgs(context: ExecutorContext, containerName: string, options: DockerExecutorOptions = {}) {
   const publishHost = options.publishHost || "127.0.0.1";
   const nodeId = context.node?.id || "node_unset";
@@ -420,60 +424,52 @@ export function dockerRunArgs(context: ExecutorContext, containerName: string, o
     `${containerName}-agent-home:/home/agent`,
     "-p",
     `${publishHost}::8080`,
-    "-e",
-    "TASK_HANDOFF_CONTROL_MODE=controlled",
-    "-e",
-    `TASK_HANDOFF_NODE_AGENT_URL=${context.nodeAgentUrl || context.node?.endpoint || ""}`,
-    "-e",
-    `TASK_HANDOFF_INSTANCE_ID=${context.instance.id}`,
-    "-e",
-    `TASK_HANDOFF_INSTANCE_NAME=${context.instance.name}`,
-    "-e",
-    `TASK_HANDOFF_REGISTRATION_TOKEN=${context.instance.registrationToken || ""}`,
-    "-e",
-    `TASK_HANDOFF_PROJECT_ID=${context.project.id}`,
-    "-e",
-    `TASK_HANDOFF_NODE_ID=${nodeId}`,
-    "-e",
-    `TASK_HANDOFF_RUNTIME_ID=${runtimeId}`,
-    "-e",
-    `TASK_HANDOFF_IMAGE_ID=${context.image.id}`,
-    ...(context.image.tag ? [`TASK_HANDOFF_IMAGE_TAG=${context.image.tag}`] : []),
-    "-e",
-    "TASK_HANDOFF_CHAT_BRIDGES=none",
-    "-e",
-    `TASK_HANDOFF_WORKSPACE=${context.project.workspacePolicy.path || "/workspace"}`,
-    "-e",
-    `TASK_HANDOFF_WORKSPACE_MODE=${context.project.workspacePolicy.mode}`,
   ];
+
+  const runtimeEnv = {
+    TASK_HANDOFF_CONTROL_MODE: "controlled",
+    TASK_HANDOFF_NODE_AGENT_URL: context.nodeAgentUrl || context.node?.endpoint || "",
+    TASK_HANDOFF_INSTANCE_ID: context.instance.id,
+    TASK_HANDOFF_INSTANCE_NAME: context.instance.name,
+    TASK_HANDOFF_REGISTRATION_TOKEN: context.instance.registrationToken || "",
+    TASK_HANDOFF_PROJECT_ID: context.project.id,
+    TASK_HANDOFF_NODE_ID: nodeId,
+    TASK_HANDOFF_RUNTIME_ID: runtimeId,
+    TASK_HANDOFF_IMAGE_ID: context.image.id,
+    ...(context.image.tag ? { TASK_HANDOFF_IMAGE_TAG: context.image.tag } : {}),
+    TASK_HANDOFF_CHAT_BRIDGES: "none",
+    TASK_HANDOFF_WORKSPACE: context.project.workspacePolicy.path || "/workspace",
+    TASK_HANDOFF_WORKSPACE_MODE: context.project.workspacePolicy.mode,
+  };
+  for (const [key, value] of Object.entries(runtimeEnv)) appendDockerEnv(args, key, value);
 
   if (context.project.source.type === "local-folder") {
     args.push("-v", `${context.project.source.path}:${context.project.workspacePolicy.path || "/workspace"}:${context.project.workspacePolicy.readOnly ? "ro" : "rw"}`);
   } else {
-    args.push("-e", `TASK_HANDOFF_PROJECT_SOURCE=${JSON.stringify(context.project.source)}`);
-    args.push("-e", `TASK_HANDOFF_WORKSPACE_POLICY=${JSON.stringify(context.project.workspacePolicy)}`);
-    args.push("-e", `TASK_HANDOFF_GIT_URL=${context.project.source.url}`);
+    appendDockerEnv(args, "TASK_HANDOFF_PROJECT_SOURCE", JSON.stringify(context.project.source));
+    appendDockerEnv(args, "TASK_HANDOFF_WORKSPACE_POLICY", JSON.stringify(context.project.workspacePolicy));
+    appendDockerEnv(args, "TASK_HANDOFF_GIT_URL", context.project.source.url);
     if (context.project.source.ref?.commit) {
-      args.push("-e", `TASK_HANDOFF_GIT_COMMIT=${context.project.source.ref.commit}`);
+      appendDockerEnv(args, "TASK_HANDOFF_GIT_COMMIT", context.project.source.ref.commit);
     } else if (context.project.source.ref?.name) {
-      args.push("-e", `TASK_HANDOFF_GIT_REF=${context.project.source.ref.name}`);
+      appendDockerEnv(args, "TASK_HANDOFF_GIT_REF", context.project.source.ref.name);
     }
     if (context.project.source.clone?.depth) {
-      args.push("-e", `TASK_HANDOFF_GIT_DEPTH=${context.project.source.clone.depth}`);
+      appendDockerEnv(args, "TASK_HANDOFF_GIT_DEPTH", String(context.project.source.clone.depth));
     }
-    args.push("-e", `TASK_HANDOFF_GIT_SUBMODULES=${context.project.source.clone?.submodules ? "true" : "false"}`);
-    args.push("-e", `TASK_HANDOFF_GIT_LFS=${context.project.source.clone?.lfs ? "true" : "false"}`);
+    appendDockerEnv(args, "TASK_HANDOFF_GIT_SUBMODULES", context.project.source.clone?.submodules ? "true" : "false");
+    appendDockerEnv(args, "TASK_HANDOFF_GIT_LFS", context.project.source.clone?.lfs ? "true" : "false");
     if (context.project.source.clone?.subdirectory) {
-      args.push("-e", `TASK_HANDOFF_WORKSPACE_SUBDIRECTORY=${context.project.source.clone.subdirectory}`);
+      appendDockerEnv(args, "TASK_HANDOFF_WORKSPACE_SUBDIRECTORY", context.project.source.clone.subdirectory);
     }
   }
 
   for (const [key, value] of Object.entries(context.image.defaultEnv)) {
-    args.push("-e", `${key}=${value}`);
+    appendDockerEnv(args, key, value);
   }
 
   for (const [key, value] of Object.entries(context.modelEnv || {})) {
-    args.push("-e", `${key}=${value}`);
+    appendDockerEnv(args, key, value);
   }
 
   args.push(context.image.resolvedReference || context.image.requestedReference!);
