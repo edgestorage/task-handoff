@@ -75,6 +75,9 @@
     "asar": true,
     "asarUnpack": [
       "bin/**/*",
+      "docker/entrypoint.sh",
+      "docker/instance-launcher.sh",
+      "docker/runtime-installer.mjs",
       "dist/**/*",
       "packages/control-plane-ui/dist/**/*",
       "release/runtime-artifacts/**/*",
@@ -92,6 +95,9 @@
     "files": [
       "apps/desktop-shell/src/**/*",
       "bin/task-handoff.js",
+      "docker/entrypoint.sh",
+      "docker/instance-launcher.sh",
+      "docker/runtime-installer.mjs",
       "dist/**/*",
       "packages/control-plane-ui/dist/**/*",
       "release/runtime-artifacts/**/*",

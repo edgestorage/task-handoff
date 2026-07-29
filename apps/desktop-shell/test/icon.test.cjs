@@ -86,11 +86,22 @@ test("packaged macOS apps keep the bundle-managed rounded Dock icon", () => {
 test("Electron unpacks the server runtime needed by its bundled Node process", () => {
   assert.deepEqual(packageJson.build.asarUnpack, [
     "bin/**/*",
+    "docker/entrypoint.sh",
+    "docker/instance-launcher.sh",
+    "docker/runtime-installer.mjs",
     "dist/**/*",
     "packages/control-plane-ui/dist/**/*",
     "release/runtime-artifacts/**/*",
     "node_modules/**/*",
   ]);
+  for (const launcherAsset of [
+    "docker/entrypoint.sh",
+    "docker/instance-launcher.sh",
+    "docker/runtime-installer.mjs",
+  ]) {
+    assert.ok(packageJson.build.files.includes(launcherAsset), `${launcherAsset} must be packaged`);
+    assert.ok(packageJson.build.asarUnpack.includes(launcherAsset), `${launcherAsset} must be available as a real file`);
+  }
   assert.ok(packageJson.build.files.includes("release/runtime-artifacts/**/*"));
   assert.equal(packageJson.build.extraResources.some((entry) => entry.from === "dist"), false);
 });

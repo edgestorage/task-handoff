@@ -1,5 +1,6 @@
 import {
   ControlledInstanceSchema,
+  RuntimeConvergenceErrorSchema,
   type ControlledInstance,
   type RuntimeConvergenceError,
   type RuntimeVersionState,
@@ -244,13 +245,20 @@ export class RuntimeConvergenceCoordinator {
   private storePhase(instance: ControlledInstance, phase: RuntimeVersionState["phase"], incrementAttempt = false) {
     const desiredVersion = this.desiredVersion();
     const actualVersion = reportedVersion(instance);
+    const previousError = instance.runtimeVersion?.desiredVersion === desiredVersion
+      ? instance.runtimeVersion.error
+      : undefined;
     return this.storeState(instance, {
       desiredVersion,
       ...(actualVersion ? { actualVersion } : {}),
       phase,
       attempt: (instance.runtimeVersion?.attempt || 0) + (incrementAttempt ? 1 : 0),
       lastAttemptAt: this.timestamp(),
-      ...(phase === "pending" ? { error: mismatchError(desiredVersion, actualVersion) } : {}),
+      ...(previousError
+        ? { error: previousError }
+        : phase === "pending"
+          ? { error: mismatchError(desiredVersion, actualVersion) }
+          : {}),
     }, false);
   }
 
@@ -306,15 +314,15 @@ function isStopped(instance: ControlledInstance) {
 
 function mismatchState(instance: ControlledInstance, desiredVersion: string, actualVersion?: string, desiredReleaseInstalled = false): RuntimeVersionState {
   const previous = instance.runtimeVersion;
-  const resumableAttempt = previous?.desiredVersion === desiredVersion && previous.phase !== "matched"
-    ? previous.attempt
-    : 0;
+  const sameRollout = previous?.desiredVersion === desiredVersion && previous.phase !== "matched";
+  const resumableAttempt = sameRollout ? previous.attempt : 0;
+  const previousError = sameRollout ? previous.error : undefined;
   return {
     desiredVersion,
     ...(actualVersion ? { actualVersion } : {}),
     phase: "pending",
     attempt: resumableAttempt,
-    error: actualVersion === desiredVersion && !desiredReleaseInstalled
+    error: previousError || (actualVersion === desiredVersion && !desiredReleaseInstalled
       ? convergenceError(
         "INSTANCE_RUNTIME_VERIFICATION_FAILED",
         `Controlled-instance ${desiredVersion} is running, but the active runtime artifact does not match the desired release identity.`,
@@ -322,7 +330,7 @@ function mismatchState(instance: ControlledInstance, desiredVersion: string, act
         actualVersion,
         true,
       )
-      : mismatchError(desiredVersion, actualVersion),
+      : mismatchError(desiredVersion, actualVersion)),
   };
 }
 
@@ -348,8 +356,11 @@ function convergenceError(
 
 function normalizeConvergenceError(error: unknown, expectedVersion: string, actualVersion?: string): RuntimeConvergenceError {
   if (error && typeof error === "object" && "code" in error && "message" in error) {
-    const candidate = error as { code: RuntimeConvergenceError["code"]; message: string; retryable?: boolean };
-    return convergenceError(candidate.code, candidate.message, expectedVersion, actualVersion, candidate.retryable ?? true);
+    const candidate = error as { code: unknown; message: unknown; retryable?: unknown };
+    const code = RuntimeConvergenceErrorSchema.shape.code.safeParse(candidate.code);
+    if (code.success && typeof candidate.message === "string") {
+      return convergenceError(code.data, candidate.message, expectedVersion, actualVersion, typeof candidate.retryable === "boolean" ? candidate.retryable : true);
+    }
   }
   return convergenceError(
     "INSTANCE_RUNTIME_INSTALL_FAILED",

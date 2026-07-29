@@ -1,5 +1,6 @@
 <template>
-  <div class="basic-settings-grid">
+  <ScrollArea class="basic-settings-scroll">
+    <div class="basic-settings-grid">
     <section v-if="desktopUpdatesAvailable" class="modal-section settings-panel-surface basic-panel server-update-panel desktop-update-panel">
       <div class="section-head">
         <span>{{ t("settings.appearance.desktopUpdates") }}</span>
@@ -88,7 +89,7 @@
         <span v-if="serverUpdateJob.error"> · {{ serverUpdateJob.error.message }}</span>
       </p>
     </section>
-    <section class="modal-section settings-panel-surface appearance-panel">
+    <section class="modal-section settings-panel-surface appearance-panel language-panel">
       <div class="section-head">
         <span>{{ t("common.language.label") }}</span>
         <div class="language-select">
@@ -101,7 +102,7 @@
       </div>
       <p class="section-description">{{ t("settings.appearance.languageDescription") }}</p>
     </section>
-    <section class="modal-section settings-panel-surface appearance-panel">
+    <section class="modal-section settings-panel-surface appearance-panel theme-panel">
       <div class="section-head">
         <span>{{ t("settings.appearance.theme") }}</span>
       </div>
@@ -117,7 +118,7 @@
         </Button>
       </div>
     </section>
-    <section class="modal-section settings-panel-surface appearance-panel">
+    <section class="modal-section settings-panel-surface appearance-panel public-access-panel">
       <div class="section-head">
         <span>{{ t("settings.publicAccess.title") }}</span>
       </div>
@@ -158,7 +159,8 @@
         <p v-if="triggerSettingsMessage" :class="triggerSettingsMessageError ? 'settings-error' : 'settings-success'">{{ triggerSettingsMessage }}</p>
       </div>
     </section>
-  </div>
+    </div>
+  </ScrollArea>
 </template>
 
 <script setup lang="ts">
@@ -169,6 +171,7 @@ import type { UpdateChannel, UpdateCheckResult, UpdateJob } from "../../../api/t
 import { Badge } from "../../../components/ui/badge";
 import type { ThemePreference } from "../../../utils/theme";
 import { Button } from "../../../components/ui/button";
+import { ScrollArea } from "../../../components/ui/scroll-area";
 import { useControlPlaneLocale, type LocalePreference } from "../../../i18n/index.ts";
 import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
@@ -257,13 +260,25 @@ const desktopUpdateSummary = computed(() => {
 </script>
 
 <style scoped>
+.basic-settings-scroll {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.basic-settings-scroll :deep([data-reka-scroll-area-viewport] > div) {
+  min-height: 100%;
+}
+
 .basic-settings-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(280px, 1fr));
+  grid-template-columns: minmax(280px, 4fr) minmax(420px, 8fr);
   align-items: start;
-  gap: 12px;
+  gap: 14px;
+  width: min(100%, 1280px);
   min-height: 0;
-  overflow: hidden;
+  margin: 0 auto;
+  padding: 0 10px 18px 0;
 }
 
 .server-update-panel {
@@ -361,6 +376,12 @@ const desktopUpdateSummary = computed(() => {
   align-content: start;
 }
 
+.basic-panel,
+.appearance-panel {
+  padding: 16px;
+}
+
+.public-access-panel,
 .composer-shortcuts-panel {
   grid-column: 1 / -1;
 }
@@ -377,8 +398,13 @@ const desktopUpdateSummary = computed(() => {
 .public-url-form label span,
 .composer-shortcuts-form label > span {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 750;
+}
+
+.section-head > span {
+  color: var(--text-strong);
+  font-size: 13px;
 }
 
 .section-head > span {
@@ -398,6 +424,15 @@ const desktopUpdateSummary = computed(() => {
 .composer-shortcuts-form {
   display: grid;
   gap: 10px;
+}
+
+.public-url-form {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+}
+
+.public-url-form > p {
+  grid-column: 1 / -1;
 }
 
 .public-url-form label,
@@ -468,7 +503,12 @@ const desktopUpdateSummary = computed(() => {
 @media (max-width: 780px) {
   .basic-settings-grid {
     grid-template-columns: 1fr;
-    overflow: visible;
+    padding-right: 8px;
+  }
+
+  .appearance-panel,
+  .composer-shortcuts-panel {
+    grid-column: auto;
   }
 
   .server-update-state {
@@ -479,7 +519,15 @@ const desktopUpdateSummary = computed(() => {
     grid-template-columns: 1fr;
   }
 
+  .public-url-form {
+    grid-template-columns: 1fr;
+  }
+
   .composer-shortcuts-form > p {
+    grid-column: auto;
+  }
+
+  .public-url-form > p {
     grid-column: auto;
   }
 }

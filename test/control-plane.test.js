@@ -6192,6 +6192,7 @@ test("controlled instance registration preserves the node-owned name after renam
 });
 
 test("register and heartbeat preserve authoritative convergence attempts and failures", async (t) => {
+  const desiredVersion = runtimeVersionStateForActual().desiredVersion;
   const app = await createNodeAgentApp({
     dataDir: tempDataDir("node-agent-convergence-report-preservation"),
     logger: false,
@@ -6218,14 +6219,14 @@ test("register and heartbeat preserve authoritative convergence attempts and fai
     status: "running",
     build: { component: "controlled-instance", packageVersion: "0.9.0" },
     runtimeVersion: {
-      desiredVersion: "1.0.0",
+      desiredVersion,
       actualVersion: "0.9.0",
       phase: "failed",
       attempt: 3,
       error: {
         code: "INSTANCE_RUNTIME_INSTALL_FAILED",
         message: "bounded retries exhausted",
-        expectedVersion: "1.0.0",
+        expectedVersion: desiredVersion,
         actualVersion: "0.9.0",
         retryable: false,
       },
@@ -6261,6 +6262,31 @@ test("register and heartbeat preserve authoritative convergence attempts and fai
   assert.equal(heartbeat.json().data.ready, false);
   assert.equal(heartbeat.json().data.runtimeVersion.phase, "failed");
   assert.equal(heartbeat.json().data.runtimeVersion.attempt, 3);
+
+  app.nodeAgentState.controlledInstances.put(ControlledInstanceSchema.parse({
+    ...app.nodeAgentState.controlledInstances.get("inst_attempts"),
+    runtimeVersion: {
+      desiredVersion,
+      actualVersion: "0.9.0",
+      phase: "pending",
+      attempt: 1,
+      error: {
+        code: "INSTANCE_RUNTIME_INSTALL_FAILED",
+        message: "docker cp could not find the launcher asset",
+        expectedVersion: desiredVersion,
+        actualVersion: "0.9.0",
+        retryable: true,
+      },
+    },
+  }));
+  const retryHeartbeat = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_attempts/heartbeat",
+    headers: { authorization: `Bearer ${registrationToken}` },
+    payload: { protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, appInventory: emptyAppInventory(), health: "ok", build: report.build },
+  });
+  assert.equal(retryHeartbeat.statusCode, 200, retryHeartbeat.body);
+  assert.equal(retryHeartbeat.json().data.runtimeVersion.error.message, "docker cp could not find the launcher asset");
 });
 
 test("node agent migrates legacy local stored endpoint-shaped instances on startup", async (t) => {

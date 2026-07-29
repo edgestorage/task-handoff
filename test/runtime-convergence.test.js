@@ -332,10 +332,58 @@ test("retry exhaustion is recorded as a permanent failure", async () => {
   assert.equal(updated.runtimeVersion.attempt, 2);
   assert.equal(updated.runtimeVersion.error.retryable, false);
   assert.match(updated.runtimeVersion.error.message, /exhausted 2 attempts/);
+  assert.match(updated.runtimeVersion.error.message, /Last error: registry unavailable/);
 
   const recovered = await coordinator.schedule("inst_runtime");
   assert.equal(installs, 2, "a permanently exhausted state must not start an unbounded retry loop");
   assert.equal(recovered.runtimeVersion.phase, "failed");
+});
+
+test("executor error codes outside the convergence protocol retain their message without invalidating state", async () => {
+  const store = memoryStore(instance());
+  const coordinator = new RuntimeConvergenceCoordinator(store, () => "2.0.0", {
+    async install() {
+      throw Object.assign(new Error("launcher asset does not exist"), { code: "ENOENT" });
+    },
+    async restart() {},
+  }, { maxAttempts: 1 });
+
+  const updated = await coordinator.schedule("inst_runtime");
+  assert.equal(updated.runtimeVersion.phase, "failed");
+  assert.equal(updated.runtimeVersion.error.code, "INSTANCE_RUNTIME_INSTALL_FAILED");
+  assert.match(updated.runtimeVersion.error.message, /launcher asset does not exist/);
+});
+
+test("an interrupted phase keeps the last concrete convergence error", async () => {
+  const previousError = {
+    code: "INSTANCE_RUNTIME_INSTALL_FAILED",
+    message: "docker cp could not find the launcher asset",
+    expectedVersion: "2.0.0",
+    actualVersion: "1.0.0",
+    retryable: true,
+  };
+  const store = memoryStore(instance({
+    ready: false,
+    runtimeVersion: {
+      desiredVersion: "2.0.0",
+      actualVersion: "1.0.0",
+      phase: "installing",
+      attempt: 1,
+      error: previousError,
+    },
+  }));
+  let observedError;
+  const coordinator = new RuntimeConvergenceCoordinator(store, () => "2.0.0", {
+    async install(value) {
+      observedError = value.runtimeVersion.error;
+      throw Object.assign(new Error("second install failed"), { code: "ENOENT" });
+    },
+    async restart() {},
+  }, { maxAttempts: 2, retryBaseDelayMs: 0, delay: async () => {} });
+
+  const updated = await coordinator.schedule("inst_runtime");
+  assert.equal(observedError.message, previousError.message);
+  assert.match(updated.runtimeVersion.error.message, /Last error: second install failed/);
 });
 
 test("non-retryable failures stop immediately", async () => {

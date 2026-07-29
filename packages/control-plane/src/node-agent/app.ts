@@ -197,21 +197,23 @@ function runtimeVersionStateForReport(instance: ControlledInstance, actualVersio
   const desiredVersion = packageVersion();
   const current = instance.runtimeVersion;
   if (!current || current.desiredVersion !== desiredVersion) return runtimeVersionStateForActual(actualVersion);
+  const reportedMismatchError = () => ({
+    code: "INSTANCE_RUNTIME_VERSION_MISMATCH" as const,
+    message: `Expected controlled-instance ${desiredVersion}, received ${actualVersion || "an unknown version"}.`,
+    expectedVersion: desiredVersion,
+    ...(actualVersion ? { actualVersion } : {}),
+    retryable: true,
+  });
+  const pendingError = current.error?.code !== "INSTANCE_RUNTIME_VERSION_MISMATCH"
+    ? current.error
+    : actualVersion === desiredVersion
+      ? undefined
+      : reportedMismatchError();
   return RuntimeVersionStateSchema.parse({
     ...current,
     desiredVersion,
     ...(actualVersion ? { actualVersion } : { actualVersion: undefined }),
-    ...(current.phase === "pending" && actualVersion !== desiredVersion
-      ? { error: {
-          code: "INSTANCE_RUNTIME_VERSION_MISMATCH",
-          message: `Expected controlled-instance ${desiredVersion}, received ${actualVersion || "an unknown version"}.`,
-          expectedVersion: desiredVersion,
-          ...(actualVersion ? { actualVersion } : {}),
-          retryable: true,
-        } }
-      : current.phase === "pending"
-        ? { error: undefined }
-        : {}),
+    ...(current.phase === "pending" ? { error: pendingError || (actualVersion !== desiredVersion ? reportedMismatchError() : undefined) } : {}),
   });
 }
 

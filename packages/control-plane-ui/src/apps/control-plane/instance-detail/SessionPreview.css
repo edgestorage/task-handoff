@@ -1107,6 +1107,10 @@
   background: var(--surface-raised);
 }
 
+.session-preview-actions {
+  background: color-mix(in srgb, var(--terminal-bg) 88%, var(--surface-raised));
+}
+
 .session-preview-body {
   background:
     linear-gradient(var(--workspace-grid) 1px, transparent 1px),
