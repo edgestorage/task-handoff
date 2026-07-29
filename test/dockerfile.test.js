@@ -96,6 +96,7 @@ test("Docker tag builds inject the release version while branch builds keep the 
   assert.match(workflow, /diagnostics\.runtime\.linuxRuntime/);
   assert.doesNotMatch(workflow, /payload\.build/);
   assert.match(dockerfile, /ARG TASK_HANDOFF_VERSION=0\.0\.1/);
+  assert.match(dockerfile, /FROM node:24-bookworm-slim AS runtime-base[\s\S]*ARG TASK_HANDOFF_VERSION=0\.0\.1[\s\S]*ENV TASK_HANDOFF_VERSION=\$\{TASK_HANDOFF_VERSION\}/);
   assert.match(dockerfile, /LABEL org\.opencontainers\.image\.version=\$\{TASK_HANDOFF_VERSION\}/);
 });
 
