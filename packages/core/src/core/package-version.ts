@@ -51,5 +51,11 @@ export function resolvePackageVersion(packageName: string, env: NodeJS.ProcessEn
 }
 
 export function packageVersionResolver(packageName: string, env: NodeJS.ProcessEnv = process.env) {
-  return () => resolvePackageVersion(packageName, env);
+  let resolvedVersion: string | undefined;
+  return () => {
+    const explicitVersion = env.TASK_HANDOFF_VERSION?.trim();
+    if (explicitVersion) return explicitVersion;
+    resolvedVersion ||= resolvePackageVersion(packageName, env);
+    return resolvedVersion;
+  };
 }

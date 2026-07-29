@@ -182,12 +182,19 @@ test("server update CLI preserves configuration and restart ordering", () => {
 });
 
 test("runtime package versions use one resolver for explicit, bundled, and workspace builds", async () => {
-  const { resolvePackageVersion } = await import("../packages/core/src/core/package-version.ts");
+  const { packageVersionResolver, resolvePackageVersion } = await import("../packages/core/src/core/package-version.ts");
   const nodeAgent = fs.readFileSync(path.join(root, "packages", "control-plane", "src", "node-agent", "app.ts"), "utf8");
   assert.match(nodeAgent, /packageVersionResolver\("@task-handoff\/node-agent"\)/);
   assert.equal(resolvePackageVersion("@task-handoff/cli", { TASK_HANDOFF_VERSION: " 9.8.7 " }), "9.8.7");
   assert.equal(resolvePackageVersion("@task-handoff/cli", {}), "0.0.1");
   assert.equal(resolvePackageVersion("@task-handoff/controlled-instance", {}), "1.0.0");
+  const resolverEnv = {};
+  const cachedResolver = packageVersionResolver("@task-handoff/cli", resolverEnv);
+  assert.equal(cachedResolver(), "0.0.1");
+  resolverEnv.TASK_HANDOFF_VERSION = " 9.8.7 ";
+  assert.equal(cachedResolver(), "9.8.7");
+  delete resolverEnv.TASK_HANDOFF_VERSION;
+  assert.equal(cachedResolver(), "0.0.1");
 
   const packagedRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-package-version-"));
   const packagedBin = path.join(packagedRoot, "bin", "task-handoff-control-plane");
