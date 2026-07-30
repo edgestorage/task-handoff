@@ -969,7 +969,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   appRuntime.on("updated", (session) => publishAppSessionRuntimeChange("app-session-updated", session));
   appRuntime.on("deleted", (session) => publishAppSessionRuntimeChange("app-session-deleted", session));
   app.addHook("onClose", async () => {
-    appRuntime.stopAll();
+    await appRuntime.stopAll();
   });
 
   const noVncRoot = resolveNoVncRoot();

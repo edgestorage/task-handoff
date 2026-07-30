@@ -10,7 +10,7 @@ import {
 } from "./ai-sessions.ts";
 import { TriggerConfigSchema, TriggerDeploymentSchema, TriggerRunSchema, TriggerRuntimeStateSchema } from "./triggers.ts";
 
-export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-07-29";
+export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-07-30";
 export const MARKET_CATALOG_PROTOCOL_VERSION = "2026-07-29";
 // The local value follows the date-only convention. Parsing remains permissive
 // so persisted records written before that convention do not disappear.
@@ -1185,6 +1185,7 @@ export const ControlledInstanceSchema = z
     imageSnapshot: InstanceImageSnapshotSchema.optional(),
     imageProvisioning: ImageProvisioningSchema.optional(),
     stateRevision: z.number().int().min(0).default(0),
+    processIncarnationId: z.string().trim().min(1).max(120).optional(),
     status: z.enum(["created", "provisioning", "starting", "registering", "registered", "running", "stopping", "stopped", "failed", "unhealthy"]).default("created"),
     health: z.enum(["unknown", "ok", "degraded", "failed"]).default("unknown"),
     connectionStatus: z.enum(["unknown", "online", "offline", "endpoint-unreachable"]).default("unknown"),
@@ -1663,6 +1664,7 @@ export const ControlledInstanceRegisterSchema = z
     target: InstanceTargetSchema.default({ strategy: "direct-port", status: "unknown" }),
     workspace: WorkspaceStatusSchema.default({ status: "unknown" }),
     registrationToken: z.string().trim().max(240).optional(),
+    processIncarnationId: z.string().trim().min(1).max(120).optional(),
   })
   .strict()
   .superRefine((value, context) => {
@@ -1684,6 +1686,7 @@ export const ControlledInstanceHeartbeatSchema = z
     triggers: ControlledInstanceSchema.shape.triggers.optional(),
     workspace: WorkspaceStatusSchema.optional(),
     target: InstanceTargetSchema.partial().optional(),
+    processIncarnationId: z.string().trim().min(1).max(120).optional(),
   })
   .strict()
   .superRefine((value, context) => {
@@ -1706,7 +1709,7 @@ export function sanitizeCrossVersionControlledInstanceRegister(
   const knownKeys = [
     "instanceId", "projectId", "source", "nodeId", "runtimeId", "imageSelection",
     "instanceVersion", "protocolVersion", "build", "controlMode", "capabilities", "appInventory",
-    "target", "workspace", "registrationToken",
+    "target", "workspace", "registrationToken", "processIncarnationId",
   ];
   const acceptedKeys = new Set([...knownKeys, "imageId"]);
   for (const key of Object.keys(source)) {
@@ -1728,7 +1731,7 @@ export function sanitizeCrossVersionControlledInstanceHeartbeat(
   if (!input || typeof input !== "object" || Array.isArray(input)) return input;
   const knownKeys = [
     "status", "health", "protocolVersion", "build", "capabilities", "appInventory", "apps",
-    "aiSessions", "triggers", "workspace", "target",
+    "aiSessions", "triggers", "workspace", "target", "processIncarnationId",
   ];
   const acceptedKeys = new Set(knownKeys);
   for (const key of Object.keys(input)) {
@@ -1877,6 +1880,9 @@ export type ApplyUpdateRequest = z.infer<typeof ApplyUpdateRequestSchema>;
 export type UpdateCheckResult = z.infer<typeof UpdateCheckResultSchema>;
 export type UpdateJob = z.infer<typeof UpdateJobSchema>;
 export type ControlledInstance = z.infer<typeof ControlledInstanceSchema>;
+export function controlledInstanceAcceptsTraffic(instance: Pick<ControlledInstance, "ready" | "runtimeVersion">) {
+  return instance.ready !== false && (!instance.runtimeVersion || instance.runtimeVersion.phase === "matched");
+}
 export type InstanceAppInventory = z.infer<typeof InstanceAppInventorySchema>;
 export type InstanceAppInventoryItem = z.infer<typeof InstanceAppInventoryItemSchema>;
 export type FinalComputerPlatform = z.infer<typeof FinalComputerPlatformSchema>;

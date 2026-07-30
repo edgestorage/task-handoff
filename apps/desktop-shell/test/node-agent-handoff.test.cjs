@@ -1,0 +1,138 @@
+const assert = require("node:assert/strict");
+const test = require("node:test");
+const { stopExistingDesktopNodeAgent } = require("../src/node-agent-handoff.cjs");
+
+function owner(overrides = {}) {
+  return {
+    component: "node-agent",
+    pid: 1234,
+    dataDir: "/desktop/node-agent",
+    token: "owner-token",
+    startIdentity: "test:owner-start",
+    ...overrides,
+  };
+}
+
+test("desktop stops the previous node agent for its own data directory", async () => {
+  const existing = owner();
+  let alive = true;
+  const signals = [];
+  const result = await stopExistingDesktopNodeAgent({
+    dataDir: "/desktop/node-agent",
+    readOwner: () => alive ? existing : undefined,
+    isAlive: () => alive,
+    processIdentity: () => existing.startIdentity,
+    signal: (_pid, signal) => {
+      signals.push(signal);
+      alive = false;
+    },
+    wait: async () => {},
+  });
+
+  assert.equal(result.status, "stopped");
+  assert.deepEqual(signals, ["SIGTERM"]);
+});
+
+test("desktop never stops a node agent owned by another data directory", async () => {
+  const existing = owner({ dataDir: "/server/node-agent" });
+  const signals = [];
+  const result = await stopExistingDesktopNodeAgent({
+    dataDir: "/desktop/node-agent",
+    readOwner: () => existing,
+    isAlive: () => true,
+    processIdentity: () => existing.startIdentity,
+    signal: (_pid, signal) => signals.push(signal),
+  });
+
+  assert.equal(result.status, "foreign");
+  assert.deepEqual(signals, []);
+});
+
+test("desktop force-stops the same owner when graceful shutdown times out", async () => {
+  const existing = owner();
+  let alive = true;
+  const signals = [];
+  const result = await stopExistingDesktopNodeAgent({
+    dataDir: "/desktop/node-agent",
+    readOwner: () => alive ? existing : undefined,
+    isAlive: () => alive,
+    processIdentity: () => existing.startIdentity,
+    signal: (_pid, signal) => {
+      signals.push(signal);
+      if (signal === "SIGKILL") alive = false;
+    },
+    wait: async () => {},
+    gracefulTimeoutMs: 0,
+    forceTimeoutMs: 1,
+  });
+
+  assert.equal(result.status, "forced");
+  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+});
+
+test("desktop does not force a replacement lock owner", async () => {
+  const existing = owner();
+  const replacement = owner({ pid: 5678, token: "replacement-token" });
+  let reads = 0;
+  const signals = [];
+  const result = await stopExistingDesktopNodeAgent({
+    dataDir: "/desktop/node-agent",
+    readOwner: () => reads++ === 0 ? existing : replacement,
+    isAlive: () => true,
+    processIdentity: () => existing.startIdentity,
+    signal: (_pid, signal) => signals.push(signal),
+    wait: async () => {},
+    gracefulTimeoutMs: 0,
+  });
+
+  assert.equal(result.status, "stopped");
+  assert.deepEqual(signals, ["SIGTERM"]);
+});
+
+test("desktop never signals a reused pid from a stale node-agent lock", async () => {
+  const existing = owner();
+  const signals = [];
+  const result = await stopExistingDesktopNodeAgent({
+    dataDir: "/desktop/node-agent",
+    readOwner: () => existing,
+    isAlive: () => true,
+    processIdentity: () => "test:replacement-start",
+    signal: (_pid, signal) => signals.push(signal),
+  });
+
+  assert.equal(result.status, "stale");
+  assert.deepEqual(signals, []);
+});
+
+test("desktop refuses to signal an owner whose process identity cannot be read", async () => {
+  const existing = owner();
+  const signals = [];
+  const result = await stopExistingDesktopNodeAgent({
+    dataDir: "/desktop/node-agent",
+    readOwner: () => existing,
+    isAlive: () => true,
+    processIdentity: () => undefined,
+    signal: (_pid, signal) => signals.push(signal),
+  });
+
+  assert.equal(result.status, "unverified");
+  assert.deepEqual(signals, []);
+});
+
+test("desktop revalidates process identity before forcing a timed-out owner", async () => {
+  const existing = owner();
+  const signals = [];
+  let identityReads = 0;
+  const result = await stopExistingDesktopNodeAgent({
+    dataDir: "/desktop/node-agent",
+    readOwner: () => existing,
+    isAlive: () => true,
+    processIdentity: () => identityReads++ === 0 ? existing.startIdentity : "test:replacement-start",
+    signal: (_pid, signal) => signals.push(signal),
+    wait: async () => {},
+    gracefulTimeoutMs: 0,
+  });
+
+  assert.equal(result.status, "stopped");
+  assert.deepEqual(signals, ["SIGTERM"]);
+});

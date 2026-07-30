@@ -70,3 +70,29 @@ export function packageVersionResolver(
     return resolvedVersion;
   };
 }
+
+/**
+ * Resolves the version from the package that owns the running executable.
+ * Managed application runtimes can be replaced without rebuilding their base
+ * image, so an image-level TASK_HANDOFF_VERSION is not authoritative for them.
+ */
+export function executablePackageVersionResolver(
+  packageName: string,
+  env: NodeJS.ProcessEnv = process.env,
+  workspacePackageName = packageName,
+) {
+  const executableEnv = { ...env };
+  delete executableEnv.TASK_HANDOFF_VERSION;
+  return packageVersionResolver(packageName, executableEnv, workspacePackageName);
+}
+
+/**
+ * Resolves the controlled-instance release that is actually being executed.
+ * A Local Runtime is bundled inside the node-agent executable, so its launcher
+ * materializes that outer release explicitly. Replaceable managed artifacts
+ * omit the override and continue to use their own manifest.
+ */
+export function controlledInstancePackageVersionResolver(env: NodeJS.ProcessEnv = process.env) {
+  const executableResolver = executablePackageVersionResolver("@task-handoff/controlled-instance", env);
+  return () => env.TASK_HANDOFF_CONTROLLED_INSTANCE_VERSION?.trim() || executableResolver();
+}

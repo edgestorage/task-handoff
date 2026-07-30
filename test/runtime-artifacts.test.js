@@ -12,7 +12,6 @@ const {
   computeRuntimePayloadSha256,
   installRuntimeArtifact,
   readRuntimeArtifactManifest,
-  rollbackRuntimeRelease,
   runtimeReleaseKey,
   switchCurrentRuntime,
   validateExtractedRuntimeArtifact,
@@ -290,7 +289,7 @@ test("Windows current junction switching supports consecutive updates", async ()
   }
 });
 
-test("installer keeps current atomic, reuses valid releases, quarantines corruption, and rolls back", async () => {
+test("installer keeps current atomic, reuses valid releases, and quarantines corruption", async () => {
   const oldArtifact = await fixture("1.0.0");
   const newArtifact = await fixture("1.1.0");
   const oldRelease = runtimeReleaseKey(oldArtifact.identity);
@@ -304,16 +303,14 @@ test("installer keeps current atomic, reuses valid releases, quarantines corrupt
     );
     assert.match(await fs.readlink(path.join(runtimeRoot, "current")), new RegExp(`${oldRelease}$`));
 
-    const installed = await installRuntimeArtifact({ archivePath: newArtifact.archivePath, identity: newArtifact.identity, runtimeRoot, launcherAbi: 1 });
-    assert.equal(installed.previousVersion, "1.0.0");
+    await installRuntimeArtifact({ archivePath: newArtifact.archivePath, identity: newArtifact.identity, runtimeRoot, launcherAbi: 1 });
     assert.match(await fs.readlink(path.join(runtimeRoot, "current")), new RegExp(`${newRelease}$`));
     assert.equal((await installRuntimeArtifact({ archivePath: newArtifact.archivePath, identity: newArtifact.identity, runtimeRoot, launcherAbi: 1 })).reused, true);
 
     await fs.writeFile(path.join(runtimeRoot, "releases", newRelease, "dist", "controlled-instance-cli.js"), "corrupt\n");
     assert.equal((await installRuntimeArtifact({ archivePath: newArtifact.archivePath, identity: newArtifact.identity, runtimeRoot, launcherAbi: 1 })).reused, false);
     assert.ok((await fs.readdir(path.join(runtimeRoot, "quarantine"))).some((name) => name.startsWith("1.1.0-linux-x64")));
-    assert.equal(await rollbackRuntimeRelease(runtimeRoot), "1.0.0");
-    assert.match(await fs.readlink(path.join(runtimeRoot, "current")), new RegExp(`${oldRelease}$`));
+    assert.ok(await fs.stat(path.join(runtimeRoot, "releases", oldRelease)).then((stats) => stats.isDirectory()));
   } finally {
     await oldArtifact.cleanup();
     await newArtifact.cleanup();
@@ -340,7 +337,7 @@ test("launcher ABI incompatibility is structured and leaves active release uncha
   }
 });
 
-test("same-version development artifacts install and roll back by exact SHA-256 identity", async () => {
+test("same-version development artifacts retain exact SHA-256 release identities", async () => {
   const first = await fixture("0.0.1", { payloadMarker: "first" });
   const second = await fixture("0.0.1", { payloadMarker: "second" });
   const runtimeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "runtime-same-version-"));
@@ -349,8 +346,7 @@ test("same-version development artifacts install and roll back by exact SHA-256 
     await installRuntimeArtifact({ archivePath: second.archivePath, identity: second.identity, runtimeRoot, launcherAbi: 1 });
     assert.equal((await readRuntimeArtifactManifest(path.join(runtimeRoot, "current"))).sha256, second.identity.sha256);
     assert.equal((await fs.readdir(path.join(runtimeRoot, "releases"))).length, 2);
-    assert.equal(await rollbackRuntimeRelease(runtimeRoot), "0.0.1");
-    assert.equal((await readRuntimeArtifactManifest(path.join(runtimeRoot, "current"))).sha256, first.identity.sha256);
+    assert.ok(await fs.stat(path.join(runtimeRoot, "releases", runtimeReleaseKey(first.identity))).then((stats) => stats.isDirectory()));
   } finally {
     await first.cleanup();
     await second.cleanup();

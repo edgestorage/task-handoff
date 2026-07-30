@@ -223,7 +223,7 @@ test("node-agent queues start while pulling and runs the container when the imag
         available = true;
         return { stdout: "pulled", stderr: "" };
       }
-      if (args[0] === "start") throw new Error("missing container");
+      if (args[0] === "inspect" && args[1] === "--format" && args[2] === "{{json .}}") throw new Error("No such container");
       if (args[0] === "run") return { stdout: "container-queued", stderr: "" };
       if (args[0] === "port") return { stdout: "127.0.0.1:18080", stderr: "" };
       return { stdout: "", stderr: "" };
@@ -451,14 +451,14 @@ test("node-agent restart migrates and resumes persisted image provisioning witho
         available = true;
         return { stdout: "pulled", stderr: "" };
       }
-      if (args[0] === "start") throw new Error("missing container");
+      if (args[0] === "inspect" && args[1] === "--format" && args[2] === "{{json .}}") throw new Error("No such container");
       if (args[0] === "run") return { stdout: "container-restored", stderr: "" };
       if (args[0] === "port") return { stdout: "127.0.0.1:18081", stderr: "" };
       return { stdout: "", stderr: "" };
     },
   });
   t.after(() => restored.close());
-  await restored.nodeAgentRestoreLocalInstances();
+  await restored.nodeAgentRestoreManagedInstances();
   const ready = await waitFor(() => {
     const instance = restored.nodeAgentState.controlledInstances.get("inst_restore");
     return instance?.runtime.containerId === "container-restored" ? instance : undefined;

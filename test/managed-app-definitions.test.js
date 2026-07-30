@@ -176,6 +176,7 @@ test("Codex runtime removes a pre-existing fixed socket and only reuses its own 
       fs.writeFileSync(socketPath, "controlled-instance-socket");
       return child;
     },
+    stopProcessTree: (candidate) => candidate.kill("SIGTERM"),
     waitForUnixSocket: (candidate) => assert.equal(fs.readFileSync(candidate, "utf8"), "controlled-instance-socket"),
     patchSession: () => {},
   });
@@ -209,6 +210,7 @@ test("managed app providers own their program-specific runtime hooks", () => {
     allocatePort: () => 8101,
     hasCommand: () => true,
     spawnLogged: () => { throw new Error("not used"); },
+    stopProcessTree: () => {},
     waitForUnixSocket: () => {},
     patchSession: () => {},
   };

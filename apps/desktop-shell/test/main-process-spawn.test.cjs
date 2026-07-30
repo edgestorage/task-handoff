@@ -18,6 +18,13 @@ test("desktop passes its authoritative package version to both server child proc
   assert.equal((main.match(/version: app\.getVersion\(\),/g) || []).length, 2);
 });
 
+test("desktop owns a single Electron process and focuses it on repeated launches", () => {
+  const main = fs.readFileSync(path.join(__dirname, "../src/main.cjs"), "utf8");
+  assert.match(main, /app\.requestSingleInstanceLock\(\)/);
+  assert.match(main, /app\.on\("second-instance"/);
+  assert.match(main, /mainWindow\.focus\(\)/);
+});
+
 test("desktop child supervision reports output, spawn failures, and exits", () => {
   const child = fakeChild();
   const info = [];

@@ -20,6 +20,7 @@ const {
   resolveDesktopProcessCwd,
   resolveDesktopRuntimeRoot,
   resolveNodeAgentControlEndpoint,
+  resolveNodeAgentDataDir,
   resolveNodeAgentHost,
   resolveNodeAgentPort,
   resolveNodeCommand,
@@ -27,6 +28,7 @@ const {
 } = require("./config.cjs");
 const { createDesktopUpdater } = require("./updater.cjs");
 const { superviseDesktopChild } = require("./child-process.cjs");
+const { stopExistingDesktopNodeAgent } = require("./node-agent-handoff.cjs");
 const { applyDesktopDockIcon, desktopIconPath: resolveDesktopIconPath } = require("./icon.cjs");
 const { applyWindowsTitleBarTheme, desktopTitleBarOptions, desktopWindowChromeMode } = require("./window-chrome.cjs");
 
@@ -798,6 +800,22 @@ async function boot() {
   if (desktopFileLoggingEnabled()) {
     logInfo(`[desktop-shell] writing desktop logs to ${resolveDesktopLogFile()}`);
   }
+  const nodeAgentDataDir = resolveNodeAgentDataDir();
+  const previousNodeAgent = await stopExistingDesktopNodeAgent({
+    dataDir: nodeAgentDataDir,
+    logInfo,
+    logError,
+  });
+  if (previousNodeAgent.status === "foreign") {
+    throw new Error(
+      `A node agent outside this Desktop installation is already running pid=${previousNodeAgent.owner.pid} dataDir=${previousNodeAgent.owner.dataDir}.`,
+    );
+  }
+  if (previousNodeAgent.status === "unverified") {
+    throw new Error(
+      `The existing Desktop node agent pid=${previousNodeAgent.owner.pid} could not be verified and was not stopped.`,
+    );
+  }
   const url = controlPlaneUrl();
   const nodeAgentHost = resolveNodeAgentHost();
   const nodeAgentPort = await findAvailablePort(nodeAgentHost, resolveNodeAgentPort());
@@ -873,40 +891,54 @@ ipcMain.handle("task-handoff:desktop-update-open-release", () => {
   return shell.openExternal(url);
 });
 
-app.whenReady().then(() => {
-  setDesktopDockIcon();
-  desktopUpdater = createDesktopUpdater({
-    app,
-    autoUpdater,
-    BrowserWindow,
-    logInfo,
-    logError,
-    install: stopDesktopServices,
+const ownsDesktopInstanceLock = app.requestSingleInstanceLock();
+
+if (!ownsDesktopInstanceLock) {
+  logInfo("[desktop-shell] another Desktop process already owns the application lock; exiting");
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
   });
-  desktopUpdater.start();
-  void boot().catch((error) => {
-    dialog.showErrorBox("TaskHandoff failed to start", error instanceof Error ? error.message : String(error));
-    app.quit();
+
+  app.whenReady().then(() => {
+    setDesktopDockIcon();
+    desktopUpdater = createDesktopUpdater({
+      app,
+      autoUpdater,
+      BrowserWindow,
+      logInfo,
+      logError,
+      install: stopDesktopServices,
+    });
+    desktopUpdater.start();
+    void boot().catch((error) => {
+      dialog.showErrorBox("TaskHandoff failed to start", error instanceof Error ? error.message : String(error));
+      app.quit();
+    });
   });
-});
 
-app.on("activate", () => {
-  if (!mainWindow) {
-    createWindow(controlPlaneUrl());
-  }
-});
+  app.on("activate", () => {
+    if (!mainWindow) {
+      createWindow(controlPlaneUrl());
+    }
+  });
 
-app.on("before-quit", () => {
-  desktopUpdater?.stop();
-  void stopDesktopServices();
-  if (desktopLogStream) {
-    desktopLogStream.end();
-    desktopLogStream = undefined;
-  }
-});
+  app.on("before-quit", () => {
+    desktopUpdater?.stop();
+    void stopDesktopServices();
+    if (desktopLogStream) {
+      desktopLogStream.end();
+      desktopLogStream = undefined;
+    }
+  });
 
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") {
-    app.quit();
-  }
-});
+  app.on("window-all-closed", () => {
+    if (process.platform !== "darwin") {
+      app.quit();
+    }
+  });
+}

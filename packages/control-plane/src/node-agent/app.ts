@@ -107,7 +107,9 @@ declare module "fastify" {
     nodeAgentRuntimeMetrics?: DockerRuntimeMetricsCollector;
     nodeAgentReverseTunnels?: ReturnType<typeof createReverseTunnelManager>;
     nodeAgentListenerManager?: NodeAgentExternalListenerManager;
-    nodeAgentRestoreLocalInstances?: () => Promise<void>;
+    nodeAgentRestoreManagedInstances?: () => Promise<void>;
+    nodeAgentRecoverManagedInstances?: () => Promise<void>;
+    nodeAgentStartRecoverySupervisor?: () => void;
   }
 
   interface FastifyRequest {
@@ -555,6 +557,12 @@ function throwForbidden(code: string, message: string): never {
   throw error;
 }
 
+function throwConflict(code: string, message: string): never {
+  const error = new Error(message);
+  Object.assign(error, { statusCode: 409, code });
+  throw error;
+}
+
 function warnProtocolVersion(protocolVersion: string, peer: string) {
   if (protocolVersion === CONTROL_PLANE_PROTOCOL_VERSION) return;
   console.warn(JSON.stringify({
@@ -925,7 +933,6 @@ type ManagedRuntimeAdapter = RuntimeAdapter & {
   artifactTarget(context?: ExecutorContext): Promise<{ platform: string; arch: string; launcherAbi: number }>;
   installRuntime(context: ExecutorContext, artifact: ResolvedRuntimeArtifact): Promise<void>;
   inspectRuntime(context: ExecutorContext, expected: RuntimeArtifactIdentity): Promise<boolean>;
-  rollbackRuntime(context: ExecutorContext, previousVersion?: string): Promise<void>;
 };
 
 function isManagedRuntimeAdapter(adapter: RuntimeAdapter): adapter is ManagedRuntimeAdapter {
@@ -966,12 +973,6 @@ class DockerRuntimeAdapter implements RuntimeAdapter {
     const containerName = context.instance.runtime.containerName;
     if (!containerName) return false;
     return runtimeArtifactIdentityMatches(await this.executor.inspectRuntimeVersion(containerName), expected);
-  }
-
-  async rollbackRuntime(context: ExecutorContext, _previousVersion?: string) {
-    const containerName = context.instance.runtime.containerName;
-    if (!containerName) return;
-    await this.executor.rollbackRuntime(containerName);
   }
 
   start(context: ExecutorContext) {
@@ -1038,6 +1039,12 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
   }
 
   async start(context: ExecutorContext): Promise<ExecutorStartResult> {
+    // A Local Runtime is a host-user singleton and may outlive the node-agent
+    // that launched it (for example when Desktop is terminated before the
+    // node-agent finishes its graceful shutdown). Verify and stop that
+    // previously owned process before launching the controlled-instance
+    // bundled with the current node-agent.
+    await stopLocalProcess(context.instance, this.processByInstanceId, this.lockPath);
     const workspacePath = localWorkspacePath(context.instance);
     const port = context.instance.runtime.port || await allocateLocalPort();
     const dataDir = path.join(this.paths.dataDir, "local-instances", context.instance.id);
@@ -1056,6 +1063,7 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
         ...process.env,
         TASK_HANDOFF_CONTROL_MODE: "controlled",
         TASK_HANDOFF_RUNTIME_KIND: "local",
+        TASK_HANDOFF_CONTROLLED_INSTANCE_VERSION: packageVersion(),
         ...(this.lockPath ? { TASK_HANDOFF_LOCAL_CONTROLLED_INSTANCE_LOCK_PATH: this.lockPath } : {}),
         TASK_HANDOFF_NODE_AGENT_URL: this.nodeAgentUrl(),
         TASK_HANDOFF_INSTANCE_ID: context.instance.id,
@@ -1892,6 +1900,9 @@ class NodeAgentState {
       throw error;
     }
     this.validateInstanceReport(existing, parsed, token);
+    if (parsed.processIncarnationId && parsed.processIncarnationId === existing.processIncarnationId) {
+      return existing;
+    }
     warnProtocolVersion(parsed.protocolVersion, `Instance ${id}`);
     const actualVersion = parsed.build?.packageVersion || parsed.instanceVersion;
     const managedArtifacts = runtimeUsesManagedArtifacts(this.requireRuntime(existing.runtimeId));
@@ -1912,6 +1923,7 @@ class NodeAgentState {
       instanceVersion: parsed.instanceVersion,
       build: parsed.build,
       runtimeVersion,
+      processIncarnationId: parsed.processIncarnationId || existing.processIncarnationId,
       capabilities: parsed.capabilities,
       appInventory: parsed.appInventory,
       workspace: parsed.workspace,
@@ -1927,6 +1939,12 @@ class NodeAgentState {
     const current = this.requireInstance(id);
     this.validateInstanceToken(current, token);
     const parsed = ControlledInstanceHeartbeatSchema.parse(input);
+    if (current.processIncarnationId && parsed.processIncarnationId && parsed.processIncarnationId !== current.processIncarnationId) {
+      throwConflict(
+        "INSTANCE_PROCESS_INCARNATION_MISMATCH",
+        `Instance ${id} report belongs to an obsolete controlled-instance process.`,
+      );
+    }
     warnProtocolVersion(parsed.protocolVersion, `Instance ${id}`);
     const timestamp = now();
     const mergedTarget = parsed.target ? { ...current.target, ...parsed.target } : current.target;
@@ -1947,6 +1965,7 @@ class NodeAgentState {
       ready: authoritativeReady && parsed.health !== "failed",
       health: actualVersion === packageVersion() ? parsed.health || current.health : "degraded",
       runtimeVersion,
+      processIncarnationId: parsed.processIncarnationId || current.processIncarnationId,
       agentStatus: "online",
       targetStatus,
       uiAccessStatus: targetStatus,
@@ -2507,7 +2526,6 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       const current = state.requireInstance(instance.id);
       state.controlledInstances.put(mergeRuntimeLifecycleResult(restartBoundary, current, result));
     },
-    rollback: async (instance) => requireManagedAdapterForInstance(instance).rollbackRuntime(state.context(instance)),
     onForcedDrain: (instance) => app.log.warn({ instanceId: instance.id }, "runtime convergence drain deadline reached; restarting instance"),
   }, {
     drainTimeoutMs: Number(process.env.TASK_HANDOFF_RUNTIME_DRAIN_TIMEOUT_MS) || undefined,
@@ -2519,11 +2537,6 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     state.updateJobs.reconcileRollouts(state.listInstances(), packageVersion());
   });
   eventForwarder.start();
-  for (const instance of state.listInstances()) {
-    if (usesManagedArtifact(instance) && !["created", "stopped", "failed", "provisioning"].includes(instance.status)) {
-      void convergence.schedule(instance.id).catch((error) => app.log.error({ instanceId: instance.id, error }, "runtime convergence recovery failed"));
-    }
-  }
   app.decorate("nodeAgentEventForwarder", eventForwarder);
   const runtimeMetrics = new DockerRuntimeMetricsCollector(
     dockerCommandRunner,
@@ -2543,6 +2556,8 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     diagnostic: logDiagnostic,
     warn: (data, message) => app.log.warn(data, message),
   };
+  const restoredInstances = new Set<string>();
+  const restoreErrors = new Map<string, string>();
   const sanitizeCrossVersionInstanceReport = (instanceId: string, report: "register" | "heartbeat", input: unknown) => {
     const protocolVersion = input && typeof input === "object" && !Array.isArray(input)
       ? (input as Record<string, unknown>).protocolVersion
@@ -2581,6 +2596,8 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
         eventForwarder.syncNow();
         return started;
       }
+      restoredInstances.add(id);
+      restoreErrors.delete(id);
       let instance = state.requireInstance(id);
       if (usesManagedArtifact(instance)) {
         try {
@@ -2802,33 +2819,94 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     }
   });
 
+  let recoveryTimer: ReturnType<typeof setTimeout> | undefined;
+  let recoverySupervisorStarted = false;
+  let recoverySupervisorStopped = false;
   app.addHook("onClose", async () => {
+    recoverySupervisorStopped = true;
+    if (recoveryTimer) clearTimeout(recoveryTimer);
     runtimeMetrics.stop();
     eventForwarder.stop();
     for (const instance of state.listInstances()) convergence.cancel(instance.id);
     await stopLocalInstancesForNodeAgentShutdown(state, runtimeAdapters);
   });
 
-  const restoreLocalInstances = async () => {
+  const restoreManagedInstances = async () => {
     for (const instance of state.listInstances().filter((item) => ["provisioning", "starting"].includes(item.status) && item.imageProvisioning?.phase !== "ready" && state.requireRuntime(item.runtimeId).type === "docker")) {
       provisionInstanceImage(instance);
     }
     const instances = state.listInstances().filter((instance) => {
+      if (restoredInstances.has(instance.id)) return false;
       const runtime = state.requireRuntime(instance.runtimeId);
-      return runtime.type === "local" && RESTORABLE_LOCAL_INSTANCE_STATUSES.has(instance.status);
+      if (runtime.type === "local") return RESTORABLE_LOCAL_INSTANCE_STATUSES.has(instance.status);
+      if (runtime.type !== "docker") return false;
+      return RESTORABLE_LOCAL_INSTANCE_STATUSES.has(instance.status)
+        || (instance.status === "provisioning" && instance.imageProvisioning?.phase === "ready");
     });
     for (const instance of instances) {
       try {
         await startNodeInstance(state, runtimeAdapters, fetchImpl, instance.id, lifecycleLoggers, "restore");
         await autoImportAgentConfig(fetchImpl, state.requireInstance(instance.id), "start", lifecycleLoggers);
+        restoredInstances.add(instance.id);
+        restoreErrors.delete(instance.id);
       } catch (error) {
-        state.controlledInstances.put(restoreFailurePatch(state.requireInstance(instance.id), error));
-        logDiagnostic({ instanceId: instance.id, action: "restore", error: error instanceof Error ? error.message : String(error) }, "node local instance restore failed");
+        if (state.requireRuntime(instance.runtimeId).type === "local") {
+          state.controlledInstances.put(restoreFailurePatch(state.requireInstance(instance.id), error));
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        if (restoreErrors.get(instance.id) !== message) {
+          restoreErrors.set(instance.id, message);
+          lifecycleLoggers.warn({ instanceId: instance.id, action: "restore", runtimeId: instance.runtimeId, error: message }, "node instance restore failed; recovery will retry");
+        }
       }
     }
   };
 
-  app.decorate("nodeAgentRestoreLocalInstances", restoreLocalInstances);
+  const recoverManagedInstances = async () => {
+    const instances = state.listInstances().filter((instance) =>
+      usesManagedArtifact(instance)
+      && !convergence.isRunning(instance.id)
+      // Persisted containers must first be re-inspected by restore so
+      // convergence does not act on stale runtime identity or target data.
+      // Instances started by this node-agent already have a resolved target.
+      && (restoredInstances.has(instance.id) || instance.target.status !== "unknown")
+      && (!instance.ready || instance.runtimeVersion?.phase !== "matched")
+      && !["created", "stopped", "failed", "provisioning", "stopping"].includes(instance.status));
+    await Promise.all(instances.map(async (instance) => {
+      try {
+        await convergence.schedule(instance.id, { retryFailed: true });
+      } catch (error) {
+        app.log.error({ instanceId: instance.id, error }, "runtime convergence recovery failed");
+      }
+    }));
+  };
+
+  const runRecoveryCycle = async () => {
+    await restoreManagedInstances();
+    await recoverManagedInstances();
+  };
+  const startRecoverySupervisor = () => {
+    if (recoverySupervisorStarted) return;
+    recoverySupervisorStarted = true;
+    const runAndContinue = () => {
+      void runRecoveryCycle()
+        .catch((error) => app.log.error({ error }, "node agent startup recovery cycle failed"))
+        .finally(scheduleNext);
+    };
+    const scheduleNext = () => {
+      if (recoverySupervisorStopped) return;
+      recoveryTimer = setTimeout(() => {
+        recoveryTimer = undefined;
+        runAndContinue();
+      }, 10_000);
+      recoveryTimer.unref?.();
+    };
+    runAndContinue();
+  };
+
+  app.decorate("nodeAgentRestoreManagedInstances", restoreManagedInstances);
+  app.decorate("nodeAgentRecoverManagedInstances", recoverManagedInstances);
+  app.decorate("nodeAgentStartRecoverySupervisor", startRecoverySupervisor);
 
   app.get("/api/node-agent/health", async () => ({
     data: {
@@ -3217,6 +3295,8 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       uiAccessStatus: probedEndpointStatus,
     });
     const stored = state.controlledInstances.put(updated);
+    restoredInstances.add(id);
+    restoreErrors.delete(id);
     await autoImportAgentConfig(fetchImpl, stored, "restart", lifecycleLoggers);
     eventForwarder.syncNow();
     logDiagnostic({ instanceId: id, action: "restart", status: stored.status, connectionStatus: stored.connectionStatus, targetStatus: stored.targetStatus, targetWeb: stored.target.web, containerName: stored.runtime.containerName }, "node instance restart completed");
@@ -3336,7 +3416,8 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   app.post("/api/node-agent/instances/:id/proxy/raw", { bodyLimit: INSTANCE_PROXY_REQUEST_BODY_LIMIT }, async (request, reply) => {
     const id = (request.params as { id: string }).id;
     const parsed = ProxyRequestSchema.parse(request.body);
-    const instanceBase = nodeLocalInstanceWebBase(state.requireInstance(id));
+    const instance = state.requireInstance(id);
+    const instanceBase = nodeLocalInstanceWebBase(instance);
     const proxyPath = parsed.path.startsWith("/") ? parsed.path : `/${parsed.path}`;
     logDiagnostic({ instanceId: id, action: "proxy.raw", method: parsed.method, path: proxyPath, instanceBase }, "node instance raw proxy requested");
     const response = await fetchImpl(`${instanceBase}${proxyPath}`, {
@@ -3376,7 +3457,8 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     const query = queryIndex >= 0 ? request.url.slice(queryIndex) : "";
     let upstream: WebSocket | undefined;
     try {
-      const instanceBase = nodeLocalInstanceWebBase(state.requireInstance(id));
+      const instance = state.requireInstance(id);
+      const instanceBase = nodeLocalInstanceWebBase(instance);
       const upstreamUrl = new URL(`/${suffix}${query}`, `${instanceBase}/`);
       upstreamUrl.protocol = upstreamUrl.protocol === "https:" ? "wss:" : "ws:";
       const protocols = proxyWebSocketProtocols(request.headers);
@@ -3787,7 +3869,7 @@ export async function runNodeAgentServer(options: RunNodeAgentServerOptions) {
       ipcServer = await listenNodeAgentIpcServer(app, ipcPath);
       await listenerManager.start();
       reverseTunnels.connectConfigured();
-      await app.nodeAgentRestoreLocalInstances?.();
+      app.nodeAgentStartRecoverySupervisor?.();
     } catch (error) {
       await app.close();
       throw error;

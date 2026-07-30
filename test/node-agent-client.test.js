@@ -126,3 +126,116 @@ test("controlled instance node agent config reads env and stays disabled for sta
   assert.equal(controlled.heartbeatIntervalMs, 1234);
   assert.equal(new NodeAgentRegistrationClient(controlled, async () => snapshot()).enabled(), true);
 });
+
+test("controlled instance starts serving while registration retries in the background", async () => {
+  const requests = [];
+  const client = new NodeAgentRegistrationClient(
+    {
+      controlMode: "controlled",
+      nodeAgentUrl: "http://node.local",
+      registrationToken: "secret-token",
+      instanceId: "inst_retry",
+      heartbeatIntervalMs: 50,
+    },
+    async () => snapshot(),
+    async (url) => {
+      requests.push(url);
+      if (requests.length === 1) throw new TypeError("node agent is not listening yet");
+      return new Response(JSON.stringify({ data: url.endsWith("/register") ? { id: "inst_retry" } : { ok: true } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+    { retryBaseDelayMs: 1, retryMaxDelayMs: 2 },
+  );
+
+  await client.start();
+  await waitFor(() => requests.length >= 3);
+  client.stop();
+
+  assert.match(requests[0], /\/register$/);
+  assert.match(requests[1], /\/register$/);
+  assert.match(requests[2], /\/heartbeat$/);
+});
+
+test("controlled instance serializes concurrent heartbeat requests", async () => {
+  let heartbeatRequests = 0;
+  let releaseHeartbeat;
+  const heartbeatGate = new Promise((resolve) => { releaseHeartbeat = resolve; });
+  const client = new NodeAgentRegistrationClient(
+    {
+      controlMode: "controlled",
+      nodeAgentUrl: "http://node.local",
+      registrationToken: "secret-token",
+      instanceId: "inst_serial",
+      heartbeatIntervalMs: 10_000,
+    },
+    async () => snapshot(),
+    async (url) => {
+      if (url.endsWith("/heartbeat")) {
+        heartbeatRequests += 1;
+        if (heartbeatRequests > 1) await heartbeatGate;
+      }
+      return new Response(JSON.stringify({ data: url.endsWith("/register") ? { id: "inst_serial" } : { ok: true } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  );
+  await client.register();
+
+  const first = client.heartbeat();
+  const second = client.heartbeat();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(heartbeatRequests, 2, "the registration heartbeat plus one shared heartbeat should be sent");
+  releaseHeartbeat();
+  await Promise.all([first, second]);
+  assert.equal(heartbeatRequests, 2);
+});
+
+test("a missing heartbeat registration automatically returns to the register flow", async () => {
+  const paths = [];
+  let heartbeatCount = 0;
+  const client = new NodeAgentRegistrationClient(
+    {
+      controlMode: "controlled",
+      nodeAgentUrl: "http://node.local",
+      registrationToken: "secret-token",
+      instanceId: "inst_reregister",
+      heartbeatIntervalMs: 2,
+    },
+    async () => snapshot(),
+    async (url) => {
+      const pathname = new URL(url).pathname;
+      paths.push(pathname);
+      if (pathname.endsWith("/heartbeat")) {
+        heartbeatCount += 1;
+        if (heartbeatCount === 2) {
+          return new Response(JSON.stringify({ error: { message: "registration was lost" } }), {
+            status: 404,
+            headers: { "content-type": "application/json" },
+          });
+        }
+      }
+      return new Response(JSON.stringify({ data: pathname.endsWith("/register") ? { id: "inst_reregister" } : { ok: true } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+    { retryBaseDelayMs: 1, retryMaxDelayMs: 2 },
+  );
+
+  await client.start();
+  await waitFor(() => paths.filter((path) => path.endsWith("/register")).length >= 2);
+  client.stop();
+
+  assert.deepEqual(paths.slice(0, 4).map((path) => path.split("/").at(-1)), ["register", "heartbeat", "heartbeat", "register"]);
+});
+
+async function waitFor(predicate, timeoutMs = 1_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("condition was not met before timeout");
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+}

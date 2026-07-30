@@ -1,0 +1,160 @@
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { spawnSync } = require("node:child_process");
+const { setTimeout: delay } = require("node:timers/promises");
+
+function resolveNodeAgentSingletonLockPath(options = {}) {
+  const temporaryDirectory = options.tmpdir || os.tmpdir();
+  const userId = options.uid ?? process.getuid?.() ?? "user";
+  return path.join(temporaryDirectory, `task-handoff-node-agent-${userId}.lock`);
+}
+
+function readNodeAgentLockOwner(lockPath) {
+  try {
+    const value = JSON.parse(fs.readFileSync(path.join(lockPath, "owner.json"), "utf8"));
+    if (
+      value?.component !== "node-agent"
+      || !Number.isInteger(value.pid)
+      || value.pid <= 0
+      || typeof value.dataDir !== "string"
+      || !value.dataDir
+      || typeof value.token !== "string"
+      || !value.token
+    ) {
+      return undefined;
+    }
+    return value;
+  } catch {
+    return undefined;
+  }
+}
+
+function sameLockOwner(left, right) {
+  return Boolean(left && right && left.pid === right.pid && left.token === right.token);
+}
+
+function processIsAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+function processStartIdentity(pid, platform = process.platform) {
+  if (!Number.isInteger(pid) || pid <= 0) return undefined;
+  if (platform === "linux") {
+    try {
+      const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+      const commandEnd = stat.lastIndexOf(")");
+      if (commandEnd < 0) return undefined;
+      const startTime = stat.slice(commandEnd + 2).trim().split(/\s+/)[19];
+      return startTime ? `linux:${startTime}` : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  if (["darwin", "freebsd", "openbsd", "aix", "sunos"].includes(platform)) {
+    const result = spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", timeout: 1_000 });
+    const startedAt = result.status === 0 ? result.stdout.trim().replace(/\s+/g, " ") : "";
+    return startedAt ? `${platform}:${startedAt}` : undefined;
+  }
+  if (platform === "win32") {
+    const command = `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks`;
+    const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command], { encoding: "utf8", timeout: 2_000 });
+    const ticks = result.status === 0 ? result.stdout.trim() : "";
+    return /^\d+$/.test(ticks) ? `win32:${ticks}` : undefined;
+  }
+  return undefined;
+}
+
+function lockOwnerMatchesProcess(owner, options) {
+  if (!owner.startIdentity || !options.isAlive(owner.pid)) return false;
+  return options.processIdentity(owner.pid) === owner.startIdentity;
+}
+
+async function waitForOwnerExit(owner, options) {
+  const deadline = Date.now() + options.timeoutMs;
+  while (Date.now() < deadline) {
+    if (!lockOwnerMatchesProcess(owner, options) || !sameLockOwner(options.readOwner(options.lockPath), owner)) {
+      return true;
+    }
+    await options.wait(options.pollMs);
+  }
+  return !lockOwnerMatchesProcess(owner, options) || !sameLockOwner(options.readOwner(options.lockPath), owner);
+}
+
+async function stopExistingDesktopNodeAgent(options) {
+  const lockPath = options.lockPath || resolveNodeAgentSingletonLockPath();
+  const readOwner = options.readOwner || readNodeAgentLockOwner;
+  const isAlive = options.isAlive || processIsAlive;
+  const processIdentity = options.processIdentity || processStartIdentity;
+  const signal = options.signal || ((pid, value) => process.kill(pid, value));
+  const wait = options.wait || delay;
+  const owner = readOwner(lockPath);
+
+  if (!owner) {
+    return { status: "absent" };
+  }
+  if (path.resolve(owner.dataDir) !== path.resolve(options.dataDir)) {
+    return { status: "foreign", owner };
+  }
+  if (!isAlive(owner.pid)) {
+    return { status: "stale", owner };
+  }
+  const currentStartIdentity = processIdentity(owner.pid);
+  if (!owner.startIdentity || !currentStartIdentity) {
+    return { status: "unverified", owner };
+  }
+  if (currentStartIdentity !== owner.startIdentity) {
+    return { status: "stale", owner };
+  }
+
+  options.logInfo?.(`[desktop-shell] stopping previous desktop node agent pid=${owner.pid}`);
+  try {
+    signal(owner.pid, "SIGTERM");
+  } catch (error) {
+    if (error?.code === "ESRCH") return { status: "stopped", owner };
+    throw error;
+  }
+
+  const common = {
+    lockPath,
+    readOwner,
+    isAlive,
+    processIdentity,
+    wait,
+    pollMs: options.pollMs ?? 100,
+  };
+  if (await waitForOwnerExit(owner, { ...common, timeoutMs: options.gracefulTimeoutMs ?? 5_000 })) {
+    options.logInfo?.(`[desktop-shell] previous desktop node agent stopped pid=${owner.pid}`);
+    return { status: "stopped", owner };
+  }
+
+  const currentOwner = readOwner(lockPath);
+  if (!sameLockOwner(currentOwner, owner)) {
+    return { status: "stopped", owner };
+  }
+  if (!lockOwnerMatchesProcess(owner, common)) {
+    return { status: "stopped", owner };
+  }
+  options.logError?.(`[desktop-shell] forcing previous desktop node agent to stop pid=${owner.pid}`);
+  try {
+    signal(owner.pid, "SIGKILL");
+  } catch (error) {
+    if (error?.code === "ESRCH") return { status: "stopped", owner };
+    throw error;
+  }
+  if (await waitForOwnerExit(owner, { ...common, timeoutMs: options.forceTimeoutMs ?? 2_000 })) {
+    return { status: "forced", owner };
+  }
+  throw new Error(`Previous desktop node agent pid=${owner.pid} did not exit.`);
+}
+
+module.exports = {
+  readNodeAgentLockOwner,
+  resolveNodeAgentSingletonLockPath,
+  stopExistingDesktopNodeAgent,
+};

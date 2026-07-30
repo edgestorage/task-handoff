@@ -86,6 +86,23 @@ test("offline instances fail before stale inventory can be treated as management
   assert.equal(requests, 0);
 });
 
+test("instances do not accept proxy traffic until runtime convergence is matched", async () => {
+  let requests = 0;
+  const gateway = new ControlledInstanceGateway({
+    requireNode: () => node, nodeAgentGateway: {}, fetchImpl: fetch,
+    nodeAgentRequest: async () => { requests += 1; return new Response("{}"); },
+  });
+  await assert.rejects(
+    gateway.request({
+      ...instance,
+      ready: false,
+      runtimeVersion: { desiredVersion: "0.0.13", actualVersion: "0.0.11", phase: "installing", attempt: 1 },
+    }, "/apps/management"),
+    (error) => error.code === "INSTANCE_NOT_READY" && error.statusCode === 409 && error.runtimePhase === "installing",
+  );
+  assert.equal(requests, 0);
+});
+
 test("old controlled-instance responses are reported as unsupported instead of management state", () => {
   assert.throws(
     () => parseInstanceAppManagementSnapshot({ items: [], observedAt: "2026-07-16T00:00:00.000Z" }),
@@ -123,6 +140,41 @@ test("node-agent forwards authoritative app jobs with the instance id scope", ()
   assert.equal(outputFrames[0].event.scope.instanceId, "inst_apps");
   assert.equal(outputFrames[0].event.payload.job.id, "job_apps");
   assert.equal(eventTopic("app.management"), "apps");
+  forwarder.stop();
+});
+
+test("node-agent waits for matched runtime convergence before opening instance event streams", () => {
+  class FakeSocket extends EventEmitter {
+    constructor() { super(); this.readyState = WebSocket.CONNECTING; }
+    close() {}
+  }
+  const instanceState = {
+    id: "inst_converging",
+    ready: false,
+    runtimeVersion: { desiredVersion: "0.0.13", actualVersion: "0.0.11", phase: "restarting", attempt: 1 },
+    target: { api: "http://127.0.0.1:19000" },
+  };
+  const sockets = [];
+  const forwarder = new NodeAgentInstanceEventForwarder({ listInstances: () => [instanceState] }, undefined, {
+    createSocket: () => {
+      const socket = new FakeSocket();
+      sockets.push(socket);
+      return socket;
+    },
+    setIntervalFn: () => ({ timer: true }),
+    clearIntervalFn: () => undefined,
+  });
+  const output = new EventEmitter();
+  output.readyState = WebSocket.OPEN;
+  output.send = () => undefined;
+
+  forwarder.addOutput(output);
+  assert.equal(sockets.length, 0);
+
+  instanceState.ready = true;
+  instanceState.runtimeVersion = { ...instanceState.runtimeVersion, actualVersion: "0.0.13", phase: "matched" };
+  forwarder.syncNow();
+  assert.equal(sockets.length, 1);
   forwarder.stop();
 });
 

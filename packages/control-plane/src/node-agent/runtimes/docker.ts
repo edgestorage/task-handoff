@@ -75,12 +75,30 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
   async start(context: ExecutorContext): Promise<ExecutorStartResult> {
     validateStartContext(context);
     const containerName = context.instance.runtime.containerName || containerNameForInstance(context.instance.id);
-    const existing = await this.runCommand("docker", ["start", containerName]).catch(() => undefined);
+    const existing = await this.inspectContainerForStart(containerName);
     if (existing) {
-      return this.runningResult(context, containerName, context.instance.runtime.containerId);
+      assertExpectedContainerId(containerName, existing.id, context.instance.runtime.containerId, "before start", "RUNTIME_EXECUTOR_FAILED");
+      const owner = existing.labels["task-handoff.instance-id"];
+      if (owner !== context.instance.id) {
+        throw runtimeExecutorError(
+          "RUNTIME_EXECUTOR_FAILED",
+          `Docker container ${containerName} belongs to ${owner || "an unknown instance"}, not ${context.instance.id}.`,
+        );
+      }
+      try {
+        await this.runCommand("docker", ["start", containerName]);
+      } catch (cause) {
+        throw runtimeExecutorError("RUNTIME_EXECUTOR_FAILED", `Could not start Docker container ${containerName}.`, cause);
+      }
+      return this.runningResult(context, containerName, existing.id);
     }
     await this.images.ensure(context.image.resolvedReference || context.image.requestedReference!);
-    const runResult = await this.runCommand("docker", dockerRunArgs(context, containerName, { publishHost: this.publishHost }));
+    let runResult;
+    try {
+      runResult = await this.runCommand("docker", dockerRunArgs(context, containerName, { publishHost: this.publishHost }));
+    } catch (cause) {
+      throw runtimeExecutorError("RUNTIME_EXECUTOR_FAILED", `Could not create Docker container ${containerName}.`, cause);
+    }
     return this.runningResult(context, containerName, runResult.stdout || undefined);
   }
 
@@ -124,7 +142,14 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
   }
 
   async stop(context: ExecutorContext): Promise<ExecutorStartResult> {
-    await this.runCommand("docker", ["stop", context.instance.runtime.containerName || containerNameForInstance(context.instance.id)]).catch(() => ({ stdout: "", stderr: "" }));
+    const containerName = context.instance.runtime.containerName || containerNameForInstance(context.instance.id);
+    try {
+      await this.runCommand("docker", ["stop", containerName]);
+    } catch (cause) {
+      if (!isDockerContainerNotFound(cause)) {
+        throw runtimeExecutorError("RUNTIME_EXECUTOR_FAILED", `Could not stop Docker container ${containerName}.`, cause);
+      }
+    }
     return {
       status: "stopped",
       health: "unknown",
@@ -151,7 +176,14 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
   }
 
   async delete(context: ExecutorContext): Promise<ExecutorStartResult> {
-    await this.runCommand("docker", ["rm", "-f", context.instance.runtime.containerName || containerNameForInstance(context.instance.id)]).catch(() => ({ stdout: "", stderr: "" }));
+    const containerName = context.instance.runtime.containerName || containerNameForInstance(context.instance.id);
+    try {
+      await this.runCommand("docker", ["rm", "-f", containerName]);
+    } catch (cause) {
+      if (!isDockerContainerNotFound(cause)) {
+        throw runtimeExecutorError("RUNTIME_EXECUTOR_FAILED", `Could not delete Docker container ${containerName}.`, cause);
+      }
+    }
     return {
       status: "stopped",
       health: "unknown",
@@ -275,20 +307,6 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
     return { platform: normalizedPlatform, arch: normalizedArch, launcherAbi: 1 };
   }
 
-  async rollbackRuntime(containerName: string): Promise<DockerRuntimeInspection> {
-    const before = await this.inspectContainerId(containerName);
-    if (!before) throw runtimeExecutorError("INSTANCE_RUNTIME_RESTART_FAILED", `Docker container ${containerName} does not exist.`);
-    try {
-      await this.runCommand("docker", ["exec", "--user", "0", containerName, "task-handoff-runtime", "rollback"]);
-      await this.runCommand("docker", ["restart", containerName]);
-    } catch (cause) {
-      throw runtimeExecutorError("INSTANCE_RUNTIME_RESTART_FAILED", `Could not roll back ${containerName} to its previous controlled-instance release.`, cause);
-    }
-    const after = await this.inspectContainerId(containerName);
-    if (!after || after !== before) throw runtimeExecutorError("INSTANCE_RUNTIME_RESTART_FAILED", `Docker container identity changed while rolling back ${containerName}.`);
-    return this.inspectRuntimeVersion(containerName);
-  }
-
   /** Installs the launcher bundle shipped by this node-agent before updating the application runtime. */
   async installRuntimeLauncher(containerName: string): Promise<void> {
     const containerId = await this.inspectContainerId(containerName);
@@ -317,15 +335,48 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
   }
 
   private async inspectContainerId(containerName: string) {
-    const result = await this.runCommand("docker", ["inspect", "--format", "{{.Id}}", containerName]).catch(() => undefined);
-    return result?.stdout.trim() || undefined;
+    try {
+      const result = await this.runCommand("docker", ["inspect", "--format", "{{.Id}}", containerName]);
+      return result.stdout.trim() || undefined;
+    } catch (cause) {
+      if (isDockerContainerNotFound(cause)) return undefined;
+      throw runtimeExecutorError("RUNTIME_EXECUTOR_FAILED", `Could not inspect Docker container ${containerName}.`, cause);
+    }
+  }
+
+  private async inspectContainerForStart(containerName: string): Promise<{ id: string; labels: Record<string, string> } | undefined> {
+    let result;
+    try {
+      result = await this.runCommand("docker", ["inspect", "--format", "{{json .}}", containerName]);
+    } catch (cause) {
+      if (isDockerContainerNotFound(cause)) return undefined;
+      throw runtimeExecutorError("RUNTIME_EXECUTOR_FAILED", `Could not inspect Docker container ${containerName}.`, cause);
+    }
+    try {
+      const parsed = JSON.parse(result.stdout || "{}") as { Id?: unknown; Config?: { Labels?: unknown } };
+      if (typeof parsed.Id !== "string" || !parsed.Id) throw new Error("Docker inspect did not return a container id.");
+      const labels = parsed.Config?.Labels && typeof parsed.Config.Labels === "object" && !Array.isArray(parsed.Config.Labels)
+        ? Object.fromEntries(Object.entries(parsed.Config.Labels).filter((entry): entry is [string, string] => typeof entry[1] === "string"))
+        : {};
+      return { id: parsed.Id, labels };
+    } catch (cause) {
+      throw runtimeExecutorError("RUNTIME_EXECUTOR_FAILED", `Docker returned invalid inspection data for ${containerName}.`, cause);
+    }
   }
 
   private async containerPort(containerName: string, containerPort: string) {
-    const result = await this.runCommand("docker", ["port", containerName, containerPort]).catch(() => ({ stdout: "", stderr: "" }));
+    let result;
+    try {
+      result = await this.runCommand("docker", ["port", containerName, containerPort]);
+    } catch (cause) {
+      throw runtimeExecutorError("RUNTIME_EXECUTOR_FAILED", `Could not resolve the published port for Docker container ${containerName}.`, cause);
+    }
     const line = result.stdout.split(/\r?\n/).find(Boolean);
     const match = line?.match(/:(\d+)$/);
-    return match?.[1];
+    if (!match?.[1]) {
+      throw runtimeExecutorError("RUNTIME_EXECUTOR_FAILED", `Docker container ${containerName} does not publish ${containerPort}.`);
+    }
+    return match[1];
   }
 
 }
@@ -369,6 +420,11 @@ function commandFailureDetail(cause: unknown) {
   const output = candidate.details?.stderr || candidate.details?.stdout;
   if (typeof output === "string" && output.trim()) return output.trim();
   return typeof candidate.message === "string" && candidate.message.trim() ? candidate.message.trim() : undefined;
+}
+
+function isDockerContainerNotFound(cause: unknown) {
+  const detail = commandFailureDetail(cause)?.toLowerCase() || "";
+  return detail.includes("no such container") || detail.includes("no such object");
 }
 
 function assertExpectedContainerId(containerName: string, actual: string, expected: string | undefined, phase: string, code: string) {

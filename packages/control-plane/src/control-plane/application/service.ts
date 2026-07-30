@@ -6,6 +6,7 @@ import {
   AppManagementJobResponseSchema,
   AppManagementSnapshotSchema,
   ControlledInstanceSchema,
+  controlledInstanceAcceptsTraffic,
   CustomImageProfileSchema,
   LEGACY_MARKET_IMAGE_IDS,
   NodeImageAvailabilitySchema,
@@ -1351,7 +1352,7 @@ export class ControlPlaneService {
     const instances = await this.listNodeInstances();
     const states = await Promise.all(
       instances.map(async (instance) => {
-        if (!instance.target.web || (instance.connectionStatus !== "online" && instance.agentStatus !== "online")) {
+        if (!controlledInstanceAcceptsTraffic(instance) || !instance.target.web || (instance.connectionStatus !== "online" && instance.agentStatus !== "online")) {
           return { streamId: `bootstrap:${instance.id}:ai.sessions`, revision: 0, lastEventAt: instance.aiSessions.updatedAt, snapshot: instance.aiSessions };
         }
         try {
@@ -1381,7 +1382,7 @@ export class ControlPlaneService {
     const instances = await this.listNodeInstances();
     const states = await Promise.all(
       instances.map(async (instance) => {
-        if (!instance.target.web || (instance.connectionStatus !== "online" && instance.agentStatus !== "online")) {
+        if (!controlledInstanceAcceptsTraffic(instance) || !instance.target.web || (instance.connectionStatus !== "online" && instance.agentStatus !== "online")) {
           const snapshot = emptyAppSessionsSnapshot();
           return { streamId: `bootstrap:${instance.id}:app.sessions`, revision: 0, lastEventAt: snapshot.updatedAt, snapshot };
         }
@@ -1935,7 +1936,7 @@ export class ControlPlaneService {
   }
 
   private async withFreshTriggerSnapshot(instance: ControlledInstance) {
-    if (instance.connectionStatus !== "online" && instance.agentStatus !== "online") {
+    if (!controlledInstanceAcceptsTraffic(instance) || (instance.connectionStatus !== "online" && instance.agentStatus !== "online")) {
       return instance;
     }
     try {

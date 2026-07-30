@@ -14,7 +14,7 @@ function fail(message) {
 }
 
 function parseArgs(argv) {
-  if (!["install", "rollback", "verify-active"].includes(argv[0])) fail("Usage: task-handoff-runtime <install|rollback|verify-active> [...]");
+  if (!["install", "verify-active"].includes(argv[0])) fail("Usage: task-handoff-runtime <install|verify-active> [...]");
   const result = { command: argv[0] };
   for (let index = 1; index < argv.length; index += 2) {
     const key = argv[index];
@@ -97,17 +97,6 @@ if (args.command === "verify-active") {
   process.stdout.write(`${JSON.stringify(manifest)}\n`);
   process.exit(0);
 }
-if (args.command === "rollback") {
-  const previousRelease = fs.readFileSync(path.join(runtimeRoot, "previous-release"), "utf8").trim();
-  if (!validateVersion(previousRelease)) fail("No previous runtime release is available.");
-  const release = path.join(runtimeRoot, "releases", previousRelease);
-  const manifest = validateRelease(release);
-  const next = path.join(runtimeRoot, `.current-${process.pid}-${Date.now()}`);
-  fs.symlinkSync(path.relative(runtimeRoot, release), next);
-  fs.renameSync(next, path.join(runtimeRoot, "current"));
-  process.stdout.write(`${JSON.stringify({ version: manifest.version, sha256: manifest.sha256, release })}\n`);
-  process.exit(0);
-}
 const expected = {
   version: args.version,
   sha256: args.sha256,
@@ -176,14 +165,9 @@ try {
   }
   lockReleaseTree(release);
 
-  let previousRelease = "";
-  try {
-    previousRelease = path.basename(fs.realpathSync(path.join(runtimeRoot, "current")));
-  } catch {}
   const next = path.join(runtimeRoot, `.current-${process.pid}-${Date.now()}`);
   fs.symlinkSync(path.relative(runtimeRoot, release), next);
   fs.renameSync(next, path.join(runtimeRoot, "current"));
-  if (previousRelease && previousRelease !== releaseKey) fs.writeFileSync(path.join(runtimeRoot, "previous-release"), `${previousRelease}\n`);
   process.stdout.write(`${JSON.stringify({ version: expected.version, sha256: expected.sha256, release })}\n`);
 } finally {
   if (!preserveStaging) fs.rmSync(staging, { recursive: true, force: true });

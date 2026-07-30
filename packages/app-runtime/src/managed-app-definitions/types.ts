@@ -16,6 +16,7 @@ export type ManagedAppRuntimeHost = {
   allocatePort(kind: "vnc" | "websockify" | "web" | "cdp"): number;
   hasCommand(command: string, env?: NodeJS.ProcessEnv, cwd?: string): boolean;
   spawnLogged(command: string, args: string[], env: NodeJS.ProcessEnv, logDir: string, logName: string, cwd?: string): ChildProcessWithoutNullStreams;
+  stopProcessTree(child: ChildProcessWithoutNullStreams, signal?: NodeJS.Signals): void;
   waitForUnixSocket(socketPath: string, timeoutMs: number, getError?: () => Error | undefined): void;
   patchSession(sessionId: string, patch: { ai: AppSession["ai"] }): void;
 };

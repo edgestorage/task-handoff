@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import type { ImageSelection, InstanceAppInventory } from "@task-handoff/protocol/control-plane";
 
 export type NodeAgentRegistrationConfig = {
@@ -40,6 +41,11 @@ export type ControlledInstanceSnapshot = {
 
 export type SnapshotProvider = () => Promise<ControlledInstanceSnapshot>;
 
+export type NodeAgentRegistrationClientOptions = {
+  retryBaseDelayMs?: number;
+  retryMaxDelayMs?: number;
+};
+
 export function nodeAgentRegistrationConfigFromEnv(env: NodeJS.ProcessEnv = process.env): NodeAgentRegistrationConfig {
   return {
     controlMode: env.TASK_HANDOFF_CONTROL_MODE === "controlled" ? "controlled" : "standalone",
@@ -59,19 +65,28 @@ export function nodeAgentRegistrationConfigFromEnv(env: NodeJS.ProcessEnv = proc
 
 export class NodeAgentRegistrationClient {
   private registeredInstanceId = "";
-  private timer: ReturnType<typeof setInterval> | undefined;
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  private inFlight: Promise<void> | undefined;
+  private stopped = true;
+  private consecutiveFailures = 0;
+  private readonly processIncarnationId = crypto.randomUUID();
   private readonly config: NodeAgentRegistrationConfig;
   private readonly snapshotProvider: SnapshotProvider;
   private readonly fetchImpl: typeof fetch;
+  private readonly retryBaseDelayMs: number;
+  private readonly retryMaxDelayMs: number;
 
   constructor(
     config: NodeAgentRegistrationConfig,
     snapshotProvider: SnapshotProvider,
     fetchImpl: typeof fetch = fetch,
+    options: NodeAgentRegistrationClientOptions = {},
   ) {
     this.config = config;
     this.snapshotProvider = snapshotProvider;
     this.fetchImpl = fetchImpl;
+    this.retryBaseDelayMs = options.retryBaseDelayMs ?? 1_000;
+    this.retryMaxDelayMs = options.retryMaxDelayMs ?? 30_000;
   }
 
   enabled() {
@@ -79,25 +94,28 @@ export class NodeAgentRegistrationClient {
   }
 
   async start() {
-    if (!this.enabled()) {
-      return;
-    }
-    await this.register();
-    this.timer = setInterval(() => {
-      void this.heartbeat().catch((error) => {
-        console.warn(`node agent heartbeat failed: ${error instanceof Error ? error.message : String(error)}`);
-      });
-    }, this.config.heartbeatIntervalMs);
+    if (!this.enabled() || !this.stopped) return;
+    this.stopped = false;
+    this.schedule(0);
   }
 
   stop() {
+    this.stopped = true;
     if (this.timer) {
-      clearInterval(this.timer);
+      clearTimeout(this.timer);
       this.timer = undefined;
     }
   }
 
   async register() {
+    return this.runExclusive(() => this.registerOnce());
+  }
+
+  async heartbeat() {
+    return this.runExclusive(() => this.heartbeatOnce());
+  }
+
+  private async registerOnce() {
     const snapshot = await this.snapshotProvider();
     const instanceId = this.requiredInstanceId();
     const response = await this.request(`node-agent/instances/${encodeURIComponent(instanceId)}/register`, {
@@ -114,29 +132,74 @@ export class NodeAgentRegistrationClient {
       appInventory: snapshot.appInventory,
       target: snapshot.target,
       workspace: snapshot.workspace,
+      processIncarnationId: this.processIncarnationId,
     });
     this.registeredInstanceId = String(response.id || instanceId);
-    await this.heartbeat();
+    await this.heartbeatOnce();
   }
 
-  async heartbeat() {
+  private async heartbeatOnce() {
     const instanceId = this.registeredInstanceId || this.config.instanceId;
     if (!instanceId) {
       return;
     }
     const snapshot = await this.snapshotProvider();
-    await this.request(`node-agent/instances/${encodeURIComponent(instanceId)}/heartbeat`, {
-      status: snapshot.status,
-      health: snapshot.health,
-      protocolVersion: snapshot.protocolVersion,
-      build: snapshot.build,
-      capabilities: snapshot.capabilities,
-      appInventory: snapshot.appInventory,
-      apps: snapshot.apps,
-      aiSessions: snapshot.aiSessions,
-      workspace: snapshot.workspace,
-      target: snapshot.target,
+    try {
+      await this.request(`node-agent/instances/${encodeURIComponent(instanceId)}/heartbeat`, {
+        status: snapshot.status,
+        health: snapshot.health,
+        protocolVersion: snapshot.protocolVersion,
+        build: snapshot.build,
+        capabilities: snapshot.capabilities,
+        appInventory: snapshot.appInventory,
+        apps: snapshot.apps,
+        aiSessions: snapshot.aiSessions,
+        workspace: snapshot.workspace,
+        target: snapshot.target,
+        processIncarnationId: this.processIncarnationId,
+      });
+    } catch (error) {
+      if (requestStatus(error) === 404) this.registeredInstanceId = "";
+      throw error;
+    }
+  }
+
+  private schedule(delayMs: number) {
+    if (this.stopped) return;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = setTimeout(() => {
+      this.timer = undefined;
+      void this.runCycle();
+    }, delayMs);
+    this.timer.unref?.();
+  }
+
+  private async runCycle() {
+    if (this.stopped) return;
+    let succeeded = false;
+    try {
+      await this.runExclusive(() => this.registeredInstanceId ? this.heartbeatOnce() : this.registerOnce());
+      this.consecutiveFailures = 0;
+      succeeded = true;
+    } catch (error) {
+      this.consecutiveFailures += 1;
+      console.warn(`node agent registration sync failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      if (!this.stopped) this.schedule(succeeded ? this.config.heartbeatIntervalMs : this.retryDelayMs());
+    }
+  }
+
+  private retryDelayMs() {
+    return Math.min(this.retryMaxDelayMs, this.retryBaseDelayMs * (2 ** Math.max(0, this.consecutiveFailures - 1)));
+  }
+
+  private runExclusive(operation: () => Promise<void>) {
+    if (this.inFlight) return this.inFlight;
+    const running = operation().finally(() => {
+      if (this.inFlight === running) this.inFlight = undefined;
     });
+    this.inFlight = running;
+    return running;
   }
 
   private async request(path: string, body: Record<string, unknown>) {
@@ -155,7 +218,10 @@ export class NodeAgentRegistrationClient {
     });
     const payload = (await response.json().catch(() => ({}))) as { data?: Record<string, unknown>; error?: { message?: string } };
     if (!response.ok) {
-      throw new Error(payload.error?.message || `Node agent request failed with HTTP ${response.status}`);
+      throw Object.assign(
+        new Error(payload.error?.message || `Node agent request failed with HTTP ${response.status}`),
+        { statusCode: response.status },
+      );
     }
     return payload.data || {};
   }
@@ -166,6 +232,12 @@ export class NodeAgentRegistrationClient {
     }
     return this.config.instanceId;
   }
+}
+
+function requestStatus(error: unknown) {
+  return error && typeof error === "object" && "statusCode" in error
+    ? Number((error as { statusCode?: unknown }).statusCode)
+    : undefined;
 }
 
 function stripUndefined(value: Record<string, unknown>) {

@@ -95,21 +95,6 @@ test("Docker restart validates the authoritative container id before restart", a
   assert.equal(calls.some((args) => args[0] === "restart"), false);
 });
 
-test("Docker rollback activates the exact retained release and restarts the same container", async () => {
-  const calls = [];
-  const executor = new LocalDockerExecutor(async (_command, args) => {
-    calls.push(args);
-    if (args[0] === "inspect") return { stdout: "container-abc", stderr: "" };
-    if (args[0] === "exec" && args.includes("verify-active")) return { stdout: JSON.stringify({ ...identity, version: "1.2.2" }), stderr: "" };
-    return { stdout: "", stderr: "" };
-  });
-  const result = await executor.rollbackRuntime("instance-1");
-  assert.equal(result.version, "1.2.2");
-  assert.ok(calls.some((args) => args.includes("rollback")));
-  assert.ok(calls.some((args) => args[0] === "restart"));
-  assert.equal(calls.some((args) => args[0] === "rm" || args[0] === "run"), false);
-});
-
 test("Docker runtime target follows the target image rather than the node process", async () => {
   const executor = new LocalDockerExecutor(async (_command, args) => {
     if (args[0] === "inspect" && args[1] === "--format") {

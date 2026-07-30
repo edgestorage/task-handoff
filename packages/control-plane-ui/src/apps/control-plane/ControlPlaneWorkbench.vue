@@ -667,6 +667,8 @@ async function loadNodeLocalFolders(nodeId: string) {
   }
 }
 
+const resourceMetricsLoads = new Map<string, Promise<void>>();
+
 watch(
   () => [
     activeInstanceId.value,
@@ -692,17 +694,25 @@ async function loadActiveInstanceResourceMetrics() {
   const instance = activeInstance.value;
   if (!instance || instance.runtime?.type !== "docker") return;
   const requestedId = instance.id;
-  try {
-    const metrics = await getInstanceResourceMetrics(requestedId);
-    if (activeInstanceId.value === requestedId) {
-      resourceMetricsByInstanceId[requestedId] = metrics;
-      delete resourceMetricsErrorByInstanceId[requestedId];
+  const currentLoad = resourceMetricsLoads.get(requestedId);
+  if (currentLoad) return currentLoad;
+  const load = (async () => {
+    try {
+      const metrics = await getInstanceResourceMetrics(requestedId);
+      if (activeInstanceId.value === requestedId) {
+        resourceMetricsByInstanceId[requestedId] = metrics;
+        delete resourceMetricsErrorByInstanceId[requestedId];
+      }
+    } catch (error) {
+      if (activeInstanceId.value === requestedId && !resourceMetricsByInstanceId[requestedId]) {
+        resourceMetricsErrorByInstanceId[requestedId] = errorText(error);
+      }
+    } finally {
+      resourceMetricsLoads.delete(requestedId);
     }
-  } catch (error) {
-    if (activeInstanceId.value === requestedId && !resourceMetricsByInstanceId[requestedId]) {
-      resourceMetricsErrorByInstanceId[requestedId] = errorText(error);
-    }
-  }
+  })();
+  resourceMetricsLoads.set(requestedId, load);
+  return load;
 }
 
 watch(

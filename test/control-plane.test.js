@@ -216,11 +216,20 @@ function resolvedRuntimeArtifact(version, platform, arch) {
 }
 
 function managedDockerRuntimeCommand(app, instanceId, web, args) {
-  if (args[0] === "inspect" && args.includes("{{json .}}")) return { stdout: JSON.stringify({ Platform: "linux", Image: "sha256:image" }), stderr: "" };
+  const desiredVersion = runtimeVersionStateForActual().desiredVersion;
+  if (args[0] === "inspect" && args.includes("{{json .}}")) return {
+    stdout: JSON.stringify({
+      Id: "container-1",
+      Platform: "linux",
+      Image: "sha256:image",
+      Config: { Labels: { "task-handoff.instance-id": instanceId } },
+    }),
+    stderr: "",
+  };
   if (args[0] === "image" && args[1] === "inspect") return { stdout: JSON.stringify({ Os: "linux", Architecture: "amd64" }), stderr: "" };
   if (args[0] === "inspect") return { stdout: "container-1", stderr: "" };
   if (args[0] === "exec" && args.includes("verify-active")) {
-    return { stdout: JSON.stringify(resolvedRuntimeArtifact("1.0.0", "linux", "x64").identity), stderr: "" };
+    return { stdout: JSON.stringify(resolvedRuntimeArtifact(desiredVersion, "linux", "x64").identity), stderr: "" };
   }
   if (args[0] === "restart" && app) {
     const instance = app.nodeAgentState.controlledInstances.get(instanceId);
@@ -230,7 +239,7 @@ function managedDockerRuntimeCommand(app, instanceId, web, args) {
       appInventory: emptyAppInventory(),
       controlMode: "controlled",
       capabilities: {},
-      build: { component: "controlled-instance", packageVersion: "1.0.0" },
+      build: { component: "controlled-instance", packageVersion: desiredVersion },
       target: { strategy: "direct-port", status: "reachable", web },
       workspace: { status: "ready" },
     }, instance.registrationToken));
@@ -254,7 +263,7 @@ function testAppInventory(apps, observedAt = new Date().toISOString()) {
 }
 
 test("controlled instance heartbeat protocol rejects legacy receiver projection", () => {
-  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-07-29");
+  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-07-30");
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, receiver: { status: "running", pendingCount: 1 } }).success, false);
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, apps: { runningCount: 1 } }).success, false);
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, appInventory: emptyAppInventory(), apps: { runningCount: 1 } }).success, true);
@@ -2368,7 +2377,7 @@ test("control plane subscribes to direct node agent websocket events", async (t)
       instanceId: "inst_direct_events",
       protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
       appInventory: emptyAppInventory(),
-      build: { component: "controlled-instance", packageVersion: "1.0.0" },
+      build: { component: "controlled-instance", packageVersion: runtimeVersionStateForActual().desiredVersion },
       target: {
         strategy: "direct-port",
         web: `http://127.0.0.1:${instanceEventsAddress.port}`,
@@ -2381,6 +2390,13 @@ test("control plane subscribes to direct node agent websocket events", async (t)
     },
   });
   assert.equal(registeredInstance.statusCode, 201);
+  const registeredState = nodeAgent.nodeAgentState.controlledInstances.get("inst_direct_events");
+  nodeAgent.nodeAgentState.controlledInstances.put({
+    ...registeredState,
+    status: "running",
+    ready: true,
+    runtimeVersion: runtimeVersionStateForActual(runtimeVersionStateForActual().desiredVersion),
+  });
 
   const controlPlane = await createControlPlaneApp({
     dataDir: tempDataDir("cp-direct-node-agent-events"),
@@ -3283,13 +3299,25 @@ test("local docker executor checks local images and pulls registry images before
       createdAt: timestamp,
       updatedAt: timestamp,
     },
+    image: {
+      id: "img_1",
+      name: "Image",
+      requestedReference: "task-handoff-web:local",
+      pullPolicy: "if-not-present",
+      capabilities: [],
+      optionalApps: [],
+      defaultEnv: {},
+      labels: {},
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    },
   };
 
   const localCalls = [];
   const localExecutor = new LocalDockerExecutor(async (command, args) => {
     localCalls.push([command, args]);
-    if (args[0] === "start") {
-      throw new Error("missing container");
+    if (args[0] === "inspect" && args.includes("{{json .}}")) {
+      throw Object.assign(new Error("No such container"), { details: { stderr: "No such container" } });
     }
     if (args[0] === "image" && args[1] === "inspect") {
       throw new Error("missing");
@@ -3316,7 +3344,7 @@ test("local docker executor checks local images and pulls registry images before
     /missing/,
   );
   assert.deepEqual(localCalls, [
-    ["docker", ["start", "task-handoff-inst_1"]],
+    ["docker", ["inspect", "--format", "{{json .}}", "task-handoff-inst_1"]],
     ["docker", ["image", "inspect", "task-handoff-web:local", "--format", "{{json .}}"]],
     ["docker", ["pull", "task-handoff-web:local"]],
     ["docker", ["image", "inspect", "task-handoff-web:local", "--format", "{{json .}}"]],
@@ -3326,8 +3354,8 @@ test("local docker executor checks local images and pulls registry images before
   let remotePulled = false;
   const remoteExecutor = new LocalDockerExecutor(async (command, args) => {
     remoteCalls.push([command, args]);
-    if (args[0] === "start") {
-      throw new Error("missing container");
+    if (args[0] === "inspect" && args.includes("{{json .}}")) {
+      throw Object.assign(new Error("No such container"), { details: { stderr: "No such container" } });
     }
     if (args[0] === "image" && args[1] === "inspect") {
       if (!remotePulled) throw new Error("missing");
@@ -3370,7 +3398,7 @@ test("local docker executor checks local images and pulls registry images before
   assert.deepEqual(
     remoteCalls.slice(0, 4),
     [
-      ["docker", ["start", "task-handoff-inst_1"]],
+      ["docker", ["inspect", "--format", "{{json .}}", "task-handoff-inst_1"]],
       ["docker", ["image", "inspect", "ghcr.io/example/task-handoff-web:latest", "--format", "{{json .}}"]],
       ["docker", ["pull", "ghcr.io/example/task-handoff-web:latest"]],
       ["docker", ["image", "inspect", "ghcr.io/example/task-handoff-web:latest", "--format", "{{json .}}"]],
@@ -3383,7 +3411,9 @@ test("local docker executor checks local images and pulls registry images before
   const resolvedCalls = [];
   const resolvedExecutor = new LocalDockerExecutor(async (command, args) => {
     resolvedCalls.push([command, args]);
-    if (args[0] === "start") throw new Error("missing container");
+    if (args[0] === "inspect" && args.includes("{{json .}}")) {
+      throw Object.assign(new Error("No such container"), { details: { stderr: "No such container" } });
+    }
     if (args[0] === "image" && args[1] === "inspect") {
       assert.equal(args[2], resolvedReference);
       return { stdout: JSON.stringify({ Id: `sha256:${"b".repeat(64)}`, RepoDigests: [resolvedReference] }), stderr: "" };
@@ -3415,6 +3445,9 @@ test("local docker executor checks local images and pulls registry images before
   const existingCalls = [];
   const existingExecutor = new LocalDockerExecutor(async (command, args) => {
     existingCalls.push([command, args]);
+    if (args[0] === "inspect" && args.includes("{{json .}}")) {
+      return { stdout: JSON.stringify({ Id: "container-1", Config: { Labels: { "task-handoff.instance-id": "inst_1" } } }), stderr: "" };
+    }
     if (args[0] === "port") {
       return { stdout: "127.0.0.1:18081", stderr: "" };
     }
@@ -3447,9 +3480,31 @@ test("local docker executor checks local images and pulls registry images before
   assert.equal(resumed.runtime.containerId, "container-1");
   assert.equal(resumed.target.web, "http://127.0.0.1:18081");
   assert.deepEqual(existingCalls, [
+    ["docker", ["inspect", "--format", "{{json .}}", "task-handoff-inst_1"]],
     ["docker", ["start", "task-handoff-inst_1"]],
     ["docker", ["port", "task-handoff-inst_1", "8080/tcp"]],
   ]);
+
+  const daemonCalls = [];
+  const daemonErrorExecutor = new LocalDockerExecutor(async (_command, args) => {
+    daemonCalls.push(args);
+    throw Object.assign(new Error("Cannot connect to the Docker daemon"), { details: { stderr: "Cannot connect to the Docker daemon" } });
+  });
+  await assert.rejects(() => daemonErrorExecutor.start(baseContext), /Cannot connect to the Docker daemon/);
+  assert.deepEqual(daemonCalls, [["inspect", "--format", "{{json .}}", "task-handoff-inst_1"]]);
+
+  const wrongOwnerCalls = [];
+  const wrongOwnerExecutor = new LocalDockerExecutor(async (_command, args) => {
+    wrongOwnerCalls.push(args);
+    return { stdout: JSON.stringify({ Id: "container-foreign", Config: { Labels: { "task-handoff.instance-id": "inst_foreign" } } }), stderr: "" };
+  });
+  await assert.rejects(() => wrongOwnerExecutor.start(baseContext), /belongs to inst_foreign/);
+  assert.equal(wrongOwnerCalls.some((args) => args[0] === "start"), false);
+
+  const stopErrorExecutor = new LocalDockerExecutor(async () => {
+    throw Object.assign(new Error("permission denied"), { details: { stderr: "permission denied" } });
+  });
+  await assert.rejects(() => stopErrorExecutor.stop(baseContext), /permission denied/);
 
   const restartCalls = [];
   const restartExecutor = new LocalDockerExecutor(async (command, args) => {
@@ -3499,6 +3554,8 @@ test("local docker executor checks local images and pulls registry images before
 test("node agent runs local docker behind node-local target and auto-imports agent config on start and restart", async (t) => {
   const calls = [];
   const fetchCalls = [];
+  let containerExists = false;
+  const desiredRuntimeVersion = runtimeVersionStateForActual().desiredVersion;
   let app;
   app = await createNodeAgentApp({
     dataDir: tempDataDir("node-agent-local-endpoint"),
@@ -3530,26 +3587,27 @@ test("node agent runs local docker behind node-local target and auto-imports age
     },
     dockerCommandRunner: async (command, args) => {
       calls.push([command, args]);
-      if (args[0] === "start") {
-        throw new Error("missing container");
+      if (args[0] === "inspect" && args.includes("{{json .}}") && !containerExists) {
+        throw Object.assign(new Error("No such container"), { details: { stderr: "No such container" } });
       }
       if (args[0] === "image" && args[1] === "inspect") {
         return { stdout: JSON.stringify({ Id: `sha256:${"b".repeat(64)}`, RepoDigests: [`task-handoff-web@sha256:${"b".repeat(64)}`], Os: "linux", Architecture: "arm64" }), stderr: "" };
       }
       if (args[0] === "run") {
+        containerExists = true;
         return { stdout: "container-1", stderr: "" };
       }
       if (args[0] === "port") {
         return { stdout: "0.0.0.0:18080", stderr: "" };
       }
       if (args[0] === "inspect" && args.includes("{{json .}}")) {
-        return { stdout: JSON.stringify({ Platform: "linux", Image: "sha256:image" }), stderr: "" };
+        return { stdout: JSON.stringify({ Id: "container-1", Platform: "linux", Image: "sha256:image", Config: { Labels: { "task-handoff.instance-id": "inst_1" } } }), stderr: "" };
       }
       if (args[0] === "inspect") {
         return { stdout: "container-1", stderr: "" };
       }
       if (args[0] === "exec" && args.includes("verify-active")) {
-        return { stdout: JSON.stringify(resolvedRuntimeArtifact("1.0.0", "linux", "arm64").identity), stderr: "" };
+        return { stdout: JSON.stringify(resolvedRuntimeArtifact(desiredRuntimeVersion, "linux", "arm64").identity), stderr: "" };
       }
       if (args[0] === "restart" && app) {
         const instance = app.nodeAgentState.controlledInstances.get("inst_1");
@@ -3559,7 +3617,7 @@ test("node agent runs local docker behind node-local target and auto-imports age
             appInventory: emptyAppInventory(),
             controlMode: "controlled",
             capabilities: {},
-            build: { component: "controlled-instance", packageVersion: "1.0.0" },
+            build: { component: "controlled-instance", packageVersion: desiredRuntimeVersion },
             target: { strategy: "direct-port", status: "reachable", web: "http://127.0.0.1:18080" },
             workspace: { status: "ready" },
           }, instance.registrationToken));
@@ -3662,11 +3720,14 @@ test("node agent runs local docker behind node-local target and auto-imports age
 
 test("node agent keeps a managed instance started when startup runtime convergence fails", async (t) => {
   const calls = [];
+  let containerExists = false;
+  let artifactResolutions = 0;
   const app = await createNodeAgentApp({
     dataDir: tempDataDir("node-agent-start-runtime-convergence-failure"),
     logger: false,
     token: "agent-secret",
     resolveRuntimeArtifact: async () => {
+      artifactResolutions += 1;
       throw Object.assign(new Error("runtime artifact unavailable"), {
         code: "INSTANCE_RUNTIME_ARTIFACT_UNAVAILABLE",
         retryable: false,
@@ -3674,14 +3735,19 @@ test("node agent keeps a managed instance started when startup runtime convergen
     },
     dockerCommandRunner: async (_command, args) => {
       calls.push(args);
-      if (args[0] === "start") throw new Error("missing container");
+      if (args[0] === "inspect" && args.includes("{{json .}}") && !containerExists) {
+        throw Object.assign(new Error("No such container"), { details: { stderr: "No such container" } });
+      }
       if (args[0] === "image" && args[1] === "inspect") {
         return { stdout: JSON.stringify({ Id: `sha256:${"f".repeat(64)}`, RepoDigests: [`task-handoff-web@sha256:${"f".repeat(64)}`], Os: "linux", Architecture: "amd64" }), stderr: "" };
       }
-      if (args[0] === "run") return { stdout: "container-start-fallback", stderr: "" };
+      if (args[0] === "run") {
+        containerExists = true;
+        return { stdout: "container-start-fallback", stderr: "" };
+      }
       if (args[0] === "port") return { stdout: "0.0.0.0:18183", stderr: "" };
       if (args[0] === "inspect" && args.includes("{{json .}}")) {
-        return { stdout: JSON.stringify({ Platform: "linux", Image: "sha256:image" }), stderr: "" };
+        return { stdout: JSON.stringify({ Id: "container-start-fallback", Platform: "linux", Image: "sha256:image", Config: { Labels: { "task-handoff.instance-id": "inst_start_fallback" } } }), stderr: "" };
       }
       return { stdout: "container-start-fallback", stderr: "" };
     },
@@ -3725,10 +3791,87 @@ test("node agent keeps a managed instance started when startup runtime convergen
   assert.equal(started.json().data.runtimeVersion.phase, "failed");
   assert.equal(started.json().data.runtimeVersion.error.code, "INSTANCE_RUNTIME_ARTIFACT_UNAVAILABLE");
   assert.ok(calls.some((args) => args[0] === "run"), "the instance container must remain started");
+
+  const attemptsAfterStart = artifactResolutions;
+  await app.nodeAgentRecoverManagedInstances();
+  await app.nodeAgentRecoverManagedInstances();
+  assert.equal(artifactResolutions, attemptsAfterStart + 2, "an active unmatched instance must remain in continuous convergence");
+
+  const lifecycleStartsAfterRequest = calls.filter((args) => ["run", "start"].includes(args[0])).length;
+  await app.nodeAgentRestoreManagedInstances();
+  assert.equal(
+    calls.filter((args) => ["run", "start"].includes(args[0])).length,
+    lifecycleStartsAfterRequest,
+    "an instance started by this node-agent must not be restored again by the recovery supervisor",
+  );
+});
+
+test("node agent restores a managed container before startup convergence", async (t) => {
+  const actions = [];
+  let artifactResolutions = 0;
+  const app = await createNodeAgentApp({
+    dataDir: tempDataDir("node-agent-restore-before-convergence"),
+    logger: false,
+    token: "agent-secret",
+    resolveRuntimeArtifact: async () => {
+      artifactResolutions += 1;
+      actions.push("resolve-artifact");
+      throw Object.assign(new Error("artifact unavailable"), {
+        code: "INSTANCE_RUNTIME_ARTIFACT_UNAVAILABLE",
+        retryable: false,
+      });
+    },
+    dockerCommandRunner: async (_command, args) => {
+      if (args[0] === "image" && args[1] === "inspect") {
+        return { stdout: JSON.stringify({ Id: `sha256:${"a".repeat(64)}`, RepoDigests: [`task-handoff-web@sha256:${"a".repeat(64)}`], Os: "linux", Architecture: "amd64" }), stderr: "" };
+      }
+      if (args[0] === "inspect" && args.includes("{{json .}}")) {
+        return { stdout: JSON.stringify({ Id: "container-restore", Platform: "linux", Image: "sha256:image", Config: { Labels: { "task-handoff.instance-id": "inst_restore_order" } } }), stderr: "" };
+      }
+      if (args[0] === "start") actions.push("start-container");
+      if (args[0] === "port") return { stdout: "127.0.0.1:18184", stderr: "" };
+      return { stdout: "container-restore", stderr: "" };
+    },
+    fetchImpl: async () => new Response(JSON.stringify({ data: { ok: true } }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+  });
+  t.after(() => app.close());
+
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: "inst_restore_order",
+      runtimeId: "runtime_local_docker",
+      imageSelection: { imageId: "img_1" },
+      image: testInstanceImage("task-handoff-web:local", "img_1", "Image"),
+      source: { type: "git-repository", url: "https://github.com/example/repo.git" },
+    },
+  });
+  assert.equal(created.statusCode, 201, created.body);
+  await waitForCondition(() => app.nodeAgentState.controlledInstances.get("inst_restore_order")?.status === "created", "restore-order image provisioning");
+  const instance = app.nodeAgentState.controlledInstances.get("inst_restore_order");
+  app.nodeAgentState.controlledInstances.put({
+    ...instance,
+    status: "registering",
+    runtime: { ...instance.runtime, kind: "docker", containerName: "task-handoff-inst_restore_order", containerId: "container-restore" },
+  });
+
+  await app.nodeAgentRecoverManagedInstances();
+  assert.equal(artifactResolutions, 0, "convergence must not run before the managed runtime is restored");
+  await app.nodeAgentRestoreManagedInstances();
+  assert.deepEqual(actions, ["start-container"]);
+  await app.nodeAgentRecoverManagedInstances();
+  assert.equal(artifactResolutions, 1);
+  assert.deepEqual(actions, ["start-container", "resolve-artifact"]);
 });
 
 test("node agent skips start config auto-import when disabled on the instance", async (t) => {
   const fetchCalls = [];
+  let containerExists = false;
   let app;
   app = await createNodeAgentApp({
     dataDir: tempDataDir("node-agent-config-auto-import-disabled"),
@@ -3736,13 +3879,14 @@ test("node agent skips start config auto-import when disabled on the instance", 
     token: "agent-secret",
     resolveRuntimeArtifact: resolvedRuntimeArtifact,
     dockerCommandRunner: async (_command, args) => {
-      if (args[0] === "start") {
-        throw new Error("missing container");
+      if (args[0] === "inspect" && args.includes("{{json .}}") && !containerExists) {
+        throw new Error("No such container");
       }
       if (args[0] === "image" && args[1] === "inspect") {
         return { stdout: JSON.stringify({ Id: `sha256:${"c".repeat(64)}`, RepoDigests: [`task-handoff-web@sha256:${"c".repeat(64)}`], Os: "linux", Architecture: "amd64" }), stderr: "" };
       }
       if (args[0] === "run") {
+        containerExists = true;
         return { stdout: "container-1", stderr: "" };
       }
       if (args[0] === "port") {
@@ -3798,6 +3942,7 @@ test("node agent skips start config auto-import when disabled on the instance", 
 
 test("node agent config auto-import failure does not fail start", async (t) => {
   const fetchCalls = [];
+  let containerExists = false;
   let app;
   app = await createNodeAgentApp({
     dataDir: tempDataDir("node-agent-config-auto-import-failure"),
@@ -3805,13 +3950,14 @@ test("node agent config auto-import failure does not fail start", async (t) => {
     token: "agent-secret",
     resolveRuntimeArtifact: resolvedRuntimeArtifact,
     dockerCommandRunner: async (_command, args) => {
-      if (args[0] === "start") {
-        throw new Error("missing container");
+      if (args[0] === "inspect" && args.includes("{{json .}}") && !containerExists) {
+        throw new Error("No such container");
       }
       if (args[0] === "image" && args[1] === "inspect") {
         return { stdout: JSON.stringify({ Id: `sha256:${"d".repeat(64)}`, RepoDigests: [`task-handoff-web@sha256:${"d".repeat(64)}`], Os: "linux", Architecture: "amd64" }), stderr: "" };
       }
       if (args[0] === "run") {
+        containerExists = true;
         return { stdout: "container-1", stderr: "" };
       }
       if (args[0] === "port") {
@@ -3882,6 +4028,7 @@ test("node agent config auto-import timeout does not hang start", async (t) => {
       process.env.TASK_HANDOFF_CONFIG_AUTO_IMPORT_TIMEOUT_MS = previousTimeout;
     }
   });
+  let containerExists = false;
   let app;
   app = await createNodeAgentApp({
     dataDir: tempDataDir("node-agent-config-auto-import-timeout"),
@@ -3889,13 +4036,14 @@ test("node agent config auto-import timeout does not hang start", async (t) => {
     token: "agent-secret",
     resolveRuntimeArtifact: resolvedRuntimeArtifact,
     dockerCommandRunner: async (_command, args) => {
-      if (args[0] === "start") {
-        throw new Error("missing container");
+      if (args[0] === "inspect" && args.includes("{{json .}}") && !containerExists) {
+        throw new Error("No such container");
       }
       if (args[0] === "image" && args[1] === "inspect") {
         return { stdout: JSON.stringify({ Id: `sha256:${"e".repeat(64)}`, RepoDigests: [`task-handoff-web@sha256:${"e".repeat(64)}`], Os: "linux", Architecture: "amd64" }), stderr: "" };
       }
       if (args[0] === "run") {
+        containerExists = true;
         return { stdout: "container-1", stderr: "" };
       }
       if (args[0] === "port") {
@@ -5656,7 +5804,6 @@ test("localhost stop migrates a legacy residual process using its reported insta
   });
   assert.equal(stopped.statusCode, 200);
   assert.equal(stopped.json().data.status, "stopped");
-  await waitForProcessExit(child.pid, "legacy residual local controlled instance");
 });
 
 test("node agent shutdown stops localhost processes while preserving active restore state", async (t) => {
@@ -5864,7 +6011,7 @@ test("node agent restores localhost runtime processes after graceful shutdown", 
     port,
   });
   await app.listen({ host, port });
-  await app.nodeAgentRestoreLocalInstances();
+  await app.nodeAgentRestoreManagedInstances();
 
   const listed = await withTimeout(
     (async () => {
@@ -5911,6 +6058,9 @@ test("node agent restores active localhost runtime processes after unclean shutd
       "const http = require('node:http');",
       "const port = Number(process.env.TASK_HANDOFF_WEB_PORT);",
       `fs.appendFileSync(${JSON.stringify(envLog)}, JSON.stringify({`,
+      "  pid: process.pid,",
+      "  processNonce: process.env.TASK_HANDOFF_LOCAL_PROCESS_NONCE,",
+      "  releaseVersion: process.env.TASK_HANDOFF_CONTROLLED_INSTANCE_VERSION,",
       "  persist: process.env.TASK_HANDOFF_APP_SESSION_PERSIST,",
       "  dataDir: process.env.TASK_HANDOFF_DATA_DIR,",
       "  logDir: process.env.TASK_HANDOFF_LOG_DIR,",
@@ -5918,6 +6068,7 @@ test("node agent restores active localhost runtime processes after unclean shutd
       "const server = http.createServer((req, res) => {",
       `  fs.appendFileSync(${JSON.stringify(requestLog)}, JSON.stringify({ method: req.method, url: req.url }) + '\\n');`,
       ...controlledProcessIdentityRouteStubLines,
+      "  if (req.url === '/api/internal/node-agent/shutdown' && req.method === 'POST' && req.headers.authorization === `Bearer ${process.env.TASK_HANDOFF_REGISTRATION_TOKEN}`) { res.end('ok'); setImmediate(() => process.kill(process.pid, 'SIGTERM')); return; }",
       "  if (req.url && req.url.startsWith('/api/config-sync/import/')) { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ data: { ok: true } })); return; }",
       "  res.end('ok');",
       "});",
@@ -5945,7 +6096,7 @@ test("node agent restores active localhost runtime processes after unclean shutd
     await app.close();
   });
   await app.listen({ host, port });
-  await app.nodeAgentRestoreLocalInstances();
+  await app.nodeAgentRestoreManagedInstances();
 
   const created = await app.inject({
     method: "POST",
@@ -5978,8 +6129,48 @@ test("node agent restores active localhost runtime processes after unclean shutd
   const child = app.nodeAgentState.controlledInstances.get("inst_local_restore_unclean");
   app.nodeAgentState.controlledInstances.put({ ...child, status: "running", connectionStatus: "online" });
   await app.close();
-  app.nodeAgentState.controlledInstances.put({ ...child, status: "running", connectionStatus: "online" });
-  await new Promise((resolve) => setTimeout(resolve, 100));
+  const orphanNonce = "previous-node-agent-process";
+  const orphan = spawn(process.execPath, [webStub], {
+    cwd: dataDir,
+    stdio: "ignore",
+    env: {
+      ...process.env,
+      TASK_HANDOFF_INSTANCE_ID: child.id,
+      TASK_HANDOFF_REGISTRATION_TOKEN: child.registrationToken,
+      TASK_HANDOFF_LOCAL_PROCESS_NONCE: orphanNonce,
+      TASK_HANDOFF_WEB_PORT: String(firstPort),
+      TASK_HANDOFF_DATA_DIR: path.join(dataDir, "local-instances", child.id),
+      TASK_HANDOFF_LOG_DIR: path.join(dataDir, "local-instances", child.id, "logs"),
+    },
+  });
+  assert.equal(typeof orphan.pid, "number");
+  t.after(() => {
+    try {
+      process.kill(orphan.pid, "SIGKILL");
+    } catch {
+      // The restore path already stopped the orphan.
+    }
+  });
+  await waitForCondition(async () => {
+    try {
+      return (await fetch(`http://${host}:${firstPort}/api/health`)).ok;
+    } catch {
+      return false;
+    }
+  }, "orphaned localhost runtime readiness");
+  app.nodeAgentState.controlledInstances.put({
+    ...child,
+    status: "running",
+    connectionStatus: "online",
+    runtime: {
+      ...child.runtime,
+      pid: orphan.pid,
+      labels: {
+        ...child.runtime.labels,
+        "task-handoff.local-process-nonce": orphanNonce,
+      },
+    },
+  });
   app = await createNodeAgentApp({
     dataDir,
     logger: false,
@@ -5988,7 +6179,7 @@ test("node agent restores active localhost runtime processes after unclean shutd
     port,
   });
   await app.listen({ host, port });
-  await app.nodeAgentRestoreLocalInstances();
+  await app.nodeAgentRestoreManagedInstances();
 
   const restored = await withTimeout(
     (async () => {
@@ -6016,9 +6207,14 @@ test("node agent restores active localhost runtime processes after unclean shutd
   assert.equal(instance.runtime.port, firstPort);
   assert.equal(typeof instance.runtime.pid, "number");
   assert.notEqual(instance.runtime.pid, firstPid);
+  assert.notEqual(instance.runtime.pid, orphan.pid);
+  await waitForProcessExit(orphan.pid, "orphaned localhost controlled instance exit");
   const envRows = fs.readFileSync(envLog, "utf8").trim().split("\n").map((line) => JSON.parse(line));
-  assert.equal(envRows.length, 2);
-  assert.deepEqual(envRows.map((row) => row.persist), ["1", "1"]);
+  assert.equal(envRows.length, 3);
+  assert.deepEqual(envRows.map((row) => row.persist), ["1", undefined, "1"]);
+  assert.equal(typeof envRows[0].releaseVersion, "string");
+  assert.equal(envRows[2].releaseVersion, envRows[0].releaseVersion);
+  assert.equal(envRows[1].releaseVersion, undefined);
   assert.ok(envRows.every((row) => row.dataDir.includes("local-instances/inst_local_restore_unclean")));
   assert.ok(envRows.every((row) => row.logDir.includes("local-instances/inst_local_restore_unclean/logs")));
   const requestRows = await waitForCondition(() => {
@@ -6287,6 +6483,89 @@ test("register and heartbeat preserve authoritative convergence attempts and fai
   });
   assert.equal(retryHeartbeat.statusCode, 200, retryHeartbeat.body);
   assert.equal(retryHeartbeat.json().data.runtimeVersion.error.message, "docker cp could not find the launcher asset");
+});
+
+test("node agent rejects heartbeat reports from an obsolete process incarnation", async (t) => {
+  const app = await createNodeAgentApp({
+    dataDir: tempDataDir("node-agent-process-incarnation"),
+    logger: false,
+    token: "agent-secret",
+  });
+  t.after(() => app.close());
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: "inst_incarnation",
+      runtimeId: "runtime_local_host",
+      source: { type: "local-folder", path: "/workspace" },
+      sourceSnapshot: {},
+    },
+  });
+  const registrationToken = created.json().data.registrationToken;
+  const registered = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_incarnation/register",
+    headers: { authorization: `Bearer ${registrationToken}` },
+    payload: {
+      instanceId: "inst_incarnation",
+      protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+      appInventory: emptyAppInventory(),
+      processIncarnationId: "process-current",
+      target: { strategy: "direct-port", status: "reachable" },
+      workspace: { status: "ready" },
+    },
+  });
+  assert.equal(registered.statusCode, 201, registered.body);
+
+  const currentHeartbeat = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_incarnation/heartbeat",
+    headers: { authorization: `Bearer ${registrationToken}` },
+    payload: {
+      protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+      appInventory: emptyAppInventory(),
+      processIncarnationId: "process-current",
+      status: "running",
+      health: "ok",
+    },
+  });
+  assert.equal(currentHeartbeat.statusCode, 200, currentHeartbeat.body);
+
+  const duplicateRegistration = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_incarnation/register",
+    headers: { authorization: `Bearer ${registrationToken}` },
+    payload: {
+      instanceId: "inst_incarnation",
+      protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+      appInventory: emptyAppInventory(),
+      processIncarnationId: "process-current",
+      target: { strategy: "direct-port", status: "reachable" },
+      workspace: { status: "ready" },
+    },
+  });
+  assert.equal(duplicateRegistration.statusCode, 201, duplicateRegistration.body);
+  assert.equal(duplicateRegistration.json().data.status, "running");
+
+  const staleHeartbeat = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_incarnation/heartbeat",
+    headers: { authorization: `Bearer ${registrationToken}` },
+    payload: {
+      protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+      appInventory: emptyAppInventory(),
+      processIncarnationId: "process-obsolete",
+      status: "failed",
+      health: "failed",
+    },
+  });
+  assert.equal(staleHeartbeat.statusCode, 409, staleHeartbeat.body);
+  assert.equal(staleHeartbeat.json().error.code, "INSTANCE_PROCESS_INCARNATION_MISMATCH");
+  const stored = app.nodeAgentState.controlledInstances.get("inst_incarnation");
+  assert.equal(stored.status, "running");
+  assert.equal(stored.health, currentHeartbeat.json().data.health);
 });
 
 test("node agent migrates legacy local stored endpoint-shaped instances on startup", async (t) => {

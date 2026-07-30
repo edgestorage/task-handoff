@@ -100,7 +100,7 @@ export class CodexRuntimeExtension implements ManagedAppRuntimeExtension {
     const appServer = this.shared;
     if (!appServer) return;
     this.shared = undefined;
-    if (!appServer.child.killed && appServer.child.exitCode === null) appServer.child.kill("SIGTERM");
+    this.host.stopProcessTree(appServer.child);
     fs.rmSync(appServer.socketPath, { force: true });
   }
 
@@ -110,7 +110,7 @@ export class CodexRuntimeExtension implements ManagedAppRuntimeExtension {
       existing.appSessionIds.add(appSessionId);
       return existing;
     }
-    if (existing && !existing.child.killed) existing.child.kill("SIGTERM");
+    if (existing) this.host.stopProcessTree(existing.child);
     if (process.platform === "win32") {
       throw Object.assign(new Error("Codex shared app-server uses unix sockets, which are unavailable on Windows."), { code: "CODEX_APP_SERVER_UNSUPPORTED" });
     }
@@ -149,7 +149,7 @@ export class CodexRuntimeExtension implements ManagedAppRuntimeExtension {
     try {
       this.host.waitForUnixSocket(socketPath, 5_000, () => spawnError);
     } catch (error) {
-      if (!child.killed) child.kill("SIGTERM");
+      this.host.stopProcessTree(child);
       this.shared = undefined;
       throw Object.assign(error instanceof Error ? error : new Error(String(error)), { code: "CODEX_APP_SERVER_START_FAILED" });
     }
@@ -162,7 +162,7 @@ export class CodexRuntimeExtension implements ManagedAppRuntimeExtension {
     appServer.appSessionIds.delete(appSessionId);
     if (appServer.appSessionIds.size > 0) return;
     this.shared = undefined;
-    if (!appServer.child.killed && appServer.child.exitCode === null) appServer.child.kill("SIGTERM");
+    this.host.stopProcessTree(appServer.child);
     fs.rmSync(appServer.socketPath, { force: true });
   }
 

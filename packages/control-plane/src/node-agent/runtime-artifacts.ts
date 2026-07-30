@@ -35,8 +35,6 @@ export type ResolvedRuntimeArtifact = {
 
 export type RuntimeInstallResult = {
   releasePath: string;
-  previousVersion?: string;
-  previousRelease?: string;
   reused: boolean;
 };
 
@@ -370,10 +368,7 @@ export async function installRuntimeArtifact(options: {
   const releasePath = path.join(releasesDir, release);
   await Promise.all([mkdir(releasesDir, { recursive: true }), mkdir(stagingDir, { recursive: true }), mkdir(quarantineDir, { recursive: true })]);
   await cleanupRuntimeStaging(options.runtimeRoot);
-  const previousRelease = await activeRelease(options.runtimeRoot);
-  const previousVersion = previousRelease
-    ? await readRuntimeArtifactManifest(path.join(releasesDir, previousRelease)).then((manifest) => manifest.version).catch(() => undefined)
-    : undefined;
+  const activeReleaseKey = await activeRelease(options.runtimeRoot);
   let reused = false;
   try {
     await validateExtractedRuntimeArtifact(releasePath, identity, {
@@ -402,27 +397,16 @@ export async function installRuntimeArtifact(options: {
       throw new RuntimeArtifactError("INSTANCE_RUNTIME_INSTALL_FAILED", "Could not install controlled instance runtime.", { cause: installError, retryable: true });
     }
   }
-  if (previousRelease !== release) {
+  if (activeReleaseKey !== release) {
     await switchCurrentRuntime(options.runtimeRoot, release);
-    if (previousRelease) await writeFile(path.join(options.runtimeRoot, "previous-release"), `${previousRelease}\n`, "utf8");
   }
   if (options.faultInjection === "after-switch") throw new RuntimeArtifactError("INSTANCE_RUNTIME_INSTALL_FAILED", "Injected failure after active release switch.", { retryable: true });
-  return { releasePath, previousVersion, previousRelease, reused };
+  return { releasePath, reused };
 }
 
 export async function cleanupRuntimeStaging(runtimeRoot: string): Promise<void> {
   await rm(path.join(runtimeRoot, "staging"), { recursive: true, force: true });
   await mkdir(path.join(runtimeRoot, "staging"), { recursive: true });
-}
-
-export async function rollbackRuntimeRelease(runtimeRoot: string, release?: string): Promise<string> {
-  const targetRelease = release ?? (await readFile(path.join(runtimeRoot, "previous-release"), "utf8")).trim();
-  if (!targetRelease) throw new RuntimeArtifactError("INSTANCE_RUNTIME_INSTALL_FAILED", "No previous verified runtime release is available.");
-  const releasePath = path.join(runtimeRoot, "releases", targetRelease);
-  const manifest = await readRuntimeArtifactManifest(releasePath);
-  await validateExtractedRuntimeArtifact(releasePath, manifest);
-  await switchCurrentRuntime(runtimeRoot, targetRelease);
-  return manifest.version;
 }
 
 export function runtimeReleaseKey(identity: Pick<RuntimeArtifactIdentity, "version" | "sha256">): string {

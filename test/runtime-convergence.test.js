@@ -311,7 +311,7 @@ test("retryable failures use bounded exponential backoff and eventually converge
   assert.equal(updated.runtimeVersion.phase, "matched");
 });
 
-test("retry exhaustion is recorded as a permanent failure", async () => {
+test("a failed attempt batch remains diagnostic until the recovery supervisor retries it", async () => {
   const store = memoryStore(instance());
   let installs = 0;
   const coordinator = new RuntimeConvergenceCoordinator(store, () => "2.0.0", {
@@ -330,13 +330,43 @@ test("retry exhaustion is recorded as a permanent failure", async () => {
   assert.equal(installs, 2);
   assert.equal(updated.runtimeVersion.phase, "failed");
   assert.equal(updated.runtimeVersion.attempt, 2);
-  assert.equal(updated.runtimeVersion.error.retryable, false);
-  assert.match(updated.runtimeVersion.error.message, /exhausted 2 attempts/);
+  assert.equal(updated.runtimeVersion.error.retryable, true);
+  assert.match(updated.runtimeVersion.error.message, /paused after 2 attempts and will retry/);
   assert.match(updated.runtimeVersion.error.message, /Last error: registry unavailable/);
 
   const recovered = await coordinator.schedule("inst_runtime");
-  assert.equal(installs, 2, "a permanently exhausted state must not start an unbounded retry loop");
+  assert.equal(installs, 2, "the coordinator waits for the recovery supervisor instead of spinning in one request");
   assert.equal(recovered.runtimeVersion.phase, "failed");
+});
+
+test("the recovery supervisor can retry a failed attempt batch after dependencies return", async () => {
+  const store = memoryStore(instance());
+  let installs = 0;
+  let dependencyReady = false;
+  const coordinator = new RuntimeConvergenceCoordinator(store, () => "2.0.0", {
+    async install() {
+      installs += 1;
+      if (!dependencyReady) throw new Error("Docker daemon unavailable");
+    },
+    async restart() {
+      const current = store.get("inst_runtime");
+      store.put({ ...current, instanceVersion: "2.0.0", build: { ...current.build, packageVersion: "2.0.0" } });
+    },
+  }, {
+    maxAttempts: 1,
+    retryBaseDelayMs: 0,
+    verificationTimeoutMs: 0,
+    delay: async () => {},
+  });
+
+  const exhausted = await coordinator.schedule("inst_runtime");
+  assert.equal(exhausted.runtimeVersion.phase, "failed");
+  dependencyReady = true;
+
+  const recovered = await coordinator.schedule("inst_runtime", { retryFailed: true });
+  assert.equal(recovered.runtimeVersion.phase, "matched");
+  assert.equal(recovered.runtimeVersion.attempt, 1);
+  assert.equal(installs, 2);
 });
 
 test("executor error codes outside the convergence protocol retain their message without invalidating state", async () => {
@@ -585,7 +615,7 @@ test("active instances drain for a bounded time and still converge", async () =>
   assert.equal(updated.runtimeVersion.phase, "matched");
 });
 
-test("verification failures remain diagnostic and invoke rollback", async () => {
+test("verification failures remain diagnostic without moving away from the desired release", async () => {
   const store = memoryStore(instance());
   let rollbacks = 0;
   const coordinator = new RuntimeConvergenceCoordinator(store, () => "2.0.0", {
@@ -597,7 +627,7 @@ test("verification failures remain diagnostic and invoke rollback", async () => 
   }, { verificationTimeoutMs: 0, maxAttempts: 1 });
 
   const updated = await coordinator.schedule("inst_runtime");
-  assert.equal(rollbacks, 1);
+  assert.equal(rollbacks, 0);
   assert.equal(updated.runtimeVersion.phase, "failed");
   assert.equal(updated.runtimeVersion.error.code, "INSTANCE_RUNTIME_VERIFICATION_FAILED");
   assert.equal(updated.ready, false);

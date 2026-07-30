@@ -182,7 +182,7 @@ test("server update CLI preserves configuration and restart ordering", () => {
 });
 
 test("runtime package versions use one resolver for explicit, bundled, and workspace builds", async () => {
-  const { packageVersionResolver, resolvePackageVersion } = await import("../packages/core/src/core/package-version.ts");
+  const { controlledInstancePackageVersionResolver, executablePackageVersionResolver, packageVersionResolver, resolvePackageVersion } = await import("../packages/core/src/core/package-version.ts");
   const nodeAgent = fs.readFileSync(path.join(root, "packages", "control-plane", "src", "node-agent", "app.ts"), "utf8");
   assert.match(nodeAgent, /packageVersionResolver\([\s\S]*?"@task-handoff\/node-agent"[\s\S]*?"@task-handoff\/control-plane"[\s\S]*?\);/);
   assert.equal(resolvePackageVersion("@task-handoff/cli", { TASK_HANDOFF_VERSION: " 9.8.7 " }), "9.8.7");
@@ -209,6 +209,11 @@ test("runtime package versions use one resolver for explicit, bundled, and works
   try {
     process.argv[1] = packagedBin;
     assert.equal(resolvePackageVersion("@task-handoff/control-plane", {}), "2.3.4-alpha.1");
+    assert.equal(executablePackageVersionResolver("@task-handoff/control-plane", { TASK_HANDOFF_VERSION: "1.0.0" })(), "2.3.4-alpha.1");
+    assert.equal(controlledInstancePackageVersionResolver({
+      TASK_HANDOFF_VERSION: "1.0.0",
+      TASK_HANDOFF_CONTROLLED_INSTANCE_VERSION: " 2.3.4-alpha.1 ",
+    })(), "2.3.4-alpha.1");
   } finally {
     process.argv[1] = previousEntry;
     fs.rmSync(packagedRoot, { recursive: true, force: true });

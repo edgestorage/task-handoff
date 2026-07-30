@@ -1,4 +1,4 @@
-import type { ControlledInstance, ControlledInstanceHeartbeat, Node } from "@task-handoff/protocol/control-plane";
+import { controlledInstanceAcceptsTraffic, type ControlledInstance, type ControlledInstanceHeartbeat, type Node } from "@task-handoff/protocol/control-plane";
 import { plainHeaders } from "../common/helpers.ts";
 import type { NodeAgentTransport, NodeAgentWebSocket } from "../nodes/client.ts";
 
@@ -27,6 +27,7 @@ export class ControlledInstanceGateway {
   }
 
   async request(instance: ControlledInstance, route: string, init: RequestInit = {}) {
+    assertInstanceAcceptsTraffic(instance);
     if (!instance.target.web || (instance.connectionStatus !== "online" && instance.agentStatus !== "online")) {
       const error = new Error(`Instance ${instance.name} is not reachable.`);
       Object.assign(error, { statusCode: 409, code: "INSTANCE_UNREACHABLE" });
@@ -62,6 +63,7 @@ export class ControlledInstanceGateway {
   }
 
   async proxyHttp(instance: ControlledInstance, path: string, init: ControlledInstanceProxyHttpInit = {}) {
+    assertInstanceAcceptsTraffic(instance);
     if (instance.connectionStatus !== "online" && instance.agentStatus !== "online") {
       const error = new Error(`Instance ${instance.name} is not reachable.`);
       Object.assign(error, { statusCode: 409, code: "INSTANCE_UNREACHABLE" });
@@ -91,6 +93,7 @@ export class ControlledInstanceGateway {
   }
 
   proxyWebSocket(instance: ControlledInstance, transport: NodeAgentTransport, socket: NodeAgentWebSocket, path: string, protocols?: string | string[], headers: Record<string, string> = {}) {
+    assertInstanceAcceptsTraffic(instance);
     if (!instance.target.web || (instance.connectionStatus !== "online" && instance.agentStatus !== "online")) {
       const error = new Error(`Instance ${instance.name} web endpoint is not reachable.`);
       Object.assign(error, { statusCode: 409, code: "INSTANCE_WEB_UNREACHABLE" });
@@ -129,6 +132,17 @@ export class ControlledInstanceGateway {
       throw error;
     }
   }
+}
+
+function assertInstanceAcceptsTraffic(instance: ControlledInstance) {
+  if (controlledInstanceAcceptsTraffic(instance)) return;
+  const error = new Error(`Instance ${instance.name} is not ready.`);
+  Object.assign(error, {
+    statusCode: 409,
+    code: "INSTANCE_NOT_READY",
+    runtimePhase: instance.runtimeVersion?.phase,
+  });
+  throw error;
 }
 
 function errorMessage(value: unknown) {

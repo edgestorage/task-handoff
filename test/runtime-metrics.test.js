@@ -111,7 +111,23 @@ test("collector serializes overlapping samples", async () => {
   releaseFirst();
   await Promise.all([first, second]);
   assert.equal(maxRunning, 1);
-  assert.equal(calls >= 1, true);
+  assert.equal(calls, 1);
+});
+
+test("fresh metric snapshots are served without starting another Docker sample", async () => {
+  const target = { id: "inst_cached", status: "running", runtime: { containerId: "cached-full", labels: {} } };
+  let calls = 0;
+  const collector = new DockerRuntimeMetricsCollector(async () => {
+    calls += 1;
+    return { stdout: JSON.stringify({ id: "cached", cpu: "1%", memory: "1MiB / 1GiB", memoryPercent: "0.1%", network: "0B / 0B", blockIo: "0B / 0B", pids: "1" }), stderr: "" };
+  }, () => [target]);
+
+  await collector.collect();
+  const first = await collector.snapshot(target.id);
+  const second = await collector.snapshot(target.id);
+
+  assert.equal(first, second);
+  assert.equal(calls, 1);
 });
 
 test("one missing container does not poison metrics for healthy containers", async () => {

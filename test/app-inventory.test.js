@@ -20,6 +20,34 @@ const { AppCatalogRepository } = require("../packages/app-runtime/src/catalog.ts
 const { AppRuntimeManager } = require("../packages/app-runtime/src/runtime.ts");
 const { createManagedAppRegistry } = require("../packages/app-runtime/src/managed-app-definitions/index.ts");
 
+function processExists(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (error.code === "ESRCH") return false;
+    throw error;
+  }
+}
+
+async function waitForFile(filePath, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (fs.existsSync(filePath)) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`Timed out waiting for ${filePath}`);
+}
+
+async function waitForProcessExit(pid, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!processExists(pid)) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`Timed out waiting for process ${pid} to exit`);
+}
+
 function storagePaths(root) {
   return {
     configPath: path.join(root, "config.json"),
@@ -87,6 +115,68 @@ test("catalog and runtime consume the same injected managed app registry", () =>
     { id: "fake-tool", name: "Override", kind: "tty", command: "/bin/sh" },
   ]), /cannot override built-in app ids/);
   runtime.stopAll();
+});
+
+test("controlled app runtime stops complete process trees from the unified launcher", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("POSIX process-group ownership is exercised on macOS and Linux");
+    return;
+  }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-app-process-tree-"));
+  const logDir = path.join(root, "logs");
+  const descendantPidPath = path.join(root, "descendant.pid");
+  fs.mkdirSync(logDir, { recursive: true });
+  const runtime = new AppRuntimeManager(storagePaths(root), createManagedAppRegistry([]));
+  const script = String.raw`
+    const fs = require("node:fs");
+    const { spawn } = require("node:child_process");
+    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+    fs.writeFileSync(process.argv[1], String(child.pid));
+    setInterval(() => {}, 1000);
+  `;
+  const launcher = runtime.spawnLogged(process.execPath, ["-e", script, descendantPidPath], process.env, logDir, "tree.log", root);
+  await waitForFile(descendantPidPath);
+  const descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
+  t.after(() => {
+    for (const pid of [launcher.pid, descendantPid]) {
+      if (!pid || !processExists(pid)) continue;
+      try { process.kill(pid, "SIGKILL"); } catch {}
+    }
+  });
+
+  assert.equal(processExists(launcher.pid), true);
+  assert.equal(processExists(descendantPid), true);
+  await runtime.stopAll();
+  await Promise.all([waitForProcessExit(launcher.pid), waitForProcessExit(descendantPid)]);
+});
+
+test("controlled app runtime reaps descendants abandoned by an exited launcher", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("POSIX process-group ownership is exercised on macOS and Linux");
+    return;
+  }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-abandoned-app-tree-"));
+  const logDir = path.join(root, "logs");
+  const descendantPidPath = path.join(root, "descendant.pid");
+  fs.mkdirSync(logDir, { recursive: true });
+  const runtime = new AppRuntimeManager(storagePaths(root), createManagedAppRegistry([]));
+  const script = String.raw`
+    const fs = require("node:fs");
+    const { spawn } = require("node:child_process");
+    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+    child.unref();
+    fs.writeFileSync(process.argv[1], String(child.pid));
+  `;
+  runtime.spawnLogged(process.execPath, ["-e", script, descendantPidPath], process.env, logDir, "tree.log", root);
+  await waitForFile(descendantPidPath);
+  const descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
+  t.after(() => {
+    if (!processExists(descendantPid)) return;
+    try { process.kill(descendantPid, "SIGKILL"); } catch {}
+  });
+
+  await waitForProcessExit(descendantPid);
+  await runtime.stopAll();
 });
 
 test("terminal GUI provider applies xterm behavior to matching custom launchers", () => {

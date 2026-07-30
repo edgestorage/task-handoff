@@ -5,6 +5,7 @@ import {
   ImagePullTerminalEventType,
   ImagePullTerminalFinishedSchema,
   ImagePullTerminalOutputSchema,
+  controlledInstanceAcceptsTraffic,
   type ImagePullTerminalFinished,
   type ImagePullTerminalOutput,
   type ControlledInstance,
@@ -414,6 +415,7 @@ function eventPayloadMeta(payload: unknown) {
 }
 
 function instanceEventUrl(instance: ControlledInstance) {
+  if (!controlledInstanceAcceptsTraffic(instance)) return undefined;
   const base = instance.target?.api || instance.target?.web;
   if (!base) {
     return undefined;

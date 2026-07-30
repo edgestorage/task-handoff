@@ -29,6 +29,7 @@ export class DockerRuntimeMetricsCollector {
   private timer: ReturnType<typeof setInterval> | undefined;
   private inFlight?: Promise<void>;
   private readonly pendingTargets = new Map<string, DockerMetricsTarget>();
+  private readonly collectingTargets = new Map<string, string>();
 
   constructor(
     runCommand: CommandRunner,
@@ -56,6 +57,8 @@ export class DockerRuntimeMetricsCollector {
     const target = this.targets().find((item) => item.id === instanceId);
     if (!target) return undefined;
     if (!ACTIVE_INSTANCE_STATUSES.has(target.status)) return stoppedMetrics(target.id);
+    const cached = this.snapshots.get(instanceId);
+    if (cached && Date.now() - Date.parse(cached.sampledAt) <= this.intervalMs) return cached;
     await this.collect([target]);
     return this.snapshots.get(instanceId);
   }
@@ -66,21 +69,28 @@ export class DockerRuntimeMetricsCollector {
       const currentIds = new Set(targets.map((target) => target.id));
       for (const instanceId of this.snapshots.keys()) if (!currentIds.has(instanceId)) this.snapshots.delete(instanceId);
     }
-    for (const target of targets) this.pendingTargets.set(target.id, target);
+    for (const target of targets) {
+      const fingerprint = metricsTargetFingerprint(target);
+      if (this.collectingTargets.get(target.id) !== fingerprint) this.pendingTargets.set(target.id, target);
+    }
     if (!this.inFlight) {
       this.inFlight = this.drain().finally(() => {
         this.inFlight = undefined;
       });
     }
     await this.inFlight;
-    if (this.pendingTargets.size) await this.collect([]);
   }
 
   private async drain() {
     while (this.pendingTargets.size) {
       const targets = [...this.pendingTargets.values()];
       this.pendingTargets.clear();
-      await this.collectOnce(targets);
+      for (const target of targets) this.collectingTargets.set(target.id, metricsTargetFingerprint(target));
+      try {
+        await this.collectOnce(targets);
+      } finally {
+        for (const target of targets) this.collectingTargets.delete(target.id);
+      }
     }
   }
 
@@ -130,6 +140,10 @@ export class DockerRuntimeMetricsCollector {
     this.snapshots.set(parsed.instanceId, parsed);
     this.publish?.(parsed);
   }
+}
+
+function metricsTargetFingerprint(target: DockerMetricsTarget) {
+  return [target.status, target.runtime.containerId || "", target.runtime.containerName || ""].join("\0");
 }
 
 export function parseDockerStatsOutput(output: string, sampledAt = new Date().toISOString()) {

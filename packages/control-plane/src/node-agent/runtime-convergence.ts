@@ -15,7 +15,6 @@ export type RuntimeConvergenceHooks = {
   isInstalled?(instance: ControlledInstance, desiredVersion: string): Promise<boolean>;
   install(instance: ControlledInstance, desiredVersion: string): Promise<void>;
   restart(instance: ControlledInstance): Promise<void>;
-  rollback?(instance: ControlledInstance): Promise<void>;
   onForcedDrain?(instance: ControlledInstance): Promise<void> | void;
 };
 
@@ -35,7 +34,7 @@ export class RuntimeConvergenceCoordinator {
   private readonly desiredVersion: () => string;
   private readonly hooks: RuntimeConvergenceHooks;
   private readonly inFlight = new Map<string, Promise<ControlledInstance>>();
-  private readonly requests = new Map<string, { startRequested: boolean; resumeCancelled: boolean }>();
+  private readonly requests = new Map<string, { startRequested: boolean; resumeCancelled: boolean; retryFailed: boolean }>();
   private readonly cancelled = new Set<string>();
   private readonly now: () => Date;
   private readonly delay: (milliseconds: number) => Promise<void>;
@@ -65,10 +64,11 @@ export class RuntimeConvergenceCoordinator {
     this.retryMaxDelayMs = nonnegativeNumber(options.retryMaxDelayMs ?? 30_000, "retryMaxDelayMs");
   }
 
-  schedule(instanceId: string, options: { startRequested?: boolean; resumeCancelled?: boolean } = {}) {
-    const request = this.requests.get(instanceId) || { startRequested: false, resumeCancelled: false };
+  schedule(instanceId: string, options: { startRequested?: boolean; resumeCancelled?: boolean; retryFailed?: boolean } = {}) {
+    const request = this.requests.get(instanceId) || { startRequested: false, resumeCancelled: false, retryFailed: false };
     request.startRequested ||= options.startRequested === true;
     request.resumeCancelled ||= options.resumeCancelled === true || options.startRequested === true;
+    request.retryFailed ||= options.retryFailed === true;
     if (request.resumeCancelled) this.cancelled.delete(instanceId);
     this.requests.set(instanceId, request);
     const existing = this.inFlight.get(instanceId);
@@ -94,7 +94,7 @@ export class RuntimeConvergenceCoordinator {
     return this.inFlight.get(instanceId);
   }
 
-  private async reconcile(instanceId: string, options: { startRequested: boolean; resumeCancelled: boolean }) {
+  private async reconcile(instanceId: string, options: { startRequested: boolean; resumeCancelled: boolean; retryFailed: boolean }) {
     let instance = this.requireInstance(instanceId);
     const desiredVersion = this.desiredVersion();
     if (this.cancelled.has(instanceId) && !options.resumeCancelled) {
@@ -116,9 +116,19 @@ export class RuntimeConvergenceCoordinator {
     }
 
     const sameRollout = instance.runtimeVersion?.desiredVersion === desiredVersion;
+    if (sameRollout && options.retryFailed && instance.runtimeVersion?.phase === "failed") {
+      instance = this.storeState(instance, {
+        desiredVersion,
+        ...(actualVersion ? { actualVersion } : {}),
+        phase: "pending",
+        attempt: 0,
+        lastAttemptAt: this.timestamp(),
+        error: instance.runtimeVersion.error || mismatchError(desiredVersion, actualVersion),
+      }, false);
+    }
     if (sameRollout && (instance.runtimeVersion?.attempt || 0) >= this.maxAttempts) {
       if (instance.runtimeVersion?.phase === "failed" && instance.runtimeVersion.error) return instance;
-      return this.storePermanentFailure(instance, desiredVersion, exhaustedError(
+      return this.storeBatchFailure(instance, desiredVersion, pausedError(
         desiredVersion,
         actualVersion,
         this.maxAttempts,
@@ -132,7 +142,6 @@ export class RuntimeConvergenceCoordinator {
     while ((instance.runtimeVersion?.attempt || 0) < this.maxAttempts) {
       if (this.cancelled.has(instanceId)) return this.storePhase(this.requireInstance(instanceId), "pending");
       let failure: RuntimeConvergenceError;
-      let installed = false;
       try {
         if (hasActiveWork(instance)) {
           instance = this.storePhase(instance, "draining");
@@ -146,7 +155,6 @@ export class RuntimeConvergenceCoordinator {
 
         instance = this.storePhase(this.requireInstance(instanceId), "installing", true);
         await this.hooks.install(instance, desiredVersion);
-        installed = true;
 
         if (this.cancelled.has(instanceId) || (isStopped(this.requireInstance(instanceId)) && !options.startRequested)) {
           return this.storePhase(this.requireInstance(instanceId), "pending");
@@ -188,22 +196,14 @@ export class RuntimeConvergenceCoordinator {
       } catch (error) {
         if (this.cancelled.has(instanceId)) return this.storePhase(this.requireInstance(instanceId), "pending");
         failure = normalizeConvergenceError(error, desiredVersion, reportedVersion(this.store.get(instanceId)));
-        if (installed && this.hooks.rollback) {
-          try {
-            await this.hooks.rollback(this.requireInstance(instanceId));
-          } catch (rollbackError) {
-            failure.message = `${failure.message} Rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`;
-            failure.retryable = false;
-          }
-        }
       }
 
       instance = this.requireInstance(instanceId);
       const attempt = instance.runtimeVersion?.attempt || 1;
       if (!failure.retryable || attempt >= this.maxAttempts) {
-        return this.storePermanentFailure(instance, desiredVersion,
+        return this.storeBatchFailure(instance, desiredVersion,
           attempt >= this.maxAttempts && failure.retryable
-            ? exhaustedError(desiredVersion, reportedVersion(instance), this.maxAttempts, failure)
+            ? pausedError(desiredVersion, reportedVersion(instance), this.maxAttempts, failure)
             : failure);
       }
 
@@ -218,7 +218,7 @@ export class RuntimeConvergenceCoordinator {
       await this.delay(this.retryDelayMs(attempt));
     }
 
-    return this.storePermanentFailure(instance, desiredVersion, exhaustedError(
+    return this.storeBatchFailure(instance, desiredVersion, pausedError(
       desiredVersion,
       reportedVersion(instance),
       this.maxAttempts,
@@ -226,7 +226,7 @@ export class RuntimeConvergenceCoordinator {
     ));
   }
 
-  private storePermanentFailure(instance: ControlledInstance, desiredVersion: string, error: RuntimeConvergenceError) {
+  private storeBatchFailure(instance: ControlledInstance, desiredVersion: string, error: RuntimeConvergenceError) {
     const actualVersion = reportedVersion(instance);
     return this.storeState(instance, {
       desiredVersion,
@@ -234,7 +234,7 @@ export class RuntimeConvergenceCoordinator {
       phase: "failed",
       attempt: instance.runtimeVersion?.attempt || 0,
       lastAttemptAt: this.timestamp(),
-      error: { ...error, retryable: false },
+      error,
     }, false);
   }
 
@@ -371,7 +371,7 @@ function normalizeConvergenceError(error: unknown, expectedVersion: string, actu
   );
 }
 
-function exhaustedError(
+function pausedError(
   expectedVersion: string,
   actualVersion: string | undefined,
   maxAttempts: number,
@@ -380,10 +380,10 @@ function exhaustedError(
   const detail = previousError?.message ? ` Last error: ${previousError.message}` : "";
   return convergenceError(
     previousError?.code || "INSTANCE_RUNTIME_INSTALL_FAILED",
-    `Runtime convergence exhausted ${maxAttempts} attempts.${detail}`,
+    `Runtime convergence paused after ${maxAttempts} attempts and will retry.${detail}`,
     expectedVersion,
     actualVersion,
-    false,
+    true,
   );
 }
 
