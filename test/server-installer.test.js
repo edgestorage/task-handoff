@@ -205,6 +205,17 @@ test("runtime package versions use one resolver for explicit, bundled, and works
     version: "2.3.4-alpha.1",
   }));
   fs.writeFileSync(packagedBin, "#!/usr/bin/env node\n");
+  const linkedBin = path.join(packagedRoot, "global-bin", "task-handoff-controlled-instance");
+  const controlledPackageRoot = path.join(packagedRoot, "global-packages", "controlled-instance");
+  const controlledPackageBin = path.join(controlledPackageRoot, "bin", "task-handoff-controlled-instance");
+  fs.mkdirSync(path.dirname(controlledPackageBin), { recursive: true });
+  fs.mkdirSync(path.dirname(linkedBin), { recursive: true });
+  fs.writeFileSync(path.join(controlledPackageRoot, "package.json"), JSON.stringify({
+    name: "@task-handoff/controlled-instance",
+    version: "3.4.5",
+  }));
+  fs.writeFileSync(controlledPackageBin, "#!/usr/bin/env node\n");
+  fs.symlinkSync(controlledPackageBin, linkedBin);
   const previousEntry = process.argv[1];
   try {
     process.argv[1] = packagedBin;
@@ -214,6 +225,12 @@ test("runtime package versions use one resolver for explicit, bundled, and works
       TASK_HANDOFF_VERSION: "1.0.0",
       TASK_HANDOFF_CONTROLLED_INSTANCE_VERSION: " 2.3.4-alpha.1 ",
     })(), "2.3.4-alpha.1");
+    process.argv[1] = linkedBin;
+    assert.equal(
+      controlledInstancePackageVersionResolver({ TASK_HANDOFF_VERSION: "1.0.0" })(),
+      "3.4.5",
+      "the executable package behind a global-bin symlink is authoritative over the base image version",
+    );
   } finally {
     process.argv[1] = previousEntry;
     fs.rmSync(packagedRoot, { recursive: true, force: true });

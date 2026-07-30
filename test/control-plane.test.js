@@ -1452,6 +1452,8 @@ function createMockNodeAgentFetch(options = {}) {
       if (action === "heartbeat" && options.heartbeat) {
         return options.heartbeat({ url, init, body, instance: current, requests, jsonResponse, errorResponse });
       }
+      const desiredRuntimeVersion = runtimeVersionStateForActual().desiredVersion;
+      const reportedRuntimeVersion = body?.build?.packageVersion || body?.instanceVersion || desiredRuntimeVersion;
       const updated = {
         ...current,
         ...(action === "start" || action === "restart"
@@ -1469,6 +1471,9 @@ function createMockNodeAgentFetch(options = {}) {
               name: body.name || current.name,
               status: "registered",
               health: "ok",
+              ready: reportedRuntimeVersion === desiredRuntimeVersion,
+              build: body.build || { component: "controlled-instance", packageVersion: reportedRuntimeVersion },
+              runtimeVersion: runtimeVersionStateForActual(reportedRuntimeVersion),
               connectionStatus: "online",
               agentStatus: "online",
               targetStatus: body.target?.status === "endpoint-unreachable" ? "endpoint-unreachable" : body.target?.status === "reachable" ? "reachable" : current.targetStatus,
@@ -7618,7 +7623,6 @@ test("control plane proxies instance websocket routes through reverse node tunne
     },
   });
   await app.listen({ host: "127.0.0.1", port: 0 });
-  t.after(() => app.close());
 
   const project = await json(app, "POST", "/api/projects", {
     name: "Reverse WebSocket Project",
@@ -7682,20 +7686,60 @@ test("control plane proxies instance websocket routes through reverse node tunne
   const hello = await onceWebSocketMessage(tunnel);
   assert.equal(hello.type, "control-plane.hello");
 
-  const respondToRecoveryRequest = async (data) => {
-    for (;;) {
-      const message = await onceWebSocketMessage(tunnel);
-      if (message.type !== "control-plane.request") continue;
-      if (message.route === "/instances") {
+  const queuedTunnelMessages = [];
+  const tunnelMessageWaiters = [];
+  let recoveryRequestPending = false;
+  let fallbackRecoverySnapshot;
+  const dispatchTunnelMessage = (raw) => {
+    const message = JSON.parse(String(raw));
+    if (message.type === "control-plane.request" && message.route === "/instances") {
+      tunnel.send(JSON.stringify({
+        type: "node-agent.response",
+        requestId: message.requestId,
+        status: 200,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ data: [...mock.instances.values()] }),
+      }));
+      return;
+    }
+    if (message.type === "control-plane.request" && !recoveryRequestPending && fallbackRecoverySnapshot) {
+      const body = JSON.parse(message.init.body);
+      if (message.route === `/instances/${created.body.data.id}/proxy` && body.path === "/api/triggers") {
         tunnel.send(JSON.stringify({
           type: "node-agent.response",
           requestId: message.requestId,
           status: 200,
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ data: [...mock.instances.values()] }),
+          body: JSON.stringify({ data: { schemaVersion: 1, configs: [], deployments: [], runtime: [], recentRuns: [] } }),
         }));
-        continue;
+        return;
       }
+      if (message.route === `/instances/${created.body.data.id}/proxy` && body.path === "/api/ai-sessions/state") {
+        tunnel.send(JSON.stringify({
+          type: "node-agent.response",
+          requestId: message.requestId,
+          status: 200,
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ data: fallbackRecoverySnapshot }),
+        }));
+        return;
+      }
+    }
+    const waiter = tunnelMessageWaiters.shift();
+    if (waiter) waiter(message);
+    else queuedTunnelMessages.push(message);
+  };
+  tunnel.on("message", dispatchTunnelMessage);
+  t.after(() => tunnel.off("message", dispatchTunnelMessage));
+  const nextTunnelMessage = () => queuedTunnelMessages.length
+    ? Promise.resolve(queuedTunnelMessages.shift())
+    : new Promise((resolve) => tunnelMessageWaiters.push(resolve));
+
+  const respondToRecoveryRequest = async (data) => {
+    recoveryRequestPending = true;
+    for (;;) {
+      const message = await nextTunnelMessage();
+      if (message.type !== "control-plane.request") continue;
       assert.equal(message.route, `/instances/${created.body.data.id}/proxy`);
       tunnel.send(JSON.stringify({
         type: "node-agent.response",
@@ -7704,6 +7748,9 @@ test("control plane proxies instance websocket routes through reverse node tunne
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ data }),
       }));
+      await new Promise((resolve) => setImmediate(resolve));
+      if (data.snapshot) fallbackRecoverySnapshot = data;
+      recoveryRequestPending = false;
       return JSON.parse(message.init.body);
     }
   };
@@ -7717,12 +7764,12 @@ test("control plane proxies instance websocket routes through reverse node tunne
       streams: [{ topic: "ai.sessions", instanceId: created.body.data.id, streamId: "ai_reverse_stream", latestRevision: 1, earliestRetainedRevision: 1 }],
     },
   }));
-  const initialRecoveryBody = await respondToRecoveryRequest({
+  const initialRecoveryBody = await withTimeout(respondToRecoveryRequest({
     streamId: "ai_reverse_stream",
     revision: 1,
     lastEventAt: recoveredAt,
     snapshot: { runningCount: 0, waitingCount: 0, staleCount: 0, sessions: [], updatedAt: recoveredAt },
-  });
+  }), "reverse tunnel initial recovery request", 5_000);
   assert.equal(initialRecoveryBody.path, "/api/ai-sessions/state");
   await waitForCondition(async () => {
     const response = await json(app, "GET", "/api/ai-sessions");
@@ -7746,7 +7793,7 @@ test("control plane proxies instance websocket routes through reverse node tunne
       removed: [],
     },
   }));
-  const deltaRecoveryBody = await respondToRecoveryRequest({
+  const deltaRecoveryBody = await withTimeout(respondToRecoveryRequest({
     instanceId: created.body.data.id,
     streamId: "ai_reverse_stream",
     sinceRevision: 1,
@@ -7754,7 +7801,7 @@ test("control plane proxies instance websocket routes through reverse node tunne
     earliestRetainedRevision: 2,
     syncRequired: false,
     events: deltaEvents,
-  });
+  }), "reverse tunnel delta recovery request", 5_000);
   assert.match(deltaRecoveryBody.path, /^\/api\/ai-sessions\?/);
   await waitForCondition(async () => {
     const response = await json(app, "GET", "/api/ai-sessions");
@@ -7769,12 +7816,12 @@ test("control plane proxies instance websocket routes through reverse node tunne
       streams: [{ topic: "ai.sessions", instanceId: created.body.data.id, streamId: "ai_reverse_restarted", latestRevision: 1, earliestRetainedRevision: 1 }],
     },
   }));
-  await respondToRecoveryRequest({
+  await withTimeout(respondToRecoveryRequest({
     streamId: "ai_reverse_restarted",
     revision: 1,
     lastEventAt: recoveredAt,
     snapshot: { runningCount: 0, waitingCount: 0, staleCount: 0, sessions: [], updatedAt: recoveredAt },
-  });
+  }), "reverse tunnel restarted recovery request", 5_000);
   tunnel.send(JSON.stringify({
     type: "node-agent.event.forwarded",
     event: { type: AiSessionEventType.Snapshot, topic: AiSessionEventTopic, payload: aiSessionSnapshotPayload({ sessions: [recoveredSession] }, { instanceId: created.body.data.id, streamId: "ai_reverse_stream", revision: 4 }), scope: { instanceId: created.body.data.id } },
@@ -7792,18 +7839,7 @@ test("control plane proxies instance websocket routes through reverse node tunne
 
   let open;
   while (!open) {
-    const message = await onceWebSocketMessage(tunnel);
-    if (message.type === "control-plane.request") {
-      assert.equal(message.route, "/instances");
-      tunnel.send(JSON.stringify({
-        type: "node-agent.response",
-        requestId: message.requestId,
-        status: 200,
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ data: [...mock.instances.values()] }),
-      }));
-      continue;
-    }
+    const message = await withTimeout(nextTunnelMessage(), "reverse websocket open request", 5_000);
     open = message;
   }
   assert.equal(open.type, "control-plane.websocket.open");
@@ -7821,12 +7857,20 @@ test("control plane proxies instance websocket routes through reverse node tunne
     }),
   });
   t.after(() => stream.terminate());
+  t.after(() => app.close());
   await withTimeout(waitForWebSocketOpen(stream), "reverse websocket stream open");
   stream.send("ready");
   assert.deepEqual(await withTimeout(onceWebSocketMessageFrame(client), "reverse websocket ready"), { message: "ready", isBinary: false });
 
   client.send("hello");
   assert.deepEqual(await withTimeout(onceWebSocketMessageFrame(stream), "reverse websocket stream frame"), { message: "hello", isBinary: false });
+  const sockets = [stream, client, tunnel];
+  const closed = sockets.map((socket) => socket.readyState === WebSocket.CLOSED
+    ? Promise.resolve()
+    : new Promise((resolve) => socket.once("close", resolve)));
+  sockets.forEach((socket) => socket.terminate());
+  await withTimeout(Promise.all(closed), "reverse websocket cleanup", 5_000);
+  await withTimeout(app.close(), "reverse websocket app close", 5_000);
 });
 
 test("node model edits create a new hash and retain the previous location until explicit deletion", async (t) => {
@@ -8363,7 +8407,7 @@ test("control plane manages projects, instances, register, heartbeat, and board 
     body: JSON.stringify({
       instanceId: createdInstance.body.data.id,
       projectId: project.body.data.id,
-      instanceVersion: "0.1.0",
+      instanceVersion: runtimeVersionStateForActual().desiredVersion,
       protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
       controlMode: "controlled",
       capabilities: { features: { appRuntime: true } },
@@ -8988,7 +9032,7 @@ test("control plane proxies instance websocket routes while preserving HTTP prox
     body: JSON.stringify({
       instanceId: createdInstance.body.data.id,
       projectId: project.body.data.id,
-      instanceVersion: "0.1.0",
+      instanceVersion: runtimeVersionStateForActual().desiredVersion,
       protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
       controlMode: "controlled",
       capabilities: { features: { appRuntime: true } },
@@ -9013,15 +9057,17 @@ test("control plane proxies instance websocket routes while preserving HTTP prox
   assert.equal(typeof address, "object");
   const client = new WebSocket(`ws://127.0.0.1:${address.port}/instances/${createdInstance.body.data.id}/api/apps/sessions/app_1/tty?token=abc`);
   t.after(() => client.terminate());
+  const readyFrame = onceWebSocketMessageFrame(client);
   await withTimeout(waitForWebSocketOpen(client), "proxied websocket open");
-  assert.deepEqual(await withTimeout(onceWebSocketMessageFrame(client), "proxied websocket ready"), { message: "ready", isBinary: false });
+  assert.deepEqual(await withTimeout(readyFrame, "proxied websocket ready"), { message: "ready", isBinary: false });
   client.send("hello");
   assert.deepEqual(await withTimeout(onceWebSocketMessageFrame(client), "proxied websocket echo"), { message: "echo:hello", isBinary: false });
   const binaryClient = new WebSocket(`ws://127.0.0.1:${address.port}/instances/${createdInstance.body.data.id}/api/apps/sessions/app_1/web/websockify`, ["binary"]);
   t.after(() => binaryClient.terminate());
+  const binaryGreeting = onceWebSocketMessageFrame(binaryClient);
   await withTimeout(waitForWebSocketOpen(binaryClient), "proxied websocket binary open");
   assert.equal(binaryClient.protocol, "binary");
-  assert.deepEqual(await withTimeout(onceWebSocketMessageFrame(binaryClient), "proxied websocket binary greeting"), { message: "RFB 003.008\n", isBinary: true });
+  assert.deepEqual(await withTimeout(binaryGreeting, "proxied websocket binary greeting"), { message: "RFB 003.008\n", isBinary: true });
   assert.deepEqual(seen.filter((entry) => entry.url !== "/api/node-agent/events"), [
     {
       url: `/api/node-agent/instances/${createdInstance.body.data.id}/proxy/ws/api/apps/sessions/app_1/tty?token=abc`,

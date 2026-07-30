@@ -11,6 +11,15 @@ function manifestVersion(manifestPath: string, expectedName?: string) {
   }
 }
 
+function realEntryDirectory(entryPath: string | undefined) {
+  if (!entryPath) return undefined;
+  try {
+    return path.dirname(fs.realpathSync(entryPath));
+  } catch {
+    return undefined;
+  }
+}
+
 export function resolvePackageVersion(
   packageName: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -20,8 +29,9 @@ export function resolvePackageVersion(
   if (explicitVersion) return explicitVersion;
 
   const packageDirectory = workspacePackageName.split("/").at(-1);
-  const entryDirectory = process.argv[1] ? path.dirname(path.resolve(process.argv[1])) : undefined;
-  const starts = [entryDirectory, process.cwd()]
+  const entryPath = process.argv[1] ? path.resolve(process.argv[1]) : undefined;
+  const entryDirectory = entryPath ? path.dirname(entryPath) : undefined;
+  const starts = [realEntryDirectory(entryPath), entryDirectory, process.cwd()]
     .filter((value): value is string => Boolean(value));
 
   // A packaged runtime must take its version from the manifest that owns the
@@ -94,5 +104,11 @@ export function executablePackageVersionResolver(
  */
 export function controlledInstancePackageVersionResolver(env: NodeJS.ProcessEnv = process.env) {
   const executableResolver = executablePackageVersionResolver("@task-handoff/controlled-instance", env);
-  return () => env.TASK_HANDOFF_CONTROLLED_INSTANCE_VERSION?.trim() || executableResolver();
+  return () => {
+    const explicitVersion = env.TASK_HANDOFF_CONTROLLED_INSTANCE_VERSION?.trim();
+    if (explicitVersion) return explicitVersion;
+    const executableVersion = executableResolver();
+    if (executableVersion !== "unknown") return executableVersion;
+    return env.TASK_HANDOFF_VERSION?.trim() || "unknown";
+  };
 }

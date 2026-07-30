@@ -27,12 +27,12 @@ export class ControlledInstanceGateway {
   }
 
   async request(instance: ControlledInstance, route: string, init: RequestInit = {}) {
-    assertInstanceAcceptsTraffic(instance);
     if (!instance.target.web || (instance.connectionStatus !== "online" && instance.agentStatus !== "online")) {
       const error = new Error(`Instance ${instance.name} is not reachable.`);
       Object.assign(error, { statusCode: 409, code: "INSTANCE_UNREACHABLE" });
       throw error;
     }
+    assertInstanceAcceptsTraffic(instance);
     const node = this.requireNode(instance.nodeId);
     const response = await this.nodeAgentRequest(node, `/instances/${encodeURIComponent(instance.id)}/proxy`, {
       method: "POST",
@@ -63,7 +63,6 @@ export class ControlledInstanceGateway {
   }
 
   async proxyHttp(instance: ControlledInstance, path: string, init: ControlledInstanceProxyHttpInit = {}) {
-    assertInstanceAcceptsTraffic(instance);
     if (instance.connectionStatus !== "online" && instance.agentStatus !== "online") {
       const error = new Error(`Instance ${instance.name} is not reachable.`);
       Object.assign(error, { statusCode: 409, code: "INSTANCE_UNREACHABLE" });
@@ -74,6 +73,7 @@ export class ControlledInstanceGateway {
       Object.assign(error, { statusCode: 409, code: "INSTANCE_WEB_UNREACHABLE" });
       throw error;
     }
+    assertInstanceAcceptsTraffic(instance);
     const node = this.requireNode(instance.nodeId);
     const response = await this.nodeAgentStreamRequest(node, `/instances/${encodeURIComponent(instance.id)}/proxy/stream`, {
       method: "POST",
@@ -93,12 +93,12 @@ export class ControlledInstanceGateway {
   }
 
   proxyWebSocket(instance: ControlledInstance, transport: NodeAgentTransport, socket: NodeAgentWebSocket, path: string, protocols?: string | string[], headers: Record<string, string> = {}) {
-    assertInstanceAcceptsTraffic(instance);
     if (!instance.target.web || (instance.connectionStatus !== "online" && instance.agentStatus !== "online")) {
       const error = new Error(`Instance ${instance.name} web endpoint is not reachable.`);
       Object.assign(error, { statusCode: 409, code: "INSTANCE_WEB_UNREACHABLE" });
       throw error;
     }
+    assertInstanceAcceptsTraffic(instance);
     const node = this.requireNode(instance.nodeId);
     const proxyPath = path.startsWith("/") ? path.slice(1) : path;
     transport.proxyWebSocket(node, socket, `/instances/${encodeURIComponent(instance.id)}/proxy/ws/${proxyPath}`, protocols, headers);
