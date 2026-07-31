@@ -104,7 +104,7 @@ import { relativeNodePathSegments, resolveNodePath } from "../nodes/path.ts";
 import { normalizeModel, publicInstance, publicInstanceWithAccess, publicModel, publicNode, publicNodeAgentCapabilities, publicProject, workspacePolicyForSource } from "../public-records.ts";
 import { controlPlaneDiagnosticLogsEnabled, errorMessage, now, throwNotFound } from "./helpers.ts";
 import {
-  ConnectNodeRemoteInputSchema,
+  CreateNodeControlPlaneConnectionInputSchema,
   ControlPlaneTriggerRecordSchema,
   ControlPlaneSettingsSchema,
   sanitizeStoredControlPlaneSettings,
@@ -525,14 +525,13 @@ export class ControlPlaneService {
     return this.fetchImpl(`${endpoint.replace(/\/$/, "")}/api/node-agent${route}`, init);
   }
 
-  private async completeNodeAgentPairing(endpoint: string, input: { joinToken: string; controlPlaneName?: string; controlPlaneUrl?: string }) {
+  private async completeNodeAgentPairing(endpoint: string, input: { joinToken: string; controlPlaneName?: string }) {
     const response = await this.fetchImpl(`${endpoint.replace(/\/$/, "")}/api/node-agent/pairing/complete`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         joinToken: input.joinToken,
         controlPlaneName: input.controlPlaneName || "Control Plane",
-        controlPlaneUrl: input.controlPlaneUrl,
       }),
     });
     const payload = (await response.json().catch(() => ({}))) as {
@@ -963,18 +962,28 @@ export class ControlPlaneService {
 
   async connectNodeToControlPlane(id: string, input: unknown) {
     const node = this.requireNode(id);
-    const parsedInput = ConnectNodeRemoteInputSchema.parse(input);
-    return this.nodeAgentGateway.connectRemote(node, parsedInput);
+    const parsedInput = CreateNodeControlPlaneConnectionInputSchema.parse(input);
+    return this.nodeAgentGateway.createControlPlaneConnection(node, parsedInput);
   }
 
-  async listNodeRemoteControlPlanes(id: string) {
+  async listNodeControlPlanePairings(id: string) {
     const node = this.requireNode(id);
-    return this.nodeAgentGateway.listRemotes(node);
+    return this.nodeAgentGateway.listControlPlanePairings(node);
   }
 
-  async deleteNodeRemoteControlPlane(id: string, keyId: string) {
+  async deleteNodeControlPlanePairing(id: string, keyId: string) {
     const node = this.requireNode(id);
-    return this.nodeAgentGateway.deleteRemote(node, keyId);
+    return this.nodeAgentGateway.deleteControlPlanePairing(node, keyId);
+  }
+
+  async listNodeControlPlaneConnections(id: string) {
+    const node = this.requireNode(id);
+    return this.nodeAgentGateway.listControlPlaneConnections(node);
+  }
+
+  async deleteNodeControlPlaneConnection(id: string, connectionId: string) {
+    const node = this.requireNode(id);
+    return this.nodeAgentGateway.deleteControlPlaneConnection(node, connectionId);
   }
 
   updateImage(id: string, input: unknown) {

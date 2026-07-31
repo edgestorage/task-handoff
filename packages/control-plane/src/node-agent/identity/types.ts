@@ -3,22 +3,29 @@ export type NodeAgentPairingInvite = {
   expiresAt: string;
   createdAt: string;
   controlPlaneName?: string;
-  controlPlaneUrl?: string;
 };
 
-export type NodeAgentRemoteControlPlane = {
+export type NodeAgentControlPlanePairing = {
   id: string;
   keyId: string;
   name?: string;
-  url?: string;
   secret: string;
   pairedAt: string;
   updatedAt: string;
-  active?: boolean;
 };
 
-export type PublicNodeAgentRemoteControlPlane = Omit<NodeAgentRemoteControlPlane, "secret"> & {
+export type PublicNodeAgentControlPlanePairing = Omit<NodeAgentControlPlanePairing, "secret"> & {
   current: boolean;
+};
+
+export type NodeAgentControlPlaneConnection = {
+  id: string;
+  pairingKeyId: string;
+  name?: string;
+  url: string;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type NodeAgentIdentity = {
@@ -26,5 +33,6 @@ export type NodeAgentIdentity = {
   createdAt: string;
   updatedAt: string;
   pairingInvites?: NodeAgentPairingInvite[];
-  remoteControlPlanes?: NodeAgentRemoteControlPlane[];
+  controlPlanePairings?: NodeAgentControlPlanePairing[];
+  controlPlaneConnections?: NodeAgentControlPlaneConnection[];
 };

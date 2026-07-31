@@ -11,7 +11,7 @@ const WebSocket = require("ws");
 const { z } = require("zod");
 
 const { createControlPlaneApp } = require("../packages/control-plane/src/server.ts");
-const { createNodeAgentApp, createReverseTunnelManager, listenNodeAgentIpcServer, mergeRuntimeLifecycleResult, NodeAgentExternalListenerManager, requestRuntimeAppSessionDrain, resolvedDockerImageUpdatePatch, runtimeVersionStateForActual } = require("../packages/control-plane/src/node-agent.ts");
+const { connectReverseTunnel, createNodeAgentApp, createReverseTunnelManager, listenNodeAgentIpcServer, mergeRuntimeLifecycleResult, NodeAgentExternalListenerManager, requestRuntimeAppSessionDrain, resolvedDockerImageUpdatePatch, runtimeVersionStateForActual } = require("../packages/control-plane/src/node-agent.ts");
 const { ControlPlaneChatGatewayRuntime, aiSessionDeliveryText, createDingdingStreamClient } = require("../packages/control-plane/src/chat-gateway.ts");
 const { ControlledInstanceGateway } = require("../packages/control-plane/src/control-plane/instances/gateway.ts");
 const { parseDingdingCardEvent, sendDingdingActionsCard } = require("../packages/control-plane/src/control-plane/chat/adapters/dingding.ts");
@@ -310,7 +310,7 @@ function testAppInventory(apps, observedAt = new Date().toISOString()) {
 }
 
 test("controlled instance heartbeat protocol rejects legacy receiver projection", () => {
-  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-07-30");
+  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-07-31");
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, receiver: { status: "running", pendingCount: 1 } }).success, false);
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, apps: { runningCount: 1 } }).success, false);
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, appInventory: emptyAppInventory(), apps: { runningCount: 1 } }).success, true);
@@ -1699,7 +1699,7 @@ test("control plane serves the remote node-agent installer without auth", async 
   assert.match(response.headers["content-type"], /text\/x-shellscript/);
   assert.match(response.body, /task-handoff-node-agent\.service/);
   assert.match(response.body, /--control-plane <url>/);
-  assert.match(response.body, /api\/node-agent\/remotes\/connect/);
+  assert.match(response.body, /api\/node-agent\/control-plane-connections/);
 });
 
 test("control plane authorization role matrix separates viewer operator and admin", () => {
@@ -2191,7 +2191,7 @@ test("control plane forwards node agent websocket events with instance scope", a
   await withTimeout(waitForWebSocketOpen(eventsSocket), "control plane events websocket open");
   assert.equal(JSON.parse((await connectedMessage).message).type, "streams.hello");
 
-  const tunnelUrl = `/api/node-agent/tunnel?nodeId=node_events`;
+  const tunnelUrl = `/api/node-tunnel?nodeId=node_events`;
   const tunnel = new WebSocket(`ws://127.0.0.1:${address.port}${tunnelUrl}`, {
     headers: createNodeAgentHmacHeaders({
       nodeId: "node_events",
@@ -4459,7 +4459,7 @@ test("node agent pairs additional control planes with one-time join tokens", asy
     method: "POST",
     url: "/api/node-agent/pairing/invites",
     headers: { authorization: "Bearer agent-secret" },
-    payload: { controlPlaneName: "Second Control Plane", controlPlaneUrl: "http://control-plane-two.test" },
+    payload: { controlPlaneName: "Second Control Plane" },
     remoteAddress: "127.0.0.1",
   });
   assert.equal(invite.statusCode, 201);
@@ -4554,13 +4554,13 @@ test("node agent identity sanitizes unknown stored fields and writes atomically 
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
       futureInviteField: "ignored",
     }],
-    remoteControlPlanes: [{
+    controlPlanePairings: [{
       id: "cp_remote",
       keyId: "key_remote",
       secret: "remote-secret",
       pairedAt: timestamp,
       updatedAt: timestamp,
-      futureRemoteField: "ignored",
+      futurePairingField: "ignored",
     }],
   }));
 
@@ -4569,15 +4569,14 @@ test("node agent identity sanitizes unknown stored fields and writes atomically 
   assert.equal(identity.nodeId, "node_sanitized");
   assert.equal(identity.futureIdentityField, undefined);
   assert.equal(identity.pairingInvites[0].futureInviteField, undefined);
-  assert.equal(identity.remoteControlPlanes[0].futureRemoteField, undefined);
-  assert.equal(identity.remoteControlPlanes[0].active, true);
+  assert.equal(identity.controlPlanePairings[0].futurePairingField, undefined);
   assert.equal(warnings.length, 3);
 
   store.write(identity);
   const persisted = JSON.parse(fs.readFileSync(paths.identityPath, "utf8"));
   assert.equal(persisted.futureIdentityField, undefined);
   assert.equal(persisted.pairingInvites[0].futureInviteField, undefined);
-  assert.equal(persisted.remoteControlPlanes[0].futureRemoteField, undefined);
+  assert.equal(persisted.controlPlanePairings[0].futurePairingField, undefined);
   assert.equal(fs.statSync(paths.identityPath).mode & 0o777, 0o600);
   assert.equal(fs.readdirSync(path.dirname(paths.identityPath)).filter((name) => name.includes("identity.json.")).length, 0);
 });
@@ -4595,6 +4594,40 @@ test("node agent does not replace malformed or truncated identity data", () => {
     (error) => error.code === "NODE_AGENT_IDENTITY_INVALID" && /invalid JSON/.test(error.message),
   );
   assert.equal(fs.readFileSync(paths.identityPath, "utf8"), truncated);
+});
+
+test("node agent migrates legacy remote records into separate pairings and outbound connections", () => {
+  const paths = nodeAgentStorePaths(tempDataDir("node-agent-identity-remote-migration"));
+  const timestamp = new Date().toISOString();
+  fs.mkdirSync(path.dirname(paths.identityPath), { recursive: true });
+  fs.writeFileSync(paths.identityPath, JSON.stringify({
+    nodeId: "node_migrated",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    remoteControlPlanes: [
+      { id: "cp_pairing_only", keyId: "key_pairing_only", name: "Direct control plane", secret: "secret-one", pairedAt: timestamp, updatedAt: timestamp, active: true },
+      { id: "cp_connected", keyId: "key_connected", name: "Tunnel control plane", url: "https://control-plane.example.com", secret: "secret-two", pairedAt: timestamp, updatedAt: timestamp, active: true },
+    ],
+  }));
+
+  const store = new NodeAgentIdentityStore(paths, { logger: () => undefined });
+  const identity = store.read();
+  assert.equal(identity.controlPlanePairings.length, 2);
+  assert.deepEqual(identity.controlPlaneConnections.map((connection) => ({
+    pairingKeyId: connection.pairingKeyId,
+    url: connection.url,
+    enabled: connection.enabled,
+  })), [{
+    pairingKeyId: "key_connected",
+    url: "https://control-plane.example.com",
+    enabled: true,
+  }]);
+
+  store.write(identity);
+  const persisted = JSON.parse(fs.readFileSync(paths.identityPath, "utf8"));
+  assert.equal(persisted.remoteControlPlanes, undefined);
+  assert.equal(persisted.controlPlanePairings.length, 2);
+  assert.equal(persisted.controlPlaneConnections.length, 1);
 });
 
 test("node agent does not initialize over an unreadable identity path", (t) => {
@@ -4624,16 +4657,19 @@ test("node agent identity ignores invalid stored credentials and invite records"
     createdAt: timestamp,
     updatedAt: timestamp,
     pairingInvites: [{ tokenHash: "token", createdAt: timestamp, expiresAt: "not-a-datetime" }],
-    remoteControlPlanes: [
+    controlPlanePairings: [
       { id: "cp_empty_secret", keyId: "known", secret: "", pairedAt: timestamp, updatedAt: timestamp },
-      { id: "cp_invalid_url", keyId: "key_url", secret: "secret", url: "not a url", pairedAt: timestamp, updatedAt: timestamp },
+    ],
+    controlPlaneConnections: [
+      { id: "connection_invalid_url", pairingKeyId: "key_url", url: "not a url", enabled: true, createdAt: timestamp, updatedAt: timestamp },
     ],
   }));
 
   const store = new NodeAgentIdentityStore(paths, { logger: (message, details) => warnings.push({ message, details }) });
   const stored = store.read();
   assert.deepEqual(stored.pairingInvites, []);
-  assert.deepEqual(stored.remoteControlPlanes, []);
+  assert.deepEqual(stored.controlPlanePairings, []);
+  assert.deepEqual(stored.controlPlaneConnections, []);
   assert.equal(warnings.filter((warning) => warning.message.includes("was ignored")).length, 3);
   store.write(stored);
   assert.deepEqual(new NodeAgentIdentityService(paths).remoteSecrets(), []);
@@ -4799,11 +4835,13 @@ test("control plane creates remote direct http nodes with node-agent join tokens
   assert.equal(runtimes.statusCode, 200);
   assert.ok(runtimes.body.data.some((runtime) => runtime.id === "runtime_local_docker"));
 
-  const remotes = await json(controlPlane, "GET", "/api/nodes/node_joined/remotes");
-  assert.equal(remotes.statusCode, 200, JSON.stringify(remotes.body));
-  assert.equal(remotes.body.data.length, 1);
-  assert.equal(remotes.body.data[0].url, undefined);
-  assert.equal(remotes.body.data[0].active, true);
+  const pairings = await json(controlPlane, "GET", "/api/nodes/node_joined/control-plane-pairings");
+  assert.equal(pairings.statusCode, 200, JSON.stringify(pairings.body));
+  assert.equal(pairings.body.data.length, 1);
+  assert.equal(pairings.body.data[0].current, true);
+  const connections = await json(controlPlane, "GET", "/api/nodes/node_joined/control-plane-connections");
+  assert.equal(connections.statusCode, 200, JSON.stringify(connections.body));
+  assert.deepEqual(connections.body.data, []);
 });
 
 test("control plane node runtime aggregation isolates invalid node protocol data", async (t) => {
@@ -5063,7 +5101,7 @@ test("node agent connects itself to another control plane with a join token", as
 
   const connected = await nodeAgent.inject({
     method: "POST",
-    url: "/api/node-agent/remotes/connect",
+    url: "/api/node-agent/control-plane-connections",
     headers: { authorization: "Bearer agent-secret" },
     payload: {
       controlPlaneUrl: `http://127.0.0.1:${targetPort}`,
@@ -5073,7 +5111,7 @@ test("node agent connects itself to another control plane with a join token", as
     remoteAddress: "127.0.0.1",
   });
   assert.equal(connected.statusCode, 201);
-  assert.equal(connected.json().data.remote.url, `http://127.0.0.1:${targetPort}`);
+  assert.equal(connected.json().data.connection.url, `http://127.0.0.1:${targetPort}`);
   assert.equal(connected.json().data.tunnel.status, "saved");
 
   const listed = await json(targetControlPlane, "GET", "/api/nodes");
@@ -5086,10 +5124,160 @@ test("node agent connects itself to another control plane with a join token", as
   assert.equal(joined.auth.secret, undefined);
 
   const identity = JSON.parse(fs.readFileSync(path.join(agentDataDir, "identity.json"), "utf8"));
-  const remote = identity.remoteControlPlanes.find((item) => item.url === `http://127.0.0.1:${targetPort}`);
-  assert.ok(remote);
-  assert.equal(remote.active, true);
-  assert.equal(remote.keyId, joined.auth.keyId);
+  const connection = identity.controlPlaneConnections.find((item) => item.url === `http://127.0.0.1:${targetPort}`);
+  assert.ok(connection);
+  assert.equal(connection.enabled, true);
+  const pairing = identity.controlPlanePairings.find((item) => item.keyId === connection.pairingKeyId);
+  assert.equal(pairing.keyId, joined.auth.keyId);
+});
+
+test("node agent persists control-plane credentials before completing the remote join", async (t) => {
+  const agentDataDir = tempDataDir("node-agent-persist-before-join");
+  let persistedDuringJoin;
+  const nodeAgent = await createNodeAgentApp({
+    dataDir: agentDataDir,
+    logger: false,
+    nodeId: "node_persist_before_join",
+    token: "agent-secret",
+    fetchImpl: async () => {
+      persistedDuringJoin = new NodeAgentIdentityStore(nodeAgentStorePaths(agentDataDir), { logger: () => undefined }).read();
+      return new Response(JSON.stringify({ data: { id: "node_persist_before_join", name: "Target Control Plane" } }), {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  t.after(() => nodeAgent.close());
+
+  const connected = await nodeAgent.inject({
+    method: "POST",
+    url: "/api/node-agent/control-plane-connections",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      controlPlaneUrl: "https://control-plane.example.com",
+      joinToken: "join-token",
+    },
+    remoteAddress: "127.0.0.1",
+  });
+
+  assert.equal(connected.statusCode, 201);
+  assert.equal(persistedDuringJoin.controlPlanePairings.length, 1);
+  assert.equal(persistedDuringJoin.controlPlaneConnections.length, 1);
+  assert.equal(persistedDuringJoin.controlPlaneConnections[0].pairingKeyId, persistedDuringJoin.controlPlanePairings[0].keyId);
+  const persistedAfterJoin = new NodeAgentIdentityStore(nodeAgentStorePaths(agentDataDir), { logger: () => undefined }).read();
+  assert.equal(persistedAfterJoin.controlPlanePairings[0].name, "Target Control Plane");
+  assert.equal(persistedAfterJoin.controlPlaneConnections[0].name, "Target Control Plane");
+});
+
+test("node agent rolls back staged control-plane credentials when the remote join fails", async (t) => {
+  const agentDataDir = tempDataDir("node-agent-rollback-failed-join");
+  const paths = nodeAgentStorePaths(agentDataDir);
+  const identity = new NodeAgentIdentityService(paths);
+  identity.resolveNodeId("node_rollback_failed_join");
+  const existing = identity.commitControlPlaneConnection(
+    identity.stageControlPlaneConnection({ url: "https://control-plane.example.com", name: "Existing" }),
+  );
+  let persistedDuringJoin;
+  const nodeAgent = await createNodeAgentApp({
+    dataDir: agentDataDir,
+    logger: false,
+    nodeId: "node_rollback_failed_join",
+    token: "agent-secret",
+    fetchImpl: async () => {
+      persistedDuringJoin = new NodeAgentIdentityStore(paths, { logger: () => undefined }).read();
+      return new Response(JSON.stringify({ error: { code: "NODE_JOIN_REJECTED", message: "Join rejected." } }), {
+        status: 409,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  t.after(() => nodeAgent.close());
+
+  const requestBody = JSON.stringify({
+    controlPlaneUrl: "https://control-plane.example.com",
+    joinToken: "join-token",
+  });
+  const connected = await nodeAgent.inject({
+    method: "POST",
+    url: "/api/node-agent/control-plane-connections",
+    headers: {
+      "content-type": "application/json",
+      ...createNodeAgentHmacHeaders({
+        nodeId: "node_rollback_failed_join",
+        keyId: existing.pairing.keyId,
+        secret: existing.pairing.secret,
+        method: "POST",
+        pathWithQuery: "/api/node-agent/control-plane-connections",
+        body: requestBody,
+      }),
+    },
+    payload: requestBody,
+    remoteAddress: "127.0.0.1",
+  });
+
+  assert.equal(connected.statusCode, 409);
+  assert.notEqual(persistedDuringJoin.controlPlaneConnections[0].id, existing.connection.id);
+  const restored = new NodeAgentIdentityStore(paths, { logger: () => undefined }).read();
+  assert.deepEqual(restored.controlPlaneConnections.map((connection) => connection.id), [existing.connection.id]);
+  assert.deepEqual(restored.controlPlanePairings.map((pairing) => pairing.keyId), [existing.pairing.keyId]);
+});
+
+test("node agent removes the orphaned pairing after replacing a control-plane connection", () => {
+  const paths = nodeAgentStorePaths(tempDataDir("node-agent-replace-control-plane-connection"));
+  const identity = new NodeAgentIdentityService(paths);
+  identity.resolveNodeId("node_replace_control_plane_connection");
+  const existing = identity.commitControlPlaneConnection(
+    identity.stageControlPlaneConnection({ url: "https://control-plane.example.com", name: "Existing" }),
+  );
+  const replacement = identity.commitControlPlaneConnection(
+    identity.stageControlPlaneConnection({ url: "https://control-plane.example.com", name: "Replacement" }),
+  );
+
+  const stored = new NodeAgentIdentityStore(paths, { logger: () => undefined }).read();
+  assert.deepEqual(stored.controlPlaneConnections.map((connection) => connection.id), [replacement.connection.id]);
+  assert.deepEqual(stored.controlPlanePairings.map((pairing) => pairing.keyId), [replacement.pairing.keyId]);
+  assert.notEqual(replacement.pairing.keyId, existing.pairing.keyId);
+});
+
+test("node agent serializes concurrent connection changes for the same control-plane URL", async () => {
+  const paths = nodeAgentStorePaths(tempDataDir("node-agent-serialize-control-plane-connection"));
+  const identity = new NodeAgentIdentityService(paths);
+  identity.resolveNodeId("node_serialize_control_plane_connection");
+  const controlPlaneUrl = "https://control-plane.example.com";
+  let activeOperations = 0;
+  let maximumActiveOperations = 0;
+  let releaseFirst;
+  let firstStartedResolve;
+  const firstStarted = new Promise((resolve) => {
+    firstStartedResolve = resolve;
+  });
+  const firstMayFinish = new Promise((resolve) => {
+    releaseFirst = resolve;
+  });
+  const connect = (name, wait) => identity.runControlPlaneConnectionOperation(controlPlaneUrl, async () => {
+    activeOperations += 1;
+    maximumActiveOperations = Math.max(maximumActiveOperations, activeOperations);
+    const staged = identity.stageControlPlaneConnection({ url: controlPlaneUrl, name });
+    if (wait) {
+      firstStartedResolve();
+      await firstMayFinish;
+    }
+    const stored = identity.commitControlPlaneConnection(staged);
+    activeOperations -= 1;
+    return stored;
+  });
+
+  const first = connect("First", true);
+  await firstStarted;
+  const second = connect("Second", false);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(activeOperations, 1);
+  releaseFirst();
+  await Promise.all([first, second]);
+
+  assert.equal(maximumActiveOperations, 1);
+  assert.deepEqual(identity.listControlPlaneConnections().map((connection) => connection.name), ["Second"]);
+  assert.deepEqual(identity.listControlPlanePairings().map((pairing) => pairing.name), ["Second"]);
 });
 
 test("control plane rejects node join when node id already exists", async (t) => {
@@ -7780,7 +7968,11 @@ test("control plane registers node connections with the agent node id", async (t
 
 test("node agent reverse tunnel survives rejected handshakes and retries", async (t) => {
   let attempts = 0;
+  let resolveFirstAttempt;
   let resolveSecondAttempt;
+  const firstAttempt = new Promise((resolve) => {
+    resolveFirstAttempt = resolve;
+  });
   const secondAttempt = new Promise((resolve) => {
     resolveSecondAttempt = resolve;
   });
@@ -7788,6 +7980,7 @@ test("node agent reverse tunnel survives rejected handshakes and retries", async
     attempts += 1;
     response.writeHead(401, { "content-type": "application/json" });
     response.end(JSON.stringify({ error: { code: "PROTOCOL_VERSION_MISMATCH" } }));
+    if (attempts === 1) resolveFirstAttempt();
     if (attempts === 2) resolveSecondAttempt();
   });
   await new Promise((resolve, reject) => {
@@ -7797,29 +7990,132 @@ test("node agent reverse tunnel survives rejected handshakes and retries", async
   t.after(() => new Promise((resolve) => rejectingServer.close(resolve)));
 
   const dataDir = tempDataDir("node-agent-rejected-reverse-tunnel");
+  const paths = nodeAgentStorePaths(dataDir);
+  const identity = new NodeAgentIdentityService(paths);
+  identity.resolveNodeId("node_rejected");
+  identity.commitControlPlaneConnection(identity.stageControlPlaneConnection({ url: `http://127.0.0.1:${rejectingServer.address().port}` }));
   const app = await createNodeAgentApp({ dataDir, logger: false, port: 8091 });
-  const manager = createReverseTunnelManager(app, { host: "127.0.0.1", port: 8091, dataDir }, nodeAgentStorePaths(dataDir), "node_rejected");
+  const manager = createReverseTunnelManager(app, { host: "127.0.0.1", port: 8091, dataDir }, paths, "node_rejected");
   t.after(async () => {
     manager.closeAll();
     await app.close();
   });
 
-  const address = rejectingServer.address();
-  assert.equal(typeof address, "object");
-  const firstSocket = manager.connect({ url: `http://127.0.0.1:${address.port}` });
-  await withTimeout(new Promise((resolve) => firstSocket.once("close", resolve)), "rejected reverse tunnel close");
+  manager.connectConfigured();
+  await withTimeout(firstAttempt, "rejected reverse tunnel first attempt");
   await withTimeout(secondAttempt, "rejected reverse tunnel retry");
 
   assert.equal(attempts, 2);
   manager.closeAll();
 });
 
-test("deleting a node agent remote cancels its pending reverse tunnel retry", async (t) => {
+test("persisted control-plane access suppresses the bootstrap reverse tunnel", async (t) => {
   let attempts = 0;
+  let resolveAttempt;
+  const attempted = new Promise((resolve) => {
+    resolveAttempt = resolve;
+  });
+  const rejectingServer = http.createServer((_request, response) => {
+    attempts += 1;
+    response.writeHead(401, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: { code: "UNAUTHORIZED" } }));
+    resolveAttempt();
+  });
+  await new Promise((resolve, reject) => {
+    rejectingServer.once("error", reject);
+    rejectingServer.listen(0, "127.0.0.1", resolve);
+  });
+  t.after(() => new Promise((resolve) => rejectingServer.close(resolve)));
+
+  const address = rejectingServer.address();
+  assert.equal(typeof address, "object");
+  const controlPlaneUrl = `http://127.0.0.1:${address.port}`;
+  const dataDir = tempDataDir("node-agent-persisted-suppresses-bootstrap");
+  const paths = nodeAgentStorePaths(dataDir);
+  const identity = new NodeAgentIdentityService(paths);
+  identity.resolveNodeId("node_single_reverse_tunnel");
+  const pending = identity.commitControlPlaneConnection(identity.stageControlPlaneConnection({ url: controlPlaneUrl }));
+  const previousControlPlaneUrl = process.env.TASK_HANDOFF_CONTROL_PLANE_URL;
+  process.env.TASK_HANDOFF_CONTROL_PLANE_URL = controlPlaneUrl;
+  t.after(() => {
+    if (previousControlPlaneUrl === undefined) delete process.env.TASK_HANDOFF_CONTROL_PLANE_URL;
+    else process.env.TASK_HANDOFF_CONTROL_PLANE_URL = previousControlPlaneUrl;
+  });
+
+  const app = await createNodeAgentApp({ dataDir, logger: false, port: 8091 });
+  const manager = createReverseTunnelManager(app, { host: "127.0.0.1", port: 8091, dataDir }, paths, "node_single_reverse_tunnel");
+  t.after(async () => {
+    manager.closeAll();
+    await app.close();
+  });
+  manager.connectConfigured();
+  await withTimeout(attempted, "persisted reverse tunnel attempt");
+  await new Promise((resolve) => setTimeout(resolve, 100));
+
+  assert.equal(attempts, 1);
+  assert.equal(identity.deleteControlPlaneConnection(pending.connection.id), true);
+  manager.connectConfigured();
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(attempts, 1);
+  manager.closeAll();
+});
+
+test("an explicit reverse tunnel remains active alongside persisted control-plane access", async (t) => {
+  const attemptedPaths = new Set();
+  let resolveAttempts;
+  const attemptsComplete = new Promise((resolve) => {
+    resolveAttempts = resolve;
+  });
+  const rejectingServer = http.createServer((request, response) => {
+    attemptedPaths.add(request.url.split("?")[0]);
+    response.writeHead(401, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: { code: "UNAUTHORIZED" } }));
+    if (attemptedPaths.size === 2) resolveAttempts();
+  });
+  await new Promise((resolve, reject) => {
+    rejectingServer.once("error", reject);
+    rejectingServer.listen(0, "127.0.0.1", resolve);
+  });
+  t.after(() => new Promise((resolve) => rejectingServer.close(resolve)));
+
+  const address = rejectingServer.address();
+  assert.equal(typeof address, "object");
+  const dataDir = tempDataDir("node-agent-explicit-and-persisted-tunnels");
+  const paths = nodeAgentStorePaths(dataDir);
+  const identity = new NodeAgentIdentityService(paths);
+  identity.resolveNodeId("node_explicit_and_persisted_tunnels");
+  identity.commitControlPlaneConnection(identity.stageControlPlaneConnection({ url: `http://127.0.0.1:${address.port}` }));
+  const app = await createNodeAgentApp({ dataDir, logger: false, port: 8091 });
+  const manager = createReverseTunnelManager(app, {
+    host: "127.0.0.1",
+    port: 8091,
+    dataDir,
+    controlPlaneTunnelUrl: `ws://127.0.0.1:${address.port}/explicit-tunnel`,
+    remoteKeyId: "explicit-key",
+    remoteSecret: "explicit-secret",
+  }, paths, "node_explicit_and_persisted_tunnels");
+  t.after(async () => {
+    manager.closeAll();
+    await app.close();
+  });
+
+  manager.connectConfigured();
+  await withTimeout(attemptsComplete, "explicit and persisted reverse tunnel attempts");
+  assert.deepEqual([...attemptedPaths].sort(), ["/api/node-tunnel", "/explicit-tunnel"]);
+  manager.closeAll();
+});
+
+test("deleting a node agent control-plane connection cancels its pending reverse tunnel retry", async (t) => {
+  let attempts = 0;
+  let resolveAttempt;
+  const attempted = new Promise((resolve) => {
+    resolveAttempt = resolve;
+  });
   const rejectingServer = http.createServer((_request, response) => {
     attempts += 1;
     response.writeHead(401, { "content-type": "application/json" });
     response.end(JSON.stringify({ error: { code: "PROTOCOL_VERSION_MISMATCH" } }));
+    resolveAttempt();
   });
   await new Promise((resolve, reject) => {
     rejectingServer.once("error", reject);
@@ -7832,8 +8128,8 @@ test("deleting a node agent remote cancels its pending reverse tunnel retry", as
   const dataDir = tempDataDir("node-agent-deleted-reverse-tunnel");
   const paths = nodeAgentStorePaths(dataDir);
   const identity = new NodeAgentIdentityService(paths);
-  const remote = identity.createRemoteControlPlane({ url: `http://127.0.0.1:${address.port}` });
-  identity.upsertRemoteControlPlane(remote);
+  identity.resolveNodeId("node_deleted");
+  const pending = identity.commitControlPlaneConnection(identity.stageControlPlaneConnection({ url: `http://127.0.0.1:${address.port}` }));
 
   const ipcPath = nodeAgentIpcPath(dataDir);
   const app = await createNodeAgentApp({ dataDir, logger: false, port: 8091, connectionMode: "local-ipc", ipcPath });
@@ -7847,15 +8143,32 @@ test("deleting a node agent remote cancels its pending reverse tunnel retry", as
     await app.close();
   });
 
-  const socket = manager.connect({ url: remote.url, keyId: remote.keyId, secret: remote.secret });
-  await withTimeout(new Promise((resolve) => socket.once("close", resolve)), "deleted reverse tunnel initial close");
+  manager.connectConfigured();
+  await withTimeout(attempted, "deleted reverse tunnel initial attempt");
+  await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(attempts, 1);
 
-  const deleted = await fetchNodeAgentIpc(ipcPath, `/remotes/${encodeURIComponent(remote.keyId)}`, {
+  const connections = await fetchNodeAgentIpc(ipcPath, "/control-plane-connections");
+  assert.equal(connections.status, 200);
+  const connectionState = (await connections.json()).data[0];
+  assert.equal(connectionState.id, pending.connection.id);
+  assert.equal(connectionState.status, "reconnecting");
+  assert.ok(connectionState.lastDisconnectedAt);
+
+  const pairingInUse = await fetchNodeAgentIpc(ipcPath, `/control-plane-pairings/${encodeURIComponent(pending.pairing.keyId)}`, {
+    method: "DELETE",
+  });
+  assert.equal(pairingInUse.status, 409);
+  assert.equal((await pairingInUse.json()).error.code, "NODE_AGENT_PAIRING_IN_USE");
+
+  const deleted = await fetchNodeAgentIpc(ipcPath, `/control-plane-connections/${encodeURIComponent(pending.connection.id)}`, {
     method: "DELETE",
   });
   assert.equal(deleted.status, 200);
   assert.equal((await deleted.json()).data.deleted, true);
+  const storedAfterDelete = new NodeAgentIdentityStore(paths, { logger: () => undefined }).read();
+  assert.equal(storedAfterDelete.controlPlaneConnections.length, 0);
+  assert.equal(storedAfterDelete.controlPlanePairings.length, 1);
 
   await new Promise((resolve) => setTimeout(resolve, 1_400));
   assert.equal(attempts, 1);
@@ -7884,7 +8197,7 @@ test("control plane accepts node agent reverse tunnel handshake", async (t) => {
 
   const address = app.server.address();
   assert.equal(typeof address, "object");
-  const tunnelPath = "/api/node-agent/tunnel?nodeId=node_tunnel";
+  const tunnelPath = "/api/node-tunnel?nodeId=node_tunnel";
   const socket = new WebSocket(`ws://127.0.0.1:${address.port}${tunnelPath}`, {
     headers: createNodeAgentHmacHeaders({
       nodeId: "node_tunnel",
@@ -7941,6 +8254,111 @@ test("control plane accepts node agent reverse tunnel handshake", async (t) => {
   assert.equal(runtimes.body.data[0].id, "runtime_reverse");
 });
 
+test("reverse tunnel authenticates forwarded control-plane requests to a paired node agent", async (t) => {
+  const nodeId = "node_tunnel_forwarded_auth";
+  const keyId = "key_tunnel_forwarded_auth";
+  const secret = "tunnel-forwarded-secret";
+  const controlPlane = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-node-agent-forwarded-auth"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+  });
+  await controlPlane.listen({ host: "127.0.0.1", port: 0 });
+  t.after(() => controlPlane.close());
+
+  const created = await json(controlPlane, "POST", "/api/nodes", {
+    id: nodeId,
+    name: "Authenticated Forwarded Tunnel Node",
+    connectionMode: "reverse-wss",
+    auth: { mode: "paired-hmac", keyId, secret },
+  });
+  assert.equal(created.statusCode, 201);
+
+  const nodeAgent = await createNodeAgentApp({
+    dataDir: tempDataDir("node-agent-forwarded-auth"),
+    logger: false,
+    nodeId,
+    remoteKeyId: keyId,
+    remoteSecret: secret,
+  });
+  t.after(() => nodeAgent.close());
+
+  const address = controlPlane.server.address();
+  assert.equal(typeof address, "object");
+  const tunnel = connectReverseTunnel(nodeAgent, {
+    tunnelUrl: `ws://127.0.0.1:${address.port}/api/node-tunnel`,
+    nodeId,
+    port: 0,
+    keyId,
+    secret,
+  });
+  t.after(() => tunnel.terminate());
+  await withTimeout(waitForWebSocketOpen(tunnel), "authenticated reverse tunnel open", 5_000);
+
+  const checked = await json(controlPlane, "POST", `/api/nodes/${nodeId}/check`);
+  assert.equal(checked.statusCode, 200);
+  assert.equal(checked.body.data.status, "online");
+  assert.equal(checked.body.data.agent.nodeId, nodeId);
+});
+
+test("control plane authenticates reverse tunnels with node HMAC when password auth is enabled", async (t) => {
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-authenticated-node-agent-tunnel"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    auth: { mode: "password" },
+  });
+  await app.listen({ host: "127.0.0.1", port: 0 });
+  t.after(() => app.close());
+
+  await json(app, "POST", "/api/auth/bootstrap-admin", {
+    username: "admin",
+    password: "password123",
+  });
+  const login = await app.inject({
+    method: "POST",
+    url: "/api/auth/login",
+    payload: { username: "admin", password: "password123" },
+  });
+  const cookie = login.headers["set-cookie"];
+  assert.ok(cookie);
+
+  const unrelatedNodeAgentRoute = await app.inject({ method: "GET", url: "/api/node-agent/health" });
+  assert.equal(unrelatedNodeAgentRoute.statusCode, 401);
+  const retiredTunnelRoute = await app.inject({ method: "GET", url: "/api/node-agent/tunnel" });
+  assert.equal(retiredTunnelRoute.statusCode, 401);
+
+  const node = await json(app, "POST", "/api/nodes", {
+    id: "node_authenticated_tunnel",
+    name: "Authenticated Tunnel Node",
+    connectionMode: "reverse-wss",
+    auth: {
+      mode: "paired-hmac",
+      keyId: "key_agent",
+      secret: "agent-secret",
+    },
+  }, { cookie });
+  assert.equal(node.statusCode, 201);
+
+  const address = app.server.address();
+  assert.equal(typeof address, "object");
+  const tunnelPath = "/api/node-tunnel?nodeId=node_authenticated_tunnel";
+  const socket = new WebSocket(`ws://127.0.0.1:${address.port}${tunnelPath}`, {
+    headers: createNodeAgentHmacHeaders({
+      nodeId: "node_authenticated_tunnel",
+      keyId: "key_agent",
+      secret: "agent-secret",
+      method: "GET",
+      pathWithQuery: tunnelPath,
+    }),
+  });
+  t.after(() => socket.close());
+
+  const hello = await onceWebSocketMessage(socket);
+  assert.equal(hello.type, "control-plane.hello");
+  assert.equal(hello.nodeId, "node_authenticated_tunnel");
+});
+
 test("reverse node tunnel streams HTTP response bodies as binary frames", async () => {
   const transport = new ControlPlaneNodeAgentTunnelTransport();
   const mainEvents = new EventEmitter();
@@ -7972,6 +8390,55 @@ test("reverse node tunnel streams HTTP response bodies as binary frames", async 
   secondaryEvents.emit("message", Buffer.from([3, 255]), true);
   secondaryEvents.emit("message", JSON.stringify({ type: "node-agent.http.end" }), false);
   assert.deepEqual([...Buffer.from(await response.arrayBuffer())], [0, 1, 2, 3, 255]);
+});
+
+test("reverse websocket proxy normalizes abnormal close events in both directions", () => {
+  class StrictWebSocket extends EventEmitter {
+    OPEN = 1;
+    readyState = this.OPEN;
+    closes = [];
+
+    send() {}
+
+    close(code, reason) {
+      const valid = code === undefined
+        || (Number.isInteger(code) && ((code >= 1000 && code <= 1014 && ![1004, 1005, 1006].includes(code)) || (code >= 3000 && code <= 4999)));
+      if (!valid) throw new TypeError("First argument must be a valid error code number");
+      if (reason !== undefined && Buffer.byteLength(reason, "utf8") > 123) throw new RangeError("Close reason is too long");
+      this.closes.push({ code, reason });
+    }
+  }
+
+  const sent = [];
+  const transport = new ControlPlaneNodeAgentTunnelTransport();
+  transport.attach("node_close_codes", {
+    readyState: 1,
+    send(data) { sent.push(JSON.parse(data)); },
+  });
+
+  const browser = new StrictWebSocket();
+  transport.proxyWebSocket({ id: "node_close_codes" }, browser, "/instances/one/proxy/ws/events");
+  const opened = sent.shift();
+  const reverseStream = new StrictWebSocket();
+  assert.equal(transport.attachWebSocketStream("node_close_codes", opened.streamId, reverseStream), true);
+
+  assert.doesNotThrow(() => browser.emit("close", 1006, Buffer.from("abnormal close")));
+  assert.ok(reverseStream.closes.length > 0);
+  assert.ok(reverseStream.closes.every((close) => close.code === undefined));
+  const forwardedClose = sent.find((message) => message.type === "control-plane.websocket.close");
+  assert.equal(forwardedClose.code, undefined);
+
+  const secondBrowser = new StrictWebSocket();
+  transport.proxyWebSocket({ id: "node_close_codes" }, secondBrowser, "/instances/two/proxy/ws/events");
+  const secondOpened = sent.findLast((message) => message.type === "control-plane.websocket.open");
+  assert.doesNotThrow(() => transport.handleMessage("node_close_codes", {
+    type: "node-agent.websocket.close",
+    streamId: secondOpened.streamId,
+    code: 1006,
+    reason: "x".repeat(200),
+  }));
+  assert.deepEqual(secondBrowser.closes.map((close) => close.code), [undefined]);
+  assert.equal(Buffer.byteLength(secondBrowser.closes[0].reason, "utf8"), 123);
 });
 
 test("control plane proxies instance websocket routes through reverse node tunnels", async (t) => {
@@ -8034,7 +8501,7 @@ test("control plane proxies instance websocket routes through reverse node tunne
 
   const address = app.server.address();
   assert.equal(typeof address, "object");
-  const tunnelPath = "/api/node-agent/tunnel?nodeId=node_mock";
+  const tunnelPath = "/api/node-tunnel?nodeId=node_mock";
   const tunnel = new WebSocket(`ws://127.0.0.1:${address.port}${tunnelPath}`, {
     headers: createNodeAgentHmacHeaders({
       nodeId: "node_mock",
@@ -8208,7 +8675,7 @@ test("control plane proxies instance websocket routes through reverse node tunne
   assert.equal(open.route, `/instances/${created.body.data.id}/proxy/ws/api/apps/sessions/app_1/tty?token=abc`);
   assert.deepEqual(open.protocols, ["binary"]);
 
-  const streamPath = `/api/node-agent/tunnel/streams/${open.streamId}?nodeId=node_mock`;
+  const streamPath = `/api/node-tunnel/streams/${open.streamId}?nodeId=node_mock`;
   const stream = new WebSocket(`ws://127.0.0.1:${address.port}${streamPath}`, {
     headers: createNodeAgentHmacHeaders({
       nodeId: "node_mock",

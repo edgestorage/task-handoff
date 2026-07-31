@@ -9,8 +9,9 @@ import {
   NodeAgentExternalListenerSchema,
   NodeAgentInstanceProxyRawResponseSchema,
   NodeAgentPairingInviteResponseSchema,
-  NodeAgentRemoteConnectResultSchema,
-  NodeAgentRemoteControlPlaneSchema,
+  NodeAgentControlPlaneConnectionCreateResultSchema,
+  NodeAgentControlPlanePairingSchema,
+  NodeAgentControlPlaneConnectionSchema,
   NodeFolderTreeEntrySchema,
   NodeLocalFolderSchema,
   NodeModelAssignmentSchema,
@@ -96,20 +97,30 @@ export class ControlPlaneNodeAgentGateway {
     });
   }
 
-  connectRemote(node: Node, input: unknown) {
-    return this.client.requestSchema(node, "/remotes/connect", NodeAgentRemoteConnectResultSchema, {
+  createControlPlaneConnection(node: Node, input: unknown) {
+    return this.client.requestSchema(node, "/control-plane-connections", NodeAgentControlPlaneConnectionCreateResultSchema, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(input),
     });
   }
 
-  listRemotes(node: Node) {
-    return this.client.requestSchema(node, "/remotes", z.array(NodeAgentRemoteControlPlaneSchema));
+  listControlPlanePairings(node: Node) {
+    return this.client.requestSchema(node, "/control-plane-pairings", z.array(NodeAgentControlPlanePairingSchema));
   }
 
-  deleteRemote(node: Node, keyId: string) {
-    return this.client.requestSchema(node, `/remotes/${encodeURIComponent(keyId)}`, NodeAgentDeleteResponseSchema, {
+  deleteControlPlanePairing(node: Node, keyId: string) {
+    return this.client.requestSchema(node, `/control-plane-pairings/${encodeURIComponent(keyId)}`, NodeAgentDeleteResponseSchema, {
+      method: "DELETE",
+    });
+  }
+
+  listControlPlaneConnections(node: Node) {
+    return this.client.requestSchema(node, "/control-plane-connections", z.array(NodeAgentControlPlaneConnectionSchema));
+  }
+
+  deleteControlPlaneConnection(node: Node, connectionId: string) {
+    return this.client.requestSchema(node, `/control-plane-connections/${encodeURIComponent(connectionId)}`, NodeAgentDeleteResponseSchema, {
       method: "DELETE",
     });
   }

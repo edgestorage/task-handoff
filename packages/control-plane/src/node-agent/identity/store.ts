@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import writeFileAtomic from "write-file-atomic";
+import { z } from "zod";
 import type { NodeAgentStorePaths } from "../persistence/paths.ts";
-import { StoredNodeAgentDateTimeSchema, StoredNodeAgentIdSchema, StoredNodeAgentPairingInviteSchema, StoredNodeAgentRemoteControlPlaneSchema } from "./schemas.ts";
+import { StoredNodeAgentControlPlaneConnectionSchema, StoredNodeAgentControlPlanePairingSchema, StoredNodeAgentDateTimeSchema, StoredNodeAgentIdSchema, StoredNodeAgentPairingInviteSchema } from "./schemas.ts";
 import type { NodeAgentIdentity } from "./types.ts";
 
 function now() {
@@ -11,9 +12,11 @@ function now() {
 
 type IdentityStoreLogger = (message: string, details: Record<string, unknown>) => void;
 
-const IDENTITY_FIELDS = new Set(["nodeId", "createdAt", "updatedAt", "pairingInvites", "remoteControlPlanes"]);
-const PAIRING_INVITE_FIELDS = new Set(["tokenHash", "expiresAt", "createdAt", "controlPlaneName", "controlPlaneUrl"]);
-const REMOTE_CONTROL_PLANE_FIELDS = new Set(["id", "keyId", "name", "url", "secret", "pairedAt", "updatedAt", "active"]);
+const IDENTITY_FIELDS = new Set(["nodeId", "createdAt", "updatedAt", "pairingInvites", "controlPlanePairings", "controlPlaneConnections", "remoteControlPlanes"]);
+const PAIRING_INVITE_FIELDS = new Set(["tokenHash", "expiresAt", "createdAt", "controlPlaneName"]);
+const CONTROL_PLANE_PAIRING_FIELDS = new Set(["id", "keyId", "name", "secret", "pairedAt", "updatedAt"]);
+const CONTROL_PLANE_CONNECTION_FIELDS = new Set(["id", "pairingKeyId", "name", "url", "enabled", "createdAt", "updatedAt"]);
+const LEGACY_REMOTE_CONTROL_PLANE_FIELDS = new Set(["id", "keyId", "name", "url", "secret", "pairedAt", "updatedAt", "active"]);
 
 function defaultLogger(message: string, details: Record<string, unknown>) {
   console.warn(JSON.stringify({ message, ...details }));
@@ -48,6 +51,41 @@ function normalizeNodeAgentIdentity(record: unknown, logger: IdentityStoreLogger
   if (ignoredIdentityFields.length) {
     logger("unknown node agent identity fields were ignored", { fields: ignoredIdentityFields });
   }
+  const legacyRemotes = Array.isArray(value.remoteControlPlanes) ? value.remoteControlPlanes.flatMap((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    const remote = item as Record<string, unknown>;
+    const ignoredFields = unknownFields(remote, LEGACY_REMOTE_CONTROL_PLANE_FIELDS);
+    if (ignoredFields.length) logger("unknown legacy node agent remote control-plane fields were ignored", { fields: ignoredFields });
+    const pairing = StoredNodeAgentControlPlanePairingSchema.safeParse(remote);
+    if (!pairing.success) {
+      logger("invalid legacy node agent control-plane pairing was ignored", { issues: pairing.error.issues });
+      return [];
+    }
+    const connection = remote.url ? StoredNodeAgentControlPlaneConnectionSchema.safeParse({
+      id: `connection_${pairing.data.keyId}`,
+      pairingKeyId: pairing.data.keyId,
+      name: remote.name,
+      url: remote.url,
+      enabled: remote.active !== false,
+      createdAt: pairing.data.pairedAt,
+      updatedAt: pairing.data.updatedAt,
+    }) : undefined;
+    return [{ pairing: pairing.data, ...(connection?.success ? { connection: connection.data } : {}) }];
+  }) : [];
+  const parseItems = <T>(items: unknown, fields: Set<string>, schema: z.ZodType<T>, label: string) => Array.isArray(items) ? items.flatMap((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      logger(`invalid node agent ${label} was ignored`, {});
+      return [];
+    }
+    const ignoredFields = unknownFields(item as Record<string, unknown>, fields);
+    if (ignoredFields.length) logger(`unknown node agent ${label} fields were ignored`, { fields: ignoredFields });
+    const parsed = schema.safeParse(item);
+    if (!parsed.success) {
+      logger(`invalid node agent ${label} was ignored`, { issues: parsed.error.issues });
+      return [];
+    }
+    return [parsed.data];
+  }) : [];
   return {
     nodeId,
     createdAt: validDateOrNow(value.createdAt, "createdAt", logger),
@@ -66,20 +104,12 @@ function normalizeNodeAgentIdentity(record: unknown, logger: IdentityStoreLogger
       }
       return [parsed.data];
     }) : [],
-    remoteControlPlanes: Array.isArray(value.remoteControlPlanes) ? value.remoteControlPlanes.flatMap((item) => {
-      if (!item || typeof item !== "object" || Array.isArray(item)) {
-        logger("invalid node agent remote control-plane was ignored", {});
-        return [];
-      }
-      const ignoredFields = unknownFields(item as Record<string, unknown>, REMOTE_CONTROL_PLANE_FIELDS);
-      if (ignoredFields.length) logger("unknown node agent remote control-plane fields were ignored", { fields: ignoredFields });
-      const parsed = StoredNodeAgentRemoteControlPlaneSchema.safeParse(item);
-      if (!parsed.success) {
-        logger("invalid node agent remote control-plane was ignored", { issues: parsed.error.issues });
-        return [];
-      }
-      return [parsed.data];
-    }) : [],
+    controlPlanePairings: value.controlPlanePairings
+      ? parseItems(value.controlPlanePairings, CONTROL_PLANE_PAIRING_FIELDS, StoredNodeAgentControlPlanePairingSchema, "control-plane pairing")
+      : legacyRemotes.map((item) => item.pairing),
+    controlPlaneConnections: value.controlPlaneConnections
+      ? parseItems(value.controlPlaneConnections, CONTROL_PLANE_CONNECTION_FIELDS, StoredNodeAgentControlPlaneConnectionSchema, "control-plane connection")
+      : legacyRemotes.flatMap((item) => item.connection ? [item.connection] : []),
   };
 }
 

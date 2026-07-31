@@ -9,6 +9,7 @@ import {
 } from "../nodes/tunnel.ts";
 import {
   IdParamsSchema,
+  NodeControlPlaneConnectionParamsSchema,
   NodeFolderTreeQuerySchema,
   NodeLocalFolderParamsSchema,
   NodeRemoteKeyParamsSchema,
@@ -96,20 +97,30 @@ export function registerNodeRoutes({
     events.publish("node.pairing-invite.created", { nodeId: params.id });
     return reply.code(201).send({ data: invite });
   });
-  app.post("/api/nodes/:id/remotes/connect", async (request) => {
+  app.post("/api/nodes/:id/control-plane-connections", async (request) => {
     const params = IdParamsSchema.parse(request.params);
     const result = await service.connectNodeToControlPlane(params.id, request.body);
     events.publish("node.remote-connect.requested", { nodeId: params.id });
     return { data: result };
   });
-  app.get("/api/nodes/:id/remotes", async (request) => {
+  app.get("/api/nodes/:id/control-plane-pairings", async (request) => {
     const params = IdParamsSchema.parse(request.params);
-    return { data: await service.listNodeRemoteControlPlanes(params.id) };
+    return { data: await service.listNodeControlPlanePairings(params.id) };
   });
-  app.delete("/api/nodes/:id/remotes/:keyId", async (request) => {
+  app.delete("/api/nodes/:id/control-plane-pairings/:keyId", async (request) => {
     const params = NodeRemoteKeyParamsSchema.parse(request.params);
-    const result = await service.deleteNodeRemoteControlPlane(params.id, params.keyId);
-    events.publish("node.remote-key.deleted", { nodeId: params.id, keyId: params.keyId });
+    const result = await service.deleteNodeControlPlanePairing(params.id, params.keyId);
+    events.publish("node.control-plane-pairing.deleted", { nodeId: params.id, keyId: params.keyId });
+    return { data: result };
+  });
+  app.get("/api/nodes/:id/control-plane-connections", async (request) => {
+    const params = IdParamsSchema.parse(request.params);
+    return { data: await service.listNodeControlPlaneConnections(params.id) };
+  });
+  app.delete("/api/nodes/:id/control-plane-connections/:connectionId", async (request) => {
+    const params = NodeControlPlaneConnectionParamsSchema.parse(request.params);
+    const result = await service.deleteNodeControlPlaneConnection(params.id, params.connectionId);
+    events.publish("node.control-plane-connection.deleted", { nodeId: params.id, connectionId: params.connectionId });
     return { data: result };
   });
   app.post("/api/node-join/invites", async (request, reply) => {

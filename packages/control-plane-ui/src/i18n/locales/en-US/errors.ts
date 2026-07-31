@@ -37,6 +37,8 @@ export const errors = {
   NODE_AGENT_HEALTH_FAILED: "The node agent health check failed.",
   NODE_AGENT_PAIRING_FAILED: "The node agent could not be paired.",
   NODE_AGENT_PAIRING_RESPONSE_INVALID: "The node agent returned an invalid pairing response.",
+  NODE_AGENT_PAIRING_IN_USE: "Remove the active control-plane connection before deleting this pairing.",
+  NODE_AGENT_PAIRING_CURRENT_REQUEST: "The control plane currently viewing this node cannot delete its own pairing.",
   NODE_AGENT_REMOTE_REQUIRES_PAIRED_HMAC: "Remote node connections require paired-HMAC authentication.",
   NODE_AGENT_REMOTE_SECRET_REQUIRED: "Enter the remote node secret.",
   NODE_AGENT_REMOTE_KEY_ID_REQUIRED: "Enter the remote node key ID.",

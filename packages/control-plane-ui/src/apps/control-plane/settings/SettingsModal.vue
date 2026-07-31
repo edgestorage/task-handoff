@@ -1020,7 +1020,8 @@ const {
   creatingNode,
   deletingNodeId,
   deletingRemoteKeyId,
-  loadRemoteKeys,
+  deletingControlPlaneConnectionId,
+  loadControlPlaneAccess,
   loadManagedUpdateJobs,
   loadNodeImages,
   loadingRemoteKeysNodeId,
@@ -1031,6 +1032,7 @@ const {
   openNodeRename,
   removeNode,
   removeRemoteKey,
+  removeControlPlaneConnection,
   renamingNodeId,
   resetNodeRename,
   nodeImageError,
@@ -1039,7 +1041,8 @@ const {
   nodeNameById,
   selectedImageNodeId,
   remoteConnectResultByNodeId,
-  remoteKeysByNodeId,
+  controlPlanePairingsByNodeId,
+  controlPlaneConnectionsByNodeId,
   remoteKeysErrorByNodeId,
   remoteConnect,
   settingsNode,
@@ -1148,13 +1151,14 @@ const nodeDetailActions = computed(() => ({
   connectSelectedNodeToRemote,
   createPairingInviteForNode,
   loadNodeImages,
-  loadRemoteKeys,
+  loadControlPlaneAccess,
   loadManagedUpdateJobs,
   openInstanceSettings: (instanceId: string) => emit("openInstanceSettings", instanceId),
   openNodeRename,
   removeNode,
   removeNodeLocalFolder,
   removeRemoteKey,
+  removeControlPlaneConnection,
   removeRuntime,
   saveExternalListener,
   submitNodeLocalFolder,
@@ -1175,6 +1179,7 @@ const nodeDetailBusy = computed(() => ({
   deletingNodeId: deletingNodeId.value,
   deletingNodeLocalFolderId: deletingNodeLocalFolderId.value,
   deletingRemoteKeyId: deletingRemoteKeyId.value,
+  deletingControlPlaneConnectionId: deletingControlPlaneConnectionId.value,
   deletingRuntimeId: deletingRuntimeId.value,
   loadingNodeImagesId: loadingNodeImagesId.value,
   loadingRemoteKeysNodeId: loadingRemoteKeysNodeId.value,
@@ -1194,7 +1199,8 @@ const nodeDetailResources = computed(() => ({
   nodeFolderImageOptions: nodeFolderImageOptions.value || [],
   remoteConnect,
   remoteConnectResultByNodeId,
-  remoteKeys: selectedNode.value ? remoteKeysByNodeId[selectedNode.value.id] || [] : [],
+  controlPlanePairings: selectedNode.value ? controlPlanePairingsByNodeId[selectedNode.value.id] || [] : [],
+  controlPlaneConnections: selectedNode.value ? controlPlaneConnectionsByNodeId[selectedNode.value.id] || [] : [],
   remoteKeysError: selectedNode.value ? remoteKeysErrorByNodeId[selectedNode.value.id] || "" : "",
   diagnostics: selectedNode.value ? nodeDiagnosticsByNodeId.value[selectedNode.value.id] || [] : [],
   externalListener: externalListener.value,
@@ -1227,7 +1233,7 @@ watch(
   (nodeId, previousNodeId) => {
     if (previousNodeId && nodeId !== previousNodeId) resetNodeRename();
     if (nodeId) {
-      void loadRemoteKeys(nodeId);
+      void loadControlPlaneAccess(nodeId);
       void loadManagedUpdateJobs(nodeId);
     }
   },

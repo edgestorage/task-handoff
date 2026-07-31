@@ -10,7 +10,7 @@ import {
 } from "./ai-sessions.ts";
 import { TriggerConfigSchema, TriggerDeploymentSchema, TriggerRunSchema, TriggerRuntimeStateSchema } from "./triggers.ts";
 
-export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-07-30";
+export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-07-31";
 export const MARKET_CATALOG_PROTOCOL_VERSION = "2026-07-29";
 // The local value follows the date-only convention. Parsing remains permissive
 // so persisted records written before that convention do not disappear.
@@ -1054,28 +1054,45 @@ export const NodeAgentPairingInviteResponseSchema = z
   })
   .passthrough();
 
-export const NodeAgentRemoteControlPlaneSchema = z
+export const NodeAgentControlPlanePairingSchema = z
   .object({
     id: IdSchema,
     keyId: IdSchema,
-    url: z.string().trim().min(1).max(2048).optional(),
     name: z.string().trim().min(1).max(160).optional(),
     pairedAt: TimestampSchema,
-    updatedAt: TimestampSchema.optional(),
-    active: z.boolean().optional(),
-    current: z.boolean().optional(),
+    updatedAt: TimestampSchema,
+    current: z.boolean(),
   })
   .passthrough();
 
-export const NodeAgentRemoteConnectResultSchema = z
+export const NodeAgentControlPlaneConnectionSchema = z
   .object({
-    remote: z
+    id: IdSchema,
+    pairingKeyId: IdSchema,
+    url: z.string().trim().min(1).max(2048),
+    name: z.string().trim().min(1).max(160).optional(),
+    enabled: z.boolean(),
+    createdAt: TimestampSchema,
+    updatedAt: TimestampSchema,
+    status: z.enum(["disabled", "connecting", "connected", "reconnecting", "failed"]),
+    lastConnectedAt: TimestampSchema.optional(),
+    lastDisconnectedAt: TimestampSchema.optional(),
+    error: z.string().optional(),
+  })
+  .passthrough();
+
+export const NodeAgentControlPlaneConnectionCreateResultSchema = z
+  .object({
+    pairing: NodeAgentControlPlanePairingSchema,
+    connection: z
       .object({
         id: IdSchema,
-        url: z.string().trim().min(1).max(2048).optional(),
-        keyId: IdSchema,
-        pairedAt: TimestampSchema,
-        active: z.boolean(),
+        pairingKeyId: IdSchema,
+        url: z.string().trim().min(1).max(2048),
+        name: z.string().trim().min(1).max(160).optional(),
+        enabled: z.boolean(),
+        createdAt: TimestampSchema,
+        updatedAt: TimestampSchema,
       })
       .passthrough(),
     tunnel: z
@@ -1863,8 +1880,9 @@ export type NodeAgentExternalListenerConfig = z.infer<typeof NodeAgentExternalLi
 export type NodeAgentExternalListener = z.infer<typeof NodeAgentExternalListenerSchema>;
 export type UpdateNodeAgentExternalListener = z.infer<typeof UpdateNodeAgentExternalListenerSchema>;
 export type NodeAgentPairingInviteResponse = z.infer<typeof NodeAgentPairingInviteResponseSchema>;
-export type NodeAgentRemoteControlPlane = z.infer<typeof NodeAgentRemoteControlPlaneSchema>;
-export type NodeAgentRemoteConnectResult = z.infer<typeof NodeAgentRemoteConnectResultSchema>;
+export type NodeAgentControlPlanePairing = z.infer<typeof NodeAgentControlPlanePairingSchema>;
+export type NodeAgentControlPlaneConnection = z.infer<typeof NodeAgentControlPlaneConnectionSchema>;
+export type NodeAgentControlPlaneConnectionCreateResult = z.infer<typeof NodeAgentControlPlaneConnectionCreateResultSchema>;
 export type NodeAgentDeleteResponse = z.infer<typeof NodeAgentDeleteResponseSchema>;
 export type LocalDockerImage = z.infer<typeof LocalDockerImageSchema>;
 export type NodeAgentInstanceProxyRawResponse = z.infer<typeof NodeAgentInstanceProxyRawResponseSchema>;

@@ -64,7 +64,7 @@ import {
   type RuntimeArtifactIdentity,
   type UpdateCheckResult,
 } from "@task-handoff/protocol/control-plane";
-import { bridgeWebSockets } from "@task-handoff/protocol/websocket-bridge";
+import { bridgeWebSockets, closeWebSocket, normalizeWebSocketCloseCode, normalizeWebSocketCloseReason } from "@task-handoff/protocol/websocket-bridge";
 import { defaultCommandRunner, LocalDockerExecutor, listLocalDockerImages, type CommandRunner, type ExecutorContext, type ExecutorStartResult } from "./runtimes/docker.ts";
 import { DockerImageService, type DockerImagePhase, type DockerImageTerminalOutput, type ResolvedDockerImage } from "./docker-images.ts";
 import { NodeAgentInstanceEventForwarder } from "./events.ts";
@@ -84,7 +84,7 @@ import { createId, createSecret, JsonCollection, JsonFile } from "../shared/pers
 import { acquireNodeAgentSingletonLock, defaultNodeAgentSingletonLockPath } from "./process/singleton-lock.ts";
 import type { TerminalCommandRunner } from "../shared/process/terminal-command-runner.ts";
 import { nodeAgentIpcEndpoint, nodeAgentIpcPath, prepareNodeAgentIpcPath } from "../shared/transport/node-agent-ipc.ts";
-import { createNodeAgentHmacHeaders } from "../shared/security/node-agent-auth.ts";
+import { createNodeAgentHmacHeaders, NODE_TUNNEL_API_PATH } from "../shared/security/node-agent-auth.ts";
 import { EventConnectionRetryTimer } from "../shared/events/connection-retry.ts";
 import { nodeAgentProxyMethod, type NodeAgentInjectResponse, websocketPayload } from "./transport/proxy-utils.ts";
 import { checkNodeAgentUpdate, npmCommand, NodeUpdateJobs, resolveNodeAgentUpdateWorker, resolveNodeUpdatePackage } from "./updates.ts";
@@ -102,7 +102,7 @@ import {
   NodeModelStore,
 } from "./models/stores.ts";
 import { NodeAgentPairedHmacVerifier } from "./identity/hmac-verifier.ts";
-import { NodeAgentPairingCompleteSchema, NodeAgentPairingInviteSchema, NodeAgentRemoteConnectSchema } from "./identity/schemas.ts";
+import { NodeAgentControlPlaneConnectionCreateSchema, NodeAgentPairingCompleteSchema, NodeAgentPairingInviteSchema } from "./identity/schemas.ts";
 import { assertHttpControlPlaneUrl, completeControlPlaneJoin, NodeAgentIdentityService } from "./identity/service.ts";
 
 export { mergeRuntimeLifecycleResult } from "./instance-lifecycle-state.ts";
@@ -3062,16 +3062,13 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     });
   });
 
-  app.get("/api/node-agent/remotes", async (request) => ({
-    data: identity.listRemoteControlPlanes(request.nodeAgentAuthKeyId),
+  app.get("/api/node-agent/control-plane-pairings", async (request) => ({
+    data: identity.listControlPlanePairings(request.nodeAgentAuthKeyId),
   }));
 
-  app.delete("/api/node-agent/remotes/:keyId", async (request) => {
+  app.delete("/api/node-agent/control-plane-pairings/:keyId", async (request) => {
     const keyId = z.string().trim().min(1).max(160).parse((request.params as { keyId: string }).keyId);
-    const deleted = identity.deleteRemoteControlPlane(keyId, request.nodeAgentAuthKeyId);
-    if (deleted) {
-      app.nodeAgentReverseTunnels?.connectConfigured();
-    }
+    const deleted = identity.deleteControlPlanePairing(keyId, request.nodeAgentAuthKeyId);
     return {
       data: {
         deleted,
@@ -3079,53 +3076,67 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     };
   });
 
-  app.post("/api/node-agent/remotes/connect", async (request, reply) => {
-    const input = NodeAgentRemoteConnectSchema.parse(request.body);
+  app.get("/api/node-agent/control-plane-connections", async () => ({
+    data: identity.listControlPlaneConnections().map((connection) => ({
+      ...connection,
+      ...(app.nodeAgentReverseTunnels?.state(connection.id) || { status: connection.enabled ? "connecting" : "disabled" }),
+    })),
+  }));
+
+  app.delete("/api/node-agent/control-plane-connections/:connectionId", async (request) => {
+    const connectionId = z.string().trim().min(1).max(160).parse((request.params as { connectionId: string }).connectionId);
+    const deleted = identity.deleteControlPlaneConnection(connectionId);
+    if (deleted) app.nodeAgentReverseTunnels?.connectConfigured();
+    return { data: { deleted } };
+  });
+
+  app.post("/api/node-agent/control-plane-connections", async (request, reply) => {
+    const input = NodeAgentControlPlaneConnectionCreateSchema.parse(request.body);
     const controlPlaneUrl = assertHttpControlPlaneUrl(input.controlPlaneUrl);
-    const remote = identity.createRemoteControlPlane({
-      url: controlPlaneUrl,
-      ...(input.controlPlaneName ? { name: input.controlPlaneName } : {}),
-      active: input.activate !== false,
-    });
-    const joined = await completeControlPlaneJoin(fetchImpl, controlPlaneUrl, {
-      joinToken: input.joinToken,
-      nodeId,
-      nodeName: state.node.name,
-      keyId: remote.keyId,
-      secret: remote.secret,
-      pairedAt: remote.pairedAt,
-    });
-    const stored = identity.upsertRemoteControlPlane({
-      ...remote,
-      ...(typeof joined.name === "string" && joined.name ? { name: input.controlPlaneName || joined.name } : {}),
-    });
-    let tunnelStatus: "disabled" | "saved" | "connecting" | "failed" = stored.active !== false ? "saved" : "disabled";
-    let tunnelError: string | undefined;
-    if (stored.active !== false) {
+    return identity.runControlPlaneConnectionOperation(controlPlaneUrl, async () => {
+      const staged = identity.stageControlPlaneConnection({
+        url: controlPlaneUrl,
+        ...(input.controlPlaneName ? { name: input.controlPlaneName } : {}),
+        enabled: input.activate !== false,
+      });
+      let joined: Awaited<ReturnType<typeof completeControlPlaneJoin>>;
+      try {
+        joined = await completeControlPlaneJoin(fetchImpl, controlPlaneUrl, {
+          joinToken: input.joinToken,
+          nodeId,
+          nodeName: state.node.name,
+          keyId: staged.pairing.keyId,
+          secret: staged.pairing.secret,
+          pairedAt: staged.pairing.pairedAt,
+        });
+      } catch (error) {
+        identity.rollbackControlPlaneConnection(staged);
+        throw error;
+      }
+      const stored = identity.commitControlPlaneConnection(staged, {
+        name: input.controlPlaneName || (typeof joined.name === "string" && joined.name ? joined.name : undefined),
+      });
+      let tunnelStatus: "disabled" | "saved" | "connecting" | "failed" = stored.connection.enabled ? "saved" : "disabled";
+      let tunnelError: string | undefined;
       if (app.nodeAgentReverseTunnels) {
         try {
-          app.nodeAgentReverseTunnels.connect({ url: controlPlaneUrl, keyId: stored.keyId, secret: stored.secret });
-          tunnelStatus = "connecting";
+          app.nodeAgentReverseTunnels.connectConfigured();
+          if (stored.connection.enabled) tunnelStatus = "connecting";
         } catch (error) {
           tunnelStatus = "failed";
           tunnelError = error instanceof Error ? error.message : String(error);
         }
       }
-    }
-    return reply.code(201).send({
-      data: {
-        remote: {
-          id: stored.id,
-          url: stored.url,
-          keyId: stored.keyId,
-          pairedAt: stored.pairedAt,
-          active: stored.active !== false,
+      return reply.code(201).send({
+        data: {
+          pairing: identity.listControlPlanePairings().find((item) => item.keyId === stored.pairing.keyId),
+          connection: stored.connection,
+          tunnel: {
+            status: tunnelStatus,
+            ...(tunnelError ? { error: tunnelError } : {}),
+          },
         },
-        tunnel: {
-          status: tunnelStatus,
-          ...(tunnelError ? { error: tunnelError } : {}),
-        },
-      },
+      });
     });
   });
 
@@ -3547,22 +3558,23 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   return app;
 }
 
-function controlPlaneTunnelUrl(options: RunNodeAgentServerOptions) {
-  const explicit = options.controlPlaneTunnelUrl || process.env.TASK_HANDOFF_CONTROL_PLANE_TUNNEL_URL;
-  if (explicit) {
-    return explicit;
-  }
+function explicitControlPlaneTunnelUrl(options: RunNodeAgentServerOptions) {
+  const value = options.controlPlaneTunnelUrl || process.env.TASK_HANDOFF_CONTROL_PLANE_TUNNEL_URL;
+  return value ? new URL(value).toString() : undefined;
+}
+
+function bootstrapControlPlaneTunnelUrl() {
   const base = process.env.TASK_HANDOFF_CONTROL_PLANE_URL;
   if (!base) {
     return undefined;
   }
-  const url = new URL("/api/node-agent/tunnel", base);
+  const url = new URL(NODE_TUNNEL_API_PATH, base);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   return url.toString();
 }
 
 function controlPlaneTunnelUrlForBase(controlPlaneUrl: string) {
-  const url = new URL("/api/node-agent/tunnel", controlPlaneUrl);
+  const url = new URL(NODE_TUNNEL_API_PATH, controlPlaneUrl);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   return url.toString();
 }
@@ -3609,6 +3621,27 @@ export function connectReverseTunnel(app: Awaited<ReturnType<typeof createNodeAg
     const port = typeof input.port === "function" ? input.port() : input.port;
     return new URL(`/api/node-agent${path}`, `http://127.0.0.1:${port}`);
   };
+  const localNodeAgentRequestHeaders = (
+    route: string,
+    method: string,
+    body: string | undefined,
+    headers: Record<string, string> = {},
+  ) => {
+    const path = route.startsWith("/") ? route : `/${route}`;
+    const authHeaders = input.secret && input.keyId
+      ? createNodeAgentHmacHeaders({
+          nodeId: input.nodeId,
+          keyId: input.keyId,
+          secret: input.secret,
+          method,
+          pathWithQuery: `/api/node-agent${path}`,
+          body,
+        })
+      : input.token
+        ? { authorization: `Bearer ${input.token}` }
+        : {};
+    return { ...headers, ...authHeaders };
+  };
   const controlPlaneStreamUrl = (streamId: string) => {
     const streamUrl = new URL(url);
     streamUrl.pathname = `${streamUrl.pathname.replace(/\/$/, "")}/streams/${encodeURIComponent(streamId)}`;
@@ -3628,11 +3661,11 @@ export function connectReverseTunnel(app: Awaited<ReturnType<typeof createNodeAg
         pathWithQuery: `${streamUrl.pathname}${streamUrl.search}`,
       })
     : {};
-  const closeStream = (streamId: string, code = 1000, reason = "") => {
+  const closeStream = (streamId: string, code?: unknown, reason?: unknown) => {
     const stream = streams.get(streamId);
     streams.delete(streamId);
-    stream?.upstream?.close(code, reason);
-    stream?.tunnel?.close(code, reason);
+    if (stream?.upstream) closeWebSocket(stream.upstream, code, reason);
+    if (stream?.tunnel) closeWebSocket(stream.tunnel, code, reason);
   };
   const sendHttpFrame = (tunnel: WebSocket, data: string | Buffer, binary = false) => new Promise<void>((resolve, reject) => {
     tunnel.send(data, { binary }, (error) => error ? reject(error) : resolve());
@@ -3667,6 +3700,8 @@ export function connectReverseTunnel(app: Awaited<ReturnType<typeof createNodeAg
       const route = typeof record.route === "string" && record.route.startsWith("/") ? record.route : "/health";
       const init = record.init && typeof record.init === "object" ? record.init as Record<string, unknown> : {};
       const requestHeaders = init.headers && typeof init.headers === "object" ? init.headers as Record<string, string> : {};
+      const method = nodeAgentProxyMethod(init.method);
+      const body = typeof init.body === "string" ? init.body : undefined;
       const controller = new AbortController();
       const streamUrl = controlPlaneHttpStreamUrl(streamId);
       const tunnel = new WebSocket(streamUrl, { headers: controlPlaneStreamHeaders(streamUrl) });
@@ -3674,9 +3709,9 @@ export function connectReverseTunnel(app: Awaited<ReturnType<typeof createNodeAg
       tunnel.on("open", async () => {
         try {
           const response = await fetch(localNodeAgentHttpUrl(route), {
-            method: nodeAgentProxyMethod(init.method),
-            headers: { ...requestHeaders, ...(input.token ? { authorization: `Bearer ${input.token}` } : {}) },
-            body: typeof init.body === "string" ? init.body : undefined,
+            method,
+            headers: localNodeAgentRequestHeaders(route, method, body, requestHeaders),
+            body,
             signal: controller.signal,
           });
           await sendHttpFrame(tunnel, JSON.stringify({ type: "node-agent.http.head", streamId, status: response.status, headers: Object.fromEntries(response.headers.entries()) }));
@@ -3711,7 +3746,7 @@ export function connectReverseTunnel(app: Awaited<ReturnType<typeof createNodeAg
       const route = typeof record.route === "string" ? record.route : "";
       const protocols = Array.isArray(record.protocols) ? record.protocols.filter((item): item is string => typeof item === "string") : undefined;
       try {
-        const headers = input.token ? { authorization: `Bearer ${input.token}` } : undefined;
+        const headers = localNodeAgentRequestHeaders(route, "GET", undefined);
         const upstream = protocols?.length ? new WebSocket(localNodeAgentWsUrl(route), protocols, { headers }) : new WebSocket(localNodeAgentWsUrl(route), { headers });
         const streamUrl = controlPlaneStreamUrl(streamId);
         const tunnel = new WebSocket(streamUrl, { headers: controlPlaneStreamHeaders(streamUrl) });
@@ -3719,8 +3754,8 @@ export function connectReverseTunnel(app: Awaited<ReturnType<typeof createNodeAg
           upstream,
           tunnel,
           close: (code = 1000, reason = "") => {
-            upstream.close(code, reason);
-            tunnel.close(code, reason);
+            closeWebSocket(upstream, code, reason);
+            closeWebSocket(tunnel, code, reason);
           },
         });
         upstream.on("open", () => {
@@ -3742,11 +3777,13 @@ export function connectReverseTunnel(app: Awaited<ReturnType<typeof createNodeAg
           },
           onUpstreamClose: (code, reason) => {
             streams.delete(streamId);
+            const closeCode = normalizeWebSocketCloseCode(code);
+            const closeReason = normalizeWebSocketCloseReason(reason);
             socket.send(JSON.stringify({
               type: "node-agent.websocket.close",
               streamId,
-              code: typeof code === "number" ? code : 1000,
-              reason: Buffer.isBuffer(reason) ? reason.toString("utf8") : String(reason || ""),
+              ...(closeCode === undefined ? {} : { code: closeCode }),
+              ...(closeReason ? { reason: closeReason } : {}),
             }));
           },
           onUpstreamError: (error) => {
@@ -3777,15 +3814,14 @@ export function connectReverseTunnel(app: Awaited<ReturnType<typeof createNodeAg
       const init = record.init && typeof record.init === "object" ? record.init as Record<string, unknown> : {};
       const route = typeof record.route === "string" && record.route.startsWith("/") ? record.route : "/health";
       const headers = init.headers && typeof init.headers === "object" ? init.headers as Record<string, string> : {};
+      const method = nodeAgentProxyMethod(init.method);
+      const body = typeof init.body === "string" ? init.body : undefined;
       try {
         const response: NodeAgentInjectResponse = await app.inject({
-          method: nodeAgentProxyMethod(init.method),
+          method,
           url: `/api/node-agent${route}`,
-          headers: {
-            ...headers,
-            ...(input.token ? { authorization: `Bearer ${input.token}` } : {}),
-          },
-          payload: typeof init.body === "string" ? init.body : undefined,
+          headers: localNodeAgentRequestHeaders(route, method, body, headers),
+          payload: body,
         });
         socket.send(
           JSON.stringify({
@@ -3818,7 +3854,16 @@ export function createReverseTunnelManager(app: Awaited<ReturnType<typeof create
   const token = options.token || process.env.TASK_HANDOFF_NODE_AGENT_TOKEN;
   const identity = new NodeAgentIdentityService(paths);
   type TunnelConfig = { tunnelUrl: string; keyId?: string; secret?: string };
-  type TunnelEntry = { config: TunnelConfig; retry: EventConnectionRetryTimer; socket?: WebSocket };
+  type TunnelStatus = "connecting" | "connected" | "reconnecting" | "failed";
+  type TunnelEntry = {
+    config: TunnelConfig;
+    retry: EventConnectionRetryTimer;
+    socket?: WebSocket;
+    status: TunnelStatus;
+    lastConnectedAt?: string;
+    lastDisconnectedAt?: string;
+    error?: string;
+  };
   const tunnels = new Map<string, TunnelEntry>();
   let closing = false;
 
@@ -3830,6 +3875,7 @@ export function createReverseTunnelManager(app: Awaited<ReturnType<typeof create
       }
     });
     if (scheduled) {
+      entry.status = "reconnecting";
       app.log.info({
         nodeId,
         tunnelUrl: new URL(entry.config.tunnelUrl).origin,
@@ -3840,6 +3886,8 @@ export function createReverseTunnelManager(app: Awaited<ReturnType<typeof create
   };
 
   const open = (key: string, entry: TunnelEntry) => {
+    entry.status = entry.lastDisconnectedAt ? "reconnecting" : "connecting";
+    entry.error = undefined;
     const socket = connectReverseTunnel(app, {
       ...entry.config,
       nodeId,
@@ -3850,12 +3898,17 @@ export function createReverseTunnelManager(app: Awaited<ReturnType<typeof create
     socket.on("open", () => {
       if (tunnels.get(key) === entry && entry.socket === socket) {
         entry.retry.reset();
+        entry.status = "connected";
+        entry.lastConnectedAt = now();
+        entry.error = undefined;
         app.log.info({ nodeId, tunnelUrl: new URL(entry.config.tunnelUrl).origin }, "node agent reverse tunnel connected");
       }
     });
     socket.on("close", (code, reason) => {
       if (tunnels.get(key) !== entry || entry.socket !== socket) return;
       entry.socket = undefined;
+      entry.lastDisconnectedAt = now();
+      entry.error = `WebSocket closed${code ? ` (${code})` : ""}${reason ? `: ${Buffer.isBuffer(reason) ? reason.toString("utf8") : String(reason)}` : ""}`;
       if (!closing) {
         app.log.warn({
           nodeId,
@@ -3866,13 +3919,19 @@ export function createReverseTunnelManager(app: Awaited<ReturnType<typeof create
         scheduleReconnect(key, entry);
       }
     });
+    socket.on("error", (error) => {
+      if (tunnels.get(key) === entry && entry.socket === socket) {
+        entry.status = "failed";
+        entry.error = error instanceof Error ? error.message : String(error);
+      }
+    });
     return socket;
   };
 
   const replace = (key: string, config: TunnelConfig) => {
     const current = tunnels.get(key);
     current?.retry.cancel();
-    const entry: TunnelEntry = { config, retry: new EventConnectionRetryTimer() };
+    const entry: TunnelEntry = { config, retry: new EventConnectionRetryTimer(), status: "connecting" };
     tunnels.set(key, entry);
     current?.socket?.close(1000, "Reverse tunnel reconnecting.");
     return open(key, entry);
@@ -3897,42 +3956,59 @@ export function createReverseTunnelManager(app: Awaited<ReturnType<typeof create
     }
   };
 
-  const connect = (remote: { url: string; keyId?: string; secret?: string }) => {
-    const key = remote.url.replace(/\/$/, "");
-    return replace(key, {
-      tunnelUrl: controlPlaneTunnelUrlForBase(remote.url),
-      keyId: remote.keyId,
-      secret: remote.secret,
-    });
-  };
-
   const connectConfigured = () => {
     closing = false;
     const configured = new Map<string, TunnelConfig>();
-    const explicitTunnelUrl = controlPlaneTunnelUrl(options);
-    if (explicitTunnelUrl) {
+    const access = identity.resolvedControlPlaneAccess();
+    const configuredTunnelUrls = new Set<string>();
+    for (const { connection, pairing } of access.connections) {
+      if (!connection.enabled) continue;
+      if (!pairing) {
+        app.log.warn({ nodeId, connectionId: connection.id, pairingKeyId: connection.pairingKeyId }, "node agent control-plane connection has no pairing");
+        continue;
+      }
+      const tunnelUrl = controlPlaneTunnelUrlForBase(connection.url);
+      configured.set(connection.id, { tunnelUrl, keyId: pairing.keyId, secret: pairing.secret });
+      configuredTunnelUrls.add(tunnelUrl);
+    }
+    const explicitTunnelUrl = explicitControlPlaneTunnelUrl(options);
+    if (explicitTunnelUrl && !configuredTunnelUrls.has(explicitTunnelUrl)) {
       const tunnelSecret = identity.reverseTunnelSecret(
         process.env.TASK_HANDOFF_CONTROL_PLANE_URL,
         options.remoteSecret || process.env.TASK_HANDOFF_NODE_AGENT_REMOTE_SECRET,
         options.remoteKeyId || process.env.TASK_HANDOFF_NODE_AGENT_REMOTE_KEY_ID,
       );
-      const key = (process.env.TASK_HANDOFF_CONTROL_PLANE_URL || explicitTunnelUrl).replace(/\/$/, "");
-      configured.set(key, {
+      configured.set(`explicit:${explicitTunnelUrl}`, {
         tunnelUrl: explicitTunnelUrl,
         keyId: tunnelSecret?.keyId,
         secret: tunnelSecret?.secret,
       });
+      configuredTunnelUrls.add(explicitTunnelUrl);
     }
-    for (const remote of identity.configuredRemoteControlPlanes()) {
-      if (remote.url && remote.active !== false) {
-        configured.set(remote.url.replace(/\/$/, ""), {
-          tunnelUrl: controlPlaneTunnelUrlForBase(remote.url),
-          keyId: remote.keyId,
-          secret: remote.secret,
-        });
-      }
+    const bootstrapTunnelUrl = access.hasPersistedAccess ? undefined : bootstrapControlPlaneTunnelUrl();
+    if (bootstrapTunnelUrl && !configuredTunnelUrls.has(bootstrapTunnelUrl)) {
+      const tunnelSecret = identity.reverseTunnelSecret(
+        process.env.TASK_HANDOFF_CONTROL_PLANE_URL,
+        options.remoteSecret || process.env.TASK_HANDOFF_NODE_AGENT_REMOTE_SECRET,
+        options.remoteKeyId || process.env.TASK_HANDOFF_NODE_AGENT_REMOTE_KEY_ID,
+      );
+      configured.set(`bootstrap:${bootstrapTunnelUrl}`, {
+        tunnelUrl: bootstrapTunnelUrl,
+        keyId: tunnelSecret?.keyId,
+        secret: tunnelSecret?.secret,
+      });
     }
     reconcile(configured);
+  };
+  const state = (connectionId: string) => {
+    const entry = tunnels.get(connectionId);
+    if (!entry) return undefined;
+    return {
+      status: entry.status,
+      ...(entry.lastConnectedAt ? { lastConnectedAt: entry.lastConnectedAt } : {}),
+      ...(entry.lastDisconnectedAt ? { lastDisconnectedAt: entry.lastDisconnectedAt } : {}),
+      ...(entry.error ? { error: entry.error } : {}),
+    };
   };
   const closeAll = () => {
     closing = true;
@@ -3942,7 +4018,7 @@ export function createReverseTunnelManager(app: Awaited<ReturnType<typeof create
     }
     tunnels.clear();
   };
-  return { connect, connectConfigured, closeAll };
+  return { connectConfigured, state, closeAll };
 }
 
 export async function listenNodeAgentIpcServer(app: Awaited<ReturnType<typeof createNodeAgentApp>>, ipcPath: string) {

@@ -1,6 +1,6 @@
 import { computed, onScopeDispose, reactive, ref } from "vue";
-import { applyNodeUpdate, checkNode, checkNodeUpdate, connectNodeRemote, createNode, createNodeJoinInvite, createNodePairingInvite, deleteNode, deleteNodeRemoteControlPlane, listNodeDockerImages, listNodeRemoteControlPlanes, listNodeUpdateJobs, syncLocalNode, updateNode } from "../../../api/queries";
-import type { LocalDockerImage, Node, NodeRemoteControlPlane, NodeRuntime, NodeStatus, UpdateChannel, UpdateCheckResult, UpdateJob } from "../../../api/types";
+import { applyNodeUpdate, checkNode, checkNodeUpdate, createNode, createNodeControlPlaneConnection, createNodeJoinInvite, createNodePairingInvite, deleteNode, deleteNodeControlPlaneConnection, deleteNodeControlPlanePairing, listNodeControlPlaneConnections, listNodeControlPlanePairings, listNodeDockerImages, listNodeUpdateJobs, syncLocalNode, updateNode } from "../../../api/queries";
+import type { LocalDockerImage, Node, NodeControlPlaneConnection, NodeControlPlanePairing, NodeRuntime, NodeStatus, UpdateChannel, UpdateCheckResult, UpdateJob } from "../../../api/types";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 import { useNodeRename } from "./useNodeRename";
 import type { Translate } from "../../../i18n/status.ts";
@@ -30,6 +30,7 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
   const creatingJoinInvite = ref(false);
   const connectingRemoteNodeId = ref("");
   const deletingRemoteKeyId = ref("");
+  const deletingControlPlaneConnectionId = ref("");
   const loadingRemoteKeysNodeId = ref("");
   const loadingNodeImagesId = ref("");
   const selectedImageNodeId = ref("");
@@ -37,7 +38,8 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
   const nodeImageError = ref("");
   const generatedToken = ref<{ titleKey: string; token: string; expiresAt: string }>();
   const remoteConnectResultByNodeId = reactive<Record<string, { status: string; error?: string; checkedAt: string }>>({});
-  const remoteKeysByNodeId = reactive<Record<string, NodeRemoteControlPlane[]>>({});
+  const controlPlanePairingsByNodeId = reactive<Record<string, NodeControlPlanePairing[]>>({});
+  const controlPlaneConnectionsByNodeId = reactive<Record<string, NodeControlPlaneConnection[]>>({});
   const remoteKeysErrorByNodeId = reactive<Record<string, string>>({});
   const nodeStatusById = reactive<Record<string, NodeStatus>>({});
   const settingsNodeSuccess = ref("");
@@ -159,7 +161,7 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
     }
     connectingRemoteNodeId.value = id;
     try {
-      const result = await connectNodeRemote(id, {
+      const result = await createNodeControlPlaneConnection(id, {
         controlPlaneUrl: remoteConnect.controlPlaneUrl.trim(),
         joinToken: remoteConnect.joinToken.trim(),
         ...(remoteConnect.controlPlaneName.trim() ? { controlPlaneName: remoteConnect.controlPlaneName.trim() } : {}),
@@ -171,7 +173,7 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
         ...(result.tunnel.error ? { error: result.tunnel.error } : {}),
       };
       remoteConnect.joinToken = "";
-      await loadRemoteKeys(id);
+      await loadControlPlaneAccess(id);
       await refresh();
     } catch (error) {
       showControlPlaneToast(translateError(error));
@@ -211,16 +213,22 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
     }
   }
 
-  async function loadRemoteKeys(id: string) {
+  async function loadControlPlaneAccess(id: string) {
     if (!id || loadingRemoteKeysNodeId.value) {
       return;
     }
     loadingRemoteKeysNodeId.value = id;
     remoteKeysErrorByNodeId[id] = "";
     try {
-      remoteKeysByNodeId[id] = await listNodeRemoteControlPlanes(id);
+      const [pairings, connections] = await Promise.all([
+        listNodeControlPlanePairings(id),
+        listNodeControlPlaneConnections(id),
+      ]);
+      controlPlanePairingsByNodeId[id] = pairings;
+      controlPlaneConnectionsByNodeId[id] = connections;
     } catch (error) {
-      remoteKeysByNodeId[id] = [];
+      controlPlanePairingsByNodeId[id] = [];
+      controlPlaneConnectionsByNodeId[id] = [];
       remoteKeysErrorByNodeId[id] = translateError(error);
     } finally {
       loadingRemoteKeysNodeId.value = "";
@@ -299,12 +307,25 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
     }
     deletingRemoteKeyId.value = keyId;
     try {
-      await deleteNodeRemoteControlPlane(nodeId, keyId);
-      await loadRemoteKeys(nodeId);
+      await deleteNodeControlPlanePairing(nodeId, keyId);
+      await loadControlPlaneAccess(nodeId);
     } catch (error) {
       showControlPlaneToast(translateError(error));
     } finally {
       deletingRemoteKeyId.value = "";
+    }
+  }
+
+  async function removeControlPlaneConnection(nodeId: string, connectionId: string) {
+    if (!nodeId || !connectionId || deletingControlPlaneConnectionId.value) return;
+    deletingControlPlaneConnectionId.value = connectionId;
+    try {
+      await deleteNodeControlPlaneConnection(nodeId, connectionId);
+      await loadControlPlaneAccess(nodeId);
+    } catch (error) {
+      showControlPlaneToast(translateError(error));
+    } finally {
+      deletingControlPlaneConnectionId.value = "";
     }
   }
 
@@ -356,20 +377,23 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
     creatingNode,
     deletingNodeId,
     deletingRemoteKeyId,
-    loadRemoteKeys,
+    deletingControlPlaneConnectionId,
+    loadControlPlaneAccess,
     loadManagedUpdateJobs,
     loadNodeImages,
     loadingRemoteKeysNodeId,
     loadingNodeImagesId,
     removeNode,
     removeRemoteKey,
+    removeControlPlaneConnection,
     nodeImageError,
     nodeImages,
     nodeStatusById,
     nodeNameById,
     selectedImageNodeId,
     remoteConnectResultByNodeId,
-    remoteKeysByNodeId,
+    controlPlanePairingsByNodeId,
+    controlPlaneConnectionsByNodeId,
     remoteKeysErrorByNodeId,
     remoteConnect,
     settingsNode,

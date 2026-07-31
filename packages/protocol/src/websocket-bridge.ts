@@ -27,7 +27,7 @@ function isOpen(socket: WebSocketLike) {
   return socket.readyState === (socket.OPEN ?? 1);
 }
 
-function closeReason(reason?: unknown) {
+export function normalizeWebSocketCloseReason(reason?: unknown) {
   const value = Buffer.isBuffer(reason) ? reason.toString("utf8") : typeof reason === "string" ? reason : "";
   if (Buffer.byteLength(value, "utf8") <= 123) {
     return value;
@@ -43,7 +43,7 @@ function closeReason(reason?: unknown) {
   return truncated;
 }
 
-function closeCode(code?: unknown) {
+export function normalizeWebSocketCloseCode(code?: unknown) {
   if (typeof code !== "number" || !Number.isInteger(code)) {
     return undefined;
   }
@@ -56,8 +56,8 @@ function closeCode(code?: unknown) {
   return undefined;
 }
 
-function closePeer(socket: WebSocketLike, code?: unknown, reason?: unknown) {
-  socket.close(closeCode(code), closeReason(reason) || undefined);
+export function closeWebSocket(socket: WebSocketLike, code?: unknown, reason?: unknown) {
+  socket.close(normalizeWebSocketCloseCode(code), normalizeWebSocketCloseReason(reason) || undefined);
 }
 
 function sendFrame(socket: WebSocketLike, frame: WebSocketFrame) {
@@ -89,8 +89,8 @@ export function bridgeWebSockets(client: WebSocketLike, upstream: WebSocketLike,
   };
   const queue = (frames: WebSocketFrame[], frame: WebSocketFrame) => {
     if (frames.length >= pendingFrameLimit) {
-      closePeer(client, 1011, "WebSocket bridge pending frame limit exceeded.");
-      closePeer(upstream, 1011, "WebSocket bridge pending frame limit exceeded.");
+      closeWebSocket(client, 1011, "WebSocket bridge pending frame limit exceeded.");
+      closeWebSocket(upstream, 1011, "WebSocket bridge pending frame limit exceeded.");
       return;
     }
     frames.push(frame);
@@ -99,8 +99,8 @@ export function bridgeWebSockets(client: WebSocketLike, upstream: WebSocketLike,
   if (options.upstreamOpenTimeoutMs && !upstreamOpened) {
     openTimer = setTimeout(() => {
       if (!upstreamOpened && !clientClosed) {
-        closePeer(client, 1011, "Upstream websocket did not open.");
-        closePeer(upstream);
+        closeWebSocket(client, 1011, "Upstream websocket did not open.");
+        closeWebSocket(upstream);
       }
     }, options.upstreamOpenTimeoutMs);
   }
@@ -134,33 +134,33 @@ export function bridgeWebSockets(client: WebSocketLike, upstream: WebSocketLike,
     if (!upstreamOpened && !clientClosed && options.onUpstreamCloseBeforeOpen?.()) {
       return;
     }
-    closePeer(client, code, reason);
+    closeWebSocket(client, code, reason);
   });
   upstream.on("error", (error) => {
     options.onUpstreamError?.(error);
     if (!upstreamOpened && !clientClosed && options.onUpstreamErrorBeforeOpen?.(error)) {
       return;
     }
-    closePeer(client);
+    closeWebSocket(client);
   });
   client.on("close", (code, reason) => {
     clearOpenTimer();
     clientClosed = true;
     options.onClientClose?.(code, reason);
-    closePeer(upstream, code, reason);
+    closeWebSocket(upstream, code, reason);
   });
   client.on("error", (error) => {
     clearOpenTimer();
     clientClosed = true;
     options.onClientError?.(error);
-    closePeer(upstream, 1011, "WebSocket bridge client failed.");
+    closeWebSocket(upstream, 1011, "WebSocket bridge client failed.");
   });
 
   return {
     close: (code?: number, reason?: string) => {
       clearOpenTimer();
-      closePeer(upstream, code, reason);
-      closePeer(client, code, reason);
+      closeWebSocket(upstream, code, reason);
+      closeWebSocket(client, code, reason);
     },
   };
 }

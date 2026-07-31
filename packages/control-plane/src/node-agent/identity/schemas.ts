@@ -8,20 +8,27 @@ const StoredUrlSchema = z.string().trim().url().max(2048);
 export const StoredNodeAgentPairingInviteSchema = z.object({
   tokenHash: z.string().trim().min(1).max(256),
   expiresAt: StoredNodeAgentDateTimeSchema,
-  createdAt: StoredNodeAgentDateTimeSchema,
-  controlPlaneName: z.string().trim().min(1).max(160).optional(),
-  controlPlaneUrl: StoredUrlSchema.optional(),
+    createdAt: StoredNodeAgentDateTimeSchema,
+    controlPlaneName: z.string().trim().min(1).max(160).optional(),
 }).strip();
 
-export const StoredNodeAgentRemoteControlPlaneSchema = z.object({
+export const StoredNodeAgentControlPlanePairingSchema = z.object({
   id: StoredNodeAgentIdSchema,
   keyId: StoredNodeAgentIdSchema,
   name: z.string().trim().min(1).max(160).optional(),
-  url: StoredUrlSchema.optional(),
   secret: StoredSecretSchema,
   pairedAt: StoredNodeAgentDateTimeSchema,
   updatedAt: StoredNodeAgentDateTimeSchema,
-  active: z.boolean().default(true),
+}).strip();
+
+export const StoredNodeAgentControlPlaneConnectionSchema = z.object({
+  id: StoredNodeAgentIdSchema,
+  pairingKeyId: StoredNodeAgentIdSchema,
+  name: z.string().trim().min(1).max(160).optional(),
+  url: StoredUrlSchema,
+  enabled: z.boolean().default(true),
+  createdAt: StoredNodeAgentDateTimeSchema,
+  updatedAt: StoredNodeAgentDateTimeSchema,
 }).strip();
 
 export const NodeAgentPairingInviteSchema = z
@@ -37,11 +44,10 @@ export const NodeAgentPairingCompleteSchema = z
     joinToken: z.string().trim().min(1).max(4096),
     controlPlaneId: z.string().trim().min(1).max(160).optional(),
     controlPlaneName: z.string().trim().min(1).max(160).optional(),
-    controlPlaneUrl: z.string().trim().max(2048).optional(),
   })
   .strict();
 
-export const NodeAgentRemoteConnectSchema = z
+export const NodeAgentControlPlaneConnectionCreateSchema = z
   .object({
     controlPlaneUrl: z.string().trim().url().max(2048),
     joinToken: z.string().trim().min(1).max(4096),

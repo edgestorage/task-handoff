@@ -13,11 +13,11 @@ import {
   type Node,
 } from "@task-handoff/protocol/control-plane";
 import { SessionStreamsHelloSchema, type SessionStreamsHello } from "@task-handoff/protocol/events";
-import { bridgeWebSockets, type WebSocketLike } from "@task-handoff/protocol/websocket-bridge";
+import { bridgeWebSockets, closeWebSocket, normalizeWebSocketCloseCode, normalizeWebSocketCloseReason, type WebSocketLike } from "@task-handoff/protocol/websocket-bridge";
 import type { ControlPlaneService } from "../application/service.ts";
 import type { NodeAgentTransport } from "./client.ts";
 import type { ControlPlaneEventBus } from "../events/bus.ts";
-import { createNodeAgentHmacHeaders, hmacHeadersFromRecord, sha256Hex, signNodeAgentRequest, timingSafeHexEqual, NODE_AGENT_HMAC_TIMESTAMP_WINDOW_MS } from "../../shared/security/node-agent-auth.ts";
+import { createNodeAgentHmacHeaders, hmacHeadersFromRecord, sha256Hex, signNodeAgentRequest, timingSafeHexEqual, NODE_AGENT_HMAC_TIMESTAMP_WINDOW_MS, NODE_TUNNEL_API_PATH } from "../../shared/security/node-agent-auth.ts";
 import { createNodeAgentIpcWebSocket, parseNodeAgentIpcEndpoint } from "../../shared/transport/node-agent-ipc.ts";
 import { EventConnectionRetryTimer, eventConnectionSafetyIntervalMs } from "../../shared/events/connection-retry.ts";
 
@@ -111,7 +111,7 @@ function verifyTunnelHmac(node: Node, request: { headers: Record<string, unknown
   if (headers.bodySha256 !== bodySha256) {
     throw Object.assign(new Error("Reverse tunnel body hash is invalid."), { statusCode: 401, code: "NODE_AGENT_TUNNEL_BODY_HASH_INVALID" });
   }
-  const pathWithQuery = request.url || `/api/node-agent/tunnel?nodeId=${encodeURIComponent(node.id)}`;
+  const pathWithQuery = request.url || `${NODE_TUNNEL_API_PATH}?nodeId=${encodeURIComponent(node.id)}`;
   const expected = signNodeAgentRequest(node.auth.secret, {
     keyId: headers.keyId,
     method: "GET",
@@ -503,12 +503,14 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
       const stream = current.streams.get(streamId);
       if (stream) {
         current.streams.delete(streamId);
-        stream.upstream?.close(typeof code === "number" ? code : 1000, Buffer.isBuffer(reason) ? reason.toString("utf8") : typeof reason === "string" ? reason : "");
+        const closeCode = normalizeWebSocketCloseCode(code);
+        const closeReason = normalizeWebSocketCloseReason(reason);
+        if (stream.upstream) closeWebSocket(stream.upstream, closeCode, closeReason);
         sendTunnel({
           type: "control-plane.websocket.close",
           streamId,
-          code: typeof code === "number" ? code : 1000,
-          reason: Buffer.isBuffer(reason) ? reason.toString("utf8") : typeof reason === "string" ? reason : "",
+          ...(closeCode === undefined ? {} : { code: closeCode }),
+          ...(closeReason ? { reason: closeReason } : {}),
         });
       }
     });
@@ -568,7 +570,7 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
     }
     if (type === "node-agent.websocket.close") {
       current?.streams.delete(streamId);
-      stream.downstream.close(typeof message.code === "number" ? message.code : 1000, typeof message.reason === "string" ? message.reason : "");
+      closeWebSocket(stream.downstream, message.code, message.reason);
       return true;
     }
     if (type === "node-agent.websocket.error") {
@@ -765,7 +767,7 @@ export function registerNodeAgentTunnelRoutes(options: {
 }) {
   const { app, service, nodeAgentTunnel, errorPayload } = options;
 
-  app.get("/api/node-agent/tunnel", { websocket: true }, (socket, request) => {
+  app.get(NODE_TUNNEL_API_PATH, { websocket: true }, (socket, request) => {
     try {
       const parsed = NodeAgentTunnelQuerySchema.parse(request.query);
       const node = service.requireNode(parsed.nodeId);
@@ -834,7 +836,7 @@ export function registerNodeAgentTunnelRoutes(options: {
     }
   });
 
-  app.get("/api/node-agent/tunnel/streams/:streamId", { websocket: true }, (socket, request) => {
+  app.get(`${NODE_TUNNEL_API_PATH}/streams/:streamId`, { websocket: true }, (socket, request) => {
     try {
       const parsed = NodeAgentTunnelQuerySchema.parse(request.query);
       const node = service.requireNode(parsed.nodeId);
@@ -847,7 +849,7 @@ export function registerNodeAgentTunnelRoutes(options: {
     }
   });
 
-  app.get("/api/node-agent/tunnel/http-streams/:streamId", { websocket: true }, (socket, request) => {
+  app.get(`${NODE_TUNNEL_API_PATH}/http-streams/:streamId`, { websocket: true }, (socket, request) => {
     try {
       const parsed = NodeAgentTunnelQuerySchema.parse(request.query);
       const node = service.requireNode(parsed.nodeId);

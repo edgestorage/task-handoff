@@ -93,7 +93,7 @@ export const UpdateNodeInputSchema = z.object({
   lastSeenAt: NodeSchema.shape.lastSeenAt,
 }).strict();
 
-export const ConnectNodeRemoteInputSchema = z.object({
+export const CreateNodeControlPlaneConnectionInputSchema = z.object({
   controlPlaneUrl: z.string().trim().url().max(2048),
   joinToken: z.string().trim().min(1).max(4096),
   controlPlaneName: z.string().trim().min(1).max(160).optional(),
@@ -109,6 +109,6 @@ export type CreateModelInput = z.infer<typeof CreateModelInputSchema>;
 export type UpdateModelInput = z.infer<typeof UpdateModelInputSchema>;
 export type CreateNodeInput = z.infer<typeof CreateNodeInputSchema>;
 export type UpdateNodeInput = z.infer<typeof UpdateNodeInputSchema>;
-export type ConnectNodeRemoteInput = z.infer<typeof ConnectNodeRemoteInputSchema>;
+export type CreateNodeControlPlaneConnectionInput = z.infer<typeof CreateNodeControlPlaneConnectionInputSchema>;
 export type CreateInstanceInput = z.infer<typeof CreateInstanceInputSchema>;
 export type UpdateInstanceInput = z.infer<typeof UpdateInstanceInputSchema>;

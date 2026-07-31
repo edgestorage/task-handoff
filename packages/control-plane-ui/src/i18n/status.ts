@@ -104,6 +104,7 @@ export const remoteConnectStatusKeys: Record<string, string> = {
   saved: "settings.nodeDetail.remoteSaved",
   connecting: "settings.nodeDetail.remoteConnecting",
   connected: "settings.nodeDetail.remoteConnected",
+  reconnecting: "settings.nodeDetail.remoteReconnecting",
   failed: "settings.nodeDetail.remoteFailed",
 };
 

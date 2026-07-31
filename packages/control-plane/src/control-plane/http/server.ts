@@ -26,6 +26,7 @@ import { AiSessionUnreadStore } from "../sessions/ai-session-unread-store.ts";
 import { ControlPlaneAppSessionAggregator } from "../sessions/app-session-aggregator.ts";
 import { nodeAgentInstallScript } from "../nodes/install-script.ts";
 import { ImagePullProgressProjector } from "../images/image-pull-progress.ts";
+import { NODE_TUNNEL_API_PATH } from "../../shared/security/node-agent-auth.ts";
 
 export type CreateControlPlaneAppOptions = {
   dataDir?: string;
@@ -148,6 +149,11 @@ function isPublicControlPlaneRoute(method: string, url: string) {
   if (path === "/favicon.ico" || path.startsWith("/assets/")) return true;
   if (method === "GET" && !path.startsWith("/api/") && !path.startsWith("/instances/")) return true;
   return false;
+}
+
+function isNodeAuthenticatedControlPlaneRoute(method: string, url: string) {
+  const path = url.split("?")[0];
+  return method === "GET" && (path === NODE_TUNNEL_API_PATH || path.startsWith(`${NODE_TUNNEL_API_PATH}/`));
 }
 
 function disabledAuthActor(): ControlPlaneActor {
@@ -322,6 +328,11 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   });
 
   app.addHook("preHandler", async (request, reply) => {
+    // Tunnel routes are machine-to-machine endpoints. Their handlers authenticate
+    // the node with the paired HMAC credentials, independently of UI user sessions.
+    if (isNodeAuthenticatedControlPlaneRoute(request.method, request.url)) {
+      return;
+    }
     if (!auth.enabled() || isPublicControlPlaneRoute(request.method, request.url)) {
       const actor = await actorForRequest(auth, request.cookies[CONTROL_PLANE_SESSION_COOKIE]);
       const authorization = routeAuthorization(request.method, request.url);

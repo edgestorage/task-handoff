@@ -2,7 +2,7 @@ const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
 const test = require("node:test");
 
-const { bridgeWebSockets } = require("../packages/protocol/src/websocket-bridge.ts");
+const { bridgeWebSockets, closeWebSocket } = require("../packages/protocol/src/websocket-bridge.ts");
 
 class MockWebSocket extends EventEmitter {
   constructor() {
@@ -50,4 +50,14 @@ test("bridgeWebSockets truncates overlong close reasons before forwarding", () =
   assert.equal(client.closes.length, 1);
   assert.equal(client.closes[0].code, 1011);
   assert.equal(Buffer.byteLength(client.closes[0].reason, "utf8"), 123);
+});
+
+test("closeWebSocket normalizes runtime close events before forwarding them", () => {
+  const socket = new MockWebSocket();
+
+  closeWebSocket(socket, 1006, "x".repeat(200));
+
+  assert.equal(socket.closes.length, 1);
+  assert.equal(socket.closes[0].code, undefined);
+  assert.equal(Buffer.byteLength(socket.closes[0].reason, "utf8"), 123);
 });

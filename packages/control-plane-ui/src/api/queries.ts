@@ -8,7 +8,7 @@ import type {
   AppSession,
   AuthSession,
   AuthUser,
-  ConnectNodeRemoteInput,
+  CreateNodeControlPlaneConnectionInput,
   CreateControlledInstanceInput,
   CreateControlledInstanceResult,
   CreateImageInput,
@@ -51,8 +51,9 @@ import type {
   NodeJoinInvite,
   NodeLocalFolder,
   NodeRuntimesPayload,
-  NodeRemoteControlPlane,
-  NodeRemoteConnectResult,
+  NodeControlPlaneConnection,
+  NodeControlPlanePairing,
+  NodeControlPlaneConnectionCreateResult,
   NodeRuntime,
   NodeStatus,
   Project,
@@ -274,12 +275,20 @@ export function useNodeImageAvailabilityQuery(nodeId: MaybeRefOrGetter<string>) 
   });
 }
 
-export function listNodeRemoteControlPlanes(nodeId: string) {
-  return getApiData<NodeRemoteControlPlane[]>(`nodes/${nodeId}/remotes`);
+export function listNodeControlPlanePairings(nodeId: string) {
+  return getApiData<NodeControlPlanePairing[]>(`nodes/${nodeId}/control-plane-pairings`);
 }
 
-export function deleteNodeRemoteControlPlane(nodeId: string, keyId: string) {
-  return deleteApiData<{ deleted: boolean }>(`nodes/${nodeId}/remotes/${encodeURIComponent(keyId)}`);
+export function deleteNodeControlPlanePairing(nodeId: string, keyId: string) {
+  return deleteApiData<{ deleted: boolean }>(`nodes/${nodeId}/control-plane-pairings/${encodeURIComponent(keyId)}`);
+}
+
+export function listNodeControlPlaneConnections(nodeId: string) {
+  return getApiData<NodeControlPlaneConnection[]>(`nodes/${nodeId}/control-plane-connections`);
+}
+
+export function deleteNodeControlPlaneConnection(nodeId: string, connectionId: string) {
+  return deleteApiData<{ deleted: boolean }>(`nodes/${nodeId}/control-plane-connections/${encodeURIComponent(connectionId)}`);
 }
 
 export function useInstanceBoardQuery() {
@@ -591,8 +600,8 @@ export function createNodePairingInvite(id: string) {
   return postApiData<NodePairingInvite>(`nodes/${id}/pairing/invites`, {});
 }
 
-export function connectNodeRemote(id: string, input: ConnectNodeRemoteInput) {
-  return postApiData<NodeRemoteConnectResult>(`nodes/${id}/remotes/connect`, input);
+export function createNodeControlPlaneConnection(id: string, input: CreateNodeControlPlaneConnectionInput) {
+  return postApiData<NodeControlPlaneConnectionCreateResult>(`nodes/${id}/control-plane-connections`, input);
 }
 
 export function createNodeJoinInvite(input: { nodeName?: string } = {}) {

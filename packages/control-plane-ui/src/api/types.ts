@@ -440,20 +440,30 @@ export type NodeJoinInvite = {
   expiresAt: string;
 };
 
-export type ConnectNodeRemoteInput = {
+export type CreateNodeControlPlaneConnectionInput = {
   controlPlaneUrl: string;
   joinToken: string;
   controlPlaneName?: string;
   activate?: boolean;
 };
 
-export type NodeRemoteConnectResult = {
-  remote: {
+export type NodeControlPlaneConnectionCreateResult = {
+  pairing: {
     id: string;
-    url?: string;
     keyId: string;
+    name?: string;
     pairedAt: string;
-    active: boolean;
+    updatedAt?: string;
+    current?: boolean;
+  };
+  connection: {
+    id: string;
+    pairingKeyId: string;
+    name?: string;
+    url: string;
+    enabled: boolean;
+    createdAt: string;
+    updatedAt: string;
   };
   tunnel: {
     status: "disabled" | "saved" | "connecting" | "connected" | "failed";
@@ -461,15 +471,27 @@ export type NodeRemoteConnectResult = {
   };
 };
 
-export type NodeRemoteControlPlane = {
+export type NodeControlPlanePairing = {
   id: string;
   keyId: string;
   name?: string;
-  url?: string;
   pairedAt: string;
   updatedAt: string;
-  active?: boolean;
   current: boolean;
+};
+
+export type NodeControlPlaneConnection = {
+  id: string;
+  pairingKeyId: string;
+  name?: string;
+  url: string;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+  status: "disabled" | "connecting" | "connected" | "reconnecting" | "failed";
+  lastConnectedAt?: string;
+  lastDisconnectedAt?: string;
+  error?: string;
 };
 
 export type InstanceAccess = {

@@ -210,7 +210,7 @@ if [ -n "$JOIN_TOKEN" ]; then
   status="$(curl -sS -o "$payload" -w '%{http_code}' \
     -H 'content-type: application/json' \
     -d "{\"controlPlaneUrl\":\"$CONTROL_PLANE_URL\",\"joinToken\":\"$JOIN_TOKEN\",\"controlPlaneName\":\"TaskHandoff Control Plane\",\"activate\":true}" \
-    "http://$HOST:$PORT/api/node-agent/remotes/connect")"
+    "http://$HOST:$PORT/api/node-agent/control-plane-connections")"
   if [ "$status" != "201" ]; then
     cat "$payload" >&2 || true
     rm -f "$payload"

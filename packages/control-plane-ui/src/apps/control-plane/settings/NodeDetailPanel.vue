@@ -376,34 +376,57 @@
           <TabsContent class="node-detail-tab-content" value="remote">
             <div class="node-remote-panel">
               <div class="section-head compact-head">
-                <span>{{ t("settings.nodeDetail.pairedKeys", { count: resources.remoteKeys.length }) }}</span>
-                <Button variant="outline" size="sm" :disabled="busy.loadingRemoteKeysNodeId === selectedNode.id" @click="actions.loadRemoteKeys(selectedNode.id)">
+                <span>{{ t("settings.nodeDetail.pairedKeys", { count: resources.controlPlanePairings.length }) }}</span>
+                <Button variant="outline" size="sm" :disabled="busy.loadingRemoteKeysNodeId === selectedNode.id" @click="actions.loadControlPlaneAccess(selectedNode.id)">
                   <RefreshCw :size="14" />
                   <span>{{ busy.loadingRemoteKeysNodeId === selectedNode.id ? t("settings.nodeDetail.loading") : t("settings.nodeDetail.refresh") }}</span>
                 </Button>
               </div>
               <div class="node-resource-list">
-                <div v-for="remote in resources.remoteKeys" :key="remote.keyId" class="node-resource-row">
+                <div v-for="pairing in resources.controlPlanePairings" :key="pairing.keyId" class="node-resource-row">
                   <div>
-                    <strong>{{ remote.name || remote.url || remote.id }}</strong>
-                    <code>{{ remote.keyId }} · {{ t("settings.nodeDetail.pairedAt", { time: localizedDateTime(remote.pairedAt) }) }}</code>
+                    <strong>{{ pairing.name || pairing.id }}</strong>
+                    <code>{{ pairing.keyId }} · {{ t("settings.nodeDetail.pairedAt", { time: localizedDateTime(pairing.pairedAt) }) }}</code>
                   </div>
                   <div class="settings-row-actions">
-                    <Badge :variant="remote.current ? 'default' : 'secondary'">{{ remote.current ? t("settings.nodeDetail.current") : remote.active === false ? t("settings.nodeDetail.inactive") : t("settings.nodeDetail.paired") }}</Badge>
-                    <Button variant="outline" size="sm" :disabled="remote.current || busy.deletingRemoteKeyId === remote.keyId" @click="actions.removeRemoteKey(selectedNode.id, remote.keyId)">
+                    <Badge :variant="pairing.current ? 'default' : 'secondary'">{{ pairing.current ? t("settings.nodeDetail.currentRequester") : t("settings.nodeDetail.paired") }}</Badge>
+                    <Button variant="outline" size="sm" :disabled="pairing.current || busy.deletingRemoteKeyId === pairing.keyId" @click="actions.removeRemoteKey(selectedNode.id, pairing.keyId)">
                       <Trash2 :size="14" />
-                      <span>{{ busy.deletingRemoteKeyId === remote.keyId ? t("settings.nodeDetail.deleting") : t("settings.nodeDetail.delete") }}</span>
+                      <span>{{ busy.deletingRemoteKeyId === pairing.keyId ? t("settings.nodeDetail.deleting") : t("settings.nodeDetail.delete") }}</span>
                     </Button>
                   </div>
                 </div>
-                <p v-if="!resources.remoteKeys.length" class="settings-empty">{{ t("settings.nodeDetail.noPairedKeys") }}</p>
+                <p v-if="!resources.controlPlanePairings.length" class="settings-empty">{{ t("settings.nodeDetail.noPairedKeys") }}</p>
               </div>
               <p v-if="resources.remoteKeysError" class="control-plane-error">{{ resources.remoteKeysError }}</p>
             </div>
 
             <div class="node-remote-panel">
               <div class="section-head compact-head">
-                <span>{{ t("settings.nodeDetail.connectRemote") }}</span>
+                <span>{{ t("settings.nodeDetail.activeConnections", { count: resources.controlPlaneConnections.length }) }}</span>
+              </div>
+              <div class="node-resource-list">
+                <div v-for="connection in resources.controlPlaneConnections" :key="connection.id" class="node-resource-row">
+                  <div>
+                    <strong>{{ connection.name || connection.url }}</strong>
+                    <code>{{ connection.url }} · {{ t("settings.nodeDetail.connectionPairing", { keyId: connection.pairingKeyId }) }}</code>
+                    <small v-if="connection.error" class="control-plane-error">{{ connection.error }}</small>
+                  </div>
+                  <div class="settings-row-actions">
+                    <Badge :variant="connection.status === 'connected' ? 'default' : 'secondary'">{{ localizedStatus(remoteConnectStatusKeys, connection.status) }}</Badge>
+                    <Button variant="outline" size="sm" :disabled="busy.deletingControlPlaneConnectionId === connection.id" @click="actions.removeControlPlaneConnection(selectedNode.id, connection.id)">
+                      <Trash2 :size="14" />
+                      <span>{{ busy.deletingControlPlaneConnectionId === connection.id ? t("settings.nodeDetail.deleting") : t("settings.nodeDetail.delete") }}</span>
+                    </Button>
+                  </div>
+                </div>
+                <p v-if="!resources.controlPlaneConnections.length" class="settings-empty">{{ t("settings.nodeDetail.noActiveConnections") }}</p>
+              </div>
+            </div>
+
+            <div class="node-remote-panel">
+              <div class="section-head compact-head">
+                <span>{{ t("settings.nodeDetail.addConnection") }}</span>
               </div>
               <div class="inline-create compact-create">
                 <label>
@@ -442,7 +465,7 @@ import { computed, ref, watch, type Component } from "vue";
 import { useI18n } from "vue-i18n";
 import { Box, Boxes, Download, FolderOpen, Gauge, KeyRound, Monitor, MoreHorizontal, Network, Pencil, Plus, RefreshCw, ServerCog, Settings, Trash2 } from "@lucide/vue";
 import { TooltipTrigger as RekaTooltipTrigger } from "reka-ui";
-import type { BuildInfo, InstanceBoardItem, LocalDockerImage, Node, NodeAgentExternalListener, NodeLocalFolder, NodeRemoteControlPlane, NodeRuntime, SelectableImage, UpdateChannel, UpdateCheckResult, UpdateJob } from "../../../api/types";
+import type { BuildInfo, InstanceBoardItem, LocalDockerImage, Node, NodeAgentExternalListener, NodeControlPlaneConnection, NodeControlPlanePairing, NodeLocalFolder, NodeRuntime, SelectableImage, UpdateChannel, UpdateCheckResult, UpdateJob } from "../../../api/types";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
@@ -491,13 +514,14 @@ type NodeDetailActions = {
   connectSelectedNodeToRemote: (nodeId: string) => void | Promise<void>;
   createPairingInviteForNode: (nodeId: string) => void | Promise<void>;
   loadNodeImages: (nodeId: string) => void | Promise<void>;
-  loadRemoteKeys: (nodeId: string) => void | Promise<void>;
+  loadControlPlaneAccess: (nodeId: string) => void | Promise<void>;
   loadManagedUpdateJobs: (nodeId: string) => void | Promise<void>;
   openNodeRename: (node: Node) => void;
   openInstanceSettings: (instanceId: string) => void;
   removeNode: (node: Node) => void | Promise<void>;
   removeNodeLocalFolder: (folderId: string) => void | Promise<void>;
   removeRemoteKey: (nodeId: string, keyId: string) => void | Promise<void>;
+  removeControlPlaneConnection: (nodeId: string, connectionId: string) => void | Promise<void>;
   removeRuntime: (runtime: NodeRuntime) => void | Promise<void>;
   saveExternalListener: () => void | Promise<void>;
   submitNodeLocalFolder: () => void | Promise<void>;
@@ -518,6 +542,7 @@ type NodeDetailBusy = {
   deletingNodeId: string;
   deletingNodeLocalFolderId: string;
   deletingRemoteKeyId: string;
+  deletingControlPlaneConnectionId: string;
   deletingRuntimeId: string;
   loadingNodeImagesId: string;
   loadingRemoteKeysNodeId: string;
@@ -537,7 +562,8 @@ type NodeDetailResources = {
   nodeFolderImageOptions: SelectableImage[];
   remoteConnect: RemoteConnectDraft;
   remoteConnectResultByNodeId: Record<string, RemoteConnectResult>;
-  remoteKeys: NodeRemoteControlPlane[];
+  controlPlanePairings: NodeControlPlanePairing[];
+  controlPlaneConnections: NodeControlPlaneConnection[];
   remoteKeysError: string;
   diagnostics: NodeDiagnosticLog[];
   externalListener?: NodeAgentExternalListener;

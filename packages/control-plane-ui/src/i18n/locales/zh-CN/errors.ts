@@ -40,6 +40,8 @@ export const errors = {
   NODE_AGENT_HEALTH_FAILED: "节点代理健康检查失败。",
   NODE_AGENT_PAIRING_FAILED: "无法与节点代理完成配对。",
   NODE_AGENT_PAIRING_RESPONSE_INVALID: "节点代理返回了无效的配对响应。",
+  NODE_AGENT_PAIRING_IN_USE: "请先删除使用此配对密钥的主动连接。",
+  NODE_AGENT_PAIRING_CURRENT_REQUEST: "当前查看此节点的控制面板不能删除自身配对。",
   NODE_AGENT_REMOTE_REQUIRES_PAIRED_HMAC: "远程节点连接需要使用 paired-HMAC 身份认证。",
   NODE_AGENT_REMOTE_SECRET_REQUIRED: "请输入远程节点密钥。",
   NODE_AGENT_REMOTE_KEY_ID_REQUIRED: "请输入远程节点密钥 ID。",

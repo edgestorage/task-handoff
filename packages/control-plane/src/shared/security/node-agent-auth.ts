@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 
 export const NODE_AGENT_HMAC_VERSION = "TASK_HANDOFF_NODE_AGENT_V1";
 export const NODE_AGENT_HMAC_TIMESTAMP_WINDOW_MS = 60_000;
+export const NODE_TUNNEL_API_PATH = "/api/node-tunnel";
 
 export type NodeAgentHmacInput = {
   keyId: string;

@@ -11,6 +11,11 @@ export const NodeRemoteKeyParamsSchema = z.object({
   keyId: RouteIdSchema,
 }).strict();
 
+export const NodeControlPlaneConnectionParamsSchema = z.object({
+  id: RouteIdSchema,
+  connectionId: RouteIdSchema,
+}).strict();
+
 export const NodeRuntimeParamsSchema = z.object({
   id: RouteIdSchema,
   runtimeId: RouteIdSchema,
