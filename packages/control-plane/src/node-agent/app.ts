@@ -92,6 +92,10 @@ import { RuntimeArtifactResolver, type ResolvedRuntimeArtifact } from "./runtime
 import { resolvePublishedRuntimeArtifact, type PublishedRuntimeArtifact } from "./runtime-release-source.ts";
 import { RuntimeConvergenceCoordinator, reportedVersion } from "./runtime-convergence.ts";
 import {
+  reduceInstanceLifecycle,
+  type InstanceLifecycleEvent,
+} from "./instance-lifecycle-state.ts";
+import {
   InstanceModelAssignmentStore,
   InstanceModelEnvironmentStore,
   LEGACY_MODEL_ENV_KEYS,
@@ -100,6 +104,8 @@ import {
 import { NodeAgentPairedHmacVerifier } from "./identity/hmac-verifier.ts";
 import { NodeAgentPairingCompleteSchema, NodeAgentPairingInviteSchema, NodeAgentRemoteConnectSchema } from "./identity/schemas.ts";
 import { assertHttpControlPlaneUrl, completeControlPlaneJoin, NodeAgentIdentityService } from "./identity/service.ts";
+
+export { mergeRuntimeLifecycleResult } from "./instance-lifecycle-state.ts";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -1622,6 +1628,10 @@ class NodeAgentState {
     return parsed.data;
   }
 
+  applyInstanceLifecycle(id: string, event: InstanceLifecycleEvent) {
+    return this.controlledInstances.put(reduceInstanceLifecycle(this.requireInstance(id), event));
+  }
+
   listInstances() {
     return this.controlledInstances.list().flatMap((instance) => {
       const parsed = safeParseStoredControlledInstance(instance);
@@ -2337,7 +2347,7 @@ async function startNodeInstance(
     }));
   }
   loggers.diagnostic({ instanceId: id, action: "start", reason, runtimeId: current.runtimeId, imageId: current.imageSelection?.imageId }, "node instance start requested");
-  const starting = state.controlledInstances.put(ControlledInstanceSchema.parse({ ...current, status: "starting", ready: false, updatedAt: now() }));
+  const starting = state.applyInstanceLifecycle(id, { type: "start-requested" });
   const adapter = runtimeAdapters.forRuntime(state.requireRuntime(starting.runtimeId));
   const result = await adapter.start(state.context(starting));
   const probedEndpointStatus = await probeInstanceEndpoint(fetchImpl, ControlledInstanceSchema.parse({
@@ -2348,67 +2358,19 @@ async function startNodeInstance(
     runtime: result.runtime ? { ...starting.runtime, ...result.runtime } : starting.runtime,
     updatedAt: now(),
   }));
-  const latest = state.requireInstance(id);
-  const updated = mergeRuntimeLifecycleResult(starting, latest, {
-    ...result,
-    target: result.target ? { ...result.target, status: probedEndpointStatus } : undefined,
-    workspace: result.workspace ? { error: undefined, ...result.workspace } : undefined,
-    targetStatus: probedEndpointStatus,
-    uiAccessStatus: probedEndpointStatus,
+  const stored = state.applyInstanceLifecycle(id, {
+    type: "runtime-lifecycle-completed",
+    baseline: starting,
+    observation: {
+      ...result,
+      target: result.target ? { ...result.target, status: probedEndpointStatus } : undefined,
+      workspace: result.workspace ? { error: undefined, ...result.workspace } : undefined,
+      targetStatus: probedEndpointStatus,
+      uiAccessStatus: probedEndpointStatus,
+    },
   });
-  const stored = state.controlledInstances.put(updated);
   loggers.diagnostic({ instanceId: id, action: "start", reason, status: stored.status, connectionStatus: stored.connectionStatus, targetStatus: stored.targetStatus, targetWeb: stored.target.web, containerName: stored.runtime.containerName }, "node instance start completed");
   return stored;
-}
-
-export function mergeRuntimeLifecycleResult(
-  baseline: ControlledInstance,
-  latest: ControlledInstance,
-  result: ExecutorStartResult,
-) {
-  const hasFreshProcessReport = latest.stateRevision > baseline.stateRevision
-    && latest.lastHeartbeatAt !== baseline.lastHeartbeatAt
-    && latest.agentStatus === "online";
-  return ControlledInstanceSchema.parse({
-    ...latest,
-    ...result,
-    ...(hasFreshProcessReport ? {
-      status: latest.status,
-      health: latest.health,
-      connectionStatus: latest.connectionStatus,
-      agentStatus: latest.agentStatus,
-      targetStatus: latest.targetStatus,
-      uiAccessStatus: latest.uiAccessStatus,
-    } : {}),
-    ready: hasFreshProcessReport ? latest.ready : false,
-    target: result.target
-      ? hasFreshProcessReport ? { ...result.target, ...latest.target } : { ...latest.target, ...result.target }
-      : latest.target,
-    workspace: result.workspace
-      ? hasFreshProcessReport ? { ...result.workspace, ...latest.workspace } : { ...latest.workspace, ...result.workspace }
-      : latest.workspace,
-    runtime: result.runtime ? { ...latest.runtime, ...result.runtime } : latest.runtime,
-    updatedAt: now(),
-  });
-}
-
-function restoreFailurePatch(instance: ControlledInstance, error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
-  return ControlledInstanceSchema.parse({
-    ...instance,
-    status: "failed",
-    ready: false,
-    health: "failed",
-    connectionStatus: "offline",
-    agentStatus: "offline",
-    targetStatus: "unknown",
-    uiAccessStatus: "unknown",
-    workspace: {
-      ...instance.workspace,
-      error: message,
-    },
-    updatedAt: now(),
-  });
 }
 
 function stoppedLocalShutdownPatch(instance: ControlledInstance) {
@@ -2596,17 +2558,13 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     },
     restart: async (instance) => {
       const adapter = adapterForInstance(instance);
-      const beforeRestart = state.requireInstance(instance.id);
-      const restartBoundary = state.controlledInstances.put(ControlledInstanceSchema.parse({
-        ...beforeRestart,
-        build: undefined,
-        instanceVersion: undefined,
-        ready: false,
-        updatedAt: now(),
-      }));
+      const restartBoundary = state.applyInstanceLifecycle(instance.id, { type: "convergence-restart-requested" });
       const result = await adapter.restart(state.context(restartBoundary));
-      const current = state.requireInstance(instance.id);
-      state.controlledInstances.put(mergeRuntimeLifecycleResult(restartBoundary, current, result));
+      state.applyInstanceLifecycle(instance.id, {
+        type: "runtime-lifecycle-completed",
+        baseline: restartBoundary,
+        observation: result,
+      });
     },
     onForcedDrain: (instance) => app.log.warn({ instanceId: instance.id }, "runtime convergence drain deadline reached; restarting instance"),
   }, {
@@ -2706,8 +2664,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       eventForwarder.syncNow();
       return instance;
     } catch (error) {
-      const failed = restoreFailurePatch(state.requireInstance(id), error);
-      state.controlledInstances.put(failed);
+      state.applyInstanceLifecycle(id, { type: "start-failed", error });
       eventForwarder.syncNow();
       lifecycleLoggers.warn({ instanceId: id, action: "start", reason, error: error instanceof Error ? error.message : String(error) }, "node instance start failed");
       throw error;
@@ -2941,7 +2898,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
         restoreErrors.delete(instance.id);
       } catch (error) {
         if (state.requireRuntime(instance.runtimeId).type === "local") {
-          state.controlledInstances.put(restoreFailurePatch(state.requireInstance(instance.id), error));
+          state.applyInstanceLifecycle(instance.id, { type: "start-failed", error });
         }
         const message = error instanceof Error ? error.message : String(error);
         if (restoreErrors.get(instance.id) !== message) {
@@ -3354,17 +3311,8 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     const current = state.requireInstance(id);
     logDiagnostic({ instanceId: current.id, action: "stop", runtimeId: current.runtimeId, containerName: current.runtime.containerName }, "node instance stop requested");
     const adapter = runtimeAdapters.forRuntime(state.requireRuntime(current.runtimeId));
-    const result = await adapter.stop(state.context(current));
-    const updated = ControlledInstanceSchema.parse({
-      ...current,
-      ...result,
-      ready: false,
-      agentStatus: "offline",
-      targetStatus: "unknown",
-      uiAccessStatus: "unknown",
-      updatedAt: now(),
-    });
-    const stored = state.controlledInstances.put(updated);
+    await adapter.stop(state.context(current));
+    const stored = state.applyInstanceLifecycle(id, { type: "stop-completed" });
     eventForwarder.syncNow();
     logDiagnostic({ instanceId: current.id, action: "stop", status: stored.status, connectionStatus: stored.connectionStatus, containerName: stored.runtime.containerName }, "node instance stop completed");
     return { data: stored };
@@ -3391,14 +3339,16 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     const result = await adapter.restart(state.context(current));
     const probeTarget = ControlledInstanceSchema.parse({ ...current, ...result, target: result.target ? { ...current.target, ...result.target } : current.target, updatedAt: now() });
     const probedEndpointStatus = await probeInstanceEndpoint(fetchImpl, probeTarget);
-    const latest = state.requireInstance(id);
-    const updated = mergeRuntimeLifecycleResult(current, latest, {
-      ...result,
-      target: result.target ? { ...result.target, status: probedEndpointStatus } : undefined,
-      targetStatus: probedEndpointStatus,
-      uiAccessStatus: probedEndpointStatus,
+    const stored = state.applyInstanceLifecycle(id, {
+      type: "runtime-lifecycle-completed",
+      baseline: current,
+      observation: {
+        ...result,
+        target: result.target ? { ...result.target, status: probedEndpointStatus } : undefined,
+        targetStatus: probedEndpointStatus,
+        uiAccessStatus: probedEndpointStatus,
+      },
     });
-    const stored = state.controlledInstances.put(updated);
     restoredInstances.add(id);
     restoreErrors.delete(id);
     await autoImportAgentConfig(fetchImpl, stored, "restart", lifecycleLoggers);
