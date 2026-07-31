@@ -61,8 +61,8 @@ export async function getApiData<T>(path: string, options?: { signal?: AbortSign
   return payload.data;
 }
 
-export async function getApiPayload<T, M = unknown>(path: string): Promise<{ data: T; meta?: M }> {
-  return withApiError(api.get(path).json<{ data: T; meta?: M }>());
+export async function getApiPayload<T, M = unknown>(path: string, options?: { signal?: AbortSignal }): Promise<{ data: T; meta?: M }> {
+  return withApiError(api.get(path, options).json<{ data: T; meta?: M }>());
 }
 
 export async function postApiData<T>(path: string, body?: unknown, options?: { signal?: AbortSignal }): Promise<T> {

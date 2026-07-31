@@ -310,7 +310,7 @@ function testAppInventory(apps, observedAt = new Date().toISOString()) {
 }
 
 test("controlled instance heartbeat protocol rejects legacy receiver projection", () => {
-  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-07-31");
+  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-08-01");
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, receiver: { status: "running", pendingCount: 1 } }).success, false);
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, apps: { runningCount: 1 } }).success, false);
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, appInventory: emptyAppInventory(), apps: { runningCount: 1 } }).success, true);
@@ -958,6 +958,53 @@ test("control-plane aggregator restart bootstraps the authoritative stream and i
   assert.equal(restarted.instances[0].revision, 5);
   assert.equal(aggregator.applySnapshot(snapshot), false);
   assert.equal((await aggregator.list()).instances[0].revision, 5);
+});
+
+test("session aggregator is the public event boundary for obsolete forwarded streams", async () => {
+  const timestamp = new Date().toISOString();
+  const events = new ControlPlaneEventBus();
+  const published = [];
+  events.connect({
+    readyState: 1,
+    OPEN: 1,
+    send: (value) => published.push(JSON.parse(String(value))),
+    on: () => undefined,
+  });
+  const aggregator = new ControlPlaneAiSessionAggregator({ bootstrap: async () => ({ instances: [] }) });
+  await aggregator.advertiseStream("inst_boundary", {
+    topic: "ai.sessions",
+    instanceId: "inst_boundary",
+    streamId: "new-stream",
+    latestRevision: 7,
+    earliestRetainedRevision: 1,
+  });
+  aggregator.applySnapshot(aiSessionSnapshotPayload(
+    { sessions: [] },
+    { instanceId: "inst_boundary", streamId: "new-stream", revision: 7, generatedAt: timestamp },
+  ));
+  const transport = new ControlPlaneNodeAgentTunnelTransport(events, {
+    validateInstanceScope: () => true,
+    onSessionEvent: (event) => aggregator.handleEvent(event),
+  });
+
+  transport.handleMessage("node_boundary", {
+    type: "node-agent.event.forwarded",
+    event: {
+      type: AiSessionEventType.Snapshot,
+      topic: "ai.sessions",
+      scope: { instanceId: "inst_boundary" },
+      payload: aiSessionSnapshotPayload(
+        { sessions: [{ id: "obsolete", agent: "codex", status: "idle", phase: "unknown", startedAt: timestamp, updatedAt: timestamp, queue: { pendingCount: 0, items: [] } }] },
+        { instanceId: "inst_boundary", streamId: "old-stream", revision: 2, generatedAt: timestamp },
+      ),
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(published.length, 0);
+  const current = (await aggregator.list()).instances[0];
+  assert.equal(current.streamId, "new-stream");
+  assert.equal(current.revision, 7);
 });
 
 test("AI session aggregator ignores obsolete epoch events during active recovery", async () => {
@@ -2208,6 +2255,32 @@ test("control plane forwards node agent websocket events with instance scope", a
   tunnel.send(JSON.stringify({ type: "node-agent.identify", nodeId: "node_events" }));
   assert.equal(JSON.parse((await withTimeout(onceWebSocketMessageFrame(tunnel), "node tunnel identified")).message).type, "control-plane.identified");
 
+  tunnel.on("message", (raw) => {
+    const message = JSON.parse(String(raw));
+    if (message.type !== "control-plane.request" || message.route !== "/instances") return;
+    const timestamp = new Date().toISOString();
+    tunnel.send(JSON.stringify({
+      type: "node-agent.response",
+      requestId: message.requestId,
+      status: 200,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        data: [{
+          id: "inst_events",
+          name: "Events Instance",
+          source: { type: "local-folder", path: "/tmp/events" },
+          sourceSnapshot: {},
+          modelSelection: {},
+          nodeId: "node_events",
+          runtimeId: "runtime_events",
+          access: { strategy: "control-plane-proxy", status: "unknown" },
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        }],
+      }),
+    }));
+  });
+
   tunnel.send(JSON.stringify({
     type: "node-agent.event.forwarded",
     event: {
@@ -2280,6 +2353,67 @@ test("control plane rejects metrics whose payload and forwarded scope disagree",
 
   assert.equal(validations, 0);
   assert.equal(published.length, 0);
+});
+
+test("control plane rejects session events whose payload and forwarded scope disagree", async () => {
+  const events = new ControlPlaneEventBus();
+  const published = [];
+  events.on((event) => published.push(event));
+  let validations = 0;
+  let aggregated = 0;
+  const tunnel = new ControlPlaneNodeAgentTunnelTransport(events, {
+    validateInstanceScope: async () => { validations += 1; return true; },
+    onSessionEvent: () => { aggregated += 1; return true; },
+  });
+  tunnel.handleMessage("node_sessions", {
+    type: "node-agent.event.forwarded",
+    event: {
+      type: AiSessionEventType.Snapshot,
+      topic: AiSessionEventTopic,
+      payload: aiSessionSnapshotPayload({ sessions: [] }, { instanceId: "inst_payload" }),
+      scope: { instanceId: "inst_scope" },
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(validations, 0);
+  assert.equal(aggregated, 0);
+  assert.equal(published.length, 0);
+});
+
+test("invalidating instance ownership prevents a stale node from forwarding session events", async () => {
+  const events = new ControlPlaneEventBus();
+  const published = [];
+  events.on((event) => published.push(event));
+  let ownsInstance = true;
+  let validations = 0;
+  const tunnel = new ControlPlaneNodeAgentTunnelTransport(events, {
+    validateInstanceScope: async () => { validations += 1; return ownsInstance; },
+  });
+  const forward = (revision) => tunnel.handleMessage("node_sessions", {
+    type: "node-agent.event.forwarded",
+    event: {
+      type: AiSessionEventType.Snapshot,
+      topic: AiSessionEventTopic,
+      payload: aiSessionSnapshotPayload({ sessions: [] }, { instanceId: "inst_owned", revision }),
+      scope: { instanceId: "inst_owned" },
+    },
+  });
+
+  forward(1);
+  forward(2);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(validations, 1);
+  assert.equal(published.length, 2);
+
+  ownsInstance = false;
+  tunnel.attach("node_sessions", { readyState: 1, send() {}, close() {} });
+  tunnel.attach("node_sessions", { readyState: 1, send() {}, close() {} });
+  forward(3);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(validations, 2);
+  assert.equal(published.length, 2);
 });
 
 test("control plane forwards lifecycle snapshots only for instances owned by the node", async () => {
@@ -8254,6 +8388,140 @@ test("control plane accepts node agent reverse tunnel handshake", async (t) => {
   assert.equal(runtimes.body.data[0].id, "runtime_reverse");
 });
 
+test("aborting a reverse tunnel request releases it and notifies the node agent", async () => {
+  const transport = new ControlPlaneNodeAgentTunnelTransport();
+  const sent = [];
+  transport.attach("node_request_abort", {
+    readyState: 1,
+    send(data) { sent.push(JSON.parse(String(data))); },
+  });
+  const controller = new AbortController();
+  const responsePromise = transport.request({ id: "node_request_abort" }, "/slow", { signal: controller.signal });
+  const requestId = sent[0].requestId;
+
+  controller.abort();
+
+  await assert.rejects(responsePromise, (error) => error.name === "AbortError" && error.code === "ABORT_ERR");
+  assert.deepEqual(sent.at(-1), { type: "control-plane.request.cancel", requestId });
+  assert.equal(transport.handleMessage("node_request_abort", {
+    type: "node-agent.response",
+    requestId,
+    status: 200,
+    body: "late",
+  }), true);
+});
+
+test("timing out a reverse tunnel request cancels the node-agent operation", async () => {
+  const transport = new ControlPlaneNodeAgentTunnelTransport(undefined, { requestTimeoutMs: 10 });
+  const sent = [];
+  transport.attach("node_request_timeout", {
+    readyState: 1,
+    send(data) { sent.push(JSON.parse(String(data))); },
+  });
+  const responsePromise = transport.request({ id: "node_request_timeout" }, "/slow-mutation", { method: "POST" });
+  const requestId = sent[0].requestId;
+
+  await assert.rejects(responsePromise, (error) => error.code === "NODE_AGENT_REVERSE_REQUEST_TIMEOUT" && error.statusCode === 504);
+
+  assert.deepEqual(sent.at(-1), { type: "control-plane.request.cancel", requestId });
+  assert.equal(transport.handleMessage("node_request_timeout", {
+    type: "node-agent.response",
+    requestId,
+    status: 200,
+    body: "late success",
+  }), true);
+});
+
+test("node reverse tunnel aborts app.inject when a regular request is canceled", async (t) => {
+  const tunnelServer = new WebSocket.Server({ host: "127.0.0.1", port: 0 });
+  const tunnelSockets = new Set();
+  t.after(() => {
+    for (const socket of tunnelSockets) socket.terminate();
+    return new Promise((resolve) => tunnelServer.close(resolve));
+  });
+  await withTimeout(new Promise((resolve) => tunnelServer.once("listening", resolve)), "request cancel tunnel server");
+  const address = tunnelServer.address();
+  assert.equal(typeof address, "object");
+  let markConnected;
+  let markInjectStarted;
+  let markInjectAborted;
+  const connected = new Promise((resolve) => { markConnected = resolve; });
+  const injectStarted = new Promise((resolve) => { markInjectStarted = resolve; });
+  const injectAborted = new Promise((resolve) => { markInjectAborted = resolve; });
+  tunnelServer.on("connection", (serverSocket) => {
+    tunnelSockets.add(serverSocket);
+    serverSocket.on("close", () => tunnelSockets.delete(serverSocket));
+    markConnected(serverSocket);
+  });
+  const tunnel = connectReverseTunnel({
+    log: { warn() {} },
+    inject(input) {
+      markInjectStarted(input.signal);
+      return new Promise((_resolve, reject) => input.signal.addEventListener("abort", () => {
+        markInjectAborted(input.signal.aborted);
+        reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+      }, { once: true }));
+    },
+  }, {
+    tunnelUrl: `ws://127.0.0.1:${address.port}/api/node-tunnel`,
+    nodeId: "node_regular_cancel",
+    port: 1,
+  });
+  t.after(() => tunnel.terminate());
+  const main = await withTimeout(connected, "regular request tunnel connection");
+  main.send(JSON.stringify({ type: "control-plane.request", requestId: "request_cancel", route: "/mutation", init: { method: "POST" } }));
+  const signal = await withTimeout(injectStarted, "regular request inject start");
+  assert.equal(signal.aborted, false);
+
+  main.send(JSON.stringify({ type: "control-plane.request.cancel", requestId: "request_cancel" }));
+
+  assert.equal(await withTimeout(injectAborted, "regular request inject abort"), true);
+});
+
+test("aborting an active fleet query cancels its reverse-WSS node request", async (t) => {
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-fleet-query-abort"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+  });
+  await app.listen({ host: "127.0.0.1", port: 0 });
+  t.after(() => app.close());
+
+  await json(app, "POST", "/api/nodes", {
+    id: "node_fleet_query_abort",
+    name: "Slow Tunnel Node",
+    connectionMode: "reverse-wss",
+    auth: { mode: "paired-hmac", keyId: "key_abort", secret: "abort-secret" },
+  });
+  const address = app.server.address();
+  assert.equal(typeof address, "object");
+  const tunnelPath = "/api/node-tunnel?nodeId=node_fleet_query_abort";
+  const socket = new WebSocket(`ws://127.0.0.1:${address.port}${tunnelPath}`, {
+    headers: createNodeAgentHmacHeaders({
+      nodeId: "node_fleet_query_abort",
+      keyId: "key_abort",
+      secret: "abort-secret",
+      method: "GET",
+      pathWithQuery: tunnelPath,
+    }),
+  });
+  t.after(() => socket.close());
+  await onceWebSocketMessage(socket);
+
+  const controller = new AbortController();
+  const responsePromise = fetch(`http://127.0.0.1:${address.port}/api/node-runtimes`, { signal: controller.signal })
+    .catch((error) => error);
+  const forwarded = await onceWebSocketMessage(socket);
+  assert.equal(forwarded.type, "control-plane.request");
+  assert.equal(forwarded.route, "/runtimes");
+
+  controller.abort();
+
+  const cancellation = await onceWebSocketMessage(socket);
+  assert.deepEqual(cancellation, { type: "control-plane.request.cancel", requestId: forwarded.requestId });
+  assert.equal((await responsePromise).name, "AbortError");
+});
+
 test("reverse tunnel authenticates forwarded control-plane requests to a paired node agent", async (t) => {
   const nodeId = "node_tunnel_forwarded_auth";
   const keyId = "key_tunnel_forwarded_auth";
@@ -8390,6 +8658,213 @@ test("reverse node tunnel streams HTTP response bodies as binary frames", async 
   secondaryEvents.emit("message", Buffer.from([3, 255]), true);
   secondaryEvents.emit("message", JSON.stringify({ type: "node-agent.http.end" }), false);
   assert.deepEqual([...Buffer.from(await response.arrayBuffer())], [0, 1, 2, 3, 255]);
+});
+
+test("replacing a reverse tunnel closes and isolates the old main socket", async () => {
+  const events = new ControlPlaneEventBus();
+  const published = [];
+  const streamHellos = [];
+  events.on((event) => published.push(event));
+  const transport = new ControlPlaneNodeAgentTunnelTransport(events, {
+    onStreamsHello: (instanceId, hello) => streamHellos.push({ instanceId, hello }),
+  });
+  const createSocket = () => {
+    const socketEvents = new EventEmitter();
+    return {
+      readyState: 1,
+      sent: [],
+      closes: [],
+      events: socketEvents,
+      send(data) { this.sent.push(JSON.parse(String(data))); },
+      close(code, reason) { this.readyState = 3; this.closes.push({ code, reason }); },
+      on(event, listener) { socketEvents.on(event, listener); },
+    };
+  };
+  const oldSocket = createSocket();
+  const newSocket = createSocket();
+  transport.attach("node_replaced", oldSocket);
+  transport.attach("node_replaced", newSocket);
+
+  assert.deepEqual(oldSocket.closes, [{ code: 1000, reason: "Reverse tunnel was replaced." }]);
+  assert.equal(transport.handleSocketMessage("node_replaced", oldSocket, { type: "node-agent.ping" }), undefined);
+  assert.equal(transport.handleSocketMessage("node_replaced", oldSocket, {
+    type: "node-agent.event.forwarded",
+    event: { type: "test.replaced-tunnel", payload: { source: "old" } },
+  }), undefined);
+  assert.equal(published.length, 0);
+  assert.equal(transport.handleSocketMessage("node_replaced", oldSocket, {
+    type: "node-agent.streams.hello",
+    instanceId: "inst_old",
+    payload: { protocolVersion: 1, streams: [] },
+  }), undefined);
+  assert.equal(streamHellos.length, 0);
+
+  const responsePromise = transport.request({ id: "node_replaced" }, "/health");
+  const requestId = newSocket.sent.at(-1).requestId;
+  assert.equal(transport.handleSocketMessage("node_replaced", oldSocket, {
+    type: "node-agent.response",
+    requestId,
+    status: 200,
+    body: "old",
+  }), undefined);
+  oldSocket.events.emit("close");
+  assert.equal(transport.handleSocketMessage("node_replaced", newSocket, {
+    type: "node-agent.response",
+    requestId,
+    status: 200,
+    body: "new",
+  }), true);
+  assert.equal(await (await responsePromise).text(), "new");
+
+  assert.equal(transport.handleSocketMessage("node_replaced", newSocket, {
+    type: "node-agent.event.forwarded",
+    event: { type: "test.replaced-tunnel", payload: { source: "new" } },
+  }), true);
+  assert.equal(published.length, 1);
+  assert.deepEqual(published[0].payload, { source: "new" });
+  assert.equal(transport.handleSocketMessage("node_replaced", newSocket, {
+    type: "node-agent.streams.hello",
+    instanceId: "inst_new",
+    payload: { protocolVersion: 1, streams: [] },
+  }), true);
+  assert.equal(streamHellos.length, 1);
+  assert.equal(streamHellos[0].instanceId, "inst_new");
+});
+
+test("reverse HTTP stream header timeout cancels the node request and ignores late frames", async () => {
+  const transport = new ControlPlaneNodeAgentTunnelTransport(undefined, { httpStreamHeaderTimeoutMs: 10 });
+  const sent = [];
+  transport.attach("node_stream_timeout", {
+    readyState: 1,
+    send(data) { sent.push(JSON.parse(String(data))); },
+  });
+
+  const responsePromise = transport.requestStream({ id: "node_stream_timeout" }, "/slow");
+  const opened = sent[0];
+  const secondaryEvents = new EventEmitter();
+  const secondary = {
+    readyState: 1,
+    closes: [],
+    pauses: 0,
+    send() {},
+    close(code, reason) { this.readyState = 3; this.closes.push({ code, reason }); },
+    pause() { this.pauses += 1; },
+    on(event, listener) { secondaryEvents.on(event, listener); },
+  };
+  assert.equal(transport.attachHttpStream("node_stream_timeout", opened.streamId, secondary), true);
+
+  await assert.rejects(responsePromise, (error) => error.code === "NODE_AGENT_REVERSE_STREAM_TIMEOUT" && error.statusCode === 504);
+  assert.equal(secondary.closes.length, 1);
+  assert.equal(sent.at(-1).type, "control-plane.http.cancel");
+  assert.equal(sent.at(-1).streamId, opened.streamId);
+
+  secondaryEvents.emit("message", JSON.stringify({ type: "node-agent.http.head", status: 200, headers: {} }), false);
+  secondaryEvents.emit("message", Buffer.alloc(128 * 1024), true);
+  assert.equal(secondary.pauses, 0);
+});
+
+test("aborting a reverse HTTP stream before headers cancels the node request", async () => {
+  const transport = new ControlPlaneNodeAgentTunnelTransport();
+  const sent = [];
+  transport.attach("node_stream_abort", {
+    readyState: 1,
+    send(data) { sent.push(JSON.parse(String(data))); },
+  });
+  const controller = new AbortController();
+  const responsePromise = transport.requestStream({ id: "node_stream_abort" }, "/slow", { signal: controller.signal });
+  const opened = sent[0];
+  const secondary = {
+    readyState: 1,
+    closes: [],
+    send() {},
+    close(code, reason) { this.readyState = 3; this.closes.push({ code, reason }); },
+    on() {},
+  };
+  assert.equal(transport.attachHttpStream("node_stream_abort", opened.streamId, secondary), true);
+
+  controller.abort();
+  await assert.rejects(responsePromise, (error) => error.name === "AbortError" && error.code === "ABORT_ERR");
+  assert.equal(secondary.closes.length, 1);
+  assert.equal(sent.at(-1).type, "control-plane.http.cancel");
+  assert.equal(sent.at(-1).streamId, opened.streamId);
+});
+
+test("closing a reverse HTTP response consumer cancels the node request", async () => {
+  const transport = new ControlPlaneNodeAgentTunnelTransport();
+  const sent = [];
+  transport.attach("node_stream_consumer", {
+    readyState: 1,
+    send(data) { sent.push(JSON.parse(String(data))); },
+  });
+  const responsePromise = transport.requestStream({ id: "node_stream_consumer" }, "/stream");
+  const opened = sent[0];
+  const secondaryEvents = new EventEmitter();
+  const secondary = {
+    readyState: 1,
+    closes: [],
+    send() {},
+    close(code, reason) { this.readyState = 3; this.closes.push({ code, reason }); },
+    on(event, listener) { secondaryEvents.on(event, listener); },
+  };
+  assert.equal(transport.attachHttpStream("node_stream_consumer", opened.streamId, secondary), true);
+  secondaryEvents.emit("message", JSON.stringify({ type: "node-agent.http.head", status: 200, headers: {} }), false);
+  const response = await responsePromise;
+
+  await response.body.cancel();
+  await waitForCondition(() => secondary.closes.length === 1, "reverse HTTP consumer cancellation");
+  assert.equal(sent.at(-1).type, "control-plane.http.cancel");
+  assert.equal(sent.at(-1).streamId, opened.streamId);
+});
+
+test("node reverse tunnel aborts its local fetch when the control plane cancels an HTTP stream", async (t) => {
+  let markRequestStarted;
+  let markRequestClosed;
+  const requestStarted = new Promise((resolve) => { markRequestStarted = resolve; });
+  const requestClosed = new Promise((resolve) => { markRequestClosed = resolve; });
+  const localServer = http.createServer((_request, response) => {
+    markRequestStarted();
+    response.once("close", () => markRequestClosed(response.writableFinished));
+  });
+  await new Promise((resolve, reject) => {
+    localServer.once("error", reject);
+    localServer.listen(0, "127.0.0.1", resolve);
+  });
+  t.after(() => new Promise((resolve) => localServer.close(resolve)));
+  const localAddress = localServer.address();
+  assert.equal(typeof localAddress, "object");
+
+  const tunnelServer = new WebSocket.Server({ host: "127.0.0.1", port: 0 });
+  const tunnelSockets = new Set();
+  t.after(() => {
+    for (const socket of tunnelSockets) socket.terminate();
+    return new Promise((resolve) => tunnelServer.close(resolve));
+  });
+  await withTimeout(new Promise((resolve) => tunnelServer.once("listening", resolve)), "reverse tunnel test server listening");
+  const tunnelAddress = tunnelServer.address();
+  assert.equal(typeof tunnelAddress, "object");
+  let markMainConnected;
+  const mainConnected = new Promise((resolve) => { markMainConnected = resolve; });
+  tunnelServer.on("connection", (serverSocket, request) => {
+    tunnelSockets.add(serverSocket);
+    serverSocket.on("close", () => tunnelSockets.delete(serverSocket));
+    if (!request.url.includes("/http-streams/")) markMainConnected(serverSocket);
+  });
+
+  const tunnel = connectReverseTunnel({
+    log: { warn() {} },
+    inject() { throw new Error("Unexpected inject call."); },
+  }, {
+    tunnelUrl: `ws://127.0.0.1:${tunnelAddress.port}/api/node-tunnel`,
+    nodeId: "node_http_cancel",
+    port: localAddress.port,
+  });
+  t.after(() => tunnel.terminate());
+  const main = await withTimeout(mainConnected, "reverse tunnel main connection");
+  main.send(JSON.stringify({ type: "control-plane.http.open", streamId: "stream_cancel", route: "/slow", init: { method: "GET" } }));
+  await withTimeout(requestStarted, "node local fetch start");
+  main.send(JSON.stringify({ type: "control-plane.http.cancel", streamId: "stream_cancel", reason: "test cancellation" }));
+
+  assert.equal(await withTimeout(requestClosed, "node local fetch cancellation"), false);
 });
 
 test("reverse websocket proxy normalizes abnormal close events in both directions", () => {
@@ -12280,7 +12755,10 @@ test("control plane telegram bridge aggregates adjacent messages and explicit be
 test("control plane telegram ai session ack updates from node agent events without event scope", async () => {
   const calls = [];
   const events = new ControlPlaneEventBus();
-  const tunnel = new ControlPlaneNodeAgentTunnelTransport(events);
+  const tunnel = new ControlPlaneNodeAgentTunnelTransport(events, {
+    validateInstanceScope: () => true,
+    onSessionEvent: () => true,
+  });
   const bridge = {
     id: "chat_telegram_node_event",
     channel: "telegram",

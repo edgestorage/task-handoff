@@ -64,12 +64,11 @@ export class ControlPlaneAppSessionAggregator {
     const parsed = schema.safeParse(event.payload);
     if (!parsed.success) {
       this.logger?.warn?.({ eventType: event.type, issues: parsed.error.issues, errorCode: "APP_SESSION_EVENT_INVALID" }, "app-session.aggregator.event.invalid");
-      return true;
+      return false;
     }
-    if (event.type === AppSessionEventType.Snapshot) this.applySnapshot(parsed.data as AppSessionSnapshotEvent);
-    if (event.type === AppSessionEventType.Patch) this.applyPatch(parsed.data as AppSessionPatchEvent);
-    if (event.type === AppSessionEventType.Removed) this.applyRemoved(parsed.data as AppSessionRemovedEvent);
-    return true;
+    if (event.type === AppSessionEventType.Snapshot) return this.applySnapshot(parsed.data as AppSessionSnapshotEvent);
+    if (event.type === AppSessionEventType.Patch) return this.applyPatch(parsed.data as AppSessionPatchEvent);
+    return this.applyRemoved(parsed.data as AppSessionRemovedEvent);
   }
 
   applySnapshot(payload: AppSessionSnapshotEvent) {

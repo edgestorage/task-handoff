@@ -15,6 +15,7 @@ import {
   NodeRemoteKeyParamsSchema,
   NodeRuntimeParamsSchema,
 } from "./route-params.ts";
+import { withRequestSignal } from "./request-signal.ts";
 
 type ErrorPayload = (error: unknown) => {
   statusCode: number;
@@ -62,7 +63,7 @@ export function registerNodeRoutes({
   });
   app.post("/api/nodes/:id/check", async (request) => {
     const node = await service.checkNode(IdParamsSchema.parse(request.params).id);
-    events.publish("node.checked", { nodeId: node.id });
+    events.publish("node.checked", { nodeId: node.id }, { topic: "node.state", scope: { nodeId: node.id } });
     return { data: node };
   });
   app.get("/api/nodes/:id/updates/jobs", async (request) => ({
@@ -161,7 +162,9 @@ export function registerNodeRoutes({
   });
   app.get("/api/nodes/:id/docker/images", async (request) => ({ data: await service.listNodeDockerImages(IdParamsSchema.parse(request.params).id) }));
   app.get("/api/nodes/:id/image-options", async (request) => ({ data: await service.listNodeImageAvailability(IdParamsSchema.parse(request.params).id) }));
-  app.get("/api/nodes/:id/local-folders", async (request) => ({ data: await service.listNodeLocalFolders(IdParamsSchema.parse(request.params).id) }));
+  app.get("/api/nodes/:id/local-folders", async (request, reply) => withRequestSignal(request, reply, async (signal) => ({
+    data: await service.listNodeLocalFolders(IdParamsSchema.parse(request.params).id, signal),
+  })));
   app.get("/api/nodes/:id/folders/tree", async (request) => {
     const params = IdParamsSchema.parse(request.params);
     const query = NodeFolderTreeQuerySchema.parse(request.query);
@@ -199,10 +202,10 @@ export function registerNodeRoutes({
     return { data: { deleted } };
   });
 
-  app.get("/api/node-runtimes", async () => {
-    const result = await service.listNodeRuntimesWithDiagnostics();
+  app.get("/api/node-runtimes", async (request, reply) => withRequestSignal(request, reply, async (signal) => {
+    const result = await service.listNodeRuntimesWithDiagnostics(signal);
     return { data: result.items, meta: { nodeErrors: result.nodeErrors } };
-  });
+  }));
 
   registerNodeAgentTunnelRoutes({ app, service, nodeAgentTunnel, errorPayload });
 }

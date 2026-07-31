@@ -4,6 +4,7 @@ import type { ChatBridgeConfig, ChatChannel, ChatGatewayStatus } from "../../../
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 import type { Translate } from "../../../i18n/status.ts";
 import { translateApiError } from "../../../i18n/apiError.ts";
+import { startSavedChatBridge } from "./chatBridgeToggle.ts";
 
 type UseChatBridgeSettingsInput = {
   bridges: Ref<ChatBridgeConfig[] | undefined>;
@@ -103,7 +104,7 @@ export function useChatBridgeSettings({ bridges, errorText, gatewayStatus, refre
     }
   }
 
-  async function saveSelectedChatBridge() {
+  async function persistSelectedChatBridge(refreshAfterSave: boolean) {
     const bridge = selectedChatBridge.value;
     if (!bridge || savingChatBridge.value) {
       return false;
@@ -122,7 +123,7 @@ export function useChatBridgeSettings({ bridges, errorText, gatewayStatus, refre
         settings.corpId = emptyToUndefined(chatForm.value.settings.corpId);
         settings.robotCode = emptyToUndefined(chatForm.value.settings.robotCode);
       }
-      await updateChatBridge(bridge.id, {
+      const updated = await updateChatBridge(bridge.id, {
         name: emptyToUndefined(chatForm.value.name),
         token: emptyToUndefined(chatForm.value.token),
         defaultChatId: emptyToUndefined(chatForm.value.defaultChatId),
@@ -131,8 +132,8 @@ export function useChatBridgeSettings({ bridges, errorText, gatewayStatus, refre
         settings,
       });
       chatBridgeSuccess.value = t("settings.chatBridge.saved", { name: chatForm.value.name || bridge.name });
-      await refresh();
-      syncChatForm();
+      syncChatForm(updated);
+      if (refreshAfterSave) await refresh();
       return true;
     } catch (error) {
       showControlPlaneToast(translateError(error));
@@ -140,6 +141,10 @@ export function useChatBridgeSettings({ bridges, errorText, gatewayStatus, refre
     } finally {
       savingChatBridge.value = false;
     }
+  }
+
+  function saveSelectedChatBridge() {
+    return persistSelectedChatBridge(true);
   }
 
   async function toggleSelectedChatBridge() {
@@ -154,12 +159,14 @@ export function useChatBridgeSettings({ bridges, errorText, gatewayStatus, refre
         await stopChatBridge(bridge.id);
         chatBridgeSuccess.value = t("settings.chatBridge.stopped", { name: bridge.name });
       } else {
-        const saved = await saveSelectedChatBridge();
-        if (!saved) {
-          return;
-        }
-        await startChatBridge(bridge.id);
+        const started = await startSavedChatBridge({
+          persist: () => persistSelectedChatBridge(false),
+          start: () => startChatBridge(bridge.id),
+          refresh,
+        });
+        if (!started) return;
         chatBridgeSuccess.value = t("settings.chatBridge.started", { name: bridge.name });
+        return;
       }
       await refresh();
     } catch (error) {

@@ -105,6 +105,7 @@ import { ArrowRight, Plus, X } from "@lucide/vue";
 import { useI18n } from "vue-i18n";
 import { translateApiError } from "../../i18n/apiError";
 import { checkNodeRuntime, createControlledInstance, createImage, createProject, listNodeFolderTree, useImageOptionsQuery, useModelsQuery, useNodeImageAvailabilityQuery, useNodeLocalFoldersQuery, useNodeRuntimesQuery, useNodesQuery, useProjectsQuery } from "../../api/queries";
+import { controlPlaneQueryKeys } from "../../api/queryKeys.ts";
 import type { CreateControlledInstanceResult, InstanceBoardItem } from "../../api/types";
 import { Button } from "../../components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "../../components/ui/dialog";
@@ -573,7 +574,7 @@ async function checkSelectedDockerRuntime() {
       dockerRuntimeCheck.state = "offline";
       dockerRuntimeCheck.rawMessage = details.error || "";
     }
-    await queryClient.invalidateQueries({ queryKey: ["control-plane-node-runtimes"] });
+    await queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.nodeRuntimes });
   } catch (error) {
     if (selectedDockerRuntimeKey.value !== key) return;
     dockerRuntimeCheck.state = "error";
@@ -589,8 +590,8 @@ async function refresh() {
     queryClient.invalidateQueries({ queryKey: ["control-plane-images"] }),
     queryClient.invalidateQueries({ queryKey: ["control-plane-nodes"] }),
     queryClient.invalidateQueries({ queryKey: ["control-plane-node-local-folders"] }),
-    queryClient.invalidateQueries({ queryKey: ["control-plane-node-runtimes"] }),
-    queryClient.invalidateQueries({ queryKey: ["instance-board"] }),
+    queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.nodeRuntimes }),
+    queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.instanceBoard }),
   ]);
 }
 

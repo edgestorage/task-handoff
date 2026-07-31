@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { createControlPlaneI18nForTest } from "../src/i18n/testing.ts";
 import { runtimeVersionStatusKeys, updateJobStatusKeys } from "../src/i18n/status.ts";
+import { refreshNodeUpdateHttpState } from "../src/apps/control-plane/settings/nodeUpdatePolling.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "utf8");
@@ -25,9 +26,41 @@ test("node update clients expose one rollout without an instance target", () => 
 
 test("active Node rollouts refresh authoritative jobs only while non-terminal", () => {
   const settings = read("src/apps/control-plane/settings/useNodeSettings.ts");
-  assert.match(settings, /converging-instances/);
+  assert.match(settings, /isActiveNodeUpdate\(job\.status\)/);
   assert.match(settings, /setTimeout\(\(\) => void loadManagedUpdateJobs\(nodeId, true\), 2_000\)/);
+  assert.match(settings, /refreshNodeUpdateHttpState\(\{/);
+  assert.match(settings, /refreshRuntimeState: refreshNodeRuntimeState/);
+  assert.doesNotMatch(settings, /Promise\.all\(\[checkSettingsNode\(nodeId\), refresh/);
   assert.match(settings, /onScopeDispose/);
+});
+
+test("an active Node rollout refreshes runtime state without issuing a redundant Node check", async () => {
+  const calls = [];
+
+  await refreshNodeUpdateHttpState({
+    status: "converging-instances",
+    refreshRuntimeState: async () => { calls.push("runtime-state"); },
+    refreshTopology: async () => { calls.push("topology"); },
+  });
+
+  assert.deepEqual(calls, ["runtime-state"]);
+});
+
+test("settings mutations use domain refresh callbacks instead of a global refresh", () => {
+  const modal = read("src/apps/control-plane/settings/SettingsModal.vue");
+  const projects = read("src/apps/control-plane/settings/useProjectSettings.ts");
+  const images = read("src/apps/control-plane/settings/useImageSettings.ts");
+  const models = read("src/apps/control-plane/settings/useModelSettings.ts");
+  const resources = read("src/apps/control-plane/settings/useNodeResourceSettings.ts");
+
+  assert.match(modal, /invalidateControlPlaneDomains\(queryClient, \["manual"\]\)/);
+  assert.match(projects, /refreshProjects/);
+  assert.match(images, /refreshImages/);
+  assert.match(models, /refreshModels/);
+  assert.match(resources, /refreshFolders/);
+  assert.match(resources, /refreshRuntimeState/);
+  assert.doesNotMatch(modal, /queryKey: \["control-plane-node-runtimes"\]/);
+  assert.doesNotMatch(modal, /queryKey: \["instance-board"\]/);
 });
 
 test("instance update controls are replaced by authoritative convergence state", () => {

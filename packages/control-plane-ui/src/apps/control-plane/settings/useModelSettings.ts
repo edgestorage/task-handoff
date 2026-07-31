@@ -10,11 +10,11 @@ type UseModelSettingsInput = {
   models: () => ModelConfig[];
   nodes: () => Node[];
   onModelDeleted: (modelId: string) => void;
-  refresh: () => Promise<void>;
+  refreshModels: () => Promise<void>;
   translate: Translate;
 };
 
-export function useModelSettings({ errorText, models, nodes, onModelDeleted, refresh, translate: t }: UseModelSettingsInput) {
+export function useModelSettings({ errorText, models, nodes, onModelDeleted, refreshModels, translate: t }: UseModelSettingsInput) {
   const translateError = (error: unknown) => translateApiError(error, t, errorText(error));
   const editingModelId = ref("");
   const savingModelId = ref("");
@@ -98,7 +98,7 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
         const results = await Promise.allSettled(locations.map((location) => location.type === "node"
           ? updateNodeModel(location.nodeId, editingModelId.value, payload)
           : updateModel(editingModelId.value, payload)));
-        await refresh();
+        await refreshModels();
         refreshed = true;
         const failure = results.find((result) => result.status === "rejected");
         if (failure?.status === "rejected") throw failure.reason;
@@ -110,7 +110,7 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
       }
       modelSaveSuccess.value = t("settings.modelRegistry.saved", { name: saved.name });
       resetModelForm();
-      if (!refreshed) await refresh();
+      if (!refreshed) await refreshModels();
     } catch (error) {
       showControlPlaneToast(translateError(error));
     } finally {
@@ -137,7 +137,7 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
         resetModelForm();
       }
       onModelDeleted(model.id);
-      await refresh();
+      await refreshModels();
     } catch (error) {
       showControlPlaneToast(translateError(error));
     } finally {
@@ -157,7 +157,7 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
     savingModelId.value = modelId;
     try {
       await reorderModels(reordered.map((model) => model.id));
-      await refresh();
+      await refreshModels();
     } catch (error) {
       showControlPlaneToast(translateError(error));
     } finally {

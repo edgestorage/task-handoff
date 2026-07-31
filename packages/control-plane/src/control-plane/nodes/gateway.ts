@@ -141,8 +141,8 @@ export class ControlPlaneNodeAgentGateway {
     return this.client.requestSchema(node, `/folders/tree${query ? `?${query}` : ""}`, z.array(NodeFolderTreeEntrySchema));
   }
 
-  listLocalFolders(node: Node) {
-    return this.client.requestSchema(node, "/local-folders", z.array(NodeLocalFolderSchema));
+  listLocalFolders(node: Node, init: RequestInit = {}) {
+    return this.client.requestSchema(node, "/local-folders", z.array(NodeLocalFolderSchema), init);
   }
 
   createLocalFolder(node: Node, input: unknown) {
@@ -164,8 +164,8 @@ export class ControlPlaneNodeAgentGateway {
     return folder;
   }
 
-  listRuntimes(node: Node) {
-    return this.client.requestSchema(node, "/runtimes", z.array(NodeRuntimeSchema));
+  listRuntimes(node: Node, init: RequestInit = {}) {
+    return this.client.requestSchema(node, "/runtimes", z.array(NodeRuntimeSchema), init);
   }
 
   createRuntime(node: Node, input: unknown) {
@@ -202,8 +202,8 @@ export class ControlPlaneNodeAgentGateway {
     });
   }
 
-  listModels(node: Node) {
-    return this.client.requestSchema(node, "/models", z.array(NodeModelPublicRecordSchema));
+  listModels(node: Node, init: RequestInit = {}) {
+    return this.client.requestSchema(node, "/models", z.array(NodeModelPublicRecordSchema), init);
   }
 
   createModel(node: Node, input: unknown) {
@@ -245,9 +245,9 @@ export class ControlPlaneNodeAgentGateway {
     });
   }
 
-  async listFleetModels(nodes: Node[]): Promise<NodeAgentFleetResult<{ nodeId: string; model: NodeModelPublicRecord }>> {
+  async listFleetModels(nodes: Node[], init: RequestInit = {}): Promise<NodeAgentFleetResult<{ nodeId: string; model: NodeModelPublicRecord }>> {
     const route = "/models";
-    const results = await Promise.allSettled(nodes.map(async (node) => ({ node, models: await this.listModels(node) })));
+    const results = await Promise.allSettled(nodes.map(async (node) => ({ node, models: await this.listModels(node, init) })));
     return results.reduce<NodeAgentFleetResult<{ nodeId: string; model: NodeModelPublicRecord }>>((current, result, index) => {
       if (result.status === "fulfilled") {
         current.items.push(...result.value.models.map((model) => ({ nodeId: result.value.node.id, model })));
@@ -259,11 +259,11 @@ export class ControlPlaneNodeAgentGateway {
     }, { items: [], nodeErrors: [] });
   }
 
-  async listFleetRuntimes(nodes: Node[]): Promise<NodeAgentFleetResult<NodeRuntime>> {
+  async listFleetRuntimes(nodes: Node[], init: RequestInit = {}): Promise<NodeAgentFleetResult<NodeRuntime>> {
     const route = "/runtimes";
     const results = await Promise.allSettled(nodes.map(async (node) => ({
       node,
-      runtimes: await this.listRuntimes(node),
+      runtimes: await this.listRuntimes(node, init),
     })));
     return results.reduce<NodeAgentFleetResult<NodeRuntime>>((current, result, index) => {
       if (result.status === "fulfilled") {
@@ -278,12 +278,12 @@ export class ControlPlaneNodeAgentGateway {
     }, { items: [], nodeErrors: [] });
   }
 
-  listInstances(node: Node) {
-    return this.listInstancesWithDiagnostics(node).then((result) => result.items);
+  listInstances(node: Node, init: RequestInit = {}) {
+    return this.listInstancesWithDiagnostics(node, init).then((result) => result.items);
   }
 
-  async listInstancesWithDiagnostics(node: Node): Promise<NodeAgentListResult<ControlledInstance>> {
-    return this.client.requestSchema(node, "/instances", z.array(z.unknown()))
+  async listInstancesWithDiagnostics(node: Node, init: RequestInit = {}): Promise<NodeAgentListResult<ControlledInstance>> {
+    return this.client.requestSchema(node, "/instances", z.array(z.unknown()), init)
       .then((items) => items.reduce<NodeAgentListResult<ControlledInstance>>((current, item) => {
         const result = this.normalizeInstance(node, item);
         if (result.instance) {
@@ -358,11 +358,11 @@ export class ControlPlaneNodeAgentGateway {
     });
   }
 
-  async listFleetInstances(nodes: Node[]): Promise<NodeAgentFleetResult<ControlledInstance>> {
+  async listFleetInstances(nodes: Node[], init: RequestInit = {}): Promise<NodeAgentFleetResult<ControlledInstance>> {
     const route = "/instances";
     const results = await Promise.allSettled(nodes.map(async (node) => ({
       node,
-      result: await this.listInstancesWithDiagnostics(node),
+      result: await this.listInstancesWithDiagnostics(node, init),
     })));
     return results.reduce<NodeAgentFleetResult<ControlledInstance>>((current, result, index) => {
       if (result.status === "fulfilled") {

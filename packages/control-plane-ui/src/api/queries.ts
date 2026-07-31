@@ -1,6 +1,9 @@
-import { useQuery } from "@tanstack/vue-query";
+import { queryOptions, useQuery } from "@tanstack/vue-query";
 import { computed, toValue, type MaybeRefOrGetter } from "vue";
 import { deleteApiData, getApiData, getApiPayload, patchApiData, postApiData } from "./client";
+import { mergeInstanceBoardPayload } from "./instanceBoardMerge.ts";
+import { controlPlaneQueryKeys } from "./queryKeys.ts";
+export { controlPlaneQueryKeys } from "./queryKeys.ts";
 import type {
   ControlPlaneStatusResponse,
   ControlPlaneSettings,
@@ -27,7 +30,7 @@ import type {
   CreateControlPlaneTriggerInput,
   ChatBridgeConfig,
   ChatChannel,
-  AiSessionAttachment,
+  AiSessionUploadedAttachment,
   AiSessionAttachmentRef,
   AiSessionHistoryList,
   AiSessionHistoryDetail,
@@ -101,7 +104,7 @@ export function logoutControlPlane() {
 
 export function useControlPlaneStatusQuery() {
   return useQuery({
-    queryKey: ["control-plane-status"],
+    queryKey: controlPlaneQueryKeys.status,
     queryFn: () => getApiData<ControlPlaneStatusResponse>("control-plane/status"),
     retry: false,
   });
@@ -109,7 +112,7 @@ export function useControlPlaneStatusQuery() {
 
 export function useControlPlaneSettingsQuery() {
   return useQuery({
-    queryKey: ["control-plane-settings"],
+    queryKey: controlPlaneQueryKeys.settings,
     queryFn: () => getApiData<ControlPlaneSettings>("control-plane/settings"),
     retry: false,
   });
@@ -121,7 +124,7 @@ export function updateControlPlaneSettings(input: Partial<ControlPlaneSettings>)
 
 export function useProjectsQuery() {
   return useQuery({
-    queryKey: ["control-plane-projects"],
+    queryKey: controlPlaneQueryKeys.projects,
     queryFn: () => getApiData<Project[]>("projects"),
     retry: false,
   });
@@ -129,7 +132,7 @@ export function useProjectsQuery() {
 
 export function useImagesQuery() {
   return useQuery({
-    queryKey: ["control-plane-images"],
+    queryKey: controlPlaneQueryKeys.images,
     queryFn: () => getApiData<ImageProfile[]>("images"),
     retry: false,
   });
@@ -137,7 +140,7 @@ export function useImagesQuery() {
 
 export function useMarketCatalogQuery() {
   return useQuery({
-    queryKey: ["control-plane-market-catalog"],
+    queryKey: controlPlaneQueryKeys.marketCatalog,
     queryFn: () => getApiData<MarketCatalog>("market/catalog"),
     retry: false,
   });
@@ -145,16 +148,14 @@ export function useMarketCatalogQuery() {
 
 export function useImageOptionsQuery() {
   return useQuery({
-    queryKey: ["control-plane-image-options"],
+    queryKey: controlPlaneQueryKeys.imageOptions,
     queryFn: () => getApiData<SelectableImage[]>("image-options"),
     retry: false,
   });
 }
 
-const modelRegistryQueryKey = ["control-plane-models"] as const;
-
-function fetchModelRegistry() {
-  return getApiData<FederatedModelRegistry>("models");
+function fetchModelRegistry(signal?: AbortSignal) {
+  return getApiData<FederatedModelRegistry>("models", { signal });
 }
 
 export function modelConfigsFromRegistry(registry: FederatedModelRegistry) {
@@ -167,16 +168,16 @@ export function modelConfigsFromRegistry(registry: FederatedModelRegistry) {
 
 export function useModelRegistryQuery() {
   return useQuery({
-    queryKey: modelRegistryQueryKey,
-    queryFn: fetchModelRegistry,
+    queryKey: controlPlaneQueryKeys.models,
+    queryFn: ({ signal }) => fetchModelRegistry(signal),
     retry: false,
   });
 }
 
 export function useModelsQuery() {
   return useQuery({
-    queryKey: modelRegistryQueryKey,
-    queryFn: fetchModelRegistry,
+    queryKey: controlPlaneQueryKeys.models,
+    queryFn: ({ signal }) => fetchModelRegistry(signal),
     select: modelConfigsFromRegistry,
     retry: false,
   });
@@ -184,8 +185,8 @@ export function useModelsQuery() {
 
 export function useNodesQuery() {
   return useQuery({
-    queryKey: ["control-plane-nodes"],
-    queryFn: () => getApiData<Node[]>("nodes"),
+    queryKey: controlPlaneQueryKeys.nodes,
+    queryFn: ({ signal }) => getApiData<Node[]>("nodes", { signal }),
     retry: false,
   });
 }
@@ -217,30 +218,39 @@ export function listNodeUpdateJobs(nodeId: string) {
   return getApiData<UpdateJob[]>(`nodes/${nodeId}/updates/jobs`);
 }
 
+function fetchNodeRuntimesPayload(signal?: AbortSignal) {
+  return getApiPayload<NodeRuntime[], NodeRuntimesPayload["meta"]>("node-runtimes", { signal });
+}
+
 export function useNodeRuntimesQuery() {
   return useQuery({
-    queryKey: ["control-plane-node-runtimes"],
-    queryFn: () => getApiData<NodeRuntime[]>("node-runtimes"),
+    queryKey: controlPlaneQueryKeys.nodeRuntimes,
+    queryFn: ({ signal }) => fetchNodeRuntimesPayload(signal),
+    select: (payload) => payload.data,
     retry: false,
   });
 }
 
 export function useNodeRuntimesPayloadQuery() {
   return useQuery({
-    queryKey: ["control-plane-node-runtimes-payload"],
-    queryFn: () => getApiPayload<NodeRuntime[], NodeRuntimesPayload["meta"]>("node-runtimes"),
+    queryKey: controlPlaneQueryKeys.nodeRuntimes,
+    queryFn: ({ signal }) => fetchNodeRuntimesPayload(signal),
+    retry: false,
+  });
+}
+
+export function nodeLocalFoldersQueryOptions(nodeId: string) {
+  return queryOptions({
+    queryKey: controlPlaneQueryKeys.nodeLocalFolders(nodeId),
+    queryFn: ({ signal }) => getApiData<NodeLocalFolder[]>(`nodes/${nodeId}/local-folders`, { signal }),
+    enabled: Boolean(nodeId),
     retry: false,
   });
 }
 
 export function useNodeLocalFoldersQuery(nodeId: MaybeRefOrGetter<string>) {
   const resolvedNodeId = computed(() => toValue(nodeId));
-  return useQuery({
-    queryKey: computed(() => ["control-plane-node-local-folders", resolvedNodeId.value]),
-    queryFn: () => getApiData<NodeLocalFolder[]>(`nodes/${resolvedNodeId.value}/local-folders`),
-    enabled: computed(() => Boolean(resolvedNodeId.value)),
-    retry: false,
-  });
+  return useQuery(computed(() => nodeLocalFoldersQueryOptions(resolvedNodeId.value)));
 }
 
 export function listNodeFolderTree(nodeId: string, input: { path?: string; depth?: number } = {}) {
@@ -268,7 +278,7 @@ export function useLocalDockerImagesQuery(nodeId: MaybeRefOrGetter<string>) {
 export function useNodeImageAvailabilityQuery(nodeId: MaybeRefOrGetter<string>) {
   const resolvedNodeId = computed(() => toValue(nodeId));
   return useQuery({
-    queryKey: computed(() => ["node-image-catalog", resolvedNodeId.value]),
+    queryKey: computed(() => controlPlaneQueryKeys.nodeImageCatalog(resolvedNodeId.value)),
     queryFn: () => getApiData<NodeImageAvailability[]>(`nodes/${resolvedNodeId.value}/image-options`),
     enabled: computed(() => Boolean(resolvedNodeId.value)),
     retry: false,
@@ -291,11 +301,23 @@ export function deleteNodeControlPlaneConnection(nodeId: string, connectionId: s
   return deleteApiData<{ deleted: boolean }>(`nodes/${nodeId}/control-plane-connections/${encodeURIComponent(connectionId)}`);
 }
 
+function fetchInstanceBoardPayload(signal?: AbortSignal) {
+  return getApiPayload<InstanceBoardItem[], InstanceBoardPayload["meta"]>("instance-board", { signal });
+}
+
+function instanceBoardQueryOptions() {
+  return {
+    queryKey: controlPlaneQueryKeys.instanceBoard,
+    queryFn: ({ signal }: { signal: AbortSignal }) => fetchInstanceBoardPayload(signal),
+    structuralSharing: mergeInstanceBoardPayload,
+    retry: false,
+  } as const;
+}
+
 export function useInstanceBoardQuery() {
   return useQuery({
-    queryKey: ["instance-board"],
-    queryFn: () => getApiData<InstanceBoardItem[]>("instance-board"),
-    retry: false,
+    ...instanceBoardQueryOptions(),
+    select: (payload) => payload.data,
   });
 }
 
@@ -304,11 +326,7 @@ export function getInstanceResourceMetrics(instanceId: string) {
 }
 
 export function useInstanceBoardPayloadQuery() {
-  return useQuery({
-    queryKey: ["instance-board-payload"],
-    queryFn: () => getApiPayload<InstanceBoardItem[], InstanceBoardPayload["meta"]>("instance-board"),
-    retry: false,
-  });
+  return useQuery(instanceBoardQueryOptions());
 }
 
 export function useControlPlaneAiSessionsQuery() {
@@ -377,7 +395,7 @@ export function unbindAiSessionTrigger(instanceId: string, sessionId: string, co
 
 export function useChatGatewayStatusQuery() {
   return useQuery({
-    queryKey: ["chat-gateway-status"],
+    queryKey: controlPlaneQueryKeys.chatStatus,
     queryFn: () => getApiData<ChatGatewayStatus>("chat-gateway/status"),
     refetchInterval: 5000,
     retry: false,
@@ -386,7 +404,7 @@ export function useChatGatewayStatusQuery() {
 
 export function useChatBridgesQuery() {
   return useQuery({
-    queryKey: ["chat-gateway-bridges"],
+    queryKey: controlPlaneQueryKeys.chatBridges,
     queryFn: () => getApiData<ChatBridgeConfig[]>("chat-gateway/bridges"),
     retry: false,
   });
@@ -465,7 +483,7 @@ export function getInstanceAppManagementJob(instanceId: string, jobId: string) {
 }
 
 export function uploadAiSessionAttachment(input: { instanceId: string; sessionId: string; kind: "image" | "file"; name: string; mime: string; data: string }) {
-  return postApiData<AiSessionAttachment>("ai-session-attachments", input);
+  return postApiData<AiSessionUploadedAttachment>("ai-session-attachments", input);
 }
 
 export function sendAiSessionMessage(instanceId: string, sessionId: string, message: string, mode?: "auto" | "queue" | "steer" | "immediate", attachments: AiSessionAttachmentRef[] = [], references: AiSessionReference[] = [], permissionMode?: import("@task-handoff/protocol/ai-sessions").AiSessionPermissionMode) {

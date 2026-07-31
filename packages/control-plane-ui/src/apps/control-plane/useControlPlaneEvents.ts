@@ -12,7 +12,10 @@ import { AiSessionUnreadEventType, AiSessionUnreadStateSchema, type AiSessionUnr
 import type { SessionStreamDescriptor } from "@task-handoff/protocol/events";
 import type { AppManagementEvent } from "../../api/types";
 import type { InstanceResourceMetrics } from "../../api/types";
+import { controlPlaneQueryKeys } from "../../api/queryKeys.ts";
+import { controlPlaneDomainQueryKeys } from "../../api/queryInvalidation.ts";
 import { applyInstanceLifecycle } from "./instanceLifecycleCache.ts";
+import { controlPlaneEventDomains } from "./eventInvalidation.ts";
 import {
   AiSessionEventType,
   AppSessionEventType,
@@ -76,8 +79,7 @@ export function useControlPlaneEvents(input: {
     socket = current;
     current.addEventListener("open", () => {
       reconnectAttempt = 0;
-      void queryClient.invalidateQueries({ queryKey: ["instance-board"] });
-      void queryClient.invalidateQueries({ queryKey: ["instance-board-payload"] });
+      void queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.instanceBoard });
       void input.appManagement?.recoverOpen();
       void input.resourceMetrics?.recoverOpen();
     });
@@ -162,28 +164,7 @@ export function useControlPlaneEvents(input: {
   function scheduleTargetedInvalidation(events: EventMessage[]) {
     const topics = new Set(events.map((event) => event.topic).filter(Boolean));
     if (topics.has("triggers")) queueInvalidation(["control-plane-triggers"]);
-    if (topics.has("nodes")) {
-      queueInvalidation(["control-plane-nodes"]);
-      queueInvalidation(["control-plane-node-runtimes"]);
-      queueInvalidation(["instance-board"]);
-    }
-    if (topics.has("instances")) queueInvalidation(["instance-board"]);
-    if (topics.has("projects")) {
-      queueInvalidation(["control-plane-projects"]);
-      queueInvalidation(["instance-board"]);
-    }
-    if (topics.has("models")) queueInvalidation(["control-plane-models"]);
-    if (topics.has("images")) {
-      queueInvalidation(["control-plane-images"]);
-      queueInvalidation(["control-plane-image-options"]);
-      queueInvalidation(["node-image-catalog"]);
-      queueInvalidation(["instance-board"]);
-    }
-    if (topics.has("market")) {
-      queueInvalidation(["control-plane-market-catalog"]);
-      queueInvalidation(["control-plane-image-options"]);
-      queueInvalidation(["node-image-catalog"]);
-    }
+    for (const queryKey of controlPlaneDomainQueryKeys(controlPlaneEventDomains(events))) queueInvalidation(queryKey);
   }
 
   function queueInvalidation(queryKey: readonly unknown[]) {

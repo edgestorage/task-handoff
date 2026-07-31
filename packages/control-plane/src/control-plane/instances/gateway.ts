@@ -78,6 +78,7 @@ export class ControlledInstanceGateway {
     const response = await this.nodeAgentStreamRequest(node, `/instances/${encodeURIComponent(instance.id)}/proxy/stream`, {
       method: "POST",
       headers: { "content-type": "application/json" },
+      signal: init.signal,
       body: JSON.stringify({
         path,
         method: init.method || "GET",

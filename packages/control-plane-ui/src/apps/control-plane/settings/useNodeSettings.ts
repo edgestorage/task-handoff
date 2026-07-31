@@ -5,13 +5,15 @@ import { showControlPlaneToast } from "../useControlPlaneToasts";
 import { useNodeRename } from "./useNodeRename";
 import type { Translate } from "../../../i18n/status.ts";
 import { translateApiError } from "../../../i18n/apiError.ts";
+import { isActiveNodeUpdate, isTerminalNodeUpdate, refreshNodeUpdateHttpState } from "./nodeUpdatePolling.ts";
 
 type UseNodeSettingsInput = {
   errorText: (error: unknown) => string;
   notify?: typeof showControlPlaneToast;
   onNodeDeleted: (runtimeId: string) => void;
   onNodeRenamed: (node: Node) => void | Promise<void>;
-  refresh: () => Promise<void>;
+  refreshNodeRuntimeState: () => Promise<void>;
+  refreshNodeTopology: () => Promise<void>;
   nodes: () => Node[];
   runtimes: () => NodeRuntime[];
   updateNodeAction?: typeof updateNode;
@@ -20,7 +22,7 @@ type UseNodeSettingsInput = {
 };
 
 const CONTROL_PLANE_BUILTIN_NODE_LABEL = "task-handoff.control-plane.builtin";
-export function useNodeSettings({ errorText, notify = showControlPlaneToast, onNodeDeleted, onNodeRenamed, refresh, nodes, runtimes, updateNodeAction = updateNode, updateChannel, translate: t }: UseNodeSettingsInput) {
+export function useNodeSettings({ errorText, notify = showControlPlaneToast, onNodeDeleted, onNodeRenamed, refreshNodeRuntimeState, refreshNodeTopology, nodes, runtimes, updateNodeAction = updateNode, updateChannel, translate: t }: UseNodeSettingsInput) {
   const translateError = (error: unknown) => translateApiError(error, t, errorText(error));
   const creatingNode = ref(false);
   const syncingLocalNode = ref(false);
@@ -85,7 +87,7 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
       settingsNode.name = "";
       settingsNode.endpoint = "";
       settingsNode.joinToken = "";
-      await refresh();
+      await refreshNodeTopology();
     } catch (error) {
       notify(translateError(error));
     } finally {
@@ -102,7 +104,7 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
     try {
       const node = await syncLocalNode();
       try {
-        await refresh();
+        await refreshNodeTopology();
         notify(t("settings.nodeDetail.nodeAdded", { name: node.name }), "success");
       } catch (error) {
         notify(t("settings.nodeDetail.nodeAddedRefreshFailed", { name: node.name, error: translateError(error) }));
@@ -174,7 +176,6 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
       };
       remoteConnect.joinToken = "";
       await loadControlPlaneAccess(id);
-      await refresh();
     } catch (error) {
       showControlPlaneToast(translateError(error));
     } finally {
@@ -274,7 +275,7 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
 
   function scheduleManagedUpdateJobsRefresh(nodeId: string) {
     if (updateJobsRefreshTimer) clearTimeout(updateJobsRefreshTimer);
-    const active = updateJobs.value.some((job) => ["queued", "updating-node", "restarting-node", "converging-instances"].includes(job.status));
+    const active = updateJobs.value.some((job) => isActiveNodeUpdate(job.status));
     if (!active) return;
     updateJobsRefreshTimer = setTimeout(() => void loadManagedUpdateJobs(nodeId, true), 2_000);
   }
@@ -288,8 +289,12 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
       if (revision !== updateJobsLoadRevision) return;
       updateJobs.value = jobs;
       const latest = jobs[0];
-      if (latest && ["succeeded", "degraded", "failed"].includes(latest.status)) delete updateChecks[nodeId];
-      await Promise.all([checkSettingsNode(nodeId), refresh()]);
+      if (isTerminalNodeUpdate(latest?.status)) delete updateChecks[nodeId];
+      await refreshNodeUpdateHttpState({
+        status: latest?.status,
+        refreshRuntimeState: refreshNodeRuntimeState,
+        refreshTopology: refreshNodeTopology,
+      });
     } catch (error) {
       if (!silent) showControlPlaneToast(translateError(error));
     } finally {
@@ -346,7 +351,7 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
         onNodeDeleted(runtime.id);
       }
       await deleteNode(target.id);
-      await refresh();
+      await refreshNodeTopology();
     } catch (error) {
       showControlPlaneToast(translateError(error));
     } finally {

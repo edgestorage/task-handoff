@@ -12,6 +12,7 @@ test("instance detail consumes resource snapshots in the existing footer", () =>
   const detail = read("src/apps/control-plane/instance-detail/InstanceDetail.vue");
   const preview = read("src/apps/control-plane/instance-detail/SessionPreview.vue");
   const events = read("src/apps/control-plane/useControlPlaneEvents.ts");
+  const eventInvalidation = read("src/apps/control-plane/eventInvalidation.ts");
 
   assert.match(workbench, /<InstanceDetail[\s\S]*?:resource-metrics="activeInstanceResourceMetrics"/);
   assert.match(workbench, /:resource-metrics-error="activeInstanceResourceMetricsError"/);
@@ -27,6 +28,7 @@ test("instance detail consumes resource snapshots in the existing footer", () =>
   assert.match(events, /InstanceResourceMetricsSchema\.safeParse/);
   assert.match(events, /event\.scope\?\.instanceId !== metrics\.data\.instanceId/);
   assert.doesNotMatch(events, /input\.refresh/);
-  assert.match(events, /queueInvalidation\(\["instance-board"\]\)/);
+  assert.match(eventInvalidation, /topics\.has\("instances"\)\) domains\.push\("instances"\)/);
+  assert.match(events, /controlPlaneDomainQueryKeys\(controlPlaneEventDomains\(events\)\)/);
   assert.match(events, /queueInvalidation\(\["control-plane-triggers"\]\)/);
 });

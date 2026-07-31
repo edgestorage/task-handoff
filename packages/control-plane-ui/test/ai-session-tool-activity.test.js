@@ -12,8 +12,9 @@ const sessions = fs.readFileSync(new URL("../src/apps/control-plane/useInstanceS
 const types = fs.readFileSync(new URL("../src/api/types.ts", import.meta.url), "utf8");
 
 test("tool activity uses the authoritative API projection", () => {
-  assert.match(types, /export type AiSessionTool = \{[\s\S]*?id\?: string;[\s\S]*?kind\?: string;[\s\S]*?name: string;/);
-  assert.match(types, /currentTool\?: AiSessionTool;\s*toolCallsSinceLastMessage: number;/);
+  assert.match(types, /AiSessionTool as ProtocolAiSessionTool/);
+  assert.match(types, /export type AiSessionTool = ProtocolAiSessionTool/);
+  assert.match(types, /export type AiSessionSummary = ProtocolAiSessionSummary/);
   assert.match(activity, /props\.toolCallsSinceLastMessage/);
   assert.match(activity, /props\.currentTool\?\.name/);
   assert.match(activity, /props\.summary/);

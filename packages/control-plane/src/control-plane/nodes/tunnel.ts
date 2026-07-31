@@ -12,12 +12,25 @@ import {
   ImagePullTerminalOutputSchema,
   type Node,
 } from "@task-handoff/protocol/control-plane";
-import { SessionStreamsHelloSchema, type SessionStreamsHello } from "@task-handoff/protocol/events";
+import {
+  AiSessionEventType,
+  AiSessionMessageDeltaEventSchema,
+  AiSessionPatchEventSchema,
+  AiSessionRemovedEventSchema,
+  AiSessionSnapshotEventSchema,
+} from "@task-handoff/protocol/ai-sessions";
+import {
+  AppSessionEventType,
+  AppSessionPatchEventSchema,
+  AppSessionRemovedEventSchema,
+  AppSessionSnapshotEventSchema,
+} from "@task-handoff/protocol/app-sessions";
+import { SessionStreamsHelloSchema, type EventEnvelope, type SessionStreamsHello } from "@task-handoff/protocol/events";
 import { bridgeWebSockets, closeWebSocket, normalizeWebSocketCloseCode, normalizeWebSocketCloseReason, type WebSocketLike } from "@task-handoff/protocol/websocket-bridge";
 import type { ControlPlaneService } from "../application/service.ts";
 import type { NodeAgentTransport } from "./client.ts";
 import type { ControlPlaneEventBus } from "../events/bus.ts";
-import { createNodeAgentHmacHeaders, hmacHeadersFromRecord, sha256Hex, signNodeAgentRequest, timingSafeHexEqual, NODE_AGENT_HMAC_TIMESTAMP_WINDOW_MS, NODE_TUNNEL_API_PATH } from "../../shared/security/node-agent-auth.ts";
+import { createDirectNodeAgentAuthHeaders, hmacHeadersFromRecord, sha256Hex, signNodeAgentRequest, timingSafeHexEqual, NODE_AGENT_HMAC_TIMESTAMP_WINDOW_MS, NODE_TUNNEL_API_PATH } from "../../shared/security/node-agent-auth.ts";
 import { createNodeAgentIpcWebSocket, parseNodeAgentIpcEndpoint } from "../../shared/transport/node-agent-ipc.ts";
 import { EventConnectionRetryTimer, eventConnectionSafetyIntervalMs } from "../../shared/events/connection-retry.ts";
 
@@ -27,6 +40,36 @@ const NodeAgentTunnelQuerySchema = z
   })
   .strict();
 
+const SESSION_EVENT_TYPES = new Set<string>([
+  AiSessionEventType.Snapshot,
+  AiSessionEventType.Patch,
+  AiSessionEventType.Removed,
+  AiSessionEventType.MessageDelta,
+  AppSessionEventType.Snapshot,
+  AppSessionEventType.Patch,
+  AppSessionEventType.Removed,
+]);
+
+const SESSION_EVENT_SCHEMAS = {
+  [AiSessionEventType.Snapshot]: AiSessionSnapshotEventSchema,
+  [AiSessionEventType.Patch]: AiSessionPatchEventSchema,
+  [AiSessionEventType.Removed]: AiSessionRemovedEventSchema,
+  [AiSessionEventType.MessageDelta]: AiSessionMessageDeltaEventSchema,
+  [AppSessionEventType.Snapshot]: AppSessionSnapshotEventSchema,
+  [AppSessionEventType.Patch]: AppSessionPatchEventSchema,
+  [AppSessionEventType.Removed]: AppSessionRemovedEventSchema,
+} as const;
+
+function parseSessionEvent(eventType: string, payload: unknown) {
+  const schema = SESSION_EVENT_SCHEMAS[eventType as keyof typeof SESSION_EVENT_SCHEMAS];
+  if (!schema) return undefined;
+  const parsed = schema.safeParse(payload);
+  if (!parsed.success) return undefined;
+  const data = parsed.data;
+  const instanceId = "meta" in data ? data.meta.instanceId : data.instanceId;
+  return { instanceId, payload: data };
+}
+
 type NodeAgentSocket = {
   send: (data: string | Buffer) => void;
   close: (code?: number, reason?: string) => void;
@@ -34,45 +77,44 @@ type NodeAgentSocket = {
   readyState: number;
 };
 
+type ReverseTunnelSocket = {
+  send: (data: string) => void;
+  close?: (code?: number, reason?: string) => void;
+  readyState?: number;
+  on?: (event: string, listener: (...args: unknown[]) => void) => void;
+};
+
+type ReverseHttpStreamEntry = {
+  resolve: (response: Response) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+  body?: PassThrough;
+  socket?: NodeAgentSocket;
+  settled: boolean;
+  finalized: boolean;
+  signal?: AbortSignal;
+  onAbort?: () => void;
+};
+
+type ReversePendingRequest = {
+  resolve: (response: Response) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+  signal?: AbortSignal;
+  onAbort?: () => void;
+};
+
+type ReverseTunnelConnection = {
+  socket: ReverseTunnelSocket;
+  pending: Map<string, ReversePendingRequest>;
+  streams: Map<string, { downstream: WebSocketLike; upstream?: WebSocketLike; pendingFrames: Array<{ data: unknown; isBinary: boolean }> }>;
+  httpStreams: Map<string, ReverseHttpStreamEntry>;
+};
+
 type TunnelErrorPayload = {
   code: string;
   message: string;
 };
-
-function nodeAgentRemoteAuth(node: Node) {
-  return node.auth.mode === "paired-hmac" && node.auth.secret
-    ? { keyId: node.auth.keyId, secret: node.auth.secret }
-    : undefined;
-}
-
-function requireNodeAgentRemoteKeyId(node: Node, keyId: string | undefined) {
-  if (!keyId) {
-    throw Object.assign(new Error(`Node ${node.id} paired-HMAC auth is missing keyId.`), { statusCode: 500, code: "NODE_AGENT_REMOTE_KEY_ID_MISSING" });
-  }
-  return keyId;
-}
-
-function nodeAgentLocalStaticToken(node: Node) {
-  if (node.connectionMode !== "local-ipc" && node.connectionMode !== "local-loopback") {
-    return undefined;
-  }
-  return node.auth.mode === "local-static-key" ? node.auth.secret : undefined;
-}
-
-function createDirectNodeAgentAuthHeaders(node: Node, input: { method: string; pathWithQuery: string }) {
-  const remoteAuth = nodeAgentRemoteAuth(node);
-  if (remoteAuth) {
-    return createNodeAgentHmacHeaders({
-      nodeId: node.id,
-      keyId: requireNodeAgentRemoteKeyId(node, remoteAuth.keyId),
-      secret: remoteAuth.secret,
-      method: input.method,
-      pathWithQuery: input.pathWithQuery,
-    });
-  }
-  const token = nodeAgentLocalStaticToken(node);
-  return token ? { authorization: `Bearer ${token}` } : undefined;
-}
 
 function createRequestId() {
   return `req_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
@@ -134,70 +176,81 @@ function requestHeaders(headers: HeadersInit | undefined) {
 }
 
 export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport {
-  private readonly sockets = new Map<string, {
-    socket: { send: (data: string) => void; readyState?: number };
-    pending: Map<string, { resolve: (response: Response) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>;
-    streams: Map<string, { downstream: WebSocketLike; upstream?: WebSocketLike; pendingFrames: Array<{ data: unknown; isBinary: boolean }> }>;
-    httpStreams: Map<string, { resolve: (response: Response) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout>; body?: PassThrough; socket?: NodeAgentSocket; settled: boolean }>;
-  }>();
+  private readonly sockets = new Map<string, ReverseTunnelConnection>();
   private readonly events?: ControlPlaneEventBus;
   private readonly onStreamsHello?: (instanceId: string, hello: SessionStreamsHello) => void | Promise<void>;
+  private readonly onSessionEvent?: (event: EventEnvelope) => boolean;
   private readonly validateInstanceScope?: (nodeId: string, instanceId: string) => boolean | Promise<boolean>;
-  private readonly validatedInstanceScopes = new Map<string, number>();
+  private readonly validatedInstanceScopes = new Map<string, { nodeId: string; instanceId: string; expiresAt: number }>();
   private readonly validatingInstanceScopes = new Map<string, Promise<boolean>>();
   private readonly instanceEventQueues = new Map<string, Promise<void>>();
+  private readonly httpStreamHeaderTimeoutMs: number;
+  private readonly requestTimeoutMs: number;
 
   constructor(events?: ControlPlaneEventBus, options: {
     onStreamsHello?: (instanceId: string, hello: SessionStreamsHello) => void | Promise<void>;
+    onSessionEvent?: (event: EventEnvelope) => boolean;
     validateInstanceScope?: (nodeId: string, instanceId: string) => boolean | Promise<boolean>;
+    httpStreamHeaderTimeoutMs?: number;
+    requestTimeoutMs?: number;
   } = {}) {
     this.events = events;
     this.onStreamsHello = options.onStreamsHello;
+    this.onSessionEvent = options.onSessionEvent;
     this.validateInstanceScope = options.validateInstanceScope;
+    this.httpStreamHeaderTimeoutMs = options.httpStreamHeaderTimeoutMs ?? 30_000;
+    this.requestTimeoutMs = options.requestTimeoutMs ?? 30_000;
   }
 
-  attach(nodeId: string, socket: { send: (data: string) => void; readyState?: number; on?: (event: string, listener: (...args: unknown[]) => void) => void }) {
+  attach(nodeId: string, socket: ReverseTunnelSocket) {
     const current = this.sockets.get(nodeId);
-    if (current) {
-      for (const entry of current.pending.values()) {
-        clearTimeout(entry.timer);
-        entry.reject(new Error(`Reverse tunnel for node ${nodeId} was replaced.`));
-      }
-      for (const [streamId, stream] of current.streams) {
-        current.streams.delete(streamId);
-        stream.downstream.close(1011, "Reverse tunnel was replaced.");
-      }
-      for (const stream of current.httpStreams.values()) {
-        clearTimeout(stream.timer);
-        stream.body?.destroy(new Error(`Reverse tunnel for node ${nodeId} was replaced.`));
-        if (!stream.settled) stream.reject(new Error(`Reverse tunnel for node ${nodeId} was replaced.`));
-      }
-    }
-    const pending = new Map<string, { resolve: (response: Response) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
-    this.sockets.set(nodeId, { socket, pending, streams: new Map(), httpStreams: new Map() });
+    if (current?.socket === socket) return;
+    if (current) this.invalidateInstanceScope({ nodeId });
+    const pending = new Map<string, ReversePendingRequest>();
+    const next: ReverseTunnelConnection = { socket, pending, streams: new Map(), httpStreams: new Map() };
+    this.sockets.set(nodeId, next);
     socket.on?.("close", () => this.detach(nodeId, socket));
     socket.on?.("error", () => this.detach(nodeId, socket));
+    if (current && current.socket !== socket) {
+      this.finalizeConnection(current, new Error(`Reverse tunnel for node ${nodeId} was replaced.`), "Reverse tunnel was replaced.", true);
+    }
   }
 
-  detach(nodeId: string, socket?: { send: (data: string) => void }) {
+  detach(nodeId: string, socket?: ReverseTunnelSocket) {
     const current = this.sockets.get(nodeId);
     if (!current || (socket && current.socket !== socket)) {
       return;
     }
     this.sockets.delete(nodeId);
-    for (const entry of current.pending.values()) {
-      clearTimeout(entry.timer);
-      entry.reject(new Error(`Reverse tunnel for node ${nodeId} disconnected.`));
+    this.invalidateInstanceScope({ nodeId });
+    this.finalizeConnection(current, new Error(`Reverse tunnel for node ${nodeId} disconnected.`), "Reverse tunnel disconnected.", true);
+  }
+
+  private finalizeConnection(connection: ReverseTunnelConnection, error: Error, reason: string, closeMainSocket: boolean) {
+    for (const requestId of [...connection.pending.keys()]) this.cancelPendingRequest(connection, requestId, error, false);
+    for (const [streamId, stream] of connection.streams) {
+      connection.streams.delete(streamId);
+      stream.downstream.close(1011, reason);
     }
-    for (const [streamId, stream] of current.streams) {
-      current.streams.delete(streamId);
-      stream.downstream.close(1011, "Reverse tunnel disconnected.");
+    for (const streamId of [...connection.httpStreams.keys()]) {
+      this.cancelHttpStream(connection, streamId, error, reason, false);
     }
-    for (const stream of current.httpStreams.values()) {
-      clearTimeout(stream.timer);
-      stream.body?.destroy(new Error(`Reverse tunnel for node ${nodeId} disconnected.`));
-      if (!stream.settled) stream.reject(new Error(`Reverse tunnel for node ${nodeId} disconnected.`));
+    if (closeMainSocket && connection.socket.close && connection.socket.readyState !== 3) {
+      try {
+        connection.socket.close(1000, reason);
+      } catch {
+        // Connection state is already finalized even if the transport cannot close cleanly.
+      }
     }
+  }
+
+  isCurrentSocket(nodeId: string, socket: { send: (data: string) => void }) {
+    return this.sockets.get(nodeId)?.socket === socket;
+  }
+
+  handleSocketMessage(nodeId: string, socket: { send: (data: string) => void }, message: Record<string, unknown>) {
+    if (!this.isCurrentSocket(nodeId, socket)) return undefined;
+    return this.handleMessage(nodeId, message);
   }
 
   handleMessage(nodeId: string, message: Record<string, unknown>) {
@@ -218,6 +271,7 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
     }
     current.pending.delete(requestId);
     clearTimeout(entry.timer);
+    if (entry.signal && entry.onAbort) entry.signal.removeEventListener("abort", entry.onAbort);
     const status = Number(message.status) || 502;
     const headers = message.headers && typeof message.headers === "object" ? message.headers as Record<string, string> : {};
     const body = typeof message.body === "string" ? message.body : "";
@@ -289,6 +343,30 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
       });
       return true;
     }
+    if (SESSION_EVENT_TYPES.has(eventType)) {
+      const parsed = parseSessionEvent(eventType, payload);
+      if (!parsed) return true;
+      const claimedInstanceIds = [scope.instanceId, event.instanceId, forwardedInstanceId]
+        .filter((value): value is string => typeof value === "string" && Boolean(value));
+      if (claimedInstanceIds.some((instanceId) => instanceId !== parsed.instanceId)) return true;
+      const instanceId = parsed.instanceId;
+      this.enqueueValidatedInstanceEvent(nodeId, instanceId, () => {
+        const eventScope = { ...scope, nodeId, instanceId };
+        const envelope: EventEnvelope = {
+          v: 1,
+          id: typeof event.id === "string" ? event.id : `forwarded_${Date.now().toString(36)}`,
+          seq: typeof event.seq === "number" ? event.seq : 0,
+          type: eventType,
+          topic: typeof event.topic === "string" ? event.topic : eventType.startsWith("app-session.") ? "app.sessions" : "ai.sessions",
+          createdAt: typeof event.createdAt === "string" ? event.createdAt : new Date().toISOString(),
+          payload: parsed.payload,
+          scope: eventScope,
+        };
+        if (this.onSessionEvent && !this.onSessionEvent(envelope)) return;
+        this.events?.publish(eventType, parsed.payload, { topic: envelope.topic, scope: eventScope });
+      });
+      return true;
+    }
     this.events?.publish(eventType, payload, {
       topic: typeof event.topic === "string" ? event.topic : undefined,
       scope: {
@@ -315,7 +393,7 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
   private async isValidatedInstanceScope(nodeId: string, instanceId: string) {
     const cacheKey = `${nodeId}:${instanceId}`;
     const now = Date.now();
-    if ((this.validatedInstanceScopes.get(cacheKey) || 0) > now) return true;
+    if ((this.validatedInstanceScopes.get(cacheKey)?.expiresAt || 0) > now) return true;
     const existing = this.validatingInstanceScopes.get(cacheKey);
     if (existing) return existing;
     const validation = (async () => {
@@ -325,13 +403,21 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
       } catch {
         valid = false;
       }
-      if (valid) this.validatedInstanceScopes.set(cacheKey, Date.now() + 30_000);
+      if (valid) this.validatedInstanceScopes.set(cacheKey, { nodeId, instanceId, expiresAt: Date.now() + 30_000 });
       return valid;
     })();
     this.validatingInstanceScopes.set(cacheKey, validation);
     return validation.finally(() => {
       if (this.validatingInstanceScopes.get(cacheKey) === validation) this.validatingInstanceScopes.delete(cacheKey);
     });
+  }
+
+  invalidateInstanceScope(input: { nodeId?: string; instanceId?: string } = {}) {
+    for (const [cacheKey, entry] of this.validatedInstanceScopes) {
+      if (input.nodeId && entry.nodeId !== input.nodeId) continue;
+      if (input.instanceId && entry.instanceId !== input.instanceId) continue;
+      this.validatedInstanceScopes.delete(cacheKey);
+    }
   }
 
   async request(node: { id: string }, route: string, init: RequestInit = {}) {
@@ -354,15 +440,61 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
       },
     };
     return new Promise<Response>((resolve, reject) => {
+      let entry: ReversePendingRequest;
       const timer = setTimeout(() => {
-        current.pending.delete(requestId);
         const error = new Error(`Reverse tunnel request to ${node.id}${route} timed out.`);
         Object.assign(error, { statusCode: 504, code: "NODE_AGENT_REVERSE_REQUEST_TIMEOUT" });
-        reject(error);
-      }, 30_000);
-      current.pending.set(requestId, { resolve, reject, timer });
-      current.socket.send(JSON.stringify(payload));
+        this.cancelPendingRequest(current, requestId, error);
+      }, this.requestTimeoutMs);
+      entry = {
+        resolve,
+        reject,
+        timer,
+        signal: init.signal || undefined,
+      };
+      if (init.signal) {
+        entry.onAbort = () => {
+          this.cancelPendingRequest(
+            current,
+            requestId,
+            Object.assign(new Error("Reverse tunnel request was aborted."), { name: "AbortError", code: "ABORT_ERR" }),
+          );
+        };
+        init.signal.addEventListener("abort", entry.onAbort, { once: true });
+      }
+      current.pending.set(requestId, entry);
+      if (init.signal?.aborted) {
+        entry.onAbort?.();
+        return;
+      }
+      try {
+        current.socket.send(JSON.stringify(payload));
+      } catch (error) {
+        this.cancelPendingRequest(current, requestId, error instanceof Error ? error : new Error(String(error)), false);
+      }
     });
+  }
+
+  private cancelPendingRequest(
+    current: ReverseTunnelConnection,
+    requestId: string,
+    error: Error,
+    notifyNode = true,
+  ) {
+    const entry = current.pending.get(requestId);
+    if (!entry) return false;
+    current.pending.delete(requestId);
+    clearTimeout(entry.timer);
+    if (entry.signal && entry.onAbort) entry.signal.removeEventListener("abort", entry.onAbort);
+    entry.reject(error);
+    if (notifyNode) {
+      try {
+        current.socket.send(JSON.stringify({ type: "control-plane.request.cancel", requestId }));
+      } catch {
+        // The request is already settled locally even if the tunnel closed concurrently.
+      }
+    }
+    return true;
   }
 
   async requestStream(node: { id: string }, route: string, init: RequestInit = {}) {
@@ -374,17 +506,74 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
     const body = typeof init.body === "string" ? init.body : init.body === undefined || init.body === null ? undefined : String(init.body);
     return new Promise<Response>((resolve, reject) => {
       const timer = setTimeout(() => {
-        current.httpStreams.delete(streamId);
-        reject(Object.assign(new Error(`Reverse tunnel stream to ${node.id}${route} timed out.`), { statusCode: 504, code: "NODE_AGENT_REVERSE_STREAM_TIMEOUT" }));
-      }, 30_000);
-      current.httpStreams.set(streamId, { resolve, reject, timer, settled: false });
-      current.socket.send(JSON.stringify({
-        type: "control-plane.http.open",
-        streamId,
-        route,
-        init: { method: init.method || "GET", headers: requestHeaders(init.headers), body },
-      }));
+        this.cancelHttpStream(
+          current,
+          streamId,
+          Object.assign(new Error(`Reverse tunnel stream to ${node.id}${route} timed out.`), { statusCode: 504, code: "NODE_AGENT_REVERSE_STREAM_TIMEOUT" }),
+          "Reverse HTTP stream header timeout.",
+        );
+      }, this.httpStreamHeaderTimeoutMs);
+      const stream: ReverseHttpStreamEntry = { resolve, reject, timer, settled: false, finalized: false, signal: init.signal || undefined };
+      current.httpStreams.set(streamId, stream);
+      if (init.signal) {
+        stream.onAbort = () => this.cancelHttpStream(
+          current,
+          streamId,
+          Object.assign(new Error("Reverse HTTP stream consumer disconnected."), { name: "AbortError", code: "ABORT_ERR" }),
+          "HTTP consumer disconnected.",
+        );
+        init.signal.addEventListener("abort", stream.onAbort, { once: true });
+        if (init.signal.aborted) {
+          stream.onAbort();
+          return;
+        }
+      }
+      try {
+        current.socket.send(JSON.stringify({
+          type: "control-plane.http.open",
+          streamId,
+          route,
+          init: { method: init.method || "GET", headers: requestHeaders(init.headers), body },
+        }));
+      } catch (error) {
+        this.cancelHttpStream(current, streamId, error instanceof Error ? error : new Error(String(error)), "Reverse tunnel send failed.", false);
+      }
     });
+  }
+
+  private cancelHttpStream(current: ReverseTunnelConnection, streamId: string, error: Error, reason: string, notifyNode = true) {
+    const stream = current.httpStreams.get(streamId);
+    if (!stream || stream.finalized) return false;
+    stream.finalized = true;
+    current.httpStreams.delete(streamId);
+    clearTimeout(stream.timer);
+    if (stream.signal && stream.onAbort) stream.signal.removeEventListener("abort", stream.onAbort);
+    if (!stream.settled) {
+      stream.settled = true;
+      stream.reject(error);
+    } else {
+      stream.body?.destroy(error);
+    }
+    if (stream.socket?.readyState === 1) stream.socket.close(1000, reason);
+    if (notifyNode) {
+      try {
+        current.socket.send(JSON.stringify({ type: "control-plane.http.cancel", streamId, reason }));
+      } catch {
+        // The child socket close above still cancels an already-bound node request.
+      }
+    }
+    return true;
+  }
+
+  private completeHttpStream(current: ReverseTunnelConnection, streamId: string) {
+    const stream = current.httpStreams.get(streamId);
+    if (!stream || stream.finalized) return false;
+    stream.finalized = true;
+    current.httpStreams.delete(streamId);
+    clearTimeout(stream.timer);
+    if (stream.signal && stream.onAbort) stream.signal.removeEventListener("abort", stream.onAbort);
+    stream.body?.end();
+    return true;
   }
 
   attachHttpStream(nodeId: string, streamId: string, socket: NodeAgentSocket) {
@@ -396,16 +585,10 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
     }
     stream.socket = socket;
     const fail = (error: Error) => {
-      clearTimeout(stream.timer);
-      current.httpStreams.delete(streamId);
-      if (!stream.settled) {
-        stream.settled = true;
-        stream.reject(error);
-      } else {
-        stream.body?.destroy(error);
-      }
+      this.cancelHttpStream(current, streamId, error, "Reverse HTTP stream failed.");
     };
     socket.on("message", (raw: unknown, isBinary: unknown) => {
+      if (stream.finalized || current.httpStreams.get(streamId) !== stream) return;
       if (isBinary) {
         if (!stream.body) return fail(new Error("Reverse HTTP stream received data before response headers."));
         if (!stream.body.write(Buffer.isBuffer(raw) ? raw : Buffer.from(raw as ArrayBuffer))) {
@@ -430,15 +613,17 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
         stream.body = body;
         stream.settled = true;
         body.once("close", () => {
-          if (current.httpStreams.delete(streamId) && socket.readyState === 1) socket.close(1000, "HTTP consumer closed.");
+          this.cancelHttpStream(current, streamId, new Error("Reverse HTTP stream consumer closed."), "HTTP consumer closed.");
         });
         stream.resolve(new Response(Readable.toWeb(body) as ReadableStream<Uint8Array>, { status, headers }));
         return;
       }
       if (message.type === "node-agent.http.end") {
-        current.httpStreams.delete(streamId);
-        stream.body?.end();
-        if (!stream.settled) fail(new Error("Reverse HTTP stream ended before response headers."));
+        if (!stream.settled) {
+          fail(new Error("Reverse HTTP stream ended before response headers."));
+        } else {
+          this.completeHttpStream(current, streamId);
+        }
         return;
       }
       if (message.type === "node-agent.http.error") {
@@ -446,7 +631,7 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
       }
     });
     socket.on("close", () => {
-      if (current.httpStreams.has(streamId)) fail(new Error("Reverse HTTP stream disconnected."));
+      fail(new Error("Reverse HTTP stream disconnected."));
     });
     socket.on("error", () => fail(new Error("Reverse HTTP stream failed.")));
     return true;
@@ -696,6 +881,7 @@ export class ControlPlaneNodeEventSubscriber {
       this.retries.set(node.id, { timer: retry?.timer || new EventConnectionRetryTimer(), url });
     });
     socket.on("message", (raw) => {
+      if (this.sockets.get(node.id) !== socket) return;
       let message: unknown;
       try {
         message = JSON.parse(String(raw));
@@ -790,6 +976,7 @@ export function registerNodeAgentTunnelRoutes(options: {
       );
 
       socket.on("message", (raw) => {
+        if (!nodeAgentTunnel.isCurrentSocket(node.id, socket)) return;
         let message: unknown;
         try {
           message = JSON.parse(String(raw));
@@ -798,7 +985,8 @@ export function registerNodeAgentTunnelRoutes(options: {
           return;
         }
         const record = message && typeof message === "object" ? (message as Record<string, unknown>) : {};
-        if (nodeAgentTunnel.handleMessage(node.id, record)) {
+        const handled = nodeAgentTunnel.handleSocketMessage(node.id, socket, record);
+        if (handled === undefined || handled) {
           return;
         }
         if (record.type === "node-agent.ping") {

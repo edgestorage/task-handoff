@@ -33,7 +33,9 @@ function instance(phase, overrides = {}) {
 
 test("node image availability queries are isolated by node id", () => {
   const queries = read("src/api/queries.ts");
-  assert.match(queries, /queryKey: computed\(\(\) => \["node-image-catalog", resolvedNodeId\.value\]\)/);
+  const queryKeys = read("src/api/queryKeys.ts");
+  assert.match(queries, /queryKey: computed\(\(\) => controlPlaneQueryKeys\.nodeImageCatalog\(resolvedNodeId\.value\)\)/);
+  assert.match(queryKeys, /nodeImageCatalog: \(nodeId\?: string\)/);
   assert.match(queries, /enabled: computed\(\(\) => Boolean\(resolvedNodeId\.value\)\)/);
 });
 

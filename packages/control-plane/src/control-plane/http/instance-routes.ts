@@ -4,6 +4,7 @@ import type { ControlPlaneService } from "../application/service.ts";
 import type { ControlPlaneEventBus } from "../events/bus.ts";
 import { IdParamsSchema } from "./route-params.ts";
 import { AppManagementOperationRequestSchema } from "@task-handoff/protocol/control-plane";
+import { withRequestSignal } from "./request-signal.ts";
 
 export type RegisterInstanceRoutesOptions = {
   app: FastifyInstance;
@@ -88,8 +89,8 @@ export function registerInstanceRoutes({ app, service, events }: RegisterInstanc
     events.publish("instance.config-synced", { instanceId: id });
     return { data: result };
   });
-  app.get("/api/instance-board", async () => {
-    const result = await service.boardWithDiagnostics();
+  app.get("/api/instance-board", async (request, reply) => withRequestSignal(request, reply, async (signal) => {
+    const result = await service.boardWithDiagnostics(signal);
     return { data: result.items, meta: { nodeErrors: result.nodeErrors } };
-  });
+  }));
 }

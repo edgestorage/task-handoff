@@ -268,13 +268,12 @@ import { useI18n } from "vue-i18n";
 import { formatTime } from "../../i18n/presentation";
 import type { SupportedLocale } from "../../i18n/locale";
 import { translateApiError } from "../../i18n/apiError";
-import { useQueryClient } from "@tanstack/vue-query";
+import { useQueries, useQueryClient } from "@tanstack/vue-query";
 import { useEventListener } from "@vueuse/core";
 import { Bot, Download, House, LayoutGrid, LogOut, Maximize2, Minus, RefreshCw, Settings, X } from "@lucide/vue";
 import "@xterm/xterm/css/xterm.css";
-import { getInstanceAppManagement, getInstanceResourceMetrics, installInstanceApp, logoutControlPlane, renameAppSession, resolveAiSessionApproval, uninstallInstanceApp, updateControlledInstance, useAuthSessionQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useInstanceBoardQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
+import { controlPlaneQueryKeys, getInstanceAppManagement, getInstanceResourceMetrics, installInstanceApp, logoutControlPlane, nodeLocalFoldersQueryOptions, renameAppSession, resolveAiSessionApproval, uninstallInstanceApp, updateControlledInstance, useAuthSessionQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useInstanceBoardQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
 import type { ConfigSyncDirection } from "@task-handoff/protocol/config-sync";
-import { getApiData } from "../../api/client";
 import { type AiSessionSummary, type AppManagementOperation, type InstanceBoardItem, type InstanceResourceMetrics, type NodeLocalFolder, type UpdateControlledInstanceInput } from "../../api/types";
 import { Button } from "../../components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../components/ui/tooltip";
@@ -387,8 +386,6 @@ const openInstanceMenuId = ref("");
 const signingOut = ref(false);
 const aiApprovalBusyKey = ref("");
 const boardSessionKeys = reactive<Record<string, string>>({});
-const nodeLocalFoldersByNodeId = reactive<Record<string, NodeLocalFolder[]>>({});
-const nodeLocalFolderLoads = reactive<Record<string, boolean>>({});
 const desktopBridge = (window as Window & { taskHandoffDesktop?: DesktopBridge }).taskHandoffDesktop;
 const serverUpdateNodeId = computed(() => desktopBridge ? "" : nodes.data.value?.find((node) => node.labels["task-handoff.control-plane.builtin"] === "true")?.id || "");
 const serverUpdateQuery = useServerUpdateCheckQuery(serverUpdateNodeId);
@@ -433,6 +430,13 @@ const {
 } = useWorkbenchInstances({
   instances: boardInstancesWithAppSessions,
 });
+const nodeLocalFolderNodeIds = computed(() => [...new Set(sortedInstances.value.map((instance) => instance.nodeId).filter(Boolean))].sort());
+const nodeLocalFolderQueries = useQueries({
+  queries: () => nodeLocalFolderNodeIds.value.map(nodeLocalFoldersQueryOptions),
+});
+const nodeLocalFoldersByNodeId = computed<Record<string, NodeLocalFolder[]>>(() => Object.fromEntries(
+  nodeLocalFolderQueries.value.map((query, index) => [nodeLocalFolderNodeIds.value[index], query.data || []]),
+));
 const activeInstanceWithAiSessions = computed(() => aiSessionStore.instanceWithAiSessions(activeInstance.value));
 const resourceMetricsByInstanceId = reactive<Record<string, InstanceResourceMetrics>>({});
 const resourceMetricsErrorByInstanceId = reactive<Record<string, string>>({});
@@ -489,7 +493,7 @@ const boardAppOptions = computed(() => {
     .map(([appId, count]) => ({ appId, count }))
     .sort((a, b) => appDisplayName(a.appId, t).localeCompare(appDisplayName(b.appId, t)));
 });
-const activeNodeLocalFolders = computed(() => activeInstance.value ? nodeLocalFoldersByNodeId[activeInstance.value.nodeId] || [] : []);
+const activeNodeLocalFolders = computed(() => activeInstance.value ? nodeLocalFoldersByNodeId.value[activeInstance.value.nodeId] || [] : []);
 const configSyncInstance = computed(() => sortedInstances.value.find((instance) => instance.id === configSyncInstanceId.value));
 const topbarKicker = computed(() => (settingsMode.value ? t("navigation.settings") : t("common.productName")));
 const topbarTitle = computed(() => {
@@ -643,30 +647,6 @@ watch(
   { flush: "post" },
 );
 
-watch(
-  () => [...new Set(sortedInstances.value.map((instance) => instance.nodeId).filter(Boolean))].sort().join("\n"),
-  (value) => {
-    for (const nodeId of value.split("\n").filter(Boolean)) {
-      void loadNodeLocalFolders(nodeId);
-    }
-  },
-  { immediate: true },
-);
-
-async function loadNodeLocalFolders(nodeId: string) {
-  if (!nodeId || nodeLocalFolderLoads[nodeId]) {
-    return;
-  }
-  nodeLocalFolderLoads[nodeId] = true;
-  try {
-    nodeLocalFoldersByNodeId[nodeId] = await getApiData<NodeLocalFolder[]>(`nodes/${nodeId}/local-folders`);
-  } catch {
-    nodeLocalFoldersByNodeId[nodeId] = [];
-  } finally {
-    nodeLocalFolderLoads[nodeId] = false;
-  }
-}
-
 const resourceMetricsLoads = new Map<string, Promise<void>>();
 
 watch(
@@ -775,23 +755,19 @@ function setBoardSize(size: BoardSize) {
 }
 
 async function refresh() {
-  for (const key of Object.keys(nodeLocalFoldersByNodeId)) {
-    delete nodeLocalFoldersByNodeId[key];
-  }
-  const nodeIds = [...new Set(sortedInstances.value.map((instance) => instance.nodeId).filter(Boolean))];
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: ["control-plane-status"] }),
     queryClient.invalidateQueries({ queryKey: ["control-plane-projects"] }),
     queryClient.invalidateQueries({ queryKey: ["control-plane-models"] }),
     queryClient.invalidateQueries({ queryKey: ["control-plane-images"] }),
     queryClient.invalidateQueries({ queryKey: ["control-plane-nodes"] }),
-    queryClient.invalidateQueries({ queryKey: ["control-plane-node-runtimes"] }),
-    queryClient.refetchQueries({ queryKey: ["instance-board"] }),
+    queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.nodeLocalFolders() }),
+    queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.nodeRuntimes }),
+    queryClient.refetchQueries({ queryKey: controlPlaneQueryKeys.instanceBoard }),
     queryClient.refetchQueries({ queryKey: ["control-plane-app-sessions"] }),
     queryClient.refetchQueries({ queryKey: ["control-plane-ai-sessions"] }),
     queryClient.invalidateQueries({ queryKey: ["control-plane-triggers"] }),
   ]);
-  await Promise.all(nodeIds.map((nodeId) => loadNodeLocalFolders(nodeId)));
   lastRefreshAt.value = new Date().toISOString();
 }
 
@@ -804,7 +780,7 @@ async function resolveAiSessionApprovalAction(instance: InstanceBoardItem, sessi
   try {
     await resolveAiSessionApproval(instance.id, session.id, decision);
     await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["instance-board"] }),
+      queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.instanceBoard }),
       queryClient.invalidateQueries({ queryKey: ["control-plane-app-sessions"] }),
       queryClient.invalidateQueries({ queryKey: ["control-plane-ai-sessions"] }),
     ]);

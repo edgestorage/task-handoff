@@ -16,7 +16,8 @@ type UseNodeResourceSettingsInput = {
   instances: Ref<InstanceBoardItem[] | undefined>;
   imageOptions: Ref<SelectableImage[] | undefined>;
   nodes: Ref<Node[] | undefined>;
-  refresh: () => Promise<void>;
+  refreshFolders: () => Promise<void>;
+  refreshRuntimeState: () => Promise<void>;
   runtimes: Ref<NodeRuntime[] | undefined>;
   translate: Translate;
 };
@@ -24,7 +25,7 @@ type UseNodeResourceSettingsInput = {
 const CONTROL_PLANE_LOCAL_NODE_LABEL = "task-handoff.control-plane.local";
 const CONTROL_PLANE_BUILTIN_NODE_LABEL = "task-handoff.control-plane.builtin";
 
-export function useNodeResourceSettings({ chooseProjectFolder, clearDefaultRuntime, errorText, imageOptions, instances, nodes, refresh, runtimes, translate: t }: UseNodeResourceSettingsInput) {
+export function useNodeResourceSettings({ chooseProjectFolder, clearDefaultRuntime, errorText, imageOptions, instances, nodes, refreshFolders, refreshRuntimeState, runtimes, translate: t }: UseNodeResourceSettingsInput) {
   const translateError = (error: unknown) => translateApiError(error, t, errorText(error));
   const selectedNodeId = ref("");
   const creatingNodeLocalFolder = ref(false);
@@ -48,7 +49,7 @@ export function useNodeResourceSettings({ chooseProjectFolder, clearDefaultRunti
     }),
     errorText,
     loadFolders: listNodeFolderTree,
-    refresh,
+    refresh: refreshFolders,
     translate: t,
   });
 
@@ -75,7 +76,7 @@ export function useNodeResourceSettings({ chooseProjectFolder, clearDefaultRunti
     checkingRuntimeId.value = runtime.id;
     try {
       await checkNodeRuntime(selectedNode.value.id, runtime.id);
-      await refresh();
+      await refreshRuntimeState();
     } catch (error) {
       showControlPlaneToast(translateError(error));
     } finally {
@@ -91,7 +92,7 @@ export function useNodeResourceSettings({ chooseProjectFolder, clearDefaultRunti
     try {
       await deleteNodeRuntime(selectedNode.value.id, runtime.id);
       clearDefaultRuntime(runtime.id);
-      await refresh();
+      await refreshRuntimeState();
     } catch (error) {
       showControlPlaneToast(translateError(error));
     } finally {
@@ -130,7 +131,7 @@ export function useNodeResourceSettings({ chooseProjectFolder, clearDefaultRunti
         path: folderPath,
         ...(nodeFolderDefaultImageId.value ? { defaultImageSelection: { imageId: nodeFolderDefaultImageId.value } } : {}),
       });
-      await refresh();
+      await refreshFolders();
     } catch (error) {
       showControlPlaneToast(translateError(error));
     } finally {
@@ -145,7 +146,7 @@ export function useNodeResourceSettings({ chooseProjectFolder, clearDefaultRunti
     deletingNodeLocalFolderId.value = folderId;
     try {
       await deleteNodeLocalFolder(selectedNode.value.id, folderId);
-      await refresh();
+      await refreshFolders();
     } catch (error) {
       showControlPlaneToast(translateError(error));
     } finally {

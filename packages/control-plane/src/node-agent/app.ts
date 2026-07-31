@@ -64,7 +64,6 @@ import {
   type RuntimeArtifactIdentity,
   type UpdateCheckResult,
 } from "@task-handoff/protocol/control-plane";
-import { bridgeWebSockets, closeWebSocket, normalizeWebSocketCloseCode, normalizeWebSocketCloseReason } from "@task-handoff/protocol/websocket-bridge";
 import { defaultCommandRunner, LocalDockerExecutor, listLocalDockerImages, type CommandRunner, type ExecutorContext, type ExecutorStartResult } from "./runtimes/docker.ts";
 import { DockerImageService, type DockerImagePhase, type DockerImageTerminalOutput, type ResolvedDockerImage } from "./docker-images.ts";
 import { NodeAgentInstanceEventForwarder } from "./events.ts";
@@ -84,9 +83,7 @@ import { createId, createSecret, JsonCollection, JsonFile } from "../shared/pers
 import { acquireNodeAgentSingletonLock, defaultNodeAgentSingletonLockPath } from "./process/singleton-lock.ts";
 import type { TerminalCommandRunner } from "../shared/process/terminal-command-runner.ts";
 import { nodeAgentIpcEndpoint, nodeAgentIpcPath, prepareNodeAgentIpcPath } from "../shared/transport/node-agent-ipc.ts";
-import { createNodeAgentHmacHeaders, NODE_TUNNEL_API_PATH } from "../shared/security/node-agent-auth.ts";
-import { EventConnectionRetryTimer } from "../shared/events/connection-retry.ts";
-import { nodeAgentProxyMethod, type NodeAgentInjectResponse, websocketPayload } from "./transport/proxy-utils.ts";
+import { websocketPayload } from "./transport/proxy-utils.ts";
 import { checkNodeAgentUpdate, npmCommand, NodeUpdateJobs, resolveNodeAgentUpdateWorker, resolveNodeUpdatePackage } from "./updates.ts";
 import { RuntimeArtifactResolver, type ResolvedRuntimeArtifact } from "./runtime-artifacts.ts";
 import { resolvePublishedRuntimeArtifact, type PublishedRuntimeArtifact } from "./runtime-release-source.ts";
@@ -104,8 +101,11 @@ import {
 import { NodeAgentPairedHmacVerifier } from "./identity/hmac-verifier.ts";
 import { NodeAgentControlPlaneConnectionCreateSchema, NodeAgentPairingCompleteSchema, NodeAgentPairingInviteSchema } from "./identity/schemas.ts";
 import { assertHttpControlPlaneUrl, completeControlPlaneJoin, NodeAgentIdentityService } from "./identity/service.ts";
+import { connectReverseTunnel } from "./reverse-tunnel/client.ts";
+import { createReverseTunnelManager } from "./reverse-tunnel/manager.ts";
 
 export { mergeRuntimeLifecycleResult } from "./instance-lifecycle-state.ts";
+export { connectReverseTunnel, createReverseTunnelManager };
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -3558,468 +3558,6 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   return app;
 }
 
-function explicitControlPlaneTunnelUrl(options: RunNodeAgentServerOptions) {
-  const value = options.controlPlaneTunnelUrl || process.env.TASK_HANDOFF_CONTROL_PLANE_TUNNEL_URL;
-  return value ? new URL(value).toString() : undefined;
-}
-
-function bootstrapControlPlaneTunnelUrl() {
-  const base = process.env.TASK_HANDOFF_CONTROL_PLANE_URL;
-  if (!base) {
-    return undefined;
-  }
-  const url = new URL(NODE_TUNNEL_API_PATH, base);
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  return url.toString();
-}
-
-function controlPlaneTunnelUrlForBase(controlPlaneUrl: string) {
-  const url = new URL(NODE_TUNNEL_API_PATH, controlPlaneUrl);
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  return url.toString();
-}
-
-export function connectReverseTunnel(app: Awaited<ReturnType<typeof createNodeAgentApp>>, input: {
-  tunnelUrl: string;
-  nodeId: string;
-  port: number | string | (() => number | string);
-  token?: string;
-  keyId?: string;
-  secret?: string;
-}) {
-  const url = new URL(input.tunnelUrl);
-  url.searchParams.set("nodeId", input.nodeId);
-  const tunnelHeaders = input.secret
-    ? createNodeAgentHmacHeaders({
-        nodeId: input.nodeId,
-        keyId: input.keyId,
-        secret: input.secret,
-        method: "GET",
-        pathWithQuery: `${url.pathname}${url.search}`,
-      })
-    : {};
-  const socket = new WebSocket(url, { headers: tunnelHeaders });
-  const streams = new Map<string, { upstream?: WebSocket; tunnel?: WebSocket; close: (code?: number, reason?: string) => void }>();
-  const httpStreams = new Map<string, { tunnel: WebSocket; controller: AbortController }>();
-  let disposeEventForwarderOutput: (() => void) | undefined;
-  socket.on("error", (error) => {
-    app.log.warn({
-      nodeId: input.nodeId,
-      tunnelUrl: `${url.origin}${url.pathname}`,
-      error: error instanceof Error ? error.message : String(error),
-    }, "node agent reverse tunnel connection failed");
-  });
-  const localNodeAgentWsUrl = (route: string) => {
-    const path = route.startsWith("/") ? route : `/${route}`;
-    const port = typeof input.port === "function" ? input.port() : input.port;
-    const localUrl = new URL(`/api/node-agent${path}`, `http://127.0.0.1:${port}`);
-    localUrl.protocol = "ws:";
-    return localUrl;
-  };
-  const localNodeAgentHttpUrl = (route: string) => {
-    const path = route.startsWith("/") ? route : `/${route}`;
-    const port = typeof input.port === "function" ? input.port() : input.port;
-    return new URL(`/api/node-agent${path}`, `http://127.0.0.1:${port}`);
-  };
-  const localNodeAgentRequestHeaders = (
-    route: string,
-    method: string,
-    body: string | undefined,
-    headers: Record<string, string> = {},
-  ) => {
-    const path = route.startsWith("/") ? route : `/${route}`;
-    const authHeaders = input.secret && input.keyId
-      ? createNodeAgentHmacHeaders({
-          nodeId: input.nodeId,
-          keyId: input.keyId,
-          secret: input.secret,
-          method,
-          pathWithQuery: `/api/node-agent${path}`,
-          body,
-        })
-      : input.token
-        ? { authorization: `Bearer ${input.token}` }
-        : {};
-    return { ...headers, ...authHeaders };
-  };
-  const controlPlaneStreamUrl = (streamId: string) => {
-    const streamUrl = new URL(url);
-    streamUrl.pathname = `${streamUrl.pathname.replace(/\/$/, "")}/streams/${encodeURIComponent(streamId)}`;
-    return streamUrl;
-  };
-  const controlPlaneHttpStreamUrl = (streamId: string) => {
-    const streamUrl = new URL(url);
-    streamUrl.pathname = `${streamUrl.pathname.replace(/\/$/, "")}/http-streams/${encodeURIComponent(streamId)}`;
-    return streamUrl;
-  };
-  const controlPlaneStreamHeaders = (streamUrl: URL) => input.secret
-    ? createNodeAgentHmacHeaders({
-        nodeId: input.nodeId,
-        keyId: input.keyId,
-        secret: input.secret,
-        method: "GET",
-        pathWithQuery: `${streamUrl.pathname}${streamUrl.search}`,
-      })
-    : {};
-  const closeStream = (streamId: string, code?: unknown, reason?: unknown) => {
-    const stream = streams.get(streamId);
-    streams.delete(streamId);
-    if (stream?.upstream) closeWebSocket(stream.upstream, code, reason);
-    if (stream?.tunnel) closeWebSocket(stream.tunnel, code, reason);
-  };
-  const sendHttpFrame = (tunnel: WebSocket, data: string | Buffer, binary = false) => new Promise<void>((resolve, reject) => {
-    tunnel.send(data, { binary }, (error) => error ? reject(error) : resolve());
-  });
-  socket.on("open", () => {
-    socket.send(JSON.stringify({ type: "node-agent.identify", nodeId: input.nodeId, serverTime: new Date().toISOString() }));
-    disposeEventForwarderOutput = app.nodeAgentEventForwarder?.addOutput(socket);
-  });
-  socket.on("close", () => {
-    for (const streamId of streams.keys()) {
-      closeStream(streamId, 1001, "Reverse tunnel disconnected.");
-    }
-    for (const [streamId, stream] of httpStreams) {
-      httpStreams.delete(streamId);
-      stream.controller.abort();
-      stream.tunnel.close(1001, "Reverse tunnel disconnected.");
-    }
-    disposeEventForwarderOutput?.();
-    disposeEventForwarderOutput = undefined;
-  });
-  socket.on("message", async (raw) => {
-    let message: unknown;
-    try {
-      message = JSON.parse(String(raw));
-    } catch {
-      socket.send(JSON.stringify({ type: "node-agent.error", code: "INVALID_JSON" }));
-      return;
-    }
-    const record = message && typeof message === "object" ? message as Record<string, unknown> : {};
-    if (record.type === "control-plane.http.open") {
-      const streamId = typeof record.streamId === "string" ? record.streamId : "";
-      const route = typeof record.route === "string" && record.route.startsWith("/") ? record.route : "/health";
-      const init = record.init && typeof record.init === "object" ? record.init as Record<string, unknown> : {};
-      const requestHeaders = init.headers && typeof init.headers === "object" ? init.headers as Record<string, string> : {};
-      const method = nodeAgentProxyMethod(init.method);
-      const body = typeof init.body === "string" ? init.body : undefined;
-      const controller = new AbortController();
-      const streamUrl = controlPlaneHttpStreamUrl(streamId);
-      const tunnel = new WebSocket(streamUrl, { headers: controlPlaneStreamHeaders(streamUrl) });
-      httpStreams.set(streamId, { tunnel, controller });
-      tunnel.on("open", async () => {
-        try {
-          const response = await fetch(localNodeAgentHttpUrl(route), {
-            method,
-            headers: localNodeAgentRequestHeaders(route, method, body, requestHeaders),
-            body,
-            signal: controller.signal,
-          });
-          await sendHttpFrame(tunnel, JSON.stringify({ type: "node-agent.http.head", streamId, status: response.status, headers: Object.fromEntries(response.headers.entries()) }));
-          if (response.body) {
-            const reader = response.body.getReader();
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              await sendHttpFrame(tunnel, Buffer.from(value), true);
-            }
-          }
-          await sendHttpFrame(tunnel, JSON.stringify({ type: "node-agent.http.end", streamId }));
-          tunnel.close(1000, "HTTP stream completed.");
-        } catch (error) {
-          if (tunnel.readyState === WebSocket.OPEN) {
-            await sendHttpFrame(tunnel, JSON.stringify({ type: "node-agent.http.error", streamId, message: error instanceof Error ? error.message : String(error) })).catch(() => undefined);
-            tunnel.close(1011, "HTTP stream failed.");
-          }
-        } finally {
-          httpStreams.delete(streamId);
-        }
-      });
-      tunnel.on("close", () => {
-        controller.abort();
-        httpStreams.delete(streamId);
-      });
-      tunnel.on("error", () => controller.abort());
-      return;
-    }
-    if (record.type === "control-plane.websocket.open") {
-      const streamId = typeof record.streamId === "string" ? record.streamId : "";
-      const route = typeof record.route === "string" ? record.route : "";
-      const protocols = Array.isArray(record.protocols) ? record.protocols.filter((item): item is string => typeof item === "string") : undefined;
-      try {
-        const headers = localNodeAgentRequestHeaders(route, "GET", undefined);
-        const upstream = protocols?.length ? new WebSocket(localNodeAgentWsUrl(route), protocols, { headers }) : new WebSocket(localNodeAgentWsUrl(route), { headers });
-        const streamUrl = controlPlaneStreamUrl(streamId);
-        const tunnel = new WebSocket(streamUrl, { headers: controlPlaneStreamHeaders(streamUrl) });
-        streams.set(streamId, {
-          upstream,
-          tunnel,
-          close: (code = 1000, reason = "") => {
-            closeWebSocket(upstream, code, reason);
-            closeWebSocket(tunnel, code, reason);
-          },
-        });
-        upstream.on("open", () => {
-          socket.send(JSON.stringify({ type: "node-agent.websocket.open", streamId, protocol: upstream.protocol }));
-        });
-        bridgeWebSockets(tunnel, upstream, {
-          pendingFrameLimit: 256,
-          upstreamOpenTimeoutMs: 10_000,
-          onClientClose: () => {
-            streams.delete(streamId);
-          },
-          onClientError: (error) => {
-            streams.delete(streamId);
-            socket.send(JSON.stringify({
-              type: "node-agent.websocket.error",
-              streamId,
-              message: error instanceof Error ? error.message : String(error),
-            }));
-          },
-          onUpstreamClose: (code, reason) => {
-            streams.delete(streamId);
-            const closeCode = normalizeWebSocketCloseCode(code);
-            const closeReason = normalizeWebSocketCloseReason(reason);
-            socket.send(JSON.stringify({
-              type: "node-agent.websocket.close",
-              streamId,
-              ...(closeCode === undefined ? {} : { code: closeCode }),
-              ...(closeReason ? { reason: closeReason } : {}),
-            }));
-          },
-          onUpstreamError: (error) => {
-            streams.delete(streamId);
-            socket.send(JSON.stringify({
-              type: "node-agent.websocket.error",
-              streamId,
-              message: error instanceof Error ? error.message : String(error),
-            }));
-          },
-        });
-      } catch (error) {
-        socket.send(JSON.stringify({
-          type: "node-agent.websocket.error",
-          streamId,
-          message: error instanceof Error ? error.message : String(error),
-        }));
-      }
-      return;
-    }
-    if (record.type === "control-plane.websocket.close") {
-      const streamId = typeof record.streamId === "string" ? record.streamId : "";
-      closeStream(streamId, typeof record.code === "number" ? record.code : 1000, typeof record.reason === "string" ? record.reason : "");
-      return;
-    }
-    if (record.type === "control-plane.request") {
-      const requestId = typeof record.requestId === "string" ? record.requestId : "";
-      const init = record.init && typeof record.init === "object" ? record.init as Record<string, unknown> : {};
-      const route = typeof record.route === "string" && record.route.startsWith("/") ? record.route : "/health";
-      const headers = init.headers && typeof init.headers === "object" ? init.headers as Record<string, string> : {};
-      const method = nodeAgentProxyMethod(init.method);
-      const body = typeof init.body === "string" ? init.body : undefined;
-      try {
-        const response: NodeAgentInjectResponse = await app.inject({
-          method,
-          url: `/api/node-agent${route}`,
-          headers: localNodeAgentRequestHeaders(route, method, body, headers),
-          payload: body,
-        });
-        socket.send(
-          JSON.stringify({
-            type: "node-agent.response",
-            requestId,
-            status: response.statusCode,
-            headers: response.headers,
-            body: response.body,
-          }),
-        );
-      } catch (error) {
-        socket.send(
-          JSON.stringify({
-            type: "node-agent.response",
-            requestId,
-            status: 502,
-            error: {
-              code: "NODE_AGENT_REVERSE_INJECT_FAILED",
-              message: error instanceof Error ? error.message : String(error),
-            },
-          }),
-        );
-      }
-    }
-  });
-  return socket;
-}
-
-export function createReverseTunnelManager(app: Awaited<ReturnType<typeof createNodeAgentApp>>, options: RunNodeAgentServerOptions, paths: NodeAgentStorePaths, nodeId: string) {
-  const token = options.token || process.env.TASK_HANDOFF_NODE_AGENT_TOKEN;
-  const identity = new NodeAgentIdentityService(paths);
-  type TunnelConfig = { tunnelUrl: string; keyId?: string; secret?: string };
-  type TunnelStatus = "connecting" | "connected" | "reconnecting" | "failed";
-  type TunnelEntry = {
-    config: TunnelConfig;
-    retry: EventConnectionRetryTimer;
-    socket?: WebSocket;
-    status: TunnelStatus;
-    lastConnectedAt?: string;
-    lastDisconnectedAt?: string;
-    error?: string;
-  };
-  const tunnels = new Map<string, TunnelEntry>();
-  let closing = false;
-
-  const scheduleReconnect = (key: string, entry: TunnelEntry) => {
-    if (closing || entry.retry.pending || tunnels.get(key) !== entry) return;
-    const scheduled = entry.retry.schedule(() => {
-      if (!closing && tunnels.get(key) === entry && !entry.socket) {
-        open(key, entry);
-      }
-    });
-    if (scheduled) {
-      entry.status = "reconnecting";
-      app.log.info({
-        nodeId,
-        tunnelUrl: new URL(entry.config.tunnelUrl).origin,
-        attempt: scheduled.attempt,
-        delay: scheduled.delay,
-      }, "node agent reverse tunnel reconnect scheduled");
-    }
-  };
-
-  const open = (key: string, entry: TunnelEntry) => {
-    entry.status = entry.lastDisconnectedAt ? "reconnecting" : "connecting";
-    entry.error = undefined;
-    const socket = connectReverseTunnel(app, {
-      ...entry.config,
-      nodeId,
-      port: () => app.nodeAgentState!.currentListenerPort,
-      token,
-    });
-    entry.socket = socket;
-    socket.on("open", () => {
-      if (tunnels.get(key) === entry && entry.socket === socket) {
-        entry.retry.reset();
-        entry.status = "connected";
-        entry.lastConnectedAt = now();
-        entry.error = undefined;
-        app.log.info({ nodeId, tunnelUrl: new URL(entry.config.tunnelUrl).origin }, "node agent reverse tunnel connected");
-      }
-    });
-    socket.on("close", (code, reason) => {
-      if (tunnels.get(key) !== entry || entry.socket !== socket) return;
-      entry.socket = undefined;
-      entry.lastDisconnectedAt = now();
-      entry.error = `WebSocket closed${code ? ` (${code})` : ""}${reason ? `: ${Buffer.isBuffer(reason) ? reason.toString("utf8") : String(reason)}` : ""}`;
-      if (!closing) {
-        app.log.warn({
-          nodeId,
-          tunnelUrl: new URL(entry.config.tunnelUrl).origin,
-          code,
-          reason: Buffer.isBuffer(reason) ? reason.toString("utf8") : String(reason || ""),
-        }, "node agent reverse tunnel disconnected");
-        scheduleReconnect(key, entry);
-      }
-    });
-    socket.on("error", (error) => {
-      if (tunnels.get(key) === entry && entry.socket === socket) {
-        entry.status = "failed";
-        entry.error = error instanceof Error ? error.message : String(error);
-      }
-    });
-    return socket;
-  };
-
-  const replace = (key: string, config: TunnelConfig) => {
-    const current = tunnels.get(key);
-    current?.retry.cancel();
-    const entry: TunnelEntry = { config, retry: new EventConnectionRetryTimer(), status: "connecting" };
-    tunnels.set(key, entry);
-    current?.socket?.close(1000, "Reverse tunnel reconnecting.");
-    return open(key, entry);
-  };
-
-  const sameConfig = (left: TunnelConfig, right: TunnelConfig) => left.tunnelUrl === right.tunnelUrl
-    && left.keyId === right.keyId
-    && left.secret === right.secret;
-
-  const reconcile = (configured: Map<string, TunnelConfig>) => {
-    for (const [key, entry] of tunnels) {
-      if (configured.has(key)) continue;
-      entry.retry.cancel();
-      tunnels.delete(key);
-      entry.socket?.close(1000, "Reverse tunnel configuration removed.");
-    }
-    for (const [key, config] of configured) {
-      const current = tunnels.get(key);
-      if (!current || !sameConfig(current.config, config)) {
-        replace(key, config);
-      }
-    }
-  };
-
-  const connectConfigured = () => {
-    closing = false;
-    const configured = new Map<string, TunnelConfig>();
-    const access = identity.resolvedControlPlaneAccess();
-    const configuredTunnelUrls = new Set<string>();
-    for (const { connection, pairing } of access.connections) {
-      if (!connection.enabled) continue;
-      if (!pairing) {
-        app.log.warn({ nodeId, connectionId: connection.id, pairingKeyId: connection.pairingKeyId }, "node agent control-plane connection has no pairing");
-        continue;
-      }
-      const tunnelUrl = controlPlaneTunnelUrlForBase(connection.url);
-      configured.set(connection.id, { tunnelUrl, keyId: pairing.keyId, secret: pairing.secret });
-      configuredTunnelUrls.add(tunnelUrl);
-    }
-    const explicitTunnelUrl = explicitControlPlaneTunnelUrl(options);
-    if (explicitTunnelUrl && !configuredTunnelUrls.has(explicitTunnelUrl)) {
-      const tunnelSecret = identity.reverseTunnelSecret(
-        process.env.TASK_HANDOFF_CONTROL_PLANE_URL,
-        options.remoteSecret || process.env.TASK_HANDOFF_NODE_AGENT_REMOTE_SECRET,
-        options.remoteKeyId || process.env.TASK_HANDOFF_NODE_AGENT_REMOTE_KEY_ID,
-      );
-      configured.set(`explicit:${explicitTunnelUrl}`, {
-        tunnelUrl: explicitTunnelUrl,
-        keyId: tunnelSecret?.keyId,
-        secret: tunnelSecret?.secret,
-      });
-      configuredTunnelUrls.add(explicitTunnelUrl);
-    }
-    const bootstrapTunnelUrl = access.hasPersistedAccess ? undefined : bootstrapControlPlaneTunnelUrl();
-    if (bootstrapTunnelUrl && !configuredTunnelUrls.has(bootstrapTunnelUrl)) {
-      const tunnelSecret = identity.reverseTunnelSecret(
-        process.env.TASK_HANDOFF_CONTROL_PLANE_URL,
-        options.remoteSecret || process.env.TASK_HANDOFF_NODE_AGENT_REMOTE_SECRET,
-        options.remoteKeyId || process.env.TASK_HANDOFF_NODE_AGENT_REMOTE_KEY_ID,
-      );
-      configured.set(`bootstrap:${bootstrapTunnelUrl}`, {
-        tunnelUrl: bootstrapTunnelUrl,
-        keyId: tunnelSecret?.keyId,
-        secret: tunnelSecret?.secret,
-      });
-    }
-    reconcile(configured);
-  };
-  const state = (connectionId: string) => {
-    const entry = tunnels.get(connectionId);
-    if (!entry) return undefined;
-    return {
-      status: entry.status,
-      ...(entry.lastConnectedAt ? { lastConnectedAt: entry.lastConnectedAt } : {}),
-      ...(entry.lastDisconnectedAt ? { lastDisconnectedAt: entry.lastDisconnectedAt } : {}),
-      ...(entry.error ? { error: entry.error } : {}),
-    };
-  };
-  const closeAll = () => {
-    closing = true;
-    for (const entry of tunnels.values()) {
-      entry.retry.cancel();
-      entry.socket?.close(1001, "Node agent shutting down.");
-    }
-    tunnels.clear();
-  };
-  return { connectConfigured, state, closeAll };
-}
 
 export async function listenNodeAgentIpcServer(app: Awaited<ReturnType<typeof createNodeAgentApp>>, ipcPath: string) {
   prepareNodeAgentIpcPath(ipcPath);
@@ -4053,12 +3591,21 @@ export async function runNodeAgentServer(options: RunNodeAgentServerOptions) {
   try {
     const effectiveOptions = { ...options, port: listenerConfig.port };
     const app = await createNodeAgentApp(effectiveOptions);
+    const nodeAgentState = app.nodeAgentState;
+    if (!nodeAgentState) {
+      throw new Error("Node agent state was not initialized.");
+    }
     const nodeId = new NodeAgentIdentityService(paths).resolveNodeId(options.nodeId || process.env.TASK_HANDOFF_NODE_ID);
-    const reverseTunnels = createReverseTunnelManager(app, effectiveOptions, paths, nodeId);
+    const reverseTunnels = createReverseTunnelManager({
+      log: app.log,
+      inject: (input) => app.inject(input),
+      nodeAgentEventForwarder: app.nodeAgentEventForwarder,
+      nodeAgentState,
+    }, effectiveOptions, paths, nodeId);
     app.decorate("nodeAgentReverseTunnels", reverseTunnels);
     const listenerManager = new NodeAgentExternalListenerManager({
       app,
-      state: app.nodeAgentState!,
+      state: nodeAgentState,
       settings,
       config: listenerConfig,
       source: hadPersistedSettings ? "persisted" : "bootstrap",

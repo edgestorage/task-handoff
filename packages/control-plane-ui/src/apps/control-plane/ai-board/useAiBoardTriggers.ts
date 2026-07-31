@@ -1,9 +1,11 @@
 import { computed, ref } from "vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import { bindAiSessionTrigger, unbindAiSessionTrigger, useControlPlaneTriggersQuery } from "../../../api/queries";
+import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import type { InstanceBoardItem, TriggerConfig, TriggerDeployment, TriggerRuntimeState } from "../../../api/types";
 import type { AiBoardCard } from "./aiBoardTypes";
 import type { Translate } from "../../../i18n/status.ts";
+import { updateInstanceBoardData } from "../instanceBoardCache.ts";
 
 type TriggerMutationResult = {
   config?: TriggerConfig;
@@ -51,7 +53,7 @@ export function useAiBoardTriggers(t: Translate) {
         upsertLocalTriggerBinding(card, created);
       }
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["instance-board"] }),
+        queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.instanceBoard }),
         queryClient.invalidateQueries({ queryKey: ["control-plane-triggers"] }),
       ]);
     } finally {
@@ -74,7 +76,7 @@ export function useAiBoardTriggers(t: Translate) {
     if (!result.config || !result.deployment) {
       return;
     }
-    queryClient.setQueryData<InstanceBoardItem[]>(["instance-board"], (current = []) => current.map((instance) => {
+    updateInstanceBoardData(queryClient, (instances) => instances.map((instance) => {
       if (instance.id !== card.instance.id) {
         return instance;
       }
@@ -107,7 +109,7 @@ export function useAiBoardTriggers(t: Translate) {
   }
 
   function removeLocalTriggerBinding(card: AiBoardCard, configHash: string) {
-    queryClient.setQueryData<InstanceBoardItem[]>(["instance-board"], (current = []) => current.map((instance) => {
+    updateInstanceBoardData(queryClient, (instances) => instances.map((instance) => {
       if (instance.id !== card.instance.id || !instance.triggers) {
         return instance;
       }

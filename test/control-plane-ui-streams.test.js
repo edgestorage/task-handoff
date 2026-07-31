@@ -126,6 +126,182 @@ test("control-plane UI applies an authoritative AI snapshot while recovery is in
   assert.deepEqual(entry.aiSessions.sessions.map((session) => session.id), ["live"]);
 });
 
+test("a late AI recovery response cannot roll the advertised stream back", async () => {
+  const queryClient = new QueryClient();
+  const initial = snapshotEvent("old-stream", 1, [summary("old")]);
+  queryClient.setQueryData(["control-plane-ai-sessions"], {
+    updatedAt: timestamp(),
+    instances: [{ instanceId: "instance-one", streamId: "old-stream", revision: 1, lastEventAt: initial.meta.generatedAt, aiSessions: initial.snapshot }],
+  });
+  let releaseDelta;
+  const deltaGate = new Promise((resolve) => { releaseDelta = resolve; });
+  const apiLoader = async () => {
+    await deltaGate;
+    return {
+      streamId: "old-stream",
+      instanceId: "instance-one",
+      sinceRevision: 1,
+      latestRevision: 2,
+      earliestRetainedRevision: 2,
+      syncRequired: false,
+      events: [{ type: AiSessionEventType.Snapshot, payload: snapshotEvent("old-stream", 2, [summary("late-old")]) }],
+    };
+  };
+  const app = createApp({ render: () => null });
+  app.use(VueQueryPlugin, { queryClient });
+  const store = app.runWithContext(() => useAiSessionStore({ boardInstances: () => [], aiSessions: () => undefined, apiLoader }));
+
+  const recovery = store.recoverDescriptor({
+    topic: "ai.sessions",
+    instanceId: "instance-one",
+    streamId: "old-stream",
+    latestRevision: 2,
+    earliestRetainedRevision: 2,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  store.applySnapshotEvent(snapshotEvent("new-stream", 1, [summary("new")]));
+  releaseDelta();
+  await recovery;
+  store.applyEvent({
+    type: AiSessionEventType.Patch,
+    payload: {
+      meta: {
+        streamId: "new-stream",
+        instanceId: "instance-one",
+        revision: 2,
+        previousRevision: 1,
+        traceId: "new-stream-patch",
+        generatedAt: timestamp(),
+        reason: "provider-event",
+      },
+      upserted: [summary("newer")],
+      removed: ["new"],
+    },
+  });
+
+  const entry = queryClient.getQueryData(["control-plane-ai-sessions"]).instances[0];
+  assert.equal(entry.streamId, "new-stream");
+  assert.equal(entry.revision, 2);
+  assert.deepEqual(entry.aiSessions.sessions.map((session) => session.id), ["newer"]);
+});
+
+test("an older AI refresh cannot overwrite a newer live snapshot on the same stream", async () => {
+  const queryClient = new QueryClient();
+  const cached = snapshotEvent("cached-stream", 1, [summary("cached")]);
+  queryClient.setQueryData(["control-plane-ai-sessions"], {
+    updatedAt: timestamp(),
+    instances: [{ instanceId: "instance-one", streamId: "cached-stream", revision: 1, lastEventAt: cached.meta.generatedAt, aiSessions: cached.snapshot }],
+  });
+  let releaseRefresh;
+  const refreshGate = new Promise((resolve) => { releaseRefresh = resolve; });
+  const refreshed = snapshotEvent("target-stream", 2, [summary("stale-refresh")]);
+  const apiLoader = async () => {
+    await refreshGate;
+    return {
+      updatedAt: timestamp(),
+      instances: [{ instanceId: "instance-one", streamId: "target-stream", revision: 2, lastEventAt: refreshed.meta.generatedAt, aiSessions: refreshed.snapshot }],
+    };
+  };
+  const app = createApp({ render: () => null });
+  app.use(VueQueryPlugin, { queryClient });
+  const store = app.runWithContext(() => useAiSessionStore({ boardInstances: () => [], aiSessions: () => undefined, apiLoader }));
+
+  const recovery = store.recoverDescriptor({
+    topic: "ai.sessions",
+    instanceId: "instance-one",
+    streamId: "target-stream",
+    latestRevision: 2,
+    earliestRetainedRevision: 2,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  store.applySnapshotEvent(snapshotEvent("target-stream", 5, [summary("live-newer")]));
+  releaseRefresh();
+  await recovery;
+
+  const entry = queryClient.getQueryData(["control-plane-ai-sessions"]).instances[0];
+  assert.equal(entry.streamId, "target-stream");
+  assert.equal(entry.revision, 5);
+  assert.deepEqual(entry.aiSessions.sessions.map((session) => session.id), ["live-newer"]);
+});
+
+test("AI recovery retries a transient loader failure until the advertised revision converges", async () => {
+  const queryClient = new QueryClient();
+  const initial = snapshotEvent("failure-stream", 1, [summary("cached")]);
+  queryClient.setQueryData(["control-plane-ai-sessions"], {
+    updatedAt: timestamp(),
+    instances: [{ instanceId: "instance-one", streamId: "failure-stream", revision: 1, lastEventAt: initial.meta.generatedAt, aiSessions: initial.snapshot }],
+  });
+  const app = createApp({ render: () => null });
+  app.use(VueQueryPlugin, { queryClient });
+  let calls = 0;
+  const store = app.runWithContext(() => useAiSessionStore({
+    boardInstances: () => [],
+    aiSessions: () => undefined,
+    recoveryRetry: { initialDelayMs: 1, maxDelayMs: 1, jitterRatio: 0 },
+    apiLoader: async () => {
+      calls += 1;
+      if (calls === 1) throw new Error("network unavailable");
+      return {
+        streamId: "failure-stream",
+        instanceId: "instance-one",
+        sinceRevision: 1,
+        latestRevision: 2,
+        earliestRetainedRevision: 2,
+        syncRequired: false,
+        events: [{ type: AiSessionEventType.Snapshot, payload: snapshotEvent("failure-stream", 2, [summary("recovered")]) }],
+      };
+    },
+  }));
+
+  const recovery = store.recoverDescriptor({
+    topic: "ai.sessions",
+    instanceId: "instance-one",
+    streamId: "failure-stream",
+    latestRevision: 2,
+    earliestRetainedRevision: 2,
+  });
+  await recovery;
+  const entry = queryClient.getQueryData(["control-plane-ai-sessions"]).instances[0];
+  assert.equal(calls, 2);
+  assert.equal(entry.revision, 2);
+  assert.deepEqual(entry.aiSessions.sessions.map((session) => session.id), ["recovered"]);
+});
+
+test("a live AI event immediately wakes a recovery waiting in backoff", async () => {
+  const queryClient = new QueryClient();
+  const initial = snapshotEvent("wake-stream", 1, [summary("cached")]);
+  queryClient.setQueryData(["control-plane-ai-sessions"], {
+    updatedAt: timestamp(),
+    instances: [{ instanceId: "instance-one", streamId: "wake-stream", revision: 1, lastEventAt: initial.meta.generatedAt, aiSessions: initial.snapshot }],
+  });
+  let calls = 0;
+  const app = createApp({ render: () => null });
+  app.use(VueQueryPlugin, { queryClient });
+  const store = app.runWithContext(() => useAiSessionStore({
+    boardInstances: () => [],
+    aiSessions: () => undefined,
+    recoveryRetry: { initialDelayMs: 60_000, maxDelayMs: 60_000, jitterRatio: 0 },
+    apiLoader: async () => {
+      calls += 1;
+      throw new Error("network unavailable");
+    },
+  }));
+
+  const recovery = store.recoverDescriptor({
+    topic: "ai.sessions",
+    instanceId: "instance-one",
+    streamId: "wake-stream",
+    latestRevision: 2,
+    earliestRetainedRevision: 2,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  store.applySnapshotEvent(snapshotEvent("wake-stream", 2, [summary("live")]));
+  await recovery;
+
+  assert.equal(calls, 1);
+  assert.equal(queryClient.getQueryData(["control-plane-ai-sessions"]).instances[0].revision, 2);
+});
+
 test("control-plane UI preserves authoritative tool activity across snapshot and patch events", () => {
   const queryClient = new QueryClient();
   const streamId = "ai-tool-stream";
@@ -170,7 +346,7 @@ test("control-plane UI preserves authoritative tool activity across snapshot and
   assert.equal(session.toolCallsSinceLastMessage, 2);
 });
 
-test("AI recovery stops on a mismatched snapshot and adopts the next live stream reset", async () => {
+test("AI recovery cancels mismatched-stream backoff when the next live stream resets", async () => {
   const queryClient = new QueryClient();
   const cached = snapshotEvent("cached-stream", 1, [summary("cached")]);
   const refreshed = snapshotEvent("new-stream", 2, [summary("refreshed")]);
@@ -190,24 +366,26 @@ test("AI recovery stops on a mismatched snapshot and adopts the next live stream
   app.use(VueQueryPlugin, { queryClient });
   const store = app.runWithContext(() => useAiSessionStore({ boardInstances: () => [], aiSessions: () => undefined, apiLoader }));
 
-  await store.recoverDescriptor({
+  const recovery = store.recoverDescriptor({
     topic: "ai.sessions",
     instanceId: "instance-one",
     streamId: "advertised-old-stream",
     latestRevision: 2,
     earliestRetainedRevision: 2,
   });
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(requests, 1);
   assert.equal(queryClient.getQueryData(["control-plane-ai-sessions"]).instances[0].streamId, "cached-stream");
 
   store.applySnapshotEvent(snapshotEvent("new-stream", 3, [summary("live")]));
+  await recovery;
   const entry = queryClient.getQueryData(["control-plane-ai-sessions"]).instances[0];
   assert.equal(entry.streamId, "new-stream");
   assert.equal(entry.revision, 3);
   assert.deepEqual(entry.aiSessions.sessions.map((session) => session.id), ["live"]);
 });
 
-test("AI recovery stops when a delta request makes no progress", async () => {
+test("AI recovery retries when a delta request makes no progress", async () => {
   const queryClient = new QueryClient();
   const cached = snapshotEvent("ai-stream", 1, [summary("cached")]);
   queryClient.setQueryData(["control-plane-ai-sessions"], {
@@ -217,14 +395,31 @@ test("AI recovery stops when a delta request makes no progress", async () => {
   let requests = 0;
   const apiLoader = async () => {
     requests += 1;
+    if (requests > 1) {
+      return {
+        streamId: "ai-stream",
+        instanceId: "instance-one",
+        sinceRevision: 1,
+        latestRevision: 2,
+        earliestRetainedRevision: 2,
+        syncRequired: false,
+        events: [{ type: AiSessionEventType.Snapshot, payload: snapshotEvent("ai-stream", 2, [summary("recovered")]) }],
+      };
+    }
     return { streamId: "ai-stream", instanceId: "instance-one", sinceRevision: 1, latestRevision: 1, earliestRetainedRevision: 2, syncRequired: false, events: [] };
   };
   const app = createApp({ render: () => null });
   app.use(VueQueryPlugin, { queryClient });
-  const store = app.runWithContext(() => useAiSessionStore({ boardInstances: () => [], aiSessions: () => undefined, apiLoader }));
+  const store = app.runWithContext(() => useAiSessionStore({
+    boardInstances: () => [],
+    aiSessions: () => undefined,
+    apiLoader,
+    recoveryRetry: { initialDelayMs: 1, maxDelayMs: 1, jitterRatio: 0 },
+  }));
 
   await store.recoverDescriptor({ topic: "ai.sessions", instanceId: "instance-one", streamId: "ai-stream", latestRevision: 2, earliestRetainedRevision: 2 });
-  assert.equal(requests, 1);
+  assert.equal(requests, 2);
+  assert.equal(queryClient.getQueryData(["control-plane-ai-sessions"]).instances[0].revision, 2);
 });
 
 test("AI full-snapshot recovery settles the normalized streaming store", async () => {
@@ -495,7 +690,7 @@ test("the first post-refresh assistant item does not inherit the snapshot item t
   streaming.clear();
 });
 
-test("app recovery stops on a mismatched snapshot and adopts the next live stream reset", async () => {
+test("app recovery cancels mismatched-stream backoff when the next live stream resets", async () => {
   const queryClient = new QueryClient();
   const cached = appSnapshotEvent("cached-stream", 1, [{ id: "cached", appId: "codex", status: "running", bindings: [] }]);
   const refreshed = appSnapshotEvent("new-stream", 2, [{ id: "refreshed", appId: "codex", status: "running", bindings: [] }]);
@@ -515,24 +710,26 @@ test("app recovery stops on a mismatched snapshot and adopts the next live strea
   app.use(VueQueryPlugin, { queryClient });
   const store = app.runWithContext(() => useAppSessionStore({ boardInstances: () => [], appSessions: () => undefined, apiLoader }));
 
-  await store.recoverDescriptor({
+  const recovery = store.recoverDescriptor({
     topic: "app.sessions",
     instanceId: "instance-one",
     streamId: "advertised-old-stream",
     latestRevision: 2,
     earliestRetainedRevision: 2,
   });
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(requests, 1);
   assert.equal(queryClient.getQueryData(["control-plane-app-sessions"]).instances[0].streamId, "cached-stream");
 
   store.applyEvent({ type: AppSessionEventType.Snapshot, payload: appSnapshotEvent("new-stream", 3, [{ id: "live", appId: "codex", status: "running", bindings: [] }]) });
+  await recovery;
   const entry = queryClient.getQueryData(["control-plane-app-sessions"]).instances[0];
   assert.equal(entry.streamId, "new-stream");
   assert.equal(entry.revision, 3);
   assert.deepEqual(entry.appSessions.sessions.map((session) => session.id), ["live"]);
 });
 
-test("app recovery stops when a delta request makes no progress", async () => {
+test("app recovery retries when a delta request makes no progress", async () => {
   const queryClient = new QueryClient();
   const cached = appSnapshotEvent("app-stream", 1, [{ id: "cached", appId: "codex", status: "running", bindings: [] }]);
   queryClient.setQueryData(["control-plane-app-sessions"], {
@@ -542,12 +739,73 @@ test("app recovery stops when a delta request makes no progress", async () => {
   let requests = 0;
   const apiLoader = async () => {
     requests += 1;
+    if (requests > 1) {
+      return {
+        streamId: "app-stream",
+        instanceId: "instance-one",
+        sinceRevision: 1,
+        latestRevision: 2,
+        earliestRetainedRevision: 2,
+        syncRequired: false,
+        events: [{ type: AppSessionEventType.Snapshot, payload: appSnapshotEvent("app-stream", 2, [{ id: "recovered", appId: "codex", status: "running", bindings: [] }]) }],
+      };
+    }
     return { streamId: "app-stream", instanceId: "instance-one", sinceRevision: 1, latestRevision: 1, earliestRetainedRevision: 2, syncRequired: false, events: [] };
   };
   const app = createApp({ render: () => null });
   app.use(VueQueryPlugin, { queryClient });
-  const store = app.runWithContext(() => useAppSessionStore({ boardInstances: () => [], appSessions: () => undefined, apiLoader }));
+  const store = app.runWithContext(() => useAppSessionStore({
+    boardInstances: () => [],
+    appSessions: () => undefined,
+    apiLoader,
+    recoveryRetry: { initialDelayMs: 1, maxDelayMs: 1, jitterRatio: 0 },
+  }));
 
   await store.recoverDescriptor({ topic: "app.sessions", instanceId: "instance-one", streamId: "app-stream", latestRevision: 2, earliestRetainedRevision: 2 });
-  assert.equal(requests, 1);
+  assert.equal(requests, 2);
+  assert.equal(queryClient.getQueryData(["control-plane-app-sessions"]).instances[0].revision, 2);
+});
+
+test("removing an authoritative app-session instance cancels its in-flight recovery", async () => {
+  const queryClient = new QueryClient();
+  const streamId = "app-instance-removal";
+  const initial = appSnapshotEvent(streamId, 1, [{ id: "removed", appId: "codex", status: "running", bindings: [] }]);
+  const authoritative = ref({
+    updatedAt: timestamp(),
+    instances: [{ instanceId: "instance-one", streamId, revision: 1, lastEventAt: initial.meta.generatedAt, appSessions: initial.snapshot }],
+  });
+  queryClient.setQueryData(["control-plane-app-sessions"], authoritative.value);
+  let releaseDelta;
+  const deltaGate = new Promise((resolve) => { releaseDelta = resolve; });
+  const apiLoader = async () => {
+    await deltaGate;
+    return {
+      streamId,
+      instanceId: "instance-one",
+      sinceRevision: 1,
+      latestRevision: 2,
+      earliestRetainedRevision: 2,
+      syncRequired: false,
+      events: [{ type: AppSessionEventType.Snapshot, payload: appSnapshotEvent(streamId, 2, [{ id: "restored", appId: "codex", status: "running", bindings: [] }]) }],
+    };
+  };
+  const app = createApp({ render: () => null });
+  app.use(VueQueryPlugin, { queryClient });
+  const store = app.runWithContext(() => useAppSessionStore({ boardInstances: () => [], appSessions: () => authoritative.value, apiLoader }));
+
+  const recovery = store.recoverDescriptor({
+    topic: "app.sessions",
+    instanceId: "instance-one",
+    streamId,
+    latestRevision: 2,
+    earliestRetainedRevision: 2,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  authoritative.value = { updatedAt: timestamp(), instances: [] };
+  queryClient.setQueryData(["control-plane-app-sessions"], authoritative.value);
+  await nextTick();
+  releaseDelta();
+  await recovery;
+
+  assert.deepEqual(queryClient.getQueryData(["control-plane-app-sessions"]).instances, []);
 });

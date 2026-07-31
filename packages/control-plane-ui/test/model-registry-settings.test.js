@@ -10,7 +10,7 @@ const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
 test("model queries preserve the federated registry and expose a flattened compatibility view", () => {
   const queries = read("src/api/queries.ts");
   assert.match(queries, /function useModelRegistryQuery/);
-  assert.match(queries, /queryFn: fetchModelRegistry/);
+  assert.match(queries, /queryFn: \(\{ signal \}\) => fetchModelRegistry\(signal\)/);
   assert.match(queries, /select: modelConfigsFromRegistry/);
   assert.match(queries, /locations: group\.locations/);
   assert.match(queries, /referenceCount: group\.referenceCount/);

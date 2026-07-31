@@ -78,11 +78,11 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import writeFileAtomic from "write-file-atomic";
-import { WebSocket as WsClient } from "ws";
 import { z } from "zod";
 import type { CommandRunner } from "../../shared/process/command-runner.ts";
 import { ControlPlaneNodeAgentClient, type NodeAgentTransport, type NodeAgentWebSocket } from "../nodes/client.ts";
 import { ControlPlaneNodeAgentGateway } from "../nodes/gateway.ts";
+import { createDirectNodeAgentTransport, fetchDirectNodeAgentEndpoint } from "../nodes/direct-transport.ts";
 import { ControlledInstanceGateway } from "../instances/gateway.ts";
 import { InstanceBoardReader } from "../instances/board-reader.ts";
 import { ControlPlaneTriggerService } from "../triggers/service.ts";
@@ -127,8 +127,8 @@ import {
 import type { ControlPlaneStorePaths } from "../persistence/paths.ts";
 import { createId, createSecret, JsonCollection, JsonFile, type StoredRecord } from "../../shared/persistence/store.ts";
 import { controlledInstanceTriggerSnapshot } from "../triggers/records.ts";
-import { createNodeAgentHmacHeaders } from "../../shared/security/node-agent-auth.ts";
-import { assertLocalIpcSocketOwnedByCurrentUser, createNodeAgentIpcWebSocket, fetchNodeAgentIpc, parseNodeAgentIpcEndpoint } from "../../shared/transport/node-agent-ipc.ts";
+import { createDirectNodeAgentAuthHeaders } from "../../shared/security/node-agent-auth.ts";
+import { parseNodeAgentIpcEndpoint } from "../../shared/transport/node-agent-ipc.ts";
 
 export function parseInstanceAppManagementSnapshot(value: unknown) {
   try {
@@ -181,48 +181,7 @@ function isControlPlaneBuiltinNode(node: Node) {
   return node.labels[CONTROL_PLANE_BUILTIN_NODE_LABEL] === "true";
 }
 
-function nodeAgentRemoteSecret(node: Pick<Node, "auth">) {
-  return node.auth.mode === "paired-hmac" ? node.auth.secret : undefined;
-}
-
-function nodeAgentRemoteKeyId(node: Pick<Node, "auth">) {
-  return node.auth.mode === "paired-hmac" ? node.auth.keyId : undefined;
-}
-
-function requireNodeAgentRemoteKeyId(node: Pick<Node, "id" | "auth">) {
-  const keyId = nodeAgentRemoteKeyId(node);
-  if (!keyId) {
-    const error = new Error(`Node ${node.id} paired-HMAC auth is missing keyId.`);
-    Object.assign(error, { statusCode: 500, code: "NODE_AGENT_REMOTE_KEY_ID_MISSING" });
-    throw error;
-  }
-  return keyId;
-}
-
-type NodeAgentAuthContext = Pick<Node, "id" | "auth" | "labels" | "connectionMode">;
-
-function nodeAgentLocalStaticToken(node: NodeAgentAuthContext) {
-  if (node.connectionMode !== "local-ipc" && node.connectionMode !== "local-loopback") {
-    return undefined;
-  }
-  return node.auth.mode === "local-static-key" ? node.auth.secret : undefined;
-}
-
-function createDirectNodeAgentAuthHeaders(node: NodeAgentAuthContext, input: { method: string; pathWithQuery: string; body?: string | Buffer }) {
-  const remoteSecret = nodeAgentRemoteSecret(node);
-  if (remoteSecret) {
-    return createNodeAgentHmacHeaders({
-      nodeId: node.id,
-      keyId: requireNodeAgentRemoteKeyId(node),
-      secret: remoteSecret,
-      method: input.method,
-      pathWithQuery: input.pathWithQuery,
-      body: input.body,
-    });
-  }
-  const token = nodeAgentLocalStaticToken(node);
-  return token ? { authorization: `Bearer ${token}` } : {};
-}
+type NodeAgentAuthContext = Pick<Node, "id" | "auth" | "connectionMode">;
 
 function defaultLocalNodeEndpoint() {
   return process.env.TASK_HANDOFF_NODE_AGENT_CONTROL_ENDPOINT || process.env.TASK_HANDOFF_NODE_AGENT_ENDPOINT || "http://127.0.0.1:8091";
@@ -250,6 +209,7 @@ export class ControlPlaneService {
   private readonly appAccessService: AppAccessService;
   private readonly chatActionTokenService = new ChatActionTokenService();
   private nodeAgentTransport: NodeAgentTransport | undefined;
+  private readonly directNodeAgentTransport: NodeAgentTransport;
   private readonly nodeAgentGateway: ControlPlaneNodeAgentGateway;
   private readonly controlledInstanceGateway: ControlledInstanceGateway;
   private readonly instanceBoardReader = new InstanceBoardReader();
@@ -267,6 +227,7 @@ export class ControlPlaneService {
     this.fetchImpl = options.fetchImpl || fetch;
     this.dockerCommandRunner = options.dockerCommandRunner;
     this.nodeAgentTransport = options.nodeAgentTransport;
+    this.directNodeAgentTransport = createDirectNodeAgentTransport(this.fetchImpl);
     this.logger = controlPlaneDiagnosticLogsEnabled() ? options.logger : undefined;
     const nodeAgentClient = new ControlPlaneNodeAgentClient({
       request: (node, route, init) => this.nodeAgentFetch(node, route, init),
@@ -490,7 +451,7 @@ export class ControlPlaneService {
           pathWithQuery: `/api/node-agent${route}`,
         })
       : {};
-    const response = await this.fetchNodeAgentEndpoint(endpoint, route, { headers });
+    const response = await fetchDirectNodeAgentEndpoint(this.fetchImpl, endpoint, route, { headers });
     const payload = (await response.json().catch(() => ({}))) as { data?: { nodeId?: unknown; protocolVersion?: unknown; build?: unknown }; error?: { message?: string } };
     if (!response.ok) {
       const error = new Error(payload.error?.message || `Node agent health check failed with HTTP ${response.status}`);
@@ -514,15 +475,6 @@ export class ControlPlaneService {
       nodeId,
       data: payload.data || {},
     };
-  }
-
-  private async fetchNodeAgentEndpoint(endpoint: string, route: string, init: RequestInit = {}) {
-    const ipcPath = parseNodeAgentIpcEndpoint(endpoint);
-    if (ipcPath) {
-      assertLocalIpcSocketOwnedByCurrentUser(ipcPath);
-      return fetchNodeAgentIpc(ipcPath, route, init);
-    }
-    return this.fetchImpl(`${endpoint.replace(/\/$/, "")}/api/node-agent${route}`, init);
   }
 
   private async completeNodeAgentPairing(endpoint: string, input: { joinToken: string; controlPlaneName?: string }) {
@@ -607,9 +559,9 @@ export class ControlPlaneService {
     return this.listAllModels().map(publicModel);
   }
 
-  async listFederatedModels() {
+  async listFederatedModels(signal?: AbortSignal) {
     const nodes = this.listNodes();
-    const fleet = await this.nodeAgentGateway.listFleetModels(nodes);
+    const fleet = await this.nodeAgentGateway.listFleetModels(nodes, { signal });
     const groups = new Map<string, {
       id: string;
       model: ReturnType<typeof publicModel> | NodeModelPublicRecord;
@@ -787,9 +739,9 @@ export class ControlPlaneService {
     }
   }
 
-  async listNodeLocalFolders(nodeId: string) {
+  async listNodeLocalFolders(nodeId: string, signal?: AbortSignal) {
     const node = this.requireNode(nodeId);
-    return this.nodeAgentGateway.listLocalFolders(node);
+    return this.nodeAgentGateway.listLocalFolders(node, { signal });
   }
 
   async listNodeFolderTree(nodeId: string, input: { path?: string; depth?: number } = {}) {
@@ -1115,17 +1067,17 @@ export class ControlPlaneService {
     return this.nodes.delete(id);
   }
 
-  async listNodeRuntimes(nodeId?: string) {
+  async listNodeRuntimes(nodeId?: string, signal?: AbortSignal) {
     const nodes = nodeId ? [this.requireNode(nodeId)] : this.listNodes();
     if (nodeId) {
-      return this.nodeAgentGateway.listRuntimes(nodes[0]);
+      return this.nodeAgentGateway.listRuntimes(nodes[0], { signal });
     }
-    const result = await this.nodeAgentGateway.listFleetRuntimes(nodes);
+    const result = await this.nodeAgentGateway.listFleetRuntimes(nodes, { signal });
     return result.items;
   }
 
-  async listNodeRuntimesWithDiagnostics() {
-    return this.nodeAgentGateway.listFleetRuntimes(this.listNodes());
+  async listNodeRuntimesWithDiagnostics(signal?: AbortSignal) {
+    return this.nodeAgentGateway.listFleetRuntimes(this.listNodes(), { signal });
   }
 
   async createNodeRuntime(nodeId: string, input: unknown) {
@@ -1344,9 +1296,11 @@ export class ControlPlaneService {
     return (await this.boardWithDiagnostics()).items;
   }
 
-  async boardWithDiagnostics() {
-    const runtimeResult = await this.listNodeRuntimesWithDiagnostics();
-    const instanceResult = await this.listNodeInstancesWithDiagnostics();
+  async boardWithDiagnostics(signal?: AbortSignal) {
+    const [runtimeResult, instanceResult] = await Promise.all([
+      this.listNodeRuntimesWithDiagnostics(signal),
+      this.listNodeInstancesWithDiagnostics(signal),
+    ]);
     return this.instanceBoardReader.read({
       projects: this.listProjects(),
       images: this.listImageOptions(),
@@ -1852,83 +1806,7 @@ export class ControlPlaneService {
       }
       return this.nodeAgentTransport;
     }
-    return this.directNodeAgentTransport();
-  }
-
-  private directNodeAgentTransport(): NodeAgentTransport {
-    const request = async (node: Node, route: string, init: RequestInit = {}) => {
-      const endpoint = node.controlEndpoint || node.endpoint;
-      if (!endpoint) {
-        const error = new Error("Node agent direct HTTP mode requires an endpoint.");
-        Object.assign(error, { statusCode: 400, code: "NODE_AGENT_ENDPOINT_REQUIRED" });
-        throw error;
-      }
-      const method = init.method || "GET";
-      const body = typeof init.body === "string" || init.body instanceof Buffer ? init.body : init.body === undefined || init.body === null ? undefined : String(init.body);
-      const authHeaders = createDirectNodeAgentAuthHeaders(node, {
-        method,
-        pathWithQuery: `/api/node-agent${route}`,
-        body: body || "",
-      });
-      return this.fetchNodeAgentEndpoint(endpoint, route, {
-        ...init,
-        body,
-        headers: {
-          ...(init.headers || {}),
-          ...authHeaders,
-        },
-      });
-    };
-    return {
-      request,
-      requestStream: request,
-      proxyWebSocket: (node, socket, route, protocols, headers = {}) => {
-        const endpoint = node.controlEndpoint || node.endpoint;
-        if (!endpoint) {
-          throw Object.assign(new Error("Node agent direct HTTP mode requires an endpoint."), { statusCode: 400, code: "NODE_AGENT_ENDPOINT_REQUIRED" });
-        }
-        const ipcPath = parseNodeAgentIpcEndpoint(endpoint);
-        const pathWithQuery = `/api/node-agent${route}`;
-        const authHeaders = createDirectNodeAgentAuthHeaders(node, {
-          method: "GET",
-          pathWithQuery,
-        });
-        if (ipcPath) {
-          assertLocalIpcSocketOwnedByCurrentUser(ipcPath);
-          const upstream = createNodeAgentIpcWebSocket(ipcPath, route, protocols, { ...headers as Record<string, string>, ...authHeaders });
-          upstream.on("open", () => {
-            socket.on("message", (data, isBinary) => upstream.readyState === WsClient.OPEN && upstream.send(isBinary ? data : String(data)));
-            socket.on("close", () => upstream.close());
-            socket.on("error", () => upstream.close());
-          });
-          upstream.on("message", (data, isBinary) => {
-            if (socket.readyState === WsClient.OPEN) {
-              socket.send(isBinary ? data : data.toString());
-            }
-          });
-          upstream.on("close", () => socket.close());
-          upstream.on("error", () => socket.close(1011, "Instance websocket proxy failed."));
-          return;
-        }
-        const url = new URL(pathWithQuery, endpoint.replace(/\/$/, ""));
-        url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-        const upstream = protocols
-          ? new WsClient(url.toString(), protocols, { headers: { ...headers, ...authHeaders } })
-          : new WsClient(url.toString(), { headers: { ...headers, ...authHeaders } });
-        upstream.on("open", () => {
-          socket.on("message", (data, isBinary) => upstream.readyState === WsClient.OPEN && upstream.send(isBinary ? data : String(data)));
-          socket.on("close", () => upstream.close());
-          socket.on("error", () => upstream.close());
-        });
-        upstream.on("message", (data, isBinary) => {
-          if (socket.readyState === WsClient.OPEN) {
-            socket.send(isBinary ? data : data.toString());
-          }
-        });
-        upstream.on("close", () => socket.close());
-        upstream.on("error", () => socket.close(1011, "Instance websocket proxy failed."));
-      },
-    };
+    return this.directNodeAgentTransport;
   }
 
   private async listNodeInstances() {
@@ -1936,20 +1814,20 @@ export class ControlPlaneService {
     return result.items;
   }
 
-  private async listNodeInstancesWithDiagnostics() {
-    const result = await this.nodeAgentGateway.listFleetInstances(this.listNodes());
+  private async listNodeInstancesWithDiagnostics(signal?: AbortSignal) {
+    const result = await this.nodeAgentGateway.listFleetInstances(this.listNodes(), { signal });
     return {
-      items: await Promise.all(result.items.map((instance) => this.withFreshTriggerSnapshot(instance))),
+      items: await Promise.all(result.items.map((instance) => this.withFreshTriggerSnapshot(instance, signal))),
       nodeErrors: result.nodeErrors,
     };
   }
 
-  private async withFreshTriggerSnapshot(instance: ControlledInstance) {
+  private async withFreshTriggerSnapshot(instance: ControlledInstance, signal?: AbortSignal) {
     if (!controlledInstanceAcceptsTraffic(instance) || (instance.connectionStatus !== "online" && instance.agentStatus !== "online")) {
       return instance;
     }
     try {
-      const index = TriggerIndexSchema.parse(await this.instanceRequest(instance, "/triggers"));
+      const index = TriggerIndexSchema.parse(await this.instanceRequest(instance, "/triggers", { signal }));
       return ControlledInstanceSchema.parse({
         ...instance,
         triggers: controlledInstanceTriggerSnapshot(index),

@@ -9,11 +9,11 @@ type UseImageSettingsInput = {
   errorText: (error: unknown) => string;
   images: Ref<ImageProfile[] | undefined>;
   onImageDeleted: (imageId: string) => void;
-  refresh: () => Promise<void>;
+  refreshImages: () => Promise<void>;
   translate: Translate;
 };
 
-export function useImageSettings({ errorText, images, onImageDeleted, refresh, translate: t }: UseImageSettingsInput) {
+export function useImageSettings({ errorText, images, onImageDeleted, refreshImages, translate: t }: UseImageSettingsInput) {
   const translateError = (error: unknown) => translateApiError(error, t, errorText(error));
   const deletingImageId = ref("");
   const savingImage = ref(false);
@@ -42,7 +42,7 @@ export function useImageSettings({ errorText, images, onImageDeleted, refresh, t
       settingsImage.name = "";
       settingsImage.reference = "";
       imageCreateSuccess.value = t("settings.imageRegistry.added", { name: image.name });
-      await refresh();
+      await refreshImages();
     } catch (error) {
       showControlPlaneToast(translateError(error));
     } finally {
@@ -57,7 +57,7 @@ export function useImageSettings({ errorText, images, onImageDeleted, refresh, t
     try {
       await deleteImage(image.id);
       onImageDeleted(image.id);
-      await refresh();
+      await refreshImages();
     } catch (error) {
       showControlPlaneToast(translateError(error));
     } finally {

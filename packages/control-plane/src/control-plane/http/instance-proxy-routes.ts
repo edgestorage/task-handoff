@@ -72,7 +72,7 @@ export function registerInstanceProxyRoutes({ app, service }: RegisterInstancePr
     handler: async (request, reply) => {
       const params = request.params as { "*": string };
       const target = await service.appAccessProxyTarget(queryToken(request.url), "vnc", params["*"] || "");
-      const proxied = await service.proxyInstanceHttp(target.instance.id, target.path, {
+      const proxied = await proxyInstanceHttp(service, reply, target.instance.id, target.path, {
         method: request.method,
         headers: proxyHeaders(request.headers),
       });
@@ -85,7 +85,7 @@ export function registerInstanceProxyRoutes({ app, service }: RegisterInstancePr
     if (request.method === "GET" || request.method === "HEAD") {
       return reply.redirect(`${instancePublicBase(params.id)}/`);
     }
-    const proxied = await service.proxyInstanceHttp(params.id, "/", {
+    const proxied = await proxyInstanceHttp(service, reply, params.id, "/", {
       method: request.method,
       headers: proxyHeaders(request.headers),
       body: requestBody(request.body),
@@ -103,7 +103,7 @@ export function registerInstanceProxyRoutes({ app, service }: RegisterInstancePr
       const queryIndex = request.url.indexOf("?");
       const query = queryIndex >= 0 ? request.url.slice(queryIndex) : "";
       const proxiedPath = `/${suffix}${query}`;
-      const proxied = await service.proxyInstanceHttp(params.id, proxiedPath, {
+      const proxied = await proxyInstanceHttp(service, reply, params.id, proxiedPath, {
         method: request.method,
         headers: proxyHeaders(request.headers),
       });
@@ -120,7 +120,7 @@ export function registerInstanceProxyRoutes({ app, service }: RegisterInstancePr
       const suffix = params["*"] || "";
       const queryIndex = request.url.indexOf("?");
       const query = queryIndex >= 0 ? request.url.slice(queryIndex) : "";
-      const proxied = await service.proxyInstanceHttp(params.id, `/${suffix}${query}`, {
+      const proxied = await proxyInstanceHttp(service, reply, params.id, `/${suffix}${query}`, {
         method: request.method,
         headers: proxyHeaders(request.headers),
         body: requestBody(request.body),
@@ -174,6 +174,19 @@ function proxyWebSocketProtocols(headers: Record<string, unknown>) {
 }
 
 type StreamingProxyResponse = { status: number; headers: Record<string, string>; body: ReadableStream<Uint8Array> | null };
+
+function proxyInstanceHttp(
+  service: ControlPlaneService,
+  reply: FastifyReply,
+  instanceId: string,
+  path: string,
+  init: { method?: string; headers?: Record<string, string>; body?: string | Buffer } = {},
+) {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  reply.raw.once("close", abort);
+  return service.proxyInstanceHttp(instanceId, path, { ...init, signal: controller.signal });
+}
 
 function replyProxyResponse(reply: FastifyReply, response: StreamingProxyResponse, transform?: Transform) {
   for (const [key, value] of Object.entries(response.headers)) {

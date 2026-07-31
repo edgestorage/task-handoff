@@ -1,21 +1,12 @@
 import type { QueryClient } from "@tanstack/vue-query";
 import type { InstanceLifecycleSnapshot } from "@task-handoff/protocol/control-plane";
-
-type BoardInstance = {
-  id: string;
-  stateRevision: number;
-  access: { status: string; [key: string]: unknown };
-  [key: string]: unknown;
-};
-
-type BoardPayload = {
-  data: BoardInstance[];
-  meta?: unknown;
-};
+import type { InstanceBoardItem } from "../../api/types";
+import { mergeNewerLifecycleProjection } from "../../api/instanceBoardMerge.ts";
+import { updateInstanceBoardData } from "./instanceBoardCache.ts";
 
 export function applyInstanceLifecycle(queryClient: QueryClient, lifecycle: InstanceLifecycleSnapshot) {
   let matched = false;
-  const patch = (instance: BoardInstance): BoardInstance => {
+  const patch = (instance: InstanceBoardItem): InstanceBoardItem => {
     if (instance.id !== lifecycle.instanceId) return instance;
     matched = true;
     if ((instance.stateRevision || 0) >= lifecycle.revision) return instance;
@@ -27,21 +18,21 @@ export function applyInstanceLifecycle(queryClient: QueryClient, lifecycle: Inst
       startedAt: lifecycle.imageProvisioning.startedAt,
       updatedAt: lifecycle.imageProvisioning.updatedAt,
     } : undefined;
-    return {
+    return mergeNewerLifecycleProjection(instance, {
       ...instance,
       stateRevision: lifecycle.revision,
       updatedAt: lifecycle.updatedAt,
       status: lifecycle.status,
       health: lifecycle.health,
       connectionStatus: lifecycle.connectionStatus,
+      ready: lifecycle.ready,
       imageProvisioning,
       runtimeVersion: lifecycle.runtimeVersion,
       workspace: lifecycle.workspace,
       lastHeartbeatAt: lifecycle.lastHeartbeatAt,
       access: { ...instance.access, status: lifecycle.accessStatus },
-    };
+    });
   };
-  queryClient.setQueryData<BoardInstance[]>(["instance-board"], (current) => current?.map(patch));
-  queryClient.setQueryData<BoardPayload>(["instance-board-payload"], (current) => current ? { ...current, data: current.data.map(patch) } : current);
+  updateInstanceBoardData(queryClient, (instances) => instances.map(patch));
   return matched;
 }

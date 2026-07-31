@@ -3,6 +3,7 @@ import { z } from "zod";
 import { ControlPlaneEventBus } from "../events/bus.ts";
 import { ControlPlaneService } from "../application/service.ts";
 import { IdParamsSchema } from "./route-params.ts";
+import { withRequestSignal } from "./request-signal.ts";
 
 export type RegisterCatalogRoutesOptions = {
   app: FastifyInstance;
@@ -41,7 +42,9 @@ export function registerCatalogRoutes({ app, service, events }: RegisterCatalogR
     return { data: { deleted } };
   });
 
-  app.get("/api/models", async () => ({ data: await service.listFederatedModels() }));
+  app.get("/api/models", async (request, reply) => withRequestSignal(request, reply, async (signal) => ({
+    data: await service.listFederatedModels(signal),
+  })));
   app.post("/api/models", async (request, reply) => {
     const model = await service.createModel(request.body);
     events.publish("model.created", { modelId: model.id });

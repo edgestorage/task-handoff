@@ -11,11 +11,11 @@ type UseProjectSettingsInput = {
   errorText: (error: unknown) => string;
   onProjectDeleted: (projectId: string) => void;
   projectInUse: (projectId: string) => boolean;
-  refresh: () => Promise<void>;
+  refreshProjects: () => Promise<void>;
   translate: Translate;
 };
 
-export function useProjectSettings({ errorText, onProjectDeleted, projectInUse, refresh, translate: t }: UseProjectSettingsInput) {
+export function useProjectSettings({ errorText, onProjectDeleted, projectInUse, refreshProjects, translate: t }: UseProjectSettingsInput) {
   const translateError = (error: unknown) => translateApiError(error, t, errorText(error));
   const creatingSettingsProject = ref(false);
   const deletingProjectId = ref("");
@@ -86,7 +86,7 @@ export function useProjectSettings({ errorText, onProjectDeleted, projectInUse, 
       settingsProject.url = "";
       settingsProject.defaultImageSelection = undefined;
       settingsProject.defaultRuntimeId = "";
-      await refresh();
+      await refreshProjects();
     } catch (error) {
       showControlPlaneToast(translateError(error));
     } finally {
@@ -105,7 +105,7 @@ export function useProjectSettings({ errorText, onProjectDeleted, projectInUse, 
     try {
       await deleteProject(project.id);
       onProjectDeleted(project.id);
-      await refresh();
+      await refreshProjects();
     } catch (error) {
       showControlPlaneToast(translateError(error));
     } finally {

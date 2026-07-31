@@ -1,4 +1,6 @@
 import type {
+  AiSessionDeltaResponse as ProtocolAiSessionDeltaResponse,
+  AiSessionEventMeta as ProtocolAiSessionEventMeta,
   AiSessionHistoryItem,
   AiSessionHistoryList,
   AiSessionHistoryDetail,
@@ -9,9 +11,33 @@ import type {
   AiSessionReference,
   AiSessionResumeResult,
   AiSessionPermissionMode,
+  AiSessionLifecycle as ProtocolAiSessionLifecycle,
+  AiSessionMessageAttachmentRef as ProtocolAiSessionAttachmentRef,
+  AiSessionMessageDeltaEvent as ProtocolAiSessionMessageDeltaEvent,
+  AiSessionPhase as ProtocolAiSessionPhase,
+  AiSessionPatchEvent as ProtocolAiSessionPatchEvent,
+  AiSessionQueuedMessage as ProtocolAiSessionQueuedMessage,
+  AiSessionQueue as ProtocolAiSessionQueue,
+  AiSessionRemovedEvent as ProtocolAiSessionRemovedEvent,
+  AiSessionSnapshotEvent as ProtocolAiSessionSnapshotEvent,
+  AiSessionsSnapshot as ProtocolAiSessionsSnapshot,
+  AiSessionSource as ProtocolAiSessionSource,
+  AiSessionSummary as ProtocolAiSessionSummary,
+  AiSessionTool as ProtocolAiSessionTool,
+  AiSessionTurn as ProtocolAiSessionTurn,
+  AiSessionUnreadState as ProtocolAiSessionUnreadState,
 } from "@task-handoff/protocol/ai-sessions";
-import type { AiSessionContextCompaction as ProtocolAiSessionContextCompaction } from "@task-handoff/protocol/ai-sessions";
+import { AiSessionEventType as ProtocolAiSessionEventType, AiSessionUnreadEventType as ProtocolAiSessionUnreadEventType } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionSubAgent as ProtocolAiSessionSubAgent } from "@task-handoff/protocol/ai-sessions";
+import type {
+  AppSessionDeltaResponse as ProtocolAppSessionDeltaResponse,
+  AppSessionPatchEvent as ProtocolAppSessionPatchEvent,
+  AppSessionRecord as ProtocolAppSession,
+  AppSessionRemovedEvent as ProtocolAppSessionRemovedEvent,
+  AppSessionSnapshotEvent as ProtocolAppSessionSnapshotEvent,
+  AppSessionsSnapshot as ProtocolAppSessionsSnapshot,
+} from "@task-handoff/protocol/app-sessions";
+import { AppSessionEventType as ProtocolAppSessionEventType } from "@task-handoff/protocol/app-sessions";
 import type {
   ImagePullProgress,
   ApplyUpdateRequest,
@@ -33,25 +59,11 @@ export type HealthResponse = {
   serverTime?: string;
 };
 
-export const AiSessionEventType = {
-  Snapshot: "ai-session.snapshot",
-  Patch: "ai-session.patch",
-  Removed: "ai-session.removed",
-  MessageDelta: "ai-session.message-delta",
-  SyncRequired: "ai-session.sync-required",
-} as const;
-export const AiSessionUnreadEventType = {
-  Updated: "ai-session.unread.updated",
-} as const;
+export const AiSessionEventType = ProtocolAiSessionEventType;
+export const AiSessionUnreadEventType = ProtocolAiSessionUnreadEventType;
+export const AppSessionEventType = ProtocolAppSessionEventType;
 
 export type AiSessionEventType = (typeof AiSessionEventType)[keyof typeof AiSessionEventType];
-
-export const AppSessionEventType = {
-  Snapshot: "app-session.snapshot",
-  Patch: "app-session.patch",
-  Removed: "app-session.removed",
-  SyncRequired: "app-session.sync-required",
-} as const;
 
 export type AppSessionEventType = (typeof AppSessionEventType)[keyof typeof AppSessionEventType];
 
@@ -545,6 +557,7 @@ export type ControlledInstance = {
   instanceVersion?: string;
   build?: BuildInfo;
   runtimeVersion?: RuntimeVersionState;
+  ready: boolean;
   capabilities: Record<string, unknown>;
   appInventory?: InstanceAppInventory;
   config: {
@@ -692,52 +705,11 @@ export type ControlPlaneTriggers = {
   triggers: ControlPlaneTrigger[];
 };
 
-export type AppSessionsSnapshot = {
-  runningCount: number;
-  problemCount: number;
-  sessions: AppSession[];
-  updatedAt: string;
-};
-
-export type AppSessionSnapshotEvent = {
-  meta: {
-    streamId: string;
-    instanceId: string;
-    nodeId?: string;
-    revision: number;
-    previousRevision?: number;
-    traceId: string;
-    generatedAt: string;
-    reason: string;
-  };
-  snapshot: AppSessionsSnapshot;
-};
-
-export type AppSessionPatchEvent = {
-  meta: AppSessionSnapshotEvent["meta"];
-  session: AppSession;
-};
-
-export type AppSessionRemovedEvent = {
-  meta: AppSessionSnapshotEvent["meta"];
-  sessionId: string;
-  tombstone?: AppSession;
-  expiresAt?: string;
-};
-
-export type AppSessionDeltaResponse = {
-  streamId: string;
-  instanceId: string;
-  sinceRevision: number;
-  latestRevision: number;
-  earliestRetainedRevision: number;
-  syncRequired: boolean;
-  events: Array<
-    | { type: typeof AppSessionEventType.Snapshot; payload: AppSessionSnapshotEvent }
-    | { type: typeof AppSessionEventType.Patch; payload: AppSessionPatchEvent }
-    | { type: typeof AppSessionEventType.Removed; payload: AppSessionRemovedEvent }
-  >;
-};
+export type AppSessionsSnapshot = ProtocolAppSessionsSnapshot;
+export type AppSessionSnapshotEvent = ProtocolAppSessionSnapshotEvent;
+export type AppSessionPatchEvent = ProtocolAppSessionPatchEvent;
+export type AppSessionRemovedEvent = ProtocolAppSessionRemovedEvent;
+export type AppSessionDeltaResponse = ProtocolAppSessionDeltaResponse;
 
 export type ControlPlaneAppSessions = {
   updatedAt: string;
@@ -758,12 +730,11 @@ export type CreateControlPlaneTriggerInput = {
   policy?: Partial<TriggerConfig["policy"]>;
 };
 
-export type AiSessionLifecycle = "running" | "waiting" | "idle" | "failed";
+export type AiSessionLifecycle = ProtocolAiSessionLifecycle;
+export type AiSessionPhase = ProtocolAiSessionPhase;
+export type AiSessionSource = ProtocolAiSessionSource;
 
-export type AiSessionPhase = "thinking" | "tool" | "editing" | "approval" | "responding" | "unknown";
-export type AiSessionSource = "control" | "realtime" | "adapter-snapshot" | "transcript-tail" | "transcript-scan" | "process-scan" | "app-session";
-
-export type AiSessionAttachment = {
+export type AiSessionUploadedAttachment = {
   id: string;
   kind: "image" | "file";
   name: string;
@@ -772,111 +743,23 @@ export type AiSessionAttachment = {
   expiresAt?: string;
 };
 
-export type AiSessionAttachmentRef = {
-  id: string;
-  kind?: "image" | "file";
-  source?: { type: "upload-ref" };
-} | {
-  id: string;
-  kind: "image" | "file";
-  name: string;
-  mime: string;
-  size: number;
-  source: { type: "runtime-path"; path: string };
-};
+export type AiSessionAttachmentRef = ProtocolAiSessionAttachmentRef;
 
-export type AiSessionTurn = {
-  id: string;
-  providerTurnId?: string;
-  source?: AiSessionSource;
-  userPrompt?: string;
-  status: "queued" | "running" | "waiting" | "completed" | "failed";
-  phase?: AiSessionPhase;
-  summary?: string;
-  lastMessage?: string;
-  lastMessageItemId?: string;
-  contextCompactions?: ProtocolAiSessionContextCompaction[];
-  revision: number;
-  sourcePriority?: number;
-  snapshotVersion?: number;
-  observedAt?: string;
-  startedAt?: string;
-  updatedAt?: string;
-  completedAt?: string;
-};
-
-export type AiSessionQueuedMessage = {
-  id: string;
-  message: string;
-  attachments?: AiSessionAttachment[];
-  status: "queued" | "sending" | "failed";
-  createdAt: string;
-  updatedAt: string;
-  error?: string;
-};
-
-export type AiSessionQueue = {
-  pendingCount: number;
-  items: AiSessionQueuedMessage[];
-};
-
-export type AiSessionTool = {
-  id?: string;
-  kind?: string;
-  name: string;
-  inputPreview?: string;
-  startedAt?: string;
-};
+export type AiSessionTurn = ProtocolAiSessionTurn;
+export type AiSessionQueuedMessage = ProtocolAiSessionQueuedMessage;
+export type AiSessionQueue = ProtocolAiSessionQueue;
+export type AiSessionTool = ProtocolAiSessionTool;
 
 export type AiSessionSubAgent = ProtocolAiSessionSubAgent;
 
-export type AiSessionSummary = {
-  id: string;
-  agent: string;
-  appSessionId?: string;
-  appId?: string;
-  providerSessionId?: string;
-  providerMeta?: Record<string, unknown>;
-  appBindingKeys?: string[];
-  actions?: {
-    send?: boolean;
-    interrupt?: boolean;
-    approval?: boolean;
-  };
-  activeTurnId?: string;
-  title?: string;
-  cwd?: string;
-  userPrompt?: string;
-  turns?: AiSessionTurn[];
-  status: AiSessionLifecycle;
-  phase: AiSessionPhase;
-  summary?: string;
-  lastMessage?: string;
-  lastMessageItemId?: string;
-  currentTool?: AiSessionTool;
-  toolCallsSinceLastMessage: number;
-  subAgents: AiSessionSubAgent[];
-  queue: AiSessionQueue;
-  startedAt: string;
-  updatedAt: string;
-  error?: string;
+export type AiSessionSummary = ProtocolAiSessionSummary & {
   unread: boolean;
 };
 
-export type AiSessionUnreadState = {
-  instanceId: string;
-  sessionId: string;
-  unread: boolean;
-  sessionUpdatedAt: string;
-  updatedAt: string;
-};
+export type AiSessionUnreadState = ProtocolAiSessionUnreadState;
 
-export type AiSessionsSnapshot = {
-  runningCount: number;
-  waitingCount: number;
-  staleCount: number;
+export type AiSessionsSnapshot = Omit<ProtocolAiSessionsSnapshot, "sessions"> & {
   sessions: AiSessionSummary[];
-  updatedAt: string;
 };
 
 export type InstanceBoardAiSummary = {
@@ -900,58 +783,12 @@ export type ControlPlaneAiSessions = {
   }>;
 };
 
-export type AiSessionEventMeta = {
-  streamId: string;
-  instanceId: string;
-  nodeId?: string;
-  revision: number;
-  previousRevision?: number;
-  traceId: string;
-  generatedAt: string;
-  reason: string;
-};
-
-export type AiSessionSnapshotEvent = {
-  meta: AiSessionEventMeta;
-  snapshot: AiSessionsSnapshot;
-};
-
-export type AiSessionPatchEvent = {
-  meta: AiSessionEventMeta;
-  upserted: AiSessionSummary[];
-  removed: string[];
-};
-
-export type AiSessionRemovedEvent = {
-  meta: AiSessionEventMeta;
-  sessionIds: string[];
-  expiresAt: string;
-};
-
-export type AiSessionMessageDeltaEvent = {
-  instanceId: string;
-  nodeId?: string;
-  sessionId: string;
-  providerSessionId: string;
-  turnId: string;
-  itemId: string;
-  delta: string;
-  generatedAt: string;
-};
-
-export type AiSessionDeltaResponse = {
-  streamId: string;
-  instanceId: string;
-  sinceRevision: number;
-  latestRevision: number;
-  earliestRetainedRevision: number;
-  syncRequired: boolean;
-  events: Array<
-    | { type: typeof AiSessionEventType.Snapshot; payload: AiSessionSnapshotEvent }
-    | { type: typeof AiSessionEventType.Patch; payload: AiSessionPatchEvent }
-    | { type: typeof AiSessionEventType.Removed; payload: AiSessionRemovedEvent }
-  >;
-};
+export type AiSessionEventMeta = ProtocolAiSessionEventMeta;
+export type AiSessionSnapshotEvent = ProtocolAiSessionSnapshotEvent;
+export type AiSessionPatchEvent = ProtocolAiSessionPatchEvent;
+export type AiSessionRemovedEvent = ProtocolAiSessionRemovedEvent;
+export type AiSessionMessageDeltaEvent = ProtocolAiSessionMessageDeltaEvent;
+export type AiSessionDeltaResponse = ProtocolAiSessionDeltaResponse;
 
 export type ChatChannel = "web" | "telegram" | "wechat" | "dingding";
 
@@ -1004,38 +841,7 @@ export type UpdateChatBridgeInput = {
   settings?: Record<string, unknown>;
 };
 
-export type AppSession = {
-  id: string;
-  appId: string;
-  title?: string;
-  kind?: "tty" | "gui" | "web" | string;
-  status?: string;
-  bindings?: Array<{
-    type: "app-session" | "provider-session" | "adapter-key";
-    id: string;
-    agent?: string;
-    adapter?: string;
-    key?: string;
-  }>;
-  workspace?: {
-    cwd?: string;
-  };
-  tty?: {
-    webPath?: string;
-    shell?: string;
-    cwd?: string;
-  };
-  web?: {
-    webPath?: string;
-    host?: string;
-    port?: number;
-  };
-  vnc?: {
-    webPath?: string;
-    noVncPath?: string;
-  };
-  [key: string]: unknown;
-};
+export type AppSession = ProtocolAppSession;
 
 export type InstanceBoardItem = Omit<ControlledInstance, "aiSessions"> & {
   aiSessions: InstanceBoardAiSummary;

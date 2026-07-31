@@ -208,6 +208,7 @@ import { useEventListener } from "@vueuse/core";
 import { Columns3, LayoutGrid, Search, SlidersHorizontal } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import { interruptAiSession, markAiSessionRead, removeAiSessionQueuedMessage, resolveAiSessionApproval, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, stopAppSession, uploadAiSessionAttachment, useControlPlaneSettingsQuery } from "../../../api/queries";
+import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { executeAiSessionCommand } from "../../../api/ai-session-commands";
 import type { AiSessionCommandInput, AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions } from "../../../api/types";
@@ -670,7 +671,7 @@ function closeBoardOverlays(event: MouseEvent) {
 
 async function refreshBoard() {
   await Promise.all([
-    queryClient.invalidateQueries({ queryKey: ["instance-board"] }),
+    queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.instanceBoard }),
     queryClient.invalidateQueries({ queryKey: ["control-plane-ai-sessions"] }),
   ]);
 }

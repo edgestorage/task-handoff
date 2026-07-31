@@ -653,11 +653,13 @@ import { useQueryClient } from "@tanstack/vue-query";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import AiSessionCardContextMenu from "../../../components/ai-session/AiSessionCardContextMenu.vue";
 import { bindAiSessionTrigger, createNodeLocalFolder, getAiSessionHistory, getAiSessionHistoryDetail, interruptAiSession, launchAppSession, listNodeFolderTree, markAiSessionRead, removeAiSessionQueuedMessage, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, stopAppSession, unbindAiSessionTrigger, updateControlledInstance, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery } from "../../../api/queries";
+import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { executeAiSessionCommand } from "../../../api/ai-session-commands";
 import type { AiSessionCommandInput, AiSessionHistoryDetail, AiSessionHistoryItem, AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
 import type { RepositoryAiSessionLaunchResult } from "@task-handoff/protocol/repository";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, NodeLocalFolder, TriggerConfig, TriggerDeployment, TriggerRuntimeState } from "../../../api/types";
 import type { LaunchableApp } from "../useInstanceSessions";
+import { updateInstanceBoardData } from "../instanceBoardCache.ts";
 import AiSessionComposer, { type AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
 import AiSessionResult from "../../../components/ai-session/AiSessionResult.vue";
 import AiSessionStreamingMarkdown from "../../../components/ai-session/AiSessionStreamingMarkdown.vue";
@@ -1450,7 +1452,7 @@ function canResolveApproval(session: AiSessionSummary) {
 
 async function refreshBoard() {
   await Promise.all([
-    queryClient.invalidateQueries({ queryKey: ["instance-board"] }),
+    queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.instanceBoard }),
     queryClient.invalidateQueries({ queryKey: ["control-plane-ai-sessions"] }),
   ]);
 }
@@ -1667,7 +1669,7 @@ async function toggleTrigger(session: AiSessionSummary, configHash: string) {
       upsertLocalTriggerBinding(created);
     }
     await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["instance-board"] }),
+      queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.instanceBoard }),
       queryClient.invalidateQueries({ queryKey: ["control-plane-triggers"] }),
     ]);
   } finally {
@@ -1699,7 +1701,7 @@ function upsertLocalTriggerBinding(result: TriggerMutationResult) {
   if (!result.config || !result.deployment) {
     return;
   }
-  queryClient.setQueryData<InstanceBoardItem[]>(["instance-board"], (current = []) => current.map((instance) => {
+  updateInstanceBoardData(queryClient, (instances) => instances.map((instance) => {
     if (instance.id !== props.instance.id) {
       return instance;
     }
@@ -1731,7 +1733,7 @@ function upsertLocalTriggerBinding(result: TriggerMutationResult) {
 }
 
 function removeLocalTriggerBinding(session: AiSessionSummary, configHash: string) {
-  queryClient.setQueryData<InstanceBoardItem[]>(["instance-board"], (current = []) => current.map((instance) => {
+  updateInstanceBoardData(queryClient, (instances) => instances.map((instance) => {
     if (instance.id !== props.instance.id || !instance.triggers) {
       return instance;
     }

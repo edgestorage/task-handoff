@@ -70,11 +70,11 @@ export class ControlPlaneAiSessionAggregator {
       const parsed = AiSessionMessageDeltaEventSchema.safeParse(event.payload);
       if (!parsed.success) {
         this.logger?.warn?.({ eventType: event.type, issues: parsed.error.issues, errorCode: "AI_SESSION_MESSAGE_DELTA_INVALID" }, "ai-session.aggregator.message-delta.invalid");
-        return true;
+        return false;
       }
-      // Message deltas are forwarded directly by the event bus. They are intentionally
-      // excluded from the recoverable snapshot and snapshot listeners; the next
-      // revisioned snapshot/patch is the authoritative projection boundary.
+      // Message deltas cross the aggregator boundary after schema validation but are
+      // excluded from recoverable snapshots; the next revisioned event remains the
+      // authoritative projection boundary.
       return true;
     }
     const schema = event.type === AiSessionEventType.Snapshot
@@ -84,18 +84,15 @@ export class ControlPlaneAiSessionAggregator {
         : event.type === AiSessionEventType.Removed
           ? AiSessionRemovedEventSchema
           : undefined;
-    if (!schema) {
-      return false;
-    }
+    if (!schema) return false;
     const parsed = schema.safeParse(event.payload);
     if (!parsed.success) {
       this.logger?.warn?.({ eventType: event.type, issues: parsed.error.issues, errorCode: "AI_SESSION_EVENT_INVALID" }, "ai-session.aggregator.event.invalid");
-      return true;
+      return false;
     }
-    if (event.type === AiSessionEventType.Snapshot) this.applySnapshot(parsed.data as AiSessionSnapshotEvent);
-    if (event.type === AiSessionEventType.Patch) this.applyPatch(parsed.data as AiSessionPatchEvent);
-    if (event.type === AiSessionEventType.Removed) this.applyRemoved(parsed.data as AiSessionRemovedEvent);
-    return true;
+    if (event.type === AiSessionEventType.Snapshot) return this.applySnapshot(parsed.data as AiSessionSnapshotEvent);
+    if (event.type === AiSessionEventType.Patch) return this.applyPatch(parsed.data as AiSessionPatchEvent);
+    return this.applyRemoved(parsed.data as AiSessionRemovedEvent);
   }
 
   onSnapshot(listener: (update: ControlPlaneAiSessionSnapshotUpdate) => void) {

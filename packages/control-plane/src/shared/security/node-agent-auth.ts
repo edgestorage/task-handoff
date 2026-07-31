@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import type { Node } from "@task-handoff/protocol/control-plane";
 
 export const NODE_AGENT_HMAC_VERSION = "TASK_HANDOFF_NODE_AGENT_V1";
 export const NODE_AGENT_HMAC_TIMESTAMP_WINDOW_MS = 60_000;
@@ -21,6 +22,34 @@ export type NodeAgentHmacHeaders = {
   "x-taskhandoff-body-sha256": string;
   "x-taskhandoff-signature": string;
 };
+
+type DirectNodeAgentAuthContext = Pick<Node, "id" | "auth" | "connectionMode">;
+
+export function createDirectNodeAgentAuthHeaders(
+  node: DirectNodeAgentAuthContext,
+  input: { method: string; pathWithQuery: string; body?: string | Buffer },
+) {
+  if (node.auth.mode === "paired-hmac" && node.auth.secret) {
+    if (!node.auth.keyId) {
+      const error = new Error(`Node ${node.id} paired-HMAC auth is missing keyId.`);
+      Object.assign(error, { statusCode: 500, code: "NODE_AGENT_REMOTE_KEY_ID_MISSING" });
+      throw error;
+    }
+    return createNodeAgentHmacHeaders({
+      nodeId: node.id,
+      keyId: node.auth.keyId,
+      secret: node.auth.secret,
+      method: input.method,
+      pathWithQuery: input.pathWithQuery,
+      body: input.body,
+    });
+  }
+  const localStaticToken = (node.connectionMode === "local-ipc" || node.connectionMode === "local-loopback")
+    && node.auth.mode === "local-static-key"
+    ? node.auth.secret
+    : undefined;
+  return localStaticToken ? { authorization: `Bearer ${localStaticToken}` } : {};
+}
 
 export function sha256Hex(value: string | Buffer = "") {
   return crypto.createHash("sha256").update(value).digest("hex");

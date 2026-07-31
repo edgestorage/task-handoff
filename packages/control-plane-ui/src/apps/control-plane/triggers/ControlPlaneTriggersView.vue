@@ -269,6 +269,7 @@ import { useQueryClient } from "@tanstack/vue-query";
 import { useI18n } from "vue-i18n";
 import { Plus, Trash2, X } from "@lucide/vue";
 import { createControlPlaneTrigger, deleteControlPlaneTrigger, runControlledInstanceTrigger, useControlPlaneTriggersQuery } from "../../../api/queries";
+import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import type { InstanceBoardItem, TriggerSource, TriggerTarget } from "../../../api/types";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
@@ -453,7 +454,7 @@ async function deleteTemplate(configHash: string) {
 
 async function refresh() {
   await queryClient.invalidateQueries({ queryKey: ["control-plane-triggers"] });
-  await queryClient.invalidateQueries({ queryKey: ["instance-board"] });
+  await queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.instanceBoard });
 }
 
 function sourceFromForm(): TriggerSource {

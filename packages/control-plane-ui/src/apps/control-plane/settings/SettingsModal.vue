@@ -572,7 +572,8 @@ import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useQueryClient } from "@tanstack/vue-query";
 import { AlertTriangle, ArrowLeft, ChevronDown, ChevronUp, Download, KeyRound, Layers, MapPin, MonitorCog, Plus, RefreshCw, Server, Settings, Trash2 } from "@lucide/vue";
-import { getNodeExternalListener, updateControlPlaneSettings, updateNodeExternalListener, useChatBridgesQuery, useChatGatewayStatusQuery, useControlPlaneSettingsQuery, useImageOptionsQuery, useImagesQuery, useInstanceBoardPayloadQuery, useMarketCatalogQuery, useModelRegistryQuery, useModelsQuery, useNodeImageAvailabilityQuery, useNodeRuntimesPayloadQuery, useNodesQuery, useProjectsQuery, useServerUpdateCheckQuery } from "../../../api/queries";
+import { controlPlaneQueryKeys, getNodeExternalListener, updateControlPlaneSettings, updateNodeExternalListener, useChatBridgesQuery, useChatGatewayStatusQuery, useControlPlaneSettingsQuery, useImageOptionsQuery, useImagesQuery, useInstanceBoardPayloadQuery, useMarketCatalogQuery, useModelRegistryQuery, useModelsQuery, useNodeImageAvailabilityQuery, useNodeRuntimesPayloadQuery, useNodesQuery, useProjectsQuery, useServerUpdateCheckQuery } from "../../../api/queries";
+import { invalidateControlPlaneDomains } from "../../../api/queryInvalidation";
 import type { BuildInfo, ControlPlaneSettings, InstanceBoardItem, ModelLocation, Node, NodeAgentExternalListener, UpdateChannel } from "../../../api/types";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
@@ -741,25 +742,15 @@ watch(
 );
 
 async function refresh() {
-  await Promise.all([
-    queryClient.invalidateQueries({ queryKey: ["control-plane-status"] }),
-    queryClient.invalidateQueries({ queryKey: ["control-plane-settings"] }),
-    queryClient.invalidateQueries({ queryKey: ["control-plane-projects"] }),
-    queryClient.invalidateQueries({ queryKey: ["control-plane-models"] }),
-    queryClient.invalidateQueries({ queryKey: ["control-plane-images"] }),
-    queryClient.invalidateQueries({ queryKey: ["control-plane-image-options"] }),
-    queryClient.invalidateQueries({ queryKey: ["control-plane-market-catalog"] }),
-    queryClient.invalidateQueries({ queryKey: ["node-image-catalog"] }),
-    queryClient.invalidateQueries({ queryKey: ["control-plane-nodes"] }),
-    queryClient.invalidateQueries({ queryKey: ["control-plane-node-local-folders"] }),
-    queryClient.invalidateQueries({ queryKey: ["control-plane-node-runtimes"] }),
-    queryClient.invalidateQueries({ queryKey: ["control-plane-node-runtimes-payload"] }),
-    queryClient.invalidateQueries({ queryKey: ["instance-board"] }),
-    queryClient.invalidateQueries({ queryKey: ["instance-board-payload"] }),
-    queryClient.invalidateQueries({ queryKey: ["chat-gateway-bridges"] }),
-    queryClient.invalidateQueries({ queryKey: ["chat-gateway-status"] }),
-  ]);
+  await invalidateControlPlaneDomains(queryClient, ["manual"]);
 }
+
+const refreshProjects = () => invalidateControlPlaneDomains(queryClient, ["projects"]);
+const refreshImages = () => invalidateControlPlaneDomains(queryClient, ["images"]);
+const refreshModels = () => invalidateControlPlaneDomains(queryClient, ["models"]);
+const refreshNodeTopology = () => invalidateControlPlaneDomains(queryClient, ["nodeTopology"]);
+const refreshNodeRuntimeState = () => invalidateControlPlaneDomains(queryClient, ["nodeRuntimeState"]);
+const refreshNodeFolders = () => invalidateControlPlaneDomains(queryClient, ["nodeFolders"]);
 
 async function syncRenamedNode(renamed: Node) {
   queryClient.setQueryData<Node[]>(["control-plane-nodes"], (current) => {
@@ -767,9 +758,8 @@ async function syncRenamedNode(renamed: Node) {
     return current.map((node) => node.id === renamed.id ? renamed : node);
   });
   await Promise.allSettled([
-    queryClient.invalidateQueries({ queryKey: ["control-plane-nodes"] }),
-    queryClient.refetchQueries({ queryKey: ["instance-board"] }),
-    queryClient.refetchQueries({ queryKey: ["instance-board-payload"] }),
+    queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.nodes }),
+    queryClient.refetchQueries({ queryKey: controlPlaneQueryKeys.instanceBoard }),
   ]);
 }
 
@@ -799,7 +789,7 @@ const {
   errorText,
   onProjectDeleted() {},
   projectInUse,
-  refresh,
+  refreshProjects,
   translate: t,
 });
 const {
@@ -846,7 +836,8 @@ const {
   imageOptions: imageOptions.data,
   instances: boardItems,
   nodes: nodes.data,
-  refresh,
+  refreshFolders: refreshNodeFolders,
+  refreshRuntimeState: refreshNodeRuntimeState,
   runtimes: nodeRuntimeItems,
   translate: t,
 });
@@ -946,7 +937,7 @@ const {
   errorText,
   images: images.data,
   onImageDeleted: clearDefaultImage,
-  refresh,
+  refreshImages,
   translate: t,
 });
 function closeImageCreate() {
@@ -978,7 +969,7 @@ const {
   models: () => models.data.value || [],
   nodes: () => nodes.data.value || [],
   onModelDeleted() {},
-  refresh,
+  refreshModels,
   translate: t,
 });
 const editingModelLocationCount = computed(() => {
@@ -1057,7 +1048,8 @@ const {
   errorText,
   onNodeDeleted: clearDefaultRuntime,
   onNodeRenamed: syncRenamedNode,
-  refresh,
+  refreshNodeRuntimeState,
+  refreshNodeTopology,
   nodes: () => nodes.data.value || [],
   runtimes: () => nodeRuntimeItems.value,
   updateChannel: () => updateChannel.value,
@@ -1325,10 +1317,7 @@ function validCommandTrigger(value: string) {
 }
 
 async function refreshChat() {
-  await Promise.all([
-    queryClient.invalidateQueries({ queryKey: ["chat-gateway-bridges"] }),
-    queryClient.invalidateQueries({ queryKey: ["chat-gateway-status"] }),
-  ]);
+  await invalidateControlPlaneDomains(queryClient, ["chat"]);
 }
 
 function catalogAvailabilityStatus(imageId: string) {

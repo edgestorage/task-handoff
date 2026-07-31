@@ -271,8 +271,6 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
         aiSessionUnread.removeInstance(instanceId);
       }
     }
-    appSessionAggregator.handleEvent(event);
-    aiSessionAggregator.handleEvent(event);
   });
   const aiSessionAttachments = new AiSessionAttachmentStore();
   const nodeAgentTunnel = new ControlPlaneNodeAgentTunnelTransport(events, {
@@ -283,6 +281,23 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
         if (descriptor.topic === "app.sessions") appSessionAggregator.advertiseStream(instanceId, descriptor);
       }
     },
+    onSessionEvent: (event) => event.type.startsWith("app-session.")
+      ? appSessionAggregator.handleEvent(event)
+      : aiSessionAggregator.handleEvent(event),
+  });
+  events.on((event) => {
+    if (event.type === "instance.created" || event.type === "instance.updated" || event.type === "instance.deleted") {
+      const instanceId = event.payload && typeof event.payload === "object" && "instanceId" in event.payload
+        ? String((event.payload as { instanceId?: unknown }).instanceId || "")
+        : "";
+      if (instanceId) nodeAgentTunnel.invalidateInstanceScope({ instanceId });
+    }
+    if (event.type === "node.deleted") {
+      const nodeId = event.payload && typeof event.payload === "object" && "nodeId" in event.payload
+        ? String((event.payload as { nodeId?: unknown }).nodeId || "")
+        : "";
+      if (nodeId) nodeAgentTunnel.invalidateInstanceScope({ nodeId });
+    }
   });
   service.setNodeAgentTransport(nodeAgentTunnel);
   service.init();

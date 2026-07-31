@@ -3,9 +3,8 @@ import type {
   AiSessionPatchEvent,
   AiSessionRemovedEvent,
   AiSessionSnapshotEvent,
-  AiSessionSummary,
-  AiSessionsSnapshot,
 } from "../../api/types";
+import type { AiSessionSummary, AiSessionsSnapshot } from "@task-handoff/protocol/ai-sessions";
 
 export type StreamingMessageIdentity = {
   instanceId: string;
