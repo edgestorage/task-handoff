@@ -5882,6 +5882,12 @@ test("controlled instance refreshes managed model auth through its registration-
     CLAUDE_HOME: claudeHome,
   });
   const runtime = new AppRuntimeManager(paths);
+  let runtimeDrainRequests = 0;
+  const stopAll = runtime.stopAll.bind(runtime);
+  runtime.stopAll = async () => {
+    runtimeDrainRequests += 1;
+    await stopAll();
+  };
   const managedEnvironments = [];
   const replaceManagedEnvironment = runtime.replaceManagedEnvironment.bind(runtime);
   runtime.replaceManagedEnvironment = (environment) => {
@@ -5907,6 +5913,31 @@ test("controlled instance refreshes managed model auth through its registration-
     assert.equal(identity.json().data.pid, process.pid);
     assert.equal(identity.json().data.processNonce, "nonce_managed_model");
     assert.ok(["string", "undefined"].includes(typeof identity.json().data.startIdentity));
+    const forbiddenDrain = await app.inject({ method: "POST", url: "/api/internal/node-agent/drain" });
+    assert.equal(forbiddenDrain.statusCode, 403);
+    const drained = await app.inject({
+      method: "POST",
+      url: "/api/internal/node-agent/drain",
+      headers: { authorization: "Bearer instance-registration-token" },
+    });
+    assert.equal(drained.statusCode, 200);
+    assert.deepEqual(drained.json().data, { drained: true, instanceId: "inst_managed_model" });
+    assert.equal(runtimeDrainRequests, 1);
+    assert.equal(runtime.isDraining(), true);
+    assert.throws(
+      () => runtime.start("missing-tool"),
+      (error) => error?.code === "APP_RUNTIME_DRAINING",
+    );
+    const forbiddenResume = await app.inject({ method: "POST", url: "/api/internal/node-agent/resume" });
+    assert.equal(forbiddenResume.statusCode, 403);
+    const resumed = await app.inject({
+      method: "POST",
+      url: "/api/internal/node-agent/resume",
+      headers: { authorization: "Bearer instance-registration-token" },
+    });
+    assert.equal(resumed.statusCode, 200);
+    assert.deepEqual(resumed.json().data, { resumed: true, instanceId: "inst_managed_model" });
+    assert.equal(runtime.isDraining(), false);
     const forbidden = await app.inject({ method: "PUT", url: "/api/internal/model-environment", payload: { OPENAI_API_KEY: "should-not-apply" } });
     assert.equal(forbidden.statusCode, 403);
     const applied = await app.inject({

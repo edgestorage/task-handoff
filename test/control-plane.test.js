@@ -10,7 +10,7 @@ const WebSocket = require("ws");
 const { z } = require("zod");
 
 const { createControlPlaneApp } = require("../packages/control-plane/src/server.ts");
-const { createNodeAgentApp, listenNodeAgentIpcServer, mergeRuntimeLifecycleResult, NodeAgentExternalListenerManager, resolvedDockerImageUpdatePatch, runtimeVersionStateForActual } = require("../packages/control-plane/src/node-agent.ts");
+const { createNodeAgentApp, listenNodeAgentIpcServer, mergeRuntimeLifecycleResult, NodeAgentExternalListenerManager, requestRuntimeAppSessionDrain, resolvedDockerImageUpdatePatch, runtimeVersionStateForActual } = require("../packages/control-plane/src/node-agent.ts");
 const { ControlPlaneChatGatewayRuntime, aiSessionDeliveryText, createDingdingStreamClient } = require("../packages/control-plane/src/chat-gateway.ts");
 const { ControlledInstanceGateway } = require("../packages/control-plane/src/control-plane/instances/gateway.ts");
 const { parseDingdingCardEvent, sendDingdingActionsCard } = require("../packages/control-plane/src/control-plane/chat/adapters/dingding.ts");
@@ -29,7 +29,7 @@ const { createNodeAgentHmacHeaders, NODE_AGENT_HMAC_TIMESTAMP_WINDOW_MS } = requ
 const { fetchNodeAgentIpc, nodeAgentIpcEndpoint, nodeAgentIpcPath, prepareNodeAgentIpcPath } = require("../packages/control-plane/src/shared/transport/node-agent-ipc.ts");
 const { can } = require("../packages/control-plane/src/control-plane/auth/authorization.ts");
 const { LocalDockerExecutor, dockerRunArgs } = require("../packages/control-plane/src/node-agent/runtimes/docker.ts");
-const { checkNodeAgentUpdate, isNewerVersion, resolveNodeAgentUpdateWorker, sanitizeStoredUpdateJob } = require("../packages/control-plane/src/node-agent/updates.ts");
+const { checkNodeAgentUpdate, isNewerVersion, resolveNodeAgentUpdateWorker, resolveNodeUpdatePackage, sanitizeStoredUpdateJob } = require("../packages/control-plane/src/node-agent/updates.ts");
 const { ProcessSingletonError, acquireProcessSingletonLock } = require("../packages/control-plane/src/shared/process/singleton-lock.ts");
 const { processStartIdentity, verifiedProcessLockOwnerPid } = require("../packages/core/src/core/process-singleton-lock.ts");
 const { acquireLocalControlledInstanceLock, localControlledInstanceLockPath, readLocalControlledInstanceLockOwner } = require("../packages/core/src/core/local-controlled-instance-lock.ts");
@@ -71,6 +71,52 @@ test("node agent uses an explicit packaged version as the runtime convergence ta
     if (previousVersion === undefined) delete process.env.TASK_HANDOFF_VERSION;
     else process.env.TASK_HANDOFF_VERSION = previousVersion;
   }
+});
+
+test("runtime app-session drain prefers managed bulk drain and falls back across older snapshots", async () => {
+  const baseInstance = {
+    id: "inst_drain",
+    target: { strategy: "direct-port", web: "http://127.0.0.1:19000" },
+    registrationToken: "registration-token",
+    apps: { runningCount: 2, problemCount: 0 },
+  };
+  const bulkCalls = [];
+  const bulk = await requestRuntimeAppSessionDrain(async (url, init) => {
+    bulkCalls.push([String(url), init?.method, init?.headers]);
+    return new Response(JSON.stringify({ data: { drained: true } }), { status: 200, headers: { "content-type": "application/json" } });
+  }, baseInstance);
+  assert.equal(bulk.requested, 2);
+  assert.deepEqual(bulk.failures, []);
+  assert.equal(bulkCalls.length, 1);
+  assert.match(bulkCalls[0][0], /\/api\/internal\/node-agent\/drain$/);
+  assert.deepEqual(bulkCalls[0][2], { authorization: "Bearer registration-token" });
+
+  const fallbackCalls = [];
+  const fallback = await requestRuntimeAppSessionDrain(async (url, init) => {
+    const path = new URL(String(url)).pathname;
+    fallbackCalls.push([path, init?.method]);
+    if (path === "/api/internal/node-agent/drain") return new Response("not found", { status: 404 });
+    if (path === "/api/apps/sessions") {
+      return new Response(JSON.stringify({
+        data: {
+          snapshot: {
+            sessions: [
+              { id: "app_running", status: "running" },
+              { id: "app_stopped", status: "stopped" },
+            ],
+          },
+        },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return new Response(JSON.stringify({ data: { status: "stopped" } }), { status: 200, headers: { "content-type": "application/json" } });
+  }, baseInstance);
+  assert.equal(fallback.requested, 1);
+  assert.deepEqual(fallback.failures, []);
+  assert.deepEqual(fallbackCalls, [
+    ["/api/internal/node-agent/drain", "POST"],
+    ["/api/apps/sessions", "GET"],
+    ["/api/apps/sessions/app_running/stop", "POST"],
+  ]);
 });
 
 test("control plane reports the explicit packaged version in health", async (t) => {
@@ -2727,11 +2773,13 @@ test("node update preflight requires immutable npm integrity metadata", async ()
 });
 
 test("node agent update API treats a missing npm channel as no update", async (t) => {
+  const globalRoot = tempDataDir("node-agent-update-missing-channel-root");
   const app = await createNodeAgentApp({
     dataDir: tempDataDir("node-agent-update-missing-channel"),
     logger: false,
     token: "agent-secret",
-    updateCommandRunner: async () => {
+    updateCommandRunner: async (_command, args) => {
+      if (args[0] === "root") return { stdout: globalRoot, stderr: "" };
       throw Object.assign(new Error("npm ERR! code E404"), {
         details: { stdout: "", stderr: "npm ERR! code E404 npm ERR! 404 No match found for version beta" },
       });
@@ -2799,12 +2847,14 @@ test("control plane rejects the real legacy target-based instance update API as 
 
 test("node agent update checks default to the stable npm channel", async (t) => {
   const calls = [];
+  const globalRoot = tempDataDir("node-agent-update-check-root");
   const app = await createNodeAgentApp({
     dataDir: tempDataDir("node-agent-update-check"),
     logger: false,
     token: "agent-secret",
     updateCommandRunner: async (command, args) => {
       calls.push([command, args]);
+      if (args[0] === "root") return { stdout: globalRoot, stderr: "" };
       return { stdout: JSON.stringify(args.includes("dist.integrity") ? npmIntegrityFixture : "9.8.7"), stderr: "" };
     },
     dockerCommandRunner: async (_command, args) => {
@@ -2839,6 +2889,7 @@ test("node agent update checks default to the stable npm channel", async (t) => 
   assert.equal(response.json().data.channel, "stable");
   assert.equal(response.json().data.availableVersion, "9.8.7");
   assert.deepEqual(calls, [
+    ["npm", ["root", "--global"]],
     ["npm", ["view", "@task-handoff/node-agent@latest", "version", "--json"]],
     ["npm", ["view", "@task-handoff/node-agent@9.8.7", "dist.integrity", "--json"]],
   ]);
@@ -2847,6 +2898,7 @@ test("node agent update checks default to the stable npm channel", async (t) => 
 test("node update preflight excludes Local Runtime artifacts on macOS and reports stopped impact", async (t) => {
   const resolved = [];
   const updateCommands = [];
+  const globalRoot = tempDataDir("node-agent-update-runtime-preflight-root");
   let failArtifact = false;
   let artifactSha = "c".repeat(64);
   const app = await createNodeAgentApp({
@@ -2861,6 +2913,7 @@ test("node update preflight excludes Local Runtime artifacts on macOS and report
     },
     updateCommandRunner: async (command, args) => {
       updateCommands.push(command);
+      if (args[0] === "root") return { stdout: globalRoot, stderr: "" };
       return { stdout: JSON.stringify(args.includes("dist.integrity") ? npmIntegrityFixture : "9.8.7"), stderr: "" };
     },
     resolveRuntimeArtifact: async (version, platform, arch) => {
@@ -3028,6 +3081,56 @@ test("node agent update checks use the configured absolute npm command", async (
   ]);
 });
 
+test("node update checks use the package that owns the installed service launcher", async () => {
+  const globalRoot = tempDataDir("node-update-package-resolution");
+  const serverRoot = path.join(globalRoot, "@task-handoff", "server");
+  const nodeAgentRoot = path.join(globalRoot, "@task-handoff", "node-agent");
+  fs.mkdirSync(serverRoot, { recursive: true });
+  fs.mkdirSync(nodeAgentRoot, { recursive: true });
+  fs.writeFileSync(path.join(serverRoot, "package.json"), JSON.stringify({ name: "@task-handoff/server", version: "1.0.0" }));
+  fs.writeFileSync(path.join(nodeAgentRoot, "package.json"), JSON.stringify({ name: "@task-handoff/node-agent", version: "0.9.0" }));
+  const calls = [];
+  const result = await checkNodeAgentUpdate({
+    channel: "stable",
+    currentVersion: "1.0.0",
+    packageName: "@task-handoff/server",
+    relatedCurrentVersions: ["0.9.0"],
+    runCommand: async (command, args) => {
+      calls.push([command, args]);
+      return { stdout: JSON.stringify(args.includes("dist.integrity") ? npmIntegrityFixture : "1.1.0"), stderr: "" };
+    },
+  });
+
+  assert.equal(result.artifactRef, `npm:@task-handoff/server@1.1.0#${npmIntegrityFixture}`);
+  assert.deepEqual(calls.map(([, args]) => args), [
+    ["view", "@task-handoff/server@latest", "version", "--json"],
+    ["view", "@task-handoff/server@1.1.0", "dist.integrity", "--json"],
+  ]);
+  assert.deepEqual(await resolveNodeUpdatePackage(async (_command, args) => {
+    assert.deepEqual(args, ["root", "--global"]);
+    return { stdout: `${globalRoot}\n`, stderr: "" };
+  }), { packageName: "@task-handoff/server", currentVersion: "1.0.0", relatedCurrentVersions: ["0.9.0"] });
+  fs.rmSync(serverRoot, { recursive: true });
+  fs.rmSync(nodeAgentRoot, { recursive: true });
+  assert.deepEqual(await resolveNodeUpdatePackage(async () => ({ stdout: globalRoot, stderr: "" })), {
+    packageName: "@task-handoff/node-agent",
+    currentVersion: undefined,
+    relatedCurrentVersions: [],
+  });
+
+  const companionOnly = await checkNodeAgentUpdate({
+    channel: "stable",
+    currentVersion: "1.1.0",
+    packageName: "@task-handoff/server",
+    relatedCurrentVersions: ["1.0.0"],
+    runCommand: async (_command, args) => ({
+      stdout: JSON.stringify(args.includes("dist.integrity") ? npmIntegrityFixture : "1.1.0"),
+      stderr: "",
+    }),
+  });
+  assert.equal(companionOnly.updateAvailable, true);
+});
+
 test("node agent resolves update workers in source and bundled runtime layouts", () => {
   const root = tempDataDir("node-agent-worker-layouts");
   const sourceModuleDir = path.join(root, "packages", "control-plane", "src", "node-agent");
@@ -3056,12 +3159,20 @@ test("node agent resolves update workers in source and bundled runtime layouts",
 
 test("node agent update apply launches the resolved worker through systemd-run", async (t) => {
   const calls = [];
+  const globalRoot = tempDataDir("node-agent-update-apply-worker-root");
+  const previousHealthUrl = process.env.TASK_HANDOFF_CONTROL_PLANE_HEALTH_URL;
+  process.env.TASK_HANDOFF_CONTROL_PLANE_HEALTH_URL = "http://127.0.0.1:8081/api/health";
+  t.after(() => {
+    if (previousHealthUrl === undefined) delete process.env.TASK_HANDOFF_CONTROL_PLANE_HEALTH_URL;
+    else process.env.TASK_HANDOFF_CONTROL_PLANE_HEALTH_URL = previousHealthUrl;
+  });
   const app = await createNodeAgentApp({
     dataDir: tempDataDir("node-agent-update-apply-worker"),
     logger: false,
     token: "agent-secret",
     updateCommandRunner: async (command, args) => {
       calls.push([command, args]);
+      if (command === "npm" && args[0] === "root") return { stdout: globalRoot, stderr: "" };
       return command === "npm" ? { stdout: JSON.stringify(args.includes("dist.integrity") ? npmIntegrityFixture : "9.8.7"), stderr: "" } : { stdout: "", stderr: "" };
     },
     platform: "linux",
@@ -3105,14 +3216,15 @@ test("node agent update apply launches the resolved worker through systemd-run",
     },
   });
   assert.equal(response.statusCode, 202);
-  assert.equal(calls.length, 3);
-  assert.equal(calls[2][0], "systemd-run");
-  const args = calls[2][1];
+  assert.equal(calls.length, 5);
+  assert.equal(calls[4][0], "systemd-run");
+  const args = calls[4][1];
   const propertyIndex = args.indexOf("--property=Type=exec");
   assert.equal(args[propertyIndex + 1], process.execPath);
   assert.equal(args[propertyIndex + 2], path.resolve(__dirname, "..", "scripts", "node-update-worker.cjs"));
   assert.equal(args[args.indexOf("--target-version") + 1], "9.8.7");
   assert.equal(args[args.indexOf("--npm-command") + 1], "npm");
+  assert.equal(args[args.indexOf("--control-plane-health-url") + 1], "http://127.0.0.1:8081/api/health");
 });
 
 test("local docker run args include resolved model environment", () => {
@@ -3489,6 +3601,95 @@ test("local docker executor checks local images and pulls registry images before
     ["docker", ["start", "task-handoff-inst_1"]],
     ["docker", ["port", "task-handoff-inst_1", "8080/tcp"]],
   ]);
+
+  const inspectFallbackExecutor = new LocalDockerExecutor(async (_command, args) => {
+    if (args[0] === "inspect" && args.includes("{{json .}}")) {
+      return { stdout: JSON.stringify({ Id: "container-1", Config: { Labels: { "task-handoff.instance-id": "inst_1" } } }), stderr: "" };
+    }
+    if (args[0] === "port") {
+      throw Object.assign(new Error("no public port '8080/tcp' published"), { details: { stderr: "no public port '8080/tcp' published" } });
+    }
+    if (args[0] === "inspect" && args.includes("{{json .NetworkSettings.Ports}}")) {
+      return { stdout: JSON.stringify({ "8080/tcp": [{ HostIp: "127.0.0.1", HostPort: "28081" }] }), stderr: "" };
+    }
+    return { stdout: "task-handoff-inst_1", stderr: "" };
+  }, { portResolutionRetryDelaysMs: [0] });
+  const resumedFromInspection = await inspectFallbackExecutor.start({
+    ...baseContext,
+    instance: {
+      ...baseContext.instance,
+      status: "stopped",
+      runtime: {
+        kind: "docker",
+        containerName: "task-handoff-inst_1",
+        containerId: "container-1",
+        labels: {},
+      },
+    },
+  });
+  assert.equal(resumedFromInspection.target.web, "http://127.0.0.1:28081");
+
+  let transientPortAttempts = 0;
+  const transientPortExecutor = new LocalDockerExecutor(async (_command, args) => {
+    if (args[0] === "inspect" && args.includes("{{json .}}")) {
+      return { stdout: JSON.stringify({ Id: "container-1", Config: { Labels: { "task-handoff.instance-id": "inst_1" } } }), stderr: "" };
+    }
+    if (args[0] === "port") {
+      transientPortAttempts += 1;
+      if (transientPortAttempts < 3) {
+        throw Object.assign(new Error("no public port '8080/tcp' published"), { details: { stderr: "no public port '8080/tcp' published" } });
+      }
+      return { stdout: "127.0.0.1:38081", stderr: "" };
+    }
+    if (args[0] === "inspect" && args.includes("{{json .NetworkSettings.Ports}}")) {
+      return { stdout: JSON.stringify({ "8080/tcp": null }), stderr: "" };
+    }
+    return { stdout: "task-handoff-inst_1", stderr: "" };
+  }, { portResolutionRetryDelaysMs: [0, 0, 0] });
+  const resumedAfterRetry = await transientPortExecutor.start({
+    ...baseContext,
+    instance: {
+      ...baseContext.instance,
+      status: "stopped",
+      runtime: {
+        kind: "docker",
+        containerName: "task-handoff-inst_1",
+        containerId: "container-1",
+        labels: {},
+      },
+    },
+  });
+  assert.equal(transientPortAttempts, 3);
+  assert.equal(resumedAfterRetry.target.web, "http://127.0.0.1:38081");
+
+  const missingPortExecutor = new LocalDockerExecutor(async (_command, args) => {
+    if (args[0] === "inspect" && args.includes("{{json .}}")) {
+      return { stdout: JSON.stringify({ Id: "container-1", Config: { Labels: { "task-handoff.instance-id": "inst_1" } } }), stderr: "" };
+    }
+    if (args[0] === "port") {
+      throw Object.assign(new Error("no public port '8080/tcp' published"), { details: { stderr: "no public port '8080/tcp' published" } });
+    }
+    if (args[0] === "inspect" && args.includes("{{json .NetworkSettings.Ports}}")) {
+      return { stdout: JSON.stringify({ "8080/tcp": null }), stderr: "" };
+    }
+    return { stdout: "task-handoff-inst_1", stderr: "" };
+  }, { portResolutionRetryDelaysMs: [0, 0] });
+  await assert.rejects(
+    () => missingPortExecutor.start({
+      ...baseContext,
+      instance: {
+        ...baseContext.instance,
+        status: "stopped",
+        runtime: {
+          kind: "docker",
+          containerName: "task-handoff-inst_1",
+          containerId: "container-1",
+          labels: {},
+        },
+      },
+    }),
+    /does not publish 8080\/tcp/,
+  );
 
   const daemonCalls = [];
   const daemonErrorExecutor = new LocalDockerExecutor(async (_command, args) => {
@@ -5673,6 +5874,71 @@ test("localhost stop uses authenticated process identity after node agent proces
   assert.equal(stopped.statusCode, 200);
   assert.equal(stopped.json().data.status, "stopped");
   await waitForProcessExit(child.pid, "detached localhost controlled instance exit");
+});
+
+test("localhost stop allows an exited residual lock owner to be reclaimed", async (t) => {
+  const dataDir = tempDataDir("node-agent-localhost-stale-residual-lock-stop");
+  const lockPath = path.join(dataDir, "host-user-local-instance.lock");
+  const instanceId = "inst_local_stale_residual_lock_stop";
+  fs.mkdirSync(lockPath, { recursive: true });
+  fs.writeFileSync(path.join(lockPath, "owner.json"), `${JSON.stringify({
+    pid: 99999999,
+    hostname: os.hostname(),
+    component: "local-controlled-instance",
+    command: "task-handoff-controlled-instance web",
+    acquiredAt: "2026-07-30T17:38:00.000Z",
+    token: "stale-owner-token",
+    startIdentity: "linux:123456",
+    instanceId,
+    dataDir: path.join(dataDir, "local-instances", instanceId),
+    host: "127.0.0.1",
+    port: 19000,
+  }, null, 2)}\n`);
+  const app = await createNodeAgentApp({
+    dataDir,
+    logger: false,
+    token: "agent-secret",
+    localControlledInstanceLockPath: lockPath,
+  });
+  t.after(async () => {
+    await app.close();
+  });
+
+  await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: instanceId,
+      name: "stale residual local instance",
+      runtimeId: "runtime_local_host",
+      source: { type: "local-folder", path: dataDir },
+    },
+  });
+  const instance = app.nodeAgentState.controlledInstances.get(instanceId);
+  app.nodeAgentState.controlledInstances.put({
+    ...instance,
+    status: "running",
+    runtime: { ...instance.runtime, pid: 99999999 },
+  });
+
+  const stopped = await app.inject({
+    method: "POST",
+    url: `/api/node-agent/instances/${instanceId}/stop`,
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {},
+  });
+  assert.equal(stopped.statusCode, 200);
+  assert.equal(stopped.json().data.status, "stopped");
+
+  const reclaimed = acquireLocalControlledInstanceLock({
+    instanceId,
+    dataDir: path.join(dataDir, "local-instances", instanceId),
+    host: "127.0.0.1",
+    port: 19001,
+  }, lockPath);
+  assert.equal(reclaimed.owner.pid, process.pid);
+  reclaimed.release();
 });
 
 test("localhost stop refuses to kill an unverifiable residual lock pid", async (t) => {

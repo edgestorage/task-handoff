@@ -193,7 +193,9 @@ test("cancellation while draining does not force, install, restart, or roll back
   let installs = 0;
   let restarts = 0;
   let rollbacks = 0;
+  let resumes = 0;
   const coordinator = new RuntimeConvergenceCoordinator(store, () => "2.0.0", {
+    async endDrain() { resumes += 1; },
     async onForcedDrain() { forced += 1; },
     async install() { installs += 1; },
     async restart() { restarts += 1; },
@@ -211,6 +213,7 @@ test("cancellation while draining does not force, install, restart, or roll back
 
   const updated = await convergence;
   assert.equal(updated.runtimeVersion.phase, "pending");
+  assert.equal(resumes, 1);
   assert.deepEqual({ forced, installs, restarts, rollbacks }, { forced: 0, installs: 0, restarts: 0, rollbacks: 0 });
 });
 
@@ -593,7 +596,9 @@ test("active instances drain for a bounded time and still converge", async () =>
   const active = instance({ apps: { runningCount: 1, problemCount: 0 } });
   const store = memoryStore(active);
   let forced = 0;
+  let drainRequests = 0;
   const coordinator = new RuntimeConvergenceCoordinator(store, () => "2.0.0", {
+    async beginDrain() { drainRequests += 1; },
     async onForcedDrain() { forced += 1; },
     async install() {},
     async restart(value) {
@@ -611,7 +616,57 @@ test("active instances drain for a bounded time and still converge", async () =>
   });
 
   const updated = await coordinator.schedule("inst_runtime");
+  assert.equal(drainRequests, 1);
   assert.equal(forced, 1);
+  assert.equal(updated.runtimeVersion.phase, "matched");
+});
+
+test("runtime reconciliation installs as soon as its drain request clears active work", async () => {
+  const active = instance({ apps: { runningCount: 1, problemCount: 0 } });
+  const store = memoryStore(active);
+  const calls = [];
+  const coordinator = new RuntimeConvergenceCoordinator(store, () => "2.0.0", {
+    async beginDrain(value) {
+      calls.push("drain");
+      store.put(ControlledInstanceSchema.parse({
+        ...store.get(value.id),
+        apps: { runningCount: 0, problemCount: 0 },
+      }));
+    },
+    async endDrain() { calls.push("resume"); },
+    async install() { calls.push("install"); },
+    async restart(value) {
+      calls.push("restart");
+      store.put(ControlledInstanceSchema.parse({
+        ...store.get(value.id),
+        build: { component: "controlled-instance", packageVersion: "2.0.0" },
+      }));
+    },
+  }, { verificationTimeoutMs: 0 });
+
+  const updated = await coordinator.schedule("inst_runtime");
+  assert.deepEqual(calls, ["drain", "install", "restart", "resume"]);
+  assert.equal(updated.runtimeVersion.phase, "matched");
+});
+
+test("runtime reconciliation closes admission before install even when no work is active", async () => {
+  const store = memoryStore(instance());
+  const calls = [];
+  const coordinator = new RuntimeConvergenceCoordinator(store, () => "2.0.0", {
+    async beginDrain() { calls.push("drain"); },
+    async endDrain() { calls.push("resume"); },
+    async install() { calls.push("install"); },
+    async restart(value) {
+      calls.push("restart");
+      store.put(ControlledInstanceSchema.parse({
+        ...store.get(value.id),
+        build: { component: "controlled-instance", packageVersion: "2.0.0" },
+      }));
+    },
+  }, { verificationTimeoutMs: 0 });
+
+  const updated = await coordinator.schedule("inst_runtime");
+  assert.deepEqual(calls, ["drain", "install", "restart", "resume"]);
   assert.equal(updated.runtimeVersion.phase, "matched");
 });
 
@@ -717,6 +772,44 @@ test("Node rollout recovers after node restart and succeeds immediately with no 
   assert.equal(succeeded.rollout.nodeVersion, "2.0.0");
   assert.equal(succeeded.rollout.deferredInstanceCount, 1);
   assert.equal(succeeded.rollout.pendingInstanceCount, 0);
+});
+
+test("Node rollout records a restarted process that still runs the wrong version", () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-rollout-version-mismatch-"));
+  const jobs = new NodeUpdateJobs(nodeAgentStorePaths(dataDir));
+  jobs.init();
+  const created = jobs.create("node_1", {
+    source: "npm",
+    channel: "stable",
+    currentVersion: "1.0.0",
+    availableVersion: "2.0.0",
+    runtimeArtifacts: [],
+    impact: {
+      runningInstanceCount: 0,
+      stoppedInstanceCount: 0,
+      activeInstanceCount: 0,
+      restartInstanceCount: 0,
+      runningInstanceIds: [],
+      stoppedInstanceIds: [],
+      activeInstanceIds: [],
+    },
+    updateAvailable: true,
+    supported: true,
+    checkedAt: new Date().toISOString(),
+  });
+  jobs.patch(created.id, {
+    status: "restarting-node",
+    rollout: { ...created.rollout, phase: "restarting-node" },
+  });
+
+  jobs.reconcileRollouts([], "1.0.0", { processStarted: true });
+
+  const failed = jobs.records.get(created.id);
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.rollout.phase, "failed");
+  assert.equal(failed.rollout.nodeVersion, "1.0.0");
+  assert.equal(failed.error.code, "NODE_UPDATE_FAILED");
+  assert.match(failed.error.message, /restarted with version 1\.0\.0, expected 2\.0\.0/);
 });
 
 test("instances stopped during rollout are deferred instead of blocking forever", () => {

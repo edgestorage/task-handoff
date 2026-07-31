@@ -40,6 +40,7 @@ export type DockerExecutorOptions = {
   publishHost?: string;
   imageService?: DockerImageService;
   launcherAssetsDir?: string;
+  portResolutionRetryDelaysMs?: readonly number[];
 };
 
 export type DockerRuntimeInstallRequest = {
@@ -64,12 +65,16 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
   private readonly publishHost: string;
   private readonly images: DockerImageService;
   private readonly launcherAssetsDir: string;
+  private readonly portResolutionRetryDelaysMs: readonly number[];
 
   constructor(runCommand: CommandRunner = defaultCommandRunner, options: DockerExecutorOptions = {}) {
     this.runCommand = runCommand;
     this.images = options.imageService || new DockerImageService(runCommand);
     this.publishHost = options.publishHost || "127.0.0.1";
     this.launcherAssetsDir = options.launcherAssetsDir || defaultLauncherAssetsDir();
+    this.portResolutionRetryDelaysMs = options.portResolutionRetryDelaysMs?.length
+      ? options.portResolutionRetryDelaysMs
+      : [0, 100, 250, 500, 1_000];
   }
 
   async start(context: ExecutorContext): Promise<ExecutorStartResult> {
@@ -365,20 +370,54 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
   }
 
   private async containerPort(containerName: string, containerPort: string) {
-    let result;
-    try {
-      result = await this.runCommand("docker", ["port", containerName, containerPort]);
-    } catch (cause) {
-      throw runtimeExecutorError("RUNTIME_EXECUTOR_FAILED", `Could not resolve the published port for Docker container ${containerName}.`, cause);
+    let lastCause: unknown;
+    let inspectedNetworkState = false;
+    for (const delayMs of this.portResolutionRetryDelaysMs) {
+      if (delayMs > 0) await delay(delayMs);
+      try {
+        const result = await this.runCommand("docker", ["port", containerName, containerPort]);
+        const published = publishedPortFromDockerPortOutput(result.stdout);
+        if (published) return published;
+      } catch (cause) {
+        lastCause = cause;
+      }
+      try {
+        const result = await this.runCommand("docker", ["inspect", "--format", "{{json .NetworkSettings.Ports}}", containerName]);
+        const published = publishedPortFromNetworkSettings(result.stdout, containerPort);
+        inspectedNetworkState = true;
+        if (published) return published;
+      } catch (cause) {
+        lastCause = cause;
+      }
     }
-    const line = result.stdout.split(/\r?\n/).find(Boolean);
-    const match = line?.match(/:(\d+)$/);
-    if (!match?.[1]) {
+    if (inspectedNetworkState) {
       throw runtimeExecutorError("RUNTIME_EXECUTOR_FAILED", `Docker container ${containerName} does not publish ${containerPort}.`);
     }
-    return match[1];
+    throw runtimeExecutorError("RUNTIME_EXECUTOR_FAILED", `Could not resolve the published port for Docker container ${containerName}.`, lastCause);
   }
 
+}
+
+function publishedPortFromDockerPortOutput(stdout: string) {
+  const line = stdout.split(/\r?\n/).find(Boolean);
+  return line?.match(/:(\d+)$/)?.[1];
+}
+
+function publishedPortFromNetworkSettings(stdout: string, containerPort: string) {
+  const parsed = JSON.parse(stdout || "null") as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+  const bindings = (parsed as Record<string, unknown>)[containerPort];
+  if (!Array.isArray(bindings)) return undefined;
+  for (const binding of bindings) {
+    if (!binding || typeof binding !== "object" || Array.isArray(binding)) continue;
+    const hostPort = (binding as Record<string, unknown>).HostPort;
+    if (typeof hostPort === "string" && /^\d+$/.test(hostPort)) return hostPort;
+  }
+  return undefined;
+}
+
+function delay(milliseconds: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function safePathSegment(value: string) {

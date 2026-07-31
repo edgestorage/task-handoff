@@ -13,6 +13,8 @@ type ConvergenceStore = {
 
 export type RuntimeConvergenceHooks = {
   isInstalled?(instance: ControlledInstance, desiredVersion: string): Promise<boolean>;
+  beginDrain?(instance: ControlledInstance): Promise<void> | void;
+  endDrain?(instance: ControlledInstance): Promise<void> | void;
   install(instance: ControlledInstance, desiredVersion: string): Promise<void>;
   restart(instance: ControlledInstance): Promise<void>;
   onForcedDrain?(instance: ControlledInstance): Promise<void> | void;
@@ -139,91 +141,99 @@ export class RuntimeConvergenceCoordinator {
     instance = this.storeState(instance, mismatchState(instance, desiredVersion, actualVersion, desiredReleaseInstalled), false);
     if (isStopped(instance) && !options.startRequested) return instance;
 
-    while ((instance.runtimeVersion?.attempt || 0) < this.maxAttempts) {
-      if (this.cancelled.has(instanceId)) return this.storePhase(this.requireInstance(instanceId), "pending");
-      let failure: RuntimeConvergenceError;
-      try {
-        if (hasActiveWork(instance)) {
+    let drainStarted = false;
+    try {
+      while ((instance.runtimeVersion?.attempt || 0) < this.maxAttempts) {
+        if (this.cancelled.has(instanceId)) return this.storePhase(this.requireInstance(instanceId), "pending");
+        let failure: RuntimeConvergenceError;
+        try {
           instance = this.storePhase(instance, "draining");
-        const drained = await this.waitUntil(instanceId, this.drainTimeoutMs, (candidate) => !hasActiveWork(candidate));
+          await this.hooks.beginDrain?.(instance);
+          drainStarted = true;
+          instance = this.requireInstance(instanceId);
+          if (hasActiveWork(instance)) {
+            const drained = await this.waitUntil(instanceId, this.drainTimeoutMs, (candidate) => !hasActiveWork(candidate));
+            instance = this.requireInstance(instanceId);
+            if (!drained) {
+              if (this.cancelled.has(instanceId)) return this.storePhase(instance, "pending");
+              await this.hooks.onForcedDrain?.(instance);
+            }
+          }
+
+          instance = this.storePhase(this.requireInstance(instanceId), "installing", true);
+          await this.hooks.install(instance, desiredVersion);
+
+          if (this.cancelled.has(instanceId) || (isStopped(this.requireInstance(instanceId)) && !options.startRequested)) {
+            return this.storePhase(this.requireInstance(instanceId), "pending");
+          }
+
+          instance = this.storePhase(this.requireInstance(instanceId), "restarting");
+          await this.hooks.restart(instance);
+          if (this.cancelled.has(instanceId)) return this.storePhase(this.requireInstance(instanceId), "pending");
+
+          instance = this.storePhase(this.requireInstance(instanceId), "verifying");
+          const verified = await this.waitUntil(instanceId, this.verificationTimeoutMs, (candidate) => reportedVersion(candidate) === desiredVersion);
+          if (this.cancelled.has(instanceId)) return this.storePhase(this.requireInstance(instanceId), "pending");
+          if (!verified) {
+            throw convergenceError(
+              "INSTANCE_RUNTIME_VERIFICATION_FAILED",
+              `Instance ${instanceId} did not register controlled-instance ${desiredVersion} after restart.`,
+              desiredVersion,
+              reportedVersion(this.requireInstance(instanceId)),
+              true,
+            );
+          }
+          const verifiedInstance = this.requireInstance(instanceId);
+          if (this.hooks.isInstalled && !await this.hooks.isInstalled(verifiedInstance, desiredVersion)) {
+            throw convergenceError(
+              "INSTANCE_RUNTIME_VERIFICATION_FAILED",
+              `Instance ${instanceId} reported controlled-instance ${desiredVersion}, but its active runtime release is missing.`,
+              desiredVersion,
+              reportedVersion(verifiedInstance),
+              true,
+            );
+          }
+          return this.storeState(verifiedInstance, {
+            desiredVersion,
+            actualVersion: desiredVersion,
+            phase: "matched",
+            attempt: verifiedInstance.runtimeVersion?.attempt || 1,
+            matchedAt: this.timestamp(),
+          }, !isStopped(verifiedInstance) && verifiedInstance.health !== "failed");
+        } catch (error) {
+          if (this.cancelled.has(instanceId)) return this.storePhase(this.requireInstance(instanceId), "pending");
+          failure = normalizeConvergenceError(error, desiredVersion, reportedVersion(this.store.get(instanceId)));
+        }
+
         instance = this.requireInstance(instanceId);
-        if (!drained) {
-          if (this.cancelled.has(instanceId)) return this.storePhase(instance, "pending");
-          await this.hooks.onForcedDrain?.(instance);
-        }
-        }
-
-        instance = this.storePhase(this.requireInstance(instanceId), "installing", true);
-        await this.hooks.install(instance, desiredVersion);
-
-        if (this.cancelled.has(instanceId) || (isStopped(this.requireInstance(instanceId)) && !options.startRequested)) {
-          return this.storePhase(this.requireInstance(instanceId), "pending");
+        const attempt = instance.runtimeVersion?.attempt || 1;
+        if (!failure.retryable || attempt >= this.maxAttempts) {
+          return this.storeBatchFailure(instance, desiredVersion,
+            attempt >= this.maxAttempts && failure.retryable
+              ? pausedError(desiredVersion, reportedVersion(instance), this.maxAttempts, failure)
+              : failure);
         }
 
-        instance = this.storePhase(this.requireInstance(instanceId), "restarting");
-        await this.hooks.restart(instance);
-        if (this.cancelled.has(instanceId)) return this.storePhase(this.requireInstance(instanceId), "pending");
-
-        instance = this.storePhase(this.requireInstance(instanceId), "verifying");
-        const verified = await this.waitUntil(instanceId, this.verificationTimeoutMs, (candidate) => reportedVersion(candidate) === desiredVersion);
-        if (this.cancelled.has(instanceId)) return this.storePhase(this.requireInstance(instanceId), "pending");
-        if (!verified) {
-          throw convergenceError(
-            "INSTANCE_RUNTIME_VERIFICATION_FAILED",
-            `Instance ${instanceId} did not register controlled-instance ${desiredVersion} after restart.`,
-            desiredVersion,
-            reportedVersion(this.requireInstance(instanceId)),
-            true,
-          );
-        }
-        const verifiedInstance = this.requireInstance(instanceId);
-        if (this.hooks.isInstalled && !await this.hooks.isInstalled(verifiedInstance, desiredVersion)) {
-          throw convergenceError(
-            "INSTANCE_RUNTIME_VERIFICATION_FAILED",
-            `Instance ${instanceId} reported controlled-instance ${desiredVersion}, but its active runtime release is missing.`,
-            desiredVersion,
-            reportedVersion(verifiedInstance),
-            true,
-          );
-        }
-        return this.storeState(verifiedInstance, {
+        instance = this.storeState(instance, {
           desiredVersion,
-          actualVersion: desiredVersion,
-          phase: "matched",
-          attempt: verifiedInstance.runtimeVersion?.attempt || 1,
-          matchedAt: this.timestamp(),
-        }, !isStopped(verifiedInstance) && verifiedInstance.health !== "failed");
-      } catch (error) {
-        if (this.cancelled.has(instanceId)) return this.storePhase(this.requireInstance(instanceId), "pending");
-        failure = normalizeConvergenceError(error, desiredVersion, reportedVersion(this.store.get(instanceId)));
+          ...(reportedVersion(instance) ? { actualVersion: reportedVersion(instance) } : {}),
+          phase: "pending",
+          attempt,
+          lastAttemptAt: this.timestamp(),
+          error: failure,
+        }, false);
+        await this.delay(this.retryDelayMs(attempt));
       }
 
-      instance = this.requireInstance(instanceId);
-      const attempt = instance.runtimeVersion?.attempt || 1;
-      if (!failure.retryable || attempt >= this.maxAttempts) {
-        return this.storeBatchFailure(instance, desiredVersion,
-          attempt >= this.maxAttempts && failure.retryable
-            ? pausedError(desiredVersion, reportedVersion(instance), this.maxAttempts, failure)
-            : failure);
-      }
-
-      instance = this.storeState(instance, {
+      return this.storeBatchFailure(instance, desiredVersion, pausedError(
         desiredVersion,
-        ...(reportedVersion(instance) ? { actualVersion: reportedVersion(instance) } : {}),
-        phase: "pending",
-        attempt,
-        lastAttemptAt: this.timestamp(),
-        error: failure,
-      }, false);
-      await this.delay(this.retryDelayMs(attempt));
+        reportedVersion(instance),
+        this.maxAttempts,
+        instance.runtimeVersion?.error,
+      ));
+    } finally {
+      if (drainStarted) await this.hooks.endDrain?.(this.requireInstance(instanceId));
     }
-
-    return this.storeBatchFailure(instance, desiredVersion, pausedError(
-      desiredVersion,
-      reportedVersion(instance),
-      this.maxAttempts,
-      instance.runtimeVersion?.error,
-    ));
   }
 
   private storeBatchFailure(instance: ControlledInstance, desiredVersion: string, error: RuntimeConvergenceError) {

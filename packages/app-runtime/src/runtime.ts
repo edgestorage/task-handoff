@@ -107,6 +107,7 @@ export class AppRuntimeManager extends EventEmitter {
   private readonly catalogRepository: AppCatalogRepository;
   private readonly persistSessionMetadata: boolean;
   private managedEnvironment: NodeJS.ProcessEnv = {};
+  private draining = false;
 
   constructor(private readonly paths: TaskHandoffStoragePaths, private readonly registry: ManagedAppRegistry = builtinManagedAppRegistry) {
     super();
@@ -158,6 +159,18 @@ export class AppRuntimeManager extends EventEmitter {
     if (changed) for (const extension of this.appRuntimeExtensions.values()) extension.managedEnvironmentChanged?.();
   }
 
+  beginDrain() {
+    this.draining = true;
+  }
+
+  endDrain() {
+    this.draining = false;
+  }
+
+  isDraining() {
+    return this.draining;
+  }
+
   listSessions() {
     return Array.from(this.persistedSessions.values()).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
@@ -171,6 +184,7 @@ export class AppRuntimeManager extends EventEmitter {
   }
 
   ensureSharedResource(appId: string) {
+    this.requireLaunchAdmission();
     const resource = this.sharedAppResource(appId);
     if (!resource) throw Object.assign(new Error(`${appId} does not provide a shared resource.`), { code: "APP_SHARED_RESOURCE_UNAVAILABLE" });
     const app = this.catalogRepository.find(appId);
@@ -256,6 +270,7 @@ export class AppRuntimeManager extends EventEmitter {
   }
 
   start(appId = "terminal-tty", options: AppLaunchOptions = {}) {
+    this.requireLaunchAdmission();
     const app = this.catalogRepository.find(appId);
     if (!app) {
       throw Object.assign(new Error("App not found."), { code: "APP_NOT_FOUND" });
@@ -1054,6 +1069,7 @@ export class AppRuntimeManager extends EventEmitter {
   }
 
   restart(id: string) {
+    this.requireLaunchAdmission();
     const metadata = this.getSession(id);
     if (!metadata) {
       throw Object.assign(new Error("App session not found."), { code: "APP_SESSION_NOT_FOUND" });
@@ -1277,6 +1293,14 @@ export class AppRuntimeManager extends EventEmitter {
     remaining = await this.waitForManagedProcessTrees(remaining, APP_PROCESS_KILL_TIMEOUT_MS);
     for (const processTree of processTrees) {
       if (!remaining.includes(processTree)) this.forgetManagedProcessTree(processTree.pid);
+    }
+  }
+
+  private requireLaunchAdmission() {
+    if (this.draining) {
+      throw Object.assign(new Error("App launches are unavailable while the controlled instance is draining for a runtime update."), {
+        code: "APP_RUNTIME_DRAINING",
+      });
     }
   }
 

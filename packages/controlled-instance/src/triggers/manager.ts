@@ -64,6 +64,7 @@ export class TriggerManager {
       }
     }
     this.watches.clear();
+    this.queued.clear();
   }
 
   handleAiSessions(snapshot: AiSessionsSnapshot) {

@@ -57,6 +57,48 @@ export function npmCommand() {
   return process.env.TASK_HANDOFF_NPM_COMMAND || "npm";
 }
 
+export type NodeUpdatePackageName = "@task-handoff/node-agent" | "@task-handoff/server";
+
+function installedPackageManifest(globalRoot: string, packageName: NodeUpdatePackageName) {
+  const manifestPath = path.join(globalRoot, ...packageName.split("/"), "package.json");
+  try {
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as { name?: unknown; version?: unknown };
+    if (manifest.name !== packageName || typeof manifest.version !== "string" || !manifest.version.trim()) {
+      throw new Error(`Installed package manifest is invalid: ${manifestPath}`);
+    }
+    return { name: packageName, version: manifest.version.trim() };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+export type NodeUpdatePackageSelection = {
+  packageName: NodeUpdatePackageName;
+  currentVersion?: string;
+  relatedCurrentVersions: string[];
+};
+
+export async function resolveNodeUpdatePackage(runCommand: CommandRunner): Promise<NodeUpdatePackageSelection> {
+  const result = await runCommand(npmCommand(), ["root", "--global"]);
+  const globalRoot = result.stdout.trim();
+  if (!globalRoot) throw new Error("npm did not return its global module root.");
+  const server = installedPackageManifest(globalRoot, "@task-handoff/server");
+  const nodeAgent = installedPackageManifest(globalRoot, "@task-handoff/node-agent");
+  if (server) {
+    return {
+      packageName: "@task-handoff/server",
+      currentVersion: server.version,
+      relatedCurrentVersions: nodeAgent ? [nodeAgent.version] : [],
+    };
+  }
+  return {
+    packageName: "@task-handoff/node-agent",
+    currentVersion: nodeAgent?.version,
+    relatedCurrentVersions: [],
+  };
+}
+
 export function resolveNodeAgentUpdateWorker(moduleDir: string, exists: (candidate: string) => boolean = fs.existsSync) {
   const packagedCandidates = [
     // Runtime releases bundle the node agent into <package>/dist/cli.js.
@@ -105,10 +147,13 @@ export async function checkNodeAgentUpdate(input: {
   channel: UpdateChannel;
   currentVersion?: string;
   runCommand: CommandRunner;
+  packageName?: NodeUpdatePackageName;
+  relatedCurrentVersions?: string[];
   impact?: UpdateCheckResult["impact"];
   runtimeArtifacts?: UpdateCheckResult["runtimeArtifacts"];
 }): Promise<UpdateCheckResult> {
-  const availableVersion = await npmVersion(input.runCommand, "@task-handoff/node-agent", input.channel);
+  const packageName = input.packageName || "@task-handoff/node-agent";
+  const availableVersion = await npmVersion(input.runCommand, packageName, input.channel);
   if (!availableVersion) {
     return unavailableNpmRelease({
       channel: input.channel,
@@ -116,14 +161,15 @@ export async function checkNodeAgentUpdate(input: {
       impact: input.impact,
     });
   }
-  const updateAvailable = isNewerVersion(input.currentVersion, availableVersion);
-  const integrity = updateAvailable ? await npmIntegrity(input.runCommand, "@task-handoff/node-agent", availableVersion) : undefined;
+  const updateAvailable = isNewerVersion(input.currentVersion, availableVersion)
+    || (input.relatedCurrentVersions || []).some((version) => isNewerVersion(version, availableVersion));
+  const integrity = updateAvailable ? await npmIntegrity(input.runCommand, packageName, availableVersion) : undefined;
   return UpdateCheckResultSchema.parse({
     source: "npm",
     channel: input.channel,
     currentVersion: input.currentVersion,
     availableVersion,
-    ...(integrity ? { artifactRef: `npm:@task-handoff/node-agent@${availableVersion}#${integrity}` } : {}),
+    ...(integrity ? { artifactRef: `npm:${packageName}@${availableVersion}#${integrity}` } : {}),
     runtimeArtifacts: input.runtimeArtifacts || [],
     impact: input.impact || emptyUpdateImpact(),
     updateAvailable,
@@ -260,9 +306,26 @@ export class NodeUpdateJobs {
     return this.records.put(UpdateJobSchema.parse({ ...current, ...patch, id, createdAt: current.createdAt, updatedAt: now() }));
   }
 
-  reconcileRollouts(instances: Array<{ id: string; status?: string; ready: boolean; runtimeVersion?: { actualVersion?: string; desiredVersion: string; phase: string } }>, nodeVersion: string) {
+  reconcileRollouts(
+    instances: Array<{ id: string; status?: string; ready: boolean; runtimeVersion?: { actualVersion?: string; desiredVersion: string; phase: string } }>,
+    nodeVersion: string,
+    options: { processStarted?: boolean } = {},
+  ) {
     const byId = new Map(instances.map((instance) => [instance.id, instance]));
     for (const persisted of this.list().filter((candidate) => ["updating-node", "restarting-node", "converging-instances"].includes(candidate.status))) {
+      if (options.processStarted && persisted.status === "restarting-node" && nodeVersion !== persisted.toVersion) {
+        this.patch(persisted.id, {
+          status: "failed",
+          rollout: { ...persisted.rollout, phase: "failed", nodeVersion },
+          error: {
+            code: "NODE_UPDATE_FAILED",
+            message: `Node agent restarted with version ${nodeVersion}, expected ${persisted.toVersion}.`,
+            retryable: false,
+          },
+          completedAt: now(),
+        });
+        continue;
+      }
       const job = persisted.status !== "converging-instances" && nodeVersion === persisted.toVersion
         ? this.patch(persisted.id, {
             status: "converging-instances",

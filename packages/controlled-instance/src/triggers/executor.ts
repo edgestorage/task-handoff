@@ -13,6 +13,7 @@ export type TriggerExecuteInput = {
 export class TriggerExecutor {
   private readonly store: TriggerStore;
   private readonly aiSessionController: AiSessionController;
+  private draining = false;
 
   constructor(
     store: TriggerStore,
@@ -22,7 +23,20 @@ export class TriggerExecutor {
     this.aiSessionController = aiSessionController;
   }
 
+  beginDrain() {
+    this.draining = true;
+  }
+
+  endDrain() {
+    this.draining = false;
+  }
+
   async execute(input: TriggerExecuteInput) {
+    if (this.draining) {
+      throw Object.assign(new Error("Triggers are unavailable while the controlled instance is draining for a runtime update."), {
+        code: "TRIGGER_RUNTIME_DRAINING",
+      });
+    }
     const run = this.store.startRun(input.config, input.deployment, input.eventType, input.eventSummary);
     const text = input.promptOverride || renderPrompt(input.config.action.promptTemplate, {
       trigger: input.config,

@@ -164,6 +164,34 @@ test("trigger executor sends directly to the target AI session", async () => {
   assert.equal(completed.length, 1);
 });
 
+test("trigger executor rejects new work while runtime convergence is draining", async () => {
+  let started = 0;
+  let sent = 0;
+  const executor = new TriggerExecutor({
+    startRun: () => { started += 1; return { id: "run_drain" }; },
+    completeRun: (run) => run,
+    deleteDeployment: () => true,
+  }, {
+    sendMessage: async () => { sent += 1; },
+  });
+  const input = {
+    config: { name: "Continue", configHash: "trg_abcdefgh", action: { promptTemplate: "Hello" } },
+    deployment: { configHash: "trg_abcdefgh", target: { type: "ai-session", aiSessionId: "ai_1" } },
+    eventType: "manual",
+  };
+
+  executor.beginDrain();
+  await assert.rejects(
+    () => executor.execute(input),
+    (error) => error?.code === "TRIGGER_RUNTIME_DRAINING",
+  );
+  assert.deepEqual({ started, sent }, { started: 0, sent: 0 });
+
+  executor.endDrain();
+  await executor.execute(input);
+  assert.deepEqual({ started, sent }, { started: 1, sent: 1 });
+});
+
 test("trigger executor removes a deployment when its AI session no longer exists", async () => {
   const removed = [];
   const store = {

@@ -85,10 +85,22 @@ test("node agent services persist the absolute npm command for managed updates",
 
   assert.match(installer, /NPM_COMMAND="\$\(command -v npm\)"/);
   assert.match(installer, /TASK_HANDOFF_NPM_COMMAND=\$NPM_COMMAND/);
+  assert.match(installer, /TASK_HANDOFF_CONTROL_PLANE_HEALTH_URL=http:\/\/127\.0\.0\.1:\$CONTROL_PLANE_PORT\/api\/health/);
   assert.match(remoteInstaller, /NPM_COMMAND="\$\(command -v npm\)"/);
   assert.match(remoteInstaller, /TASK_HANDOFF_NPM_COMMAND=\$NPM_COMMAND/);
   assert.match(worker, /process\.env\.TASK_HANDOFF_NPM_COMMAND \|\| "npm"/);
   assert.match(updater, /process\.env\.TASK_HANDOFF_NPM_COMMAND \|\| "npm"/);
+});
+
+test("node agent updates discover the package that owns their launcher", () => {
+  const installer = fs.readFileSync(path.join(root, "scripts", "install-server-services.sh"), "utf8");
+  const remoteInstaller = fs.readFileSync(path.join(root, "packages", "control-plane", "src", "control-plane", "nodes", "install-script.ts"), "utf8");
+  const updater = fs.readFileSync(path.join(root, "packages", "control-plane", "src", "node-agent", "updates.ts"), "utf8");
+
+  assert.doesNotMatch(installer, /TASK_HANDOFF_NODE_UPDATE_PACKAGE/);
+  assert.doesNotMatch(remoteInstaller, /TASK_HANDOFF_NODE_UPDATE_PACKAGE/);
+  assert.match(updater, /installedPackageManifest\(globalRoot, "@task-handoff\/server"\)/);
+  assert.match(updater, /relatedCurrentVersions/);
 });
 
 test("installed server services use independent runtime commands", () => {
@@ -368,7 +380,7 @@ test("node update worker uses Commander for required and validated options", () 
   const invalid = spawnSync(process.execPath, [worker, "--job-file", "/tmp/unused-job.json", "--target-version", "not-semver"], { encoding: "utf8" });
   assert.notEqual(invalid.status, 0);
   assert.match(invalid.stderr, /must be an exact semantic version/);
-  assert.match(source, /verifyInstalledVersion\(\)/);
+  assert.match(source, /verifyInstalledVersion\(packageName, globalRoot\)/);
   assert.match(source, /expected \$\{targetVersion\}, found/);
 });
 

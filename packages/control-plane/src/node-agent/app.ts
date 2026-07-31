@@ -12,7 +12,7 @@ import WebSocket from "ws";
 import type { FastifyServerOptions } from "fastify";
 import { z } from "zod";
 import { readLocalControlledInstanceLockOwner } from "@task-handoff/core/core/local-controlled-instance-lock";
-import { processStartIdentity } from "@task-handoff/core/core/process-singleton-lock";
+import { processLockOwnerMatchesLiveProcess, processStartIdentity } from "@task-handoff/core/core/process-singleton-lock";
 import { packageVersionResolver } from "@task-handoff/core/core/package-version";
 import {
   CONTROL_PLANE_PROTOCOL_VERSION,
@@ -86,7 +86,7 @@ import type { TerminalCommandRunner } from "../shared/process/terminal-command-r
 import { nodeAgentIpcEndpoint, nodeAgentIpcPath, prepareNodeAgentIpcPath } from "../shared/transport/node-agent-ipc.ts";
 import { createNodeAgentHmacHeaders } from "../shared/security/node-agent-auth.ts";
 import { nodeAgentProxyMethod, type NodeAgentInjectResponse, websocketPayload } from "./transport/proxy-utils.ts";
-import { checkNodeAgentUpdate, npmCommand, NodeUpdateJobs, resolveNodeAgentUpdateWorker } from "./updates.ts";
+import { checkNodeAgentUpdate, npmCommand, NodeUpdateJobs, resolveNodeAgentUpdateWorker, resolveNodeUpdatePackage } from "./updates.ts";
 import { RuntimeArtifactResolver, type ResolvedRuntimeArtifact } from "./runtime-artifacts.ts";
 import { resolvePublishedRuntimeArtifact, type PublishedRuntimeArtifact } from "./runtime-release-source.ts";
 import { RuntimeConvergenceCoordinator, reportedVersion } from "./runtime-convergence.ts";
@@ -541,6 +541,66 @@ function nodeLocalInstanceWebBase(instance: ControlledInstance) {
   }
 }
 
+function appSessionsFromCrossVersionSnapshot(payload: unknown) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return [];
+  const data = (payload as Record<string, unknown>).data;
+  if (Array.isArray(data)) return data;
+  if (!data || typeof data !== "object" || Array.isArray(data)) return [];
+  const snapshot = (data as Record<string, unknown>).snapshot;
+  const source = snapshot && typeof snapshot === "object" && !Array.isArray(snapshot) ? snapshot : data;
+  const sessions = (source as Record<string, unknown>).sessions;
+  return Array.isArray(sessions) ? sessions : [];
+}
+
+export async function requestRuntimeAppSessionDrain(fetchImpl: typeof fetch, instance: ControlledInstance) {
+  const instanceBase = nodeLocalInstanceWebBase(instance);
+  if (instance.registrationToken) {
+    const internalResponse = await fetchWithTimeout(fetchImpl, `${instanceBase}/api/internal/node-agent/drain`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${instance.registrationToken}` },
+    }, 10_000);
+    if (internalResponse.ok) {
+      return { requested: instance.apps.runningCount, failures: [] as Array<{ sessionId: string; error: string }> };
+    }
+  }
+  const listResponse = await fetchWithTimeout(fetchImpl, `${instanceBase}/api/apps/sessions`, {
+    method: "GET",
+    headers: { "cache-control": "no-cache" },
+  }, 5_000);
+  if (!listResponse.ok) {
+    throw new Error(`Could not list app sessions for runtime drain (HTTP ${listResponse.status}).`);
+  }
+  const sessions = appSessionsFromCrossVersionSnapshot(await listResponse.json());
+  const runningSessionIds = sessions.flatMap((session) => {
+    if (!session || typeof session !== "object" || Array.isArray(session)) return [];
+    const record = session as Record<string, unknown>;
+    return record.status === "running" && typeof record.id === "string" && record.id ? [record.id] : [];
+  });
+  const results = await Promise.all(runningSessionIds.map(async (sessionId) => {
+    try {
+      const response = await fetchWithTimeout(fetchImpl, `${instanceBase}/api/apps/sessions/${encodeURIComponent(sessionId)}/stop`, {
+        method: "POST",
+      }, 5_000);
+      return response.ok ? undefined : { sessionId, error: `HTTP ${response.status}` };
+    } catch (error) {
+      return { sessionId, error: error instanceof Error ? error.message : String(error) };
+    }
+  }));
+  return {
+    requested: runningSessionIds.length,
+    failures: results.filter((result): result is { sessionId: string; error: string } => Boolean(result)),
+  };
+}
+
+export async function releaseRuntimeAppSessionDrain(fetchImpl: typeof fetch, instance: ControlledInstance) {
+  if (!instance.registrationToken) return false;
+  const response = await fetchWithTimeout(fetchImpl, `${nodeLocalInstanceWebBase(instance)}/api/internal/node-agent/resume`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${instance.registrationToken}` },
+  }, 5_000);
+  return response.ok;
+}
+
 function proxyWebSocketProtocols(headers: Record<string, unknown>) {
   const value = headers["sec-websocket-protocol"];
   const text = Array.isArray(value) ? value.join(",") : typeof value === "string" ? value : "";
@@ -864,7 +924,7 @@ async function stopLocalProcess(
     if (await terminateLocalProcess(legacyIdentity.pid, legacyIdentity.startIdentity)) return;
     throw localProcessStopError(instance, `Legacy controlled instance ${instance.id} did not exit after termination.`);
   }
-  if (lockOwner?.instanceId === instance.id) {
+  if (lockOwner?.instanceId === instance.id && processLockOwnerMatchesLiveProcess(lockOwner)) {
     throw localProcessStopError(
       instance,
       `Local controlled instance ${instance.id} is still owned by pid ${lockOwner.pid}, but its process identity could not be verified.`,
@@ -1345,7 +1405,7 @@ class NodeAgentState {
     this.modelAssignments.init();
     this.migrateLegacyModelEnvironments();
     this.updateJobs.init();
-    this.updateJobs.reconcileRollouts(this.controlledInstances.list(), packageVersion());
+    this.updateJobs.reconcileRollouts(this.controlledInstances.list(), packageVersion(), { processStarted: true });
     if (!this.nodeRuntimes.get("runtime_local_docker")) {
       const timestamp = now();
       this.nodeRuntimes.put(
@@ -2508,6 +2568,27 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       const artifact = await resolveArtifactForInstance(instance, desiredVersion);
       return requireManagedAdapterForInstance(instance).inspectRuntime(state.context(instance), artifact.identity);
     },
+    beginDrain: async (instance) => {
+      try {
+        const result = await requestRuntimeAppSessionDrain(fetchImpl, instance);
+        if (result.failures.length) {
+          app.log.warn({ instanceId: instance.id, requested: result.requested, failures: result.failures }, "runtime convergence could not stop every app session");
+        } else {
+          app.log.info({ instanceId: instance.id, requested: result.requested }, "runtime convergence requested app session drain");
+        }
+      } catch (error) {
+        app.log.warn({ instanceId: instance.id, error: error instanceof Error ? error.message : String(error) }, "runtime convergence could not request app session drain");
+      }
+    },
+    endDrain: async (instance) => {
+      try {
+        if (await releaseRuntimeAppSessionDrain(fetchImpl, instance)) {
+          app.log.info({ instanceId: instance.id }, "runtime convergence released app session drain");
+        }
+      } catch (error) {
+        app.log.warn({ instanceId: instance.id, error: error instanceof Error ? error.message : String(error) }, "runtime convergence could not release app session drain");
+      }
+    },
     install: async (instance, desiredVersion) => {
       const adapter = requireManagedAdapterForInstance(instance);
       await adapter.installRuntime(state.context(instance), await resolveArtifactForInstance(instance, desiredVersion));
@@ -2683,10 +2764,16 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
 
   const checkUpdate = async (input: z.infer<typeof UpdateCheckRequestSchema>) => {
     const impact = currentUpdateImpact();
+    const selection = await resolveNodeUpdatePackage(updateCommandRunner);
+    const relatedCurrentVersions = selection.packageName === "@task-handoff/server"
+      ? [...new Set([...selection.relatedCurrentVersions, packageVersion()])]
+      : selection.relatedCurrentVersions;
     const check = await checkNodeAgentUpdate({
       channel: input.channel,
-      currentVersion: packageVersion(),
+      currentVersion: selection.currentVersion || packageVersion(),
       runCommand: updateCommandRunner,
+      packageName: selection.packageName,
+      relatedCurrentVersions,
       impact,
     });
     if (!check.updateAvailable) return check;
@@ -2726,9 +2813,11 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       throw error;
     }
     const check = preflight.result;
+    const selection = await resolveNodeUpdatePackage(updateCommandRunner);
     const unchanged = check.channel === input.channel
       && check.availableVersion === input.targetVersion
-      && check.currentVersion === packageVersion()
+      && check.currentVersion === (selection.currentVersion || packageVersion())
+      && check.artifactRef?.startsWith(`npm:${selection.packageName}@`) === true
       && JSON.stringify(check.impact) === JSON.stringify(currentUpdateImpact());
     if (!unchanged) {
       const error = new Error("The update target or affected instances changed after preflight. Check for updates again.");
@@ -2985,6 +3074,9 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       "--job-file", state.updateJobs.records.filePath(job.id),
       "--target-version", job.toVersion,
       "--npm-command", npmCommand(),
+      ...(optionalEnv("TASK_HANDOFF_CONTROL_PLANE_HEALTH_URL")
+        ? ["--control-plane-health-url", optionalEnv("TASK_HANDOFF_CONTROL_PLANE_HEALTH_URL")!]
+        : []),
     ]);
     return reply.code(202).send({ data: job });
   });

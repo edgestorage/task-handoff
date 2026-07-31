@@ -12,6 +12,19 @@ function parseExactVersion(value) {
   return value;
 }
 
+function parseControlPlaneHealthUrl(value) {
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new InvalidArgumentError("must be a valid loopback HTTP URL");
+  }
+  if (!["http:", "https:"].includes(parsed.protocol) || !["127.0.0.1", "localhost", "::1"].includes(parsed.hostname)) {
+    throw new InvalidArgumentError("must be a valid loopback HTTP URL");
+  }
+  return parsed.toString();
+}
+
 const options = new Command()
   .name("task-handoff-node-update-worker")
   .description("Apply a detached TaskHandoff node update.")
@@ -19,6 +32,7 @@ const options = new Command()
   .requiredOption("--target-version <version>", "exact semantic version", parseExactVersion)
   .option("--service <name>", "systemd service to restart", "task-handoff-node-agent.service")
   .option("--npm-command <path>", "npm executable", process.env.TASK_HANDOFF_NPM_COMMAND || "npm")
+  .option("--control-plane-health-url <url>", "local control-plane health endpoint", parseControlPlaneHealthUrl)
   .parse(process.argv)
   .opts();
 
@@ -26,8 +40,9 @@ const jobFile = options.jobFile;
 const targetVersion = options.targetVersion;
 const service = options.service;
 const npmCommand = options.npmCommand;
-const nodeAgentManifest = path.resolve(__dirname, "..", "package.json");
+const controlPlaneHealthUrl = options.controlPlaneHealthUrl;
 const terminalStatuses = new Set(["succeeded", "degraded", "failed"]);
+const supportedPackages = new Set(["@task-handoff/node-agent", "@task-handoff/server"]);
 
 function updateJob(expectedStatuses, createPatch) {
   const observed = JSON.parse(fs.readFileSync(jobFile, "utf8"));
@@ -58,35 +73,99 @@ function run(command, args) {
   if (result.status !== 0) throw new Error(`${command} exited with status ${result.status ?? "unknown"}`);
 }
 
-function verifyInstalledVersion() {
-  const installedVersion = JSON.parse(fs.readFileSync(nodeAgentManifest, "utf8")).version;
-  if (installedVersion !== targetVersion) {
-    throw new Error(`Updated node-agent verification failed: expected ${targetVersion}, found ${installedVersion || "unknown"}.`);
+function installedVersion(packageName, globalRoot, nestedUnder) {
+  const manifest = nestedUnder
+    ? path.join(globalRoot, ...nestedUnder.split("/"), "node_modules", ...packageName.split("/"), "package.json")
+    : path.join(globalRoot, ...packageName.split("/"), "package.json");
+  try {
+    return JSON.parse(fs.readFileSync(manifest, "utf8")).version;
+  } catch (error) {
+    if (error?.code === "ENOENT") return undefined;
+    throw error;
   }
+}
+
+function verifyInstalledVersion(packageName, globalRoot) {
+  const actualVersion = installedVersion(packageName, globalRoot);
+  if (actualVersion !== targetVersion) {
+    throw new Error(`Updated ${packageName} verification failed: expected ${targetVersion}, found ${actualVersion || "unknown"}.`);
+  }
+}
+
+function verifyServerDistributionVersions(globalRoot) {
+  for (const packageName of ["@task-handoff/control-plane", "@task-handoff/node-agent", "@task-handoff/controlled-instance"]) {
+    const actualVersion = installedVersion(packageName, globalRoot, "@task-handoff/server")
+      || installedVersion(packageName, globalRoot);
+    if (actualVersion !== targetVersion) {
+      throw new Error(`Updated @task-handoff/server does not provide ${packageName} ${targetVersion}; found ${actualVersion || "unknown"}.`);
+    }
+  }
+}
+
+function npmArtifactIntegrity(packageName) {
+  const result = spawnSync(npmCommand, ["view", `${packageName}@${targetVersion}`, "dist.integrity", "--json"], { encoding: "utf8" });
+  if (result.status !== 0) throw new Error(`Could not verify the ${packageName} npm artifact integrity.`);
+  let integrity;
+  try {
+    integrity = JSON.parse(result.stdout);
+  } catch {
+    throw new Error(`npm returned invalid ${packageName} artifact integrity metadata.`);
+  }
+  if (typeof integrity !== "string" || !/^sha(?:256|384|512)-[A-Za-z0-9+/=]+$/.test(integrity)) {
+    throw new Error(`npm returned invalid ${packageName} artifact integrity metadata.`);
+  }
+  return integrity;
 }
 
 function verifyNpmArtifactIntegrity() {
   const job = JSON.parse(fs.readFileSync(jobFile, "utf8"));
-  const prefix = `npm:@task-handoff/node-agent@${targetVersion}#`;
-  if (typeof job.artifactRef !== "string" || !job.artifactRef.startsWith(prefix) || job.artifactRef.length === prefix.length) {
-    throw new Error(`Update job does not pin npm integrity for @task-handoff/node-agent@${targetVersion}.`);
+  const suffix = `@${targetVersion}#`;
+  if (typeof job.artifactRef !== "string" || !job.artifactRef.startsWith("npm:") || !job.artifactRef.includes(suffix)) {
+    throw new Error(`Update job does not pin npm integrity for version ${targetVersion}.`);
   }
-  const expectedIntegrity = job.artifactRef.slice(prefix.length);
-  const result = spawnSync(npmCommand, ["view", `@task-handoff/node-agent@${targetVersion}`, "dist.integrity", "--json"], { encoding: "utf8" });
-  if (result.status !== 0) throw new Error("Could not verify the node-agent npm artifact integrity.");
-  let actualIntegrity;
-  try {
-    actualIntegrity = JSON.parse(result.stdout);
-  } catch {
-    throw new Error("npm returned invalid node-agent artifact integrity metadata.");
+  const separator = job.artifactRef.indexOf(suffix);
+  const packageName = job.artifactRef.slice("npm:".length, separator);
+  const expectedIntegrity = job.artifactRef.slice(separator + suffix.length);
+  if (!supportedPackages.has(packageName) || !expectedIntegrity) {
+    throw new Error(`Update job does not identify a supported immutable npm artifact.`);
   }
+  const actualIntegrity = npmArtifactIntegrity(packageName);
   if (actualIntegrity !== expectedIntegrity) {
-    throw new Error(`Node-agent npm artifact integrity mismatch: expected ${expectedIntegrity}, found ${String(actualIntegrity || "unknown")}.`);
+    throw new Error(`${packageName} npm artifact integrity mismatch: expected ${expectedIntegrity}, found ${String(actualIntegrity || "unknown")}.`);
   }
+  return packageName;
 }
 
-let restartAttempted = false;
+async function waitForControlPlaneHealth(healthUrl, timeoutMs = 60_000) {
+  const deadline = Date.now() + timeoutMs;
+  let lastFailure = "not reachable";
+  while (Date.now() < deadline) {
+    try {
+      if (process.env.TASK_HANDOFF_UPDATE_WORKER_TEST_HEALTH_FILE) {
+        const payload = JSON.parse(fs.readFileSync(process.env.TASK_HANDOFF_UPDATE_WORKER_TEST_HEALTH_FILE, "utf8"));
+        const version = payload?.data?.version;
+        if (version === targetVersion) return;
+        lastFailure = `reported version ${String(version || "unknown")}`;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        continue;
+      }
+      const response = await fetch(healthUrl, {
+        headers: { "cache-control": "no-cache" },
+        signal: AbortSignal.timeout(2_000),
+      });
+      const payload = await response.json().catch(() => ({}));
+      const version = payload?.data?.version;
+      if (response.ok && version === targetVersion) return;
+      lastFailure = response.ok ? `reported version ${String(version || "unknown")}` : `returned HTTP ${response.status}`;
+    } catch (error) {
+      lastFailure = error instanceof Error ? error.message : String(error);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw new Error(`Control plane did not become healthy at ${healthUrl} with version ${targetVersion}: ${lastFailure}.`);
+}
 
+async function main() {
 try {
   const claimed = updateJob(["queued"], (current) => ({
     status: "updating-node",
@@ -95,33 +174,58 @@ try {
     error: undefined,
   }));
   if (!claimed) process.exit(0);
-  verifyNpmArtifactIntegrity();
+  const packageName = verifyNpmArtifactIntegrity();
   const prefixResult = spawnSync(npmCommand, ["prefix", "--global"], { encoding: "utf8" });
   if (prefixResult.status !== 0) throw new Error("Could not determine the npm global prefix.");
   const prefix = prefixResult.stdout.trim();
+  const rootResult = spawnSync(npmCommand, ["root", "--global"], { encoding: "utf8" });
+  if (rootResult.status !== 0) throw new Error("Could not determine the npm global module root.");
+  const globalRoot = rootResult.stdout.trim();
+  const standaloneNodeAgentWasInstalled = packageName === "@task-handoff/server"
+    && installedVersion("@task-handoff/node-agent", globalRoot) !== undefined;
   run(npmCommand, [
     "install",
     "--global",
     "--prefix",
     prefix,
-    `@task-handoff/node-agent@${targetVersion}`,
+    `${packageName}@${targetVersion}`,
   ]);
+  verifyInstalledVersion(packageName, globalRoot);
+  if (packageName === "@task-handoff/server") {
+    if (standaloneNodeAgentWasInstalled && installedVersion("@task-handoff/node-agent", globalRoot) !== targetVersion) {
+      const expectedNodeAgentIntegrity = npmArtifactIntegrity("@task-handoff/node-agent");
+      run(npmCommand, [
+        "install",
+        "--global",
+        "--prefix",
+        prefix,
+        `@task-handoff/node-agent@${targetVersion}`,
+      ]);
+      if (npmArtifactIntegrity("@task-handoff/node-agent") !== expectedNodeAgentIntegrity) {
+        throw new Error("@task-handoff/node-agent npm artifact integrity changed during installation.");
+      }
+      verifyInstalledVersion("@task-handoff/node-agent", globalRoot);
+    }
+    verifyServerDistributionVersions(globalRoot);
+  }
+  if (packageName === "@task-handoff/server") {
+    if (!controlPlaneHealthUrl) throw new Error("A control-plane health URL is required for a complete server update.");
+    run("systemctl", ["restart", "task-handoff-control-plane.service"]);
+    await waitForControlPlaneHealth(controlPlaneHealthUrl);
+  }
   const handedOff = updateJob(["updating-node"], (current) => ({ status: "restarting-node", rollout: { ...current.rollout, phase: "restarting-node" } }));
   if (!handedOff) process.exit(0);
-  // Once restart is attempted, the new node-agent exclusively owns all later
-  // rollout transitions. The old worker must never write this job again.
-  restartAttempted = true;
   run("systemctl", ["restart", service]);
-  verifyInstalledVersion();
 } catch (error) {
-  if (!restartAttempted) {
-    updateJob(["queued", "updating-node"], (current) => ({
-      status: "failed",
-      rollout: { ...current.rollout, phase: "failed" },
-      error: { code: "NODE_UPDATE_FAILED", message: error instanceof Error ? error.message : String(error), retryable: false },
-      completedAt: new Date().toISOString(),
-    }));
-  }
+  updateJob(["queued", "updating-node", "restarting-node"], (current) => ({
+    status: "failed",
+    rollout: { ...current.rollout, phase: "failed" },
+    error: { code: "NODE_UPDATE_FAILED", message: error instanceof Error ? error.message : String(error), retryable: false },
+    completedAt: new Date().toISOString(),
+  }));
   console.error(error);
   process.exit(1);
 }
+}
+
+void main();

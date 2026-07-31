@@ -83,9 +83,11 @@ test("published runtime metadata reports missing artifacts before a Node update"
   );
 });
 
-test("the detached Node worker installs only node-agent", () => {
+test("the detached Node worker installs only the verified package that owns the service", () => {
   const worker = fs.readFileSync(path.join(__dirname, "..", "scripts", "node-update-worker.cjs"), "utf8");
-  assert.match(worker, /@task-handoff\/node-agent@\$\{targetVersion\}/);
+  assert.match(worker, /supportedPackages = new Set\(\["@task-handoff\/node-agent", "@task-handoff\/server"\]\)/);
+  assert.match(worker, /`\$\{packageName\}@\$\{targetVersion\}`/);
+  assert.match(worker, /verifyNpmArtifactIntegrity\(\)/);
   assert.doesNotMatch(worker, /@task-handoff\/controlled-instance@/);
   assert.doesNotMatch(worker, /taskHandoff.*update/);
 });

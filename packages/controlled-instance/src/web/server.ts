@@ -1020,6 +1020,28 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     },
   }));
 
+  app.post("/api/internal/node-agent/drain", nodeAgentProcessRoute, async () => {
+    appRuntime.beginDrain();
+    triggerExecutor.beginDrain();
+    triggerManager.stop();
+    await appRuntime.stopAll();
+    publishAppSessionSnapshot("app-session-updated");
+    await refreshAndPublishAiSessions("app-session-updated");
+    if (nodeAgentClient.enabled()) {
+      await nodeAgentClient.heartbeat().catch((error) => {
+        app.log.warn({ err: error }, "failed to publish heartbeat after runtime drain");
+      });
+    }
+    return { data: { drained: true, instanceId } };
+  });
+
+  app.post("/api/internal/node-agent/resume", nodeAgentProcessRoute, async () => {
+    appRuntime.endDrain();
+    triggerExecutor.endDrain();
+    triggerManager.start();
+    return { data: { resumed: true, instanceId } };
+  });
+
   app.post("/api/internal/node-agent/shutdown", nodeAgentProcessRoute, async (_request, reply) => {
     setImmediate(() => process.kill(process.pid, "SIGTERM"));
     return reply.code(202).send({ data: { accepted: true, instanceId } });
