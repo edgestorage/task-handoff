@@ -206,60 +206,95 @@
     </header>
     <p class="trigger-board-description">{{ t("triggers.description") }}</p>
 
+    <div class="trigger-board-overview" :aria-label="t('triggers.overview.label')">
+      <div class="trigger-board-stat"><Zap :size="15" /><span>{{ t("triggers.overview.templates") }}</span><strong>{{ triggers.data.value?.triggers.length || 0 }}</strong></div>
+      <div class="trigger-board-stat"><MapPin :size="15" /><span>{{ t("triggers.overview.deployments") }}</span><strong>{{ overview.deploymentCount }}</strong></div>
+      <div class="trigger-board-stat"><Activity :size="15" /><span>{{ t("triggers.overview.running") }}</span><strong>{{ overview.runningCount }}</strong></div>
+      <div class="trigger-board-stat" :class="{ 'is-danger': overview.errorCount > 0 }"><CircleAlert :size="15" /><span>{{ t("triggers.overview.errors") }}</span><strong>{{ overview.errorCount }}</strong></div>
+    </div>
+
     <p v-if="triggers.error.value" class="form-error">{{ errorText }}</p>
     <div v-else-if="filteredTriggers.length" class="trigger-board-list">
       <section v-for="trigger in filteredTriggers" :key="trigger.configHash" class="trigger-board-card">
         <header class="trigger-board-card-head">
-          <div>
+          <div class="trigger-board-heading">
             <div class="trigger-board-title">
-              {{ trigger.config.name }}
-              <Badge variant="secondary">{{ sourceTypeLabel(trigger.config.source.type) }}</Badge>
-              <Badge>{{ shortHash(trigger.configHash) }}</Badge>
-              <Badge v-if="!trigger.ownedByControlPlane" variant="secondary">{{ t("triggers.ownership.instanceLocal") }}</Badge>
+              <strong>{{ trigger.config.name }}</strong>
+              <code>{{ shortHash(trigger.configHash) }}</code>
             </div>
             <p v-if="trigger.config.description">{{ trigger.config.description }}</p>
-            <div class="trigger-board-meta">
-              <span>{{ sourceText(trigger.config.source) }}</span>
-              <span>{{ t(trigger.deploymentCount === 1 ? "triggers.counts.bindingOne" : "triggers.counts.bindings", { count: trigger.deploymentCount }) }}</span>
-              <span>{{ t("triggers.counts.enabled", { count: trigger.enabledCount }) }}</span>
-              <span>{{ t("triggers.counts.running", { count: trigger.runningCount }) }}</span>
-              <span>{{ t(trigger.errorCount === 1 ? "triggers.counts.errorOne" : "triggers.counts.errors", { count: trigger.errorCount }) }}</span>
-            </div>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            :disabled="deletingHash === trigger.configHash || !trigger.ownedByControlPlane"
-            :title="trigger.ownedByControlPlane ? t('triggers.actions.deleteTitle') : t('triggers.ownership.deleteOwnedElsewhere')"
-            @click="deleteTemplate(trigger.configHash)"
-          >
-            <Trash2 :size="14" />
-            <span>{{ t("triggers.actions.delete") }}</span>
-          </Button>
+          <div class="trigger-board-badges">
+            <Badge variant="secondary">{{ sourceTypeLabel(trigger.config.source.type) }}</Badge>
+            <Badge :variant="trigger.errorCount ? 'destructive' : 'secondary'">{{ triggerStatusLabel(trigger) }}</Badge>
+            <Badge v-if="!trigger.ownedByControlPlane" variant="secondary">{{ t("triggers.ownership.instanceLocal") }}</Badge>
+          </div>
         </header>
 
-        <div v-if="trigger.deployments.length" class="trigger-board-deployments">
-          <div v-for="entry in trigger.deployments" :key="`${entry.instanceId}:${entry.deployment.deploymentId || entry.deployment.configHash}`" class="trigger-board-deployment">
-            <div>
-              <strong>{{ entry.instanceName }}</strong>
-              <span>{{ targetText(entry.deployment.target) }}</span>
-              <span :title="entry.runtime?.lastError">{{ runtimeStatusLabel(entry.runtime?.status || (entry.deployment.enabled ? "idle" : "disabled")) }}</span>
-              <span>{{ originLabel(entry.deployment.origin) }}</span>
-            </div>
-            <Button variant="outline" size="sm" @click="run(entry.instanceId, trigger.configHash, entry.deployment.deploymentId || entry.deployment.configHash)">{{ t("triggers.actions.run") }}</Button>
-          </div>
+        <div class="trigger-board-source">
+          <Clock3 v-if="trigger.config.source.type === 'schedule'" :size="14" />
+          <FolderSync v-else-if="trigger.config.source.type === 'file-change'" :size="14" />
+          <Bot v-else :size="14" />
+          <span>{{ sourceText(trigger.config.source) }}</span>
+        </div>
+        <div class="trigger-board-meta">
+          <span>{{ t(trigger.deploymentCount === 1 ? "triggers.counts.bindingOne" : "triggers.counts.bindings", { count: trigger.deploymentCount }) }}</span>
+          <span>{{ t("triggers.counts.enabled", { count: trigger.enabledCount }) }}</span>
+          <span v-if="trigger.runningCount">{{ t("triggers.counts.running", { count: trigger.runningCount }) }}</span>
+          <span v-if="trigger.errorCount" class="is-danger">{{ t(trigger.errorCount === 1 ? "triggers.counts.errorOne" : "triggers.counts.errors", { count: trigger.errorCount }) }}</span>
         </div>
 
-        <div v-if="trigger.recentRuns.length" class="trigger-board-runs">
-          <div v-for="run in trigger.recentRuns.slice(0, 3)" :key="run.id" class="trigger-board-run">
-            <Badge :variant="run.status === 'failed' ? 'destructive' : 'secondary'" :title="run.error">{{ runStatusLabel(run.status) }}</Badge>
-            <span>{{ run.instanceName || run.instanceId }}</span>
-            <span>{{ formatDate(run.startedAt) }}</span>
+        <div class="trigger-board-section-label"><span>{{ t("triggers.deployments.title") }}</span><small>{{ t("triggers.deployments.description") }}</small></div>
+        <div v-if="trigger.deployments.length" class="trigger-board-deployments">
+          <div v-for="entry in trigger.deployments" :key="`${entry.instanceId}:${entry.deployment.deploymentId || entry.deployment.configHash}`" class="trigger-board-deployment">
+            <MapPin :size="14" aria-hidden="true" />
+            <div class="trigger-board-deployment-main">
+              <strong>{{ entry.instanceName }}</strong>
+              <span :title="targetText(entry.deployment.target)">{{ sessionTitle(entry.instanceId, entry.deployment.target.aiSessionId) }}</span>
+            </div>
+            <div class="trigger-board-deployment-state">
+              <span class="trigger-runtime-dot" :data-status="entry.runtime?.status || (entry.deployment.enabled ? 'idle' : 'disabled')" />
+              <span :title="entry.runtime?.lastError">{{ runtimeStatusLabel(entry.runtime?.status || (entry.deployment.enabled ? "idle" : "disabled")) }}</span>
+              <small>{{ originLabel(entry.deployment.origin) }}</small>
+            </div>
+            <div class="trigger-board-deployment-actions">
+              <Button variant="ghost" size="icon" :aria-label="t('triggers.actions.run')" :title="t('triggers.actions.run')" @click="run(entry.instanceId, trigger.configHash, entry.deployment.deploymentId || entry.deployment.configHash)"><Play :size="14" /></Button>
+              <Button v-if="trigger.ownedByControlPlane && entry.deployment.origin === 'control-plane'" variant="ghost" size="icon" :disabled="bindingBusyKey === deploymentKey(entry.instanceId, entry.deployment.target.aiSessionId, trigger.configHash)" :aria-label="t('triggers.actions.unbind')" :title="t('triggers.actions.unbind')" @click="unbind(trigger.configHash, entry.instanceId, entry.deployment.target.aiSessionId)"><Unlink :size="14" /></Button>
+            </div>
           </div>
         </div>
+        <p v-else class="trigger-board-no-deployments">{{ t("triggers.deployments.empty") }}</p>
+
+        <details v-if="trigger.recentRuns.length" class="trigger-board-activity">
+          <summary><span><History :size="14" />{{ t("triggers.activity.title") }}</span><small>{{ t("triggers.activity.latest", { time: formatDate(trigger.recentRuns[0].startedAt) }) }}</small></summary>
+          <div class="trigger-board-runs">
+            <div v-for="run in trigger.recentRuns.slice(0, 5)" :key="run.id" class="trigger-board-run">
+              <Badge :variant="run.status === 'failed' ? 'destructive' : 'secondary'" :title="run.error">{{ runStatusLabel(run.status) }}</Badge>
+              <span>{{ run.instanceName || run.instanceId }}</span><span>{{ eventTypeLabel(run.eventType) }}</span><time>{{ formatDate(run.startedAt) }}</time>
+            </div>
+          </div>
+        </details>
+
+        <footer class="trigger-board-card-actions">
+          <Button variant="outline" size="sm" :disabled="!trigger.ownedByControlPlane || !availableSessions(trigger).length" @click="openDeployDialog(trigger.configHash)"><MapPinPlus :size="14" /><span>{{ t("triggers.actions.deploy") }}</span></Button>
+          <Button variant="outline" size="sm" class="trigger-board-delete" :disabled="deletingHash === trigger.configHash || !trigger.ownedByControlPlane" :title="trigger.ownedByControlPlane ? t('triggers.actions.deleteTitle') : t('triggers.ownership.deleteOwnedElsewhere')" @click="deleteTemplate(trigger.configHash)"><Trash2 :size="14" /><span>{{ t("triggers.actions.delete") }}</span></Button>
+        </footer>
       </section>
     </div>
     <p v-else class="settings-empty">{{ t("triggers.empty") }}</p>
+
+    <Dialog v-model:open="deployDialogOpen">
+      <DialogContent class="trigger-deploy-dialog">
+        <DialogClose as-child><Button variant="ghost" size="icon" class="trigger-create-close" :aria-label="t('triggers.deployments.close')"><X :size="16" /></Button></DialogClose>
+        <DialogHeader><DialogTitle>{{ t("triggers.deployments.dialogTitle") }}</DialogTitle><DialogDescription>{{ t("triggers.deployments.dialogDescription") }}</DialogDescription></DialogHeader>
+        <div class="trigger-deploy-session-list">
+          <button v-for="session in selectedTriggerSessions" :key="`${session.instanceId}:${session.id}`" type="button" :disabled="Boolean(bindingBusyKey)" @click="bindSelectedTrigger(session.instanceId, session.id)">
+            <Bot :size="15" /><span><strong>{{ session.title || session.userPrompt || session.id }}</strong><small>{{ session.instanceName }} · {{ session.cwd || session.agent }}</small></span><Plus :size="14" />
+          </button>
+          <p v-if="!selectedTriggerSessions.length" class="settings-empty">{{ t("triggers.deployments.noSessions") }}</p>
+        </div>
+      </DialogContent>
+    </Dialog>
   </section>
 </template>
 
@@ -267,10 +302,10 @@
 import { computed, reactive, ref } from "vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import { useI18n } from "vue-i18n";
-import { Plus, Trash2, X } from "@lucide/vue";
-import { createControlPlaneTrigger, deleteControlPlaneTrigger, runControlledInstanceTrigger, useControlPlaneTriggersQuery } from "../../../api/queries";
+import { Activity, Bot, CircleAlert, Clock3, FolderSync, History, MapPin, MapPinPlus, Play, Plus, Trash2, Unlink, X, Zap } from "@lucide/vue";
+import { bindAiSessionTrigger, createControlPlaneTrigger, deleteControlPlaneTrigger, runControlledInstanceTrigger, unbindAiSessionTrigger, useControlPlaneAiSessionsQuery, useControlPlaneTriggersQuery } from "../../../api/queries";
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
-import type { InstanceBoardItem, TriggerSource, TriggerTarget } from "../../../api/types";
+import type { ControlPlaneTrigger, InstanceBoardItem, TriggerRun, TriggerSource, TriggerTarget } from "../../../api/types";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Checkbox } from "../../../components/ui/checkbox";
@@ -289,12 +324,16 @@ type AiSessionTriggerSource = Extract<TriggerSource, { type: "ai-session" }>;
 
 const queryClient = useQueryClient();
 const { locale, t } = useI18n();
-defineProps<{ instances: InstanceBoardItem[] }>();
+const props = defineProps<{ instances: InstanceBoardItem[] }>();
 const triggers = useControlPlaneTriggersQuery();
+const aiSessions = useControlPlaneAiSessionsQuery();
 const filter = ref("");
 const creating = ref(false);
 const deletingHash = ref("");
+const bindingBusyKey = ref("");
 const createDialogOpen = ref(false);
+const deployDialogOpen = ref(false);
+const deployTriggerHash = ref("");
 const createForm = reactive({
   name: "",
   sourceType: "schedule" as TriggerSource["type"],
@@ -404,6 +443,71 @@ const filteredTriggers = computed(() => {
   }
   return items.filter((trigger) => `${trigger.config.name} ${trigger.configHash} ${trigger.config.source.type} ${sourceText(trigger.config.source)}`.toLowerCase().includes(value));
 });
+const overview = computed(() => (triggers.data.value?.triggers || []).reduce((result, trigger) => ({
+  deploymentCount: result.deploymentCount + trigger.deploymentCount,
+  runningCount: result.runningCount + trigger.runningCount,
+  errorCount: result.errorCount + trigger.errorCount,
+}), { deploymentCount: 0, runningCount: 0, errorCount: 0 }));
+const allSessions = computed(() => (aiSessions.data.value?.instances || []).flatMap((entry) => {
+  const instance = props.instances.find((candidate) => candidate.id === entry.instanceId);
+  return entry.aiSessions.sessions.map((session) => ({ ...session, instanceId: entry.instanceId, instanceName: instance?.name || entry.instanceId }));
+}));
+const selectedTrigger = computed(() => (triggers.data.value?.triggers || []).find((trigger) => trigger.configHash === deployTriggerHash.value));
+const selectedTriggerSessions = computed(() => selectedTrigger.value ? availableSessions(selectedTrigger.value) : []);
+
+function triggerStatusLabel(trigger: ControlPlaneTrigger) {
+  if (trigger.errorCount) return t("triggers.status.error");
+  if (trigger.runningCount) return t("triggers.status.running");
+  if (!trigger.deploymentCount) return t("triggers.status.notDeployed");
+  if (!trigger.enabledCount) return t("triggers.status.disabled");
+  return t("triggers.status.active");
+}
+
+function availableSessions(trigger: ControlPlaneTrigger) {
+  const deployed = new Set(trigger.deployments.map((entry) => `${entry.instanceId}:${entry.deployment.target.aiSessionId}`));
+  return allSessions.value.filter((session) => !deployed.has(`${session.instanceId}:${session.id}`));
+}
+
+function sessionTitle(instanceId: string, sessionId: string) {
+  const session = allSessions.value.find((candidate) => candidate.instanceId === instanceId && candidate.id === sessionId);
+  return session?.title || session?.userPrompt || sessionId;
+}
+
+function deploymentKey(instanceId: string, sessionId: string, configHash: string) {
+  return `${instanceId}:${sessionId}:${configHash}`;
+}
+
+function openDeployDialog(configHash: string) {
+  deployTriggerHash.value = configHash;
+  deployDialogOpen.value = true;
+}
+
+async function bindSelectedTrigger(instanceId: string, sessionId: string) {
+  if (!deployTriggerHash.value || bindingBusyKey.value) return;
+  bindingBusyKey.value = deploymentKey(instanceId, sessionId, deployTriggerHash.value);
+  try {
+    await bindAiSessionTrigger(instanceId, sessionId, deployTriggerHash.value);
+    deployDialogOpen.value = false;
+    await refresh();
+  } catch (error) {
+    showControlPlaneToast(translateApiError(error, t));
+  } finally {
+    bindingBusyKey.value = "";
+  }
+}
+
+async function unbind(configHash: string, instanceId: string, sessionId: string) {
+  if (bindingBusyKey.value) return;
+  bindingBusyKey.value = deploymentKey(instanceId, sessionId, configHash);
+  try {
+    await unbindAiSessionTrigger(instanceId, sessionId, configHash);
+    await refresh();
+  } catch (error) {
+    showControlPlaneToast(translateApiError(error, t));
+  } finally {
+    bindingBusyKey.value = "";
+  }
+}
 
 async function run(instanceId: string, configHash: string, deploymentId?: string) {
   try {
@@ -455,6 +559,7 @@ async function deleteTemplate(configHash: string) {
 async function refresh() {
   await queryClient.invalidateQueries({ queryKey: ["control-plane-triggers"] });
   await queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.instanceBoard });
+  await queryClient.invalidateQueries({ queryKey: ["control-plane-ai-sessions"] });
 }
 
 function sourceFromForm(): TriggerSource {
@@ -588,6 +693,13 @@ function runStatusLabel(value: string) {
   if (value === "failed") return t("triggers.status.failed");
   if (value === "skipped") return t("triggers.status.skipped");
   return t("triggers.status.unknown", { value });
+}
+
+function eventTypeLabel(value: TriggerRun["eventType"]) {
+  if (value === "manual") return t("triggers.eventType.manual");
+  if (value === "schedule") return t("triggers.eventType.schedule");
+  if (value === "file-change") return t("triggers.eventType.fileChange");
+  return t("triggers.eventType.aiSession");
 }
 
 function originLabel(value: string) {

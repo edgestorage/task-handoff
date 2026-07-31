@@ -264,26 +264,26 @@
 
 @media (max-width: 780px) {
   .control-plane-topbar {
-    height: auto;
+    height: 56px;
     min-height: 56px;
-    align-items: flex-start;
-    flex-direction: column;
-    padding: 10px 12px;
+    flex-direction: row;
+    padding: 0 12px;
   }
 
   .control-plane-actions {
-    width: 100%;
-    justify-content: space-between;
+    min-width: 0;
+    margin-left: auto;
+    justify-content: flex-end;
   }
 
   .topbar-left {
-    width: 100%;
+    flex: 0 1 auto;
   }
 
   .control-plane-workbench {
     grid-template-columns: 1fr;
     grid-template-rows: auto minmax(0, 1fr);
-    height: calc(100vh - 98px);
+    height: calc(100vh - 56px);
   }
 
   .control-plane-workbench.instances-collapsed {

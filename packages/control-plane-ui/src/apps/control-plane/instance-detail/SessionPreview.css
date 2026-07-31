@@ -383,6 +383,57 @@
   border-color: hsl(var(--destructive));
 }
 
+:global(.session-tab-detail-tooltip) {
+  position: fixed;
+  z-index: 9999;
+  width: min(280px, calc(100vw - 32px));
+  max-height: calc(100vh - 24px);
+  overflow: auto;
+  display: grid;
+  gap: 6px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--surface-hover) !important;
+  color: var(--text-strong) !important;
+  box-shadow: 0 14px 38px rgb(0 0 0 / 38%);
+  padding: 13px 14px;
+  -webkit-backdrop-filter: blur(16px) saturate(1.18);
+  backdrop-filter: blur(16px) saturate(1.18);
+  transition:
+    left 120ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    top 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+:global(.session-tab-detail-enter-active),
+:global(.session-tab-detail-leave-active) {
+  transition:
+    opacity 100ms ease,
+    transform 100ms ease;
+}
+
+:global(.session-tab-detail-enter-from),
+:global(.session-tab-detail-leave-to) {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+:global(.session-tab-detail-title) {
+  display: block;
+  color: var(--text-strong);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+:global(.session-tab-detail-cwd) {
+  display: block;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
 .instance-action-menu {
   display: grid;
   width: 158px;

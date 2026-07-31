@@ -297,7 +297,9 @@ function sessionWorkspaceKey(session: SessionTab, instance: InstanceBoardItem) {
   const codex = objectValue(ai?.codex);
   const claude = objectValue(ai?.claude);
   const launch = objectValue(source.launch);
-  return stringValue(tty?.cwd)
+  const workspace = objectValue(source.workspace);
+  return stringValue(workspace?.cwd)
+    || stringValue(tty?.cwd)
     || stringValue(codex?.cwd)
     || stringValue(claude?.cwd)
     || stringValue(launch?.cwd)

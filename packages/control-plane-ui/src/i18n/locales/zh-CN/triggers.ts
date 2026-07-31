@@ -7,6 +7,17 @@ export const triggers = {
   description: "汇总来自控制平面和受控实例的模板。",
   empty: "暂无触发器模板。",
   filter: "筛选模板",
+  overview: { label: "触发器状态概览", templates: "模板", deployments: "部署", running: "运行中", errors: "错误" },
+  deployments: {
+    title: "部署位置",
+    description: "此触发器当前运行的位置",
+    empty: "尚未部署到任何 AI 会话。",
+    close: "关闭部署对话框",
+    dialogTitle: "部署触发器",
+    dialogDescription: "选择一个 AI 会话，触发器将在该会话所属的受控实例中运行。",
+    noSessions: "暂无可用的 AI 会话。",
+  },
+  activity: { title: "最近活动", latest: "最近一次 {time}" },
   create: {
     action: "新建触发器",
     close: "关闭新建触发器对话框",
@@ -139,6 +150,8 @@ export const triggers = {
     delete: "删除",
     deleteTitle: "删除触发器模板",
     run: "运行",
+    deploy: "部署到会话",
+    unbind: "解除部署",
   },
   status: {
     enabled: "已启用",
@@ -150,8 +163,11 @@ export const triggers = {
     completed: "已完成",
     failed: "失败",
     skipped: "已跳过",
+    active: "运行正常",
+    notDeployed: "未部署",
     unknown: "未知（{value}）",
   },
+  eventType: { manual: "手动运行", schedule: "计划任务", fileChange: "文件变更", aiSession: "AI 会话" },
   origin: {
     controlPlane: "控制平面",
     controlledInstance: "受控实例",

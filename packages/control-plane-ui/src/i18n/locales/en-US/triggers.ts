@@ -4,6 +4,17 @@ export const triggers = {
   description: "Templates aggregated from control plane and controlled instances.",
   empty: "No trigger templates yet.",
   filter: "Filter templates",
+  overview: { label: "Trigger status overview", templates: "Templates", deployments: "Deployments", running: "Running", errors: "Errors" },
+  deployments: {
+    title: "Deployments",
+    description: "Where this trigger is active",
+    empty: "Not deployed to any AI session yet.",
+    close: "Close deployment dialog",
+    dialogTitle: "Deploy trigger",
+    dialogDescription: "Choose an AI session. The trigger will run inside that session's controlled instance.",
+    noSessions: "No available AI sessions.",
+  },
+  activity: { title: "Recent activity", latest: "Latest {time}" },
   create: {
     action: "New trigger",
     close: "Close create trigger dialog",
@@ -136,6 +147,8 @@ export const triggers = {
     delete: "Delete",
     deleteTitle: "Delete trigger template",
     run: "Run",
+    deploy: "Deploy to session",
+    unbind: "Remove deployment",
   },
   status: {
     enabled: "Enabled",
@@ -147,8 +160,11 @@ export const triggers = {
     completed: "Completed",
     failed: "Failed",
     skipped: "Skipped",
+    active: "Active",
+    notDeployed: "Not deployed",
     unknown: "Unknown ({value})",
   },
+  eventType: { manual: "Manual", schedule: "Schedule", fileChange: "File change", aiSession: "AI session" },
   origin: {
     controlPlane: "Control plane",
     controlledInstance: "Controlled instance",

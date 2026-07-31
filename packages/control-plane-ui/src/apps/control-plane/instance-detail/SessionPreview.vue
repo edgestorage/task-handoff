@@ -42,7 +42,16 @@
           <div v-if="previewSessionTabs(tabGroup.id, tabGroup.appTabs).length" class="session-tab-strip-frame">
             <div v-session-tab-overflow class="session-tab-strip" @scroll="updateSessionTabOverflowFromEvent" @wheel="scrollSessionTabs">
               <TransitionGroup name="session-tab-reorder" tag="div" class="session-tab-strip-content" role="tablist" :aria-label="hasSessionSplit ? t('sessions.tabs.paneTabs', { pane: tabGroup.id }) : t('sessions.tabs.views')">
-                <span v-for="session in previewSessionTabs(tabGroup.id, tabGroup.appTabs)" :key="session.key" class="session-tab-sortable-shell">
+                <span
+                  v-for="session in previewSessionTabs(tabGroup.id, tabGroup.appTabs)"
+                  :key="session.key"
+                  class="session-tab-sortable-shell"
+                  @mouseenter="showSessionTabDetail($event, session)"
+                  @pointermove="showSessionTabDetail($event, session)"
+                  @mouseleave="scheduleSessionTabDetailClose"
+                  @focusin="showSessionTabDetail($event, session)"
+                  @focusout="scheduleSessionTabDetailClose"
+                >
                   <ContextMenu>
                     <ContextMenuTrigger as-child>
                       <span
@@ -54,7 +63,6 @@
                         role="tab"
                         tabindex="0"
                         :aria-selected="isSessionTabActive(session)"
-                        :title="`${sessionDisplayName(session, t)} · ${stoppingSessionId === session.key ? t('sessions.tabs.stopping') : sessionStatusLabel(session.status, t)}`"
                         @click="selectSessionFromTab($event, session.key)"
                         @pointerdown="startSessionTabPointer($event, session, tabGroup.id)"
                         @keydown.enter.prevent="$emit('selectSession', session.key)"
@@ -92,7 +100,7 @@
                           <X :size="13" />
                         </button>
                       </span>
-                    </ContextMenuTrigger>
+                      </ContextMenuTrigger>
                     <ContextMenuContent class="instance-action-menu">
                       <ContextMenuItem v-if="session.kind !== 'repository'" class="instance-action-item" @select="beginSessionRename(session)">
                         <Pencil :size="14" />
@@ -324,6 +332,21 @@
       @created="handleProjectCreated"
       @update:open="projectPickerOpen = $event"
     />
+    <Teleport to="body">
+      <Transition name="session-tab-detail">
+        <div
+          v-if="sessionTabDetailVisible && sessionTabDetailSession"
+          class="session-tab-detail-tooltip"
+          :style="sessionTabDetailStyle"
+          role="tooltip"
+          @mouseenter="cancelSessionTabDetailClose"
+          @mouseleave="scheduleSessionTabDetailClose"
+        >
+          <strong class="session-tab-detail-title">{{ sessionDisplayName(sessionTabDetailSession, t) }}</strong>
+          <span class="session-tab-detail-cwd">{{ sessionTabWorkspaceLabel(sessionTabDetailSession) }}</span>
+        </div>
+      </Transition>
+    </Teleport>
   </section>
 </template>
 
@@ -351,6 +374,7 @@ import {
   sessionMeta,
   sessionDisplayName,
   sessionStatusLabel,
+  sessionWorkspacePath,
   shouldGroupAppSessionTabs,
   type LaunchableApp,
   type SessionTab,
@@ -431,6 +455,67 @@ const activeRepositorySessionId = computed(() => {
 });
 const resourceMetricsDisplay = computed(() => formatResourceMetrics(props.resourceMetrics, resourceMetricsNow.value.getTime(), locale.value, t));
 const sessionTabOverflowObservers = new WeakMap<HTMLElement, ResizeObserver>();
+const sessionTabDetailSession = ref<SessionTab>();
+const sessionTabDetailVisible = ref(false);
+const sessionTabDetailPosition = ref({ left: 12, top: 12 });
+const sessionTabDetailStyle = computed(() => ({
+  left: `${sessionTabDetailPosition.value.left}px`,
+  top: `${sessionTabDetailPosition.value.top}px`,
+}));
+const SESSION_TAB_DETAIL_DELAY_MS = 1_000;
+const SESSION_TAB_DETAIL_SKIP_DELAY_MS = 800;
+const SESSION_TAB_DETAIL_CLOSE_DELAY_MS = 120;
+let sessionTabDetailOpenTimer: ReturnType<typeof setTimeout> | undefined;
+let sessionTabDetailCloseTimer: ReturnType<typeof setTimeout> | undefined;
+let sessionTabDetailClosedAt = 0;
+
+function sessionTabWorkspaceLabel(session: SessionTab) {
+  const path = sessionWorkspacePath(session, props.instance);
+  return path === "__unknown_workspace__" ? t("sessions.tabs.unknownWorkspace") : path;
+}
+
+function cancelSessionTabDetailClose() {
+  if (!sessionTabDetailCloseTimer) return;
+  clearTimeout(sessionTabDetailCloseTimer);
+  sessionTabDetailCloseTimer = undefined;
+}
+
+function closeSessionTabDetail() {
+  if (sessionTabDetailOpenTimer) clearTimeout(sessionTabDetailOpenTimer);
+  if (sessionTabDetailCloseTimer) clearTimeout(sessionTabDetailCloseTimer);
+  sessionTabDetailOpenTimer = undefined;
+  sessionTabDetailCloseTimer = undefined;
+  if (sessionTabDetailVisible.value) sessionTabDetailClosedAt = Date.now();
+  sessionTabDetailVisible.value = false;
+}
+
+function scheduleSessionTabDetailClose() {
+  if (sessionTabDetailOpenTimer) clearTimeout(sessionTabDetailOpenTimer);
+  sessionTabDetailOpenTimer = undefined;
+  cancelSessionTabDetailClose();
+  sessionTabDetailCloseTimer = setTimeout(closeSessionTabDetail, SESSION_TAB_DETAIL_CLOSE_DELAY_MS);
+}
+
+function showSessionTabDetail(event: Event, session: SessionTab) {
+  if (!(event.currentTarget instanceof HTMLElement)) return;
+  cancelSessionTabDetailClose();
+  if (sessionTabDetailOpenTimer) clearTimeout(sessionTabDetailOpenTimer);
+  const bounds = event.currentTarget.getBoundingClientRect();
+  const cardWidth = Math.min(280, window.innerWidth - 24);
+  sessionTabDetailPosition.value = {
+    left: Math.max(12, Math.min(bounds.left, window.innerWidth - cardWidth - 12)),
+    top: bounds.bottom + 4,
+  };
+  sessionTabDetailSession.value = session;
+  if (sessionTabDetailVisible.value || Date.now() - sessionTabDetailClosedAt <= SESSION_TAB_DETAIL_SKIP_DELAY_MS) {
+    sessionTabDetailVisible.value = true;
+    return;
+  }
+  sessionTabDetailOpenTimer = setTimeout(() => {
+    sessionTabDetailVisible.value = true;
+    sessionTabDetailOpenTimer = undefined;
+  }, SESSION_TAB_DETAIL_DELAY_MS);
+}
 
 function updateSessionTabOverflow(tabList: HTMLElement) {
   const maxScrollLeft = Math.max(0, tabList.scrollWidth - tabList.clientWidth);
@@ -829,6 +914,7 @@ function startSplitResize(event: PointerEvent) {
 onBeforeUnmount(() => {
   stopSplitResize?.();
   cancelSessionTabPointerDrag();
+  closeSessionTabDetail();
   document.body.classList.remove("session-pane-resizing");
 });
 </script>
