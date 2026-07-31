@@ -1,5 +1,6 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const http = require("node:http");
 const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
@@ -10,7 +11,7 @@ const WebSocket = require("ws");
 const { z } = require("zod");
 
 const { createControlPlaneApp } = require("../packages/control-plane/src/server.ts");
-const { createNodeAgentApp, listenNodeAgentIpcServer, mergeRuntimeLifecycleResult, NodeAgentExternalListenerManager, requestRuntimeAppSessionDrain, resolvedDockerImageUpdatePatch, runtimeVersionStateForActual } = require("../packages/control-plane/src/node-agent.ts");
+const { createNodeAgentApp, createReverseTunnelManager, listenNodeAgentIpcServer, mergeRuntimeLifecycleResult, NodeAgentExternalListenerManager, requestRuntimeAppSessionDrain, resolvedDockerImageUpdatePatch, runtimeVersionStateForActual } = require("../packages/control-plane/src/node-agent.ts");
 const { ControlPlaneChatGatewayRuntime, aiSessionDeliveryText, createDingdingStreamClient } = require("../packages/control-plane/src/chat-gateway.ts");
 const { ControlledInstanceGateway } = require("../packages/control-plane/src/control-plane/instances/gateway.ts");
 const { parseDingdingCardEvent, sendDingdingActionsCard } = require("../packages/control-plane/src/control-plane/chat/adapters/dingding.ts");
@@ -4001,7 +4002,17 @@ test("node agent keeps a managed instance started when startup runtime convergen
   const attemptsAfterStart = artifactResolutions;
   await app.nodeAgentRecoverManagedInstances();
   await app.nodeAgentRecoverManagedInstances();
-  assert.equal(artifactResolutions, attemptsAfterStart + 2, "an active unmatched instance must remain in continuous convergence");
+  assert.equal(artifactResolutions, attemptsAfterStart, "passive recovery must not reset a failed run attempt budget");
+
+  const restarted = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_start_fallback/restart",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {},
+  });
+  assert.equal(restarted.statusCode, 200, restarted.body);
+  assert.equal(restarted.json().data.runtimeVersion.phase, "failed");
+  assert.equal(artifactResolutions, attemptsAfterStart + 1, "an explicit restart creates a fresh convergence budget");
 
   const lifecycleStartsAfterRequest = calls.filter((args) => ["run", "start"].includes(args[0])).length;
   await app.nodeAgentRestoreManagedInstances();
@@ -6723,10 +6734,12 @@ test("register and heartbeat preserve authoritative convergence attempts and fai
     method: "POST",
     url: "/api/node-agent/instances/inst_attempts/heartbeat",
     headers: { authorization: `Bearer ${registrationToken}` },
-    payload: { protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, appInventory: emptyAppInventory(), health: "ok", build: report.build },
+    payload: { protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, appInventory: emptyAppInventory(), status: "running", health: "ok", build: report.build },
   });
   assert.equal(heartbeat.statusCode, 200, heartbeat.body);
-  assert.equal(heartbeat.json().data.ready, false);
+  assert.equal(heartbeat.json().data.status, "running");
+  assert.equal(heartbeat.json().data.health, "ok");
+  assert.equal(heartbeat.json().data.ready, true);
   assert.equal(heartbeat.json().data.runtimeVersion.phase, "failed");
   assert.equal(heartbeat.json().data.runtimeVersion.attempt, 3);
 
@@ -7763,6 +7776,89 @@ test("control plane registers node connections with the agent node id", async (t
   assert.equal(folders.statusCode, 200);
   assert.equal(folders.body.data[0].id, "folder_1");
   assert.equal(folders.body.data[0].nodeId, "node_remote");
+});
+
+test("node agent reverse tunnel survives rejected handshakes and retries", async (t) => {
+  let attempts = 0;
+  let resolveSecondAttempt;
+  const secondAttempt = new Promise((resolve) => {
+    resolveSecondAttempt = resolve;
+  });
+  const rejectingServer = http.createServer((_request, response) => {
+    attempts += 1;
+    response.writeHead(401, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: { code: "PROTOCOL_VERSION_MISMATCH" } }));
+    if (attempts === 2) resolveSecondAttempt();
+  });
+  await new Promise((resolve, reject) => {
+    rejectingServer.once("error", reject);
+    rejectingServer.listen(0, "127.0.0.1", resolve);
+  });
+  t.after(() => new Promise((resolve) => rejectingServer.close(resolve)));
+
+  const dataDir = tempDataDir("node-agent-rejected-reverse-tunnel");
+  const app = await createNodeAgentApp({ dataDir, logger: false, port: 8091 });
+  const manager = createReverseTunnelManager(app, { host: "127.0.0.1", port: 8091, dataDir }, nodeAgentStorePaths(dataDir), "node_rejected");
+  t.after(async () => {
+    manager.closeAll();
+    await app.close();
+  });
+
+  const address = rejectingServer.address();
+  assert.equal(typeof address, "object");
+  const firstSocket = manager.connect({ url: `http://127.0.0.1:${address.port}` });
+  await withTimeout(new Promise((resolve) => firstSocket.once("close", resolve)), "rejected reverse tunnel close");
+  await withTimeout(secondAttempt, "rejected reverse tunnel retry");
+
+  assert.equal(attempts, 2);
+  manager.closeAll();
+});
+
+test("deleting a node agent remote cancels its pending reverse tunnel retry", async (t) => {
+  let attempts = 0;
+  const rejectingServer = http.createServer((_request, response) => {
+    attempts += 1;
+    response.writeHead(401, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: { code: "PROTOCOL_VERSION_MISMATCH" } }));
+  });
+  await new Promise((resolve, reject) => {
+    rejectingServer.once("error", reject);
+    rejectingServer.listen(0, "127.0.0.1", resolve);
+  });
+  t.after(() => new Promise((resolve) => rejectingServer.close(resolve)));
+
+  const address = rejectingServer.address();
+  assert.equal(typeof address, "object");
+  const dataDir = tempDataDir("node-agent-deleted-reverse-tunnel");
+  const paths = nodeAgentStorePaths(dataDir);
+  const identity = new NodeAgentIdentityService(paths);
+  const remote = identity.createRemoteControlPlane({ url: `http://127.0.0.1:${address.port}` });
+  identity.upsertRemoteControlPlane(remote);
+
+  const ipcPath = nodeAgentIpcPath(dataDir);
+  const app = await createNodeAgentApp({ dataDir, logger: false, port: 8091, connectionMode: "local-ipc", ipcPath });
+  const manager = createReverseTunnelManager(app, { host: "127.0.0.1", port: 8091, dataDir, connectionMode: "local-ipc", ipcPath }, paths, "node_deleted");
+  app.decorate("nodeAgentReverseTunnels", manager);
+  await app.ready();
+  const ipcServer = await listenNodeAgentIpcServer(app, ipcPath);
+  t.after(async () => {
+    manager.closeAll();
+    await new Promise((resolve) => ipcServer.close(resolve));
+    await app.close();
+  });
+
+  const socket = manager.connect({ url: remote.url, keyId: remote.keyId, secret: remote.secret });
+  await withTimeout(new Promise((resolve) => socket.once("close", resolve)), "deleted reverse tunnel initial close");
+  assert.equal(attempts, 1);
+
+  const deleted = await fetchNodeAgentIpc(ipcPath, `/remotes/${encodeURIComponent(remote.keyId)}`, {
+    method: "DELETE",
+  });
+  assert.equal(deleted.status, 200);
+  assert.equal((await deleted.json()).data.deleted, true);
+
+  await new Promise((resolve) => setTimeout(resolve, 1_400));
+  assert.equal(attempts, 1);
 });
 
 test("control plane accepts node agent reverse tunnel handshake", async (t) => {

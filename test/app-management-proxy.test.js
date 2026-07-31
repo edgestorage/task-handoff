@@ -86,7 +86,7 @@ test("offline instances fail before stale inventory can be treated as management
   assert.equal(requests, 0);
 });
 
-test("instances do not accept proxy traffic until runtime convergence is matched", async () => {
+test("instances do not accept proxy traffic while their runtime is not ready", async () => {
   let requests = 0;
   const gateway = new ControlledInstanceGateway({
     requireNode: () => node, nodeAgentGateway: {}, fetchImpl: fetch,
@@ -101,6 +101,30 @@ test("instances do not accept proxy traffic until runtime convergence is matched
     (error) => error.code === "INSTANCE_NOT_READY" && error.statusCode === 409 && error.runtimePhase === "installing",
   );
   assert.equal(requests, 0);
+});
+
+test("a ready instance keeps accepting proxy traffic after runtime convergence fails", async () => {
+  let requests = 0;
+  const gateway = new ControlledInstanceGateway({
+    requireNode: () => node, nodeAgentGateway: {}, fetchImpl: fetch,
+    nodeAgentRequest: async () => {
+      requests += 1;
+      return new Response(JSON.stringify({ data: { ok: true } }), { headers: { "content-type": "application/json" } });
+    },
+  });
+  const result = await gateway.request({
+    ...instance,
+    ready: true,
+    runtimeVersion: {
+      desiredVersion: "0.0.13",
+      actualVersion: "0.0.11",
+      phase: "failed",
+      attempt: 3,
+      error: { code: "INSTANCE_RUNTIME_INSTALL_FAILED", message: "install failed", retryable: true },
+    },
+  }, "/apps/management");
+  assert.deepEqual(result, { ok: true });
+  assert.equal(requests, 1);
 });
 
 test("old controlled-instance responses are reported as unsupported instead of management state", () => {

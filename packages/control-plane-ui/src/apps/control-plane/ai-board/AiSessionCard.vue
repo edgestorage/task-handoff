@@ -1,14 +1,16 @@
 <template>
-  <article
-    class="ai-board-card"
-    :data-state="card.session.status"
-    :data-selected="selected ? 'true' : undefined"
-    role="button"
-    tabindex="0"
-    @click="$emit('selectCard', card.key)"
-    @keydown.enter.prevent="$emit('selectCard', card.key)"
-    @keydown.space.prevent="$emit('selectCard', card.key)"
-  >
+  <ContextMenu>
+    <ContextMenuTrigger as-child>
+      <article
+        class="ai-board-card"
+        :data-state="card.session.status"
+        :data-selected="selected ? 'true' : undefined"
+        role="button"
+        tabindex="0"
+        @click="$emit('selectCard', card.key)"
+        @keydown.enter.prevent="$emit('selectCard', card.key)"
+        @keydown.space.prevent="$emit('selectCard', card.key)"
+      >
     <div class="ai-board-card-headline" :data-show-workspace="showWorkspace ? 'true' : undefined">
       <button type="button" class="ai-board-instance" @click.stop="$emit('selectCard', card.key)">
         <span class="ai-board-dot" />
@@ -134,7 +136,21 @@
         </DropdownMenuContent>
       </DropdownMenu>
     </div>
-  </article>
+      </article>
+    </ContextMenuTrigger>
+    <AiSessionCardContextMenu
+      :bound-trigger-count="boundTriggers(card).length"
+      has-app-session
+      :is-stopping-app-session="isStoppingAppSession"
+      :is-trigger-bound="(configHash) => isTriggerBound(card, configHash)"
+      :is-trigger-busy="(configHash) => triggerBusyKey === triggerActionKey(card, configHash)"
+      :short-hash="shortHash"
+      :trigger-templates="triggerTemplates"
+      @close-app="$emit('stopAppSession', card)"
+      @open-app="$emit('openAiSessionApp', card.instance, card.session)"
+      @toggle-trigger="$emit('toggleTrigger', card, $event)"
+    />
+  </ContextMenu>
 </template>
 
 <script setup lang="ts">
@@ -142,9 +158,11 @@ import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { Ban, Check, ChevronLeft, ChevronRight, ExternalLink, MoreHorizontal, Square, X, Zap } from "@lucide/vue";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
+import AiSessionCardContextMenu from "../../../components/ai-session/AiSessionCardContextMenu.vue";
 import AiSessionToolActivity from "../../../components/ai-session/AiSessionToolActivity.vue";
 import type { AiSessionSummary, ControlPlaneTrigger, InstanceBoardItem, InstanceWithAiSessions, TriggerDeployment } from "../../../api/types";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
+import { ContextMenu, ContextMenuTrigger } from "../../../components/ui/context-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
 import AiSessionStreamingMarkdown from "../../../components/ai-session/AiSessionStreamingMarkdown.vue";
 import {

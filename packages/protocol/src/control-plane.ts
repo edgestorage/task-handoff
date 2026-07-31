@@ -1881,7 +1881,8 @@ export type UpdateCheckResult = z.infer<typeof UpdateCheckResultSchema>;
 export type UpdateJob = z.infer<typeof UpdateJobSchema>;
 export type ControlledInstance = z.infer<typeof ControlledInstanceSchema>;
 export function controlledInstanceAcceptsTraffic(instance: Pick<ControlledInstance, "ready" | "runtimeVersion">) {
-  return instance.ready !== false && (!instance.runtimeVersion || instance.runtimeVersion.phase === "matched");
+  return instance.ready !== false
+    && (!instance.runtimeVersion || ["matched", "failed"].includes(instance.runtimeVersion.phase));
 }
 export type InstanceAppInventory = z.infer<typeof InstanceAppInventorySchema>;
 export type InstanceAppInventoryItem = z.infer<typeof InstanceAppInventoryItemSchema>;

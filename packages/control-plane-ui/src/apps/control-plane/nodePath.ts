@@ -26,6 +26,7 @@ function isWindowsNodePath(value: string) {
 type ComparableNodePath = {
   root: string;
   segments: string[];
+  comparisonSegments: string[];
 };
 
 export function nodePathName(value: string) {
@@ -71,7 +72,7 @@ function comparableNodePath(value: string, windows: boolean): ComparableNodePath
 
   const segments: string[] = [];
   for (const rawSegment of remainder.split("/")) {
-    const segment = windows ? rawSegment.toLowerCase() : rawSegment;
+    const segment = rawSegment;
     if (!segment || segment === ".") continue;
     if (segment === "..") {
       segments.pop();
@@ -79,7 +80,11 @@ function comparableNodePath(value: string, windows: boolean): ComparableNodePath
     }
     segments.push(segment);
   }
-  return { root, segments };
+  return {
+    root,
+    segments,
+    comparisonSegments: windows ? segments.map((segment) => segment.toLowerCase()) : segments,
+  };
 }
 
 export function isSameOrChildNodePath(candidate: string, root: string) {
@@ -93,5 +98,21 @@ export function isSameOrChildNodePath(candidate: string, root: string) {
     return false;
   }
   return normalizedCandidate.root === normalizedRoot.root
-    && normalizedRoot.segments.every((segment, index) => normalizedCandidate.segments[index] === segment);
+    && normalizedRoot.comparisonSegments.every((segment, index) => normalizedCandidate.comparisonSegments[index] === segment);
+}
+
+export function relativeNodePathSegments(root: string, candidate: string) {
+  const rootIsWindows = isWindowsNodePath(root);
+  if (rootIsWindows !== isWindowsNodePath(candidate)) {
+    return undefined;
+  }
+  const normalizedRoot = comparableNodePath(root, rootIsWindows);
+  const normalizedCandidate = comparableNodePath(candidate, rootIsWindows);
+  if (!normalizedRoot || !normalizedCandidate || normalizedCandidate.root !== normalizedRoot.root) {
+    return undefined;
+  }
+  if (!normalizedRoot.comparisonSegments.every((segment, index) => normalizedCandidate.comparisonSegments[index] === segment)) {
+    return undefined;
+  }
+  return normalizedCandidate.segments.slice(normalizedRoot.segments.length);
 }

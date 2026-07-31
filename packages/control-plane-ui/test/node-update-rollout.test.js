@@ -36,6 +36,7 @@ test("instance update controls are replaced by authoritative convergence state",
 
   assert.match(instanceGroup, /instance\.runtimeVersion/);
   assert.match(instanceGroup, /runtimeVersionSummary\(instance\)/);
+  assert.match(panel, /state\.phase === "failed" && instance\.status === "running" \? "settings\.nodeDetail\.runtimeVersionFailedSummary"/);
   assert.doesNotMatch(instanceGroup, /checkManagedUpdate|applyManagedUpdate|<Button/);
   assert.doesNotMatch(panel, /component: ['"]controlled-instance['"]/);
 });
@@ -47,7 +48,12 @@ test("node rollout presents converging, successful, and degraded authoritative p
   assert.equal(t(updateJobStatusKeys.succeeded), "Succeeded");
   assert.equal(t(updateJobStatusKeys.degraded), "Degraded");
   assert.equal(t(runtimeVersionStatusKeys.matched), "Matched");
-  assert.equal(t(runtimeVersionStatusKeys.failed), "Failed");
+  assert.equal(t(runtimeVersionStatusKeys.failed), "Update failed");
+  assert.match(t("settings.nodeDetail.runtimeVersionFailedSummary", {
+    actual: "0.0.8",
+    desired: "0.0.9",
+    attempt: 3,
+  }), /Update failed · still running 0\.0\.8 → desired 0\.0\.9 · 3 attempts/);
 });
 
 test("node rollout confirmation discloses every restart impact before apply", () => {

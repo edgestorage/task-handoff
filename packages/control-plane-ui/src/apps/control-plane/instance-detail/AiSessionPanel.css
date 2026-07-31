@@ -286,7 +286,7 @@
 }
 
 
-:global(.session-ai-project-item span) { flex: 1; }
+:global(.session-ai-project-item span) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 :global(.session-ai-project-item > svg) { width: 13px; height: 13px; }
 :global(.session-ai-project-item:hover),
 :global(.session-ai-project-item:focus-visible),
@@ -880,7 +880,24 @@
 
 .session-ai-path-group-head {
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) 16px auto;
+  grid-template-columns: minmax(0, 1fr) 28px;
+  align-items: center;
+  gap: 0;
+  width: 100%;
+  min-height: 30px;
+  min-width: 0;
+  border-radius: 6px;
+  transition: background-color 120ms ease;
+}
+
+.session-ai-path-group-head:hover,
+.session-ai-path-group-head:focus-within {
+  background: var(--surface-hover);
+}
+
+.session-ai-path-group-toggle {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
   align-items: center;
   gap: 6px;
   width: 100%;
@@ -899,10 +916,36 @@
   text-align: left;
 }
 
-.session-ai-path-group-head:hover,
-.session-ai-path-group-head:focus-visible {
-  background: var(--surface-hover);
+.session-ai-path-group-toggle:focus-visible,
+.session-ai-path-group-add:focus-visible {
   outline: none;
+}
+
+.session-ai-path-group-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+  padding: 0;
+  transition: color 120ms ease, opacity 120ms ease;
+  visibility: hidden;
+}
+
+.session-ai-path-group-head:hover .session-ai-path-group-add,
+.session-ai-path-group-head:focus-within .session-ai-path-group-add {
+  opacity: 1;
+  visibility: visible;
+}
+
+.session-ai-path-group-add:hover,
+.session-ai-path-group-add:focus-visible {
+  color: var(--text-strong);
 }
 
 .session-ai-path-group-text {
@@ -929,22 +972,6 @@
 .session-ai-path-group-icon {
   justify-self: center;
   color: var(--text-muted);
-}
-
-.session-ai-path-group-chevron {
-  color: var(--text-muted);
-  transform: rotate(0deg);
-  transition: transform 120ms ease;
-}
-
-.session-ai-path-group-chevron.open {
-  transform: rotate(90deg);
-}
-
-.session-ai-path-group-head strong {
-  color: var(--text-muted);
-  font-size: 11px;
-  font-weight: 750;
 }
 
 .session-ai-empty.session-ai-filter-empty {

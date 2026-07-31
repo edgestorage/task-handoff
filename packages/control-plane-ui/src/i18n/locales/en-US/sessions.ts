@@ -41,7 +41,7 @@ export const sessions = {
     view: "View", status: "Status", listOptions: "AI session list options", newSession: "New AI session", allStatuses: "All statuses", active: "Active", waiting: "Waiting", problem: "Problem",
     noMatching: "No matching sessions", noConversations: "No conversations yet", tryFilter: "Try another status filter.", startHint: "Use the + button above to start a conversation.",
     resizeList: "Resize AI session list", startIdea: "Start with an idea", searchProjects: "Search projects", noProjects: "No projects found", newProject: "New project",
-    promptPlaceholder: "Do anything", chooseProject: "Choose project", startedWorktree: "AI session started in the selected worktree.", backLatest: "Back to latest",
+    promptPlaceholder: "Do anything", chooseProject: "Choose project", projectUnavailable: "This project is no longer registered on the node.", startedWorktree: "AI session started in the selected worktree.", backLatest: "Back to latest",
     defaultPermissionFailed: "Failed to update the default Codex permission mode.", starting: "The new AI session is still starting. Please try again in a moment.",
     startFailed: "Failed to start AI session.", sendFailed: "Failed to send message.", noGoal: "No active goal.", commandFailed: "Failed to run command.", steerFailed: "Failed to steer message.",
     steerQueuedFailed: "Failed to steer queued message.", retryQueuedFailed: "Failed to retry queued message.", removeQueuedFailed: "Failed to remove queued message.",

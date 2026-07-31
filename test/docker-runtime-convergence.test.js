@@ -132,6 +132,19 @@ test("runtime launcher installation refreshes node-agent assets with one root ex
   assert.equal(calls.some((args) => args[0] === "rm" || args[0] === "run" || args[0] === "pull"), false);
 });
 
+test("Linux launcher sources and package preparation enforce LF line endings", () => {
+  const attributes = fs.readFileSync(path.resolve(__dirname, "../.gitattributes"), "utf8").split(/\r?\n/);
+  for (const pattern of ["*.sh", "*.mjs", "*.cjs", "*.js"]) {
+    assert.ok(attributes.includes(`${pattern} text eol=lf`), `${pattern} must be pinned to LF`);
+  }
+  const preparation = fs.readFileSync(path.resolve(__dirname, "../scripts/prepare-runtime-packages.mjs"), "utf8");
+  assert.match(preparation, /replace\(\/\\r\\n\?\/g, "\\n"\)/);
+  for (const file of ["entrypoint.sh", "instance-launcher.sh", "runtime-installer.mjs"]) {
+    const contents = fs.readFileSync(path.resolve(__dirname, "../docker", file));
+    assert.equal(contents.includes(Buffer.from("\r\n")), false, `${file} must use LF line endings`);
+  }
+});
+
 test("runtime launcher installation preserves the root command stderr", async () => {
   const executor = new LocalDockerExecutor(async (_command, args) => {
     if (args[0] === "inspect") return { stdout: "container-abc", stderr: "" };

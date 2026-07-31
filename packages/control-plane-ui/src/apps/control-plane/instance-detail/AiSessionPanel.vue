@@ -83,31 +83,46 @@
               :key="group.key"
               class="session-ai-path-group"
             >
-              <button
+              <div
                 v-if="groupSessionsByPath"
-                type="button"
                 class="session-ai-path-group-head"
-                :aria-expanded="!collapsedPathGroups[group.key]"
-                @click="togglePathGroup(group.key)"
               >
-                <Folder class="session-ai-path-group-icon" :size="15" />
-                <span class="session-ai-path-group-text">
-                  <TooltipProvider :delay-duration="120">
-                    <Tooltip>
-                      <TooltipTrigger as-child>
-                        <span class="session-ai-path-group-title">{{ group.label }}</span>
-                      </TooltipTrigger>
-                      <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ group.key }}</TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
-                </span>
-                <ChevronRight class="session-ai-path-group-chevron" :class="{ open: !collapsedPathGroups[group.key] }" :size="15" />
-                <strong>{{ group.sessions.length }}</strong>
-              </button>
+                <button
+                  type="button"
+                  class="session-ai-path-group-toggle"
+                  :aria-expanded="!collapsedPathGroups[group.key]"
+                  @click="togglePathGroup(group.key)"
+                >
+                  <Folder v-if="collapsedPathGroups[group.key]" class="session-ai-path-group-icon" :size="15" />
+                  <FolderOpen v-else class="session-ai-path-group-icon" :size="15" />
+                  <span class="session-ai-path-group-text">
+                    <TooltipProvider :delay-duration="120">
+                      <Tooltip>
+                        <TooltipTrigger as-child>
+                          <span class="session-ai-path-group-title">{{ group.label }}</span>
+                        </TooltipTrigger>
+                        <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ group.key }}</TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  class="session-ai-path-group-add"
+                  :aria-label="`${t('sessions.panel.newSession')} · ${group.label}`"
+                  :title="t('sessions.panel.newSession')"
+                  @click="openNewSessionForPath(group.key)"
+                >
+                  <Plus :size="15" />
+                </button>
+              </div>
               <template v-if="!groupSessionsByPath || !collapsedPathGroups[group.key]">
-                <article
+                <ContextMenu
                   v-for="session in group.sessions"
                   :key="session.id"
+                >
+                  <ContextMenuTrigger as-child>
+                <article
                   class="session-ai-row"
                   :data-state="session.status"
                   :data-selected="selectedSession?.id === session.id"
@@ -243,6 +258,20 @@
                   </DropdownMenu>
                 </div>
                 </article>
+                  </ContextMenuTrigger>
+                  <AiSessionCardContextMenu
+                    :bound-trigger-count="boundTriggers(session).length"
+                    :has-app-session="Boolean(aiSessionAppTab(instance, session))"
+                    :is-stopping-app-session="stoppingAppSessionId === session.id"
+                    :is-trigger-bound="(configHash) => isTriggerBound(session, configHash)"
+                    :is-trigger-busy="(configHash) => triggerBusyKey === triggerActionKey(session, configHash)"
+                    :short-hash="shortHash"
+                    :trigger-templates="triggerTemplates"
+                    @close-app="closeAppSession(session)"
+                    @open-app="$emit('openAiSessionApp', instance, session)"
+                    @toggle-trigger="toggleTrigger(session, $event)"
+                  />
+                </ContextMenu>
               </template>
             </section>
             <div v-if="!sortedSessions.length" class="session-ai-empty session-ai-filter-empty" role="status">
@@ -265,27 +294,39 @@
             <p v-else-if="!historyItems.length" class="session-ai-history-state">{{ t("sessions.panel.noHistory") }}</p>
             <template v-else>
               <section v-for="group in displayedHistoryGroups" :key="group.key" class="session-ai-path-group session-ai-history-group">
-                <button
+                <div
                   v-if="groupSessionsByPath"
-                  type="button"
                   class="session-ai-path-group-head"
-                  :aria-expanded="!collapsedHistoryPathGroups[group.key]"
-                  @click="toggleHistoryPathGroup(group.key)"
                 >
-                  <Folder class="session-ai-path-group-icon" :size="15" />
-                  <span class="session-ai-path-group-text">
-                    <TooltipProvider :delay-duration="120">
-                      <Tooltip>
-                        <TooltipTrigger as-child>
-                          <span class="session-ai-path-group-title">{{ group.label }}</span>
-                        </TooltipTrigger>
-                        <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ group.key }}</TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                  </span>
-                  <ChevronRight class="session-ai-path-group-chevron" :class="{ open: !collapsedHistoryPathGroups[group.key] }" :size="15" />
-                  <strong>{{ group.items.length }}</strong>
-                </button>
+                  <button
+                    type="button"
+                    class="session-ai-path-group-toggle"
+                    :aria-expanded="!collapsedHistoryPathGroups[group.key]"
+                    @click="toggleHistoryPathGroup(group.key)"
+                  >
+                    <Folder v-if="collapsedHistoryPathGroups[group.key]" class="session-ai-path-group-icon" :size="15" />
+                    <FolderOpen v-else class="session-ai-path-group-icon" :size="15" />
+                    <span class="session-ai-path-group-text">
+                      <TooltipProvider :delay-duration="120">
+                        <Tooltip>
+                          <TooltipTrigger as-child>
+                            <span class="session-ai-path-group-title">{{ group.label }}</span>
+                          </TooltipTrigger>
+                          <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ group.key }}</TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    class="session-ai-path-group-add"
+                    :aria-label="`${t('sessions.panel.newSession')} · ${group.label}`"
+                    :title="t('sessions.panel.newSession')"
+                    @click="openNewSessionForPath(group.key)"
+                  >
+                    <Plus :size="15" />
+                  </button>
+                </div>
                 <template v-if="!groupSessionsByPath || !collapsedHistoryPathGroups[group.key]">
                   <article
                     v-for="item in group.items"
@@ -398,7 +439,7 @@
                 </DropdownMenuTrigger>
                 <DropdownMenuContent class="session-ai-project-menu session-ai-project-picker-menu" align="start" :collision-padding="12" :side-offset="8">
                   <input v-model="newSessionFolderQuery" class="session-ai-project-search" :placeholder="t('sessions.panel.searchProjects')" :aria-label="t('sessions.panel.searchProjects')" />
-                  <ScrollArea type="always" class="session-ai-project-list">
+                  <ScrollArea type="auto" :horizontal="false" class="session-ai-project-list">
                     <DropdownMenuItem v-for="folder in filteredNewSessionFolders" :key="folder.id" class="session-ai-project-item" @select="newSessionFolderId = folder.id">
                       <Folder :size="15" /><span>{{ folder.name }}</span><Check v-if="newSessionFolderId === folder.id" :size="15" />
                     </DropdownMenuItem>
@@ -607,9 +648,10 @@ import { useI18n } from "vue-i18n";
 import { formatRelativeTime } from "../../../i18n/presentation";
 import type { SupportedLocale } from "../../../i18n/locale";
 import { translateApiError } from "../../../i18n/apiError";
-import { ArrowDown, ArrowLeft, Ban, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Code2, ExternalLink, Filter, Folder, History, LoaderCircle, MessageSquare, MoreHorizontal, Plus, SlidersHorizontal, Square, X, Zap } from "@lucide/vue";
+import { ArrowDown, ArrowLeft, Ban, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Code2, ExternalLink, Filter, Folder, FolderOpen, History, LoaderCircle, MessageSquare, MoreHorizontal, Plus, SlidersHorizontal, Square, X, Zap } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
+import AiSessionCardContextMenu from "../../../components/ai-session/AiSessionCardContextMenu.vue";
 import { bindAiSessionTrigger, createNodeLocalFolder, getAiSessionHistory, getAiSessionHistoryDetail, interruptAiSession, launchAppSession, listNodeFolderTree, markAiSessionRead, removeAiSessionQueuedMessage, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, stopAppSession, unbindAiSessionTrigger, updateControlledInstance, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery } from "../../../api/queries";
 import { executeAiSessionCommand } from "../../../api/ai-session-commands";
 import type { AiSessionCommandInput, AiSessionHistoryDetail, AiSessionHistoryItem, AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
@@ -625,9 +667,11 @@ import { desktopRuntimePathAccess } from "../../../components/ai-session/useAiSe
 import AiSessionTurnNavigator from "../../../components/ai-session/AiSessionTurnNavigator.vue";
 import { Button } from "../../../components/ui/button";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
+import { ContextMenu, ContextMenuTrigger } from "../../../components/ui/context-menu";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
+import { relativeNodePathSegments } from "../nodePath";
 import NodeStorageFolderPickerDialog from "../settings/NodeStorageFolderPickerDialog.vue";
 import RepositoryEnvironment from "./RepositoryEnvironment.vue";
 import { useNodeStorageFolderPicker } from "../settings/useNodeStorageFolderPicker";
@@ -1277,6 +1321,42 @@ function openNewSession() {
   messageAttachments.value = [];
   messageMentionBindings.value = [];
   initializeNewSessionDefaults();
+}
+
+function newSessionFolderIdForPath(sessionPath: string) {
+  const runtimeIsLocal = props.instance.runtime?.type === "local" || props.instance.runtime?.kind === "local";
+  const sourcePath = props.instance.source.type === "local-folder" ? props.instance.source.path : "";
+  const workspacePath = props.instance.runtime?.workspacePath || props.instance.workspace.path || "/workspace";
+  return newSessionFolders.value.find((folder) => {
+    if (runtimeIsLocal) {
+      return relativeNodePathSegments(folder.path, sessionPath)?.length === 0;
+    }
+    if (!sourcePath) {
+      return false;
+    }
+    const relativeSegments = relativeNodePathSegments(sourcePath, folder.path);
+    if (!relativeSegments) {
+      return false;
+    }
+    const workspaceRoot = workspacePath.replace(/\/+$/, "") || "/";
+    const mappedPath = relativeSegments.length
+      ? `${workspaceRoot === "/" ? "" : workspaceRoot}/${relativeSegments.join("/")}`
+      : workspaceRoot;
+    return relativeNodePathSegments(mappedPath, sessionPath)?.length === 0;
+  })?.id;
+}
+
+async function openNewSessionForPath(sessionPath: string) {
+  const folderId = newSessionFolderIdForPath(sessionPath);
+  if (!folderId) {
+    showControlPlaneToast(t("sessions.panel.projectUnavailable"));
+    return;
+  }
+  if (historyMode.value) {
+    await leaveHistoryMode();
+  }
+  openNewSession();
+  newSessionFolderId.value = folderId;
 }
 
 function initializeNewSessionDefaults() {

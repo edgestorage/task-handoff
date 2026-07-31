@@ -85,6 +85,7 @@ import { acquireNodeAgentSingletonLock, defaultNodeAgentSingletonLockPath } from
 import type { TerminalCommandRunner } from "../shared/process/terminal-command-runner.ts";
 import { nodeAgentIpcEndpoint, nodeAgentIpcPath, prepareNodeAgentIpcPath } from "../shared/transport/node-agent-ipc.ts";
 import { createNodeAgentHmacHeaders } from "../shared/security/node-agent-auth.ts";
+import { EventConnectionRetryTimer } from "../shared/events/connection-retry.ts";
 import { nodeAgentProxyMethod, type NodeAgentInjectResponse, websocketPayload } from "./transport/proxy-utils.ts";
 import { checkNodeAgentUpdate, npmCommand, NodeUpdateJobs, resolveNodeAgentUpdateWorker, resolveNodeUpdatePackage } from "./updates.ts";
 import { RuntimeArtifactResolver, type ResolvedRuntimeArtifact } from "./runtime-artifacts.ts";
@@ -1463,7 +1464,7 @@ class NodeAgentState {
         ? derived
         : derived.phase === "matched"
         ? (stopped ? derived : { ...derived, phase: "verifying" as const, matchedAt: undefined })
-        : previous?.phase === "failed" && previous.error?.retryable === false
+        : previous?.phase === "failed"
           ? { ...derived, phase: "failed" as const, attempt: previous.attempt, lastAttemptAt: previous.lastAttemptAt, error: previous.error }
           : { ...derived, attempt: previous?.attempt || 0, lastAttemptAt: previous?.lastAttemptAt };
       this.controlledInstances.put(ControlledInstanceSchema.parse({
@@ -2016,14 +2017,14 @@ class NodeAgentState {
     const actualVersion = parsed.build?.packageVersion || current.build?.packageVersion || current.instanceVersion;
     const managedArtifacts = runtimeUsesManagedArtifacts(this.requireRuntime(current.runtimeId));
     const runtimeVersion = runtimeVersionStateForReport(current, actualVersion, managedArtifacts);
-    const authoritativeReady = actualVersion === packageVersion()
-      && (!managedArtifacts || (current.ready && current.runtimeVersion?.phase === "matched"));
+    const reportedHealth = parsed.health || current.health;
+    const authoritativeReady = (parsed.status || current.status) === "running" && reportedHealth !== "failed";
     const updated = ControlledInstanceSchema.parse({
       ...current,
       ...parsed,
       target,
-      ready: authoritativeReady && parsed.health !== "failed",
-      health: actualVersion === packageVersion() ? parsed.health || current.health : "degraded",
+      ready: authoritativeReady,
+      health: reportedHealth,
       runtimeVersion,
       processIncarnationId: parsed.processIncarnationId || current.processIncarnationId,
       agentStatus: "online",
@@ -2963,7 +2964,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       && !["created", "stopped", "failed", "provisioning", "stopping"].includes(instance.status));
     await Promise.all(instances.map(async (instance) => {
       try {
-        await convergence.schedule(instance.id, { retryFailed: true });
+        await convergence.schedule(instance.id);
       } catch (error) {
         app.log.error({ instanceId: instance.id, error }, "runtime convergence recovery failed");
       }
@@ -3110,9 +3111,13 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
 
   app.delete("/api/node-agent/remotes/:keyId", async (request) => {
     const keyId = z.string().trim().min(1).max(160).parse((request.params as { keyId: string }).keyId);
+    const deleted = identity.deleteRemoteControlPlane(keyId, request.nodeAgentAuthKeyId);
+    if (deleted) {
+      app.nodeAgentReverseTunnels?.connectConfigured();
+    }
     return {
       data: {
-        deleted: identity.deleteRemoteControlPlane(keyId, request.nodeAgentAuthKeyId),
+        deleted,
       },
     };
   });
@@ -3367,9 +3372,16 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
 
   app.post("/api/node-agent/instances/:id/restart", async (request) => {
     const id = (request.params as { id: string }).id;
-    const current = state.requireInstance(id);
+    let current = state.requireInstance(id);
     NodeInstanceLifecycleRequestSchema.parse(request.body);
     if (usesManagedArtifact(current) && (!current.ready || current.runtimeVersion?.phase !== "matched")) {
+      if (current.runtimeVersion?.phase === "failed") {
+        current = state.controlledInstances.put(ControlledInstanceSchema.parse({
+          ...current,
+          runtimeVersion: runtimeVersionStateForActual(reportedVersion(current)),
+          updatedAt: now(),
+        }));
+      }
       const instance = await convergence.schedule(id, { startRequested: true });
       eventForwarder.syncNow();
       return { data: instance };
@@ -3605,7 +3617,7 @@ function controlPlaneTunnelUrlForBase(controlPlaneUrl: string) {
   return url.toString();
 }
 
-function connectReverseTunnel(app: Awaited<ReturnType<typeof createNodeAgentApp>>, input: {
+export function connectReverseTunnel(app: Awaited<ReturnType<typeof createNodeAgentApp>>, input: {
   tunnelUrl: string;
   nodeId: string;
   port: number | string | (() => number | string);
@@ -3628,6 +3640,13 @@ function connectReverseTunnel(app: Awaited<ReturnType<typeof createNodeAgentApp>
   const streams = new Map<string, { upstream?: WebSocket; tunnel?: WebSocket; close: (code?: number, reason?: string) => void }>();
   const httpStreams = new Map<string, { tunnel: WebSocket; controller: AbortController }>();
   let disposeEventForwarderOutput: (() => void) | undefined;
+  socket.on("error", (error) => {
+    app.log.warn({
+      nodeId: input.nodeId,
+      tunnelUrl: `${url.origin}${url.pathname}`,
+      error: error instanceof Error ? error.message : String(error),
+    }, "node agent reverse tunnel connection failed");
+  });
   const localNodeAgentWsUrl = (route: string) => {
     const path = route.startsWith("/") ? route : `/${route}`;
     const port = typeof input.port === "function" ? input.port() : input.port;
@@ -3845,30 +3864,101 @@ function connectReverseTunnel(app: Awaited<ReturnType<typeof createNodeAgentApp>
   return socket;
 }
 
-function createReverseTunnelManager(app: Awaited<ReturnType<typeof createNodeAgentApp>>, options: RunNodeAgentServerOptions, paths: NodeAgentStorePaths, nodeId: string) {
+export function createReverseTunnelManager(app: Awaited<ReturnType<typeof createNodeAgentApp>>, options: RunNodeAgentServerOptions, paths: NodeAgentStorePaths, nodeId: string) {
   const token = options.token || process.env.TASK_HANDOFF_NODE_AGENT_TOKEN;
   const identity = new NodeAgentIdentityService(paths);
-  const sockets = new Map<string, WebSocket>();
-  const connect = (remote: { url: string; keyId?: string; secret?: string }) => {
-    const key = remote.url.replace(/\/$/, "");
-    sockets.get(key)?.close(1000, "Reverse tunnel reconnecting.");
+  type TunnelConfig = { tunnelUrl: string; keyId?: string; secret?: string };
+  type TunnelEntry = { config: TunnelConfig; retry: EventConnectionRetryTimer; socket?: WebSocket };
+  const tunnels = new Map<string, TunnelEntry>();
+  let closing = false;
+
+  const scheduleReconnect = (key: string, entry: TunnelEntry) => {
+    if (closing || entry.retry.pending || tunnels.get(key) !== entry) return;
+    const scheduled = entry.retry.schedule(() => {
+      if (!closing && tunnels.get(key) === entry && !entry.socket) {
+        open(key, entry);
+      }
+    });
+    if (scheduled) {
+      app.log.info({
+        nodeId,
+        tunnelUrl: new URL(entry.config.tunnelUrl).origin,
+        attempt: scheduled.attempt,
+        delay: scheduled.delay,
+      }, "node agent reverse tunnel reconnect scheduled");
+    }
+  };
+
+  const open = (key: string, entry: TunnelEntry) => {
     const socket = connectReverseTunnel(app, {
-      tunnelUrl: controlPlaneTunnelUrlForBase(remote.url),
+      ...entry.config,
       nodeId,
       port: () => app.nodeAgentState!.currentListenerPort,
       token,
-      keyId: remote.keyId,
-      secret: remote.secret,
     });
-    sockets.set(key, socket);
-    socket.on("close", () => {
-      if (sockets.get(key) === socket) {
-        sockets.delete(key);
+    entry.socket = socket;
+    socket.on("open", () => {
+      if (tunnels.get(key) === entry && entry.socket === socket) {
+        entry.retry.reset();
+        app.log.info({ nodeId, tunnelUrl: new URL(entry.config.tunnelUrl).origin }, "node agent reverse tunnel connected");
+      }
+    });
+    socket.on("close", (code, reason) => {
+      if (tunnels.get(key) !== entry || entry.socket !== socket) return;
+      entry.socket = undefined;
+      if (!closing) {
+        app.log.warn({
+          nodeId,
+          tunnelUrl: new URL(entry.config.tunnelUrl).origin,
+          code,
+          reason: Buffer.isBuffer(reason) ? reason.toString("utf8") : String(reason || ""),
+        }, "node agent reverse tunnel disconnected");
+        scheduleReconnect(key, entry);
       }
     });
     return socket;
   };
+
+  const replace = (key: string, config: TunnelConfig) => {
+    const current = tunnels.get(key);
+    current?.retry.cancel();
+    const entry: TunnelEntry = { config, retry: new EventConnectionRetryTimer() };
+    tunnels.set(key, entry);
+    current?.socket?.close(1000, "Reverse tunnel reconnecting.");
+    return open(key, entry);
+  };
+
+  const sameConfig = (left: TunnelConfig, right: TunnelConfig) => left.tunnelUrl === right.tunnelUrl
+    && left.keyId === right.keyId
+    && left.secret === right.secret;
+
+  const reconcile = (configured: Map<string, TunnelConfig>) => {
+    for (const [key, entry] of tunnels) {
+      if (configured.has(key)) continue;
+      entry.retry.cancel();
+      tunnels.delete(key);
+      entry.socket?.close(1000, "Reverse tunnel configuration removed.");
+    }
+    for (const [key, config] of configured) {
+      const current = tunnels.get(key);
+      if (!current || !sameConfig(current.config, config)) {
+        replace(key, config);
+      }
+    }
+  };
+
+  const connect = (remote: { url: string; keyId?: string; secret?: string }) => {
+    const key = remote.url.replace(/\/$/, "");
+    return replace(key, {
+      tunnelUrl: controlPlaneTunnelUrlForBase(remote.url),
+      keyId: remote.keyId,
+      secret: remote.secret,
+    });
+  };
+
   const connectConfigured = () => {
+    closing = false;
+    const configured = new Map<string, TunnelConfig>();
     const explicitTunnelUrl = controlPlaneTunnelUrl(options);
     if (explicitTunnelUrl) {
       const tunnelSecret = identity.reverseTunnelSecret(
@@ -3877,28 +3967,30 @@ function createReverseTunnelManager(app: Awaited<ReturnType<typeof createNodeAge
         options.remoteKeyId || process.env.TASK_HANDOFF_NODE_AGENT_REMOTE_KEY_ID,
       );
       const key = (process.env.TASK_HANDOFF_CONTROL_PLANE_URL || explicitTunnelUrl).replace(/\/$/, "");
-      sockets.get(key)?.close(1000, "Reverse tunnel reconnecting.");
-      const socket = connectReverseTunnel(app, {
+      configured.set(key, {
         tunnelUrl: explicitTunnelUrl,
-        nodeId,
-        port: () => app.nodeAgentState!.currentListenerPort,
-        token,
         keyId: tunnelSecret?.keyId,
         secret: tunnelSecret?.secret,
       });
-      sockets.set(key, socket);
     }
     for (const remote of identity.configuredRemoteControlPlanes()) {
       if (remote.url && remote.active !== false) {
-        connect({ url: remote.url, keyId: remote.keyId, secret: remote.secret });
+        configured.set(remote.url.replace(/\/$/, ""), {
+          tunnelUrl: controlPlaneTunnelUrlForBase(remote.url),
+          keyId: remote.keyId,
+          secret: remote.secret,
+        });
       }
     }
+    reconcile(configured);
   };
   const closeAll = () => {
-    for (const socket of sockets.values()) {
-      socket.close(1001, "Node agent shutting down.");
+    closing = true;
+    for (const entry of tunnels.values()) {
+      entry.retry.cancel();
+      entry.socket?.close(1001, "Node agent shutting down.");
     }
-    sockets.clear();
+    tunnels.clear();
   };
   return { connect, connectConfigured, closeAll };
 }

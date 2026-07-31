@@ -6,6 +6,9 @@ const panel = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail
 const styles = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.css", import.meta.url), "utf8");
 const boardCard = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionCard.vue", import.meta.url), "utf8");
 const sharedActionStyles = fs.readFileSync(new URL("../src/components/ai-session/AiSessionCardAction.css", import.meta.url), "utf8");
+const contextMenu = fs.readFileSync(new URL("../src/components/ai-session/AiSessionCardContextMenu.vue", import.meta.url), "utf8");
+const contextSubMenu = fs.readFileSync(new URL("../src/components/ui/context-menu/ContextMenuSubContent.vue", import.meta.url), "utf8");
+const scrollArea = fs.readFileSync(new URL("../src/components/ui/scroll-area/ScrollArea.vue", import.meta.url), "utf8");
 
 test("instance AI session cards match board card status and navigation behavior", () => {
   assert.doesNotMatch(panel, /<small>\{\{ aiSessionStatusLabel\(session\) \}\}<\/small>/);
@@ -23,6 +26,17 @@ test("AI session path labels show only the folder and reveal the full path when 
   assert.match(panel, /<TooltipContent[^>]*>\{\{ session\.cwd \|\| t\("sessions\.board\.unknownPath"\) \}\}<\/TooltipContent>/);
   assert.match(panel, /<TooltipTrigger as-child>\s*<span class="session-ai-path-group-title">/);
   assert.match(styles, /\.session-ai-card-workspace b\s*\{[^}]*color: inherit;[^}]*font-weight: inherit;/s);
+});
+
+test("AI session path groups create a session in their registered project", () => {
+  assert.doesNotMatch(panel, /group\.(?:sessions|items)\.length/);
+  assert.match(panel, /class="session-ai-path-group-add"[\s\S]*?@click="openNewSessionForPath\(group\.key\)"/);
+  assert.match(panel, /const folderId = newSessionFolderIdForPath\(sessionPath\);/);
+  assert.match(panel, /openNewSession\(\);\s*newSessionFolderId\.value = folderId;/);
+  assert.match(styles, /\.session-ai-path-group-head\s*\{[^}]*grid-template-columns: minmax\(0, 1fr\) 28px;/s);
+  assert.match(styles, /\.session-ai-path-group-head:hover,\s*\.session-ai-path-group-head:focus-within\s*\{[^}]*background: var\(--surface-hover\);/s);
+  assert.match(styles, /\.session-ai-path-group-add\s*\{[^}]*background: transparent;[^}]*opacity: 0;[^}]*visibility: hidden;/s);
+  assert.match(styles, /\.session-ai-path-group-head:hover \.session-ai-path-group-add,\s*\.session-ai-path-group-head:focus-within \.session-ai-path-group-add\s*\{[^}]*opacity: 1;[^}]*visibility: visible;/s);
 });
 
 test("instance AI session card user messages use a single unpadded line", () => {
@@ -77,6 +91,20 @@ test("instance and board cards share one action button style", () => {
   assert.doesNotMatch(styles, /\.session-ai-open\s*\{/);
 });
 
+test("instance and board AI session cards expose their toolbar actions from one shared context menu", () => {
+  for (const source of [panel, boardCard]) {
+    assert.match(source, /<ContextMenu(?:\s|>)/);
+    assert.match(source, /<ContextMenuTrigger as-child>/);
+    assert.match(source, /<AiSessionCardContextMenu/);
+  }
+  assert.match(contextMenu, /<ContextMenuSubTrigger class="ai-session-context-menu-item">/);
+  assert.match(contextMenu, /@select="\$emit\('openApp'\)"/);
+  assert.match(contextMenu, /@select="\$emit\('closeApp'\)"/);
+  assert.match(contextMenu, /@select="\$emit\('toggleTrigger', trigger\.configHash\)"/);
+  assert.match(contextMenu, /:global\(\.ai-session-context-menu\)[\s\S]*backdrop-filter: blur\(16px\)/);
+  assert.match(contextSubMenu, /<ContextMenuPortal>[\s\S]*<ContextMenuSubContent/);
+});
+
 test("an unselected AI session defaults to the new-session surface", () => {
   assert.match(panel, /const showNewSession = computed\(\(\) => newSessionOpen\.value \|\| !selectedSession\.value\);/);
   assert.match(panel, /<section v-else-if="showNewSession" class="session-ai-detail session-ai-new-detail">/);
@@ -93,10 +121,11 @@ test("opening the already-visible new-session surface preserves its draft", () =
 
 test("new-session folder picker keeps actions visible while long folder lists scroll", () => {
   assert.match(panel, /<DropdownMenuContent class="session-ai-project-menu session-ai-project-picker-menu"[^>]*:collision-padding="12"/);
-  assert.match(panel, /<ScrollArea type="always" class="session-ai-project-list">[\s\S]*?filteredNewSessionFolders[\s\S]*?<\/ScrollArea>\s*<DropdownMenuSeparator \/>[\s\S]*?openNewProject/);
+  assert.match(panel, /<ScrollArea type="auto" :horizontal="false" class="session-ai-project-list">[\s\S]*?filteredNewSessionFolders[\s\S]*?<\/ScrollArea>\s*<DropdownMenuSeparator \/>[\s\S]*?openNewProject/);
   assert.match(styles, /:global\(\.session-ai-project-picker-menu\)\s*\{[^}]*--reka-dropdown-menu-content-available-height[^}]*grid-template-rows: auto minmax\(0, 1fr\) auto auto;[^}]*overflow: hidden;/s);
   assert.match(styles, /\.session-ai-project-list\s*\{[^}]*min-height: 0;/s);
   assert.doesNotMatch(styles, /\.session-ai-project-list\s*\{[^}]*overflow-y: auto;/s);
+  assert.match(scrollArea, /<ScrollBar v-if="horizontal" orientation="horizontal" \/>/);
 });
 
 test("new-session permission edits update the authoritative instance default", () => {

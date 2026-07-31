@@ -31,6 +31,11 @@ function exactDependencies(dependencies) {
   );
 }
 
+function copyLinuxExecutable(source, destination) {
+  const contents = fs.readFileSync(source, "utf8").replace(/\r\n?/g, "\n");
+  fs.writeFileSync(destination, contents, { mode: 0o755 });
+}
+
 for (const [name, definition] of selected) {
   const packageDir = path.join(root, "release", "npm", name);
   fs.mkdirSync(packageDir, { recursive: true });
@@ -59,11 +64,9 @@ for (const [name, definition] of selected) {
     fs.writeFileSync(runtimeCliPath, `#!/usr/bin/env node\nrequire("../dist/${definition.entryFile}");\n`, { mode: 0o755 });
     bin[definition.binName] = `bin/${definition.binName}`;
     const wrapperPath = path.join(binDir, "task-handoff-install-server");
-    fs.copyFileSync(path.join(root, "scripts", "install-server-package.cjs"), wrapperPath);
-    fs.chmodSync(wrapperPath, 0o755);
+    copyLinuxExecutable(path.join(root, "scripts", "install-server-package.cjs"), wrapperPath);
     const serviceInstallerPath = path.join(binDir, "task-handoff-install-server-services");
-    fs.copyFileSync(path.join(root, "scripts", "install-server-services.sh"), serviceInstallerPath);
-    fs.chmodSync(serviceInstallerPath, 0o755);
+    copyLinuxExecutable(path.join(root, "scripts", "install-server-services.sh"), serviceInstallerPath);
   } else {
     const wrapperPath = path.join(binDir, definition.binName);
     const bundledRuntimeBootstrap = name === "node-agent"
@@ -74,13 +77,11 @@ for (const [name, definition] of selected) {
   }
   if (name === "node-agent") {
     const updateWorkerPath = path.join(binDir, "task-handoff-node-update-worker");
-    fs.copyFileSync(path.join(root, "scripts", "node-update-worker.cjs"), updateWorkerPath);
-    fs.chmodSync(updateWorkerPath, 0o755);
+    copyLinuxExecutable(path.join(root, "scripts", "node-update-worker.cjs"), updateWorkerPath);
     const dockerAssetsDir = path.join(packageDir, "docker");
     fs.mkdirSync(dockerAssetsDir, { recursive: true });
     for (const asset of ["entrypoint.sh", "instance-launcher.sh", "runtime-installer.mjs"]) {
-      fs.copyFileSync(path.join(root, "docker", asset), path.join(dockerAssetsDir, asset));
-      fs.chmodSync(path.join(dockerAssetsDir, asset), 0o755);
+      copyLinuxExecutable(path.join(root, "docker", asset), path.join(dockerAssetsDir, asset));
     }
     const bundledRuntimeDir = path.join(packageDir, "runtime-artifacts");
     fs.rmSync(bundledRuntimeDir, { recursive: true, force: true });

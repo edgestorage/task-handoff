@@ -59,7 +59,7 @@
           </button>
           <article v-else class="repository-branch-row" :data-current="node.branch.current ? 'true' : undefined" :style="branchTreeLayout(node.depth)">
             <button type="button" class="repository-branch-select" :disabled="node.branch.current || mutating" @click="checkoutBranch(node.branch)">
-              <span class="repository-branch-name" :title="node.branch.name"><Check v-if="node.branch.current" :size="14" /><GitBranch v-else :size="14" /><strong>{{ node.label }}</strong></span>
+              <span class="repository-branch-name" :title="node.branch.name"><Check v-if="node.branch.current" :size="14" /><GitBranch v-else :size="14" /><span>{{ node.label }}</span></span>
               <small v-if="node.branch.current && currentChangeCount">{{ t("repository.branchesPanel.uncommitted", { count: currentChangeCount }) }}</small>
               <small v-else-if="node.branch.checkedOutWorktreeIds.length">{{ t("repository.branchesPanel.checkedOut", { count: node.branch.checkedOutWorktreeIds.length }) }}</small>
               <small v-else-if="node.branch.upstream">{{ node.branch.upstream }}<template v-if="node.branch.ahead || node.branch.behind"> · {{ t("repository.branchesPanel.sync", { ahead: node.branch.ahead || 0, behind: node.branch.behind || 0 }) }}</template></small>
@@ -100,7 +100,7 @@
           </button>
           <article v-else class="repository-branch-row remote" :style="branchTreeLayout(node.depth)">
             <div class="repository-branch-select static">
-              <span class="repository-branch-name" :title="node.branch.name"><Cloud :size="14" /><strong>{{ node.label }}</strong></span>
+              <span class="repository-branch-name" :title="node.branch.name"><Cloud :size="14" /><span>{{ node.label }}</span></span>
               <small v-if="node.branch.checkedOutWorktreeIds.length">{{ t("repository.branchesPanel.tracked", { count: node.branch.checkedOutWorktreeIds.length }) }}</small>
             </div>
             <button type="button" class="repository-branch-track" :disabled="mutating" @click="beginTracking(node.branch)">{{ t("repository.branchesPanel.track") }}</button>
@@ -400,7 +400,7 @@ async function deleteBranch() {
 .repository-branch-select:focus-visible { outline: 1px solid color-mix(in srgb, var(--focus-ring) 65%, transparent); outline-offset: -1px; }
 .repository-branch-select:disabled { cursor: default; }
 .repository-branch-name { min-width: 0; gap: 7px; color: var(--text-strong); }
-.repository-branch-name strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.repository-branch-name > span { overflow: hidden; font-size: 12px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
 .repository-branch-select small { overflow: hidden; color: var(--text-muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .repository-branch-delete, .repository-branch-track { flex: 0 0 auto; border: 0; border-radius: 6px; background: transparent; color: var(--text-muted); cursor: pointer; }
 .repository-branch-delete { display: grid; width: 27px; height: 27px; place-items: center; padding: 0; }

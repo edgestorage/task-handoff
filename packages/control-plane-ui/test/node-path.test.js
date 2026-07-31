@@ -6,6 +6,7 @@ import {
   nativeNodeFolderSelectionResult,
   nodeFolderSelectionMode,
   nodePathName,
+  relativeNodePathSegments,
 } from "../src/apps/control-plane/nodePath.ts";
 
 test("web local nodes use node browsing when no native picker exists", () => {
@@ -50,4 +51,12 @@ test("node path containment resolves dot segments before comparing paths", () =>
   assert.equal(isSameOrChildNodePath("C:\\workspace\\project\\..\\src", "c:\\workspace"), true);
   assert.equal(isSameOrChildNodePath("C:\\workspace\\..\\secret", "c:\\workspace"), false);
   assert.equal(isSameOrChildNodePath("\\\\server\\share\\workspace\\..\\secret", "\\\\server\\share\\workspace"), false);
+});
+
+test("relative node paths preserve folder names while enforcing containment", () => {
+  assert.deepEqual(relativeNodePathSegments("/Users/me/work", "/Users/me/work/project/src"), ["project", "src"]);
+  assert.deepEqual(relativeNodePathSegments("C:\\WORK", "c:\\work\\Project\\src"), ["Project", "src"]);
+  assert.deepEqual(relativeNodePathSegments("/workspace", "/workspace/project/../src"), ["src"]);
+  assert.equal(relativeNodePathSegments("/workspace", "/workspace-other/project"), undefined);
+  assert.equal(relativeNodePathSegments("C:\\workspace", "D:\\workspace\\project"), undefined);
 });

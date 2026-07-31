@@ -614,7 +614,7 @@ function canApplyUpdate() {
 function runtimeVersionSummary(instance: InstanceBoardItem) {
   const state = instance.runtimeVersion;
   if (!state) return t("settings.nodeDetail.runtimeVersionUnavailable");
-  return t("settings.nodeDetail.runtimeVersionSummary", {
+  return t(state.phase === "failed" && instance.status === "running" ? "settings.nodeDetail.runtimeVersionFailedSummary" : "settings.nodeDetail.runtimeVersionSummary", {
     actual: state.actualVersion || t("settings.nodeDetail.unknown"),
     desired: state.desiredVersion,
     attempt: state.attempt,
