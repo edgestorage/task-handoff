@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { QueryClient } from "@tanstack/vue-query";
-import { mergeInstanceBoardPayload } from "../src/api/instanceBoardMerge.ts";
+import { mergeInstanceBoardPayload, mergeInstanceBoardQueryData } from "../src/api/instanceBoardMerge.ts";
 import { applyInstanceLifecycle } from "../src/apps/control-plane/instanceLifecycleCache.ts";
 import { controlPlaneQueryKeys } from "../src/api/queryKeys.ts";
 
@@ -114,7 +114,7 @@ test("an in-flight stale board response cannot overwrite a newer lifecycle revis
   const fetch = queryClient.fetchQuery({
     queryKey: controlPlaneQueryKeys.instanceBoard,
     queryFn: () => boardResponse,
-    structuralSharing: mergeInstanceBoardPayload,
+    structuralSharing: mergeInstanceBoardQueryData,
   });
   queryClient.setQueryData(controlPlaneQueryKeys.instanceBoard, {
     data: [target, untouched],
@@ -167,4 +167,17 @@ test("board HTTP merge accepts newer revisions and authoritative removals", () =
   assert.equal(merged.data.length, 1);
   assert.equal(merged.data[0].stateRevision, 3);
   assert.equal(merged.data[0].status, "running");
+});
+
+test("board structural sharing accepts the item array produced by query select", () => {
+  const previous = [boardInstance("inst_target", 2, "stopped")];
+  const incoming = [boardInstance("inst_target", 1, "running"), boardInstance("inst_added", 1, "created")];
+
+  const merged = mergeInstanceBoardQueryData(previous, incoming);
+
+  assert.ok(Array.isArray(merged));
+  assert.equal(merged.length, 2);
+  assert.equal(merged[0].stateRevision, 2);
+  assert.equal(merged[0].status, "stopped");
+  assert.equal(merged[1].id, "inst_added");
 });

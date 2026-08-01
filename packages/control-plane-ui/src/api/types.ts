@@ -574,7 +574,9 @@ export type ControlledInstance = {
   access: InstanceAccess;
   apps: {
     runningCount: number;
-    sessions: Array<Record<string, unknown>>;
+    problemCount: number;
+    updatedAt?: string;
+    revision?: number;
   };
   aiSessions: AiSessionsSnapshot;
   triggers?: {
@@ -854,7 +856,13 @@ export type InstanceBoardItem = Omit<ControlledInstance, "aiSessions"> & {
   imagePullProgress?: ImagePullProgress;
 };
 
-export type InstanceWithAiSessions = Omit<InstanceBoardItem, "aiSessions"> & {
+export type InstanceBoardItemWithAppSessions = Omit<InstanceBoardItem, "apps"> & {
+  apps: InstanceBoardItem["apps"] & {
+    sessions: Array<Record<string, unknown>>;
+  };
+};
+
+export type InstanceWithAiSessions = Omit<InstanceBoardItemWithAppSessions, "aiSessions"> & {
   aiSessions: AiSessionsSnapshot & InstanceBoardAiSummary;
 };
 

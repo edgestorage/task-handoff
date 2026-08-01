@@ -11,6 +11,7 @@ import {
   type AppSessionsSnapshot,
   type ControlPlaneAppSessions,
   type InstanceBoardItem,
+  type InstanceBoardItemWithAppSessions,
 } from "../../api/types";
 import { isVisibleAppSession } from "./appSessionVisibility.ts";
 import { createSessionStreamRecovery, type SessionStreamRecoveryRetryOptions } from "./sessionStreamRecovery.ts";
@@ -93,7 +94,7 @@ export function useAppSessionStore(input: {
   };
 }
 
-function mergeBoardAppSessions(instances: InstanceBoardItem[], appSessions?: ControlPlaneAppSessions): InstanceBoardItem[] {
+function mergeBoardAppSessions(instances: InstanceBoardItem[], appSessions?: ControlPlaneAppSessions): InstanceBoardItemWithAppSessions[] {
   const byInstance = new Map((appSessions?.instances || []).map((entry) => [entry.instanceId, entry.appSessions]));
   return instances.map((instance) => {
     const snapshot = byInstance.get(instance.id);

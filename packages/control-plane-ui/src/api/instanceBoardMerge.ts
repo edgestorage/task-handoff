@@ -45,3 +45,22 @@ export function mergeInstanceBoardPayload(
     data: incoming.data.map((instance) => mergeInstance(previousById.get(instance.id), instance)),
   });
 }
+
+/**
+ * TanStack Query applies an observer's structural sharing function both to the
+ * cached query value and to values returned by `select`. The instance-board
+ * cache stores a payload, while its workbench observer selects the item array,
+ * so the merger must preserve both shapes.
+ */
+export function mergeInstanceBoardQueryData(
+  previous: InstanceBoardPayload | InstanceBoardItem[] | undefined,
+  incoming: InstanceBoardPayload | InstanceBoardItem[],
+): InstanceBoardPayload | InstanceBoardItem[] {
+  if (Array.isArray(incoming)) {
+    const previousItems = Array.isArray(previous) ? previous : undefined;
+    if (!previousItems) return incoming;
+    const previousById = new Map(previousItems.map((instance) => [instance.id, instance]));
+    return replaceEqualDeep(previousItems, incoming.map((instance) => mergeInstance(previousById.get(instance.id), instance)));
+  }
+  return mergeInstanceBoardPayload(Array.isArray(previous) ? undefined : previous, incoming);
+}

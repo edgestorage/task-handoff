@@ -14,6 +14,7 @@ import {
   type AiSessionsSnapshot,
   type ControlPlaneAiSessions,
   type InstanceBoardItem,
+  type InstanceBoardItemWithAppSessions,
   type InstanceWithAiSessions,
 } from "../../api/types";
 import { appSessionBindingKeys, isVisibleAppSession } from "./appSessionVisibility.ts";
@@ -21,7 +22,7 @@ import { createSessionStreamRecovery, type SessionStreamRecoveryRetryOptions } f
 import { useStreamingMessagesStore } from "./useStreamingMessagesStore.ts";
 
 export function useAiSessionStore(input: {
-  boardInstances: () => InstanceBoardItem[];
+  boardInstances: () => InstanceBoardItemWithAppSessions[];
   aiSessions: () => ControlPlaneAiSessions | undefined;
   apiLoader?: typeof getApiData;
   recoveryRetry?: SessionStreamRecoveryRetryOptions;
@@ -64,7 +65,7 @@ export function useAiSessionStore(input: {
     knownInstanceIds = nextInstanceIds;
   }, { immediate: true });
 
-  function instanceWithAiSessions(instance?: InstanceBoardItem): InstanceWithAiSessions | undefined {
+  function instanceWithAiSessions(instance?: InstanceBoardItemWithAppSessions): InstanceWithAiSessions | undefined {
     if (!instance) {
       return undefined;
     }
@@ -193,7 +194,7 @@ function aiSessionSnapshot(sessions: AiSessionSummary[], updatedAt: string, stal
   };
 }
 
-function mergeBoardAiSessions(instances: InstanceBoardItem[], aiSessions?: ControlPlaneAiSessions): InstanceWithAiSessions[] {
+function mergeBoardAiSessions(instances: InstanceBoardItemWithAppSessions[], aiSessions?: ControlPlaneAiSessions): InstanceWithAiSessions[] {
   if (!aiSessions?.instances?.length) {
     return instances.map((instance) => ({ ...instance, aiSessions: emptyAiSessionsSnapshot(instance.aiSessions.updatedAt) }));
   }
@@ -225,7 +226,7 @@ function aiSessionSnapshotWithSummary(snapshot: AiSessionsSnapshot, summary: Ins
   };
 }
 
-function visibleAiSessionSnapshot(instance: InstanceBoardItem, snapshot: AiSessionsSnapshot) {
+function visibleAiSessionSnapshot(instance: InstanceBoardItemWithAppSessions, snapshot: AiSessionsSnapshot) {
   const sessions = snapshot.sessions.filter((session) => hasBoundVisibleAppSession(instance.apps.sessions || [], session));
   return aiSessionSnapshotWithSummary({ ...snapshot, sessions }, instance.aiSessions);
 }

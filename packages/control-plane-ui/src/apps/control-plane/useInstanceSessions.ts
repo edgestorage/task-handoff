@@ -1,4 +1,4 @@
-import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions } from "../../api/types";
+import type { AiSessionSummary, InstanceBoardItem, InstanceBoardItemWithAppSessions, InstanceWithAiSessions } from "../../api/types";
 import type { RepositorySessionKind } from "@task-handoff/protocol/repository";
 import { appSessionBindingKeys, appSessionStatus, isVisibleAppSession } from "./appSessionVisibility.ts";
 import { aiSessionStatusKeys, translateStatus, type Translate } from "../../i18n/status.ts";
@@ -72,7 +72,7 @@ function proxiedWebSocketUrl(instance: InstanceBoardItem, path: string) {
   return url.toString();
 }
 
-export function buildAppSessionTabs(instance: InstanceBoardItem | undefined, t: Translate): SessionTab[] {
+export function buildAppSessionTabs(instance: InstanceBoardItemWithAppSessions | undefined, t: Translate): SessionTab[] {
   if (!instance) {
     return [];
   }
@@ -583,7 +583,7 @@ export function aiSessionContext(session: AiSessionSummary) {
   return cwd || id || session.agent;
 }
 
-export function aiSessionAppTab(instance: InstanceBoardItem | InstanceWithAiSessions, session?: AiSessionSummary) {
+export function aiSessionAppTab(instance: InstanceBoardItemWithAppSessions | InstanceWithAiSessions, session?: AiSessionSummary) {
   if (!session) {
     return undefined;
   }
@@ -627,7 +627,7 @@ export function absoluteInstanceUrl(instance: InstanceBoardItem, path: string) {
   return joinInstancePath(instance, path);
 }
 
-export function activeAppLabel(instance: InstanceBoardItem, t: Translate) {
+export function activeAppLabel(instance: InstanceBoardItemWithAppSessions, t: Translate) {
   const visibleSessions = instance.apps.sessions.filter(isVisibleAppSession);
   const session = visibleSessions[0];
   if (session && typeof session === "object" && "appId" in session && typeof session.appId === "string") {

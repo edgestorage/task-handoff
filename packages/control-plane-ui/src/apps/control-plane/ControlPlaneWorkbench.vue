@@ -274,7 +274,7 @@ import { Bot, Download, House, LayoutGrid, LogOut, Maximize2, Minus, RefreshCw, 
 import "@xterm/xterm/css/xterm.css";
 import { controlPlaneQueryKeys, getInstanceAppManagement, getInstanceResourceMetrics, installInstanceApp, logoutControlPlane, nodeLocalFoldersQueryOptions, renameAppSession, resolveAiSessionApproval, uninstallInstanceApp, updateControlledInstance, useAuthSessionQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useInstanceBoardQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
 import type { ConfigSyncDirection } from "@task-handoff/protocol/config-sync";
-import { type AiSessionSummary, type AppManagementOperation, type InstanceBoardItem, type InstanceResourceMetrics, type NodeLocalFolder, type UpdateControlledInstanceInput } from "../../api/types";
+import { type AiSessionSummary, type AppManagementOperation, type InstanceBoardItem, type InstanceBoardItemWithAppSessions, type InstanceResourceMetrics, type NodeLocalFolder, type UpdateControlledInstanceInput } from "../../api/types";
 import { Button } from "../../components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../components/ui/tooltip";
 import AiSessionBoardView from "./ai-board/AiSessionBoardView.vue";
@@ -913,7 +913,7 @@ function selectInstance(id: string) {
   closeFloatingLayers();
 }
 
-function openAiSessionAppFromBoard(instance: InstanceBoardItem, session?: AiSessionSummary) {
+function openAiSessionAppFromBoard(instance: InstanceBoardItemWithAppSessions, session?: AiSessionSummary) {
   setActiveInstance(instance.id);
   openAiSessionApp(instance, session);
   workbenchView.value = "instance";

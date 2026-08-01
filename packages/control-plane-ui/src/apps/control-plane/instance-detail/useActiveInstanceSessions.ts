@@ -1,6 +1,6 @@
 import { computed, reactive, ref, watch, type ComputedRef, type Ref } from "vue";
 import { launchAppSession, markAiSessionRead, stopAppSession } from "../../../api/queries";
-import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions } from "../../../api/types";
+import type { AiSessionSummary, InstanceBoardItem, InstanceBoardItemWithAppSessions, InstanceWithAiSessions } from "../../../api/types";
 import {
   aiSessionAppTab,
   appDisplayName,
@@ -431,7 +431,7 @@ export function useActiveInstanceSessions({
     return resolveSelectedAiSession(sessions, selectedAiSessionKeys[instance.id]);
   }
 
-  function openAiSessionApp(instance: InstanceBoardItem, session?: AiSessionSummary) {
+  function openAiSessionApp(instance: InstanceBoardItemWithAppSessions, session?: AiSessionSummary) {
     const tab = aiSessionAppTab(instance, session);
     if (tab) {
       selectedSessionKeys[instance.id] = tab.key;

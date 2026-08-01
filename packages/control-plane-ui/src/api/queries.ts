@@ -1,7 +1,7 @@
 import { queryOptions, useQuery } from "@tanstack/vue-query";
 import { computed, toValue, type MaybeRefOrGetter } from "vue";
 import { deleteApiData, getApiData, getApiPayload, patchApiData, postApiData } from "./client";
-import { mergeInstanceBoardPayload } from "./instanceBoardMerge.ts";
+import { mergeInstanceBoardQueryData } from "./instanceBoardMerge.ts";
 import { controlPlaneQueryKeys } from "./queryKeys.ts";
 export { controlPlaneQueryKeys } from "./queryKeys.ts";
 import type {
@@ -309,7 +309,7 @@ function instanceBoardQueryOptions() {
   return {
     queryKey: controlPlaneQueryKeys.instanceBoard,
     queryFn: ({ signal }: { signal: AbortSignal }) => fetchInstanceBoardPayload(signal),
-    structuralSharing: mergeInstanceBoardPayload,
+    structuralSharing: mergeInstanceBoardQueryData,
     retry: false,
   } as const;
 }

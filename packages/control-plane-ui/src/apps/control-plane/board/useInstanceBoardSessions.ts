@@ -1,5 +1,5 @@
 import type { ComputedRef, Ref } from "vue";
-import type { InstanceBoardItem } from "../../../api/types";
+import type { InstanceBoardItemWithAppSessions } from "../../../api/types";
 import type { Translate } from "../../../i18n/status";
 import type { SupportedLocale } from "../../../i18n/locale";
 import { absoluteInstanceUrl, buildAppSessionTabs, previewDetail, previewTitle, sessionDisplayName, sessionFrameUrl, sessionMeta, sessionTerminalSocketUrl } from "../useInstanceSessions";
@@ -7,19 +7,19 @@ import { absoluteInstanceUrl, buildAppSessionTabs, previewDetail, previewTitle, 
 type UseInstanceBoardSessionsInput = {
   boardInteractive: Ref<boolean>;
   boardSessionKeys: Record<string, string>;
-  boardVisibleInstances: ComputedRef<InstanceBoardItem[]>;
+  boardVisibleInstances: ComputedRef<InstanceBoardItemWithAppSessions[]>;
   t: Translate;
   locale: ComputedRef<string>;
 };
 
 export function useInstanceBoardSessions({ boardInteractive, boardSessionKeys, boardVisibleInstances, locale, t }: UseInstanceBoardSessionsInput) {
-  function boardPrimarySession(instance: InstanceBoardItem) {
+  function boardPrimarySession(instance: InstanceBoardItemWithAppSessions) {
     const sessions = boardSessions(instance);
     const selectedKey = boardSessionKeys[instance.id];
     return sessions.find((session) => session.key === selectedKey) || sessions[0];
   }
 
-  function boardSessions(instance: InstanceBoardItem) {
+  function boardSessions(instance: InstanceBoardItemWithAppSessions) {
     return buildAppSessionTabs(instance, t);
   }
 
@@ -36,17 +36,17 @@ export function useInstanceBoardSessions({ boardInteractive, boardSessionKeys, b
     }
   }
 
-  function boardSessionFrameUrl(instance: InstanceBoardItem) {
+  function boardSessionFrameUrl(instance: InstanceBoardItemWithAppSessions) {
     const session = boardPrimarySession(instance);
     return session ? sessionFrameUrl(instance, session, { compact: true, interactive: boardInteractive.value }) : "";
   }
 
-  function boardTerminalSocketUrl(instance: InstanceBoardItem) {
+  function boardTerminalSocketUrl(instance: InstanceBoardItemWithAppSessions) {
     const session = boardPrimarySession(instance);
     return session ? sessionTerminalSocketUrl(instance, session) : "";
   }
 
-  function boardOpenUrl(instance: InstanceBoardItem) {
+  function boardOpenUrl(instance: InstanceBoardItemWithAppSessions) {
     const webUrl = absoluteInstanceUrl(instance, "/");
     const session = boardPrimarySession(instance);
     if (!session) {
@@ -57,7 +57,7 @@ export function useInstanceBoardSessions({ boardInteractive, boardSessionKeys, b
     return frameUrl || (!terminalUrl ? webUrl : webUrl);
   }
 
-  function boardPreviewState(instance: InstanceBoardItem) {
+  function boardPreviewState(instance: InstanceBoardItemWithAppSessions) {
     if (boardSessionFrameUrl(instance)) {
       return "live";
     }
@@ -67,7 +67,7 @@ export function useInstanceBoardSessions({ boardInteractive, boardSessionKeys, b
     return instance.connectionStatus;
   }
 
-  function boardCardTitle(instance: InstanceBoardItem) {
+  function boardCardTitle(instance: InstanceBoardItemWithAppSessions) {
     const session = boardPrimarySession(instance);
     if (session) {
       return sessionDisplayName(session, t);
@@ -75,7 +75,7 @@ export function useInstanceBoardSessions({ boardInteractive, boardSessionKeys, b
     return previewTitle(instance, t);
   }
 
-  function boardCardDetail(instance: InstanceBoardItem) {
+  function boardCardDetail(instance: InstanceBoardItemWithAppSessions) {
     const session = boardPrimarySession(instance);
     if (session) {
       return sessionMeta(session, t);

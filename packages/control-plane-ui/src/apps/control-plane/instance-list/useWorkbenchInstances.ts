@@ -2,8 +2,8 @@ import { computed, ref, watch, type Ref } from "vue";
 import type { InstanceBoardItem } from "../../../api/types.ts";
 import { instanceDisplayName as formatInstanceDisplayName } from "../useInstanceStatus.ts";
 
-type UseWorkbenchInstancesInput = {
-  instances: Ref<InstanceBoardItem[] | undefined>;
+type UseWorkbenchInstancesInput<T extends InstanceBoardItem> = {
+  instances: Ref<T[] | undefined>;
 };
 
 export type InstanceListSortMode = "created-desc" | "name-asc" | "node-asc" | "status-asc";
@@ -39,7 +39,7 @@ function persistActiveInstanceId(id: string) {
   }
 }
 
-export function useWorkbenchInstances({ instances }: UseWorkbenchInstancesInput) {
+export function useWorkbenchInstances<T extends InstanceBoardItem>({ instances }: UseWorkbenchInstancesInput<T>) {
   const activeInstanceId = ref(storedActiveInstanceId());
   const instanceFilter = ref("");
   const instanceSortMode = ref<InstanceListSortMode>("created-desc");
