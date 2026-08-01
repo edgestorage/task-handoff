@@ -37,6 +37,7 @@ function requiredExecutablePaths(name, definition) {
     ...(name === "server" ? ["bin/task-handoff-install-server", "bin/task-handoff-install-server-services"] : []),
     ...(name === "node-agent" ? [
       "bin/task-handoff-node-update-worker",
+      "docker/bootstrap.sh",
       "docker/entrypoint.sh",
       "docker/instance-launcher.sh",
       "docker/runtime-installer.mjs",

@@ -103,6 +103,14 @@ The current directory is mounted at `/workspace` by default. Set `TASK_HANDOFF_W
 TASK_HANDOFF_WORKSPACE_HOST=/path/to/workspace pnpm run docker:up:all
 ```
 
+### Managed Docker image contract
+
+The Node Agent treats registered images as base environments and injects the TaskHandoff bootstrap and controlled-instance runtime before first start. Official and third-party images use the same path. A compatible Linux image must provide `bash`, Node.js 24, `sudo`/`visudo`, `getent`, `useradd`, `groupadd`, `usermod`, `tar`, and `install`, and must allow its container to start initially as root.
+
+For a local-folder project, the managed process adopts the workspace owner's numeric UID and GID. The bootstrap creates or reuses a matching container user, grants that user passwordless container-root sudo, initializes only the managed `/home/agent` and `/data` volumes, and never changes ownership of a bind-mounted workspace. On later starts it skips identity initialization, revalidates sudo and workspace access, and then launches the injected runtime. Containers created before this bootstrap contract, or whose required UID/GID has changed, must be recreated; their named home and data volumes can be retained.
+
+Administrators can override workspace-owner detection for every new container on a node by setting both `TASK_HANDOFF_CONTAINER_UID` and `TASK_HANDOFF_CONTAINER_GID` in the Node Agent environment. Root IDs and partial overrides are rejected.
+
 ## Server Deployment
 
 Server deployments install the Control Plane and the server-local Node Agent as independent systemd services. The control plane can stop or restart without terminating instances managed by the agent.

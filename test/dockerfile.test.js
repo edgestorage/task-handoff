@@ -11,6 +11,18 @@ test("Docker runtime uses the supported Node.js 24 release line", () => {
   assert.match(dockerfile, /^FROM node:24-bookworm-slim AS runtime-base$/m);
 });
 
+test("Docker bootstrap defines the shared image identity and sudo contract", () => {
+  const bootstrap = fs.readFileSync(path.join(root, "docker", "bootstrap.sh"), "utf8");
+  assert.match(bootstrap, /TASK_HANDOFF_RUN_UID/);
+  assert.match(bootstrap, /TASK_HANDOFF_RUN_GID/);
+  assert.match(bootstrap, /identity-initialized/);
+  assert.match(bootstrap, /NOPASSWD: ALL/);
+  assert.match(bootstrap, /visudo -cf/);
+  assert.match(bootstrap, /sudo -n true/);
+  assert.match(bootstrap, /task-handoff-write-probe/);
+  assert.doesNotMatch(bootstrap, /chown -R[^\n]*TASK_HANDOFF_WORKSPACE[^\n]*local-bind/);
+});
+
 test("Docker profiles run as agent with passwordless container-root escalation", () => {
   const dockerfile = fs.readFileSync(path.join(root, "Dockerfile"), "utf8");
 

@@ -41,6 +41,8 @@ export type DockerExecutorOptions = {
   imageService?: DockerImageService;
   launcherAssetsDir?: string;
   portResolutionRetryDelaysMs?: readonly number[];
+  runtimeUid?: number;
+  runtimeGid?: number;
 };
 
 export type DockerRuntimeInstallRequest = {
@@ -66,12 +68,16 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
   private readonly images: DockerImageService;
   private readonly launcherAssetsDir: string;
   private readonly portResolutionRetryDelaysMs: readonly number[];
+  private readonly runtimeUid?: number;
+  private readonly runtimeGid?: number;
 
   constructor(runCommand: CommandRunner = defaultCommandRunner, options: DockerExecutorOptions = {}) {
     this.runCommand = runCommand;
     this.images = options.imageService || new DockerImageService(runCommand);
     this.publishHost = options.publishHost || "127.0.0.1";
     this.launcherAssetsDir = options.launcherAssetsDir || defaultLauncherAssetsDir();
+    this.runtimeUid = options.runtimeUid;
+    this.runtimeGid = options.runtimeGid;
     this.portResolutionRetryDelaysMs = options.portResolutionRetryDelaysMs?.length
       ? options.portResolutionRetryDelaysMs
       : [0, 100, 250, 500, 1_000];
@@ -80,6 +86,7 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
   async start(context: ExecutorContext): Promise<ExecutorStartResult> {
     validateStartContext(context);
     const containerName = context.instance.runtime.containerName || containerNameForInstance(context.instance.id);
+    const identity = runtimeIdentity(context, this.runtimeUid, this.runtimeGid);
     const existing = await this.inspectContainerForStart(containerName);
     if (existing) {
       assertExpectedContainerId(containerName, existing.id, context.instance.runtime.containerId, "before start", "RUNTIME_EXECUTOR_FAILED");
@@ -90,21 +97,77 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
           `Docker container ${containerName} belongs to ${owner || "an unknown instance"}, not ${context.instance.id}.`,
         );
       }
+      if (existing.labels["task-handoff.bootstrap-version"] !== "1") {
+        throw runtimeExecutorError("INSTANCE_BASE_RUNTIME_INCOMPATIBLE", `Docker container ${containerName} predates managed identity bootstrap and must be recreated.`);
+      }
+      if (existing.labels["task-handoff.runtime-uid"] !== String(identity.uid) || existing.labels["task-handoff.runtime-gid"] !== String(identity.gid)) {
+        throw runtimeExecutorError("INSTANCE_BASE_RUNTIME_INCOMPATIBLE", `Docker container ${containerName} was created for UID:GID ${existing.labels["task-handoff.runtime-uid"] || "unknown"}:${existing.labels["task-handoff.runtime-gid"] || "unknown"}, but ${identity.uid}:${identity.gid} is now required; recreate the container while retaining its named volumes.`);
+      }
       try {
         await this.runCommand("docker", ["start", containerName]);
+        await this.waitForBootstrap(containerName);
       } catch (cause) {
         throw runtimeExecutorError("RUNTIME_EXECUTOR_FAILED", `Could not start Docker container ${containerName}.`, cause);
       }
       return this.runningResult(context, containerName, existing.id);
     }
     await this.images.ensure(context.image.resolvedReference || context.image.requestedReference!);
-    let runResult;
+    let createResult;
+    let created = false;
+    let started = false;
     try {
-      runResult = await this.runCommand("docker", dockerRunArgs(context, containerName, { publishHost: this.publishHost }));
+      createResult = await this.runCommand("docker", dockerRunArgs(context, containerName, {
+        publishHost: this.publishHost,
+        runtimeUid: identity.uid,
+        runtimeGid: identity.gid,
+      }));
+      created = true;
+      await this.copyBootstrapAssets(containerName);
+      await this.runCommand("docker", ["start", containerName]);
+      started = true;
+      await this.waitForBootstrap(containerName);
     } catch (cause) {
-      throw runtimeExecutorError("RUNTIME_EXECUTOR_FAILED", `Could not create Docker container ${containerName}.`, cause);
+      if (created) await this.runCommand("docker", ["rm", "-f", containerName]).catch(() => ({ stdout: "", stderr: "" }));
+      throw runtimeExecutorError(
+        started ? "INSTANCE_BASE_RUNTIME_INCOMPATIBLE" : "RUNTIME_EXECUTOR_FAILED",
+        started
+          ? `Docker image ${context.image.resolvedReference || context.image.requestedReference} does not satisfy the TaskHandoff bootstrap contract.`
+          : `Could not create and bootstrap Docker container ${containerName}.`,
+        cause,
+      );
     }
-    return this.runningResult(context, containerName, runResult.stdout || undefined);
+    return this.runningResult(context, containerName, createResult.stdout.trim() || undefined);
+  }
+
+  private async copyBootstrapAssets(containerName: string) {
+    const assets = [
+      ["bootstrap.sh", "/root/.task-handoff-bootstrap.bootstrap"],
+      ["entrypoint.sh", "/root/.task-handoff-entrypoint.bootstrap"],
+      ["instance-launcher.sh", "/root/.task-handoff-instance-launcher.bootstrap"],
+      ["runtime-installer.mjs", "/root/.task-handoff-runtime-installer.bootstrap"],
+    ] as const;
+    for (const [source, target] of assets) {
+      await this.runCommand("docker", ["cp", path.join(this.launcherAssetsDir, source), `${containerName}:${target}`]);
+    }
+  }
+
+  private async waitForBootstrap(containerName: string) {
+    let lastCause: unknown;
+    for (const delayMs of [0, 100, 250, 500, 1_000, 2_000, 4_000, 8_000, 15_000]) {
+      if (delayMs > 0) await delay(delayMs);
+      try {
+        await this.runCommand("docker", [
+          "exec", "--user", "0", containerName, "node", "-e",
+          "require('node:fs').accessSync('/opt/task-handoff/.bootstrap-ready')",
+        ]);
+        return;
+      } catch (cause) {
+        lastCause = cause;
+      }
+    }
+    const logs = await this.runCommand("docker", ["logs", containerName]).catch(() => undefined);
+    const detail = logs?.stderr || logs?.stdout;
+    throw new Error(detail?.trim() || commandFailureDetail(lastCause) || `Container ${containerName} did not complete bootstrap.`);
   }
 
   private async runningResult(context: ExecutorContext, containerName: string, containerId?: string): Promise<ExecutorStartResult> {
@@ -174,6 +237,7 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
     if (!before) throw runtimeExecutorError("INSTANCE_RUNTIME_RESTART_FAILED", `Docker container ${containerName} does not exist.`);
     assertExpectedContainerId(containerName, before, expectedContainerId, "before restart", "INSTANCE_RUNTIME_RESTART_FAILED");
     await this.runCommand("docker", ["restart", containerName]);
+    await this.waitForBootstrap(containerName);
     const after = await this.inspectContainerId(containerName);
     if (!after || after !== before) throw runtimeExecutorError("INSTANCE_RUNTIME_RESTART_FAILED", `Docker container identity changed while restarting ${containerName}.`);
     assertExpectedContainerId(containerName, after, expectedContainerId, "after restart", "INSTANCE_RUNTIME_RESTART_FAILED");
@@ -211,6 +275,7 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
     assertExpectedContainerId(request.containerName, before, request.expectedContainerId, "before runtime restart", "INSTANCE_RUNTIME_RESTART_FAILED");
     try {
       await this.runCommand("docker", ["restart", request.containerName]);
+      await this.waitForBootstrap(request.containerName);
     } catch (cause) {
       throw runtimeExecutorError("INSTANCE_RUNTIME_RESTART_FAILED", `Could not restart Docker container ${request.containerName}.`, cause);
     }
@@ -269,7 +334,7 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
     const result = await this.runCommand("docker", [
       "exec",
       "--user",
-      "agent",
+      "0",
       containerName,
       "task-handoff-runtime",
       "verify-active",
@@ -316,21 +381,16 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
   async installRuntimeLauncher(containerName: string): Promise<void> {
     const containerId = await this.inspectContainerId(containerName);
     if (!containerId) throw runtimeExecutorError("INSTANCE_BASE_RUNTIME_INCOMPATIBLE", `Docker container ${containerName} does not exist.`);
-    const assets = [
-      [path.join(this.launcherAssetsDir, "entrypoint.sh"), "/root/.task-handoff-entrypoint.bootstrap"],
-      [path.join(this.launcherAssetsDir, "instance-launcher.sh"), "/root/.task-handoff-instance-launcher.bootstrap"],
-      [path.join(this.launcherAssetsDir, "runtime-installer.mjs"), "/root/.task-handoff-runtime-installer.bootstrap"],
-    ] as const;
-    for (const [source, target] of assets) await this.runCommand("docker", ["cp", source, `${containerName}:${target}`]);
+    await this.copyBootstrapAssets(containerName);
     try {
       await this.runCommand("docker", [
         "exec",
         "--user",
         "0",
         containerName,
-        "bash",
-        "-ceu",
-        "install -d -o root -g root -m 0755 /opt/task-handoff/instance-runtime /opt/task-handoff/instance-runtime/releases /opt/task-handoff/instance-runtime/staging /opt/task-handoff/instance-runtime/incoming; chown -R root:root /opt/task-handoff/instance-runtime; chmod -R go-w /opt/task-handoff/instance-runtime; install -m 0755 /root/.task-handoff-entrypoint.bootstrap /usr/local/bin/task-handoff-entrypoint; install -m 0755 /root/.task-handoff-instance-launcher.bootstrap /usr/local/bin/task-handoff-instance-launcher; install -d /usr/local/lib/task-handoff; install -m 0755 /root/.task-handoff-runtime-installer.bootstrap /usr/local/lib/task-handoff/runtime-installer.mjs; ln -sfn /usr/local/lib/task-handoff/runtime-installer.mjs /usr/local/bin/task-handoff-runtime; rm -f /root/.task-handoff-entrypoint.bootstrap /root/.task-handoff-instance-launcher.bootstrap /root/.task-handoff-runtime-installer.bootstrap",
+        "node",
+        "-e",
+        "const fs=require('node:fs'); fs.mkdirSync('/usr/local/lib/task-handoff',{recursive:true}); for (const [source,target] of [['/root/.task-handoff-entrypoint.bootstrap','/usr/local/bin/task-handoff-entrypoint'],['/root/.task-handoff-instance-launcher.bootstrap','/usr/local/bin/task-handoff-instance-launcher'],['/root/.task-handoff-runtime-installer.bootstrap','/usr/local/lib/task-handoff/runtime-installer.mjs']]) { fs.copyFileSync(source,target); fs.chmodSync(target,0o755); } try { fs.unlinkSync('/usr/local/bin/task-handoff-runtime'); } catch (error) { if (error.code!=='ENOENT') throw error; } fs.symlinkSync('/usr/local/lib/task-handoff/runtime-installer.mjs','/usr/local/bin/task-handoff-runtime');",
       ]);
     } catch (cause) {
       throw runtimeExecutorError("INSTANCE_BASE_RUNTIME_INCOMPATIBLE", `Could not install the runtime launcher in ${containerName}.`, cause);
@@ -489,10 +549,14 @@ export function dockerRunArgs(context: ExecutorContext, containerName: string, o
   const nodeId = context.node?.id || "node_unset";
   const runtimeId = context.runtime?.id || "runtime_local_docker";
   const args = [
-    "run",
-    "-d",
+    "create",
     "--name",
     containerName,
+    "--user",
+    "0:0",
+    "--init",
+    "--entrypoint",
+    "/bin/bash",
     "--label",
     `task-handoff.instance-id=${context.instance.id}`,
     "--label",
@@ -503,6 +567,12 @@ export function dockerRunArgs(context: ExecutorContext, containerName: string, o
     `task-handoff.runtime-id=${runtimeId}`,
     "--label",
     `task-handoff.image-id=${context.image.id}`,
+    "--label",
+    "task-handoff.bootstrap-version=1",
+    "--label",
+    `task-handoff.runtime-uid=${options.runtimeUid ?? 1000}`,
+    "--label",
+    `task-handoff.runtime-gid=${options.runtimeGid ?? 1000}`,
     "--shm-size",
     "1gb",
     "--security-opt",
@@ -535,8 +605,12 @@ export function dockerRunArgs(context: ExecutorContext, containerName: string, o
     TASK_HANDOFF_CHAT_BRIDGES: "none",
     TASK_HANDOFF_WORKSPACE: context.project.workspacePolicy.path || "/workspace",
     TASK_HANDOFF_WORKSPACE_MODE: context.project.workspacePolicy.mode,
+    TASK_HANDOFF_WORKSPACE_READ_ONLY: context.project.workspacePolicy.readOnly ? "true" : "false",
+    TASK_HANDOFF_RUN_UID: String(options.runtimeUid ?? 1000),
+    TASK_HANDOFF_RUN_GID: String(options.runtimeGid ?? 1000),
   };
   for (const [key, value] of Object.entries(runtimeEnv)) appendDockerEnv(args, key, value);
+  const protectedRuntimeEnv = new Set(Object.keys(runtimeEnv));
 
   if (context.project.source.type === "local-folder") {
     args.push("-v", `${context.project.source.path}:${context.project.workspacePolicy.path || "/workspace"}:${context.project.workspacePolicy.readOnly ? "ro" : "rw"}`);
@@ -560,15 +634,35 @@ export function dockerRunArgs(context: ExecutorContext, containerName: string, o
   }
 
   for (const [key, value] of Object.entries(context.image.defaultEnv)) {
+    if (protectedRuntimeEnv.has(key)) continue;
     appendDockerEnv(args, key, value);
   }
 
   for (const [key, value] of Object.entries(context.modelEnv || {})) {
+    if (protectedRuntimeEnv.has(key)) continue;
     appendDockerEnv(args, key, value);
   }
 
-  args.push(context.image.resolvedReference || context.image.requestedReference!);
+  args.push(context.image.resolvedReference || context.image.requestedReference!, "/root/.task-handoff-bootstrap.bootstrap");
   return args;
+}
+
+export function runtimeIdentity(context: ExecutorContext, configuredUid?: number, configuredGid?: number) {
+  if (positiveId(configuredUid) && positiveId(configuredGid)) return { uid: configuredUid, gid: configuredGid };
+  if (context.project.source.type === "local-folder") {
+    try {
+      const stat = fs.statSync(context.project.source.path);
+      if (positiveId(stat.uid) && positiveId(stat.gid)) return { uid: stat.uid, gid: stat.gid };
+    } catch {}
+  }
+  const processUid = process.getuid?.();
+  const processGid = process.getgid?.();
+  if (positiveId(processUid) && positiveId(processGid)) return { uid: processUid, gid: processGid };
+  return { uid: 1000, gid: 1000 };
+}
+
+function positiveId(value: number | undefined): value is number {
+  return Number.isInteger(value) && value! > 0 && value! <= 0x7fffffff;
 }
 
 export function validateStartContext(context: ExecutorContext) {

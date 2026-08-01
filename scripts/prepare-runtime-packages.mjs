@@ -80,7 +80,7 @@ for (const [name, definition] of selected) {
     copyLinuxExecutable(path.join(root, "scripts", "node-update-worker.cjs"), updateWorkerPath);
     const dockerAssetsDir = path.join(packageDir, "docker");
     fs.mkdirSync(dockerAssetsDir, { recursive: true });
-    for (const asset of ["entrypoint.sh", "instance-launcher.sh", "runtime-installer.mjs"]) {
+    for (const asset of ["bootstrap.sh", "entrypoint.sh", "instance-launcher.sh", "runtime-installer.mjs"]) {
       copyLinuxExecutable(path.join(root, "docker", asset), path.join(dockerAssetsDir, asset));
     }
     const bundledRuntimeDir = path.join(packageDir, "runtime-artifacts");

@@ -155,6 +155,16 @@ function optionalEnv(name: string) {
   return value || undefined;
 }
 
+function optionalContainerIdentityId(name: string) {
+  const value = optionalEnv(name);
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 0x7fffffff) {
+    throw new Error(`${name} must be a positive non-root numeric ID.`);
+  }
+  return parsed;
+}
+
 const packageVersion = packageVersionResolver(
   "@task-handoff/node-agent",
   process.env,
@@ -2471,9 +2481,16 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   state.init();
   const dockerCommandRunner = options.dockerCommandRunner || defaultCommandRunner;
   const dockerImageService = new DockerImageService(dockerCommandRunner, options.dockerTerminalCommandRunner);
+  const configuredRuntimeUid = optionalContainerIdentityId("TASK_HANDOFF_CONTAINER_UID");
+  const configuredRuntimeGid = optionalContainerIdentityId("TASK_HANDOFF_CONTAINER_GID");
+  if ((configuredRuntimeUid === undefined) !== (configuredRuntimeGid === undefined)) {
+    throw new Error("TASK_HANDOFF_CONTAINER_UID and TASK_HANDOFF_CONTAINER_GID must be configured together.");
+  }
   const dockerExecutor = new LocalDockerExecutor(dockerCommandRunner, {
     publishHost: "127.0.0.1",
     imageService: dockerImageService,
+    runtimeUid: configuredRuntimeUid,
+    runtimeGid: configuredRuntimeGid,
   });
   const runtimeAdapters = new RuntimeAdapterRegistry(
     new DockerRuntimeAdapter(dockerExecutor, dockerCommandRunner, platform, arch),

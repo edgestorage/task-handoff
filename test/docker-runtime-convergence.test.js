@@ -115,7 +115,7 @@ test("Docker runtime target falls back to daemon architecture and normalizes ali
   assert.deepEqual(await executor.inspectRuntimeTarget(), { platform: "linux", arch: "arm64", launcherAbi: 1 });
 });
 
-test("runtime launcher installation refreshes node-agent assets with one root exec", async () => {
+test("runtime launcher installation refreshes bootstrap-installed assets with one root exec", async () => {
   const calls = [];
   const executor = new LocalDockerExecutor(async (_command, args) => {
     calls.push(args);
@@ -126,8 +126,9 @@ test("runtime launcher installation refreshes node-agent assets with one root ex
   await executor.installRuntimeLauncher("instance-1");
   const rootExec = calls.filter((args) => args[0] === "exec" && args[1] === "--user" && args[2] === "0");
   assert.equal(rootExec.length, 1);
-  assert.match(rootExec[0].at(-1), /install -d -o root/);
-  assert.ok(calls.filter((args) => args[0] === "cp").every((args) => args[2].includes(":/root/.task-handoff-")));
+  assert.equal(rootExec[0][4], "node");
+  assert.match(rootExec[0].at(-1), /task-handoff-instance-launcher/);
+  assert.equal(calls.filter((args) => args[0] === "cp").length, 4);
   assert.equal(calls.some((args) => args[0] === "rm" || args[0] === "run" || args[0] === "pull"), false);
 });
 
@@ -138,7 +139,7 @@ test("Linux launcher sources and package preparation enforce LF line endings", (
   }
   const preparation = fs.readFileSync(path.resolve(__dirname, "../scripts/prepare-runtime-packages.mjs"), "utf8");
   assert.match(preparation, /replace\(\/\\r\\n\?\/g, "\\n"\)/);
-  for (const file of ["entrypoint.sh", "instance-launcher.sh", "runtime-installer.mjs"]) {
+  for (const file of ["bootstrap.sh", "entrypoint.sh", "instance-launcher.sh", "runtime-installer.mjs"]) {
     const contents = fs.readFileSync(path.resolve(__dirname, "../docker", file));
     assert.equal(contents.includes(Buffer.from("\r\n")), false, `${file} must use LF line endings`);
   }
@@ -157,6 +158,18 @@ test("runtime launcher installation preserves the root command stderr", async ()
     () => executor.installRuntimeLauncher("instance-1"),
     (error) => error.code === "INSTANCE_BASE_RUNTIME_INCOMPATIBLE" && /Cause: install: permission denied/.test(error.message),
   );
+});
+
+test("runtime version inspection is independent of the base image user name", async () => {
+  const calls = [];
+  const executor = new LocalDockerExecutor(async (_command, args) => {
+    calls.push(args);
+    if (args[0] === "inspect") return { stdout: "container-abc", stderr: "" };
+    if (args[0] === "exec") return { stdout: "{}", stderr: "" };
+    throw new Error(`unexpected command: ${args.join(" ")}`);
+  });
+  await executor.inspectRuntimeVersion("instance-1");
+  assert.deepEqual(calls.find((args) => args[0] === "exec").slice(0, 5), ["exec", "--user", "0", "instance-1", "task-handoff-runtime"]);
 });
 
 test("container installer verifies payload and atomically activates an idempotent release", () => {

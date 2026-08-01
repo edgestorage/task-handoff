@@ -2768,6 +2768,7 @@ test("local docker run args include controlled metadata and disable local chat b
         ...testInstanceImage("task-handoff-web:latest", "img_1", "Image"),
         defaultEnv: {
           EXTRA_FLAG: "1",
+          TASK_HANDOFF_RUN_UID: "0",
         },
       },
       runtime: {
@@ -2806,7 +2807,8 @@ test("local docker run args include controlled metadata and disable local chat b
   const imageTagIndex = args.indexOf("TASK_HANDOFF_IMAGE_TAG=latest");
   assert.ok(imageTagIndex > 0);
   assert.equal(args[imageTagIndex - 1], "-e");
-  assert.equal(args.at(-1), "task-handoff-web:latest");
+  assert.equal(args.at(-2), "task-handoff-web:latest");
+  assert.equal(args.at(-1), "/root/.task-handoff-bootstrap.bootstrap");
   for (const [index, arg] of args.entries()) {
     if (/^[A-Z][A-Z0-9_]*=/.test(arg)) assert.equal(args[index - 1], "-e", `${arg} must be passed as a Docker environment variable`);
   }
@@ -2821,12 +2823,20 @@ test("local docker run args include controlled metadata and disable local chat b
   assert.ok(args.includes("TASK_HANDOFF_CHAT_BRIDGES=none"));
   assert.ok(args.includes("TASK_HANDOFF_WORKSPACE=/workspace"));
   assert.ok(args.includes("TASK_HANDOFF_WORKSPACE_MODE=local-bind"));
+  assert.ok(args.includes("TASK_HANDOFF_WORKSPACE_READ_ONLY=false"));
+  assert.ok(args.includes("TASK_HANDOFF_RUN_UID=1000"));
+  assert.ok(args.includes("TASK_HANDOFF_RUN_GID=1000"));
+  assert.ok(args.includes("create"));
+  assert.ok(args.includes("0:0"));
+  assert.ok(args.includes("--init"));
+  assert.ok(args.includes("/bin/bash"));
   assert.ok(args.includes("bridge"));
   assert.ok(args.includes("host.docker.internal:host-gateway"));
   assert.ok(args.includes("/tmp:rw,mode=1777"));
   assert.ok(args.includes("task-handoff-inst_1-data:/data"));
   assert.ok(args.includes("task-handoff-inst_1-agent-home:/home/agent"));
   assert.ok(args.includes("EXTRA_FLAG=1"));
+  assert.equal(args.includes("TASK_HANDOFF_RUN_UID=0"), false);
   assert.ok(args.includes("/tmp/workspace:/workspace:rw"));
 });
 
@@ -3625,7 +3635,7 @@ test("local docker executor checks local images and pulls registry images before
       remotePulled = true;
       return { stdout: "pulled", stderr: "" };
     }
-    if (args[0] === "run") {
+    if (args[0] === "create") {
       return { stdout: "container-1", stderr: "" };
     }
     if (args[0] === "port") {
@@ -3658,7 +3668,9 @@ test("local docker executor checks local images and pulls registry images before
       ["docker", ["image", "inspect", "ghcr.io/example/task-handoff-web:latest", "--format", "{{json .}}"]],
     ],
   );
-  assert.ok(remoteCalls.some(([, args]) => args[0] === "run"));
+  assert.ok(remoteCalls.some(([, args]) => args[0] === "create"));
+  assert.equal(remoteCalls.filter(([, args]) => args[0] === "cp").length, 4);
+  assert.ok(remoteCalls.some(([, args]) => args[0] === "start"));
   assert.equal(remoteCalls.some(([, args]) => args[0] === "rm"), false);
 
   const resolvedReference = `ghcr.io/example/task-handoff-web@sha256:${"b".repeat(64)}`;
@@ -3672,7 +3684,7 @@ test("local docker executor checks local images and pulls registry images before
       assert.equal(args[2], resolvedReference);
       return { stdout: JSON.stringify({ Id: `sha256:${"b".repeat(64)}`, RepoDigests: [resolvedReference] }), stderr: "" };
     }
-    if (args[0] === "run") return { stdout: "container-resolved", stderr: "" };
+    if (args[0] === "create") return { stdout: "container-resolved", stderr: "" };
     if (args[0] === "port") return { stdout: "127.0.0.1:18082", stderr: "" };
     return { stdout: "", stderr: "" };
   });
@@ -3694,13 +3706,13 @@ test("local docker executor checks local images and pulls registry images before
     },
   });
   assert.equal(resolvedCalls.some(([, args]) => args[0] === "pull"), false);
-  assert.equal(resolvedCalls.find(([, args]) => args[0] === "run")[1].at(-1), resolvedReference);
+  assert.equal(resolvedCalls.find(([, args]) => args[0] === "create")[1].at(-2), resolvedReference);
 
   const existingCalls = [];
   const existingExecutor = new LocalDockerExecutor(async (command, args) => {
     existingCalls.push([command, args]);
     if (args[0] === "inspect" && args.includes("{{json .}}")) {
-      return { stdout: JSON.stringify({ Id: "container-1", Config: { Labels: { "task-handoff.instance-id": "inst_1" } } }), stderr: "" };
+      return { stdout: JSON.stringify({ Id: "container-1", Config: { Labels: { "task-handoff.instance-id": "inst_1", "task-handoff.bootstrap-version": "1", "task-handoff.runtime-uid": "1000", "task-handoff.runtime-gid": "1000" } } }), stderr: "" };
     }
     if (args[0] === "port") {
       return { stdout: "127.0.0.1:18081", stderr: "" };
@@ -3736,12 +3748,13 @@ test("local docker executor checks local images and pulls registry images before
   assert.deepEqual(existingCalls, [
     ["docker", ["inspect", "--format", "{{json .}}", "task-handoff-inst_1"]],
     ["docker", ["start", "task-handoff-inst_1"]],
+    ["docker", ["exec", "--user", "0", "task-handoff-inst_1", "node", "-e", "require('node:fs').accessSync('/opt/task-handoff/.bootstrap-ready')"]],
     ["docker", ["port", "task-handoff-inst_1", "8080/tcp"]],
   ]);
 
   const inspectFallbackExecutor = new LocalDockerExecutor(async (_command, args) => {
     if (args[0] === "inspect" && args.includes("{{json .}}")) {
-      return { stdout: JSON.stringify({ Id: "container-1", Config: { Labels: { "task-handoff.instance-id": "inst_1" } } }), stderr: "" };
+      return { stdout: JSON.stringify({ Id: "container-1", Config: { Labels: { "task-handoff.instance-id": "inst_1", "task-handoff.bootstrap-version": "1", "task-handoff.runtime-uid": "1000", "task-handoff.runtime-gid": "1000" } } }), stderr: "" };
     }
     if (args[0] === "port") {
       throw Object.assign(new Error("no public port '8080/tcp' published"), { details: { stderr: "no public port '8080/tcp' published" } });
@@ -3769,7 +3782,7 @@ test("local docker executor checks local images and pulls registry images before
   let transientPortAttempts = 0;
   const transientPortExecutor = new LocalDockerExecutor(async (_command, args) => {
     if (args[0] === "inspect" && args.includes("{{json .}}")) {
-      return { stdout: JSON.stringify({ Id: "container-1", Config: { Labels: { "task-handoff.instance-id": "inst_1" } } }), stderr: "" };
+      return { stdout: JSON.stringify({ Id: "container-1", Config: { Labels: { "task-handoff.instance-id": "inst_1", "task-handoff.bootstrap-version": "1", "task-handoff.runtime-uid": "1000", "task-handoff.runtime-gid": "1000" } } }), stderr: "" };
     }
     if (args[0] === "port") {
       transientPortAttempts += 1;
@@ -3801,7 +3814,7 @@ test("local docker executor checks local images and pulls registry images before
 
   const missingPortExecutor = new LocalDockerExecutor(async (_command, args) => {
     if (args[0] === "inspect" && args.includes("{{json .}}")) {
-      return { stdout: JSON.stringify({ Id: "container-1", Config: { Labels: { "task-handoff.instance-id": "inst_1" } } }), stderr: "" };
+      return { stdout: JSON.stringify({ Id: "container-1", Config: { Labels: { "task-handoff.instance-id": "inst_1", "task-handoff.bootstrap-version": "1", "task-handoff.runtime-uid": "1000", "task-handoff.runtime-gid": "1000" } } }), stderr: "" };
     }
     if (args[0] === "port") {
       throw Object.assign(new Error("no public port '8080/tcp' published"), { details: { stderr: "no public port '8080/tcp' published" } });
@@ -3944,7 +3957,7 @@ test("node agent runs local docker behind node-local target and auto-imports age
         return { stdout: "0.0.0.0:18080", stderr: "" };
       }
       if (args[0] === "inspect" && args.includes("{{json .}}")) {
-        return { stdout: JSON.stringify({ Id: "container-1", Platform: "linux", Image: "sha256:image", Config: { Labels: { "task-handoff.instance-id": "inst_1" } } }), stderr: "" };
+        return { stdout: JSON.stringify({ Id: "container-1", Platform: "linux", Image: "sha256:image", Config: { Labels: { "task-handoff.instance-id": "inst_1", "task-handoff.bootstrap-version": "1", "task-handoff.runtime-uid": "1000", "task-handoff.runtime-gid": "1000" } } }), stderr: "" };
       }
       if (args[0] === "inspect") {
         return { stdout: "container-1", stderr: "" };
