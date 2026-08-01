@@ -26,7 +26,7 @@ import { AiSessionUnreadStore } from "../sessions/ai-session-unread-store.ts";
 import { ControlPlaneAppSessionAggregator } from "../sessions/app-session-aggregator.ts";
 import { nodeAgentInstallScript } from "../nodes/install-script.ts";
 import { ImagePullProgressProjector } from "../images/image-pull-progress.ts";
-import { NODE_TUNNEL_API_PATH } from "../../shared/security/node-agent-auth.ts";
+import { PUBLIC_CONTROL_PLANE_ROUTE, PUBLIC_CONTROL_PLANE_UI_ROUTE } from "./auth-boundary.ts";
 import { ControlPlaneProxyStore } from "../proxy/store.ts";
 import { ControlPlaneProxyService } from "../proxy/service.ts";
 import { ControlPlaneNodeProxyRuntime } from "../proxy/runtime.ts";
@@ -145,30 +145,17 @@ export function controlPlaneErrorPayload(error: unknown) {
     message: error instanceof Error ? error.message : String(error),
     ...(record.details && typeof record.details === "object" && !Array.isArray(record.details) ? { details: record.details } : {}),
     ...(typeof record.retryable === "boolean" ? { retryable: record.retryable } : {}),
+    ...(typeof record.retryAfterSeconds === "number" ? { retryAfterSeconds: record.retryAfterSeconds } : {}),
   };
-}
-
-function isPublicControlPlaneRoute(method: string, url: string) {
-  const path = url.split("?")[0];
-  if (path === "/api/health" || path.startsWith("/api/auth/")) return true;
-  if (method === "GET" && path === "/install-node-agent.sh") return true;
-  if (method === "POST" && path === "/api/node-join/complete") return true;
-  if (method === "POST" && path === "/api/node-proxy/claims") return true;
-  if (path === "/api/app-access/session") return true;
-  if (path.startsWith("/apps/access/")) return true;
-  if (path === "/favicon.ico" || path.startsWith("/assets/")) return true;
-  if (method === "GET" && !path.startsWith("/api/") && !path.startsWith("/instances/")) return true;
-  return false;
-}
-
-function isNodeAuthenticatedControlPlaneRoute(method: string, url: string) {
-  const path = url.split("?")[0];
-  return (method === "GET" && (path === NODE_TUNNEL_API_PATH || path.startsWith(`${NODE_TUNNEL_API_PATH}/`)))
-    || path.startsWith("/api/node-proxy/bindings/");
 }
 
 function disabledAuthActor(): ControlPlaneActor {
   return { type: "system", reason: "auth-disabled" };
+}
+
+function isPublicUiPath(url: string) {
+  const path = url.split("?")[0] || "/";
+  return !path.startsWith("/api/") && path !== "/api" && !path.startsWith("/instances/") && path !== "/instances";
 }
 
 async function actorForRequest(auth: ControlPlaneAuth, sessionToken: string | undefined) {
@@ -179,12 +166,21 @@ async function actorForRequest(auth: ControlPlaneAuth, sessionToken: string | un
   return user ? { type: "user" as const, userId: user.id, role: user.role } : undefined;
 }
 
-function routeAuthorization(method: string, url: string): { action: ControlPlaneAction; resource: ControlPlaneResource } | undefined {
+const ROUTES_WITHOUT_RBAC = new Set([
+  "/api/auth/session",
+  "/api/auth/bootstrap-admin",
+  "/api/auth/login",
+  "/api/auth/logout",
+  "/api/health",
+  "/api/events",
+]);
+
+export function routeAuthorization(method: string, url: string): { action: ControlPlaneAction; resource: ControlPlaneResource } | undefined {
   const path = url.split("?")[0] || "/";
   if (!path.startsWith("/api/")) {
     return undefined;
   }
-  if (path.startsWith("/api/auth/") || path === "/api/health" || path === "/api/events") {
+  if (ROUTES_WITHOUT_RBAC.has(path)) {
     return undefined;
   }
   const action = actionForHttpMethod(method);
@@ -196,6 +192,15 @@ function routeAuthorization(method: string, url: string): { action: ControlPlane
   }
   if (path.startsWith("/api/chat-gateway/bridges")) {
     return { action: method === "GET" ? "read" : "manage-secrets", resource: { type: "chat-bridge" } };
+  }
+  if (path === "/api/chat-gateway/messages" || path === "/api/chat-gateway/actions") {
+    return { action: "send-message", resource: { type: "ai-session" } };
+  }
+  if (path === "/api/chat-gateway/poll-ai-sessions") {
+    return { action: "manage-settings", resource: { type: "chat-bridge" } };
+  }
+  if (path === "/api/ai-session-attachments") {
+    return { action: "send-message", resource: { type: "ai-session" } };
   }
   if (path === "/api/node-join/invites") {
     return { action: "manage-node-auth", resource: { type: "node" } };
@@ -211,10 +216,16 @@ function routeAuthorization(method: string, url: string): { action: ControlPlane
   }
   if (path.startsWith("/api/controlled-instances")) {
     if (path.includes("/ai-sessions/")) {
+      if (path.includes("/triggers")) return { action, resource: { type: "trigger" } };
       if (path.endsWith("/approval")) return { action: "approve", resource: { type: "ai-session" } };
       if (path.endsWith("/interrupt")) return { action: "interrupt", resource: { type: "ai-session" } };
-      if (path.includes("/messages") || path.includes("/queue/")) return { action: "send-message", resource: { type: "ai-session" } };
-      return { action: "read", resource: { type: "ai-session" } };
+      if (path.endsWith("/resume") || path.endsWith("/commands") || path.includes("/messages") || path.includes("/queue/")) {
+        return { action: "send-message", resource: { type: "ai-session" } };
+      }
+      if (path.endsWith("/read") || path.endsWith("/mentions/files")) {
+        return { action: "read", resource: { type: "ai-session" } };
+      }
+      return { action, resource: { type: "ai-session" } };
     }
     if (path.includes("/start")) return { action: "start", resource: { type: "instance" } };
     if (path.includes("/stop")) return { action: "stop", resource: { type: "instance" } };
@@ -231,7 +242,9 @@ function routeAuthorization(method: string, url: string): { action: ControlPlane
   if (path.startsWith("/api/triggers")) {
     return { action, resource: { type: "trigger" } };
   }
-  return { action: "read", resource: { type: "control-plane-settings" } };
+  // Unknown read routes remain visible to viewer roles. Unknown mutations are
+  // fail-closed for non-admin actors instead of silently degrading to read.
+  return { action, resource: { type: "control-plane-settings" } };
 }
 
 function actionForHttpMethod(method: string): ControlPlaneAction {
@@ -380,6 +393,9 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
 
   app.setErrorHandler((error, request, reply) => {
     const payload = controlPlaneErrorPayload(error);
+    if (payload.retryAfterSeconds !== undefined) {
+      reply.header("retry-after", String(payload.retryAfterSeconds));
+    }
     if (diagnosticLogsEnabled || payload.statusCode >= 500) {
       const log = payload.statusCode >= 500 ? app.log.error.bind(app.log) : app.log.warn.bind(app.log);
       log(
@@ -404,14 +420,22 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   });
 
   app.addHook("preHandler", async (request, reply) => {
-    // Tunnel routes are machine-to-machine endpoints. Their handlers authenticate
-    // the node with the paired HMAC credentials, independently of UI user sessions.
-    if (isNodeAuthenticatedControlPlaneRoute(request.method, request.url)) {
+    // Fastify matches percent-decoded paths, while request.url retains the raw
+    // client encoding. Security decisions must use the matched route template
+    // so an encoded segment such as /%61pi cannot be mistaken for a public UI
+    // path after Fastify has routed it to /api.
+    const matchedRoute = request.routeOptions.url;
+    const securityUrl = matchedRoute && matchedRoute !== "*" ? matchedRoute : request.url;
+    const authBoundary = request.routeOptions.config.controlPlaneAuthBoundary;
+    // Machine routes opt out of UI sessions explicitly. Their handlers remain
+    // responsible for binding credentials or paired node HMAC authentication.
+    if (authBoundary === "proxy-binding" || authBoundary === "node-tunnel") {
       return;
     }
-    if (!auth.enabled() || isPublicControlPlaneRoute(request.method, request.url)) {
+    const isPublicRoute = authBoundary === "public" || (authBoundary === "public-ui" && isPublicUiPath(request.url));
+    if (!auth.enabled() || isPublicRoute) {
       const actor = await actorForRequest(auth, request.cookies[CONTROL_PLANE_SESSION_COOKIE]);
-      const authorization = routeAuthorization(request.method, request.url);
+      const authorization = routeAuthorization(request.method, securityUrl);
       if (authorization) {
         assertCan(actor || disabledAuthActor(), authorization.action, authorization.resource);
       }
@@ -426,7 +450,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
         },
       });
     }
-    const authorization = routeAuthorization(request.method, request.url);
+    const authorization = routeAuthorization(request.method, securityUrl);
     if (authorization) {
       assertCan(actor, authorization.action, authorization.resource);
     }
@@ -434,17 +458,17 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
 
   const staticDir = path.resolve(options.staticDir || process.env.TASK_HANDOFF_CONTROL_PLANE_STATIC_DIR || defaultStaticDir());
   if (fs.existsSync(staticDir)) {
-    app.get("/assets/*", async (request, reply) => {
+    app.get("/assets/*", { config: PUBLIC_CONTROL_PLANE_ROUTE }, async (request, reply) => {
       const assetPath = (request.params as { "*": string })["*"];
       return sendStaticFile(reply, staticDir, path.join("assets", assetPath || ""));
     });
-    app.get("/favicon.ico", async (_request, reply) => {
+    app.get("/favicon.ico", { config: PUBLIC_CONTROL_PLANE_ROUTE }, async (_request, reply) => {
       const favicon = staticFilePath(staticDir, "favicon.ico");
       return favicon ? sendStaticFile(reply, staticDir, "favicon.ico") : reply.code(204).send();
     });
   }
 
-  app.get("/api/health", async () => ({
+  app.get("/api/health", { config: PUBLIC_CONTROL_PLANE_ROUTE }, async () => ({
     data: {
       ok: true,
       role: "control-plane",
@@ -463,7 +487,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     },
   }));
 
-  app.get("/install-node-agent.sh", async (_request, reply) => {
+  app.get("/install-node-agent.sh", { config: PUBLIC_CONTROL_PLANE_ROUTE }, async (_request, reply) => {
     reply.header("cache-control", "no-store");
     reply.type("text/x-shellscript; charset=utf-8");
     return nodeAgentInstallScript();
@@ -502,13 +526,13 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     }
   });
 
-  app.get("/api/auth/session", async (request) => ({ data: await auth.currentSession(request.cookies[CONTROL_PLANE_SESSION_COOKIE]) }));
-  app.post("/api/auth/bootstrap-admin", async (request, reply) => {
+  app.get("/api/auth/session", { config: PUBLIC_CONTROL_PLANE_ROUTE }, async (request) => ({ data: await auth.currentSession(request.cookies[CONTROL_PLANE_SESSION_COOKIE]) }));
+  app.post("/api/auth/bootstrap-admin", { config: PUBLIC_CONTROL_PLANE_ROUTE }, async (request, reply) => {
     const user = await auth.bootstrapAdmin(request.body);
     return reply.code(201).send({ data: user });
   });
-  app.post("/api/auth/login", async (request, reply) => {
-    const result = await auth.login(request.body);
+  app.post("/api/auth/login", { config: PUBLIC_CONTROL_PLANE_ROUTE }, async (request, reply) => {
+    const result = await auth.login(request.body, { sourceId: request.ip });
     reply.setCookie(CONTROL_PLANE_SESSION_COOKIE, result.sessionToken, {
       path: "/",
       httpOnly: true,
@@ -517,7 +541,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     });
     return { data: { user: result.user } };
   });
-  app.post("/api/auth/logout", async (request, reply) => {
+  app.post("/api/auth/logout", { config: PUBLIC_CONTROL_PLANE_ROUTE }, async (request, reply) => {
     const result = auth.logout(request.cookies[CONTROL_PLANE_SESSION_COOKIE]);
     reply.clearCookie(CONTROL_PLANE_SESSION_COOKIE, { path: "/" });
     return { data: result };
@@ -592,7 +616,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
 
   registerInstanceProxyRoutes({ app, service });
 
-  app.get("*", async (_request, reply) =>
+  app.get("*", { config: PUBLIC_CONTROL_PLANE_UI_ROUTE }, async (_request, reply) =>
     fs.existsSync(staticDir)
       ? sendStaticFile(reply, staticDir, "index.html")
       : reply.code(404).send({

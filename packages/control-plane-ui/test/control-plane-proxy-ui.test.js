@@ -126,8 +126,8 @@ test("proxy management lists own bounded themed overflow without truncating iden
   const management = read("src/apps/control-plane/settings/ControlPlaneProxyManagementPanel.vue");
   assert.match(management, /<ScrollArea v-else-if="nodeInvites\.length" class="proxy-list" :horizontal="false">/);
   assert.match(management, /<ScrollArea v-else-if="nodeBindings\.length" class="proxy-list" :horizontal="false">/);
-  assert.match(management, /\.proxy-list \{ max-height: min\(260px,/);
-  assert.match(management, /\.proxy-row strong, \.proxy-row span, \.proxy-row code \{ overflow-wrap: anywhere;/);
+  assert.match(management, /\.proxy-list\s*\{\s*max-height: min\(260px,/);
+  assert.match(management, /\.proxy-row strong,\s*\.proxy-row span,\s*\.proxy-row code\s*\{[\s\S]*?overflow-wrap: anywhere;/);
   assert.doesNotMatch(management, /\.proxy-list[^}]*overflow:\s*auto/);
 });
 
@@ -187,8 +187,8 @@ test("proxy dialogs preserve keyboard submit, cancel, focus, and destructive con
   assert.match(remoteDialog, /<Button type="submit"/);
   assert.doesNotMatch(remoteDialog, /@(?:open|close)-auto-focus\.prevent/);
   assert.match(management, /<AlertDialog[\s\S]*<AlertDialogCancel>[\s\S]*<AlertDialogAction/);
-  assert.match(management, /size="icon" :aria-label="t\('settings\.controlPlaneProxy\.revokeInvite'\)"/);
-  assert.match(management, /size="icon" :aria-label="t\('settings\.controlPlaneProxy\.revokeBinding'\)"/);
+  assert.match(management, /size="icon-sm" :aria-label="t\('settings\.controlPlaneProxy\.revokeInvite'\)"/);
+  assert.match(management, /size="icon-sm" :aria-label="t\('settings\.controlPlaneProxy\.revokeBinding'\)"/);
 });
 
 test("proxy claim validation errors are associated with the exact invalid control", () => {

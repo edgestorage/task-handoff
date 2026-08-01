@@ -409,6 +409,10 @@
             <div class="node-remote-panel">
               <div class="section-head compact-head">
                 <span>{{ t("settings.nodeDetail.activeConnections", { count: resources.controlPlaneConnections.length }) }}</span>
+                <Button variant="outline" size="sm" @click="remoteConnectionDialogOpen = true">
+                  <Plus :size="14" />
+                  <span>{{ t("settings.nodeDetail.addConnection") }}</span>
+                </Button>
               </div>
               <div class="node-resource-list">
                 <div v-for="connection in resources.controlPlaneConnections" :key="connection.id" class="node-resource-row">
@@ -427,31 +431,6 @@
                 </div>
                 <p v-if="!resources.controlPlaneConnections.length" class="settings-empty">{{ t("settings.nodeDetail.noActiveConnections") }}</p>
               </div>
-            </div>
-
-            <div class="node-remote-panel">
-              <div class="section-head compact-head">
-                <span>{{ t("settings.nodeDetail.addConnection") }}</span>
-              </div>
-              <div class="inline-create compact-create">
-                <label>
-                  <span>{{ t("settings.nodeDetail.controlPlaneUrl") }}</span>
-                  <!-- i18n-audit-allow-next-line code-token: example control-plane URL -->
-                  <ControlPlaneInput :model-value="resources.remoteConnect.controlPlaneUrl" placeholder="https://control-plane.example.com" @update:model-value="actions.updateRemoteConnect('controlPlaneUrl', $event)" />
-                </label>
-                <label>
-                  <span>{{ t("settings.nodeDetail.joinToken") }}</span>
-                  <ControlPlaneInput :model-value="resources.remoteConnect.joinToken" :placeholder="t('settings.nodeDetail.tokenPlaceholder')" @update:model-value="actions.updateRemoteConnect('joinToken', $event)" />
-                </label>
-                <label>
-                  <span>{{ t("settings.nodeDetail.name") }}</span>
-                  <ControlPlaneInput :model-value="resources.remoteConnect.controlPlaneName" :placeholder="t('settings.nodeDetail.optional')" @update:model-value="actions.updateRemoteConnect('controlPlaneName', $event)" />
-                </label>
-                <Button variant="outline" size="sm" :disabled="!resources.canConnectRemote || busy.connectingRemoteNodeId === selectedNode.id" @click="actions.connectSelectedNodeToRemote(selectedNode.id)">
-                  <Plus :size="15" />
-                  <span>{{ busy.connectingRemoteNodeId === selectedNode.id ? t("settings.nodeDetail.connecting") : t("settings.nodeDetail.connect") }}</span>
-                </Button>
-              </div>
               <p v-if="resources.remoteConnectResultByNodeId[selectedNode.id]" class="settings-success">
                 {{ t("settings.nodeDetail.remoteResult", { status: localizedStatus(remoteConnectStatusKeys, resources.remoteConnectResultByNodeId[selectedNode.id].status) }) }}
                 <span v-if="resources.remoteConnectResultByNodeId[selectedNode.id].error"> · {{ resources.remoteConnectResultByNodeId[selectedNode.id].error }}</span>
@@ -466,6 +445,40 @@
       </div>
     </ScrollArea>
     <p v-else class="settings-empty">{{ t("settings.nodeDetail.selectNode") }}</p>
+
+    <Dialog :open="remoteConnectionDialogOpen" @update:open="setRemoteConnectionDialogOpen">
+      <DialogContent class="remote-connection-dialog">
+        <DialogHeader>
+          <DialogTitle>{{ t("settings.nodeDetail.addConnection") }}</DialogTitle>
+          <DialogDescription>{{ t("settings.nodeDetail.connectRemote") }}</DialogDescription>
+        </DialogHeader>
+
+        <form class="remote-connection-form" @submit.prevent="submitRemoteConnection">
+          <div class="remote-connection-fields">
+            <label for="remote-connection-url">
+              <span>{{ t("settings.nodeDetail.controlPlaneUrl") }}</span>
+              <!-- i18n-audit-allow-next-line code-token: example control-plane URL -->
+              <ControlPlaneInput id="remote-connection-url" :model-value="resources.remoteConnect.controlPlaneUrl" placeholder="https://control-plane.example.com" autofocus @update:model-value="actions.updateRemoteConnect('controlPlaneUrl', $event)" />
+            </label>
+            <label for="remote-connection-token">
+              <span>{{ t("settings.nodeDetail.joinToken") }}</span>
+              <ControlPlaneInput id="remote-connection-token" :model-value="resources.remoteConnect.joinToken" :placeholder="t('settings.nodeDetail.tokenPlaceholder')" @update:model-value="actions.updateRemoteConnect('joinToken', $event)" />
+            </label>
+            <label for="remote-connection-name">
+              <span>{{ t("settings.nodeDetail.name") }}</span>
+              <ControlPlaneInput id="remote-connection-name" :model-value="resources.remoteConnect.controlPlaneName" :placeholder="t('settings.nodeDetail.optional')" @update:model-value="actions.updateRemoteConnect('controlPlaneName', $event)" />
+            </label>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" :disabled="remoteConnectionSubmitting" @click="setRemoteConnectionDialogOpen(false)">{{ t("common.actions.cancel") }}</Button>
+            <Button type="submit" :disabled="!resources.canConnectRemote || remoteConnectionSubmitting">
+              <Plus :size="14" />
+              <span>{{ remoteConnectionSubmitting ? t("settings.nodeDetail.connecting") : t("settings.nodeDetail.connect") }}</span>
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   </section>
 </template>
 
@@ -477,6 +490,7 @@ import { TooltipTrigger as RekaTooltipTrigger } from "reka-ui";
 import type { BuildInfo, InstanceBoardItem, LocalDockerImage, Node, NodeAgentExternalListener, NodeControlPlaneConnection, NodeControlPlanePairing, NodeLocalFolder, NodeRuntime, SelectableImage, UpdateChannel, UpdateCheckResult, UpdateJob } from "../../../api/types";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../../components/ui/tabs";
@@ -611,6 +625,7 @@ const props = defineProps<{
 }>();
 
 const activeTab = ref<NodeDetailTab>("overview");
+const remoteConnectionDialogOpen = ref(false);
 const localizedStatus = (keys: Record<string, string>, value: string) => translateStatus(keys, value, t);
 const localizedDateTime = (value: string) => {
   const parsed = new Date(value);
@@ -634,6 +649,19 @@ const tabs = computed(() => [
 ] satisfies Array<{ value: NodeDetailTab; label: string; icon: Component }>);
 
 const nodeUpdateCheck = computed(() => props.resources.updateChecks[props.selectedNode?.id || ""]);
+const remoteConnectionSubmitting = computed(() => props.busy.connectingRemoteNodeId === props.selectedNode?.id);
+
+function setRemoteConnectionDialogOpen(open: boolean) {
+  if (!open && remoteConnectionSubmitting.value) return;
+  remoteConnectionDialogOpen.value = open;
+}
+
+async function submitRemoteConnection() {
+  const nodeId = props.selectedNode?.id;
+  if (!nodeId || !props.resources.canConnectRemote || remoteConnectionSubmitting.value) return;
+  await props.actions.connectSelectedNodeToRemote(nodeId);
+  if (!props.resources.remoteConnect.joinToken) remoteConnectionDialogOpen.value = false;
+}
 
 function updateSummary(fallback?: string) {
   const check = nodeUpdateCheck.value;
@@ -667,11 +695,18 @@ watch(
   () => props.selectedNode?.id,
   () => {
     activeTab.value = "overview";
+    remoteConnectionDialogOpen.value = false;
   },
 );
 </script>
 
 <style scoped>
+.node-detail-panel {
+  --node-detail-body-size: 12px;
+  --node-detail-section-title-size: 13px;
+  --node-detail-feature-title-size: 14px;
+}
+
 .node-detail-content {
   max-height: 100%;
   min-height: 0;
@@ -708,7 +743,7 @@ watch(
 .node-detail-identity > span,
 .node-metrics span {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--node-detail-body-size);
   font-weight: 750;
 }
 
@@ -727,7 +762,8 @@ watch(
 .node-detail-meta {
   gap: 5px;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--node-detail-body-size);
+  line-height: 1.5;
 }
 
 .node-detail-header-actions {
@@ -842,7 +878,8 @@ watch(
 .node-resource-row code {
   overflow: hidden;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--node-detail-body-size);
+  line-height: 1.5;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -887,14 +924,14 @@ watch(
 
 .node-listener-form label > span {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--node-detail-body-size);
   font-weight: 750;
 }
 
 .node-listener-warning {
   margin: 10px 0 0;
   color: var(--warning, #b7791f);
-  font-size: 11px;
+  font-size: var(--node-detail-body-size);
   line-height: 1.5;
 }
 
@@ -902,7 +939,8 @@ watch(
   display: block;
   margin-top: 8px;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--node-detail-body-size);
+  line-height: 1.5;
 }
 
 .node-detail-tabs {
@@ -1078,15 +1116,12 @@ watch(
   min-width: 0;
 }
 
-.section-head span,
-.node-remote-panel label span {
-  color: var(--text-muted);
-  font-size: 11px;
-  font-weight: 750;
-}
-
 .section-head > span {
   overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--node-detail-section-title-size);
+  font-weight: 700;
+  line-height: 1.5;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1143,9 +1178,9 @@ watch(
 
 .managed-update-group-head span {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--node-detail-body-size);
   font-weight: 600;
-  line-height: 1.35;
+  line-height: 1.5;
 }
 
 .update-job-title {
@@ -1159,14 +1194,17 @@ watch(
   min-width: 0;
 }
 
-.inline-create,
-.node-remote-panel label {
+.remote-connection-form,
+.remote-connection-fields,
+.remote-connection-fields label {
   display: grid;
-  gap: 7px;
+  gap: 8px;
 }
 
-.compact-create {
-  gap: 8px;
+.remote-connection-fields label > span {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 750;
 }
 
 .node-diagnostic-grid {
@@ -1188,9 +1226,9 @@ watch(
 .node-diagnostic-grid b,
 .node-diagnostic-grid em {
   overflow: hidden;
-  font-size: 11px;
+  font-size: var(--node-detail-body-size);
   font-style: normal;
-  line-height: 1.25;
+  line-height: 1.5;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1232,7 +1270,7 @@ watch(
 .node-diagnostic-log-entry small {
   overflow: hidden;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--node-detail-body-size);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1259,7 +1297,8 @@ watch(
   gap: 8px;
   min-width: 0;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--node-detail-body-size);
+  line-height: 1.5;
 }
 
 .settings-empty,

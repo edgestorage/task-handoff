@@ -17,6 +17,7 @@ import {
 } from "./route-params.ts";
 import { withRequestSignal } from "./request-signal.ts";
 import { z } from "zod";
+import { PUBLIC_CONTROL_PLANE_ROUTE } from "./auth-boundary.ts";
 
 const DeleteNodeQuerySchema = z.object({ force: z.enum(["true", "false"]).optional() }).strict();
 
@@ -132,7 +133,7 @@ export function registerNodeRoutes({
     events.publish("node-join.invite.created", { inviteId: invite.id });
     return reply.code(201).send({ data: invite });
   });
-  app.post("/api/node-join/complete", async (request, reply) => {
+  app.post("/api/node-join/complete", { config: PUBLIC_CONTROL_PLANE_ROUTE }, async (request, reply) => {
     const node = service.completeNodeJoin(request.body);
     nodeEventSubscriber.syncNow();
     events.publish("node.joined", { nodeId: node.id });

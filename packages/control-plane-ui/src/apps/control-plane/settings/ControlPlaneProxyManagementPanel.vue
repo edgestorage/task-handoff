@@ -39,7 +39,7 @@
             </div>
             <div class="proxy-row-actions">
               <Badge :variant="invite.status === 'active' ? 'default' : 'secondary'">{{ t(`settings.controlPlaneProxy.inviteStatus.${invite.status}`) }}</Badge>
-              <Button v-if="invite.status === 'active'" variant="outline" size="icon" :aria-label="t('settings.controlPlaneProxy.revokeInvite')" @click="askRevoke('invite', invite.id)">
+              <Button v-if="invite.status === 'active'" variant="outline" size="icon-sm" :aria-label="t('settings.controlPlaneProxy.revokeInvite')" @click="askRevoke('invite', invite.id)">
                 <Trash2 :size="14" />
               </Button>
             </div>
@@ -69,7 +69,7 @@
               <span v-else-if="diagnostics.error.value" class="proxy-activity control-plane-error">{{ t("settings.controlPlaneProxy.activityUnavailable") }}</span>
               <span v-else class="proxy-activity">{{ t("settings.controlPlaneProxy.activity", { http: activity(binding.id).activeHttp, streams: activity(binding.id).activeStreams, webSockets: activity(binding.id).activeWebSockets }) }}</span>
               <Badge :variant="binding.status === 'active' ? 'default' : 'secondary'">{{ t(`settings.controlPlaneProxy.bindingStatus.${binding.status}`) }}</Badge>
-              <Button v-if="binding.status === 'active'" variant="outline" size="icon" :aria-label="t('settings.controlPlaneProxy.revokeBinding')" @click="askRevoke('binding', binding.id)">
+              <Button v-if="binding.status === 'active'" variant="outline" size="icon-sm" :aria-label="t('settings.controlPlaneProxy.revokeBinding')" @click="askRevoke('binding', binding.id)">
                 <Unplug :size="14" />
               </Button>
             </div>
@@ -171,21 +171,139 @@ async function confirmRevoke() {
 </script>
 
 <style scoped>
-.proxy-management-panel, .proxy-section { display: grid; gap: 10px; }
-.section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-.section-head p { margin: 3px 0 0; color: var(--text-muted); font-size: 12px; }
-.proxy-actions, .proxy-row-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.proxy-trust-warning { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-inset); font-size: 12px; line-height: 1.5; }
-.proxy-trust-warning svg { flex: none; color: var(--warning, var(--text-muted)); }
-.proxy-section h4 { margin: 4px 0 0; font-size: 13px; }
-.proxy-list { max-height: min(260px, var(--reka-scroll-area-viewport-height, 260px)); }
-.proxy-list-content { min-width: 0; padding-right: 10px; }
-.proxy-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid var(--border); }
-.proxy-row > div:first-child { display: grid; min-width: 0; gap: 3px; }
-.proxy-row strong, .proxy-row span, .proxy-row code { overflow-wrap: anywhere; font-size: 12px; }
-.proxy-row span, .proxy-activity { color: var(--text-muted); }
-.proxy-empty { margin: 0; color: var(--text-muted); font-size: 12px; }
-.proxy-query-error { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; color: var(--status-danger); font-size: 12px; line-height: 1.5; }
-.proxy-query-error span { min-width: 0; overflow-wrap: anywhere; }
-@media (max-width: 720px) { .section-head, .proxy-row { align-items: stretch; flex-direction: column; } .proxy-actions { justify-content: flex-start; } }
+.proxy-management-panel,
+.proxy-section {
+  display: grid;
+  gap: 10px;
+}
+
+.section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.section-head strong {
+  color: var(--text-strong);
+  font-size: var(--node-detail-feature-title-size, 14px);
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.section-head p {
+  margin: 3px 0 0;
+  color: var(--text-muted);
+  font-size: var(--node-detail-body-size, 12px);
+  line-height: 1.5;
+}
+
+.proxy-actions,
+.proxy-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.proxy-trust-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-inset);
+  padding: 10px 12px;
+  font-size: var(--node-detail-body-size, 12px);
+  line-height: 1.5;
+}
+
+.proxy-trust-warning svg {
+  flex: none;
+  color: var(--warning, var(--text-muted));
+}
+
+.proxy-section h4 {
+  margin: 4px 0 0;
+  color: var(--text-strong);
+  font-size: var(--node-detail-section-title-size, 13px);
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.proxy-list {
+  max-height: min(260px, var(--reka-scroll-area-viewport-height, 260px));
+}
+
+.proxy-list-content {
+  min-width: 0;
+  padding-right: 10px;
+}
+
+.proxy-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 1px solid var(--border);
+  padding: 10px 0;
+}
+
+.proxy-row > div:first-child {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.proxy-row strong,
+.proxy-row span,
+.proxy-row code {
+  overflow-wrap: anywhere;
+  font-size: var(--node-detail-body-size, 12px);
+  line-height: 1.5;
+}
+
+.proxy-row strong {
+  color: var(--text-strong);
+  font-weight: 700;
+}
+
+.proxy-row span,
+.proxy-activity {
+  color: var(--text-muted);
+}
+
+.proxy-empty {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--node-detail-body-size, 12px);
+  line-height: 1.5;
+}
+
+.proxy-query-error {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--status-danger);
+  font-size: var(--node-detail-body-size, 12px);
+  line-height: 1.5;
+}
+
+.proxy-query-error span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 720px) {
+  .section-head,
+  .proxy-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .proxy-actions {
+    justify-content: flex-start;
+  }
+}
 </style>

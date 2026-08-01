@@ -10,18 +10,23 @@ export type StoredRecord = {
   updatedAt: string;
 };
 
-function ensureDirectory(directory: string, mode?: number) {
-  fs.mkdirSync(directory, { recursive: true, ...(mode === undefined ? {} : { mode }) });
-  if (mode !== undefined) fs.chmodSync(directory, mode);
+const DEFAULT_DIRECTORY_MODE = 0o700;
+const DEFAULT_FILE_MODE = 0o600;
+
+function ensureDirectory(directory: string, mode = DEFAULT_DIRECTORY_MODE) {
+  fs.mkdirSync(directory, { recursive: true, mode });
+  fs.chmodSync(directory, mode);
 }
 
 function writeJsonAtomic(filePath: string, value: unknown, options: { directoryMode?: number; fileMode?: number } = {}) {
-  ensureDirectory(path.dirname(filePath), options.directoryMode);
+  const directoryMode = options.directoryMode ?? DEFAULT_DIRECTORY_MODE;
+  const fileMode = options.fileMode ?? DEFAULT_FILE_MODE;
+  ensureDirectory(path.dirname(filePath), directoryMode);
   writeFileAtomic.sync(filePath, `${JSON.stringify(value, null, 2)}\n`, {
     encoding: "utf8",
-    ...(options.fileMode === undefined ? {} : { mode: options.fileMode }),
+    mode: fileMode,
   });
-  if (options.fileMode !== undefined) fs.chmodSync(filePath, options.fileMode);
+  fs.chmodSync(filePath, fileMode);
 }
 
 type StoreLogger = (message: string, details: Record<string, unknown>) => void;
@@ -78,6 +83,7 @@ export function createSecret() {
 export class JsonCollection<T extends StoredRecord> {
   private readonly directory: string;
   private readonly options: StoreOptions<T>;
+  private permissionsInitialized = false;
 
   constructor(directory: string, options: StoreOptions<T> = {}) {
     this.directory = directory;
@@ -85,12 +91,13 @@ export class JsonCollection<T extends StoredRecord> {
   }
 
   init() {
-    ensureDirectory(this.directory, this.options.directoryMode);
-    if (this.options.fileMode !== undefined) {
-      for (const name of fs.readdirSync(this.directory).filter((entry) => entry.endsWith(".json"))) {
-        fs.chmodSync(path.join(this.directory, name), this.options.fileMode);
-      }
+    if (this.permissionsInitialized && fs.existsSync(this.directory)) return;
+    ensureDirectory(this.directory, this.options.directoryMode ?? DEFAULT_DIRECTORY_MODE);
+    const fileMode = this.options.fileMode ?? DEFAULT_FILE_MODE;
+    for (const name of fs.readdirSync(this.directory).filter((entry) => entry.endsWith(".json"))) {
+      fs.chmodSync(path.join(this.directory, name), fileMode);
     }
+    this.permissionsInitialized = true;
   }
 
   filePath(id: string) {
@@ -159,11 +166,11 @@ export class JsonFile<T> {
   }
 
   init() {
-    ensureDirectory(path.dirname(this.filePathValue), this.options.directoryMode);
+    ensureDirectory(path.dirname(this.filePathValue), this.options.directoryMode ?? DEFAULT_DIRECTORY_MODE);
     if (!fs.existsSync(this.filePathValue)) {
       this.put(this.defaults());
-    } else if (this.options.fileMode !== undefined) {
-      fs.chmodSync(this.filePathValue, this.options.fileMode);
+    } else {
+      fs.chmodSync(this.filePathValue, this.options.fileMode ?? DEFAULT_FILE_MODE);
     }
   }
 

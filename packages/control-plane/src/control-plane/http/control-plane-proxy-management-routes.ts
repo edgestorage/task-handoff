@@ -4,6 +4,7 @@ import type { ControlPlaneService } from "../application/service.ts";
 import type { ControlPlaneEventBus } from "../events/bus.ts";
 import type { ControlPlaneProxyService } from "../proxy/service.ts";
 import type { ControlPlaneNodeProxyRuntime } from "../proxy/runtime.ts";
+import { PUBLIC_CONTROL_PLANE_ROUTE } from "./auth-boundary.ts";
 
 const IdParamsSchema = z.object({ id: z.string().trim().min(1).max(160) }).strict();
 const ResumeProxyClaimInputSchema = z.object({}).strict();
@@ -52,7 +53,7 @@ export function registerControlPlaneProxyManagementRoutes(options: {
   });
   app.get("/api/control-plane-proxy/diagnostics", async () => ({ data: runtime.diagnostics() }));
 
-  app.post("/api/node-proxy/claims", async (request, reply) => {
+  app.post("/api/node-proxy/claims", { config: PUBLIC_CONTROL_PLANE_ROUTE }, async (request, reply) => {
     const result = proxy.claimInvite(request.body);
     events.publish("control-plane-proxy.binding.created", {
       binding: result.binding,

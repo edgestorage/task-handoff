@@ -31,6 +31,7 @@ import type { ControlPlaneService } from "../application/service.ts";
 import type { NodeAgentTransport } from "./client.ts";
 import type { ControlPlaneEventBus } from "../events/bus.ts";
 import { createDirectNodeAgentAuthHeaders, hmacHeadersFromRecord, sha256Hex, signNodeAgentRequest, timingSafeHexEqual, NODE_AGENT_HMAC_TIMESTAMP_WINDOW_MS, NODE_TUNNEL_API_PATH } from "../../shared/security/node-agent-auth.ts";
+import { NODE_TUNNEL_ROUTE } from "../http/auth-boundary.ts";
 import { createNodeAgentIpcWebSocket, parseNodeAgentIpcEndpoint } from "../../shared/transport/node-agent-ipc.ts";
 import { EventConnectionRetryTimer, eventConnectionSafetyIntervalMs } from "../../shared/events/connection-retry.ts";
 import { NodeTunnelIngress, type NodeAgentTunnelSocket } from "./tunnel-ingress.ts";
@@ -1038,7 +1039,7 @@ export class ControlPlaneNodeEventSubscriber {
 
 export function registerNodeAgentTunnelRoutes(options: {
   app: {
-    get: (path: string, options: { websocket: true }, handler: (socket: NodeAgentTunnelSocket, request: { query?: unknown; params?: unknown; headers: Record<string, unknown>; url?: string }) => void) => void;
+    get: (path: string, options: { websocket: true; config?: typeof NODE_TUNNEL_ROUTE }, handler: (socket: NodeAgentTunnelSocket, request: { query?: unknown; params?: unknown; headers: Record<string, unknown>; url?: string }) => void) => void;
     log?: { warn?: (data: Record<string, unknown>, message?: string) => void };
   };
   service: ControlPlaneService;
@@ -1055,7 +1056,7 @@ export function registerNodeAgentTunnelRoutes(options: {
     }
   };
 
-  app.get(NODE_TUNNEL_API_PATH, { websocket: true }, (socket, request) => {
+  app.get(NODE_TUNNEL_API_PATH, { websocket: true, config: NODE_TUNNEL_ROUTE }, (socket, request) => {
     try {
       const parsed = NodeAgentTunnelQuerySchema.parse(request.query);
       const node = service.requireNode(parsed.nodeId);
@@ -1075,7 +1076,7 @@ export function registerNodeAgentTunnelRoutes(options: {
     }
   });
 
-  app.get(`${NODE_TUNNEL_API_PATH}/streams/:streamId`, { websocket: true }, (socket, request) => {
+  app.get(`${NODE_TUNNEL_API_PATH}/streams/:streamId`, { websocket: true, config: NODE_TUNNEL_ROUTE }, (socket, request) => {
     try {
       const parsed = NodeAgentTunnelQuerySchema.parse(request.query);
       const node = service.requireNode(parsed.nodeId);
@@ -1089,7 +1090,7 @@ export function registerNodeAgentTunnelRoutes(options: {
     }
   });
 
-  app.get(`${NODE_TUNNEL_API_PATH}/channels/:channelId`, { websocket: true }, (socket, request) => {
+  app.get(`${NODE_TUNNEL_API_PATH}/channels/:channelId`, { websocket: true, config: NODE_TUNNEL_ROUTE }, (socket, request) => {
     try {
       const parsed = NodeAgentTunnelQuerySchema.parse(request.query);
       const node = service.requireNode(parsed.nodeId);
@@ -1103,7 +1104,7 @@ export function registerNodeAgentTunnelRoutes(options: {
     }
   });
 
-  app.get(`${NODE_TUNNEL_API_PATH}/http-streams/:streamId`, { websocket: true }, (socket, request) => {
+  app.get(`${NODE_TUNNEL_API_PATH}/http-streams/:streamId`, { websocket: true, config: NODE_TUNNEL_ROUTE }, (socket, request) => {
     try {
       const parsed = NodeAgentTunnelQuerySchema.parse(request.query);
       const node = service.requireNode(parsed.nodeId);

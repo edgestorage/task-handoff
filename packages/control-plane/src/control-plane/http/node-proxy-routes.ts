@@ -19,6 +19,7 @@ import { ControlPlaneNodeProxyRuntime } from "../proxy/runtime.ts";
 import { ControlPlaneProxyEventHub } from "../proxy/event-hub.ts";
 import { publicControlPlaneProxyTarget } from "../proxy/target-projector.ts";
 import type { ControlPlaneProxyTarget } from "../proxy/target-projector.ts";
+import { PROXY_BINDING_ROUTE } from "./auth-boundary.ts";
 
 const BindingParamsSchema = z.object({ bindingId: z.string().trim().min(1).max(160) }).passthrough();
 const WebSocketQuerySchema = z.object({ route: NodeAgentProxyRouteSchema }).strict();
@@ -72,6 +73,7 @@ export function registerNodeProxyRoutes(options: RegisterNodeProxyRoutesOptions)
   };
 
   app.all("/api/node-proxy/bindings/:bindingId/http/*", {
+    config: PROXY_BINDING_ROUTE,
     bodyLimit: runtime.maxRequestBodyBytes,
     logLevel: "silent",
     async onRequest(request, reply) {
@@ -129,7 +131,7 @@ export function registerNodeProxyRoutes(options: RegisterNodeProxyRoutesOptions)
     }
   });
 
-  app.get("/api/node-proxy/bindings/:bindingId/websocket", { websocket: true, logLevel: "silent" }, async (socket, request) => {
+  app.get("/api/node-proxy/bindings/:bindingId/websocket", { websocket: true, logLevel: "silent", config: PROXY_BINDING_ROUTE }, async (socket, request) => {
     let wrapped: NodeAgentWebSocket | undefined;
     try {
       const bindingId = BindingParamsSchema.parse(request.params).bindingId;
@@ -147,7 +149,7 @@ export function registerNodeProxyRoutes(options: RegisterNodeProxyRoutesOptions)
     }
   });
 
-  app.get("/api/node-proxy/bindings/:bindingId/snapshot", async (request, reply) => {
+  app.get("/api/node-proxy/bindings/:bindingId/snapshot", { config: PROXY_BINDING_ROUTE }, async (request, reply) => {
     try {
       const bindingId = BindingParamsSchema.parse(request.params).bindingId;
       const binding = authenticateRequest(authority, bindingId, request);
@@ -182,7 +184,7 @@ export function registerNodeProxyRoutes(options: RegisterNodeProxyRoutesOptions)
     }
   });
 
-  app.get("/api/node-proxy/bindings/:bindingId/events", { websocket: true, logLevel: "silent" }, async (socket, request) => {
+  app.get("/api/node-proxy/bindings/:bindingId/events", { websocket: true, logLevel: "silent", config: PROXY_BINDING_ROUTE }, async (socket, request) => {
     let wrapped: NodeAgentWebSocket | undefined;
     let closeSubscription: (() => void) | undefined;
     let unregisterRuntimeCleanup: (() => void) | undefined;
@@ -227,7 +229,7 @@ export function registerNodeProxyRoutes(options: RegisterNodeProxyRoutesOptions)
     }
   });
 
-  app.delete("/api/node-proxy/bindings/:bindingId", async (request, reply) => {
+  app.delete("/api/node-proxy/bindings/:bindingId", { config: PROXY_BINDING_ROUTE }, async (request, reply) => {
     try {
       const bindingId = BindingParamsSchema.parse(request.params).bindingId;
       authenticateRequest(authority, bindingId, request);

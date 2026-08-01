@@ -1,8 +1,11 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { Readable, Transform } from "node:stream";
 import type { ControlPlaneService } from "../application/service.ts";
+import { CONTROL_PLANE_SESSION_COOKIE } from "../auth/service.ts";
+import { PUBLIC_CONTROL_PLANE_ROUTE } from "./auth-boundary.ts";
 
 const HOP_BY_HOP_HEADERS = new Set(["connection", "content-length", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade"]);
+const CONTROL_PLANE_IDENTITY_REQUEST_HEADERS = new Set(["authorization"]);
 const DECODED_RESPONSE_HEADERS = new Set(["content-encoding"]);
 
 export type RegisterInstanceProxyRoutesOptions = {
@@ -25,7 +28,7 @@ export function registerInstanceProxyRoutes({ app, service }: RegisterInstancePr
     }
   };
 
-  app.get("/api/app-access/session", async (request) => {
+  app.get("/api/app-access/session", { config: PUBLIC_CONTROL_PLANE_ROUTE }, async (request) => {
     const token = queryToken(request.url);
     const mode = (request.query as { mode?: string }).mode === "vnc" ? "vnc" : (request.query as { mode?: string }).mode === "web" ? "web" : "tty";
     const target = await service.appAccessProxyTarget(token, mode);
@@ -46,7 +49,7 @@ export function registerInstanceProxyRoutes({ app, service }: RegisterInstancePr
     };
   });
 
-  app.get("/apps/access/tty/ws", { websocket: true }, async (socket, request) => {
+  app.get("/apps/access/tty/ws", { websocket: true, config: PUBLIC_CONTROL_PLANE_ROUTE }, async (socket, request) => {
     try {
       const target = await service.appAccessProxyTarget(queryToken(request.url), "tty");
       await service.proxyInstanceWebSocket(target.instance.id, socket, target.path, proxyWebSocketProtocols(request.headers), proxyWebSocketHeaders(request.headers));
@@ -68,6 +71,7 @@ export function registerInstanceProxyRoutes({ app, service }: RegisterInstancePr
   app.route({
     method: "GET",
     url: "/apps/access/vnc/proxy/*",
+    config: PUBLIC_CONTROL_PLANE_ROUTE,
     wsHandler: proxyVncAccessWebSocket,
     handler: async (request, reply) => {
       const params = request.params as { "*": string };
@@ -146,9 +150,23 @@ type ProxyRequest = {
 function proxyHeaders(headers: Record<string, unknown>) {
   return Object.fromEntries(
     Object.entries(headers)
-      .filter(([key, value]) => !HOP_BY_HOP_HEADERS.has(key.toLowerCase()) && typeof value !== "undefined")
-      .map(([key, value]) => [key, Array.isArray(value) ? value.join(", ") : String(value)]),
+      .flatMap(([key, value]) => {
+        const lower = key.toLowerCase();
+        if (HOP_BY_HOP_HEADERS.has(lower) || CONTROL_PLANE_IDENTITY_REQUEST_HEADERS.has(lower) || typeof value === "undefined") return [];
+        const text = Array.isArray(value) ? value.join(", ") : String(value);
+        if (lower !== "cookie") return [[key, text]];
+        const forwarded = withoutControlPlaneSessionCookie(text);
+        return forwarded ? [[key, forwarded]] : [];
+      }),
   );
+}
+
+function withoutControlPlaneSessionCookie(value: string) {
+  return value
+    .split(";")
+    .map((part) => part.trim())
+    .filter((part) => part && part.slice(0, part.indexOf("=")).trim() !== CONTROL_PLANE_SESSION_COOKIE)
+    .join("; ");
 }
 
 function proxyWebSocketHeaders(headers: Record<string, unknown>) {

@@ -10,7 +10,7 @@ const test = require("node:test");
 const WebSocket = require("ws");
 const { z } = require("zod");
 
-const { createControlPlaneApp } = require("../packages/control-plane/src/server.ts");
+const { createControlPlaneApp, routeAuthorization } = require("../packages/control-plane/src/server.ts");
 const { connectReverseTunnel, createNodeAgentApp, createReverseTunnelManager, listenNodeAgentIpcServer, mergeRuntimeLifecycleResult, NodeAgentExternalListenerManager, requestRuntimeAppSessionDrain, resolvedDockerImageUpdatePatch, runtimeVersionStateForActual } = require("../packages/control-plane/src/node-agent.ts");
 const { ControlPlaneChatGatewayRuntime, aiSessionDeliveryText, createDingdingStreamClient } = require("../packages/control-plane/src/chat-gateway.ts");
 const { ControlledInstanceGateway } = require("../packages/control-plane/src/control-plane/instances/gateway.ts");
@@ -746,6 +746,25 @@ test("JSON collections isolate invalid records and strip unknown stored fields",
   assert.equal(warnings.length, 2);
   assert.match(warnings[0].message + warnings[1].message, /could not be read/);
   assert.match(warnings[0].message + warnings[1].message, /unknown stored fields were ignored/);
+  if (process.platform !== "win32") {
+    assert.equal(fs.statSync(directory).mode & 0o777, 0o700);
+    assert.equal(fs.statSync(path.join(directory, "valid.json")).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(path.join(directory, "broken.json")).mode & 0o777, 0o600);
+
+    const originalChmodSync = fs.chmodSync;
+    const repeatedReadChmods = [];
+    fs.chmodSync = (filePath, mode) => {
+      repeatedReadChmods.push({ filePath, mode });
+      return originalChmodSync(filePath, mode);
+    };
+    try {
+      collection.get("valid");
+      collection.list();
+    } finally {
+      fs.chmodSync = originalChmodSync;
+    }
+    assert.deepEqual(repeatedReadChmods, []);
+  }
 });
 
 test("session aggregators apply patch and removed events as one revisioned stream", async () => {
@@ -1688,6 +1707,12 @@ test("control plane password auth protects APIs and supports bootstrap login log
     const blocked = await json(app, "GET", "/api/projects");
     assert.equal(blocked.statusCode, 401);
 
+    const encodedApiBlocked = await json(app, "GET", "/%61pi/projects");
+    assert.equal(encodedApiBlocked.statusCode, 401);
+    const encodedInstanceBlocked = await json(app, "GET", "/%69nstances/inst_unknown/");
+    assert.equal(encodedInstanceBlocked.statusCode, 401);
+    await assert.rejects(app.injectWS("/%61pi/events"), /Unexpected server response: 401/);
+
     const bootstrap = await json(app, "POST", "/api/auth/bootstrap-admin", {
       username: "admin",
       password: "password123",
@@ -1708,6 +1733,8 @@ test("control plane password auth protects APIs and supports bootstrap login log
 
     const authorized = await json(app, "GET", "/api/projects", undefined, { cookie });
     assert.equal(authorized.statusCode, 200);
+    const encodedAuthorized = await json(app, "GET", "/%61pi/projects", undefined, { cookie });
+    assert.equal(encodedAuthorized.statusCode, 200);
 
     const session = await json(app, "GET", "/api/auth/session", undefined, { cookie });
     assert.equal(session.statusCode, 200);
@@ -1728,6 +1755,194 @@ test("control plane password auth protects APIs and supports bootstrap login log
   } finally {
     await app.close();
   }
+});
+
+test("control plane auth exemptions belong to explicit routes and are not inherited by path prefixes", async (t) => {
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("cp-auth-explicit-boundaries"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    auth: { mode: "password" },
+  });
+  t.after(() => app.close());
+
+  for (const url of [
+    "/api/auth/future-sensitive",
+    "/api/node-tunnel/future-sensitive",
+    "/api/node-proxy/bindings/fake/future-sensitive",
+    "/apps/access/future-sensitive",
+  ]) {
+    app.get(url, async () => ({ data: { reached: true } }));
+  }
+
+  for (const url of [
+    "/api/auth/future-sensitive",
+    "/api/node-tunnel/future-sensitive",
+    "/api/node-proxy/bindings/fake/future-sensitive",
+    "/apps/access/future-sensitive",
+  ]) {
+    const response = await app.inject({ method: "GET", url });
+    assert.equal(response.statusCode, 401, `${url}: ${response.body}`);
+    assert.equal(response.json().error.code, "CONTROL_PLANE_AUTH_REQUIRED", url);
+  }
+
+  const health = await app.inject({ method: "GET", url: "/api/health" });
+  assert.equal(health.statusCode, 200);
+  const session = await app.inject({ method: "GET", url: "/api/auth/session" });
+  assert.equal(session.statusCode, 200);
+
+  for (const url of ["/api/node-join/complete", "/api/node-proxy/claims"]) {
+    const response = await app.inject({ method: "POST", url, payload: {} });
+    assert.equal(response.statusCode, 400, `${url}: ${response.body}`);
+    assert.notEqual(response.json().error.code, "CONTROL_PLANE_AUTH_REQUIRED", url);
+  }
+  const appAccess = await app.inject({ method: "GET", url: "/api/app-access/session?token=invalid" });
+  assert.equal(appAccess.statusCode, 401);
+  assert.equal(appAccess.json().error.code, "APP_ACCESS_TOKEN_INVALID");
+});
+
+test("control plane admin bootstrap has exactly one winner under concurrency", async (t) => {
+  const dataDir = tempDataDir("cp-auth-bootstrap-concurrency");
+  const app = await createControlPlaneApp({
+    dataDir,
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    auth: { mode: "password" },
+  });
+  t.after(() => app.close());
+
+  const attempts = await Promise.all(Array.from({ length: 8 }, (_, index) => app.inject({
+    method: "POST",
+    url: "/api/auth/bootstrap-admin",
+    payload: {
+      username: `admin-${index}`,
+      password: `password-${index}`,
+    },
+  })));
+  const winners = attempts.filter((response) => response.statusCode === 201);
+  const rejected = attempts.filter((response) => response.statusCode === 409);
+
+  assert.equal(winners.length, 1);
+  assert.equal(rejected.length, 7);
+  assert.equal(rejected.every((response) => response.json().error.code === "AUTH_BOOTSTRAP_IN_PROGRESS"), true);
+  assert.equal(fs.readdirSync(path.join(dataDir, "auth-users")).filter((name) => name.endsWith(".json")).length, 1);
+
+  const repeated = await app.inject({
+    method: "POST",
+    url: "/api/auth/bootstrap-admin",
+    payload: { username: "another-admin", password: "password-another" },
+  });
+  assert.equal(repeated.statusCode, 409);
+  assert.equal(repeated.json().error.code, "AUTH_BOOTSTRAP_ALREADY_DONE");
+});
+
+test("control plane viewer cannot reach privileged mutation handlers", async (t) => {
+  const dataDir = tempDataDir("cp-auth-viewer-mutations");
+  const app = await createControlPlaneApp({
+    dataDir,
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    auth: { mode: "password" },
+  });
+  t.after(() => app.close());
+  await json(app, "POST", "/api/auth/bootstrap-admin", {
+    username: "viewer",
+    password: "password123",
+  });
+  const userPath = path.join(dataDir, "auth-users", fs.readdirSync(path.join(dataDir, "auth-users")).find((name) => name.endsWith(".json")));
+  const user = JSON.parse(fs.readFileSync(userPath, "utf8"));
+  fs.writeFileSync(userPath, JSON.stringify({ ...user, role: "viewer" }));
+  const login = await app.inject({
+    method: "POST",
+    url: "/api/auth/login",
+    payload: { username: "viewer", password: "password123" },
+  });
+  const cookie = login.headers["set-cookie"];
+  assert.equal(login.statusCode, 200);
+  assert.ok(cookie);
+
+  const readable = await app.inject({ method: "GET", url: "/api/projects", headers: { cookie } });
+  assert.equal(readable.statusCode, 200);
+  for (const [method, url, payload] of [
+    ["POST", "/api/ai-session-attachments", {}],
+    ["POST", "/api/chat-gateway/messages", {}],
+    ["POST", "/api/chat-gateway/actions", {}],
+    ["POST", "/api/controlled-instances/inst_x/ai-sessions/session_x/resume", {}],
+    ["POST", "/api/controlled-instances/inst_x/ai-sessions/session_x/commands", {}],
+    ["POST", "/api/controlled-instances/inst_x/ai-sessions/session_x/triggers", {}],
+    ["DELETE", "/api/controlled-instances/inst_x/ai-sessions/session_x/triggers/trigger_x", undefined],
+  ]) {
+    const response = await app.inject({ method, url, headers: { cookie }, ...(payload === undefined ? {} : { payload }) });
+    assert.equal(response.statusCode, 403, `${method} ${url}: ${response.body}`);
+    assert.equal(response.json().error.code, "CONTROL_PLANE_FORBIDDEN");
+  }
+});
+
+test("control plane login bounds password concurrency and rate limits source and username failures", async (t) => {
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("cp-auth-login-rate-limit"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    auth: {
+      mode: "password",
+      loginRateLimit: {
+        windowMs: 60_000,
+        maxFailuresPerSource: 2,
+        maxFailuresPerUsername: 2,
+        maxConcurrent: 1,
+      },
+    },
+  });
+  t.after(() => app.close());
+  await json(app, "POST", "/api/auth/bootstrap-admin", {
+    username: "admin",
+    password: "password123",
+  });
+
+  const concurrent = await Promise.all([1, 2].map(() => app.inject({
+    method: "POST",
+    url: "/api/auth/login",
+    remoteAddress: "10.0.0.1",
+    payload: { username: "admin", password: "password123" },
+  })));
+  assert.deepEqual(concurrent.map((response) => response.statusCode).sort(), [200, 429]);
+  assert.equal(concurrent.find((response) => response.statusCode === 429).json().error.code, "AUTH_LOGIN_RATE_LIMITED");
+
+  for (const remoteAddress of ["10.0.1.1", "10.0.1.2"]) {
+    const failed = await app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      remoteAddress,
+      payload: { username: "admin", password: "wrong-password" },
+    });
+    assert.equal(failed.statusCode, 401);
+  }
+  const usernameLimited = await app.inject({
+    method: "POST",
+    url: "/api/auth/login",
+    remoteAddress: "10.0.1.3",
+    payload: { username: "admin", password: "wrong-password" },
+  });
+  assert.equal(usernameLimited.statusCode, 429);
+  assert.equal(usernameLimited.headers["retry-after"], "60");
+
+  for (const username of ["missing-one", "missing-two"]) {
+    const failed = await app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      remoteAddress: "10.0.2.1",
+      payload: { username, password: "wrong-password" },
+    });
+    assert.equal(failed.statusCode, 401);
+  }
+  const sourceLimited = await app.inject({
+    method: "POST",
+    url: "/api/auth/login",
+    remoteAddress: "10.0.2.1",
+    payload: { username: "missing-three", password: "wrong-password" },
+  });
+  assert.equal(sourceLimited.statusCode, 429);
+  assert.equal(sourceLimited.headers["retry-after"], "60");
 });
 
 test("control plane serves the remote node-agent installer without auth", async (t) => {
@@ -1763,6 +1978,41 @@ test("control plane authorization role matrix separates viewer operator and admi
   assert.equal(can(operator, "manage-node-auth", { type: "node", id: "node_1" }), false);
   assert.equal(can(viewer, "read", { type: "instance", id: "inst_1" }), true);
   assert.equal(can(viewer, "start", { type: "instance", id: "inst_1" }), false);
+});
+
+test("control plane mutation route policies never degrade privileged operations to read", () => {
+  const viewer = { type: "user", userId: "u_viewer", role: "viewer" };
+  const operator = { type: "user", userId: "u_operator", role: "operator" };
+  const operatorRoutes = [
+    ["POST", "/api/ai-session-attachments", "send-message", "ai-session"],
+    ["POST", "/api/chat-gateway/messages", "send-message", "ai-session"],
+    ["POST", "/api/chat-gateway/actions", "send-message", "ai-session"],
+    ["POST", "/api/controlled-instances/:id/ai-sessions/:sessionId/resume", "send-message", "ai-session"],
+    ["POST", "/api/controlled-instances/:id/ai-sessions/:sessionId/commands", "send-message", "ai-session"],
+    ["POST", "/api/controlled-instances/:id/ai-sessions/:sessionId/triggers", "create", "trigger"],
+    ["DELETE", "/api/controlled-instances/:id/ai-sessions/:sessionId/triggers/:configHash", "delete", "trigger"],
+  ];
+  for (const [method, route, expectedAction, expectedResource] of operatorRoutes) {
+    const policy = routeAuthorization(method, route);
+    assert.equal(policy.action, expectedAction, `${method} ${route}`);
+    assert.equal(policy.resource.type, expectedResource, `${method} ${route}`);
+    assert.equal(can(viewer, policy.action, policy.resource), false, `${method} ${route} viewer`);
+    assert.equal(can(operator, policy.action, policy.resource), true, `${method} ${route} operator`);
+  }
+
+  const adminOnly = routeAuthorization("POST", "/api/chat-gateway/poll-ai-sessions");
+  assert.equal(adminOnly.action, "manage-settings");
+  assert.equal(can(viewer, adminOnly.action, adminOnly.resource), false);
+  assert.equal(can(operator, adminOnly.action, adminOnly.resource), false);
+
+  const unknownMutation = routeAuthorization("POST", "/api/future-sensitive-operation");
+  assert.equal(unknownMutation.action, "create");
+  assert.equal(can(viewer, unknownMutation.action, unknownMutation.resource), false);
+  assert.equal(can(operator, unknownMutation.action, unknownMutation.resource), false);
+  const unknownAiMutation = routeAuthorization("POST", "/api/controlled-instances/:id/ai-sessions/:sessionId/future-operation");
+  assert.equal(unknownAiMutation.action, "create");
+  assert.equal(can(viewer, unknownAiMutation.action, unknownAiMutation.resource), false);
+  assert.equal(can(operator, unknownAiMutation.action, unknownAiMutation.resource), false);
 });
 
 test("event connection retry timing is bounded, jittered, and safety reconciliation is clamped", () => {
@@ -10485,12 +10735,24 @@ test("control plane proxies instance websocket routes while preserving HTTP prox
   const proxied = await app.inject({
     method: "GET",
     url: `/instances/${createdInstance.body.data.id}/api/apps/sessions/app_1/web/index.html?theme=dark`,
+    headers: {
+      cookie: "task_handoff_cp_session=control-plane-session; instance_session=instance-session",
+      authorization: "Bearer control-plane-credential",
+      "x-instance-client": "forward-me",
+    },
   });
   assert.equal(proxied.statusCode, 200);
   assert.equal(proxied.headers["content-encoding"], undefined);
   assert.equal(proxied.body, "<!doctype html><html><head><title>App</title></head><body><script src=\"./app.js\"></script></body></html>");
   assert.doesNotMatch(proxied.body, /__TASK_HANDOFF_PUBLIC_BASE__/);
   assert.doesNotMatch(proxied.body, /<base href=/);
+  const proxiedPageRequest = mock.requests.find((request) =>
+    request.path.endsWith("/proxy/stream") &&
+    request.body?.path === "/api/apps/sessions/app_1/web/index.html?theme=dark"
+  );
+  assert.equal(proxiedPageRequest.body.headers.cookie, "instance_session=instance-session");
+  assert.equal(proxiedPageRequest.body.headers.authorization, undefined);
+  assert.equal(proxiedPageRequest.body.headers["x-instance-client"], "forward-me");
 
   const uploaded = await app.inject({
     method: "POST",
