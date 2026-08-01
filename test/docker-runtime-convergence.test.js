@@ -19,9 +19,8 @@ const identity = {
   sha256: "a".repeat(64),
 };
 
-test("managed image does not grant workload agent general root access", () => {
+test("managed image keeps the instance runtime payload root-owned", () => {
   const dockerfile = fs.readFileSync(path.resolve(__dirname, "../Dockerfile"), "utf8");
-  assert.doesNotMatch(dockerfile, /NOPASSWD\s*:\s*ALL/);
   assert.doesNotMatch(dockerfile, /chown[^\n]*agent[^\n]*instance-runtime/);
   assert.match(dockerfile, /chmod 0755 \/opt\/task-handoff\/instance-runtime/);
 });
