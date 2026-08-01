@@ -2,7 +2,7 @@ import { z } from "zod";
 import { PassThrough, Readable } from "node:stream";
 import { WebSocket as WsClient } from "ws";
 import {
-  CONTROL_PLANE_PROTOCOL_VERSION,
+  encodeNodeTunnelRequestBody,
   InstanceLifecycleEventType,
   InstanceLifecycleSnapshotSchema,
   InstanceResourceMetricsEventType,
@@ -33,6 +33,7 @@ import type { ControlPlaneEventBus } from "../events/bus.ts";
 import { createDirectNodeAgentAuthHeaders, hmacHeadersFromRecord, sha256Hex, signNodeAgentRequest, timingSafeHexEqual, NODE_AGENT_HMAC_TIMESTAMP_WINDOW_MS, NODE_TUNNEL_API_PATH } from "../../shared/security/node-agent-auth.ts";
 import { createNodeAgentIpcWebSocket, parseNodeAgentIpcEndpoint } from "../../shared/transport/node-agent-ipc.ts";
 import { EventConnectionRetryTimer, eventConnectionSafetyIntervalMs } from "../../shared/events/connection-retry.ts";
+import { NodeTunnelIngress, type NodeAgentTunnelSocket } from "./tunnel-ingress.ts";
 
 const NodeAgentTunnelQuerySchema = z
   .object({
@@ -70,13 +71,6 @@ function parseSessionEvent(eventType: string, payload: unknown) {
   return { instanceId, payload: data };
 }
 
-type NodeAgentSocket = {
-  send: (data: string | Buffer) => void;
-  close: (code?: number, reason?: string) => void;
-  on: (event: string, listener: (...args: unknown[]) => void) => void;
-  readyState: number;
-};
-
 type ReverseTunnelSocket = {
   send: (data: string) => void;
   close?: (code?: number, reason?: string) => void;
@@ -89,7 +83,7 @@ type ReverseHttpStreamEntry = {
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
   body?: PassThrough;
-  socket?: NodeAgentSocket;
+  socket?: NodeAgentTunnelSocket;
   settled: boolean;
   finalized: boolean;
   signal?: AbortSignal;
@@ -109,6 +103,14 @@ type ReverseTunnelConnection = {
   pending: Map<string, ReversePendingRequest>;
   streams: Map<string, { downstream: WebSocketLike; upstream?: WebSocketLike; pendingFrames: Array<{ data: unknown; isBinary: boolean }> }>;
   httpStreams: Map<string, ReverseHttpStreamEntry>;
+  pendingChannels: Map<string, PendingNodeTunnelChannel>;
+};
+
+export type PendingNodeTunnelChannel = {
+  id: string;
+  attach: (socket: NodeAgentTunnelSocket) => boolean;
+  cancel: (error: Error, reason: string) => void;
+  timer?: ReturnType<typeof setTimeout>;
 };
 
 type TunnelErrorPayload = {
@@ -186,6 +188,7 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
   private readonly instanceEventQueues = new Map<string, Promise<void>>();
   private readonly httpStreamHeaderTimeoutMs: number;
   private readonly requestTimeoutMs: number;
+  private readonly auxiliaryAttachTimeoutMs: number;
 
   constructor(events?: ControlPlaneEventBus, options: {
     onStreamsHello?: (instanceId: string, hello: SessionStreamsHello) => void | Promise<void>;
@@ -193,6 +196,7 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
     validateInstanceScope?: (nodeId: string, instanceId: string) => boolean | Promise<boolean>;
     httpStreamHeaderTimeoutMs?: number;
     requestTimeoutMs?: number;
+    auxiliaryAttachTimeoutMs?: number;
   } = {}) {
     this.events = events;
     this.onStreamsHello = options.onStreamsHello;
@@ -200,6 +204,7 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
     this.validateInstanceScope = options.validateInstanceScope;
     this.httpStreamHeaderTimeoutMs = options.httpStreamHeaderTimeoutMs ?? 30_000;
     this.requestTimeoutMs = options.requestTimeoutMs ?? 30_000;
+    this.auxiliaryAttachTimeoutMs = options.auxiliaryAttachTimeoutMs ?? 30_000;
   }
 
   attach(nodeId: string, socket: ReverseTunnelSocket) {
@@ -207,7 +212,13 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
     if (current?.socket === socket) return;
     if (current) this.invalidateInstanceScope({ nodeId });
     const pending = new Map<string, ReversePendingRequest>();
-    const next: ReverseTunnelConnection = { socket, pending, streams: new Map(), httpStreams: new Map() };
+    const next: ReverseTunnelConnection = {
+      socket,
+      pending,
+      streams: new Map(),
+      httpStreams: new Map(),
+      pendingChannels: new Map(),
+    };
     this.sockets.set(nodeId, next);
     socket.on?.("close", () => this.detach(nodeId, socket));
     socket.on?.("error", () => this.detach(nodeId, socket));
@@ -226,6 +237,18 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
     this.finalizeConnection(current, new Error(`Reverse tunnel for node ${nodeId} disconnected.`), "Reverse tunnel disconnected.", true);
   }
 
+  disconnect(nodeId: string, reason = "Node connection disabled locally.") {
+    const current = this.sockets.get(nodeId);
+    if (!current) return false;
+    this.detach(nodeId, current.socket);
+    current.socket.close?.(1000, reason);
+    return true;
+  }
+
+  connected(nodeId: string) {
+    return this.sockets.has(nodeId);
+  }
+
   private finalizeConnection(connection: ReverseTunnelConnection, error: Error, reason: string, closeMainSocket: boolean) {
     for (const requestId of [...connection.pending.keys()]) this.cancelPendingRequest(connection, requestId, error, false);
     for (const [streamId, stream] of connection.streams) {
@@ -235,6 +258,8 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
     for (const streamId of [...connection.httpStreams.keys()]) {
       this.cancelHttpStream(connection, streamId, error, reason, false);
     }
+    for (const pending of connection.pendingChannels.values()) clearTimeout(pending.timer);
+    connection.pendingChannels.clear();
     if (closeMainSocket && connection.socket.close && connection.socket.readyState !== 3) {
       try {
         connection.socket.close(1000, reason);
@@ -428,7 +453,7 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
       throw error;
     }
     const requestId = createRequestId();
-    const body = typeof init.body === "string" ? init.body : init.body === undefined || init.body === null ? undefined : String(init.body);
+    const body = encodeNodeTunnelRequestBody(init.body);
     const payload = {
       type: "control-plane.request",
       requestId,
@@ -503,7 +528,7 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
       throw Object.assign(new Error(`Reverse tunnel for node ${node.id} is not connected.`), { statusCode: 503, code: "NODE_AGENT_REVERSE_TUNNEL_OFFLINE" });
     }
     const streamId = createRequestId();
-    const body = typeof init.body === "string" ? init.body : init.body === undefined || init.body === null ? undefined : String(init.body);
+    const body = encodeNodeTunnelRequestBody(init.body);
     return new Promise<Response>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.cancelHttpStream(
@@ -515,6 +540,11 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
       }, this.httpStreamHeaderTimeoutMs);
       const stream: ReverseHttpStreamEntry = { resolve, reject, timer, settled: false, finalized: false, signal: init.signal || undefined };
       current.httpStreams.set(streamId, stream);
+      this.registerPendingChannel(current, {
+        id: streamId,
+        attach: (socket) => this.attachHttpStreamChannel(node.id, streamId, socket),
+        cancel: (error, reason) => { this.cancelHttpStream(current, streamId, error, reason); },
+      }, "Reverse HTTP channel attach timed out.");
       if (init.signal) {
         stream.onAbort = () => this.cancelHttpStream(
           current,
@@ -546,6 +576,7 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
     if (!stream || stream.finalized) return false;
     stream.finalized = true;
     current.httpStreams.delete(streamId);
+    this.removePendingChannel(current, streamId);
     clearTimeout(stream.timer);
     if (stream.signal && stream.onAbort) stream.signal.removeEventListener("abort", stream.onAbort);
     if (!stream.settled) {
@@ -570,13 +601,47 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
     if (!stream || stream.finalized) return false;
     stream.finalized = true;
     current.httpStreams.delete(streamId);
+    this.removePendingChannel(current, streamId);
     clearTimeout(stream.timer);
     if (stream.signal && stream.onAbort) stream.signal.removeEventListener("abort", stream.onAbort);
     stream.body?.end();
     return true;
   }
 
-  attachHttpStream(nodeId: string, streamId: string, socket: NodeAgentSocket) {
+  attachAuxiliary(nodeId: string, channelId: string, socket: NodeAgentTunnelSocket) {
+    const current = this.sockets.get(nodeId);
+    const pending = current?.pendingChannels.get(channelId);
+    if (!current || !pending) {
+      socket.close(1008, "Unknown reverse tunnel channel.");
+      return false;
+    }
+    this.removePendingChannel(current, channelId);
+    return pending.attach(socket);
+  }
+
+  private registerPendingChannel(current: ReverseTunnelConnection, pending: PendingNodeTunnelChannel, reason: string) {
+    this.removePendingChannel(current, pending.id);
+    pending.timer = setTimeout(() => {
+      if (current.pendingChannels.get(pending.id) !== pending) return;
+      current.pendingChannels.delete(pending.id);
+      pending.cancel(Object.assign(new Error(reason), { code: "NODE_AGENT_REVERSE_CHANNEL_ATTACH_TIMEOUT" }), reason);
+    }, this.auxiliaryAttachTimeoutMs);
+    pending.timer.unref?.();
+    current.pendingChannels.set(pending.id, pending);
+  }
+
+  private removePendingChannel(current: ReverseTunnelConnection, channelId: string) {
+    const pending = current.pendingChannels.get(channelId);
+    if (pending?.timer) clearTimeout(pending.timer);
+    current.pendingChannels.delete(channelId);
+    return pending;
+  }
+
+  attachHttpStream(nodeId: string, streamId: string, socket: NodeAgentTunnelSocket) {
+    return this.attachAuxiliary(nodeId, streamId, socket);
+  }
+
+  private attachHttpStreamChannel(nodeId: string, streamId: string, socket: NodeAgentTunnelSocket) {
     const current = this.sockets.get(nodeId);
     const stream = current?.httpStreams.get(streamId);
     if (!current || !stream) {
@@ -592,8 +657,8 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
       if (isBinary) {
         if (!stream.body) return fail(new Error("Reverse HTTP stream received data before response headers."));
         if (!stream.body.write(Buffer.isBuffer(raw) ? raw : Buffer.from(raw as ArrayBuffer))) {
-          (socket as NodeAgentSocket & { pause?: () => void }).pause?.();
-          stream.body.once("drain", () => (socket as NodeAgentSocket & { resume?: () => void }).resume?.());
+          (socket as NodeAgentTunnelSocket & { pause?: () => void }).pause?.();
+          stream.body.once("drain", () => (socket as NodeAgentTunnelSocket & { resume?: () => void }).resume?.());
         }
         return;
       }
@@ -655,12 +720,22 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
       try {
         current.socket.send(JSON.stringify(payload));
       } catch {
+        this.removePendingChannel(current, streamId);
         current.streams.delete(streamId);
         downstream.close(1011, "Reverse tunnel send failed.");
       }
     };
     const entry = { downstream, pendingFrames: [] as Array<{ data: unknown; isBinary: boolean }> };
     current.streams.set(streamId, entry);
+    this.registerPendingChannel(current, {
+      id: streamId,
+      attach: (socket) => this.attachWebSocketStreamChannel(nodeId, streamId, socket),
+      cancel: (_error, reason) => {
+        this.removePendingChannel(current, streamId);
+        current.streams.delete(streamId);
+        downstream.close(1011, reason);
+      },
+    }, "Reverse websocket channel attach timed out.");
     sendTunnel({
       type: "control-plane.websocket.open",
       streamId,
@@ -677,6 +752,7 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
         return;
       }
       if (stream.pendingFrames.length >= 256) {
+        this.removePendingChannel(current, streamId);
         current.streams.delete(streamId);
         downstream.close(1011, "Reverse websocket stream pending frame limit exceeded.");
         sendTunnel({ type: "control-plane.websocket.close", streamId, code: 1011, reason: "Reverse websocket stream pending frame limit exceeded." });
@@ -687,6 +763,7 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
     downstream.on("close", (code, reason) => {
       const stream = current.streams.get(streamId);
       if (stream) {
+        this.removePendingChannel(current, streamId);
         current.streams.delete(streamId);
         const closeCode = normalizeWebSocketCloseCode(code);
         const closeReason = normalizeWebSocketCloseReason(reason);
@@ -702,6 +779,7 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
     downstream.on("error", () => {
       const stream = current.streams.get(streamId);
       if (stream) {
+        this.removePendingChannel(current, streamId);
         current.streams.delete(streamId);
         stream.upstream?.close(1011, "Downstream websocket failed.");
         sendTunnel({ type: "control-plane.websocket.close", streamId, code: 1011, reason: "Downstream websocket failed." });
@@ -710,6 +788,14 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
   }
 
   attachWebSocketStream(
+    nodeId: string,
+    streamId: string,
+    upstream: WebSocketLike,
+  ) {
+    return this.attachAuxiliary(nodeId, streamId, upstream as NodeAgentTunnelSocket);
+  }
+
+  private attachWebSocketStreamChannel(
     nodeId: string,
     streamId: string,
     upstream: WebSocketLike,
@@ -727,15 +813,19 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
     bridgeWebSockets(stream.downstream, upstream, {
       pendingFrameLimit: 256,
       onClientClose: () => {
+        this.removePendingChannel(current, streamId);
         current.streams.delete(streamId);
       },
       onClientError: () => {
+        this.removePendingChannel(current, streamId);
         current.streams.delete(streamId);
       },
       onUpstreamClose: () => {
+        this.removePendingChannel(current, streamId);
         current.streams.delete(streamId);
       },
       onUpstreamError: () => {
+        this.removePendingChannel(current, streamId);
         current.streams.delete(streamId);
       },
     });
@@ -754,11 +844,13 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
       return true;
     }
     if (type === "node-agent.websocket.close") {
+      if (current) this.removePendingChannel(current, streamId);
       current?.streams.delete(streamId);
       closeWebSocket(stream.downstream, message.code, message.reason);
       return true;
     }
     if (type === "node-agent.websocket.error") {
+      if (current) this.removePendingChannel(current, streamId);
       current?.streams.delete(streamId);
       stream.downstream.close(1011, typeof message.message === "string" ? message.message : "Reverse websocket proxy failed.");
       return true;
@@ -926,6 +1018,7 @@ export class ControlPlaneNodeEventSubscriber {
   }
 
   private nodeEventsUrl(node: Node) {
+    if (node.connectionEnabled === false) return undefined;
     const endpoint = node.controlEndpoint || node.endpoint;
     if (!endpoint || node.connectionMode === "reverse-wss") {
       return undefined;
@@ -945,72 +1038,30 @@ export class ControlPlaneNodeEventSubscriber {
 
 export function registerNodeAgentTunnelRoutes(options: {
   app: {
-    get: (path: string, options: { websocket: true }, handler: (socket: NodeAgentSocket, request: { query?: unknown; params?: unknown; headers: Record<string, unknown>; url?: string }) => void) => void;
+    get: (path: string, options: { websocket: true }, handler: (socket: NodeAgentTunnelSocket, request: { query?: unknown; params?: unknown; headers: Record<string, unknown>; url?: string }) => void) => void;
+    log?: { warn?: (data: Record<string, unknown>, message?: string) => void };
   };
   service: ControlPlaneService;
   nodeAgentTunnel: ControlPlaneNodeAgentTunnelTransport;
   errorPayload: (error: unknown) => TunnelErrorPayload;
 }) {
   const { app, service, nodeAgentTunnel, errorPayload } = options;
+  const ingress = new NodeTunnelIngress(nodeAgentTunnel);
+  const requireTunnelEnabled = (node: Node) => {
+    if (node.connectionEnabled === false) {
+      const error = new Error("Node agent connection is disabled locally.");
+      Object.assign(error, { statusCode: 409, code: "NODE_AGENT_CONNECTION_DISABLED" });
+      throw error;
+    }
+  };
 
   app.get(NODE_TUNNEL_API_PATH, { websocket: true }, (socket, request) => {
     try {
       const parsed = NodeAgentTunnelQuerySchema.parse(request.query);
       const node = service.requireNode(parsed.nodeId);
       verifyTunnelHmac(node, request);
-      nodeAgentTunnel.attach(node.id, socket);
-
-      socket.send(
-        JSON.stringify({
-          type: "control-plane.hello",
-          protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
-          nodeId: node.id,
-          serverTime: new Date().toISOString(),
-          capabilities: {
-            reverseTunnel: "request-response",
-            httpResponseStreaming: true,
-            lifecycleCommands: true,
-            instanceApiProxy: true,
-          },
-        }),
-      );
-
-      socket.on("message", (raw) => {
-        if (!nodeAgentTunnel.isCurrentSocket(node.id, socket)) return;
-        let message: unknown;
-        try {
-          message = JSON.parse(String(raw));
-        } catch {
-          socket.send(JSON.stringify({ type: "control-plane.error", code: "INVALID_JSON" }));
-          return;
-        }
-        const record = message && typeof message === "object" ? (message as Record<string, unknown>) : {};
-        const handled = nodeAgentTunnel.handleSocketMessage(node.id, socket, record);
-        if (handled === undefined || handled) {
-          return;
-        }
-        if (record.type === "node-agent.ping") {
-          socket.send(
-            JSON.stringify({
-              type: "control-plane.pong",
-              nodeId: node.id,
-              serverTime: new Date().toISOString(),
-            }),
-          );
-          return;
-        }
-        if (record.type === "node-agent.identify") {
-          socket.send(
-            JSON.stringify({
-              type: "control-plane.identified",
-              nodeId: node.id,
-              serverTime: new Date().toISOString(),
-            }),
-          );
-          return;
-        }
-        socket.send(JSON.stringify({ type: "control-plane.error", code: "UNSUPPORTED_MESSAGE" }));
-      });
+      requireTunnelEnabled(node);
+      ingress.attachMain(node.id, socket);
     } catch (error) {
       const payload = errorPayload(error);
       socket.send(
@@ -1029,8 +1080,23 @@ export function registerNodeAgentTunnelRoutes(options: {
       const parsed = NodeAgentTunnelQuerySchema.parse(request.query);
       const node = service.requireNode(parsed.nodeId);
       verifyTunnelHmac(node, request);
+      requireTunnelEnabled(node);
       const streamId = (request.params as { streamId: string }).streamId;
-      nodeAgentTunnel.attachWebSocketStream(node.id, streamId, socket);
+      ingress.attachAuxiliary(node.id, streamId, socket);
+    } catch (error) {
+      const payload = errorPayload(error);
+      socket.close(1008, payload.message);
+    }
+  });
+
+  app.get(`${NODE_TUNNEL_API_PATH}/channels/:channelId`, { websocket: true }, (socket, request) => {
+    try {
+      const parsed = NodeAgentTunnelQuerySchema.parse(request.query);
+      const node = service.requireNode(parsed.nodeId);
+      verifyTunnelHmac(node, request);
+      requireTunnelEnabled(node);
+      const channelId = (request.params as { channelId: string }).channelId;
+      ingress.attachAuxiliary(node.id, channelId, socket);
     } catch (error) {
       const payload = errorPayload(error);
       socket.close(1008, payload.message);
@@ -1042,8 +1108,9 @@ export function registerNodeAgentTunnelRoutes(options: {
       const parsed = NodeAgentTunnelQuerySchema.parse(request.query);
       const node = service.requireNode(parsed.nodeId);
       verifyTunnelHmac(node, request);
+      requireTunnelEnabled(node);
       const streamId = (request.params as { streamId: string }).streamId;
-      nodeAgentTunnel.attachHttpStream(node.id, streamId, socket);
+      ingress.attachAuxiliary(node.id, streamId, socket);
     } catch (error) {
       const payload = errorPayload(error);
       socket.close(1008, payload.message);

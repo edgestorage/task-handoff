@@ -31,16 +31,18 @@ const instance = {
 };
 const node = { id: "node_apps" };
 
+function transportWithRequest(request) {
+  return { request, requestStream: request, proxyWebSocket() {} };
+}
+
 test("control-plane gateway sends app management requests through the generic node instance proxy unchanged", async () => {
   const requests = [];
   const gateway = new ControlledInstanceGateway({
     requireNode: () => node,
-    nodeAgentGateway: {},
-    fetchImpl: fetch,
-    nodeAgentRequest: async (_node, route, init) => {
+    nodeAgentTransport: () => transportWithRequest(async (_node, route, init) => {
       requests.push({ route, body: JSON.parse(init.body) });
       return new Response(JSON.stringify({ data: { job: { id: "job_apps", appId: "chromium" } } }), { status: 202, headers: { "content-type": "application/json" } });
-    },
+    }),
   });
   const result = await gateway.request(instance, "/apps/chromium/install", {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ requestId: "request_apps" }),
@@ -61,11 +63,9 @@ test("control-plane gateway sends app management requests through the generic no
 test("structured controlled-instance conflicts survive the proxy boundary", async () => {
   const gateway = new ControlledInstanceGateway({
     requireNode: () => node,
-    nodeAgentGateway: {},
-    fetchImpl: fetch,
-    nodeAgentRequest: async () => new Response(JSON.stringify({
+    nodeAgentTransport: () => transportWithRequest(async () => new Response(JSON.stringify({
       error: { code: "app_sessions_running", message: "App has running sessions.", details: { sessionIds: ["session_apps"] } },
-    }), { status: 409, headers: { "content-type": "application/json" } }),
+    }), { status: 409, headers: { "content-type": "application/json" } })),
   });
   await assert.rejects(
     gateway.request(instance, "/apps/chromium/uninstall", { method: "POST", body: "{}" }),
@@ -76,8 +76,8 @@ test("structured controlled-instance conflicts survive the proxy boundary", asyn
 test("offline instances fail before stale inventory can be treated as management capability", async () => {
   let requests = 0;
   const gateway = new ControlledInstanceGateway({
-    requireNode: () => node, nodeAgentGateway: {}, fetchImpl: fetch,
-    nodeAgentRequest: async () => { requests += 1; return new Response("{}"); },
+    requireNode: () => node,
+    nodeAgentTransport: () => transportWithRequest(async () => { requests += 1; return new Response("{}"); }),
   });
   await assert.rejects(
     gateway.request({ ...instance, connectionStatus: "offline", agentStatus: "offline", appInventory: { items: [], issues: [], observedAt: new Date().toISOString() } }, "/apps/management"),
@@ -89,8 +89,8 @@ test("offline instances fail before stale inventory can be treated as management
 test("instances do not accept proxy traffic while their runtime is not ready", async () => {
   let requests = 0;
   const gateway = new ControlledInstanceGateway({
-    requireNode: () => node, nodeAgentGateway: {}, fetchImpl: fetch,
-    nodeAgentRequest: async () => { requests += 1; return new Response("{}"); },
+    requireNode: () => node,
+    nodeAgentTransport: () => transportWithRequest(async () => { requests += 1; return new Response("{}"); }),
   });
   await assert.rejects(
     gateway.request({
@@ -106,11 +106,11 @@ test("instances do not accept proxy traffic while their runtime is not ready", a
 test("a ready instance keeps accepting proxy traffic after runtime convergence fails", async () => {
   let requests = 0;
   const gateway = new ControlledInstanceGateway({
-    requireNode: () => node, nodeAgentGateway: {}, fetchImpl: fetch,
-    nodeAgentRequest: async () => {
+    requireNode: () => node,
+    nodeAgentTransport: () => transportWithRequest(async () => {
       requests += 1;
       return new Response(JSON.stringify({ data: { ok: true } }), { headers: { "content-type": "application/json" } });
-    },
+    }),
   });
   const result = await gateway.request({
     ...instance,

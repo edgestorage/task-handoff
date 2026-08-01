@@ -323,6 +323,13 @@ function errorPayload(error: unknown) {
       statusCode: 400,
       code: "VALIDATION_ERROR",
       message: error.issues.map((issue) => `${issue.path.join(".") || "body"}: ${issue.message}`).join("; "),
+      details: {
+        issues: error.issues.map((issue) => ({
+          path: issue.path.map(String),
+          code: issue.code,
+          message: issue.message,
+        })),
+      },
     };
   }
   const record = error && typeof error === "object" ? (error as Record<string, unknown>) : {};
@@ -330,6 +337,8 @@ function errorPayload(error: unknown) {
     statusCode: typeof record.statusCode === "number" ? record.statusCode : 500,
     code: typeof record.code === "string" ? record.code : "NODE_AGENT_ERROR",
     message: error instanceof Error ? error.message : String(error),
+    ...(record.details && typeof record.details === "object" && !Array.isArray(record.details) ? { details: record.details } : {}),
+    ...(typeof record.retryable === "boolean" ? { retryable: record.retryable } : {}),
   };
 }
 

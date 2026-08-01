@@ -6,6 +6,7 @@ import { useNodeRename } from "./useNodeRename";
 import type { Translate } from "../../../i18n/status.ts";
 import { translateApiError } from "../../../i18n/apiError.ts";
 import { isActiveNodeUpdate, isTerminalNodeUpdate, refreshNodeUpdateHttpState } from "./nodeUpdatePolling.ts";
+import { proxyForceDeleteAllowed } from "./controlPlaneProxyUi.ts";
 
 type UseNodeSettingsInput = {
   errorText: (error: unknown) => string;
@@ -338,7 +339,7 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
     return nodes().find((node) => node.id === nodeId)?.name || nodeId;
   }
 
-  async function removeNode(target: { id: string; name: string; labels: Record<string, string> }) {
+  async function removeNode(target: Node) {
     if (target.labels[CONTROL_PLANE_BUILTIN_NODE_LABEL] === "true" || deletingNodeId.value) {
       return;
     }
@@ -347,10 +348,14 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
     }
     deletingNodeId.value = target.id;
     try {
-      for (const runtime of runtimes().filter((item) => item.nodeId === target.id)) {
-        onNodeDeleted(runtime.id);
+      try {
+        await deleteNode(target.id);
+      } catch (error) {
+        if (!proxyForceDeleteAllowed(target, error)
+          || !window.confirm(t("settings.controlPlaneProxy.forceDeleteConfirm", { name: target.name }))) throw error;
+        await deleteNode(target.id, true);
       }
-      await deleteNode(target.id);
+      for (const runtime of runtimes().filter((item) => item.nodeId === target.id)) onNodeDeleted(runtime.id);
       await refreshNodeTopology();
     } catch (error) {
       showControlPlaneToast(translateError(error));

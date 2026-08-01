@@ -4,9 +4,7 @@ import type { NodeAgentTransport, NodeAgentWebSocket } from "../nodes/client.ts"
 
 export type ControlledInstanceGatewayOptions = {
   requireNode: (nodeId: string) => Node;
-  nodeAgentRequest: (node: Node, route: string, init?: RequestInit) => Promise<Response>;
-  nodeAgentStreamRequest: (node: Node, route: string, init?: RequestInit) => Promise<Response>;
-  fetchImpl: typeof fetch;
+  nodeAgentTransport: (node: Node) => NodeAgentTransport;
 };
 
 export type ControlledInstanceProxyHttpInit = Omit<RequestInit, "body"> & {
@@ -15,15 +13,11 @@ export type ControlledInstanceProxyHttpInit = Omit<RequestInit, "body"> & {
 
 export class ControlledInstanceGateway {
   private readonly requireNode: ControlledInstanceGatewayOptions["requireNode"];
-  private readonly nodeAgentRequest: ControlledInstanceGatewayOptions["nodeAgentRequest"];
-  private readonly nodeAgentStreamRequest: ControlledInstanceGatewayOptions["nodeAgentStreamRequest"];
-  private readonly fetchImpl: typeof fetch;
+  private readonly nodeAgentTransport: ControlledInstanceGatewayOptions["nodeAgentTransport"];
 
   constructor(options: ControlledInstanceGatewayOptions) {
     this.requireNode = options.requireNode;
-    this.nodeAgentRequest = options.nodeAgentRequest;
-    this.nodeAgentStreamRequest = options.nodeAgentStreamRequest;
-    this.fetchImpl = options.fetchImpl;
+    this.nodeAgentTransport = options.nodeAgentTransport;
   }
 
   async request(instance: ControlledInstance, route: string, init: RequestInit = {}) {
@@ -34,7 +28,7 @@ export class ControlledInstanceGateway {
     }
     assertInstanceAcceptsTraffic(instance);
     const node = this.requireNode(instance.nodeId);
-    const response = await this.nodeAgentRequest(node, `/instances/${encodeURIComponent(instance.id)}/proxy`, {
+    const response = await this.nodeAgentTransport(node).request(node, `/instances/${encodeURIComponent(instance.id)}/proxy`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -75,7 +69,7 @@ export class ControlledInstanceGateway {
     }
     assertInstanceAcceptsTraffic(instance);
     const node = this.requireNode(instance.nodeId);
-    const response = await this.nodeAgentStreamRequest(node, `/instances/${encodeURIComponent(instance.id)}/proxy/stream`, {
+    const response = await this.nodeAgentTransport(node).requestStream(node, `/instances/${encodeURIComponent(instance.id)}/proxy/stream`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       signal: init.signal,
@@ -93,7 +87,7 @@ export class ControlledInstanceGateway {
     };
   }
 
-  proxyWebSocket(instance: ControlledInstance, transport: NodeAgentTransport, socket: NodeAgentWebSocket, path: string, protocols?: string | string[], headers: Record<string, string> = {}) {
+  proxyWebSocket(instance: ControlledInstance, socket: NodeAgentWebSocket, path: string, protocols?: string | string[], headers: Record<string, string> = {}) {
     if (!instance.target.web || (instance.connectionStatus !== "online" && instance.agentStatus !== "online")) {
       const error = new Error(`Instance ${instance.name} web endpoint is not reachable.`);
       Object.assign(error, { statusCode: 409, code: "INSTANCE_WEB_UNREACHABLE" });
@@ -102,10 +96,10 @@ export class ControlledInstanceGateway {
     assertInstanceAcceptsTraffic(instance);
     const node = this.requireNode(instance.nodeId);
     const proxyPath = path.startsWith("/") ? path.slice(1) : path;
-    transport.proxyWebSocket(node, socket, `/instances/${encodeURIComponent(instance.id)}/proxy/ws/${proxyPath}`, protocols, headers);
+    this.nodeAgentTransport(node).proxyWebSocket(node, socket, `/instances/${encodeURIComponent(instance.id)}/proxy/ws/${proxyPath}`, protocols, headers);
   }
 
-  async reportHeartbeat(instance: ControlledInstance, input: ControlledInstanceHeartbeat, reverseTransport?: NodeAgentTransport) {
+  async reportHeartbeat(instance: ControlledInstance, input: ControlledInstanceHeartbeat) {
     if (!instance.registrationToken) {
       return;
     }
@@ -119,13 +113,7 @@ export class ControlledInstanceGateway {
       },
       body: JSON.stringify(input),
     };
-    const response =
-      node.connectionMode === "reverse-wss"
-        ? await reverseTransport?.request(node, route, init)
-        : await this.fetchImpl(`${(node.controlEndpoint || node.endpoint || "").replace(/\/$/, "")}/api/node-agent${route}`, init);
-    if (!response) {
-      return;
-    }
+    const response = await this.nodeAgentTransport(node).request(node, route, init);
     const payload = await response.json().catch(() => ({})) as { data?: unknown; error?: { message?: string } };
     if (!response.ok) {
       const error = new Error(payload.error?.message || `Instance heartbeat sync failed with HTTP ${response.status}`);

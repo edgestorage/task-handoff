@@ -12,7 +12,7 @@ export * from "../chat/bridges/inputs.ts";
 export * from "../triggers/inputs.ts";
 
 const NodeAuthInputSchema = z.object({
-  mode: z.enum(["local-static-key", "paired-hmac"]).default("local-static-key"),
+  mode: z.enum(["local-static-key", "paired-hmac", "proxy-binding"]).default("local-static-key"),
   keyId: NodeSchema.shape.id.optional(),
   secret: z.string().trim().max(4096).optional(),
   pairedAt: NodeSchema.shape.createdAt.optional(),
@@ -65,6 +65,8 @@ export const CreateNodeInputSchema = z.object({
   id: NodeSchema.shape.id.optional(),
   name: NodeSchema.shape.name,
   connectionMode: NodeSchema.shape.connectionMode.optional(),
+  connectionPath: NodeSchema.shape.connectionPath.optional(),
+  connectionEnabled: NodeSchema.shape.connectionEnabled.optional(),
   auth: NodeAuthInputSchema.optional(),
   joinToken: z.string().trim().min(1).max(4096).optional(),
   endpoint: NodeSchema.shape.endpoint,
@@ -81,6 +83,8 @@ export const CreateNodeInputSchema = z.object({
 export const UpdateNodeInputSchema = z.object({
   name: NodeSchema.shape.name.optional(),
   connectionMode: NodeSchema.shape.connectionMode.unwrap().optional(),
+  connectionPath: NodeSchema.shape.connectionPath.unwrap().optional(),
+  connectionEnabled: NodeSchema.shape.connectionEnabled.unwrap().optional(),
   auth: NodeAuthInputSchema.optional(),
   endpoint: NodeSchema.shape.endpoint,
   controlEndpoint: NodeSchema.shape.controlEndpoint,

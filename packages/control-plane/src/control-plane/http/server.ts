@@ -27,6 +27,14 @@ import { ControlPlaneAppSessionAggregator } from "../sessions/app-session-aggreg
 import { nodeAgentInstallScript } from "../nodes/install-script.ts";
 import { ImagePullProgressProjector } from "../images/image-pull-progress.ts";
 import { NODE_TUNNEL_API_PATH } from "../../shared/security/node-agent-auth.ts";
+import { ControlPlaneProxyStore } from "../proxy/store.ts";
+import { ControlPlaneProxyService } from "../proxy/service.ts";
+import { ControlPlaneNodeProxyRuntime } from "../proxy/runtime.ts";
+import { ControlPlaneProxyEventHub } from "../proxy/event-hub.ts";
+import { registerNodeProxyRoutes } from "./node-proxy-routes.ts";
+import { ControlPlaneProxyStateSubscriber } from "../nodes/control-plane-proxy-state-subscriber.ts";
+import { registerControlPlaneProxyManagementRoutes } from "./control-plane-proxy-management-routes.ts";
+import { projectControlPlaneProxyTarget, publicControlPlaneProxyTarget } from "../proxy/target-projector.ts";
 
 export type CreateControlPlaneAppOptions = {
   dataDir?: string;
@@ -34,6 +42,7 @@ export type CreateControlPlaneAppOptions = {
   logger?: FastifyServerOptions["logger"];
   service?: ControlPlaneServiceOptions;
   auth?: ControlPlaneAuthOptions;
+  proxyOrigin?: string;
 };
 
 export type RunControlPlaneServerOptions = CreateControlPlaneAppOptions & {
@@ -144,6 +153,7 @@ function isPublicControlPlaneRoute(method: string, url: string) {
   if (path === "/api/health" || path.startsWith("/api/auth/")) return true;
   if (method === "GET" && path === "/install-node-agent.sh") return true;
   if (method === "POST" && path === "/api/node-join/complete") return true;
+  if (method === "POST" && path === "/api/node-proxy/claims") return true;
   if (path === "/api/app-access/session") return true;
   if (path.startsWith("/apps/access/")) return true;
   if (path === "/favicon.ico" || path.startsWith("/assets/")) return true;
@@ -153,7 +163,8 @@ function isPublicControlPlaneRoute(method: string, url: string) {
 
 function isNodeAuthenticatedControlPlaneRoute(method: string, url: string) {
   const path = url.split("?")[0];
-  return method === "GET" && (path === NODE_TUNNEL_API_PATH || path.startsWith(`${NODE_TUNNEL_API_PATH}/`));
+  return (method === "GET" && (path === NODE_TUNNEL_API_PATH || path.startsWith(`${NODE_TUNNEL_API_PATH}/`)))
+    || path.startsWith("/api/node-proxy/bindings/");
 }
 
 function disabledAuthActor(): ControlPlaneActor {
@@ -188,6 +199,9 @@ function routeAuthorization(method: string, url: string): { action: ControlPlane
   }
   if (path === "/api/node-join/invites") {
     return { action: "manage-node-auth", resource: { type: "node" } };
+  }
+  if (path.startsWith("/api/control-plane-proxy")) {
+    return { action: method === "GET" ? "read" : "manage-node-auth", resource: { type: "node" } };
   }
   if (path.startsWith("/api/nodes")) {
     if (/\/(runtimes|local-folders)(\/|$)/.test(path)) {
@@ -285,7 +299,43 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       ? appSessionAggregator.handleEvent(event)
       : aiSessionAggregator.handleEvent(event),
   });
+  const explicitProxyOrigin = options.proxyOrigin || process.env.TASK_HANDOFF_CONTROL_PLANE_PROXY_ORIGIN;
+  const projectProxyTarget = (nodeId: string) => {
+    const node = service.nodes.get(nodeId);
+    return node
+      ? projectControlPlaneProxyTarget(node, nodeAgentTunnel.connected(node.id))
+      : undefined;
+  };
+  const proxy = new ControlPlaneProxyService(
+    new ControlPlaneProxyStore(paths.proxyAuthorityPath, (message, details) => app.log.warn(details, message)),
+    {
+      get: projectProxyTarget,
+    },
+    {
+      proxyOrigin: explicitProxyOrigin,
+      proxyOriginProvider: () => service.getSettings().publicBaseUrl,
+    },
+  );
+  const proxyRuntime = new ControlPlaneNodeProxyRuntime();
+  const proxyEventHub = new ControlPlaneProxyEventHub(events, {
+    projectTarget: (targetNodeId) => {
+      const target = projectProxyTarget(targetNodeId);
+      return target ? publicControlPlaneProxyTarget(target) : undefined;
+    },
+  });
+  const proxyStateSubscriber = new ControlPlaneProxyStateSubscriber(service, {
+    fetchImpl: options.service?.fetchImpl,
+    logger: app.log,
+    onStateChanged: (node) => events.publish(
+      "node.proxy-state.updated",
+      { nodeId: node.id, proxyState: node.proxyState },
+      { topic: "node.state", scope: { nodeId: node.id } },
+    ),
+  });
   events.on((event) => {
+    if (event.type === "node.created" || event.type === "node.updated" || event.type === "node.deleted") {
+      proxyStateSubscriber.syncNow();
+    }
     if (event.type === "instance.created" || event.type === "instance.updated" || event.type === "instance.deleted") {
       const instanceId = event.payload && typeof event.payload === "object" && "instanceId" in event.payload
         ? String((event.payload as { instanceId?: unknown }).instanceId || "")
@@ -296,11 +346,20 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       const nodeId = event.payload && typeof event.payload === "object" && "nodeId" in event.payload
         ? String((event.payload as { nodeId?: unknown }).nodeId || "")
         : "";
-      if (nodeId) nodeAgentTunnel.invalidateInstanceScope({ nodeId });
+      if (nodeId) {
+        nodeAgentTunnel.invalidateInstanceScope({ nodeId });
+        const revoked = proxy.revokeTarget(nodeId);
+        for (const binding of revoked.bindings) {
+          proxyRuntime.closeBinding(binding.id, "Proxy target was deleted.");
+          events.publish("control-plane-proxy.binding.updated", { binding }, { topic: "control-plane-proxy", scope: { nodeId } });
+        }
+      }
     }
   });
   service.setNodeAgentTransport(nodeAgentTunnel);
   service.init();
+  proxy.init();
+  proxyStateSubscriber.start();
   await service.syncLocalNodeConnection().catch(() => undefined);
   auth.init();
   const chatGateway = new ControlPlaneChatGatewayRuntime(service, options.service?.fetchImpl, { aiSessions: aiSessionAggregator, logger: app.log });
@@ -311,6 +370,8 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   await app.register(websocket);
   app.addHook("onClose", async () => {
     imagePullProgress.close();
+    proxyEventHub.stop();
+    proxyStateSubscriber.stop();
     nodeEventSubscriber.stop();
     chatGateway.stopAll();
   });
@@ -497,6 +558,36 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     nodeAgentTunnel,
     nodeEventSubscriber,
     errorPayload: controlPlaneErrorPayload,
+  });
+
+  registerNodeProxyRoutes({
+    app,
+    authority: proxy,
+    resolveTarget: (targetNodeId) => {
+      const node = service.requireNode(targetNodeId);
+      return { node, transport: service.resolveNodeAgentTransport(node) };
+    },
+    projectTarget: projectProxyTarget,
+    runtime: proxyRuntime,
+    eventHub: proxyEventHub,
+    onBindingRevoked: (binding) => events.publish("control-plane-proxy.binding.updated", {
+      binding,
+      audit: { action: "binding.revoke", actor: `control-plane:${binding.sourceControlPlaneId}` },
+    }, { topic: "control-plane-proxy", scope: { nodeId: binding.targetNodeId } }),
+  });
+  registerControlPlaneProxyManagementRoutes({
+    app,
+    service,
+    proxy,
+    runtime: proxyRuntime,
+    events,
+    actorId: async (request) => {
+      const actor = await actorForRequest(auth, request.cookies[CONTROL_PLANE_SESSION_COOKIE]);
+      if (!actor) return "system:unknown";
+      if (actor.type === "user") return `user:${actor.userId}`;
+      if (actor.type === "system") return `system:${actor.reason}`;
+      return `chat-bridge:${actor.bridgeId}`;
+    },
   });
 
   registerInstanceProxyRoutes({ app, service });

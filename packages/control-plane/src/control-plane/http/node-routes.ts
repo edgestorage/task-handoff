@@ -16,6 +16,9 @@ import {
   NodeRuntimeParamsSchema,
 } from "./route-params.ts";
 import { withRequestSignal } from "./request-signal.ts";
+import { z } from "zod";
+
+const DeleteNodeQuerySchema = z.object({ force: z.enum(["true", "false"]).optional() }).strict();
 
 type ErrorPayload = (error: unknown) => {
   statusCode: number;
@@ -190,16 +193,18 @@ export function registerNodeRoutes({
   app.get("/api/nodes/:id", async (request) => ({ data: service.requirePublicNode(IdParamsSchema.parse(request.params).id) }));
   app.patch("/api/nodes/:id", async (request) => {
     const node = service.updateNode(IdParamsSchema.parse(request.params).id, request.body);
+    if (!node.connectionEnabled) nodeAgentTunnel.disconnect(node.id);
     nodeEventSubscriber.syncNow();
     events.publish("node.updated", { nodeId: node.id });
     return { data: service.requirePublicNode(node.id) };
   });
   app.delete("/api/nodes/:id", async (request) => {
     const id = IdParamsSchema.parse(request.params).id;
-    const deleted = service.deleteNode(id);
+    const query = DeleteNodeQuerySchema.parse(request.query);
+    const result = await service.deleteNodeWithProxyLifecycle(id, query.force === "true");
     nodeEventSubscriber.syncNow();
-    events.publish("node.deleted", { nodeId: id, deleted });
-    return { data: { deleted } };
+    events.publish("node.deleted", { nodeId: id, deleted: result.deleted, revoke: result.revoke });
+    return { data: result };
   });
 
   app.get("/api/node-runtimes", async (request, reply) => withRequestSignal(request, reply, async (signal) => {

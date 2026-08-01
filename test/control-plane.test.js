@@ -44,7 +44,7 @@ const { launchableAppsForInstance: chatLaunchableAppsForInstance } = require("..
 const { appSessionStatus } = require("../packages/control-plane-ui/src/apps/control-plane/appSessionVisibility.ts");
 const { AiSessionEventType, AiSessionEventTopic, AiSessionUnreadEventType } = require("../packages/protocol/src/ai-sessions.ts");
 const { AppSessionEventType, normalizeAppSessionRecord } = require("../packages/protocol/src/app-sessions.ts");
-const { ApplyUpdateRequestSchema, CONTROL_PLANE_PROTOCOL_VERSION, ControlledInstanceHeartbeatSchema, ControlledInstanceRegisterSchema, ControlledInstanceSchema, InstanceAppInventorySchema, InstanceLifecycleEventType, RuntimeArtifactIdentitySchema, RuntimeVersionStateSchema, UpdateCheckRequestSchema, UpdateJobSchema, modelConfigHash, parseStoredControlledInstance, sanitizeStoredControlledInstance } = require("../packages/protocol/src/control-plane.ts");
+const { ApplyUpdateRequestSchema, CONTROL_PLANE_PROTOCOL_VERSION, ControlledInstanceHeartbeatSchema, ControlledInstanceRegisterSchema, ControlledInstanceSchema, InstanceAppInventorySchema, InstanceLifecycleEventType, RuntimeArtifactIdentitySchema, RuntimeVersionStateSchema, UpdateCheckRequestSchema, UpdateJobSchema, decodeNodeTunnelRequestBody, modelConfigHash, parseStoredControlledInstance, sanitizeStoredControlledInstance } = require("../packages/protocol/src/control-plane.ts");
 const { ChatActionTokenService, parsePendingDecisionCallbackData, pendingDecisionRouteFingerprint } = require("../packages/control-plane/src/control-plane/chat/action-token-service.ts");
 
 const controlledProcessIdentityRouteStubLines = [
@@ -694,15 +694,17 @@ test("session aggregators never let an older bootstrap overwrite realtime state"
 test("controlled instance gateway preserves structured remote errors for every proxied route", async () => {
   const gateway = new ControlledInstanceGateway({
     requireNode: () => ({ id: "node_1" }),
-    nodeAgentGateway: {},
-    nodeAgentRequest: async () => new Response(JSON.stringify({
-      error: {
-        code: "APP_SESSION_NOT_FOUND",
-        message: "App session not found.",
-        details: { appSessionId: "app_missing" },
-      },
-    }), { status: 404, headers: { "content-type": "application/json" } }),
-    fetchImpl: fetch,
+    nodeAgentTransport: () => ({
+      request: async () => new Response(JSON.stringify({
+        error: {
+          code: "APP_SESSION_NOT_FOUND",
+          message: "App session not found.",
+          details: { appSessionId: "app_missing" },
+        },
+      }), { status: 404, headers: { "content-type": "application/json" } }),
+      requestStream: async () => new Response(),
+      proxyWebSocket() {},
+    }),
   });
   const instance = {
     id: "inst_1",
@@ -4029,7 +4031,9 @@ test("node agent runs local docker behind node-local target and auto-imports age
   const body = response.json();
   assert.equal(body.data.target.web, "http://127.0.0.1:18080");
   assert.deepEqual(
-    fetchCalls.map((call) => `${call.method} ${new URL(call.url).pathname}`),
+    fetchCalls
+      .map((call) => `${call.method} ${new URL(call.url).pathname}`)
+      .filter((call) => call === "GET /api/health" || call.startsWith("POST /api/config-sync/import/")),
     [
       "GET /api/health",
       "POST /api/config-sync/import/codex",
@@ -4050,7 +4054,9 @@ test("node agent runs local docker behind node-local target and auto-imports age
   });
   assert.equal(restarted.statusCode, 200);
   assert.deepEqual(
-    fetchCalls.map((call) => `${call.method} ${new URL(call.url).pathname}`),
+    fetchCalls
+      .map((call) => `${call.method} ${new URL(call.url).pathname}`)
+      .filter((call) => call === "GET /api/health" || call.startsWith("POST /api/config-sync/import/")),
     [
       "GET /api/health",
       "POST /api/config-sync/import/codex",
@@ -4288,7 +4294,12 @@ test("node agent skips start config auto-import when disabled on the instance", 
     payload: {},
   });
   assert.equal(started.statusCode, 200, started.body);
-  assert.deepEqual(fetchCalls.map((call) => `${call.method} ${new URL(call.url).pathname}`), ["GET /api/health"]);
+  assert.deepEqual(
+    fetchCalls
+      .map((call) => `${call.method} ${new URL(call.url).pathname}`)
+      .filter((call) => call === "GET /api/health" || call.startsWith("POST /api/config-sync/import/")),
+    ["GET /api/health"],
+  );
 });
 
 test("node agent config auto-import failure does not fail start", async (t) => {
@@ -4360,7 +4371,9 @@ test("node agent config auto-import failure does not fail start", async (t) => {
   assert.equal(started.statusCode, 200);
   assert.equal(started.json().data.target.status, "reachable");
   assert.deepEqual(
-    fetchCalls.map((call) => `${call.method} ${new URL(call.url).pathname}`),
+    fetchCalls
+      .map((call) => `${call.method} ${new URL(call.url).pathname}`)
+      .filter((call) => call === "GET /api/health" || call.startsWith("POST /api/config-sync/import/")),
     [
       "GET /api/health",
       "POST /api/config-sync/import/codex",
@@ -4408,6 +4421,9 @@ test("node agent config auto-import timeout does not hang start", async (t) => {
       const pathname = new URL(String(url)).pathname;
       if (pathname === "/api/health") {
         return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (pathname.startsWith("/api/internal/node-agent/") || pathname === "/api/apps/sessions") {
+        return new Response(JSON.stringify({ data: { ok: true, sessions: [] } }), { status: 200, headers: { "content-type": "application/json" } });
       }
       await new Promise((resolve, reject) => {
         const timeout = setTimeout(resolve, 1_000);
@@ -6739,6 +6755,8 @@ test("node agent restores active localhost runtime processes after unclean shutd
     stdio: "ignore",
     env: {
       ...process.env,
+      TASK_HANDOFF_APP_SESSION_PERSIST: undefined,
+      TASK_HANDOFF_CONTROLLED_INSTANCE_VERSION: undefined,
       TASK_HANDOFF_INSTANCE_ID: child.id,
       TASK_HANDOFF_REGISTRATION_TOKEN: child.registrationToken,
       TASK_HANDOFF_LOCAL_PROCESS_NONCE: orphanNonce,
@@ -8478,6 +8496,72 @@ test("node reverse tunnel aborts app.inject when a regular request is canceled",
   assert.equal(await withTimeout(injectAborted, "regular request inject abort"), true);
 });
 
+test("node reverse tunnel rejects legacy request bodies without terminating the connection", async (t) => {
+  const tunnelServer = new WebSocket.Server({ host: "127.0.0.1", port: 0 });
+  const tunnelSockets = new Set();
+  t.after(() => {
+    for (const socket of tunnelSockets) socket.terminate();
+    return new Promise((resolve) => tunnelServer.close(resolve));
+  });
+  await withTimeout(new Promise((resolve) => tunnelServer.once("listening", resolve)), "legacy request tunnel server");
+  const address = tunnelServer.address();
+  assert.equal(typeof address, "object");
+
+  let markConnected;
+  const connected = new Promise((resolve) => { markConnected = resolve; });
+  tunnelServer.on("connection", (serverSocket) => {
+    tunnelSockets.add(serverSocket);
+    serverSocket.on("close", () => tunnelSockets.delete(serverSocket));
+    markConnected({ serverSocket, identified: onceWebSocketMessage(serverSocket) });
+  });
+  const warnings = [];
+  let injectCount = 0;
+  const tunnel = connectReverseTunnel({
+    log: { warn(data, message) { warnings.push({ data, message }); } },
+    async inject() {
+      injectCount += 1;
+      return { statusCode: 200, headers: { "content-type": "application/json" }, body: "{}" };
+    },
+  }, {
+    tunnelUrl: `ws://127.0.0.1:${address.port}/api/node-tunnel`,
+    nodeId: "node_legacy_request_body",
+    port: 1,
+  });
+  t.after(() => tunnel.terminate());
+
+  const { serverSocket: main, identified } = await withTimeout(connected, "legacy request tunnel connection");
+  assert.equal((await withTimeout(identified, "legacy request tunnel identify")).type, "node-agent.identify");
+  const rejectedResponse = onceWebSocketMessage(main);
+  main.send(JSON.stringify({
+    type: "control-plane.request",
+    requestId: "legacy_request",
+    route: "/instances/one/proxy",
+    init: { method: "POST", body: "{\"legacy\":true}" },
+  }));
+  assert.deepEqual(await withTimeout(rejectedResponse, "legacy request rejection"), {
+    type: "node-agent.response",
+    requestId: "legacy_request",
+    status: 400,
+    error: {
+      code: "NODE_TUNNEL_REQUEST_BODY_INVALID",
+      message: "Reverse tunnel request body does not match the negotiated protocol.",
+    },
+  });
+  assert.equal(injectCount, 0);
+  assert.equal(warnings.at(-1).message, "node agent reverse tunnel request body rejected");
+
+  const healthyResponse = onceWebSocketMessage(main);
+  main.send(JSON.stringify({
+    type: "control-plane.request",
+    requestId: "current_request",
+    route: "/health",
+    init: { method: "GET" },
+  }));
+  assert.equal((await withTimeout(healthyResponse, "request after legacy rejection")).status, 200);
+  assert.equal(injectCount, 1);
+  assert.equal(main.readyState, WebSocket.OPEN);
+});
+
 test("aborting an active fleet query cancels its reverse-WSS node request", async (t) => {
   const app = await createControlPlaneApp({
     dataDir: tempDataDir("control-plane-fleet-query-abort"),
@@ -9007,7 +9091,7 @@ test("control plane proxies instance websocket routes through reverse node tunne
       return;
     }
     if (message.type === "control-plane.request" && !recoveryRequestPending && fallbackRecoverySnapshot) {
-      const body = JSON.parse(message.init.body);
+      const body = JSON.parse(String(decodeNodeTunnelRequestBody(message.init.body)));
       if (message.route === `/instances/${created.body.data.id}/proxy` && body.path === "/api/triggers") {
         tunnel.send(JSON.stringify({
           type: "node-agent.response",
@@ -9055,7 +9139,7 @@ test("control plane proxies instance websocket routes through reverse node tunne
       await new Promise((resolve) => setImmediate(resolve));
       if (data.snapshot) fallbackRecoverySnapshot = data;
       recoveryRequestPending = false;
-      return JSON.parse(message.init.body);
+      return JSON.parse(String(decodeNodeTunnelRequestBody(message.init.body)));
     }
   };
 

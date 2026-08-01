@@ -41,6 +41,12 @@ const expectedDomains = {
     controlPlaneQueryKeys.instanceBoard,
   ],
   nodeFolders: [controlPlaneQueryKeys.nodeLocalFolders()],
+  controlPlaneProxy: [
+    controlPlaneQueryKeys.controlPlaneProxyInvites,
+    controlPlaneQueryKeys.controlPlaneProxyBindings,
+    controlPlaneQueryKeys.controlPlaneProxyDiagnostics,
+    controlPlaneQueryKeys.controlPlaneProxyPendingClaims,
+  ],
   instances: [controlPlaneQueryKeys.instanceBoard],
   chat: [controlPlaneQueryKeys.chatBridges, controlPlaneQueryKeys.chatStatus],
 };
@@ -94,5 +100,13 @@ test("node.checked invalidates only Node state instead of the full topology", ()
   assert.deepEqual(
     controlPlaneDomainQueryKeys(controlPlaneEventDomains([{ type: "node.checked", topic: "node.state" }])),
     [controlPlaneQueryKeys.nodes],
+  );
+});
+
+test("control-plane proxy events invalidate only proxy management projections", () => {
+  assert.deepEqual(controlPlaneEventDomains([{ topic: "control-plane-proxy" }]), ["controlPlaneProxy"]);
+  assert.deepEqual(
+    controlPlaneDomainQueryKeys(controlPlaneEventDomains([{ topic: "control-plane-proxy" }])),
+    expectedDomains.controlPlaneProxy,
   );
 });

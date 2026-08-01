@@ -523,26 +523,119 @@
           </DialogHeader>
 
           <form class="remote-node-form" @submit.prevent="submitRemoteNode">
-            <label>
-              <span>{{ t("settings.fields.name") }}</span>
-              <ControlPlaneInput v-model="settingsNode.name" :placeholder="t('settings.nodeDetail.remoteNamePlaceholder')" />
-            </label>
-            <label>
-              <span>{{ t("settings.fields.endpoint") }}</span>
-              <!-- i18n-audit-allow-next-line code-token: example node endpoint -->
-              <ControlPlaneInput v-model="settingsNode.endpoint" placeholder="http://10.0.0.12:8091" />
-            </label>
-            <label>
-              <span>{{ t("settings.nodeRegistry.joinToken") }}</span>
-              <ControlPlaneInput v-model="settingsNode.joinToken" :placeholder="t('settings.nodeDetail.pairingTokenPlaceholder')" />
-            </label>
+            <ScrollArea class="remote-node-form-scroll" :horizontal="false">
+              <div class="remote-node-form-content">
+            <Tabs v-model="remoteNodeMode" class="remote-node-tabs">
+              <TabsList class="remote-node-mode-tabs">
+                <TabsTrigger value="direct">{{ t("settings.controlPlaneProxy.directMode") }}</TabsTrigger>
+                <TabsTrigger value="control-plane-proxy">{{ t("settings.controlPlaneProxy.proxyMode") }}</TabsTrigger>
+              </TabsList>
+              <TabsContent value="direct" class="remote-node-mode-content">
+                <label>
+                  <span>{{ t("settings.fields.name") }}</span>
+                  <ControlPlaneInput v-model="settingsNode.name" :placeholder="t('settings.nodeDetail.remoteNamePlaceholder')" />
+                </label>
+                <label>
+                  <span>{{ t("settings.fields.endpoint") }}</span>
+                  <!-- i18n-audit-allow-next-line code-token: example node endpoint -->
+                  <ControlPlaneInput v-model="settingsNode.endpoint" placeholder="http://10.0.0.12:8091" />
+                </label>
+                <label>
+                  <span>{{ t("settings.nodeRegistry.joinToken") }}</span>
+                  <ControlPlaneInput v-model="settingsNode.joinToken" :placeholder="t('settings.nodeDetail.pairingTokenPlaceholder')" />
+                </label>
+              </TabsContent>
+              <TabsContent value="control-plane-proxy" class="remote-node-mode-content">
+                <div class="proxy-trust-notice">
+                  <ShieldAlert :size="18" />
+                  <span>{{ t("settings.controlPlaneProxy.trustWarning") }}</span>
+                </div>
+                <label>
+                  <span>{{ t("settings.controlPlaneProxy.proxyOrigin") }}</span>
+                  <!-- i18n-audit-allow-next-line code-token: example trusted control-plane origin -->
+                  <ControlPlaneInput v-model="proxyNodeDraft.proxyOrigin" :aria-describedby="proxyNodeErrorField === 'origin' ? 'proxy-node-error' : undefined" :aria-invalid="proxyNodeErrorField === 'origin'" placeholder="https://control-plane.example.com" />
+                </label>
+                <div class="remote-node-field">
+                  <label for="proxy-invite-token">{{ t("settings.controlPlaneProxy.inviteToken") }}</label>
+                  <div class="proxy-token-input">
+                    <ControlPlaneInput
+                      id="proxy-invite-token"
+                      v-model="proxyNodeDraft.inviteToken"
+                      :aria-describedby="proxyNodeErrorField === 'token' ? 'proxy-node-error' : undefined"
+                      :aria-invalid="proxyNodeErrorField === 'token'"
+                      autocomplete="off"
+                      :placeholder="t('settings.controlPlaneProxy.inviteTokenPlaceholder')"
+                      :type="showProxyInviteToken ? 'text' : 'password'"
+                    />
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="ghost"
+                      :aria-label="t(showProxyInviteToken ? 'settings.controlPlaneProxy.hideToken' : 'settings.controlPlaneProxy.showToken')"
+                      :aria-pressed="showProxyInviteToken"
+                      @click="showProxyInviteToken = !showProxyInviteToken"
+                    >
+                      <EyeOff v-if="showProxyInviteToken" :size="15" />
+                      <Eye v-else :size="15" />
+                    </Button>
+                  </div>
+                </div>
+                <label>
+                  <span>{{ t("settings.fields.name") }}</span>
+                  <ControlPlaneInput v-model="proxyNodeDraft.name" :placeholder="t('settings.controlPlaneProxy.optionalName')" />
+                </label>
+                <label class="proxy-trust-confirmation">
+                  <Checkbox
+                    :aria-describedby="proxyNodeErrorField === 'trust' ? 'proxy-node-error' : undefined"
+                    :aria-invalid="proxyNodeErrorField === 'trust'"
+                    :model-value="proxyNodeDraft.trusted"
+                    @update:model-value="(value) => proxyNodeDraft.trusted = value === true"
+                  />
+                  <span>{{ t("settings.controlPlaneProxy.trustConfirmation") }}</span>
+                </label>
+                <div v-if="pendingProxyClaims.isLoading.value" class="pending-proxy-state" role="status">{{ t("settings.nodeDetail.loading") }}</div>
+                <div v-else-if="pendingProxyClaims.error.value" class="pending-proxy-state control-plane-error" role="alert">
+                  <span>{{ translateApiError(pendingProxyClaims.error.value, t) }}</span>
+                  <Button type="button" size="sm" variant="outline" @click="pendingProxyClaims.refetch()">{{ t("common.actions.retry") }}</Button>
+                </div>
+                <div v-else-if="pendingProxyClaims.data.value?.length" class="pending-proxy-claims">
+                  <strong>{{ t("settings.controlPlaneProxy.pendingClaims") }}</strong>
+                  <ScrollArea class="pending-proxy-list" :horizontal="false">
+                    <div class="pending-proxy-list-content">
+                      <div v-for="claim in pendingProxyClaims.data.value" :key="claim.id" class="pending-proxy-row">
+                        <span>{{ claim.proxyOrigin }} · {{ t(`settings.controlPlaneProxy.claimStatus.${claim.status}`) }}</span>
+                        <div>
+                          <Button type="button" size="sm" variant="outline" :disabled="Boolean(pendingClaimBusyId)" @click="resumeProxyClaim(claim.id)">
+                            {{ pendingClaimBusyId === claim.id && pendingClaimAction === 'resume' ? t("settings.controlPlaneProxy.resuming") : t("settings.controlPlaneProxy.resume") }}
+                          </Button>
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="outline"
+                            :disabled="Boolean(pendingClaimBusyId)"
+                            :aria-label="t(pendingClaimBusyId === claim.id && pendingClaimAction === 'cancel' ? 'settings.controlPlaneProxy.cancelling' : 'settings.controlPlaneProxy.cancelClaim')"
+                            @click="cancelProxyClaim(claim.id)"
+                          >
+                            <RefreshCw v-if="pendingClaimBusyId === claim.id && pendingClaimAction === 'cancel'" class="proxy-spin" :size="14" />
+                            <Trash2 v-else :size="14" />
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  </ScrollArea>
+                </div>
+              </TabsContent>
+            </Tabs>
+            <p v-if="proxyNodeError" id="proxy-node-error" class="control-plane-error" role="alert">{{ proxyNodeError }}</p>
             <p v-if="settingsNodeSuccess" class="settings-success">{{ settingsNodeSuccess }}</p>
+              </div>
+            </ScrollArea>
 
             <DialogFooter>
               <Button type="button" variant="outline" @click="setRemoteNodeDialogOpen(false)">{{ t("common.actions.cancel") }}</Button>
-              <Button type="submit" :disabled="!canCreateNode || creatingNode">
+              <Button type="submit" :disabled="!canSubmitRemoteNode || creatingRemoteNode">
                 <Plus :size="15" />
-                <span>{{ creatingNode ? t("settings.nodeRegistry.creating") : t("settings.nodeRegistry.create") }}</span>
+                <span>{{ creatingRemoteNode ? t("settings.nodeRegistry.creating") : t("settings.nodeRegistry.create") }}</span>
               </Button>
             </DialogFooter>
           </form>
@@ -571,8 +664,8 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useQueryClient } from "@tanstack/vue-query";
-import { AlertTriangle, ArrowLeft, ChevronDown, ChevronUp, Download, KeyRound, Layers, MapPin, MonitorCog, Plus, RefreshCw, Server, Settings, Trash2 } from "@lucide/vue";
-import { controlPlaneQueryKeys, getNodeExternalListener, updateControlPlaneSettings, updateNodeExternalListener, useChatBridgesQuery, useChatGatewayStatusQuery, useControlPlaneSettingsQuery, useImageOptionsQuery, useImagesQuery, useInstanceBoardPayloadQuery, useMarketCatalogQuery, useModelRegistryQuery, useModelsQuery, useNodeImageAvailabilityQuery, useNodeRuntimesPayloadQuery, useNodesQuery, useProjectsQuery, useServerUpdateCheckQuery } from "../../../api/queries";
+import { AlertTriangle, ArrowLeft, ChevronDown, ChevronUp, Download, Eye, EyeOff, KeyRound, Layers, MapPin, MonitorCog, Plus, RefreshCw, Server, Settings, ShieldAlert, Trash2 } from "@lucide/vue";
+import { cancelControlPlaneProxyClaim, claimControlPlaneProxyNode, controlPlaneQueryKeys, getNodeExternalListener, resumeControlPlaneProxyClaim, updateControlPlaneSettings, updateNodeExternalListener, useChatBridgesQuery, useChatGatewayStatusQuery, useControlPlaneSettingsQuery, useImageOptionsQuery, useImagesQuery, useInstanceBoardPayloadQuery, useMarketCatalogQuery, useModelRegistryQuery, useModelsQuery, useNodeImageAvailabilityQuery, useNodeRuntimesPayloadQuery, useNodesQuery, usePendingControlPlaneProxyClaimsQuery, useProjectsQuery, useServerUpdateCheckQuery } from "../../../api/queries";
 import { invalidateControlPlaneDomains } from "../../../api/queryInvalidation";
 import type { BuildInfo, ControlPlaneSettings, InstanceBoardItem, ModelLocation, Node, NodeAgentExternalListener, UpdateChannel } from "../../../api/types";
 import { Badge } from "../../../components/ui/badge";
@@ -581,7 +674,7 @@ import { Checkbox } from "../../../components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
 import { ScrollArea } from "../../../components/ui/scroll-area";
-import { Tabs, TabsList, TabsTrigger } from "../../../components/ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../../components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
 import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
@@ -607,6 +700,7 @@ import { getThemePreference, saveThemePreference, type ThemePreference } from ".
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 import { connectionStatusKeys, translateStatus } from "../../../i18n/status";
 import { translateApiError } from "../../../i18n/apiError";
+import { normalizeProxyOrigin, proxyClaimValidation } from "./controlPlaneProxyUi";
 
 type SettingsSection = "basic" | "chat" | "images" | "projects" | "nodes" | "models" | "triggers";
 type NodeDiagnosticLog = {
@@ -674,6 +768,15 @@ const commandTriggerError = computed(() => validCommandTrigger(commandTrigger.va
 const triggerSettingsAtDefaults = computed(() => commandTrigger.value === "/" && mentionTrigger.value === "@");
 const triggerSettingsDirty = computed(() => mentionTrigger.value !== (controlPlaneSettings.data.value?.mentionTrigger || "@") || commandTrigger.value !== (controlPlaneSettings.data.value?.commandTrigger || "/"));
 const remoteNodeDialogOpen = ref(false);
+const remoteNodeMode = ref<"direct" | "control-plane-proxy">("direct");
+const creatingProxyNode = ref(false);
+const proxyNodeError = ref("");
+const proxyNodeErrorField = ref<"origin" | "token" | "trust" | "form">("form");
+const proxyNodeDraft = ref({ proxyOrigin: "", inviteToken: "", name: "", trusted: false });
+const showProxyInviteToken = ref(false);
+const pendingClaimBusyId = ref("");
+const pendingClaimAction = ref<"resume" | "cancel">();
+const pendingProxyClaims = usePendingControlPlaneProxyClaimsQuery();
 const creatingNodeAgentInstall = ref(false);
 const nodeAgentInstallInvite = ref<{ joinToken: string; expiresAt: string }>();
 const nodeAgentInstallControlPlaneUrl = computed(() => publicBaseUrl.value.trim() || window.location.origin);
@@ -1058,8 +1161,15 @@ const {
 
 function openRemoteNodeDialog() {
   clearNodeFeedback();
+  proxyNodeError.value = "";
+  proxyNodeErrorField.value = "form";
   remoteNodeDialogOpen.value = true;
 }
+
+const canSubmitRemoteNode = computed(() => remoteNodeMode.value === "direct"
+  ? canCreateNode.value
+  : !proxyClaimValidation(proxyNodeDraft.value));
+const creatingRemoteNode = computed(() => creatingNode.value || creatingProxyNode.value);
 
 async function openNodeAgentInstallGuide() {
   if (creatingNodeAgentInstall.value) return;
@@ -1076,13 +1186,84 @@ function setRemoteNodeDialogOpen(open: boolean) {
   remoteNodeDialogOpen.value = open;
   if (!open) {
     clearNodeFeedback();
+    proxyNodeError.value = "";
+    proxyNodeErrorField.value = "form";
+    proxyNodeDraft.value = { proxyOrigin: "", inviteToken: "", name: "", trusted: false };
+    showProxyInviteToken.value = false;
   }
 }
 
 async function submitRemoteNode() {
+  if (remoteNodeMode.value === "control-plane-proxy") {
+    await submitProxyNode();
+    return;
+  }
   await createSettingsNode();
   if (settingsNodeSuccess.value) {
-    remoteNodeDialogOpen.value = false;
+    setRemoteNodeDialogOpen(false);
+  }
+}
+
+function proxyValidationMessage() {
+  const issue = proxyClaimValidation(proxyNodeDraft.value);
+  proxyNodeErrorField.value = issue || "form";
+  return issue ? t(`settings.controlPlaneProxy.validation.${issue}`) : "";
+}
+
+async function submitProxyNode() {
+  proxyNodeError.value = proxyValidationMessage();
+  if (proxyNodeError.value || creatingProxyNode.value) return;
+  creatingProxyNode.value = true;
+  try {
+    const result = await claimControlPlaneProxyNode({
+      proxyOrigin: normalizeProxyOrigin(proxyNodeDraft.value.proxyOrigin),
+      inviteToken: proxyNodeDraft.value.inviteToken.trim(),
+      name: proxyNodeDraft.value.name.trim() || undefined,
+    });
+    await invalidateControlPlaneDomains(queryClient, ["nodeTopology", "controlPlaneProxy"]);
+    selectNode(result.node.id);
+    setRemoteNodeDialogOpen(false);
+    showControlPlaneToast(t("settings.controlPlaneProxy.nodeAdded", { name: result.node.name }), "success");
+  } catch (error) {
+    proxyNodeErrorField.value = "form";
+    proxyNodeError.value = translateApiError(error, t);
+    await pendingProxyClaims.refetch();
+  } finally {
+    creatingProxyNode.value = false;
+  }
+}
+
+async function resumeProxyClaim(id: string) {
+  if (pendingClaimBusyId.value) return;
+  pendingClaimBusyId.value = id;
+  pendingClaimAction.value = "resume";
+  try {
+    const result = await resumeControlPlaneProxyClaim(id);
+    await invalidateControlPlaneDomains(queryClient, ["nodeTopology", "controlPlaneProxy"]);
+    selectNode(result.node.id);
+    setRemoteNodeDialogOpen(false);
+  } catch (error) {
+    proxyNodeErrorField.value = "form";
+    proxyNodeError.value = translateApiError(error, t);
+  } finally {
+    pendingClaimBusyId.value = "";
+    pendingClaimAction.value = undefined;
+  }
+}
+
+async function cancelProxyClaim(id: string) {
+  if (pendingClaimBusyId.value) return;
+  pendingClaimBusyId.value = id;
+  pendingClaimAction.value = "cancel";
+  try {
+    await cancelControlPlaneProxyClaim(id);
+    await pendingProxyClaims.refetch();
+  } catch (error) {
+    proxyNodeErrorField.value = "form";
+    proxyNodeError.value = translateApiError(error, t);
+  } finally {
+    pendingClaimBusyId.value = "";
+    pendingClaimAction.value = undefined;
   }
 }
 
@@ -1733,6 +1914,9 @@ function errorText(error: unknown) {
 
 .remote-node-dialog {
   width: min(520px, calc(100vw - 36px));
+  max-height: calc(100dvh - 36px);
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
 }
 
 :global(.node-rename-dialog.node-rename-dialog) {
@@ -1756,19 +1940,46 @@ function errorText(error: unknown) {
 
 .remote-node-form {
   display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
   gap: 14px;
+  min-height: 0;
 }
 
-.remote-node-form label {
+.remote-node-form-scroll { min-height: 0; }
+.remote-node-form-content { display: grid; gap: 14px; padding-right: 10px; }
+
+.remote-node-form label,
+.remote-node-field {
   display: grid;
   gap: 7px;
 }
 
-.remote-node-form label > span {
+.remote-node-form label > span,
+.remote-node-field > label {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 750;
 }
+
+.remote-node-mode-tabs { width: 100%; }
+.remote-node-mode-tabs :deep(button) { flex: 1; }
+.remote-node-mode-content { display: grid; gap: 12px; margin-top: 12px; }
+.proxy-token-input { position: relative; }
+.proxy-token-input .control-plane-input { padding-right: 40px; }
+.proxy-token-input button { position: absolute; top: 1px; right: 1px; width: 32px; height: 32px; }
+.proxy-trust-notice { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-inset); font-size: 12px; line-height: 1.5; }
+.proxy-trust-notice svg { flex: none; color: var(--warning, var(--text-muted)); }
+.proxy-trust-confirmation { grid-template-columns: auto minmax(0, 1fr) !important; align-items: start; color: var(--text); font-size: 12px; line-height: 1.5; }
+.pending-proxy-state, .pending-proxy-claims { font-size: 12px; }
+.pending-proxy-state { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.pending-proxy-claims { display: grid; gap: 8px; min-height: 0; padding-top: 4px; }
+.pending-proxy-list { max-height: min(220px, max(96px, calc(100dvh - 430px))); }
+.pending-proxy-list-content { min-width: 0; padding-right: 10px; }
+.pending-proxy-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+.pending-proxy-row > span { min-width: 0; overflow-wrap: anywhere; }
+.pending-proxy-row > div { display: flex; gap: 6px; }
+.proxy-spin { animation: proxy-spin 0.8s linear infinite; }
+@keyframes proxy-spin { to { transform: rotate(360deg); } }
 
 .section-head {
   display: flex;

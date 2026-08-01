@@ -11,6 +11,16 @@ test("Docker runtime uses the supported Node.js 24 release line", () => {
   assert.match(dockerfile, /^FROM node:24-bookworm-slim AS runtime-base$/m);
 });
 
+test("Docker profiles run as agent with passwordless container-root escalation", () => {
+  const dockerfile = fs.readFileSync(path.join(root, "Dockerfile"), "utf8");
+
+  assert.match(dockerfile, /apt-get install -y --no-install-recommends[\s\S]*?\n    sudo \\/);
+  assert.match(dockerfile, /printf 'agent ALL=\(root\) NOPASSWD: ALL\\n' > \/etc\/sudoers\.d\/task-handoff-agent/);
+  assert.match(dockerfile, /chmod 0440 \/etc\/sudoers\.d\/task-handoff-agent/);
+  assert.match(dockerfile, /visudo -cf \/etc\/sudoers\.d\/task-handoff-agent/);
+  assert.equal((dockerfile.match(/^USER agent$/gm) || []).length, 3);
+});
+
 test("Docker exports cumulative Codex, AI, and Browser image profiles", () => {
   const dockerfile = fs.readFileSync(path.join(root, "Dockerfile"), "utf8");
 

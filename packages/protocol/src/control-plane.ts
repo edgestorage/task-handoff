@@ -9,8 +9,10 @@ import {
   AiSessionsSnapshotSchema,
 } from "./ai-sessions.ts";
 import { TriggerConfigSchema, TriggerDeploymentSchema, TriggerRunSchema, TriggerRuntimeStateSchema } from "./triggers.ts";
+import { ControlPlaneProxyErrorSchema, ProxyTargetStateSchema } from "./control-plane-proxy.ts";
 
 export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-08-01";
+export const NODE_TUNNEL_PROTOCOL_VERSION = "2026-08-01";
 export const MARKET_CATALOG_PROTOCOL_VERSION = "2026-07-29";
 // The local value follows the date-only convention. Parsing remains permissive
 // so persisted records written before that convention do not disappear.
@@ -21,6 +23,34 @@ const TimestampSchema = z.string().datetime();
 const LabelsSchema = z.record(z.string(), z.string()).default({});
 const StringRecordSchema = z.record(z.string(), z.string()).default({});
 const DateProtocolVersionSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Protocol version must use YYYY-MM-DD format.");
+
+export const NodeTunnelRequestBodySchema = z.object({
+  encoding: z.enum(["utf8", "base64"]),
+  data: z.string(),
+}).strict().superRefine((body, context) => {
+  if (body.encoding === "base64" && Buffer.from(body.data, "base64").toString("base64") !== body.data) {
+    context.addIssue({ code: "custom", path: ["data"], message: "Node tunnel binary body must use canonical base64 encoding." });
+  }
+});
+
+export type NodeTunnelRequestBody = z.infer<typeof NodeTunnelRequestBodySchema>;
+
+export function encodeNodeTunnelRequestBody(value: unknown): NodeTunnelRequestBody | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === "string") return { encoding: "utf8", data: value };
+  if (Buffer.isBuffer(value)) return { encoding: "base64", data: value.toString("base64") };
+  if (value instanceof ArrayBuffer) return { encoding: "base64", data: Buffer.from(value).toString("base64") };
+  if (ArrayBuffer.isView(value)) {
+    return { encoding: "base64", data: Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString("base64") };
+  }
+  throw new TypeError("Node tunnel request body must be a string or binary buffer.");
+}
+
+export function decodeNodeTunnelRequestBody(value: unknown): string | Buffer | undefined {
+  if (value === undefined || value === null) return undefined;
+  const parsed = NodeTunnelRequestBodySchema.parse(value);
+  return parsed.encoding === "utf8" ? parsed.data : Buffer.from(parsed.data, "base64");
+}
 
 const DockerTagPattern = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/;
 const DockerDigestPattern = /^sha256:([a-fA-F0-9]{64})$/;
@@ -942,14 +972,38 @@ function sanitizeStoredInstanceImageSnapshot(
   };
 }
 
+export const NodeConnectionPathSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("direct") }).strict(),
+  z.object({
+    kind: z.literal("control-plane-proxy"),
+    proxyId: IdSchema,
+    proxyBindingId: IdSchema,
+    targetNodeId: IdSchema,
+  }).strict(),
+]);
+
+export const NodeControlPlaneProxyStateSchema = z.object({
+  reachability: z.enum(["unknown", "reachable", "unreachable"]),
+  bindingStatus: z.enum(["unknown", "active", "revoked"]),
+  bindingRevision: z.number().int().positive().optional(),
+  streamId: z.string().trim().min(1).max(160).optional(),
+  revision: z.number().int().nonnegative().optional(),
+  observedAt: TimestampSchema.optional(),
+  target: ProxyTargetStateSchema.optional(),
+  lastError: ControlPlaneProxyErrorSchema.optional(),
+  updatedAt: TimestampSchema,
+}).strict();
+
 export const NodeSchema = z
   .object({
     id: IdSchema,
     name: z.string().trim().min(1).max(160),
-    connectionMode: z.enum(["local-ipc", "local-loopback", "direct-http", "reverse-wss"]).default("direct-http"),
+    connectionMode: z.enum(["local-ipc", "local-loopback", "direct-http", "reverse-wss", "control-plane-proxy"]).default("direct-http"),
+    connectionPath: NodeConnectionPathSchema.default({ kind: "direct" }),
+    connectionEnabled: z.boolean().default(true),
     auth: z
       .object({
-        mode: z.enum(["local-static-key", "paired-hmac"]).default("local-static-key"),
+        mode: z.enum(["local-static-key", "paired-hmac", "proxy-binding"]).default("local-static-key"),
         keyId: IdSchema.optional(),
         secret: z.string().trim().max(4096).optional(),
         pairedAt: TimestampSchema.optional(),
@@ -971,13 +1025,69 @@ export const NodeSchema = z
     status: z.enum(["unknown", "online", "offline", "degraded"]).default("unknown"),
     health: z.enum(["unknown", "ok", "degraded", "failed"]).default("unknown"),
     capabilities: z.record(z.string(), z.unknown()).default({}),
+    proxyState: NodeControlPlaneProxyStateSchema.optional(),
     appInventory: InstanceAppInventorySchema.optional(),
     labels: LabelsSchema,
     lastSeenAt: TimestampSchema.optional(),
     createdAt: TimestampSchema,
     updatedAt: TimestampSchema,
   })
-  .strict();
+  .strict()
+  .superRefine((node, context) => {
+    if (node.connectionPath.kind === "control-plane-proxy" && node.connectionMode !== "control-plane-proxy") {
+      context.addIssue({
+        code: "custom",
+        path: ["connectionPath"],
+        message: "Control-plane proxy paths require control-plane-proxy connection mode.",
+      });
+    }
+    if (node.connectionMode === "control-plane-proxy" && node.connectionPath.kind !== "control-plane-proxy") {
+      context.addIssue({
+        code: "custom",
+        path: ["connectionPath"],
+        message: "Control-plane proxy nodes require a control-plane-proxy connection path.",
+      });
+    }
+  });
+
+export function sanitizeStoredNode(input: unknown, onWarning?: (warning: { field: string }) => void) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+  const source = input as Record<string, unknown>;
+  const known = new Set([
+    "id", "name", "connectionMode", "connectionPath", "connectionEnabled", "auth", "endpoint", "controlEndpoint",
+    "containerEndpoint", "publicWebBase", "status", "health", "capabilities", "proxyState", "appInventory",
+    "labels", "lastSeenAt", "createdAt", "updatedAt",
+  ]);
+  for (const field of Object.keys(source)) if (!known.has(field)) onWarning?.({ field });
+
+  const auth = source.auth && typeof source.auth === "object" && !Array.isArray(source.auth)
+    ? pickObjectFields(source.auth, ["mode", "keyId", "secret", "pairedAt", "pairing"])
+    : source.auth;
+  if (auth && typeof auth === "object" && "pairing" in auth) {
+    auth.pairing = pickObjectFields(auth.pairing, ["status", "joinToken", "expiresAt"]);
+  }
+  const connectionPath = source.connectionPath && typeof source.connectionPath === "object" && !Array.isArray(source.connectionPath)
+    ? (source.connectionPath as Record<string, unknown>).kind === "control-plane-proxy"
+      ? pickObjectFields(source.connectionPath, ["kind", "proxyId", "proxyBindingId", "targetNodeId"])
+      : pickObjectFields(source.connectionPath, ["kind"])
+    : { kind: "direct" };
+  const proxyState = source.proxyState && typeof source.proxyState === "object" && !Array.isArray(source.proxyState)
+    ? pickObjectFields(source.proxyState, [
+        "reachability", "bindingStatus", "bindingRevision", "streamId", "revision", "observedAt", "target", "lastError", "updatedAt",
+      ])
+    : source.proxyState;
+  if (proxyState && typeof proxyState === "object") {
+    const state = proxyState as Record<string, unknown>;
+    state.target = pickObjectFields(state.target, ["id", "name", "status", "health", "lastSeenAt", "capabilities"]);
+    state.lastError = pickObjectFields(state.lastError, ["code", "message", "retryable", "details"]);
+  }
+  return {
+    ...Object.fromEntries(Object.entries(source).filter(([field]) => known.has(field))),
+    auth,
+    connectionPath,
+    proxyState,
+  };
+}
 
 export const NodeRuntimeSchema = z
   .object({

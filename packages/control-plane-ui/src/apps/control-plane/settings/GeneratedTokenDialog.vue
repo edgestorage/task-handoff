@@ -17,6 +17,13 @@
         </Button>
       </div>
 
+      <dl v-if="details?.length" class="generated-token-details">
+        <template v-for="detail in details" :key="detail.label">
+          <dt>{{ detail.label }}</dt>
+          <dd>{{ detail.value }}</dd>
+        </template>
+      </dl>
+
       <p class="generated-token-expiry">{{ t("settings.nodeDialogs.expires", { time: formattedExpiry }) }}</p>
 
       <DialogFooter>
@@ -43,6 +50,7 @@ const props = defineProps<{
   expiresAt: string;
   title: string;
   token: string;
+  details?: Array<{ label: string; value: string }>;
 }>();
 
 const emit = defineEmits<{
@@ -101,6 +109,17 @@ async function copyToken() {
   color: var(--text-muted);
   font-size: 12px;
 }
+
+.generated-token-details {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 6px 12px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.generated-token-details dt { color: var(--text-muted); }
+.generated-token-details dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
 
 @media (max-width: 520px) {
   .generated-token-field {

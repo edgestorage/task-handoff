@@ -85,6 +85,7 @@ RUN apt-get update \
     curl \
     git \
     python3 \
+    sudo \
     tini \
     vim \
     zsh \
@@ -97,7 +98,10 @@ RUN if id -u agent >/dev/null 2>&1; then \
   else \
     useradd -m -u 1000 -s /bin/bash agent; \
   fi \
-  && mkdir -p /home/agent/.codex /home/agent/.claude
+  && mkdir -p /home/agent/.codex /home/agent/.claude \
+  && printf 'agent ALL=(root) NOPASSWD: ALL\n' > /etc/sudoers.d/task-handoff-agent \
+  && chmod 0440 /etc/sudoers.d/task-handoff-agent \
+  && visudo -cf /etc/sudoers.d/task-handoff-agent
 
 FROM runtime-base AS runtime-package-install
 RUN apt-get update \

@@ -12,6 +12,7 @@ import {
   NodeImageAvailabilitySchema,
   NodeFolderTreeEntrySchema,
   sanitizeStoredImageProfile,
+  sanitizeStoredNode,
   sanitizeStoredProject,
   FederatedModelRegistrySchema,
   ModelConfigSchema,
@@ -83,6 +84,9 @@ import type { CommandRunner } from "../../shared/process/command-runner.ts";
 import { ControlPlaneNodeAgentClient, type NodeAgentTransport, type NodeAgentWebSocket } from "../nodes/client.ts";
 import { ControlPlaneNodeAgentGateway } from "../nodes/gateway.ts";
 import { createDirectNodeAgentTransport, fetchDirectNodeAgentEndpoint } from "../nodes/direct-transport.ts";
+import { NodeAgentTransportResolver } from "../nodes/transport-resolver.ts";
+import { ControlPlaneProxyNodeAgentTransport, controlPlaneProxyAuthenticationHeaders } from "../nodes/control-plane-proxy-transport.ts";
+import { ControlPlaneProxyPrivateStore, controlPlaneProxyPrivateStorePaths } from "../nodes/control-plane-proxy-private-store.ts";
 import { ControlledInstanceGateway } from "../instances/gateway.ts";
 import { InstanceBoardReader } from "../instances/board-reader.ts";
 import { ControlPlaneTriggerService } from "../triggers/service.ts";
@@ -129,6 +133,18 @@ import { createId, createSecret, JsonCollection, JsonFile, type StoredRecord } f
 import { controlledInstanceTriggerSnapshot } from "../triggers/records.ts";
 import { createDirectNodeAgentAuthHeaders } from "../../shared/security/node-agent-auth.ts";
 import { parseNodeAgentIpcEndpoint } from "../../shared/transport/node-agent-ipc.ts";
+import {
+  ClaimProxyInviteResultSchema,
+  CONTROL_PLANE_PROXY_PROTOCOL_VERSION,
+  ControlPlaneProxyErrorCode,
+  ControlPlaneProxyOriginSchema,
+  PublicProxyBindingSchema,
+  type ControlPlaneProxyError,
+  type PendingProxyClaim,
+  type ProxyNodeCredential,
+  type ProxyTargetEvent,
+  type ProxyTargetSnapshot,
+} from "@task-handoff/protocol/control-plane-proxy";
 
 export function parseInstanceAppManagementSnapshot(value: unknown) {
   try {
@@ -165,6 +181,20 @@ const NodeJoinInviteSchema = z.object({
 }).strict();
 const CONTROL_PLANE_LOCAL_NODE_LABEL = "task-handoff.control-plane.local";
 const CONTROL_PLANE_BUILTIN_NODE_LABEL = "task-handoff.control-plane.builtin";
+const CreateProxyNodeClaimInputSchema = z.object({
+  proxyOrigin: ControlPlaneProxyOriginSchema,
+  inviteToken: z.string().trim().min(24).max(512),
+  name: z.string().trim().min(1).max(160).optional(),
+}).strict();
+const ProxyBindingRevocationResponseSchema = z.object({
+  data: z.object({
+    binding: PublicProxyBindingSchema,
+    closed: z.object({
+      abortedRequests: z.number().int().nonnegative(),
+      closedSockets: z.number().int().nonnegative(),
+    }).strict(),
+  }).strict(),
+}).strict();
 
 export type ControlPlaneServiceOptions = {
   fetchImpl?: FetchImpl;
@@ -208,8 +238,8 @@ export class ControlPlaneService {
   private readonly logger: ServiceLogger | undefined;
   private readonly appAccessService: AppAccessService;
   private readonly chatActionTokenService = new ChatActionTokenService();
-  private nodeAgentTransport: NodeAgentTransport | undefined;
-  private readonly directNodeAgentTransport: NodeAgentTransport;
+  private readonly nodeAgentTransportResolver: NodeAgentTransportResolver;
+  readonly proxyPrivateStore: ControlPlaneProxyPrivateStore;
   private readonly nodeAgentGateway: ControlPlaneNodeAgentGateway;
   private readonly controlledInstanceGateway: ControlledInstanceGateway;
   private readonly instanceBoardReader = new InstanceBoardReader();
@@ -219,6 +249,7 @@ export class ControlPlaneService {
   private readonly chatBridgeService: ChatBridgeService;
   private readonly chatSessionService: ChatSessionService;
   private readonly chatSessionRuntime: ControlPlaneChatSessionRuntime;
+  private readonly proxyClaimOperations = new Map<string, Promise<unknown>>();
   private aiSessionSnapshotProvider: ((options?: { refresh?: boolean }) => Promise<{ updatedAt: string; instances: Array<{ instanceId: string; streamId: string; aiSessions: AiSessionsSnapshot; revision: number; lastEventAt: string }> }>) | undefined;
   private appSessionSnapshotProvider: ((options?: { refresh?: boolean }) => Promise<{ updatedAt: string; instances: Array<{ instanceId: string; streamId: string; appSessions: AppSessionsSnapshot; revision: number; lastEventAt: string }> }>) | undefined;
 
@@ -226,8 +257,18 @@ export class ControlPlaneService {
     this.paths = paths;
     this.fetchImpl = options.fetchImpl || fetch;
     this.dockerCommandRunner = options.dockerCommandRunner;
-    this.nodeAgentTransport = options.nodeAgentTransport;
-    this.directNodeAgentTransport = createDirectNodeAgentTransport(this.fetchImpl);
+    this.proxyPrivateStore = new ControlPlaneProxyPrivateStore(
+      controlPlaneProxyPrivateStorePaths(paths.dataDir),
+      (message, details) => this.logWarn(details, message),
+    );
+    this.nodeAgentTransportResolver = new NodeAgentTransportResolver({
+      direct: createDirectNodeAgentTransport(this.fetchImpl),
+      tunnel: options.nodeAgentTransport,
+      proxy: new ControlPlaneProxyNodeAgentTransport({
+        credentialForNode: (node) => this.proxyPrivateStore.nodeCredential(node.id),
+        fetchImpl: this.fetchImpl,
+      }),
+    });
     this.logger = controlPlaneDiagnosticLogsEnabled() ? options.logger : undefined;
     const nodeAgentClient = new ControlPlaneNodeAgentClient({
       request: (node, route, init) => this.nodeAgentFetch(node, route, init),
@@ -236,9 +277,7 @@ export class ControlPlaneService {
     this.nodeAgentGateway = new ControlPlaneNodeAgentGateway(nodeAgentClient);
     this.controlledInstanceGateway = new ControlledInstanceGateway({
       requireNode: (nodeId) => this.requireNode(nodeId),
-      nodeAgentRequest: (node, route, init) => this.nodeAgentFetch(node, route, init),
-      nodeAgentStreamRequest: (node, route, init) => this.nodeAgentTransportFor(node).requestStream(node, route, init),
-      fetchImpl: this.fetchImpl,
+      nodeAgentTransport: (node) => this.nodeAgentTransportResolver.resolve(node),
     });
     const storeOptions = <T,>(schema: z.ZodType<T>) => ({
       schema,
@@ -250,7 +289,10 @@ export class ControlPlaneService {
       ...storeOptions(CustomImageProfileSchema),
       sanitize: (value) => sanitizeStoredImageProfile(value, (warning) => this.logWarn(warning, "legacy image profile field was migrated")),
     });
-    this.nodes = new JsonCollection(paths.nodesDir, storeOptions(NodeSchema));
+    this.nodes = new JsonCollection(paths.nodesDir, {
+      ...storeOptions(NodeSchema),
+      sanitize: (value) => sanitizeStoredNode(value, (warning) => this.logWarn(warning, "unknown stored node field was ignored")),
+    });
     this.chatSessions = new JsonCollection(paths.chatSessionsDir, storeOptions(ChatSessionBindingSchema));
     this.chatBridges = new JsonCollection(paths.chatBridgesDir, storeOptions(ChatBridgeConfigSchema));
     this.triggers = new JsonCollection(paths.triggersDir, storeOptions(ControlPlaneTriggerRecordSchema));
@@ -323,7 +365,11 @@ export class ControlPlaneService {
   }
 
   setNodeAgentTransport(transport: NodeAgentTransport) {
-    this.nodeAgentTransport = transport;
+    this.nodeAgentTransportResolver.setTunnel(transport);
+  }
+
+  resolveNodeAgentTransport(node: Node) {
+    return this.nodeAgentTransportResolver.resolve(node);
   }
 
   setAiSessionSnapshotProvider(provider: (options?: { refresh?: boolean }) => Promise<{ updatedAt: string; instances: Array<{ instanceId: string; streamId: string; aiSessions: AiSessionsSnapshot; revision: number; lastEventAt: string }> }>) {
@@ -351,6 +397,14 @@ export class ControlPlaneService {
     this.chatBridges.init();
     this.triggers.init();
     this.nodeJoinInvites.init();
+    this.proxyPrivateStore.init();
+    this.proxyPrivateStore.gcNodeCredentials((credential) => {
+      const node = this.nodes.get(credential.nodeId);
+      return node?.connectionMode === "control-plane-proxy"
+        && node.connectionPath.kind === "control-plane-proxy"
+        && node.connectionPath.proxyBindingId === credential.proxyBindingId
+        && node.connectionPath.targetNodeId === credential.targetNodeId;
+    });
     this.settings.init();
     this.migrateLegacyImageCatalog();
     this.seedDefaults();
@@ -1044,9 +1098,405 @@ export class ControlPlaneService {
     return this.nodes.put(node);
   }
 
+  listPendingProxyClaims() {
+    return this.proxyPrivateStore.publicPendingClaims();
+  }
+
+  async claimProxyNode(input: unknown) {
+    const parsed = CreateProxyNodeClaimInputSchema.parse(input);
+    const timestamp = now();
+    const claimId = createId("proxy_claim");
+    const pending: PendingProxyClaim = {
+      id: claimId,
+      claimId,
+      proxyOrigin: parsed.proxyOrigin,
+      ...(parsed.name ? { requestedName: parsed.name } : {}),
+      sourceControlPlaneId: this.proxyPrivateStore.controlPlaneId(),
+      bindingKeyId: createId("proxy_key"),
+      credential: createSecret(),
+      status: "pending",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString(),
+    };
+    this.proxyPrivateStore.putPendingClaim(pending);
+    return this.withProxyClaimLock(pending.claimId, () => this.completeProxyClaim(pending, parsed.inviteToken));
+  }
+
+  async resumeProxyClaim(claimId: string) {
+    return this.withProxyClaimLock(claimId, async () => {
+      const pending = this.proxyPrivateStore.pendingClaimByClaimId(claimId);
+      if (!pending) throwNotFound("CONTROL_PLANE_PROXY_CLAIM_NOT_FOUND", `Proxy claim ${claimId} was not found.`);
+      return this.completeProxyClaim(pending);
+    });
+  }
+
+  async cancelProxyClaim(claimId: string) {
+    return this.withProxyClaimLock(claimId, async () => {
+      const pending = this.proxyPrivateStore.pendingClaimByClaimId(claimId);
+      if (!pending) return { deleted: false, compensationRequired: false, remoteRevoke: "not-required" as const };
+      if (pending.status === "pending") {
+        return { ...this.proxyPrivateStore.cancelPendingClaim(claimId, false), remoteRevoke: "not-required" as const };
+      }
+
+      let response: Response;
+      try {
+        response = await this.requestProxyClaim(pending);
+      } catch (cause) {
+        throw this.proxyCompensationError(pending, "Trusted control-plane proxy is unavailable; claim cancellation requires retry.", cause);
+      }
+      const payload = await this.proxyResponsePayload(response);
+      if (!response.ok) {
+        const code = payload?.error?.code;
+        if (code === ControlPlaneProxyErrorCode.InviteInvalid || code === ControlPlaneProxyErrorCode.BindingRevoked) {
+          return {
+            deleted: this.proxyPrivateStore.completePendingClaimCompensation(claimId),
+            compensationRequired: false,
+            remoteRevoke: code === ControlPlaneProxyErrorCode.BindingRevoked ? "already-revoked" as const : "not-created" as const,
+          };
+        }
+        throw this.proxyCompensationError(
+          pending,
+          payload?.error?.message || `Proxy claim recovery failed with HTTP ${response.status}.`,
+          undefined,
+          response.status,
+          code,
+          payload?.error?.retryable,
+        );
+      }
+
+      const result = ClaimProxyInviteResultSchema.parse(payload?.data);
+      this.requireProxyClaimResultIdentity(pending, result);
+      const credential: ProxyNodeCredential = {
+        id: `proxy_compensation_${result.binding.id}`,
+        nodeId: result.target.id,
+        proxyOrigin: pending.proxyOrigin,
+        proxyBindingId: result.binding.id,
+        targetNodeId: result.target.id,
+        sourceControlPlaneId: pending.sourceControlPlaneId,
+        bindingKeyId: pending.bindingKeyId,
+        credential: pending.credential,
+        createdAt: pending.createdAt,
+        updatedAt: now(),
+      };
+      let revoke: Response;
+      try {
+        revoke = await this.fetchImpl(new URL(`/api/node-proxy/bindings/${encodeURIComponent(result.binding.id)}`, pending.proxyOrigin), {
+          method: "DELETE",
+          headers: controlPlaneProxyAuthenticationHeaders(credential),
+        });
+      } catch (cause) {
+        throw this.proxyCompensationError(pending, "Trusted control-plane proxy is unavailable; binding revocation requires retry.", cause);
+      }
+      const revokePayload = await this.proxyResponsePayload(revoke);
+      if (!revoke.ok && revokePayload?.error?.code !== ControlPlaneProxyErrorCode.BindingRevoked) {
+        throw this.proxyCompensationError(
+          pending,
+          revokePayload?.error?.message || `Proxy binding revoke failed with HTTP ${revoke.status}.`,
+          undefined,
+          revoke.status,
+          revokePayload?.error?.code,
+          revokePayload?.error?.retryable,
+        );
+      }
+      if (revoke.ok) {
+        try {
+          this.requireProxyRevocationReceipt(revokePayload, credential);
+        } catch (cause) {
+          throw this.proxyCompensationError(
+            pending,
+            "Proxy binding revocation returned an invalid receipt; compensation requires retry.",
+            cause,
+            502,
+            ControlPlaneProxyErrorCode.TransportFailed,
+            true,
+          );
+        }
+      }
+      return {
+        deleted: this.proxyPrivateStore.completePendingClaimCompensation(claimId),
+        compensationRequired: false,
+        remoteRevoke: revoke.ok ? "revoked" as const : "already-revoked" as const,
+      };
+    });
+  }
+
+  private async completeProxyClaim(pending: PendingProxyClaim, inviteToken?: string) {
+    this.proxyPrivateStore.markCompensationRequired(pending.claimId);
+    let response: Response;
+    try {
+      response = await this.requestProxyClaim(pending, inviteToken);
+    } catch (cause) {
+      const error = new Error(`Trusted control-plane proxy ${pending.proxyOrigin} is unavailable.`, { cause });
+      Object.assign(error, { statusCode: 503, code: "CONTROL_PLANE_PROXY_UNAVAILABLE", retryable: true, claimId: pending.claimId });
+      throw error;
+    }
+    const payload = await this.proxyResponsePayload(response);
+    if (!response.ok) {
+      const retryable = payload?.error?.retryable ?? response.status >= 500;
+      if (!retryable) this.proxyPrivateStore.completePendingClaimCompensation(pending.claimId);
+      const error = new Error(payload?.error?.message || `Proxy claim failed with HTTP ${response.status}.`);
+      Object.assign(error, {
+        statusCode: response.status,
+        code: payload?.error?.code || "CONTROL_PLANE_PROXY_CLAIM_FAILED",
+        retryable,
+        details: payload?.error?.details,
+        claimId: pending.claimId,
+      });
+      throw error;
+    }
+    const result = ClaimProxyInviteResultSchema.parse(payload?.data);
+    this.requireProxyClaimResultIdentity(pending, result);
+    const current = this.nodes.get(result.target.id);
+    const sameIdentity = current?.connectionMode === "control-plane-proxy"
+      && current.connectionPath.kind === "control-plane-proxy"
+      && current.connectionPath.proxyBindingId === result.binding.id
+      && current.connectionPath.targetNodeId === result.target.id;
+    if (current && !sameIdentity) {
+      this.proxyPrivateStore.markCompensationRequired(pending.claimId);
+      const error = new Error(`Node ${result.target.id} already exists with another connection identity.`);
+      Object.assign(error, { statusCode: 409, code: "CONTROL_PLANE_PROXY_NODE_IDENTITY_CONFLICT", claimId: pending.claimId });
+      throw error;
+    }
+    const credential: ProxyNodeCredential = {
+      id: `proxy_credential_${result.target.id}`,
+      nodeId: result.target.id,
+      proxyOrigin: pending.proxyOrigin,
+      proxyBindingId: result.binding.id,
+      targetNodeId: result.target.id,
+      sourceControlPlaneId: pending.sourceControlPlaneId,
+      bindingKeyId: pending.bindingKeyId,
+      credential: pending.credential,
+      createdAt: pending.createdAt,
+      updatedAt: now(),
+    };
+    const node = current || NodeSchema.parse({
+      id: result.target.id,
+      name: pending.requestedName || result.target.name,
+      connectionMode: "control-plane-proxy",
+      connectionPath: {
+        kind: "control-plane-proxy",
+        proxyId: new URL(pending.proxyOrigin).host,
+        proxyBindingId: result.binding.id,
+        targetNodeId: result.target.id,
+      },
+      connectionEnabled: true,
+      auth: { mode: "proxy-binding" },
+      status: result.target.status,
+      health: result.target.health,
+      capabilities: result.target.capabilities,
+      proxyState: {
+        reachability: "reachable",
+        bindingStatus: result.binding.status,
+        bindingRevision: result.binding.revision,
+        observedAt: now(),
+        target: result.target,
+        updatedAt: now(),
+      },
+      labels: {},
+      lastSeenAt: result.target.lastSeenAt,
+      createdAt: now(),
+      updatedAt: now(),
+    });
+    if (!current) this.nodes.put(node);
+    try {
+      this.proxyPrivateStore.promotePendingClaim(pending.claimId, credential);
+    } catch (error) {
+      if (!current) this.nodes.delete(node.id);
+      throw error;
+    }
+    return { node: publicNode(node), binding: result.binding };
+  }
+
+  applyProxyTargetSnapshot(nodeId: string, snapshot: ProxyTargetSnapshot) {
+    const node = this.requireProxyNodeIdentity(nodeId, snapshot.binding.id, snapshot.binding.targetNodeId);
+    return this.putProxyTargetState(node, snapshot.target, {
+      reachability: "reachable",
+      bindingStatus: snapshot.binding.status,
+      bindingRevision: snapshot.binding.revision,
+      streamId: snapshot.streamId,
+      revision: snapshot.revision,
+      observedAt: snapshot.observedAt,
+    });
+  }
+
+  applyProxyTargetEvent(nodeId: string, event: ProxyTargetEvent) {
+    const node = this.requireProxyNodeIdentity(nodeId, undefined, event.targetNodeId);
+    const state = node.proxyState;
+    if (!state?.streamId || state.streamId !== event.streamId || state.revision === undefined || event.revision !== state.revision + 1) {
+      const error = new Error("Proxy target event does not continue the authoritative snapshot cursor.");
+      Object.assign(error, { code: ControlPlaneProxyErrorCode.SnapshotRequired, statusCode: 409, retryable: true });
+      throw error;
+    }
+    return this.putProxyTargetState(node, event.target, {
+      ...state,
+      reachability: "reachable",
+      bindingStatus: state.bindingStatus === "revoked" ? "revoked" : "active",
+      revision: event.revision,
+      observedAt: event.event.createdAt,
+    });
+  }
+
+  markProxyUnavailable(nodeId: string, error: ControlPlaneProxyError) {
+    const node = this.requireProxyNodeIdentity(nodeId);
+    const timestamp = now();
+    return this.nodes.put(NodeSchema.parse({
+      ...node,
+      status: "degraded",
+      health: "degraded",
+      proxyState: {
+        ...node.proxyState,
+        reachability: "unreachable",
+        bindingStatus: node.proxyState?.bindingStatus ?? "unknown",
+        lastError: error,
+        updatedAt: timestamp,
+      },
+      updatedAt: timestamp,
+    }));
+  }
+
+  markProxyBindingRevoked(nodeId: string, error: ControlPlaneProxyError) {
+    const node = this.requireProxyNodeIdentity(nodeId);
+    const timestamp = now();
+    return this.nodes.put(NodeSchema.parse({
+      ...node,
+      status: "degraded",
+      health: "degraded",
+      proxyState: {
+        ...node.proxyState,
+        reachability: "reachable",
+        bindingStatus: "revoked",
+        lastError: error,
+        updatedAt: timestamp,
+      },
+      updatedAt: timestamp,
+    }));
+  }
+
+  private requireProxyNodeIdentity(nodeId: string, bindingId?: string, targetNodeId?: string) {
+    const node = this.requireNode(nodeId);
+    if (node.connectionMode !== "control-plane-proxy"
+      || node.connectionPath.kind !== "control-plane-proxy"
+      || (bindingId !== undefined && node.connectionPath.proxyBindingId !== bindingId)
+      || (targetNodeId !== undefined && node.connectionPath.targetNodeId !== targetNodeId)) {
+      const error = new Error("Proxy state identity does not match the node connection path.");
+      Object.assign(error, { code: ControlPlaneProxyErrorCode.BindingIdentityConflict, statusCode: 409, retryable: false });
+      throw error;
+    }
+    return node;
+  }
+
+  private putProxyTargetState(
+    node: Node,
+    target: ProxyTargetSnapshot["target"],
+    proxyState: Omit<NonNullable<Node["proxyState"]>, "target" | "lastError" | "updatedAt">,
+  ) {
+    const timestamp = now();
+    return this.nodes.put(NodeSchema.parse({
+      ...node,
+      name: target.name,
+      status: target.status,
+      health: target.health,
+      capabilities: target.capabilities,
+      lastSeenAt: target.lastSeenAt,
+      proxyState: { ...proxyState, target, updatedAt: timestamp },
+      updatedAt: timestamp,
+    }));
+  }
+
+  private requestProxyClaim(pending: PendingProxyClaim, inviteToken?: string) {
+    return this.fetchImpl(new URL("/api/node-proxy/claims", pending.proxyOrigin), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        protocolVersion: CONTROL_PLANE_PROXY_PROTOCOL_VERSION,
+        ...(inviteToken ? { inviteToken } : {}),
+        claimId: pending.claimId,
+        sourceControlPlaneId: pending.sourceControlPlaneId,
+        ...(pending.targetNodeId ? { targetNodeId: pending.targetNodeId } : {}),
+        bindingKeyId: pending.bindingKeyId,
+        credential: pending.credential,
+      }),
+    });
+  }
+
+  private async proxyResponsePayload(response: Response) {
+    return response.json().catch(() => undefined) as Promise<{
+      data?: unknown;
+      error?: { code?: string; message?: string; retryable?: boolean; details?: unknown };
+    } | undefined>;
+  }
+
+  private requireProxyRevocationReceipt(payload: unknown, credential: ProxyNodeCredential) {
+    const parsed = ProxyBindingRevocationResponseSchema.safeParse(payload);
+    const binding = parsed.success ? parsed.data.data.binding : undefined;
+    if (!binding
+      || binding.id !== credential.proxyBindingId
+      || binding.sourceControlPlaneId !== credential.sourceControlPlaneId
+      || binding.targetNodeId !== credential.targetNodeId
+      || binding.bindingKeyId !== credential.bindingKeyId
+      || binding.status !== "revoked") {
+      const error = new Error("Proxy binding revocation receipt does not match the local binding identity.");
+      Object.assign(error, {
+        statusCode: 502,
+        code: ControlPlaneProxyErrorCode.TransportFailed,
+        retryable: true,
+        details: { bindingId: credential.proxyBindingId },
+      });
+      throw error;
+    }
+    return binding;
+  }
+
+  private requireProxyClaimResultIdentity(
+    pending: PendingProxyClaim,
+    result: ReturnType<typeof ClaimProxyInviteResultSchema.parse>,
+  ) {
+    if (result.binding.claimId !== pending.claimId
+      || result.binding.sourceControlPlaneId !== pending.sourceControlPlaneId
+      || result.binding.bindingKeyId !== pending.bindingKeyId
+      || result.binding.targetNodeId !== result.target.id
+      || (pending.targetNodeId !== undefined && result.binding.targetNodeId !== pending.targetNodeId)) {
+      const error = new Error("Proxy claim response does not match the persisted pending identity.");
+      Object.assign(error, {
+        statusCode: 409,
+        code: ControlPlaneProxyErrorCode.BindingIdentityConflict,
+        retryable: false,
+        claimId: pending.claimId,
+        compensationRequired: true,
+      });
+      throw error;
+    }
+  }
+
+  private proxyCompensationError(
+    pending: PendingProxyClaim,
+    message: string,
+    cause?: unknown,
+    statusCode = 503,
+    code = "CONTROL_PLANE_PROXY_COMPENSATION_REQUIRED",
+    retryable = true,
+  ) {
+    const error = new Error(message, cause === undefined ? undefined : { cause });
+    Object.assign(error, { statusCode, code, retryable, claimId: pending.claimId, compensationRequired: true });
+    return error;
+  }
+
+  private async withProxyClaimLock<T>(claimId: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.proxyClaimOperations.get(claimId) ?? Promise.resolve();
+    const current = previous.catch(() => undefined).then(operation);
+    this.proxyClaimOperations.set(claimId, current);
+    try {
+      return await current;
+    } finally {
+      if (this.proxyClaimOperations.get(claimId) === current) this.proxyClaimOperations.delete(claimId);
+    }
+  }
+
   updateNode(id: string, input: unknown) {
     const parsedInput: UpdateNodeInput = UpdateNodeInputSchema.parse(input);
     const current = this.requireNode(id);
+    this.requireGenericNodePatchPreservesProxyIdentity(current, parsedInput);
     const updated = NodeSchema.parse({
       ...current,
       ...parsedInput,
@@ -1057,6 +1507,26 @@ export class ControlPlaneService {
     return this.nodes.put(updated);
   }
 
+  private requireGenericNodePatchPreservesProxyIdentity(current: Node, input: UpdateNodeInput) {
+    const nextMode = input.connectionMode ?? current.connectionMode;
+    const nextPath = input.connectionPath ?? current.connectionPath;
+    const nextAuth = input.auth ?? current.auth;
+    const currentIsProxy = current.connectionMode === "control-plane-proxy"
+      || current.connectionPath.kind === "control-plane-proxy"
+      || current.auth.mode === "proxy-binding";
+    const nextIsProxy = nextMode === "control-plane-proxy"
+      || nextPath.kind === "control-plane-proxy"
+      || nextAuth.mode === "proxy-binding";
+    const changed = nextMode !== current.connectionMode
+      || JSON.stringify(nextPath) !== JSON.stringify(current.connectionPath)
+      || JSON.stringify(nextAuth) !== JSON.stringify(current.auth);
+    if ((currentIsProxy || nextIsProxy) && changed) {
+      const error = new Error("Proxy node connection identity can only be changed through the control-plane proxy lifecycle API.");
+      Object.assign(error, { statusCode: 409, code: "CONTROL_PLANE_PROXY_IDENTITY_IMMUTABLE", retryable: false });
+      throw error;
+    }
+  }
+
   deleteNode(id: string) {
     const current = this.requireNode(id);
     if (isControlPlaneBuiltinNode(current)) {
@@ -1065,6 +1535,83 @@ export class ControlPlaneService {
       throw error;
     }
     return this.nodes.delete(id);
+  }
+
+  async deleteNodeWithProxyLifecycle(id: string, force = false) {
+    const node = this.requireNode(id);
+    if (node.connectionMode !== "control-plane-proxy") return { deleted: this.deleteNode(id), revoke: { mode: "not-proxied" as const, orphanRisk: false } };
+    const credential = this.proxyPrivateStore.nodeCredential(id);
+    if (!credential) {
+      if (!force) {
+        const error = new Error("Proxy node credential is missing; remote binding cannot be revoked.");
+        Object.assign(error, {
+          statusCode: 409,
+          code: "CONTROL_PLANE_PROXY_CREDENTIAL_REQUIRED",
+          retryable: false,
+          details: { forceDeleteAllowed: true, forceDeleteReason: "credential-missing" },
+        });
+        throw error;
+      }
+      return this.forceDeleteProxyNode(id);
+    }
+
+    let response: Response;
+    try {
+      response = await this.fetchImpl(new URL(`/api/node-proxy/bindings/${encodeURIComponent(credential.proxyBindingId)}`, credential.proxyOrigin), {
+        method: "DELETE",
+        headers: controlPlaneProxyAuthenticationHeaders(credential),
+      });
+    } catch (cause) {
+      if (force) return this.forceDeleteProxyNode(id);
+      const error = new Error("Trusted control-plane proxy is unavailable; the binding was not revoked.", { cause });
+      Object.assign(error, {
+        statusCode: 503,
+        code: "CONTROL_PLANE_PROXY_REVOKE_UNAVAILABLE",
+        retryable: true,
+        details: { forceDeleteAllowed: true, forceDeleteReason: "proxy-unavailable" },
+      });
+      throw error;
+    }
+
+    if (!response.ok) {
+      const payload = await response.json().catch(() => undefined) as { error?: { code?: string; message?: string; retryable?: boolean; details?: { bindingId?: unknown } } } | undefined;
+      if (payload?.error?.code === ControlPlaneProxyErrorCode.BindingRevoked) {
+        const bindingId = payload.error.details?.bindingId;
+        if (bindingId === credential.proxyBindingId) {
+          const deleted = this.deleteNode(id);
+          this.proxyPrivateStore.deleteNodeCredential(id);
+          return { deleted, revoke: { mode: "revoked" as const, orphanRisk: false } };
+        }
+      }
+      const error = new Error(payload?.error?.message || `Proxy binding revoke failed with HTTP ${response.status}.`);
+      Object.assign(error, {
+        statusCode: response.status,
+        code: payload?.error?.code || "CONTROL_PLANE_PROXY_REVOKE_FAILED",
+        retryable: payload?.error?.retryable ?? response.status >= 500,
+        details: { ...(payload?.error?.details || {}), forceDeleteAllowed: false },
+      });
+      throw error;
+    }
+
+    const payload = await response.json().catch(() => undefined);
+    try {
+      this.requireProxyRevocationReceipt(payload, credential);
+    } catch (cause) {
+      if (cause && typeof cause === "object") {
+        const current = cause as { details?: Record<string, unknown> };
+        current.details = { ...(current.details || {}), forceDeleteAllowed: false };
+      }
+      throw cause;
+    }
+    const deleted = this.deleteNode(id);
+    this.proxyPrivateStore.deleteNodeCredential(id);
+    return { deleted, revoke: { mode: "revoked" as const, orphanRisk: false } };
+  }
+
+  private forceDeleteProxyNode(id: string) {
+    const deleted = this.deleteNode(id);
+    this.proxyPrivateStore.deleteNodeCredential(id);
+    return { deleted, revoke: { mode: "forced" as const, orphanRisk: true } };
   }
 
   async listNodeRuntimes(nodeId?: string, signal?: AbortSignal) {
@@ -1734,7 +2281,7 @@ export class ControlPlaneService {
 
   async proxyInstanceWebSocket(instanceId: string, socket: NodeAgentWebSocket, path: string, protocols?: string | string[], headers: Record<string, string> = {}) {
     const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
-    this.controlledInstanceGateway.proxyWebSocket(instance, this.nodeAgentTransportFor(this.requireNode(instance.nodeId)), socket, path, protocols, headers);
+    this.controlledInstanceGateway.proxyWebSocket(instance, socket, path, protocols, headers);
   }
 
   async instanceConfigSyncState(instanceId: string) {
@@ -1790,23 +2337,11 @@ export class ControlPlaneService {
   }
 
   private async reportInstanceHeartbeat(instance: ControlledInstance, input: ControlledInstanceHeartbeat) {
-    await this.controlledInstanceGateway.reportHeartbeat(instance, input, this.nodeAgentTransport);
+    await this.controlledInstanceGateway.reportHeartbeat(instance, input);
   }
 
   private async nodeAgentFetch(node: Node, route: string, init: RequestInit = {}) {
-    return this.nodeAgentTransportFor(node).request(node, route, init);
-  }
-
-  private nodeAgentTransportFor(node: Node): NodeAgentTransport {
-    if (node.connectionMode === "reverse-wss") {
-      if (!this.nodeAgentTransport) {
-        const error = new Error("Reverse node agent transport is not available.");
-        Object.assign(error, { statusCode: 503, code: "NODE_AGENT_REVERSE_TRANSPORT_UNAVAILABLE" });
-        throw error;
-      }
-      return this.nodeAgentTransport;
-    }
-    return this.directNodeAgentTransport;
+    return this.nodeAgentTransportResolver.resolve(node).request(node, route, init);
   }
 
   private async listNodeInstances() {

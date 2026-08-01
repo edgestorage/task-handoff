@@ -1,4 +1,5 @@
 import WebSocket from "ws";
+import { decodeNodeTunnelRequestBody } from "@task-handoff/protocol/control-plane";
 import { bridgeWebSockets, closeWebSocket, normalizeWebSocketCloseCode, normalizeWebSocketCloseReason } from "@task-handoff/protocol/websocket-bridge";
 import { createNodeAgentHmacHeaders } from "../../shared/security/node-agent-auth.ts";
 import { nodeAgentProxyMethod, type NodeAgentInjectResponse } from "../transport/proxy-utils.ts";
@@ -11,7 +12,7 @@ export type ReverseTunnelHost = {
     method: ReturnType<typeof nodeAgentProxyMethod>;
     url: string;
     headers: Record<string, string>;
-    payload?: string;
+    payload?: string | Buffer;
     signal?: AbortSignal;
   }): Promise<NodeAgentInjectResponse>;
   nodeAgentEventForwarder?: {
@@ -70,7 +71,7 @@ export function connectReverseTunnel(app: ReverseTunnelHost, input: ReverseTunne
   const localNodeAgentRequestHeaders = (
     route: string,
     method: string,
-    body: string | undefined,
+    body: string | Buffer | undefined,
     headers: Record<string, string> = {},
   ) => {
     const path = route.startsWith("/") ? route : `/${route}`;
@@ -136,7 +137,7 @@ export function connectReverseTunnel(app: ReverseTunnelHost, input: ReverseTunne
     disposeEventForwarderOutput?.();
     disposeEventForwarderOutput = undefined;
   });
-  socket.on("message", async (raw) => {
+  const handleMessage = async (raw: unknown) => {
     let message: unknown;
     try {
       message = JSON.parse(String(raw));
@@ -151,7 +152,19 @@ export function connectReverseTunnel(app: ReverseTunnelHost, input: ReverseTunne
       const init = record.init && typeof record.init === "object" ? record.init as Record<string, unknown> : {};
       const requestHeaders = init.headers && typeof init.headers === "object" ? init.headers as Record<string, string> : {};
       const method = nodeAgentProxyMethod(init.method);
-      const body = typeof init.body === "string" ? init.body : undefined;
+      let body: string | Buffer | undefined;
+      try {
+        body = decodeNodeTunnelRequestBody(init.body);
+      } catch (error) {
+        app.log.warn({
+          nodeId: input.nodeId,
+          messageType: record.type,
+          streamId,
+          error: error instanceof Error ? error.message : String(error),
+        }, "node agent reverse tunnel request body rejected");
+        socket.send(JSON.stringify({ type: "node-agent.error", code: "NODE_TUNNEL_REQUEST_BODY_INVALID", streamId }));
+        return;
+      }
       const controller = new AbortController();
       const streamUrl = controlPlaneHttpStreamUrl(streamId);
       const tunnel = new WebSocket(streamUrl, { headers: controlPlaneStreamHeaders(streamUrl) });
@@ -161,7 +174,7 @@ export function connectReverseTunnel(app: ReverseTunnelHost, input: ReverseTunne
           const response = await fetch(localNodeAgentHttpUrl(route), {
             method,
             headers: localNodeAgentRequestHeaders(route, method, body, requestHeaders),
-            body,
+            body: Buffer.isBuffer(body) ? new Uint8Array(body) : body,
             signal: controller.signal,
           });
           await sendHttpFrame(tunnel, JSON.stringify({ type: "node-agent.http.head", streamId, status: response.status, headers: Object.fromEntries(response.headers.entries()) }));
@@ -280,7 +293,27 @@ export function connectReverseTunnel(app: ReverseTunnelHost, input: ReverseTunne
       const route = typeof record.route === "string" && record.route.startsWith("/") ? record.route : "/health";
       const headers = init.headers && typeof init.headers === "object" ? init.headers as Record<string, string> : {};
       const method = nodeAgentProxyMethod(init.method);
-      const body = typeof init.body === "string" ? init.body : undefined;
+      let body: string | Buffer | undefined;
+      try {
+        body = decodeNodeTunnelRequestBody(init.body);
+      } catch (error) {
+        app.log.warn({
+          nodeId: input.nodeId,
+          messageType: record.type,
+          requestId,
+          error: error instanceof Error ? error.message : String(error),
+        }, "node agent reverse tunnel request body rejected");
+        socket.send(JSON.stringify({
+          type: "node-agent.response",
+          requestId,
+          status: 400,
+          error: {
+            code: "NODE_TUNNEL_REQUEST_BODY_INVALID",
+            message: "Reverse tunnel request body does not match the negotiated protocol.",
+          },
+        }));
+        return;
+      }
       const controller = new AbortController();
       requests.set(requestId, controller);
       try {
@@ -314,6 +347,19 @@ export function connectReverseTunnel(app: ReverseTunnelHost, input: ReverseTunne
         requests.delete(requestId);
       }
     }
+  };
+  socket.on("message", (raw) => {
+    void handleMessage(raw).catch((error) => {
+      app.log.warn({
+        nodeId: input.nodeId,
+        error: error instanceof Error ? error.message : String(error),
+      }, "node agent reverse tunnel message rejected");
+      try {
+        socket.send(JSON.stringify({ type: "node-agent.error", code: "INVALID_TUNNEL_MESSAGE" }));
+      } catch {
+        // The tunnel may have closed while the invalid message was being handled.
+      }
+    });
   });
   return socket;
 }

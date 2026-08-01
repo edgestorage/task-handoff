@@ -170,6 +170,8 @@ jobs:
             const requiredMissing = payload.commands.filter((command) => command.required && !command.available);
             if (requiredMissing.length) throw new Error(`required commands missing: ${requiredMissing.map((command) => command.name).join(", ")}`);
             '
+            test "$(docker exec "task-handoff-${profile}-ci" id -un)" = agent
+            test "$(docker exec "task-handoff-${profile}-ci" sudo -n id -u)" = 0
           done
           docker exec task-handoff-codex-ci codex --version
           ! docker exec task-handoff-codex-ci sh -lc 'command -v claude'
@@ -240,6 +242,8 @@ jobs:
           '
           docker exec task-handoff-web-ci codex --version
           docker exec task-handoff-web-ci claude --version
+          test "$(docker exec task-handoff-web-ci id -un)" = agent
+          test "$(docker exec task-handoff-web-ci sudo -n id -u)" = 0
           terminal_response="$(curl -fsS \
             -H 'content-type: application/json' \
             -d '{"appId":"terminal-tty","title":"Terminal Smoke","cwd":"/workspace","args":["-lc","printf launch-options-ready"]}' \

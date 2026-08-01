@@ -346,9 +346,36 @@ export type ImageProvisioning = {
 export type Node = {
   id: string;
   name: string;
-  connectionMode: "local-ipc" | "local-loopback" | "direct-http" | "reverse-wss";
+  connectionMode: "local-ipc" | "local-loopback" | "direct-http" | "reverse-wss" | "control-plane-proxy";
+  connectionEnabled?: boolean;
+  connectionPath?:
+    | { kind: "direct" }
+    | {
+        kind: "control-plane-proxy";
+        proxyId: string;
+        proxyBindingId: string;
+        targetNodeId: string;
+      };
+  proxyState?: {
+    reachability: "unknown" | "reachable" | "unreachable";
+    bindingStatus: "unknown" | "active" | "revoked";
+    bindingRevision?: number;
+    streamId?: string;
+    revision?: number;
+    observedAt?: string;
+    target?: {
+      id: string;
+      name: string;
+      status: "unknown" | "online" | "offline" | "degraded";
+      health: "unknown" | "ok" | "degraded" | "failed";
+      lastSeenAt?: string;
+      capabilities: Record<string, unknown>;
+    };
+    lastError?: ControlPlaneProxyError;
+    updatedAt: string;
+  };
   auth?: {
-    mode: "local-static-key" | "paired-hmac";
+    mode: "local-static-key" | "paired-hmac" | "proxy-binding";
     keyId?: string;
     pairedAt?: string;
     pairing?: {
@@ -367,6 +394,86 @@ export type Node = {
   lastSeenAt?: string;
   createdAt: string;
   updatedAt: string;
+};
+
+export type ControlPlaneProxyError = {
+  code: string;
+  message: string;
+  retryable: boolean;
+  details?: Record<string, unknown>;
+};
+
+export type PublicProxyInvite = {
+  id: string;
+  targetNodeId: string;
+  status: "active" | "consumed" | "revoked" | "expired";
+  createdBy: string;
+  expiresAt: string;
+  consumedByClaimId?: string;
+  consumedAt?: string;
+  revokedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CreateProxyInviteResult = {
+  invite: PublicProxyInvite;
+  token: string;
+  proxyOrigin: string;
+  protocolVersion: string;
+};
+
+export type PublicProxyBinding = {
+  id: string;
+  claimId: string;
+  sourceControlPlaneId: string;
+  targetNodeId: string;
+  bindingKeyId: string;
+  status: "active" | "revoked";
+  revision: number;
+  lastError?: ControlPlaneProxyError;
+  revokedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ControlPlaneProxyDiagnostic = {
+  bindingId: string;
+  activeHttp: number;
+  activeStreams: number;
+  activeWebSockets: number;
+};
+
+export type PublicPendingProxyClaim = {
+  id: string;
+  claimId: string;
+  proxyOrigin: string;
+  sourceControlPlaneId: string;
+  targetNodeId?: string;
+  bindingKeyId: string;
+  status: "pending" | "compensation-required";
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: string;
+};
+
+export type ClaimProxyNodeResult = {
+  node: Node;
+  binding: PublicProxyBinding;
+};
+
+export type CancelProxyClaimResult = {
+  deleted: boolean;
+  compensationRequired: boolean;
+  remoteRevoke: "not-required" | "not-created" | "already-revoked" | "revoked";
+};
+
+export type DeleteNodeResult = {
+  deleted: boolean;
+  revoke: {
+    mode: "not-proxied" | "revoked" | "forced";
+    orphanRisk: boolean;
+  };
 };
 
 export type NodeAgentExternalListener = {

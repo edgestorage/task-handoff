@@ -72,6 +72,14 @@ import type {
   UpdateNodeInput,
   AppManagementJobResponse,
   AppManagementSnapshot,
+  ClaimProxyNodeResult,
+  CancelProxyClaimResult,
+  ControlPlaneProxyDiagnostic,
+  CreateProxyInviteResult,
+  DeleteNodeResult,
+  PublicPendingProxyClaim,
+  PublicProxyBinding,
+  PublicProxyInvite,
 } from "./types";
 
 export function useHealthQuery() {
@@ -189,6 +197,62 @@ export function useNodesQuery() {
     queryFn: ({ signal }) => getApiData<Node[]>("nodes", { signal }),
     retry: false,
   });
+}
+
+export function useControlPlaneProxyInvitesQuery() {
+  return useQuery({
+    queryKey: controlPlaneQueryKeys.controlPlaneProxyInvites,
+    queryFn: ({ signal }) => getApiData<PublicProxyInvite[]>("control-plane-proxy/invites", { signal }),
+    retry: false,
+  });
+}
+
+export function createControlPlaneProxyInvite(input: { targetNodeId: string; expiresInSeconds?: number }) {
+  return postApiData<CreateProxyInviteResult>("control-plane-proxy/invites", input);
+}
+
+export function revokeControlPlaneProxyInvite(id: string) {
+  return deleteApiData<PublicProxyInvite>(`control-plane-proxy/invites/${id}`);
+}
+
+export function useControlPlaneProxyBindingsQuery() {
+  return useQuery({
+    queryKey: controlPlaneQueryKeys.controlPlaneProxyBindings,
+    queryFn: ({ signal }) => getApiData<PublicProxyBinding[]>("control-plane-proxy/bindings", { signal }),
+    retry: false,
+  });
+}
+
+export function revokeControlPlaneProxyBinding(id: string) {
+  return deleteApiData<{ binding: PublicProxyBinding; closed: { abortedRequests: number; closedSockets: number } }>(`control-plane-proxy/bindings/${id}`);
+}
+
+export function useControlPlaneProxyDiagnosticsQuery() {
+  return useQuery({
+    queryKey: controlPlaneQueryKeys.controlPlaneProxyDiagnostics,
+    queryFn: ({ signal }) => getApiData<ControlPlaneProxyDiagnostic[]>("control-plane-proxy/diagnostics", { signal }),
+    retry: false,
+  });
+}
+
+export function usePendingControlPlaneProxyClaimsQuery() {
+  return useQuery({
+    queryKey: controlPlaneQueryKeys.controlPlaneProxyPendingClaims,
+    queryFn: ({ signal }) => getApiData<PublicPendingProxyClaim[]>("control-plane-proxy/pending-claims", { signal }),
+    retry: false,
+  });
+}
+
+export function claimControlPlaneProxyNode(input: { proxyOrigin: string; inviteToken: string; name?: string }) {
+  return postApiData<ClaimProxyNodeResult>("control-plane-proxy/claims", input);
+}
+
+export function resumeControlPlaneProxyClaim(id: string) {
+  return postApiData<ClaimProxyNodeResult>(`control-plane-proxy/pending-claims/${id}/resume`);
+}
+
+export function cancelControlPlaneProxyClaim(id: string) {
+  return deleteApiData<CancelProxyClaimResult>(`control-plane-proxy/pending-claims/${id}`);
 }
 
 export function checkNodeUpdate(nodeId: string, channel: UpdateChannel) {
@@ -598,8 +662,8 @@ export function syncLocalNode() {
   return postApiData<Node>("nodes/local/sync");
 }
 
-export function deleteNode(id: string) {
-  return deleteApiData<{ deleted: boolean }>(`nodes/${id}`);
+export function deleteNode(id: string, force = false) {
+  return deleteApiData<DeleteNodeResult>(`nodes/${id}${force ? "?force=true" : ""}`);
 }
 
 export function checkNode(id: string) {

@@ -54,6 +54,7 @@ export const nodeRuntimeStatusKeys: Record<string, string> = {
 export const nodeConnectionModeKeys: Record<string, string> = {
   "direct-http": "settings.nodeDetail.connectionDirectHttp",
   "reverse-wss": "settings.nodeDetail.connectionReverseWss",
+  "control-plane-proxy": "settings.nodeDetail.connectionControlPlaneProxy",
 };
 
 export const runtimeTypeKeys: Record<string, string> = {

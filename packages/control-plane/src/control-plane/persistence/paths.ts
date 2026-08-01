@@ -18,6 +18,7 @@ export type ControlPlaneStorePaths = {
   chatBridgesDir: string;
   triggersDir: string;
   nodeJoinInvitesDir: string;
+  proxyAuthorityPath: string;
   authUsersDir: string;
   authSessionsDir: string;
   aiSessionUnreadDir: string;
@@ -47,6 +48,7 @@ export function controlPlaneStorePaths(dataDir = defaultControlPlaneDataDir()): 
     chatBridgesDir: path.join(root, "chat-bridges"),
     triggersDir: path.join(root, "triggers"),
     nodeJoinInvitesDir: path.join(root, "node-join-invites"),
+    proxyAuthorityPath: path.join(root, "control-plane-proxy", "authority.json"),
     authUsersDir: path.join(root, "auth-users"),
     authSessionsDir: path.join(root, "auth-sessions"),
     aiSessionUnreadDir: path.join(root, "ai-session-unread"),

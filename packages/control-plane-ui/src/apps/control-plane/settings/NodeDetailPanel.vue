@@ -374,6 +374,11 @@
           </TabsContent>
 
           <TabsContent class="node-detail-tab-content" value="remote">
+            <ControlPlaneProxyNodePanel
+              v-if="selectedNode.connectionMode === 'control-plane-proxy'"
+              :selected-node="selectedNode"
+            />
+            <template v-else>
             <div class="node-remote-panel">
               <div class="section-head compact-head">
                 <span>{{ t("settings.nodeDetail.pairedKeys", { count: resources.controlPlanePairings.length }) }}</span>
@@ -452,6 +457,10 @@
                 <span v-if="resources.remoteConnectResultByNodeId[selectedNode.id].error"> · {{ resources.remoteConnectResultByNodeId[selectedNode.id].error }}</span>
               </p>
             </div>
+            <div class="node-remote-panel">
+              <ControlPlaneProxyManagementPanel :node-id="selectedNode.id" :node-name="selectedNode.name" />
+            </div>
+            </template>
           </TabsContent>
         </Tabs>
       </div>
@@ -475,6 +484,8 @@ import { Tooltip, TooltipContent } from "../../../components/ui/tooltip";
 import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
+import ControlPlaneProxyManagementPanel from "./ControlPlaneProxyManagementPanel.vue";
+import ControlPlaneProxyNodePanel from "./ControlPlaneProxyNodePanel.vue";
 import { nodeEndpointDisplay } from "./nodeEndpointDisplay";
 import { nodeDetailActionState } from "./nodeDetailActions";
 import { externalListenerSourceKeys, externalListenerStatusKeys, instanceStatusKeys, nodeConnectionModeKeys, nodeRuntimeStatusKeys, remoteConnectStatusKeys, runtimeAccessStrategyKeys, runtimeTypeKeys, runtimeVersionStatusKeys, translateStatus, updateJobStatusKeys } from "../../../i18n/status";

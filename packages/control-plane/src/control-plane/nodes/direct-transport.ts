@@ -1,5 +1,5 @@
 import type { Node } from "@task-handoff/protocol/control-plane";
-import { bridgeWebSockets } from "@task-handoff/protocol/websocket-bridge";
+import { bridgeWebSockets, type WebSocketLike } from "@task-handoff/protocol/websocket-bridge";
 import { WebSocket as WsClient } from "ws";
 import { createDirectNodeAgentAuthHeaders } from "../../shared/security/node-agent-auth.ts";
 import {
@@ -11,6 +11,15 @@ import {
 import type { NodeAgentTransport, NodeAgentWebSocket } from "./client.ts";
 
 type FetchImpl = typeof fetch;
+
+export type DirectNodeAgentTransportOptions = {
+  openWebSocket?: (
+    node: Node,
+    route: string,
+    protocols: string | string[] | undefined,
+    headers: Record<string, string>,
+  ) => WebSocketLike;
+};
 
 export async function fetchDirectNodeAgentEndpoint(
   fetchImpl: FetchImpl,
@@ -45,22 +54,33 @@ function openDirectNodeAgentWebSocket(
   const endpoint = requireDirectNodeAgentEndpoint(node);
   const ipcPath = parseNodeAgentIpcEndpoint(endpoint);
   const pathWithQuery = `/api/node-agent${route}`;
-  const authHeaders = createDirectNodeAgentAuthHeaders(node, {
-    method: "GET",
-    pathWithQuery,
-  });
   if (ipcPath) {
     assertLocalIpcSocketOwnedByCurrentUser(ipcPath);
-    return createNodeAgentIpcWebSocket(ipcPath, route, protocols, { ...headers, ...authHeaders });
+    return createNodeAgentIpcWebSocket(ipcPath, route, protocols, headers);
   }
   const url = new URL(pathWithQuery, endpoint.replace(/\/$/, ""));
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   return protocols
-    ? new WsClient(url.toString(), protocols, { headers: { ...headers, ...authHeaders } })
-    : new WsClient(url.toString(), { headers: { ...headers, ...authHeaders } });
+    ? new WsClient(url.toString(), protocols, { headers })
+    : new WsClient(url.toString(), { headers });
 }
 
-export function createDirectNodeAgentTransport(fetchImpl: FetchImpl = fetch): NodeAgentTransport {
+function directNodeAgentHeaders(
+  node: Node,
+  input: { method: string; pathWithQuery: string; body?: string | Buffer },
+  headers?: HeadersInit,
+) {
+  const merged = new Headers(headers);
+  const authHeaders = createDirectNodeAgentAuthHeaders(node, input);
+  for (const [name, value] of Object.entries(authHeaders)) {
+    if (name === "authorization" && merged.has(name)) continue;
+    merged.set(name, value);
+  }
+  return Object.fromEntries(merged.entries());
+}
+
+export function createDirectNodeAgentTransport(fetchImpl: FetchImpl = fetch, options: DirectNodeAgentTransportOptions = {}): NodeAgentTransport {
+  const openWebSocket = options.openWebSocket || openDirectNodeAgentWebSocket;
   const request = async (node: Node, route: string, init: RequestInit = {}) => {
     const endpoint = requireDirectNodeAgentEndpoint(node);
     const method = init.method || "GET";
@@ -69,18 +89,15 @@ export function createDirectNodeAgentTransport(fetchImpl: FetchImpl = fetch): No
       : init.body === undefined || init.body === null
         ? undefined
         : String(init.body);
-    const authHeaders = createDirectNodeAgentAuthHeaders(node, {
+    const headers = directNodeAgentHeaders(node, {
       method,
       pathWithQuery: `/api/node-agent${route}`,
       body: body || "",
-    });
+    }, init.headers);
     return fetchDirectNodeAgentEndpoint(fetchImpl, endpoint, route, {
       ...init,
       body,
-      headers: {
-        ...(init.headers || {}),
-        ...authHeaders,
-      },
+      headers,
     });
   };
 
@@ -88,7 +105,9 @@ export function createDirectNodeAgentTransport(fetchImpl: FetchImpl = fetch): No
     request,
     requestStream: request,
     proxyWebSocket(node: Node, socket: NodeAgentWebSocket, route: string, protocols?: string | string[], headers: Record<string, string> = {}) {
-      bridgeWebSockets(socket, openDirectNodeAgentWebSocket(node, route, protocols, headers), {
+      const pathWithQuery = `/api/node-agent${route}`;
+      const mergedHeaders = directNodeAgentHeaders(node, { method: "GET", pathWithQuery }, headers);
+      bridgeWebSockets(socket, openWebSocket(node, route, protocols, mergedHeaders), {
         onUpstreamError: () => socket.close(1011, "Instance websocket proxy failed."),
         onUpstreamErrorBeforeOpen: () => true,
       });

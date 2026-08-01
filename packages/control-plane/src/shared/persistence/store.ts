@@ -10,13 +10,18 @@ export type StoredRecord = {
   updatedAt: string;
 };
 
-function ensureDirectory(directory: string) {
-  fs.mkdirSync(directory, { recursive: true });
+function ensureDirectory(directory: string, mode?: number) {
+  fs.mkdirSync(directory, { recursive: true, ...(mode === undefined ? {} : { mode }) });
+  if (mode !== undefined) fs.chmodSync(directory, mode);
 }
 
-function writeJsonAtomic(filePath: string, value: unknown) {
-  ensureDirectory(path.dirname(filePath));
-  writeFileAtomic.sync(filePath, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8" });
+function writeJsonAtomic(filePath: string, value: unknown, options: { directoryMode?: number; fileMode?: number } = {}) {
+  ensureDirectory(path.dirname(filePath), options.directoryMode);
+  writeFileAtomic.sync(filePath, `${JSON.stringify(value, null, 2)}\n`, {
+    encoding: "utf8",
+    ...(options.fileMode === undefined ? {} : { mode: options.fileMode }),
+  });
+  if (options.fileMode !== undefined) fs.chmodSync(filePath, options.fileMode);
 }
 
 type StoreLogger = (message: string, details: Record<string, unknown>) => void;
@@ -24,6 +29,8 @@ type StoreOptions<T> = {
   schema?: z.ZodType<T>;
   sanitize?: (value: unknown) => unknown;
   logger?: StoreLogger;
+  directoryMode?: number;
+  fileMode?: number;
 };
 
 function defaultStoreLogger(message: string, details: Record<string, unknown>) {
@@ -78,7 +85,12 @@ export class JsonCollection<T extends StoredRecord> {
   }
 
   init() {
-    ensureDirectory(this.directory);
+    ensureDirectory(this.directory, this.options.directoryMode);
+    if (this.options.fileMode !== undefined) {
+      for (const name of fs.readdirSync(this.directory).filter((entry) => entry.endsWith(".json"))) {
+        fs.chmodSync(path.join(this.directory, name), this.options.fileMode);
+      }
+    }
   }
 
   filePath(id: string) {
@@ -98,6 +110,7 @@ export class JsonCollection<T extends StoredRecord> {
   }
 
   get(id: string) {
+    this.init();
     const filePath = this.filePath(id);
     return fs.existsSync(filePath) ? parseStored(filePath, this.options) : undefined;
   }
@@ -105,7 +118,7 @@ export class JsonCollection<T extends StoredRecord> {
   put(record: T) {
     const candidate = this.options.sanitize ? this.options.sanitize(record) : record;
     const value = this.options.schema ? this.options.schema.parse(candidate) : candidate as T;
-    writeJsonAtomic(this.filePath(value.id), value);
+    writeJsonAtomic(this.filePath(value.id), value, this.options);
     return value;
   }
 
@@ -146,9 +159,11 @@ export class JsonFile<T> {
   }
 
   init() {
-    ensureDirectory(path.dirname(this.filePathValue));
+    ensureDirectory(path.dirname(this.filePathValue), this.options.directoryMode);
     if (!fs.existsSync(this.filePathValue)) {
       this.put(this.defaults());
+    } else if (this.options.fileMode !== undefined) {
+      fs.chmodSync(this.filePathValue, this.options.fileMode);
     }
   }
 
@@ -160,7 +175,7 @@ export class JsonFile<T> {
   put(value: T) {
     const candidate = this.options.sanitize ? this.options.sanitize(value) : value;
     const parsed = this.options.schema ? this.options.schema.parse(candidate) : candidate as T;
-    writeJsonAtomic(this.filePathValue, parsed);
+    writeJsonAtomic(this.filePathValue, parsed, this.options);
     return parsed;
   }
 }

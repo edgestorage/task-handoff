@@ -10,9 +10,14 @@ class MockWebSocket extends EventEmitter {
     this.OPEN = 1;
     this.readyState = this.OPEN;
     this.closes = [];
+    this.sent = [];
+    this.throwOnSend = false;
   }
 
-  send() {}
+  send(data, options) {
+    if (this.throwOnSend) throw new Error("simulated send failure");
+    this.sent.push({ data, options });
+  }
 
   close(code, reason) {
     if (code !== undefined && !isSendableCloseCode(code)) {
@@ -60,4 +65,77 @@ test("closeWebSocket normalizes runtime close events before forwarding them", ()
   assert.equal(socket.closes.length, 1);
   assert.equal(socket.closes[0].code, undefined);
   assert.equal(Buffer.byteLength(socket.closes[0].reason, "utf8"), 123);
+});
+
+test("bridgeWebSockets enforces optional frame and total byte limits", () => {
+  const client = new MockWebSocket();
+  const upstream = new MockWebSocket();
+  const frames = [];
+  bridgeWebSockets(client, upstream, {
+    maxFrameBytes: 4,
+    maxTotalBytes: 6,
+    onFrame: (direction, bytes) => frames.push({ direction, bytes }),
+  });
+
+  client.emit("message", "1234", false);
+  upstream.emit("message", Buffer.from("123"), true);
+
+  assert.deepEqual(frames, [
+    { direction: "client-to-upstream", bytes: 4 },
+    { direction: "upstream-to-client", bytes: 3 },
+  ]);
+  assert.deepEqual(client.closes.at(-1), { code: 1009, reason: "WebSocket bridge traffic limit exceeded." });
+  assert.deepEqual(upstream.closes.at(-1), { code: 1009, reason: "WebSocket bridge traffic limit exceeded." });
+});
+
+test("bridgeWebSockets closes both sides when the destination consumer remains buffered", () => {
+  const client = new MockWebSocket();
+  const upstream = new MockWebSocket();
+  upstream.bufferedAmount = 9;
+  bridgeWebSockets(client, upstream, { maxBufferedBytes: 8 });
+
+  client.emit("message", "opaque", false);
+
+  assert.deepEqual(client.closes.at(-1), { code: 1013, reason: "WebSocket bridge consumer is too slow." });
+  assert.deepEqual(upstream.closes.at(-1), { code: 1013, reason: "WebSocket bridge consumer is too slow." });
+});
+
+test("bridgeWebSockets includes the current frame in the buffered byte limit", () => {
+  const client = new MockWebSocket();
+  const upstream = new MockWebSocket();
+  upstream.bufferedAmount = 7;
+  bridgeWebSockets(client, upstream, { maxBufferedBytes: 8 });
+
+  client.emit("message", "12", false);
+
+  assert.equal(upstream.sent.length, 0);
+  assert.deepEqual(client.closes.at(-1), { code: 1013, reason: "WebSocket bridge consumer is too slow." });
+  assert.deepEqual(upstream.closes.at(-1), { code: 1013, reason: "WebSocket bridge consumer is too slow." });
+});
+
+test("bridgeWebSockets includes queued frames in the buffered byte limit", () => {
+  const client = new MockWebSocket();
+  const upstream = new MockWebSocket();
+  upstream.readyState = 0;
+  upstream.bufferedAmount = 2;
+  bridgeWebSockets(client, upstream, { maxBufferedBytes: 8 });
+
+  client.emit("message", "1234", false);
+  assert.equal(client.closes.length, 0);
+  client.emit("message", "789", false);
+
+  assert.equal(upstream.sent.length, 0);
+  assert.deepEqual(client.closes.at(-1), { code: 1013, reason: "WebSocket bridge consumer is too slow." });
+  assert.deepEqual(upstream.closes.at(-1), { code: 1013, reason: "WebSocket bridge consumer is too slow." });
+});
+
+test("bridgeWebSockets converts destination send exceptions into symmetric closure", () => {
+  const client = new MockWebSocket();
+  const upstream = new MockWebSocket();
+  upstream.throwOnSend = true;
+  bridgeWebSockets(client, upstream);
+
+  assert.doesNotThrow(() => client.emit("message", "opaque", false));
+  assert.deepEqual(client.closes.at(-1), { code: 1011, reason: "WebSocket bridge send failed." });
+  assert.deepEqual(upstream.closes.at(-1), { code: 1011, reason: "WebSocket bridge send failed." });
 });

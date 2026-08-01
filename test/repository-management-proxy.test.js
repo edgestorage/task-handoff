@@ -75,6 +75,10 @@ function proxyBridge(controlled, requests) {
   };
 }
 
+function transportWithRequest(request) {
+  return { request, requestStream: request, proxyWebSocket() {} };
+}
+
 async function jsonFromProxy(response) {
   return new Response(response.body).json();
 }
@@ -93,7 +97,7 @@ test("repository APIs cross local, direct, and reverse instance proxy transports
       const requests = [];
       const node = { id: `node-${connectionMode}`, connectionMode };
       const instance = { id: `instance-${connectionMode}`, name: connectionMode, nodeId: node.id, connectionStatus: "online", agentStatus: "online", target: { web: "http://controlled.invalid" } };
-      const gateway = new ControlledInstanceGateway({ requireNode: () => node, nodeAgentRequest: proxyBridge(controlled, requests), nodeAgentStreamRequest: proxyBridge(controlled, requests), fetchImpl: fetch });
+      const gateway = new ControlledInstanceGateway({ requireNode: () => node, nodeAgentTransport: () => transportWithRequest(proxyBridge(controlled, requests)) });
       const proxied = await gateway.proxyHttp(instance, `/api/ai-sessions/${ai.id}/repository/context`);
       const payload = await jsonFromProxy(proxied);
       assert.equal(proxied.status, 200);
@@ -123,7 +127,7 @@ test("generic proxy limits cannot bypass repository file and diff limits", async
   const node = { id: "node-limits", connectionMode: "direct-http" };
   const instance = { id: "instance-limits", name: "limits", nodeId: node.id, connectionStatus: "online", agentStatus: "online", target: { web: "http://controlled.invalid" } };
   const requests = [];
-  const gateway = new ControlledInstanceGateway({ requireNode: () => node, nodeAgentRequest: proxyBridge(controlled, requests), nodeAgentStreamRequest: proxyBridge(controlled, requests), fetchImpl: fetch });
+  const gateway = new ControlledInstanceGateway({ requireNode: () => node, nodeAgentTransport: () => transportWithRequest(proxyBridge(controlled, requests)) });
   try {
     const diff = await gateway.proxyHttp(instance, `/api/ai-sessions/${ai.id}/repository/diff?scope=unstaged&path=tracked.txt&byteLimit=1024`);
     const diffPayload = await jsonFromProxy(diff);

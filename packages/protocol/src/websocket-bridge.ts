@@ -1,6 +1,7 @@
 export type WebSocketLike = {
   readyState: number;
   OPEN?: number;
+  bufferedAmount?: number;
   send: (data: unknown, options?: { binary?: boolean }) => void;
   close: (code?: number, reason?: string) => void;
   on: (event: "open" | "message" | "close" | "error", listener: (...args: unknown[]) => void) => void;
@@ -9,10 +10,14 @@ export type WebSocketLike = {
 type WebSocketFrame = {
   data: unknown;
   isBinary: boolean;
+  bytes: number;
 };
 
 export type WebSocketBridgeOptions = {
   pendingFrameLimit?: number;
+  maxFrameBytes?: number;
+  maxTotalBytes?: number;
+  maxBufferedBytes?: number;
   upstreamOpenTimeoutMs?: number;
   onUpstreamOpen?: () => void;
   onUpstreamCloseBeforeOpen?: () => boolean;
@@ -21,6 +26,7 @@ export type WebSocketBridgeOptions = {
   onClientError?: (error: unknown) => void;
   onUpstreamClose?: (code?: unknown, reason?: unknown) => void;
   onUpstreamError?: (error: unknown) => void;
+  onFrame?: (direction: "client-to-upstream" | "upstream-to-client", bytes: number) => void;
 };
 
 function isOpen(socket: WebSocketLike) {
@@ -64,22 +70,47 @@ function sendFrame(socket: WebSocketLike, frame: WebSocketFrame) {
   socket.send(frame.data, { binary: frame.isBinary });
 }
 
-function flush(socket: WebSocketLike, frames: WebSocketFrame[]) {
+function flush(socket: WebSocketLike, frames: WebSocketFrame[], send: (frame: WebSocketFrame) => boolean, dequeued: (frame: WebSocketFrame) => void) {
   if (!isOpen(socket)) {
     return;
   }
   for (const frame of frames.splice(0)) {
-    sendFrame(socket, frame);
+    dequeued(frame);
+    if (!send(frame)) return;
   }
 }
 
 export function bridgeWebSockets(client: WebSocketLike, upstream: WebSocketLike, options: WebSocketBridgeOptions = {}) {
   const pendingFrameLimit = options.pendingFrameLimit ?? 256;
+  const maxFrameBytes = options.maxFrameBytes ?? 8 * 1024 * 1024;
+  const maxTotalBytes = options.maxTotalBytes ?? 1024 * 1024 * 1024;
+  const maxBufferedBytes = options.maxBufferedBytes ?? 16 * 1024 * 1024;
   let clientClosed = false;
   let upstreamOpened = isOpen(upstream);
   const pendingToUpstream: WebSocketFrame[] = [];
   const pendingToClient: WebSocketFrame[] = [];
+  let pendingToUpstreamBytes = 0;
+  let pendingToClientBytes = 0;
   let openTimer: ReturnType<typeof setTimeout> | undefined;
+  let totalBytes = 0;
+
+  const frameBytes = (value: unknown) => {
+    if (Buffer.isBuffer(value)) return value.byteLength;
+    if (value instanceof ArrayBuffer) return value.byteLength;
+    if (ArrayBuffer.isView(value)) return value.byteLength;
+    return Buffer.byteLength(typeof value === "string" ? value : String(value), "utf8");
+  };
+  const acceptFrame = (direction: "client-to-upstream" | "upstream-to-client", value: unknown) => {
+    const bytes = frameBytes(value);
+    totalBytes += bytes;
+    options.onFrame?.(direction, bytes);
+    if (bytes > maxFrameBytes || totalBytes > maxTotalBytes) {
+      closeWebSocket(client, 1009, "WebSocket bridge traffic limit exceeded.");
+      closeWebSocket(upstream, 1009, "WebSocket bridge traffic limit exceeded.");
+      return false;
+    }
+    return true;
+  };
 
   const clearOpenTimer = () => {
     if (openTimer) {
@@ -87,13 +118,38 @@ export function bridgeWebSockets(client: WebSocketLike, upstream: WebSocketLike,
       openTimer = undefined;
     }
   };
-  const queue = (frames: WebSocketFrame[], frame: WebSocketFrame) => {
+  const forward = (socket: WebSocketLike, frame: WebSocketFrame) => {
+    const bytes = frame.bytes;
+    if ((socket.bufferedAmount ?? 0) + bytes > maxBufferedBytes) {
+      closeWebSocket(client, 1013, "WebSocket bridge consumer is too slow.");
+      closeWebSocket(upstream, 1013, "WebSocket bridge consumer is too slow.");
+      return false;
+    }
+    try {
+      sendFrame(socket, frame);
+      return true;
+    } catch {
+      closeWebSocket(client, 1011, "WebSocket bridge send failed.");
+      closeWebSocket(upstream, 1011, "WebSocket bridge send failed.");
+      return false;
+    }
+  };
+  const queue = (direction: "upstream" | "client", frames: WebSocketFrame[], frame: WebSocketFrame) => {
     if (frames.length >= pendingFrameLimit) {
       closeWebSocket(client, 1011, "WebSocket bridge pending frame limit exceeded.");
       closeWebSocket(upstream, 1011, "WebSocket bridge pending frame limit exceeded.");
       return;
     }
+    const pendingBytes = direction === "upstream" ? pendingToUpstreamBytes : pendingToClientBytes;
+    const destination = direction === "upstream" ? upstream : client;
+    if ((destination.bufferedAmount ?? 0) + pendingBytes + frame.bytes > maxBufferedBytes) {
+      closeWebSocket(client, 1013, "WebSocket bridge consumer is too slow.");
+      closeWebSocket(upstream, 1013, "WebSocket bridge consumer is too slow.");
+      return;
+    }
     frames.push(frame);
+    if (direction === "upstream") pendingToUpstreamBytes += frame.bytes;
+    else pendingToClientBytes += frame.bytes;
   };
 
   if (options.upstreamOpenTimeoutMs && !upstreamOpened) {
@@ -105,28 +161,30 @@ export function bridgeWebSockets(client: WebSocketLike, upstream: WebSocketLike,
     }, options.upstreamOpenTimeoutMs);
   }
 
-  client.on("open", () => flush(client, pendingToClient));
+  client.on("open", () => flush(client, pendingToClient, (frame) => forward(client, frame), (frame) => { pendingToClientBytes -= frame.bytes; }));
   upstream.on("open", () => {
     clearOpenTimer();
     upstreamOpened = true;
     options.onUpstreamOpen?.();
-    flush(upstream, pendingToUpstream);
+    flush(upstream, pendingToUpstream, (frame) => forward(upstream, frame), (frame) => { pendingToUpstreamBytes -= frame.bytes; });
   });
   client.on("message", (message, isBinary = false) => {
-    const frame = { data: message, isBinary: Boolean(isBinary) };
+    if (!acceptFrame("client-to-upstream", message)) return;
+    const frame = { data: message, isBinary: Boolean(isBinary), bytes: frameBytes(message) };
     if (isOpen(upstream)) {
-      sendFrame(upstream, frame);
+      forward(upstream, frame);
       return;
     }
-    queue(pendingToUpstream, frame);
+    queue("upstream", pendingToUpstream, frame);
   });
   upstream.on("message", (message, isBinary = false) => {
-    const frame = { data: message, isBinary: Boolean(isBinary) };
+    if (!acceptFrame("upstream-to-client", message)) return;
+    const frame = { data: message, isBinary: Boolean(isBinary), bytes: frameBytes(message) };
     if (isOpen(client)) {
-      sendFrame(client, frame);
+      forward(client, frame);
       return;
     }
-    queue(pendingToClient, frame);
+    queue("client", pendingToClient, frame);
   });
   upstream.on("close", (code, reason) => {
     clearOpenTimer();

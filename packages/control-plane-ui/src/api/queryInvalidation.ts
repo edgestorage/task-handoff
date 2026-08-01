@@ -11,6 +11,7 @@ export type ControlPlaneQueryDomain =
   | "nodeTopology"
   | "nodeRuntimeState"
   | "nodeFolders"
+  | "controlPlaneProxy"
   | "instances"
   | "chat";
 
@@ -48,6 +49,12 @@ const domainQueryKeys: Record<Exclude<ControlPlaneQueryDomain, "manual">, () => 
     controlPlaneQueryKeys.instanceBoard,
   ],
   nodeFolders: () => [controlPlaneQueryKeys.nodeLocalFolders()],
+  controlPlaneProxy: () => [
+    controlPlaneQueryKeys.controlPlaneProxyInvites,
+    controlPlaneQueryKeys.controlPlaneProxyBindings,
+    controlPlaneQueryKeys.controlPlaneProxyDiagnostics,
+    controlPlaneQueryKeys.controlPlaneProxyPendingClaims,
+  ],
   instances: () => [controlPlaneQueryKeys.instanceBoard],
   chat: () => [
     controlPlaneQueryKeys.chatBridges,

@@ -7,6 +7,10 @@ export const controlPlaneQueryKeys = {
   imageOptions: ["control-plane-image-options"] as const,
   marketCatalog: ["control-plane-market-catalog"] as const,
   nodes: ["control-plane-nodes"] as const,
+  controlPlaneProxyInvites: ["control-plane-proxy-invites"] as const,
+  controlPlaneProxyBindings: ["control-plane-proxy-bindings"] as const,
+  controlPlaneProxyDiagnostics: ["control-plane-proxy-diagnostics"] as const,
+  controlPlaneProxyPendingClaims: ["control-plane-proxy-pending-claims"] as const,
   nodeRuntimes: ["control-plane-node-runtimes-payload"] as const,
   nodeLocalFolders: (nodeId?: string) => nodeId
     ? ["control-plane-node-local-folders", nodeId] as const
