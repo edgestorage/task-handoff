@@ -9,6 +9,16 @@ const test = require("node:test");
 
 const root = path.resolve(__dirname, "..");
 
+function typescriptSources(directory) {
+  return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const filename = path.join(directory, entry.name);
+    if (entry.isDirectory()) return typescriptSources(filename);
+    return entry.isFile() && entry.name.endsWith(".ts")
+      ? [{ filename, source: fs.readFileSync(filename, "utf8") }]
+      : [];
+  });
+}
+
 test("server bootstrap owns the complete Debian and Ubuntu install path", () => {
   const bootstrap = fs.readFileSync(path.join(root, "scripts", "install-server.sh"), "utf8");
 
@@ -195,8 +205,21 @@ test("server update CLI preserves configuration and restart ordering", () => {
 
 test("runtime package versions use one resolver for explicit, bundled, and workspace builds", async () => {
   const { controlledInstancePackageVersionResolver, executablePackageVersionResolver, packageVersionResolver, resolvePackageVersion } = await import("../packages/core/src/core/package-version.ts");
-  const nodeAgent = fs.readFileSync(path.join(root, "packages", "control-plane", "src", "node-agent", "app.ts"), "utf8");
-  assert.match(nodeAgent, /packageVersionResolver\([\s\S]*?"@task-handoff\/node-agent"[\s\S]*?"@task-handoff\/control-plane"[\s\S]*?\);/);
+  const sourceRoot = path.join(root, "packages", "control-plane", "src");
+  const nodeAgentRoot = path.join(sourceRoot, "node-agent");
+  const facadeFilename = path.join(sourceRoot, "node-agent.ts");
+  const nodeAgentSources = [
+    { filename: facadeFilename, source: fs.readFileSync(facadeFilename, "utf8") },
+    ...typescriptSources(nodeAgentRoot),
+  ];
+  const resolverSources = nodeAgentSources.filter(({ source }) => /\bpackageVersionResolver\b/.test(source));
+  assert.deepEqual(resolverSources.map(({ filename }) => path.relative(sourceRoot, filename)), [path.join("node-agent", "runtime-version-state.ts")]);
+  const runtimeVersionState = resolverSources[0].source;
+  assert.equal(runtimeVersionState.match(/\bpackageVersionResolver\s*\(/g)?.length, 1);
+  assert.match(runtimeVersionState, /packageVersionResolver\([\s\S]*?"@task-handoff\/node-agent"[\s\S]*?"@task-handoff\/control-plane"[\s\S]*?\);/);
+  const appSource = nodeAgentSources.find(({ filename }) => path.relative(sourceRoot, filename) === path.join("node-agent", "app.ts"))?.source || "";
+  assert.match(appSource, /import\s*\{[^}]*\bdesiredControlledInstanceVersion\b[^}]*\}\s*from\s*"\.\/runtime-version-state\.ts"/);
+  assert.match(appSource, /desiredControlledInstanceVersion\(\)/);
   assert.equal(resolvePackageVersion("@task-handoff/cli", { TASK_HANDOFF_VERSION: " 9.8.7 " }), "9.8.7");
   assert.equal(resolvePackageVersion("@task-handoff/cli", {}), "0.0.1");
   assert.equal(resolvePackageVersion("@task-handoff/controlled-instance", {}), "1.0.0");

@@ -3,29 +3,9 @@ import { PassThrough, Readable } from "node:stream";
 import { WebSocket as WsClient } from "ws";
 import {
   encodeNodeTunnelRequestBody,
-  InstanceLifecycleEventType,
-  InstanceLifecycleSnapshotSchema,
-  InstanceResourceMetricsEventType,
-  InstanceResourceMetricsSchema,
-  ImagePullTerminalEventType,
-  ImagePullTerminalFinishedSchema,
-  ImagePullTerminalOutputSchema,
   type Node,
 } from "@task-handoff/protocol/control-plane";
-import {
-  AiSessionEventType,
-  AiSessionMessageDeltaEventSchema,
-  AiSessionPatchEventSchema,
-  AiSessionRemovedEventSchema,
-  AiSessionSnapshotEventSchema,
-} from "@task-handoff/protocol/ai-sessions";
-import {
-  AppSessionEventType,
-  AppSessionPatchEventSchema,
-  AppSessionRemovedEventSchema,
-  AppSessionSnapshotEventSchema,
-} from "@task-handoff/protocol/app-sessions";
-import { SessionStreamsHelloSchema, type EventEnvelope, type SessionStreamsHello } from "@task-handoff/protocol/events";
+import type { EventEnvelope, SessionStreamsHello } from "@task-handoff/protocol/events";
 import { bridgeWebSockets, closeWebSocket, normalizeWebSocketCloseCode, normalizeWebSocketCloseReason, type WebSocketLike } from "@task-handoff/protocol/websocket-bridge";
 import type { ControlPlaneService } from "../application/service.ts";
 import type { NodeAgentTransport } from "./client.ts";
@@ -35,42 +15,13 @@ import { NODE_TUNNEL_ROUTE } from "../http/auth-boundary.ts";
 import { createNodeAgentIpcWebSocket, parseNodeAgentIpcEndpoint } from "../../shared/transport/node-agent-ipc.ts";
 import { EventConnectionRetryTimer, eventConnectionSafetyIntervalMs } from "../../shared/events/connection-retry.ts";
 import { NodeTunnelIngress, type NodeAgentTunnelSocket } from "./tunnel-ingress.ts";
+import { NodeTunnelEventRouter } from "./tunnel-event-router.ts";
 
 const NodeAgentTunnelQuerySchema = z
   .object({
     nodeId: z.string().trim().min(1).max(120),
   })
   .strict();
-
-const SESSION_EVENT_TYPES = new Set<string>([
-  AiSessionEventType.Snapshot,
-  AiSessionEventType.Patch,
-  AiSessionEventType.Removed,
-  AiSessionEventType.MessageDelta,
-  AppSessionEventType.Snapshot,
-  AppSessionEventType.Patch,
-  AppSessionEventType.Removed,
-]);
-
-const SESSION_EVENT_SCHEMAS = {
-  [AiSessionEventType.Snapshot]: AiSessionSnapshotEventSchema,
-  [AiSessionEventType.Patch]: AiSessionPatchEventSchema,
-  [AiSessionEventType.Removed]: AiSessionRemovedEventSchema,
-  [AiSessionEventType.MessageDelta]: AiSessionMessageDeltaEventSchema,
-  [AppSessionEventType.Snapshot]: AppSessionSnapshotEventSchema,
-  [AppSessionEventType.Patch]: AppSessionPatchEventSchema,
-  [AppSessionEventType.Removed]: AppSessionRemovedEventSchema,
-} as const;
-
-function parseSessionEvent(eventType: string, payload: unknown) {
-  const schema = SESSION_EVENT_SCHEMAS[eventType as keyof typeof SESSION_EVENT_SCHEMAS];
-  if (!schema) return undefined;
-  const parsed = schema.safeParse(payload);
-  if (!parsed.success) return undefined;
-  const data = parsed.data;
-  const instanceId = "meta" in data ? data.meta.instanceId : data.instanceId;
-  return { instanceId, payload: data };
-}
 
 type ReverseTunnelSocket = {
   send: (data: string) => void;
@@ -180,13 +131,7 @@ function requestHeaders(headers: HeadersInit | undefined) {
 
 export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport {
   private readonly sockets = new Map<string, ReverseTunnelConnection>();
-  private readonly events?: ControlPlaneEventBus;
-  private readonly onStreamsHello?: (instanceId: string, hello: SessionStreamsHello) => void | Promise<void>;
-  private readonly onSessionEvent?: (event: EventEnvelope) => boolean;
-  private readonly validateInstanceScope?: (nodeId: string, instanceId: string) => boolean | Promise<boolean>;
-  private readonly validatedInstanceScopes = new Map<string, { nodeId: string; instanceId: string; expiresAt: number }>();
-  private readonly validatingInstanceScopes = new Map<string, Promise<boolean>>();
-  private readonly instanceEventQueues = new Map<string, Promise<void>>();
+  private readonly eventRouter: NodeTunnelEventRouter;
   private readonly httpStreamHeaderTimeoutMs: number;
   private readonly requestTimeoutMs: number;
   private readonly auxiliaryAttachTimeoutMs: number;
@@ -199,10 +144,12 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
     requestTimeoutMs?: number;
     auxiliaryAttachTimeoutMs?: number;
   } = {}) {
-    this.events = events;
-    this.onStreamsHello = options.onStreamsHello;
-    this.onSessionEvent = options.onSessionEvent;
-    this.validateInstanceScope = options.validateInstanceScope;
+    this.eventRouter = new NodeTunnelEventRouter({
+      events,
+      onStreamsHello: options.onStreamsHello,
+      onSessionEvent: options.onSessionEvent,
+      validateInstanceScope: options.validateInstanceScope,
+    });
     this.httpStreamHeaderTimeoutMs = options.httpStreamHeaderTimeoutMs ?? 30_000;
     this.requestTimeoutMs = options.requestTimeoutMs ?? 30_000;
     this.auxiliaryAttachTimeoutMs = options.auxiliaryAttachTimeoutMs ?? 30_000;
@@ -280,7 +227,7 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
   }
 
   handleMessage(nodeId: string, message: Record<string, unknown>) {
-    if (this.handleNodeAgentEvent(nodeId, message)) {
+    if (this.eventRouter.handle(nodeId, message)) {
       return true;
     }
     if (this.handleWebSocketMessage(nodeId, message)) {
@@ -312,138 +259,12 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
     return true;
   }
 
-  private handleNodeAgentEvent(nodeId: string, message: Record<string, unknown>) {
-    const type = typeof message.type === "string" ? message.type : "";
-    if (type === "node-agent.streams.hello") {
-      const instanceId = typeof message.instanceId === "string" ? message.instanceId : "";
-      const hello = SessionStreamsHelloSchema.safeParse(message.payload);
-      if (instanceId && hello.success) void this.onStreamsHello?.(instanceId, hello.data);
-      return true;
-    }
-    if (!type.startsWith("node-agent.event.")) {
-      return false;
-    }
-    const event = message.event && typeof message.event === "object" && !Array.isArray(message.event) ? message.event as Record<string, unknown> : undefined;
-    const eventType = typeof event?.type === "string" ? event.type : "";
-    if (!eventType) {
-      return true;
-    }
-    const payload = "payload" in event ? event.payload : {};
-    const scope = event.scope && typeof event.scope === "object" && !Array.isArray(event.scope) ? event.scope as Record<string, unknown> : {};
-    const forwardedInstanceId = typeof message.instanceId === "string" ? message.instanceId : undefined;
-    if (eventType === InstanceResourceMetricsEventType.Snapshot) {
-      const metrics = InstanceResourceMetricsSchema.safeParse(payload);
-      const scopeInstanceId = typeof scope.instanceId === "string" ? scope.instanceId : typeof event.instanceId === "string" ? event.instanceId : forwardedInstanceId;
-      if (!metrics.success || metrics.data.instanceId !== scopeInstanceId) return true;
-      this.enqueueValidatedInstanceEvent(nodeId, metrics.data.instanceId, () => {
-        this.events?.publish(InstanceResourceMetricsEventType.Snapshot, metrics.data, {
-          topic: "instances",
-          scope: { ...scope, nodeId, instanceId: metrics.data.instanceId },
-        });
-      });
-      return true;
-    }
-    if (eventType === InstanceLifecycleEventType.Snapshot) {
-      const lifecycle = InstanceLifecycleSnapshotSchema.safeParse(payload);
-      const scopeInstanceId = typeof scope.instanceId === "string" ? scope.instanceId : typeof event.instanceId === "string" ? event.instanceId : forwardedInstanceId;
-      if (!lifecycle.success || lifecycle.data.instanceId !== scopeInstanceId) return true;
-      this.enqueueValidatedInstanceEvent(nodeId, lifecycle.data.instanceId, () => {
-        this.events?.publish(InstanceLifecycleEventType.Snapshot, lifecycle.data, {
-          topic: "instances",
-          scope: { ...scope, nodeId, instanceId: lifecycle.data.instanceId },
-        });
-      });
-      return true;
-    }
-    if (eventType === ImagePullTerminalEventType.Output || eventType === ImagePullTerminalEventType.Finished) {
-      const parsed = eventType === ImagePullTerminalEventType.Output
-        ? ImagePullTerminalOutputSchema.safeParse(payload)
-        : ImagePullTerminalFinishedSchema.safeParse(payload);
-      const scopeInstanceId = typeof scope.instanceId === "string" ? scope.instanceId : typeof event.instanceId === "string" ? event.instanceId : forwardedInstanceId;
-      if (!parsed.success || parsed.data.instanceId !== scopeInstanceId) return true;
-      this.enqueueValidatedInstanceEvent(nodeId, parsed.data.instanceId, () => {
-        this.events?.publish(eventType, parsed.data, {
-          topic: "instances",
-          scope: { ...scope, nodeId, instanceId: parsed.data.instanceId },
-        });
-      });
-      return true;
-    }
-    if (SESSION_EVENT_TYPES.has(eventType)) {
-      const parsed = parseSessionEvent(eventType, payload);
-      if (!parsed) return true;
-      const claimedInstanceIds = [scope.instanceId, event.instanceId, forwardedInstanceId]
-        .filter((value): value is string => typeof value === "string" && Boolean(value));
-      if (claimedInstanceIds.some((instanceId) => instanceId !== parsed.instanceId)) return true;
-      const instanceId = parsed.instanceId;
-      this.enqueueValidatedInstanceEvent(nodeId, instanceId, () => {
-        const eventScope = { ...scope, nodeId, instanceId };
-        const envelope: EventEnvelope = {
-          v: 1,
-          id: typeof event.id === "string" ? event.id : `forwarded_${Date.now().toString(36)}`,
-          seq: typeof event.seq === "number" ? event.seq : 0,
-          type: eventType,
-          topic: typeof event.topic === "string" ? event.topic : eventType.startsWith("app-session.") ? "app.sessions" : "ai.sessions",
-          createdAt: typeof event.createdAt === "string" ? event.createdAt : new Date().toISOString(),
-          payload: parsed.payload,
-          scope: eventScope,
-        };
-        if (this.onSessionEvent && !this.onSessionEvent(envelope)) return;
-        this.events?.publish(eventType, parsed.payload, { topic: envelope.topic, scope: eventScope });
-      });
-      return true;
-    }
-    this.events?.publish(eventType, payload, {
-      topic: typeof event.topic === "string" ? event.topic : undefined,
-      scope: {
-        ...scope,
-        nodeId,
-        instanceId: typeof scope.instanceId === "string" ? scope.instanceId : typeof event.instanceId === "string" ? event.instanceId : forwardedInstanceId,
-      },
-    });
-    return true;
-  }
-
-  private enqueueValidatedInstanceEvent(nodeId: string, instanceId: string, publish: () => void) {
-    const queueKey = `${nodeId}:${instanceId}`;
-    const previous = this.instanceEventQueues.get(queueKey) || Promise.resolve();
-    const queued = previous.then(async () => {
-      if (await this.isValidatedInstanceScope(nodeId, instanceId)) publish();
-    });
-    this.instanceEventQueues.set(queueKey, queued);
-    void queued.finally(() => {
-      if (this.instanceEventQueues.get(queueKey) === queued) this.instanceEventQueues.delete(queueKey);
-    });
-  }
-
-  private async isValidatedInstanceScope(nodeId: string, instanceId: string) {
-    const cacheKey = `${nodeId}:${instanceId}`;
-    const now = Date.now();
-    if ((this.validatedInstanceScopes.get(cacheKey)?.expiresAt || 0) > now) return true;
-    const existing = this.validatingInstanceScopes.get(cacheKey);
-    if (existing) return existing;
-    const validation = (async () => {
-      let valid = false;
-      try {
-        valid = Boolean(await this.validateInstanceScope?.(nodeId, instanceId));
-      } catch {
-        valid = false;
-      }
-      if (valid) this.validatedInstanceScopes.set(cacheKey, { nodeId, instanceId, expiresAt: Date.now() + 30_000 });
-      return valid;
-    })();
-    this.validatingInstanceScopes.set(cacheKey, validation);
-    return validation.finally(() => {
-      if (this.validatingInstanceScopes.get(cacheKey) === validation) this.validatingInstanceScopes.delete(cacheKey);
-    });
-  }
-
   invalidateInstanceScope(input: { nodeId?: string; instanceId?: string } = {}) {
-    for (const [cacheKey, entry] of this.validatedInstanceScopes) {
-      if (input.nodeId && entry.nodeId !== input.nodeId) continue;
-      if (input.instanceId && entry.instanceId !== input.instanceId) continue;
-      this.validatedInstanceScopes.delete(cacheKey);
-    }
+    this.eventRouter.invalidate(input);
+  }
+
+  instanceScopeDiagnostics() {
+    return this.eventRouter.diagnostics();
   }
 
   async request(node: { id: string }, route: string, init: RequestInit = {}) {

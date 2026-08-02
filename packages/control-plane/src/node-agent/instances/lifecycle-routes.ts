@@ -1,0 +1,136 @@
+import type { FastifyInstance } from "fastify";
+import { z } from "zod";
+import {
+  ControlledInstanceSchema,
+  type ControlledInstance,
+  type NodeRuntime,
+} from "@task-handoff/protocol/control-plane";
+import type { ExecutorContext } from "../runtimes/docker.ts";
+import type { RuntimeAdapterRegistry } from "../runtimes/adapters.ts";
+import type { InstanceLifecycleEvent } from "../instance-lifecycle-state.ts";
+import { reportedVersion } from "../runtime-convergence.ts";
+import { runtimeVersionStateForActual } from "../runtime-version-state.ts";
+
+const LifecycleRequestSchema = z.object({}).strict().default({});
+
+type LifecycleState = {
+  requireInstance(id: string): ControlledInstance;
+  requireRuntime(id: string): NodeRuntime;
+  putInstance(instance: ControlledInstance): ControlledInstance;
+  deleteInstance(id: string): boolean;
+  applyLifecycle(id: string, event: InstanceLifecycleEvent): ControlledInstance;
+  context(instance: ControlledInstance, modelEnv?: Record<string, string>): ExecutorContext;
+};
+
+type Convergence = {
+  cancel(id: string): Promise<unknown>;
+  schedule(id: string, options?: { startRequested?: boolean; resumeCancelled?: boolean }): Promise<ControlledInstance>;
+};
+
+type Hooks = {
+  start(id: string): Promise<ControlledInstance>;
+  sync(): void;
+  isManaged(instance: ControlledInstance): boolean;
+  probe(instance: ControlledInstance): Promise<"reachable" | "endpoint-unreachable" | "unknown">;
+  autoImport(instance: ControlledInstance): Promise<void>;
+  markRestarted(id: string): void;
+  deleteMetadata(id: string): void;
+  diagnostic(data: Record<string, unknown>, message: string): void;
+};
+
+function now() {
+  return new Date().toISOString();
+}
+
+export function registerInstanceLifecycleRoutes(
+  app: FastifyInstance,
+  state: LifecycleState,
+  adapters: RuntimeAdapterRegistry,
+  convergence: Convergence,
+  hooks: Hooks,
+) {
+  app.post("/api/node-agent/instances/:id/start", async (request) => {
+    LifecycleRequestSchema.parse(request.body);
+    return { data: await hooks.start((request.params as { id: string }).id) };
+  });
+
+  app.post("/api/node-agent/instances/:id/runtime/reconcile", async (request) => {
+    const id = (request.params as { id: string }).id;
+    LifecycleRequestSchema.parse(request.body);
+    const current = state.requireInstance(id);
+    state.putInstance(ControlledInstanceSchema.parse({
+      ...current,
+      ready: false,
+      runtimeVersion: runtimeVersionStateForActual(reportedVersion(current)),
+      updatedAt: now(),
+    }));
+    const instance = await convergence.schedule(id, {
+      startRequested: !["created", "stopped"].includes(current.status),
+      resumeCancelled: true,
+    });
+    hooks.sync();
+    return { data: instance };
+  });
+
+  app.post("/api/node-agent/instances/:id/stop", async (request) => {
+    const id = (request.params as { id: string }).id;
+    await convergence.cancel(id);
+    const current = state.requireInstance(id);
+    hooks.diagnostic({ instanceId: id, action: "stop", runtimeId: current.runtimeId, containerName: current.runtime.containerName }, "node instance stop requested");
+    await adapters.forRuntime(state.requireRuntime(current.runtimeId)).stop(state.context(current));
+    const stored = state.applyLifecycle(id, { type: "stop-completed" });
+    hooks.sync();
+    hooks.diagnostic({ instanceId: id, action: "stop", status: stored.status, connectionStatus: stored.connectionStatus, containerName: stored.runtime.containerName }, "node instance stop completed");
+    return { data: stored };
+  });
+
+  app.post("/api/node-agent/instances/:id/restart", async (request) => {
+    const id = (request.params as { id: string }).id;
+    LifecycleRequestSchema.parse(request.body);
+    let current = state.requireInstance(id);
+    if (hooks.isManaged(current) && (!current.ready || current.runtimeVersion?.phase !== "matched")) {
+      if (current.runtimeVersion?.phase === "failed") {
+        current = state.putInstance(ControlledInstanceSchema.parse({
+          ...current,
+          runtimeVersion: runtimeVersionStateForActual(reportedVersion(current)),
+          updatedAt: now(),
+        }));
+      }
+      const instance = await convergence.schedule(id, { startRequested: true });
+      hooks.sync();
+      return { data: instance };
+    }
+    hooks.diagnostic({ instanceId: id, action: "restart", runtimeId: current.runtimeId, imageId: current.imageSelection?.imageId, containerName: current.runtime.containerName }, "node instance restart requested");
+    const result = await adapters.forRuntime(state.requireRuntime(current.runtimeId)).restart(state.context(current));
+    const probeTarget = ControlledInstanceSchema.parse({ ...current, ...result, target: result.target ? { ...current.target, ...result.target } : current.target, updatedAt: now() });
+    const targetStatus = await hooks.probe(probeTarget);
+    const stored = state.applyLifecycle(id, {
+      type: "runtime-lifecycle-completed",
+      baseline: current,
+      observation: {
+        ...result,
+        target: result.target ? { ...result.target, status: targetStatus } : undefined,
+        targetStatus,
+        uiAccessStatus: targetStatus,
+      },
+    });
+    hooks.markRestarted(id);
+    await hooks.autoImport(stored);
+    hooks.sync();
+    hooks.diagnostic({ instanceId: id, action: "restart", status: stored.status, connectionStatus: stored.connectionStatus, targetStatus: stored.targetStatus, targetWeb: stored.target.web, containerName: stored.runtime.containerName }, "node instance restart completed");
+    return { data: stored };
+  });
+
+  app.post("/api/node-agent/instances/:id/delete", async (request) => {
+    const id = (request.params as { id: string }).id;
+    const current = state.requireInstance(id);
+    await convergence.cancel(id);
+    hooks.diagnostic({ instanceId: id, action: "delete", runtimeId: current.runtimeId, containerName: current.runtime.containerName }, "node instance delete requested");
+    await adapters.forRuntime(state.requireRuntime(current.runtimeId)).delete(state.context(current, {}));
+    hooks.diagnostic({ instanceId: id, action: "delete" }, "node instance delete completed");
+    const deleted = state.deleteInstance(id);
+    hooks.deleteMetadata(id);
+    hooks.sync();
+    return { data: { deleted } };
+  });
+}

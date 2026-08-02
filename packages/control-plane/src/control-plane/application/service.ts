@@ -2,7 +2,6 @@ import {
   ChatBridgeConfigSchema,
   ChatSessionBindingSchema,
   CONTROL_PLANE_PROTOCOL_VERSION,
-  BuildInfoSchema,
   AppManagementJobResponseSchema,
   AppManagementSnapshotSchema,
   ControlledInstanceSchema,
@@ -14,10 +13,7 @@ import {
   sanitizeStoredImageProfile,
   sanitizeStoredNode,
   sanitizeStoredProject,
-  FederatedModelRegistrySchema,
   ModelConfigSchema,
-  modelConfigHash,
-  NodeModelPublicRecordSchema,
   NodeSchema,
   PendingRouteSchema,
   ProjectSchema,
@@ -28,7 +24,6 @@ import {
   type ControlledInstanceHeartbeat,
   type CustomImageProfile,
   type ModelConfig,
-  type NodeModelPublicRecord,
   type Node,
   type NodeLocalFolder,
   type NodeRuntime,
@@ -46,36 +41,22 @@ import {
   type ConfigSyncRequest,
 } from "@task-handoff/protocol/config-sync";
 import {
-  AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES,
-  AiSessionActionResultSchema,
-  AiSessionCommandResultSchema,
   AiSessionDeltaResponseSchema,
-  AiSessionHistoryListSchema,
-  AiSessionHistoryDetailSchema,
-  AiSessionMentionCatalogSchema,
-  AiSessionMentionFileSearchSchema,
-  AiSessionQueueSchema,
-  AiSessionResumeResultSchema,
-  AiSessionStatusSchema,
   AiSessionsStateSchema,
-  type AiSessionActionResult,
   type AiSessionCommandInput,
-  type AiSessionCommandResult,
   type AiSessionDeltaResponse,
   type AiSessionMessageAttachment,
   type AiSessionPermissionMode,
-  type AiSessionHistoryList,
-  type AiSessionHistoryDetail,
   type AiSessionReference,
-  type AiSessionResumeResult,
   type AiSessionSendMode,
   type AiSessionsSnapshot,
 } from "@task-handoff/protocol/ai-sessions";
 import { AppSessionDeltaResponseSchema, AppSessionsStateSchema, emptyAppSessionsSnapshot, type AppSessionDeltaResponse, type AppSessionsSnapshot } from "@task-handoff/protocol/app-sessions";
+import { AiSessionActionService } from "../sessions/ai-session-actions.ts";
+export { assertAiSessionRuntimePathSupport } from "../sessions/ai-session-actions.ts";
 import {
   TriggerIndexSchema,
 } from "@task-handoff/protocol/triggers";
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import writeFileAtomic from "write-file-atomic";
@@ -83,12 +64,17 @@ import { z } from "zod";
 import type { CommandRunner } from "../../shared/process/command-runner.ts";
 import { ControlPlaneNodeAgentClient, type NodeAgentTransport, type NodeAgentWebSocket } from "../nodes/client.ts";
 import { ControlPlaneNodeAgentGateway } from "../nodes/gateway.ts";
-import { createDirectNodeAgentTransport, fetchDirectNodeAgentEndpoint } from "../nodes/direct-transport.ts";
+import { createDirectNodeAgentTransport } from "../nodes/direct-transport.ts";
 import { NodeAgentTransportResolver } from "../nodes/transport-resolver.ts";
-import { ControlPlaneProxyNodeAgentTransport, controlPlaneProxyAuthenticationHeaders } from "../nodes/control-plane-proxy-transport.ts";
+import { ControlPlaneProxyNodeAgentTransport } from "../nodes/control-plane-proxy-transport.ts";
 import { ControlPlaneProxyPrivateStore, controlPlaneProxyPrivateStorePaths } from "../nodes/control-plane-proxy-private-store.ts";
+import { ControlPlaneProxyLifecycle } from "../nodes/proxy-lifecycle.ts";
+import { NodeConnectionManager } from "../nodes/connection-manager.ts";
+import { NodeJoinInviteSchema, NodeJoinService, type NodeJoinInvite } from "../nodes/join-service.ts";
+import { ControlPlaneModelService } from "../models/service.ts";
 import { ControlledInstanceGateway } from "../instances/gateway.ts";
 import { InstanceBoardReader } from "../instances/board-reader.ts";
+import { ControlledInstanceCreator } from "../instances/creator.ts";
 import { ControlPlaneTriggerService } from "../triggers/service.ts";
 import { ControlPlaneCatalogService } from "../catalog/service.ts";
 import { EmbeddedMarketCatalogProvider, MarketCatalogService } from "../catalog/market.ts";
@@ -105,46 +91,24 @@ import {
   type ConfigSyncPreferenceRecord,
 } from "../instances/config-sync.ts";
 import { relativeNodePathSegments, resolveNodePath } from "../nodes/path.ts";
-import { normalizeModel, publicInstance, publicInstanceWithAccess, publicModel, publicNode, publicNodeAgentCapabilities, publicProject, workspacePolicyForSource } from "../public-records.ts";
+import { publicInstance, publicInstanceWithAccess, publicNode, publicNodeAgentCapabilities, publicProject, workspacePolicyForSource } from "../public-records.ts";
 import { controlPlaneDiagnosticLogsEnabled, errorMessage, now, throwNotFound } from "./helpers.ts";
 import {
   CreateNodeControlPlaneConnectionInputSchema,
   ControlPlaneTriggerRecordSchema,
   ControlPlaneSettingsSchema,
   sanitizeStoredControlPlaneSettings,
-  CreateInstanceInputSchema,
-  CreateModelInputSchema,
-  CreateNodeJoinInviteInputSchema,
-  CreateNodeInputSchema,
   UpdateInstanceInputSchema,
-  UpdateModelInputSchema,
   UpdateNodeInputSchema,
   type ControlPlaneSettings,
   type ControlPlaneTriggerRecord,
-  type CreateInstanceInput,
-  type CreateModelInput,
-  type CreateNodeInput,
   type UpdateInstanceInput,
-  type UpdateModelInput,
   type UpdateNodeInput,
 } from "./inputs.ts";
 import type { ControlPlaneStorePaths } from "../persistence/paths.ts";
-import { createId, createSecret, JsonCollection, JsonFile, type StoredRecord } from "../../shared/persistence/store.ts";
+import { JsonCollection, JsonFile } from "../../shared/persistence/store.ts";
 import { controlledInstanceTriggerSnapshot } from "../triggers/records.ts";
-import { createDirectNodeAgentAuthHeaders } from "../../shared/security/node-agent-auth.ts";
-import { parseNodeAgentIpcEndpoint } from "../../shared/transport/node-agent-ipc.ts";
-import {
-  ClaimProxyInviteResultSchema,
-  CONTROL_PLANE_PROXY_PROTOCOL_VERSION,
-  ControlPlaneProxyErrorCode,
-  ControlPlaneProxyOriginSchema,
-  PublicProxyBindingSchema,
-  type ControlPlaneProxyError,
-  type PendingProxyClaim,
-  type ProxyNodeCredential,
-  type ProxyTargetEvent,
-  type ProxyTargetSnapshot,
-} from "@task-handoff/protocol/control-plane-proxy";
+import type { ControlPlaneProxyError, ProxyTargetEvent, ProxyTargetSnapshot } from "@task-handoff/protocol/control-plane-proxy";
 
 export function parseInstanceAppManagementSnapshot(value: unknown) {
   try {
@@ -165,36 +129,8 @@ type ServiceLogger = {
   warn?: (data: unknown, message?: string) => void;
   error?: (data: unknown, message?: string) => void;
 };
-const NODE_JOIN_INVITE_TTL_MS = 10 * 60 * 1000;
-type NodeJoinInvite = StoredRecord & {
-  tokenHash: string;
-  expiresAt: string;
-  nodeName?: string;
-};
-const NodeJoinInviteSchema = z.object({
-  id: z.string().trim().min(1),
-  tokenHash: z.string().trim().min(1),
-  expiresAt: z.string().datetime(),
-  nodeName: z.string().trim().min(1).max(160).optional(),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime(),
-}).strict();
 const CONTROL_PLANE_LOCAL_NODE_LABEL = "task-handoff.control-plane.local";
 const CONTROL_PLANE_BUILTIN_NODE_LABEL = "task-handoff.control-plane.builtin";
-const CreateProxyNodeClaimInputSchema = z.object({
-  proxyOrigin: ControlPlaneProxyOriginSchema,
-  inviteToken: z.string().trim().min(24).max(512),
-  name: z.string().trim().min(1).max(160).optional(),
-}).strict();
-const ProxyBindingRevocationResponseSchema = z.object({
-  data: z.object({
-    binding: PublicProxyBindingSchema,
-    closed: z.object({
-      abortedRequests: z.number().int().nonnegative(),
-      closedSockets: z.number().int().nonnegative(),
-    }).strict(),
-  }).strict(),
-}).strict();
 
 export type ControlPlaneServiceOptions = {
   fetchImpl?: FetchImpl;
@@ -211,25 +147,17 @@ function isControlPlaneBuiltinNode(node: Node) {
   return node.labels[CONTROL_PLANE_BUILTIN_NODE_LABEL] === "true";
 }
 
-type NodeAgentAuthContext = Pick<Node, "id" | "auth" | "connectionMode">;
-
-function defaultLocalNodeEndpoint() {
-  return process.env.TASK_HANDOFF_NODE_AGENT_CONTROL_ENDPOINT || process.env.TASK_HANDOFF_NODE_AGENT_ENDPOINT || "http://127.0.0.1:8091";
-}
-
-function localConnectionModeForEndpoint(endpoint: string): Node["connectionMode"] {
-  return parseNodeAgentIpcEndpoint(endpoint) ? "local-ipc" : "local-loopback";
-}
-
 export class ControlPlaneService {
   private readonly projects: JsonCollection<Project>;
   readonly models: JsonCollection<ModelConfig>;
+  private readonly modelService: ControlPlaneModelService;
   private readonly images: JsonCollection<CustomImageProfile>;
   readonly nodes: JsonCollection<Node>;
   readonly chatSessions: JsonCollection<ChatSessionBinding>;
   readonly chatBridges: JsonCollection<ChatBridgeConfig>;
   readonly triggers: JsonCollection<ControlPlaneTriggerRecord>;
   readonly nodeJoinInvites: JsonCollection<NodeJoinInvite>;
+  private readonly nodeJoinService: NodeJoinService;
   private readonly configSyncPreferences: JsonCollection<ConfigSyncPreferenceRecord>;
   private readonly settings: JsonFile<ControlPlaneSettings>;
   readonly paths: ControlPlaneStorePaths;
@@ -240,8 +168,12 @@ export class ControlPlaneService {
   private readonly chatActionTokenService = new ChatActionTokenService();
   private readonly nodeAgentTransportResolver: NodeAgentTransportResolver;
   readonly proxyPrivateStore: ControlPlaneProxyPrivateStore;
+  private readonly proxyLifecycle: ControlPlaneProxyLifecycle;
+  private readonly nodeConnectionManager: NodeConnectionManager;
   private readonly nodeAgentGateway: ControlPlaneNodeAgentGateway;
   private readonly controlledInstanceGateway: ControlledInstanceGateway;
+  private readonly aiSessionActionService: AiSessionActionService;
+  private readonly controlledInstanceCreator: ControlledInstanceCreator;
   private readonly instanceBoardReader = new InstanceBoardReader();
   private readonly controlPlaneTriggerService: ControlPlaneTriggerService;
   private readonly catalogService: ControlPlaneCatalogService;
@@ -249,7 +181,6 @@ export class ControlPlaneService {
   private readonly chatBridgeService: ChatBridgeService;
   private readonly chatSessionService: ChatSessionService;
   private readonly chatSessionRuntime: ControlPlaneChatSessionRuntime;
-  private readonly proxyClaimOperations = new Map<string, Promise<unknown>>();
   private aiSessionSnapshotProvider: ((options?: { refresh?: boolean }) => Promise<{ updatedAt: string; instances: Array<{ instanceId: string; streamId: string; aiSessions: AiSessionsSnapshot; revision: number; lastEventAt: string }> }>) | undefined;
   private appSessionSnapshotProvider: ((options?: { refresh?: boolean }) => Promise<{ updatedAt: string; instances: Array<{ instanceId: string; streamId: string; appSessions: AppSessionsSnapshot; revision: number; lastEventAt: string }> }>) | undefined;
 
@@ -279,12 +210,27 @@ export class ControlPlaneService {
       requireNode: (nodeId) => this.requireNode(nodeId),
       nodeAgentTransport: (node) => this.nodeAgentTransportResolver.resolve(node),
     });
+    this.aiSessionActionService = new AiSessionActionService({
+      requireInstance: (instanceId) => this.requireControlledInstance(instanceId, true) as Promise<ControlledInstance>,
+      request: (instance, route, init) => this.instanceRequest(instance, route, init),
+      requireRuntime: (nodeId, runtimeId) => this.requireNodeRuntimeOnNode(nodeId, runtimeId),
+      refreshSnapshots: () => Promise.all([
+        this.listAppSessions({ refresh: true }),
+        this.listAiSessions({ refresh: true }),
+      ]),
+    });
     const storeOptions = <T,>(schema: z.ZodType<T>) => ({
       schema,
       logger: (message: string, details: Record<string, unknown>) => this.logWarn(details, message),
     });
     this.projects = new JsonCollection(paths.projectsDir, { ...storeOptions(ProjectSchema), sanitize: sanitizeStoredProject });
     this.models = new JsonCollection(paths.modelsDir, storeOptions(ModelConfigSchema));
+    this.modelService = new ControlPlaneModelService({
+      models: this.models,
+      gateway: this.nodeAgentGateway,
+      listNodes: () => this.listNodes(),
+      requireNode: (id) => this.requireNode(id),
+    });
     this.images = new JsonCollection(paths.imagesDir, {
       ...storeOptions(CustomImageProfileSchema),
       sanitize: (value) => sanitizeStoredImageProfile(value, (warning) => this.logWarn(warning, "legacy image profile field was migrated")),
@@ -293,10 +239,29 @@ export class ControlPlaneService {
       ...storeOptions(NodeSchema),
       sanitize: (value) => sanitizeStoredNode(value, (warning) => this.logWarn(warning, "unknown stored node field was ignored")),
     });
+    this.proxyLifecycle = new ControlPlaneProxyLifecycle({
+      nodes: this.nodes,
+      privateStore: this.proxyPrivateStore,
+      fetchImpl: this.fetchImpl,
+      requireNode: (id) => this.requireNode(id),
+      deleteNode: (id) => this.deleteNode(id),
+    });
+    this.nodeConnectionManager = new NodeConnectionManager({
+      nodes: this.nodes,
+      fetchImpl: this.fetchImpl,
+      localNodeLabel: CONTROL_PLANE_LOCAL_NODE_LABEL,
+      builtinNodeLabel: CONTROL_PLANE_BUILTIN_NODE_LABEL,
+      info: (data, message) => this.logInfo(data, message),
+      warn: (data, message) => this.logWarn(data, message),
+    });
     this.chatSessions = new JsonCollection(paths.chatSessionsDir, storeOptions(ChatSessionBindingSchema));
     this.chatBridges = new JsonCollection(paths.chatBridgesDir, storeOptions(ChatBridgeConfigSchema));
     this.triggers = new JsonCollection(paths.triggersDir, storeOptions(ControlPlaneTriggerRecordSchema));
     this.nodeJoinInvites = new JsonCollection(paths.nodeJoinInvitesDir, storeOptions(NodeJoinInviteSchema));
+    this.nodeJoinService = new NodeJoinService({
+      invites: this.nodeJoinInvites,
+      nodes: this.nodes,
+    });
     this.configSyncPreferences = new JsonCollection(path.join(paths.dataDir, "config-sync-preferences"), {
       ...storeOptions(ConfigSyncPreferenceRecordSchema),
       sanitize: sanitizeStoredConfigSyncPreferenceRecord,
@@ -312,6 +277,16 @@ export class ControlPlaneService {
       market: this.marketCatalogService,
       settings: this.settings,
       defaultNodeId: () => this.defaultNodeId(),
+    });
+    this.controlledInstanceCreator = new ControlledInstanceCreator({
+      gateway: this.nodeAgentGateway,
+      defaultNodeId: () => this.defaultNodeId(),
+      requireProject: (id) => this.requireProject(id),
+      requireNode: (id) => this.requireNode(id),
+      requireRuntime: (nodeId, runtimeId) => this.requireNodeRuntimeOnNode(nodeId, runtimeId),
+      requireLocalFolder: (node, folderId) => this.requireNodeLocalFolder(node, folderId),
+      resolveImageSelection: (selection) => this.catalogService.resolveImageSelection(selection),
+      prepareModels: (node, selection) => this.modelService.prepareAssignment(node, selection),
     });
     this.controlPlaneTriggerService = new ControlPlaneTriggerService({
       triggers: this.triggers,
@@ -497,231 +472,44 @@ export class ControlPlaneService {
     return this.nodes.list().find(isControlPlaneLocalNode)?.id || this.nodes.list()[0]?.id;
   }
 
-  private async inspectNodeAgent(endpoint: string, node?: NodeAgentAuthContext) {
-    const route = "/health";
-    const headers = node
-      ? createDirectNodeAgentAuthHeaders(node, {
-          method: "GET",
-          pathWithQuery: `/api/node-agent${route}`,
-        })
-      : {};
-    const response = await fetchDirectNodeAgentEndpoint(this.fetchImpl, endpoint, route, { headers });
-    const payload = (await response.json().catch(() => ({}))) as { data?: { nodeId?: unknown; protocolVersion?: unknown; build?: unknown }; error?: { message?: string } };
-    if (!response.ok) {
-      const error = new Error(payload.error?.message || `Node agent health check failed with HTTP ${response.status}`);
-      Object.assign(error, { statusCode: response.status, code: "NODE_AGENT_HEALTH_FAILED" });
-      this.logWarn({ nodeEndpoint: endpoint, statusCode: response.status, errorCode: "NODE_AGENT_HEALTH_FAILED" }, "node agent health check failed");
-      throw error;
-    }
-    const nodeId = typeof payload.data?.nodeId === "string" && payload.data.nodeId.trim() ? payload.data.nodeId.trim() : undefined;
-    if (!nodeId) {
-      const error = new Error("Node agent health response did not include nodeId.");
-      Object.assign(error, { statusCode: 502, code: "NODE_AGENT_ID_MISSING" });
-      this.logWarn({ nodeEndpoint: endpoint, payload: payload.data, errorCode: "NODE_AGENT_ID_MISSING" }, "node agent health response missing node id");
-      throw error;
-    }
-    if (payload.data?.protocolVersion !== CONTROL_PLANE_PROTOCOL_VERSION) {
-      this.logWarn({ nodeId, nodeEndpoint: endpoint, expectedProtocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, actualProtocolVersion: payload.data?.protocolVersion, build: payload.data?.build, errorCode: "PROTOCOL_VERSION_MISMATCH" }, "node agent protocol version mismatch");
-    }
-    const build = BuildInfoSchema.safeParse(payload.data?.build);
-    this.logInfo({ nodeId, nodeEndpoint: endpoint, protocolVersion: payload.data.protocolVersion, build: build.success ? build.data : payload.data?.build }, "node agent health check ok");
-    return {
-      nodeId,
-      data: payload.data || {},
-    };
-  }
-
-  private async completeNodeAgentPairing(endpoint: string, input: { joinToken: string; controlPlaneName?: string }) {
-    const response = await this.fetchImpl(`${endpoint.replace(/\/$/, "")}/api/node-agent/pairing/complete`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        joinToken: input.joinToken,
-        controlPlaneName: input.controlPlaneName || "Control Plane",
-      }),
-    });
-    const payload = (await response.json().catch(() => ({}))) as {
-      data?: { nodeId?: unknown; keyId?: unknown; secret?: unknown; pairedAt?: unknown };
-      error?: { message?: string };
-    };
-    if (!response.ok) {
-      const error = new Error(payload.error?.message || `Node agent pairing failed with status ${response.status}.`);
-      Object.assign(error, { statusCode: response.status, code: "NODE_AGENT_PAIRING_FAILED" });
-      throw error;
-    }
-    if (typeof payload.data?.nodeId !== "string" || !payload.data.nodeId.trim() || typeof payload.data?.keyId !== "string" || !payload.data.keyId.trim() || typeof payload.data?.secret !== "string" || !payload.data.secret.trim()) {
-      const error = new Error("Node agent pairing response did not include nodeId, keyId, and secret.");
-      Object.assign(error, { statusCode: 502, code: "NODE_AGENT_PAIRING_RESPONSE_INVALID" });
-      throw error;
-    }
-    return {
-      nodeId: payload.data.nodeId.trim(),
-      keyId: payload.data.keyId.trim(),
-      secret: payload.data.secret.trim(),
-      pairedAt: typeof payload.data.pairedAt === "string" ? payload.data.pairedAt : now(),
-    };
-  }
-
-  async syncLocalNodeConnection() {
-    const labels = {
-      [CONTROL_PLANE_LOCAL_NODE_LABEL]: "true",
-      [CONTROL_PLANE_BUILTIN_NODE_LABEL]: "true",
-    };
-    const localStaticSecret = process.env.TASK_HANDOFF_NODE_AGENT_TOKEN?.trim() || undefined;
-    const endpoint = defaultLocalNodeEndpoint();
-    const connectionMode = localConnectionModeForEndpoint(endpoint);
-    const localProbeNode = NodeSchema.parse({
-      id: "node_local_probe",
-      name: "Local Node Probe",
-      connectionMode,
-      auth: { mode: "local-static-key", secret: localStaticSecret },
-      labels,
-      createdAt: now(),
-      updatedAt: now(),
-    });
-    const inspected = await this.inspectNodeAgent(endpoint, localProbeNode);
-    const timestamp = now();
-    const current = this.nodes.get(inspected.nodeId);
-    const previousLocal = this.nodes.list().filter((node) => isControlPlaneLocalNode(node) && node.id !== inspected.nodeId);
-    for (const node of previousLocal) {
-      this.nodes.delete(node.id);
-    }
-    const node = NodeSchema.parse({
-      ...(current || {}),
-      id: inspected.nodeId,
-      name: current?.name || "Local Node",
-      connectionMode,
-      auth: { mode: "local-static-key", secret: localStaticSecret },
-      endpoint,
-      controlEndpoint: endpoint,
-      containerEndpoint: process.env.TASK_HANDOFF_NODE_AGENT_CONTAINER_URL,
-      publicWebBase: process.env.TASK_HANDOFF_INSTANCE_PUBLIC_WEB_BASE,
-      status: "online",
-      health: "ok",
-      capabilities: { ...(current?.capabilities || {}), agent: publicNodeAgentCapabilities(inspected.data) },
-      labels: {
-        ...(current?.labels || {}),
-        ...labels,
-      },
-      createdAt: current?.createdAt || timestamp,
-      updatedAt: timestamp,
-    });
-    return this.nodes.put(node);
+  syncLocalNodeConnection() {
+    return this.nodeConnectionManager.syncLocal();
   }
 
   listModels() {
-    return this.listAllModels().map(publicModel);
+    return this.modelService.list();
   }
 
-  async listFederatedModels(signal?: AbortSignal) {
-    const nodes = this.listNodes();
-    const fleet = await this.nodeAgentGateway.listFleetModels(nodes, { signal });
-    const groups = new Map<string, {
-      id: string;
-      model: ReturnType<typeof publicModel> | NodeModelPublicRecord;
-      locations: Array<
-        | { type: "control-plane"; name: string; enabled: boolean; order: number }
-        | { type: "node"; nodeId: string; name: string; enabled: boolean; order: number; referenceCount: number }
-      >;
-      referenceCount: number;
-    }>();
-    for (const model of this.listAllModels()) {
-      groups.set(model.id, {
-        id: model.id,
-        model: publicModel(model),
-        locations: [{ type: "control-plane", name: model.name, enabled: model.enabled, order: model.order }],
-        referenceCount: 0,
-      });
-    }
-    for (const { nodeId, model } of fleet.items) {
-      const { referenceCount: _referenceCount, ...publicModelRecord } = model;
-      const group = groups.get(model.id);
-      if (group) {
-        group.locations.push({ type: "node", nodeId, name: model.name, enabled: model.enabled, order: model.order, referenceCount: model.referenceCount });
-        group.referenceCount += model.referenceCount;
-      } else {
-        groups.set(model.id, {
-          id: model.id,
-          model: publicModelRecord,
-          locations: [{ type: "node", nodeId, name: model.name, enabled: model.enabled, order: model.order, referenceCount: model.referenceCount }],
-          referenceCount: model.referenceCount,
-        });
-      }
-    }
-    return FederatedModelRegistrySchema.parse({
-      models: [...groups.values()].sort((a, b) => a.model.order - b.model.order || a.model.name.localeCompare(b.model.name)),
-      nodeDiagnostics: fleet.nodeErrors.map((error) => ({ nodeId: error.nodeId, code: error.code, message: error.message })),
-      updatedAt: now(),
-    });
+  listFederatedModels(signal?: AbortSignal) {
+    return this.modelService.listFederated(signal);
   }
 
-  private listAllModels() {
-    return this.models.list().map((model) => this.normalizeModelRecord(model)).sort((a, b) => a.order - b.order || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  createModel(input: unknown) {
+    return this.modelService.create(input);
   }
 
-  async createModel(input: unknown) {
-    const parsedInput = CreateModelInputSchema.parse(input);
-    const timestamp = now();
-    const nextOrder = this.nextModelOrder();
-    const id = modelConfigHash(parsedInput);
-    const existing = this.models.get(id);
-    const model = ModelConfigSchema.parse({
-      ...parsedInput,
-      id,
-      enabled: parsedInput.enabled ?? true,
-      order: parsedInput.order ?? nextOrder,
-      labels: parsedInput.labels || {},
-      createdAt: existing?.createdAt || timestamp,
-      updatedAt: timestamp,
-    });
-    return publicModel(this.models.put(model));
+  updateModel(id: string, input: unknown) {
+    return this.modelService.update(id, input);
   }
 
-  async updateModel(id: string, input: unknown) {
-    const parsedInput: UpdateModelInput = UpdateModelInputSchema.parse(input);
-    const current = this.requireModelSecret(id);
-    const candidate = ModelConfigSchema.parse({
-      ...current,
-      ...parsedInput,
-      key: parsedInput.key?.trim() ? parsedInput.key : current.key,
-      createdAt: current.createdAt,
-      updatedAt: now(),
-    });
-    const nextId = modelConfigHash(candidate);
-    const stored = this.models.put(ModelConfigSchema.parse({ ...candidate, id: nextId }));
-    return publicModel(stored);
+  deleteModel(id: string) {
+    return this.modelService.delete(id);
   }
 
-  async deleteModel(id: string) {
-    this.requireModelSecret(id);
-    return this.models.delete(id);
-  }
-
-  async reorderModels(ids: string[]) {
-    const uniqueIds = [...new Set(ids)];
-    const byId = new Map(this.models.list().map((model) => [model.id, model]));
-    for (const id of uniqueIds) {
-      if (!byId.has(id)) {
-        throwNotFound("MODEL_NOT_FOUND", `Model ${id} was not found.`);
-      }
-    }
-    uniqueIds.forEach((id, index) => {
-      const current = byId.get(id)!;
-      this.models.put(ModelConfigSchema.parse({ ...current, order: (index + 1) * 100, updatedAt: now() }));
-    });
-    return this.listModels();
+  reorderModels(ids: string[]) {
+    return this.modelService.reorder(ids);
   }
 
   createNodeModel(nodeId: string, input: unknown) {
-    return this.nodeAgentGateway.createModel(this.requireNode(nodeId), input);
+    return this.modelService.createOnNode(nodeId, input);
   }
 
   updateNodeModel(nodeId: string, modelId: string, input: unknown) {
-    return this.nodeAgentGateway.updateModel(this.requireNode(nodeId), modelId, input);
+    return this.modelService.updateOnNode(nodeId, modelId, input);
   }
 
   deleteNodeModel(nodeId: string, modelId: string) {
-    return this.nodeAgentGateway.deleteModel(this.requireNode(nodeId), modelId);
+    return this.modelService.deleteOnNode(nodeId, modelId);
   }
 
   createProject(input: unknown) {
@@ -890,80 +678,12 @@ export class ControlPlaneService {
     return node;
   }
 
-  private pruneNodeJoinInvites() {
-    const timestamp = Date.now();
-    for (const invite of this.nodeJoinInvites.list()) {
-      if (Date.parse(invite.expiresAt) <= timestamp) {
-        this.nodeJoinInvites.delete(invite.id);
-      }
-    }
-  }
-
   createNodeJoinInvite(input: unknown = {}) {
-    this.pruneNodeJoinInvites();
-    const parsedInput = CreateNodeJoinInviteInputSchema.parse(input && typeof input === "object" ? input : {});
-    const timestamp = now();
-    const token = createSecret();
-    const invite = {
-      id: createId("node_join"),
-      tokenHash: crypto.createHash("sha256").update(token).digest("hex"),
-      expiresAt: new Date(Date.now() + (parsedInput.expiresInMs || NODE_JOIN_INVITE_TTL_MS)).toISOString(),
-      ...(parsedInput.nodeName ? { nodeName: parsedInput.nodeName } : {}),
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    };
-    this.nodeJoinInvites.put(invite);
-    return {
-      id: invite.id,
-      joinToken: token,
-      expiresAt: invite.expiresAt,
-    };
+    return this.nodeJoinService.createInvite(input);
   }
 
   completeNodeJoin(input: unknown) {
-    this.pruneNodeJoinInvites();
-    const parsedInput = z.object({
-      joinToken: z.string().trim().min(1).max(4096),
-      nodeId: NodeSchema.shape.id,
-      nodeName: NodeSchema.shape.name.optional(),
-      keyId: z.string().trim().min(1).max(160),
-      secret: z.string().trim().min(1).max(4096),
-      pairedAt: z.string().datetime().optional(),
-    }).parse(input);
-    const tokenHash = crypto.createHash("sha256").update(parsedInput.joinToken).digest("hex");
-    const invite = this.nodeJoinInvites.list().find((item) => item.tokenHash === tokenHash && Date.parse(item.expiresAt) > Date.now());
-    if (!invite) {
-      const error = new Error("Node join token is invalid or expired.");
-      Object.assign(error, { statusCode: 401, code: "NODE_JOIN_TOKEN_INVALID" });
-      throw error;
-    }
-    this.nodeJoinInvites.delete(invite.id);
-    const timestamp = now();
-    const current = this.nodes.get(parsedInput.nodeId);
-    if (current) {
-      const error = new Error(`Node ${parsedInput.nodeId} already exists in this control-plane.`);
-      Object.assign(error, { statusCode: 409, code: "NODE_JOIN_NODE_ALREADY_EXISTS" });
-      throw error;
-    }
-    const node = NodeSchema.parse({
-      id: parsedInput.nodeId,
-      name: parsedInput.nodeName || invite.nodeName || parsedInput.nodeId,
-      connectionMode: "reverse-wss",
-      auth: {
-        mode: "paired-hmac",
-        keyId: parsedInput.keyId,
-        secret: parsedInput.secret,
-        pairedAt: parsedInput.pairedAt || timestamp,
-        pairing: { status: "paired" },
-      },
-      status: "unknown",
-      health: "unknown",
-      capabilities: {},
-      labels: {},
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    });
-    return this.nodes.put(node);
+    return this.nodeJoinService.complete(input);
   }
 
   async connectNodeToControlPlane(id: string, input: unknown) {
@@ -1017,486 +737,46 @@ export class ControlPlaneService {
     return this.listNodes().map(publicNode);
   }
 
-  async createNode(input: unknown) {
-    const parsedInput = CreateNodeInputSchema.parse(input);
-    const timestamp = now();
-    const connectionMode = parsedInput.connectionMode || "direct-http";
-    const inputRecord = input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : {};
-    let auth = "auth" in inputRecord
-      ? parsedInput.auth
-      : { mode: connectionMode === "local-ipc" || connectionMode === "local-loopback" ? "local-static-key" as const : "paired-hmac" as const };
-    if ((connectionMode === "direct-http" || connectionMode === "reverse-wss") && auth.mode !== "paired-hmac") {
-      const error = new Error("Remote node connections require paired-HMAC authentication.");
-      Object.assign(error, { statusCode: 400, code: "NODE_AGENT_REMOTE_REQUIRES_PAIRED_HMAC" });
-      throw error;
-    }
-    const controlEndpoint = parsedInput.controlEndpoint || parsedInput.endpoint;
-    if (!controlEndpoint && connectionMode !== "reverse-wss") {
-      const error = new Error("Node agent direct HTTP mode requires an endpoint.");
-      Object.assign(error, { statusCode: 400, code: "NODE_AGENT_ENDPOINT_REQUIRED" });
-      throw error;
-    }
-    const pairing = parsedInput.joinToken && controlEndpoint
-      ? await this.completeNodeAgentPairing(controlEndpoint, { joinToken: parsedInput.joinToken })
-      : undefined;
-    if (pairing) {
-      auth = {
-        mode: "paired-hmac",
-        keyId: pairing.keyId,
-        secret: pairing.secret,
-        pairedAt: pairing.pairedAt,
-        pairing: { status: "paired" },
-      };
-    }
-    if ((connectionMode === "direct-http" || connectionMode === "reverse-wss") && !auth.secret) {
-      const error = new Error("Remote node connections require a paired node secret or join token.");
-      Object.assign(error, { statusCode: 400, code: "NODE_AGENT_REMOTE_SECRET_REQUIRED" });
-      throw error;
-    }
-    if ((connectionMode === "direct-http" || connectionMode === "reverse-wss") && !auth.keyId) {
-      const error = new Error("Remote node connections require a paired key id.");
-      Object.assign(error, { statusCode: 400, code: "NODE_AGENT_REMOTE_KEY_ID_REQUIRED" });
-      throw error;
-    }
-    const provisionalId = parsedInput.id || pairing?.nodeId || createId("node");
-    const probeNode = NodeSchema.parse({
-      id: provisionalId,
-      name: parsedInput.name,
-      connectionMode,
-      auth,
-      labels: parsedInput.labels || {},
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    });
-    const inspected = connectionMode === "reverse-wss" && (parsedInput.id || pairing?.nodeId) ? undefined : await this.inspectNodeAgent(controlEndpoint || "", probeNode);
-    const id = parsedInput.id || pairing?.nodeId || inspected?.nodeId || provisionalId;
-    if (!id) {
-      const error = new Error("Node id is required.");
-      Object.assign(error, { statusCode: 400, code: "NODE_ID_REQUIRED" });
-      throw error;
-    }
-    if (parsedInput.id && inspected?.nodeId && inspected.nodeId !== parsedInput.id) {
-      const error = new Error(`Node agent id ${inspected.nodeId} does not match requested node id ${parsedInput.id}.`);
-      Object.assign(error, { statusCode: 400, code: "NODE_AGENT_ID_MISMATCH" });
-      throw error;
-    }
-    const { joinToken: _joinToken, ...nodeInput } = parsedInput;
-    const node = NodeSchema.parse({
-      ...nodeInput,
-      id,
-      connectionMode,
-      auth,
-      endpoint: controlEndpoint,
-      controlEndpoint,
-      status: parsedInput.status || (inspected ? "online" : "unknown"),
-      health: parsedInput.health || (inspected ? "ok" : "unknown"),
-      capabilities: { ...(parsedInput.capabilities || {}), ...(inspected ? { agent: publicNodeAgentCapabilities(inspected.data) } : {}) },
-      labels: parsedInput.labels || {},
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    });
-    return this.nodes.put(node);
+  createNode(input: unknown) {
+    return this.nodeConnectionManager.create(input);
   }
 
   listPendingProxyClaims() {
-    return this.proxyPrivateStore.publicPendingClaims();
+    return this.proxyLifecycle.listPendingClaims();
   }
 
-  async claimProxyNode(input: unknown) {
-    const parsed = CreateProxyNodeClaimInputSchema.parse(input);
-    const timestamp = now();
-    const claimId = createId("proxy_claim");
-    const pending: PendingProxyClaim = {
-      id: claimId,
-      claimId,
-      proxyOrigin: parsed.proxyOrigin,
-      ...(parsed.name ? { requestedName: parsed.name } : {}),
-      sourceControlPlaneId: this.proxyPrivateStore.controlPlaneId(),
-      bindingKeyId: createId("proxy_key"),
-      credential: createSecret(),
-      status: "pending",
-      createdAt: timestamp,
-      updatedAt: timestamp,
-      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString(),
-    };
-    this.proxyPrivateStore.putPendingClaim(pending);
-    return this.withProxyClaimLock(pending.claimId, () => this.completeProxyClaim(pending, parsed.inviteToken));
+  claimProxyNode(input: unknown) {
+    return this.proxyLifecycle.claimNode(input);
   }
 
-  async resumeProxyClaim(claimId: string) {
-    return this.withProxyClaimLock(claimId, async () => {
-      const pending = this.proxyPrivateStore.pendingClaimByClaimId(claimId);
-      if (!pending) throwNotFound("CONTROL_PLANE_PROXY_CLAIM_NOT_FOUND", `Proxy claim ${claimId} was not found.`);
-      return this.completeProxyClaim(pending);
-    });
+  resumeProxyClaim(claimId: string) {
+    return this.proxyLifecycle.resumeClaim(claimId);
   }
 
-  async cancelProxyClaim(claimId: string) {
-    return this.withProxyClaimLock(claimId, async () => {
-      const pending = this.proxyPrivateStore.pendingClaimByClaimId(claimId);
-      if (!pending) return { deleted: false, compensationRequired: false, remoteRevoke: "not-required" as const };
-      if (pending.status === "pending") {
-        return { ...this.proxyPrivateStore.cancelPendingClaim(claimId, false), remoteRevoke: "not-required" as const };
-      }
-
-      let response: Response;
-      try {
-        response = await this.requestProxyClaim(pending);
-      } catch (cause) {
-        throw this.proxyCompensationError(pending, "Trusted control-plane proxy is unavailable; claim cancellation requires retry.", cause);
-      }
-      const payload = await this.proxyResponsePayload(response);
-      if (!response.ok) {
-        const code = payload?.error?.code;
-        if (code === ControlPlaneProxyErrorCode.InviteInvalid || code === ControlPlaneProxyErrorCode.BindingRevoked) {
-          return {
-            deleted: this.proxyPrivateStore.completePendingClaimCompensation(claimId),
-            compensationRequired: false,
-            remoteRevoke: code === ControlPlaneProxyErrorCode.BindingRevoked ? "already-revoked" as const : "not-created" as const,
-          };
-        }
-        throw this.proxyCompensationError(
-          pending,
-          payload?.error?.message || `Proxy claim recovery failed with HTTP ${response.status}.`,
-          undefined,
-          response.status,
-          code,
-          payload?.error?.retryable,
-        );
-      }
-
-      const result = ClaimProxyInviteResultSchema.parse(payload?.data);
-      this.requireProxyClaimResultIdentity(pending, result);
-      const credential: ProxyNodeCredential = {
-        id: `proxy_compensation_${result.binding.id}`,
-        nodeId: result.target.id,
-        proxyOrigin: pending.proxyOrigin,
-        proxyBindingId: result.binding.id,
-        targetNodeId: result.target.id,
-        sourceControlPlaneId: pending.sourceControlPlaneId,
-        bindingKeyId: pending.bindingKeyId,
-        credential: pending.credential,
-        createdAt: pending.createdAt,
-        updatedAt: now(),
-      };
-      let revoke: Response;
-      try {
-        revoke = await this.fetchImpl(new URL(`/api/node-proxy/bindings/${encodeURIComponent(result.binding.id)}`, pending.proxyOrigin), {
-          method: "DELETE",
-          headers: controlPlaneProxyAuthenticationHeaders(credential),
-        });
-      } catch (cause) {
-        throw this.proxyCompensationError(pending, "Trusted control-plane proxy is unavailable; binding revocation requires retry.", cause);
-      }
-      const revokePayload = await this.proxyResponsePayload(revoke);
-      if (!revoke.ok && revokePayload?.error?.code !== ControlPlaneProxyErrorCode.BindingRevoked) {
-        throw this.proxyCompensationError(
-          pending,
-          revokePayload?.error?.message || `Proxy binding revoke failed with HTTP ${revoke.status}.`,
-          undefined,
-          revoke.status,
-          revokePayload?.error?.code,
-          revokePayload?.error?.retryable,
-        );
-      }
-      if (revoke.ok) {
-        try {
-          this.requireProxyRevocationReceipt(revokePayload, credential);
-        } catch (cause) {
-          throw this.proxyCompensationError(
-            pending,
-            "Proxy binding revocation returned an invalid receipt; compensation requires retry.",
-            cause,
-            502,
-            ControlPlaneProxyErrorCode.TransportFailed,
-            true,
-          );
-        }
-      }
-      return {
-        deleted: this.proxyPrivateStore.completePendingClaimCompensation(claimId),
-        compensationRequired: false,
-        remoteRevoke: revoke.ok ? "revoked" as const : "already-revoked" as const,
-      };
-    });
-  }
-
-  private async completeProxyClaim(pending: PendingProxyClaim, inviteToken?: string) {
-    this.proxyPrivateStore.markCompensationRequired(pending.claimId);
-    let response: Response;
-    try {
-      response = await this.requestProxyClaim(pending, inviteToken);
-    } catch (cause) {
-      const error = new Error(`Trusted control-plane proxy ${pending.proxyOrigin} is unavailable.`, { cause });
-      Object.assign(error, { statusCode: 503, code: "CONTROL_PLANE_PROXY_UNAVAILABLE", retryable: true, claimId: pending.claimId });
-      throw error;
-    }
-    const payload = await this.proxyResponsePayload(response);
-    if (!response.ok) {
-      const retryable = payload?.error?.retryable ?? response.status >= 500;
-      if (!retryable) this.proxyPrivateStore.completePendingClaimCompensation(pending.claimId);
-      const error = new Error(payload?.error?.message || `Proxy claim failed with HTTP ${response.status}.`);
-      Object.assign(error, {
-        statusCode: response.status,
-        code: payload?.error?.code || "CONTROL_PLANE_PROXY_CLAIM_FAILED",
-        retryable,
-        details: payload?.error?.details,
-        claimId: pending.claimId,
-      });
-      throw error;
-    }
-    const result = ClaimProxyInviteResultSchema.parse(payload?.data);
-    this.requireProxyClaimResultIdentity(pending, result);
-    const current = this.nodes.get(result.target.id);
-    const sameIdentity = current?.connectionMode === "control-plane-proxy"
-      && current.connectionPath.kind === "control-plane-proxy"
-      && current.connectionPath.proxyBindingId === result.binding.id
-      && current.connectionPath.targetNodeId === result.target.id;
-    if (current && !sameIdentity) {
-      this.proxyPrivateStore.markCompensationRequired(pending.claimId);
-      const error = new Error(`Node ${result.target.id} already exists with another connection identity.`);
-      Object.assign(error, { statusCode: 409, code: "CONTROL_PLANE_PROXY_NODE_IDENTITY_CONFLICT", claimId: pending.claimId });
-      throw error;
-    }
-    const credential: ProxyNodeCredential = {
-      id: `proxy_credential_${result.target.id}`,
-      nodeId: result.target.id,
-      proxyOrigin: pending.proxyOrigin,
-      proxyBindingId: result.binding.id,
-      targetNodeId: result.target.id,
-      sourceControlPlaneId: pending.sourceControlPlaneId,
-      bindingKeyId: pending.bindingKeyId,
-      credential: pending.credential,
-      createdAt: pending.createdAt,
-      updatedAt: now(),
-    };
-    const node = current || NodeSchema.parse({
-      id: result.target.id,
-      name: pending.requestedName || result.target.name,
-      connectionMode: "control-plane-proxy",
-      connectionPath: {
-        kind: "control-plane-proxy",
-        proxyId: new URL(pending.proxyOrigin).host,
-        proxyBindingId: result.binding.id,
-        targetNodeId: result.target.id,
-      },
-      connectionEnabled: true,
-      auth: { mode: "proxy-binding" },
-      status: result.target.status,
-      health: result.target.health,
-      capabilities: result.target.capabilities,
-      proxyState: {
-        reachability: "reachable",
-        bindingStatus: result.binding.status,
-        bindingRevision: result.binding.revision,
-        observedAt: now(),
-        target: result.target,
-        updatedAt: now(),
-      },
-      labels: {},
-      lastSeenAt: result.target.lastSeenAt,
-      createdAt: now(),
-      updatedAt: now(),
-    });
-    if (!current) this.nodes.put(node);
-    try {
-      this.proxyPrivateStore.promotePendingClaim(pending.claimId, credential);
-    } catch (error) {
-      if (!current) this.nodes.delete(node.id);
-      throw error;
-    }
-    return { node: publicNode(node), binding: result.binding };
+  cancelProxyClaim(claimId: string) {
+    return this.proxyLifecycle.cancelClaim(claimId);
   }
 
   applyProxyTargetSnapshot(nodeId: string, snapshot: ProxyTargetSnapshot) {
-    const node = this.requireProxyNodeIdentity(nodeId, snapshot.binding.id, snapshot.binding.targetNodeId);
-    return this.putProxyTargetState(node, snapshot.target, {
-      reachability: "reachable",
-      bindingStatus: snapshot.binding.status,
-      bindingRevision: snapshot.binding.revision,
-      streamId: snapshot.streamId,
-      revision: snapshot.revision,
-      observedAt: snapshot.observedAt,
-    });
+    return this.proxyLifecycle.applyTargetSnapshot(nodeId, snapshot);
   }
 
   applyProxyTargetEvent(nodeId: string, event: ProxyTargetEvent) {
-    const node = this.requireProxyNodeIdentity(nodeId, undefined, event.targetNodeId);
-    const state = node.proxyState;
-    if (!state?.streamId || state.streamId !== event.streamId || state.revision === undefined || event.revision !== state.revision + 1) {
-      const error = new Error("Proxy target event does not continue the authoritative snapshot cursor.");
-      Object.assign(error, { code: ControlPlaneProxyErrorCode.SnapshotRequired, statusCode: 409, retryable: true });
-      throw error;
-    }
-    return this.putProxyTargetState(node, event.target, {
-      ...state,
-      reachability: "reachable",
-      bindingStatus: state.bindingStatus === "revoked" ? "revoked" : "active",
-      revision: event.revision,
-      observedAt: event.event.createdAt,
-    });
+    return this.proxyLifecycle.applyTargetEvent(nodeId, event);
   }
 
   markProxyUnavailable(nodeId: string, error: ControlPlaneProxyError) {
-    const node = this.requireProxyNodeIdentity(nodeId);
-    const timestamp = now();
-    return this.nodes.put(NodeSchema.parse({
-      ...node,
-      status: "degraded",
-      health: "degraded",
-      proxyState: {
-        ...node.proxyState,
-        reachability: "unreachable",
-        bindingStatus: node.proxyState?.bindingStatus ?? "unknown",
-        lastError: error,
-        updatedAt: timestamp,
-      },
-      updatedAt: timestamp,
-    }));
+    return this.proxyLifecycle.markUnavailable(nodeId, error);
   }
 
   markProxyBindingRevoked(nodeId: string, error: ControlPlaneProxyError) {
-    const node = this.requireProxyNodeIdentity(nodeId);
-    const timestamp = now();
-    return this.nodes.put(NodeSchema.parse({
-      ...node,
-      status: "degraded",
-      health: "degraded",
-      proxyState: {
-        ...node.proxyState,
-        reachability: "reachable",
-        bindingStatus: "revoked",
-        lastError: error,
-        updatedAt: timestamp,
-      },
-      updatedAt: timestamp,
-    }));
-  }
-
-  private requireProxyNodeIdentity(nodeId: string, bindingId?: string, targetNodeId?: string) {
-    const node = this.requireNode(nodeId);
-    if (node.connectionMode !== "control-plane-proxy"
-      || node.connectionPath.kind !== "control-plane-proxy"
-      || (bindingId !== undefined && node.connectionPath.proxyBindingId !== bindingId)
-      || (targetNodeId !== undefined && node.connectionPath.targetNodeId !== targetNodeId)) {
-      const error = new Error("Proxy state identity does not match the node connection path.");
-      Object.assign(error, { code: ControlPlaneProxyErrorCode.BindingIdentityConflict, statusCode: 409, retryable: false });
-      throw error;
-    }
-    return node;
-  }
-
-  private putProxyTargetState(
-    node: Node,
-    target: ProxyTargetSnapshot["target"],
-    proxyState: Omit<NonNullable<Node["proxyState"]>, "target" | "lastError" | "updatedAt">,
-  ) {
-    const timestamp = now();
-    return this.nodes.put(NodeSchema.parse({
-      ...node,
-      name: target.name,
-      status: target.status,
-      health: target.health,
-      capabilities: target.capabilities,
-      lastSeenAt: target.lastSeenAt,
-      proxyState: { ...proxyState, target, updatedAt: timestamp },
-      updatedAt: timestamp,
-    }));
-  }
-
-  private requestProxyClaim(pending: PendingProxyClaim, inviteToken?: string) {
-    return this.fetchImpl(new URL("/api/node-proxy/claims", pending.proxyOrigin), {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        protocolVersion: CONTROL_PLANE_PROXY_PROTOCOL_VERSION,
-        ...(inviteToken ? { inviteToken } : {}),
-        claimId: pending.claimId,
-        sourceControlPlaneId: pending.sourceControlPlaneId,
-        ...(pending.targetNodeId ? { targetNodeId: pending.targetNodeId } : {}),
-        bindingKeyId: pending.bindingKeyId,
-        credential: pending.credential,
-      }),
-    });
-  }
-
-  private async proxyResponsePayload(response: Response) {
-    return response.json().catch(() => undefined) as Promise<{
-      data?: unknown;
-      error?: { code?: string; message?: string; retryable?: boolean; details?: unknown };
-    } | undefined>;
-  }
-
-  private requireProxyRevocationReceipt(payload: unknown, credential: ProxyNodeCredential) {
-    const parsed = ProxyBindingRevocationResponseSchema.safeParse(payload);
-    const binding = parsed.success ? parsed.data.data.binding : undefined;
-    if (!binding
-      || binding.id !== credential.proxyBindingId
-      || binding.sourceControlPlaneId !== credential.sourceControlPlaneId
-      || binding.targetNodeId !== credential.targetNodeId
-      || binding.bindingKeyId !== credential.bindingKeyId
-      || binding.status !== "revoked") {
-      const error = new Error("Proxy binding revocation receipt does not match the local binding identity.");
-      Object.assign(error, {
-        statusCode: 502,
-        code: ControlPlaneProxyErrorCode.TransportFailed,
-        retryable: true,
-        details: { bindingId: credential.proxyBindingId },
-      });
-      throw error;
-    }
-    return binding;
-  }
-
-  private requireProxyClaimResultIdentity(
-    pending: PendingProxyClaim,
-    result: ReturnType<typeof ClaimProxyInviteResultSchema.parse>,
-  ) {
-    if (result.binding.claimId !== pending.claimId
-      || result.binding.sourceControlPlaneId !== pending.sourceControlPlaneId
-      || result.binding.bindingKeyId !== pending.bindingKeyId
-      || result.binding.targetNodeId !== result.target.id
-      || (pending.targetNodeId !== undefined && result.binding.targetNodeId !== pending.targetNodeId)) {
-      const error = new Error("Proxy claim response does not match the persisted pending identity.");
-      Object.assign(error, {
-        statusCode: 409,
-        code: ControlPlaneProxyErrorCode.BindingIdentityConflict,
-        retryable: false,
-        claimId: pending.claimId,
-        compensationRequired: true,
-      });
-      throw error;
-    }
-  }
-
-  private proxyCompensationError(
-    pending: PendingProxyClaim,
-    message: string,
-    cause?: unknown,
-    statusCode = 503,
-    code = "CONTROL_PLANE_PROXY_COMPENSATION_REQUIRED",
-    retryable = true,
-  ) {
-    const error = new Error(message, cause === undefined ? undefined : { cause });
-    Object.assign(error, { statusCode, code, retryable, claimId: pending.claimId, compensationRequired: true });
-    return error;
-  }
-
-  private async withProxyClaimLock<T>(claimId: string, operation: () => Promise<T>): Promise<T> {
-    const previous = this.proxyClaimOperations.get(claimId) ?? Promise.resolve();
-    const current = previous.catch(() => undefined).then(operation);
-    this.proxyClaimOperations.set(claimId, current);
-    try {
-      return await current;
-    } finally {
-      if (this.proxyClaimOperations.get(claimId) === current) this.proxyClaimOperations.delete(claimId);
-    }
+    return this.proxyLifecycle.markBindingRevoked(nodeId, error);
   }
 
   updateNode(id: string, input: unknown) {
     const parsedInput: UpdateNodeInput = UpdateNodeInputSchema.parse(input);
     const current = this.requireNode(id);
-    this.requireGenericNodePatchPreservesProxyIdentity(current, parsedInput);
+    this.proxyLifecycle.assertIdentityPatch(current, parsedInput);
     const updated = NodeSchema.parse({
       ...current,
       ...parsedInput,
@@ -1505,26 +785,6 @@ export class ControlPlaneService {
       updatedAt: now(),
     });
     return this.nodes.put(updated);
-  }
-
-  private requireGenericNodePatchPreservesProxyIdentity(current: Node, input: UpdateNodeInput) {
-    const nextMode = input.connectionMode ?? current.connectionMode;
-    const nextPath = input.connectionPath ?? current.connectionPath;
-    const nextAuth = input.auth ?? current.auth;
-    const currentIsProxy = current.connectionMode === "control-plane-proxy"
-      || current.connectionPath.kind === "control-plane-proxy"
-      || current.auth.mode === "proxy-binding";
-    const nextIsProxy = nextMode === "control-plane-proxy"
-      || nextPath.kind === "control-plane-proxy"
-      || nextAuth.mode === "proxy-binding";
-    const changed = nextMode !== current.connectionMode
-      || JSON.stringify(nextPath) !== JSON.stringify(current.connectionPath)
-      || JSON.stringify(nextAuth) !== JSON.stringify(current.auth);
-    if ((currentIsProxy || nextIsProxy) && changed) {
-      const error = new Error("Proxy node connection identity can only be changed through the control-plane proxy lifecycle API.");
-      Object.assign(error, { statusCode: 409, code: "CONTROL_PLANE_PROXY_IDENTITY_IMMUTABLE", retryable: false });
-      throw error;
-    }
   }
 
   deleteNode(id: string) {
@@ -1538,80 +798,7 @@ export class ControlPlaneService {
   }
 
   async deleteNodeWithProxyLifecycle(id: string, force = false) {
-    const node = this.requireNode(id);
-    if (node.connectionMode !== "control-plane-proxy") return { deleted: this.deleteNode(id), revoke: { mode: "not-proxied" as const, orphanRisk: false } };
-    const credential = this.proxyPrivateStore.nodeCredential(id);
-    if (!credential) {
-      if (!force) {
-        const error = new Error("Proxy node credential is missing; remote binding cannot be revoked.");
-        Object.assign(error, {
-          statusCode: 409,
-          code: "CONTROL_PLANE_PROXY_CREDENTIAL_REQUIRED",
-          retryable: false,
-          details: { forceDeleteAllowed: true, forceDeleteReason: "credential-missing" },
-        });
-        throw error;
-      }
-      return this.forceDeleteProxyNode(id);
-    }
-
-    let response: Response;
-    try {
-      response = await this.fetchImpl(new URL(`/api/node-proxy/bindings/${encodeURIComponent(credential.proxyBindingId)}`, credential.proxyOrigin), {
-        method: "DELETE",
-        headers: controlPlaneProxyAuthenticationHeaders(credential),
-      });
-    } catch (cause) {
-      if (force) return this.forceDeleteProxyNode(id);
-      const error = new Error("Trusted control-plane proxy is unavailable; the binding was not revoked.", { cause });
-      Object.assign(error, {
-        statusCode: 503,
-        code: "CONTROL_PLANE_PROXY_REVOKE_UNAVAILABLE",
-        retryable: true,
-        details: { forceDeleteAllowed: true, forceDeleteReason: "proxy-unavailable" },
-      });
-      throw error;
-    }
-
-    if (!response.ok) {
-      const payload = await response.json().catch(() => undefined) as { error?: { code?: string; message?: string; retryable?: boolean; details?: { bindingId?: unknown } } } | undefined;
-      if (payload?.error?.code === ControlPlaneProxyErrorCode.BindingRevoked) {
-        const bindingId = payload.error.details?.bindingId;
-        if (bindingId === credential.proxyBindingId) {
-          const deleted = this.deleteNode(id);
-          this.proxyPrivateStore.deleteNodeCredential(id);
-          return { deleted, revoke: { mode: "revoked" as const, orphanRisk: false } };
-        }
-      }
-      const error = new Error(payload?.error?.message || `Proxy binding revoke failed with HTTP ${response.status}.`);
-      Object.assign(error, {
-        statusCode: response.status,
-        code: payload?.error?.code || "CONTROL_PLANE_PROXY_REVOKE_FAILED",
-        retryable: payload?.error?.retryable ?? response.status >= 500,
-        details: { ...(payload?.error?.details || {}), forceDeleteAllowed: false },
-      });
-      throw error;
-    }
-
-    const payload = await response.json().catch(() => undefined);
-    try {
-      this.requireProxyRevocationReceipt(payload, credential);
-    } catch (cause) {
-      if (cause && typeof cause === "object") {
-        const current = cause as { details?: Record<string, unknown> };
-        current.details = { ...(current.details || {}), forceDeleteAllowed: false };
-      }
-      throw cause;
-    }
-    const deleted = this.deleteNode(id);
-    this.proxyPrivateStore.deleteNodeCredential(id);
-    return { deleted, revoke: { mode: "revoked" as const, orphanRisk: false } };
-  }
-
-  private forceDeleteProxyNode(id: string) {
-    const deleted = this.deleteNode(id);
-    this.proxyPrivateStore.deleteNodeCredential(id);
-    return { deleted, revoke: { mode: "forced" as const, orphanRisk: true } };
+    return this.proxyLifecycle.deleteNode(this.requireNode(id), force);
   }
 
   async listNodeRuntimes(nodeId?: string, signal?: AbortSignal) {
@@ -1670,121 +857,8 @@ export class ControlPlaneService {
     return instances.some((instance) => instance.id === instanceId && instance.nodeId === nodeId);
   }
 
-  async createControlledInstance(input: unknown) {
-    const parsedInput = CreateInstanceInputSchema.parse(input);
-    const project = parsedInput.projectId ? this.requireProject(parsedInput.projectId) : undefined;
-    const runtimeId = parsedInput.runtimeId || project?.defaultRuntimeId || "runtime_local_docker";
-    const nodeId = parsedInput.nodeId || project?.defaultNodeId || this.defaultNodeId();
-    if (!nodeId) {
-      const error = new Error("At least one node connection is required before creating an instance.");
-      Object.assign(error, { statusCode: 400, code: "NODE_REQUIRED" });
-      throw error;
-    }
-    const node = this.requireNode(nodeId);
-    const runtime = await this.requireNodeRuntimeOnNode(node.id, runtimeId);
-    const requiresImage = typeof runtime.capabilities.requiresImage === "boolean" ? runtime.capabilities.requiresImage : runtime.type !== "local";
-    const imageSelection = parsedInput.imageSelection || (requiresImage ? project?.defaultImageSelection : undefined);
-    const imageOption = imageSelection ? this.catalogService.resolveImageSelection(imageSelection) : undefined;
-    if (requiresImage && !imageOption) {
-      const error = new Error(`Runtime ${runtime.name} requires an image.`);
-      Object.assign(error, { statusCode: 400, code: "RUNTIME_IMAGE_REQUIRED" });
-      throw error;
-    }
-    let source = parsedInput.source || project?.source;
-    let sourceSnapshot: Record<string, unknown> = parsedInput.sourceSnapshot || (project ? project : {});
-    if (!source) {
-      const error = new Error("Instance source is required.");
-      Object.assign(error, { statusCode: 400, code: "INSTANCE_SOURCE_REQUIRED" });
-      throw error;
-    }
-    if (runtime.type === "local" && source.type !== "local-folder") {
-      const error = new Error("Localhost runtime currently supports local folder sources only.");
-      Object.assign(error, { statusCode: 400, code: "LOCAL_RUNTIME_REQUIRES_LOCAL_FOLDER" });
-      throw error;
-    }
-    if (source.type === "local-folder") {
-      if (source.ownerNodeId && source.ownerNodeId !== node.id) {
-        const error = new Error(`Local folder ${source.path} belongs to node ${source.ownerNodeId}, not ${node.id}.`);
-        Object.assign(error, { statusCode: 400, code: "LOCAL_FOLDER_REQUIRES_OWNER_NODE" });
-        throw error;
-      }
-      if (source.localFolderId) {
-        const folder = await this.requireNodeLocalFolder(node, source.localFolderId);
-        source = { ...source, localFolderId: folder.id, ownerNodeId: folder.nodeId, path: folder.path };
-        sourceSnapshot = folder as Record<string, unknown>;
-      } else {
-        const folder = await this.nodeAgentGateway.createLocalFolder(node, {
-            name: typeof sourceSnapshot.name === "string" ? sourceSnapshot.name : "Local folder",
-            path: source.path,
-            defaultImageSelection: imageOption ? { imageId: imageOption.id, tag: imageOption.tag } : undefined,
-          });
-        source = { ...source, localFolderId: folder.id, ownerNodeId: folder.nodeId, path: folder.path };
-        sourceSnapshot = folder as Record<string, unknown>;
-      }
-    }
-
-    const preparedModels = await this.prepareInstanceModels(node, parsedInput.modelSelection || {});
-    const imageTimestamp = now();
-    const imageSnapshot = imageOption ? {
-      id: imageOption.id,
-      origin: imageOption.origin,
-      name: imageOption.name,
-      description: imageOption.description,
-      localizedDescriptions: imageOption.localizedDescriptions,
-      cover: imageOption.cover,
-      repository: imageOption.repository,
-      tag: imageOption.tag,
-      requestedReference: imageOption.reference,
-      resolvedDigest: imageOption.digest,
-      resolvedReference: imageOption.digest ? `${imageOption.repository}@${imageOption.digest}` : undefined,
-      downloadSizeBytes: imageOption.downloadSizeBytes,
-      pullPolicy: "if-not-present" as const,
-      capabilities: imageOption.capabilities,
-      optionalApps: imageOption.optionalApps,
-      defaultEnv: imageOption.defaultEnv,
-      labels: imageOption.labels,
-      market: imageOption.market,
-      createdAt: imageTimestamp,
-      updatedAt: imageTimestamp,
-    } : undefined;
-    const instance = await this.nodeAgentGateway.createInstance(node, {
-      id: parsedInput.id,
-      name: parsedInput.name,
-      runtimeId,
-      ...(imageOption && imageSnapshot ? {
-        imageSelection: { imageId: imageOption.id, tag: imageOption.tag },
-        image: imageSnapshot,
-      } : {}),
-      projectId: project?.id,
-      source,
-      sourceSnapshot,
-      config: parsedInput.config,
-      modelSelection: {},
-    });
-    let assigned = instance;
-    try {
-      assigned = (await this.nodeAgentGateway.assignInstanceModels(node, instance.id, preparedModels)).instance;
-    } catch (error) {
-      await this.nodeAgentGateway.deleteInstance(node, instance.id).catch(() => undefined);
-      throw error;
-    }
-    let startOutcome: { status: "not-requested" | "started" | "failed"; error?: { code: string; message: string } } = { status: "not-requested" };
-    if (parsedInput.start) {
-      try {
-        assigned = await this.nodeAgentGateway.startInstance(node, assigned.id);
-        startOutcome = { status: "started" };
-      } catch (error) {
-        startOutcome = { status: "failed", error: publicOperationError(error, "INSTANCE_START_FAILED") };
-        assigned = await this.nodeAgentGateway.listInstances(node)
-          .then((instances) => instances.find((candidate) => candidate.id === assigned.id) || assigned)
-          .catch(() => assigned);
-      }
-    }
-    return {
-      ...publicInstanceWithAccess(assigned),
-      registrationToken: assigned.registrationToken,
-      startOutcome,
-    };
+  createControlledInstance(input: unknown) {
+    return this.controlledInstanceCreator.create(input);
   }
 
   async updateControlledInstance(id: string, input: unknown) {
@@ -1796,7 +870,7 @@ export class ControlPlaneService {
       ? await this.nodeAgentGateway.updateInstance(node, id, instancePatch)
       : current;
     if (modelSelection) {
-      const preparedModels = await this.prepareInstanceModels(node, modelSelection);
+      const preparedModels = await this.modelService.prepareAssignment(node, modelSelection);
       instance = (await this.nodeAgentGateway.assignInstanceModels(node, id, preparedModels)).instance;
     }
     return publicInstanceWithAccess(instance);
@@ -1813,7 +887,7 @@ export class ControlPlaneService {
   async startControlledInstance(id: string) {
     const current = await this.requireNodeInstance(id);
     const node = this.requireNode(current.nodeId);
-    await this.ensureInstanceModelAssignment(current);
+    await this.modelService.ensureInstanceAssignment(current);
     const instance = await this.nodeAgentGateway.startInstance(node, id);
     return publicInstanceWithAccess(instance);
   }
@@ -1828,7 +902,7 @@ export class ControlPlaneService {
   async restartControlledInstance(id: string) {
     const current = await this.requireNodeInstance(id);
     const node = this.requireNode(current.nodeId);
-    await this.ensureInstanceModelAssignment(current);
+    await this.modelService.ensureInstanceAssignment(current);
     const instance = await this.nodeAgentGateway.restartInstance(node, id);
     return publicInstanceWithAccess(instance);
   }
@@ -2087,44 +1161,20 @@ export class ControlPlaneService {
     return result.items.map((instance) => ({ id: instance.id, name: instance.name }));
   }
 
-  async resolveAiSessionApproval(instanceId: string, sessionId: string, decision: "allow" | "deny" | "skip"): Promise<AiSessionActionResult> {
-    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
-    return AiSessionActionResultSchema.parse(await this.instanceRequest(instance, `/ai-sessions/${encodeURIComponent(sessionId)}/approval`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ decision }),
-    }));
+  resolveAiSessionApproval(instanceId: string, sessionId: string, decision: "allow" | "deny" | "skip") {
+    return this.aiSessionActionService.resolveApproval(instanceId, sessionId, decision);
   }
 
-  async listAiSessionHistory(instanceId: string): Promise<AiSessionHistoryList> {
-    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
-    return AiSessionHistoryListSchema.parse(await this.instanceRequest(instance, "/ai-sessions/history"));
+  listAiSessionHistory(instanceId: string) {
+    return this.aiSessionActionService.listHistory(instanceId);
   }
 
-  async getAiSessionHistoryDetail(instanceId: string, aiSessionId: string): Promise<AiSessionHistoryDetail> {
-    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
-    return AiSessionHistoryDetailSchema.parse(await this.instanceRequest(
-      instance,
-      `/ai-sessions/history/${encodeURIComponent(aiSessionId)}`,
-    ));
+  getAiSessionHistoryDetail(instanceId: string, aiSessionId: string) {
+    return this.aiSessionActionService.historyDetail(instanceId, aiSessionId);
   }
 
-  async resumeAiSession(instanceId: string, aiSessionId: string): Promise<AiSessionResumeResult> {
-    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
-    const result = AiSessionResumeResultSchema.parse(await this.instanceRequest(
-      instance,
-      `/ai-sessions/${encodeURIComponent(aiSessionId)}/resume`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({}),
-      },
-    ));
-    await Promise.all([
-      this.listAppSessions({ refresh: true }),
-      this.listAiSessions({ refresh: true }),
-    ]);
-    return result;
+  resumeAiSession(instanceId: string, aiSessionId: string) {
+    return this.aiSessionActionService.resume(instanceId, aiSessionId);
   }
 
   async launchAppSession(instanceId: string, appId = "terminal-tty", options: Record<string, unknown> = {}) {
@@ -2195,83 +1245,56 @@ export class ControlPlaneService {
     return session;
   }
 
-  async sendAiSessionMessage(instanceId: string, sessionId: string, message: string, mode?: AiSessionSendMode, attachments: AiSessionMessageAttachment[] = [], references: AiSessionReference[] = [], permissionMode?: AiSessionPermissionMode): Promise<AiSessionActionResult> {
-    assertAiSessionAttachmentsWithinLimit(attachments);
-    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
-    if (attachments.some((attachment) => attachment.source.type === "runtime-path")) {
-      const runtime = await this.requireNodeRuntimeOnNode(instance.nodeId, instance.runtimeId);
-      assertAiSessionRuntimePathSupport(attachments, runtime.type);
-    }
-    const session = instance.aiSessions.sessions.find((candidate) => candidate.id === sessionId);
-    const effectivePermissionMode = permissionMode || (session?.agent === "codex" ? instance.config.defaultCodexPermissionMode : undefined);
-    const body = { message, ...(mode ? { mode } : {}), ...(attachments.length ? { attachments } : {}), ...(references.length ? { references } : {}), ...(effectivePermissionMode ? { permissionMode: effectivePermissionMode } : {}) };
-    return AiSessionActionResultSchema.parse(await this.instanceRequest(instance, `/ai-sessions/${encodeURIComponent(sessionId)}/messages`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    }));
+  sendAiSessionMessage(
+    instanceId: string,
+    sessionId: string,
+    message: string,
+    mode?: AiSessionSendMode,
+    attachments: AiSessionMessageAttachment[] = [],
+    references: AiSessionReference[] = [],
+    permissionMode?: AiSessionPermissionMode,
+  ) {
+    return this.aiSessionActionService.sendMessage(
+      instanceId,
+      sessionId,
+      message,
+      mode,
+      attachments,
+      references,
+      permissionMode,
+    );
   }
 
-  async aiSessionMentionCatalog(instanceId: string, sessionId: string) {
-    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
-    return AiSessionMentionCatalogSchema.parse(await this.instanceRequest(instance, `/ai-sessions/${encodeURIComponent(sessionId)}/mentions`));
+  aiSessionMentionCatalog(instanceId: string, sessionId: string) {
+    return this.aiSessionActionService.mentionCatalog(instanceId, sessionId);
   }
 
-  async searchAiSessionMentionFiles(instanceId: string, sessionId: string, query: string) {
-    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
-    return AiSessionMentionFileSearchSchema.parse(await this.instanceRequest(instance, `/ai-sessions/${encodeURIComponent(sessionId)}/mentions/files`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ query }),
-    }));
+  searchAiSessionMentionFiles(instanceId: string, sessionId: string, query: string) {
+    return this.aiSessionActionService.searchMentionFiles(instanceId, sessionId, query);
   }
 
-  async executeAiSessionCommand(instanceId: string, sessionId: string, input: AiSessionCommandInput): Promise<AiSessionCommandResult> {
-    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
-    return AiSessionCommandResultSchema.parse(await this.instanceRequest(instance, `/ai-sessions/${encodeURIComponent(sessionId)}/commands`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(input),
-    }));
+  executeAiSessionCommand(instanceId: string, sessionId: string, input: AiSessionCommandInput) {
+    return this.aiSessionActionService.executeCommand(instanceId, sessionId, input);
   }
 
-  async aiSessionQueue(instanceId: string, sessionId: string) {
-    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
-    return AiSessionQueueSchema.parse(await this.instanceRequest(instance, `/ai-sessions/${encodeURIComponent(sessionId)}/queue`));
+  aiSessionQueue(instanceId: string, sessionId: string) {
+    return this.aiSessionActionService.queue(instanceId, sessionId);
   }
 
-  async steerAiSessionQueuedMessage(instanceId: string, sessionId: string, queueId: string) {
-    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
-    return AiSessionActionResultSchema.parse(await this.instanceRequest(instance, `/ai-sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(queueId)}/steer`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({}),
-    }));
+  steerAiSessionQueuedMessage(instanceId: string, sessionId: string, queueId: string) {
+    return this.aiSessionActionService.steerQueuedMessage(instanceId, sessionId, queueId);
   }
 
-  async retryAiSessionQueuedMessage(instanceId: string, sessionId: string, queueId: string) {
-    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
-    return AiSessionStatusSchema.parse(await this.instanceRequest(instance, `/ai-sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(queueId)}/retry`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({}),
-    }));
+  retryAiSessionQueuedMessage(instanceId: string, sessionId: string, queueId: string) {
+    return this.aiSessionActionService.retryQueuedMessage(instanceId, sessionId, queueId);
   }
 
-  async removeAiSessionQueuedMessage(instanceId: string, sessionId: string, queueId: string) {
-    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
-    return AiSessionStatusSchema.parse(await this.instanceRequest(instance, `/ai-sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(queueId)}`, {
-      method: "DELETE",
-    }));
+  removeAiSessionQueuedMessage(instanceId: string, sessionId: string, queueId: string) {
+    return this.aiSessionActionService.removeQueuedMessage(instanceId, sessionId, queueId);
   }
 
-  async interruptAiSession(instanceId: string, sessionId: string): Promise<AiSessionActionResult> {
-    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
-    return AiSessionActionResultSchema.parse(await this.instanceRequest(instance, `/ai-sessions/${encodeURIComponent(sessionId)}/interrupt`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({}),
-    }));
+  interruptAiSession(instanceId: string, sessionId: string) {
+    return this.aiSessionActionService.interrupt(instanceId, sessionId);
   }
 
   async proxyInstanceHttp(instanceId: string, path: string, init: ProxyHttpInit = {}) {
@@ -2439,83 +1462,12 @@ export class ControlPlaneService {
     return relativeSegments.length ? path.posix.join(workspacePath, ...relativeSegments) : workspacePath;
   }
 
-  private async prepareInstanceModels(node: Node, selection: { codexModelHash?: string | null; claudeModelHash?: string | null }) {
-    const nodeModels = await this.nodeAgentGateway.listModels(node);
-    const storedSelection = {
-      ...(selection.codexModelHash === null ? { codexModelHash: null } : selection.codexModelHash?.trim() ? { codexModelHash: selection.codexModelHash.trim() } : {}),
-      ...(selection.claudeModelHash === null ? { claudeModelHash: null } : selection.claudeModelHash?.trim() ? { claudeModelHash: selection.claudeModelHash.trim() } : {}),
-    };
-    const resolve = async (app: "codex" | "claude", selectedId?: string | null) => {
-      if (selectedId === null) return undefined;
-      const controlPlaneModel = selectedId
-        ? this.listAllModels().find((model) => model.id === selectedId)
-        : this.listAllModels().find((model) => model.enabled && model.app === app);
-      if (controlPlaneModel) {
-        if (controlPlaneModel.app !== app) {
-          throw Object.assign(new Error(`Model ${controlPlaneModel.id} is not a ${app} model.`), { statusCode: 400, code: "MODEL_APP_MISMATCH" });
-        }
-        if (!controlPlaneModel.enabled) {
-          throw Object.assign(new Error(`Model ${controlPlaneModel.id} is disabled.`), { statusCode: 400, code: "MODEL_DISABLED" });
-        }
-        await this.nodeAgentGateway.deployModel(node, controlPlaneModel.id, controlPlaneModel);
-        return controlPlaneModel.id;
-      }
-      if (!selectedId) return undefined;
-      const local = nodeModels.find((model) => model.id === selectedId);
-      if (!local) {
-        throwNotFound("MODEL_NOT_FOUND", `Model ${selectedId} was not found on control-plane or node ${node.id}.`);
-      }
-      if (local.app !== app) {
-        throw Object.assign(new Error(`Model ${selectedId} is not a ${app} model.`), { statusCode: 400, code: "MODEL_APP_MISMATCH" });
-      }
-      if (!local.enabled) throw Object.assign(new Error(`Model ${selectedId} is disabled.`), { statusCode: 400, code: "MODEL_DISABLED" });
-      return local.id;
-    };
-    return {
-      modelSelection: storedSelection,
-      codexModelHash: await resolve("codex", storedSelection.codexModelHash),
-      claudeModelHash: await resolve("claude", storedSelection.claudeModelHash),
-    };
-  }
-
-  private async ensureInstanceModelAssignment(instance: ControlledInstance) {
-    const node = this.requireNode(instance.nodeId);
-    const prepared = await this.prepareInstanceModels(node, instance.modelSelection);
-    return this.nodeAgentGateway.assignInstanceModels(node, instance.id, prepared);
-  }
-
-  private nextModelOrder() {
-    const last = this.models.list().reduce((max, model) => Math.max(max, model.order), 0);
-    return last + 100;
-  }
-
   requireProject(id: string) {
     return this.catalogService.requireProject(id);
   }
 
   requireModel(id: string, includeSecret = false) {
-    const record = this.models.get(id);
-    if (!record) {
-      throwNotFound("MODEL_NOT_FOUND", `Model ${id} was not found.`);
-    }
-    const model = this.normalizeModelRecord(record);
-    return includeSecret ? model : publicModel(model);
-  }
-
-  private requireModelSecret(id: string) {
-    const record = this.models.get(id);
-    if (!record) {
-      throwNotFound("MODEL_NOT_FOUND", `Model ${id} was not found.`);
-    }
-    return this.normalizeModelRecord(record);
-  }
-
-  private normalizeModelRecord(record: unknown) {
-    const model = normalizeModel(record);
-    if (model !== record) {
-      this.models.put(model);
-    }
-    return model;
+    return this.modelService.require(id, includeSecret);
   }
 
   requireImage(id: string) {
@@ -2543,36 +1495,3 @@ export class ControlPlaneService {
 type ProxyHttpInit = Omit<RequestInit, "body"> & {
   body?: RequestInit["body"] | Buffer;
 };
-
-function assertAiSessionAttachmentsWithinLimit(attachments: AiSessionMessageAttachment[]) {
-  const totalBytes = attachments.reduce((sum, attachment) => sum + (attachment.source.type === "inline" ? attachment.size : 0), 0);
-  if (totalBytes <= AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES) {
-    return;
-  }
-  const error = new Error(`Inline attachments must be ${AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES} bytes or less in total.`);
-  Object.assign(error, { statusCode: 400, code: "AI_SESSION_ATTACHMENTS_TOO_LARGE" });
-  throw error;
-}
-
-export function assertAiSessionRuntimePathSupport(attachments: AiSessionMessageAttachment[], runtimeType: "docker" | "kubernetes" | "local") {
-  if (runtimeType === "local" || !attachments.some((attachment) => attachment.source.type === "runtime-path")) return;
-  const error = new Error("Runtime path attachments are currently available only for Local Runtime instances.");
-  Object.assign(error, { statusCode: 400, code: "AI_SESSION_RUNTIME_PATH_UNSUPPORTED" });
-  throw error;
-}
-
-function objectRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
-}
-
-function publicOperationError(error: unknown, fallbackCode: string) {
-  const record = objectRecord(error);
-  return {
-    code: typeof record.code === "string" && record.code.trim() ? record.code.trim() : fallbackCode,
-    message: error instanceof Error && error.message.trim() ? error.message : "The operation failed.",
-  };
-}
-
-function stringValue(value: unknown) {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}

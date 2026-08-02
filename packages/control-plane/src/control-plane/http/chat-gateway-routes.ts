@@ -113,7 +113,11 @@ export function registerChatGatewayRoutes({ app, service, chatGateway }: Registe
     }, "chat gateway bridge state changed");
     return { data: chatGateway.stopBridge(id) };
   });
-  app.delete("/api/chat-gateway/bridges/:id", async (request) => ({ data: { deleted: service.deleteChatBridge(IdParamsSchema.parse(request.params).id) } }));
+  app.delete("/api/chat-gateway/bridges/:id", async (request) => {
+    const id = IdParamsSchema.parse(request.params).id;
+    chatGateway.stopBridge(id);
+    return { data: { deleted: service.deleteChatBridge(id) } };
+  });
   app.post("/api/chat-gateway/messages", { bodyLimit: 64 * 1024 * 1024 }, async (request) => ({ data: await service.handleChatGatewayMessage(ChatGatewayMessageSchema.parse(request.body)) }));
   app.post("/api/chat-gateway/actions", async (request) => ({ data: await service.handleChatGatewayAction(parseChatGatewayActionInput(request.body)) }));
   app.get("/api/pending-routes", async () => ({ data: await service.listPendingRoutes() }));

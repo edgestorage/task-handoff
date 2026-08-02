@@ -5,14 +5,20 @@ export type TerminalCommandRunOptions = {
   cols?: number;
   rows?: number;
   timeoutMs?: number;
+  signal?: AbortSignal;
   onData?: (data: string) => void;
 };
 
 export type TerminalCommandRunner = (command: string, args: string[], options?: TerminalCommandRunOptions) => Promise<CommandResult>;
 
 export const defaultTerminalCommandRunner: TerminalCommandRunner = (command, args, options = {}) => new Promise((resolve, reject) => {
+  if (options.signal?.aborted) {
+    reject(Object.assign(new Error(`${command} was aborted.`), { code: "RUNTIME_COMMAND_ABORTED" }));
+    return;
+  }
   const output: string[] = [];
   let timedOut = false;
+  let aborted = false;
   let terminal: ReturnType<typeof spawnPty>;
   try {
     terminal = spawnPty(command, args, {
@@ -30,18 +36,38 @@ export const defaultTerminalCommandRunner: TerminalCommandRunner = (command, arg
     timedOut = true;
     terminal.kill("SIGKILL");
   }, options.timeoutMs) : undefined;
+  const onAbort = () => {
+    aborted = true;
+    try {
+      terminal.kill("SIGKILL");
+    } catch {
+      // The terminal exited concurrently with cancellation.
+    }
+  };
+  const cleanup = () => {
+    if (timer) clearTimeout(timer);
+    options.signal?.removeEventListener("abort", onAbort);
+  };
+  options.signal?.addEventListener("abort", onAbort, { once: true });
   timer?.unref?.();
   terminal.onData((data) => {
     output.push(data);
     options.onData?.(data);
   });
   terminal.onExit(({ exitCode }) => {
-    if (timer) clearTimeout(timer);
+    cleanup();
     const result = { stdout: output.join(""), stderr: "" };
     if (timedOut) {
       reject(Object.assign(new Error(`${command} timed out after ${options.timeoutMs}ms`), {
         statusCode: 504,
         code: "RUNTIME_COMMAND_TIMEOUT",
+        details: result,
+      }));
+      return;
+    }
+    if (aborted) {
+      reject(Object.assign(new Error(`${command} was aborted.`), {
+        code: "RUNTIME_COMMAND_ABORTED",
         details: result,
       }));
       return;

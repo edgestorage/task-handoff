@@ -52,3 +52,21 @@ test("async TTL cache invalidation forces a new load", async () => {
   cache.invalidate();
   assert.equal(await cache.get(), "value-2");
 });
+
+test("async TTL cache invalidation isolates an in-flight stale load", async () => {
+  let calls = 0;
+  let releaseFirst;
+  const firstLoad = new Promise((resolve) => { releaseFirst = resolve; });
+  const cache = new AsyncTtlCache(60_000, async () => {
+    calls += 1;
+    return calls === 1 ? firstLoad : `value-${calls}`;
+  });
+
+  const first = cache.get();
+  cache.invalidate();
+  assert.equal(await cache.get(), "value-2");
+  releaseFirst("stale-value");
+  assert.equal(await first, "stale-value");
+  assert.equal(await cache.get(), "value-2");
+  assert.equal(calls, 2);
+});

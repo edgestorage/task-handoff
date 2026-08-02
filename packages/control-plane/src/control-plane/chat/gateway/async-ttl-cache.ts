@@ -8,6 +8,7 @@ export class AsyncTtlCache<T> {
   private readonly now: () => number;
   private cached: { expiresAt: number; value: T } | undefined;
   private pending: Promise<T> | undefined;
+  private generation = 0;
 
   constructor(ttlMs: number, load: () => Promise<T>, options: AsyncTtlCacheOptions = {}) {
     this.ttlMs = ttlMs;
@@ -20,9 +21,12 @@ export class AsyncTtlCache<T> {
       return Promise.resolve(this.cached.value);
     }
     if (this.pending) return this.pending;
+    const generation = this.generation;
     const pending = this.load()
       .then((value) => {
-        this.cached = { expiresAt: this.now() + this.ttlMs, value };
+        if (this.generation === generation) {
+          this.cached = { expiresAt: this.now() + this.ttlMs, value };
+        }
         return value;
       })
       .finally(() => {
@@ -33,6 +37,8 @@ export class AsyncTtlCache<T> {
   }
 
   invalidate() {
+    this.generation += 1;
     this.cached = undefined;
+    this.pending = undefined;
   }
 }

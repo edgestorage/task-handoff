@@ -13,6 +13,8 @@ export type ResolvedDockerImage = {
 
 type InFlightImage = {
   promise: Promise<ResolvedDockerImage>;
+  controller: AbortController;
+  abortDisposers: Set<() => void>;
   phaseListeners: Set<(phase: DockerImagePhase) => void>;
   terminalListeners: Set<(output: DockerImageTerminalOutput) => void>;
   phase?: DockerImagePhase;
@@ -38,7 +40,7 @@ export class DockerImageService {
     this.runTerminalCommand = runTerminalCommand || terminalRunnerFromCommandRunner(runCommand);
   }
 
-  ensure(referenceInput: string, onPhase?: (phase: DockerImagePhase) => void, onTerminal?: (output: DockerImageTerminalOutput) => void) {
+  ensure(referenceInput: string, onPhase?: (phase: DockerImagePhase) => void, onTerminal?: (output: DockerImageTerminalOutput) => void, signal?: AbortSignal) {
     const reference = normalizeDockerImageReference(referenceInput);
     const existing = this.inFlight.get(reference);
     if (existing) {
@@ -50,6 +52,7 @@ export class DockerImageService {
         existing.terminalListeners.add(onTerminal);
         if (existing.terminalTail) onTerminal({ sequence: existing.terminalSequence, data: existing.terminalTail, replay: true });
       }
+      this.bindAbort(existing, signal);
       return existing.promise;
     }
     const phaseListeners = new Set<(phase: DockerImagePhase) => void>();
@@ -58,11 +61,14 @@ export class DockerImageService {
     if (onTerminal) terminalListeners.add(onTerminal);
     const entry: InFlightImage = {
       promise: Promise.resolve(undefined as never),
+      controller: new AbortController(),
+      abortDisposers: new Set(),
       phaseListeners,
       terminalListeners,
       terminalSequence: 0,
       terminalTail: "",
     };
+    this.bindAbort(entry, signal);
     const notify = (phase: DockerImagePhase) => {
       entry.phase = phase;
       phaseListeners.forEach((listener) => listener(phase));
@@ -73,20 +79,38 @@ export class DockerImageService {
       const output = { sequence: entry.terminalSequence, data };
       terminalListeners.forEach((listener) => listener(output));
     };
-    entry.promise = this.ensureOnce(reference, notify, notifyTerminal).finally(() => this.inFlight.delete(reference));
+    entry.promise = this.ensureOnce(reference, notify, notifyTerminal, entry.controller.signal).finally(() => {
+      this.inFlight.delete(reference);
+      for (const dispose of entry.abortDisposers) dispose();
+      entry.abortDisposers.clear();
+    });
     this.inFlight.set(reference, entry);
     return entry.promise;
   }
 
-  private async ensureOnce(reference: string, notify: (phase: DockerImagePhase) => void, notifyTerminal: (data: string) => void) {
+  private bindAbort(entry: InFlightImage, signal?: AbortSignal) {
+    if (!signal) return;
+    if (signal.aborted) {
+      entry.controller.abort();
+      return;
+    }
+    const abort = () => entry.controller.abort();
+    signal.addEventListener("abort", abort, { once: true });
+    entry.abortDisposers.add(() => signal.removeEventListener("abort", abort));
+  }
+
+  private async ensureOnce(reference: string, notify: (phase: DockerImagePhase) => void, notifyTerminal: (data: string) => void, signal: AbortSignal) {
     notify("checking-image");
-    let inspected = await this.inspect(reference).catch(() => undefined);
+    let inspected = await this.inspect(reference, signal).catch((error) => {
+      if (signal.aborted) throw error;
+      return undefined;
+    });
     let pulled = false;
     if (!inspected) {
       notify("pulling-image");
-      await this.runTerminalCommand("docker", ["pull", reference], { cols: 120, rows: 40, onData: notifyTerminal });
+      await this.runTerminalCommand("docker", ["pull", reference], { cols: 120, rows: 40, signal, onData: notifyTerminal });
       pulled = true;
-      inspected = await this.inspect(reference);
+      inspected = await this.inspect(reference, signal);
     }
     notify("resolving-image");
     const repoDigest = dockerRepoDigests(inspected).find((item) => /@sha256:[a-fA-F0-9]{64}$/.test(item));
@@ -99,8 +123,8 @@ export class DockerImageService {
     };
   }
 
-  private async inspect(reference: string) {
-    const result = await this.runCommand("docker", ["image", "inspect", reference, "--format", "{{json .}}"]);
+  private async inspect(reference: string, signal?: AbortSignal) {
+    const result = await this.runCommand("docker", ["image", "inspect", reference, "--format", "{{json .}}"], { signal });
     return JSON.parse(result.stdout.trim() || "{}") as Record<string, unknown>;
   }
 }
@@ -108,7 +132,7 @@ export class DockerImageService {
 function terminalRunnerFromCommandRunner(runCommand: CommandRunner): TerminalCommandRunner {
   if (runCommand === defaultCommandRunner) return defaultTerminalCommandRunner;
   return async (command, args, options = {}) => {
-    const result = await runCommand(command, args, { timeoutMs: options.timeoutMs });
+    const result = await runCommand(command, args, { timeoutMs: options.timeoutMs, signal: options.signal });
     if (result.stdout) options.onData?.(result.stdout);
     if (result.stderr) options.onData?.(result.stderr);
     return result;

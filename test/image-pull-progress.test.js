@@ -125,3 +125,57 @@ test("reverse tunnel preserves image pull event order behind one scope validatio
   assert.deepEqual(published.map((event) => event.payload.sequence), [1000, 2000, 3000]);
   assert.equal(validations, 1);
 });
+
+test("reverse tunnel invalidation isolates in-flight validation and queued events", async () => {
+  const events = new ControlPlaneEventBus();
+  const published = [];
+  events.on((event) => published.push(event));
+  let validations = 0;
+  let releaseFirst;
+  let owned = true;
+  const firstValidation = new Promise((resolve) => { releaseFirst = resolve; });
+  const tunnel = new ControlPlaneNodeAgentTunnelTransport(events, {
+    validateInstanceScope: async () => {
+      validations += 1;
+      return validations === 1 ? firstValidation : owned;
+    },
+  });
+  const forward = (sequence) => tunnel.handleMessage("node_pull", {
+    type: "node-agent.event.forwarded",
+    event: {
+      type: ImagePullTerminalEventType.Output,
+      topic: "instances",
+      payload: output(sequence, `${sequence}\r\n`),
+      scope: { instanceId: "inst_pull_progress" },
+    },
+  });
+
+  forward(1000);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(tunnel.instanceScopeDiagnostics(), {
+    validatedScopes: 0,
+    validatingScopes: 1,
+    queuedScopes: 1,
+    scopeEpochs: 1,
+  });
+  owned = false;
+  tunnel.invalidateInstanceScope({ nodeId: "node_pull" });
+  assert.deepEqual(tunnel.instanceScopeDiagnostics(), {
+    validatedScopes: 0,
+    validatingScopes: 0,
+    queuedScopes: 0,
+    scopeEpochs: 0,
+  });
+  forward(2000);
+  releaseFirst(true);
+  await new Promise((resolve) => setImmediate(() => setImmediate(resolve)));
+
+  assert.equal(validations, 2);
+  assert.deepEqual(published, []);
+  assert.deepEqual(tunnel.instanceScopeDiagnostics(), {
+    validatedScopes: 0,
+    validatingScopes: 0,
+    queuedScopes: 0,
+    scopeEpochs: 0,
+  });
+});

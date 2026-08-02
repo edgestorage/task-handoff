@@ -1,5 +1,4 @@
 import type { ChatBridgeConfig, ChatGatewayMessage, ChatSessionBinding, PendingRoute } from "@task-handoff/protocol/control-plane";
-import crypto from "node:crypto";
 import type { DWClientDownStream } from "dingtalk-stream";
 import { createInlineKeyboard } from "@task-handoff/core/core/chat-interactions";
 import type { ChatInlineKeyboard, ChatInteractionPayload } from "@task-handoff/core/core/chat-interactions";
@@ -35,6 +34,9 @@ import {
 import { pollWechatMessages } from "../adapters/wechat.ts";
 import { DingdingBridgeRuntimeManager } from "./dingding-bridge-runtime.ts";
 import { AsyncTtlCache } from "./async-ttl-cache.ts";
+import { TelegramMessageAggregator, type TelegramMessageContext } from "./telegram-message-aggregator.ts";
+import { TelegramAiSessionCallbacks } from "./telegram-ai-session-callbacks.ts";
+import { PendingRouteNotifier } from "./pending-route-notifier.ts";
 
 export { createDingdingStreamClient } from "./dingding-bridge-runtime.ts";
 
@@ -53,28 +55,8 @@ function chatGatewayDiagnosticLogsEnabled() {
   return envFlag(process.env.TASK_HANDOFF_DIAGNOSTIC_LOGS);
 }
 
-const TELEGRAM_MESSAGE_AGGREGATE_DELAY_MS = 1000;
 const AI_SESSION_INSTANCE_NAMES_TTL_MS = 30_000;
 const AI_SESSION_PENDING_ROUTES_TTL_MS = 1_000;
-type AiSessionQueueTelegramAction =
-  | { type: "steer"; instanceId: string; sessionId: string; queueId: string }
-  | { type: "delete-menu"; instanceId: string; sessionId: string }
-  | { type: "delete-item"; instanceId: string; sessionId: string; queueId: string };
-type TelegramMessageAggregate = {
-  bridgeId: string;
-  chatId: string;
-  userId?: string;
-  texts: string[];
-  attachments: AiSessionMessageAttachment[];
-  context?: TelegramMessageContext;
-  explicit: boolean;
-  timer?: Timer;
-};
-type TelegramMessageContext = {
-  sourceMessageId?: number;
-  replyToMessageId?: number;
-  quoteText?: string;
-};
 type TelegramReplyAiSessionTarget = {
   instanceId: string;
   sessionId: string;
@@ -175,17 +157,16 @@ export class ControlPlaneChatGatewayRuntime {
   private readonly fetchImpl: typeof fetch;
   private readonly logger: ChatGatewayLogger | undefined;
   private bridgeTimers = new Map<string, Timer>();
+  private bridgePollingGenerations = new Map<string, number>();
   private readonly dingdingBridges: DingdingBridgeRuntimeManager;
   private bridgeErrors = new Map<string, string>();
   private telegramOffsets = new Map<string, number>();
   private seenTelegramUpdates = new Set<string>();
   private wechatCursors = new Map<string, string>();
-  private announcedPending = new Set<string>();
+  private readonly pendingRouteNotifier: PendingRouteNotifier;
   private deliveredAiSessionFingerprints = new Map<string, string>();
-  private aiSessionCancelTokens = new Map<string, { instanceId: string; sessionId: string }>();
-  private aiSessionQueueActionTokens = new Map<string, AiSessionQueueTelegramAction>();
-  private telegramMessageAggregates = new Map<string, TelegramMessageAggregate>();
-  private telegramMessageAggregateEndTokens = new Map<string, string>();
+  private readonly telegramAiSessionCallbacks: TelegramAiSessionCallbacks;
+  private readonly telegramMessageAggregator: TelegramMessageAggregator;
   private telegramProgressMessageTargets = new Map<string, TelegramReplyAiSessionTarget>();
   private readonly aiSessionInstanceNamesCache: AsyncTtlCache<Map<string, string>>;
   private readonly aiSessionPendingRoutesCache: AsyncTtlCache<Array<PendingRoute & { instance?: { id: string; name?: string } }>>;
@@ -204,6 +185,48 @@ export class ControlPlaneChatGatewayRuntime {
       AI_SESSION_PENDING_ROUTES_TTL_MS,
       () => this.service.listPendingRoutes().catch(() => []),
     );
+    this.telegramMessageAggregator = new TelegramMessageAggregator({
+      requireBridge: (id) => this.service.requireChatBridge(id),
+      send: (bridge, chatId, text, telegramOptions = {}) => this.sendTelegramMessage(bridge, chatId, text, telegramOptions),
+      answerCallback: (bridge, callbackQueryId, text) => this.answerTelegramCallback(bridge, callbackQueryId, text),
+      dispatch: (bridge, chatId, userId, text, attachments, context) => this.dispatchTelegramGatewayMessage(
+        bridge,
+        chatId,
+        userId,
+        text,
+        attachments,
+        context,
+      ),
+      onError: (bridgeId, error) => this.bridgeErrors.set(bridgeId, errorMessage(error)),
+    });
+    this.telegramAiSessionCallbacks = new TelegramAiSessionCallbacks({
+      interrupt: (instanceId, sessionId) => this.service.interruptAiSession(instanceId, sessionId),
+      queue: (instanceId, sessionId) => this.service.aiSessionQueue(instanceId, sessionId),
+      steer: (instanceId, sessionId, queueId) => this.service.steerAiSessionQueuedMessage(instanceId, sessionId, queueId),
+      remove: (instanceId, sessionId, queueId) => this.service.removeAiSessionQueuedMessage(instanceId, sessionId, queueId),
+      actionAllowed: (bridge, chatId, instanceId, sessionId, messageId) => this.telegramAiSessionActionAllowed(
+        bridge,
+        chatId,
+        instanceId,
+        sessionId,
+        messageId,
+      ),
+      answer: (bridge, callbackQueryId, text) => this.answerTelegramCallback(bridge, callbackQueryId, text),
+      send: (bridge, chatId, text, telegramOptions = {}) => this.sendTelegramMessage(bridge, chatId, text, telegramOptions),
+      deleteMessage: (bridge, chatId, messageId) => this.deleteTelegramMessage(bridge, chatId, messageId),
+      setBridgeError: (bridgeId, error) => this.bridgeErrors.set(bridgeId, error),
+      info: (data, message) => this.logInfo(data, message),
+      warn: (data, message) => this.logWarn(data, message),
+    });
+    this.pendingRouteNotifier = new PendingRouteNotifier({
+      listRoutes: () => this.service.listPendingRoutes(),
+      listBindings: () => this.service.listChatSessions(),
+      listBridges: () => this.service.listChatBridges(),
+      requireBridge: (id) => this.service.requireChatBridge(id),
+      callbackData: (routeId, decision) => this.service.pendingDecisionCallbackData(routeId, decision),
+      send: (bridge, chatId, payload) => this.sendViaBridge(bridge, chatId, payload),
+      setBridgeError: (bridgeId, error) => this.bridgeErrors.set(bridgeId, error),
+    });
     this.telegramProgress = new TelegramProgressAdapter({
       updateIntervalMs: options.telegramProgressUpdateIntervalMs,
       requireBridge: (id) => this.service.requireChatBridge(id),
@@ -277,7 +300,7 @@ export class ControlPlaneChatGatewayRuntime {
       hasToken: Boolean(bridge.token),
     });
     if (bridge.channel === "wechat") {
-      return this.startPollingBridge(bridge, (current) => this.pollWechat(current));
+      return this.startPollingBridge(bridge, (current, isCurrent) => this.pollWechat(current, isCurrent));
     }
     if (bridge.channel === "dingding") {
       return this.startDingdingBridge(bridge);
@@ -290,43 +313,48 @@ export class ControlPlaneChatGatewayRuntime {
       this.bridgeErrors.set(id, "Telegram token is not configured.");
       return this.status();
     }
-    return this.startPollingBridge(bridge, (current) => this.pollTelegram(current));
+    return this.startPollingBridge(bridge, (current, isCurrent) => this.pollTelegram(current, isCurrent));
   }
 
   stopBridge(id: string) {
+    this.advanceBridgePollingGeneration(id);
     const timer = this.bridgeTimers.get(id);
     if (timer) {
       clearInterval(timer);
       this.bridgeTimers.delete(id);
     }
     this.dingdingBridges.stop(id);
+    this.telegramMessageAggregator.stopBridge(id);
     return this.status();
   }
 
   stopAll() {
-    for (const id of new Set([...this.bridgeTimers.keys(), ...this.dingdingBridges.ids()])) {
+    const bridgeIds = new Set([
+      ...this.service.listChatBridges().map((bridge) => bridge.id),
+      ...this.bridgePollingGenerations.keys(),
+      ...this.bridgeTimers.keys(),
+      ...this.dingdingBridges.ids(),
+    ]);
+    for (const id of bridgeIds) {
       this.stopBridge(id);
     }
     this.dingdingBridges.stopAll();
-    for (const aggregate of this.telegramMessageAggregates.values()) {
-      if (aggregate.timer) {
-        clearTimeout(aggregate.timer);
-      }
-    }
-    this.telegramMessageAggregates.clear();
-    this.telegramMessageAggregateEndTokens.clear();
+    this.telegramMessageAggregator.stop();
+    this.telegramAiSessionCallbacks.clear();
     this.stopAiSessionListener?.();
     this.stopAiSessionListener = undefined;
   }
 
   async pollBridgeNow(id: string) {
     const bridge = this.service.requireChatBridge(id);
+    const generation = this.bridgePollingGeneration(id);
+    const isCurrent = () => this.bridgePollingGeneration(id) === generation;
     if (bridge.channel === "telegram") {
-      await this.pollTelegram(bridge);
+      await this.pollTelegram(bridge, isCurrent);
       return this.status();
     }
     if (bridge.channel === "wechat") {
-      await this.pollWechat(bridge);
+      await this.pollWechat(bridge, isCurrent);
       return this.status();
     }
     if (bridge.channel === "dingding") {
@@ -358,19 +386,31 @@ export class ControlPlaneChatGatewayRuntime {
     };
   }
 
-  private startPollingBridge(bridge: ChatBridgeConfig, poll: (bridge: ChatBridgeConfig) => Promise<void>) {
+  private startPollingBridge(
+    bridge: ChatBridgeConfig,
+    poll: (bridge: ChatBridgeConfig, isCurrent: () => boolean) => Promise<void>,
+  ) {
     if (!bridge.token) {
       this.bridgeErrors.set(bridge.id, `${bridge.channel} token is not configured.`);
       return this.status();
     }
     this.bridgeErrors.delete(bridge.id);
+    const generation = this.advanceBridgePollingGeneration(bridge.id);
+    const isCurrent = () => this.bridgePollingGeneration(bridge.id) === generation;
+    const run = (current: ChatBridgeConfig) => {
+      if (!isCurrent()) return;
+      void poll(current, isCurrent).catch((error) => {
+        if (isCurrent()) this.bridgeErrors.set(bridge.id, error instanceof Error ? error.message : String(error));
+      });
+    };
     const interval = setInterval(() => {
+      if (!isCurrent()) return;
       const current = this.service.requireChatBridge(bridge.id);
       if (!current.enabled) {
         this.stopBridge(bridge.id);
         return;
       }
-      void poll(current).catch((error) => this.bridgeErrors.set(bridge.id, error instanceof Error ? error.message : String(error)));
+      run(current);
     }, bridge.pollIntervalMs);
     this.bridgeTimers.set(bridge.id, interval);
     this.logAiSessionDelivery({
@@ -381,9 +421,19 @@ export class ControlPlaneChatGatewayRuntime {
     });
     if (bridge.enabled) {
       const current = this.service.requireChatBridge(bridge.id);
-      void poll(current).catch((error) => this.bridgeErrors.set(bridge.id, error instanceof Error ? error.message : String(error)));
+      run(current);
     }
     return this.status();
+  }
+
+  private bridgePollingGeneration(bridgeId: string) {
+    return this.bridgePollingGenerations.get(bridgeId) || 0;
+  }
+
+  private advanceBridgePollingGeneration(bridgeId: string) {
+    const generation = this.bridgePollingGeneration(bridgeId) + 1;
+    this.bridgePollingGenerations.set(bridgeId, generation);
+    return generation;
   }
 
   private startDingdingBridge(bridge: ChatBridgeConfig) {
@@ -601,7 +651,7 @@ export class ControlPlaneChatGatewayRuntime {
     return dingdingCardUpdateResponse(reply, replyMarkupFromGatewayResult(result), "updated", event.body, event.params);
   }
 
-  private async pollWechat(bridge: ChatBridgeConfig) {
+  private async pollWechat(bridge: ChatBridgeConfig, isCurrent: () => boolean = () => true) {
     if (!bridge.token) {
       return;
     }
@@ -612,11 +662,13 @@ export class ControlPlaneChatGatewayRuntime {
       bridge,
       cursor,
     });
+    if (!isCurrent()) return;
     if (result.cursor) {
       this.wechatCursors.set(bridge.id, result.cursor);
       this.updateChatBridge(bridge.id, { settings: { updatesBuf: result.cursor } });
     }
     for (const message of result.messages) {
+      if (!isCurrent()) return;
       const { chatId, contextToken, text } = message;
       if (!bridge.defaultChatId) {
         this.updateChatBridge(bridge.id, { defaultChatId: chatId, settings: { contextToken } });
@@ -633,6 +685,7 @@ export class ControlPlaneChatGatewayRuntime {
         },
         message: { text, attachments: [] },
       });
+      if (!isCurrent()) return;
       const reply = replyFromGatewayResult(result);
       if (reply) {
         const adapter = createChatGatewaySendAdapter({ fetchImpl: this.fetchImpl, bridge });
@@ -641,54 +694,8 @@ export class ControlPlaneChatGatewayRuntime {
     }
   }
 
-  private async pollPendingRoutes() {
-    const routes = await this.service.listPendingRoutes().catch(() => []);
-    for (const route of routes) {
-      if (this.announcedPending.has(route.id)) {
-        continue;
-      }
-      const payload = renderPendingNotification(route, (routeId, decision) => this.service.pendingDecisionCallbackData(routeId, decision));
-      const bindings = route.aiSessionId ? this.service.listChatSessions().filter((binding) => binding.activeInstanceId === route.instanceId && binding.activeAiSessionId === route.aiSessionId) : [];
-      const delivered = new Set<string>();
-      for (const binding of bindings) {
-        if (!binding.bridgeId) {
-          continue;
-        }
-        await this.sendToChatBinding(binding, payload).then((sent) => {
-          if (sent) {
-            delivered.add(binding.id);
-          }
-        });
-      }
-      if (delivered.size === 0) {
-        if (await this.sendToDefaultBridgeChats(payload)) {
-          this.announcedPending.add(route.id);
-        }
-        continue;
-      }
-      this.announcedPending.add(route.id);
-    }
-  }
-
-  private async sendToDefaultBridgeChats(payload: ChatInteractionPayload) {
-    let delivered = false;
-    for (const bridge of this.service.listChatBridges()) {
-      if (!bridge.enabled || !bridge.defaultChatId) {
-        continue;
-      }
-      let failed = false;
-      const sent = await this.sendViaBridge(bridge, bridge.defaultChatId, payload).catch((error) => {
-        this.bridgeErrors.set(bridge.id, error instanceof Error ? error.message : String(error));
-        failed = true;
-        return undefined;
-      });
-      if (sent) {
-        delivered = true;
-      } else if (!failed) {
-        this.bridgeErrors.set(bridge.id, "Chat bridge message was not delivered.");
-      }
-    }
-    return delivered;
+  pollPendingRoutes() {
+    return this.pendingRouteNotifier.poll();
   }
 
   private async sendToChatBinding(binding: { bridgeId?: string; chatSessionId: string }, payload: ChatInteractionPayload) {
@@ -717,7 +724,7 @@ export class ControlPlaneChatGatewayRuntime {
     return adapter.send(chatId, text, { replyMarkup });
   }
 
-  private async pollTelegram(bridge: ChatBridgeConfig) {
+  private async pollTelegram(bridge: ChatBridgeConfig, isCurrent: () => boolean = () => true) {
     if (!bridge.token) {
       return;
     }
@@ -728,11 +735,13 @@ export class ControlPlaneChatGatewayRuntime {
       bridge,
       offset,
     });
+    if (!isCurrent()) return;
     if (result.conflict) {
       this.bridgeErrors.set(bridge.id, result.conflict);
       return;
     }
     for (const update of result.updates) {
+      if (!isCurrent()) return;
       if (update.updateId !== undefined) {
         const seenKey = `${bridge.id}:${update.updateId}`;
         if (this.seenTelegramUpdates.has(seenKey) || update.updateId <= (this.telegramOffsets.get(bridge.id) || 0)) {
@@ -773,6 +782,7 @@ export class ControlPlaneChatGatewayRuntime {
           }, "telegram image download skipped");
         },
       });
+      if (!isCurrent()) return;
       const text = update.rawText.trim();
       if (!text && !attachments.length) {
         continue;
@@ -785,7 +795,7 @@ export class ControlPlaneChatGatewayRuntime {
         hasQuote: Boolean(update.quoteText),
         textPreview: compactLogText(text),
       }, "telegram chat gateway message received");
-      await this.handleTelegramIncomingText(bridge, update.chatId, update.userId, text, attachments, {
+      await this.telegramMessageAggregator.handleIncoming(bridge, update.chatId, update.userId, text, attachments, {
         sourceMessageId: update.messageId,
         replyToMessageId: update.replyToMessageId,
         quoteText: update.quoteText,
@@ -793,141 +803,6 @@ export class ControlPlaneChatGatewayRuntime {
         autoBegin: update.autoBegin,
       });
     }
-  }
-
-  private async handleTelegramIncomingText(bridge: ChatBridgeConfig, chatId: string, userId: string | undefined, text: string, attachments: AiSessionMessageAttachment[] = [], context: TelegramMessageContext = {}, options: { autoBegin?: boolean } = {}) {
-    const normalized = text.trim();
-    const command = normalized.split(/\s+/, 1)[0]?.toLowerCase() || "";
-    const key = telegramAggregateKey(bridge.id, chatId, userId);
-    const existing = this.telegramMessageAggregates.get(key);
-    if (options.autoBegin && !existing) {
-      this.startTelegramAggregate(key, bridge, chatId, userId, context);
-      this.enqueueTelegramAggregate(key, bridge, chatId, userId, text, attachments, context, true);
-      await this.sendTelegramMessage(bridge, chatId, "Image received. Continue sending messages, then send /end when done.", {
-        replyToMessageId: context.sourceMessageId,
-        replyMarkup: createInlineKeyboard([[
-          { text: "/end", callbackData: this.telegramAggregateEndCallbackData(key) },
-        ]]),
-      });
-      return;
-    }
-    if (command === "/begin") {
-      this.startTelegramAggregate(key, bridge, chatId, userId, context);
-      await this.sendTelegramMessage(bridge, chatId, "Started collecting messages. Send /end when done.", {
-        replyToMessageId: context.sourceMessageId,
-        replyMarkup: createInlineKeyboard([[
-          { text: "/end", callbackData: this.telegramAggregateEndCallbackData(key) },
-        ]]),
-      });
-      return;
-    }
-    if (command === "/end") {
-      await this.flushTelegramAggregate(key, "manual");
-      return;
-    }
-    if (existing?.explicit) {
-      this.enqueueTelegramAggregate(key, bridge, chatId, userId, text, attachments, context, true);
-      return;
-    }
-    if (this.isImmediateTelegramCommand(normalized)) {
-      await this.dispatchTelegramGatewayMessage(bridge, chatId, userId, text, attachments, context);
-      return;
-    }
-    this.enqueueTelegramAggregate(key, bridge, chatId, userId, text, attachments, context, false);
-  }
-
-  private isImmediateTelegramCommand(text: string) {
-    return text.trim().startsWith("/");
-  }
-
-  private startTelegramAggregate(key: string, bridge: ChatBridgeConfig, chatId: string, userId: string | undefined, context: TelegramMessageContext = {}) {
-    const existing = this.telegramMessageAggregates.get(key);
-    if (existing?.timer) {
-      clearTimeout(existing.timer);
-    }
-    this.telegramMessageAggregates.set(key, {
-      bridgeId: bridge.id,
-      chatId,
-      userId,
-      texts: [],
-      attachments: [],
-      context,
-      explicit: true,
-    });
-  }
-
-  private enqueueTelegramAggregate(key: string, bridge: ChatBridgeConfig, chatId: string, userId: string | undefined, text: string, attachments: AiSessionMessageAttachment[], context: TelegramMessageContext, explicit: boolean) {
-    const existing = this.telegramMessageAggregates.get(key);
-    if (existing?.timer) {
-      clearTimeout(existing.timer);
-    }
-    const aggregate: TelegramMessageAggregate = existing || {
-      bridgeId: bridge.id,
-      chatId,
-      userId,
-      texts: [],
-      attachments: [],
-      context,
-      explicit,
-    };
-    aggregate.bridgeId = bridge.id;
-    aggregate.chatId = chatId;
-    aggregate.userId = userId;
-    aggregate.context = mergeTelegramMessageContext(aggregate.context, context);
-    aggregate.explicit = aggregate.explicit || explicit;
-    if (text.trim()) {
-      aggregate.texts.push(text);
-    }
-    aggregate.attachments.push(...attachments);
-    if (!aggregate.explicit) {
-      aggregate.timer = setTimeout(() => {
-        void this.flushTelegramAggregate(key, "timer");
-      }, TELEGRAM_MESSAGE_AGGREGATE_DELAY_MS);
-    } else {
-      aggregate.timer = undefined;
-    }
-    this.telegramMessageAggregates.set(key, aggregate);
-  }
-
-  private async flushTelegramAggregate(key: string, reason: "timer" | "manual" | "callback") {
-    const aggregate = this.telegramMessageAggregates.get(key);
-    if (!aggregate) {
-      return false;
-    }
-    if (aggregate.timer) {
-      clearTimeout(aggregate.timer);
-    }
-    this.telegramMessageAggregates.delete(key);
-    const bridge = this.service.requireChatBridge(aggregate.bridgeId);
-    const text = aggregate.texts.join("\n\n").trim();
-    if (!text && !aggregate.attachments.length) {
-      if (reason !== "timer") {
-        await this.sendTelegramMessage(bridge, aggregate.chatId, "No messages collected.", { replyToMessageId: aggregate.context?.sourceMessageId });
-      }
-      return false;
-    }
-    await this.dispatchTelegramGatewayMessage(bridge, aggregate.chatId, aggregate.userId, text, aggregate.attachments, aggregate.context);
-    return true;
-  }
-
-  private async handleTelegramAggregateEndCallback(bridge: ChatBridgeConfig, chatId: string, callbackQueryId: string, token: string, userId: string | undefined) {
-    const key = this.telegramMessageAggregateEndTokens.get(token) || "";
-    if (key !== telegramAggregateKey(bridge.id, chatId, userId)) {
-      await this.answerTelegramCallback(bridge, callbackQueryId, "This collection is not active here");
-      return;
-    }
-    const flushed = await this.flushTelegramAggregate(key, "callback");
-    await this.answerTelegramCallback(bridge, callbackQueryId, flushed ? "Collected message sent" : "No messages collected");
-  }
-
-  private telegramAggregateEndCallbackData(key: string) {
-    const token = crypto
-      .createHash("sha256")
-      .update(key)
-      .digest("base64url")
-      .slice(0, 16);
-    this.telegramMessageAggregateEndTokens.set(token, key);
-    return `task_handoff:cp_msg_end:${token}`;
   }
 
   private async dispatchTelegramGatewayMessage(bridge: ChatBridgeConfig, chatId: string, userId: string | undefined, text: string, attachments: AiSessionMessageAttachment[] = [], context: TelegramMessageContext = {}) {
@@ -993,49 +868,18 @@ export class ControlPlaneChatGatewayRuntime {
     if (!chatId || !this.telegramAllowed(bridge, userId)) {
       return;
     }
-    const cancelTokenMatch = data.match(/^task_handoff:cp_ai_cancel:([^:]+)$/);
-    if (cancelTokenMatch) {
-      const target = this.aiSessionCancelTokens.get(cancelTokenMatch[1]);
-      if (!target) {
-        await this.answerTelegramCallback(bridge, stringSetting(callbackQuery.id), "This AI session action expired");
-        return;
-      }
-      await this.handleTelegramAiSessionCancelCallback(bridge, chatId, stringSetting(callbackQuery.id), target.instanceId, target.sessionId, userId, messageIdFromTelegramMessage(message));
-      return;
-    }
-    const steerTokenMatch = data.match(/^task_handoff:cp_ai_steer:([^:]+)$/);
-    if (steerTokenMatch) {
-      const target = this.aiSessionQueueActionTokens.get(steerTokenMatch[1]);
-      if (!target || target.type !== "steer") {
-        await this.answerTelegramCallback(bridge, stringSetting(callbackQuery.id), "This AI session action expired");
-        return;
-      }
-      await this.handleTelegramAiSessionQueueSteerCallback(bridge, chatId, stringSetting(callbackQuery.id), target.instanceId, target.sessionId, target.queueId, userId, messageIdFromTelegramMessage(message));
-      return;
-    }
-    const queueDeleteMenuTokenMatch = data.match(/^task_handoff:cp_ai_qdel_menu:([^:]+)$/);
-    if (queueDeleteMenuTokenMatch) {
-      const target = this.aiSessionQueueActionTokens.get(queueDeleteMenuTokenMatch[1]);
-      if (!target || target.type !== "delete-menu") {
-        await this.answerTelegramCallback(bridge, stringSetting(callbackQuery.id), "This AI session action expired");
-        return;
-      }
-      await this.handleTelegramAiSessionQueueDeleteMenuCallback(bridge, chatId, stringSetting(callbackQuery.id), target.instanceId, target.sessionId, userId, messageIdFromTelegramMessage(message));
-      return;
-    }
-    const queueDeleteItemTokenMatch = data.match(/^task_handoff:cp_ai_qdel:([^:]+)$/);
-    if (queueDeleteItemTokenMatch) {
-      const target = this.aiSessionQueueActionTokens.get(queueDeleteItemTokenMatch[1]);
-      if (!target || target.type !== "delete-item") {
-        await this.answerTelegramCallback(bridge, stringSetting(callbackQuery.id), "This AI session action expired");
-        return;
-      }
-      await this.handleTelegramAiSessionQueueDeleteItemCallback(bridge, chatId, stringSetting(callbackQuery.id), messageIdFromTelegramMessage(message), target.instanceId, target.sessionId, target.queueId, userId);
+    if (await this.telegramAiSessionCallbacks.tryHandle(data, {
+      bridge,
+      chatId,
+      callbackQueryId: stringSetting(callbackQuery.id),
+      userId,
+      messageId: messageIdFromTelegramMessage(message),
+    })) {
       return;
     }
     const aggregateEndMatch = data.match(/^task_handoff:cp_msg_end:([^:]+)$/);
     if (aggregateEndMatch) {
-      await this.handleTelegramAggregateEndCallback(bridge, chatId, stringSetting(callbackQuery.id), aggregateEndMatch[1], userId);
+      await this.telegramMessageAggregator.handleEndCallback(bridge, chatId, stringSetting(callbackQuery.id), aggregateEndMatch[1], userId);
       return;
     }
     let action: ChatGatewayAction | undefined;
@@ -1103,120 +947,6 @@ export class ControlPlaneChatGatewayRuntime {
         error: errorMessage(error),
       }, "telegram callback message delete failed");
     });
-  }
-
-  private async handleTelegramAiSessionCancelCallback(bridge: ChatBridgeConfig, chatId: string, callbackQueryId: string, instanceId: string, sessionId: string, userId: string | undefined, messageId?: number) {
-    if (!this.telegramAiSessionActionAllowed(bridge, chatId, instanceId, sessionId, messageId)) {
-      await this.answerTelegramCallback(bridge, callbackQueryId, "This chat is not bound to that AI session");
-      return;
-    }
-    try {
-      await this.service.interruptAiSession(instanceId, sessionId);
-      await this.answerTelegramCallback(bridge, callbackQueryId, "Interrupt sent");
-      this.logInfo({
-        bridgeId: bridge.id,
-        chatId,
-        instanceId,
-        sessionId,
-        userId,
-      }, "telegram ai session cancel sent");
-    } catch (error) {
-      this.bridgeErrors.set(bridge.id, errorMessage(error));
-      await this.answerTelegramCallback(bridge, callbackQueryId, `Interrupt failed: ${compactLogText(errorMessage(error), 120)}`);
-    }
-  }
-
-  private async handleTelegramAiSessionQueueSteerCallback(bridge: ChatBridgeConfig, chatId: string, callbackQueryId: string, instanceId: string, sessionId: string, queueId: string, userId: string | undefined, messageId?: number) {
-    if (!this.telegramAiSessionActionAllowed(bridge, chatId, instanceId, sessionId, messageId)) {
-      await this.answerTelegramCallback(bridge, callbackQueryId, "This chat is not bound to that AI session");
-      return;
-    }
-    try {
-      await this.service.steerAiSessionQueuedMessage(instanceId, sessionId, queueId);
-      await this.answerTelegramCallback(bridge, callbackQueryId, "Steered queued message");
-      this.logInfo({
-        bridgeId: bridge.id,
-        chatId,
-        instanceId,
-        sessionId,
-        queueId,
-        userId,
-      }, "telegram ai session queued message steered");
-    } catch (error) {
-      this.bridgeErrors.set(bridge.id, errorMessage(error));
-      await this.answerTelegramCallback(bridge, callbackQueryId, `Steer failed: ${compactLogText(errorMessage(error), 120)}`);
-    }
-  }
-
-  private async handleTelegramAiSessionQueueDeleteMenuCallback(bridge: ChatBridgeConfig, chatId: string, callbackQueryId: string, instanceId: string, sessionId: string, userId: string | undefined, messageId?: number) {
-    if (!this.telegramAiSessionActionAllowed(bridge, chatId, instanceId, sessionId, messageId)) {
-      await this.answerTelegramCallback(bridge, callbackQueryId, "This chat is not bound to that AI session");
-      return;
-    }
-    try {
-      const queue = asRecord(await this.service.aiSessionQueue(instanceId, sessionId));
-      const items = (Array.isArray(queue.items) ? queue.items : [])
-        .map((item) => asRecord(item))
-        .filter((item) => stringSetting(item.status) === "queued" && stringSetting(item.id));
-      if (!items.length) {
-        await this.answerTelegramCallback(bridge, callbackQueryId, "Queue is empty");
-        return;
-      }
-      const rows = items.slice(0, TELEGRAM_AI_QUEUE_BUTTON_LIMIT).map((item, index) => [{
-        text: telegramQueueButtonText(stringSetting(item.message), index),
-        callbackData: this.aiSessionQueueDeleteItemCallbackData(instanceId, sessionId, stringSetting(item.id)),
-      }]);
-      await this.sendTelegramMessage(bridge, chatId, "Delete queued message", {
-        replyMarkup: createInlineKeyboard(rows),
-      });
-      await this.answerTelegramCallback(bridge, callbackQueryId, "Select a queued message");
-      this.logInfo({
-        bridgeId: bridge.id,
-        chatId,
-        instanceId,
-        sessionId,
-        itemCount: items.length,
-        userId,
-      }, "telegram ai session queue delete menu sent");
-    } catch (error) {
-      this.bridgeErrors.set(bridge.id, errorMessage(error));
-      await this.answerTelegramCallback(bridge, callbackQueryId, `Queue menu failed: ${compactLogText(errorMessage(error), 120)}`);
-    }
-  }
-
-  private async handleTelegramAiSessionQueueDeleteItemCallback(bridge: ChatBridgeConfig, chatId: string, callbackQueryId: string, messageId: number | undefined, instanceId: string, sessionId: string, queueId: string, userId: string | undefined) {
-    if (!this.telegramAiSessionActionAllowed(bridge, chatId, instanceId, sessionId, messageId)) {
-      await this.answerTelegramCallback(bridge, callbackQueryId, "This chat is not bound to that AI session");
-      return;
-    }
-    try {
-      await this.service.removeAiSessionQueuedMessage(instanceId, sessionId, queueId);
-      await this.answerTelegramCallback(bridge, callbackQueryId, "Queued message deleted");
-      if (Number.isInteger(messageId)) {
-        await this.deleteTelegramMessage(bridge, chatId, messageId as number).catch((error) => {
-          this.logWarn({
-            bridgeId: bridge.id,
-            chatId,
-            instanceId,
-            sessionId,
-            queueId,
-            messageId,
-            error: errorMessage(error),
-          }, "telegram ai session queue delete menu message delete failed");
-        });
-      }
-      this.logInfo({
-        bridgeId: bridge.id,
-        chatId,
-        instanceId,
-        sessionId,
-        queueId,
-        userId,
-      }, "telegram ai session queued message deleted");
-    } catch (error) {
-      this.bridgeErrors.set(bridge.id, errorMessage(error));
-      await this.answerTelegramCallback(bridge, callbackQueryId, `Delete failed: ${compactLogText(errorMessage(error), 120)}`);
-    }
   }
 
   private telegramAiSessionBindingActive(bridge: ChatBridgeConfig, chatId: string, instanceId: string, sessionId: string) {
@@ -1507,9 +1237,9 @@ export class ControlPlaneChatGatewayRuntime {
         continue;
       }
       const actions = aiSessionProgressActions({
-        cancelCallbackData: this.aiSessionCancelCallbackData(instanceId, session.id),
-        queueSteerCallbackData: (queueId) => this.aiSessionQueueSteerCallbackData(instanceId, session.id, queueId),
-        queueDeleteMenuCallbackData: () => this.aiSessionQueueDeleteMenuCallbackData(instanceId, session.id),
+        cancelCallbackData: this.telegramAiSessionCallbacks.cancelCallbackData(instanceId, session.id),
+        queueSteerCallbackData: (queueId) => this.telegramAiSessionCallbacks.queueSteerCallbackData(instanceId, session.id, queueId),
+        queueDeleteMenuCallbackData: () => this.telegramAiSessionCallbacks.queueDeleteMenuCallbackData(instanceId, session.id),
         permissionCallbackData: (routeId, decision) => this.service.pendingDecisionCallbackData(routeId, decision),
         pendingApproval: pendingApprovals.get(session.id) || approvalRoute(instanceId, session),
         session,
@@ -1644,9 +1374,9 @@ export class ControlPlaneChatGatewayRuntime {
         continue;
       }
       const actions = aiSessionProgressActions({
-        cancelCallbackData: this.aiSessionCancelCallbackData(instanceId, session.id),
-        queueSteerCallbackData: (queueId) => this.aiSessionQueueSteerCallbackData(instanceId, session.id, queueId),
-        queueDeleteMenuCallbackData: () => this.aiSessionQueueDeleteMenuCallbackData(instanceId, session.id),
+        cancelCallbackData: this.telegramAiSessionCallbacks.cancelCallbackData(instanceId, session.id),
+        queueSteerCallbackData: (queueId) => this.telegramAiSessionCallbacks.queueSteerCallbackData(instanceId, session.id, queueId),
+        queueDeleteMenuCallbackData: () => this.telegramAiSessionCallbacks.queueDeleteMenuCallbackData(instanceId, session.id),
         permissionCallbackData: (routeId, decision) => this.service.pendingDecisionCallbackData(routeId, decision),
         pendingApproval: pendingApprovals.get(session.id) || approvalRoute(instanceId, session),
         session,
@@ -1819,40 +1549,6 @@ export class ControlPlaneChatGatewayRuntime {
       .map((route) => [route.aiSessionId || "", route]));
   }
 
-  private aiSessionCancelCallbackData(instanceId: string, sessionId: string) {
-    const token = crypto
-      .createHash("sha256")
-      .update(`${instanceId}\0${sessionId}`)
-      .digest("base64url")
-      .slice(0, 16);
-    this.aiSessionCancelTokens.set(token, { instanceId, sessionId });
-    return `task_handoff:cp_ai_cancel:${token}`;
-  }
-
-  private aiSessionQueueSteerCallbackData(instanceId: string, sessionId: string, queueId: string) {
-    const token = this.aiSessionQueueActionToken({ type: "steer", instanceId, sessionId, queueId });
-    return `task_handoff:cp_ai_steer:${token}`;
-  }
-
-  private aiSessionQueueDeleteMenuCallbackData(instanceId: string, sessionId: string) {
-    const token = this.aiSessionQueueActionToken({ type: "delete-menu", instanceId, sessionId });
-    return `task_handoff:cp_ai_qdel_menu:${token}`;
-  }
-
-  private aiSessionQueueDeleteItemCallbackData(instanceId: string, sessionId: string, queueId: string) {
-    const token = this.aiSessionQueueActionToken({ type: "delete-item", instanceId, sessionId, queueId });
-    return `task_handoff:cp_ai_qdel:${token}`;
-  }
-
-  private aiSessionQueueActionToken(action: AiSessionQueueTelegramAction) {
-    const token = crypto
-      .createHash("sha256")
-      .update([action.type, action.instanceId, action.sessionId, "queueId" in action ? action.queueId : ""].join("\0"))
-      .digest("base64url")
-      .slice(0, 16);
-    this.aiSessionQueueActionTokens.set(token, action);
-    return token;
-  }
 }
 
 function replyFromGatewayResult(result: unknown) {
@@ -1885,20 +1581,8 @@ function messageIdFromTelegramMessage(message: Record<string, unknown> | undefin
   return Number.isInteger(id) ? id : undefined;
 }
 
-function telegramAggregateKey(bridgeId: string, chatId: string, userId: string | undefined) {
-  return [bridgeId, chatId, userId || ""].join(":");
-}
-
 function telegramProgressMessageTargetKey(bridgeId: string, chatId: string, messageId: number) {
   return [bridgeId, chatId, String(messageId)].join(":");
-}
-
-function mergeTelegramMessageContext(current: TelegramMessageContext | undefined, next: TelegramMessageContext) {
-  return {
-    sourceMessageId: current?.sourceMessageId ?? next.sourceMessageId,
-    replyToMessageId: current?.replyToMessageId ?? next.replyToMessageId,
-    quoteText: current?.quoteText || next.quoteText,
-  };
 }
 
 function textWithTelegramQuote(text: string, quoteText: string | undefined) {
@@ -2030,26 +1714,6 @@ function routedAiSessionResult(result: ChatGatewayResult) {
 
 function routedAiSessionAction(result: ChatGatewayResult) {
   return result.aiSession && "action" in result.aiSession ? result.aiSession.action : undefined;
-}
-
-function renderPendingNotification(
-  route: { id: string; projectId: string; instanceId: string; aiSessionId?: string; kind: string; result: string; project?: { name: string }; instance?: { name: string } },
-  callbackData: (routeId: string, decision: "allow" | "deny" | "skip") => string,
-): ChatInteractionPayload {
-  const target = `${route.project?.name || route.projectId} / ${route.instance?.name || route.instanceId}`;
-  const command = route.kind === "approval" ? `/approve ${route.id}\n/deny ${route.id}\n/skip ${route.id}` : `/reply ${route.id} <message>`;
-  const text = `[${target}]\n${route.result}\n\n${command}`;
-  if (route.kind !== "approval") {
-    return { text };
-  }
-  return {
-    text,
-    replyMarkup: createInlineKeyboard([[
-      { text: "Allow", callbackData: callbackData(route.id, "allow") },
-      { text: "Skip", callbackData: callbackData(route.id, "skip") },
-      { text: "Deny", callbackData: callbackData(route.id, "deny") },
-    ]]),
-  };
 }
 
 const TELEGRAM_AI_QUEUE_BUTTON_LIMIT = 5;

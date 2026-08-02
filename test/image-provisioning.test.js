@@ -11,6 +11,7 @@ const {
 } = require("../packages/protocol/src/control-plane.ts");
 const { DockerImageService } = require("../packages/control-plane/src/node-agent/docker-images.ts");
 const { createNodeAgentApp } = require("../packages/control-plane/src/node-agent/app.ts");
+const { defaultTerminalCommandRunner } = require("../packages/control-plane/src/shared/process/terminal-command-runner.ts");
 
 const digest = (letter) => `sha256:${letter.repeat(64)}`;
 const tempDataDir = (name) => fs.mkdtempSync(path.join(os.tmpdir(), `${name}-`));
@@ -151,6 +152,47 @@ test("Docker image service single-flights concurrent pulls and permits retry aft
   assert.equal(pullCalls, 2);
   assert.deepEqual(firstPhases, ["checking-image", "pulling-image", "resolving-image"]);
   assert.deepEqual(secondPhases, ["checking-image", "pulling-image", "resolving-image"]);
+});
+
+test("Docker image service aborts the underlying pull process", async () => {
+  let pullSignal;
+  let pullExited = false;
+  const service = new DockerImageService(
+    async () => { throw new Error("missing"); },
+    async (_command, _args, options) => {
+      pullSignal = options.signal;
+      return new Promise((_resolve, reject) => {
+        options.signal.addEventListener("abort", () => {
+          setImmediate(() => {
+            pullExited = true;
+            reject(Object.assign(new Error("docker was aborted."), { code: "RUNTIME_COMMAND_ABORTED" }));
+          });
+        }, { once: true });
+      });
+    },
+  );
+  const controller = new AbortController();
+  const pulling = service.ensure("docker.io/example/app:v1", undefined, undefined, controller.signal);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(pullSignal.aborted, false);
+
+  controller.abort();
+  await assert.rejects(pulling, (error) => error.code === "RUNTIME_COMMAND_ABORTED");
+  assert.equal(pullSignal.aborted, true);
+  assert.equal(pullExited, true);
+});
+
+test("terminal command cancellation kills and reaps the child process", async () => {
+  const controller = new AbortController();
+  const startedAt = Date.now();
+  const running = defaultTerminalCommandRunner(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    signal: controller.signal,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  controller.abort();
+
+  await assert.rejects(running, (error) => error.code === "RUNTIME_COMMAND_ABORTED");
+  assert.ok(Date.now() - startedAt < 2_000);
 });
 
 test("node-agent creates immediately, provisions the image, and blocks stale worker writes after deletion", async (t) => {
