@@ -371,6 +371,20 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   });
   service.setNodeAgentTransport(nodeAgentTunnel);
   service.init();
+  let pairingRecoveryInFlight: Promise<void> | undefined;
+  let pairingRecoveryTimer: ReturnType<typeof setInterval> | undefined;
+  const recoverPendingPairings = () => {
+    if (pairingRecoveryInFlight) return pairingRecoveryInFlight;
+    const recovery = service.recoverPendingPairingRevokes().then(() => undefined);
+    pairingRecoveryInFlight = recovery;
+    void recovery.then(() => {
+      if (pairingRecoveryInFlight === recovery) pairingRecoveryInFlight = undefined;
+    }, () => {
+      if (pairingRecoveryInFlight === recovery) pairingRecoveryInFlight = undefined;
+    });
+    return recovery;
+  };
+  await recoverPendingPairings().catch((error) => app.log.warn({ error }, "pending node pairing recovery failed"));
   proxy.init();
   proxyStateSubscriber.start();
   await service.syncLocalNodeConnection().catch(() => undefined);
@@ -382,6 +396,8 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   await app.register(cookie);
   await app.register(websocket);
   app.addHook("onClose", async () => {
+    if (pairingRecoveryTimer) clearInterval(pairingRecoveryTimer);
+    await pairingRecoveryInFlight?.catch(() => undefined);
     imagePullProgress.close();
     proxyEventHub.stop();
     proxyStateSubscriber.stop();
@@ -482,6 +498,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   app.get("/api/session-streams/diagnostics", async () => ({
     data: {
       aiSessions: aiSessionAggregator.diagnostics(),
+      aiSessionActions: service.aiSessionActionDiagnostics(),
       appSessions: appSessionAggregator.diagnostics(),
       nodeConnections: nodeEventSubscriber.diagnostics(),
     },
@@ -627,6 +644,10 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
         }),
   );
 
+  pairingRecoveryTimer = setInterval(() => {
+    void recoverPendingPairings().catch((error) => app.log.warn({ error }, "pending node pairing recovery failed"));
+  }, 30_000);
+  pairingRecoveryTimer.unref();
   return app;
 }
 

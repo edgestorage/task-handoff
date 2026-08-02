@@ -158,6 +158,7 @@ export class ControlPlaneChatGatewayRuntime {
   private readonly logger: ChatGatewayLogger | undefined;
   private bridgeTimers = new Map<string, Timer>();
   private bridgePollingGenerations = new Map<string, number>();
+  private bridgePolls = new Map<string, { generation: number; promise: Promise<void> }>();
   private readonly dingdingBridges: DingdingBridgeRuntimeManager;
   private bridgeErrors = new Map<string, string>();
   private telegramOffsets = new Map<string, number>();
@@ -333,6 +334,7 @@ export class ControlPlaneChatGatewayRuntime {
       ...this.service.listChatBridges().map((bridge) => bridge.id),
       ...this.bridgePollingGenerations.keys(),
       ...this.bridgeTimers.keys(),
+      ...this.bridgePolls.keys(),
       ...this.dingdingBridges.ids(),
     ]);
     for (const id of bridgeIds) {
@@ -348,13 +350,12 @@ export class ControlPlaneChatGatewayRuntime {
   async pollBridgeNow(id: string) {
     const bridge = this.service.requireChatBridge(id);
     const generation = this.bridgePollingGeneration(id);
-    const isCurrent = () => this.bridgePollingGeneration(id) === generation;
     if (bridge.channel === "telegram") {
-      await this.pollTelegram(bridge, isCurrent);
+      await this.runBridgePoll(bridge, generation, (current, isCurrent) => this.pollTelegram(current, isCurrent));
       return this.status();
     }
     if (bridge.channel === "wechat") {
-      await this.pollWechat(bridge, isCurrent);
+      await this.runBridgePoll(bridge, generation, (current, isCurrent) => this.pollWechat(current, isCurrent));
       return this.status();
     }
     if (bridge.channel === "dingding") {
@@ -399,7 +400,7 @@ export class ControlPlaneChatGatewayRuntime {
     const isCurrent = () => this.bridgePollingGeneration(bridge.id) === generation;
     const run = (current: ChatBridgeConfig) => {
       if (!isCurrent()) return;
-      void poll(current, isCurrent).catch((error) => {
+      void this.runBridgePoll(current, generation, poll).catch((error) => {
         if (isCurrent()) this.bridgeErrors.set(bridge.id, error instanceof Error ? error.message : String(error));
       });
     };
@@ -424,6 +425,29 @@ export class ControlPlaneChatGatewayRuntime {
       run(current);
     }
     return this.status();
+  }
+
+  private runBridgePoll(
+    bridge: ChatBridgeConfig,
+    generation: number,
+    poll: (bridge: ChatBridgeConfig, isCurrent: () => boolean) => Promise<void>,
+  ) {
+    const existing = this.bridgePolls.get(bridge.id);
+    if (existing?.generation === generation) return existing.promise;
+    const run = async () => {
+      const isCurrent = () => this.bridgePollingGeneration(bridge.id) === generation;
+      if (!isCurrent()) return;
+      await poll(bridge, isCurrent);
+    };
+    // A stopped generation is isolated by isCurrent(). Do not let a hung
+    // request from that obsolete generation block a newly started bridge.
+    const promise = run();
+    this.bridgePolls.set(bridge.id, { generation, promise });
+    const cleanup = () => {
+      if (this.bridgePolls.get(bridge.id)?.promise === promise) this.bridgePolls.delete(bridge.id);
+    };
+    void promise.then(cleanup, cleanup);
+    return promise;
   }
 
   private bridgePollingGeneration(bridgeId: string) {

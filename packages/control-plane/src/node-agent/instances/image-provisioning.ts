@@ -18,6 +18,7 @@ type Options = {
   diagnostic: Diagnostic;
   warn: Diagnostic;
   publish(type: string, payload: Record<string, unknown>, instanceId: string): void;
+  runInstanceOperation?<T>(instanceId: string, operation: () => Promise<T>): Promise<T>;
 };
 
 function now() {
@@ -125,14 +126,25 @@ export class InstanceImageProvisioningController {
     generation: number,
     onReadyToStart?: () => Promise<void>,
   ) {
-    const initial = this.currentGeneration(instance.id, generation);
+    const initial = this.currentGeneration(instance.id, generation, true, instance.createdAt);
     if (!initial) return;
     let terminalSequence = 0;
     let terminalStarted = false;
+    let phaseFailure: { error: unknown } | undefined;
+    let phaseUpdates = Promise.resolve();
     try {
       const resolved = await this.images.ensure(
         initial.imageSnapshot!.requestedReference!,
-        (phase) => this.updatePhase(instance.id, generation, phase),
+        (phase) => {
+          phaseUpdates = phaseUpdates.then(async () => {
+            if (phaseFailure) return;
+            try {
+              await this.updatePhase(instance.id, generation, phase, instance.createdAt);
+            } catch (error) {
+              phaseFailure = { error };
+            }
+          });
+        },
         (output) => {
           if (this.stopped) return;
           terminalStarted = true;
@@ -141,72 +153,88 @@ export class InstanceImageProvisioningController {
         },
         this.abortController.signal,
       );
+      await phaseUpdates;
+      if (phaseFailure) throw phaseFailure.error;
       if (this.stopped) return;
       if (terminalStarted) this.publishFinished(instance, generation, terminalSequence + 1, "succeeded");
-      const current = this.currentGeneration(instance.id, generation);
-      if (!current) return;
-      this.state.controlledInstances.put(ControlledInstanceSchema.parse({
-        ...current,
-        status: current.status === "starting" ? "starting" : "created",
-        health: "unknown",
-        imageSnapshot: {
-          ...current.imageSnapshot!,
-          requestedReference: resolved.requestedReference,
-          resolvedDigest: resolved.resolvedDigest,
-          resolvedReference: resolved.resolvedReference,
-        },
-        imageProvisioning: { ...current.imageProvisioning!, phase: "ready", error: undefined, updatedAt: now() },
-        updatedAt: now(),
-      }));
-      this.options.sync();
-      this.options.diagnostic({
-        instanceId: instance.id,
-        action: "image.provision",
-        reference: resolved.requestedReference,
-        digest: resolved.resolvedDigest,
-        pulled: resolved.pulled,
-      }, "node instance image provisioning completed");
-      if (current.status === "starting") await onReadyToStart?.();
+      const commit = async () => {
+        if (this.stopped) return;
+        const current = this.currentGeneration(instance.id, generation, true, instance.createdAt);
+        if (!current) return;
+        const ready = this.state.controlledInstances.put(ControlledInstanceSchema.parse({
+          ...current,
+          status: current.status === "provisioning" ? "created" : current.status,
+          health: "unknown",
+          imageSnapshot: {
+            ...current.imageSnapshot!,
+            requestedReference: resolved.requestedReference,
+            resolvedDigest: resolved.resolvedDigest,
+            resolvedReference: resolved.resolvedReference,
+          },
+          imageProvisioning: { ...current.imageProvisioning!, phase: "ready", error: undefined, updatedAt: now() },
+          updatedAt: now(),
+        }));
+        this.options.sync();
+        this.options.diagnostic({
+          instanceId: instance.id,
+          action: "image.provision",
+          reference: resolved.requestedReference,
+          digest: resolved.resolvedDigest,
+          pulled: resolved.pulled,
+        }, "node instance image provisioning completed");
+        if (ready.status === "starting") await onReadyToStart?.();
+      };
+      await (this.options.runInstanceOperation?.(instance.id, commit) ?? commit());
     } catch (error) {
+      await phaseUpdates;
+      if (phaseFailure) error = phaseFailure.error;
       if (this.stopped) return;
       if (terminalStarted) this.publishFinished(instance, generation, terminalSequence + 1, "failed");
-      const current = this.currentGeneration(instance.id, generation, false);
-      if (!current?.imageProvisioning) return;
       const message = error instanceof Error ? error.message : String(error);
-      this.state.controlledInstances.put(ControlledInstanceSchema.parse({
-        ...current,
-        status: "failed",
-        health: "failed",
-        imageProvisioning: { ...current.imageProvisioning, phase: "failed", error: message, updatedAt: now() },
-        updatedAt: now(),
-      }));
-      this.options.sync();
-      this.options.warn({
-        instanceId: instance.id,
-        action: "image.provision",
-        reference: current.imageProvisioning.requestedReference,
-        error: message,
-      }, "node instance image provisioning failed");
+      const fail = async () => {
+        if (this.stopped) return;
+        const current = this.currentGeneration(instance.id, generation, false, instance.createdAt);
+        if (!current?.imageProvisioning || !["provisioning", "starting"].includes(current.status)) return;
+        this.state.controlledInstances.put(ControlledInstanceSchema.parse({
+          ...current,
+          status: "failed",
+          health: "failed",
+          imageProvisioning: { ...current.imageProvisioning, phase: "failed", error: message, updatedAt: now() },
+          updatedAt: now(),
+        }));
+        this.options.sync();
+        this.options.warn({
+          instanceId: instance.id,
+          action: "image.provision",
+          reference: current.imageProvisioning.requestedReference,
+          error: message,
+        }, "node instance image provisioning failed");
+      };
+      await (this.options.runInstanceOperation?.(instance.id, fail) ?? fail());
     }
   }
 
-  private currentGeneration(id: string, generation: number, requireSnapshot = true) {
+  private currentGeneration(id: string, generation: number, requireSnapshot = true, createdAt?: string) {
     const current = this.state.controlledInstances.get(id);
-    if (!current || current.imageProvisioning?.generation !== generation || (requireSnapshot && !current.imageSnapshot)) return undefined;
+    if (!current || (createdAt && current.createdAt !== createdAt) || current.imageProvisioning?.generation !== generation || (requireSnapshot && !current.imageSnapshot)) return undefined;
     return current;
   }
 
-  private updatePhase(id: string, generation: number, phase: DockerImagePhase) {
+  private async updatePhase(id: string, generation: number, phase: DockerImagePhase, createdAt?: string) {
     if (this.stopped) return;
-    const current = this.currentGeneration(id, generation);
-    if (!current) return;
-    this.state.controlledInstances.put(ControlledInstanceSchema.parse({
-      ...current,
-      status: current.status === "starting" ? "starting" : "provisioning",
-      imageProvisioning: { ...current.imageProvisioning!, phase, error: undefined, updatedAt: now() },
-      updatedAt: now(),
-    }));
-    this.options.sync();
+    const update = async () => {
+      if (this.stopped) return;
+      const current = this.currentGeneration(id, generation, true, createdAt);
+      if (!current || !["provisioning", "starting"].includes(current.status)) return;
+      this.state.controlledInstances.put(ControlledInstanceSchema.parse({
+        ...current,
+        status: current.status === "starting" ? "starting" : "provisioning",
+        imageProvisioning: { ...current.imageProvisioning!, phase, error: undefined, updatedAt: now() },
+        updatedAt: now(),
+      }));
+      this.options.sync();
+    };
+    await (this.options.runInstanceOperation?.(id, update) ?? update());
   }
 
   private eventBase(instance: ControlledInstance, generation: number) {

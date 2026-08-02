@@ -1164,6 +1164,13 @@ export const NodeAgentPairingInviteResponseSchema = z
   })
   .passthrough();
 
+export const NodeAgentPairingCompleteResultSchema = z.object({
+  nodeId: IdSchema,
+  keyId: IdSchema,
+  secret: z.string().regex(/^[A-Za-z0-9_-]{32,128}$/),
+  pairedAt: TimestampSchema,
+}).strict();
+
 export const NodeAgentControlPlanePairingSchema = z
   .object({
     id: IdSchema,
@@ -1174,6 +1181,12 @@ export const NodeAgentControlPlanePairingSchema = z
     current: z.boolean(),
   })
   .passthrough();
+
+export const NodeAgentPairingSelfRevokeResultSchema = z.object({
+  keyId: IdSchema,
+  revoked: z.literal(true),
+  revokedAt: TimestampSchema,
+}).strict();
 
 export const NodeAgentControlPlaneConnectionSchema = z
   .object({
@@ -1990,7 +2003,9 @@ export type NodeAgentExternalListenerConfig = z.infer<typeof NodeAgentExternalLi
 export type NodeAgentExternalListener = z.infer<typeof NodeAgentExternalListenerSchema>;
 export type UpdateNodeAgentExternalListener = z.infer<typeof UpdateNodeAgentExternalListenerSchema>;
 export type NodeAgentPairingInviteResponse = z.infer<typeof NodeAgentPairingInviteResponseSchema>;
+export type NodeAgentPairingCompleteResult = z.infer<typeof NodeAgentPairingCompleteResultSchema>;
 export type NodeAgentControlPlanePairing = z.infer<typeof NodeAgentControlPlanePairingSchema>;
+export type NodeAgentPairingSelfRevokeResult = z.infer<typeof NodeAgentPairingSelfRevokeResultSchema>;
 export type NodeAgentControlPlaneConnection = z.infer<typeof NodeAgentControlPlaneConnectionSchema>;
 export type NodeAgentControlPlaneConnectionCreateResult = z.infer<typeof NodeAgentControlPlaneConnectionCreateResultSchema>;
 export type NodeAgentDeleteResponse = z.infer<typeof NodeAgentDeleteResponseSchema>;

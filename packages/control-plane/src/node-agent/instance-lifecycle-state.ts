@@ -17,6 +17,8 @@ export type RuntimeLifecycleObservation = {
 
 export type InstanceLifecycleEvent =
   | { type: "start-requested" }
+  | { type: "stop-requested" }
+  | { type: "stop-failed"; baseline: ControlledInstance }
   | { type: "convergence-restart-requested" }
   | {
       type: "runtime-lifecycle-completed";
@@ -24,6 +26,7 @@ export type InstanceLifecycleEvent =
       observation: RuntimeLifecycleObservation;
     }
   | { type: "stop-completed" }
+  | { type: "runtime-exited"; error: unknown }
   | { type: "start-failed"; error: unknown };
 
 function errorMessage(error: unknown) {
@@ -36,6 +39,9 @@ function runtimeLifecycleCompleted(
   observation: RuntimeLifecycleObservation,
   observedAt: string,
 ) {
+  const supersededByTerminalLifecycle = latest.stateRevision > baseline.stateRevision
+    && ["failed", "stopping", "stopped"].includes(latest.status);
+  if (supersededByTerminalLifecycle) return latest;
   const hasFreshProcessReport = latest.stateRevision > baseline.stateRevision
     && latest.lastHeartbeatAt !== baseline.lastHeartbeatAt
     && latest.agentStatus === "online";
@@ -75,6 +81,30 @@ export function reduceInstanceLifecycle(
         ready: false,
         updatedAt: observedAt,
       });
+    case "stop-requested":
+      return ControlledInstanceSchema.parse({
+        ...current,
+        status: "stopping",
+        ready: false,
+        updatedAt: observedAt,
+      });
+    case "stop-failed":
+      if (current.status !== "stopping") return current;
+      return ControlledInstanceSchema.parse({
+        ...current,
+        status: event.baseline.status,
+        health: event.baseline.health,
+        connectionStatus: event.baseline.connectionStatus,
+        agentStatus: event.baseline.agentStatus,
+        targetStatus: event.baseline.targetStatus,
+        uiAccessStatus: event.baseline.uiAccessStatus,
+        ready: event.baseline.ready,
+        target: {
+          ...current.target,
+          status: event.baseline.target.status,
+        },
+        updatedAt: observedAt,
+      });
     case "convergence-restart-requested":
       return ControlledInstanceSchema.parse({
         ...current,
@@ -101,6 +131,7 @@ export function reduceInstanceLifecycle(
         },
         updatedAt: observedAt,
       });
+    case "runtime-exited":
     case "start-failed":
       return ControlledInstanceSchema.parse({
         ...current,

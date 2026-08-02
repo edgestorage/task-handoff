@@ -17,6 +17,7 @@ import {
   allocateLocalPort,
   waitForChildExit,
   waitForChildSpawn,
+  type LocalProcessExit,
 } from "./local-process-supervisor.ts";
 import { desiredControlledInstanceVersion } from "../runtime-version-state.ts";
 import { localRuntimeCapabilities } from "../state.ts";
@@ -78,13 +79,13 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
   private readonly commandOverride?: string[];
   private readonly lockPath?: string;
 
-  constructor(runCommand: CommandRunner, paths: NodeAgentStorePaths, nodeAgentUrl: () => string, commandOverride?: string[], lockPath?: string) {
+  constructor(runCommand: CommandRunner, paths: NodeAgentStorePaths, nodeAgentUrl: () => string, commandOverride?: string[], lockPath?: string, onUnexpectedExit?: (event: LocalProcessExit) => void | Promise<void>, onUnexpectedExitError?: (error: unknown, event: LocalProcessExit) => void) {
     this.runCommand = runCommand;
     this.paths = paths;
     this.nodeAgentUrl = nodeAgentUrl;
     this.commandOverride = commandOverride;
     this.lockPath = lockPath;
-    this.processSupervisor = new LocalProcessSupervisor(lockPath);
+    this.processSupervisor = new LocalProcessSupervisor(lockPath, onUnexpectedExit, onUnexpectedExitError);
   }
 
   async start(context: ExecutorContext): Promise<ExecutorStartResult> {
@@ -164,7 +165,6 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
       }
     });
     child.once("exit", (code, signal) => {
-      this.processSupervisor.release(context.instance.id, child);
       try {
         fs.appendFileSync(
           path.join(logDir, "controlled-instance.lifecycle.log"),
@@ -184,7 +184,7 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
           context.instance.registrationToken,
         )
       : false;
-    if (!ready) {
+    if (!ready || !this.processSupervisor.markReady(context.instance.id, child)) {
       this.processSupervisor.release(context.instance.id, child);
       if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
       await waitForChildExit(child);

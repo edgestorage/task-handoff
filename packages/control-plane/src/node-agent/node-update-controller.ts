@@ -111,16 +111,35 @@ export class NodeUpdateController {
       });
     }
     const healthUrl = process.env.TASK_HANDOFF_CONTROL_PLANE_HEALTH_URL?.trim();
-    await this.options.runCommand("systemd-run", [
-      "--unit", `task-handoff-update-${job.id}`,
-      "--collect",
-      "--property=Type=exec",
-      ...(packaged ? [worker] : [process.execPath, worker]),
-      "--job-file", this.options.jobs.records.filePath(job.id),
-      "--target-version", job.toVersion,
-      "--npm-command", npmCommand(),
-      ...(healthUrl ? ["--control-plane-health-url", healthUrl] : []),
-    ]);
+    try {
+      await this.options.runCommand("systemd-run", [
+        "--unit", `task-handoff-update-${job.id}`,
+        "--collect",
+        "--property=Type=exec",
+        ...(packaged ? [worker] : [process.execPath, worker]),
+        "--job-file", this.options.jobs.records.filePath(job.id),
+        "--target-version", job.toVersion,
+        "--npm-command", npmCommand(),
+        ...(healthUrl ? ["--control-plane-health-url", healthUrl] : []),
+      ]);
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      this.options.jobs.patch(job.id, {
+        status: "failed",
+        rollout: { ...job.rollout, phase: "failed" },
+        error: {
+          code: "NODE_UPDATE_FAILED",
+          message: `Failed to launch the node update worker: ${message}`,
+          retryable: true,
+        },
+        completedAt: new Date().toISOString(),
+      });
+      throw Object.assign(new Error(`Failed to launch the node update worker: ${message}`), {
+        statusCode: 500,
+        code: "NODE_UPDATE_WORKER_LAUNCH_FAILED",
+        cause,
+      });
+    }
     return job;
   }
 

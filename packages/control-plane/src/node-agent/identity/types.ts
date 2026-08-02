@@ -11,6 +11,7 @@ export type NodeAgentControlPlanePairing = {
   name?: string;
   secret: string;
   pairedAt: string;
+  revokedAt?: string;
   updatedAt: string;
 };
 

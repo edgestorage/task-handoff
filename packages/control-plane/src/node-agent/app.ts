@@ -39,6 +39,7 @@ import { registerRuntimeRoutes } from "./runtimes/routes.ts";
 import { registerInstanceManagementRoutes } from "./instances/routes.ts";
 import { registerInstanceLifecycleRoutes } from "./instances/lifecycle-routes.ts";
 import { InstanceImageProvisioningController } from "./instances/image-provisioning.ts";
+import { InstanceOperationGate } from "./instances/instance-operation-gate.ts";
 import {
   createInstanceProxyMetrics,
   registerInstanceProxyRoutes,
@@ -234,6 +235,10 @@ function isInstanceReportRoute(url: string) {
 
 function isPairingCompleteRoute(url: string) {
   return url.split("?")[0] === "/api/node-agent/pairing/complete";
+}
+
+function isPairingSelfRevokeRoute(url: string) {
+  return url.split("?")[0] === "/api/node-agent/pairing/current";
 }
 
 function now() {
@@ -481,6 +486,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     publishHost: "127.0.0.1",
     imageService: dockerImageService,
   });
+  let recoverySupervisor!: NodeAgentRecoverySupervisor;
   const runtimeAdapters = new RuntimeAdapterRegistry(
     new DockerRuntimeAdapter(dockerExecutor, dockerCommandRunner, platform, arch),
     new LocalhostRuntimeAdapter(
@@ -489,6 +495,11 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       () => state.localNodeAgentUrl,
       configuredLocalControlledCommand(),
       options.localControlledInstanceLockPath,
+      (event) => recoverySupervisor.handleUnexpectedLocalExit(
+        event.instanceId,
+        new Error(`Local controlled instance exited unexpectedly (pid=${event.pid ?? "unknown"}, code=${event.code ?? "none"}, signal=${event.signal ?? "none"}).`),
+      ),
+      (error, event) => app.log.error({ error, instanceId: event.instanceId, pid: event.pid }, "local controlled instance exit recovery failed"),
     ),
   );
   const updateCommandRunner = options.updateCommandRunner || options.dockerCommandRunner || defaultCommandRunner;
@@ -601,7 +612,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     diagnostic: logDiagnostic,
     warn: (data, message) => app.log.warn(data, message),
   };
-  let recoverySupervisor: NodeAgentRecoverySupervisor;
+  const instanceOperations = new InstanceOperationGate();
   const sanitizeCrossVersionInstanceReport = (instanceId: string, report: "register" | "heartbeat", input: unknown) => {
     const protocolVersion = input && typeof input === "object" && !Array.isArray(input)
       ? (input as Record<string, unknown>).protocolVersion
@@ -622,8 +633,13 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       : sanitizeCrossVersionControlledInstanceHeartbeat(input, onWarning);
   };
 
-  const startInstanceWithFailureState = async (id: string, reason: "request" | "image-ready") => {
+  const startInstanceWithFailureState = async (
+    id: string,
+    reason: "request" | "image-ready",
+    shouldContinue: () => boolean = () => true,
+  ) => {
     try {
+      if (!shouldContinue()) return state.requireInstance(id);
       let current = state.requireInstance(id);
       if (current.runtimeVersion?.phase === "failed" && usesManagedArtifact(current)) {
         current = state.controlledInstances.put(ControlledInstanceSchema.parse({
@@ -640,6 +656,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
         eventForwarder.syncNow();
         return started;
       }
+      if (!shouldContinue()) return state.requireInstance(id);
       recoverySupervisor.markRestored(id);
       let instance = state.requireInstance(id);
       if (usesManagedArtifact(instance)) {
@@ -663,6 +680,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
           }, "node instance started with failed runtime convergence");
         }
       }
+      if (!shouldContinue()) return state.requireInstance(id);
       await autoImportAgentConfig(fetchImpl, instance, "start", lifecycleLoggers);
       eventForwarder.syncNow();
       return instance;
@@ -679,11 +697,17 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     diagnostic: lifecycleLoggers.diagnostic,
     warn: lifecycleLoggers.warn,
     publish: (type, payload, instanceId) => eventForwarder.publish(type, payload, { instanceId }),
+    runInstanceOperation: (instanceId, operation) => instanceOperations.run(instanceId, operation),
   });
 
   const provisionInstanceImage = (instance: ControlledInstance) => {
+    const intent = instanceOperations.intent(instance.id);
     void imageProvisioning.provision(instance, async () => {
-      await startInstanceWithFailureState(instance.id, "image-ready").catch(() => undefined);
+      await startInstanceWithFailureState(
+        instance.id,
+        "image-ready",
+        () => instanceOperations.isIntentCurrent(instance.id, intent),
+      ).catch(() => undefined);
     });
   };
 
@@ -698,6 +722,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     usesManagedArtifact,
     warn: lifecycleLoggers.warn,
     error: (data, message) => app.log.error(data, message),
+    runInstanceOperation: (instanceId, operation) => instanceOperations.run(instanceId, operation),
   });
 
   const resolvePreflightRuntimeArtifacts = async (version: string) => {
@@ -770,6 +795,11 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   app.addHook("preHandler", async (request) => {
     const hmacKeyId = pairedHmac.verify(request);
     if (hmacKeyId) {
+      if (identity.isRevokedPairing(hmacKeyId) && !isPairingSelfRevokeRoute(request.url)) {
+        const error = new Error("The node agent pairing used for this request has been revoked.");
+        Object.assign(error, { statusCode: 401, code: "NODE_AGENT_HMAC_KEY_REVOKED" });
+        throw error;
+      }
       request.nodeAgentAuthKeyId = hmacKeyId;
       return;
     }
@@ -940,15 +970,19 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     applyLifecycle: (id, event) => state.applyInstanceLifecycle(id, event),
     context: (instance, modelEnv) => state.context(instance, modelEnv),
   }, runtimeAdapters, convergence, {
-    start: (id) => startInstanceWithFailureState(id, "request"),
+    start: (id, shouldContinue) => startInstanceWithFailureState(id, "request", shouldContinue),
     sync: () => eventForwarder.syncNow(),
     isManaged: usesManagedArtifact,
     probe: (instance) => probeInstanceEndpoint(fetchImpl, instance),
     autoImport: (instance) => autoImportAgentConfig(fetchImpl, instance, "restart", lifecycleLoggers),
     markRestarted: (id) => recoverySupervisor.markRestored(id),
+    allowRecovery: (id) => recoverySupervisor.allowRecovery(id),
+    suppressRecovery: (id) => recoverySupervisor.suppressRecovery(id),
+    forgetRecovery: (id) => recoverySupervisor.forgetInstance(id),
+    completeSuppressedRecovery: (id) => recoverySupervisor.completeSuppressedOperation(id),
     deleteMetadata: (id) => state.modelRegistry.deleteInstanceMetadata(id),
     diagnostic: logDiagnostic,
-  });
+  }, instanceOperations);
 
   registerInstanceProxyRoutes(app, {
     fetchImpl,

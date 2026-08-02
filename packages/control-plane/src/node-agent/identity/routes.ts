@@ -52,6 +52,10 @@ export function registerNodeAgentIdentityRoutes(app: FastifyInstance, options: O
     return { data: { deleted: identity.deleteControlPlanePairing(keyId, request.nodeAgentAuthKeyId) } };
   });
 
+  app.delete("/api/node-agent/pairing/current", async (request) => ({
+    data: identity.revokeCurrentControlPlanePairing(request.nodeAgentAuthKeyId || ""),
+  }));
+
   app.get("/api/node-agent/control-plane-connections", async () => ({
     data: identity.listControlPlaneConnections().map((connection) => ({
       ...connection,

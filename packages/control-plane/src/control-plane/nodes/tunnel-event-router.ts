@@ -59,7 +59,9 @@ export class NodeTunnelEventRouter {
     if (type === "node-agent.streams.hello") {
       const instanceId = typeof message.instanceId === "string" ? message.instanceId : "";
       const hello = SessionStreamsHelloSchema.safeParse(message.payload);
-      if (instanceId && hello.success) void this.options.onStreamsHello?.(instanceId, hello.data);
+      if (instanceId && hello.success) {
+        this.enqueue(nodeId, instanceId, () => this.options.onStreamsHello?.(instanceId, hello.data));
+      }
       return true;
     }
     if (!type.startsWith("node-agent.event.")) return false;
@@ -134,10 +136,14 @@ export class NodeTunnelEventRouter {
       return true;
     }
 
-    this.options.events?.publish(eventType, payload, {
-      topic: typeof event.topic === "string" ? event.topic : undefined,
-      scope: { ...scope, nodeId, instanceId: claimedInstanceId },
-    });
+    const publishUnknown = () => {
+      this.options.events?.publish(eventType, payload, {
+        topic: typeof event.topic === "string" ? event.topic : undefined,
+        scope: { ...scope, nodeId, ...(claimedInstanceId ? { instanceId: claimedInstanceId } : {}) },
+      });
+    };
+    if (claimedInstanceId) this.enqueue(nodeId, claimedInstanceId, publishUnknown);
+    else publishUnknown();
     return true;
   }
 
@@ -171,21 +177,22 @@ export class NodeTunnelEventRouter {
     };
   }
 
-  private enqueue(nodeId: string, instanceId: string, publish: () => void) {
+  private enqueue(nodeId: string, instanceId: string, publish: () => void | Promise<void>) {
     const key = scopeKey(nodeId, instanceId);
     const epoch = this.scopeEpoch(key);
     const previous = this.eventQueues.get(key) || Promise.resolve();
-    const queued = previous.then(async () => {
+    const queued = previous.catch(() => undefined).then(async () => {
       if (this.scopeEpochs.get(key) !== epoch) return;
-      if (await this.isScopeValid(nodeId, instanceId, epoch) && this.scopeEpochs.get(key) === epoch) publish();
+      if (await this.isScopeValid(nodeId, instanceId, epoch) && this.scopeEpochs.get(key) === epoch) await publish();
     });
     this.eventQueues.set(key, queued);
-    void queued.finally(() => {
+    const cleanup = () => {
       if (this.eventQueues.get(key) === queued) this.eventQueues.delete(key);
       if (this.scopeEpochs.get(key) === epoch && !this.eventQueues.has(key) && !this.validatingScopes.has(key)) {
         this.scopeEpochs.delete(key);
       }
-    });
+    };
+    void queued.then(cleanup, cleanup);
   }
 
   private async isScopeValid(nodeId: string, instanceId: string, epoch: object) {

@@ -18,6 +18,7 @@ export const StoredNodeAgentControlPlanePairingSchema = z.object({
   name: z.string().trim().min(1).max(160).optional(),
   secret: StoredSecretSchema,
   pairedAt: StoredNodeAgentDateTimeSchema,
+  revokedAt: StoredNodeAgentDateTimeSchema.optional(),
   updatedAt: StoredNodeAgentDateTimeSchema,
 }).strip();
 

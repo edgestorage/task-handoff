@@ -17,6 +17,13 @@ type LocalProcessIdentity = {
   startIdentity?: string;
 };
 
+export type LocalProcessExit = {
+  instanceId: string;
+  pid?: number;
+  code: number | null;
+  signal: NodeJS.Signals | null;
+};
+
 function processWeb(instance: ControlledInstance) {
   return instance.runtime.port ? `http://127.0.0.1:${instance.runtime.port}` : instance.target.web;
 }
@@ -177,14 +184,44 @@ export function waitForChildSpawn(child: ChildProcessWithoutNullStreams) {
 
 export class LocalProcessSupervisor {
   private readonly children = new Map<string, ChildProcessWithoutNullStreams>();
+  private readonly readyChildren = new WeakSet<ChildProcessWithoutNullStreams>();
+  private readonly expectedExits = new WeakSet<ChildProcessWithoutNullStreams>();
   private readonly lockPath?: string;
+  private readonly onUnexpectedExit?: (event: LocalProcessExit) => void | Promise<void>;
+  private readonly onUnexpectedExitError?: (error: unknown, event: LocalProcessExit) => void;
 
-  constructor(lockPath?: string) {
+  constructor(lockPath?: string, onUnexpectedExit?: (event: LocalProcessExit) => void | Promise<void>, onUnexpectedExitError?: (error: unknown, event: LocalProcessExit) => void) {
     this.lockPath = lockPath;
+    this.onUnexpectedExit = onUnexpectedExit;
+    this.onUnexpectedExitError = onUnexpectedExitError;
   }
 
   track(instanceId: string, child: ChildProcessWithoutNullStreams) {
     this.children.set(instanceId, child);
+    child.once("exit", (code, signal) => {
+      this.release(instanceId, child);
+      if (this.readyChildren.has(child) && !this.expectedExits.has(child)) {
+        const event = { instanceId, pid: child.pid, code, signal };
+        const reportError = (error: unknown) => {
+          try {
+            this.onUnexpectedExitError?.(error, event);
+          } catch {
+            // Process exit diagnostics must not escape EventEmitter dispatch.
+          }
+        };
+        try {
+          void Promise.resolve(this.onUnexpectedExit?.(event)).catch(reportError);
+        } catch (error) {
+          reportError(error);
+        }
+      }
+    });
+  }
+
+  markReady(instanceId: string, child: ChildProcessWithoutNullStreams) {
+    if (this.children.get(instanceId) !== child || child.exitCode !== null || child.signalCode !== null) return false;
+    this.readyChildren.add(child);
+    return true;
   }
 
   release(instanceId: string, child: ChildProcessWithoutNullStreams) {
@@ -193,8 +230,9 @@ export class LocalProcessSupervisor {
 
   async stop(instance: ControlledInstance) {
     const child = this.children.get(instance.id);
-    if (child && !child.killed) {
-      child.kill("SIGTERM");
+    if (child) {
+      this.expectedExits.add(child);
+      if (!child.killed) child.kill("SIGTERM");
       this.children.delete(instance.id);
       await waitForChildExit(child);
       return;
@@ -246,6 +284,7 @@ export class LocalProcessSupervisor {
   async stopAll() {
     const children = Array.from(this.children.values());
     for (const child of children) {
+      this.expectedExits.add(child);
       if (!child.killed) child.kill("SIGTERM");
     }
     this.children.clear();

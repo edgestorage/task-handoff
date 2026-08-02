@@ -218,3 +218,137 @@ test("stopping the runtime isolates an explicitly requested in-flight poll", asy
   assert.deepEqual(updates, []);
   assert.deepEqual(routed, []);
 });
+
+test("WeChat interval, immediate, and manual polls share one cursor flight", async (t) => {
+  const releases = [];
+  const fetchCursors = [];
+  const routed = [];
+  const currentBridge = {
+    id: "bridge_wechat_single_flight",
+    channel: "wechat",
+    name: "wechat bridge",
+    enabled: true,
+    token: "secret-token",
+    tokenSet: true,
+    defaultChatId: "chat_a",
+    pollIntervalMs: 5,
+    allowedUserIds: [],
+    settings: { updatesBuf: "cursor-before" },
+  };
+  const service = {
+    listChatBridges: () => [currentBridge],
+    requireChatBridge: () => currentBridge,
+    updateChatBridge: () => currentBridge,
+    listChatSessions: () => [],
+    listPendingRoutes: async () => [],
+    handleChatGatewayMessage: async (input) => { routed.push(input); return {}; },
+    handleChatGatewayAction: async () => ({}),
+    resolveChatActionToken: () => { throw new Error("unused"); },
+    pendingDecisionCallbackData: () => "unused",
+    listAiSessions: async () => ({ instances: [] }),
+    boardAsync: async () => [],
+    aiSessionQueue: async () => ({ items: [] }),
+    steerAiSessionQueuedMessage: async () => ({}),
+    removeAiSessionQueuedMessage: async () => ({}),
+    interruptAiSession: async () => ({}),
+  };
+  const runtime = new ControlPlaneChatGatewayRuntime(service, async (_url, init) => {
+    fetchCursors.push(JSON.parse(String(init.body)).get_updates_buf);
+    return new Promise((resolve) => { releases.push(resolve); });
+  });
+  t.after(() => runtime.stopAll());
+
+  runtime.startBridge(currentBridge.id);
+  const manual = runtime.pollBridgeNow(currentBridge.id);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(fetchCursors, ["cursor-before"]);
+  assert.equal(releases.length, 1);
+
+  releases[0](new Response(JSON.stringify({
+    errcode: 0,
+    get_updates_buf: "cursor-after",
+    msgs: [{
+      message_type: 1,
+      from_user_id: "chat_a",
+      context_token: "context-next",
+      item_list: [{ type: 1, text_item: { text: "hello once" } }],
+    }],
+  }), { status: 200, headers: { "content-type": "application/json" } }));
+  await manual;
+  runtime.stopBridge(currentBridge.id);
+
+  assert.equal(routed.length, 1);
+  assert.equal(routed[0].message.text, "hello once");
+});
+
+test("a restarted WeChat bridge is not blocked by a hung obsolete poll", async (t) => {
+  const releases = [];
+  const fetchCursors = [];
+  const updates = [];
+  const routed = [];
+  const currentBridge = {
+    id: "bridge_wechat_restart",
+    channel: "wechat",
+    name: "wechat restart bridge",
+    enabled: true,
+    token: "secret-token",
+    tokenSet: true,
+    defaultChatId: "chat_a",
+    pollIntervalMs: 60_000,
+    allowedUserIds: [],
+    settings: { updatesBuf: "cursor-before" },
+  };
+  const service = {
+    listChatBridges: () => [currentBridge],
+    requireChatBridge: () => currentBridge,
+    updateChatBridge: (_id, input) => { updates.push(input); return currentBridge; },
+    listChatSessions: () => [],
+    listPendingRoutes: async () => [],
+    handleChatGatewayMessage: async (input) => { routed.push(input); return {}; },
+    handleChatGatewayAction: async () => ({}),
+    resolveChatActionToken: () => { throw new Error("unused"); },
+    pendingDecisionCallbackData: () => "unused",
+    listAiSessions: async () => ({ instances: [] }),
+    boardAsync: async () => [],
+    aiSessionQueue: async () => ({ items: [] }),
+    steerAiSessionQueuedMessage: async () => ({}),
+    removeAiSessionQueuedMessage: async () => ({}),
+    interruptAiSession: async () => ({}),
+  };
+  const runtime = new ControlPlaneChatGatewayRuntime(service, async (_url, init) => {
+    fetchCursors.push(JSON.parse(String(init.body)).get_updates_buf);
+    return new Promise((resolve) => { releases.push(resolve); });
+  });
+  t.after(() => runtime.stopAll());
+
+  runtime.startBridge(currentBridge.id);
+  runtime.stopBridge(currentBridge.id);
+  runtime.startBridge(currentBridge.id);
+  assert.deepEqual(fetchCursors, ["cursor-before", "cursor-before"]);
+
+  releases[1](new Response(JSON.stringify({
+    errcode: 0,
+    get_updates_buf: "cursor-current",
+    msgs: [{
+      message_type: 1,
+      from_user_id: "chat_a",
+      context_token: "context-current",
+      item_list: [{ type: 1, text_item: { text: "current message" } }],
+    }],
+  }), { status: 200, headers: { "content-type": "application/json" } }));
+  await new Promise((resolve) => setImmediate(() => setImmediate(resolve)));
+  releases[0](new Response(JSON.stringify({
+    errcode: 0,
+    get_updates_buf: "cursor-obsolete",
+    msgs: [{
+      message_type: 1,
+      from_user_id: "chat_a",
+      context_token: "context-obsolete",
+      item_list: [{ type: 1, text_item: { text: "obsolete message" } }],
+    }],
+  }), { status: 200, headers: { "content-type": "application/json" } }));
+  await new Promise((resolve) => setImmediate(() => setImmediate(resolve)));
+
+  assert.deepEqual(updates, [{ settings: { updatesBuf: "cursor-current" } }]);
+  assert.deepEqual(routed.map((entry) => entry.message.text), ["current message"]);
+});

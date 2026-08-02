@@ -134,3 +134,97 @@ test("start failure has one canonical offline state transition", () => {
   assert.equal(reduced.ready, false);
   assert.equal(reduced.workspace.error, "launcher failed");
 });
+
+test("unexpected runtime exit uses the canonical failed offline transition", () => {
+  const current = instance({
+    status: "running",
+    health: "ok",
+    connectionStatus: "online",
+    agentStatus: "online",
+    ready: true,
+  });
+  const reduced = reduceInstanceLifecycle(current, {
+    type: "runtime-exited",
+    error: new Error("process exited with code 17"),
+  });
+
+  assert.equal(reduced.status, "failed");
+  assert.equal(reduced.health, "failed");
+  assert.equal(reduced.connectionStatus, "offline");
+  assert.equal(reduced.agentStatus, "offline");
+  assert.equal(reduced.ready, false);
+  assert.equal(reduced.workspace.error, "process exited with code 17");
+});
+
+test("stop request persists stopping intent before asynchronous shutdown", () => {
+  const reduced = reduceInstanceLifecycle(instance({ status: "running", ready: true }), {
+    type: "stop-requested",
+  });
+  assert.equal(reduced.status, "stopping");
+  assert.equal(reduced.ready, false);
+});
+
+test("stop failure restores lifecycle-owned state from the pre-stop generation", () => {
+  const baseline = instance({
+    status: "running",
+    health: "ok",
+    connectionStatus: "online",
+    agentStatus: "online",
+    targetStatus: "reachable",
+    uiAccessStatus: "reachable",
+    ready: true,
+    target: { strategy: "direct-port", status: "reachable", web: "http://127.0.0.1:32000" },
+  });
+  const stopping = reduceInstanceLifecycle(baseline, { type: "stop-requested" });
+  const reduced = reduceInstanceLifecycle(stopping, { type: "stop-failed", baseline });
+
+  assert.equal(reduced.status, "running");
+  assert.equal(reduced.health, "ok");
+  assert.equal(reduced.connectionStatus, "online");
+  assert.equal(reduced.agentStatus, "online");
+  assert.equal(reduced.ready, true);
+  assert.equal(reduced.target.status, "reachable");
+});
+
+test("stop failure preserves a newer authoritative lifecycle report", () => {
+  const baseline = instance({ status: "running", health: "ok", ready: true, stateRevision: 4 });
+  const newer = instance({
+    status: "running",
+    health: "degraded",
+    connectionStatus: "online",
+    agentStatus: "online",
+    ready: true,
+    stateRevision: 6,
+    lastHeartbeatAt: "2026-07-28T00:00:03.000Z",
+  });
+  const reduced = reduceInstanceLifecycle(newer, { type: "stop-failed", baseline });
+  assert.equal(reduced, newer);
+  assert.equal(reduced.health, "degraded");
+});
+
+test("a newer runtime exit generation invalidates an older start completion", () => {
+  const baseline = instance({ status: "starting", stateRevision: 4 });
+  const exited = instance({
+    status: "failed",
+    health: "failed",
+    connectionStatus: "offline",
+    agentStatus: "offline",
+    ready: false,
+    stateRevision: 5,
+    workspace: { status: "pending", error: "child exited" },
+  });
+  const reduced = reduceInstanceLifecycle(exited, {
+    type: "runtime-lifecycle-completed",
+    baseline,
+    observation: {
+      status: "registering",
+      connectionStatus: "online",
+      runtime: { pid: 4242 },
+    },
+  });
+
+  assert.equal(reduced.status, "failed");
+  assert.equal(reduced.connectionStatus, "offline");
+  assert.equal(reduced.workspace.error, "child exited");
+  assert.equal(reduced.runtime.pid, undefined);
+});

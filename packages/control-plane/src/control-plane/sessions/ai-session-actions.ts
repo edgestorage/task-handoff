@@ -27,10 +27,13 @@ type AiSessionActionServiceOptions = {
   request: (instance: ControlledInstance, route: string, init?: RequestInit) => Promise<unknown>;
   requireRuntime: (nodeId: string, runtimeId: string) => Promise<NodeRuntime>;
   refreshSnapshots: () => Promise<unknown>;
+  warn?: (data: Record<string, unknown>, message: string) => void;
 };
 
 export class AiSessionActionService {
   private readonly options: AiSessionActionServiceOptions;
+  private resumeSnapshotRefreshFailures = 0;
+  private lastResumeSnapshotRefreshFailure: { instanceId: string; aiSessionId: string; code: string; message: string; occurredAt: string } | undefined;
 
   constructor(options: AiSessionActionServiceOptions) {
     this.options = options;
@@ -50,8 +53,36 @@ export class AiSessionActionService {
 
   async resume(instanceId: string, aiSessionId: string): Promise<AiSessionResumeResult> {
     const result = AiSessionResumeResultSchema.parse(await this.post(instanceId, sessionRoute(aiSessionId, "resume"), {}));
-    await this.options.refreshSnapshots();
+    await this.refreshAfterCommittedResume(instanceId, aiSessionId);
     return result;
+  }
+
+  private async refreshAfterCommittedResume(instanceId: string, aiSessionId: string) {
+    try {
+      await this.options.refreshSnapshots();
+    } catch (error) {
+      const failure = {
+        instanceId,
+        aiSessionId,
+        code: errorCode(error),
+        message: errorMessage(error),
+        occurredAt: new Date().toISOString(),
+      };
+      this.resumeSnapshotRefreshFailures += 1;
+      this.lastResumeSnapshotRefreshFailure = failure;
+      try {
+        this.options.warn?.(failure, "AI session resumed but snapshot refresh failed");
+      } catch {
+        // Diagnostics must never turn an already committed remote resume into an API failure.
+      }
+    }
+  }
+
+  diagnostics() {
+    return {
+      resumeSnapshotRefreshFailures: this.resumeSnapshotRefreshFailures,
+      lastResumeSnapshotRefreshFailure: this.lastResumeSnapshotRefreshFailure,
+    };
   }
 
   async sendMessage(
@@ -129,6 +160,16 @@ export class AiSessionActionService {
       body: JSON.stringify(body),
     });
   }
+}
+
+function errorCode(error: unknown) {
+  return error && typeof error === "object" && "code" in error && typeof error.code === "string"
+    ? error.code
+    : "AI_SESSION_SNAPSHOT_REFRESH_FAILED";
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function sessionRoute(sessionId: string, suffix: string) {

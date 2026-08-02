@@ -69,7 +69,7 @@ import { NodeAgentTransportResolver } from "../nodes/transport-resolver.ts";
 import { ControlPlaneProxyNodeAgentTransport } from "../nodes/control-plane-proxy-transport.ts";
 import { ControlPlaneProxyPrivateStore, controlPlaneProxyPrivateStorePaths } from "../nodes/control-plane-proxy-private-store.ts";
 import { ControlPlaneProxyLifecycle } from "../nodes/proxy-lifecycle.ts";
-import { NodeConnectionManager } from "../nodes/connection-manager.ts";
+import { NodeConnectionManager, PendingPairingRevokeSchema, type PendingPairingRevoke } from "../nodes/connection-manager.ts";
 import { NodeJoinInviteSchema, NodeJoinService, type NodeJoinInvite } from "../nodes/join-service.ts";
 import { ControlPlaneModelService } from "../models/service.ts";
 import { ControlledInstanceGateway } from "../instances/gateway.ts";
@@ -153,6 +153,7 @@ export class ControlPlaneService {
   private readonly modelService: ControlPlaneModelService;
   private readonly images: JsonCollection<CustomImageProfile>;
   readonly nodes: JsonCollection<Node>;
+  private readonly pendingPairingRevokes: JsonCollection<PendingPairingRevoke>;
   readonly chatSessions: JsonCollection<ChatSessionBinding>;
   readonly chatBridges: JsonCollection<ChatBridgeConfig>;
   readonly triggers: JsonCollection<ControlPlaneTriggerRecord>;
@@ -218,6 +219,7 @@ export class ControlPlaneService {
         this.listAppSessions({ refresh: true }),
         this.listAiSessions({ refresh: true }),
       ]),
+      warn: (data, message) => this.logWarn(data, message),
     });
     const storeOptions = <T,>(schema: z.ZodType<T>) => ({
       schema,
@@ -239,6 +241,7 @@ export class ControlPlaneService {
       ...storeOptions(NodeSchema),
       sanitize: (value) => sanitizeStoredNode(value, (warning) => this.logWarn(warning, "unknown stored node field was ignored")),
     });
+    this.pendingPairingRevokes = new JsonCollection(paths.pendingPairingRevokesDir, storeOptions(PendingPairingRevokeSchema));
     this.proxyLifecycle = new ControlPlaneProxyLifecycle({
       nodes: this.nodes,
       privateStore: this.proxyPrivateStore,
@@ -248,6 +251,7 @@ export class ControlPlaneService {
     });
     this.nodeConnectionManager = new NodeConnectionManager({
       nodes: this.nodes,
+      pendingPairingRevokes: this.pendingPairingRevokes,
       fetchImpl: this.fetchImpl,
       localNodeLabel: CONTROL_PLANE_LOCAL_NODE_LABEL,
       builtinNodeLabel: CONTROL_PLANE_BUILTIN_NODE_LABEL,
@@ -368,6 +372,7 @@ export class ControlPlaneService {
     this.models.init();
     this.images.init();
     this.nodes.init();
+    this.pendingPairingRevokes.init();
     this.chatSessions.init();
     this.chatBridges.init();
     this.triggers.init();
@@ -474,6 +479,10 @@ export class ControlPlaneService {
 
   syncLocalNodeConnection() {
     return this.nodeConnectionManager.syncLocal();
+  }
+
+  recoverPendingPairingRevokes() {
+    return this.nodeConnectionManager.recoverPendingPairingRevokes();
   }
 
   listModels() {
@@ -1175,6 +1184,10 @@ export class ControlPlaneService {
 
   resumeAiSession(instanceId: string, aiSessionId: string) {
     return this.aiSessionActionService.resume(instanceId, aiSessionId);
+  }
+
+  aiSessionActionDiagnostics() {
+    return this.aiSessionActionService.diagnostics();
   }
 
   async launchAppSession(instanceId: string, appId = "terminal-tty", options: Record<string, unknown> = {}) {

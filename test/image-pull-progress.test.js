@@ -179,3 +179,168 @@ test("reverse tunnel invalidation isolates in-flight validation and queued event
     scopeEpochs: 0,
   });
 });
+
+test("reverse tunnel validates and orders stream hello with instance events", async () => {
+  const events = new ControlPlaneEventBus();
+  const observed = [];
+  events.on((event) => observed.push(`event:${event.payload.sequence}`));
+  let releaseValidation;
+  const validation = new Promise((resolve) => { releaseValidation = resolve; });
+  const tunnel = new ControlPlaneNodeAgentTunnelTransport(events, {
+    validateInstanceScope: () => validation,
+    onStreamsHello: async (instanceId) => {
+      observed.push(`hello:${instanceId}`);
+      await new Promise((resolve) => setImmediate(resolve));
+    },
+  });
+
+  tunnel.handleMessage("node_pull", {
+    type: "node-agent.streams.hello",
+    instanceId: "inst_pull_progress",
+    payload: { protocolVersion: 1, streams: [] },
+  });
+  tunnel.handleMessage("node_pull", {
+    type: "node-agent.event.forwarded",
+    event: {
+      type: ImagePullTerminalEventType.Output,
+      topic: "instances",
+      payload: output(4000, "ordered\r\n"),
+      scope: { instanceId: "inst_pull_progress" },
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(observed, []);
+
+  releaseValidation(true);
+  await new Promise((resolve) => setImmediate(() => setImmediate(() => setImmediate(resolve))));
+  assert.deepEqual(observed, ["hello:inst_pull_progress", "event:4000"]);
+});
+
+test("reverse tunnel invalidation drops an unvalidated stream hello", async () => {
+  let releaseValidation;
+  const validation = new Promise((resolve) => { releaseValidation = resolve; });
+  const hellos = [];
+  const tunnel = new ControlPlaneNodeAgentTunnelTransport(undefined, {
+    validateInstanceScope: () => validation,
+    onStreamsHello: (instanceId) => { hellos.push(instanceId); },
+  });
+
+  tunnel.handleMessage("node_unowned", {
+    type: "node-agent.streams.hello",
+    instanceId: "inst_owned_elsewhere",
+    payload: { protocolVersion: 1, streams: [] },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  tunnel.invalidateInstanceScope({ nodeId: "node_unowned", instanceId: "inst_owned_elsewhere" });
+  releaseValidation(true);
+  await new Promise((resolve) => setImmediate(() => setImmediate(resolve)));
+
+  assert.deepEqual(hellos, []);
+  assert.deepEqual(tunnel.instanceScopeDiagnostics(), {
+    validatedScopes: 0,
+    validatingScopes: 0,
+    queuedScopes: 0,
+    scopeEpochs: 0,
+  });
+});
+
+test("reverse tunnel rejects a stream hello for an instance the node does not own", async () => {
+  const hellos = [];
+  const tunnel = new ControlPlaneNodeAgentTunnelTransport(undefined, {
+    validateInstanceScope: async () => false,
+    onStreamsHello: (instanceId) => { hellos.push(instanceId); },
+  });
+  tunnel.handleMessage("node_unowned", {
+    type: "node-agent.streams.hello",
+    instanceId: "inst_owned_elsewhere",
+    payload: { protocolVersion: 1, streams: [] },
+  });
+  await new Promise((resolve) => setImmediate(() => setImmediate(resolve)));
+  assert.deepEqual(hellos, []);
+});
+
+test("a rejected stream hello callback does not poison later instance events", async () => {
+  const events = new ControlPlaneEventBus();
+  const published = [];
+  events.on((event) => published.push(event));
+  const tunnel = new ControlPlaneNodeAgentTunnelTransport(events, {
+    validateInstanceScope: async () => true,
+    onStreamsHello: async () => { throw new Error("aggregator unavailable"); },
+  });
+
+  tunnel.handleMessage("node_pull", {
+    type: "node-agent.streams.hello",
+    instanceId: "inst_pull_progress",
+    payload: { protocolVersion: 1, streams: [] },
+  });
+  tunnel.handleMessage("node_pull", {
+    type: "node-agent.event.forwarded",
+    event: {
+      type: ImagePullTerminalEventType.Output,
+      topic: "instances",
+      payload: output(5000, "after rejected hello\r\n"),
+      scope: { instanceId: "inst_pull_progress" },
+    },
+  });
+  await new Promise((resolve) => setImmediate(() => setImmediate(() => setImmediate(resolve))));
+
+  assert.deepEqual(published.map((event) => event.payload.sequence), [5000]);
+  assert.deepEqual(tunnel.instanceScopeDiagnostics(), {
+    validatedScopes: 1,
+    validatingScopes: 0,
+    queuedScopes: 0,
+    scopeEpochs: 0,
+  });
+});
+
+test("unknown forwarded instance events share hello ownership and ordering", async (t) => {
+  await t.test("owned custom event stays behind hello", async () => {
+    const events = new ControlPlaneEventBus();
+    const observed = [];
+    events.on((event) => observed.push(`event:${event.type}`));
+    let releaseValidation;
+    const validation = new Promise((resolve) => { releaseValidation = resolve; });
+    const tunnel = new ControlPlaneNodeAgentTunnelTransport(events, {
+      validateInstanceScope: () => validation,
+      onStreamsHello: (instanceId) => { observed.push(`hello:${instanceId}`); },
+    });
+    tunnel.handleMessage("node_custom", {
+      type: "node-agent.streams.hello",
+      instanceId: "inst_custom",
+      payload: { protocolVersion: 1, streams: [] },
+    });
+    tunnel.handleMessage("node_custom", {
+      type: "node-agent.event.forwarded",
+      event: {
+        type: "custom.instance.changed",
+        topic: "instances",
+        payload: { value: 1 },
+        scope: { instanceId: "inst_custom" },
+      },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(observed, []);
+    releaseValidation(true);
+    await new Promise((resolve) => setImmediate(() => setImmediate(resolve)));
+    assert.deepEqual(observed, ["hello:inst_custom", "event:custom.instance.changed"]);
+  });
+
+  await t.test("unowned custom event is rejected", async () => {
+    const events = new ControlPlaneEventBus();
+    const published = [];
+    events.on((event) => published.push(event));
+    const tunnel = new ControlPlaneNodeAgentTunnelTransport(events, {
+      validateInstanceScope: async () => false,
+    });
+    tunnel.handleMessage("node_custom", {
+      type: "node-agent.event.forwarded",
+      event: {
+        type: "custom.instance.changed",
+        payload: { value: 1 },
+        scope: { instanceId: "inst_owned_elsewhere" },
+      },
+    });
+    await new Promise((resolve) => setImmediate(() => setImmediate(resolve)));
+    assert.deepEqual(published, []);
+  });
+});

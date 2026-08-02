@@ -42,7 +42,8 @@ export class NodeAgentPairedHmacVerifier {
   verify(request: { method: string; url: string; headers: Record<string, unknown>; body: unknown }) {
     const headers = hmacHeadersFromRecord(request.headers);
     if (!headers.nodeId && !headers.signature) return false;
-    const remoteSecrets = this.identity.remoteSecrets(this.overrideSecret, this.overrideKeyId);
+    const selfRevoke = request.method === "DELETE" && request.url.split("?")[0] === "/api/node-agent/pairing/current";
+    const remoteSecrets = this.identity.remoteSecrets(this.overrideSecret, this.overrideKeyId, selfRevoke);
     if (!remoteSecrets.length) return false;
     if (headers.nodeId !== this.nodeId) {
       throw Object.assign(new Error("Invalid node agent HMAC node id."), { statusCode: 401, code: "NODE_AGENT_HMAC_NODE_MISMATCH" });

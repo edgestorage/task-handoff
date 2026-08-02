@@ -25,6 +25,11 @@ type Options = {
   warn: Logger;
   error: Logger;
   intervalMs?: number;
+  retryBaseDelayMs?: number;
+  retryMaxDelayMs?: number;
+  crashStableWindowMs?: number;
+  nowMs?: () => number;
+  runInstanceOperation?<T>(instanceId: string, operation: () => Promise<T>): Promise<T>;
 };
 
 function now() {
@@ -47,9 +52,15 @@ function resumableLocalShutdownState(instance: ControlledInstance) {
 export class NodeAgentRecoverySupervisor {
   private readonly options: Options;
   private readonly restoredInstances = new Set<string>();
-  private readonly restoreErrors = new Map<string, string>();
+  private readonly restoreErrors = new Map<string, { message: string; attempt: number; nextAttemptAt: number }>();
+  private readonly unexpectedExitRetries = new Map<string, { attempt: number; lastExitAt: number }>();
+  private readonly suppressedInstances = new Set<string>();
+  private readonly pendingUnexpectedExits = new Map<string, unknown>();
+  private readonly activeRestores = new Map<string, Promise<unknown>>();
   private timer?: ReturnType<typeof setTimeout>;
   private activeCycle?: Promise<void>;
+  private cycleRequested = false;
+  private cycleRequestDelayMs?: number;
   private started = false;
   private stopped = false;
 
@@ -58,8 +69,71 @@ export class NodeAgentRecoverySupervisor {
   }
 
   markRestored(id: string) {
+    const status = this.options.state.requireInstance(id).status;
+    if (["failed", "stopping", "stopped"].includes(status)) return false;
     this.restoredInstances.add(id);
     this.restoreErrors.delete(id);
+    return true;
+  }
+
+  allowRecovery(id: string) {
+    this.suppressedInstances.delete(id);
+    const pendingExit = this.pendingUnexpectedExits.get(id);
+    if (pendingExit !== undefined) {
+      this.pendingUnexpectedExits.delete(id);
+      this.applyUnexpectedLocalExit(id, pendingExit);
+    }
+  }
+
+  completeSuppressedOperation(id: string) {
+    this.pendingUnexpectedExits.delete(id);
+    this.restoredInstances.delete(id);
+    this.restoreErrors.delete(id);
+    this.unexpectedExitRetries.delete(id);
+  }
+
+  forgetInstance(id: string) {
+    this.restoredInstances.delete(id);
+    this.restoreErrors.delete(id);
+    this.unexpectedExitRetries.delete(id);
+    this.suppressedInstances.delete(id);
+    this.activeRestores.delete(id);
+    this.pendingUnexpectedExits.delete(id);
+  }
+
+  async suppressRecovery(id: string) {
+    this.suppressedInstances.add(id);
+    await this.activeRestores.get(id)?.catch(() => undefined);
+  }
+
+  handleUnexpectedLocalExit(instanceId: string, error: unknown) {
+    if (this.stopped) return;
+    if (this.suppressedInstances.has(instanceId)) {
+      this.pendingUnexpectedExits.set(instanceId, error);
+      return;
+    }
+    this.applyUnexpectedLocalExit(instanceId, error);
+  }
+
+  private applyUnexpectedLocalExit(instanceId: string, error: unknown) {
+    const instance = this.options.state.requireInstance(instanceId);
+    if (this.options.state.requireRuntime(instance.runtimeId).type !== "local") return;
+    this.restoredInstances.delete(instanceId);
+    const timestamp = this.options.nowMs?.() ?? Date.now();
+    const previous = this.unexpectedExitRetries.get(instanceId);
+    const stableWindow = this.options.crashStableWindowMs ?? 30_000;
+    const attempt = previous && timestamp - previous.lastExitAt < stableWindow
+      ? previous.attempt + 1
+      : 1;
+    this.unexpectedExitRetries.set(instanceId, { attempt, lastExitAt: timestamp });
+    const base = this.options.retryBaseDelayMs ?? 1_000;
+    const delay = attempt === 1
+      ? 0
+      : Math.min(this.options.retryMaxDelayMs ?? 30_000, base * (2 ** Math.min(attempt - 2, 10)));
+    const message = error instanceof Error ? error.message : String(error);
+    this.restoreErrors.set(instanceId, { message, attempt, nextAttemptAt: timestamp + delay });
+    this.options.state.applyInstanceLifecycle(instanceId, { type: "runtime-exited", error });
+    this.requestCycle(delay);
   }
 
   async restoreManagedInstances() {
@@ -79,38 +153,80 @@ export class NodeAgentRecoverySupervisor {
 
     const candidates = state.listInstances().filter((instance) => {
       if (this.restoredInstances.has(instance.id)) return false;
+      if (this.suppressedInstances.has(instance.id)) return false;
       const runtime = state.requireRuntime(instance.runtimeId);
-      if (runtime.type === "local") return RESTORABLE_INSTANCE_STATUSES.has(instance.status);
+      if (runtime.type === "local") {
+        const retry = this.restoreErrors.get(instance.id);
+        return (RESTORABLE_INSTANCE_STATUSES.has(instance.status) || instance.status === "failed")
+          && (!retry || retry.nextAttemptAt <= (this.options.nowMs?.() ?? Date.now()));
+      }
       if (runtime.type !== "docker") return false;
       return RESTORABLE_INSTANCE_STATUSES.has(instance.status)
         || (instance.status === "provisioning" && instance.imageProvisioning?.phase === "ready");
     });
 
-    for (const instance of candidates) {
+    await Promise.all(candidates.map(async (instance) => {
       if (this.stopped) return;
-      try {
-        await this.options.restoreInstance(instance.id);
+      const restore = async () => {
         if (this.stopped) return;
-        await this.options.autoImport(state.requireInstance(instance.id));
-        if (this.stopped) return;
-        this.markRestored(instance.id);
-      } catch (error) {
-        if (this.stopped) return;
-        if (state.requireRuntime(instance.runtimeId).type === "local") {
-          state.applyInstanceLifecycle(instance.id, { type: "start-failed", error });
+        const current = state.listInstances().find((candidate) => candidate.id === instance.id);
+        if (!current) return;
+        if (!this.isRestoreCandidate(current)) return;
+        const retryAtStart = this.restoreErrors.get(current.id);
+        try {
+          const restoring = this.options.restoreInstance(current.id);
+          this.activeRestores.set(current.id, restoring);
+          try {
+            await restoring;
+          } finally {
+            if (this.activeRestores.get(current.id) === restoring) this.activeRestores.delete(current.id);
+          }
+          if (this.stopped || this.suppressedInstances.has(current.id)) return;
+          await this.options.autoImport(state.requireInstance(current.id));
+          if (this.stopped || this.suppressedInstances.has(current.id)) return;
+          if (this.restoreErrors.get(current.id) !== retryAtStart) return;
+          if (!this.markRestored(current.id)) {
+            throw new Error(`Restored instance ${current.id} did not reach a recoverable running state.`);
+          }
+        } catch (error) {
+          if (this.stopped || this.suppressedInstances.has(current.id)) return;
+          if (state.requireRuntime(current.runtimeId).type === "local") {
+            state.applyInstanceLifecycle(current.id, { type: "start-failed", error });
+          }
+          const message = error instanceof Error ? error.message : String(error);
+          const previous = this.restoreErrors.get(current.id);
+          const attempt = (previous?.attempt ?? 0) + 1;
+          const base = this.options.retryBaseDelayMs ?? 1_000;
+          const delay = Math.min(this.options.retryMaxDelayMs ?? 30_000, base * (2 ** Math.min(attempt - 1, 10)));
+          const nextAttemptAt = (this.options.nowMs?.() ?? Date.now()) + delay;
+          this.restoreErrors.set(current.id, { message, attempt, nextAttemptAt });
+          if (previous?.message !== message || previous.attempt !== attempt) {
+            this.options.warn({
+              instanceId: current.id,
+              action: "restore",
+              runtimeId: current.runtimeId,
+              error: message,
+              attempt,
+              nextAttemptAt: new Date(nextAttemptAt).toISOString(),
+            }, "node instance restore failed; recovery will retry");
+          }
         }
-        const message = error instanceof Error ? error.message : String(error);
-        if (this.restoreErrors.get(instance.id) !== message) {
-          this.restoreErrors.set(instance.id, message);
-          this.options.warn({
-            instanceId: instance.id,
-            action: "restore",
-            runtimeId: instance.runtimeId,
-            error: message,
-          }, "node instance restore failed; recovery will retry");
-        }
-      }
+      };
+      await (this.options.runInstanceOperation?.(instance.id, restore) ?? restore());
+    }));
+  }
+
+  private isRestoreCandidate(instance: ControlledInstance) {
+    if (this.restoredInstances.has(instance.id) || this.suppressedInstances.has(instance.id)) return false;
+    const runtime = this.options.state.requireRuntime(instance.runtimeId);
+    if (runtime.type === "local") {
+      const retry = this.restoreErrors.get(instance.id);
+      return (RESTORABLE_INSTANCE_STATUSES.has(instance.status) || instance.status === "failed")
+        && (!retry || retry.nextAttemptAt <= (this.options.nowMs?.() ?? Date.now()));
     }
+    if (runtime.type !== "docker") return false;
+    return RESTORABLE_INSTANCE_STATUSES.has(instance.status)
+      || (instance.status === "provisioning" && instance.imageProvisioning?.phase === "ready");
   }
 
   async recoverManagedInstances() {
@@ -171,16 +287,52 @@ export class NodeAgentRecoverySupervisor {
     this.activeCycle = cycle;
     void cycle.finally(() => {
       if (this.activeCycle === cycle) this.activeCycle = undefined;
-      this.scheduleNext();
+      if (this.cycleRequested) {
+        this.cycleRequested = false;
+        this.cycleRequestDelayMs = undefined;
+        this.scheduleNext();
+      } else {
+        this.scheduleNext();
+      }
     });
   }
 
   private scheduleNext() {
     if (this.stopped) return;
+    const timestamp = this.options.nowMs?.() ?? Date.now();
+    const instances = new Map(this.options.state.listInstances().map((instance) => [instance.id, instance]));
+    const nextRetryAt = [...this.restoreErrors.entries()].reduce((earliest, [instanceId, retry]) => {
+      const instance = instances.get(instanceId);
+      if (!instance || this.restoredInstances.has(instanceId) || this.suppressedInstances.has(instanceId)) return earliest;
+      if (this.options.state.requireRuntime(instance.runtimeId).type !== "local") return earliest;
+      if (!RESTORABLE_INSTANCE_STATUSES.has(instance.status) && instance.status !== "failed") return earliest;
+      return Math.min(earliest, retry.nextAttemptAt);
+    }, Number.POSITIVE_INFINITY);
+    const delay = Math.min(
+      this.options.intervalMs ?? 10_000,
+      Math.max(0, nextRetryAt - timestamp),
+    );
     this.timer = setTimeout(() => {
       this.timer = undefined;
       this.runAndContinue();
-    }, this.options.intervalMs ?? 10_000);
+    }, delay);
+    this.timer.unref?.();
+  }
+
+  private requestCycle(delayMs = 0) {
+    if (!this.started || this.stopped) return;
+    if (this.activeCycle) {
+      this.cycleRequested = true;
+      this.cycleRequestDelayMs = this.cycleRequestDelayMs === undefined
+        ? delayMs
+        : Math.min(this.cycleRequestDelayMs, delayMs);
+      return;
+    }
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = setTimeout(() => {
+      this.timer = undefined;
+      this.runAndContinue();
+    }, delayMs);
     this.timer.unref?.();
   }
 }

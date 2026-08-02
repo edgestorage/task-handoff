@@ -14,7 +14,7 @@ type IdentityStoreLogger = (message: string, details: Record<string, unknown>) =
 
 const IDENTITY_FIELDS = new Set(["nodeId", "createdAt", "updatedAt", "pairingInvites", "controlPlanePairings", "controlPlaneConnections", "remoteControlPlanes"]);
 const PAIRING_INVITE_FIELDS = new Set(["tokenHash", "expiresAt", "createdAt", "controlPlaneName"]);
-const CONTROL_PLANE_PAIRING_FIELDS = new Set(["id", "keyId", "name", "secret", "pairedAt", "updatedAt"]);
+const CONTROL_PLANE_PAIRING_FIELDS = new Set(["id", "keyId", "name", "secret", "pairedAt", "revokedAt", "updatedAt"]);
 const CONTROL_PLANE_CONNECTION_FIELDS = new Set(["id", "pairingKeyId", "name", "url", "enabled", "createdAt", "updatedAt"]);
 const LEGACY_REMOTE_CONTROL_PLANE_FIELDS = new Set(["id", "keyId", "name", "url", "secret", "pairedAt", "updatedAt", "active"]);
 

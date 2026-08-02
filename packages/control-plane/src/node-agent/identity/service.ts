@@ -182,7 +182,9 @@ export class NodeAgentIdentityService {
 
   resolvedControlPlaneAccess() {
     const identity = this.store.read();
-    const pairings = new Map((identity?.controlPlanePairings || []).map((pairing) => [pairing.keyId, pairing]));
+    const pairings = new Map((identity?.controlPlanePairings || [])
+      .filter((pairing) => !pairing.revokedAt)
+      .map((pairing) => [pairing.keyId, pairing]));
     const connections = identity?.controlPlaneConnections || [];
     return {
       hasPersistedAccess: connections.length > 0 || pairings.size > 0,
@@ -195,6 +197,7 @@ export class NodeAgentIdentityService {
 
   listControlPlanePairings(currentKeyId = ""): PublicNodeAgentControlPlanePairing[] {
     return (this.store.read()?.controlPlanePairings || [])
+      .filter((pairing) => !pairing.revokedAt)
       .map(({ secret: _secret, ...pairing }) => ({ ...pairing, current: Boolean(currentKeyId && pairing.keyId === currentKeyId) }))
       .sort((a, b) => Number(b.current) - Number(a.current) || b.updatedAt.localeCompare(a.updatedAt));
   }
@@ -220,6 +223,40 @@ export class NodeAgentIdentityService {
     return true;
   }
 
+  revokeCurrentControlPlanePairing(currentKeyId: string) {
+    if (!currentKeyId) {
+      throw Object.assign(new Error("Current paired-HMAC authentication is required to revoke this pairing."), {
+        statusCode: 403,
+        code: "NODE_AGENT_PAIRING_SELF_REVOKE_HMAC_REQUIRED",
+      });
+    }
+    const current = this.store.read();
+    const pairing = current?.controlPlanePairings?.find((candidate) => candidate.keyId === currentKeyId);
+    if (!current || !pairing) {
+      throw Object.assign(new Error("The current control-plane pairing no longer exists."), {
+        statusCode: 404,
+        code: "NODE_AGENT_PAIRING_NOT_FOUND",
+      });
+    }
+    if (pairing.revokedAt) {
+      return { keyId: currentKeyId, revoked: true as const, revokedAt: pairing.revokedAt };
+    }
+    if ((current.controlPlaneConnections || []).some((connection) => connection.pairingKeyId === currentKeyId)) {
+      throw Object.assign(new Error("Cannot revoke a pairing used by a configured control-plane connection."), {
+        statusCode: 409,
+        code: "NODE_AGENT_PAIRING_IN_USE",
+      });
+    }
+    const revokedAt = now();
+    this.store.write({
+      ...current,
+      controlPlanePairings: current.controlPlanePairings.map((candidate) => candidate.keyId === currentKeyId
+        ? { ...candidate, revokedAt, updatedAt: revokedAt }
+        : candidate),
+    });
+    return { keyId: currentKeyId, revoked: true as const, revokedAt };
+  }
+
   deleteControlPlaneConnection(connectionId: string) {
     const current = this.store.read();
     if (!current) return false;
@@ -229,17 +266,23 @@ export class NodeAgentIdentityService {
     return true;
   }
 
-  remoteSecrets(overrideSecret?: string, overrideKeyId?: string) {
+  remoteSecrets(overrideSecret?: string, overrideKeyId?: string, includeRevoked = false) {
     return [
-      ...(this.store.read()?.controlPlanePairings || []).map((pairing) => ({ keyId: pairing.keyId, secret: pairing.secret })),
+      ...(this.store.read()?.controlPlanePairings || [])
+        .filter((pairing) => includeRevoked || !pairing.revokedAt)
+        .map((pairing) => ({ keyId: pairing.keyId, secret: pairing.secret })),
       ...(overrideSecret && overrideKeyId ? [{ keyId: overrideKeyId, secret: overrideSecret }] : []),
     ];
+  }
+
+  isRevokedPairing(keyId: string) {
+    return Boolean(this.store.read()?.controlPlanePairings?.some((pairing) => pairing.keyId === keyId && pairing.revokedAt));
   }
 
   reverseTunnelSecret(controlPlaneUrl?: string, overrideSecret?: string, overrideKeyId?: string) {
     if (overrideSecret && overrideKeyId) return { keyId: overrideKeyId, secret: overrideSecret };
     const identity = this.store.read();
-    const pairings = identity?.controlPlanePairings || [];
+    const pairings = (identity?.controlPlanePairings || []).filter((pairing) => !pairing.revokedAt);
     if (!pairings.length) return undefined;
     if (controlPlaneUrl) {
       const normalizedUrl = controlPlaneUrl.replace(/\/$/, "");

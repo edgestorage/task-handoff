@@ -2784,6 +2784,22 @@ test("control plane subscribes to direct node agent websocket events", async (t)
     logger: false,
     token: "agent-secret",
     port: 0,
+    resolveRuntimeArtifact: resolvedRuntimeArtifact,
+    dockerCommandRunner: async (_command, args) => {
+      if (args[0] === "image" && args[1] === "inspect") {
+        return {
+          stdout: JSON.stringify({
+            Id: `sha256:${"d".repeat(64)}`,
+            RepoDigests: [`task-handoff/default@sha256:${"d".repeat(64)}`],
+            Os: "linux",
+            Architecture: "amd64",
+          }),
+          stderr: "",
+        };
+      }
+      if (args[0] === "info") return { stdout: JSON.stringify({ OSType: "linux", Architecture: "x86_64" }), stderr: "" };
+      return { stdout: "", stderr: "" };
+    },
   });
   t.after(() => nodeAgent.close());
   await nodeAgent.listen({ host: "127.0.0.1", port: 0 });
@@ -2807,6 +2823,28 @@ test("control plane subscribes to direct node agent websocket events", async (t)
     },
   });
   assert.equal(createdInstance.statusCode, 201);
+  await waitForCondition(
+    () => nodeAgent.nodeAgentState.controlledInstances.get("inst_direct_events")?.imageProvisioning?.phase === "ready",
+    "direct events image provisioning",
+  );
+  const provisionedInstance = nodeAgent.nodeAgentState.controlledInstances.get("inst_direct_events");
+  const desiredRuntimeVersion = runtimeVersionStateForActual().desiredVersion;
+  nodeAgent.nodeAgentState.controlledInstances.put({
+    ...provisionedInstance,
+    runtimeVersion: {
+      desiredVersion: desiredRuntimeVersion,
+      actualVersion: desiredRuntimeVersion,
+      phase: "failed",
+      attempt: 1,
+      error: {
+        code: "INSTANCE_RUNTIME_INSTALL_FAILED",
+        message: "Test fixture leaves convergence outside the direct event subscription path.",
+        expectedVersion: desiredRuntimeVersion,
+        actualVersion: desiredRuntimeVersion,
+        retryable: false,
+      },
+    },
+  });
   const registeredInstance = await nodeAgent.inject({
     method: "POST",
     url: "/api/node-agent/instances/inst_direct_events/register",
@@ -2887,6 +2925,10 @@ test("control plane subscribes to direct node agent websocket events", async (t)
     },
   });
   assert.equal(heartbeat.statusCode, 200);
+  const heartbeatState = nodeAgent.nodeAgentState.controlledInstances.get("inst_direct_events");
+  assert.equal(heartbeatState.ready, true);
+  assert.ok(["matched", "failed"].includes(heartbeatState.runtimeVersion?.phase));
+  assert.equal(heartbeatState.target.api, `http://127.0.0.1:${instanceEventsAddress.port}`);
   const runningLifecycle = await waitForCondition(() => receivedEvents.find((entry) => (
     entry.type === InstanceLifecycleEventType.Snapshot
     && entry.payload.status === "running"
@@ -2894,6 +2936,12 @@ test("control plane subscribes to direct node agent websocket events", async (t)
   )), "live node agent lifecycle update", 7000);
   assert.equal(runningLifecycle.payload.health, "ok");
   assert.equal(runningLifecycle.payload.accessStatus, "reachable");
+
+  await waitForCondition(
+    () => nodeAgent.nodeAgentEventForwarder.diagnostics().activeConnections === 1,
+    "direct node agent instance event connection",
+    7000,
+  );
 
   const event = await waitForCondition(() => receivedEvents.find((entry) => entry.type === AiSessionEventType.Snapshot), "direct node agent ai session event", 7000);
   assert.equal(event.type, AiSessionEventType.Snapshot);
@@ -2940,8 +2988,13 @@ test("control plane subscribes to direct node agent websocket events", async (t)
       }],
     }, { instanceId: "inst_direct_events", streamId: "ai_direct_stream", revision, generatedAt: updatedAt }),
   }));
-  sendAiSessionStatus("running", 2, "2026-07-25T01:00:00.000Z");
-  sendAiSessionStatus("idle", 3, "2026-07-25T01:00:01.000Z");
+  const roundBase = Date.now() + 1_000;
+  const roundStartedAt = new Date(roundBase).toISOString();
+  const roundCompletedAt = new Date(roundBase + 1_000).toISOString();
+  const nextRoundStartedAt = new Date(roundBase + 2_000).toISOString();
+  const nextRoundFailedAt = new Date(roundBase + 3_000).toISOString();
+  sendAiSessionStatus("running", 2, roundStartedAt);
+  sendAiSessionStatus("idle", 3, roundCompletedAt);
   const unreadEvent = await waitForCondition(() => receivedEvents.find((entry) => entry.type === AiSessionUnreadEventType.Updated && entry.payload.unread), "completed AI session unread event");
   assert.equal(unreadEvent.payload.sessionId, "ai_1");
   const unreadView = await waitForCondition(async () => {
@@ -2951,13 +3004,13 @@ test("control plane subscribes to direct node agent websocket events", async (t)
   }, "completed AI session unread projection");
   assert.equal(unreadView.statusCode, 200);
 
-  sendAiSessionStatus("running", 4, "2026-07-25T01:00:02.000Z");
-  const clearedForNewRound = await waitForCondition(() => receivedEvents.find((entry) => entry.type === AiSessionUnreadEventType.Updated && entry.payload.sessionUpdatedAt === "2026-07-25T01:00:02.000Z" && !entry.payload.unread), "new AI session round clears unread");
+  sendAiSessionStatus("running", 4, nextRoundStartedAt);
+  const clearedForNewRound = await waitForCondition(() => receivedEvents.find((entry) => entry.type === AiSessionUnreadEventType.Updated && entry.payload.sessionUpdatedAt === nextRoundStartedAt && !entry.payload.unread), "new AI session round clears unread");
   assert.equal(clearedForNewRound.payload.unread, false);
-  sendAiSessionStatus("failed", 5, "2026-07-25T01:00:03.000Z");
-  await waitForCondition(() => receivedEvents.find((entry) => entry.type === AiSessionUnreadEventType.Updated && entry.payload.sessionUpdatedAt === "2026-07-25T01:00:03.000Z" && entry.payload.unread), "failed AI session unread event");
+  sendAiSessionStatus("failed", 5, nextRoundFailedAt);
+  await waitForCondition(() => receivedEvents.find((entry) => entry.type === AiSessionUnreadEventType.Updated && entry.payload.sessionUpdatedAt === nextRoundFailedAt && entry.payload.unread), "failed AI session unread event");
   const read = await json(controlPlane, "POST", "/api/controlled-instances/inst_direct_events/ai-sessions/ai_1/read", {
-    sessionUpdatedAt: "2026-07-25T01:00:03.000Z",
+    sessionUpdatedAt: nextRoundFailedAt,
   });
   assert.equal(read.statusCode, 200);
   assert.equal(read.body.data.unread, false);
@@ -4935,6 +4988,135 @@ test("node agent pairs additional control planes with one-time join tokens", asy
     remoteAddress: "203.0.113.10",
   });
   assert.equal(signedAfterRestart.statusCode, 200);
+});
+
+test("node agent allows a paired-HMAC credential to revoke only itself through the compensation endpoint", async (t) => {
+  const dataDir = tempDataDir("node-agent-pairing-self-revoke");
+  const app = await createNodeAgentApp({
+    dataDir,
+    logger: false,
+    nodeId: "node_pairing_self_revoke",
+    token: "agent-secret",
+  });
+  t.after(() => app.close());
+  const invite = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/pairing/invites",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {},
+    remoteAddress: "127.0.0.1",
+  });
+  const paired = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/pairing/complete",
+    payload: { joinToken: invite.json().data.joinToken },
+    remoteAddress: "203.0.113.10",
+  });
+  const credential = paired.json().data;
+  const sign = (selectedCredential, method, pathWithQuery, body) => createNodeAgentHmacHeaders({
+    nodeId: "node_pairing_self_revoke",
+    keyId: selectedCredential.keyId,
+    secret: selectedCredential.secret,
+    method,
+    pathWithQuery,
+    body,
+  });
+  const secondInviteBody = JSON.stringify({ controlPlaneName: "Surviving Control Plane" });
+  const secondInvite = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/pairing/invites",
+    headers: {
+      "content-type": "application/json",
+      ...sign(credential, "POST", "/api/node-agent/pairing/invites", secondInviteBody),
+    },
+    payload: secondInviteBody,
+    remoteAddress: "203.0.113.10",
+  });
+  assert.equal(secondInvite.statusCode, 201, secondInvite.body);
+  const secondPaired = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/pairing/complete",
+    payload: { joinToken: secondInvite.json().data.joinToken },
+    remoteAddress: "203.0.113.11",
+  });
+  assert.equal(secondPaired.statusCode, 201, secondPaired.body);
+  const secondCredential = secondPaired.json().data;
+  assert.notEqual(secondCredential.keyId, credential.keyId);
+
+  const identityStore = new NodeAgentIdentityStore(nodeAgentStorePaths(dataDir));
+  const identity = identityStore.read();
+  const connectionTimestamp = new Date().toISOString();
+  identityStore.write({
+    ...identity,
+    controlPlaneConnections: [{
+      id: "connection_self_revoke_guard",
+      pairingKeyId: secondCredential.keyId,
+      url: "https://control-plane.example.test",
+      enabled: true,
+      createdAt: connectionTimestamp,
+      updatedAt: connectionTimestamp,
+    }],
+  });
+  const inUse = await app.inject({
+    method: "DELETE",
+    url: "/api/node-agent/pairing/current",
+    headers: sign(secondCredential, "DELETE", "/api/node-agent/pairing/current"),
+    remoteAddress: "203.0.113.11",
+  });
+  assert.equal(inUse.statusCode, 409);
+  assert.equal(inUse.json().error.code, "NODE_AGENT_PAIRING_IN_USE");
+
+  const ordinaryDelete = await app.inject({
+    method: "DELETE",
+    url: `/api/node-agent/control-plane-pairings/${encodeURIComponent(credential.keyId)}`,
+    headers: sign(credential, "DELETE", `/api/node-agent/control-plane-pairings/${encodeURIComponent(credential.keyId)}`),
+    remoteAddress: "203.0.113.10",
+  });
+  assert.equal(ordinaryDelete.statusCode, 409);
+  assert.equal(ordinaryDelete.json().error.code, "NODE_AGENT_PAIRING_CURRENT_REQUEST");
+
+  const revoked = await app.inject({
+    method: "DELETE",
+    url: "/api/node-agent/pairing/current",
+    headers: sign(credential, "DELETE", "/api/node-agent/pairing/current"),
+    remoteAddress: "203.0.113.10",
+  });
+  assert.equal(revoked.statusCode, 200);
+  assert.deepEqual(revoked.json().data, {
+    keyId: credential.keyId,
+    revoked: true,
+    revokedAt: revoked.json().data.revokedAt,
+  });
+  assert.ok(Date.parse(revoked.json().data.revokedAt));
+  const storedPairings = new NodeAgentIdentityStore(nodeAgentStorePaths(dataDir)).read().controlPlanePairings;
+  assert.equal(storedPairings.find((pairing) => pairing.keyId === credential.keyId).revokedAt, revoked.json().data.revokedAt);
+  assert.equal(storedPairings.find((pairing) => pairing.keyId === secondCredential.keyId).revokedAt, undefined);
+
+  const repeatedRevoke = await app.inject({
+    method: "DELETE",
+    url: "/api/node-agent/pairing/current",
+    headers: sign(credential, "DELETE", "/api/node-agent/pairing/current"),
+    remoteAddress: "203.0.113.10",
+  });
+  assert.equal(repeatedRevoke.statusCode, 200);
+  assert.deepEqual(repeatedRevoke.json().data, revoked.json().data);
+
+  const secondStillWorks = await app.inject({
+    method: "GET",
+    url: "/api/node-agent/health",
+    headers: sign(secondCredential, "GET", "/api/node-agent/health"),
+    remoteAddress: "203.0.113.11",
+  });
+  assert.equal(secondStillWorks.statusCode, 200);
+
+  const reused = await app.inject({
+    method: "GET",
+    url: "/api/node-agent/health",
+    headers: sign(credential, "GET", "/api/node-agent/health"),
+    remoteAddress: "203.0.113.10",
+  });
+  assert.equal(reused.statusCode, 401);
+  assert.equal(reused.json().error.code, "NODE_AGENT_HMAC_KEY_INVALID");
 });
 
 test("node agent identity sanitizes unknown stored fields and writes atomically with private permissions", () => {
@@ -7718,6 +7900,7 @@ test("node agent proxies mutating instance API requests while runtime convergenc
     dataDir: tempDataDir("node-agent-proxy"),
     logger: false,
     token: "agent-secret",
+    resolveRuntimeArtifact: resolvedRuntimeArtifact,
     fetchImpl: async (url, init = {}) => {
       calls.push({
         url,
@@ -7809,6 +7992,7 @@ test("node agent proxies direct-port instances through the node-local host", asy
     dataDir: tempDataDir("node-agent-proxy-local-host"),
     logger: false,
     token: "agent-secret",
+    resolveRuntimeArtifact: resolvedRuntimeArtifact,
     fetchImpl: async (url, init = {}) => {
       calls.push({
         url,
@@ -7944,6 +8128,7 @@ test("node agent proxies instance websocket subprotocols", async (t) => {
     dataDir: tempDataDir("node-agent-ws-protocol"),
     logger: false,
     token: "agent-secret",
+    resolveRuntimeArtifact: resolvedRuntimeArtifact,
   });
   t.after(() => app.close());
 
@@ -9000,6 +9185,7 @@ test("replacing a reverse tunnel closes and isolates the old main socket", async
   const streamHellos = [];
   events.on((event) => published.push(event));
   const transport = new ControlPlaneNodeAgentTunnelTransport(events, {
+    validateInstanceScope: () => true,
     onStreamsHello: (instanceId, hello) => streamHellos.push({ instanceId, hello }),
   });
   const createSocket = () => {
@@ -9061,6 +9247,7 @@ test("replacing a reverse tunnel closes and isolates the old main socket", async
     instanceId: "inst_new",
     payload: { protocolVersion: 1, streams: [] },
   }), true);
+  await new Promise((resolve) => setImmediate(() => setImmediate(resolve)));
   assert.equal(streamHellos.length, 1);
   assert.equal(streamHellos[0].instanceId, "inst_new");
 });
@@ -17188,6 +17375,9 @@ test("control plane aggregates ai session pending routes and proxies ai session 
     providerSessionId: "claude_history_proxy",
     appSessionId: "app_history_proxy",
   });
+  const sessionDiagnostics = await json(app, "GET", "/api/session-streams/diagnostics");
+  assert.equal(sessionDiagnostics.statusCode, 200);
+  assert.equal(sessionDiagnostics.body.data.aiSessionActions.resumeSnapshotRefreshFailures, 0);
   const historyForwards = requests.filter((request) => request.body.path === "/api/ai-sessions/history" || request.body.path === "/api/ai-sessions/history/ais_history_proxy" || request.body.path === "/api/ai-sessions/ais_history_proxy/resume");
   assert.deepEqual(historyForwards.map((request) => [request.body.method, request.body.path, request.body.body ? JSON.parse(request.body.body) : undefined]), [
     ["GET", "/api/ai-sessions/history", undefined],
