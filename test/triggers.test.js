@@ -20,6 +20,7 @@ const {
 const { TriggerExecutor } = require("../packages/controlled-instance/src/triggers/executor.ts");
 const { fileTriggerMatcher, nextScheduleTime } = require("../packages/controlled-instance/src/triggers/manager.ts");
 const { sanitizeStoredTriggerIndex } = require("../packages/controlled-instance/src/triggers/store.ts");
+const { ControlPlaneTriggerService } = require("../packages/control-plane/src/control-plane/triggers/service.ts");
 
 test("file trigger globs support root files, recursive directories, and ignores", () => {
   const matches = fileTriggerMatcher(["**/*.ts"], ["generated/**"]);
@@ -76,6 +77,91 @@ test("trigger config hash changes when behavior changes", () => {
     policy: { maxConcurrentRuns: 1, whenBusy: "skip" },
   });
   assert.notEqual(first, second);
+});
+
+test("editing a control-plane trigger replaces its behavior identity", async () => {
+  const records = new Map();
+  const collection = {
+    list: () => [...records.values()],
+    get: (id) => records.get(id),
+    put: (record) => { records.set(record.id, record); return record; },
+    delete: (id) => records.delete(id),
+  };
+  const requests = [];
+  const service = new ControlPlaneTriggerService({
+    triggers: collection,
+    listInstances: async () => [{
+      id: "inst_1",
+      name: "Worker",
+      triggers: { configs: [] },
+    }],
+    requireInstance: async () => { throw new Error("unused"); },
+    instanceRequest: async (_instance, route, init) => { requests.push({ route, init }); return { ok: true }; },
+  });
+  const created = service.createTrigger({
+    name: "Hourly",
+    source: { type: "schedule", scheduleKind: "interval", intervalMs: 3_600_000 },
+    action: { promptTemplate: "Continue" },
+  });
+  const result = await service.updateTrigger(created.configHash, {
+    name: "Every two hours",
+    source: { type: "schedule", scheduleKind: "interval", intervalMs: 7_200_000 },
+    action: { promptTemplate: "Continue" },
+  });
+
+  assert.notEqual(result.trigger.configHash, created.configHash);
+  assert.equal(records.has(created.configHash), false);
+  assert.equal(records.get(result.trigger.configHash).name, "Every two hours");
+  assert.deepEqual(requests, []);
+});
+
+test("editing a deployed trigger migrates control-plane session deployments", async () => {
+  const records = new Map();
+  const collection = {
+    list: () => [...records.values()],
+    get: (id) => records.get(id),
+    put: (record) => { records.set(record.id, record); return record; },
+    delete: (id) => records.delete(id),
+  };
+  const requests = [];
+  const service = new ControlPlaneTriggerService({
+    triggers: collection,
+    listInstances: async () => [{
+      id: "inst_1",
+      name: "Worker",
+      triggers: { configs: [{
+        configHash: created.configHash,
+        deployments: [{
+          configHash: created.configHash,
+          deploymentId: "old_deployment",
+          origin: "control-plane",
+          enabled: false,
+          target: { type: "ai-session", aiSessionId: "session_1" },
+        }],
+      }] },
+    }],
+    requireInstance: async () => { throw new Error("unused"); },
+    instanceRequest: async (_instance, route, init) => { requests.push({ route, init }); return { ok: true }; },
+  });
+  const created = service.createTrigger({
+    name: "Hourly",
+    source: { type: "schedule", scheduleKind: "interval", intervalMs: 3_600_000 },
+    action: { promptTemplate: "Continue" },
+  });
+  const result = await service.updateTrigger(created.configHash, {
+    name: "Hourly",
+    source: { type: "schedule", scheduleKind: "interval", intervalMs: 7_200_000 },
+    action: { promptTemplate: "Continue" },
+  });
+
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].route, "/triggers");
+  const replacement = JSON.parse(requests[0].init.body);
+  assert.equal(replacement.deployment.enabled, false);
+  assert.equal(replacement.deployment.target.aiSessionId, "session_1");
+  assert.ok(replacement.deployment.deploymentId.endsWith(result.trigger.configHash));
+  assert.equal(requests[1].route, `/triggers/${created.configHash}/deployments/old_deployment`);
+  assert.equal(requests[1].init.method, "DELETE");
 });
 
 test("trigger events use triggers topic", () => {

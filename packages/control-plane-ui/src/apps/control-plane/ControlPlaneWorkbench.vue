@@ -22,10 +22,55 @@
           class="desktop-window-controls native-window-control-space macos-native-window-control-space"
           aria-hidden="true"
         />
-        <div class="control-plane-title">
+        <div v-if="settingsMode" class="control-plane-title">
           <span class="control-plane-kicker">{{ topbarKicker }}</span>
           <strong>{{ topbarTitle }}</strong>
         </div>
+        <DropdownMenu v-else>
+          <DropdownMenuTrigger as-child>
+            <button
+              type="button"
+              class="control-plane-title control-plane-instance-switcher"
+              :aria-label="t('instances.list.switchInstance')"
+              @dblclick.stop
+            >
+              <span class="control-plane-kicker">{{ topbarKicker }}</span>
+              <span class="control-plane-instance-switcher-title">
+                <strong>{{ topbarTitle }}</strong>
+                <small v-if="topbarNodeName" class="control-plane-instance-node-name" :title="topbarNodeName">· {{ topbarNodeName }}</small>
+                <ChevronDown class="control-plane-instance-switcher-chevron" :size="16" aria-hidden="true" />
+              </span>
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent class="control-plane-instance-menu" align="start" :collision-padding="12" :side-offset="8">
+            <ScrollArea
+              class="control-plane-instance-menu-scroll"
+              :horizontal="false"
+              :style="{ '--instance-menu-height': `${Math.max(sortedInstances.length, 1) * 52 - 2}px` }"
+            >
+              <div class="control-plane-instance-menu-list">
+                <DropdownMenuItem
+                  v-for="instance in sortedInstances"
+                  :key="instance.id"
+                  class="control-plane-instance-menu-item"
+                  :class="{ selected: instance.id === activeInstance?.id }"
+                  :aria-current="instance.id === activeInstance?.id ? 'true' : undefined"
+                  @select="selectInstance(instance.id)"
+                >
+                  <span class="status-dot" :data-state="instance.connectionStatus" />
+                  <span class="control-plane-instance-menu-copy">
+                    <strong>{{ instanceDisplayName(instance) }}</strong>
+                    <small>{{ instance.node?.name || instance.nodeId }}</small>
+                  </span>
+                  <Check v-if="instance.id === activeInstance?.id" class="control-plane-instance-menu-check" :size="16" aria-hidden="true" />
+                </DropdownMenuItem>
+                <DropdownMenuItem v-if="!sortedInstances.length" class="control-plane-instance-menu-item" disabled>
+                  {{ t("instances.list.noMatches") }}
+                </DropdownMenuItem>
+              </div>
+            </ScrollArea>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
       <div class="control-plane-actions">
         <TooltipProvider v-if="serverUpdateAvailable" :delay-duration="120">
@@ -270,12 +315,14 @@ import type { SupportedLocale } from "../../i18n/locale";
 import { translateApiError } from "../../i18n/apiError";
 import { useQueries, useQueryClient } from "@tanstack/vue-query";
 import { useEventListener } from "@vueuse/core";
-import { Bot, Download, House, LayoutGrid, LogOut, Maximize2, Minus, RefreshCw, Settings, X } from "@lucide/vue";
+import { Bot, Check, ChevronDown, Download, House, LayoutGrid, LogOut, Maximize2, Minus, RefreshCw, Settings, X } from "@lucide/vue";
 import "@xterm/xterm/css/xterm.css";
 import { controlPlaneQueryKeys, getInstanceAppManagement, getInstanceResourceMetrics, installInstanceApp, logoutControlPlane, nodeLocalFoldersQueryOptions, renameAppSession, resolveAiSessionApproval, uninstallInstanceApp, updateControlledInstance, useAuthSessionQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useInstanceBoardQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
 import type { ConfigSyncDirection } from "@task-handoff/protocol/config-sync";
 import { type AiSessionSummary, type AppManagementOperation, type InstanceBoardItem, type InstanceBoardItemWithAppSessions, type InstanceResourceMetrics, type NodeLocalFolder, type UpdateControlledInstanceInput } from "../../api/types";
 import { Button } from "../../components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../components/ui/dropdown-menu";
+import { ScrollArea } from "../../components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../components/ui/tooltip";
 import AiSessionBoardView from "./ai-board/AiSessionBoardView.vue";
 import InstanceBoardView from "./board/InstanceBoardView.vue";
@@ -502,6 +549,7 @@ const topbarTitle = computed(() => {
   }
   return settingsSectionTitle(settingsSection.value);
 });
+const topbarNodeName = computed(() => activeInstance.value?.node?.name || "");
 const refreshing = computed(() => board.isFetching.value || controlPlane.isFetching.value);
 useControlPlaneEvents({
   aiSessions: aiSessionStore,

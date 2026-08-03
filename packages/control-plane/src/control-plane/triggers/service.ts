@@ -6,6 +6,7 @@ import {
   BindAiSessionTriggerSchema,
   ControlPlaneTriggerRecordSchema,
   CreateControlPlaneTriggerSchema,
+  UpdateControlPlaneTriggerSchema,
   type ControlPlaneTriggerRecord,
 } from "./inputs.ts";
 import { now, throwNotFound } from "../common/helpers.ts";
@@ -118,6 +119,85 @@ export class ControlPlaneTriggerService {
       updatedAt: timestamp,
     });
     return this.triggers.put(record);
+  }
+
+  async updateTrigger(configHash: string, input: unknown) {
+    const existing = this.requireTrigger(configHash);
+    const parsed = UpdateControlPlaneTriggerSchema.parse(input || {});
+    const timestamp = now();
+    const policy = {
+      maxConcurrentRuns: parsed.policy?.maxConcurrentRuns ?? 1,
+      whenBusy: parsed.policy?.whenBusy ?? "skip",
+      cooldownMs: parsed.policy?.cooldownMs,
+    } as TriggerConfig["policy"];
+    const nextConfigHash = triggerConfigHash({ source: parsed.source, action: parsed.action, policy });
+    const collision = nextConfigHash !== configHash && this.triggers.get(nextConfigHash);
+    if (collision) {
+      const error = new Error(`Trigger ${nextConfigHash} already exists.`);
+      Object.assign(error, { statusCode: 409, code: "TRIGGER_ALREADY_EXISTS" });
+      throw error;
+    }
+    const record = ControlPlaneTriggerRecordSchema.parse({
+      id: nextConfigHash,
+      configHash: nextConfigHash,
+      name: parsed.name,
+      description: parsed.description,
+      source: parsed.source,
+      action: parsed.action,
+      policy,
+      createdAt: existing.createdAt,
+      updatedAt: timestamp,
+    });
+
+    const instances = await this.listInstances();
+    const results = [];
+    for (const instance of instances) {
+      const item = instance.triggers?.configs?.find((entry) => entry.configHash === configHash);
+      const deployments = (item?.deployments || []).filter((deployment) => deployment.origin === "control-plane");
+      if (nextConfigHash === configHash) {
+        if (deployments.length) {
+          results.push({
+            instanceId: instance.id,
+            data: await this.instanceRequest(instance, `/triggers/${encodeURIComponent(configHash)}`, {
+              method: "PATCH",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ name: record.name, description: record.description ?? null }),
+            }),
+          });
+        }
+        continue;
+      }
+      for (const deployment of deployments) {
+        const deploymentId = deployment.target.type === "ai-session"
+          ? aiSessionTriggerDeploymentId(deployment.target.aiSessionId, nextConfigHash)
+          : deployment.deploymentId;
+        const data = await this.instanceRequest(instance, "/triggers", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            name: record.name,
+            description: record.description,
+            source: record.source,
+            action: record.action,
+            policy: record.policy,
+            deployment: {
+              deploymentId,
+              origin: "control-plane",
+              enabled: deployment.enabled,
+              target: deployment.target,
+              localName: deployment.localName,
+            },
+          }),
+        });
+        const oldDeploymentId = deployment.deploymentId || deployment.configHash;
+        await this.instanceRequest(instance, `/triggers/${encodeURIComponent(configHash)}/deployments/${encodeURIComponent(oldDeploymentId)}`, { method: "DELETE" });
+        results.push({ instanceId: instance.id, deploymentId, data });
+      }
+    }
+
+    this.triggers.put(record);
+    if (nextConfigHash !== configHash) this.triggers.delete(configHash);
+    return { previousConfigHash: configHash, trigger: record, results };
   }
 
   async deleteTrigger(configHash: string) {

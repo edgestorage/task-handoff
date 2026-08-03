@@ -38,7 +38,7 @@ export const sessions = {
     noSelected: "No AI session selected",
   },
   panel: {
-    view: "View", status: "Status", listOptions: "AI session list options", newSession: "New AI session", allStatuses: "All statuses", active: "Active", waiting: "Waiting", problem: "Problem",
+    view: "View", status: "Status", listOptions: "AI session list options", sessionList: "AI session list", newSession: "New AI session", allStatuses: "All statuses", active: "Active", waiting: "Waiting", problem: "Problem",
     noMatching: "No matching sessions", noConversations: "No conversations yet", tryFilter: "Try another status filter.", startHint: "Use the + button above to start a conversation.",
     resizeList: "Resize AI session list", startIdea: "Start with an idea", searchProjects: "Search projects", noProjects: "No projects found", newProject: "New project",
     promptPlaceholder: "Do anything", chooseProject: "Choose project", projectUnavailable: "This project is no longer registered on the node.", startedWorktree: "AI session started in the selected worktree.", backLatest: "Back to latest",

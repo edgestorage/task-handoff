@@ -56,3 +56,8 @@ test("board empty states use the themed inset surface", () => {
   assert.match(board, /\.board-empty \{[\s\S]*?background: var\(--surface-inset\);/);
   assert.doesNotMatch(board, /\.board-empty \{[\s\S]*?background: var\(--white\);/);
 });
+
+test("mobile board groups flow directly into a single card column", () => {
+  assert.match(board, /@media \(max-width: 780px\) \{[\s\S]*?\.instance-board-grid \{\s*grid-template-columns: minmax\(0, 1fr\);/);
+  assert.doesNotMatch(board, /@media \(max-width: 780px\) \{[\s\S]*?grid-auto-rows:/);
+});

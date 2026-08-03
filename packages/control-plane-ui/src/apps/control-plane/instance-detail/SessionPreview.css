@@ -487,6 +487,7 @@
 .session-ai-home {
   position: relative;
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
   gap: 8px;
@@ -1123,7 +1124,17 @@
 
 @media (max-width: 780px) {
   .session-preview {
+    grid-template-rows: auto minmax(0, 1fr);
     min-height: 320px;
+  }
+
+  .session-preview-actions {
+    display: none;
+  }
+
+  .session-tab-item {
+    touch-action: pan-x;
+    -webkit-touch-callout: none;
   }
 
   .session-preview-body {

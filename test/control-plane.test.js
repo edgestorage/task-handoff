@@ -1871,6 +1871,7 @@ test("control plane viewer cannot reach privileged mutation handlers", async (t)
     ["POST", "/api/controlled-instances/inst_x/ai-sessions/session_x/commands", {}],
     ["POST", "/api/controlled-instances/inst_x/ai-sessions/session_x/triggers", {}],
     ["DELETE", "/api/controlled-instances/inst_x/ai-sessions/session_x/triggers/trigger_x", undefined],
+    ["PUT", "/api/triggers/trigger_x", {}],
   ]) {
     const response = await app.inject({ method, url, headers: { cookie }, ...(payload === undefined ? {} : { payload }) });
     assert.equal(response.statusCode, 403, `${method} ${url}: ${response.body}`);
@@ -1991,6 +1992,7 @@ test("control plane mutation route policies never degrade privileged operations 
     ["POST", "/api/controlled-instances/:id/ai-sessions/:sessionId/commands", "send-message", "ai-session"],
     ["POST", "/api/controlled-instances/:id/ai-sessions/:sessionId/triggers", "create", "trigger"],
     ["DELETE", "/api/controlled-instances/:id/ai-sessions/:sessionId/triggers/:configHash", "delete", "trigger"],
+    ["PUT", "/api/triggers/:configHash", "update", "trigger"],
   ];
   for (const [method, route, expectedAction, expectedResource] of operatorRoutes) {
     const policy = routeAuthorization(method, route);

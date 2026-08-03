@@ -25,6 +25,8 @@ export const triggers = {
     description: "配置事件来源以及触发时要运行的提示词。",
     name: "名称",
     namePlaceholder: "触发器名称",
+    templateDescription: "说明",
+    descriptionPlaceholder: "可选说明",
     type: "类型",
     typePlaceholder: "触发器类型",
     source: "来源",
@@ -39,6 +41,8 @@ export const triggers = {
     globs: "匹配模式",
     ignore: "忽略",
     debounceMs: "防抖（毫秒）",
+    agent: "智能体",
+    anyAgent: "任意智能体",
     statuses: "状态",
     phases: "阶段",
     anyStatus: "任意状态",
@@ -47,6 +51,7 @@ export const triggers = {
     runPolicyHint: "控制重复事件和重叠运行。",
     cooldown: "冷却时间",
     busyPolicy: "繁忙策略",
+    maxConcurrentRuns: "最大并发运行数",
     customCooldown: "自定义冷却时间",
     prompt: "提示词",
     promptHint: "触发器运行时，此提示词会发送到目标会话。",
@@ -54,6 +59,13 @@ export const triggers = {
     cancel: "取消",
     creating: "正在创建",
     submit: "创建模板",
+  },
+  edit: {
+    close: "关闭编辑触发器对话框",
+    title: "编辑触发器模板",
+    description: "更新事件来源、运行策略或提示词；已有部署会迁移到更新后的模板。",
+    saving: "正在保存",
+    submit: "保存更改",
   },
   sourceType: {
     schedule: "计划",
@@ -137,6 +149,7 @@ export const triggers = {
   ownership: {
     instanceLocal: "实例本地",
     deleteOwnedElsewhere: "此触发器归受控实例所有",
+    editOwnedElsewhere: "这里只能编辑控制平面管理的触发器模板",
   },
   counts: {
     bindingOne: "{count} 个会话绑定",
@@ -147,6 +160,8 @@ export const triggers = {
     errors: "{count} 个错误",
   },
   actions: {
+    edit: "编辑",
+    editTitle: "编辑触发器模板",
     delete: "删除",
     deleteTitle: "删除触发器模板",
     run: "运行",

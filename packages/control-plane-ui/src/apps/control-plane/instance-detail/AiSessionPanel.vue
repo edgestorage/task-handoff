@@ -1,6 +1,6 @@
 <template>
   <div class="session-ai-panel" :style="workspaceStyle">
-    <div class="session-ai-workspace">
+    <div class="session-ai-workspace" :data-mobile-pane="mobilePane">
       <aside ref="sidebarEl" class="session-ai-sidebar">
         <div class="session-ai-sidebar-head">
           <div v-if="historyMode" class="session-ai-history-head">
@@ -368,6 +368,15 @@
         :title="t('sessions.panel.resizeList')"
         @pointerdown="startSidebarResize"
       />
+      <Button
+        v-if="mobilePane === 'detail'"
+        variant="ghost"
+        class="session-ai-mobile-list-button"
+        @click="showMobileSessionList"
+      >
+        <ArrowLeft :size="16" />
+        <span>{{ t("sessions.panel.sessionList") }}</span>
+      </Button>
       <section v-if="historyMode" ref="detailEl" class="session-ai-detail session-ai-history-detail">
         <ScrollArea class="session-ai-detail-scroll">
           <div v-if="!selectedHistoryId" class="session-ai-history-detail-state">
@@ -749,6 +758,7 @@ const props = defineProps<{
 const { locale, t } = useI18n();
 
 const visibleAiSessions = computed(() => props.instance.aiSessions?.sessions || []);
+const mobilePane = ref<"list" | "detail">("list");
 const sessionStatusFilter = ref<SessionStatusFilter>("all");
 const groupSessionsByPath = ref(storedGroupByPath());
 const sortSessionsByStatus = ref(storedSortByStatus());
@@ -1190,7 +1200,12 @@ function nextPrompt(session: AiSessionSummary) {
 
 function selectSession(sessionId: string) {
   newSessionOpen.value = false;
+  mobilePane.value = "detail";
   emit("selectAiSession", props.instance.id, sessionId);
+}
+
+function showMobileSessionList() {
+  mobilePane.value = "list";
 }
 
 function sidebarViewport() {
@@ -1233,6 +1248,7 @@ async function loadHistory() {
 
 async function selectHistoryItem(item: AiSessionHistoryItem) {
   if (resumingHistoryId.value) return;
+  mobilePane.value = "detail";
   if (selectedHistoryId.value !== item.id) {
     historyMessageDraft.value = "";
     historyMessageAttachments.value = [];
@@ -1318,7 +1334,11 @@ async function sendHistoryMessage(permissionMode?: AiSessionPermissionMode) {
 function openNewSession() {
   const wasVisible = showNewSession.value;
   newSessionOpen.value = true;
-  if (wasVisible) return;
+  if (wasVisible) {
+    mobilePane.value = "detail";
+    return;
+  }
+  mobilePane.value = "detail";
   newSessionDraft.value = "";
   messageAttachments.value = [];
   messageMentionBindings.value = [];
@@ -1934,6 +1954,9 @@ onMounted(() => {
     observeDetailActionsWidth();
     observeDetailScroll();
   });
+});
+watch(() => props.instance.id, () => {
+  mobilePane.value = "list";
 });
 onBeforeUnmount(() => {
   composerResizeObserver?.disconnect();

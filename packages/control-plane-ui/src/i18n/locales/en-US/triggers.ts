@@ -22,6 +22,8 @@ export const triggers = {
     description: "Configure the event source and prompt that should run when it fires.",
     name: "Name",
     namePlaceholder: "Trigger name",
+    templateDescription: "Description",
+    descriptionPlaceholder: "Optional description",
     type: "Type",
     typePlaceholder: "Trigger type",
     source: "Source",
@@ -36,6 +38,8 @@ export const triggers = {
     globs: "Globs",
     ignore: "Ignore",
     debounceMs: "Debounce ms",
+    agent: "Agent",
+    anyAgent: "Any agent",
     statuses: "Statuses",
     phases: "Phases",
     anyStatus: "Any status",
@@ -44,6 +48,7 @@ export const triggers = {
     runPolicyHint: "Control repeated events and overlapping runs.",
     cooldown: "Cooldown",
     busyPolicy: "Busy policy",
+    maxConcurrentRuns: "Maximum concurrent runs",
     customCooldown: "Custom cooldown",
     prompt: "Prompt",
     promptHint: "This prompt is sent to the target session when the trigger runs.",
@@ -51,6 +56,13 @@ export const triggers = {
     cancel: "Cancel",
     creating: "Creating",
     submit: "Create template",
+  },
+  edit: {
+    close: "Close edit trigger dialog",
+    title: "Edit trigger template",
+    description: "Update the event source, run policy, or prompt. Existing deployments will move to the updated template.",
+    saving: "Saving",
+    submit: "Save changes",
   },
   sourceType: {
     schedule: "Schedule",
@@ -134,6 +146,7 @@ export const triggers = {
   ownership: {
     instanceLocal: "instance local",
     deleteOwnedElsewhere: "This trigger is owned by a controlled instance",
+    editOwnedElsewhere: "Only control-plane trigger templates can be edited here",
   },
   counts: {
     bindingOne: "{count} session binding",
@@ -144,6 +157,8 @@ export const triggers = {
     errors: "{count} errors",
   },
   actions: {
+    edit: "Edit",
+    editTitle: "Edit trigger template",
     delete: "Delete",
     deleteTitle: "Delete trigger template",
     run: "Run",

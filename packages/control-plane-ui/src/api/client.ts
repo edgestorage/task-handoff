@@ -75,6 +75,11 @@ export async function patchApiData<T>(path: string, body?: unknown): Promise<T> 
   return payload.data;
 }
 
+export async function putApiData<T>(path: string, body?: unknown): Promise<T> {
+  const payload = await withApiError(api.put(path, { json: body ?? {} }).json<{ data: T }>());
+  return payload.data;
+}
+
 export async function deleteApiData<T>(path: string): Promise<T> {
   const payload = await withApiError(api.delete(path).json<{ data: T }>());
   return payload.data;

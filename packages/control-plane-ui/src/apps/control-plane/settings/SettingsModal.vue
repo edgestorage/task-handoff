@@ -12,7 +12,11 @@
         </Tabs>
       </div>
 
-      <ControlPlaneTriggersView v-if="settingsSection === 'triggers'" :instances="instances" />
+      <ScrollArea v-if="settingsSection === 'triggers'" class="settings-section-scroll" :horizontal="false">
+        <div class="settings-section-scroll-content">
+          <ControlPlaneTriggersView :instances="instances" />
+        </div>
+      </ScrollArea>
 
       <BasicSettingsSection
         v-else-if="settingsSection === 'basic'"
@@ -54,16 +58,21 @@
         @update:theme-preference="setThemePreference"
       />
 
-      <ChatBridgeSettingsSection
-        v-else-if="settingsSection === 'chat'"
-        :chat="chatSettings"
-        :error-text="errorText"
-        :gateway-error="chatGatewayStatus.error.value"
-        :is-refreshing="chatBridges.isFetching.value || chatGatewayStatus.isFetching.value"
-        :refresh-chat="refreshChat"
-      />
+      <ScrollArea v-else-if="settingsSection === 'chat'" class="settings-section-scroll" :horizontal="false">
+        <div class="settings-section-scroll-content">
+          <ChatBridgeSettingsSection
+            :chat="chatSettings"
+            :error-text="errorText"
+            :gateway-error="chatGatewayStatus.error.value"
+            :is-refreshing="chatBridges.isFetching.value || chatGatewayStatus.isFetching.value"
+            :refresh-chat="refreshChat"
+          />
+        </div>
+      </ScrollArea>
 
-      <div v-else-if="settingsSection === 'models'" class="project-management-grid">
+      <ScrollArea v-else-if="settingsSection === 'models'" class="settings-section-scroll" :horizontal="false">
+        <div class="settings-section-scroll-content">
+      <div class="project-management-grid">
         <section class="modal-section settings-panel-surface">
           <div class="section-head">
             <span>{{ t("settings.modelRegistry.count", { count: models.data.value?.length || 0 }) }}</span>
@@ -211,8 +220,12 @@
           </div>
         </section>
       </div>
+        </div>
+      </ScrollArea>
 
-      <div v-else-if="settingsSection === 'images'" class="image-management-grid">
+      <ScrollArea v-else-if="settingsSection === 'images'" class="settings-section-scroll" :horizontal="false">
+        <div class="settings-section-scroll-content">
+      <div class="image-management-grid">
         <section class="modal-section settings-panel-surface image-market-section">
           <div class="image-market-head">
             <div>
@@ -312,8 +325,12 @@
           </Dialog>
         </section>
       </div>
+        </div>
+      </ScrollArea>
 
-      <div v-else-if="settingsSection === 'projects'" class="project-management-grid">
+      <ScrollArea v-else-if="settingsSection === 'projects'" class="settings-section-scroll" :horizontal="false">
+        <div class="settings-section-scroll-content">
+      <div class="project-management-grid">
         <section class="modal-section settings-panel-surface">
           <div class="section-head">
             <span>{{ t("settings.projectRegistry.count", { count: projects.data.value?.length || 0 }) }}</span>
@@ -376,6 +393,8 @@
           <p v-if="settingsProjectSuccess" class="settings-success">{{ settingsProjectSuccess }}</p>
         </section>
       </div>
+        </div>
+      </ScrollArea>
 
       <div v-else class="node-management-grid">
         <TooltipProvider :delay-duration="120">
@@ -1637,6 +1656,23 @@ function errorText(error: unknown) {
   padding: 12px;
 }
 
+.settings-section-scroll {
+  align-self: stretch;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.settings-section-scroll :deep([data-task-handoff-scroll-viewport] > div) {
+  min-width: 100%;
+  min-height: 100%;
+}
+
+.settings-section-scroll-content {
+  min-width: 0;
+  padding: 0 10px 18px 0;
+}
+
 .control-settings-page-actions {
   display: flex;
   align-items: center;
@@ -2815,6 +2851,10 @@ function errorText(error: unknown) {
 
   .control-settings-page {
     padding: 12px;
+  }
+
+  .settings-section-scroll-content {
+    padding-right: 6px;
   }
 
   .image-registry-head {

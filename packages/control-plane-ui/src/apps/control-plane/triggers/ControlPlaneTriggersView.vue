@@ -6,20 +6,20 @@
         <Input v-model="filter" class="trigger-board-filter" :placeholder="t('triggers.filter')" />
         <Dialog v-model:open="createDialogOpen">
           <DialogTrigger as-child>
-            <Button size="sm">
+            <Button size="sm" @click="beginCreate">
               <Plus :size="14" />
               <span>{{ t("triggers.create.action") }}</span>
             </Button>
           </DialogTrigger>
           <DialogContent class="trigger-create-dialog">
             <DialogClose as-child>
-              <Button variant="ghost" size="icon" class="trigger-create-close" :aria-label="t('triggers.create.close')">
+              <Button variant="ghost" size="icon" class="trigger-create-close" :aria-label="t(editingHash ? 'triggers.edit.close' : 'triggers.create.close')">
                 <X :size="16" />
               </Button>
             </DialogClose>
             <DialogHeader>
-              <DialogTitle>{{ t("triggers.create.title") }}</DialogTitle>
-              <DialogDescription>{{ t("triggers.create.description") }}</DialogDescription>
+              <DialogTitle>{{ t(editingHash ? "triggers.edit.title" : "triggers.create.title") }}</DialogTitle>
+              <DialogDescription>{{ t(editingHash ? "triggers.edit.description" : "triggers.create.description") }}</DialogDescription>
             </DialogHeader>
             <div class="trigger-create-dialog-body">
               <section class="trigger-create-group">
@@ -35,6 +35,10 @@
                       <ControlPlaneSelectItem value="file-change">{{ t("triggers.sourceType.fileChange") }}</ControlPlaneSelectItem>
                       <ControlPlaneSelectItem value="ai-session">{{ t("triggers.sourceType.aiSession") }}</ControlPlaneSelectItem>
                     </ControlPlaneSelect>
+                  </label>
+                  <label class="trigger-create-full-width">
+                    <span>{{ t("triggers.create.templateDescription") }}</span>
+                    <Textarea v-model="createForm.description" rows="2" :placeholder="t('triggers.create.descriptionPlaceholder')" />
                   </label>
                 </div>
 
@@ -103,6 +107,10 @@
                 </div>
                 <div v-else class="trigger-board-source-grid">
                   <label>
+                    <span>{{ t("triggers.create.agent") }}</span>
+                    <Input v-model="createForm.agent" :placeholder="t('triggers.create.anyAgent')" />
+                  </label>
+                  <label>
                     <span>{{ t("triggers.create.statuses") }}</span>
                     <DropdownMenu>
                       <DropdownMenuTrigger as-child>
@@ -168,6 +176,10 @@
                       <ControlPlaneSelectItem value="queue">{{ t("triggers.busyPolicy.queue") }}</ControlPlaneSelectItem>
                     </ControlPlaneSelect>
                   </label>
+                  <label>
+                    <span>{{ t("triggers.create.maxConcurrentRuns") }}</span>
+                    <Input v-model="createForm.maxConcurrentRuns" type="number" min="1" max="20" step="1" inputmode="numeric" placeholder="1" />
+                  </label>
                   <label v-if="createForm.cooldownPreset === 'custom'" class="trigger-interval-field">
                     <span>{{ t("triggers.create.customCooldown") }}</span>
                     <div class="trigger-interval-control">
@@ -195,9 +207,10 @@
               <DialogClose as-child>
                 <Button variant="outline" size="sm">{{ t("triggers.create.cancel") }}</Button>
               </DialogClose>
-              <Button size="sm" :disabled="creating" @click="createTemplate">
-                <Plus :size="14" />
-                <span>{{ creating ? t("triggers.create.creating") : t("triggers.create.submit") }}</span>
+              <Button size="sm" :disabled="saving" @click="saveTemplate">
+                <Pencil v-if="editingHash" :size="14" />
+                <Plus v-else :size="14" />
+                <span>{{ saving ? t(editingHash ? "triggers.edit.saving" : "triggers.create.creating") : t(editingHash ? "triggers.edit.submit" : "triggers.create.submit") }}</span>
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -277,6 +290,7 @@
 
         <footer class="trigger-board-card-actions">
           <Button variant="outline" size="sm" :disabled="!trigger.ownedByControlPlane || !availableSessions(trigger).length" @click="openDeployDialog(trigger.configHash)"><MapPinPlus :size="14" /><span>{{ t("triggers.actions.deploy") }}</span></Button>
+          <Button variant="outline" size="sm" :disabled="!trigger.ownedByControlPlane" :title="trigger.ownedByControlPlane ? t('triggers.actions.editTitle') : t('triggers.ownership.editOwnedElsewhere')" @click="beginEdit(trigger)"><Pencil :size="14" /><span>{{ t("triggers.actions.edit") }}</span></Button>
           <Button variant="outline" size="sm" class="trigger-board-delete" :disabled="deletingHash === trigger.configHash || !trigger.ownedByControlPlane" :title="trigger.ownedByControlPlane ? t('triggers.actions.deleteTitle') : t('triggers.ownership.deleteOwnedElsewhere')" @click="deleteTemplate(trigger.configHash)"><Trash2 :size="14" /><span>{{ t("triggers.actions.delete") }}</span></Button>
         </footer>
       </section>
@@ -302,8 +316,8 @@
 import { computed, reactive, ref } from "vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import { useI18n } from "vue-i18n";
-import { Activity, Bot, CircleAlert, Clock3, FolderSync, History, MapPin, MapPinPlus, Play, Plus, Trash2, Unlink, X, Zap } from "@lucide/vue";
-import { bindAiSessionTrigger, createControlPlaneTrigger, deleteControlPlaneTrigger, runControlledInstanceTrigger, unbindAiSessionTrigger, useControlPlaneAiSessionsQuery, useControlPlaneTriggersQuery } from "../../../api/queries";
+import { Activity, Bot, CircleAlert, Clock3, FolderSync, History, MapPin, MapPinPlus, Pencil, Play, Plus, Trash2, Unlink, X, Zap } from "@lucide/vue";
+import { bindAiSessionTrigger, createControlPlaneTrigger, deleteControlPlaneTrigger, runControlledInstanceTrigger, unbindAiSessionTrigger, updateControlPlaneTrigger, useControlPlaneAiSessionsQuery, useControlPlaneTriggersQuery } from "../../../api/queries";
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import type { ControlPlaneTrigger, InstanceBoardItem, TriggerRun, TriggerSource, TriggerTarget } from "../../../api/types";
 import { Badge } from "../../../components/ui/badge";
@@ -328,7 +342,8 @@ const props = defineProps<{ instances: InstanceBoardItem[] }>();
 const triggers = useControlPlaneTriggersQuery();
 const aiSessions = useControlPlaneAiSessionsQuery();
 const filter = ref("");
-const creating = ref(false);
+const saving = ref(false);
+const editingHash = ref("");
 const deletingHash = ref("");
 const bindingBusyKey = ref("");
 const createDialogOpen = ref(false);
@@ -336,6 +351,7 @@ const deployDialogOpen = ref(false);
 const deployTriggerHash = ref("");
 const createForm = reactive({
   name: "",
+  description: "",
   sourceType: "schedule" as TriggerSource["type"],
   scheduleKind: "interval" as ScheduleKind,
   intervalValue: "1",
@@ -349,10 +365,12 @@ const createForm = reactive({
   debounceMs: "1500",
   statuses: ["idle", "failed"] as AiSessionTriggerSource["statuses"],
   phases: [] as AiSessionTriggerSource["phases"],
+  agent: "",
   cooldownPreset: "none" as CooldownPreset,
   customCooldownValue: "5",
   customCooldownUnit: "minute" as CooldownUnit,
   whenBusy: "skip" as "skip" | "queue",
+  maxConcurrentRuns: "1",
   promptTemplate: "Please review the current context and continue with the next useful step.",
 });
 
@@ -518,27 +536,116 @@ async function run(instanceId: string, configHash: string, deploymentId?: string
   }
 }
 
-async function createTemplate() {
-  creating.value = true;
+function beginCreate() {
+  editingHash.value = "";
+  resetCreateForm();
+}
+
+function resetCreateForm() {
+  Object.assign(createForm, {
+    name: "",
+    description: "",
+    sourceType: "schedule",
+    scheduleKind: "interval",
+    intervalValue: "1",
+    intervalUnit: "hour",
+    timeOfDay: "09:00",
+    timezone: defaultTimezone(),
+    weekdays: [1, 2, 3, 4, 5],
+    roots: "/workspace",
+    globs: "**/*",
+    ignore: "node_modules/**, .git/**",
+    debounceMs: "1500",
+    statuses: ["idle", "failed"],
+    phases: [],
+    agent: "",
+    cooldownPreset: "none",
+    customCooldownValue: "5",
+    customCooldownUnit: "minute",
+    whenBusy: "skip",
+    maxConcurrentRuns: "1",
+    promptTemplate: "Please review the current context and continue with the next useful step.",
+  });
+}
+
+function beginEdit(trigger: ControlPlaneTrigger) {
+  if (!trigger.ownedByControlPlane) return;
+  editingHash.value = trigger.configHash;
+  resetCreateForm();
+  populateForm(trigger.config);
+  createDialogOpen.value = true;
+}
+
+async function saveTemplate() {
+  saving.value = true;
   try {
-    await createControlPlaneTrigger({
+    const input = {
       name: createForm.name.trim() || "Untitled trigger",
+      description: createForm.description.trim() || undefined,
       source: sourceFromForm(),
       action: { promptTemplate: createForm.promptTemplate },
       policy: {
         cooldownMs: cooldownMsFromForm(),
-        maxConcurrentRuns: 1,
+        maxConcurrentRuns: boundedInteger(createForm.maxConcurrentRuns, 1, 1, 20),
         whenBusy: createForm.whenBusy,
       },
-    });
+    };
+    if (editingHash.value) {
+      await updateControlPlaneTrigger(editingHash.value, input);
+    } else {
+      await createControlPlaneTrigger(input);
+    }
     createForm.name = "";
     createDialogOpen.value = false;
     await refresh();
   } catch (error) {
     showControlPlaneToast(translateApiError(error, t));
   } finally {
-    creating.value = false;
+    saving.value = false;
   }
+}
+
+function populateForm(config: ControlPlaneTrigger["config"]) {
+  createForm.name = config.name;
+  createForm.description = config.description || "";
+  createForm.sourceType = config.source.type;
+  createForm.promptTemplate = config.action.promptTemplate;
+  createForm.whenBusy = config.policy.whenBusy;
+  createForm.maxConcurrentRuns = String(config.policy.maxConcurrentRuns);
+  setCooldown(config.policy.cooldownMs || 0);
+  if (config.source.type === "file-change") {
+    createForm.roots = config.source.roots.join(", ");
+    createForm.globs = config.source.globs.join(", ");
+    createForm.ignore = (config.source.ignore || []).join(", ");
+    createForm.debounceMs = String(config.source.debounceMs);
+  } else if (config.source.type === "ai-session") {
+    createForm.agent = config.source.agent || "";
+    createForm.statuses = [...(config.source.statuses || [])];
+    createForm.phases = [...(config.source.phases || [])];
+  } else if ("intervalMs" in config.source) {
+    createForm.scheduleKind = "interval";
+    const intervalMs = config.source.intervalMs;
+    const unit = (["week", "day", "hour", "minute"] as IntervalUnit[]).find((candidate) => intervalMs % intervalUnitMs[candidate] === 0) || "minute";
+    createForm.intervalUnit = unit;
+    createForm.intervalValue = String(intervalMs / intervalUnitMs[unit]);
+  } else {
+    createForm.scheduleKind = config.source.scheduleKind;
+    createForm.timeOfDay = config.source.timeOfDay;
+    createForm.timezone = config.source.timezone;
+    if (config.source.scheduleKind === "weekly") createForm.weekdays = [...config.source.weekdays];
+  }
+}
+
+function setCooldown(cooldownMs: number) {
+  const preset = cooldownPresetOptions.value.find((option) => option.ms === cooldownMs);
+  if (preset) {
+    createForm.cooldownPreset = preset.value;
+    return;
+  }
+  createForm.cooldownPreset = "custom";
+  const unit = (["hour", "minute", "second"] as CooldownUnit[]).find((candidate) => cooldownMs % cooldownUnitMs[candidate] === 0) || "second";
+  createForm.customCooldownUnit = unit;
+  createForm.customCooldownValue = String(cooldownMs / cooldownUnitMs[unit]);
 }
 
 async function deleteTemplate(configHash: string) {
@@ -575,6 +682,7 @@ function sourceFromForm(): TriggerSource {
   if (createForm.sourceType === "ai-session") {
     return {
       type: "ai-session",
+      agent: createForm.agent.trim() || undefined,
       statuses: createForm.statuses.length ? createForm.statuses : undefined,
       phases: createForm.phases.length ? createForm.phases : undefined,
     };
@@ -627,6 +735,12 @@ function listFromCsv(value: string, fallback: string[] = []) {
 
 function positiveNumber(value: string, fallback: number) {
   return Math.max(1, Number(value) || fallback);
+}
+
+function boundedInteger(value: string, fallback: number, minimum: number, maximum: number) {
+  const parsed = Number(value);
+  const normalized = Number.isFinite(parsed) ? Math.round(parsed) : fallback;
+  return Math.min(maximum, Math.max(minimum, normalized));
 }
 
 function shortHash(value: string) {

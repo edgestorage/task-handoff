@@ -62,13 +62,15 @@
       <ScrollArea v-if="layoutMode === 'columns'" class="ai-board-columns-scroll">
         <div class="ai-board-columns" :style="boardColumnGridStyle">
           <section v-for="column in boardColumns" :key="column.key" class="ai-board-column" :data-tone="column.tone">
-            <header class="ai-board-column-head">
-              <span>
-                <strong>{{ column.title }}</strong>
-                <small>{{ column.description }}</small>
-              </span>
-              <b>{{ column.cards.length }}</b>
-            </header>
+            <div class="ai-board-column-head-mask">
+              <header class="ai-board-column-head">
+                <span>
+                  <strong>{{ column.title }}</strong>
+                  <small>{{ column.description }}</small>
+                </span>
+                <b>{{ column.cards.length }}</b>
+              </header>
+            </div>
 
             <div class="ai-board-column-body-content">
               <AiSessionCard
@@ -1184,43 +1186,46 @@ watch([() => selectedCard.value?.session.id, messageDraft, messageMentionBinding
 }
 
 .ai-board-column {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   min-height: 0;
   overflow: visible;
-  border: 1px solid var(--ai-board-column-border);
   border-radius: 8px;
   background: var(--ai-board-column-bg);
 }
 
-.ai-board-column[data-tone="waiting"] {
-  border-color: var(--ai-board-column-waiting-border);
-}
-
-.ai-board-column[data-tone="problem"] {
-  border-color: var(--ai-board-column-problem-border);
+.ai-board-column-head-mask {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--workspace-bg);
 }
 
 .ai-board-column-head {
   display: flex;
-  position: sticky;
-  top: 0;
-  z-index: 3;
   align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
   min-width: 0;
-  border-bottom: 1px solid var(--ai-board-column-border);
-  border-radius: 7px 7px 0 0;
+  border: 1px solid var(--ai-board-column-border);
+  border-radius: 8px 8px 0 0;
   background: var(--ai-board-column-head-bg);
   padding: 10px;
 }
 
 .ai-board-column[data-tone="waiting"] .ai-board-column-head {
-  background: var(--ai-board-waiting-head-bg);
+  border-top-color: var(--ai-board-column-waiting-border);
+  border-right-color: var(--ai-board-column-waiting-border);
+  border-left-color: var(--ai-board-column-waiting-border);
+  background: linear-gradient(var(--ai-board-waiting-head-bg), var(--ai-board-waiting-head-bg)), var(--ai-board-column-head-bg);
 }
 
 .ai-board-column[data-tone="problem"] .ai-board-column-head {
-  background: var(--ai-board-problem-head-bg);
+  border-top-color: var(--ai-board-column-problem-border);
+  border-right-color: var(--ai-board-column-problem-border);
+  border-left-color: var(--ai-board-column-problem-border);
+  background: linear-gradient(var(--ai-board-problem-head-bg), var(--ai-board-problem-head-bg)), var(--ai-board-column-head-bg);
 }
 
 .ai-board-column-head span {
@@ -1276,11 +1281,25 @@ watch([() => selectedCard.value?.session.id, messageDraft, messageMentionBinding
 
 .ai-board-column-body-content {
   display: flex;
+  position: relative;
+  z-index: 1;
+  flex: 1 0 auto;
   flex-direction: column;
   gap: 8px;
   min-width: 0;
-  min-height: 100%;
+  min-height: 0;
+  border: solid var(--ai-board-column-border);
+  border-width: 0 1px 1px;
+  border-radius: 0 0 8px 8px;
   padding: 8px 10px 190px;
+}
+
+.ai-board-column[data-tone="waiting"] .ai-board-column-body-content {
+  border-color: var(--ai-board-column-waiting-border);
+}
+
+.ai-board-column[data-tone="problem"] .ai-board-column-body-content {
+  border-color: var(--ai-board-column-problem-border);
 }
 
 .ai-board-grid {

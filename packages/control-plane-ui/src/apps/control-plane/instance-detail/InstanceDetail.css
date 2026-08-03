@@ -279,7 +279,7 @@
 @media (max-width: 780px) {
   .instance-detail {
     overflow: hidden;
-    padding: 12px;
+    padding: 8px;
   }
 
   .instance-detail-layout {
@@ -290,16 +290,64 @@
   .detail-head {
     display: grid;
     grid-template-columns: 1fr;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+
+  .detail-head p {
+    display: none;
+  }
+
+  .detail-name-button,
+  .detail-name-input {
+    margin-left: -4px;
+    font-size: 20px;
+    line-height: 1.15;
+  }
+
+  .detail-name-button .detail-name-button-label,
+  .detail-name-input {
+    padding: 1px 4px 2px;
   }
 
   .detail-side {
-    justify-items: start;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    justify-items: initial;
+    width: 100%;
+    gap: 6px 8px;
     min-width: 0;
   }
 
   .detail-badges,
   .instance-controls {
     justify-content: flex-start;
+    flex-wrap: nowrap;
+  }
+
+  .instance-controls {
+    margin-left: auto;
+    gap: 4px;
+  }
+
+  .instance-controls > button {
+    position: relative;
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+    padding: 0;
+  }
+
+  .instance-controls > button > span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
 }
 

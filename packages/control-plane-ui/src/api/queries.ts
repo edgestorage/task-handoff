@@ -1,6 +1,6 @@
 import { queryOptions, useQuery } from "@tanstack/vue-query";
 import { computed, toValue, type MaybeRefOrGetter } from "vue";
-import { deleteApiData, getApiData, getApiPayload, patchApiData, postApiData } from "./client";
+import { deleteApiData, getApiData, getApiPayload, patchApiData, postApiData, putApiData } from "./client";
 import { mergeInstanceBoardQueryData } from "./instanceBoardMerge.ts";
 import { controlPlaneQueryKeys } from "./queryKeys.ts";
 export { controlPlaneQueryKeys } from "./queryKeys.ts";
@@ -439,6 +439,10 @@ export function runControlledInstanceTrigger(instanceId: string, configHash: str
 
 export function createControlPlaneTrigger(input: CreateControlPlaneTriggerInput) {
   return postApiData<Record<string, unknown>>("triggers", input);
+}
+
+export function updateControlPlaneTrigger(configHash: string, input: CreateControlPlaneTriggerInput) {
+  return putApiData<Record<string, unknown>>(`triggers/${configHash}`, input);
 }
 
 export function deleteControlPlaneTrigger(configHash: string) {

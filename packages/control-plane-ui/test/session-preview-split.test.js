@@ -97,7 +97,8 @@ test("session tab dragging follows the pointer, reorders live, and accepts pane 
 
   assert.match(preview, /@pointerdown="startSessionTabPointer\(\$event, session, tabGroup\.id\)"/);
   assert.match(preview, /window\.addEventListener\("pointermove", moveSessionTabPointer, true\)/);
-  assert.match(preview, /Math\.hypot\(event\.clientX - pending\.startX, event\.clientY - pending\.startY\) < 5/);
+  assert.match(preview, /const distance = Math\.hypot\(event\.clientX - pending\.startX, event\.clientY - pending\.startY\);/);
+  assert.match(preview, /if \(!sessionTabPointerDrag\.value && distance < 5\) return;/);
   assert.match(preview, /<Teleport to="body">[\s\S]*class="session-tab-pointer-overlay"/);
   assert.match(preview, /<TransitionGroup name="session-tab-reorder"[\s\S]*previewSessionTabs\(tabGroup\.id, tabGroup\.appTabs\)/);
   assert.match(preview, /function previewSessionTabs\([\s\S]*nextTabs\.splice\(target\.placement === "after" \? targetIndex \+ 1 : targetIndex, 0, drag\.session\)/);

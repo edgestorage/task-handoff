@@ -22,6 +22,12 @@ export function registerTriggerRoutes({ app, service, events }: RegisterTriggerR
     events.publish("trigger.created", { configHash: trigger.configHash });
     return reply.code(201).send({ data: trigger });
   });
+  app.put("/api/triggers/:configHash", async (request) => {
+    const params = TriggerConfigParamsSchema.parse(request.params);
+    const result = await service.updateTrigger(params.configHash, request.body);
+    events.publish("trigger.updated", { previousConfigHash: params.configHash, configHash: result.trigger.configHash });
+    return { data: result };
+  });
   app.delete("/api/triggers/:configHash", async (request) => {
     const params = TriggerConfigParamsSchema.parse(request.params);
     const result = await service.deleteTrigger(params.configHash);

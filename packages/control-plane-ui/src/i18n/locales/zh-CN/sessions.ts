@@ -41,7 +41,7 @@ export const sessions = {
     noSelected: "未选择 AI 会话",
   },
   panel: {
-    view: "视图", status: "状态", listOptions: "AI 会话列表选项", newSession: "新建 AI 会话", allStatuses: "全部状态", active: "活跃", waiting: "等待中", problem: "异常",
+    view: "视图", status: "状态", listOptions: "AI 会话列表选项", sessionList: "AI 会话列表", newSession: "新建 AI 会话", allStatuses: "全部状态", active: "活跃", waiting: "等待中", problem: "异常",
     noMatching: "没有匹配的会话", noConversations: "尚无对话", tryFilter: "请尝试其他状态筛选。", startHint: "使用上方的 + 按钮开始对话。",
     resizeList: "调整 AI 会话列表大小", startIdea: "从一个想法开始", searchProjects: "搜索项目", noProjects: "未找到项目", newProject: "新建项目",
     promptPlaceholder: "描述你想做的事", chooseProject: "选择项目", projectUnavailable: "这个项目已不在节点的登记目录中。", startedWorktree: "AI 会话已在所选 worktree 中启动。", backLatest: "返回最新消息",

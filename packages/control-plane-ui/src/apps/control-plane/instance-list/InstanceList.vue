@@ -844,32 +844,7 @@ function openNewInstanceFromTemporaryList() {
 
 @media (max-width: 780px) {
   .instance-list {
-    grid-template-rows: auto auto auto;
-    max-height: 224px;
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
-  }
-
-  .instance-resize-handle {
     display: none;
-  }
-
-  .instance-list.collapsed {
-    grid-template-rows: auto;
-    max-height: 58px;
-  }
-
-  .instances-expand-rail {
-    width: 100%;
-    min-height: 40px;
-    grid-auto-flow: column;
-    align-content: center;
-    justify-content: center;
-    padding: 0 10px;
-  }
-
-  .instances-expand-rail span {
-    writing-mode: horizontal-tb;
   }
 }
 </style>

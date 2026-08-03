@@ -34,3 +34,16 @@ test("AI board node and agent groups use authoritative identifiers", () => {
   assert.match(board, /key: card\.session\.agent, label: appDisplayName\(card\.session\.agent, t\)/);
   assert.match(board, /stored === "node" \|\| stored === "agent"/);
 });
+
+test("sticky AI board column headers own one continuous rounded border", () => {
+  assert.doesNotMatch(board, /\.ai-board-column \{[^}]*border: 1px/);
+  assert.doesNotMatch(board, /clip-path: inset\(0 round 8px\);/);
+  assert.doesNotMatch(board, /columnsHeadersStuck|data-headers-stuck|updateColumnsHeaderStuck/);
+  assert.match(board, /class="ai-board-column-head-mask">\s*<header class="ai-board-column-head">/);
+  assert.match(board, /\.ai-board-column-head-mask \{[\s\S]*?position: sticky;[\s\S]*?background: var\(--workspace-bg\);/);
+  assert.match(board, /\.ai-board-column-head \{[\s\S]*?border: 1px solid var\(--ai-board-column-border\);[\s\S]*?border-radius: 8px 8px 0 0;/);
+  assert.match(board, /\.ai-board-column\[data-tone="waiting"\] \.ai-board-column-head \{[\s\S]*?border-top-color: var\(--ai-board-column-waiting-border\);[\s\S]*?border-right-color: var\(--ai-board-column-waiting-border\);[\s\S]*?border-left-color: var\(--ai-board-column-waiting-border\);/);
+  assert.match(board, /background: linear-gradient\(var\(--ai-board-waiting-head-bg\), var\(--ai-board-waiting-head-bg\)\), var\(--ai-board-column-head-bg\);/);
+  assert.match(board, /\.ai-board-column \{[\s\S]*?display: flex;[\s\S]*?flex-direction: column;/);
+  assert.match(board, /\.ai-board-column-body-content \{[\s\S]*?position: relative;[\s\S]*?z-index: 1;[\s\S]*?flex: 1 0 auto;[\s\S]*?min-height: 0;[\s\S]*?border: solid var\(--ai-board-column-border\);[\s\S]*?border-width: 0 1px 1px;/);
+});

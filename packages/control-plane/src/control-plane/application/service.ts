@@ -1033,6 +1033,10 @@ export class ControlPlaneService {
     return this.controlPlaneTriggerService.createTrigger(input);
   }
 
+  async updateTrigger(configHash: string, input: unknown) {
+    return this.controlPlaneTriggerService.updateTrigger(configHash, input);
+  }
+
   async deleteTrigger(configHash: string) {
     return this.controlPlaneTriggerService.deleteTrigger(configHash);
   }

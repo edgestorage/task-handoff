@@ -136,6 +136,10 @@
   gap: 10px;
 }
 
+.trigger-create-full-width {
+  grid-column: 1 / -1;
+}
+
 .trigger-board-create label,
 .trigger-create-group label,
 .trigger-board-prompt {
@@ -643,6 +647,7 @@
   }
 
   .trigger-board-filter {
+    flex: 0 0 auto;
     width: 100%;
     max-width: none;
   }
@@ -674,5 +679,63 @@
 
   .trigger-interval-control {
     grid-template-columns: minmax(0, 1fr) 124px;
+  }
+
+  .trigger-create-dialog.trigger-create-dialog {
+    width: calc(100vw - 16px);
+    max-height: calc(100vh - 24px);
+    padding: 14px;
+  }
+
+  .trigger-board-card-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .trigger-board-card-actions > button:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .trigger-board-card-actions > button {
+    width: 100%;
+  }
+
+  .trigger-board-delete {
+    margin-left: 0;
+  }
+}
+
+@media (max-width: 480px) {
+  .trigger-board.settings-panel-surface {
+    gap: 10px;
+    padding: 10px;
+  }
+
+  .trigger-board-head-actions {
+    gap: 8px;
+  }
+
+  .trigger-board-card {
+    padding: 10px;
+  }
+
+  .trigger-board-overview {
+    gap: 6px;
+  }
+
+  .trigger-board-stat {
+    padding: 8px;
+  }
+
+  .trigger-board-section-label small {
+    line-height: 1.45;
+  }
+
+  .trigger-board-no-deployments {
+    line-height: 1.45;
+  }
+
+  .trigger-interval-control {
+    grid-template-columns: minmax(0, 1fr) 112px;
   }
 }

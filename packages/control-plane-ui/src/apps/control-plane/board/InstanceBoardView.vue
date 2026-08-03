@@ -895,8 +895,7 @@ function canLaunchBoardApp(instance: InstanceBoardItem) {
   }
 
   .instance-board-grid {
-    --board-card-min: 280px;
-    grid-auto-rows: 380px;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 </style>

@@ -68,6 +68,18 @@ test("instance AI session card previews do not open an expanded overlay", () => 
   assert.doesNotMatch(styles, /session-ai-expanded|cursor: zoom-in/);
 });
 
+test("mobile AI sessions switch between the card list and one detail pane", () => {
+  assert.match(panel, /class="session-ai-workspace" :data-mobile-pane="mobilePane"/);
+  assert.match(panel, /function selectSession\(sessionId: string\) \{[\s\S]*mobilePane\.value = "detail";[\s\S]*emit\("selectAiSession"/);
+  assert.match(panel, /class="session-ai-mobile-list-button"[\s\S]*@click="showMobileSessionList"/);
+  assert.match(panel, /function showMobileSessionList\(\) \{\s*mobilePane\.value = "list";/);
+  assert.match(styles, /@media \(max-width: 920px\)[\s\S]*data-mobile-pane="list"[^}]*> \.session-ai-detail[\s\S]*data-mobile-pane="detail"[^}]*> \.session-ai-sidebar[^{]*\{\s*display: none;/);
+  assert.match(styles, /@media \(max-width: 920px\)[\s\S]*\.session-ai-panel \{\s*padding: 8px;[\s\S]*data-mobile-pane="detail"\] \{\s*grid-template-rows: 28px minmax\(0, 1fr\);\s*row-gap: 2px;[\s\S]*\.session-ai-mobile-list-button \{[\s\S]*height: 28px;[\s\S]*margin: 0;/);
+  assert.match(styles, /@media \(max-width: 920px\)[\s\S]*\.session-ai-preview-field-assistant \{\s*padding-right: 38px;/);
+  assert.doesNotMatch(styles, /@media \(max-width: 920px\)[\s\S]*\.session-ai-select \{\s*padding-right: 38px;/);
+  assert.doesNotMatch(styles, /grid-template-rows: minmax\(220px, 42vh\) minmax\(0, 1fr\)/);
+});
+
 test("bound instance AI sessions expose the same close menu as board cards", () => {
   assert.match(panel, /<DropdownMenu v-if="aiSessionAppTab\(instance, session\)">[\s\S]*?t\('sessions\.actions\.moreFor', \{ agent: session\.agent \}\)[\s\S]*?t\("sessions\.actions\.closeApp"\)/);
   assert.match(panel, /await stopAppSession\(props\.instance\.id, appSessionId\);/);
@@ -116,7 +128,7 @@ test("an unselected AI session defaults to the new-session surface", () => {
 });
 
 test("opening the already-visible new-session surface preserves its draft", () => {
-  assert.match(panel, /function openNewSession\(\) \{\s*const wasVisible = showNewSession\.value;\s*newSessionOpen\.value = true;\s*if \(wasVisible\) return;/);
+  assert.match(panel, /function openNewSession\(\) \{\s*const wasVisible = showNewSession\.value;\s*newSessionOpen\.value = true;[\s\S]{0,120}if \(wasVisible\) \{[\s\S]{0,80}return;[\s\S]{0,80}\}[\s\S]{0,120}newSessionDraft\.value = "";/);
 });
 
 test("new-session folder picker keeps actions visible while long folder lists scroll", () => {

@@ -53,7 +53,7 @@
                   @focusout="scheduleSessionTabDetailClose"
                 >
                   <ContextMenu>
-                    <ContextMenuTrigger as-child>
+                    <ContextMenuTrigger as-child :disabled="!sessionSplitAvailable">
                       <span
                         class="session-tab-item"
                         :class="{ active: isSessionTabActive(session), focused: isSessionTabFocused(session), 'drag-placeholder': draggingSessionTabKey === session.key }"
@@ -106,11 +106,11 @@
                         <Pencil :size="14" />
                         <span>{{ t("sessions.tabs.rename") }}</span>
                       </ContextMenuItem>
-                      <ContextMenuItem v-if="sessionPaneId(session) === 'right'" class="instance-action-item" @select="$emit('moveSessionToPane', session.key, 'left')">
+                      <ContextMenuItem v-if="sessionSplitAvailable && sessionPaneId(session) === 'right'" class="instance-action-item" @select="$emit('moveSessionToPane', session.key, 'left')">
                         <PanelLeft :size="14" />
                         <span>{{ t("sessions.tabs.moveLeft") }}</span>
                       </ContextMenuItem>
-                      <ContextMenuItem v-else class="instance-action-item" @select="$emit('moveSessionToPane', session.key, 'right')">
+                      <ContextMenuItem v-else-if="sessionSplitAvailable" class="instance-action-item" @select="$emit('moveSessionToPane', session.key, 'right')">
                         <PanelRight :size="14" />
                         <span>{{ t("sessions.tabs.moveRight") }}</span>
                       </ContextMenuItem>
@@ -251,7 +251,7 @@
           session-kind="app-session"
           @open-workspace="$emit('openRepositoryWorkspace', $event)"
         />
-        <button type="button" class="preview-expand-button" :disabled="!hasSessionSplit && !canOpenSessionSplit" :aria-label="hasSessionSplit ? t('sessions.tabs.closeSplit') : t('sessions.tabs.split')" :title="hasSessionSplit ? t('sessions.tabs.closeSplit') : t('sessions.tabs.split')" @click="hasSessionSplit ? $emit('closeSessionSplit') : $emit('openSessionSplit')">
+        <button v-if="sessionSplitAvailable" type="button" class="preview-expand-button" :disabled="!hasSessionSplit && !canOpenSessionSplit" :aria-label="hasSessionSplit ? t('sessions.tabs.closeSplit') : t('sessions.tabs.split')" :title="hasSessionSplit ? t('sessions.tabs.closeSplit') : t('sessions.tabs.split')" @click="hasSessionSplit ? $emit('closeSessionSplit') : $emit('openSessionSplit')">
           <PanelRightClose v-if="hasSessionSplit" :size="15" />
           <Columns2 v-else :size="15" />
         </button>
@@ -351,9 +351,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, type ComponentPublicInstance, type ObjectDirective } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch, type ComponentPublicInstance, type ObjectDirective } from "vue";
 import { useI18n } from "vue-i18n";
-import { useNow } from "@vueuse/core";
+import { useMediaQuery, useNow } from "@vueuse/core";
 import { Activity, AppWindow, Bot, Boxes, ChevronDown, Columns2, Folder, FolderGit2, Maximize2, Minimize2, PanelLeft, PanelRight, PanelRightClose, Pencil, Plus, X } from "@lucide/vue";
 import type { RepositorySessionKind } from "@task-handoff/protocol/repository";
 import type { AiSessionSummary, InstanceBoardItem, InstanceResourceMetrics, InstanceWithAiSessions, NodeLocalFolder } from "../../../api/types";
@@ -448,6 +448,11 @@ const emit = defineEmits<{
 }>();
 
 const resourceMetricsNow = useNow({ interval: 1_000 });
+const sessionSplitAvailable = useMediaQuery("(min-width: 781px)");
+
+watch([sessionSplitAvailable, () => props.hasSessionSplit], ([available, split]) => {
+  if (!available && split) emit("closeSessionSplit");
+}, { immediate: true });
 const { locale } = useControlPlaneLocale();
 const activeRepositorySessionId = computed(() => {
   if (!props.activeSession || props.activeSession.kind === "ai" || props.activeSession.kind === "status" || props.activeSession.kind === "repository") return "";
@@ -603,8 +608,10 @@ const sessionTabPointerDrag = ref<{
 }>();
 let pendingSessionTabPointer: {
   pointerId: number;
+  pointerType: string;
   session: SessionTab;
   pane: SessionPaneId;
+  tab: HTMLElement;
   startX: number;
   startY: number;
   offsetX: number;
@@ -612,6 +619,10 @@ let pendingSessionTabPointer: {
   width: number;
   height: number;
 } | undefined;
+const mobileSessionTabDragHoldMs = 420;
+const mobileSessionTabDragMoveTolerance = 8;
+let sessionTabLongPressTimer: number | undefined;
+let sessionTabDragMoved = false;
 let suppressSessionTabClickUntil = 0;
 const editingSessionKey = ref("");
 const sessionTitleDraft = ref("");
@@ -782,8 +793,10 @@ function startSessionTabPointer(event: PointerEvent, session: SessionTab, pane: 
   const bounds = tab.getBoundingClientRect();
   pendingSessionTabPointer = {
     pointerId: event.pointerId,
+    pointerType: event.pointerType,
     session,
     pane,
+    tab,
     startX: event.clientX,
     startY: event.clientY,
     offsetX: event.clientX - bounds.left,
@@ -796,29 +809,55 @@ function startSessionTabPointer(event: PointerEvent, session: SessionTab, pane: 
   window.addEventListener("pointercancel", cancelSessionTabPointerDrag, true);
   window.addEventListener("keydown", cancelSessionTabPointerDragOnEscape, true);
   window.addEventListener("blur", cancelSessionTabPointerDrag);
+  if (!sessionSplitAvailable.value && event.pointerType === "touch") {
+    sessionTabLongPressTimer = window.setTimeout(() => {
+      const pending = pendingSessionTabPointer;
+      if (!pending || pending.pointerId !== event.pointerId) return;
+      activateSessionTabPointerDrag(pending.startX, pending.startY);
+    }, mobileSessionTabDragHoldMs);
+  }
 }
 
 function moveSessionTabPointer(event: PointerEvent) {
   const pending = pendingSessionTabPointer;
   if (!pending || event.pointerId !== pending.pointerId) return;
-  if (!sessionTabPointerDrag.value && Math.hypot(event.clientX - pending.startX, event.clientY - pending.startY) < 5) return;
+  const distance = Math.hypot(event.clientX - pending.startX, event.clientY - pending.startY);
+  const waitsForLongPress = !sessionSplitAvailable.value && pending.pointerType === "touch";
+  if (!sessionTabPointerDrag.value && waitsForLongPress) {
+    if (distance > mobileSessionTabDragMoveTolerance) cleanupSessionTabPointerDrag(false);
+    return;
+  }
+  if (!sessionTabPointerDrag.value && distance < 5) return;
   event.preventDefault();
   if (!sessionTabPointerDrag.value) {
-    draggingSessionTabKey.value = pending.session.key;
-    sessionTabPointerDrag.value = {
-      pointerId: pending.pointerId,
-      session: pending.session,
-      x: event.clientX - pending.offsetX,
-      y: event.clientY - pending.offsetY,
-      width: pending.width,
-      height: pending.height,
-    };
-    document.body.classList.add("session-tab-pointer-dragging");
+    activateSessionTabPointerDrag(event.clientX, event.clientY);
   } else {
     sessionTabPointerDrag.value.x = event.clientX - pending.offsetX;
     sessionTabPointerDrag.value.y = event.clientY - pending.offsetY;
   }
+  sessionTabDragMoved = true;
   updateSessionTabPointerTarget(event.clientX, event.clientY);
+}
+
+function activateSessionTabPointerDrag(clientX: number, clientY: number) {
+  const pending = pendingSessionTabPointer;
+  if (!pending || sessionTabPointerDrag.value) return;
+  clearSessionTabLongPressTimer();
+  try {
+    pending.tab.setPointerCapture?.(pending.pointerId);
+  } catch {
+    // Window-level listeners keep dragging functional when a WebView cannot capture this pointer.
+  }
+  draggingSessionTabKey.value = pending.session.key;
+  sessionTabPointerDrag.value = {
+    pointerId: pending.pointerId,
+    session: pending.session,
+    x: clientX - pending.offsetX,
+    y: clientY - pending.offsetY,
+    width: pending.width,
+    height: pending.height,
+  };
+  document.body.classList.add("session-tab-pointer-dragging");
 }
 
 function updateSessionTabPointerTarget(clientX: number, clientY: number) {
@@ -856,9 +895,9 @@ function scrollSessionTabDragViewport(selector: HTMLElement, clientX: number) {
 function finishSessionTabPointer(event: PointerEvent) {
   if (!pendingSessionTabPointer || event.pointerId !== pendingSessionTabPointer.pointerId) return;
   const wasDragging = Boolean(sessionTabPointerDrag.value);
-  if (wasDragging) updateSessionTabPointerTarget(event.clientX, event.clientY);
+  if (wasDragging && sessionTabDragMoved) updateSessionTabPointerTarget(event.clientX, event.clientY);
   const target = sessionTabDropTarget.value;
-  if (wasDragging && draggingSessionTabKey.value && target) {
+  if (wasDragging && sessionTabDragMoved && draggingSessionTabKey.value && target) {
     emit("moveSessionTab", draggingSessionTabKey.value, target.targetKey, target.placement, target.pane);
   }
   cleanupSessionTabPointerDrag(wasDragging);
@@ -875,17 +914,27 @@ function cancelSessionTabPointerDrag() {
 }
 
 function cleanupSessionTabPointerDrag(suppressClick: boolean) {
+  clearSessionTabLongPressTimer();
   window.removeEventListener("pointermove", moveSessionTabPointer, true);
   window.removeEventListener("pointerup", finishSessionTabPointer, true);
   window.removeEventListener("pointercancel", cancelSessionTabPointerDrag, true);
   window.removeEventListener("keydown", cancelSessionTabPointerDragOnEscape, true);
   window.removeEventListener("blur", cancelSessionTabPointerDrag);
+  const pending = pendingSessionTabPointer;
+  if (pending?.tab.hasPointerCapture?.(pending.pointerId)) pending.tab.releasePointerCapture(pending.pointerId);
   pendingSessionTabPointer = undefined;
   sessionTabPointerDrag.value = undefined;
   draggingSessionTabKey.value = "";
   sessionTabDropTarget.value = undefined;
+  sessionTabDragMoved = false;
   document.body.classList.remove("session-tab-pointer-dragging");
   if (suppressClick) suppressSessionTabClickUntil = Date.now() + 250;
+}
+
+function clearSessionTabLongPressTimer() {
+  if (sessionTabLongPressTimer === undefined) return;
+  window.clearTimeout(sessionTabLongPressTimer);
+  sessionTabLongPressTimer = undefined;
 }
 
 function startSplitResize(event: PointerEvent) {
