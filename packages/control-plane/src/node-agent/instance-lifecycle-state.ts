@@ -40,7 +40,7 @@ function runtimeLifecycleCompleted(
   observedAt: string,
 ) {
   const supersededByTerminalLifecycle = latest.stateRevision > baseline.stateRevision
-    && ["failed", "stopping", "stopped"].includes(latest.status);
+    && ["failed", "stopping", "stopped", "deleting"].includes(latest.status);
   if (supersededByTerminalLifecycle) return latest;
   const hasFreshProcessReport = latest.stateRevision > baseline.stateRevision
     && latest.lastHeartbeatAt !== baseline.lastHeartbeatAt

@@ -19,6 +19,7 @@ const HISTORY_INDEX_FIELDS = new Set(["schemaVersion", "items"]);
 const HISTORY_ITEM_FIELDS = new Set([
   "id",
   "agent",
+  "creationSource",
   "providerSessionId",
   "title",
   "userPrompt",
@@ -107,7 +108,10 @@ export function sanitizeAiSessionHistoryIndex(
       onWarning?.({ kind: "item", id, reason: "invalid item removed" });
       return [];
     }
-    const candidate = knownFields(item, HISTORY_ITEM_FIELDS);
+    const candidate = {
+      ...knownFields(item, HISTORY_ITEM_FIELDS),
+      creationSource: item.creationSource === "ai-session" ? "ai-session" : "app-session",
+    };
     const parsed = AiSessionHistoryItemSchema.safeParse(candidate);
     if (!parsed.success) {
       onWarning?.({ kind: "item", id, reason: "item failed current schema and was removed" });

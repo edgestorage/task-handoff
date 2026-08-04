@@ -1,8 +1,9 @@
 const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
+const net = require("node:net");
 const test = require("node:test");
 
-const { NodeAgentExternalListenerManager } = require("../packages/control-plane/src/node-agent/external-listener-manager.ts");
+const { allocateNodeAgentExternalListener, NodeAgentExternalListenerManager } = require("../packages/control-plane/src/node-agent/external-listener-manager.ts");
 const { NodeAgentRecoverySupervisor } = require("../packages/control-plane/src/node-agent/recovery-supervisor.ts");
 const { LocalProcessSupervisor } = require("../packages/control-plane/src/node-agent/runtimes/local-process-supervisor.ts");
 const { InstanceOperationGate } = require("../packages/control-plane/src/node-agent/instances/instance-operation-gate.ts");
@@ -586,4 +587,19 @@ test("external listener updates execute serially", async () => {
   assert.deepEqual(events, ["stop", "listen:18092", "stop", "listen:18093"]);
   assert.deepEqual(persistedPorts, [18092, 18093]);
   assert.equal(manager.current().port, 18093);
+});
+
+test("desktop node-agent listener allocation skips an occupied preferred port", async (t) => {
+  const occupied = net.createServer();
+  await new Promise((resolve, reject) => {
+    occupied.once("error", reject);
+    occupied.listen(0, "127.0.0.1", resolve);
+  });
+  t.after(() => occupied.close());
+  const address = occupied.address();
+  assert.equal(typeof address, "object");
+
+  const allocated = await allocateNodeAgentExternalListener({ bindScope: "loopback", port: address.port }, 2);
+  assert.equal(allocated.bindScope, "loopback");
+  assert.equal(allocated.port, address.port + 1);
 });

@@ -1,6 +1,9 @@
 import {
   AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES,
   AiSessionActionResultSchema,
+  AiSessionCreateResultSchema,
+  AiSessionCloseResultSchema,
+  AiSessionOpenAppResultSchema,
   AiSessionCommandResultSchema,
   AiSessionHistoryDetailSchema,
   AiSessionHistoryListSchema,
@@ -12,6 +15,9 @@ import {
   type AiSessionActionResult,
   type AiSessionCommandInput,
   type AiSessionCommandResult,
+  type AiSessionCreateResult,
+  type AiSessionCloseResult,
+  type AiSessionOpenAppResult,
   type AiSessionHistoryDetail,
   type AiSessionHistoryList,
   type AiSessionMessageAttachment,
@@ -54,6 +60,40 @@ export class AiSessionActionService {
   async resume(instanceId: string, aiSessionId: string): Promise<AiSessionResumeResult> {
     const result = AiSessionResumeResultSchema.parse(await this.post(instanceId, sessionRoute(aiSessionId, "resume"), {}));
     await this.refreshAfterCommittedResume(instanceId, aiSessionId);
+    return result;
+  }
+
+  async create(
+    instanceId: string,
+    input: {
+      agent: string;
+      cwd: { type: "runtime-path"; path: string };
+      message: string;
+      attachments?: AiSessionMessageAttachment[];
+      references?: AiSessionReference[];
+      permissionMode?: AiSessionPermissionMode;
+      clientRequestId: string;
+    },
+  ): Promise<AiSessionCreateResult> {
+    assertAiSessionAttachmentsWithinLimit(input.attachments || []);
+    const instance = await this.options.requireInstance(instanceId);
+    const effectivePermissionMode = input.permissionMode
+      || (input.agent === "codex" ? instance.config.defaultCodexPermissionMode : undefined);
+    const result = AiSessionCreateResultSchema.parse(await this.options.request(instance, "/ai-sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...input, ...(effectivePermissionMode ? { permissionMode: effectivePermissionMode } : {}) }),
+    }));
+    return result;
+  }
+
+  async openApp(instanceId: string, aiSessionId: string, clientRequestId: string): Promise<AiSessionOpenAppResult> {
+    const result = AiSessionOpenAppResultSchema.parse(await this.post(instanceId, sessionRoute(aiSessionId, "open-app"), { clientRequestId }));
+    return result;
+  }
+
+  async close(instanceId: string, aiSessionId: string, clientRequestId: string): Promise<AiSessionCloseResult> {
+    const result = AiSessionCloseResultSchema.parse(await this.post(instanceId, sessionRoute(aiSessionId, "close"), { clientRequestId }));
     return result;
   }
 

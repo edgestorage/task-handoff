@@ -7,10 +7,17 @@
 }
 
 .control-plane-shell {
-  height: 100vh;
+  --control-plane-viewport-height: 100vh;
+  height: var(--control-plane-viewport-height);
   overflow: hidden;
   background: var(--workspace-bg);
   color: var(--text);
+}
+
+@supports (height: 100dvh) {
+  .control-plane-shell {
+    --control-plane-viewport-height: 100dvh;
+  }
 }
 
 .control-plane-topbar {
@@ -369,7 +376,7 @@
 .control-plane-workbench {
   display: grid;
   grid-template-columns: var(--instances-width, 292px) minmax(0, 1fr);
-  height: calc(100vh - 56px);
+  height: calc(var(--control-plane-viewport-height) - 56px);
   min-height: 0;
 }
 
@@ -427,7 +434,7 @@
   .control-plane-workbench {
     grid-template-columns: 1fr;
     grid-template-rows: minmax(0, 1fr);
-    height: calc(100vh - 56px);
+    height: calc(var(--control-plane-viewport-height) - 56px);
   }
 
   .control-plane-workbench.instances-collapsed {

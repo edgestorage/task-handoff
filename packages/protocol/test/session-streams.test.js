@@ -3,6 +3,10 @@ import test from "node:test";
 
 import {
   AiSessionEventMetaSchema,
+  AiSessionCreateInputSchema,
+  AiSessionCreateResultSchema,
+  AiSessionCloseInputSchema,
+  AiSessionCloseResultSchema,
   AiSessionEventType,
   AiSessionDeltaResponseSchema,
   AiSessionHistoryIndexSchema,
@@ -14,6 +18,8 @@ import {
   AiSessionMentionFileSearchSchema,
   AiSessionMessageInputSchema,
   AiSessionMessageRefInputSchema,
+  AiSessionOpenAppInputSchema,
+  AiSessionOpenAppResultSchema,
   AiSessionReferenceSchema,
   AiSessionRealtimeInputSchema,
   AiSessionStatusSchema,
@@ -40,6 +46,7 @@ test("AI session history schemas expose bounded strict summaries and resume resu
   const item = {
     id: "ai-history-1",
     agent: "codex",
+    creationSource: "app-session",
     providerSessionId: "11111111-1111-4111-8111-111111111111",
     title: "Continue the implementation",
     userPrompt: "Build AI session history",
@@ -70,12 +77,54 @@ test("AI session history schemas expose bounded strict summaries and resume resu
     aiSessionId: item.id,
     providerSessionId: item.providerSessionId,
     appSessionId: "app-1",
+    creationSource: "app-session",
   }), {
     disposition: "resumed",
     aiSessionId: item.id,
     providerSessionId: item.providerSessionId,
     appSessionId: "app-1",
+    creationSource: "app-session",
   });
+});
+
+test("AI session create, open-app, and close schemas keep trusted identities server-side", () => {
+  const create = {
+    agent: "codex",
+    cwd: { type: "runtime-path", path: "/workspace/project" },
+    message: "Implement the change",
+    attachments: [],
+    references: [],
+    permissionMode: "auto-review",
+    clientRequestId: "request-create-1",
+  };
+  assert.deepEqual(AiSessionCreateInputSchema.parse(create), create);
+  assert.equal(AiSessionCreateInputSchema.safeParse({ ...create, cwd: { type: "runtime-path", path: "relative/path" } }).success, false);
+  assert.equal(AiSessionCreateInputSchema.safeParse({ ...create, providerSessionId: "client-controlled" }).success, false);
+  assert.deepEqual(AiSessionCreateResultSchema.parse({
+    disposition: "created",
+    aiSessionId: "ai-1",
+    providerSessionId: "thread-1",
+    creationSource: "ai-session",
+  }).creationSource, "ai-session");
+
+  const action = { clientRequestId: "request-action-1" };
+  assert.deepEqual(AiSessionOpenAppInputSchema.parse(action), action);
+  assert.deepEqual(AiSessionCloseInputSchema.parse(action), action);
+  assert.equal(AiSessionOpenAppInputSchema.safeParse({ ...action, cwd: "/tmp" }).success, false);
+  assert.equal(AiSessionCloseInputSchema.safeParse({ ...action, providerSessionId: "thread-1" }).success, false);
+  assert.equal(AiSessionOpenAppResultSchema.parse({
+    disposition: "opened",
+    aiSessionId: "ai-1",
+    providerSessionId: "thread-1",
+    appSessionId: "app-1",
+    creationSource: "ai-session",
+  }).appSessionId, "app-1");
+  assert.equal(AiSessionCloseResultSchema.parse({
+    disposition: "closed",
+    aiSessionId: "ai-1",
+    providerSessionId: "thread-1",
+    creationSource: "ai-session",
+  }).disposition, "closed");
 });
 
 test("AI session mention schemas enforce canonical references and safe file results", () => {
@@ -100,6 +149,7 @@ function session(overrides = {}) {
   return {
     id: "session-a",
     agent: "codex",
+    creationSource: "app-session",
     startedAt: now,
     updatedAt: now,
     counters: {},

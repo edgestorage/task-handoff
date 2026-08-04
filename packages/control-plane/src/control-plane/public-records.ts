@@ -59,7 +59,13 @@ export function publicInstance(instance: ControlledInstance) {
     uiAccessStatus: _uiAccessStatus,
     ...publicRecord
   } = instance;
-  return publicRecord;
+  return {
+    ...publicRecord,
+    runtime: {
+      ...publicRecord.runtime,
+      managedVolumes: publicRecord.runtime.managedVolumes.map(({ labels: _labels, ...volume }) => volume),
+    },
+  };
 }
 
 export function publicInstanceWithAccess(instance: ControlledInstance) {

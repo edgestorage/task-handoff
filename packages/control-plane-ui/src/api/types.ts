@@ -10,6 +10,9 @@ import type {
   AiSessionMentionFileSearch,
   AiSessionReference,
   AiSessionResumeResult,
+  AiSessionCreateResult,
+  AiSessionOpenAppResult,
+  AiSessionCloseResult,
   AiSessionPermissionMode,
   AiSessionLifecycle as ProtocolAiSessionLifecycle,
   AiSessionMessageAttachmentRef as ProtocolAiSessionAttachmentRef,
@@ -39,6 +42,8 @@ import type {
 } from "@task-handoff/protocol/app-sessions";
 import { AppSessionEventType as ProtocolAppSessionEventType } from "@task-handoff/protocol/app-sessions";
 import type {
+  EnvironmentSource,
+  EnvironmentTemplate,
   ImagePullProgress,
   ApplyUpdateRequest,
   NodeRolloutSummary,
@@ -48,7 +53,7 @@ import type {
   UpdateJob as ProtocolUpdateJob,
 } from "@task-handoff/protocol/control-plane";
 
-export type { AiSessionHistoryDetail, AiSessionHistoryItem, AiSessionHistoryList, AiSessionMentionCandidate, AiSessionMentionCatalog, AiSessionMentionDiagnostic, AiSessionMentionFileSearch, AiSessionReference, AiSessionResumeResult };
+export type { AiSessionCloseResult, AiSessionCreateResult, AiSessionHistoryDetail, AiSessionHistoryItem, AiSessionHistoryList, AiSessionMentionCandidate, AiSessionMentionCatalog, AiSessionMentionDiagnostic, AiSessionMentionFileSearch, AiSessionOpenAppResult, AiSessionReference, AiSessionResumeResult };
 
 export type HealthResponse = {
   ok: boolean;
@@ -97,6 +102,7 @@ export type UpdateCheckResult = ProtocolUpdateCheckResult;
 export type UpdateJob = ProtocolUpdateJob;
 export type { NodeRolloutSummary, NodeUpdateImpact, RuntimeVersionState };
 export type { ApplyUpdateRequest };
+export type { EnvironmentSource, EnvironmentTemplate };
 
 export type AuthUser = {
   id: string;
@@ -653,10 +659,11 @@ export type ControlledInstance = {
   nodeId: string;
   runtimeId: string;
   imageSelection?: ImageSelection;
+  environmentSource?: EnvironmentSource;
   imageSnapshot?: InstanceImageSnapshot;
   imageProvisioning?: ImageProvisioning;
   stateRevision: number;
-  status: "created" | "provisioning" | "starting" | "registering" | "registered" | "running" | "stopping" | "stopped" | "failed" | "unhealthy";
+  status: "created" | "provisioning" | "starting" | "registering" | "registered" | "running" | "stopping" | "stopped" | "deleting" | "failed" | "unhealthy";
   health: "unknown" | "ok" | "degraded" | "failed";
   connectionStatus: "unknown" | "online" | "offline" | "endpoint-unreachable";
   controlMode: "standalone" | "controlled";
@@ -984,6 +991,7 @@ export type CreateControlledInstanceInput = {
   source?: ProjectSource;
   sourceSnapshot?: Record<string, unknown>;
   imageSelection?: ImageSelection;
+  environmentSource?: EnvironmentSource;
   nodeId: string;
   runtimeId: string;
   config?: {

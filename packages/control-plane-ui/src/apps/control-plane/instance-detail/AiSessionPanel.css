@@ -1836,7 +1836,7 @@
   left: calc(10px + var(--session-ai-detail-left-inset, 0px));
   z-index: 5;
   min-height: 84px;
-  max-height: min(320px, calc(100vh - 180px));
+  max-height: min(320px, calc(var(--control-plane-viewport-height, 100vh) - 180px));
   -webkit-backdrop-filter: blur(16px);
   backdrop-filter: blur(16px);
 }
@@ -1902,7 +1902,7 @@
   z-index: auto;
   width: 100%;
   min-height: 0;
-  max-height: min(320px, calc(100vh - 220px));
+  max-height: min(320px, calc(var(--control-plane-viewport-height, 100vh) - 220px));
   border-radius: 0 0 20px 20px;
   -webkit-backdrop-filter: none;
   backdrop-filter: none;

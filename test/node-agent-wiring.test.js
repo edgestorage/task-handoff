@@ -137,6 +137,7 @@ function lifecycleRouteHarness(options = {}) {
     target: { strategy: "node-proxy", status: "reachable" },
     apps: { runningCount: 0, problemCount: 0 },
     aiSessions: { runningCount: 0, waitingCount: 0, sessions: [], updatedAt: "2026-08-02T00:00:00.000Z" },
+    ...(options.environmentTemplateOrigin ? { environmentTemplateOrigin: options.environmentTemplateOrigin } : {}),
     createdAt: "2026-08-02T00:00:00.000Z",
     updatedAt: "2026-08-02T00:00:00.000Z",
   });
@@ -145,7 +146,7 @@ function lifecycleRouteHarness(options = {}) {
   const state = {
     requireInstance: () => instance,
     requireRuntime: () => ({ id: "runtime_local", type: "local" }),
-    putInstance: (value) => value,
+    putInstance: (value) => { instance = ControlledInstanceSchema.parse(value); return instance; },
     deleteInstance: () => true,
     applyLifecycle: (_id, event) => {
       lifecycleEvents.push(event);
@@ -176,6 +177,14 @@ function lifecycleRouteHarness(options = {}) {
       options.deleteInstanceObserved?.(context.instance);
       await options.deleteGate;
       if (options.failDelete) throw new Error("delete failed");
+      return {
+        instanceId: context.instance.id,
+        containerDeleted: true,
+        completed: true,
+        deletedVolumes: [],
+        retainedVolumes: [],
+        volumeResults: [],
+      };
     },
     restart: async () => {
       calls.push("adapter:restart");
@@ -218,6 +227,7 @@ function lifecycleRouteHarness(options = {}) {
     forgetRecovery: () => { calls.push("recovery:forget"); },
     completeSuppressedRecovery: () => { calls.push("recovery:complete-suppressed"); },
     deleteMetadata: () => { calls.push("metadata:delete"); },
+    releaseEnvironmentImage: async (imageId) => { calls.push(`environment-image:release:${imageId}`); },
     diagnostic: () => undefined,
   };
   const operationGate = new InstanceOperationGate();
@@ -251,6 +261,7 @@ test("instance lifecycle routes order recovery suppression and allowance around 
     {
       method: "POST",
       url: "/api/node-agent/instances/inst_routes/delete",
+      payload: { deleteVolumes: true },
       expected: ["convergence:cancel", "lifecycle:stop-requested", "recovery:suppress", "adapter:delete", "recovery:forget", "metadata:delete", "hook:sync"],
     },
     {
@@ -279,6 +290,32 @@ test("instance lifecycle routes order recovery suppression and allowance around 
   }
 });
 
+test("deleting a derived instance releases its environment image after instance metadata", async (t) => {
+  const imageId = `sha256:${"d".repeat(64)}`;
+  const harness = lifecycleRouteHarness({
+    environmentTemplateOrigin: {
+      templateId: "template_routes",
+      name: "Routes template",
+      nodeId: "node_routes",
+      imageId,
+      platform: "linux",
+      architecture: "x64",
+    },
+  });
+  t.after(() => harness.app.close());
+
+  const response = await harness.app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_routes/delete",
+    payload: { deleteVolumes: true },
+  });
+  assert.equal(response.statusCode, 200);
+  const metadataIndex = harness.calls.indexOf("metadata:delete");
+  const releaseIndex = harness.calls.indexOf(`environment-image:release:${imageId}`);
+  assert.ok(metadataIndex >= 0);
+  assert.ok(releaseIndex > metadataIndex);
+});
+
 test("failed stop and delete compensate lifecycle state before allowing recovery", async (t) => {
   for (const entry of [
     { action: "stop", option: "failStop", adapterCall: "adapter:stop" },
@@ -287,20 +324,22 @@ test("failed stop and delete compensate lifecycle state before allowing recovery
     await t.test(entry.action, async () => {
       const { app, calls, lifecycleEvents, baselineInstance } = lifecycleRouteHarness({ [entry.option]: true });
       try {
-        const response = await app.inject({ method: "POST", url: `/api/node-agent/instances/inst_routes/${entry.action}` });
+        const response = await app.inject({ method: "POST", url: `/api/node-agent/instances/inst_routes/${entry.action}`, ...(entry.action === "delete" ? { payload: { deleteVolumes: true } } : {}) });
         assert.equal(response.statusCode, 500);
         assert.deepEqual(calls, [
           "convergence:cancel",
           "lifecycle:stop-requested",
           "recovery:suppress",
           entry.adapterCall,
-          "lifecycle:stop-failed",
+          ...(entry.action === "stop" ? ["lifecycle:stop-failed"] : []),
           "hook:sync",
           "recovery:allow",
         ]);
-        const stopFailed = lifecycleEvents.find((event) => event.type === "stop-failed");
-        assert.equal(stopFailed.baseline, baselineInstance);
-        assert.equal(stopFailed.baseline.status, "running");
+        if (entry.action === "stop") {
+          const stopFailed = lifecycleEvents.find((event) => event.type === "stop-failed");
+          assert.equal(stopFailed.baseline, baselineInstance);
+          assert.equal(stopFailed.baseline.status, "running");
+        }
       } finally {
         await app.close();
       }
@@ -336,7 +375,7 @@ test("per-instance lifecycle queue serializes delete before start", async () => 
   const gate = deferred();
   const { app, calls } = lifecycleRouteHarness({ deleteGate: gate.promise, failStart: true });
   try {
-    const deleting = app.inject({ method: "POST", url: "/api/node-agent/instances/inst_routes/delete" });
+    const deleting = app.inject({ method: "POST", url: "/api/node-agent/instances/inst_routes/delete", payload: { deleteVolumes: true } });
     while (!calls.includes("adapter:delete")) await new Promise((resolve) => setImmediate(resolve));
     const starting = app.inject({ method: "POST", url: "/api/node-agent/instances/inst_routes/start", payload: {} });
     await new Promise((resolve) => setImmediate(resolve));
@@ -459,7 +498,7 @@ test("delete re-reads the authoritative instance after cancellation settles", as
     deleteInstanceObserved: (instance) => { deletedInstance = instance; },
   });
   try {
-    const deleting = harness.app.inject({ method: "POST", url: "/api/node-agent/instances/inst_routes/delete" });
+    const deleting = harness.app.inject({ method: "POST", url: "/api/node-agent/instances/inst_routes/delete", payload: { deleteVolumes: true } });
     await cancelEntered.promise;
     harness.replaceInstance({
       ...harness.baselineInstance,

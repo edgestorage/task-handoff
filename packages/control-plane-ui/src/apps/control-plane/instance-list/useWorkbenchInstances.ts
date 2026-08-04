@@ -6,7 +6,7 @@ type UseWorkbenchInstancesInput<T extends InstanceBoardItem> = {
   instances: Ref<T[] | undefined>;
 };
 
-export type InstanceListSortMode = "created-desc" | "name-asc" | "node-asc" | "status-asc";
+export type InstanceListSortMode = "name-asc" | "node-asc" | "status-asc";
 
 const GROUP_BY_NODE_STORAGE_KEY = "task-handoff.control-plane.instances-group-by-node";
 export const ACTIVE_INSTANCE_STORAGE_KEY = "task-handoff.control-plane.active-instance-id";
@@ -42,22 +42,22 @@ function persistActiveInstanceId(id: string) {
 export function useWorkbenchInstances<T extends InstanceBoardItem>({ instances }: UseWorkbenchInstancesInput<T>) {
   const activeInstanceId = ref(storedActiveInstanceId());
   const instanceFilter = ref("");
-  const instanceSortMode = ref<InstanceListSortMode>("created-desc");
+  const instanceSortMode = ref<InstanceListSortMode>("node-asc");
   const groupInstancesByNode = ref(storedGroupByNode());
 
   const sortedInstances = computed(() => {
     const list = [...(instances.value || [])];
     return list.sort((a, b) => {
       if (instanceSortMode.value === "name-asc") {
-        return a.name.localeCompare(b.name) || b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id);
+        return a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
       }
       if (instanceSortMode.value === "node-asc") {
-        return nodeLabel(a).localeCompare(nodeLabel(b)) || a.name.localeCompare(b.name) || b.createdAt.localeCompare(a.createdAt);
+        return nodeLabel(a).localeCompare(nodeLabel(b)) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
       }
-      if (instanceSortMode.value === "status-asc") {
-        return a.connectionStatus.localeCompare(b.connectionStatus) || a.status.localeCompare(b.status) || b.createdAt.localeCompare(a.createdAt);
-      }
-      return Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.id.localeCompare(a.id);
+      return a.connectionStatus.localeCompare(b.connectionStatus)
+        || a.status.localeCompare(b.status)
+        || a.name.localeCompare(b.name)
+        || a.id.localeCompare(b.id);
     });
   });
 

@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import { Duplex } from "node:stream";
 import WebSocket from "ws";
 import type { AiSessionApprovalDecision } from "../../ai-session-control";
-import type { CodexTurnPermissionOverrides } from "./contract";
+import type { CodexThreadStartOptions, CodexTurnPermissionOverrides } from "./contract";
 import { approvalResponseForRequest, codexApprovalRequest } from "../protocol/approvals";
 import { codexNotification } from "../protocol/events";
 import { turnIdFromResult } from "../protocol/turn-control";
@@ -126,6 +126,32 @@ export class CodexAppServerClient extends EventEmitter {
     return ids;
   }
 
+  async startThread(options: CodexThreadStartOptions) {
+    const result = await this.request("thread/start", {
+      model: options.model || null,
+      modelProvider: options.modelProvider || null,
+      cwd: options.cwd,
+      runtimeWorkspaceRoots: options.runtimeWorkspaceRoots || [options.cwd],
+      ...(options.permissions || {}),
+      ephemeral: false,
+      sessionStartSource: "startup",
+      threadSource: "user",
+    });
+    const thread = result.thread && typeof result.thread === "object" && !Array.isArray(result.thread)
+      ? result.thread as CodexThread
+      : undefined;
+    if (!thread || typeof thread.id !== "string" || !thread.id.trim()) {
+      throw new Error("Codex thread/start returned no persistent thread identity.");
+    }
+    if (thread.ephemeral === true) {
+      throw new Error("Codex thread/start returned an ephemeral thread.");
+    }
+    if (typeof thread.cwd !== "string" || !thread.cwd.trim()) {
+      throw new Error("Codex thread/start returned no cwd.");
+    }
+    return thread;
+  }
+
   async readThread(threadId: string, options: { includeTurns?: boolean } = {}) {
     const result = await this.request("thread/read", { threadId, includeTurns: Boolean(options.includeTurns) });
     return result.thread && typeof result.thread === "object" ? result.thread as CodexThread : undefined;
@@ -213,6 +239,22 @@ export class CodexAppServerClient extends EventEmitter {
   async resumeThread(threadId: string) {
     const result = await this.request("thread/resume", { threadId });
     return result.thread && typeof result.thread === "object" ? result.thread as CodexThread : undefined;
+  }
+
+  async archiveThread(threadId: string) {
+    await this.request("thread/archive", { threadId });
+  }
+
+  async unarchiveThread(threadId: string) {
+    await this.request("thread/unarchive", { threadId });
+  }
+
+  async deleteThread(threadId: string) {
+    await this.request("thread/delete", { threadId });
+  }
+
+  async unsubscribeThread(threadId: string) {
+    await this.request("thread/unsubscribe", { threadId });
   }
 
   async startReview(threadId: string) {

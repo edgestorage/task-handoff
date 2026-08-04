@@ -80,8 +80,9 @@ export async function putApiData<T>(path: string, body?: unknown): Promise<T> {
   return payload.data;
 }
 
-export async function deleteApiData<T>(path: string): Promise<T> {
-  const payload = await withApiError(api.delete(path).json<{ data: T }>());
+export async function deleteApiData<T>(path: string, body?: unknown): Promise<T> {
+  const request = body === undefined ? api.delete(path) : api.delete(path, { json: body });
+  const payload = await withApiError(request.json<{ data: T }>());
   return payload.data;
 }
 

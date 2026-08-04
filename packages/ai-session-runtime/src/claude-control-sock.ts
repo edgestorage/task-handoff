@@ -165,6 +165,12 @@ export class ClaudeControlSockSessionBridge implements AiSessionControlProvider,
     throw aiSessionControlError("AI_SESSION_APPROVAL_UNSUPPORTED", "Claude daemon sessions do not expose structured approval control.", 400);
   }
 
+  // Claude's resumable conversation is owned by the App/daemon process. The
+  // unified close coordinator stops that App immediately after this boundary.
+  async archiveSession(_providerSessionId: string) {}
+
+  async unsubscribeSession(_providerSessionId: string) {}
+
   stop() {
     for (const stop of this.subscriptions.values()) {
       stop();

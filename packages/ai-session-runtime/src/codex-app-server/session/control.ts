@@ -166,7 +166,7 @@ export class CodexAppServerSessionControl {
   }
 }
 
-function codexPermissionOverrides(mode?: AiSessionPermissionMode): CodexTurnPermissionOverrides | undefined {
+export function codexPermissionOverrides(mode?: AiSessionPermissionMode): CodexTurnPermissionOverrides | undefined {
   if (mode === "ask") {
     return { approvalPolicy: "on-request", approvalsReviewer: "user", permissions: ":workspace" };
   }

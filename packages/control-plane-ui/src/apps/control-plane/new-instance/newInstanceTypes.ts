@@ -13,6 +13,8 @@ export type SourceDraft = {
 export type RuntimeDraft = {
   nodeId: string;
   runtimeId: string;
+  environmentSourceType: "image" | "template";
+  environmentTemplateId: string;
   imageId: string;
   imageTag: string;
 };

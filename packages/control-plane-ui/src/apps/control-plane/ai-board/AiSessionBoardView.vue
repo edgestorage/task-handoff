@@ -93,7 +93,7 @@
                 :trigger-button-title="triggerButtonTitle"
                 :trigger-templates="triggerTemplates"
                 @next-prompt="nextPrompt"
-                @open-ai-session-app="(instance, session) => emit('openAiSessionApp', instance, session)"
+                @open-ai-session-app="openCardApp"
                 @previous-prompt="previousPrompt"
                 @resolve-approval="(instance, session, decision) => emit('resolveApproval', instance, session, decision)"
                 @select-card="selectCard"
@@ -147,7 +147,7 @@
               :trigger-button-title="triggerButtonTitle"
               :trigger-templates="triggerTemplates"
               @next-prompt="nextPrompt"
-              @open-ai-session-app="(instance, session) => emit('openAiSessionApp', instance, session)"
+              @open-ai-session-app="openCardApp"
               @previous-prompt="previousPrompt"
               @resolve-approval="(instance, session, decision) => emit('resolveApproval', instance, session, decision)"
               @select-card="selectCard"
@@ -182,7 +182,7 @@
           :prompt-count="promptCount(selectedCard.session)"
           :prompt-index="promptIndexFor(selectedCard)"
           @next-prompt="nextPrompt(selectedCard)"
-          @open-ai-session-app="(instance, session) => emit('openAiSessionApp', instance, session)"
+          @open-ai-session-app="openCardApp"
           @previous-prompt="previousPrompt(selectedCard)"
           @remove-queued-message="removeSelectedQueuedMessage"
           @resolve-approval="resolveSelectedApproval"
@@ -209,7 +209,7 @@ import { translateApiError } from "../../../i18n/apiError";
 import { useEventListener } from "@vueuse/core";
 import { Columns3, LayoutGrid, Search, SlidersHorizontal } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
-import { interruptAiSession, markAiSessionRead, removeAiSessionQueuedMessage, resolveAiSessionApproval, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, stopAppSession, uploadAiSessionAttachment, useControlPlaneSettingsQuery } from "../../../api/queries";
+import { closeAiSession, interruptAiSession, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, resolveAiSessionApproval, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, uploadAiSessionAttachment, useControlPlaneSettingsQuery } from "../../../api/queries";
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { executeAiSessionCommand } from "../../../api/ai-session-commands";
 import type { AiSessionCommandInput, AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
@@ -808,27 +808,44 @@ async function removeSelectedQueuedMessage(queueId: string) {
 }
 
 async function stopCardAppSession(card: AiBoardCard) {
-  const sessionId = appSessionIdFor(card);
-  if (!sessionId || stoppingAppSessionKey.value) {
-    return;
-  }
+  if (stoppingAppSessionKey.value) return;
   stoppingAppSessionKey.value = card.key;
   try {
-    await stopAppSession(card.instance.id, sessionId);
+    await closeAiSession(card.instance.id, card.session.id, crypto.randomUUID());
     await refreshBoard();
     if (selectedCardKey.value === card.key) {
       clearSelectedCard();
     }
   } catch (error) {
-    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.closeAppFailed")));
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.closeSessionFailed")));
     await refreshBoard();
   } finally {
     stoppingAppSessionKey.value = "";
   }
 }
 
-function appSessionIdFor(card: AiBoardCard) {
-  return typeof card.appTab.source?.id === "string" ? card.appTab.source.id : card.appTab.key;
+async function openCardApp(instance: InstanceWithAiSessions, session?: AiSessionSummary) {
+  if (!session) return;
+  if (session.appSessionId) {
+    emit("openAiSessionApp", instance, session);
+    return;
+  }
+  try {
+    const result = await openAiSessionApp(instance.id, session.id, crypto.randomUUID());
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await refreshBoard();
+      const current = instance.aiSessions?.sessions.find((candidate) => candidate.id === result.aiSessionId);
+      if (current?.appSessionId) {
+        emit("openAiSessionApp", instance, current);
+        return;
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 500));
+    }
+    throw new Error(t("sessions.panel.starting"));
+  } catch (error) {
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.openAppFailed")));
+    await refreshBoard();
+  }
 }
 
 async function runSelectedQueueAction(action: (card: AiBoardCard) => Promise<unknown>, message: string) {

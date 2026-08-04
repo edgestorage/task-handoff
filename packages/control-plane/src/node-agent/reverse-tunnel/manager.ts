@@ -59,6 +59,7 @@ export function createReverseTunnelManager(
     lastConnectedAt?: string;
     lastDisconnectedAt?: string;
     error?: string;
+    handshakeTimer?: ReturnType<typeof setTimeout>;
   };
   const tunnels = new Map<string, TunnelEntry>();
   let closing = false;
@@ -91,15 +92,37 @@ export function createReverseTunnelManager(
     entry.socket = socket;
     socket.on("open", () => {
       if (tunnels.get(key) === entry && entry.socket === socket) {
-        entry.retry.reset();
-        entry.status = "connected";
-        entry.lastConnectedAt = new Date().toISOString();
-        entry.error = undefined;
-        app.log.info({ nodeId, tunnelUrl: new URL(entry.config.tunnelUrl).origin }, "node agent reverse tunnel connected");
+        entry.status = "connecting";
+        entry.handshakeTimer = setTimeout(() => {
+          if (tunnels.get(key) !== entry || entry.socket !== socket || entry.status === "connected") return;
+          entry.error = "Reverse tunnel did not receive a control-plane handshake.";
+          socket.close(1008, "Reverse tunnel handshake timed out.");
+        }, 10_000);
+        entry.handshakeTimer.unref?.();
       }
+    });
+    socket.on("message", (raw) => {
+      if (tunnels.get(key) !== entry || entry.socket !== socket || entry.status === "connected") return;
+      let message: unknown;
+      try {
+        message = JSON.parse(String(raw));
+      } catch {
+        return;
+      }
+      const type = message && typeof message === "object" ? (message as { type?: unknown }).type : undefined;
+      if (type !== "control-plane.hello" && type !== "control-plane.identified") return;
+      if (entry.handshakeTimer) clearTimeout(entry.handshakeTimer);
+      entry.handshakeTimer = undefined;
+      entry.retry.reset();
+      entry.status = "connected";
+      entry.lastConnectedAt = new Date().toISOString();
+      entry.error = undefined;
+      app.log.info({ nodeId, tunnelUrl: new URL(entry.config.tunnelUrl).origin }, "node agent reverse tunnel connected");
     });
     socket.on("close", (code, reason) => {
       if (tunnels.get(key) !== entry || entry.socket !== socket) return;
+      if (entry.handshakeTimer) clearTimeout(entry.handshakeTimer);
+      entry.handshakeTimer = undefined;
       entry.socket = undefined;
       entry.lastDisconnectedAt = new Date().toISOString();
       entry.error = `WebSocket closed${code ? ` (${code})` : ""}${reason ? `: ${Buffer.isBuffer(reason) ? reason.toString("utf8") : String(reason)}` : ""}`;
@@ -125,6 +148,7 @@ export function createReverseTunnelManager(
   const replace = (key: string, config: TunnelConfig) => {
     const current = tunnels.get(key);
     current?.retry.cancel();
+    if (current?.handshakeTimer) clearTimeout(current.handshakeTimer);
     const entry: TunnelEntry = { config, retry: new EventConnectionRetryTimer(), status: "connecting" };
     tunnels.set(key, entry);
     current?.socket?.close(1000, "Reverse tunnel reconnecting.");
@@ -139,6 +163,7 @@ export function createReverseTunnelManager(
     for (const [key, entry] of tunnels) {
       if (configured.has(key)) continue;
       entry.retry.cancel();
+      if (entry.handshakeTimer) clearTimeout(entry.handshakeTimer);
       tunnels.delete(key);
       entry.socket?.close(1000, "Reverse tunnel configuration removed.");
     }
@@ -208,6 +233,7 @@ export function createReverseTunnelManager(
     closing = true;
     for (const entry of tunnels.values()) {
       entry.retry.cancel();
+      if (entry.handshakeTimer) clearTimeout(entry.handshakeTimer);
       entry.socket?.close(1001, "Node agent shutting down.");
     }
     tunnels.clear();

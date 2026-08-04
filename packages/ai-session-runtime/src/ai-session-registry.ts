@@ -4,6 +4,7 @@ import { EventEmitter } from "node:events";
 import { resolveStoragePaths } from "@task-handoff/core/storage/paths";
 import type {
   AiSessionLifecycle,
+  AiSessionCreationSource,
   AiSessionHistoryItem,
   AiSessionMessageAttachment,
   AiSessionPermissionMode,
@@ -61,6 +62,7 @@ import {
 
 type AiSessionStartInput = {
   agent: string;
+  creationSource?: AiSessionCreationSource;
   appSessionId?: string;
   appId?: string;
   providerSessionId?: string;
@@ -104,6 +106,7 @@ function summaryForHeartbeat(session: AiSessionStatus): AiSessionSummary {
   return {
     id: session.id,
     agent: session.agent,
+    creationSource: session.creationSource,
     appSessionId: session.appSessionId,
     appId: session.appId,
     providerSessionId: session.providerSessionId,
@@ -137,6 +140,8 @@ function actionsForSession(session: AiSessionStatus): AiSessionStatus["actions"]
     send: configured.send ?? true,
     interrupt: Boolean(active && configured.interrupt !== false),
     approval: Boolean(session.status === "waiting" && session.phase === "approval" && configured.approval !== false),
+    openApp: configured.openApp ?? Boolean(session.providerSessionId && !session.appSessionId),
+    close: configured.close ?? Boolean(session.providerSessionId),
   };
 }
 
@@ -206,6 +211,7 @@ export class AiSessionRegistry {
     const session: AiSessionStatus = {
       id: `ais_${randomUUID().replace(/-/g, "").slice(0, 20)}`,
       agent: compact(input.agent || "unknown", 80),
+      creationSource: input.creationSource || "app-session",
       appSessionId: input.appSessionId ? compact(input.appSessionId, 120) : undefined,
       appId: input.appId ? compact(input.appId, 120) : undefined,
       providerSessionId: input.providerSessionId ? compact(input.providerSessionId, 240) : undefined,
@@ -238,6 +244,7 @@ export class AiSessionRegistry {
     const session: AiSessionStatus = {
       id: item.id,
       agent: item.agent,
+      creationSource: item.creationSource,
       appId: item.agent,
       providerSessionId: item.providerSessionId,
       title: item.title,
@@ -391,6 +398,7 @@ export class AiSessionRegistry {
     if (!existing) {
       const session = this.start({
         agent: input.agent,
+        creationSource: input.creationSource,
         appSessionId: input.appSessionId,
         appId: input.appId,
         providerSessionId: input.providerSessionId,
@@ -542,7 +550,9 @@ export class AiSessionRegistry {
         .filter(Boolean),
     );
     const sessions = this.list()
-      .filter((session) => Boolean(session.appSessionId && appSessionIds.has(session.appSessionId)))
+      .filter((session) => session.appSessionId
+        ? appSessionIds.has(session.appSessionId)
+        : session.creationSource === "ai-session" && Boolean(session.providerSessionId))
       .slice(0, limit);
     return this.snapshotFromSessions(sessions);
   }

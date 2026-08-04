@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { ControlPlaneService } from "../application/service.ts";
 import type { ControlPlaneEventBus } from "../events/bus.ts";
 import { IdParamsSchema } from "./route-params.ts";
-import { AppManagementOperationRequestSchema } from "@task-handoff/protocol/control-plane";
+import { AppManagementOperationRequestSchema, InstanceDeleteInputSchema } from "@task-handoff/protocol/control-plane";
 import { withRequestSignal } from "./request-signal.ts";
 
 export type RegisterInstanceRoutesOptions = {
@@ -50,9 +50,9 @@ export function registerInstanceRoutes({ app, service, events }: RegisterInstanc
   });
   app.delete("/api/controlled-instances/:id", async (request) => {
     const id = IdParamsSchema.parse(request.params).id;
-    const deleted = await service.deleteControlledInstance(id);
-    events.publish("instance.deleted", { instanceId: id, deleted });
-    return { data: { deleted } };
+    const result = await service.deleteControlledInstance(id, InstanceDeleteInputSchema.parse(request.body));
+    if (result.completed) events.publish("instance.deleted", { instanceId: id, result });
+    return { data: result };
   });
   app.post("/api/controlled-instances/:id/start", async (request) => {
     const instance = await service.startControlledInstance(IdParamsSchema.parse(request.params).id);

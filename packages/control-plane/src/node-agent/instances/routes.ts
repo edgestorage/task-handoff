@@ -17,7 +17,7 @@ function bearerToken(headers: Record<string, unknown>) {
 
 type Operations = {
   list(): ControlledInstance[];
-  create(input: ReturnType<typeof CreateNodeInstanceSchema.parse>): ControlledInstance;
+  create(input: ReturnType<typeof CreateNodeInstanceSchema.parse>): ControlledInstance | Promise<ControlledInstance>;
   retryImageProvisioning(id: string): ControlledInstance;
   update(id: string, input: ReturnType<typeof UpdateNodeInstanceSchema.parse>): ControlledInstance;
   register(id: string, input: ControlledInstanceRegister, token?: string): ControlledInstance;
@@ -33,7 +33,7 @@ export function registerInstanceManagementRoutes(app: FastifyInstance, operation
   app.get("/api/node-agent/instances", async () => ({ data: operations.list() }));
 
   app.post("/api/node-agent/instances", async (request, reply) => {
-    const instance = operations.create(CreateNodeInstanceSchema.parse(request.body));
+    const instance = await operations.create(CreateNodeInstanceSchema.parse(request.body));
     operations.afterCreate(instance);
     return reply.code(201).send({ data: instance });
   });

@@ -16,6 +16,7 @@ export type AiSessionResumeCoordinatorOptions = {
   registry: AiSessionRegistry;
   appSessions: () => readonly AiSessionResumeAppSession[];
   startApp: (item: AiSessionHistoryItem) => AiSessionResumeAppSession | Promise<AiSessionResumeAppSession>;
+  resumeProvider?: (item: AiSessionHistoryItem) => void | Promise<void>;
 };
 
 export class AiSessionResumeCoordinator {
@@ -57,6 +58,7 @@ export class AiSessionResumeCoordinator {
         aiSessionId: providerSession.id,
         providerSessionId: item.providerSessionId,
         appSessionId: providerSession.appSessionId,
+        creationSource: item.creationSource,
       });
     }
 
@@ -65,6 +67,17 @@ export class AiSessionResumeCoordinator {
     if (providerSession && providerSession.id !== item.id) this.options.registry.discard(providerSession.id);
     this.options.registry.restoreHistory(item);
     try {
+      if (item.creationSource === "ai-session") {
+        if (!this.options.resumeProvider) throw new Error("Provider does not support direct AI session resume.");
+        await this.options.resumeProvider(item);
+        this.options.history.remove(item.id);
+        return AiSessionResumeResultSchema.parse({
+          disposition: "resumed",
+          aiSessionId: item.id,
+          providerSessionId: item.providerSessionId,
+          creationSource: item.creationSource,
+        });
+      }
       const appSession = await this.options.startApp(item);
       if (!appSession?.id || (typeof appSession.status === "string" && appSession.status !== "running")) {
         throw new Error("Provider resume did not create a running app session.");
@@ -74,6 +87,7 @@ export class AiSessionResumeCoordinator {
         aiSessionId: item.id,
         providerSessionId: item.providerSessionId,
         appSessionId: appSession.id,
+        creationSource: item.creationSource,
       });
     } catch (error: unknown) {
       if (!previous) this.options.registry.discard(item.id);

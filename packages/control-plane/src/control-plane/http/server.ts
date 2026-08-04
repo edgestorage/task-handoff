@@ -666,6 +666,12 @@ export async function runControlPlaneServer(options: RunControlPlaneServerOption
     await app.listen({ host: options.host, port: options.port });
   } catch (error) {
     lock.release();
+    if (error && typeof error === "object" && (error as NodeJS.ErrnoException).code === "EADDRINUSE") {
+      throw Object.assign(
+        new Error(`Control plane port ${options.host}:${options.port} is already in use.`),
+        { statusCode: 409, code: "CONTROL_PLANE_PORT_IN_USE", cause: error },
+      );
+    }
     throw error;
   }
 }

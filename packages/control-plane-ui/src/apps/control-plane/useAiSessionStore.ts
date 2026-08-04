@@ -17,7 +17,6 @@ import {
   type InstanceBoardItemWithAppSessions,
   type InstanceWithAiSessions,
 } from "../../api/types";
-import { appSessionBindingKeys, isVisibleAppSession } from "./appSessionVisibility.ts";
 import { createSessionStreamRecovery, type SessionStreamRecoveryRetryOptions } from "./sessionStreamRecovery.ts";
 import { useStreamingMessagesStore } from "./useStreamingMessagesStore.ts";
 
@@ -227,16 +226,7 @@ function aiSessionSnapshotWithSummary(snapshot: AiSessionsSnapshot, summary: Ins
 }
 
 function visibleAiSessionSnapshot(instance: InstanceBoardItemWithAppSessions, snapshot: AiSessionsSnapshot) {
-  const sessions = snapshot.sessions.filter((session) => hasBoundVisibleAppSession(instance.apps.sessions || [], session));
-  return aiSessionSnapshotWithSummary({ ...snapshot, sessions }, instance.aiSessions);
-}
-
-function hasBoundVisibleAppSession(appSessions: Array<Record<string, unknown>>, session: AiSessionSummary) {
-  if (session.appSessionId && appSessions.some((entry) => entry.id === session.appSessionId && isVisibleAppSession(entry))) {
-    return true;
-  }
-  const bindingKeys = new Set(session.appBindingKeys || []);
-  return Boolean(bindingKeys.size && appSessions.some((entry) => isVisibleAppSession(entry) && appSessionBindingKeys(entry).some((key) => bindingKeys.has(key))));
+  return aiSessionSnapshotWithSummary(snapshot, instance.aiSessions);
 }
 
 function upsertInstanceAiSessions(current: ControlPlaneAiSessions | undefined, instanceId: string, snapshot: AiSessionsSnapshot, meta: { streamId: string; revision?: number; lastEventAt?: string }): ControlPlaneAiSessions {

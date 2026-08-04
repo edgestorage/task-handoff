@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { AiSessionApprovalInputSchema, AiSessionCommandInputSchema, AiSessionMentionFileSearchInputSchema, AiSessionMessageRefInputSchema, AiSessionUnreadEventType } from "@task-handoff/protocol/ai-sessions";
+import { AiSessionApprovalInputSchema, AiSessionCloseInputSchema, AiSessionCommandInputSchema, AiSessionCreateRefInputSchema, AiSessionMentionFileSearchInputSchema, AiSessionMessageRefInputSchema, AiSessionOpenAppInputSchema, AiSessionUnreadEventType } from "@task-handoff/protocol/ai-sessions";
 import type { ControlPlaneService } from "../application/service.ts";
 import type { ControlPlaneEventBus } from "../events/bus.ts";
 import type { ControlPlaneAiSessionAggregator } from "../sessions/ai-session-aggregator.ts";
@@ -122,6 +122,28 @@ export function registerSessionRoutes({
       appSessionId: result.appSessionId,
       disposition: result.disposition,
     });
+    return { data: result };
+  });
+  app.post("/api/controlled-instances/:id/ai-sessions", async (request) => {
+    const params = IdParamsSchema.parse(request.params);
+    const parsed = AiSessionCreateRefInputSchema.parse(request.body || {});
+    const attachments = aiSessionAttachments.resolveRefs(parsed.attachments, params.id, parsed.clientRequestId);
+    const result = await service.createAiSession(params.id, { ...parsed, attachments });
+    events.publish("instance.ai-session.created", { instanceId: params.id, sessionId: result.aiSessionId, providerSessionId: result.providerSessionId, clientRequestId: parsed.clientRequestId });
+    return { data: result };
+  });
+  app.post("/api/controlled-instances/:id/ai-sessions/:sessionId/open-app", async (request) => {
+    const params = InstanceSessionParamsSchema.parse(request.params);
+    const parsed = AiSessionOpenAppInputSchema.parse(request.body || {});
+    const result = await service.openAiSessionApp(params.id, params.sessionId, parsed.clientRequestId);
+    events.publish("instance.ai-session.app-opened", { instanceId: params.id, sessionId: params.sessionId, appSessionId: result.appSessionId });
+    return { data: result };
+  });
+  app.post("/api/controlled-instances/:id/ai-sessions/:sessionId/close", async (request) => {
+    const params = InstanceSessionParamsSchema.parse(request.params);
+    const parsed = AiSessionCloseInputSchema.parse(request.body || {});
+    const result = await service.closeAiSession(params.id, params.sessionId, parsed.clientRequestId);
+    events.publish("instance.ai-session.closed", { instanceId: params.id, sessionId: params.sessionId, providerSessionId: result.providerSessionId });
     return { data: result };
   });
   app.post("/api/controlled-instances/:id/ai-sessions/:sessionId/messages", async (request) => {

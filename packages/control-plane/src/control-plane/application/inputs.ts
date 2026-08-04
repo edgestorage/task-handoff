@@ -1,5 +1,6 @@
 import {
   ControlledInstanceSchema,
+  EnvironmentSourceSchema,
   ModelConfigSchema,
   NodeSchema,
   ProjectSourceSchema,
@@ -36,11 +37,16 @@ export const CreateInstanceInputSchema = z.object({
   sourceSnapshot: z.record(z.string(), z.unknown()).optional(),
   nodeId: ControlledInstanceSchema.shape.nodeId.optional(),
   runtimeId: ControlledInstanceSchema.shape.runtimeId.optional(),
+  environmentSource: EnvironmentSourceSchema.optional(),
   imageSelection: ControlledInstanceSchema.shape.imageSelection,
   config: InstanceConfigInputSchema.optional(),
   modelSelection: ControlledInstanceSchema.shape.modelSelection.optional(),
   start: z.boolean().default(false),
-}).strict();
+}).strict().superRefine((input, context) => {
+  if (input.environmentSource && input.imageSelection) {
+    context.addIssue({ code: "custom", path: ["environmentSource"], message: "environmentSource and imageSelection are mutually exclusive." });
+  }
+});
 
 export const UpdateInstanceInputSchema = z.object({
   name: ControlledInstanceSchema.shape.name.optional(),

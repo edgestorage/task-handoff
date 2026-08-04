@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { processStartIdentity } from "@task-handoff/core/core/process-singleton-lock";
-import type { ControlledInstance, NodeRuntime } from "@task-handoff/protocol/control-plane";
+import { InstanceDeleteResultSchema, type ControlledInstance, type InstanceDeleteInput, type NodeRuntime } from "@task-handoff/protocol/control-plane";
 import type { NodeAgentStorePaths } from "../persistence/paths.ts";
 import {
   type CommandRunner,
@@ -15,6 +15,7 @@ import {
   LOCAL_PROCESS_NONCE_LABEL,
   LocalProcessSupervisor,
   allocateLocalPort,
+  canListenOnLocalPort,
   waitForChildExit,
   waitForChildSpawn,
   type LocalProcessExit,
@@ -96,7 +97,16 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
     // bundled with the current node-agent.
     await this.processSupervisor.stop(context.instance);
     const workspacePath = localWorkspacePath(context.instance);
-    const port = context.instance.runtime.port || await allocateLocalPort();
+    const configuredPort = context.instance.runtime.port;
+    const configuredPortAvailable = configuredPort ? await canListenOnLocalPort(configuredPort) : false;
+    const allocateOnConflict = process.env.TASK_HANDOFF_LOCAL_INSTANCE_PORT_CONFLICT === "allocate";
+    if (configuredPort && !configuredPortAvailable && !allocateOnConflict) {
+      throw Object.assign(
+        new Error(`Local controlled instance port 127.0.0.1:${configuredPort} is already in use.`),
+        { statusCode: 409, code: "LOCAL_INSTANCE_PORT_IN_USE" },
+      );
+    }
+    const port = configuredPort && configuredPortAvailable ? configuredPort : await allocateLocalPort();
     const dataDir = path.join(this.paths.dataDir, "local-instances", context.instance.id);
     const logDir = path.join(dataDir, "logs");
     fs.mkdirSync(logDir, { recursive: true });
@@ -247,8 +257,16 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
     return this.start(context);
   }
 
-  async delete(context: ExecutorContext): Promise<ExecutorStartResult> {
-    return this.stop(context);
+  async delete(context: ExecutorContext, _input: InstanceDeleteInput) {
+    await this.stop(context);
+    return InstanceDeleteResultSchema.parse({
+      instanceId: context.instance.id,
+      containerDeleted: true,
+      completed: true,
+      deletedVolumes: [],
+      retainedVolumes: [],
+      volumeResults: [],
+    });
   }
 
   async check(runtime: NodeRuntime): Promise<Partial<NodeRuntime>> {

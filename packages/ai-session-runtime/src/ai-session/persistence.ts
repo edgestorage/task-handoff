@@ -19,7 +19,7 @@ import type {
 import { compact, messageText, normalizeTurns } from "../ai-session-turns";
 
 const PERSISTED_SESSION_FIELDS = new Set([
-  "id", "agent", "appSessionId", "appId", "providerSessionId", "providerMeta", "appBindingKeys", "actions",
+  "id", "agent", "creationSource", "appSessionId", "appId", "providerSessionId", "providerMeta", "appBindingKeys", "actions",
   "activeTurnId", "title", "cwd", "userPrompt", "turns", "status", "phase", "summary", "lastMessage", "lastMessageItemId",
   "currentTool", "toolCallsSinceLastMessage", "subAgents", "transcriptPath", "transcriptSize", "startedAt", "updatedAt",
   "completedAt", "error", "counters", "queue",
@@ -111,8 +111,10 @@ function normalizeActions(value: unknown): AiSessionStatus["actions"] {
     send: typeof record.send === "boolean" ? record.send : undefined,
     interrupt: typeof record.interrupt === "boolean" ? record.interrupt : undefined,
     approval: typeof record.approval === "boolean" ? record.approval : undefined,
+    openApp: typeof record.openApp === "boolean" ? record.openApp : undefined,
+    close: typeof record.close === "boolean" ? record.close : undefined,
   };
-  return actions.send === undefined && actions.interrupt === undefined && actions.approval === undefined ? undefined : actions;
+  return Object.values(actions).every((action) => action === undefined) ? undefined : actions;
 }
 
 export function emptyAiSessionQueue(): AiSessionStatus["queue"] {
@@ -244,6 +246,7 @@ export function sanitizePersistedAiSession(value: unknown): AiSessionStatus | un
   const candidate = {
     id: compact(record.id, 120),
     agent: compact(record.agent, 80),
+    creationSource: record.creationSource === "ai-session" ? "ai-session" : "app-session",
     ...(typeof record.appSessionId === "string" && record.appSessionId ? { appSessionId: compact(record.appSessionId, 120) } : {}),
     ...(typeof record.appId === "string" && record.appId ? { appId: compact(record.appId, 120) } : {}),
     ...(typeof record.providerSessionId === "string" && record.providerSessionId ? { providerSessionId: compact(record.providerSessionId, 240) } : {}),

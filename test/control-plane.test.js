@@ -181,6 +181,25 @@ function testInstanceImage(reference = "task-handoff-web:local", id = "img_1", n
   };
 }
 
+function testManagedVolumes(instanceId, includeWorkspace = false) {
+  const volume = (role, mountPath) => ({
+    role,
+    name: `task-handoff-${instanceId}-${role}`,
+    mountPath,
+    labels: {
+      "task-handoff.owner": "task-handoff",
+      "task-handoff.instance-id": instanceId,
+      "task-handoff.node-id": "node_exec",
+      "task-handoff.volume-role": role,
+    },
+  });
+  return [
+    volume("data", "/data"),
+    volume("agent-home", "/home/agent"),
+    ...(includeWorkspace ? [volume("workspace", "/workspace")] : []),
+  ];
+}
+
 test("runtime lifecycle result preserves a newer registration heartbeat", () => {
   const baseline = ControlledInstanceSchema.parse({
     id: "inst_start_race",
@@ -889,7 +908,7 @@ test("AI session aggregator recovers advertised gaps from instance deltas and re
         type: AiSessionEventType.Patch,
         payload: {
           meta: { instanceId, streamId, revision, previousRevision: revision - 1, traceId: `recover_${revision}`, generatedAt: timestamp, reason: "provider-event" },
-          upserted: [{ id: `ai_${revision}`, agent: "codex", status: "idle", phase: "unknown", startedAt: timestamp, updatedAt: timestamp, queue: { pendingCount: 0, items: [] } }],
+          upserted: [{ id: `ai_${revision}`, agent: "codex", creationSource: "app-session", status: "idle", phase: "unknown", startedAt: timestamp, updatedAt: timestamp, queue: { pendingCount: 0, items: [] } }],
           removed: [],
         },
       })),
@@ -915,6 +934,7 @@ test("AI session aggregator validates message deltas without copying snapshots o
     sessions: [{
       id: "session_delta",
       agent: "codex",
+      creationSource: "app-session",
       providerSessionId: "thread_delta",
       activeTurnId: "turn_delta",
       status: "running",
@@ -3040,6 +3060,7 @@ test("local docker run args include controlled metadata and disable local chat b
   const args = dockerRunArgs(
     {
       nodeAgentUrl: "http://127.0.0.1:8091",
+      privateConfigPath: "/private/inst_1.json",
       node: {
         id: "node_exec",
         name: "Execution Node",
@@ -3099,7 +3120,7 @@ test("local docker run args include controlled metadata and disable local chat b
         workspace: { status: "unknown" },
         target: { strategy: "direct-port", status: "unknown" },
         apps: { runningCount: 0 },
-        runtime: { labels: {} },
+        runtime: { labels: {}, managedVolumes: testManagedVolumes("inst_1") },
         registrationToken: "secret",
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -3129,8 +3150,8 @@ test("local docker run args include controlled metadata and disable local chat b
   assert.ok(args.includes("bridge"));
   assert.ok(args.includes("host.docker.internal:host-gateway"));
   assert.ok(args.includes("/tmp:rw,mode=1777"));
-  assert.ok(args.includes("task-handoff-inst_1-data:/data"));
-  assert.ok(args.includes("task-handoff-inst_1-agent-home:/home/agent"));
+  assert.ok(args.includes("type=volume,src=task-handoff-inst_1-data,dst=/data"));
+  assert.ok(args.includes("type=volume,src=task-handoff-inst_1-agent-home,dst=/home/agent"));
   assert.ok(args.includes("EXTRA_FLAG=1"));
   assert.ok(args.includes("/tmp/workspace:/workspace:rw"));
 });
@@ -3669,11 +3690,12 @@ test("node agent update apply launches the resolved worker through systemd-run",
   assert.equal(args[args.indexOf("--control-plane-health-url") + 1], "http://127.0.0.1:8081/api/health");
 });
 
-test("local docker run args include resolved model environment", () => {
+test("local docker run args keep resolved model environment out of Docker Config", () => {
   const timestamp = new Date().toISOString();
   const args = dockerRunArgs(
     {
       nodeAgentUrl: "http://127.0.0.1:8091",
+      privateConfigPath: "/private/inst_1.json",
       modelEnv: {
         OPENAI_API_KEY: "codex-key",
         OPENAI_BASE_URL: "https://openai.example/v1",
@@ -3724,7 +3746,7 @@ test("local docker run args include resolved model environment", () => {
         workspace: { status: "unknown" },
         target: { strategy: "direct-port", status: "unknown" },
         apps: { runningCount: 0 },
-        runtime: { labels: {} },
+        runtime: { labels: {}, managedVolumes: testManagedVolumes("inst_1") },
         registrationToken: "secret",
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -3733,13 +3755,8 @@ test("local docker run args include resolved model environment", () => {
     "task-handoff-inst_1",
   );
 
-  assert.ok(args.includes("OPENAI_API_KEY=codex-key"));
-  assert.ok(args.includes("OPENAI_BASE_URL=https://openai.example/v1"));
-  assert.ok(args.includes("TASK_HANDOFF_CODEX_BASE_URL=https://openai.example/v1"));
-  assert.ok(args.includes("TASK_HANDOFF_CODEX_MODEL=gpt-codex"));
-  assert.ok(args.includes("ANTHROPIC_API_KEY=claude-key"));
-  assert.ok(args.includes("ANTHROPIC_BASE_URL=https://anthropic.example"));
-  assert.ok(args.includes("TASK_HANDOFF_CLAUDE_MODEL=claude-sonnet"));
+  assert.equal(args.some((value) => value.includes("codex-key") || value.includes("claude-key")), false);
+  assert.ok(args.includes("type=bind,src=/private/inst_1.json,dst=/run/task-handoff/instance-private-config.json,readonly"));
 });
 
 test("local docker run args expose git workspace bootstrap environment", () => {
@@ -3747,6 +3764,7 @@ test("local docker run args expose git workspace bootstrap environment", () => {
   const args = dockerRunArgs(
     {
       nodeAgentUrl: "http://127.0.0.1:8091",
+      privateConfigPath: "/private/inst_git.json",
       project: {
         id: "proj_git",
         name: "Git Project",
@@ -3791,7 +3809,7 @@ test("local docker run args expose git workspace bootstrap environment", () => {
         workspace: { status: "unknown" },
         target: { strategy: "direct-port", status: "unknown" },
         apps: { runningCount: 0 },
-        runtime: { labels: {} },
+        runtime: { labels: {}, managedVolumes: testManagedVolumes("inst_git", true) },
         registrationToken: "secret",
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -3807,12 +3825,14 @@ test("local docker run args expose git workspace bootstrap environment", () => {
   assert.ok(args.includes("TASK_HANDOFF_GIT_DEPTH=10"));
   assert.ok(args.includes("TASK_HANDOFF_GIT_SUBMODULES=true"));
   assert.ok(args.includes("TASK_HANDOFF_GIT_LFS=false"));
+  assert.ok(args.includes("type=volume,src=task-handoff-inst_git-workspace,dst=/workspace"));
 });
 
 test("local docker executor checks local images and pulls registry images before running", async () => {
   const timestamp = new Date().toISOString();
   const baseContext = {
     nodeAgentUrl: "http://127.0.0.1:8091",
+    privateConfigPath: "/private/inst_1.json",
     project: {
       id: "proj_1",
       name: "Project",
@@ -3853,7 +3873,7 @@ test("local docker executor checks local images and pulls registry images before
       workspace: { status: "unknown" },
       target: { strategy: "direct-port", status: "unknown" },
       apps: { runningCount: 0 },
-      runtime: { labels: {} },
+      runtime: { labels: {}, managedVolumes: testManagedVolumes("inst_1") },
       registrationToken: "secret",
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -3870,6 +3890,18 @@ test("local docker executor checks local images and pulls registry images before
       createdAt: timestamp,
       updatedAt: timestamp,
     },
+  };
+  const managedVolumeInspection = (name) => {
+    const volume = baseContext.instance.runtime.managedVolumes.find((item) => item.name === name);
+    return { Name: name, Labels: volume.labels };
+  };
+  const existingContainerInspection = {
+    Id: "container-1",
+    Config: { Labels: { "task-handoff.instance-id": "inst_1" } },
+    Mounts: [
+      ...baseContext.instance.runtime.managedVolumes.map((volume) => ({ Type: "volume", Name: volume.name, Destination: volume.mountPath })),
+      { Type: "bind", Source: "/tmp/workspace", Destination: "/workspace" },
+    ],
   };
 
   const localCalls = [];
@@ -3913,6 +3945,10 @@ test("local docker executor checks local images and pulls registry images before
   let remotePulled = false;
   const remoteExecutor = new LocalDockerExecutor(async (command, args) => {
     remoteCalls.push([command, args]);
+    if (args[0] === "volume" && args[1] === "inspect") {
+      const name = args.at(-1);
+      return { stdout: JSON.stringify(managedVolumeInspection(name)), stderr: "" };
+    }
     if (args[0] === "inspect" && args.includes("{{json .}}")) {
       throw Object.assign(new Error("No such container"), { details: { stderr: "No such container" } });
     }
@@ -3970,6 +4006,10 @@ test("local docker executor checks local images and pulls registry images before
   const resolvedCalls = [];
   const resolvedExecutor = new LocalDockerExecutor(async (command, args) => {
     resolvedCalls.push([command, args]);
+    if (args[0] === "volume" && args[1] === "inspect") {
+      const name = args.at(-1);
+      return { stdout: JSON.stringify(managedVolumeInspection(name)), stderr: "" };
+    }
     if (args[0] === "inspect" && args.includes("{{json .}}")) {
       throw Object.assign(new Error("No such container"), { details: { stderr: "No such container" } });
     }
@@ -4004,8 +4044,9 @@ test("local docker executor checks local images and pulls registry images before
   const existingCalls = [];
   const existingExecutor = new LocalDockerExecutor(async (command, args) => {
     existingCalls.push([command, args]);
+    if (args[0] === "volume" && args[1] === "inspect") return { stdout: JSON.stringify(managedVolumeInspection(args.at(-1))), stderr: "" };
     if (args[0] === "inspect" && args.includes("{{json .}}")) {
-      return { stdout: JSON.stringify({ Id: "container-1", Config: { Labels: { "task-handoff.instance-id": "inst_1" } } }), stderr: "" };
+      return { stdout: JSON.stringify(existingContainerInspection), stderr: "" };
     }
     if (args[0] === "port") {
       return { stdout: "127.0.0.1:18081", stderr: "" };
@@ -4022,6 +4063,7 @@ test("local docker executor checks local images and pulls registry images before
         containerName: "task-handoff-inst_1",
         containerId: "container-1",
         labels: {},
+        managedVolumes: baseContext.instance.runtime.managedVolumes,
       },
     },
     image: {
@@ -4040,13 +4082,16 @@ test("local docker executor checks local images and pulls registry images before
   assert.equal(resumed.target.web, "http://127.0.0.1:18081");
   assert.deepEqual(existingCalls, [
     ["docker", ["inspect", "--format", "{{json .}}", "task-handoff-inst_1"]],
+    ["docker", ["volume", "inspect", "--format", "{{json .}}", "task-handoff-inst_1-data"]],
+    ["docker", ["volume", "inspect", "--format", "{{json .}}", "task-handoff-inst_1-agent-home"]],
     ["docker", ["start", "task-handoff-inst_1"]],
     ["docker", ["port", "task-handoff-inst_1", "8080/tcp"]],
   ]);
 
   const inspectFallbackExecutor = new LocalDockerExecutor(async (_command, args) => {
+    if (args[0] === "volume" && args[1] === "inspect") return { stdout: JSON.stringify(managedVolumeInspection(args.at(-1))), stderr: "" };
     if (args[0] === "inspect" && args.includes("{{json .}}")) {
-      return { stdout: JSON.stringify({ Id: "container-1", Config: { Labels: { "task-handoff.instance-id": "inst_1" } } }), stderr: "" };
+      return { stdout: JSON.stringify(existingContainerInspection), stderr: "" };
     }
     if (args[0] === "port") {
       throw Object.assign(new Error("no public port '8080/tcp' published"), { details: { stderr: "no public port '8080/tcp' published" } });
@@ -4066,6 +4111,7 @@ test("local docker executor checks local images and pulls registry images before
         containerName: "task-handoff-inst_1",
         containerId: "container-1",
         labels: {},
+        managedVolumes: baseContext.instance.runtime.managedVolumes,
       },
     },
   });
@@ -4073,8 +4119,9 @@ test("local docker executor checks local images and pulls registry images before
 
   let transientPortAttempts = 0;
   const transientPortExecutor = new LocalDockerExecutor(async (_command, args) => {
+    if (args[0] === "volume" && args[1] === "inspect") return { stdout: JSON.stringify(managedVolumeInspection(args.at(-1))), stderr: "" };
     if (args[0] === "inspect" && args.includes("{{json .}}")) {
-      return { stdout: JSON.stringify({ Id: "container-1", Config: { Labels: { "task-handoff.instance-id": "inst_1" } } }), stderr: "" };
+      return { stdout: JSON.stringify(existingContainerInspection), stderr: "" };
     }
     if (args[0] === "port") {
       transientPortAttempts += 1;
@@ -4098,6 +4145,7 @@ test("local docker executor checks local images and pulls registry images before
         containerName: "task-handoff-inst_1",
         containerId: "container-1",
         labels: {},
+        managedVolumes: baseContext.instance.runtime.managedVolumes,
       },
     },
   });
@@ -4105,8 +4153,9 @@ test("local docker executor checks local images and pulls registry images before
   assert.equal(resumedAfterRetry.target.web, "http://127.0.0.1:38081");
 
   const missingPortExecutor = new LocalDockerExecutor(async (_command, args) => {
+    if (args[0] === "volume" && args[1] === "inspect") return { stdout: JSON.stringify(managedVolumeInspection(args.at(-1))), stderr: "" };
     if (args[0] === "inspect" && args.includes("{{json .}}")) {
-      return { stdout: JSON.stringify({ Id: "container-1", Config: { Labels: { "task-handoff.instance-id": "inst_1" } } }), stderr: "" };
+      return { stdout: JSON.stringify(existingContainerInspection), stderr: "" };
     }
     if (args[0] === "port") {
       throw Object.assign(new Error("no public port '8080/tcp' published"), { details: { stderr: "no public port '8080/tcp' published" } });
@@ -4127,6 +4176,7 @@ test("local docker executor checks local images and pulls registry images before
           containerName: "task-handoff-inst_1",
           containerId: "container-1",
           labels: {},
+          managedVolumes: baseContext.instance.runtime.managedVolumes,
         },
       },
     }),
@@ -4235,6 +4285,16 @@ test("node agent runs local docker behind node-local target and auto-imports age
     },
     dockerCommandRunner: async (command, args) => {
       calls.push([command, args]);
+      if (args[0] === "volume" && args[1] === "inspect") {
+        const name = args.at(-1);
+        const role = name.endsWith("-agent-home") ? "agent-home" : name.endsWith("-workspace") ? "workspace" : "data";
+        return { stdout: JSON.stringify({ Name: name, Labels: {
+          "task-handoff.owner": "task-handoff",
+          "task-handoff.instance-id": "inst_1",
+          "task-handoff.node-id": "node_local",
+          "task-handoff.volume-role": role,
+        } }), stderr: "" };
+      }
       if (args[0] === "inspect" && args.includes("{{json .}}") && !containerExists) {
         throw Object.assign(new Error("No such container"), { details: { stderr: "No such container" } });
       }
@@ -6509,7 +6569,7 @@ test("localhost process spawn failures fail the instance without crashing node a
   assert.equal(health.statusCode, 200);
 });
 
-test("localhost startup rejects a stale healthy process already bound to the instance port", async (t) => {
+test("server localhost startup reports an occupied instance port", async (t) => {
   const dataDir = tempDataDir("node-agent-localhost-stale-port");
   const webStub = path.join(dataDir, "controlled-web-stub.js");
   fs.writeFileSync(
@@ -6562,8 +6622,8 @@ test("localhost startup rejects a stale healthy process already bound to the ins
     headers: { authorization: "Bearer agent-secret" },
     payload: {},
   });
-  assert.equal(started.statusCode, 503);
-  assert.equal(started.json().error.code, "LOCAL_INSTANCE_PROCESS_NOT_READY");
+  assert.equal(started.statusCode, 409);
+  assert.equal(started.json().error.code, "LOCAL_INSTANCE_PORT_IN_USE");
   const failed = app.nodeAgentState.controlledInstances.get("inst_local_stale_port");
   assert.equal(failed.status, "failed");
   assert.notEqual(failed.runtime.pid, process.pid);

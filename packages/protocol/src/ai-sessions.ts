@@ -21,6 +21,8 @@ export const AI_SESSION_DELTA_RETENTION_MS = AI_SESSION_TOMBSTONE_RETENTION_MS;
 
 export const AiAgentKindSchema = z.string().trim().min(1).max(80);
 
+export const AiSessionCreationSourceSchema = z.enum(["app-session", "ai-session"]);
+
 export const AiSessionLifecycleSchema = z.enum([
   "running",
   "waiting",
@@ -96,6 +98,8 @@ export const AiSessionActionsSchema = z
     send: z.boolean().optional(),
     interrupt: z.boolean().optional(),
     approval: z.boolean().optional(),
+    openApp: z.boolean().optional(),
+    close: z.boolean().optional(),
   })
   .strict();
 
@@ -279,6 +283,73 @@ export const AiSessionMessageRefInputSchema = AiSessionMessageBaseSchema.extend(
   references: AiSessionReferencesSchema,
 }).strict();
 
+export const AiSessionRuntimePathSchema = z.object({
+  type: z.literal("runtime-path"),
+  path: z.string().trim().min(1).max(4096).refine(
+    (value) => value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value),
+    "Runtime paths must be absolute in the target controlled instance.",
+  ),
+}).strict();
+
+export const AiSessionCreateInputSchema = AiSessionMessageInputSchema.extend({
+  agent: AiAgentKindSchema,
+  cwd: AiSessionRuntimePathSchema,
+  clientRequestId: z.string().trim().min(1).max(160),
+}).strict();
+
+export const AiSessionCreateRefInputSchema = AiSessionMessageRefInputSchema.extend({
+  agent: AiAgentKindSchema,
+  cwd: AiSessionRuntimePathSchema,
+  clientRequestId: z.string().trim().min(1).max(160),
+}).strict();
+
+export const AiSessionCreateResultSchema = z.object({
+  disposition: z.enum(["created", "already-created"]),
+  aiSessionId: z.string().trim().min(1).max(120),
+  providerSessionId: z.string().trim().min(1).max(240),
+  creationSource: z.literal("ai-session"),
+}).strict();
+
+export const AiSessionOpenAppInputSchema = z.object({
+  clientRequestId: z.string().trim().min(1).max(160),
+}).strict();
+
+export const AiSessionOpenAppResultSchema = z.object({
+  disposition: z.enum(["opened", "already-open"]),
+  aiSessionId: z.string().trim().min(1).max(120),
+  providerSessionId: z.string().trim().min(1).max(240),
+  appSessionId: z.string().trim().min(1).max(120),
+  creationSource: AiSessionCreationSourceSchema,
+}).strict();
+
+export const AiSessionCloseInputSchema = z.object({
+  clientRequestId: z.string().trim().min(1).max(160),
+}).strict();
+
+export const AiSessionCloseResultSchema = z.object({
+  disposition: z.enum(["closed", "already-closed"]),
+  aiSessionId: z.string().trim().min(1).max(120),
+  providerSessionId: z.string().trim().min(1).max(240),
+  creationSource: AiSessionCreationSourceSchema,
+}).strict();
+
+export const AiSessionActionErrorSchema = z.object({
+  code: z.enum([
+    "invalid-request",
+    "not-found",
+    "unsupported",
+    "provider-unavailable",
+    "materialization-failed",
+    "open-app-failed",
+    "close-failed",
+    "conflict",
+  ]),
+  message: z.string().trim().min(1).max(4000),
+  retryable: z.boolean().default(false),
+  aiSessionId: z.string().trim().min(1).max(120).optional(),
+  providerSessionId: z.string().trim().min(1).max(240).optional(),
+}).strict();
+
 export const AiSessionApprovalInputSchema = z.object({
   decision: z.enum(["allow", "deny", "skip"]),
 }).strict();
@@ -376,6 +447,7 @@ export const AiSessionStatusSchema = z
   .object({
     id: z.string().trim().min(1).max(120),
     agent: AiAgentKindSchema,
+    creationSource: AiSessionCreationSourceSchema.default("app-session"),
     appSessionId: z.string().trim().max(120).optional(),
     appId: z.string().trim().max(120).optional(),
     providerSessionId: z.string().trim().max(240).optional(),
@@ -421,6 +493,7 @@ export const AI_SESSION_HISTORY_LIMIT = 50;
 export const AiSessionHistoryItemSchema = z.object({
   id: z.string().trim().min(1).max(120),
   agent: z.enum(["codex", "claude"]),
+  creationSource: AiSessionCreationSourceSchema,
   providerSessionId: z.string().trim().min(1).max(240),
   title: z.string().trim().max(240).optional(),
   userPrompt: z.string().trim().optional(),
@@ -448,12 +521,14 @@ export const AiSessionResumeResultSchema = z.object({
   disposition: z.enum(["resumed", "already-open"]),
   aiSessionId: z.string().trim().min(1).max(120),
   providerSessionId: z.string().trim().min(1).max(240),
-  appSessionId: z.string().trim().min(1).max(120),
+  appSessionId: z.string().trim().min(1).max(120).optional(),
+  creationSource: AiSessionCreationSourceSchema,
 }).strict();
 
 export const AiSessionSummarySchema = AiSessionStatusSchema.pick({
   id: true,
   agent: true,
+  creationSource: true,
   appSessionId: true,
   appId: true,
   providerSessionId: true,
@@ -675,6 +750,7 @@ export const AiSessionInputBaseSchema = z
 export const AiSessionSnapshotInputSchema = AiSessionInputBaseSchema.extend({
   type: z.literal("snapshot"),
   agent: z.string().trim().min(1).max(80),
+  creationSource: AiSessionCreationSourceSchema.optional(),
   appSessionId: z.string().trim().max(120).optional(),
   appId: z.string().trim().max(120).optional(),
   providerSessionId: z.string().trim().max(240).optional(),
@@ -759,6 +835,7 @@ export const AiSessionReducerInputSchema = z.discriminatedUnion("type", [
 ]);
 
 export type AiAgentKind = z.infer<typeof AiAgentKindSchema>;
+export type AiSessionCreationSource = z.infer<typeof AiSessionCreationSourceSchema>;
 export type AiSessionLifecycle = z.infer<typeof AiSessionLifecycleSchema>;
 export type AiSessionUnreadState = z.infer<typeof AiSessionUnreadStateSchema>;
 export type AiSessionPhase = z.infer<typeof AiSessionPhaseSchema>;
@@ -786,6 +863,15 @@ export type AiSessionMentionFileSearchInput = z.infer<typeof AiSessionMentionFil
 export type AiSessionMentionFileSearch = z.infer<typeof AiSessionMentionFileSearchSchema>;
 export type AiSessionMessageInput = z.infer<typeof AiSessionMessageInputSchema>;
 export type AiSessionMessageRefInput = z.infer<typeof AiSessionMessageRefInputSchema>;
+export type AiSessionRuntimePath = z.infer<typeof AiSessionRuntimePathSchema>;
+export type AiSessionCreateInput = z.infer<typeof AiSessionCreateInputSchema>;
+export type AiSessionCreateRefInput = z.infer<typeof AiSessionCreateRefInputSchema>;
+export type AiSessionCreateResult = z.infer<typeof AiSessionCreateResultSchema>;
+export type AiSessionOpenAppInput = z.infer<typeof AiSessionOpenAppInputSchema>;
+export type AiSessionOpenAppResult = z.infer<typeof AiSessionOpenAppResultSchema>;
+export type AiSessionCloseInput = z.infer<typeof AiSessionCloseInputSchema>;
+export type AiSessionCloseResult = z.infer<typeof AiSessionCloseResultSchema>;
+export type AiSessionActionError = z.infer<typeof AiSessionActionErrorSchema>;
 export type AiSessionApprovalInput = z.infer<typeof AiSessionApprovalInputSchema>;
 export type AiSessionQueueReorderInput = z.infer<typeof AiSessionQueueReorderInputSchema>;
 export type AiSessionControlError = z.infer<typeof AiSessionControlErrorSchema>;

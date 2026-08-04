@@ -54,17 +54,28 @@ function setEnvironment(paths, workspaceRoot) {
   };
 }
 
-function codexBridgeStub() {
+function codexBridgeStub(overrides = {}) {
+  let sequence = 0;
   return {
     id: "repository-api-codex-stub",
     agent: "codex",
     refresh() {},
+    async sync() {},
     stop() {},
+    async createSession(input) {
+      sequence += 1;
+      return { providerSessionId: `provider-${sequence}`, cwd: input.cwd, creationSource: "ai-session" };
+    },
+    async readSession() {},
+    async archiveSession() {},
+    async deleteSession() {},
+    async unsubscribeSession() {},
     async mentionCatalog() { return { candidates: [], diagnostics: [] }; },
     async searchMentionFiles() { return { candidates: [], complete: true }; },
     async executeCommand() { throw new Error("not used"); },
-    async startMessage() { throw new Error("not used"); },
+    async startMessage() {},
     async interrupt() { throw new Error("not used"); },
+    ...overrides,
   };
 }
 
@@ -164,7 +175,7 @@ test("repository API exposes Files, Changes, diff, and authoritative mutation re
   }
 });
 
-test("AI session repository API launches in opaque worktrees and conservatively compensates failed launches", async () => {
+test("AI session repository API creates Direct sessions in opaque worktrees and conservatively compensates failures", async () => {
   const fixture = createGitFixture();
   const externalWorktree = fixture.createWorktree("external", "feature/external");
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-repository-api-launch-"));
@@ -173,12 +184,21 @@ test("AI session repository API launches in opaque worktrees and conservatively 
   const aiSessions = createAiSessionRegistry({ dir: path.join(dataRoot, "ai-sessions") });
   const source = aiSessions.start({ agent: "codex", cwd: fixture.root, status: "running" });
   const appRuntime = new AppRuntimeManager(paths);
-  const launches = [];
-  appRuntime.start = (agent, options) => {
-    launches.push({ agent, cwd: options.cwd });
-    return { id: `launch-${launches.length}` };
-  };
-  const app = await createWebApp({ staticDir: path.join(dataRoot, "missing-static"), logger: false, appRuntime, aiSessionRegistry: aiSessions, codexAppServer: codexBridgeStub() });
+  appRuntime.ensureSharedResource = async () => undefined;
+  const providerCreates = [];
+  let providerFailure = "";
+  const codexAppServer = codexBridgeStub({
+    async createSession(input) {
+      providerCreates.push({ cwd: input.cwd });
+      if (providerFailure === "clean") throw new Error("secret provider diagnostics");
+      if (providerFailure === "dirty") {
+        fs.writeFileSync(path.join(input.cwd, "recovery.txt"), "preserve me\n");
+        throw new Error("provider failed after user-visible state");
+      }
+      return { providerSessionId: `provider-${providerCreates.length}`, cwd: input.cwd, creationSource: "ai-session" };
+    },
+  });
+  const app = await createWebApp({ staticDir: path.join(dataRoot, "missing-static"), logger: false, appRuntime, aiSessionRegistry: aiSessions, codexAppServer });
   try {
     const base = `/api/ai-sessions/${source.id}/repository`;
     const listed = (await app.inject({ method: "GET", url: `${base}/worktrees` })).json().data;
@@ -190,18 +210,20 @@ test("AI session repository API launches in opaque worktrees and conservatively 
     const selected = await app.inject({
       method: "POST",
       url: `${base}/ai-sessions`,
-      payload: { agent: "claude", workspaceSelection: { type: "worktree", repositoryContextId: listed.repositoryContextId, worktreeId: external.id } },
+      payload: { agent: "codex", workspaceSelection: { type: "worktree", repositoryContextId: listed.repositoryContextId, worktreeId: external.id }, message: "Work in the selected tree.", clientRequestId: "selected-request" },
     });
     assert.equal(selected.statusCode, 200);
-    assert.deepEqual(selected.json().data, { appSessionId: "launch-1", worktreeId: external.id, disposition: "started" });
-    assert.equal(launches[0].cwd, fs.realpathSync(externalWorktree));
+    const selectedAiSessionId = selected.json().data.aiSessionId;
+    assert.equal(selected.json().data.providerSessionId, "provider-1");
+    assert.equal(selected.json().data.disposition, "started");
+    assert.equal(providerCreates[0].cwd, fs.realpathSync(externalWorktree));
     assert.equal(JSON.stringify(selected.json()).includes(externalWorktree), false);
     assert.equal(aiSessions.get(source.id).cwd, fixture.root);
 
     const strict = await app.inject({
       method: "POST",
       url: `${base}/ai-sessions`,
-      payload: { agent: "codex", workspaceSelection: { type: "current" }, cwd: externalWorktree },
+      payload: { agent: "codex", workspaceSelection: { type: "current" }, message: "Strict request.", clientRequestId: "strict-request", cwd: externalWorktree },
     });
     assert.equal(strict.statusCode, 400);
     assert.equal(strict.json().error.code, "REPOSITORY_REQUEST_INVALID");
@@ -209,66 +231,60 @@ test("AI session repository API launches in opaque worktrees and conservatively 
     const stale = await app.inject({
       method: "POST",
       url: `${base}/ai-sessions`,
-      payload: { agent: "codex", workspaceSelection: { type: "worktree", repositoryContextId: `${listed.repositoryContextId}-stale`, worktreeId: external.id } },
+      payload: { agent: "codex", workspaceSelection: { type: "worktree", repositoryContextId: `${listed.repositoryContextId}-stale`, worktreeId: external.id }, message: "Stale request.", clientRequestId: "stale-request" },
     });
     assert.equal(stale.statusCode, 409);
     assert.equal(stale.json().error.code, "REPOSITORY_STATE_STALE");
-    assert.equal(launches.length, 1);
+    assert.equal(providerCreates.length, 1);
 
     appRuntime.listSessions = () => [{ id: "occupied-app", status: "running", workspace: { cwd: externalWorktree } }];
-    aiSessions.start({ agent: "codex", cwd: externalWorktree, status: "idle", providerSessionId: "closed-provider-session" });
+    const directOccupied = aiSessions.start({ agent: "codex", creationSource: "ai-session", cwd: externalWorktree, status: "idle", providerSessionId: "active-provider-session" });
     const occupiedList = (await app.inject({ method: "GET", url: `${base}/worktrees` })).json().data;
     const occupiedWorktree = occupiedList.items.find((item) => item.id === external.id);
-    assert.deepEqual(occupiedWorktree.activeAiSessionIds, []);
+    assert.deepEqual(new Set(occupiedWorktree.activeAiSessionIds), new Set([selectedAiSessionId, directOccupied.id]));
     assert.deepEqual(occupiedWorktree.activeAppSessionIds, ["occupied-app"]);
     assert.equal(occupiedWorktree.canCreateAiSession, true);
     const occupied = await app.inject({
       method: "POST",
       url: `${base}/ai-sessions`,
-      payload: { agent: "codex", workspaceSelection: { type: "worktree", repositoryContextId: listed.repositoryContextId, worktreeId: external.id } },
+      payload: { agent: "codex", workspaceSelection: { type: "worktree", repositoryContextId: listed.repositoryContextId, worktreeId: external.id }, message: "Second request.", clientRequestId: "occupied-request" },
     });
     assert.equal(occupied.statusCode, 200);
-    assert.deepEqual(occupied.json().data, { appSessionId: "launch-2", worktreeId: external.id, disposition: "started" });
-    assert.equal(launches.length, 2);
+    assert.equal(occupied.json().data.providerSessionId, "provider-2");
+    assert.equal(providerCreates.length, 2);
     appRuntime.listSessions = () => [];
 
     const contextForSuccess = (await app.inject({ method: "GET", url: `${base}/context` })).json().data;
     const combined = await app.inject({
       method: "POST",
       url: `${base}/worktrees/ai-sessions`,
-      payload: { agent: "codex", worktree: { mode: "new-branch", branchName: "feature/combined", startRef: "HEAD", expectedSnapshotId: contextForSuccess.snapshotId } },
+      payload: { agent: "codex", worktree: { mode: "new-branch", branchName: "feature/combined", startRef: "HEAD", expectedSnapshotId: contextForSuccess.snapshotId }, message: "Combined request.", clientRequestId: "combined-request" },
     });
     assert.equal(combined.statusCode, 200);
-    assert.equal(combined.json().data.appSessionId, "launch-3");
-    assert.equal(path.basename(launches[2].cwd).startsWith("feature-combined-"), true);
+    assert.equal(combined.json().data.providerSessionId, "provider-3");
+    assert.equal(path.basename(providerCreates[2].cwd).startsWith("feature-combined-"), true);
     assert.equal(aiSessions.get(source.id).cwd, fixture.root);
 
-    appRuntime.start = (_agent, options) => {
-      launches.push({ agent: "codex", cwd: options.cwd });
-      throw new Error("secret launch diagnostics");
-    };
+    providerFailure = "clean";
     const contextForCleanup = (await app.inject({ method: "GET", url: `${base}/context` })).json().data;
     const cleanFailure = await app.inject({
       method: "POST",
       url: `${base}/worktrees/ai-sessions`,
-      payload: { agent: "codex", worktree: { mode: "new-branch", branchName: "feature/cleanup", startRef: "HEAD", expectedSnapshotId: contextForCleanup.snapshotId } },
+      payload: { agent: "codex", worktree: { mode: "new-branch", branchName: "feature/cleanup", startRef: "HEAD", expectedSnapshotId: contextForCleanup.snapshotId }, message: "Fail cleanly.", clientRequestId: "cleanup-request" },
     });
     assert.equal(cleanFailure.statusCode, 400);
     assert.equal(cleanFailure.json().error.code, "REPOSITORY_OPERATION_FAILED");
     assert.deepEqual(cleanFailure.json().error.details.worktreeRemoved, true);
-    assert.equal(cleanFailure.body.includes("secret launch diagnostics"), false);
+    assert.equal(cleanFailure.body.includes("secret provider diagnostics"), false);
     assert.equal(fixture.git(["show-ref", "--verify", "refs/heads/feature/cleanup"]).length > 0, true);
     assert.equal(fixture.git(["worktree", "list", "--porcelain"]).includes("feature/cleanup"), false);
 
-    appRuntime.start = (_agent, options) => {
-      fs.writeFileSync(path.join(options.cwd, "recovery.txt"), "preserve me\n");
-      throw new Error("launch failed after user-visible state");
-    };
+    providerFailure = "dirty";
     const contextForRecovery = (await app.inject({ method: "GET", url: `${base}/context` })).json().data;
     const dirtyFailure = await app.inject({
       method: "POST",
       url: `${base}/worktrees/ai-sessions`,
-      payload: { agent: "claude", worktree: { mode: "new-branch", branchName: "feature/recovery", startRef: "HEAD", expectedSnapshotId: contextForRecovery.snapshotId } },
+      payload: { agent: "codex", worktree: { mode: "new-branch", branchName: "feature/recovery", startRef: "HEAD", expectedSnapshotId: contextForRecovery.snapshotId }, message: "Fail with state.", clientRequestId: "recovery-request" },
     });
     assert.equal(dirtyFailure.statusCode, 400);
     assert.deepEqual(dirtyFailure.json().error.details.worktreeRemoved, false);
@@ -283,4 +299,99 @@ test("AI session repository API launches in opaque worktrees and conservatively 
     await app.close();
     restore();
   }
+});
+
+test("controlled instance routes create, bind, and close one Direct AI session identity", async () => {
+  const fixture = createGitFixture();
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-direct-route-"));
+  const paths = pathsFor(dataRoot);
+  const restore = setEnvironment(paths, fixture.base);
+  const aiSessions = createAiSessionRegistry({ dir: path.join(dataRoot, "ai-sessions") });
+  const appRuntime = new AppRuntimeManager(paths);
+  appRuntime.ensureSharedResource = async () => undefined;
+  let runningApps = [];
+  let providerSequence = 0;
+  const archived = [];
+  const bridge = codexBridgeStub({
+    async createSession(input) {
+      providerSequence += 1;
+      return { providerSessionId: `thread-route-${providerSequence}`, cwd: input.cwd, creationSource: "ai-session" };
+    },
+    async archiveSession(providerSessionId) {
+      archived.push(providerSessionId);
+    },
+  });
+  appRuntime.listSessions = () => runningApps;
+  appRuntime.start = (agent, options) => {
+    assert.equal(agent, "codex");
+    const providerSessionId = options.aiSessionResume.providerSessionId;
+    const appSession = { id: "app-route", appId: "codex", status: "running", workspace: { cwd: fixture.root } };
+    runningApps = [appSession];
+    aiSessions.applyAdapterSnapshot({
+      source: "control",
+      agent: "codex",
+      appId: "codex",
+      appSessionId: appSession.id,
+      providerSessionId,
+      cwd: fixture.root,
+      status: "idle",
+      phase: "unknown",
+    });
+    return appSession;
+  };
+  appRuntime.stop = (appSessionId) => {
+    runningApps = runningApps.filter((session) => session.id !== appSessionId);
+  };
+  const app = await createWebApp({ staticDir: path.join(dataRoot, "missing-static"), logger: false, appRuntime, aiSessionRegistry: aiSessions, codexAppServer: bridge });
+  try {
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/ai-sessions",
+      payload: { agent: "codex", cwd: { type: "runtime-path", path: fixture.root }, message: "Create directly.", clientRequestId: "route-create" },
+    });
+    assert.equal(created.statusCode, 200);
+    const identity = created.json().data;
+    assert.equal(identity.providerSessionId, "thread-route-1");
+    assert.equal(aiSessions.get(identity.aiSessionId).appSessionId, undefined);
+
+    const opened = await app.inject({
+      method: "POST",
+      url: `/api/ai-sessions/${identity.aiSessionId}/open-app`,
+      payload: { clientRequestId: "route-open" },
+    });
+    assert.equal(opened.statusCode, 200);
+    assert.equal(opened.json().data.aiSessionId, identity.aiSessionId);
+    assert.equal(opened.json().data.providerSessionId, identity.providerSessionId);
+    assert.equal(opened.json().data.appSessionId, "app-route");
+
+    const closed = await app.inject({
+      method: "POST",
+      url: `/api/ai-sessions/${identity.aiSessionId}/close`,
+      payload: { clientRequestId: "route-close" },
+    });
+    assert.equal(closed.statusCode, 200);
+    assert.equal(closed.json().data.aiSessionId, identity.aiSessionId);
+    assert.deepEqual(archived, ["thread-route-1"]);
+    assert.equal(aiSessions.get(identity.aiSessionId), undefined);
+    const repeated = await app.inject({
+      method: "POST",
+      url: `/api/ai-sessions/${identity.aiSessionId}/close`,
+      payload: { clientRequestId: "route-close-repeat" },
+    });
+    assert.equal(repeated.json().data.disposition, "already-closed");
+    assert.deepEqual(archived, ["thread-route-1"]);
+
+    const shutdownSession = await app.inject({
+      method: "POST",
+      url: "/api/ai-sessions",
+      payload: { agent: "codex", cwd: { type: "runtime-path", path: fixture.root }, message: "Close on shutdown.", clientRequestId: "route-shutdown" },
+    });
+    assert.equal(shutdownSession.statusCode, 200);
+    assert.ok(aiSessions.get(shutdownSession.json().data.aiSessionId));
+  } finally {
+    await app.close();
+    restore();
+  }
+  assert.deepEqual(archived, ["thread-route-1", "thread-route-2"]);
+  assert.deepEqual(aiSessions.all(), []);
 });

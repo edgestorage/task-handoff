@@ -80,11 +80,11 @@ test("mobile AI sessions switch between the card list and one detail pane", () =
   assert.doesNotMatch(styles, /grid-template-rows: minmax\(220px, 42vh\) minmax\(0, 1fr\)/);
 });
 
-test("bound instance AI sessions expose the same close menu as board cards", () => {
-  assert.match(panel, /<DropdownMenu v-if="aiSessionAppTab\(instance, session\)">[\s\S]*?t\('sessions\.actions\.moreFor', \{ agent: session\.agent \}\)[\s\S]*?t\("sessions\.actions\.closeApp"\)/);
-  assert.match(panel, /await stopAppSession\(props\.instance\.id, appSessionId\);/);
-  assert.match(panel, /const appSession = aiSessionAppTab\(props\.instance, session\);/);
-  assert.match(panel, /stoppingAppSessionId === session\.id \? t\("sessions\.actions\.closingApp"\) : t\("sessions\.actions\.closeApp"\)/);
+test("all instance AI sessions expose the unified close menu", () => {
+  assert.match(panel, /<DropdownMenu>[\s\S]*?t\('sessions\.actions\.moreFor', \{ agent: session\.agent \}\)[\s\S]*?t\("sessions\.actions\.closeSession"\)/);
+  assert.match(panel, /await closeAiSession\(props\.instance\.id, session\.id, crypto\.randomUUID\(\)\);/);
+  assert.match(panel, /stoppingAppSessionId === session\.id \? t\("sessions\.actions\.closingSession"\) : t\("sessions\.actions\.closeSession"\)/);
+  assert.match(panel, /aiSessionAppTab\(instance, session\) \|\| session\.actions\?\.openApp/);
   assert.match(styles, /:global\(\.session-ai-card-menu\)/);
   assert.match(styles, /:global\(\.session-ai-card-menu-item\.danger\)/);
 });
@@ -111,7 +111,7 @@ test("instance and board AI session cards expose their toolbar actions from one 
   }
   assert.match(contextMenu, /<ContextMenuSubTrigger class="ai-session-context-menu-item">/);
   assert.match(contextMenu, /@select="\$emit\('openApp'\)"/);
-  assert.match(contextMenu, /@select="\$emit\('closeApp'\)"/);
+  assert.match(contextMenu, /@select="\$emit\('closeSession'\)"/);
   assert.match(contextMenu, /@select="\$emit\('toggleTrigger', trigger\.configHash\)"/);
   assert.match(contextMenu, /:global\(\.ai-session-context-menu\)[\s\S]*backdrop-filter: blur\(16px\)/);
   assert.match(contextSubMenu, /<ContextMenuPortal>[\s\S]*<ContextMenuSubContent/);

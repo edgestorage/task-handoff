@@ -3,7 +3,7 @@ import path from "node:path";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
 import type { AppRuntimeManager } from "@task-handoff/app-runtime/runtime";
-import type { AiSessionRegistry } from "@task-handoff/ai-session-runtime";
+import type { AiSessionCreateCoordinator, AiSessionRegistry } from "@task-handoff/ai-session-runtime";
 import {
   RepositoryCommitRequestSchema,
   RepositoryCheckoutBranchRequestSchema,
@@ -37,6 +37,7 @@ import { ManagedWorktreeRegistry, RepositoryWorktreeService } from "./worktrees"
 type RegisterRepositoryRoutesOptions = {
   appRuntime: AppRuntimeManager;
   aiSessions: AiSessionRegistry;
+  aiSessionCreate: AiSessionCreateCoordinator;
   managedWorktreesRoot: string;
   workspaceRoots: string[];
 };
@@ -247,8 +248,14 @@ export function registerRepositoryRoutes(app: FastifyInstance, options: Register
         ? worktrees.items.find((item) => item.isCurrent)?.id
         : body.workspaceSelection.worktreeId;
       if (!worktreeId) throw new RepositoryOperationError("REPOSITORY_WORKTREE_NOT_FOUND", "Current worktree no longer exists.", source);
-      const launched = options.appRuntime.start(body.agent, { cwd: workspace });
-      return { data: { appSessionId: launched.id, worktreeId, disposition: "started" as const } };
+      const created = await options.aiSessionCreate.create({
+        agent: body.agent,
+        cwd: workspace,
+        message: body.message,
+        permissionMode: body.permissionMode,
+        clientRequestId: body.clientRequestId,
+      });
+      return { data: { aiSessionId: created.aiSessionId, providerSessionId: created.providerSessionId, worktreeId, disposition: "started" as const } };
     } catch (error) { return sendRepositoryError(reply, sanitizeAiSessionLaunchError(error)); }
   });
 
@@ -259,8 +266,14 @@ export function registerRepositoryRoutes(app: FastifyInstance, options: Register
       const created = await services.worktrees.create(body.worktree);
       try {
         const workspace = await services.worktrees.resolveWorkspace(created.worktrees.repositoryContextId, created.worktreeId);
-        const launched = options.appRuntime.start(body.agent, { cwd: workspace });
-        return { data: { appSessionId: launched.id, worktreeId: created.worktreeId, disposition: "started" as const } };
+        const session = await options.aiSessionCreate.create({
+          agent: body.agent,
+          cwd: workspace,
+          message: body.message,
+          permissionMode: body.permissionMode,
+          clientRequestId: body.clientRequestId,
+        });
+        return { data: { aiSessionId: session.aiSessionId, providerSessionId: session.providerSessionId, worktreeId: created.worktreeId, disposition: "started" as const } };
       } catch (launchError) {
         const cleanup = await compensateFailedWorktreeLaunch(services.worktrees, created.worktreeId);
         throw new RepositoryOperationError(

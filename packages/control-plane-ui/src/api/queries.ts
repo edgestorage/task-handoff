@@ -349,6 +349,24 @@ export function useNodeImageAvailabilityQuery(nodeId: MaybeRefOrGetter<string>) 
   });
 }
 
+export function useEnvironmentTemplatesQuery(nodeId: MaybeRefOrGetter<string>) {
+  const resolvedNodeId = computed(() => toValue(nodeId));
+  return useQuery({
+    queryKey: computed(() => controlPlaneQueryKeys.environmentTemplates(resolvedNodeId.value)),
+    queryFn: () => getApiData<import("./types").EnvironmentTemplate[]>(`nodes/${resolvedNodeId.value}/environment-templates`),
+    enabled: computed(() => Boolean(resolvedNodeId.value)),
+    retry: false,
+  });
+}
+
+export function saveEnvironmentTemplate(instanceId: string, name: string) {
+  return postApiData<import("./types").EnvironmentTemplate>(`controlled-instances/${instanceId}/environment-templates`, { name });
+}
+
+export function deleteEnvironmentTemplate(nodeId: string, templateId: string) {
+  return deleteApiData<import("./types").EnvironmentTemplate>(`nodes/${nodeId}/environment-templates/${templateId}`);
+}
+
 export function listNodeControlPlanePairings(nodeId: string) {
   return getApiData<NodeControlPlanePairing[]>(`nodes/${nodeId}/control-plane-pairings`);
 }
@@ -415,6 +433,18 @@ export function getAiSessionHistoryDetail(instanceId: string, aiSessionId: strin
 
 export function resumeAiSession(instanceId: string, aiSessionId: string) {
   return postApiData<AiSessionResumeResult>(`controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/${encodeURIComponent(aiSessionId)}/resume`, {});
+}
+
+export function createAiSession(instanceId: string, input: import("@task-handoff/protocol/ai-sessions").AiSessionCreateRefInput) {
+  return postApiData<import("./types").AiSessionCreateResult>(`controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions`, input);
+}
+
+export function openAiSessionApp(instanceId: string, aiSessionId: string, clientRequestId: string) {
+  return postApiData<import("./types").AiSessionOpenAppResult>(`controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/${encodeURIComponent(aiSessionId)}/open-app`, { clientRequestId });
+}
+
+export function closeAiSession(instanceId: string, aiSessionId: string, clientRequestId: string) {
+  return postApiData<import("./types").AiSessionCloseResult>(`controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/${encodeURIComponent(aiSessionId)}/close`, { clientRequestId });
 }
 
 export function useControlPlaneAppSessionsQuery() {
@@ -518,8 +548,8 @@ export function restartControlledInstance(id: string) {
   return postApiData<InstanceBoardItem>(`controlled-instances/${id}/restart`);
 }
 
-export function deleteControlledInstance(id: string) {
-  return deleteApiData<{ deleted: boolean }>(`controlled-instances/${id}`);
+export function deleteControlledInstance(id: string, deleteVolumes: boolean) {
+  return deleteApiData<import("@task-handoff/protocol/control-plane").InstanceDeleteResult>(`controlled-instances/${id}`, { deleteVolumes });
 }
 
 export function launchAppSession(instanceId: string, input: LaunchAppSessionInput = {}) {

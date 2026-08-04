@@ -24,6 +24,38 @@ type ListenerSnapshot = {
   error?: string;
 };
 
+async function listenerPortAvailable(config: NodeAgentExternalListenerConfig) {
+  const host = externalListenerHost(config.bindScope);
+  const occupied = await new Promise<boolean>((resolve) => {
+    const socket = net.createConnection({ host: "127.0.0.1", port: config.port });
+    const finish = (connected: boolean) => {
+      socket.removeAllListeners();
+      socket.destroy();
+      resolve(connected);
+    };
+    socket.once("connect", () => finish(true));
+    socket.once("error", () => finish(false));
+    socket.setTimeout(250, () => finish(false));
+  });
+  if (occupied) return false;
+  return new Promise<boolean>((resolve) => {
+    const server = net.createServer();
+    server.once("error", () => resolve(false));
+    server.listen({ host, port: config.port, exclusive: true }, () => server.close(() => resolve(true)));
+  });
+}
+
+export async function allocateNodeAgentExternalListener(preferred: NodeAgentExternalListenerConfig, attempts = 20) {
+  for (let offset = 0; offset < attempts && preferred.port + offset <= 65535; offset += 1) {
+    const candidate = { ...preferred, port: preferred.port + offset };
+    if (await listenerPortAvailable(candidate)) return candidate;
+  }
+  throw Object.assign(
+    new Error(`No available node-agent port found starting at ${preferred.port}.`),
+    { statusCode: 503, code: "NODE_AGENT_LISTENER_PORT_UNAVAILABLE" },
+  );
+}
+
 export class NodeAgentExternalListenerManager {
   private readonly app: FastifyInstance;
   private readonly state: ListenerState;
@@ -74,7 +106,11 @@ export class NodeAgentExternalListenerManager {
       this.error = error instanceof Error ? error.message : String(error);
       this.app.log.error(
         { host: externalListenerHost(this.config.bindScope), port: this.config.port, error: this.error },
-        "node agent TCP listener failed to start; Unix IPC remains available",
+        "node agent TCP listener failed to start",
+      );
+      throw Object.assign(
+        new Error(`Failed to bind node agent TCP listener at ${externalListenerHost(this.config.bindScope)}:${this.config.port}: ${this.error}`),
+        { statusCode: 409, code: "NODE_AGENT_LISTENER_BIND_FAILED" },
       );
     }
     return this.current();

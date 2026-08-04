@@ -18,6 +18,9 @@ export const controlPlaneQueryKeys = {
   nodeImageCatalog: (nodeId?: string) => nodeId
     ? ["node-image-catalog", nodeId] as const
     : ["node-image-catalog"] as const,
+  environmentTemplates: (nodeId?: string) => nodeId
+    ? ["node-environment-templates", nodeId] as const
+    : ["node-environment-templates"] as const,
   instanceBoard: ["instance-board-payload"] as const,
   chatBridges: ["chat-gateway-bridges"] as const,
   chatStatus: ["chat-gateway-status"] as const,

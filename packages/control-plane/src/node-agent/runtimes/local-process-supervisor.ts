@@ -144,13 +144,33 @@ export async function allocateLocalPort() {
   );
 }
 
-function canListen(port: number) {
+function canConnect(port: number) {
+  return new Promise<boolean>((resolve) => {
+    const socket = net.createConnection({ host: "127.0.0.1", port });
+    const finish = (connected: boolean) => {
+      socket.removeAllListeners();
+      socket.destroy();
+      resolve(connected);
+    };
+    socket.once("connect", () => finish(true));
+    socket.once("error", () => finish(false));
+    socket.setTimeout(250, () => finish(false));
+  });
+}
+
+export async function canListenOnLocalPort(port: number) {
+  // A wildcard listener owned by Docker Desktop/OrbStack can still allow a
+  // loopback bind on macOS while intercepting traffic sent to that port. A
+  // connection probe catches that case before the regular bind probe.
+  if (await canConnect(port)) return false;
   return new Promise<boolean>((resolve) => {
     const server = net.createServer();
     server.once("error", () => resolve(false));
-    server.listen({ host: "127.0.0.1", port }, () => server.close(() => resolve(true)));
+    server.listen({ host: "127.0.0.1", port, exclusive: true }, () => server.close(() => resolve(true)));
   });
 }
+
+const canListen = canListenOnLocalPort;
 
 export function waitForChildExit(child: ChildProcessWithoutNullStreams, timeoutMs = 3_000) {
   if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();

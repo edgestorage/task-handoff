@@ -119,7 +119,7 @@
           </template>
         </DropdownMenuContent>
       </DropdownMenu>
-      <button type="button" class="ai-board-open ai-session-card-action" :aria-label="t('sessions.actions.openAppFor', { agent: card.session.agent })" :title="t('sessions.actions.openApp')" @click.stop="$emit('openAiSessionApp', card.instance, card.session)">
+      <button v-if="card.session.appSessionId || card.session.actions?.openApp" type="button" class="ai-board-open ai-session-card-action" :aria-label="t('sessions.actions.openAppFor', { agent: card.session.agent })" :title="t('sessions.actions.openApp')" @click.stop="$emit('openAiSessionApp', card.instance, card.session)">
         <ExternalLink :size="14" />
       </button>
       <DropdownMenu>
@@ -131,7 +131,7 @@
         <DropdownMenuContent class="ai-board-card-menu" align="end" :side-offset="6" @click.stop>
           <DropdownMenuItem class="ai-board-card-menu-item danger" :disabled="isStoppingAppSession" @select="$emit('stopAppSession', card)">
             <Square :size="13" />
-            <span>{{ isStoppingAppSession ? t("sessions.actions.closingApp") : t("sessions.actions.closeApp") }}</span>
+            <span>{{ isStoppingAppSession ? t("sessions.actions.closingSession") : t("sessions.actions.closeSession") }}</span>
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -140,13 +140,14 @@
     </ContextMenuTrigger>
     <AiSessionCardContextMenu
       :bound-trigger-count="boundTriggers(card).length"
-      has-app-session
+      :has-app-session="Boolean(card.session.appSessionId)"
+      :can-open-app="Boolean(card.session.appSessionId || card.session.actions?.openApp)"
       :is-stopping-app-session="isStoppingAppSession"
       :is-trigger-bound="(configHash) => isTriggerBound(card, configHash)"
       :is-trigger-busy="(configHash) => triggerBusyKey === triggerActionKey(card, configHash)"
       :short-hash="shortHash"
       :trigger-templates="triggerTemplates"
-      @close-app="$emit('stopAppSession', card)"
+      @close-session="$emit('stopAppSession', card)"
       @open-app="$emit('openAiSessionApp', card.instance, card.session)"
       @toggle-trigger="$emit('toggleTrigger', card, $event)"
     />

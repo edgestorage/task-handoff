@@ -23,10 +23,13 @@ import { AppRuntimeManager } from "@task-handoff/app-runtime/runtime";
 import type { AppCatalogItem, AppLaunchOptions } from "@task-handoff/app-runtime/types";
 import {
   AiSessionController,
+  AiSessionCreateCoordinator,
+  AiSessionCloseCoordinator,
   AiSessionDiscoveryCoordinator,
   AiSessionHistoryLifecycle,
   AiSessionHistoryStore,
   AiSessionResumeCoordinator,
+  AiSessionOpenAppCoordinator,
   ClaudeAppSessionBindingProvider,
   ClaudeControlSockSessionBridge,
   CodexAppServerSessionBridge,
@@ -70,6 +73,12 @@ import {
   AI_SESSION_DELTA_RETENTION_MS,
   AiSessionEventType,
   AiSessionActionResultSchema,
+  AiSessionCreateInputSchema,
+  AiSessionCreateResultSchema,
+  AiSessionCloseInputSchema,
+  AiSessionCloseResultSchema,
+  AiSessionOpenAppInputSchema,
+  AiSessionOpenAppResultSchema,
   AiSessionApprovalInputSchema,
   AiSessionControlErrorSchema,
   AiSessionHistoryListSchema,
@@ -539,12 +548,6 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     },
   });
   const aiSessions = options.aiSessionRegistry || createAiSessionRegistry();
-  registerRepositoryRoutes(app, {
-    appRuntime,
-    aiSessions,
-    managedWorktreesRoot: process.env.TASK_HANDOFF_MANAGED_WORKTREES_ROOT || path.join(storagePaths.dataDir, "managed-worktrees"),
-    workspaceRoots: repositoryWorkspaceRootsFromEnv(),
-  });
   const aiSessionHistory = new AiSessionHistoryStore(storagePaths, {
     onWarning: (warning) => app.log.warn({ warning }, "AI session history entry was sanitized"),
   });
@@ -602,6 +605,10 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       : Number(configuredDeltaCoalescingWindow),
   });
   const codexAppServer = options.codexAppServer || new CodexAppServerSessionBridge(aiSessions, {
+    threadStartDefaults: {
+      model: process.env.TASK_HANDOFF_CODEX_MODEL?.trim() || undefined,
+      modelProvider: process.env.TASK_HANDOFF_CODEX_MODEL?.trim() ? "openai" : undefined,
+    },
     onMessageDelta: (delta) => {
       const payload = AiSessionMessageDeltaEventSchema.parse({
         instanceId,
@@ -648,16 +655,66 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
         providerSessionId: item.providerSessionId,
       },
     }),
+    resumeProvider: async (item) => {
+      await appRuntime.ensureSharedResource(item.agent);
+      await codexAppServer.sync(appSessionsWithSharedCodexAppServer());
+      await aiSessionController.provider(item.agent).resumeSession?.(item.providerSessionId);
+    },
+  });
+  const aiSessionCreate = new AiSessionCreateCoordinator({
+    registry: aiSessions,
+    controller: aiSessionController,
+    operationStorePath: path.join(storagePaths.runtimeDir, "ai-session-create-operations.json"),
+    ensureProvider: async (agent) => {
+      await appRuntime.ensureSharedResource(agent);
+      if (agent === "codex") await codexAppServer.sync(appSessionsWithSharedCodexAppServer());
+    },
+    onDiagnostic: (diagnostic) => app.log.warn({ diagnostic }, "AI session create compensation"),
+  });
+  registerRepositoryRoutes(app, {
+    appRuntime,
+    aiSessions,
+    aiSessionCreate,
+    managedWorktreesRoot: process.env.TASK_HANDOFF_MANAGED_WORKTREES_ROOT || path.join(storagePaths.dataDir, "managed-worktrees"),
+    workspaceRoots: repositoryWorkspaceRootsFromEnv(),
+  });
+  const aiSessionOpenApp = new AiSessionOpenAppCoordinator({
+    registry: aiSessions,
+    appSessions: appSessionsWithSharedCodexAppServer,
+    startApp: (session) => appRuntime.start(session.agent, {
+      cwd: session.cwd,
+      aiSessionResume: {
+        aiSessionId: session.id,
+        providerSessionId: session.providerSessionId || "",
+      },
+    }),
+    stopApp: (appSessionId) => { appRuntime.stop(appSessionId); },
+  });
+  const aiSessionClose = new AiSessionCloseCoordinator({
+    registry: aiSessions,
+    controller: aiSessionController,
+    history: aiSessionHistory,
+    stopApp: (appSessionId) => { appRuntime.stop(appSessionId); },
+    onDiagnostic: (diagnostic) => app.log.warn({ diagnostic }, "AI session close rollback"),
   });
   const refreshAiSessions = async () => {
     const appSessions = appSessionsWithSharedCodexAppServer();
-    aiSessionHistoryLifecycle.reconcile(aiSessions.all(), appSessions);
+    const activeAppIds = new Set(appSessions.filter((session) => !session.status || session.status === "running").map((session) => session.id));
+    const lostBindings = aiSessions.all().flatMap((session) => {
+      const appSessionId = session.appSessionId;
+      return appSessionId && !activeAppIds.has(appSessionId) ? [{ session, appSessionId }] : [];
+    });
+    await Promise.all(lostBindings.map(async ({ session, appSessionId }) => {
+      try { await aiSessionClose.closeForAppSession(appSessionId); } catch (error: unknown) {
+        app.log.warn({ err: error, aiSessionId: session.id, appSessionId }, "failed to close AI session after App exit");
+      }
+    }));
     aiSessions.reconcileAppSessionBindings(appSessions);
     await aiSessionDiscovery.refresh({
       registry: aiSessions,
       appSessions,
     });
-    aiSessionHistoryLifecycle.reconcile(aiSessions.all(), appSessions);
+    aiSessionHistoryLifecycle.activate(aiSessions.all(), appSessions);
   };
   const aiSessionRefreshScheduler = new AiSessionRefreshScheduler(
     refreshAiSessions,
@@ -955,6 +1012,11 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     claudeControlSock.stop();
   });
   app.addHook("preClose", async () => {
+    await Promise.all(aiSessions.all().map(async (session) => {
+      try { await aiSessionClose.close(session.id); } catch (error: unknown) {
+        app.log.warn({ err: error, aiSessionId: session.id }, "failed to close AI session during program shutdown");
+      }
+    }));
     codexAppServer.stop();
     aiSessionMessageDeltas.close("service-close");
   });
@@ -1257,6 +1319,42 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       z.object({}).strict().parse(request.body || {});
       const result = AiSessionResumeResultSchema.parse(await aiSessionResume.resume(request.params.id));
       await refreshAndPublishAiSessions("control-action");
+      return { data: result };
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
+  app.post<{ Body: unknown }>("/api/ai-sessions", { bodyLimit: 64 * 1024 * 1024 }, async (request, reply) => {
+    try {
+      const body = AiSessionCreateInputSchema.parse(request.body || {});
+      const result = AiSessionCreateResultSchema.parse(await aiSessionCreate.create({
+        ...body,
+        cwd: body.cwd.path,
+      }));
+      publishAiSessionSnapshot("control-action");
+      return { data: result };
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
+  app.post<{ Params: { id: string }; Body: unknown }>("/api/ai-sessions/:id/open-app", async (request, reply) => {
+    try {
+      AiSessionOpenAppInputSchema.parse(request.body || {});
+      const result = AiSessionOpenAppResultSchema.parse(await aiSessionOpenApp.open(request.params.id));
+      await refreshAndPublishAiSessions("control-action");
+      return { data: result };
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
+  app.post<{ Params: { id: string }; Body: unknown }>("/api/ai-sessions/:id/close", async (request, reply) => {
+    try {
+      AiSessionCloseInputSchema.parse(request.body || {});
+      const result = AiSessionCloseResultSchema.parse(await aiSessionClose.close(request.params.id));
+      publishAiSessionSnapshot("control-action");
       return { data: result };
     } catch (error: unknown) {
       return sendAiSessionControlError(reply, error);
@@ -1666,6 +1764,11 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
 
   app.post<{ Params: { id: string } }>("/api/apps/sessions/:id/stop", async (request, reply) => {
     try {
+      const closed = await aiSessionClose.closeForAppSession(request.params.id);
+      if (closed) {
+        publishAiSessionSnapshot("control-action");
+        return { data: closed };
+      }
       return { data: appRuntime.stop(request.params.id) };
     } catch (error: unknown) {
       return reply.code(404).send({ error: { code: "APP_SESSION_NOT_FOUND", message: error instanceof Error ? error.message : String(error) } });

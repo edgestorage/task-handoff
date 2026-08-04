@@ -140,6 +140,70 @@ export const ImageSelectionSchema = z.object({
   tag: z.string().trim().min(1).max(128).regex(DockerTagPattern).optional(),
 }).strict();
 
+export const EnvironmentSourceSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("image"),
+    imageSelection: ImageSelectionSchema,
+  }).strict(),
+  z.object({
+    type: z.literal("template"),
+    environmentTemplateId: IdSchema,
+  }).strict(),
+]);
+
+export const EnvironmentTemplateStatusSchema = z.enum(["creating", "ready", "failed", "deleting"]);
+export const FinalComputerPlatformSchema = z.enum(["linux", "darwin", "win32", "freebsd", "openbsd", "aix", "sunos", "unknown"]);
+export const FinalComputerArchSchema = z.enum(["x64", "arm64", "arm", "ia32", "ppc64", "s390x", "riscv64", "unknown"]);
+
+export const EnvironmentTemplateErrorSchema = z.object({
+  code: z.string().trim().min(1).max(120),
+  message: z.string().trim().min(1).max(2048),
+  phase: z.enum(["validate", "commit", "inspect", "security-check", "persist", "delete", "recovery"]).optional(),
+}).strict();
+
+export const EnvironmentTemplateOriginSchema = z.object({
+  templateId: IdSchema,
+  nodeId: IdSchema,
+  imageId: DockerImageDigestSchema,
+  name: z.string().trim().min(1).max(160),
+  platform: FinalComputerPlatformSchema,
+  architecture: FinalComputerArchSchema,
+}).strict();
+
+export const ManagedVolumeRoleSchema = z.enum(["data", "agent-home", "workspace"]);
+
+export const ManagedVolumeSchema = z.object({
+  role: ManagedVolumeRoleSchema,
+  name: z.string().trim().min(1).max(255),
+  mountPath: z.string().trim().startsWith("/").max(4096),
+  labels: z.record(z.string(), z.string()),
+}).strict();
+
+export const InstanceDeleteInputSchema = z.object({
+  deleteVolumes: z.boolean(),
+}).strict();
+
+export const ManagedVolumeDispositionSchema = ManagedVolumeSchema.pick({
+  role: true,
+  name: true,
+  mountPath: true,
+}).extend({
+  status: z.enum(["deleted", "retained", "missing", "failed"]),
+  error: z.object({
+    code: z.string().trim().min(1).max(120),
+    message: z.string().trim().min(1).max(2048),
+  }).strict().optional(),
+}).strict();
+
+export const InstanceDeleteResultSchema = z.object({
+  instanceId: IdSchema,
+  containerDeleted: z.boolean(),
+  completed: z.boolean(),
+  deletedVolumes: z.array(ManagedVolumeDispositionSchema),
+  retainedVolumes: z.array(ManagedVolumeDispositionSchema),
+  volumeResults: z.array(ManagedVolumeDispositionSchema),
+}).strict();
+
 export const LEGACY_MARKET_IMAGE_IDS: Record<string, string> = {
   img_default: "market_taskhandoff_browser",
   img_codex: "market_taskhandoff_codex",
@@ -209,8 +273,57 @@ export const InstanceAppInventorySchema = z
   })
   .strict();
 
-export const FinalComputerPlatformSchema = z.enum(["linux", "darwin", "win32", "freebsd", "openbsd", "aix", "sunos", "unknown"]);
-export const FinalComputerArchSchema = z.enum(["x64", "arm64", "arm", "ia32", "ppc64", "s390x", "riscv64", "unknown"]);
+export const EnvironmentTemplateSchema = z.object({
+  id: IdSchema,
+  name: z.string().trim().min(1).max(160),
+  sourceInstanceId: IdSchema,
+  nodeId: IdSchema,
+  imageId: DockerImageDigestSchema.optional(),
+  internalTag: z.string().trim().min(1).max(512).optional(),
+  platform: FinalComputerPlatformSchema.optional(),
+  architecture: FinalComputerArchSchema.optional(),
+  sizeBytes: z.number().int().nonnegative().optional(),
+  status: EnvironmentTemplateStatusSchema,
+  error: EnvironmentTemplateErrorSchema.optional(),
+  createdAt: TimestampSchema,
+  updatedAt: TimestampSchema,
+}).strict().superRefine((template, context) => {
+  if (template.status === "ready") {
+    for (const field of ["imageId", "internalTag", "platform", "architecture", "sizeBytes"] as const) {
+      if (template[field] === undefined) {
+        context.addIssue({ code: "custom", path: [field], message: `Ready environment template requires ${field}.` });
+      }
+    }
+  }
+  if (template.status === "failed" && !template.error) {
+    context.addIssue({ code: "custom", path: ["error"], message: "Failed environment template requires an error diagnostic." });
+  }
+});
+
+export function sanitizeStoredEnvironmentTemplate(
+  input: unknown,
+  onWarning?: (warning: { templateId?: string; field: string }) => void,
+) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+  const source = input as Record<string, unknown>;
+  const knownKeys = new Set([
+    "id", "name", "sourceInstanceId", "nodeId", "imageId", "internalTag", "platform",
+    "architecture", "sizeBytes", "status", "error", "createdAt", "updatedAt",
+  ]);
+  const templateId = typeof source.id === "string" ? source.id : undefined;
+  for (const key of Object.keys(source)) {
+    if (!knownKeys.has(key)) onWarning?.({ templateId, field: key });
+  }
+  const next = pickObjectFields(source, [...knownKeys]) as Record<string, unknown>;
+  if (source.error && typeof source.error === "object" && !Array.isArray(source.error)) {
+    const error = source.error as Record<string, unknown>;
+    for (const key of Object.keys(error)) {
+      if (!["code", "message", "phase"].includes(key)) onWarning?.({ templateId, field: `error.${key}` });
+    }
+    next.error = pickObjectFields(error, ["code", "message", "phase"]);
+  }
+  return next;
+}
 export const AppInstallerSchema = z.enum(["apt", "dnf", "brew", "npm"]);
 export const AppInstallPrivilegeSchema = z.enum(["user", "passwordless-sudo", "root"]);
 export const FinalComputerCapabilitiesSchema = z.object({
@@ -1322,11 +1435,13 @@ export const ControlledInstanceSchema = z
     nodeId: IdSchema,
     runtimeId: IdSchema,
     imageSelection: ImageSelectionSchema.optional(),
+    environmentSource: EnvironmentSourceSchema.optional(),
+    environmentTemplateOrigin: EnvironmentTemplateOriginSchema.optional(),
     imageSnapshot: InstanceImageSnapshotSchema.optional(),
     imageProvisioning: ImageProvisioningSchema.optional(),
     stateRevision: z.number().int().min(0).default(0),
     processIncarnationId: z.string().trim().min(1).max(120).optional(),
-    status: z.enum(["created", "provisioning", "starting", "registering", "registered", "running", "stopping", "stopped", "failed", "unhealthy"]).default("created"),
+    status: z.enum(["created", "provisioning", "starting", "registering", "registered", "running", "stopping", "stopped", "deleting", "failed", "unhealthy"]).default("created"),
     health: z.enum(["unknown", "ok", "degraded", "failed"]).default("unknown"),
     connectionStatus: z.enum(["unknown", "online", "offline", "endpoint-unreachable"]).default("unknown"),
     agentStatus: z.enum(["unknown", "online", "offline"]).default("unknown"),
@@ -1390,9 +1505,10 @@ export const ControlledInstanceSchema = z
         pid: z.number().int().positive().optional(),
         port: z.number().int().positive().max(65535).optional(),
         labels: z.record(z.string(), z.string()).default({}),
+        managedVolumes: z.array(ManagedVolumeSchema).default([]),
       })
       .strict()
-      .default({ labels: {} }),
+      .default({ labels: {}, managedVolumes: [] }),
     registrationToken: z.string().trim().min(1).max(240).optional(),
     lastHeartbeatAt: TimestampSchema.optional(),
     createdAt: TimestampSchema,
@@ -1491,7 +1607,9 @@ export function sanitizeStoredControlledInstance(
   next.imageProvisioning = sanitizeStoredStrictObject(ImageProvisioningSchema, pickObjectFields(source.imageProvisioning, ["phase", "requestedReference", "generation", "error", "startedAt", "updatedAt"]), "imageProvisioning", onWarning, typeof source.id === "string" ? source.id : undefined);
   next.runtimeVersion = sanitizeStoredRuntimeVersion(source.runtimeVersion, onWarning, typeof source.id === "string" ? source.id : undefined);
   next.workspace = sanitizeStoredStrictObject(WorkspaceStatusSchema, source.workspace, "workspace", onWarning, typeof source.id === "string" ? source.id : undefined) || { status: "unknown" };
-  next.runtime = sanitizeStoredStrictObject(ControlledInstanceSchema.shape.runtime.unwrap(), pickObjectFields(source.runtime, ["kind", "containerName", "containerId", "workspacePath", "pid", "port", "labels"]), "runtime", onWarning, typeof source.id === "string" ? source.id : undefined) || { labels: {} };
+  next.environmentSource = sanitizeStoredStrictObject(EnvironmentSourceSchema, source.environmentSource, "environmentSource", onWarning, typeof source.id === "string" ? source.id : undefined);
+  next.environmentTemplateOrigin = sanitizeStoredStrictObject(EnvironmentTemplateOriginSchema, source.environmentTemplateOrigin, "environmentTemplateOrigin", onWarning, typeof source.id === "string" ? source.id : undefined);
+  next.runtime = sanitizeStoredStrictObject(ControlledInstanceSchema.shape.runtime.unwrap(), pickObjectFields(source.runtime, ["kind", "containerName", "containerId", "workspacePath", "pid", "port", "labels", "managedVolumes"]), "runtime", onWarning, typeof source.id === "string" ? source.id : undefined) || { labels: {}, managedVolumes: [] };
   next.target = sanitizeStoredStrictObject(InstanceTargetSchema, pickObjectFields(source.target ?? source.endpoints, ["strategy", "web", "api", "vnc", "tty", "logs", "status"]), "target", onWarning, typeof source.id === "string" ? source.id : undefined) || { strategy: "direct-port", status: "unknown" };
   next.access = sanitizeStoredStrictObject(InstanceAccessSchema, pickObjectFields(source.access, ["strategy", "web", "api", "ws", "status"]), "access", onWarning, typeof source.id === "string" ? source.id : undefined) || { strategy: "control-plane-proxy", status: "unknown" };
   for (const [key, schema] of Object.entries(ControlledInstanceSchema.shape)) {
@@ -1980,6 +2098,16 @@ export type ModelLocation = z.infer<typeof ModelLocationSchema>;
 export type FederatedModelGroup = z.infer<typeof FederatedModelGroupSchema>;
 export type FederatedModelRegistry = z.infer<typeof FederatedModelRegistrySchema>;
 export type ImageSelection = z.infer<typeof ImageSelectionSchema>;
+export type EnvironmentSource = z.infer<typeof EnvironmentSourceSchema>;
+export type EnvironmentTemplateStatus = z.infer<typeof EnvironmentTemplateStatusSchema>;
+export type EnvironmentTemplateError = z.infer<typeof EnvironmentTemplateErrorSchema>;
+export type EnvironmentTemplate = z.infer<typeof EnvironmentTemplateSchema>;
+export type EnvironmentTemplateOrigin = z.infer<typeof EnvironmentTemplateOriginSchema>;
+export type ManagedVolumeRole = z.infer<typeof ManagedVolumeRoleSchema>;
+export type ManagedVolume = z.infer<typeof ManagedVolumeSchema>;
+export type ManagedVolumeDisposition = z.infer<typeof ManagedVolumeDispositionSchema>;
+export type InstanceDeleteInput = z.infer<typeof InstanceDeleteInputSchema>;
+export type InstanceDeleteResult = z.infer<typeof InstanceDeleteResultSchema>;
 export type ImageCover = z.infer<typeof ImageCoverSchema>;
 export type MarketImagePlatformArtifact = z.infer<typeof MarketImagePlatformArtifactSchema>;
 export type MarketImageTag = z.infer<typeof MarketImageTagSchema>;

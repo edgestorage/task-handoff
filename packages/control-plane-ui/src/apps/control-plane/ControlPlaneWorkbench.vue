@@ -145,6 +145,7 @@
         @expand="expandInstances"
         @new-instance="newInstanceOpen = true"
         @open-settings="openInstanceSettings"
+        @save-template="openSaveEnvironmentTemplate"
         @resize-start="startInstanceResize"
         @run-action="runRowInstanceAction"
         @open-config-sync="openConfigSync"
@@ -291,6 +292,25 @@
       @completed="refresh"
     />
 
+    <InstanceDeleteDialog
+      :open="Boolean(deleteDialogInstance)"
+      :instance="deleteDialogInstance"
+      :submitting="Boolean(deleteDialogInstance && isInstanceActionBusy(deleteDialogInstance))"
+      :result="deleteResult"
+      :error="deleteError"
+      @update:open="(open) => { if (!open) closeDeleteDialog() }"
+      @confirm="confirmDeleteInstance"
+    />
+
+    <SaveEnvironmentTemplateDialog
+      :open="Boolean(saveTemplateInstance)"
+      :instance="saveTemplateInstance"
+      :submitting="savingEnvironmentTemplate"
+      :error="saveTemplateError"
+      @update:open="(open) => { if (!open) closeSaveEnvironmentTemplate() }"
+      @confirm="confirmSaveEnvironmentTemplate"
+    />
+
     <InstanceSettingsDialog
       v-model:open="instanceSettingsOpen"
       :initial-section="instanceSettingsSection"
@@ -317,7 +337,7 @@ import { useQueries, useQueryClient } from "@tanstack/vue-query";
 import { useEventListener } from "@vueuse/core";
 import { Bot, Check, ChevronDown, Download, House, LayoutGrid, LogOut, Maximize2, Minus, RefreshCw, Settings, X } from "@lucide/vue";
 import "@xterm/xterm/css/xterm.css";
-import { controlPlaneQueryKeys, getInstanceAppManagement, getInstanceResourceMetrics, installInstanceApp, logoutControlPlane, nodeLocalFoldersQueryOptions, renameAppSession, resolveAiSessionApproval, uninstallInstanceApp, updateControlledInstance, useAuthSessionQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useInstanceBoardQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
+import { controlPlaneQueryKeys, getInstanceAppManagement, getInstanceResourceMetrics, installInstanceApp, logoutControlPlane, nodeLocalFoldersQueryOptions, renameAppSession, resolveAiSessionApproval, saveEnvironmentTemplate, uninstallInstanceApp, updateControlledInstance, useAuthSessionQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useInstanceBoardQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
 import type { ConfigSyncDirection } from "@task-handoff/protocol/config-sync";
 import { type AiSessionSummary, type AppManagementOperation, type InstanceBoardItem, type InstanceBoardItemWithAppSessions, type InstanceResourceMetrics, type NodeLocalFolder, type UpdateControlledInstanceInput } from "../../api/types";
 import { Button } from "../../components/ui/button";
@@ -329,6 +349,8 @@ import InstanceBoardView from "./board/InstanceBoardView.vue";
 import InstanceDetail from "./instance-detail/InstanceDetail.vue";
 import InstanceList from "./instance-list/InstanceList.vue";
 import ConfigSyncDialog from "./instance-list/ConfigSyncDialog.vue";
+import InstanceDeleteDialog from "./instance-list/InstanceDeleteDialog.vue";
+import SaveEnvironmentTemplateDialog from "./instance-list/SaveEnvironmentTemplateDialog.vue";
 import InstanceSettingsDialog from "./instance-settings/InstanceSettingsDialog.vue";
 import { useInstanceAppManagement } from "./instance-settings/useInstanceAppManagement";
 import NewInstanceModal from "./NewInstanceModal.vue";
@@ -398,7 +420,7 @@ const instanceViewMode = computed(() => workbenchView.value === "instance");
 const boardMode = computed(() => workbenchView.value === "board");
 const aiBoardMode = computed(() => workbenchView.value === "ai");
 const settingsMode = ref(false);
-const settingsSection = ref<"basic" | "chat" | "images" | "projects" | "nodes" | "models" | "triggers">("nodes");
+const settingsSection = ref<"basic" | "chat" | "images" | "environment-templates" | "projects" | "nodes" | "models" | "triggers">("nodes");
 const boardFilter = ref("");
 const aiBoardFilter = ref("");
 const boardProjectFilter = ref(ALL_BOARD_FILTER_VALUE);
@@ -408,6 +430,9 @@ const boardSize = ref<BoardSize>(storedBoardSize());
 const boardInteractive = ref(storedBoardInteractive());
 const sessionPreviewExpanded = ref(storedSessionPreviewExpanded());
 const newInstanceOpen = ref(false);
+const saveTemplateInstance = ref<InstanceBoardItem>();
+const savingEnvironmentTemplate = ref(false);
+const saveTemplateError = ref("");
 const configSyncInstanceId = ref("");
 const configSyncDirection = ref<ConfigSyncDirection>("import");
 const configSyncDialogOpen = computed({
@@ -840,6 +865,11 @@ async function resolveAiSessionApprovalAction(instance: InstanceBoardItem, sessi
 const {
   activeActionLabel,
   canExportConfig,
+  closeDeleteDialog,
+  confirmDeleteInstance,
+  deleteDialogInstance,
+  deleteError,
+  deleteResult,
   isInstanceActionBusy,
   runInstanceAction,
   runRowInstanceAction,
@@ -857,6 +887,35 @@ const {
   refresh,
   translate: t,
 });
+
+function openSaveEnvironmentTemplate(instance: InstanceBoardItem) {
+  openInstanceMenuId.value = "";
+  saveTemplateError.value = "";
+  saveTemplateInstance.value = instance;
+}
+
+function closeSaveEnvironmentTemplate() {
+  if (savingEnvironmentTemplate.value) return;
+  saveTemplateInstance.value = undefined;
+  saveTemplateError.value = "";
+}
+
+async function confirmSaveEnvironmentTemplate(name: string) {
+  const instance = saveTemplateInstance.value;
+  if (!instance || savingEnvironmentTemplate.value) return;
+  savingEnvironmentTemplate.value = true;
+  saveTemplateError.value = "";
+  try {
+    await saveEnvironmentTemplate(instance.id, name);
+    await queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.environmentTemplates(instance.nodeId) });
+    showToast(t("instances.environmentTemplateDialog.saved", { name }));
+    saveTemplateInstance.value = undefined;
+  } catch (error) {
+    saveTemplateError.value = errorText(error);
+  } finally {
+    savingEnvironmentTemplate.value = false;
+  }
+}
 
 function openConfigSync(direction: ConfigSyncDirection, instance: InstanceBoardItem) {
   configSyncDirection.value = direction;
@@ -889,6 +948,9 @@ function settingsSectionTitle(section: typeof settingsSection.value) {
   }
   if (section === "images") {
     return t("settings.images");
+  }
+  if (section === "environment-templates") {
+    return t("settings.environmentTemplates");
   }
   if (section === "nodes") {
     return t("settings.nodes");

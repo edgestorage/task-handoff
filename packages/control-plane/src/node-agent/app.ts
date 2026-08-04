@@ -40,11 +40,14 @@ import { registerInstanceManagementRoutes } from "./instances/routes.ts";
 import { registerInstanceLifecycleRoutes } from "./instances/lifecycle-routes.ts";
 import { InstanceImageProvisioningController } from "./instances/image-provisioning.ts";
 import { InstanceOperationGate } from "./instances/instance-operation-gate.ts";
+import { EnvironmentTemplateService } from "./environment-templates/service.ts";
+import { registerEnvironmentTemplateRoutes } from "./environment-templates/routes.ts";
 import {
   createInstanceProxyMetrics,
   registerInstanceProxyRoutes,
 } from "./instances/proxy-routes.ts";
 import {
+  allocateNodeAgentExternalListener,
   NodeAgentExternalListenerManager,
   registerExternalListenerSettingsRoutes,
 } from "./external-listener-manager.ts";
@@ -307,6 +310,7 @@ async function autoImportAgentConfig(fetchImpl: typeof fetch, instance: Controll
 
 async function syncAssignedModelEnvironment(fetchImpl: typeof fetch, state: NodeAgentState, instanceId: string) {
   const instance = state.requireInstance(instanceId);
+  state.instancePrivateConfigs.materialize(instance.id, instance.registrationToken, state.resolvedAssignedModelEnvironment(instanceId));
   if (instance.targetStatus !== "reachable" || !instance.target.web) return false;
   const response = await fetchWithTimeout(fetchImpl, `${nodeLocalInstanceWebBase(instance)}/api/internal/model-environment`, {
     method: "PUT",
@@ -613,6 +617,15 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     warn: (data, message) => app.log.warn(data, message),
   };
   const instanceOperations = new InstanceOperationGate();
+  const environmentTemplates = new EnvironmentTemplateService(
+    state.environmentTemplates,
+    state.instancePrivateConfigs,
+    dockerExecutor,
+    (id) => state.requireInstance(id),
+    (id) => state.requireRuntime(id),
+    (instanceId, operation) => instanceOperations.run(instanceId, operation),
+    (imageId) => state.listInstances().some((instance) => instance.environmentTemplateOrigin?.imageId === imageId),
+  );
   const sanitizeCrossVersionInstanceReport = (instanceId: string, report: "register" | "heartbeat", input: unknown) => {
     const protocolVersion = input && typeof input === "object" && !Array.isArray(input)
       ? (input as Record<string, unknown>).protocolVersion
@@ -652,7 +665,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       const runtime = state.requireRuntime(current.runtimeId);
       await startNodeInstance(state, runtimeAdapters, fetchImpl, id, lifecycleLoggers);
       const started = state.requireInstance(id);
-      if (runtime.type === "docker" && started.imageProvisioning?.phase !== "ready") {
+      if (runtime.type === "docker" && started.imageProvisioning && started.imageProvisioning.phase !== "ready") {
         eventForwarder.syncNow();
         return started;
       }
@@ -848,6 +861,10 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     data: {
       ok: true,
       role: "node-agent",
+      listener: {
+        host: "127.0.0.1",
+        port: state.currentListenerPort,
+      },
       nodeId,
       platform: finalComputerPlatform(platform),
       arch: process.arch,
@@ -901,9 +918,13 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
 
   registerNodeModelRoutes(app, state.modelRegistry, (id) => syncAssignedModelEnvironment(fetchImpl, state, id));
 
+  registerEnvironmentTemplateRoutes(app, environmentTemplates);
+
   registerInstanceManagementRoutes(app, {
     list: () => state.listInstances(),
-    create: (input) => state.createInstance(input),
+    create: (input) => input.environmentSource?.type === "template"
+      ? environmentTemplates.runTemplateOperation(input.environmentSource.environmentTemplateId, () => state.createInstance(input))
+      : state.createInstance(input),
     retryImageProvisioning: (id) => imageProvisioning.retry(id),
     update: (id, input) => {
       const current = state.requireInstance(id);
@@ -980,7 +1001,11 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     suppressRecovery: (id) => recoverySupervisor.suppressRecovery(id),
     forgetRecovery: (id) => recoverySupervisor.forgetInstance(id),
     completeSuppressedRecovery: (id) => recoverySupervisor.completeSuppressedOperation(id),
-    deleteMetadata: (id) => state.modelRegistry.deleteInstanceMetadata(id),
+    deleteMetadata: (id) => {
+      state.modelRegistry.deleteInstanceMetadata(id);
+      state.instancePrivateConfigs.delete(id);
+    },
+    releaseEnvironmentImage: (imageId) => environmentTemplates.releaseUnusedImage(imageId),
     diagnostic: logDiagnostic,
   }, instanceOperations);
 
@@ -1019,7 +1044,14 @@ export async function runNodeAgentServer(options: RunNodeAgentServerOptions) {
   const defaults = bootstrapExternalListener(options.host, options.port);
   const hadPersistedSettings = fs.existsSync(paths.settingsPath);
   const settings = createRuntimeSettingsFile(paths, defaults);
-  const listenerConfig = settings.get().externalListener;
+  let listenerConfig = settings.get().externalListener;
+  if (process.env.TASK_HANDOFF_NODE_AGENT_PORT_CONFLICT === "allocate") {
+    const allocated = await allocateNodeAgentExternalListener(listenerConfig);
+    if (allocated.port !== listenerConfig.port) {
+      settings.put({ version: 1, externalListener: allocated });
+      listenerConfig = allocated;
+    }
+  }
   const lock = acquireNodeAgentSingletonLock(defaultNodeAgentSingletonLockPath(), {
     dataDir: paths.dataDir,
     host: externalListenerHost(listenerConfig.bindScope),

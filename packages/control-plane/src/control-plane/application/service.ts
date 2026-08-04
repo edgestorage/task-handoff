@@ -7,6 +7,7 @@ import {
   ControlledInstanceSchema,
   controlledInstanceAcceptsTraffic,
   CustomImageProfileSchema,
+  InstanceDeleteInputSchema,
   LEGACY_MARKET_IMAGE_IDS,
   NodeImageAvailabilitySchema,
   NodeFolderTreeEntrySchema,
@@ -45,6 +46,7 @@ import {
   AiSessionsStateSchema,
   type AiSessionCommandInput,
   type AiSessionDeltaResponse,
+  type AiSessionCreateInput,
   type AiSessionMessageAttachment,
   type AiSessionPermissionMode,
   type AiSessionReference,
@@ -885,12 +887,30 @@ export class ControlPlaneService {
     return publicInstanceWithAccess(instance);
   }
 
-  async deleteControlledInstance(id: string) {
+  async deleteControlledInstance(id: string, input: unknown) {
+    const parsedInput = InstanceDeleteInputSchema.parse(input);
     const current = await this.requireNodeInstance(id);
     const node = this.requireNode(current.nodeId);
-    const result = await this.nodeAgentGateway.deleteInstance(node, id);
-    this.configSyncPreferences.delete(id);
-    return Boolean(result.deleted);
+    const result = await this.nodeAgentGateway.deleteInstance(node, id, parsedInput);
+    if (result.completed) this.configSyncPreferences.delete(id);
+    return result;
+  }
+
+  listEnvironmentTemplates(nodeId: string) {
+    return this.nodeAgentGateway.listEnvironmentTemplates(this.requireNode(nodeId));
+  }
+
+  getEnvironmentTemplate(nodeId: string, templateId: string) {
+    return this.nodeAgentGateway.getEnvironmentTemplate(this.requireNode(nodeId), templateId);
+  }
+
+  async createEnvironmentTemplate(instanceId: string, input: unknown) {
+    const instance = await this.requireNodeInstance(instanceId);
+    return this.nodeAgentGateway.createEnvironmentTemplate(this.requireNode(instance.nodeId), instanceId, input);
+  }
+
+  deleteEnvironmentTemplate(nodeId: string, templateId: string) {
+    return this.nodeAgentGateway.deleteEnvironmentTemplate(this.requireNode(nodeId), templateId);
   }
 
   async startControlledInstance(id: string) {
@@ -1188,6 +1208,18 @@ export class ControlPlaneService {
 
   resumeAiSession(instanceId: string, aiSessionId: string) {
     return this.aiSessionActionService.resume(instanceId, aiSessionId);
+  }
+
+  createAiSession(instanceId: string, input: AiSessionCreateInput) {
+    return this.aiSessionActionService.create(instanceId, input);
+  }
+
+  openAiSessionApp(instanceId: string, aiSessionId: string, clientRequestId: string) {
+    return this.aiSessionActionService.openApp(instanceId, aiSessionId, clientRequestId);
+  }
+
+  closeAiSession(instanceId: string, aiSessionId: string, clientRequestId: string) {
+    return this.aiSessionActionService.close(instanceId, aiSessionId, clientRequestId);
   }
 
   aiSessionActionDiagnostics() {

@@ -2,7 +2,9 @@ import { z } from "zod";
 import {
   CONTROL_PLANE_PROTOCOL_VERSION,
   ControlledInstanceSchema,
+  EnvironmentTemplateSchema,
   InstanceResourceMetricsSchema,
+  InstanceDeleteResultSchema,
   LocalDockerImageSchema,
   NodeAgentDeleteResponseSchema,
   NodeAgentHealthSchema,
@@ -312,10 +314,35 @@ export class ControlPlaneNodeAgentGateway {
     });
   }
 
-  deleteInstance(node: Node, instanceId: string) {
-    return this.client.requestSchema(node, `/instances/${encodeURIComponent(instanceId)}/delete`, NodeAgentDeleteResponseSchema, {
+  deleteInstance(node: Node, instanceId: string, input: unknown) {
+    return this.client.requestSchema(node, `/instances/${encodeURIComponent(instanceId)}/delete`, InstanceDeleteResultSchema, {
       method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
     });
+  }
+
+  listEnvironmentTemplates(node: Node, init: RequestInit = {}) {
+    return this.client.requestSchema(node, "/environment-templates", z.array(EnvironmentTemplateSchema), init);
+  }
+
+  getEnvironmentTemplate(node: Node, templateId: string, init: RequestInit = {}) {
+    return this.client.requestSchema(node, `/environment-templates/${encodeURIComponent(templateId)}`, EnvironmentTemplateSchema, init);
+  }
+
+  createEnvironmentTemplate(node: Node, instanceId: string, input: unknown) {
+    return this.client.requestSchema(node, `/instances/${encodeURIComponent(instanceId)}/environment-templates`, EnvironmentTemplateSchema, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    });
+  }
+
+  deleteEnvironmentTemplate(node: Node, templateId: string) {
+    return this.client.requestSchema(node, `/environment-templates/${encodeURIComponent(templateId)}`, z.object({
+      deleted: z.boolean(),
+      templateId: EnvironmentTemplateSchema.shape.id,
+    }).strict(), { method: "DELETE" });
   }
 
   startInstance(node: Node, instanceId: string, input: unknown = {}) {

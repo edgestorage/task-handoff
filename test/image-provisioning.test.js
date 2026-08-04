@@ -16,6 +16,17 @@ const { defaultTerminalCommandRunner } = require("../packages/control-plane/src/
 const digest = (letter) => `sha256:${letter.repeat(64)}`;
 const tempDataDir = (name) => fs.mkdtempSync(path.join(os.tmpdir(), `${name}-`));
 
+function managedVolumeInspect(args, instanceId) {
+  if (args[0] !== "volume" || args[1] !== "inspect") return undefined;
+  const name = args.at(-1);
+  const role = name.endsWith("-agent-home") ? "agent-home" : name.endsWith("-workspace") ? "workspace" : "data";
+  return { stdout: JSON.stringify({ Name: name, Labels: {
+    "task-handoff.owner": "task-handoff",
+    "task-handoff.instance-id": instanceId,
+    "task-handoff.volume-role": role,
+  } }), stderr: "" };
+}
+
 function eventSocket(events) {
   return {
     readyState: 1,
@@ -204,6 +215,8 @@ test("node-agent creates immediately, provisions the image, and blocks stale wor
     logger: false,
     token: "agent-secret",
     dockerCommandRunner: async (_command, args) => {
+      const volume = managedVolumeInspect(args, "inst_pull");
+      if (volume) return volume;
       if (args[0] === "image") {
         if (!available) throw new Error("missing");
         return { stdout: JSON.stringify({ Id: digest("c"), RepoDigests: [`docker.io/example/controlled@${digest("c")}`] }), stderr: "" };
@@ -236,6 +249,7 @@ test("node-agent creates immediately, provisions the image, and blocks stale wor
   const deleted = await app.inject({
     method: "POST",
     url: "/api/node-agent/instances/inst_pull/delete",
+    payload: { deleteVolumes: true },
     headers: { authorization: "Bearer agent-secret" },
   });
   assert.equal(deleted.statusCode, 200);
@@ -256,6 +270,8 @@ test("node-agent queues start while pulling and runs the container when the imag
     fetchImpl: async () => ({ ok: false }),
     dockerCommandRunner: async (_command, args) => {
       calls.push(args);
+      const volume = managedVolumeInspect(args, "inst_queued_start");
+      if (volume) return volume;
       if (args[0] === "image") {
         if (!available) throw new Error("missing");
         return { stdout: JSON.stringify({ Id: digest("f"), RepoDigests: [`docker.io/example/controlled@${digest("f")}`] }), stderr: "" };
@@ -337,6 +353,8 @@ test("node-agent streams Docker pull TTY output live and replays its bounded tai
     logger: false,
     token: "agent-secret",
     dockerCommandRunner: async (_command, args) => {
+      const volume = managedVolumeInspect(args, "inst_tty_pull");
+      if (volume) return volume;
       if (args[0] === "image") {
         if (!available) throw new Error("missing");
         return { stdout: JSON.stringify({ Id: digest("a"), RepoDigests: [`docker.io/example/controlled@${digest("a")}`] }), stderr: "" };
@@ -383,6 +401,8 @@ test("failed node-agent image provisioning is persisted and can be retried", asy
     logger: false,
     token: "agent-secret",
     dockerCommandRunner: async (_command, args) => {
+      const volume = managedVolumeInspect(args, "inst_retry");
+      if (volume) return volume;
       if (args[0] === "image") {
         if (!available) throw new Error("missing");
         return { stdout: JSON.stringify({ Id: digest("d"), RepoDigests: [`docker.io/example/controlled@${digest("d")}`] }), stderr: "" };
@@ -436,6 +456,8 @@ test("node-agent restart migrates and resumes persisted image provisioning witho
     logger: false,
     token: "agent-secret",
     dockerCommandRunner: async (_command, args) => {
+      const volume = managedVolumeInspect(args, "inst_restore");
+      if (volume) return volume;
       if (args[0] === "image") throw new Error("missing");
       if (args[0] === "pull") throw new Error("temporary registry outage");
       return { stdout: "", stderr: "" };
@@ -485,6 +507,8 @@ test("node-agent restart migrates and resumes persisted image provisioning witho
     token: "agent-secret",
     fetchImpl: async () => ({ ok: false }),
     dockerCommandRunner: async (_command, args) => {
+      const volume = managedVolumeInspect(args, "inst_restore");
+      if (volume) return volume;
       if (args[0] === "image") {
         if (!available) throw new Error("missing");
         return { stdout: JSON.stringify({ Id: digest("e"), RepoDigests: [`docker.io/example/controlled@${digest("e")}`] }), stderr: "" };

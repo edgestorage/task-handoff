@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import {
   ControlledInstanceSchema,
+  InstanceDeleteInputSchema,
   type ControlledInstance,
   type NodeRuntime,
 } from "@task-handoff/protocol/control-plane";
@@ -40,6 +41,7 @@ type Hooks = {
   forgetRecovery(id: string): void;
   completeSuppressedRecovery(id: string): void;
   deleteMetadata(id: string): void;
+  releaseEnvironmentImage?(imageId: string): Promise<unknown>;
   diagnostic(data: Record<string, unknown>, message: string): void;
 };
 
@@ -190,37 +192,54 @@ export function registerInstanceLifecycleRoutes(
 
   app.post("/api/node-agent/instances/:id/delete", async (request) => {
     const id = (request.params as { id: string }).id;
+    const input = InstanceDeleteInputSchema.parse(request.body);
     state.requireInstance(id);
     operations.invalidate(id);
     const cancellation = settledCancellation(id);
     return operations.run(id, async () => {
       const current = state.requireInstance(id);
-      state.applyLifecycle(id, { type: "stop-requested" });
+      if (current.status !== "deleting") state.applyLifecycle(id, { type: "stop-requested" });
       try {
         await hooks.suppressRecovery(id);
         const cancellationOutcome = await cancellation;
         if ("error" in cancellationOutcome) throw cancellationOutcome.error;
         const authoritative = state.requireInstance(id);
+        state.putInstance(ControlledInstanceSchema.parse({
+          ...authoritative,
+          status: "deleting",
+          ready: false,
+          updatedAt: now(),
+        }));
         hooks.diagnostic({ instanceId: id, action: "delete", runtimeId: authoritative.runtimeId, containerName: authoritative.runtime.containerName }, "node instance delete requested");
-        await adapters.forRuntime(state.requireRuntime(authoritative.runtimeId)).delete(state.context(authoritative, {}));
+        const result = await adapters.forRuntime(state.requireRuntime(authoritative.runtimeId)).delete(state.context(authoritative, {}), input);
+        if (!result.completed) {
+          hooks.diagnostic({ instanceId: id, action: "delete", volumeResults: result.volumeResults }, "node instance delete requires retry");
+          hooks.sync();
+          return { data: result };
+        }
+        hooks.diagnostic({ instanceId: id, action: "delete" }, "node instance delete completed");
+        const deleted = state.deleteInstance(id);
+        if (deleted) {
+          hooks.forgetRecovery(id);
+          operations.clearIntent(id);
+        }
+        hooks.deleteMetadata(id);
+        if (deleted && authoritative.environmentTemplateOrigin?.imageId && hooks.releaseEnvironmentImage) {
+          await hooks.releaseEnvironmentImage(authoritative.environmentTemplateOrigin.imageId).catch((error) => {
+            hooks.diagnostic({ instanceId: id, action: "release-environment-image", error: error instanceof Error ? error.message : String(error) }, "environment image cleanup deferred after instance deletion");
+          });
+        }
+        hooks.sync();
+        return { data: result };
       } catch (error) {
         try {
-          state.applyLifecycle(id, { type: "stop-failed", baseline: current });
+          state.putInstance(ControlledInstanceSchema.parse({ ...current, updatedAt: now() }));
           hooks.sync();
         } finally {
           hooks.allowRecovery(id);
         }
         throw error;
       }
-      hooks.diagnostic({ instanceId: id, action: "delete" }, "node instance delete completed");
-      const deleted = state.deleteInstance(id);
-      if (deleted) {
-        hooks.forgetRecovery(id);
-        operations.clearIntent(id);
-      }
-      hooks.deleteMetadata(id);
-      hooks.sync();
-      return { data: { deleted } };
     });
   });
 }

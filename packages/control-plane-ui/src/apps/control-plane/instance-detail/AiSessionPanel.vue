@@ -234,25 +234,26 @@
                     </DropdownMenuContent>
                   </DropdownMenu>
                   <button
-                    v-if="aiSessionAppTab(instance, session)"
+                    v-if="aiSessionAppTab(instance, session) || session.actions?.openApp"
                     type="button"
                     class="session-ai-open ai-session-card-action"
                     :aria-label="t('sessions.actions.openAppFor', { agent: session.agent })"
                     :title="t('sessions.actions.openApp')"
-                    @click="$emit('openAiSessionApp', instance, session)"
+                    :disabled="openingAiSessionId === session.id"
+                    @click="openSessionApp(session)"
                   >
                     <ExternalLink :size="14" />
                   </button>
-                  <DropdownMenu v-if="aiSessionAppTab(instance, session)">
+                  <DropdownMenu>
                     <DropdownMenuTrigger as-child>
                       <button type="button" class="session-ai-more ai-session-card-action" :aria-label="t('sessions.actions.moreFor', { agent: session.agent })" :title="t('sessions.actions.more')" @click.stop>
                         <MoreHorizontal :size="14" />
                       </button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent class="session-ai-card-menu" align="end" :side-offset="6" @click.stop>
-                      <DropdownMenuItem class="session-ai-card-menu-item danger" :disabled="stoppingAppSessionId === session.id" @select="closeAppSession(session)">
+                      <DropdownMenuItem class="session-ai-card-menu-item danger" :disabled="stoppingAppSessionId === session.id" @select="closeSession(session)">
                         <Square :size="13" />
-                        <span>{{ stoppingAppSessionId === session.id ? t("sessions.actions.closingApp") : t("sessions.actions.closeApp") }}</span>
+                        <span>{{ stoppingAppSessionId === session.id ? t("sessions.actions.closingSession") : t("sessions.actions.closeSession") }}</span>
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
@@ -262,13 +263,14 @@
                   <AiSessionCardContextMenu
                     :bound-trigger-count="boundTriggers(session).length"
                     :has-app-session="Boolean(aiSessionAppTab(instance, session))"
+                    :can-open-app="Boolean(aiSessionAppTab(instance, session) || session.actions?.openApp)"
                     :is-stopping-app-session="stoppingAppSessionId === session.id"
                     :is-trigger-bound="(configHash) => isTriggerBound(session, configHash)"
                     :is-trigger-busy="(configHash) => triggerBusyKey === triggerActionKey(session, configHash)"
                     :short-hash="shortHash"
                     :trigger-templates="triggerTemplates"
-                    @close-app="closeAppSession(session)"
-                    @open-app="$emit('openAiSessionApp', instance, session)"
+                    @close-session="closeSession(session)"
+                    @open-app="openSessionApp(session)"
                     @toggle-trigger="toggleTrigger(session, $event)"
                   />
                 </ContextMenu>
@@ -543,13 +545,23 @@
               </Tooltip>
             </TooltipProvider>
             <button
-              v-if="aiSessionAppTab(instance, selectedSession)"
+              v-if="aiSessionAppTab(instance, selectedSession) || selectedSession.actions?.openApp"
               type="button"
               :title="t('sessions.actions.openApp')"
               :aria-label="t('sessions.actions.openApp')"
-              @click="$emit('openAiSessionApp', instance, selectedSession)"
+              :disabled="openingAiSessionId === selectedSession.id"
+              @click="openSessionApp(selectedSession)"
             >
               <ExternalLink :size="15" />
+            </button>
+            <button
+              type="button"
+              :disabled="stoppingAppSessionId === selectedSession.id"
+              :title="t('sessions.actions.closeSession')"
+              :aria-label="t('sessions.actions.closeSession')"
+              @click="closeSession(selectedSession)"
+            >
+              <Square :size="14" />
             </button>
           </div>
           <header ref="detailHeaderEl">
@@ -661,7 +673,7 @@ import { ArrowDown, ArrowLeft, Ban, Bot, Check, ChevronDown, ChevronLeft, Chevro
 import { useQueryClient } from "@tanstack/vue-query";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import AiSessionCardContextMenu from "../../../components/ai-session/AiSessionCardContextMenu.vue";
-import { bindAiSessionTrigger, createNodeLocalFolder, getAiSessionHistory, getAiSessionHistoryDetail, interruptAiSession, launchAppSession, listNodeFolderTree, markAiSessionRead, removeAiSessionQueuedMessage, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, stopAppSession, unbindAiSessionTrigger, updateControlledInstance, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery } from "../../../api/queries";
+import { bindAiSessionTrigger, closeAiSession, createAiSession, createNodeLocalFolder, getAiSessionHistory, getAiSessionHistoryDetail, interruptAiSession, listNodeFolderTree, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, unbindAiSessionTrigger, updateControlledInstance, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery } from "../../../api/queries";
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { executeAiSessionCommand } from "../../../api/ai-session-commands";
 import type { AiSessionCommandInput, AiSessionHistoryDetail, AiSessionHistoryItem, AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
@@ -800,28 +812,9 @@ const repositoryAiAgent = computed<"codex" | "claude" | undefined>(() => {
   const agent = selectedSession.value?.agent;
   return agent === "codex" || agent === "claude" ? agent : undefined;
 });
-const pendingRepositoryAppSessionId = ref("");
-watch(() => props.instance.aiSessions?.sessions, (sessions) => {
-  if (!pendingRepositoryAppSessionId.value) return;
-  const session = sessions?.find((item) => item.appSessionId === pendingRepositoryAppSessionId.value);
-  if (!session) return;
-  pendingRepositoryAppSessionId.value = "";
-  emit("selectAiSession", props.instance.id, session.id);
-}, { deep: false });
-
 async function handleRepositoryAiSessionStarted(result: RepositoryAiSessionLaunchResult) {
-  pendingRepositoryAppSessionId.value = result.appSessionId;
   showControlPlaneToast(t("sessions.panel.startedWorktree"), "success");
-  for (let attempt = 0; attempt < 20 && pendingRepositoryAppSessionId.value; attempt += 1) {
-    await refreshBoard();
-    const session = props.instance.aiSessions?.sessions.find((item) => item.appSessionId === result.appSessionId);
-    if (session) {
-      pendingRepositoryAppSessionId.value = "";
-      emit("selectAiSession", props.instance.id, session.id);
-      return;
-    }
-    await new Promise((resolve) => window.setTimeout(resolve, 500));
-  }
+  emit("selectAiSession", props.instance.id, result.aiSessionId);
 }
 const newSessionOpen = ref(false);
 const showNewSession = computed(() => newSessionOpen.value || !selectedSession.value);
@@ -833,7 +826,7 @@ const launchingNewSession = ref(false);
 const savingNewSessionPermission = ref(false);
 const newSessionPermissionMode = ref<AiSessionPermissionMode>(props.instance.config.defaultCodexPermissionMode);
 const newSessionComposerBusy = computed(() => launchingNewSession.value || savingNewSessionPermission.value);
-const aiSessionLaunchableApps = computed(() => (props.launchableApps || []).filter((app) => app.id === "codex" || app.id === "claude"));
+const aiSessionLaunchableApps = computed(() => (props.launchableApps || []).filter((app) => app.id === "codex"));
 const createdNewSessionFolders = ref<NodeLocalFolder[]>([]);
 const newSessionFolders = computed(() => {
   const folders = [...(props.nodeLocalFolders || []), ...createdNewSessionFolders.value];
@@ -921,6 +914,7 @@ const isFollowingLatest = ref(true);
 let sidebarResizeCleanup: (() => void) | undefined;
 const aiSessionActionBusy = ref(false);
 const stoppingAppSessionId = ref("");
+const openingAiSessionId = ref("");
 const triggerBusyKey = ref("");
 const triggerSearch = ref("");
 const triggers = useControlPlaneTriggersQuery();
@@ -1283,7 +1277,10 @@ function relativeHistoryTime(value: string) {
 async function resumeHistorySession(item: AiSessionHistoryItem) {
   const result = await resumeAiSession(props.instance.id, item.id);
   const findAuthoritativeSession = () => visibleAiSessions.value.find((session) => (
-    session.id === result.aiSessionId && session.appSessionId === result.appSessionId
+    session.id === result.aiSessionId
+    && session.providerSessionId === result.providerSessionId
+    && session.creationSource === result.creationSource
+    && (result.appSessionId ? session.appSessionId === result.appSessionId : !session.appSessionId)
   ));
   let session = findAuthoritativeSession();
   for (let attempt = 0; attempt < 12 && !session; attempt += 1) {
@@ -1421,36 +1418,25 @@ async function confirmNewProject() {
 
 async function createNewSession(permissionMode?: AiSessionPermissionMode) {
   const message = newSessionDraft.value.trim();
-  if (!newSessionApp.value || !message || newSessionComposerBusy.value) return;
+  const cwd = newSessionFolder.value?.path || (props.instance.source.type === "local-folder" ? props.instance.source.path : "");
+  if (!newSessionApp.value || !cwd || !message || newSessionComposerBusy.value) return;
   launchingNewSession.value = true;
   try {
-    const appSession = await launchAppSession(props.instance.id, { appId: newSessionApp.value, ...(newSessionFolderId.value ? { cwdFolderId: newSessionFolderId.value } : {}) });
-    const providerBinding = appSession.bindings?.find((binding) => binding.type === "provider-session");
-    let session: AiSessionSummary | undefined;
-    for (let attempt = 0; attempt < 20 && !session; attempt += 1) {
-      await refreshBoard();
-      session = (props.instance.aiSessions?.sessions || []).find((candidate) =>
-        candidate.appSessionId === appSession.id ||
-        Boolean(providerBinding?.id && candidate.providerSessionId === providerBinding.id),
-      );
-      if (!session) await new Promise((resolve) => window.setTimeout(resolve, 500));
-    }
-    if (!session) throw new Error(t("sessions.panel.starting"));
-    const attachments = await uploadMessageAttachments(props.instance.id, session.id);
-    await sendAiSessionMessage(
-      props.instance.id,
-      session.id,
-      aiSessionMessageText(message),
-      undefined,
+    const clientRequestId = crypto.randomUUID();
+    const attachments = await uploadMessageAttachments(props.instance.id, clientRequestId);
+    const result = await createAiSession(props.instance.id, {
+      agent: newSessionApp.value,
+      cwd: { type: "runtime-path", path: cwd },
+      message: aiSessionMessageText(message),
       attachments,
-      referencesForBindings(newSessionDraft.value, messageMentionBindings.value),
+      references: referencesForBindings(newSessionDraft.value, messageMentionBindings.value),
       permissionMode,
-    );
+      clientRequestId,
+    });
     if (permissionMode) {
-      persistAiSessionPermissionMode(aiSessionPermissionKey(props.instance.id, session.id), permissionMode);
+      persistAiSessionPermissionMode(aiSessionPermissionKey(props.instance.id, result.aiSessionId), permissionMode);
     }
-    await refreshBoard();
-    emit("selectAiSession", props.instance.id, session.id);
+    emit("selectAiSession", props.instance.id, result.aiSessionId);
     newSessionDraft.value = "";
     messageMentionBindings.value = [];
     messageAttachments.value = [];
@@ -1630,23 +1616,42 @@ async function resolveApproval(session: AiSessionSummary, decision: "allow" | "d
   }
 }
 
-function appSessionIdFor(session: AiSessionSummary) {
-  const appSession = aiSessionAppTab(props.instance, session);
-  if (!appSession) return undefined;
-  return typeof appSession.source?.id === "string" ? appSession.source.id : appSession.key;
-}
-
-async function closeAppSession(session: AiSessionSummary) {
-  const appSessionId = appSessionIdFor(session);
-  if (!appSessionId || stoppingAppSessionId.value) {
+async function openSessionApp(session: AiSessionSummary) {
+  const existing = aiSessionAppTab(props.instance, session);
+  if (existing) {
+    emit("openAiSessionApp", props.instance, session);
     return;
   }
+  if (openingAiSessionId.value || !session.actions?.openApp) return;
+  openingAiSessionId.value = session.id;
+  try {
+    const result = await openAiSessionApp(props.instance.id, session.id, crypto.randomUUID());
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await refreshBoard();
+      const current = props.instance.aiSessions?.sessions.find((candidate) => candidate.id === result.aiSessionId);
+      if (current?.appSessionId) {
+        emit("openAiSessionApp", props.instance, current);
+        return;
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 500));
+    }
+    throw new Error(t("sessions.panel.starting"));
+  } catch (error) {
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.openAppFailed")));
+    await refreshBoard();
+  } finally {
+    openingAiSessionId.value = "";
+  }
+}
+
+async function closeSession(session: AiSessionSummary) {
+  if (stoppingAppSessionId.value) return;
   stoppingAppSessionId.value = session.id;
   try {
-    await stopAppSession(props.instance.id, appSessionId);
+    await closeAiSession(props.instance.id, session.id, crypto.randomUUID());
     await refreshBoard();
   } catch (error) {
-    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.closeAppFailed")));
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.closeSessionFailed")));
     await refreshBoard();
   } finally {
     stoppingAppSessionId.value = "";

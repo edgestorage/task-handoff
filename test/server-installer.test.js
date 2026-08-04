@@ -28,6 +28,7 @@ test("server bootstrap owns the complete Debian and Ubuntu install path", () => 
   assert.match(bootstrap, /PACKAGE_TARGET="latest"/);
   assert.match(bootstrap, /nodejs\.org\/dist\/latest-v24\.x\/SHASUMS256\.txt/);
   assert.match(bootstrap, /Node\.js archive checksum verification failed/);
+  assert.match(bootstrap, /apt-get install -y --no-install-recommends g\+\+ make python3/);
   assert.match(bootstrap, /apt-get install -y docker\.io/);
   assert.match(bootstrap, /npm install -g/);
   assert.match(bootstrap, /@task-handoff\/server@\$PACKAGE_TARGET/);
