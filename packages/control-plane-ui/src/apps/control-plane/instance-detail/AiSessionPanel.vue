@@ -707,6 +707,11 @@ import {
 } from "../useAiSessionPermissionMode";
 import { createStreamingScrollFollow, type ScrollViewport } from "../../../lib/streaming-scroll-follow";
 import {
+  aiSessionStatusGroup as sessionStatusGroup,
+  canInterruptAiSession,
+  isAiSessionApprovalPending,
+} from "@task-handoff/control-plane-client";
+import {
   aiSessionAppDisplayName,
   aiSessionAppTab,
   aiSessionBasename,
@@ -962,20 +967,6 @@ const workspaceStyle = computed(
       "--session-ai-sidebar-width": `${sidebarWidth.value}px`,
     }) as CSSProperties,
 );
-
-function sessionStatusGroup(session: AiSessionSummary): Exclude<SessionStatusFilter, "all"> {
-  const status = session.status as string;
-  if (status === "waiting") {
-    return "waiting";
-  }
-  if (status === "failed") {
-    return "problem";
-  }
-  if (status === "running") {
-    return "active";
-  }
-  return "idle";
-}
 
 function groupAiSessionsByPath(sessions: AiSessionSummary[]) {
   const groups = new Map<string, AiSessionSummary[]>();
@@ -1449,11 +1440,11 @@ async function createNewSession(permissionMode?: AiSessionPermissionMode) {
 }
 
 function canInterrupt(session: AiSessionSummary) {
-  return Boolean(session.actions?.interrupt);
+  return canInterruptAiSession(session);
 }
 
 function canResolveApproval(session: AiSessionSummary) {
-  return session.status === "waiting" && session.phase === "approval";
+  return isAiSessionApprovalPending(session);
 }
 
 async function refreshBoard() {

@@ -18,8 +18,10 @@ import {
 import { withRequestSignal } from "./request-signal.ts";
 import { z } from "zod";
 import { PUBLIC_CONTROL_PLANE_ROUTE } from "./auth-boundary.ts";
+import { publicNodeDirectory } from "../public-records.ts";
 
 const DeleteNodeQuerySchema = z.object({ force: z.enum(["true", "false"]).optional() }).strict();
+const NodeListQuerySchema = z.object({ projection: z.literal("directory").optional() }).strict();
 
 type ErrorPayload = (error: unknown) => {
   statusCode: number;
@@ -52,7 +54,10 @@ export function registerNodeRoutes({
     Object.assign(error, { statusCode: 404, code: "LEGACY_INSTANCE_UPDATE_RETIRED" });
     throw error;
   };
-  app.get("/api/nodes", async () => ({ data: service.listPublicNodes() }));
+  app.get("/api/nodes", async (request) => {
+    const query = NodeListQuerySchema.parse(request.query);
+    return { data: query.projection === "directory" ? service.listNodes().map(publicNodeDirectory) : service.listPublicNodes() };
+  });
   app.post("/api/nodes/local/sync", async () => {
     const node = await service.syncLocalNodeConnection();
     nodeEventSubscriber.syncNow();

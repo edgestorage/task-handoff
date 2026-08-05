@@ -81,8 +81,8 @@ test("managed worktree creation launches a new session without a client filesyst
   assert.match(panel, /\.repository-worktree-card\[data-current="true"\] \.repository-worktree-branch strong,[\s\S]*color: var\(--brand-accent-muted, var\(--brand-accent\)\)/);
   assert.match(repositoryApi, /\/worktrees\/ai-sessions/);
   assert.doesNotMatch(panel, /worktree:\s*\{[^}]*\b(path|cwd)\s*:/);
-  assert.match(aiPanel, /pendingRepositoryAiSessionId\.value = result\.aiSessionId/);
-  assert.match(aiPanel, /item\.providerSessionId === result\.providerSessionId/);
+  assert.match(aiPanel, /handleRepositoryAiSessionStarted\(result: RepositoryAiSessionLaunchResult\)/);
+  assert.match(aiPanel, /emit\("selectAiSession", props\.instance\.id, result\.aiSessionId\)/);
   assert.doesNotMatch(aiPanel, /pendingRepositoryAppSessionId/);
   assert.match(aiPanel, /emit\("selectAiSession", props\.instance\.id, session\.id\)/);
 });

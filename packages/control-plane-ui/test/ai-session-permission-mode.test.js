@@ -55,7 +55,7 @@ test("session composer permission state initializes from the instance default an
 
 test("starting a session copies the instance default into session-scoped permission state", () => {
   const createNewSession = panel.match(/async function createNewSession[\s\S]*?\n}\n\nfunction canInterrupt/)?.[0] || "";
-  assert.match(createNewSession, /persistAiSessionPermissionMode\(aiSessionPermissionKey\(props\.instance\.id, session\.id\), permissionMode\)/);
+  assert.match(createNewSession, /persistAiSessionPermissionMode\(aiSessionPermissionKey\(props\.instance\.id, result\.aiSessionId\), permissionMode\)/);
   assert.doesNotMatch(panel, /newAiSessionPermissionKey|new-session:/);
 });
 

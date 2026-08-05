@@ -5,6 +5,21 @@ import { aiSessionStatusKeys, translateStatus, type Translate } from "../../i18n
 import { formatRelativeTime, formatTime } from "../../i18n/presentation.ts";
 import type { SupportedLocale } from "../../i18n/locale.ts";
 import { hasInstanceStatusPage } from "./useInstanceStatus.ts";
+import {
+  aiSessionLastUserMessageTime,
+  aiSessionStableSortKey,
+  compareAiSessionsByLastUserMessage,
+  sortedAiSessions,
+  sortedAiSessionsByLastUserMessage,
+} from "@task-handoff/control-plane-client";
+
+export {
+  aiSessionLastUserMessageTime,
+  aiSessionStableSortKey,
+  compareAiSessionsByLastUserMessage,
+  sortedAiSessions,
+  sortedAiSessionsByLastUserMessage,
+};
 
 export type SessionTab = {
   key: string;
@@ -339,54 +354,6 @@ export function sessionKindDisplayName(kind: string, t: Translate) {
 
 export function primaryAiSession(instance: InstanceWithAiSessions): AiSessionSummary | undefined {
   return sortedAiSessions(aiSessionSnapshotSessions(instance.aiSessions))[0];
-}
-
-export function sortedAiSessions(sessions?: AiSessionSummary[]) {
-  return [...(sessions || [])].sort((a, b) => {
-    const priorityDelta = aiSessionPriority(b) - aiSessionPriority(a);
-    return priorityDelta || aiSessionStableSortKey(a).localeCompare(aiSessionStableSortKey(b));
-  });
-}
-
-export function sortedAiSessionsByLastUserMessage(sessions?: AiSessionSummary[], sortByStatus = true) {
-  return [...(sessions || [])].sort((a, b) => {
-    return compareAiSessionsByLastUserMessage(a, b, sortByStatus) || aiSessionStableSortKey(a).localeCompare(aiSessionStableSortKey(b));
-  });
-}
-
-export function compareAiSessionsByLastUserMessage(left: AiSessionSummary, right: AiSessionSummary, sortByStatus = true) {
-  if (sortByStatus) {
-    const priorityDelta = aiSessionPriority(right) - aiSessionPriority(left);
-    if (priorityDelta) {
-      return priorityDelta;
-    }
-  }
-  return aiSessionLastUserMessageTime(right) - aiSessionLastUserMessageTime(left);
-}
-
-export function aiSessionLastUserMessageTime(session: AiSessionSummary) {
-  const lastUserTurn = [...(session.turns || [])].reverse().find((turn) => turn.userPrompt?.trim());
-  if (!lastUserTurn?.startedAt) {
-    return 0;
-  }
-  const timestamp = Date.parse(lastUserTurn.startedAt);
-  return Number.isFinite(timestamp) ? timestamp : 0;
-}
-
-export function aiSessionPriority(session: AiSessionSummary) {
-  if (session.status === "waiting") return 4;
-  if (session.status === "failed") return 3;
-  if (session.status === "running") return 2;
-  if (session.status === "idle") return 1;
-  return 0;
-}
-
-export function aiSessionStableSortKey(session: AiSessionSummary) {
-  return [
-    session.cwd || "",
-    session.agent || "",
-    session.providerSessionId || session.id,
-  ].join("\u0000");
 }
 
 export function primaryAiSessionMessage(instance: InstanceWithAiSessions, t: Translate) {

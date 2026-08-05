@@ -5,12 +5,13 @@ import test from "node:test";
 const source = (path) => readFile(new URL(`../src/${path}`, import.meta.url), "utf8");
 
 test("AI session UI uses authoritative Direct create, Open App, and close actions", async () => {
-  const [panel, board, store, cardMenu, queries, en, zh] = await Promise.all([
+  const [panel, board, store, cardMenu, queries, sharedClient, en, zh] = await Promise.all([
     source("apps/control-plane/instance-detail/AiSessionPanel.vue"),
     source("apps/control-plane/ai-board/AiSessionBoardView.vue"),
     source("apps/control-plane/useAiSessionStore.ts"),
     source("components/ai-session/AiSessionCardContextMenu.vue"),
     source("api/queries.ts"),
+    readFile(new URL("../../control-plane-client/src/ai-sessions.ts", import.meta.url), "utf8"),
     source("i18n/locales/en-US/sessions.ts"),
     source("i18n/locales/zh-CN/sessions.ts"),
   ]);
@@ -32,8 +33,8 @@ test("AI session UI uses authoritative Direct create, Open App, and close action
   assert.match(board, /openAiSessionApp\(instance\.id, session\.id/);
   assert.match(board, /closeAiSession\(card\.instance\.id, card\.session\.id/);
   assert.match(cardMenu, /\$emit\('closeSession'\)/);
-  assert.match(queries, /ai-sessions\/\$\{encodeURIComponent\(aiSessionId\)\}\/open-app/);
-  assert.match(queries, /ai-sessions\/\$\{encodeURIComponent\(aiSessionId\)\}\/close/);
+  assert.match(queries, /sharedAiSessionsApi\.create\(instanceId, input\)/);
+  assert.match(sharedClient, /const sessionRoute = .*ai-sessions/);
   for (const locale of [en, zh]) {
     assert.match(locale, /closeSession:/);
     assert.match(locale, /openApp:/);

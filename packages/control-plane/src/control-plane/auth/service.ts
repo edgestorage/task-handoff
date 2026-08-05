@@ -1,6 +1,12 @@
 import crypto from "node:crypto";
 import { promisify } from "node:util";
 import { z } from "zod";
+import {
+  ControlPlaneMobileDeviceSchema,
+  ControlPlaneMobileLoginInputSchema,
+  ControlPlaneMobileSessionSchema,
+  type ControlPlaneMobileDevice,
+} from "@task-handoff/protocol/control-plane-access";
 import type { ControlPlaneRole } from "./authorization.ts";
 import type { ControlPlaneStorePaths } from "../persistence/paths.ts";
 import { createId, createSecret, JsonCollection, type StoredRecord } from "../../shared/persistence/store.ts";
@@ -62,6 +68,8 @@ type AuthSession = StoredRecord & {
   tokenHash: string;
   expiresAt: string;
   lastSeenAt?: string;
+  clientType: "web" | "mobile";
+  device?: ControlPlaneMobileDevice;
 };
 const StoredRecordSchema = z.object({
   id: z.string().trim().min(1),
@@ -79,7 +87,12 @@ const AuthSessionSchema = StoredRecordSchema.extend({
   tokenHash: z.string().trim().min(1),
   expiresAt: z.string().datetime(),
   lastSeenAt: z.string().datetime().optional(),
-}).strict();
+  clientType: z.enum(["web", "mobile"]).default("web"),
+  device: ControlPlaneMobileDeviceSchema.optional(),
+}).strict().refine((session) => session.clientType !== "mobile" || Boolean(session.device), {
+  path: ["device"],
+  message: "Mobile sessions require device metadata.",
+});
 
 function now() {
   return new Date().toISOString();
@@ -213,6 +226,17 @@ function publicUser(user: AuthUser) {
   };
 }
 
+function publicMobileSession(session: AuthSession, user: AuthUser) {
+  return ControlPlaneMobileSessionSchema.parse({
+    id: session.id,
+    expiresAt: session.expiresAt,
+    createdAt: session.createdAt,
+    lastSeenAt: session.lastSeenAt,
+    device: session.device,
+    user: publicUser(user),
+  });
+}
+
 export class ControlPlaneAuth {
   readonly mode: ControlPlaneAuthMode;
   private readonly users: JsonCollection<AuthUser>;
@@ -285,66 +309,100 @@ export class ControlPlaneAuth {
       throw error;
     }
     const parsed = LoginSchema.parse(input);
+    const user = await this.authenticate(parsed.username, parsed.password, context);
+    const session = this.createSession(user, "web");
+    return {
+      user: publicUser(user),
+      sessionToken: session.token,
+      expiresAt: session.record.expiresAt,
+    };
+  }
+
+  async loginMobile(input: unknown, context: { sourceId?: string } = {}) {
+    const parsed = ControlPlaneMobileLoginInputSchema.parse(input);
+    const user = await this.authenticate(parsed.username, parsed.password, context);
+    const session = this.createSession(user, "mobile", parsed.device);
+    return {
+      sessionToken: session.token,
+      session: publicMobileSession(session.record, user),
+    };
+  }
+
+  private async authenticate(username: string, password: string, context: { sourceId?: string }) {
+    if (!this.enabled()) {
+      const error = new Error("Control Plane authentication is disabled.");
+      Object.assign(error, { statusCode: 400, code: "AUTH_DISABLED" });
+      throw error;
+    }
     const sourceId = String(context.sourceId || "unknown").trim() || "unknown";
-    const normalizedUsername = parsed.username.toLocaleLowerCase("en-US");
+    const normalizedUsername = username.toLocaleLowerCase("en-US");
     this.loginRateLimiter.begin(sourceId, normalizedUsername);
     try {
-      const user = this.users.list().find((item) => item.username === parsed.username);
-      if (!user || !(await verifyPassword(parsed.password, user.passwordHash))) {
+      const user = this.users.list().find((item) => item.username === username);
+      if (!user || !(await verifyPassword(password, user.passwordHash))) {
         this.loginRateLimiter.recordFailure(sourceId, normalizedUsername);
         const error = new Error("Invalid username or password.");
         Object.assign(error, { statusCode: 401, code: "AUTH_LOGIN_FAILED" });
         throw error;
       }
       const timestamp = now();
-      const token = createSecret();
-      const expiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();
-      const session = this.sessions.put({
-        id: createId("sess"),
-        userId: user.id,
-        tokenHash: sha256(token),
-        expiresAt,
-        createdAt: timestamp,
-        updatedAt: timestamp,
-        lastSeenAt: timestamp,
-      });
-      this.users.put({ ...user, lastLoginAt: timestamp, updatedAt: timestamp });
-      return {
-        user: publicUser({ ...user, lastLoginAt: timestamp, updatedAt: timestamp }),
-        sessionToken: `${session.id}.${token}`,
-        expiresAt,
-      };
+      return this.users.put({ ...user, lastLoginAt: timestamp, updatedAt: timestamp });
     } finally {
       this.loginRateLimiter.finish();
     }
   }
 
+  private createSession(user: AuthUser, clientType: "web" | "mobile", device?: ControlPlaneMobileDevice) {
+    const timestamp = now();
+    const secret = createSecret();
+    const record = this.sessions.put({
+      id: createId(clientType === "mobile" ? "msess" : "sess"),
+      userId: user.id,
+      tokenHash: sha256(secret),
+      expiresAt: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      lastSeenAt: timestamp,
+      clientType,
+      ...(device ? { device } : {}),
+    });
+    return { record, token: `${record.id}.${secret}` };
+  }
+
   async userForSessionToken(token: string | undefined) {
-    if (!this.enabled()) {
-      return undefined;
-    }
-    if (!token) {
-      return undefined;
-    }
+    const resolved = this.resolveSessionToken(token, "web");
+    return resolved?.user;
+  }
+
+  async userForMobileSessionToken(token: string | undefined) {
+    const resolved = this.resolveSessionToken(token, "mobile");
+    return resolved?.user;
+  }
+
+  private resolveSessionToken(token: string | undefined, clientType?: "web" | "mobile") {
+    if (!this.enabled() || !token) return undefined;
     const [sessionId, secret] = token.split(".");
     if (!sessionId || !secret) {
       return undefined;
     }
     const session = this.sessions.get(sessionId);
-    if (!session || session.expiresAt <= now() || session.tokenHash !== sha256(secret)) {
+    if (!session || (clientType && session.clientType !== clientType) || session.expiresAt <= now() || session.tokenHash !== sha256(secret)) {
       return undefined;
     }
     const user = this.users.get(session.userId);
     if (!user) {
       return undefined;
     }
-    this.sessions.put({ ...session, lastSeenAt: now(), updatedAt: now() });
-    return publicUser(user);
+    const timestamp = now();
+    const updated = this.sessions.put({ ...session, lastSeenAt: timestamp, updatedAt: timestamp });
+    return { session: updated, user: publicUser(user), storedUser: user };
   }
 
-  async currentSession(token: string | undefined) {
+  async currentSession(token: string | undefined, clientType: "web" | "mobile" = "web") {
     const state = this.state();
-    const user = await this.userForSessionToken(token);
+    const user = clientType === "mobile"
+      ? await this.userForMobileSessionToken(token)
+      : await this.userForSessionToken(token);
     return {
       ...state,
       authenticated: !this.enabled() || Boolean(user),
@@ -358,5 +416,21 @@ export class ControlPlaneAuth {
       this.sessions.delete(sessionId);
     }
     return { ok: true };
+  }
+
+  mobileSessions(token: string | undefined) {
+    const current = this.resolveSessionToken(token);
+    if (!current) return undefined;
+    return this.sessions.list()
+      .filter((session) => session.clientType === "mobile" && session.userId === current.storedUser.id && session.expiresAt > now())
+      .map((session) => publicMobileSession(session, current.storedUser));
+  }
+
+  revokeMobileSession(token: string | undefined, sessionId: string) {
+    const current = this.resolveSessionToken(token);
+    if (!current) return undefined;
+    const session = this.sessions.get(sessionId);
+    if (!session || session.clientType !== "mobile" || session.userId !== current.storedUser.id) return false;
+    return this.sessions.delete(session.id);
   }
 }

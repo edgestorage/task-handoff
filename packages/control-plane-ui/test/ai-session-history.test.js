@@ -47,9 +47,9 @@ test("history detail composer resumes, waits for authoritative state, and then s
 });
 
 test("history API clients send only instance and AI session identities", () => {
-  assert.match(queries, /getAiSessionHistory\(instanceId: string\)[\s\S]*controlled-instances\/\$\{encodeURIComponent\(instanceId\)\}\/ai-sessions\/history/);
-  assert.match(queries, /getAiSessionHistoryDetail\(instanceId: string, aiSessionId: string\)[\s\S]*ai-sessions\/history\/\$\{encodeURIComponent\(aiSessionId\)\}/);
-  assert.match(queries, /resumeAiSession\(instanceId: string, aiSessionId: string\)[\s\S]*postApiData<AiSessionResumeResult>[\s\S]*\/resume`, \{\}\)/);
+  assert.match(queries, /getAiSessionHistory\(instanceId: string\)[\s\S]*sharedAiSessionsApi\.history\(instanceId\)/);
+  assert.match(queries, /getAiSessionHistoryDetail\(instanceId: string, aiSessionId: string\)[\s\S]*sharedAiSessionsApi\.historyDetail\(instanceId, aiSessionId\)/);
+  assert.match(queries, /resumeAiSession\(instanceId: string, aiSessionId: string\)[\s\S]*sharedAiSessionsApi\.resume\(instanceId, aiSessionId\)/);
   assert.doesNotMatch(queries, /resumeAiSession\([^)]*providerSessionId/);
 });
 

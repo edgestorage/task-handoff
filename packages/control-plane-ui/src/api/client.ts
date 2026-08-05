@@ -35,7 +35,7 @@ export class ApiError extends Error {
   }
 }
 
-async function withApiError<T>(request: Promise<T>): Promise<T> {
+export async function withApiError<T>(request: Promise<T>): Promise<T> {
   try {
     return await request;
   } catch (error) {

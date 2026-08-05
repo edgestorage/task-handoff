@@ -5,6 +5,12 @@ import type {
   AiSessionSnapshotEvent,
 } from "../../api/types";
 import type { AiSessionSummary, AiSessionsSnapshot } from "@task-handoff/protocol/ai-sessions";
+import {
+  aiSessionAuthoritativeMessageStatus,
+  aiSessionMessageKey,
+  appendAiSessionMessageDelta,
+  type AiSessionStreamingMessageStatus,
+} from "@task-handoff/control-plane-client";
 
 export type StreamingMessageIdentity = {
   instanceId: string;
@@ -13,12 +19,7 @@ export type StreamingMessageIdentity = {
   itemId: string;
 };
 
-export type StreamingMessageStatus =
-  | "streaming"
-  | "complete"
-  | "waiting"
-  | "failed"
-  | "interrupted";
+export type StreamingMessageStatus = AiSessionStreamingMessageStatus;
 
 export type StreamingMessageState = StreamingMessageIdentity & {
   key: string;
@@ -62,12 +63,7 @@ type AuthoritativeSnapshotInput = {
 };
 
 export function streamingMessageKey(identity: StreamingMessageIdentity) {
-  return JSON.stringify([
-    identity.instanceId,
-    identity.sessionId,
-    identity.turnId,
-    identity.itemId,
-  ]);
+  return aiSessionMessageKey(identity);
 }
 
 export function createStreamingMessagesStore(options: StreamingMessagesStoreOptions = {}) {
@@ -100,14 +96,7 @@ export function createStreamingMessagesStore(options: StreamingMessagesStoreOpti
     const at = input.generatedAt || now();
     const entry = ensureMessage(input.identity, input.streamId, at);
     const current = entry.value;
-    entry.value = {
-      ...current,
-      receivedText: current.receivedText + input.delta,
-      status: "streaming",
-      receivedAt: at,
-      settledAt: undefined,
-      updatedAt: at,
-    };
+    entry.value = appendAiSessionMessageDelta(current, input.delta, at);
     return entry;
   }
 
@@ -248,7 +237,7 @@ export function createStreamingMessagesStore(options: StreamingMessagesStoreOpti
       : activeTurn;
     const authoritativeItemId = turn?.lastMessageItemId || session.lastMessageItemId;
     const text = turn?.lastMessage ?? (activeTurn ? undefined : session.lastMessage);
-    const status = authoritativeStatus(session, turn?.status);
+    const status = aiSessionAuthoritativeMessageStatus(session, turn?.status);
     if (target?.value.itemId && authoritativeItemId && target.value.itemId !== authoritativeItemId) {
       return;
     }
@@ -342,13 +331,6 @@ export function createStreamingMessagesStore(options: StreamingMessagesStoreOpti
     clear,
     size,
   };
-}
-
-function authoritativeStatus(session: AiSessionSummary, turnStatus?: string): StreamingMessageStatus {
-  if (session.status === "failed" || turnStatus === "failed") return "failed";
-  if (session.status === "waiting" || turnStatus === "waiting") return "waiting";
-  if (session.status === "idle" || turnStatus === "completed") return "complete";
-  return "streaming";
 }
 
 function streamingSessionKey(instanceId: string, sessionId: string) {

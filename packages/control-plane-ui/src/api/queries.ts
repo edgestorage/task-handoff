@@ -3,6 +3,7 @@ import { computed, toValue, type MaybeRefOrGetter } from "vue";
 import { deleteApiData, getApiData, getApiPayload, patchApiData, postApiData, putApiData } from "./client";
 import { mergeInstanceBoardQueryData } from "./instanceBoardMerge.ts";
 import { controlPlaneQueryKeys } from "./queryKeys.ts";
+import { sharedAiSessionsApi, sharedControlPlaneClient } from "./sharedClient.ts";
 export { controlPlaneQueryKeys } from "./queryKeys.ts";
 import type {
   ControlPlaneStatusResponse,
@@ -93,21 +94,21 @@ export function useHealthQuery() {
 export function useAuthSessionQuery() {
   return useQuery({
     queryKey: ["auth-session"],
-    queryFn: () => getApiData<AuthSession>("auth/session"),
+    queryFn: () => sharedControlPlaneClient.auth.session(),
     retry: false,
   });
 }
 
 export function bootstrapAdmin(input: { username: string; password: string }) {
-  return postApiData<AuthUser>("auth/bootstrap-admin", input);
+  return sharedControlPlaneClient.auth.bootstrapAdmin(input);
 }
 
 export function loginControlPlane(input: { username: string; password: string }) {
-  return postApiData<{ user: AuthUser }>("auth/login", input);
+  return sharedControlPlaneClient.auth.login(input);
 }
 
 export function logoutControlPlane() {
-  return postApiData<{ ok: boolean }>("auth/logout");
+  return sharedControlPlaneClient.auth.logout();
 }
 
 export function useControlPlaneStatusQuery() {
@@ -414,37 +415,37 @@ export function useInstanceBoardPayloadQuery() {
 export function useControlPlaneAiSessionsQuery() {
   return useQuery({
     queryKey: ["control-plane-ai-sessions"],
-    queryFn: () => getApiData<ControlPlaneAiSessions>("ai-sessions"),
+    queryFn: () => sharedAiSessionsApi.list() as Promise<ControlPlaneAiSessions>,
     retry: false,
   });
 }
 
 export function markAiSessionRead(instanceId: string, sessionId: string, sessionUpdatedAt: string) {
-  return postApiData<import("./types").AiSessionUnreadState>(`controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/${encodeURIComponent(sessionId)}/read`, { sessionUpdatedAt });
+  return sharedAiSessionsApi.markRead(instanceId, sessionId, sessionUpdatedAt);
 }
 
 export function getAiSessionHistory(instanceId: string) {
-  return getApiData<AiSessionHistoryList>(`controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/history`);
+  return sharedAiSessionsApi.history(instanceId);
 }
 
 export function getAiSessionHistoryDetail(instanceId: string, aiSessionId: string) {
-  return getApiData<AiSessionHistoryDetail>(`controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/history/${encodeURIComponent(aiSessionId)}`);
+  return sharedAiSessionsApi.historyDetail(instanceId, aiSessionId);
 }
 
 export function resumeAiSession(instanceId: string, aiSessionId: string) {
-  return postApiData<AiSessionResumeResult>(`controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/${encodeURIComponent(aiSessionId)}/resume`, {});
+  return sharedAiSessionsApi.resume(instanceId, aiSessionId);
 }
 
 export function createAiSession(instanceId: string, input: import("@task-handoff/protocol/ai-sessions").AiSessionCreateRefInput) {
-  return postApiData<import("./types").AiSessionCreateResult>(`controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions`, input);
+  return sharedAiSessionsApi.create(instanceId, input);
 }
 
 export function openAiSessionApp(instanceId: string, aiSessionId: string, clientRequestId: string) {
-  return postApiData<import("./types").AiSessionOpenAppResult>(`controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/${encodeURIComponent(aiSessionId)}/open-app`, { clientRequestId });
+  return sharedAiSessionsApi.openApp(instanceId, aiSessionId, clientRequestId);
 }
 
 export function closeAiSession(instanceId: string, aiSessionId: string, clientRequestId: string) {
-  return postApiData<import("./types").AiSessionCloseResult>(`controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/${encodeURIComponent(aiSessionId)}/close`, { clientRequestId });
+  return sharedAiSessionsApi.close(instanceId, aiSessionId, clientRequestId);
 }
 
 export function useControlPlaneAppSessionsQuery() {
@@ -581,39 +582,39 @@ export function getInstanceAppManagementJob(instanceId: string, jobId: string) {
 }
 
 export function uploadAiSessionAttachment(input: { instanceId: string; sessionId: string; kind: "image" | "file"; name: string; mime: string; data: string }) {
-  return postApiData<AiSessionUploadedAttachment>("ai-session-attachments", input);
+  return sharedAiSessionsApi.uploadAttachment(input);
 }
 
 export function sendAiSessionMessage(instanceId: string, sessionId: string, message: string, mode?: "auto" | "queue" | "steer" | "immediate", attachments: AiSessionAttachmentRef[] = [], references: AiSessionReference[] = [], permissionMode?: import("@task-handoff/protocol/ai-sessions").AiSessionPermissionMode) {
-  return postApiData<Record<string, unknown>>(`controlled-instances/${instanceId}/ai-sessions/${sessionId}/messages`, { message, mode, attachments, references, permissionMode });
+  return sharedAiSessionsApi.sendMessage(instanceId, sessionId, { message, mode, attachments, references, permissionMode });
 }
 
 export function getAiSessionMentionCatalog(instanceId: string, sessionId: string, signal?: AbortSignal) {
-  return getApiData<AiSessionMentionCatalog>(`controlled-instances/${instanceId}/ai-sessions/${sessionId}/mentions`, { signal });
+  return sharedAiSessionsApi.mentionCatalog(instanceId, sessionId, signal);
 }
 
 export function searchAiSessionMentionFiles(instanceId: string, sessionId: string, query: string, signal?: AbortSignal) {
-  return postApiData<AiSessionMentionFileSearch>(`controlled-instances/${instanceId}/ai-sessions/${sessionId}/mentions/files`, { query }, { signal });
+  return sharedAiSessionsApi.searchMentionFiles(instanceId, sessionId, query, signal);
 }
 
 export function steerAiSessionQueuedMessage(instanceId: string, sessionId: string, queueId: string) {
-  return postApiData<Record<string, unknown>>(`controlled-instances/${instanceId}/ai-sessions/${sessionId}/queue/${queueId}/steer`);
+  return sharedAiSessionsApi.steerQueue(instanceId, sessionId, queueId);
 }
 
 export function retryAiSessionQueuedMessage(instanceId: string, sessionId: string, queueId: string) {
-  return postApiData<Record<string, unknown>>(`controlled-instances/${instanceId}/ai-sessions/${sessionId}/queue/${queueId}/retry`);
+  return sharedAiSessionsApi.retryQueue(instanceId, sessionId, queueId);
 }
 
 export function removeAiSessionQueuedMessage(instanceId: string, sessionId: string, queueId: string) {
-  return deleteApiData<Record<string, unknown>>(`controlled-instances/${instanceId}/ai-sessions/${sessionId}/queue/${queueId}`);
+  return sharedAiSessionsApi.removeQueue(instanceId, sessionId, queueId);
 }
 
 export function interruptAiSession(instanceId: string, sessionId: string) {
-  return postApiData<Record<string, unknown>>(`controlled-instances/${instanceId}/ai-sessions/${sessionId}/interrupt`);
+  return sharedAiSessionsApi.interrupt(instanceId, sessionId);
 }
 
 export function resolveAiSessionApproval(instanceId: string, sessionId: string, decision: "allow" | "deny" | "skip") {
-  return postApiData<Record<string, unknown>>(`controlled-instances/${instanceId}/ai-sessions/${sessionId}/approval`, { decision });
+  return sharedAiSessionsApi.approval(instanceId, sessionId, decision);
 }
 
 export function getControlledInstanceConfigSyncState(instanceId: string) {

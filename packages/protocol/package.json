@@ -14,6 +14,14 @@
       "types": "./src/control-plane.ts",
       "default": "./src/control-plane.ts"
     },
+    "./control-plane-access": {
+      "types": "./src/control-plane-access.ts",
+      "default": "./src/control-plane-access.ts"
+    },
+    "./control-plane-directory": {
+      "types": "./src/control-plane-directory.ts",
+      "default": "./src/control-plane-directory.ts"
+    },
     "./config-sync": {
       "types": "./src/config-sync.ts",
       "default": "./src/config-sync.ts"

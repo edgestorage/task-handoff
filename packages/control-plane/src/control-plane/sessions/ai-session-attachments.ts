@@ -67,6 +67,7 @@ export class AiSessionAttachmentStore {
 
   constructor(ttlMs = DEFAULT_TTL_MS) {
     this.ttlMs = ttlMs;
+    this.pruneOrphanFiles();
   }
 
   upload(input: unknown) {
@@ -132,6 +133,10 @@ export class AiSessionAttachmentStore {
     return attachments;
   }
 
+  dispose() {
+    for (const id of [...this.items.keys()]) this.consumeAttachment(id);
+  }
+
   private requireAttachment(ref: Extract<AiSessionMessageAttachmentRef, { source: { type: "upload-ref" } }>, instanceId: string, sessionId: string) {
     const attachment = this.items.get(ref.id);
     if (!attachment) {
@@ -188,6 +193,26 @@ export class AiSessionAttachmentStore {
         fs.unlinkSync(attachment.path);
       } catch {
         // Best-effort cleanup; expired attachments are no longer resolvable.
+      }
+    }
+    this.pruneOrphanFiles();
+  }
+
+  private pruneOrphanFiles() {
+    const dir = attachmentRoot();
+    let names: string[];
+    try {
+      names = fs.readdirSync(dir);
+    } catch {
+      return;
+    }
+    const oldestRetainedMtime = Date.now() - Math.max(this.ttlMs, DEFAULT_TTL_MS);
+    for (const name of names) {
+      const filePath = path.join(dir, name);
+      try {
+        if (fs.statSync(filePath).isFile() && fs.statSync(filePath).mtimeMs <= oldestRetainedMtime) fs.unlinkSync(filePath);
+      } catch {
+        // Another process or store may have consumed the temporary file.
       }
     }
   }

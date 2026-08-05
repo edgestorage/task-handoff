@@ -423,7 +423,7 @@ test("instance creation sends Market default, explicit tag, and Custom reference
       modelSelection: {},
       nodeId: node.id,
       runtimeId: input.runtimeId,
-      imageSelection: input.imageSelection,
+      imageSelection: input.environmentSource?.type === "image" ? input.environmentSource.imageSelection : undefined,
       imageSnapshot: input.image,
       status: "created",
       health: "unknown",
@@ -448,7 +448,9 @@ test("instance creation sends Market default, explicit tag, and Custom reference
     imageSelection: received.find((entry) => entry.id === id)?.imageSelection,
     imageSnapshot: received.find((entry) => entry.id === id)?.image,
     status: "created", health: "unknown", connectionStatus: "unknown", controlMode: "controlled",
-    capabilities: {}, config: {}, workspace: { status: "unknown" }, createdAt: now, updatedAt: now,
+    capabilities: {}, config: {}, workspace: { status: "unknown" },
+    runtime: { labels: {}, managedVolumes: [] },
+    createdAt: now, updatedAt: now,
   } });
   const custom = service.createImage({ name: "Create custom", reference: "docker.io/example/custom:v3" });
   const base = {
@@ -464,5 +466,5 @@ test("instance creation sends Market default, explicit tag, and Custom reference
     "huadream/task-handoff-controlled-browser:latest",
     "docker.io/example/custom:v3",
   ]);
-  assert.deepEqual(received.map((input) => input.imageSelection.tag), ["latest", "latest", "v3"]);
+  assert.deepEqual(received.map((input) => input.environmentSource.imageSelection.tag), [undefined, "latest", undefined]);
 });

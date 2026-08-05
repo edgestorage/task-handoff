@@ -60,7 +60,8 @@
     "docker:build:image:all-optional": "sh scripts/docker-build-image-all-optional.sh",
     "docker:up:all": "sh scripts/docker-up-all-optional.sh",
     "pack:dry": "pnpm run build:legacy && npm_config_cache=/private/tmp/task-handoff-npm-cache npm pack --dry-run",
-    "test": "node --test"
+    "test": "pnpm run test:node && pnpm --filter @task-handoff/control-plane-client test && pnpm --filter @task-handoff/control-plane-ui test && pnpm --filter @task-handoff/mobile test",
+    "test:node": "node --test test/*.test.* apps/*/test/*.test.* packages/protocol/test/*.test.* packages/*/*.test.*"
   },
   "engines": {
     "node": ">=24.15.0 <25"

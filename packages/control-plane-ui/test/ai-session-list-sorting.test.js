@@ -59,8 +59,8 @@ test("instance AI session list can sort directly by user message recency", () =>
 test("instance AI sessions with the same status sort by the last user message descending", () => {
   const older = session("older", "idle", [userTurn("older", "2026-07-18T10:00:00.000Z")]);
   const newer = session("newer", "idle", [
-    userTurn("newer-1", "2026-07-18T09:00:00.000Z"),
     userTurn("newer-2", "2026-07-18T11:00:00.000Z", { updatedAt: "2026-07-18T14:00:00.000Z" }),
+    userTurn("newer-1-returned-last", "2026-07-18T09:00:00.000Z"),
   ]);
 
   assert.deepEqual(

@@ -1,7 +1,8 @@
 import { computed, watch } from "vue";
 import { useQueryClient } from "@tanstack/vue-query";
-import { applyAiSessionStreamEvent, type AiSessionStreamEvent, type AiSessionsState } from "@task-handoff/protocol/ai-sessions";
-import { getApiData } from "../../api/client";
+import type { AiSessionStreamEvent } from "@task-handoff/protocol/ai-sessions";
+import { applyAiSessionUnreadState, applyControlPlaneAiSessionStreamEvent } from "@task-handoff/control-plane-client";
+import { sharedAiSessionsApi } from "../../api/sharedClient";
 import {
   AiSessionEventType,
   type AiSessionSummary,
@@ -23,11 +24,11 @@ import { useStreamingMessagesStore } from "./useStreamingMessagesStore.ts";
 export function useAiSessionStore(input: {
   boardInstances: () => InstanceBoardItemWithAppSessions[];
   aiSessions: () => ControlPlaneAiSessions | undefined;
-  apiLoader?: typeof getApiData;
+  aiSessionsApi?: Pick<typeof sharedAiSessionsApi, "refresh" | "delta">;
   recoveryRetry?: SessionStreamRecoveryRetryOptions;
 }) {
   const queryClient = useQueryClient();
-  const apiLoader = input.apiLoader || getApiData;
+  const aiSessionsApi = input.aiSessionsApi || sharedAiSessionsApi;
   const streamingMessages = useStreamingMessagesStore();
   const boardInstancesWithAiSessions = computed(() => mergeBoardAiSessions(input.boardInstances(), input.aiSessions()));
   const snapshotsByInstanceId = computed(() => {
@@ -42,10 +43,10 @@ export function useAiSessionStore(input: {
     topic: "ai.sessions",
     getEntry: (instanceId) => queryClient.getQueryData<ControlPlaneAiSessions>(["control-plane-ai-sessions"])
       ?.instances.find((entry) => entry.instanceId === instanceId),
-    refreshSnapshot: async (instanceId, signal) => (await apiLoader<ControlPlaneAiSessions>("ai-sessions?refresh=true", { signal }))
+    refreshSnapshot: async (instanceId, signal) => (await aiSessionsApi.refresh(signal))
       .instances.find((entry) => entry.instanceId === instanceId),
     applySnapshot: applyRecoveredSnapshot,
-    loadDelta: (entry, signal) => apiLoader<AiSessionDeltaResponse>(`ai-sessions?instanceId=${encodeURIComponent(entry.instanceId)}&streamId=${encodeURIComponent(entry.streamId)}&sinceRevision=${encodeURIComponent(String(entry.revision ?? 0))}`, { signal }),
+    loadDelta: (entry, signal) => aiSessionsApi.delta(entry.instanceId, entry.streamId, entry.revision ?? 0, signal),
     applyEvent: (event: AiSessionDeltaResponse["events"][number]) => { applyEvent(event, true); },
     onStreamChanged: (instanceId, streamId) => streamingMessages.replaceStream(instanceId, streamId),
     onError: (error, context) => console.warn("AI_SESSION_STREAM_RECOVERY_RETRY", {
@@ -114,19 +115,10 @@ export function useAiSessionStore(input: {
     let applied = false;
     queryClient.setQueryData<ControlPlaneAiSessions>(["control-plane-ai-sessions"], (current) => {
       const entry = current?.instances.find((candidate) => candidate.instanceId === instanceId);
-      const projection: AiSessionsState | undefined = entry ? { streamId: entry.streamId, revision: entry.revision ?? 0, lastEventAt: entry.lastEventAt || entry.aiSessions.updatedAt, snapshot: entry.aiSessions } : undefined;
-      const result = applyAiSessionStreamEvent(projection, event);
+      const { result, entry: nextEntry } = applyControlPlaneAiSessionStreamEvent(entry, event);
       if (result.kind !== "applied") return current;
       applied = true;
-      const previousUnread = new Map(entry?.aiSessions.sessions.map((session) => [session.id, session.unread]) || []);
-      const snapshot = {
-        ...result.projection.snapshot,
-        sessions: result.projection.snapshot.sessions.map((session) => ({
-          ...session,
-          unread: session.status === "running" || session.status === "waiting" ? false : previousUnread.get(session.id) || false,
-        })),
-      };
-      return upsertInstanceAiSessions(current, instanceId, snapshot, { streamId: result.projection.streamId, revision: result.projection.revision, lastEventAt: result.projection.lastEventAt });
+      return upsertInstanceAiSessions(current, instanceId, nextEntry!.aiSessions, nextEntry!);
     });
     if (applied) {
       if (event.type === AiSessionEventType.Snapshot) streamingMessages.applySnapshot(event.payload);
@@ -146,7 +138,7 @@ export function useAiSessionStore(input: {
         const sessions = entry.aiSessions.sessions.map((session) => {
           if (session.id !== state.sessionId || session.updatedAt !== state.sessionUpdatedAt) return session;
           applied = true;
-          return { ...session, unread: state.unread };
+          return applyAiSessionUnreadState(session, state);
         });
         return applied ? { ...entry, aiSessions: { ...entry.aiSessions, sessions } } : entry;
       });

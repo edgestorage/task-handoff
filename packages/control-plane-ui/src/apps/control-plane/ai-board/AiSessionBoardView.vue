@@ -213,6 +213,7 @@ import { closeAiSession, interruptAiSession, markAiSessionRead, openAiSessionApp
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { executeAiSessionCommand } from "../../../api/ai-session-commands";
 import type { AiSessionCommandInput, AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
+import { isAiSessionApprovalPending } from "@task-handoff/control-plane-client";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions } from "../../../api/types";
 import type { AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
 import { referencesForBindings, type AiSessionMentionBinding } from "../../../components/ai-session/mentions";
@@ -640,7 +641,7 @@ function nextPrompt(card: AiBoardCard) {
 }
 
 function canResolveApproval(session: AiSessionSummary) {
-  return session.status === "waiting" && session.phase === "approval";
+  return isAiSessionApprovalPending(session);
 }
 
 function canInterrupt(session: AiSessionSummary) {
