@@ -1,5 +1,5 @@
 import type { ChatBridgeConfig } from "@task-handoff/protocol/control-plane";
-import { createInlineKeyboard } from "@task-handoff/core/core/chat-interactions";
+import { createInlineKeyboard, type ChatInlineKeyboard } from "@task-handoff/core/core/chat-interactions";
 import crypto from "node:crypto";
 import type { TelegramMessageOptions } from "../adapters/telegram-gateway.ts";
 
@@ -17,7 +17,11 @@ type CallbackContext = {
   chatId: string;
   callbackQueryId: string;
   userId?: string;
-  messageId?: number;
+  messageId?: number | string;
+  actionAllowed?: (instanceId: string, sessionId: string) => boolean;
+  answer?: (text: string) => Promise<unknown>;
+  send?: (text: string, options?: { replyMarkup?: ChatInlineKeyboard }) => Promise<unknown>;
+  deleteMessage?: () => Promise<unknown>;
 };
 
 type TelegramAiSessionCallbacksOptions = {
@@ -102,7 +106,7 @@ export class TelegramAiSessionCallbacks {
       sessionId,
       successText: "Interrupt sent",
       failurePrefix: "Interrupt failed",
-      logMessage: "telegram ai session cancel sent",
+      logMessage: "chat ai session cancel sent",
       operation: () => this.options.interrupt(instanceId, sessionId),
     });
   }
@@ -113,7 +117,7 @@ export class TelegramAiSessionCallbacks {
       ...target,
       successText: "Steered queued message",
       failurePrefix: "Steer failed",
-      logMessage: "telegram ai session queued message steered",
+      logMessage: "chat ai session queued message steered",
       operation: () => this.options.steer(target.instanceId, target.sessionId, target.queueId),
     });
   }
@@ -126,18 +130,18 @@ export class TelegramAiSessionCallbacks {
         .map(asRecord)
         .filter((item) => stringValue(item.status) === "queued" && stringValue(item.id));
       if (!items.length) {
-        await this.options.answer(context.bridge, context.callbackQueryId, "Queue is empty");
+        await this.answer(context, "Queue is empty");
         return;
       }
       const rows = items.slice(0, QUEUE_BUTTON_LIMIT).map((item, index) => [{
         text: queueButtonText(stringValue(item.message), index),
         callbackData: this.queueDeleteItemCallbackData(target.instanceId, target.sessionId, stringValue(item.id)),
       }]);
-      await this.options.send(context.bridge, context.chatId, "Delete queued message", {
+      await this.send(context, "Delete queued message", {
         replyMarkup: createInlineKeyboard(rows),
       });
-      await this.options.answer(context.bridge, context.callbackQueryId, "Select a queued message");
-      this.options.info(this.logData(context, target, { itemCount: items.length }), "telegram ai session queue delete menu sent");
+      await this.answer(context, "Select a queued message");
+      this.options.info(this.logData(context, target, { itemCount: items.length }), "chat ai session queue delete menu sent");
     } catch (error) {
       await this.fail(context, error, "Queue menu failed");
     }
@@ -147,16 +151,16 @@ export class TelegramAiSessionCallbacks {
     if (!await this.requireAllowed(context, target.instanceId, target.sessionId)) return;
     try {
       await this.options.remove(target.instanceId, target.sessionId, target.queueId);
-      await this.options.answer(context.bridge, context.callbackQueryId, "Queued message deleted");
-      if (Number.isInteger(context.messageId)) {
-        await this.options.deleteMessage(context.bridge, context.chatId, context.messageId as number).catch((error) => {
+      await this.answer(context, "Queued message deleted");
+      if (context.deleteMessage || Number.isInteger(context.messageId)) {
+        await this.deleteMessage(context).catch((error) => {
           this.options.warn(
             this.logData(context, target, { messageId: context.messageId, error: errorMessage(error) }),
-            "telegram ai session queue delete menu message delete failed",
+            "chat ai session queue delete menu message delete failed",
           );
         });
       }
-      this.options.info(this.logData(context, target), "telegram ai session queued message deleted");
+      this.options.info(this.logData(context, target), "chat ai session queued message deleted");
     } catch (error) {
       await this.fail(context, error, "Delete failed");
     }
@@ -176,7 +180,7 @@ export class TelegramAiSessionCallbacks {
   ) {
     try {
       await input.operation();
-      await this.options.answer(context.bridge, context.callbackQueryId, input.successText);
+      await this.answer(context, input.successText);
       this.options.info(this.logData(context, input), input.logMessage);
     } catch (error) {
       await this.fail(context, error, input.failurePrefix);
@@ -184,20 +188,51 @@ export class TelegramAiSessionCallbacks {
   }
 
   private async requireAllowed(context: CallbackContext, instanceId: string, sessionId: string) {
-    if (this.options.actionAllowed(context.bridge, context.chatId, instanceId, sessionId, context.messageId)) return true;
-    await this.options.answer(context.bridge, context.callbackQueryId, "This chat is not bound to that AI session");
+    const allowed = context.actionAllowed
+      ? context.actionAllowed(instanceId, sessionId)
+      : this.options.actionAllowed(
+          context.bridge,
+          context.chatId,
+          instanceId,
+          sessionId,
+          Number.isInteger(context.messageId) ? context.messageId as number : undefined,
+        );
+    if (allowed) return true;
+    await this.answer(context, "This chat is not bound to that AI session");
     return false;
   }
 
   private async fail(context: CallbackContext, error: unknown, prefix: string) {
     const message = errorMessage(error);
     this.options.setBridgeError(context.bridge.id, message);
-    await this.options.answer(context.bridge, context.callbackQueryId, `${prefix}: ${compactText(message, 120)}`);
+    await this.answer(context, `${prefix}: ${compactText(message, 120)}`);
   }
 
   private async expired(context: CallbackContext) {
-    await this.options.answer(context.bridge, context.callbackQueryId, "This AI session action expired");
+    await this.answer(context, "This AI session action expired");
     return true;
+  }
+
+  private answer(context: CallbackContext, text: string) {
+    return context.answer
+      ? context.answer(text)
+      : this.options.answer(context.bridge, context.callbackQueryId, text);
+  }
+
+  private send(context: CallbackContext, text: string, options: { replyMarkup?: ChatInlineKeyboard }) {
+    return context.send
+      ? context.send(text, options)
+      : this.options.send(context.bridge, context.chatId, text, options);
+  }
+
+  private deleteMessage(context: CallbackContext) {
+    if (context.deleteMessage) {
+      return context.deleteMessage();
+    }
+    if (Number.isInteger(context.messageId)) {
+      return this.options.deleteMessage(context.bridge, context.chatId, context.messageId as number);
+    }
+    return Promise.resolve(undefined);
   }
 
   private queueDeleteItemCallbackData(instanceId: string, sessionId: string, queueId: string) {

@@ -1,6 +1,6 @@
 import type { ChatBridgeConfig, ChatGatewayMessage, ChatSessionBinding, PendingRoute } from "@task-handoff/protocol/control-plane";
 import type { DWClientDownStream } from "dingtalk-stream";
-import type { NormalizedMessage } from "@larksuiteoapi/node-sdk";
+import type { CardActionEvent, NormalizedMessage } from "@larksuiteoapi/node-sdk";
 import { createInlineKeyboard } from "@task-handoff/core/core/chat-interactions";
 import type { ChatInlineKeyboard, ChatInteractionPayload } from "@task-handoff/core/core/chat-interactions";
 import {
@@ -35,7 +35,12 @@ import {
 import { pollWechatMessages } from "../adapters/wechat.ts";
 import { DingdingBridgeRuntimeManager } from "./dingding-bridge-runtime.ts";
 import { LarkBridgeRuntimeManager, type LarkChannelFactoryInput } from "./lark-bridge-runtime.ts";
-import type { LarkChannelLike, LarkRuntimeState } from "../adapters/lark.ts";
+import {
+  larkCallbackData,
+  larkCard,
+  type LarkChannelLike,
+  type LarkRuntimeState,
+} from "../adapters/lark.ts";
 import { AsyncTtlCache } from "./async-ttl-cache.ts";
 import { TelegramMessageAggregator, type TelegramMessageContext } from "./telegram-message-aggregator.ts";
 import { TelegramAiSessionCallbacks } from "./telegram-ai-session-callbacks.ts";
@@ -263,6 +268,7 @@ export class ControlPlaneChatGatewayRuntime {
         warn: (data, message) => this.logWarn(data, message),
       },
       onMessage: (bridge, runtime, message) => this.handleLarkMessage(bridge, runtime, message),
+      onCardAction: (bridge, runtime, event) => this.handleLarkCardAction(bridge, runtime, event),
       onError: (bridgeId, error) => this.bridgeErrors.set(bridgeId, errorMessage(error)),
       clearError: (bridgeId) => this.bridgeErrors.delete(bridgeId),
     });
@@ -543,7 +549,8 @@ export class ControlPlaneChatGatewayRuntime {
     }
     const reply = replyFromGatewayResult(result);
     if (!reply) return;
-    if (await this.sendLarkRoutedAiSessionProgress(result, bridge, message.chatId, reply)) {
+    const replyMarkup = replyMarkupFromGatewayResult(result);
+    if (await this.sendLarkRoutedAiSessionProgress(result, bridge, message.chatId, reply, replyMarkup)) {
       return;
     }
     const adapter = createChatGatewaySendAdapter({
@@ -551,7 +558,7 @@ export class ControlPlaneChatGatewayRuntime {
       bridge,
       larkRuntime: runtime,
     });
-    const sent = await adapter.send(message.chatId, reply);
+    const sent = await adapter.send(message.chatId, reply, { replyMarkup });
     if (sent) {
       this.logInfo({
         bridgeId: bridge.id,
@@ -570,6 +577,7 @@ export class ControlPlaneChatGatewayRuntime {
     bridge: ChatBridgeConfig,
     chatId: string,
     text: string,
+    replyMarkup?: ChatInlineKeyboard,
   ) {
     if (result.routed !== true) {
       return false;
@@ -594,6 +602,7 @@ export class ControlPlaneChatGatewayRuntime {
       key,
       chatId,
       text,
+      replyMarkup,
     });
     if (!delivered) {
       return false;
@@ -609,6 +618,78 @@ export class ControlPlaneChatGatewayRuntime {
       textPreview: compactLogText(text),
     }, "lark ai session progress message started");
     return true;
+  }
+
+  private async handleLarkCardAction(bridge: ChatBridgeConfig, runtime: LarkRuntimeState, event: CardActionEvent) {
+    const userId = event.operator.openId || event.operator.userId;
+    if (!this.larkAllowed(bridge, userId)) {
+      this.logWarn({
+        bridgeId: bridge.id,
+        chatId: event.chatId,
+        messageId: event.messageId,
+        userId,
+      }, "lark card action ignored");
+      return;
+    }
+    const callbackData = larkCallbackData(event.action.value);
+    const updateCard = (text: string, replyMarkup?: ChatInlineKeyboard) => runtime.channel.updateCard(
+      event.messageId,
+      larkCard(text || "Updated", replyMarkup),
+    );
+    if (!callbackData) {
+      await updateCard("Unsupported action");
+      return;
+    }
+    if (await this.telegramAiSessionCallbacks.tryHandle(callbackData, {
+      bridge,
+      chatId: event.chatId,
+      callbackQueryId: event.messageId,
+      userId,
+      messageId: event.messageId,
+      actionAllowed: (instanceId, sessionId) => this.chatAiSessionBindingActive(
+        bridge,
+        event.chatId,
+        instanceId,
+        sessionId,
+      ),
+      answer: (text) => updateCard(text),
+      send: (text, options) => runtime.channel.send(event.chatId, {
+        card: larkCard(text, options?.replyMarkup),
+      }),
+    })) {
+      return;
+    }
+    let action: ChatGatewayAction | undefined;
+    try {
+      action = await this.parseChatGatewayCallbackAction(callbackData);
+    } catch (error) {
+      if (hasErrorCode(error, "CHAT_PENDING_ACTION_STALE")) {
+        await updateCard(errorMessage(error));
+        return;
+      }
+      throw error;
+    }
+    if (!action) {
+      await updateCard("Unsupported action");
+      return;
+    }
+    const result = await this.service.handleChatGatewayAction({
+      source: {
+        channel: "lark",
+        bridgeId: bridge.id,
+        chatSessionId: event.chatId,
+        userId,
+      },
+      action,
+    });
+    if (action.type === "pending-decision" && isAcceptedGatewayResult(result)) {
+      await updateCard(`${action.decision} sent`);
+      return;
+    }
+    const reply = replyFromGatewayResult(result)
+      || stringSetting((result as { message?: unknown }).message)
+      || "Updated";
+    await updateCard(reply, replyMarkupFromGatewayResult(result));
   }
 
   private async handleDingdingRobotMessage(bridge: ChatBridgeConfig, runtime: DingdingRuntimeBridge, message: DWClientDownStream) {
@@ -1120,7 +1201,7 @@ export class ControlPlaneChatGatewayRuntime {
     });
   }
 
-  private telegramAiSessionBindingActive(bridge: ChatBridgeConfig, chatId: string, instanceId: string, sessionId: string) {
+  private chatAiSessionBindingActive(bridge: ChatBridgeConfig, chatId: string, instanceId: string, sessionId: string) {
     return this.service.listChatSessions().some((entry) =>
       entry.bridgeId === bridge.id &&
       entry.chatSessionId === chatId &&
@@ -1130,7 +1211,7 @@ export class ControlPlaneChatGatewayRuntime {
   }
 
   private telegramAiSessionActionAllowed(bridge: ChatBridgeConfig, chatId: string, instanceId: string, sessionId: string, messageId?: number) {
-    if (this.telegramAiSessionBindingActive(bridge, chatId, instanceId, sessionId)) {
+    if (this.chatAiSessionBindingActive(bridge, chatId, instanceId, sessionId)) {
       return true;
     }
     if (!Number.isInteger(messageId)) {
@@ -1695,6 +1776,7 @@ export class ControlPlaneChatGatewayRuntime {
         key,
         chatId: binding.chatSessionId,
         text,
+        replyMarkup: progressReplyMarkup({ actionRows }),
       });
       if (updated) {
         this.logInfo({

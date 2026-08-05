@@ -1,42 +1,26 @@
+import type { ChatInlineKeyboard } from "@task-handoff/core/core/chat-interactions";
 import type { ChatGatewayProgressUpdate } from "../adapters/contracts.ts";
-import type { LarkRuntimeState } from "../adapters/lark.ts";
+import {
+  larkActionsFingerprint,
+  larkCard,
+  type LarkRuntimeState,
+} from "../adapters/lark.ts";
 
 type LarkProgressEntry = {
   bridgeId: string;
   messageId?: string;
   delivered?: boolean;
   lastText: string;
+  lastActionsFingerprint: string;
   lastUpdateAt: number;
   pending?: Promise<unknown>;
   pendingText?: string;
+  pendingReplyMarkup?: ChatInlineKeyboard;
   timer?: ReturnType<typeof setTimeout>;
   cancelPending?: (error: Error) => void;
 };
 
 const LARK_PROGRESS_UPDATE_MS = 1000;
-const LARK_PROGRESS_SUMMARY_MAX_CHARS = 50;
-
-function larkProgressCard(text: string) {
-  return {
-    schema: "2.0",
-    config: {
-      summary: { content: larkProgressSummary(text) },
-    },
-    body: {
-      elements: [{
-        tag: "markdown",
-        content: text,
-      }],
-    },
-  };
-}
-
-function larkProgressSummary(text: string) {
-  const summary = text.replace(/\s+/g, " ").trim();
-  return summary.length <= LARK_PROGRESS_SUMMARY_MAX_CHARS
-    ? summary
-    : `${summary.slice(0, LARK_PROGRESS_SUMMARY_MAX_CHARS - 3)}...`;
-}
 
 export class LarkProgressStore {
   readonly entries = new Map<string, LarkProgressEntry>();
@@ -73,15 +57,17 @@ export class LarkProgressStore {
 
   async applyUpdate(input: ChatGatewayProgressUpdate, runtime: LarkRuntimeState) {
     const generation = this.generation(input.bridge.id);
+    const nextActionsFingerprint = larkActionsFingerprint(input.replyMarkup);
     let existing = this.entries.get(input.key);
     if (existing?.pending) await existing.pending;
     if (!this.isCurrent(input.bridge.id, generation)) return false;
     existing = this.entries.get(input.key);
     if (existing?.messageId) {
-      if (existing.lastText === input.text) return true;
+      if (existing.lastText === input.text && existing.lastActionsFingerprint === nextActionsFingerprint) return true;
       const elapsed = Date.now() - existing.lastUpdateAt;
       if (elapsed < this.updateIntervalMs) {
         existing.pendingText = input.text;
+        existing.pendingReplyMarkup = input.replyMarkup;
         if (!existing.timer) {
           existing.pending = new Promise((resolve, reject) => {
             existing.cancelPending = reject;
@@ -89,9 +75,19 @@ export class LarkProgressStore {
               existing.timer = undefined;
               existing.cancelPending = undefined;
               const nextText = existing.pendingText;
+              const nextReplyMarkup = existing.pendingReplyMarkup;
               existing.pendingText = undefined;
+              existing.pendingReplyMarkup = undefined;
               if (!nextText) return resolve(undefined);
-              this.updateExistingEntry(input, runtime, existing, nextText, generation).then(resolve, reject);
+              this.updateExistingEntry(
+                input,
+                runtime,
+                existing,
+                nextText,
+                nextReplyMarkup,
+                larkActionsFingerprint(nextReplyMarkup),
+                generation,
+              ).then(resolve, reject);
             }, this.updateIntervalMs - elapsed);
           }).finally(() => {
             existing.pending = undefined;
@@ -102,16 +98,25 @@ export class LarkProgressStore {
         await existing.pending;
         return this.isCurrent(input.bridge.id, generation) && this.entries.has(input.key);
       }
-      await this.updateExistingEntry(input, runtime, existing, input.text, generation);
+      await this.updateExistingEntry(
+        input,
+        runtime,
+        existing,
+        input.text,
+        input.replyMarkup,
+        nextActionsFingerprint,
+        generation,
+      );
       return this.isCurrent(input.bridge.id, generation);
     }
 
     const entry: LarkProgressEntry = {
       bridgeId: input.bridge.id,
       lastText: input.text,
+      lastActionsFingerprint: nextActionsFingerprint,
       lastUpdateAt: Date.now(),
     };
-    entry.pending = runtime.channel.send(input.chatId, { card: larkProgressCard(input.text) }).then((result) => {
+    entry.pending = runtime.channel.send(input.chatId, { card: larkCard(input.text, input.replyMarkup) }).then((result) => {
       if (!this.isCurrent(input.bridge.id, generation)) return;
       entry.messageId = result.messageId;
       entry.delivered = true;
@@ -132,12 +137,15 @@ export class LarkProgressStore {
     runtime: LarkRuntimeState,
     entry: LarkProgressEntry,
     text: string,
+    replyMarkup: ChatInlineKeyboard | undefined,
+    actionsFingerprint: string,
     generation: number,
   ) {
     if (!entry.messageId) return;
-    await runtime.channel.updateCard(entry.messageId, larkProgressCard(text));
+    await runtime.channel.updateCard(entry.messageId, larkCard(text, replyMarkup));
     if (!this.isCurrent(input.bridge.id, generation)) return;
     entry.lastText = text;
+    entry.lastActionsFingerprint = actionsFingerprint;
     entry.lastUpdateAt = Date.now();
   }
 }

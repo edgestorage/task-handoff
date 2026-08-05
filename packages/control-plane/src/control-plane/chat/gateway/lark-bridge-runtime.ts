@@ -1,6 +1,7 @@
 import {
   createLarkChannel,
   Domain,
+  type CardActionEvent,
   type LarkChannelOptions,
   type NormalizedMessage,
 } from "@larksuiteoapi/node-sdk";
@@ -24,6 +25,7 @@ export type LarkBridgeRuntimeManagerOptions = {
   createChannel?: (input: LarkChannelFactoryInput) => LarkChannelLike;
   logger: LarkBridgeRuntimeLogger;
   onMessage: (bridge: ChatBridgeConfig, runtime: LarkRuntimeState, message: NormalizedMessage) => Promise<void>;
+  onCardAction: (bridge: ChatBridgeConfig, runtime: LarkRuntimeState, event: CardActionEvent) => Promise<void>;
   onError: (bridgeId: string, error: unknown) => void;
   clearError: (bridgeId: string) => void;
   reconnectDelayMs?: number;
@@ -94,6 +96,11 @@ export class LarkBridgeRuntimeManager implements ChatGatewayProgressStore {
     const stopListening = runtime.channel.on({
       message: (message) => {
         void this.options.onMessage(bridge, runtime, message).catch((error) => {
+          this.options.onError(bridge.id, error);
+        });
+      },
+      cardAction: (event) => {
+        void this.options.onCardAction(bridge, runtime, event).catch((error) => {
           this.options.onError(bridge.id, error);
         });
       },

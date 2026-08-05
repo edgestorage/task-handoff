@@ -17,6 +17,7 @@ const { ControlledInstanceGateway } = require("../packages/control-plane/src/con
 const { parseDingdingCardEvent, sendDingdingActionsCard } = require("../packages/control-plane/src/control-plane/chat/adapters/dingding.ts");
 const { DingdingProgressStore } = require("../packages/control-plane/src/control-plane/chat/gateway/dingding-progress-store.ts");
 const { DingdingBridgeRuntimeManager } = require("../packages/control-plane/src/control-plane/chat/gateway/dingding-bridge-runtime.ts");
+const { LarkProgressStore } = require("../packages/control-plane/src/control-plane/chat/gateway/lark-progress-store.ts");
 const { ControlPlaneEventBus } = require("../packages/control-plane/src/control-plane/events/bus.ts");
 const { ControlPlaneAiSessionAggregator } = require("../packages/control-plane/src/control-plane/sessions/ai-session-aggregator.ts");
 const { ControlPlaneAppSessionAggregator } = require("../packages/control-plane/src/control-plane/sessions/app-session-aggregator.ts");
@@ -14935,6 +14936,7 @@ test("control plane chat bridge settings cover telegram wechat dingding and lark
 
 test("control plane lark bridge reuses routed progress messages and ignores revision-only snapshots", async () => {
   const calls = [];
+  const interrupts = [];
   const events = new ControlPlaneEventBus();
   let fakeChannel;
   const bridge = {
@@ -14989,6 +14991,9 @@ test("control plane lark bridge reuses routed progress messages and ignores revi
     boardAsync: async () => [{ id: "inst_1", name: "instance-main" }],
     listPendingRoutes: async () => [],
     pendingDecisionCallbackData: (_routeId, decision) => `decision:${decision}`,
+    interruptAiSession: async (instanceId, sessionId) => {
+      interrupts.push({ instanceId, sessionId });
+    },
   };
   class FakeLarkChannel {
     async connect() {}
@@ -15063,6 +15068,24 @@ test("control plane lark bridge reuses routed progress messages and ignores revi
     assert.equal(runningUpdate.messageId, "om_progress_1");
     assert.match(runningUpdate.card.body.elements[0].content, /^instance-main · codex running\/responding/);
     assert.match(runningUpdate.card.body.elements[0].content, /正在汇总结果。/);
+    const cancelButton = runningUpdate.card.body.elements.find((element) => element.tag === "button" && element.text?.content === "Cancel");
+    assert.ok(cancelButton);
+    assert.equal(cancelButton.type, "danger");
+
+    await fakeChannel.handlers.cardAction({
+      messageId: "om_progress_1",
+      chatId: "oc_lark_chat",
+      operator: { openId: "ou_lark_user" },
+      action: {
+        value: cancelButton.behaviors[0].value,
+        tag: "button",
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(interrupts, [{ instanceId: "inst_1", sessionId: "ais_1" }]);
+    const cancelUpdate = calls.filter((call) => call.type === "update").at(-1);
+    assert.equal(cancelUpdate.messageId, "om_progress_1");
+    assert.equal(cancelUpdate.card.body.elements[0].content, "Interrupt sent");
 
     const completedSession = {
       ...runningSession,
@@ -15104,6 +15127,153 @@ test("control plane lark bridge reuses routed progress messages and ignores revi
   } finally {
     runtime.stopAll();
   }
+});
+
+test("control plane lark bridge dispatches interactive card actions and updates the original card", async () => {
+  const calls = [];
+  const actions = [];
+  let fakeChannel;
+  const bridge = {
+    id: "chat_lark_actions",
+    channel: "lark",
+    name: "Feishu Actions",
+    enabled: true,
+    token: "cli_lark_app_id",
+    tokenSet: true,
+    defaultChatId: "oc_lark_chat",
+    allowedUserIds: ["ou_lark_user"],
+    pollIntervalMs: 30000,
+    settings: { appSecret: "lark-app-secret", domain: "feishu" },
+  };
+  const service = {
+    listChatBridges: () => [bridge],
+    requireChatBridge: () => bridge,
+    updateChatBridge: () => bridge,
+    handleChatGatewayMessage: async () => ({
+      reply: "Choose a session",
+      replyMarkup: {
+        inline_keyboard: [[{ text: "Session 2", callback_data: "task_handoff:cp_session:1" }]],
+      },
+    }),
+    handleChatGatewayAction: async (input) => {
+      actions.push(input);
+      return {
+        reply: "Session selected",
+        replyMarkup: {
+          inline_keyboard: [[{ text: "Open", callback_data: "task_handoff:cp_session:0" }]],
+        },
+      };
+    },
+    listChatSessions: () => [],
+    listPendingRoutes: async () => [],
+  };
+  class FakeLarkChannel {
+    async connect() {}
+    async disconnect() {}
+    on(handlers) {
+      this.handlers = handlers;
+      return () => {
+        this.handlers = undefined;
+      };
+    }
+    async send(chatId, input) {
+      calls.push({ type: "send", chatId, input });
+      return { messageId: "om_action_1" };
+    }
+    async updateCard(messageId, card) {
+      calls.push({ type: "update", messageId, card });
+    }
+  }
+  const runtime = new ControlPlaneChatGatewayRuntime(service, fetch, {
+    createLarkChannel: () => {
+      fakeChannel = new FakeLarkChannel();
+      return fakeChannel;
+    },
+  });
+
+  try {
+    runtime.startBridge(bridge.id);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await fakeChannel.handlers.message({
+      chatId: "oc_lark_chat",
+      chatType: "p2p",
+      senderId: "ou_lark_user",
+      messageId: "om_incoming_action",
+      content: "/ai-sessions",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const sent = calls.find((call) => call.type === "send");
+    assert.equal(sent.input.card.schema, "2.0");
+    const button = sent.input.card.body.elements.find((element) => element.tag === "button");
+    assert.equal(button.text.content, "Session 2");
+
+    await fakeChannel.handlers.cardAction({
+      messageId: "om_action_1",
+      chatId: "oc_lark_chat",
+      operator: { openId: "ou_lark_user" },
+      action: { value: button.behaviors[0].value, tag: "button" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(actions.length, 1);
+    assert.equal(actions[0].source.channel, "lark");
+    assert.equal(actions[0].source.chatSessionId, "oc_lark_chat");
+    assert.deepEqual(actions[0].action, { type: "ai-session", index: 1 });
+    const updated = calls.filter((call) => call.type === "update").at(-1);
+    assert.equal(updated.messageId, "om_action_1");
+    assert.equal(updated.card.body.elements[0].content, "Session selected");
+    assert.equal(updated.card.body.elements[1].text.content, "Open");
+
+    await fakeChannel.handlers.cardAction({
+      messageId: "om_action_1",
+      chatId: "oc_lark_chat",
+      operator: { openId: "ou_other" },
+      action: { value: button.behaviors[0].value, tag: "button" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(actions.length, 1);
+  } finally {
+    runtime.stopAll();
+  }
+});
+
+test("lark progress cards update when only actions change", async () => {
+  const calls = [];
+  const store = new LarkProgressStore(1);
+  const bridge = {
+    id: "chat_lark_action_progress",
+    channel: "lark",
+    settings: {},
+  };
+  const runtime = {
+    channel: {
+      async send(chatId, input) {
+        calls.push({ type: "send", chatId, input });
+        return { messageId: "om_progress_action_1" };
+      },
+      async updateCard(messageId, card) {
+        calls.push({ type: "update", messageId, card });
+      },
+    },
+  };
+  const input = {
+    bridge,
+    key: "inst_1:ais_1:turn_1:chat_lark_action_progress:oc_lark_chat",
+    chatId: "oc_lark_chat",
+    text: "Working",
+  };
+
+  assert.equal(await store.applyUpdate(input, runtime), true);
+  assert.equal(await store.applyUpdate({
+    ...input,
+    replyMarkup: {
+      inline_keyboard: [[{ text: "Cancel", callback_data: "task_handoff:cp_ai_cancel:token" }]],
+    },
+  }, runtime), true);
+
+  const updated = calls.filter((call) => call.type === "update").at(-1);
+  assert.equal(updated.messageId, "om_progress_action_1");
+  assert.equal(updated.card.body.elements[0].content, "Working");
+  assert.equal(updated.card.body.elements[1].text.content, "Cancel");
 });
 
 test("control plane wechat bridge polls messages and sends replies", async (t) => {
