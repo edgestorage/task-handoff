@@ -15034,7 +15034,10 @@ test("control plane lark bridge reuses routed progress messages and ignores revi
       messageId: "om_incoming_1",
       content: "检查当前状态",
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForCondition(
+      () => calls.filter((call) => call.type === "send").length === 1,
+      "lark routed progress message",
+    );
 
     assert.equal(calls.filter((call) => call.type === "send").length, 1);
     assert.equal(calls[0].input.card.schema, "2.0");
@@ -15055,6 +15058,7 @@ test("control plane lark bridge reuses routed progress messages and ignores revi
         userPrompt: "检查当前状态",
         lastMessage: "正在汇总结果。",
       }],
+      startedAt: "2026-08-05T00:00:00.000Z",
       updatedAt: "2026-08-05T00:00:01.000Z",
     };
     publishAiSessionSnapshotForTest(events, {
@@ -15062,9 +15066,10 @@ test("control plane lark bridge reuses routed progress messages and ignores revi
       sessions: [runningSession],
       updatedAt: runningSession.updatedAt,
     }, { scope: { instanceId: "inst_1" } });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
-    const runningUpdate = calls.filter((call) => call.type === "update").at(-1);
+    const runningUpdate = await waitForCondition(
+      () => calls.filter((call) => call.type === "update").at(-1),
+      "lark running progress update",
+    );
     assert.equal(runningUpdate.messageId, "om_progress_1");
     assert.match(runningUpdate.card.body.elements[0].content, /^instance-main · codex running\/responding/);
     assert.match(runningUpdate.card.body.elements[0].content, /正在汇总结果。/);
@@ -15100,13 +15105,15 @@ test("control plane lark bridge reuses routed progress messages and ignores revi
       }],
       updatedAt: "2026-08-05T00:00:02.000Z",
     };
+    const updateCountBeforeCompletion = calls.filter((call) => call.type === "update").length;
     publishAiSessionSnapshotForTest(events, {
       sessions: [completedSession],
       updatedAt: completedSession.updatedAt,
     }, { scope: { instanceId: "inst_1" } });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
-    const completedUpdate = calls.filter((call) => call.type === "update").at(-1);
+    const completedUpdate = await waitForCondition(() => {
+      const updates = calls.filter((call) => call.type === "update");
+      return updates.length > updateCountBeforeCompletion ? updates.at(-1) : undefined;
+    }, "lark completed progress update");
     assert.equal(completedUpdate.messageId, "om_progress_1");
     assert.match(completedUpdate.card.body.elements[0].content, /^instance-main · codex completed\n/);
     assert.match(completedUpdate.card.body.elements[0].content, /最终结果。/);
