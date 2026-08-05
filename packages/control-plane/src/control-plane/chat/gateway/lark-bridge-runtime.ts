@@ -6,6 +6,8 @@ import {
 } from "@larksuiteoapi/node-sdk";
 import type { ChatBridgeConfig } from "@task-handoff/protocol/control-plane";
 import type { LarkChannelLike, LarkRuntimeState } from "../adapters/lark.ts";
+import type { ChatGatewayProgressStore, ChatGatewayProgressUpdate } from "../adapters/contracts.ts";
+import { LarkProgressStore } from "./lark-progress-store.ts";
 
 export type LarkBridgeRuntimeLogger = {
   info: (data: Record<string, unknown>, message: string) => void;
@@ -25,6 +27,7 @@ export type LarkBridgeRuntimeManagerOptions = {
   onError: (bridgeId: string, error: unknown) => void;
   clearError: (bridgeId: string) => void;
   reconnectDelayMs?: number;
+  progressUpdateIntervalMs?: number;
 };
 
 export function createLarkSdkChannel(input: LarkChannelFactoryInput) {
@@ -44,17 +47,19 @@ export function createLarkSdkChannel(input: LarkChannelFactoryInput) {
   return createLarkChannel(options);
 }
 
-export class LarkBridgeRuntimeManager {
+export class LarkBridgeRuntimeManager implements ChatGatewayProgressStore {
   private readonly runtimes = new Map<string, LarkRuntimeState>();
   private readonly connected = new Set<string>();
   private readonly unsubscribe = new Map<string, () => void>();
   private readonly reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly options: LarkBridgeRuntimeManagerOptions;
   private readonly createChannel: (input: LarkChannelFactoryInput) => LarkChannelLike;
+  private readonly progress: LarkProgressStore;
 
   constructor(options: LarkBridgeRuntimeManagerOptions) {
     this.options = options;
     this.createChannel = options.createChannel || createLarkSdkChannel;
+    this.progress = new LarkProgressStore(options.progressUpdateIntervalMs);
   }
 
   has(bridgeId: string) {
@@ -148,6 +153,7 @@ export class LarkBridgeRuntimeManager {
     this.connected.delete(bridgeId);
     const runtime = this.runtimes.get(bridgeId);
     this.runtimes.delete(bridgeId);
+    this.progress.clearBridge(bridgeId);
     if (!runtime) return;
     try {
       runtime.channel.rawWsClient?.close({ force: true });
@@ -161,6 +167,16 @@ export class LarkBridgeRuntimeManager {
     for (const bridgeId of [...this.runtimes.keys()]) {
       this.stop(bridgeId);
     }
+    this.progress.clear();
+  }
+
+  applyUpdate(input: ChatGatewayProgressUpdate) {
+    const runtime = this.runtimes.get(input.bridge.id);
+    return runtime ? this.progress.applyUpdate(input, runtime) : Promise.resolve(false);
+  }
+
+  applyProgressUpdate(input: ChatGatewayProgressUpdate) {
+    return this.applyUpdate(input);
   }
 }
 

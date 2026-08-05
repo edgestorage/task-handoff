@@ -7,6 +7,7 @@ import {
   rebuildCodexSubAgents,
   rebuildCodexToolActivity,
 } from "./activity";
+import { compact } from "../../ai-session-turns";
 import type {
   CodexThread,
   CodexToolActivityState,
@@ -62,9 +63,7 @@ export function summarizeThreadTurns(thread: CodexThread): {
         lastMessageItemId = typeof item.id === "string" && item.id.trim() ? item.id.trim() : undefined;
         historyTurn.lastMessage = lastMessage;
         historyTurn.lastMessageItemId = lastMessageItemId;
-        historyTurn.summary = lastMessage.length > 1000
-          ? `${lastMessage.slice(0, 997)}...`
-          : lastMessage;
+        historyTurn.summary = compact(lastMessage, 1000);
       } else if (item.type === "contextCompaction" && typeof item.id === "string" && item.id.trim()) {
         historyTurn.contextCompactions = [
           ...(historyTurn.contextCompactions || []),

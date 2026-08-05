@@ -3012,6 +3012,10 @@ test("codex app server bridge restores child completion from thread snapshots", 
 test("codex app server bridge repeated snapshots keep completed turns stable", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-stable-turn-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const longResponse = Array.from(
+    { length: 80 },
+    (_, index) => `Result ${index + 1} includes enough detail to verify stable whitespace normalization.`,
+  ).join("\n\n");
   class FakeCodexAppServerClient extends EventEmitter {
     constructor() {
       super();
@@ -3024,7 +3028,7 @@ test("codex app server bridge repeated snapshots keep completed turns stable", a
           id: "turn_stable",
           items: [
             { type: "userMessage", content: [{ type: "text", text: "你好", text_elements: [] }] },
-            { type: "agentMessage", text: "你好。有什么要我处理的？" },
+            { type: "agentMessage", text: longResponse },
           ],
         }],
       };
@@ -3050,6 +3054,7 @@ test("codex app server bridge repeated snapshots keep completed turns stable", a
   ]);
   const first = registry.list()[0];
   assert.equal(first.turns[0].revision, 1);
+  assert.equal(first.turns[0].summary.length, 1000);
   const firstTurn = { ...first.turns[0] };
 
   await new Promise((resolve) => setTimeout(resolve, 5));

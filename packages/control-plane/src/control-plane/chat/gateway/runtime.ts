@@ -83,6 +83,7 @@ type ControlPlaneChatGatewayRuntimeOptions = {
   };
   logger?: ChatGatewayLogger;
   telegramProgressUpdateIntervalMs?: number;
+  larkProgressUpdateIntervalMs?: number;
 };
 
 type ChatActionToken = {
@@ -256,6 +257,7 @@ export class ControlPlaneChatGatewayRuntime {
     });
     this.larkBridges = new LarkBridgeRuntimeManager({
       createChannel: options.createLarkChannel,
+      progressUpdateIntervalMs: options.larkProgressUpdateIntervalMs,
       logger: {
         info: (data, message) => this.logInfo(data, message),
         warn: (data, message) => this.logWarn(data, message),
@@ -338,6 +340,10 @@ export class ControlPlaneChatGatewayRuntime {
 
   stopBridge(id: string) {
     this.advanceBridgePollingGeneration(id);
+    const deliveryKeyMarker = `:${id}:`;
+    for (const key of this.deliveredAiSessionFingerprints.keys()) {
+      if (key.includes(deliveryKeyMarker)) this.deliveredAiSessionFingerprints.delete(key);
+    }
     const timer = this.bridgeTimers.get(id);
     if (timer) {
       clearInterval(timer);
@@ -537,6 +543,9 @@ export class ControlPlaneChatGatewayRuntime {
     }
     const reply = replyFromGatewayResult(result);
     if (!reply) return;
+    if (await this.sendLarkRoutedAiSessionProgress(result, bridge, message.chatId, reply)) {
+      return;
+    }
     const adapter = createChatGatewaySendAdapter({
       fetchImpl: this.fetchImpl,
       bridge,
@@ -554,6 +563,52 @@ export class ControlPlaneChatGatewayRuntime {
         replyPreview: compactLogText(reply),
       }, "lark chat gateway reply sent");
     }
+  }
+
+  private async sendLarkRoutedAiSessionProgress(
+    result: ChatGatewayResult,
+    bridge: ChatBridgeConfig,
+    chatId: string,
+    text: string,
+  ) {
+    if (result.routed !== true) {
+      return false;
+    }
+    const route = routedAiSessionResult(result);
+    const { instanceId, sessionId, turnId } = route;
+    if (!instanceId || !sessionId || !turnId) {
+      this.logWarn({
+        bridgeId: bridge.id,
+        chatId,
+        instanceId,
+        sessionId,
+        turnId,
+        turnIdSources: route.sources,
+        routed: result.routed,
+      }, "lark ai session progress message not started");
+      return false;
+    }
+    const key = aiSessionDeliveryKey(instanceId, sessionId, turnId, bridge.id, chatId);
+    const delivered = await this.larkBridges.applyProgressUpdate({
+      bridge,
+      key,
+      chatId,
+      text,
+    });
+    if (!delivered) {
+      return false;
+    }
+    this.deliveredAiSessionFingerprints.delete(key);
+    this.logInfo({
+      bridgeId: bridge.id,
+      chatId,
+      instanceId,
+      sessionId,
+      turnId,
+      key,
+      textPreview: compactLogText(text),
+    }, "lark ai session progress message started");
+    return true;
   }
 
   private async handleDingdingRobotMessage(bridge: ChatBridgeConfig, runtime: DingdingRuntimeBridge, message: DWClientDownStream) {
@@ -1634,6 +1689,23 @@ export class ControlPlaneChatGatewayRuntime {
       }
       return updated;
     }
+    if (bridge.channel === "lark") {
+      const updated = await this.larkBridges.applyProgressUpdate({
+        bridge,
+        key,
+        chatId: binding.chatSessionId,
+        text,
+      });
+      if (updated) {
+        this.logInfo({
+          bridgeId: binding.bridgeId,
+          chatId: binding.chatSessionId,
+          key,
+          textPreview: compactLogText(text),
+        }, "lark ai session progress updated");
+      }
+      return updated;
+    }
     if (bridge.channel !== "telegram") {
       return false;
     }
@@ -1920,7 +1992,6 @@ export function aiSessionFingerprint(session: Partial<AiSessionSummary>, heading
   return [
     heading,
     latestTurn?.id || "",
-    String(latestTurn?.revision ?? ""),
     latestTurn?.status || session.status || "",
     latestTurn?.phase || session.phase || "",
     latestTurn?.lastMessage || "",
@@ -1948,7 +2019,8 @@ export function aiSessionDeliveryText(session: AiSessionSummary, heading: string
 }
 
 function aiSessionDeliveryHeading(instanceName: string, session: Partial<AiSessionSummary>) {
-  const state = [session.status, session.phase && session.phase !== "unknown" ? session.phase : undefined].filter(Boolean).join("/");
+  const status = session.status === "idle" ? "completed" : session.status;
+  const state = [status, session.phase && session.phase !== "unknown" ? session.phase : undefined].filter(Boolean).join("/");
   return `${instanceName} · ${session.agent || "ai"} ${state || "unknown"}`;
 }
 

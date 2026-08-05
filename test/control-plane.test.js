@@ -12787,7 +12787,7 @@ test("control plane telegram bridge renders ai session buttons and handles selec
   await waitTelegramAggregate();
   const aiReply = calls.filter((call) => call.type === "fetch" && call.url.includes("editMessageText")).at(-1);
   assert.equal(aiReply.body.message_id, sentAckMessageId);
-  assert.match(aiReply.body.text, /^\*instance\\-main · claude idle\*/);
+  assert.match(aiReply.body.text, /^\*instance\\-main · claude completed\*/);
   assert.match(aiReply.body.text, /需要我在/);
   const sendCountAfterAiReply = calls.filter((call) => call.type === "fetch" && call.url.includes("sendMessage")).length;
   const editCountAfterAiReply = calls.filter((call) => call.type === "fetch" && call.url.includes("editMessageText")).length;
@@ -13913,7 +13913,7 @@ test("control plane ai session delivery keeps response content inside the latest
   assert.equal(aiSessionDeliveryText(session, "instance-main · claude running/thinking"), "");
 
   session.turns[1].lastMessage = "second answer";
-  assert.equal(aiSessionDeliveryText(session, "instance-main · claude idle"), "instance-main · claude idle\nsecond answer");
+  assert.equal(aiSessionDeliveryText(session, "instance-main · claude completed"), "instance-main · claude completed\nsecond answer");
 });
 
 test("control plane ai session delivery appends authoritative tool activity after the latest response", () => {
@@ -14047,8 +14047,8 @@ test("control plane ai session delivery keys explicit turns by id and revision",
     completedAt: "2026-07-03T00:00:02.000Z",
     updatedAt: "2026-07-03T00:00:02.000Z",
   };
-  const delivered = aiSessionDeliveryText(session, "instance-main · claude idle");
-  assert.equal(delivered, "instance-main · claude idle\nsecond answer");
+  const delivered = aiSessionDeliveryText(session, "instance-main · claude completed");
+  assert.equal(delivered, "instance-main · claude completed\nsecond answer");
   assert.doesNotMatch(delivered, /first answer/);
 });
 
@@ -14931,6 +14931,179 @@ test("control plane chat bridge settings cover telegram wechat dingding and lark
   assert.equal(bridges.body.data.find((bridge) => bridge.channel === "dingding").settings.clientSecretSet, true);
   assert.equal(bridges.body.data.find((bridge) => bridge.channel === "lark").settings.appSecret, undefined);
   assert.equal(bridges.body.data.find((bridge) => bridge.channel === "lark").settings.appSecretSet, true);
+});
+
+test("control plane lark bridge reuses routed progress messages and ignores revision-only snapshots", async () => {
+  const calls = [];
+  const events = new ControlPlaneEventBus();
+  let fakeChannel;
+  const bridge = {
+    id: "chat_lark_progress",
+    channel: "lark",
+    name: "Feishu Progress",
+    enabled: true,
+    token: "cli_lark_app_id",
+    tokenSet: true,
+    defaultChatId: "",
+    allowedUserIds: ["ou_lark_user"],
+    pollIntervalMs: 30000,
+    settings: {
+      appSecret: "lark-app-secret",
+      domain: "feishu",
+    },
+  };
+  const binding = {
+    id: "lark:chat",
+    channel: "lark",
+    bridgeId: bridge.id,
+    chatSessionId: "oc_lark_chat",
+    activeInstanceId: "inst_1",
+    activeAiSessionId: "ais_1",
+  };
+  const service = {
+    listChatBridges: () => [bridge],
+    requireChatBridge: () => bridge,
+    updateChatBridge: (_id, patch) => Object.assign(bridge, patch),
+    handleChatGatewayMessage: async (message) => ({
+      accepted: true,
+      routed: true,
+      binding,
+      instance: { id: "inst_1" },
+      aiSession: {
+        session: {
+          id: "ais_1",
+          agent: "codex",
+          activeTurnId: "turn_1",
+          status: "running",
+          phase: "thinking",
+          turns: [{ id: "turn_1", userPrompt: message.message.text, revision: 0 }],
+        },
+        provider: "codex",
+        action: "send",
+      },
+      turnId: "turn_1",
+      providerTurnId: "turn_1",
+      reply: "Sent to instance-main / ais_1.",
+    }),
+    listChatSessions: () => [binding],
+    boardAsync: async () => [{ id: "inst_1", name: "instance-main" }],
+    listPendingRoutes: async () => [],
+    pendingDecisionCallbackData: (_routeId, decision) => `decision:${decision}`,
+  };
+  class FakeLarkChannel {
+    async connect() {}
+    async disconnect() {}
+    on(handlers) {
+      this.handlers = handlers;
+      return () => {
+        this.handlers = undefined;
+      };
+    }
+    async send(chatId, input) {
+      calls.push({ type: "send", chatId, input });
+      return { messageId: "om_progress_1" };
+    }
+    async updateCard(messageId, card) {
+      calls.push({ type: "update", messageId, card });
+    }
+  }
+  const runtime = new ControlPlaneChatGatewayRuntime(
+    service,
+    fetch,
+    aiSessionGatewayOptions(events, {
+      createLarkChannel: () => {
+        fakeChannel = new FakeLarkChannel();
+        return fakeChannel;
+      },
+      larkProgressUpdateIntervalMs: 1,
+    }),
+  );
+
+  try {
+    runtime.startBridge(bridge.id);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    fakeChannel.handlers.message({
+      chatId: "oc_lark_chat",
+      chatType: "p2p",
+      senderId: "ou_lark_user",
+      messageId: "om_incoming_1",
+      content: "检查当前状态",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    assert.equal(calls.filter((call) => call.type === "send").length, 1);
+    assert.equal(calls[0].input.card.schema, "2.0");
+    assert.equal(calls[0].input.card.body.elements[0].tag, "markdown");
+    assert.equal(calls[0].input.card.body.elements[0].content, "Sent to instance-main / ais_1.");
+
+    const runningSession = {
+      id: "ais_1",
+      agent: "codex",
+      activeTurnId: "turn_1",
+      status: "running",
+      phase: "responding",
+      turns: [{
+        id: "turn_1",
+        status: "running",
+        phase: "responding",
+        revision: 1,
+        userPrompt: "检查当前状态",
+        lastMessage: "正在汇总结果。",
+      }],
+      updatedAt: "2026-08-05T00:00:01.000Z",
+    };
+    publishAiSessionSnapshotForTest(events, {
+      runningCount: 1,
+      sessions: [runningSession],
+      updatedAt: runningSession.updatedAt,
+    }, { scope: { instanceId: "inst_1" } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const runningUpdate = calls.filter((call) => call.type === "update").at(-1);
+    assert.equal(runningUpdate.messageId, "om_progress_1");
+    assert.match(runningUpdate.card.body.elements[0].content, /^instance-main · codex running\/responding/);
+    assert.match(runningUpdate.card.body.elements[0].content, /正在汇总结果。/);
+
+    const completedSession = {
+      ...runningSession,
+      status: "idle",
+      phase: "unknown",
+      turns: [{
+        ...runningSession.turns[0],
+        status: "completed",
+        phase: "responding",
+        revision: 2,
+        lastMessage: "最终结果。",
+      }],
+      updatedAt: "2026-08-05T00:00:02.000Z",
+    };
+    publishAiSessionSnapshotForTest(events, {
+      sessions: [completedSession],
+      updatedAt: completedSession.updatedAt,
+    }, { scope: { instanceId: "inst_1" } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const completedUpdate = calls.filter((call) => call.type === "update").at(-1);
+    assert.equal(completedUpdate.messageId, "om_progress_1");
+    assert.match(completedUpdate.card.body.elements[0].content, /^instance-main · codex completed\n/);
+    assert.match(completedUpdate.card.body.elements[0].content, /最终结果。/);
+    const updateCount = calls.filter((call) => call.type === "update").length;
+
+    publishAiSessionSnapshotForTest(events, {
+      sessions: [{
+        ...completedSession,
+        turns: [{ ...completedSession.turns[0], revision: 3 }],
+        updatedAt: "2026-08-05T00:00:03.000Z",
+      }],
+      updatedAt: "2026-08-05T00:00:03.000Z",
+    }, { scope: { instanceId: "inst_1" } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    assert.equal(calls.filter((call) => call.type === "send").length, 1);
+    assert.equal(calls.filter((call) => call.type === "update").length, updateCount);
+  } finally {
+    runtime.stopAll();
+  }
 });
 
 test("control plane wechat bridge polls messages and sends replies", async (t) => {
