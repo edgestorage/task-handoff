@@ -14836,7 +14836,7 @@ test("control plane telegram bridge falls back from markdown v2 to legacy markdo
   assert.equal(sent[1].body.text, "Use *markdown* please");
 });
 
-test("control plane chat bridge settings cover telegram wechat and dingding", async (t) => {
+test("control plane chat bridge settings cover telegram wechat dingding and lark", async (t) => {
   const app = await createControlPlaneApp({
     dataDir: tempDataDir("control-plane-chat-bridges"),
     logger: false,
@@ -14902,11 +14902,35 @@ test("control plane chat bridge settings cover telegram wechat and dingding", as
   assert.equal(dingding.body.data.settings.clientSecretSet, true);
   assert.equal(dingding.body.data.settings.robotCode, "robot-code");
 
+  const larkBridge = await json(app, "POST", "/api/chat-gateway/bridges", {
+    channel: "lark",
+    name: "Feishu Main",
+  });
+  assert.equal(larkBridge.statusCode, 200);
+
+  const lark = await json(app, "PATCH", `/api/chat-gateway/bridges/${larkBridge.body.data.id}`, {
+    token: "cli_lark_app_id",
+    defaultChatId: "oc_lark_chat",
+    allowedUserIds: ["ou_lark_user"],
+    settings: {
+      appSecret: "lark-app-secret",
+      domain: "feishu",
+    },
+  });
+  assert.equal(lark.statusCode, 200);
+  assert.equal(lark.body.data.token, undefined);
+  assert.equal(lark.body.data.tokenSet, true);
+  assert.equal(lark.body.data.settings.appSecret, undefined);
+  assert.equal(lark.body.data.settings.appSecretSet, true);
+  assert.equal(lark.body.data.settings.domain, "feishu");
+
   const bridges = await json(app, "GET", "/api/chat-gateway/bridges");
   assert.equal(bridges.statusCode, 200);
   assert.equal(bridges.body.data.filter((bridge) => bridge.channel === "telegram").length, 2);
   assert.equal(bridges.body.data.find((bridge) => bridge.channel === "dingding").settings.clientSecret, undefined);
   assert.equal(bridges.body.data.find((bridge) => bridge.channel === "dingding").settings.clientSecretSet, true);
+  assert.equal(bridges.body.data.find((bridge) => bridge.channel === "lark").settings.appSecret, undefined);
+  assert.equal(bridges.body.data.find((bridge) => bridge.channel === "lark").settings.appSecretSet, true);
 });
 
 test("control plane wechat bridge polls messages and sends replies", async (t) => {

@@ -1,5 +1,6 @@
 import type { ChatBridgeConfig, ChatGatewayMessage, ChatSessionBinding, PendingRoute } from "@task-handoff/protocol/control-plane";
 import type { DWClientDownStream } from "dingtalk-stream";
+import type { NormalizedMessage } from "@larksuiteoapi/node-sdk";
 import { createInlineKeyboard } from "@task-handoff/core/core/chat-interactions";
 import type { ChatInlineKeyboard, ChatInteractionPayload } from "@task-handoff/core/core/chat-interactions";
 import {
@@ -33,12 +34,15 @@ import {
 } from "../adapters/telegram.ts";
 import { pollWechatMessages } from "../adapters/wechat.ts";
 import { DingdingBridgeRuntimeManager } from "./dingding-bridge-runtime.ts";
+import { LarkBridgeRuntimeManager, type LarkChannelFactoryInput } from "./lark-bridge-runtime.ts";
+import type { LarkChannelLike, LarkRuntimeState } from "../adapters/lark.ts";
 import { AsyncTtlCache } from "./async-ttl-cache.ts";
 import { TelegramMessageAggregator, type TelegramMessageContext } from "./telegram-message-aggregator.ts";
 import { TelegramAiSessionCallbacks } from "./telegram-ai-session-callbacks.ts";
 import { PendingRouteNotifier } from "./pending-route-notifier.ts";
 
 export { createDingdingStreamClient } from "./dingding-bridge-runtime.ts";
+export { createLarkSdkChannel } from "./lark-bridge-runtime.ts";
 
 type Timer = ReturnType<typeof setInterval>;
 type ChatGatewayLogger = {
@@ -73,6 +77,7 @@ type TelegramOwnedProgressEntry = {
 type DingdingRuntimeBridge = DingdingRuntimeState;
 type ControlPlaneChatGatewayRuntimeOptions = {
   createDingdingClient?: (input: { clientId: string; clientSecret: string }) => DingdingClientLike;
+  createLarkChannel?: (input: LarkChannelFactoryInput) => LarkChannelLike;
   aiSessions?: {
     onSnapshot: (listener: (update: ControlPlaneAiSessionSnapshotUpdate) => void) => () => void;
   };
@@ -160,6 +165,7 @@ export class ControlPlaneChatGatewayRuntime {
   private bridgePollingGenerations = new Map<string, number>();
   private bridgePolls = new Map<string, { generation: number; promise: Promise<void> }>();
   private readonly dingdingBridges: DingdingBridgeRuntimeManager;
+  private readonly larkBridges: LarkBridgeRuntimeManager;
   private bridgeErrors = new Map<string, string>();
   private telegramOffsets = new Map<string, number>();
   private seenTelegramUpdates = new Set<string>();
@@ -248,6 +254,16 @@ export class ControlPlaneChatGatewayRuntime {
       onError: (bridgeId, error) => this.bridgeErrors.set(bridgeId, errorMessage(error)),
       clearError: (bridgeId) => this.bridgeErrors.delete(bridgeId),
     });
+    this.larkBridges = new LarkBridgeRuntimeManager({
+      createChannel: options.createLarkChannel,
+      logger: {
+        info: (data, message) => this.logInfo(data, message),
+        warn: (data, message) => this.logWarn(data, message),
+      },
+      onMessage: (bridge, runtime, message) => this.handleLarkMessage(bridge, runtime, message),
+      onError: (bridgeId, error) => this.bridgeErrors.set(bridgeId, errorMessage(error)),
+      clearError: (bridgeId) => this.bridgeErrors.delete(bridgeId),
+    });
     this.stopAiSessionListener = options.aiSessions?.onSnapshot((update) => {
       void this.deliverAiSessionSnapshot(update.instanceId, update.aiSessions).catch((error) => {
         this.logWarn({
@@ -285,7 +301,7 @@ export class ControlPlaneChatGatewayRuntime {
   }
 
   startBridge(id: string) {
-    if (this.bridgeTimers.has(id) || this.dingdingBridges.has(id)) {
+    if (this.bridgeTimers.has(id) || this.dingdingBridges.has(id) || this.larkBridges.has(id)) {
       this.logAiSessionDelivery({
         stage: "bridge-start-skipped-running",
         bridgeId: id,
@@ -306,6 +322,9 @@ export class ControlPlaneChatGatewayRuntime {
     if (bridge.channel === "dingding") {
       return this.startDingdingBridge(bridge);
     }
+    if (bridge.channel === "lark") {
+      return this.startLarkBridge(bridge);
+    }
     if (bridge.channel !== "telegram") {
       this.bridgeErrors.set(id, `${bridge.channel} bridge is not supported in the control plane.`);
       return this.status();
@@ -325,6 +344,7 @@ export class ControlPlaneChatGatewayRuntime {
       this.bridgeTimers.delete(id);
     }
     this.dingdingBridges.stop(id);
+    this.larkBridges.stop(id);
     this.telegramMessageAggregator.stopBridge(id);
     return this.status();
   }
@@ -336,11 +356,13 @@ export class ControlPlaneChatGatewayRuntime {
       ...this.bridgeTimers.keys(),
       ...this.bridgePolls.keys(),
       ...this.dingdingBridges.ids(),
+      ...this.larkBridges.ids(),
     ]);
     for (const id of bridgeIds) {
       this.stopBridge(id);
     }
     this.dingdingBridges.stopAll();
+    this.larkBridges.stopAll();
     this.telegramMessageAggregator.stop();
     this.telegramAiSessionCallbacks.clear();
     this.stopAiSessionListener?.();
@@ -361,6 +383,9 @@ export class ControlPlaneChatGatewayRuntime {
     if (bridge.channel === "dingding") {
       return this.status();
     }
+    if (bridge.channel === "lark") {
+      return this.status();
+    }
     this.bridgeErrors.set(id, `${bridge.channel} bridge is not supported in the control plane.`);
     return this.status();
   }
@@ -375,7 +400,7 @@ export class ControlPlaneChatGatewayRuntime {
       id: bridge.id,
       channel: bridge.channel,
       name: bridge.name,
-      running: this.bridgeTimers.has(bridge.id) || this.dingdingBridges.isRunning(bridge.id),
+      running: this.bridgeTimers.has(bridge.id) || this.dingdingBridges.isRunning(bridge.id) || this.larkBridges.isRunning(bridge.id),
       tokenSet: Boolean(bridge.tokenSet),
       defaultChatId: bridge.defaultChatId,
       lastUpdateId: this.telegramOffsets.get(bridge.id),
@@ -463,6 +488,72 @@ export class ControlPlaneChatGatewayRuntime {
   private startDingdingBridge(bridge: ChatBridgeConfig) {
     this.dingdingBridges.start(bridge);
     return this.status();
+  }
+
+  private startLarkBridge(bridge: ChatBridgeConfig) {
+    this.larkBridges.start(bridge);
+    return this.status();
+  }
+
+  private async handleLarkMessage(bridge: ChatBridgeConfig, runtime: LarkRuntimeState, message: NormalizedMessage) {
+    const allowed = this.larkAllowed(bridge, message.senderId);
+    const text = String(message.content || "").trim();
+    if (!allowed || !text) {
+      this.logWarn({
+        bridgeId: bridge.id,
+        chatId: message.chatId,
+        senderId: message.senderId,
+        allowed,
+        hasText: Boolean(text),
+      }, "lark message ignored");
+      return;
+    }
+    if (!bridge.defaultChatId) {
+      this.updateChatBridge(bridge.id, { defaultChatId: message.chatId });
+    }
+    this.logInfo({
+      bridgeId: bridge.id,
+      chatId: message.chatId,
+      senderId: message.senderId,
+      chatType: message.chatType,
+      messageId: message.messageId,
+      textPreview: compactLogText(text),
+    }, "lark chat gateway message received");
+    let result: ChatGatewayResult;
+    try {
+      result = await this.service.handleChatGatewayMessage({
+        source: {
+          type: "chat-gateway",
+          channel: "lark",
+          bridgeId: bridge.id,
+          chatSessionId: message.chatId,
+          userId: message.senderId,
+        },
+        message: { text, attachments: [] },
+      });
+    } catch (error) {
+      await runtime.channel.send(message.chatId, { markdown: `Failed to handle message: ${errorMessage(error)}` });
+      return;
+    }
+    const reply = replyFromGatewayResult(result);
+    if (!reply) return;
+    const adapter = createChatGatewaySendAdapter({
+      fetchImpl: this.fetchImpl,
+      bridge,
+      larkRuntime: runtime,
+    });
+    const sent = await adapter.send(message.chatId, reply);
+    if (sent) {
+      this.logInfo({
+        bridgeId: bridge.id,
+        chatId: message.chatId,
+        senderId: message.senderId,
+        provider: sent.provider,
+        interactionId: sent.interactionId,
+        routed: asRecord(result).routed === true,
+        replyPreview: compactLogText(reply),
+      }, "lark chat gateway reply sent");
+    }
   }
 
   private async handleDingdingRobotMessage(bridge: ChatBridgeConfig, runtime: DingdingRuntimeBridge, message: DWClientDownStream) {
@@ -744,6 +835,7 @@ export class ControlPlaneChatGatewayRuntime {
       fetchImpl: this.fetchImpl,
       bridge,
       dingdingRuntime: this.dingdingBridges.get(bridge.id),
+      larkRuntime: this.larkBridges.get(bridge.id),
     });
     return adapter.send(chatId, text, { replyMarkup });
   }
@@ -1024,6 +1116,20 @@ export class ControlPlaneChatGatewayRuntime {
       bridge.allowedUserIds = [normalized];
       this.updateChatBridge(bridge.id, { allowedUserIds: bridge.allowedUserIds });
       this.logInfo({ bridgeId: bridge.id, userId: normalized }, "dingding user bound");
+      return true;
+    }
+    return bridge.allowedUserIds.includes(normalized);
+  }
+
+  private larkAllowed(bridge: ChatBridgeConfig, userId: string | undefined) {
+    const normalized = String(userId || "").trim();
+    if (!normalized) {
+      return false;
+    }
+    if (bridge.allowedUserIds.length === 0) {
+      bridge.allowedUserIds = [normalized];
+      this.updateChatBridge(bridge.id, { allowedUserIds: bridge.allowedUserIds });
+      this.logInfo({ bridgeId: bridge.id, userId: normalized }, "lark user bound");
       return true;
     }
     return bridge.allowedUserIds.includes(normalized);

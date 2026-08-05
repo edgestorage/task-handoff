@@ -1880,7 +1880,7 @@ export function sanitizeCrossVersionControlledInstanceHeartbeat(
   return pickObjectFields(input, knownKeys);
 }
 
-export const ChatChannelSchema = z.enum(["web", "telegram", "wechat", "dingding"]);
+export const ChatChannelSchema = z.enum(["web", "telegram", "wechat", "dingding", "lark"]);
 
 export const ChatBridgeConfigSchema = z
   .object({
