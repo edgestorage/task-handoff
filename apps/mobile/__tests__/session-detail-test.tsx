@@ -1,12 +1,15 @@
-import { fireEvent, render, waitFor } from '@testing-library/react-native';
-import { StyleSheet } from 'react-native';
+import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
+import { Animated, Keyboard, PixelRatio, StyleSheet } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ControlPlaneAiSessionSummarySchema } from '@task-handoff/control-plane-client';
 
-import { detailItems, SessionDetail } from '../src/ai-sessions/SessionDetail';
+import { conversationDetailItems, detailItems, SessionDetail } from '../src/ai-sessions/SessionDetail';
 import { SessionWorkspace } from '../src/ai-sessions/SessionWorkspace';
 import type { MobileAiSessionActionCoordinator } from '../src/ai-sessions/actions';
-import { SafeMarkdown, safeMarkdownLink, sanitizeMarkdown } from '../src/components/SafeMarkdown';
+import { CHARACTER_FADE_MS, SafeMarkdown, shouldAnimateMarkdownText, safeMarkdownLink, sanitizeMarkdown, StreamingMarkdownText } from '../src/components/SafeMarkdown';
+import { nextStreamingMarkdownCommit } from '../src/components/useStreamingMarkdown';
+import { MobileAiSessionPermissionStore } from '../src/ai-sessions/permission-store';
+import type { ValueStore } from '../src/platform/secure-storage';
 
 const session = ControlPlaneAiSessionSummarySchema.parse({
   id: 'session-1', agent: 'codex', title: 'Long session', status: 'running', phase: 'tool',
@@ -22,6 +25,34 @@ const session = ControlPlaneAiSessionSummarySchema.parse({
 test('detail preserves turn and streaming message identity order', () => {
   const items = detailItems(session, [{ instanceId: 'instance-1', sessionId: 'session-1', turnId: 'turn-1', itemId: 'item-1', receivedText: 'Streaming result', status: 'streaming', updatedAt: '2026-08-05T00:01:00.000Z' }]);
   expect(items.map((item) => [item.role, item.text])).toEqual([['user', 'Please **test** this'], ['assistant', 'Streaming result']]);
+  expect(items[1]).toEqual(expect.objectContaining({ streamKey: 'turn-1:item-1', streaming: true }));
+});
+
+test('short detail content does not force a full viewport scroll range', async () => {
+  const shortSession = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    currentTool: undefined,
+    subAgents: [],
+    turns: [{ ...session.turns![0], lastMessage: 'Done.', status: 'completed' }],
+  });
+  const screen = await render(<SessionDetail bottomInset={98} messages={[]} session={shortSession} />);
+  const contentStyle = StyleSheet.flatten(screen.getByTestId('session-detail-scroll').props.contentContainerStyle);
+
+  expect(contentStyle.flexGrow).toBeUndefined();
+  expect(contentStyle.paddingBottom).toBe(114);
+  screen.unmount();
+});
+
+test('turn mode replaces the previous assistant item when a new item starts', () => {
+  const messages = [
+    { instanceId: 'instance-1', sessionId: 'session-1', turnId: 'turn-1', itemId: 'item-z', receivedText: 'Earlier assistant message', status: 'complete' as const, updatedAt: '2026-08-05T00:01:00.000Z' },
+    { instanceId: 'instance-1', sessionId: 'session-1', turnId: 'turn-1', itemId: 'item-a', receivedText: 'New assistant message', status: 'streaming' as const, updatedAt: '2026-08-05T00:02:00.000Z' },
+  ];
+
+  expect(detailItems(session, messages)).toEqual([
+    expect.objectContaining({ role: 'user', text: 'Please **test** this' }),
+    expect.objectContaining({ role: 'assistant', text: 'New assistant message', streamKey: 'turn-1:item-a', streaming: true }),
+  ]);
 });
 
 test('detail navigates one authoritative turn and applies streaming only to latest', async () => {
@@ -45,6 +76,9 @@ test('detail navigates one authoritative turn and applies streaming only to late
   expect(screen.queryByText('shell · pnpm test')).toBeNull();
   screen.rerender(<SessionDetail messages={[]} mode="conversation" session={multiTurn} />);
   await waitFor(() => screen.getByText('Second prompt'));
+  expect(conversationDetailItems(multiTurn, []).map((item) => item.id)).toEqual([
+    'turn-1:user', 'turn-1:assistant', 'turn-2:user', 'turn-2:assistant',
+  ]);
   screen.getByText('First prompt');
   screen.getByText('shell · pnpm test');
   expect(screen.queryByText('Turn 1 of 2')).toBeNull();
@@ -62,7 +96,7 @@ test('safe markdown normalizes protocol text and rejects executable schemes', ()
 
 test('safe markdown renders semantic headings, emphasis, lists, and code', async () => {
   const screen = await render(
-    <SafeMarkdown>{'# Result\n\n**Ready**\n\n- first\n- second\n\n`inline`\n\n```ts\nconst ok = true;\n```'}</SafeMarkdown>,
+    <SafeMarkdown>{'# Result\n\n**Ready**\n\n- first\n- second\n\n`inline`\n\n```ts\nconst ok = true;\n```\n\n| Item | Status |\n| --- | --- |\n| Typecheck | Pass |'}</SafeMarkdown>,
   );
   screen.getByText('Result');
   screen.getByText('Ready');
@@ -70,6 +104,77 @@ test('safe markdown renders semantic headings, emphasis, lists, and code', async
   screen.getByText('second');
   screen.getByText('inline');
   screen.getByText(/const ok = true/);
+  expect(screen.getByTestId('markdown-code-scroll')).toBeTruthy();
+  expect(screen.getByTestId('markdown-table-scroll')).toBeTruthy();
+  expect(StyleSheet.flatten(screen.getByText('const').props.style).color).toBe('#cf222e');
+  expect(screen.getAllByTestId('markdown-list-item-content').every((item) => StyleSheet.flatten(item.props.style).flex === 0)).toBe(true);
+});
+
+test('fenced code constrains its cross-axis height inside a vertical conversation', async () => {
+  const screen = await render(<SafeMarkdown>{'```\nline one\nline two\nline three\n```'}</SafeMarkdown>);
+  expect(StyleSheet.flatten(screen.getByTestId('markdown-code-scroll').props.style).height).toBe(Math.ceil(60 * PixelRatio.getFontScale() + 24));
+  screen.unmount();
+});
+
+test('fenced code height follows the accessibility font scale', async () => {
+  const fontScale = jest.spyOn(PixelRatio, 'getFontScale').mockReturnValue(1.5);
+  const screen = await render(<SafeMarkdown>{'```\nline one\nline two\nline three\n```'}</SafeMarkdown>);
+  expect(StyleSheet.flatten(screen.getByTestId('markdown-code-scroll').props.style).height).toBe(114);
+  screen.unmount();
+  fontScale.mockRestore();
+});
+
+test('inline code aligns its measured code baseline with the body baseline', async () => {
+  const screen = await render(<SafeMarkdown>Use `StreamingMarkdownController` here.</SafeMarkdown>);
+  const inlineCode = screen.getByTestId('markdown-inline-code');
+  expect(StyleSheet.flatten(inlineCode.props.style)).toEqual(expect.objectContaining({
+    borderRadius: 6,
+    overflow: 'hidden',
+    paddingHorizontal: 4,
+  }));
+  const inlineCodeText = screen.getByTestId('markdown-inline-code-text');
+  expect(StyleSheet.flatten(inlineCodeText.props.style)).toEqual(expect.objectContaining({ fontSize: 13, lineHeight: 20 }));
+  await act(async () => {
+    fireEvent(screen.getByTestId('markdown-inline-code-baseline-probe'), 'textLayout', { nativeEvent: { lines: [{ ascender: 16, y: 0 }] } });
+    fireEvent(inlineCodeText, 'textLayout', { nativeEvent: { lines: [{ ascender: 14.5, y: 0 }] } });
+  });
+  expect(StyleSheet.flatten(screen.getByTestId('markdown-inline-code').props.style).transform).toEqual([{ translateY: 1.5 }]);
+  screen.unmount();
+});
+
+test('safe markdown can remove the final paragraph spacing inside message bubbles', async () => {
+  const screen = await render(<SafeMarkdown trimEnd>One paragraph</SafeMarkdown>);
+  const paragraph = screen.getByText('One paragraph').parent?.parent;
+  expect(StyleSheet.flatten(paragraph?.props.style).marginBottom).toBe(0);
+});
+
+test('streaming text uses the Web fade duration while tables and reduced motion disable character fades', () => {
+  expect(CHARACTER_FADE_MS).toBe(150);
+  expect(shouldAnimateMarkdownText(true, false, ['paragraph'])).toBe(true);
+  expect(shouldAnimateMarkdownText(true, false, ['td', 'tr', 'table'])).toBe(false);
+  expect(shouldAnimateMarkdownText(true, true, ['paragraph'])).toBe(false);
+});
+
+test('new text nodes created during streaming run the 150ms character fade', async () => {
+  const timing = jest.spyOn(Animated, 'timing').mockImplementation((_value, config) => ({
+    reset: () => undefined,
+    start: () => undefined,
+    stop: () => undefined,
+  }));
+  const screen = await render(<StreamingMarkdownText animate content="World" />);
+
+  await waitFor(() => expect(timing).toHaveBeenCalled());
+  expect(timing.mock.calls.some(([, config]) => config.duration === CHARACTER_FADE_MS && config.toValue === 1)).toBe(true);
+  screen.unmount();
+  timing.mockRestore();
+});
+
+test('streaming markdown commits whole graphemes and resets rewrites atomically', () => {
+  const target = `A👨‍👩‍👧‍👦B${'x'.repeat(100)}`;
+  const first = nextStreamingMarkdownCommit('', target);
+  expect(first).not.toContain('�');
+  expect(first.length).toBeLessThan(target.length);
+  expect(nextStreamingMarkdownCommit('old', 'replacement')).toBe('replacement');
 });
 
 test('detail renders active tool and expands active sub-agents within the protocol bound', async () => {
@@ -96,8 +201,11 @@ test('offline detail keeps cached content visible but disables authoritative act
     ...session,
     actions: { send: true, interrupt: true, approval: true },
     queue: {
-      pendingCount: 1,
-      items: [{ id: 'queue-1', message: 'queued work', attachments: [], references: [], status: 'failed', createdAt: session.startedAt, updatedAt: session.updatedAt, error: 'provider unavailable' }],
+      pendingCount: 2,
+      items: [
+        { id: 'queue-1', message: 'queued work', attachments: [], references: [], status: 'failed', createdAt: session.startedAt, updatedAt: session.updatedAt, error: 'provider unavailable' },
+        { id: 'queue-2', message: 'another queued message', attachments: [], references: [], status: 'queued', createdAt: session.startedAt, updatedAt: session.updatedAt },
+      ],
     },
   });
   const actions = {
@@ -113,32 +221,90 @@ test('offline detail keeps cached content visible but disables authoritative act
   screen.getByText('Live state is unavailable. Actions are disabled until the Control Plane snapshot recovers.');
   expect(screen.getByRole('button', { name: 'Stop' })).toBeDisabled();
   expect(screen.getByRole('button', { name: 'retry' })).toBeDisabled();
-  screen.getByText('failed · 0 attachments · 0 references');
+  screen.getByLabelText('Queued messages');
+  screen.getByText('queued work');
+  screen.getByText('another queued message');
+  expect(screen.getAllByRole('button', { name: 'remove' })).toHaveLength(2);
+  screen.getByText('Needs attention');
+  screen.getByText('Ask');
   screen.getByText('provider unavailable');
 });
 
-test('running composer makes draft action an explicit steer request', async () => {
+test('running composer sends in auto mode so the authoritative runtime queues the message', async () => {
   const actionable = ControlPlaneAiSessionSummarySchema.parse({ ...session, actions: { send: true, interrupt: true } });
   const send = jest.fn().mockReturnValue(new Promise(() => undefined));
   const actions = { subscribe: () => () => undefined, state: () => ({ phase: 'idle' as const }), approval: jest.fn(), interrupt: jest.fn(), queue: jest.fn(), send } as unknown as MobileAiSessionActionCoordinator;
   const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}><SessionWorkspace actions={actions} controlPlaneId="cp" instanceId="instance" messages={[]} session={actionable} /></SafeAreaProvider>);
   screen.getByRole('button', { name: 'Stop' });
-  fireEvent.changeText(screen.getByLabelText('Message'), 'Change direction');
-  await waitFor(() => screen.getByRole('button', { name: 'Steer' }));
-  fireEvent.press(screen.getByRole('button', { name: 'Steer' }));
-  await waitFor(() => expect(send).toHaveBeenCalledWith('instance', 'session-1', 'Change direction', 'ask', [], 'steer'));
+  fireEvent.changeText(screen.getByTestId('session-message-input'), 'Change direction');
+  await waitFor(() => screen.getByRole('button', { name: 'Send' }));
+  fireEvent.press(screen.getByRole('button', { name: 'Send' }));
+  await waitFor(() => expect(send).toHaveBeenCalledWith('instance', 'session-1', 'Change direction', undefined, [], 'auto'));
+  screen.unmount();
+});
+
+test('session composer restores its persisted permission mode before falling back to the instance default', async () => {
+  const values = new Map<string, string>();
+  const storage: ValueStore = {
+    available: async () => true,
+    get: async (key) => values.get(key),
+    set: async (key, value) => { values.set(key, value); },
+    remove: async (key) => { values.delete(key); },
+  };
+  const permissions = new MobileAiSessionPermissionStore(storage);
+  await permissions.write('cp', 'instance', session.id, 'auto-review');
+  const actions = { subscribe: () => () => undefined, state: () => ({ phase: 'idle' as const }), approval: jest.fn(), interrupt: jest.fn(), queue: jest.fn(), send: jest.fn() } as unknown as MobileAiSessionActionCoordinator;
+
+  const screen = await render(
+    <SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}>
+      <SessionWorkspace actions={actions} controlPlaneId="cp" defaultPermissionMode="full-access" instanceId="instance" messages={[]} permissions={permissions} session={session} />
+    </SafeAreaProvider>,
+  );
+
+  await waitFor(() => screen.getByRole('button', { name: 'Permission mode: Auto review' }));
+  screen.unmount();
+});
+
+test('session composer lets the server apply its authoritative permission default while the directory is still loading', async () => {
+  const actionable = ControlPlaneAiSessionSummarySchema.parse({ ...session, actions: { send: true, interrupt: true } });
+  const send = jest.fn().mockResolvedValue({ disposition: 'accepted' });
+  const actions = { subscribe: () => () => undefined, state: () => ({ phase: 'idle' as const }), approval: jest.fn(), interrupt: jest.fn(), queue: jest.fn(), send } as unknown as MobileAiSessionActionCoordinator;
+  const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}><SessionWorkspace actions={actions} controlPlaneId="cp" instanceId="instance" messages={[]} session={actionable} /></SafeAreaProvider>);
+
+  fireEvent.changeText(screen.getByTestId('session-message-input'), 'Use the instance default');
+  await waitFor(() => screen.getByRole('button', { name: 'Send' }));
+  fireEvent.press(screen.getByRole('button', { name: 'Send' }));
+  await waitFor(() => expect(send).toHaveBeenCalledWith('instance', 'session-1', 'Use the instance default', undefined, [], 'auto'));
   screen.unmount();
 });
 
 test('composer expands to a multiline editor while focused', async () => {
+  const timing = jest.spyOn(Animated, 'timing').mockImplementation(() => ({
+    reset: () => undefined,
+    start: (callback) => callback?.({ finished: true }),
+    stop: () => undefined,
+  }));
   const actionable = ControlPlaneAiSessionSummarySchema.parse({ ...session, actions: { send: true, interrupt: true } });
   const actions = { subscribe: () => () => undefined, state: () => ({ phase: 'idle' as const }), approval: jest.fn(), interrupt: jest.fn(), queue: jest.fn(), send: jest.fn() } as unknown as MobileAiSessionActionCoordinator;
   const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}><SessionWorkspace actions={actions} controlPlaneId="cp" instanceId="instance" messages={[]} session={actionable} /></SafeAreaProvider>);
-  const input = screen.getByLabelText('Message');
+  const input = screen.getByTestId('session-message-input');
 
-  expect(StyleSheet.flatten(input.props.style).minHeight).toBe(40);
+  expect(screen.getByTestId('session-composer-blur')).toBeTruthy();
+  expect(screen.getByTestId('session-composer').props.accessibilityState.expanded).toBe(false);
   fireEvent(input, 'focus');
-  await waitFor(() => expect(StyleSheet.flatten(screen.getByLabelText('Message').props.style).minHeight).toBe(94));
-  fireEvent(input, 'blur');
-  await waitFor(() => expect(StyleSheet.flatten(screen.getByLabelText('Message').props.style).minHeight).toBe(40));
+  await waitFor(() => expect(screen.getByTestId('session-composer').props.accessibilityState.expanded).toBe(true));
+  fireEvent(screen.getByTestId('session-message-input'), 'blur');
+  await waitFor(() => expect(screen.getByTestId('session-composer').props.accessibilityState.expanded).toBe(false));
+  timing.mockRestore();
+});
+
+test('touching outside the composer dismisses the keyboard', async () => {
+  const dismiss = jest.spyOn(Keyboard, 'dismiss').mockImplementation(() => undefined);
+  const actionable = ControlPlaneAiSessionSummarySchema.parse({ ...session, actions: { send: true, interrupt: true } });
+  const actions = { subscribe: () => () => undefined, state: () => ({ phase: 'idle' as const }), approval: jest.fn(), interrupt: jest.fn(), queue: jest.fn(), send: jest.fn() } as unknown as MobileAiSessionActionCoordinator;
+  const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}><SessionWorkspace actions={actions} controlPlaneId="cp" instanceId="instance" messages={[]} session={actionable} /></SafeAreaProvider>);
+
+  fireEvent(screen.getByTestId('session-workspace'), 'touchStart');
+  expect(dismiss).toHaveBeenCalledTimes(1);
+  dismiss.mockRestore();
 });

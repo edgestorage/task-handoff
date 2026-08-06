@@ -15850,6 +15850,7 @@ test("control plane dingding bridge sends action cards and handles callbacks", a
     assert.ok(cardCreate);
     assert.equal(cardCreate.body.userId, "staff-1");
     assert.equal(cardCreate.body.imGroupOpenDeliverModel.robotCode, "robot-code");
+    assert.equal(cardCreate.body.callbackRouteKey, "task_handoff_message");
     const cardParams = cardCreate.body.cardData.cardParamMap;
     assert.equal(cardParams.biz_conversation_id, "dingding-chat");
     assert.equal(cardParams.biz_sender_id, "staff-1");

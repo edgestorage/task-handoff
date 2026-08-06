@@ -2,6 +2,7 @@ import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { SystemIcon } from '../components/SystemIcon';
 import { useMobileTheme } from '../components/theme';
+import { useI18n, type Translate } from '../i18n';
 import type { AiSessionPermissionMode } from '@task-handoff/protocol/ai-sessions';
 
 type ComposerToolbarProps = {
@@ -20,26 +21,27 @@ type ComposerToolbarProps = {
 
 export function SessionComposerToolbar(props: ComposerToolbarProps) {
   const { colors } = useMobileTheme();
-  const chooseAttachment = () => Alert.alert('Add attachment', undefined, [
-    { text: 'Photo', onPress: props.onAddImage },
-    { text: 'Device file', onPress: props.onAddFile },
-    { text: 'Workspace file', onPress: props.onAddRuntimeFile },
-    { text: 'Cancel', style: 'cancel' },
+  const { t } = useI18n();
+  const chooseAttachment = () => Alert.alert(t('composer.addAttachment'), undefined, [
+    { text: t('composer.photo'), onPress: props.onAddImage },
+    { text: t('composer.deviceFile'), onPress: props.onAddFile },
+    { text: t('composer.workspaceFile'), onPress: props.onAddRuntimeFile },
+    { text: t('common.cancel'), style: 'cancel' },
   ]);
-  const choosePermissionMode = () => Alert.alert('Permission mode', undefined, [
-    { text: 'Ask before changes', onPress: () => props.onPermissionModeChange('ask') },
-    { text: 'Auto review', onPress: () => props.onPermissionModeChange('auto-review') },
-    { text: 'Full access', onPress: () => props.onPermissionModeChange('full-access') },
-    { text: 'Cancel', style: 'cancel' },
+  const choosePermissionMode = () => Alert.alert(t('composer.permissionMode'), undefined, [
+    { text: t('composer.askBeforeChanges'), onPress: () => props.onPermissionModeChange('ask') },
+    { text: t('composer.autoReview'), onPress: () => props.onPermissionModeChange('auto-review') },
+    { text: t('composer.fullAccess'), onPress: () => props.onPermissionModeChange('full-access') },
+    { text: t('common.cancel'), style: 'cancel' },
   ]);
   return <View style={styles.toolbar}>
-    <IconButton android="add_circle_outline" ios="plus.circle" label="Add attachment" disabled={props.imageDisabled && props.fileDisabled && props.runtimeFileDisabled} onPress={chooseAttachment} />
-    <Pressable accessibilityRole="button" accessibilityLabel={`Permission mode: ${permissionLabel(props.permissionMode)}`} onPress={choosePermissionMode} style={[styles.permission, { backgroundColor: colors.surfaceMuted }]}> 
+    <IconButton android="add_circle_outline" ios="plus.circle" label={t('composer.addAttachment')} disabled={props.imageDisabled && props.fileDisabled && props.runtimeFileDisabled} onPress={chooseAttachment} />
+    <Pressable accessibilityRole="button" accessibilityLabel={t('composer.permissionModeValue', { mode: permissionLabel(props.permissionMode, t) })} onPress={choosePermissionMode} style={[styles.permission, { backgroundColor: colors.surfaceMuted }]}>
       <SystemIcon android="shield" color={props.permissionMode === 'full-access' ? colors.error : colors.textMuted} ios={permissionIcon(props.permissionMode)} size={15} />
-      <Text style={[styles.permissionText, { color: props.permissionMode === 'full-access' ? colors.error : colors.text }]}>{permissionLabel(props.permissionMode)}</Text>
+      <Text style={[styles.permissionText, { color: props.permissionMode === 'full-access' ? colors.error : colors.text }]}>{permissionLabel(props.permissionMode, t)}</Text>
       <SystemIcon android="expand_more" color={colors.textMuted} ios="chevron.down" size={10} />
     </Pressable>
-    {props.showInterrupt ? <IconButton android="stop_circle" ios="stop.circle.fill" label="Interrupt" color={colors.error} disabled={props.interruptDisabled} onPress={props.onInterrupt} /> : null}
+    {props.showInterrupt ? <IconButton android="stop_circle" ios="stop.circle.fill" label={t('composer.interrupt')} color={colors.error} disabled={props.interruptDisabled} onPress={props.onInterrupt} /> : null}
   </View>;
 }
 
@@ -51,8 +53,8 @@ export function NativePrimaryButton({ busy, disabled, label, systemImage, onPres
   </Pressable>;
 }
 
-export function permissionLabel(mode: AiSessionPermissionMode) {
-  return mode === 'ask' ? 'Ask' : mode === 'auto-review' ? 'Auto review' : 'Full access';
+export function permissionLabel(mode: AiSessionPermissionMode, t: Translate) {
+  return mode === 'ask' ? t('composer.ask') : mode === 'auto-review' ? t('composer.autoReview') : t('composer.fullAccess');
 }
 
 function permissionIcon(mode: AiSessionPermissionMode): Parameters<typeof SystemIcon>[0]['ios'] {

@@ -3,27 +3,29 @@ import { buttonStyle, font, foregroundStyle, frame, lineLimit, listSectionSpacin
 import { StyleSheet } from 'react-native';
 
 import { useMobileTheme } from '../components/theme';
+import { useI18n } from '../i18n';
 import type { InstanceHistoryProps, InstanceOverviewProps } from './instance-section-types';
 
 export function InstanceOverview(props: InstanceOverviewProps) {
   const { colors, dark } = useMobileTheme();
+  const { t } = useI18n();
   return <Host colorScheme={dark ? 'dark' : 'light'} seedColor={colors.primary} style={styles.overview}>
     <Form modifiers={[listSectionSpacing('compact')]}>
-      <Section title="INSTANCE">
-        <ValueRow icon="server.rack" label="Node" value={props.nodeName} />
-        <ValueRow icon="shippingbox" label="Runtime" value={props.runtime} />
-        <ValueRow icon="folder" label="Workspace" value={props.workspace} />
-        <ValueRow icon="clock" label="Heartbeat" value={props.heartbeat} />
-        <ValueRow icon={props.protocolCompatible ? 'checkmark.seal' : 'exclamationmark.triangle'} label="Protocol" value={props.protocol} warning={!props.protocolCompatible} />
+      <Section title={t('nav.instance').toLocaleUpperCase()}>
+        <ValueRow icon="server.rack" label={t('nav.node')} value={props.nodeName} />
+        <ValueRow icon="shippingbox" label={t('instance.runtime')} value={props.runtime} />
+        <ValueRow icon="folder" label={t('instance.workspace')} value={props.workspace} />
+        <ValueRow icon="clock" label={t('instance.heartbeat')} value={props.heartbeat} />
+        <ValueRow icon={props.protocolCompatible ? 'checkmark.seal' : 'exclamationmark.triangle'} label={t('instance.protocol')} value={props.protocol} warning={!props.protocolCompatible} />
       </Section>
       <Section>
-        <Button label="New AI Session" systemImage="square.and.pencil" onPress={props.onCreateSession} />
+        <Button label={t('nav.newSession')} systemImage="square.and.pencil" onPress={props.onCreateSession} />
         <Button onPress={props.onShowSessions}>
           <HStack spacing={10}>
             <Image color={colors.primary} size={19} systemName="bubble.left.and.bubble.right.fill" />
             <VStack alignment="leading" spacing={2} modifiers={[frame({ maxWidth: Infinity, alignment: 'leading' })]}>
-              <Text modifiers={[font({ weight: 'semibold' })]}>AI Sessions</Text>
-              <Text modifiers={[font({ size: 12 }), foregroundStyle('secondary')]}>{props.activeSessionCount} active · {props.problemSessionCount} need attention</Text>
+              <Text modifiers={[font({ weight: 'semibold' })]}>{t('nav.aiSessions')}</Text>
+              <Text modifiers={[font({ size: 12 }), foregroundStyle('secondary')]}>{t('instance.sessionSummary', { active: props.activeSessionCount, problem: props.problemSessionCount })}</Text>
             </VStack>
             <Image color={colors.textMuted} size={12} systemName="chevron.right" />
           </HStack>
@@ -35,22 +37,23 @@ export function InstanceOverview(props: InstanceOverviewProps) {
 
 export function InstanceHistory({ items, loading, onOpen }: InstanceHistoryProps) {
   const { colors, dark } = useMobileTheme();
+  const { locale, t } = useI18n();
   const height = loading || !items.length ? 138 : Math.min(72 + items.length * 66, 380);
   return <Host colorScheme={dark ? 'dark' : 'light'} seedColor={colors.primary} style={[styles.history, { height }]}>
     <Form modifiers={[listSectionSpacing('compact')]}>
-      <Section title={`HISTORY${items.length ? ` · ${items.length}` : ''}`}>
-        {loading ? <HStack spacing={9}><ProgressView /><Text modifiers={[foregroundStyle('secondary')]}>Loading history…</Text></HStack> : null}
+      <Section title={`${t('instance.history')}${items.length ? ` · ${items.length}` : ''}`}>
+        {loading ? <HStack spacing={9}><ProgressView /><Text modifiers={[foregroundStyle('secondary')]}>{t('history.loading')}</Text></HStack> : null}
         {!loading && items.map((item) => <Button key={item.id} onPress={() => onOpen(item)} modifiers={[buttonStyle('plain')]}>
           <HStack spacing={10}>
             <Image color={colors.textMuted} size={18} systemName="clock.arrow.circlepath" />
             <VStack alignment="leading" spacing={3} modifiers={[frame({ maxWidth: Infinity, alignment: 'leading' })]}>
-              <Text modifiers={[font({ weight: 'semibold' }), lineLimit(2)]}>{item.title || item.userPrompt || 'Archived session'}</Text>
-              <Text modifiers={[font({ size: 12 }), foregroundStyle('secondary'), lineLimit(1)]}>{item.agent} · {new Date(item.lastActiveAt).toLocaleString()}</Text>
+              <Text modifiers={[font({ weight: 'semibold' }), lineLimit(2)]}>{item.title || item.userPrompt || t('instance.archivedSession')}</Text>
+              <Text modifiers={[font({ size: 12 }), foregroundStyle('secondary'), lineLimit(1)]}>{item.agent} · {new Date(item.lastActiveAt).toLocaleString(locale)}</Text>
             </VStack>
             <Image color={colors.textMuted} size={12} systemName="chevron.right" />
           </HStack>
         </Button>)}
-        {!loading && !items.length ? <Label title="No archived sessions yet" systemImage="clock.arrow.circlepath" modifiers={[foregroundStyle('secondary')]} /> : null}
+        {!loading && !items.length ? <Label title={t('instance.archivedEmpty')} systemImage="clock.arrow.circlepath" modifiers={[foregroundStyle('secondary')]} /> : null}
       </Section>
     </Form>
   </Host>;

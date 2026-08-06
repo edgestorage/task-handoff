@@ -28,7 +28,7 @@ export class MobileAiSessionActionCoordinator {
   state(key: string) { return this.states.get(key) ?? { phase: 'idle' as const }; }
   subscribe(listener: () => void) { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
 
-  send(instanceId: string, sessionId: string, message: string, permissionMode: AiSessionPermissionMode = 'ask', attachments: AiSessionMessageAttachmentRef[] = [], mode: AiSessionSendMode = 'auto') {
+  send(instanceId: string, sessionId: string, message: string, permissionMode?: AiSessionPermissionMode, attachments: AiSessionMessageAttachmentRef[] = [], mode: AiSessionSendMode = 'auto') {
     return this.run(instanceId, sessionId, 'send', undefined, () => this.client.aiSessions.sendMessage(instanceId, sessionId, {
       message, mode, permissionMode, attachments,
     }));

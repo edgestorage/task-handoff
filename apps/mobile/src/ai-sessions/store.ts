@@ -57,6 +57,15 @@ export type MobileStreamingMessage = {
   settledAt?: string;
 };
 
+export function activeMobileStreamingMessage(
+  messages: readonly MobileStreamingMessage[],
+  turnId: string,
+) {
+  // Message entries retain their creation order in the profile projection. Like
+  // the Web active-message ref, a delta for an older item must not reactivate it.
+  return messages.filter((message) => message.turnId === turnId).at(-1);
+}
+
 type Listener = () => void;
 
 export class MobileAiSessionStore {

@@ -120,4 +120,46 @@ describe('DirectControlPlaneTransport', () => {
     listeners.get('message')?.({ data: JSON.stringify({ v: 1, type: 'streams.hello', topic: 'system', payload: {} }) });
     expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'streams.hello' }));
   });
+
+  test('unwraps forwarded node-agent events before delivering them to consumers', async () => {
+    const listeners = new Map<string, (event: { data?: unknown }) => void>();
+    const socket = {
+      readyState: 0,
+      addEventListener: jest.fn((type: string, listener: (event: { data?: unknown }) => void) => listeners.set(type, listener)),
+      close: jest.fn(),
+      send: jest.fn(),
+    };
+    const onEvent = jest.fn();
+    const onError = jest.fn();
+    const transport = new DirectControlPlaneTransport(profile, secureStore(), {
+      probeImpl: async () => target,
+      webSocketFactory: () => socket,
+    });
+    transport.connectEvents({ onOpen: jest.fn(), onEvent, onError, onClose: jest.fn() });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    listeners.get('message')?.({
+      data: JSON.stringify({
+        type: 'node-agent.event.forwarded',
+        scope: { nodeId: 'node-1' },
+        event: {
+          v: 1,
+          type: 'ai-session.message-delta',
+          topic: 'ai.sessions',
+          payload: { sessionId: 'session-1', messageId: 'message-1', delta: 'Hello' },
+          scope: { instanceId: 'instance-1' },
+        },
+      }),
+    });
+
+    expect(onEvent).toHaveBeenCalledWith({
+      v: 1,
+      type: 'ai-session.message-delta',
+      topic: 'ai.sessions',
+      payload: { sessionId: 'session-1', messageId: 'message-1', delta: 'Hello' },
+      scope: { nodeId: 'node-1', instanceId: 'instance-1' },
+    });
+    expect(onError).not.toHaveBeenCalled();
+    expect(socket.close).not.toHaveBeenCalled();
+  });
 });

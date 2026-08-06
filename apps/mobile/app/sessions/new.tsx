@@ -1,21 +1,27 @@
 import * as Crypto from 'expo-crypto';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { AiSessionPermissionMode } from '@task-handoff/protocol/ai-sessions';
+import type { ControlPlaneNodeLocalFolder } from '@task-handoff/control-plane-client';
 
 import { NewSessionForm } from '../../src/ai-sessions/NewSessionForm';
 import { initialInstanceId, instanceCreateGuidance } from '../../src/ai-sessions/new-session-types';
 import { createMobileAiSession, lifecycleGuidance } from '../../src/ai-sessions/session-lifecycle';
 import { createDirectControlPlaneClient } from '../../src/control-plane/client';
-import { mobileCreateRequestStore, mobileProfileStore, mobileSecureStore } from '../../src/control-plane/runtime';
+import { mobileCreateRequestStore, mobilePermissionStore, mobileProfileStore, mobileSecureStore } from '../../src/control-plane/runtime';
 import { useActiveDirectories } from '../../src/directories/use-directories';
+import { mobileDirectoryStore } from '../../src/directories/store';
+import { useI18n } from '../../src/i18n';
 
 export default function NewAiSessionRoute() {
+  const { t } = useI18n();
   const { instanceId: requestedInstanceId } = useLocalSearchParams<{ instanceId?: string }>();
   const { controlPlaneId, state } = useActiveDirectories();
   const [selection, setSelection] = useState<{ instanceId?: string; agent?: string; cwd?: string }>({});
   const [message, setMessage] = useState('');
-  const [permissionMode, setPermissionMode] = useState<AiSessionPermissionMode>('ask');
+  const [permissionSelection, setPermissionSelection] = useState<{ instanceId: string; mode: AiSessionPermissionMode }>();
+  const [savingPermission, setSavingPermission] = useState(false);
+  const [folderState, setFolderState] = useState<{ nodeId: string; folders: ControlPlaneNodeLocalFolder[] }>({ nodeId: '', folders: [] });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
 
@@ -29,8 +35,25 @@ export default function NewAiSessionRoute() {
   const cwd = selection.instanceId === selectedInstanceId && selection.cwd !== undefined
     ? selection.cwd
     : selectedInstance?.workspace.path ?? '';
+  const permissionMode = permissionSelection?.instanceId === selectedInstanceId
+    ? permissionSelection.mode
+    : selectedInstance?.config.defaultCodexPermissionMode ?? 'ask';
 
   const guidance = instanceCreateGuidance(selectedInstance);
+  useEffect(() => {
+    const nodeId = selectedInstance?.nodeId;
+    if (!nodeId) return;
+    const abort = new AbortController();
+    void mobileProfileStore.active().then(async (profile) => {
+      if (!profile || abort.signal.aborted) return;
+      const nextFolders = await createDirectControlPlaneClient(profile, mobileSecureStore).api.resources.nodeLocalFolders(nodeId, abort.signal);
+      if (!abort.signal.aborted) setFolderState({ nodeId, folders: nextFolders });
+    }).catch(() => {
+      if (!abort.signal.aborted) setFolderState({ nodeId, folders: [] });
+    });
+    return () => abort.abort();
+  }, [selectedInstance?.nodeId]);
+
   const create = async () => {
     if (!selectedInstance || !controlPlaneId || guidance) return;
     setBusy(true);
@@ -48,6 +71,7 @@ export default function NewAiSessionRoute() {
         permissionMode,
         clientRequestId: requestId,
       });
+      if (agent === 'codex') await mobilePermissionStore.write(controlPlaneId, selectedInstance.id, result.aiSessionId, permissionMode).catch(() => undefined);
       await mobileCreateRequestStore.clear(controlPlaneId, selectedInstance.id, requestId);
       router.replace({ pathname: '/sessions/[instanceId]/[sessionId]', params: { instanceId: selectedInstance.id, sessionId: result.aiSessionId } });
     } catch (cause) {
@@ -57,19 +81,40 @@ export default function NewAiSessionRoute() {
     }
   };
 
+  const updatePermissionMode = async (next: AiSessionPermissionMode) => {
+    if (!selectedInstance || agent !== 'codex' || !controlPlaneId || savingPermission || next === permissionMode) return;
+    const previous = permissionMode;
+    setPermissionSelection({ instanceId: selectedInstance.id, mode: next });
+    setSavingPermission(true);
+    setError(undefined);
+    try {
+      const profile = await mobileProfileStore.active();
+      if (!profile || profile.identity.controlPlaneId !== controlPlaneId) throw new Error('No active Control Plane.');
+      const saved = await createDirectControlPlaneClient(profile, mobileSecureStore).api.resources.updateInstanceDefaultPermissionMode(selectedInstance.id, next);
+      mobileDirectoryStore.setInstanceDefaultPermissionMode(controlPlaneId, selectedInstance.id, saved);
+      setPermissionSelection({ instanceId: selectedInstance.id, mode: saved });
+    } catch (cause) {
+      setPermissionSelection({ instanceId: selectedInstance.id, mode: previous });
+      setError(cause instanceof Error ? cause.message : 'Could not save the default permission mode.');
+    } finally {
+      setSavingPermission(false);
+    }
+  };
+
   return <>
-    <Stack.Screen options={{ title: 'New AI Session' }} />
+    <Stack.Screen options={{ title: t('nav.newSession') }} />
     <NewSessionForm
       key={selectedInstance?.id || 'no-instance'}
       instances={state.instances}
       selectedInstance={selectedInstance}
+      folders={folderState.nodeId === selectedInstance?.nodeId ? folderState.folders : []}
       selectedInstanceId={selectedInstanceId}
       selectedAgent={agent}
       cwd={cwd}
       message={message}
       permissionMode={permissionMode}
-      busy={busy}
-      disabled={busy || Boolean(guidance) || !agent || !cwd.trim() || !message.trim()}
+      busy={busy || savingPermission}
+      disabled={busy || savingPermission || Boolean(guidance) || !agent || !cwd.trim() || !message.trim()}
       error={error || guidance}
       onInstanceChange={(instanceId) => {
         const instance = state.instances.find((candidate) => candidate.id === instanceId);
@@ -79,7 +124,7 @@ export default function NewAiSessionRoute() {
       onAgentChange={(nextAgent) => setSelection({ instanceId: selectedInstanceId, agent: nextAgent, cwd })}
       onCwdChange={(nextCwd) => setSelection({ instanceId: selectedInstanceId, agent, cwd: nextCwd })}
       onMessageChange={setMessage}
-      onPermissionModeChange={setPermissionMode}
+      onPermissionModeChange={(next) => { void updatePermissionMode(next); }}
       onCreate={() => { void create(); }}
     />
   </>;

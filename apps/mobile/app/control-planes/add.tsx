@@ -16,11 +16,13 @@ import {
 } from '../../src/control-plane/direct-enrollment';
 import { mobileProfileStore as profiles, mobileSecureStore as secureStore } from '../../src/control-plane/runtime';
 import { isMobileTestMode } from '../../src/platform/build-variant';
+import { useI18n, type Translate } from '../../src/i18n';
 
 type EnrollmentStep = 'address' | 'identity' | 'credentials';
 
 export default function AddControlPlaneScreen() {
   const { colors } = useMobileTheme();
+  const { t } = useI18n();
   const [step, setStep] = useState<EnrollmentStep>('address');
   const [address, setAddress] = useState('');
   const [target, setTarget] = useState<VerifiedDirectControlPlane>();
@@ -45,7 +47,7 @@ export default function AddControlPlaneScreen() {
     } catch (cause) {
       setTarget(undefined);
       setExisting(false);
-      setError(messageFor(cause));
+      setError(messageFor(cause, t));
     } finally {
       setBusy(false);
     }
@@ -62,7 +64,7 @@ export default function AddControlPlaneScreen() {
       setPassword('');
       router.replace('/(tabs)/inbox');
     } catch (cause) {
-      setError(messageFor(cause));
+      setError(messageFor(cause, t));
     } finally {
       setBusy(false);
     }
@@ -70,12 +72,12 @@ export default function AddControlPlaneScreen() {
 
   return (
     <>
-      <Stack.Screen options={{ title: step === 'address' ? 'Add Control Plane' : 'Connect' }} />
+      <Stack.Screen options={{ title: step === 'address' ? t('nav.addControlPlane') : t('enroll.connect') }} />
       <Screen>
         <View style={styles.progressHeader}>
-          <Text style={[styles.stepLabel, { color: colors.primary }]}>STEP {stepNumber(step)} OF 3</Text>
-          <Text accessibilityRole="header" style={[styles.title, { color: colors.text }]}>{titleFor(step)}</Text>
-          <Text style={[styles.description, { color: colors.textMuted }]}>{descriptionFor(step)}</Text>
+          <Text style={[styles.stepLabel, { color: colors.primary }]}>{t('enroll.step', { current: stepNumber(step) })}</Text>
+          <Text accessibilityRole="header" style={[styles.title, { color: colors.text }]}>{titleFor(step, t)}</Text>
+          <Text style={[styles.description, { color: colors.textMuted }]}>{descriptionFor(step, t)}</Text>
         </View>
 
         <View accessibilityRole="progressbar" accessibilityValue={{ min: 1, max: 3, now: stepNumber(step) }} style={[styles.progressTrack, { backgroundColor: colors.border }]}> 
@@ -84,12 +86,12 @@ export default function AddControlPlaneScreen() {
 
         {step === 'address' ? (
           <>
-            <SectionLabel label="CONNECTION" color={colors.textMuted} />
+            <SectionLabel label={t('enroll.connection')} color={colors.textMuted} />
             <View style={[styles.formGroup, { backgroundColor: colors.surface, borderColor: colors.border }]}> 
               <View style={styles.inputRow}>
                 <SystemIcon android="language" color={colors.textMuted} ios="network" size={19} />
                 <TextInput
-                  accessibilityLabel="Control Plane address"
+                  accessibilityLabel={t('enroll.address')}
                   autoCapitalize="none"
                   autoCorrect={false}
                   editable={!busy}
@@ -105,52 +107,52 @@ export default function AddControlPlaneScreen() {
                 {address ? <Pressable accessibilityLabel="Clear address" hitSlop={10} onPress={() => setAddress('')}><SystemIcon android="cancel" color={colors.textMuted} ios="xmark.circle.fill" size={18} /></Pressable> : null}
               </View>
             </View>
-            <Text style={[styles.footnote, { color: colors.textMuted }]}>We verify the server’s signed identity before asking for your credentials.</Text>
+            <Text style={[styles.footnote, { color: colors.textMuted }]}>{t('enroll.verifyHelp')}</Text>
 
             {isMobileTestMode ? (
               <View style={[styles.notice, { backgroundColor: colors.notice }]}> 
                 <SystemIcon android="warning" color={colors.noticeText} ios="exclamationmark.triangle.fill" size={17} />
-                <Text style={[styles.noticeText, { color: colors.noticeText }]}><Text style={styles.noticeStrong}>Test mode: </Text>HTTP is allowed on a trusted local network. Its traffic is not encrypted.</Text>
+                <Text style={[styles.noticeText, { color: colors.noticeText }]}><Text style={styles.noticeStrong}>{t('enroll.testMode')}</Text>{t('enroll.testModeHelp')}</Text>
               </View>
             ) : null}
 
-            <View style={styles.primaryAction}><NativeActionButton disabled={busy || !address.trim()} icon={{ android: 'verified_user', ios: 'checkmark.shield' }} label="Verify Address" onPress={() => { void verifyAddress(); }} /></View>
+            <View style={styles.primaryAction}><NativeActionButton disabled={busy || !address.trim()} icon={{ android: 'verified_user', ios: 'checkmark.shield' }} label={t('enroll.verifyAddress')} onPress={() => { void verifyAddress(); }} /></View>
           </>
         ) : null}
 
         {step === 'identity' && target ? (
           <>
-            <SectionLabel label="VERIFIED IDENTITY" color={colors.textMuted} />
+            <SectionLabel label={t('enroll.verifiedIdentity')} color={colors.textMuted} />
             <View style={[styles.formGroup, { backgroundColor: colors.surface, borderColor: colors.border }]}> 
-              <IdentityRow icon="network" label="Address" value={target.origin} />
+              <IdentityRow icon="network" label={t('controlPlane.address')} value={target.origin} />
               <Divider color={colors.border} />
-              <IdentityRow icon="server.rack" label="Control Plane ID" value={target.identity.controlPlaneId} />
+              <IdentityRow icon="server.rack" label={t('controlPlane.id')} value={target.identity.controlPlaneId} />
               <Divider color={colors.border} />
-              <IdentityRow icon="key.horizontal" label="Signing key" value={target.identity.publicKey.fingerprint} monospace />
+              <IdentityRow icon="key.horizontal" label={t('enroll.signingKey')} value={target.identity.publicKey.fingerprint} monospace />
             </View>
             <View style={styles.verifiedNote}>
               <SystemIcon android="verified_user" color="#34c759" ios="checkmark.seal.fill" size={20} />
-              <Text style={[styles.verifiedText, { color: colors.textMuted }]}>The address and signed server identity match. Review these details before continuing.</Text>
+              <Text style={[styles.verifiedText, { color: colors.textMuted }]}>{t('enroll.verifiedHelp')}</Text>
             </View>
-            {existing ? <View style={[styles.notice, { backgroundColor: colors.notice }]}><Text style={[styles.noticeText, { color: colors.noticeText }]}>This Control Plane is already saved. Signing in will update its verified address and session.</Text></View> : null}
-            <View style={styles.primaryAction}><NativeActionButton icon={{ android: 'arrow_forward', ios: 'arrow.right' }} label="Continue to Sign In" onPress={() => { setError(undefined); setStep('credentials'); }} /></View>
-            <NativeActionButton compact label="Use a Different Address" onPress={() => { setError(undefined); setTarget(undefined); setStep('address'); }} />
+            {existing ? <View style={[styles.notice, { backgroundColor: colors.notice }]}><Text style={[styles.noticeText, { color: colors.noticeText }]}>{t('enroll.existing')}</Text></View> : null}
+            <View style={styles.primaryAction}><NativeActionButton icon={{ android: 'arrow_forward', ios: 'arrow.right' }} label={t('enroll.continueSignIn')} onPress={() => { setError(undefined); setStep('credentials'); }} /></View>
+            <NativeActionButton compact label={t('enroll.differentAddress')} onPress={() => { setError(undefined); setTarget(undefined); setStep('address'); }} />
           </>
         ) : null}
 
         {step === 'credentials' && target ? (
           <>
-            <SectionLabel label="SIGN IN" color={colors.textMuted} />
+            <SectionLabel label={t('enroll.signIn')} color={colors.textMuted} />
             <View style={[styles.formGroup, { backgroundColor: colors.surface, borderColor: colors.border }]}> 
               <View style={styles.inputRow}>
                 <SystemIcon android="person" color={colors.textMuted} ios="person" size={19} />
                 <TextInput
-                  accessibilityLabel="Username"
+                  accessibilityLabel={t('enroll.username')}
                   autoCapitalize="none"
                   autoCorrect={false}
                   editable={!busy}
                   onChangeText={(value) => { setUsername(value); setError(undefined); }}
-                  placeholder="Username"
+                  placeholder={t('enroll.username')}
                   placeholderTextColor={colors.textMuted}
                   returnKeyType="next"
                   style={[styles.input, { color: colors.text }]}
@@ -162,11 +164,11 @@ export default function AddControlPlaneScreen() {
               <View style={styles.inputRow}>
                 <SystemIcon android="lock" color={colors.textMuted} ios="lock" size={19} />
                 <TextInput
-                  accessibilityLabel="Password"
+                  accessibilityLabel={t('enroll.password')}
                   editable={!busy}
                   onChangeText={(value) => { setPassword(value); setError(undefined); }}
                   onSubmitEditing={() => { if (username.trim() && password && !busy) void connect(); }}
-                  placeholder="Password"
+                  placeholder={t('enroll.password')}
                   placeholderTextColor={colors.textMuted}
                   returnKeyType="go"
                   secureTextEntry
@@ -176,13 +178,13 @@ export default function AddControlPlaneScreen() {
                 />
               </View>
             </View>
-            <Text numberOfLines={1} style={[styles.footnote, { color: colors.textMuted }]}>Signing in to {target.origin}</Text>
-            <View style={styles.primaryAction}><NativeActionButton disabled={busy || !username.trim() || !password} icon={{ android: 'login', ios: 'person.badge.key' }} label={existing ? 'Sign In and Update' : 'Connect Control Plane'} onPress={() => { void connect(); }} /></View>
-            <NativeActionButton compact disabled={busy} label="Back to Identity" onPress={() => { setError(undefined); setStep('identity'); }} />
+            <Text numberOfLines={1} style={[styles.footnote, { color: colors.textMuted }]}>{t('enroll.signingInto', { address: target.origin })}</Text>
+            <View style={styles.primaryAction}><NativeActionButton disabled={busy || !username.trim() || !password} icon={{ android: 'login', ios: 'person.badge.key' }} label={existing ? t('enroll.signInUpdate') : t('enroll.connectControlPlane')} onPress={() => { void connect(); }} /></View>
+            <NativeActionButton compact disabled={busy} label={t('enroll.backIdentity')} onPress={() => { setError(undefined); setStep('identity'); }} />
           </>
         ) : null}
 
-        {busy ? <View style={styles.busyRow}><ActivityIndicator accessibilityLabel={step === 'address' ? 'Verifying address' : 'Connecting'} /><Text style={[styles.busyText, { color: colors.textMuted }]}>{step === 'address' ? 'Verifying signed identity…' : 'Signing in securely…'}</Text></View> : null}
+        {busy ? <View style={styles.busyRow}><ActivityIndicator accessibilityLabel={step === 'address' ? t('enroll.verifying') : t('enroll.connecting')} /><Text style={[styles.busyText, { color: colors.textMuted }]}>{step === 'address' ? t('enroll.verifyingIdentity') : t('enroll.signingIn')}</Text></View> : null}
         {error ? <View style={[styles.errorGroup, { backgroundColor: colors.errorSoft }]}><SystemIcon android="error" color={colors.error} ios="exclamationmark.circle.fill" size={18} /><Text accessibilityLiveRegion="polite" style={[styles.error, { color: colors.error }]}>{error}</Text></View> : null}
       </Screen>
     </>
@@ -214,21 +216,21 @@ function stepNumber(step: EnrollmentStep) {
   return step === 'address' ? 1 : step === 'identity' ? 2 : 3;
 }
 
-function titleFor(step: EnrollmentStep) {
-  if (step === 'address') return 'Where is your Control Plane?';
-  if (step === 'identity') return 'Review its identity';
-  return 'Sign in securely';
+function titleFor(step: EnrollmentStep, t: Translate) {
+  if (step === 'address') return t('enroll.addressTitle');
+  if (step === 'identity') return t('enroll.identityTitle');
+  return t('enroll.credentialsTitle');
 }
 
-function descriptionFor(step: EnrollmentStep) {
-  if (step === 'address') return isMobileTestMode ? 'Enter an HTTP or HTTPS address reachable from this device.' : 'Enter the HTTPS address reachable from this device.';
-  if (step === 'identity') return 'Make sure this is the Control Plane you intend to trust.';
-  return 'Your password is sent only to the verified address above.';
+function descriptionFor(step: EnrollmentStep, t: Translate) {
+  if (step === 'address') return isMobileTestMode ? t('enroll.addressDescriptionTest') : t('enroll.addressDescription');
+  if (step === 'identity') return t('enroll.identityDescription');
+  return t('enroll.credentialsDescription');
 }
 
-function messageFor(cause: unknown) {
+function messageFor(cause: unknown, t: Translate) {
   if (cause instanceof DirectEnrollmentError) return cause.message;
-  return cause instanceof Error ? cause.message : 'Could not add the Control Plane.';
+  return cause instanceof Error ? cause.message : t('enroll.error');
 }
 
 const styles = StyleSheet.create({

@@ -11,6 +11,7 @@ import { canCreateSession, initialInstanceId, instanceCreateGuidance } from '../
 
 const instance = ControlPlaneInstanceDirectoryEntrySchema.parse({
   id: 'instance-1', name: 'Instance', nodeId: 'node-1', status: 'running', health: 'ok', connectionStatus: 'online', ready: true,
+  config: { defaultCodexPermissionMode: 'full-access' },
   observedAt: '2026-08-05T00:00:00.000Z', runtime: { id: 'runtime-1', name: 'Docker', type: 'docker' }, workspace: { status: 'ready', path: '/workspace' },
   protocol: { version: '2026-08-01', compatible: true }, aiSessions: { runningCount: 0, waitingCount: 0, staleCount: 0, idleCount: 0, problemCount: 0, updatedAt: '2026-08-05T00:00:00.000Z' },
   availableAgents: [{ id: 'codex', name: 'Codex', kind: 'tty', supportsCwdSelection: true }],
@@ -31,7 +32,7 @@ test('create owns stable idempotency identity and accepts created or already-cre
   expect((await createMobileAiSession(api, input)).disposition).toBe('created');
   expect((await createMobileAiSession(api, input)).disposition).toBe('already-created');
   expect(create.mock.calls[0][1].clientRequestId).toBe(create.mock.calls[1][1].clientRequestId);
-  expect(create.mock.calls[0][1].permissionMode).toBe('ask');
+  expect(create.mock.calls[0][1].permissionMode).toBe('full-access');
 });
 
 test('new session selection honors a requested instance and exposes readiness guidance', () => {
@@ -43,11 +44,23 @@ test('new session selection honors a requested instance and exposes readiness gu
   expect(instanceCreateGuidance(offline)).toMatch(/not ready/);
 });
 
+test('directory exposes the authoritative default permission mode used by new sessions', () => {
+  expect(instance.config.defaultCodexPermissionMode).toBe('full-access');
+});
+
 test('create forwards the selected permission mode', async () => {
   const create = jest.fn().mockResolvedValue({ disposition: 'created', aiSessionId: 'session-1', providerSessionId: 'provider-1', creationSource: 'ai-session' });
   const api = { aiSessions: { create } } as unknown as ControlPlaneClient;
   await createMobileAiSession(api, { instance, agent: 'codex', cwd: '/workspace', message: 'Build it', permissionMode: 'auto-review', clientRequestId: 'mobile-request-1' });
   expect(create.mock.calls[0][1].permissionMode).toBe('auto-review');
+});
+
+test('Claude creation does not receive the Codex permission mode', async () => {
+  const create = jest.fn().mockResolvedValue({ disposition: 'created', aiSessionId: 'session-1', providerSessionId: 'provider-1', creationSource: 'ai-session' });
+  const api = { aiSessions: { create } } as unknown as ControlPlaneClient;
+  const claudeInstance = { ...instance, availableAgents: [...instance.availableAgents, { id: 'claude', name: 'Claude', kind: 'tty' as const, supportsCwdSelection: true }] };
+  await createMobileAiSession(api, { instance: claudeInstance, agent: 'claude', cwd: '/workspace', message: 'Build it', permissionMode: 'full-access', clientRequestId: 'mobile-request-1' });
+  expect(create.mock.calls[0][1].permissionMode).toBeUndefined();
 });
 
 test('create request identity survives a new store instance and changes only with the payload', async () => {

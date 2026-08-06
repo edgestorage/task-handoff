@@ -33,10 +33,12 @@ import {
   connectionModeLabel,
   instanceStateLabel,
   nodeDisplayName,
+  nodeStateLabel,
   nodeSummary,
   relativeObservedAt,
 } from './presentation';
 import type { MobileDirectoryProfileState } from './store';
+import { useI18n, type Translate } from '../i18n';
 
 type NodesDirectoryProps = {
   state: MobileDirectoryProfileState;
@@ -45,11 +47,12 @@ type NodesDirectoryProps = {
 
 export function NodesDirectory({ state, onOpen }: NodesDirectoryProps) {
   const { colors, dark } = useMobileTheme();
+  const { t } = useI18n();
   const instancesByNode = useMemo(() => groupInstancesByNode(state.instances), [state.instances]);
 
   return (
     <SafeAreaView edges={['top']} style={[styles.screen, { backgroundColor: colors.background }]}> 
-      <NativeText accessibilityRole="header" style={[styles.title, { color: colors.text }]}>Nodes</NativeText>
+      <NativeText accessibilityRole="header" style={[styles.title, { color: colors.text }]}>{t('nav.nodes')}</NativeText>
       <Host colorScheme={dark ? 'dark' : 'light'} seedColor={colors.primary} style={{ flex: 1 }} useViewportSizeMeasurement>
         <List modifiers={[listStyle('insetGrouped'), tint(colors.primary)]}>
         <DirectoryStateSections state={state} />
@@ -62,28 +65,28 @@ export function NodesDirectory({ state, onOpen }: NodesDirectoryProps) {
               footer={node.error ? <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle(colors.error)]}>{node.error.code}: {node.error.message}</Text> : undefined}
             >
               <Button
-                modifiers={[buttonStyle('plain'), frame({ maxWidth: Infinity, alignment: 'leading' }), accessibilityLabel(`Open ${node.name}`)]}
+                modifiers={[buttonStyle('plain'), frame({ maxWidth: Infinity, alignment: 'leading' }), accessibilityLabel(t('directories.open', { name: node.name }))]}
                 onPress={() => onOpen?.(node)}
               >
                 <HStack alignment="center" spacing={12}>
                   <Image color={colors.primary} size={21} systemName="server.rack" />
                   <VStack alignment="leading" spacing={2}>
                     <HStack spacing={6}>
-                      <Text modifiers={[font({ textStyle: 'body', weight: 'semibold' }), lineLimit(1)]}>{nodeDisplayName(node)}</Text>
+                      <Text modifiers={[font({ textStyle: 'body', weight: 'semibold' }), lineLimit(1)]}>{nodeDisplayName(node, t)}</Text>
                       <Image color={nodeStatusColor(node, colors.textMuted)} size={7} systemName="circle.fill" />
                     </HStack>
                     <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle({ type: 'hierarchical', style: 'secondary' }), lineLimit(1)]}>
-                      {nodeConnectionSummary(node)}
+                      {nodeConnectionSummary(node, t)}
                     </Text>
                   </VStack>
                   <Spacer />
-                  <Text modifiers={[font({ textStyle: 'caption' }), foregroundStyle({ type: 'hierarchical', style: 'secondary' })]}>{nodeSummary(instances.length, node)}</Text>
+                  <Text modifiers={[font({ textStyle: 'caption' }), foregroundStyle({ type: 'hierarchical', style: 'secondary' })]}>{nodeSummary(instances.length, node, t)}</Text>
                   <Image color={colors.textMuted} size={12} systemName="chevron.right" />
                 </HStack>
               </Button>
               {instances.map((instance) => <InstanceSummaryRow instance={instance} key={instance.id} />)}
               {!instances.length ? (
-                <Text modifiers={[font({ textStyle: 'subheadline' }), foregroundStyle({ type: 'hierarchical', style: 'secondary' })]}>No instances on this node.</Text>
+                <Text modifiers={[font({ textStyle: 'subheadline' }), foregroundStyle({ type: 'hierarchical', style: 'secondary' })]}>{t('directories.noInstancesOnNode')}</Text>
               ) : null}
             </Section>
           );
@@ -102,6 +105,7 @@ type InstancesDirectoryProps = {
 
 export function InstancesDirectory({ state, nodeId, onOpen }: InstancesDirectoryProps) {
   const { colors, dark } = useMobileTheme();
+  const { t } = useI18n();
   const [selectedNode, setSelectedNode] = useState(nodeId || 'all');
   const [selectedStatus, setSelectedStatus] = useState('all');
   const [selectedAi, setSelectedAi] = useState<InstanceAiFilter>('all');
@@ -122,25 +126,25 @@ export function InstancesDirectory({ state, nodeId, onOpen }: InstancesDirectory
         <List modifiers={[listStyle('insetGrouped'), tint(colors.primary)]}>
         <DirectoryStateSections state={state} />
         {nodeId ? (
-          <Section title="Status">
+          <Section title={t('directories.status')}>
             <HStack alignment="center" spacing={8}>
               <Image color={node?.health === 'ok' ? '#34c759' : colors.textMuted} size={8} systemName="circle.fill" />
               <Text modifiers={[font({ textStyle: 'subheadline' }), foregroundStyle({ type: 'hierarchical', style: 'secondary' })]}>
-                {node ? `${node.status} · ${node.health} · ${node.connectionMode}` : 'Node unavailable'}
+                {node ? `${nodeStateLabel(node, t)} · ${connectionModeLabel(node.connectionMode, t)}` : t('directories.nodeUnavailable')}
               </Text>
             </HStack>
           </Section>
         ) : null}
-        <Section title="Filters">
+        <Section title={t('directories.filters')}>
           {!nodeId && nodeIds.length > 1 ? (
-            <NativeFilter label="Node" onChange={setSelectedNode} value={selectedNode} values={['all', ...nodeIds]} labelFor={(value) => value === 'all' ? 'All Nodes' : nodeLabel(state, value)} />
+            <NativeFilter label={t('nav.node')} onChange={setSelectedNode} value={selectedNode} values={['all', ...nodeIds]} labelFor={(value) => value === 'all' ? t('directories.allNodes') : nodeLabel(state, value)} />
           ) : null}
-          {statuses.length > 1 ? <NativeFilter label="Status" onChange={setSelectedStatus} value={selectedStatus} values={['all', ...statuses]} /> : null}
-          <NativeFilter label="AI activity" onChange={(value) => setSelectedAi(value as InstanceAiFilter)} value={selectedAi} values={['all', 'active', 'problem', 'idle']} />
+          {statuses.length > 1 ? <NativeFilter label={t('directories.status')} labelFor={(value) => localizedFilterValue(value, t)} onChange={setSelectedStatus} value={selectedStatus} values={['all', ...statuses]} /> : null}
+          <NativeFilter label={t('directories.aiActivity')} labelFor={(value) => localizedFilterValue(value, t)} onChange={(value) => setSelectedAi(value as InstanceAiFilter)} value={selectedAi} values={['all', 'active', 'problem', 'idle']} />
         </Section>
         {!instances.length ? <EmptySection loading={state.phase === 'loading'} /> : null}
         {visibleNodeIds.map((visibleNodeId) => (
-          <Section key={visibleNodeId} title={nodeId ? `Instances (${instances.length})` : nodeLabel(state, visibleNodeId)}>
+          <Section key={visibleNodeId} title={nodeId ? `${t('directories.instances')} (${instances.length})` : nodeLabel(state, visibleNodeId)}>
             {(instancesByNode.get(visibleNodeId) ?? []).map((instance) => (
               <InstanceButton instance={instance} key={instance.id} onPress={() => onOpen?.(instance)} />
             ))}
@@ -153,8 +157,9 @@ export function InstancesDirectory({ state, nodeId, onOpen }: InstancesDirectory
 }
 
 function InstanceButton({ instance, onPress }: { instance: ControlPlaneInstanceDirectoryEntry; onPress(): void }) {
+  const { t } = useI18n();
   return (
-    <Button modifiers={[buttonStyle('plain'), frame({ maxWidth: Infinity, alignment: 'leading' }), accessibilityLabel(`Open ${instance.name}`)]} onPress={onPress}>
+    <Button modifiers={[buttonStyle('plain'), frame({ maxWidth: Infinity, alignment: 'leading' }), accessibilityLabel(t('directories.open', { name: instance.name }))]} onPress={onPress}>
       <HStack alignment="center" spacing={12}>
         <InstanceIdentity instance={instance} />
         <Spacer />
@@ -165,7 +170,8 @@ function InstanceButton({ instance, onPress }: { instance: ControlPlaneInstanceD
 }
 
 function InstanceSummaryRow({ instance }: { instance: ControlPlaneInstanceDirectoryEntry }) {
-  const activity = aiSessionSummary(instance.aiSessions);
+  const { t } = useI18n();
+  const activity = aiSessionSummary(instance.aiSessions, t);
   return (
     <HStack alignment="center" spacing={12}>
       <InstanceIdentity instance={instance} />
@@ -176,13 +182,14 @@ function InstanceSummaryRow({ instance }: { instance: ControlPlaneInstanceDirect
 }
 
 function InstanceIdentity({ instance }: { instance: ControlPlaneInstanceDirectoryEntry }) {
+  const { t } = useI18n();
   return (
     <HStack alignment="center" spacing={10}>
       <Image size={19} systemName="shippingbox" />
       <VStack alignment="leading" spacing={3}>
         <Text modifiers={[font({ textStyle: 'body', weight: 'medium' }), lineLimit(1)]}>{instance.name}</Text>
-        <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle({ type: 'hierarchical', style: 'secondary' }), lineLimit(1)]}>{instanceStateLabel(instance)} · {runtimeLabel(instance)}</Text>
-        {!instance.protocol.compatible ? <Text modifiers={[font({ textStyle: 'caption' }), foregroundStyle('#9a6700')]}>{instance.protocol.warning || 'Protocol version differs.'}</Text> : null}
+        <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle({ type: 'hierarchical', style: 'secondary' }), lineLimit(1)]}>{instanceStateLabel(instance, t)} · {runtimeLabel(instance)}</Text>
+        {!instance.protocol.compatible ? <Text modifiers={[font({ textStyle: 'caption' }), foregroundStyle('#9a6700')]}>{instance.protocol.warning || t('directories.protocolWarning')}</Text> : null}
         {instance.error ? <Text modifiers={[font({ textStyle: 'caption' }), foregroundStyle('#c9342f')]}>{instance.error.code}: {instance.error.message}</Text> : null}
       </VStack>
     </HStack>
@@ -198,10 +205,11 @@ function NativeFilter({ label, labelFor = capitalize, onChange, value, values }:
 }
 
 function DirectoryStateSections({ state }: { state: MobileDirectoryProfileState }) {
+  const { t } = useI18n();
   const message = state.phase === 'stale'
-    ? 'Showing cached directory data.'
+    ? t('directories.cached')
     : state.phase === 'offline'
-      ? 'Offline — showing the latest cached directory.'
+      ? t('directories.offlineCached')
       : undefined;
   return (
     <>
@@ -212,7 +220,8 @@ function DirectoryStateSections({ state }: { state: MobileDirectoryProfileState 
 }
 
 function EmptySection({ loading }: { loading: boolean }) {
-  return <Section><Text modifiers={[font({ textStyle: 'body' }), foregroundStyle({ type: 'hierarchical', style: 'secondary' })]}>{loading ? 'Loading…' : 'No entries.'}</Text></Section>;
+  const { t } = useI18n();
+  return <Section><Text modifiers={[font({ textStyle: 'body' }), foregroundStyle({ type: 'hierarchical', style: 'secondary' })]}>{loading ? t('directories.loading') : t('directories.noEntries')}</Text></Section>;
 }
 
 type InstanceAiFilter = 'all' | 'active' | 'problem' | 'idle';
@@ -247,16 +256,27 @@ function capitalize(value: string) {
   return value === 'all' ? 'All' : `${value.charAt(0).toUpperCase()}${value.slice(1)}`;
 }
 
+function localizedFilterValue(value: string, t: Translate) {
+  if (value === 'all') return t('sessions.filterAll');
+  if (value === 'active') return t('sessions.filterActive');
+  if (value === 'problem') return t('sessions.filterProblem');
+  if (value === 'idle') return t('sessions.filterIdle');
+  if (value === 'running') return t('status.running');
+  if (value === 'failed') return t('status.failed');
+  if (value === 'stopped') return t('status.stopped');
+  return capitalize(value);
+}
+
 const styles = StyleSheet.create({
   screen: { flex: 1 },
   title: { fontSize: 34, fontWeight: '700', letterSpacing: -0.8, lineHeight: 41, paddingHorizontal: 16, paddingTop: 16 },
 });
 
-function nodeConnectionSummary(node: ControlPlaneNodeDirectoryEntry) {
-  const connection = connectionModeLabel(node.connectionMode);
+function nodeConnectionSummary(node: ControlPlaneNodeDirectoryEntry, t: Translate) {
+  const connection = connectionModeLabel(node.connectionMode, t);
   return node.status === 'online' && node.health === 'ok'
     ? connection
-    : `${connection} · ${relativeObservedAt(node.lastSeenAt || node.observedAt)}`;
+    : `${connection} · ${relativeObservedAt(node.lastSeenAt || node.observedAt, t)}`;
 }
 
 function nodeStatusColor(node: ControlPlaneNodeDirectoryEntry, fallback: string) {

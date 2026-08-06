@@ -30,6 +30,14 @@ export class MobileDirectoryStore {
     for (const listener of this.listeners.get(controlPlaneId) ?? []) listener();
     return next;
   }
+  setInstanceDefaultPermissionMode(controlPlaneId: string, instanceId: string, defaultCodexPermissionMode: ControlPlaneInstanceDirectoryEntry['config']['defaultCodexPermissionMode']) {
+    const current = this.profile(controlPlaneId);
+    return this.set(controlPlaneId, {
+      instances: current.instances.map((instance) => instance.id === instanceId
+        ? { ...instance, config: { ...instance.config, defaultCodexPermissionMode } }
+        : instance),
+    });
+  }
   clearProfile(controlPlaneId: string) {
     const deleted = this.profiles.delete(controlPlaneId);
     this.generations.set(controlPlaneId, this.generation(controlPlaneId) + 1);

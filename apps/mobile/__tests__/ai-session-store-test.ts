@@ -1,4 +1,4 @@
-import { MobileAiSessionStore, mobileControlPlaneQueryKeys } from '../src/ai-sessions/store';
+import { activeMobileStreamingMessage, MobileAiSessionStore, mobileControlPlaneQueryKeys } from '../src/ai-sessions/store';
 import { MobileAiSessionController } from '../src/ai-sessions/controller';
 import {
   applyControlPlaneAiSessionStreamEvent,
@@ -265,6 +265,21 @@ describe('MobileAiSessionStore identity isolation', () => {
       });
     }
     expect(Object.keys(store.profile('cp-bounded').messages)).toHaveLength(200);
+  });
+
+  test('keeps the newly created assistant item active when an older item receives a late delta', () => {
+    const store = new MobileAiSessionStore();
+    store.replaceSnapshot('cp-active', snapshot('instance-1', 'session-1'));
+    const append = (itemId: string, delta: string, generatedAt: string) => store.appendMessageDelta('cp-active', {
+      instanceId: 'instance-1', sessionId: 'session-1', providerSessionId: 'provider-1',
+      turnId: 'turn-1', itemId, delta, generatedAt,
+    });
+    append('item-old', 'old', '2026-08-05T00:10:00.000Z');
+    append('item-new', 'new', '2026-08-05T00:10:01.000Z');
+    append('item-old', ' late', '2026-08-05T00:10:02.000Z');
+
+    const active = activeMobileStreamingMessage(Object.values(store.profile('cp-active').messages), 'turn-1');
+    expect(active).toEqual(expect.objectContaining({ itemId: 'item-new', receivedText: 'new' }));
   });
 
   test('reconnects snapshot-first after an event socket closes while the app remains active', async () => {

@@ -63,6 +63,12 @@ describe('<InboxRoute />', () => {
       { id: 'one', userPrompt: 'Old prompt', lastMessage: 'Old response', status: 'completed', revision: 1 },
       { id: 'two', userPrompt: 'Current prompt', lastMessage: 'Current response', status: 'running', revision: 2 },
     ] })).toEqual(expect.objectContaining({ prompt: 'Current prompt', response: 'Current response', turnCount: 2, turnIndex: 1 }));
+    expect(inboxCardContent({ ...running, turns: [
+      { id: 'two', userPrompt: 'Current prompt', status: 'running', revision: 2 },
+    ] }, [
+      { instanceId: 'instance-1', sessionId: running.id, turnId: 'two', itemId: 'item-z', receivedText: 'Earlier assistant message', status: 'complete', updatedAt: running.updatedAt },
+      { instanceId: 'instance-1', sessionId: running.id, turnId: 'two', itemId: 'item-a', receivedText: 'New assistant message', status: 'streaming', updatedAt: running.updatedAt },
+    ])).toEqual(expect.objectContaining({ response: 'New assistant message' }));
     expect(snapshot.instances[0].aiSessions.sessions.filter((session) => matchesStatusFilter(session, 'active')).map((session) => session.id)).toEqual(['running']);
     expect(snapshot.instances[0].aiSessions.sessions.filter((session) => matchesStatusFilter(session, 'waiting')).map((session) => session.id)).toEqual(['approval']);
   });

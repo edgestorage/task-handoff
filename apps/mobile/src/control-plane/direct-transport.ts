@@ -19,6 +19,23 @@ const EventSchema = z.object({
   scope: z.object({ instanceId: z.string().optional(), nodeId: z.string().optional() }).passthrough().optional(),
 }).passthrough();
 
+const ForwardedEventSchema = z.object({
+  type: z.literal('node-agent.event.forwarded'),
+  event: EventSchema,
+  scope: z.object({ instanceId: z.string().optional(), nodeId: z.string().optional() }).passthrough().optional(),
+}).passthrough();
+
+const IncomingEventSchema = z.union([ForwardedEventSchema, EventSchema]);
+
+function normalizeIncomingEvent(event: z.infer<typeof IncomingEventSchema>): MobileControlPlaneEvent {
+  const forwarded = ForwardedEventSchema.safeParse(event);
+  if (!forwarded.success) return event;
+  return {
+    ...forwarded.data.event,
+    scope: { ...forwarded.data.scope, ...forwarded.data.event.scope },
+  };
+}
+
 type WebSocketLike = {
   readyState: number;
   addEventListener(type: 'open' | 'message' | 'error' | 'close', listener: (event: { data?: unknown }) => void): void;
@@ -120,9 +137,9 @@ export class DirectControlPlaneTransport implements MobileControlPlaneTransport 
         socket.addEventListener('message', (event) => {
           if (closed) return;
           try {
-            const parsed = EventSchema.safeParse(JSON.parse(String(event.data)));
+            const parsed = IncomingEventSchema.safeParse(JSON.parse(String(event.data)));
             if (!parsed.success) throw new Error('Event envelope did not match the protocol.');
-            handlers.onEvent(parsed.data as MobileControlPlaneEvent);
+            handlers.onEvent(normalizeIncomingEvent(parsed.data));
           } catch {
             handlers.onError(new MobileControlPlaneTransportError('DIRECT_EVENT_INVALID', 'The Control Plane sent an invalid event envelope.'));
             socket?.close(1002, 'Invalid event envelope');

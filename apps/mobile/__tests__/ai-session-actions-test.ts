@@ -3,6 +3,7 @@ import type { ControlPlaneClient } from '@task-handoff/control-plane-client';
 import { MobileAiSessionActionCoordinator, MobileAiSessionDraftStore, mobileAiSessionBusyKey } from '../src/ai-sessions/actions';
 import { MobileAiSessionStore } from '../src/ai-sessions/store';
 import type { SecureValueStore } from '../src/platform/secure-storage';
+import { MOBILE_AI_SESSION_PERMISSION_TTL_MS, MobileAiSessionPermissionStore } from '../src/ai-sessions/permission-store';
 
 function client(overrides: Partial<ControlPlaneClient['aiSessions']> = {}) {
   const snapshot = { updatedAt: '2026-08-05T00:00:00.000Z', instances: [] };
@@ -99,6 +100,29 @@ test('draft writes are serialized so an older native write cannot overwrite newe
     drafts.write('cp', 'instance', 'session', 'newer'),
   ]);
   expect(await drafts.read('cp', 'instance', 'session')).toBe('newer');
+});
+
+test('permission modes survive restart, expire after 30 days, and remain isolated by profile and session', async () => {
+  const values = new Map<string, string>();
+  const storage: SecureValueStore = {
+    available: async () => true,
+    get: async (key) => values.get(key),
+    set: async (key, value) => { values.set(key, value); },
+    remove: async (key) => { values.delete(key); },
+  };
+  const now = Date.parse('2026-08-06T00:00:00.000Z');
+  const permissions = new MobileAiSessionPermissionStore(storage);
+  await permissions.write('cp-a', 'instance', 'session', 'full-access', now);
+
+  const afterRestart = new MobileAiSessionPermissionStore(storage);
+  expect(await afterRestart.read('cp-a', 'instance', 'session', 'ask', now + 1)).toBe('full-access');
+  expect(await afterRestart.read('cp-b', 'instance', 'session', 'auto-review', now + 1)).toBe('auto-review');
+  expect(await afterRestart.read('cp-a', 'instance', 'other-session', 'ask', now + 1)).toBe('ask');
+  expect(await afterRestart.read('cp-a', 'instance', 'session', 'auto-review', now + MOBILE_AI_SESSION_PERMISSION_TTL_MS)).toBe('auto-review');
+
+  await afterRestart.clearProfile('cp-a');
+  expect(await new MobileAiSessionPermissionStore(storage).read('cp-a', 'instance', 'session', 'ask', now + 2)).toBe('ask');
+  expect(await new MobileAiSessionPermissionStore(storage).read('cp-b', 'instance', 'session', 'ask', now + 2)).toBe('auto-review');
 });
 
 test('a request finishing after page or profile switch only recovers its original Control Plane state', async () => {

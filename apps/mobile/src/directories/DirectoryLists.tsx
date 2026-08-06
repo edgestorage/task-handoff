@@ -7,16 +7,18 @@ import type { MobileDirectoryProfileState } from './store';
 import { useMobileTheme } from '../components/theme';
 import { SystemIcon } from '../components/SystemIcon';
 import { ScreenFlatList } from '../components/ScreenFlatList';
-import { aiSessionSummary, connectionModeLabel, instanceStateLabel, nodeDisplayName, nodeSummary, relativeObservedAt } from './presentation';
+import { aiSessionSummary, connectionModeLabel, instanceStateLabel, nodeDisplayName, nodeStateLabel, nodeSummary, relativeObservedAt } from './presentation';
+import { useI18n } from '../i18n';
 
 export function NodesDirectory({ state, onOpen }: { state: MobileDirectoryProfileState; onOpen?(node: ControlPlaneNodeDirectoryEntry): void }) {
   const { colors } = useMobileTheme();
-  return <SafeAreaView edges={['top']} style={[styles.screen, { backgroundColor: colors.background }]}><DirectoryList title="Nodes" state={state} data={state.nodes} keyOf={(node) => node.id} render={(node) => (
-    <DirectoryCard icon="node" onPress={() => onOpen?.(node)} title={nodeDisplayName(node)} subtitle={connectionModeLabel(node.connectionMode)}>
+  const { t } = useI18n();
+  return <SafeAreaView edges={['top']} style={[styles.screen, { backgroundColor: colors.background }]}><DirectoryList title={t('nav.nodes')} state={state} data={state.nodes} keyOf={(node) => node.id} render={(node) => (
+    <DirectoryCard icon="node" onPress={() => onOpen?.(node)} title={nodeDisplayName(node, t)} subtitle={connectionModeLabel(node.connectionMode, t)}>
       <View style={styles.nodeSummary}>
-        <Text style={[styles.meta, { color: colors.textMuted }]}>{nodeSummary(state.instances.filter((instance) => instance.nodeId === node.id).length, node)}</Text>
+        <Text style={[styles.meta, { color: colors.textMuted }]}>{nodeSummary(state.instances.filter((instance) => instance.nodeId === node.id).length, node, t)}</Text>
       </View>
-      {node.status === 'online' && node.health === 'ok' ? null : <Text style={[styles.meta, { color: colors.textMuted }]}>{relativeObservedAt(node.lastSeenAt || node.observedAt)}</Text>}
+      {node.status === 'online' && node.health === 'ok' ? null : <Text style={[styles.meta, { color: colors.textMuted }]}>{relativeObservedAt(node.lastSeenAt || node.observedAt, t)}</Text>}
       {node.error ? <Text style={[styles.error, { color: colors.error }]}>{node.error.code}: {node.error.message}</Text> : null}
     </DirectoryCard>
   )} /></SafeAreaView>;
@@ -24,6 +26,7 @@ export function NodesDirectory({ state, onOpen }: { state: MobileDirectoryProfil
 
 export function InstancesDirectory({ state, nodeId, onOpen }: { state: MobileDirectoryProfileState; nodeId?: string; onOpen?(instance: ControlPlaneInstanceDirectoryEntry): void }) {
   const { colors } = useMobileTheme();
+  const { t } = useI18n();
   const [selectedNode, setSelectedNode] = useState(nodeId || 'all');
   const [selectedStatus, setSelectedStatus] = useState('all');
   const [selectedAi, setSelectedAi] = useState<InstanceAiFilter>('all');
@@ -39,21 +42,21 @@ export function InstancesDirectory({ state, nodeId, onOpen }: { state: MobileDir
     {nodeId ? (
       <View style={[styles.nodeStatusSummary, { backgroundColor: colors.surface, borderColor: colors.border }]}> 
         <View style={[styles.nodeStatusDot, { backgroundColor: node?.health === 'ok' ? '#34c759' : colors.textMuted }]} />
-        <Text numberOfLines={1} style={[styles.nodeStatusText, { color: colors.textMuted }]}>{node ? `${node.status} · ${node.health} · ${node.connectionMode}` : 'Node unavailable'}</Text>
+        <Text numberOfLines={1} style={[styles.nodeStatusText, { color: colors.textMuted }]}>{node ? `${nodeStateLabel(node, t)} · ${connectionModeLabel(node.connectionMode, t)}` : t('directories.nodeUnavailable')}</Text>
       </View>
-    ) : <Text accessibilityRole="header" style={[styles.title, { color: colors.text }]}>Instances</Text>}
-    {nodeId ? <View style={styles.sectionHeading}><Text style={[styles.sectionTitle, { color: colors.text }]}>Instances</Text><Text style={[styles.sectionCount, { backgroundColor: colors.surfaceMuted, color: colors.textMuted }]}>{instances.length}</Text></View> : null}
+    ) : <Text accessibilityRole="header" style={[styles.title, { color: colors.text }]}>{t('directories.instances')}</Text>}
+    {nodeId ? <View style={styles.sectionHeading}><Text style={[styles.sectionTitle, { color: colors.text }]}>{t('directories.instances')}</Text><Text style={[styles.sectionCount, { backgroundColor: colors.surfaceMuted, color: colors.textMuted }]}>{instances.length}</Text></View> : null}
     <View accessibilityRole="toolbar" style={styles.filters}>
-      {!nodeId && nodes.length > 1 ? <FilterRow label="Node" values={['all', ...nodes]} value={selectedNode} onChange={setSelectedNode} /> : null}
-      {statuses.length > 1 ? <FilterRow label="Status" values={['all', ...statuses]} value={selectedStatus} onChange={setSelectedStatus} /> : null}
-      <FilterRow label="AI" values={['all', 'active', 'problem', 'idle']} value={selectedAi} onChange={(value) => setSelectedAi(value as InstanceAiFilter)} />
+      {!nodeId && nodes.length > 1 ? <FilterRow label={t('nav.node')} values={['all', ...nodes]} value={selectedNode} onChange={setSelectedNode} /> : null}
+      {statuses.length > 1 ? <FilterRow label={t('directories.status')} values={['all', ...statuses]} value={selectedStatus} onChange={setSelectedStatus} /> : null}
+      <FilterRow label={t('directories.ai')} values={['all', 'active', 'problem', 'idle']} value={selectedAi} onChange={(value) => setSelectedAi(value as InstanceAiFilter)} />
     </View>
     <DirectoryListContent state={state} data={instances} keyOf={(instance) => instance.id} render={(instance) => (
-      <DirectoryCard icon="instance" onPress={() => onOpen?.(instance)} title={instance.name} subtitle={instanceStateLabel(instance)}>
+      <DirectoryCard icon="instance" onPress={() => onOpen?.(instance)} title={instance.name} subtitle={instanceStateLabel(instance, t)}>
       <Text style={[styles.meta, { color: colors.textMuted }]}>{!nodeId ? `Node ${instance.nodeId} · ` : ''}{instance.runtime.name || instance.runtime.id}{instance.runtime.type ? ` · ${instance.runtime.type}` : ''}</Text>
-      <Text style={[styles.meta, { color: colors.textMuted }]}>{instance.lastHeartbeatAt ? relativeObservedAt(instance.lastHeartbeatAt) : 'Heartbeat not observed'}</Text>
-      {aiSessionSummary(instance.aiSessions) ? <Text style={[styles.meta, { color: colors.textMuted }]}>AI · {aiSessionSummary(instance.aiSessions)}</Text> : null}
-      {!instance.protocol.compatible ? <Text style={[styles.warning, { color: colors.noticeText }]}>{instance.protocol.warning || 'Protocol version differs.'}</Text> : null}
+      <Text style={[styles.meta, { color: colors.textMuted }]}>{instance.lastHeartbeatAt ? relativeObservedAt(instance.lastHeartbeatAt, t) : t('directories.heartbeatMissing')}</Text>
+      {aiSessionSummary(instance.aiSessions, t) ? <Text style={[styles.meta, { color: colors.textMuted }]}>AI · {aiSessionSummary(instance.aiSessions, t)}</Text> : null}
+      {!instance.protocol.compatible ? <Text style={[styles.warning, { color: colors.noticeText }]}>{instance.protocol.warning || t('directories.protocolWarning')}</Text> : null}
       {instance.error ? <Text style={[styles.error, { color: colors.error }]}>{instance.error.code}: {instance.error.message}</Text> : null}
     </DirectoryCard>
     )} />
@@ -70,11 +73,12 @@ function DirectoryList<T>({ title, state, data, keyOf, render }: { title: string
 
 function DirectoryListContent<T>({ state, data, keyOf, render }: { state: MobileDirectoryProfileState; data: readonly T[]; keyOf(item: T): string; render(item: T): React.ReactElement }) {
   const { colors } = useMobileTheme();
+  const { t } = useI18n();
   return <>
-    {state.phase === 'stale' ? <Text style={[styles.notice, { backgroundColor: colors.notice, color: colors.noticeText }]}>Showing cached directory data.</Text> : null}
-    {state.phase === 'offline' ? <Text style={[styles.notice, { backgroundColor: colors.notice, color: colors.noticeText }]}>Offline — showing the latest cached directory.</Text> : null}
+    {state.phase === 'stale' ? <Text style={[styles.notice, { backgroundColor: colors.notice, color: colors.noticeText }]}>{t('directories.cached')}</Text> : null}
+    {state.phase === 'offline' ? <Text style={[styles.notice, { backgroundColor: colors.notice, color: colors.noticeText }]}>{t('directories.offlineCached')}</Text> : null}
     {state.error ? <Text style={[styles.error, { color: colors.error }]}>{state.error}</Text> : null}
-    <ScreenFlatList contentContainerStyle={data.length ? styles.list : styles.empty} data={[...data]} keyExtractor={keyOf} ListEmptyComponent={<Text style={[styles.emptyText, { color: colors.textMuted }]}>{state.phase === 'loading' ? 'Loading…' : 'No entries.'}</Text>} renderItem={({ item }) => render(item)} />
+    <ScreenFlatList contentContainerStyle={data.length ? styles.list : styles.empty} data={[...data]} keyExtractor={keyOf} ListEmptyComponent={<Text style={[styles.emptyText, { color: colors.textMuted }]}>{state.phase === 'loading' ? t('directories.loading') : t('directories.noEntries')}</Text>} renderItem={({ item }) => render(item)} />
   </>;
 }
 
@@ -93,9 +97,21 @@ export function filterInstances(instances: readonly ControlPlaneInstanceDirector
 
 function FilterRow({ label, values, value, onChange }: { label: string; values: readonly string[]; value: string; onChange(value: string): void }) {
   const { colors } = useMobileTheme();
+  const { t } = useI18n();
   return <View style={styles.filterRow}><Text style={[styles.filterLabel, { color: colors.textMuted }]}>{label}</Text><FlatList horizontal data={[...values]} keyExtractor={(item) => item} renderItem={({ item }) => (
-    <Pressable accessibilityRole="button" accessibilityState={{ selected: item === value }} onPress={() => onChange(item)} style={[styles.filter, { backgroundColor: colors.surfaceMuted }, item === value && { backgroundColor: colors.primarySoft }]}><Text style={[styles.filterText, { color: colors.text }]}>{item}</Text></Pressable>
+    <Pressable accessibilityRole="button" accessibilityState={{ selected: item === value }} onPress={() => onChange(item)} style={[styles.filter, { backgroundColor: colors.surfaceMuted }, item === value && { backgroundColor: colors.primarySoft }]}><Text style={[styles.filterText, { color: colors.text }]}>{filterValueLabel(item, t)}</Text></Pressable>
   )} showsHorizontalScrollIndicator={false} /></View>;
+}
+
+function filterValueLabel(value: string, t: ReturnType<typeof useI18n>['t']) {
+  if (value === 'all') return t('sessions.filterAll');
+  if (value === 'active') return t('sessions.filterActive');
+  if (value === 'problem') return t('sessions.filterProblem');
+  if (value === 'idle') return t('sessions.filterIdle');
+  if (value === 'running') return t('status.running');
+  if (value === 'failed') return t('status.failed');
+  if (value === 'stopped') return t('status.stopped');
+  return value;
 }
 
 function DirectoryCard({ title, subtitle, children, icon, onPress }: React.PropsWithChildren<{ title: string; subtitle: string; icon: 'node' | 'instance'; onPress(): void }>) {

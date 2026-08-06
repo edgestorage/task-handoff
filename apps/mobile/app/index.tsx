@@ -4,9 +4,11 @@ import { ActivityIndicator, View } from 'react-native';
 
 import { useMobileTheme } from '../src/components/theme';
 import { mobileProfileStore } from '../src/control-plane/runtime';
+import { useI18n } from '../src/i18n';
 
 export default function IndexRoute() {
   const { colors } = useMobileTheme();
+  const { t } = useI18n();
   const [destination, setDestination] = useState<'/(tabs)/inbox' | '/profiles'>();
   useEffect(() => {
     let live = true;
@@ -15,6 +17,6 @@ export default function IndexRoute() {
     });
     return () => { live = false; };
   }, []);
-  if (!destination) return <View style={{ alignItems: 'center', backgroundColor: colors.background, flex: 1, justifyContent: 'center' }}><ActivityIndicator accessibilityLabel="Loading profile" color={colors.primary} /></View>;
+  if (!destination) return <View style={{ alignItems: 'center', backgroundColor: colors.background, flex: 1, justifyContent: 'center' }}><ActivityIndicator accessibilityLabel={t('common.loading')} color={colors.primary} /></View>;
   return <Redirect href={destination} />;
 }

@@ -95,6 +95,7 @@ export function publicInstanceDirectory(item: InstanceBoardResult["items"][numbe
     health: item.health,
     connectionStatus: item.connectionStatus,
     ready: item.ready,
+    config: { defaultCodexPermissionMode: item.config.defaultCodexPermissionMode },
     lastHeartbeatAt: item.lastHeartbeatAt,
     heartbeatAgeMs: item.heartbeatAgeMs,
     observedAt: item.updatedAt,

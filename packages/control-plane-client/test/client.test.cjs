@@ -152,6 +152,9 @@ test("shared resource client requests strict mobile-safe directory projections",
           capabilities: ["agent"],
         }] });
       }
+      if (path === "/api/controlled-instances/instance%2F1") {
+        return schema.parse({ data: { config: { defaultCodexPermissionMode: "auto-review" } } });
+      }
       return schema.parse({ data: [{
         id: "instance-1",
         name: "Instance",
@@ -160,6 +163,7 @@ test("shared resource client requests strict mobile-safe directory projections",
         health: "ok",
         connectionStatus: "online",
         ready: true,
+        config: { defaultCodexPermissionMode: "full-access" },
         observedAt: "2026-08-05T00:00:00.000Z",
         runtime: { id: "runtime-1", name: "Docker", type: "docker" },
         workspace: { status: "ready", path: "/workspace" },
@@ -179,12 +183,19 @@ test("shared resource client requests strict mobile-safe directory projections",
   const api = createControlPlaneClient(transport);
 
   await api.resources.nodes();
-  await api.resources.instanceBoard();
+  const instances = await api.resources.instanceBoard();
+  const savedPermission = await api.resources.updateInstanceDefaultPermissionMode("instance/1", "auto-review");
+
+  assert.equal(instances[0].config.defaultCodexPermissionMode, "full-access");
+  assert.equal(savedPermission, "auto-review");
 
   assert.deepEqual(requests.map((request) => request.path), [
     "/api/nodes?projection=directory",
     "/api/instance-board?projection=directory",
+    "/api/controlled-instances/instance%2F1",
   ]);
+  assert.equal(requests[2].init.method, "PATCH");
+  assert.deepEqual(JSON.parse(requests[2].init.body), { config: { defaultCodexPermissionMode: "auto-review" } });
 
   const unsafeApi = createControlPlaneClient({
     request(path, schema) {

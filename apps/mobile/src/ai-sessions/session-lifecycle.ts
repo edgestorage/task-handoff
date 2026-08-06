@@ -36,7 +36,7 @@ export async function createMobileAiSession(client: ControlPlaneClient, input: {
     clientRequestId: input.clientRequestId,
     message: input.message,
     mode: 'auto',
-    permissionMode: input.permissionMode ?? 'ask',
+    permissionMode: agent.data === 'codex' ? input.permissionMode ?? input.instance.config.defaultCodexPermissionMode : undefined,
     attachments: [],
     references: [],
   });

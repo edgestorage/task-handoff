@@ -12,9 +12,11 @@ import { createDirectControlPlaneClient } from '../../src/control-plane/client';
 import { mobileProfileStore, mobileSecureStore } from '../../src/control-plane/runtime';
 import { useActiveDirectories } from '../../src/directories/use-directories';
 import { InstanceHistory, InstanceOverview } from '../../src/instances/InstanceNativeSections';
+import { useI18n } from '../../src/i18n';
 
 export default function InstanceDirectoryDetailRoute() {
   const { colors } = useMobileTheme();
+  const { locale, t } = useI18n();
   const { instanceId } = useLocalSearchParams<{ instanceId: string }>();
   const { controlPlaneId, state } = useActiveDirectories();
   const instance = state.instances.find((candidate) => candidate.id === instanceId);
@@ -38,7 +40,7 @@ export default function InstanceDirectoryDetailRoute() {
   }, [instanceId]);
 
   if (!instance) {
-    return <Screen><Text style={[styles.error, { color: colors.error }]}>Instance not found in the current Control Plane directory.</Text></Screen>;
+    return <Screen><Text style={[styles.error, { color: colors.error }]}>{t('instance.notFound')}</Text></Screen>;
   }
 
   const activeSessionCount = instance.aiSessions.runningCount + instance.aiSessions.waitingCount;
@@ -53,7 +55,7 @@ export default function InstanceDirectoryDetailRoute() {
 
       <InstanceOverview
         activeSessionCount={activeSessionCount}
-        heartbeat={instance.lastHeartbeatAt ? new Date(instance.lastHeartbeatAt).toLocaleString() : 'Not observed'}
+        heartbeat={instance.lastHeartbeatAt ? new Date(instance.lastHeartbeatAt).toLocaleString(locale) : t('instance.notObserved')}
         nodeName={node?.name || instance.nodeId}
         onCreateSession={() => router.push({ pathname: '/sessions/new', params: { instanceId } })}
         onShowSessions={() => {
@@ -61,7 +63,7 @@ export default function InstanceDirectoryDetailRoute() {
           router.push({ pathname: '/(tabs)/inbox', params: { instanceId } });
         }}
         problemSessionCount={instance.aiSessions.problemCount}
-        protocol={instance.protocol.version || 'Not reported'}
+        protocol={instance.protocol.version || t('instance.notReported')}
         protocolCompatible={instance.protocol.compatible}
         runtime={`${instance.runtime.name || instance.runtime.id}${instance.runtime.type ? ` · ${instance.runtime.type}` : ''}`}
         workspace={instance.workspace.path || instance.workspace.status}

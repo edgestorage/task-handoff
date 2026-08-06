@@ -4,9 +4,15 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { useMobileTheme } from '../src/components/theme';
 import { ActiveAiSessionsProvider } from '../src/ai-sessions/use-active-sessions';
+import { MobileI18nProvider, useI18n } from '../src/i18n';
 
 export default function RootLayout() {
+  return <MobileI18nProvider><LocalizedRootLayout /></MobileI18nProvider>;
+}
+
+function LocalizedRootLayout() {
   const { colors, dark } = useMobileTheme();
+  const { t } = useI18n();
   return (
     <GestureHandlerRootView style={{ backgroundColor: colors.background, flex: 1 }}>
       <SafeAreaProvider>
@@ -23,14 +29,14 @@ export default function RootLayout() {
             }}
           >
             <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-            <Stack.Screen name="profiles" options={{ title: 'Control Planes' }} />
-            <Stack.Screen name="control-planes/add" options={{ title: 'Add Control Plane' }} />
-            <Stack.Screen name="control-planes/[controlPlaneId]" options={{ title: 'Control Plane' }} />
-            <Stack.Screen name="nodes/[nodeId]" options={{ title: 'Node' }} />
-            <Stack.Screen name="instances/[instanceId]" options={{ title: 'Instance' }} />
-            <Stack.Screen name="sessions/new" options={{ title: 'New AI Session' }} />
-            <Stack.Screen name="sessions/[instanceId]/[sessionId]" options={{ title: 'AI Session' }} />
-            <Stack.Screen name="history/[instanceId]/[historyId]" options={{ title: 'Session History' }} />
+            <Stack.Screen name="profiles" options={{ title: t('nav.controlPlanes') }} />
+            <Stack.Screen name="control-planes/add" options={{ title: t('nav.addControlPlane') }} />
+            <Stack.Screen name="control-planes/[controlPlaneId]" options={{ title: t('nav.controlPlane') }} />
+            <Stack.Screen name="nodes/[nodeId]" options={{ title: t('nav.node') }} />
+            <Stack.Screen name="instances/[instanceId]" options={{ title: t('nav.instance') }} />
+            <Stack.Screen name="sessions/new" options={{ title: t('nav.newSession') }} />
+            <Stack.Screen name="sessions/[instanceId]/[sessionId]" options={{ title: t('nav.aiSession') }} />
+            <Stack.Screen name="history/[instanceId]/[historyId]" options={{ title: t('nav.sessionHistory') }} />
           </Stack>
         </ActiveAiSessionsProvider>
       </SafeAreaProvider>

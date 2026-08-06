@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { InstanceBoardAiSummarySchema } from "./ai-sessions.ts";
+import { AiSessionPermissionModeSchema, InstanceBoardAiSummarySchema } from "./ai-sessions.ts";
 
 const IdSchema = z.string().trim().min(1).max(120).regex(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$/);
 const TimestampSchema = z.string().datetime();
@@ -31,6 +31,9 @@ export const ControlPlaneInstanceDirectoryEntrySchema = z.object({
   health: z.enum(["unknown", "ok", "degraded", "failed"]),
   connectionStatus: z.enum(["unknown", "online", "offline", "endpoint-unreachable"]),
   ready: z.boolean(),
+  config: z.object({
+    defaultCodexPermissionMode: AiSessionPermissionModeSchema.default("ask"),
+  }).strict().default({ defaultCodexPermissionMode: "ask" }),
   lastHeartbeatAt: TimestampSchema.optional(),
   heartbeatAgeMs: z.number().int().nonnegative().optional(),
   observedAt: TimestampSchema,

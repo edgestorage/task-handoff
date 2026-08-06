@@ -1,10 +1,12 @@
 import type { AiSessionPermissionMode } from '@task-handoff/protocol/ai-sessions';
 import type { ControlPlaneInstanceDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
+import type { ControlPlaneNodeLocalFolder } from '@task-handoff/control-plane-client';
 
 export type NewSessionFormProps = {
   instances: readonly ControlPlaneInstanceDirectoryEntry[];
   selectedInstanceId: string;
   selectedInstance?: ControlPlaneInstanceDirectoryEntry;
+  folders: readonly ControlPlaneNodeLocalFolder[];
   selectedAgent: string;
   cwd: string;
   message: string;

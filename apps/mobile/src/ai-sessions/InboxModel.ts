@@ -6,13 +6,16 @@ import {
 } from '@task-handoff/control-plane-client';
 
 import type { MobileDirectoryProfileState } from '../directories/store';
-import type { AiSessionScope, MobileAiSessionProfileState, MobileStreamingMessage } from './store';
+import { activeMobileStreamingMessage, type AiSessionScope, type MobileAiSessionProfileState, type MobileStreamingMessage } from './store';
 import { aiSessionDisplayTurns } from './SessionDetail';
+import { translate, type Translate } from '../i18n';
+
+const english: Translate = (key, params) => translate('en-US', key, params);
 
 export type SessionStatusFilter = 'all' | 'active' | 'waiting' | 'idle' | 'problem';
 export type SessionScopeOption = { label: string; scope: AiSessionScope };
 
-export function inboxCardContent(session: ControlPlaneAiSessionSummary, messages: readonly MobileStreamingMessage[] = []) {
+export function inboxCardContent(session: ControlPlaneAiSessionSummary, messages: readonly MobileStreamingMessage[] = [], t: Translate = english) {
   const turns = aiSessionDisplayTurns(session);
   const lastUserMessageAt = aiSessionLastUserMessageAt(session);
   const matchingTurnIndex = lastUserMessageAt
@@ -20,12 +23,10 @@ export function inboxCardContent(session: ControlPlaneAiSessionSummary, messages
     : -1;
   const selectedTurnIndex = matchingTurnIndex >= 0 ? matchingTurnIndex : Math.max(0, turns.length - 1);
   const turn = turns[selectedTurnIndex];
-  const streamed = turn
-    ? messages.filter((message) => message.turnId === turn.id).sort((left, right) => left.itemId.localeCompare(right.itemId)).map((message) => message.receivedText.trim()).filter(Boolean).join('\n\n')
-    : '';
+  const streamed = turn ? activeMobileStreamingMessage(messages, turn.id)?.receivedText.trim() || '' : '';
   return {
-    prompt: turn?.userPrompt?.trim() || session.userPrompt?.trim() || session.title?.trim() || 'Untitled session',
-    response: streamed || turn?.lastMessage?.trim() || turn?.summary?.trim() || session.lastMessage?.trim() || session.summary?.trim() || 'No response yet.',
+    prompt: turn?.userPrompt?.trim() || session.userPrompt?.trim() || session.title?.trim() || t('sessions.untitled'),
+    response: streamed || turn?.lastMessage?.trim() || turn?.summary?.trim() || session.lastMessage?.trim() || session.summary?.trim() || t('sessions.noResponse'),
     turnCount: turns.length,
     turnIndex: Math.max(0, turns.length - 1),
   };
@@ -47,26 +48,26 @@ export function matchesStatusFilter(session: ControlPlaneAiSessionSummary, filte
   return session.status !== 'running' && session.status !== 'waiting' && session.status !== 'failed';
 }
 
-export function statusFilterLabel(filter: SessionStatusFilter) {
-  return filter === 'all' ? 'All' : filter.charAt(0).toUpperCase() + filter.slice(1);
+export function statusFilterLabel(filter: SessionStatusFilter, t: Translate = english) {
+  return t(`sessions.filter${filter.charAt(0).toUpperCase()}${filter.slice(1)}` as 'sessions.filterAll');
 }
 
-export function inboxStatusMessage(sync: MobileAiSessionProfileState['sync']) {
+export function inboxStatusMessage(sync: MobileAiSessionProfileState['sync'], t: Translate = english) {
   return sync.phase === 'offline'
-    ? 'Offline — showing the latest cached snapshot.'
+    ? t('sessions.syncOffline')
     : sync.phase === 'stale'
-      ? 'Live updates paused — showing cached data.'
+      ? t('sessions.syncStale')
       : sync.error;
 }
 
-export function sessionScopeOptions(directory?: Pick<MobileDirectoryProfileState, 'nodes' | 'instances'>): SessionScopeOption[] {
+export function sessionScopeOptions(directory?: Pick<MobileDirectoryProfileState, 'nodes' | 'instances'>, t: Translate = english): SessionScopeOption[] {
   const nodes = directory?.nodes ?? [];
   const nodeNames = new Map(nodes.map((node) => [node.id, node.name]));
   return [
-    { label: 'All Sessions', scope: { kind: 'all' } },
-    ...nodes.map((node) => ({ label: `Node · ${node.name}`, scope: { kind: 'node' as const, nodeId: node.id } })),
+    { label: t('sessions.scopeAll'), scope: { kind: 'all' } },
+    ...nodes.map((node) => ({ label: t('sessions.scopeNode', { name: node.name }), scope: { kind: 'node' as const, nodeId: node.id } })),
     ...(directory?.instances ?? []).map((instance) => ({
-      label: `Instance · ${instance.name} — ${nodeNames.get(instance.nodeId) || instance.nodeId}`,
+      label: t('sessions.scopeInstance', { name: instance.name, node: nodeNames.get(instance.nodeId) || instance.nodeId }),
       scope: { kind: 'instance' as const, instanceId: instance.id },
     })),
   ];
@@ -77,7 +78,7 @@ export function sameScope(left: AiSessionScope, right: AiSessionScope) {
     && (left.kind === 'all' || (left.kind === 'node' && right.kind === 'node' && left.nodeId === right.nodeId) || (left.kind === 'instance' && right.kind === 'instance' && left.instanceId === right.instanceId));
 }
 
-export function workspaceLabel(cwd?: string) {
+export function workspaceLabel(cwd?: string, t: Translate = english) {
   const normalized = cwd?.replace(/\/+$/, '');
-  return normalized?.split('/').filter(Boolean).at(-1) || cwd || 'Unknown workspace';
+  return normalized?.split('/').filter(Boolean).at(-1) || cwd || t('sessions.unknownWorkspace');
 }

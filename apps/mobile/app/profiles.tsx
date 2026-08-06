@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { router, Stack } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { AndroidSymbol, SFSymbol } from 'expo-symbols';
@@ -12,9 +12,11 @@ import { isMobileTestMode } from '../src/platform/build-variant';
 import { SystemIcon } from '../src/components/SystemIcon';
 import { NativeProfilesScreen } from '../src/control-plane/NativeProfilesScreen';
 import { NativeActionButton } from '../src/components/NativeActionButton';
+import { useI18n, type LocalePreference } from '../src/i18n';
 
 export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInTabs?: boolean }) {
   const { colors } = useMobileTheme();
+  const { t } = useI18n();
   const [error, setError] = useState<string>();
   const [savedProfiles, setSavedProfiles] = useState<MobileControlPlaneProfile[]>([]);
   const [activeId, setActiveId] = useState<string>();
@@ -29,19 +31,19 @@ export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInT
       setProfilesLoaded(true);
     }).catch((cause) => {
       if (!live) return;
-      setError(cause instanceof Error ? cause.message : 'Could not load Control Planes.');
+      setError(cause instanceof Error ? cause.message : t('profiles.loadError'));
       setProfilesLoaded(true);
     });
     void load();
     const unsubscribe = profiles.subscribe(() => { void load(); });
     return () => { live = false; unsubscribe(); };
-  }, []);
+  }, [t]);
 
   if (!profilesLoaded) {
     return (
       <SafeAreaView edges={['top']} style={[styles.safeArea, { backgroundColor: colors.background }]}>
         <Stack.Screen options={{ headerShown: false }} />
-        <View style={styles.loadingScreen}><ActivityIndicator accessibilityLabel="Loading Control Planes" /></View>
+        <View style={styles.loadingScreen}><ActivityIndicator accessibilityLabel={t('profiles.loading')} /></View>
       </SafeAreaView>
     );
   }
@@ -75,7 +77,7 @@ export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInT
       <Screen>
         <View style={styles.saved}>
           <View style={styles.savedHeading}>
-            <Text accessibilityRole="header" style={[styles.title, { color: colors.text }]}>Control Planes</Text>
+            <Text accessibilityRole="header" style={[styles.title, { color: colors.text }]}>{t('nav.controlPlanes')}</Text>
           </View>
           <View style={[styles.profileGroup, { backgroundColor: colors.surface, borderColor: colors.border }]}> 
             {savedProfiles.map((profile, index) => {
@@ -83,7 +85,7 @@ export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInT
               return <View key={`${profile.identity.controlPlaneId}:${profile.identity.publicKeyFingerprint}`}>
                 {index ? <View style={[styles.profileDivider, { backgroundColor: colors.border }]} /> : null}
                 <Pressable
-                  accessibilityLabel={`View ${profile.identity.displayName || 'Control Plane'} details`}
+                  accessibilityLabel={t('profiles.viewDetails', { name: profile.identity.displayName || t('profiles.defaultName') })}
                   accessibilityRole="button"
                   onPress={() => router.push({ pathname: '/control-planes/[controlPlaneId]', params: { controlPlaneId: profile.identity.controlPlaneId } })}
                   style={({ pressed }) => [styles.profileRow, pressed && { backgroundColor: colors.surfaceMuted }]}
@@ -93,7 +95,7 @@ export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInT
                   </View>
                   <View style={styles.profileIdentity}>
                     <View style={styles.profileNameRow}>
-                      <Text numberOfLines={1} style={[styles.profileName, { color: colors.text }]}>{profile.identity.displayName || 'Control Plane'}</Text>
+                      <Text numberOfLines={1} style={[styles.profileName, { color: colors.text }]}>{profile.identity.displayName || t('profiles.defaultName')}</Text>
                       {active ? <SystemIcon android="check_circle" color={colors.primary} ios="checkmark.circle.fill" size={16} /> : null}
                     </View>
                     <Text selectable numberOfLines={1} style={[styles.profileOrigin, { color: colors.textMuted }]}>{profile.access.origin}</Text>
@@ -111,10 +113,11 @@ export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInT
               <View style={[styles.addIcon, { backgroundColor: colors.primarySoft }]}> 
                 <SystemIcon android="add" color={colors.primary} ios="plus" size={17} />
               </View>
-              <Text style={[styles.addRowText, { color: colors.primary }]}>Add Control Plane</Text>
+              <Text style={[styles.addRowText, { color: colors.primary }]}>{t('profiles.add')}</Text>
               <SystemIcon android="chevron_right" color={colors.textMuted} ios="chevron.right" size={13} />
             </Pressable>
           </View>
+          <LanguageRow />
         </View>
         {error ? <Text accessibilityLiveRegion="polite" style={[styles.error, { color: colors.error }]}>{error}</Text> : null}
       </Screen>
@@ -124,30 +127,51 @@ export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInT
 
 export function ProfilesWelcome({ onAdd }: { onAdd: () => void }) {
   const { colors } = useMobileTheme();
+  const { t } = useI18n();
 
   return (
     <View style={styles.welcome}>
       <View style={styles.hero}>
         <Image accessibilityIgnoresInvertColors source={require('../assets/icon.png')} style={styles.brandIcon} />
         <Text style={[styles.brandName, { color: colors.text }]}>TaskHandoff</Text>
-        <Text accessibilityRole="header" style={[styles.heroTitle, { color: colors.text }]}>Your AI work, with you.</Text>
-        <Text style={[styles.heroDescription, { color: colors.textMuted }]}>Connect this device to your Control Plane to follow work, review progress, and respond wherever you are.</Text>
+        <Text accessibilityRole="header" style={[styles.heroTitle, { color: colors.text }]}>{t('profiles.heroTitle')}</Text>
+        <Text style={[styles.heroDescription, { color: colors.textMuted }]}>{t('profiles.heroDescription')}</Text>
       </View>
 
       <View style={[styles.guideCard, { backgroundColor: colors.surface, borderColor: colors.border }]}> 
-        <GuideItem colors={colors} icon={{ android: 'lock', ios: 'lock' }} title="Connect securely" description="We verify the Control Plane’s signed identity before sending your password." />
+        <GuideItem colors={colors} icon={{ android: 'lock', ios: 'lock' }} title={t('profiles.secureTitle')} description={t('profiles.secureDescription')} />
         <View style={[styles.guideDivider, { backgroundColor: colors.border }]} />
-        <GuideItem colors={colors} icon={{ android: 'sync', ios: 'arrow.triangle.2.circlepath' }} title="Keep sessions in sync" description="See active AI sessions and their latest state from one mobile inbox." />
+        <GuideItem colors={colors} icon={{ android: 'sync', ios: 'arrow.triangle.2.circlepath' }} title={t('profiles.syncTitle')} description={t('profiles.syncDescription')} />
         <View style={[styles.guideDivider, { backgroundColor: colors.border }]} />
-        <GuideItem colors={colors} icon={{ android: 'visibility', ios: 'eye' }} title="Stay in control" description="Review progress and respond without taking runtime ownership away from your Control Plane." />
+        <GuideItem colors={colors} icon={{ android: 'visibility', ios: 'eye' }} title={t('profiles.controlTitle')} description={t('profiles.controlDescription')} />
       </View>
 
       <View style={styles.welcomeFooter}>
-        <NativeActionButton label="Connect a Control Plane" onPress={onAdd} />
-        <Text style={[styles.requirement, { color: colors.textMuted }]}>{isMobileTestMode ? 'Have your Control Plane address and sign-in ready. HTTP is allowed in this test build.' : 'Have your HTTPS Control Plane address and sign-in ready.'}</Text>
+        <NativeActionButton label={t('profiles.connect')} onPress={onAdd} />
+        <LanguageRow compact />
+        <Text style={[styles.requirement, { color: colors.textMuted }]}>{isMobileTestMode ? t('profiles.requirementTest') : t('profiles.requirement')}</Text>
       </View>
     </View>
   );
+}
+
+function LanguageRow({ compact = false }: { compact?: boolean }) {
+  const { colors } = useMobileTheme();
+  const { preference, setPreference, t } = useI18n();
+  const labels: Record<LocalePreference, string> = { system: t('locale.system'), 'en-US': t('locale.english'), 'zh-CN': t('locale.chinese') };
+  const chooseLanguage = () => Alert.alert(t('locale.language'), undefined, [
+    ...(Object.keys(labels) as LocalePreference[]).map((value) => ({
+      text: `${preference === value ? '✓ ' : ''}${labels[value]}`,
+      onPress: () => { void setPreference(value); },
+    })),
+    { text: t('common.cancel'), style: 'cancel' },
+  ]);
+  return <Pressable accessibilityRole="button" onPress={chooseLanguage} style={[styles.languageRow, !compact && { backgroundColor: colors.surface, borderColor: colors.border }]}>
+    <SystemIcon android="language" color={colors.textMuted} ios="globe" size={18} />
+    <Text style={[styles.languageLabel, { color: colors.text }]}>{t('locale.language')}</Text>
+    <Text style={[styles.languageValue, { color: colors.textMuted }]}>{labels[preference]}</Text>
+    <SystemIcon android="chevron_right" color={colors.textMuted} ios="chevron.right" size={12} />
+  </Pressable>;
 }
 
 function GuideItem({ colors, icon, title, description }: { colors: ReturnType<typeof useMobileTheme>['colors']; icon: { android: AndroidSymbol; ios: SFSymbol }; title: string; description: string }) {
@@ -199,4 +223,7 @@ const styles = StyleSheet.create({
   buttonPressed: { opacity: 0.8 },
   fingerprint: { color: '#6b7280', fontFamily: 'monospace', fontSize: 12 },
   error: { color: '#b91c1c', fontSize: 13, lineHeight: 19 },
+  languageRow: { alignItems: 'center', borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 10, minHeight: 48, paddingHorizontal: 14 },
+  languageLabel: { flex: 1, fontSize: 15, fontWeight: '600' },
+  languageValue: { fontSize: 13 },
 });

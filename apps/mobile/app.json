@@ -27,6 +27,12 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.taskhandoff.mobile.dev",
+      "infoPlist": {
+        "CFBundleLocalizations": [
+          "en",
+          "zh-Hans"
+        ]
+      },
       "config": {
         "usesNonExemptEncryption": false
       }

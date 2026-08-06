@@ -272,7 +272,7 @@ export async function sendDingdingActionsCard(input: {
   const settings = input.bridge.settings || {};
   const robotCode = stringSetting(settings.robotCode);
   const cardTemplateId = stringSetting(settings.cardTemplateId) || "13fc6717-12e4-43ed-8533-111a310d4995.schema";
-  const callbackRouteKey = stringSetting(settings.cardCallbackRouteKey) || "bi_workflow_ticket";
+  const callbackRouteKey = stringSetting(settings.cardCallbackRouteKey) || "task_handoff_message";
   const senderId = input.senderId || input.runtime.senderIds.get(input.chatId) || stringSetting(settings.senderId);
   const conversationType = dingdingRuntimeConversationType(input.runtime, input.chatId);
   if (!robotCode || !cardTemplateId || !senderId) {

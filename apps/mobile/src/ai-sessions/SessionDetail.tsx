@@ -1,15 +1,20 @@
 import { Profiler, useEffect, useMemo, useState, type ProfilerOnRenderCallback } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ScrollViewMarker } from 'react-native-screens/experimental';
 import { isAiSessionApprovalPending, type ControlPlaneAiSessionSummary } from '@task-handoff/control-plane-client';
 
 import { SafeMarkdown } from '../components/SafeMarkdown';
 import { SystemIcon } from '../components/SystemIcon';
-import type { MobileStreamingMessage } from './store';
+import { activeMobileStreamingMessage, type MobileStreamingMessage } from './store';
 import { mobileMetrics } from '../observability/mobile-metrics';
 import { useMobileTheme } from '../components/theme';
 import { NativeSessionModePicker } from './NativeSessionModePicker';
+import { ToolActivityText } from './ToolActivityText';
+import { translate, useI18n, type Translate } from '../i18n';
 
-type DetailItem = { id: string; role: 'user' | 'assistant' | 'error'; text: string };
+const english: Translate = (key, params) => translate('en-US', key, params);
+
+type DetailItem = { id: string; role: 'user' | 'assistant' | 'error'; streamKey?: string; streaming?: boolean; text: string };
 export type SessionDetailMode = 'conversation' | 'turn';
 
 export function SessionDetail({
@@ -20,6 +25,7 @@ export function SessionDetail({
   onTurnIndexChange,
   mode,
   onModeChange,
+  showModePicker = true,
   bottomInset = 0,
 }: {
   session?: ControlPlaneAiSessionSummary;
@@ -29,9 +35,11 @@ export function SessionDetail({
   onTurnIndexChange?(index: number): void;
   mode?: SessionDetailMode;
   onModeChange?(mode: SessionDetailMode): void;
+  showModePicker?: boolean;
   bottomInset?: number;
 }) {
   const { colors } = useMobileTheme();
+  const { locale, t } = useI18n();
   const turns = useMemo(() => aiSessionDisplayTurns(session), [session]);
   const latestIndex = Math.max(0, turns.length - 1);
   const [localTurnIndex, setLocalTurnIndex] = useState(latestIndex);
@@ -40,8 +48,8 @@ export function SessionDetail({
   const selectedIndex = Math.min(Math.max(turnIndex ?? localTurnIndex, 0), latestIndex);
   const isLatest = selectedIndex >= latestIndex;
   const showsLatest = selectedMode === 'conversation' || isLatest;
-  const activityText = session ? sessionActivityText(session) : undefined;
-  const items = useMemo(() => selectedMode === 'conversation' ? conversationDetailItems(session, messages) : detailItems(session, messages, selectedIndex), [session, messages, selectedIndex, selectedMode]);
+  const activityText = session ? sessionActivityText(session, t) : undefined;
+  const items = useMemo(() => selectedMode === 'conversation' ? conversationDetailItems(session, messages, t) : detailItems(session, messages, selectedIndex, t), [session, messages, selectedIndex, selectedMode, t]);
   useEffect(() => {
     if (session) onVisible?.(session.updatedAt);
   }, [onVisible, session]);
@@ -58,53 +66,69 @@ export function SessionDetail({
     <Profiler id="detail" onRender={recordDetailRender}>
       <View style={[styles.empty, { backgroundColor: colors.background }]}>
         <SystemIcon android="chat_bubble_outline" color={colors.textMuted} ios="bubble.left.and.bubble.right" size={30} />
-        <Text style={[styles.emptyTitle, { color: colors.text }]}>Session unavailable</Text>
-        <Text style={[styles.muted, styles.emptyText, { color: colors.textMuted }]}>This session is not available in the current snapshot.</Text>
+        <Text style={[styles.emptyTitle, { color: colors.text }]}>{t('sessions.unavailable')}</Text>
+        <Text style={[styles.muted, styles.emptyText, { color: colors.textMuted }]}>{t('sessions.unavailableDescription')}</Text>
       </View>
     </Profiler>
   );
   return (
     <Profiler id="detail" onRender={recordDetailRender}>
-      <ScrollView
-        style={styles.fill}
-        contentContainerStyle={[styles.list, { backgroundColor: colors.surface, paddingBottom: Math.max(28, bottomInset + 16) }]}
-        keyboardDismissMode="interactive"
-      >
-        <View style={styles.header}>
-          {turns.length ? <View style={styles.modePicker}><NativeSessionModePicker mode={selectedMode} onChange={selectMode} /></View> : null}
-          <View style={styles.sessionBar}>
-            <View style={styles.metaRow}>
-              <View style={[styles.statusDot, { backgroundColor: statusColor(session.status, colors.primary, colors.textMuted, colors.error) }]} />
-              <Text style={[styles.meta, { color: colors.textMuted }]}>{statusLabel(session.status, activityText ? 'unknown' : session.phase)}</Text>
+      <ScrollViewMarker scrollEdgeEffects={{ top: 'soft' }} style={[styles.fill, { backgroundColor: colors.surface }]}>
+        <FlatList
+          contentContainerStyle={[styles.list, { backgroundColor: colors.surface, paddingBottom: Math.max(28, bottomInset + 16) }]}
+          contentInsetAdjustmentBehavior="automatic"
+          data={items}
+          initialNumToRender={6}
+          ItemSeparatorComponent={DetailItemSeparator}
+          keyExtractor={(item) => item.id}
+          keyboardDismissMode="interactive"
+          ListEmptyComponent={<View style={styles.conversationEmpty}><Text style={[styles.muted, { color: colors.textMuted }]}>{t('sessions.noMessages')}</Text></View>}
+          ListFooterComponent={showsLatest && activityText || session.subAgents.length ? <View style={styles.footer}>
+            {showsLatest && activityText ? <View style={styles.tool}><SystemIcon android="auto_awesome" color={colors.textMuted} ios="sparkles" size={14} /><ToolActivityText containerStyle={styles.toolText} numberOfLines={1} running={session.status === 'running'} textStyle={styles.toolTitle}>{activityText}</ToolActivityText></View> : null}
+            <SubAgents agents={session.subAgents} locale={locale} />
+          </View> : null}
+          ListHeaderComponent={<View style={styles.header}>
+            {showModePicker && turns.length ? <View style={styles.modePicker}><NativeSessionModePicker mode={selectedMode} onChange={selectMode} /></View> : null}
+            <View style={styles.sessionBar}>
+              <View style={styles.metaRow}>
+                <View style={[styles.statusDot, { backgroundColor: statusColor(session.status, colors.primary, colors.textMuted, colors.error) }]} />
+                <Text style={[styles.meta, { color: colors.textMuted }]}>{statusLabel(session.status, activityText ? 'unknown' : session.phase)}</Text>
+              </View>
+              {selectedMode === 'turn' && turns.length > 1 ? <View style={styles.turnNavigator}>
+                <Pressable accessibilityLabel={t('sessions.previousTurn')} accessibilityRole="button" accessibilityState={{ disabled: selectedIndex <= 0 }} disabled={selectedIndex <= 0} hitSlop={8} onPress={() => selectTurn(selectedIndex - 1)} style={[styles.turnButton, selectedIndex <= 0 && styles.turnButtonDisabled]}><SystemIcon android="chevron_left" color={colors.primary} ios="chevron.left" size={14} /></Pressable>
+                <Text style={[styles.turnIndex, { color: colors.textMuted }]}>{selectedIndex + 1} / {turns.length}</Text>
+                <Pressable accessibilityLabel={t('sessions.nextTurn')} accessibilityRole="button" accessibilityState={{ disabled: isLatest }} disabled={isLatest} hitSlop={8} onPress={() => selectTurn(selectedIndex + 1)} style={[styles.turnButton, isLatest && styles.turnButtonDisabled]}><SystemIcon android="chevron_right" color={colors.primary} ios="chevron.right" size={14} /></Pressable>
+              </View> : null}
             </View>
-            {selectedMode === 'turn' && turns.length > 1 ? <View style={styles.turnNavigator}>
-              <Pressable accessibilityLabel="Previous turn" accessibilityRole="button" accessibilityState={{ disabled: selectedIndex <= 0 }} disabled={selectedIndex <= 0} hitSlop={8} onPress={() => selectTurn(selectedIndex - 1)} style={[styles.turnButton, selectedIndex <= 0 && styles.turnButtonDisabled]}><SystemIcon android="chevron_left" color={colors.primary} ios="chevron.left" size={14} /></Pressable>
-              <Text style={[styles.turnIndex, { color: colors.textMuted }]}>{selectedIndex + 1} / {turns.length}</Text>
-              <Pressable accessibilityLabel="Next turn" accessibilityRole="button" accessibilityState={{ disabled: isLatest }} disabled={isLatest} hitSlop={8} onPress={() => selectTurn(selectedIndex + 1)} style={[styles.turnButton, isLatest && styles.turnButtonDisabled]}><SystemIcon android="chevron_right" color={colors.primary} ios="chevron.right" size={14} /></Pressable>
-            </View> : null}
-          </View>
-        </View>
-        {!items.length ? <View style={styles.conversationEmpty}><Text style={[styles.muted, { color: colors.textMuted }]}>No messages in this session yet.</Text></View> : items.map((item) => selectedMode === 'conversation' && item.role === 'user' ? (
-          <View key={item.id} style={[styles.conversationUser, { backgroundColor: colors.primarySoft }]}><SafeMarkdown>{item.text}</SafeMarkdown></View>
-        ) : selectedMode === 'conversation' && item.role === 'assistant' ? (
-          <View key={item.id} style={styles.conversationResponse}><SafeMarkdown>{item.text}</SafeMarkdown></View>
-        ) : item.role === 'user' ? (
-          <View key={item.id} style={[styles.promptBlock, { backgroundColor: colors.primarySoft }]}><SafeMarkdown>{item.text}</SafeMarkdown></View>
-        ) : item.role === 'assistant' ? (
-          <View key={item.id} style={styles.responseBlock}><SafeMarkdown>{item.text}</SafeMarkdown></View>
-        ) : <View key={item.id} style={[styles.errorBlock, { backgroundColor: colors.errorSoft }]}><SystemIcon android="error" color={colors.error} ios="exclamationmark.triangle.fill" size={16} /><View style={styles.errorText}><Text style={[styles.role, { color: colors.error }]}>Session error</Text><SafeMarkdown>{item.text}</SafeMarkdown></View></View>)}
-          {showsLatest && activityText ? <View style={styles.tool}><SystemIcon android="auto_awesome" color={colors.textMuted} ios="sparkles" size={14} /><Text numberOfLines={2} style={[styles.toolTitle, { color: colors.textMuted }]}>{activityText}</Text></View> : null}
-        <SubAgents agents={session.subAgents} />
-      </ScrollView>
+          </View>}
+          maxToRenderPerBatch={6}
+          renderItem={({ item }) => selectedMode === 'conversation' && item.role === 'user' ? (
+            <View style={[styles.conversationUser, { backgroundColor: colors.primarySoft }]}><SafeMarkdown trimEnd>{item.text}</SafeMarkdown></View>
+          ) : selectedMode === 'conversation' && item.role === 'assistant' ? (
+            <View style={styles.conversationResponse}><SafeMarkdown streamKey={item.streamKey} streaming={item.streaming}>{item.text}</SafeMarkdown></View>
+          ) : item.role === 'user' ? (
+            <View style={[styles.promptBlock, { backgroundColor: colors.primarySoft }]}><SafeMarkdown trimEnd>{item.text}</SafeMarkdown></View>
+          ) : item.role === 'assistant' ? (
+            <View style={styles.responseBlock}><SafeMarkdown streamKey={item.streamKey} streaming={item.streaming}>{item.text}</SafeMarkdown></View>
+          ) : <View style={[styles.errorBlock, { backgroundColor: colors.errorSoft }]}><SystemIcon android="error" color={colors.error} ios="exclamationmark.triangle.fill" size={16} /><View style={styles.errorText}><Text style={[styles.role, { color: colors.error }]}>{t('sessions.error')}</Text><SafeMarkdown>{item.text}</SafeMarkdown></View></View>}
+          style={[styles.fill, { backgroundColor: colors.surface }]}
+          testID="session-detail-scroll"
+          windowSize={7}
+        />
+      </ScrollViewMarker>
     </Profiler>
   );
+}
+
+function DetailItemSeparator() {
+  return <View style={styles.itemSeparator} />;
 }
 
 const recordDetailRender: ProfilerOnRenderCallback = (_id, _phase, actualDuration) => {
   mobileMetrics.record('render.duration', { screen: 'detail' }, actualDuration);
 };
 
-export function detailItems(session: ControlPlaneAiSessionSummary | undefined, messages: readonly MobileStreamingMessage[], turnIndex?: number): DetailItem[] {
+export function detailItems(session: ControlPlaneAiSessionSummary | undefined, messages: readonly MobileStreamingMessage[], turnIndex?: number, t: Translate = english): DetailItem[] {
   if (!session) return [];
   const turns = aiSessionDisplayTurns(session);
   if (turns.length) {
@@ -113,41 +137,45 @@ export function detailItems(session: ControlPlaneAiSessionSummary | undefined, m
     const isLatest = index >= turns.length - 1;
     const items: DetailItem[] = [];
     if (turn.userPrompt?.trim()) items.push({ id: `${turn.id}:user`, role: 'user', text: turn.userPrompt });
-    const streamed = isLatest
-      ? messages.filter((message) => message.turnId === turn.id).sort((a, b) => a.itemId.localeCompare(b.itemId))
-      : [];
-    const streamedText = streamed.map((message) => message.receivedText.trim()).filter(Boolean).join('\n\n');
-    const response = streamedText || turn.lastMessage?.trim() || turn.summary?.trim();
-    if (response) items.push({ id: `${turn.id}:assistant`, role: 'assistant', text: response });
-    if (isLatest && session.status === 'failed') items.push({ id: 'session:error', role: 'error', text: 'Session failed. Open the desktop app for diagnostic details.' });
+    const streamed = isLatest ? activeMobileStreamingMessage(messages, turn.id) : undefined;
+    const hasStreamedText = Boolean(streamed?.receivedText.trim());
+    const response = hasStreamedText ? streamed!.receivedText : turn.lastMessage?.trim() || turn.summary?.trim();
+    if (response) items.push({
+      id: `${turn.id}:assistant`,
+      role: 'assistant',
+      streamKey: hasStreamedText ? `${turn.id}:${streamed!.itemId}` : undefined,
+      streaming: streamed?.status === 'streaming',
+      text: response,
+    });
+    if (isLatest && session.status === 'failed') items.push({ id: 'session:error', role: 'error', text: t('sessions.failedDiagnostic') });
     return items;
   }
   const items: DetailItem[] = [];
   if (session.userPrompt) items.push({ id: 'session:user', role: 'user', text: session.userPrompt });
   if (session.lastMessage || session.summary) items.push({ id: 'session:assistant', role: 'assistant', text: session.lastMessage || session.summary! });
-  if (session.status === 'failed') items.push({ id: 'session:error', role: 'error', text: 'Session failed. Open the desktop app for diagnostic details.' });
+  if (session.status === 'failed') items.push({ id: 'session:error', role: 'error', text: t('sessions.failedDiagnostic') });
   return items;
 }
 
-export function conversationDetailItems(session: ControlPlaneAiSessionSummary | undefined, messages: readonly MobileStreamingMessage[]): DetailItem[] {
+export function conversationDetailItems(session: ControlPlaneAiSessionSummary | undefined, messages: readonly MobileStreamingMessage[], t: Translate = english): DetailItem[] {
   const turns = aiSessionDisplayTurns(session);
-  if (!turns.length) return detailItems(session, messages);
-  return turns.flatMap((_turn, index) => detailItems(session, messages, index));
+  if (!turns.length) return detailItems(session, messages, undefined, t);
+  return turns.flatMap((_turn, index) => detailItems(session, messages, index, t));
 }
 
 export function aiSessionDisplayTurns(session: ControlPlaneAiSessionSummary | undefined) {
   return (session?.turns ?? []).filter((turn) => turn.userPrompt?.trim() || turn.lastMessage?.trim() || turn.summary?.trim() || turn.contextCompactions?.length);
 }
 
-export function sessionActivityText(session: ControlPlaneAiSessionSummary) {
+export function sessionActivityText(session: ControlPlaneAiSessionSummary, t: Translate = english) {
   if (!['running', 'waiting'].includes(session.status) || isAiSessionApprovalPending(session)) return undefined;
   if (session.currentTool?.name) return session.currentTool.inputPreview
     ? `${session.currentTool.name} · ${session.currentTool.inputPreview}`
     : session.currentTool.name;
-  if (session.phase === 'responding') return 'Responding…';
-  if (session.phase === 'editing') return 'Editing…';
-  if (session.status === 'waiting') return 'Waiting…';
-  return session.toolCallsSinceLastMessage > 0 ? `Thinking · ${session.toolCallsSinceLastMessage} tool calls` : 'Thinking…';
+  if (session.phase === 'responding') return t('sessions.responding');
+  if (session.phase === 'editing') return t('sessions.editing');
+  if (session.status === 'waiting') return t('sessions.waiting');
+  return session.toolCallsSinceLastMessage > 0 ? t('sessions.thinkingTools', { count: session.toolCallsSinceLastMessage }) : t('sessions.thinking');
 }
 
 function statusColor(status: ControlPlaneAiSessionSummary['status'], active: string, muted: string, error: string) {
@@ -162,8 +190,9 @@ function statusLabel(status: ControlPlaneAiSessionSummary['status'], phase: Cont
   return `${statusText}${phaseText}`;
 }
 
-function SubAgents({ agents }: { agents: ControlPlaneAiSessionSummary['subAgents'] }) {
+function SubAgents({ agents, locale }: { agents: ControlPlaneAiSessionSummary['subAgents']; locale: string }) {
   const { colors } = useMobileTheme();
+  const { t } = useI18n();
   const active = agents.filter((agent) => ['pending-init', 'running', 'interrupted', 'errored', 'not-found'].includes(agent.status));
   const [userExpanded, setUserExpanded] = useState<boolean>();
   const expanded = userExpanded ?? active.length > 0;
@@ -174,7 +203,7 @@ function SubAgents({ agents }: { agents: ControlPlaneAiSessionSummary['subAgents
         <View style={[styles.avatar, { backgroundColor: colors.surfaceMuted }]}>
           <SystemIcon android="account_tree" color={colors.primary} ios="point.3.connected.trianglepath.dotted" size={16} />
         </View>
-        <Text style={[styles.subAgentTitle, { color: colors.text }]}>Sub-agents ({agents.length}) · {expanded ? 'Hide' : 'Show'}</Text>
+        <Text style={[styles.subAgentTitle, { color: colors.text }]}>{t('sessions.subAgents', { count: agents.length, action: expanded ? t('common.hide') : t('common.show') })}</Text>
         <SystemIcon android={expanded ? 'expand_less' : 'expand_more'} color={colors.textMuted} ios={expanded ? 'chevron.up' : 'chevron.down'} size={14} />
       </Pressable>
       {expanded ? agents.slice(0, 50).map((agent) => (
@@ -183,8 +212,8 @@ function SubAgents({ agents }: { agents: ControlPlaneAiSessionSummary['subAgents
             <View style={[styles.statusDot, { backgroundColor: ['running', 'pending-init'].includes(agent.status) ? colors.primary : colors.textMuted }]} />
             <Text numberOfLines={1} style={[styles.subAgentName, { color: colors.text }]}>{agent.path || agent.threadId}</Text>
           </View>
-          <Text style={[styles.meta, { color: colors.textMuted }]}>{agent.status} · {agent.activity || 'activity unknown'} · {new Date(agent.updatedAt).toLocaleString()}</Text>
-          <Text style={[styles.muted, { color: colors.textMuted }]}>{agent.message || 'No message available.'}</Text>
+          <Text style={[styles.meta, { color: colors.textMuted }]}>{agent.status} · {agent.activity || t('sessions.activityUnknown')} · {new Date(agent.updatedAt).toLocaleString(locale)}</Text>
+          <Text style={[styles.muted, { color: colors.textMuted }]}>{agent.message || t('sessions.noAgentMessage')}</Text>
         </View>
       )) : null}
     </View>
@@ -193,37 +222,40 @@ function SubAgents({ agents }: { agents: ControlPlaneAiSessionSummary['subAgents
 
 const styles = StyleSheet.create({
   fill: { flex: 1 },
-  list: { flexGrow: 1, gap: 16, paddingHorizontal: 16, paddingBottom: 28, paddingTop: 10 },
+  list: { paddingHorizontal: 16, paddingBottom: 28, paddingTop: 12 },
   empty: { alignItems: 'center', flex: 1, gap: 8, justifyContent: 'center', padding: 32 },
   emptyTitle: { fontSize: 17, fontWeight: '700' },
   emptyText: { maxWidth: 260, textAlign: 'center' },
-  header: { gap: 10, marginBottom: 2 },
+  footer: { gap: 18, marginTop: 18 },
+  header: { gap: 12, marginBottom: 20 },
+  itemSeparator: { height: 18 },
   modePicker: { alignItems: 'center' },
-  sessionBar: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', minHeight: 32 },
-  metaRow: { alignItems: 'center', flexDirection: 'row', gap: 7 },
-  turnNavigator: { alignItems: 'center', flexDirection: 'row', gap: 2 },
-  turnButton: { alignItems: 'center', height: 30, justifyContent: 'center', width: 30 },
+  sessionBar: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', minHeight: 36 },
+  metaRow: { alignItems: 'center', flexDirection: 'row', gap: 8 },
+  turnNavigator: { alignItems: 'center', flexDirection: 'row', gap: 4 },
+  turnButton: { alignItems: 'center', height: 32, justifyContent: 'center', width: 32 },
   turnButtonDisabled: { opacity: 0.3 },
-  turnIndex: { fontSize: 12, fontVariant: ['tabular-nums'], fontWeight: '600', minWidth: 42, textAlign: 'center' },
+  turnIndex: { fontSize: 13, fontVariant: ['tabular-nums'], fontWeight: '600', lineHeight: 18, minWidth: 44, textAlign: 'center' },
   statusDot: { borderRadius: 4, height: 8, width: 8 },
-  meta: { fontSize: 12, lineHeight: 17, textTransform: 'capitalize' },
-  muted: { fontSize: 12, lineHeight: 18 },
-  tool: { alignItems: 'center', flexDirection: 'row', gap: 7, minHeight: 28, paddingHorizontal: 2 },
+  meta: { fontSize: 13, lineHeight: 18, textTransform: 'capitalize' },
+  muted: { fontSize: 13, lineHeight: 19 },
+  tool: { alignItems: 'center', flexDirection: 'row', gap: 8, minHeight: 32, paddingHorizontal: 2 },
   toolBody: { flex: 1, gap: 3 },
-  toolTitle: { flex: 1, fontSize: 13, fontWeight: '500' },
+  toolText: { flex: 1 },
+  toolTitle: { fontSize: 14, fontWeight: '500', lineHeight: 20 },
   conversationEmpty: { alignItems: 'center', paddingVertical: 32 },
   avatar: { alignItems: 'center', borderRadius: 10, height: 28, justifyContent: 'center', width: 28 },
-  promptBlock: { alignSelf: 'flex-end', borderRadius: 18, borderTopRightRadius: 6, maxWidth: '88%', paddingHorizontal: 14, paddingVertical: 10 },
-  responseBlock: { alignSelf: 'stretch', paddingHorizontal: 2, paddingVertical: 2 },
-  conversationUser: { alignSelf: 'flex-end', borderRadius: 16, borderTopRightRadius: 5, maxWidth: '88%', paddingHorizontal: 13, paddingVertical: 10 },
+  promptBlock: { alignSelf: 'flex-end', borderRadius: 18, borderTopRightRadius: 6, maxWidth: '90%', paddingHorizontal: 14, paddingVertical: 12 },
+  responseBlock: { alignSelf: 'stretch', paddingHorizontal: 2, paddingVertical: 4 },
+  conversationUser: { alignSelf: 'flex-end', borderRadius: 18, borderTopRightRadius: 6, maxWidth: '90%', paddingHorizontal: 14, paddingVertical: 12 },
   conversationResponse: { alignSelf: 'flex-start', maxWidth: '98%', paddingHorizontal: 2, paddingVertical: 4 },
-  errorBlock: { alignItems: 'flex-start', borderRadius: 10, flexDirection: 'row', gap: 8, padding: 10 },
-  errorText: { flex: 1, gap: 5 },
-  role: { fontSize: 12, fontWeight: '600', textTransform: 'capitalize' },
-  subAgents: { borderTopWidth: StyleSheet.hairlineWidth, gap: 9, marginTop: 8, paddingTop: 14 },
-  subAgentHeader: { alignItems: 'center', flexDirection: 'row', gap: 9, minHeight: 44 },
-  subAgentTitle: { flex: 1, fontSize: 15, fontWeight: '700' },
-  subAgent: { borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, gap: 5, padding: 11 },
-  subAgentNameRow: { alignItems: 'center', flexDirection: 'row', gap: 7 },
-  subAgentName: { flex: 1, fontSize: 13, fontWeight: '600' },
+  errorBlock: { alignItems: 'flex-start', borderRadius: 12, flexDirection: 'row', gap: 8, padding: 12 },
+  errorText: { flex: 1, gap: 6 },
+  role: { fontSize: 13, fontWeight: '600', lineHeight: 18, textTransform: 'capitalize' },
+  subAgents: { borderTopWidth: StyleSheet.hairlineWidth, gap: 12, marginTop: 8, paddingTop: 16 },
+  subAgentHeader: { alignItems: 'center', flexDirection: 'row', gap: 10, minHeight: 44 },
+  subAgentTitle: { flex: 1, fontSize: 16, fontWeight: '700', lineHeight: 22 },
+  subAgent: { borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, gap: 8, padding: 12 },
+  subAgentNameRow: { alignItems: 'center', flexDirection: 'row', gap: 8 },
+  subAgentName: { flex: 1, fontSize: 14, fontWeight: '600', lineHeight: 20 },
 });

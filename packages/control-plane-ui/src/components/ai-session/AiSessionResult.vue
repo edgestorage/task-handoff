@@ -37,23 +37,33 @@
     />
 
     <section v-if="session.queue?.items.length" class="ai-session-detail-queue">
-      <span>{{ t("sessions.activity.queue", { count: session.queue.pendingCount }) }}</span>
-      <div class="ai-session-detail-queue-list">
+      <span class="ai-session-detail-queue-label">{{ t("sessions.activity.queue", { count: session.queue.pendingCount }) }}</span>
+      <ScrollArea class="ai-session-detail-queue-list" :horizontal="false">
         <article
           v-for="item in session.queue.items"
           :key="item.id"
           class="ai-session-detail-queue-item"
           :data-state="item.status"
         >
-          <p>{{ item.message }}</p>
-          <small v-if="item.error">{{ item.error }}</small>
-          <div>
-            <button type="button" :disabled="busy || !canInterrupt" @click="$emit('steerQueuedMessage', item.id)">{{ t("sessions.activity.steer") }}</button>
-            <button v-if="item.status === 'failed'" type="button" :disabled="busy" @click="$emit('retryQueuedMessage', item.id)">{{ t("sessions.activity.retry") }}</button>
-            <button type="button" :disabled="busy" @click="$emit('removeQueuedMessage', item.id)">{{ t("sessions.activity.remove") }}</button>
+          <List class="ai-session-detail-queue-icon" :size="15" />
+          <div class="ai-session-detail-queue-copy">
+            <p>{{ item.message }}</p>
+            <small v-if="item.error">{{ item.error }}</small>
+          </div>
+          <div class="ai-session-detail-queue-actions">
+            <button type="button" :disabled="busy || !canInterrupt" :title="t('sessions.activity.steer')" @click="$emit('steerQueuedMessage', item.id)">
+              <CornerDownRight :size="15" />
+              <span>{{ t("sessions.activity.steer") }}</span>
+            </button>
+            <button v-if="item.status === 'failed'" type="button" :disabled="busy" :aria-label="t('sessions.activity.retry')" :title="t('sessions.activity.retry')" @click="$emit('retryQueuedMessage', item.id)">
+              <RotateCcw :size="15" />
+            </button>
+            <button type="button" class="ai-session-detail-queue-remove" :disabled="busy" :aria-label="t('sessions.activity.remove')" :title="t('sessions.activity.remove')" @click="$emit('removeQueuedMessage', item.id)">
+              <Trash2 :size="15" />
+            </button>
           </div>
         </article>
-      </div>
+      </ScrollArea>
     </section>
 
     <div v-if="canResolveApproval" class="ai-session-detail-approval">
@@ -74,11 +84,12 @@
 </template>
 
 <script setup lang="ts">
-import { Ban, Check, X } from "@lucide/vue";
+import { Ban, Check, CornerDownRight, List, RotateCcw, Trash2, X } from "@lucide/vue";
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import type { AiSessionSummary } from "../../api/types";
 import { useStreamingMessagesStore } from "../../apps/control-plane/useStreamingMessagesStore";
+import { ScrollArea } from "../ui/scroll-area";
 import AiSessionStreamingMarkdown from "./AiSessionStreamingMarkdown.vue";
 import AiSessionSubAgents from "./AiSessionSubAgents.vue";
 import AiSessionToolActivity from "./AiSessionToolActivity.vue";
@@ -189,42 +200,56 @@ const displayContent = computed(() => streamingContent.value || props.responseCo
 }
 
 .ai-session-detail-queue {
-  display: grid;
-  gap: 7px;
   min-width: 0;
-  border-bottom: 1px solid var(--detail-activity-border);
-  padding-bottom: 12px;
 }
 
-.ai-session-detail-queue > span {
-  color: var(--detail-activity-muted);
-  font-size: 12px;
-  font-weight: 800;
+.ai-session-detail-queue-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  clip-path: inset(50%);
 }
 
 .ai-session-detail-queue-list {
-  display: grid;
-  gap: 8px;
+  max-height: 220px;
+  border: 1px solid var(--detail-activity-border);
+  border-radius: 10px;
+  background: var(--detail-action-bg);
 }
 
 .ai-session-detail-queue-item {
   display: grid;
-  gap: 7px;
+  grid-template-columns: 15px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
   min-width: 0;
-  border: 1px solid var(--detail-activity-border);
-  border-radius: 7px;
-  background: var(--detail-activity-surface);
-  padding: 9px;
+  min-height: 42px;
+  padding: 7px 9px;
 }
 
-.ai-session-detail-queue-item[data-state="failed"] {
-  border-color: var(--detail-activity-danger);
+.ai-session-detail-queue-item + .ai-session-detail-queue-item {
+  border-top: 1px solid var(--detail-activity-border);
+}
+
+.ai-session-detail-queue-icon {
+  color: var(--detail-activity-muted);
+}
+
+.ai-session-detail-queue-item[data-state="failed"] .ai-session-detail-queue-icon {
+  color: var(--detail-activity-danger);
+}
+
+.ai-session-detail-queue-copy {
+  min-width: 0;
 }
 
 .ai-session-detail-queue-item p {
   margin: 0;
   color: var(--detail-activity-text);
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.4;
   overflow-wrap: anywhere;
 }
@@ -235,36 +260,46 @@ const displayContent = computed(() => streamingContent.value || props.responseCo
   overflow-wrap: anywhere;
 }
 
-.ai-session-detail-queue-item div {
+.ai-session-detail-queue-actions {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  align-items: center;
+  gap: 2px;
 }
 
-.ai-session-detail-queue-item button {
+.ai-session-detail-queue-actions button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 26px;
-  border: 1px solid var(--detail-activity-border);
-  border-radius: 7px;
+  gap: 4px;
+  min-width: 28px;
+  min-height: 28px;
+  border: 0;
+  border-radius: 6px;
   background: transparent;
-  color: var(--detail-activity-text);
+  color: var(--detail-activity-muted);
   cursor: pointer;
-  font-size: 11px;
-  padding: 0 8px;
+  font-size: 12px;
+  padding: 0 5px;
 }
 
-.ai-session-detail-queue-item button:hover,
-.ai-session-detail-queue-item button:focus-visible {
-  border-color: var(--focus-ring, var(--detail-activity-strong));
+.ai-session-detail-queue-actions button:hover {
+  background: var(--detail-activity-surface);
   color: var(--detail-activity-strong);
-  outline: none;
 }
 
-.ai-session-detail-queue-item button:disabled {
+.ai-session-detail-queue-actions button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--focus-ring, var(--detail-activity-strong));
+}
+
+.ai-session-detail-queue-actions button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+}
+
+.ai-session-detail-queue-actions .ai-session-detail-queue-remove:hover {
+  background: color-mix(in srgb, var(--detail-activity-danger) 12%, transparent);
+  color: var(--detail-activity-danger);
 }
 
 .ai-session-detail-approval {

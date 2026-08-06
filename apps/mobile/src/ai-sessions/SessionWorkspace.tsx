@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-import { Alert, FlatList, KeyboardAvoidingView, LayoutAnimation, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useEffect, useRef, useState, type ComponentProps } from 'react';
+import { Alert, FlatList, Keyboard, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { canInterruptAiSession, isAiSessionApprovalPending, type ControlPlaneAiSessionSummary, type ControlPlaneClient } from '@task-handoff/control-plane-client';
 import type { AiSessionMentionCandidate, AiSessionPermissionMode } from '@task-handoff/protocol/ai-sessions';
@@ -11,7 +11,9 @@ import { pickDocument, pickImage } from '../platform/file-picker';
 import { runtimeAttachmentFromServerCandidate, uploadMobileAttachment, usableUploadRefs, type MobilePendingAttachment } from './attachments';
 import { useMobileTheme } from '../components/theme';
 import { SystemIcon } from '../components/SystemIcon';
-import { SessionComposerToolbar } from './NativeSessionControls';
+import { SessionComposer } from './SessionComposer';
+import { useI18n, type Translate } from '../i18n';
+import type { MobileAiSessionPermissionStore } from './permission-store';
 
 export function SessionWorkspace({
   controlPlaneId,
@@ -20,8 +22,12 @@ export function SessionWorkspace({
   messages,
   actions,
   drafts,
+  permissions,
+  defaultPermissionMode,
   client,
   onVisible,
+  detailMode: controlledDetailMode,
+  onDetailModeChange,
   syncPhase = 'ready',
 }: {
   controlPlaneId: string;
@@ -30,26 +36,44 @@ export function SessionWorkspace({
   messages: readonly MobileStreamingMessage[];
   actions?: MobileAiSessionActionCoordinator;
   drafts?: MobileAiSessionDraftStore;
+  permissions?: MobileAiSessionPermissionStore;
+  defaultPermissionMode?: AiSessionPermissionMode;
   client?: ControlPlaneClient;
   onVisible?(updatedAt: string): void;
+  detailMode?: SessionDetailMode;
+  onDetailModeChange?(mode: SessionDetailMode): void;
   syncPhase?: 'idle' | 'loading' | 'ready' | 'stale' | 'offline' | 'error';
 }) {
   const insets = useSafeAreaInsets();
   const { colors } = useMobileTheme();
+  const { t } = useI18n();
   const [draft, setDraft] = useState('');
   const latestDraft = useRef('');
   const draftTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const [permissionMode, setPermissionMode] = useState<AiSessionPermissionMode>('ask');
+  const [permissionSelection, setPermissionSelection] = useState<{
+    key: string;
+    mode: AiSessionPermissionMode;
+    resolved: boolean;
+  }>();
   const [composerFocused, setComposerFocused] = useState(false);
   const [composerOverlayHeight, setComposerOverlayHeight] = useState(0);
   const [, rerender] = useState(0);
   const [attachments, setAttachments] = useState<MobilePendingAttachment[]>([]);
   const [runtimeCandidates, setRuntimeCandidates] = useState<AiSessionMentionCandidate[]>([]);
   const [selectedTurnIndex, setSelectedTurnIndex] = useState(() => Math.max(0, aiSessionDisplayTurns(session).length - 1));
-  const [detailMode, setDetailMode] = useState<SessionDetailMode>('turn');
+  const [localDetailMode, setLocalDetailMode] = useState<SessionDetailMode>('turn');
+  const detailMode = controlledDetailMode ?? localDetailMode;
+  const setDetailMode = (next: SessionDetailMode) => {
+    if (controlledDetailMode === undefined) setLocalDetailMode(next);
+    onDetailModeChange?.(next);
+  };
   const selectionSessionId = useRef<string | undefined>(undefined);
   const knownTurnCount = useRef(0);
   const sessionId = session?.id;
+  const permissionKey = sessionId ? `${controlPlaneId}\u0000${instanceId}\u0000${sessionId}` : undefined;
+  const permissionMode = permissionSelection && permissionSelection.key === permissionKey
+    ? permissionSelection.mode
+    : defaultPermissionMode ?? 'ask';
   const turnCount = aiSessionDisplayTurns(session).length;
   const latestTurnIndex = Math.max(0, turnCount - 1);
   useEffect(() => actions?.subscribe(() => rerender((value) => value + 1)), [actions]);
@@ -67,6 +91,20 @@ export function SessionWorkspace({
     };
   }, [controlPlaneId, drafts, instanceId, sessionId]);
   useEffect(() => {
+    if (!sessionId || session?.agent !== 'codex' || !defaultPermissionMode) return;
+    let live = true;
+    const key = `${controlPlaneId}\u0000${instanceId}\u0000${sessionId}`;
+    setPermissionSelection((current) => current?.key === key
+      ? current
+      : { key, mode: defaultPermissionMode, resolved: !permissions });
+    if (permissions) void permissions.read(controlPlaneId, instanceId, sessionId, defaultPermissionMode).then((stored) => {
+      if (live) setPermissionSelection((current) => current?.key === key && !current.resolved
+        ? { key, mode: stored, resolved: true }
+        : current);
+    });
+    return () => { live = false; };
+  }, [controlPlaneId, defaultPermissionMode, instanceId, permissions, session?.agent, sessionId]);
+  useEffect(() => {
     const sameSession = selectionSessionId.current === sessionId;
     const previousCount = knownTurnCount.current;
     setSelectedTurnIndex((current) => !sameSession || current >= previousCount - 1 ? latestTurnIndex : Math.min(current, latestTurnIndex));
@@ -83,12 +121,15 @@ export function SessionWorkspace({
   const actionErrors = [sendState, state('interrupt'), ...(isLatestTurn ? [state('approval'), ...session.queue.items.flatMap((item) => [
     state('queue-steer', item.id), state('queue-retry', item.id), state('queue-remove', item.id),
   ])] : [])].map((candidate) => candidate?.error).filter((error, index, all): error is string => Boolean(error) && all.indexOf(error) === index);
-  const send = async (mode: 'auto' | 'steer' = 'auto') => {
+  const send = async () => {
     if (!actions || !draft.trim()) return;
     let refs;
     try { refs = usableUploadRefs(attachments); }
     catch (cause) { setAttachments((current) => [...current, { localId: 'validation', kind: 'file', name: 'Attachment', mime: 'application/octet-stream', size: 0, phase: 'failed', error: cause instanceof Error ? cause.message : 'Attachment invalid.' }]); return; }
-    const result = await actions.send(instanceId, session.id, draft.trim(), permissionMode, refs, mode);
+    const selectedPermissionMode = permissionSelection && permissionSelection.key === permissionKey && permissionSelection.resolved
+      ? permissionSelection.mode
+      : defaultPermissionMode;
+    const result = await actions.send(instanceId, session.id, draft.trim(), session.agent === 'codex' ? selectedPermissionMode : undefined, refs, 'auto');
     if (result.disposition === 'accepted') {
       setDraft('');
       latestDraft.current = '';
@@ -122,70 +163,83 @@ export function SessionWorkspace({
     if (drafts) draftTimer.current = setTimeout(() => { void drafts.write(controlPlaneId, instanceId, session.id, text); }, 150);
   };
   const hasDraft = Boolean(draft.trim());
-  const composerAction = !hasDraft && canInterrupt ? 'stop' : hasDraft && session.status === 'running' && canInterrupt ? 'steer' : 'send';
+  const composerAction = !hasDraft && canInterrupt ? 'stop' : 'send';
   const composerDisabled = !authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes((composerAction === 'stop' ? state('interrupt') : sendState)?.phase || '')
     || (composerAction === 'stop' ? !canInterrupt : !session.actions?.send || !hasDraft);
   const runComposerAction = () => {
     if (composerAction === 'stop') void actions?.interrupt(instanceId, session.id);
-    else void send(composerAction === 'steer' ? 'steer' : 'auto');
+    else void send();
   };
   const setComposerFocus = (focused: boolean) => {
-    if (Platform.OS === 'ios') LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     setComposerFocused(focused);
   };
+  const updatePermissionMode = (mode: AiSessionPermissionMode) => {
+    if (permissionKey) setPermissionSelection({ key: permissionKey, mode, resolved: true });
+    if (sessionId && permissions) void permissions.write(controlPlaneId, instanceId, sessionId, mode).catch(() => undefined);
+  };
   return (
-    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.fill}>
-      <SessionDetail bottomInset={composerOverlayHeight} messages={messages} mode={detailMode} onModeChange={setDetailMode} onVisible={onVisible} onTurnIndexChange={setSelectedTurnIndex} session={session} turnIndex={selectedTurnIndex} />
+    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} onTouchStart={Keyboard.dismiss} style={styles.fill} testID="session-workspace">
+      <SessionDetail bottomInset={composerOverlayHeight} messages={messages} mode={detailMode} onModeChange={setDetailMode} onVisible={onVisible} onTurnIndexChange={setSelectedTurnIndex} session={session} showModePicker={controlledDetailMode === undefined} turnIndex={selectedTurnIndex} />
       <View onLayout={(event) => setComposerOverlayHeight(event.nativeEvent.layout.height)} style={[styles.actions, { paddingBottom: Math.max(insets.bottom, 8) }]}> 
         {!authoritativeActionsEnabled ? (
           <View style={[styles.notice, { backgroundColor: colors.notice }]}> 
             <SystemIcon android="cloud_off" color={colors.noticeText} ios="icloud.slash" size={16} />
-            <Text accessibilityLiveRegion="polite" style={[styles.noticeText, { color: colors.noticeText }]}>Live state is unavailable. Actions are disabled until the Control Plane snapshot recovers.</Text>
+            <Text accessibilityLiveRegion="polite" style={[styles.noticeText, { color: colors.noticeText }]}>{t('workspace.offline')}</Text>
           </View>
         ) : null}
         {isLatestTurn && approvalPending ? (
           <View style={[styles.approval, { backgroundColor: colors.notice }]}> 
             <View style={styles.approvalTitleRow}>
               <SystemIcon android="approval" color={colors.noticeText} ios="hand.raised.fill" size={17} />
-              <Text style={[styles.approvalTitle, { color: colors.noticeText }]}>Approval needed</Text>
+              <Text style={[styles.approvalTitle, { color: colors.noticeText }]}>{t('sessions.approvalNeeded')}</Text>
             </View>
             <View style={styles.actionRow}>
             {(['allow', 'deny', 'skip'] as const).map((decision) => (
-              <ActionButton key={decision} label={decision} tone={decision === 'deny' ? 'danger' : 'secondary'} disabled={!authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes(state('approval')?.phase || '')} onPress={() => {
-                Alert.alert('Resolve approval?', `Send “${decision}” to this session?`, [
-                  { text: 'Cancel', style: 'cancel' },
-                  { text: decision, onPress: () => { void actions?.approval(instanceId, session.id, decision); } },
+              <ActionButton key={decision} label={t(`workspace.${decision}` as 'workspace.allow')} tone={decision === 'deny' ? 'danger' : 'secondary'} disabled={!authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes(state('approval')?.phase || '')} onPress={() => {
+                const decisionLabel = t(`workspace.${decision}` as 'workspace.allow');
+                Alert.alert(t('workspace.resolveApproval'), t('workspace.sendDecision', { decision: decisionLabel }), [
+                  { text: t('common.cancel'), style: 'cancel' },
+                  { text: decisionLabel, onPress: () => { void actions?.approval(instanceId, session.id, decision); } },
                 ]);
               }} />
             ))}
             </View>
           </View>
         ) : null}
-        {isLatestTurn && session.queue.items.length ? <FlatList
-          accessibilityLabel="Queued messages"
+        {isLatestTurn && session.queue.items.length ? <View style={[styles.queueListFrame, { backgroundColor: colors.surface, borderColor: colors.border }]}><FlatList
+          accessibilityLabel={t('workspace.queuedMessages')}
           data={session.queue.items}
           keyExtractor={(item) => item.id}
           keyboardShouldPersistTaps="handled"
           nestedScrollEnabled
           style={styles.queueList}
-          contentContainerStyle={styles.queueListContent}
-          renderItem={({ item }) => (
-            <View style={[styles.queue, { backgroundColor: colors.surfaceMuted }]}> 
-              <View style={styles.queueHeading}>
-                <SystemIcon android="schedule" color={colors.textMuted} ios="clock" size={14} />
-                <Text style={[styles.queueLabel, { color: colors.textMuted }]}>Queued</Text>
+          ItemSeparatorComponent={() => <View style={[styles.queueSeparator, { backgroundColor: colors.border }]} />}
+          renderItem={({ item }) => {
+            const metadata = [
+              item.status === 'failed' ? t('workspace.queueFailed') : undefined,
+              item.permissionMode ? queuePermissionLabel(item.permissionMode, t) : undefined,
+              item.attachments.length ? t('workspace.queueAttachments', { count: item.attachments.length }) : undefined,
+              item.references.length ? t('workspace.queueReferences', { count: item.references.length }) : undefined,
+            ].filter(Boolean).join(' · ');
+            return (
+              <View style={styles.queueRow}>
+                <View style={styles.queueContent}>
+                  <SystemIcon android="queue" color={item.status === 'failed' ? colors.error : colors.textMuted} ios="text.line.last.and.arrowtriangle.forward" size={15} style={styles.queueIcon} />
+                  <View style={styles.queueCopy}>
+                    <Text numberOfLines={2} style={[styles.queueText, { color: colors.text }]}>{item.message}</Text>
+                    {metadata ? <Text numberOfLines={1} style={[styles.queueMeta, { color: colors.textMuted }]}>{metadata}</Text> : null}
+                    {item.error ? <Text numberOfLines={2} style={[styles.error, styles.queueError, { color: colors.error }]}>{item.error}</Text> : null}
+                  </View>
+                </View>
+                <View style={styles.queueActions}>
+                  <QueueActionButton icon={{ android: 'turn_right', ios: 'arrow.turn.up.right' }} label={t('workspace.steerAction')} disabled={!authoritativeActionsEnabled || !actions || !canInterrupt || ['busy', 'result-unknown'].includes(state('queue-steer', item.id)?.phase || '')} onPress={() => { void actions?.queue(instanceId, session.id, item.id, 'steer'); }} showLabel />
+                  {item.status === 'failed' ? <QueueActionButton icon={{ android: 'refresh', ios: 'arrow.clockwise' }} label={t('workspace.retryAction')} disabled={!authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes(state('queue-retry', item.id)?.phase || '')} onPress={() => { void actions?.queue(instanceId, session.id, item.id, 'retry'); }} /> : null}
+                  <QueueActionButton destructive icon={{ android: 'close', ios: 'xmark' }} label={t('workspace.removeAction')} disabled={!authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes(state('queue-remove', item.id)?.phase || '')} onPress={() => { void actions?.queue(instanceId, session.id, item.id, 'remove'); }} />
+                </View>
               </View>
-              <Text numberOfLines={2} style={[styles.queueText, { color: colors.text }]}>{item.message}</Text>
-              <Text style={[styles.queueMeta, { color: colors.textMuted }]}>{item.status}{item.permissionMode ? ` · ${item.permissionMode}` : ''} · {item.attachments.length} attachments · {item.references.length} references</Text>
-              {item.error ? <Text style={[styles.error, { color: colors.error }]}>{item.error}</Text> : null}
-              <View style={styles.actionRow}>
-                <ActionButton label="steer" tone="secondary" disabled={!authoritativeActionsEnabled || !actions || !canInterrupt || ['busy', 'result-unknown'].includes(state('queue-steer', item.id)?.phase || '')} onPress={() => { void actions?.queue(instanceId, session.id, item.id, 'steer'); }} />
-                {item.status === 'failed' ? <ActionButton label="retry" tone="secondary" disabled={!authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes(state('queue-retry', item.id)?.phase || '')} onPress={() => { void actions?.queue(instanceId, session.id, item.id, 'retry'); }} /> : null}
-                <ActionButton label="remove" tone="danger" disabled={!authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes(state('queue-remove', item.id)?.phase || '')} onPress={() => { void actions?.queue(instanceId, session.id, item.id, 'remove'); }} />
-              </View>
-            </View>
-          )}
-        /> : null}
+            );
+          }}
+        /></View> : null}
         {runtimeCandidates.length ? <FlatList accessibilityLabel="Runtime files" data={runtimeCandidates} keyExtractor={(candidate) => candidate.path} keyboardShouldPersistTaps="handled" nestedScrollEnabled style={[styles.runtimeFiles, { backgroundColor: colors.background }]} contentContainerStyle={styles.runtimeFilesContent} renderItem={({ item: candidate }) => <Pressable accessibilityLabel={`${candidate.name}, ${candidate.path}`} accessibilityRole="button" onPress={() => {
           if (!session.cwd) return;
           try {
@@ -195,38 +249,25 @@ export function SessionWorkspace({
           } catch { setRuntimeCandidates([]); }
         }}><Text style={[styles.runtimeFile, { color: colors.primary }]}>{candidate.name} · {candidate.path}</Text></Pressable>} /> : null}
         {attachments.length ? <View style={styles.attachments}>{attachments.map((attachment) => <View key={attachment.localId} style={[styles.attachment, { backgroundColor: colors.surfaceMuted }]}><SystemIcon android={attachment.kind === 'image' ? 'image' : 'description'} color={colors.textMuted} ios={attachment.kind === 'image' ? 'photo' : 'doc'} size={15} /><Text numberOfLines={1} style={[styles.attachmentName, { color: colors.text }]}>{attachment.name}</Text><Text style={[styles.attachmentPhase, { color: attachment.phase === 'failed' ? colors.error : colors.textMuted }]}>{attachment.phase}</Text><Pressable accessibilityLabel={`Remove ${attachment.name}`} accessibilityRole="button" hitSlop={8} onPress={() => setAttachments((current) => current.filter((item) => item.localId !== attachment.localId))}><SystemIcon android="close" color={colors.textMuted} ios="xmark.circle.fill" size={17} /></Pressable>{attachment.error ? <Text accessibilityLiveRegion="polite" style={[styles.error, { color: colors.error }]}>{attachment.error}</Text> : null}</View>)}</View> : null}
-        <View style={[styles.composerRow, composerFocused && styles.composerRowFocused, { backgroundColor: colors.surfaceMuted, borderColor: colors.border }]}> 
-          <View style={styles.nativeToolbar}>
-            <SessionComposerToolbar
-              fileDisabled={!authoritativeActionsEnabled || !client}
-              imageDisabled={!authoritativeActionsEnabled || !client}
-              onAddFile={() => { void selectLocal('file'); }}
-              onAddImage={() => { void selectLocal('image'); }}
-              onAddRuntimeFile={() => { void loadRuntimeFiles(); }}
-              onInterrupt={() => undefined}
-              onPermissionModeChange={setPermissionMode}
-              permissionMode={permissionMode}
-              runtimeFileDisabled={!authoritativeActionsEnabled || !client || !session.cwd}
-              showInterrupt={false}
-            />
-          </View>
-          <TextInput
-            accessibilityLabel="Message"
-            editable={authoritativeActionsEnabled}
-            multiline
-            onBlur={() => setComposerFocus(false)}
-            onChangeText={updateDraft}
-            onFocus={() => setComposerFocus(true)}
-            placeholder="Message this session"
-            placeholderTextColor={colors.textMuted}
-            style={[styles.input, composerFocused && styles.inputFocused, { color: colors.text }]}
-            textAlignVertical="top"
-            value={draft}
-          />
-          <Pressable accessibilityLabel={composerAction === 'stop' ? 'Stop' : composerAction === 'steer' ? 'Steer' : 'Send'} accessibilityRole="button" accessibilityState={{ disabled: composerDisabled }} disabled={composerDisabled} onPress={runComposerAction} style={({ pressed }) => [styles.sendButton, { backgroundColor: composerAction === 'stop' ? colors.error : colors.primaryButton }, pressed && styles.pressed, composerDisabled && styles.disabled]}>
-            <SystemIcon android={composerAction === 'stop' ? 'stop' : composerAction === 'steer' ? 'turn_right' : 'arrow_upward'} color="#ffffff" ios={composerAction === 'stop' ? 'stop.fill' : composerAction === 'steer' ? 'arrow.turn.up.right' : 'arrow.up'} size={18} />
-          </Pressable>
-        </View>
+        <SessionComposer
+          action={composerAction}
+          actionDisabled={composerDisabled}
+          editable={authoritativeActionsEnabled}
+          fileDisabled={!authoritativeActionsEnabled || !client}
+          focused={composerFocused}
+          imageDisabled={!authoritativeActionsEnabled || !client}
+          onAction={runComposerAction}
+          onAddFile={() => { void selectLocal('file'); }}
+          onAddImage={() => { void selectLocal('image'); }}
+          onAddRuntimeFile={() => { void loadRuntimeFiles(); }}
+          onFocusChange={setComposerFocus}
+          onPermissionModeChange={updatePermissionMode}
+          onValueChange={updateDraft}
+          permissionEnabled={session.agent === 'codex'}
+          permissionMode={permissionMode}
+          runtimeFileDisabled={!authoritativeActionsEnabled || !client || !session.cwd}
+          value={draft}
+        />
         {actionErrors.map((error) => <Text accessibilityLiveRegion="polite" key={error} style={[styles.error, { color: colors.error }]}>{error}</Text>)}
       </View>
     </KeyboardAvoidingView>
@@ -240,49 +281,50 @@ function ActionButton({ label, disabled, onPress, tone = 'primary' }: { label: s
   return <Pressable accessibilityRole="button" accessibilityState={{ disabled: Boolean(disabled) }} disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.button, { backgroundColor, borderColor: tone === 'secondary' ? colors.border : backgroundColor }, tone === 'secondary' && styles.buttonBorder, disabled && styles.disabled, pressed && styles.pressed]}><Text style={[styles.buttonText, { color }]}>{label}</Text></Pressable>;
 }
 
+function QueueActionButton({ label, icon, destructive = false, disabled, onPress, showLabel = false }: { label: string; icon: Pick<ComponentProps<typeof SystemIcon>, 'android' | 'ios'>; destructive?: boolean; disabled?: boolean; onPress(): void; showLabel?: boolean }) {
+  const { colors } = useMobileTheme();
+  const color = destructive ? colors.error : colors.primary;
+  return <Pressable accessibilityLabel={label} accessibilityRole="button" accessibilityState={{ disabled: Boolean(disabled) }} disabled={disabled} hitSlop={5} onPress={onPress} style={({ pressed }) => [styles.queueAction, disabled && styles.disabled, pressed && styles.pressed]}><SystemIcon android={icon.android} color={color} ios={icon.ios} size={14} />{showLabel ? <Text style={[styles.queueActionText, { color }]}>{label}</Text> : null}</Pressable>;
+}
+
+function queuePermissionLabel(mode: AiSessionPermissionMode, t: Translate) {
+  if (mode === 'auto-review') return t('composer.autoReview');
+  if (mode === 'full-access') return t('composer.fullAccess');
+  return t('composer.ask');
+}
+
 const styles = StyleSheet.create({
   fill: { flex: 1 },
-  actions: { bottom: 0, gap: 7, left: 0, paddingHorizontal: 10, paddingTop: 6, position: 'absolute', right: 0, zIndex: 10 },
-  actionRow: { alignItems: 'center', flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
-  approval: { borderRadius: 12, gap: 8, padding: 10 },
-  approvalTitleRow: { alignItems: 'center', flexDirection: 'row', gap: 7 },
-  approvalTitle: { fontSize: 13, fontWeight: '700' },
-  nativeToolbar: { alignSelf: 'flex-end', justifyContent: 'flex-end', marginLeft: -6, width: 104 },
-  composerRow: {
-    alignItems: 'center',
-    borderRadius: 25,
-    borderWidth: StyleSheet.hairlineWidth,
-    flexDirection: 'row',
-    gap: 0,
-    minHeight: 50,
-    padding: 4,
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 5 },
-    shadowOpacity: 0.13,
-    shadowRadius: 14,
-  },
-  composerRowFocused: { alignItems: 'flex-end', borderRadius: 24, minHeight: 104 },
-  input: { alignSelf: 'stretch', flex: 1, fontSize: 16, lineHeight: 21, maxHeight: 128, minHeight: 40, paddingHorizontal: 4, paddingVertical: 9 },
-  inputFocused: { minHeight: 94, paddingTop: 12 },
-  sendButton: { alignItems: 'center', alignSelf: 'flex-end', borderRadius: 19, height: 38, justifyContent: 'center', width: 38 },
-  button: { borderRadius: 9, minHeight: 36, justifyContent: 'center', paddingHorizontal: 12 },
+  actions: { bottom: 0, gap: 8, left: 0, paddingHorizontal: 12, paddingTop: 8, position: 'absolute', right: 0, zIndex: 10 },
+  actionRow: { alignItems: 'center', flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  approval: { borderRadius: 12, gap: 10, padding: 12 },
+  approvalTitleRow: { alignItems: 'center', flexDirection: 'row', gap: 8 },
+  approvalTitle: { fontSize: 14, fontWeight: '700', lineHeight: 20 },
+  button: { borderRadius: 10, minHeight: 40, justifyContent: 'center', paddingHorizontal: 14 },
   buttonBorder: { borderWidth: StyleSheet.hairlineWidth },
   disabled: { opacity: 0.4 },
   pressed: { opacity: 0.7 },
-  buttonText: { fontSize: 12, fontWeight: '700', textTransform: 'capitalize' },
-  queue: { backgroundColor: '#f1f5f9', borderRadius: 9, gap: 6, padding: 8 },
-  queueHeading: { alignItems: 'center', flexDirection: 'row', gap: 5 },
-  queueLabel: { fontSize: 12, fontWeight: '700' },
-  queueList: { maxHeight: 168 }, queueListContent: { gap: 7 },
-  queueText: { color: '#334155', fontSize: 12 },
-  queueMeta: { color: '#64748b', fontSize: 12 },
-  notice: { alignItems: 'flex-start', borderRadius: 10, flexDirection: 'row', gap: 7, padding: 9 },
-  noticeText: { flex: 1, fontSize: 12, lineHeight: 17 },
-  error: { color: '#b91c1c', fontSize: 12, lineHeight: 17 },
-  attachments: { gap: 5 },
-  attachment: { alignItems: 'center', borderRadius: 9, flexDirection: 'row', flexWrap: 'wrap', gap: 7, paddingHorizontal: 9, paddingVertical: 7 },
-  attachmentName: { flex: 1, fontSize: 12, fontWeight: '600' },
-  attachmentPhase: { fontSize: 12, textTransform: 'capitalize' },
-  runtimeFiles: { backgroundColor: '#f8fafc', borderRadius: 8, maxHeight: 120 }, runtimeFilesContent: { gap: 7, padding: 8 },
-  runtimeFile: { color: '#2563eb', fontSize: 12 },
+  buttonText: { fontSize: 13, fontWeight: '700', lineHeight: 18, textTransform: 'capitalize' },
+  queueListFrame: { borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },
+  queueList: { maxHeight: 224 },
+  queueSeparator: { height: StyleSheet.hairlineWidth, marginLeft: 40 },
+  queueRow: { alignItems: 'center', flexDirection: 'row', gap: 8, minHeight: 52, paddingHorizontal: 10, paddingVertical: 8 },
+  queueContent: { alignItems: 'flex-start', flex: 1, flexDirection: 'row', gap: 9, minWidth: 0 },
+  queueIcon: { marginTop: 3 },
+  queueCopy: { flex: 1, gap: 1, minWidth: 0 },
+  queueText: { fontSize: 14, fontWeight: '500', lineHeight: 20 },
+  queueMeta: { fontSize: 12, lineHeight: 17 },
+  queueError: { marginTop: 1 },
+  queueActions: { alignItems: 'center', flexDirection: 'row', gap: 2 },
+  queueAction: { alignItems: 'center', borderRadius: 8, flexDirection: 'row', gap: 4, height: 34, justifyContent: 'center', minWidth: 34, paddingHorizontal: 6 },
+  queueActionText: { fontSize: 12, fontWeight: '700', lineHeight: 17 },
+  notice: { alignItems: 'flex-start', borderRadius: 10, flexDirection: 'row', gap: 8, padding: 12 },
+  noticeText: { flex: 1, fontSize: 13, lineHeight: 18 },
+  error: { color: '#b91c1c', fontSize: 13, lineHeight: 18 },
+  attachments: { gap: 8 },
+  attachment: { alignItems: 'center', borderRadius: 10, flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 10, paddingVertical: 8 },
+  attachmentName: { flex: 1, fontSize: 13, fontWeight: '600', lineHeight: 18 },
+  attachmentPhase: { fontSize: 12, lineHeight: 17, textTransform: 'capitalize' },
+  runtimeFiles: { backgroundColor: '#f8fafc', borderRadius: 10, maxHeight: 128 }, runtimeFilesContent: { gap: 8, padding: 10 },
+  runtimeFile: { color: '#2563eb', fontSize: 13, lineHeight: 18 },
 });

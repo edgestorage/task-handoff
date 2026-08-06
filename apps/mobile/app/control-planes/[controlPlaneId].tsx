@@ -7,10 +7,12 @@ import { SystemIcon } from '../../src/components/SystemIcon';
 import { useMobileTheme } from '../../src/components/theme';
 import type { MobileControlPlaneProfile } from '../../src/control-plane/profile';
 import { deleteMobileControlPlaneProfile, mobileProfileStore as profiles } from '../../src/control-plane/runtime';
+import { useI18n, type Translate } from '../../src/i18n';
 
 export default function ControlPlaneDetailScreen() {
   const { controlPlaneId } = useLocalSearchParams<{ controlPlaneId: string }>();
   const { colors } = useMobileTheme();
+  const { t } = useI18n();
   const [profile, setProfile] = useState<MobileControlPlaneProfile>();
   const [active, setActive] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -27,11 +29,11 @@ export default function ControlPlaneDetailScreen() {
       setLoading(false);
     }).catch((cause) => {
       if (!live) return;
-      setError(messageFor(cause));
+      setError(messageFor(cause, t));
       setLoading(false);
     });
     return () => { live = false; };
-  }, [controlPlaneId]);
+  }, [controlPlaneId, t]);
 
   const makeActive = async () => {
     if (!profile) return;
@@ -41,7 +43,7 @@ export default function ControlPlaneDetailScreen() {
       await profiles.setActive(profile);
       setActive(true);
     } catch (cause) {
-      setError(messageFor(cause));
+      setError(messageFor(cause, t));
     } finally {
       setBusy(false);
     }
@@ -50,12 +52,12 @@ export default function ControlPlaneDetailScreen() {
   const remove = () => {
     if (!profile) return;
     Alert.alert(
-      'Remove Control Plane?',
-      'This removes its local sessions, drafts, and cached state from this device. Nothing is removed from the Control Plane.',
+      t('controlPlane.removeTitle'),
+      t('controlPlane.removeDescription'),
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: t('common.cancel'), style: 'cancel' },
         {
-          text: 'Remove',
+          text: t('common.remove'),
           style: 'destructive',
           onPress: () => {
             setBusy(true);
@@ -63,7 +65,7 @@ export default function ControlPlaneDetailScreen() {
             void deleteMobileControlPlaneProfile(profile).then((remaining) => {
               router.replace(remaining.length ? '/(tabs)/profiles' : '/profiles');
             }).catch((cause) => {
-              setError(messageFor(cause));
+              setError(messageFor(cause, t));
               setBusy(false);
             });
           },
@@ -72,53 +74,53 @@ export default function ControlPlaneDetailScreen() {
     );
   };
 
-  if (loading) return <View style={[styles.loading, { backgroundColor: colors.background }]}><ActivityIndicator accessibilityLabel="Loading Control Plane" /></View>;
+  if (loading) return <View style={[styles.loading, { backgroundColor: colors.background }]}><ActivityIndicator accessibilityLabel={t('controlPlane.loading')} /></View>;
 
   if (!profile) {
     return (
       <Screen>
-        <Stack.Screen options={{ title: 'Control Plane' }} />
+        <Stack.Screen options={{ title: t('nav.controlPlane') }} />
         <View style={styles.empty}>
           <SystemIcon android="error_outline" color={colors.textMuted} ios="exclamationmark.circle" size={30} />
-          <Text style={[styles.emptyTitle, { color: colors.text }]}>Control Plane not found</Text>
-          <Text style={[styles.emptyText, { color: colors.textMuted }]}>It may have been removed from this device.</Text>
+          <Text style={[styles.emptyTitle, { color: colors.text }]}>{t('controlPlane.notFound')}</Text>
+          <Text style={[styles.emptyText, { color: colors.textMuted }]}>{t('controlPlane.maybeRemoved')}</Text>
         </View>
       </Screen>
     );
   }
 
-  const name = profile.identity.displayName || 'Control Plane';
+  const name = profile.identity.displayName || t('profiles.defaultName');
   return (
     <Screen>
       <Stack.Screen options={{ title: name }} />
 
       <View style={styles.section}>
-        <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>CONNECTION</Text>
+        <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>{t('controlPlane.connection')}</Text>
         <View style={[styles.group, { backgroundColor: colors.surface, borderColor: colors.border }]}> 
-          <DetailRow colors={colors} label="Status" value={active ? 'Active on this device' : 'Saved'} valueColor={active ? colors.primary : undefined} />
+          <DetailRow colors={colors} label={t('controlPlane.status')} value={active ? t('controlPlane.active') : t('controlPlane.saved')} valueColor={active ? colors.primary : undefined} />
           <View style={[styles.divider, { backgroundColor: colors.border }]} />
-          <DetailRow colors={colors} label="Address" value={profile.access.origin} />
+          <DetailRow colors={colors} label={t('controlPlane.address')} value={profile.access.origin} />
           <View style={[styles.divider, { backgroundColor: colors.border }]} />
-          <DetailRow colors={colors} label="Control Plane ID" value={profile.identity.controlPlaneId} />
+          <DetailRow colors={colors} label={t('controlPlane.id')} value={profile.identity.controlPlaneId} />
           <View style={[styles.divider, { backgroundColor: colors.border }]} />
-          <DetailRow colors={colors} label="Signing fingerprint" value={profile.identity.publicKeyFingerprint} />
+          <DetailRow colors={colors} label={t('controlPlane.fingerprint')} value={profile.identity.publicKeyFingerprint} />
         </View>
-        <Text style={[styles.footnote, { color: colors.textMuted }]}>The signing fingerprint identifies the Control Plane that was verified when this connection was added.</Text>
+        <Text style={[styles.footnote, { color: colors.textMuted }]}>{t('controlPlane.fingerprintHelp')}</Text>
       </View>
 
       <View style={styles.section}>
-        <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>ACTIONS</Text>
+        <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>{t('controlPlane.actions')}</Text>
         <View style={[styles.group, { backgroundColor: colors.surface, borderColor: colors.border }]}>
           {!active ? <>
-            <ActionRow disabled={busy} icon={{ android: 'check_circle', ios: 'checkmark.circle' }} label="Make Active" onPress={() => { void makeActive(); }} tint={colors.primary} />
+            <ActionRow disabled={busy} icon={{ android: 'check_circle', ios: 'checkmark.circle' }} label={t('controlPlane.makeActive')} onPress={() => { void makeActive(); }} tint={colors.primary} />
             <View style={[styles.divider, { backgroundColor: colors.border }]} />
           </> : null}
-          <ActionRow disabled={busy} icon={{ android: 'delete', ios: 'trash' }} label="Remove Control Plane" onPress={remove} tint={colors.error} />
+          <ActionRow disabled={busy} icon={{ android: 'delete', ios: 'trash' }} label={t('controlPlane.remove')} onPress={remove} tint={colors.error} />
         </View>
-        <Text style={[styles.footnote, { color: colors.textMuted }]}>Removing only clears this device. Nodes, instances, and AI sessions on the Control Plane are unchanged.</Text>
+        <Text style={[styles.footnote, { color: colors.textMuted }]}>{t('controlPlane.removeHelp')}</Text>
       </View>
 
-      {busy ? <ActivityIndicator accessibilityLabel="Updating Control Plane" /> : null}
+      {busy ? <ActivityIndicator accessibilityLabel={t('controlPlane.updating')} /> : null}
       {error ? <Text accessibilityLiveRegion="polite" style={[styles.error, { color: colors.error }]}>{error}</Text> : null}
     </Screen>
   );
@@ -142,8 +144,8 @@ function ActionRow({ disabled, icon, label, onPress, tint }: { disabled: boolean
   );
 }
 
-function messageFor(cause: unknown) {
-  return cause instanceof Error ? cause.message : 'Could not update the Control Plane.';
+function messageFor(cause: unknown, t: Translate) {
+  return cause instanceof Error ? cause.message : t('controlPlane.updateError');
 }
 
 const styles = StyleSheet.create({
