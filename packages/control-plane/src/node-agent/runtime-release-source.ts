@@ -1,4 +1,5 @@
 import { RuntimeArtifactIdentitySchema, type RuntimeArtifactIdentity } from "@task-handoff/protocol/control-plane";
+import { safeParseResponse } from "@task-handoff/protocol/response-validation";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { RuntimeArtifactError, type RuntimeArtifactSource } from "./runtime-artifacts.ts";
@@ -27,7 +28,7 @@ async function resolveBundledRuntimeArtifact(version: string): Promise<Published
       readFile(path.join(root, `${stem}.manifest.json`), "utf8"),
       readFile(path.join(root, `${stem}.tar.gz.sha256`), "utf8"),
     ]);
-    const parsed = RuntimeArtifactIdentitySchema.safeParse(JSON.parse(manifestText));
+    const parsed = safeParseResponse(RuntimeArtifactIdentitySchema, JSON.parse(manifestText));
     if (!parsed.success || parsed.data.version !== version || parsed.data.platform !== "linux" || parsed.data.arch !== "universal") {
       throw new RuntimeArtifactError("INSTANCE_RUNTIME_ARTIFACT_INVALID", `Bundled controlled-instance ${version} has an invalid Linux manifest.`);
     }
@@ -84,7 +85,7 @@ export async function resolvePublishedRuntimeArtifact(
   } catch (cause) {
     throw new RuntimeArtifactError("INSTANCE_RUNTIME_ARTIFACT_INVALID", `Release manifest for controlled-instance ${version} is not valid JSON.`, { cause });
   }
-  const parsed = RuntimeArtifactIdentitySchema.safeParse(manifest);
+  const parsed = safeParseResponse(RuntimeArtifactIdentitySchema, manifest);
   if (!parsed.success) {
     throw new RuntimeArtifactError("INSTANCE_RUNTIME_ARTIFACT_INVALID", `Release manifest for controlled-instance ${version} is invalid: ${parsed.error.message}`);
   }

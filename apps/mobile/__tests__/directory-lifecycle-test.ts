@@ -8,14 +8,18 @@ import { MobileDirectoryStore } from '../src/directories/store';
 import { MobileDirectoryController } from '../src/directories/controller';
 import { filterInstances } from '../src/directories/DirectoryLists';
 import { canCreateSession, initialInstanceId, instanceCreateGuidance } from '../src/ai-sessions/new-session-types';
+import { appLaunchIssue, canLaunchApp, initialAppInstanceId } from '../src/app-sessions/new-app-session-types';
 
-const instance = ControlPlaneInstanceDirectoryEntrySchema.parse({
+const instance = {
+  ...ControlPlaneInstanceDirectoryEntrySchema.parse({
   id: 'instance-1', name: 'Instance', nodeId: 'node-1', status: 'running', health: 'ok', connectionStatus: 'online', ready: true,
   config: { defaultCodexPermissionMode: 'full-access' },
   observedAt: '2026-08-05T00:00:00.000Z', runtime: { id: 'runtime-1', name: 'Docker', type: 'docker' }, workspace: { status: 'ready', path: '/workspace' },
   protocol: { version: '2026-08-01', compatible: true }, aiSessions: { runningCount: 0, waitingCount: 0, staleCount: 0, idleCount: 0, problemCount: 0, updatedAt: '2026-08-05T00:00:00.000Z' },
   availableAgents: [{ id: 'codex', name: 'Codex', kind: 'tty', supportsCwdSelection: true }],
-});
+  }),
+  availableApps: [{ id: 'terminal-tty', name: 'Terminal', kind: 'tty' as const, supportsCwdSelection: true }],
+};
 
 test('runtime paths are absolute, instance-scoped, and never device URIs', () => {
   expect(runtimePathForInstance('/workspace/project', instance)).toEqual({ type: 'runtime-path', path: '/workspace/project' });
@@ -46,6 +50,15 @@ test('new session selection honors a requested instance and exposes readiness gu
 
 test('directory exposes the authoritative default permission mode used by new sessions', () => {
   expect(instance.config.defaultCodexPermissionMode).toBe('full-access');
+});
+
+test('app launch selection uses the complete app inventory instead of the AI agent subset', () => {
+  const offline = { ...instance, id: 'offline', ready: false, connectionStatus: 'offline' as const };
+  expect(instance.availableApps[0].id).toBe('terminal-tty');
+  expect(instance.availableAgents.some((agent) => agent.id === 'terminal-tty')).toBe(false);
+  expect(initialAppInstanceId([offline, instance])).toBe(instance.id);
+  expect(canLaunchApp(instance)).toBe(true);
+  expect(appLaunchIssue(offline)).toBe('instance-not-ready');
 });
 
 test('create forwards the selected permission mode', async () => {

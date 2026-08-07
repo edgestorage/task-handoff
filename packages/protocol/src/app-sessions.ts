@@ -23,6 +23,8 @@ export const AppSessionStatusSchema = z.enum([
   "unknown",
 ]);
 
+const HIDDEN_APP_SESSION_STATUSES = new Set<AppSessionStatus>(["stopped", "failed", "exited", "closed", "terminated"]);
+
 export const AppSessionBindingSchema = z
   .object({
     type: z.enum(["app-session", "provider-session", "adapter-key"]),
@@ -169,7 +171,12 @@ export function applyAppSessionStreamEvent(
     if (current?.streamId === meta.streamId && meta.revision < current.revision) return { kind: "stale", projection: current };
     return {
       kind: "applied",
-      projection: AppSessionsStateSchema.parse({ streamId: meta.streamId, revision: meta.revision, lastEventAt: meta.generatedAt, snapshot: event.payload.snapshot }),
+      projection: AppSessionsStateSchema.parse({
+        streamId: meta.streamId,
+        revision: meta.revision,
+        lastEventAt: meta.generatedAt,
+        snapshot: activeAppSessionsSnapshotFromRecords(event.payload.snapshot.sessions, event.payload.snapshot.updatedAt),
+      }),
     };
   }
   if (!current || current.streamId !== meta.streamId) {
@@ -183,12 +190,13 @@ export function applyAppSessionStreamEvent(
   const sessions = [...current.snapshot.sessions];
   if (event.type === AppSessionEventType.Patch) {
     const index = sessions.findIndex((session) => session.id === event.payload.session.id);
-    if (index < 0) sessions.push(event.payload.session);
+    if (!isVisibleAppSessionStatus(event.payload.session.status)) {
+      if (index >= 0) sessions.splice(index, 1);
+    } else if (index < 0) sessions.push(event.payload.session);
     else sessions[index] = event.payload.session;
   } else {
     const index = sessions.findIndex((session) => session.id === event.payload.sessionId);
     if (index >= 0) sessions.splice(index, 1);
-    if (event.payload.tombstone) sessions.push(event.payload.tombstone);
   }
   const snapshot = appSessionsSnapshotFromRecords(sessions, meta.generatedAt);
   return {
@@ -205,6 +213,13 @@ export function appSessionsSnapshotFromRecords(sessions: Array<Record<string, un
     sessions: parsedSessions,
     updatedAt: now,
   });
+}
+
+export function activeAppSessionsSnapshotFromRecords(sessions: Array<Record<string, unknown>>, now = new Date().toISOString()) {
+  return appSessionsSnapshotFromRecords(
+    sessions.filter((session) => isVisibleAppSessionStatus(typeof session.status === "string" ? session.status : undefined)),
+    now,
+  );
 }
 
 export function normalizeAppSessionRecord(session: Record<string, unknown>) {
@@ -229,6 +244,10 @@ export function normalizeAppSessionStatus(status: string | undefined): AppSessio
   if (value === "ended") return "closed";
   if (value === "terminating") return "stopping";
   return AppSessionStatusSchema.options.includes(value as AppSessionStatus) ? value as AppSessionStatus : "unknown";
+}
+
+export function isVisibleAppSessionStatus(status: string | undefined) {
+  return !HIDDEN_APP_SESSION_STATUSES.has(normalizeAppSessionStatus(status));
 }
 
 export function appSessionBindingKeys(session: Record<string, unknown>) {

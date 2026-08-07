@@ -30,11 +30,27 @@ export interface MobileControlPlaneEventConnection {
   close(): void;
 }
 
+export type MobileAppSessionTtyHandlers = {
+  onOpen(): void;
+  onOutput(data: string): void;
+  onResize(cols: number, rows: number): void;
+  onExit(code?: number | null, signal?: string | null): void;
+  onError(error: MobileControlPlaneTransportError): void;
+  onClose(): void;
+};
+
+export interface MobileAppSessionTtyConnection {
+  sendInput(data: string): void;
+  resize(cols: number, rows: number): void;
+  close(): void;
+}
+
 export interface MobileControlPlaneTransport extends ControlPlaneClientTransport {
   readonly profile: MobileControlPlaneProfile;
   request<T>(path: string, schema: z.ZodType<T>, init?: RequestInit): Promise<T>;
   revalidate?(): Promise<void>;
   connectEvents(handlers: MobileControlPlaneEventHandlers): MobileControlPlaneEventConnection;
+  connectAppSessionTty(instanceId: string, sessionId: string, handlers: MobileAppSessionTtyHandlers): MobileAppSessionTtyConnection;
 }
 
 export class MobileControlPlaneTransportError extends Error {

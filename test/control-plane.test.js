@@ -43,9 +43,8 @@ const { JsonCollection, JsonFile } = require("../packages/control-plane/src/shar
 const { nodeAgentStorePaths } = require("../packages/control-plane/src/node-agent/persistence/paths.ts");
 const { aiSessionUserPrompts, displayAiSessionMessage, displayAiSessionTitle, launchableAppsForInstance: uiLaunchableAppsForInstance } = require("../packages/control-plane-ui/src/apps/control-plane/useInstanceSessions.ts");
 const { launchableAppsForInstance: chatLaunchableAppsForInstance } = require("../packages/control-plane/src/control-plane/chat/rendering.ts");
-const { appSessionStatus } = require("../packages/control-plane-ui/src/apps/control-plane/appSessionVisibility.ts");
 const { AiSessionEventType, AiSessionEventTopic, AiSessionUnreadEventType } = require("../packages/protocol/src/ai-sessions.ts");
-const { AppSessionEventType, normalizeAppSessionRecord } = require("../packages/protocol/src/app-sessions.ts");
+const { AppSessionEventType, normalizeAppSessionRecord, normalizeAppSessionStatus } = require("../packages/protocol/src/app-sessions.ts");
 const { ApplyUpdateRequestSchema, CONTROL_PLANE_PROTOCOL_VERSION, ControlledInstanceHeartbeatSchema, ControlledInstanceRegisterSchema, ControlledInstanceSchema, InstanceAppInventorySchema, InstanceLifecycleEventType, RuntimeArtifactIdentitySchema, RuntimeVersionStateSchema, UpdateCheckRequestSchema, UpdateJobSchema, decodeNodeTunnelRequestBody, modelConfigHash, parseStoredControlledInstance, sanitizeStoredControlledInstance } = require("../packages/protocol/src/control-plane.ts");
 const { ChatActionTokenService, parsePendingDecisionCallbackData, pendingDecisionRouteFingerprint } = require("../packages/control-plane/src/control-plane/chat/action-token-service.ts");
 const { ControlPlanePublicIdentityDocumentSchema, controlPlaneIdentitySigningInput } = require("../packages/protocol/src/control-plane-access.ts");
@@ -907,7 +906,7 @@ test("session aggregators apply patch and removed events as one revisioned strea
   });
   assert.equal(normalizedAppSession.status, "running");
   assert.deepEqual(normalizedAppSession.workspace, { cwd: "/workspace/current" });
-  assert.equal(appSessionStatus({ status: "future-state" }), "unknown");
+  assert.equal(normalizeAppSessionStatus("future-state"), "unknown");
 });
 
 test("AI session aggregator recovers advertised gaps from instance deltas and rejects obsolete bootstrap streams", async () => {
@@ -5874,6 +5873,7 @@ test("control plane node instance aggregation isolates invalid node protocol dat
   const goodDirectoryInstance = directory.body.data.find((instance) => instance.id === "inst_good");
   assert.equal(goodDirectoryInstance.protocol.compatible, false);
   assert.match(goodDirectoryInstance.protocol.warning, /Node protocol 2026-06-22/);
+  assert.ok(Array.isArray(goodDirectoryInstance.availableApps));
   const oldDirectoryInstance = directory.body.data.find((instance) => instance.id === "inst_old_protocol");
   assert.equal(oldDirectoryInstance.protocol.compatible, false);
   assert.match(oldDirectoryInstance.protocol.warning, /Instance protocol 2026-06-23/);
@@ -11433,11 +11433,11 @@ test("control plane launches app sessions through the controlled instance API", 
       }
       if (body.path === "/api/apps/sessions/state") {
         const updatedAt = new Date().toISOString();
-        const sessions = [...appSessionsById.values()];
+        const sessions = [...appSessionsById.values()].filter((session) => session.status !== "stopped");
         return jsonResponse({ streamId: "app_launch_stream", revision: appSessionRevision, lastEventAt: updatedAt, snapshot: { runningCount: sessions.filter((session) => session.status === "running").length, problemCount: 0, sessions, updatedAt } });
       }
       if (body.path === "/api/apps/sessions" && body.method === "GET") {
-        return jsonResponse([...appSessionsById.values()]);
+        return jsonResponse([...appSessionsById.values()].filter((session) => session.status !== "stopped"));
       }
       if (body.path === "/api/apps/sessions/app_1" && body.method === "PATCH") {
         const current = appSessionsById.get("app_1") || appSessionPayload();
@@ -11624,12 +11624,6 @@ test("control plane launches app sessions through the controlled instance API", 
   assert.equal(appSessionsAfterStop.statusCode, 200);
   assert.equal(appSessionsAfterStop.body.data.instances[0].appSessions.runningCount, 0);
   assert.deepEqual(appSessionsAfterStop.body.data.instances[0].appSessions.sessions, []);
-  const appSessionTombstonesAfterStop = await json(app, "GET", "/api/app-sessions?includeTombstones=true");
-  assert.equal(appSessionTombstonesAfterStop.statusCode, 200);
-  assert.equal(appSessionTombstonesAfterStop.body.data.instances[0].appSessions.runningCount, 0);
-  assert.deepEqual(appSessionTombstonesAfterStop.body.data.instances[0].appSessions.sessions, [
-    appSessionPayload("stopped", "Control Claude"),
-  ]);
   const boardAfterStop = await json(app, "GET", "/api/instance-board");
   assert.equal(boardAfterStop.statusCode, 200);
   assert.equal(boardAfterStop.body.data[0].apps.runningCount, 0);

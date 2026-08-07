@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { DirectControlPlaneTransport } from '../src/control-plane/direct-transport';
+import { createDirectControlPlaneClient } from '../src/control-plane/client';
 import type { MobileControlPlaneProfile } from '../src/control-plane/profile';
 import type { SecureValueStore } from '../src/platform/secure-storage';
 
@@ -38,6 +39,14 @@ function secureStore(token = 'msess_test.secret'): SecureValueStore {
 }
 
 describe('DirectControlPlaneTransport', () => {
+  test('reuses one transport for the same stored Control Plane identity', () => {
+    const store = secureStore();
+    const first = createDirectControlPlaneClient(profile, store);
+    const second = createDirectControlPlaneClient({ ...profile }, store);
+
+    expect(second.transport).toBe(first.transport);
+  });
+
   test('keeps HTTP requests on the verified origin and owns the bearer header', async () => {
     const fetchImpl = jest.fn<Promise<Response>, [RequestInfo | URL, RequestInit?]>(async () => new Response(JSON.stringify({ data: { ok: true } }), {
       status: 200,
@@ -119,6 +128,68 @@ describe('DirectControlPlaneTransport', () => {
     expect(socket.send).toHaveBeenCalledWith(expect.stringContaining('"type":"subscribe"'));
     listeners.get('message')?.({ data: JSON.stringify({ v: 1, type: 'streams.hello', topic: 'system', payload: {} }) });
     expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'streams.hello' }));
+  });
+
+  test('multiplexes event subscribers over one authenticated WebSocket', async () => {
+    const listeners = new Map<string, (event: { data?: unknown }) => void>();
+    const socket = {
+      readyState: 0,
+      addEventListener: jest.fn((type: string, listener: (event: { data?: unknown }) => void) => listeners.set(type, listener)),
+      close: jest.fn(),
+      send: jest.fn(),
+    };
+    const factory = jest.fn(() => socket);
+    const firstEvent = jest.fn();
+    const secondEvent = jest.fn();
+    const transport = new DirectControlPlaneTransport(profile, secureStore(), {
+      probeImpl: async () => target,
+      webSocketFactory: factory,
+    });
+    const first = transport.connectEvents({ onOpen: jest.fn(), onEvent: firstEvent, onError: jest.fn(), onClose: jest.fn() });
+    const second = transport.connectEvents({ onOpen: jest.fn(), onEvent: secondEvent, onError: jest.fn(), onClose: jest.fn() });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(factory).toHaveBeenCalledTimes(1);
+    listeners.get('message')?.({ data: JSON.stringify({ v: 1, type: 'streams.hello', topic: 'system', payload: {} }) });
+    expect(firstEvent).toHaveBeenCalledTimes(1);
+    expect(secondEvent).toHaveBeenCalledTimes(1);
+    first.close();
+    expect(socket.close).not.toHaveBeenCalled();
+    second.close();
+    expect(socket.close).toHaveBeenCalledTimes(1);
+  });
+
+  test('connects an App Session TTY through the authenticated instance proxy', async () => {
+    const listeners = new Map<string, (event: { data?: unknown }) => void>();
+    const socket = {
+      readyState: 0,
+      addEventListener: jest.fn((type: string, listener: (event: { data?: unknown }) => void) => listeners.set(type, listener)),
+      close: jest.fn(),
+      send: jest.fn(),
+    };
+    const factory = jest.fn((_url: string, _headers: Record<string, string>) => socket);
+    const onOutput = jest.fn();
+    const transport = new DirectControlPlaneTransport(profile, secureStore(), {
+      probeImpl: async () => target,
+      webSocketFactory: factory,
+    });
+    const connection = transport.connectAppSessionTty('instance/one', 'tty one', {
+      onOpen: jest.fn(), onOutput, onResize: jest.fn(), onExit: jest.fn(), onError: jest.fn(), onClose: jest.fn(),
+    });
+    connection.resize(92, 28);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(factory).toHaveBeenCalledWith(
+      'wss://control.example.com/instances/instance%2Fone/api/apps/sessions/tty%20one/tty',
+      { authorization: 'Bearer msess_test.secret' },
+    );
+    socket.readyState = 1;
+    listeners.get('open')?.({});
+    expect(socket.send).toHaveBeenCalledWith(JSON.stringify({ type: 'resize', cols: 92, rows: 28 }));
+    connection.sendInput('echo hello\r');
+    expect(socket.send).toHaveBeenCalledWith(JSON.stringify({ type: 'input', data: 'echo hello\r' }));
+    listeners.get('message')?.({ data: JSON.stringify({ type: 'output', data: 'hello\r\n' }) });
+    expect(onOutput).toHaveBeenCalledWith('hello\r\n');
   });
 
   test('unwraps forwarded node-agent events before delivering them to consumers', async () => {

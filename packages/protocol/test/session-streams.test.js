@@ -32,6 +32,7 @@ import {
 } from "../src/ai-sessions.ts";
 import {
   AppSessionEventType,
+  activeAppSessionsSnapshotFromRecords,
   applyAppSessionStreamEvent,
   emptyAppSessionsSnapshot,
 } from "../src/app-sessions.ts";
@@ -312,6 +313,56 @@ test("app session reducer applies a strict continuous patch", () => {
   });
   assert.equal(applied.kind, "applied");
   assert.equal(applied.projection.snapshot.runningCount, 1);
+});
+
+test("app session authority removes terminal states and never restores event tombstones to the active snapshot", () => {
+  const snapshot = activeAppSessionsSnapshotFromRecords([
+    { id: "running", status: "running" },
+    { id: "stopped", status: "stopped" },
+    { id: "closed", status: "closed" },
+  ], now);
+  assert.deepEqual(snapshot.sessions.map((session) => session.id), ["running"]);
+
+  const normalizedSnapshotEvent = applyAppSessionStreamEvent(undefined, {
+    type: AppSessionEventType.Snapshot,
+    payload: {
+      meta: meta(),
+      snapshot: {
+        runningCount: 1,
+        problemCount: 0,
+        sessions: [{ id: "running", status: "running" }, { id: "stopped", status: "stopped" }],
+        updatedAt: now,
+      },
+    },
+  });
+  assert.equal(normalizedSnapshotEvent.kind, "applied");
+  assert.deepEqual(normalizedSnapshotEvent.projection.snapshot.sessions.map((session) => session.id), ["running"]);
+
+  const initial = applyAppSessionStreamEvent(undefined, {
+    type: AppSessionEventType.Snapshot,
+    payload: { meta: meta(), snapshot },
+  });
+  assert.equal(initial.kind, "applied");
+  const removed = applyAppSessionStreamEvent(initial.projection, {
+    type: AppSessionEventType.Removed,
+    payload: {
+      meta: meta({ revision: 2, previousRevision: 1, reason: "app-session-updated" }),
+      sessionId: "running",
+      tombstone: { id: "running", status: "stopped", bindings: [] },
+    },
+  });
+  assert.equal(removed.kind, "applied");
+  assert.deepEqual(removed.projection.snapshot.sessions, []);
+
+  const legacyStoppedPatch = applyAppSessionStreamEvent(initial.projection, {
+    type: AppSessionEventType.Patch,
+    payload: {
+      meta: meta({ revision: 2, previousRevision: 1, reason: "app-session-updated" }),
+      session: { id: "running", status: "stopped", bindings: [] },
+    },
+  });
+  assert.equal(legacyStoppedPatch.kind, "applied");
+  assert.deepEqual(legacyStoppedPatch.projection.snapshot.sessions, []);
 });
 
 test("stream schemas reject legacy metadata and describe retained recovery history", () => {

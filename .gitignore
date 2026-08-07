@@ -5,6 +5,7 @@
 node_modules/
 /dist/
 /release/
+/tmp/
 scripts/docker-up-workspace-local.sh
 packages/web-ui/dist/
 packages/control-plane-ui/dist/

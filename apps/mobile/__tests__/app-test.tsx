@@ -1,9 +1,14 @@
 import { render } from '@testing-library/react-native';
+import { StyleSheet } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { ControlPlaneAiSessionsSchema } from '@task-handoff/control-plane-client';
+import { aiSessionStatusGroup, ControlPlaneAiSessionsSchema } from '@task-handoff/control-plane-client';
 
 import { AiSessionInbox, inboxCardContent, inboxEntries } from '../src/ai-sessions/Inbox';
-import { inboxStatusMessage, matchesStatusFilter } from '../src/ai-sessions/InboxModel';
+import { inboxStatusMessage, matchesStatusFilter, statusFilterLabel } from '../src/ai-sessions/InboxModel';
+import { sessionActivityText } from '../src/ai-sessions/SessionDetail';
+import { sessionStatusTone } from '../src/ai-sessions/SessionStatusIndicator';
+import { mobileLightColors } from '../src/components/theme';
+import { translate } from '../src/i18n';
 
 const snapshot = ControlPlaneAiSessionsSchema.parse({
   updatedAt: '2026-08-05T00:02:00.000Z',
@@ -38,6 +43,12 @@ describe('<InboxRoute />', () => {
     );
 
     expect(screen.toJSON()).not.toBeNull();
+    const responsePreviews = screen.getAllByText('No response yet.');
+    expect(responsePreviews[0].props.numberOfLines).toBe(3);
+    expect(StyleSheet.flatten(responsePreviews[0].props.style).minHeight).toBe(60);
+    expect(screen.getAllByText('Active')).toHaveLength(1);
+    expect(screen.getAllByText('Waiting')).toHaveLength(1);
+    expect(screen.getByTestId('session-card-footer-activity')).toBeTruthy();
     expect(inboxEntries(snapshot).map((entry) => inboxCardContent(entry.session))).toEqual([
       expect.objectContaining({ prompt: 'Build mobile', turnCount: 2, turnIndex: 1 }),
       expect.objectContaining({ prompt: 'Approve change', turnCount: 1, turnIndex: 0 }),
@@ -71,5 +82,20 @@ describe('<InboxRoute />', () => {
     ])).toEqual(expect.objectContaining({ response: 'New assistant message' }));
     expect(snapshot.instances[0].aiSessions.sessions.filter((session) => matchesStatusFilter(session, 'active')).map((session) => session.id)).toEqual(['running']);
     expect(snapshot.instances[0].aiSessions.sessions.filter((session) => matchesStatusFilter(session, 'waiting')).map((session) => session.id)).toEqual(['approval']);
+    expect(statusFilterLabel(aiSessionStatusGroup(running))).toBe('Active');
+    expect(statusFilterLabel(aiSessionStatusGroup(snapshot.instances[0].aiSessions.sessions[1]))).toBe('Waiting');
+  });
+
+  test('list and detail consume the shared Web-aligned session status tones', () => {
+    expect(sessionStatusTone('active', mobileLightColors).foreground).toBe(mobileLightColors.sessionActive);
+    expect(sessionStatusTone('waiting', mobileLightColors).foreground).toBe(mobileLightColors.sessionWaiting);
+    expect(sessionStatusTone('problem', mobileLightColors).foreground).toBe(mobileLightColors.error);
+    expect(sessionStatusTone('idle', mobileLightColors).foreground).toBe(mobileLightColors.sessionIdle);
+  });
+
+  test('card activity text uses the active locale instead of the English fallback', () => {
+    const running = snapshot.instances[0].aiSessions.sessions[0];
+    const t = (key: Parameters<typeof translate>[1], params?: Parameters<typeof translate>[2]) => translate('zh-CN', key, params);
+    expect(sessionActivityText({ ...running, phase: 'thinking', toolCallsSinceLastMessage: 2 }, t)).toBe('思考中 · 2 次工具调用');
   });
 });

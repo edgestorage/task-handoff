@@ -1,72 +1,96 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Stack, useLocalSearchParams } from 'expo-router';
-import { Platform, Pressable, StyleSheet, Text } from 'react-native';
+import { useCallback, useState } from 'react';
+import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
+import { Alert, Pressable, StyleSheet } from 'react-native';
+import * as Crypto from 'expo-crypto';
+import { MenuView, type MenuAction } from '@expo/ui/community/menu';
 
 import { SessionWorkspace } from '../../../src/ai-sessions/SessionWorkspace';
 import type { SessionDetailMode } from '../../../src/ai-sessions/SessionDetail';
-import { MobileAiSessionActionCoordinator } from '../../../src/ai-sessions/actions';
+import { mobileAiSessionBusyKey } from '../../../src/ai-sessions/actions';
 import { useActiveAiSessions } from '../../../src/ai-sessions/use-active-sessions';
-import { createDirectControlPlaneClient } from '../../../src/control-plane/client';
-import { mobileDraftStore, mobilePermissionStore, mobileProfileStore, mobileSecureStore } from '../../../src/control-plane/runtime';
+import { mobileDraftStore, mobilePermissionStore } from '../../../src/control-plane/runtime';
 import { mobileAiSessionStore } from '../../../src/ai-sessions/store';
 import { useActiveDirectories } from '../../../src/directories/use-directories';
 import { useMobileTheme } from '../../../src/components/theme';
+import { SystemIcon } from '../../../src/components/SystemIcon';
 import { useI18n } from '../../../src/i18n';
-
-const supportsScrollEdgeEffects = Platform.OS === 'ios' && Number.parseInt(String(Platform.Version), 10) >= 26;
+import { useTaskStatusSettings } from '../../../src/task-status/settings';
 
 export default function SessionDetailRoute() {
   const params = useLocalSearchParams<{ instanceId: string; sessionId: string }>();
-  const { controlPlaneId, state } = useActiveAiSessions();
+  const router = useRouter();
+  const { actions, client, controlPlaneId, state } = useActiveAiSessions();
   const directories = useActiveDirectories();
   const { colors } = useMobileTheme();
   const { t } = useI18n();
+  const taskStatus = useTaskStatusSettings();
   const session = controlPlaneId ? mobileAiSessionStore.session(controlPlaneId, params.instanceId, params.sessionId) : undefined;
   const messages = Object.values(state.messages).filter((message) => message.instanceId === params.instanceId && message.sessionId === params.sessionId);
-  const [actions, setActions] = useState<MobileAiSessionActionCoordinator>();
-  const [client, setClient] = useState<ReturnType<typeof createDirectControlPlaneClient>['api']>();
   const [detailMode, setDetailMode] = useState<SessionDetailMode>('turn');
+  const [closing, setClosing] = useState(false);
   const defaultPermissionMode = directories.controlPlaneId === controlPlaneId
     ? directories.state.instances.find((instance) => instance.id === params.instanceId)?.config.defaultCodexPermissionMode
     : undefined;
-  useEffect(() => {
-    let live = true;
-    void mobileProfileStore.active().then((profile) => {
-      if (!live || !profile || profile.identity.controlPlaneId !== controlPlaneId) return;
-      const api = createDirectControlPlaneClient(profile, mobileSecureStore).api;
-      setClient(api);
-      setActions(new MobileAiSessionActionCoordinator(controlPlaneId, api, mobileAiSessionStore));
-    });
-    return () => { live = false; };
-  }, [controlPlaneId]);
   const markVisible = useCallback((sessionUpdatedAt: string) => {
-    if (!controlPlaneId || !session?.unread) return;
-    void mobileProfileStore.active().then(async (profile) => {
-      if (!profile || profile.identity.controlPlaneId !== controlPlaneId) return;
-      const { api } = createDirectControlPlaneClient(profile, mobileSecureStore);
-      const unread = await api.aiSessions.markRead(params.instanceId, params.sessionId, sessionUpdatedAt);
+    if (!client || !controlPlaneId || !session?.unread) return;
+    void client.aiSessions.markRead(params.instanceId, params.sessionId, sessionUpdatedAt).then((unread) => {
       mobileAiSessionStore.applyUnread(controlPlaneId, unread);
     }).catch(() => undefined);
-  }, [controlPlaneId, params.instanceId, params.sessionId, session?.unread]);
+  }, [client, controlPlaneId, params.instanceId, params.sessionId, session?.unread]);
+  const title = session?.title || session?.agent || 'AI Session';
+  const trackedSession = taskStatus.trackedSession;
+  const trackedHere = Boolean(trackedSession
+    && trackedSession.controlPlaneId === controlPlaneId
+    && trackedSession.instanceId === params.instanceId
+    && trackedSession.sessionId === params.sessionId);
+  const canTrack = session?.status === 'running' || session?.status === 'waiting';
+  const liveActivityAction: MenuAction | undefined = taskStatus.available && taskStatus.loaded && !taskStatus.autoStart ? {
+    id: 'live-activity',
+    image: trackedHere ? 'waveform.slash' : 'waveform',
+    title: trackedHere ? t('liveActivity.stop') : t('liveActivity.start'),
+    attributes: { disabled: !trackedHere && (!canTrack || !controlPlaneId) },
+  } : undefined;
+  const closeSession = () => Alert.alert(t('sessions.closeConfirmTitle', { name: title }), t('sessions.closeConfirmDescription'), [
+    { text: t('common.cancel'), style: 'cancel' },
+    { text: t('sessions.closeSession'), style: 'destructive', onPress: () => {
+      if (!actions || !controlPlaneId) return;
+      setClosing(true);
+      void actions.close(params.instanceId, params.sessionId, Crypto.randomUUID()).then((result) => {
+        if (result.disposition === 'accepted') {
+          router.back();
+          return;
+        }
+        const actionState = actions.state(mobileAiSessionBusyKey(controlPlaneId, params.instanceId, params.sessionId, 'close'));
+        Alert.alert(t('sessions.closeFailed'), actionState.error);
+      }).finally(() => setClosing(false));
+    } },
+  ]);
   return <>
     <Stack.Screen options={{
-      title: session?.title || session?.agent || 'AI Session',
-      ...(Platform.OS === 'ios' ? {
-        headerStyle: { backgroundColor: 'transparent' },
-        headerTransparent: true,
-        ...(supportsScrollEdgeEffects
-          ? { scrollEdgeEffects: { top: 'soft' as const } }
-          : { headerBlurEffect: 'systemMaterial' as const }),
-      } : undefined),
+      title,
       headerRight: () => (
-        <Pressable
-          accessibilityLabel={t('sessions.sessionViewMode')}
-          accessibilityRole="button"
-          onPress={() => setDetailMode((current) => current === 'turn' ? 'conversation' : 'turn')}
-          style={({ pressed }) => [styles.modeButton, { backgroundColor: colors.surfaceMuted }, pressed && styles.modeButtonPressed]}
+        <MenuView
+          actions={[
+            { id: 'view-turn', image: 'rectangle.stack', state: detailMode === 'turn' ? 'on' : 'off', title: t('sessions.turn') },
+            { id: 'view-conversation', image: 'text.bubble', state: detailMode === 'conversation' ? 'on' : 'off', title: t('sessions.filterAll') },
+            ...(liveActivityAction ? [liveActivityAction] : []),
+            { id: 'close', image: 'xmark.circle', title: closing ? t('sessions.closing') : t('sessions.closeSession'), attributes: { destructive: true, disabled: closing || !actions || state.sync.phase !== 'ready' } },
+          ]}
+          onPressAction={({ nativeEvent }) => {
+            if (nativeEvent.event === 'view-turn') setDetailMode('turn');
+            else if (nativeEvent.event === 'view-conversation') setDetailMode('conversation');
+            else if (nativeEvent.event === 'live-activity') {
+              if (trackedHere) void taskStatus.stopTracking();
+              else if (controlPlaneId) void taskStatus.startTracking({ controlPlaneId, instanceId: params.instanceId, sessionId: params.sessionId });
+            }
+            else if (nativeEvent.event === 'close') closeSession();
+          }}
+          title={t('sessions.sessionView')}
         >
-          <Text style={[styles.modeButtonText, { color: colors.primary }]}>{detailMode === 'turn' ? t('sessions.turn') : t('sessions.filterAll')}</Text>
-        </Pressable>
+          <Pressable accessibilityLabel={t('sessions.moreActions')} accessibilityRole="button" hitSlop={10} style={({ pressed }) => [styles.menuButton, pressed && styles.menuButtonPressed]}>
+            <SystemIcon android="more_horiz" color={colors.primary} ios="ellipsis.circle" size={23} />
+          </Pressable>
+        </MenuView>
       ),
     }} />
     <SessionWorkspace
@@ -88,7 +112,6 @@ export default function SessionDetailRoute() {
 }
 
 const styles = StyleSheet.create({
-  modeButton: { alignItems: 'center', borderRadius: 15, justifyContent: 'center', minHeight: 30, minWidth: 54, paddingHorizontal: 10 },
-  modeButtonPressed: { opacity: 0.65 },
-  modeButtonText: { fontSize: 13, fontWeight: '600', lineHeight: 18 },
+  menuButton: { alignItems: 'center', height: 34, justifyContent: 'center', width: 34 },
+  menuButtonPressed: { opacity: 0.65 },
 });

@@ -5,7 +5,7 @@ import {
   controlPlaneIdentitySigningInput,
   type ControlPlanePublicIdentityPayload,
 } from '@task-handoff/protocol/control-plane-access';
-import { createControlPlaneAuthApi, type ControlPlaneClientTransport } from '@task-handoff/control-plane-client';
+import { createControlPlaneClient, type ControlPlaneClientTransport } from '@task-handoff/control-plane-client';
 
 import type { SecureValueStore } from '../platform/secure-storage';
 import {
@@ -142,7 +142,7 @@ function publicAuthApi(origin: string, fetchImpl: typeof fetch) {
       return parsed.data;
     },
   };
-  return createControlPlaneAuthApi(transport);
+  return createControlPlaneClient(transport).auth;
 }
 
 export async function probeDirectControlPlane(

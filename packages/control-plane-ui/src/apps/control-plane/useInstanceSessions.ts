@@ -1,6 +1,6 @@
 import type { AiSessionSummary, InstanceBoardItem, InstanceBoardItemWithAppSessions, InstanceWithAiSessions } from "../../api/types";
 import type { RepositorySessionKind } from "@task-handoff/protocol/repository";
-import { appSessionBindingKeys, appSessionStatus, isVisibleAppSession } from "./appSessionVisibility.ts";
+import { appSessionBindingKeys } from "./appSessionVisibility.ts";
 import { aiSessionStatusKeys, translateStatus, type Translate } from "../../i18n/status.ts";
 import { formatRelativeTime, formatTime } from "../../i18n/presentation.ts";
 import type { SupportedLocale } from "../../i18n/locale.ts";
@@ -8,6 +8,7 @@ import { hasInstanceStatusPage } from "./useInstanceStatus.ts";
 import {
   aiSessionLastUserMessageTime,
   aiSessionStableSortKey,
+  availableInstanceApps,
   compareAiSessionsByLastUserMessage,
   sortedAiSessions,
   sortedAiSessionsByLastUserMessage,
@@ -123,9 +124,6 @@ export function buildSessionTabs(instance: InstanceWithAiSessions | undefined, t
 }
 
 function appSessionTab(session: Record<string, unknown>, index: number, t?: Translate): SessionTab | undefined {
-  if (!isVisibleAppSession(session)) {
-    return undefined;
-  }
   const appId = typeof session.appId === "string" ? session.appId : t ? t("sessions.tabs.appFallback", { number: index + 1 }) : `app-${index + 1}`;
   const status = typeof session.status === "string" ? session.status : "running";
   const key = typeof session.id === "string" ? session.id : `${appId}-${index}`;
@@ -225,12 +223,8 @@ export function aiSessionAppDisplayName(appTab: SessionTab | undefined, fallback
 }
 
 export function launchableAppsForInstance(instance: InstanceBoardItem, t: Translate): LaunchableApp[] {
-  if (instance.connectionStatus !== "online" || !instance.appInventory) {
-    return [];
-  }
   return uniqueLaunchableApps(
-    instance.appInventory.items
-      .filter((app) => app.availability === "available")
+    availableInstanceApps(instance)
       .map((app): LaunchableApp | undefined => {
         return {
           id: app.id,
@@ -595,12 +589,11 @@ export function absoluteInstanceUrl(instance: InstanceBoardItem, path: string) {
 }
 
 export function activeAppLabel(instance: InstanceBoardItemWithAppSessions, t: Translate) {
-  const visibleSessions = instance.apps.sessions.filter(isVisibleAppSession);
-  const session = visibleSessions[0];
+  const session = instance.apps.sessions[0];
   if (session && typeof session === "object" && "appId" in session && typeof session.appId === "string") {
     return session.appId;
   }
-  return visibleSessions.length ? t("sessions.tabs.appSessions", { count: visibleSessions.length }) : t("sessions.tabs.noActiveApp");
+  return instance.apps.sessions.length ? t("sessions.tabs.appSessions", { count: instance.apps.sessions.length }) : t("sessions.tabs.noActiveApp");
 }
 
 export function previewTitle(instance: InstanceBoardItem, t: Translate) {

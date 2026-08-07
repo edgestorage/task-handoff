@@ -1,7 +1,7 @@
 import { render } from '@testing-library/react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
-import PrimaryTabsLayout from '../app/(tabs)/_layout';
+import PrimaryTabsLayout from '../app/(tabs)/(main)/_layout';
 import { ScreenFlatList } from '../src/components/ScreenFlatList';
 
 jest.mock('expo-router/unstable-native-tabs', () => {
@@ -33,6 +33,9 @@ describe('<PrimaryTabsLayout />', () => {
     );
 
     expect(screen.getByTestId('native-tabs')).toBeTruthy();
+    expect(screen.getByText('AI Sessions')).toBeTruthy();
+    expect(screen.getByText('App Sessions')).toBeTruthy();
+    expect(screen.getByText('Instances')).toBeTruthy();
     expect(screen.getByTestId('primary-tabs-safe-area')).toHaveStyle({ flex: 1 });
   });
 

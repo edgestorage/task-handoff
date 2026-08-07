@@ -32,7 +32,7 @@ test("Environment uses a portal popover and authoritative repository context", a
   assert.match(component, /repository\.environment\.branch/);
   assert.doesNotMatch(component, /executionLocation|<Laptop/);
   assert.match(repositoryApi, /\/instances\/\$\{encodeURIComponent\(target\.instanceId\)\}\/api\/\$\{sessionCollection\}\/\$\{encodeURIComponent\(target\.sessionId\)\}\/repository/);
-  assert.match(repositoryApi, /RepositoryWorktreesSchema\.safeParse/);
+  assert.match(repositoryApi, /safeParseResponse\(RepositoryWorktreesSchema/);
   assert.match(repositoryApi, /Restart the instance to load the current protocol/);
   const contextClient = repositoryApi.slice(repositoryApi.indexOf("export function getRepositoryContext"), repositoryApi.indexOf("export function getRepositoryWorktrees"));
   assert.doesNotMatch(contextClient, /[?&](cwd|path|repositoryRoot)=/);

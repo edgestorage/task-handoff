@@ -6,6 +6,13 @@ import { ActionSheetIOS, Alert, Animated, Easing, Platform, Pressable, StyleShee
 import { SystemIcon } from '../components/SystemIcon';
 import { useMobileTheme } from '../components/theme';
 import { useI18n, type Translate } from '../i18n';
+import {
+  SESSION_COMPOSER_ACTION_ICON_SIZE,
+  SESSION_COMPOSER_ACTION_RADIUS,
+  SESSION_COMPOSER_ACTION_SIZE,
+  SESSION_COMPOSER_EXPANDED_RADIUS,
+  SESSION_COMPOSER_TOOLBAR_HEIGHT,
+} from './composer-metrics';
 import type { SessionComposerProps } from './session-composer-types';
 
 export function SessionComposer(props: SessionComposerProps) {
@@ -33,7 +40,7 @@ export function SessionComposer(props: SessionComposerProps) {
     return () => animation.stop();
   }, [expansion, props.focused]);
   const animatedContainerStyle = {
-    borderRadius: expansion.interpolate({ inputRange: [0, 1], outputRange: [28, 22] }),
+    borderRadius: expansion.interpolate({ inputRange: [0, 1], outputRange: [28, SESSION_COMPOSER_EXPANDED_RADIUS] }),
     height: expansion.interpolate({ inputRange: [0, 1], outputRange: [56, 152] }),
   };
   const measuredPermissionWidth = permissionLabelMeasurement?.label === currentPermissionLabel
@@ -46,7 +53,11 @@ export function SessionComposer(props: SessionComposerProps) {
       accessibilityState={{ expanded: props.focused }}
       onTouchStart={(event) => event.stopPropagation()}
       testID="session-composer"
-      style={[styles.composer, animatedContainerStyle, { borderColor: colors.border }]}
+      style={[
+        styles.composer,
+        animatedContainerStyle,
+        { backgroundColor: dark ? 'rgba(36, 36, 38, 0.78)' : 'transparent', borderColor: colors.border },
+      ]}
     >
       <BlurView
         intensity={70}
@@ -54,6 +65,11 @@ export function SessionComposer(props: SessionComposerProps) {
         style={StyleSheet.absoluteFill}
         testID="session-composer-blur"
         tint={dark ? 'systemUltraThinMaterialDark' : 'systemUltraThinMaterialLight'}
+      />
+      <View
+        pointerEvents="none"
+        style={[StyleSheet.absoluteFill, { backgroundColor: dark ? 'transparent' : 'rgba(255, 255, 255, 0.58)' }]}
+        testID="session-composer-tint"
       />
       <TextInput
         accessibilityLabel={t('composer.message')}
@@ -115,9 +131,9 @@ export function SessionComposer(props: SessionComposerProps) {
           disabled={props.actionDisabled}
           onPress={props.onAction}
           testID="session-composer-action"
-          style={({ pressed }) => [styles.actionButton, { backgroundColor: props.action === 'stop' ? colors.error : colors.primaryButton }, pressed && styles.pressed, props.actionDisabled && styles.disabled]}
+          style={({ pressed }) => [styles.actionButton, { backgroundColor: props.action === 'stop' ? colors.destructiveButton : colors.primaryButton }, pressed && styles.pressed, props.actionDisabled && styles.disabled]}
         >
-          <SystemIcon android={props.action === 'stop' ? 'stop' : 'arrow_upward'} color="#ffffff" ios={props.action === 'stop' ? 'stop.fill' : 'arrow.up'} size={17} />
+          <SystemIcon android={props.action === 'stop' ? 'stop' : 'arrow_upward'} color="#ffffff" ios={props.action === 'stop' ? 'stop.fill' : 'arrow.up'} size={SESSION_COMPOSER_ACTION_ICON_SIZE} />
         </Pressable>
       </View>
     </Animated.View>
@@ -193,7 +209,7 @@ const styles = StyleSheet.create({
   inputCollapsed: { bottom: 0, left: 84, paddingHorizontal: 4, paddingVertical: 15, position: 'absolute', right: 52, top: 0 },
   inputCollapsedWithoutPermission: { left: 48 },
   inputFocused: { bottom: 50, left: 0, paddingBottom: 8, paddingHorizontal: 14, paddingTop: 14, position: 'absolute', right: 0, top: 0 },
-  toolbar: { alignItems: 'center', bottom: 0, flexDirection: 'row', height: 56, justifyContent: 'space-between', left: 0, paddingHorizontal: 8, position: 'absolute', right: 0 },
+  toolbar: { alignItems: 'center', bottom: 0, flexDirection: 'row', height: SESSION_COMPOSER_TOOLBAR_HEIGHT, justifyContent: 'space-between', left: 0, paddingHorizontal: 8, position: 'absolute', right: 0 },
   leadingTools: { alignItems: 'center', flexDirection: 'row', gap: 1 },
   toolButton: { alignItems: 'center', height: 40, justifyContent: 'center', width: 40 },
   addIconOffset: { transform: [{ translateX: 3 }] },
@@ -202,7 +218,7 @@ const styles = StyleSheet.create({
   permissionIconSlot: { alignItems: 'center', height: 20, justifyContent: 'center', left: 8, position: 'absolute', width: 20 },
   permissionText: { fontSize: 13, fontWeight: '600', marginLeft: 34, marginRight: 8 },
   permissionTextMeasurement: { fontSize: 13, fontWeight: '600', opacity: 0, position: 'absolute' },
-  actionButton: { alignItems: 'center', borderRadius: 19, height: 38, justifyContent: 'center', width: 38 },
+  actionButton: { alignItems: 'center', borderRadius: SESSION_COMPOSER_ACTION_RADIUS, height: SESSION_COMPOSER_ACTION_SIZE, justifyContent: 'center', width: SESSION_COMPOSER_ACTION_SIZE },
   disabled: { opacity: 0.4 },
   pressed: { opacity: 0.7 },
 });

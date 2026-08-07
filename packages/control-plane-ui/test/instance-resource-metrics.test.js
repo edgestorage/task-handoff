@@ -25,7 +25,7 @@ test("instance detail consumes resource snapshots in the existing footer", () =>
   assert.match(workbench, /activeInstance\.value\?\.runtime\?\.type === "docker"/);
   assert.match(workbench, /if \(!currentIds\.has\(instanceId\)\) delete resourceMetricsByInstanceId\[instanceId\]/);
   assert.match(events, /InstanceResourceMetricsEventType\.Snapshot/);
-  assert.match(events, /InstanceResourceMetricsSchema\.safeParse/);
+  assert.match(events, /safeParseResponse\(InstanceResourceMetricsSchema/);
   assert.match(events, /event\.scope\?\.instanceId !== metrics\.data\.instanceId/);
   assert.doesNotMatch(events, /input\.refresh/);
   assert.match(eventInvalidation, /topics\.has\("instances"\)\) domains\.push\("instances"\)/);

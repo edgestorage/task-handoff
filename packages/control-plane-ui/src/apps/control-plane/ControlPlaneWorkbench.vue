@@ -26,23 +26,24 @@
           <span class="control-plane-kicker">{{ topbarKicker }}</span>
           <strong>{{ topbarTitle }}</strong>
         </div>
-        <DropdownMenu v-else>
-          <DropdownMenuTrigger as-child>
-            <button
-              type="button"
-              class="control-plane-title control-plane-instance-switcher"
-              :aria-label="t('instances.list.switchInstance')"
-              @dblclick.stop
-            >
-              <span class="control-plane-kicker">{{ topbarKicker }}</span>
+        <div v-else class="control-plane-title control-plane-instance-switcher-shell">
+          <span class="control-plane-kicker">{{ topbarKicker }}</span>
+          <DropdownMenu>
+            <DropdownMenuTrigger as-child>
+              <button
+                type="button"
+                class="control-plane-instance-switcher"
+                :aria-label="t('instances.list.switchInstance')"
+                @dblclick.stop
+              >
               <span class="control-plane-instance-switcher-title">
                 <strong>{{ topbarTitle }}</strong>
                 <small v-if="topbarNodeName" class="control-plane-instance-node-name" :title="topbarNodeName">· {{ topbarNodeName }}</small>
                 <ChevronDown class="control-plane-instance-switcher-chevron" :size="16" aria-hidden="true" />
               </span>
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent class="control-plane-instance-menu" align="start" :collision-padding="12" :side-offset="8">
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent class="control-plane-instance-menu" align="start" :collision-padding="12" :side-offset="8">
             <ScrollArea
               class="control-plane-instance-menu-scroll"
               :horizontal="false"
@@ -69,8 +70,9 @@
                 </DropdownMenuItem>
               </div>
             </ScrollArea>
-          </DropdownMenuContent>
-        </DropdownMenu>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
       <div class="control-plane-actions">
         <TooltipProvider v-if="serverUpdateAvailable" :delay-duration="120">
@@ -420,7 +422,7 @@ const instanceViewMode = computed(() => workbenchView.value === "instance");
 const boardMode = computed(() => workbenchView.value === "board");
 const aiBoardMode = computed(() => workbenchView.value === "ai");
 const settingsMode = ref(false);
-const settingsSection = ref<"basic" | "chat" | "images" | "environment-templates" | "projects" | "nodes" | "models" | "triggers">("nodes");
+const settingsSection = ref<"basic" | "chat" | "images" | "environment-templates" | "projects" | "nodes" | "models" | "triggers" | "mobile-sessions">("nodes");
 const boardFilter = ref("");
 const aiBoardFilter = ref("");
 const boardProjectFilter = ref(ALL_BOARD_FILTER_VALUE);
@@ -963,6 +965,9 @@ function settingsSectionTitle(section: typeof settingsSection.value) {
   }
   if (section === "triggers") {
     return t("triggers.title");
+  }
+  if (section === "mobile-sessions") {
+    return t("settings.mobileSessions.navigation");
   }
   return t("settings.projects");
 }

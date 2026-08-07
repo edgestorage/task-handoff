@@ -9,6 +9,7 @@ import {
   AiSessionUnreadStateSchema,
   type AiSessionStreamEvent,
 } from '@task-handoff/protocol/ai-sessions';
+import { safeParseResponse } from '@task-handoff/protocol/response-validation';
 
 import type {
   MobileControlPlaneEvent,
@@ -132,7 +133,7 @@ export class MobileAiSessionController {
   applyEvent(event: MobileControlPlaneEvent) {
     if (!this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) return false;
     if (event.type === AiSessionEventType.MessageDelta) {
-      const parsed = AiSessionMessageDeltaEventSchema.safeParse(event.payload);
+      const parsed = safeParseResponse(AiSessionMessageDeltaEventSchema, event.payload);
       if (!parsed.success || event.scope?.instanceId !== parsed.data.instanceId) return false;
       this.store.appendMessageDelta(this.controlPlaneId, parsed.data);
       const deltaKey = `${parsed.data.instanceId}\u0000${parsed.data.sessionId}\u0000${parsed.data.turnId}\u0000${parsed.data.itemId}`;
@@ -144,7 +145,7 @@ export class MobileAiSessionController {
       return true;
     }
     if (event.type === AiSessionUnreadEventType.Updated) {
-      const parsed = AiSessionUnreadStateSchema.safeParse(event.payload);
+      const parsed = safeParseResponse(AiSessionUnreadStateSchema, event.payload);
       if (!parsed.success || event.scope?.instanceId !== parsed.data.instanceId) return false;
       return this.store.applyUnread(this.controlPlaneId, parsed.data);
     }
@@ -155,7 +156,7 @@ export class MobileAiSessionController {
     } as const;
     const schema = schemas[event.type as keyof typeof schemas];
     if (!schema) return false;
-    const parsed = schema.safeParse(event.payload);
+    const parsed = safeParseResponse(schema, event.payload);
     if (!parsed.success || event.scope?.instanceId !== parsed.data.meta.instanceId) return false;
     const result = this.store.applyStreamEvent(this.controlPlaneId, {
       type: event.type,

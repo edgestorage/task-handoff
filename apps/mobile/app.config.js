@@ -19,11 +19,34 @@ module.exports = () => {
   if (!variant) {
     throw new Error(`Unsupported TASK_HANDOFF_MOBILE_VARIANT: ${variantName}`);
   }
+  const taskStatusWidgetsEnabled = process.env.TASK_HANDOFF_WIDGETS_ENABLED !== '0';
+  const carPlayEnabled = variantName === 'development' && process.env.TASK_HANDOFF_CARPLAY_ENABLED === '1';
+  const plugins = [
+    ...(baseConfig.plugins || []),
+    ...(taskStatusWidgetsEnabled ? [[
+      'expo-widgets',
+      {
+        bundleIdentifier: `${variant.applicationId}.widgets`,
+        groupIdentifier: `group.${variant.applicationId}`,
+        widgets: [{
+          name: 'TaskStatusWidget',
+          displayName: 'Task Status',
+          description: 'Shows active TaskHandoff AI work at a glance.',
+          supportedFamilies: ['systemSmall', 'systemMedium'],
+        }],
+      },
+    ]] : []),
+    ...(carPlayEnabled ? [[
+      './plugins/with-task-handoff-carplay',
+      { entitlement: 'com.apple.developer.carplay-driving-task' },
+    ]] : []),
+  ];
 
   return {
     ...baseConfig,
     name: variant.name,
     scheme: variant.scheme,
+    plugins,
     ios: {
       ...baseConfig.ios,
       bundleIdentifier: variant.applicationId,
@@ -44,6 +67,8 @@ module.exports = () => {
     extra: {
       ...baseConfig.extra,
       variant: variantName,
+      taskStatusWidgetsEnabled,
+      carPlayEnabled,
     },
   };
 };

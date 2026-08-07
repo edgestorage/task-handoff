@@ -23,6 +23,13 @@ export const ControlPlaneNodeDirectoryEntrySchema = z.object({
 
 export const ControlPlaneNodeDirectorySchema = z.array(ControlPlaneNodeDirectoryEntrySchema);
 
+export const ControlPlaneAvailableAppSchema = z.object({
+  id: z.string().trim().min(1).max(120),
+  name: z.string().trim().min(1).max(120),
+  kind: z.enum(["tty", "gui", "web"]),
+  supportsCwdSelection: z.boolean(),
+}).strict();
+
 export const ControlPlaneInstanceDirectoryEntrySchema = z.object({
   id: IdSchema,
   name: z.string().trim().min(1).max(160),
@@ -52,12 +59,8 @@ export const ControlPlaneInstanceDirectoryEntrySchema = z.object({
     warning: z.string().trim().min(1).max(500).optional(),
   }).strict(),
   aiSessions: InstanceBoardAiSummarySchema,
-  availableAgents: z.array(z.object({
-    id: z.string().trim().min(1).max(120),
-    name: z.string().trim().min(1).max(120),
-    kind: z.enum(["tty", "gui", "web"]),
-    supportsCwdSelection: z.boolean(),
-  }).strict()).max(256),
+  availableApps: z.array(ControlPlaneAvailableAppSchema).max(256).default([]),
+  availableAgents: z.array(ControlPlaneAvailableAppSchema).max(256),
   error: DirectoryErrorSchema.optional(),
 }).strict();
 

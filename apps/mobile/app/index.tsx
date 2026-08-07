@@ -9,11 +9,11 @@ import { useI18n } from '../src/i18n';
 export default function IndexRoute() {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
-  const [destination, setDestination] = useState<'/(tabs)/inbox' | '/profiles'>();
+  const [destination, setDestination] = useState<'/(tabs)/(main)/inbox' | '/profiles'>();
   useEffect(() => {
     let live = true;
     void mobileProfileStore.active().then((profile) => {
-      if (live) setDestination(profile ? '/(tabs)/inbox' : '/profiles');
+      if (live) setDestination(profile ? '/(tabs)/(main)/inbox' : '/profiles');
     });
     return () => { live = false; };
   }, []);

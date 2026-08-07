@@ -99,6 +99,7 @@ import {
   APP_SESSION_DELTA_RETENTION_MS,
   AppSessionDeltaResponseSchema,
   AppSessionEventType,
+  activeAppSessionsSnapshotFromRecords,
   appSessionsSnapshotFromRecords,
   type AppSessionPatchEvent,
   type AppSessionEventReason,
@@ -836,7 +837,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     }, "app-session.event.published");
   };
   const publishAppSessionSnapshot = (reason: AppSessionEventReason) => {
-    const snapshot = appSessionsSnapshotFromRecords(appRuntime.listSessions() as unknown as Array<Record<string, unknown>>);
+    const snapshot = activeAppSessionsSnapshotFromRecords(appRuntime.listSessions() as unknown as Array<Record<string, unknown>>);
     const fingerprint = JSON.stringify(snapshot.sessions);
     if (fingerprint === appSessionsFingerprint) {
       streamDiagnostics.appUnchanged += 1;
@@ -1715,7 +1716,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       streamId: appSessionStreamId,
       revision: appSessionSnapshotRevision,
       lastEventAt: appSessionEventHistory.at(-1)?.payload.meta.generatedAt || startedAt,
-      snapshot: appSessionsSnapshotFromRecords(appRuntime.listSessions() as unknown as Array<Record<string, unknown>>),
+      snapshot: activeAppSessionsSnapshotFromRecords(appRuntime.listSessions() as unknown as Array<Record<string, unknown>>),
     } };
   });
 
@@ -1724,7 +1725,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       streamId: appSessionStreamId,
       revision: appSessionSnapshotRevision,
       lastEventAt: appSessionEventHistory.at(-1)?.payload.meta.generatedAt || startedAt,
-      snapshot: appSessionsSnapshotFromRecords(appRuntime.listSessions() as unknown as Array<Record<string, unknown>>),
+      snapshot: activeAppSessionsSnapshotFromRecords(appRuntime.listSessions() as unknown as Array<Record<string, unknown>>),
     },
   }));
 

@@ -5,7 +5,7 @@ import {
   AppSessionPatchEventSchema,
   AppSessionRemovedEventSchema,
   AppSessionSnapshotEventSchema,
-  appSessionsSnapshotFromRecords,
+  activeAppSessionsSnapshotFromRecords,
   applyAppSessionStreamEvent,
   type AppSessionDeltaResponse,
   type AppSessionPatchEvent,
@@ -15,7 +15,7 @@ import {
   type AppSessionsState,
 } from "@task-handoff/protocol/app-sessions";
 import type { EventEnvelope, SessionStreamDescriptor } from "@task-handoff/protocol/events";
-import { isVisibleAppSessionStatus } from "./app-session-visibility.ts";
+import { safeParseResponse } from "@task-handoff/protocol/response-validation";
 
 type Logger = {
   info?: (data: Record<string, unknown>, message?: string) => void;
@@ -61,7 +61,7 @@ export class ControlPlaneAppSessionAggregator {
           ? AppSessionRemovedEventSchema
           : undefined;
     if (!schema) return false;
-    const parsed = schema.safeParse(event.payload);
+    const parsed = safeParseResponse(schema, event.payload);
     if (!parsed.success) {
       this.logger?.warn?.({ eventType: event.type, issues: parsed.error.issues, errorCode: "APP_SESSION_EVENT_INVALID" }, "app-session.aggregator.event.invalid");
       return false;
@@ -106,9 +106,9 @@ export class ControlPlaneAppSessionAggregator {
     return this.apply({ type: AppSessionEventType.Removed, payload });
   }
 
-  async list(options: { refresh?: boolean; includeTombstones?: boolean } = {}): Promise<ControlPlaneAppSessionsView> {
+  async list(options: { refresh?: boolean } = {}): Promise<ControlPlaneAppSessionsView> {
     if (options.refresh || this.snapshots.size === 0) await this.bootstrapFromInstances();
-    return this.view({ includeTombstones: options.includeTombstones });
+    return this.view();
   }
 
   async streamDescriptors() {
@@ -201,7 +201,12 @@ export class ControlPlaneAppSessionAggregator {
       if (advertisedStreamId && advertisedStreamId !== entry.streamId) continue;
       if (current?.streamId === entry.streamId && current.revision >= entry.revision) continue;
       if (current?.streamId !== entry.streamId) this.history.delete(entry.instanceId);
-      this.snapshots.set(entry.instanceId, { streamId: entry.streamId, snapshot: entry.appSessions, revision: entry.revision, lastEventAt: entry.lastEventAt });
+      this.snapshots.set(entry.instanceId, {
+        streamId: entry.streamId,
+        snapshot: activeAppSessionsSnapshotFromRecords(entry.appSessions.sessions, entry.appSessions.updatedAt),
+        revision: entry.revision,
+        lastEventAt: entry.lastEventAt,
+      });
     }
   }
 
@@ -287,14 +292,10 @@ export class ControlPlaneAppSessionAggregator {
     throw new Error("APP_SESSION_DELTA_INSTANCE_ID_REQUIRED");
   }
 
-  private visibleSnapshot(snapshot: AppSessionsSnapshot): AppSessionsSnapshot {
-    return appSessionsSnapshotFromRecords(snapshot.sessions.filter((session) => isVisibleAppSessionStatus(typeof session.status === "string" ? session.status : undefined)), snapshot.updatedAt);
-  }
-
-  private view(options: { includeTombstones?: boolean } = {}): ControlPlaneAppSessionsView {
+  private view(): ControlPlaneAppSessionsView {
     return {
       updatedAt: new Date().toISOString(),
-      instances: [...this.snapshots.entries()].map(([instanceId, entry]) => ({ instanceId, streamId: entry.streamId, appSessions: options.includeTombstones ? entry.snapshot : this.visibleSnapshot(entry.snapshot), revision: entry.revision, lastEventAt: entry.lastEventAt })),
+      instances: [...this.snapshots.entries()].map(([instanceId, entry]) => ({ instanceId, streamId: entry.streamId, appSessions: entry.snapshot, revision: entry.revision, lastEventAt: entry.lastEventAt })),
     };
   }
 }

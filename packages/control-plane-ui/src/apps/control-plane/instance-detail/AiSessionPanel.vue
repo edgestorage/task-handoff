@@ -126,7 +126,9 @@
                   class="session-ai-row"
                   :data-state="session.status"
                   :data-selected="selectedSession?.id === session.id"
+                  :data-unread="session.unread ? 'true' : undefined"
                 >
+                <span v-if="session.unread" class="ai-session-unread-dot" :aria-label="t('sessions.actions.unread')" :title="t('sessions.actions.unread')" />
                 <div
                   class="session-ai-select"
                   role="button"
@@ -139,7 +141,6 @@
                     <span class="session-ai-dot" />
                     <span class="session-ai-state-line">
                       <strong>{{ aiSessionAppDisplayName(aiSessionAppTab(instance, session), session.agent, t) }}</strong>
-                      <span v-if="session.unread" class="ai-session-unread-dot" :aria-label="t('sessions.actions.unread')" :title="t('sessions.actions.unread')" />
                       <span v-if="!groupSessionsByPath" class="session-ai-card-workspace">
                         <span aria-hidden="true">·</span>
                         <TooltipProvider :delay-duration="120">

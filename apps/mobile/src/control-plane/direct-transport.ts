@@ -5,6 +5,8 @@ import { assertDirectIdentityCompatible, probeDirectControlPlane } from './direc
 import type { MobileControlPlaneProfile } from './profile';
 import {
   MobileControlPlaneTransportError,
+  type MobileAppSessionTtyConnection,
+  type MobileAppSessionTtyHandlers,
   type MobileControlPlaneEvent,
   type MobileControlPlaneEventConnection,
   type MobileControlPlaneEventHandlers,
@@ -26,6 +28,14 @@ const ForwardedEventSchema = z.object({
 }).passthrough();
 
 const IncomingEventSchema = z.union([ForwardedEventSchema, EventSchema]);
+
+const IncomingTtyMessageSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('connected') }).passthrough(),
+  z.object({ type: z.literal('output'), data: z.string() }).passthrough(),
+  z.object({ type: z.literal('resize'), cols: z.number().int().positive(), rows: z.number().int().positive() }).passthrough(),
+  z.object({ type: z.literal('exit'), code: z.number().int().nullable().optional(), signal: z.union([z.string(), z.number()]).nullable().optional() }).passthrough(),
+  z.object({ type: z.literal('error'), message: z.string().optional() }).passthrough(),
+]);
 
 function normalizeIncomingEvent(event: z.infer<typeof IncomingEventSchema>): MobileControlPlaneEvent {
   const forwarded = ForwardedEventSchema.safeParse(event);
@@ -64,15 +74,23 @@ function requestUrl(origin: string, route: string) {
   return url.toString();
 }
 
-function websocketUrl(origin: string) {
-  const url = new URL('/api/events', origin);
+function websocketRouteUrl(origin: string, route: string) {
+  const url = new URL(requestUrl(origin, route));
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
   return url.toString();
+}
+
+function websocketUrl(origin: string) {
+  return websocketRouteUrl(origin, '/api/events');
 }
 
 export class DirectControlPlaneTransport implements MobileControlPlaneTransport {
   readonly profile: MobileControlPlaneProfile;
   private verified?: Promise<void>;
+  private readonly eventSubscribers = new Set<MobileControlPlaneEventHandlers>();
+  private eventSocket?: WebSocketLike;
+  private eventConnecting?: Promise<void>;
+  private eventOpen = false;
 
   constructor(
     profile: MobileControlPlaneProfile,
@@ -118,37 +136,122 @@ export class DirectControlPlaneTransport implements MobileControlPlaneTransport 
   }
 
   connectEvents(handlers: MobileControlPlaneEventHandlers): MobileControlPlaneEventConnection {
+    let closed = false;
+    this.eventSubscribers.add(handlers);
+    if (this.eventOpen) handlers.onOpen();
+    else void this.ensureEventConnection();
+    return {
+      close: () => {
+        if (closed) return;
+        closed = true;
+        this.eventSubscribers.delete(handlers);
+        if (!this.eventSubscribers.size) this.closeEventConnection();
+      },
+    };
+  }
+
+  private ensureEventConnection() {
+    if (this.eventSocket || this.eventConnecting || !this.eventSubscribers.size) return this.eventConnecting;
+    this.eventConnecting = (async () => {
+      try {
+        await this.ensureVerified();
+        const token = await this.sessionToken();
+        if (!this.eventSubscribers.size || this.eventSocket) return;
+        const socket = (this.options.webSocketFactory ?? defaultWebSocketFactory)(
+          websocketUrl(this.profile.access.origin),
+          { authorization: `Bearer ${token}` },
+        );
+        this.eventSocket = socket;
+        socket.addEventListener('open', () => {
+          if (this.eventSocket !== socket) return;
+          this.eventOpen = true;
+          socket.send(JSON.stringify({ v: 1, type: 'subscribe', topics: ['ai.sessions', 'app.sessions', 'nodes', 'instances', 'system'] }));
+          for (const subscriber of [...this.eventSubscribers]) subscriber.onOpen();
+        });
+        socket.addEventListener('message', (event) => {
+          if (this.eventSocket !== socket) return;
+          try {
+            const parsed = IncomingEventSchema.safeParse(JSON.parse(String(event.data)));
+            if (!parsed.success) throw new Error('Event envelope did not match the protocol.');
+            const normalized = normalizeIncomingEvent(parsed.data);
+            for (const subscriber of [...this.eventSubscribers]) subscriber.onEvent(normalized);
+          } catch {
+            const error = new MobileControlPlaneTransportError('DIRECT_EVENT_INVALID', 'The Control Plane sent an invalid event envelope.');
+            for (const subscriber of [...this.eventSubscribers]) subscriber.onError(error);
+            socket.close(1002, 'Invalid event envelope');
+          }
+        });
+        socket.addEventListener('error', () => {
+          if (this.eventSocket !== socket) return;
+          const error = new MobileControlPlaneTransportError('DIRECT_EVENT_CONNECTION_FAILED', 'The Control Plane event connection failed.', true);
+          for (const subscriber of [...this.eventSubscribers]) subscriber.onError(error);
+        });
+        socket.addEventListener('close', () => {
+          if (this.eventSocket !== socket) return;
+          this.eventSocket = undefined;
+          this.eventOpen = false;
+          for (const subscriber of [...this.eventSubscribers]) subscriber.onClose();
+        });
+      } catch (cause) {
+        const error = asTransportError(cause);
+        for (const subscriber of [...this.eventSubscribers]) subscriber.onError(error);
+      } finally {
+        this.eventConnecting = undefined;
+      }
+    })();
+    return this.eventConnecting;
+  }
+
+  private closeEventConnection() {
+    const socket = this.eventSocket;
+    this.eventSocket = undefined;
+    this.eventOpen = false;
+    socket?.close(1000, 'Client closed');
+  }
+
+  connectAppSessionTty(instanceId: string, sessionId: string, handlers: MobileAppSessionTtyHandlers): MobileAppSessionTtyConnection {
     let socket: WebSocketLike | undefined;
     let closed = false;
+    let open = false;
+    let pendingResize: { cols: number; rows: number } | undefined;
+    const send = (message: unknown) => {
+      if (open && socket?.readyState === 1) socket.send(JSON.stringify(message));
+    };
     void (async () => {
       try {
         await this.ensureVerified();
         const token = await this.sessionToken();
         if (closed) return;
+        const route = `/instances/${encodeURIComponent(instanceId)}/api/apps/sessions/${encodeURIComponent(sessionId)}/tty`;
         socket = (this.options.webSocketFactory ?? defaultWebSocketFactory)(
-          websocketUrl(this.profile.access.origin),
+          websocketRouteUrl(this.profile.access.origin, route),
           { authorization: `Bearer ${token}` },
         );
         socket.addEventListener('open', () => {
           if (closed) return;
-          socket?.send(JSON.stringify({ v: 1, type: 'subscribe', topics: ['ai.sessions', 'app.sessions', 'nodes', 'instances', 'system'] }));
+          open = true;
           handlers.onOpen();
+          if (pendingResize) send({ type: 'resize', ...pendingResize });
         });
         socket.addEventListener('message', (event) => {
-          if (closed) return;
+          if (closed || typeof event.data !== 'string') return;
           try {
-            const parsed = IncomingEventSchema.safeParse(JSON.parse(String(event.data)));
-            if (!parsed.success) throw new Error('Event envelope did not match the protocol.');
-            handlers.onEvent(normalizeIncomingEvent(parsed.data));
+            const parsed = IncomingTtyMessageSchema.safeParse(JSON.parse(event.data));
+            if (!parsed.success) return;
+            const message = parsed.data;
+            if (message.type === 'output') handlers.onOutput(message.data);
+            else if (message.type === 'resize') handlers.onResize(message.cols, message.rows);
+            else if (message.type === 'exit') handlers.onExit(message.code, message.signal == null ? null : String(message.signal));
+            else if (message.type === 'error') handlers.onError(new MobileControlPlaneTransportError('TTY_SESSION_ERROR', message.message || 'TTY session error.'));
           } catch {
-            handlers.onError(new MobileControlPlaneTransportError('DIRECT_EVENT_INVALID', 'The Control Plane sent an invalid event envelope.'));
-            socket?.close(1002, 'Invalid event envelope');
+            handlers.onError(new MobileControlPlaneTransportError('TTY_MESSAGE_INVALID', 'The TTY session sent an invalid message.'));
           }
         });
         socket.addEventListener('error', () => {
-          if (!closed) handlers.onError(new MobileControlPlaneTransportError('DIRECT_EVENT_CONNECTION_FAILED', 'The Control Plane event connection failed.', true));
+          if (!closed) handlers.onError(new MobileControlPlaneTransportError('TTY_CONNECTION_FAILED', 'The TTY session connection failed.', true));
         });
         socket.addEventListener('close', () => {
+          open = false;
           if (!closed) handlers.onClose();
         });
       } catch (cause) {
@@ -156,11 +259,20 @@ export class DirectControlPlaneTransport implements MobileControlPlaneTransport 
       }
     })();
     return {
+      sendInput(data: string) {
+        if (data) send({ type: 'input', data });
+      },
+      resize(cols: number, rows: number) {
+        if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols <= 0 || rows <= 0) return;
+        pendingResize = { cols, rows };
+        send({ type: 'resize', cols, rows });
+      },
       close() {
         closed = true;
+        open = false;
         socket?.close(1000, 'Client closed');
       },
-    };
+    } satisfies MobileAppSessionTtyConnection;
   }
 
   async revalidate() {

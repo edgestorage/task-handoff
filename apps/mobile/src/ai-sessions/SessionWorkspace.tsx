@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ComponentProps } from 'react';
+import { GripVertical } from 'lucide-react-native';
 import { Alert, FlatList, Keyboard, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { canInterruptAiSession, isAiSessionApprovalPending, type ControlPlaneAiSessionSummary, type ControlPlaneClient } from '@task-handoff/control-plane-client';
@@ -178,9 +179,11 @@ export function SessionWorkspace({
     if (sessionId && permissions) void permissions.write(controlPlaneId, instanceId, sessionId, mode).catch(() => undefined);
   };
   return (
-    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} onTouchStart={Keyboard.dismiss} style={styles.fill} testID="session-workspace">
-      <SessionDetail bottomInset={composerOverlayHeight} messages={messages} mode={detailMode} onModeChange={setDetailMode} onVisible={onVisible} onTurnIndexChange={setSelectedTurnIndex} session={session} showModePicker={controlledDetailMode === undefined} turnIndex={selectedTurnIndex} />
-      <View onLayout={(event) => setComposerOverlayHeight(event.nativeEvent.layout.height)} style={[styles.actions, { paddingBottom: Math.max(insets.bottom, 8) }]}> 
+    <KeyboardAvoidingView behavior={sessionKeyboardAvoidingBehavior(Platform.OS)} style={styles.fill} testID="session-workspace">
+      <View onTouchStart={Keyboard.dismiss} style={styles.fill} testID="session-content">
+        <SessionDetail bottomInset={composerOverlayHeight} messages={messages} mode={detailMode} onModeChange={setDetailMode} onVisible={onVisible} onTurnIndexChange={setSelectedTurnIndex} session={session} showModePicker={controlledDetailMode === undefined} turnIndex={selectedTurnIndex} />
+      </View>
+      <View onLayout={(event) => setComposerOverlayHeight(event.nativeEvent.layout.height)} style={[styles.actions, { paddingBottom: Math.max(insets.bottom, 8) }]} testID="session-actions">
         {!authoritativeActionsEnabled ? (
           <View style={[styles.notice, { backgroundColor: colors.notice }]}> 
             <SystemIcon android="cloud_off" color={colors.noticeText} ios="icloud.slash" size={16} />
@@ -194,15 +197,15 @@ export function SessionWorkspace({
               <Text style={[styles.approvalTitle, { color: colors.noticeText }]}>{t('sessions.approvalNeeded')}</Text>
             </View>
             <View style={styles.actionRow}>
-            {(['allow', 'deny', 'skip'] as const).map((decision) => (
-              <ActionButton key={decision} label={t(`workspace.${decision}` as 'workspace.allow')} tone={decision === 'deny' ? 'danger' : 'secondary'} disabled={!authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes(state('approval')?.phase || '')} onPress={() => {
-                const decisionLabel = t(`workspace.${decision}` as 'workspace.allow');
-                Alert.alert(t('workspace.resolveApproval'), t('workspace.sendDecision', { decision: decisionLabel }), [
-                  { text: t('common.cancel'), style: 'cancel' },
-                  { text: decisionLabel, onPress: () => { void actions?.approval(instanceId, session.id, decision); } },
-                ]);
-              }} />
-            ))}
+              {(['allow', 'skip', 'deny'] as const).map((decision) => (
+                <ApprovalButton key={decision} decision={decision} label={t(`workspace.${decision}` as 'workspace.allow')} disabled={!authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes(state('approval')?.phase || '')} onPress={() => {
+                  const decisionLabel = t(`workspace.${decision}` as 'workspace.allow');
+                  Alert.alert(t('workspace.resolveApproval'), t('workspace.sendDecision', { decision: decisionLabel }), [
+                    { text: t('common.cancel'), style: 'cancel' },
+                    { text: decisionLabel, onPress: () => { void actions?.approval(instanceId, session.id, decision); } },
+                  ]);
+                }} />
+              ))}
             </View>
           </View>
         ) : null}
@@ -224,7 +227,7 @@ export function SessionWorkspace({
             return (
               <View style={styles.queueRow}>
                 <View style={styles.queueContent}>
-                  <SystemIcon android="queue" color={item.status === 'failed' ? colors.error : colors.textMuted} ios="text.line.last.and.arrowtriangle.forward" size={15} style={styles.queueIcon} />
+                  <GripVertical color={item.status === 'failed' ? colors.error : colors.textMuted} size={17} strokeWidth={1.8} />
                   <View style={styles.queueCopy}>
                     <Text numberOfLines={2} style={[styles.queueText, { color: colors.text }]}>{item.message}</Text>
                     {metadata ? <Text numberOfLines={1} style={[styles.queueMeta, { color: colors.textMuted }]}>{metadata}</Text> : null}
@@ -274,11 +277,30 @@ export function SessionWorkspace({
   );
 }
 
-function ActionButton({ label, disabled, onPress, tone = 'primary' }: { label: string; disabled?: boolean; onPress(): void; tone?: 'primary' | 'secondary' | 'danger' }) {
+export function sessionKeyboardAvoidingBehavior(platform: string): 'height' | undefined {
+  return platform === 'ios' ? 'height' : undefined;
+}
+
+function ApprovalButton({ label, decision, disabled, onPress }: { label: string; decision: 'allow' | 'skip' | 'deny'; disabled?: boolean; onPress(): void }) {
   const { colors } = useMobileTheme();
-  const backgroundColor = tone === 'primary' ? colors.primaryButton : tone === 'danger' ? colors.errorSoft : colors.surface;
-  const color = tone === 'primary' ? '#ffffff' : tone === 'danger' ? colors.error : colors.primary;
-  return <Pressable accessibilityRole="button" accessibilityState={{ disabled: Boolean(disabled) }} disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.button, { backgroundColor, borderColor: tone === 'secondary' ? colors.border : backgroundColor }, tone === 'secondary' && styles.buttonBorder, disabled && styles.disabled, pressed && styles.pressed]}><Text style={[styles.buttonText, { color }]}>{label}</Text></Pressable>;
+  const color = decision === 'deny' ? colors.error : decision === 'allow' ? colors.primary : colors.textMuted;
+  const icon = decision === 'allow'
+    ? { android: 'check' as const, ios: 'checkmark' as const }
+    : decision === 'skip'
+      ? { android: 'block' as const, ios: 'nosign' as const }
+      : { android: 'close' as const, ios: 'xmark' as const };
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ disabled: Boolean(disabled) }}
+      disabled={disabled}
+      onPress={onPress}
+      style={({ pressed }) => [styles.approvalButton, { backgroundColor: colors.surface, borderColor: colors.border }, disabled && styles.disabled, pressed && styles.pressed]}
+    >
+      <SystemIcon android={icon.android} color={color} ios={icon.ios} size={14} />
+      <Text style={[styles.approvalButtonText, { color }]}>{label}</Text>
+    </Pressable>
+  );
 }
 
 function QueueActionButton({ label, icon, destructive = false, disabled, onPress, showLabel = false }: { label: string; icon: Pick<ComponentProps<typeof SystemIcon>, 'android' | 'ios'>; destructive?: boolean; disabled?: boolean; onPress(): void; showLabel?: boolean }) {
@@ -296,21 +318,19 @@ function queuePermissionLabel(mode: AiSessionPermissionMode, t: Translate) {
 const styles = StyleSheet.create({
   fill: { flex: 1 },
   actions: { bottom: 0, gap: 8, left: 0, paddingHorizontal: 12, paddingTop: 8, position: 'absolute', right: 0, zIndex: 10 },
-  actionRow: { alignItems: 'center', flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  approval: { borderRadius: 12, gap: 10, padding: 12 },
-  approvalTitleRow: { alignItems: 'center', flexDirection: 'row', gap: 8 },
-  approvalTitle: { fontSize: 14, fontWeight: '700', lineHeight: 20 },
-  button: { borderRadius: 10, minHeight: 40, justifyContent: 'center', paddingHorizontal: 14 },
-  buttonBorder: { borderWidth: StyleSheet.hairlineWidth },
+  actionRow: { alignItems: 'center', flexDirection: 'row', gap: 6 },
+  approval: { borderRadius: 14, gap: 8, padding: 10 },
+  approvalTitleRow: { alignItems: 'center', flexDirection: 'row', gap: 7, paddingHorizontal: 2 },
+  approvalTitle: { fontSize: 14, fontWeight: '700', lineHeight: 19 },
+  approvalButton: { alignItems: 'center', borderRadius: 9, borderWidth: StyleSheet.hairlineWidth, flex: 1, flexDirection: 'row', gap: 5, justifyContent: 'center', minHeight: 38, paddingHorizontal: 8 },
+  approvalButtonText: { fontSize: 13, fontWeight: '700', lineHeight: 18 },
   disabled: { opacity: 0.4 },
   pressed: { opacity: 0.7 },
-  buttonText: { fontSize: 13, fontWeight: '700', lineHeight: 18, textTransform: 'capitalize' },
   queueListFrame: { borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },
   queueList: { maxHeight: 224 },
   queueSeparator: { height: StyleSheet.hairlineWidth, marginLeft: 40 },
   queueRow: { alignItems: 'center', flexDirection: 'row', gap: 8, minHeight: 52, paddingHorizontal: 10, paddingVertical: 8 },
-  queueContent: { alignItems: 'flex-start', flex: 1, flexDirection: 'row', gap: 9, minWidth: 0 },
-  queueIcon: { marginTop: 3 },
+  queueContent: { alignItems: 'center', flex: 1, flexDirection: 'row', gap: 9, minWidth: 0 },
   queueCopy: { flex: 1, gap: 1, minWidth: 0 },
   queueText: { fontSize: 14, fontWeight: '500', lineHeight: 20 },
   queueMeta: { fontSize: 12, lineHeight: 17 },

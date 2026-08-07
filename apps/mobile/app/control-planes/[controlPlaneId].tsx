@@ -63,7 +63,7 @@ export default function ControlPlaneDetailScreen() {
             setBusy(true);
             setError(undefined);
             void deleteMobileControlPlaneProfile(profile).then((remaining) => {
-              router.replace(remaining.length ? '/(tabs)/profiles' : '/profiles');
+              router.replace(remaining.length ? '/(tabs)/(main)/inbox' : '/profiles');
             }).catch((cause) => {
               setError(messageFor(cause, t));
               setBusy(false);

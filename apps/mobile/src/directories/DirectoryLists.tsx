@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import type { ControlPlaneInstanceDirectoryEntry, ControlPlaneNodeDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
 
 import type { MobileDirectoryProfileState } from './store';
@@ -13,7 +12,7 @@ import { useI18n } from '../i18n';
 export function NodesDirectory({ state, onOpen }: { state: MobileDirectoryProfileState; onOpen?(node: ControlPlaneNodeDirectoryEntry): void }) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
-  return <SafeAreaView edges={['top']} style={[styles.screen, { backgroundColor: colors.background }]}><DirectoryList title={t('nav.nodes')} state={state} data={state.nodes} keyOf={(node) => node.id} render={(node) => (
+  return <View style={[styles.screen, { backgroundColor: colors.background }]}><DirectoryList state={state} data={state.nodes} keyOf={(node) => node.id} render={(node) => (
     <DirectoryCard icon="node" onPress={() => onOpen?.(node)} title={nodeDisplayName(node, t)} subtitle={connectionModeLabel(node.connectionMode, t)}>
       <View style={styles.nodeSummary}>
         <Text style={[styles.meta, { color: colors.textMuted }]}>{nodeSummary(state.instances.filter((instance) => instance.nodeId === node.id).length, node, t)}</Text>
@@ -21,7 +20,7 @@ export function NodesDirectory({ state, onOpen }: { state: MobileDirectoryProfil
       {node.status === 'online' && node.health === 'ok' ? null : <Text style={[styles.meta, { color: colors.textMuted }]}>{relativeObservedAt(node.lastSeenAt || node.observedAt, t)}</Text>}
       {node.error ? <Text style={[styles.error, { color: colors.error }]}>{node.error.code}: {node.error.message}</Text> : null}
     </DirectoryCard>
-  )} /></SafeAreaView>;
+  )} /></View>;
 }
 
 export function InstancesDirectory({ state, nodeId, onOpen }: { state: MobileDirectoryProfileState; nodeId?: string; onOpen?(instance: ControlPlaneInstanceDirectoryEntry): void }) {
@@ -63,10 +62,9 @@ export function InstancesDirectory({ state, nodeId, onOpen }: { state: MobileDir
   </View>;
 }
 
-function DirectoryList<T>({ title, state, data, keyOf, render }: { title: string; state: MobileDirectoryProfileState; data: readonly T[]; keyOf(item: T): string; render(item: T): React.ReactElement }) {
+function DirectoryList<T>({ state, data, keyOf, render }: { state: MobileDirectoryProfileState; data: readonly T[]; keyOf(item: T): string; render(item: T): React.ReactElement }) {
   const { colors } = useMobileTheme();
   return <View style={[styles.screen, { backgroundColor: colors.background }]}>
-    <Text accessibilityRole="header" style={[styles.title, { color: colors.text }]}>{title}</Text>
     <DirectoryListContent state={state} data={data} keyOf={keyOf} render={render} />
   </View>;
 }

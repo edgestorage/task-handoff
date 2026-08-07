@@ -16,7 +16,7 @@ test('tool activity derives its duration from the measured logical text width', 
   await fireEvent(screen.getByTestId('tool-activity-label'), 'layout', { nativeEvent: { layout: { height: 18, width: 256, x: 0, y: 0 } } });
 
   await waitFor(() => expect(timing).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-    duration: 4_000,
+    duration: (400 / 150) * 1_000,
     toValue: 328,
     useNativeDriver: true,
   })));

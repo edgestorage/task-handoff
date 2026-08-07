@@ -10,6 +10,7 @@ function client(overrides: Partial<ControlPlaneClient['aiSessions']> = {}) {
   return { aiSessions: {
     list: jest.fn().mockResolvedValue(snapshot),
     sendMessage: jest.fn().mockResolvedValue({}), approval: jest.fn().mockResolvedValue({}), interrupt: jest.fn().mockResolvedValue({}),
+    close: jest.fn().mockResolvedValue({}),
     steerQueue: jest.fn().mockResolvedValue({}), retryQueue: jest.fn().mockResolvedValue({}), removeQueue: jest.fn().mockResolvedValue({}),
     ...overrides,
   } } as unknown as ControlPlaneClient;
@@ -35,6 +36,14 @@ test('blocks duplicate action submission while the first request is unresolved',
   resolve({});
   expect((await first).disposition).toBe('accepted');
   expect(api.aiSessions.interrupt).toHaveBeenCalledTimes(1);
+});
+
+test('closes through the shared client with an idempotency key and refreshes authoritative state', async () => {
+  const api = client();
+  const coordinator = new MobileAiSessionActionCoordinator('cp', api, new MobileAiSessionStore());
+  expect((await coordinator.close('instance', 'session', 'close-request-1')).disposition).toBe('accepted');
+  expect(api.aiSessions.close).toHaveBeenCalledWith('instance', 'session', 'close-request-1');
+  expect(api.aiSessions.list).toHaveBeenCalledTimes(1);
 });
 
 test('keeps an authoritative action response accepted when only the follow-up snapshot refresh fails', async () => {

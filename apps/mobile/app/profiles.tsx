@@ -7,7 +7,7 @@ import type { AndroidSymbol, SFSymbol } from 'expo-symbols';
 import { Screen } from '../src/components/Screen';
 import type { MobileControlPlaneProfile } from '../src/control-plane/profile';
 import { mobileProfileStore as profiles } from '../src/control-plane/runtime';
-import { useMobileTheme } from '../src/components/theme';
+import { useMobileTheme, type AppearancePreference } from '../src/components/theme';
 import { isMobileTestMode } from '../src/platform/build-variant';
 import { SystemIcon } from '../src/components/SystemIcon';
 import { NativeProfilesScreen } from '../src/control-plane/NativeProfilesScreen';
@@ -41,8 +41,8 @@ export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInT
 
   if (!profilesLoaded) {
     return (
-      <SafeAreaView edges={['top']} style={[styles.safeArea, { backgroundColor: colors.background }]}>
-        <Stack.Screen options={{ headerShown: false }} />
+      <SafeAreaView edges={embeddedInTabs ? [] : ['top']} style={[styles.safeArea, { backgroundColor: colors.background }]}>
+        <Stack.Screen options={{ headerShown: false, title: t('nav.settings') }} />
         <View style={styles.loadingScreen}><ActivityIndicator accessibilityLabel={t('profiles.loading')} /></View>
       </SafeAreaView>
     );
@@ -50,9 +50,9 @@ export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInT
 
   if (!savedProfiles.length) {
     return (
-      <SafeAreaView edges={['top']} style={[styles.safeArea, { backgroundColor: colors.background }]}> 
-        <Stack.Screen options={{ headerShown: false }} />
-        <Screen>
+      <SafeAreaView edges={embeddedInTabs ? [] : ['top']} style={[styles.safeArea, { backgroundColor: colors.background }]}>
+        <Stack.Screen options={{ headerShown: false, title: t('nav.settings') }} />
+        <Screen alwaysBounceVertical={false}>
           <ProfilesWelcome onAdd={() => router.push('/control-planes/add')} />
         </Screen>
       </SafeAreaView>
@@ -60,7 +60,7 @@ export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInT
   }
 
   if (Platform.OS === 'ios') {
-    return <NativeProfilesScreen
+    return <><Stack.Screen options={{ headerShown: true, title: t('nav.settings') }} /><NativeProfilesScreen
       activeId={activeId}
       error={error}
       profiles={savedProfiles}
@@ -68,17 +68,17 @@ export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInT
       testMode={isMobileTestMode}
       onAdd={() => router.push('/control-planes/add')}
       onOpen={(controlPlaneId) => router.push({ pathname: '/control-planes/[controlPlaneId]', params: { controlPlaneId } })}
-    />;
+    /></>;
   }
 
   return (
-    <SafeAreaView edges={embeddedInTabs ? ['top'] : []} style={[styles.safeArea, { backgroundColor: colors.background }]}> 
-      <Stack.Screen options={{ headerShown: !embeddedInTabs }} />
+    <SafeAreaView edges={[]} style={[styles.safeArea, { backgroundColor: colors.background }]}>
+      <Stack.Screen options={{ headerShown: true }} />
       <Screen>
         <View style={styles.saved}>
-          <View style={styles.savedHeading}>
+          {!embeddedInTabs ? <View style={styles.savedHeading}>
             <Text accessibilityRole="header" style={[styles.title, { color: colors.text }]}>{t('nav.controlPlanes')}</Text>
-          </View>
+          </View> : null}
           <View style={[styles.profileGroup, { backgroundColor: colors.surface, borderColor: colors.border }]}> 
             {savedProfiles.map((profile, index) => {
               const active = activeId === profile.identity.controlPlaneId;
@@ -118,6 +118,7 @@ export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInT
             </Pressable>
           </View>
           <LanguageRow />
+          <AppearanceRow />
         </View>
         {error ? <Text accessibilityLiveRegion="polite" style={[styles.error, { color: colors.error }]}>{error}</Text> : null}
       </Screen>
@@ -138,17 +139,20 @@ export function ProfilesWelcome({ onAdd }: { onAdd: () => void }) {
         <Text style={[styles.heroDescription, { color: colors.textMuted }]}>{t('profiles.heroDescription')}</Text>
       </View>
 
-      <View style={[styles.guideCard, { backgroundColor: colors.surface, borderColor: colors.border }]}> 
-        <GuideItem colors={colors} icon={{ android: 'lock', ios: 'lock' }} title={t('profiles.secureTitle')} description={t('profiles.secureDescription')} />
-        <View style={[styles.guideDivider, { backgroundColor: colors.border }]} />
-        <GuideItem colors={colors} icon={{ android: 'sync', ios: 'arrow.triangle.2.circlepath' }} title={t('profiles.syncTitle')} description={t('profiles.syncDescription')} />
-        <View style={[styles.guideDivider, { backgroundColor: colors.border }]} />
-        <GuideItem colors={colors} icon={{ android: 'visibility', ios: 'eye' }} title={t('profiles.controlTitle')} description={t('profiles.controlDescription')} />
+      <View style={styles.guide}>
+        <View style={[styles.guideCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <GuideItem colors={colors} icon={{ android: 'lock', ios: 'lock' }} title={t('profiles.secureTitle')} description={t('profiles.secureDescription')} />
+          <View style={[styles.guideDivider, { backgroundColor: colors.border }]} />
+          <GuideItem colors={colors} icon={{ android: 'sync', ios: 'arrow.triangle.2.circlepath' }} title={t('profiles.syncTitle')} description={t('profiles.syncDescription')} />
+          <View style={[styles.guideDivider, { backgroundColor: colors.border }]} />
+          <GuideItem colors={colors} icon={{ android: 'visibility', ios: 'eye' }} title={t('profiles.controlTitle')} description={t('profiles.controlDescription')} />
+        </View>
+        <NativeActionButton label={t('profiles.connect')} onPress={onAdd} />
       </View>
 
       <View style={styles.welcomeFooter}>
-        <NativeActionButton label={t('profiles.connect')} onPress={onAdd} />
         <LanguageRow compact />
+        <AppearanceRow compact />
         <Text style={[styles.requirement, { color: colors.textMuted }]}>{isMobileTestMode ? t('profiles.requirementTest') : t('profiles.requirement')}</Text>
       </View>
     </View>
@@ -169,6 +173,25 @@ function LanguageRow({ compact = false }: { compact?: boolean }) {
   return <Pressable accessibilityRole="button" onPress={chooseLanguage} style={[styles.languageRow, !compact && { backgroundColor: colors.surface, borderColor: colors.border }]}>
     <SystemIcon android="language" color={colors.textMuted} ios="globe" size={18} />
     <Text style={[styles.languageLabel, { color: colors.text }]}>{t('locale.language')}</Text>
+    <Text style={[styles.languageValue, { color: colors.textMuted }]}>{labels[preference]}</Text>
+    <SystemIcon android="chevron_right" color={colors.textMuted} ios="chevron.right" size={12} />
+  </Pressable>;
+}
+
+function AppearanceRow({ compact = false }: { compact?: boolean }) {
+  const { colors, preference, setPreference } = useMobileTheme();
+  const { t } = useI18n();
+  const labels: Record<AppearancePreference, string> = { system: t('appearance.system'), light: t('appearance.light'), dark: t('appearance.dark') };
+  const chooseAppearance = () => Alert.alert(t('appearance.title'), undefined, [
+    ...(Object.keys(labels) as AppearancePreference[]).map((value) => ({
+      text: `${preference === value ? '✓ ' : ''}${labels[value]}`,
+      onPress: () => { void setPreference(value); },
+    })),
+    { text: t('common.cancel'), style: 'cancel' },
+  ]);
+  return <Pressable accessibilityRole="button" onPress={chooseAppearance} style={[styles.languageRow, !compact && { backgroundColor: colors.surface, borderColor: colors.border }]}>
+    <SystemIcon android="dark_mode" color={colors.textMuted} ios="circle.lefthalf.filled" size={18} />
+    <Text style={[styles.languageLabel, { color: colors.text }]}>{t('appearance.title')}</Text>
     <Text style={[styles.languageValue, { color: colors.textMuted }]}>{labels[preference]}</Text>
     <SystemIcon android="chevron_right" color={colors.textMuted} ios="chevron.right" size={12} />
   </Pressable>;
@@ -197,6 +220,7 @@ const styles = StyleSheet.create({
   hero: { alignItems: 'center', gap: 9, paddingHorizontal: 12 },
   heroTitle: { fontSize: 30, fontWeight: '700', letterSpacing: -0.8, lineHeight: 36, textAlign: 'center' },
   heroDescription: { fontSize: 15, lineHeight: 22, maxWidth: 340, textAlign: 'center' },
+  guide: { gap: 14 },
   guideCard: { borderRadius: 18, borderWidth: 1, paddingHorizontal: 16 },
   guideItem: { flexDirection: 'row', gap: 12, paddingVertical: 15 },
   guideIcon: { alignItems: 'center', marginTop: 2, width: 24 },

@@ -24,7 +24,7 @@ import {
   tint,
 } from '@expo/ui/swift-ui/modifiers';
 import type { ControlPlaneInstanceDirectoryEntry, ControlPlaneNodeDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
-import { StyleSheet, Text as NativeText } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useMobileTheme } from '../components/theme';
@@ -51,8 +51,7 @@ export function NodesDirectory({ state, onOpen }: NodesDirectoryProps) {
   const instancesByNode = useMemo(() => groupInstancesByNode(state.instances), [state.instances]);
 
   return (
-    <SafeAreaView edges={['top']} style={[styles.screen, { backgroundColor: colors.background }]}> 
-      <NativeText accessibilityRole="header" style={[styles.title, { color: colors.text }]}>{t('nav.nodes')}</NativeText>
+    <View style={[styles.screen, { backgroundColor: colors.background }]}>
       <Host colorScheme={dark ? 'dark' : 'light'} seedColor={colors.primary} style={{ flex: 1 }} useViewportSizeMeasurement>
         <List modifiers={[listStyle('insetGrouped'), tint(colors.primary)]}>
         <DirectoryStateSections state={state} />
@@ -93,7 +92,7 @@ export function NodesDirectory({ state, onOpen }: NodesDirectoryProps) {
         })}
         </List>
       </Host>
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -269,7 +268,6 @@ function localizedFilterValue(value: string, t: Translate) {
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },
-  title: { fontSize: 34, fontWeight: '700', letterSpacing: -0.8, lineHeight: 41, paddingHorizontal: 16, paddingTop: 16 },
 });
 
 function nodeConnectionSummary(node: ControlPlaneNodeDirectoryEntry, t: Translate) {

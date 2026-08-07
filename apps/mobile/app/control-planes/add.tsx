@@ -62,7 +62,7 @@ export default function AddControlPlaneScreen() {
       const profile = await loginDirectControlPlane(target, { username: username.trim(), password }, secureStore);
       await profiles.put(profile);
       setPassword('');
-      router.replace('/(tabs)/inbox');
+      router.replace('/(tabs)/(main)/inbox');
     } catch (cause) {
       setError(messageFor(cause, t));
     } finally {

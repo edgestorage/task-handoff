@@ -7,7 +7,12 @@ const styles = fs.readFileSync(new URL("../src/apps/control-plane/ControlPlaneWo
 
 test("instance title appends the authoritative node name as muted metadata", () => {
   assert.match(workbench, /const topbarNodeName = computed\(\(\) => activeInstance\.value\?\.node\?\.name \|\| ""\);/);
+  assert.match(workbench, /<div v-else class="control-plane-title control-plane-instance-switcher-shell">\s*<span class="control-plane-kicker">\{\{ topbarKicker \}\}<\/span>\s*<DropdownMenu>/);
+  assert.match(workbench, /<DropdownMenuTrigger as-child>\s*<button[\s\S]*?class="control-plane-instance-switcher"[\s\S]*?<span class="control-plane-instance-switcher-title">/);
   assert.match(workbench, /<small v-if="topbarNodeName" class="control-plane-instance-node-name" :title="topbarNodeName">· \{\{ topbarNodeName \}\}<\/small>/);
+  assert.match(styles, /\.control-plane-instance-switcher-shell > \.control-plane-kicker \{[\s\S]*?padding: 0 6px;/);
+  assert.match(styles, /\.control-plane-instance-switcher-title \{[\s\S]*?align-items: baseline;/);
+  assert.match(styles, /\.control-plane-instance-switcher-chevron \{[\s\S]*?align-self: center;/);
   assert.match(styles, /\.control-plane-instance-node-name \{[\s\S]*?color: var\(--text-muted\);[\s\S]*?font-size: 12px;[\s\S]*?text-overflow: ellipsis;/);
   assert.match(styles, /@media \(max-width: 780px\) \{[\s\S]*?\.control-plane-instance-node-name \{\s*display: none;/);
 });

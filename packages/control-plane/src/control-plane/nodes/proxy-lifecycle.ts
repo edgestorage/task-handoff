@@ -11,6 +11,7 @@ import {
   type ProxyTargetSnapshot,
 } from "@task-handoff/protocol/control-plane-proxy";
 import { NodeSchema, type Node } from "@task-handoff/protocol/control-plane";
+import { parseResponse, safeParseResponse } from "@task-handoff/protocol/response-validation";
 import { z } from "zod";
 import { createId, createSecret, type JsonCollection } from "../../shared/persistence/store.ts";
 import { publicNode } from "../public-records.ts";
@@ -119,7 +120,7 @@ export class ControlPlaneProxyLifecycle {
         );
       }
 
-      const result = ClaimProxyInviteResultSchema.parse(payload?.data);
+      const result = parseResponse(ClaimProxyInviteResultSchema, payload?.data);
       this.requireClaimResultIdentity(pending, result);
       const credential = this.compensationCredential(pending, result);
       let revoke: Response;
@@ -332,7 +333,7 @@ export class ControlPlaneProxyLifecycle {
       });
       throw error;
     }
-    const result = ClaimProxyInviteResultSchema.parse(payload?.data);
+    const result = parseResponse(ClaimProxyInviteResultSchema, payload?.data);
     this.requireClaimResultIdentity(pending, result);
     const current = this.options.nodes.get(result.target.id);
     const sameIdentity = current?.connectionMode === "control-plane-proxy"
@@ -457,7 +458,7 @@ export class ControlPlaneProxyLifecycle {
   }
 
   private requireRevocationReceipt(payload: unknown, credential: ProxyNodeCredential) {
-    const parsed = ProxyBindingRevocationResponseSchema.safeParse(payload);
+    const parsed = safeParseResponse(ProxyBindingRevocationResponseSchema, payload);
     const binding = parsed.success ? parsed.data.data.binding : undefined;
     if (!binding
       || binding.id !== credential.proxyBindingId

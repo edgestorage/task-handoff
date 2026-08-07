@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { InstanceDeleteResultSchema, RuntimeArtifactIdentitySchema, type ControlledInstance, type InstanceDeleteInput, type InstanceDeleteResult, type InstanceImageSnapshot, type LocalDockerImage, type Node, type NodeRuntime, type Project, type RuntimeArtifactIdentity } from "@task-handoff/protocol/control-plane";
+import { safeParseResponse } from "@task-handoff/protocol/response-validation";
 import { defaultCommandRunner, type CommandRunner } from "../../shared/process/command-runner.ts";
 import { DockerImageService, listDockerImages } from "../docker-images.ts";
 
@@ -562,7 +563,7 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
     ]).catch(() => undefined);
     if (!result?.stdout) return { containerId };
     try {
-      const parsed = RuntimeArtifactIdentitySchema.safeParse(JSON.parse(result.stdout));
+      const parsed = safeParseResponse(RuntimeArtifactIdentitySchema, JSON.parse(result.stdout));
       return parsed.success ? { containerId, ...parsed.data } : { containerId };
     } catch {
       return { containerId };

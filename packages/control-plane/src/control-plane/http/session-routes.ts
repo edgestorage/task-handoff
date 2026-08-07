@@ -52,7 +52,6 @@ export function registerSessionRoutes({
   app.get("/api/app-sessions", async (request) => {
     const query = z.object({
       refresh: z.string().optional(),
-      includeTombstones: z.string().optional(),
       instanceId: z.string().trim().min(1).optional(),
       streamId: z.string().trim().min(1).optional(),
       sinceRevision: z.string().optional(),
@@ -73,7 +72,6 @@ export function registerSessionRoutes({
     }
     return { data: await appSessionAggregator.list({
       refresh: query.refresh === "true" || query.refresh === "1",
-      includeTombstones: query.includeTombstones === "true" || query.includeTombstones === "1",
     }) };
   });
 

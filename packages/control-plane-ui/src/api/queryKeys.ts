@@ -1,6 +1,7 @@
 export const controlPlaneQueryKeys = {
   status: ["control-plane-status"] as const,
   settings: ["control-plane-settings"] as const,
+  mobileSessions: ["control-plane-mobile-sessions"] as const,
   projects: ["control-plane-projects"] as const,
   models: ["control-plane-models"] as const,
   images: ["control-plane-images"] as const,

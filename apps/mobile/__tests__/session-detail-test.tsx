@@ -4,7 +4,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ControlPlaneAiSessionSummarySchema } from '@task-handoff/control-plane-client';
 
 import { conversationDetailItems, detailItems, SessionDetail } from '../src/ai-sessions/SessionDetail';
-import { SessionWorkspace } from '../src/ai-sessions/SessionWorkspace';
+import { sessionKeyboardAvoidingBehavior, SessionWorkspace } from '../src/ai-sessions/SessionWorkspace';
 import type { MobileAiSessionActionCoordinator } from '../src/ai-sessions/actions';
 import { CHARACTER_FADE_MS, SafeMarkdown, shouldAnimateMarkdownText, safeMarkdownLink, sanitizeMarkdown, StreamingMarkdownText } from '../src/components/SafeMarkdown';
 import { nextStreamingMarkdownCommit } from '../src/components/useStreamingMarkdown';
@@ -304,7 +304,21 @@ test('touching outside the composer dismisses the keyboard', async () => {
   const actions = { subscribe: () => () => undefined, state: () => ({ phase: 'idle' as const }), approval: jest.fn(), interrupt: jest.fn(), queue: jest.fn(), send: jest.fn() } as unknown as MobileAiSessionActionCoordinator;
   const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}><SessionWorkspace actions={actions} controlPlaneId="cp" instanceId="instance" messages={[]} session={actionable} /></SafeAreaProvider>);
 
-  fireEvent(screen.getByTestId('session-workspace'), 'touchStart');
+  fireEvent(screen.getByTestId('session-content'), 'touchStart');
   expect(dismiss).toHaveBeenCalledTimes(1);
   dismiss.mockRestore();
+});
+
+test('floating composer follows the keyboard without creating an opaque layout section', async () => {
+  const actionable = ControlPlaneAiSessionSummarySchema.parse({ ...session, actions: { send: true, interrupt: true } });
+  const actions = { subscribe: () => () => undefined, state: () => ({ phase: 'idle' as const }), approval: jest.fn(), interrupt: jest.fn(), queue: jest.fn(), send: jest.fn() } as unknown as MobileAiSessionActionCoordinator;
+  const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}><SessionWorkspace actions={actions} controlPlaneId="cp" instanceId="instance" messages={[]} session={actionable} /></SafeAreaProvider>);
+
+  const actionsStyle = StyleSheet.flatten(screen.getByTestId('session-actions').props.style);
+  const workspaceStyle = StyleSheet.flatten(screen.getByTestId('session-workspace').props.style);
+  expect(sessionKeyboardAvoidingBehavior('ios')).toBe('height');
+  expect(sessionKeyboardAvoidingBehavior('android')).toBeUndefined();
+  expect(actionsStyle.position).toBe('absolute');
+  expect(workspaceStyle.backgroundColor).toBeUndefined();
+  screen.unmount();
 });

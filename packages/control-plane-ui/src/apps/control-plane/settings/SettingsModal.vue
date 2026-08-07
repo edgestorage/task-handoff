@@ -70,6 +70,8 @@
         </div>
       </ScrollArea>
 
+      <MobileSessionsSettingsSection v-else-if="settingsSection === 'mobile-sessions'" />
+
       <ScrollArea v-else-if="settingsSection === 'models'" class="settings-section-scroll" :horizontal="false">
         <div class="settings-section-scroll-content">
       <div class="project-management-grid">
@@ -703,6 +705,7 @@ import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
 import ControlPlaneTriggersView from "../triggers/ControlPlaneTriggersView.vue";
 import BasicSettingsSection from "./AppearanceSettingsSection.vue";
 import ChatBridgeSettingsSection from "./ChatBridgeSettingsSection.vue";
+import MobileSessionsSettingsSection from "./MobileSessionsSettingsSection.vue";
 import { useChatBridgeSettings } from "./useChatBridgeSettings";
 import { useImageSettings } from "./useImageSettings";
 import { useModelSettings } from "./useModelSettings";
@@ -724,7 +727,7 @@ import { connectionStatusKeys, translateStatus } from "../../../i18n/status";
 import { translateApiError } from "../../../i18n/apiError";
 import { normalizeProxyOrigin, proxyClaimValidation } from "./controlPlaneProxyUi";
 
-type SettingsSection = "basic" | "chat" | "images" | "environment-templates" | "projects" | "nodes" | "models" | "triggers";
+type SettingsSection = "basic" | "chat" | "images" | "environment-templates" | "projects" | "nodes" | "models" | "triggers" | "mobile-sessions";
 type NodeDiagnosticLog = {
   route: string;
   method: string;
@@ -757,6 +760,7 @@ const settingsSections = computed<Array<{ id: SettingsSection; label: string }>>
   { id: "models", label: t("settings.models") },
   { id: "triggers", label: t("triggers.title") },
   { id: "chat", label: t("settings.chat") },
+  { id: "mobile-sessions", label: t("settings.mobileSessions.navigation") },
   { id: "basic", label: t("settings.basic") },
 ]);
 

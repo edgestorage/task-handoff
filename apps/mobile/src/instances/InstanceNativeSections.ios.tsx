@@ -9,7 +9,8 @@ import type { InstanceHistoryProps, InstanceOverviewProps } from './instance-sec
 export function InstanceOverview(props: InstanceOverviewProps) {
   const { colors, dark } = useMobileTheme();
   const { t } = useI18n();
-  return <Host colorScheme={dark ? 'dark' : 'light'} seedColor={colors.primary} style={styles.overview}>
+  const overviewHeight = overviewBaseHeight + overviewActionCount * overviewActionHeight + overviewFormBottomInset;
+  return <Host colorScheme={dark ? 'dark' : 'light'} seedColor={colors.primary} style={[styles.overview, { height: overviewHeight }]}>
     <Form modifiers={[listSectionSpacing('compact')]}>
       <Section title={t('nav.instance').toLocaleUpperCase()}>
         <ValueRow icon="server.rack" label={t('nav.node')} value={props.nodeName} />
@@ -30,18 +31,19 @@ export function InstanceOverview(props: InstanceOverviewProps) {
             <Image color={colors.textMuted} size={12} systemName="chevron.right" />
           </HStack>
         </Button>
+        <Button label={t('nav.history')} systemImage="clock.arrow.circlepath" onPress={props.onShowHistory} />
       </Section>
     </Form>
   </Host>;
 }
 
-export function InstanceHistory({ items, loading, onOpen }: InstanceHistoryProps) {
+export function InstanceHistory({ items, loading, onOpen, standalone = false }: InstanceHistoryProps) {
   const { colors, dark } = useMobileTheme();
   const { locale, t } = useI18n();
   const height = loading || !items.length ? 138 : Math.min(72 + items.length * 66, 380);
-  return <Host colorScheme={dark ? 'dark' : 'light'} seedColor={colors.primary} style={[styles.history, { height }]}>
+  return <Host colorScheme={dark ? 'dark' : 'light'} seedColor={colors.primary} style={standalone ? styles.historyStandalone : [styles.history, { height }]}>
     <Form modifiers={[listSectionSpacing('compact')]}>
-      <Section title={`${t('instance.history')}${items.length ? ` · ${items.length}` : ''}`}>
+      <Section title={standalone ? undefined : `${t('instance.history')}${items.length ? ` · ${items.length}` : ''}`}>
         {loading ? <HStack spacing={9}><ProgressView /><Text modifiers={[foregroundStyle('secondary')]}>{t('history.loading')}</Text></HStack> : null}
         {!loading && items.map((item) => <Button key={item.id} onPress={() => onOpen(item)} modifiers={[buttonStyle('plain')]}>
           <HStack spacing={10}>
@@ -66,6 +68,12 @@ function ValueRow({ icon, label, value, warning }: { icon: Parameters<typeof Lab
 }
 
 const styles = StyleSheet.create({
-  overview: { alignSelf: 'stretch', height: 390, marginHorizontal: -20 },
+  overview: { alignSelf: 'stretch', marginHorizontal: -20 },
   history: { alignSelf: 'stretch', marginHorizontal: -20 },
+  historyStandalone: { flex: 1 },
 });
+
+const overviewBaseHeight = 286;
+const overviewActionCount = 3;
+const overviewActionHeight = 52;
+const overviewFormBottomInset = 52;

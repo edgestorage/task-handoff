@@ -1,5 +1,6 @@
 import {
   aiSessionLastUserMessageAt,
+  aiSessionStatusGroup,
   sortedAiSessionInboxEntries,
   type ControlPlaneAiSessions,
   type ControlPlaneAiSessionSummary,
@@ -41,11 +42,7 @@ export function inboxEntries(snapshot: ControlPlaneAiSessions | undefined, scope
 }
 
 export function matchesStatusFilter(session: ControlPlaneAiSessionSummary, filter: SessionStatusFilter) {
-  if (filter === 'all') return true;
-  if (filter === 'active') return session.status === 'running';
-  if (filter === 'waiting') return session.status === 'waiting';
-  if (filter === 'problem') return session.status === 'failed';
-  return session.status !== 'running' && session.status !== 'waiting' && session.status !== 'failed';
+  return filter === 'all' || aiSessionStatusGroup(session) === filter;
 }
 
 export function statusFilterLabel(filter: SessionStatusFilter, t: Translate = english) {

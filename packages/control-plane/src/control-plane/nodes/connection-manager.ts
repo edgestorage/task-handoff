@@ -6,6 +6,7 @@ import {
   NodeSchema,
   type Node,
 } from "@task-handoff/protocol/control-plane";
+import { safeParseResponse } from "@task-handoff/protocol/response-validation";
 import { z } from "zod";
 import { createId, type JsonCollection } from "../../shared/persistence/store.ts";
 import { createDirectNodeAgentAuthHeaders } from "../../shared/security/node-agent-auth.ts";
@@ -353,7 +354,7 @@ export class NodeConnectionManager {
         code: "NODE_AGENT_ID_MISSING",
       });
     }
-    const build = BuildInfoSchema.safeParse(payload.data?.build);
+    const build = safeParseResponse(BuildInfoSchema, payload.data?.build);
     if (payload.data?.protocolVersion !== CONTROL_PLANE_PROTOCOL_VERSION) {
       this.options.warn(redactDiagnosticSecrets({
         nodeId,
@@ -398,7 +399,7 @@ export class NodeConnectionManager {
         code: "NODE_AGENT_PAIRING_RESPONSE_INVALID",
       });
     }
-    const parsed = NodeAgentPairingCompleteResultSchema.safeParse(raw);
+    const parsed = safeParseResponse(NodeAgentPairingCompleteResultSchema, raw);
     const nodeId = raw.nodeId.trim();
     const keyId = raw.keyId.trim();
     const secret = raw.secret.trim();
@@ -435,7 +436,7 @@ export class NodeConnectionManager {
           retryable: response.status === 408 || response.status === 429 || response.status >= 500,
         });
       }
-      const parsedReceipt = NodeAgentPairingSelfRevokeResultSchema.safeParse(payload.data);
+      const parsedReceipt = safeParseResponse(NodeAgentPairingSelfRevokeResultSchema, payload.data);
       if (!parsedReceipt.success) {
         throw Object.assign(new Error("Node agent pairing revoke receipt was invalid."), {
           statusCode: 502,

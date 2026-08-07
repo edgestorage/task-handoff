@@ -1,13 +1,21 @@
 import { createControlPlaneAiSessionsApi } from "./ai-sessions.ts";
+import { createControlPlaneAppSessionsApi } from "./app-sessions.ts";
 import { createControlPlaneAuthApi } from "./auth.ts";
+import { responseSchema } from "@task-handoff/protocol/response-validation";
 import type { ControlPlaneClientTransport } from "./transport.ts";
 import { createControlPlaneResourcesApi } from "./resources.ts";
 
 export function createControlPlaneClient(transport: ControlPlaneClientTransport) {
+  const compatibleTransport: ControlPlaneClientTransport = {
+    request(path, schema, init) {
+      return transport.request(path, responseSchema(schema), init);
+    },
+  };
   return {
-    auth: createControlPlaneAuthApi(transport),
-    aiSessions: createControlPlaneAiSessionsApi(transport),
-    resources: createControlPlaneResourcesApi(transport),
+    auth: createControlPlaneAuthApi(compatibleTransport),
+    aiSessions: createControlPlaneAiSessionsApi(compatibleTransport),
+    appSessions: createControlPlaneAppSessionsApi(compatibleTransport),
+    resources: createControlPlaneResourcesApi(compatibleTransport),
   };
 }
 

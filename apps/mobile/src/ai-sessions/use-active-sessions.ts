@@ -7,16 +7,21 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from 'react';
+import type { ControlPlaneClient } from '@task-handoff/control-plane-client';
 
 import { createDirectControlPlaneClient } from '../control-plane/client';
 import { mobileProfileStore, mobileSecureStore } from '../control-plane/runtime';
 import { subscribeToNetworkState } from '../platform/network';
 import { subscribeToAppLifecycle } from '../platform/lifecycle';
 import { MobileAiSessionController } from './controller';
+import { MobileAiSessionActionCoordinator } from './actions';
 import { mobileAiSessionStore } from './store';
 import type { MobileControlPlaneProfile } from '../control-plane/profile';
+import { isCarPlayConnected, subscribeToCarPlayConnection } from '../carplay/runtime';
 
 type ActiveAiSessions = {
+  actions?: MobileAiSessionActionCoordinator;
+  client?: ControlPlaneClient;
   controlPlaneId?: string;
   state: ReturnType<typeof mobileAiSessionStore.profile>;
 };
@@ -58,18 +63,22 @@ export function useActiveAiSessions() {
 
 function useActiveAiSessionsRuntime(dependencies: ActiveAiSessionsDependencies): ActiveAiSessions {
   const [controlPlaneId, setControlPlaneId] = useState<string>();
+  const [runtime, setRuntime] = useState<{ actions: MobileAiSessionActionCoordinator; client: ControlPlaneClient }>();
   useEffect(() => {
     let live = true;
     let activation = 0;
     let controller: MobileAiSessionController | undefined;
     let unsubscribeNetwork: (() => void) | undefined;
     let unsubscribeLifecycle: (() => void) | undefined;
+    let unsubscribeCarPlay: (() => void) | undefined;
 
     const stopRuntime = () => {
       unsubscribeNetwork?.();
       unsubscribeLifecycle?.();
       unsubscribeNetwork = undefined;
       unsubscribeLifecycle = undefined;
+      unsubscribeCarPlay?.();
+      unsubscribeCarPlay = undefined;
       controller?.stop();
       controller = undefined;
     };
@@ -80,24 +89,33 @@ function useActiveAiSessionsRuntime(dependencies: ActiveAiSessionsDependencies):
       stopRuntime();
       if (!profile) {
         setControlPlaneId(undefined);
+        setRuntime(undefined);
         return;
       }
       const id = profile.identity.controlPlaneId;
       setControlPlaneId(id);
       const { api, transport } = dependencies.createClient(profile);
+      setRuntime({ actions: new MobileAiSessionActionCoordinator(id, api, mobileAiSessionStore), client: api });
       controller = new MobileAiSessionController(id, api, transport, mobileAiSessionStore);
       const storeGeneration = mobileAiSessionStore.generation(id);
       let active = false;
+      let carPlayConnected = false;
       let connected = true;
       let running = false;
       const reconcile = () => {
-        const shouldRun = active && connected;
+        const shouldRun = (active || carPlayConnected) && connected;
         if (shouldRun === running) return;
         running = shouldRun;
         if (shouldRun) void controller?.start().catch(() => undefined);
         else controller?.stop();
       };
       unsubscribeLifecycle = dependencies.subscribeLifecycle((phase) => { active = phase === 'active'; reconcile(); });
+      unsubscribeCarPlay = subscribeToCarPlayConnection((next) => { carPlayConnected = next; reconcile(); });
+      void isCarPlayConnected().then((next) => {
+        if (!live || currentActivation !== activation) return;
+        carPlayConnected = next;
+        reconcile();
+      }).catch(() => undefined);
       unsubscribeNetwork = dependencies.subscribeNetwork((network) => {
         connected = network.connected;
         if (!connected && mobileAiSessionStore.isGeneration(id, storeGeneration)) {
@@ -124,5 +142,5 @@ function useActiveAiSessionsRuntime(dependencies: ActiveAiSessionsDependencies):
     () => controlPlaneId ? mobileAiSessionStore.profile(controlPlaneId) : empty,
     () => empty,
   );
-  return { controlPlaneId, state };
+  return { actions: runtime?.actions, client: runtime?.client, controlPlaneId, state };
 }

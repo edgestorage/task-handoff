@@ -6,5 +6,6 @@ catalog:
 allowBuilds:
   electron: set this to true or false
   esbuild: set this to true or false
+  expo-libghostty: true
   node-pty: set this to true or false
   vue-demi: set this to true or false

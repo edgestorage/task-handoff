@@ -10,6 +10,7 @@ import {
   InstanceLifecycleSnapshotSchema,
 } from "@task-handoff/protocol/control-plane";
 import type { EventEnvelope } from "@task-handoff/protocol/events";
+import { safeParseResponse } from "@task-handoff/protocol/response-validation";
 import type { ControlPlaneEventBus } from "../events/bus.ts";
 
 const MAX_TERMINAL_TAIL = 256 * 1024;
@@ -44,7 +45,7 @@ export class ImagePullProgressProjector {
 
   handle(event: EventEnvelope) {
     if (event.type === InstanceLifecycleEventType.Snapshot) {
-      const parsed = InstanceLifecycleSnapshotSchema.safeParse(event.payload);
+      const parsed = safeParseResponse(InstanceLifecycleSnapshotSchema, event.payload);
       if (parsed.success) this.reconcileLifecycle(parsed.data);
       return;
     }
@@ -55,12 +56,12 @@ export class ImagePullProgressProjector {
       return;
     }
     if (event.type === ImagePullTerminalEventType.Output) {
-      const parsed = ImagePullTerminalOutputSchema.safeParse(event.payload);
+      const parsed = safeParseResponse(ImagePullTerminalOutputSchema, event.payload);
       if (parsed.success) this.applyOutput(parsed.data);
       return;
     }
     if (event.type === ImagePullTerminalEventType.Finished) {
-      const parsed = ImagePullTerminalFinishedSchema.safeParse(event.payload);
+      const parsed = safeParseResponse(ImagePullTerminalFinishedSchema, event.payload);
       if (parsed.success) this.applyFinished(parsed.data);
     }
   }

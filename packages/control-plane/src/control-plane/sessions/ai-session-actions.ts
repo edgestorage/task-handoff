@@ -27,6 +27,7 @@ import {
   type AiSessionSendMode,
 } from "@task-handoff/protocol/ai-sessions";
 import type { ControlledInstance, NodeRuntime } from "@task-handoff/protocol/control-plane";
+import { parseResponse } from "@task-handoff/protocol/response-validation";
 
 type AiSessionActionServiceOptions = {
   requireInstance: (instanceId: string) => Promise<ControlledInstance>;
@@ -46,19 +47,19 @@ export class AiSessionActionService {
   }
 
   async resolveApproval(instanceId: string, sessionId: string, decision: "allow" | "deny" | "skip"): Promise<AiSessionActionResult> {
-    return AiSessionActionResultSchema.parse(await this.post(instanceId, sessionRoute(sessionId, "approval"), { decision }));
+    return parseResponse(AiSessionActionResultSchema, await this.post(instanceId, sessionRoute(sessionId, "approval"), { decision }));
   }
 
   async listHistory(instanceId: string): Promise<AiSessionHistoryList> {
-    return AiSessionHistoryListSchema.parse(await this.get(instanceId, "/ai-sessions/history"));
+    return parseResponse(AiSessionHistoryListSchema, await this.get(instanceId, "/ai-sessions/history"));
   }
 
   async historyDetail(instanceId: string, aiSessionId: string): Promise<AiSessionHistoryDetail> {
-    return AiSessionHistoryDetailSchema.parse(await this.get(instanceId, `/ai-sessions/history/${encodeURIComponent(aiSessionId)}`));
+    return parseResponse(AiSessionHistoryDetailSchema, await this.get(instanceId, `/ai-sessions/history/${encodeURIComponent(aiSessionId)}`));
   }
 
   async resume(instanceId: string, aiSessionId: string): Promise<AiSessionResumeResult> {
-    const result = AiSessionResumeResultSchema.parse(await this.post(instanceId, sessionRoute(aiSessionId, "resume"), {}));
+    const result = parseResponse(AiSessionResumeResultSchema, await this.post(instanceId, sessionRoute(aiSessionId, "resume"), {}));
     await this.refreshAfterCommittedResume(instanceId, aiSessionId);
     return result;
   }
@@ -79,7 +80,7 @@ export class AiSessionActionService {
     const instance = await this.options.requireInstance(instanceId);
     const effectivePermissionMode = input.permissionMode
       || (input.agent === "codex" ? instance.config.defaultCodexPermissionMode : undefined);
-    const result = AiSessionCreateResultSchema.parse(await this.options.request(instance, "/ai-sessions", {
+    const result = parseResponse(AiSessionCreateResultSchema, await this.options.request(instance, "/ai-sessions", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ ...input, ...(effectivePermissionMode ? { permissionMode: effectivePermissionMode } : {}) }),
@@ -88,12 +89,12 @@ export class AiSessionActionService {
   }
 
   async openApp(instanceId: string, aiSessionId: string, clientRequestId: string): Promise<AiSessionOpenAppResult> {
-    const result = AiSessionOpenAppResultSchema.parse(await this.post(instanceId, sessionRoute(aiSessionId, "open-app"), { clientRequestId }));
+    const result = parseResponse(AiSessionOpenAppResultSchema, await this.post(instanceId, sessionRoute(aiSessionId, "open-app"), { clientRequestId }));
     return result;
   }
 
   async close(instanceId: string, aiSessionId: string, clientRequestId: string): Promise<AiSessionCloseResult> {
-    const result = AiSessionCloseResultSchema.parse(await this.post(instanceId, sessionRoute(aiSessionId, "close"), { clientRequestId }));
+    const result = parseResponse(AiSessionCloseResultSchema, await this.post(instanceId, sessionRoute(aiSessionId, "close"), { clientRequestId }));
     return result;
   }
 
@@ -143,7 +144,7 @@ export class AiSessionActionService {
     const session = instance.aiSessions.sessions.find((candidate) => candidate.id === sessionId);
     const effectivePermissionMode = permissionMode
       || (session?.agent === "codex" ? instance.config.defaultCodexPermissionMode : undefined);
-    return AiSessionActionResultSchema.parse(await this.options.request(instance, sessionRoute(sessionId, "messages"), {
+    return parseResponse(AiSessionActionResultSchema, await this.options.request(instance, sessionRoute(sessionId, "messages"), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -157,36 +158,36 @@ export class AiSessionActionService {
   }
 
   async mentionCatalog(instanceId: string, sessionId: string) {
-    return AiSessionMentionCatalogSchema.parse(await this.get(instanceId, sessionRoute(sessionId, "mentions")));
+    return parseResponse(AiSessionMentionCatalogSchema, await this.get(instanceId, sessionRoute(sessionId, "mentions")));
   }
 
   async searchMentionFiles(instanceId: string, sessionId: string, query: string) {
-    return AiSessionMentionFileSearchSchema.parse(await this.post(instanceId, sessionRoute(sessionId, "mentions/files"), { query }));
+    return parseResponse(AiSessionMentionFileSearchSchema, await this.post(instanceId, sessionRoute(sessionId, "mentions/files"), { query }));
   }
 
   async executeCommand(instanceId: string, sessionId: string, input: AiSessionCommandInput): Promise<AiSessionCommandResult> {
-    return AiSessionCommandResultSchema.parse(await this.post(instanceId, sessionRoute(sessionId, "commands"), input));
+    return parseResponse(AiSessionCommandResultSchema, await this.post(instanceId, sessionRoute(sessionId, "commands"), input));
   }
 
   async queue(instanceId: string, sessionId: string) {
-    return AiSessionQueueSchema.parse(await this.get(instanceId, sessionRoute(sessionId, "queue")));
+    return parseResponse(AiSessionQueueSchema, await this.get(instanceId, sessionRoute(sessionId, "queue")));
   }
 
   async steerQueuedMessage(instanceId: string, sessionId: string, queueId: string) {
-    return AiSessionActionResultSchema.parse(await this.post(instanceId, queueRoute(sessionId, queueId, "steer"), {}));
+    return parseResponse(AiSessionActionResultSchema, await this.post(instanceId, queueRoute(sessionId, queueId, "steer"), {}));
   }
 
   async retryQueuedMessage(instanceId: string, sessionId: string, queueId: string) {
-    return AiSessionStatusSchema.parse(await this.post(instanceId, queueRoute(sessionId, queueId, "retry"), {}));
+    return parseResponse(AiSessionStatusSchema, await this.post(instanceId, queueRoute(sessionId, queueId, "retry"), {}));
   }
 
   async removeQueuedMessage(instanceId: string, sessionId: string, queueId: string) {
     const instance = await this.options.requireInstance(instanceId);
-    return AiSessionStatusSchema.parse(await this.options.request(instance, queueRoute(sessionId, queueId), { method: "DELETE" }));
+    return parseResponse(AiSessionStatusSchema, await this.options.request(instance, queueRoute(sessionId, queueId), { method: "DELETE" }));
   }
 
   async interrupt(instanceId: string, sessionId: string): Promise<AiSessionActionResult> {
-    return AiSessionActionResultSchema.parse(await this.post(instanceId, sessionRoute(sessionId, "interrupt"), {}));
+    return parseResponse(AiSessionActionResultSchema, await this.post(instanceId, sessionRoute(sessionId, "interrupt"), {}));
   }
 
   private async get(instanceId: string, route: string) {

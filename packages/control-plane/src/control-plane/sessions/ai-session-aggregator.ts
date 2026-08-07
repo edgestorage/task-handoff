@@ -16,6 +16,7 @@ import {
 } from "@task-handoff/protocol/ai-sessions";
 import type { EventEnvelope } from "@task-handoff/protocol/events";
 import type { SessionStreamDescriptor } from "@task-handoff/protocol/events";
+import { safeParseResponse } from "@task-handoff/protocol/response-validation";
 
 type Logger = {
   info?: (data: Record<string, unknown>, message?: string) => void;
@@ -67,7 +68,7 @@ export class ControlPlaneAiSessionAggregator {
 
   handleEvent(event: EventEnvelope) {
     if (event.type === AiSessionEventType.MessageDelta) {
-      const parsed = AiSessionMessageDeltaEventSchema.safeParse(event.payload);
+      const parsed = safeParseResponse(AiSessionMessageDeltaEventSchema, event.payload);
       if (!parsed.success) {
         this.logger?.warn?.({ eventType: event.type, issues: parsed.error.issues, errorCode: "AI_SESSION_MESSAGE_DELTA_INVALID" }, "ai-session.aggregator.message-delta.invalid");
         return false;
@@ -85,7 +86,7 @@ export class ControlPlaneAiSessionAggregator {
           ? AiSessionRemovedEventSchema
           : undefined;
     if (!schema) return false;
-    const parsed = schema.safeParse(event.payload);
+    const parsed = safeParseResponse(schema, event.payload);
     if (!parsed.success) {
       this.logger?.warn?.({ eventType: event.type, issues: parsed.error.issues, errorCode: "AI_SESSION_EVENT_INVALID" }, "ai-session.aggregator.event.invalid");
       return false;

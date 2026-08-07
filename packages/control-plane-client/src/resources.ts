@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   ControlPlaneInstanceDirectorySchema,
   ControlPlaneNodeDirectorySchema,
+  type ControlPlaneInstanceDirectoryEntry,
 } from "@task-handoff/protocol/control-plane-directory";
 import { AiSessionPermissionModeSchema, type AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
 import type { ControlPlaneClientTransport } from "./transport.ts";
@@ -20,6 +21,8 @@ export const ControlPlaneNodeLocalFolderSchema = z.object({
   updatedAt: z.string().datetime(),
 }).passthrough();
 export type ControlPlaneNodeLocalFolder = z.infer<typeof ControlPlaneNodeLocalFolderSchema>;
+
+export type ControlPlaneInstanceResourceEntry = ControlPlaneInstanceDirectoryEntry;
 
 export function createControlPlaneResourcesApi(transport: ControlPlaneClientTransport) {
   const requestData = async <T>(path: string, schema: z.ZodType<T>, signal?: AbortSignal) => (

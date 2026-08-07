@@ -10,6 +10,7 @@ export type InstanceOverviewProps = {
   activeSessionCount: number;
   problemSessionCount: number;
   onCreateSession(): void;
+  onShowHistory(): void;
   onShowSessions(): void;
 };
 
@@ -17,4 +18,5 @@ export type InstanceHistoryProps = {
   items: AiSessionHistoryItem[];
   loading: boolean;
   onOpen(item: AiSessionHistoryItem): void;
+  standalone?: boolean;
 };

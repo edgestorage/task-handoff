@@ -107,6 +107,14 @@ export function publicInstanceDirectory(item: InstanceBoardResult["items"][numbe
       warning: protocolWarnings.length ? protocolWarnings.join(" ") : undefined,
     },
     aiSessions: item.aiSessions,
+    availableApps: (item.appInventory?.items || [])
+      .filter((app) => app.availability === "available")
+      .map((app) => ({
+        id: app.id,
+        name: app.name,
+        kind: app.kind,
+        supportsCwdSelection: app.capabilities.supportsCwdSelection,
+      })),
     availableAgents: (item.appInventory?.items || [])
       .filter((app) => app.availability === "available" && (app.id === "codex" || app.id === "claude"))
       .map((app) => ({

@@ -4,6 +4,13 @@ import { Screen } from '../components/Screen';
 import { SystemIcon } from '../components/SystemIcon';
 import { useMobileTheme } from '../components/theme';
 import { useI18n, type Translate } from '../i18n';
+import {
+  SESSION_COMPOSER_ACTION_ICON_SIZE,
+  SESSION_COMPOSER_ACTION_RADIUS,
+  SESSION_COMPOSER_ACTION_SIZE,
+  SESSION_COMPOSER_EXPANDED_RADIUS,
+  SESSION_COMPOSER_TOOLBAR_HEIGHT,
+} from './composer-metrics';
 import type { NewSessionFormProps } from './new-session-types';
 
 export function NewSessionForm(props: NewSessionFormProps) {
@@ -62,7 +69,7 @@ export function NewSessionForm(props: NewSessionFormProps) {
           onPress={props.onCreate}
           style={({ pressed }) => [styles.sendButton, { backgroundColor: colors.primaryButton }, props.disabled && styles.disabled, pressed && styles.pressed]}
         >
-          <SystemIcon android={props.busy ? 'hourglass_top' : 'arrow_upward'} color="#fff" ios={props.busy ? 'hourglass' : 'arrow.up'} size={19} />
+          <SystemIcon android={props.busy ? 'hourglass_top' : 'arrow_upward'} color="#fff" ios={props.busy ? 'hourglass' : 'arrow.up'} size={SESSION_COMPOSER_ACTION_ICON_SIZE} />
         </Pressable>
       </View>
     </View>
@@ -110,15 +117,15 @@ const styles = StyleSheet.create({
   intro: { alignItems: 'center', gap: 8, marginBottom: 8, marginTop: 20, paddingHorizontal: 20 },
   heading: { fontSize: 28, fontWeight: '700', letterSpacing: -0.6, lineHeight: 34, textAlign: 'center' },
   description: { fontSize: 15, lineHeight: 22, textAlign: 'center' },
-  composer: { borderRadius: 20, borderWidth: StyleSheet.hairlineWidth, minHeight: 320, overflow: 'hidden', padding: 14 },
+  composer: { borderRadius: SESSION_COMPOSER_EXPANDED_RADIUS, borderWidth: StyleSheet.hairlineWidth, minHeight: 320, overflow: 'hidden', paddingBottom: 0, paddingHorizontal: 14, paddingTop: 14 },
   contextRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   contextPill: { alignItems: 'center', borderRadius: 10, flexDirection: 'row', gap: 6, maxWidth: '100%', minHeight: 38, paddingHorizontal: 11 },
   contextLabel: { flexShrink: 1, fontSize: 14, fontWeight: '600', lineHeight: 20 },
   prompt: { flex: 1, fontSize: 16, lineHeight: 24, minHeight: 176, paddingHorizontal: 4, paddingVertical: 16, textAlignVertical: 'top' },
-  toolbar: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', minHeight: 46 },
+  toolbar: { alignItems: 'center', flexDirection: 'row', height: SESSION_COMPOSER_TOOLBAR_HEIGHT, justifyContent: 'space-between', marginHorizontal: -2, paddingBottom: 6 },
   permissionButton: { alignItems: 'center', flexDirection: 'row', gap: 7, minHeight: 40, paddingHorizontal: 4 },
   permissionLabel: { fontSize: 13, fontWeight: '600', lineHeight: 18 },
-  sendButton: { alignItems: 'center', borderRadius: 22, height: 44, justifyContent: 'center', width: 44 },
+  sendButton: { alignItems: 'center', borderRadius: SESSION_COMPOSER_ACTION_RADIUS, height: SESSION_COMPOSER_ACTION_SIZE, justifyContent: 'center', width: SESSION_COMPOSER_ACTION_SIZE },
   disabled: { opacity: 0.4 },
   pressed: { opacity: 0.72 },
   error: { borderRadius: 12, fontSize: 13, lineHeight: 19, padding: 12 },

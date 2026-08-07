@@ -2,12 +2,17 @@ import type { PropsWithChildren } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 import { useMobileTheme } from './theme';
 
-export function Screen({ children }: PropsWithChildren) {
+type ScreenProps = PropsWithChildren<{
+  alwaysBounceVertical?: boolean;
+}>;
+
+export function Screen({ alwaysBounceVertical, children }: ScreenProps) {
   const { colors } = useMobileTheme();
 
   return (
     <View style={[styles.fill, { backgroundColor: colors.background }]}>
       <ScrollView
+        alwaysBounceVertical={alwaysBounceVertical}
         automaticallyAdjustKeyboardInsets
         contentInsetAdjustmentBehavior="automatic"
         contentContainerStyle={[

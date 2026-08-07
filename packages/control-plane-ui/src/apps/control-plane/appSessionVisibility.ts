@@ -1,15 +1,3 @@
-import { normalizeAppSessionStatus } from "@task-handoff/protocol/app-sessions";
-
-export const HIDDEN_APP_SESSION_STATUSES = new Set(["stopped", "failed", "exited", "closed", "terminated"]);
-
-export function appSessionStatus(session: Record<string, unknown>) {
-  return normalizeAppSessionStatus(typeof session.status === "string" ? session.status : undefined);
-}
-
-export function isVisibleAppSession(session: Record<string, unknown>) {
-  return !HIDDEN_APP_SESSION_STATUSES.has(appSessionStatus(session));
-}
-
 export function appSessionBindingKeys(session?: Record<string, unknown>) {
   const bindings = Array.isArray(session?.bindings) ? session.bindings : [];
   const normalized = bindings.flatMap((binding) => {

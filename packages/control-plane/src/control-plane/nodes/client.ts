@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { Node } from "@task-handoff/protocol/control-plane";
+import { safeParseResponse } from "@task-handoff/protocol/response-validation";
 
 export type NodeAgentWebSocket = {
   on(event: string, listener: (...args: unknown[]) => void): void;
@@ -112,7 +113,7 @@ export class ControlPlaneNodeAgentClient {
   }
 
   parse<T>(node: Node, route: string, schema: z.ZodType<T>, value: unknown, method = "GET") {
-    const parsed = schema.safeParse(value);
+    const parsed = safeParseResponse(schema, value);
     if (parsed.success) {
       return parsed.data;
     }

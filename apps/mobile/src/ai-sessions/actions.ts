@@ -5,7 +5,7 @@ import type { ValueStore } from '../platform/secure-storage';
 import type { MobileAiSessionStore } from './store';
 import { mobileMetrics } from '../observability/mobile-metrics';
 
-export type MobileAiSessionAction = 'send' | 'approval' | 'interrupt' | 'queue-steer' | 'queue-retry' | 'queue-remove';
+export type MobileAiSessionAction = 'send' | 'approval' | 'interrupt' | 'close' | 'queue-steer' | 'queue-retry' | 'queue-remove';
 export type MobileActionState = { phase: 'idle' | 'busy' | 'result-unknown' | 'failed'; error?: string };
 
 export function mobileAiSessionBusyKey(controlPlaneId: string, instanceId: string, sessionId: string, action: MobileAiSessionAction, queueId?: string) {
@@ -38,6 +38,9 @@ export class MobileAiSessionActionCoordinator {
   }
   interrupt(instanceId: string, sessionId: string) {
     return this.run(instanceId, sessionId, 'interrupt', undefined, () => this.client.aiSessions.interrupt(instanceId, sessionId));
+  }
+  close(instanceId: string, sessionId: string, clientRequestId: string) {
+    return this.run(instanceId, sessionId, 'close', undefined, () => this.client.aiSessions.close(instanceId, sessionId, clientRequestId));
   }
   queue(instanceId: string, sessionId: string, queueId: string, action: 'steer' | 'retry' | 'remove') {
     const kind = `queue-${action}` as const;

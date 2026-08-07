@@ -1059,12 +1059,15 @@
 }
 
 .ai-session-unread-dot {
-  flex: 0 0 auto;
+  position: absolute;
+  top: 13px;
+  right: 14px;
+  z-index: 4;
   width: 7px;
   height: 7px;
   border-radius: 999px;
-  background: var(--brand-accent);
-  box-shadow: 0 0 0 3px var(--brand-accent-soft);
+  background: var(--status-info);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--status-info) 18%, transparent);
 }
 
 .session-ai-card-workspace {
@@ -1363,6 +1366,10 @@
 .session-ai-row:focus-within .session-ai-card-tools {
   opacity: 1;
   pointer-events: auto;
+}
+
+.session-ai-row[data-unread="true"] .session-ai-card-tools {
+  right: 28px;
 }
 
 :global(.session-ai-card-menu) {

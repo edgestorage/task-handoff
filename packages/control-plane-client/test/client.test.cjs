@@ -46,6 +46,37 @@ test("shared AI Session client owns route encoding, request input, and response 
   assert.equal(requests[0].init.method, "POST");
 });
 
+test("shared App Session client owns aggregate, launch, stop, rename, and delta routes", async () => {
+  const requests = [];
+  const transport = {
+    async request(path, schema, init) {
+      requests.push({ path, init });
+      if (path.includes("sinceRevision")) return schema.parse({ data: { streamId: "stream-1", instanceId: "instance-1", sinceRevision: 4, latestRevision: 4, earliestRetainedRevision: 0, syncRequired: false, events: [] } });
+      if (path.includes("/apps/sessions")) return schema.parse({ data: { id: "app-session-1", appId: "terminal-tty", kind: "tty", status: "running", bindings: [] } });
+      return schema.parse({ data: { updatedAt: "2026-08-07T00:00:00.000Z", instances: [] } });
+    },
+  };
+  const api = createControlPlaneClient(transport);
+  await api.appSessions.list();
+  await api.appSessions.launch("instance/1", { appId: "terminal-tty", cwdFolderId: "folder/1" });
+  await api.appSessions.stop("instance/1", "session/1");
+  await api.appSessions.rename("instance/1", "session/1", "  Terminal  ");
+  await api.appSessions.delta("instance/1", "stream/1", 4);
+  assert.deepEqual(requests.map((request) => request.path), [
+    "/api/app-sessions",
+    "/api/controlled-instances/instance%2F1/apps/sessions",
+    "/api/controlled-instances/instance%2F1/apps/sessions/session%2F1/stop",
+    "/api/controlled-instances/instance%2F1/apps/sessions/session%2F1",
+    "/api/app-sessions?instanceId=instance%2F1&streamId=stream%2F1&sinceRevision=4",
+  ]);
+  assert.equal(requests[1].init.method, "POST");
+  assert.deepEqual(JSON.parse(requests[1].init.body), { appId: "terminal-tty", cwdFolderId: "folder/1" });
+  assert.equal(requests[2].init.method, "POST");
+  assert.deepEqual(JSON.parse(requests[2].init.body), {});
+  assert.equal(requests[3].init.method, "PATCH");
+  assert.deepEqual(JSON.parse(requests[3].init.body), { title: "Terminal" });
+});
+
 test("shared auth client owns Web and mobile authentication contracts", async () => {
   const requests = [];
   const transport = {
@@ -136,7 +167,7 @@ test("shared client owns recovery, desktop lifecycle, and command routes used by
   ]);
 });
 
-test("shared resource client requests strict mobile-safe directory projections", async () => {
+test("shared resource client validates declared fields and drops unknown response fields", async () => {
   const requests = [];
   const transport = {
     async request(path, schema, init) {
@@ -176,6 +207,7 @@ test("shared resource client requests strict mobile-safe directory projections",
           problemCount: 0,
           updatedAt: "2026-08-05T00:00:00.000Z",
         },
+        availableApps: [{ id: "terminal-tty", name: "Terminal", kind: "tty", supportsCwdSelection: true }],
         availableAgents: [],
       }] });
     },
@@ -187,6 +219,7 @@ test("shared resource client requests strict mobile-safe directory projections",
   const savedPermission = await api.resources.updateInstanceDefaultPermissionMode("instance/1", "auto-review");
 
   assert.equal(instances[0].config.defaultCodexPermissionMode, "full-access");
+  assert.equal(instances[0].availableApps[0].id, "terminal-tty");
   assert.equal(savedPermission, "auto-review");
 
   assert.deepEqual(requests.map((request) => request.path), [
@@ -197,7 +230,7 @@ test("shared resource client requests strict mobile-safe directory projections",
   assert.equal(requests[2].init.method, "PATCH");
   assert.deepEqual(JSON.parse(requests[2].init.body), { config: { defaultCodexPermissionMode: "auto-review" } });
 
-  const unsafeApi = createControlPlaneClient({
+  const compatibleApi = createControlPlaneClient({
     request(path, schema) {
       return Promise.resolve(schema.parse({ data: [{
         id: "node-1",
@@ -211,7 +244,24 @@ test("shared resource client requests strict mobile-safe directory projections",
       }] }));
     },
   });
-  await assert.rejects(() => unsafeApi.resources.nodes());
+  const compatibleNodes = await compatibleApi.resources.nodes();
+  assert.equal(compatibleNodes[0].id, "node-1");
+  assert.equal("endpoint" in compatibleNodes[0], false);
+
+  const invalidApi = createControlPlaneClient({
+    request(path, schema) {
+      return Promise.resolve(schema.parse({ data: [{
+        id: "node-1",
+        name: "Node",
+        status: 123,
+        health: "ok",
+        connectionMode: "direct-http",
+        observedAt: "2026-08-05T00:00:00.000Z",
+        capabilities: [],
+      }] }));
+    },
+  });
+  await assert.rejects(() => invalidApi.resources.nodes());
 });
 
 test("shared AI Session state preserves Web sorting, unread, approval, and delta behavior", () => {

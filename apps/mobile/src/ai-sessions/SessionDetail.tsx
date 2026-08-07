@@ -1,7 +1,7 @@
 import { Profiler, useEffect, useMemo, useState, type ProfilerOnRenderCallback } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { ScrollViewMarker } from 'react-native-screens/experimental';
-import { isAiSessionApprovalPending, type ControlPlaneAiSessionSummary } from '@task-handoff/control-plane-client';
+import { aiSessionStatusGroup, isAiSessionApprovalPending, type ControlPlaneAiSessionSummary } from '@task-handoff/control-plane-client';
 
 import { SafeMarkdown } from '../components/SafeMarkdown';
 import { SystemIcon } from '../components/SystemIcon';
@@ -10,6 +10,7 @@ import { mobileMetrics } from '../observability/mobile-metrics';
 import { useMobileTheme } from '../components/theme';
 import { NativeSessionModePicker } from './NativeSessionModePicker';
 import { ToolActivityText } from './ToolActivityText';
+import { SessionStatusIndicator } from './SessionStatusIndicator';
 import { translate, useI18n, type Translate } from '../i18n';
 
 const english: Translate = (key, params) => translate('en-US', key, params);
@@ -71,6 +72,7 @@ export function SessionDetail({
       </View>
     </Profiler>
   );
+  const sessionStatusLabel = statusLabel(session.status, activityText ? 'unknown' : session.phase);
   return (
     <Profiler id="detail" onRender={recordDetailRender}>
       <ScrollViewMarker scrollEdgeEffects={{ top: 'soft' }} style={[styles.fill, { backgroundColor: colors.surface }]}>
@@ -91,8 +93,8 @@ export function SessionDetail({
             {showModePicker && turns.length ? <View style={styles.modePicker}><NativeSessionModePicker mode={selectedMode} onChange={selectMode} /></View> : null}
             <View style={styles.sessionBar}>
               <View style={styles.metaRow}>
-                <View style={[styles.statusDot, { backgroundColor: statusColor(session.status, colors.primary, colors.textMuted, colors.error) }]} />
-                <Text style={[styles.meta, { color: colors.textMuted }]}>{statusLabel(session.status, activityText ? 'unknown' : session.phase)}</Text>
+                <SessionStatusIndicator group={aiSessionStatusGroup(session)} label={sessionStatusLabel} />
+                <Text style={[styles.meta, { color: colors.textMuted }]}>{sessionStatusLabel}</Text>
               </View>
               {selectedMode === 'turn' && turns.length > 1 ? <View style={styles.turnNavigator}>
                 <Pressable accessibilityLabel={t('sessions.previousTurn')} accessibilityRole="button" accessibilityState={{ disabled: selectedIndex <= 0 }} disabled={selectedIndex <= 0} hitSlop={8} onPress={() => selectTurn(selectedIndex - 1)} style={[styles.turnButton, selectedIndex <= 0 && styles.turnButtonDisabled]}><SystemIcon android="chevron_left" color={colors.primary} ios="chevron.left" size={14} /></Pressable>
@@ -178,12 +180,6 @@ export function sessionActivityText(session: ControlPlaneAiSessionSummary, t: Tr
   return session.toolCallsSinceLastMessage > 0 ? t('sessions.thinkingTools', { count: session.toolCallsSinceLastMessage }) : t('sessions.thinking');
 }
 
-function statusColor(status: ControlPlaneAiSessionSummary['status'], active: string, muted: string, error: string) {
-  if (status === 'failed') return error;
-  if (status === 'running' || status === 'waiting') return active;
-  return muted;
-}
-
 function statusLabel(status: ControlPlaneAiSessionSummary['status'], phase: ControlPlaneAiSessionSummary['phase']) {
   const statusText = status.charAt(0).toUpperCase() + status.slice(1);
   const phaseText = phase === 'unknown' ? '' : ` · ${phase.charAt(0).toUpperCase() + phase.slice(1)}`;
@@ -226,7 +222,7 @@ const styles = StyleSheet.create({
   empty: { alignItems: 'center', flex: 1, gap: 8, justifyContent: 'center', padding: 32 },
   emptyTitle: { fontSize: 17, fontWeight: '700' },
   emptyText: { maxWidth: 260, textAlign: 'center' },
-  footer: { gap: 18, marginTop: 18 },
+  footer: { gap: 18, marginTop: 6 },
   header: { gap: 12, marginBottom: 20 },
   itemSeparator: { height: 18 },
   modePicker: { alignItems: 'center' },
@@ -239,7 +235,7 @@ const styles = StyleSheet.create({
   statusDot: { borderRadius: 4, height: 8, width: 8 },
   meta: { fontSize: 13, lineHeight: 18, textTransform: 'capitalize' },
   muted: { fontSize: 13, lineHeight: 19 },
-  tool: { alignItems: 'center', flexDirection: 'row', gap: 8, minHeight: 32, paddingHorizontal: 2 },
+  tool: { alignItems: 'center', flexDirection: 'row', gap: 8, minHeight: 24, paddingHorizontal: 2 },
   toolBody: { flex: 1, gap: 3 },
   toolText: { flex: 1 },
   toolTitle: { fontSize: 14, fontWeight: '500', lineHeight: 20 },

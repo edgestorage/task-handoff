@@ -1,9 +1,10 @@
-import type { ControlPlaneInstanceDirectoryEntry, ControlPlaneNodeDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
+import type { ControlPlaneInstanceResourceEntry } from '@task-handoff/control-plane-client';
+import type { ControlPlaneNodeDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
 
 export type MobileDirectoryProfileState = {
   controlPlaneId: string;
   nodes: readonly ControlPlaneNodeDirectoryEntry[];
-  instances: readonly ControlPlaneInstanceDirectoryEntry[];
+  instances: readonly ControlPlaneInstanceResourceEntry[];
   phase: 'idle' | 'loading' | 'ready' | 'stale' | 'offline' | 'error';
   updatedAt?: string;
   error?: string;
@@ -30,7 +31,7 @@ export class MobileDirectoryStore {
     for (const listener of this.listeners.get(controlPlaneId) ?? []) listener();
     return next;
   }
-  setInstanceDefaultPermissionMode(controlPlaneId: string, instanceId: string, defaultCodexPermissionMode: ControlPlaneInstanceDirectoryEntry['config']['defaultCodexPermissionMode']) {
+  setInstanceDefaultPermissionMode(controlPlaneId: string, instanceId: string, defaultCodexPermissionMode: ControlPlaneInstanceResourceEntry['config']['defaultCodexPermissionMode']) {
     const current = this.profile(controlPlaneId);
     return this.set(controlPlaneId, {
       instances: current.instances.map((instance) => instance.id === instanceId

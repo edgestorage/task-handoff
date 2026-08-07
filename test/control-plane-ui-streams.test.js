@@ -776,6 +776,29 @@ test("app recovery retries when a delta request makes no progress", async () => 
   assert.equal(queryClient.getQueryData(["control-plane-app-sessions"]).instances[0].revision, 2);
 });
 
+test("control-plane UI consumes the shared authoritative App Session projection without its own status filter", () => {
+  const queryClient = new QueryClient();
+  const streamId = "app-authoritative";
+  const initial = appSnapshotEvent(streamId, 1, [{ id: "app", appId: "terminal-tty", status: "running", bindings: [] }]);
+  queryClient.setQueryData(["control-plane-app-sessions"], {
+    updatedAt: timestamp(),
+    instances: [{ instanceId: "instance-one", streamId, revision: 1, lastEventAt: initial.meta.generatedAt, appSessions: initial.snapshot }],
+  });
+  const app = createApp({ render: () => null });
+  app.use(VueQueryPlugin, { queryClient });
+  const store = app.runWithContext(() => useAppSessionStore({ boardInstances: () => [], appSessions: () => undefined, apiLoader: async () => undefined }));
+
+  store.applyEvent({
+    type: AppSessionEventType.Patch,
+    payload: {
+      meta: { ...initial.meta, revision: 2, previousRevision: 1, traceId: "app-authoritative-2" },
+      session: { id: "app", appId: "terminal-tty", status: "stopped", bindings: [] },
+    },
+  });
+
+  assert.deepEqual(queryClient.getQueryData(["control-plane-app-sessions"]).instances[0].appSessions.sessions, []);
+});
+
 test("removing an authoritative app-session instance cancels its in-flight recovery", async () => {
   const queryClient = new QueryClient();
   const streamId = "app-instance-removal";

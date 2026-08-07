@@ -45,7 +45,7 @@
           class="ai-session-detail-queue-item"
           :data-state="item.status"
         >
-          <List class="ai-session-detail-queue-icon" :size="15" />
+          <GripVertical class="ai-session-detail-queue-icon" :size="17" :stroke-width="1.8" />
           <div class="ai-session-detail-queue-copy">
             <p>{{ item.message }}</p>
             <small v-if="item.error">{{ item.error }}</small>
@@ -84,7 +84,7 @@
 </template>
 
 <script setup lang="ts">
-import { Ban, Check, CornerDownRight, List, RotateCcw, Trash2, X } from "@lucide/vue";
+import { Ban, Check, CornerDownRight, GripVertical, RotateCcw, Trash2, X } from "@lucide/vue";
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import type { AiSessionSummary } from "../../api/types";
@@ -222,7 +222,7 @@ const displayContent = computed(() => streamingContent.value || props.responseCo
 
 .ai-session-detail-queue-item {
   display: grid;
-  grid-template-columns: 15px minmax(0, 1fr) auto;
+  grid-template-columns: 17px minmax(0, 1fr) auto;
   align-items: center;
   gap: 9px;
   min-width: 0;

@@ -1,5 +1,6 @@
 import { translate } from '../src/i18n';
 import { matchSupportedLocale, resolveLocale, sanitizeLocalePreference } from '../src/i18n/locale';
+import { resolveThemeDark, sanitizeAppearancePreference } from '../src/components/theme';
 
 describe('mobile i18n', () => {
   test('normalizes supported English and simplified Chinese system locales', () => {
@@ -18,5 +19,13 @@ describe('mobile i18n', () => {
     expect(translate('zh-CN', 'sessions.filterAccessibility', { scope: '全部会话' })).toBe('筛选会话，当前范围：全部会话');
     expect(translate('en-US', 'directories.instanceCount', { count: 1 })).toBe('1 Instance');
     expect(translate('en-US', 'directories.instanceCount', { count: 3 })).toBe('3 Instances');
+  });
+
+  test('normalizes and resolves the persisted appearance preference', () => {
+    expect(sanitizeAppearancePreference('dark')).toBe('dark');
+    expect(sanitizeAppearancePreference('sepia')).toBe('system');
+    expect(resolveThemeDark('system', 'dark')).toBe(true);
+    expect(resolveThemeDark('light', 'dark')).toBe(false);
+    expect(resolveThemeDark('dark', 'light')).toBe(true);
   });
 });

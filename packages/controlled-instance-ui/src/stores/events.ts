@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import type { QueryClient } from "@tanstack/vue-query";
 import {
   AiSessionDeltaResponseSchema,
+  AiSessionsStateSchema,
   AiSessionEventType,
   applyAiSessionStreamEvent,
   type AiSessionDeltaResponse,
@@ -10,12 +11,14 @@ import {
 } from "@task-handoff/protocol/ai-sessions";
 import {
   AppSessionDeltaResponseSchema,
+  AppSessionsStateSchema,
   AppSessionEventType,
   applyAppSessionStreamEvent,
   type AppSessionDeltaResponse,
   type AppSessionStreamEvent,
   type AppSessionsState,
 } from "@task-handoff/protocol/app-sessions";
+import { parseResponse, safeParseResponse } from "@task-handoff/protocol/response-validation";
 import {
   SessionStreamsHelloEventType,
   SessionStreamsHelloSchema,
@@ -115,18 +118,18 @@ export function applyDomainEvent(queryClient: QueryClient, event: WebEvent) {
 
 async function loadSnapshot(topic: SessionStreamTopic, queryClient: QueryClient) {
   if (topic === "ai.sessions") {
-    const state = await sessionApiLoader<AiSessionsState>("ai-sessions");
+    const state = parseResponse(AiSessionsStateSchema, await sessionApiLoader<unknown>("ai-sessions"));
     writeAiProjection(queryClient, state);
     return state.revision;
   }
-  const state = await sessionApiLoader<AppSessionsState>("apps/sessions");
+  const state = parseResponse(AppSessionsStateSchema, await sessionApiLoader<unknown>("apps/sessions"));
   writeAppProjection(queryClient, state);
   return state.revision;
 }
 
 async function recoverDelta(topic: SessionStreamTopic, descriptor: SessionStreamDescriptor, queryClient: QueryClient) {
   if (topic === "ai.sessions" && aiProjection?.streamId === descriptor.streamId) {
-    const delta = AiSessionDeltaResponseSchema.parse(await sessionApiLoader<AiSessionDeltaResponse>(`ai-sessions?streamId=${encodeURIComponent(descriptor.streamId)}&sinceRevision=${aiProjection.revision}`));
+    const delta = parseResponse(AiSessionDeltaResponseSchema, await sessionApiLoader<unknown>(`ai-sessions?streamId=${encodeURIComponent(descriptor.streamId)}&sinceRevision=${aiProjection.revision}`));
     if (delta.syncRequired) return loadSnapshot(topic, queryClient);
     for (const event of delta.events) {
       const result = applyAiSessionStreamEvent(aiProjection, event);
@@ -136,7 +139,7 @@ async function recoverDelta(topic: SessionStreamTopic, descriptor: SessionStream
     return aiProjection?.revision || 0;
   }
   if (topic === "app.sessions" && appProjection?.streamId === descriptor.streamId) {
-    const delta = AppSessionDeltaResponseSchema.parse(await sessionApiLoader<AppSessionDeltaResponse>(`apps/sessions?streamId=${encodeURIComponent(descriptor.streamId)}&sinceRevision=${appProjection.revision}`));
+    const delta = parseResponse(AppSessionDeltaResponseSchema, await sessionApiLoader<unknown>(`apps/sessions?streamId=${encodeURIComponent(descriptor.streamId)}&sinceRevision=${appProjection.revision}`));
     if (delta.syncRequired) return loadSnapshot(topic, queryClient);
     for (const event of delta.events) {
       const result = applyAppSessionStreamEvent(appProjection, event);
@@ -226,7 +229,7 @@ export const useEventsStore = defineStore("events", {
           this.lastEventAt = event.createdAt;
           this.events = [event, ...this.events].slice(0, 50);
           if (event.type === SessionStreamsHelloEventType && queryClient) {
-            const parsed = SessionStreamsHelloSchema.safeParse(event.payload);
+            const parsed = safeParseResponse(SessionStreamsHelloSchema, event.payload);
             if (!parsed.success) {
               incompatibleProtocol = true;
               this.connectionState = "error";

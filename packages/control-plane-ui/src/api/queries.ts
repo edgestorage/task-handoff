@@ -111,6 +111,19 @@ export function logoutControlPlane() {
   return sharedControlPlaneClient.auth.logout();
 }
 
+export function useMobileSessionsQuery(enabled: MaybeRefOrGetter<boolean> = true) {
+  return useQuery({
+    queryKey: controlPlaneQueryKeys.mobileSessions,
+    queryFn: ({ signal }) => sharedControlPlaneClient.auth.mobileSessions(signal),
+    enabled: computed(() => toValue(enabled)),
+    retry: false,
+  });
+}
+
+export function revokeMobileSession(sessionId: string) {
+  return sharedControlPlaneClient.auth.revokeMobileSession(sessionId);
+}
+
 export function useControlPlaneStatusQuery() {
   return useQuery({
     queryKey: controlPlaneQueryKeys.status,
@@ -558,11 +571,11 @@ export function launchAppSession(instanceId: string, input: LaunchAppSessionInpu
 }
 
 export function stopAppSession(instanceId: string, sessionId: string) {
-  return postApiData<AppSession>(`controlled-instances/${instanceId}/apps/sessions/${sessionId}/stop`);
+  return sharedControlPlaneClient.appSessions.stop(instanceId, sessionId);
 }
 
 export function renameAppSession(instanceId: string, sessionId: string, title: string) {
-  return patchApiData<AppSession>(`controlled-instances/${instanceId}/apps/sessions/${sessionId}`, { title });
+  return sharedControlPlaneClient.appSessions.rename(instanceId, sessionId, title);
 }
 
 export function getInstanceAppManagement(instanceId: string) {

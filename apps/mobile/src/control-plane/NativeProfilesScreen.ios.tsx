@@ -1,4 +1,4 @@
-import { Button, HStack, Host, Image, Label, List, Section, Spacer, Text, VStack } from '@expo/ui/swift-ui';
+import { Button, HStack, Host, Image, Label, List, Section, Spacer, Text, Toggle, VStack } from '@expo/ui/swift-ui';
 import {
   accessibilityLabel,
   buttonStyle,
@@ -13,11 +13,13 @@ import { SafeAreaView } from 'react-native-screens/experimental';
 
 import { useMobileTheme } from '../components/theme';
 import { useI18n } from '../i18n';
+import { useTaskStatusSettings } from '../task-status/settings';
 import type { NativeProfilesScreenProps } from './NativeProfilesScreen';
 
 export function NativeProfilesScreen(props: NativeProfilesScreenProps) {
-  const { colors, dark } = useMobileTheme();
+  const { colors, dark, preference: appearance, setPreference: setAppearance } = useMobileTheme();
   const { preference, setPreference, t } = useI18n();
+  const taskStatus = useTaskStatusSettings();
 
   return (
     <SafeAreaView edges={{ bottom: true }} style={{ flex: 1 }}>
@@ -33,6 +35,24 @@ export function NativeProfilesScreen(props: NativeProfilesScreenProps) {
             <Button label={`${preference === 'en-US' ? '✓ ' : ''}${t('locale.english')}`} systemImage="globe" onPress={() => { void setPreference('en-US'); }} />
             <Button label={`${preference === 'zh-CN' ? '✓ ' : ''}${t('locale.chinese')}`} systemImage="globe" onPress={() => { void setPreference('zh-CN'); }} />
           </Section>
+          <Section title={t('appearance.title')}>
+            <Button label={`${appearance === 'system' ? '✓ ' : ''}${t('appearance.system')}`} systemImage="gearshape" onPress={() => { void setAppearance('system'); }} />
+            <Button label={`${appearance === 'light' ? '✓ ' : ''}${t('appearance.light')}`} systemImage="sun.max" onPress={() => { void setAppearance('light'); }} />
+            <Button label={`${appearance === 'dark' ? '✓ ' : ''}${t('appearance.dark')}`} systemImage="moon" onPress={() => { void setAppearance('dark'); }} />
+          </Section>
+          {taskStatus.available && taskStatus.loaded ? (
+            <Section title={t('liveActivity.title')}>
+              <Toggle
+                isOn={taskStatus.autoStart}
+                label={t('liveActivity.autoStart')}
+                systemImage="waveform"
+                onIsOnChange={(value) => { void taskStatus.setAutoStart(value); }}
+              />
+              <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle({ type: 'hierarchical', style: 'secondary' })]}>
+                {t('liveActivity.autoStartHelp')}
+              </Text>
+            </Section>
+          ) : null}
           {props.error ? (
             <Section>
               <Label

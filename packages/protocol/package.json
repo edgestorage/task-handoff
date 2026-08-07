@@ -50,6 +50,10 @@
       "types": "./src/events.ts",
       "default": "./src/events.ts"
     },
+    "./response-validation": {
+      "types": "./src/response-validation.ts",
+      "default": "./src/response-validation.ts"
+    },
     "./websocket-bridge": {
       "types": "./src/websocket-bridge.ts",
       "default": "./src/websocket-bridge.ts"

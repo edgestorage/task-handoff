@@ -31,3 +31,11 @@ test("Windows overlay mirrors the macOS flex spacer inside the titlebar", () => 
   assert.doesNotMatch(styles, /\.control-plane-actions\s*\{[^}]*position:\s*absolute/s);
   assert.match(theme, /setWindowChromeTheme\?\.\(theme\)/);
 });
+
+test("an open menu temporarily makes the titlebar clickable for outside dismissal", () => {
+  assert.match(styles, /\.control-plane-topbar \{[\s\S]*?-webkit-app-region: drag;/);
+  assert.match(
+    styles,
+    /:global\(body:has\(\[role="menu"\]\[data-state="open"\]\) \.control-plane-topbar\) \{\s*-webkit-app-region: no-drag;/,
+  );
+});

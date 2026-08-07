@@ -6,6 +6,7 @@ import {
   type ImagePullProgress,
   type InstanceLifecycleSnapshot,
 } from "@task-handoff/protocol/control-plane";
+import { safeParseResponse } from "@task-handoff/protocol/response-validation";
 
 const MAX_TERMINAL_TAIL = 256 * 1024;
 
@@ -16,7 +17,7 @@ export function useImagePullProgress() {
 
   function applyEvent(type: string, payload: unknown) {
     if (type === ImagePullTerminalEventType.Output) {
-      const parsed = ImagePullTerminalOutputSchema.safeParse(payload);
+      const parsed = safeParseResponse(ImagePullTerminalOutputSchema, payload);
       if (!parsed.success) return false;
       const output = parsed.data;
       const previous = byInstanceId[output.instanceId];
@@ -36,7 +37,7 @@ export function useImagePullProgress() {
       return true;
     }
     if (type !== ImagePullTerminalEventType.Progress && type !== ImagePullTerminalEventType.Snapshot) return false;
-    const parsed = ImagePullProgressSchema.safeParse(payload);
+    const parsed = safeParseResponse(ImagePullProgressSchema, payload);
     if (!parsed.success) return false;
     const progress = parsed.data;
     const current = byInstanceId[progress.instanceId];

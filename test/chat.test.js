@@ -6248,6 +6248,9 @@ test("app session title updates through the API, persists, and emits an authorit
     appRuntime: runtime,
   });
   try {
+    const activeBeforeRename = await app.inject({ method: "GET", url: "/api/apps/sessions/state" });
+    assert.deepEqual(activeBeforeRename.json().data.snapshot.sessions, []);
+
     const renamed = await app.inject({
       method: "PATCH",
       url: "/api/apps/sessions/app_existing",
@@ -6257,6 +6260,8 @@ test("app session title updates through the API, persists, and emits an authorit
     assert.equal(renamed.json().data.title, "Project Codex");
     assert.equal(runtime.getSession("app_existing").title, "Project Codex");
     assert.equal(updates.at(-1).title, "Project Codex");
+    const activeAfterRename = await app.inject({ method: "GET", url: "/api/apps/sessions/state" });
+    assert.deepEqual(activeAfterRename.json().data.snapshot.sessions, []);
 
     const metadata = JSON.parse(fs.readFileSync(path.join(paths.appSessionsDir, "app_existing", "metadata.json"), "utf8"));
     assert.equal(metadata.title, "Project Codex");

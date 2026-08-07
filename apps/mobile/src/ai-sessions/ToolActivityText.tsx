@@ -15,7 +15,7 @@ import { useMobileTheme } from '../components/theme';
 // React Native layout measurements are density-independent logical units
 // (points on iOS and dp on Android), rather than physical screen pixels.
 const SWEEP_WIDTH = 72;
-const SWEEP_SPEED_UNITS_PER_SECOND = 100;
+const SWEEP_SPEED_UNITS_PER_SECOND = 150;
 const SWEEP_PAUSE_MS = 1_500;
 const STRIPE_OPACITIES = [0.08, 0.18, 0.38, 0.68, 1, 0.68, 0.38, 0.18, 0.08];
 const STRIPE_WIDTH = SWEEP_WIDTH / STRIPE_OPACITIES.length;
