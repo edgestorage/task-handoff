@@ -105,6 +105,7 @@ declare module "fastify" {
 
 const AUTO_IMPORT_AGENT_CONFIG_PRESETS = ["codex", "claude"] as const;
 const DEFAULT_AUTO_IMPORT_AGENT_CONFIG_TIMEOUT_MS = 5_000;
+const NODE_AGENT_PROCESS_START_IDENTITY = processStartIdentity(process.pid);
 function optionalEnv(name: string) {
   const value = process.env[name]?.trim();
   return value || undefined;
@@ -479,7 +480,6 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   const controlEndpoint = connectionMode === "local-ipc" ? nodeAgentIpcEndpoint(ipcPath) : endpoint;
   const platform = options.platform || process.platform;
   const arch = options.arch || process.arch;
-  const nodeAgentProcessIdentity = processStartIdentity(process.pid);
   const state = new NodeAgentState(paths, nodeId, endpoint, containerUrl, port, platform);
   state.node.connectionMode = connectionMode;
   state.node.controlEndpoint = controlEndpoint;
@@ -864,7 +864,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       role: "node-agent",
       process: {
         pid: process.pid,
-        ...(nodeAgentProcessIdentity ? { startIdentity: nodeAgentProcessIdentity } : {}),
+        ...(NODE_AGENT_PROCESS_START_IDENTITY ? { startIdentity: NODE_AGENT_PROCESS_START_IDENTITY } : {}),
       },
       listener: {
         host: "127.0.0.1",
