@@ -1250,6 +1250,10 @@ export const NodeAgentHealthSchema = z
     role: z.string().optional(),
     nodeId: IdSchema.optional(),
     platform: FinalComputerPlatformSchema.optional(),
+    process: z.object({
+      pid: z.number().int().positive(),
+      startIdentity: z.string().trim().min(1).optional(),
+    }).strict().optional(),
   })
   .passthrough();
 

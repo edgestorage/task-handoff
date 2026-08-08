@@ -37,8 +37,11 @@ export class ProcessSingletonError extends Error {
 export type AcquiredProcessLock = {
   lockPath: string;
   owner: ProcessLockOwner;
+  updateDetails: (details: ProcessLockDetails) => boolean;
   release: () => void;
 };
+
+export type ProcessLockDetails = Pick<ProcessLockOwner, "dataDir" | "host" | "port" | "instanceId">;
 
 function ownerPath(lockPath: string) {
   return path.join(lockPath, "owner.json");
@@ -153,6 +156,30 @@ function writeOwner(lockPath: string, owner: ProcessLockOwner) {
   tryRemoveFile(initializationPath(lockPath));
 }
 
+function updateOwner(lockPath: string, owner: ProcessLockOwner, details: Partial<ProcessLockDetails>) {
+  const current = readOwner(lockPath);
+  if (current?.token !== owner.token) return false;
+  const next = { ...owner };
+  for (const [key, value] of Object.entries(details) as Array<[keyof ProcessLockDetails, ProcessLockDetails[keyof ProcessLockDetails]]>) {
+    if (value === undefined) delete next[key];
+    else Object.assign(next, { [key]: value });
+  }
+  const temporaryPath = path.join(lockPath, `.owner-update-${owner.token}-${crypto.randomUUID()}.tmp`);
+  try {
+    fs.writeFileSync(temporaryPath, `${JSON.stringify(next, null, 2)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    if (readOwner(lockPath)?.token !== owner.token) return false;
+    fs.renameSync(temporaryPath, ownerPath(lockPath));
+    for (const key of Object.keys(owner) as Array<keyof ProcessLockOwner>) delete owner[key];
+    Object.assign(owner, next);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  } finally {
+    tryRemoveFile(temporaryPath);
+  }
+}
+
 function readInitialization(lockPath: string) {
   try {
     return JSON.parse(fs.readFileSync(initializationPath(lockPath), "utf8")) as {
@@ -263,18 +290,19 @@ export function acquireProcessSingletonLock(lockPath: string, details: {
   error?: { label?: string; code?: string };
 } = {}): AcquiredProcessLock {
   fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  const startIdentity = processStartIdentity(process.pid);
   const owner: ProcessLockOwner = {
     pid: process.pid,
     hostname: os.hostname(),
-    component: details.component,
     command: process.argv.join(" "),
     acquiredAt: new Date().toISOString(),
     token: crypto.randomUUID(),
-    startIdentity: processStartIdentity(process.pid),
-    dataDir: details.dataDir,
-    host: details.host,
-    port: details.port,
-    instanceId: details.instanceId,
+    ...(details.component !== undefined ? { component: details.component } : {}),
+    ...(startIdentity ? { startIdentity } : {}),
+    ...(details.dataDir !== undefined ? { dataDir: details.dataDir } : {}),
+    ...(details.host !== undefined ? { host: details.host } : {}),
+    ...(details.port !== undefined ? { port: details.port } : {}),
+    ...(details.instanceId !== undefined ? { instanceId: details.instanceId } : {}),
   };
 
   for (let attempt = 0; attempt < INCOMPLETE_LOCK_RETRY_COUNT; attempt += 1) {
@@ -294,6 +322,9 @@ export function acquireProcessSingletonLock(lockPath: string, details: {
       return {
         lockPath,
         owner,
+        updateDetails(details) {
+          return updateOwner(lockPath, owner, details);
+        },
         release() {
           const current = readOwner(lockPath);
           if (current?.token !== owner.token) {

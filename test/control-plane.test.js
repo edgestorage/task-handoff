@@ -35,7 +35,7 @@ const { can } = require("../packages/control-plane/src/control-plane/auth/author
 const { LocalDockerExecutor, dockerRunArgs } = require("../packages/control-plane/src/node-agent/runtimes/docker.ts");
 const { waitForChildExit } = require("../packages/control-plane/src/node-agent/runtimes/local-process-supervisor.ts");
 const { checkNodeAgentUpdate, isNewerVersion, resolveNodeAgentUpdateWorker, resolveNodeUpdatePackage, sanitizeStoredUpdateJob } = require("../packages/control-plane/src/node-agent/updates.ts");
-const { ProcessSingletonError, acquireProcessSingletonLock } = require("../packages/control-plane/src/shared/process/singleton-lock.ts");
+const { ProcessSingletonError, acquireProcessSingletonLock, readProcessSingletonLockOwner } = require("../packages/control-plane/src/shared/process/singleton-lock.ts");
 const { processStartIdentity, verifiedProcessLockOwnerPid } = require("../packages/core/src/core/process-singleton-lock.ts");
 const { acquireLocalControlledInstanceLock, localControlledInstanceLockPath, readLocalControlledInstanceLockOwner } = require("../packages/core/src/core/local-controlled-instance-lock.ts");
 const { acquireControlPlaneSingletonLock } = require("../packages/control-plane/src/control-plane/process/singleton-lock.ts");
@@ -2293,6 +2293,21 @@ test("control plane process lock enforces one owner per system lock", () => {
   const second = acquireControlPlaneSingletonLock(lockPath, { dataDir: path.join(dataDir, "second"), host: "127.0.0.1", port: 18082 });
   assert.equal(second.owner.port, 18082);
   second.release();
+});
+
+test("process lock owner details update atomically only while the token still owns the lease", () => {
+  const root = tempDataDir("process-lock-owner-update");
+  const lockPath = path.join(root, "service.lock");
+  const lock = acquireProcessSingletonLock(lockPath, { component: "node-agent", dataDir: root });
+  assert.equal(lock.updateDetails({ host: "127.0.0.1", port: 18092 }), true);
+  assert.equal(lock.owner.port, 18092);
+  assert.deepEqual(readProcessSingletonLockOwner(lockPath), lock.owner);
+
+  fs.writeFileSync(path.join(lockPath, "owner.json"), `${JSON.stringify({ ...lock.owner, token: "replacement-owner" })}\n`);
+  assert.equal(lock.updateDetails({ port: 18093 }), false);
+  assert.equal(readProcessSingletonLockOwner(lockPath).port, 18092);
+  lock.release();
+  fs.rmSync(lockPath, { recursive: true, force: true });
 });
 
 test("node agent process lock enforces one owner independent of port", () => {
@@ -11037,8 +11052,8 @@ test("control plane preserves a renamed built-in node across sync and instance p
   const renamed = await json(app, "PATCH", "/api/nodes/node_mock", { name: "  Local build host  " });
   assert.equal(renamed.statusCode, 200);
   assert.equal(renamed.body.data.name, "Local build host");
-  const { name: _beforeName, updatedAt: _beforeUpdatedAt, ...beforeInvariant } = before.body.data;
-  const { name: _afterName, updatedAt: _afterUpdatedAt, ...afterInvariant } = renamed.body.data;
+  const { name: _beforeName, updatedAt: _beforeUpdatedAt, connectionPhase: _beforeConnectionPhase, ...beforeInvariant } = before.body.data;
+  const { name: _afterName, updatedAt: _afterUpdatedAt, connectionPhase: _afterConnectionPhase, ...afterInvariant } = renamed.body.data;
   assert.deepEqual(afterInvariant, beforeInvariant);
 
   const synced = await json(app, "POST", "/api/nodes/local/sync");

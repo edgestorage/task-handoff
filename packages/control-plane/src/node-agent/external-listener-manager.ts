@@ -65,6 +65,7 @@ export class NodeAgentExternalListenerManager {
   private source: NodeAgentExternalListener["source"];
   private status: NodeAgentExternalListener["status"] = "error";
   private error?: string;
+  private readonly onActiveListener?: (listener: NodeAgentExternalListener) => void;
   private updateQueue: Promise<void> = Promise.resolve();
 
   constructor(input: {
@@ -73,12 +74,14 @@ export class NodeAgentExternalListenerManager {
     settings: JsonFile<NodeAgentRuntimeSettings>;
     config: NodeAgentExternalListenerConfig;
     source: NodeAgentExternalListener["source"];
+    onActiveListener?: (listener: NodeAgentExternalListener) => void;
   }) {
     this.app = input.app;
     this.state = input.state;
     this.settings = input.settings;
     this.config = input.config;
     this.source = input.source;
+    this.onActiveListener = input.onActiveListener;
     this.app.server.on("connection", (socket) => {
       this.sockets.add(socket);
       socket.once("close", () => this.sockets.delete(socket));
@@ -113,7 +116,9 @@ export class NodeAgentExternalListenerManager {
         { statusCode: 409, code: "NODE_AGENT_LISTENER_BIND_FAILED" },
       );
     }
-    return this.current();
+    const current = this.current();
+    this.onActiveListener?.(current);
+    return current;
   }
 
   update(input: unknown) {
@@ -163,7 +168,9 @@ export class NodeAgentExternalListenerManager {
     this.status = "listening";
     this.error = undefined;
     this.state.setListenerPort(candidate.port);
-    return this.current();
+    const current = this.current();
+    this.onActiveListener?.(current);
+    return current;
   }
 
   async shutdown() {
@@ -190,6 +197,7 @@ export class NodeAgentExternalListenerManager {
       }
     }
     this.state.setListenerPort(previous.config.port);
+    if (this.status === "listening") this.onActiveListener?.(this.current());
   }
 
   private async listen(config: NodeAgentExternalListenerConfig) {

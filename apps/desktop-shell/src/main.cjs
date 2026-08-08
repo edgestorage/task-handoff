@@ -27,8 +27,13 @@ const {
   validateDesktopInputs,
 } = require("./config.cjs");
 const { createDesktopUpdater } = require("./updater.cjs");
-const { superviseDesktopChild } = require("./child-process.cjs");
-const { inspectExistingDesktopControlPlane, stopExistingDesktopNodeAgent } = require("./node-agent-handoff.cjs");
+const { stopSupervisedDesktopChild, superviseDesktopChild } = require("./child-process.cjs");
+const { createDesktopServiceLifecycle } = require("./desktop-service-lifecycle.cjs");
+const {
+  ensureDesktopNodeAgent,
+  inspectExistingDesktopControlPlane,
+  stopExistingDesktopNodeAgent,
+} = require("./node-agent-handoff.cjs");
 const { applyDesktopDockIcon, desktopIconPath: resolveDesktopIconPath } = require("./icon.cjs");
 const { applyWindowsTitleBarTheme, desktopTitleBarOptions, desktopWindowChromeMode } = require("./window-chrome.cjs");
 
@@ -39,7 +44,6 @@ let ownsControlPlaneProcess = false;
 let ownsNodeAgentProcess = false;
 let desktopLogStream;
 let desktopUpdater;
-let desktopServicesStopPromise;
 let desktopQuitPromise;
 let desktopQuitReady = false;
 const controlPlaneWindows = new Set();
@@ -774,31 +778,6 @@ async function waitForNodeAgent(endpoint, child, attempts = 80) {
   throw new Error(`Node agent did not become ready at ${endpoint}.`);
 }
 
-function stopOwnedChild(child, label) {
-  if (!child || child.exitCode !== null || child.signalCode !== null) {
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(forceTimer);
-      clearTimeout(giveUpTimer);
-      resolve();
-    };
-    const forceTimer = setTimeout(() => {
-      if (child.exitCode === null && child.signalCode === null) {
-        logError(`[desktop-shell] forcing ${label} to stop`);
-        child.kill("SIGKILL");
-      }
-    }, 3000);
-    const giveUpTimer = setTimeout(finish, 5000);
-    child.once("exit", finish);
-    child.kill("SIGTERM");
-  });
-}
-
 function stopControlPlane() {
   if (!controlPlaneProcess || !ownsControlPlaneProcess) {
     return Promise.resolve();
@@ -806,30 +785,37 @@ function stopControlPlane() {
   const child = controlPlaneProcess;
   controlPlaneProcess = undefined;
   ownsControlPlaneProcess = false;
-  return stopOwnedChild(child, "control plane");
+  return stopSupervisedDesktopChild(child, {
+    label: "Control Plane",
+    onForce: () => logError("[desktop-shell] forcing control plane to stop"),
+  });
 }
 
-function stopNodeAgent() {
-  if (!nodeAgentProcess || !ownsNodeAgentProcess) {
-    return Promise.resolve();
-  }
-  const child = nodeAgentProcess;
-  nodeAgentProcess = undefined;
-  ownsNodeAgentProcess = false;
-  return stopOwnedChild(child, "node agent");
-}
-
-async function stopDesktopServices() {
-  if (!desktopServicesStopPromise) {
-    desktopServicesStopPromise = (async () => {
-      await stopControlPlane();
-      await stopNodeAgent();
-    })().finally(() => {
-      desktopServicesStopPromise = undefined;
+async function stopNodeAgent() {
+  if (nodeAgentProcess && ownsNodeAgentProcess) {
+    const child = nodeAgentProcess;
+    nodeAgentProcess = undefined;
+    ownsNodeAgentProcess = false;
+    await stopSupervisedDesktopChild(child, {
+      label: "Node agent",
+      onForce: () => logError("[desktop-shell] forcing node agent to stop"),
     });
+    return;
   }
-  return desktopServicesStopPromise;
+  const result = await stopExistingDesktopNodeAgent({
+    dataDir: resolveNodeAgentDataDir(),
+    logInfo,
+    logError,
+  });
+  if (result.status === "foreign") {
+    throw new Error(`Refusing to stop node agent pid=${result.owner.pid} owned by dataDir=${result.owner.dataDir}.`);
+  }
+  if (result.status === "unverified") {
+    throw new Error(`Refusing to stop node agent pid=${result.owner.pid} because its process identity could not be verified.`);
+  }
 }
+
+const desktopServiceLifecycle = createDesktopServiceLifecycle({ stopControlPlane, stopNodeAgent });
 
 async function boot() {
   if (desktopFileLoggingEnabled()) {
@@ -843,21 +829,7 @@ async function boot() {
     throw new Error(`The existing Control Plane pid=${existingControlPlane.owner.pid} could not be verified.`);
   }
   const nodeAgentDataDir = resolveNodeAgentDataDir();
-  const previousNodeAgent = await stopExistingDesktopNodeAgent({
-    dataDir: nodeAgentDataDir,
-    logInfo,
-    logError,
-  });
-  if (previousNodeAgent.status === "foreign") {
-    throw new Error(
-      `A node agent outside this Desktop installation is already running pid=${previousNodeAgent.owner.pid} dataDir=${previousNodeAgent.owner.dataDir}.`,
-    );
-  }
-  if (previousNodeAgent.status === "unverified") {
-    throw new Error(
-      `The existing Desktop node agent pid=${previousNodeAgent.owner.pid} could not be verified and was not stopped.`,
-    );
-  }
+  const nodeAgentControlEndpoint = resolveNodeAgentControlEndpoint();
   let bootNodeAgent;
   let nodeAgentReady = false;
   try {
@@ -866,27 +838,36 @@ async function boot() {
     const url = localHttpUrl(controlPlaneHost, controlPlanePort);
     const nodeAgentHost = resolveNodeAgentHost();
     const nodeAgentPort = resolveNodeAgentPort();
-    const nodeAgentControlEndpoint = resolveNodeAgentControlEndpoint();
-    bootNodeAgent = startNodeAgent({ host: nodeAgentHost, port: nodeAgentPort });
-    const nodeAgentHealth = await waitForNodeAgent(nodeAgentControlEndpoint, bootNodeAgent);
+    const ensuredNodeAgent = await ensureDesktopNodeAgent({
+      dataDir: nodeAgentDataDir,
+      expected: {
+        packageVersion: app.getVersion(),
+        buildId: process.env.TASK_HANDOFF_BUILD_ID,
+        gitCommit: process.env.TASK_HANDOFF_GIT_COMMIT,
+      },
+      fetchHealth: () => fetchNodeAgentHealth(nodeAgentControlEndpoint),
+      start: () => startNodeAgent({ host: nodeAgentHost, port: nodeAgentPort }),
+      waitUntilReady: (child) => waitForNodeAgent(nodeAgentControlEndpoint, child),
+      logInfo,
+      logError,
+    });
+    bootNodeAgent = ensuredNodeAgent.child;
     nodeAgentReady = true;
+    const nodeAgentHealth = ensuredNodeAgent.health;
     const actualNodeAgentPort = Number(nodeAgentHealth?.listener?.port) || nodeAgentPort;
     const nodeAgentEndpoint = localHttpUrl(nodeAgentHost, actualNodeAgentPort);
     const child = startControlPlane({ host: controlPlaneHost, port: controlPlanePort, nodeAgentEndpoint, nodeAgentControlEndpoint });
     await waitForControlPlane(url, child);
+    desktopServiceLifecycle.markRunning();
     createWindow(url);
-    bootNodeAgent.unref?.();
+    bootNodeAgent?.unref?.();
   } catch (error) {
     const detail = error instanceof Error ? error.stack || error.message : String(error);
     logError(`[desktop-shell] desktop services failed to start ${detail}`);
-    await stopControlPlane().catch((cleanupError) => {
+    await desktopServiceLifecycle.stop("boot-failure", { nodeAgentReady }).catch((cleanupError) => {
       logError(`[desktop-shell] failed to roll back desktop services ${cleanupError instanceof Error ? cleanupError.stack || cleanupError.message : String(cleanupError)}`);
     });
-    if (!nodeAgentReady) {
-      await stopNodeAgent().catch((cleanupError) => {
-        logError(`[desktop-shell] failed to roll back node agent ${cleanupError instanceof Error ? cleanupError.stack || cleanupError.message : String(cleanupError)}`);
-      });
-    } else {
+    if (nodeAgentReady) {
       bootNodeAgent?.unref?.();
     }
     createWindow(htmlDataUrl(renderFailurePage("TaskHandoff desktop services failed", detail)));
@@ -894,7 +875,7 @@ async function boot() {
 }
 
 async function prepareDesktopUpdateInstall() {
-  await stopDesktopServices();
+  await desktopServiceLifecycle.stop("update");
   desktopQuitReady = true;
 }
 
@@ -999,7 +980,7 @@ if (!ownsDesktopInstanceLock) {
     }
     event.preventDefault();
     if (!desktopQuitPromise) {
-      desktopQuitPromise = stopControlPlane()
+      desktopQuitPromise = desktopServiceLifecycle.stop("quit")
         .catch((error) => logError(`[desktop-shell] failed to stop control plane during quit ${error instanceof Error ? error.stack || error.message : String(error)}`))
         .finally(() => {
           desktopQuitReady = true;

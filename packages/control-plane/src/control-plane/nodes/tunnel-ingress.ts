@@ -54,6 +54,7 @@ export class NodeTunnelIngress {
       return;
     }
     if (record.type === "node-agent.identify") {
+      this.transport.markHealthy(nodeId, socket);
       socket.send(JSON.stringify({ type: "control-plane.identified", nodeId, serverTime: new Date().toISOString() }));
       return;
     }

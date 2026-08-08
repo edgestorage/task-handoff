@@ -3,6 +3,8 @@ import path from "node:path";
 import { acquireProcessSingletonLock } from "../../shared/process/singleton-lock.ts";
 
 export function defaultNodeAgentSingletonLockPath() {
+  const override = process.env.TASK_HANDOFF_NODE_AGENT_LOCK_PATH?.trim();
+  if (override) return path.resolve(override);
   return path.join(os.tmpdir(), `task-handoff-node-agent-${process.getuid?.() ?? "user"}.lock`);
 }
 

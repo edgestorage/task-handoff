@@ -12,6 +12,8 @@ export const instances = {
     new: "新建实例",
     search: "搜索实例",
     loading: "正在加载实例...",
+    nodeConnecting: "正在连接",
+    nodeReconnecting: "正在重连",
     openControls: "打开 {name} 的控制菜单",
     noMatches: "没有匹配的实例",
     resizeSidebar: "调整实例侧栏大小",

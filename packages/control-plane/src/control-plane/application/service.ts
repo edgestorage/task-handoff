@@ -112,6 +112,7 @@ import type { ControlPlaneStorePaths } from "../persistence/paths.ts";
 import { JsonCollection, JsonFile } from "../../shared/persistence/store.ts";
 import { controlledInstanceTriggerSnapshot } from "../triggers/records.ts";
 import type { ControlPlaneProxyError, ProxyTargetEvent, ProxyTargetSnapshot } from "@task-handoff/protocol/control-plane-proxy";
+import type { NodeConnectionRuntime } from "../nodes/connection-runtime.ts";
 
 export function parseInstanceAppManagementSnapshot(value: unknown) {
   try {
@@ -140,6 +141,7 @@ export type ControlPlaneServiceOptions = {
   dockerCommandRunner?: CommandRunner;
   nodeAgentTransport?: NodeAgentTransport;
   logger?: ServiceLogger;
+  nodeConnectionRuntime?: NodeConnectionRuntime;
 };
 
 function isControlPlaneLocalNode(node: Node) {
@@ -168,6 +170,7 @@ export class ControlPlaneService {
   private readonly fetchImpl: FetchImpl;
   private readonly dockerCommandRunner: CommandRunner | undefined;
   private readonly logger: ServiceLogger | undefined;
+  private readonly nodeConnectionRuntime: NodeConnectionRuntime | undefined;
   private readonly appAccessService: AppAccessService;
   private readonly chatActionTokenService = new ChatActionTokenService();
   private readonly nodeAgentTransportResolver: NodeAgentTransportResolver;
@@ -192,6 +195,7 @@ export class ControlPlaneService {
     this.paths = paths;
     this.fetchImpl = options.fetchImpl || fetch;
     this.dockerCommandRunner = options.dockerCommandRunner;
+    this.nodeConnectionRuntime = options.nodeConnectionRuntime;
     this.proxyPrivateStore = new ControlPlaneProxyPrivateStore(
       controlPlaneProxyPrivateStorePaths(paths.dataDir),
       (message, details) => this.logWarn(details, message),
@@ -632,6 +636,7 @@ export class ControlPlaneService {
         this.nodes.delete(node.id);
       }
       this.nodes.put(updated);
+      this.nodeConnectionRuntime?.observedReachable(updated);
       return {
         id: updated.id,
         status: "online",
@@ -646,6 +651,7 @@ export class ControlPlaneService {
         updatedAt: now(),
       });
       this.nodes.put(updated);
+      this.nodeConnectionRuntime?.observedFailure(updated, errorMessage(error));
       return {
         id: node.id,
         status: "offline",
@@ -746,7 +752,11 @@ export class ControlPlaneService {
   }
 
   listPublicNodes() {
-    return this.listNodes().map(publicNode);
+    return this.listNodes().map((node) => publicNode(this.projectNodeConnection(node)));
+  }
+
+  projectNodeConnection(node: Node) {
+    return this.nodeConnectionRuntime?.project(node) || node;
   }
 
   createNode(input: unknown) {
@@ -955,7 +965,7 @@ export class ControlPlaneService {
     return this.instanceBoardReader.read({
       projects: this.listProjects(),
       images: this.listImageOptions(),
-      nodes: this.nodes.list(),
+      nodes: this.nodes.list().map((node) => this.projectNodeConnection(node)),
       runtimes: runtimeResult.items,
       instances: instanceResult.items,
       nodeErrors: [...runtimeResult.nodeErrors, ...instanceResult.nodeErrors],
@@ -1549,7 +1559,7 @@ export class ControlPlaneService {
   }
 
   requirePublicNode(id: string) {
-    return publicNode(this.requireNode(id));
+    return publicNode(this.projectNodeConnection(this.requireNode(id)));
   }
 
   async requireControlledInstance(id: string, includeSecret = false) {

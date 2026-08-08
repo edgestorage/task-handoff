@@ -37,7 +37,7 @@ export function publicNodeAgentCapabilities(data: unknown) {
   };
 }
 
-export function publicNode(node: Node) {
+export function publicNode<T extends Node>(node: T) {
   const { agent, ...capabilities } = node.capabilities;
   const { secret: _secret, ...auth } = node.auth;
   const pairing = auth.pairing ? { ...auth.pairing, joinToken: undefined } : undefined;

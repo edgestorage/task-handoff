@@ -1,6 +1,12 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { inspectExistingDesktopControlPlane, stopExistingDesktopNodeAgent } = require("../src/node-agent-handoff.cjs");
+const {
+  ensureDesktopNodeAgent,
+  inspectExistingDesktopControlPlane,
+  inspectExistingDesktopNodeAgent,
+  reusableDesktopNodeAgent,
+  stopExistingDesktopNodeAgent,
+} = require("../src/node-agent-handoff.cjs");
 
 function owner(overrides = {}) {
   return {
@@ -25,6 +31,70 @@ test("desktop detects a verified Control Plane before replacing its node agent",
     isAlive: () => true,
     processIdentity: () => "test:reused-pid",
   }).status, "stale");
+});
+
+test("desktop reuses only a healthy node agent with matching scope and build identity", () => {
+  const existing = owner();
+  const inspection = inspectExistingDesktopNodeAgent({
+    dataDir: existing.dataDir,
+    readOwner: () => existing,
+    isAlive: () => true,
+    processIdentity: () => existing.startIdentity,
+  });
+  const health = {
+    role: "node-agent",
+    process: { pid: existing.pid, startIdentity: existing.startIdentity },
+    listener: { port: 18091 },
+    build: { component: "node-agent", packageVersion: "1.2.3", buildId: "build-a" },
+  };
+  assert.equal(reusableDesktopNodeAgent(inspection, health, { packageVersion: "1.2.3", buildId: "build-a" }), true);
+  assert.equal(reusableDesktopNodeAgent(inspection, { ...health, process: { ...health.process, pid: 9999 } }, { packageVersion: "1.2.3", buildId: "build-a" }), false);
+  assert.equal(reusableDesktopNodeAgent(inspection, health, { packageVersion: "1.2.4", buildId: "build-a" }), false);
+  assert.equal(reusableDesktopNodeAgent(inspection, health, { packageVersion: "1.2.3", buildId: "build-b" }), false);
+  assert.equal(reusableDesktopNodeAgent({ status: "foreign", owner: existing }, health, { packageVersion: "1.2.3" }), false);
+});
+
+test("desktop node-agent ensure state machine reuses the verified health owner", async () => {
+  const existing = owner();
+  const health = {
+    role: "node-agent",
+    process: { pid: existing.pid, startIdentity: existing.startIdentity },
+    listener: { port: 18091 },
+    build: { component: "node-agent", packageVersion: "1.2.3" },
+  };
+  let starts = 0;
+  const result = await ensureDesktopNodeAgent({
+    dataDir: existing.dataDir,
+    expected: { packageVersion: "1.2.3" },
+    inspectOptions: {
+      readOwner: () => existing,
+      isAlive: () => true,
+      processIdentity: () => existing.startIdentity,
+    },
+    fetchHealth: async () => ({ ok: true, payload: { data: health } }),
+    start: () => { starts += 1; },
+    waitUntilReady: async () => undefined,
+  });
+  assert.equal(result.action, "reused");
+  assert.equal(result.health, health);
+  assert.equal(starts, 0);
+});
+
+test("desktop node-agent ensure state machine starts when no owner exists", async () => {
+  const child = { pid: 5678 };
+  const health = { listener: { port: 18092 } };
+  const result = await ensureDesktopNodeAgent({
+    dataDir: "/desktop/node-agent",
+    expected: { packageVersion: "1.2.3" },
+    inspectOptions: { readOwner: () => undefined },
+    fetchHealth: async () => undefined,
+    start: () => child,
+    waitUntilReady: async (startedChild) => {
+      assert.equal(startedChild, child);
+      return health;
+    },
+  });
+  assert.deepEqual(result, { action: "started", child, health });
 });
 
 test("desktop stops the previous node agent for its own data directory", async () => {

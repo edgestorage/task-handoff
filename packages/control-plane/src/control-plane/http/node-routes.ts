@@ -56,7 +56,7 @@ export function registerNodeRoutes({
   };
   app.get("/api/nodes", async (request) => {
     const query = NodeListQuerySchema.parse(request.query);
-    return { data: query.projection === "directory" ? service.listNodes().map(publicNodeDirectory) : service.listPublicNodes() };
+    return { data: query.projection === "directory" ? service.listNodes().map((node) => publicNodeDirectory(service.projectNodeConnection(node))) : service.listPublicNodes() };
   });
   app.post("/api/nodes/local/sync", async () => {
     const node = await service.syncLocalNodeConnection();

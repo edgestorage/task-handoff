@@ -140,6 +140,7 @@
         :instances="filteredInstances"
         :is-instance-action-busy="isInstanceActionBusy"
         :loading="board.isLoading.value"
+        :nodes="nodes.data.value || []"
         :open-menu-id="openInstanceMenuId"
         v-model:sort-mode="instanceSortMode"
         :total-instances="sortedInstances.length"
