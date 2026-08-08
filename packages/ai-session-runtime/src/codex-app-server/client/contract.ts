@@ -10,10 +10,19 @@ export type CodexTurnPermissionOverrides = {
   permissions: ":workspace" | ":danger-full-access";
 };
 
+export type CodexThreadStartOptions = {
+  cwd: string;
+  model?: string;
+  modelProvider?: string;
+  runtimeWorkspaceRoots?: string[];
+  permissions?: CodexTurnPermissionOverrides;
+};
+
 export type CodexAppServerClientLike = EventEmitter & {
   start: () => Promise<void>;
   stop: () => void;
   listLoadedThreadIds: () => Promise<string[]>;
+  startThread?: (options: CodexThreadStartOptions) => Promise<CodexThread>;
   readThread?: (threadId: string, options?: { includeTurns?: boolean }) => Promise<CodexThread | undefined>;
   listThreads?: () => Promise<CodexThread[]>;
   startTurn?: (threadId: string, message: string, inputs?: CodexUserInput[], permissions?: CodexTurnPermissionOverrides) => Promise<{ turnId?: string }>;
@@ -26,6 +35,10 @@ export type CodexAppServerClientLike = EventEmitter & {
   stopFuzzyFileSearch?: (sessionId: string) => Promise<void>;
   interruptTurn?: (threadId: string, turnId: string) => Promise<void>;
   resumeThread?: (threadId: string) => Promise<CodexThread | undefined>;
+  archiveThread?: (threadId: string) => Promise<void>;
+  unarchiveThread?: (threadId: string) => Promise<void>;
+  deleteThread?: (threadId: string) => Promise<void>;
+  unsubscribeThread?: (threadId: string) => Promise<void>;
   startReview?: (threadId: string) => Promise<{ turnId?: string }>;
   setThreadName?: (threadId: string, name: string) => Promise<void>;
   setThreadGoal?: (threadId: string, objective: string) => Promise<JsonValue>;

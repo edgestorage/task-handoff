@@ -17,6 +17,7 @@ import type {
   RepositoryWorktrees,
 } from "@task-handoff/protocol/repository";
 import { RepositoryWorktreesSchema } from "@task-handoff/protocol/repository";
+import { safeParseResponse } from "@task-handoff/protocol/response-validation";
 import { useQuery } from "@tanstack/vue-query";
 import { computed, toValue, type MaybeRefOrGetter } from "vue";
 import { deleteUrlData, getUrlData, postUrlData, putUrlData } from "./client";
@@ -38,7 +39,7 @@ export function getRepositoryContext(target: RepositorySessionTarget, options?: 
 
 export async function getRepositoryWorktrees(target: RepositorySessionTarget, options?: { signal?: AbortSignal }) {
   const data = await getUrlData<unknown>(`${repositoryTargetBasePath(target)}/worktrees`, options);
-  const parsed = RepositoryWorktreesSchema.safeParse(data);
+  const parsed = safeParseResponse(RepositoryWorktreesSchema, data);
   if (!parsed.success) {
     throw new Error("The controlled instance returned an incompatible worktree response. Restart the instance to load the current protocol.");
   }

@@ -72,19 +72,27 @@ test("workspace selection uses opaque server-issued identifiers, never a path", 
   assert.equal(RepositoryStartAiSessionRequestSchema.safeParse({
     agent: "codex",
     workspaceSelection: { type: "worktree", repositoryContextId: "repo-context-1", worktreeId: "wt-1" },
+    message: "Implement the requested change.",
+    clientRequestId: "request-1",
   }).success, true);
   assert.equal(RepositoryStartAiSessionRequestSchema.safeParse({
     agent: "codex",
     workspaceSelection: { type: "worktree", repositoryContextId: "repo-context-1", worktreeId: "wt-1" },
+    message: "Implement the requested change.",
+    clientRequestId: "request-1",
     cwd: "/tmp/escape",
   }).success, false);
   assert.equal(RepositoryCreateWorktreeAiSessionRequestSchema.safeParse({
     agent: "claude",
     worktree: { mode: "new-branch", branchName: "feature/isolated", startRef: "HEAD", expectedSnapshotId: snapshot },
+    message: "Implement the requested change.",
+    clientRequestId: "request-2",
   }).success, true);
   assert.equal(RepositoryCreateWorktreeAiSessionRequestSchema.safeParse({
     agent: "claude",
     worktree: { mode: "new-branch", branchName: "feature/isolated", startRef: "HEAD", expectedSnapshotId: snapshot, worktreePath: "/tmp/escape" },
+    message: "Implement the requested change.",
+    clientRequestId: "request-2",
   }).success, false);
 });
 

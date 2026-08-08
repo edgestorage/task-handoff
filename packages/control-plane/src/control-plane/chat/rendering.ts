@@ -1,4 +1,4 @@
-import type { AppAccessMode } from "../instances/app-access-service.ts";
+import { appSessionAccessMode, type AppSessionAccessMode } from "@task-handoff/protocol/app-sessions";
 import type { AiSessionActionResult } from "@task-handoff/protocol/ai-sessions";
 import { isVisibleAppSessionStatus } from "../sessions/app-session-visibility.ts";
 import type { ChatBoardInstance } from "./types.ts";
@@ -65,25 +65,14 @@ export function launchAppCallbackData(token: string) {
   return `task_handoff:cp_a:${token}`;
 }
 
-export function appSessionLink(instance: ChatBoardInstance, session: Record<string, unknown>, publicBaseUrl: string | undefined, createToken: () => string) {
+export function appSessionLink(instance: ChatBoardInstance, session: Record<string, unknown>, publicBaseUrl: string | undefined, createToken: (mode: AppSessionAccessMode) => string) {
   const id = stringValue(session.id);
-  const relative = id ? appSessionAccessPath(session, createToken) : `/instances/${encodeURIComponent(instance.id)}/`;
+  const relative = id ? appSessionAccessPath(session, createToken) || `/instances/${encodeURIComponent(instance.id)}/` : `/instances/${encodeURIComponent(instance.id)}/`;
   const absolute = absoluteControlPlaneUrl(relative, publicBaseUrl);
   return {
     text: absolute || relative,
     url: absolute,
   };
-}
-
-export function appSessionAccessMode(session: Record<string, unknown>): AppAccessMode {
-  const kind = stringValue(session.kind);
-  if (kind === "gui") {
-    return "vnc";
-  }
-  if (kind === "web") {
-    return "web";
-  }
-  return "tty";
 }
 
 export function stringValue(value: unknown) {
@@ -128,9 +117,10 @@ function appDisplayName(id: string) {
   return names[id] || id.replace(/[-_]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
-function appSessionAccessPath(session: Record<string, unknown>, createToken: () => string) {
+function appSessionAccessPath(session: Record<string, unknown>, createToken: (mode: AppSessionAccessMode) => string) {
   const mode = appSessionAccessMode(session);
-  const token = encodeURIComponent(createToken());
+  if (!mode) return undefined;
+  const token = encodeURIComponent(createToken(mode));
   return `/apps/access/${mode}?token=${token}`;
 }
 

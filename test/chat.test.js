@@ -1591,6 +1591,38 @@ test("ai session controller can steer queued messages into active turns", async 
   assert.deepEqual(registry.get(session.id).queue.items, []);
 });
 
+test("AI session queue edits and reorders use an exact revisioned queued-message permutation", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-queue-order-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const session = registry.start({ agent: "codex", appSessionId: "app-order", status: "running", phase: "thinking" });
+  const first = registry.enqueueMessage(session.id, "first").item;
+  const second = registry.enqueueMessage(session.id, "second").item;
+  const third = registry.enqueueMessage(session.id, "third").item;
+  const controller = new AiSessionController(registry);
+
+  assert.equal(registry.get(session.id).queue.revision, 3);
+  const edited = controller.editQueuedMessage(session.id, second.id, 3, "edited second");
+  assert.equal(edited.queue.revision, 4);
+  assert.equal(edited.queue.items.find((item) => item.id === second.id).message, "edited second");
+  assert.throws(
+    () => controller.editQueuedMessage(session.id, second.id, 3, "stale edit"),
+    (error) => error?.code === "AI_SESSION_QUEUE_REVISION_CONFLICT" && error?.statusCode === 409,
+  );
+
+  const reordered = controller.reorderQueuedMessages(session.id, 4, [third.id, first.id, second.id]);
+  assert.equal(reordered.queue.revision, 5);
+  assert.deepEqual(reordered.queue.items.map((item) => item.id), [third.id, first.id, second.id]);
+  assert.throws(
+    () => controller.reorderQueuedMessages(session.id, 5, [third.id, third.id, second.id]),
+    (error) => error?.code === "AI_SESSION_QUEUE_ORDER_INVALID" && error?.statusCode === 409,
+  );
+  assert.equal(registry.get(session.id).queue.revision, 5);
+
+  registry.markQueuedMessageFailed(session.id, first.id, new Error("temporary"));
+  const retried = controller.retryQueuedMessage(session.id, first.id);
+  assert.deepEqual(retried.queue.items.filter((item) => item.status === "queued").map((item) => item.id), [third.id, second.id, first.id]);
+});
+
 test("ai session registry does not truncate assistant responses", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-registry-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
@@ -5597,7 +5629,7 @@ test("AI session refresh schedules a trailing scan when an app session update ar
   ]);
 });
 
-test("web app AI session snapshot endpoint only exposes app-bound sessions", async (t) => {
+test("web app AI session snapshot exposes Direct sessions without an App binding", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-web-events-bound-ai-"));
   const paths = appRuntimeTestPaths(root);
   const aiSessionDir = path.join(paths.dataDir, "ai-sessions");
@@ -5617,6 +5649,22 @@ test("web app AI session snapshot endpoint only exposes app-bound sessions", asy
       queue: { pendingCount: 0, items: [] },
     })}\n`,
   );
+  fs.writeFileSync(
+    path.join(aiSessionDir, "ais_direct.json"),
+    `${JSON.stringify({
+      id: "ais_direct",
+      agent: "codex",
+      creationSource: "ai-session",
+      appId: "codex-app-server",
+      providerSessionId: "thread_direct",
+      status: "idle",
+      phase: "unknown",
+      startedAt: "2026-07-04T00:00:00.000Z",
+      updatedAt: "2026-07-04T00:00:00.000Z",
+      counters: { toolCalls: 0, edits: 0, approvals: 0 },
+      queue: { pendingCount: 0, items: [] },
+    })}\n`,
+  );
   const restoreEnv = withWebStorageEnv(paths, {
     TASK_HANDOFF_WEB_AUTH: "off",
     TASK_HANDOFF_NOVNC_ROOT: path.join(root, "missing-novnc"),
@@ -5627,13 +5675,10 @@ test("web app AI session snapshot endpoint only exposes app-bound sessions", asy
   });
   const app = await createWebApp({ staticDir: path.join(root, "missing-static"), logger: false });
   try {
-    await app.listen({ port: 0, host: "127.0.0.1" });
-    const address = app.server.address();
-    const port = typeof address === "object" && address ? address.port : 0;
-    assert.ok(port > 0);
+    await app.ready();
     const response = await app.inject({ method: "GET", url: "/api/ai-sessions/state" });
     assert.equal(response.statusCode, 200);
-    assert.deepEqual(JSON.parse(response.payload).data.snapshot.sessions, []);
+    assert.deepEqual(JSON.parse(response.payload).data.snapshot.sessions.map((session) => session.id), ["ais_direct"]);
   } finally {
     await app.close();
     restoreEnv();
@@ -6130,6 +6175,7 @@ test("controlled instance history routes use trusted Task Handoff entries for re
   history.upsert({
     id: "ais_history_route",
     agent: "codex",
+    creationSource: "app-session",
     providerSessionId: "thread_history_route",
     title: "Trusted history title",
     cwd: "/workspace/trusted",
@@ -6177,6 +6223,7 @@ test("controlled instance history routes use trusted Task Handoff entries for re
       aiSessionId: "ais_history_route",
       providerSessionId: "thread_history_route",
       appSessionId: "app_history_route",
+      creationSource: "app-session",
     });
     assert.deepEqual(starts, [{
       appId: "codex",
@@ -6238,6 +6285,9 @@ test("app session title updates through the API, persists, and emits an authorit
     appRuntime: runtime,
   });
   try {
+    const activeBeforeRename = await app.inject({ method: "GET", url: "/api/apps/sessions/state" });
+    assert.deepEqual(activeBeforeRename.json().data.snapshot.sessions, []);
+
     const renamed = await app.inject({
       method: "PATCH",
       url: "/api/apps/sessions/app_existing",
@@ -6247,6 +6297,8 @@ test("app session title updates through the API, persists, and emits an authorit
     assert.equal(renamed.json().data.title, "Project Codex");
     assert.equal(runtime.getSession("app_existing").title, "Project Codex");
     assert.equal(updates.at(-1).title, "Project Codex");
+    const activeAfterRename = await app.inject({ method: "GET", url: "/api/apps/sessions/state" });
+    assert.deepEqual(activeAfterRename.json().data.snapshot.sessions, []);
 
     const metadata = JSON.parse(fs.readFileSync(path.join(paths.appSessionsDir, "app_existing", "metadata.json"), "utf8"));
     assert.equal(metadata.title, "Project Codex");

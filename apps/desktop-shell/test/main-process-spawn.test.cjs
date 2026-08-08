@@ -18,6 +18,15 @@ test("desktop passes its authoritative package version to both server child proc
   assert.equal((main.match(/version: app\.getVersion\(\),/g) || []).length, 2);
 });
 
+test("desktop allocates ports for all local services and enables Local Runtime reallocation", () => {
+  const main = fs.readFileSync(path.join(__dirname, "../src/main.cjs"), "utf8");
+  assert.match(main, /findAvailablePort\(controlPlaneHost, resolveControlPlanePort\(\), 20, "control-plane"\)/);
+  assert.match(main, /TASK_HANDOFF_LOCAL_INSTANCE_PORT_CONFLICT: "allocate"/);
+  assert.match(main, /TASK_HANDOFF_NODE_AGENT_PORT_CONFLICT: "allocate"/);
+  assert.match(main, /nodeAgentHealth\?\.listener\?\.port/);
+  assert.match(main, /startControlPlane\(\{ host: controlPlaneHost, port: controlPlanePort,/);
+});
+
 test("desktop owns a single Electron process and focuses it on repeated launches", () => {
   const main = fs.readFileSync(path.join(__dirname, "../src/main.cjs"), "utf8");
   assert.match(main, /app\.requestSingleInstanceLock\(\)/);

@@ -21,6 +21,16 @@ const { useAiSessionStore } = require("../packages/control-plane-ui/src/apps/con
 const { useStreamingMessagesStore } = require("../packages/control-plane-ui/src/apps/control-plane/useStreamingMessagesStore.ts");
 const { useAppSessionStore } = require("../packages/control-plane-ui/src/apps/control-plane/useAppSessionStore.ts");
 
+function aiSessionsApiFromLoader(apiLoader) {
+  return {
+    refresh: (signal) => apiLoader("ai-sessions?refresh=true", { signal }),
+    delta: (instanceId, streamId, sinceRevision, signal) => apiLoader(
+      `ai-sessions?instanceId=${encodeURIComponent(instanceId)}&streamId=${encodeURIComponent(streamId)}&sinceRevision=${encodeURIComponent(String(sinceRevision))}`,
+      { signal },
+    ),
+  };
+}
+
 function timestamp() {
   return new Date().toISOString();
 }
@@ -103,7 +113,7 @@ test("control-plane UI applies an authoritative AI snapshot while recovery is in
   };
   const app = createApp({ render: () => null });
   app.use(VueQueryPlugin, { queryClient });
-  const store = app.runWithContext(() => useAiSessionStore({ boardInstances: () => [], aiSessions: () => undefined, apiLoader }));
+  const store = app.runWithContext(() => useAiSessionStore({ boardInstances: () => [], aiSessions: () => undefined, aiSessionsApi: aiSessionsApiFromLoader(apiLoader) }));
 
   const recovery = store.recoverDescriptor({
     topic: "ai.sessions",
@@ -149,7 +159,7 @@ test("a late AI recovery response cannot roll the advertised stream back", async
   };
   const app = createApp({ render: () => null });
   app.use(VueQueryPlugin, { queryClient });
-  const store = app.runWithContext(() => useAiSessionStore({ boardInstances: () => [], aiSessions: () => undefined, apiLoader }));
+  const store = app.runWithContext(() => useAiSessionStore({ boardInstances: () => [], aiSessions: () => undefined, aiSessionsApi: aiSessionsApiFromLoader(apiLoader) }));
 
   const recovery = store.recoverDescriptor({
     topic: "ai.sessions",
@@ -204,7 +214,7 @@ test("an older AI refresh cannot overwrite a newer live snapshot on the same str
   };
   const app = createApp({ render: () => null });
   app.use(VueQueryPlugin, { queryClient });
-  const store = app.runWithContext(() => useAiSessionStore({ boardInstances: () => [], aiSessions: () => undefined, apiLoader }));
+  const store = app.runWithContext(() => useAiSessionStore({ boardInstances: () => [], aiSessions: () => undefined, aiSessionsApi: aiSessionsApiFromLoader(apiLoader) }));
 
   const recovery = store.recoverDescriptor({
     topic: "ai.sessions",
@@ -238,7 +248,7 @@ test("AI recovery retries a transient loader failure until the advertised revisi
     boardInstances: () => [],
     aiSessions: () => undefined,
     recoveryRetry: { initialDelayMs: 1, maxDelayMs: 1, jitterRatio: 0 },
-    apiLoader: async () => {
+    aiSessionsApi: aiSessionsApiFromLoader(async () => {
       calls += 1;
       if (calls === 1) throw new Error("network unavailable");
       return {
@@ -250,7 +260,7 @@ test("AI recovery retries a transient loader failure until the advertised revisi
         syncRequired: false,
         events: [{ type: AiSessionEventType.Snapshot, payload: snapshotEvent("failure-stream", 2, [summary("recovered")]) }],
       };
-    },
+    }),
   }));
 
   const recovery = store.recoverDescriptor({
@@ -281,10 +291,10 @@ test("a live AI event immediately wakes a recovery waiting in backoff", async ()
     boardInstances: () => [],
     aiSessions: () => undefined,
     recoveryRetry: { initialDelayMs: 60_000, maxDelayMs: 60_000, jitterRatio: 0 },
-    apiLoader: async () => {
+    aiSessionsApi: aiSessionsApiFromLoader(async () => {
       calls += 1;
       throw new Error("network unavailable");
-    },
+    }),
   }));
 
   const recovery = store.recoverDescriptor({
@@ -364,7 +374,7 @@ test("AI recovery cancels mismatched-stream backoff when the next live stream re
   };
   const app = createApp({ render: () => null });
   app.use(VueQueryPlugin, { queryClient });
-  const store = app.runWithContext(() => useAiSessionStore({ boardInstances: () => [], aiSessions: () => undefined, apiLoader }));
+  const store = app.runWithContext(() => useAiSessionStore({ boardInstances: () => [], aiSessions: () => undefined, aiSessionsApi: aiSessionsApiFromLoader(apiLoader) }));
 
   const recovery = store.recoverDescriptor({
     topic: "ai.sessions",
@@ -413,7 +423,7 @@ test("AI recovery retries when a delta request makes no progress", async () => {
   const store = app.runWithContext(() => useAiSessionStore({
     boardInstances: () => [],
     aiSessions: () => undefined,
-    apiLoader,
+    aiSessionsApi: aiSessionsApiFromLoader(apiLoader),
     recoveryRetry: { initialDelayMs: 1, maxDelayMs: 1, jitterRatio: 0 },
   }));
 
@@ -456,7 +466,7 @@ test("AI full-snapshot recovery settles the normalized streaming store", async (
     : { updatedAt: timestamp(), instances: [{ instanceId: "instance-one", streamId, revision: 2, lastEventAt: recovered.meta.generatedAt, aiSessions: recovered.snapshot }] };
   const app = createApp({ render: () => null });
   app.use(VueQueryPlugin, { queryClient });
-  const store = app.runWithContext(() => useAiSessionStore({ boardInstances: () => [], aiSessions: () => undefined, apiLoader }));
+  const store = app.runWithContext(() => useAiSessionStore({ boardInstances: () => [], aiSessions: () => undefined, aiSessionsApi: aiSessionsApiFromLoader(apiLoader) }));
   const streaming = useStreamingMessagesStore();
   streaming.clear();
 
@@ -563,7 +573,7 @@ test("removing an authoritative instance prevents an in-flight recovery from res
   };
   const app = createApp({ render: () => null });
   app.use(VueQueryPlugin, { queryClient });
-  const store = app.runWithContext(() => useAiSessionStore({ boardInstances: () => [], aiSessions: () => authoritative.value, apiLoader }));
+  const store = app.runWithContext(() => useAiSessionStore({ boardInstances: () => [], aiSessions: () => authoritative.value, aiSessionsApi: aiSessionsApiFromLoader(apiLoader) }));
   const streaming = useStreamingMessagesStore();
   streaming.clear();
 
@@ -764,6 +774,29 @@ test("app recovery retries when a delta request makes no progress", async () => 
   await store.recoverDescriptor({ topic: "app.sessions", instanceId: "instance-one", streamId: "app-stream", latestRevision: 2, earliestRetainedRevision: 2 });
   assert.equal(requests, 2);
   assert.equal(queryClient.getQueryData(["control-plane-app-sessions"]).instances[0].revision, 2);
+});
+
+test("control-plane UI consumes the shared authoritative App Session projection without its own status filter", () => {
+  const queryClient = new QueryClient();
+  const streamId = "app-authoritative";
+  const initial = appSnapshotEvent(streamId, 1, [{ id: "app", appId: "terminal-tty", status: "running", bindings: [] }]);
+  queryClient.setQueryData(["control-plane-app-sessions"], {
+    updatedAt: timestamp(),
+    instances: [{ instanceId: "instance-one", streamId, revision: 1, lastEventAt: initial.meta.generatedAt, appSessions: initial.snapshot }],
+  });
+  const app = createApp({ render: () => null });
+  app.use(VueQueryPlugin, { queryClient });
+  const store = app.runWithContext(() => useAppSessionStore({ boardInstances: () => [], appSessions: () => undefined, apiLoader: async () => undefined }));
+
+  store.applyEvent({
+    type: AppSessionEventType.Patch,
+    payload: {
+      meta: { ...initial.meta, revision: 2, previousRevision: 1, traceId: "app-authoritative-2" },
+      session: { id: "app", appId: "terminal-tty", status: "stopped", bindings: [] },
+    },
+  });
+
+  assert.deepEqual(queryClient.getQueryData(["control-plane-app-sessions"]).instances[0].appSessions.sessions, []);
 });
 
 test("removing an authoritative app-session instance cancels its in-flight recovery", async () => {

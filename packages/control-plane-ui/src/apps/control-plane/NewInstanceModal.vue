@@ -62,6 +62,7 @@
             :creating-image="creatingImage"
             :docker-runtime-check-message="dockerRuntimeCheckMessage"
             :docker-runtime-check-state="dockerRuntimeCheck.state"
+            :environment-templates="environmentTemplates.data.value || []"
             :images="imageOptions.data.value || []"
             :image-availability="imageAvailability.data.value || []"
             :instance-draft="instanceDraft"
@@ -104,7 +105,7 @@ import { useQueryClient } from "@tanstack/vue-query";
 import { ArrowRight, Plus, X } from "@lucide/vue";
 import { useI18n } from "vue-i18n";
 import { translateApiError } from "../../i18n/apiError";
-import { checkNodeRuntime, createControlledInstance, createImage, createProject, listNodeFolderTree, useImageOptionsQuery, useModelsQuery, useNodeImageAvailabilityQuery, useNodeLocalFoldersQuery, useNodeRuntimesQuery, useNodesQuery, useProjectsQuery } from "../../api/queries";
+import { checkNodeRuntime, createControlledInstance, createImage, createProject, listNodeFolderTree, useEnvironmentTemplatesQuery, useImageOptionsQuery, useModelsQuery, useNodeImageAvailabilityQuery, useNodeLocalFoldersQuery, useNodeRuntimesQuery, useNodesQuery, useProjectsQuery } from "../../api/queries";
 import { controlPlaneQueryKeys } from "../../api/queryKeys.ts";
 import type { CreateControlledInstanceResult, InstanceBoardItem } from "../../api/types";
 import { Button } from "../../components/ui/button";
@@ -183,10 +184,13 @@ const {
 const runtimeDraft = reactive<RuntimeDraft>({
   nodeId: "",
   runtimeId: "",
+  environmentSourceType: "image",
+  environmentTemplateId: "",
   imageId: "",
   imageTag: "",
 });
 const imageAvailability = useNodeImageAvailabilityQuery(() => runtimeDraft.nodeId);
+const environmentTemplates = useEnvironmentTemplatesQuery(() => runtimeDraft.nodeId);
 const instanceDraft = reactive<InstanceDraft>({
   name: "",
   autoImportAgentConfigs: true,
@@ -273,8 +277,11 @@ const runtimeBlockedReason = computed(() => {
       return t("instances.create.blocked.dockerUnavailable");
     }
   }
-  if (selectedRuntimeRequiresImage.value && !runtimeDraft.imageId) {
+  if (selectedRuntimeRequiresImage.value && runtimeDraft.environmentSourceType === "image" && !runtimeDraft.imageId) {
     return t("instances.create.blocked.image");
+  }
+  if (selectedRuntimeRequiresImage.value && runtimeDraft.environmentSourceType === "template" && !runtimeDraft.environmentTemplateId) {
+    return t("instances.create.blocked.environmentTemplate");
   }
   return "";
 });
@@ -412,7 +419,22 @@ watch(
   () => runtimeDraft.nodeId,
   () => {
     ensureRuntimeForNode();
+    runtimeDraft.environmentTemplateId = "";
   },
+);
+
+watch(
+  () => environmentTemplates.data.value,
+  (items) => {
+    const ready = (items || []).filter((template) => template.status === "ready");
+    if (runtimeDraft.environmentTemplateId && !ready.some((template) => template.id === runtimeDraft.environmentTemplateId)) {
+      runtimeDraft.environmentTemplateId = "";
+    }
+    if (runtimeDraft.environmentSourceType === "template" && !runtimeDraft.environmentTemplateId) {
+      runtimeDraft.environmentTemplateId = ready[0]?.id || "";
+    }
+  },
+  { immediate: true },
 );
 
 watch(
@@ -627,7 +649,13 @@ async function createInstance() {
                   path: localFolderPath.value,
                 },
           }),
-      ...(selectedRuntimeRequiresImage.value ? { imageSelection: { imageId: runtimeDraft.imageId, ...(runtimeDraft.imageTag ? { tag: runtimeDraft.imageTag } : {}) } } : {}),
+      ...(selectedRuntimeRequiresImage.value
+        ? {
+            environmentSource: runtimeDraft.environmentSourceType === "template"
+              ? { type: "template" as const, environmentTemplateId: runtimeDraft.environmentTemplateId }
+              : { type: "image" as const, imageSelection: { imageId: runtimeDraft.imageId, ...(runtimeDraft.imageTag ? { tag: runtimeDraft.imageTag } : {}) } },
+          }
+        : {}),
       nodeId: runtimeDraft.nodeId,
       runtimeId: runtimeDraft.runtimeId,
       config: {

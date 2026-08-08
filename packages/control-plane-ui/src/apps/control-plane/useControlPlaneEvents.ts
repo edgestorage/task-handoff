@@ -9,6 +9,7 @@ import {
   type InstanceLifecycleSnapshot,
 } from "@task-handoff/protocol/control-plane";
 import { AiSessionUnreadEventType, AiSessionUnreadStateSchema, type AiSessionUnreadState } from "@task-handoff/protocol/ai-sessions";
+import { safeParseResponse } from "@task-handoff/protocol/response-validation";
 import type { SessionStreamDescriptor } from "@task-handoff/protocol/events";
 import type { AppManagementEvent } from "../../api/types";
 import type { InstanceResourceMetrics } from "../../api/types";
@@ -102,7 +103,7 @@ export function useControlPlaneEvents(input: {
     try {
       const message = JSON.parse(raw) as EventMessage;
       if (message.type === SessionStreamsHelloEventType) {
-        const parsed = SessionStreamsHelloSchema.safeParse(message.payload);
+        const parsed = safeParseResponse(SessionStreamsHelloSchema, message.payload);
         if (!parsed.success) {
           closing = true;
           console.error("SESSION_STREAM_PROTOCOL_INCOMPATIBLE", parsed.error.issues);
@@ -134,7 +135,7 @@ export function useControlPlaneEvents(input: {
       return input.aiSessions.applyMessageDelta(event.payload as AiSessionMessageDeltaEvent);
     }
     if (event.type === AiSessionUnreadEventType.Updated) {
-      const state = AiSessionUnreadStateSchema.safeParse(event.payload);
+      const state = safeParseResponse(AiSessionUnreadStateSchema, event.payload);
       if (!state.success || event.scope?.instanceId !== state.data.instanceId) return false;
       return input.aiSessions.applyUnreadEvent(state.data);
     }
@@ -148,12 +149,12 @@ export function useControlPlaneEvents(input: {
       return input.appManagement?.applyEvent(event.scope.instanceId, event.payload as AppManagementEvent) || false;
     }
     if (event.type === InstanceResourceMetricsEventType.Snapshot && event.payload && typeof event.payload === "object") {
-      const metrics = InstanceResourceMetricsSchema.safeParse(event.payload);
+      const metrics = safeParseResponse(InstanceResourceMetricsSchema, event.payload);
       if (!metrics.success || event.scope?.instanceId !== metrics.data.instanceId) return false;
       return input.resourceMetrics?.applyEvent(metrics.data) || false;
     }
     if (event.type === InstanceLifecycleEventType.Snapshot) {
-      const lifecycle = InstanceLifecycleSnapshotSchema.safeParse(event.payload);
+      const lifecycle = safeParseResponse(InstanceLifecycleSnapshotSchema, event.payload);
       if (!lifecycle.success || event.scope?.instanceId !== lifecycle.data.instanceId) return false;
       input.imagePullProgress?.reconcileLifecycle?.(lifecycle.data);
       return applyInstanceLifecycle(queryClient, lifecycle.data);

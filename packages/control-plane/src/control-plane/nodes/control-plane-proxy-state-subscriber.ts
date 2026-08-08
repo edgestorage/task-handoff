@@ -9,6 +9,7 @@ import {
   type ProxyTargetSnapshot,
 } from "@task-handoff/protocol/control-plane-proxy";
 import type { Node } from "@task-handoff/protocol/control-plane";
+import { parseResponse, safeParseResponse } from "@task-handoff/protocol/response-validation";
 import { WebSocket as WsClient } from "ws";
 import { controlPlaneProxyAuthenticationHeaders } from "./control-plane-proxy-transport.ts";
 
@@ -121,7 +122,7 @@ export class ControlPlaneProxyStateSubscriber {
       if (!this.current(nodeId, generation)) return;
       const payload = await response.json().catch(() => undefined) as { data?: unknown; error?: unknown } | undefined;
       if (!response.ok) {
-        const parsedError = ControlPlaneProxyErrorSchema.safeParse(payload?.error);
+        const parsedError = safeParseResponse(ControlPlaneProxyErrorSchema, payload?.error);
         const error = parsedError.success ? parsedError.data : unavailableError(`Proxy snapshot failed with HTTP ${response.status}.`);
         if (error.code === ControlPlaneProxyErrorCode.BindingRevoked) {
           this.onStateChanged(this.service.markProxyBindingRevoked(nodeId, error));
@@ -130,7 +131,7 @@ export class ControlPlaneProxyStateSubscriber {
         this.fail(nodeId, generation, error, error.retryable);
         return;
       }
-      const snapshot = ProxyTargetSnapshotSchema.parse(payload?.data);
+      const snapshot = parseResponse(ProxyTargetSnapshotSchema, payload?.data);
       this.validateIdentity(credential, snapshot.binding.id, snapshot.binding.targetNodeId);
       this.onStateChanged(this.service.applyProxyTargetSnapshot(nodeId, snapshot));
       if (snapshot.binding.status === "revoked") {
@@ -163,7 +164,7 @@ export class ControlPlaneProxyStateSubscriber {
     socket.on("message", (raw) => {
       if (!this.current(nodeId, generation)) return;
       try {
-        const parsed = ProxyEventStreamMessageSchema.parse(JSON.parse(String(raw)));
+        const parsed = parseResponse(ProxyEventStreamMessageSchema, JSON.parse(String(raw)));
         if (parsed.bindingId !== credential.proxyBindingId
           || parsed.sourceControlPlaneId !== credential.sourceControlPlaneId
           || parsed.targetNodeId !== credential.targetNodeId

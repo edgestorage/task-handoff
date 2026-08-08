@@ -13,7 +13,6 @@ import {
   type InstanceBoardItem,
   type InstanceBoardItemWithAppSessions,
 } from "../../api/types";
-import { isVisibleAppSession } from "./appSessionVisibility.ts";
 import { createSessionStreamRecovery, type SessionStreamRecoveryRetryOptions } from "./sessionStreamRecovery.ts";
 
 export function useAppSessionStore(input: {
@@ -74,7 +73,7 @@ export function useAppSessionStore(input: {
       const result = applyAppSessionStreamEvent(projection, event);
       if (result.kind !== "applied") return current;
       applied = true;
-      return upsertInstanceAppSessions(current, instanceId, visibleAppSessionsSnapshot(result.projection.snapshot), { streamId: result.projection.streamId, revision: result.projection.revision, lastEventAt: result.projection.lastEventAt });
+      return upsertInstanceAppSessions(current, instanceId, result.projection.snapshot, { streamId: result.projection.streamId, revision: result.projection.revision, lastEventAt: result.projection.lastEventAt });
     });
     if (!applied && !fromRecovery) void streamRecovery.recoverDescriptor(observation.descriptor);
     return applied || Boolean(streamRecovery.streamId(instanceId));
@@ -106,23 +105,10 @@ function mergeBoardAppSessions(instances: InstanceBoardItem[], appSessions?: Con
       apps: {
         ...instance.apps,
         runningCount: snapshot.runningCount,
-        sessions: snapshot.sessions.filter(isVisibleAppSession),
+        sessions: snapshot.sessions,
       },
     };
   });
-}
-
-function visibleAppSessionsSnapshot(snapshot: AppSessionsSnapshot): AppSessionsSnapshot {
-  return appSessionsSnapshot(snapshot.sessions.filter(isVisibleAppSession));
-}
-
-function appSessionsSnapshot(sessions: AppSessionsSnapshot["sessions"], updatedAt = new Date().toISOString()): AppSessionsSnapshot {
-  return {
-    runningCount: sessions.filter((session) => session.status === "running").length,
-    problemCount: sessions.filter((session) => session.status === "failed").length,
-    sessions,
-    updatedAt,
-  };
 }
 
 function upsertInstanceAppSessions(current: ControlPlaneAppSessions | undefined, instanceId: string, snapshot: AppSessionsSnapshot, meta: { streamId: string; revision?: number; lastEventAt?: string }): ControlPlaneAppSessions {

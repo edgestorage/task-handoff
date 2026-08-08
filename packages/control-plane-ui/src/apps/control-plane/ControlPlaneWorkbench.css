@@ -7,10 +7,17 @@
 }
 
 .control-plane-shell {
-  height: 100vh;
+  --control-plane-viewport-height: 100vh;
+  height: var(--control-plane-viewport-height);
   overflow: hidden;
   background: var(--workspace-bg);
   color: var(--text);
+}
+
+@supports (height: 100dvh) {
+  .control-plane-shell {
+    --control-plane-viewport-height: 100dvh;
+  }
 }
 
 .control-plane-topbar {
@@ -23,6 +30,15 @@
   border-bottom: 1px solid var(--line);
   background: var(--surface);
   padding: 0 16px;
+}
+
+/*
+ * Electron's native drag region consumes pointer events before Reka can use
+ * them as outside interactions. While a menu portal is open, let the page
+ * receive the first titlebar click so the menu can dismiss normally.
+ */
+:global(body:has([role="menu"][data-state="open"]) .control-plane-topbar) {
+  -webkit-app-region: no-drag;
 }
 
 .topbar-left {
@@ -95,7 +111,6 @@
 .control-plane-title {
   display: grid;
   min-width: 0;
-  gap: 2px;
 }
 
 .control-plane-kicker {
@@ -116,6 +131,7 @@
 
 .control-plane-instance-switcher {
   -webkit-app-region: no-drag;
+  display: block;
   max-width: min(360px, 38vw);
   border: 0;
   border-radius: 6px;
@@ -125,6 +141,10 @@
   font: inherit;
   padding: 3px 6px;
   text-align: left;
+}
+
+.control-plane-instance-switcher-shell > .control-plane-kicker {
+  padding: 0 6px;
 }
 
 .control-plane-instance-switcher:hover,
@@ -140,7 +160,7 @@
 .control-plane-instance-switcher-title {
   display: flex;
   min-width: 0;
-  align-items: center;
+  align-items: baseline;
   gap: 5px;
 }
 
@@ -162,6 +182,7 @@
 }
 
 .control-plane-instance-switcher-chevron {
+  align-self: center;
   flex: 0 0 auto;
   opacity: 0;
   transform: translateX(-3px);
@@ -369,7 +390,7 @@
 .control-plane-workbench {
   display: grid;
   grid-template-columns: var(--instances-width, 292px) minmax(0, 1fr);
-  height: calc(100vh - 56px);
+  height: calc(var(--control-plane-viewport-height) - 56px);
   min-height: 0;
 }
 
@@ -427,7 +448,7 @@
   .control-plane-workbench {
     grid-template-columns: 1fr;
     grid-template-rows: minmax(0, 1fr);
-    height: calc(100vh - 56px);
+    height: calc(var(--control-plane-viewport-height) - 56px);
   }
 
   .control-plane-workbench.instances-collapsed {

@@ -3,8 +3,9 @@ import { z } from "zod";
 import type { ControlPlaneService } from "../application/service.ts";
 import type { ControlPlaneEventBus } from "../events/bus.ts";
 import { IdParamsSchema } from "./route-params.ts";
-import { AppManagementOperationRequestSchema } from "@task-handoff/protocol/control-plane";
+import { AppManagementOperationRequestSchema, InstanceDeleteInputSchema } from "@task-handoff/protocol/control-plane";
 import { withRequestSignal } from "./request-signal.ts";
+import { publicInstanceDirectory } from "../public-records.ts";
 
 export type RegisterInstanceRoutesOptions = {
   app: FastifyInstance;
@@ -18,6 +19,7 @@ const ConfigSyncFolderQuerySchema = z.object({
 }).strict();
 const InstanceAppParamsSchema = z.object({ id: z.string().trim().min(1), appId: z.string().trim().min(1) }).strict();
 const InstanceAppJobParamsSchema = z.object({ id: z.string().trim().min(1), jobId: z.string().trim().min(1) }).strict();
+const InstanceBoardQuerySchema = z.object({ projection: z.literal("directory").optional() }).strict();
 
 export function registerInstanceRoutes({ app, service, events }: RegisterInstanceRoutesOptions) {
   app.get("/api/controlled-instances", async () => ({ data: await service.listControlledInstances() }));
@@ -50,9 +52,9 @@ export function registerInstanceRoutes({ app, service, events }: RegisterInstanc
   });
   app.delete("/api/controlled-instances/:id", async (request) => {
     const id = IdParamsSchema.parse(request.params).id;
-    const deleted = await service.deleteControlledInstance(id);
-    events.publish("instance.deleted", { instanceId: id, deleted });
-    return { data: { deleted } };
+    const result = await service.deleteControlledInstance(id, InstanceDeleteInputSchema.parse(request.body));
+    if (result.completed) events.publish("instance.deleted", { instanceId: id, result });
+    return { data: result };
   });
   app.post("/api/controlled-instances/:id/start", async (request) => {
     const instance = await service.startControlledInstance(IdParamsSchema.parse(request.params).id);
@@ -90,7 +92,11 @@ export function registerInstanceRoutes({ app, service, events }: RegisterInstanc
     return { data: result };
   });
   app.get("/api/instance-board", async (request, reply) => withRequestSignal(request, reply, async (signal) => {
+    const query = InstanceBoardQuerySchema.parse(request.query);
     const result = await service.boardWithDiagnostics(signal);
-    return { data: result.items, meta: { nodeErrors: result.nodeErrors } };
+    return {
+      data: query.projection === "directory" ? result.items.map(publicInstanceDirectory) : result.items,
+      meta: { nodeErrors: result.nodeErrors },
+    };
   }));
 }

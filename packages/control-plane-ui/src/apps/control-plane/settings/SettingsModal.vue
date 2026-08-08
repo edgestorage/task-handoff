@@ -70,6 +70,8 @@
         </div>
       </ScrollArea>
 
+      <MobileSessionsSettingsSection v-else-if="settingsSection === 'mobile-sessions'" />
+
       <ScrollArea v-else-if="settingsSection === 'models'" class="settings-section-scroll" :horizontal="false">
         <div class="settings-section-scroll-content">
       <div class="project-management-grid">
@@ -327,6 +329,8 @@
       </div>
         </div>
       </ScrollArea>
+
+      <EnvironmentTemplatesSettings v-else-if="settingsSection === 'environment-templates'" :nodes="nodes.data.value || []" />
 
       <ScrollArea v-else-if="settingsSection === 'projects'" class="settings-section-scroll" :horizontal="false">
         <div class="settings-section-scroll-content">
@@ -701,6 +705,7 @@ import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
 import ControlPlaneTriggersView from "../triggers/ControlPlaneTriggersView.vue";
 import BasicSettingsSection from "./AppearanceSettingsSection.vue";
 import ChatBridgeSettingsSection from "./ChatBridgeSettingsSection.vue";
+import MobileSessionsSettingsSection from "./MobileSessionsSettingsSection.vue";
 import { useChatBridgeSettings } from "./useChatBridgeSettings";
 import { useImageSettings } from "./useImageSettings";
 import { useModelSettings } from "./useModelSettings";
@@ -714,6 +719,7 @@ import NodeDetailPanel from "./NodeDetailPanel.vue";
 import NodeAgentInstallDialog from "./NodeAgentInstallDialog.vue";
 import NodeStorageFolderPickerDialog from "./NodeStorageFolderPickerDialog.vue";
 import GeneratedTokenDialog from "./GeneratedTokenDialog.vue";
+import EnvironmentTemplatesSettings from "./EnvironmentTemplatesSettings.vue";
 import { nodeEndpointDisplay } from "./nodeEndpointDisplay";
 import { getThemePreference, saveThemePreference, type ThemePreference } from "../../../utils/theme";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
@@ -721,7 +727,7 @@ import { connectionStatusKeys, translateStatus } from "../../../i18n/status";
 import { translateApiError } from "../../../i18n/apiError";
 import { normalizeProxyOrigin, proxyClaimValidation } from "./controlPlaneProxyUi";
 
-type SettingsSection = "basic" | "chat" | "images" | "projects" | "nodes" | "models" | "triggers";
+type SettingsSection = "basic" | "chat" | "images" | "environment-templates" | "projects" | "nodes" | "models" | "triggers" | "mobile-sessions";
 type NodeDiagnosticLog = {
   route: string;
   method: string;
@@ -749,10 +755,12 @@ const DEFAULT_SELECT_VALUE = "__default__";
 const settingsSections = computed<Array<{ id: SettingsSection; label: string }>>(() => [
   { id: "nodes", label: t("settings.nodes") },
   { id: "images", label: t("settings.images") },
+  { id: "environment-templates", label: t("settings.environmentTemplates") },
   { id: "projects", label: t("settings.projects") },
   { id: "models", label: t("settings.models") },
   { id: "triggers", label: t("triggers.title") },
   { id: "chat", label: t("settings.chat") },
+  { id: "mobile-sessions", label: t("settings.mobileSessions.navigation") },
   { id: "basic", label: t("settings.basic") },
 ]);
 

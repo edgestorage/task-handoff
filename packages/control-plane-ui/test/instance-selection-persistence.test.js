@@ -17,7 +17,7 @@ const {
   useWorkbenchInstances,
 } = await import("../src/apps/control-plane/instance-list/useWorkbenchInstances.ts");
 
-function instance(id, createdAt) {
+function instance(id, createdAt, overrides = {}) {
   return {
     id,
     name: id,
@@ -25,8 +25,24 @@ function instance(id, createdAt) {
     connectionStatus: "online",
     status: "running",
     createdAt,
+    ...overrides,
   };
 }
+
+test("sorts instances by node name by default", () => {
+  storage.values.clear();
+  const instances = ref([
+    instance("instance-z", "2026-07-25T12:00:00.000Z", { name: "Zulu", nodeId: "node-a", node: { name: "Alpha" } }),
+    instance("instance-b", "2026-07-25T11:00:00.000Z", { name: "Beta", nodeId: "node-b", node: { name: "Bravo" } }),
+    instance("instance-a", "2026-07-25T10:00:00.000Z", { name: "Alpha", nodeId: "node-b", node: { name: "Bravo" } }),
+  ]);
+  const scope = effectScope();
+  const state = scope.run(() => useWorkbenchInstances({ instances }));
+
+  assert.equal(state.instanceSortMode.value, "node-asc");
+  assert.deepEqual(state.sortedInstances.value.map((item) => item.id), ["instance-z", "instance-a", "instance-b"]);
+  scope.stop();
+});
 
 test("restores the selected instance after the instance snapshot loads", async () => {
   storage.values.clear();

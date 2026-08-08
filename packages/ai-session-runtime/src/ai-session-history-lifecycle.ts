@@ -44,12 +44,13 @@ export function aiSessionHistoryItem(
   session: AiSessionStatus,
   archivedAt = new Date().toISOString(),
 ): AiSessionHistoryItem | undefined {
-  if (!resumableAgent(session.agent) || !session.providerSessionId || !session.cwd || !session.appSessionId) {
+  if (!resumableAgent(session.agent) || !session.providerSessionId || !session.cwd) {
     return undefined;
   }
   return AiSessionHistoryItemSchema.parse({
     id: session.id,
     agent: session.agent,
+    creationSource: session.creationSource,
     providerSessionId: session.providerSessionId,
     title: session.title,
     userPrompt: session.userPrompt,
@@ -65,6 +66,17 @@ export class AiSessionHistoryLifecycle {
 
   constructor(store: AiSessionHistoryStore) {
     this.store = store;
+  }
+
+  activate(sessions: readonly AiSessionStatus[], appSessions: readonly AppSessionPresenceCandidate[]) {
+    const activeIds = activeAppSessionIds(appSessions);
+    let activated = 0;
+    for (const session of sessions) {
+      if (!resumableAgent(session.agent) || !session.providerSessionId || !session.appSessionId || !activeIds.has(session.appSessionId)) continue;
+      activated += Number(this.store.remove(session.id));
+      activated += Number(this.store.removeIdentity(session.agent, session.providerSessionId));
+    }
+    return { activated, items: this.store.list() };
   }
 
   reconcile(

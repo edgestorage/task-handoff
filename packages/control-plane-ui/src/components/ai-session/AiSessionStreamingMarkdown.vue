@@ -18,9 +18,11 @@
 <script setup lang="ts">
 import { computed, nextTick, provide, ref, watch } from "vue";
 import MarkdownRender, { enableKatex, enableMermaid, setCustomComponents, useSmoothMarkdownStream } from "markstream-vue";
+import type { MarkdownCodeTools } from "@task-handoff/web-theme/markdown";
 import "markstream-vue/index.css";
 import { useStreamingMessagesStore } from "../../apps/control-plane/useStreamingMessagesStore";
 import AiSessionMarkdownNode from "./AiSessionMarkdownNode.vue";
+import { aiSessionMarkdownCodeToolsKey, defaultAiSessionMarkdownCodeTools } from "./markdown-code-tools";
 
 enableKatex();
 enableMermaid();
@@ -32,6 +34,7 @@ setCustomComponents(markdownScopeId, {
 });
 
 const props = withDefaults(defineProps<{
+  codeTools?: MarkdownCodeTools;
   content?: unknown;
   fileLinks?: boolean;
   instanceId: string;
@@ -41,6 +44,8 @@ const props = withDefaults(defineProps<{
   fileLinks: false,
   isLatest: false,
 });
+
+provide(aiSessionMarkdownCodeToolsKey, computed(() => props.codeTools ?? defaultAiSessionMarkdownCodeTools));
 
 const emit = defineEmits<{
   openFile: [href: string];

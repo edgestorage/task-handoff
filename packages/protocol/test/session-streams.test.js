@@ -3,6 +3,10 @@ import test from "node:test";
 
 import {
   AiSessionEventMetaSchema,
+  AiSessionCreateInputSchema,
+  AiSessionCreateResultSchema,
+  AiSessionCloseInputSchema,
+  AiSessionCloseResultSchema,
   AiSessionEventType,
   AiSessionDeltaResponseSchema,
   AiSessionHistoryIndexSchema,
@@ -14,6 +18,10 @@ import {
   AiSessionMentionFileSearchSchema,
   AiSessionMessageInputSchema,
   AiSessionMessageRefInputSchema,
+  AiSessionOpenAppInputSchema,
+  AiSessionOpenAppResultSchema,
+  AiSessionQueueEditInputSchema,
+  AiSessionQueueReorderInputSchema,
   AiSessionReferenceSchema,
   AiSessionRealtimeInputSchema,
   AiSessionStatusSchema,
@@ -26,6 +34,8 @@ import {
 } from "../src/ai-sessions.ts";
 import {
   AppSessionEventType,
+  activeAppSessionsSnapshotFromRecords,
+  appSessionAccessMode,
   applyAppSessionStreamEvent,
   emptyAppSessionsSnapshot,
 } from "../src/app-sessions.ts";
@@ -36,10 +46,29 @@ import {
 
 const now = "2026-07-13T00:00:00.000Z";
 
+test("app session access mode is derived from the authoritative session kind", () => {
+  assert.equal(appSessionAccessMode({ kind: "tty" }), "tty");
+  assert.equal(appSessionAccessMode({ kind: "gui" }), "vnc");
+  assert.equal(appSessionAccessMode({ kind: "web" }), "web");
+  assert.equal(appSessionAccessMode({ kind: "future-kind", appId: "terminal-tty" }), undefined);
+});
+
+test("AI session queue schemas expose revisioned edit and reorder inputs", () => {
+  const session = AiSessionStatusSchema.parse({
+    id: "session-a", agent: "codex", status: "idle", phase: "unknown", startedAt: now, updatedAt: now,
+  });
+  assert.deepEqual(session.queue, { revision: 0, pendingCount: 0, items: [] });
+  assert.deepEqual(AiSessionQueueEditInputSchema.parse({ expectedRevision: 2, message: "  updated  " }), { expectedRevision: 2, message: "updated" });
+  assert.deepEqual(AiSessionQueueReorderInputSchema.parse({ expectedRevision: 2, queueIds: ["q-2", "q-1"] }), { expectedRevision: 2, queueIds: ["q-2", "q-1"] });
+  assert.equal(AiSessionQueueEditInputSchema.safeParse({ message: "missing revision" }).success, false);
+  assert.equal(AiSessionQueueReorderInputSchema.safeParse({ expectedRevision: 2, queueIds: [], extra: true }).success, false);
+});
+
 test("AI session history schemas expose bounded strict summaries and resume results", () => {
   const item = {
     id: "ai-history-1",
     agent: "codex",
+    creationSource: "app-session",
     providerSessionId: "11111111-1111-4111-8111-111111111111",
     title: "Continue the implementation",
     userPrompt: "Build AI session history",
@@ -70,12 +99,54 @@ test("AI session history schemas expose bounded strict summaries and resume resu
     aiSessionId: item.id,
     providerSessionId: item.providerSessionId,
     appSessionId: "app-1",
+    creationSource: "app-session",
   }), {
     disposition: "resumed",
     aiSessionId: item.id,
     providerSessionId: item.providerSessionId,
     appSessionId: "app-1",
+    creationSource: "app-session",
   });
+});
+
+test("AI session create, open-app, and close schemas keep trusted identities server-side", () => {
+  const create = {
+    agent: "codex",
+    cwd: { type: "runtime-path", path: "/workspace/project" },
+    message: "Implement the change",
+    attachments: [],
+    references: [],
+    permissionMode: "auto-review",
+    clientRequestId: "request-create-1",
+  };
+  assert.deepEqual(AiSessionCreateInputSchema.parse(create), create);
+  assert.equal(AiSessionCreateInputSchema.safeParse({ ...create, cwd: { type: "runtime-path", path: "relative/path" } }).success, false);
+  assert.equal(AiSessionCreateInputSchema.safeParse({ ...create, providerSessionId: "client-controlled" }).success, false);
+  assert.deepEqual(AiSessionCreateResultSchema.parse({
+    disposition: "created",
+    aiSessionId: "ai-1",
+    providerSessionId: "thread-1",
+    creationSource: "ai-session",
+  }).creationSource, "ai-session");
+
+  const action = { clientRequestId: "request-action-1" };
+  assert.deepEqual(AiSessionOpenAppInputSchema.parse(action), action);
+  assert.deepEqual(AiSessionCloseInputSchema.parse(action), action);
+  assert.equal(AiSessionOpenAppInputSchema.safeParse({ ...action, cwd: "/tmp" }).success, false);
+  assert.equal(AiSessionCloseInputSchema.safeParse({ ...action, providerSessionId: "thread-1" }).success, false);
+  assert.equal(AiSessionOpenAppResultSchema.parse({
+    disposition: "opened",
+    aiSessionId: "ai-1",
+    providerSessionId: "thread-1",
+    appSessionId: "app-1",
+    creationSource: "ai-session",
+  }).appSessionId, "app-1");
+  assert.equal(AiSessionCloseResultSchema.parse({
+    disposition: "closed",
+    aiSessionId: "ai-1",
+    providerSessionId: "thread-1",
+    creationSource: "ai-session",
+  }).disposition, "closed");
 });
 
 test("AI session mention schemas enforce canonical references and safe file results", () => {
@@ -100,6 +171,7 @@ function session(overrides = {}) {
   return {
     id: "session-a",
     agent: "codex",
+    creationSource: "app-session",
     startedAt: now,
     updatedAt: now,
     counters: {},
@@ -262,6 +334,56 @@ test("app session reducer applies a strict continuous patch", () => {
   });
   assert.equal(applied.kind, "applied");
   assert.equal(applied.projection.snapshot.runningCount, 1);
+});
+
+test("app session authority removes terminal states and never restores event tombstones to the active snapshot", () => {
+  const snapshot = activeAppSessionsSnapshotFromRecords([
+    { id: "running", status: "running" },
+    { id: "stopped", status: "stopped" },
+    { id: "closed", status: "closed" },
+  ], now);
+  assert.deepEqual(snapshot.sessions.map((session) => session.id), ["running"]);
+
+  const normalizedSnapshotEvent = applyAppSessionStreamEvent(undefined, {
+    type: AppSessionEventType.Snapshot,
+    payload: {
+      meta: meta(),
+      snapshot: {
+        runningCount: 1,
+        problemCount: 0,
+        sessions: [{ id: "running", status: "running" }, { id: "stopped", status: "stopped" }],
+        updatedAt: now,
+      },
+    },
+  });
+  assert.equal(normalizedSnapshotEvent.kind, "applied");
+  assert.deepEqual(normalizedSnapshotEvent.projection.snapshot.sessions.map((session) => session.id), ["running"]);
+
+  const initial = applyAppSessionStreamEvent(undefined, {
+    type: AppSessionEventType.Snapshot,
+    payload: { meta: meta(), snapshot },
+  });
+  assert.equal(initial.kind, "applied");
+  const removed = applyAppSessionStreamEvent(initial.projection, {
+    type: AppSessionEventType.Removed,
+    payload: {
+      meta: meta({ revision: 2, previousRevision: 1, reason: "app-session-updated" }),
+      sessionId: "running",
+      tombstone: { id: "running", status: "stopped", bindings: [] },
+    },
+  });
+  assert.equal(removed.kind, "applied");
+  assert.deepEqual(removed.projection.snapshot.sessions, []);
+
+  const legacyStoppedPatch = applyAppSessionStreamEvent(initial.projection, {
+    type: AppSessionEventType.Patch,
+    payload: {
+      meta: meta({ revision: 2, previousRevision: 1, reason: "app-session-updated" }),
+      session: { id: "running", status: "stopped", bindings: [] },
+    },
+  });
+  assert.equal(legacyStoppedPatch.kind, "applied");
+  assert.deepEqual(legacyStoppedPatch.projection.snapshot.sessions, []);
 });
 
 test("stream schemas reject legacy metadata and describe retained recovery history", () => {

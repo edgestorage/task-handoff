@@ -573,7 +573,19 @@ async function fetchNodeAgentHealth(endpoint) {
   };
 }
 
-function canBindPort(host, port) {
+async function canBindPort(host, port) {
+  const occupied = await new Promise((resolve) => {
+    const socket = net.createConnection({ host: host === "0.0.0.0" ? "127.0.0.1" : host, port });
+    const finish = (connected) => {
+      socket.removeAllListeners();
+      socket.destroy();
+      resolve(connected);
+    };
+    socket.once("connect", () => finish(true));
+    socket.once("error", () => finish(false));
+    socket.setTimeout(250, () => finish(false));
+  });
+  if (occupied) return false;
   return new Promise((resolve) => {
     const server = net.createServer();
     server.once("error", () => resolve(false));
@@ -584,14 +596,14 @@ function canBindPort(host, port) {
   });
 }
 
-async function findAvailablePort(host, preferredPort, attempts = 20) {
+async function findAvailablePort(host, preferredPort, attempts = 20, label = "Desktop service") {
   for (let offset = 0; offset < attempts; offset += 1) {
     const port = preferredPort + offset;
     if (await canBindPort(host, port)) {
       return port;
     }
   }
-  throw new Error(`No available node-agent port found starting at ${preferredPort}.`);
+  throw new Error(`No available ${label} port found starting at ${preferredPort}.`);
 }
 
 function startControlPlane(options = {}) {
@@ -605,7 +617,9 @@ function startControlPlane(options = {}) {
   }
 
   const nodeCommand = resolveNodeCommand(process.env, { packaged: app.isPackaged, execPath: process.execPath });
-  const args = buildControlPlaneArgs({ root });
+  const host = options.host || resolveControlPlaneHost();
+  const port = options.port || resolveControlPlanePort();
+  const args = buildControlPlaneArgs({ root, host, port });
   const processCwd = resolveDesktopProcessCwd(process.env, { packaged: app.isPackaged, root });
   fs.mkdirSync(processCwd, { recursive: true });
   controlPlaneProcess = spawn(nodeCommand, args, {
@@ -615,8 +629,8 @@ function startControlPlane(options = {}) {
         packaged: app.isPackaged,
         version: app.getVersion(),
         overrides: {
-          TASK_HANDOFF_CONTROL_PLANE_HOST: resolveControlPlaneHost(),
-          TASK_HANDOFF_CONTROL_PLANE_PORT: String(resolveControlPlanePort()),
+          TASK_HANDOFF_CONTROL_PLANE_HOST: host,
+          TASK_HANDOFF_CONTROL_PLANE_PORT: String(port),
           TASK_HANDOFF_NODE_AGENT_CONTROL_ENDPOINT: options.nodeAgentControlEndpoint || resolveNodeAgentControlEndpoint(),
           TASK_HANDOFF_NODE_AGENT_ENDPOINT: options.nodeAgentEndpoint || nodeAgentUrl(),
         },
@@ -667,6 +681,8 @@ function startNodeAgent(options = {}) {
           TASK_HANDOFF_NODE_AGENT_PORT: String(port),
           TASK_HANDOFF_BUNDLED_RUNTIME_DIR: process.env.TASK_HANDOFF_BUNDLED_RUNTIME_DIR || path.join(root, "release", "runtime-artifacts"),
           TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV: JSON.stringify([nodeCommand, validation.cliEntry, "web"]),
+          TASK_HANDOFF_LOCAL_INSTANCE_PORT_CONFLICT: "allocate",
+          TASK_HANDOFF_NODE_AGENT_PORT_CONFLICT: "allocate",
         },
       }),
     },
@@ -729,7 +745,7 @@ async function waitForNodeAgent(endpoint, child, attempts = 80) {
     try {
       const response = await fetchNodeAgentHealth(endpoint);
       if (response.ok && response.payload?.data?.role === "node-agent") {
-        return;
+        return response.payload.data;
       }
     } catch {
       // The agent is still starting.
@@ -816,15 +832,18 @@ async function boot() {
       `The existing Desktop node agent pid=${previousNodeAgent.owner.pid} could not be verified and was not stopped.`,
     );
   }
-  const url = controlPlaneUrl();
+  const controlPlaneHost = resolveControlPlaneHost();
+  const controlPlanePort = await findAvailablePort(controlPlaneHost, resolveControlPlanePort(), 20, "control-plane");
+  const url = localHttpUrl(controlPlaneHost, controlPlanePort);
   const nodeAgentHost = resolveNodeAgentHost();
-  const nodeAgentPort = await findAvailablePort(nodeAgentHost, resolveNodeAgentPort());
-  const nodeAgentEndpoint = localHttpUrl(nodeAgentHost, nodeAgentPort);
+  const nodeAgentPort = resolveNodeAgentPort();
   const nodeAgentControlEndpoint = resolveNodeAgentControlEndpoint();
   const nodeAgent = startNodeAgent({ host: nodeAgentHost, port: nodeAgentPort });
   try {
-    await waitForNodeAgent(nodeAgentControlEndpoint, nodeAgent);
-    const child = startControlPlane({ nodeAgentEndpoint, nodeAgentControlEndpoint });
+    const nodeAgentHealth = await waitForNodeAgent(nodeAgentControlEndpoint, nodeAgent);
+    const actualNodeAgentPort = Number(nodeAgentHealth?.listener?.port) || nodeAgentPort;
+    const nodeAgentEndpoint = localHttpUrl(nodeAgentHost, actualNodeAgentPort);
+    const child = startControlPlane({ host: controlPlaneHost, port: controlPlanePort, nodeAgentEndpoint, nodeAgentControlEndpoint });
     await waitForControlPlane(url, child);
     createWindow(url);
   } catch (error) {

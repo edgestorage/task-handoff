@@ -33,6 +33,8 @@ import {
 } from "./schemas.ts";
 import { NodeModelRegistry } from "./models/registry.ts";
 import { NodeUpdateJobs } from "./updates.ts";
+import { EnvironmentTemplateStore } from "./environment-templates/store.ts";
+import { InstancePrivateConfigStore } from "./instances/private-config-store.ts";
 import {
   desiredControlledInstanceVersion,
   runtimeVersionStateForActual,
@@ -60,6 +62,26 @@ function workspacePolicyForSource(source: Project["source"]) {
     return WorkspacePolicySchema.parse({ mode: "local-bind", path: "/workspace", readOnly: false });
   }
   return WorkspacePolicySchema.parse({ mode: "git-clone", path: "/workspace", readOnly: false });
+}
+
+function managedVolumesForDockerInstance(instanceId: string, nodeId: string, source: Project["source"]) {
+  const containerName = `task-handoff-${instanceId.replace(/[^a-zA-Z0-9_.-]/g, "-")}`;
+  const roles = [
+    { role: "data" as const, suffix: "data", mountPath: "/data" },
+    { role: "agent-home" as const, suffix: "agent-home", mountPath: "/home/agent" },
+    ...(source.type === "local-folder" ? [] : [{ role: "workspace" as const, suffix: "workspace", mountPath: "/workspace" }]),
+  ];
+  return roles.map(({ role, suffix, mountPath }) => ({
+    role,
+    name: `${containerName}-${suffix}`,
+    mountPath,
+    labels: {
+      "task-handoff.owner": "task-handoff",
+      "task-handoff.instance-id": instanceId,
+      "task-handoff.node-id": nodeId,
+      "task-handoff.volume-role": role,
+    },
+  }));
 }
 
 function projectForInstance(instance: ControlledInstance): Project {
@@ -139,6 +161,16 @@ function defaultAccessStrategyForRuntime(type: NodeRuntime["type"]) {
 
 export class ControlledInstanceCollection extends JsonCollection<ControlledInstance> {
   private onStored?: (instance: ControlledInstance) => void;
+  private readonly privateConfigs: InstancePrivateConfigStore;
+
+  constructor(
+    directory: string,
+    options: ConstructorParameters<typeof JsonCollection<ControlledInstance>>[1],
+    privateConfigs: InstancePrivateConfigStore,
+  ) {
+    super(directory, options);
+    this.privateConfigs = privateConfigs;
+  }
 
   setOnStored(listener: (instance: ControlledInstance) => void) {
     this.onStored = listener;
@@ -146,12 +178,36 @@ export class ControlledInstanceCollection extends JsonCollection<ControlledInsta
 
   override put(record: ControlledInstance) {
     const persistedRevision = super.get(record.id)?.stateRevision || 0;
+    const existingPrivateConfig = this.privateConfigs.get(record.id);
+    const instanceCredential = record.registrationToken || existingPrivateConfig?.instanceCredential;
+    if (instanceCredential) {
+      this.privateConfigs.materialize(record.id, instanceCredential, existingPrivateConfig?.environment || {});
+    }
+    const { registrationToken: _registrationToken, ...persistentRecord } = record;
     const stored = super.put(ControlledInstanceSchema.parse({
-      ...record,
+      ...persistentRecord,
       stateRevision: Math.max(record.stateRevision || 0, persistedRevision) + 1,
     }));
-    this.onStored?.(stored);
-    return stored;
+    const hydrated = this.hydrate(stored);
+    this.onStored?.(hydrated);
+    return hydrated;
+  }
+
+  override get(id: string) {
+    const stored = super.get(id);
+    return stored ? this.hydrate(stored) : undefined;
+  }
+
+  override list() {
+    return super.list().map((instance) => this.hydrate(instance));
+  }
+
+  private hydrate(instance: ControlledInstance) {
+    const instanceCredential = this.privateConfigs.get(instance.id)?.instanceCredential || instance.registrationToken;
+    return ControlledInstanceSchema.parse({
+      ...instance,
+      registrationToken: instanceCredential,
+    });
   }
 }
 
@@ -161,6 +217,8 @@ export class NodeAgentState {
   readonly localFolders: JsonCollection<NodeLocalFolder>;
   readonly nodeRuntimes: JsonCollection<NodeRuntime>;
   readonly controlledInstances: ControlledInstanceCollection;
+  readonly environmentTemplates: EnvironmentTemplateStore;
+  readonly instancePrivateConfigs: InstancePrivateConfigStore;
   readonly modelRegistry: NodeModelRegistry;
   readonly updateJobs: NodeUpdateJobs;
   readonly node: Node;
@@ -173,6 +231,7 @@ export class NodeAgentState {
     this.nodeId = nodeId;
     this.localFolders = new JsonCollection(paths.localFoldersDir, { schema: NodeLocalFolderSchema, sanitize: sanitizeStoredNodeLocalFolder });
     this.nodeRuntimes = new JsonCollection(paths.nodeRuntimesDir, { schema: NodeRuntimeSchema });
+    this.instancePrivateConfigs = new InstancePrivateConfigStore(paths);
     this.controlledInstances = new ControlledInstanceCollection(paths.controlledInstancesDir, {
       schema: ControlledInstanceSchema,
       sanitize: (value) => sanitizeStoredControlledInstance(value, (warning) => {
@@ -181,7 +240,8 @@ export class NodeAgentState {
           ...warning,
         }));
       }),
-    });
+    }, this.instancePrivateConfigs);
+    this.environmentTemplates = new EnvironmentTemplateStore(paths);
     this.modelRegistry = new NodeModelRegistry(paths, nodeId, {
       has: (id) => Boolean(this.controlledInstances.get(id)),
       list: () => this.listInstances(),
@@ -214,7 +274,9 @@ export class NodeAgentState {
     this.localFolders.init();
     for (const folder of this.localFolders.list()) this.localFolders.put(folder);
     this.nodeRuntimes.init();
+    this.instancePrivateConfigs.init();
     this.controlledInstances.init();
+    this.environmentTemplates.init();
     this.modelRegistry.init();
     this.updateJobs.init();
     this.updateJobs.reconcileRollouts(this.controlledInstances.list(), desiredControlledInstanceVersion(), { processStarted: true });
@@ -453,7 +515,24 @@ export class NodeAgentState {
     const timestamp = now();
     const id = input.id || createId("inst");
     const source = ProjectSourceSchema.parse(input.source);
-    if (runtimeRequiresImage(runtime) && (!input.imageSelection || !input.image)) {
+    const environmentSource = input.environmentSource || (input.imageSelection ? { type: "image" as const, imageSelection: input.imageSelection } : undefined);
+    if (environmentSource?.type === "template" && runtime.type !== "docker") {
+      const error = new Error(`Runtime ${runtime.name} does not support environment templates.`);
+      Object.assign(error, { statusCode: 409, code: "ENVIRONMENT_TEMPLATE_RUNTIME_UNSUPPORTED" });
+      throw error;
+    }
+    const environmentTemplate = environmentSource?.type === "template" ? this.environmentTemplates.get(environmentSource.environmentTemplateId) : undefined;
+    if (environmentSource?.type === "template" && (!environmentTemplate || environmentTemplate.status !== "ready")) {
+      const error = new Error(`Environment template ${environmentSource.environmentTemplateId} is not ready on node ${this.nodeId}.`);
+      Object.assign(error, { statusCode: environmentTemplate ? 409 : 404, code: environmentTemplate ? "ENVIRONMENT_TEMPLATE_NOT_READY" : "ENVIRONMENT_TEMPLATE_NOT_FOUND" });
+      throw error;
+    }
+    if (environmentTemplate && environmentTemplate.nodeId !== this.nodeId) {
+      const error = new Error(`Environment template ${environmentTemplate.id} belongs to node ${environmentTemplate.nodeId}, not ${this.nodeId}.`);
+      Object.assign(error, { statusCode: 409, code: "ENVIRONMENT_TEMPLATE_NODE_MISMATCH" });
+      throw error;
+    }
+    if (runtimeRequiresImage(runtime) && (!environmentSource || (environmentSource.type === "image" && !input.image))) {
       const error = new Error(`Runtime ${runtime.name} requires an image.`);
       Object.assign(error, { statusCode: 400, code: "NODE_RUNTIME_IMAGE_REQUIRED" });
       throw error;
@@ -468,7 +547,26 @@ export class NodeAgentState {
       Object.assign(error, { statusCode: 409, code: "LOCAL_RUNTIME_INSTANCE_EXISTS" });
       throw error;
     }
-    const imageSnapshot = input.image ? InstanceImageSnapshotSchema.parse(input.image) : undefined;
+    const imageSnapshot = environmentTemplate
+      ? InstanceImageSnapshotSchema.parse({
+          id: environmentTemplate.id,
+          origin: "custom",
+          name: environmentTemplate.name,
+          repository: "task-handoff/environment-template",
+          tag: environmentTemplate.id.toLowerCase().replace(/[^a-z0-9_.-]/g, "-"),
+          requestedReference: environmentTemplate.internalTag,
+          resolvedDigest: environmentTemplate.imageId,
+          resolvedReference: environmentTemplate.internalTag,
+          downloadSizeBytes: environmentTemplate.sizeBytes || undefined,
+          pullPolicy: "if-not-present",
+          capabilities: [],
+          optionalApps: [],
+          defaultEnv: {},
+          labels: {},
+          createdAt: environmentTemplate.createdAt,
+          updatedAt: environmentTemplate.updatedAt,
+        })
+      : input.image ? InstanceImageSnapshotSchema.parse(input.image) : undefined;
     const workspacePath = runtime.type === "local" && source.type === "local-folder" ? path.resolve(source.path) : undefined;
     const instance = ControlledInstanceSchema.parse({
       id,
@@ -479,16 +577,25 @@ export class NodeAgentState {
       projectId: input.projectId,
       nodeId: this.nodeId,
       runtimeId: runtime.id,
-      imageSelection: input.imageSelection,
+      imageSelection: environmentSource?.type === "image" ? environmentSource.imageSelection : undefined,
+      environmentSource,
+      environmentTemplateOrigin: environmentTemplate ? {
+        templateId: environmentTemplate.id,
+        nodeId: environmentTemplate.nodeId,
+        imageId: environmentTemplate.imageId,
+        name: environmentTemplate.name,
+        platform: environmentTemplate.platform,
+        architecture: environmentTemplate.architecture,
+      } : undefined,
       imageSnapshot,
-      imageProvisioning: imageSnapshot && runtime.type === "docker" ? {
+      imageProvisioning: imageSnapshot && runtime.type === "docker" && environmentSource?.type !== "template" ? {
         phase: "checking-image",
         requestedReference: imageSnapshot.requestedReference,
         generation: 0,
         startedAt: timestamp,
         updatedAt: timestamp,
       } : undefined,
-      status: imageSnapshot && runtime.type === "docker" ? "provisioning" : "created",
+      status: imageSnapshot && runtime.type === "docker" && environmentSource?.type !== "template" ? "provisioning" : "created",
       health: "unknown",
       connectionStatus: "unknown",
       agentStatus: "unknown",
@@ -504,12 +611,16 @@ export class NodeAgentState {
       },
       workspace: runtime.type === "local" ? { mode: "local-bind", status: "unknown", path: workspacePath } : { status: "unknown" },
       target: { strategy: "node-proxy", status: "unknown" },
-      runtime: runtime.type === "local" ? { kind: "local", workspacePath, labels: { "task-handoff.runtime-kind": "local" } } : { labels: {} },
+      runtime: runtime.type === "local"
+        ? { kind: "local", workspacePath, labels: { "task-handoff.runtime-kind": "local" }, managedVolumes: [] }
+        : { labels: {}, managedVolumes: managedVolumesForDockerInstance(id, this.nodeId, source) },
       registrationToken: createSecret(),
       createdAt: timestamp,
       updatedAt: timestamp,
     });
-    return this.controlledInstances.put(instance);
+    const stored = this.controlledInstances.put(instance);
+    this.instancePrivateConfigs.materialize(stored.id, stored.registrationToken, this.resolvedAssignedModelEnvironment(stored.id));
+    return stored;
   }
 
   registerInstance(id: string, input: ControlledInstanceRegister, token?: string) {
@@ -623,6 +734,7 @@ export class NodeAgentState {
 
   context(instance: ControlledInstance, modelEnv: Record<string, string> = this.resolvedAssignedModelEnvironment(instance.id)): ExecutorContext {
     const image = instance.imageSnapshot || InstanceImageSnapshotSchema.parse({ id: "img_localhost", origin: "custom", name: "Localhost", repository: "localhost", tag: "local", requestedReference: "localhost:local", pullPolicy: "if-not-present", capabilities: [], optionalApps: [], defaultEnv: {}, labels: {}, createdAt: instance.createdAt, updatedAt: instance.updatedAt });
+    const privateConfig = this.instancePrivateConfigs.materialize(instance.id, instance.registrationToken, modelEnv);
     return {
       project: projectForInstance(instance),
       image,
@@ -631,6 +743,7 @@ export class NodeAgentState {
       instance,
       nodeAgentUrl: this.containerUrl,
       modelEnv,
+      privateConfigPath: this.instancePrivateConfigs.filePath(privateConfig.instanceId),
     };
   }
 }

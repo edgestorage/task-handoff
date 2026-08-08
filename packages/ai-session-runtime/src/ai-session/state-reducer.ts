@@ -107,6 +107,7 @@ export function applyAiSessionPatch(
     ...patch,
     id: current.id,
     agent: current.agent,
+    creationSource: current.creationSource,
     startedAt: current.startedAt,
     updatedAt,
     status: patch.status ? normalizeAiSessionLifecycle(patch.status) : current.status,

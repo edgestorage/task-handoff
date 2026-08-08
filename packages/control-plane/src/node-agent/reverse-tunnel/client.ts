@@ -49,6 +49,8 @@ export function connectReverseTunnel(app: ReverseTunnelHost, input: ReverseTunne
   const httpStreams = new Map<string, { tunnel: WebSocket; controller: AbortController }>();
   const requests = new Map<string, AbortController>();
   let disposeEventForwarderOutput: (() => void) | undefined;
+  let keepAliveTimer: ReturnType<typeof setInterval> | undefined;
+  let keepAliveAcknowledged = true;
   socket.on("error", (error) => {
     app.log.warn({
       nodeId: input.nodeId,
@@ -120,8 +122,22 @@ export function connectReverseTunnel(app: ReverseTunnelHost, input: ReverseTunne
   socket.on("open", () => {
     socket.send(JSON.stringify({ type: "node-agent.identify", nodeId: input.nodeId, serverTime: new Date().toISOString() }));
     disposeEventForwarderOutput = app.nodeAgentEventForwarder?.addOutput(socket);
+    keepAliveTimer = setInterval(() => {
+      if (!keepAliveAcknowledged) {
+        socket.terminate();
+        return;
+      }
+      keepAliveAcknowledged = false;
+      socket.ping();
+    }, 25_000);
+    keepAliveTimer.unref?.();
+  });
+  socket.on("pong", () => {
+    keepAliveAcknowledged = true;
   });
   socket.on("close", () => {
+    if (keepAliveTimer) clearInterval(keepAliveTimer);
+    keepAliveTimer = undefined;
     for (const streamId of streams.keys()) {
       closeStream(streamId, 1001, "Reverse tunnel disconnected.");
     }

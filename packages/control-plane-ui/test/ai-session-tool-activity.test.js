@@ -14,7 +14,7 @@ const types = fs.readFileSync(new URL("../src/api/types.ts", import.meta.url), "
 test("tool activity uses the authoritative API projection", () => {
   assert.match(types, /AiSessionTool as ProtocolAiSessionTool/);
   assert.match(types, /export type AiSessionTool = ProtocolAiSessionTool/);
-  assert.match(types, /export type AiSessionSummary = ProtocolAiSessionSummary/);
+  assert.match(types, /export type AiSessionSummary = SharedControlPlaneAiSessionSummary/);
   assert.match(activity, /props\.toolCallsSinceLastMessage/);
   assert.match(activity, /props\.currentTool\?\.name/);
   assert.match(activity, /props\.summary/);
@@ -89,7 +89,7 @@ test("both detail surfaces share the complete AI result while cards remain uncha
   assert.match(result, /<AiSessionStreamingMarkdown/);
   assert.match(result, /<AiSessionToolActivity[\s\S]*?:current-tool="session\.currentTool"[\s\S]*?:phase="session\.phase"[\s\S]*?:status="session\.status"[\s\S]*?:summary="session\.summary"[\s\S]*?:tool-calls-since-last-message="session\.toolCallsSinceLastMessage"[\s\S]*?:tone="tone"/);
   assert.match(result, /<AiSessionSubAgents/);
-  assert.match(result, /v-for="item in session\.queue\.items"/);
+  assert.match(result, /v-for="item in displayedQueueItems"/);
   assert.match(result, /v-if="canResolveApproval"/);
   assert.match(result, /\$emit\('resolveApproval', 'allow'\)/);
   assert.match(floatingDock, /tone="board"/);

@@ -5,19 +5,20 @@
         class="ai-board-card"
         :data-state="card.session.status"
         :data-selected="selected ? 'true' : undefined"
+        :data-unread="card.session.unread ? 'true' : undefined"
         role="button"
         tabindex="0"
         @click="$emit('selectCard', card.key)"
         @keydown.enter.prevent="$emit('selectCard', card.key)"
         @keydown.space.prevent="$emit('selectCard', card.key)"
       >
+    <span v-if="card.session.unread" class="ai-session-unread-dot" :aria-label="t('sessions.actions.unread')" :title="t('sessions.actions.unread')" />
     <div class="ai-board-card-headline" :data-show-workspace="showWorkspace ? 'true' : undefined">
       <button type="button" class="ai-board-instance" @click.stop="$emit('selectCard', card.key)">
         <span class="ai-board-dot" />
         <span class="ai-board-identity">
           <span class="ai-board-primary-line">
             <strong>{{ instanceDisplayName(card.instance) }}</strong>
-            <span v-if="card.session.unread" class="ai-session-unread-dot" :aria-label="t('sessions.actions.unread')" :title="t('sessions.actions.unread')" />
           </span>
           <small class="ai-board-secondary-line">
             <span>{{ aiSessionAppDisplayName(card.appTab, card.session.agent, t) }}</span>
@@ -119,7 +120,7 @@
           </template>
         </DropdownMenuContent>
       </DropdownMenu>
-      <button type="button" class="ai-board-open ai-session-card-action" :aria-label="t('sessions.actions.openAppFor', { agent: card.session.agent })" :title="t('sessions.actions.openApp')" @click.stop="$emit('openAiSessionApp', card.instance, card.session)">
+      <button v-if="card.session.appSessionId || card.session.actions?.openApp" type="button" class="ai-board-open ai-session-card-action" :aria-label="t('sessions.actions.openAppFor', { agent: card.session.agent })" :title="t('sessions.actions.openApp')" @click.stop="$emit('openAiSessionApp', card.instance, card.session)">
         <ExternalLink :size="14" />
       </button>
       <DropdownMenu>
@@ -131,7 +132,7 @@
         <DropdownMenuContent class="ai-board-card-menu" align="end" :side-offset="6" @click.stop>
           <DropdownMenuItem class="ai-board-card-menu-item danger" :disabled="isStoppingAppSession" @select="$emit('stopAppSession', card)">
             <Square :size="13" />
-            <span>{{ isStoppingAppSession ? t("sessions.actions.closingApp") : t("sessions.actions.closeApp") }}</span>
+            <span>{{ isStoppingAppSession ? t("sessions.actions.closingSession") : t("sessions.actions.closeSession") }}</span>
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -140,13 +141,14 @@
     </ContextMenuTrigger>
     <AiSessionCardContextMenu
       :bound-trigger-count="boundTriggers(card).length"
-      has-app-session
+      :has-app-session="Boolean(card.session.appSessionId)"
+      :can-open-app="Boolean(card.session.appSessionId || card.session.actions?.openApp)"
       :is-stopping-app-session="isStoppingAppSession"
       :is-trigger-bound="(configHash) => isTriggerBound(card, configHash)"
       :is-trigger-busy="(configHash) => triggerBusyKey === triggerActionKey(card, configHash)"
       :short-hash="shortHash"
       :trigger-templates="triggerTemplates"
-      @close-app="$emit('stopAppSession', card)"
+      @close-session="$emit('stopAppSession', card)"
       @open-app="$emit('openAiSessionApp', card.instance, card.session)"
       @toggle-trigger="$emit('toggleTrigger', card, $event)"
     />
@@ -315,12 +317,15 @@ const filteredTriggerTemplates = computed(() => {
 }
 
 .ai-session-unread-dot {
-  flex: 0 0 auto;
+  position: absolute;
+  top: 13px;
+  right: 14px;
+  z-index: 4;
   width: 7px;
   height: 7px;
   border-radius: 999px;
-  background: var(--brand-accent);
-  box-shadow: 0 0 0 3px var(--brand-accent-soft);
+  background: var(--status-info);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--status-info) 18%, transparent);
 }
 
 .ai-board-secondary-line {
@@ -507,6 +512,10 @@ const filteredTriggerTemplates = computed(() => {
 .ai-board-card:focus-within .ai-board-card-tools {
   opacity: 1;
   pointer-events: auto;
+}
+
+.ai-board-card[data-unread="true"] .ai-board-card-tools {
+  right: 28px;
 }
 
 .ai-board-turn-nav {

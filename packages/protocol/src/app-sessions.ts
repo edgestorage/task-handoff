@@ -23,6 +23,23 @@ export const AppSessionStatusSchema = z.enum([
   "unknown",
 ]);
 
+export const AppSessionAccessModeSchema = z.enum(["tty", "vnc", "web"]);
+
+export const AppSessionAccessLeaseSchema = z
+  .object({
+    mode: AppSessionAccessModeSchema,
+    url: z.string().trim().min(1).max(4096),
+    token: z.string().trim().min(1).max(512),
+    expiresAt: z.string().datetime(),
+  })
+  .strict();
+
+export const AppSessionAccessRevocationSchema = z
+  .object({ revoked: z.boolean() })
+  .strict();
+
+const HIDDEN_APP_SESSION_STATUSES = new Set<AppSessionStatus>(["stopped", "failed", "exited", "closed", "terminated"]);
+
 export const AppSessionBindingSchema = z
   .object({
     type: z.enum(["app-session", "provider-session", "adapter-key"]),
@@ -169,7 +186,12 @@ export function applyAppSessionStreamEvent(
     if (current?.streamId === meta.streamId && meta.revision < current.revision) return { kind: "stale", projection: current };
     return {
       kind: "applied",
-      projection: AppSessionsStateSchema.parse({ streamId: meta.streamId, revision: meta.revision, lastEventAt: meta.generatedAt, snapshot: event.payload.snapshot }),
+      projection: AppSessionsStateSchema.parse({
+        streamId: meta.streamId,
+        revision: meta.revision,
+        lastEventAt: meta.generatedAt,
+        snapshot: activeAppSessionsSnapshotFromRecords(event.payload.snapshot.sessions, event.payload.snapshot.updatedAt),
+      }),
     };
   }
   if (!current || current.streamId !== meta.streamId) {
@@ -183,12 +205,13 @@ export function applyAppSessionStreamEvent(
   const sessions = [...current.snapshot.sessions];
   if (event.type === AppSessionEventType.Patch) {
     const index = sessions.findIndex((session) => session.id === event.payload.session.id);
-    if (index < 0) sessions.push(event.payload.session);
+    if (!isVisibleAppSessionStatus(event.payload.session.status)) {
+      if (index >= 0) sessions.splice(index, 1);
+    } else if (index < 0) sessions.push(event.payload.session);
     else sessions[index] = event.payload.session;
   } else {
     const index = sessions.findIndex((session) => session.id === event.payload.sessionId);
     if (index >= 0) sessions.splice(index, 1);
-    if (event.payload.tombstone) sessions.push(event.payload.tombstone);
   }
   const snapshot = appSessionsSnapshotFromRecords(sessions, meta.generatedAt);
   return {
@@ -205,6 +228,13 @@ export function appSessionsSnapshotFromRecords(sessions: Array<Record<string, un
     sessions: parsedSessions,
     updatedAt: now,
   });
+}
+
+export function activeAppSessionsSnapshotFromRecords(sessions: Array<Record<string, unknown>>, now = new Date().toISOString()) {
+  return appSessionsSnapshotFromRecords(
+    sessions.filter((session) => isVisibleAppSessionStatus(typeof session.status === "string" ? session.status : undefined)),
+    now,
+  );
 }
 
 export function normalizeAppSessionRecord(session: Record<string, unknown>) {
@@ -229,6 +259,17 @@ export function normalizeAppSessionStatus(status: string | undefined): AppSessio
   if (value === "ended") return "closed";
   if (value === "terminating") return "stopping";
   return AppSessionStatusSchema.options.includes(value as AppSessionStatus) ? value as AppSessionStatus : "unknown";
+}
+
+export function isVisibleAppSessionStatus(status: string | undefined) {
+  return !HIDDEN_APP_SESSION_STATUSES.has(normalizeAppSessionStatus(status));
+}
+
+export function appSessionAccessMode(session: Record<string, unknown>): AppSessionAccessMode | undefined {
+  if (session.kind === "tty") return "tty";
+  if (session.kind === "gui") return "vnc";
+  if (session.kind === "web") return "web";
+  return undefined;
 }
 
 export function appSessionBindingKeys(session: Record<string, unknown>) {
@@ -317,6 +358,8 @@ export function emptyAppSessionsSnapshot(now = new Date().toISOString()) {
 
 export type AppSessionRecord = z.infer<typeof AppSessionRecordSchema>;
 export type AppSessionStatus = z.infer<typeof AppSessionStatusSchema>;
+export type AppSessionAccessMode = z.infer<typeof AppSessionAccessModeSchema>;
+export type AppSessionAccessLease = z.infer<typeof AppSessionAccessLeaseSchema>;
 export type AppSessionBinding = z.infer<typeof AppSessionBindingSchema>;
 export type AppSessionsSnapshot = z.infer<typeof AppSessionsSnapshotSchema>;
 export type AppSessionsState = z.infer<typeof AppSessionsStateSchema>;

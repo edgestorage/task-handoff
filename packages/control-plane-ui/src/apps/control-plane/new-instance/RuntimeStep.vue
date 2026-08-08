@@ -2,7 +2,7 @@
   <section class="wizard-section">
     <div class="section-head">
       <span>{{ t("instances.create.runtime") }}</span>
-      <button v-if="selectedRuntimeRequiresImage" type="button" @click="$emit('update:newImageOpen', !newImageOpen)">{{ newImageOpen ? t("instances.create.useExisting") : t("instances.create.addImage") }}</button>
+      <button v-if="selectedRuntimeRequiresImage && runtimeDraft.environmentSourceType === 'image'" type="button" @click="$emit('update:newImageOpen', !newImageOpen)">{{ newImageOpen ? t("instances.create.useExisting") : t("instances.create.addImage") }}</button>
     </div>
 
     <div class="runtime-summary">
@@ -25,7 +25,20 @@
           <ControlPlaneSelectItem v-for="runtime in runtimesForSelectedNode" :key="runtime.id" :value="runtime.id">{{ runtime.name }}</ControlPlaneSelectItem>
         </ControlPlaneSelect>
       </label>
-      <div v-if="selectedRuntimeRequiresImage && !newImageOpen" class="image-picker-field">
+      <div v-if="selectedRuntimeRequiresImage" class="environment-source-field">
+        <span>{{ t("instances.create.environmentSource") }}</span>
+        <div class="environment-source-control" role="group" :aria-label="t('instances.create.environmentSource')">
+          <button type="button" :class="{ active: runtimeDraft.environmentSourceType === 'image' }" :aria-pressed="runtimeDraft.environmentSourceType === 'image'" @click="selectEnvironmentSource('image')">
+            <Image :size="15" />
+            <span>{{ t("instances.create.image") }}</span>
+          </button>
+          <button type="button" :class="{ active: runtimeDraft.environmentSourceType === 'template' }" :aria-pressed="runtimeDraft.environmentSourceType === 'template'" @click="selectEnvironmentSource('template')">
+            <Package :size="15" />
+            <span>{{ t("instances.create.environmentTemplate") }}</span>
+          </button>
+        </div>
+      </div>
+      <div v-if="selectedRuntimeRequiresImage && runtimeDraft.environmentSourceType === 'image' && !newImageOpen" class="image-picker-field">
         <span>{{ t("instances.create.image") }}</span>
         <Popover v-model:open="imagePickerOpen">
           <PopoverTrigger as-child>
@@ -98,7 +111,44 @@
           </PopoverContent>
         </Popover>
       </div>
-      <label v-if="selectedImage?.origin === 'market' && selectedImage.availableTags.length > 1 && !newImageOpen">
+      <div v-if="selectedRuntimeRequiresImage && runtimeDraft.environmentSourceType === 'template'" class="image-picker-field">
+        <span>{{ t("instances.create.environmentTemplate") }}</span>
+        <Popover v-model:open="templatePickerOpen">
+          <PopoverTrigger as-child>
+            <button type="button" class="image-picker-trigger template-picker-trigger">
+              <Package :size="20" />
+              <span v-if="selectedTemplate" class="image-picker-trigger-copy">
+                <strong>{{ selectedTemplate.name }}</strong>
+                <small>{{ templateMeta(selectedTemplate) }}</small>
+              </span>
+              <span v-else class="image-picker-placeholder">{{ t("instances.create.selectEnvironmentTemplate") }}</span>
+              <ChevronDown :size="16" />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent class="image-picker-popover" align="start" :collision-padding="12" :side-offset="6" :style="{ width: 'var(--reka-popover-trigger-width)', padding: '4px' }">
+            <label class="image-picker-search">
+              <Search :size="14" />
+              <input ref="templateSearchInput" v-model="templateSearch" type="search" :placeholder="t('instances.create.searchEnvironmentTemplates')" :aria-label="t('instances.create.searchEnvironmentTemplates')" />
+            </label>
+            <ScrollArea class="image-picker-list">
+              <div class="image-picker-list-content" role="listbox" :aria-label="t('instances.create.environmentTemplate')">
+                <div class="image-picker-options">
+                  <button v-for="template in filteredTemplates" :key="template.id" type="button" role="option" class="image-picker-option template-picker-option" :class="{ selected: template.id === runtimeDraft.environmentTemplateId }" :aria-selected="template.id === runtimeDraft.environmentTemplateId" @click="selectTemplate(template.id)">
+                    <Package :size="18" />
+                    <span class="image-picker-option-copy">
+                      <span class="image-picker-option-head"><strong>{{ template.name }}</strong><small data-status="available">{{ t("instances.create.templateReady") }}</small></span>
+                      <span class="image-picker-option-meta"><code>{{ template.imageId }}</code><small>{{ templateMeta(template) }}</small></span>
+                    </span>
+                    <Check v-if="template.id === runtimeDraft.environmentTemplateId" :size="15" />
+                  </button>
+                </div>
+                <div v-if="!filteredTemplates.length" class="image-picker-empty">{{ t("instances.create.noEnvironmentTemplates") }}</div>
+              </div>
+            </ScrollArea>
+          </PopoverContent>
+        </Popover>
+      </div>
+      <label v-if="runtimeDraft.environmentSourceType === 'image' && selectedImage?.origin === 'market' && selectedImage.availableTags.length > 1 && !newImageOpen">
         <span>{{ t("instances.create.imageTag") }}</span>
         <ControlPlaneSelect v-model="runtimeDraft.imageTag" :placeholder="t('instances.create.selectImageTag')">
           <ControlPlaneSelectItem v-for="tag in selectableTags" :key="tag.name" :value="tag.name">
@@ -131,7 +181,7 @@
       </CardContent>
     </Card>
 
-    <div v-if="selectedRuntimeRequiresImage && newImageOpen" class="step-fields inline-create">
+    <div v-if="selectedRuntimeRequiresImage && runtimeDraft.environmentSourceType === 'image' && newImageOpen" class="step-fields inline-create">
       <label>
         <span>{{ t("instances.create.name") }}</span>
         <ControlPlaneInput v-model="newImage.name" :placeholder="t('instances.create.imageName')" />
@@ -180,10 +230,10 @@
 </template>
 
 <script setup lang="ts">
-import { Check, ChevronDown, CircleAlert, CircleCheck, ExternalLink, LoaderCircle, Plus, RefreshCw, Search } from "@lucide/vue";
+import { Check, ChevronDown, CircleAlert, CircleCheck, ExternalLink, Image, LoaderCircle, Package, Plus, RefreshCw, Search } from "@lucide/vue";
 import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import type { ModelConfig, Node, NodeImageAvailability, NodeRuntime, SelectableImage } from "../../../api/types";
+import type { EnvironmentTemplate, ModelConfig, Node, NodeImageAvailability, NodeRuntime, SelectableImage } from "../../../api/types";
 import { Button } from "../../../components/ui/button";
 import { Card, CardContent } from "../../../components/ui/card";
 import { Checkbox } from "../../../components/ui/checkbox";
@@ -205,6 +255,7 @@ const props = defineProps<{
   dockerRuntimeCheckMessage: string;
   dockerRuntimeCheckState: DockerRuntimeCheckState;
   images: SelectableImage[];
+  environmentTemplates: EnvironmentTemplate[];
   imageAvailability: NodeImageAvailability[];
   instanceDraft: InstanceDraft;
   models: ModelConfig[];
@@ -224,6 +275,9 @@ const noModelValue = "__none__";
 const imagePickerOpen = ref(false);
 const imageSearch = ref("");
 const imageSearchInput = ref<HTMLInputElement>();
+const templatePickerOpen = ref(false);
+const templateSearch = ref("");
+const templateSearchInput = ref<HTMLInputElement>();
 const normalizedImageSearch = computed(() => imageSearch.value.trim().toLocaleLowerCase());
 const imageMatchesSearch = (image: SelectableImage) => !normalizedImageSearch.value || [
   image.name,
@@ -243,12 +297,37 @@ const filteredImageGroups = computed(() => imageGroups.value
   .map((group) => ({ ...group, images: group.images.filter(imageMatchesSearch) }))
   .filter((group) => group.images.length));
 const selectedImage = computed(() => props.images.find((image) => image.id === props.runtimeDraft.imageId));
+const readyTemplates = computed(() => props.environmentTemplates.filter((template) => template.status === "ready"));
+const selectedTemplate = computed(() => readyTemplates.value.find((template) => template.id === props.runtimeDraft.environmentTemplateId));
+const filteredTemplates = computed(() => {
+  const search = templateSearch.value.trim().toLocaleLowerCase();
+  return readyTemplates.value.filter((template) => !search || `${template.name} ${template.imageId || ""} ${template.platform || ""} ${template.architecture || ""}`.toLocaleLowerCase().includes(search));
+});
+const templateMeta = (template: EnvironmentTemplate) => [template.platform, template.architecture, formatBytes(template.sizeBytes)].filter(Boolean).join(" · ");
+const formatBytes = (bytes?: number) => {
+  if (bytes === undefined) return "";
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${Math.round(bytes / 1024 / 1024)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+};
 const localizedImageDescription = (image: SelectableImage) => resolveImageDescription(image, locale.value);
 const selectableTags = computed(() => selectedImage.value?.availableTags.filter((tag) => tag.status !== "yanked") || []);
 const lifecycleLabel = (status: string) => t(`instances.create.lifecycle.${status}`);
 const selectImage = (imageId: string) => {
   props.runtimeDraft.imageId = imageId;
   imagePickerOpen.value = false;
+};
+const selectTemplate = (templateId: string) => {
+  props.runtimeDraft.environmentTemplateId = templateId;
+  templatePickerOpen.value = false;
+};
+const selectEnvironmentSource = (type: "image" | "template") => {
+  props.runtimeDraft.environmentSourceType = type;
+  if (type === "template") {
+    props.runtimeDraft.environmentTemplateId ||= readyTemplates.value[0]?.id || "";
+    props.runtimeDraft.imageTag = "";
+  }
+  if (type === "image") props.runtimeDraft.imageId ||= props.images[0]?.id || "";
 };
 const installGuidance = computed(() => dockerInstallGuidance(props.selectedNodePlatform));
 const installGuidanceLabel = computed(() => t(`instances.create.docker.install.${installGuidance.value.kind}Label`));
@@ -282,6 +361,14 @@ watch(imagePickerOpen, async (open) => {
   }
   await nextTick();
   imageSearchInput.value?.focus();
+});
+watch(templatePickerOpen, async (open) => {
+  if (!open) {
+    templateSearch.value = "";
+    return;
+  }
+  await nextTick();
+  templateSearchInput.value?.focus();
 });
 const eligibleModels = computed(() => props.models.filter((model) => model.locations?.some((location) => location.type === "control-plane" || (location.type === "node" && location.nodeId === props.runtimeDraft.nodeId))));
 const codexModels = computed(() => eligibleModels.value.filter((model) => model.app === "codex"));
@@ -341,6 +428,71 @@ defineEmits<{
   grid-column: 1 / -1;
   min-width: 0;
   gap: 7px;
+}
+
+.environment-source-field {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 7px;
+}
+
+.environment-source-field > span {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.environment-source-control {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 3px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-inset);
+  padding: 3px;
+}
+
+.environment-source-control button {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.environment-source-control button:hover,
+.environment-source-control button:focus-visible {
+  background: var(--surface-hover);
+  color: var(--text);
+  outline: none;
+}
+
+.environment-source-control button.active {
+  background: var(--surface-raised);
+  color: var(--text-strong);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 8%);
+}
+
+.template-picker-trigger > svg:first-child {
+  justify-self: center;
+  color: var(--text-muted);
+}
+
+.template-picker-option {
+  grid-template-columns: 28px minmax(0, 1fr) 15px;
+  min-height: 58px;
+}
+
+.template-picker-option > svg:first-child {
+  justify-self: center;
+  color: var(--text-muted);
 }
 
 .image-picker-field > span {

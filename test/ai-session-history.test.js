@@ -29,12 +29,14 @@ const {
 const { AiSessionHistoryLifecycle } = require("../packages/ai-session-runtime/src/ai-session-history-lifecycle.ts");
 const { AiSessionResumeCoordinator } = require("../packages/ai-session-runtime/src/ai-session-resume.ts");
 const { createAiSessionRegistry } = require("../packages/ai-session-runtime/src/ai-session-registry.ts");
+const { sanitizePersistedAiSession } = require("../packages/ai-session-runtime/src/ai-session/persistence.ts");
 
 function historyItem(index, overrides = {}) {
   const timestamp = new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString();
   return {
     id: `ai-${index}`,
     agent: index % 2 ? "claude" : "codex",
+    creationSource: "app-session",
     providerSessionId: `provider-${index}`,
     title: `Session ${index}`,
     userPrompt: `Prompt ${index}`,
@@ -127,6 +129,65 @@ test("AI session history sanitation isolates invalid entries and ignores unknown
   assert.ok(warnings.some((warning) => warning.kind === "index" && warning.reason.includes("unknown")));
 });
 
+test("AI session persistence migrates creation source and ignores cross-version fields", () => {
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (message) => warnings.push(String(message));
+  try {
+    const legacy = sanitizePersistedAiSession({
+      id: "ai-legacy",
+      agent: "codex",
+      appSessionId: "app-legacy",
+      providerSessionId: "thread-legacy",
+      status: "idle",
+      phase: "unknown",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-02T00:00:00.000Z",
+      counters: {},
+      queue: {},
+      futureField: true,
+    });
+    assert.equal(legacy.creationSource, "app-session");
+    assert.equal("futureField" in legacy, false);
+    assert.ok(warnings.some((warning) => warning.includes("futureField")));
+
+    const direct = sanitizePersistedAiSession({ ...legacy, creationSource: "ai-session", appSessionId: undefined });
+    assert.equal(direct.creationSource, "ai-session");
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  const migratedHistory = sanitizeAiSessionHistoryIndex({
+    schemaVersion: 1,
+    items: [{ ...historyItem(14), creationSource: undefined }],
+  });
+  assert.equal(migratedHistory.items[0].creationSource, "app-session");
+});
+
+test("AI session creation source is first-write-wins across later App bindings", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-source-"));
+  const registry = createAiSessionRegistry({ dir: root });
+  const direct = registry.applyAdapterSnapshot({
+    agent: "codex",
+    creationSource: "ai-session",
+    providerSessionId: "thread-direct",
+    cwd: "/workspace",
+    status: "idle",
+  });
+  const bound = registry.applyAdapterSnapshot({
+    agent: "codex",
+    creationSource: "app-session",
+    appId: "codex",
+    appSessionId: "app-direct",
+    providerSessionId: "thread-direct",
+    cwd: "/workspace",
+    status: "idle",
+  });
+  assert.equal(direct.creationSource, "ai-session");
+  assert.equal(bound.creationSource, "ai-session");
+  assert.equal(bound.appSessionId, "app-direct");
+});
+
 test("AI session history store rewrites sanitized persisted data and tolerates unreadable JSON", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-history-sanitize-"));
   const warnings = [];
@@ -151,6 +212,7 @@ test("AI session lifecycle archives stopped bindings before prune and activates 
   const session = {
     id: "ai-lifecycle",
     agent: "codex",
+    creationSource: "app-session",
     appSessionId: "app-lifecycle",
     appId: "codex",
     providerSessionId: "provider-lifecycle",
@@ -200,6 +262,7 @@ test("AI session lifecycle ignores sessions without a resumable provider identit
   const base = {
     id: "ai-unresumable",
     agent: "codex",
+    creationSource: "app-session",
     appSessionId: "app-unresumable",
     cwd: "/workspace",
     status: "idle",
@@ -241,8 +304,8 @@ test("AI session resume coordinator preserves identity and deduplicates concurre
   assert.equal(starts, 1);
   release();
   assert.deepEqual(await Promise.all([first, second]), [
-    { disposition: "resumed", aiSessionId: item.id, providerSessionId: item.providerSessionId, appSessionId: "app-resumed" },
-    { disposition: "resumed", aiSessionId: item.id, providerSessionId: item.providerSessionId, appSessionId: "app-resumed" },
+    { disposition: "resumed", aiSessionId: item.id, providerSessionId: item.providerSessionId, appSessionId: "app-resumed", creationSource: "app-session" },
+    { disposition: "resumed", aiSessionId: item.id, providerSessionId: item.providerSessionId, appSessionId: "app-resumed", creationSource: "app-session" },
   ]);
   assert.equal(registry.get(item.id).providerSessionId, item.providerSessionId);
   assert.equal(history.get(item.id).id, item.id);
@@ -275,7 +338,38 @@ test("AI session resume coordinator reuses an authoritative running binding", as
     aiSessionId: item.id,
     providerSessionId: item.providerSessionId,
     appSessionId: "app-open",
+    creationSource: "app-session",
   });
+});
+
+test("AI session resume coordinator restores Direct history without launching an App", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-history-direct-resume-"));
+  const history = new AiSessionHistoryStore({ dataDir: root });
+  const registry = createAiSessionRegistry({ dir: path.join(root, "registry") });
+  const item = historyItem(15, { id: "ai-direct-resume", creationSource: "ai-session" });
+  history.upsert(item);
+  let providerResumes = 0;
+  const coordinator = new AiSessionResumeCoordinator({
+    history,
+    registry,
+    appSessions: () => [],
+    startApp: () => { throw new Error("must not start an App"); },
+    resumeProvider: async (entry) => {
+      providerResumes += 1;
+      assert.equal(entry.providerSessionId, item.providerSessionId);
+    },
+  });
+
+  assert.deepEqual(await coordinator.resume(item.id), {
+    disposition: "resumed",
+    aiSessionId: item.id,
+    providerSessionId: item.providerSessionId,
+    creationSource: "ai-session",
+  });
+  assert.equal(providerResumes, 1);
+  assert.equal(registry.get(item.id).creationSource, "ai-session");
+  assert.equal(registry.get(item.id).appSessionId, undefined);
+  assert.equal(history.get(item.id), undefined);
 });
 
 test("AI session resume coordinator retains history and permits retry after provider failure", async () => {

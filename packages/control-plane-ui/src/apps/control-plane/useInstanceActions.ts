@@ -1,4 +1,5 @@
 import { ref } from "vue";
+import type { InstanceDeleteResult } from "@task-handoff/protocol/control-plane";
 import {
   deleteControlledInstance,
   restartControlledInstance,
@@ -25,6 +26,9 @@ type UseInstanceActionsInput = {
 export function useInstanceActions({ clearActiveInstance, closeInstanceMenu, errorText, notifyError, refresh, translate: t }: UseInstanceActionsInput) {
   const activeInstanceAction = ref<InstanceAction | "">("");
   const activeInstanceActionId = ref("");
+  const deleteDialogInstance = ref<InstanceBoardItem>();
+  const deleteResult = ref<InstanceDeleteResult>();
+  const deleteError = ref("");
 
   function reportActionError(message: string) {
     notifyError?.(message);
@@ -48,7 +52,10 @@ export function useInstanceActions({ clearActiveInstance, closeInstanceMenu, err
     if (isInstanceActionBusy(instance) || !canShowInstanceAction(instance, action)) {
       return;
     }
-    if (action === "delete" && !window.confirm(t("instances.actions.deleteConfirm", { name: instance.name }))) {
+    if (action === "delete") {
+      deleteDialogInstance.value = instance;
+      deleteResult.value = undefined;
+      deleteError.value = "";
       return;
     }
     activeInstanceAction.value = action;
@@ -62,13 +69,42 @@ export function useInstanceActions({ clearActiveInstance, closeInstanceMenu, err
         await restartControlledInstance(instance.id);
       } else if (action === "retry-image") {
         await retryInstanceImageProvisioning(instance.id);
-      } else {
-        await deleteControlledInstance(instance.id);
-        clearActiveInstance(instance.id);
-        await refresh();
       }
     } catch (error) {
       reportActionError(errorText(error));
+      await refresh();
+    } finally {
+      activeInstanceAction.value = "";
+      activeInstanceActionId.value = "";
+    }
+  }
+
+  function closeDeleteDialog() {
+    if (deleteDialogInstance.value && isInstanceActionBusy(deleteDialogInstance.value)) return;
+    deleteDialogInstance.value = undefined;
+    deleteResult.value = undefined;
+    deleteError.value = "";
+  }
+
+  async function confirmDeleteInstance(deleteVolumes: boolean) {
+    const instance = deleteDialogInstance.value;
+    if (!instance || isInstanceActionBusy(instance)) return;
+    activeInstanceAction.value = "delete";
+    activeInstanceActionId.value = instance.id;
+    deleteError.value = "";
+    try {
+      const result = await deleteControlledInstance(instance.id, deleteVolumes);
+      deleteResult.value = result;
+      if (!result.completed) return;
+      clearActiveInstance(instance.id);
+      await refresh();
+      if (!result.retainedVolumes.length) {
+        deleteDialogInstance.value = undefined;
+        deleteResult.value = undefined;
+      }
+    } catch (error) {
+      deleteError.value = errorText(error);
+      reportActionError(deleteError.value);
       await refresh();
     } finally {
       activeInstanceAction.value = "";
@@ -104,6 +140,11 @@ export function useInstanceActions({ clearActiveInstance, closeInstanceMenu, err
   return {
     activeActionLabel,
     canExportConfig,
+    closeDeleteDialog,
+    confirmDeleteInstance,
+    deleteDialogInstance,
+    deleteError,
+    deleteResult,
     isInstanceActionBusy,
     runInstanceAction,
     runRowInstanceAction,

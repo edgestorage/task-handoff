@@ -27,13 +27,13 @@
         </ContextMenuItem>
       </ContextMenuSubContent>
     </ContextMenuSub>
-    <ContextMenuItem v-if="hasAppSession" class="ai-session-context-menu-item" @select="$emit('openApp')">
+    <ContextMenuItem v-if="canOpenApp" class="ai-session-context-menu-item" @select="$emit('openApp')">
       <ExternalLink :size="14" />
       <span>{{ t("sessions.actions.openApp") }}</span>
     </ContextMenuItem>
-    <ContextMenuItem v-if="hasAppSession" class="ai-session-context-menu-item danger" :disabled="isStoppingAppSession" @select="$emit('closeApp')">
+    <ContextMenuItem class="ai-session-context-menu-item danger" :disabled="isStoppingAppSession" @select="$emit('closeSession')">
       <Square :size="13" />
-      <span>{{ isStoppingAppSession ? t("sessions.actions.closingApp") : t("sessions.actions.closeApp") }}</span>
+      <span>{{ isStoppingAppSession ? t("sessions.actions.closingSession") : t("sessions.actions.closeSession") }}</span>
     </ContextMenuItem>
   </ContextMenuContent>
 </template>
@@ -55,6 +55,7 @@ const { t } = useI18n();
 defineProps<{
   boundTriggerCount: number;
   hasAppSession: boolean;
+  canOpenApp: boolean;
   isStoppingAppSession?: boolean;
   isTriggerBound: (configHash: string) => boolean;
   isTriggerBusy: (configHash: string) => boolean;
@@ -63,7 +64,7 @@ defineProps<{
 }>();
 
 defineEmits<{
-  closeApp: [];
+  closeSession: [];
   openApp: [];
   toggleTrigger: [configHash: string];
 }>();

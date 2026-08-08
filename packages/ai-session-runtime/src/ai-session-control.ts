@@ -1,6 +1,7 @@
 import type {
   AiSessionActionResult,
   AiSessionApprovalInput,
+  AiSessionCreationSource,
   AiSessionMessageAttachment,
   AiSessionPermissionMode,
   AiSessionReference,
@@ -20,6 +21,17 @@ export type AiSessionSendInput = {
 export type AiSessionApprovalDecision = AiSessionApprovalInput["decision"];
 export type { AiSessionActionResult } from "@task-handoff/protocol/ai-sessions";
 
+export type AiSessionProviderCreateInput = {
+  cwd: string;
+  permissionMode?: AiSessionPermissionMode;
+};
+
+export type AiSessionProviderCreateResult = {
+  providerSessionId: string;
+  cwd: string;
+  creationSource: AiSessionCreationSource;
+};
+
 export type PendingAiSessionApproval = {
   id: string;
   sessionId: string;
@@ -31,6 +43,12 @@ export type PendingAiSessionApproval = {
 
 export interface AiSessionControlProvider {
   readonly agent: string;
+  createSession?(input: AiSessionProviderCreateInput): Promise<AiSessionProviderCreateResult>;
+  readSession?(providerSessionId: string): Promise<void>;
+  resumeSession?(providerSessionId: string): Promise<void>;
+  archiveSession?(providerSessionId: string): Promise<void>;
+  deleteSession?(providerSessionId: string): Promise<void>;
+  unsubscribeSession?(providerSessionId: string): Promise<void>;
   startMessage?(session: AiSessionStatus, input: AiSessionSendInput): Promise<AiSessionActionResult>;
   steerMessage?(session: AiSessionStatus, input: AiSessionSendInput): Promise<AiSessionActionResult>;
   sendMessage?(session: AiSessionStatus, input: AiSessionSendInput): Promise<AiSessionActionResult>;
@@ -84,6 +102,22 @@ export class AiSessionController {
 
   register(provider: AiSessionControlProvider) {
     this.providers.set(provider.agent, provider);
+  }
+
+  provider(agent: string) {
+    const provider = this.providers.get(agent);
+    if (!provider) {
+      throw aiSessionControlError("AI_SESSION_CONTROL_UNSUPPORTED", `${agent} sessions do not support direct control yet.`, 400);
+    }
+    return provider;
+  }
+
+  async createSession(agent: string, input: AiSessionProviderCreateInput) {
+    const provider = this.provider(agent);
+    if (!provider.createSession) {
+      throw aiSessionControlError("AI_SESSION_CREATE_UNSUPPORTED", `${agent} does not support direct AI session creation.`, 400);
+    }
+    return provider.createSession(input);
   }
 
   async sendMessage(sessionId: string, input: AiSessionSendInput) {
@@ -182,19 +216,41 @@ export class AiSessionController {
   }
 
   removeQueuedMessage(sessionId: string, queueId: string) {
+    this.requireSession(sessionId);
     const session = this.registry.removeQueuedMessage(sessionId, queueId);
     if (!session) {
-      throw aiSessionControlError("AI_SESSION_NOT_FOUND", "AI session not found.", 404);
+      throw aiSessionControlError("AI_SESSION_QUEUE_ITEM_NOT_FOUND", "Queued message not found.", 404);
     }
     return session;
   }
 
-  reorderQueuedMessages(sessionId: string, queueIds: string[]) {
-    const session = this.registry.reorderQueuedMessages(sessionId, queueIds);
-    if (!session) {
+  editQueuedMessage(sessionId: string, queueId: string, expectedRevision: number, message: string) {
+    const result = this.registry.editQueuedMessage(sessionId, queueId, expectedRevision, message);
+    if (!result) throw aiSessionControlError("AI_SESSION_NOT_FOUND", "AI session not found.", 404);
+    if (result.kind === "revision-conflict") {
+      throw aiSessionControlError("AI_SESSION_QUEUE_REVISION_CONFLICT", `AI session queue changed at revision ${result.currentRevision}.`, 409);
+    }
+    if (result.kind === "not-found") {
+      throw aiSessionControlError("AI_SESSION_QUEUE_ITEM_NOT_FOUND", "Queued message not found.", 404);
+    }
+    if (result.kind === "not-editable") {
+      throw aiSessionControlError("AI_SESSION_QUEUE_ITEM_NOT_EDITABLE", "Only queued messages can be edited.", 409);
+    }
+    return result.session;
+  }
+
+  reorderQueuedMessages(sessionId: string, expectedRevision: number, queueIds: string[]) {
+    const result = this.registry.reorderQueuedMessages(sessionId, expectedRevision, queueIds);
+    if (!result) {
       throw aiSessionControlError("AI_SESSION_NOT_FOUND", "AI session not found.", 404);
     }
-    return session;
+    if (result.kind === "revision-conflict") {
+      throw aiSessionControlError("AI_SESSION_QUEUE_REVISION_CONFLICT", `AI session queue changed at revision ${result.currentRevision}.`, 409);
+    }
+    if (result.kind === "order-invalid") {
+      throw aiSessionControlError("AI_SESSION_QUEUE_ORDER_INVALID", "Queue order must contain every currently queued message exactly once.", 409);
+    }
+    return result.session;
   }
 
   async interrupt(sessionId: string) {
@@ -223,11 +279,7 @@ export class AiSessionController {
   }
 
   private requireProvider(session: AiSessionStatus) {
-    const provider = this.providers.get(session.agent);
-    if (!provider) {
-      throw aiSessionControlError("AI_SESSION_CONTROL_UNSUPPORTED", `${session.agent} sessions do not support direct control yet.`, 400);
-    }
-    return provider;
+    return this.provider(session.agent);
   }
 }
 

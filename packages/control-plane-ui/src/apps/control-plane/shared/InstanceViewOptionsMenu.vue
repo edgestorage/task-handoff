@@ -8,7 +8,6 @@
     <DropdownMenuContent class="instance-view-options-menu" align="end" :side-offset="6">
       <DropdownMenuLabel class="instance-view-options-label">{{ t("instances.viewOptions.sort") }}</DropdownMenuLabel>
       <DropdownMenuRadioGroup :model-value="sortMode" @update:model-value="(value) => $emit('update:sortMode', value as InstanceListSortMode)">
-        <DropdownMenuRadioItem class="instance-view-options-item option-item" value="created-desc">{{ t("instances.viewOptions.newestFirst") }}</DropdownMenuRadioItem>
         <DropdownMenuRadioItem class="instance-view-options-item option-item" value="name-asc">{{ t("instances.viewOptions.name") }}</DropdownMenuRadioItem>
         <DropdownMenuRadioItem class="instance-view-options-item option-item" value="node-asc">{{ t("instances.viewOptions.node") }}</DropdownMenuRadioItem>
         <DropdownMenuRadioItem class="instance-view-options-item option-item" value="status-asc">{{ t("instances.viewOptions.status") }}</DropdownMenuRadioItem>

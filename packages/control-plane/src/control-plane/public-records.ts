@@ -1,5 +1,6 @@
 import {
   BuildInfoSchema,
+  CONTROL_PLANE_PROTOCOL_VERSION,
   FinalComputerPlatformSchema,
   FinalComputerArchSchema,
   ModelConfigSchema,
@@ -10,6 +11,11 @@ import {
   type Node,
   type Project,
 } from "@task-handoff/protocol/control-plane";
+import {
+  ControlPlaneInstanceDirectoryEntrySchema,
+  ControlPlaneNodeDirectoryEntrySchema,
+} from "@task-handoff/protocol/control-plane-directory";
+import type { InstanceBoardResult } from "./instances/board-reader.ts";
 
 export function publicNodeAgentCapabilities(data: unknown) {
   if (!data || typeof data !== "object") {
@@ -41,6 +47,84 @@ export function publicNode(node: Node) {
     auth: pairing ? { ...auth, pairing } : auth,
     capabilities: publicAgent ? { ...capabilities, agent: publicAgent } : capabilities,
   };
+}
+
+export function publicNodeDirectory(node: Node) {
+  const proxyError = node.proxyState?.lastError;
+  return ControlPlaneNodeDirectoryEntrySchema.parse({
+    id: node.id,
+    name: node.name,
+    status: node.status,
+    health: node.health,
+    connectionMode: node.connectionMode,
+    lastSeenAt: node.lastSeenAt,
+    observedAt: node.updatedAt,
+    capabilities: Object.keys(node.capabilities).sort(),
+    error: proxyError ? { code: proxyError.code, message: "Node connection failed. Use the desktop Control Plane for diagnostics." } : undefined,
+  });
+}
+
+export function publicInstanceDirectory(item: InstanceBoardResult["items"][number]) {
+  const runtimeError = item.runtimeVersion?.error;
+  const imageError = item.imageProvisioning?.error;
+  const workspaceError = item.workspace.error;
+  const error = runtimeError
+    ? { code: runtimeError.code, message: "Instance runtime convergence failed. Use the desktop Control Plane for diagnostics." }
+    : imageError
+      ? { code: "IMAGE_PROVISIONING_FAILED", message: "Instance image provisioning failed. Use the desktop Control Plane for diagnostics." }
+      : workspaceError
+        ? { code: "WORKSPACE_FAILED", message: "Instance workspace preparation failed. Use the desktop Control Plane for diagnostics." }
+        : undefined;
+  const nodeAgent = item.node?.capabilities.agent;
+  const nodeAgentRecord = nodeAgent && typeof nodeAgent === "object" && !Array.isArray(nodeAgent)
+    ? nodeAgent as Record<string, unknown>
+    : undefined;
+  const nodeProtocolVersion = typeof nodeAgentRecord?.protocolVersion === "string"
+    ? nodeAgentRecord.protocolVersion
+    : undefined;
+  const nodeProtocolCompatible = !nodeProtocolVersion || nodeProtocolVersion === CONTROL_PLANE_PROTOCOL_VERSION;
+  const protocolWarnings = [
+    item.protocolCompatible ? undefined : `Instance protocol ${item.protocolVersion || "unknown"} differs from this Control Plane.`,
+    nodeProtocolCompatible ? undefined : `Node protocol ${nodeProtocolVersion} differs from this Control Plane.`,
+  ].filter((warning): warning is string => Boolean(warning));
+  return ControlPlaneInstanceDirectoryEntrySchema.parse({
+    id: item.id,
+    name: item.name,
+    nodeId: item.nodeId,
+    status: item.status,
+    health: item.health,
+    connectionStatus: item.connectionStatus,
+    ready: item.ready,
+    config: { defaultCodexPermissionMode: item.config.defaultCodexPermissionMode },
+    lastHeartbeatAt: item.lastHeartbeatAt,
+    heartbeatAgeMs: item.heartbeatAgeMs,
+    observedAt: item.updatedAt,
+    runtime: { id: item.runtimeId, name: item.runtime?.name, type: item.runtime?.type },
+    workspace: { status: item.workspace.status, path: item.workspace.path },
+    protocol: {
+      version: item.protocolVersion,
+      compatible: item.protocolCompatible && nodeProtocolCompatible,
+      warning: protocolWarnings.length ? protocolWarnings.join(" ") : undefined,
+    },
+    aiSessions: item.aiSessions,
+    availableApps: (item.appInventory?.items || [])
+      .filter((app) => app.availability === "available")
+      .map((app) => ({
+        id: app.id,
+        name: app.name,
+        kind: app.kind,
+        supportsCwdSelection: app.capabilities.supportsCwdSelection,
+      })),
+    availableAgents: (item.appInventory?.items || [])
+      .filter((app) => app.availability === "available" && (app.id === "codex" || app.id === "claude"))
+      .map((app) => ({
+        id: app.id,
+        name: app.name,
+        kind: app.kind,
+        supportsCwdSelection: app.capabilities.supportsCwdSelection,
+      })),
+    error,
+  });
 }
 
 export function workspacePolicyForSource(source: Project["source"]) {

@@ -342,13 +342,20 @@ export const AiSessionWorkspaceSelectionSchema = z.discriminatedUnion("type", [
 export const RepositoryStartAiSessionRequestSchema = z.object({
   agent: z.enum(["codex", "claude"]),
   workspaceSelection: AiSessionWorkspaceSelectionSchema,
+  message: z.string().trim().min(1).max(20000),
+  clientRequestId: IdSchema,
+  permissionMode: z.enum(["ask", "auto-review", "full-access"]).optional(),
 }).strict();
 export const RepositoryCreateWorktreeAiSessionRequestSchema = z.object({
   agent: z.enum(["codex", "claude"]),
   worktree: RepositoryCreateWorktreeRequestSchema,
+  message: z.string().trim().min(1).max(20000),
+  clientRequestId: IdSchema,
+  permissionMode: z.enum(["ask", "auto-review", "full-access"]).optional(),
 }).strict();
 export const RepositoryAiSessionLaunchResultSchema = z.object({
-  appSessionId: IdSchema,
+  aiSessionId: IdSchema,
+  providerSessionId: z.string().trim().min(1).max(240),
   worktreeId: IdSchema,
   disposition: z.literal("started"),
 }).strict();

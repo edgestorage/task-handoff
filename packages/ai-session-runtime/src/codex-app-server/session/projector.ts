@@ -145,7 +145,7 @@ export class CodexAppServerSessionProjector {
     return false;
   }
 
-  applyThreadSnapshot(thread: CodexThread, context: { appSessionId?: string } = {}) {
+  applyThreadSnapshot(thread: CodexThread, context: { appSessionId?: string; creationSource?: AiSessionStatus["creationSource"] } = {}) {
     const threadId = typeof thread.id === "string" ? thread.id : undefined;
     if (!threadId || thread.ephemeral === true) {
       return;
@@ -160,6 +160,7 @@ export class CodexAppServerSessionProjector {
     return this.options.registry.applyAdapterSnapshot({
       source: "adapter-snapshot",
       agent: "codex",
+      creationSource: context.creationSource || (context.appSessionId ? "app-session" : existing?.creationSource),
       appId: context.appSessionId ? "codex" : "codex-app-server",
       appSessionId: context.appSessionId,
       providerSessionId: threadId,

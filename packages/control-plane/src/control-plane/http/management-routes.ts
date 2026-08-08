@@ -13,6 +13,7 @@ import type {
 import { registerCatalogRoutes } from "./catalog-routes.ts";
 import { registerChatGatewayRoutes } from "./chat-gateway-routes.ts";
 import { registerInstanceRoutes } from "./instance-routes.ts";
+import { registerEnvironmentTemplateRoutes } from "./environment-template-routes.ts";
 import { registerNodeRoutes } from "./node-routes.ts";
 import { registerSessionRoutes } from "./session-routes.ts";
 import { registerTriggerRoutes } from "./trigger-routes.ts";
@@ -55,6 +56,7 @@ export function registerControlPlaneManagementRoutes(options: RegisterControlPla
   registerCatalogRoutes({ app, service, events });
   registerNodeRoutes({ app, service, events, nodeAgentTunnel, nodeEventSubscriber, errorPayload });
   registerInstanceRoutes({ app, service, events });
+  registerEnvironmentTemplateRoutes(app, service, events);
   registerSessionRoutes({ app, service, events, appSessionAggregator, aiSessionAggregator, aiSessionUnread, aiSessionAttachments });
   registerTriggerRoutes({ app, service, events });
   registerChatGatewayRoutes({ app, service, chatGateway });

@@ -13,6 +13,7 @@ import {
 import { AiSessionEventTopic, AiSessionEventType } from "@task-handoff/protocol/ai-sessions";
 import { AppSessionEventTopic } from "@task-handoff/protocol/app-sessions";
 import { SessionStreamsHelloEventType, SessionStreamsHelloSchema, eventTopic, type EventEnvelope } from "@task-handoff/protocol/events";
+import { safeParseResponse } from "@task-handoff/protocol/response-validation";
 import { EventConnectionRetryTimer, eventConnectionSafetyIntervalMs } from "../shared/events/connection-retry.ts";
 
 type NodeAgentInstanceEventState = {
@@ -131,7 +132,7 @@ export class NodeAgentInstanceEventForwarder {
 
   private rememberImagePullTerminal(type: string, payload: unknown) {
     if (type === ImagePullTerminalEventType.Output) {
-      const parsed = ImagePullTerminalOutputSchema.safeParse(payload);
+      const parsed = safeParseResponse(ImagePullTerminalOutputSchema, payload);
       if (!parsed.success) return;
       const output = parsed.data;
       const current = this.imagePullTerminalByInstance.get(output.instanceId);
@@ -142,7 +143,7 @@ export class NodeAgentInstanceEventForwarder {
       return;
     }
     if (type === ImagePullTerminalEventType.Finished) {
-      const parsed = ImagePullTerminalFinishedSchema.safeParse(payload);
+      const parsed = safeParseResponse(ImagePullTerminalFinishedSchema, payload);
       if (!parsed.success) return;
       const finished = parsed.data;
       const current = this.imagePullTerminalByInstance.get(finished.instanceId);
@@ -264,7 +265,7 @@ export class NodeAgentInstanceEventForwarder {
         return;
       }
       if (event.type === SessionStreamsHelloEventType) {
-        const hello = SessionStreamsHelloSchema.safeParse(event.payload);
+        const hello = safeParseResponse(SessionStreamsHelloSchema, event.payload);
         if (!hello.success) {
           this.logger?.warn?.({ instanceId, issues: hello.error.issues }, "session-stream.handshake.invalid");
           socket.close(1002, "Incompatible session stream handshake.");

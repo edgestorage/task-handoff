@@ -114,6 +114,12 @@ fi
 node_is_compatible || die "Node.js $MIN_NODE_VERSION or newer is required; found $(node --version 2>/dev/null || echo none)"
 command -v npm >/dev/null 2>&1 || die "npm was not installed with Node.js"
 
+# Runtime packages include native Node.js addons such as node-pty. Published
+# prebuilds are not guaranteed for every supported Node.js/platform pair, so
+# npm must be able to fall back to node-gyp during installation.
+echo "Ensuring native Node.js build tools are available"
+apt-get install -y --no-install-recommends g++ make python3
+
 echo "[3/5] Ensuring Docker is available"
 if [ "$INSTALL_DOCKER" = "1" ]; then
   if ! command -v docker >/dev/null 2>&1; then

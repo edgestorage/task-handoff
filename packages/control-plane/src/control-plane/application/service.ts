@@ -7,6 +7,7 @@ import {
   ControlledInstanceSchema,
   controlledInstanceAcceptsTraffic,
   CustomImageProfileSchema,
+  InstanceDeleteInputSchema,
   LEGACY_MARKET_IMAGE_IDS,
   NodeImageAvailabilitySchema,
   NodeFolderTreeEntrySchema,
@@ -33,6 +34,7 @@ import {
   type ApplyUpdateRequest,
   type AppManagementOperationRequest,
 } from "@task-handoff/protocol/control-plane";
+import { parseResponse } from "@task-handoff/protocol/response-validation";
 import {
   ConfigSyncBatchResultSchema,
   ConfigSyncProgramSchema,
@@ -45,6 +47,7 @@ import {
   AiSessionsStateSchema,
   type AiSessionCommandInput,
   type AiSessionDeltaResponse,
+  type AiSessionCreateInput,
   type AiSessionMessageAttachment,
   type AiSessionPermissionMode,
   type AiSessionReference,
@@ -112,7 +115,7 @@ import type { ControlPlaneProxyError, ProxyTargetEvent, ProxyTargetSnapshot } fr
 
 export function parseInstanceAppManagementSnapshot(value: unknown) {
   try {
-    return AppManagementSnapshotSchema.parse(value);
+    return parseResponse(AppManagementSnapshotSchema, value);
   } catch (error) {
     if (error instanceof z.ZodError) {
       const unsupported = new Error("This controlled instance does not support managed app operations.");
@@ -885,12 +888,30 @@ export class ControlPlaneService {
     return publicInstanceWithAccess(instance);
   }
 
-  async deleteControlledInstance(id: string) {
+  async deleteControlledInstance(id: string, input: unknown) {
+    const parsedInput = InstanceDeleteInputSchema.parse(input);
     const current = await this.requireNodeInstance(id);
     const node = this.requireNode(current.nodeId);
-    const result = await this.nodeAgentGateway.deleteInstance(node, id);
-    this.configSyncPreferences.delete(id);
-    return Boolean(result.deleted);
+    const result = await this.nodeAgentGateway.deleteInstance(node, id, parsedInput);
+    if (result.completed) this.configSyncPreferences.delete(id);
+    return result;
+  }
+
+  listEnvironmentTemplates(nodeId: string) {
+    return this.nodeAgentGateway.listEnvironmentTemplates(this.requireNode(nodeId));
+  }
+
+  getEnvironmentTemplate(nodeId: string, templateId: string) {
+    return this.nodeAgentGateway.getEnvironmentTemplate(this.requireNode(nodeId), templateId);
+  }
+
+  async createEnvironmentTemplate(instanceId: string, input: unknown) {
+    const instance = await this.requireNodeInstance(instanceId);
+    return this.nodeAgentGateway.createEnvironmentTemplate(this.requireNode(instance.nodeId), instanceId, input);
+  }
+
+  deleteEnvironmentTemplate(nodeId: string, templateId: string) {
+    return this.nodeAgentGateway.deleteEnvironmentTemplate(this.requireNode(nodeId), templateId);
   }
 
   async startControlledInstance(id: string) {
@@ -949,7 +970,7 @@ export class ControlPlaneService {
           return { streamId: `bootstrap:${instance.id}:ai.sessions`, revision: 0, lastEventAt: instance.aiSessions.updatedAt, snapshot: instance.aiSessions };
         }
         try {
-          return AiSessionsStateSchema.parse(await this.instanceRequest(instance, "/ai-sessions/state"));
+          return parseResponse(AiSessionsStateSchema, await this.instanceRequest(instance, "/ai-sessions/state"));
         } catch (error) {
           this.logWarn(
             { instanceId: instance.id, error: errorMessage(error), errorCode: "AI_SESSION_LIVE_REFRESH_FAILED" },
@@ -980,7 +1001,7 @@ export class ControlPlaneService {
           return { streamId: `bootstrap:${instance.id}:app.sessions`, revision: 0, lastEventAt: snapshot.updatedAt, snapshot };
         }
         try {
-          return AppSessionsStateSchema.parse(await this.instanceRequest(instance, "/apps/sessions/state"));
+          return parseResponse(AppSessionsStateSchema, await this.instanceRequest(instance, "/apps/sessions/state"));
         } catch (error) {
           this.logWarn(
             { instanceId: instance.id, error: errorMessage(error), errorCode: "APP_SESSION_LIVE_REFRESH_FAILED" },
@@ -1006,23 +1027,23 @@ export class ControlPlaneService {
   async recoverAiSessionDelta(instanceId: string, streamId: string, sinceRevision: number): Promise<AiSessionDeltaResponse> {
     const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
     const query = new URLSearchParams({ streamId, sinceRevision: String(sinceRevision) });
-    return AiSessionDeltaResponseSchema.parse(await this.instanceRequest(instance, `/ai-sessions?${query}`));
+    return parseResponse(AiSessionDeltaResponseSchema, await this.instanceRequest(instance, `/ai-sessions?${query}`));
   }
 
   async recoverAiSessionSnapshot(instanceId: string) {
     const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
-    return AiSessionsStateSchema.parse(await this.instanceRequest(instance, "/ai-sessions/state"));
+    return parseResponse(AiSessionsStateSchema, await this.instanceRequest(instance, "/ai-sessions/state"));
   }
 
   async recoverAppSessionDelta(instanceId: string, streamId: string, sinceRevision: number): Promise<AppSessionDeltaResponse> {
     const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
     const query = new URLSearchParams({ streamId, sinceRevision: String(sinceRevision) });
-    return AppSessionDeltaResponseSchema.parse(await this.instanceRequest(instance, `/apps/sessions?${query}`));
+    return parseResponse(AppSessionDeltaResponseSchema, await this.instanceRequest(instance, `/apps/sessions?${query}`));
   }
 
   async recoverAppSessionSnapshot(instanceId: string) {
     const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
-    return AppSessionsStateSchema.parse(await this.instanceRequest(instance, "/apps/sessions/state"));
+    return parseResponse(AppSessionsStateSchema, await this.instanceRequest(instance, "/apps/sessions/state"));
   }
 
   async listTriggers() {
@@ -1067,6 +1088,14 @@ export class ControlPlaneService {
 
   createAppAccessToken(input: { instanceId: string; sessionId: string; mode: AppAccessMode; ttlMs?: number }) {
     return this.appAccessService.createToken(input);
+  }
+
+  createAppSessionAccessToken(input: { instanceId: string; sessionId: string; ttlMs?: number }) {
+    return this.appAccessService.createSessionToken(input);
+  }
+
+  revokeAppSessionAccessToken(token: string, expected: { instanceId: string; sessionId: string }) {
+    this.appAccessService.revokeToken(token, expected);
   }
 
   resolveAppAccessToken(token: string, mode?: AppAccessMode) {
@@ -1190,6 +1219,18 @@ export class ControlPlaneService {
     return this.aiSessionActionService.resume(instanceId, aiSessionId);
   }
 
+  createAiSession(instanceId: string, input: AiSessionCreateInput) {
+    return this.aiSessionActionService.create(instanceId, input);
+  }
+
+  openAiSessionApp(instanceId: string, aiSessionId: string, clientRequestId: string) {
+    return this.aiSessionActionService.openApp(instanceId, aiSessionId, clientRequestId);
+  }
+
+  closeAiSession(instanceId: string, aiSessionId: string, clientRequestId: string) {
+    return this.aiSessionActionService.close(instanceId, aiSessionId, clientRequestId);
+  }
+
   aiSessionActionDiagnostics() {
     return this.aiSessionActionService.diagnostics();
   }
@@ -1239,7 +1280,7 @@ export class ControlPlaneService {
 
   async requestInstanceAppOperation(instanceId: string, appId: string, operation: "install" | "uninstall", input: AppManagementOperationRequest = {}) {
     const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
-    return AppManagementJobResponseSchema.parse(await this.instanceRequest(instance, `/apps/${encodeURIComponent(appId)}/${operation}`, {
+    return parseResponse(AppManagementJobResponseSchema, await this.instanceRequest(instance, `/apps/${encodeURIComponent(appId)}/${operation}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(input),
@@ -1248,7 +1289,7 @@ export class ControlPlaneService {
 
   async instanceAppManagementJob(instanceId: string, jobId: string) {
     const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
-    return AppManagementJobResponseSchema.parse(await this.instanceRequest(instance, `/apps/jobs/${encodeURIComponent(jobId)}`));
+    return parseResponse(AppManagementJobResponseSchema, await this.instanceRequest(instance, `/apps/jobs/${encodeURIComponent(jobId)}`));
   }
 
   async renameAppSession(instanceId: string, sessionId: string, title: string) {
@@ -1310,6 +1351,14 @@ export class ControlPlaneService {
     return this.aiSessionActionService.removeQueuedMessage(instanceId, sessionId, queueId);
   }
 
+  editAiSessionQueuedMessage(instanceId: string, sessionId: string, queueId: string, input: { expectedRevision: number; message: string }) {
+    return this.aiSessionActionService.editQueuedMessage(instanceId, sessionId, queueId, input);
+  }
+
+  reorderAiSessionQueuedMessages(instanceId: string, sessionId: string, input: { expectedRevision: number; queueIds: string[] }) {
+    return this.aiSessionActionService.reorderQueuedMessages(instanceId, sessionId, input);
+  }
+
   interruptAiSession(instanceId: string, sessionId: string) {
     return this.aiSessionActionService.interrupt(instanceId, sessionId);
   }
@@ -1353,7 +1402,7 @@ export class ControlPlaneService {
     }
     const workspaceFolder = normalizeConfigSyncWorkspaceFolder(request.workspaceFolder);
     const normalizedRequest = { ...request, workspaceFolder };
-    const result = ConfigSyncBatchResultSchema.parse(await this.instanceRequest(instance, "/config-sync", {
+    const result = parseResponse(ConfigSyncBatchResultSchema, await this.instanceRequest(instance, "/config-sync", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(normalizedRequest),
@@ -1402,7 +1451,7 @@ export class ControlPlaneService {
       return instance;
     }
     try {
-      const index = TriggerIndexSchema.parse(await this.instanceRequest(instance, "/triggers", { signal }));
+      const index = parseResponse(TriggerIndexSchema, await this.instanceRequest(instance, "/triggers", { signal }));
       return ControlledInstanceSchema.parse({
         ...instance,
         triggers: controlledInstanceTriggerSnapshot(index),

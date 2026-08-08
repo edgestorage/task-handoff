@@ -2,6 +2,7 @@ import { z } from "zod";
 import { AiSessionPermissionModeSchema } from "@task-handoff/protocol/ai-sessions";
 import {
   ControlledInstanceSchema,
+  EnvironmentSourceSchema,
   ImageSelectionSchema,
   InstanceImageSnapshotSchema,
   ProjectSourceSchema,
@@ -40,6 +41,7 @@ export const CreateNodeInstanceSchema = z
     name: z.string().trim().min(1).max(160).optional(),
     runtimeId: z.string().trim().min(1).max(120),
     imageSelection: ImageSelectionSchema.optional(),
+    environmentSource: EnvironmentSourceSchema.optional(),
     projectId: z.string().trim().min(1).max(120).optional(),
     image: InstanceImageSnapshotSchema.optional(),
     source: ProjectSourceSchema,
@@ -50,7 +52,15 @@ export const CreateNodeInstanceSchema = z
     }).strict().optional(),
     modelSelection: ControlledInstanceSchema.shape.modelSelection,
   })
-  .strict();
+  .strict()
+  .superRefine((input, context) => {
+    if (input.environmentSource && input.imageSelection) {
+      context.addIssue({ code: "custom", path: ["environmentSource"], message: "environmentSource and imageSelection are mutually exclusive." });
+    }
+    if (input.environmentSource?.type === "template" && input.image) {
+      context.addIssue({ code: "custom", path: ["image"], message: "Template environment source is resolved by the node-agent and cannot include an image snapshot." });
+    }
+  });
 
 export const UpdateNodeInstanceSchema = z
   .object({

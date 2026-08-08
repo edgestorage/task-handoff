@@ -32,7 +32,7 @@ test("Environment uses a portal popover and authoritative repository context", a
   assert.match(component, /repository\.environment\.branch/);
   assert.doesNotMatch(component, /executionLocation|<Laptop/);
   assert.match(repositoryApi, /\/instances\/\$\{encodeURIComponent\(target\.instanceId\)\}\/api\/\$\{sessionCollection\}\/\$\{encodeURIComponent\(target\.sessionId\)\}\/repository/);
-  assert.match(repositoryApi, /RepositoryWorktreesSchema\.safeParse/);
+  assert.match(repositoryApi, /safeParseResponse\(RepositoryWorktreesSchema/);
   assert.match(repositoryApi, /Restart the instance to load the current protocol/);
   const contextClient = repositoryApi.slice(repositoryApi.indexOf("export function getRepositoryContext"), repositoryApi.indexOf("export function getRepositoryWorktrees"));
   assert.doesNotMatch(contextClient, /[?&](cwd|path|repositoryRoot)=/);
@@ -81,8 +81,9 @@ test("managed worktree creation launches a new session without a client filesyst
   assert.match(panel, /\.repository-worktree-card\[data-current="true"\] \.repository-worktree-branch strong,[\s\S]*color: var\(--brand-accent-muted, var\(--brand-accent\)\)/);
   assert.match(repositoryApi, /\/worktrees\/ai-sessions/);
   assert.doesNotMatch(panel, /worktree:\s*\{[^}]*\b(path|cwd)\s*:/);
-  assert.match(aiPanel, /pendingRepositoryAppSessionId\.value = result\.appSessionId/);
-  assert.match(aiPanel, /item\.appSessionId === result\.appSessionId/);
+  assert.match(aiPanel, /handleRepositoryAiSessionStarted\(result: RepositoryAiSessionLaunchResult\)/);
+  assert.match(aiPanel, /emit\("selectAiSession", props\.instance\.id, result\.aiSessionId\)/);
+  assert.doesNotMatch(aiPanel, /pendingRepositoryAppSessionId/);
   assert.match(aiPanel, /emit\("selectAiSession", props\.instance\.id, session\.id\)/);
 });
 

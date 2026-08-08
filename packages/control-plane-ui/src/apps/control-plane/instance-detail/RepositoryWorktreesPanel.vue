@@ -45,12 +45,16 @@
         <!-- i18n-audit-allow-next-line code-token: Git revision token -->
         <input v-model="createStartRef" name="startRef" autocomplete="off" placeholder="HEAD" :disabled="creatingManagedSession" />
       </label>
+      <label>
+        <span>{{ t("repository.worktreesPanel.task") }}</span>
+        <textarea v-model="createMessage" name="message" :placeholder="t('repository.worktreesPanel.taskPlaceholder')" :disabled="creatingManagedSession" />
+      </label>
       <RepositoryErrorNotice v-if="createError" :error="createError" :fallback="t('repository.worktreesPanel.createError')" />
       <small v-if="createRecoveryKey" class="repository-worktree-recovery">{{ t(createRecoveryKey) }}</small>
       <button
         type="submit"
         class="repository-worktree-create-submit"
-        :disabled="creatingManagedSession || !worktrees?.snapshotId || !createBranchName.trim() || !createStartRef.trim()"
+        :disabled="creatingManagedSession || !worktrees?.snapshotId || !createBranchName.trim() || !createStartRef.trim() || !createMessage.trim()"
       >
         <LoaderCircle v-if="creatingManagedSession" class="repository-worktree-spin" :size="14" />
         <GitFork v-else :size="14" />
@@ -96,16 +100,31 @@
         </div>
         <small v-if="worktree.lockReason" class="repository-worktree-reason">{{ worktree.lockReason }}</small>
         <button
-          v-if="canStartAiSession && worktree.canCreateAiSession"
+          v-if="canStartAiSession && worktree.canCreateAiSession && startingComposerWorktreeId !== worktree.id"
           type="button"
           class="repository-worktree-start"
           :disabled="Boolean(startingWorktreeId)"
-          @click="startAiSession(worktree)"
+          @click="openStartComposer(worktree)"
         >
           <LoaderCircle v-if="startingWorktreeId === worktree.id" class="repository-worktree-spin" :size="14" />
           <Plus v-else :size="14" />
           <span>{{ t(startingWorktreeId === worktree.id ? "repository.worktreesPanel.starting" : "repository.worktreesPanel.newHere") }}</span>
         </button>
+        <form
+          v-else-if="canStartAiSession && worktree.canCreateAiSession"
+          class="repository-worktree-start-composer"
+          @submit.prevent="startAiSession(worktree)"
+        >
+          <textarea v-model="startMessage" :placeholder="t('repository.worktreesPanel.taskPlaceholder')" :disabled="Boolean(startingWorktreeId)" autofocus />
+          <span>
+            <Button type="button" variant="outline" size="sm" :disabled="Boolean(startingWorktreeId)" @click="closeStartComposer">{{ t("repository.common.cancel") }}</Button>
+            <Button type="submit" size="sm" :disabled="Boolean(startingWorktreeId) || !startMessage.trim()">
+              <LoaderCircle v-if="startingWorktreeId === worktree.id" class="repository-worktree-spin" :size="14" />
+              <Plus v-else :size="14" />
+              {{ t(startingWorktreeId === worktree.id ? "repository.worktreesPanel.starting" : "repository.worktreesPanel.start") }}
+            </Button>
+          </span>
+        </form>
         <small v-else-if="canStartAiSession && !worktree.canCreateAiSession" class="repository-worktree-blocked">
           {{ blockerSummary(worktree) }}
         </small>
@@ -196,6 +215,7 @@ const startError = ref<unknown>();
 const createOpen = ref(false);
 const createBranchName = ref("");
 const createStartRef = ref("HEAD");
+const createMessage = ref("");
 const creatingManagedSession = ref(false);
 const createError = ref<unknown>();
 const createRecoveryKey = ref("");
@@ -204,6 +224,8 @@ const removeTarget = ref<RepositoryWorktree>();
 const removingWorktree = ref(false);
 const removeError = ref<unknown>();
 const removeSuccessKey = ref("");
+const startingComposerWorktreeId = ref("");
+const startMessage = ref("");
 
 function worktreeLabel(worktree: RepositoryWorktree) {
   if (worktree.head.state === "branch") return worktree.head.branch || t("repository.common.unknownBranch");
@@ -286,7 +308,8 @@ async function createManagedWorktreeSession() {
   if (!props.aiAgent || !worktrees.value?.snapshotId || creatingManagedSession.value) return;
   const branchName = createBranchName.value.trim();
   const startRef = createStartRef.value.trim();
-  if (!branchName || !startRef) return;
+  const message = createMessage.value.trim();
+  if (!branchName || !startRef || !message) return;
   createError.value = undefined;
   createRecoveryKey.value = "";
   creatingManagedSession.value = true;
@@ -294,9 +317,12 @@ async function createManagedWorktreeSession() {
     const result = await createRepositoryWorktreeAiSession(target.value, {
       agent: props.aiAgent,
       worktree: { mode: "new-branch", branchName, startRef, expectedSnapshotId: worktrees.value.snapshotId },
+      message,
+      clientRequestId: crypto.randomUUID(),
     });
     emit("aiSessionStarted", result);
     createBranchName.value = "";
+    createMessage.value = "";
     createOpen.value = false;
     await worktreesQuery.refetch();
   } catch (error) {
@@ -314,8 +340,21 @@ async function createManagedWorktreeSession() {
   }
 }
 
+function openStartComposer(worktree: RepositoryWorktree) {
+  startingComposerWorktreeId.value = worktree.id;
+  startMessage.value = "";
+  startError.value = undefined;
+}
+
+function closeStartComposer() {
+  if (startingWorktreeId.value) return;
+  startingComposerWorktreeId.value = "";
+  startMessage.value = "";
+}
+
 async function startAiSession(worktree: RepositoryWorktree) {
-  if (!props.aiAgent || !worktrees.value || startingWorktreeId.value) return;
+  const message = startMessage.value.trim();
+  if (!props.aiAgent || !worktrees.value || !message || startingWorktreeId.value) return;
   startError.value = undefined;
   startingWorktreeId.value = worktree.id;
   try {
@@ -326,8 +365,12 @@ async function startAiSession(worktree: RepositoryWorktree) {
         repositoryContextId: worktrees.value.repositoryContextId,
         worktreeId: worktree.id,
       },
+      message,
+      clientRequestId: crypto.randomUUID(),
     });
     emit("aiSessionStarted", result);
+    startingComposerWorktreeId.value = "";
+    startMessage.value = "";
     await worktreesQuery.refetch();
   } catch (error) {
     startError.value = error;
@@ -430,20 +473,44 @@ async function startAiSession(worktree: RepositoryWorktree) {
   line-height: 1.4;
 }
 
-.repository-worktree-create input {
+.repository-worktree-create input,
+.repository-worktree-create textarea,
+.repository-worktree-start-composer textarea {
   width: 100%;
-  height: 31px;
   border: 1px solid var(--line-subtle);
   border-radius: 7px;
   outline: none;
   background: var(--surface-subtle);
   color: var(--text);
-  padding: 0 9px;
-  font-size: 11px;
+  padding: 7px 9px;
+  font-size: 12px;
 }
 
-.repository-worktree-create input:focus-visible {
+.repository-worktree-create input {
+  height: 31px;
+}
+
+.repository-worktree-create textarea,
+.repository-worktree-start-composer textarea {
+  min-height: 68px;
+  resize: vertical;
+}
+
+.repository-worktree-create input:focus-visible,
+.repository-worktree-create textarea:focus-visible,
+.repository-worktree-start-composer textarea:focus-visible {
   border-color: var(--focus-ring);
+}
+
+.repository-worktree-start-composer {
+  display: grid;
+  gap: 7px;
+}
+
+.repository-worktree-start-composer > span {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
 }
 
 .repository-worktree-create-error {

@@ -4,6 +4,7 @@ import { mkdir, lstat, open, readFile, readdir, readlink, rename, rm, symlink, w
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { RuntimeArtifactIdentitySchema, type RuntimeArtifactIdentity } from "@task-handoff/protocol/control-plane";
+import { safeParseResponse } from "@task-handoff/protocol/response-validation";
 import { extract } from "tar";
 
 export const RUNTIME_ARTIFACT_MANIFEST = "runtime-manifest.json";
@@ -136,7 +137,7 @@ export async function readRuntimeArtifactManifest(rootDir: string): Promise<Runt
   } catch (error) {
     throw new RuntimeArtifactError("INSTANCE_RUNTIME_ARTIFACT_INVALID", "Runtime artifact manifest is missing or invalid JSON.", { cause: error });
   }
-  const parsed = RuntimeArtifactIdentitySchema.safeParse(value);
+  const parsed = safeParseResponse(RuntimeArtifactIdentitySchema, value);
   if (!parsed.success) {
     throw new RuntimeArtifactError("INSTANCE_RUNTIME_ARTIFACT_INVALID", `Runtime artifact manifest is invalid: ${parsed.error.message}`);
   }

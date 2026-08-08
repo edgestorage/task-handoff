@@ -1,4 +1,6 @@
 import type {
+  InstanceDeleteInput,
+  InstanceDeleteResult,
   NodeRuntime,
   RuntimeArtifactIdentity,
 } from "@task-handoff/protocol/control-plane";
@@ -28,7 +30,7 @@ export type RuntimeAdapter = {
   start(context: ExecutorContext): Promise<ExecutorStartResult>;
   stop(context: ExecutorContext): Promise<ExecutorStartResult>;
   restart(context: ExecutorContext): Promise<ExecutorStartResult>;
-  delete(context: ExecutorContext): Promise<ExecutorStartResult>;
+  delete(context: ExecutorContext, input: InstanceDeleteInput): Promise<InstanceDeleteResult>;
   managedArtifacts?: boolean;
   check?(runtime: NodeRuntime): Promise<Partial<NodeRuntime>>;
   stopAll?(): Promise<void>;
@@ -114,8 +116,8 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     return this.executor.restart(context, context.instance.runtime.containerId);
   }
 
-  delete(context: ExecutorContext) {
-    return this.executor.delete(context);
+  delete(context: ExecutorContext, input: InstanceDeleteInput) {
+    return this.executor.delete(context, input);
   }
 
   async check(runtime: NodeRuntime): Promise<Partial<NodeRuntime>> {

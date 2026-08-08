@@ -8,6 +8,8 @@ export type NodeAgentStorePaths = {
   localFoldersDir: string;
   nodeRuntimesDir: string;
   controlledInstancesDir: string;
+  environmentTemplatesDir: string;
+  instancePrivateConfigsDir: string;
   nodeModelsDir: string;
   modelAssignmentsDir: string;
   modelEnvironmentsDir: string;
@@ -28,6 +30,8 @@ export function nodeAgentStorePaths(dataDir = defaultNodeAgentDataDir()): NodeAg
     localFoldersDir: path.join(root, "local-folders"),
     nodeRuntimesDir: path.join(root, "node-runtimes"),
     controlledInstancesDir: path.join(root, "controlled-instances"),
+    environmentTemplatesDir: path.join(root, "environment-templates"),
+    instancePrivateConfigsDir: path.join(root, "instance-private-configs"),
     nodeModelsDir: path.join(root, "models"),
     modelAssignmentsDir: path.join(root, "model-assignments"),
     modelEnvironmentsDir: path.join(root, "model-environments"),

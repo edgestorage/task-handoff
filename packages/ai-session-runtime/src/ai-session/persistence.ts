@@ -19,7 +19,7 @@ import type {
 import { compact, messageText, normalizeTurns } from "../ai-session-turns";
 
 const PERSISTED_SESSION_FIELDS = new Set([
-  "id", "agent", "appSessionId", "appId", "providerSessionId", "providerMeta", "appBindingKeys", "actions",
+  "id", "agent", "creationSource", "appSessionId", "appId", "providerSessionId", "providerMeta", "appBindingKeys", "actions",
   "activeTurnId", "title", "cwd", "userPrompt", "turns", "status", "phase", "summary", "lastMessage", "lastMessageItemId",
   "currentTool", "toolCallsSinceLastMessage", "subAgents", "transcriptPath", "transcriptSize", "startedAt", "updatedAt",
   "completedAt", "error", "counters", "queue",
@@ -111,28 +111,39 @@ function normalizeActions(value: unknown): AiSessionStatus["actions"] {
     send: typeof record.send === "boolean" ? record.send : undefined,
     interrupt: typeof record.interrupt === "boolean" ? record.interrupt : undefined,
     approval: typeof record.approval === "boolean" ? record.approval : undefined,
+    openApp: typeof record.openApp === "boolean" ? record.openApp : undefined,
+    close: typeof record.close === "boolean" ? record.close : undefined,
   };
-  return actions.send === undefined && actions.interrupt === undefined && actions.approval === undefined ? undefined : actions;
+  return Object.values(actions).every((action) => action === undefined) ? undefined : actions;
 }
 
 export function emptyAiSessionQueue(): AiSessionStatus["queue"] {
-  return { pendingCount: 0, items: [] };
+  return { revision: 0, pendingCount: 0, items: [] };
 }
 
-export function normalizeAiSessionQueueItems(items: AiSessionQueuedMessage[]): AiSessionStatus["queue"] {
+export function normalizeAiSessionQueueItems(items: AiSessionQueuedMessage[], revision: unknown = 0): AiSessionStatus["queue"] {
   const normalizedItems = items
     .map(normalizeQueuedMessage)
     .filter((item): item is AiSessionQueuedMessage => Boolean(item))
-    .slice(0, 100);
+    .slice(0, 100)
+    .sort((left, right) => queueStatusRank(left.status) - queueStatusRank(right.status));
   return {
+    revision: normalizeNonNegativeInteger(revision),
     pendingCount: normalizedItems.filter((item) => item.status === "queued" || item.status === "sending").length,
     items: normalizedItems,
   };
 }
 
 export function normalizeAiSessionQueue(value: unknown): AiSessionStatus["queue"] {
-  const record = value && typeof value === "object" && !Array.isArray(value) ? value as { items?: unknown } : {};
-  return normalizeAiSessionQueueItems(Array.isArray(record.items) ? record.items as AiSessionQueuedMessage[] : []);
+  const record = value && typeof value === "object" && !Array.isArray(value) ? value as { revision?: unknown; items?: unknown } : {};
+  return normalizeAiSessionQueueItems(
+    Array.isArray(record.items) ? record.items as AiSessionQueuedMessage[] : [],
+    record.revision,
+  );
+}
+
+function queueStatusRank(status: AiSessionQueuedMessage["status"]) {
+  return status === "sending" ? 0 : status === "queued" ? 1 : 2;
 }
 
 function normalizeQueuedMessage(value: unknown): AiSessionQueuedMessage | undefined {
@@ -244,6 +255,7 @@ export function sanitizePersistedAiSession(value: unknown): AiSessionStatus | un
   const candidate = {
     id: compact(record.id, 120),
     agent: compact(record.agent, 80),
+    creationSource: record.creationSource === "ai-session" ? "ai-session" : "app-session",
     ...(typeof record.appSessionId === "string" && record.appSessionId ? { appSessionId: compact(record.appSessionId, 120) } : {}),
     ...(typeof record.appId === "string" && record.appId ? { appId: compact(record.appId, 120) } : {}),
     ...(typeof record.providerSessionId === "string" && record.providerSessionId ? { providerSessionId: compact(record.providerSessionId, 240) } : {}),

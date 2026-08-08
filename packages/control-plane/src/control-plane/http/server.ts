@@ -3,7 +3,7 @@ import fs from "node:fs";
 import Fastify from "fastify";
 import cookie from "@fastify/cookie";
 import websocket from "@fastify/websocket";
-import type { FastifyReply } from "fastify";
+import type { FastifyReply, FastifyRequest } from "fastify";
 import type { FastifyServerOptions } from "fastify";
 import { z } from "zod";
 import { AiSessionUnreadEventType } from "@task-handoff/protocol/ai-sessions";
@@ -35,6 +35,7 @@ import { registerNodeProxyRoutes } from "./node-proxy-routes.ts";
 import { ControlPlaneProxyStateSubscriber } from "../nodes/control-plane-proxy-state-subscriber.ts";
 import { registerControlPlaneProxyManagementRoutes } from "./control-plane-proxy-management-routes.ts";
 import { projectControlPlaneProxyTarget, publicControlPlaneProxyTarget } from "../proxy/target-projector.ts";
+import { ControlPlaneIdentityService } from "../identity/service.ts";
 
 export type CreateControlPlaneAppOptions = {
   dataDir?: string;
@@ -158,11 +159,24 @@ function isPublicUiPath(url: string) {
   return !path.startsWith("/api/") && path !== "/api" && !path.startsWith("/instances/") && path !== "/instances";
 }
 
-async function actorForRequest(auth: ControlPlaneAuth, sessionToken: string | undefined) {
+type RequestSessionCredential = { token: string | undefined; clientType: "web" | "mobile" };
+
+function requestSessionCredential(request: FastifyRequest): RequestSessionCredential {
+  const authorization = request.headers.authorization;
+  if (authorization !== undefined) {
+    const match = /^Bearer ([^\s]+)$/.exec(authorization);
+    return { token: match?.[1], clientType: "mobile" };
+  }
+  return { token: request.cookies[CONTROL_PLANE_SESSION_COOKIE], clientType: "web" };
+}
+
+async function actorForRequest(auth: ControlPlaneAuth, credential: RequestSessionCredential) {
   if (!auth.enabled()) {
     return disabledAuthActor();
   }
-  const user = await auth.userForSessionToken(sessionToken);
+  const user = credential.clientType === "mobile"
+    ? await auth.userForMobileSessionToken(credential.token)
+    : await auth.userForSessionToken(credential.token);
   return user ? { type: "user" as const, userId: user.id, role: user.role } : undefined;
 }
 
@@ -171,6 +185,8 @@ const ROUTES_WITHOUT_RBAC = new Set([
   "/api/auth/bootstrap-admin",
   "/api/auth/login",
   "/api/auth/logout",
+  "/api/auth/mobile/login",
+  "/api/control-plane/identity",
   "/api/health",
   "/api/events",
 ]);
@@ -186,6 +202,9 @@ export function routeAuthorization(method: string, url: string): { action: Contr
   const action = actionForHttpMethod(method);
   if (path.startsWith("/api/control-plane/settings")) {
     return { action: method === "GET" ? "read" : "manage-settings", resource: { type: "control-plane-settings" } };
+  }
+  if (path === "/api/auth/mobile/logout" || path.startsWith("/api/auth/mobile/sessions")) {
+    return undefined;
   }
   if (path.startsWith("/api/models")) {
     return { action: method === "GET" ? "read" : "manage-secrets", resource: { type: "model" } };
@@ -215,8 +234,10 @@ export function routeAuthorization(method: string, url: string): { action: Contr
     return { action: method === "GET" ? "read" : "manage-node-auth", resource: { type: "node" } };
   }
   if (path.startsWith("/api/controlled-instances")) {
-    if (path.includes("/ai-sessions/")) {
+    if (/\/apps\/sessions\/[^/]+\/access$/.test(path)) return { action: "read", resource: { type: "instance" } };
+    if (path.includes("/ai-sessions")) {
       if (path.includes("/triggers")) return { action, resource: { type: "trigger" } };
+      if (method === "POST" && /\/ai-sessions$/.test(path)) return { action: "send-message", resource: { type: "ai-session" } };
       if (path.endsWith("/approval")) return { action: "approve", resource: { type: "ai-session" } };
       if (path.endsWith("/interrupt")) return { action: "interrupt", resource: { type: "ai-session" } };
       if (path.endsWith("/resume") || path.endsWith("/commands") || path.includes("/messages") || path.includes("/queue/")) {
@@ -260,6 +281,11 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   const app = Fastify({ logger: options.logger ?? true });
   const service = new ControlPlaneService(paths, { ...options.service, logger: app.log });
   const auth = new ControlPlaneAuth(paths, options.auth);
+  const identity = new ControlPlaneIdentityService(
+    paths.identitySigningPath,
+    () => service.proxyPrivateStore.controlPlaneId(),
+    (message, details) => app.log.warn(details, message),
+  );
   const events = new ControlPlaneEventBus();
   const imagePullProgress = new ImagePullProgressProjector(events);
   const aiSessionUnread = new AiSessionUnreadStore(paths, {
@@ -300,6 +326,9 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     }
   });
   const aiSessionAttachments = new AiSessionAttachmentStore();
+  app.addHook("onClose", async () => {
+    aiSessionAttachments.dispose();
+  });
   const nodeAgentTunnel = new ControlPlaneNodeAgentTunnelTransport(events, {
     validateInstanceScope: (nodeId, instanceId) => service.nodeOwnsInstance(nodeId, instanceId),
     onStreamsHello: (instanceId, hello) => {
@@ -371,6 +400,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   });
   service.setNodeAgentTransport(nodeAgentTunnel);
   service.init();
+  identity.init();
   let pairingRecoveryInFlight: Promise<void> | undefined;
   let pairingRecoveryTimer: ReturnType<typeof setInterval> | undefined;
   const recoverPendingPairings = () => {
@@ -450,14 +480,14 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     }
     const isPublicRoute = authBoundary === "public" || (authBoundary === "public-ui" && isPublicUiPath(request.url));
     if (!auth.enabled() || isPublicRoute) {
-      const actor = await actorForRequest(auth, request.cookies[CONTROL_PLANE_SESSION_COOKIE]);
+      const actor = await actorForRequest(auth, requestSessionCredential(request));
       const authorization = routeAuthorization(request.method, securityUrl);
       if (authorization) {
         assertCan(actor || disabledAuthActor(), authorization.action, authorization.resource);
       }
       return;
     }
-    const actor = await actorForRequest(auth, request.cookies[CONTROL_PLANE_SESSION_COOKIE]);
+    const actor = await actorForRequest(auth, requestSessionCredential(request));
     if (!actor) {
       return reply.code(401).send({
         error: {
@@ -494,6 +524,10 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       serverTime: new Date().toISOString(),
     },
   }));
+
+  app.get("/api/control-plane/identity", { config: PUBLIC_CONTROL_PLANE_ROUTE }, async () => (
+    identity.publicDocument(auth.enabled() ? "required" : "disabled")
+  ));
 
   app.get("/api/session-streams/diagnostics", async () => ({
     data: {
@@ -543,7 +577,10 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     }
   });
 
-  app.get("/api/auth/session", { config: PUBLIC_CONTROL_PLANE_ROUTE }, async (request) => ({ data: await auth.currentSession(request.cookies[CONTROL_PLANE_SESSION_COOKIE]) }));
+  app.get("/api/auth/session", { config: PUBLIC_CONTROL_PLANE_ROUTE }, async (request) => {
+    const credential = requestSessionCredential(request);
+    return { data: await auth.currentSession(credential.token, credential.clientType) };
+  });
   app.post("/api/auth/bootstrap-admin", { config: PUBLIC_CONTROL_PLANE_ROUTE }, async (request, reply) => {
     const user = await auth.bootstrapAdmin(request.body);
     return reply.code(201).send({ data: user });
@@ -557,6 +594,26 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       expires: new Date(result.expiresAt),
     });
     return { data: { user: result.user } };
+  });
+  app.post("/api/auth/mobile/login", { config: PUBLIC_CONTROL_PLANE_ROUTE }, async (request) => ({
+    data: await auth.loginMobile(request.body, { sourceId: request.ip }),
+  }));
+  app.post("/api/auth/mobile/logout", async (request) => {
+    const credential = requestSessionCredential(request);
+    return { data: auth.logout(credential.clientType === "mobile" ? credential.token : undefined) };
+  });
+  app.get("/api/auth/mobile/sessions", async (request, reply) => {
+    const sessions = auth.mobileSessions(requestSessionCredential(request).token);
+    return sessions ? { data: sessions } : reply.code(401).send({
+      error: { code: "CONTROL_PLANE_AUTH_REQUIRED", message: "Sign in to access mobile sessions." },
+    });
+  });
+  app.delete("/api/auth/mobile/sessions/:id", async (request, reply) => {
+    const params = z.object({ id: z.string().trim().min(1) }).parse(request.params);
+    const revoked = auth.revokeMobileSession(requestSessionCredential(request).token, params.id);
+    return revoked === undefined ? reply.code(401).send({
+      error: { code: "CONTROL_PLANE_AUTH_REQUIRED", message: "Sign in to revoke mobile sessions." },
+    }) : { data: { revoked } };
   });
   app.post("/api/auth/logout", { config: PUBLIC_CONTROL_PLANE_ROUTE }, async (request, reply) => {
     const result = auth.logout(request.cookies[CONTROL_PLANE_SESSION_COOKIE]);
@@ -623,7 +680,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     runtime: proxyRuntime,
     events,
     actorId: async (request) => {
-      const actor = await actorForRequest(auth, request.cookies[CONTROL_PLANE_SESSION_COOKIE]);
+      const actor = await actorForRequest(auth, requestSessionCredential(request));
       if (!actor) return "system:unknown";
       if (actor.type === "user") return `user:${actor.userId}`;
       if (actor.type === "system") return `system:${actor.reason}`;
@@ -666,6 +723,12 @@ export async function runControlPlaneServer(options: RunControlPlaneServerOption
     await app.listen({ host: options.host, port: options.port });
   } catch (error) {
     lock.release();
+    if (error && typeof error === "object" && (error as NodeJS.ErrnoException).code === "EADDRINUSE") {
+      throw Object.assign(
+        new Error(`Control plane port ${options.host}:${options.port} is already in use.`),
+        { statusCode: 409, code: "CONTROL_PLANE_PORT_IN_USE", cause: error },
+      );
+    }
     throw error;
   }
 }

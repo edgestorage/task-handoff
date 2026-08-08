@@ -1,10 +1,26 @@
 import type { AiSessionSummary, InstanceBoardItem, InstanceBoardItemWithAppSessions, InstanceWithAiSessions } from "../../api/types";
 import type { RepositorySessionKind } from "@task-handoff/protocol/repository";
-import { appSessionBindingKeys, appSessionStatus, isVisibleAppSession } from "./appSessionVisibility.ts";
+import { appSessionBindingKeys } from "./appSessionVisibility.ts";
 import { aiSessionStatusKeys, translateStatus, type Translate } from "../../i18n/status.ts";
 import { formatRelativeTime, formatTime } from "../../i18n/presentation.ts";
 import type { SupportedLocale } from "../../i18n/locale.ts";
 import { hasInstanceStatusPage } from "./useInstanceStatus.ts";
+import {
+  aiSessionLastUserMessageTime,
+  aiSessionStableSortKey,
+  availableInstanceApps,
+  compareAiSessionsByLastUserMessage,
+  sortedAiSessions,
+  sortedAiSessionsByLastUserMessage,
+} from "@task-handoff/control-plane-client";
+
+export {
+  aiSessionLastUserMessageTime,
+  aiSessionStableSortKey,
+  compareAiSessionsByLastUserMessage,
+  sortedAiSessions,
+  sortedAiSessionsByLastUserMessage,
+};
 
 export type SessionTab = {
   key: string;
@@ -108,9 +124,6 @@ export function buildSessionTabs(instance: InstanceWithAiSessions | undefined, t
 }
 
 function appSessionTab(session: Record<string, unknown>, index: number, t?: Translate): SessionTab | undefined {
-  if (!isVisibleAppSession(session)) {
-    return undefined;
-  }
   const appId = typeof session.appId === "string" ? session.appId : t ? t("sessions.tabs.appFallback", { number: index + 1 }) : `app-${index + 1}`;
   const status = typeof session.status === "string" ? session.status : "running";
   const key = typeof session.id === "string" ? session.id : `${appId}-${index}`;
@@ -210,12 +223,8 @@ export function aiSessionAppDisplayName(appTab: SessionTab | undefined, fallback
 }
 
 export function launchableAppsForInstance(instance: InstanceBoardItem, t: Translate): LaunchableApp[] {
-  if (instance.connectionStatus !== "online" || !instance.appInventory) {
-    return [];
-  }
   return uniqueLaunchableApps(
-    instance.appInventory.items
-      .filter((app) => app.availability === "available")
+    availableInstanceApps(instance)
       .map((app): LaunchableApp | undefined => {
         return {
           id: app.id,
@@ -339,54 +348,6 @@ export function sessionKindDisplayName(kind: string, t: Translate) {
 
 export function primaryAiSession(instance: InstanceWithAiSessions): AiSessionSummary | undefined {
   return sortedAiSessions(aiSessionSnapshotSessions(instance.aiSessions))[0];
-}
-
-export function sortedAiSessions(sessions?: AiSessionSummary[]) {
-  return [...(sessions || [])].sort((a, b) => {
-    const priorityDelta = aiSessionPriority(b) - aiSessionPriority(a);
-    return priorityDelta || aiSessionStableSortKey(a).localeCompare(aiSessionStableSortKey(b));
-  });
-}
-
-export function sortedAiSessionsByLastUserMessage(sessions?: AiSessionSummary[], sortByStatus = true) {
-  return [...(sessions || [])].sort((a, b) => {
-    return compareAiSessionsByLastUserMessage(a, b, sortByStatus) || aiSessionStableSortKey(a).localeCompare(aiSessionStableSortKey(b));
-  });
-}
-
-export function compareAiSessionsByLastUserMessage(left: AiSessionSummary, right: AiSessionSummary, sortByStatus = true) {
-  if (sortByStatus) {
-    const priorityDelta = aiSessionPriority(right) - aiSessionPriority(left);
-    if (priorityDelta) {
-      return priorityDelta;
-    }
-  }
-  return aiSessionLastUserMessageTime(right) - aiSessionLastUserMessageTime(left);
-}
-
-export function aiSessionLastUserMessageTime(session: AiSessionSummary) {
-  const lastUserTurn = [...(session.turns || [])].reverse().find((turn) => turn.userPrompt?.trim());
-  if (!lastUserTurn?.startedAt) {
-    return 0;
-  }
-  const timestamp = Date.parse(lastUserTurn.startedAt);
-  return Number.isFinite(timestamp) ? timestamp : 0;
-}
-
-export function aiSessionPriority(session: AiSessionSummary) {
-  if (session.status === "waiting") return 4;
-  if (session.status === "failed") return 3;
-  if (session.status === "running") return 2;
-  if (session.status === "idle") return 1;
-  return 0;
-}
-
-export function aiSessionStableSortKey(session: AiSessionSummary) {
-  return [
-    session.cwd || "",
-    session.agent || "",
-    session.providerSessionId || session.id,
-  ].join("\u0000");
 }
 
 export function primaryAiSessionMessage(instance: InstanceWithAiSessions, t: Translate) {
@@ -628,12 +589,11 @@ export function absoluteInstanceUrl(instance: InstanceBoardItem, path: string) {
 }
 
 export function activeAppLabel(instance: InstanceBoardItemWithAppSessions, t: Translate) {
-  const visibleSessions = instance.apps.sessions.filter(isVisibleAppSession);
-  const session = visibleSessions[0];
+  const session = instance.apps.sessions[0];
   if (session && typeof session === "object" && "appId" in session && typeof session.appId === "string") {
     return session.appId;
   }
-  return visibleSessions.length ? t("sessions.tabs.appSessions", { count: visibleSessions.length }) : t("sessions.tabs.noActiveApp");
+  return instance.apps.sessions.length ? t("sessions.tabs.appSessions", { count: instance.apps.sessions.length }) : t("sessions.tabs.noActiveApp");
 }
 
 export function previewTitle(instance: InstanceBoardItem, t: Translate) {

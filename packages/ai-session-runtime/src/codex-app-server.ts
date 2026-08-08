@@ -1,15 +1,17 @@
 import type { AiSessionCommandInput, AiSessionCommandResult, AiSessionStatus } from "@task-handoff/protocol/ai-sessions";
-import type { AiSessionActionResult, AiSessionApprovalDecision, AiSessionControlProvider, AiSessionSendInput } from "./ai-session-control";
+import type { AiSessionActionResult, AiSessionApprovalDecision, AiSessionControlProvider, AiSessionProviderCreateInput, AiSessionProviderCreateResult, AiSessionSendInput } from "./ai-session-control";
 import { aiSessionControlError } from "./ai-session-control";
 import type { AiSessionDiscoveryContext, AiSessionDiscoveryProvider } from "./ai-session-discovery";
 import type { AiSessionRegistry } from "./ai-session-registry";
 import { CodexAppServerClient, type CodexAppServerClientOptions } from "./codex-app-server/client/client";
 import type { CodexAppServerClientLike } from "./codex-app-server/client/contract";
+import type { CodexThreadStartOptions } from "./codex-app-server/client/contract";
 import { CodexAppServerConnectionManager } from "./codex-app-server/client/connection-manager";
 import type { CodexAppServerEvent, CodexThread, CodexThreadStatus } from "./codex-app-server/protocol/types";
 import { CodexAppServerApprovalCoordinator } from "./codex-app-server/session/approval-coordinator";
 import { CodexAppServerSessionBinding, type CodexAppSession } from "./codex-app-server/session/binding";
 import { CodexAppServerSessionControl } from "./codex-app-server/session/control";
+import { codexPermissionOverrides } from "./codex-app-server/session/control";
 import { CodexAppServerSessionDiscovery } from "./codex-app-server/session/discovery";
 import { CodexAppServerSessionProjector } from "./codex-app-server/session/projector";
 import { CodexAppServerMentions } from "./codex-app-server/mentions";
@@ -26,6 +28,7 @@ type CodexAppServerBridgeOptions = {
     itemId: string;
     delta: string;
   }) => void;
+  threadStartDefaults?: Pick<CodexThreadStartOptions, "model" | "modelProvider">;
 };
 
 export type { CodexAppServerClientLike } from "./codex-app-server/client/contract";
@@ -42,6 +45,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
   private readonly mentions: CodexAppServerMentions;
   private readonly injectedClient?: CodexAppServerClientLike;
   private readonly options: CodexAppServerBridgeOptions;
+  private directCreateRequests = 0;
 
   constructor(
     private readonly registry: AiSessionRegistry,
@@ -142,6 +146,66 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
     return this.control.sendMessage(session, input);
   }
 
+  async createSession(input: AiSessionProviderCreateInput): Promise<AiSessionProviderCreateResult> {
+    const client = await this.requireReadyClient();
+    if (!client.startThread) {
+      throw aiSessionControlError("AI_SESSION_CREATE_UNSUPPORTED", "Codex app-server does not support thread creation.", 400);
+    }
+    this.directCreateRequests += 1;
+    try {
+      const thread = await client.startThread({
+        cwd: input.cwd,
+        runtimeWorkspaceRoots: [input.cwd],
+        ...this.options.threadStartDefaults,
+        permissions: codexPermissionOverrides(input.permissionMode),
+      });
+      this.projector.applyThreadSnapshot(thread, { creationSource: "ai-session" });
+      const providerSessionId = typeof thread.id === "string" ? thread.id.trim() : "";
+      const cwd = typeof thread.cwd === "string" ? thread.cwd.trim() : "";
+      if (!providerSessionId || !cwd) {
+        throw aiSessionControlError("AI_SESSION_CREATE_INVALID_RESPONSE", "Codex app-server returned an invalid thread identity.", 502);
+      }
+      return { providerSessionId, cwd, creationSource: "ai-session" };
+    } finally {
+      this.directCreateRequests -= 1;
+    }
+  }
+
+  async readSession(providerSessionId: string) {
+    const client = await this.requireReadyClient();
+    if (!client.readThread) throw aiSessionControlError("AI_SESSION_READ_UNSUPPORTED", "Codex app-server does not support thread reads.", 400);
+    const thread = await client.readThread(providerSessionId, { includeTurns: true });
+    if (!thread) throw aiSessionControlError("AI_SESSION_THREAD_NOT_FOUND", "Codex thread was not found.", 404);
+    this.projector.applyThreadSnapshot(thread, { creationSource: "ai-session" });
+  }
+
+  async resumeSession(providerSessionId: string) {
+    const client = await this.requireReadyClient();
+    if (client.unarchiveThread) await client.unarchiveThread(providerSessionId);
+    const thread = client.resumeThread
+      ? await client.resumeThread(providerSessionId)
+      : client.readThread ? await client.readThread(providerSessionId, { includeTurns: true }) : undefined;
+    if (!thread) throw aiSessionControlError("AI_SESSION_RESUME_UNSUPPORTED", "Codex app-server could not resume the thread.", 409);
+    this.projector.applyThreadSnapshot(thread, { creationSource: "ai-session" });
+  }
+
+  async archiveSession(providerSessionId: string) {
+    const client = await this.requireReadyClient();
+    if (!client.archiveThread) throw aiSessionControlError("AI_SESSION_CLOSE_UNSUPPORTED", "Codex app-server does not support thread archive.", 400);
+    await client.archiveThread(providerSessionId);
+  }
+
+  async deleteSession(providerSessionId: string) {
+    const client = await this.requireReadyClient();
+    if (!client.deleteThread) throw aiSessionControlError("AI_SESSION_DELETE_UNSUPPORTED", "Codex app-server does not support thread deletion.", 400);
+    await client.deleteThread(providerSessionId);
+  }
+
+  async unsubscribeSession(providerSessionId: string) {
+    const client = await this.requireReadyClient();
+    await client.unsubscribeThread?.(providerSessionId);
+  }
+
   async startMessage(session: AiSessionStatus, input: AiSessionSendInput): Promise<AiSessionActionResult> {
     return this.control.startMessage(session, input);
   }
@@ -207,7 +271,10 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
 
   private applyProviderEvent(event: CodexAppServerEvent) {
     if (event.type === "thread") {
-      this.upsertThread(event.thread, { bindAppSession: true });
+      this.upsertThread(event.thread, {
+        bindAppSession: true,
+        creationSource: this.directCreateRequests > 0 ? "ai-session" : undefined,
+      });
       return;
     }
     if (event.type === "approval-request") {
@@ -231,13 +298,13 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
     this.projector.apply(event);
   }
 
-  private upsertThread(thread: CodexThread, options: { bindAppSession: boolean }) {
+  private upsertThread(thread: CodexThread, options: { bindAppSession: boolean; creationSource?: AiSessionStatus["creationSource"] }) {
     const id = typeof thread.id === "string" ? thread.id : undefined;
     if (!id || thread.ephemeral === true) {
       return;
     }
     const appSessionId = options.bindAppSession ? this.binding.appSessionIdForThread(id) : undefined;
-    this.projector.applyThreadSnapshot(thread, { appSessionId });
+    this.projector.applyThreadSnapshot(thread, { appSessionId, creationSource: options.creationSource });
   }
 
   private async requireReadyClient() {

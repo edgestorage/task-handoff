@@ -1,17 +1,25 @@
 import {
   AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES,
   AiSessionActionResultSchema,
+  AiSessionCreateResultSchema,
+  AiSessionCloseResultSchema,
+  AiSessionOpenAppResultSchema,
   AiSessionCommandResultSchema,
   AiSessionHistoryDetailSchema,
   AiSessionHistoryListSchema,
   AiSessionMentionCatalogSchema,
   AiSessionMentionFileSearchSchema,
   AiSessionQueueSchema,
+  AiSessionQueueEditInputSchema,
+  AiSessionQueueReorderInputSchema,
   AiSessionResumeResultSchema,
   AiSessionStatusSchema,
   type AiSessionActionResult,
   type AiSessionCommandInput,
   type AiSessionCommandResult,
+  type AiSessionCreateResult,
+  type AiSessionCloseResult,
+  type AiSessionOpenAppResult,
   type AiSessionHistoryDetail,
   type AiSessionHistoryList,
   type AiSessionMessageAttachment,
@@ -21,6 +29,7 @@ import {
   type AiSessionSendMode,
 } from "@task-handoff/protocol/ai-sessions";
 import type { ControlledInstance, NodeRuntime } from "@task-handoff/protocol/control-plane";
+import { parseResponse } from "@task-handoff/protocol/response-validation";
 
 type AiSessionActionServiceOptions = {
   requireInstance: (instanceId: string) => Promise<ControlledInstance>;
@@ -40,20 +49,54 @@ export class AiSessionActionService {
   }
 
   async resolveApproval(instanceId: string, sessionId: string, decision: "allow" | "deny" | "skip"): Promise<AiSessionActionResult> {
-    return AiSessionActionResultSchema.parse(await this.post(instanceId, sessionRoute(sessionId, "approval"), { decision }));
+    return parseResponse(AiSessionActionResultSchema, await this.post(instanceId, sessionRoute(sessionId, "approval"), { decision }));
   }
 
   async listHistory(instanceId: string): Promise<AiSessionHistoryList> {
-    return AiSessionHistoryListSchema.parse(await this.get(instanceId, "/ai-sessions/history"));
+    return parseResponse(AiSessionHistoryListSchema, await this.get(instanceId, "/ai-sessions/history"));
   }
 
   async historyDetail(instanceId: string, aiSessionId: string): Promise<AiSessionHistoryDetail> {
-    return AiSessionHistoryDetailSchema.parse(await this.get(instanceId, `/ai-sessions/history/${encodeURIComponent(aiSessionId)}`));
+    return parseResponse(AiSessionHistoryDetailSchema, await this.get(instanceId, `/ai-sessions/history/${encodeURIComponent(aiSessionId)}`));
   }
 
   async resume(instanceId: string, aiSessionId: string): Promise<AiSessionResumeResult> {
-    const result = AiSessionResumeResultSchema.parse(await this.post(instanceId, sessionRoute(aiSessionId, "resume"), {}));
+    const result = parseResponse(AiSessionResumeResultSchema, await this.post(instanceId, sessionRoute(aiSessionId, "resume"), {}));
     await this.refreshAfterCommittedResume(instanceId, aiSessionId);
+    return result;
+  }
+
+  async create(
+    instanceId: string,
+    input: {
+      agent: string;
+      cwd: { type: "runtime-path"; path: string };
+      message: string;
+      attachments?: AiSessionMessageAttachment[];
+      references?: AiSessionReference[];
+      permissionMode?: AiSessionPermissionMode;
+      clientRequestId: string;
+    },
+  ): Promise<AiSessionCreateResult> {
+    assertAiSessionAttachmentsWithinLimit(input.attachments || []);
+    const instance = await this.options.requireInstance(instanceId);
+    const effectivePermissionMode = input.permissionMode
+      || (input.agent === "codex" ? instance.config.defaultCodexPermissionMode : undefined);
+    const result = parseResponse(AiSessionCreateResultSchema, await this.options.request(instance, "/ai-sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...input, ...(effectivePermissionMode ? { permissionMode: effectivePermissionMode } : {}) }),
+    }));
+    return result;
+  }
+
+  async openApp(instanceId: string, aiSessionId: string, clientRequestId: string): Promise<AiSessionOpenAppResult> {
+    const result = parseResponse(AiSessionOpenAppResultSchema, await this.post(instanceId, sessionRoute(aiSessionId, "open-app"), { clientRequestId }));
+    return result;
+  }
+
+  async close(instanceId: string, aiSessionId: string, clientRequestId: string): Promise<AiSessionCloseResult> {
+    const result = parseResponse(AiSessionCloseResultSchema, await this.post(instanceId, sessionRoute(aiSessionId, "close"), { clientRequestId }));
     return result;
   }
 
@@ -103,7 +146,7 @@ export class AiSessionActionService {
     const session = instance.aiSessions.sessions.find((candidate) => candidate.id === sessionId);
     const effectivePermissionMode = permissionMode
       || (session?.agent === "codex" ? instance.config.defaultCodexPermissionMode : undefined);
-    return AiSessionActionResultSchema.parse(await this.options.request(instance, sessionRoute(sessionId, "messages"), {
+    return parseResponse(AiSessionActionResultSchema, await this.options.request(instance, sessionRoute(sessionId, "messages"), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -117,36 +160,46 @@ export class AiSessionActionService {
   }
 
   async mentionCatalog(instanceId: string, sessionId: string) {
-    return AiSessionMentionCatalogSchema.parse(await this.get(instanceId, sessionRoute(sessionId, "mentions")));
+    return parseResponse(AiSessionMentionCatalogSchema, await this.get(instanceId, sessionRoute(sessionId, "mentions")));
   }
 
   async searchMentionFiles(instanceId: string, sessionId: string, query: string) {
-    return AiSessionMentionFileSearchSchema.parse(await this.post(instanceId, sessionRoute(sessionId, "mentions/files"), { query }));
+    return parseResponse(AiSessionMentionFileSearchSchema, await this.post(instanceId, sessionRoute(sessionId, "mentions/files"), { query }));
   }
 
   async executeCommand(instanceId: string, sessionId: string, input: AiSessionCommandInput): Promise<AiSessionCommandResult> {
-    return AiSessionCommandResultSchema.parse(await this.post(instanceId, sessionRoute(sessionId, "commands"), input));
+    return parseResponse(AiSessionCommandResultSchema, await this.post(instanceId, sessionRoute(sessionId, "commands"), input));
   }
 
   async queue(instanceId: string, sessionId: string) {
-    return AiSessionQueueSchema.parse(await this.get(instanceId, sessionRoute(sessionId, "queue")));
+    return parseResponse(AiSessionQueueSchema, await this.get(instanceId, sessionRoute(sessionId, "queue")));
   }
 
   async steerQueuedMessage(instanceId: string, sessionId: string, queueId: string) {
-    return AiSessionActionResultSchema.parse(await this.post(instanceId, queueRoute(sessionId, queueId, "steer"), {}));
+    return parseResponse(AiSessionActionResultSchema, await this.post(instanceId, queueRoute(sessionId, queueId, "steer"), {}));
   }
 
   async retryQueuedMessage(instanceId: string, sessionId: string, queueId: string) {
-    return AiSessionStatusSchema.parse(await this.post(instanceId, queueRoute(sessionId, queueId, "retry"), {}));
+    return parseResponse(AiSessionStatusSchema, await this.post(instanceId, queueRoute(sessionId, queueId, "retry"), {}));
   }
 
   async removeQueuedMessage(instanceId: string, sessionId: string, queueId: string) {
     const instance = await this.options.requireInstance(instanceId);
-    return AiSessionStatusSchema.parse(await this.options.request(instance, queueRoute(sessionId, queueId), { method: "DELETE" }));
+    return parseResponse(AiSessionStatusSchema, await this.options.request(instance, queueRoute(sessionId, queueId), { method: "DELETE" }));
+  }
+
+  async editQueuedMessage(instanceId: string, sessionId: string, queueId: string, input: { expectedRevision: number; message: string }) {
+    const body = AiSessionQueueEditInputSchema.parse(input);
+    return parseResponse(AiSessionStatusSchema, await this.patch(instanceId, queueRoute(sessionId, queueId), body));
+  }
+
+  async reorderQueuedMessages(instanceId: string, sessionId: string, input: { expectedRevision: number; queueIds: string[] }) {
+    const body = AiSessionQueueReorderInputSchema.parse(input);
+    return parseResponse(AiSessionStatusSchema, await this.patch(instanceId, sessionRoute(sessionId, "queue/reorder"), body));
   }
 
   async interrupt(instanceId: string, sessionId: string): Promise<AiSessionActionResult> {
-    return AiSessionActionResultSchema.parse(await this.post(instanceId, sessionRoute(sessionId, "interrupt"), {}));
+    return parseResponse(AiSessionActionResultSchema, await this.post(instanceId, sessionRoute(sessionId, "interrupt"), {}));
   }
 
   private async get(instanceId: string, route: string) {
@@ -156,6 +209,14 @@ export class AiSessionActionService {
   private async post(instanceId: string, route: string, body: unknown) {
     return this.options.request(await this.options.requireInstance(instanceId), route, {
       method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  private async patch(instanceId: string, route: string, body: unknown) {
+    return this.options.request(await this.options.requireInstance(instanceId), route, {
+      method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });

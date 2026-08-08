@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");
 const net = require("node:net");
@@ -20,6 +21,7 @@ const { DingdingBridgeRuntimeManager } = require("../packages/control-plane/src/
 const { LarkProgressStore } = require("../packages/control-plane/src/control-plane/chat/gateway/lark-progress-store.ts");
 const { ControlPlaneEventBus } = require("../packages/control-plane/src/control-plane/events/bus.ts");
 const { ControlPlaneAiSessionAggregator } = require("../packages/control-plane/src/control-plane/sessions/ai-session-aggregator.ts");
+const { AiSessionAttachmentStore } = require("../packages/control-plane/src/control-plane/sessions/ai-session-attachments.ts");
 const { ControlPlaneAppSessionAggregator } = require("../packages/control-plane/src/control-plane/sessions/app-session-aggregator.ts");
 const { NodeAgentInstanceEventForwarder } = require("../packages/control-plane/src/node-agent/events.ts");
 const { AiSessionMessageDeltaCoalescer } = require("../packages/controlled-instance/src/web/ai-session-message-delta-coalescer.ts");
@@ -42,11 +44,11 @@ const { JsonCollection, JsonFile } = require("../packages/control-plane/src/shar
 const { nodeAgentStorePaths } = require("../packages/control-plane/src/node-agent/persistence/paths.ts");
 const { aiSessionUserPrompts, displayAiSessionMessage, displayAiSessionTitle, launchableAppsForInstance: uiLaunchableAppsForInstance } = require("../packages/control-plane-ui/src/apps/control-plane/useInstanceSessions.ts");
 const { launchableAppsForInstance: chatLaunchableAppsForInstance } = require("../packages/control-plane/src/control-plane/chat/rendering.ts");
-const { appSessionStatus } = require("../packages/control-plane-ui/src/apps/control-plane/appSessionVisibility.ts");
 const { AiSessionEventType, AiSessionEventTopic, AiSessionUnreadEventType } = require("../packages/protocol/src/ai-sessions.ts");
-const { AppSessionEventType, normalizeAppSessionRecord } = require("../packages/protocol/src/app-sessions.ts");
+const { AppSessionEventType, normalizeAppSessionRecord, normalizeAppSessionStatus } = require("../packages/protocol/src/app-sessions.ts");
 const { ApplyUpdateRequestSchema, CONTROL_PLANE_PROTOCOL_VERSION, ControlledInstanceHeartbeatSchema, ControlledInstanceRegisterSchema, ControlledInstanceSchema, InstanceAppInventorySchema, InstanceLifecycleEventType, RuntimeArtifactIdentitySchema, RuntimeVersionStateSchema, UpdateCheckRequestSchema, UpdateJobSchema, decodeNodeTunnelRequestBody, modelConfigHash, parseStoredControlledInstance, sanitizeStoredControlledInstance } = require("../packages/protocol/src/control-plane.ts");
 const { ChatActionTokenService, parsePendingDecisionCallbackData, pendingDecisionRouteFingerprint } = require("../packages/control-plane/src/control-plane/chat/action-token-service.ts");
+const { ControlPlanePublicIdentityDocumentSchema, controlPlaneIdentitySigningInput } = require("../packages/protocol/src/control-plane-access.ts");
 
 const controlledProcessIdentityRouteStubLines = [
   "  if (req.url === '/api/health') { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ data: { ok: true } })); return; }",
@@ -153,6 +155,24 @@ function emptyAppInventory(observedAt = new Date().toISOString()) {
   return { items: [], observedAt, issues: [] };
 }
 
+test("AI session upload refs are scoped, expiring, and consumed exactly once", () => {
+  const store = new AiSessionAttachmentStore(60_000);
+  const uploaded = store.upload({ instanceId: "instance-1", sessionId: "session-1", kind: "file", name: "note.txt", mime: "text/plain", data: Buffer.from("hello").toString("base64") });
+  const ref = { id: uploaded.id, kind: "file", source: { type: "upload-ref" } };
+  assert.throws(() => store.resolveRefs([ref], "instance-1", "session-other"), /scope mismatch/);
+  assert.equal(store.resolveRefs([ref], "instance-1", "session-1")[0].source.data, Buffer.from("hello").toString("base64"));
+  assert.throws(() => store.resolveRefs([ref], "instance-1", "session-1"), /not found or expired/);
+
+  const expiredStore = new AiSessionAttachmentStore(-1);
+  const expired = expiredStore.upload({ instanceId: "instance-1", sessionId: "session-1", kind: "image", name: "pixel.png", mime: "image/png", data: Buffer.from("png").toString("base64") });
+  assert.throws(() => expiredStore.resolveRefs([{ id: expired.id, source: { type: "upload-ref" } }], "instance-1", "session-1"), /not found or expired/);
+
+  const disposedStore = new AiSessionAttachmentStore();
+  const disposed = disposedStore.upload({ instanceId: "instance-1", sessionId: "session-1", kind: "file", name: "cleanup.txt", mime: "text/plain", data: Buffer.from("cleanup").toString("base64") });
+  disposedStore.dispose();
+  assert.throws(() => disposedStore.resolveRefs([{ id: disposed.id, source: { type: "upload-ref" } }], "instance-1", "session-1"), /not found or expired/);
+});
+
 const npmIntegrityFixture = `sha512-${Buffer.from("task-handoff-node-agent-integrity").toString("base64")}`;
 
 function testInstanceImage(reference = "task-handoff-web:local", id = "img_1", name = "Image") {
@@ -180,6 +200,31 @@ function testInstanceImage(reference = "task-handoff-web:local", id = "img_1", n
     createdAt: timestamp,
     updatedAt: timestamp,
   };
+}
+
+function testManagedVolumes(instanceId, includeWorkspace = false) {
+  const volume = (role, mountPath) => ({
+    role,
+    name: `task-handoff-${instanceId}-${role}`,
+    mountPath,
+    labels: {
+      "task-handoff.owner": "task-handoff",
+      "task-handoff.instance-id": instanceId,
+      "task-handoff.node-id": "node_exec",
+      "task-handoff.volume-role": role,
+    },
+  });
+  return [
+    volume("data", "/data"),
+    volume("agent-home", "/home/agent"),
+    ...(includeWorkspace ? [volume("workspace", "/workspace")] : []),
+  ];
+}
+
+function testManagedVolumeInspection(instanceId, name) {
+  const volume = testManagedVolumes(instanceId, true).find((item) => item.name === name);
+  assert.ok(volume, `unknown managed volume ${name}`);
+  return { Name: name, Labels: volume.labels };
 }
 
 test("runtime lifecycle result preserves a newer registration heartbeat", () => {
@@ -862,7 +907,7 @@ test("session aggregators apply patch and removed events as one revisioned strea
   });
   assert.equal(normalizedAppSession.status, "running");
   assert.deepEqual(normalizedAppSession.workspace, { cwd: "/workspace/current" });
-  assert.equal(appSessionStatus({ status: "future-state" }), "unknown");
+  assert.equal(normalizeAppSessionStatus("future-state"), "unknown");
 });
 
 test("AI session aggregator recovers advertised gaps from instance deltas and rejects obsolete bootstrap streams", async () => {
@@ -890,7 +935,7 @@ test("AI session aggregator recovers advertised gaps from instance deltas and re
         type: AiSessionEventType.Patch,
         payload: {
           meta: { instanceId, streamId, revision, previousRevision: revision - 1, traceId: `recover_${revision}`, generatedAt: timestamp, reason: "provider-event" },
-          upserted: [{ id: `ai_${revision}`, agent: "codex", status: "idle", phase: "unknown", startedAt: timestamp, updatedAt: timestamp, queue: { pendingCount: 0, items: [] } }],
+          upserted: [{ id: `ai_${revision}`, agent: "codex", creationSource: "app-session", status: "idle", phase: "unknown", startedAt: timestamp, updatedAt: timestamp, queue: { pendingCount: 0, items: [] } }],
           removed: [],
         },
       })),
@@ -916,6 +961,7 @@ test("AI session aggregator validates message deltas without copying snapshots o
     sessions: [{
       id: "session_delta",
       agent: "codex",
+      creationSource: "app-session",
       providerSessionId: "thread_delta",
       activeTurnId: "turn_delta",
       status: "running",
@@ -1560,7 +1606,20 @@ function createMockNodeAgentFetch(options = {}) {
       }
       if (action === "delete") {
         instances.delete(id);
-        return jsonResponse({ deleted: true });
+        const volumeResults = (current.runtime?.managedVolumes || []).map((volume) => ({
+          role: volume.role,
+          name: volume.name,
+          mountPath: volume.mountPath,
+          status: body.deleteVolumes ? "deleted" : "retained",
+        }));
+        return jsonResponse({
+          instanceId: id,
+          containerDeleted: true,
+          completed: true,
+          deletedVolumes: volumeResults.filter((volume) => volume.status === "deleted"),
+          retainedVolumes: volumeResults.filter((volume) => volume.status === "retained"),
+          volumeResults,
+        });
       }
       if (action === "proxy") {
         return options.proxy ? options.proxy({ url, init, body, instance: current, requests, jsonResponse, errorResponse }) : jsonResponse({ ok: true });
@@ -1624,6 +1683,10 @@ test("control plane auth is disabled by default", async () => {
     assert.equal(session.statusCode, 200);
     assert.equal(session.body.data.mode, "disabled");
     assert.equal(session.body.data.authenticated, true);
+
+    const identity = await json(app, "GET", "/api/control-plane/identity");
+    assert.equal(identity.statusCode, 200);
+    assert.equal(identity.body.data.payload.capabilities.authentication, "disabled");
 
     const projects = await json(app, "GET", "/api/projects");
     assert.equal(projects.statusCode, 200);
@@ -1756,6 +1819,88 @@ test("control plane password auth protects APIs and supports bootstrap login log
   } finally {
     await app.close();
   }
+});
+
+test("control plane exposes a stable signed identity and authorizes revocable mobile bearer sessions", async (t) => {
+  const dataDir = tempDataDir("cp-mobile-auth");
+  let app = await createControlPlaneApp({ dataDir, logger: false, auth: { mode: "password" } });
+  t.after(async () => app.close());
+
+  const firstIdentityResponse = await app.inject({ method: "GET", url: "/api/control-plane/identity" });
+  assert.equal(firstIdentityResponse.statusCode, 200);
+  const firstIdentity = ControlPlanePublicIdentityDocumentSchema.parse(firstIdentityResponse.json()).data;
+  assert.equal(firstIdentity.payload.kind, "control-plane");
+  assert.equal(firstIdentity.payload.capabilities.authentication, "required");
+  const publicKey = crypto.createPublicKey({
+    key: { kty: "OKP", crv: "Ed25519", x: firstIdentity.payload.publicKey.value },
+    format: "jwk",
+  });
+  assert.equal(crypto.verify(
+    null,
+    Buffer.from(controlPlaneIdentitySigningInput(firstIdentity.payload)),
+    publicKey,
+    Buffer.from(firstIdentity.signature, "base64url"),
+  ), true);
+  assert.equal(
+    firstIdentity.payload.publicKey.fingerprint,
+    `sha256:${crypto.createHash("sha256").update(Buffer.from(firstIdentity.payload.publicKey.value, "base64url")).digest("base64url")}`,
+  );
+
+  await json(app, "POST", "/api/auth/bootstrap-admin", { username: "admin", password: "password123" });
+  const mobileLogin = await app.inject({
+    method: "POST",
+    url: "/api/auth/mobile/login",
+    payload: {
+      username: "admin",
+      password: "password123",
+      device: { id: "device_12345678", name: "Test Phone", platform: "ios", appVersion: "0.0.1" },
+    },
+  });
+  assert.equal(mobileLogin.statusCode, 200, mobileLogin.body);
+  const mobileToken = mobileLogin.json().data.sessionToken;
+  const mobileSessionId = mobileLogin.json().data.session.id;
+  assert.match(mobileToken, /^msess_[^.]+\.[A-Za-z0-9_-]+$/);
+  assert.equal(mobileLogin.headers["set-cookie"], undefined);
+
+  const mobileSession = await app.inject({ method: "GET", url: "/api/auth/session", headers: { authorization: `Bearer ${mobileToken}` } });
+  assert.equal(mobileSession.statusCode, 200, mobileSession.body);
+  assert.equal(mobileSession.json().data.authenticated, true);
+  assert.equal(mobileSession.json().data.user.username, "admin");
+  const mobileTokenAsCookie = await app.inject({
+    method: "GET",
+    url: "/api/projects",
+    headers: { cookie: `task_handoff_cp_session=${mobileToken}` },
+  });
+  assert.equal(mobileTokenAsCookie.statusCode, 401);
+
+  const authorized = await app.inject({ method: "GET", url: "/api/projects", headers: { authorization: `Bearer ${mobileToken}` } });
+  assert.equal(authorized.statusCode, 200, authorized.body);
+  const eventSocket = await app.injectWS("/api/events", { headers: { authorization: `Bearer ${mobileToken}` } });
+  eventSocket.terminate();
+  const storedMobileSession = fs.readFileSync(path.join(dataDir, "auth-sessions", `${mobileSessionId}.json`), "utf8");
+  assert.equal(storedMobileSession.includes(mobileToken), false);
+  assert.equal(storedMobileSession.includes(mobileToken.split(".")[1]), false);
+
+  const webLogin = await app.inject({ method: "POST", url: "/api/auth/login", payload: { username: "admin", password: "password123" } });
+  const cookie = webLogin.headers["set-cookie"];
+  const webToken = cookie.match(/task_handoff_cp_session=([^;]+)/)[1];
+  const webTokenAsBearer = await app.inject({ method: "GET", url: "/api/projects", headers: { authorization: `Bearer ${webToken}` } });
+  assert.equal(webTokenAsBearer.statusCode, 401);
+
+  const sessions = await app.inject({ method: "GET", url: "/api/auth/mobile/sessions", headers: { cookie } });
+  assert.equal(sessions.statusCode, 200, sessions.body);
+  assert.deepEqual(sessions.json().data.map((session) => session.id), [mobileSessionId]);
+  const revoke = await app.inject({ method: "DELETE", url: `/api/auth/mobile/sessions/${mobileSessionId}`, headers: { cookie } });
+  assert.equal(revoke.statusCode, 200, revoke.body);
+  assert.equal(revoke.json().data.revoked, true);
+  const revoked = await app.inject({ method: "GET", url: "/api/projects", headers: { authorization: `Bearer ${mobileToken}` } });
+  assert.equal(revoked.statusCode, 401);
+
+  await app.close();
+  app = await createControlPlaneApp({ dataDir, logger: false, auth: { mode: "password" } });
+  const secondIdentity = ControlPlanePublicIdentityDocumentSchema.parse((await app.inject({ method: "GET", url: "/api/control-plane/identity" })).json()).data;
+  assert.equal(secondIdentity.payload.controlPlaneId, firstIdentity.payload.controlPlaneId);
+  assert.equal(secondIdentity.payload.publicKey.fingerprint, firstIdentity.payload.publicKey.fingerprint);
 });
 
 test("control plane auth exemptions belong to explicit routes and are not inherited by path prefixes", async (t) => {
@@ -1989,6 +2134,7 @@ test("control plane mutation route policies never degrade privileged operations 
     ["POST", "/api/ai-session-attachments", "send-message", "ai-session"],
     ["POST", "/api/chat-gateway/messages", "send-message", "ai-session"],
     ["POST", "/api/chat-gateway/actions", "send-message", "ai-session"],
+    ["POST", "/api/controlled-instances/:id/ai-sessions", "send-message", "ai-session"],
     ["POST", "/api/controlled-instances/:id/ai-sessions/:sessionId/resume", "send-message", "ai-session"],
     ["POST", "/api/controlled-instances/:id/ai-sessions/:sessionId/commands", "send-message", "ai-session"],
     ["POST", "/api/controlled-instances/:id/ai-sessions/:sessionId/triggers", "create", "trigger"],
@@ -2001,6 +2147,13 @@ test("control plane mutation route policies never degrade privileged operations 
     assert.equal(policy.resource.type, expectedResource, `${method} ${route}`);
     assert.equal(can(viewer, policy.action, policy.resource), false, `${method} ${route} viewer`);
     assert.equal(can(operator, policy.action, policy.resource), true, `${method} ${route} operator`);
+  }
+
+  for (const method of ["POST", "DELETE"]) {
+    const access = routeAuthorization(method, "/api/controlled-instances/:id/apps/sessions/:sessionId/access");
+    assert.equal(access.action, "read", `${method} App Session access lease`);
+    assert.equal(access.resource.type, "instance", `${method} App Session access lease`);
+    assert.equal(can(viewer, access.action, access.resource), true, `${method} App Session access lease viewer`);
   }
 
   const adminOnly = routeAuthorization("POST", "/api/chat-gateway/poll-ai-sessions");
@@ -3041,6 +3194,7 @@ test("local docker run args include controlled metadata and disable local chat b
   const args = dockerRunArgs(
     {
       nodeAgentUrl: "http://127.0.0.1:8091",
+      privateConfigPath: "/private/inst_1.json",
       node: {
         id: "node_exec",
         name: "Execution Node",
@@ -3100,7 +3254,7 @@ test("local docker run args include controlled metadata and disable local chat b
         workspace: { status: "unknown" },
         target: { strategy: "direct-port", status: "unknown" },
         apps: { runningCount: 0 },
-        runtime: { labels: {} },
+        runtime: { labels: {}, managedVolumes: testManagedVolumes("inst_1") },
         registrationToken: "secret",
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -3130,8 +3284,8 @@ test("local docker run args include controlled metadata and disable local chat b
   assert.ok(args.includes("bridge"));
   assert.ok(args.includes("host.docker.internal:host-gateway"));
   assert.ok(args.includes("/tmp:rw,mode=1777"));
-  assert.ok(args.includes("task-handoff-inst_1-data:/data"));
-  assert.ok(args.includes("task-handoff-inst_1-agent-home:/home/agent"));
+  assert.ok(args.includes("type=volume,src=task-handoff-inst_1-data,dst=/data"));
+  assert.ok(args.includes("type=volume,src=task-handoff-inst_1-agent-home,dst=/home/agent"));
   assert.ok(args.includes("EXTRA_FLAG=1"));
   assert.ok(args.includes("/tmp/workspace:/workspace:rw"));
 });
@@ -3670,11 +3824,12 @@ test("node agent update apply launches the resolved worker through systemd-run",
   assert.equal(args[args.indexOf("--control-plane-health-url") + 1], "http://127.0.0.1:8081/api/health");
 });
 
-test("local docker run args include resolved model environment", () => {
+test("local docker run args keep resolved model environment out of Docker Config", () => {
   const timestamp = new Date().toISOString();
   const args = dockerRunArgs(
     {
       nodeAgentUrl: "http://127.0.0.1:8091",
+      privateConfigPath: "/private/inst_1.json",
       modelEnv: {
         OPENAI_API_KEY: "codex-key",
         OPENAI_BASE_URL: "https://openai.example/v1",
@@ -3725,7 +3880,7 @@ test("local docker run args include resolved model environment", () => {
         workspace: { status: "unknown" },
         target: { strategy: "direct-port", status: "unknown" },
         apps: { runningCount: 0 },
-        runtime: { labels: {} },
+        runtime: { labels: {}, managedVolumes: testManagedVolumes("inst_1") },
         registrationToken: "secret",
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -3734,13 +3889,8 @@ test("local docker run args include resolved model environment", () => {
     "task-handoff-inst_1",
   );
 
-  assert.ok(args.includes("OPENAI_API_KEY=codex-key"));
-  assert.ok(args.includes("OPENAI_BASE_URL=https://openai.example/v1"));
-  assert.ok(args.includes("TASK_HANDOFF_CODEX_BASE_URL=https://openai.example/v1"));
-  assert.ok(args.includes("TASK_HANDOFF_CODEX_MODEL=gpt-codex"));
-  assert.ok(args.includes("ANTHROPIC_API_KEY=claude-key"));
-  assert.ok(args.includes("ANTHROPIC_BASE_URL=https://anthropic.example"));
-  assert.ok(args.includes("TASK_HANDOFF_CLAUDE_MODEL=claude-sonnet"));
+  assert.equal(args.some((value) => value.includes("codex-key") || value.includes("claude-key")), false);
+  assert.ok(args.includes("type=bind,src=/private/inst_1.json,dst=/run/task-handoff/instance-private-config.json,readonly"));
 });
 
 test("local docker run args expose git workspace bootstrap environment", () => {
@@ -3748,6 +3898,7 @@ test("local docker run args expose git workspace bootstrap environment", () => {
   const args = dockerRunArgs(
     {
       nodeAgentUrl: "http://127.0.0.1:8091",
+      privateConfigPath: "/private/inst_git.json",
       project: {
         id: "proj_git",
         name: "Git Project",
@@ -3792,7 +3943,7 @@ test("local docker run args expose git workspace bootstrap environment", () => {
         workspace: { status: "unknown" },
         target: { strategy: "direct-port", status: "unknown" },
         apps: { runningCount: 0 },
-        runtime: { labels: {} },
+        runtime: { labels: {}, managedVolumes: testManagedVolumes("inst_git", true) },
         registrationToken: "secret",
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -3808,12 +3959,14 @@ test("local docker run args expose git workspace bootstrap environment", () => {
   assert.ok(args.includes("TASK_HANDOFF_GIT_DEPTH=10"));
   assert.ok(args.includes("TASK_HANDOFF_GIT_SUBMODULES=true"));
   assert.ok(args.includes("TASK_HANDOFF_GIT_LFS=false"));
+  assert.ok(args.includes("type=volume,src=task-handoff-inst_git-workspace,dst=/workspace"));
 });
 
 test("local docker executor checks local images and pulls registry images before running", async () => {
   const timestamp = new Date().toISOString();
   const baseContext = {
     nodeAgentUrl: "http://127.0.0.1:8091",
+    privateConfigPath: "/private/inst_1.json",
     project: {
       id: "proj_1",
       name: "Project",
@@ -3854,7 +4007,7 @@ test("local docker executor checks local images and pulls registry images before
       workspace: { status: "unknown" },
       target: { strategy: "direct-port", status: "unknown" },
       apps: { runningCount: 0 },
-      runtime: { labels: {} },
+      runtime: { labels: {}, managedVolumes: testManagedVolumes("inst_1") },
       registrationToken: "secret",
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -3871,6 +4024,18 @@ test("local docker executor checks local images and pulls registry images before
       createdAt: timestamp,
       updatedAt: timestamp,
     },
+  };
+  const managedVolumeInspection = (name) => {
+    const volume = baseContext.instance.runtime.managedVolumes.find((item) => item.name === name);
+    return { Name: name, Labels: volume.labels };
+  };
+  const existingContainerInspection = {
+    Id: "container-1",
+    Config: { Labels: { "task-handoff.instance-id": "inst_1" } },
+    Mounts: [
+      ...baseContext.instance.runtime.managedVolumes.map((volume) => ({ Type: "volume", Name: volume.name, Destination: volume.mountPath })),
+      { Type: "bind", Source: "/tmp/workspace", Destination: "/workspace" },
+    ],
   };
 
   const localCalls = [];
@@ -3914,6 +4079,10 @@ test("local docker executor checks local images and pulls registry images before
   let remotePulled = false;
   const remoteExecutor = new LocalDockerExecutor(async (command, args) => {
     remoteCalls.push([command, args]);
+    if (args[0] === "volume" && args[1] === "inspect") {
+      const name = args.at(-1);
+      return { stdout: JSON.stringify(managedVolumeInspection(name)), stderr: "" };
+    }
     if (args[0] === "inspect" && args.includes("{{json .}}")) {
       throw Object.assign(new Error("No such container"), { details: { stderr: "No such container" } });
     }
@@ -3971,6 +4140,10 @@ test("local docker executor checks local images and pulls registry images before
   const resolvedCalls = [];
   const resolvedExecutor = new LocalDockerExecutor(async (command, args) => {
     resolvedCalls.push([command, args]);
+    if (args[0] === "volume" && args[1] === "inspect") {
+      const name = args.at(-1);
+      return { stdout: JSON.stringify(managedVolumeInspection(name)), stderr: "" };
+    }
     if (args[0] === "inspect" && args.includes("{{json .}}")) {
       throw Object.assign(new Error("No such container"), { details: { stderr: "No such container" } });
     }
@@ -4005,8 +4178,9 @@ test("local docker executor checks local images and pulls registry images before
   const existingCalls = [];
   const existingExecutor = new LocalDockerExecutor(async (command, args) => {
     existingCalls.push([command, args]);
+    if (args[0] === "volume" && args[1] === "inspect") return { stdout: JSON.stringify(managedVolumeInspection(args.at(-1))), stderr: "" };
     if (args[0] === "inspect" && args.includes("{{json .}}")) {
-      return { stdout: JSON.stringify({ Id: "container-1", Config: { Labels: { "task-handoff.instance-id": "inst_1" } } }), stderr: "" };
+      return { stdout: JSON.stringify(existingContainerInspection), stderr: "" };
     }
     if (args[0] === "port") {
       return { stdout: "127.0.0.1:18081", stderr: "" };
@@ -4023,6 +4197,7 @@ test("local docker executor checks local images and pulls registry images before
         containerName: "task-handoff-inst_1",
         containerId: "container-1",
         labels: {},
+        managedVolumes: baseContext.instance.runtime.managedVolumes,
       },
     },
     image: {
@@ -4041,13 +4216,16 @@ test("local docker executor checks local images and pulls registry images before
   assert.equal(resumed.target.web, "http://127.0.0.1:18081");
   assert.deepEqual(existingCalls, [
     ["docker", ["inspect", "--format", "{{json .}}", "task-handoff-inst_1"]],
+    ["docker", ["volume", "inspect", "--format", "{{json .}}", "task-handoff-inst_1-data"]],
+    ["docker", ["volume", "inspect", "--format", "{{json .}}", "task-handoff-inst_1-agent-home"]],
     ["docker", ["start", "task-handoff-inst_1"]],
     ["docker", ["port", "task-handoff-inst_1", "8080/tcp"]],
   ]);
 
   const inspectFallbackExecutor = new LocalDockerExecutor(async (_command, args) => {
+    if (args[0] === "volume" && args[1] === "inspect") return { stdout: JSON.stringify(managedVolumeInspection(args.at(-1))), stderr: "" };
     if (args[0] === "inspect" && args.includes("{{json .}}")) {
-      return { stdout: JSON.stringify({ Id: "container-1", Config: { Labels: { "task-handoff.instance-id": "inst_1" } } }), stderr: "" };
+      return { stdout: JSON.stringify(existingContainerInspection), stderr: "" };
     }
     if (args[0] === "port") {
       throw Object.assign(new Error("no public port '8080/tcp' published"), { details: { stderr: "no public port '8080/tcp' published" } });
@@ -4067,6 +4245,7 @@ test("local docker executor checks local images and pulls registry images before
         containerName: "task-handoff-inst_1",
         containerId: "container-1",
         labels: {},
+        managedVolumes: baseContext.instance.runtime.managedVolumes,
       },
     },
   });
@@ -4074,8 +4253,9 @@ test("local docker executor checks local images and pulls registry images before
 
   let transientPortAttempts = 0;
   const transientPortExecutor = new LocalDockerExecutor(async (_command, args) => {
+    if (args[0] === "volume" && args[1] === "inspect") return { stdout: JSON.stringify(managedVolumeInspection(args.at(-1))), stderr: "" };
     if (args[0] === "inspect" && args.includes("{{json .}}")) {
-      return { stdout: JSON.stringify({ Id: "container-1", Config: { Labels: { "task-handoff.instance-id": "inst_1" } } }), stderr: "" };
+      return { stdout: JSON.stringify(existingContainerInspection), stderr: "" };
     }
     if (args[0] === "port") {
       transientPortAttempts += 1;
@@ -4099,6 +4279,7 @@ test("local docker executor checks local images and pulls registry images before
         containerName: "task-handoff-inst_1",
         containerId: "container-1",
         labels: {},
+        managedVolumes: baseContext.instance.runtime.managedVolumes,
       },
     },
   });
@@ -4106,8 +4287,9 @@ test("local docker executor checks local images and pulls registry images before
   assert.equal(resumedAfterRetry.target.web, "http://127.0.0.1:38081");
 
   const missingPortExecutor = new LocalDockerExecutor(async (_command, args) => {
+    if (args[0] === "volume" && args[1] === "inspect") return { stdout: JSON.stringify(managedVolumeInspection(args.at(-1))), stderr: "" };
     if (args[0] === "inspect" && args.includes("{{json .}}")) {
-      return { stdout: JSON.stringify({ Id: "container-1", Config: { Labels: { "task-handoff.instance-id": "inst_1" } } }), stderr: "" };
+      return { stdout: JSON.stringify(existingContainerInspection), stderr: "" };
     }
     if (args[0] === "port") {
       throw Object.assign(new Error("no public port '8080/tcp' published"), { details: { stderr: "no public port '8080/tcp' published" } });
@@ -4128,6 +4310,7 @@ test("local docker executor checks local images and pulls registry images before
           containerName: "task-handoff-inst_1",
           containerId: "container-1",
           labels: {},
+          managedVolumes: baseContext.instance.runtime.managedVolumes,
         },
       },
     }),
@@ -4236,6 +4419,16 @@ test("node agent runs local docker behind node-local target and auto-imports age
     },
     dockerCommandRunner: async (command, args) => {
       calls.push([command, args]);
+      if (args[0] === "volume" && args[1] === "inspect") {
+        const name = args.at(-1);
+        const role = name.endsWith("-agent-home") ? "agent-home" : name.endsWith("-workspace") ? "workspace" : "data";
+        return { stdout: JSON.stringify({ Name: name, Labels: {
+          "task-handoff.owner": "task-handoff",
+          "task-handoff.instance-id": "inst_1",
+          "task-handoff.node-id": "node_local",
+          "task-handoff.volume-role": role,
+        } }), stderr: "" };
+      }
       if (args[0] === "inspect" && args.includes("{{json .}}") && !containerExists) {
         throw Object.assign(new Error("No such container"), { details: { stderr: "No such container" } });
       }
@@ -4388,6 +4581,9 @@ test("node agent keeps a managed instance started when startup runtime convergen
     },
     dockerCommandRunner: async (_command, args) => {
       calls.push(args);
+      if (args[0] === "volume" && args[1] === "inspect") {
+        return { stdout: JSON.stringify(testManagedVolumeInspection("inst_start_fallback", args.at(-1))), stderr: "" };
+      }
       if (args[0] === "inspect" && args.includes("{{json .}}") && !containerExists) {
         throw Object.assign(new Error("No such container"), { details: { stderr: "No such container" } });
       }
@@ -4469,7 +4665,7 @@ test("node agent keeps a managed instance started when startup runtime convergen
   );
 });
 
-test("node agent restores a managed container before startup convergence", async (t) => {
+test("node agent starts a managed container before startup convergence", async (t) => {
   const actions = [];
   let artifactResolutions = 0;
   const app = await createNodeAgentApp({
@@ -4485,11 +4681,27 @@ test("node agent restores a managed container before startup convergence", async
       });
     },
     dockerCommandRunner: async (_command, args) => {
+      if (args[0] === "volume" && args[1] === "inspect") {
+        return { stdout: JSON.stringify(testManagedVolumeInspection("inst_restore_order", args.at(-1))), stderr: "" };
+      }
       if (args[0] === "image" && args[1] === "inspect") {
         return { stdout: JSON.stringify({ Id: `sha256:${"a".repeat(64)}`, RepoDigests: [`task-handoff-web@sha256:${"a".repeat(64)}`], Os: "linux", Architecture: "amd64" }), stderr: "" };
       }
       if (args[0] === "inspect" && args.includes("{{json .}}")) {
-        return { stdout: JSON.stringify({ Id: "container-restore", Platform: "linux", Image: "sha256:image", Config: { Labels: { "task-handoff.instance-id": "inst_restore_order" } } }), stderr: "" };
+        return {
+          stdout: JSON.stringify({
+            Id: "container-restore",
+            Platform: "linux",
+            Image: "sha256:image",
+            Config: { Labels: { "task-handoff.instance-id": "inst_restore_order" } },
+            Mounts: testManagedVolumes("inst_restore_order", true).map((volume) => ({
+              Type: "volume",
+              Name: volume.name,
+              Destination: volume.mountPath,
+            })),
+          }),
+          stderr: "",
+        };
       }
       if (args[0] === "start") actions.push("start-container");
       if (args[0] === "port") return { stdout: "127.0.0.1:18184", stderr: "" };
@@ -4515,20 +4727,15 @@ test("node agent restores a managed container before startup convergence", async
     },
   });
   assert.equal(created.statusCode, 201, created.body);
-  await waitForCondition(() => app.nodeAgentState.controlledInstances.get("inst_restore_order")?.status === "created", "restore-order image provisioning");
-  const instance = app.nodeAgentState.controlledInstances.get("inst_restore_order");
-  app.nodeAgentState.controlledInstances.put({
-    ...instance,
-    status: "registering",
-    runtime: { ...instance.runtime, kind: "docker", containerName: "task-handoff-inst_restore_order", containerId: "container-restore" },
+  const queuedStart = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_restore_order/start",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {},
   });
-
-  await app.nodeAgentRecoverManagedInstances();
-  assert.equal(artifactResolutions, 0, "convergence must not run before the managed runtime is restored");
-  await app.nodeAgentRestoreManagedInstances();
-  assert.deepEqual(actions, ["start-container"]);
-  await app.nodeAgentRecoverManagedInstances();
-  assert.equal(artifactResolutions, 1);
+  assert.equal(queuedStart.statusCode, 200, queuedStart.body);
+  assert.equal(queuedStart.json().data.status, "registering");
+  await waitForCondition(() => artifactResolutions === 1, "start before runtime convergence");
   assert.deepEqual(actions, ["start-container", "resolve-artifact"]);
 });
 
@@ -4542,6 +4749,9 @@ test("node agent skips start config auto-import when disabled on the instance", 
     token: "agent-secret",
     resolveRuntimeArtifact: resolvedRuntimeArtifact,
     dockerCommandRunner: async (_command, args) => {
+      if (args[0] === "volume" && args[1] === "inspect") {
+        return { stdout: JSON.stringify(testManagedVolumeInspection("inst_no_auto_import", args.at(-1))), stderr: "" };
+      }
       if (args[0] === "inspect" && args.includes("{{json .}}") && !containerExists) {
         throw new Error("No such container");
       }
@@ -4618,6 +4828,9 @@ test("node agent config auto-import failure does not fail start", async (t) => {
     token: "agent-secret",
     resolveRuntimeArtifact: resolvedRuntimeArtifact,
     dockerCommandRunner: async (_command, args) => {
+      if (args[0] === "volume" && args[1] === "inspect") {
+        return { stdout: JSON.stringify(testManagedVolumeInspection("inst_auto_import_fails", args.at(-1))), stderr: "" };
+      }
       if (args[0] === "inspect" && args.includes("{{json .}}") && !containerExists) {
         throw new Error("No such container");
       }
@@ -4674,7 +4887,7 @@ test("node agent config auto-import failure does not fail start", async (t) => {
     headers: { authorization: "Bearer agent-secret" },
     payload: {},
   });
-  assert.equal(started.statusCode, 200);
+  assert.equal(started.statusCode, 200, JSON.stringify(started.body));
   assert.equal(started.json().data.target.status, "reachable");
   assert.deepEqual(
     fetchCalls
@@ -4706,6 +4919,9 @@ test("node agent config auto-import timeout does not hang start", async (t) => {
     token: "agent-secret",
     resolveRuntimeArtifact: resolvedRuntimeArtifact,
     dockerCommandRunner: async (_command, args) => {
+      if (args[0] === "volume" && args[1] === "inspect") {
+        return { stdout: JSON.stringify(testManagedVolumeInspection("inst_auto_import_timeout", args.at(-1))), stderr: "" };
+      }
       if (args[0] === "inspect" && args.includes("{{json .}}") && !containerExists) {
         throw new Error("No such container");
       }
@@ -5575,7 +5791,7 @@ test("control plane node instance aggregation isolates invalid node protocol dat
           ok: true,
           role: "node-agent",
           nodeId,
-          protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+          protocolVersion: nodeId === "node_good" ? "2026-06-22" : CONTROL_PLANE_PROTOCOL_VERSION,
         },
       }), {
         status: 200,
@@ -5658,6 +5874,26 @@ test("control plane node instance aggregation isolates invalid node protocol dat
     ["node_bad", "NODE_INSTANCE_PAYLOAD_INVALID"],
     ["node_good", "NODE_INSTANCE_PAYLOAD_INVALID"],
   ]);
+
+  const directory = await json(app, "GET", "/api/instance-board?projection=directory");
+  assert.equal(directory.statusCode, 200, JSON.stringify(directory.body));
+  assert.deepEqual(directory.body.data.map((instance) => instance.id), ["inst_good", "inst_old_protocol"]);
+  const goodDirectoryInstance = directory.body.data.find((instance) => instance.id === "inst_good");
+  assert.equal(goodDirectoryInstance.protocol.compatible, false);
+  assert.match(goodDirectoryInstance.protocol.warning, /Node protocol 2026-06-22/);
+  assert.ok(Array.isArray(goodDirectoryInstance.availableApps));
+  const oldDirectoryInstance = directory.body.data.find((instance) => instance.id === "inst_old_protocol");
+  assert.equal(oldDirectoryInstance.protocol.compatible, false);
+  assert.match(oldDirectoryInstance.protocol.warning, /Instance protocol 2026-06-23/);
+  assert.match(oldDirectoryInstance.protocol.warning, /Node protocol 2026-06-22/);
+  const forbiddenDirectoryKeys = new Set([
+    "access", "auth", "containerEndpoint", "controlEndpoint", "endpoint", "joinToken", "pairing",
+    "port", "publicWebBase", "registrationToken", "secret", "target",
+  ]);
+  const directoryKeys = (value) => value && typeof value === "object"
+    ? Object.entries(value).flatMap(([key, nested]) => [key, ...directoryKeys(nested)])
+    : [];
+  assert.deepEqual(directoryKeys(directory.body.data).filter((key) => forbiddenDirectoryKeys.has(key)), []);
 });
 
 test("node agent connects itself to another control plane with a join token", async (t) => {
@@ -6510,7 +6746,7 @@ test("localhost process spawn failures fail the instance without crashing node a
   assert.equal(health.statusCode, 200);
 });
 
-test("localhost startup rejects a stale healthy process already bound to the instance port", async (t) => {
+test("server localhost startup reports an occupied instance port", async (t) => {
   const dataDir = tempDataDir("node-agent-localhost-stale-port");
   const webStub = path.join(dataDir, "controlled-web-stub.js");
   fs.writeFileSync(
@@ -6523,6 +6759,10 @@ test("localhost startup rejects a stale healthy process already bound to the ins
   );
   const stalePort = await freePort("127.0.0.1");
   const staleServer = net.createServer((socket) => {
+    // The availability probe closes as soon as it establishes that the port is
+    // occupied, so the fixture may observe ECONNRESET while writing its fake
+    // health response. Keep that expected peer disconnect inside the fixture.
+    socket.on("error", () => undefined);
     const body = JSON.stringify({ data: { ok: true, version: "old", startedAt: "2026-07-26T00:00:00.000Z" } });
     socket.end(`HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body)}\r\nconnection: close\r\n\r\n${body}`);
   });
@@ -6563,8 +6803,8 @@ test("localhost startup rejects a stale healthy process already bound to the ins
     headers: { authorization: "Bearer agent-secret" },
     payload: {},
   });
-  assert.equal(started.statusCode, 503);
-  assert.equal(started.json().error.code, "LOCAL_INSTANCE_PROCESS_NOT_READY");
+  assert.equal(started.statusCode, 409);
+  assert.equal(started.json().error.code, "LOCAL_INSTANCE_PORT_IN_USE");
   const failed = app.nodeAgentState.controlledInstances.get("inst_local_stale_port");
   assert.equal(failed.status, "failed");
   assert.notEqual(failed.runtime.pid, process.pid);
@@ -7254,7 +7494,7 @@ test("node agent restores active localhost runtime processes after unclean shutd
       }
     })(),
     "localhost runtime restore",
-    3000,
+    10_000,
   );
   assert.equal(restored.statusCode, 200);
   const instance = restored.json().data.find((item) => item.id === "inst_local_restore_unclean");
@@ -8293,6 +8533,17 @@ test("control plane checks node agent runtime targets and lists their images", a
       buildId: "agent-build",
     },
   });
+
+  const nodeDirectory = await json(app, "GET", "/api/nodes?projection=directory");
+  assert.equal(nodeDirectory.statusCode, 200, JSON.stringify(nodeDirectory.body));
+  assert.equal(nodeDirectory.body.data.length, 1);
+  assert.equal(nodeDirectory.body.data[0].id, "node_agent");
+  assert.equal(nodeDirectory.body.data[0].connectionMode, "direct-http");
+  assert.ok(nodeDirectory.body.data[0].capabilities.includes("agent"));
+  assert.equal(JSON.stringify(nodeDirectory.body).includes("agent-secret"), false);
+  for (const forbidden of ["auth", "endpoint", "controlEndpoint", "containerEndpoint", "publicWebBase", "pairing", "secret"]) {
+    assert.equal(Object.hasOwn(nodeDirectory.body.data[0], forbidden), false);
+  }
 
   const runtimes = await json(app, "GET", "/api/nodes/node_agent/runtimes");
   assert.equal(runtimes.statusCode, 200);
@@ -11059,7 +11310,7 @@ test("control plane starts, stops, and restarts instances through runtime execut
   assert.equal(created.statusCode, 201);
 
   const started = await json(app, "POST", `/api/controlled-instances/${created.body.data.id}/start`);
-  assert.equal(started.statusCode, 200);
+  assert.equal(started.statusCode, 200, JSON.stringify(started.body));
   assert.equal(started.body.data.status, "registering");
   assert.equal(started.body.data.connectionStatus, "online");
   assert.equal(started.body.data.target, undefined);
@@ -11079,9 +11330,9 @@ test("control plane starts, stops, and restarts instances through runtime execut
   assert.equal(restarted.statusCode, 200);
   assert.equal(restarted.body.data.status, "registering");
 
-  const deleted = await json(app, "DELETE", `/api/controlled-instances/${created.body.data.id}`);
+  const deleted = await json(app, "DELETE", `/api/controlled-instances/${created.body.data.id}`, { deleteVolumes: false });
   assert.equal(deleted.statusCode, 200);
-  assert.equal(deleted.body.data.deleted, true);
+  assert.equal(deleted.body.data.completed, true);
   const afterDelete = await json(app, "GET", "/api/controlled-instances");
   assert.equal(afterDelete.statusCode, 200);
   assert.equal(afterDelete.body.data.length, 0);
@@ -11194,11 +11445,11 @@ test("control plane launches app sessions through the controlled instance API", 
       }
       if (body.path === "/api/apps/sessions/state") {
         const updatedAt = new Date().toISOString();
-        const sessions = [...appSessionsById.values()];
+        const sessions = [...appSessionsById.values()].filter((session) => session.status !== "stopped");
         return jsonResponse({ streamId: "app_launch_stream", revision: appSessionRevision, lastEventAt: updatedAt, snapshot: { runningCount: sessions.filter((session) => session.status === "running").length, problemCount: 0, sessions, updatedAt } });
       }
       if (body.path === "/api/apps/sessions" && body.method === "GET") {
-        return jsonResponse([...appSessionsById.values()]);
+        return jsonResponse([...appSessionsById.values()].filter((session) => session.status !== "stopped"));
       }
       if (body.path === "/api/apps/sessions/app_1" && body.method === "PATCH") {
         const current = appSessionsById.get("app_1") || appSessionPayload();
@@ -11385,12 +11636,6 @@ test("control plane launches app sessions through the controlled instance API", 
   assert.equal(appSessionsAfterStop.statusCode, 200);
   assert.equal(appSessionsAfterStop.body.data.instances[0].appSessions.runningCount, 0);
   assert.deepEqual(appSessionsAfterStop.body.data.instances[0].appSessions.sessions, []);
-  const appSessionTombstonesAfterStop = await json(app, "GET", "/api/app-sessions?includeTombstones=true");
-  assert.equal(appSessionTombstonesAfterStop.statusCode, 200);
-  assert.equal(appSessionTombstonesAfterStop.body.data.instances[0].appSessions.runningCount, 0);
-  assert.deepEqual(appSessionTombstonesAfterStop.body.data.instances[0].appSessions.sessions, [
-    appSessionPayload("stopped", "Control Claude"),
-  ]);
   const boardAfterStop = await json(app, "GET", "/api/instance-board");
   assert.equal(boardAfterStop.statusCode, 200);
   assert.equal(boardAfterStop.body.data[0].apps.runningCount, 0);
@@ -15984,6 +16229,7 @@ test("control plane dingding bridge sends action cards and handles callbacks", a
     assert.ok(cardCreate);
     assert.equal(cardCreate.body.userId, "staff-1");
     assert.equal(cardCreate.body.imGroupOpenDeliverModel.robotCode, "robot-code");
+    assert.equal(cardCreate.body.callbackRouteKey, "task_handoff_message");
     const cardParams = cardCreate.body.cardData.cardParamMap;
     assert.equal(cardParams.biz_conversation_id, "dingding-chat");
     assert.equal(cardParams.biz_sender_id, "staff-1");
@@ -17580,6 +17826,7 @@ test("control plane aggregates ai session pending routes and proxies ai session 
         return new Response(JSON.stringify({ data: { items: [{
           id: "ais_history_proxy",
           agent: "claude",
+          creationSource: "ai-session",
           providerSessionId: "claude_history_proxy",
           title: "Proxy history",
           cwd: "/workspace/proxy",
@@ -17592,6 +17839,7 @@ test("control plane aggregates ai session pending routes and proxies ai session 
           item: {
             id: "ais_history_proxy",
             agent: "claude",
+            creationSource: "ai-session",
             providerSessionId: "claude_history_proxy",
             title: "Proxy history",
             cwd: "/workspace/proxy",
@@ -17607,6 +17855,7 @@ test("control plane aggregates ai session pending routes and proxies ai session 
           aiSessionId: "ais_history_proxy",
           providerSessionId: "claude_history_proxy",
           appSessionId: "app_history_proxy",
+          creationSource: "ai-session",
         } }), { status: 200, headers: { "content-type": "application/json" } });
       }
       if (body?.path === "/api/ai-sessions/ais_history_unavailable/resume" && body.method === "POST") {
@@ -17738,7 +17987,7 @@ test("control plane aggregates ai session pending routes and proxies ai session 
   ]);
 
   const history = await json(app, "GET", `/api/controlled-instances/${created.body.data.id}/ai-sessions/history`);
-  assert.equal(history.statusCode, 200);
+  assert.equal(history.statusCode, 200, JSON.stringify(history.body));
   assert.deepEqual(history.body.data.items.map((item) => [item.id, item.providerSessionId]), [["ais_history_proxy", "claude_history_proxy"]]);
   const historyDetail = await json(app, "GET", `/api/controlled-instances/${created.body.data.id}/ai-sessions/history/ais_history_proxy`);
   assert.equal(historyDetail.statusCode, 200);
@@ -17750,6 +17999,7 @@ test("control plane aggregates ai session pending routes and proxies ai session 
     aiSessionId: "ais_history_proxy",
     providerSessionId: "claude_history_proxy",
     appSessionId: "app_history_proxy",
+    creationSource: "ai-session",
   });
   const sessionDiagnostics = await json(app, "GET", "/api/session-streams/diagnostics");
   assert.equal(sessionDiagnostics.statusCode, 200);

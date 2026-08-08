@@ -23,6 +23,7 @@ TaskHandoff brings Codex and other AI development work into one control plane. I
 - **Multi-node management** — Connect local and remote nodes and inspect their resources and managed instances from one place.
 - **Managed workspaces** — Create, start, stop, and restore isolated workspaces, with Docker as the primary runtime today.
 - **Image market and custom images** — Choose from a read-only built-in catalog or separately managed custom images through one instance creation flow.
+- **Environment templates** — Save a Docker instance's installed tools and container configuration as a node-local reusable environment, then combine it with any project or local-folder workspace.
 - **AI session center** — View and control sessions across instances with real-time state delivered over WebSocket.
 - **Repository workflows** — Inspect files, changes, branches, and worktrees, with conservative remote delivery for Git repositories.
 - **Chat integrations** — Route messages, approvals, and actions from Telegram, DingTalk, WeChat, and future adapters to a selected instance.
@@ -56,6 +57,16 @@ TaskHandoff is organized into four cooperating layers:
 - **Chat Gateway and AI Sessions** keep chat credentials, bindings, command parsing, and routing in the control plane, while each target AI Session remains the source of truth for conversation state.
 
 Docker is the primary runtime today. Runtime capabilities and adapters keep the model open to Kubernetes and local-host runtimes without creating separate UI flows for each environment.
+
+### Environment templates
+
+An environment template is a node-local Docker image created from an existing instance with `docker commit`. Registry images and environment templates are peer environment sources in the instance creation flow. Workspace selection remains independent, so either source can be combined with a Git project or a local-folder workspace.
+
+Templates capture only the container writable layer, such as installed system packages and tools. They exclude `/workspace`, `/data`, `/home/agent`, every other bind mount or volume, memory, processes, and network state. Derived instances always receive a new identity, registration token, port, and managed volumes. The node agent briefly pauses the source container during commit and rejects a template if Docker Config contains instance-private credentials.
+
+Every Docker instance has managed volumes for `/data` and `/home/agent`; Git workspaces also have a managed `/workspace` volume, while local folders use an external bind mount. The instance deletion dialog uses one option, selected by default, to delete all managed data. Clearing it retains every managed volume and reports its name; retained volumes are never attached automatically to another instance.
+
+The source node owns both the template record and its Docker image, so a template can be used only on that node while it is ready. Deleting a template removes its internal template tag. A content-addressed internal lease keeps the image recoverable while derived instances reference it, and the image is garbage-collected after the final reference is removed.
 
 ## Quick Start
 

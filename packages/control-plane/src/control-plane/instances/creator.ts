@@ -42,9 +42,24 @@ export class ControlledInstanceCreator {
     const node = this.options.requireNode(nodeId);
     const runtime = await this.options.requireRuntime(node.id, runtimeId);
     const requiresImage = runtime.capabilities.requiresImage ?? runtime.type !== "local";
-    const imageSelection = parsedInput.imageSelection || (requiresImage ? project?.defaultImageSelection : undefined);
+    const environmentSource = parsedInput.environmentSource
+      || (parsedInput.imageSelection ? { type: "image" as const, imageSelection: parsedInput.imageSelection } : undefined)
+      || (requiresImage && project?.defaultImageSelection ? { type: "image" as const, imageSelection: project.defaultImageSelection } : undefined);
+    if (environmentSource?.type === "template" && runtime.type !== "docker") {
+      throw publicError(`Runtime ${runtime.name} does not support environment templates.`, 409, "ENVIRONMENT_TEMPLATE_RUNTIME_UNSUPPORTED");
+    }
+    const imageSelection = environmentSource?.type === "image" ? environmentSource.imageSelection : undefined;
     const imageOption = imageSelection ? this.options.resolveImageSelection(imageSelection) : undefined;
-    if (requiresImage && !imageOption) {
+    const environmentTemplate = environmentSource?.type === "template"
+      ? await this.options.gateway.getEnvironmentTemplate(node, environmentSource.environmentTemplateId)
+      : undefined;
+    if (environmentTemplate && environmentTemplate.status !== "ready") {
+      throw publicError(`Environment template ${environmentTemplate.id} is ${environmentTemplate.status}.`, 409, "ENVIRONMENT_TEMPLATE_NOT_READY");
+    }
+    if (environmentTemplate && environmentTemplate.nodeId !== node.id) {
+      throw publicError(`Environment template ${environmentTemplate.id} belongs to node ${environmentTemplate.nodeId}.`, 409, "ENVIRONMENT_TEMPLATE_NODE_MISMATCH");
+    }
+    if (requiresImage && !imageOption && !environmentTemplate) {
       throw publicError(`Runtime ${runtime.name} requires an image.`, 400, "RUNTIME_IMAGE_REQUIRED");
     }
 
@@ -62,8 +77,8 @@ export class ControlledInstanceCreator {
       id: parsedInput.id,
       name: parsedInput.name,
       runtimeId,
+      ...(environmentSource ? { environmentSource } : {}),
       ...(imageOption && imageSnapshot ? {
-        imageSelection: { imageId: imageOption.id, tag: imageOption.tag },
         image: imageSnapshot,
       } : {}),
       projectId: project?.id,
@@ -77,7 +92,7 @@ export class ControlledInstanceCreator {
     try {
       assigned = (await this.options.gateway.assignInstanceModels(node, instance.id, preparedModels)).instance;
     } catch (error) {
-      await this.options.gateway.deleteInstance(node, instance.id).catch(() => undefined);
+      await this.options.gateway.deleteInstance(node, instance.id, { deleteVolumes: true }).catch(() => undefined);
       throw error;
     }
 

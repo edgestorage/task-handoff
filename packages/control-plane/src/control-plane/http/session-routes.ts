@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { AiSessionApprovalInputSchema, AiSessionCommandInputSchema, AiSessionMentionFileSearchInputSchema, AiSessionMessageRefInputSchema, AiSessionUnreadEventType } from "@task-handoff/protocol/ai-sessions";
+import { AiSessionApprovalInputSchema, AiSessionCloseInputSchema, AiSessionCommandInputSchema, AiSessionCreateRefInputSchema, AiSessionMentionFileSearchInputSchema, AiSessionMessageRefInputSchema, AiSessionOpenAppInputSchema, AiSessionQueueEditInputSchema, AiSessionQueueReorderInputSchema, AiSessionUnreadEventType } from "@task-handoff/protocol/ai-sessions";
 import type { ControlPlaneService } from "../application/service.ts";
 import type { ControlPlaneEventBus } from "../events/bus.ts";
 import type { ControlPlaneAiSessionAggregator } from "../sessions/ai-session-aggregator.ts";
@@ -38,6 +38,10 @@ const AppSessionRenameRequestSchema = z
   })
   .strict();
 
+const AppSessionAccessRevokeRequestSchema = z
+  .object({ token: z.string().trim().min(1).max(512) })
+  .strict();
+
 const EmptyRequestSchema = z.object({}).strict();
 
 export function registerSessionRoutes({
@@ -52,7 +56,6 @@ export function registerSessionRoutes({
   app.get("/api/app-sessions", async (request) => {
     const query = z.object({
       refresh: z.string().optional(),
-      includeTombstones: z.string().optional(),
       instanceId: z.string().trim().min(1).optional(),
       streamId: z.string().trim().min(1).optional(),
       sinceRevision: z.string().optional(),
@@ -73,7 +76,6 @@ export function registerSessionRoutes({
     }
     return { data: await appSessionAggregator.list({
       refresh: query.refresh === "true" || query.refresh === "1",
-      includeTombstones: query.includeTombstones === "true" || query.includeTombstones === "1",
     }) };
   });
 
@@ -96,6 +98,25 @@ export function registerSessionRoutes({
     const session = await service.renameAppSession(params.id, params.sessionId, parsed.title);
     events.publish("instance.app-session.renamed", { instanceId: params.id, sessionId: params.sessionId, title: parsed.title });
     return { data: session };
+  });
+  app.post("/api/controlled-instances/:id/apps/sessions/:sessionId/access", async (request) => {
+    const params = InstanceSessionParamsSchema.parse(request.params);
+    EmptyRequestSchema.parse(request.body || {});
+    const access = await service.createAppSessionAccessToken({ instanceId: params.id, sessionId: params.sessionId });
+    return {
+      data: {
+        mode: access.mode,
+        url: `/apps/access/${access.mode}?token=${encodeURIComponent(access.token)}`,
+        token: access.token,
+        expiresAt: access.expiresAt,
+      },
+    };
+  });
+  app.delete("/api/controlled-instances/:id/apps/sessions/:sessionId/access", async (request) => {
+    const params = InstanceSessionParamsSchema.parse(request.params);
+    const input = AppSessionAccessRevokeRequestSchema.parse(request.body || {});
+    service.revokeAppSessionAccessToken(input.token, { instanceId: params.id, sessionId: params.sessionId });
+    return { data: { revoked: true } };
   });
   app.get("/api/controlled-instances/:id/app-sessions", async (request) => {
     const params = IdParamsSchema.parse(request.params);
@@ -122,6 +143,28 @@ export function registerSessionRoutes({
       appSessionId: result.appSessionId,
       disposition: result.disposition,
     });
+    return { data: result };
+  });
+  app.post("/api/controlled-instances/:id/ai-sessions", async (request) => {
+    const params = IdParamsSchema.parse(request.params);
+    const parsed = AiSessionCreateRefInputSchema.parse(request.body || {});
+    const attachments = aiSessionAttachments.resolveRefs(parsed.attachments, params.id, parsed.clientRequestId);
+    const result = await service.createAiSession(params.id, { ...parsed, attachments });
+    events.publish("instance.ai-session.created", { instanceId: params.id, sessionId: result.aiSessionId, providerSessionId: result.providerSessionId, clientRequestId: parsed.clientRequestId });
+    return { data: result };
+  });
+  app.post("/api/controlled-instances/:id/ai-sessions/:sessionId/open-app", async (request) => {
+    const params = InstanceSessionParamsSchema.parse(request.params);
+    const parsed = AiSessionOpenAppInputSchema.parse(request.body || {});
+    const result = await service.openAiSessionApp(params.id, params.sessionId, parsed.clientRequestId);
+    events.publish("instance.ai-session.app-opened", { instanceId: params.id, sessionId: params.sessionId, appSessionId: result.appSessionId });
+    return { data: result };
+  });
+  app.post("/api/controlled-instances/:id/ai-sessions/:sessionId/close", async (request) => {
+    const params = InstanceSessionParamsSchema.parse(request.params);
+    const parsed = AiSessionCloseInputSchema.parse(request.body || {});
+    const result = await service.closeAiSession(params.id, params.sessionId, parsed.clientRequestId);
+    events.publish("instance.ai-session.closed", { instanceId: params.id, sessionId: params.sessionId, providerSessionId: result.providerSessionId });
     return { data: result };
   });
   app.post("/api/controlled-instances/:id/ai-sessions/:sessionId/messages", async (request) => {
@@ -165,6 +208,16 @@ export function registerSessionRoutes({
   app.delete("/api/controlled-instances/:id/ai-sessions/:sessionId/queue/:queueId", async (request) => {
     const params = InstanceSessionQueueParamsSchema.parse(request.params);
     return { data: await service.removeAiSessionQueuedMessage(params.id, params.sessionId, params.queueId) };
+  });
+  app.patch("/api/controlled-instances/:id/ai-sessions/:sessionId/queue/:queueId", async (request) => {
+    const params = InstanceSessionQueueParamsSchema.parse(request.params);
+    const input = AiSessionQueueEditInputSchema.parse(request.body || {});
+    return { data: await service.editAiSessionQueuedMessage(params.id, params.sessionId, params.queueId, input) };
+  });
+  app.patch("/api/controlled-instances/:id/ai-sessions/:sessionId/queue/reorder", async (request) => {
+    const params = InstanceSessionParamsSchema.parse(request.params);
+    const input = AiSessionQueueReorderInputSchema.parse(request.body || {});
+    return { data: await service.reorderAiSessionQueuedMessages(params.id, params.sessionId, input) };
   });
   app.post("/api/controlled-instances/:id/ai-sessions/:sessionId/interrupt", async (request) => {
     const params = InstanceSessionParamsSchema.parse(request.params);

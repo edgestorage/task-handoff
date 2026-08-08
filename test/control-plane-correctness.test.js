@@ -404,6 +404,7 @@ test("AI session resume returns the committed result when snapshot refresh fails
         aiSessionId: "ai_session_1",
         providerSessionId: "provider_session_1",
         appSessionId: "app_session_1",
+        creationSource: "app-session",
       };
     },
     requireRuntime: async () => ({}),
@@ -432,6 +433,7 @@ test("AI session resume remains successful when refresh diagnostics throw", asyn
       aiSessionId: "ai_session_2",
       providerSessionId: "provider_session_2",
       appSessionId: "app_session_2",
+      creationSource: "app-session",
     }),
     requireRuntime: async () => ({}),
     refreshSnapshots: async () => { throw new Error("snapshot failed"); },
@@ -441,4 +443,39 @@ test("AI session resume remains successful when refresh diagnostics throw", asyn
   const result = await service.resume("instance_2", "ai_session_2");
   assert.equal(result.disposition, "resumed");
   assert.equal(service.diagnostics().resumeSnapshotRefreshFailures, 1);
+});
+
+test("AI session create, Open App, and close proxy strict controlled-instance results", async () => {
+  const requests = [];
+  let snapshotRefreshes = 0;
+  const instance = { config: { defaultCodexPermissionMode: "auto-review" } };
+  const service = new AiSessionActionService({
+    requireInstance: async () => instance,
+    request: async (_instance, route, init) => {
+      requests.push({ route, body: init?.body ? JSON.parse(init.body) : undefined });
+      if (route === "/ai-sessions") return { disposition: "created", aiSessionId: "ai-direct", providerSessionId: "thread-direct", creationSource: "ai-session" };
+      if (route.endsWith("/open-app")) return { disposition: "opened", aiSessionId: "ai-direct", providerSessionId: "thread-direct", appSessionId: "app-direct", creationSource: "ai-session" };
+      return { disposition: "closed", aiSessionId: "ai-direct", providerSessionId: "thread-direct", creationSource: "ai-session" };
+    },
+    requireRuntime: async () => ({ type: "local" }),
+    refreshSnapshots: async () => { snapshotRefreshes += 1; },
+  });
+  const created = await service.create("instance-direct", {
+    agent: "codex",
+    cwd: { type: "runtime-path", path: "/workspace" },
+    message: "Start",
+    clientRequestId: "request-create",
+  });
+  const opened = await service.openApp("instance-direct", created.aiSessionId, "request-open");
+  const closed = await service.close("instance-direct", created.aiSessionId, "request-close");
+  assert.equal(opened.appSessionId, "app-direct");
+  assert.equal(closed.disposition, "closed");
+  assert.deepEqual(requests.map((request) => request.route), [
+    "/ai-sessions",
+    "/ai-sessions/ai-direct/open-app",
+    "/ai-sessions/ai-direct/close",
+  ]);
+  assert.equal(requests[0].body.permissionMode, "auto-review");
+  assert.deepEqual(requests[1].body, { clientRequestId: "request-open" });
+  assert.equal(snapshotRefreshes, 0, "committed lifecycle actions rely on the authoritative event stream");
 });

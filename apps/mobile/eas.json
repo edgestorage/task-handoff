@@ -1,0 +1,22 @@
+{
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "env": {
+        "TASK_HANDOFF_MOBILE_VARIANT": "development"
+      }
+    },
+    "preview": {
+      "distribution": "internal",
+      "env": {
+        "TASK_HANDOFF_MOBILE_VARIANT": "production"
+      }
+    },
+    "production": {
+      "env": {
+        "TASK_HANDOFF_MOBILE_VARIANT": "production"
+      }
+    }
+  }
+}

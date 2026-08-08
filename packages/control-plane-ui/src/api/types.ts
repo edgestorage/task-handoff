@@ -10,6 +10,9 @@ import type {
   AiSessionMentionFileSearch,
   AiSessionReference,
   AiSessionResumeResult,
+  AiSessionCreateResult,
+  AiSessionOpenAppResult,
+  AiSessionCloseResult,
   AiSessionPermissionMode,
   AiSessionLifecycle as ProtocolAiSessionLifecycle,
   AiSessionMessageAttachmentRef as ProtocolAiSessionAttachmentRef,
@@ -20,9 +23,7 @@ import type {
   AiSessionQueue as ProtocolAiSessionQueue,
   AiSessionRemovedEvent as ProtocolAiSessionRemovedEvent,
   AiSessionSnapshotEvent as ProtocolAiSessionSnapshotEvent,
-  AiSessionsSnapshot as ProtocolAiSessionsSnapshot,
   AiSessionSource as ProtocolAiSessionSource,
-  AiSessionSummary as ProtocolAiSessionSummary,
   AiSessionTool as ProtocolAiSessionTool,
   AiSessionTurn as ProtocolAiSessionTurn,
   AiSessionUnreadState as ProtocolAiSessionUnreadState,
@@ -39,6 +40,8 @@ import type {
 } from "@task-handoff/protocol/app-sessions";
 import { AppSessionEventType as ProtocolAppSessionEventType } from "@task-handoff/protocol/app-sessions";
 import type {
+  EnvironmentSource,
+  EnvironmentTemplate,
   ImagePullProgress,
   ApplyUpdateRequest,
   NodeRolloutSummary,
@@ -47,8 +50,16 @@ import type {
   UpdateCheckResult as ProtocolUpdateCheckResult,
   UpdateJob as ProtocolUpdateJob,
 } from "@task-handoff/protocol/control-plane";
+import type {
+  AiSessionUploadedAttachment as SharedAiSessionUploadedAttachment,
+  ControlPlaneAiSessionSummary as SharedControlPlaneAiSessionSummary,
+  ControlPlaneAiSessions as SharedControlPlaneAiSessions,
+  ControlPlaneAiSessionsSnapshot as SharedControlPlaneAiSessionsSnapshot,
+  ControlPlaneAuthSession as SharedControlPlaneAuthSession,
+} from "@task-handoff/control-plane-client";
+import type { ControlPlaneAuthenticatedUser } from "@task-handoff/protocol/control-plane-access";
 
-export type { AiSessionHistoryDetail, AiSessionHistoryItem, AiSessionHistoryList, AiSessionMentionCandidate, AiSessionMentionCatalog, AiSessionMentionDiagnostic, AiSessionMentionFileSearch, AiSessionReference, AiSessionResumeResult };
+export type { AiSessionCloseResult, AiSessionCreateResult, AiSessionHistoryDetail, AiSessionHistoryItem, AiSessionHistoryList, AiSessionMentionCandidate, AiSessionMentionCatalog, AiSessionMentionDiagnostic, AiSessionMentionFileSearch, AiSessionOpenAppResult, AiSessionReference, AiSessionResumeResult };
 
 export type HealthResponse = {
   ok: boolean;
@@ -97,23 +108,10 @@ export type UpdateCheckResult = ProtocolUpdateCheckResult;
 export type UpdateJob = ProtocolUpdateJob;
 export type { NodeRolloutSummary, NodeUpdateImpact, RuntimeVersionState };
 export type { ApplyUpdateRequest };
+export type { EnvironmentSource, EnvironmentTemplate };
 
-export type AuthUser = {
-  id: string;
-  username: string;
-  role: "admin";
-  createdAt: string;
-  updatedAt: string;
-  lastLoginAt?: string;
-};
-
-export type AuthSession = {
-  mode: "disabled" | "password";
-  enabled: boolean;
-  requiresBootstrap: boolean;
-  authenticated: boolean;
-  user?: AuthUser;
-};
+export type AuthUser = ControlPlaneAuthenticatedUser;
+export type AuthSession = SharedControlPlaneAuthSession;
 
 export type ProjectSource =
   | { type: "local-folder"; path: string; ownerNodeId?: string; localFolderId?: string }
@@ -653,10 +651,11 @@ export type ControlledInstance = {
   nodeId: string;
   runtimeId: string;
   imageSelection?: ImageSelection;
+  environmentSource?: EnvironmentSource;
   imageSnapshot?: InstanceImageSnapshot;
   imageProvisioning?: ImageProvisioning;
   stateRevision: number;
-  status: "created" | "provisioning" | "starting" | "registering" | "registered" | "running" | "stopping" | "stopped" | "failed" | "unhealthy";
+  status: "created" | "provisioning" | "starting" | "registering" | "registered" | "running" | "stopping" | "stopped" | "deleting" | "failed" | "unhealthy";
   health: "unknown" | "ok" | "degraded" | "failed";
   connectionStatus: "unknown" | "online" | "offline" | "endpoint-unreachable";
   controlMode: "standalone" | "controlled";
@@ -843,14 +842,7 @@ export type AiSessionLifecycle = ProtocolAiSessionLifecycle;
 export type AiSessionPhase = ProtocolAiSessionPhase;
 export type AiSessionSource = ProtocolAiSessionSource;
 
-export type AiSessionUploadedAttachment = {
-  id: string;
-  kind: "image" | "file";
-  name: string;
-  mime: string;
-  size: number;
-  expiresAt?: string;
-};
+export type AiSessionUploadedAttachment = SharedAiSessionUploadedAttachment;
 
 export type AiSessionAttachmentRef = ProtocolAiSessionAttachmentRef;
 
@@ -861,15 +853,11 @@ export type AiSessionTool = ProtocolAiSessionTool;
 
 export type AiSessionSubAgent = ProtocolAiSessionSubAgent;
 
-export type AiSessionSummary = ProtocolAiSessionSummary & {
-  unread: boolean;
-};
+export type AiSessionSummary = SharedControlPlaneAiSessionSummary;
 
 export type AiSessionUnreadState = ProtocolAiSessionUnreadState;
 
-export type AiSessionsSnapshot = Omit<ProtocolAiSessionsSnapshot, "sessions"> & {
-  sessions: AiSessionSummary[];
-};
+export type AiSessionsSnapshot = SharedControlPlaneAiSessionsSnapshot;
 
 export type InstanceBoardAiSummary = {
   runningCount: number;
@@ -881,16 +869,7 @@ export type InstanceBoardAiSummary = {
   revision?: number;
 };
 
-export type ControlPlaneAiSessions = {
-  updatedAt: string;
-  instances: Array<{
-    instanceId: string;
-    streamId: string;
-    aiSessions: AiSessionsSnapshot;
-    revision?: number;
-    lastEventAt?: string;
-  }>;
-};
+export type ControlPlaneAiSessions = SharedControlPlaneAiSessions;
 
 export type AiSessionEventMeta = ProtocolAiSessionEventMeta;
 export type AiSessionSnapshotEvent = ProtocolAiSessionSnapshotEvent;
@@ -984,6 +963,7 @@ export type CreateControlledInstanceInput = {
   source?: ProjectSource;
   sourceSnapshot?: Record<string, unknown>;
   imageSelection?: ImageSelection;
+  environmentSource?: EnvironmentSource;
   nodeId: string;
   runtimeId: string;
   config?: {

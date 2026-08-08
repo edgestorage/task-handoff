@@ -21,6 +21,7 @@ import {
   AppSessionSnapshotEventSchema,
 } from "@task-handoff/protocol/app-sessions";
 import { SessionStreamsHelloSchema, type EventEnvelope, type SessionStreamsHello } from "@task-handoff/protocol/events";
+import { safeParseResponse } from "@task-handoff/protocol/response-validation";
 import type { ControlPlaneEventBus } from "../events/bus.ts";
 
 const SESSION_EVENT_SCHEMAS = {
@@ -58,7 +59,7 @@ export class NodeTunnelEventRouter {
     const type = typeof message.type === "string" ? message.type : "";
     if (type === "node-agent.streams.hello") {
       const instanceId = typeof message.instanceId === "string" ? message.instanceId : "";
-      const hello = SessionStreamsHelloSchema.safeParse(message.payload);
+      const hello = safeParseResponse(SessionStreamsHelloSchema, message.payload);
       if (instanceId && hello.success) {
         this.enqueue(nodeId, instanceId, () => this.options.onStreamsHello?.(instanceId, hello.data));
       }
@@ -75,7 +76,7 @@ export class NodeTunnelEventRouter {
     const claimedInstanceId = firstString(scope.instanceId, event.instanceId, forwardedInstanceId);
 
     if (eventType === InstanceResourceMetricsEventType.Snapshot) {
-      const parsed = InstanceResourceMetricsSchema.safeParse(payload);
+      const parsed = safeParseResponse(InstanceResourceMetricsSchema, payload);
       if (!parsed.success || parsed.data.instanceId !== claimedInstanceId) return true;
       this.enqueue(nodeId, parsed.data.instanceId, () => {
         this.options.events?.publish(eventType, parsed.data, {
@@ -86,7 +87,7 @@ export class NodeTunnelEventRouter {
       return true;
     }
     if (eventType === InstanceLifecycleEventType.Snapshot) {
-      const parsed = InstanceLifecycleSnapshotSchema.safeParse(payload);
+      const parsed = safeParseResponse(InstanceLifecycleSnapshotSchema, payload);
       if (!parsed.success || parsed.data.instanceId !== claimedInstanceId) return true;
       this.enqueue(nodeId, parsed.data.instanceId, () => {
         this.options.events?.publish(eventType, parsed.data, {
@@ -98,8 +99,8 @@ export class NodeTunnelEventRouter {
     }
     if (eventType === ImagePullTerminalEventType.Output || eventType === ImagePullTerminalEventType.Finished) {
       const parsed = eventType === ImagePullTerminalEventType.Output
-        ? ImagePullTerminalOutputSchema.safeParse(payload)
-        : ImagePullTerminalFinishedSchema.safeParse(payload);
+        ? safeParseResponse(ImagePullTerminalOutputSchema, payload)
+        : safeParseResponse(ImagePullTerminalFinishedSchema, payload);
       if (!parsed.success || parsed.data.instanceId !== claimedInstanceId) return true;
       this.enqueue(nodeId, parsed.data.instanceId, () => {
         this.options.events?.publish(eventType, parsed.data, {
@@ -231,7 +232,7 @@ export class NodeTunnelEventRouter {
 function parseSessionEvent(eventType: string, payload: unknown) {
   const schema = SESSION_EVENT_SCHEMAS[eventType as keyof typeof SESSION_EVENT_SCHEMAS];
   if (!schema) return undefined;
-  const parsed = schema.safeParse(payload);
+  const parsed = safeParseResponse(schema, payload);
   if (!parsed.success) return undefined;
   const data = parsed.data;
   return { instanceId: "meta" in data ? data.meta.instanceId : data.instanceId, payload: data };

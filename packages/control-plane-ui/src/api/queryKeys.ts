@@ -1,6 +1,7 @@
 export const controlPlaneQueryKeys = {
   status: ["control-plane-status"] as const,
   settings: ["control-plane-settings"] as const,
+  mobileSessions: ["control-plane-mobile-sessions"] as const,
   projects: ["control-plane-projects"] as const,
   models: ["control-plane-models"] as const,
   images: ["control-plane-images"] as const,
@@ -18,6 +19,9 @@ export const controlPlaneQueryKeys = {
   nodeImageCatalog: (nodeId?: string) => nodeId
     ? ["node-image-catalog", nodeId] as const
     : ["node-image-catalog"] as const,
+  environmentTemplates: (nodeId?: string) => nodeId
+    ? ["node-environment-templates", nodeId] as const
+    : ["node-environment-templates"] as const,
   instanceBoard: ["instance-board-payload"] as const,
   chatBridges: ["chat-gateway-bridges"] as const,
   chatStatus: ["chat-gateway-status"] as const,

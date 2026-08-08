@@ -25,6 +25,19 @@ export type AiSessionEnqueueResult = {
 
 type QueueItemPatch = Partial<Pick<AiSessionQueuedMessage, "status" | "error">>;
 
+export type AiSessionQueueReorderResult =
+  | { kind: "updated"; session: AiSessionStatus }
+  | { kind: "unchanged"; session: AiSessionStatus }
+  | { kind: "revision-conflict"; currentRevision: number }
+  | { kind: "order-invalid" };
+
+export type AiSessionQueueEditResult =
+  | { kind: "updated"; session: AiSessionStatus }
+  | { kind: "unchanged"; session: AiSessionStatus }
+  | { kind: "revision-conflict"; currentRevision: number }
+  | { kind: "not-found" }
+  | { kind: "not-editable" };
+
 function defaultQueueId() {
   return `aiq_${randomUUID().replace(/-/g, "").slice(0, 20)}`;
 }
@@ -100,24 +113,55 @@ export class AiSessionQueueService {
   }
 
   retryQueuedMessage(current: AiSessionStatus, queueId: string) {
-    return this.patchQueuedMessage(current, queueId, { status: "queued", error: undefined });
+    const item = this.queuedMessages(current).items.find((entry) => entry.id === queueId);
+    if (!item) return undefined;
+    const remaining = this.queuedMessages(current).items.filter((entry) => entry.id !== queueId);
+    const timestamp = this.now();
+    return this.withQueue(current, [...remaining, { ...item, status: "queued", error: undefined, updatedAt: timestamp }], timestamp);
   }
 
   removeQueuedMessage(current: AiSessionStatus, queueId: string) {
+    if (!this.queuedMessages(current).items.some((item) => item.id === queueId)) return undefined;
     const items = this.queuedMessages(current).items.filter((item) => item.id !== queueId);
     this.queuedAttachmentPayloads.delete(queueId);
     return this.withQueue(current, items, this.now());
   }
 
-  reorderQueuedMessages(current: AiSessionStatus, queueIds: string[]) {
+  editQueuedMessage(current: AiSessionStatus, queueId: string, expectedRevision: number, message: string): AiSessionQueueEditResult {
+    if (current.queue.revision !== expectedRevision) {
+      return { kind: "revision-conflict", currentRevision: current.queue.revision };
+    }
+    const item = this.queuedMessages(current).items.find((entry) => entry.id === queueId);
+    if (!item) return { kind: "not-found" };
+    if (item.status !== "queued") return { kind: "not-editable" };
+    const normalizedMessage = messageText(message);
+    if (item.message === normalizedMessage) return { kind: "unchanged", session: current };
+    const timestamp = this.now();
+    const items = this.queuedMessages(current).items.map((entry) => entry.id === queueId
+      ? { ...entry, message: normalizedMessage, updatedAt: timestamp }
+      : entry);
+    return { kind: "updated", session: this.withQueue(current, items, timestamp) };
+  }
+
+  reorderQueuedMessages(current: AiSessionStatus, expectedRevision: number, queueIds: string[]): AiSessionQueueReorderResult {
+    if (current.queue.revision !== expectedRevision) {
+      return { kind: "revision-conflict", currentRevision: current.queue.revision };
+    }
     const currentItems = this.queuedMessages(current).items;
-    const byId = new Map(currentItems.map((item) => [item.id, item]));
-    const ordered = queueIds
-      .map((queueId) => byId.get(queueId))
-      .filter((item): item is AiSessionQueuedMessage => Boolean(item));
+    const queuedItems = currentItems.filter((item) => item.status === "queued");
     const requested = new Set(queueIds);
-    const remaining = currentItems.filter((item) => !requested.has(item.id));
-    return this.withQueue(current, [...ordered, ...remaining], this.now());
+    if (requested.size !== queueIds.length
+      || queueIds.length !== queuedItems.length
+      || queuedItems.some((item) => !requested.has(item.id))) {
+      return { kind: "order-invalid" };
+    }
+    if (queuedItems.every((item, index) => item.id === queueIds[index])) {
+      return { kind: "unchanged", session: current };
+    }
+    const byId = new Map(queuedItems.map((item) => [item.id, item]));
+    const ordered = queueIds.map((queueId) => byId.get(queueId)!);
+    const nonQueued = currentItems.filter((item) => item.status !== "queued");
+    return { kind: "updated", session: this.withQueue(current, [...nonQueued, ...ordered], this.now()) };
   }
 
   private patchQueuedMessage(current: AiSessionStatus, queueId: string, patch: QueueItemPatch) {
@@ -137,7 +181,7 @@ export class AiSessionQueueService {
     return {
       ...current,
       updatedAt,
-      queue: normalizeAiSessionQueueItems(items),
+      queue: normalizeAiSessionQueueItems(items, current.queue.revision + 1),
     };
   }
 }
