@@ -12,6 +12,7 @@ jest.mock('expo-router/unstable-native-tabs', () => {
     {
       Icon: () => null,
       Label: ({ children }: React.PropsWithChildren) => React.createElement(Text, null, children),
+      VectorIcon: () => null,
     },
   );
   const NativeTabs = Object.assign(

@@ -331,6 +331,14 @@ export const enUS = {
   'instance.nameTooLong': 'Name must be {max} characters or fewer.',
   'instance.nameUnchanged': 'Enter a different name.',
   'instance.renameFailed': 'Could not update the name.',
+  'instance.start': 'Start',
+  'instance.stop': 'Stop',
+  'instance.restart': 'Restart',
+  'instance.retryImage': 'Retry Image',
+  'instance.actionFailed': 'Could not update the instance lifecycle.',
+  'instance.actionConfirmTitle': '{action} “{name}”?',
+  'instance.stopConfirmDescription': 'This stops the controlled instance and its active work.',
+  'instance.restartConfirmDescription': 'This restarts the controlled instance. Active app and AI sessions may be interrupted.',
 } as const;
 
 export type MessageKey = keyof typeof enUS;
@@ -353,7 +361,7 @@ export const zhCN: Record<MessageKey, string> = {
   'time.recently': '最近在线', 'time.justNow': '刚刚在线', 'time.minutesAgo': '{count} 分钟前在线', 'time.hoursAgo': '{count} 小时前在线', 'time.yesterday': '昨天在线', 'time.daysAgo': '{count} 天前在线',
   'history.archivedAt': '归档于 {date}', 'history.workspace': '工作区', 'history.providerSession': 'Provider 会话', 'history.conversation': '对话', 'history.turnCount': '{count} 轮', 'history.you': '你', 'history.empty': '此会话没有保留对话轮次。', 'history.resume': '继续会话', 'history.loadError': '无法加载历史记录。', 'history.loading': '正在加载历史记录…',
   'instance.notFound': '当前控制面板目录中没有此实例。', 'instance.notObserved': '尚未观测到', 'instance.runtime': '运行环境', 'instance.workspace': '工作区', 'instance.heartbeat': '心跳', 'instance.protocol': '协议', 'instance.archivedEmpty': '还没有已归档会话', 'instance.sessionSummary': '{active} 个活跃 · {problem} 个需要处理', 'instance.history': '历史记录', 'instance.archivedSession': '已归档会话', 'instance.notReported': '未上报',
-  'instance.moreActions': '更多实例操作', 'instance.editInstanceName': '编辑实例名称', 'instance.editNodeName': '编辑节点名称', 'instance.instanceName': '实例名称', 'instance.nodeName': '节点名称', 'instance.renaming': '正在保存…', 'instance.nameRequired': '名称不能为空。', 'instance.nameTooLong': '名称不能超过 {max} 个字符。', 'instance.nameUnchanged': '请输入不同的名称。', 'instance.renameFailed': '无法更新名称。',
+  'instance.moreActions': '更多实例操作', 'instance.editInstanceName': '编辑实例名称', 'instance.editNodeName': '编辑节点名称', 'instance.instanceName': '实例名称', 'instance.nodeName': '节点名称', 'instance.renaming': '正在保存…', 'instance.nameRequired': '名称不能为空。', 'instance.nameTooLong': '名称不能超过 {max} 个字符。', 'instance.nameUnchanged': '请输入不同的名称。', 'instance.renameFailed': '无法更新名称。', 'instance.start': '启动', 'instance.stop': '停止', 'instance.restart': '重启', 'instance.retryImage': '重试镜像准备', 'instance.actionFailed': '无法更新实例生命周期。', 'instance.actionConfirmTitle': '{action}“{name}”？', 'instance.stopConfirmDescription': '这会停止受管实例及其中正在进行的工作。', 'instance.restartConfirmDescription': '这会重启受管实例，正在运行的 App 和 AI 会话可能会中断。',
   'sessions.copyCode': '复制',
   'sessions.codeCopied': '已复制',
   'sessions.plainText': '纯文本',

@@ -38,7 +38,7 @@ export class MobileAiSessionController {
     this.storeGeneration = store.generation(controlPlaneId);
   }
 
-  async start(signal?: AbortSignal) {
+  async start(signal?: AbortSignal, options: { managed?: boolean } = {}) {
     if (!this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) return;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined;
@@ -50,10 +50,12 @@ export class MobileAiSessionController {
       lastSyncedAt: this.store.profile(this.controlPlaneId).sync.lastSyncedAt,
     });
     try {
-      await this.transport.revalidate?.();
+      if (!options.managed) await this.transport.revalidate?.();
       if (epoch !== this.epoch || !this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) return;
-      const auth = await this.client.auth.session(signal);
-      if (!auth.authenticated) throw new MobileControlPlaneTransportError('DIRECT_SESSION_EXPIRED', 'The mobile Control Plane session expired. Sign in again.', false, 401);
+      if (!options.managed) {
+        const auth = await this.client.auth.session(signal);
+        if (!auth.authenticated) throw new MobileControlPlaneTransportError('DIRECT_SESSION_EXPIRED', 'The mobile Control Plane session expired. Sign in again.', false, 401);
+      }
       if (!(await this.refreshSnapshot(signal, epoch))) return;
       this.reconnectAttempt = 0;
       mobileMetrics.record('connection.result', { result: 'connected' });
@@ -64,9 +66,10 @@ export class MobileAiSessionController {
         error: cause instanceof Error ? cause.message : 'Could not load AI Sessions.',
       });
       mobileMetrics.record('connection.result', { result: 'failed' });
-      this.scheduleReconnect(epoch);
+      if (!options.managed) this.scheduleReconnect(epoch);
       throw cause;
     }
+    if (options.managed) return;
     this.connection?.close();
     if (epoch !== this.epoch || !this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) return;
     this.connection = this.transport.connectEvents({
@@ -100,6 +103,25 @@ export class MobileAiSessionController {
     this.reconnectAttempt = 0;
     this.connection?.close();
     this.connection = undefined;
+  }
+
+  offline() {
+    this.stop();
+    if (!this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) return;
+    this.store.setSyncState(this.controlPlaneId, {
+      phase: 'offline',
+      lastSyncedAt: this.store.profile(this.controlPlaneId).sync.lastSyncedAt,
+    });
+  }
+
+  onConnectionError(error?: MobileControlPlaneTransportError) {
+    if (!this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) return;
+    const current = this.store.profile(this.controlPlaneId);
+    this.store.setSyncState(this.controlPlaneId, {
+      phase: current.snapshot ? 'stale' : 'error',
+      lastSyncedAt: current.sync.lastSyncedAt,
+      ...(error ? { error: error.message } : {}),
+    });
   }
 
   private scheduleReconnect(epoch: number) {

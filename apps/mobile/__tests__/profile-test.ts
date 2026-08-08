@@ -5,6 +5,7 @@ import {
 } from '../src/control-plane/profile';
 import { MobileControlPlaneProfileStore } from '../src/control-plane/profile-store';
 import type { SecureValueStore } from '../src/platform/secure-storage';
+import { requireRemoteMobileSessionRevocation } from '../src/control-plane/profile-removal';
 
 const fingerprint = `sha256:${'a'.repeat(43)}`;
 
@@ -31,6 +32,17 @@ const baseProfile = {
 };
 
 describe('MobileControlPlaneProfile', () => {
+  test('requires remote mobile-session revocation before local profile removal', async () => {
+    const unavailable = Object.assign(new Error('offline'), { status: undefined });
+    await expect(requireRemoteMobileSessionRevocation(async () => { throw unavailable; })).rejects.toBe(unavailable);
+    await expect(requireRemoteMobileSessionRevocation(async () => { throw Object.assign(new Error('expired'), { status: 401 }); })).resolves.toBeUndefined();
+    const forbidden = Object.assign(new Error('forbidden'), { status: 403 });
+    await expect(requireRemoteMobileSessionRevocation(async () => { throw forbidden; })).rejects.toBe(forbidden);
+    const logout = jest.fn().mockResolvedValue({ ok: true });
+    await requireRemoteMobileSessionRevocation(logout);
+    expect(logout).toHaveBeenCalledTimes(1);
+  });
+
   test('uses a stable signed identity instead of the origin as its id', () => {
     const profile = MobileControlPlaneProfileSchema.parse(baseProfile);
 

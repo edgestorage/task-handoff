@@ -111,6 +111,18 @@ test('directory and Inbox state remain isolated across Control Planes and data s
   expect(sessions.profile('cp-b').scope).toEqual({ kind: 'instance', instanceId: 'instance-b' });
 });
 
+test('instance subscribers ignore node-only directory updates', () => {
+  const directories = new MobileDirectoryStore();
+  const listener = jest.fn();
+  directories.set('cp-a', { instances: [instance], phase: 'ready' });
+  directories.subscribeInstances('cp-a', listener);
+
+  directories.set('cp-a', { phase: 'stale' });
+  expect(listener).not.toHaveBeenCalled();
+  directories.setInstanceName('cp-a', instance.id, 'Renamed');
+  expect(listener).toHaveBeenCalledTimes(1);
+});
+
 test('offline and provider errors include a desktop remediation path', () => {
   expect(lifecycleGuidance({ code: 'INSTANCE_OFFLINE', message: 'Offline' }).message).toMatch(/desktop app/);
   expect(lifecycleGuidance({ code: 'PROVIDER_UNAVAILABLE', message: 'Missing key' }).message).toMatch(/desktop app/);
@@ -132,6 +144,66 @@ test('directory controller marks cache offline and refreshes authoritative snaps
   expect(store.profile('cp-a').phase).toBe('ready');
   expect(store.profile('cp-a').instances[0].status).toBe('stopped');
   expect(instanceBoard).toHaveBeenCalledTimes(2);
+});
+
+test('directory controller applies node connection and instance lifecycle events before its recovery snapshot', async () => {
+  const store = new MobileDirectoryStore();
+  const node = ControlPlaneNodeDirectoryEntrySchema.parse({
+    id: 'node-1', name: 'Node', status: 'online', health: 'ok', connectionMode: 'reverse-wss',
+    observedAt: '2026-08-05T00:00:00.000Z', capabilities: [],
+  });
+  const running = { ...instance, availableActions: ['stop', 'restart'] as const };
+  let handlers: { onEvent(event: unknown): void } | undefined;
+  const api = { resources: { nodes: jest.fn().mockResolvedValue([node]), instanceBoard: jest.fn().mockResolvedValue([running]) } } as unknown as ControlPlaneClient;
+  const transport = {
+    revalidate: jest.fn().mockResolvedValue(undefined),
+    connectEvents: jest.fn((next) => { handlers = next; return { close: jest.fn() }; }),
+  } as never;
+  const controller = new MobileDirectoryController('cp-a', api, store, transport);
+  await controller.start();
+
+  handlers!.onEvent({
+    type: 'node.connection.updated', topic: 'node.state', scope: { nodeId: node.id },
+    payload: { nodeId: node.id, phase: 'reconnecting', changedAt: '2026-08-05T00:00:02.000Z' },
+  });
+  expect(store.profile('cp-a').nodes[0].connectionPhase).toBe('reconnecting');
+  handlers!.onEvent({
+    type: 'node.connection.updated', topic: 'node.state', scope: { nodeId: node.id },
+    payload: { nodeId: node.id, phase: 'healthy', changedAt: '2026-08-05T00:00:01.000Z' },
+  });
+  expect(store.profile('cp-a').nodes[0].connectionPhase).toBe('reconnecting');
+
+  handlers!.onEvent({
+    type: 'instance.lifecycle.snapshot', topic: 'instances', scope: { instanceId: instance.id },
+    payload: {
+      instanceId: instance.id, revision: 2, updatedAt: '2026-08-05T00:00:03.000Z',
+      status: 'stopping', health: 'ok', connectionStatus: 'online', ready: false,
+    },
+  });
+  expect(store.profile('cp-a').instances[0].status).toBe('stopping');
+  expect(store.profile('cp-a').instances[0].availableActions).toEqual([]);
+  controller.stop();
+});
+
+test('instance lifecycle actions use the server-projected availability and refresh the directory', async () => {
+  const store = new MobileDirectoryStore();
+  const running = ControlPlaneInstanceDirectoryEntrySchema.parse({ ...instance, availableActions: ['stop', 'restart'] });
+  const stopped = ControlPlaneInstanceDirectoryEntrySchema.parse({
+    ...instance,
+    status: 'stopped',
+    connectionStatus: 'offline',
+    ready: false,
+    availableActions: ['start'],
+  });
+  store.set('cp-a', { instances: [running], phase: 'ready' });
+  const instanceAction = jest.fn().mockResolvedValue({ id: instance.id, status: 'stopping' });
+  const api = { resources: { instanceAction, nodes: jest.fn().mockResolvedValue([]), instanceBoard: jest.fn().mockResolvedValue([stopped]) } } as unknown as ControlPlaneClient;
+  const controller = new MobileDirectoryController('cp-a', api, store);
+
+  await controller.runInstanceAction(instance.id, 'stop');
+  expect(instanceAction).toHaveBeenCalledWith(instance.id, 'stop');
+  expect(store.profile('cp-a').instances[0].availableActions).toEqual(['start']);
+  await expect(controller.runInstanceAction(instance.id, 'restart')).rejects.toThrow(/not currently available/);
 });
 
 test('directory renames use shared resource APIs and immediately update the authoritative cache projection', async () => {
@@ -160,6 +232,43 @@ test('directory renames use shared resource APIs and immediately update the auth
   await controller.updateInstanceName(instance.id, 'Renamed Instance');
   expect(store.profile('cp-a').instances[0].name).toBe('Renamed Instance');
   expect(updateInstanceName).toHaveBeenCalledWith(instance.id, 'Renamed Instance');
+});
+
+test('concurrent directory mutations share one refresh and queue one trailing refresh', async () => {
+  const store = new MobileDirectoryStore();
+  store.set('cp-a', { instances: [instance], phase: 'ready' });
+  let resolveNodes!: (value: []) => void;
+  let resolveInstances!: (value: typeof instance[]) => void;
+  const nodes = jest.fn()
+    .mockReturnValueOnce(new Promise<[]>((resolve) => { resolveNodes = resolve; }))
+    .mockResolvedValueOnce([]);
+  const instanceBoard = jest.fn()
+    .mockReturnValueOnce(new Promise<typeof instance[]>((resolve) => { resolveInstances = resolve; }))
+    .mockResolvedValueOnce([instance]);
+  const api = {
+    resources: {
+      nodes,
+      instanceBoard,
+      updateInstanceName: jest.fn()
+        .mockResolvedValueOnce({ id: instance.id, name: 'First' })
+        .mockResolvedValueOnce({ id: instance.id, name: 'Second' }),
+    },
+  } as unknown as ControlPlaneClient;
+  const controller = new MobileDirectoryController('cp-a', api, store);
+
+  await Promise.all([
+    controller.updateInstanceName(instance.id, 'First'),
+    controller.updateInstanceName(instance.id, 'Second'),
+  ]);
+  expect(nodes).toHaveBeenCalledTimes(1);
+  expect(instanceBoard).toHaveBeenCalledTimes(1);
+
+  resolveNodes([]);
+  resolveInstances([instance]);
+  for (let index = 0; index < 6; index += 1) await Promise.resolve();
+  expect(nodes).toHaveBeenCalledTimes(2);
+  expect(instanceBoard).toHaveBeenCalledTimes(2);
+  controller.stop();
 });
 
 test('resource name validation matches the server name invariant', () => {

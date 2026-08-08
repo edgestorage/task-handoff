@@ -1250,12 +1250,30 @@ export const NodeAgentHealthSchema = z
     role: z.string().optional(),
     nodeId: IdSchema.optional(),
     platform: FinalComputerPlatformSchema.optional(),
+    arch: FinalComputerArchSchema.optional(),
+    protocolVersion: ProtocolVersionSchema.optional(),
+    build: BuildInfoSchema.strip().optional(),
     process: z.object({
       pid: z.number().int().positive(),
       startIdentity: z.string().trim().min(1).optional(),
-    }).strict().optional(),
+    }).strip().optional(),
+    listener: z.object({
+      host: z.string().trim().min(1),
+      port: z.number().int().min(1).max(65535),
+    }).strip().optional(),
+    instanceProxy: z.object({
+      requests: z.number().int().nonnegative(),
+      active: z.number().int().nonnegative(),
+      completed: z.number().int().nonnegative(),
+      aborted: z.number().int().nonnegative(),
+      limitRejected: z.number().int().nonnegative(),
+      responseBytes: z.number().nonnegative(),
+      totalDurationMs: z.number().nonnegative(),
+      maxResponseBytes: z.number().int().nonnegative(),
+    }).partial().strip().optional(),
+    serverTime: TimestampSchema.optional(),
   })
-  .passthrough();
+  .strip();
 
 export const NodeAgentExternalListenerConfigSchema = z
   .object({

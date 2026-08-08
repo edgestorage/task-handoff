@@ -8,6 +8,8 @@ import { mobileAiSessionStore } from '../ai-sessions/store';
 import { mobileDirectoryStore } from '../directories/store';
 import { mobileMetrics } from '../observability/mobile-metrics';
 import type { MobileControlPlaneProfile } from './profile';
+import { createDirectControlPlaneClient } from './client';
+import { requireRemoteMobileSessionRevocation } from './profile-removal';
 
 export const mobileSecureStore = new ExpoSecureValueStore();
 export const mobileFileStore = new ExpoFileValueStore();
@@ -20,6 +22,7 @@ export const mobilePermissionStore = new MobileAiSessionPermissionStore(mobileFi
 
 export async function deleteMobileControlPlaneProfile(profile: MobileControlPlaneProfile) {
   const controlPlaneId = profile.identity.controlPlaneId;
+  await requireRemoteMobileSessionRevocation(() => createDirectControlPlaneClient(profile, mobileSecureStore).api.auth.logoutMobile());
   await mobileDraftStore.clearProfile(controlPlaneId);
   await mobileCreateRequestStore.clearProfile(controlPlaneId);
   await mobilePermissionStore.clearProfile(controlPlaneId);

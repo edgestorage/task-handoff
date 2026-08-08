@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { MenuView, type MenuAction } from '@expo/ui/community/menu';
-import { KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import type { ControlPlaneInstanceAction } from '@task-handoff/protocol/control-plane-directory';
 
 import { mobileAiSessionStore } from '../../src/ai-sessions/store';
 import { Screen } from '../../src/components/Screen';
@@ -13,16 +14,19 @@ import { RESOURCE_NAME_MAX_LENGTH, validateResourceName } from '../../src/instan
 import { useI18n } from '../../src/i18n';
 
 type RenameTarget = 'instance' | 'node';
+const PRIMARY_LIFECYCLE_ACTIONS = ['start', 'stop', 'restart'] as const;
 
 export default function InstanceDirectoryDetailRoute() {
   const { colors } = useMobileTheme();
   const { locale, t } = useI18n();
   const { instanceId } = useLocalSearchParams<{ instanceId: string }>();
-  const { controlPlaneId, state, updateInstanceName, updateNodeName } = useActiveDirectories();
+  const { controlPlaneId, runInstanceAction, state, updateInstanceName, updateNodeName } = useActiveDirectories();
   const [renameTarget, setRenameTarget] = useState<RenameTarget>();
   const [renameDraft, setRenameDraft] = useState('');
   const [renameError, setRenameError] = useState('');
   const [renaming, setRenaming] = useState(false);
+  const [lifecycleAction, setLifecycleAction] = useState<ControlPlaneInstanceAction>();
+  const [lifecycleError, setLifecycleError] = useState('');
   const instance = state.instances.find((candidate) => candidate.id === instanceId);
   const node = instance ? state.nodes.find((candidate) => candidate.id === instance.nodeId) : undefined;
   if (!instance) {
@@ -32,7 +36,7 @@ export default function InstanceDirectoryDetailRoute() {
   const activeSessionCount = instance.aiSessions.runningCount + instance.aiSessions.waitingCount;
   const statusColor = instance.ready && instance.connectionStatus === 'online' ? '#34c759' : instance.status === 'failed' || instance.status === 'unhealthy' ? colors.error : colors.textMuted;
   const currentName = renameTarget === 'node' ? node?.name : instance.name;
-  const canRename = state.phase === 'ready' && !renaming;
+  const canRename = state.phase === 'ready' && !renaming && !lifecycleAction;
   const openRename = (target: RenameTarget) => {
     const name = target === 'node' ? node?.name : instance.name;
     if (!name || !canRename) return;
@@ -67,17 +71,51 @@ export default function InstanceDirectoryDetailRoute() {
       setRenaming(false);
     }
   };
+  const lifecycleMenuActions: MenuAction[] = instance.availableActions.map((action) => ({
+    id: action,
+    image: action === 'start' ? 'play.circle' : action === 'stop' ? 'stop.circle' : 'arrow.clockwise.circle',
+    title: t(action === 'start' ? 'instance.start' : action === 'stop' ? 'instance.stop' : action === 'restart' ? 'instance.restart' : 'instance.retryImage'),
+    attributes: { disabled: Boolean(lifecycleAction) || state.phase !== 'ready', destructive: action === 'stop' },
+  }));
   const menuActions: MenuAction[] = [
+    ...lifecycleMenuActions,
     { id: 'rename-instance', image: 'pencil', title: t('instance.editInstanceName'), attributes: { disabled: !canRename } },
     { id: 'rename-node', image: 'server.rack', title: t('instance.editNodeName'), attributes: { disabled: !canRename || !node } },
   ];
+  const lifecycleActionLabel = (action: ControlPlaneInstanceAction) => t(
+    action === 'start' ? 'instance.start' : action === 'stop' ? 'instance.stop' : action === 'restart' ? 'instance.restart' : 'instance.retryImage',
+  );
+  const executeLifecycleAction = async (action: ControlPlaneInstanceAction) => {
+    if (lifecycleAction || state.phase !== 'ready' || !instance.availableActions.includes(action)) return;
+    setLifecycleAction(action);
+    setLifecycleError('');
+    try {
+      await runInstanceAction(instance.id, action);
+    } catch (cause) {
+      setLifecycleError(cause instanceof Error && cause.message ? cause.message : t('instance.actionFailed'));
+    } finally {
+      setLifecycleAction(undefined);
+    }
+  };
+  const requestLifecycleAction = (action: ControlPlaneInstanceAction) => {
+    if (action !== 'stop' && action !== 'restart') {
+      void executeLifecycleAction(action);
+      return;
+    }
+    const label = t(action === 'stop' ? 'instance.stop' : 'instance.restart');
+    Alert.alert(t('instance.actionConfirmTitle', { action: label, name: instance.name }), t(action === 'stop' ? 'instance.stopConfirmDescription' : 'instance.restartConfirmDescription'), [
+      { text: t('common.cancel'), style: 'cancel' },
+      { text: label, style: action === 'stop' ? 'destructive' : 'default', onPress: () => { void executeLifecycleAction(action); } },
+    ]);
+  };
   return <>
     <Stack.Screen options={{
       title: instance.name,
       headerRight: () => <MenuView
         actions={menuActions}
         onPressAction={({ nativeEvent }) => {
-          if (nativeEvent.event === 'rename-instance') openRename('instance');
+          if (instance.availableActions.includes(nativeEvent.event as ControlPlaneInstanceAction)) requestLifecycleAction(nativeEvent.event as ControlPlaneInstanceAction);
+          else if (nativeEvent.event === 'rename-instance') openRename('instance');
           else if (nativeEvent.event === 'rename-node') openRename('node');
         }}
         title={t('instance.moreActions')}
@@ -89,9 +127,48 @@ export default function InstanceDirectoryDetailRoute() {
     }} />
     <Screen>
       <View style={[styles.statusSummary, { backgroundColor: colors.surface, borderColor: colors.border }]}> 
-        <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
+        {lifecycleAction ? <ActivityIndicator color={colors.primary} size="small" /> : <View style={[styles.statusDot, { backgroundColor: statusColor }]} />}
         <Text style={[styles.statusText, { color: colors.textMuted }]}>{instance.status} · {instance.connectionStatus} · {instance.health}</Text>
       </View>
+
+      <View accessibilityRole="toolbar" style={[styles.lifecycleToolbar, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+        {PRIMARY_LIFECYCLE_ACTIONS.map((action) => {
+          const enabled = state.phase === 'ready' && !lifecycleAction && instance.availableActions.includes(action);
+          const destructive = action === 'stop';
+          return <Pressable
+            accessibilityLabel={lifecycleActionLabel(action)}
+            accessibilityRole="button"
+            accessibilityState={{ disabled: !enabled, busy: lifecycleAction === action }}
+            disabled={!enabled}
+            key={action}
+            onPress={() => requestLifecycleAction(action)}
+            style={({ pressed }) => [styles.lifecycleButton, !enabled && styles.lifecycleButtonDisabled, pressed && styles.pressed]}
+          >
+            {lifecycleAction === action
+              ? <ActivityIndicator color={colors.primary} size="small" />
+              : <SystemIcon
+                android={action === 'start' ? 'play_circle' : action === 'stop' ? 'stop_circle' : 'refresh'}
+                color={enabled ? destructive ? colors.error : colors.primary : colors.textMuted}
+                ios={action === 'start' ? 'play.circle.fill' : action === 'stop' ? 'stop.circle.fill' : 'arrow.clockwise.circle.fill'}
+                size={22}
+              />}
+            <Text style={[styles.lifecycleButtonText, { color: enabled ? destructive ? colors.error : colors.primary : colors.textMuted }]}>{lifecycleActionLabel(action)}</Text>
+          </Pressable>;
+        })}
+        {instance.availableActions.includes('retry-image') ? <Pressable
+          accessibilityLabel={lifecycleActionLabel('retry-image')}
+          accessibilityRole="button"
+          accessibilityState={{ disabled: Boolean(lifecycleAction) || state.phase !== 'ready', busy: lifecycleAction === 'retry-image' }}
+          disabled={Boolean(lifecycleAction) || state.phase !== 'ready'}
+          onPress={() => requestLifecycleAction('retry-image')}
+          style={({ pressed }) => [styles.lifecycleButton, (Boolean(lifecycleAction) || state.phase !== 'ready') && styles.lifecycleButtonDisabled, pressed && styles.pressed]}
+        >
+          {lifecycleAction === 'retry-image' ? <ActivityIndicator color={colors.primary} size="small" /> : <SystemIcon android="refresh" color={colors.primary} ios="arrow.clockwise.circle.fill" size={22} />}
+          <Text style={[styles.lifecycleButtonText, { color: colors.primary }]}>{lifecycleActionLabel('retry-image')}</Text>
+        </Pressable> : null}
+      </View>
+
+      {lifecycleError ? <Notice error text={lifecycleError} /> : null}
 
       <InstanceOverview
         activeSessionCount={activeSessionCount}
@@ -156,6 +233,10 @@ const styles = StyleSheet.create({
   statusSummary: { alignItems: 'center', borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 8, minHeight: 42, paddingHorizontal: 12 },
   statusDot: { borderRadius: 999, height: 8, width: 8 },
   statusText: { fontSize: 13, textTransform: 'capitalize' },
+  lifecycleToolbar: { borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, flexDirection: 'row', minHeight: 62, overflow: 'hidden' },
+  lifecycleButton: { alignItems: 'center', flex: 1, gap: 4, justifyContent: 'center', minHeight: 62, minWidth: 0, paddingHorizontal: 4, paddingVertical: 8 },
+  lifecycleButtonDisabled: { opacity: 0.42 },
+  lifecycleButtonText: { fontSize: 12, fontWeight: '600', textAlign: 'center' },
   notice: { alignItems: 'flex-start', borderRadius: 12, flexDirection: 'row', gap: 9, padding: 12 },
   noticeText: { flex: 1, fontSize: 13, lineHeight: 18 },
   error: { fontSize: 14, lineHeight: 20 },

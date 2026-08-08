@@ -13,6 +13,7 @@ import { MobileI18nProvider, useI18n } from '../src/i18n';
 import { TaskStatusSurface } from '../src/task-status/TaskStatusSurface';
 import { TaskStatusSettingsProvider } from '../src/task-status/settings';
 import { CarPlaySurface } from '../src/carplay/CarPlaySurface';
+import { MobileControlPlaneRuntimeProvider } from '../src/control-plane/use-mobile-control-plane-runtime';
 
 export default function RootLayout() {
   return <MobileThemeProvider><MobileI18nProvider><TaskStatusSettingsProvider><LocalizedRootLayout /></TaskStatusSettingsProvider></MobileI18nProvider></MobileThemeProvider>;
@@ -41,10 +42,11 @@ function LocalizedRootLayout() {
       <SafeAreaProvider>
         <StatusBar animated style={dark ? 'light' : 'dark'} />
         <ThemeProvider value={navigationTheme}>
-          <ActiveDirectoriesProvider>
-            <InstanceScopeProvider>
-              <ActiveAiSessionsProvider>
-                <ActiveAppSessionsProvider>
+          <MobileControlPlaneRuntimeProvider>
+            <ActiveDirectoriesProvider>
+              <InstanceScopeProvider>
+                <ActiveAiSessionsProvider>
+                  <ActiveAppSessionsProvider>
                   <TaskStatusSurface />
                   <CarPlaySurface />
                   <Stack
@@ -58,22 +60,24 @@ function LocalizedRootLayout() {
                     }}
                   >
                     <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-                    <Stack.Screen name="profiles" options={{ headerShown: false, title: t('nav.settings') }} />
+                    <Stack.Screen name="profiles" options={{ title: t('nav.settings'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="control-planes/add" options={{ title: t('nav.addControlPlane') }} />
-                    <Stack.Screen name="control-planes/[controlPlaneId]" options={{ title: t('nav.controlPlane') }} />
+                    <Stack.Screen name="control-planes/[controlPlaneId]" options={{ title: t('nav.controlPlane'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="nodes/[nodeId]" options={{ title: t('nav.node') }} />
-                    <Stack.Screen name="instances/[instanceId]" options={{ title: t('nav.instance') }} />
+                    <Stack.Screen name="instances/[instanceId]" options={{ title: t('nav.instance'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="sessions/new" options={{ headerStyle: { backgroundColor: colors.background }, title: '' }} />
                     <Stack.Screen name="sessions/[instanceId]/[sessionId]" options={{ title: t('nav.aiSession'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="app-sessions/new" options={{ title: t('nav.newAppSession') }} />
                     <Stack.Screen name="app-sessions/[instanceId]/[sessionId]" options={{ title: t('nav.terminal') }} />
-                    <Stack.Screen name="history/[instanceId]/index" options={{ title: t('nav.history') }} />
-                    <Stack.Screen name="history/[instanceId]/[historyId]" options={{ title: t('nav.sessionHistory') }} />
+                    <Stack.Screen name="history/[instanceId]/index" options={{ title: t('nav.history'), ...iosTransparentHeaderOptions(dark) }} />
+                    <Stack.Screen name="history/[instanceId]/[historyId]" options={{ title: t('nav.sessionHistory'), ...iosTransparentHeaderOptions(dark) }} />
+                    <Stack.Screen name="icon-gallery" options={{ title: 'Ionicons 图标选择' }} />
                   </Stack>
-                </ActiveAppSessionsProvider>
-              </ActiveAiSessionsProvider>
-            </InstanceScopeProvider>
-          </ActiveDirectoriesProvider>
+                  </ActiveAppSessionsProvider>
+                </ActiveAiSessionsProvider>
+              </InstanceScopeProvider>
+            </ActiveDirectoriesProvider>
+          </MobileControlPlaneRuntimeProvider>
         </ThemeProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>

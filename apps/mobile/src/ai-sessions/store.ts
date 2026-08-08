@@ -79,6 +79,7 @@ type Listener = () => void;
 export class MobileAiSessionStore {
   private readonly profiles = new Map<string, MobileAiSessionProfileState>();
   private readonly listeners = new Map<string, Set<Listener>>();
+  private readonly snapshotListeners = new Map<string, Set<Listener>>();
   private readonly sessionListeners = new Map<string, Set<Listener>>();
   private readonly sessionKeysByControlPlane = new Map<string, Set<string>>();
   private readonly sessionViewCache = new Map<string, MobileAiSessionViewState>();
@@ -96,6 +97,10 @@ export class MobileAiSessionStore {
     const initial: MobileAiSessionProfileState = { controlPlaneId, messages: {}, sync: { phase: 'idle' } };
     this.profiles.set(controlPlaneId, initial);
     return initial;
+  }
+
+  snapshot(controlPlaneId: string) {
+    return this.profile(controlPlaneId).snapshot;
   }
 
   session(controlPlaneId: string, instanceId: string, sessionId: string): ControlPlaneAiSessionSummary | undefined {
@@ -123,7 +128,7 @@ export class MobileAiSessionStore {
     return view;
   }
 
-  replaceSnapshot(controlPlaneId: string, snapshot: ControlPlaneAiSessions) {
+  replaceSnapshot(controlPlaneId: string, snapshot: ControlPlaneAiSessions, affectedSessionKeys?: ReadonlySet<string>) {
     const current = this.profile(controlPlaneId);
     const next = {
       ...current,
@@ -134,9 +139,12 @@ export class MobileAiSessionStore {
     };
     this.profiles.set(controlPlaneId, next);
     this.messageTurnsByControlPlane.set(controlPlaneId, indexMessageTurns(next.messages));
-    this.invalidateControlPlaneSessions(controlPlaneId);
+    if (affectedSessionKeys) this.invalidateSessions(affectedSessionKeys);
+    else this.invalidateControlPlaneSessions(controlPlaneId);
     this.emit(controlPlaneId);
-    this.emitControlPlaneSessions(controlPlaneId);
+    this.emitSnapshot(controlPlaneId);
+    if (affectedSessionKeys) this.emitSessions(affectedSessionKeys);
+    else this.emitControlPlaneSessions(controlPlaneId);
     return next;
   }
 
@@ -165,10 +173,14 @@ export class MobileAiSessionStore {
     const nextInstances = index < 0 ? [...instances, replacement!] : instances.map((candidate, candidateIndex) => (
       candidateIndex === index ? replacement! : candidate
     ));
+    const affectedSessionKeys = new Set([
+      ...(entry?.aiSessions.sessions ?? []),
+      ...(replacement?.aiSessions.sessions ?? []),
+    ].map((session) => mobileSessionSubscriptionKey(controlPlaneId, instanceId, session.id)));
     this.replaceSnapshot(controlPlaneId, {
       updatedAt: result.projection.lastEventAt,
       instances: nextInstances,
-    });
+    }, affectedSessionKeys);
     return result;
   }
 
@@ -185,7 +197,9 @@ export class MobileAiSessionStore {
       });
       return applied ? { ...entry, aiSessions: { ...entry.aiSessions, sessions } } : entry;
     });
-    if (applied) this.replaceSnapshot(controlPlaneId, { updatedAt: state.updatedAt, instances });
+    if (applied) this.replaceSnapshot(controlPlaneId, { updatedAt: state.updatedAt, instances }, new Set([
+      mobileSessionSubscriptionKey(controlPlaneId, state.instanceId, state.sessionId),
+    ]));
     return applied;
   }
 
@@ -241,6 +255,7 @@ export class MobileAiSessionStore {
     if (deleted) {
       this.invalidateControlPlaneSessions(controlPlaneId);
       this.emit(controlPlaneId);
+      this.emitSnapshot(controlPlaneId);
       this.emitControlPlaneSessions(controlPlaneId);
     }
     return deleted;
@@ -253,6 +268,16 @@ export class MobileAiSessionStore {
     return () => {
       listeners.delete(listener);
       if (!listeners.size) this.listeners.delete(controlPlaneId);
+    };
+  }
+
+  subscribeSnapshot(controlPlaneId: string, listener: Listener) {
+    const listeners = this.snapshotListeners.get(controlPlaneId) ?? new Set<Listener>();
+    listeners.add(listener);
+    this.snapshotListeners.set(controlPlaneId, listeners);
+    return () => {
+      listeners.delete(listener);
+      if (!listeners.size) this.snapshotListeners.delete(controlPlaneId);
     };
   }
 
@@ -274,10 +299,24 @@ export class MobileAiSessionStore {
     for (const listener of this.listeners.get(controlPlaneId) ?? []) listener();
   }
 
+  private emitSnapshot(controlPlaneId: string) {
+    for (const listener of this.snapshotListeners.get(controlPlaneId) ?? []) listener();
+  }
+
   private emitControlPlaneSessions(controlPlaneId: string) {
     for (const key of this.sessionKeysByControlPlane.get(controlPlaneId) ?? []) {
       for (const listener of this.sessionListeners.get(key) ?? []) listener();
     }
+  }
+
+  private emitSessions(keys: ReadonlySet<string>) {
+    for (const key of keys) {
+      for (const listener of this.sessionListeners.get(key) ?? []) listener();
+    }
+  }
+
+  private invalidateSessions(keys: ReadonlySet<string>) {
+    for (const key of keys) this.sessionViewCache.delete(key);
   }
 
   private invalidateControlPlaneSessions(controlPlaneId: string) {

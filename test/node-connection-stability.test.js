@@ -2,6 +2,9 @@ const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
 const test = require("node:test");
 
+const { NodeAgentHealthSchema } = require("../packages/protocol/src/control-plane.ts");
+const { ControlPlaneNodeAgentClient } = require("../packages/control-plane/src/control-plane/nodes/client.ts");
+const { ControlPlaneNodeAgentGateway } = require("../packages/control-plane/src/control-plane/nodes/gateway.ts");
 const { NodeConnectionRuntime } = require("../packages/control-plane/src/control-plane/nodes/connection-runtime.ts");
 const { createDirectNodeAgentTransport } = require("../packages/control-plane/src/control-plane/nodes/direct-transport.ts");
 const { ControlPlaneNodeAgentTunnelTransport, ControlPlaneNodeEventSubscriber } = require("../packages/control-plane/src/control-plane/nodes/tunnel.ts");
@@ -164,7 +167,85 @@ test("direct requests enforce total and streaming-header deadlines", async () =>
   await assert.rejects(transport.requestStream(node, "/logs"), (error) => error?.code === "NODE_AGENT_RESPONSE_HEADER_TIMEOUT");
 });
 
+test("fleet aggregation serves node snapshots without waiting for a slow or reconnecting agent", async () => {
+  const timestamp = new Date().toISOString();
+  const runtime = {
+    id: "runtime_cached",
+    nodeId: "node_cached",
+    name: "Cached Runtime",
+    type: "docker",
+    status: "online",
+    accessStrategy: "direct-port",
+    capabilities: {},
+    labels: {},
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+  let requests = 0;
+  let slow = false;
+  const client = new ControlPlaneNodeAgentClient({
+    request: async () => {
+      requests += 1;
+      if (slow) return new Promise(() => undefined);
+      return new Response(JSON.stringify({ data: [runtime] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  const gateway = new ControlPlaneNodeAgentGateway(client, { fleetRequestTimeoutMs: 5 });
+  const node = {
+    id: "node_cached",
+    connectionMode: "direct-http",
+    status: "online",
+    auth: { mode: "paired-hmac", keyId: "key_cached" },
+    connectionPhase: "healthy",
+  };
+
+  const initial = await gateway.listFleetRuntimes([node]);
+  assert.deepEqual(initial.items.map((item) => item.id), [runtime.id]);
+  assert.deepEqual(initial.nodeErrors, []);
+
+  slow = true;
+  const startedAt = Date.now();
+  const timedOut = await gateway.listFleetRuntimes([node]);
+  assert.ok(Date.now() - startedAt < 100);
+  assert.deepEqual(timedOut.items.map((item) => item.id), [runtime.id]);
+  assert.equal(timedOut.nodeErrors[0].code, "NODE_AGENT_FLEET_TIMEOUT");
+
+  const requestsBeforeReconnect = requests;
+  const reconnecting = await gateway.listFleetRuntimes([{ ...node, status: "offline", connectionPhase: "reconnecting" }]);
+  assert.equal(requests, requestsBeforeReconnect);
+  assert.deepEqual(reconnecting.items.map((item) => item.id), [runtime.id]);
+  assert.equal(reconnecting.nodeErrors[0].code, "NODE_AGENT_CONNECTION_PENDING");
+
+  const replacedConnection = await gateway.listFleetRuntimes([{
+    ...node,
+    endpoint: "https://replacement-node.example",
+    status: "offline",
+    connectionPhase: "connecting",
+  }]);
+  assert.deepEqual(replacedConnection.items, []);
+});
+
+test("node agent health response drops unknown cross-version fields", () => {
+  const parsed = NodeAgentHealthSchema.parse({
+    ok: true,
+    futureTopLevel: true,
+    build: { component: "node-agent", packageVersion: "1.2.3", futureBuildField: true },
+    listener: { host: "127.0.0.1", port: 8091, futureListenerField: true },
+    process: { pid: 42, startIdentity: "process-start", futureProcessField: true },
+  });
+  assert.deepEqual(parsed, {
+    ok: true,
+    build: { component: "node-agent", packageVersion: "1.2.3" },
+    listener: { host: "127.0.0.1", port: 8091 },
+    process: { pid: 42, startIdentity: "process-start" },
+  });
+});
+
 test("direct event connection terminates a half-open socket and publishes reconnecting state", async (t) => {
+  const clock = fakeClock();
   class Socket extends EventEmitter {
     constructor() {
       super();
@@ -194,6 +275,7 @@ test("direct event connection terminates a half-open socket and publishes reconn
       heartbeatIntervalMs: 5,
       heartbeatTimeoutMs: 5,
       stableThresholdMs: 50,
+      ...clock,
       createSocket: () => socket,
     },
   );
@@ -203,7 +285,7 @@ test("direct event connection terminates a half-open socket and publishes reconn
   socket.emit("open");
   socket.emit("message", JSON.stringify({ type: "node-agent.events.connected" }));
   assert.equal(runtime.observation(node.id).phase, "healthy");
-  await new Promise((resolve) => setTimeout(resolve, 18));
+  clock.advance(10);
   assert.equal(socket.pings, 1);
   assert.equal(runtime.observation(node.id).phase, "reconnecting");
 });

@@ -8,7 +8,7 @@ Add the address as an origin such as `https://control.example.com`; paths, query
 
 ## Mobile sessions and AI Sessions
 
-Login creates a separately revocable mobile device session. After login, the app opens AI Session Inbox directly. Nodes and Instances are read-only directories; lifecycle repair, application installation, provider/model configuration, terminal access, and settings remain desktop responsibilities.
+Login creates a separately revocable mobile device session. After login, the app opens AI Session Inbox directly. Node and Instance directories follow authoritative realtime state. Mobile can run the server-authorized Instance start, stop, restart, and image-retry actions and can access supported App Sessions, including terminals. Instance creation/deletion, Node lifecycle repair, application installation, provider/model configuration, and advanced settings remain desktop responsibilities.
 
 The app supports snapshot-first live sessions, history/resume, new sessions, messages, approvals, interrupt, queue actions, sub-agents, mobile uploads, and server-selected runtime files. A runtime path always belongs to the selected controlled instance and must stay within its reported workspace.
 

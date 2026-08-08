@@ -4,21 +4,25 @@ import {
   useContext,
   useEffect,
   useMemo,
-  useState,
   useSyncExternalStore,
   type ReactNode,
 } from 'react';
 import type { ControlPlaneClient } from '@task-handoff/control-plane-client';
 
-import { createDirectControlPlaneClient } from '../control-plane/client';
-import { mobileProfileStore, mobileSecureStore } from '../control-plane/runtime';
-import { subscribeToNetworkState } from '../platform/network';
-import { subscribeToAppLifecycle } from '../platform/lifecycle';
-import { MobileAiSessionController } from './controller';
-import { MobileAiSessionActionCoordinator } from './actions';
-import { mobileAiSessionStore, type MobileAiSessionViewState } from './store';
-import type { MobileControlPlaneProfile } from '../control-plane/profile';
 import { isCarPlayConnected, subscribeToCarPlayConnection } from '../carplay/runtime';
+import { createDirectControlPlaneClient } from '../control-plane/client';
+import type { MobileControlPlaneProfile } from '../control-plane/profile';
+import {
+  MobileControlPlaneRuntimeProvider,
+  useMobileControlPlaneRuntime,
+  useOptionalMobileControlPlaneRuntime,
+  type MobileControlPlaneRuntimeDependencies,
+} from '../control-plane/use-mobile-control-plane-runtime';
+import { subscribeToAppLifecycle } from '../platform/lifecycle';
+import { subscribeToNetworkState } from '../platform/network';
+import { MobileAiSessionActionCoordinator } from './actions';
+import { MobileAiSessionController } from './controller';
+import { mobileAiSessionStore, type MobileAiSessionViewState } from './store';
 
 type ActiveAiSessions = {
   actions?: MobileAiSessionActionCoordinator;
@@ -37,30 +41,55 @@ export type ActiveAiSessionsDependencies = {
   createClient(profile: MobileControlPlaneProfile): ReturnType<typeof createDirectControlPlaneClient>;
   subscribeLifecycle: typeof subscribeToAppLifecycle;
   subscribeNetwork: typeof subscribeToNetworkState;
+  subscribeCarPlay?: MobileControlPlaneRuntimeDependencies['subscribeCarPlay'];
+  carPlayConnected?: MobileControlPlaneRuntimeDependencies['carPlayConnected'];
 };
 
-const defaultDependencies: ActiveAiSessionsDependencies = {
-  activeProfile: () => mobileProfileStore.active(),
-  subscribeProfiles: (listener) => mobileProfileStore.subscribe(listener),
-  createClient: (profile) => createDirectControlPlaneClient(profile, mobileSecureStore),
-  subscribeLifecycle: subscribeToAppLifecycle,
-  subscribeNetwork: subscribeToNetworkState,
-};
+export function ActiveAiSessionsProvider({ children, dependencies }: { children: ReactNode; dependencies?: ActiveAiSessionsDependencies }): ReactNode {
+  const runtime = useOptionalMobileControlPlaneRuntime();
+  if (!runtime) {
+    const runtimeDependencies = dependencies ? {
+      ...dependencies,
+      subscribeCarPlay: dependencies.subscribeCarPlay ?? subscribeToCarPlayConnection,
+      carPlayConnected: dependencies.carPlayConnected ?? isCarPlayConnected,
+    } : undefined;
+    return createElement(MobileControlPlaneRuntimeProvider, { dependencies: runtimeDependencies },
+      createElement(ActiveAiSessionsProvider, null, children),
+    );
+  }
+  return createElement(ActiveAiSessionsBoundary, null, children);
+}
 
-export function ActiveAiSessionsProvider({
-  children,
-  dependencies = defaultDependencies,
-}: {
-  children: ReactNode;
-  dependencies?: ActiveAiSessionsDependencies;
-}) {
-  const value = useActiveAiSessionsRuntimeState(dependencies);
-  const runtime = useMemo(() => ({
-    actions: value.actions,
-    client: value.client,
-    controlPlaneId: value.controlPlaneId,
-  }), [value.actions, value.client, value.controlPlaneId]);
-  return createElement(ActiveAiSessionsRuntimeContext.Provider, { value: runtime },
+function ActiveAiSessionsBoundary({ children }: { children: ReactNode }) {
+  const runtime = useMobileControlPlaneRuntime();
+  const controller = useMemo(() => runtime.controlPlaneId && runtime.api && runtime.transport
+    ? new MobileAiSessionController(runtime.controlPlaneId, runtime.api, runtime.transport, mobileAiSessionStore)
+    : undefined, [runtime.api, runtime.controlPlaneId, runtime.transport]);
+  const actions = useMemo(() => runtime.controlPlaneId && runtime.api
+    ? new MobileAiSessionActionCoordinator(runtime.controlPlaneId, runtime.api, mobileAiSessionStore)
+    : undefined, [runtime.api, runtime.controlPlaneId]);
+  useEffect(() => {
+    if (!runtime.coordinator || !controller) return;
+    return runtime.coordinator.register({
+      key: 'ai-sessions',
+      topics: ['ai.sessions'],
+      background: true,
+      start: (signal) => controller.start(signal, { managed: true }),
+      stop: () => controller.stop(),
+      offline: () => controller.offline(),
+      onEvent: (event) => { controller.applyEvent(event); },
+      onConnectionError: (error) => controller.onConnectionError(error),
+    });
+  }, [controller, runtime.coordinator]);
+  const empty = mobileAiSessionStore.profile(runtime.controlPlaneId || '__booting__');
+  const state = useSyncExternalStore(
+    (listener) => runtime.controlPlaneId ? mobileAiSessionStore.subscribe(runtime.controlPlaneId, listener) : () => undefined,
+    () => runtime.controlPlaneId ? mobileAiSessionStore.profile(runtime.controlPlaneId) : empty,
+    () => empty,
+  );
+  const runtimeValue = useMemo(() => ({ actions, client: runtime.api, controlPlaneId: runtime.controlPlaneId }), [actions, runtime.api, runtime.controlPlaneId]);
+  const value = useMemo(() => ({ ...runtimeValue, state }), [runtimeValue, state]);
+  return createElement(ActiveAiSessionsRuntimeContext.Provider, { value: runtimeValue },
     createElement(ActiveAiSessionsContext.Provider, { value }, children),
   );
 }
@@ -77,11 +106,18 @@ export function useActiveAiSessionsRuntime() {
   return value;
 }
 
-export function useActiveAiSessionView(
-  controlPlaneId: string | undefined,
-  instanceId: string,
-  sessionId: string,
-) {
+export function useActiveAiSessionsSnapshot() {
+  const { controlPlaneId } = useActiveAiSessionsRuntime();
+  return useSyncExternalStore(
+    (listener) => controlPlaneId
+      ? mobileAiSessionStore.subscribeSnapshot(controlPlaneId, listener)
+      : () => undefined,
+    () => controlPlaneId ? mobileAiSessionStore.snapshot(controlPlaneId) : undefined,
+    () => undefined,
+  );
+}
+
+export function useActiveAiSessionView(controlPlaneId: string | undefined, instanceId: string, sessionId: string) {
   return useSyncExternalStore(
     (listener) => controlPlaneId
       ? mobileAiSessionStore.subscribeSession(controlPlaneId, instanceId, sessionId, listener)
@@ -91,88 +127,4 @@ export function useActiveAiSessionView(
       : emptySessionView,
     () => emptySessionView,
   );
-}
-
-function useActiveAiSessionsRuntimeState(dependencies: ActiveAiSessionsDependencies): ActiveAiSessions {
-  const [controlPlaneId, setControlPlaneId] = useState<string>();
-  const [runtime, setRuntime] = useState<{ actions: MobileAiSessionActionCoordinator; client: ControlPlaneClient }>();
-  useEffect(() => {
-    let live = true;
-    let activation = 0;
-    let controller: MobileAiSessionController | undefined;
-    let unsubscribeNetwork: (() => void) | undefined;
-    let unsubscribeLifecycle: (() => void) | undefined;
-    let unsubscribeCarPlay: (() => void) | undefined;
-
-    const stopRuntime = () => {
-      unsubscribeNetwork?.();
-      unsubscribeLifecycle?.();
-      unsubscribeNetwork = undefined;
-      unsubscribeLifecycle = undefined;
-      unsubscribeCarPlay?.();
-      unsubscribeCarPlay = undefined;
-      controller?.stop();
-      controller = undefined;
-    };
-    const activate = async () => {
-      const currentActivation = ++activation;
-      const profile = await dependencies.activeProfile();
-      if (!live || currentActivation !== activation) return;
-      stopRuntime();
-      if (!profile) {
-        setControlPlaneId(undefined);
-        setRuntime(undefined);
-        return;
-      }
-      const id = profile.identity.controlPlaneId;
-      setControlPlaneId(id);
-      const { api, transport } = dependencies.createClient(profile);
-      setRuntime({ actions: new MobileAiSessionActionCoordinator(id, api, mobileAiSessionStore), client: api });
-      controller = new MobileAiSessionController(id, api, transport, mobileAiSessionStore);
-      const storeGeneration = mobileAiSessionStore.generation(id);
-      let active = false;
-      let carPlayConnected = false;
-      let connected = true;
-      let running = false;
-      const reconcile = () => {
-        const shouldRun = (active || carPlayConnected) && connected;
-        if (shouldRun === running) return;
-        running = shouldRun;
-        if (shouldRun) void controller?.start().catch(() => undefined);
-        else controller?.stop();
-      };
-      unsubscribeLifecycle = dependencies.subscribeLifecycle((phase) => { active = phase === 'active'; reconcile(); });
-      unsubscribeCarPlay = subscribeToCarPlayConnection((next) => { carPlayConnected = next; reconcile(); });
-      void isCarPlayConnected().then((next) => {
-        if (!live || currentActivation !== activation) return;
-        carPlayConnected = next;
-        reconcile();
-      }).catch(() => undefined);
-      unsubscribeNetwork = dependencies.subscribeNetwork((network) => {
-        connected = network.connected;
-        if (!connected && mobileAiSessionStore.isGeneration(id, storeGeneration)) {
-          mobileAiSessionStore.setSyncState(id, {
-            phase: 'offline',
-            lastSyncedAt: mobileAiSessionStore.profile(id).sync.lastSyncedAt,
-          });
-        }
-        reconcile();
-      });
-    };
-    const unsubscribeProfiles = dependencies.subscribeProfiles(() => { void activate(); });
-    void activate();
-    return () => {
-      live = false;
-      activation += 1;
-      unsubscribeProfiles();
-      stopRuntime();
-    };
-  }, [dependencies]);
-  const empty = mobileAiSessionStore.profile(controlPlaneId || '__booting__');
-  const state = useSyncExternalStore(
-    (listener) => controlPlaneId ? mobileAiSessionStore.subscribe(controlPlaneId, listener) : () => undefined,
-    () => controlPlaneId ? mobileAiSessionStore.profile(controlPlaneId) : empty,
-    () => empty,
-  );
-  return { actions: runtime?.actions, client: runtime?.client, controlPlaneId, state };
 }

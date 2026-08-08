@@ -4,6 +4,33 @@ import { AiSessionPermissionModeSchema, InstanceBoardAiSummarySchema } from "./a
 const IdSchema = z.string().trim().min(1).max(120).regex(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$/);
 const TimestampSchema = z.string().datetime();
 
+export const ControlPlaneNodeConnectionPhaseSchema = z.enum([
+  "connecting",
+  "handshaking",
+  "healthy",
+  "reconnecting",
+  "suspect",
+  "offline",
+]);
+
+export const ControlPlaneInstanceActionSchema = z.enum([
+  "start",
+  "stop",
+  "restart",
+  "retry-image",
+]);
+
+export const ControlPlaneInstanceLifecycleDirectoryEventSchema = z.object({
+  instanceId: IdSchema,
+  revision: z.number().int().nonnegative(),
+  updatedAt: TimestampSchema,
+  status: z.enum(["created", "provisioning", "starting", "registering", "registered", "running", "stopping", "stopped", "deleting", "failed", "unhealthy"]),
+  health: z.enum(["unknown", "ok", "degraded", "failed"]),
+  connectionStatus: z.enum(["unknown", "online", "offline", "endpoint-unreachable"]),
+  ready: z.boolean(),
+  lastHeartbeatAt: TimestampSchema.optional(),
+}).strip();
+
 const DirectoryErrorSchema = z.object({
   code: z.string().trim().min(1).max(120),
   message: z.string().trim().min(1).max(2048),
@@ -15,6 +42,7 @@ export const ControlPlaneNodeDirectoryEntrySchema = z.object({
   status: z.enum(["unknown", "online", "offline", "degraded"]),
   health: z.enum(["unknown", "ok", "degraded", "failed"]),
   connectionMode: z.enum(["local-ipc", "local-loopback", "direct-http", "reverse-wss", "control-plane-proxy"]),
+  connectionPhase: ControlPlaneNodeConnectionPhaseSchema.optional(),
   lastSeenAt: TimestampSchema.optional(),
   observedAt: TimestampSchema,
   capabilities: z.array(z.string().trim().min(1).max(120)).max(256),
@@ -59,6 +87,7 @@ export const ControlPlaneInstanceDirectoryEntrySchema = z.object({
     warning: z.string().trim().min(1).max(500).optional(),
   }).strict(),
   aiSessions: InstanceBoardAiSummarySchema,
+  availableActions: z.array(ControlPlaneInstanceActionSchema).max(4).default([]),
   availableApps: z.array(ControlPlaneAvailableAppSchema).max(256).default([]),
   availableAgents: z.array(ControlPlaneAvailableAppSchema).max(256),
   error: DirectoryErrorSchema.optional(),
@@ -68,3 +97,6 @@ export const ControlPlaneInstanceDirectorySchema = z.array(ControlPlaneInstanceD
 
 export type ControlPlaneNodeDirectoryEntry = z.infer<typeof ControlPlaneNodeDirectoryEntrySchema>;
 export type ControlPlaneInstanceDirectoryEntry = z.infer<typeof ControlPlaneInstanceDirectoryEntrySchema>;
+export type ControlPlaneNodeConnectionPhase = z.infer<typeof ControlPlaneNodeConnectionPhaseSchema>;
+export type ControlPlaneInstanceAction = z.infer<typeof ControlPlaneInstanceActionSchema>;
+export type ControlPlaneInstanceLifecycleDirectoryEvent = z.infer<typeof ControlPlaneInstanceLifecycleDirectoryEventSchema>;

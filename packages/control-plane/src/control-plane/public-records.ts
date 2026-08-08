@@ -49,7 +49,7 @@ export function publicNode<T extends Node>(node: T) {
   };
 }
 
-export function publicNodeDirectory(node: Node) {
+export function publicNodeDirectory(node: Node & { connectionPhase?: "connecting" | "handshaking" | "healthy" | "reconnecting" | "suspect" | "offline" }) {
   const proxyError = node.proxyState?.lastError;
   return ControlPlaneNodeDirectoryEntrySchema.parse({
     id: node.id,
@@ -57,6 +57,7 @@ export function publicNodeDirectory(node: Node) {
     status: node.status,
     health: node.health,
     connectionMode: node.connectionMode,
+    connectionPhase: node.connectionPhase,
     lastSeenAt: node.lastSeenAt,
     observedAt: node.updatedAt,
     capabilities: Object.keys(node.capabilities).sort(),
@@ -87,6 +88,16 @@ export function publicInstanceDirectory(item: InstanceBoardResult["items"][numbe
     item.protocolCompatible ? undefined : `Instance protocol ${item.protocolVersion || "unknown"} differs from this Control Plane.`,
     nodeProtocolCompatible ? undefined : `Node protocol ${nodeProtocolVersion} differs from this Control Plane.`,
   ].filter((warning): warning is string => Boolean(warning));
+  const running = item.status === "running" || item.connectionStatus === "online" || item.access.status === "reachable";
+  const connecting = !["failed", "stopped", "stopping", "unhealthy"].includes(item.status)
+    && item.connectionStatus !== "online"
+    && ["provisioning", "starting", "registering", "registered"].includes(item.status);
+  const availableActions = [
+    !running && !["provisioning", "starting", "registering", "registered", "stopping"].includes(item.status) ? "start" as const : undefined,
+    !["failed", "stopped", "stopping", "unhealthy"].includes(item.status) && (running || connecting) ? "stop" as const : undefined,
+    running ? "restart" as const : undefined,
+    item.status === "failed" && item.imageProvisioning?.phase === "failed" ? "retry-image" as const : undefined,
+  ].filter((action): action is "start" | "stop" | "restart" | "retry-image" => Boolean(action));
   return ControlPlaneInstanceDirectoryEntrySchema.parse({
     id: item.id,
     name: item.name,
@@ -107,6 +118,7 @@ export function publicInstanceDirectory(item: InstanceBoardResult["items"][numbe
       warning: protocolWarnings.length ? protocolWarnings.join(" ") : undefined,
     },
     aiSessions: item.aiSessions,
+    availableActions,
     availableApps: (item.appInventory?.items || [])
       .filter((app) => app.availability === "available")
       .map((app) => ({

@@ -1,30 +1,31 @@
 import * as Linking from 'expo-linking';
 import { useEffect, useMemo } from 'react';
 
-import { useActiveAiSessions } from '../ai-sessions/use-active-sessions';
-import { useActiveDirectories } from '../directories/use-directories';
+import { useActiveAiSessionsRuntime, useActiveAiSessionsSnapshot } from '../ai-sessions/use-active-sessions';
+import { useActiveDirectoryInstances } from '../directories/use-directories';
 import { useI18n } from '../i18n';
 import { projectSessionTaskStatus, projectTaskStatus } from './model';
 import { syncTaskStatusSurfaces } from './runtime';
 import { useTaskStatusSettings } from './settings';
 
 export function TaskStatusSurface() {
-  const { state } = useActiveAiSessions();
-  const { state: directory } = useActiveDirectories();
+  const { controlPlaneId } = useActiveAiSessionsRuntime();
+  const snapshot = useActiveAiSessionsSnapshot();
+  const instances = useActiveDirectoryInstances();
   const { t } = useI18n();
   const { autoStart, available, loaded, stopTracking, trackedSession } = useTaskStatusSettings();
   const instanceNames = useMemo(
-    () => new Map(directory.instances.map((instance) => [instance.id, instance.name])),
-    [directory.instances],
+    () => new Map(instances.map((instance) => [instance.id, instance.name])),
+    [instances],
   );
   const projection = useMemo(
-    () => projectTaskStatus(state.snapshot, instanceNames, t),
-    [instanceNames, state.snapshot, t],
+    () => projectTaskStatus(snapshot, instanceNames, t),
+    [instanceNames, snapshot, t],
   );
   const liveActivityProjection = useMemo(() => {
     if (autoStart) return projection;
-    if (!trackedSession || trackedSession.controlPlaneId !== state.controlPlaneId) return undefined;
-    const session = state.snapshot?.instances
+    if (!trackedSession || trackedSession.controlPlaneId !== controlPlaneId) return undefined;
+    const session = snapshot?.instances
       .find((entry) => entry.instanceId === trackedSession.instanceId)
       ?.aiSessions.sessions.find((candidate) => candidate.id === trackedSession.sessionId);
     return session
@@ -34,11 +35,11 @@ export function TaskStatusSurface() {
         t,
       )
       : undefined;
-  }, [autoStart, instanceNames, projection, state.controlPlaneId, state.snapshot, t, trackedSession]);
+  }, [autoStart, controlPlaneId, instanceNames, projection, snapshot, t, trackedSession]);
   const endLiveActivity = autoStart
-    ? Boolean(state.snapshot && !liveActivityProjection?.shouldShowLiveActivity)
+    ? Boolean(snapshot && !liveActivityProjection?.shouldShowLiveActivity)
       : trackedSession
-      ? Boolean((trackedSession.controlPlaneId !== state.controlPlaneId || state.snapshot) && !liveActivityProjection?.shouldShowLiveActivity)
+      ? Boolean((trackedSession.controlPlaneId !== controlPlaneId || snapshot) && !liveActivityProjection?.shouldShowLiveActivity)
       : true;
   const activityUrl = !autoStart && trackedSession
     ? Linking.createURL(`/sessions/${encodeURIComponent(trackedSession.instanceId)}/${encodeURIComponent(trackedSession.sessionId)}`)

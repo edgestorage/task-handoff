@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  ControlPlaneInstanceActionSchema,
   ControlPlaneInstanceDirectorySchema,
   ControlPlaneNodeDirectorySchema,
   type ControlPlaneInstanceDirectoryEntry,
@@ -15,6 +16,10 @@ const NamedResourceSchema = z.object({
   id: z.string().trim().min(1).max(160),
   name: z.string().trim().min(1).max(160),
 });
+const InstanceActionResultSchema = z.object({
+  id: z.string().trim().min(1).max(160),
+  status: z.string().trim().min(1).max(80),
+}).strip();
 export const ControlPlaneNodeLocalFolderSchema = z.object({
   id: z.string().trim().min(1).max(120),
   nodeId: z.string().trim().min(1).max(120),
@@ -77,6 +82,15 @@ export function createControlPlaneResourcesApi(transport: ControlPlaneClientTran
     },
     nodeLocalFolders(nodeId: string, signal?: AbortSignal) {
       return requestData(`/api/nodes/${encodeURIComponent(nodeId)}/local-folders`, z.array(ControlPlaneNodeLocalFolderSchema), signal);
+    },
+    instanceAction(instanceId: string, action: z.infer<typeof ControlPlaneInstanceActionSchema>) {
+      const parsedAction = ControlPlaneInstanceActionSchema.parse(action);
+      const suffix = parsedAction === "retry-image" ? "image-provisioning/retry" : parsedAction;
+      return transport.request(
+        `/api/controlled-instances/${encodeURIComponent(instanceId)}/${suffix}`,
+        DataSchema(InstanceActionResultSchema),
+        { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({}) },
+      ).then((response) => response.data);
     },
   };
 }
