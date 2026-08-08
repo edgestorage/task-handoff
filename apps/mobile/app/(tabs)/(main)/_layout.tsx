@@ -1,9 +1,30 @@
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { NativeTabs } from 'expo-router/unstable-native-tabs';
-import { Platform } from 'react-native';
+import { Platform, type ColorValue } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useMobileTheme } from '../../../src/components/theme';
 import { useI18n } from '../../../src/i18n';
+
+const TAB_ICON_SIZE = 25;
+
+const aiSessionTabIconFamily = {
+  getImageSource(_name: 'chatbubbles-outline', _size: number, color: ColorValue) {
+    return Ionicons.getImageSource('chatbubbles-outline', TAB_ICON_SIZE, color);
+  },
+};
+
+const appSessionTabIconFamily = {
+  getImageSource(_name: 'cube-outline', _size: number, color: ColorValue) {
+    return Ionicons.getImageSource('cube-outline', TAB_ICON_SIZE, color);
+  },
+};
+
+const instanceTabIconFamily = {
+  getImageSource(_name: 'layers-outline', _size: number, color: ColorValue) {
+    return Ionicons.getImageSource('layers-outline', TAB_ICON_SIZE, color);
+  },
+};
 
 export default function PrimaryTabsLayout() {
   const { colors, dark } = useMobileTheme();
@@ -16,15 +37,24 @@ export default function PrimaryTabsLayout() {
     <SafeAreaView edges={Platform.OS === 'ios' ? [] : ['top']} style={{ flex: 1 }} testID="primary-tabs-safe-area">
       <NativeTabs backgroundColor={Platform.OS === 'android' ? colors.surface : undefined} blurEffect={nativeTabBlur} disableTransparentOnScrollEdge={Platform.OS === 'ios' && !liquidGlassTabs} iconColor={{ default: colors.textMuted, selected: colors.primary }} labelStyle={{ color: colors.textMuted, fontSize: 12, fontWeight: '500' }} minimizeBehavior={liquidGlassTabs ? 'onScrollDown' : undefined} tintColor={colors.primary}>
         <NativeTabs.Trigger disableAutomaticContentInsets name="inbox">
-          <NativeTabs.Trigger.Icon md={{ default: 'chat_bubble_outline', selected: 'chat_bubble' }} sf={{ default: 'list.bullet.rectangle', selected: 'list.bullet.rectangle.fill' }} />
+          <NativeTabs.Trigger.Icon
+            renderingMode="template"
+            src={<NativeTabs.Trigger.VectorIcon family={aiSessionTabIconFamily} name="chatbubbles-outline" />}
+          />
           <NativeTabs.Trigger.Label>{t('nav.aiSessions')}</NativeTabs.Trigger.Label>
         </NativeTabs.Trigger>
         <NativeTabs.Trigger disableAutomaticContentInsets name="apps">
-          <NativeTabs.Trigger.Icon md={{ default: 'terminal', selected: 'terminal' }} sf={{ default: 'macwindow', selected: 'macwindow' }} />
+          <NativeTabs.Trigger.Icon
+            renderingMode="template"
+            src={<NativeTabs.Trigger.VectorIcon family={appSessionTabIconFamily} name="cube-outline" />}
+          />
           <NativeTabs.Trigger.Label>{t('nav.appSessions')}</NativeTabs.Trigger.Label>
         </NativeTabs.Trigger>
         <NativeTabs.Trigger disableAutomaticContentInsets name="instances">
-          <NativeTabs.Trigger.Icon md={{ default: 'dns', selected: 'dns' }} sf={{ default: 'server.rack', selected: 'server.rack' }} />
+          <NativeTabs.Trigger.Icon
+            renderingMode="template"
+            src={<NativeTabs.Trigger.VectorIcon family={instanceTabIconFamily} name="layers-outline" />}
+          />
           <NativeTabs.Trigger.Label>{t('nav.instances')}</NativeTabs.Trigger.Label>
         </NativeTabs.Trigger>
       </NativeTabs>

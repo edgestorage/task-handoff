@@ -57,9 +57,6 @@ import {
 import { AppSessionDeltaResponseSchema, AppSessionsStateSchema, emptyAppSessionsSnapshot, type AppSessionDeltaResponse, type AppSessionsSnapshot } from "@task-handoff/protocol/app-sessions";
 import { AiSessionActionService } from "../sessions/ai-session-actions.ts";
 export { assertAiSessionRuntimePathSupport } from "../sessions/ai-session-actions.ts";
-import {
-  TriggerIndexSchema,
-} from "@task-handoff/protocol/triggers";
 import fs from "node:fs";
 import path from "node:path";
 import writeFileAtomic from "write-file-atomic";
@@ -110,7 +107,6 @@ import {
 } from "./inputs.ts";
 import type { ControlPlaneStorePaths } from "../persistence/paths.ts";
 import { JsonCollection, JsonFile } from "../../shared/persistence/store.ts";
-import { controlledInstanceTriggerSnapshot } from "../triggers/records.ts";
 import type { ControlPlaneProxyError, ProxyTargetEvent, ProxyTargetSnapshot } from "@task-handoff/protocol/control-plane-proxy";
 import type { NodeConnectionRuntime } from "../nodes/connection-runtime.ts";
 
@@ -833,7 +829,7 @@ export class ControlPlaneService {
   }
 
   async listNodeRuntimesWithDiagnostics(signal?: AbortSignal) {
-    return this.nodeAgentGateway.listFleetRuntimes(this.listNodes(), { signal });
+    return this.nodeAgentGateway.listFleetRuntimes(this.listNodes().map((node) => this.projectNodeConnection(node)), { signal });
   }
 
   async createNodeRuntime(nodeId: string, input: unknown) {
@@ -1449,26 +1445,7 @@ export class ControlPlaneService {
   }
 
   private async listNodeInstancesWithDiagnostics(signal?: AbortSignal) {
-    const result = await this.nodeAgentGateway.listFleetInstances(this.listNodes(), { signal });
-    return {
-      items: await Promise.all(result.items.map((instance) => this.withFreshTriggerSnapshot(instance, signal))),
-      nodeErrors: result.nodeErrors,
-    };
-  }
-
-  private async withFreshTriggerSnapshot(instance: ControlledInstance, signal?: AbortSignal) {
-    if (!controlledInstanceAcceptsTraffic(instance) || (instance.connectionStatus !== "online" && instance.agentStatus !== "online")) {
-      return instance;
-    }
-    try {
-      const index = parseResponse(TriggerIndexSchema, await this.instanceRequest(instance, "/triggers", { signal }));
-      return ControlledInstanceSchema.parse({
-        ...instance,
-        triggers: controlledInstanceTriggerSnapshot(index),
-      });
-    } catch {
-      return instance;
-    }
+    return this.nodeAgentGateway.listFleetInstances(this.listNodes().map((node) => this.projectNodeConnection(node)), { signal });
   }
 
   private async requireNodeInstance(id: string) {

@@ -18,3 +18,8 @@ test("a connecting node has a visible group even before its instances respond", 
   assert.match(instanceList, /v-if="!instances\.length && !loading"/);
   assert.match(instanceList, /\.instance-group-status \{[\s\S]*?font-size: 12px/);
 });
+
+test("connecting nodes suppress the loading placeholder only in node-grouped mode", () => {
+  assert.match(instanceList, /hasConnectingNodes = computed\(\(\) => props\.groupByNode && props\.nodes\.some/);
+  assert.match(instanceList, /v-if="loading && !hasConnectingNodes"/);
+});

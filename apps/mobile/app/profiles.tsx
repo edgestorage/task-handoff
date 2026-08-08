@@ -73,7 +73,7 @@ export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInT
 
   return (
     <SafeAreaView edges={[]} style={[styles.safeArea, { backgroundColor: colors.background }]}>
-      <Stack.Screen options={{ headerShown: true }} />
+      <Stack.Screen options={{ headerShown: true, title: t('nav.settings') }} />
       <Screen>
         <View style={styles.saved}>
           {!embeddedInTabs ? <View style={styles.savedHeading}>

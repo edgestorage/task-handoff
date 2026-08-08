@@ -9,7 +9,7 @@ import {
   listStyle,
   tint,
 } from '@expo/ui/swift-ui/modifiers';
-import { SafeAreaView } from 'react-native-screens/experimental';
+import { View } from 'react-native';
 
 import { useMobileTheme } from '../components/theme';
 import { useI18n } from '../i18n';
@@ -22,8 +22,8 @@ export function NativeProfilesScreen(props: NativeProfilesScreenProps) {
   const taskStatus = useTaskStatusSettings();
 
   return (
-    <SafeAreaView edges={{ bottom: true }} style={{ flex: 1 }}>
-      <Host colorScheme={dark ? 'dark' : 'light'} seedColor={colors.primary} style={{ flex: 1 }} useViewportSizeMeasurement>
+    <View style={{ flex: 1 }}>
+      <Host colorScheme={dark ? 'dark' : 'light'} seedColor={colors.primary} style={{ flex: 1 }}>
         <List modifiers={[listStyle('insetGrouped'), tint(colors.primary)]}>
           {!props.profilesLoaded ? (
             <Section>
@@ -64,7 +64,7 @@ export function NativeProfilesScreen(props: NativeProfilesScreenProps) {
           ) : null}
         </List>
       </Host>
-    </SafeAreaView>
+    </View>
   );
 }
 

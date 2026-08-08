@@ -6,7 +6,7 @@ import { translate, type Translate } from '../i18n';
 
 const english: Translate = (key, params) => translate('en-US', key, params);
 
-type NodeState = Pick<ControlPlaneNodeDirectoryEntry, 'health' | 'status'>;
+type NodeState = Pick<ControlPlaneNodeDirectoryEntry, 'connectionPhase' | 'health' | 'status'>;
 type InstanceState = Pick<ControlPlaneInstanceDirectoryEntry, 'connectionStatus' | 'health' | 'status'>;
 type AiSummary = ControlPlaneInstanceDirectoryEntry['aiSessions'];
 
@@ -25,6 +25,7 @@ export function nodeSummary(instanceCount: number, node: NodeState, t: Translate
 }
 
 export function nodeStateLabel(node: NodeState, t: Translate = english) {
+  if (node.connectionPhase === 'connecting' || node.connectionPhase === 'handshaking' || node.connectionPhase === 'reconnecting') return t('status.connecting');
   if (node.health === 'failed') return t('status.failed');
   if (node.health === 'degraded' || node.status === 'degraded') return t('status.degraded');
   if (node.status === 'online') return t('status.online');

@@ -28,6 +28,7 @@ const ForwardedEventSchema = z.object({
 }).passthrough();
 
 const IncomingEventSchema = z.union([ForwardedEventSchema, EventSchema]);
+const DEFAULT_EVENT_TOPICS = ['ai.sessions', 'app.sessions', 'node.state', 'nodes', 'instances', 'system'] as const;
 
 const IncomingTtyMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('connected') }).passthrough(),
@@ -138,7 +139,10 @@ export class DirectControlPlaneTransport implements MobileControlPlaneTransport 
   connectEvents(handlers: MobileControlPlaneEventHandlers): MobileControlPlaneEventConnection {
     let closed = false;
     this.eventSubscribers.add(handlers);
-    if (this.eventOpen) handlers.onOpen();
+    if (this.eventOpen) {
+      this.sendEventSubscription();
+      handlers.onOpen();
+    }
     else void this.ensureEventConnection();
     return {
       close: () => {
@@ -146,6 +150,7 @@ export class DirectControlPlaneTransport implements MobileControlPlaneTransport 
         closed = true;
         this.eventSubscribers.delete(handlers);
         if (!this.eventSubscribers.size) this.closeEventConnection();
+        else if (this.eventOpen) this.sendEventSubscription();
       },
     };
   }
@@ -165,7 +170,7 @@ export class DirectControlPlaneTransport implements MobileControlPlaneTransport 
         socket.addEventListener('open', () => {
           if (this.eventSocket !== socket) return;
           this.eventOpen = true;
-          socket.send(JSON.stringify({ v: 1, type: 'subscribe', topics: ['ai.sessions', 'app.sessions', 'nodes', 'instances', 'system'] }));
+          this.sendEventSubscription();
           for (const subscriber of [...this.eventSubscribers]) subscriber.onOpen();
         });
         socket.addEventListener('message', (event) => {
@@ -207,6 +212,16 @@ export class DirectControlPlaneTransport implements MobileControlPlaneTransport 
     this.eventSocket = undefined;
     this.eventOpen = false;
     socket?.close(1000, 'Client closed');
+  }
+
+  private sendEventSubscription() {
+    const socket = this.eventSocket;
+    if (!this.eventOpen || !socket) return;
+    const topics = new Set<string>();
+    for (const subscriber of this.eventSubscribers) {
+      for (const topic of subscriber.topics ?? DEFAULT_EVENT_TOPICS) topics.add(topic);
+    }
+    socket.send(JSON.stringify({ v: 1, type: 'subscribe', topics: [...topics].sort() }));
   }
 
   connectAppSessionTty(instanceId: string, sessionId: string, handlers: MobileAppSessionTtyHandlers): MobileAppSessionTtyConnection {

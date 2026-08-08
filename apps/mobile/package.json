@@ -6,6 +6,7 @@
   "main": "expo-router/entry",
   "dependencies": {
     "@expo/ui": "~57.0.9",
+    "@expo/vector-icons": "^15.1.1",
     "@task-handoff/control-plane-client": "workspace:*",
     "@task-handoff/protocol": "workspace:*",
     "expo": "~57.0.10",

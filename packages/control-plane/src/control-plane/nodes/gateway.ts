@@ -37,6 +37,10 @@ export type NodeAgentFleetResult<T> = {
   nodeErrors: NodeAgentScopedError[];
 };
 
+export type ControlPlaneNodeAgentGatewayOptions = {
+  fleetRequestTimeoutMs?: number;
+};
+
 type NodeAgentListResult<T> = NodeAgentFleetResult<T>;
 
 type NodeAgentInstanceParseResult = {
@@ -44,11 +48,24 @@ type NodeAgentInstanceParseResult = {
   error?: NodeAgentScopedError;
 };
 
+type NodeAgentFleetSnapshot<T> = {
+  connectionKey: string;
+  items: T[];
+};
+
+const DEFAULT_FLEET_REQUEST_TIMEOUT_MS = 2_000;
+
 export class ControlPlaneNodeAgentGateway {
   private readonly client: ControlPlaneNodeAgentClient;
+  private readonly fleetRequestTimeoutMs: number;
+  private readonly runtimeSnapshots = new Map<string, NodeAgentFleetSnapshot<NodeRuntime>>();
+  private readonly instanceSnapshots = new Map<string, NodeAgentFleetSnapshot<ControlledInstance>>();
 
-  constructor(client: ControlPlaneNodeAgentClient) {
+  constructor(client: ControlPlaneNodeAgentClient, options: ControlPlaneNodeAgentGatewayOptions = {}) {
     this.client = client;
+    this.fleetRequestTimeoutMs = Number.isFinite(options.fleetRequestTimeoutMs) && Number(options.fleetRequestTimeoutMs) > 0
+      ? Number(options.fleetRequestTimeoutMs)
+      : DEFAULT_FLEET_REQUEST_TIMEOUT_MS;
   }
 
   request(node: Node, route: string, init: RequestInit = {}) {
@@ -262,22 +279,10 @@ export class ControlPlaneNodeAgentGateway {
   }
 
   async listFleetRuntimes(nodes: Node[], init: RequestInit = {}): Promise<NodeAgentFleetResult<NodeRuntime>> {
-    const route = "/runtimes";
-    const results = await Promise.allSettled(nodes.map(async (node) => ({
-      node,
-      runtimes: await this.listRuntimes(node, init),
-    })));
-    return results.reduce<NodeAgentFleetResult<NodeRuntime>>((current, result, index) => {
-      if (result.status === "fulfilled") {
-        current.items.push(...result.value.runtimes);
-      } else {
-        const node = nodes[index];
-        if (node) {
-          current.nodeErrors.push(nodeAgentScopedError(node, route, "GET", result.reason));
-        }
-      }
-      return current;
-    }, { items: [], nodeErrors: [] });
+    return this.listFleetFromSnapshots(nodes, "/runtimes", init, this.runtimeSnapshots, async (node, requestInit) => ({
+      items: await this.listRuntimes(node, requestInit),
+      nodeErrors: [],
+    }));
   }
 
   listInstances(node: Node, init: RequestInit = {}) {
@@ -386,20 +391,97 @@ export class ControlPlaneNodeAgentGateway {
   }
 
   async listFleetInstances(nodes: Node[], init: RequestInit = {}): Promise<NodeAgentFleetResult<ControlledInstance>> {
-    const route = "/instances";
-    const results = await Promise.allSettled(nodes.map(async (node) => ({
-      node,
-      result: await this.listInstancesWithDiagnostics(node, init),
-    })));
-    return results.reduce<NodeAgentFleetResult<ControlledInstance>>((current, result, index) => {
-      if (result.status === "fulfilled") {
-        current.items.push(...result.value.result.items);
-        current.nodeErrors.push(...result.value.result.nodeErrors);
-      } else {
-        current.nodeErrors.push(nodeAgentScopedError(nodes[index], route, "GET", result.reason));
+    return this.listFleetFromSnapshots(
+      nodes,
+      "/instances",
+      init,
+      this.instanceSnapshots,
+      (node, requestInit) => this.listInstancesWithDiagnostics(node, requestInit),
+    );
+  }
+
+  private async listFleetFromSnapshots<T>(
+    nodes: Node[],
+    route: string,
+    init: RequestInit,
+    snapshots: Map<string, NodeAgentFleetSnapshot<T>>,
+    load: (node: Node, init: RequestInit) => Promise<NodeAgentListResult<T>>,
+  ): Promise<NodeAgentFleetResult<T>> {
+    const activeNodeIds = new Set(nodes.map((node) => node.id));
+    for (const nodeId of snapshots.keys()) {
+      if (!activeNodeIds.has(nodeId)) snapshots.delete(nodeId);
+    }
+    const results = await Promise.all(nodes.map(async (node): Promise<NodeAgentFleetResult<T>> => {
+      const connectionKey = this.fleetConnectionKey(node);
+      try {
+        this.requireFleetNodeReady(node, route);
+        const result = await this.withFleetDeadline(node, route, init, (requestInit) => load(node, requestInit));
+        snapshots.set(node.id, { connectionKey, items: [...result.items] });
+        return result;
+      } catch (error) {
+        const snapshot = snapshots.get(node.id);
+        return {
+          items: snapshot?.connectionKey === connectionKey ? [...snapshot.items] : [],
+          nodeErrors: [nodeAgentScopedError(node, route, "GET", error)],
+        };
       }
-      return current;
+    }));
+    return results.reduce<NodeAgentFleetResult<T>>((fleet, result) => {
+      fleet.items.push(...result.items);
+      fleet.nodeErrors.push(...result.nodeErrors);
+      return fleet;
     }, { items: [], nodeErrors: [] });
+  }
+
+  private fleetConnectionKey(node: Node) {
+    return JSON.stringify([
+      node.id,
+      node.connectionMode,
+      node.controlEndpoint,
+      node.endpoint,
+      node.auth.mode,
+      node.auth.keyId,
+    ]);
+  }
+
+  private requireFleetNodeReady(node: Node, route: string) {
+    const phase = (node as Node & { connectionPhase?: string }).connectionPhase;
+    const directControlApiIsOnline = node.status === "online"
+      && node.connectionMode !== "reverse-wss"
+      && node.connectionMode !== "control-plane-proxy";
+    if (!phase || phase === "healthy" || directControlApiIsOnline) return;
+    const error = new Error(`Node agent ${node.id} is ${phase}; serving its latest fleet snapshot.`);
+    Object.assign(error, { code: "NODE_AGENT_CONNECTION_PENDING", nodeId: node.id, route });
+    throw error;
+  }
+
+  private async withFleetDeadline<T>(
+    node: Node,
+    route: string,
+    init: RequestInit,
+    load: (init: RequestInit) => Promise<T>,
+  ) {
+    const controller = new AbortController();
+    const timeoutError = Object.assign(
+      new Error(`Node agent ${node.id} did not return ${route} before the fleet aggregation deadline.`),
+      { code: "NODE_AGENT_FLEET_TIMEOUT", nodeId: node.id, route },
+    );
+    const aborted = new Promise<never>((_resolve, reject) => {
+      const rejectFromAbort = () => reject(controller.signal.reason || timeoutError);
+      if (controller.signal.aborted) rejectFromAbort();
+      else controller.signal.addEventListener("abort", rejectFromAbort, { once: true });
+    });
+    const abortFromCaller = () => controller.abort(init.signal?.reason);
+    if (init.signal?.aborted) abortFromCaller();
+    else init.signal?.addEventListener("abort", abortFromCaller, { once: true });
+    const timer = setTimeout(() => controller.abort(timeoutError), this.fleetRequestTimeoutMs);
+    timer.unref?.();
+    try {
+      return await Promise.race([load({ ...init, signal: controller.signal }), aborted]);
+    } finally {
+      clearTimeout(timer);
+      init.signal?.removeEventListener("abort", abortFromCaller);
+    }
   }
 
   private normalizeInstance(node: Node, value: unknown): NodeAgentInstanceParseResult {

@@ -1,11 +1,30 @@
 import type { ControlPlaneClient } from '@task-handoff/control-plane-client';
+import { ControlPlaneInstanceLifecycleDirectoryEventSchema, ControlPlaneNodeConnectionPhaseSchema } from '@task-handoff/protocol/control-plane-directory';
+import type { ControlPlaneInstanceAction } from '@task-handoff/protocol/control-plane-directory';
+import { safeParseResponse } from '@task-handoff/protocol/response-validation';
+import { z } from 'zod';
 
 import { MobileDirectoryStore } from './store';
-import type { MobileControlPlaneTransport } from '../control-plane/transport';
+import type { MobileControlPlaneEvent, MobileControlPlaneEventConnection, MobileControlPlaneTransport, MobileControlPlaneTransportError } from '../control-plane/transport';
+
+const NodeConnectionObservationSchema = z.object({
+  nodeId: z.string().trim().min(1).max(160),
+  phase: ControlPlaneNodeConnectionPhaseSchema,
+  changedAt: z.string().datetime(),
+  lastSeenAt: z.string().datetime().optional(),
+}).strip();
+const INSTANCE_LIFECYCLE_SNAPSHOT_EVENT = 'instance.lifecycle.snapshot';
 
 export class MobileDirectoryController {
   private epoch = 0;
   private readonly storeGeneration: number;
+  private connection?: MobileControlPlaneEventConnection;
+  private refreshTimer?: ReturnType<typeof setTimeout>;
+  private refreshInFlight?: Promise<void>;
+  private refreshQueued = false;
+  private activeSignal?: AbortSignal;
+  private reconnectAttempt = 0;
+  private reconnectTimer?: ReturnType<typeof setTimeout>;
 
   constructor(
     private readonly controlPlaneId: string,
@@ -16,20 +35,21 @@ export class MobileDirectoryController {
     this.storeGeneration = store.generation(controlPlaneId);
   }
 
-  async start() {
+  async start(signal?: AbortSignal, options: { managed?: boolean } = {}) {
     if (!this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) return false;
     const epoch = ++this.epoch;
+    this.activeSignal = signal;
     const current = this.store.profile(this.controlPlaneId);
     this.store.set(this.controlPlaneId, {
       phase: current.nodes.length || current.instances.length ? 'stale' : 'loading',
       error: undefined,
     });
     try {
-      await this.transport?.revalidate?.();
+      if (!options.managed) await this.transport?.revalidate?.();
       if (epoch !== this.epoch || !this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) return false;
       const [nodes, instances] = await Promise.all([
-        this.client.resources.nodes(),
-        this.client.resources.instanceBoard(),
+        this.client.resources.nodes(signal),
+        this.client.resources.instanceBoard(signal),
       ]);
       if (epoch !== this.epoch || !this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) return false;
       this.store.set(this.controlPlaneId, {
@@ -39,6 +59,8 @@ export class MobileDirectoryController {
         updatedAt: new Date().toISOString(),
         error: undefined,
       });
+      this.reconnectAttempt = 0;
+      if (!options.managed) this.connectEvents(epoch);
       return true;
     } catch (cause) {
       if (epoch !== this.epoch || !this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) return false;
@@ -47,6 +69,7 @@ export class MobileDirectoryController {
         phase: latest.nodes.length || latest.instances.length ? 'stale' : 'error',
         error: cause instanceof Error ? cause.message : 'Directory unavailable.',
       });
+      if (!options.managed && this.transport) this.scheduleReconnect(epoch);
       throw cause;
     }
   }
@@ -55,7 +78,7 @@ export class MobileDirectoryController {
     const updated = await this.client.resources.updateInstanceName(instanceId, name);
     if (this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) {
       this.store.setInstanceName(this.controlPlaneId, updated.id, updated.name);
-      void this.start().catch(() => undefined);
+      void this.requestRefresh().catch(() => undefined);
     }
     return updated;
   }
@@ -64,9 +87,18 @@ export class MobileDirectoryController {
     const updated = await this.client.resources.updateNodeName(nodeId, name);
     if (this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) {
       this.store.setNodeName(this.controlPlaneId, updated.id, updated.name);
-      void this.start().catch(() => undefined);
+      void this.requestRefresh().catch(() => undefined);
     }
     return updated;
+  }
+
+  async runInstanceAction(instanceId: string, action: ControlPlaneInstanceAction) {
+    const instance = this.store.profile(this.controlPlaneId).instances.find((candidate) => candidate.id === instanceId);
+    if (!instance) throw new Error(`Instance ${instanceId} is not in the current directory snapshot.`);
+    if (!instance.availableActions.includes(action)) throw new Error(`Instance action ${action} is not currently available.`);
+    const result = await this.client.resources.instanceAction(instanceId, action);
+    await this.requestRefresh();
+    return result;
   }
 
   offline() {
@@ -81,7 +113,109 @@ export class MobileDirectoryController {
     });
   }
 
+  onConnectionError(error?: MobileControlPlaneTransportError) {
+    if (!this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) return;
+    const current = this.store.profile(this.controlPlaneId);
+    this.store.set(this.controlPlaneId, {
+      phase: current.nodes.length || current.instances.length ? 'stale' : 'error',
+      ...(error ? { error: error.message } : {}),
+    });
+  }
+
   stop() {
     this.epoch += 1;
+    if (this.refreshTimer) clearTimeout(this.refreshTimer);
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.refreshTimer = undefined;
+    this.reconnectTimer = undefined;
+    this.reconnectAttempt = 0;
+    this.refreshQueued = false;
+    this.activeSignal = undefined;
+    this.connection?.close();
+    this.connection = undefined;
+  }
+
+  private connectEvents(epoch: number) {
+    if (!this.transport || epoch !== this.epoch) return;
+    this.connection?.close();
+    this.connection = this.transport.connectEvents({
+      onOpen: () => undefined,
+      onEvent: (event) => { if (epoch === this.epoch) this.applyEvent(event); },
+      onError: (cause) => {
+        if (epoch !== this.epoch) return;
+        const current = this.store.profile(this.controlPlaneId);
+        this.store.set(this.controlPlaneId, { phase: current.nodes.length || current.instances.length ? 'stale' : 'error', error: cause.message });
+        this.scheduleReconnect(epoch);
+      },
+      onClose: () => {
+        if (epoch !== this.epoch) return;
+        const current = this.store.profile(this.controlPlaneId);
+        this.store.set(this.controlPlaneId, { phase: current.nodes.length || current.instances.length ? 'stale' : 'error' });
+        this.scheduleReconnect(epoch);
+      },
+    });
+  }
+
+  applyEvent(event: MobileControlPlaneEvent) {
+    if (event.type === 'node.connection.updated') {
+      const parsed = safeParseResponse(NodeConnectionObservationSchema, event.payload);
+      if (!parsed.success || event.scope?.nodeId !== parsed.data.nodeId) return false;
+      this.store.setNodeConnection(this.controlPlaneId, parsed.data.nodeId, parsed.data.phase, parsed.data.changedAt, parsed.data.lastSeenAt);
+      return true;
+    }
+    if (event.type === INSTANCE_LIFECYCLE_SNAPSHOT_EVENT) {
+      const parsed = safeParseResponse(ControlPlaneInstanceLifecycleDirectoryEventSchema, event.payload);
+      if (!parsed.success || event.scope?.instanceId !== parsed.data.instanceId) return false;
+      const applied = this.store.applyInstanceLifecycle(this.controlPlaneId, parsed.data);
+      if (applied) this.scheduleRefresh();
+      return applied;
+    }
+    if (event.topic === 'nodes' || event.topic === 'node.state' || event.topic === 'instances') {
+      this.scheduleRefresh();
+      return true;
+    }
+    return false;
+  }
+
+  private scheduleRefresh() {
+    if (this.refreshTimer) return;
+    this.refreshTimer = setTimeout(() => {
+      this.refreshTimer = undefined;
+      void this.requestRefresh().catch(() => undefined);
+    }, 100);
+  }
+
+  private requestRefresh() {
+    if (this.refreshInFlight) {
+      this.refreshQueued = true;
+      return this.refreshInFlight;
+    }
+    const epoch = this.epoch;
+    const refresh = this.refreshDirectories(epoch, this.activeSignal).finally(() => {
+      if (this.refreshInFlight !== refresh) return;
+      this.refreshInFlight = undefined;
+      if (!this.refreshQueued || epoch !== this.epoch) return;
+      this.refreshQueued = false;
+      void this.requestRefresh().catch(() => undefined);
+    });
+    this.refreshInFlight = refresh;
+    return refresh;
+  }
+
+  private async refreshDirectories(epoch: number, signal?: AbortSignal) {
+    const [nodes, instances] = await Promise.all([this.client.resources.nodes(signal), this.client.resources.instanceBoard(signal)]);
+    if (signal?.aborted || epoch !== this.epoch || !this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) return;
+    this.store.set(this.controlPlaneId, { nodes, instances, phase: 'ready', updatedAt: new Date().toISOString(), error: undefined });
+  }
+
+  private scheduleReconnect(epoch: number) {
+    if (this.reconnectTimer || epoch !== this.epoch) return;
+    const delay = Math.min(1_000 * (2 ** this.reconnectAttempt), 30_000);
+    this.reconnectAttempt += 1;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = undefined;
+      if (epoch !== this.epoch) return;
+      void this.start().catch(() => undefined);
+    }, delay);
   }
 }

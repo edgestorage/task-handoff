@@ -221,6 +221,9 @@ test("shared resource client validates declared fields and drops unknown respons
         if (JSON.parse(init.body).name) return schema.parse({ data: { id: "instance-1", name: "Renamed Instance", ignored: true } });
         return schema.parse({ data: { config: { defaultCodexPermissionMode: "auto-review" } } });
       }
+      if (path === "/api/controlled-instances/instance%2F1/restart") {
+        return schema.parse({ data: { id: "instance-1", status: "starting", ignored: true } });
+      }
       return schema.parse({ data: [{
         id: "instance-1",
         name: "Instance",
@@ -254,12 +257,14 @@ test("shared resource client validates declared fields and drops unknown respons
   const savedPermission = await api.resources.updateInstanceDefaultPermissionMode("instance/1", "auto-review");
   const renamedInstance = await api.resources.updateInstanceName("instance/1", "Renamed Instance");
   const renamedNode = await api.resources.updateNodeName("node-1", "Renamed Node");
+  const restarted = await api.resources.instanceAction("instance/1", "restart");
 
   assert.equal(instances[0].config.defaultCodexPermissionMode, "full-access");
   assert.equal(instances[0].availableApps[0].id, "terminal-tty");
   assert.equal(savedPermission, "auto-review");
   assert.deepEqual(renamedInstance, { id: "instance-1", name: "Renamed Instance" });
   assert.deepEqual(renamedNode, { id: "node-1", name: "Renamed Node" });
+  assert.deepEqual(restarted, { id: "instance-1", status: "starting" });
 
   assert.deepEqual(requests.map((request) => request.path), [
     "/api/nodes?projection=directory",
@@ -267,11 +272,13 @@ test("shared resource client validates declared fields and drops unknown respons
     "/api/controlled-instances/instance%2F1",
     "/api/controlled-instances/instance%2F1",
     "/api/nodes/node-1",
+    "/api/controlled-instances/instance%2F1/restart",
   ]);
   assert.equal(requests[2].init.method, "PATCH");
   assert.deepEqual(JSON.parse(requests[2].init.body), { config: { defaultCodexPermissionMode: "auto-review" } });
   assert.deepEqual(JSON.parse(requests[3].init.body), { name: "Renamed Instance" });
   assert.deepEqual(JSON.parse(requests[4].init.body), { name: "Renamed Node" });
+  assert.equal(requests[5].init.method, "POST");
 
   const compatibleApi = createControlPlaneClient({
     request(path, schema) {

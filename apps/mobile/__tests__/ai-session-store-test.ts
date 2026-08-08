@@ -81,8 +81,10 @@ describe('MobileAiSessionStore identity isolation', () => {
     store.replaceSnapshot('cp-scoped', initial);
     const firstListener = jest.fn();
     const secondListener = jest.fn();
+    const snapshotListener = jest.fn();
     store.subscribeSession('cp-scoped', 'instance-1', 'session-1', firstListener);
     store.subscribeSession('cp-scoped', 'instance-1', 'session-2', secondListener);
+    store.subscribeSnapshot('cp-scoped', snapshotListener);
     const stableSecondView = store.sessionView('cp-scoped', 'instance-1', 'session-2');
 
     store.appendMessageDelta('cp-scoped', {
@@ -92,8 +94,12 @@ describe('MobileAiSessionStore identity isolation', () => {
 
     expect(firstListener).toHaveBeenCalledTimes(1);
     expect(secondListener).not.toHaveBeenCalled();
+    expect(snapshotListener).not.toHaveBeenCalled();
     expect(store.sessionView('cp-scoped', 'instance-1', 'session-2')).toBe(stableSecondView);
     expect(store.sessionView('cp-scoped', 'instance-1', 'session-1').messages[0]?.receivedText).toBe('hello');
+
+    store.replaceSnapshot('cp-scoped', initial);
+    expect(snapshotListener).toHaveBeenCalledTimes(1);
   });
 
   test('message retention notifies a different session when its final message is evicted', () => {

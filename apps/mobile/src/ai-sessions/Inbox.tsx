@@ -35,7 +35,7 @@ export { inboxCardContent, inboxEntries, sessionScopeOptions } from './InboxMode
 
 const ALL_SCOPE: AiSessionScope = { kind: 'all' };
 const STATUS_FILTERS = ['all', 'active', 'waiting', 'idle', 'problem'] as const;
-const STATUS_FILTER_PADDING = 2;
+const STATUS_FILTER_PADDING = 3;
 
 export function AiSessionInbox({
   actions,
@@ -212,8 +212,8 @@ const styles = StyleSheet.create({
   emptyText: { color: '#64748b', fontSize: 14 },
   statusFilters: { borderRadius: 999, flexDirection: 'row', padding: STATUS_FILTER_PADDING, position: 'relative', width: '100%' },
   statusFilterSelection: { borderRadius: 999, bottom: STATUS_FILTER_PADDING, left: STATUS_FILTER_PADDING, position: 'absolute', top: STATUS_FILTER_PADDING },
-  statusFilter: { alignItems: 'center', borderRadius: 999, flex: 1, justifyContent: 'center', minHeight: 36, paddingHorizontal: 4, zIndex: 1 },
-  statusFilterText: { fontSize: 13, fontWeight: '600', lineHeight: 18 },
+  statusFilter: { alignItems: 'center', borderRadius: 999, flex: 1, justifyContent: 'center', minHeight: 34, paddingHorizontal: 4, zIndex: 1 },
+  statusFilterText: { fontSize: 14, fontWeight: '600', lineHeight: 20 },
   cardContainer: { borderRadius: 16, marginBottom: 12, marginHorizontal: 20 },
   cardContent: { borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, gap: 10, padding: 16, paddingVertical: 12 },
   row: { alignItems: 'center', flexDirection: 'row', gap: 8 },

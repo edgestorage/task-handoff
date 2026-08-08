@@ -39,7 +39,7 @@ pnpm --filter @task-handoff/mobile release:check
 
 ## Product boundary
 
-The first release opens directly into AI Session Inbox and includes active detail, Markdown/code, complete sub-agent display, create/history/resume, composer, approval, interrupt, queue actions, mobile uploads, server-selected runtime files, and read-only Node/Instance directories. Node/Instance lifecycle, terminal, full file management, model/environment/application management, triggers, full settings, official account, and relay features are intentionally absent.
+The first release opens directly into AI Session Inbox and includes active detail, Markdown/code, complete sub-agent display, create/history/resume, composer, approval, interrupt, queue actions, mobile uploads, server-selected runtime files, realtime Node/Instance directories, server-authorized Instance start/stop/restart/image-retry actions, App Session launch/rename/stop, and terminal access. Instance creation/deletion, full Node lifecycle, full file management, model/environment/application installation management, triggers, full settings, official account, and relay features are intentionally absent.
 
 Operator setup and recovery are documented in [mobile-control-plane-operations.md](../../docs/mobile-control-plane-operations.md). The threat model is [mobile-control-plane-security.md](../../docs/mobile-control-plane-security.md). Deferred work is listed in [mobile-control-plane-future-changes.md](../../docs/mobile-control-plane-future-changes.md).
 

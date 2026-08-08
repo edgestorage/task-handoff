@@ -20,6 +20,7 @@ export type MobileControlPlaneEvent = {
 };
 
 export type MobileControlPlaneEventHandlers = {
+  topics?: readonly string[];
   onOpen(): void;
   onEvent(event: MobileControlPlaneEvent): void;
   onError(error: MobileControlPlaneTransportError): void;

@@ -23,6 +23,7 @@ export default function HistoryDetailRoute() {
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [actionsHeight, setActionsHeight] = useState(0);
+  const actionsBottom = Math.max(insets.bottom, 12);
   useEffect(() => {
     let live = true;
     void withClient((api) => api.aiSessions.historyDetail(instanceId, historyId)).then((result) => { if (live) setDetail(result); }).catch((cause) => { if (live) setError(lifecycleGuidance(cause).message); });
@@ -39,7 +40,7 @@ export default function HistoryDetailRoute() {
   return <>
   <Stack.Screen options={{ title: detail?.item.title || t('nav.sessionHistory') }} />
   <View style={[styles.page, { backgroundColor: colors.background }]}>
-  <Screen contentContainerStyle={detail ? { paddingBottom: actionsHeight + 16 } : undefined} testID="history-detail-scroll">
+  <Screen contentContainerStyle={detail ? { paddingBottom: actionsHeight + actionsBottom + 16 } : undefined} testID="history-detail-scroll">
     {detail ? <>
       <View style={styles.header}>
         <View style={[styles.historyIcon, { backgroundColor: colors.primarySoft }]}>
@@ -68,7 +69,7 @@ export default function HistoryDetailRoute() {
   </Screen>
   {detail ? <View
     onLayout={(event) => setActionsHeight(event.nativeEvent.layout.height)}
-    style={[styles.actions, { backgroundColor: colors.background, borderColor: colors.border, paddingBottom: Math.max(insets.bottom, 12) }]}
+    style={[styles.actions, { bottom: actionsBottom }]}
     testID="history-resume-actions"
   >
     {error ? <View style={[styles.errorCard, { backgroundColor: colors.errorSoft }]}><SystemIcon android="error" color={colors.error} ios="exclamationmark.triangle.fill" size={17} /><Text accessibilityLiveRegion="polite" style={[styles.error, { color: colors.error }]}>{error}</Text></View> : null}
@@ -94,7 +95,7 @@ async function withClient<T>(operation: (client: ReturnType<typeof createDirectC
 
 const styles = StyleSheet.create({
   page: { flex: 1 },
-  actions: { borderTopWidth: StyleSheet.hairlineWidth, bottom: 0, gap: 8, left: 0, paddingHorizontal: 16, paddingTop: 10, position: 'absolute', right: 0, zIndex: 10 },
+  actions: { gap: 8, left: 0, paddingHorizontal: 16, position: 'absolute', right: 0, zIndex: 10 },
   header: { alignItems: 'flex-start', flexDirection: 'row', gap: 12 },
   historyIcon: { alignItems: 'center', borderRadius: 12, height: 44, justifyContent: 'center', width: 44 },
   headerText: { flex: 1, gap: 6 },

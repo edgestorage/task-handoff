@@ -8,7 +8,7 @@ import {
 } from '@task-handoff/protocol/app-sessions';
 import { safeParseResponse } from '@task-handoff/protocol/response-validation';
 
-import type { MobileControlPlaneEvent, MobileControlPlaneEventConnection, MobileControlPlaneTransport } from '../control-plane/transport';
+import type { MobileControlPlaneEvent, MobileControlPlaneEventConnection, MobileControlPlaneTransport, MobileControlPlaneTransportError } from '../control-plane/transport';
 import { MobileAppSessionStore } from './store';
 
 export class MobileAppSessionController {
@@ -22,7 +22,7 @@ export class MobileAppSessionController {
   constructor(private readonly id: string, private readonly client: ControlPlaneClient, private readonly transport: MobileControlPlaneTransport, private readonly store: MobileAppSessionStore) {
     this.generation = store.generation(id);
   }
-  async start(signal?: AbortSignal) {
+  async start(signal?: AbortSignal, options: { managed?: boolean } = {}) {
     if (!this.store.isGeneration(this.id, this.generation)) return;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined;
@@ -30,7 +30,7 @@ export class MobileAppSessionController {
     const current = this.store.profile(this.id);
     this.store.setSyncState(this.id, { phase: current.snapshot ? 'stale' : 'loading', lastSyncedAt: current.sync.lastSyncedAt });
     try {
-      await this.transport.revalidate?.();
+      if (!options.managed) await this.transport.revalidate?.();
       const snapshot = await this.client.appSessions.list(signal);
       if (!this.live(epoch)) return;
       this.store.replaceSnapshot(this.id, snapshot);
@@ -41,9 +41,10 @@ export class MobileAppSessionController {
         lastSyncedAt: this.store.profile(this.id).sync.lastSyncedAt,
         error: cause instanceof Error ? cause.message : 'Could not load App Sessions.',
       });
-      this.scheduleReconnect(epoch);
+      if (!options.managed) this.scheduleReconnect(epoch);
       throw cause;
     }
+    if (options.managed) return;
     if (!this.live(epoch)) return;
     this.connection?.close();
     this.connection = this.transport.connectEvents({
@@ -69,6 +70,15 @@ export class MobileAppSessionController {
     this.recoveries.clear();
   }
   offline() { this.stop(); this.store.setSyncState(this.id, { phase: 'offline', lastSyncedAt: this.store.profile(this.id).sync.lastSyncedAt }); }
+  onConnectionError(error?: MobileControlPlaneTransportError) {
+    if (!this.store.isGeneration(this.id, this.generation)) return;
+    const current = this.store.profile(this.id);
+    this.store.setSyncState(this.id, {
+      phase: current.snapshot ? 'stale' : 'error',
+      lastSyncedAt: current.sync.lastSyncedAt,
+      ...(error ? { error: error.message } : {}),
+    });
+  }
   applyEvent(event: MobileControlPlaneEvent) {
     if (event.topic && event.topic !== 'app.sessions') return false;
     const schemas = {

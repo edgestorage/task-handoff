@@ -41,8 +41,8 @@ test('directory activates when the first Control Plane profile is created after 
       return () => undefined;
     }),
     createClient: () => ({
-      api: { resources: { nodes, instanceBoard } },
-      transport: { revalidate: jest.fn().mockResolvedValue(undefined) },
+      api: { auth: { session: jest.fn().mockResolvedValue({ authenticated: true }) }, resources: { nodes, instanceBoard } },
+      transport: { revalidate: jest.fn().mockResolvedValue(undefined), connectEvents: jest.fn(() => ({ close: jest.fn() })) },
     }) as unknown as ReturnType<ActiveDirectoriesDependencies['createClient']>,
     subscribeLifecycle: (listener) => { listener('active'); return () => undefined; },
     subscribeNetwork: (listener) => { listener({ connected: true, internetReachable: true, type: 'wifi' }); return () => undefined; },

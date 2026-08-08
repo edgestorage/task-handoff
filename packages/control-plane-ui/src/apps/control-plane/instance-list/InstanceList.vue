@@ -290,7 +290,7 @@ function instanceRuntimeLabel(instance: InstanceBoardItem) {
 }
 
 const collapsedGroups = reactive<Record<string, boolean>>({});
-const hasConnectingNodes = computed(() => props.nodes.some((node) => node.connectionPhase === "connecting" || node.connectionPhase === "handshaking" || node.connectionPhase === "reconnecting"));
+const hasConnectingNodes = computed(() => props.groupByNode && props.nodes.some((node) => node.connectionPhase === "connecting" || node.connectionPhase === "handshaking" || node.connectionPhase === "reconnecting"));
 
 const instanceGroups = computed(() => {
   if (!props.groupByNode) {

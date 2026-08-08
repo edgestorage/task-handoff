@@ -5936,6 +5936,7 @@ test("control plane node instance aggregation isolates invalid node protocol dat
   assert.equal(goodDirectoryInstance.protocol.compatible, false);
   assert.match(goodDirectoryInstance.protocol.warning, /Node protocol 2026-06-22/);
   assert.ok(Array.isArray(goodDirectoryInstance.availableApps));
+  assert.deepEqual(goodDirectoryInstance.availableActions, ["stop", "restart"]);
   const oldDirectoryInstance = directory.body.data.find((instance) => instance.id === "inst_old_protocol");
   assert.equal(oldDirectoryInstance.protocol.compatible, false);
   assert.match(oldDirectoryInstance.protocol.warning, /Instance protocol 2026-06-23/);
@@ -6825,12 +6826,16 @@ test("server localhost startup reports an occupied instance port", async (t) => 
     staleServer.listen(stalePort, "127.0.0.1", resolve);
   });
   const previousCommandArgv = process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV;
+  const previousPortConflictPolicy = process.env.TASK_HANDOFF_LOCAL_INSTANCE_PORT_CONFLICT;
   process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV = JSON.stringify([process.execPath, webStub]);
+  delete process.env.TASK_HANDOFF_LOCAL_INSTANCE_PORT_CONFLICT;
   const app = await createNodeAgentApp({ dataDir, logger: false, token: "agent-secret" });
   t.after(async () => {
     staleServer.close();
     if (previousCommandArgv === undefined) delete process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV;
     else process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV = previousCommandArgv;
+    if (previousPortConflictPolicy === undefined) delete process.env.TASK_HANDOFF_LOCAL_INSTANCE_PORT_CONFLICT;
+    else process.env.TASK_HANDOFF_LOCAL_INSTANCE_PORT_CONFLICT = previousPortConflictPolicy;
     await app.close();
   });
 
@@ -6857,7 +6862,7 @@ test("server localhost startup reports an occupied instance port", async (t) => 
     headers: { authorization: "Bearer agent-secret" },
     payload: {},
   });
-  assert.equal(started.statusCode, 409);
+  assert.equal(started.statusCode, 409, JSON.stringify(started.json()));
   assert.equal(started.json().error.code, "LOCAL_INSTANCE_PORT_IN_USE");
   const failed = app.nodeAgentState.controlledInstances.get("inst_local_stale_port");
   assert.equal(failed.status, "failed");
@@ -7993,6 +7998,7 @@ test("node agent tolerates extra fields in stored controlled instances", async (
   const timestamp = new Date().toISOString();
   const instanceDir = path.join(dataDir, "controlled-instances");
   const instanceFile = path.join(instanceDir, "inst_extra.json");
+  const desiredVersion = runtimeVersionStateForActual("0.9.0").desiredVersion;
   fs.mkdirSync(instanceDir, { recursive: true });
   fs.writeFileSync(
     instanceFile,
@@ -8107,7 +8113,7 @@ test("node agent tolerates extra fields in stored controlled instances", async (
         },
         runtime: { labels: {}, legacyRuntimeField: true },
         runtimeVersion: {
-          desiredVersion: "1.0.0",
+          desiredVersion,
           actualVersion: "0.9.0",
           phase: "updating",
           attempt: 2,
@@ -8193,6 +8199,7 @@ test("node agent tolerates extra fields in stored controlled instances", async (
 
 test("node agent proxies mutating instance API requests while runtime convergence is pending", async (t) => {
   const calls = [];
+  const proxyCalls = () => calls.filter((call) => !call.url.includes("/api/internal/node-agent/"));
   const app = await createNodeAgentApp({
     dataDir: tempDataDir("node-agent-proxy"),
     logger: false,
@@ -8271,7 +8278,7 @@ test("node agent proxies mutating instance API requests while runtime convergenc
 
   assert.equal(response.statusCode, 202);
   assert.deepEqual(response.json(), { data: { accepted: true } });
-  assert.deepEqual(calls, [
+  assert.deepEqual(proxyCalls(), [
     {
       url: "http://127.0.0.1:18080/api/status",
       method: "POST",
@@ -8285,6 +8292,7 @@ test("node agent proxies mutating instance API requests while runtime convergenc
 
 test("node agent proxies direct-port instances through the node-local host", async (t) => {
   const calls = [];
+  const proxyCalls = () => calls.filter((call) => !call.url.includes("/api/internal/node-agent/"));
   const app = await createNodeAgentApp({
     dataDir: tempDataDir("node-agent-proxy-local-host"),
     logger: false,
@@ -8360,7 +8368,7 @@ test("node agent proxies direct-port instances through the node-local host", asy
 
   assert.equal(response.statusCode, 200);
   assert.equal(response.body, "<html>ok</html>");
-  assert.deepEqual(calls, [
+  assert.deepEqual(proxyCalls(), [
     {
       url: "http://127.0.0.1:18080/",
       method: "GET",
@@ -8381,7 +8389,7 @@ test("node agent proxies direct-port instances through the node-local host", asy
   });
 
   assert.equal(posted.statusCode, 200);
-  assert.deepEqual(calls.at(-1), {
+  assert.deepEqual(proxyCalls().at(-1), {
     url: "http://127.0.0.1:18080/upload",
     method: "POST",
     bodyBytes: [0, 1, 2, 255],
@@ -8593,6 +8601,7 @@ test("control plane checks node agent runtime targets and lists their images", a
   assert.equal(nodeDirectory.body.data.length, 1);
   assert.equal(nodeDirectory.body.data[0].id, "node_agent");
   assert.equal(nodeDirectory.body.data[0].connectionMode, "direct-http");
+  assert.equal(nodeDirectory.body.data[0].connectionPhase, "healthy");
   assert.ok(nodeDirectory.body.data[0].capabilities.includes("agent"));
   assert.equal(JSON.stringify(nodeDirectory.body).includes("agent-secret"), false);
   for (const forbidden of ["auth", "endpoint", "controlEndpoint", "containerEndpoint", "publicWebBase", "pairing", "secret"]) {
@@ -9334,6 +9343,9 @@ test("aborting an active fleet query cancels its reverse-WSS node request", asyn
   });
   t.after(() => socket.close());
   await onceWebSocketMessage(socket);
+  socket.send(JSON.stringify({ type: "node-agent.identify", nodeId: "node_fleet_query_abort" }));
+  const identified = await onceWebSocketMessage(socket);
+  assert.equal(identified.type, "control-plane.identified");
 
   const controller = new AbortController();
   const responsePromise = fetch(`http://127.0.0.1:${address.port}/api/node-runtimes`, { signal: controller.signal })
