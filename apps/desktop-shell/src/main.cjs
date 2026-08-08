@@ -28,7 +28,7 @@ const {
 } = require("./config.cjs");
 const { createDesktopUpdater } = require("./updater.cjs");
 const { superviseDesktopChild } = require("./child-process.cjs");
-const { stopExistingDesktopNodeAgent } = require("./node-agent-handoff.cjs");
+const { inspectExistingDesktopControlPlane, stopExistingDesktopNodeAgent } = require("./node-agent-handoff.cjs");
 const { applyDesktopDockIcon, desktopIconPath: resolveDesktopIconPath } = require("./icon.cjs");
 const { applyWindowsTitleBarTheme, desktopTitleBarOptions, desktopWindowChromeMode } = require("./window-chrome.cjs");
 
@@ -40,6 +40,8 @@ let ownsNodeAgentProcess = false;
 let desktopLogStream;
 let desktopUpdater;
 let desktopServicesStopPromise;
+let desktopQuitPromise;
+let desktopQuitReady = false;
 const controlPlaneWindows = new Set();
 const windowsTitleBarOverlayHeights = new WeakMap();
 const childProcessSpawnErrors = new WeakMap();
@@ -130,6 +132,12 @@ function writeLog(stream, message) {
 
 function writeDesktopFileLog(message) {
   writeLog(desktopFileLogStream(), message);
+}
+
+function closeDesktopFileLog() {
+  if (!desktopLogStream) return;
+  desktopLogStream.end();
+  desktopLogStream = undefined;
 }
 
 process.stdout?.on?.("error", reportLogWriteError);
@@ -670,24 +678,35 @@ function startNodeAgent(options = {}) {
   const args = buildNodeAgentArgs({ root, host, port });
   const processCwd = resolveDesktopProcessCwd(process.env, { packaged: app.isPackaged, root });
   fs.mkdirSync(processCwd, { recursive: true });
-  nodeAgentProcess = spawn(nodeCommand, args, {
-    cwd: processCwd,
-    env: {
-      ...buildDesktopChildProcessEnv(process.env, {
-        packaged: app.isPackaged,
-        version: app.getVersion(),
-        overrides: {
-          TASK_HANDOFF_NODE_AGENT_HOST: host,
-          TASK_HANDOFF_NODE_AGENT_PORT: String(port),
-          TASK_HANDOFF_BUNDLED_RUNTIME_DIR: process.env.TASK_HANDOFF_BUNDLED_RUNTIME_DIR || path.join(root, "release", "runtime-artifacts"),
-          TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV: JSON.stringify([nodeCommand, validation.cliEntry, "web"]),
-          TASK_HANDOFF_LOCAL_INSTANCE_PORT_CONFLICT: "allocate",
-          TASK_HANDOFF_NODE_AGENT_PORT_CONFLICT: "allocate",
-        },
-      }),
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  const logDir = path.join(resolveNodeAgentDataDir(), "logs");
+  fs.mkdirSync(logDir, { recursive: true });
+  const stdout = fs.openSync(path.join(logDir, "node-agent.out.log"), "a", 0o600);
+  const stderr = fs.openSync(path.join(logDir, "node-agent.err.log"), "a", 0o600);
+  try {
+    nodeAgentProcess = spawn(nodeCommand, args, {
+      cwd: processCwd,
+      detached: true,
+      env: {
+        ...buildDesktopChildProcessEnv(process.env, {
+          packaged: app.isPackaged,
+          version: app.getVersion(),
+          overrides: {
+            TASK_HANDOFF_NODE_AGENT_HOST: host,
+            TASK_HANDOFF_NODE_AGENT_PORT: String(port),
+            TASK_HANDOFF_BUNDLED_RUNTIME_DIR: process.env.TASK_HANDOFF_BUNDLED_RUNTIME_DIR || path.join(root, "release", "runtime-artifacts"),
+            TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV: JSON.stringify([nodeCommand, validation.cliEntry, "web"]),
+            TASK_HANDOFF_LOCAL_INSTANCE_PORT_CONFLICT: "allocate",
+            TASK_HANDOFF_NODE_AGENT_PORT_CONFLICT: "allocate",
+          },
+        }),
+      },
+      stdio: ["ignore", stdout, stderr],
+      windowsHide: true,
+    });
+  } finally {
+    fs.closeSync(stdout);
+    fs.closeSync(stderr);
+  }
   ownsNodeAgentProcess = true;
   const child = nodeAgentProcess;
 
@@ -816,6 +835,13 @@ async function boot() {
   if (desktopFileLoggingEnabled()) {
     logInfo(`[desktop-shell] writing desktop logs to ${resolveDesktopLogFile()}`);
   }
+  const existingControlPlane = inspectExistingDesktopControlPlane();
+  if (existingControlPlane.status === "running") {
+    throw new Error(`A Control Plane is already running pid=${existingControlPlane.owner.pid}. Close it before starting Desktop.`);
+  }
+  if (existingControlPlane.status === "unverified") {
+    throw new Error(`The existing Control Plane pid=${existingControlPlane.owner.pid} could not be verified.`);
+  }
   const nodeAgentDataDir = resolveNodeAgentDataDir();
   const previousNodeAgent = await stopExistingDesktopNodeAgent({
     dataDir: nodeAgentDataDir,
@@ -832,25 +858,44 @@ async function boot() {
       `The existing Desktop node agent pid=${previousNodeAgent.owner.pid} could not be verified and was not stopped.`,
     );
   }
-  const controlPlaneHost = resolveControlPlaneHost();
-  const controlPlanePort = await findAvailablePort(controlPlaneHost, resolveControlPlanePort(), 20, "control-plane");
-  const url = localHttpUrl(controlPlaneHost, controlPlanePort);
-  const nodeAgentHost = resolveNodeAgentHost();
-  const nodeAgentPort = resolveNodeAgentPort();
-  const nodeAgentControlEndpoint = resolveNodeAgentControlEndpoint();
-  const nodeAgent = startNodeAgent({ host: nodeAgentHost, port: nodeAgentPort });
+  let bootNodeAgent;
+  let nodeAgentReady = false;
   try {
-    const nodeAgentHealth = await waitForNodeAgent(nodeAgentControlEndpoint, nodeAgent);
+    const controlPlaneHost = resolveControlPlaneHost();
+    const controlPlanePort = await findAvailablePort(controlPlaneHost, resolveControlPlanePort(), 20, "control-plane");
+    const url = localHttpUrl(controlPlaneHost, controlPlanePort);
+    const nodeAgentHost = resolveNodeAgentHost();
+    const nodeAgentPort = resolveNodeAgentPort();
+    const nodeAgentControlEndpoint = resolveNodeAgentControlEndpoint();
+    bootNodeAgent = startNodeAgent({ host: nodeAgentHost, port: nodeAgentPort });
+    const nodeAgentHealth = await waitForNodeAgent(nodeAgentControlEndpoint, bootNodeAgent);
+    nodeAgentReady = true;
     const actualNodeAgentPort = Number(nodeAgentHealth?.listener?.port) || nodeAgentPort;
     const nodeAgentEndpoint = localHttpUrl(nodeAgentHost, actualNodeAgentPort);
     const child = startControlPlane({ host: controlPlaneHost, port: controlPlanePort, nodeAgentEndpoint, nodeAgentControlEndpoint });
     await waitForControlPlane(url, child);
     createWindow(url);
+    bootNodeAgent.unref?.();
   } catch (error) {
     const detail = error instanceof Error ? error.stack || error.message : String(error);
     logError(`[desktop-shell] desktop services failed to start ${detail}`);
+    await stopControlPlane().catch((cleanupError) => {
+      logError(`[desktop-shell] failed to roll back desktop services ${cleanupError instanceof Error ? cleanupError.stack || cleanupError.message : String(cleanupError)}`);
+    });
+    if (!nodeAgentReady) {
+      await stopNodeAgent().catch((cleanupError) => {
+        logError(`[desktop-shell] failed to roll back node agent ${cleanupError instanceof Error ? cleanupError.stack || cleanupError.message : String(cleanupError)}`);
+      });
+    } else {
+      bootNodeAgent?.unref?.();
+    }
     createWindow(htmlDataUrl(renderFailurePage("TaskHandoff desktop services failed", detail)));
   }
+}
+
+async function prepareDesktopUpdateInstall() {
+  await stopDesktopServices();
+  desktopQuitReady = true;
 }
 
 ipcMain.handle("task-handoff:choose-project-folder", async () => {
@@ -931,7 +976,7 @@ if (!ownsDesktopInstanceLock) {
       BrowserWindow,
       logInfo,
       logError,
-      install: stopDesktopServices,
+      install: prepareDesktopUpdateInstall,
     });
     desktopUpdater.start();
     void boot().catch((error) => {
@@ -946,12 +991,21 @@ if (!ownsDesktopInstanceLock) {
     }
   });
 
-  app.on("before-quit", () => {
+  app.on("before-quit", (event) => {
     desktopUpdater?.stop();
-    void stopDesktopServices();
-    if (desktopLogStream) {
-      desktopLogStream.end();
-      desktopLogStream = undefined;
+    if (desktopQuitReady) {
+      closeDesktopFileLog();
+      return;
+    }
+    event.preventDefault();
+    if (!desktopQuitPromise) {
+      desktopQuitPromise = stopControlPlane()
+        .catch((error) => logError(`[desktop-shell] failed to stop control plane during quit ${error instanceof Error ? error.stack || error.message : String(error)}`))
+        .finally(() => {
+          desktopQuitReady = true;
+          closeDesktopFileLog();
+          app.quit();
+        });
     }
   });
 

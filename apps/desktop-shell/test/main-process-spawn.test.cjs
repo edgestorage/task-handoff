@@ -34,6 +34,25 @@ test("desktop owns a single Electron process and focuses it on repeated launches
   assert.match(main, /mainWindow\.focus\(\)/);
 });
 
+test("desktop keeps node-agent independent while making Control Plane shutdown awaitable", () => {
+  const main = fs.readFileSync(path.join(__dirname, "../src/main.cjs"), "utf8");
+  assert.match(main, /detached: true/);
+  assert.match(main, /nodeAgent\.unref\?\.\(\)/);
+  assert.match(main, /app\.on\("before-quit", \(event\) =>/);
+  assert.match(main, /event\.preventDefault\(\)/);
+  assert.match(main, /desktopQuitPromise = stopControlPlane\(\)/);
+  assert.doesNotMatch(main, /app\.on\("before-quit"[\s\S]*?stopDesktopServices\(\)/);
+  assert.match(main, /install: prepareDesktopUpdateInstall/);
+});
+
+test("desktop rolls back failed children without coupling a healthy node-agent to Control Plane", () => {
+  const main = fs.readFileSync(path.join(__dirname, "../src/main.cjs"), "utf8");
+  assert.match(main, /desktop services failed to start[\s\S]*await stopControlPlane\(\)/);
+  assert.match(main, /if \(!nodeAgentReady\)[\s\S]*await stopNodeAgent\(\)/);
+  assert.match(main, /else \{[\s\S]*bootNodeAgent\?\.unref\?\.\(\)/);
+  assert.match(main, /inspectExistingDesktopControlPlane\(\)[\s\S]*stopExistingDesktopNodeAgent/);
+});
+
 test("desktop child supervision reports output, spawn failures, and exits", () => {
   const child = fakeChild();
   const info = [];
@@ -64,4 +83,17 @@ test("desktop child supervision reports output, spawn failures, and exits", () =
     "[node-agent] failed to spawn command=/app/TaskHandoff cwd=/tmp/task-handoff: ENOENT",
     "[node-agent] exited code=1 signal=",
   ]);
+});
+
+test("desktop child supervision supports detached children with file-backed stdio", () => {
+  const child = new EventEmitter();
+  child.stdout = null;
+  child.stderr = null;
+  assert.equal(superviseDesktopChild(child, {
+    label: "node-agent",
+    command: "/app/TaskHandoff",
+    cwd: "/tmp/task-handoff",
+    logInfo: () => undefined,
+    logError: () => undefined,
+  }), child);
 });

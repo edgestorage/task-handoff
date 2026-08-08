@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { stopExistingDesktopNodeAgent } = require("../src/node-agent-handoff.cjs");
+const { inspectExistingDesktopControlPlane, stopExistingDesktopNodeAgent } = require("../src/node-agent-handoff.cjs");
 
 function owner(overrides = {}) {
   return {
@@ -12,6 +12,20 @@ function owner(overrides = {}) {
     ...overrides,
   };
 }
+
+test("desktop detects a verified Control Plane before replacing its node agent", () => {
+  const existing = owner({ component: "control-plane", dataDir: "/desktop/control-plane" });
+  assert.deepEqual(inspectExistingDesktopControlPlane({
+    readOwner: () => existing,
+    isAlive: () => true,
+    processIdentity: () => existing.startIdentity,
+  }), { status: "running", owner: existing });
+  assert.equal(inspectExistingDesktopControlPlane({
+    readOwner: () => existing,
+    isAlive: () => true,
+    processIdentity: () => "test:reused-pid",
+  }).status, "stale");
+});
 
 test("desktop stops the previous node agent for its own data directory", async () => {
   const existing = owner();

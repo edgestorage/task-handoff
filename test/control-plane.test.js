@@ -33,6 +33,7 @@ const { createNodeAgentHmacHeaders, NODE_AGENT_HMAC_TIMESTAMP_WINDOW_MS } = requ
 const { fetchNodeAgentIpc, nodeAgentIpcEndpoint, nodeAgentIpcPath, prepareNodeAgentIpcPath } = require("../packages/control-plane/src/shared/transport/node-agent-ipc.ts");
 const { can } = require("../packages/control-plane/src/control-plane/auth/authorization.ts");
 const { LocalDockerExecutor, dockerRunArgs } = require("../packages/control-plane/src/node-agent/runtimes/docker.ts");
+const { waitForChildExit } = require("../packages/control-plane/src/node-agent/runtimes/local-process-supervisor.ts");
 const { checkNodeAgentUpdate, isNewerVersion, resolveNodeAgentUpdateWorker, resolveNodeUpdatePackage, sanitizeStoredUpdateJob } = require("../packages/control-plane/src/node-agent/updates.ts");
 const { ProcessSingletonError, acquireProcessSingletonLock } = require("../packages/control-plane/src/shared/process/singleton-lock.ts");
 const { processStartIdentity, verifiedProcessLockOwnerPid } = require("../packages/core/src/core/process-singleton-lock.ts");
@@ -2312,6 +2313,42 @@ test("node agent process lock enforces one owner independent of port", () => {
   );
 
   first.release();
+});
+
+test("node agent acquires its singleton before initializing or writing runtime settings", () => {
+  const source = fs.readFileSync(path.join(__dirname, "../packages/control-plane/src/node-agent/app.ts"), "utf8");
+  const runServer = source.slice(source.indexOf("export async function runNodeAgentServer"));
+  const lock = runServer.indexOf("acquireNodeAgentSingletonLock");
+  assert.ok(lock >= 0);
+  assert.ok(lock < runServer.indexOf("createRuntimeSettingsFile"));
+  assert.ok(lock < runServer.indexOf("settings.put"));
+});
+
+test("local process exit waits for the forced process exit event", async () => {
+  const child = new EventEmitter();
+  child.pid = 1234;
+  child.exitCode = null;
+  child.signalCode = null;
+  const signals = [];
+  child.kill = (signal) => {
+    signals.push(signal);
+    if (signal === "SIGKILL") setImmediate(() => {
+      child.signalCode = "SIGKILL";
+      child.emit("exit", null, "SIGKILL");
+    });
+    return true;
+  };
+  await waitForChildExit(child, 0, 100);
+  assert.deepEqual(signals, ["SIGKILL"]);
+});
+
+test("local process exit fails when SIGKILL cannot be confirmed", async () => {
+  const child = new EventEmitter();
+  child.pid = 5678;
+  child.exitCode = null;
+  child.signalCode = null;
+  child.kill = () => true;
+  await assert.rejects(() => waitForChildExit(child, 0, 0), (error) => error.code === "LOCAL_INSTANCE_PROCESS_EXIT_UNCONFIRMED");
 });
 
 test("local controlled instance lock is host-user scoped instead of node-agent data scoped", () => {

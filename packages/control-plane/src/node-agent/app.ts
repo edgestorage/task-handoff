@@ -1041,23 +1041,21 @@ export async function listenNodeAgentIpcServer(app: Awaited<ReturnType<typeof cr
 
 export async function runNodeAgentServer(options: RunNodeAgentServerOptions) {
   const paths = nodeAgentStorePaths(options.dataDir);
-  const defaults = bootstrapExternalListener(options.host, options.port);
-  const hadPersistedSettings = fs.existsSync(paths.settingsPath);
-  const settings = createRuntimeSettingsFile(paths, defaults);
-  let listenerConfig = settings.get().externalListener;
-  if (process.env.TASK_HANDOFF_NODE_AGENT_PORT_CONFLICT === "allocate") {
-    const allocated = await allocateNodeAgentExternalListener(listenerConfig);
-    if (allocated.port !== listenerConfig.port) {
-      settings.put({ version: 1, externalListener: allocated });
-      listenerConfig = allocated;
-    }
-  }
   const lock = acquireNodeAgentSingletonLock(defaultNodeAgentSingletonLockPath(), {
     dataDir: paths.dataDir,
-    host: externalListenerHost(listenerConfig.bindScope),
-    port: listenerConfig.port,
   });
   try {
+    const defaults = bootstrapExternalListener(options.host, options.port);
+    const hadPersistedSettings = fs.existsSync(paths.settingsPath);
+    const settings = createRuntimeSettingsFile(paths, defaults);
+    let listenerConfig = settings.get().externalListener;
+    if (process.env.TASK_HANDOFF_NODE_AGENT_PORT_CONFLICT === "allocate") {
+      const allocated = await allocateNodeAgentExternalListener(listenerConfig);
+      if (allocated.port !== listenerConfig.port) {
+        settings.put({ version: 1, externalListener: allocated });
+        listenerConfig = allocated;
+      }
+    }
     const effectiveOptions = { ...options, port: listenerConfig.port };
     const app = await createNodeAgentApp(effectiveOptions);
     const nodeAgentState = app.nodeAgentState;

@@ -172,19 +172,30 @@ export async function canListenOnLocalPort(port: number) {
 
 const canListen = canListenOnLocalPort;
 
-export function waitForChildExit(child: ChildProcessWithoutNullStreams, timeoutMs = 3_000) {
-  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
-  return new Promise<void>((resolve) => {
+function waitForObservedChildExit(child: ChildProcessWithoutNullStreams, timeoutMs: number) {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true);
+  return new Promise<boolean>((resolve) => {
     const timer = setTimeout(() => {
-      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-      resolve();
+      child.off("exit", onExit);
+      resolve(child.exitCode !== null || child.signalCode !== null);
     }, timeoutMs);
     timer.unref();
-    child.once("exit", () => {
+    const onExit = () => {
       clearTimeout(timer);
-      resolve();
-    });
+      resolve(true);
+    };
+    child.once("exit", onExit);
   });
+}
+
+export async function waitForChildExit(child: ChildProcessWithoutNullStreams, gracefulTimeoutMs = 3_000, forceTimeoutMs = 1_000) {
+  if (await waitForObservedChildExit(child, gracefulTimeoutMs)) return;
+  if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+  if (await waitForObservedChildExit(child, forceTimeoutMs)) return;
+  throw Object.assign(
+    new Error(`Controlled instance process pid=${child.pid ?? "unknown"} did not exit after SIGKILL.`),
+    { statusCode: 503, code: "LOCAL_INSTANCE_PROCESS_EXIT_UNCONFIRMED", pid: child.pid },
+  );
 }
 
 export function waitForChildSpawn(child: ChildProcessWithoutNullStreams) {

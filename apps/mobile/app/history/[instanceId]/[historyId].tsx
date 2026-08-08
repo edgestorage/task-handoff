@@ -1,6 +1,7 @@
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { AiSessionHistoryDetail } from '@task-handoff/protocol/ai-sessions';
 
 import { SafeMarkdown } from '../../../src/components/SafeMarkdown';
@@ -14,12 +15,14 @@ import { NativePrimaryButton } from '../../../src/ai-sessions/NativeSessionContr
 import { useI18n } from '../../../src/i18n';
 
 export default function HistoryDetailRoute() {
+  const insets = useSafeAreaInsets();
   const { colors } = useMobileTheme();
   const { locale, t } = useI18n();
   const { instanceId, historyId } = useLocalSearchParams<{ instanceId: string; historyId: string }>();
   const [detail, setDetail] = useState<AiSessionHistoryDetail>();
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const [actionsHeight, setActionsHeight] = useState(0);
   useEffect(() => {
     let live = true;
     void withClient((api) => api.aiSessions.historyDetail(instanceId, historyId)).then((result) => { if (live) setDetail(result); }).catch((cause) => { if (live) setError(lifecycleGuidance(cause).message); });
@@ -35,7 +38,8 @@ export default function HistoryDetailRoute() {
   };
   return <>
   <Stack.Screen options={{ title: detail?.item.title || t('nav.sessionHistory') }} />
-  <Screen>
+  <View style={[styles.page, { backgroundColor: colors.background }]}>
+  <Screen contentContainerStyle={detail ? { paddingBottom: actionsHeight + 16 } : undefined} testID="history-detail-scroll">
     {detail ? <>
       <View style={styles.header}>
         <View style={[styles.historyIcon, { backgroundColor: colors.primarySoft }]}>
@@ -59,10 +63,18 @@ export default function HistoryDetailRoute() {
         {turn.userPrompt ? <View style={styles.userMessage}><Text style={[styles.role, { color: colors.textMuted }]}>{t('history.you')}</Text><View style={[styles.bubble, styles.userBubble, { backgroundColor: colors.primarySoft }]}><SafeMarkdown trimEnd>{turn.userPrompt}</SafeMarkdown></View></View> : null}
         {turn.lastMessage || turn.summary ? <View style={styles.assistantRow}><View style={[styles.avatar, { backgroundColor: colors.surfaceMuted }]}><SystemIcon android="auto_awesome" color={colors.primary} ios="sparkles" size={15} /></View><View style={styles.assistantMessage}><Text style={[styles.role, { color: colors.textMuted }]}>{detail.item.agent}</Text><View style={[styles.bubble, styles.assistantBubble, { backgroundColor: colors.surface, borderColor: colors.border }]}><SafeMarkdown trimEnd>{turn.lastMessage || turn.summary!}</SafeMarkdown></View></View></View> : null}
       </View>) : <View style={styles.empty}><Text style={[styles.meta, { color: colors.textMuted }]}>{t('history.empty')}</Text></View>}
-      <NativePrimaryButton busy={busy} disabled={busy} label={busy ? t('composer.resuming') : t('history.resume')} systemImage="play.fill" onPress={() => { void resume(); }} />
     </> : <View style={styles.loading}><ActivityIndicator /><Text style={[styles.meta, { color: colors.textMuted }]}>{error ? t('history.loadError') : t('history.loading')}</Text></View>}
-    {error ? <View style={[styles.errorCard, { backgroundColor: colors.errorSoft }]}><SystemIcon android="error" color={colors.error} ios="exclamationmark.triangle.fill" size={17} /><Text accessibilityLiveRegion="polite" style={[styles.error, { color: colors.error }]}>{error}</Text></View> : null}
+    {!detail && error ? <View style={[styles.errorCard, { backgroundColor: colors.errorSoft }]}><SystemIcon android="error" color={colors.error} ios="exclamationmark.triangle.fill" size={17} /><Text accessibilityLiveRegion="polite" style={[styles.error, { color: colors.error }]}>{error}</Text></View> : null}
   </Screen>
+  {detail ? <View
+    onLayout={(event) => setActionsHeight(event.nativeEvent.layout.height)}
+    style={[styles.actions, { backgroundColor: colors.background, borderColor: colors.border, paddingBottom: Math.max(insets.bottom, 12) }]}
+    testID="history-resume-actions"
+  >
+    {error ? <View style={[styles.errorCard, { backgroundColor: colors.errorSoft }]}><SystemIcon android="error" color={colors.error} ios="exclamationmark.triangle.fill" size={17} /><Text accessibilityLiveRegion="polite" style={[styles.error, { color: colors.error }]}>{error}</Text></View> : null}
+    <NativePrimaryButton busy={busy} disabled={busy} label={busy ? t('composer.resuming') : t('history.resume')} systemImage="play.fill" onPress={() => { void resume(); }} />
+  </View> : null}
+  </View>
   </>;
 }
 
@@ -81,6 +93,8 @@ async function withClient<T>(operation: (client: ReturnType<typeof createDirectC
 }
 
 const styles = StyleSheet.create({
+  page: { flex: 1 },
+  actions: { borderTopWidth: StyleSheet.hairlineWidth, bottom: 0, gap: 8, left: 0, paddingHorizontal: 16, paddingTop: 10, position: 'absolute', right: 0, zIndex: 10 },
   header: { alignItems: 'flex-start', flexDirection: 'row', gap: 12 },
   historyIcon: { alignItems: 'center', borderRadius: 12, height: 44, justifyContent: 'center', width: 44 },
   headerText: { flex: 1, gap: 6 },
