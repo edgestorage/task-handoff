@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { BlurView } from 'expo-blur';
 import { Hand, Pencil, Plus, ShieldAlert, ShieldCheck, X } from 'lucide-react-native';
-import { ActionSheetIOS, Alert, Animated, Easing, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActionSheetIOS, ActivityIndicator, Alert, Animated, Easing, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { SystemIcon } from '../components/SystemIcon';
 import { useMobileTheme } from '../components/theme';
@@ -21,6 +21,7 @@ export function SessionComposer(props: SessionComposerProps) {
   const { colors, dark } = useMobileTheme();
   const { t } = useI18n();
   const permissionDanger = props.permissionMode === 'full-access';
+  const attachmentDisabled = props.actionBusy || props.imageDisabled && props.fileDisabled && props.runtimeFileDisabled;
   const PermissionIcon = props.permissionMode === 'ask' ? Hand : props.permissionMode === 'auto-review' ? ShieldCheck : ShieldAlert;
   const currentPermissionLabel = permissionLabel(props.permissionMode, t);
   const [permissionLabelMeasurement, setPermissionLabelMeasurement] = useState<{ label: string; width: number }>();
@@ -78,7 +79,7 @@ export function SessionComposer(props: SessionComposerProps) {
       <TextInput
         ref={inputRef}
         accessibilityLabel={t('composer.message')}
-        editable={props.editable}
+        editable={props.editable && !props.actionBusy}
         multiline
         onBlur={() => props.onFocusChange(false)}
         onChangeText={props.onValueChange}
@@ -95,17 +96,18 @@ export function SessionComposer(props: SessionComposerProps) {
         {props.editingLabel ? <View style={styles.editingState}>
           <Pencil color={colors.textMuted} size={16} strokeWidth={1.8} />
           <Text numberOfLines={1} style={[styles.editingLabel, { color: colors.textMuted }]}>{props.editingLabel}</Text>
-          <Pressable accessibilityLabel={t('composer.cancelEdit')} accessibilityRole="button" hitSlop={6} onPress={props.onCancelEdit} style={({ pressed }) => [styles.cancelEditButton, pressed && styles.pressed]}>
+          <Pressable accessibilityLabel={t('composer.cancelEdit')} accessibilityRole="button" accessibilityState={{ disabled: props.actionBusy }} disabled={props.actionBusy} hitSlop={6} onPress={props.onCancelEdit} style={({ pressed }) => [styles.cancelEditButton, props.actionBusy && styles.disabled, pressed && styles.pressed]}>
             <X color={colors.textMuted} size={17} strokeWidth={1.9} />
           </Pressable>
         </View> : <View style={styles.leadingTools}>
           <Pressable
             accessibilityLabel={t('composer.addAttachment')}
             accessibilityRole="button"
-            disabled={props.imageDisabled && props.fileDisabled && props.runtimeFileDisabled}
+            accessibilityState={{ disabled: attachmentDisabled }}
+            disabled={attachmentDisabled}
             hitSlop={4}
             onPress={() => showAttachmentMenu(props, t)}
-            style={({ pressed }) => [styles.toolButton, pressed && styles.pressed, props.imageDisabled && props.fileDisabled && props.runtimeFileDisabled && styles.disabled]}
+            style={({ pressed }) => [styles.toolButton, pressed && styles.pressed, attachmentDisabled && styles.disabled]}
           >
             <Plus color={colors.textMuted} size={ATTACHMENT_ICON_SIZE} strokeWidth={1.9} />
           </Pressable>
@@ -113,8 +115,10 @@ export function SessionComposer(props: SessionComposerProps) {
             <Pressable
               accessibilityLabel={t('composer.permissionModeValue', { mode: permissionLabel(props.permissionMode, t) })}
               accessibilityRole="button"
+              accessibilityState={{ disabled: props.actionBusy }}
+              disabled={props.actionBusy}
               onPress={() => showPermissionMenu(props, t)}
-              style={({ pressed }) => [styles.permissionButton, pressed && { backgroundColor: colors.surfaceMuted }]}
+              style={({ pressed }) => [styles.permissionButton, props.actionBusy && styles.disabled, pressed && { backgroundColor: colors.surfaceMuted }]}
             >
               <View style={styles.permissionIconSlot}>
                 <PermissionIcon color={permissionDanger ? colors.error : colors.textMuted} size={permissionIconSize(props.permissionMode)} strokeWidth={1.8} />
@@ -134,15 +138,17 @@ export function SessionComposer(props: SessionComposerProps) {
           </Text> : null}
         </View>}
         <Pressable
-          accessibilityLabel={actionLabel(props.action, t)}
+          accessibilityLabel={actionLabel(props.action, t, props.actionBusy)}
           accessibilityRole="button"
-          accessibilityState={{ disabled: props.actionDisabled }}
+          accessibilityState={{ busy: props.actionBusy, disabled: props.actionDisabled }}
           disabled={props.actionDisabled}
           onPress={props.onAction}
           testID="session-composer-action"
           style={({ pressed }) => [styles.actionButton, { backgroundColor: props.action === 'stop' ? colors.destructiveButton : colors.primaryButton }, pressed && styles.pressed, props.actionDisabled && styles.disabled]}
         >
-          <SystemIcon android={props.action === 'stop' ? 'stop' : props.action === 'save' ? 'check' : 'arrow_upward'} color="#ffffff" ios={props.action === 'stop' ? 'stop.fill' : props.action === 'save' ? 'checkmark' : 'arrow.up'} size={SESSION_COMPOSER_ACTION_ICON_SIZE} />
+          {props.actionBusy
+            ? <ActivityIndicator color="#ffffff" size="small" testID="session-composer-action-loading" />
+            : <SystemIcon android={props.action === 'stop' ? 'stop' : props.action === 'save' ? 'check' : 'arrow_upward'} color="#ffffff" ios={props.action === 'stop' ? 'stop.fill' : props.action === 'save' ? 'checkmark' : 'arrow.up'} size={SESSION_COMPOSER_ACTION_ICON_SIZE} />}
         </Pressable>
       </View>
     </Animated.View>
@@ -189,7 +195,8 @@ function showPermissionMenu(props: SessionComposerProps, t: Translate) {
   ]);
 }
 
-function actionLabel(action: SessionComposerProps['action'], t: Translate) {
+function actionLabel(action: SessionComposerProps['action'], t: Translate, busy: boolean) {
+  if (busy) return action === 'stop' ? t('composer.stopping') : action === 'save' ? t('composer.saving') : t('composer.sending');
   return action === 'stop' ? t('composer.stop') : action === 'save' ? t('composer.saveEdit') : t('composer.send');
 }
 

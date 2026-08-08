@@ -3,7 +3,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { formatBytes } from "../../i18n/presentation";
 import type { SupportedLocale } from "../../i18n/locale";
-import { AppWindow, ArrowUp, Box, Check, CornerDownRight, File, Folder, Hand, Minimize2, Pencil, Plus, Puzzle, ScanSearch, ShieldAlert, ShieldCheck, Square, Target, WandSparkles, X } from "@lucide/vue";
+import { AppWindow, ArrowUp, Box, Check, CornerDownRight, File, Folder, Hand, LoaderCircle, Minimize2, Pencil, Plus, Puzzle, ScanSearch, ShieldAlert, ShieldCheck, Square, Target, WandSparkles, X } from "@lucide/vue";
 import { PopoverAnchor } from "reka-ui";
 import type { AiSessionMentionCandidate } from "../../api/types";
 import type { AiSessionCommandInput, AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
@@ -99,7 +99,20 @@ const hasDraft = computed(() => props.modelValue.trim().length > 0 || attachment
 const actionKind = computed(() => editing.value ? "save" : hasDraft.value || !props.canInterrupt ? "send" : "stop");
 const canRun = computed(() => editing.value ? props.modelValue.trim().length > 0 : hasDraft.value || (!props.busy && props.canInterrupt));
 const canSteer = computed(() => !editing.value && props.busy && hasDraft.value);
-const actionTitle = computed(() => actionKind.value === "stop" ? t("sessions.composer.stopTurn") : actionKind.value === "save" ? t("sessions.composer.saveQueuedMessage") : t("sessions.composer.send"));
+const actionTitle = computed(() => {
+  if (props.busy) {
+    return actionKind.value === "stop"
+      ? t("sessions.composer.stopping")
+      : actionKind.value === "save"
+        ? t("sessions.composer.saving")
+        : t("sessions.composer.sending");
+  }
+  return actionKind.value === "stop"
+    ? t("sessions.composer.stopTurn")
+    : actionKind.value === "save"
+      ? t("sessions.composer.saveQueuedMessage")
+      : t("sessions.composer.send");
+});
 const commandLauncherDisabled = computed(() => Boolean(editing.value || props.busy || props.modelValue.length || props.mentionContext?.provider !== "codex"));
 const permissionProvider = computed(() => props.provider || props.mentionContext?.provider);
 const storedPermissionMode = useAiSessionPermissionMode(
@@ -707,8 +720,10 @@ watch(() => props.busy, (busy) => {
           :data-action="actionKind"
           :disabled="busy || !canRun"
           :title="actionTitle"
+          :aria-label="actionTitle"
         >
-          <ArrowUp v-if="actionKind === 'send'" :size="18" />
+          <LoaderCircle v-if="busy" class="animate-spin motion-reduce:animate-none" :size="18" />
+          <ArrowUp v-else-if="actionKind === 'send'" :size="18" />
           <Check v-else-if="actionKind === 'save'" :size="17" />
           <Square v-else :size="16" />
         </button>

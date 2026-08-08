@@ -64,7 +64,7 @@ export const sessions = {
     resumePending: "对话已经启动，但运行状态尚未确认，请稍后重试。", continueFailed: "无法继续该对话。",
   },
   composer: {
-    plugins: "插件", skills: "技能", files: "文件", directories: "目录", apps: "应用", stopTurn: "停止当前 AI 回合", send: "发送消息", editingQueuedMessage: "正在编辑排队消息", saveQueuedMessage: "保存排队消息", cancelQueuedEdit: "取消编辑排队消息",
+    plugins: "插件", skills: "技能", files: "文件", directories: "目录", apps: "应用", stopTurn: "停止当前 AI 回合", send: "发送消息", sending: "正在发送…", stopping: "正在停止…", editingQueuedMessage: "正在编辑排队消息", saveQueuedMessage: "保存排队消息", saving: "正在保存…", cancelQueuedEdit: "取消编辑排队消息",
     askDescription: "访问互联网或编辑工作区外文件前进行询问。", autoReviewDescription: "仅对检测为可能不安全的操作进行询问。",
     fullAccessDescription: "无需审批即可无限制访问互联网和文件。", localPath: "本地路径", removeAttachment: "移除附件", followUp: "请求后续修改",
     noMatches: "没有匹配项", commands: "命令", loading: "正在加载...", openCommands: "打开命令菜单", permissionMode: "权限模式：{mode}", choosePermission: "选择权限模式",

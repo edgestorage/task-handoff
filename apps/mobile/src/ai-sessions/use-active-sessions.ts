@@ -3,6 +3,7 @@ import {
   createElement,
   useContext,
   useEffect,
+  useMemo,
   useState,
   useSyncExternalStore,
   type ReactNode,
@@ -15,7 +16,7 @@ import { subscribeToNetworkState } from '../platform/network';
 import { subscribeToAppLifecycle } from '../platform/lifecycle';
 import { MobileAiSessionController } from './controller';
 import { MobileAiSessionActionCoordinator } from './actions';
-import { mobileAiSessionStore } from './store';
+import { mobileAiSessionStore, type MobileAiSessionViewState } from './store';
 import type { MobileControlPlaneProfile } from '../control-plane/profile';
 import { isCarPlayConnected, subscribeToCarPlayConnection } from '../carplay/runtime';
 
@@ -27,6 +28,8 @@ type ActiveAiSessions = {
 };
 
 const ActiveAiSessionsContext = createContext<ActiveAiSessions | undefined>(undefined);
+const ActiveAiSessionsRuntimeContext = createContext<Omit<ActiveAiSessions, 'state'> | undefined>(undefined);
+const emptySessionView: MobileAiSessionViewState = { messages: [], syncPhase: 'idle' };
 
 export type ActiveAiSessionsDependencies = {
   activeProfile(): Promise<MobileControlPlaneProfile | undefined>;
@@ -51,8 +54,15 @@ export function ActiveAiSessionsProvider({
   children: ReactNode;
   dependencies?: ActiveAiSessionsDependencies;
 }) {
-  const value = useActiveAiSessionsRuntime(dependencies);
-  return createElement(ActiveAiSessionsContext.Provider, { value }, children);
+  const value = useActiveAiSessionsRuntimeState(dependencies);
+  const runtime = useMemo(() => ({
+    actions: value.actions,
+    client: value.client,
+    controlPlaneId: value.controlPlaneId,
+  }), [value.actions, value.client, value.controlPlaneId]);
+  return createElement(ActiveAiSessionsRuntimeContext.Provider, { value: runtime },
+    createElement(ActiveAiSessionsContext.Provider, { value }, children),
+  );
 }
 
 export function useActiveAiSessions() {
@@ -61,7 +71,29 @@ export function useActiveAiSessions() {
   return value;
 }
 
-function useActiveAiSessionsRuntime(dependencies: ActiveAiSessionsDependencies): ActiveAiSessions {
+export function useActiveAiSessionsRuntime() {
+  const value = useContext(ActiveAiSessionsRuntimeContext);
+  if (!value) throw new Error('useActiveAiSessionsRuntime must be used inside ActiveAiSessionsProvider.');
+  return value;
+}
+
+export function useActiveAiSessionView(
+  controlPlaneId: string | undefined,
+  instanceId: string,
+  sessionId: string,
+) {
+  return useSyncExternalStore(
+    (listener) => controlPlaneId
+      ? mobileAiSessionStore.subscribeSession(controlPlaneId, instanceId, sessionId, listener)
+      : () => undefined,
+    () => controlPlaneId
+      ? mobileAiSessionStore.sessionView(controlPlaneId, instanceId, sessionId)
+      : emptySessionView,
+    () => emptySessionView,
+  );
+}
+
+function useActiveAiSessionsRuntimeState(dependencies: ActiveAiSessionsDependencies): ActiveAiSessions {
   const [controlPlaneId, setControlPlaneId] = useState<string>();
   const [runtime, setRuntime] = useState<{ actions: MobileAiSessionActionCoordinator; client: ControlPlaneClient }>();
   useEffect(() => {

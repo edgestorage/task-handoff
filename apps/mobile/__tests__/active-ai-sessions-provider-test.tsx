@@ -1,11 +1,13 @@
-import { render, waitFor } from '@testing-library/react-native';
+import { act, render, waitFor } from '@testing-library/react-native';
 import { Text } from 'react-native';
 
 import {
   ActiveAiSessionsProvider,
+  useActiveAiSessionsRuntime,
   useActiveAiSessions,
   type ActiveAiSessionsDependencies,
 } from '../src/ai-sessions/use-active-sessions';
+import { mobileAiSessionStore } from '../src/ai-sessions/store';
 
 const profile = {
   version: 1 as const,
@@ -29,10 +31,22 @@ function Consumer({ name }: { name: string }) {
   return <Text>{name}:{controlPlaneId}</Text>;
 }
 
+function RuntimeConsumer({ onRender }: { onRender(): void }) {
+  onRender();
+  const { controlPlaneId } = useActiveAiSessionsRuntime();
+  return <Text>runtime:{controlPlaneId}</Text>;
+}
+
+function MessageCountConsumer() {
+  const { state } = useActiveAiSessions();
+  return <Text>messages:{Object.keys(state.messages).length}</Text>;
+}
+
 test('one root provider owns one AI session connection for multiple screens', async () => {
   const list = jest.fn().mockResolvedValue({ updatedAt: '2026-08-05T00:00:00.000Z', instances: [] });
   const connectEvents = jest.fn(() => ({ close: jest.fn() }));
   const subscribeProfiles = jest.fn(() => () => undefined);
+  const runtimeRenders = jest.fn();
   const dependencies: ActiveAiSessionsDependencies = {
     activeProfile: jest.fn().mockResolvedValue(profile),
     subscribeProfiles,
@@ -50,6 +64,8 @@ test('one root provider owns one AI session connection for multiple screens', as
     <ActiveAiSessionsProvider dependencies={dependencies}>
       <Consumer name="inbox" />
       <Consumer name="detail" />
+      <RuntimeConsumer onRender={runtimeRenders} />
+      <MessageCountConsumer />
     </ActiveAiSessionsProvider>,
   );
 
@@ -60,4 +76,16 @@ test('one root provider owns one AI session connection for multiple screens', as
     expect(connectEvents).toHaveBeenCalledTimes(1);
   });
   expect(subscribeProfiles).toHaveBeenCalledTimes(1);
+  const stableRuntimeRenderCount = runtimeRenders.mock.calls.length;
+
+  await act(async () => {
+    mobileAiSessionStore.appendMessageDelta('cp-provider', {
+      instanceId: 'instance-1', sessionId: 'session-1', providerSessionId: 'session-1',
+      turnId: 'turn-1', itemId: 'item-1', delta: 'hello', generatedAt: '2026-08-05T00:01:00.000Z',
+    });
+  });
+  await waitFor(() => screen.getByText('messages:1'));
+  expect(runtimeRenders).toHaveBeenCalledTimes(stableRuntimeRenderCount);
+  screen.unmount();
+  mobileAiSessionStore.clearProfile('cp-provider');
 });

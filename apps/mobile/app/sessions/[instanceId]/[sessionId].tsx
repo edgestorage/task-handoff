@@ -7,7 +7,7 @@ import { MenuView, type MenuAction } from '@expo/ui/community/menu';
 import { SessionWorkspace } from '../../../src/ai-sessions/SessionWorkspace';
 import type { SessionDetailMode } from '../../../src/ai-sessions/SessionDetail';
 import { mobileAiSessionBusyKey } from '../../../src/ai-sessions/actions';
-import { useActiveAiSessions } from '../../../src/ai-sessions/use-active-sessions';
+import { useActiveAiSessionView, useActiveAiSessionsRuntime } from '../../../src/ai-sessions/use-active-sessions';
 import { mobileDraftStore, mobilePermissionStore } from '../../../src/control-plane/runtime';
 import { mobileAiSessionStore } from '../../../src/ai-sessions/store';
 import { useActiveDirectories } from '../../../src/directories/use-directories';
@@ -19,13 +19,14 @@ import { useTaskStatusSettings } from '../../../src/task-status/settings';
 export default function SessionDetailRoute() {
   const params = useLocalSearchParams<{ instanceId: string; sessionId: string }>();
   const router = useRouter();
-  const { actions, client, controlPlaneId, state } = useActiveAiSessions();
+  const { actions, client, controlPlaneId } = useActiveAiSessionsRuntime();
   const directories = useActiveDirectories();
   const { colors } = useMobileTheme();
   const { t } = useI18n();
   const taskStatus = useTaskStatusSettings();
-  const session = controlPlaneId ? mobileAiSessionStore.session(controlPlaneId, params.instanceId, params.sessionId) : undefined;
-  const messages = Object.values(state.messages).filter((message) => message.instanceId === params.instanceId && message.sessionId === params.sessionId);
+  const sessionView = useActiveAiSessionView(controlPlaneId, params.instanceId, params.sessionId);
+  const session = sessionView.session;
+  const messages = sessionView.messages;
   const [detailMode, setDetailMode] = useState<SessionDetailMode>('turn');
   const [closing, setClosing] = useState(false);
   const defaultPermissionMode = directories.controlPlaneId === controlPlaneId
@@ -74,7 +75,7 @@ export default function SessionDetailRoute() {
             { id: 'view-turn', image: 'rectangle.stack', state: detailMode === 'turn' ? 'on' : 'off', title: t('sessions.turn') },
             { id: 'view-conversation', image: 'text.bubble', state: detailMode === 'conversation' ? 'on' : 'off', title: t('sessions.filterAll') },
             ...(liveActivityAction ? [liveActivityAction] : []),
-            { id: 'close', image: 'xmark.circle', title: closing ? t('sessions.closing') : t('sessions.closeSession'), attributes: { destructive: true, disabled: closing || !actions || state.sync.phase !== 'ready' } },
+            { id: 'close', image: 'xmark.circle', title: closing ? t('sessions.closing') : t('sessions.closeSession'), attributes: { destructive: true, disabled: closing || !actions || sessionView.syncPhase !== 'ready' } },
           ]}
           onPressAction={({ nativeEvent }) => {
             if (nativeEvent.event === 'view-turn') setDetailMode('turn');
@@ -106,7 +107,7 @@ export default function SessionDetailRoute() {
     onVisible={markVisible}
     onDetailModeChange={setDetailMode}
     session={session}
-    syncPhase={state.sync.phase}
+    syncPhase={sessionView.syncPhase}
     />
   </>;
 }

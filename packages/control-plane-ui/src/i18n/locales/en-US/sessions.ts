@@ -61,7 +61,7 @@ export const sessions = {
     resumePending: "The conversation started, but its runtime state is not confirmed yet. Please try again shortly.", continueFailed: "Failed to continue this conversation.",
   },
   composer: {
-    plugins: "Plugins", skills: "Skills", files: "Files", directories: "Directories", apps: "Apps", stopTurn: "Stop current AI turn", send: "Send message", editingQueuedMessage: "Editing queued message", saveQueuedMessage: "Save queued message", cancelQueuedEdit: "Cancel queued message editing",
+    plugins: "Plugins", skills: "Skills", files: "Files", directories: "Directories", apps: "Apps", stopTurn: "Stop current AI turn", send: "Send message", sending: "Sending…", stopping: "Stopping…", editingQueuedMessage: "Editing queued message", saveQueuedMessage: "Save queued message", saving: "Saving…", cancelQueuedEdit: "Cancel queued message editing",
     askDescription: "Ask before accessing the internet or editing files outside the workspace.", autoReviewDescription: "Only ask for actions detected as potentially unsafe.",
     fullAccessDescription: "Unrestricted internet and file access without approval.", localPath: "Local path", removeAttachment: "Remove attachment", followUp: "Ask for follow-up changes",
     noMatches: "No matches", commands: "Commands", loading: "Loading...", openCommands: "Open command menu", permissionMode: "Permission mode: {mode}", choosePermission: "Choose permission mode",
