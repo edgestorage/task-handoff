@@ -14,7 +14,7 @@ type UseChatBridgeSettingsInput = {
   translate: Translate;
 };
 
-const chatChannels: ChatChannel[] = ["telegram", "wechat", "dingding"];
+const chatChannels: ChatChannel[] = ["telegram", "wechat", "dingding", "lark"];
 
 export function useChatBridgeSettings({ bridges, errorText, gatewayStatus, refresh, translate: t }: UseChatBridgeSettingsInput) {
   const translateError = (error: unknown) => translateApiError(error, t, errorText(error));
@@ -34,6 +34,8 @@ export function useChatBridgeSettings({ bridges, errorText, gatewayStatus, refre
       contextToken: "",
       updatesBuf: "",
       clientSecret: "",
+      appSecret: "",
+      domain: "feishu",
       corpId: "",
       robotCode: "",
     },
@@ -45,7 +47,11 @@ export function useChatBridgeSettings({ bridges, errorText, gatewayStatus, refre
   const selectedChatBridge = computed(() => orderedChatBridges.value.find((bridge) => bridge.id === selectedChatBridgeId.value) || orderedChatBridges.value[0]);
   const selectedChatStatus = computed(() => selectedChatBridge.value ? gatewayStatus.value?.bridges.find((bridge) => bridge.id === selectedChatBridge.value?.id) : undefined);
   const chatBridgeBusy = computed(() => creatingChatBridge.value || savingChatBridge.value || togglingChatBridge.value);
-  const chatTokenPlaceholder = computed(() => selectedChatBridge.value?.channel === "dingding" ? t("settings.chatBridge.clientIdPlaceholder") : t("settings.chatBridge.botTokenPlaceholder"));
+  const chatTokenPlaceholder = computed(() => {
+    if (selectedChatBridge.value?.channel === "dingding") return t("settings.chatBridge.clientIdPlaceholder");
+    if (selectedChatBridge.value?.channel === "lark") return t("settings.chatBridge.appIdPlaceholder");
+    return t("settings.chatBridge.botTokenPlaceholder");
+  });
 
   watch(
     selectedChatBridge,
@@ -70,6 +76,8 @@ export function useChatBridgeSettings({ bridges, errorText, gatewayStatus, refre
         contextToken: stringSetting(settings.contextToken),
         updatesBuf: stringSetting(settings.updatesBuf),
         clientSecret: "",
+        appSecret: "",
+        domain: stringSetting(settings.domain) || "feishu",
         corpId: stringSetting(settings.corpId),
         robotCode: stringSetting(settings.robotCode),
       },
@@ -122,6 +130,10 @@ export function useChatBridgeSettings({ bridges, errorText, gatewayStatus, refre
         settings.clientSecret = emptyToUndefined(chatForm.value.settings.clientSecret);
         settings.corpId = emptyToUndefined(chatForm.value.settings.corpId);
         settings.robotCode = emptyToUndefined(chatForm.value.settings.robotCode);
+      }
+      if (bridge.channel === "lark") {
+        settings.appSecret = emptyToUndefined(chatForm.value.settings.appSecret);
+        settings.domain = chatForm.value.settings.domain === "lark" ? "lark" : "feishu";
       }
       const updated = await updateChatBridge(bridge.id, {
         name: emptyToUndefined(chatForm.value.name),
@@ -205,6 +217,9 @@ export function useChatBridgeSettings({ bridges, errorText, gatewayStatus, refre
     if (channel === "dingding") {
       return "DingDing";
     }
+    if (channel === "lark") {
+      return "Feishu / Lark";
+    }
     return channel;
   }
 
@@ -222,8 +237,11 @@ export function useChatBridgeSettings({ bridges, errorText, gatewayStatus, refre
     if (status?.error) {
       return status.error;
     }
+    const credentialSet = bridge?.channel === "lark"
+      ? Boolean((status?.tokenSet || bridge?.tokenSet) && bridge.settings.appSecretSet)
+      : Boolean(status?.tokenSet || bridge?.tokenSet);
     return [
-      status?.tokenSet || bridge?.tokenSet ? t("settings.chatBridge.secretSet") : t("settings.chatBridge.secretMissing"),
+      credentialSet ? t("settings.chatBridge.credentialsSet") : t("settings.chatBridge.credentialsMissing"),
       bridge?.defaultChatId ? t("settings.chatBridge.chatId", { id: bridge.defaultChatId }) : t("settings.chatBridge.noDefaultChat"),
     ].join(" · ");
   }

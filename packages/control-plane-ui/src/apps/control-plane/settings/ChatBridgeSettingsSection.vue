@@ -51,8 +51,8 @@
           <ControlPlaneInput v-model="chatForm.name" :placeholder="t('settings.chatBridge.bridgeName')" />
         </label>
         <label>
-          <span>{{ selectedChatBridge.channel === 'dingding' ? t('settings.chatBridge.clientId') : t('settings.chatBridge.token') }}</span>
-          <ControlPlaneInput v-model="chatForm.token" type="password" :placeholder="selectedChatBridge?.tokenSet ? t('settings.chatBridge.keepSecret') : chatTokenPlaceholder" />
+          <span>{{ selectedChatBridge.channel === 'dingding' ? t('settings.chatBridge.clientId') : selectedChatBridge.channel === 'lark' ? t('settings.chatBridge.appId') : t('settings.chatBridge.token') }}</span>
+          <ControlPlaneInput v-model="chatForm.token" :type="selectedChatBridge.channel === 'lark' ? 'text' : 'password'" :placeholder="selectedChatBridge?.tokenSet ? t('settings.chatBridge.keepSecret') : chatTokenPlaceholder" />
         </label>
         <div v-if="selectedChatBridge.channel === 'telegram'" class="settings-form-grid">
           <label>
@@ -101,9 +101,26 @@
             <ControlPlaneInput v-model="chatForm.settings.corpId" :placeholder="t('settings.chatBridge.optional')" />
           </label>
         </div>
+        <div v-else-if="selectedChatBridge.channel === 'lark'" class="settings-form-grid">
+          <label>
+            <span>{{ t("settings.chatBridge.appSecret") }}</span>
+            <ControlPlaneInput v-model="chatForm.settings.appSecret" type="password" :placeholder="selectedChatBridge?.settings.appSecretSet ? t('settings.chatBridge.keepSecret') : t('settings.chatBridge.appSecret')" />
+          </label>
+          <label>
+            <span>{{ t("settings.chatBridge.domain") }}</span>
+            <ControlPlaneSelect v-model="chatForm.settings.domain">
+              <ControlPlaneSelectItem value="feishu">{{ t("settings.chatBridge.feishuChina") }}</ControlPlaneSelectItem>
+              <ControlPlaneSelectItem value="lark">{{ t("settings.chatBridge.larkGlobal") }}</ControlPlaneSelectItem>
+            </ControlPlaneSelect>
+          </label>
+          <label>
+            <span>{{ t("settings.chatBridge.defaultChatId") }}</span>
+            <ControlPlaneInput v-model="chatForm.defaultChatId" :placeholder="t('settings.chatBridge.larkChatIdPlaceholder')" />
+          </label>
+        </div>
         <label>
           <span>{{ t("settings.chatBridge.allowedUsers") }}</span>
-          <ControlPlaneInput v-model="chatAllowedUsersText" :placeholder="t('settings.chatBridge.allowedUsersPlaceholder')" />
+          <ControlPlaneInput v-model="chatAllowedUsersText" :placeholder="selectedChatBridge.channel === 'lark' ? t('settings.chatBridge.larkAllowedUsersPlaceholder') : t('settings.chatBridge.allowedUsersPlaceholder')" />
         </label>
         <Button variant="outline" size="sm" :disabled="chatBridgeBusy" @click="saveSelectedChatBridge">
           <Settings :size="14" />
@@ -125,6 +142,8 @@ import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
+import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
+import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
 
 const { t } = useI18n();
 
