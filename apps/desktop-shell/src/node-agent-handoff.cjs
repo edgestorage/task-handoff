@@ -5,12 +5,16 @@ const { spawnSync } = require("node:child_process");
 const { setTimeout: delay } = require("node:timers/promises");
 
 function resolveNodeAgentSingletonLockPath(options = {}) {
+  const override = options.env?.TASK_HANDOFF_NODE_AGENT_LOCK_PATH || process.env.TASK_HANDOFF_NODE_AGENT_LOCK_PATH;
+  if (override?.trim()) return path.resolve(override.trim());
   const temporaryDirectory = options.tmpdir || os.tmpdir();
   const userId = options.uid ?? process.getuid?.() ?? "user";
   return path.join(temporaryDirectory, `task-handoff-node-agent-${userId}.lock`);
 }
 
 function resolveControlPlaneSingletonLockPath(options = {}) {
+  const override = options.env?.TASK_HANDOFF_CONTROL_PLANE_LOCK_PATH || process.env.TASK_HANDOFF_CONTROL_PLANE_LOCK_PATH;
+  if (override?.trim()) return path.resolve(override.trim());
   const temporaryDirectory = options.tmpdir || os.tmpdir();
   const userId = options.uid ?? process.getuid?.() ?? "user";
   return path.join(temporaryDirectory, `task-handoff-control-plane-${userId}.lock`);
@@ -108,6 +112,66 @@ function inspectExistingDesktopControlPlane(options = {}) {
   return { status: "running", owner };
 }
 
+function inspectExistingDesktopNodeAgent(options = {}) {
+  const lockPath = options.lockPath || resolveNodeAgentSingletonLockPath();
+  const readOwner = options.readOwner || readNodeAgentLockOwner;
+  const isAlive = options.isAlive || processIsAlive;
+  const processIdentity = options.processIdentity || processStartIdentity;
+  const owner = readOwner(lockPath);
+  if (!owner) return { status: "absent" };
+  if (path.resolve(owner.dataDir) !== path.resolve(options.dataDir)) return { status: "foreign", owner };
+  if (!isAlive(owner.pid)) return { status: "stale", owner };
+  if (!owner.startIdentity) return { status: "unverified", owner };
+  const currentStartIdentity = processIdentity(owner.pid);
+  if (!currentStartIdentity) return { status: "unverified", owner };
+  if (currentStartIdentity !== owner.startIdentity) return { status: "stale", owner };
+  return { status: "running", owner };
+}
+
+function reusableDesktopNodeAgent(inspection, health, expected = {}) {
+  if (inspection?.status !== "running" || !health || health.role !== "node-agent") return false;
+  if (health.process?.pid !== inspection.owner.pid || health.process?.startIdentity !== inspection.owner.startIdentity) return false;
+  if (health.build?.component !== "node-agent" || health.build.packageVersion !== expected.packageVersion) return false;
+  if (expected.buildId && health.build.buildId !== expected.buildId) return false;
+  if (expected.gitCommit && health.build.gitCommit !== expected.gitCommit) return false;
+  return Number.isInteger(health.listener?.port) && health.listener.port > 0;
+}
+
+async function ensureDesktopNodeAgent(options) {
+  const inspection = inspectExistingDesktopNodeAgent({
+    dataDir: options.dataDir,
+    ...(options.inspectOptions || {}),
+  });
+  if (inspection.status === "foreign") {
+    throw new Error(
+      `A node agent outside this Desktop installation is already running pid=${inspection.owner.pid} dataDir=${inspection.owner.dataDir}.`,
+    );
+  }
+  if (inspection.status === "unverified") {
+    throw new Error(`The existing Desktop node agent pid=${inspection.owner.pid} could not be verified and was not stopped.`);
+  }
+  if (inspection.status === "running") {
+    const response = await options.fetchHealth().catch(() => undefined);
+    const health = response?.ok ? response.payload?.data : undefined;
+    if (reusableDesktopNodeAgent(inspection, health, options.expected)) {
+      options.logInfo?.(`[desktop-shell] reusing compatible node agent pid=${inspection.owner.pid} version=${health.build.packageVersion}`);
+      return { action: "reused", child: undefined, health, owner: inspection.owner };
+    }
+    const replaced = await stopExistingDesktopNodeAgent({
+      dataDir: options.dataDir,
+      logInfo: options.logInfo,
+      logError: options.logError,
+      ...(options.stopOptions || {}),
+    });
+    if (["foreign", "unverified"].includes(replaced.status)) {
+      throw new Error("The existing node agent changed ownership while Desktop was preparing its replacement.");
+    }
+  }
+  const child = options.start();
+  const health = await options.waitUntilReady(child);
+  return { action: "started", child, health };
+}
+
 function lockOwnerMatchesProcess(owner, options) {
   if (!owner.startIdentity || !options.isAlive(owner.pid)) return false;
   return options.processIdentity(owner.pid) === owner.startIdentity;
@@ -131,24 +195,15 @@ async function stopExistingDesktopNodeAgent(options) {
   const processIdentity = options.processIdentity || processStartIdentity;
   const signal = options.signal || ((pid, value) => process.kill(pid, value));
   const wait = options.wait || delay;
-  const owner = readOwner(lockPath);
-
-  if (!owner) {
-    return { status: "absent" };
-  }
-  if (path.resolve(owner.dataDir) !== path.resolve(options.dataDir)) {
-    return { status: "foreign", owner };
-  }
-  if (!isAlive(owner.pid)) {
-    return { status: "stale", owner };
-  }
-  const currentStartIdentity = processIdentity(owner.pid);
-  if (!owner.startIdentity || !currentStartIdentity) {
-    return { status: "unverified", owner };
-  }
-  if (currentStartIdentity !== owner.startIdentity) {
-    return { status: "stale", owner };
-  }
+  const inspection = inspectExistingDesktopNodeAgent({
+    dataDir: options.dataDir,
+    lockPath,
+    readOwner,
+    isAlive,
+    processIdentity,
+  });
+  if (inspection.status !== "running") return inspection;
+  const owner = inspection.owner;
 
   options.logInfo?.(`[desktop-shell] stopping previous desktop node agent pid=${owner.pid}`);
   try {
@@ -192,9 +247,12 @@ async function stopExistingDesktopNodeAgent(options) {
 }
 
 module.exports = {
+  ensureDesktopNodeAgent,
   inspectExistingDesktopControlPlane,
+  inspectExistingDesktopNodeAgent,
   readControlPlaneLockOwner,
   readNodeAgentLockOwner,
+  reusableDesktopNodeAgent,
   resolveControlPlaneSingletonLockPath,
   resolveNodeAgentSingletonLockPath,
   stopExistingDesktopNodeAgent,

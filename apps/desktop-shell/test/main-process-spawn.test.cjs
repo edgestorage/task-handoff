@@ -3,7 +3,7 @@ const { EventEmitter } = require("node:events");
 const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
-const { superviseDesktopChild } = require("../src/child-process.cjs");
+const { stopSupervisedDesktopChild, superviseDesktopChild } = require("../src/child-process.cjs");
 
 function fakeChild() {
   const child = new EventEmitter();
@@ -37,20 +37,19 @@ test("desktop owns a single Electron process and focuses it on repeated launches
 test("desktop keeps node-agent independent while making Control Plane shutdown awaitable", () => {
   const main = fs.readFileSync(path.join(__dirname, "../src/main.cjs"), "utf8");
   assert.match(main, /detached: true/);
-  assert.match(main, /nodeAgent\.unref\?\.\(\)/);
+  assert.match(main, /bootNodeAgent\?\.unref\?\.\(\)/);
   assert.match(main, /app\.on\("before-quit", \(event\) =>/);
   assert.match(main, /event\.preventDefault\(\)/);
-  assert.match(main, /desktopQuitPromise = stopControlPlane\(\)/);
-  assert.doesNotMatch(main, /app\.on\("before-quit"[\s\S]*?stopDesktopServices\(\)/);
+  assert.match(main, /desktopQuitPromise = desktopServiceLifecycle\.stop\("quit"\)/);
   assert.match(main, /install: prepareDesktopUpdateInstall/);
+  assert.match(main, /async function stopNodeAgent\(\)[\s\S]*stopExistingDesktopNodeAgent/);
 });
 
 test("desktop rolls back failed children without coupling a healthy node-agent to Control Plane", () => {
   const main = fs.readFileSync(path.join(__dirname, "../src/main.cjs"), "utf8");
-  assert.match(main, /desktop services failed to start[\s\S]*await stopControlPlane\(\)/);
-  assert.match(main, /if \(!nodeAgentReady\)[\s\S]*await stopNodeAgent\(\)/);
-  assert.match(main, /else \{[\s\S]*bootNodeAgent\?\.unref\?\.\(\)/);
-  assert.match(main, /inspectExistingDesktopControlPlane\(\)[\s\S]*stopExistingDesktopNodeAgent/);
+  assert.match(main, /desktop services failed to start[\s\S]*desktopServiceLifecycle\.stop\("boot-failure", \{ nodeAgentReady \}\)/);
+  assert.match(main, /if \(nodeAgentReady\)[\s\S]*bootNodeAgent\?\.unref\?\.\(\)/);
+  assert.match(main, /inspectExistingDesktopControlPlane\(\)[\s\S]*ensureDesktopNodeAgent/);
 });
 
 test("desktop child supervision reports output, spawn failures, and exits", () => {
@@ -96,4 +95,21 @@ test("desktop child supervision supports detached children with file-backed stdi
     logInfo: () => undefined,
     logError: () => undefined,
   }), child);
+});
+
+test("desktop child termination confirms exit after force", async () => {
+  const child = fakeChild();
+  child.pid = 1234;
+  child.exitCode = null;
+  child.signalCode = null;
+  const signals = [];
+  child.kill = (signal) => {
+    signals.push(signal);
+    if (signal === "SIGKILL") setImmediate(() => {
+      child.signalCode = signal;
+      child.emit("exit", null, signal);
+    });
+  };
+  await stopSupervisedDesktopChild(child, { gracefulTimeoutMs: 0, forceTimeoutMs: 100 });
+  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
 });

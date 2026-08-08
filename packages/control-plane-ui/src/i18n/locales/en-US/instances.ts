@@ -9,6 +9,8 @@ export const instances = {
     new: "New instance",
     search: "Search instances",
     loading: "Loading instances...",
+    nodeConnecting: "Connecting",
+    nodeReconnecting: "Reconnecting",
     openControls: "Open controls for {name}",
     noMatches: "No matching instances",
     resizeSidebar: "Resize instances sidebar",

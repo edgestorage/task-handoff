@@ -387,6 +387,7 @@ export type Node = {
   publicWebBase?: string;
   status: "unknown" | "online" | "offline" | "degraded";
   health: "unknown" | "ok" | "degraded" | "failed";
+  connectionPhase?: "connecting" | "handshaking" | "healthy" | "reconnecting" | "suspect" | "offline";
   capabilities: Record<string, unknown>;
   labels: Record<string, string>;
   lastSeenAt?: string;

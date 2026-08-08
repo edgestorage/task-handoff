@@ -23,6 +23,7 @@
           :instances="instances"
           :is-instance-action-busy="isInstanceActionBusy"
           :loading="loading"
+          :nodes="nodes"
           :open-menu-id="openMenuId"
           :sort-mode="sortMode"
           :total-instances="totalInstances"
@@ -73,7 +74,7 @@
         <input :value="filter" :placeholder="t('instances.list.search')" @input="$emit('update:filter', ($event.target as HTMLInputElement).value)" />
       </label>
 
-      <div v-if="loading" class="list-empty">{{ t("instances.list.loading") }}</div>
+      <div v-if="loading && !hasConnectingNodes" class="list-empty">{{ t("instances.list.loading") }}</div>
       <div v-else-if="error" class="list-empty error">{{ error }}</div>
       <ScrollArea v-else class="instance-rows">
         <div class="instance-rows-content">
@@ -86,7 +87,11 @@
             @click="toggleGroup(group.key)"
           >
             <Server class="instance-group-icon" :size="15" />
-            <span>{{ group.label }}</span>
+            <span class="instance-group-name">{{ group.label }}</span>
+            <span v-if="group.connectionLabel" class="instance-group-status" :data-phase="group.connectionPhase">
+              <LoaderCircle v-if="group.connectionPhase !== 'offline'" :size="13" aria-hidden="true" />
+              {{ group.connectionLabel }}
+            </span>
             <ChevronRight class="instance-group-chevron" :class="{ open: !collapsedGroups[group.key] }" :size="15" />
             <strong>{{ group.instances.length }}</strong>
           </button>
@@ -205,7 +210,7 @@
           </ContextMenu>
           </template>
         </template>
-        <div v-if="!instances.length" class="list-empty">{{ t("instances.list.noMatches") }}</div>
+        <div v-if="!instances.length && !loading" class="list-empty">{{ t("instances.list.noMatches") }}</div>
         </div>
       </ScrollArea>
     </template>
@@ -216,8 +221,8 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { Boxes, ChevronRight, Container, Download, Laptop, MoreHorizontal, PackagePlus, PanelLeftClose, PanelLeftOpen, Play, Plus, RotateCw, Search, Server, Settings, Square, Trash2, Upload } from "@lucide/vue";
-import type { InstanceBoardItem } from "../../../api/types";
+import { Boxes, ChevronRight, Container, Download, Laptop, LoaderCircle, MoreHorizontal, PackagePlus, PanelLeftClose, PanelLeftOpen, Play, Plus, RotateCw, Search, Server, Settings, Square, Trash2, Upload } from "@lucide/vue";
+import type { InstanceBoardItem, Node } from "../../../api/types";
 import type { ConfigSyncDirection } from "@task-handoff/protocol/config-sync";
 import { Button } from "../../../components/ui/button";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "../../../components/ui/context-menu";
@@ -246,6 +251,7 @@ const props = defineProps<{
   instances: InstanceBoardItem[];
   isInstanceActionBusy: (instance: InstanceBoardItem) => boolean;
   loading: boolean;
+  nodes: Node[];
   openMenuId: string;
   sortMode: InstanceListSortMode;
   totalInstances: number;
@@ -284,15 +290,27 @@ function instanceRuntimeLabel(instance: InstanceBoardItem) {
 }
 
 const collapsedGroups = reactive<Record<string, boolean>>({});
+const hasConnectingNodes = computed(() => props.nodes.some((node) => node.connectionPhase === "connecting" || node.connectionPhase === "handshaking" || node.connectionPhase === "reconnecting"));
 
 const instanceGroups = computed(() => {
   if (!props.groupByNode) {
     return [{ key: "__all__", label: t("instances.board.allNodes"), instances: props.instances }];
   }
-  const groups = new Map<string, { key: string; label: string; instances: InstanceBoardItem[] }>();
+  const groups = new Map<string, { key: string; label: string; instances: InstanceBoardItem[]; connectionPhase?: Node["connectionPhase"]; connectionLabel?: string }>();
+  for (const node of props.nodes) {
+    const connectionLabel = node.connectionPhase === "connecting" || node.connectionPhase === "handshaking"
+      ? t("instances.list.nodeConnecting")
+      : node.connectionPhase === "reconnecting"
+        ? t("instances.list.nodeReconnecting")
+        : undefined;
+    if (connectionLabel) {
+      groups.set(node.id, { key: node.id, label: node.name || node.id, instances: [], connectionPhase: node.connectionPhase, connectionLabel });
+    }
+  }
   for (const instance of props.instances) {
     const key = instance.nodeId || "__unknown__";
-    const current = groups.get(key) || { key, label: instanceNodeLabel(instance), instances: [] };
+    const node = props.nodes.find((candidate) => candidate.id === key);
+    const current = groups.get(key) || { key, label: instanceNodeLabel(instance), instances: [], connectionPhase: node?.connectionPhase };
     current.instances.push(instance);
     groups.set(key, current);
   }
@@ -540,6 +558,31 @@ function openNewInstanceFromTemporaryList() {
   padding-right: 2px;
 }
 
+.instance-group-status {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  gap: 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.instance-group-status svg {
+  flex: 0 0 auto;
+  animation: instance-group-connecting-spin 900ms linear infinite;
+}
+
+@keyframes instance-group-connecting-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .instance-group-status svg {
+    animation: none;
+  }
+}
+
 .instance-row {
   display: grid;
   position: relative;
@@ -641,7 +684,7 @@ function openNewInstanceFromTemporaryList() {
 
 .instance-group-label {
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) 16px auto;
+  grid-template-columns: 20px minmax(0, 1fr) auto 16px auto;
   align-items: center;
   width: 100%;
   min-height: 32px;
@@ -681,7 +724,16 @@ function openNewInstanceFromTemporaryList() {
   color: var(--text-muted);
 }
 
+.instance-group-name {
+  grid-column: 2;
+}
+
+.instance-group-status {
+  grid-column: 3;
+}
+
 .instance-group-chevron {
+  grid-column: 4;
   color: var(--text-muted);
   transform: rotate(0deg);
   transition: transform 120ms ease;
@@ -692,6 +744,7 @@ function openNewInstanceFromTemporaryList() {
 }
 
 .instance-group-label strong {
+  grid-column: 5;
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 750;

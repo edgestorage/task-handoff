@@ -7,6 +7,7 @@ import websocket from "@fastify/websocket";
 import WebSocket from "ws";
 import type { FastifyServerOptions } from "fastify";
 import { z } from "zod";
+import { processStartIdentity } from "@task-handoff/core/core/process-singleton-lock";
 import {
   CONTROL_PLANE_PROTOCOL_VERSION,
   ControlledInstanceSchema,
@@ -72,7 +73,6 @@ import {
 import {
   bootstrapExternalListener,
   createRuntimeSettingsFile,
-  externalListenerHost,
 } from "./external-listener-settings.ts";
 import {
   desiredControlledInstanceVersion,
@@ -479,6 +479,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   const controlEndpoint = connectionMode === "local-ipc" ? nodeAgentIpcEndpoint(ipcPath) : endpoint;
   const platform = options.platform || process.platform;
   const arch = options.arch || process.arch;
+  const nodeAgentProcessIdentity = processStartIdentity(process.pid);
   const state = new NodeAgentState(paths, nodeId, endpoint, containerUrl, port, platform);
   state.node.connectionMode = connectionMode;
   state.node.controlEndpoint = controlEndpoint;
@@ -498,7 +499,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       paths,
       () => state.localNodeAgentUrl,
       configuredLocalControlledCommand(),
-      options.localControlledInstanceLockPath,
+      options.localControlledInstanceLockPath || process.env.TASK_HANDOFF_LOCAL_CONTROLLED_INSTANCE_LOCK_PATH,
       (event) => recoverySupervisor.handleUnexpectedLocalExit(
         event.instanceId,
         new Error(`Local controlled instance exited unexpectedly (pid=${event.pid ?? "unknown"}, code=${event.code ?? "none"}, signal=${event.signal ?? "none"}).`),
@@ -861,6 +862,10 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     data: {
       ok: true,
       role: "node-agent",
+      process: {
+        pid: process.pid,
+        ...(nodeAgentProcessIdentity ? { startIdentity: nodeAgentProcessIdentity } : {}),
+      },
       listener: {
         host: "127.0.0.1",
         port: state.currentListenerPort,
@@ -1056,6 +1061,16 @@ export async function runNodeAgentServer(options: RunNodeAgentServerOptions) {
         listenerConfig = allocated;
       }
     }
+    const publishActiveListener = (listener: ReturnType<NodeAgentExternalListenerManager["current"]>) => {
+      if (!lock.updateDetails({
+        dataDir: paths.dataDir,
+        host: listener.host,
+        port: listener.port,
+        instanceId: undefined,
+      })) {
+        throw new Error("Node agent singleton ownership changed while publishing listener state.");
+      }
+    };
     const effectiveOptions = { ...options, port: listenerConfig.port };
     const app = await createNodeAgentApp(effectiveOptions);
     const nodeAgentState = app.nodeAgentState;
@@ -1076,6 +1091,7 @@ export async function runNodeAgentServer(options: RunNodeAgentServerOptions) {
       settings,
       config: listenerConfig,
       source: hadPersistedSettings ? "persisted" : "bootstrap",
+      onActiveListener: publishActiveListener,
     });
     app.decorate("nodeAgentListenerManager", listenerManager);
     let ipcServer: http.Server | undefined;

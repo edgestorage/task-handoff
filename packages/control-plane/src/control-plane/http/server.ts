@@ -36,6 +36,7 @@ import { ControlPlaneProxyStateSubscriber } from "../nodes/control-plane-proxy-s
 import { registerControlPlaneProxyManagementRoutes } from "./control-plane-proxy-management-routes.ts";
 import { projectControlPlaneProxyTarget, publicControlPlaneProxyTarget } from "../proxy/target-projector.ts";
 import { ControlPlaneIdentityService } from "../identity/service.ts";
+import { NodeConnectionRuntime } from "../nodes/connection-runtime.ts";
 
 export type CreateControlPlaneAppOptions = {
   dataDir?: string;
@@ -279,14 +280,19 @@ function actionForHttpMethod(method: string): ControlPlaneAction {
 export async function createControlPlaneApp(options: CreateControlPlaneAppOptions = {}) {
   const paths = controlPlaneStorePaths(options.dataDir);
   const app = Fastify({ logger: options.logger ?? true });
-  const service = new ControlPlaneService(paths, { ...options.service, logger: app.log });
+  const events = new ControlPlaneEventBus();
+  const nodeConnectionRuntime = new NodeConnectionRuntime();
+  nodeConnectionRuntime.onChange((observation) => events.publish("node.connection.updated", observation, {
+    topic: "node.state",
+    scope: { nodeId: observation.nodeId },
+  }));
+  const service = new ControlPlaneService(paths, { ...options.service, logger: app.log, nodeConnectionRuntime });
   const auth = new ControlPlaneAuth(paths, options.auth);
   const identity = new ControlPlaneIdentityService(
     paths.identitySigningPath,
     () => service.proxyPrivateStore.controlPlaneId(),
     (message, details) => app.log.warn(details, message),
   );
-  const events = new ControlPlaneEventBus();
   const imagePullProgress = new ImagePullProgressProjector(events);
   const aiSessionUnread = new AiSessionUnreadStore(paths, {
     onChanged: (state) => queueMicrotask(() => events.publish(AiSessionUnreadEventType.Updated, state, {
@@ -330,6 +336,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     aiSessionAttachments.dispose();
   });
   const nodeAgentTunnel = new ControlPlaneNodeAgentTunnelTransport(events, {
+    connectionRuntime: nodeConnectionRuntime,
     validateInstanceScope: (nodeId, instanceId) => service.nodeOwnsInstance(nodeId, instanceId),
     onStreamsHello: (instanceId, hello) => {
       for (const descriptor of hello.streams) {
@@ -421,7 +428,11 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   auth.init();
   const chatGateway = new ControlPlaneChatGatewayRuntime(service, options.service?.fetchImpl, { aiSessions: aiSessionAggregator, logger: app.log });
   chatGateway.startEnabled();
-  const nodeEventSubscriber = new ControlPlaneNodeEventSubscriber(service, nodeAgentTunnel, { safetyIntervalMs: Number(process.env.TASK_HANDOFF_EVENT_CONNECTION_SAFETY_INTERVAL_MS) || undefined, logger: app.log });
+  const nodeEventSubscriber = new ControlPlaneNodeEventSubscriber(service, nodeAgentTunnel, {
+    safetyIntervalMs: Number(process.env.TASK_HANDOFF_EVENT_CONNECTION_SAFETY_INTERVAL_MS) || undefined,
+    logger: app.log,
+    connectionRuntime: nodeConnectionRuntime,
+  });
   nodeEventSubscriber.start();
   await app.register(cookie);
   await app.register(websocket);
@@ -534,7 +545,10 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       aiSessions: aiSessionAggregator.diagnostics(),
       aiSessionActions: service.aiSessionActionDiagnostics(),
       appSessions: appSessionAggregator.diagnostics(),
-      nodeConnections: nodeEventSubscriber.diagnostics(),
+      nodeConnections: {
+        ...nodeEventSubscriber.diagnostics(),
+        runtime: nodeConnectionRuntime.diagnostics(),
+      },
     },
   }));
 
