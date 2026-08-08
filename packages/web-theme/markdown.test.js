@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { highlightSource, renderMarkdown } from "./markdown.ts";
+import { handleMarkdownCodeCopy, highlightSource, renderMarkdown } from "./markdown.ts";
 
 test("renderMarkdown renders block Markdown and GFM consistently", () => {
   const html = renderMarkdown([
@@ -52,6 +52,27 @@ test("renderMarkdown highlights registered fenced code languages", () => {
   assert.match(html, /<span class="hljs-number">42<\/span>/);
 });
 
+test("renderMarkdown optionally renders code language and localized copy controls", () => {
+  const html = renderMarkdown("```TypeScript\nconst answer = 42;\n```", {
+    codeTools: { copiedLabel: "已复制", copyLabel: "复制", plainTextLabel: "纯文本" },
+  });
+
+  assert.match(html, /class="markdown-code-block"/);
+  assert.match(html, /class="markdown-code-language">typescript<\/span>/);
+  assert.match(html, /class="markdown-code-copy"[^>]*data-copy-label="复制"[^>]*data-copied-label="已复制">复制<\/button>/);
+  assert.match(html, /<pre data-language="typescript">/);
+});
+
+test("renderMarkdown labels untyped tool-enabled code without changing default output", () => {
+  const enhanced = renderMarkdown("```\nplain\n```", {
+    codeTools: { copiedLabel: "Copied", copyLabel: "Copy", plainTextLabel: "Plain text" },
+  });
+  const defaultHtml = renderMarkdown("```\nplain\n```");
+
+  assert.match(enhanced, /class="markdown-code-language">Plain text<\/span>/);
+  assert.doesNotMatch(defaultHtml, /markdown-code-toolbar/);
+});
+
 test("highlightSource exposes safe reusable syntax highlighting", () => {
   assert.match(highlightSource("const answer = 42;", "typescript"), /hljs-keyword/);
   assert.equal(highlightSource("<script>alert(1)</script>", "unknown"), "&lt;script&gt;alert(1)&lt;/script&gt;");
@@ -81,4 +102,33 @@ test("renderMarkdown emits a safe pending container for Mermaid diagrams", () =>
   assert.match(html, /class="markdown-mermaid" data-mermaid-state="pending"/);
   assert.match(html, /<code>graph TD\n  A\[Start\] --&gt; B\[Done\]<\/code>/);
   assert.doesNotMatch(html, /class="hljs/);
+});
+
+test("handleMarkdownCodeCopy contains clipboard permission failures", async () => {
+  const OriginalElement = globalThis.Element;
+  const navigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  class FakeElement {
+    closest(selector) {
+      return selector === ".markdown-code-copy" ? button : undefined;
+    }
+  }
+  const button = {
+    closest: () => ({ querySelector: () => ({ textContent: "private code" }) }),
+    dataset: { copiedLabel: "Copied", copyLabel: "Copy" },
+    textContent: "Copy",
+  };
+  Object.defineProperty(globalThis, "Element", { configurable: true, value: FakeElement });
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { clipboard: { writeText: async () => { throw new Error("NotAllowedError"); } } },
+  });
+  try {
+    assert.equal(await handleMarkdownCodeCopy({ target: new FakeElement() }), false);
+    assert.equal(button.textContent, "Copy");
+  } finally {
+    if (OriginalElement === undefined) delete globalThis.Element;
+    else Object.defineProperty(globalThis, "Element", { configurable: true, value: OriginalElement });
+    if (navigatorDescriptor) Object.defineProperty(globalThis, "navigator", navigatorDescriptor);
+    else delete globalThis.navigator;
+  }
 });

@@ -1,5 +1,7 @@
 import * as Network from 'expo-network';
 
+import { subscribeToAppLifecycle } from './lifecycle';
+
 export type MobileNetworkState = {
   connected: boolean;
   internetReachable: boolean | undefined;
@@ -20,9 +22,26 @@ export async function currentNetworkState() {
 
 export function subscribeToNetworkState(listener: (state: MobileNetworkState) => void) {
   let live = true;
-  void currentNetworkState().then((state) => { if (live) listener(state); }).catch(() => undefined);
+  let revision = 0;
+  let initializedLifecycle = false;
+  const refresh = () => {
+    const currentRevision = ++revision;
+    void currentNetworkState().then((state) => {
+      if (live && currentRevision === revision) listener(state);
+    }).catch(() => undefined);
+  };
+  const unsubscribeLifecycle = subscribeToAppLifecycle((phase) => {
+    if (!initializedLifecycle || phase === 'active') refresh();
+    initializedLifecycle = true;
+  });
   const subscription = Network.addNetworkStateListener((state) => {
+    revision += 1;
     listener(normalizeNetworkState(state));
   });
-  return () => { live = false; subscription.remove(); };
+  return () => {
+    live = false;
+    revision += 1;
+    unsubscribeLifecycle();
+    subscription.remove();
+  };
 }

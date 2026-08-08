@@ -1,5 +1,5 @@
 import type { ControlPlaneClient } from '@task-handoff/control-plane-client';
-import { ControlPlaneInstanceDirectoryEntrySchema } from '@task-handoff/protocol/control-plane-directory';
+import { ControlPlaneInstanceDirectoryEntrySchema, ControlPlaneNodeDirectoryEntrySchema } from '@task-handoff/protocol/control-plane-directory';
 
 import { createMobileAiSession, lifecycleGuidance, MobileAiSessionCreateRequestStore, runtimePathForInstance } from '../src/ai-sessions/session-lifecycle';
 import type { ValueStore } from '../src/platform/secure-storage';
@@ -9,6 +9,7 @@ import { MobileDirectoryController } from '../src/directories/controller';
 import { filterInstances } from '../src/directories/DirectoryLists';
 import { canCreateSession, initialInstanceId, instanceCreateGuidance } from '../src/ai-sessions/new-session-types';
 import { appLaunchIssue, canLaunchApp, initialAppInstanceId } from '../src/app-sessions/new-app-session-types';
+import { RESOURCE_NAME_MAX_LENGTH, validateResourceName } from '../src/instances/resource-name';
 
 const instance = {
   ...ControlPlaneInstanceDirectoryEntrySchema.parse({
@@ -131,6 +132,41 @@ test('directory controller marks cache offline and refreshes authoritative snaps
   expect(store.profile('cp-a').phase).toBe('ready');
   expect(store.profile('cp-a').instances[0].status).toBe('stopped');
   expect(instanceBoard).toHaveBeenCalledTimes(2);
+});
+
+test('directory renames use shared resource APIs and immediately update the authoritative cache projection', async () => {
+  const store = new MobileDirectoryStore();
+  const node = ControlPlaneNodeDirectoryEntrySchema.parse({
+    id: 'node-1', name: 'Node', status: 'online', health: 'ok', connectionMode: 'direct-http',
+    observedAt: '2026-08-05T00:00:00.000Z', capabilities: [],
+  });
+  store.set('cp-a', { nodes: [node], instances: [instance], phase: 'ready' });
+  const updateNodeName = jest.fn().mockResolvedValue({ id: node.id, name: 'Renamed Node' });
+  const updateInstanceName = jest.fn().mockResolvedValue({ id: instance.id, name: 'Renamed Instance' });
+  const api = {
+    resources: {
+      nodes: jest.fn().mockResolvedValue([{ ...node, name: 'Renamed Node' }]),
+      instanceBoard: jest.fn().mockResolvedValue([{ ...instance, name: 'Renamed Instance' }]),
+      updateNodeName,
+      updateInstanceName,
+    },
+  } as unknown as ControlPlaneClient;
+  const controller = new MobileDirectoryController('cp-a', api, store);
+
+  await controller.updateNodeName(node.id, 'Renamed Node');
+  expect(store.profile('cp-a').nodes[0].name).toBe('Renamed Node');
+  expect(updateNodeName).toHaveBeenCalledWith(node.id, 'Renamed Node');
+
+  await controller.updateInstanceName(instance.id, 'Renamed Instance');
+  expect(store.profile('cp-a').instances[0].name).toBe('Renamed Instance');
+  expect(updateInstanceName).toHaveBeenCalledWith(instance.id, 'Renamed Instance');
+});
+
+test('resource name validation matches the server name invariant', () => {
+  expect(validateResourceName('   ', 'Current')).toBe('required');
+  expect(validateResourceName('x'.repeat(RESOURCE_NAME_MAX_LENGTH + 1), 'Current')).toBe('too-long');
+  expect(validateResourceName('  Current  ', 'Current')).toBe('unchanged');
+  expect(validateResourceName('  Renamed  ', 'Current')).toBeUndefined();
 });
 
 test('instance directory filters by Node, authoritative status, and AI activity independently', () => {

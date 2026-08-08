@@ -30,13 +30,20 @@ export function projectCarPlaySessions(
   messages: readonly MobileStreamingMessage[],
   t: Translate,
 ): CarPlayProjection {
+  const messagesBySession = new Map<string, MobileStreamingMessage[]>();
+  for (const message of messages) {
+    const key = JSON.stringify([message.instanceId, message.sessionId]);
+    const grouped = messagesBySession.get(key) ?? [];
+    grouped.push(message);
+    messagesBySession.set(key, grouped);
+  }
   const entries = sortedAiSessionInboxEntries((snapshot?.instances ?? []).flatMap((entry) => (
     entry.aiSessions.sessions.map((session) => ({ instanceId: entry.instanceId, session }))
   ))).map(({ instanceId, session }) => {
     const status = aiSessionStatusGroup(session);
     const content = inboxCardContent(
       session,
-      messages.filter((message) => message.instanceId === instanceId && message.sessionId === session.id),
+      messagesBySession.get(JSON.stringify([instanceId, session.id])),
       t,
     );
     return {

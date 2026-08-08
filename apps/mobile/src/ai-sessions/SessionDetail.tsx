@@ -238,7 +238,7 @@ const styles = StyleSheet.create({
   tool: { alignItems: 'center', flexDirection: 'row', gap: 8, minHeight: 24, paddingHorizontal: 2 },
   toolBody: { flex: 1, gap: 3 },
   toolText: { flex: 1 },
-  toolTitle: { fontSize: 14, fontWeight: '500', lineHeight: 20 },
+  toolTitle: { fontSize: 16, fontWeight: '500', lineHeight: 24 },
   conversationEmpty: { alignItems: 'center', paddingVertical: 32 },
   avatar: { alignItems: 'center', borderRadius: 10, height: 28, justifyContent: 'center', width: 28 },
   promptBlock: { alignSelf: 'flex-end', borderRadius: 18, borderTopRightRadius: 6, maxWidth: '90%', paddingHorizontal: 14, paddingVertical: 12 },

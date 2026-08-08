@@ -59,9 +59,9 @@ export function registerInstanceProxyRoutes({ app, service }: RegisterInstancePr
   });
 
   const proxyVncAccessWebSocket = async (socket: ProxySocket, request: ProxyRequest) => {
-    const params = request.params as { "*": string };
+    const params = request.params as { token?: string; "*": string };
     try {
-      const target = await service.appAccessProxyTarget(queryToken(request.url), "vnc", params["*"] || "");
+      const target = await service.appAccessProxyTarget(params.token || queryToken(request.url), "vnc", params["*"] || "");
       await service.proxyInstanceWebSocket(target.instance.id, socket, target.path, proxyWebSocketProtocols(request.headers), proxyWebSocketHeaders(request.headers));
     } catch {
       socket.close(1011, "VNC access link is invalid or expired.");
@@ -76,6 +76,22 @@ export function registerInstanceProxyRoutes({ app, service }: RegisterInstancePr
     handler: async (request, reply) => {
       const params = request.params as { "*": string };
       const target = await service.appAccessProxyTarget(queryToken(request.url), "vnc", params["*"] || "");
+      const proxied = await proxyInstanceHttp(service, reply, target.instance.id, target.path, {
+        method: request.method,
+        headers: proxyHeaders(request.headers),
+      });
+      return replyInstanceProxyResponse(reply, proxied, target.instance.id, target.path);
+    },
+  });
+
+  app.route({
+    method: "GET",
+    url: "/apps/access/vnc/:token/proxy/*",
+    config: PUBLIC_CONTROL_PLANE_ROUTE,
+    wsHandler: proxyVncAccessWebSocket,
+    handler: async (request, reply) => {
+      const params = request.params as { token: string; "*": string };
+      const target = await service.appAccessProxyTarget(params.token, "vnc", params["*"] || "");
       const proxied = await proxyInstanceHttp(service, reply, target.instance.id, target.path, {
         method: request.method,
         headers: proxyHeaders(request.headers),
@@ -305,12 +321,13 @@ function queryToken(url: string) {
   return parsed.searchParams.get("token") || "";
 }
 
-function vncAccessFrameUrl(token: string, sessionId: string, session: Record<string, unknown>) {
+export function vncAccessFrameUrl(token: string, sessionId: string, session: Record<string, unknown>) {
   const encodedToken = encodeURIComponent(token);
   const encodedSessionId = encodeURIComponent(sessionId);
+  const accessBase = `apps/access/vnc/${encodedToken}/proxy`;
   const vnc = session.vnc && typeof session.vnc === "object" ? session.vnc as Record<string, unknown> : {};
   const backend = typeof vnc.backend === "string" ? vnc.backend : "";
   return backend === "kasmvnc"
-    ? `/apps/access/vnc/proxy/api/apps/sessions/${encodedSessionId}/web/?token=${encodedToken}`
-    : `/apps/access/vnc/proxy/api/novnc/vnc.html?token=${encodedToken}&path=${encodeURIComponent(`apps/access/vnc/proxy/api/apps/sessions/${encodedSessionId}/vnc?token=${encodedToken}`)}&autoconnect=1&resize=scale`;
+    ? `/${accessBase}/api/apps/sessions/${encodedSessionId}/web/`
+    : `/${accessBase}/api/novnc/vnc.html?path=${encodeURIComponent(`${accessBase}/api/apps/sessions/${encodedSessionId}/vnc`)}&autoconnect=1&resize=scale`;
 }

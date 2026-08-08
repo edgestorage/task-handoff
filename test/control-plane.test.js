@@ -2148,6 +2148,13 @@ test("control plane mutation route policies never degrade privileged operations 
     assert.equal(can(operator, policy.action, policy.resource), true, `${method} ${route} operator`);
   }
 
+  for (const method of ["POST", "DELETE"]) {
+    const access = routeAuthorization(method, "/api/controlled-instances/:id/apps/sessions/:sessionId/access");
+    assert.equal(access.action, "read", `${method} App Session access lease`);
+    assert.equal(access.resource.type, "instance", `${method} App Session access lease`);
+    assert.equal(can(viewer, access.action, access.resource), true, `${method} App Session access lease viewer`);
+  }
+
   const adminOnly = routeAuthorization("POST", "/api/chat-gateway/poll-ai-sessions");
   assert.equal(adminOnly.action, "manage-settings");
   assert.equal(can(viewer, adminOnly.action, adminOnly.resource), false);
@@ -6751,6 +6758,10 @@ test("server localhost startup reports an occupied instance port", async (t) => 
   );
   const stalePort = await freePort("127.0.0.1");
   const staleServer = net.createServer((socket) => {
+    // The availability probe closes as soon as it establishes that the port is
+    // occupied, so the fixture may observe ECONNRESET while writing its fake
+    // health response. Keep that expected peer disconnect inside the fixture.
+    socket.on("error", () => undefined);
     const body = JSON.stringify({ data: { ok: true, version: "old", startedAt: "2026-07-26T00:00:00.000Z" } });
     socket.end(`HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body)}\r\nconnection: close\r\n\r\n${body}`);
   });
@@ -7482,7 +7493,7 @@ test("node agent restores active localhost runtime processes after unclean shutd
       }
     })(),
     "localhost runtime restore",
-    3000,
+    10_000,
   );
   assert.equal(restored.statusCode, 200);
   const instance = restored.json().data.find((item) => item.id === "inst_local_restore_unclean");

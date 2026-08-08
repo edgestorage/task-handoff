@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AccessibilityInfo, Animated, Easing, PixelRatio, Platform, ScrollView, StyleSheet, Text, View, type TextLayoutEvent, type TextStyle } from 'react-native';
+import { AccessibilityInfo, Animated, Easing, PixelRatio, Platform, Pressable, ScrollView, StyleSheet, Text, View, type TextLayoutEvent, type TextStyle } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
+import { Check, Copy } from 'lucide-react-native';
 import Markdown, { AstRenderer, MarkdownIt, renderRules, type ASTNode, type RenderRules } from 'react-native-markdown-renderer';
 import { common, createLowlight } from 'lowlight';
 
+import { useI18n } from '../i18n';
 import { openSystemLink } from '../platform/links';
 import { useMobileTheme, type MobileThemeColors } from './theme';
 import { useStreamingMarkdown } from './useStreamingMarkdown';
@@ -67,7 +70,13 @@ export function SafeMarkdown({
   const styles = useMemo(() => markdownStyles(colors, compact), [colors, compact]);
   const reducedMotion = useReduceMotion(Boolean(streamKey));
   const paced = useStreamingMarkdown(sanitizeMarkdown(children), streaming, streamKey);
-  const rules = useMemo(() => createRules(paced.revealEnabled, reducedMotion, trimEnd), [paced.revealEnabled, reducedMotion, trimEnd]);
+  // The map is intentionally replaced when the authoritative stream identity changes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const textStreamState = useMemo(() => new Map<string, string>(), [streamKey]);
+  const rules = useMemo(
+    () => createRules(paced.revealEnabled, reducedMotion, trimEnd, streamKey, textStreamState),
+    [paced.revealEnabled, reducedMotion, streamKey, textStreamState, trimEnd],
+  );
   const renderer = useMemo(() => new AstRenderer(
     { ...renderRules, ...rules },
     styles,
@@ -102,11 +111,30 @@ export const CHARACTER_FADE_MS = 150;
 type RevealSegment = { id: number; opacity: Animated.Value; settled: boolean; text: string };
 type RevealState = { pending: RevealSegment[]; settled: string };
 
-export function StreamingMarkdownText({ animate, content }: { animate: boolean; content: string }) {
-  const [state, setState] = useState<RevealState>({ pending: [], settled: animate ? '' : content });
+export function initialStreamingText(content: string, animate: boolean, persisted?: string) {
+  return persisted && content.startsWith(persisted) ? persisted : animate ? '' : content;
+}
+
+export function StreamingMarkdownText({
+  animate,
+  content,
+  sharedState,
+  stateKey,
+}: {
+  animate: boolean;
+  content: string;
+  sharedState?: Map<string, string>;
+  stateKey?: string;
+}) {
+  const initialPersisted = stateKey ? sharedState?.get(stateKey) : undefined;
+  const [state, setState] = useState<RevealState>({
+    pending: [],
+    settled: initialStreamingText(content, animate, initialPersisted),
+  });
   const stateRef = useRef(state);
   const animations = useRef(new Map<number, Animated.CompositeAnimation>());
   const nextId = useRef(0);
+  const activeStateKey = useRef(stateKey);
 
   const publish = useCallback((next: RevealState) => {
     stateRef.current = next;
@@ -132,21 +160,36 @@ export function StreamingMarkdownText({ animate, content }: { animate: boolean; 
   }, [publish]);
 
   useEffect(() => {
-    const current = stateRef.current;
+    let current = stateRef.current;
+    if (activeStateKey.current !== stateKey) {
+      stopPending();
+      activeStateKey.current = stateKey;
+      const persisted = stateKey ? sharedState?.get(stateKey) : undefined;
+      current = {
+        pending: [],
+        settled: initialStreamingText(content, animate, persisted),
+      };
+      publish(current);
+    }
     const rendered = current.settled + current.pending.map((segment) => segment.text).join('');
     if (!animate) {
       stopPending();
       if (rendered !== content || current.pending.length) publish({ pending: [], settled: content });
+      if (stateKey) sharedState?.set(stateKey, content);
       return;
     }
     if (!content.startsWith(rendered)) {
       stopPending();
       publish({ pending: [], settled: content });
+      if (stateKey) sharedState?.set(stateKey, content);
       return;
     }
 
     const addition = content.slice(rendered.length);
-    if (!addition) return;
+    if (!addition) {
+      if (stateKey) sharedState?.set(stateKey, content);
+      return;
+    }
     const segments = splitGraphemes(addition).map((text) => ({
       id: ++nextId.current,
       opacity: new Animated.Value(0),
@@ -160,12 +203,19 @@ export function StreamingMarkdownText({ animate, content }: { animate: boolean; 
         easing: Easing.out(Easing.ease),
         isInteraction: false,
         toValue: 1,
-        useNativeDriver: true,
+        // Nested React Native Text renders as virtual text. Its opacity is a
+        // text attribute, so the native view driver cannot update the glyphs
+        // reliably across platforms; keep this animation on the JS driver.
+        useNativeDriver: false,
       });
       animations.current.set(segment.id, animation);
-      animation.start(() => settle(segment.id));
+      animation.start(({ finished }) => {
+        if (finished) settle(segment.id);
+        else animations.current.delete(segment.id);
+      });
     }
-  }, [animate, content, publish, settle, stopPending]);
+    if (stateKey) sharedState?.set(stateKey, content);
+  }, [animate, content, publish, settle, sharedState, stateKey, stopPending]);
 
   useEffect(() => () => stopPending(), [stopPending]);
 
@@ -213,7 +263,13 @@ function stabilizeAstKeys(nodes: ASTNode[], parentPath = 'root') {
   });
 }
 
-function createRules(revealEnabled: boolean, reducedMotion: boolean, trimEnd: boolean): RenderRules {
+function createRules(
+  revealEnabled: boolean,
+  reducedMotion: boolean,
+  trimEnd: boolean,
+  streamKey?: string,
+  textStreamState?: Map<string, string>,
+): RenderRules {
   const rules: Record<string, SafeRenderRule> = {
     ...flowRules,
     text: (node, _children, parentNodes) => (
@@ -221,6 +277,8 @@ function createRules(revealEnabled: boolean, reducedMotion: boolean, trimEnd: bo
         <StreamingMarkdownText
           animate={shouldAnimateMarkdownText(revealEnabled, reducedMotion, parentNodes.map((parent) => parent.type))}
           content={node.content}
+          sharedState={textStreamState}
+          stateKey={streamKey ? `${streamKey}:${node.key}` : undefined}
         />
       </Text>
     ),
@@ -341,11 +399,19 @@ function renderCodeBlock(
   styles: SafeMarkdownStyles,
 ) {
   const content = typeof node.content === 'string' ? node.content.replace(/\n$/, '') : '';
+  const language = String((node as typeof node & { sourceInfo?: unknown }).sourceInfo ?? '').trim().split(/\s+/, 1)[0].toLowerCase();
+  return <MarkdownCodeBlock content={content} key={node.key} language={language} styles={styles} />;
+}
+
+function MarkdownCodeBlock({ content, language, styles }: { content: string; language: string; styles: SafeMarkdownStyles }) {
+  const { t } = useI18n();
+  const [copiedContent, setCopiedContent] = useState<string>();
+  const resetTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const copied = copiedContent === content;
   // A horizontal ScrollView needs an explicit cross-axis size inside a
   // virtualized list. Include the current accessibility font scale so the
   // explicit height never clips enlarged code text.
   const blockHeight = Math.ceil(Math.max(1, content.split('\n').length) * 20 * PixelRatio.getFontScale() + 24);
-  const language = String((node as typeof node & { sourceInfo?: unknown }).sourceInfo ?? '').trim().split(/\s+/, 1)[0].toLowerCase();
   let highlighted: HighlightNode[] | undefined;
   if (language && codeHighlighter.registered(language)) {
     try {
@@ -354,11 +420,34 @@ function renderCodeBlock(
       highlighted = undefined;
     }
   }
+  useEffect(() => {
+    return () => {
+      if (resetTimer.current) clearTimeout(resetTimer.current);
+    };
+  }, []);
+  const copyCode = useCallback(async () => {
+    try {
+      await Clipboard.setStringAsync(content);
+    } catch {
+      return;
+    }
+    setCopiedContent(content);
+    if (resetTimer.current) clearTimeout(resetTimer.current);
+    resetTimer.current = setTimeout(() => setCopiedContent(undefined), 1600);
+  }, [content]);
+  const copyLabel = copied ? t('sessions.codeCopied') : t('sessions.copyCode');
   return (
-    <View key={node.key} style={styles.codeBlockContainer}>
+    <View style={styles.codeBlockContainer}>
+      <View style={styles.codeBlockToolbar} testID="markdown-code-toolbar">
+        <Text numberOfLines={1} style={styles.codeBlockLanguage}>{language || t('sessions.plainText')}</Text>
+        <Pressable accessibilityLabel={copyLabel} accessibilityRole="button" hitSlop={6} onPress={() => void copyCode()} style={({ pressed }) => [styles.codeBlockCopy, pressed && styles.codeBlockCopyPressed]} testID="markdown-code-copy">
+          {copied ? <Check color={styles.codeBlockCopyText.color} size={14} /> : <Copy color={styles.codeBlockCopyText.color} size={14} />}
+          <Text style={styles.codeBlockCopyText}>{copyLabel}</Text>
+        </Pressable>
+      </View>
       <ScrollView contentContainerStyle={styles.codeBlockScrollContent} horizontal showsHorizontalScrollIndicator={false} style={{ height: blockHeight }} testID="markdown-code-scroll">
         <Text selectable style={styles.codeBlockText}>
-          {highlighted ? highlighted.map((child, index) => renderHighlightNode(child, `${node.key}:${index}`, styles)) : content}
+          {highlighted ? highlighted.map((child, index) => renderHighlightNode(child, `code:${index}`, styles)) : content}
         </Text>
       </ScrollView>
     </View>
@@ -430,8 +519,8 @@ function renderHeading(
 
 function markdownStyles(colors: MobileThemeColors, compact: boolean) {
   const codeFont = Platform.OS === 'ios' ? 'Menlo' : 'monospace';
-  const bodySize = compact ? 13 : 15;
-  const bodyLineHeight = compact ? 20 : 23;
+  const bodySize = compact ? 13 : 16;
+  const bodyLineHeight = compact ? 20 : 24;
   return StyleSheet.create({
     root: {},
     body: { color: colors.text, fontSize: bodySize, lineHeight: bodyLineHeight },
@@ -467,6 +556,11 @@ function markdownStyles(colors: MobileThemeColors, compact: boolean) {
     code_block: {},
     fence: {},
     codeBlockContainer: { backgroundColor: colors.surfaceMuted, borderColor: colors.border, borderRadius: 7, borderWidth: StyleSheet.hairlineWidth, marginBottom: 11, overflow: 'hidden' },
+    codeBlockToolbar: { alignItems: 'center', borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', justifyContent: 'space-between', minHeight: 36, paddingLeft: 12, paddingRight: 6 },
+    codeBlockLanguage: { color: colors.textMuted, flexShrink: 1, fontSize: 12, lineHeight: 16, marginRight: 12 },
+    codeBlockCopy: { alignItems: 'center', borderRadius: 6, flexDirection: 'row', gap: 5, minHeight: 30, paddingHorizontal: 7 },
+    codeBlockCopyPressed: { backgroundColor: colors.surface },
+    codeBlockCopyText: { color: colors.textMuted, fontSize: 12, lineHeight: 16 },
     codeBlockScrollContent: { paddingHorizontal: 14, paddingVertical: 12 },
     codeBlockText: { color: colors.text, fontFamily: codeFont, fontSize: 13, lineHeight: 20 },
     syntaxComment: { color: colors.syntaxComment, fontStyle: 'italic' },

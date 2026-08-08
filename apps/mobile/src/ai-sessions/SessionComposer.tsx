@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { BlurView } from 'expo-blur';
-import { Hand, Plus, ShieldAlert, ShieldCheck } from 'lucide-react-native';
+import { Hand, Pencil, Plus, ShieldAlert, ShieldCheck, X } from 'lucide-react-native';
 import { ActionSheetIOS, Alert, Animated, Easing, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { SystemIcon } from '../components/SystemIcon';
@@ -10,6 +10,8 @@ import {
   SESSION_COMPOSER_ACTION_ICON_SIZE,
   SESSION_COMPOSER_ACTION_RADIUS,
   SESSION_COMPOSER_ACTION_SIZE,
+  SESSION_COMPOSER_COLLAPSED_HEIGHT,
+  SESSION_COMPOSER_EXPANDED_HEIGHT,
   SESSION_COMPOSER_EXPANDED_RADIUS,
   SESSION_COMPOSER_TOOLBAR_HEIGHT,
 } from './composer-metrics';
@@ -22,8 +24,15 @@ export function SessionComposer(props: SessionComposerProps) {
   const PermissionIcon = props.permissionMode === 'ask' ? Hand : props.permissionMode === 'auto-review' ? ShieldCheck : ShieldAlert;
   const currentPermissionLabel = permissionLabel(props.permissionMode, t);
   const [permissionLabelMeasurement, setPermissionLabelMeasurement] = useState<{ label: string; width: number }>();
-  const [expansion] = useState(() => new Animated.Value(props.focused ? 1 : 0));
+  const [fallbackExpansion] = useState(() => new Animated.Value(props.focused ? 1 : 0));
+  const expansion = props.expansion ?? fallbackExpansion;
   const mounted = useRef(false);
+  const inputRef = useRef<TextInput>(null);
+  useEffect(() => {
+    if (!props.focusRequestKey) return;
+    const frame = requestAnimationFrame(() => inputRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [props.focusRequestKey]);
   useEffect(() => {
     if (!mounted.current) {
       mounted.current = true;
@@ -41,7 +50,7 @@ export function SessionComposer(props: SessionComposerProps) {
   }, [expansion, props.focused]);
   const animatedContainerStyle = {
     borderRadius: expansion.interpolate({ inputRange: [0, 1], outputRange: [28, SESSION_COMPOSER_EXPANDED_RADIUS] }),
-    height: expansion.interpolate({ inputRange: [0, 1], outputRange: [56, 152] }),
+    height: expansion.interpolate({ inputRange: [0, 1], outputRange: [SESSION_COMPOSER_COLLAPSED_HEIGHT, SESSION_COMPOSER_EXPANDED_HEIGHT] }),
   };
   const measuredPermissionWidth = permissionLabelMeasurement?.label === currentPermissionLabel
     ? Math.ceil(permissionLabelMeasurement.width) + 42
@@ -56,7 +65,7 @@ export function SessionComposer(props: SessionComposerProps) {
       style={[
         styles.composer,
         animatedContainerStyle,
-        { backgroundColor: dark ? 'rgba(36, 36, 38, 0.78)' : 'transparent', borderColor: colors.border },
+        { backgroundColor: 'transparent', borderColor: colors.border },
       ]}
     >
       <BlurView
@@ -66,12 +75,8 @@ export function SessionComposer(props: SessionComposerProps) {
         testID="session-composer-blur"
         tint={dark ? 'systemUltraThinMaterialDark' : 'systemUltraThinMaterialLight'}
       />
-      <View
-        pointerEvents="none"
-        style={[StyleSheet.absoluteFill, { backgroundColor: dark ? 'transparent' : 'rgba(255, 255, 255, 0.58)' }]}
-        testID="session-composer-tint"
-      />
       <TextInput
+        ref={inputRef}
         accessibilityLabel={t('composer.message')}
         editable={props.editable}
         multiline
@@ -87,7 +92,13 @@ export function SessionComposer(props: SessionComposerProps) {
         value={props.value}
       />
       <View pointerEvents="box-none" style={styles.toolbar}>
-        <View style={styles.leadingTools}>
+        {props.editingLabel ? <View style={styles.editingState}>
+          <Pencil color={colors.textMuted} size={16} strokeWidth={1.8} />
+          <Text numberOfLines={1} style={[styles.editingLabel, { color: colors.textMuted }]}>{props.editingLabel}</Text>
+          <Pressable accessibilityLabel={t('composer.cancelEdit')} accessibilityRole="button" hitSlop={6} onPress={props.onCancelEdit} style={({ pressed }) => [styles.cancelEditButton, pressed && styles.pressed]}>
+            <X color={colors.textMuted} size={17} strokeWidth={1.9} />
+          </Pressable>
+        </View> : <View style={styles.leadingTools}>
           <Pressable
             accessibilityLabel={t('composer.addAttachment')}
             accessibilityRole="button"
@@ -96,9 +107,7 @@ export function SessionComposer(props: SessionComposerProps) {
             onPress={() => showAttachmentMenu(props, t)}
             style={({ pressed }) => [styles.toolButton, pressed && styles.pressed, props.imageDisabled && props.fileDisabled && props.runtimeFileDisabled && styles.disabled]}
           >
-            <View style={styles.addIconOffset}>
-              <Plus color={colors.textMuted} size={19} strokeWidth={1.9} />
-            </View>
+            <Plus color={colors.textMuted} size={ATTACHMENT_ICON_SIZE} strokeWidth={1.9} />
           </Pressable>
           {props.permissionEnabled ? <Animated.View style={[styles.permissionButtonFrame, { width: permissionWidth }]}>
             <Pressable
@@ -123,7 +132,7 @@ export function SessionComposer(props: SessionComposerProps) {
           >
             {currentPermissionLabel}
           </Text> : null}
-        </View>
+        </View>}
         <Pressable
           accessibilityLabel={actionLabel(props.action, t)}
           accessibilityRole="button"
@@ -133,7 +142,7 @@ export function SessionComposer(props: SessionComposerProps) {
           testID="session-composer-action"
           style={({ pressed }) => [styles.actionButton, { backgroundColor: props.action === 'stop' ? colors.destructiveButton : colors.primaryButton }, pressed && styles.pressed, props.actionDisabled && styles.disabled]}
         >
-          <SystemIcon android={props.action === 'stop' ? 'stop' : 'arrow_upward'} color="#ffffff" ios={props.action === 'stop' ? 'stop.fill' : 'arrow.up'} size={SESSION_COMPOSER_ACTION_ICON_SIZE} />
+          <SystemIcon android={props.action === 'stop' ? 'stop' : props.action === 'save' ? 'check' : 'arrow_upward'} color="#ffffff" ios={props.action === 'stop' ? 'stop.fill' : props.action === 'save' ? 'checkmark' : 'arrow.up'} size={SESSION_COMPOSER_ACTION_ICON_SIZE} />
         </Pressable>
       </View>
     </Animated.View>
@@ -181,7 +190,7 @@ function showPermissionMenu(props: SessionComposerProps, t: Translate) {
 }
 
 function actionLabel(action: SessionComposerProps['action'], t: Translate) {
-  return action === 'stop' ? t('composer.stop') : t('composer.send');
+  return action === 'stop' ? t('composer.stop') : action === 'save' ? t('composer.saveEdit') : t('composer.send');
 }
 
 function permissionLabel(mode: SessionComposerProps['permissionMode'], t: Translate) {
@@ -193,8 +202,10 @@ function estimatedPermissionWidth(mode: SessionComposerProps['permissionMode']) 
 }
 
 function permissionIconSize(mode: SessionComposerProps['permissionMode']) {
-  return mode === 'ask' ? 16 : 17;
+  return mode === 'ask' ? 21 : 22;
 }
+
+const ATTACHMENT_ICON_SIZE = 25;
 
 const styles = StyleSheet.create({
   composer: {
@@ -210,9 +221,11 @@ const styles = StyleSheet.create({
   inputCollapsedWithoutPermission: { left: 48 },
   inputFocused: { bottom: 50, left: 0, paddingBottom: 8, paddingHorizontal: 14, paddingTop: 14, position: 'absolute', right: 0, top: 0 },
   toolbar: { alignItems: 'center', bottom: 0, flexDirection: 'row', height: SESSION_COMPOSER_TOOLBAR_HEIGHT, justifyContent: 'space-between', left: 0, paddingHorizontal: 8, position: 'absolute', right: 0 },
-  leadingTools: { alignItems: 'center', flexDirection: 'row', gap: 1 },
+  leadingTools: { alignItems: 'center', flexDirection: 'row' },
+  editingState: { alignItems: 'center', flex: 1, flexDirection: 'row', gap: 7, minWidth: 0, paddingLeft: 8, paddingRight: 6 },
+  editingLabel: { flexShrink: 1, fontSize: 13, fontWeight: '600' },
+  cancelEditButton: { alignItems: 'center', height: 34, justifyContent: 'center', width: 34 },
   toolButton: { alignItems: 'center', height: 40, justifyContent: 'center', width: 40 },
-  addIconOffset: { transform: [{ translateX: 3 }] },
   permissionButtonFrame: { borderRadius: 19, height: 38, overflow: 'hidden' },
   permissionButton: { alignItems: 'center', borderRadius: 19, flex: 1, flexDirection: 'row' },
   permissionIconSlot: { alignItems: 'center', height: 20, justifyContent: 'center', left: 8, position: 'absolute', width: 20 },

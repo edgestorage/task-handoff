@@ -1591,6 +1591,38 @@ test("ai session controller can steer queued messages into active turns", async 
   assert.deepEqual(registry.get(session.id).queue.items, []);
 });
 
+test("AI session queue edits and reorders use an exact revisioned queued-message permutation", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-queue-order-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const session = registry.start({ agent: "codex", appSessionId: "app-order", status: "running", phase: "thinking" });
+  const first = registry.enqueueMessage(session.id, "first").item;
+  const second = registry.enqueueMessage(session.id, "second").item;
+  const third = registry.enqueueMessage(session.id, "third").item;
+  const controller = new AiSessionController(registry);
+
+  assert.equal(registry.get(session.id).queue.revision, 3);
+  const edited = controller.editQueuedMessage(session.id, second.id, 3, "edited second");
+  assert.equal(edited.queue.revision, 4);
+  assert.equal(edited.queue.items.find((item) => item.id === second.id).message, "edited second");
+  assert.throws(
+    () => controller.editQueuedMessage(session.id, second.id, 3, "stale edit"),
+    (error) => error?.code === "AI_SESSION_QUEUE_REVISION_CONFLICT" && error?.statusCode === 409,
+  );
+
+  const reordered = controller.reorderQueuedMessages(session.id, 4, [third.id, first.id, second.id]);
+  assert.equal(reordered.queue.revision, 5);
+  assert.deepEqual(reordered.queue.items.map((item) => item.id), [third.id, first.id, second.id]);
+  assert.throws(
+    () => controller.reorderQueuedMessages(session.id, 5, [third.id, third.id, second.id]),
+    (error) => error?.code === "AI_SESSION_QUEUE_ORDER_INVALID" && error?.statusCode === 409,
+  );
+  assert.equal(registry.get(session.id).queue.revision, 5);
+
+  registry.markQueuedMessageFailed(session.id, first.id, new Error("temporary"));
+  const retried = controller.retryQueuedMessage(session.id, first.id);
+  assert.deepEqual(retried.queue.items.filter((item) => item.status === "queued").map((item) => item.id), [third.id, second.id, first.id]);
+});
+
 test("ai session registry does not truncate assistant responses", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-registry-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });

@@ -14,6 +14,7 @@ export type NewSessionFormProps = {
   busy: boolean;
   disabled: boolean;
   error?: string;
+  visualBalanceInset?: number;
   onInstanceChange(value: string): void;
   onAgentChange(value: string): void;
   onCwdChange(value: string): void;

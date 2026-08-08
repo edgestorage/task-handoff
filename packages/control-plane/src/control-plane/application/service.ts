@@ -1090,6 +1090,14 @@ export class ControlPlaneService {
     return this.appAccessService.createToken(input);
   }
 
+  createAppSessionAccessToken(input: { instanceId: string; sessionId: string; ttlMs?: number }) {
+    return this.appAccessService.createSessionToken(input);
+  }
+
+  revokeAppSessionAccessToken(token: string, expected: { instanceId: string; sessionId: string }) {
+    this.appAccessService.revokeToken(token, expected);
+  }
+
   resolveAppAccessToken(token: string, mode?: AppAccessMode) {
     return this.appAccessService.resolveToken(token, mode);
   }
@@ -1341,6 +1349,14 @@ export class ControlPlaneService {
 
   removeAiSessionQueuedMessage(instanceId: string, sessionId: string, queueId: string) {
     return this.aiSessionActionService.removeQueuedMessage(instanceId, sessionId, queueId);
+  }
+
+  editAiSessionQueuedMessage(instanceId: string, sessionId: string, queueId: string, input: { expectedRevision: number; message: string }) {
+    return this.aiSessionActionService.editQueuedMessage(instanceId, sessionId, queueId, input);
+  }
+
+  reorderAiSessionQueuedMessages(instanceId: string, sessionId: string, input: { expectedRevision: number; queueIds: string[] }) {
+    return this.aiSessionActionService.reorderQueuedMessages(instanceId, sessionId, input);
   }
 
   interruptAiSession(instanceId: string, sessionId: string) {

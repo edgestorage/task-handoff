@@ -355,7 +355,13 @@ export const AiSessionApprovalInputSchema = z.object({
 }).strict();
 
 export const AiSessionQueueReorderInputSchema = z.object({
+  expectedRevision: z.number().int().min(0),
   queueIds: z.array(z.string().trim().min(1).max(120)).max(100),
+}).strict();
+
+export const AiSessionQueueEditInputSchema = z.object({
+  expectedRevision: z.number().int().min(0),
+  message: z.string().trim().min(1).max(20000),
 }).strict();
 
 export const AiSessionControlErrorSchema = z.object({
@@ -382,11 +388,12 @@ export const AiSessionQueuedMessageSchema = z
 
 export const AiSessionQueueSchema = z
   .object({
+    revision: z.number().int().min(0).default(0),
     pendingCount: z.number().int().min(0).default(0),
     items: z.array(AiSessionQueuedMessageSchema).max(100).default([]),
   })
   .strict()
-  .default({ pendingCount: 0, items: [] });
+  .default({ revision: 0, pendingCount: 0, items: [] });
 
 export const AiSessionSourceSchema = z.enum([
   "control",
@@ -873,6 +880,7 @@ export type AiSessionCloseInput = z.infer<typeof AiSessionCloseInputSchema>;
 export type AiSessionCloseResult = z.infer<typeof AiSessionCloseResultSchema>;
 export type AiSessionActionError = z.infer<typeof AiSessionActionErrorSchema>;
 export type AiSessionApprovalInput = z.infer<typeof AiSessionApprovalInputSchema>;
+export type AiSessionQueueEditInput = z.infer<typeof AiSessionQueueEditInputSchema>;
 export type AiSessionQueueReorderInput = z.infer<typeof AiSessionQueueReorderInputSchema>;
 export type AiSessionControlError = z.infer<typeof AiSessionControlErrorSchema>;
 export type AiSessionQueuedMessage = z.infer<typeof AiSessionQueuedMessageSchema>;

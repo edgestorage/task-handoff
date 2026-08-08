@@ -234,6 +234,7 @@ export function routeAuthorization(method: string, url: string): { action: Contr
     return { action: method === "GET" ? "read" : "manage-node-auth", resource: { type: "node" } };
   }
   if (path.startsWith("/api/controlled-instances")) {
+    if (/\/apps\/sessions\/[^/]+\/access$/.test(path)) return { action: "read", resource: { type: "instance" } };
     if (path.includes("/ai-sessions")) {
       if (path.includes("/triggers")) return { action, resource: { type: "trigger" } };
       if (method === "POST" && /\/ai-sessions$/.test(path)) return { action: "send-message", resource: { type: "ai-session" } };

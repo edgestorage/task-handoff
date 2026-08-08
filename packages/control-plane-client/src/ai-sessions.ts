@@ -12,6 +12,8 @@ import {
   AiSessionMessageRefInputSchema,
   AiSessionOpenAppInputSchema,
   AiSessionOpenAppResultSchema,
+  AiSessionQueueEditInputSchema,
+  AiSessionQueueReorderInputSchema,
   AiSessionCloseInputSchema,
   AiSessionCloseResultSchema,
   AiSessionCommandInputSchema,
@@ -25,6 +27,8 @@ import {
   type AiSessionCommandInput,
   type AiSessionMessageAttachmentRef,
   type AiSessionPermissionMode,
+  type AiSessionQueueEditInput,
+  type AiSessionQueueReorderInput,
   type AiSessionReference,
   type AiSessionSendMode,
 } from "@task-handoff/protocol/ai-sessions";
@@ -133,6 +137,12 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
     },
     removeQueue(instanceId: string, sessionId: string, queueId: string) {
       return requestData(`${sessionRoute(instanceId, sessionId)}/queue/${encodeURIComponent(queueId)}`, AiSessionStatusSchema, { method: "DELETE" });
+    },
+    editQueue(instanceId: string, sessionId: string, queueId: string, input: AiSessionQueueEditInput) {
+      return requestData(`${sessionRoute(instanceId, sessionId)}/queue/${encodeURIComponent(queueId)}`, AiSessionStatusSchema, json("PATCH", AiSessionQueueEditInputSchema.parse(input)));
+    },
+    reorderQueue(instanceId: string, sessionId: string, input: AiSessionQueueReorderInput) {
+      return requestData(`${sessionRoute(instanceId, sessionId)}/queue/reorder`, AiSessionStatusSchema, json("PATCH", AiSessionQueueReorderInputSchema.parse(input)));
     },
     uploadAttachment(input: { instanceId: string; sessionId: string; kind: "image" | "file"; name: string; mime: string; data: string }) {
       return requestData("/api/ai-session-attachments", AiSessionUploadedAttachmentSchema, json("POST", input));

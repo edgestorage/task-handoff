@@ -12,6 +12,7 @@ function client(overrides: Partial<ControlPlaneClient['aiSessions']> = {}) {
     sendMessage: jest.fn().mockResolvedValue({}), approval: jest.fn().mockResolvedValue({}), interrupt: jest.fn().mockResolvedValue({}),
     close: jest.fn().mockResolvedValue({}),
     steerQueue: jest.fn().mockResolvedValue({}), retryQueue: jest.fn().mockResolvedValue({}), removeQueue: jest.fn().mockResolvedValue({}),
+    editQueue: jest.fn().mockResolvedValue({}), reorderQueue: jest.fn().mockResolvedValue({}),
     ...overrides,
   } } as unknown as ControlPlaneClient;
 }
@@ -72,6 +73,15 @@ test('preserves explicit steer mode at the protocol boundary', async () => {
   const coordinator = new MobileAiSessionActionCoordinator('cp', api, new MobileAiSessionStore());
   await coordinator.send('instance', 'session', 'redirect', 'ask', [], 'steer');
   expect(api.aiSessions.sendMessage).toHaveBeenCalledWith('instance', 'session', expect.objectContaining({ message: 'redirect', mode: 'steer' }));
+});
+
+test('edits and reorders queued messages with the authoritative queue revision', async () => {
+  const api = client();
+  const coordinator = new MobileAiSessionActionCoordinator('cp', api, new MobileAiSessionStore());
+  await coordinator.editQueue('instance', 'session', 'queue-1', 7, 'revised');
+  await coordinator.reorderQueue('instance', 'session', 8, ['queue-2', 'queue-1']);
+  expect(api.aiSessions.editQueue).toHaveBeenCalledWith('instance', 'session', 'queue-1', { expectedRevision: 7, message: 'revised' });
+  expect(api.aiSessions.reorderQueue).toHaveBeenCalledWith('instance', 'session', { expectedRevision: 8, queueIds: ['queue-2', 'queue-1'] });
 });
 
 test('drafts are versioned and isolated by complete session identity', async () => {

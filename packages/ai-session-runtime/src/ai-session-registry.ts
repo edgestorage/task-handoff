@@ -340,12 +340,22 @@ export class AiSessionRegistry {
 
   removeQueuedMessage(id: string, queueId: string) {
     const current = this.get(id);
-    return current ? this.put(this.queueService.removeQueuedMessage(current, queueId)) : undefined;
+    const updated = current ? this.queueService.removeQueuedMessage(current, queueId) : undefined;
+    return updated ? this.put(updated) : undefined;
   }
 
-  reorderQueuedMessages(id: string, queueIds: string[]) {
+  editQueuedMessage(id: string, queueId: string, expectedRevision: number, message: string) {
     const current = this.get(id);
-    return current ? this.put(this.queueService.reorderQueuedMessages(current, queueIds)) : undefined;
+    if (!current) return undefined;
+    const result = this.queueService.editQueuedMessage(current, queueId, expectedRevision, message);
+    return result.kind === "updated" ? { ...result, session: this.put(result.session) } : result;
+  }
+
+  reorderQueuedMessages(id: string, expectedRevision: number, queueIds: string[]) {
+    const current = this.get(id);
+    if (!current) return undefined;
+    const result = this.queueService.reorderQueuedMessages(current, expectedRevision, queueIds);
+    return result.kind === "updated" ? { ...result, session: this.put(result.session) } : result;
   }
 
   bindProviderSession(id: string, providerSessionId: string) {

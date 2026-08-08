@@ -86,6 +86,13 @@ test("streaming Markdown keeps the existing session typography, semantic colors,
   assert.match(markdownNode, /<AiSessionCodeBlock/);
   assert.match(markdownNode, /<AiSessionAnimatedTextNode/);
   assert.match(codeBlock, /renderCodeBlock/);
+  assert.match(codeBlock, /handleMarkdownCodeCopy/);
+  assert.match(codeBlock, /inject\(aiSessionMarkdownCodeToolsKey/);
+  assert.doesNotMatch(codeBlock, /useI18n/);
+  assert.match(message, /provide\(aiSessionMarkdownCodeToolsKey/);
+  assert.match(result, /sessions\.markdown\.copy/);
+  assert.match(codeBlock, /markdown-code-toolbar/);
+  assert.match(codeBlock, /markdown-code-copy/);
   assert.match(message, /\.hljs-keyword/);
   assert.match(message, /:deep\(pre code\)/);
   assert.match(message, /:deep\(\.table-node-wrapper\)/);

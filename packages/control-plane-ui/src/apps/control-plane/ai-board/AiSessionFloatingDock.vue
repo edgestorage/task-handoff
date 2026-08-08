@@ -110,6 +110,8 @@
               :response-content="displayAiSessionResponse(card.session, promptIndex, t)"
               :session="card.session"
               tone="board"
+              @edit-queued-message="$emit('editQueuedMessage', $event)"
+              @reorder-queued-messages="$emit('reorderQueuedMessages', $event)"
               @steer-queued-message="$emit('steerQueuedMessage', $event)"
               @retry-queued-message="$emit('retryQueuedMessage', $event)"
               @remove-queued-message="$emit('removeQueuedMessage', $event)"
@@ -126,9 +128,11 @@
     </Transition>
 
     <AiSessionComposer
+      ref="composerEl"
       class="ai-board-floating-compose"
       :model-value="draft"
       :attachments="attachments"
+      :editing-label="editingLabel"
       :mention-bindings="mentionBindings"
       :mention-context="mentionContext"
       :mention-trigger="mentionTrigger"
@@ -143,6 +147,7 @@
       @update:attachments="$emit('update:attachments', $event)"
       @update:mention-bindings="$emit('update:mentionBindings', $event)"
       @run="$emit('run', $event)"
+      @cancel-edit="$emit('cancelEdit')"
       @steer="$emit('steer')"
       @command="$emit('command', $event)"
     />
@@ -182,6 +187,7 @@ const props = defineProps<{
   collapsed: boolean;
   attachments: AiSessionComposerAttachment[];
   draft: string;
+  editingLabel?: string;
   mentionBindings: AiSessionMentionBinding[];
   mentionContext?: AiSessionMentionContext;
   mentionTrigger: string;
@@ -193,10 +199,13 @@ const props = defineProps<{
 }>();
 
 defineEmits<{
+  cancelEdit: [];
+  editQueuedMessage: [payload: { queueId: string; message: string }];
   nextPrompt: [];
   openAiSessionApp: [instance: InstanceWithAiSessions, session?: AiSessionSummary];
   previousPrompt: [];
   removeQueuedMessage: [queueId: string];
+  reorderQueuedMessages: [payload: { expectedRevision: number; queueIds: string[] }];
   resolveApproval: [decision: "allow" | "deny" | "skip"];
   retryQueuedMessage: [queueId: string];
   run: [permissionMode?: AiSessionPermissionMode];
@@ -222,12 +231,14 @@ const DOCK_SIZE_STORAGE_KEY = "task-handoff:ai-board:floating-dock-size";
 const dockWidth = ref(DEFAULT_DOCK_WIDTH);
 const detailHeight = ref(DEFAULT_DETAIL_HEIGHT);
 const dockRoot = ref<HTMLElement>();
+const composerEl = ref<InstanceType<typeof AiSessionComposer>>();
 const detailScrolled = ref(false);
 const promptContentEl = ref<HTMLElement>();
 const promptSectionEl = ref<HTMLElement>();
 const promptHasOverflow = ref(false);
 const promptExpanded = ref(false);
 const promptStickyPlaceholderHeight = ref(0);
+defineExpose({ focusComposer: () => composerEl.value?.focus() });
 let detailScrollViewport: HTMLElement | undefined;
 let detailScrollLayoutRevision = 0;
 let detailScrollLayoutPending = false;

@@ -5,7 +5,7 @@ import type { ValueStore } from '../platform/secure-storage';
 import type { MobileAiSessionStore } from './store';
 import { mobileMetrics } from '../observability/mobile-metrics';
 
-export type MobileAiSessionAction = 'send' | 'approval' | 'interrupt' | 'close' | 'queue-steer' | 'queue-retry' | 'queue-remove';
+export type MobileAiSessionAction = 'send' | 'approval' | 'interrupt' | 'close' | 'queue-steer' | 'queue-retry' | 'queue-remove' | 'queue-edit' | 'queue-reorder';
 export type MobileActionState = { phase: 'idle' | 'busy' | 'result-unknown' | 'failed'; error?: string };
 
 export function mobileAiSessionBusyKey(controlPlaneId: string, instanceId: string, sessionId: string, action: MobileAiSessionAction, queueId?: string) {
@@ -49,6 +49,12 @@ export class MobileAiSessionActionCoordinator {
         : action === 'retry' ? this.client.aiSessions.retryQueue(instanceId, sessionId, queueId)
           : this.client.aiSessions.removeQueue(instanceId, sessionId, queueId)
     ));
+  }
+  editQueue(instanceId: string, sessionId: string, queueId: string, expectedRevision: number, message: string) {
+    return this.run(instanceId, sessionId, 'queue-edit', queueId, () => this.client.aiSessions.editQueue(instanceId, sessionId, queueId, { expectedRevision, message }));
+  }
+  reorderQueue(instanceId: string, sessionId: string, expectedRevision: number, queueIds: string[]) {
+    return this.run(instanceId, sessionId, 'queue-reorder', undefined, () => this.client.aiSessions.reorderQueue(instanceId, sessionId, { expectedRevision, queueIds }));
   }
 
   private async run<T>(instanceId: string, sessionId: string, action: MobileAiSessionAction, queueId: string | undefined, operation: () => Promise<T>) {

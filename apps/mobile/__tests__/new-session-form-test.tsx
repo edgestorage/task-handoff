@@ -1,7 +1,8 @@
 import { fireEvent, render } from '@testing-library/react-native';
+import { StyleSheet } from 'react-native';
 import type { ControlPlaneInstanceDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
 
-import { NewSessionForm } from '../src/ai-sessions/NewSessionForm';
+import { NewSessionForm, newSessionKeyboardAvoidingBehavior, newSessionVisualBalanceInset } from '../src/ai-sessions/NewSessionForm';
 
 const instance = {
   id: 'instance-1',
@@ -26,6 +27,7 @@ describe('<NewSessionForm />', () => {
       permissionMode="auto-review"
       busy={false}
       disabled={false}
+      visualBalanceInset={103}
       onInstanceChange={jest.fn()}
       onAgentChange={jest.fn()}
       onCwdChange={jest.fn()}
@@ -40,6 +42,20 @@ describe('<NewSessionForm />', () => {
     expect(screen.getByText('Mobile')).toBeTruthy();
     expect(screen.getByDisplayValue('Build the mobile flow')).toBeTruthy();
     expect(screen.getByText('Auto review')).toBeTruthy();
+    expect(newSessionKeyboardAvoidingBehavior('ios')).toBe('padding');
+    expect(newSessionKeyboardAvoidingBehavior('android')).toBeUndefined();
+    const scroll = screen.getByTestId('new-session-scroll');
+    expect(scroll.props.alwaysBounceVertical).toBe(false);
+    expect(scroll.props.automaticallyAdjustKeyboardInsets).toBe(false);
+    expect(StyleSheet.flatten(scroll.props.contentContainerStyle)).toEqual(expect.objectContaining({
+      alignSelf: 'center',
+      justifyContent: 'center',
+      maxWidth: 640,
+      paddingBottom: 127,
+      width: '100%',
+    }));
+    expect(newSessionVisualBalanceInset('ios', 59)).toBe(103);
+    expect(newSessionVisualBalanceInset('android', 24)).toBe(80);
 
     fireEvent.press(screen.getByRole('button', { name: 'Create session' }));
     expect(onCreate).toHaveBeenCalledTimes(1);

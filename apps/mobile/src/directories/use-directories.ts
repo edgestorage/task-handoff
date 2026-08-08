@@ -1,4 +1,4 @@
-import { createContext, createElement, useContext, useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { createContext, createElement, useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 
 import { createDirectControlPlaneClient } from '../control-plane/client';
 import { mobileProfileStore, mobileSecureStore } from '../control-plane/runtime';
@@ -8,7 +8,13 @@ import { MobileDirectoryController } from './controller';
 import { mobileDirectoryStore } from './store';
 import type { MobileControlPlaneProfile } from '../control-plane/profile';
 
-type ActiveDirectories = { controlPlaneId?: string; controlPlaneOrigin?: string; state: ReturnType<typeof mobileDirectoryStore.profile> };
+type ActiveDirectories = {
+  controlPlaneId?: string;
+  controlPlaneOrigin?: string;
+  state: ReturnType<typeof mobileDirectoryStore.profile>;
+  updateInstanceName(instanceId: string, name: string): Promise<void>;
+  updateNodeName(nodeId: string, name: string): Promise<void>;
+};
 const Context = createContext<ActiveDirectories | undefined>(undefined);
 
 export type ActiveDirectoriesDependencies = {
@@ -47,6 +53,7 @@ export function useActiveDirectories() {
 function useActiveDirectoriesRuntime(dependencies: ActiveDirectoriesDependencies): ActiveDirectories {
   const [controlPlaneId, setControlPlaneId] = useState<string>();
   const [controlPlaneOrigin, setControlPlaneOrigin] = useState<string>();
+  const controllerRef = useRef<MobileDirectoryController | undefined>(undefined);
   useEffect(() => {
     let live = true;
     let activation = 0;
@@ -60,6 +67,7 @@ function useActiveDirectoriesRuntime(dependencies: ActiveDirectoriesDependencies
       unsubscribeNetwork = undefined;
       unsubscribeLifecycle = undefined;
       controller?.stop();
+      if (controllerRef.current === controller) controllerRef.current = undefined;
       controller = undefined;
     };
     const activate = async () => {
@@ -77,6 +85,7 @@ function useActiveDirectoriesRuntime(dependencies: ActiveDirectoriesDependencies
       setControlPlaneOrigin(profile.access.origin);
       const direct = dependencies.createClient(profile);
       controller = new MobileDirectoryController(id, direct.api, mobileDirectoryStore, direct.transport);
+      controllerRef.current = controller;
       let active = false;
       let connected = true;
       let running = false;
@@ -106,5 +115,15 @@ function useActiveDirectoriesRuntime(dependencies: ActiveDirectoriesDependencies
     () => controlPlaneId ? mobileDirectoryStore.profile(controlPlaneId) : empty,
     () => empty,
   );
-  return { controlPlaneId, controlPlaneOrigin, state };
+  const updateInstanceName = useCallback(async (instanceId: string, name: string) => {
+    const controller = controllerRef.current;
+    if (!controller) throw new Error('The active Control Plane directory is unavailable.');
+    await controller.updateInstanceName(instanceId, name);
+  }, []);
+  const updateNodeName = useCallback(async (nodeId: string, name: string) => {
+    const controller = controllerRef.current;
+    if (!controller) throw new Error('The active Control Plane directory is unavailable.');
+    await controller.updateNodeName(nodeId, name);
+  }, []);
+  return { controlPlaneId, controlPlaneOrigin, state, updateInstanceName, updateNodeName };
 }

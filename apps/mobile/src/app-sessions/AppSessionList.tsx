@@ -1,15 +1,16 @@
 import { useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import type { AppSessionRecord } from '@task-handoff/protocol/app-sessions';
 
 import { useMobileTheme } from '../components/theme';
-import { SwipeToClose } from '../components/SwipeToClose';
+import { SwipeActionList } from '../components/SwipeActionList';
 import type { MobileDirectoryProfileState } from '../directories/store';
 import type { AiSessionScope } from '../ai-sessions/store';
 import { useI18n } from '../i18n';
 import type { MobileAppSessionProfileState } from './store';
-import { canCloseAppSession } from './status';
+import { canCloseAppSession, canOpenAppSession } from './status';
+import { formatSessionUpdatedTime } from '../session-time';
 
 type Entry = { instanceId: string; instanceName: string; session: AppSessionRecord };
 type Props = {
@@ -50,46 +51,48 @@ export function AppSessionList({ state, directory, onCloseSession, scope }: Prop
   const statusMessage = state.sync.phase === 'offline' || state.sync.phase === 'stale'
     ? t('appSessions.cached')
     : state.sync.error;
-  return <FlatList
-    contentInsetAdjustmentBehavior="automatic"
+  return <SwipeActionList
     contentContainerStyle={styles.list}
     data={entries}
+    itemContainerStyle={styles.cardContainer}
     keyExtractor={(entry) => `${entry.instanceId}:${entry.session.id}`}
     ListHeaderComponent={statusMessage ? <Text accessibilityLiveRegion="polite" style={[styles.notice, { backgroundColor: colors.notice, color: colors.noticeText }]}>{statusMessage}</Text> : null}
     ListEmptyComponent={<View style={styles.empty}><Text style={[styles.emptyText, { color: colors.textMuted }]}>{state.sync.phase === 'error' ? t('appSessions.loadError') : t('appSessions.empty')}</Text></View>}
+    swipeAction={(item) => canCloseAppSession(item.session.status) ? {
+      disabled: state.sync.phase !== 'ready' || Boolean(closingKey) || item.session.status === 'stopping',
+      label: closingKey === `${item.instanceId}:${item.session.id}` || item.session.status === 'stopping' ? t('appSessions.closing') : t('appSessions.close'),
+      onPress: () => requestClose(item),
+    } : null}
     renderItem={({ item }) => <AppSessionCard
       entry={item}
-      closeDisabled={state.sync.phase !== 'ready' || Boolean(closingKey)}
-      closing={closingKey === `${item.instanceId}:${item.session.id}`}
       locale={locale}
-      onClose={() => requestClose(item)}
-      onPress={item.session.kind === 'tty' && item.session.status === 'running' ? () => router.push({ pathname: '/app-sessions/[instanceId]/[sessionId]', params: { instanceId: item.instanceId, sessionId: item.session.id } }) : undefined}
+      onPress={canOpenAppSession(item.session) ? () => router.push({ pathname: '/app-sessions/[instanceId]/[sessionId]', params: { instanceId: item.instanceId, sessionId: item.session.id } }) : undefined}
     />}
     style={{ backgroundColor: colors.background }}
   />;
 }
 
-function AppSessionCard({ closeDisabled, closing, entry, locale, onClose, onPress }: { closeDisabled: boolean; closing: boolean; entry: Entry; locale: string; onClose(): void; onPress?: () => void }) {
+function AppSessionCard({ entry, locale, onPress }: { entry: Entry; locale: string; onPress?: () => void }) {
   const { colors, dark } = useMobileTheme();
   const { t } = useI18n();
   const value = entry.session.updatedAt || entry.session.createdAt;
   const title = entry.session.title || entry.session.appId || entry.session.id;
   const statusColor = entry.session.status === 'failed' ? colors.error : entry.session.status === 'running' ? colors.primary : colors.textMuted;
-  const card = <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border, borderWidth: dark ? StyleSheet.hairlineWidth : 0 }]}>
+  return <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border, borderWidth: dark ? StyleSheet.hairlineWidth : 0 }]}>
     <Pressable accessibilityRole={onPress ? 'button' : undefined} disabled={!onPress} onPress={onPress} style={({ pressed }) => [styles.cardContent, pressed && styles.pressed]}>
       <View style={styles.heading}>
         <Text numberOfLines={1} style={[styles.title, { color: colors.text }]}>{title}</Text>
         <View style={[styles.badge, { backgroundColor: colors.surfaceMuted }]}><View style={[styles.dot, { backgroundColor: statusColor }]} /><Text style={[styles.status, { color: statusColor }]}>{entry.session.status}</Text></View>
       </View>
       <Text numberOfLines={1} style={[styles.meta, { color: colors.textMuted }]}>{entry.session.appId || t('appSessions.unknownApp')} · {entry.instanceName}</Text>
-      {entry.session.workspace?.cwd ? <Text numberOfLines={1} style={[styles.cwd, { color: colors.textMuted }]}>{entry.session.workspace.cwd}</Text> : null}
-      {value ? <Text style={[styles.time, { color: colors.textMuted }]}>{new Date(value).toLocaleString(locale, { dateStyle: 'short', timeStyle: 'short' })}</Text> : null}
+      {entry.session.workspace?.cwd || value ? <View style={styles.footer}>
+        {entry.session.workspace?.cwd ? <Text numberOfLines={1} style={[styles.cwd, { color: colors.textMuted }]}>{entry.session.workspace.cwd}</Text> : null}
+        {value ? <Text style={[styles.time, { color: colors.textMuted }]}>{formatSessionUpdatedTime(value, locale, t('sessions.yesterday'))}</Text> : null}
+      </View> : null}
     </Pressable>
   </View>;
-  if (!canCloseAppSession(entry.session.status)) return card;
-  return <SwipeToClose disabled={closeDisabled || entry.session.status === 'stopping'} label={closing || entry.session.status === 'stopping' ? t('appSessions.closing') : t('appSessions.close')} onClose={onClose}>{card}</SwipeToClose>;
 }
 
 const styles = StyleSheet.create({
-  loading: { flex: 1 }, list: { gap: 12, paddingBottom: 112, paddingHorizontal: 16, paddingTop: 16 }, empty: { alignItems: 'center', justifyContent: 'center', minHeight: 240, padding: 24 }, emptyText: { fontSize: 14 }, notice: { borderRadius: 10, fontSize: 13, lineHeight: 18, padding: 12 }, card: { borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' }, cardContent: { gap: 8, padding: 16 }, pressed: { opacity: 0.6 }, heading: { alignItems: 'center', flexDirection: 'row', gap: 10 }, title: { flex: 1, fontSize: 16, fontWeight: '700' }, badge: { alignItems: 'center', borderRadius: 999, flexDirection: 'row', gap: 5, paddingHorizontal: 8, paddingVertical: 5 }, dot: { borderRadius: 4, height: 7, width: 7 }, status: { fontSize: 12, fontWeight: '600', textTransform: 'capitalize' }, meta: { fontSize: 13 }, cwd: { fontFamily: 'monospace', fontSize: 12 }, time: { fontSize: 12 },
+  loading: { flex: 1 }, list: { paddingBottom: 112, paddingTop: 16 }, cardContainer: { marginBottom: 12, marginHorizontal: 20 }, empty: { alignItems: 'center', justifyContent: 'center', minHeight: 240, padding: 24 }, emptyText: { fontSize: 15 }, notice: { borderRadius: 10, fontSize: 13, lineHeight: 18, marginBottom: 12, marginHorizontal: 20, padding: 12 }, card: { borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' }, cardContent: { gap: 8, paddingHorizontal: 16, paddingVertical: 12 }, pressed: { opacity: 0.6 }, heading: { alignItems: 'center', flexDirection: 'row', gap: 10 }, title: { flex: 1, fontSize: 17, fontWeight: '700', lineHeight: 22 }, badge: { alignItems: 'center', borderRadius: 999, flexDirection: 'row', gap: 5, paddingHorizontal: 7, paddingVertical: 4 }, dot: { borderRadius: 4, height: 7, width: 7 }, status: { fontSize: 12, fontWeight: '600', lineHeight: 17, textTransform: 'capitalize' }, meta: { fontSize: 14, lineHeight: 19 }, footer: { alignItems: 'center', flexDirection: 'row', gap: 12, minHeight: 19 }, cwd: { flex: 1, fontFamily: 'monospace', fontSize: 14, lineHeight: 19, minWidth: 0 }, time: { flexShrink: 0, fontSize: 12, lineHeight: 17, marginLeft: 'auto' },
 });

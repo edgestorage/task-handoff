@@ -1,20 +1,21 @@
 import * as Crypto from 'expo-crypto';
-import { router, Stack, useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
+import { Platform } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { AiSessionPermissionMode } from '@task-handoff/protocol/ai-sessions';
 import type { ControlPlaneNodeLocalFolder } from '@task-handoff/control-plane-client';
 
-import { NewSessionForm } from '../../src/ai-sessions/NewSessionForm';
+import { NewSessionForm, newSessionVisualBalanceInset } from '../../src/ai-sessions/NewSessionForm';
 import { initialInstanceId, instanceCreateGuidance } from '../../src/ai-sessions/new-session-types';
 import { createMobileAiSession, lifecycleGuidance } from '../../src/ai-sessions/session-lifecycle';
 import { createDirectControlPlaneClient } from '../../src/control-plane/client';
 import { mobileCreateRequestStore, mobilePermissionStore, mobileProfileStore, mobileSecureStore } from '../../src/control-plane/runtime';
 import { useActiveDirectories } from '../../src/directories/use-directories';
 import { mobileDirectoryStore } from '../../src/directories/store';
-import { useI18n } from '../../src/i18n';
 
 export default function NewAiSessionRoute() {
-  const { t } = useI18n();
+  const insets = useSafeAreaInsets();
   const { instanceId: requestedInstanceId } = useLocalSearchParams<{ instanceId?: string }>();
   const { controlPlaneId, state } = useActiveDirectories();
   const [selection, setSelection] = useState<{ instanceId?: string; agent?: string; cwd?: string }>({});
@@ -101,31 +102,29 @@ export default function NewAiSessionRoute() {
     }
   };
 
-  return <>
-    <Stack.Screen options={{ title: t('nav.newSession') }} />
-    <NewSessionForm
-      key={selectedInstance?.id || 'no-instance'}
-      instances={state.instances}
-      selectedInstance={selectedInstance}
-      folders={folderState.nodeId === selectedInstance?.nodeId ? folderState.folders : []}
-      selectedInstanceId={selectedInstanceId}
-      selectedAgent={agent}
-      cwd={cwd}
-      message={message}
-      permissionMode={permissionMode}
-      busy={busy || savingPermission}
-      disabled={busy || savingPermission || Boolean(guidance) || !agent || !cwd.trim() || !message.trim()}
-      error={error || guidance}
-      onInstanceChange={(instanceId) => {
-        const instance = state.instances.find((candidate) => candidate.id === instanceId);
-        setSelection({ instanceId, agent: instance?.availableAgents[0]?.id, cwd: instance?.workspace.path ?? '' });
-        setError(undefined);
-      }}
-      onAgentChange={(nextAgent) => setSelection({ instanceId: selectedInstanceId, agent: nextAgent, cwd })}
-      onCwdChange={(nextCwd) => setSelection({ instanceId: selectedInstanceId, agent, cwd: nextCwd })}
-      onMessageChange={setMessage}
-      onPermissionModeChange={(next) => { void updatePermissionMode(next); }}
-      onCreate={() => { void create(); }}
-    />
-  </>;
+  return <NewSessionForm
+    key={selectedInstance?.id || 'no-instance'}
+    instances={state.instances}
+    selectedInstance={selectedInstance}
+    folders={folderState.nodeId === selectedInstance?.nodeId ? folderState.folders : []}
+    selectedInstanceId={selectedInstanceId}
+    selectedAgent={agent}
+    cwd={cwd}
+    message={message}
+    permissionMode={permissionMode}
+    busy={busy || savingPermission}
+    disabled={busy || savingPermission || Boolean(guidance) || !agent || !cwd.trim() || !message.trim()}
+    error={error || guidance}
+    visualBalanceInset={newSessionVisualBalanceInset(Platform.OS, insets.top)}
+    onInstanceChange={(instanceId) => {
+      const instance = state.instances.find((candidate) => candidate.id === instanceId);
+      setSelection({ instanceId, agent: instance?.availableAgents[0]?.id, cwd: instance?.workspace.path ?? '' });
+      setError(undefined);
+    }}
+    onAgentChange={(nextAgent) => setSelection({ instanceId: selectedInstanceId, agent: nextAgent, cwd })}
+    onCwdChange={(nextCwd) => setSelection({ instanceId: selectedInstanceId, agent, cwd: nextCwd })}
+    onMessageChange={setMessage}
+    onPermissionModeChange={(next) => { void updatePermissionMode(next); }}
+    onCreate={() => { void create(); }}
+  />;
 }

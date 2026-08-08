@@ -23,6 +23,21 @@ export const AppSessionStatusSchema = z.enum([
   "unknown",
 ]);
 
+export const AppSessionAccessModeSchema = z.enum(["tty", "vnc", "web"]);
+
+export const AppSessionAccessLeaseSchema = z
+  .object({
+    mode: AppSessionAccessModeSchema,
+    url: z.string().trim().min(1).max(4096),
+    token: z.string().trim().min(1).max(512),
+    expiresAt: z.string().datetime(),
+  })
+  .strict();
+
+export const AppSessionAccessRevocationSchema = z
+  .object({ revoked: z.boolean() })
+  .strict();
+
 const HIDDEN_APP_SESSION_STATUSES = new Set<AppSessionStatus>(["stopped", "failed", "exited", "closed", "terminated"]);
 
 export const AppSessionBindingSchema = z
@@ -250,6 +265,13 @@ export function isVisibleAppSessionStatus(status: string | undefined) {
   return !HIDDEN_APP_SESSION_STATUSES.has(normalizeAppSessionStatus(status));
 }
 
+export function appSessionAccessMode(session: Record<string, unknown>): AppSessionAccessMode | undefined {
+  if (session.kind === "tty") return "tty";
+  if (session.kind === "gui") return "vnc";
+  if (session.kind === "web") return "web";
+  return undefined;
+}
+
 export function appSessionBindingKeys(session: Record<string, unknown>) {
   return [
     ...normalizeAppSessionRecord(session).bindings.map(appSessionBindingKey),
@@ -336,6 +358,8 @@ export function emptyAppSessionsSnapshot(now = new Date().toISOString()) {
 
 export type AppSessionRecord = z.infer<typeof AppSessionRecordSchema>;
 export type AppSessionStatus = z.infer<typeof AppSessionStatusSchema>;
+export type AppSessionAccessMode = z.infer<typeof AppSessionAccessModeSchema>;
+export type AppSessionAccessLease = z.infer<typeof AppSessionAccessLeaseSchema>;
 export type AppSessionBinding = z.infer<typeof AppSessionBindingSchema>;
 export type AppSessionsSnapshot = z.infer<typeof AppSessionsSnapshotSchema>;
 export type AppSessionsState = z.infer<typeof AppSessionsStateSchema>;

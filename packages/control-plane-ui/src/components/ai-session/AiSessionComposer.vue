@@ -47,6 +47,7 @@ const props = defineProps<{
   permissionKey?: string;
   permissionMode?: AiSessionPermissionMode;
   defaultPermissionMode?: AiSessionPermissionMode;
+  editingLabel?: string;
 }>();
 
 const emit = defineEmits<{
@@ -57,6 +58,7 @@ const emit = defineEmits<{
   (event: "run", permissionMode?: AiSessionPermissionMode): void;
   (event: "steer"): void;
   (event: "command", value: AiSessionCommandInput): void;
+  (event: "cancelEdit"): void;
 }>();
 const { locale, t } = useI18n();
 
@@ -83,7 +85,8 @@ const commandOpen = ref(false);
 const commandQuery = ref("");
 const activeCommandIndex = ref(0);
 const commandCandidates = computed(() => matchingCommands(commandQuery.value));
-const overlayOpen = computed(() => !props.busy && (mentions.open.value || commandOpen.value));
+const editing = computed(() => Boolean(props.editingLabel));
+const overlayOpen = computed(() => !editing.value && !props.busy && (mentions.open.value || commandOpen.value));
 const mentionPopoverRadius = ref("20px");
 const mentionKinds = ["plugin", "skill", "file", "directory", "app"] as const;
 const groupedMentionCandidates = computed(() => mentionKinds.map((kind) => ({
@@ -93,11 +96,11 @@ const groupedMentionCandidates = computed(() => mentionKinds.map((kind) => ({
   diagnostics: mentions.diagnostics.value.filter((diagnostic) => diagnostic.category === (kind === "skill" ? "skills" : kind === "plugin" ? "plugins" : kind === "app" ? "apps" : "files")),
 })).filter((group) => group.candidates.length || group.diagnostics.length));
 const hasDraft = computed(() => props.modelValue.trim().length > 0 || attachments.value.length > 0);
-const actionKind = computed(() => hasDraft.value || !props.canInterrupt ? "send" : "stop");
-const canRun = computed(() => hasDraft.value || (!props.busy && props.canInterrupt));
-const canSteer = computed(() => props.busy && hasDraft.value);
-const actionTitle = computed(() => actionKind.value === "stop" ? t("sessions.composer.stopTurn") : t("sessions.composer.send"));
-const commandLauncherDisabled = computed(() => Boolean(props.busy || props.modelValue.length || props.mentionContext?.provider !== "codex"));
+const actionKind = computed(() => editing.value ? "save" : hasDraft.value || !props.canInterrupt ? "send" : "stop");
+const canRun = computed(() => editing.value ? props.modelValue.trim().length > 0 : hasDraft.value || (!props.busy && props.canInterrupt));
+const canSteer = computed(() => !editing.value && props.busy && hasDraft.value);
+const actionTitle = computed(() => actionKind.value === "stop" ? t("sessions.composer.stopTurn") : actionKind.value === "save" ? t("sessions.composer.saveQueuedMessage") : t("sessions.composer.send"));
+const commandLauncherDisabled = computed(() => Boolean(editing.value || props.busy || props.modelValue.length || props.mentionContext?.provider !== "codex"));
 const permissionProvider = computed(() => props.provider || props.mentionContext?.provider);
 const storedPermissionMode = useAiSessionPermissionMode(
   () => props.permissionKey || props.mentionContext?.sessionId || "",
@@ -143,6 +146,12 @@ function textareaElement() {
       ? value.$el
       : undefined;
 }
+
+function focus() {
+  void nextTick(() => textareaElement()?.focus());
+}
+
+defineExpose({ focus });
 
 function composerMaxHeight(composer: HTMLFormElement) {
   const maxHeight = Number.parseFloat(getComputedStyle(composer).maxHeight);
@@ -301,6 +310,7 @@ function formatAttachmentSize(size: number) {
 }
 
 function handlePaste(event: ClipboardEvent) {
+  if (editing.value) return;
   if (props.busy) {
     return;
   }
@@ -313,7 +323,7 @@ function handlePaste(event: ClipboardEvent) {
 }
 
 function handleDrop(event: DragEvent) {
-  if (props.busy) {
+  if (props.busy || editing.value) {
     return;
   }
   const files = Array.from(event.dataTransfer?.files || []);
@@ -326,7 +336,7 @@ function handleDrop(event: DragEvent) {
 
 function submit() {
   if (!props.busy && canRun.value) {
-    const command = parseAiSessionCommand(props.modelValue.trim(), commandTrigger.value, props.mentionContext?.provider);
+    const command = editing.value ? undefined : parseAiSessionCommand(props.modelValue.trim(), commandTrigger.value, props.mentionContext?.provider);
     if (command) {
       emit("command", command);
       return;
@@ -630,7 +640,14 @@ watch(() => props.busy, (busy) => {
       </PopoverContent>
     </Popover>
     <div class="ai-session-composer__toolbar">
-      <div class="ai-session-composer__leading">
+      <div v-if="editingLabel" class="ai-session-composer__editing">
+        <Pencil :size="15" />
+        <span>{{ editingLabel }}</span>
+        <button type="button" :title="t('sessions.composer.cancelQueuedEdit')" :aria-label="t('sessions.composer.cancelQueuedEdit')" :disabled="busy" @click="emit('cancelEdit')">
+          <X :size="15" />
+        </button>
+      </div>
+      <div v-else class="ai-session-composer__leading">
         <button
           type="button"
           class="ai-session-composer__tool"
@@ -692,6 +709,7 @@ watch(() => props.busy, (busy) => {
           :title="actionTitle"
         >
           <ArrowUp v-if="actionKind === 'send'" :size="18" />
+          <Check v-else-if="actionKind === 'save'" :size="17" />
           <Square v-else :size="16" />
         </button>
       </div>
@@ -900,6 +918,40 @@ watch(() => props.busy, (busy) => {
   min-width: 0;
   align-items: center;
   gap: 4px;
+}
+
+.ai-session-composer__editing {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  padding-left: 8px;
+  color: var(--ai-composer-muted, currentColor);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ai-session-composer__editing span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-session-composer__editing button {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  place-items: center;
+}
+
+.ai-session-composer__editing button:hover {
+  background: var(--ai-composer-hover, color-mix(in srgb, currentColor 8%, transparent));
 }
 
 .ai-session-composer__permission-trigger {

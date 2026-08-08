@@ -118,23 +118,32 @@ function normalizeActions(value: unknown): AiSessionStatus["actions"] {
 }
 
 export function emptyAiSessionQueue(): AiSessionStatus["queue"] {
-  return { pendingCount: 0, items: [] };
+  return { revision: 0, pendingCount: 0, items: [] };
 }
 
-export function normalizeAiSessionQueueItems(items: AiSessionQueuedMessage[]): AiSessionStatus["queue"] {
+export function normalizeAiSessionQueueItems(items: AiSessionQueuedMessage[], revision: unknown = 0): AiSessionStatus["queue"] {
   const normalizedItems = items
     .map(normalizeQueuedMessage)
     .filter((item): item is AiSessionQueuedMessage => Boolean(item))
-    .slice(0, 100);
+    .slice(0, 100)
+    .sort((left, right) => queueStatusRank(left.status) - queueStatusRank(right.status));
   return {
+    revision: normalizeNonNegativeInteger(revision),
     pendingCount: normalizedItems.filter((item) => item.status === "queued" || item.status === "sending").length,
     items: normalizedItems,
   };
 }
 
 export function normalizeAiSessionQueue(value: unknown): AiSessionStatus["queue"] {
-  const record = value && typeof value === "object" && !Array.isArray(value) ? value as { items?: unknown } : {};
-  return normalizeAiSessionQueueItems(Array.isArray(record.items) ? record.items as AiSessionQueuedMessage[] : []);
+  const record = value && typeof value === "object" && !Array.isArray(value) ? value as { revision?: unknown; items?: unknown } : {};
+  return normalizeAiSessionQueueItems(
+    Array.isArray(record.items) ? record.items as AiSessionQueuedMessage[] : [],
+    record.revision,
+  );
+}
+
+function queueStatusRank(status: AiSessionQueuedMessage["status"]) {
+  return status === "sending" ? 0 : status === "queued" ? 1 : 2;
 }
 
 function normalizeQueuedMessage(value: unknown): AiSessionQueuedMessage | undefined {

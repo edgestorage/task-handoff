@@ -1,4 +1,4 @@
-import { activeMobileStreamingMessage, MobileAiSessionStore, mobileControlPlaneQueryKeys } from '../src/ai-sessions/store';
+import { activeMobileStreamingMessage, MOBILE_MESSAGE_TURN_LIMIT, MobileAiSessionStore, mobileControlPlaneQueryKeys } from '../src/ai-sessions/store';
 import { MobileAiSessionController } from '../src/ai-sessions/controller';
 import {
   applyControlPlaneAiSessionStreamEvent,
@@ -30,7 +30,7 @@ function snapshot(instanceId: string, sessionId: string): ControlPlaneAiSessions
           phase: 'unknown',
           startedAt: updatedAt,
           updatedAt,
-          queue: { pendingCount: 0, items: [] },
+          queue: { revision: 0, pendingCount: 0, items: [] },
           toolCallsSinceLastMessage: 0,
           subAgents: [],
           unread: false,
@@ -254,7 +254,7 @@ describe('MobileAiSessionStore identity isolation', () => {
     expect(nativeStore.profile('cp-contract').snapshot?.instances[0]).toEqual(webEntry);
   });
 
-  test('bounds streaming messages per Control Plane profile', () => {
+  test('bounds streaming messages to the newest 50 turns per Control Plane profile', () => {
     const store = new MobileAiSessionStore();
     store.replaceSnapshot('cp-bounded', snapshot('instance-1', 'session-1'));
     for (let index = 0; index < 205; index += 1) {
@@ -264,7 +264,76 @@ describe('MobileAiSessionStore identity isolation', () => {
         generatedAt: new Date(Date.parse('2026-08-05T00:10:00.000Z') + index).toISOString(),
       });
     }
-    expect(Object.keys(store.profile('cp-bounded').messages)).toHaveLength(200);
+    const messages = Object.values(store.profile('cp-bounded').messages);
+    expect(new Set(messages.map((message) => message.turnId)).size).toBe(MOBILE_MESSAGE_TURN_LIMIT);
+    expect(messages.at(-1)?.turnId).toBe('turn-204');
+  });
+
+  test('snapshot recovery restores only active streaming turns', () => {
+    const initial = snapshot('instance-many', 'session-many');
+    const template = initial.instances[0].aiSessions.sessions[0];
+    initial.instances[0].aiSessions.sessions = Array.from({ length: 80 }, (_, index) => {
+      const active = index === 79;
+      const turnId = active ? 'turn-active' : `turn-${index}`;
+      return {
+        ...template,
+        id: `session-${index}`,
+        providerSessionId: `provider-${index}`,
+        status: active ? 'running' as const : 'idle' as const,
+        phase: active ? 'responding' as const : 'unknown' as const,
+        activeTurnId: turnId,
+        turns: [{
+          id: turnId,
+          userPrompt: `Prompt ${index}`,
+          lastMessage: `Response ${index}`,
+          lastMessageItemId: `item-${index}`,
+          status: active ? 'running' as const : 'completed' as const,
+          phase: 'responding' as const,
+          revision: 1,
+          startedAt: new Date(Date.parse(initial.updatedAt) + index).toISOString(),
+          updatedAt: new Date(Date.parse(initial.updatedAt) + index).toISOString(),
+        }],
+      };
+    });
+    const store = new MobileAiSessionStore();
+
+    store.replaceSnapshot('cp-many', initial);
+
+    expect(Object.values(store.profile('cp-many').messages)).toEqual([
+      expect.objectContaining({ turnId: 'turn-active', status: 'streaming', receivedText: 'Response 79' }),
+    ]);
+  });
+
+  test('restores an active streaming message from an authoritative snapshot before later deltas arrive', () => {
+    const initial = snapshot('instance-snapshot', 'session-snapshot');
+    const current = initial.instances[0].aiSessions.sessions[0];
+    current.status = 'running';
+    current.phase = 'responding';
+    current.activeTurnId = 'turn-snapshot';
+    current.turns = [{
+      id: 'turn-snapshot',
+      userPrompt: 'Explain the result',
+      lastMessage: 'Partial response',
+      lastMessageItemId: 'item-snapshot',
+      status: 'running',
+      phase: 'responding',
+      revision: 1,
+      startedAt: initial.updatedAt,
+      updatedAt: initial.updatedAt,
+    }];
+    const store = new MobileAiSessionStore();
+
+    store.replaceSnapshot('cp-snapshot', initial);
+    const restored = Object.values(store.profile('cp-snapshot').messages);
+
+    expect(restored).toEqual([expect.objectContaining({
+      instanceId: 'instance-snapshot',
+      sessionId: 'session-snapshot',
+      turnId: 'turn-snapshot',
+      itemId: 'item-snapshot',
+      receivedText: 'Partial response',
+      status: 'streaming',
+    })]);
   });
 
   test('keeps the newly created assistant item active when an older item receives a late delta', () => {

@@ -1,8 +1,8 @@
 import type { ControlledInstance } from "@task-handoff/protocol/control-plane";
-import type { AppSessionsSnapshot } from "@task-handoff/protocol/app-sessions";
+import { appSessionAccessMode, type AppSessionAccessMode, type AppSessionsSnapshot } from "@task-handoff/protocol/app-sessions";
 import { ExpiringTokenStore } from "../tokens/expiring-token-store.ts";
 
-export type AppAccessMode = "tty" | "vnc" | "web";
+export type AppAccessMode = AppSessionAccessMode;
 
 export type AppAccessToken = {
   token: string;
@@ -42,28 +42,52 @@ export class AppAccessService {
     });
   }
 
+  async createSessionToken(input: { instanceId: string; sessionId: string; ttlMs?: number }) {
+    await this.requireInstance(input.instanceId);
+    const session = await this.requireSession(input.instanceId, input.sessionId);
+    const mode = appSessionAccessMode(session);
+    if (mode !== "vnc") {
+      const error = new Error("This app session does not expose a VNC view.");
+      Object.assign(error, { statusCode: 409, code: "APP_SESSION_ACCESS_UNAVAILABLE" });
+      throw error;
+    }
+    if (session.status !== "running") {
+      const error = new Error("The app session is not running.");
+      Object.assign(error, { statusCode: 409, code: "APP_SESSION_NOT_RUNNING" });
+      throw error;
+    }
+    return this.createToken({ ...input, mode });
+  }
+
   resolveToken(token: string, mode?: AppAccessMode) {
     return this.tokens.resolve(token, (record) => !mode || record.mode === mode);
+  }
+
+  revokeToken(token: string, expected: { instanceId: string; sessionId: string }) {
+    this.tokens.revoke(token, (record) => record.instanceId === expected.instanceId && record.sessionId === expected.sessionId);
   }
 
   async proxyTarget(token: string, mode: AppAccessMode, suffix = "") {
     const access = this.resolveToken(token, mode);
     const instance = await this.requireInstance(access.instanceId);
-    const appSessions = await this.listAppSessions();
-    const session = appSessions.instances
-      .find((entry) => entry.instanceId === access.instanceId)
-      ?.appSessions.sessions.find((entry) => stringValue(entry.id) === access.sessionId);
-    if (!session) {
-      const error = new Error("App session was not found.");
-      Object.assign(error, { statusCode: 404, code: "APP_SESSION_NOT_FOUND" });
-      throw error;
-    }
+    const session = await this.requireSession(access.instanceId, access.sessionId);
     return {
       access,
       instance,
       session,
       path: appSessionTokenProxyPath(mode, access.sessionId, session, suffix),
     };
+  }
+
+  private async requireSession(instanceId: string, sessionId: string) {
+    const appSessions = await this.listAppSessions();
+    const session = appSessions.instances
+      .find((entry) => entry.instanceId === instanceId)
+      ?.appSessions.sessions.find((entry) => stringValue(entry.id) === sessionId);
+    if (session) return session;
+    const error = new Error("App session was not found.");
+    Object.assign(error, { statusCode: 404, code: "APP_SESSION_NOT_FOUND" });
+    throw error;
   }
 }
 

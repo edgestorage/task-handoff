@@ -3,24 +3,35 @@ import { Alert, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Te
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { TerminalView, type TerminalViewRef } from 'expo-libghostty';
 import { MenuView, type MenuAction } from '@expo/ui/community/menu';
+import { WebView } from 'react-native-webview';
+import { appSessionAccessMode, type AppSessionAccessLease } from '@task-handoff/protocol/app-sessions';
 
 import { useActiveAppSessions } from '../../../src/app-sessions/use-active-app-sessions';
+import { AppSessionAccessLeaseController, shouldRenewAppSessionAccessAfterHttpStatus } from '../../../src/app-sessions/access-lease';
 import { canCloseAppSession } from '../../../src/app-sessions/status';
+import { AppSessionTerminalInputNormalizer } from '../../../src/app-sessions/terminal-input';
+import { APP_SESSION_TERMINAL_FONT_SIZE, appSessionTerminalKeyboardBehavior, appSessionTerminalKeyboardOffset } from '../../../src/app-sessions/terminal-layout';
 import { SystemIcon } from '../../../src/components/SystemIcon';
 import { useMobileTheme } from '../../../src/components/theme';
 import type { MobileAppSessionTtyConnection } from '../../../src/control-plane/transport';
 import { useI18n } from '../../../src/i18n';
+import { subscribeToAppLifecycle } from '../../../src/platform/lifecycle';
+import { subscribeToNetworkState } from '../../../src/platform/network';
 
-export default function AppSessionTerminalRoute() {
+type ActiveAppSessionAccess = AppSessionAccessLease & { instanceId: string; sessionId: string };
+
+export default function AppSessionRoute() {
   const params = useLocalSearchParams<{ instanceId: string; sessionId: string }>();
   const instanceId = first(params.instanceId);
   const sessionId = first(params.sessionId);
   const router = useRouter();
-  const { closeSession, renameSession, state, transport } = useActiveAppSessions();
+  const { closeSession, createAccess, renameSession, revokeAccess, state, transport } = useActiveAppSessions();
   const { colors } = useMobileTheme();
   const { t } = useI18n();
   const terminal = useRef<TerminalViewRef>(null);
+  const terminalInput = useRef(new AppSessionTerminalInputNormalizer());
   const connection = useRef<MobileAppSessionTtyConnection | undefined>(undefined);
+  const renewAccessRef = useRef<(invalidateCurrent?: boolean) => void>(() => undefined);
   const [status, setStatus] = useState<'connecting' | 'connected' | 'closed' | 'exited' | 'error'>('connecting');
   const [error, setError] = useState('');
   const [closing, setClosing] = useState(false);
@@ -28,9 +39,12 @@ export default function AppSessionTerminalRoute() {
   const [renameDraft, setRenameDraft] = useState('');
   const [renameError, setRenameError] = useState('');
   const [renaming, setRenaming] = useState(false);
+  const [access, setAccess] = useState<ActiveAppSessionAccess>();
   const session = useMemo(() => state.snapshot?.instances
     .find((entry) => entry.instanceId === instanceId)
     ?.appSessions.sessions.find((entry) => entry.id === sessionId), [instanceId, sessionId, state.snapshot]);
+  const accessMode = session ? appSessionAccessMode(session) : undefined;
+  const activeAccess = session?.status === 'running' && access?.instanceId === instanceId && access.sessionId === sessionId ? access : undefined;
 
   useEffect(() => {
     if (!transport || !instanceId || !sessionId || session?.kind !== 'tty' || session.status !== 'running') return;
@@ -55,7 +69,51 @@ export default function AppSessionTerminalRoute() {
     };
   }, [instanceId, session?.kind, session?.status, sessionId, transport]);
 
-  const title = session?.title || session?.appId || t('nav.terminal');
+  useEffect(() => {
+    if (!instanceId || !sessionId || accessMode !== 'vnc' || session?.status !== 'running') return;
+    let foreground = false;
+    let previousPhase: string | undefined;
+    let previousConnected: boolean | undefined;
+    const leases = new AppSessionAccessLeaseController({
+      create: async () => {
+        const created = await createAccess(instanceId, sessionId);
+        if (created.mode !== 'vnc') throw new Error('The Control Plane returned an unexpected App Session access mode.');
+        return created;
+      },
+      revoke: (token) => revokeAccess(instanceId, sessionId, token),
+      onError: (cause) => {
+        if (!cause) {
+          setError('');
+          return;
+        }
+        setError(cause instanceof Error ? cause.message : t('appSessions.viewUnavailable'));
+        setStatus('error');
+      },
+      onLease: (created) => {
+        setAccess(created ? { ...created, instanceId, sessionId } : undefined);
+        if (created) setStatus('connecting');
+      },
+    });
+    renewAccessRef.current = (invalidateCurrent) => { void leases.renew(invalidateCurrent); };
+    const unsubscribeLifecycle = subscribeToAppLifecycle((phase) => {
+      foreground = phase === 'active';
+      if (phase === 'active' && previousPhase !== 'active') void leases.renew();
+      previousPhase = phase;
+    });
+    const unsubscribeNetwork = subscribeToNetworkState((network) => {
+      if (foreground && network.connected && previousConnected === false) void leases.renew();
+      previousConnected = network.connected;
+    });
+    void leases.start();
+    return () => {
+      renewAccessRef.current = () => undefined;
+      unsubscribeLifecycle();
+      unsubscribeNetwork();
+      leases.stop();
+    };
+  }, [accessMode, createAccess, instanceId, revokeAccess, session?.status, sessionId, t]);
+
+  const title = session?.title || session?.appId || t('nav.appSessions');
   const closeDisabled = closing || state.sync.phase !== 'ready' || session?.status === 'stopping';
   const renameDisabled = renaming || state.sync.phase !== 'ready';
   const openRename = () => {
@@ -117,22 +175,59 @@ export default function AppSessionTerminalRoute() {
     </MenuView> : undefined,
   }} />;
 
-  if (!session || session.kind !== 'tty') {
-    return <>{header}<View style={[styles.unavailable, { backgroundColor: colors.code }]}><Text style={[styles.unavailableText, { color: colors.codeText }]}>{t('appSessions.terminalUnavailable')}</Text></View></>;
+  if (!session || (accessMode !== 'tty' && accessMode !== 'vnc')) {
+    return <>{header}<View style={[styles.unavailable, { backgroundColor: colors.code }]}><Text style={[styles.unavailableText, { color: colors.codeText }]}>{t('appSessions.viewUnavailable')}</Text></View></>;
   }
 
   const statusText = error || (status === 'connecting' ? t('appSessions.terminalConnecting') : status === 'connected' ? t('appSessions.terminalConnected') : status === 'exited' ? t('appSessions.terminalExited') : t('appSessions.terminalClosed'));
-  return <>{header}<View style={[styles.screen, { backgroundColor: colors.code }]}>
-    <TerminalView
-      ref={terminal}
-      fontSize={13}
-      onInput={({ nativeEvent }) => connection.current?.sendInput(nativeEvent.text)}
-      onResize={({ nativeEvent }) => connection.current?.resize(nativeEvent.cols, nativeEvent.rows)}
-      style={styles.terminal}
-      theme={{ background: colors.code, foreground: colors.codeText, cursorColor: colors.sessionActive, selectionBackground: colors.primarySoft }}
-    />
-    {status !== 'connected' ? <View pointerEvents="none" style={[styles.status, { backgroundColor: colors.surface }]}><Text numberOfLines={2} style={[styles.statusText, { color: status === 'error' ? colors.error : colors.textMuted }]}>{statusText}</Text></View> : null}
-  </View><Modal animationType="fade" onRequestClose={() => !renaming && setRenameOpen(false)} transparent visible={renameOpen}>
+  const content = accessMode === 'tty' ? <TerminalView
+    ref={terminal}
+    fontSize={APP_SESSION_TERMINAL_FONT_SIZE}
+    onInput={({ nativeEvent }) => {
+      const input = terminalInput.current.push(nativeEvent.text);
+      if (input) connection.current?.sendInput(input);
+    }}
+    onResize={({ nativeEvent }) => connection.current?.resize(nativeEvent.cols, nativeEvent.rows)}
+    style={styles.terminal}
+    theme={{ background: colors.code, foreground: colors.codeText, cursorColor: colors.sessionActive, selectionBackground: colors.primarySoft }}
+  /> : activeAccess ? <WebView
+    key={activeAccess.token}
+    allowsFullscreenVideo
+    domStorageEnabled
+    javaScriptEnabled
+    onError={({ nativeEvent }) => {
+      setError(nativeEvent.description || t('appSessions.viewUnavailable'));
+      setStatus('error');
+    }}
+    onHttpError={({ nativeEvent }) => {
+      if (shouldRenewAppSessionAccessAfterHttpStatus(nativeEvent.statusCode)) {
+        setError('');
+        setStatus('connecting');
+        renewAccessRef.current(true);
+        return;
+      }
+      setError(`${t('appSessions.viewUnavailable')} (${nativeEvent.statusCode})`);
+      setStatus('error');
+    }}
+    onLoadEnd={() => setStatus((current) => current === 'error' ? current : 'connected')}
+    onLoadStart={() => setStatus('connecting')}
+    onShouldStartLoadWithRequest={({ url }) => sameOriginOrLocalDocument(url, activeAccess.url)}
+    originWhitelist={[new URL(activeAccess.url).origin]}
+    sharedCookiesEnabled={false}
+    source={{ uri: activeAccess.url }}
+    style={styles.webView}
+    thirdPartyCookiesEnabled={false}
+  /> : null;
+  const sessionContent = <>{content}
+    {status !== 'connected' ? <View pointerEvents="none" style={[styles.status, { backgroundColor: colors.surface }]}><Text numberOfLines={2} style={[styles.statusText, { color: status === 'error' ? colors.error : colors.textMuted }]}>{statusText}</Text></View> : null}</>;
+  return <>{header}{accessMode === 'tty' ? <View style={[styles.screen, styles.terminalKeyboardBackground]} testID="app-session-terminal-keyboard-background">
+    <KeyboardAvoidingView
+      behavior={appSessionTerminalKeyboardBehavior(Platform.OS)}
+      keyboardVerticalOffset={appSessionTerminalKeyboardOffset(Platform.OS, Platform.Version)}
+      style={[styles.screen, styles.terminalKeyboardBackground]}
+      testID="app-session-terminal-keyboard-area"
+    >{sessionContent}</KeyboardAvoidingView>
+  </View> : <View style={[styles.screen, { backgroundColor: colors.code }]}>{sessionContent}</View>}<Modal animationType="fade" onRequestClose={() => !renaming && setRenameOpen(false)} transparent visible={renameOpen}>
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.renameOverlay}>
       <Pressable disabled={renaming} onPress={() => setRenameOpen(false)} style={styles.renameBackdrop} />
       <View style={[styles.renameDialog, { backgroundColor: colors.surface }]}>
@@ -164,9 +259,20 @@ function first(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] || '' : value || '';
 }
 
+function sameOriginOrLocalDocument(url: string, accessUrl: string) {
+  if (url === 'about:blank') return true;
+  try {
+    return new URL(url).origin === new URL(accessUrl).origin;
+  } catch {
+    return false;
+  }
+}
+
 const styles = StyleSheet.create({
   screen: { flex: 1 },
   terminal: { flex: 1 },
+  terminalKeyboardBackground: { backgroundColor: '#000000' },
+  webView: { flex: 1 },
   status: { borderRadius: 9, left: 12, maxWidth: '85%', paddingHorizontal: 10, paddingVertical: 7, position: 'absolute', top: 10 },
   statusText: { fontSize: 12, lineHeight: 16 },
   menuButton: { alignItems: 'center', height: 34, justifyContent: 'center', width: 34 },

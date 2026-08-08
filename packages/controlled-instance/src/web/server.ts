@@ -93,6 +93,7 @@ import {
   AiSessionCommandResultSchema,
   AiSessionMentionFileSearchInputSchema,
   AiSessionQueueReorderInputSchema,
+  AiSessionQueueEditInputSchema,
   AiSessionResumeResultSchema,
 } from "@task-handoff/protocol/ai-sessions";
 import {
@@ -1493,10 +1494,21 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     }
   });
 
+  app.patch<{ Params: { id: string; queueId: string }; Body: unknown }>("/api/ai-sessions/:id/queue/:queueId", async (request, reply) => {
+    try {
+      const body = AiSessionQueueEditInputSchema.parse(request.body || {});
+      const session = aiSessionController.editQueuedMessage(request.params.id, request.params.queueId, body.expectedRevision, body.message);
+      publishAiSessionSnapshot("control-action");
+      return { data: session };
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
   app.patch<{ Params: { id: string }; Body: unknown }>("/api/ai-sessions/:id/queue/reorder", async (request, reply) => {
     try {
       const body = AiSessionQueueReorderInputSchema.parse(request.body || {});
-      const session = aiSessionController.reorderQueuedMessages(request.params.id, body.queueIds);
+      const session = aiSessionController.reorderQueuedMessages(request.params.id, body.expectedRevision, body.queueIds);
       publishAiSessionSnapshot("control-action");
       return { data: session };
     } catch (error: unknown) {

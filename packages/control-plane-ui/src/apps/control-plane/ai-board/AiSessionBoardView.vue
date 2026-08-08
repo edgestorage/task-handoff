@@ -165,6 +165,7 @@
 
       <Transition name="ai-board-floating-dock-fade">
         <AiSessionFloatingDock
+          ref="floatingDockEl"
           v-if="selectedCard"
           v-model:collapsed="detailCollapsed"
           :busy="aiSessionActionBusy"
@@ -173,6 +174,7 @@
           :card="selectedCard"
           :attachments="messageAttachments"
           :draft="messageDraft"
+          :editing-label="queueComposerEdit ? t('sessions.composer.editingQueuedMessage') : undefined"
           :mention-bindings="messageMentionBindings"
           :mention-context="mentionContext"
           :mention-trigger="mentionTrigger"
@@ -184,11 +186,14 @@
           @next-prompt="nextPrompt(selectedCard)"
           @open-ai-session-app="openCardApp"
           @previous-prompt="previousPrompt(selectedCard)"
+          @edit-queued-message="editSelectedQueuedMessage"
           @remove-queued-message="removeSelectedQueuedMessage"
+          @reorder-queued-messages="reorderSelectedQueuedMessages"
           @resolve-approval="resolveSelectedApproval"
           @retry-queued-message="retrySelectedQueuedMessage"
           @run="runSelectedSessionAction"
           @command="executeSelectedSessionCommand"
+          @cancel-edit="cancelQueueComposerEdit"
           @steer="steerMessageDraft"
           @steer-queued-message="steerSelectedQueuedMessage"
           @update:attachments="messageAttachments = $event"
@@ -201,7 +206,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { compareNaturalText, compareTechnicalIdentifiers } from "../../../i18n/presentation";
 import type { SupportedLocale } from "../../../i18n/locale";
@@ -209,7 +214,7 @@ import { translateApiError } from "../../../i18n/apiError";
 import { useEventListener } from "@vueuse/core";
 import { Columns3, LayoutGrid, Search, SlidersHorizontal } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
-import { closeAiSession, interruptAiSession, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, resolveAiSessionApproval, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, uploadAiSessionAttachment, useControlPlaneSettingsQuery } from "../../../api/queries";
+import { closeAiSession, editAiSessionQueuedMessage, interruptAiSession, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, uploadAiSessionAttachment, useControlPlaneSettingsQuery } from "../../../api/queries";
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { executeAiSessionCommand } from "../../../api/ai-session-commands";
 import type { AiSessionCommandInput, AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
@@ -289,6 +294,14 @@ const detailCollapsed = ref(false);
 const messageDraft = ref("");
 const messageAttachments = ref<AiSessionComposerAttachment[]>([]);
 const messageMentionBindings = ref<AiSessionMentionBinding[]>([]);
+const floatingDockEl = ref<InstanceType<typeof AiSessionFloatingDock>>();
+const queueComposerEdit = ref<{
+  queueId: string;
+  originalMessage: string;
+  previousDraft: string;
+  previousAttachments: AiSessionComposerAttachment[];
+  previousMentionBindings: AiSessionMentionBinding[];
+}>();
 const aiSessionActionBusy = ref(false);
 const stoppingAppSessionKey = ref("");
 const queryClient = useQueryClient();
@@ -656,6 +669,7 @@ function selectCard(key: string) {
 }
 
 function clearSelectedCard() {
+  queueComposerEdit.value = undefined;
   selectedCardKey.value = "";
   messageDraft.value = "";
   messageAttachments.value = [];
@@ -682,6 +696,10 @@ async function refreshBoard() {
 async function runSelectedSessionAction(permissionMode?: AiSessionPermissionMode) {
   const card = selectedCard.value;
   if (!card || aiSessionActionBusy.value || (!messageDraft.value.trim() && !messageAttachments.value.length && !canInterrupt(card.session))) {
+    return;
+  }
+  if (queueComposerEdit.value) {
+    await saveSelectedQueuedMessage();
     return;
   }
   if (messageDraft.value.trim() || messageAttachments.value.length) {
@@ -808,6 +826,56 @@ async function removeSelectedQueuedMessage(queueId: string) {
   await runSelectedQueueAction((card) => removeAiSessionQueuedMessage(card.instance.id, card.session.id, queueId), t("sessions.panel.removeQueuedFailed"));
 }
 
+function editSelectedQueuedMessage(payload: { queueId: string; message: string }) {
+  const previous = queueComposerEdit.value;
+  queueComposerEdit.value = {
+    queueId: payload.queueId,
+    originalMessage: payload.message,
+    previousDraft: previous?.previousDraft ?? messageDraft.value,
+    previousAttachments: previous?.previousAttachments ?? messageAttachments.value,
+    previousMentionBindings: previous?.previousMentionBindings ?? messageMentionBindings.value,
+  };
+  messageDraft.value = payload.message;
+  messageAttachments.value = [];
+  messageMentionBindings.value = [];
+  detailCollapsed.value = false;
+  void nextTick(() => floatingDockEl.value?.focusComposer());
+}
+
+function cancelQueueComposerEdit() {
+  const edit = queueComposerEdit.value;
+  if (!edit) return;
+  queueComposerEdit.value = undefined;
+  messageDraft.value = edit.previousDraft;
+  messageAttachments.value = edit.previousAttachments;
+  messageMentionBindings.value = edit.previousMentionBindings;
+}
+
+async function saveSelectedQueuedMessage() {
+  const card = selectedCard.value;
+  const edit = queueComposerEdit.value;
+  const message = messageDraft.value.trim();
+  if (!card || !edit || !message || aiSessionActionBusy.value) return;
+  if (message === edit.originalMessage.trim()) {
+    cancelQueueComposerEdit();
+    return;
+  }
+  aiSessionActionBusy.value = true;
+  try {
+    await editAiSessionQueuedMessage(card.instance.id, card.session.id, edit.queueId, card.session.queue.revision, message);
+    cancelQueueComposerEdit();
+    await refreshBoard();
+  } catch (error) {
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.editQueuedFailed")));
+  } finally {
+    aiSessionActionBusy.value = false;
+  }
+}
+
+async function reorderSelectedQueuedMessages(payload: { expectedRevision: number; queueIds: string[] }) {
+  await runSelectedQueueAction((card) => reorderAiSessionQueuedMessages(card.instance.id, card.session.id, payload.expectedRevision, payload.queueIds), t("sessions.panel.reorderQueuedFailed"));
+}
+
 async function stopCardAppSession(card: AiBoardCard) {
   if (stoppingAppSessionKey.value) return;
   stoppingAppSessionKey.value = card.key;
@@ -888,6 +956,7 @@ watch(visibleColumnKeysSignature, () => {
 useEventListener(document, "click", closeBoardOverlays, { capture: true });
 
 watch(() => selectedCard.value?.session.id, (sessionId) => {
+  queueComposerEdit.value = undefined;
   const draft = sessionId ? loadAiSessionDraftPayload(sessionId) : { value: "", bindings: [] };
   messageDraft.value = draft.value;
   messageMentionBindings.value = draft.bindings;
@@ -913,7 +982,7 @@ watch(detailCollapsed, (collapsed, previous) => {
 });
 
 watch([() => selectedCard.value?.session.id, messageDraft, messageMentionBindings], ([sessionId, draft, bindings]) => {
-  if (sessionId) {
+  if (sessionId && !queueComposerEdit.value) {
     persistAiSessionDraftPayload(sessionId, draft, bindings);
   }
 }, { deep: true });

@@ -160,6 +160,7 @@
                   <div class="session-ai-preview-field session-ai-preview-field-assistant">
                     <AiSessionStreamingMarkdown
                       class="session-ai-message"
+                      :code-tools="markdownCodeTools"
                       :content="displayAiSessionMessage(session, promptIndexFor(session), t)"
                       :instance-id="instance.id"
                       file-links
@@ -409,11 +410,11 @@
             <div v-else class="session-ai-history-turns">
               <article v-for="turn in historyDetail.turns" :key="turn.id" class="session-ai-history-turn">
                 <section v-if="turn.userPrompt" class="session-ai-history-message session-ai-history-message-user">
-                  <MarkdownContent :content="turn.userPrompt" />
+                  <MarkdownContent :code-tools="markdownCodeTools" :content="turn.userPrompt" />
                 </section>
                 <section v-if="turn.lastMessage || turn.summary" class="session-ai-history-message session-ai-history-message-assistant">
                   <small>{{ historyDetail.item.agent === "claude" ? t("common.products.claude") : t("common.products.codex") }}</small>
-                  <MarkdownContent :content="turn.lastMessage || turn.summary || ''" />
+                  <MarkdownContent :code-tools="markdownCodeTools" :content="turn.lastMessage || turn.summary || ''" />
                 </section>
               </article>
             </div>
@@ -576,7 +577,7 @@
                 class="session-ai-detail-prompt-content"
                 :class="{ expanded: promptExpanded }"
               >
-                <MarkdownContent :content="displayAiSessionTitle(selectedSession, promptIndexFor(selectedSession), t)" />
+                <MarkdownContent :content="displayAiSessionTitle(selectedSession, promptIndexFor(selectedSession), t)" :code-tools="markdownCodeTools" />
               </div>
               <button
                 v-if="promptHasOverflow"
@@ -605,10 +606,12 @@
             :is-latest="promptIndexFor(selectedSession) >= promptCount(selectedSession) - 1"
             :response-content="displayAiSessionResponse(selectedSession, promptIndexFor(selectedSession), t)"
             :session="selectedSession"
+            @edit-queued-message="editQueuedMessage(selectedSession.id, $event)"
             @open-file="openMarkdownFile(selectedSession, $event)"
             @steer-queued-message="steerQueuedMessage(selectedSession.id, $event)"
             @retry-queued-message="retryQueuedMessage(selectedSession.id, $event)"
             @remove-queued-message="removeQueuedMessage(selectedSession.id, $event)"
+            @reorder-queued-messages="reorderQueuedMessages(selectedSession.id, $event)"
             @resolve-approval="resolveSelectedApproval"
           />
           </section>
@@ -639,7 +642,9 @@
           :mention-context="mentionContext"
           :mention-trigger="mentionTrigger"
           :command-trigger="commandTrigger"
+          :editing-label="queueComposerEdit ? t('sessions.composer.editingQueuedMessage') : undefined"
           :session-busy="selectedSession?.status === 'running' || selectedSession?.status === 'waiting'"
+          @cancel-edit="cancelQueueComposerEdit"
           @command="executeSelectedSessionCommand"
           @run="runSelectedSessionAction"
           @steer="steerMessageDraft"
@@ -674,7 +679,7 @@ import { ArrowDown, ArrowLeft, Ban, Bot, Check, ChevronDown, ChevronLeft, Chevro
 import { useQueryClient } from "@tanstack/vue-query";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import AiSessionCardContextMenu from "../../../components/ai-session/AiSessionCardContextMenu.vue";
-import { bindAiSessionTrigger, closeAiSession, createAiSession, createNodeLocalFolder, getAiSessionHistory, getAiSessionHistoryDetail, interruptAiSession, listNodeFolderTree, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, unbindAiSessionTrigger, updateControlledInstance, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery } from "../../../api/queries";
+import { bindAiSessionTrigger, closeAiSession, createAiSession, createNodeLocalFolder, editAiSessionQueuedMessage, getAiSessionHistory, getAiSessionHistoryDetail, interruptAiSession, listNodeFolderTree, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, unbindAiSessionTrigger, updateControlledInstance, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery } from "../../../api/queries";
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { executeAiSessionCommand } from "../../../api/ai-session-commands";
 import type { AiSessionCommandInput, AiSessionHistoryDetail, AiSessionHistoryItem, AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
@@ -774,6 +779,11 @@ const props = defineProps<{
   selectedAiSession: (instance: InstanceBoardItem, sessions?: AiSessionSummary[]) => AiSessionSummary | undefined;
 }>();
 const { locale, t } = useI18n();
+const markdownCodeTools = computed(() => ({
+  copiedLabel: t("sessions.markdown.copied"),
+  copyLabel: t("sessions.markdown.copy"),
+  plainTextLabel: t("sessions.markdown.plainText"),
+}));
 
 const visibleAiSessions = computed(() => props.instance.aiSessions?.sessions || []);
 const mobilePane = ref<"list" | "detail">("list");
@@ -882,6 +892,13 @@ const collapsedHistoryPathGroups = reactive<Record<string, boolean>>({});
 const messageDraft = ref("");
 const messageAttachments = ref<AiSessionComposerAttachment[]>([]);
 const messageMentionBindings = ref<AiSessionMentionBinding[]>([]);
+const queueComposerEdit = ref<{
+  queueId: string;
+  originalMessage: string;
+  previousDraft: string;
+  previousAttachments: AiSessionComposerAttachment[];
+  previousMentionBindings: AiSessionMentionBinding[];
+}>();
 const controlPlaneSettings = useControlPlaneSettingsQuery();
 const mentionTrigger = computed(() => controlPlaneSettings.data.value?.mentionTrigger || "@");
 const commandTrigger = computed(() => controlPlaneSettings.data.value?.commandTrigger || "/");
@@ -1460,6 +1477,10 @@ async function runSelectedSessionAction(permissionMode?: AiSessionPermissionMode
   if (!session || aiSessionActionBusy.value || (!messageDraft.value.trim() && !messageAttachments.value.length && !canInterrupt(session))) {
     return;
   }
+  if (queueComposerEdit.value) {
+    await saveQueuedMessageEdit();
+    return;
+  }
   if (messageDraft.value.trim() || messageAttachments.value.length) {
     await sendSelectedSessionMessage(permissionMode);
     return;
@@ -1553,6 +1574,56 @@ async function retryQueuedMessage(sessionId: string, queueId: string) {
 
 async function removeQueuedMessage(sessionId: string, queueId: string) {
   await runQueueAction(() => removeAiSessionQueuedMessage(props.instance.id, sessionId, queueId), t("sessions.panel.removeQueuedFailed"));
+}
+
+function editQueuedMessage(sessionId: string, payload: { queueId: string; message: string }) {
+  if (selectedSession.value?.id !== sessionId) return;
+  const previous = queueComposerEdit.value;
+  queueComposerEdit.value = {
+    queueId: payload.queueId,
+    originalMessage: payload.message,
+    previousDraft: previous?.previousDraft ?? messageDraft.value,
+    previousAttachments: previous?.previousAttachments ?? messageAttachments.value,
+    previousMentionBindings: previous?.previousMentionBindings ?? messageMentionBindings.value,
+  };
+  messageDraft.value = payload.message;
+  messageAttachments.value = [];
+  messageMentionBindings.value = [];
+  void nextTick(() => composerEl.value?.focus());
+}
+
+function cancelQueueComposerEdit() {
+  const edit = queueComposerEdit.value;
+  if (!edit) return;
+  queueComposerEdit.value = undefined;
+  messageDraft.value = edit.previousDraft;
+  messageAttachments.value = edit.previousAttachments;
+  messageMentionBindings.value = edit.previousMentionBindings;
+}
+
+async function saveQueuedMessageEdit() {
+  const session = selectedSession.value;
+  const edit = queueComposerEdit.value;
+  const message = messageDraft.value.trim();
+  if (!session || !edit || !message || aiSessionActionBusy.value) return;
+  if (message === edit.originalMessage.trim()) {
+    cancelQueueComposerEdit();
+    return;
+  }
+  aiSessionActionBusy.value = true;
+  try {
+    await editAiSessionQueuedMessage(props.instance.id, session.id, edit.queueId, session.queue.revision, message);
+    cancelQueueComposerEdit();
+    await refreshBoard();
+  } catch (error) {
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.editQueuedFailed")));
+  } finally {
+    aiSessionActionBusy.value = false;
+  }
+}
+
+async function reorderQueuedMessages(sessionId: string, payload: { expectedRevision: number; queueIds: string[] }) {
+  await runQueueAction(() => reorderAiSessionQueuedMessages(props.instance.id, sessionId, payload.expectedRevision, payload.queueIds), t("sessions.panel.reorderQueuedFailed"));
 }
 
 async function runQueueAction(action: () => Promise<unknown>, message: string) {
@@ -1915,6 +1986,7 @@ watch([selectedSession, messageAttachments, messageDraft, historyMessageAttachme
 }, { immediate: true });
 
 watch(() => `${props.instance.id}\u0000${selectedSession.value?.id || ""}`, () => {
+  queueComposerEdit.value = undefined;
   const draft = selectedSession.value ? loadAiSessionDraftPayload(selectedSession.value.id) : { value: "", bindings: [] };
   messageDraft.value = draft.value;
   messageMentionBindings.value = draft.bindings;
@@ -1940,7 +2012,7 @@ watch(() => `${props.instance.id}\u0000${selectedSession.value?.id || ""}`, () =
 }, { immediate: true });
 
 watch([() => selectedSession.value?.id, messageDraft, messageMentionBindings], ([sessionId, draft, bindings]) => {
-  if (sessionId) {
+  if (sessionId && !queueComposerEdit.value) {
     persistAiSessionDraftPayload(sessionId, draft, bindings);
   }
 }, { deep: true });

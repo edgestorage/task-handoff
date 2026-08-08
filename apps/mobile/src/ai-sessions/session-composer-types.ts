@@ -1,13 +1,17 @@
 import type { AiSessionPermissionMode } from '@task-handoff/protocol/ai-sessions';
+import type { Animated } from 'react-native';
 
-export type SessionComposerAction = 'send' | 'stop';
+export type SessionComposerAction = 'save' | 'send' | 'stop';
 
 export type SessionComposerProps = {
   action: SessionComposerAction;
   actionDisabled: boolean;
   editable: boolean;
+  editingLabel?: string;
+  expansion: Animated.Value;
   fileDisabled: boolean;
   focused: boolean;
+  focusRequestKey?: number;
   imageDisabled: boolean;
   permissionEnabled: boolean;
   permissionMode: AiSessionPermissionMode;
@@ -17,6 +21,7 @@ export type SessionComposerProps = {
   onAddFile(): void;
   onAddImage(): void;
   onAddRuntimeFile(): void;
+  onCancelEdit?(): void;
   onFocusChange(focused: boolean): void;
   onPermissionModeChange(mode: AiSessionPermissionMode): void;
   onValueChange(value: string): void;

@@ -1,12 +1,13 @@
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
+import * as Clipboard from 'expo-clipboard';
 import { Animated, Keyboard, PixelRatio, StyleSheet } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ControlPlaneAiSessionSummarySchema } from '@task-handoff/control-plane-client';
 
 import { conversationDetailItems, detailItems, SessionDetail } from '../src/ai-sessions/SessionDetail';
-import { sessionKeyboardAvoidingBehavior, SessionWorkspace } from '../src/ai-sessions/SessionWorkspace';
+import { COMPOSER_BACKDROP_OPACITIES, composerBottomBackdropGeometry, moveQueueId, queueItemsWithQueuedOrder, queueListScrollEnabled, sessionKeyboardAvoidingBehavior, SessionWorkspace } from '../src/ai-sessions/SessionWorkspace';
 import type { MobileAiSessionActionCoordinator } from '../src/ai-sessions/actions';
-import { CHARACTER_FADE_MS, SafeMarkdown, shouldAnimateMarkdownText, safeMarkdownLink, sanitizeMarkdown, StreamingMarkdownText } from '../src/components/SafeMarkdown';
+import { CHARACTER_FADE_MS, initialStreamingText, SafeMarkdown, shouldAnimateMarkdownText, safeMarkdownLink, sanitizeMarkdown, StreamingMarkdownText } from '../src/components/SafeMarkdown';
 import { nextStreamingMarkdownCommit } from '../src/components/useStreamingMarkdown';
 import { MobileAiSessionPermissionStore } from '../src/ai-sessions/permission-store';
 import type { ValueStore } from '../src/platform/secure-storage';
@@ -105,9 +106,28 @@ test('safe markdown renders semantic headings, emphasis, lists, and code', async
   screen.getByText('inline');
   screen.getByText(/const ok = true/);
   expect(screen.getByTestId('markdown-code-scroll')).toBeTruthy();
+  screen.getByText('ts');
+  expect(screen.getByRole('button', { name: 'Copy' })).toBeTruthy();
   expect(screen.getByTestId('markdown-table-scroll')).toBeTruthy();
   expect(StyleSheet.flatten(screen.getByText('const').props.style).color).toBe('#cf222e');
   expect(screen.getAllByTestId('markdown-list-item-content').every((item) => StyleSheet.flatten(item.props.style).flex === 0)).toBe(true);
+});
+
+test('fenced code copies raw source and confirms the action', async () => {
+  const write = jest.spyOn(Clipboard, 'setStringAsync').mockResolvedValue(true);
+  const screen = await render(<SafeMarkdown>{'```typescript\nconst ok = true;\n```'}</SafeMarkdown>);
+
+  await act(async () => fireEvent.press(screen.getByRole('button', { name: 'Copy' })));
+  await waitFor(() => expect(write).toHaveBeenCalledWith('const ok = true;'));
+  await waitFor(() => screen.getByRole('button', { name: 'Copied' }));
+  screen.unmount();
+  write.mockRestore();
+});
+
+test('untyped fenced code exposes a plain text language label', async () => {
+  const screen = await render(<SafeMarkdown>{'```\nplain\n```'}</SafeMarkdown>);
+  screen.getByText('Plain text');
+  screen.unmount();
 });
 
 test('fenced code constrains its cross-axis height inside a vertical conversation', async () => {
@@ -164,9 +184,15 @@ test('new text nodes created during streaming run the 150ms character fade', asy
   const screen = await render(<StreamingMarkdownText animate content="World" />);
 
   await waitFor(() => expect(timing).toHaveBeenCalled());
-  expect(timing.mock.calls.some(([, config]) => config.duration === CHARACTER_FADE_MS && config.toValue === 1)).toBe(true);
+  expect(timing.mock.calls.some(([, config]) => config.duration === CHARACTER_FADE_MS && config.toValue === 1 && config.useNativeDriver === false)).toBe(true);
   screen.unmount();
   timing.mockRestore();
+});
+
+test('streaming text resumes from persisted Markdown node content after a remount', () => {
+  expect(initialStreamingText('Hello!', true, 'Hello')).toBe('Hello');
+  expect(initialStreamingText('Rewritten', true, 'Old')).toBe('');
+  expect(initialStreamingText('Snapshot', false, undefined)).toBe('Snapshot');
 });
 
 test('streaming markdown commits whole graphemes and resets rewrites atomically', () => {
@@ -230,6 +256,63 @@ test('offline detail keeps cached content visible but disables authoritative act
   screen.getByText('provider unavailable');
 });
 
+test('queued messages expose edit controls and a drag handle that reorders with the authoritative revision', async () => {
+  const actionable = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    actions: { send: true, interrupt: true },
+    queue: {
+      revision: 4,
+      pendingCount: 2,
+      items: [
+        { id: 'queue-1', message: 'first queued message', attachments: [], references: [], status: 'queued', createdAt: session.startedAt, updatedAt: session.updatedAt },
+        { id: 'queue-2', message: 'second queued message', attachments: [], references: [], status: 'queued', createdAt: session.startedAt, updatedAt: session.updatedAt },
+      ],
+    },
+  });
+  const reorderQueue = jest.fn().mockResolvedValue({ disposition: 'accepted' });
+  const editQueue = jest.fn().mockResolvedValue({ disposition: 'accepted' });
+  const actions = {
+    subscribe: () => () => undefined,
+    state: () => ({ phase: 'idle' as const }),
+    approval: jest.fn(), interrupt: jest.fn(), queue: jest.fn(), send: jest.fn(), editQueue, reorderQueue,
+  } as unknown as MobileAiSessionActionCoordinator;
+  const screen = await render(
+    <SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}>
+      <SessionWorkspace actions={actions} controlPlaneId="cp" instanceId="instance" messages={[]} session={actionable} />
+    </SafeAreaProvider>,
+  );
+
+  const handles = screen.getAllByTestId('queue-drag-handle');
+  expect(handles).toHaveLength(2);
+  expect(queueListScrollEnabled('queue-1')).toBe(false);
+  expect(queueListScrollEnabled()).toBe(true);
+  await act(async () => { fireEvent(handles[0], 'accessibilityAction', { nativeEvent: { actionName: 'increment' } }); });
+  expect(reorderQueue).toHaveBeenCalledWith('instance', session.id, 4, ['queue-2', 'queue-1']);
+  expect(screen.getAllByRole('button', { name: 'edit' })).toHaveLength(2);
+  const composer = screen.getByTestId('session-message-input');
+  await act(async () => { fireEvent.changeText(composer, 'preserved draft'); });
+  await act(async () => { fireEvent.press(screen.getAllByRole('button', { name: 'edit' })[0]); });
+  await waitFor(() => expect(screen.getByTestId('session-message-input').props.value).toBe('second queued message'));
+  screen.getByText('Edit queued message');
+  fireEvent.changeText(screen.getByTestId('session-message-input'), 'updated queued message');
+  await waitFor(() => expect(screen.getByTestId('session-message-input').props.value).toBe('updated queued message'));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Save queued message' })).toBeEnabled());
+  await act(async () => { fireEvent.press(screen.getByRole('button', { name: 'Save queued message' })); });
+  await waitFor(() => expect(editQueue).toHaveBeenCalledWith('instance', session.id, 'queue-2', 4, 'updated queued message'));
+  await waitFor(() => expect(screen.getByTestId('session-message-input').props.value).toBe('preserved draft'));
+  expect(editQueue).toHaveBeenCalledTimes(1);
+});
+
+test('queue drag preview reorders queued items without moving the normalized failed group', () => {
+  const items = [
+    { id: 'queue-1', status: 'queued' },
+    { id: 'queue-2', status: 'queued' },
+    { id: 'failed-1', status: 'failed' },
+  ];
+  const reordered = moveQueueId(['queue-1', 'queue-2'], 0, 1);
+  expect(queueItemsWithQueuedOrder(items, reordered).map((item) => item.id)).toEqual(['queue-2', 'queue-1', 'failed-1']);
+});
+
 test('running composer sends in auto mode so the authoritative runtime queues the message', async () => {
   const actionable = ControlPlaneAiSessionSummarySchema.parse({ ...session, actions: { send: true, interrupt: true } });
   const send = jest.fn().mockReturnValue(new Promise(() => undefined));
@@ -290,6 +373,8 @@ test('composer expands to a multiline editor while focused', async () => {
   const input = screen.getByTestId('session-message-input');
 
   expect(screen.getByTestId('session-composer-blur')).toBeTruthy();
+  expect(StyleSheet.flatten(screen.getByTestId('session-composer').props.style).backgroundColor).toBe('transparent');
+  expect(screen.queryByTestId('session-composer-tint')).toBeNull();
   expect(screen.getByTestId('session-composer').props.accessibilityState.expanded).toBe(false);
   fireEvent(input, 'focus');
   await waitFor(() => expect(screen.getByTestId('session-composer').props.accessibilityState.expanded).toBe(true));
@@ -321,4 +406,48 @@ test('floating composer follows the keyboard without creating an opaque layout s
   expect(actionsStyle.position).toBe('absolute');
   expect(workspaceStyle.backgroundColor).toBeUndefined();
   screen.unmount();
+});
+
+test('composer backdrop fades from 16px above the input through the safe-area bottom', () => {
+  expect(COMPOSER_BACKDROP_OPACITIES).toEqual({ fade: [0, 0.8], composer: 0.8, bottom: [0.8, 1, 1] });
+  expect(composerBottomBackdropGeometry(34)).toEqual({ height: 34, locations: [0, 26 / 34, 1] });
+});
+
+test('blurring the mobile composer cancels a queued message edit and restores the prior draft', async () => {
+  jest.useFakeTimers();
+  const actionable = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    actions: { send: true, interrupt: true },
+    queue: {
+      revision: 4,
+      pendingCount: 1,
+      items: [
+        { id: 'queue-1', message: 'queued message', attachments: [], references: [], status: 'queued', createdAt: session.startedAt, updatedAt: session.updatedAt },
+      ],
+    },
+  });
+  const editQueue = jest.fn();
+  const actions = {
+    subscribe: () => () => undefined,
+    state: () => ({ phase: 'idle' as const }),
+    approval: jest.fn(), interrupt: jest.fn(), queue: jest.fn(), send: jest.fn(), editQueue, reorderQueue: jest.fn(),
+  } as unknown as MobileAiSessionActionCoordinator;
+  const screen = await render(
+    <SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}>
+      <SessionWorkspace actions={actions} controlPlaneId="cp" instanceId="instance" messages={[]} session={actionable} />
+    </SafeAreaProvider>,
+  );
+
+  await act(async () => { fireEvent.changeText(screen.getByTestId('session-message-input'), 'preserved draft'); });
+  await act(async () => { fireEvent.press(screen.getByRole('button', { name: 'edit' })); });
+  expect(screen.getByTestId('session-message-input').props.value).toBe('queued message');
+  await act(async () => { fireEvent.changeText(screen.getByTestId('session-message-input'), 'discard this edit'); });
+  await act(async () => { fireEvent(screen.getByTestId('session-message-input'), 'blur'); });
+  expect(screen.getByTestId('session-message-input').props.value).toBe('preserved draft');
+  expect(screen.queryByText('Edit queued message')).toBeNull();
+  expect(editQueue).not.toHaveBeenCalled();
+
+  screen.unmount();
+  act(() => { jest.runOnlyPendingTimers(); });
+  jest.useRealTimers();
 });

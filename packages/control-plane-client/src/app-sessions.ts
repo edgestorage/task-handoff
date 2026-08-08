@@ -1,6 +1,8 @@
 import { z } from "zod";
 import {
   AppSessionDeltaResponseSchema,
+  AppSessionAccessLeaseSchema,
+  AppSessionAccessRevocationSchema,
   AppSessionRecordSchema,
   AppSessionsSnapshotSchema,
 } from "@task-handoff/protocol/app-sessions";
@@ -58,6 +60,20 @@ export function createControlPlaneAppSessionsApi(transport: ControlPlaneClientTr
         `/api/controlled-instances/${encodeURIComponent(instanceId)}/apps/sessions/${encodeURIComponent(sessionId)}`,
         AppSessionRecordSchema,
         { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) },
+      );
+    },
+    access(instanceId: string, sessionId: string) {
+      return requestData(
+        `/api/controlled-instances/${encodeURIComponent(instanceId)}/apps/sessions/${encodeURIComponent(sessionId)}/access`,
+        AppSessionAccessLeaseSchema,
+        { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({}) },
+      );
+    },
+    revokeAccess(instanceId: string, sessionId: string, token: string) {
+      return requestData(
+        `/api/controlled-instances/${encodeURIComponent(instanceId)}/apps/sessions/${encodeURIComponent(sessionId)}/access`,
+        AppSessionAccessRevocationSchema,
+        { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ token }) },
       );
     },
     delta(instanceId: string, streamId: string, sinceRevision: number, signal?: AbortSignal) {

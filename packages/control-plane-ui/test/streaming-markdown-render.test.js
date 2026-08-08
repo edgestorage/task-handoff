@@ -39,7 +39,9 @@ test("text fenced code blocks retain their content alongside animated text", asy
     const html = await renderToString(app);
     assert.match(html, /data-node-type="code_block"/);
     assert.match(html, /class="ai-session-highlighted-code"/);
-    assert.match(html, /<pre><code>实例 A: \[开发, GPU\]/);
+    assert.match(html, /class="markdown-code-copy"/);
+    assert.match(html, />Copy<\/button>/);
+    assert.match(html, /<pre[^>]*><code>实例 A: \[开发, GPU\]/);
     assert.match(html, /实例 B: \[开发\]/);
   } finally {
     await server.close();

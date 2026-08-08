@@ -40,6 +40,11 @@ export const sessions = {
     notBound: "未绑定", collapse: "收起详情", expand: "展开", collapsePrompt: "收起",
     noSelected: "未选择 AI 会话",
   },
+  markdown: {
+    copied: "已复制",
+    copy: "复制",
+    plainText: "纯文本",
+  },
   panel: {
     view: "视图", status: "状态", listOptions: "AI 会话列表选项", sessionList: "AI 会话列表", newSession: "新建 AI 会话", allStatuses: "全部状态", active: "活跃", waiting: "等待中", problem: "异常",
     noMatching: "没有匹配的会话", noConversations: "尚无对话", tryFilter: "请尝试其他状态筛选。", startHint: "使用上方的 + 按钮开始对话。",
@@ -47,7 +52,7 @@ export const sessions = {
     promptPlaceholder: "描述你想做的事", chooseProject: "选择项目", projectUnavailable: "这个项目已不在节点的登记目录中。", startedWorktree: "AI 会话已在所选 worktree 中启动。", backLatest: "返回最新消息",
     defaultPermissionFailed: "无法更新默认 Codex 权限模式。", starting: "新的 AI 会话仍在启动，请稍后重试。",
     startFailed: "无法启动 AI 会话。", sendFailed: "无法发送消息。", noGoal: "没有活跃目标。", commandFailed: "无法运行命令。", steerFailed: "无法追加消息。",
-    steerQueuedFailed: "无法修改排队消息。", retryQueuedFailed: "无法重试排队消息。", removeQueuedFailed: "无法移除排队消息。",
+    steerQueuedFailed: "无法调整排队消息。", retryQueuedFailed: "无法重试排队消息。", removeQueuedFailed: "无法移除排队消息。", editQueuedFailed: "无法编辑排队消息。", reorderQueuedFailed: "无法调整排队消息顺序。",
     stopFailed: "无法停止 AI 会话。", approvalFailed: "无法处理审批。", closeAppFailed: "无法关闭应用会话。", closeSessionFailed: "无法关闭 AI 会话。", openAppFailed: "无法为 AI 会话打开应用。",
     loadingHistory: "正在读取过往对话…", retry: "重试", noHistory: "暂无过往对话", viewHistory: "查看过往对话",
     selectHistory: "选择一条过往对话查看详情", loadingHistoryDetail: "正在读取对话详情…", noHistoryDetail: "这条过往对话没有可展示的详情。",
@@ -59,7 +64,7 @@ export const sessions = {
     resumePending: "对话已经启动，但运行状态尚未确认，请稍后重试。", continueFailed: "无法继续该对话。",
   },
   composer: {
-    plugins: "插件", skills: "技能", files: "文件", directories: "目录", apps: "应用", stopTurn: "停止当前 AI 回合", send: "发送消息",
+    plugins: "插件", skills: "技能", files: "文件", directories: "目录", apps: "应用", stopTurn: "停止当前 AI 回合", send: "发送消息", editingQueuedMessage: "正在编辑排队消息", saveQueuedMessage: "保存排队消息", cancelQueuedEdit: "取消编辑排队消息",
     askDescription: "访问互联网或编辑工作区外文件前进行询问。", autoReviewDescription: "仅对检测为可能不安全的操作进行询问。",
     fullAccessDescription: "无需审批即可无限制访问互联网和文件。", localPath: "本地路径", removeAttachment: "移除附件", followUp: "请求后续修改",
     noMatches: "没有匹配项", commands: "命令", loading: "正在加载...", openCommands: "打开命令菜单", permissionMode: "权限模式：{mode}", choosePermission: "选择权限模式",
@@ -73,7 +78,7 @@ export const sessions = {
   },
   activity: {
     waitingApproval: "正在等待审批...", waitingApprovalSummary: "正在等待审批 · {summary}", responding: "正在回复...", editing: "正在编辑...", waiting: "正在等待...",
-    thinking: "正在思考...", thinkingTools: "正在思考... · 已完成 {count} 个工具调用", queue: "队列 · {count}", steer: "修改", retry: "重试", remove: "移除",
+    thinking: "正在思考...", thinkingTools: "正在思考... · 已完成 {count} 个工具调用", queue: "队列 · {count}", steer: "引导", retry: "重试", remove: "移除", edit: "编辑", save: "保存", cancel: "取消", reorder: "拖动调整排队消息顺序", moveUp: "上移", moveDown: "下移",
     noRecent: "近期没有 AI 活动", runningTool: "正在运行 {tool}", running: "运行中...",
   },
   subAgents: {

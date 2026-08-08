@@ -57,7 +57,7 @@ export class AiSessionCloseCoordinator {
     const frozen: AiSessionStatus = {
       ...session,
       actions: { ...session.actions, send: false, interrupt: false, approval: false, openApp: false, close: false },
-      queue: { pendingCount: 0, items: [] },
+      queue: { revision: 0, pendingCount: 0, items: [] },
     };
     this.options.registry.put(frozen);
     try {

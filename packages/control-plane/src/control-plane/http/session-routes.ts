@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { AiSessionApprovalInputSchema, AiSessionCloseInputSchema, AiSessionCommandInputSchema, AiSessionCreateRefInputSchema, AiSessionMentionFileSearchInputSchema, AiSessionMessageRefInputSchema, AiSessionOpenAppInputSchema, AiSessionUnreadEventType } from "@task-handoff/protocol/ai-sessions";
+import { AiSessionApprovalInputSchema, AiSessionCloseInputSchema, AiSessionCommandInputSchema, AiSessionCreateRefInputSchema, AiSessionMentionFileSearchInputSchema, AiSessionMessageRefInputSchema, AiSessionOpenAppInputSchema, AiSessionQueueEditInputSchema, AiSessionQueueReorderInputSchema, AiSessionUnreadEventType } from "@task-handoff/protocol/ai-sessions";
 import type { ControlPlaneService } from "../application/service.ts";
 import type { ControlPlaneEventBus } from "../events/bus.ts";
 import type { ControlPlaneAiSessionAggregator } from "../sessions/ai-session-aggregator.ts";
@@ -36,6 +36,10 @@ const AppSessionRenameRequestSchema = z
   .object({
     title: z.string().trim().min(1).max(120),
   })
+  .strict();
+
+const AppSessionAccessRevokeRequestSchema = z
+  .object({ token: z.string().trim().min(1).max(512) })
   .strict();
 
 const EmptyRequestSchema = z.object({}).strict();
@@ -94,6 +98,25 @@ export function registerSessionRoutes({
     const session = await service.renameAppSession(params.id, params.sessionId, parsed.title);
     events.publish("instance.app-session.renamed", { instanceId: params.id, sessionId: params.sessionId, title: parsed.title });
     return { data: session };
+  });
+  app.post("/api/controlled-instances/:id/apps/sessions/:sessionId/access", async (request) => {
+    const params = InstanceSessionParamsSchema.parse(request.params);
+    EmptyRequestSchema.parse(request.body || {});
+    const access = await service.createAppSessionAccessToken({ instanceId: params.id, sessionId: params.sessionId });
+    return {
+      data: {
+        mode: access.mode,
+        url: `/apps/access/${access.mode}?token=${encodeURIComponent(access.token)}`,
+        token: access.token,
+        expiresAt: access.expiresAt,
+      },
+    };
+  });
+  app.delete("/api/controlled-instances/:id/apps/sessions/:sessionId/access", async (request) => {
+    const params = InstanceSessionParamsSchema.parse(request.params);
+    const input = AppSessionAccessRevokeRequestSchema.parse(request.body || {});
+    service.revokeAppSessionAccessToken(input.token, { instanceId: params.id, sessionId: params.sessionId });
+    return { data: { revoked: true } };
   });
   app.get("/api/controlled-instances/:id/app-sessions", async (request) => {
     const params = IdParamsSchema.parse(request.params);
@@ -185,6 +208,16 @@ export function registerSessionRoutes({
   app.delete("/api/controlled-instances/:id/ai-sessions/:sessionId/queue/:queueId", async (request) => {
     const params = InstanceSessionQueueParamsSchema.parse(request.params);
     return { data: await service.removeAiSessionQueuedMessage(params.id, params.sessionId, params.queueId) };
+  });
+  app.patch("/api/controlled-instances/:id/ai-sessions/:sessionId/queue/:queueId", async (request) => {
+    const params = InstanceSessionQueueParamsSchema.parse(request.params);
+    const input = AiSessionQueueEditInputSchema.parse(request.body || {});
+    return { data: await service.editAiSessionQueuedMessage(params.id, params.sessionId, params.queueId, input) };
+  });
+  app.patch("/api/controlled-instances/:id/ai-sessions/:sessionId/queue/reorder", async (request) => {
+    const params = InstanceSessionParamsSchema.parse(request.params);
+    const input = AiSessionQueueReorderInputSchema.parse(request.body || {});
+    return { data: await service.reorderAiSessionQueuedMessages(params.id, params.sessionId, input) };
   });
   app.post("/api/controlled-instances/:id/ai-sessions/:sessionId/interrupt", async (request) => {
     const params = InstanceSessionParamsSchema.parse(request.params);

@@ -216,19 +216,41 @@ export class AiSessionController {
   }
 
   removeQueuedMessage(sessionId: string, queueId: string) {
+    this.requireSession(sessionId);
     const session = this.registry.removeQueuedMessage(sessionId, queueId);
     if (!session) {
-      throw aiSessionControlError("AI_SESSION_NOT_FOUND", "AI session not found.", 404);
+      throw aiSessionControlError("AI_SESSION_QUEUE_ITEM_NOT_FOUND", "Queued message not found.", 404);
     }
     return session;
   }
 
-  reorderQueuedMessages(sessionId: string, queueIds: string[]) {
-    const session = this.registry.reorderQueuedMessages(sessionId, queueIds);
-    if (!session) {
+  editQueuedMessage(sessionId: string, queueId: string, expectedRevision: number, message: string) {
+    const result = this.registry.editQueuedMessage(sessionId, queueId, expectedRevision, message);
+    if (!result) throw aiSessionControlError("AI_SESSION_NOT_FOUND", "AI session not found.", 404);
+    if (result.kind === "revision-conflict") {
+      throw aiSessionControlError("AI_SESSION_QUEUE_REVISION_CONFLICT", `AI session queue changed at revision ${result.currentRevision}.`, 409);
+    }
+    if (result.kind === "not-found") {
+      throw aiSessionControlError("AI_SESSION_QUEUE_ITEM_NOT_FOUND", "Queued message not found.", 404);
+    }
+    if (result.kind === "not-editable") {
+      throw aiSessionControlError("AI_SESSION_QUEUE_ITEM_NOT_EDITABLE", "Only queued messages can be edited.", 409);
+    }
+    return result.session;
+  }
+
+  reorderQueuedMessages(sessionId: string, expectedRevision: number, queueIds: string[]) {
+    const result = this.registry.reorderQueuedMessages(sessionId, expectedRevision, queueIds);
+    if (!result) {
       throw aiSessionControlError("AI_SESSION_NOT_FOUND", "AI session not found.", 404);
     }
-    return session;
+    if (result.kind === "revision-conflict") {
+      throw aiSessionControlError("AI_SESSION_QUEUE_REVISION_CONFLICT", `AI session queue changed at revision ${result.currentRevision}.`, 409);
+    }
+    if (result.kind === "order-invalid") {
+      throw aiSessionControlError("AI_SESSION_QUEUE_ORDER_INVALID", "Queue order must contain every currently queued message exactly once.", 409);
+    }
+    return result.session;
   }
 
   async interrupt(sessionId: string) {

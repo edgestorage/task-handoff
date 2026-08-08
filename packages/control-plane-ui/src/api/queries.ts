@@ -622,6 +622,14 @@ export function removeAiSessionQueuedMessage(instanceId: string, sessionId: stri
   return sharedAiSessionsApi.removeQueue(instanceId, sessionId, queueId);
 }
 
+export function editAiSessionQueuedMessage(instanceId: string, sessionId: string, queueId: string, expectedRevision: number, message: string) {
+  return sharedAiSessionsApi.editQueue(instanceId, sessionId, queueId, { expectedRevision, message });
+}
+
+export function reorderAiSessionQueuedMessages(instanceId: string, sessionId: string, expectedRevision: number, queueIds: string[]) {
+  return sharedAiSessionsApi.reorderQueue(instanceId, sessionId, { expectedRevision, queueIds });
+}
+
 export function interruptAiSession(instanceId: string, sessionId: string) {
   return sharedAiSessionsApi.interrupt(instanceId, sessionId);
 }

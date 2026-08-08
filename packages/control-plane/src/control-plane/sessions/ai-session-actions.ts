@@ -10,6 +10,8 @@ import {
   AiSessionMentionCatalogSchema,
   AiSessionMentionFileSearchSchema,
   AiSessionQueueSchema,
+  AiSessionQueueEditInputSchema,
+  AiSessionQueueReorderInputSchema,
   AiSessionResumeResultSchema,
   AiSessionStatusSchema,
   type AiSessionActionResult,
@@ -186,6 +188,16 @@ export class AiSessionActionService {
     return parseResponse(AiSessionStatusSchema, await this.options.request(instance, queueRoute(sessionId, queueId), { method: "DELETE" }));
   }
 
+  async editQueuedMessage(instanceId: string, sessionId: string, queueId: string, input: { expectedRevision: number; message: string }) {
+    const body = AiSessionQueueEditInputSchema.parse(input);
+    return parseResponse(AiSessionStatusSchema, await this.patch(instanceId, queueRoute(sessionId, queueId), body));
+  }
+
+  async reorderQueuedMessages(instanceId: string, sessionId: string, input: { expectedRevision: number; queueIds: string[] }) {
+    const body = AiSessionQueueReorderInputSchema.parse(input);
+    return parseResponse(AiSessionStatusSchema, await this.patch(instanceId, sessionRoute(sessionId, "queue/reorder"), body));
+  }
+
   async interrupt(instanceId: string, sessionId: string): Promise<AiSessionActionResult> {
     return parseResponse(AiSessionActionResultSchema, await this.post(instanceId, sessionRoute(sessionId, "interrupt"), {}));
   }
@@ -197,6 +209,14 @@ export class AiSessionActionService {
   private async post(instanceId: string, route: string, body: unknown) {
     return this.options.request(await this.options.requireInstance(instanceId), route, {
       method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  private async patch(instanceId: string, route: string, body: unknown) {
+    return this.options.request(await this.options.requireInstance(instanceId), route, {
+      method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });

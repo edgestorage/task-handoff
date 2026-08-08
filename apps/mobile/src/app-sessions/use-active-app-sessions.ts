@@ -1,5 +1,6 @@
 import { createContext, createElement, useCallback, useContext, useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import type { ControlPlaneClient } from '@task-handoff/control-plane-client';
+import type { AppSessionAccessLease } from '@task-handoff/protocol/app-sessions';
 
 import { createDirectControlPlaneClient } from '../control-plane/client';
 import type { MobileControlPlaneTransport } from '../control-plane/transport';
@@ -11,7 +12,9 @@ import { mobileAppSessionStore } from './store';
 
 type ActiveAppSessions = {
   closeSession(instanceId: string, sessionId: string): Promise<void>;
+  createAccess(instanceId: string, sessionId: string): Promise<AppSessionAccessLease>;
   renameSession(instanceId: string, sessionId: string, title: string): Promise<void>;
+  revokeAccess(instanceId: string, sessionId: string, token: string): Promise<void>;
   controlPlaneId?: string;
   state: ReturnType<typeof mobileAppSessionStore.profile>;
   transport?: MobileControlPlaneTransport;
@@ -74,13 +77,24 @@ export function ActiveAppSessionsProvider({ children }: { children: ReactNode })
       mobileAppSessionStore.replaceSnapshot(active.controlPlaneId, snapshot);
     }
   }, [activeClient]);
+  const createAccess = useCallback(async (instanceId: string, sessionId: string) => {
+    const active = activeClient;
+    if (!active || !transport) throw new Error('No active Control Plane.');
+    const access = await active.api.appSessions.access(instanceId, sessionId);
+    return { ...access, url: new URL(access.url, transport.profile.access.origin).toString() };
+  }, [activeClient, transport]);
+  const revokeAccess = useCallback(async (instanceId: string, sessionId: string, token: string) => {
+    const active = activeClient;
+    if (!active) return;
+    await active.api.appSessions.revokeAccess(instanceId, sessionId, token);
+  }, [activeClient]);
   const empty = mobileAppSessionStore.profile(controlPlaneId || '__booting__');
   const state = useSyncExternalStore(
     (listener) => controlPlaneId ? mobileAppSessionStore.subscribe(controlPlaneId, listener) : () => undefined,
     () => controlPlaneId ? mobileAppSessionStore.profile(controlPlaneId) : empty,
     () => empty,
   );
-  return createElement(Context.Provider, { value: { closeSession, controlPlaneId, renameSession, state, transport } }, children);
+  return createElement(Context.Provider, { value: { closeSession, controlPlaneId, createAccess, renameSession, revokeAccess, state, transport } }, children);
 }
 
 export function useActiveAppSessions() {

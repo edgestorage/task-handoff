@@ -57,6 +57,8 @@ export type MobileStreamingMessage = {
   settledAt?: string;
 };
 
+export const MOBILE_MESSAGE_TURN_LIMIT = 50;
+
 export function activeMobileStreamingMessage(
   messages: readonly MobileStreamingMessage[],
   turnId: string,
@@ -168,12 +170,10 @@ export class MobileAiSessionStore {
       updatedAt: event.generatedAt,
     };
     const updated = appendAiSessionMessageDelta(existing, event.delta, event.generatedAt);
-    const messages = {
+    const messages = trimMobileStreamingMessages({
       ...current.messages,
       [key]: { ...updated, receivedText: updated.receivedText.slice(0, 200_000) },
-    };
-    const keys = Object.keys(messages).sort((left, right) => messages[right].updatedAt.localeCompare(messages[left].updatedAt));
-    for (const staleKey of keys.slice(200)) delete messages[staleKey];
+    });
     this.profiles.set(controlPlaneId, { ...current, messages });
     this.emit(controlPlaneId);
     return messages[key];
@@ -214,13 +214,50 @@ function reconcileStreamingMessages(
     if (!session) continue;
     const turn = session.turns?.find((candidate) => candidate.id === message.turnId);
     const authoritativeText = turn?.lastMessageItemId === message.itemId ? turn.lastMessage : undefined;
+    const status = aiSessionAuthoritativeMessageStatus(session, turn?.status);
+    if (status !== 'streaming') continue;
     next[key] = {
       ...message,
       receivedText: authoritativeText ?? message.receivedText,
-      status: aiSessionAuthoritativeMessageStatus(session, turn?.status),
-      settledAt: authoritativeText || ['idle', 'failed'].includes(session.status) ? snapshot.updatedAt : message.settledAt,
+      status,
+      settledAt: undefined,
       updatedAt: snapshot.updatedAt,
     };
   }
-  return next;
+  for (const instance of snapshot.instances) {
+    for (const session of instance.aiSessions.sessions) {
+      const turn = session.turns?.find((candidate) => candidate.id === session.activeTurnId) ?? session.turns?.at(-1);
+      const itemId = turn?.lastMessageItemId ?? session.lastMessageItemId;
+      const text = turn?.lastMessage ?? (turn ? undefined : session.lastMessage);
+      if (!turn?.id || !itemId || text === undefined) continue;
+      const identity = { instanceId: instance.instanceId, sessionId: session.id, turnId: turn.id, itemId };
+      const key = aiSessionMessageKey(identity);
+      if (next[key]) continue;
+      const status = aiSessionAuthoritativeMessageStatus(session, turn.status);
+      if (status !== 'streaming') continue;
+      next[key] = {
+        ...identity,
+        receivedText: text,
+        status,
+        receivedAt: snapshot.updatedAt,
+        settledAt: status === 'streaming' ? undefined : snapshot.updatedAt,
+        updatedAt: snapshot.updatedAt,
+      };
+    }
+  }
+  return trimMobileStreamingMessages(next);
+}
+
+export function trimMobileStreamingMessages(messages: Readonly<Record<string, MobileStreamingMessage>>) {
+  const newestFirst = Object.entries(messages).sort(([, left], [, right]) => right.updatedAt.localeCompare(left.updatedAt));
+  const retainedTurns = new Set<string>();
+  for (const [, message] of newestFirst) {
+    const turnKey = JSON.stringify([message.instanceId, message.sessionId, message.turnId]);
+    if (retainedTurns.has(turnKey)) continue;
+    if (retainedTurns.size >= MOBILE_MESSAGE_TURN_LIMIT) break;
+    retainedTurns.add(turnKey);
+  }
+  return Object.fromEntries(Object.entries(messages).filter(([, message]) => (
+    retainedTurns.has(JSON.stringify([message.instanceId, message.sessionId, message.turnId]))
+  )));
 }

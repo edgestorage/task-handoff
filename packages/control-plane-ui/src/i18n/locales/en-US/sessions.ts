@@ -37,6 +37,11 @@ export const sessions = {
     notBound: "Not bound", collapse: "Collapse details", expand: "Expand", collapsePrompt: "Collapse",
     noSelected: "No AI session selected",
   },
+  markdown: {
+    copied: "Copied",
+    copy: "Copy",
+    plainText: "Plain text",
+  },
   panel: {
     view: "View", status: "Status", listOptions: "AI session list options", sessionList: "AI session list", newSession: "New AI session", allStatuses: "All statuses", active: "Active", waiting: "Waiting", problem: "Problem",
     noMatching: "No matching sessions", noConversations: "No conversations yet", tryFilter: "Try another status filter.", startHint: "Use the + button above to start a conversation.",
@@ -44,7 +49,7 @@ export const sessions = {
     promptPlaceholder: "Do anything", chooseProject: "Choose project", projectUnavailable: "This project is no longer registered on the node.", startedWorktree: "AI session started in the selected worktree.", backLatest: "Back to latest",
     defaultPermissionFailed: "Failed to update the default Codex permission mode.", starting: "The new AI session is still starting. Please try again in a moment.",
     startFailed: "Failed to start AI session.", sendFailed: "Failed to send message.", noGoal: "No active goal.", commandFailed: "Failed to run command.", steerFailed: "Failed to steer message.",
-    steerQueuedFailed: "Failed to steer queued message.", retryQueuedFailed: "Failed to retry queued message.", removeQueuedFailed: "Failed to remove queued message.",
+    steerQueuedFailed: "Failed to steer queued message.", retryQueuedFailed: "Failed to retry queued message.", removeQueuedFailed: "Failed to remove queued message.", editQueuedFailed: "Failed to edit queued message.", reorderQueuedFailed: "Failed to reorder queued messages.",
     stopFailed: "Failed to stop AI session.", approvalFailed: "Failed to resolve approval.", closeAppFailed: "Failed to close app session.", closeSessionFailed: "Failed to close AI session.", openAppFailed: "Failed to open an app for the AI session.",
     loadingHistory: "Loading previous conversations…", retry: "Retry", noHistory: "No previous conversations", viewHistory: "View previous conversations",
     selectHistory: "Select a previous conversation to view details", loadingHistoryDetail: "Loading conversation details…", noHistoryDetail: "This conversation has no details to display.",
@@ -56,7 +61,7 @@ export const sessions = {
     resumePending: "The conversation started, but its runtime state is not confirmed yet. Please try again shortly.", continueFailed: "Failed to continue this conversation.",
   },
   composer: {
-    plugins: "Plugins", skills: "Skills", files: "Files", directories: "Directories", apps: "Apps", stopTurn: "Stop current AI turn", send: "Send message",
+    plugins: "Plugins", skills: "Skills", files: "Files", directories: "Directories", apps: "Apps", stopTurn: "Stop current AI turn", send: "Send message", editingQueuedMessage: "Editing queued message", saveQueuedMessage: "Save queued message", cancelQueuedEdit: "Cancel queued message editing",
     askDescription: "Ask before accessing the internet or editing files outside the workspace.", autoReviewDescription: "Only ask for actions detected as potentially unsafe.",
     fullAccessDescription: "Unrestricted internet and file access without approval.", localPath: "Local path", removeAttachment: "Remove attachment", followUp: "Ask for follow-up changes",
     noMatches: "No matches", commands: "Commands", loading: "Loading...", openCommands: "Open command menu", permissionMode: "Permission mode: {mode}", choosePermission: "Choose permission mode",
@@ -70,7 +75,7 @@ export const sessions = {
   },
   activity: {
     waitingApproval: "Waiting for approval...", waitingApprovalSummary: "Waiting for approval · {summary}", responding: "Responding...", editing: "Editing...", waiting: "Waiting...",
-    thinking: "Thinking...", thinkingTools: "Thinking... · {count} tool completed | Thinking... · {count} tools completed", queue: "Queue · {count}", steer: "Steer", retry: "Retry", remove: "Remove",
+    thinking: "Thinking...", thinkingTools: "Thinking... · {count} tool completed | Thinking... · {count} tools completed", queue: "Queue · {count}", steer: "Steer", retry: "Retry", remove: "Remove", edit: "Edit", save: "Save", cancel: "Cancel", reorder: "Drag to reorder queued message", moveUp: "Move up", moveDown: "Move down",
     noRecent: "No recent AI activity", runningTool: "Running {tool}", running: "Running...",
   },
   subAgents: {

@@ -1,7 +1,6 @@
 import type { ChatSessionBinding } from "@task-handoff/protocol/control-plane";
 import { compactChatLabel, createSingleColumnKeyboard } from "@task-handoff/core/core/chat-interactions";
 import {
-  appSessionAccessMode,
   appSessionButtonLabel,
   appSessionLink,
   instanceAppMenuCallbackData,
@@ -125,11 +124,11 @@ export class ControlPlaneChatAppCommands {
         .map((session) => ({
           instance,
           session,
-          link: appSessionLink(instance, session, this.deps.controlPlanePublicBaseUrl(), () =>
+          link: appSessionLink(instance, session, this.deps.controlPlanePublicBaseUrl(), (mode) =>
             this.deps.createAppAccessToken({
               instanceId: instance.id,
               sessionId: stringValue(session.id) || "",
-              mode: appSessionAccessMode(session),
+              mode,
             }).token,
           ),
         }));

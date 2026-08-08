@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState, type ComponentProps } from 'react';
+import { useEffect, useMemo, useRef, useState, type ComponentProps } from 'react';
 import { GripVertical } from 'lucide-react-native';
-import { Alert, FlatList, Keyboard, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Animated, FlatList, Keyboard, KeyboardAvoidingView, PanResponder, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
 import { canInterruptAiSession, isAiSessionApprovalPending, type ControlPlaneAiSessionSummary, type ControlPlaneClient } from '@task-handoff/control-plane-client';
 import type { AiSessionMentionCandidate, AiSessionPermissionMode } from '@task-handoff/protocol/ai-sessions';
 
@@ -13,6 +14,7 @@ import { runtimeAttachmentFromServerCandidate, uploadMobileAttachment, usableUpl
 import { useMobileTheme } from '../components/theme';
 import { SystemIcon } from '../components/SystemIcon';
 import { SessionComposer } from './SessionComposer';
+import { SESSION_COMPOSER_COLLAPSED_HEIGHT, SESSION_COMPOSER_EXPANDED_HEIGHT } from './composer-metrics';
 import { useI18n, type Translate } from '../i18n';
 import type { MobileAiSessionPermissionStore } from './permission-store';
 
@@ -57,10 +59,27 @@ export function SessionWorkspace({
     resolved: boolean;
   }>();
   const [composerFocused, setComposerFocused] = useState(false);
+  const [composerExpansion] = useState(() => new Animated.Value(0));
   const [composerOverlayHeight, setComposerOverlayHeight] = useState(0);
   const [, rerender] = useState(0);
   const [attachments, setAttachments] = useState<MobilePendingAttachment[]>([]);
   const [runtimeCandidates, setRuntimeCandidates] = useState<AiSessionMentionCandidate[]>([]);
+  const [queueEdit, setQueueEdit] = useState<{
+    sessionId: string;
+    queueId: string;
+    originalMessage: string;
+    previousDraft: string;
+    previousAttachments: MobilePendingAttachment[];
+    previousRuntimeCandidates: AiSessionMentionCandidate[];
+  }>();
+  const queueEditRef = useRef(queueEdit);
+  queueEditRef.current = queueEdit;
+  const [composerFocusRequest, setComposerFocusRequest] = useState(0);
+  const [queueOrderPreview, setQueueOrderPreview] = useState<string[]>();
+  const [draggingQueueId, setDraggingQueueId] = useState<string>();
+  const queueOrderPreviewRef = useRef<string[] | undefined>(undefined);
+  const queueRowHeights = useRef(new Map<string, number>());
+  const queueDrag = useRef<{ queueId: string; sourceCenter: number; sourceIds: string[]; targets: { index: number; center: number }[] } | undefined>(undefined);
   const [selectedTurnIndex, setSelectedTurnIndex] = useState(() => Math.max(0, aiSessionDisplayTurns(session).length - 1));
   const [localDetailMode, setLocalDetailMode] = useState<SessionDetailMode>('turn');
   const detailMode = controlledDetailMode ?? localDetailMode;
@@ -71,6 +90,9 @@ export function SessionWorkspace({
   const selectionSessionId = useRef<string | undefined>(undefined);
   const knownTurnCount = useRef(0);
   const sessionId = session?.id;
+  const currentSessionId = useRef(sessionId);
+  currentSessionId.current = sessionId;
+  const activeQueueEdit = queueEdit?.sessionId === sessionId ? queueEdit : undefined;
   const permissionKey = sessionId ? `${controlPlaneId}\u0000${instanceId}\u0000${sessionId}` : undefined;
   const permissionMode = permissionSelection && permissionSelection.key === permissionKey
     ? permissionSelection.mode
@@ -112,6 +134,12 @@ export function SessionWorkspace({
     selectionSessionId.current = sessionId;
     knownTurnCount.current = turnCount;
   }, [latestTurnIndex, sessionId, turnCount]);
+  useEffect(() => {
+    queueOrderPreviewRef.current = undefined;
+    setQueueOrderPreview(undefined);
+    setDraggingQueueId(undefined);
+    queueDrag.current = undefined;
+  }, [session?.queue.revision, sessionId]);
   if (!session) return <SessionDetail messages={messages} session={session} />;
   const authoritativeActionsEnabled = syncPhase === 'ready';
   const isLatestTurn = detailMode === 'conversation' || selectedTurnIndex >= latestTurnIndex;
@@ -120,8 +148,116 @@ export function SessionWorkspace({
   const state = (action: Parameters<typeof mobileAiSessionBusyKey>[3], queueId?: string) => actions?.state(mobileAiSessionBusyKey(controlPlaneId, instanceId, session.id, action, queueId));
   const sendState = state('send');
   const actionErrors = [sendState, state('interrupt'), ...(isLatestTurn ? [state('approval'), ...session.queue.items.flatMap((item) => [
-    state('queue-steer', item.id), state('queue-retry', item.id), state('queue-remove', item.id),
-  ])] : [])].map((candidate) => candidate?.error).filter((error, index, all): error is string => Boolean(error) && all.indexOf(error) === index);
+    state('queue-steer', item.id), state('queue-retry', item.id), state('queue-remove', item.id), state('queue-edit', item.id),
+  ]), state('queue-reorder')] : [])].map((candidate) => candidate?.error).filter((error, index, all): error is string => Boolean(error) && all.indexOf(error) === index);
+  const queuedItems = session.queue.items.filter((item) => item.status === 'queued');
+  const displayedQueueItems = queueItemsWithQueuedOrder(session.queue.items, queueOrderPreview);
+  const commitQueueOrder = async (queueIds: string[]) => {
+    if (!actions || arraysEqual(queueIds, queuedItems.map((item) => item.id))) return;
+    const result = await actions.reorderQueue(instanceId, session.id, session.queue.revision, queueIds);
+    if (result.disposition !== 'accepted') {
+      queueOrderPreviewRef.current = undefined;
+      setQueueOrderPreview(undefined);
+    }
+  };
+  const moveQueuedMessage = (queueId: string, offset: -1 | 1) => {
+    const queueIds = queuedItems.map((item) => item.id);
+    const index = queueIds.indexOf(queueId);
+    const target = index + offset;
+    if (index < 0 || target < 0 || target >= queueIds.length) return;
+    const reordered = moveQueueId(queueIds, index, target);
+    queueOrderPreviewRef.current = reordered;
+    setQueueOrderPreview(reordered);
+    void commitQueueOrder(reordered);
+  };
+  const beginQueueDrag = (queueId: string) => {
+    const sourceIds = queuedItems.map((item) => item.id);
+    let cursor = 0;
+    const targets = sourceIds.flatMap((id, index) => {
+      const height = queueRowHeights.current.get(id);
+      if (!height) return [];
+      const target = { index, center: cursor + height / 2 };
+      cursor += height + StyleSheet.hairlineWidth;
+      return [target];
+    });
+    const source = targets.find((target) => sourceIds[target.index] === queueId);
+    if (!source || targets.length < 2) return;
+    queueDrag.current = { queueId, sourceCenter: source.center, sourceIds, targets };
+    queueOrderPreviewRef.current = sourceIds;
+    setQueueOrderPreview(sourceIds);
+    setDraggingQueueId(queueId);
+  };
+  const updateQueueDrag = (queueId: string, dy: number) => {
+    const drag = queueDrag.current;
+    if (!drag || drag.queueId !== queueId) return;
+    const pointerCenter = drag.sourceCenter + dy;
+    const target = drag.targets.reduce((closest, candidate) => (
+      Math.abs(candidate.center - pointerCenter) < Math.abs(closest.center - pointerCenter) ? candidate : closest
+    ));
+    const reordered = moveQueueId(drag.sourceIds, drag.sourceIds.indexOf(queueId), target.index);
+    if (arraysEqual(reordered, queueOrderPreviewRef.current)) return;
+    queueOrderPreviewRef.current = reordered;
+    setQueueOrderPreview(reordered);
+  };
+  const finishQueueDrag = (queueId: string) => {
+    const drag = queueDrag.current;
+    if (!drag || drag.queueId !== queueId) return;
+    const reordered = queueOrderPreviewRef.current || drag.sourceIds;
+    queueDrag.current = undefined;
+    setDraggingQueueId(undefined);
+    if (arraysEqual(reordered, drag.sourceIds)) {
+      queueOrderPreviewRef.current = undefined;
+      setQueueOrderPreview(undefined);
+      return;
+    }
+    void commitQueueOrder(reordered);
+  };
+  const cancelQueueDrag = (queueId: string) => {
+    if (queueDrag.current?.queueId !== queueId) return;
+    queueDrag.current = undefined;
+    queueOrderPreviewRef.current = undefined;
+    setQueueOrderPreview(undefined);
+    setDraggingQueueId(undefined);
+  };
+  const restoreDraftAfterQueueEdit = (edit: NonNullable<typeof activeQueueEdit>) => {
+    if (queueEditRef.current !== edit) return;
+    if (edit.sessionId !== currentSessionId.current) {
+      setQueueEdit((current) => current === edit ? undefined : current);
+      return;
+    }
+    setQueueEdit(undefined);
+    setDraft(edit.previousDraft);
+    latestDraft.current = edit.previousDraft;
+    setAttachments(edit.previousAttachments);
+    setRuntimeCandidates(edit.previousRuntimeCandidates);
+    if (draftTimer.current) clearTimeout(draftTimer.current);
+    void drafts?.write(controlPlaneId, instanceId, session.id, edit.previousDraft);
+  };
+  const beginQueueEdit = (queueId: string, message: string) => {
+    const previous = activeQueueEdit;
+    setQueueEdit({
+      sessionId: session.id,
+      queueId,
+      originalMessage: message,
+      previousDraft: previous?.previousDraft ?? draft,
+      previousAttachments: previous?.previousAttachments ?? attachments,
+      previousRuntimeCandidates: previous?.previousRuntimeCandidates ?? runtimeCandidates,
+    });
+    setDraft(message);
+    setAttachments([]);
+    setRuntimeCandidates([]);
+    setComposerFocused(true);
+    setComposerFocusRequest((value) => value + 1);
+  };
+  const saveQueueEdit = async () => {
+    if (!actions || !activeQueueEdit || !draft.trim()) return;
+    if (draft.trim() === activeQueueEdit.originalMessage.trim()) {
+      restoreDraftAfterQueueEdit(activeQueueEdit);
+      return;
+    }
+    const result = await actions.editQueue(instanceId, session.id, activeQueueEdit.queueId, session.queue.revision, draft.trim());
+    if (result.disposition === 'accepted') restoreDraftAfterQueueEdit(activeQueueEdit);
+  };
   const send = async () => {
     if (!actions || !draft.trim()) return;
     let refs;
@@ -159,31 +295,70 @@ export function SessionWorkspace({
   };
   const updateDraft = (text: string) => {
     setDraft(text);
+    if (activeQueueEdit) return;
     latestDraft.current = text;
     if (draftTimer.current) clearTimeout(draftTimer.current);
     if (drafts) draftTimer.current = setTimeout(() => { void drafts.write(controlPlaneId, instanceId, session.id, text); }, 150);
   };
   const hasDraft = Boolean(draft.trim());
-  const composerAction = !hasDraft && canInterrupt ? 'stop' : 'send';
-  const composerDisabled = !authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes((composerAction === 'stop' ? state('interrupt') : sendState)?.phase || '')
-    || (composerAction === 'stop' ? !canInterrupt : !session.actions?.send || !hasDraft);
+  const composerAction = activeQueueEdit ? 'save' : !hasDraft && canInterrupt ? 'stop' : 'send';
+  const composerOperationState = composerAction === 'stop' ? state('interrupt') : composerAction === 'save' ? state('queue-edit', activeQueueEdit?.queueId) : sendState;
+  const composerDisabled = !authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes(composerOperationState?.phase || '')
+    || (composerAction === 'stop' ? !canInterrupt : composerAction === 'save'
+      ? !hasDraft || draft.trim() === activeQueueEdit?.originalMessage.trim()
+      : !session.actions?.send || !hasDraft);
   const runComposerAction = () => {
     if (composerAction === 'stop') void actions?.interrupt(instanceId, session.id);
+    else if (composerAction === 'save') void saveQueueEdit();
     else void send();
   };
   const setComposerFocus = (focused: boolean) => {
+    if (!focused && activeQueueEdit) restoreDraftAfterQueueEdit(activeQueueEdit);
     setComposerFocused(focused);
   };
   const updatePermissionMode = (mode: AiSessionPermissionMode) => {
     if (permissionKey) setPermissionSelection({ key: permissionKey, mode, resolved: true });
     if (sessionId && permissions) void permissions.write(controlPlaneId, instanceId, sessionId, mode).catch(() => undefined);
   };
+  const composerBottomInset = Math.max(insets.bottom, 8);
+  const composerBackdropHeight = composerExpansion.interpolate({
+    inputRange: [0, 1],
+    outputRange: [SESSION_COMPOSER_COLLAPSED_HEIGHT, SESSION_COMPOSER_EXPANDED_HEIGHT],
+  });
+  const composerFadeBottom = Animated.add(composerBackdropHeight, composerBottomInset);
+  const bottomBackdrop = composerBottomBackdropGeometry(composerBottomInset);
   return (
     <KeyboardAvoidingView behavior={sessionKeyboardAvoidingBehavior(Platform.OS)} style={styles.fill} testID="session-workspace">
       <View onTouchStart={Keyboard.dismiss} style={styles.fill} testID="session-content">
         <SessionDetail bottomInset={composerOverlayHeight} messages={messages} mode={detailMode} onModeChange={setDetailMode} onVisible={onVisible} onTurnIndexChange={setSelectedTurnIndex} session={session} showModePicker={controlledDetailMode === undefined} turnIndex={selectedTurnIndex} />
       </View>
-      <View onLayout={(event) => setComposerOverlayHeight(event.nativeEvent.layout.height)} style={[styles.actions, { paddingBottom: Math.max(insets.bottom, 8) }]} testID="session-actions">
+      <>
+        <Animated.View pointerEvents="none" style={[styles.composerBackdrop, { bottom: composerFadeBottom, height: 16 }]} testID="session-composer-fade-backdrop">
+          <Svg height="100%" width="100%">
+            <Defs>
+              <LinearGradient id="session-composer-gradient" x1="0" x2="0" y1="0" y2="100%">
+                <Stop offset={0} stopColor={colors.surface} stopOpacity={COMPOSER_BACKDROP_OPACITIES.fade[0]} />
+                <Stop offset={1} stopColor={colors.surface} stopOpacity={COMPOSER_BACKDROP_OPACITIES.fade[1]} />
+              </LinearGradient>
+            </Defs>
+            <Rect fill="url(#session-composer-gradient)" height="100%" width="100%" />
+          </Svg>
+        </Animated.View>
+        <Animated.View pointerEvents="none" style={[styles.composerBackdrop, { backgroundColor: colors.surface, bottom: composerBottomInset, height: composerBackdropHeight, opacity: COMPOSER_BACKDROP_OPACITIES.composer }]} testID="session-composer-backdrop" />
+        <View pointerEvents="none" style={[styles.composerBackdrop, { bottom: 0, height: bottomBackdrop.height }]} testID="session-composer-bottom-backdrop">
+          <Svg height="100%" width="100%">
+            <Defs>
+              <LinearGradient id="session-composer-bottom-gradient" x1="0" x2="0" y1="0" y2="100%">
+                <Stop offset={bottomBackdrop.locations[0]} stopColor={colors.surface} stopOpacity={COMPOSER_BACKDROP_OPACITIES.bottom[0]} />
+                <Stop offset={bottomBackdrop.locations[1]} stopColor={colors.surface} stopOpacity={COMPOSER_BACKDROP_OPACITIES.bottom[1]} />
+                <Stop offset={bottomBackdrop.locations[2]} stopColor={colors.surface} stopOpacity={COMPOSER_BACKDROP_OPACITIES.bottom[2]} />
+              </LinearGradient>
+            </Defs>
+            <Rect fill="url(#session-composer-bottom-gradient)" height="100%" width="100%" />
+          </Svg>
+        </View>
+      </>
+      <View onLayout={(event) => setComposerOverlayHeight(event.nativeEvent.layout.height)} style={[styles.actions, { paddingBottom: composerBottomInset }]} testID="session-actions">
         {!authoritativeActionsEnabled ? (
           <View style={[styles.notice, { backgroundColor: colors.notice }]}> 
             <SystemIcon android="cloud_off" color={colors.noticeText} ios="icloud.slash" size={16} />
@@ -211,11 +386,13 @@ export function SessionWorkspace({
         ) : null}
         {isLatestTurn && session.queue.items.length ? <View style={[styles.queueListFrame, { backgroundColor: colors.surface, borderColor: colors.border }]}><FlatList
           accessibilityLabel={t('workspace.queuedMessages')}
-          data={session.queue.items}
+          data={displayedQueueItems}
           keyExtractor={(item) => item.id}
           keyboardShouldPersistTaps="handled"
           nestedScrollEnabled
+          scrollEnabled={queueListScrollEnabled(draggingQueueId)}
           style={styles.queueList}
+          testID="queued-message-list"
           ItemSeparatorComponent={() => <View style={[styles.queueSeparator, { backgroundColor: colors.border }]} />}
           renderItem={({ item }) => {
             const metadata = [
@@ -225,9 +402,20 @@ export function SessionWorkspace({
               item.references.length ? t('workspace.queueReferences', { count: item.references.length }) : undefined,
             ].filter(Boolean).join(' · ');
             return (
-              <View style={styles.queueRow}>
+              <View onLayout={(event) => queueRowHeights.current.set(item.id, event.nativeEvent.layout.height)} style={[styles.queueRow, draggingQueueId === item.id && styles.queueRowDragging]} testID={`queued-message-row-${item.id}`}>
                 <View style={styles.queueContent}>
-                  <GripVertical color={item.status === 'failed' ? colors.error : colors.textMuted} size={17} strokeWidth={1.8} />
+                  {item.status === 'queued' ? <QueueDragHandle
+                    disabled={!authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes(state('queue-reorder')?.phase || '')}
+                    label={t('workspace.reorderAction')}
+                    moveDownLabel={t('workspace.moveDownAction')}
+                    moveUpLabel={t('workspace.moveUpAction')}
+                    onDragCancel={() => cancelQueueDrag(item.id)}
+                    onDragEnd={() => finishQueueDrag(item.id)}
+                    onDragMove={(dy) => updateQueueDrag(item.id, dy)}
+                    onDragStart={() => beginQueueDrag(item.id)}
+                    onMoveDown={() => moveQueuedMessage(item.id, 1)}
+                    onMoveUp={() => moveQueuedMessage(item.id, -1)}
+                  /> : <GripVertical color={colors.error} size={17} strokeWidth={1.8} />}
                   <View style={styles.queueCopy}>
                     <Text numberOfLines={2} style={[styles.queueText, { color: colors.text }]}>{item.message}</Text>
                     {metadata ? <Text numberOfLines={1} style={[styles.queueMeta, { color: colors.textMuted }]}>{metadata}</Text> : null}
@@ -235,6 +423,7 @@ export function SessionWorkspace({
                   </View>
                 </View>
                 <View style={styles.queueActions}>
+                  {item.status === 'queued' ? <QueueActionButton icon={{ android: 'edit', ios: 'pencil' }} label={t('workspace.editAction')} disabled={!authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes(state('queue-edit', item.id)?.phase || '')} onPress={() => beginQueueEdit(item.id, item.message)} /> : null}
                   <QueueActionButton icon={{ android: 'turn_right', ios: 'arrow.turn.up.right' }} label={t('workspace.steerAction')} disabled={!authoritativeActionsEnabled || !actions || !canInterrupt || ['busy', 'result-unknown'].includes(state('queue-steer', item.id)?.phase || '')} onPress={() => { void actions?.queue(instanceId, session.id, item.id, 'steer'); }} showLabel />
                   {item.status === 'failed' ? <QueueActionButton icon={{ android: 'refresh', ios: 'arrow.clockwise' }} label={t('workspace.retryAction')} disabled={!authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes(state('queue-retry', item.id)?.phase || '')} onPress={() => { void actions?.queue(instanceId, session.id, item.id, 'retry'); }} /> : null}
                   <QueueActionButton destructive icon={{ android: 'close', ios: 'xmark' }} label={t('workspace.removeAction')} disabled={!authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes(state('queue-remove', item.id)?.phase || '')} onPress={() => { void actions?.queue(instanceId, session.id, item.id, 'remove'); }} />
@@ -252,17 +441,22 @@ export function SessionWorkspace({
           } catch { setRuntimeCandidates([]); }
         }}><Text style={[styles.runtimeFile, { color: colors.primary }]}>{candidate.name} · {candidate.path}</Text></Pressable>} /> : null}
         {attachments.length ? <View style={styles.attachments}>{attachments.map((attachment) => <View key={attachment.localId} style={[styles.attachment, { backgroundColor: colors.surfaceMuted }]}><SystemIcon android={attachment.kind === 'image' ? 'image' : 'description'} color={colors.textMuted} ios={attachment.kind === 'image' ? 'photo' : 'doc'} size={15} /><Text numberOfLines={1} style={[styles.attachmentName, { color: colors.text }]}>{attachment.name}</Text><Text style={[styles.attachmentPhase, { color: attachment.phase === 'failed' ? colors.error : colors.textMuted }]}>{attachment.phase}</Text><Pressable accessibilityLabel={`Remove ${attachment.name}`} accessibilityRole="button" hitSlop={8} onPress={() => setAttachments((current) => current.filter((item) => item.localId !== attachment.localId))}><SystemIcon android="close" color={colors.textMuted} ios="xmark.circle.fill" size={17} /></Pressable>{attachment.error ? <Text accessibilityLiveRegion="polite" style={[styles.error, { color: colors.error }]}>{attachment.error}</Text> : null}</View>)}</View> : null}
+        {actionErrors.map((error) => <Text accessibilityLiveRegion="polite" key={error} style={[styles.error, { color: colors.error }]}>{error}</Text>)}
         <SessionComposer
           action={composerAction}
           actionDisabled={composerDisabled}
           editable={authoritativeActionsEnabled}
+          editingLabel={activeQueueEdit ? t('workspace.editMessage') : undefined}
+          expansion={composerExpansion}
           fileDisabled={!authoritativeActionsEnabled || !client}
           focused={composerFocused}
+          focusRequestKey={composerFocusRequest}
           imageDisabled={!authoritativeActionsEnabled || !client}
           onAction={runComposerAction}
           onAddFile={() => { void selectLocal('file'); }}
           onAddImage={() => { void selectLocal('image'); }}
           onAddRuntimeFile={() => { void loadRuntimeFiles(); }}
+          onCancelEdit={() => { if (activeQueueEdit) restoreDraftAfterQueueEdit(activeQueueEdit); }}
           onFocusChange={setComposerFocus}
           onPermissionModeChange={updatePermissionMode}
           onValueChange={updateDraft}
@@ -271,7 +465,6 @@ export function SessionWorkspace({
           runtimeFileDisabled={!authoritativeActionsEnabled || !client || !session.cwd}
           value={draft}
         />
-        {actionErrors.map((error) => <Text accessibilityLiveRegion="polite" key={error} style={[styles.error, { color: colors.error }]}>{error}</Text>)}
       </View>
     </KeyboardAvoidingView>
   );
@@ -279,6 +472,20 @@ export function SessionWorkspace({
 
 export function sessionKeyboardAvoidingBehavior(platform: string): 'height' | undefined {
   return platform === 'ios' ? 'height' : undefined;
+}
+
+export const COMPOSER_BACKDROP_OPACITIES = {
+  fade: [0, 0.8],
+  composer: 0.8,
+  bottom: [0.8, 1, 1],
+} as const;
+
+export function composerBottomBackdropGeometry(bottomInset: number) {
+  if (bottomInset <= 0) return { height: 0, locations: [0, 1, 1] as const };
+  return {
+    height: bottomInset,
+    locations: [0, Math.max(0, 1 - 8 / bottomInset), 1] as const,
+  };
 }
 
 function ApprovalButton({ label, decision, disabled, onPress }: { label: string; decision: 'allow' | 'skip' | 'deny'; disabled?: boolean; onPress(): void }) {
@@ -309,6 +516,64 @@ function QueueActionButton({ label, icon, destructive = false, disabled, onPress
   return <Pressable accessibilityLabel={label} accessibilityRole="button" accessibilityState={{ disabled: Boolean(disabled) }} disabled={disabled} hitSlop={5} onPress={onPress} style={({ pressed }) => [styles.queueAction, disabled && styles.disabled, pressed && styles.pressed]}><SystemIcon android={icon.android} color={color} ios={icon.ios} size={14} />{showLabel ? <Text style={[styles.queueActionText, { color }]}>{label}</Text> : null}</Pressable>;
 }
 
+function QueueDragHandle({ disabled, label, moveDownLabel, moveUpLabel, onDragCancel, onDragEnd, onDragMove, onDragStart, onMoveDown, onMoveUp }: { disabled?: boolean; label: string; moveDownLabel: string; moveUpLabel: string; onDragCancel(): void; onDragEnd(): void; onDragMove(dy: number): void; onDragStart(): void; onMoveDown(): void; onMoveUp(): void }) {
+  const { colors } = useMobileTheme();
+  const responder = useMemo(() => PanResponder.create({
+    onMoveShouldSetPanResponderCapture: () => !disabled,
+    onMoveShouldSetPanResponder: () => !disabled,
+    onPanResponderGrant: onDragStart,
+    onPanResponderMove: (_event, gesture) => onDragMove(gesture.dy),
+    onPanResponderRelease: onDragEnd,
+    onPanResponderTerminate: onDragCancel,
+    onPanResponderTerminationRequest: () => false,
+    onShouldBlockNativeResponder: () => true,
+    onStartShouldSetPanResponderCapture: () => !disabled,
+    onStartShouldSetPanResponder: () => !disabled,
+  }), [disabled, onDragCancel, onDragEnd, onDragMove, onDragStart]);
+  return (
+    <View
+      accessibilityActions={[{ name: 'decrement', label: moveUpLabel }, { name: 'increment', label: moveDownLabel }]}
+      accessibilityLabel={label}
+      accessibilityRole="adjustable"
+      accessibilityState={{ disabled: Boolean(disabled) }}
+      onAccessibilityAction={(event) => {
+        if (disabled) return;
+        if (event.nativeEvent.actionName === 'decrement') onMoveUp();
+        if (event.nativeEvent.actionName === 'increment') onMoveDown();
+      }}
+      style={[styles.queueDragHandle, disabled && styles.disabled]}
+      testID="queue-drag-handle"
+      {...responder.panHandlers}
+    >
+      <GripVertical color={colors.textMuted} size={18} strokeWidth={1.8} />
+    </View>
+  );
+}
+
+export function moveQueueId(queueIds: readonly string[], source: number, target: number) {
+  if (source < 0 || target < 0 || source >= queueIds.length || target >= queueIds.length || source === target) return [...queueIds];
+  const reordered = [...queueIds];
+  const [item] = reordered.splice(source, 1);
+  reordered.splice(target, 0, item);
+  return reordered;
+}
+
+export function queueListScrollEnabled(draggingQueueId?: string) {
+  return !draggingQueueId;
+}
+
+export function queueItemsWithQueuedOrder<T extends { id: string; status: string }>(items: readonly T[], queueIds?: readonly string[]) {
+  if (!queueIds) return [...items];
+  const queuedById = new Map(items.filter((item) => item.status === 'queued').map((item) => [item.id, item]));
+  const ordered = queueIds.map((id) => queuedById.get(id)).filter((item): item is T => Boolean(item));
+  let queuedIndex = 0;
+  return items.map((item) => item.status === 'queued' ? ordered[queuedIndex++] || item : item);
+}
+
+function arraysEqual(left: readonly string[] | undefined, right: readonly string[] | undefined) {
+  return left?.length === right?.length && left?.every((value, index) => value === right?.[index]);
+}
+
 function queuePermissionLabel(mode: AiSessionPermissionMode, t: Translate) {
   if (mode === 'auto-review') return t('composer.autoReview');
   if (mode === 'full-access') return t('composer.fullAccess');
@@ -317,7 +582,8 @@ function queuePermissionLabel(mode: AiSessionPermissionMode, t: Translate) {
 
 const styles = StyleSheet.create({
   fill: { flex: 1 },
-  actions: { bottom: 0, gap: 8, left: 0, paddingHorizontal: 12, paddingTop: 8, position: 'absolute', right: 0, zIndex: 10 },
+  actions: { bottom: 0, gap: 8, left: 0, paddingHorizontal: 12, paddingTop: 16, position: 'absolute', right: 0, zIndex: 10 },
+  composerBackdrop: { left: 0, position: 'absolute', right: 0, zIndex: 9 },
   actionRow: { alignItems: 'center', flexDirection: 'row', gap: 6 },
   approval: { borderRadius: 14, gap: 8, padding: 10 },
   approvalTitleRow: { alignItems: 'center', flexDirection: 'row', gap: 7, paddingHorizontal: 2 },
@@ -328,14 +594,16 @@ const styles = StyleSheet.create({
   pressed: { opacity: 0.7 },
   queueListFrame: { borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },
   queueList: { maxHeight: 224 },
-  queueSeparator: { height: StyleSheet.hairlineWidth, marginLeft: 40 },
-  queueRow: { alignItems: 'center', flexDirection: 'row', gap: 8, minHeight: 52, paddingHorizontal: 10, paddingVertical: 8 },
-  queueContent: { alignItems: 'center', flex: 1, flexDirection: 'row', gap: 9, minWidth: 0 },
+  queueSeparator: { height: StyleSheet.hairlineWidth, marginLeft: 30 },
+  queueRow: { alignItems: 'center', flexDirection: 'row', gap: 8, minHeight: 52, paddingHorizontal: 7, paddingVertical: 8 },
+  queueRowDragging: { opacity: 0.72 },
+  queueContent: { alignItems: 'center', flex: 1, flexDirection: 'row', gap: 4, minWidth: 0 },
   queueCopy: { flex: 1, gap: 1, minWidth: 0 },
   queueText: { fontSize: 14, fontWeight: '500', lineHeight: 20 },
   queueMeta: { fontSize: 12, lineHeight: 17 },
   queueError: { marginTop: 1 },
   queueActions: { alignItems: 'center', flexDirection: 'row', gap: 2 },
+  queueDragHandle: { alignItems: 'center', height: 40, justifyContent: 'center', width: 24 },
   queueAction: { alignItems: 'center', borderRadius: 8, flexDirection: 'row', gap: 4, height: 34, justifyContent: 'center', minWidth: 34, paddingHorizontal: 6 },
   queueActionText: { fontSize: 12, fontWeight: '700', lineHeight: 17 },
   notice: { alignItems: 'flex-start', borderRadius: 10, flexDirection: 'row', gap: 8, padding: 12 },

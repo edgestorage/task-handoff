@@ -39,6 +39,18 @@ export class MobileDirectoryStore {
         : instance),
     });
   }
+  setInstanceName(controlPlaneId: string, instanceId: string, name: string) {
+    const current = this.profile(controlPlaneId);
+    return this.set(controlPlaneId, {
+      instances: current.instances.map((instance) => instance.id === instanceId ? { ...instance, name } : instance),
+    });
+  }
+  setNodeName(controlPlaneId: string, nodeId: string, name: string) {
+    const current = this.profile(controlPlaneId);
+    return this.set(controlPlaneId, {
+      nodes: current.nodes.map((node) => node.id === nodeId ? { ...node, name } : node),
+    });
+  }
   clearProfile(controlPlaneId: string) {
     const deleted = this.profiles.delete(controlPlaneId);
     this.generations.set(controlPlaneId, this.generation(controlPlaneId) + 1);

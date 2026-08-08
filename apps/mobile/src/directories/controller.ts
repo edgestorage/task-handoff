@@ -51,6 +51,24 @@ export class MobileDirectoryController {
     }
   }
 
+  async updateInstanceName(instanceId: string, name: string) {
+    const updated = await this.client.resources.updateInstanceName(instanceId, name);
+    if (this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) {
+      this.store.setInstanceName(this.controlPlaneId, updated.id, updated.name);
+      void this.start().catch(() => undefined);
+    }
+    return updated;
+  }
+
+  async updateNodeName(nodeId: string, name: string) {
+    const updated = await this.client.resources.updateNodeName(nodeId, name);
+    if (this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) {
+      this.store.setNodeName(this.controlPlaneId, updated.id, updated.name);
+      void this.start().catch(() => undefined);
+    }
+    return updated;
+  }
+
   offline() {
     this.stop();
     if (!this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) return;

@@ -46,12 +46,37 @@ test("shared AI Session client owns route encoding, request input, and response 
   assert.equal(requests[0].init.method, "POST");
 });
 
+test("shared AI Session client owns revisioned queue edit and reorder routes", async () => {
+  const requests = [];
+  const transport = {
+    async request(path, schema, init) {
+      requests.push({ path, init });
+      return schema.parse({ data: {
+        id: "session-1", agent: "codex", status: "running", phase: "thinking",
+        startedAt: "2026-08-05T00:00:00.000Z", updatedAt: "2026-08-05T00:00:00.000Z",
+        queue: { revision: 4, pendingCount: 2, items: [] },
+      } });
+    },
+  };
+  const api = createControlPlaneClient(transport);
+  await api.aiSessions.editQueue("instance/1", "session/1", "queue/1", { expectedRevision: 3, message: "  revised  " });
+  await api.aiSessions.reorderQueue("instance/1", "session/1", { expectedRevision: 4, queueIds: ["queue-2", "queue-1"] });
+  assert.deepEqual(requests.map((request) => request.path), [
+    "/api/controlled-instances/instance%2F1/ai-sessions/session%2F1/queue/queue%2F1",
+    "/api/controlled-instances/instance%2F1/ai-sessions/session%2F1/queue/reorder",
+  ]);
+  assert.deepEqual(requests.map((request) => request.init.method), ["PATCH", "PATCH"]);
+  assert.deepEqual(JSON.parse(requests[0].init.body), { expectedRevision: 3, message: "revised" });
+  assert.deepEqual(JSON.parse(requests[1].init.body), { expectedRevision: 4, queueIds: ["queue-2", "queue-1"] });
+});
+
 test("shared App Session client owns aggregate, launch, stop, rename, and delta routes", async () => {
   const requests = [];
   const transport = {
     async request(path, schema, init) {
       requests.push({ path, init });
       if (path.includes("sinceRevision")) return schema.parse({ data: { streamId: "stream-1", instanceId: "instance-1", sinceRevision: 4, latestRevision: 4, earliestRetainedRevision: 0, syncRequired: false, events: [] } });
+      if (path.endsWith("/access")) return schema.parse({ data: init.method === "DELETE" ? { revoked: true } : { mode: "vnc", url: "/apps/access/vnc?token=lease", token: "lease", expiresAt: "2026-08-07T00:15:00.000Z" } });
       if (path.includes("/apps/sessions")) return schema.parse({ data: { id: "app-session-1", appId: "terminal-tty", kind: "tty", status: "running", bindings: [] } });
       return schema.parse({ data: { updatedAt: "2026-08-07T00:00:00.000Z", instances: [] } });
     },
@@ -61,12 +86,16 @@ test("shared App Session client owns aggregate, launch, stop, rename, and delta 
   await api.appSessions.launch("instance/1", { appId: "terminal-tty", cwdFolderId: "folder/1" });
   await api.appSessions.stop("instance/1", "session/1");
   await api.appSessions.rename("instance/1", "session/1", "  Terminal  ");
+  const access = await api.appSessions.access("instance/1", "session/1");
+  await api.appSessions.revokeAccess("instance/1", "session/1", access.token);
   await api.appSessions.delta("instance/1", "stream/1", 4);
   assert.deepEqual(requests.map((request) => request.path), [
     "/api/app-sessions",
     "/api/controlled-instances/instance%2F1/apps/sessions",
     "/api/controlled-instances/instance%2F1/apps/sessions/session%2F1/stop",
     "/api/controlled-instances/instance%2F1/apps/sessions/session%2F1",
+    "/api/controlled-instances/instance%2F1/apps/sessions/session%2F1/access",
+    "/api/controlled-instances/instance%2F1/apps/sessions/session%2F1/access",
     "/api/app-sessions?instanceId=instance%2F1&streamId=stream%2F1&sinceRevision=4",
   ]);
   assert.equal(requests[1].init.method, "POST");
@@ -75,6 +104,10 @@ test("shared App Session client owns aggregate, launch, stop, rename, and delta 
   assert.deepEqual(JSON.parse(requests[2].init.body), {});
   assert.equal(requests[3].init.method, "PATCH");
   assert.deepEqual(JSON.parse(requests[3].init.body), { title: "Terminal" });
+  assert.equal(requests[4].init.method, "POST");
+  assert.deepEqual(JSON.parse(requests[4].init.body), {});
+  assert.equal(requests[5].init.method, "DELETE");
+  assert.deepEqual(JSON.parse(requests[5].init.body), { token: "lease" });
 });
 
 test("shared auth client owns Web and mobile authentication contracts", async () => {
@@ -173,6 +206,7 @@ test("shared resource client validates declared fields and drops unknown respons
     async request(path, schema, init) {
       requests.push({ path, init });
       if (path.startsWith("/api/nodes")) {
+        if (init?.method === "PATCH") return schema.parse({ data: { id: "node-1", name: "Renamed Node", ignored: true } });
         return schema.parse({ data: [{
           id: "node-1",
           name: "Node",
@@ -184,6 +218,7 @@ test("shared resource client validates declared fields and drops unknown respons
         }] });
       }
       if (path === "/api/controlled-instances/instance%2F1") {
+        if (JSON.parse(init.body).name) return schema.parse({ data: { id: "instance-1", name: "Renamed Instance", ignored: true } });
         return schema.parse({ data: { config: { defaultCodexPermissionMode: "auto-review" } } });
       }
       return schema.parse({ data: [{
@@ -217,18 +252,26 @@ test("shared resource client validates declared fields and drops unknown respons
   await api.resources.nodes();
   const instances = await api.resources.instanceBoard();
   const savedPermission = await api.resources.updateInstanceDefaultPermissionMode("instance/1", "auto-review");
+  const renamedInstance = await api.resources.updateInstanceName("instance/1", "Renamed Instance");
+  const renamedNode = await api.resources.updateNodeName("node-1", "Renamed Node");
 
   assert.equal(instances[0].config.defaultCodexPermissionMode, "full-access");
   assert.equal(instances[0].availableApps[0].id, "terminal-tty");
   assert.equal(savedPermission, "auto-review");
+  assert.deepEqual(renamedInstance, { id: "instance-1", name: "Renamed Instance" });
+  assert.deepEqual(renamedNode, { id: "node-1", name: "Renamed Node" });
 
   assert.deepEqual(requests.map((request) => request.path), [
     "/api/nodes?projection=directory",
     "/api/instance-board?projection=directory",
     "/api/controlled-instances/instance%2F1",
+    "/api/controlled-instances/instance%2F1",
+    "/api/nodes/node-1",
   ]);
   assert.equal(requests[2].init.method, "PATCH");
   assert.deepEqual(JSON.parse(requests[2].init.body), { config: { defaultCodexPermissionMode: "auto-review" } });
+  assert.deepEqual(JSON.parse(requests[3].init.body), { name: "Renamed Instance" });
+  assert.deepEqual(JSON.parse(requests[4].init.body), { name: "Renamed Node" });
 
   const compatibleApi = createControlPlaneClient({
     request(path, schema) {

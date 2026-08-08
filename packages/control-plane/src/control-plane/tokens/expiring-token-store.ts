@@ -47,6 +47,12 @@ export class ExpiringTokenStore<T extends ExpiringTokenRecord> {
     return record;
   }
 
+  revoke(token: string, predicate?: (record: T) => boolean) {
+    const record = this.resolve(token, predicate);
+    this.records.delete(token);
+    return record;
+  }
+
   private invalidError() {
     const error = new Error(this.options.invalidMessage);
     Object.assign(error, { statusCode: this.options.invalidStatusCode || 400, code: this.options.invalidCode });

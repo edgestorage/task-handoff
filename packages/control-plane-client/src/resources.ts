@@ -11,6 +11,10 @@ const DataSchema = <T extends z.ZodType>(schema: T) => z.object({ data: schema }
 const InstancePermissionConfigSchema = z.object({
   config: z.object({ defaultCodexPermissionMode: AiSessionPermissionModeSchema }).passthrough(),
 }).passthrough();
+const NamedResourceSchema = z.object({
+  id: z.string().trim().min(1).max(160),
+  name: z.string().trim().min(1).max(160),
+});
 export const ControlPlaneNodeLocalFolderSchema = z.object({
   id: z.string().trim().min(1).max(120),
   nodeId: z.string().trim().min(1).max(120),
@@ -34,6 +38,30 @@ export function createControlPlaneResourcesApi(transport: ControlPlaneClientTran
     },
     instanceBoard(signal?: AbortSignal) {
       return requestData("/api/instance-board?projection=directory", ControlPlaneInstanceDirectorySchema, signal);
+    },
+    async updateInstanceName(instanceId: string, name: string) {
+      const response = await transport.request(
+        `/api/controlled-instances/${encodeURIComponent(instanceId)}`,
+        DataSchema(NamedResourceSchema),
+        {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name }),
+        },
+      );
+      return response.data;
+    },
+    async updateNodeName(nodeId: string, name: string) {
+      const response = await transport.request(
+        `/api/nodes/${encodeURIComponent(nodeId)}`,
+        DataSchema(NamedResourceSchema),
+        {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name }),
+        },
+      );
+      return response.data;
     },
     async updateInstanceDefaultPermissionMode(instanceId: string, permissionMode: AiSessionPermissionMode) {
       const response = await transport.request(

@@ -1,19 +1,20 @@
 <template>
-  <div ref="root" class="markdown-content" v-html="html" />
+  <div ref="root" class="markdown-content" v-html="html" @click="handleMarkdownCodeCopy" />
 </template>
 
 <script setup lang="ts">
 import "katex/dist/katex.min.css";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { renderMarkdown } from "./markdown";
+import { handleMarkdownCodeCopy, renderMarkdown, type MarkdownCodeTools } from "./markdown";
 import { renderMermaid, type MermaidTheme } from "./mermaid";
 
 const props = defineProps<{
+  codeTools?: MarkdownCodeTools;
   content?: unknown;
 }>();
 
 const root = ref<HTMLElement>();
-const html = computed(() => renderMarkdown(props.content));
+const html = computed(() => renderMarkdown(props.content, { codeTools: props.codeTools }));
 const mermaidSources = new WeakMap<Element, string>();
 let renderVersion = 0;
 let themeObserver: MutationObserver | undefined;
@@ -188,6 +189,62 @@ onBeforeUnmount(() => {
   background: transparent;
   padding: 0;
   white-space: pre;
+}
+
+.markdown-content :deep(.markdown-code-block) {
+  max-width: 100%;
+  margin: 0.75em 0;
+  overflow: hidden;
+  border: 1px solid var(--markdown-border-color, var(--line, transparent));
+  border-radius: 7px;
+  background: var(--markdown-code-bg, var(--surface-inset, rgb(127 127 127 / 14%)));
+}
+
+.markdown-content :deep(.markdown-code-toolbar) {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--markdown-border-color, var(--line, transparent));
+  padding: 0 10px 0 12px;
+  color: var(--markdown-muted-color, var(--text-muted, currentColor));
+  font-size: 12px;
+  line-height: 1;
+}
+
+.markdown-content :deep(.markdown-code-language) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.markdown-content :deep(.markdown-code-copy) {
+  min-height: 28px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  padding: 0 6px;
+}
+
+.markdown-content :deep(.markdown-code-copy:hover) {
+  background: var(--surface-hover, rgb(127 127 127 / 12%));
+  color: var(--markdown-text-color, var(--text-strong, currentColor));
+}
+
+.markdown-content :deep(.markdown-code-copy:focus-visible) {
+  outline: 2px solid var(--focus-ring, var(--brand-accent, currentColor));
+  outline-offset: 1px;
+}
+
+.markdown-content :deep(.markdown-code-block > pre) {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .markdown-content :deep(.hljs-comment),

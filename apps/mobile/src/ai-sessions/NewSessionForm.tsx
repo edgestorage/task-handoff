@@ -1,4 +1,4 @@
-import { Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { Screen } from '../components/Screen';
 import { SystemIcon } from '../components/SystemIcon';
@@ -23,58 +23,65 @@ export function NewSessionForm(props: NewSessionFormProps) {
     ? props.folders.map((folder) => ({ label: `${folder.name} — ${folder.path}`, value: folder.path }))
     : props.cwd ? [{ label: `${folderName} — ${props.cwd}`, value: props.cwd }] : [];
 
-  return <Screen>
-    <View style={styles.intro}>
-      <Text style={[styles.heading, { color: colors.text }]}>{t('sessions.startIdea')}</Text>
-      <Text style={[styles.description, { color: colors.textMuted }]}>{t('sessions.ideaDescription')}</Text>
-    </View>
-
-    <View style={[styles.composer, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-      <View style={styles.contextRow}>
-        <ContextPill
-          icon={{ android: 'dns', ios: 'server.rack' }}
-          label={props.selectedInstance?.name || t('sessions.selectInstance')}
-          onPress={() => choose(t('sessions.instance'), props.instances.map((instance) => ({ label: instance.name, value: instance.id })), props.onInstanceChange, t)}
-        />
-        <ContextPill
-          icon={{ android: 'folder', ios: 'folder' }}
-          label={folderName}
-          onPress={() => choose(t('sessions.folder'), folderOptions, props.onCwdChange, t)}
-        />
-        <ContextPill
-          icon={{ android: 'auto_awesome', ios: 'sparkles' }}
-          label={selectedAgentName || 'Choose agent'}
-          onPress={() => choose('Agent', (props.selectedInstance?.availableAgents ?? []).map((agent) => ({ label: agent.name, value: agent.id })), props.onAgentChange, t)}
-        />
+  return <KeyboardAvoidingView behavior={newSessionKeyboardAvoidingBehavior(Platform.OS)} style={styles.screen} testID="new-session-keyboard-area">
+    <Screen
+      alwaysBounceVertical={false}
+      automaticallyAdjustKeyboardInsets={false}
+      contentContainerStyle={[styles.screenContent, { paddingBottom: 24 + (props.visualBalanceInset ?? 0) }]}
+      testID="new-session-scroll"
+    >
+      <View style={styles.intro}>
+        <Text style={[styles.heading, { color: colors.text }]}>{t('sessions.startIdea')}</Text>
+        <Text style={[styles.description, { color: colors.textMuted }]}>{t('sessions.ideaDescription')}</Text>
       </View>
 
-      <TextInput
-        accessibilityLabel={t('sessions.prompt')}
-        multiline
-        onChangeText={props.onMessageChange}
-        placeholder={t('sessions.promptPlaceholder')}
-        placeholderTextColor={colors.textMuted}
-        selectionColor={colors.primary}
-        style={[styles.prompt, { color: colors.text }]}
-        value={props.message}
-      />
+      <View style={[styles.composer, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+        <View style={styles.contextRow}>
+          <ContextPill
+            icon={{ android: 'dns', ios: 'server.rack' }}
+            label={props.selectedInstance?.name || t('sessions.selectInstance')}
+            onPress={() => choose(t('sessions.instance'), props.instances.map((instance) => ({ label: instance.name, value: instance.id })), props.onInstanceChange, t)}
+          />
+          <ContextPill
+            icon={{ android: 'folder', ios: 'folder' }}
+            label={folderName}
+            onPress={() => choose(t('sessions.folder'), folderOptions, props.onCwdChange, t)}
+          />
+          <ContextPill
+            icon={{ android: 'auto_awesome', ios: 'sparkles' }}
+            label={selectedAgentName || 'Choose agent'}
+            onPress={() => choose('Agent', (props.selectedInstance?.availableAgents ?? []).map((agent) => ({ label: agent.name, value: agent.id })), props.onAgentChange, t)}
+          />
+        </View>
 
-      <View style={styles.toolbar}>
-        {props.selectedAgent === 'codex' ? <PermissionButton mode={props.permissionMode} onChange={props.onPermissionModeChange} /> : <View />}
-        <Pressable
-          accessibilityLabel={props.busy ? t('sessions.creating') : t('sessions.create')}
-          accessibilityRole="button"
-          accessibilityState={{ disabled: props.disabled }}
-          disabled={props.disabled}
-          onPress={props.onCreate}
-          style={({ pressed }) => [styles.sendButton, { backgroundColor: colors.primaryButton }, props.disabled && styles.disabled, pressed && styles.pressed]}
-        >
-          <SystemIcon android={props.busy ? 'hourglass_top' : 'arrow_upward'} color="#fff" ios={props.busy ? 'hourglass' : 'arrow.up'} size={SESSION_COMPOSER_ACTION_ICON_SIZE} />
-        </Pressable>
+        <TextInput
+          accessibilityLabel={t('sessions.prompt')}
+          multiline
+          onChangeText={props.onMessageChange}
+          placeholder={t('sessions.promptPlaceholder')}
+          placeholderTextColor={colors.textMuted}
+          selectionColor={colors.primary}
+          style={[styles.prompt, { color: colors.text }]}
+          value={props.message}
+        />
+
+        <View style={styles.toolbar}>
+          {props.selectedAgent === 'codex' ? <PermissionButton mode={props.permissionMode} onChange={props.onPermissionModeChange} /> : <View />}
+          <Pressable
+            accessibilityLabel={props.busy ? t('sessions.creating') : t('sessions.create')}
+            accessibilityRole="button"
+            accessibilityState={{ disabled: props.disabled }}
+            disabled={props.disabled}
+            onPress={props.onCreate}
+            style={({ pressed }) => [styles.sendButton, { backgroundColor: colors.primaryButton }, props.disabled && styles.disabled, pressed && styles.pressed]}
+          >
+            <SystemIcon android={props.busy ? 'hourglass_top' : 'arrow_upward'} color="#fff" ios={props.busy ? 'hourglass' : 'arrow.up'} size={SESSION_COMPOSER_ACTION_ICON_SIZE} />
+          </Pressable>
+        </View>
       </View>
-    </View>
-    {props.error ? <Text accessibilityLiveRegion="polite" style={[styles.error, { backgroundColor: colors.errorSoft, color: colors.error }]}>{props.error}</Text> : null}
-  </Screen>;
+      {props.error ? <Text accessibilityLiveRegion="polite" style={[styles.error, { backgroundColor: colors.errorSoft, color: colors.error }]}>{props.error}</Text> : null}
+    </Screen>
+  </KeyboardAvoidingView>;
 }
 
 function ContextPill({ icon, label, onPress }: { icon: { android: 'dns' | 'auto_awesome' | 'folder'; ios: 'server.rack' | 'sparkles' | 'folder' }; label: string; onPress(): void }) {
@@ -113,8 +120,20 @@ function pathName(path: string) {
   return path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || '';
 }
 
+export function newSessionKeyboardAvoidingBehavior(platform: string): 'padding' | undefined {
+  return platform === 'ios' ? 'padding' : undefined;
+}
+
+export function newSessionVisualBalanceInset(platform: string, safeAreaTop: number): number {
+  if (platform === 'ios') return Math.max(0, safeAreaTop) + 44;
+  if (platform === 'android') return Math.max(0, safeAreaTop) + 56;
+  return 0;
+}
+
 const styles = StyleSheet.create({
-  intro: { alignItems: 'center', gap: 8, marginBottom: 8, marginTop: 20, paddingHorizontal: 20 },
+  screen: { flex: 1 },
+  screenContent: { alignSelf: 'center', gap: 16, justifyContent: 'center', maxWidth: 640, paddingVertical: 24, width: '100%' },
+  intro: { alignItems: 'center', gap: 8, paddingHorizontal: 20 },
   heading: { fontSize: 28, fontWeight: '700', letterSpacing: -0.6, lineHeight: 34, textAlign: 'center' },
   description: { fontSize: 15, lineHeight: 22, textAlign: 'center' },
   composer: { borderRadius: SESSION_COMPOSER_EXPANDED_RADIUS, borderWidth: StyleSheet.hairlineWidth, minHeight: 320, overflow: 'hidden', paddingBottom: 0, paddingHorizontal: 14, paddingTop: 14 },

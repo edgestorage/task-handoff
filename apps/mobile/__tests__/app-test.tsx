@@ -43,12 +43,19 @@ describe('<InboxRoute />', () => {
     );
 
     expect(screen.toJSON()).not.toBeNull();
+    expect(screen.getByTestId('swipe-action-list').props.contentInsetAdjustmentBehavior).toBe('automatic');
     const responsePreviews = screen.getAllByText('No response yet.');
     expect(responsePreviews[0].props.numberOfLines).toBe(3);
+    expect(StyleSheet.flatten(responsePreviews[0].props.style).fontSize).toBe(15);
+    expect(StyleSheet.flatten(responsePreviews[0].props.style).lineHeight).toBe(20);
     expect(StyleSheet.flatten(responsePreviews[0].props.style).minHeight).toBe(60);
+    expect(StyleSheet.flatten(screen.getAllByTestId('session-card')[0].props.style).paddingVertical).toBe(12);
+    expect(StyleSheet.flatten(screen.getAllByTestId('session-card-footer-row')[0].props.style).minHeight).toBe(18);
     expect(screen.getAllByText('Active')).toHaveLength(1);
     expect(screen.getAllByText('Waiting')).toHaveLength(1);
     expect(screen.getByTestId('session-card-footer-activity')).toBeTruthy();
+    expect(StyleSheet.flatten(screen.getByTestId('tool-activity-label').props.style).fontSize).toBe(15);
+    expect(StyleSheet.flatten(screen.getByTestId('tool-activity-label').props.style).lineHeight).toBe(20);
     expect(inboxEntries(snapshot).map((entry) => inboxCardContent(entry.session))).toEqual([
       expect.objectContaining({ prompt: 'Build mobile', turnCount: 2, turnIndex: 1 }),
       expect.objectContaining({ prompt: 'Approve change', turnCount: 1, turnIndex: 0 }),

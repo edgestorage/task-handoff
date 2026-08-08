@@ -20,6 +20,8 @@ import {
   AiSessionMessageRefInputSchema,
   AiSessionOpenAppInputSchema,
   AiSessionOpenAppResultSchema,
+  AiSessionQueueEditInputSchema,
+  AiSessionQueueReorderInputSchema,
   AiSessionReferenceSchema,
   AiSessionRealtimeInputSchema,
   AiSessionStatusSchema,
@@ -33,6 +35,7 @@ import {
 import {
   AppSessionEventType,
   activeAppSessionsSnapshotFromRecords,
+  appSessionAccessMode,
   applyAppSessionStreamEvent,
   emptyAppSessionsSnapshot,
 } from "../src/app-sessions.ts";
@@ -42,6 +45,24 @@ import {
 } from "../src/events.ts";
 
 const now = "2026-07-13T00:00:00.000Z";
+
+test("app session access mode is derived from the authoritative session kind", () => {
+  assert.equal(appSessionAccessMode({ kind: "tty" }), "tty");
+  assert.equal(appSessionAccessMode({ kind: "gui" }), "vnc");
+  assert.equal(appSessionAccessMode({ kind: "web" }), "web");
+  assert.equal(appSessionAccessMode({ kind: "future-kind", appId: "terminal-tty" }), undefined);
+});
+
+test("AI session queue schemas expose revisioned edit and reorder inputs", () => {
+  const session = AiSessionStatusSchema.parse({
+    id: "session-a", agent: "codex", status: "idle", phase: "unknown", startedAt: now, updatedAt: now,
+  });
+  assert.deepEqual(session.queue, { revision: 0, pendingCount: 0, items: [] });
+  assert.deepEqual(AiSessionQueueEditInputSchema.parse({ expectedRevision: 2, message: "  updated  " }), { expectedRevision: 2, message: "updated" });
+  assert.deepEqual(AiSessionQueueReorderInputSchema.parse({ expectedRevision: 2, queueIds: ["q-2", "q-1"] }), { expectedRevision: 2, queueIds: ["q-2", "q-1"] });
+  assert.equal(AiSessionQueueEditInputSchema.safeParse({ message: "missing revision" }).success, false);
+  assert.equal(AiSessionQueueReorderInputSchema.safeParse({ expectedRevision: 2, queueIds: [], extra: true }).success, false);
+});
 
 test("AI session history schemas expose bounded strict summaries and resume results", () => {
   const item = {
