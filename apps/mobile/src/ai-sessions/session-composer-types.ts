@@ -5,6 +5,7 @@ export type SessionComposerAction = 'save' | 'send' | 'stop';
 
 export type SessionComposerProps = {
   action: SessionComposerAction;
+  actionBusy: boolean;
   actionDisabled: boolean;
   editable: boolean;
   editingLabel?: string;

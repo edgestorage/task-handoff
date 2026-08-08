@@ -303,6 +303,7 @@ export function SessionWorkspace({
   const hasDraft = Boolean(draft.trim());
   const composerAction = activeQueueEdit ? 'save' : !hasDraft && canInterrupt ? 'stop' : 'send';
   const composerOperationState = composerAction === 'stop' ? state('interrupt') : composerAction === 'save' ? state('queue-edit', activeQueueEdit?.queueId) : sendState;
+  const composerBusy = composerOperationState?.phase === 'busy';
   const composerDisabled = !authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes(composerOperationState?.phase || '')
     || (composerAction === 'stop' ? !canInterrupt : composerAction === 'save'
       ? !hasDraft || draft.trim() === activeQueueEdit?.originalMessage.trim()
@@ -444,6 +445,7 @@ export function SessionWorkspace({
         {actionErrors.map((error) => <Text accessibilityLiveRegion="polite" key={error} style={[styles.error, { color: colors.error }]}>{error}</Text>)}
         <SessionComposer
           action={composerAction}
+          actionBusy={composerBusy}
           actionDisabled={composerDisabled}
           editable={authoritativeActionsEnabled}
           editingLabel={activeQueueEdit ? t('workspace.editMessage') : undefined}

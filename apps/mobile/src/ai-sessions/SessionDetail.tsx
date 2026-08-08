@@ -1,5 +1,5 @@
-import { Profiler, useEffect, useMemo, useState, type ProfilerOnRenderCallback } from 'react';
-import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Profiler, useCallback, useEffect, useMemo, useRef, useState, type ProfilerOnRenderCallback } from 'react';
+import { FlatList, Pressable, StyleSheet, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import { ScrollViewMarker } from 'react-native-screens/experimental';
 import { aiSessionStatusGroup, isAiSessionApprovalPending, type ControlPlaneAiSessionSummary } from '@task-handoff/control-plane-client';
 
@@ -14,6 +14,7 @@ import { SessionStatusIndicator } from './SessionStatusIndicator';
 import { translate, useI18n, type Translate } from '../i18n';
 
 const english: Translate = (key, params) => translate('en-US', key, params);
+const SCROLL_BOTTOM_THRESHOLD = 48;
 
 type DetailItem = { id: string; role: 'user' | 'assistant' | 'error'; streamKey?: string; streaming?: boolean; text: string };
 export type SessionDetailMode = 'conversation' | 'turn';
@@ -45,15 +46,61 @@ export function SessionDetail({
   const latestIndex = Math.max(0, turns.length - 1);
   const [localTurnIndex, setLocalTurnIndex] = useState(latestIndex);
   const [localMode, setLocalMode] = useState<SessionDetailMode>('turn');
+  const listRef = useRef<FlatList<DetailItem>>(null);
+  const scrollFrame = useRef<number | undefined>(undefined);
+  const userDragging = useRef(false);
+  const scrollMetrics = useRef({ contentHeight: 0, offsetY: 0, viewportHeight: 0 });
+  const followingRef = useRef(true);
+  const [following, setFollowingState] = useState(true);
+  const [canScroll, setCanScroll] = useState(false);
   const selectedMode = mode ?? localMode;
   const selectedIndex = Math.min(Math.max(turnIndex ?? localTurnIndex, 0), latestIndex);
   const isLatest = selectedIndex >= latestIndex;
   const showsLatest = selectedMode === 'conversation' || isLatest;
   const activityText = session ? sessionActivityText(session, t) : undefined;
   const items = useMemo(() => selectedMode === 'conversation' ? conversationDetailItems(session, messages, t) : detailItems(session, messages, selectedIndex, t), [session, messages, selectedIndex, selectedMode, t]);
+  const setFollowing = useCallback((next: boolean) => {
+    followingRef.current = next;
+    setFollowingState(next);
+  }, []);
+  const scheduleScrollToEnd = useCallback((animated: boolean) => {
+    if (scrollFrame.current !== undefined) cancelAnimationFrame(scrollFrame.current);
+    scrollFrame.current = requestAnimationFrame(() => {
+      scrollFrame.current = undefined;
+      listRef.current?.scrollToEnd({ animated });
+    });
+  }, []);
+  const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    scrollMetrics.current = {
+      contentHeight: contentSize.height,
+      offsetY: Math.max(0, contentOffset.y),
+      viewportHeight: layoutMeasurement.height,
+    };
+    const atBottom = isSessionScrollNearBottom(scrollMetrics.current);
+    if (atBottom && !followingRef.current) setFollowing(true);
+    else if (!atBottom && userDragging.current && followingRef.current) setFollowing(false);
+  }, [setFollowing]);
+  const handleContentSizeChange = useCallback((_width: number, height: number) => {
+    scrollMetrics.current.contentHeight = height;
+    setCanScroll(height > scrollMetrics.current.viewportHeight + SCROLL_BOTTOM_THRESHOLD);
+    if (
+      followingRef.current
+      && !userDragging.current
+      && scrollMetrics.current.viewportHeight > 0
+      && height > scrollMetrics.current.viewportHeight + SCROLL_BOTTOM_THRESHOLD
+    ) scheduleScrollToEnd(false);
+  }, [scheduleScrollToEnd]);
+  const resumeFollowing = useCallback(() => {
+    setFollowing(true);
+    scheduleScrollToEnd(true);
+  }, [scheduleScrollToEnd, setFollowing]);
   useEffect(() => {
     if (session) onVisible?.(session.updatedAt);
   }, [onVisible, session]);
+  useEffect(() => () => {
+    if (scrollFrame.current !== undefined) cancelAnimationFrame(scrollFrame.current);
+  }, []);
   const selectTurn = (index: number) => {
     const next = Math.min(Math.max(index, 0), latestIndex);
     if (turnIndex === undefined) setLocalTurnIndex(next);
@@ -77,6 +124,7 @@ export function SessionDetail({
     <Profiler id="detail" onRender={recordDetailRender}>
       <ScrollViewMarker scrollEdgeEffects={{ top: 'soft' }} style={[styles.fill, { backgroundColor: colors.surface }]}>
         <FlatList
+          ref={listRef}
           contentContainerStyle={[styles.list, { backgroundColor: colors.surface, paddingBottom: Math.max(28, bottomInset + 16) }]}
           contentInsetAdjustmentBehavior="automatic"
           data={items}
@@ -84,6 +132,22 @@ export function SessionDetail({
           ItemSeparatorComponent={DetailItemSeparator}
           keyExtractor={(item) => item.id}
           keyboardDismissMode="interactive"
+          onContentSizeChange={handleContentSizeChange}
+          onLayout={(event) => {
+            scrollMetrics.current.viewportHeight = event.nativeEvent.layout.height;
+            setCanScroll(scrollMetrics.current.contentHeight > event.nativeEvent.layout.height + SCROLL_BOTTOM_THRESHOLD);
+            if (
+              followingRef.current
+              && !userDragging.current
+              && scrollMetrics.current.contentHeight > event.nativeEvent.layout.height + SCROLL_BOTTOM_THRESHOLD
+            ) scheduleScrollToEnd(false);
+          }}
+          onScroll={handleScroll}
+          onScrollBeginDrag={() => { userDragging.current = true; }}
+          onScrollEndDrag={() => { userDragging.current = false; }}
+          onMomentumScrollBegin={() => { userDragging.current = true; }}
+          onMomentumScrollEnd={() => { userDragging.current = false; }}
+          scrollEventThrottle={16}
           ListEmptyComponent={<View style={styles.conversationEmpty}><Text style={[styles.muted, { color: colors.textMuted }]}>{t('sessions.noMessages')}</Text></View>}
           ListFooterComponent={showsLatest && activityText || session.subAgents.length ? <View style={styles.footer}>
             {showsLatest && activityText ? <View style={styles.tool}><SystemIcon android="auto_awesome" color={colors.textMuted} ios="sparkles" size={14} /><ToolActivityText containerStyle={styles.toolText} numberOfLines={1} running={session.status === 'running'} textStyle={styles.toolTitle}>{activityText}</ToolActivityText></View> : null}
@@ -117,6 +181,22 @@ export function SessionDetail({
           testID="session-detail-scroll"
           windowSize={7}
         />
+        {!following && canScroll ? (
+          <Pressable
+            accessibilityLabel={t('sessions.scrollToBottom')}
+            accessibilityRole="button"
+            hitSlop={8}
+            onPress={resumeFollowing}
+            style={({ pressed }) => [
+              styles.scrollToBottom,
+              { backgroundColor: colors.surface, borderColor: colors.border, bottom: Math.max(16, bottomInset + 12) },
+              pressed && styles.scrollToBottomPressed,
+            ]}
+            testID="session-scroll-to-bottom"
+          >
+            <SystemIcon android="keyboard_arrow_down" color={colors.text} ios="arrow.down" size={21} />
+          </Pressable>
+        ) : null}
       </ScrollViewMarker>
     </Profiler>
   );
@@ -129,6 +209,19 @@ function DetailItemSeparator() {
 const recordDetailRender: ProfilerOnRenderCallback = (_id, _phase, actualDuration) => {
   mobileMetrics.record('render.duration', { screen: 'detail' }, actualDuration);
 };
+
+export function isSessionScrollNearBottom({
+  contentHeight,
+  offsetY,
+  viewportHeight,
+}: {
+  contentHeight: number;
+  offsetY: number;
+  viewportHeight: number;
+}) {
+  return contentHeight <= viewportHeight
+    || contentHeight - viewportHeight - offsetY <= SCROLL_BOTTOM_THRESHOLD;
+}
 
 export function detailItems(session: ControlPlaneAiSessionSummary | undefined, messages: readonly MobileStreamingMessage[], turnIndex?: number, t: Translate = english): DetailItem[] {
   if (!session) return [];
@@ -218,6 +311,22 @@ function SubAgents({ agents, locale }: { agents: ControlPlaneAiSessionSummary['s
 
 const styles = StyleSheet.create({
   fill: { flex: 1 },
+  scrollToBottom: {
+    alignItems: 'center',
+    borderRadius: 22,
+    borderWidth: StyleSheet.hairlineWidth,
+    elevation: 4,
+    height: 44,
+    justifyContent: 'center',
+    position: 'absolute',
+    right: 16,
+    shadowColor: '#000',
+    shadowOffset: { height: 2, width: 0 },
+    shadowOpacity: 0.16,
+    shadowRadius: 5,
+    width: 44,
+  },
+  scrollToBottomPressed: { opacity: 0.72, transform: [{ scale: 0.96 }] },
   list: { paddingHorizontal: 16, paddingBottom: 28, paddingTop: 12 },
   empty: { alignItems: 'center', flex: 1, gap: 8, justifyContent: 'center', padding: 32 },
   emptyTitle: { fontSize: 17, fontWeight: '700' },

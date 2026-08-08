@@ -70,6 +70,55 @@ describe('MobileAiSessionStore identity isolation', () => {
     expect(store.session('cp-b', 'instance-1', 'session-1')?.id).toBe('session-1');
   });
 
+  test('message deltas notify only their session and preserve unrelated session view snapshots', () => {
+    const store = new MobileAiSessionStore();
+    const initial = snapshot('instance-1', 'session-1');
+    initial.instances[0].aiSessions.sessions.push({
+      ...initial.instances[0].aiSessions.sessions[0],
+      id: 'session-2',
+      providerSessionId: 'session-2',
+    });
+    store.replaceSnapshot('cp-scoped', initial);
+    const firstListener = jest.fn();
+    const secondListener = jest.fn();
+    store.subscribeSession('cp-scoped', 'instance-1', 'session-1', firstListener);
+    store.subscribeSession('cp-scoped', 'instance-1', 'session-2', secondListener);
+    const stableSecondView = store.sessionView('cp-scoped', 'instance-1', 'session-2');
+
+    store.appendMessageDelta('cp-scoped', {
+      instanceId: 'instance-1', sessionId: 'session-1', providerSessionId: 'session-1',
+      turnId: 'turn-1', itemId: 'item-1', delta: 'hello', generatedAt: initial.updatedAt,
+    });
+
+    expect(firstListener).toHaveBeenCalledTimes(1);
+    expect(secondListener).not.toHaveBeenCalled();
+    expect(store.sessionView('cp-scoped', 'instance-1', 'session-2')).toBe(stableSecondView);
+    expect(store.sessionView('cp-scoped', 'instance-1', 'session-1').messages[0]?.receivedText).toBe('hello');
+  });
+
+  test('message retention notifies a different session when its final message is evicted', () => {
+    const store = new MobileAiSessionStore();
+    store.replaceSnapshot('cp-retention', snapshot('instance-1', 'session-0'));
+    for (let index = 0; index < MOBILE_MESSAGE_TURN_LIMIT; index += 1) {
+      store.appendMessageDelta('cp-retention', {
+        instanceId: 'instance-1', sessionId: `session-${index}`, providerSessionId: `session-${index}`,
+        turnId: `turn-${index}`, itemId: `item-${index}`, delta: 'x',
+        generatedAt: new Date(Date.parse('2026-08-05T00:10:00.000Z') + index).toISOString(),
+      });
+    }
+    const evictedListener = jest.fn();
+    store.subscribeSession('cp-retention', 'instance-1', 'session-0', evictedListener);
+    expect(store.sessionView('cp-retention', 'instance-1', 'session-0').messages).toHaveLength(1);
+
+    store.appendMessageDelta('cp-retention', {
+      instanceId: 'instance-1', sessionId: 'session-new', providerSessionId: 'session-new',
+      turnId: 'turn-new', itemId: 'item-new', delta: 'new', generatedAt: '2026-08-05T00:11:00.000Z',
+    });
+
+    expect(evictedListener).toHaveBeenCalledTimes(1);
+    expect(store.sessionView('cp-retention', 'instance-1', 'session-0').messages).toHaveLength(0);
+  });
+
   test('controller initializes snapshot then consumes stream, unread, and message events', async () => {
     const store = new MobileAiSessionStore();
     const initial = snapshot('instance-1', 'session-1');

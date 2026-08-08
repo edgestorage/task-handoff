@@ -57,6 +57,12 @@ export type MobileStreamingMessage = {
   settledAt?: string;
 };
 
+export type MobileAiSessionViewState = {
+  session?: ControlPlaneAiSessionSummary;
+  messages: readonly MobileStreamingMessage[];
+  syncPhase: MobileAiSessionProfileState['sync']['phase'];
+};
+
 export const MOBILE_MESSAGE_TURN_LIMIT = 50;
 
 export function activeMobileStreamingMessage(
@@ -73,6 +79,11 @@ type Listener = () => void;
 export class MobileAiSessionStore {
   private readonly profiles = new Map<string, MobileAiSessionProfileState>();
   private readonly listeners = new Map<string, Set<Listener>>();
+  private readonly sessionListeners = new Map<string, Set<Listener>>();
+  private readonly sessionKeysByControlPlane = new Map<string, Set<string>>();
+  private readonly sessionViewCache = new Map<string, MobileAiSessionViewState>();
+  private readonly sessionViewKeysByControlPlane = new Map<string, Set<string>>();
+  private readonly messageTurnsByControlPlane = new Map<string, Set<string>>();
   private readonly generations = new Map<string, number>();
 
   generation(controlPlaneId: string) { return this.generations.get(controlPlaneId) ?? 0; }
@@ -93,6 +104,25 @@ export class MobileAiSessionStore {
       ?.aiSessions.sessions.find((session) => session.id === sessionId);
   }
 
+  sessionView(controlPlaneId: string, instanceId: string, sessionId: string): MobileAiSessionViewState {
+    const key = mobileSessionSubscriptionKey(controlPlaneId, instanceId, sessionId);
+    const cached = this.sessionViewCache.get(key);
+    if (cached) return cached;
+    const profile = this.profiles.get(controlPlaneId);
+    const view: MobileAiSessionViewState = {
+      session: profile?.snapshot?.instances
+        .find((instance) => instance.instanceId === instanceId)
+        ?.aiSessions.sessions.find((session) => session.id === sessionId),
+      messages: Object.values(profile?.messages ?? {}).filter((message) => (
+        message.instanceId === instanceId && message.sessionId === sessionId
+      )),
+      syncPhase: profile?.sync.phase ?? 'idle',
+    };
+    this.sessionViewCache.set(key, view);
+    addIndex(this.sessionViewKeysByControlPlane, controlPlaneId, key);
+    return view;
+  }
+
   replaceSnapshot(controlPlaneId: string, snapshot: ControlPlaneAiSessions) {
     const current = this.profile(controlPlaneId);
     const next = {
@@ -103,14 +133,19 @@ export class MobileAiSessionStore {
       sync: { phase: 'ready' as const, lastSyncedAt: snapshot.updatedAt },
     };
     this.profiles.set(controlPlaneId, next);
+    this.messageTurnsByControlPlane.set(controlPlaneId, indexMessageTurns(next.messages));
+    this.invalidateControlPlaneSessions(controlPlaneId);
     this.emit(controlPlaneId);
+    this.emitControlPlaneSessions(controlPlaneId);
     return next;
   }
 
   setSyncState(controlPlaneId: string, sync: MobileAiSessionProfileState['sync']) {
     const current = this.profile(controlPlaneId);
     this.profiles.set(controlPlaneId, { ...current, sync });
+    this.invalidateControlPlaneSessions(controlPlaneId);
     this.emit(controlPlaneId);
+    this.emitControlPlaneSessions(controlPlaneId);
   }
 
   setScope(controlPlaneId: string, scope: AiSessionScope = { kind: 'all' }) {
@@ -163,26 +198,51 @@ export class MobileAiSessionStore {
       itemId: event.itemId,
     };
     const key = aiSessionMessageKey(identity);
-    const existing = current.messages[key] ?? {
+    const existingMessage = current.messages[key];
+    const existing = existingMessage ?? {
       ...identity,
       receivedText: '',
       status: 'streaming' as const,
       updatedAt: event.generatedAt,
     };
     const updated = appendAiSessionMessageDelta(existing, event.delta, event.generatedAt);
-    const messages = trimMobileStreamingMessages({
+    const candidateMessages = {
       ...current.messages,
       [key]: { ...updated, receivedText: updated.receivedText.slice(0, 200_000) },
-    });
+    };
+    const turnKey = mobileMessageTurnKey(identity);
+    const indexedTurns = this.messageTurnsByControlPlane.get(controlPlaneId) ?? indexMessageTurns(current.messages);
+    const addsTurn = !indexedTurns.has(turnKey);
+    const messages = addsTurn ? trimMobileStreamingMessages(candidateMessages) : candidateMessages;
+    if (!this.messageTurnsByControlPlane.has(controlPlaneId) || addsTurn) {
+      this.messageTurnsByControlPlane.set(controlPlaneId, indexMessageTurns(messages));
+    }
     this.profiles.set(controlPlaneId, { ...current, messages });
+    const affectedSessions = new Set([mobileSessionSubscriptionKey(controlPlaneId, event.instanceId, event.sessionId)]);
+    if (addsTurn) {
+      for (const [previousKey, previous] of Object.entries(current.messages)) {
+        if (!messages[previousKey]) {
+          affectedSessions.add(mobileSessionSubscriptionKey(controlPlaneId, previous.instanceId, previous.sessionId));
+        }
+      }
+    }
+    for (const sessionKey of affectedSessions) this.sessionViewCache.delete(sessionKey);
     this.emit(controlPlaneId);
+    for (const sessionKey of affectedSessions) {
+      for (const listener of this.sessionListeners.get(sessionKey) ?? []) listener();
+    }
     return messages[key];
   }
 
   clearProfile(controlPlaneId: string) {
     const deleted = this.profiles.delete(controlPlaneId);
+    this.messageTurnsByControlPlane.delete(controlPlaneId);
     this.generations.set(controlPlaneId, this.generation(controlPlaneId) + 1);
-    if (deleted) this.emit(controlPlaneId);
+    if (deleted) {
+      this.invalidateControlPlaneSessions(controlPlaneId);
+      this.emit(controlPlaneId);
+      this.emitControlPlaneSessions(controlPlaneId);
+    }
     return deleted;
   }
 
@@ -196,8 +256,35 @@ export class MobileAiSessionStore {
     };
   }
 
+  subscribeSession(controlPlaneId: string, instanceId: string, sessionId: string, listener: Listener) {
+    const key = mobileSessionSubscriptionKey(controlPlaneId, instanceId, sessionId);
+    const listeners = this.sessionListeners.get(key) ?? new Set<Listener>();
+    listeners.add(listener);
+    this.sessionListeners.set(key, listeners);
+    addIndex(this.sessionKeysByControlPlane, controlPlaneId, key);
+    return () => {
+      listeners.delete(listener);
+      if (listeners.size) return;
+      this.sessionListeners.delete(key);
+      removeIndex(this.sessionKeysByControlPlane, controlPlaneId, key);
+    };
+  }
+
   private emit(controlPlaneId: string) {
     for (const listener of this.listeners.get(controlPlaneId) ?? []) listener();
+  }
+
+  private emitControlPlaneSessions(controlPlaneId: string) {
+    for (const key of this.sessionKeysByControlPlane.get(controlPlaneId) ?? []) {
+      for (const listener of this.sessionListeners.get(key) ?? []) listener();
+    }
+  }
+
+  private invalidateControlPlaneSessions(controlPlaneId: string) {
+    for (const key of this.sessionViewKeysByControlPlane.get(controlPlaneId) ?? []) {
+      this.sessionViewCache.delete(key);
+    }
+    this.sessionViewKeysByControlPlane.delete(controlPlaneId);
   }
 }
 
@@ -252,12 +339,37 @@ export function trimMobileStreamingMessages(messages: Readonly<Record<string, Mo
   const newestFirst = Object.entries(messages).sort(([, left], [, right]) => right.updatedAt.localeCompare(left.updatedAt));
   const retainedTurns = new Set<string>();
   for (const [, message] of newestFirst) {
-    const turnKey = JSON.stringify([message.instanceId, message.sessionId, message.turnId]);
+    const turnKey = mobileMessageTurnKey(message);
     if (retainedTurns.has(turnKey)) continue;
     if (retainedTurns.size >= MOBILE_MESSAGE_TURN_LIMIT) break;
     retainedTurns.add(turnKey);
   }
   return Object.fromEntries(Object.entries(messages).filter(([, message]) => (
-    retainedTurns.has(JSON.stringify([message.instanceId, message.sessionId, message.turnId]))
+    retainedTurns.has(mobileMessageTurnKey(message))
   )));
+}
+
+function indexMessageTurns(messages: Readonly<Record<string, MobileStreamingMessage>>) {
+  return new Set(Object.values(messages).map(mobileMessageTurnKey));
+}
+
+function mobileMessageTurnKey(message: Pick<MobileStreamingMessage, 'instanceId' | 'sessionId' | 'turnId'>) {
+  return JSON.stringify([message.instanceId, message.sessionId, message.turnId]);
+}
+
+function mobileSessionSubscriptionKey(controlPlaneId: string, instanceId: string, sessionId: string) {
+  return JSON.stringify([controlPlaneId, instanceId, sessionId]);
+}
+
+function addIndex(index: Map<string, Set<string>>, owner: string, key: string) {
+  const keys = index.get(owner) ?? new Set<string>();
+  keys.add(key);
+  index.set(owner, keys);
+}
+
+function removeIndex(index: Map<string, Set<string>>, owner: string, key: string) {
+  const keys = index.get(owner);
+  if (!keys) return;
+  keys.delete(key);
+  if (!keys.size) index.delete(owner);
 }

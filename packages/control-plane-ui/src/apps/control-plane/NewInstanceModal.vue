@@ -1,6 +1,6 @@
 <template>
-  <Dialog :open="true" @update:open="(open) => !open && $emit('close')">
-    <DialogContent class="new-instance-modal" style="width: min(900px, calc(100vw - 36px)); max-width: calc(100vw - 36px)">
+  <Dialog :open="true" @update:open="requestClose">
+    <DialogContent class="new-instance-modal" style="width: min(900px, calc(100vw - 36px)); max-width: calc(100vw - 36px)" :aria-busy="creating">
       <DialogDescription class="sr-only">{{ t("instances.create.description") }}</DialogDescription>
       <div class="modal-head">
         <div>
@@ -8,7 +8,7 @@
           <DialogTitle>{{ t("instances.create.title") }}</DialogTitle>
         </div>
         <DialogClose as-child>
-          <button type="button" class="panel-close" :aria-label="t('instances.create.close')">
+          <button type="button" class="panel-close" :aria-label="t('instances.create.close')" :disabled="creating">
             <X :size="16" />
           </button>
         </DialogClose>
@@ -16,83 +16,86 @@
 
       <ScrollArea class="new-instance-body">
         <div class="new-instance-body-content">
-      <div class="wizard-layout">
-        <nav class="wizard-steps" :aria-label="t('instances.create.stepsLabel')">
-          <button v-for="item in wizardSteps" :key="item.id" type="button" :class="{ active: step === item.id, complete: stepIndex(item.id) < activeStepIndex }" @click="goToStep(item.id)">
-            <span>{{ stepIndex(item.id) + 1 }}</span>
-            <strong>{{ item.label }}</strong>
-          </button>
-        </nav>
+          <fieldset class="new-instance-fields" :disabled="creating">
+            <div class="wizard-layout">
+              <nav class="wizard-steps" :aria-label="t('instances.create.stepsLabel')">
+                <button v-for="item in wizardSteps" :key="item.id" type="button" :class="{ active: step === item.id, complete: stepIndex(item.id) < activeStepIndex }" @click="goToStep(item.id)">
+                  <span>{{ stepIndex(item.id) + 1 }}</span>
+                  <strong>{{ item.label }}</strong>
+                </button>
+              </nav>
 
-        <div class="wizard-panel">
-          <SourceStep
-            v-if="step === 'source'"
-            v-model:new-project-open="newProjectOpen"
-            :can-browse-project-folder="canBrowseProjectFolder"
-            :can-create-project="canCreateProject"
-            :choose-folder-value="chooseFolderValue"
-            :creating-local-folder="creatingLocalFolder"
-            :creating-project="creatingProject"
-            :loading-node-folder-tree="loadingNodeFolderTree"
-            :local-folder-select-value="localFolderSelectValue"
-            :local-folders="localFolders.data.value || []"
-            :local-path-open="localPathOpen"
-            :local-path-placeholder="localPathPlaceholder"
-            :new-project="newProject"
-            :node-folder-tree-error="nodeFolderTreeError"
-            :node-folder-tree-rows="nodeFolderTreeRows"
-            :nodes="nodes.data.value || []"
-            :project-create-error="projectCreateError"
-            :projects="projects.data.value || []"
-            :show-node-folder-tree="showNodeFolderTree"
-            :source-draft="sourceDraft"
-            @choose-project-folder-path="chooseProjectFolderPath"
-            @create-project="createQuickProject"
-            @load-node-folder-roots="loadNodeFolderRoots"
-            @select-local-folder="selectLocalFolder"
-            @select-node-folder-path="selectNodeFolderPath"
-            @select-source-mode="selectSourceMode"
-            @set-local-folder-path="setLocalFolderPath"
-          />
+              <div class="wizard-panel">
+                <SourceStep
+                  v-if="step === 'source'"
+                  v-model:new-project-open="newProjectOpen"
+                  :can-browse-project-folder="canBrowseProjectFolder"
+                  :can-create-project="canCreateProject"
+                  :choose-folder-value="chooseFolderValue"
+                  :creating-local-folder="creatingLocalFolder"
+                  :creating-project="creatingProject"
+                  :loading-node-folder-tree="loadingNodeFolderTree"
+                  :local-folder-select-value="localFolderSelectValue"
+                  :local-folders="localFolders.data.value || []"
+                  :local-path-open="localPathOpen"
+                  :local-path-placeholder="localPathPlaceholder"
+                  :new-project="newProject"
+                  :node-folder-tree-error="nodeFolderTreeError"
+                  :node-folder-tree-rows="nodeFolderTreeRows"
+                  :nodes="nodes.data.value || []"
+                  :project-create-error="projectCreateError"
+                  :projects="projects.data.value || []"
+                  :show-node-folder-tree="showNodeFolderTree"
+                  :source-draft="sourceDraft"
+                  @choose-project-folder-path="chooseProjectFolderPath"
+                  @create-project="createQuickProject"
+                  @load-node-folder-roots="loadNodeFolderRoots"
+                  @select-local-folder="selectLocalFolder"
+                  @select-node-folder-path="selectNodeFolderPath"
+                  @select-source-mode="selectSourceMode"
+                  @set-local-folder-path="setLocalFolderPath"
+                />
 
-          <RuntimeStep
-            v-else
-            v-model:new-image-open="newImageOpen"
-            :can-create-image="canCreateImage"
-            :creating-image="creatingImage"
-            :docker-runtime-check-message="dockerRuntimeCheckMessage"
-            :docker-runtime-check-state="dockerRuntimeCheck.state"
-            :environment-templates="environmentTemplates.data.value || []"
-            :images="imageOptions.data.value || []"
-            :image-availability="imageAvailability.data.value || []"
-            :instance-draft="instanceDraft"
-            :models="models.data.value || []"
-            :new-image="newImage"
-            :nodes="nodes.data.value || []"
-            :runtime-draft="runtimeDraft"
-            :runtimes-for-selected-node="runtimesForSelectedNode"
-            :selected-runtime="selectedRuntime"
-            :selected-runtime-requires-image="selectedRuntimeRequiresImage"
-            :selected-node-platform="dockerRuntimeCheck.platform || selectedNodePlatform"
-            :source-summary="sourceSummary"
-            @check-docker-runtime="checkSelectedDockerRuntime"
-            @create-image="createQuickImage"
-          />
-        </div>
-      </div>
+                <RuntimeStep
+                  v-else
+                  v-model:new-image-open="newImageOpen"
+                  :can-create-image="canCreateImage"
+                  :creating-image="creatingImage"
+                  :docker-runtime-check-message="dockerRuntimeCheckMessage"
+                  :docker-runtime-check-state="dockerRuntimeCheck.state"
+                  :environment-templates="environmentTemplates.data.value || []"
+                  :images="imageOptions.data.value || []"
+                  :image-availability="imageAvailability.data.value || []"
+                  :instance-draft="instanceDraft"
+                  :models="models.data.value || []"
+                  :new-image="newImage"
+                  :nodes="nodes.data.value || []"
+                  :runtime-draft="runtimeDraft"
+                  :runtimes-for-selected-node="runtimesForSelectedNode"
+                  :selected-runtime="selectedRuntime"
+                  :selected-runtime-requires-image="selectedRuntimeRequiresImage"
+                  :selected-node-platform="dockerRuntimeCheck.platform || selectedNodePlatform"
+                  :source-summary="sourceSummary"
+                  @check-docker-runtime="checkSelectedDockerRuntime"
+                  @create-image="createQuickImage"
+                />
+              </div>
+            </div>
+          </fieldset>
 
-      <div class="modal-actions">
-        <span v-if="currentBlockedReason" class="create-blocked-reason">{{ currentBlockedReason }}</span>
-        <Button variant="outline" size="sm" @click="step === 'source' ? $emit('close') : previousStep()">{{ step === "source" ? t("instances.create.cancel") : t("instances.create.back") }}</Button>
-        <Button v-if="step === 'source'" size="sm" :disabled="!canContinue" @click="nextStep">
-          <ArrowRight :size="15" />
-          <span>{{ t("instances.create.continue") }}</span>
-        </Button>
-        <Button v-else size="sm" :disabled="!canCreateInstance || creating" @click="createInstance">
-          <Plus :size="15" />
-          <span>{{ creating ? t("instances.create.creating") : t("instances.create.create") }}</span>
-        </Button>
-      </div>
+          <div class="modal-actions">
+            <span v-if="currentBlockedReason" class="create-blocked-reason">{{ currentBlockedReason }}</span>
+            <Button variant="outline" size="sm" :disabled="creating" @click="step === 'source' ? $emit('close') : previousStep()">{{ step === "source" ? t("instances.create.cancel") : t("instances.create.back") }}</Button>
+            <Button v-if="step === 'source'" size="sm" :disabled="!canContinue || creating" @click="nextStep">
+              <ArrowRight :size="15" />
+              <span>{{ t("instances.create.continue") }}</span>
+            </Button>
+            <Button v-else size="sm" :disabled="!canCreateInstance || creating" :aria-label="t(creating ? 'instances.create.creating' : 'instances.create.create')" @click="createInstance">
+              <LoaderCircle v-if="creating" class="animate-spin motion-reduce:animate-none" :size="15" />
+              <Plus v-else :size="15" />
+              <span>{{ creating ? t("instances.create.creating") : t("instances.create.create") }}</span>
+            </Button>
+          </div>
         </div>
       </ScrollArea>
     </DialogContent>
@@ -102,7 +105,7 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, watch } from "vue";
 import { useQueryClient } from "@tanstack/vue-query";
-import { ArrowRight, Plus, X } from "@lucide/vue";
+import { ArrowRight, LoaderCircle, Plus, X } from "@lucide/vue";
 import { useI18n } from "vue-i18n";
 import { translateApiError } from "../../i18n/apiError";
 import { checkNodeRuntime, createControlledInstance, createImage, createProject, listNodeFolderTree, useEnvironmentTemplatesQuery, useImageOptionsQuery, useModelsQuery, useNodeImageAvailabilityQuery, useNodeLocalFoldersQuery, useNodeRuntimesQuery, useNodesQuery, useProjectsQuery } from "../../api/queries";
@@ -154,6 +157,13 @@ const creatingProject = ref(false);
 const creatingImage = ref(false);
 const creatingLocalFolder = ref(false);
 const localPathOpen = ref(false);
+
+function requestClose(open: boolean) {
+  if (!open && !creating.value) {
+    emit("close");
+  }
+}
+
 const dockerRuntimeCheck = reactive<{ key: string; state: DockerRuntimeCheckState; rawMessage: string; serverVersion: string; platform: string }>({
   key: "",
   state: "idle",
@@ -877,6 +887,18 @@ function errorText(error: unknown) {
   background: var(--surface-active);
   color: var(--text-strong);
   outline: none;
+}
+
+.panel-close:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.new-instance-fields {
+  min-width: 0;
+  margin: 0;
+  border: 0;
+  padding: 0;
 }
 
 .wizard-layout {

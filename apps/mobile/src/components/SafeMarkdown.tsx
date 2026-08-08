@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AccessibilityInfo, Animated, Easing, PixelRatio, Platform, Pressable, ScrollView, StyleSheet, Text, View, type TextLayoutEvent, type TextStyle } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { Check, Copy } from 'lucide-react-native';
@@ -7,6 +7,7 @@ import { common, createLowlight } from 'lowlight';
 
 import { useI18n } from '../i18n';
 import { openSystemLink } from '../platform/links';
+import { splitGraphemes } from './graphemes';
 import { useMobileTheme, type MobileThemeColors } from './theme';
 import { useStreamingMarkdown } from './useStreamingMarkdown';
 
@@ -38,7 +39,33 @@ export function sanitizeMarkdown(markdown: string) {
   return markdown.replace(/\r\n?/g, '\n').replace(/\0/g, '\uFFFD');
 }
 
-type MarkdownToken = { children?: MarkdownToken[] | null; content?: string; type: string };
+export function hasUnclosedMarkdownFence(markdown: string) {
+  let open: { marker: '`' | '~'; length: number } | undefined;
+  for (const line of markdown.split('\n')) {
+    if (open) {
+      const closing = line.match(/^ {0,3}(`{3,}|~{3,})[ \t]*$/);
+      if (closing && closing[1][0] === open.marker && closing[1].length >= open.length) open = undefined;
+      continue;
+    }
+    const opening = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+    if (!opening) continue;
+    const marker = opening[1][0] as '`' | '~';
+    // CommonMark does not allow backticks in the info string of a backtick fence.
+    if (marker === '`' && opening[2].includes('`')) continue;
+    open = { marker, length: opening[1].length };
+  }
+  return open !== undefined;
+}
+
+type MarkdownToken = {
+  block?: boolean;
+  children?: MarkdownToken[] | null;
+  content?: string;
+  level?: number;
+  map?: [number, number] | null;
+  nesting?: number;
+  type: string;
+};
 
 export function markdownPlainText(markdown: string) {
   const output: string[] = [];
@@ -51,6 +78,69 @@ export function markdownPlainText(markdown: string) {
   };
   visit(markdownParser.parse(sanitizeMarkdown(markdown), {}) as MarkdownToken[]);
   return output.join('').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+export function streamingMarkdownStableCutoff(markdown: string) {
+  const tokens = markdownParser.parse(markdown, {}) as MarkdownToken[];
+  const starts = tokens
+    .filter((token) => token.block && token.level === 0 && token.map && token.nesting !== -1)
+    .map((token) => token.map![0])
+    .filter((line, index, lines) => index === 0 || line !== lines[index - 1]);
+  if (starts.length < 2) return 0;
+  const cutoffLine = starts.at(-1)!;
+  let cutoff = 0;
+  for (let line = 0; line < cutoffLine; line += 1) {
+    const newline = markdown.indexOf('\n', cutoff);
+    if (newline < 0) return 0;
+    cutoff = newline + 1;
+  }
+  // Reference definitions are document-scoped and can change the meaning of
+  // earlier bracket syntax. Keep such content in the mutable tail.
+  return markdown.slice(0, cutoff).includes('[') ? 0 : cutoff;
+}
+
+type StreamingMarkdownBlock = { id: number; source: string };
+type StreamingBlockState = {
+  nextId: number;
+  source: string;
+  stable: StreamingMarkdownBlock[];
+  tail: StreamingMarkdownBlock;
+};
+
+export function advanceStreamingMarkdownBlocks(previous: StreamingBlockState, source: string): StreamingBlockState {
+  if (!source.startsWith(previous.source)) return {
+    nextId: previous.nextId + 1,
+    source,
+    stable: [],
+    tail: { id: previous.nextId, source },
+  };
+  let tail = previous.tail.source + source.slice(previous.source.length);
+  const cutoff = streamingMarkdownStableCutoff(tail);
+  if (!cutoff) return { ...previous, source, tail: { ...previous.tail, source: tail } };
+  const stable = [...previous.stable, { ...previous.tail, source: tail.slice(0, cutoff) }];
+  tail = tail.slice(cutoff);
+  return {
+    nextId: previous.nextId + 1,
+    source,
+    stable,
+    tail: { id: previous.nextId, source: tail },
+  };
+}
+
+class StreamingMarkdownBlockAccumulator {
+  private value: StreamingBlockState = {
+    nextId: 1,
+    source: '',
+    stable: [],
+    tail: { id: 0, source: '' },
+  };
+
+  constructor(readonly streamKey?: string) {}
+
+  advance(source: string) {
+    this.value = advanceStreamingMarkdownBlocks(this.value, source);
+    return this.value;
+  }
 }
 
 export function SafeMarkdown({
@@ -70,12 +160,20 @@ export function SafeMarkdown({
   const styles = useMemo(() => markdownStyles(colors, compact), [colors, compact]);
   const reducedMotion = useReduceMotion(Boolean(streamKey));
   const paced = useStreamingMarkdown(sanitizeMarkdown(children), streaming, streamKey);
+  const blockAccumulator = useMemo(() => new StreamingMarkdownBlockAccumulator(streamKey), [streamKey]);
+  const blocks = streaming
+    ? blockAccumulator.advance(paced.visible)
+    : undefined;
+  const sources: StreamingMarkdownBlock[] = blocks
+    ? [...blocks.stable, blocks.tail]
+    : [{ id: 0, source: paced.visible }];
+  const deferFinalCodeHighlight = streaming && hasUnclosedMarkdownFence(blocks?.tail.source ?? paced.visible);
   // The map is intentionally replaced when the authoritative stream identity changes.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const textStreamState = useMemo(() => new Map<string, string>(), [streamKey]);
   const rules = useMemo(
-    () => createRules(paced.revealEnabled, reducedMotion, trimEnd, streamKey, textStreamState),
-    [paced.revealEnabled, reducedMotion, streamKey, textStreamState, trimEnd],
+    () => createRules(paced.revealEnabled, reducedMotion, trimEnd, deferFinalCodeHighlight, streamKey, textStreamState),
+    [deferFinalCodeHighlight, paced.revealEnabled, reducedMotion, streamKey, textStreamState, trimEnd],
   );
   const renderer = useMemo(() => new AstRenderer(
     { ...renderRules, ...rules },
@@ -89,26 +187,47 @@ export function SafeMarkdown({
       },
     },
   ), [rules, styles]);
-  const renderStableTree = useMemo(() => function StableMarkdownTree(nodes: ASTNode[]) {
-    stabilizeAstKeys(nodes);
-    return <View style={styles.root}>{nodes.map((node) => renderer.renderNode(node, []))}</View>;
-  }, [renderer, styles.root]);
-
   return (
-    <Markdown
-      markdownit={markdownParser}
-      renderer={renderStableTree}
-    >
-      {paced.visible}
-    </Markdown>
+    <View style={styles.root}>
+      {sources.map((block, index) => (
+        <MarkdownChunk
+          first={index === 0}
+          key={block.id}
+          last={index === sources.length - 1}
+          renderer={renderer}
+          source={block.source}
+          treeKey={`block:${block.id}`}
+        />
+      ))}
+    </View>
   );
 }
+
+const MarkdownChunk = memo(function MarkdownChunk({
+  first,
+  last,
+  renderer,
+  source,
+  treeKey,
+}: {
+  first: boolean;
+  last: boolean;
+  renderer: AstRenderer;
+  source: string;
+  treeKey: string;
+}) {
+  const renderTree = useMemo(() => function StableMarkdownTree(nodes: ASTNode[]) {
+    stabilizeAstKeys(nodes, treeKey, first, last);
+    return <>{nodes.map((node) => renderer.renderNode(node, []))}</>;
+  }, [first, last, renderer, treeKey]);
+  return <Markdown markdownit={markdownParser} renderer={renderTree}>{source}</Markdown>;
+});
 
 type SafeMarkdownStyles = ReturnType<typeof markdownStyles>;
 type SafeRenderRule = (node: ASTNode, children: ReactNode[], parentNodes: ASTNode[], styles: SafeMarkdownStyles) => ReactNode;
 
 export const CHARACTER_FADE_MS = 150;
-type RevealSegment = { id: number; opacity: Animated.Value; settled: boolean; text: string };
+type RevealSegment = { id: number; opacity: Animated.Value; text: string };
 type RevealState = { pending: RevealSegment[]; settled: string };
 
 export function initialStreamingText(content: string, animate: boolean, persisted?: string) {
@@ -133,6 +252,9 @@ export function StreamingMarkdownText({
   });
   const stateRef = useRef(state);
   const animations = useRef(new Map<number, Animated.CompositeAnimation>());
+  const completedSegments = useRef(new Set<number>());
+  const settleFrame = useRef<number | undefined>(undefined);
+  const renderedContent = useRef(state.settled);
   const nextId = useRef(0);
   const activeStateKey = useRef(stateKey);
 
@@ -144,20 +266,33 @@ export function StreamingMarkdownText({
   const stopPending = useCallback(() => {
     for (const animation of animations.current.values()) animation.stop();
     animations.current.clear();
+    completedSegments.current.clear();
+    if (settleFrame.current !== undefined) cancelAnimationFrame(settleFrame.current);
+    settleFrame.current = undefined;
   }, []);
+
+  const flushSettled = useCallback(() => {
+    settleFrame.current = undefined;
+    const current = stateRef.current;
+    let settled = current.settled;
+    let settledCount = 0;
+    while (
+      settledCount < current.pending.length
+      && completedSegments.current.has(current.pending[settledCount].id)
+    ) {
+      const segment = current.pending[settledCount];
+      completedSegments.current.delete(segment.id);
+      settled += segment.text;
+      settledCount += 1;
+    }
+    if (settledCount) publish({ settled, pending: current.pending.slice(settledCount) });
+  }, [publish]);
 
   const settle = useCallback((id: number) => {
     animations.current.delete(id);
-    const current = stateRef.current;
-    const pending = current.pending.map((segment) => segment.id === id ? { ...segment, settled: true } : segment);
-    let settled = current.settled;
-    let settledCount = 0;
-    while (settledCount < pending.length && pending[settledCount].settled) {
-      settled += pending[settledCount].text;
-      settledCount += 1;
-    }
-    publish({ settled, pending: pending.slice(settledCount) });
-  }, [publish]);
+    completedSegments.current.add(id);
+    if (settleFrame.current === undefined) settleFrame.current = requestAnimationFrame(flushSettled);
+  }, [flushSettled]);
 
   useEffect(() => {
     let current = stateRef.current;
@@ -169,17 +304,22 @@ export function StreamingMarkdownText({
         pending: [],
         settled: initialStreamingText(content, animate, persisted),
       };
+      renderedContent.current = current.settled;
       publish(current);
     }
-    const rendered = current.settled + current.pending.map((segment) => segment.text).join('');
+    const rendered = renderedContent.current;
     if (!animate) {
       stopPending();
-      if (rendered !== content || current.pending.length) publish({ pending: [], settled: content });
+      if (rendered !== content || current.pending.length) {
+        renderedContent.current = content;
+        publish({ pending: [], settled: content });
+      }
       if (stateKey) sharedState?.set(stateKey, content);
       return;
     }
     if (!content.startsWith(rendered)) {
       stopPending();
+      renderedContent.current = content;
       publish({ pending: [], settled: content });
       if (stateKey) sharedState?.set(stateKey, content);
       return;
@@ -193,9 +333,9 @@ export function StreamingMarkdownText({
     const segments = splitGraphemes(addition).map((text) => ({
       id: ++nextId.current,
       opacity: new Animated.Value(0),
-      settled: false,
       text,
     }));
+    renderedContent.current += addition;
     publish({ ...current, pending: [...current.pending, ...segments] });
     for (const segment of segments) {
       const animation = Animated.timing(segment.opacity, {
@@ -224,17 +364,6 @@ export function StreamingMarkdownText({
   ))}</>;
 }
 
-function splitGraphemes(value: string) {
-  const Segmenter = (Intl as typeof Intl & {
-    Segmenter?: new (locale?: string | string[], options?: { granularity: 'grapheme' }) => {
-      segment(input: string): Iterable<{ segment: string }>;
-    };
-  }).Segmenter;
-  return Segmenter
-    ? Array.from(new Segmenter(undefined, { granularity: 'grapheme' }).segment(value), (entry) => entry.segment)
-    : Array.from(value);
-}
-
 function useReduceMotion(active: boolean) {
   const [enabled, setEnabled] = useState(false);
   useEffect(() => {
@@ -252,14 +381,22 @@ function useReduceMotion(active: boolean) {
   return active && enabled;
 }
 
-function stabilizeAstKeys(nodes: ASTNode[], parentPath = 'root') {
+function stabilizeAstKeys(
+  nodes: ASTNode[],
+  parentPath = 'root',
+  markFirst = true,
+  markLast = true,
+  topLevel = true,
+  mutableTail = markLast,
+) {
   nodes.forEach((node, index) => {
     node.key = `${parentPath}.${index}:${node.type}`;
-    if (parentPath === 'root') {
-      node.attributes.__safeTopLevelFirst = index === 0 ? 'true' : 'false';
-      node.attributes.__safeTopLevelLast = index === nodes.length - 1 ? 'true' : 'false';
+    node.attributes.__safeMutableTail = mutableTail ? 'true' : 'false';
+    if (topLevel) {
+      node.attributes.__safeTopLevelFirst = markFirst && index === 0 ? 'true' : 'false';
+      node.attributes.__safeTopLevelLast = markLast && index === nodes.length - 1 ? 'true' : 'false';
     }
-    stabilizeAstKeys(node.children, node.key);
+    stabilizeAstKeys(node.children, node.key, false, false, false, mutableTail);
   });
 }
 
@@ -267,11 +404,26 @@ function createRules(
   revealEnabled: boolean,
   reducedMotion: boolean,
   trimEnd: boolean,
+  deferFinalCodeHighlight: boolean,
   streamKey?: string,
   textStreamState?: Map<string, string>,
 ): RenderRules {
   const rules: Record<string, SafeRenderRule> = {
     ...flowRules,
+    code_block: (node, children, parentNodes, styles) => renderCodeBlock(
+      node,
+      children,
+      parentNodes,
+      styles,
+      deferFinalCodeHighlight && node.attributes.__safeMutableTail === 'true',
+    ),
+    fence: (node, children, parentNodes, styles) => renderCodeBlock(
+      node,
+      children,
+      parentNodes,
+      styles,
+      deferFinalCodeHighlight && node.attributes.__safeMutableTail === 'true',
+    ),
     text: (node, _children, parentNodes) => (
       <Text key={node.key}>
         <StreamingMarkdownText
@@ -397,13 +549,14 @@ function renderCodeBlock(
   _children: ReactNode[],
   _parentNodes: ASTNode[],
   styles: SafeMarkdownStyles,
+  deferHighlight = false,
 ) {
   const content = typeof node.content === 'string' ? node.content.replace(/\n$/, '') : '';
   const language = String((node as typeof node & { sourceInfo?: unknown }).sourceInfo ?? '').trim().split(/\s+/, 1)[0].toLowerCase();
-  return <MarkdownCodeBlock content={content} key={node.key} language={language} styles={styles} />;
+  return <MarkdownCodeBlock content={content} deferHighlight={deferHighlight} key={node.key} language={language} styles={styles} />;
 }
 
-function MarkdownCodeBlock({ content, language, styles }: { content: string; language: string; styles: SafeMarkdownStyles }) {
+function MarkdownCodeBlock({ content, deferHighlight, language, styles }: { content: string; deferHighlight: boolean; language: string; styles: SafeMarkdownStyles }) {
   const { t } = useI18n();
   const [copiedContent, setCopiedContent] = useState<string>();
   const resetTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -412,14 +565,14 @@ function MarkdownCodeBlock({ content, language, styles }: { content: string; lan
   // virtualized list. Include the current accessibility font scale so the
   // explicit height never clips enlarged code text.
   const blockHeight = Math.ceil(Math.max(1, content.split('\n').length) * 20 * PixelRatio.getFontScale() + 24);
-  let highlighted: HighlightNode[] | undefined;
-  if (language && codeHighlighter.registered(language)) {
+  const highlighted = useMemo(() => {
+    if (deferHighlight || !language || !codeHighlighter.registered(language)) return undefined;
     try {
-      highlighted = codeHighlighter.highlight(language, content, { prefix: 'hljs-' }).children;
+      return codeHighlighter.highlight(language, content, { prefix: 'hljs-' }).children;
     } catch {
-      highlighted = undefined;
+      return undefined;
     }
-  }
+  }, [content, deferHighlight, language]);
   useEffect(() => {
     return () => {
       if (resetTimer.current) clearTimeout(resetTimer.current);
