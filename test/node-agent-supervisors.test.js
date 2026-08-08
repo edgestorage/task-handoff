@@ -561,6 +561,7 @@ test("external listener updates execute serially", async () => {
   const server = new EventEmitter();
   const events = [];
   const persistedPorts = [];
+  const publishedPorts = [];
   let releaseFirstListen;
   const firstListenGate = new Promise((resolve) => { releaseFirstListen = resolve; });
   const manager = new NodeAgentExternalListenerManager({
@@ -569,6 +570,7 @@ test("external listener updates execute serially", async () => {
     settings: { put: (settings) => persistedPorts.push(settings.externalListener.port) },
     config: { bindScope: "loopback", port: 18091 },
     source: "bootstrap",
+    onActiveListener: (listener) => publishedPorts.push(listener.port),
   });
   manager.stop = async () => { events.push("stop"); };
   manager.listen = async (config) => {
@@ -586,6 +588,7 @@ test("external listener updates execute serially", async () => {
   await Promise.all([first, second]);
   assert.deepEqual(events, ["stop", "listen:18092", "stop", "listen:18093"]);
   assert.deepEqual(persistedPorts, [18092, 18093]);
+  assert.deepEqual(publishedPorts, [18092, 18093]);
   assert.equal(manager.current().port, 18093);
 });
 

@@ -161,6 +161,7 @@ async function ensureDesktopNodeAgent(options) {
       dataDir: options.dataDir,
       logInfo: options.logInfo,
       logError: options.logError,
+      ...(options.inspectOptions || {}),
       ...(options.stopOptions || {}),
     });
     if (["foreign", "unverified"].includes(replaced.status)) {

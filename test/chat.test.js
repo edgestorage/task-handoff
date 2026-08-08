@@ -7314,15 +7314,18 @@ test("app runtime allocators skip occupied ports and live displays", async () =>
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-app-alloc-"));
   const paths = appRuntimeTestPaths(root);
   const occupied = net.createServer();
-  await new Promise((resolve, reject) => {
-    occupied.once("error", reject);
-    occupied.listen(6101, "127.0.0.1", resolve);
+  const ownsOccupiedPort = await new Promise((resolve, reject) => {
+    occupied.once("error", (error) => {
+      if (error.code === "EADDRINUSE") resolve(false);
+      else reject(error);
+    });
+    occupied.listen(6101, "127.0.0.1", () => resolve(true));
   });
   try {
     const runtime = new AppRuntimeManager(paths);
     const vncPort = runtime.allocatePort("vnc");
     assert.notEqual(vncPort, 6101);
-    assert.equal(vncPort, 6102);
+    assert.ok(vncPort >= 6102 && vncPort <= 6199);
 
     runtime.sessions.set("live_display", {
       metadata: {
@@ -7350,7 +7353,7 @@ test("app runtime allocators skip occupied ports and live displays", async () =>
     });
     assert.equal(runtime.allocateDisplay(), 102);
   } finally {
-    occupied.close();
+    if (ownsOccupiedPort) occupied.close();
   }
 });
 
