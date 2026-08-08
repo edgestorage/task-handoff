@@ -878,7 +878,7 @@ export type AiSessionRemovedEvent = ProtocolAiSessionRemovedEvent;
 export type AiSessionMessageDeltaEvent = ProtocolAiSessionMessageDeltaEvent;
 export type AiSessionDeltaResponse = ProtocolAiSessionDeltaResponse;
 
-export type ChatChannel = "web" | "telegram" | "wechat" | "dingding";
+export type ChatChannel = "web" | "telegram" | "wechat" | "dingding" | "lark";
 
 export type ChatBridgeConfig = {
   id: string;

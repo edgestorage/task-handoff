@@ -1,7 +1,15 @@
 import type { ChatBridgeConfig, ChatSessionBinding } from "@task-handoff/protocol/control-plane";
 
 export function defaultChatBridgeName(channel: ChatBridgeConfig["channel"], index: number) {
-  const label = channel === "telegram" ? "Telegram" : channel === "wechat" ? "WeChat" : channel === "dingding" ? "DingDing" : "Web";
+  const label = channel === "telegram"
+    ? "Telegram"
+    : channel === "wechat"
+      ? "WeChat"
+      : channel === "dingding"
+        ? "DingDing"
+        : channel === "lark"
+          ? "Lark"
+          : "Web";
   return `${label} ${index}`;
 }
 
@@ -38,6 +46,10 @@ function publicChatBridgeSettings(settings: Record<string, unknown>) {
   if (typeof next.clientSecret === "string" && next.clientSecret) {
     delete next.clientSecret;
     next.clientSecretSet = true;
+  }
+  if (typeof next.appSecret === "string" && next.appSecret) {
+    delete next.appSecret;
+    next.appSecretSet = true;
   }
   return next;
 }

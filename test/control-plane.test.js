@@ -18,6 +18,7 @@ const { ControlledInstanceGateway } = require("../packages/control-plane/src/con
 const { parseDingdingCardEvent, sendDingdingActionsCard } = require("../packages/control-plane/src/control-plane/chat/adapters/dingding.ts");
 const { DingdingProgressStore } = require("../packages/control-plane/src/control-plane/chat/gateway/dingding-progress-store.ts");
 const { DingdingBridgeRuntimeManager } = require("../packages/control-plane/src/control-plane/chat/gateway/dingding-bridge-runtime.ts");
+const { LarkProgressStore } = require("../packages/control-plane/src/control-plane/chat/gateway/lark-progress-store.ts");
 const { ControlPlaneEventBus } = require("../packages/control-plane/src/control-plane/events/bus.ts");
 const { ControlPlaneAiSessionAggregator } = require("../packages/control-plane/src/control-plane/sessions/ai-session-aggregator.ts");
 const { AiSessionAttachmentStore } = require("../packages/control-plane/src/control-plane/sessions/ai-session-attachments.ts");
@@ -13032,7 +13033,7 @@ test("control plane telegram bridge renders ai session buttons and handles selec
   await waitTelegramAggregate();
   const aiReply = calls.filter((call) => call.type === "fetch" && call.url.includes("editMessageText")).at(-1);
   assert.equal(aiReply.body.message_id, sentAckMessageId);
-  assert.match(aiReply.body.text, /^\*instance\\-main · claude idle\*/);
+  assert.match(aiReply.body.text, /^\*instance\\-main · claude completed\*/);
   assert.match(aiReply.body.text, /需要我在/);
   const sendCountAfterAiReply = calls.filter((call) => call.type === "fetch" && call.url.includes("sendMessage")).length;
   const editCountAfterAiReply = calls.filter((call) => call.type === "fetch" && call.url.includes("editMessageText")).length;
@@ -14158,7 +14159,7 @@ test("control plane ai session delivery keeps response content inside the latest
   assert.equal(aiSessionDeliveryText(session, "instance-main · claude running/thinking"), "");
 
   session.turns[1].lastMessage = "second answer";
-  assert.equal(aiSessionDeliveryText(session, "instance-main · claude idle"), "instance-main · claude idle\nsecond answer");
+  assert.equal(aiSessionDeliveryText(session, "instance-main · claude completed"), "instance-main · claude completed\nsecond answer");
 });
 
 test("control plane ai session delivery appends authoritative tool activity after the latest response", () => {
@@ -14292,8 +14293,8 @@ test("control plane ai session delivery keys explicit turns by id and revision",
     completedAt: "2026-07-03T00:00:02.000Z",
     updatedAt: "2026-07-03T00:00:02.000Z",
   };
-  const delivered = aiSessionDeliveryText(session, "instance-main · claude idle");
-  assert.equal(delivered, "instance-main · claude idle\nsecond answer");
+  const delivered = aiSessionDeliveryText(session, "instance-main · claude completed");
+  assert.equal(delivered, "instance-main · claude completed\nsecond answer");
   assert.doesNotMatch(delivered, /first answer/);
 });
 
@@ -15081,7 +15082,7 @@ test("control plane telegram bridge falls back from markdown v2 to legacy markdo
   assert.equal(sent[1].body.text, "Use *markdown* please");
 });
 
-test("control plane chat bridge settings cover telegram wechat and dingding", async (t) => {
+test("control plane chat bridge settings cover telegram wechat dingding and lark", async (t) => {
   const app = await createControlPlaneApp({
     dataDir: tempDataDir("control-plane-chat-bridges"),
     logger: false,
@@ -15147,11 +15148,384 @@ test("control plane chat bridge settings cover telegram wechat and dingding", as
   assert.equal(dingding.body.data.settings.clientSecretSet, true);
   assert.equal(dingding.body.data.settings.robotCode, "robot-code");
 
+  const larkBridge = await json(app, "POST", "/api/chat-gateway/bridges", {
+    channel: "lark",
+    name: "Feishu Main",
+  });
+  assert.equal(larkBridge.statusCode, 200);
+
+  const lark = await json(app, "PATCH", `/api/chat-gateway/bridges/${larkBridge.body.data.id}`, {
+    token: "cli_lark_app_id",
+    defaultChatId: "oc_lark_chat",
+    allowedUserIds: ["ou_lark_user"],
+    settings: {
+      appSecret: "lark-app-secret",
+      domain: "feishu",
+    },
+  });
+  assert.equal(lark.statusCode, 200);
+  assert.equal(lark.body.data.token, undefined);
+  assert.equal(lark.body.data.tokenSet, true);
+  assert.equal(lark.body.data.settings.appSecret, undefined);
+  assert.equal(lark.body.data.settings.appSecretSet, true);
+  assert.equal(lark.body.data.settings.domain, "feishu");
+
   const bridges = await json(app, "GET", "/api/chat-gateway/bridges");
   assert.equal(bridges.statusCode, 200);
   assert.equal(bridges.body.data.filter((bridge) => bridge.channel === "telegram").length, 2);
   assert.equal(bridges.body.data.find((bridge) => bridge.channel === "dingding").settings.clientSecret, undefined);
   assert.equal(bridges.body.data.find((bridge) => bridge.channel === "dingding").settings.clientSecretSet, true);
+  assert.equal(bridges.body.data.find((bridge) => bridge.channel === "lark").settings.appSecret, undefined);
+  assert.equal(bridges.body.data.find((bridge) => bridge.channel === "lark").settings.appSecretSet, true);
+});
+
+test("control plane lark bridge reuses routed progress messages and ignores revision-only snapshots", async () => {
+  const calls = [];
+  const interrupts = [];
+  const events = new ControlPlaneEventBus();
+  let fakeChannel;
+  const bridge = {
+    id: "chat_lark_progress",
+    channel: "lark",
+    name: "Feishu Progress",
+    enabled: true,
+    token: "cli_lark_app_id",
+    tokenSet: true,
+    defaultChatId: "",
+    allowedUserIds: ["ou_lark_user"],
+    pollIntervalMs: 30000,
+    settings: {
+      appSecret: "lark-app-secret",
+      domain: "feishu",
+    },
+  };
+  const binding = {
+    id: "lark:chat",
+    channel: "lark",
+    bridgeId: bridge.id,
+    chatSessionId: "oc_lark_chat",
+    activeInstanceId: "inst_1",
+    activeAiSessionId: "ais_1",
+  };
+  const service = {
+    listChatBridges: () => [bridge],
+    requireChatBridge: () => bridge,
+    updateChatBridge: (_id, patch) => Object.assign(bridge, patch),
+    handleChatGatewayMessage: async (message) => ({
+      accepted: true,
+      routed: true,
+      binding,
+      instance: { id: "inst_1" },
+      aiSession: {
+        session: {
+          id: "ais_1",
+          agent: "codex",
+          activeTurnId: "turn_1",
+          status: "running",
+          phase: "thinking",
+          turns: [{ id: "turn_1", userPrompt: message.message.text, revision: 0 }],
+        },
+        provider: "codex",
+        action: "send",
+      },
+      turnId: "turn_1",
+      providerTurnId: "turn_1",
+      reply: "Sent to instance-main / ais_1.",
+    }),
+    listChatSessions: () => [binding],
+    boardAsync: async () => [{ id: "inst_1", name: "instance-main" }],
+    listPendingRoutes: async () => [],
+    pendingDecisionCallbackData: (_routeId, decision) => `decision:${decision}`,
+    interruptAiSession: async (instanceId, sessionId) => {
+      interrupts.push({ instanceId, sessionId });
+    },
+  };
+  class FakeLarkChannel {
+    async connect() {}
+    async disconnect() {}
+    on(handlers) {
+      this.handlers = handlers;
+      return () => {
+        this.handlers = undefined;
+      };
+    }
+    async send(chatId, input) {
+      calls.push({ type: "send", chatId, input });
+      return { messageId: "om_progress_1" };
+    }
+    async updateCard(messageId, card) {
+      calls.push({ type: "update", messageId, card });
+    }
+  }
+  const runtime = new ControlPlaneChatGatewayRuntime(
+    service,
+    fetch,
+    aiSessionGatewayOptions(events, {
+      createLarkChannel: () => {
+        fakeChannel = new FakeLarkChannel();
+        return fakeChannel;
+      },
+      larkProgressUpdateIntervalMs: 1,
+    }),
+  );
+
+  try {
+    runtime.startBridge(bridge.id);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    fakeChannel.handlers.message({
+      chatId: "oc_lark_chat",
+      chatType: "p2p",
+      senderId: "ou_lark_user",
+      messageId: "om_incoming_1",
+      content: "检查当前状态",
+    });
+    await waitForCondition(
+      () => calls.filter((call) => call.type === "send").length === 1,
+      "lark routed progress message",
+    );
+
+    assert.equal(calls.filter((call) => call.type === "send").length, 1);
+    assert.equal(calls[0].input.card.schema, "2.0");
+    assert.equal(calls[0].input.card.body.elements[0].tag, "markdown");
+    assert.equal(calls[0].input.card.body.elements[0].content, "Sent to instance-main / ais_1.");
+
+    const runningSession = {
+      id: "ais_1",
+      agent: "codex",
+      activeTurnId: "turn_1",
+      status: "running",
+      phase: "responding",
+      turns: [{
+        id: "turn_1",
+        status: "running",
+        phase: "responding",
+        revision: 1,
+        userPrompt: "检查当前状态",
+        lastMessage: "正在汇总结果。",
+      }],
+      startedAt: "2026-08-05T00:00:00.000Z",
+      updatedAt: "2026-08-05T00:00:01.000Z",
+    };
+    publishAiSessionSnapshotForTest(events, {
+      runningCount: 1,
+      sessions: [runningSession],
+      updatedAt: runningSession.updatedAt,
+    }, { scope: { instanceId: "inst_1" } });
+    const runningUpdate = await waitForCondition(
+      () => calls.filter((call) => call.type === "update").at(-1),
+      "lark running progress update",
+    );
+    assert.equal(runningUpdate.messageId, "om_progress_1");
+    assert.match(runningUpdate.card.body.elements[0].content, /^instance-main · codex running\/responding/);
+    assert.match(runningUpdate.card.body.elements[0].content, /正在汇总结果。/);
+    const cancelButton = runningUpdate.card.body.elements.find((element) => element.tag === "button" && element.text?.content === "Cancel");
+    assert.ok(cancelButton);
+    assert.equal(cancelButton.type, "danger");
+
+    await fakeChannel.handlers.cardAction({
+      messageId: "om_progress_1",
+      chatId: "oc_lark_chat",
+      operator: { openId: "ou_lark_user" },
+      action: {
+        value: cancelButton.behaviors[0].value,
+        tag: "button",
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(interrupts, [{ instanceId: "inst_1", sessionId: "ais_1" }]);
+    const cancelUpdate = calls.filter((call) => call.type === "update").at(-1);
+    assert.equal(cancelUpdate.messageId, "om_progress_1");
+    assert.equal(cancelUpdate.card.body.elements[0].content, "Interrupt sent");
+
+    const completedSession = {
+      ...runningSession,
+      status: "idle",
+      phase: "unknown",
+      turns: [{
+        ...runningSession.turns[0],
+        status: "completed",
+        phase: "responding",
+        revision: 2,
+        lastMessage: "最终结果。",
+      }],
+      updatedAt: "2026-08-05T00:00:02.000Z",
+    };
+    const updateCountBeforeCompletion = calls.filter((call) => call.type === "update").length;
+    publishAiSessionSnapshotForTest(events, {
+      sessions: [completedSession],
+      updatedAt: completedSession.updatedAt,
+    }, { scope: { instanceId: "inst_1" } });
+    const completedUpdate = await waitForCondition(() => {
+      const updates = calls.filter((call) => call.type === "update");
+      return updates.length > updateCountBeforeCompletion ? updates.at(-1) : undefined;
+    }, "lark completed progress update");
+    assert.equal(completedUpdate.messageId, "om_progress_1");
+    assert.match(completedUpdate.card.body.elements[0].content, /^instance-main · codex completed\n/);
+    assert.match(completedUpdate.card.body.elements[0].content, /最终结果。/);
+    const updateCount = calls.filter((call) => call.type === "update").length;
+
+    publishAiSessionSnapshotForTest(events, {
+      sessions: [{
+        ...completedSession,
+        turns: [{ ...completedSession.turns[0], revision: 3 }],
+        updatedAt: "2026-08-05T00:00:03.000Z",
+      }],
+      updatedAt: "2026-08-05T00:00:03.000Z",
+    }, { scope: { instanceId: "inst_1" } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    assert.equal(calls.filter((call) => call.type === "send").length, 1);
+    assert.equal(calls.filter((call) => call.type === "update").length, updateCount);
+  } finally {
+    runtime.stopAll();
+  }
+});
+
+test("control plane lark bridge dispatches interactive card actions and updates the original card", async () => {
+  const calls = [];
+  const actions = [];
+  let fakeChannel;
+  const bridge = {
+    id: "chat_lark_actions",
+    channel: "lark",
+    name: "Feishu Actions",
+    enabled: true,
+    token: "cli_lark_app_id",
+    tokenSet: true,
+    defaultChatId: "oc_lark_chat",
+    allowedUserIds: ["ou_lark_user"],
+    pollIntervalMs: 30000,
+    settings: { appSecret: "lark-app-secret", domain: "feishu" },
+  };
+  const service = {
+    listChatBridges: () => [bridge],
+    requireChatBridge: () => bridge,
+    updateChatBridge: () => bridge,
+    handleChatGatewayMessage: async () => ({
+      reply: "Choose a session",
+      replyMarkup: {
+        inline_keyboard: [[{ text: "Session 2", callback_data: "task_handoff:cp_session:1" }]],
+      },
+    }),
+    handleChatGatewayAction: async (input) => {
+      actions.push(input);
+      return {
+        reply: "Session selected",
+        replyMarkup: {
+          inline_keyboard: [[{ text: "Open", callback_data: "task_handoff:cp_session:0" }]],
+        },
+      };
+    },
+    listChatSessions: () => [],
+    listPendingRoutes: async () => [],
+  };
+  class FakeLarkChannel {
+    async connect() {}
+    async disconnect() {}
+    on(handlers) {
+      this.handlers = handlers;
+      return () => {
+        this.handlers = undefined;
+      };
+    }
+    async send(chatId, input) {
+      calls.push({ type: "send", chatId, input });
+      return { messageId: "om_action_1" };
+    }
+    async updateCard(messageId, card) {
+      calls.push({ type: "update", messageId, card });
+    }
+  }
+  const runtime = new ControlPlaneChatGatewayRuntime(service, fetch, {
+    createLarkChannel: () => {
+      fakeChannel = new FakeLarkChannel();
+      return fakeChannel;
+    },
+  });
+
+  try {
+    runtime.startBridge(bridge.id);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await fakeChannel.handlers.message({
+      chatId: "oc_lark_chat",
+      chatType: "p2p",
+      senderId: "ou_lark_user",
+      messageId: "om_incoming_action",
+      content: "/ai-sessions",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const sent = calls.find((call) => call.type === "send");
+    assert.equal(sent.input.card.schema, "2.0");
+    const button = sent.input.card.body.elements.find((element) => element.tag === "button");
+    assert.equal(button.text.content, "Session 2");
+
+    await fakeChannel.handlers.cardAction({
+      messageId: "om_action_1",
+      chatId: "oc_lark_chat",
+      operator: { openId: "ou_lark_user" },
+      action: { value: button.behaviors[0].value, tag: "button" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(actions.length, 1);
+    assert.equal(actions[0].source.channel, "lark");
+    assert.equal(actions[0].source.chatSessionId, "oc_lark_chat");
+    assert.deepEqual(actions[0].action, { type: "ai-session", index: 1 });
+    const updated = calls.filter((call) => call.type === "update").at(-1);
+    assert.equal(updated.messageId, "om_action_1");
+    assert.equal(updated.card.body.elements[0].content, "Session selected");
+    assert.equal(updated.card.body.elements[1].text.content, "Open");
+
+    await fakeChannel.handlers.cardAction({
+      messageId: "om_action_1",
+      chatId: "oc_lark_chat",
+      operator: { openId: "ou_other" },
+      action: { value: button.behaviors[0].value, tag: "button" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(actions.length, 1);
+  } finally {
+    runtime.stopAll();
+  }
+});
+
+test("lark progress cards update when only actions change", async () => {
+  const calls = [];
+  const store = new LarkProgressStore(1);
+  const bridge = {
+    id: "chat_lark_action_progress",
+    channel: "lark",
+    settings: {},
+  };
+  const runtime = {
+    channel: {
+      async send(chatId, input) {
+        calls.push({ type: "send", chatId, input });
+        return { messageId: "om_progress_action_1" };
+      },
+      async updateCard(messageId, card) {
+        calls.push({ type: "update", messageId, card });
+      },
+    },
+  };
+  const input = {
+    bridge,
+    key: "inst_1:ais_1:turn_1:chat_lark_action_progress:oc_lark_chat",
+    chatId: "oc_lark_chat",
+    text: "Working",
+  };
+
+  assert.equal(await store.applyUpdate(input, runtime), true);
+  assert.equal(await store.applyUpdate({
+    ...input,
+    replyMarkup: {
+      inline_keyboard: [[{ text: "Cancel", callback_data: "task_handoff:cp_ai_cancel:token" }]],
+    },
+  }, runtime), true);
+
+  const updated = calls.filter((call) => call.type === "update").at(-1);
+  assert.equal(updated.messageId, "om_progress_action_1");
+  assert.equal(updated.card.body.elements[0].content, "Working");
+  assert.equal(updated.card.body.elements[1].text.content, "Cancel");
 });
 
 test("control plane wechat bridge polls messages and sends replies", async (t) => {
