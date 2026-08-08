@@ -4530,6 +4530,8 @@ test("node agent runs local docker behind node-local target and auto-imports age
   });
   assert.equal(health.statusCode, 200);
   assert.equal(health.json().data.role, "node-agent");
+  assert.equal(health.json().data.process.pid, process.pid);
+  assert.ok(["string", "undefined"].includes(typeof health.json().data.process.startIdentity));
   assert.equal(health.json().data.platform, "linux");
   assert.equal(health.json().data.protocolVersion, CONTROL_PLANE_PROTOCOL_VERSION);
   assert.equal(health.json().data.build.component, "node-agent");
