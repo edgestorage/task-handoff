@@ -253,7 +253,6 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
   }
 
   async restart(context: ExecutorContext): Promise<ExecutorStartResult> {
-    await this.processSupervisor.stop(context.instance);
     return this.start(context);
   }
 

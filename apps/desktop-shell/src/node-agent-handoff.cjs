@@ -10,6 +10,30 @@ function resolveNodeAgentSingletonLockPath(options = {}) {
   return path.join(temporaryDirectory, `task-handoff-node-agent-${userId}.lock`);
 }
 
+function resolveControlPlaneSingletonLockPath(options = {}) {
+  const temporaryDirectory = options.tmpdir || os.tmpdir();
+  const userId = options.uid ?? process.getuid?.() ?? "user";
+  return path.join(temporaryDirectory, `task-handoff-control-plane-${userId}.lock`);
+}
+
+function readControlPlaneLockOwner(lockPath) {
+  try {
+    const value = JSON.parse(fs.readFileSync(path.join(lockPath, "owner.json"), "utf8"));
+    if (
+      value?.component !== "control-plane"
+      || !Number.isInteger(value.pid)
+      || value.pid <= 0
+      || typeof value.token !== "string"
+      || !value.token
+    ) {
+      return undefined;
+    }
+    return value;
+  } catch {
+    return undefined;
+  }
+}
+
 function readNodeAgentLockOwner(lockPath) {
   try {
     const value = JSON.parse(fs.readFileSync(path.join(lockPath, "owner.json"), "utf8"));
@@ -68,6 +92,20 @@ function processStartIdentity(pid, platform = process.platform) {
     return /^\d+$/.test(ticks) ? `win32:${ticks}` : undefined;
   }
   return undefined;
+}
+
+function inspectExistingDesktopControlPlane(options = {}) {
+  const lockPath = options.lockPath || resolveControlPlaneSingletonLockPath();
+  const readOwner = options.readOwner || readControlPlaneLockOwner;
+  const isAlive = options.isAlive || processIsAlive;
+  const processIdentity = options.processIdentity || processStartIdentity;
+  const owner = readOwner(lockPath);
+  if (!owner || !isAlive(owner.pid)) return { status: owner ? "stale" : "absent", owner };
+  if (!owner.startIdentity) return { status: "unverified", owner };
+  const currentStartIdentity = processIdentity(owner.pid);
+  if (!currentStartIdentity) return { status: "unverified", owner };
+  if (currentStartIdentity !== owner.startIdentity) return { status: "stale", owner };
+  return { status: "running", owner };
 }
 
 function lockOwnerMatchesProcess(owner, options) {
@@ -154,7 +192,10 @@ async function stopExistingDesktopNodeAgent(options) {
 }
 
 module.exports = {
+  inspectExistingDesktopControlPlane,
+  readControlPlaneLockOwner,
   readNodeAgentLockOwner,
+  resolveControlPlaneSingletonLockPath,
   resolveNodeAgentSingletonLockPath,
   stopExistingDesktopNodeAgent,
 };
