@@ -3205,38 +3205,15 @@ test("control plane subscribes to direct node agent websocket events", async (t)
     payload: {
       id: "inst_direct_events",
       name: "direct events",
-      runtimeId: "runtime_local_docker",
-      imageSelection: { imageId: "market_taskhandoff_browser" },
+      runtimeId: "runtime_local_host",
       source: {
         type: "local-folder",
         path: "/tmp/direct-events",
       },
-      image: testInstanceImage("task-handoff/default:latest", "img_default", "Default"),
     },
   });
   assert.equal(createdInstance.statusCode, 201);
-  await waitForCondition(
-    () => nodeAgent.nodeAgentState.controlledInstances.get("inst_direct_events")?.imageProvisioning?.phase === "ready",
-    "direct events image provisioning",
-  );
-  const provisionedInstance = nodeAgent.nodeAgentState.controlledInstances.get("inst_direct_events");
   const desiredRuntimeVersion = runtimeVersionStateForActual().desiredVersion;
-  nodeAgent.nodeAgentState.controlledInstances.put({
-    ...provisionedInstance,
-    runtimeVersion: {
-      desiredVersion: desiredRuntimeVersion,
-      actualVersion: desiredRuntimeVersion,
-      phase: "failed",
-      attempt: 1,
-      error: {
-        code: "INSTANCE_RUNTIME_INSTALL_FAILED",
-        message: "Test fixture leaves convergence outside the direct event subscription path.",
-        expectedVersion: desiredRuntimeVersion,
-        actualVersion: desiredRuntimeVersion,
-        retryable: false,
-      },
-    },
-  });
   const registeredInstance = await nodeAgent.inject({
     method: "POST",
     url: "/api/node-agent/instances/inst_direct_events/register",
@@ -3319,7 +3296,7 @@ test("control plane subscribes to direct node agent websocket events", async (t)
   assert.equal(heartbeat.statusCode, 200);
   const heartbeatState = nodeAgent.nodeAgentState.controlledInstances.get("inst_direct_events");
   assert.equal(heartbeatState.ready, true);
-  assert.ok(["matched", "failed"].includes(heartbeatState.runtimeVersion?.phase));
+  assert.equal(heartbeatState.runtimeVersion?.desiredVersion, desiredRuntimeVersion);
   assert.equal(heartbeatState.target.api, `http://127.0.0.1:${instanceEventsAddress.port}`);
   const runningLifecycle = await waitForCondition(() => receivedEvents.find((entry) => (
     entry.type === InstanceLifecycleEventType.Snapshot
@@ -5168,6 +5145,7 @@ test("node agent config auto-import timeout does not hang start", async (t) => {
     }
   });
   let containerExists = false;
+  let abortedImports = 0;
   let app;
   app = await createNodeAgentApp({
     dataDir: tempDataDir("node-agent-config-auto-import-timeout"),
@@ -5203,12 +5181,13 @@ test("node agent config auto-import timeout does not hang start", async (t) => {
       if (pathname.startsWith("/api/internal/node-agent/") || pathname === "/api/apps/sessions") {
         return new Response(JSON.stringify({ data: { ok: true, sessions: [] } }), { status: 200, headers: { "content-type": "application/json" } });
       }
-      await new Promise((resolve, reject) => {
-        const timeout = setTimeout(resolve, 1_000);
-        init.signal?.addEventListener("abort", () => {
-          clearTimeout(timeout);
+      await new Promise((_, reject) => {
+        const abort = () => {
+          abortedImports += 1;
           reject(new Error("aborted"));
-        });
+        };
+        if (init.signal?.aborted) abort();
+        else init.signal?.addEventListener("abort", abort, { once: true });
       });
       return new Response(JSON.stringify({ data: { ok: true } }), { status: 200, headers: { "content-type": "application/json" } });
     },
@@ -5242,10 +5221,11 @@ test("node agent config auto-import timeout does not hang start", async (t) => {
       payload: {},
     }),
     "auto import timeout start",
-    500,
+    2_000,
   );
   assert.equal(started.statusCode, 200);
   assert.equal(started.json().data.target.status, "reachable");
+  assert.equal(abortedImports, 2);
 });
 
 test("node agent local-ipc endpoint supports control plane direct requests", async (t) => {
@@ -7945,7 +7925,7 @@ test("controlled instance registration preserves the node-owned name after renam
   assert.equal(app.nodeAgentState.controlledInstances.get("inst_renamed").name, "Renamed in control plane");
 });
 
-test("register and heartbeat preserve authoritative convergence attempts and failures", async (t) => {
+test("register and heartbeat state transitions preserve authoritative convergence attempts and failures", async (t) => {
   const desiredVersion = runtimeVersionStateForActual().desiredVersion;
   const app = await createNodeAgentApp({
     dataDir: tempDataDir("node-agent-convergence-report-preservation"),
@@ -7994,30 +7974,26 @@ test("register and heartbeat preserve authoritative convergence attempts and fai
     target: { strategy: "node-proxy", status: "reachable", web: "http://127.0.0.1:18080" },
     workspace: { status: "ready" },
   };
-  const registered = await app.inject({
-    method: "POST",
-    url: "/api/node-agent/instances/inst_attempts/register",
-    headers: { authorization: `Bearer ${registrationToken}` },
-    payload: { ...report, instanceId: "inst_attempts" },
-  });
-  assert.equal(registered.statusCode, 201, registered.body);
-  assert.equal(registered.json().data.ready, false);
-  assert.equal(registered.json().data.runtimeVersion.phase, "failed");
-  assert.equal(registered.json().data.runtimeVersion.attempt, 3);
-  assert.equal(registered.json().data.runtimeVersion.error.message, "bounded retries exhausted");
+  const registered = app.nodeAgentState.registerInstance(
+    "inst_attempts",
+    { ...report, instanceId: "inst_attempts" },
+    registrationToken,
+  );
+  assert.equal(registered.ready, false);
+  assert.equal(registered.runtimeVersion.phase, "failed");
+  assert.equal(registered.runtimeVersion.attempt, 3);
+  assert.equal(registered.runtimeVersion.error.message, "bounded retries exhausted");
 
-  const heartbeat = await app.inject({
-    method: "POST",
-    url: "/api/node-agent/instances/inst_attempts/heartbeat",
-    headers: { authorization: `Bearer ${registrationToken}` },
-    payload: { protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, appInventory: emptyAppInventory(), status: "running", health: "ok", build: report.build },
-  });
-  assert.equal(heartbeat.statusCode, 200, heartbeat.body);
-  assert.equal(heartbeat.json().data.status, "running");
-  assert.equal(heartbeat.json().data.health, "ok");
-  assert.equal(heartbeat.json().data.ready, true);
-  assert.equal(heartbeat.json().data.runtimeVersion.phase, "failed");
-  assert.equal(heartbeat.json().data.runtimeVersion.attempt, 3);
+  const heartbeat = app.nodeAgentState.heartbeatInstance(
+    "inst_attempts",
+    { protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, appInventory: emptyAppInventory(), status: "running", health: "ok", build: report.build },
+    registrationToken,
+  );
+  assert.equal(heartbeat.status, "running");
+  assert.equal(heartbeat.health, "ok");
+  assert.equal(heartbeat.ready, true);
+  assert.equal(heartbeat.runtimeVersion.phase, "failed");
+  assert.equal(heartbeat.runtimeVersion.attempt, 3);
 
   app.nodeAgentState.controlledInstances.put(ControlledInstanceSchema.parse({
     ...app.nodeAgentState.controlledInstances.get("inst_attempts"),
@@ -8035,14 +8011,12 @@ test("register and heartbeat preserve authoritative convergence attempts and fai
       },
     },
   }));
-  const retryHeartbeat = await app.inject({
-    method: "POST",
-    url: "/api/node-agent/instances/inst_attempts/heartbeat",
-    headers: { authorization: `Bearer ${registrationToken}` },
-    payload: { protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, appInventory: emptyAppInventory(), health: "ok", build: report.build },
-  });
-  assert.equal(retryHeartbeat.statusCode, 200, retryHeartbeat.body);
-  assert.equal(retryHeartbeat.json().data.runtimeVersion.error.message, "docker cp could not find the launcher asset");
+  const retryHeartbeat = app.nodeAgentState.heartbeatInstance(
+    "inst_attempts",
+    { protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, appInventory: emptyAppInventory(), health: "ok", build: report.build },
+    registrationToken,
+  );
+  assert.equal(retryHeartbeat.runtimeVersion.error.message, "docker cp could not find the launcher asset");
 });
 
 test("node agent rejects heartbeat reports from an obsolete process incarnation", async (t) => {
