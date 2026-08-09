@@ -14,6 +14,8 @@ export type SwipeActionListProps<Item> = {
   keyExtractor(item: Item, index: number): string;
   ListEmptyComponent?: ReactElement | null;
   ListHeaderComponent?: ReactElement | null;
+  onRefresh?: () => void;
+  refreshing?: boolean;
   renderItem(info: { index: number; item: Item }): ReactElement;
   swipeAction(item: Item): SwipeAction | null;
   style?: StyleProp<ViewStyle>;

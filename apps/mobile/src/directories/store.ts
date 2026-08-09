@@ -1,6 +1,9 @@
 import type { ControlPlaneInstanceResourceEntry } from '@task-handoff/control-plane-client';
-import type { ControlPlaneNodeDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
-import type { ControlPlaneInstanceLifecycleDirectoryEvent, ControlPlaneNodeConnectionPhase } from '@task-handoff/protocol/control-plane-directory';
+import type {
+  ControlPlaneInstanceLifecycleDirectoryEvent,
+  ControlPlaneNodeConnectionPhase,
+  ControlPlaneNodeDirectoryEntry,
+} from '@task-handoff/protocol/control-plane-directory';
 
 export type MobileDirectoryProfileState = {
   controlPlaneId: string;

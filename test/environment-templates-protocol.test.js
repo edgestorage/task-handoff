@@ -61,7 +61,7 @@ test("ready and failed environment templates require lifecycle metadata", () => 
   })).status, "ready");
 });
 
-test("managed volume and template origin survive stored instance sanitization", () => {
+test("template origin survives generic stored instance sanitization", () => {
   const warnings = [];
   const sanitized = sanitizeStoredControlledInstance({
     id: "inst_one",
@@ -82,7 +82,6 @@ test("managed volume and template origin survive stored instance sanitization", 
     access: { strategy: "control-plane-proxy", status: "unknown" },
     runtime: {
       labels: {},
-      managedVolumes: [{ role: "data", name: "volume-data", mountPath: "/data", labels: { owner: "task-handoff" }, future: true }],
       future: true,
     },
     createdAt: timestamp,
@@ -92,12 +91,6 @@ test("managed volume and template origin survive stored instance sanitization", 
   const parsed = ControlledInstanceSchema.parse(sanitized);
   assert.equal(parsed.environmentSource.type, "template");
   assert.equal(parsed.environmentTemplateOrigin.templateId, "envtpl_one");
-  assert.deepEqual(parsed.runtime.managedVolumes[0], {
-    role: "data",
-    name: "volume-data",
-    mountPath: "/data",
-    labels: { owner: "task-handoff" },
-  });
   assert.ok(warnings.includes("future"));
   assert.ok(warnings.includes("runtime"));
   assert.ok(warnings.includes("environmentSource"));

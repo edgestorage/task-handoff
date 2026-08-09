@@ -9,15 +9,16 @@ import { createDirectControlPlaneClient } from '../../src/control-plane/client';
 import { mobileProfileStore, mobileSecureStore } from '../../src/control-plane/runtime';
 import { useActiveDirectories } from '../../src/directories/use-directories';
 import { useI18n } from '../../src/i18n';
+import { useMobileToast } from '../../src/components/MobileToast';
 
 export default function NewAppSessionRoute() {
   const { t } = useI18n();
+  const toast = useMobileToast();
   const { instanceId: requestedInstanceId } = useLocalSearchParams<{ instanceId?: string }>();
   const { controlPlaneId, state } = useActiveDirectories();
   const [selection, setSelection] = useState<{ instanceId?: string; appId?: string; folderId?: string }>({});
   const [folderState, setFolderState] = useState<{ nodeId: string; folders: ControlPlaneNodeLocalFolder[] }>({ nodeId: '', folders: [] });
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
 
   const selectedInstanceId = state.instances.some((instance) => instance.id === selection.instanceId)
     ? selection.instanceId!
@@ -51,7 +52,6 @@ export default function NewAppSessionRoute() {
   const create = async () => {
     if (!selectedInstance || !selectedAppId || !controlPlaneId || guidance) return;
     setBusy(true);
-    setError(undefined);
     try {
       const profile = await mobileProfileStore.active();
       if (!profile || profile.identity.controlPlaneId !== controlPlaneId) throw new Error('No active Control Plane.');
@@ -69,7 +69,7 @@ export default function NewAppSessionRoute() {
         router.back();
       }
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t('appSessions.createError'));
+      toast.show({ detail: cause instanceof Error ? cause.message : t('appSessions.createError'), title: t('toast.actionFailed', { action: t('appSessions.create') }), tone: 'error' });
     } finally {
       setBusy(false);
     }
@@ -85,11 +85,10 @@ export default function NewAppSessionRoute() {
       selectedFolderId={selection.instanceId === selectedInstanceId ? selection.folderId : undefined}
       busy={busy}
       disabled={busy || Boolean(guidance) || !selectedAppId}
-      error={error || guidance}
+      error={guidance}
       onInstanceChange={(instanceId) => {
         const instance = state.instances.find((candidate) => candidate.id === instanceId);
         setSelection({ instanceId, appId: instance?.availableApps[0]?.id });
-        setError(undefined);
       }}
       onAppChange={(appId) => setSelection({ instanceId: selectedInstanceId, appId })}
       onFolderChange={(folderId) => setSelection({ instanceId: selectedInstanceId, appId: selectedAppId, folderId })}

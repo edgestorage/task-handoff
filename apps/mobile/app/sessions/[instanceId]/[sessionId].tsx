@@ -15,6 +15,7 @@ import { useMobileTheme } from '../../../src/components/theme';
 import { SystemIcon } from '../../../src/components/SystemIcon';
 import { useI18n } from '../../../src/i18n';
 import { useTaskStatusSettings } from '../../../src/task-status/settings';
+import { useActiveTriggers } from '../../../src/triggers/use-active-triggers';
 
 export default function SessionDetailRoute() {
   const params = useLocalSearchParams<{ instanceId: string; sessionId: string }>();
@@ -24,6 +25,7 @@ export default function SessionDetailRoute() {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
   const taskStatus = useTaskStatusSettings();
+  const triggers = useActiveTriggers();
   const sessionView = useActiveAiSessionView(controlPlaneId, params.instanceId, params.sessionId);
   const session = sessionView.session;
   const messages = sessionView.messages;
@@ -75,6 +77,7 @@ export default function SessionDetailRoute() {
             { id: 'view-turn', image: 'rectangle.stack', state: detailMode === 'turn' ? 'on' : 'off', title: t('sessions.turn') },
             { id: 'view-conversation', image: 'text.bubble', state: detailMode === 'conversation' ? 'on' : 'off', title: t('sessions.filterAll') },
             ...(liveActivityAction ? [liveActivityAction] : []),
+            ...(triggers.available ? [{ id: 'triggers', image: 'bolt', title: t('triggers.sessionTitle') } as MenuAction] : []),
             { id: 'close', image: 'xmark.circle', title: closing ? t('sessions.closing') : t('sessions.closeSession'), attributes: { destructive: true, disabled: closing || !actions || sessionView.syncPhase !== 'ready' } },
           ]}
           onPressAction={({ nativeEvent }) => {
@@ -84,6 +87,7 @@ export default function SessionDetailRoute() {
               if (trackedHere) void taskStatus.stopTracking();
               else if (controlPlaneId) void taskStatus.startTracking({ controlPlaneId, instanceId: params.instanceId, sessionId: params.sessionId });
             }
+            else if (nativeEvent.event === 'triggers') router.push({ pathname: '/sessions/[instanceId]/[sessionId]/triggers' as never, params: { instanceId: params.instanceId, sessionId: params.sessionId } });
             else if (nativeEvent.event === 'close') closeSession();
           }}
           title={t('sessions.sessionView')}

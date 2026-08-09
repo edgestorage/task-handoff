@@ -29,7 +29,7 @@ describe('direct Control Plane enrollment', () => {
         kind: 'control-plane' as const,
         controlPlaneId: 'control_plane_one',
         publicKey: { algorithm: 'Ed25519' as const, encoding: 'base64url' as const, value: 'a'.repeat(43), fingerprint: `sha256:${'b'.repeat(43)}` },
-        capabilities: { authentication: 'required' as const, aiSessions: true, nodes: true, instanceBoard: true },
+        capabilities: { authentication: 'required' as const, aiSessions: true, nodes: true, instanceBoard: true, triggers: true },
         protocolVersion: '2026-08-05',
         issuedAt: '2026-08-05T00:00:00.000Z',
         expiresAt: '2026-08-05T00:05:00.000Z',
@@ -53,7 +53,7 @@ describe('direct Control Plane enrollment', () => {
       identity: {
         version: 1 as const, kind: 'control-plane' as const, controlPlaneId: 'cp',
         publicKey: { algorithm: 'Ed25519' as const, encoding: 'base64url' as const, value: 'a'.repeat(43), fingerprint: `sha256:${'b'.repeat(43)}` },
-        capabilities: { authentication: 'required' as const, aiSessions: true, nodes: true, instanceBoard: true },
+        capabilities: { authentication: 'required' as const, aiSessions: true, nodes: true, instanceBoard: true, triggers: true },
         protocolVersion: '2026-08-05', issuedAt: '2026-08-05T00:00:00.000Z', expiresAt: '2026-08-05T00:05:00.000Z',
       },
     };
@@ -85,7 +85,7 @@ describe('direct Control Plane enrollment', () => {
       identity: {
         version: 1 as const, kind: 'control-plane' as const, controlPlaneId: 'cp',
         publicKey: { algorithm: 'Ed25519' as const, encoding: 'base64url' as const, value: 'a'.repeat(43), fingerprint: `sha256:${'b'.repeat(43)}` },
-        capabilities: { authentication: 'disabled' as const, aiSessions: true, nodes: true, instanceBoard: true },
+        capabilities: { authentication: 'disabled' as const, aiSessions: true, nodes: true, instanceBoard: true, triggers: true },
         protocolVersion: '2026-08-05', issuedAt: '2026-08-05T00:00:00.000Z', expiresAt: '2026-08-05T00:05:00.000Z',
       },
     };

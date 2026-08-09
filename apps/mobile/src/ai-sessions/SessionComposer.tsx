@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { BlurView } from 'expo-blur';
+import { TextInputWrapper, type PasteEventPayload } from 'expo-paste-input';
 import { Hand, Pencil, Plus, ShieldAlert, ShieldCheck, X } from 'lucide-react-native';
-import { ActionSheetIOS, ActivityIndicator, Alert, Animated, Easing, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Animated, Easing, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { SystemIcon } from '../components/SystemIcon';
 import { useMobileTheme } from '../components/theme';
@@ -15,6 +16,7 @@ import {
   SESSION_COMPOSER_EXPANDED_RADIUS,
   SESSION_COMPOSER_TOOLBAR_HEIGHT,
 } from './composer-metrics';
+import { AttachmentMenu, PermissionMenu, type PermissionOption } from './SessionComposerMenus';
 import type { SessionComposerProps } from './session-composer-types';
 
 export function SessionComposer(props: SessionComposerProps) {
@@ -24,6 +26,11 @@ export function SessionComposer(props: SessionComposerProps) {
   const attachmentDisabled = props.actionBusy || props.imageDisabled && props.fileDisabled && props.runtimeFileDisabled;
   const PermissionIcon = props.permissionMode === 'ask' ? Hand : props.permissionMode === 'auto-review' ? ShieldCheck : ShieldAlert;
   const currentPermissionLabel = permissionLabel(props.permissionMode, t);
+  const permissionOptions: PermissionOption[] = [
+    { value: 'ask', label: t('composer.ask'), description: t('composer.askDescription'), systemImage: 'hand.raised' },
+    { value: 'auto-review', label: t('composer.autoReview'), description: t('composer.autoReviewDescription'), systemImage: 'checkmark.shield' },
+    { value: 'full-access', label: t('composer.fullAccess'), description: t('composer.fullAccessDescription'), systemImage: 'exclamationmark.shield', danger: true },
+  ];
   const [permissionLabelMeasurement, setPermissionLabelMeasurement] = useState<{ label: string; width: number }>();
   const [fallbackExpansion] = useState(() => new Animated.Value(props.focused ? 1 : 0));
   const expansion = props.expansion ?? fallbackExpansion;
@@ -76,22 +83,31 @@ export function SessionComposer(props: SessionComposerProps) {
         testID="session-composer-blur"
         tint={dark ? 'systemUltraThinMaterialDark' : 'systemUltraThinMaterialLight'}
       />
-      <TextInput
-        ref={inputRef}
-        accessibilityLabel={t('composer.message')}
-        editable={props.editable && !props.actionBusy}
-        multiline
-        onBlur={() => props.onFocusChange(false)}
-        onChangeText={props.onValueChange}
-        onFocus={() => props.onFocusChange(true)}
-        placeholder={t('composer.placeholder')}
-        placeholderTextColor={colors.textMuted}
-        scrollEnabled={props.focused}
-        style={[styles.input, props.focused ? styles.inputFocused : styles.inputCollapsed, !props.focused && !props.permissionEnabled && styles.inputCollapsedWithoutPermission, { color: colors.text }]}
-        textAlignVertical={props.focused ? 'top' : 'center'}
-        testID="session-message-input"
-        value={props.value}
-      />
+      <TextInputWrapper
+        onPaste={(payload: PasteEventPayload) => {
+          if (payload.type === 'images') props.onPasteImages(payload.uris);
+        }}
+        pointerEvents="box-none"
+        style={StyleSheet.absoluteFill}
+        testID="session-message-paste-input"
+      >
+        <TextInput
+          ref={inputRef}
+          accessibilityLabel={t('composer.message')}
+          editable={props.editable && !props.actionBusy}
+          multiline
+          onBlur={() => props.onFocusChange(false)}
+          onChangeText={props.onValueChange}
+          onFocus={() => props.onFocusChange(true)}
+          placeholder={t('composer.placeholder')}
+          placeholderTextColor={colors.textMuted}
+          scrollEnabled={props.focused}
+          style={[styles.input, props.focused ? styles.inputFocused : styles.inputCollapsed, !props.focused && !props.permissionEnabled && styles.inputCollapsedWithoutPermission, { color: colors.text }]}
+          textAlignVertical={props.focused ? 'top' : 'center'}
+          testID="session-message-input"
+          value={props.value}
+        />
+      </TextInputWrapper>
       <View pointerEvents="box-none" style={styles.toolbar}>
         {props.editingLabel ? <View style={styles.editingState}>
           <Pencil color={colors.textMuted} size={16} strokeWidth={1.8} />
@@ -100,33 +116,58 @@ export function SessionComposer(props: SessionComposerProps) {
             <X color={colors.textMuted} size={17} strokeWidth={1.9} />
           </Pressable>
         </View> : <View style={styles.leadingTools}>
-          <Pressable
-            accessibilityLabel={t('composer.addAttachment')}
-            accessibilityRole="button"
-            accessibilityState={{ disabled: attachmentDisabled }}
-            disabled={attachmentDisabled}
-            hitSlop={4}
-            onPress={() => showAttachmentMenu(props, t)}
-            style={({ pressed }) => [styles.toolButton, pressed && styles.pressed, attachmentDisabled && styles.disabled]}
+          <AttachmentMenu
+            cancelLabel={t('common.cancel')}
+            fileDisabled={props.fileDisabled}
+            fileLabel={t('composer.deviceFile')}
+            imageDisabled={props.imageDisabled}
+            imageLabel={t('composer.photo')}
+            onAddFile={props.onAddFile}
+            onAddImage={props.onAddImage}
+            onAddRuntimeFile={props.onAddRuntimeFile}
+            runtimeFileDisabled={props.runtimeFileDisabled}
+            runtimeFileLabel={t('composer.workspaceFile')}
+            title={t('composer.addAttachment')}
           >
-            <Plus color={colors.textMuted} size={ATTACHMENT_ICON_SIZE} strokeWidth={1.9} />
-          </Pressable>
-          {props.permissionEnabled ? <Animated.View style={[styles.permissionButtonFrame, { width: permissionWidth }]}>
-            <Pressable
-              accessibilityLabel={t('composer.permissionModeValue', { mode: permissionLabel(props.permissionMode, t) })}
+            {(onPress) => <Pressable
+              accessibilityLabel={t('composer.addAttachment')}
               accessibilityRole="button"
-              accessibilityState={{ disabled: props.actionBusy }}
-              disabled={props.actionBusy}
-              onPress={() => showPermissionMenu(props, t)}
-              style={({ pressed }) => [styles.permissionButton, props.actionBusy && styles.disabled, pressed && { backgroundColor: colors.surfaceMuted }]}
+              accessibilityState={{ disabled: attachmentDisabled }}
+              disabled={attachmentDisabled}
+              hitSlop={4}
+              onPress={onPress}
+              style={({ pressed }) => [styles.toolButton, pressed && styles.pressed, attachmentDisabled && styles.disabled]}
             >
-              <View style={styles.permissionIconSlot}>
-                <PermissionIcon color={permissionDanger ? colors.error : colors.textMuted} size={permissionIconSize(props.permissionMode)} strokeWidth={1.8} />
-              </View>
-              <Animated.Text numberOfLines={1} style={[styles.permissionText, { color: permissionDanger ? colors.error : colors.textMuted, opacity: permissionTextOpacity }]}>
-                {currentPermissionLabel}
-              </Animated.Text>
-            </Pressable>
+              <Plus color={colors.textMuted} size={ATTACHMENT_ICON_SIZE} strokeWidth={1.9} />
+            </Pressable>}
+          </AttachmentMenu>
+          {props.permissionEnabled ? <Animated.View style={[styles.permissionButtonFrame, { width: permissionWidth }]} testID="session-permission-button-frame">
+            <PermissionMenu
+              cancelLabel={t('common.cancel')}
+              disabled={props.actionBusy}
+              mode={props.permissionMode}
+              onChange={props.onPermissionModeChange}
+              options={permissionOptions}
+              title={t('composer.permissionMode')}
+            >
+              {(onPress) => <Animated.View style={[styles.permissionMenuTriggerFrame, { width: permissionWidth }]} testID="session-permission-menu-trigger-frame">
+                <Pressable
+                  accessibilityLabel={t('composer.permissionModeValue', { mode: permissionLabel(props.permissionMode, t) })}
+                  accessibilityRole="button"
+                  accessibilityState={{ disabled: props.actionBusy }}
+                  disabled={props.actionBusy}
+                  onPress={onPress}
+                  style={({ pressed }) => [styles.permissionButton, props.actionBusy && styles.disabled, pressed && { backgroundColor: colors.surfaceMuted }]}
+                >
+                  <View style={styles.permissionIconSlot}>
+                    <PermissionIcon color={permissionDanger ? colors.error : colors.textMuted} size={permissionIconSize(props.permissionMode)} strokeWidth={1.8} />
+                  </View>
+                  <Animated.Text numberOfLines={1} style={[styles.permissionText, { color: permissionDanger ? colors.error : colors.textMuted, opacity: permissionTextOpacity }]}>
+                    {currentPermissionLabel}
+                  </Animated.Text>
+                </Pressable>
+              </Animated.View>}
+            </PermissionMenu>
           </Animated.View> : null}
           {props.permissionEnabled ? <Text
             accessibilityElementsHidden
@@ -155,46 +196,6 @@ export function SessionComposer(props: SessionComposerProps) {
   );
 }
 
-function showAttachmentMenu(props: SessionComposerProps, t: Translate) {
-  const options = [t('composer.photo'), t('composer.deviceFile'), t('composer.workspaceFile'), t('common.cancel')];
-  if (Platform.OS === 'ios') {
-    ActionSheetIOS.showActionSheetWithOptions({
-      options,
-      cancelButtonIndex: 3,
-      disabledButtonIndices: [props.imageDisabled ? 0 : -1, props.fileDisabled ? 1 : -1, props.runtimeFileDisabled ? 2 : -1].filter((index) => index >= 0),
-    }, (index) => {
-      if (index === 0) props.onAddImage();
-      else if (index === 1) props.onAddFile();
-      else if (index === 2) props.onAddRuntimeFile();
-    });
-    return;
-  }
-  Alert.alert(t('composer.addAttachment'), undefined, [
-    { text: t('composer.photo'), onPress: props.onAddImage },
-    { text: t('composer.deviceFile'), onPress: props.onAddFile },
-    { text: t('composer.workspaceFile'), onPress: props.onAddRuntimeFile },
-    { text: t('common.cancel'), style: 'cancel' },
-  ]);
-}
-
-function showPermissionMenu(props: SessionComposerProps, t: Translate) {
-  const select = (index: number) => {
-    if (index === 0) props.onPermissionModeChange('ask');
-    else if (index === 1) props.onPermissionModeChange('auto-review');
-    else if (index === 2) props.onPermissionModeChange('full-access');
-  };
-  if (Platform.OS === 'ios') {
-    ActionSheetIOS.showActionSheetWithOptions({ options: [t('composer.askBeforeChanges'), t('composer.autoReview'), t('composer.fullAccess'), t('common.cancel')], cancelButtonIndex: 3, destructiveButtonIndex: 2 }, select);
-    return;
-  }
-  Alert.alert(t('composer.permissionMode'), undefined, [
-    { text: t('composer.askBeforeChanges'), onPress: () => select(0) },
-    { text: t('composer.autoReview'), onPress: () => select(1) },
-    { text: t('composer.fullAccess'), style: 'destructive', onPress: () => select(2) },
-    { text: t('common.cancel'), style: 'cancel' },
-  ]);
-}
-
 function actionLabel(action: SessionComposerProps['action'], t: Translate, busy: boolean) {
   if (busy) return action === 'stop' ? t('composer.stopping') : action === 'save' ? t('composer.saving') : t('composer.sending');
   return action === 'stop' ? t('composer.stop') : action === 'save' ? t('composer.saveEdit') : t('composer.send');
@@ -205,7 +206,7 @@ function permissionLabel(mode: SessionComposerProps['permissionMode'], t: Transl
 }
 
 function estimatedPermissionWidth(mode: SessionComposerProps['permissionMode']) {
-  return mode === 'ask' ? 70 : mode === 'auto-review' ? 136 : 126;
+  return mode === 'ask' ? 142 : mode === 'auto-review' ? 132 : 126;
 }
 
 function permissionIconSize(mode: SessionComposerProps['permissionMode']) {
@@ -234,6 +235,7 @@ const styles = StyleSheet.create({
   cancelEditButton: { alignItems: 'center', height: 34, justifyContent: 'center', width: 34 },
   toolButton: { alignItems: 'center', height: 40, justifyContent: 'center', width: 40 },
   permissionButtonFrame: { borderRadius: 19, height: 38, overflow: 'hidden' },
+  permissionMenuTriggerFrame: { height: 38 },
   permissionButton: { alignItems: 'center', borderRadius: 19, flex: 1, flexDirection: 'row' },
   permissionIconSlot: { alignItems: 'center', height: 20, justifyContent: 'center', left: 8, position: 'absolute', width: 20 },
   permissionText: { fontSize: 13, fontWeight: '600', marginLeft: 34, marginRight: 8 },

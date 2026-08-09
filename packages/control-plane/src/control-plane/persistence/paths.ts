@@ -13,12 +13,9 @@ export type ControlPlaneStorePaths = {
   marketMigrationBackupPath: string;
   nodesDir: string;
   pendingPairingRevokesDir: string;
-  nodeRuntimesDir: string;
-  controlledInstancesDir: string;
   chatSessionsDir: string;
   chatBridgesDir: string;
   triggersDir: string;
-  nodeJoinInvitesDir: string;
   proxyAuthorityPath: string;
   identitySigningPath: string;
   authUsersDir: string;
@@ -45,12 +42,9 @@ export function controlPlaneStorePaths(dataDir = defaultControlPlaneDataDir()): 
     marketMigrationBackupPath: path.join(root, "market", "legacy-image-migration-backup.json"),
     nodesDir: path.join(root, "nodes"),
     pendingPairingRevokesDir: path.join(root, "pending-pairing-revokes"),
-    nodeRuntimesDir: path.join(root, "node-runtimes"),
-    controlledInstancesDir: path.join(root, "controlled-instances"),
     chatSessionsDir: path.join(root, "chat-sessions"),
     chatBridgesDir: path.join(root, "chat-bridges"),
     triggersDir: path.join(root, "triggers"),
-    nodeJoinInvitesDir: path.join(root, "node-join-invites"),
     proxyAuthorityPath: path.join(root, "control-plane-proxy", "authority.json"),
     identitySigningPath: path.join(root, "control-plane-identity-signing.json"),
     authUsersDir: path.join(root, "auth-users"),

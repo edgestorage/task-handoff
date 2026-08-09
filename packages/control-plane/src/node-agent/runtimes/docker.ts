@@ -45,6 +45,10 @@ export type DockerExecutorOptions = {
   portResolutionRetryDelaysMs?: readonly number[];
 };
 
+type DockerRunOptions = Pick<DockerExecutorOptions, "publishHost" | "launcherAssetsDir"> & {
+  imageReference?: string;
+};
+
 export type DockerRuntimeInstallRequest = {
   containerName: string;
   artifactPath: string;
@@ -75,6 +79,52 @@ type DockerContainerMount = {
   name?: string;
   source?: string;
 };
+
+const DOCKER_BOOTSTRAP_ABI = "1";
+const DOCKER_BOOTSTRAP_CONTAINER_DIR = "/run/task-handoff/bootstrap";
+const DOCKER_BOOTSTRAP_ENTRYPOINT = `${DOCKER_BOOTSTRAP_CONTAINER_DIR}/entrypoint.sh`;
+const DOCKER_BOOTSTRAP_EXECUTABLE = "/bin/bash";
+const DOCKER_RUNTIME_INSTALLER = `${DOCKER_BOOTSTRAP_CONTAINER_DIR}/runtime-installer.mjs`;
+const DOCKER_RUNTIME_ROOT = "/opt/task-handoff/instance-runtime";
+
+function runtimeVolumeForInstance(instanceId: string, nodeId: string) {
+  const containerName = containerNameForInstance(instanceId);
+  return {
+    role: "runtime",
+    name: `${containerName}-runtime`,
+    mountPath: DOCKER_RUNTIME_ROOT,
+    labels: {
+      "task-handoff.owner": "task-handoff",
+      "task-handoff.instance-id": instanceId,
+      "task-handoff.node-id": nodeId,
+      "task-handoff.volume-role": "runtime",
+    },
+  };
+}
+
+function persistentVolumesForInstance(instanceId: string, nodeId: string, source: Project["source"]) {
+  const containerName = containerNameForInstance(instanceId);
+  const roles = [
+    { role: "data" as const, suffix: "data", mountPath: "/data" },
+    { role: "agent-home" as const, suffix: "agent-home", mountPath: "/home/agent" },
+    ...(source.type === "local-folder" ? [] : [{ role: "workspace" as const, suffix: "workspace", mountPath: "/workspace" }]),
+  ];
+  return roles.map(({ role, suffix, mountPath }) => ({
+    role,
+    name: `${containerName}-${suffix}`,
+    mountPath,
+    labels: {
+      "task-handoff.owner": "task-handoff",
+      "task-handoff.instance-id": instanceId,
+      "task-handoff.node-id": nodeId,
+      "task-handoff.volume-role": role,
+    },
+  }));
+}
+
+function persistentVolumesForContext(context: ExecutorContext) {
+  return persistentVolumesForInstance(context.instance.id, context.node?.id || "node_unset", context.project.source);
+}
 
 const SENSITIVE_DOCKER_CONFIG_KEYS = new Set([
   "TASK_HANDOFF_REGISTRATION_TOKEN",
@@ -154,13 +204,24 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
           `Docker container ${containerName} belongs to ${owner || "an unknown instance"}, not ${context.instance.id}.`,
         );
       }
-      await this.validateManagedVolumes(context, existing.mounts);
+      const bootstrapMount = existing.mounts.find((mount) => mount.type === "bind" && mount.destination === DOCKER_BOOTSTRAP_CONTAINER_DIR);
+      const authoritativeBootstrap = existing.labels["task-handoff.bootstrap-abi"] === DOCKER_BOOTSTRAP_ABI
+        && existing.entrypoint[0] === DOCKER_BOOTSTRAP_EXECUTABLE
+        && existing.command[0] === DOCKER_BOOTSTRAP_ENTRYPOINT
+        && bootstrapMount?.source
+        && path.resolve(bootstrapMount.source) === path.resolve(this.launcherAssetsDir);
+      if (!authoritativeBootstrap) {
+        await this.createPersistentVolumes(context);
+        return this.recreateWithAuthoritativeBootstrap(context, containerName, existing);
+      }
+      await this.createRuntimeVolume(context);
+      await this.validatePersistentVolumes(context, existing.mounts);
       try {
         await this.runCommand("docker", ["start", containerName]);
       } catch (cause) {
         throw runtimeExecutorError("RUNTIME_EXECUTOR_FAILED", `Could not start Docker container ${containerName}.`, cause);
       }
-      return this.runningResult(context, containerName, existing.id);
+      return this.bootstrapResult(context, containerName, existing.id);
     }
     if (context.instance.environmentTemplateOrigin) {
       const inspected = await this.inspectEnvironmentTemplateImage(context.instance.environmentTemplateOrigin.imageId);
@@ -175,14 +236,45 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
     } else {
       await this.images.ensure(context.image.resolvedReference || context.image.requestedReference!);
     }
-    await this.createManagedVolumes(context);
+    await this.createPersistentVolumes(context);
     let runResult;
     try {
-      runResult = await this.runCommand("docker", dockerRunArgs(context, containerName, { publishHost: this.publishHost }));
+      runResult = await this.runCommand("docker", dockerRunArgs(context, containerName, {
+        publishHost: this.publishHost,
+        launcherAssetsDir: this.launcherAssetsDir,
+      }));
     } catch (cause) {
       throw runtimeExecutorError("RUNTIME_EXECUTOR_FAILED", `Could not create Docker container ${containerName}.`, cause);
     }
-    return this.runningResult(context, containerName, runResult.stdout || undefined);
+    return this.bootstrapResult(context, containerName, runResult.stdout || undefined);
+  }
+
+  private async recreateWithAuthoritativeBootstrap(
+    context: ExecutorContext,
+    containerName: string,
+    existing: { id: string; image?: string; running: boolean },
+  ): Promise<ExecutorStartResult> {
+    const backupName = `${containerName}-pre-bootstrap-${existing.id.slice(0, 12)}`;
+    if (existing.running) await this.runCommand("docker", ["stop", containerName]);
+    try {
+      await this.runCommand("docker", ["rename", containerName, backupName]);
+    } catch (cause) {
+      if (existing.running) await this.runCommand("docker", ["start", containerName]).catch(() => ({ stdout: "", stderr: "" }));
+      throw runtimeExecutorError("RUNTIME_EXECUTOR_FAILED", `Could not preserve Docker container ${containerName} before bootstrap migration.`, cause);
+    }
+    try {
+      const result = await this.runCommand("docker", dockerRunArgs(context, containerName, {
+        publishHost: this.publishHost,
+        launcherAssetsDir: this.launcherAssetsDir,
+        imageReference: existing.image,
+      }));
+      return this.bootstrapResult(context, containerName, result.stdout || undefined, backupName);
+    } catch (cause) {
+      await this.runCommand("docker", ["rm", "-f", containerName]).catch(() => ({ stdout: "", stderr: "" }));
+      await this.runCommand("docker", ["rename", backupName, containerName]).catch(() => ({ stdout: "", stderr: "" }));
+      if (existing.running) await this.runCommand("docker", ["start", containerName]).catch(() => ({ stdout: "", stderr: "" }));
+      throw runtimeExecutorError("RUNTIME_EXECUTOR_FAILED", `Could not recreate Docker container ${containerName} with the node-agent bootstrap.`, cause);
+    }
   }
 
   async inspectContainerConfigSecurity(containerName: string, secretValues: readonly string[]) {
@@ -266,40 +358,34 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
     }
   }
 
-  private async createManagedVolumes(context: ExecutorContext) {
-    this.assertManagedVolumeModel(context);
-    for (const volume of context.instance.runtime.managedVolumes) {
-      const args = ["volume", "create"];
-      for (const [key, value] of Object.entries(volume.labels).sort(([left], [right]) => left.localeCompare(right))) {
-        args.push("--label", `${key}=${value}`);
-      }
-      args.push(volume.name);
-      try {
-        await this.runCommand("docker", args);
-      } catch (cause) {
-        throw runtimeExecutorError("INSTANCE_VOLUME_CREATE_FAILED", `Could not create managed volume ${volume.name}.`, cause);
-      }
-      await this.validateManagedVolume(context.instance.id, volume);
+  private async createPersistentVolumes(context: ExecutorContext) {
+    const runtimeVolume = runtimeVolumeForInstance(context.instance.id, context.node?.id || "node_unset");
+    for (const volume of [...persistentVolumesForContext(context), runtimeVolume]) {
+      await this.createVolume(volume);
+      await this.validateOwnedVolume(context.instance.id, volume);
     }
   }
 
-  private assertManagedVolumeModel(context: ExecutorContext) {
-    const expectedRoles = context.project.source.type === "local-folder"
-      ? ["agent-home", "data"]
-      : ["agent-home", "data", "workspace"];
-    const actualRoles = context.instance.runtime.managedVolumes.map((volume) => volume.role).sort();
-    if (actualRoles.join("\0") !== expectedRoles.join("\0")) {
-      throw Object.assign(new Error(`Instance ${context.instance.id} managed volume model does not match its workspace source.`), {
-        statusCode: 409,
-        code: "INSTANCE_VOLUME_MODEL_INVALID",
-      });
+  private async createRuntimeVolume(context: ExecutorContext) {
+    await this.createVolume(runtimeVolumeForInstance(context.instance.id, context.node?.id || "node_unset"));
+  }
+
+  private async createVolume(volume: { name: string; labels: Record<string, string> }) {
+    const args = ["volume", "create"];
+    for (const [key, value] of Object.entries(volume.labels).sort(([left], [right]) => left.localeCompare(right))) {
+      args.push("--label", `${key}=${value}`);
+    }
+    args.push(volume.name);
+    try {
+      await this.runCommand("docker", args);
+    } catch (cause) {
+      throw runtimeExecutorError("INSTANCE_VOLUME_CREATE_FAILED", `Could not create managed volume ${volume.name}.`, cause);
     }
   }
 
-  private async validateManagedVolumes(context: ExecutorContext, mounts: DockerContainerMount[]) {
-    this.assertManagedVolumeModel(context);
-    for (const volume of context.instance.runtime.managedVolumes) {
-      await this.validateManagedVolume(context.instance.id, volume);
+  private async validatePersistentVolumes(context: ExecutorContext, mounts: DockerContainerMount[]) {
+    for (const volume of persistentVolumesForContext(context)) {
+      await this.validateOwnedVolume(context.instance.id, volume);
       const mount = mounts.find((item) => item.type === "volume" && item.destination === volume.mountPath);
       if (!mount || mount.name !== volume.name) {
         throw Object.assign(new Error(`Docker container mount for ${volume.role} does not match managed volume ${volume.name}.`), {
@@ -307,6 +393,15 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
           code: "INSTANCE_VOLUME_MOUNT_IDENTITY_MISMATCH",
         });
       }
+    }
+    const runtimeVolume = runtimeVolumeForInstance(context.instance.id, context.node?.id || "node_unset");
+    await this.validateOwnedVolume(context.instance.id, runtimeVolume);
+    const runtimeMount = mounts.find((item) => item.type === "volume" && item.destination === runtimeVolume.mountPath);
+    if (!runtimeMount || runtimeMount.name !== runtimeVolume.name) {
+      throw Object.assign(new Error(`Docker container runtime mount does not match ${runtimeVolume.name}.`), {
+        statusCode: 409,
+        code: "INSTANCE_VOLUME_MOUNT_IDENTITY_MISMATCH",
+      });
     }
     if (context.project.source.type === "local-folder") {
       const workspace = mounts.find((item) => item.destination === (context.project.workspacePolicy.path || "/workspace"));
@@ -319,7 +414,7 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
     }
   }
 
-  private async validateManagedVolume(instanceId: string, expected: ControlledInstance["runtime"]["managedVolumes"][number]) {
+  private async validateOwnedVolume(instanceId: string, expected: { role: string; name: string; mountPath: string; labels: Record<string, string> }) {
     let result;
     try {
       result = await this.runCommand("docker", ["volume", "inspect", "--format", "{{json .}}", expected.name]);
@@ -384,6 +479,34 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
     };
   }
 
+  private bootstrapResult(context: ExecutorContext, containerName: string, containerId?: string, backupName?: string): ExecutorStartResult {
+    return {
+      status: "starting",
+      health: "unknown",
+      connectionStatus: "unknown",
+      agentStatus: "unknown",
+      targetStatus: "unknown",
+      uiAccessStatus: "unknown",
+      target: { strategy: "direct-port", status: "unknown" },
+      workspace: {
+        mode: context.project.workspacePolicy.mode,
+        status: "pending",
+        path: context.project.workspacePolicy.path,
+      },
+      runtime: {
+        ...context.instance.runtime,
+        kind: "docker",
+        containerName,
+        ...(containerId ? { containerId } : {}),
+        labels: {
+          ...context.instance.runtime.labels,
+          "task-handoff.bootstrap-abi": DOCKER_BOOTSTRAP_ABI,
+          ...(backupName ? { "task-handoff.bootstrap-backup": backupName } : {}),
+        },
+      },
+    };
+  }
+
   async stop(context: ExecutorContext): Promise<ExecutorStartResult> {
     const containerName = context.instance.runtime.containerName || containerNameForInstance(context.instance.id);
     try {
@@ -428,7 +551,7 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
       }
     }
     const volumeResults = [];
-    for (const volume of context.instance.runtime.managedVolumes) {
+    for (const volume of persistentVolumesForContext(context)) {
       if (!input.deleteVolumes) {
         volumeResults.push({ role: volume.role, name: volume.name, mountPath: volume.mountPath, status: "retained" as const });
         continue;
@@ -462,6 +585,7 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
         });
       }
     }
+    await this.deleteRuntimeVolume(context);
     return InstanceDeleteResultSchema.parse({
       instanceId: context.instance.id,
       containerDeleted: true,
@@ -470,6 +594,23 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
       retainedVolumes: volumeResults.filter((result) => result.status === "retained"),
       volumeResults,
     });
+  }
+
+  private async deleteRuntimeVolume(context: ExecutorContext) {
+    const volume = runtimeVolumeForInstance(context.instance.id, context.node?.id || "node_unset");
+    const inspected = await this.inspectVolumeForDelete(volume.name);
+    if (!inspected) return;
+    if (inspected.name !== volume.name
+      || inspected.labels["task-handoff.owner"] !== "task-handoff"
+      || inspected.labels["task-handoff.instance-id"] !== context.instance.id
+      || inspected.labels["task-handoff.volume-role"] !== "runtime") {
+      throw runtimeExecutorError("INSTANCE_VOLUME_IDENTITY_MISMATCH", `Runtime volume ${volume.name} ownership does not match instance ${context.instance.id}.`);
+    }
+    try {
+      await this.runCommand("docker", ["volume", "rm", volume.name]);
+    } catch (cause) {
+      throw runtimeExecutorError("INSTANCE_VOLUME_DELETE_FAILED", `Could not delete runtime volume ${volume.name}.`, cause);
+    }
   }
 
   private async inspectVolumeForDelete(name: string) {
@@ -523,7 +664,8 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
         "--user",
         "0",
         request.containerName,
-        "task-handoff-runtime",
+        "node",
+        DOCKER_RUNTIME_INSTALLER,
         "install",
         "--artifact",
         remoteArtifact,
@@ -558,7 +700,8 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
       "--user",
       "agent",
       containerName,
-      "task-handoff-runtime",
+      "node",
+      DOCKER_RUNTIME_INSTALLER,
       "verify-active",
     ]).catch(() => undefined);
     if (!result?.stdout) return { containerId };
@@ -568,6 +711,15 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
     } catch {
       return { containerId };
     }
+  }
+
+  async removeBootstrapBackup(backupName: string, instanceId: string): Promise<void> {
+    const inspected = await this.inspectContainerForStart(backupName);
+    if (!inspected) return;
+    if (inspected.labels["task-handoff.instance-id"] !== instanceId) {
+      throw runtimeExecutorError("RUNTIME_EXECUTOR_FAILED", `Docker bootstrap backup ${backupName} does not belong to ${instanceId}.`);
+    }
+    await this.runCommand("docker", ["rm", "-f", backupName]);
   }
 
   async inspectRuntimeTarget(containerName?: string): Promise<DockerRuntimeTarget> {
@@ -599,16 +751,10 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
     return { platform: normalizedPlatform, arch: normalizedArch, launcherAbi: 1 };
   }
 
-  /** Installs the launcher bundle shipped by this node-agent before updating the application runtime. */
+  /** Verifies the launcher bundle mounted from this node-agent and prepares its persistent runtime root. */
   async installRuntimeLauncher(containerName: string): Promise<void> {
     const containerId = await this.inspectContainerId(containerName);
     if (!containerId) throw runtimeExecutorError("INSTANCE_BASE_RUNTIME_INCOMPATIBLE", `Docker container ${containerName} does not exist.`);
-    const assets = [
-      [path.join(this.launcherAssetsDir, "entrypoint.sh"), "/root/.task-handoff-entrypoint.bootstrap"],
-      [path.join(this.launcherAssetsDir, "instance-launcher.sh"), "/root/.task-handoff-instance-launcher.bootstrap"],
-      [path.join(this.launcherAssetsDir, "runtime-installer.mjs"), "/root/.task-handoff-runtime-installer.bootstrap"],
-    ] as const;
-    for (const [source, target] of assets) await this.runCommand("docker", ["cp", source, `${containerName}:${target}`]);
     try {
       await this.runCommand("docker", [
         "exec",
@@ -617,7 +763,7 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
         containerName,
         "bash",
         "-ceu",
-        "install -d -o root -g root -m 0755 /opt/task-handoff/instance-runtime /opt/task-handoff/instance-runtime/releases /opt/task-handoff/instance-runtime/staging /opt/task-handoff/instance-runtime/incoming; chown -R root:root /opt/task-handoff/instance-runtime; chmod -R go-w /opt/task-handoff/instance-runtime; install -m 0755 /root/.task-handoff-entrypoint.bootstrap /usr/local/bin/task-handoff-entrypoint; install -m 0755 /root/.task-handoff-instance-launcher.bootstrap /usr/local/bin/task-handoff-instance-launcher; install -d /usr/local/lib/task-handoff; install -m 0755 /root/.task-handoff-runtime-installer.bootstrap /usr/local/lib/task-handoff/runtime-installer.mjs; ln -sfn /usr/local/lib/task-handoff/runtime-installer.mjs /usr/local/bin/task-handoff-runtime; rm -f /root/.task-handoff-entrypoint.bootstrap /root/.task-handoff-instance-launcher.bootstrap /root/.task-handoff-runtime-installer.bootstrap",
+        `test -r ${DOCKER_BOOTSTRAP_ENTRYPOINT}; test -r ${DOCKER_BOOTSTRAP_CONTAINER_DIR}/instance-launcher.sh; test -r ${DOCKER_RUNTIME_INSTALLER}; install -d -o root -g root -m 0755 /opt/task-handoff/instance-runtime /opt/task-handoff/instance-runtime/releases /opt/task-handoff/instance-runtime/staging /opt/task-handoff/instance-runtime/incoming; chown -R root:root /opt/task-handoff/instance-runtime; chmod -R go-w /opt/task-handoff/instance-runtime`,
       ]);
     } catch (cause) {
       throw runtimeExecutorError("INSTANCE_BASE_RUNTIME_INCOMPATIBLE", `Could not install the runtime launcher in ${containerName}.`, cause);
@@ -636,7 +782,7 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
     }
   }
 
-  private async inspectContainerForStart(containerName: string): Promise<{ id: string; labels: Record<string, string>; mounts: DockerContainerMount[] } | undefined> {
+  private async inspectContainerForStart(containerName: string): Promise<{ id: string; image?: string; running: boolean; entrypoint: string[]; command: string[]; labels: Record<string, string>; mounts: DockerContainerMount[] } | undefined> {
     let result;
     try {
       result = await this.runCommand("docker", ["inspect", "--format", "{{json .}}", containerName]);
@@ -645,7 +791,7 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
       throw runtimeExecutorError("RUNTIME_EXECUTOR_FAILED", `Could not inspect Docker container ${containerName}.`, cause);
     }
     try {
-      const parsed = JSON.parse(result.stdout || "{}") as { Id?: unknown; Config?: { Labels?: unknown }; Mounts?: unknown };
+      const parsed = JSON.parse(result.stdout || "{}") as { Id?: unknown; Image?: unknown; State?: { Running?: unknown }; Config?: { Entrypoint?: unknown; Cmd?: unknown; Labels?: unknown }; Mounts?: unknown };
       if (typeof parsed.Id !== "string" || !parsed.Id) throw new Error("Docker inspect did not return a container id.");
       const labels = parsed.Config?.Labels && typeof parsed.Config.Labels === "object" && !Array.isArray(parsed.Config.Labels)
         ? Object.fromEntries(Object.entries(parsed.Config.Labels).filter((entry): entry is [string, string] => typeof entry[1] === "string"))
@@ -663,7 +809,13 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
           source: typeof value.Source === "string" ? value.Source : undefined,
         }];
       }) : [];
-      return { id: parsed.Id, labels, mounts };
+      const entrypoint = Array.isArray(parsed.Config?.Entrypoint)
+        ? parsed.Config.Entrypoint.filter((item): item is string => typeof item === "string")
+        : typeof parsed.Config?.Entrypoint === "string" ? [parsed.Config.Entrypoint] : [];
+      const command = Array.isArray(parsed.Config?.Cmd)
+        ? parsed.Config.Cmd.filter((item): item is string => typeof item === "string")
+        : typeof parsed.Config?.Cmd === "string" ? [parsed.Config.Cmd] : [];
+      return { id: parsed.Id, image: typeof parsed.Image === "string" ? parsed.Image : undefined, running: parsed.State?.Running === true, entrypoint, command, labels, mounts };
     } catch (cause) {
       throw runtimeExecutorError("RUNTIME_EXECUTOR_FAILED", `Docker returned invalid inspection data for ${containerName}.`, cause);
     }
@@ -793,8 +945,9 @@ function appendDockerEnv(args: string[], key: string, value: string) {
   args.push("-e", `${key}=${value}`);
 }
 
-export function dockerRunArgs(context: ExecutorContext, containerName: string, options: DockerExecutorOptions = {}) {
+export function dockerRunArgs(context: ExecutorContext, containerName: string, options: DockerRunOptions = {}) {
   const publishHost = options.publishHost || "127.0.0.1";
+  const launcherAssetsDir = path.resolve(options.launcherAssetsDir || defaultLauncherAssetsDir());
   const nodeId = context.node?.id || "node_unset";
   const runtimeId = context.runtime?.id || "runtime_local_docker";
   const args = [
@@ -814,12 +967,15 @@ export function dockerRunArgs(context: ExecutorContext, containerName: string, o
     `task-handoff.runtime-id=${runtimeId}`,
     "--label",
     `task-handoff.image-id=${context.image.id}`,
+    "--label",
+    `task-handoff.bootstrap-abi=${DOCKER_BOOTSTRAP_ABI}`,
     "--shm-size",
     "1gb",
     "--security-opt",
     "seccomp=unconfined",
     "--network",
     "bridge",
+    "--no-healthcheck",
     "--add-host",
     "host.docker.internal:host-gateway",
     "--tmpfs",
@@ -837,11 +993,17 @@ export function dockerRunArgs(context: ExecutorContext, containerName: string, o
   args.push(
     "--mount",
     `type=bind,src=${context.privateConfigPath},dst=/run/task-handoff/instance-private-config.json,readonly`,
+    "--mount",
+    `type=bind,src=${launcherAssetsDir},dst=${DOCKER_BOOTSTRAP_CONTAINER_DIR},readonly`,
+    "--entrypoint",
+    DOCKER_BOOTSTRAP_EXECUTABLE,
   );
 
-  for (const volume of context.instance.runtime.managedVolumes) {
+  for (const volume of persistentVolumesForContext(context)) {
     args.push("--mount", `type=volume,src=${volume.name},dst=${volume.mountPath}`);
   }
+  const runtimeVolume = runtimeVolumeForInstance(context.instance.id, context.node?.id || "node_unset");
+  args.push("--mount", `type=volume,src=${runtimeVolume.name},dst=${runtimeVolume.mountPath}`);
 
   const runtimeEnv = {
     TASK_HANDOFF_CONTROL_MODE: "controlled",
@@ -852,6 +1014,7 @@ export function dockerRunArgs(context: ExecutorContext, containerName: string, o
     TASK_HANDOFF_NODE_ID: nodeId,
     TASK_HANDOFF_RUNTIME_ID: runtimeId,
     TASK_HANDOFF_IMAGE_ID: context.image.id,
+    TASK_HANDOFF_INSTANCE_LAUNCHER: `${DOCKER_BOOTSTRAP_CONTAINER_DIR}/instance-launcher.sh`,
     ...(context.image.tag ? { TASK_HANDOFF_IMAGE_TAG: context.image.tag } : {}),
     TASK_HANDOFF_CHAT_BRIDGES: "none",
     TASK_HANDOFF_WORKSPACE: context.project.workspacePolicy.path || "/workspace",
@@ -884,7 +1047,12 @@ export function dockerRunArgs(context: ExecutorContext, containerName: string, o
     appendDockerEnv(args, key, value);
   }
 
-  args.push(context.instance.environmentTemplateOrigin?.imageId || context.image.resolvedReference || context.image.requestedReference!);
+  args.push(
+    options.imageReference || context.instance.environmentTemplateOrigin?.imageId || context.image.resolvedReference || context.image.requestedReference!,
+    DOCKER_BOOTSTRAP_ENTRYPOINT,
+    "task-handoff",
+    "web",
+  );
   return args;
 }
 

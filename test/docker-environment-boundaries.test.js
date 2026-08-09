@@ -27,11 +27,6 @@ function managedVolume(instanceId, role, name, mountPath) {
 
 function context(source = { type: "local-folder", path: "/tmp/workspace" }) {
   const instanceId = "inst_one";
-  const volumes = [
-    managedVolume(instanceId, "data", "task-handoff-inst_one-data", "/data"),
-    managedVolume(instanceId, "agent-home", "task-handoff-inst_one-agent-home", "/home/agent"),
-    ...(source.type === "local-folder" ? [] : [managedVolume(instanceId, "workspace", "task-handoff-inst_one-workspace", "/workspace")]),
-  ];
   return {
     privateConfigPath: "/private/inst_one.json",
     nodeAgentUrl: "http://host.docker.internal:8091",
@@ -57,9 +52,32 @@ function context(source = { type: "local-folder", path: "/tmp/workspace" }) {
     instance: ControlledInstanceSchema.parse({
       id: instanceId, name: "Instance", projectId: "proj_one", source, sourceSnapshot: {}, modelSelection: {},
       nodeId: "node_one", runtimeId: "runtime_local_docker", imageSelection: { imageId: "img_one" },
-      access: { strategy: "control-plane-proxy", status: "unknown" }, runtime: { labels: {}, managedVolumes: volumes },
+      access: { strategy: "control-plane-proxy", status: "unknown" }, runtime: { labels: {} },
       registrationToken: "registration-secret", createdAt: timestamp, updatedAt: timestamp,
     }),
+  };
+}
+
+function persistentVolumes(value) {
+  const instanceId = value.instance.id;
+  return [
+    managedVolume(instanceId, "data", `task-handoff-${instanceId}-data`, "/data"),
+    managedVolume(instanceId, "agent-home", `task-handoff-${instanceId}-agent-home`, "/home/agent"),
+    ...(value.project.source.type === "local-folder" ? [] : [managedVolume(instanceId, "workspace", `task-handoff-${instanceId}-workspace`, "/workspace")]),
+  ];
+}
+
+function volumeForInspection(value, name) {
+  return persistentVolumes(value).find((item) => item.name === name) || {
+    role: "runtime",
+    name: `task-handoff-${value.instance.id}-runtime`,
+    mountPath: "/opt/task-handoff/instance-runtime",
+    labels: {
+      "task-handoff.owner": "task-handoff",
+      "task-handoff.instance-id": value.instance.id,
+      "task-handoff.node-id": value.node.id,
+      "task-handoff.volume-role": "runtime",
+    },
   };
 }
 
@@ -108,6 +126,9 @@ test("docker config uses a read-only private file and explicit managed mounts wi
   assert.ok(args.includes("type=bind,src=/private/inst_one.json,dst=/run/task-handoff/instance-private-config.json,readonly"));
   assert.ok(args.includes("type=volume,src=task-handoff-inst_one-data,dst=/data"));
   assert.ok(args.includes("type=volume,src=task-handoff-inst_one-agent-home,dst=/home/agent"));
+  assert.ok(args.includes("type=volume,src=task-handoff-inst_one-runtime,dst=/opt/task-handoff/instance-runtime"));
+  assert.ok(args.includes("/run/task-handoff/bootstrap/entrypoint.sh"));
+  assert.ok(args.includes("--no-healthcheck"));
   assert.ok(args.includes("/tmp/workspace:/workspace:rw"));
   assert.equal(args.some((value) => value.includes("registration-secret") || value.includes("model-secret")), false);
 
@@ -131,7 +152,7 @@ test("docker executor creates and labels authoritative volumes before docker run
     }
     if (args[0] === "volume" && args[1] === "inspect") {
       const name = args.at(-1);
-      const volume = context().instance.runtime.managedVolumes.find((item) => item.name === name);
+      const volume = volumeForInspection(context(), name);
       return { stdout: JSON.stringify({ Name: name, Labels: volume.labels }), stderr: "" };
     }
     if (args[0] === "run") return { stdout: "container-one", stderr: "" };
@@ -141,9 +162,90 @@ test("docker executor creates and labels authoritative volumes before docker run
   const result = await executor.start(context());
   const runIndex = calls.findIndex((args) => args[0] === "run");
   const volumeCreateIndexes = calls.flatMap((args, index) => args[0] === "volume" && args[1] === "create" ? [index] : []);
-  assert.equal(volumeCreateIndexes.length, 2);
+  assert.equal(volumeCreateIndexes.length, 3);
   assert.ok(volumeCreateIndexes.every((index) => index < runIndex));
-  assert.equal(result.runtime.managedVolumes.length, 2);
+  assert.equal("managedVolumes" in result.runtime, false);
+});
+
+test("legacy containers are rebuilt from the same image under the node-agent bootstrap without starting the old entrypoint", async () => {
+  const value = context();
+  const calls = [];
+  const executor = new LocalDockerExecutor(async (_command, args) => {
+    calls.push(args);
+    if (args[0] === "inspect" && args.includes("{{json .}}")) {
+      return { stdout: JSON.stringify({
+        Id: "legacy-container-id",
+        Image: "sha256:legacy-image-id",
+        State: { Running: true },
+        Config: { Entrypoint: ["/usr/local/bin/legacy-entrypoint"], Labels: { "task-handoff.instance-id": value.instance.id } },
+        Mounts: persistentVolumes(value).map((volume) => ({ Type: "volume", Name: volume.name, Destination: volume.mountPath })),
+      }), stderr: "" };
+    }
+    if (args[0] === "volume" && args[1] === "inspect") {
+      const volume = volumeForInspection(value, args.at(-1));
+      return { stdout: JSON.stringify({ Name: volume.name, Labels: volume.labels }), stderr: "" };
+    }
+    if (args[0] === "run") return { stdout: "current-container-id", stderr: "" };
+    return { stdout: "", stderr: "" };
+  }, { launcherAssetsDir: "C:\\Program Files\\Task Handoff\\bootstrap" });
+
+  const result = await executor.start({
+    ...value,
+    instance: {
+      ...value.instance,
+      runtime: { ...value.instance.runtime, containerName: "task-handoff-inst_one", containerId: "legacy-container-id" },
+    },
+  });
+
+  assert.deepEqual(calls.filter((args) => ["stop", "rename"].includes(args[0])).map((args) => args[0]), ["stop", "rename"]);
+  assert.equal(calls.some((args) => args[0] === "start"), false);
+  const run = calls.find((args) => args[0] === "run");
+  assert.equal(run.at(-4), "sha256:legacy-image-id");
+  assert.ok(run.includes(`type=bind,src=${path.resolve("C:\\Program Files\\Task Handoff\\bootstrap")},dst=/run/task-handoff/bootstrap,readonly`));
+  assert.ok(run.includes("/run/task-handoff/bootstrap/entrypoint.sh"));
+  assert.equal(result.status, "starting");
+  assert.equal(result.runtime.containerId, "current-container-id");
+  assert.match(result.runtime.labels["task-handoff.bootstrap-backup"], /legacy-conta/);
+});
+
+test("failed bootstrap migration restores a previously running legacy container", async () => {
+  const value = context();
+  const calls = [];
+  const executor = new LocalDockerExecutor(async (_command, args) => {
+    calls.push(args);
+    if (args[0] === "inspect" && args.includes("{{json .}}")) {
+      return { stdout: JSON.stringify({
+        Id: "legacy-container-id",
+        Image: "sha256:legacy-image-id",
+        State: { Running: true },
+        Config: { Labels: { "task-handoff.instance-id": value.instance.id } },
+        Mounts: [],
+      }), stderr: "" };
+    }
+    if (args[0] === "volume" && args[1] === "inspect") {
+      const volume = volumeForInspection(value, args.at(-1));
+      return { stdout: JSON.stringify({ Name: volume.name, Labels: volume.labels }), stderr: "" };
+    }
+    if (args[0] === "run") throw new Error("create failed");
+    return { stdout: "", stderr: "" };
+  }, { launcherAssetsDir: "/current/bootstrap" });
+
+  await assert.rejects(() => executor.start({
+    ...value,
+    instance: {
+      ...value.instance,
+      runtime: { ...value.instance.runtime, containerName: "task-handoff-inst_one", containerId: "legacy-container-id" },
+    },
+  }), /Could not recreate Docker container/);
+
+  assert.deepEqual(calls.filter((args) => ["stop", "rename", "run", "rm", "start"].includes(args[0])).map((args) => args[0]), [
+    "stop",
+    "rename",
+    "run",
+    "rm",
+    "rename",
+    "start",
+  ]);
 });
 
 test("managed volume deletion returns partial failures and retained resources", async () => {
@@ -151,7 +253,7 @@ test("managed volume deletion returns partial failures and retained resources", 
   const executor = new LocalDockerExecutor(async (_command, args) => {
     if (args[0] === "volume" && args[1] === "inspect") {
       const name = args.at(-1);
-      const volume = local.instance.runtime.managedVolumes.find((item) => item.name === name);
+      const volume = volumeForInspection(local, name);
       return { stdout: JSON.stringify({ Name: name, Labels: volume.labels }), stderr: "" };
     }
     if (args[0] === "volume" && args[1] === "rm" && args[2].endsWith("-data")) throw new Error("volume busy");
@@ -175,7 +277,7 @@ test("managed volume deletion is identity-safe and missing resources are idempot
     if (args[0] === "volume" && args[1] === "inspect") {
       const name = args.at(-1);
       if (name.endsWith("-workspace")) throw Object.assign(new Error("No such volume"), { details: { stderr: "No such volume" } });
-      const volume = git.instance.runtime.managedVolumes.find((item) => item.name === name);
+      const volume = volumeForInspection(git, name);
       return { stdout: JSON.stringify({ Name: name, Labels: {
         ...volume.labels,
         ...(name.endsWith("-data") ? { "task-handoff.instance-id": "inst_foreign" } : {}),

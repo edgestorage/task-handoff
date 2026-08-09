@@ -446,10 +446,9 @@ export class ControlPlaneNodeAgentGateway {
 
   private requireFleetNodeReady(node: Node, route: string) {
     const phase = (node as Node & { connectionPhase?: string }).connectionPhase;
-    const directControlApiIsOnline = node.status === "online"
-      && node.connectionMode !== "reverse-wss"
+    const directControlApiCanBeProbed = node.connectionMode !== "reverse-wss"
       && node.connectionMode !== "control-plane-proxy";
-    if (!phase || phase === "healthy" || directControlApiIsOnline) return;
+    if (!phase || phase === "healthy" || directControlApiCanBeProbed) return;
     const error = new Error(`Node agent ${node.id} is ${phase}; serving its latest fleet snapshot.`);
     Object.assign(error, { code: "NODE_AGENT_CONNECTION_PENDING", nodeId: node.id, route });
     throw error;

@@ -633,14 +633,14 @@ async function confirmAppOperation() {
   border: 0;
   border-radius: 6px;
   background: var(--surface-hover);
-  color: var(--brand-accent-muted);
+  color: var(--text-muted);
   cursor: pointer;
 }
 
 .instance-settings-close:hover,
 .instance-settings-close:focus-visible {
   background: var(--surface-active);
-  color: var(--white);
+  color: var(--text-strong);
   outline: none;
 }
 
@@ -691,7 +691,7 @@ async function confirmAppOperation() {
 
 .instance-settings-tabs-list :deep(button[data-state="active"]) {
   background: var(--surface-active);
-  color: var(--white);
+  color: var(--text-strong);
   box-shadow: none;
 }
 
@@ -1086,7 +1086,7 @@ async function confirmAppOperation() {
 .instance-app-issues {
   border-left: 3px solid var(--status-danger);
   padding-left: 10px;
-  color: var(--terminal-text);
+  color: var(--text);
   font-size: 12px;
 }
 

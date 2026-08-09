@@ -68,3 +68,20 @@ test('app sessions reload a snapshot and reconnect after the event socket closes
     jest.useRealTimers();
   }
 });
+
+test('app sessions explicitly refresh from the authoritative snapshot endpoint', async () => {
+  const store = new MobileAppSessionStore();
+  const initial = { updatedAt: at, instances: [] };
+  const refreshed = { updatedAt: '2026-08-07T00:01:00.000Z', instances: [] };
+  const refresh = jest.fn().mockResolvedValue(refreshed);
+  const client = { appSessions: { list: jest.fn().mockResolvedValue(initial), refresh } } as unknown as ControlPlaneClient;
+  const transport = { connectEvents: jest.fn(() => ({ close: jest.fn() })) } as unknown as MobileControlPlaneTransport;
+  const controller = new MobileAppSessionController('cp-refresh', client, transport, store);
+
+  await controller.start();
+  await controller.refresh();
+
+  expect(refresh).toHaveBeenCalledTimes(1);
+  expect(store.profile('cp-refresh').snapshot?.updatedAt).toBe(refreshed.updatedAt);
+  controller.stop();
+});

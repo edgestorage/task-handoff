@@ -34,6 +34,20 @@ export const LoginSchema = z
   })
   .strict();
 
+export const ChangePasswordSchema = z
+  .object({
+    currentPassword: z.string().min(1).max(4096),
+    newPassword: PasswordSchema,
+  })
+  .strict();
+
+export const ReplaceCredentialsSchema = z
+  .object({
+    username: UsernameSchema,
+    password: PasswordSchema,
+  })
+  .strict();
+
 export type ControlPlaneAuthMode = z.infer<typeof ControlPlaneAuthModeSchema>;
 
 export type ControlPlaneAuthOptions = {
@@ -243,6 +257,7 @@ export class ControlPlaneAuth {
   private readonly sessions: JsonCollection<AuthSession>;
   private readonly loginRateLimiter: LoginRateLimiter;
   private bootstrapAdminInProgress = false;
+  private credentialUpdateInProgress = false;
 
   constructor(paths: ControlPlaneStorePaths, options: ControlPlaneAuthOptions = {}) {
     this.mode = resolveAuthMode(options);
@@ -328,6 +343,80 @@ export class ControlPlaneAuth {
     };
   }
 
+  async changePassword(token: string | undefined, input: unknown, context: { sourceId?: string } = {}) {
+    const current = this.resolveSessionToken(token, "web");
+    if (!current) {
+      const error = new Error("Sign in to change the password.");
+      Object.assign(error, { statusCode: 401, code: "CONTROL_PLANE_AUTH_REQUIRED" });
+      throw error;
+    }
+    const parsed = ChangePasswordSchema.parse(input);
+    if (this.credentialUpdateInProgress) {
+      const error = new Error("Control Plane credentials are already being updated.");
+      Object.assign(error, { statusCode: 409, code: "AUTH_CREDENTIAL_UPDATE_IN_PROGRESS" });
+      throw error;
+    }
+    this.credentialUpdateInProgress = true;
+    const sourceId = String(context.sourceId || "unknown").trim() || "unknown";
+    const normalizedUsername = current.storedUser.username.toLocaleLowerCase("en-US");
+    let passwordVerificationStarted = false;
+    try {
+      this.loginRateLimiter.begin(sourceId, normalizedUsername);
+      passwordVerificationStarted = true;
+      if (!(await verifyPassword(parsed.currentPassword, current.storedUser.passwordHash))) {
+        this.loginRateLimiter.recordFailure(sourceId, normalizedUsername);
+        const error = new Error("The current password is incorrect.");
+        Object.assign(error, { statusCode: 400, code: "AUTH_CURRENT_PASSWORD_INVALID" });
+        throw error;
+      }
+      if (await verifyPassword(parsed.newPassword, current.storedUser.passwordHash)) {
+        const error = new Error("The new password must be different from the current password.");
+        Object.assign(error, { statusCode: 400, code: "AUTH_PASSWORD_UNCHANGED" });
+        throw error;
+      }
+      const timestamp = now();
+      const user = this.users.put({
+        ...current.storedUser,
+        passwordHash: await hashPassword(parsed.newPassword),
+        updatedAt: timestamp,
+      });
+      this.revokeUserSessions(user.id);
+      const session = this.createSession(user, "web");
+      return {
+        user: publicUser(user),
+        sessionToken: session.token,
+        expiresAt: session.record.expiresAt,
+      };
+    } finally {
+      if (passwordVerificationStarted) this.loginRateLimiter.finish();
+      this.credentialUpdateInProgress = false;
+    }
+  }
+
+  async replaceCredentials(input: unknown) {
+    const parsed = ReplaceCredentialsSchema.parse(input);
+    const users = this.users.list();
+    if (users.length === 0) {
+      const error = new Error("Control Plane administrator has not been initialized.");
+      Object.assign(error, { statusCode: 409, code: "AUTH_ACCOUNT_NOT_INITIALIZED" });
+      throw error;
+    }
+    if (users.length !== 1) {
+      const error = new Error("The account to update is ambiguous.");
+      Object.assign(error, { statusCode: 409, code: "AUTH_ACCOUNT_AMBIGUOUS" });
+      throw error;
+    }
+    const timestamp = now();
+    const user = this.users.put({
+      ...users[0],
+      username: parsed.username,
+      passwordHash: await hashPassword(parsed.password),
+      updatedAt: timestamp,
+    });
+    this.revokeUserSessions(user.id);
+    return publicUser(user);
+  }
+
   private async authenticate(username: string, password: string, context: { sourceId?: string }) {
     if (!this.enabled()) {
       const error = new Error("Control Plane authentication is disabled.");
@@ -367,6 +456,12 @@ export class ControlPlaneAuth {
       ...(device ? { device } : {}),
     });
     return { record, token: `${record.id}.${secret}` };
+  }
+
+  private revokeUserSessions(userId: string) {
+    for (const session of this.sessions.list()) {
+      if (session.userId === userId) this.sessions.delete(session.id);
+    }
   }
 
   async userForSessionToken(token: string | undefined) {

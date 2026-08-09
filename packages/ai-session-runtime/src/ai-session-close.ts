@@ -64,7 +64,25 @@ export class AiSessionCloseCoordinator {
       if ((session.status === "running" || session.status === "waiting") && session.activeTurnId) {
         await this.options.controller.interrupt(session.id);
       }
-      await provider.archiveSession(session.providerSessionId);
+      try {
+        await provider.archiveSession(session.providerSessionId);
+      } catch (archiveError: unknown) {
+        let stillActive = true;
+        if (provider.activeSessionExists) {
+          try {
+            stillActive = await provider.activeSessionExists(session.providerSessionId);
+          } catch {
+            // The archive failure remains authoritative when provider state
+            // cannot be verified independently.
+          }
+        }
+        if (stillActive) throw archiveError;
+        this.options.onDiagnostic?.({
+          code: "AI_SESSION_CLOSE_PROVIDER_ALREADY_ABSENT",
+          aiSessionId: session.id,
+          providerSessionId: session.providerSessionId,
+        });
+      }
       if (session.appSessionId) await this.options.stopApp(session.appSessionId);
       await provider.unsubscribeSession?.(session.providerSessionId);
       const item = aiSessionHistoryItem(session);

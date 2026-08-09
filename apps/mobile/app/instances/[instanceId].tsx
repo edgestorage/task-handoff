@@ -6,6 +6,8 @@ import type { ControlPlaneInstanceAction } from '@task-handoff/protocol/control-
 
 import { mobileAiSessionStore } from '../../src/ai-sessions/store';
 import { Screen } from '../../src/components/Screen';
+import { EmptyState } from '../../src/components/EmptyState';
+import { useMobileToast } from '../../src/components/MobileToast';
 import { SystemIcon } from '../../src/components/SystemIcon';
 import { useMobileTheme } from '../../src/components/theme';
 import { useActiveDirectories } from '../../src/directories/use-directories';
@@ -19,6 +21,7 @@ const PRIMARY_LIFECYCLE_ACTIONS = ['start', 'stop', 'restart'] as const;
 export default function InstanceDirectoryDetailRoute() {
   const { colors } = useMobileTheme();
   const { locale, t } = useI18n();
+  const toast = useMobileToast();
   const { instanceId } = useLocalSearchParams<{ instanceId: string }>();
   const { controlPlaneId, runInstanceAction, state, updateInstanceName, updateNodeName } = useActiveDirectories();
   const [renameTarget, setRenameTarget] = useState<RenameTarget>();
@@ -26,11 +29,10 @@ export default function InstanceDirectoryDetailRoute() {
   const [renameError, setRenameError] = useState('');
   const [renaming, setRenaming] = useState(false);
   const [lifecycleAction, setLifecycleAction] = useState<ControlPlaneInstanceAction>();
-  const [lifecycleError, setLifecycleError] = useState('');
   const instance = state.instances.find((candidate) => candidate.id === instanceId);
   const node = instance ? state.nodes.find((candidate) => candidate.id === instance.nodeId) : undefined;
   if (!instance) {
-    return <Screen><Text style={[styles.error, { color: colors.error }]}>{t('instance.notFound')}</Text></Screen>;
+    return <Screen contentContainerStyle={styles.emptyScreen}><EmptyState icon={{ android: 'deployed_code', ios: 'shippingbox' }} message={t('instance.notFound')} /></Screen>;
   }
 
   const activeSessionCount = instance.aiSessions.runningCount + instance.aiSessions.waitingCount;
@@ -66,7 +68,11 @@ export default function InstanceDirectoryDetailRoute() {
       setRenameTarget(undefined);
       setRenameDraft('');
     } catch (cause) {
-      setRenameError(cause instanceof Error && cause.message ? cause.message : t('instance.renameFailed'));
+      toast.show({
+        detail: cause instanceof Error && cause.message ? cause.message : t('instance.renameFailed'),
+        title: t('toast.actionFailed', { action: t(renameTarget === 'node' ? 'instance.editNodeName' : 'instance.editInstanceName') }),
+        tone: 'error',
+      });
     } finally {
       setRenaming(false);
     }
@@ -88,11 +94,14 @@ export default function InstanceDirectoryDetailRoute() {
   const executeLifecycleAction = async (action: ControlPlaneInstanceAction) => {
     if (lifecycleAction || state.phase !== 'ready' || !instance.availableActions.includes(action)) return;
     setLifecycleAction(action);
-    setLifecycleError('');
     try {
       await runInstanceAction(instance.id, action);
     } catch (cause) {
-      setLifecycleError(cause instanceof Error && cause.message ? cause.message : t('instance.actionFailed'));
+      toast.show({
+        detail: cause instanceof Error && cause.message ? cause.message : t('instance.actionFailed'),
+        title: t('toast.actionFailed', { action: lifecycleActionLabel(action) }),
+        tone: 'error',
+      });
     } finally {
       setLifecycleAction(undefined);
     }
@@ -168,8 +177,6 @@ export default function InstanceDirectoryDetailRoute() {
         </Pressable> : null}
       </View>
 
-      {lifecycleError ? <Notice error text={lifecycleError} /> : null}
-
       <InstanceOverview
         activeSessionCount={activeSessionCount}
         heartbeat={instance.lastHeartbeatAt ? new Date(instance.lastHeartbeatAt).toLocaleString(locale) : t('instance.notObserved')}
@@ -230,6 +237,7 @@ function Notice({ error, text }: { error?: boolean; text: string }) {
 }
 
 const styles = StyleSheet.create({
+  emptyScreen: { flexGrow: 1, justifyContent: 'center' },
   statusSummary: { alignItems: 'center', borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 8, minHeight: 42, paddingHorizontal: 12 },
   statusDot: { borderRadius: 999, height: 8, width: 8 },
   statusText: { fontSize: 13, textTransform: 'capitalize' },

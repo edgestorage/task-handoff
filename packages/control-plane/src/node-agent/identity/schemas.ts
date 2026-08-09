@@ -5,13 +5,6 @@ export const StoredNodeAgentDateTimeSchema = z.string().datetime();
 const StoredSecretSchema = z.string().min(1).max(4096);
 const StoredUrlSchema = z.string().trim().url().max(2048);
 
-export const StoredNodeAgentPairingInviteSchema = z.object({
-  tokenHash: z.string().trim().min(1).max(256),
-  expiresAt: StoredNodeAgentDateTimeSchema,
-    createdAt: StoredNodeAgentDateTimeSchema,
-    controlPlaneName: z.string().trim().min(1).max(160).optional(),
-}).strip();
-
 export const StoredNodeAgentControlPlanePairingSchema = z.object({
   id: StoredNodeAgentIdSchema,
   keyId: StoredNodeAgentIdSchema,

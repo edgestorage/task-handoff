@@ -17,6 +17,7 @@ import type { JsonValue } from "./protocol/types";
 
 type MentionOptions = {
   readyClient: () => Promise<CodexAppServerClientLike>;
+  readyThreadClient?: (threadId: string) => Promise<CodexAppServerClientLike>;
   connectionEpoch: () => number;
 };
 
@@ -39,7 +40,7 @@ export class CodexAppServerMentions {
 
   async catalog(session: AiSessionStatus, options: { force?: boolean } = {}) {
     const context = this.requireContext(session);
-    const client = await this.client();
+    const client = await this.client(context.threadId);
     const cacheKey = `${this.options.connectionEpoch()}:${context.cwd}:${context.threadId}`;
     if (!options.force) {
       const cached = this.cache.get(cacheKey);
@@ -129,8 +130,10 @@ export class CodexAppServerMentions {
     }
   }
 
-  private async client() {
-    const client = await this.options.readyClient();
+  private async client(threadId?: string) {
+    const client = threadId && this.options.readyThreadClient
+      ? await this.options.readyThreadClient(threadId)
+      : await this.options.readyClient();
     if (this.attachedClient !== client) {
       this.detachClient();
       this.attachedClient = client;

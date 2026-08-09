@@ -1,5 +1,8 @@
 import { z } from 'zod';
-import { ControlPlanePublicCapabilitiesSchema } from '@task-handoff/protocol/control-plane-access';
+import {
+  ControlPlanePublicCapabilitiesSchema,
+  type ControlPlanePublicCapabilities,
+} from '@task-handoff/protocol/control-plane-access';
 
 export const MOBILE_CONTROL_PLANE_PROFILE_VERSION = 1;
 
@@ -10,7 +13,9 @@ export const MobileControlPlaneIdentitySchema = z.object({
   protocolVersion: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 }).strict();
 
-export const MobileControlPlaneCapabilitiesSchema = ControlPlanePublicCapabilitiesSchema;
+export const MobileControlPlaneCapabilitiesSchema = ControlPlanePublicCapabilitiesSchema.extend({
+  triggers: z.boolean(),
+}).strict();
 
 export const MobileControlPlaneProfileSchema = z.object({
   version: z.literal(MOBILE_CONTROL_PLANE_PROFILE_VERSION),
@@ -29,11 +34,18 @@ export type MobileControlPlaneIdentity = z.infer<typeof MobileControlPlaneIdenti
 export type MobileControlPlaneCapabilities = z.infer<typeof MobileControlPlaneCapabilitiesSchema>;
 export type MobileControlPlaneProfile = z.infer<typeof MobileControlPlaneProfileSchema>;
 
+export function normalizeMobileControlPlaneCapabilities(input: ControlPlanePublicCapabilities): MobileControlPlaneCapabilities {
+  return MobileControlPlaneCapabilitiesSchema.parse({
+    ...input,
+    triggers: input.triggers === true,
+  });
+}
+
 const STORED_PROFILE_FIELDS = {
   '': ['version', 'identity', 'access', 'capabilities', 'createdAt', 'updatedAt'],
   identity: ['controlPlaneId', 'publicKeyFingerprint', 'displayName', 'protocolVersion'],
   access: ['kind', 'origin', 'secureSessionKey'],
-  capabilities: ['authentication', 'aiSessions', 'nodes', 'instanceBoard'],
+  capabilities: ['authentication', 'aiSessions', 'nodes', 'instanceBoard', 'triggers'],
 } as const;
 
 export function storedMobileControlPlaneProfileUnknownFields(input: unknown) {
@@ -60,11 +72,14 @@ export function sanitizeStoredMobileControlPlaneProfile(input: unknown) {
   const profile = pick(input, ['version', 'identity', 'access', 'capabilities', 'createdAt', 'updatedAt']);
   if (!profile || typeof profile !== 'object' || Array.isArray(profile)) return profile;
   const value = profile as Record<string, unknown>;
+  const capabilities = pick(value.capabilities, ['authentication', 'aiSessions', 'nodes', 'instanceBoard', 'triggers']);
   return {
     ...value,
     identity: pick(value.identity, ['controlPlaneId', 'publicKeyFingerprint', 'displayName', 'protocolVersion']),
     access: pick(value.access, ['kind', 'origin', 'secureSessionKey']),
-    capabilities: pick(value.capabilities, ['authentication', 'aiSessions', 'nodes', 'instanceBoard']),
+    capabilities: capabilities && typeof capabilities === 'object' && !Array.isArray(capabilities)
+      ? { triggers: false, ...capabilities }
+      : capabilities,
   };
 }
 

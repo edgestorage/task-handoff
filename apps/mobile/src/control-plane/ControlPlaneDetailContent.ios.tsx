@@ -50,10 +50,9 @@ export function ControlPlaneDetailContent(props: ControlPlaneDetailContentProps)
             />
           </Section>
 
-          {props.busy || props.error ? (
+          {props.busy ? (
             <Section>
               {props.busy ? <LabeledContent label={t('controlPlane.updating')}><ProgressView /></LabeledContent> : null}
-              {props.error ? <Label title={props.error} systemImage="exclamationmark.triangle.fill" modifiers={[foregroundStyle(colors.error)]} /> : null}
             </Section>
           ) : null}
         </List>

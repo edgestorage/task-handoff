@@ -43,6 +43,9 @@
         :server-update-job="serverUpdateJob"
         :server-updates-available="serverUpdatesAvailable"
         :theme-preference="themePreference"
+        :diagnostic-logs="diagnosticLogs"
+        :saving-diagnostic-logs="savingDiagnosticLogs"
+        :exporting-diagnostic-logs="exportingDiagnosticLogs"
         @apply-server-update="applyServerUpdate"
         @check-server-update="checkServerUpdate"
         @check-desktop-update="runDesktopUpdateAction(desktopUpdates.check)"
@@ -56,6 +59,8 @@
         @update:server-update-channel="setUpdateChannel"
         @update:desktop-update-channel="setDesktopUpdateChannel"
         @update:theme-preference="setThemePreference"
+        @update:diagnostic-logs="setDiagnosticLogs"
+        @export-diagnostic-logs="exportDiagnosticLogs"
       />
 
       <ScrollArea v-else-if="settingsSection === 'chat'" class="settings-section-scroll" :horizontal="false">
@@ -71,6 +76,8 @@
       </ScrollArea>
 
       <MobileSessionsSettingsSection v-else-if="settingsSection === 'mobile-sessions'" />
+
+      <AccountSecuritySettingsSection v-else-if="settingsSection === 'account'" />
 
       <ScrollArea v-else-if="settingsSection === 'models'" class="settings-section-scroll" :horizontal="false">
         <div class="settings-section-scroll-content">
@@ -688,7 +695,7 @@ import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useQueryClient } from "@tanstack/vue-query";
 import { AlertTriangle, ArrowLeft, ChevronDown, ChevronUp, Download, Eye, EyeOff, KeyRound, Layers, MapPin, MonitorCog, Plus, RefreshCw, Server, Settings, ShieldAlert, Trash2 } from "@lucide/vue";
-import { cancelControlPlaneProxyClaim, claimControlPlaneProxyNode, controlPlaneQueryKeys, getNodeExternalListener, resumeControlPlaneProxyClaim, updateControlPlaneSettings, updateNodeExternalListener, useChatBridgesQuery, useChatGatewayStatusQuery, useControlPlaneSettingsQuery, useImageOptionsQuery, useImagesQuery, useInstanceBoardPayloadQuery, useMarketCatalogQuery, useModelRegistryQuery, useModelsQuery, useNodeImageAvailabilityQuery, useNodeRuntimesPayloadQuery, useNodesQuery, usePendingControlPlaneProxyClaimsQuery, useProjectsQuery, useServerUpdateCheckQuery } from "../../../api/queries";
+import { cancelControlPlaneProxyClaim, claimControlPlaneProxyNode, controlPlaneQueryKeys, downloadControlPlaneDiagnosticLogs, getNodeExternalListener, resumeControlPlaneProxyClaim, updateControlPlaneSettings, updateNodeExternalListener, useChatBridgesQuery, useChatGatewayStatusQuery, useControlPlaneSettingsQuery, useImageOptionsQuery, useImagesQuery, useInstanceBoardPayloadQuery, useMarketCatalogQuery, useModelRegistryQuery, useModelsQuery, useNodeImageAvailabilityQuery, useNodeRuntimesPayloadQuery, useNodesQuery, usePendingControlPlaneProxyClaimsQuery, useProjectsQuery, useServerUpdateCheckQuery } from "../../../api/queries";
 import { invalidateControlPlaneDomains } from "../../../api/queryInvalidation";
 import type { BuildInfo, ControlPlaneSettings, InstanceBoardItem, ModelLocation, Node, NodeAgentExternalListener, UpdateChannel } from "../../../api/types";
 import { Badge } from "../../../components/ui/badge";
@@ -706,6 +713,7 @@ import ControlPlaneTriggersView from "../triggers/ControlPlaneTriggersView.vue";
 import BasicSettingsSection from "./AppearanceSettingsSection.vue";
 import ChatBridgeSettingsSection from "./ChatBridgeSettingsSection.vue";
 import MobileSessionsSettingsSection from "./MobileSessionsSettingsSection.vue";
+import AccountSecuritySettingsSection from "./AccountSecuritySettingsSection.vue";
 import { useChatBridgeSettings } from "./useChatBridgeSettings";
 import { useImageSettings } from "./useImageSettings";
 import { useModelSettings } from "./useModelSettings";
@@ -727,7 +735,7 @@ import { connectionStatusKeys, translateStatus } from "../../../i18n/status";
 import { translateApiError } from "../../../i18n/apiError";
 import { normalizeProxyOrigin, proxyClaimValidation } from "./controlPlaneProxyUi";
 
-type SettingsSection = "basic" | "chat" | "images" | "environment-templates" | "projects" | "nodes" | "models" | "triggers" | "mobile-sessions";
+type SettingsSection = "basic" | "chat" | "images" | "environment-templates" | "projects" | "nodes" | "models" | "triggers" | "mobile-sessions" | "account";
 type NodeDiagnosticLog = {
   route: string;
   method: string;
@@ -761,6 +769,7 @@ const settingsSections = computed<Array<{ id: SettingsSection; label: string }>>
   { id: "triggers", label: t("triggers.title") },
   { id: "chat", label: t("settings.chat") },
   { id: "mobile-sessions", label: t("settings.mobileSessions.navigation") },
+  { id: "account", label: t("settings.account.navigation") },
   { id: "basic", label: t("settings.basic") },
 ]);
 
@@ -779,12 +788,15 @@ const chatGatewayStatus = useChatGatewayStatusQuery();
 const controlPlaneSettings = useControlPlaneSettingsQuery();
 const desktopUpdates = useDesktopUpdates();
 const updateChannel = computed<UpdateChannel>(() => controlPlaneSettings.data.value?.updateChannel || "stable");
+const diagnosticLogs = computed(() => controlPlaneSettings.data.value?.diagnosticLogs === true);
 
 const settingsSection = ref<SettingsSection>(props.initialSection || "nodes");
 const themePreference = ref<ThemePreference>(getThemePreference());
 const publicBaseUrl = ref("");
 const publicBaseUrlMessage = ref("");
 const savingPublicBaseUrl = ref(false);
+const savingDiagnosticLogs = ref(false);
+const exportingDiagnosticLogs = ref(false);
 const mentionTrigger = ref("@");
 const mentionTriggerError = computed(() => validMentionTrigger(mentionTrigger.value) ? "" : t("settings.composer.mentionInvalid"));
 const commandTrigger = ref("/");
@@ -867,6 +879,17 @@ watch(
   () => controlPlaneSettings.data.value?.commandTrigger,
   (value) => {
     commandTrigger.value = value || "/";
+  },
+  { immediate: true },
+);
+
+watch(
+  () => controlPlaneSettings.data.value?.diagnosticLogs,
+  (enabled) => {
+    if (typeof enabled !== "boolean") return;
+    void (window as Window & {
+      taskHandoffDesktop?: { setDiagnosticLogsEnabled?: (value: boolean) => Promise<unknown> };
+    }).taskHandoffDesktop?.setDiagnosticLogsEnabled?.(enabled);
   },
   { immediate: true },
 );
@@ -1302,6 +1325,39 @@ async function setUpdateChannel(value: string) {
     for (const key of Object.keys(updateChecks)) delete updateChecks[key];
   } catch (error) {
     showControlPlaneToast(errorText(error));
+  }
+}
+
+async function setDiagnosticLogs(enabled: boolean) {
+  if (savingDiagnosticLogs.value || enabled === diagnosticLogs.value) return;
+  savingDiagnosticLogs.value = true;
+  try {
+    const saved = await updateControlPlaneSettings({ diagnosticLogs: enabled });
+    queryClient.setQueryData<ControlPlaneSettings>(["control-plane-settings"], saved);
+    showControlPlaneToast(t(enabled ? "settings.diagnosticLogs.enabledMessage" : "settings.diagnosticLogs.disabledMessage"), "success");
+  } catch (error) {
+    showControlPlaneToast(errorText(error));
+  } finally {
+    savingDiagnosticLogs.value = false;
+  }
+}
+
+async function exportDiagnosticLogs() {
+  if (exportingDiagnosticLogs.value) return;
+  exportingDiagnosticLogs.value = true;
+  try {
+    const { blob, filename } = await downloadControlPlaneDiagnosticLogs();
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.click();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+    showControlPlaneToast(t("settings.diagnosticLogs.exported"), "success");
+  } catch (error) {
+    showControlPlaneToast(errorText(error));
+  } finally {
+    exportingDiagnosticLogs.value = false;
   }
 }
 

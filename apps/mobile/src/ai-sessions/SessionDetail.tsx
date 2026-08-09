@@ -5,6 +5,7 @@ import { aiSessionStatusGroup, isAiSessionApprovalPending, type ControlPlaneAiSe
 
 import { SafeMarkdown } from '../components/SafeMarkdown';
 import { SystemIcon } from '../components/SystemIcon';
+import { EmptyState } from '../components/EmptyState';
 import { activeMobileStreamingMessage, type MobileStreamingMessage } from './store';
 import { mobileMetrics } from '../observability/mobile-metrics';
 import { useMobileTheme } from '../components/theme';
@@ -51,7 +52,7 @@ export function SessionDetail({
   const userDragging = useRef(false);
   const scrollMetrics = useRef({ contentHeight: 0, offsetY: 0, viewportHeight: 0 });
   const followingRef = useRef(true);
-  const [following, setFollowingState] = useState(true);
+  const [atBottom, setAtBottom] = useState(true);
   const [canScroll, setCanScroll] = useState(false);
   const selectedMode = mode ?? localMode;
   const selectedIndex = Math.min(Math.max(turnIndex ?? localTurnIndex, 0), latestIndex);
@@ -61,13 +62,17 @@ export function SessionDetail({
   const items = useMemo(() => selectedMode === 'conversation' ? conversationDetailItems(session, messages, t) : detailItems(session, messages, selectedIndex, t), [session, messages, selectedIndex, selectedMode, t]);
   const setFollowing = useCallback((next: boolean) => {
     followingRef.current = next;
-    setFollowingState(next);
   }, []);
-  const scheduleScrollToEnd = useCallback((animated: boolean) => {
+  const scheduleScrollToBottom = useCallback((animated: boolean) => {
     if (scrollFrame.current !== undefined) cancelAnimationFrame(scrollFrame.current);
     scrollFrame.current = requestAnimationFrame(() => {
       scrollFrame.current = undefined;
-      listRef.current?.scrollToEnd({ animated });
+      listRef.current?.scrollToOffset({
+        animated,
+        // Native scroll views clamp an oversized offset to their exact current end.
+        // Using the measured content height also survives automatic content insets.
+        offset: scrollMetrics.current.contentHeight,
+      });
     });
   }, []);
   const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -77,9 +82,10 @@ export function SessionDetail({
       offsetY: Math.max(0, contentOffset.y),
       viewportHeight: layoutMeasurement.height,
     };
-    const atBottom = isSessionScrollNearBottom(scrollMetrics.current);
-    if (atBottom && !followingRef.current) setFollowing(true);
-    else if (!atBottom && userDragging.current && followingRef.current) setFollowing(false);
+    const nextAtBottom = isSessionScrollNearBottom(scrollMetrics.current);
+    setAtBottom(nextAtBottom);
+    if (nextAtBottom && !followingRef.current) setFollowing(true);
+    else if (!nextAtBottom && userDragging.current && followingRef.current) setFollowing(false);
   }, [setFollowing]);
   const handleContentSizeChange = useCallback((_width: number, height: number) => {
     scrollMetrics.current.contentHeight = height;
@@ -89,12 +95,16 @@ export function SessionDetail({
       && !userDragging.current
       && scrollMetrics.current.viewportHeight > 0
       && height > scrollMetrics.current.viewportHeight + SCROLL_BOTTOM_THRESHOLD
-    ) scheduleScrollToEnd(false);
-  }, [scheduleScrollToEnd]);
+    ) scheduleScrollToBottom(false);
+  }, [scheduleScrollToBottom]);
   const resumeFollowing = useCallback(() => {
     setFollowing(true);
-    scheduleScrollToEnd(true);
-  }, [scheduleScrollToEnd, setFollowing]);
+    scheduleScrollToBottom(true);
+  }, [scheduleScrollToBottom, setFollowing]);
+  const finishProgrammaticScroll = useCallback(() => {
+    userDragging.current = false;
+    if (followingRef.current && !isSessionScrollNearBottom(scrollMetrics.current)) scheduleScrollToBottom(false);
+  }, [scheduleScrollToBottom]);
   useEffect(() => {
     if (session) onVisible?.(session.updatedAt);
   }, [onVisible, session]);
@@ -140,15 +150,15 @@ export function SessionDetail({
               followingRef.current
               && !userDragging.current
               && scrollMetrics.current.contentHeight > event.nativeEvent.layout.height + SCROLL_BOTTOM_THRESHOLD
-            ) scheduleScrollToEnd(false);
+            ) scheduleScrollToBottom(false);
           }}
           onScroll={handleScroll}
           onScrollBeginDrag={() => { userDragging.current = true; }}
           onScrollEndDrag={() => { userDragging.current = false; }}
           onMomentumScrollBegin={() => { userDragging.current = true; }}
-          onMomentumScrollEnd={() => { userDragging.current = false; }}
+          onMomentumScrollEnd={finishProgrammaticScroll}
           scrollEventThrottle={16}
-          ListEmptyComponent={<View style={styles.conversationEmpty}><Text style={[styles.muted, { color: colors.textMuted }]}>{t('sessions.noMessages')}</Text></View>}
+          ListEmptyComponent={<EmptyState icon={{ android: 'chat_bubble_outline', ios: 'bubble.left' }} iconSize={26} message={t('sessions.noMessages')} style={styles.conversationEmpty} />}
           ListFooterComponent={showsLatest && activityText || session.subAgents.length ? <View style={styles.footer}>
             {showsLatest && activityText ? <View style={styles.tool}><SystemIcon android="auto_awesome" color={colors.textMuted} ios="sparkles" size={14} /><ToolActivityText containerStyle={styles.toolText} numberOfLines={1} running={session.status === 'running'} textStyle={styles.toolTitle}>{activityText}</ToolActivityText></View> : null}
             <SubAgents agents={session.subAgents} locale={locale} />
@@ -181,7 +191,7 @@ export function SessionDetail({
           testID="session-detail-scroll"
           windowSize={7}
         />
-        {!following && canScroll ? (
+        {!atBottom && canScroll ? (
           <Pressable
             accessibilityLabel={t('sessions.scrollToBottom')}
             accessibilityRole="button"
@@ -189,12 +199,12 @@ export function SessionDetail({
             onPress={resumeFollowing}
             style={({ pressed }) => [
               styles.scrollToBottom,
-              { backgroundColor: colors.surface, borderColor: colors.border, bottom: Math.max(16, bottomInset + 12) },
+              { backgroundColor: colors.primaryButton, borderColor: colors.primaryButton, bottom: Math.max(16, bottomInset + 12) },
               pressed && styles.scrollToBottomPressed,
             ]}
             testID="session-scroll-to-bottom"
           >
-            <SystemIcon android="keyboard_arrow_down" color={colors.text} ios="arrow.down" size={21} />
+            <SystemIcon android="keyboard_arrow_down" color="#ffffff" ios="arrow.down" size={21} />
           </Pressable>
         ) : null}
       </ScrollViewMarker>
@@ -348,7 +358,7 @@ const styles = StyleSheet.create({
   toolBody: { flex: 1, gap: 3 },
   toolText: { flex: 1 },
   toolTitle: { fontSize: 16, fontWeight: '500', lineHeight: 24 },
-  conversationEmpty: { alignItems: 'center', paddingVertical: 32 },
+  conversationEmpty: { paddingVertical: 32 },
   avatar: { alignItems: 'center', borderRadius: 10, height: 28, justifyContent: 'center', width: 28 },
   promptBlock: { alignSelf: 'flex-end', borderRadius: 18, borderTopRightRadius: 6, maxWidth: '90%', paddingHorizontal: 14, paddingVertical: 12 },
   responseBlock: { alignSelf: 'stretch', paddingHorizontal: 2, paddingVertical: 4 },

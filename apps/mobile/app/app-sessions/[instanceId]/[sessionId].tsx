@@ -13,6 +13,7 @@ import { AppSessionTerminalInputNormalizer } from '../../../src/app-sessions/ter
 import { APP_SESSION_TERMINAL_FONT_SIZE, appSessionTerminalKeyboardBehavior, appSessionTerminalKeyboardOffset } from '../../../src/app-sessions/terminal-layout';
 import { SystemIcon } from '../../../src/components/SystemIcon';
 import { useMobileTheme } from '../../../src/components/theme';
+import { useMobileToast } from '../../../src/components/MobileToast';
 import type { MobileAppSessionTtyConnection } from '../../../src/control-plane/transport';
 import { useI18n } from '../../../src/i18n';
 import { subscribeToAppLifecycle } from '../../../src/platform/lifecycle';
@@ -28,6 +29,7 @@ export default function AppSessionRoute() {
   const { closeSession, createAccess, renameSession, revokeAccess, state, transport } = useActiveAppSessions();
   const { colors } = useMobileTheme();
   const { t } = useI18n();
+  const toast = useMobileToast();
   const terminal = useRef<TerminalViewRef>(null);
   const terminalInput = useRef(new AppSessionTerminalInputNormalizer());
   const connection = useRef<MobileAppSessionTtyConnection | undefined>(undefined);
@@ -136,7 +138,11 @@ export default function AppSessionRoute() {
     void renameSession(instanceId, sessionId, nextTitle).then(() => {
       setRenameOpen(false);
     }).catch((cause) => {
-      setRenameError(cause instanceof Error && cause.message ? cause.message : t('appSessions.renameFailed'));
+      toast.show({
+        detail: cause instanceof Error && cause.message ? cause.message : t('appSessions.renameFailed'),
+        title: t('toast.actionFailed', { action: t('appSessions.rename') }),
+        tone: 'error',
+      });
     }).finally(() => setRenaming(false));
   };
   const confirmClose = () => Alert.alert(t('appSessions.closeConfirmTitle', { name: title }), t('appSessions.closeConfirmDescription'), [

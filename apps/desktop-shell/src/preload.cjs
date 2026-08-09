@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld("taskHandoffDesktop", {
   getPathForFile: (file) => webUtils.getPathForFile(file),
   openAppWindow: (url) => ipcRenderer.invoke("task-handoff:open-app-window", url),
   openControlPlaneWindow: (url) => ipcRenderer.invoke("task-handoff:open-control-plane-window", url),
+  setDiagnosticLogsEnabled: (enabled) => ipcRenderer.invoke("task-handoff:set-diagnostic-logs-enabled", enabled),
   desktopUpdates: {
     getState: () => ipcRenderer.invoke("task-handoff:desktop-update-get-state"),
     check: () => ipcRenderer.invoke("task-handoff:desktop-update-check"),

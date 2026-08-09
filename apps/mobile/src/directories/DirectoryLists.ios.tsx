@@ -4,8 +4,10 @@ import {
   HStack,
   Host,
   Image,
+  Label,
   List,
   Picker,
+  ProgressView,
   Section,
   Spacer,
   Text,
@@ -20,6 +22,7 @@ import {
   lineLimit,
   listStyle,
   pickerStyle,
+  refreshable,
   tag,
   tint,
 } from '@expo/ui/swift-ui/modifiers';
@@ -55,7 +58,7 @@ export function NodesDirectory({ state, onOpen }: NodesDirectoryProps) {
       <Host colorScheme={dark ? 'dark' : 'light'} seedColor={colors.primary} style={{ flex: 1 }} useViewportSizeMeasurement>
         <List modifiers={[listStyle('insetGrouped'), tint(colors.primary)]}>
         <DirectoryStateSections state={state} />
-        {!state.nodes.length ? <EmptySection loading={state.phase === 'loading'} /> : null}
+        {!state.nodes.length ? <EmptySection loading={state.phase === 'loading'} systemImage="server.rack" /> : null}
         {state.nodes.map((node) => {
           const instances = instancesByNode.get(node.id) ?? [];
           return (
@@ -84,9 +87,7 @@ export function NodesDirectory({ state, onOpen }: NodesDirectoryProps) {
                 </HStack>
               </Button>
               {instances.map((instance) => <InstanceSummaryRow instance={instance} key={instance.id} />)}
-              {!instances.length ? (
-                <Text modifiers={[font({ textStyle: 'subheadline' }), foregroundStyle({ type: 'hierarchical', style: 'secondary' })]}>{t('directories.noInstancesOnNode')}</Text>
-              ) : null}
+              {!instances.length ? <Label title={t('directories.noInstancesOnNode')} systemImage="shippingbox" modifiers={[foregroundStyle({ type: 'hierarchical', style: 'secondary' })]} /> : null}
             </Section>
           );
         })}
@@ -100,9 +101,10 @@ type InstancesDirectoryProps = {
   state: MobileDirectoryProfileState;
   nodeId?: string;
   onOpen?(instance: ControlPlaneInstanceDirectoryEntry): void;
+  onRefresh?: () => Promise<void>;
 };
 
-export function InstancesDirectory({ state, nodeId, onOpen }: InstancesDirectoryProps) {
+export function InstancesDirectory({ state, nodeId, onOpen, onRefresh }: InstancesDirectoryProps) {
   const { colors, dark } = useMobileTheme();
   const { t } = useI18n();
   const [selectedNode, setSelectedNode] = useState(nodeId || 'all');
@@ -122,7 +124,7 @@ export function InstancesDirectory({ state, nodeId, onOpen }: InstancesDirectory
   return (
     <SafeAreaView edges={nodeId ? [] : ['top']} style={[styles.screen, { backgroundColor: colors.background }]}> 
       <Host colorScheme={dark ? 'dark' : 'light'} seedColor={colors.primary} style={{ flex: 1 }} useViewportSizeMeasurement>
-        <List modifiers={[listStyle('insetGrouped'), tint(colors.primary)]}>
+        <List modifiers={[listStyle('insetGrouped'), tint(colors.primary), ...(onRefresh ? [refreshable(onRefresh)] : [])]}>
         <DirectoryStateSections state={state} />
         {nodeId ? (
           <Section title={t('directories.status')}>
@@ -141,7 +143,7 @@ export function InstancesDirectory({ state, nodeId, onOpen }: InstancesDirectory
           {statuses.length > 1 ? <NativeFilter label={t('directories.status')} labelFor={(value) => localizedFilterValue(value, t)} onChange={setSelectedStatus} value={selectedStatus} values={['all', ...statuses]} /> : null}
           <NativeFilter label={t('directories.aiActivity')} labelFor={(value) => localizedFilterValue(value, t)} onChange={(value) => setSelectedAi(value as InstanceAiFilter)} value={selectedAi} values={['all', 'active', 'problem', 'idle']} />
         </Section>
-        {!instances.length ? <EmptySection loading={state.phase === 'loading'} /> : null}
+        {!instances.length ? <EmptySection loading={state.phase === 'loading'} systemImage="shippingbox" /> : null}
         {visibleNodeIds.map((visibleNodeId) => (
           <Section key={visibleNodeId} title={nodeId ? `${t('directories.instances')} (${instances.length})` : nodeLabel(state, visibleNodeId)}>
             {(instancesByNode.get(visibleNodeId) ?? []).map((instance) => (
@@ -218,9 +220,12 @@ function DirectoryStateSections({ state }: { state: MobileDirectoryProfileState 
   );
 }
 
-function EmptySection({ loading }: { loading: boolean }) {
+function EmptySection({ loading, systemImage }: { loading: boolean; systemImage: Parameters<typeof Label>[0]['systemImage'] }) {
   const { t } = useI18n();
-  return <Section><Text modifiers={[font({ textStyle: 'body' }), foregroundStyle({ type: 'hierarchical', style: 'secondary' })]}>{loading ? t('directories.loading') : t('directories.noEntries')}</Text></Section>;
+  return <Section>{loading
+    ? <HStack spacing={9}><ProgressView /><Text modifiers={[foregroundStyle({ type: 'hierarchical', style: 'secondary' })]}>{t('directories.loading')}</Text></HStack>
+    : <Label title={t('directories.noEntries')} systemImage={systemImage} modifiers={[foregroundStyle({ type: 'hierarchical', style: 'secondary' })]} />}
+  </Section>;
 }
 
 type InstanceAiFilter = 'all' | 'active' | 'problem' | 'idle';

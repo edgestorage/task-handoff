@@ -53,6 +53,7 @@ test("instance AI session cards replace the metadata footer with floating naviga
   assert.match(styles, /\.session-ai-select\s*\{[^}]*padding: 10px 14px 0;/s);
   assert.match(styles, /\.session-ai-preview-field-assistant\s*\{[^}]*padding: 10px 14px 0;/s);
   assert.match(styles, /\.session-ai-turn-nav\s*\{[^}]*position: absolute;[^}]*right: 10px;[^}]*bottom: 8px;/s);
+  assert.match(styles, /\.session-ai-turn-nav\s*\{[^}]*gap: 2px;[^}]*padding: 0;/s);
 });
 
 test("waiting approval actions float at the bottom left of instance AI session cards", () => {
@@ -123,6 +124,8 @@ test("an unselected AI session defaults to the new-session surface", () => {
   assert.match(panel, /<h1 class="session-ai-new-title">\{\{ t\("sessions\.panel\.startIdea"\) \}\}<\/h1>/);
   assert.match(styles, /\.session-ai-new-start\s*\{[^}]*width: min\(760px, 100%\);[^}]*gap: 48px;/s);
   assert.match(styles, /\.session-ai-new-title\s*\{[^}]*text-align: center;/s);
+  assert.match(styles, /\.session-ai-new-dialog\s*\{[^}]*box-shadow: var\(--shadow-soft\);/s);
+  assert.match(styles, /\.session-ai-new-dialog:focus-within\s*\{[^}]*var\(--shadow-soft\);/s);
   assert.match(panel, /watch\(\s*\[showNewSession, aiSessionLaunchableApps, newSessionFolders\]/);
   assert.doesNotMatch(panel, /session-ai-no-selection/);
 });

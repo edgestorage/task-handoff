@@ -13,18 +13,21 @@ import { createDirectControlPlaneClient } from '../../src/control-plane/client';
 import { mobileCreateRequestStore, mobilePermissionStore, mobileProfileStore, mobileSecureStore } from '../../src/control-plane/runtime';
 import { useActiveDirectories } from '../../src/directories/use-directories';
 import { mobileDirectoryStore } from '../../src/directories/store';
+import { useMobileToast } from '../../src/components/MobileToast';
+import { useI18n } from '../../src/i18n';
 
 export default function NewAiSessionRoute() {
   const insets = useSafeAreaInsets();
+  const { t } = useI18n();
+  const toast = useMobileToast();
   const { instanceId: requestedInstanceId } = useLocalSearchParams<{ instanceId?: string }>();
   const { controlPlaneId, state } = useActiveDirectories();
-  const [selection, setSelection] = useState<{ instanceId?: string; agent?: string; cwd?: string }>({});
+  const [selection, setSelection] = useState<{ instanceId?: string; agent?: string; folderId?: string }>({});
   const [message, setMessage] = useState('');
   const [permissionSelection, setPermissionSelection] = useState<{ instanceId: string; mode: AiSessionPermissionMode }>();
   const [savingPermission, setSavingPermission] = useState(false);
   const [folderState, setFolderState] = useState<{ nodeId: string; folders: ControlPlaneNodeLocalFolder[] }>({ nodeId: '', folders: [] });
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
 
   const selectedInstanceId = state.instances.some((instance) => instance.id === selection.instanceId)
     ? selection.instanceId!
@@ -33,9 +36,7 @@ export default function NewAiSessionRoute() {
   const agent = selectedInstance?.availableAgents.some((candidate) => candidate.id === selection.agent)
     ? selection.agent!
     : selectedInstance?.availableAgents[0]?.id ?? '';
-  const cwd = selection.instanceId === selectedInstanceId && selection.cwd !== undefined
-    ? selection.cwd
-    : selectedInstance?.workspace.path ?? '';
+  const folderId = selection.instanceId === selectedInstanceId ? selection.folderId : undefined;
   const permissionMode = permissionSelection?.instanceId === selectedInstanceId
     ? permissionSelection.mode
     : selectedInstance?.config.defaultCodexPermissionMode ?? 'ask';
@@ -58,16 +59,15 @@ export default function NewAiSessionRoute() {
   const create = async () => {
     if (!selectedInstance || !controlPlaneId || guidance) return;
     setBusy(true);
-    setError(undefined);
     try {
       const profile = await mobileProfileStore.active();
       if (!profile) throw new Error('No active Control Plane.');
-      const requestInput = { agent, cwd, message, permissionMode };
+      const requestInput = { agent, cwdFolderId: folderId, message, permissionMode };
       const requestId = await mobileCreateRequestStore.getOrCreate(controlPlaneId, selectedInstance.id, requestInput, Crypto.randomUUID);
       const result = await createMobileAiSession(createDirectControlPlaneClient(profile, mobileSecureStore).api, {
         instance: selectedInstance,
         agent,
-        cwd,
+        cwdFolderId: folderId,
         message,
         permissionMode,
         clientRequestId: requestId,
@@ -76,7 +76,7 @@ export default function NewAiSessionRoute() {
       await mobileCreateRequestStore.clear(controlPlaneId, selectedInstance.id, requestId);
       router.replace({ pathname: '/sessions/[instanceId]/[sessionId]', params: { instanceId: selectedInstance.id, sessionId: result.aiSessionId } });
     } catch (cause) {
-      setError(lifecycleGuidance(cause).message);
+      toast.show({ detail: lifecycleGuidance(cause).message, title: t('toast.actionFailed', { action: t('sessions.create') }), tone: 'error' });
     } finally {
       setBusy(false);
     }
@@ -87,7 +87,6 @@ export default function NewAiSessionRoute() {
     const previous = permissionMode;
     setPermissionSelection({ instanceId: selectedInstance.id, mode: next });
     setSavingPermission(true);
-    setError(undefined);
     try {
       const profile = await mobileProfileStore.active();
       if (!profile || profile.identity.controlPlaneId !== controlPlaneId) throw new Error('No active Control Plane.');
@@ -96,7 +95,7 @@ export default function NewAiSessionRoute() {
       setPermissionSelection({ instanceId: selectedInstance.id, mode: saved });
     } catch (cause) {
       setPermissionSelection({ instanceId: selectedInstance.id, mode: previous });
-      setError(cause instanceof Error ? cause.message : 'Could not save the default permission mode.');
+      toast.show({ detail: cause instanceof Error ? cause.message : 'Could not save the default permission mode.', title: t('toast.actionFailed', { action: t('sessions.permission') }), tone: 'error' });
     } finally {
       setSavingPermission(false);
     }
@@ -105,24 +104,24 @@ export default function NewAiSessionRoute() {
   return <NewSessionForm
     key={selectedInstance?.id || 'no-instance'}
     instances={state.instances}
+    nodes={state.nodes}
     selectedInstance={selectedInstance}
     folders={folderState.nodeId === selectedInstance?.nodeId ? folderState.folders : []}
     selectedInstanceId={selectedInstanceId}
     selectedAgent={agent}
-    cwd={cwd}
+    selectedFolderId={folderId}
     message={message}
     permissionMode={permissionMode}
     busy={busy || savingPermission}
-    disabled={busy || savingPermission || Boolean(guidance) || !agent || !cwd.trim() || !message.trim()}
-    error={error || guidance}
+    disabled={busy || savingPermission || Boolean(guidance) || !agent || !message.trim()}
+    error={guidance}
     visualBalanceInset={newSessionVisualBalanceInset(Platform.OS, insets.top)}
     onInstanceChange={(instanceId) => {
       const instance = state.instances.find((candidate) => candidate.id === instanceId);
-      setSelection({ instanceId, agent: instance?.availableAgents[0]?.id, cwd: instance?.workspace.path ?? '' });
-      setError(undefined);
+      setSelection({ instanceId, agent: instance?.availableAgents[0]?.id });
     }}
-    onAgentChange={(nextAgent) => setSelection({ instanceId: selectedInstanceId, agent: nextAgent, cwd })}
-    onCwdChange={(nextCwd) => setSelection({ instanceId: selectedInstanceId, agent, cwd: nextCwd })}
+    onAgentChange={(nextAgent) => setSelection({ instanceId: selectedInstanceId, agent: nextAgent, folderId })}
+    onFolderChange={(nextFolderId) => setSelection({ instanceId: selectedInstanceId, agent, folderId: nextFolderId })}
     onMessageChange={setMessage}
     onPermissionModeChange={(next) => { void updatePermissionMode(next); }}
     onCreate={() => { void create(); }}

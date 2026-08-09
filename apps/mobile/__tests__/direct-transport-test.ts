@@ -10,7 +10,7 @@ const profile: MobileControlPlaneProfile = {
   version: 1,
   identity: { controlPlaneId: 'control_plane_test', publicKeyFingerprint: fingerprint, protocolVersion: '2026-08-05' },
   access: { kind: 'direct', origin: 'https://control.example.com', secureSessionKey: 'session.test' },
-  capabilities: { authentication: 'required', aiSessions: true, nodes: true, instanceBoard: true },
+  capabilities: { authentication: 'required', aiSessions: true, nodes: true, instanceBoard: true, triggers: true },
   createdAt: '2026-08-05T00:00:00.000Z',
   updatedAt: '2026-08-05T00:00:00.000Z',
 };

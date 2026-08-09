@@ -20,3 +20,4 @@ docs/*
 !docs/mobile-control-plane-security.md
 tasks
 AGENTS.md
+AGENTS.local.md

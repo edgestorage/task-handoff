@@ -1427,15 +1427,15 @@ async function confirmNewProject() {
 
 async function createNewSession(permissionMode?: AiSessionPermissionMode) {
   const message = newSessionDraft.value.trim();
-  const cwd = newSessionFolder.value?.path || (props.instance.source.type === "local-folder" ? props.instance.source.path : "");
-  if (!newSessionApp.value || !cwd || !message || newSessionComposerBusy.value) return;
+  const cwdFolderId = newSessionFolder.value?.id;
+  if (!newSessionApp.value || !message || newSessionComposerBusy.value) return;
   launchingNewSession.value = true;
   try {
     const clientRequestId = crypto.randomUUID();
     const attachments = await uploadMessageAttachments(props.instance.id, clientRequestId);
     const result = await createAiSession(props.instance.id, {
       agent: newSessionApp.value,
-      cwd: { type: "runtime-path", path: cwd },
+      ...(cwdFolderId ? { cwdFolderId } : {}),
       message: aiSessionMessageText(message),
       attachments,
       references: referencesForBindings(newSessionDraft.value, messageMentionBindings.value),

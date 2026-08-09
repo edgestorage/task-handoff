@@ -2,6 +2,7 @@ import type { Node } from "@task-handoff/protocol/control-plane";
 
 export type NodeConnectionTransport = "direct-http" | "reverse-wss";
 export type NodeConnectionRuntimePhase = "connecting" | "handshaking" | "healthy" | "reconnecting" | "suspect" | "offline";
+export type NodeControlReachability = "unknown" | "reachable" | "unreachable";
 
 export type NodeConnectionObservation = {
   nodeId: string;
@@ -16,6 +17,9 @@ export type NodeConnectionObservation = {
   nextRetryAt?: string;
   closeCode?: number;
   error?: string;
+  controlReachability: NodeControlReachability;
+  controlChangedAt?: string;
+  controlError?: string;
 };
 
 export type NodeConnectionProjection = Node & {
@@ -37,6 +41,9 @@ export class NodeConnectionRuntime {
       phase,
       changedAt: new Date().toISOString(),
       consecutiveFailures: previous?.transport === transport ? previous.consecutiveFailures : 0,
+      controlReachability: previous?.transport === transport ? previous.controlReachability : "unknown",
+      controlChangedAt: previous?.transport === transport ? previous.controlChangedAt : undefined,
+      controlError: previous?.transport === transport ? previous.controlError : undefined,
     };
     this.observations.set(nodeId, observation);
     this.publish(observation);
@@ -83,6 +90,21 @@ export class NodeConnectionRuntime {
     const generation = current?.transport === transport
       ? current.generation
       : this.begin(node.id, transport, "handshaking");
+    if (transport === "direct-http") {
+      const timestamp = new Date().toISOString();
+      if (current?.controlReachability === "reachable") {
+        return this.update(node.id, generation, { lastSeenAt: timestamp }, false);
+      }
+      return this.update(node.id, generation, {
+        controlReachability: "reachable",
+        controlChangedAt: timestamp,
+        controlError: undefined,
+        lastSeenAt: timestamp,
+      });
+    }
+    if (current?.phase === "healthy") {
+      return this.update(node.id, generation, { lastSeenAt: new Date().toISOString() }, false);
+    }
     return this.connected(node.id, generation);
   }
 
@@ -90,12 +112,19 @@ export class NodeConnectionRuntime {
     if (node.connectionMode === "control-plane-proxy") return false;
     const transport: NodeConnectionTransport = node.connectionMode === "reverse-wss" ? "reverse-wss" : "direct-http";
     const current = this.observations.get(node.id);
-    if (current?.transport === transport && current.phase === "healthy") {
-      return true;
-    }
     const generation = current?.transport === transport
       ? current.generation
       : this.begin(node.id, transport, "connecting");
+    if (transport === "direct-http") {
+      if (current?.controlReachability === "unreachable") {
+        return this.update(node.id, generation, { controlError: error }, false);
+      }
+      return this.update(node.id, generation, {
+        controlReachability: "unreachable",
+        controlChangedAt: new Date().toISOString(),
+        controlError: error,
+      });
+    }
     return this.disconnected(node.id, generation, { error });
   }
 
@@ -130,16 +159,29 @@ export class NodeConnectionRuntime {
     const observation = this.observations.get(node.id);
     const expectedTransport: NodeConnectionTransport = node.connectionMode === "reverse-wss" ? "reverse-wss" : "direct-http";
     if (!observation || observation.transport !== expectedTransport) {
-      return node;
+      return expectedTransport === "direct-http"
+        ? { ...node, status: "unknown", health: "unknown", connectionPhase: "connecting" }
+        : node;
     }
     // A direct node's HTTP health check is the authority for node reachability.
     // Its event WebSocket is a secondary stream: reconnecting it must not make a
     // node with a healthy control API appear offline.
     if (expectedTransport === "direct-http") {
+      if (observation.controlReachability === "reachable") {
+        return {
+          ...node,
+          status: "online",
+          health: node.health === "unknown" || node.health === "failed" ? "ok" : node.health,
+          lastSeenAt: observation.lastSeenAt || node.lastSeenAt,
+          connectionPhase: "healthy",
+        };
+      }
       return {
         ...node,
-        lastSeenAt: observation.lastSeenAt || node.lastSeenAt,
-        connectionPhase: observation.phase,
+        status: observation.controlReachability === "unreachable" ? "offline" : "unknown",
+        health: observation.controlReachability === "unreachable" ? "failed" : "unknown",
+        lastSeenAt: observation.lastSeenAt,
+        connectionPhase: observation.controlReachability === "unreachable" ? "offline" : "connecting",
       };
     }
     if (observation.phase === "healthy") {

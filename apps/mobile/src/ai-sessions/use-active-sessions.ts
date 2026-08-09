@@ -28,6 +28,7 @@ type ActiveAiSessions = {
   actions?: MobileAiSessionActionCoordinator;
   client?: ControlPlaneClient;
   controlPlaneId?: string;
+  refresh(): Promise<void>;
   state: ReturnType<typeof mobileAiSessionStore.profile>;
 };
 
@@ -87,7 +88,11 @@ function ActiveAiSessionsBoundary({ children }: { children: ReactNode }) {
     () => runtime.controlPlaneId ? mobileAiSessionStore.profile(runtime.controlPlaneId) : empty,
     () => empty,
   );
-  const runtimeValue = useMemo(() => ({ actions, client: runtime.api, controlPlaneId: runtime.controlPlaneId }), [actions, runtime.api, runtime.controlPlaneId]);
+  const refresh = useMemo(() => async () => {
+    if (!controller) throw new Error('The active Control Plane AI Sessions are unavailable.');
+    await controller.refresh();
+  }, [controller]);
+  const runtimeValue = useMemo(() => ({ actions, client: runtime.api, controlPlaneId: runtime.controlPlaneId, refresh }), [actions, refresh, runtime.api, runtime.controlPlaneId]);
   const value = useMemo(() => ({ ...runtimeValue, state }), [runtimeValue, state]);
   return createElement(ActiveAiSessionsRuntimeContext.Provider, { value: runtimeValue },
     createElement(ActiveAiSessionsContext.Provider, { value }, children),

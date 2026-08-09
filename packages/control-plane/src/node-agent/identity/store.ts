@@ -3,7 +3,7 @@ import path from "node:path";
 import writeFileAtomic from "write-file-atomic";
 import { z } from "zod";
 import type { NodeAgentStorePaths } from "../persistence/paths.ts";
-import { StoredNodeAgentControlPlaneConnectionSchema, StoredNodeAgentControlPlanePairingSchema, StoredNodeAgentDateTimeSchema, StoredNodeAgentIdSchema, StoredNodeAgentPairingInviteSchema } from "./schemas.ts";
+import { StoredNodeAgentControlPlaneConnectionSchema, StoredNodeAgentControlPlanePairingSchema, StoredNodeAgentDateTimeSchema, StoredNodeAgentIdSchema } from "./schemas.ts";
 import type { NodeAgentIdentity } from "./types.ts";
 
 function now() {
@@ -13,7 +13,6 @@ function now() {
 type IdentityStoreLogger = (message: string, details: Record<string, unknown>) => void;
 
 const IDENTITY_FIELDS = new Set(["nodeId", "createdAt", "updatedAt", "pairingInvites", "controlPlanePairings", "controlPlaneConnections", "remoteControlPlanes"]);
-const PAIRING_INVITE_FIELDS = new Set(["tokenHash", "expiresAt", "createdAt", "controlPlaneName"]);
 const CONTROL_PLANE_PAIRING_FIELDS = new Set(["id", "keyId", "name", "secret", "pairedAt", "revokedAt", "updatedAt"]);
 const CONTROL_PLANE_CONNECTION_FIELDS = new Set(["id", "pairingKeyId", "name", "url", "enabled", "createdAt", "updatedAt"]);
 const LEGACY_REMOTE_CONTROL_PLANE_FIELDS = new Set(["id", "keyId", "name", "url", "secret", "pairedAt", "updatedAt", "active"]);
@@ -50,6 +49,9 @@ function normalizeNodeAgentIdentity(record: unknown, logger: IdentityStoreLogger
   const ignoredIdentityFields = unknownFields(value, IDENTITY_FIELDS);
   if (ignoredIdentityFields.length) {
     logger("unknown node agent identity fields were ignored", { fields: ignoredIdentityFields });
+  }
+  if (Array.isArray(value.pairingInvites) && value.pairingInvites.length) {
+    logger("persisted node agent pairing invites were discarded", { count: value.pairingInvites.length });
   }
   const legacyRemotes = Array.isArray(value.remoteControlPlanes) ? value.remoteControlPlanes.flatMap((item) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) return [];
@@ -90,20 +92,6 @@ function normalizeNodeAgentIdentity(record: unknown, logger: IdentityStoreLogger
     nodeId,
     createdAt: validDateOrNow(value.createdAt, "createdAt", logger),
     updatedAt: validDateOrNow(value.updatedAt, "updatedAt", logger),
-    pairingInvites: Array.isArray(value.pairingInvites) ? value.pairingInvites.flatMap((item) => {
-      if (!item || typeof item !== "object" || Array.isArray(item)) {
-        logger("invalid node agent pairing invite was ignored", {});
-        return [];
-      }
-      const ignoredFields = unknownFields(item as Record<string, unknown>, PAIRING_INVITE_FIELDS);
-      if (ignoredFields.length) logger("unknown node agent pairing invite fields were ignored", { fields: ignoredFields });
-      const parsed = StoredNodeAgentPairingInviteSchema.safeParse(item);
-      if (!parsed.success) {
-        logger("invalid node agent pairing invite was ignored", { issues: parsed.error.issues });
-        return [];
-      }
-      return [parsed.data];
-    }) : [],
     controlPlanePairings: value.controlPlanePairings
       ? parseItems(value.controlPlanePairings, CONTROL_PLANE_PAIRING_FIELDS, StoredNodeAgentControlPlanePairingSchema, "control-plane pairing")
       : legacyRemotes.map((item) => item.pairing),
@@ -139,6 +127,13 @@ export class NodeAgentIdentityStore {
       throw identityError(`Node agent identity contains invalid JSON: ${this.paths.identityPath}`, error);
     }
     return normalizeNodeAgentIdentity(record, this.logger);
+  }
+
+  init() {
+    const identity = this.read();
+    if (!identity) return;
+    const raw = JSON.parse(fs.readFileSync(this.paths.identityPath, "utf8")) as Record<string, unknown>;
+    if ("pairingInvites" in raw || "remoteControlPlanes" in raw) this.write(identity);
   }
 
   write(identity: NodeAgentIdentity) {

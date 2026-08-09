@@ -65,7 +65,7 @@ if (bundleIndex >= 0) {
       'NodeAgentTransport', 'nodeCredential', 'relayEndpoint', 'accessTicket',
       '/api/controlled-instances/:id/start', '/api/controlled-instances/:id/stop',
       '/api/controlled-instances/:id/restart', '/api/nodes/:id/pairing',
-      '/api/nodes/:id/updates/apply', '/api/triggers', '/api/models',
+      '/api/nodes/:id/updates/apply', '/api/models',
     ];
     for (const file of sourceFiles(bundleDir, new Set(['.js', '.json', '.map', '.hbc']))) {
       const source = fs.readFileSync(file, 'utf8');

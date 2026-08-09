@@ -18,6 +18,7 @@ import { mobileDirectoryStore } from './store';
 type ActiveDirectories = {
   controlPlaneId?: string;
   controlPlaneOrigin?: string;
+  refresh(): Promise<void>;
   state: ReturnType<typeof mobileDirectoryStore.profile>;
   updateInstanceName(instanceId: string, name: string): Promise<void>;
   updateNodeName(nodeId: string, name: string): Promise<void>;
@@ -85,14 +86,19 @@ function ActiveDirectoriesBoundary({ children }: { children: ReactNode }) {
     if (!controller) throw new Error('The active Control Plane directory is unavailable.');
     await controller.runInstanceAction(instanceId, action);
   }, [controller]);
+  const refresh = useCallback(async () => {
+    if (!controller) throw new Error('The active Control Plane directory is unavailable.');
+    await controller.refresh();
+  }, [controller]);
   const value = useMemo(() => ({
     controlPlaneId: runtime.controlPlaneId,
     controlPlaneOrigin: runtime.controlPlaneOrigin,
+    refresh,
     state,
     updateInstanceName,
     updateNodeName,
     runInstanceAction,
-  }), [runtime.controlPlaneId, runtime.controlPlaneOrigin, runInstanceAction, state, updateInstanceName, updateNodeName]);
+  }), [refresh, runtime.controlPlaneId, runtime.controlPlaneOrigin, runInstanceAction, state, updateInstanceName, updateNodeName]);
   return createElement(Context.Provider, { value }, children);
 }
 

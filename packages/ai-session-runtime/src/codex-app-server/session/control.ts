@@ -9,7 +9,7 @@ import { activeTurnMismatchFoundId, isNoActiveTurnError } from "../protocol/turn
 
 type SessionControlOptions = {
   registry: AiSessionRegistry;
-  readyClient: () => Promise<CodexAppServerClientLike>;
+  readyThreadClient: (threadId: string) => Promise<CodexAppServerClientLike>;
   validateReferences?: (session: AiSessionStatus, references: AiSessionReference[]) => Promise<AiSessionReference[]>;
 };
 
@@ -17,9 +17,9 @@ export class CodexAppServerSessionControl {
   constructor(private readonly options: SessionControlOptions) {}
 
   async sendMessage(session: AiSessionStatus, input: AiSessionSendInput): Promise<AiSessionActionResult> {
-    const client = await this.options.readyClient();
-    const references = await this.validateReferences(session, input.references || []);
     const threadId = this.requireThreadId(session);
+    const client = await this.options.readyThreadClient(threadId);
+    const references = await this.validateReferences(session, input.references || []);
     const result = await withAttachmentPathFallback(input.message, input.attachments, session.cwd, (providerMessage) => (
       this.steerOrStartTurnForCompatibility(client, threadId, session, providerMessage, references, input.permissionMode)
     ));
@@ -34,9 +34,9 @@ export class CodexAppServerSessionControl {
   }
 
   async startMessage(session: AiSessionStatus, input: AiSessionSendInput): Promise<AiSessionActionResult> {
-    const client = await this.options.readyClient();
-    const references = await this.validateReferences(session, input.references || []);
     const threadId = this.requireThreadId(session);
+    const client = await this.options.readyThreadClient(threadId);
+    const references = await this.validateReferences(session, input.references || []);
     const result = await withAttachmentPathFallback(input.message, input.attachments, session.cwd, (providerMessage) => (
       this.startTurn(client, threadId, providerMessage, references, input.permissionMode)
     ));
@@ -51,9 +51,9 @@ export class CodexAppServerSessionControl {
   }
 
   async steerMessage(session: AiSessionStatus, input: AiSessionSendInput): Promise<AiSessionActionResult> {
-    const client = await this.options.readyClient();
-    const references = await this.validateReferences(session, input.references || []);
     const threadId = this.requireThreadId(session);
+    const client = await this.options.readyThreadClient(threadId);
+    const references = await this.validateReferences(session, input.references || []);
     const result = await withAttachmentPathFallback(input.message, input.attachments, session.cwd, (providerMessage) => (
       this.steerTurn(client, threadId, session, providerMessage, references)
     ));
@@ -68,8 +68,8 @@ export class CodexAppServerSessionControl {
   }
 
   async interrupt(session: AiSessionStatus): Promise<AiSessionActionResult> {
-    const client = await this.options.readyClient();
     const threadId = this.requireThreadId(session);
+    const client = await this.options.readyThreadClient(threadId);
     const turnId = session.activeTurnId;
     if (!turnId) {
       throw aiSessionControlError("AI_SESSION_NO_ACTIVE_TURN", "AI session has no active turn to interrupt.");

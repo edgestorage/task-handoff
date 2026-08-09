@@ -7,6 +7,7 @@
   "dependencies": {
     "@expo/ui": "~57.0.9",
     "@expo/vector-icons": "^15.1.1",
+    "@react-native-menu/menu": "^2.0.0",
     "@task-handoff/control-plane-client": "workspace:*",
     "@task-handoff/protocol": "workspace:*",
     "expo": "~57.0.10",
@@ -21,6 +22,7 @@
     "expo-libghostty": "^0.8.1",
     "expo-linking": "~57.0.5",
     "expo-network": "~57.0.1",
+    "expo-paste-input": "0.2.2",
     "expo-router": "~57.0.10",
     "expo-secure-store": "~57.0.1",
     "expo-status-bar": "~57.0.1",

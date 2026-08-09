@@ -6,6 +6,20 @@ const test = require("node:test");
 const root = path.resolve(__dirname, "..");
 const workflow = fs.readFileSync(path.join(root, ".github/workflows/desktop-release.yml"), "utf8");
 const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+const prepareDesktopRuntime = fs.readFileSync(path.join(root, "scripts", "prepare-desktop-runtime.mjs"), "utf8");
+
+test("local desktop runtime preparation follows the controlled-instance package version", () => {
+  assert.match(prepareDesktopRuntime, /path\.join\(root, "packages", "controlled-instance", "package\.json"\)/);
+  assert.match(prepareDesktopRuntime, /process\.env\.TASK_HANDOFF_VERSION \|\| controlledInstancePackage\.version/);
+  assert.match(prepareDesktopRuntime, /env: \{ \.\.\.process\.env, TASK_HANDOFF_VERSION: version \}/);
+  assert.doesNotMatch(prepareDesktopRuntime, /rootPackage\.version/);
+});
+
+test("desktop development rebuilds the local CLI before starting Electron", () => {
+  const start = manifest.scripts["desktop:start"];
+  assert.match(start, /^pnpm run build:legacy && pnpm run desktop:runtime:prepare/);
+  assert.match(start, /pnpm --filter @task-handoff\/desktop-shell start$/);
+});
 
 test("desktop releases publish updater metadata to the public release repository", () => {
   assert.deepEqual(manifest.build.publish, [{ provider: "github", owner: "edgestorage", repo: "task-handoff" }]);

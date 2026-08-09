@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type ComponentProps } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ComponentProps } from 'react';
+import { File } from 'expo-file-system';
 import { GripVertical } from 'lucide-react-native';
 import { Alert, Animated, FlatList, Keyboard, KeyboardAvoidingView, PanResponder, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -6,17 +7,18 @@ import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
 import { canInterruptAiSession, isAiSessionApprovalPending, type ControlPlaneAiSessionSummary, type ControlPlaneClient } from '@task-handoff/control-plane-client';
 import type { AiSessionMentionCandidate, AiSessionPermissionMode } from '@task-handoff/protocol/ai-sessions';
 
-import { mobileAiSessionBusyKey, MobileAiSessionActionCoordinator, MobileAiSessionDraftStore } from './actions';
+import { mobileAiSessionBusyKey, MobileAiSessionActionCoordinator, MobileAiSessionDraftStore, type MobileActionResult } from './actions';
 import { aiSessionDisplayTurns, SessionDetail, type SessionDetailMode } from './SessionDetail';
 import type { MobileStreamingMessage } from './store';
 import { pickDocument, pickImage } from '../platform/file-picker';
-import { runtimeAttachmentFromServerCandidate, uploadMobileAttachment, usableUploadRefs, type MobilePendingAttachment } from './attachments';
+import { mobilePastedImage, runtimeAttachmentFromServerCandidate, uploadMobileAttachment, usableUploadRefs, type MobilePendingAttachment } from './attachments';
 import { useMobileTheme } from '../components/theme';
 import { SystemIcon } from '../components/SystemIcon';
 import { SessionComposer } from './SessionComposer';
 import { SESSION_COMPOSER_COLLAPSED_HEIGHT, SESSION_COMPOSER_EXPANDED_HEIGHT } from './composer-metrics';
 import { useI18n, type Translate } from '../i18n';
 import type { MobileAiSessionPermissionStore } from './permission-store';
+import { useMobileToast } from '../components/MobileToast';
 
 export function SessionWorkspace({
   controlPlaneId,
@@ -50,6 +52,7 @@ export function SessionWorkspace({
   const insets = useSafeAreaInsets();
   const { colors } = useMobileTheme();
   const { t } = useI18n();
+  const toast = useMobileToast();
   const [draft, setDraft] = useState('');
   const latestDraft = useRef('');
   const draftTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -77,6 +80,7 @@ export function SessionWorkspace({
   const [composerFocusRequest, setComposerFocusRequest] = useState(0);
   const [queueOrderPreview, setQueueOrderPreview] = useState<string[]>();
   const [draggingQueueId, setDraggingQueueId] = useState<string>();
+  const [queueDragOffsetY, setQueueDragOffsetY] = useState(0);
   const queueOrderPreviewRef = useRef<string[] | undefined>(undefined);
   const queueRowHeights = useRef(new Map<string, number>());
   const queueDrag = useRef<{ queueId: string; sourceCenter: number; sourceIds: string[]; targets: { index: number; center: number }[] } | undefined>(undefined);
@@ -138,6 +142,7 @@ export function SessionWorkspace({
     queueOrderPreviewRef.current = undefined;
     setQueueOrderPreview(undefined);
     setDraggingQueueId(undefined);
+    setQueueDragOffsetY(0);
     queueDrag.current = undefined;
   }, [session?.queue.revision, sessionId]);
   if (!session) return <SessionDetail messages={messages} session={session} />;
@@ -147,14 +152,18 @@ export function SessionWorkspace({
   const approvalPending = isAiSessionApprovalPending(session);
   const state = (action: Parameters<typeof mobileAiSessionBusyKey>[3], queueId?: string) => actions?.state(mobileAiSessionBusyKey(controlPlaneId, instanceId, session.id, action, queueId));
   const sendState = state('send');
-  const actionErrors = [sendState, state('interrupt'), ...(isLatestTurn ? [state('approval'), ...session.queue.items.flatMap((item) => [
-    state('queue-steer', item.id), state('queue-retry', item.id), state('queue-remove', item.id), state('queue-edit', item.id),
-  ]), state('queue-reorder')] : [])].map((candidate) => candidate?.error).filter((error, index, all): error is string => Boolean(error) && all.indexOf(error) === index);
+  const performAction = async <T,>(label: string, operation: () => Promise<MobileActionResult<T>>) => {
+    const result = await operation();
+    if (result.disposition === 'failed' || result.disposition === 'result-unknown') {
+      toast.show({ detail: result.error, title: t('toast.actionFailed', { action: label }), tone: 'error' });
+    }
+    return result;
+  };
   const queuedItems = session.queue.items.filter((item) => item.status === 'queued');
   const displayedQueueItems = queueItemsWithQueuedOrder(session.queue.items, queueOrderPreview);
   const commitQueueOrder = async (queueIds: string[]) => {
     if (!actions || arraysEqual(queueIds, queuedItems.map((item) => item.id))) return;
-    const result = await actions.reorderQueue(instanceId, session.id, session.queue.revision, queueIds);
+    const result = await performAction(t('workspace.reorderAction'), () => actions.reorderQueue(instanceId, session.id, session.queue.revision, queueIds));
     if (result.disposition !== 'accepted') {
       queueOrderPreviewRef.current = undefined;
       setQueueOrderPreview(undefined);
@@ -186,18 +195,17 @@ export function SessionWorkspace({
     queueOrderPreviewRef.current = sourceIds;
     setQueueOrderPreview(sourceIds);
     setDraggingQueueId(queueId);
+    setQueueDragOffsetY(0);
   };
   const updateQueueDrag = (queueId: string, dy: number) => {
     const drag = queueDrag.current;
     if (!drag || drag.queueId !== queueId) return;
-    const pointerCenter = drag.sourceCenter + dy;
-    const target = drag.targets.reduce((closest, candidate) => (
-      Math.abs(candidate.center - pointerCenter) < Math.abs(closest.center - pointerCenter) ? candidate : closest
-    ));
-    const reordered = moveQueueId(drag.sourceIds, drag.sourceIds.indexOf(queueId), target.index);
-    if (arraysEqual(reordered, queueOrderPreviewRef.current)) return;
-    queueOrderPreviewRef.current = reordered;
-    setQueueOrderPreview(reordered);
+    const preview = queueDragPreview(drag.sourceIds, queueId, drag.sourceCenter, drag.targets, dy);
+    setQueueDragOffsetY(preview.offsetY);
+    if (!arraysEqual(preview.queueIds, queueOrderPreviewRef.current)) {
+      queueOrderPreviewRef.current = preview.queueIds;
+      setQueueOrderPreview(preview.queueIds);
+    }
   };
   const finishQueueDrag = (queueId: string) => {
     const drag = queueDrag.current;
@@ -205,6 +213,7 @@ export function SessionWorkspace({
     const reordered = queueOrderPreviewRef.current || drag.sourceIds;
     queueDrag.current = undefined;
     setDraggingQueueId(undefined);
+    setQueueDragOffsetY(0);
     if (arraysEqual(reordered, drag.sourceIds)) {
       queueOrderPreviewRef.current = undefined;
       setQueueOrderPreview(undefined);
@@ -218,6 +227,7 @@ export function SessionWorkspace({
     queueOrderPreviewRef.current = undefined;
     setQueueOrderPreview(undefined);
     setDraggingQueueId(undefined);
+    setQueueDragOffsetY(0);
   };
   const restoreDraftAfterQueueEdit = (edit: NonNullable<typeof activeQueueEdit>) => {
     if (queueEditRef.current !== edit) return;
@@ -255,7 +265,7 @@ export function SessionWorkspace({
       restoreDraftAfterQueueEdit(activeQueueEdit);
       return;
     }
-    const result = await actions.editQueue(instanceId, session.id, activeQueueEdit.queueId, session.queue.revision, draft.trim());
+    const result = await performAction(t('workspace.saveAction'), () => actions.editQueue(instanceId, session.id, activeQueueEdit.queueId, session.queue.revision, draft.trim()));
     if (result.disposition === 'accepted') restoreDraftAfterQueueEdit(activeQueueEdit);
   };
   const send = async () => {
@@ -266,7 +276,7 @@ export function SessionWorkspace({
     const selectedPermissionMode = permissionSelection && permissionSelection.key === permissionKey && permissionSelection.resolved
       ? permissionSelection.mode
       : defaultPermissionMode;
-    const result = await actions.send(instanceId, session.id, draft.trim(), session.agent === 'codex' ? selectedPermissionMode : undefined, refs, 'auto');
+    const result = await performAction(t('composer.send'), () => actions.send(instanceId, session.id, draft.trim(), session.agent === 'codex' ? selectedPermissionMode : undefined, refs, 'auto'));
     if (result.disposition === 'accepted') {
       setDraft('');
       latestDraft.current = '';
@@ -285,6 +295,26 @@ export function SessionWorkspace({
     } catch (cause) {
       setAttachments((current) => [...current, { localId: `failed:${Date.now()}`, kind, name: 'Attachment', mime: 'application/octet-stream', size: 0, phase: 'failed', error: cause instanceof Error ? cause.message : 'Could not select attachment.' }]);
     }
+  };
+  const pasteImages = async (uris: string[]) => {
+    if (!client) return;
+    const pasted = await Promise.all(uris.map(async (uri, index): Promise<MobilePendingAttachment> => {
+      try {
+        return await uploadMobileAttachment(client, { instanceId, sessionId: session.id }, mobilePastedImage(uri));
+      } catch (cause) {
+        try { new File(uri).delete(); } catch { /* The native wrapper owns only temporary paste files. */ }
+        return {
+          error: cause instanceof Error ? cause.message : 'Could not paste image.',
+          kind: 'image',
+          localId: `clipboard-failed:${Date.now()}:${index}`,
+          mime: 'application/octet-stream',
+          name: 'Clipboard image',
+          phase: 'failed',
+          size: 0,
+        };
+      }
+    }));
+    setAttachments((current) => [...current.filter((item) => !pasted.some((next) => next.localId === item.localId)), ...pasted]);
   };
   const loadRuntimeFiles = async () => {
     if (!client) return;
@@ -309,7 +339,7 @@ export function SessionWorkspace({
       ? !hasDraft || draft.trim() === activeQueueEdit?.originalMessage.trim()
       : !session.actions?.send || !hasDraft);
   const runComposerAction = () => {
-    if (composerAction === 'stop') void actions?.interrupt(instanceId, session.id);
+    if (composerAction === 'stop' && actions) void performAction(t('composer.stop'), () => actions.interrupt(instanceId, session.id));
     else if (composerAction === 'save') void saveQueueEdit();
     else void send();
   };
@@ -378,7 +408,7 @@ export function SessionWorkspace({
                   const decisionLabel = t(`workspace.${decision}` as 'workspace.allow');
                   Alert.alert(t('workspace.resolveApproval'), t('workspace.sendDecision', { decision: decisionLabel }), [
                     { text: t('common.cancel'), style: 'cancel' },
-                    { text: decisionLabel, onPress: () => { void actions?.approval(instanceId, session.id, decision); } },
+                    { text: decisionLabel, onPress: () => { if (actions) void performAction(decisionLabel, () => actions.approval(instanceId, session.id, decision)); } },
                   ]);
                 }} />
               ))}
@@ -403,7 +433,11 @@ export function SessionWorkspace({
               item.references.length ? t('workspace.queueReferences', { count: item.references.length }) : undefined,
             ].filter(Boolean).join(' · ');
             return (
-              <View onLayout={(event) => queueRowHeights.current.set(item.id, event.nativeEvent.layout.height)} style={[styles.queueRow, draggingQueueId === item.id && styles.queueRowDragging]} testID={`queued-message-row-${item.id}`}>
+              <View
+                onLayout={(event) => queueRowHeights.current.set(item.id, event.nativeEvent.layout.height)}
+                style={[styles.queueRow, draggingQueueId === item.id && styles.queueRowDragging, draggingQueueId === item.id && { transform: [{ translateY: queueDragOffsetY }], zIndex: 1 }]}
+                testID={`queued-message-row-${item.id}`}
+              >
                 <View style={styles.queueContent}>
                   {item.status === 'queued' ? <QueueDragHandle
                     disabled={!authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes(state('queue-reorder')?.phase || '')}
@@ -425,9 +459,9 @@ export function SessionWorkspace({
                 </View>
                 <View style={styles.queueActions}>
                   {item.status === 'queued' ? <QueueActionButton icon={{ android: 'edit', ios: 'pencil' }} label={t('workspace.editAction')} disabled={!authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes(state('queue-edit', item.id)?.phase || '')} onPress={() => beginQueueEdit(item.id, item.message)} /> : null}
-                  <QueueActionButton icon={{ android: 'turn_right', ios: 'arrow.turn.up.right' }} label={t('workspace.steerAction')} disabled={!authoritativeActionsEnabled || !actions || !canInterrupt || ['busy', 'result-unknown'].includes(state('queue-steer', item.id)?.phase || '')} onPress={() => { void actions?.queue(instanceId, session.id, item.id, 'steer'); }} showLabel />
-                  {item.status === 'failed' ? <QueueActionButton icon={{ android: 'refresh', ios: 'arrow.clockwise' }} label={t('workspace.retryAction')} disabled={!authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes(state('queue-retry', item.id)?.phase || '')} onPress={() => { void actions?.queue(instanceId, session.id, item.id, 'retry'); }} /> : null}
-                  <QueueActionButton destructive icon={{ android: 'close', ios: 'xmark' }} label={t('workspace.removeAction')} disabled={!authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes(state('queue-remove', item.id)?.phase || '')} onPress={() => { void actions?.queue(instanceId, session.id, item.id, 'remove'); }} />
+                  <QueueActionButton icon={{ android: 'turn_right', ios: 'arrow.turn.up.right' }} label={t('workspace.steerAction')} disabled={!authoritativeActionsEnabled || !actions || !canInterrupt || ['busy', 'result-unknown'].includes(state('queue-steer', item.id)?.phase || '')} onPress={() => { if (actions) void performAction(t('workspace.steerAction'), () => actions.queue(instanceId, session.id, item.id, 'steer')); }} showLabel />
+                  {item.status === 'failed' ? <QueueActionButton icon={{ android: 'refresh', ios: 'arrow.clockwise' }} label={t('workspace.retryAction')} disabled={!authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes(state('queue-retry', item.id)?.phase || '')} onPress={() => { if (actions) void performAction(t('workspace.retryAction'), () => actions.queue(instanceId, session.id, item.id, 'retry')); }} /> : null}
+                  <QueueActionButton destructive icon={{ android: 'close', ios: 'xmark' }} label={t('workspace.removeAction')} disabled={!authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes(state('queue-remove', item.id)?.phase || '')} onPress={() => { if (actions) void performAction(t('workspace.removeAction'), () => actions.queue(instanceId, session.id, item.id, 'remove')); }} />
                 </View>
               </View>
             );
@@ -442,7 +476,6 @@ export function SessionWorkspace({
           } catch { setRuntimeCandidates([]); }
         }}><Text style={[styles.runtimeFile, { color: colors.primary }]}>{candidate.name} · {candidate.path}</Text></Pressable>} /> : null}
         {attachments.length ? <View style={styles.attachments}>{attachments.map((attachment) => <View key={attachment.localId} style={[styles.attachment, { backgroundColor: colors.surfaceMuted }]}><SystemIcon android={attachment.kind === 'image' ? 'image' : 'description'} color={colors.textMuted} ios={attachment.kind === 'image' ? 'photo' : 'doc'} size={15} /><Text numberOfLines={1} style={[styles.attachmentName, { color: colors.text }]}>{attachment.name}</Text><Text style={[styles.attachmentPhase, { color: attachment.phase === 'failed' ? colors.error : colors.textMuted }]}>{attachment.phase}</Text><Pressable accessibilityLabel={`Remove ${attachment.name}`} accessibilityRole="button" hitSlop={8} onPress={() => setAttachments((current) => current.filter((item) => item.localId !== attachment.localId))}><SystemIcon android="close" color={colors.textMuted} ios="xmark.circle.fill" size={17} /></Pressable>{attachment.error ? <Text accessibilityLiveRegion="polite" style={[styles.error, { color: colors.error }]}>{attachment.error}</Text> : null}</View>)}</View> : null}
-        {actionErrors.map((error) => <Text accessibilityLiveRegion="polite" key={error} style={[styles.error, { color: colors.error }]}>{error}</Text>)}
         <SessionComposer
           action={composerAction}
           actionBusy={composerBusy}
@@ -458,6 +491,7 @@ export function SessionWorkspace({
           onAddFile={() => { void selectLocal('file'); }}
           onAddImage={() => { void selectLocal('image'); }}
           onAddRuntimeFile={() => { void loadRuntimeFiles(); }}
+          onPasteImages={(uris) => { void pasteImages(uris); }}
           onCancelEdit={() => { if (activeQueueEdit) restoreDraftAfterQueueEdit(activeQueueEdit); }}
           onFocusChange={setComposerFocus}
           onPermissionModeChange={updatePermissionMode}
@@ -520,18 +554,26 @@ function QueueActionButton({ label, icon, destructive = false, disabled, onPress
 
 function QueueDragHandle({ disabled, label, moveDownLabel, moveUpLabel, onDragCancel, onDragEnd, onDragMove, onDragStart, onMoveDown, onMoveUp }: { disabled?: boolean; label: string; moveDownLabel: string; moveUpLabel: string; onDragCancel(): void; onDragEnd(): void; onDragMove(dy: number): void; onDragStart(): void; onMoveDown(): void; onMoveUp(): void }) {
   const { colors } = useMobileTheme();
-  const responder = useMemo(() => PanResponder.create({
-    onMoveShouldSetPanResponderCapture: () => !disabled,
-    onMoveShouldSetPanResponder: () => !disabled,
-    onPanResponderGrant: onDragStart,
-    onPanResponderMove: (_event, gesture) => onDragMove(gesture.dy),
-    onPanResponderRelease: onDragEnd,
-    onPanResponderTerminate: onDragCancel,
+  const callbacks = useRef({ onDragCancel, onDragEnd, onDragMove, onDragStart });
+  const disabledRef = useRef(disabled);
+  useLayoutEffect(() => {
+    callbacks.current = { onDragCancel, onDragEnd, onDragMove, onDragStart };
+    disabledRef.current = disabled;
+  }, [disabled, onDragCancel, onDragEnd, onDragMove, onDragStart]);
+  // PanResponder stores these functions for native events; the refs are only read after a gesture event fires.
+  // eslint-disable-next-line react-hooks/refs
+  const [responder] = useState(() => PanResponder.create({
+    onMoveShouldSetPanResponderCapture: () => !disabledRef.current,
+    onMoveShouldSetPanResponder: () => !disabledRef.current,
+    onPanResponderGrant: () => callbacks.current.onDragStart(),
+    onPanResponderMove: (_event, gesture) => callbacks.current.onDragMove(gesture.dy),
+    onPanResponderRelease: () => callbacks.current.onDragEnd(),
+    onPanResponderTerminate: () => callbacks.current.onDragCancel(),
     onPanResponderTerminationRequest: () => false,
     onShouldBlockNativeResponder: () => true,
-    onStartShouldSetPanResponderCapture: () => !disabled,
-    onStartShouldSetPanResponder: () => !disabled,
-  }), [disabled, onDragCancel, onDragEnd, onDragMove, onDragStart]);
+    onStartShouldSetPanResponderCapture: () => !disabledRef.current,
+    onStartShouldSetPanResponder: () => !disabledRef.current,
+  }));
   return (
     <View
       accessibilityActions={[{ name: 'decrement', label: moveUpLabel }, { name: 'increment', label: moveDownLabel }]}
@@ -558,6 +600,23 @@ export function moveQueueId(queueIds: readonly string[], source: number, target:
   const [item] = reordered.splice(source, 1);
   reordered.splice(target, 0, item);
   return reordered;
+}
+
+export function queueDragPreview(
+  sourceIds: readonly string[],
+  queueId: string,
+  sourceCenter: number,
+  targets: readonly { index: number; center: number }[],
+  dy: number,
+) {
+  const pointerCenter = sourceCenter + dy;
+  const target = targets.reduce((closest, candidate) => (
+    Math.abs(candidate.center - pointerCenter) < Math.abs(closest.center - pointerCenter) ? candidate : closest
+  ));
+  return {
+    queueIds: moveQueueId(sourceIds, sourceIds.indexOf(queueId), target.index),
+    offsetY: pointerCenter - target.center,
+  };
 }
 
 export function queueListScrollEnabled(draggingQueueId?: string) {

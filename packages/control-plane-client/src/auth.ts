@@ -29,6 +29,11 @@ export function createControlPlaneAuthApi(transport: ControlPlaneClientTransport
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body ?? {}),
   });
+  const patch = (body: unknown): RequestInit => ({
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
   return {
     identity() {
       return transport.request("/api/control-plane/identity", ControlPlanePublicIdentityDocumentSchema);
@@ -41,6 +46,13 @@ export function createControlPlaneAuthApi(transport: ControlPlaneClientTransport
     },
     login(input: { username: string; password: string }) {
       return requestData("/api/auth/login", z.object({ user: ControlPlaneAuthenticatedUserSchema }).strict(), post(input));
+    },
+    changePassword(input: { currentPassword: string; newPassword: string }) {
+      return requestData(
+        "/api/auth/password",
+        z.object({ user: ControlPlaneAuthenticatedUserSchema }).strict(),
+        patch(input),
+      );
     },
     logout() {
       return requestData("/api/auth/logout", z.object({ ok: z.boolean() }).strict(), post());

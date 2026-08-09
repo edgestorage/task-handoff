@@ -1,5 +1,5 @@
 import type { ControlledInstance } from "@task-handoff/protocol/control-plane";
-import { triggerConfigHash, type TriggerConfig } from "@task-handoff/protocol/triggers";
+import { ControlPlaneTriggersSchema, triggerConfigHash, type TriggerConfig } from "@task-handoff/protocol/triggers";
 import type { JsonCollection } from "../../shared/persistence/store.ts";
 import {
   ApplyControlPlaneTriggerSchema,
@@ -48,7 +48,7 @@ export class ControlPlaneTriggerService {
     for (const record of this.triggers.list()) {
       groups.set(record.configHash, {
         configHash: record.configHash,
-        config: record,
+        config: publicTriggerConfig(record),
         deploymentCount: 0,
         enabledCount: 0,
         runningCount: 0,
@@ -92,10 +92,10 @@ export class ControlPlaneTriggerService {
         groups.set(item.configHash, current);
       }
     }
-    return {
+    return ControlPlaneTriggersSchema.parse({
       updatedAt: new Date().toISOString(),
       triggers: [...groups.values()].sort((a, b) => String((a.config as { name?: string }).name || a.configHash).localeCompare(String((b.config as { name?: string }).name || b.configHash))),
-    };
+    });
   }
 
   createTrigger(input: unknown) {
@@ -328,6 +328,19 @@ export class ControlPlaneTriggerService {
     }
     return config;
   }
+}
+
+function publicTriggerConfig(record: ControlPlaneTriggerRecord): TriggerConfig {
+  return {
+    configHash: record.configHash,
+    name: record.name,
+    ...(record.description !== undefined ? { description: record.description } : {}),
+    source: record.source,
+    action: record.action,
+    policy: record.policy,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+  };
 }
 
 function aiSessionTriggerDeploymentId(sessionId: string, configHash: string) {

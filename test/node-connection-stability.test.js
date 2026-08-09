@@ -91,8 +91,10 @@ test("shared websocket supervisor resets retry only after a stable healthy windo
   supervisor.close();
 });
 
-test("runtime projection rejects stale generations while direct HTTP health remains authoritative", () => {
+test("runtime projection rejects persisted direct HTTP health until the control API is observed", () => {
   const runtime = new NodeConnectionRuntime();
+  const observations = [];
+  runtime.onChange((observation) => observations.push(observation));
   const node = {
     id: "node_runtime",
     name: "Node",
@@ -107,17 +109,27 @@ test("runtime projection rejects stale generations while direct HTTP health rema
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
-  assert.equal(runtime.project(node).status, "online");
+  assert.equal(runtime.project(node).status, "unknown");
   const first = runtime.begin(node.id, "direct-http");
   assert.equal(runtime.project(node).connectionPhase, "connecting");
   const second = runtime.begin(node.id, "direct-http");
   assert.equal(runtime.connected(node.id, first), false);
   assert.equal(runtime.connected(node.id, second), true);
+  assert.equal(runtime.project(node).status, "unknown");
+  assert.equal(runtime.observedReachable(node), true);
   assert.equal(runtime.project(node).status, "online");
   assert.equal(runtime.project(node).connectionPhase, "healthy");
+  const publishedAfterReachable = observations.length;
+  const controlChangedAt = runtime.observation(node.id).controlChangedAt;
+  assert.equal(runtime.observedReachable(node), true);
+  assert.equal(observations.length, publishedAfterReachable);
+  assert.equal(runtime.observation(node.id).controlChangedAt, controlChangedAt);
   runtime.disconnected(node.id, second, { error: "closed" });
   assert.equal(runtime.project(node).status, "online");
-  assert.equal(runtime.project(node).connectionPhase, "offline");
+  assert.equal(runtime.project(node).connectionPhase, "healthy");
+  assert.equal(runtime.observedFailure(node, "request timed out"), true);
+  assert.equal(runtime.project(node).status, "offline");
+  assert.equal(runtime.project(node).health, "failed");
 });
 
 test("reverse tunnel becomes healthy only after identify and ignores a replaced generation", () => {
@@ -215,9 +227,9 @@ test("fleet aggregation serves node snapshots without waiting for a slow or reco
 
   const requestsBeforeReconnect = requests;
   const reconnecting = await gateway.listFleetRuntimes([{ ...node, status: "offline", connectionPhase: "reconnecting" }]);
-  assert.equal(requests, requestsBeforeReconnect);
+  assert.equal(requests, requestsBeforeReconnect + 1);
   assert.deepEqual(reconnecting.items.map((item) => item.id), [runtime.id]);
-  assert.equal(reconnecting.nodeErrors[0].code, "NODE_AGENT_CONNECTION_PENDING");
+  assert.equal(reconnecting.nodeErrors[0].code, "NODE_AGENT_FLEET_TIMEOUT");
 
   const replacedConnection = await gateway.listFleetRuntimes([{
     ...node,

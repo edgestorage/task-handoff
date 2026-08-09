@@ -1,5 +1,6 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const crypto = require("node:crypto");
 const test = require("node:test");
 const ts = require("typescript");
 
@@ -79,6 +80,20 @@ test("trigger config hash changes when behavior changes", () => {
   assert.notEqual(first, second);
 });
 
+test("trigger config hash stays byte-compatible with SHA-256 identities", () => {
+  const canonical = JSON.stringify({
+    action: { promptTemplate: "Hello" },
+    policy: { maxConcurrentRuns: 1, whenBusy: "skip" },
+    source: { intervalMs: 1000, type: "schedule" },
+  });
+  const expected = `trg_${crypto.createHash("sha256").update(canonical).digest("hex").slice(0, 24)}`;
+  assert.equal(triggerConfigHash({
+    source: { type: "schedule", intervalMs: 1000 },
+    action: { promptTemplate: "Hello" },
+    policy: { maxConcurrentRuns: 1, whenBusy: "skip" },
+  }), expected);
+});
+
 test("editing a control-plane trigger replaces its behavior identity", async () => {
   const records = new Map();
   const collection = {
@@ -113,6 +128,34 @@ test("editing a control-plane trigger replaces its behavior identity", async () 
   assert.equal(records.has(created.configHash), false);
   assert.equal(records.get(result.trigger.configHash).name, "Every two hours");
   assert.deepEqual(requests, []);
+});
+
+test("listing control-plane triggers excludes persistence identity from public config", async () => {
+  const records = new Map();
+  const collection = {
+    list: () => [...records.values()],
+    get: (id) => records.get(id),
+    put: (record) => { records.set(record.id, record); return record; },
+    delete: (id) => records.delete(id),
+  };
+  const service = new ControlPlaneTriggerService({
+    triggers: collection,
+    listInstances: async () => [],
+    requireInstance: async () => { throw new Error("unused"); },
+    instanceRequest: async () => { throw new Error("unused"); },
+  });
+  const created = service.createTrigger({
+    name: "Hourly",
+    source: { type: "schedule", scheduleKind: "interval", intervalMs: 3_600_000 },
+    action: { promptTemplate: "Continue" },
+  });
+
+  const result = await service.listTriggers();
+
+  assert.equal(result.triggers.length, 1);
+  assert.equal(result.triggers[0].configHash, created.configHash);
+  assert.equal(result.triggers[0].config.configHash, created.configHash);
+  assert.equal("id" in result.triggers[0].config, false);
 });
 
 test("editing a deployed trigger migrates control-plane session deployments", async () => {

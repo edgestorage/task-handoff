@@ -142,6 +142,20 @@ export class MobileAiSessionController {
     return true;
   }
 
+  async refresh() {
+    const epoch = this.epoch;
+    try {
+      await this.refreshSnapshot(undefined, epoch);
+    } catch (cause) {
+      if (epoch === this.epoch && this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) this.store.setSyncState(this.controlPlaneId, {
+        phase: this.store.profile(this.controlPlaneId).snapshot ? 'stale' : 'error',
+        lastSyncedAt: this.store.profile(this.controlPlaneId).sync.lastSyncedAt,
+        error: cause instanceof Error ? cause.message : 'Could not refresh AI Sessions.',
+      });
+      throw cause;
+    }
+  }
+
   recoverInstance(instanceId: string) {
     const active = this.recoveries.get(instanceId);
     if (active) return active;

@@ -79,6 +79,19 @@ export class MobileAppSessionController {
       ...(error ? { error: error.message } : {}),
     });
   }
+  async refresh() {
+    const epoch = this.epoch;
+    try {
+      await this.refreshSnapshot(epoch);
+    } catch (cause) {
+      if (this.live(epoch)) this.store.setSyncState(this.id, {
+        phase: this.store.profile(this.id).snapshot ? 'stale' : 'error',
+        lastSyncedAt: this.store.profile(this.id).sync.lastSyncedAt,
+        error: cause instanceof Error ? cause.message : 'Could not refresh App Sessions.',
+      });
+      throw cause;
+    }
+  }
   applyEvent(event: MobileControlPlaneEvent) {
     if (event.topic && event.topic !== 'app.sessions') return false;
     const schemas = {
@@ -103,16 +116,16 @@ export class MobileAppSessionController {
   }
   private async recoverNow(instanceId: string, epoch: number) {
     const entry = this.store.profile(this.id).snapshot?.instances.find((candidate) => candidate.instanceId === instanceId);
-    if (!entry) return this.refresh(epoch);
+    if (!entry) return this.refreshSnapshot(epoch);
     const delta = await this.client.appSessions.delta(instanceId, entry.streamId, entry.revision ?? 0);
     if (!this.live(epoch)) return;
-    if (delta.syncRequired || delta.streamId !== entry.streamId) return this.refresh(epoch);
+    if (delta.syncRequired || delta.streamId !== entry.streamId) return this.refreshSnapshot(epoch);
     for (const event of delta.events) {
       const result = this.store.applyStreamEvent(this.id, event);
-      if (result.kind === 'gap' || result.kind === 'snapshot-required') return this.refresh(epoch);
+      if (result.kind === 'gap' || result.kind === 'snapshot-required') return this.refreshSnapshot(epoch);
     }
   }
-  private async refresh(epoch: number) {
+  private async refreshSnapshot(epoch: number) {
     const snapshot = await this.client.appSessions.refresh();
     if (this.live(epoch)) this.store.replaceSnapshot(this.id, snapshot);
   }

@@ -4,17 +4,20 @@ import { router } from 'expo-router';
 import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { SystemIcon } from '../components/SystemIcon';
+import { EmptyState } from '../components/EmptyState';
 import { useMobileTheme } from '../components/theme';
 import { useActiveDirectories } from '../directories/use-directories';
 import { instanceStateLabel, nodeDisplayName, nodeStateLabel } from '../directories/presentation';
 import { useI18n } from '../i18n';
 import { useInstanceScope } from './use-instance-scope';
+import { useMobileControlPlaneRuntime } from '../control-plane/use-mobile-control-plane-runtime';
 
 export function InstanceDrawerContent(props: DrawerContentComponentProps) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
   const { controlPlaneOrigin, state } = useActiveDirectories();
   const { scope, setScope } = useInstanceScope();
+  const { triggerCapability } = useMobileControlPlaneRuntime();
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const instancesByNode = useMemo(() => new Map(state.nodes.map((node) => [node.id, state.instances.filter((instance) => instance.nodeId === node.id)])), [state.instances, state.nodes]);
   const select = (instanceId?: string) => {
@@ -31,6 +34,7 @@ export function InstanceDrawerContent(props: DrawerContentComponentProps) {
         </View>
       </View>
       <DrawerRow active={scope.kind === 'all'} count={state.instances.length} icon="all" label={t('scope.allInstances')} onPress={() => select()} />
+      {triggerCapability ? <DrawerRow icon="triggers" label={t('triggers.title')} onPress={() => { props.navigation.closeDrawer(); router.push('/triggers' as never); }} /> : null}
       <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>{t('nav.instances')}</Text>
       <View style={styles.nodeGroups}>
         {state.nodes.map((node) => {
@@ -62,6 +66,7 @@ export function InstanceDrawerContent(props: DrawerContentComponentProps) {
                 icon="instance"
                 key={instance.id}
                 label={instance.name}
+                nested
                 onPress={() => select(instance.id)}
                 subtitle={instanceStateLabel(instance, t)}
               />
@@ -69,7 +74,7 @@ export function InstanceDrawerContent(props: DrawerContentComponentProps) {
           </View>;
         })}
       </View>
-      {!state.nodes.length && state.phase !== 'loading' ? <Text style={[styles.empty, { color: colors.textMuted }]}>{t('directories.noEntries')}</Text> : null}
+      {!state.nodes.length && state.phase !== 'loading' ? <EmptyState icon={{ android: 'dns', ios: 'server.rack' }} iconSize={24} message={t('directories.noEntries')} style={styles.empty} /> : null}
     </DrawerContentScrollView>
     <View style={styles.footer}>
       <Pressable
@@ -84,16 +89,18 @@ export function InstanceDrawerContent(props: DrawerContentComponentProps) {
   </View>;
 }
 
-function DrawerRow({ active = false, count, icon, label, onPress, subtitle }: { active?: boolean; count?: number; icon: 'all' | 'instance' | 'settings'; label: string; onPress(): void; subtitle?: string }) {
+function DrawerRow({ active = false, count, icon, label, nested = false, onPress, subtitle }: { active?: boolean; count?: number; icon: 'all' | 'instance' | 'settings' | 'triggers'; label: string; nested?: boolean; onPress(): void; subtitle?: string }) {
   const { colors } = useMobileTheme();
-  const icons = icon === 'all' ? { android: 'select_all' as const, ios: 'square.grid.2x2' as const } : icon === 'settings' ? { android: 'settings' as const, ios: 'gearshape' as const } : { android: 'deployed_code' as const, ios: 'shippingbox' as const };
+  const icons = icon === 'all' ? { android: 'select_all' as const, ios: 'square.grid.2x2' as const } : icon === 'settings' ? { android: 'settings' as const, ios: 'gearshape' as const } : icon === 'triggers' ? { android: 'bolt' as const, ios: 'bolt' as const } : { android: 'deployed_code' as const, ios: 'shippingbox' as const };
   return <Pressable accessibilityRole="button" accessibilityState={{ selected: active }} onPress={onPress} style={({ pressed }) => [styles.row, active && { backgroundColor: colors.surfaceMuted }, pressed && !active && styles.pressed]}>
-    <SystemIcon android={icons.android} color={active ? colors.text : colors.textMuted} ios={icons.ios} size={18} />
-    <View style={styles.rowCopy}>
-      <Text numberOfLines={1} style={[styles.rowLabel, { color: colors.text }, active && styles.activeLabel]}>{label}</Text>
-      {subtitle ? <Text numberOfLines={1} style={[styles.rowSubtitle, { color: colors.textMuted }]}>{subtitle}</Text> : null}
+    <View style={[styles.rowContent, nested && styles.nestedRowContent]}>
+      <SystemIcon android={icons.android} color={active ? colors.text : colors.textMuted} ios={icons.ios} size={18} />
+      <View style={styles.rowCopy}>
+        <Text numberOfLines={1} style={[styles.rowLabel, { color: colors.text }, active && styles.activeLabel]}>{label}</Text>
+        {subtitle ? <Text numberOfLines={1} style={[styles.rowSubtitle, { color: colors.textMuted }]}>{subtitle}</Text> : null}
+      </View>
+      {count !== undefined ? <Text style={[styles.count, { color: colors.textMuted }]}>{count}</Text> : null}
     </View>
-    {count !== undefined ? <Text style={[styles.count, { color: colors.textMuted }]}>{count}</Text> : null}
   </Pressable>;
 }
 
@@ -107,7 +114,9 @@ const styles = StyleSheet.create({
   controlPlane: { fontSize: 12 },
   sectionLabel: { fontSize: 14, fontWeight: '600', paddingBottom: 12, paddingHorizontal: 8, paddingTop: 34 },
   nodeGroups: { gap: 20 },
-  row: { alignItems: 'center', borderRadius: 12, flexDirection: 'row', gap: 13, minHeight: 54, paddingHorizontal: 12, paddingVertical: 7 },
+  row: { borderRadius: 12, minHeight: 54, paddingHorizontal: 12, paddingVertical: 7 },
+  rowContent: { alignItems: 'center', flex: 1, flexDirection: 'row', gap: 13, minWidth: 0 },
+  nestedRowContent: { paddingLeft: 20 },
   rowCopy: { flex: 1, gap: 2, minWidth: 0 },
   rowLabel: { fontSize: 16 },
   rowSubtitle: { fontSize: 12 },
@@ -120,7 +129,7 @@ const styles = StyleSheet.create({
   statusDot: { borderRadius: 999, height: 6, width: 6 },
   count: { fontSize: 12, fontVariant: ['tabular-nums'], fontWeight: '500' },
   instanceList: { gap: 2, paddingTop: 4 },
-  empty: { fontSize: 13, paddingHorizontal: 4, paddingVertical: 20 },
+  empty: { paddingHorizontal: 4, paddingVertical: 20 },
   pressed: { opacity: 0.58 },
   footer: { alignItems: 'flex-end', paddingBottom: 22, paddingHorizontal: 24, paddingTop: 10 },
   settingsButton: { alignItems: 'center', borderRadius: 27, height: 54, justifyContent: 'center', width: 54 },

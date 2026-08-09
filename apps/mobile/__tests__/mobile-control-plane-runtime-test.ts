@@ -18,7 +18,7 @@ const profile: MobileControlPlaneProfile = {
     protocolVersion: '2026-08-05',
   },
   access: { kind: 'direct', origin: 'https://control.example.com', secureSessionKey: 'session.runtime' },
-  capabilities: { authentication: 'required', aiSessions: true, nodes: true, instanceBoard: true },
+  capabilities: { authentication: 'required', aiSessions: true, nodes: true, instanceBoard: true, triggers: true },
   createdAt: '2026-08-05T00:00:00.000Z',
   updatedAt: '2026-08-05T00:00:00.000Z',
 };

@@ -1,4 +1,4 @@
-import { render } from '@testing-library/react-native';
+import { act, render, waitFor } from '@testing-library/react-native';
 import { StyleSheet } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { aiSessionStatusGroup, ControlPlaneAiSessionsSchema } from '@task-handoff/control-plane-client';
@@ -30,6 +30,20 @@ const snapshot = ControlPlaneAiSessionsSchema.parse({
 });
 
 describe('<InboxRoute />', () => {
+  test('pairs an empty session message with a contextual icon', async () => {
+    const screen = await render(
+      <AiSessionInbox state={{
+        controlPlaneId: 'cp-1',
+        messages: {},
+        snapshot: ControlPlaneAiSessionsSchema.parse({ updatedAt: '2026-08-05T00:02:00.000Z', instances: [] }),
+        sync: { phase: 'ready' },
+      }} />,
+    );
+
+    expect(screen.getByText('No AI Sessions yet.')).toBeTruthy();
+    expect(screen.getByTestId('empty-state-icon')).toBeTruthy();
+  });
+
   test('renders the mobile Control Plane entry point', async () => {
     const screen = await render(
       <SafeAreaProvider
@@ -60,6 +74,19 @@ describe('<InboxRoute />', () => {
       expect.objectContaining({ prompt: 'Build mobile', turnCount: 2, turnIndex: 1 }),
       expect.objectContaining({ prompt: 'Approve change', turnCount: 1, turnIndex: 0 }),
     ]);
+  });
+
+  test('pulling the inbox refreshes its authoritative snapshot and clears the indicator', async () => {
+    const onRefresh = jest.fn().mockResolvedValue(undefined);
+    const screen = await render(
+      <AiSessionInbox onRefresh={onRefresh} state={{ controlPlaneId: 'cp-1', messages: {}, snapshot, sync: { phase: 'ready' } }} />,
+    );
+    const list = screen.getByTestId('swipe-action-list');
+
+    await act(async () => { list.props.onRefresh(); });
+
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.getByTestId('swipe-action-list').props.refreshing).toBe(false));
   });
 
   test('sorts by the latest user message despite status and later assistant activity', async () => {

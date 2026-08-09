@@ -35,7 +35,7 @@ test("Docker exports cumulative Codex, AI, and Browser image profiles", () => {
   assert.match(dockerfile, /io\.task-handoff\.image\.capabilities=terminal,gui-terminal,browser,vscode-web,codex,claude/);
 });
 
-test("Docker image bakes a versioned bootstrap runtime and retains the managed runtime launcher", () => {
+test("Docker image bakes a versioned bootstrap runtime while the managed launcher waits for the node-agent artifact", () => {
   const dockerfile = fs.readFileSync(path.join(root, "Dockerfile"), "utf8");
 
   assert.match(dockerfile, /ARG TASK_HANDOFF_VERSION=0\.0\.1[\s\S]*TASK_HANDOFF_VERSION="\$\{TASK_HANDOFF_VERSION\}" pnpm run runtime:pack:controlled-instance/);
@@ -46,8 +46,9 @@ test("Docker image bakes a versioned bootstrap runtime and retains the managed r
   assert.match(dockerfile, /COPY docker\/instance-launcher\.sh/);
   assert.match(dockerfile, /COPY docker\/runtime-installer\.mjs/);
   const launcher = fs.readFileSync(path.join(root, "docker", "instance-launcher.sh"), "utf8");
-  assert.match(launcher, /command -v task-handoff-controlled-instance/);
-  assert.match(launcher, /exec task-handoff-controlled-instance web/);
+  assert.match(launcher, /while \[ ! -L "\$\{current\}" \]/);
+  assert.doesNotMatch(launcher, /command -v task-handoff-controlled-instance/);
+  assert.doesNotMatch(launcher, /exec task-handoff-controlled-instance web/);
   assert.match(launcher, /await import\(pathToFileURL\(entrypoint\)\.href\)/);
 });
 

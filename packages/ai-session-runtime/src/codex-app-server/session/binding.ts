@@ -22,6 +22,7 @@ type BindingSession = {
   appId?: string;
   status?: string;
   socketPath?: string;
+  command?: string;
   activeThreadId?: string;
   threadIds: readonly string[];
 };
@@ -44,6 +45,7 @@ function bindingSession(value: unknown): BindingSession | undefined {
     appId: typeof value.appId === "string" ? value.appId : undefined,
     status: typeof value.status === "string" ? value.status : undefined,
     socketPath: nonEmptyString(appServer?.socketPath),
+    command: nonEmptyString(appServer?.command),
     activeThreadId: typeof ai?.activeThreadId === "string" ? ai.activeThreadId : undefined,
     threadIds: Array.isArray(ai?.threadIds)
       ? ai.threadIds.filter((threadId): threadId is string => typeof threadId === "string")
@@ -67,9 +69,14 @@ export function codexAppServerSocketPath(appSessions: readonly unknown[]) {
 export class CodexAppServerSessionBinding {
   private sessions: readonly BindingSession[] = [];
   private socketPathValue?: string;
+  private commandValue?: string;
 
   get socketPath() {
     return this.socketPathValue;
+  }
+
+  get command() {
+    return this.commandValue;
   }
 
   update(appSessions: readonly unknown[] = []) {
@@ -77,13 +84,16 @@ export class CodexAppServerSessionBinding {
       const session = bindingSession(value);
       return session ? [session] : [];
     });
-    this.socketPathValue = this.sessions.find(isRunningCodexSession)?.socketPath;
+    const activeSession = this.sessions.find(isRunningCodexSession);
+    this.socketPathValue = activeSession?.socketPath;
+    this.commandValue = activeSession?.command;
     return this.socketPathValue;
   }
 
   clear() {
     this.sessions = [];
     this.socketPathValue = undefined;
+    this.commandValue = undefined;
   }
 
   appSessionIdForThread(threadId: string) {

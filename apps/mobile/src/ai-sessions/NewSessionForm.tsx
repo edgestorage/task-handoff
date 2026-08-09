@@ -1,9 +1,11 @@
-import { Alert, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import type { ControlPlaneInstanceDirectoryEntry, ControlPlaneNodeDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
 
+import { AnchoredSelectMenu, type AnchoredSelectOption } from '../components/AnchoredSelectMenu';
 import { Screen } from '../components/Screen';
 import { SystemIcon } from '../components/SystemIcon';
 import { useMobileTheme } from '../components/theme';
-import { useI18n, type Translate } from '../i18n';
+import { useI18n } from '../i18n';
 import {
   SESSION_COMPOSER_ACTION_ICON_SIZE,
   SESSION_COMPOSER_ACTION_RADIUS,
@@ -12,16 +14,22 @@ import {
   SESSION_COMPOSER_TOOLBAR_HEIGHT,
 } from './composer-metrics';
 import type { NewSessionFormProps } from './new-session-types';
+import { NewSessionContextMenu } from './NewSessionContextMenu';
+
+const DEFAULT_WORKSPACE_VALUE = '__default-workspace__';
 
 export function NewSessionForm(props: NewSessionFormProps) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
   const selectedAgentName = props.selectedInstance?.availableAgents.find((agent) => agent.id === props.selectedAgent)?.name;
-  const selectedFolder = props.folders.find((folder) => folder.path === props.cwd);
-  const folderName = selectedFolder?.name || pathName(props.cwd) || t('sessions.selectFolder');
-  const folderOptions = props.folders.length
-    ? props.folders.map((folder) => ({ label: `${folder.name} — ${folder.path}`, value: folder.path }))
-    : props.cwd ? [{ label: `${folderName} — ${props.cwd}`, value: props.cwd }] : [];
+  const selectedFolder = props.folders.find((folder) => folder.id === props.selectedFolderId);
+  const folderName = selectedFolder?.name || t('appSessions.defaultWorkspace');
+  const instanceOptions = newSessionInstanceOptions(props.instances, props.nodes);
+  const folderOptions: AnchoredSelectOption[] = [
+    { label: t('appSessions.defaultWorkspace'), systemImage: 'folder', value: DEFAULT_WORKSPACE_VALUE },
+    ...props.folders.map((folder) => ({ label: folder.name, description: folder.path, systemImage: 'folder' as const, value: folder.id })),
+  ];
+  const agentOptions: AnchoredSelectOption[] = (props.selectedInstance?.availableAgents ?? []).map((agent) => ({ label: agent.name, systemImage: 'sparkles', value: agent.id }));
 
   return <KeyboardAvoidingView behavior={newSessionKeyboardAvoidingBehavior(Platform.OS)} style={styles.screen} testID="new-session-keyboard-area">
     <Screen
@@ -37,21 +45,15 @@ export function NewSessionForm(props: NewSessionFormProps) {
 
       <View style={[styles.composer, { backgroundColor: colors.surface, borderColor: colors.border }]}>
         <View style={styles.contextRow}>
-          <ContextPill
-            icon={{ android: 'dns', ios: 'server.rack' }}
-            label={props.selectedInstance?.name || t('sessions.selectInstance')}
-            onPress={() => choose(t('sessions.instance'), props.instances.map((instance) => ({ label: instance.name, value: instance.id })), props.onInstanceChange, t)}
-          />
-          <ContextPill
-            icon={{ android: 'folder', ios: 'folder' }}
-            label={folderName}
-            onPress={() => choose(t('sessions.folder'), folderOptions, props.onCwdChange, t)}
-          />
-          <ContextPill
-            icon={{ android: 'auto_awesome', ios: 'sparkles' }}
-            label={selectedAgentName || 'Choose agent'}
-            onPress={() => choose('Agent', (props.selectedInstance?.availableAgents ?? []).map((agent) => ({ label: agent.name, value: agent.id })), props.onAgentChange, t)}
-          />
+          <NewSessionContextMenu cancelLabel={t('common.cancel')} onSelect={props.onInstanceChange} options={instanceOptions} selectedValue={props.selectedInstanceId} title={t('sessions.instance')}>
+            {(onPress) => <ContextPill disabled={!instanceOptions.length} icon={{ android: 'dns', ios: 'server.rack' }} label={props.selectedInstance?.name || t('sessions.selectInstance')} onPress={onPress} />}
+          </NewSessionContextMenu>
+          <NewSessionContextMenu cancelLabel={t('common.cancel')} onSelect={(value) => props.onFolderChange(value === DEFAULT_WORKSPACE_VALUE ? undefined : value)} options={folderOptions} selectedValue={props.selectedFolderId ?? DEFAULT_WORKSPACE_VALUE} title={t('sessions.folder')}>
+            {(onPress) => <ContextPill disabled={!folderOptions.length} icon={{ android: 'folder', ios: 'folder' }} label={folderName} onPress={onPress} />}
+          </NewSessionContextMenu>
+          <NewSessionContextMenu cancelLabel={t('common.cancel')} onSelect={props.onAgentChange} options={agentOptions} selectedValue={props.selectedAgent} title={t('sessions.agent')}>
+            {(onPress) => <ContextPill disabled={!agentOptions.length} icon={{ android: 'auto_awesome', ios: 'sparkles' }} label={selectedAgentName || t('sessions.selectAgent')} onPress={onPress} />}
+          </NewSessionContextMenu>
         </View>
 
         <TextInput
@@ -84,9 +86,14 @@ export function NewSessionForm(props: NewSessionFormProps) {
   </KeyboardAvoidingView>;
 }
 
-function ContextPill({ icon, label, onPress }: { icon: { android: 'dns' | 'auto_awesome' | 'folder'; ios: 'server.rack' | 'sparkles' | 'folder' }; label: string; onPress(): void }) {
+export function newSessionInstanceOptions(instances: readonly ControlPlaneInstanceDirectoryEntry[], nodes: readonly ControlPlaneNodeDirectoryEntry[]): AnchoredSelectOption[] {
+  const nodeNames = new Map(nodes.map((node) => [node.id, node.name]));
+  return instances.map((instance) => ({ label: instance.name, description: nodeNames.get(instance.nodeId) || instance.nodeId, systemImage: 'server.rack', value: instance.id }));
+}
+
+function ContextPill({ disabled, icon, label, onPress }: { disabled?: boolean; icon: { android: 'dns' | 'auto_awesome' | 'folder'; ios: 'server.rack' | 'sparkles' | 'folder' }; label: string; onPress?: () => void }) {
   const { colors } = useMobileTheme();
-  return <Pressable accessibilityRole="button" onPress={onPress} style={({ pressed }) => [styles.contextPill, { backgroundColor: colors.surfaceMuted }, pressed && styles.pressed]}>
+  return <Pressable accessibilityLabel={label} accessibilityRole="button" accessibilityState={{ disabled: Boolean(disabled) }} disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.contextPill, { backgroundColor: colors.surfaceMuted }, disabled && styles.disabled, pressed && styles.pressed]}>
     <SystemIcon android={icon.android} color={colors.textMuted} ios={icon.ios} size={15} />
     <Text numberOfLines={1} style={[styles.contextLabel, { color: colors.text }]}>{label}</Text>
     <SystemIcon android="expand_more" color={colors.textMuted} ios="chevron.down" size={11} />
@@ -96,28 +103,19 @@ function ContextPill({ icon, label, onPress }: { icon: { android: 'dns' | 'auto_
 function PermissionButton({ mode, onChange }: { mode: NewSessionFormProps['permissionMode']; onChange(value: NewSessionFormProps['permissionMode']): void }) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
-  const label = mode === 'ask' ? t('composer.askBeforeChanges') : mode === 'auto-review' ? t('composer.autoReview') : t('composer.fullAccess');
-  return <Pressable
-    accessibilityRole="button"
-    onPress={() => choose(t('sessions.permission'), [
-      { label: t('composer.askBeforeChanges'), value: 'ask' },
-      { label: t('composer.autoReview'), value: 'auto-review' },
-      { label: t('composer.fullAccess'), value: 'full-access' },
-    ], (value) => onChange(value as NewSessionFormProps['permissionMode']), t)}
-    style={({ pressed }) => [styles.permissionButton, pressed && styles.pressed]}
-  >
-    <SystemIcon android="verified_user" color={colors.textMuted} ios="hand.raised" size={16} />
-    <Text style={[styles.permissionLabel, { color: colors.textMuted }]}>{label}</Text>
-    <SystemIcon android="expand_more" color={colors.textMuted} ios="chevron.down" size={10} />
-  </Pressable>;
-}
-
-function choose(title: string, options: { label: string; value: string }[], onSelect: (value: string) => void, t: Translate) {
-  Alert.alert(title, undefined, [...options.map((option) => ({ text: option.label, onPress: () => onSelect(option.value) })), { text: t('common.cancel'), style: 'cancel' }]);
-}
-
-function pathName(path: string) {
-  return path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || '';
+  const options: AnchoredSelectOption<NewSessionFormProps['permissionMode']>[] = [
+    { value: 'ask', label: t('composer.ask'), description: t('composer.askDescription'), systemImage: 'hand.raised' },
+    { value: 'auto-review', label: t('composer.autoReview'), description: t('composer.autoReviewDescription'), systemImage: 'checkmark.shield' },
+    { value: 'full-access', label: t('composer.fullAccess'), description: t('composer.fullAccessDescription'), systemImage: 'exclamationmark.shield', danger: true },
+  ];
+  const selected = options.find((option) => option.value === mode) || options[0];
+  return <AnchoredSelectMenu cancelLabel={t('common.cancel')} onSelect={onChange} options={options} selectedValue={mode} title={t('sessions.permission')}>
+    {(onPress) => <Pressable accessibilityLabel={t('composer.permissionModeValue', { mode: selected.label })} accessibilityRole="button" onPress={onPress} style={({ pressed }) => [styles.permissionButton, pressed && styles.pressed]}>
+      <SystemIcon android="verified_user" color={selected.danger ? colors.error : colors.textMuted} ios={selected.systemImage || 'hand.raised'} size={16} />
+      <Text style={[styles.permissionLabel, { color: selected.danger ? colors.error : colors.textMuted }]}>{selected.label}</Text>
+      <SystemIcon android="expand_more" color={colors.textMuted} ios="chevron.down" size={10} />
+    </Pressable>}
+  </AnchoredSelectMenu>;
 }
 
 export function newSessionKeyboardAvoidingBehavior(platform: string): 'padding' | undefined {

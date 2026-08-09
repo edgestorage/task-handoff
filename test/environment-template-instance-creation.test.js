@@ -59,10 +59,9 @@ test("template-derived instances combine with independent Git and local workspac
   assert.equal(git.imageSnapshot.resolvedDigest, imageId);
   assert.equal(git.status, "created");
   assert.equal(git.imageProvisioning, undefined);
-  assert.deepEqual(git.runtime.managedVolumes.map((volume) => volume.role).sort(), ["agent-home", "data", "workspace"]);
-  assert.deepEqual(local.runtime.managedVolumes.map((volume) => volume.role).sort(), ["agent-home", "data"]);
+  assert.equal("managedVolumes" in git.runtime, false);
+  assert.equal("managedVolumes" in local.runtime, false);
   assert.notEqual(git.registrationToken, local.registrationToken);
-  assert.equal(new Set([...git.runtime.managedVolumes, ...local.runtime.managedVolumes].map((volume) => volume.name)).size, 5);
   assert.equal(state.instancePrivateConfigs.get(git.id).instanceCredential, git.registrationToken);
   assert.equal(state.instancePrivateConfigs.get(local.id).instanceCredential, local.registrationToken);
   const persistedGit = JSON.parse(fs.readFileSync(state.paths.controlledInstancesDir + "/inst_git.json", "utf8"));
@@ -70,8 +69,8 @@ test("template-derived instances combine with independent Git and local workspac
 
   const gitRunArgs = dockerRunArgs(state.context(git), "task-handoff-inst_git");
   const localRunArgs = dockerRunArgs(state.context(local), "task-handoff-inst_local");
-  assert.equal(gitRunArgs.at(-1), imageId);
-  assert.equal(localRunArgs.at(-1), imageId);
+  assert.equal(gitRunArgs.at(-4), imageId);
+  assert.equal(localRunArgs.at(-4), imageId);
   assert.ok(gitRunArgs.includes("type=volume,src=task-handoff-inst_git-workspace,dst=/workspace"));
   assert.ok(localRunArgs.includes("/tmp/local-project:/workspace:rw"));
 });

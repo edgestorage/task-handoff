@@ -430,4 +430,21 @@ describe('MobileAiSessionStore identity isolation', () => {
       jest.useRealTimers();
     }
   });
+
+  test('explicitly refreshes AI Sessions from the authoritative list snapshot', async () => {
+    const store = new MobileAiSessionStore();
+    const initial = snapshot('instance-refresh', 'session-before');
+    const refreshed = snapshot('instance-refresh', 'session-after');
+    const list = jest.fn().mockResolvedValueOnce(initial).mockResolvedValueOnce(refreshed);
+    const client = { auth: { session: jest.fn().mockResolvedValue({ authenticated: true }) }, aiSessions: { list } } as unknown as ControlPlaneClient;
+    const transport = { connectEvents: jest.fn(() => ({ close: jest.fn() })) } as unknown as MobileControlPlaneTransport;
+    const controller = new MobileAiSessionController('cp-refresh', client, transport, store);
+
+    await controller.start();
+    await controller.refresh();
+
+    expect(list).toHaveBeenCalledTimes(2);
+    expect(store.session('cp-refresh', 'instance-refresh', 'session-after')).toBeDefined();
+    controller.stop();
+  });
 });

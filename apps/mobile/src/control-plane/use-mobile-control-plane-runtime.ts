@@ -274,6 +274,7 @@ export type MobileControlPlaneRuntimeValue = {
   controlPlaneOrigin?: string;
   coordinator?: MobileControlPlaneConnectionCoordinator;
   phase: MobileControlPlaneRuntimePhase;
+  triggerCapability: boolean;
   transport?: MobileControlPlaneTransport;
 };
 
@@ -331,15 +332,18 @@ export function MobileControlPlaneRuntimeProvider({
       coordinator?.stop();
     };
   }, [dependencies]);
+  const activeCarPlayConnected = active?.coordinator.isCarPlayConnected() ?? false;
+  const activePhase = active?.coordinator.snapshot().phase ?? 'idle';
   const value = useMemo<MobileControlPlaneRuntimeValue>(() => ({
     api: active?.direct.api,
-    carPlayConnected: active?.coordinator.isCarPlayConnected() ?? false,
+    carPlayConnected: activeCarPlayConnected,
     controlPlaneId: active?.profile.identity.controlPlaneId,
     controlPlaneOrigin: active?.profile.access.origin,
     coordinator: active?.coordinator,
-    phase: active?.coordinator.snapshot().phase ?? 'idle',
+    phase: activePhase,
+    triggerCapability: active?.profile.capabilities.triggers === true,
     transport: active?.direct.transport,
-  }), [active, active?.coordinator.isCarPlayConnected(), active?.coordinator.snapshot().phase]);
+  }), [active, activeCarPlayConnected, activePhase]);
   return createElement(Context.Provider, { value }, children);
 }
 

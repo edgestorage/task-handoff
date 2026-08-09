@@ -4,10 +4,10 @@ import { useActiveDirectories } from '../../src/directories/use-directories';
 
 export default function NodeInstancesRoute() {
   const { nodeId } = useLocalSearchParams<{ nodeId: string }>();
-  const { state } = useActiveDirectories();
+  const { refresh, state } = useActiveDirectories();
   const node = state.nodes.find((candidate) => candidate.id === nodeId);
   return <>
     <Stack.Screen options={{ title: node?.name || 'Node' }} />
-    <InstancesDirectory nodeId={nodeId} state={state} onOpen={(instance) => router.push({ pathname: '/instances/[instanceId]', params: { instanceId: instance.id } })} />
+    <InstancesDirectory nodeId={nodeId} state={state} onRefresh={refresh} onOpen={(instance) => router.push({ pathname: '/instances/[instanceId]', params: { instanceId: instance.id } })} />
   </>;
 }

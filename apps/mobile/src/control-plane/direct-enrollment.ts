@@ -10,6 +10,7 @@ import { createControlPlaneClient, type ControlPlaneClientTransport } from '@tas
 import type { SecureValueStore } from '../platform/secure-storage';
 import {
   MOBILE_CONTROL_PLANE_PROFILE_VERSION,
+  normalizeMobileControlPlaneCapabilities,
   type MobileControlPlaneProfile,
 } from './profile';
 
@@ -201,7 +202,7 @@ export async function loginDirectControlPlane(
       protocolVersion: target.identity.protocolVersion,
     },
     access: { kind: 'direct', origin: target.origin, secureSessionKey },
-    capabilities: target.identity.capabilities,
+    capabilities: normalizeMobileControlPlaneCapabilities(target.identity.capabilities),
     createdAt: timestamp,
     updatedAt: timestamp,
   };

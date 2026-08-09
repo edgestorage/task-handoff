@@ -59,10 +59,12 @@ test("preload API delegates privileged desktop operations through IPC", async ()
   assert.equal(api.windowChrome.mode, "macos-overlay");
   assert.equal(api.getPathForFile({ name: "project" }), "/files/project");
   await api.openControlPlaneWindow("/repository-workspace");
+  await api.setDiagnosticLogsEnabled(true);
   await api.desktopUpdates.check();
   await api.desktopUpdates.install();
   assert.deepEqual(invocations, [
     ["task-handoff:open-control-plane-window", "/repository-workspace"],
+    ["task-handoff:set-diagnostic-logs-enabled", true],
     ["task-handoff:desktop-update-check"],
     ["task-handoff:desktop-update-install"],
   ]);

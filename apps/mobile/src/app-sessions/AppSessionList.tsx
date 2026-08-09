@@ -4,7 +4,9 @@ import { useRouter } from 'expo-router';
 import type { AppSessionRecord } from '@task-handoff/protocol/app-sessions';
 
 import { useMobileTheme } from '../components/theme';
+import { EmptyState } from '../components/EmptyState';
 import { SwipeActionList } from '../components/SwipeActionList';
+import { usePullToRefresh } from '../components/use-pull-to-refresh';
 import type { MobileDirectoryProfileState } from '../directories/store';
 import type { AiSessionScope } from '../ai-sessions/store';
 import { useI18n } from '../i18n';
@@ -16,15 +18,17 @@ type Entry = { instanceId: string; instanceName: string; session: AppSessionReco
 type Props = {
   directory: MobileDirectoryProfileState;
   onCloseSession(instanceId: string, sessionId: string): Promise<void>;
+  onRefresh?: () => Promise<void>;
   scope: Extract<AiSessionScope, { kind: 'all' | 'instance' }>;
   state: MobileAppSessionProfileState;
 };
 
-export function AppSessionList({ state, directory, onCloseSession, scope }: Props) {
+export function AppSessionList({ state, directory, onCloseSession, onRefresh, scope }: Props) {
   const { colors } = useMobileTheme();
   const { locale, t } = useI18n();
   const router = useRouter();
   const [closingKey, setClosingKey] = useState('');
+  const pullToRefresh = usePullToRefresh(onRefresh);
   const entries = useMemo(() => {
     const names = new Map(directory.instances.map((instance) => [instance.id, instance.name]));
     return (state.snapshot?.instances ?? []).flatMap((entry) => scope.kind === 'instance' && scope.instanceId !== entry.instanceId ? [] : entry.appSessions.sessions.map((session) => ({ instanceId: entry.instanceId, instanceName: names.get(entry.instanceId) || entry.instanceId, session })))
@@ -57,7 +61,16 @@ export function AppSessionList({ state, directory, onCloseSession, scope }: Prop
     itemContainerStyle={styles.cardContainer}
     keyExtractor={(entry) => `${entry.instanceId}:${entry.session.id}`}
     ListHeaderComponent={statusMessage ? <Text accessibilityLiveRegion="polite" style={[styles.notice, { backgroundColor: colors.notice, color: colors.noticeText }]}>{statusMessage}</Text> : null}
-    ListEmptyComponent={<View style={styles.empty}><Text style={[styles.emptyText, { color: colors.textMuted }]}>{state.sync.phase === 'error' ? t('appSessions.loadError') : t('appSessions.empty')}</Text></View>}
+    ListEmptyComponent={<EmptyState
+      icon={state.sync.phase === 'error'
+        ? { android: 'error_outline', ios: 'exclamationmark.circle' }
+        : { android: 'deployed_code', ios: 'shippingbox' }}
+      iconColor={state.sync.phase === 'error' ? colors.error : undefined}
+      message={state.sync.phase === 'error' ? t('appSessions.loadError') : t('appSessions.empty')}
+      style={styles.empty}
+    />}
+    onRefresh={pullToRefresh.onRefresh}
+    refreshing={pullToRefresh.refreshing}
     swipeAction={(item) => canCloseAppSession(item.session.status) ? {
       disabled: state.sync.phase !== 'ready' || Boolean(closingKey) || item.session.status === 'stopping',
       label: closingKey === `${item.instanceId}:${item.session.id}` || item.session.status === 'stopping' ? t('appSessions.closing') : t('appSessions.close'),
@@ -94,5 +107,5 @@ function AppSessionCard({ entry, locale, onPress }: { entry: Entry; locale: stri
 }
 
 const styles = StyleSheet.create({
-  loading: { flex: 1 }, list: { paddingBottom: 112, paddingTop: 16 }, cardContainer: { marginBottom: 12, marginHorizontal: 20 }, empty: { alignItems: 'center', justifyContent: 'center', minHeight: 240, padding: 24 }, emptyText: { fontSize: 15 }, notice: { borderRadius: 10, fontSize: 13, lineHeight: 18, marginBottom: 12, marginHorizontal: 20, padding: 12 }, card: { borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' }, cardContent: { gap: 8, paddingHorizontal: 16, paddingVertical: 12 }, pressed: { opacity: 0.6 }, heading: { alignItems: 'center', flexDirection: 'row', gap: 10 }, title: { flex: 1, fontSize: 17, fontWeight: '700', lineHeight: 22 }, badge: { alignItems: 'center', borderRadius: 999, flexDirection: 'row', gap: 5, paddingHorizontal: 7, paddingVertical: 4 }, dot: { borderRadius: 4, height: 7, width: 7 }, status: { fontSize: 12, fontWeight: '600', lineHeight: 17, textTransform: 'capitalize' }, meta: { fontSize: 14, lineHeight: 19 }, footer: { alignItems: 'center', flexDirection: 'row', gap: 12, minHeight: 19 }, cwd: { flex: 1, fontFamily: 'monospace', fontSize: 14, lineHeight: 19, minWidth: 0 }, time: { flexShrink: 0, fontSize: 12, lineHeight: 17, marginLeft: 'auto' },
+  loading: { flex: 1 }, list: { paddingTop: 16 }, cardContainer: { marginBottom: 12, marginHorizontal: 20 }, empty: { minHeight: 240 }, notice: { borderRadius: 10, fontSize: 13, lineHeight: 18, marginBottom: 12, marginHorizontal: 20, padding: 12 }, card: { borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' }, cardContent: { gap: 8, paddingHorizontal: 16, paddingVertical: 12 }, pressed: { opacity: 0.6 }, heading: { alignItems: 'center', flexDirection: 'row', gap: 10 }, title: { flex: 1, fontSize: 17, fontWeight: '700', lineHeight: 22 }, badge: { alignItems: 'center', borderRadius: 999, flexDirection: 'row', gap: 5, paddingHorizontal: 7, paddingVertical: 4 }, dot: { borderRadius: 4, height: 7, width: 7 }, status: { fontSize: 12, fontWeight: '600', lineHeight: 17, textTransform: 'capitalize' }, meta: { fontSize: 14, lineHeight: 19 }, footer: { alignItems: 'center', flexDirection: 'row', gap: 12, minHeight: 19 }, cwd: { flex: 1, fontFamily: 'monospace', fontSize: 14, lineHeight: 19, minWidth: 0 }, time: { flexShrink: 0, fontSize: 12, lineHeight: 17, marginLeft: 'auto' },
 });

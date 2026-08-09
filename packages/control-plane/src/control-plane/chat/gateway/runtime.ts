@@ -87,6 +87,7 @@ type ControlPlaneChatGatewayRuntimeOptions = {
     onSnapshot: (listener: (update: ControlPlaneAiSessionSnapshotUpdate) => void) => () => void;
   };
   logger?: ChatGatewayLogger;
+  diagnosticLogsEnabled?: () => boolean;
   telegramProgressUpdateIntervalMs?: number;
   larkProgressUpdateIntervalMs?: number;
 };
@@ -167,6 +168,7 @@ export class ControlPlaneChatGatewayRuntime {
   private readonly service: ChatGatewayService;
   private readonly fetchImpl: typeof fetch;
   private readonly logger: ChatGatewayLogger | undefined;
+  private readonly diagnosticLogsEnabled: () => boolean;
   private bridgeTimers = new Map<string, Timer>();
   private bridgePollingGenerations = new Map<string, number>();
   private bridgePolls = new Map<string, { generation: number; promise: Promise<void> }>();
@@ -189,7 +191,8 @@ export class ControlPlaneChatGatewayRuntime {
   constructor(service: ChatGatewayService, fetchImpl: typeof fetch = fetch, options: ControlPlaneChatGatewayRuntimeOptions = {}) {
     this.service = service;
     this.fetchImpl = fetchImpl;
-    this.logger = chatGatewayDiagnosticLogsEnabled() ? options.logger : undefined;
+    this.logger = options.logger;
+    this.diagnosticLogsEnabled = options.diagnosticLogsEnabled || chatGatewayDiagnosticLogsEnabled;
     this.aiSessionInstanceNamesCache = new AsyncTtlCache(AI_SESSION_INSTANCE_NAMES_TTL_MS, async () => {
       const instances = await (this.service.listAiSessionInstanceNames?.() || this.service.boardAsync()).catch(() => []);
       return new Map(instances.map((instance) => [instance.id, instance.name || instance.id] as const));
@@ -284,10 +287,12 @@ export class ControlPlaneChatGatewayRuntime {
   }
 
   private logInfo(data: Record<string, unknown>, message: string) {
+    if (!this.diagnosticLogsEnabled()) return;
     this.logger?.info?.({ component: "control-plane-chat-gateway", ...data }, message);
   }
 
   private logWarn(data: Record<string, unknown>, message: string) {
+    if (!this.diagnosticLogsEnabled()) return;
     this.logger?.warn?.({ component: "control-plane-chat-gateway", ...data }, message);
   }
 

@@ -384,14 +384,26 @@ test("controlled instance routes create, bind, and close one Direct AI session i
     const shutdownSession = await app.inject({
       method: "POST",
       url: "/api/ai-sessions",
-      payload: { agent: "codex", cwd: { type: "runtime-path", path: fixture.root }, message: "Close on shutdown.", clientRequestId: "route-shutdown" },
+      payload: { agent: "codex", cwd: { type: "runtime-path", path: fixture.root }, message: "Preserve on shutdown.", clientRequestId: "route-shutdown" },
     });
     assert.equal(shutdownSession.statusCode, 200);
     assert.ok(aiSessions.get(shutdownSession.json().data.aiSessionId));
+    aiSessions.applyAdapterSnapshot({
+      agent: "codex",
+      creationSource: "app-session",
+      appId: "codex",
+      appSessionId: "app-preserved-on-shutdown",
+      providerSessionId: "thread-app-preserved-on-shutdown",
+      cwd: fixture.root,
+      status: "idle",
+    });
   } finally {
     await app.close();
     restore();
   }
-  assert.deepEqual(archived, ["thread-route-1", "thread-route-2"]);
-  assert.deepEqual(aiSessions.all(), []);
+  assert.deepEqual(archived, ["thread-route-1"]);
+  assert.deepEqual(
+    aiSessions.all().map((session) => session.providerSessionId).sort(),
+    ["thread-app-preserved-on-shutdown", "thread-route-2"],
+  );
 });

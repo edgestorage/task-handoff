@@ -5,23 +5,10 @@ import type { ValueStore } from '../platform/secure-storage';
 
 const CREATE_REQUEST_VERSION = 1;
 
-export function runtimePathForInstance(rawPath: string, instance: Pick<ControlPlaneInstanceDirectoryEntry, 'workspace'>) {
-  const value = rawPath.trim().replace(/\\/g, '/');
-  const root = instance.workspace.path?.replace(/\\/g, '/').replace(/\/$/, '');
-  if (!value || /^[a-z][a-z0-9+.-]*:/i.test(value) || (!value.startsWith('/') && !/^[A-Za-z]:\//.test(value))) {
-    throw lifecycleError('AI_SESSION_CWD_INVALID', 'Choose an absolute path inside the target controlled instance. Device URIs are not accepted.');
-  }
-  if (value.split('/').includes('..')) throw lifecycleError('AI_SESSION_CWD_INVALID', 'Runtime paths cannot traverse outside the selected workspace.');
-  if (!root || !(value === root || value.startsWith(`${root}/`))) {
-    throw lifecycleError('AI_SESSION_CWD_OUTSIDE_WORKSPACE', 'The path must be inside the workspace reported by the target controlled instance.');
-  }
-  return { type: 'runtime-path' as const, path: value };
-}
-
 export async function createMobileAiSession(client: ControlPlaneClient, input: {
   instance: ControlPlaneInstanceDirectoryEntry;
   agent: string;
-  cwd: string;
+  cwdFolderId?: string;
   message: string;
   permissionMode?: AiSessionPermissionMode;
   clientRequestId: string;
@@ -32,7 +19,7 @@ export async function createMobileAiSession(client: ControlPlaneClient, input: {
   if (!agent.success) throw lifecycleError('AGENT_UNSUPPORTED', 'The selected application does not provide an AI Session agent. Choose Codex or Claude.');
   return client.aiSessions.create(input.instance.id, {
     agent: agent.data,
-    cwd: runtimePathForInstance(input.cwd, input.instance),
+    ...(input.cwdFolderId ? { cwdFolderId: input.cwdFolderId } : {}),
     clientRequestId: input.clientRequestId,
     message: input.message,
     mode: 'auto',
@@ -58,7 +45,7 @@ export class MobileAiSessionCreateRequestStore {
   getOrCreate(
     controlPlaneId: string,
     instanceId: string,
-    input: { agent: string; cwd: string; message: string; permissionMode?: AiSessionPermissionMode },
+    input: { agent: string; cwdFolderId?: string; message: string; permissionMode?: AiSessionPermissionMode },
     createId: () => string,
   ) {
     return this.enqueue(async () => {

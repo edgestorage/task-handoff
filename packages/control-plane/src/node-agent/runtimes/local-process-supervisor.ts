@@ -9,6 +9,16 @@ import {
 
 export const LOCAL_PROCESS_NONCE_LABEL = "task-handoff.local-process-nonce";
 const REQUEST_TIMEOUT_MS = 1_000;
+export const DEFAULT_LOCAL_PROCESS_READY_TIMEOUT_MS = 30_000;
+const GRACEFUL_EXIT_TIMEOUT_MS = 10_000;
+const FORCED_EXIT_TIMEOUT_MS = 2_000;
+
+export function localProcessReadyTimeoutMs(value = process.env.TASK_HANDOFF_LOCAL_PROCESS_READY_TIMEOUT_MS) {
+  const configured = Number(value);
+  return Number.isFinite(configured) && configured > 0
+    ? configured
+    : DEFAULT_LOCAL_PROCESS_READY_TIMEOUT_MS;
+}
 
 type LocalProcessIdentity = {
   instanceId: string;
@@ -23,6 +33,21 @@ export type LocalProcessExit = {
   code: number | null;
   signal: NodeJS.Signals | null;
 };
+
+export type LocalProcessLifecycleEvent = {
+  stage: "graceful-signal-sent" | "graceful-timeout" | "force-signal-sent" | "force-exit-confirmed" | "force-exit-unconfirmed";
+  pid?: number;
+  signal?: NodeJS.Signals;
+  timeoutMs?: number;
+};
+
+type LocalProcessLifecycleReporter = (event: LocalProcessLifecycleEvent) => void;
+
+function reportLifecycle(reporter: LocalProcessLifecycleReporter | undefined, event: LocalProcessLifecycleEvent) {
+  try { reporter?.(event); } catch {
+    // Lifecycle diagnostics must never interfere with process termination.
+  }
+}
 
 function processWeb(instance: ControlledInstance) {
   return instance.runtime.port ? `http://127.0.0.1:${instance.runtime.port}` : instance.target.web;
@@ -98,7 +123,7 @@ async function terminate(pid: number, expectedStartIdentity: string) {
   } catch {
     return true;
   }
-  const deadline = Date.now() + 3_000;
+  const deadline = Date.now() + GRACEFUL_EXIT_TIMEOUT_MS;
   while (Date.now() < deadline) {
     try {
       process.kill(pid, 0);
@@ -112,7 +137,7 @@ async function terminate(pid: number, expectedStartIdentity: string) {
   } catch {
     // Process exited after the final liveness check.
   }
-  const killDeadline = Date.now() + 1_000;
+  const killDeadline = Date.now() + FORCED_EXIT_TIMEOUT_MS;
   while (Date.now() < killDeadline) {
     try {
       process.kill(pid, 0);
@@ -188,10 +213,25 @@ function waitForObservedChildExit(child: ChildProcessWithoutNullStreams, timeout
   });
 }
 
-export async function waitForChildExit(child: ChildProcessWithoutNullStreams, gracefulTimeoutMs = 3_000, forceTimeoutMs = 1_000) {
+export async function waitForChildExit(
+  child: ChildProcessWithoutNullStreams,
+  gracefulTimeoutMs = GRACEFUL_EXIT_TIMEOUT_MS,
+  forceTimeoutMs = FORCED_EXIT_TIMEOUT_MS,
+  reporter?: LocalProcessLifecycleReporter,
+) {
   if (await waitForObservedChildExit(child, gracefulTimeoutMs)) return;
-  if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-  if (await waitForObservedChildExit(child, forceTimeoutMs)) return;
+  reportLifecycle(reporter, { stage: "graceful-timeout", pid: child.pid, timeoutMs: gracefulTimeoutMs });
+  let forceSignalSent = false;
+  if (child.exitCode === null && child.signalCode === null) {
+    child.kill("SIGKILL");
+    forceSignalSent = true;
+    reportLifecycle(reporter, { stage: "force-signal-sent", pid: child.pid, signal: "SIGKILL" });
+  }
+  if (await waitForObservedChildExit(child, forceTimeoutMs)) {
+    if (forceSignalSent) reportLifecycle(reporter, { stage: "force-exit-confirmed", pid: child.pid, signal: "SIGKILL" });
+    return;
+  }
+  reportLifecycle(reporter, { stage: "force-exit-unconfirmed", pid: child.pid, signal: "SIGKILL", timeoutMs: forceTimeoutMs });
   throw Object.assign(
     new Error(`Controlled instance process pid=${child.pid ?? "unknown"} did not exit after SIGKILL.`),
     { statusCode: 503, code: "LOCAL_INSTANCE_PROCESS_EXIT_UNCONFIRMED", pid: child.pid },
@@ -217,6 +257,7 @@ export class LocalProcessSupervisor {
   private readonly children = new Map<string, ChildProcessWithoutNullStreams>();
   private readonly readyChildren = new WeakSet<ChildProcessWithoutNullStreams>();
   private readonly expectedExits = new WeakSet<ChildProcessWithoutNullStreams>();
+  private readonly lifecycleReporters = new WeakMap<ChildProcessWithoutNullStreams, LocalProcessLifecycleReporter>();
   private readonly lockPath?: string;
   private readonly onUnexpectedExit?: (event: LocalProcessExit) => void | Promise<void>;
   private readonly onUnexpectedExitError?: (error: unknown, event: LocalProcessExit) => void;
@@ -227,8 +268,9 @@ export class LocalProcessSupervisor {
     this.onUnexpectedExitError = onUnexpectedExitError;
   }
 
-  track(instanceId: string, child: ChildProcessWithoutNullStreams) {
+  track(instanceId: string, child: ChildProcessWithoutNullStreams, lifecycleReporter?: LocalProcessLifecycleReporter) {
     this.children.set(instanceId, child);
+    if (lifecycleReporter) this.lifecycleReporters.set(child, lifecycleReporter);
     child.once("exit", (code, signal) => {
       this.release(instanceId, child);
       if (this.readyChildren.has(child) && !this.expectedExits.has(child)) {
@@ -263,15 +305,19 @@ export class LocalProcessSupervisor {
     const child = this.children.get(instance.id);
     if (child) {
       this.expectedExits.add(child);
-      if (!child.killed) child.kill("SIGTERM");
+      const reporter = this.lifecycleReporters.get(child);
+      if (!child.killed) {
+        child.kill("SIGTERM");
+        reportLifecycle(reporter, { stage: "graceful-signal-sent", pid: child.pid, signal: "SIGTERM" });
+      }
       this.children.delete(instance.id);
-      await waitForChildExit(child);
+      await waitForChildExit(child, GRACEFUL_EXIT_TIMEOUT_MS, FORCED_EXIT_TIMEOUT_MS, reporter);
       return;
     }
     const shutdownIdentity = await requestShutdown(instance);
     if (shutdownIdentity) {
       const web = processWeb(instance);
-      const deadline = Date.now() + 3_000;
+      const deadline = Date.now() + GRACEFUL_EXIT_TIMEOUT_MS;
       while (web && Date.now() < deadline) {
         if (!await fetchProcessIdentity(web, instance.registrationToken!)) return;
         await new Promise((resolve) => setTimeout(resolve, 50));
@@ -297,7 +343,13 @@ export class LocalProcessSupervisor {
     }
   }
 
-  async waitUntilHealthy(web: string, expected: LocalProcessIdentity, child: ChildProcessWithoutNullStreams, registrationToken: string, timeoutMs = 3_000) {
+  async waitUntilHealthy(
+    web: string,
+    expected: LocalProcessIdentity,
+    child: ChildProcessWithoutNullStreams,
+    registrationToken: string,
+    timeoutMs = localProcessReadyTimeoutMs(),
+  ) {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       if (child.exitCode !== null || child.signalCode !== null) return false;
@@ -316,9 +368,18 @@ export class LocalProcessSupervisor {
     const children = Array.from(this.children.values());
     for (const child of children) {
       this.expectedExits.add(child);
-      if (!child.killed) child.kill("SIGTERM");
+      const reporter = this.lifecycleReporters.get(child);
+      if (!child.killed) {
+        child.kill("SIGTERM");
+        reportLifecycle(reporter, { stage: "graceful-signal-sent", pid: child.pid, signal: "SIGTERM" });
+      }
     }
     this.children.clear();
-    await Promise.all(children.map((child) => waitForChildExit(child)));
+    await Promise.all(children.map((child) => waitForChildExit(
+      child,
+      GRACEFUL_EXIT_TIMEOUT_MS,
+      FORCED_EXIT_TIMEOUT_MS,
+      this.lifecycleReporters.get(child),
+    )));
   }
 }

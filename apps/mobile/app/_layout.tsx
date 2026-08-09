@@ -14,6 +14,8 @@ import { TaskStatusSurface } from '../src/task-status/TaskStatusSurface';
 import { TaskStatusSettingsProvider } from '../src/task-status/settings';
 import { CarPlaySurface } from '../src/carplay/CarPlaySurface';
 import { MobileControlPlaneRuntimeProvider } from '../src/control-plane/use-mobile-control-plane-runtime';
+import { MobileToastProvider } from '../src/components/MobileToast';
+import { ActiveTriggersProvider } from '../src/triggers/use-active-triggers';
 
 export default function RootLayout() {
   return <MobileThemeProvider><MobileI18nProvider><TaskStatusSettingsProvider><LocalizedRootLayout /></TaskStatusSettingsProvider></MobileI18nProvider></MobileThemeProvider>;
@@ -40,13 +42,15 @@ function LocalizedRootLayout() {
   return (
     <GestureHandlerRootView style={{ backgroundColor: colors.background, flex: 1 }}>
       <SafeAreaProvider>
-        <StatusBar animated style={dark ? 'light' : 'dark'} />
-        <ThemeProvider value={navigationTheme}>
+        <MobileToastProvider>
+          <StatusBar animated style={dark ? 'light' : 'dark'} />
+          <ThemeProvider value={navigationTheme}>
           <MobileControlPlaneRuntimeProvider>
             <ActiveDirectoriesProvider>
               <InstanceScopeProvider>
                 <ActiveAiSessionsProvider>
                   <ActiveAppSessionsProvider>
+                  <ActiveTriggersProvider>
                   <TaskStatusSurface />
                   <CarPlaySurface />
                   <Stack
@@ -71,14 +75,20 @@ function LocalizedRootLayout() {
                     <Stack.Screen name="app-sessions/[instanceId]/[sessionId]" options={{ title: t('nav.terminal') }} />
                     <Stack.Screen name="history/[instanceId]/index" options={{ title: t('nav.history'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="history/[instanceId]/[historyId]" options={{ title: t('nav.sessionHistory'), ...iosTransparentHeaderOptions(dark) }} />
+                    <Stack.Screen name="triggers/index" options={{ title: t('triggers.title'), ...iosTransparentHeaderOptions(dark) }} />
+                    <Stack.Screen name="triggers/new" options={{ title: t('triggers.create') }} />
+                    <Stack.Screen name="triggers/[configHash]" options={{ title: t('triggers.title'), ...iosTransparentHeaderOptions(dark) }} />
+                    <Stack.Screen name="sessions/[instanceId]/[sessionId]/triggers" options={{ title: t('triggers.sessionTitle'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="icon-gallery" options={{ title: 'Ionicons 图标选择' }} />
                   </Stack>
+                  </ActiveTriggersProvider>
                   </ActiveAppSessionsProvider>
                 </ActiveAiSessionsProvider>
               </InstanceScopeProvider>
             </ActiveDirectoriesProvider>
           </MobileControlPlaneRuntimeProvider>
-        </ThemeProvider>
+          </ThemeProvider>
+        </MobileToastProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );

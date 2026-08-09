@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 import { processStartIdentity } from "@task-handoff/core/core/process-singleton-lock";
 import { InstanceDeleteResultSchema, type ControlledInstance, type InstanceDeleteInput, type NodeRuntime } from "@task-handoff/protocol/control-plane";
 import type { NodeAgentStorePaths } from "../persistence/paths.ts";
+import { copyTruncateOpenLog } from "@task-handoff/core/storage/open-log-retention";
 import {
   type CommandRunner,
   type ExecutorContext,
@@ -109,12 +110,18 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
     const port = configuredPort && configuredPortAvailable ? configuredPort : await allocateLocalPort();
     const dataDir = path.join(this.paths.dataDir, "local-instances", context.instance.id);
     const logDir = path.join(dataDir, "logs");
-    fs.mkdirSync(logDir, { recursive: true });
+    fs.mkdirSync(logDir, { recursive: true, mode: 0o700 });
+    fs.chmodSync(dataDir, 0o700);
+    fs.chmodSync(logDir, 0o700);
     const [command, ...baseArgs] = localControlledInstanceCommand(this.commandOverride);
     const args = [...baseArgs, "--host", "127.0.0.1", "--port", String(port)];
     const processNonce = crypto.randomUUID();
-    const out = fs.openSync(path.join(logDir, "controlled-instance.out.log"), "a");
-    const err = fs.openSync(path.join(logDir, "controlled-instance.err.log"), "a");
+    const outPath = path.join(logDir, "controlled-instance.out.log");
+    const errPath = path.join(logDir, "controlled-instance.err.log");
+    copyTruncateOpenLog(outPath);
+    copyTruncateOpenLog(errPath);
+    const out = fs.openSync(outPath, "a", 0o600);
+    const err = fs.openSync(errPath, "a", 0o600);
     const child = spawn(command, args, {
       cwd: workspacePath,
       detached: false,
@@ -163,11 +170,17 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
         { statusCode: 500, code: "LOCAL_INSTANCE_PROCESS_SPAWN_FAILED" },
       );
     }
-    this.processSupervisor.track(context.instance.id, child);
+    const lifecycleLogPath = path.join(logDir, "controlled-instance.lifecycle.log");
+    this.processSupervisor.track(context.instance.id, child, (event) => {
+      fs.appendFileSync(
+        lifecycleLogPath,
+        `[${new Date().toISOString()}] shutdown stage=${event.stage} pid=${event.pid ?? ""} signal=${event.signal ?? ""} timeoutMs=${event.timeoutMs ?? ""}\n`,
+      );
+    });
     child.on("error", (error) => {
       try {
         fs.appendFileSync(
-          path.join(logDir, "controlled-instance.lifecycle.log"),
+          lifecycleLogPath,
           `[${new Date().toISOString()}] process error pid=${child.pid ?? ""} error=${error.message}\n`,
         );
       } catch {
@@ -177,7 +190,7 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
     child.once("exit", (code, signal) => {
       try {
         fs.appendFileSync(
-          path.join(logDir, "controlled-instance.lifecycle.log"),
+          lifecycleLogPath,
           `[${new Date().toISOString()}] exited pid=${child.pid ?? ""} code=${code ?? ""} signal=${signal ?? ""}\n`,
         );
       } catch {

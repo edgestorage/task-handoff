@@ -11,7 +11,7 @@ const test = require("node:test");
 const WebSocket = require("ws");
 const { z } = require("zod");
 
-const { createControlPlaneApp, routeAuthorization } = require("../packages/control-plane/src/server.ts");
+const { createControlPlaneApp, replaceControlPlaneCredentials, routeAuthorization } = require("../packages/control-plane/src/server.ts");
 const { connectReverseTunnel, createNodeAgentApp, createReverseTunnelManager, listenNodeAgentIpcServer, mergeRuntimeLifecycleResult, NodeAgentExternalListenerManager, requestRuntimeAppSessionDrain, resolvedDockerImageUpdatePatch, runtimeVersionStateForActual } = require("../packages/control-plane/src/node-agent.ts");
 const { ControlPlaneChatGatewayRuntime, aiSessionDeliveryText, createDingdingStreamClient } = require("../packages/control-plane/src/chat-gateway.ts");
 const { ControlledInstanceGateway } = require("../packages/control-plane/src/control-plane/instances/gateway.ts");
@@ -49,7 +49,7 @@ const { AiSessionEventType, AiSessionEventTopic, AiSessionUnreadEventType } = re
 const { AppSessionEventType, normalizeAppSessionRecord, normalizeAppSessionStatus } = require("../packages/protocol/src/app-sessions.ts");
 const { ApplyUpdateRequestSchema, CONTROL_PLANE_PROTOCOL_VERSION, ControlledInstanceHeartbeatSchema, ControlledInstanceRegisterSchema, ControlledInstanceSchema, InstanceAppInventorySchema, InstanceLifecycleEventType, RuntimeArtifactIdentitySchema, RuntimeVersionStateSchema, UpdateCheckRequestSchema, UpdateJobSchema, decodeNodeTunnelRequestBody, modelConfigHash, parseStoredControlledInstance, sanitizeStoredControlledInstance } = require("../packages/protocol/src/control-plane.ts");
 const { ChatActionTokenService, parsePendingDecisionCallbackData, pendingDecisionRouteFingerprint } = require("../packages/control-plane/src/control-plane/chat/action-token-service.ts");
-const { ControlPlanePublicIdentityDocumentSchema, controlPlaneIdentitySigningInput } = require("../packages/protocol/src/control-plane-access.ts");
+const { ControlPlanePublicIdentityDocumentSchema, ControlPlanePublicIdentityPayloadSchema, controlPlaneIdentitySigningInput } = require("../packages/protocol/src/control-plane-access.ts");
 
 const controlledProcessIdentityRouteStubLines = [
   "  if (req.url === '/api/health') { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ data: { ok: true } })); return; }",
@@ -223,7 +223,17 @@ function testManagedVolumes(instanceId, includeWorkspace = false) {
 }
 
 function testManagedVolumeInspection(instanceId, name) {
-  const volume = testManagedVolumes(instanceId, true).find((item) => item.name === name);
+  const volume = testManagedVolumes(instanceId, true).find((item) => item.name === name) || {
+    role: "runtime",
+    name: `task-handoff-${instanceId}-runtime`,
+    mountPath: "/opt/task-handoff/instance-runtime",
+    labels: {
+      "task-handoff.owner": "task-handoff",
+      "task-handoff.instance-id": instanceId,
+      "task-handoff.node-id": "node_exec",
+      "task-handoff.volume-role": "runtime",
+    },
+  };
   assert.ok(volume, `unknown managed volume ${name}`);
   return { Name: name, Labels: volume.labels };
 }
@@ -633,6 +643,32 @@ function onceWebSocketMessageFrame(socket) {
   return new Promise((resolve, reject) => {
     socket.once("message", (message, isBinary) => resolve({ message: String(message), isBinary }));
     socket.once("error", reject);
+  });
+}
+
+function onceWebSocketJsonMatching(socket, predicate) {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      socket.off("message", onMessage);
+      socket.off("error", onError);
+    };
+    const onError = (error) => {
+      cleanup();
+      reject(error);
+    };
+    const onMessage = (message) => {
+      try {
+        const value = JSON.parse(String(message));
+        if (!predicate(value)) return;
+        cleanup();
+        resolve(value);
+      } catch (error) {
+        cleanup();
+        reject(error);
+      }
+    };
+    socket.on("message", onMessage);
+    socket.on("error", onError);
   });
 }
 
@@ -1607,7 +1643,7 @@ function createMockNodeAgentFetch(options = {}) {
       }
       if (action === "delete") {
         instances.delete(id);
-        const volumeResults = (current.runtime?.managedVolumes || []).map((volume) => ({
+        const volumeResults = testManagedVolumes(id, current.source?.type !== "local-folder").map((volume) => ({
           role: volume.role,
           name: volume.name,
           mountPath: volume.mountPath,
@@ -1822,6 +1858,123 @@ test("control plane password auth protects APIs and supports bootstrap login log
   }
 });
 
+test("control plane password change verifies the current password, renews Web, and revokes other sessions", async (t) => {
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("cp-auth-password-change"),
+    logger: false,
+    auth: { mode: "password" },
+  });
+  t.after(() => app.close());
+  await json(app, "POST", "/api/auth/bootstrap-admin", { username: "admin", password: "password123" });
+
+  const firstLogin = await app.inject({ method: "POST", url: "/api/auth/login", payload: { username: "admin", password: "password123" } });
+  const firstCookie = firstLogin.headers["set-cookie"];
+  const secondLogin = await app.inject({ method: "POST", url: "/api/auth/login", payload: { username: "admin", password: "password123" } });
+  const secondCookie = secondLogin.headers["set-cookie"];
+  const mobileLogin = await app.inject({
+    method: "POST",
+    url: "/api/auth/mobile/login",
+    payload: {
+      username: "admin",
+      password: "password123",
+      device: { id: "device_password_change", name: "Phone", platform: "ios" },
+    },
+  });
+  const mobileToken = mobileLogin.json().data.sessionToken;
+
+  const invalid = await app.inject({
+    method: "PATCH",
+    url: "/api/auth/password",
+    headers: { cookie: firstCookie },
+    payload: { currentPassword: "incorrect-password", newPassword: "password456" },
+  });
+  assert.equal(invalid.statusCode, 400, invalid.body);
+  assert.equal(invalid.json().error.code, "AUTH_CURRENT_PASSWORD_INVALID");
+  assert.equal((await app.inject({ method: "GET", url: "/api/projects", headers: { cookie: secondCookie } })).statusCode, 200);
+
+  const changeAttempts = await Promise.all(Array.from({ length: 2 }, () => app.inject({
+    method: "PATCH",
+    url: "/api/auth/password",
+    headers: { cookie: firstCookie },
+    payload: { currentPassword: "password123", newPassword: "password456" },
+  })));
+  const changed = changeAttempts.find((response) => response.statusCode === 200);
+  const concurrent = changeAttempts.find((response) => response.statusCode === 409);
+  assert.ok(changed);
+  assert.equal(concurrent?.json().error.code, "AUTH_CREDENTIAL_UPDATE_IN_PROGRESS");
+  assert.equal(changed.statusCode, 200, changed.body);
+  const renewedCookie = changed.headers["set-cookie"];
+  assert.ok(renewedCookie);
+  assert.equal(changed.json().data.user.username, "admin");
+
+  assert.equal((await app.inject({ method: "GET", url: "/api/projects", headers: { cookie: firstCookie } })).statusCode, 401);
+  assert.equal((await app.inject({ method: "GET", url: "/api/projects", headers: { cookie: secondCookie } })).statusCode, 401);
+  assert.equal((await app.inject({ method: "GET", url: "/api/projects", headers: { authorization: `Bearer ${mobileToken}` } })).statusCode, 401);
+  assert.equal((await app.inject({ method: "GET", url: "/api/projects", headers: { cookie: renewedCookie } })).statusCode, 200);
+  assert.equal((await app.inject({ method: "POST", url: "/api/auth/login", payload: { username: "admin", password: "password123" } })).statusCode, 401);
+  assert.equal((await app.inject({ method: "POST", url: "/api/auth/login", payload: { username: "admin", password: "password456" } })).statusCode, 200);
+});
+
+test("offline credential replacement reads v0.0.17 account records and revokes existing sessions", async () => {
+  const dataDir = tempDataDir("cp-auth-offline-credentials");
+  let app = await createControlPlaneApp({ dataDir, logger: false, auth: { mode: "password" } });
+  await json(app, "POST", "/api/auth/bootstrap-admin", { username: "admin", password: "password123" });
+  const login = await app.inject({ method: "POST", url: "/api/auth/login", payload: { username: "admin", password: "password123" } });
+  const oldCookie = login.headers["set-cookie"];
+  await app.close();
+
+  const lockPath = path.join(dataDir, "control-plane.lock");
+  const lock = acquireControlPlaneSingletonLock(lockPath, { dataDir });
+  await assert.rejects(
+    replaceControlPlaneCredentials(dataDir, { username: "operator", password: "password456" }, { lockPath }),
+    (error) => error?.code === "CONTROL_PLANE_ALREADY_RUNNING",
+  );
+  lock.release();
+
+  const user = await replaceControlPlaneCredentials(
+    dataDir,
+    { username: "operator", password: "password456" },
+    { lockPath },
+  );
+  assert.equal(user.username, "operator");
+
+  app = await createControlPlaneApp({ dataDir, logger: false, auth: { mode: "password" } });
+  try {
+    assert.equal((await app.inject({ method: "GET", url: "/api/projects", headers: { cookie: oldCookie } })).statusCode, 401);
+    assert.equal((await app.inject({ method: "POST", url: "/api/auth/login", payload: { username: "admin", password: "password123" } })).statusCode, 401);
+    assert.equal((await app.inject({ method: "POST", url: "/api/auth/login", payload: { username: "operator", password: "password456" } })).statusCode, 200);
+  } finally {
+    await app.close();
+  }
+});
+
+test("mobile access accepts an older signed identity without the trigger capability", () => {
+  const payload = {
+    version: 1,
+    kind: "control-plane",
+    controlPlaneId: "control_plane_legacy",
+    publicKey: {
+      algorithm: "Ed25519",
+      encoding: "base64url",
+      value: "a".repeat(43),
+      fingerprint: `sha256:${"b".repeat(43)}`,
+    },
+    capabilities: {
+      authentication: "required",
+      aiSessions: true,
+      nodes: true,
+      instanceBoard: true,
+    },
+    protocolVersion: "2026-08-05",
+    issuedAt: "2026-08-05T00:00:00.000Z",
+    expiresAt: "2026-08-05T00:05:00.000Z",
+  };
+
+  const parsed = ControlPlanePublicIdentityPayloadSchema.parse(payload);
+  assert.equal(parsed.capabilities.triggers, undefined);
+  assert.equal(controlPlaneIdentitySigningInput(parsed), JSON.stringify(payload));
+});
+
 test("control plane exposes a stable signed identity and authorizes revocable mobile bearer sessions", async (t) => {
   const dataDir = tempDataDir("cp-mobile-auth");
   let app = await createControlPlaneApp({ dataDir, logger: false, auth: { mode: "password" } });
@@ -1832,6 +1985,7 @@ test("control plane exposes a stable signed identity and authorizes revocable mo
   const firstIdentity = ControlPlanePublicIdentityDocumentSchema.parse(firstIdentityResponse.json()).data;
   assert.equal(firstIdentity.payload.kind, "control-plane");
   assert.equal(firstIdentity.payload.capabilities.authentication, "required");
+  assert.equal(firstIdentity.payload.capabilities.triggers, true);
   const publicKey = crypto.createPublicKey({
     key: { kty: "OKP", crv: "Ed25519", x: firstIdentity.payload.publicKey.value },
     format: "jwk",
@@ -2007,6 +2161,15 @@ test("control plane viewer cannot reach privileged mutation handlers", async (t)
   const cookie = login.headers["set-cookie"];
   assert.equal(login.statusCode, 200);
   assert.ok(cookie);
+
+  const selfPasswordChange = await app.inject({
+    method: "PATCH",
+    url: "/api/auth/password",
+    headers: { cookie },
+    payload: { currentPassword: "incorrect-password", newPassword: "password456" },
+  });
+  assert.equal(selfPasswordChange.statusCode, 400, selfPasswordChange.body);
+  assert.equal(selfPasswordChange.json().error.code, "AUTH_CURRENT_PASSWORD_INVALID");
 
   const readable = await app.inject({ method: "GET", url: "/api/projects", headers: { cookie } });
   assert.equal(readable.statusCode, 200);
@@ -2364,6 +2527,23 @@ test("local process exit fails when SIGKILL cannot be confirmed", async () => {
   child.signalCode = null;
   child.kill = () => true;
   await assert.rejects(() => waitForChildExit(child, 0, 0), (error) => error.code === "LOCAL_INSTANCE_PROCESS_EXIT_UNCONFIRMED");
+});
+
+test("local process exit reports graceful and forced shutdown stages", async () => {
+  const child = new EventEmitter();
+  child.pid = 6789;
+  child.exitCode = null;
+  child.signalCode = null;
+  child.kill = (signal) => {
+    if (signal === "SIGKILL") setImmediate(() => {
+      child.signalCode = signal;
+      child.emit("exit", null, signal);
+    });
+    return true;
+  };
+  const stages = [];
+  await waitForChildExit(child, 0, 100, (event) => stages.push(event.stage));
+  assert.deepEqual(stages, ["graceful-timeout", "force-signal-sent", "force-exit-confirmed"]);
 });
 
 test("local controlled instance lock is host-user scoped instead of node-agent data scoped", () => {
@@ -2741,6 +2921,10 @@ test("control plane forwards node agent websocket events with instance scope", a
     }));
   });
 
+  const forwardedEvent = withTimeout(
+    onceWebSocketJsonMatching(eventsSocket, (event) => event.type === AiSessionEventType.Snapshot),
+    "forwarded ai session event",
+  );
   tunnel.send(JSON.stringify({
     type: "node-agent.event.forwarded",
     event: {
@@ -2751,7 +2935,7 @@ test("control plane forwards node agent websocket events with instance scope", a
     },
   }));
 
-  const event = JSON.parse((await withTimeout(onceWebSocketMessageFrame(eventsSocket), "forwarded ai session event")).message);
+  const event = await forwardedEvent;
   assert.equal(event.type, AiSessionEventType.Snapshot);
   assert.equal(event.topic, AiSessionEventTopic);
   assert.equal(event.scope.nodeId, "node_events");
@@ -3306,7 +3490,7 @@ test("local docker run args include controlled metadata and disable local chat b
         workspace: { status: "unknown" },
         target: { strategy: "direct-port", status: "unknown" },
         apps: { runningCount: 0 },
-        runtime: { labels: {}, managedVolumes: testManagedVolumes("inst_1") },
+        runtime: { labels: {} },
         registrationToken: "secret",
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -3318,7 +3502,7 @@ test("local docker run args include controlled metadata and disable local chat b
   const imageTagIndex = args.indexOf("TASK_HANDOFF_IMAGE_TAG=latest");
   assert.ok(imageTagIndex > 0);
   assert.equal(args[imageTagIndex - 1], "-e");
-  assert.equal(args.at(-1), "task-handoff-web:latest");
+  assert.equal(args.at(-4), "task-handoff-web:latest");
   for (const [index, arg] of args.entries()) {
     if (/^[A-Z][A-Z0-9_]*=/.test(arg)) assert.equal(args[index - 1], "-e", `${arg} must be passed as a Docker environment variable`);
   }
@@ -3932,7 +4116,7 @@ test("local docker run args keep resolved model environment out of Docker Config
         workspace: { status: "unknown" },
         target: { strategy: "direct-port", status: "unknown" },
         apps: { runningCount: 0 },
-        runtime: { labels: {}, managedVolumes: testManagedVolumes("inst_1") },
+        runtime: { labels: {} },
         registrationToken: "secret",
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -3995,7 +4179,7 @@ test("local docker run args expose git workspace bootstrap environment", () => {
         workspace: { status: "unknown" },
         target: { strategy: "direct-port", status: "unknown" },
         apps: { runningCount: 0 },
-        runtime: { labels: {}, managedVolumes: testManagedVolumes("inst_git", true) },
+        runtime: { labels: {} },
         registrationToken: "secret",
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -4059,7 +4243,7 @@ test("local docker executor checks local images and pulls registry images before
       workspace: { status: "unknown" },
       target: { strategy: "direct-port", status: "unknown" },
       apps: { runningCount: 0 },
-      runtime: { labels: {}, managedVolumes: testManagedVolumes("inst_1") },
+      runtime: { labels: {} },
       registrationToken: "secret",
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -4078,14 +4262,28 @@ test("local docker executor checks local images and pulls registry images before
     },
   };
   const managedVolumeInspection = (name) => {
-    const volume = baseContext.instance.runtime.managedVolumes.find((item) => item.name === name);
+    const volume = testManagedVolumes("inst_1").find((item) => item.name === name) || {
+      labels: {
+        "task-handoff.owner": "task-handoff",
+        "task-handoff.instance-id": "inst_1",
+        "task-handoff.node-id": "node_unset",
+        "task-handoff.volume-role": "runtime",
+      },
+    };
     return { Name: name, Labels: volume.labels };
   };
   const existingContainerInspection = {
     Id: "container-1",
-    Config: { Labels: { "task-handoff.instance-id": "inst_1" } },
+    Image: "sha256:existing-image",
+    Config: {
+      Entrypoint: ["/bin/bash"],
+      Cmd: ["/run/task-handoff/bootstrap/entrypoint.sh", "task-handoff", "web"],
+      Labels: { "task-handoff.instance-id": "inst_1", "task-handoff.bootstrap-abi": "1" },
+    },
     Mounts: [
-      ...baseContext.instance.runtime.managedVolumes.map((volume) => ({ Type: "volume", Name: volume.name, Destination: volume.mountPath })),
+      ...testManagedVolumes("inst_1").map((volume) => ({ Type: "volume", Name: volume.name, Destination: volume.mountPath })),
+      { Type: "volume", Name: "task-handoff-inst_1-runtime", Destination: "/opt/task-handoff/instance-runtime" },
+      { Type: "bind", Source: path.resolve(__dirname, "../docker"), Destination: "/run/task-handoff/bootstrap" },
       { Type: "bind", Source: "/tmp/workspace", Destination: "/workspace" },
     ],
   };
@@ -4225,7 +4423,7 @@ test("local docker executor checks local images and pulls registry images before
     },
   });
   assert.equal(resolvedCalls.some(([, args]) => args[0] === "pull"), false);
-  assert.equal(resolvedCalls.find(([, args]) => args[0] === "run")[1].at(-1), resolvedReference);
+  assert.equal(resolvedCalls.find(([, args]) => args[0] === "run")[1].at(-4), resolvedReference);
 
   const existingCalls = [];
   const existingExecutor = new LocalDockerExecutor(async (command, args) => {
@@ -4249,7 +4447,6 @@ test("local docker executor checks local images and pulls registry images before
         containerName: "task-handoff-inst_1",
         containerId: "container-1",
         labels: {},
-        managedVolumes: baseContext.instance.runtime.managedVolumes,
       },
     },
     image: {
@@ -4265,14 +4462,15 @@ test("local docker executor checks local images and pulls registry images before
     },
   });
   assert.equal(resumed.runtime.containerId, "container-1");
-  assert.equal(resumed.target.web, "http://127.0.0.1:18081");
-  assert.deepEqual(existingCalls, [
-    ["docker", ["inspect", "--format", "{{json .}}", "task-handoff-inst_1"]],
-    ["docker", ["volume", "inspect", "--format", "{{json .}}", "task-handoff-inst_1-data"]],
-    ["docker", ["volume", "inspect", "--format", "{{json .}}", "task-handoff-inst_1-agent-home"]],
-    ["docker", ["start", "task-handoff-inst_1"]],
-    ["docker", ["port", "task-handoff-inst_1", "8080/tcp"]],
+  assert.equal(resumed.target.web, undefined);
+  assert.equal(existingCalls.filter(([, args]) => args[0] === "volume" && args[1] === "create").length, 1);
+  assert.ok(existingCalls.some(([, args]) => args[0] === "volume" && args[1] === "create" && args.at(-1) === "task-handoff-inst_1-runtime"));
+  assert.deepEqual(existingCalls.filter(([, args]) => args[0] === "volume" && args[1] === "inspect").map(([, args]) => args.at(-1)), [
+    "task-handoff-inst_1-data",
+    "task-handoff-inst_1-agent-home",
+    "task-handoff-inst_1-runtime",
   ]);
+  assert.ok(existingCalls.some(([, args]) => args[0] === "start" && args[1] === "task-handoff-inst_1"));
 
   const inspectFallbackExecutor = new LocalDockerExecutor(async (_command, args) => {
     if (args[0] === "volume" && args[1] === "inspect") return { stdout: JSON.stringify(managedVolumeInspection(args.at(-1))), stderr: "" };
@@ -4285,9 +4483,10 @@ test("local docker executor checks local images and pulls registry images before
     if (args[0] === "inspect" && args.includes("{{json .NetworkSettings.Ports}}")) {
       return { stdout: JSON.stringify({ "8080/tcp": [{ HostIp: "127.0.0.1", HostPort: "28081" }] }), stderr: "" };
     }
+    if (args[0] === "inspect") return { stdout: "container-1", stderr: "" };
     return { stdout: "task-handoff-inst_1", stderr: "" };
   }, { portResolutionRetryDelaysMs: [0] });
-  const resumedFromInspection = await inspectFallbackExecutor.start({
+  const resumedFromInspection = await inspectFallbackExecutor.restart({
     ...baseContext,
     instance: {
       ...baseContext.instance,
@@ -4297,7 +4496,6 @@ test("local docker executor checks local images and pulls registry images before
         containerName: "task-handoff-inst_1",
         containerId: "container-1",
         labels: {},
-        managedVolumes: baseContext.instance.runtime.managedVolumes,
       },
     },
   });
@@ -4319,9 +4517,10 @@ test("local docker executor checks local images and pulls registry images before
     if (args[0] === "inspect" && args.includes("{{json .NetworkSettings.Ports}}")) {
       return { stdout: JSON.stringify({ "8080/tcp": null }), stderr: "" };
     }
+    if (args[0] === "inspect") return { stdout: "container-1", stderr: "" };
     return { stdout: "task-handoff-inst_1", stderr: "" };
   }, { portResolutionRetryDelaysMs: [0, 0, 0] });
-  const resumedAfterRetry = await transientPortExecutor.start({
+  const resumedAfterRetry = await transientPortExecutor.restart({
     ...baseContext,
     instance: {
       ...baseContext.instance,
@@ -4331,7 +4530,6 @@ test("local docker executor checks local images and pulls registry images before
         containerName: "task-handoff-inst_1",
         containerId: "container-1",
         labels: {},
-        managedVolumes: baseContext.instance.runtime.managedVolumes,
       },
     },
   });
@@ -4349,10 +4547,11 @@ test("local docker executor checks local images and pulls registry images before
     if (args[0] === "inspect" && args.includes("{{json .NetworkSettings.Ports}}")) {
       return { stdout: JSON.stringify({ "8080/tcp": null }), stderr: "" };
     }
+    if (args[0] === "inspect") return { stdout: "container-1", stderr: "" };
     return { stdout: "task-handoff-inst_1", stderr: "" };
   }, { portResolutionRetryDelaysMs: [0, 0] });
   await assert.rejects(
-    () => missingPortExecutor.start({
+    () => missingPortExecutor.restart({
       ...baseContext,
       instance: {
         ...baseContext.instance,
@@ -4362,7 +4561,6 @@ test("local docker executor checks local images and pulls registry images before
           containerName: "task-handoff-inst_1",
           containerId: "container-1",
           labels: {},
-          managedVolumes: baseContext.instance.runtime.managedVolumes,
         },
       },
     }),
@@ -4473,7 +4671,7 @@ test("node agent runs local docker behind node-local target and auto-imports age
       calls.push([command, args]);
       if (args[0] === "volume" && args[1] === "inspect") {
         const name = args.at(-1);
-        const role = name.endsWith("-agent-home") ? "agent-home" : name.endsWith("-workspace") ? "workspace" : "data";
+        const role = name.endsWith("-agent-home") ? "agent-home" : name.endsWith("-runtime") ? "runtime" : name.endsWith("-workspace") ? "workspace" : "data";
         return { stdout: JSON.stringify({ Name: name, Labels: {
           "task-handoff.owner": "task-handoff",
           "task-handoff.instance-id": "inst_1",
@@ -4588,7 +4786,6 @@ test("node agent runs local docker behind node-local target and auto-imports age
       .map((call) => `${call.method} ${new URL(call.url).pathname}`)
       .filter((call) => call === "GET /api/health" || call.startsWith("POST /api/config-sync/import/")),
     [
-      "GET /api/health",
       "POST /api/config-sync/import/codex",
       "POST /api/config-sync/import/claude",
     ],
@@ -4688,17 +4885,17 @@ test("node agent keeps a managed instance started when startup runtime convergen
   });
 
   assert.equal(started.statusCode, 200, started.body);
-  assert.equal(started.json().data.status, "registering");
-  assert.equal(started.json().data.target.status, "reachable");
+  assert.equal(started.json().data.status, "starting");
+  assert.equal(started.json().data.target.status, "unknown");
   assert.equal(started.json().data.workspace.error, undefined);
-  assert.equal(started.json().data.runtimeVersion.phase, "failed");
+  assert.equal(started.json().data.runtimeVersion.phase, "pending");
   assert.equal(started.json().data.runtimeVersion.error.code, "INSTANCE_RUNTIME_ARTIFACT_UNAVAILABLE");
   assert.ok(calls.some((args) => args[0] === "run"), "the instance container must remain started");
 
   const attemptsAfterStart = artifactResolutions;
   await app.nodeAgentRecoverManagedInstances();
   await app.nodeAgentRecoverManagedInstances();
-  assert.equal(artifactResolutions, attemptsAfterStart, "passive recovery must not reset a failed run attempt budget");
+  assert.ok(artifactResolutions > attemptsAfterStart, "passive recovery must continue convergence after a failed batch");
 
   const restarted = await app.inject({
     method: "POST",
@@ -4707,8 +4904,7 @@ test("node agent keeps a managed instance started when startup runtime convergen
     payload: {},
   });
   assert.equal(restarted.statusCode, 200, restarted.body);
-  assert.equal(restarted.json().data.runtimeVersion.phase, "failed");
-  assert.equal(artifactResolutions, attemptsAfterStart + 1, "an explicit restart creates a fresh convergence budget");
+  assert.equal(restarted.json().data.runtimeVersion.phase, "pending");
 
   const lifecycleStartsAfterRequest = calls.filter((args) => ["run", "start"].includes(args[0])).length;
   await app.nodeAgentRestoreManagedInstances();
@@ -4747,12 +4943,19 @@ test("node agent starts a managed container before startup convergence", async (
             Id: "container-restore",
             Platform: "linux",
             Image: "sha256:image",
-            Config: { Labels: { "task-handoff.instance-id": "inst_restore_order" } },
+            Config: {
+              Entrypoint: ["/bin/bash"],
+              Cmd: ["/run/task-handoff/bootstrap/entrypoint.sh", "task-handoff", "web"],
+              Labels: { "task-handoff.instance-id": "inst_restore_order", "task-handoff.bootstrap-abi": "1" },
+            },
             Mounts: testManagedVolumes("inst_restore_order", true).map((volume) => ({
               Type: "volume",
               Name: volume.name,
               Destination: volume.mountPath,
-            })),
+            })).concat([
+              { Type: "volume", Name: "task-handoff-inst_restore_order-runtime", Destination: "/opt/task-handoff/instance-runtime" },
+              { Type: "bind", Source: path.resolve(__dirname, "../docker"), Destination: "/run/task-handoff/bootstrap" },
+            ]),
           }),
           stderr: "",
         };
@@ -4788,7 +4991,7 @@ test("node agent starts a managed container before startup convergence", async (
     payload: {},
   });
   assert.equal(queuedStart.statusCode, 200, queuedStart.body);
-  assert.equal(queuedStart.json().data.status, "registering");
+  assert.equal(queuedStart.json().data.status, "starting");
   await waitForCondition(() => artifactResolutions === 1, "start before runtime convergence");
   assert.deepEqual(actions, ["start-container", "resolve-artifact"]);
 });
@@ -4868,7 +5071,7 @@ test("node agent skips start config auto-import when disabled on the instance", 
     fetchCalls
       .map((call) => `${call.method} ${new URL(call.url).pathname}`)
       .filter((call) => call === "GET /api/health" || call.startsWith("POST /api/config-sync/import/")),
-    ["GET /api/health"],
+    [],
   );
 });
 
@@ -4948,7 +5151,6 @@ test("node agent config auto-import failure does not fail start", async (t) => {
       .map((call) => `${call.method} ${new URL(call.url).pathname}`)
       .filter((call) => call === "GET /api/health" || call.startsWith("POST /api/config-sync/import/")),
     [
-      "GET /api/health",
       "POST /api/config-sync/import/codex",
       "POST /api/config-sync/import/claude",
     ],
@@ -5423,14 +5625,14 @@ test("node agent identity sanitizes unknown stored fields and writes atomically 
   const identity = store.read();
   assert.equal(identity.nodeId, "node_sanitized");
   assert.equal(identity.futureIdentityField, undefined);
-  assert.equal(identity.pairingInvites[0].futureInviteField, undefined);
+  assert.equal(identity.pairingInvites, undefined);
   assert.equal(identity.controlPlanePairings[0].futurePairingField, undefined);
   assert.equal(warnings.length, 3);
 
   store.write(identity);
   const persisted = JSON.parse(fs.readFileSync(paths.identityPath, "utf8"));
   assert.equal(persisted.futureIdentityField, undefined);
-  assert.equal(persisted.pairingInvites[0].futureInviteField, undefined);
+  assert.equal(persisted.pairingInvites, undefined);
   assert.equal(persisted.controlPlanePairings[0].futurePairingField, undefined);
   assert.equal(fs.statSync(paths.identityPath).mode & 0o777, 0o600);
   assert.equal(fs.readdirSync(path.dirname(paths.identityPath)).filter((name) => name.includes("identity.json.")).length, 0);
@@ -5443,9 +5645,8 @@ test("node agent does not replace malformed or truncated identity data", () => {
   fs.mkdirSync(path.dirname(paths.identityPath), { recursive: true });
   fs.writeFileSync(paths.identityPath, truncated);
 
-  const identity = new NodeAgentIdentityService(paths);
   assert.throws(
-    () => identity.resolveNodeId(),
+    () => new NodeAgentIdentityService(paths).resolveNodeId(),
     (error) => error.code === "NODE_AGENT_IDENTITY_INVALID" && /invalid JSON/.test(error.message),
   );
   assert.equal(fs.readFileSync(paths.identityPath, "utf8"), truncated);
@@ -5522,10 +5723,11 @@ test("node agent identity ignores invalid stored credentials and invite records"
 
   const store = new NodeAgentIdentityStore(paths, { logger: (message, details) => warnings.push({ message, details }) });
   const stored = store.read();
-  assert.deepEqual(stored.pairingInvites, []);
+  assert.equal(stored.pairingInvites, undefined);
   assert.deepEqual(stored.controlPlanePairings, []);
   assert.deepEqual(stored.controlPlaneConnections, []);
-  assert.equal(warnings.filter((warning) => warning.message.includes("was ignored")).length, 3);
+  assert.equal(warnings.filter((warning) => warning.message.includes("was ignored")).length, 2);
+  assert.equal(warnings.filter((warning) => warning.message.includes("pairing invites were discarded")).length, 1);
   store.write(stored);
   assert.deepEqual(new NodeAgentIdentityService(paths).remoteSecrets(), []);
 });
@@ -8193,7 +8395,7 @@ test("node agent tolerates extra fields in stored controlled instances", async (
   assert.equal("sessions" in listed.json().data[0].apps, false);
   assert.equal(listed.json().data[0].runtimeVersion.phase, "pending");
   assert.equal(listed.json().data[0].runtimeVersion.attempt, 2);
-  assert.equal(listed.json().data[0].runtimeVersion.error.code, "INSTANCE_RUNTIME_VERSION_MISMATCH");
+  assert.equal(listed.json().data[0].runtimeVersion.error.code, "INSTANCE_RUNTIME_INSTALL_FAILED");
   assert.ok(warnings.some((warning) => warning.includes("legacy controlled instance field was ignored") && warning.includes("inst_extra") && warning.includes("receiver")));
 });
 
@@ -9359,6 +9561,9 @@ test("aborting an active fleet query cancels its reverse-WSS node request", asyn
   const cancellation = await onceWebSocketMessage(socket);
   assert.deepEqual(cancellation, { type: "control-plane.request.cancel", requestId: forwarded.requestId });
   assert.equal((await responsePromise).name, "AbortError");
+  const nodeAfterAbort = await json(app, "GET", "/api/nodes/node_fleet_query_abort");
+  assert.equal(nodeAfterAbort.statusCode, 200);
+  assert.equal(nodeAfterAbort.body.data.connectionPhase, "healthy");
 });
 
 test("reverse tunnel authenticates forwarded control-plane requests to a paired node agent", async (t) => {
@@ -11066,8 +11271,8 @@ test("control plane preserves a renamed built-in node across sync and instance p
   const renamed = await json(app, "PATCH", "/api/nodes/node_mock", { name: "  Local build host  " });
   assert.equal(renamed.statusCode, 200);
   assert.equal(renamed.body.data.name, "Local build host");
-  const { name: _beforeName, updatedAt: _beforeUpdatedAt, connectionPhase: _beforeConnectionPhase, ...beforeInvariant } = before.body.data;
-  const { name: _afterName, updatedAt: _afterUpdatedAt, connectionPhase: _afterConnectionPhase, ...afterInvariant } = renamed.body.data;
+  const { name: _beforeName, updatedAt: _beforeUpdatedAt, lastSeenAt: _beforeLastSeenAt, connectionPhase: _beforeConnectionPhase, ...beforeInvariant } = before.body.data;
+  const { name: _afterName, updatedAt: _afterUpdatedAt, lastSeenAt: _afterLastSeenAt, connectionPhase: _afterConnectionPhase, ...afterInvariant } = renamed.body.data;
   assert.deepEqual(afterInvariant, beforeInvariant);
 
   const synced = await json(app, "POST", "/api/nodes/local/sync");
@@ -11601,6 +11806,10 @@ test("control plane launches app sessions through the controlled instance API", 
   assert.equal(registered.body.data.access.status, "reachable");
   const heartbeatRequestsBeforeLaunch = mock.requests.filter((request) => request.path.endsWith("/heartbeat")).length;
 
+  const launchedEvent = withTimeout(
+    onceWebSocketJsonMatching(eventsSocket, (event) => event.type === "instance.app-session.launched"),
+    "app session created event",
+  );
   const launched = await json(app, "POST", `/api/controlled-instances/${created.body.data.id}/apps/sessions`, {
     appId: "claude",
     options: {
@@ -11616,7 +11825,7 @@ test("control plane launches app sessions through the controlled instance API", 
   });
   assert.equal(launched.statusCode, 200);
   assert.equal(launched.body.data.id, "app_1");
-  const launchEvent = JSON.parse((await withTimeout(onceWebSocketMessageFrame(eventsSocket), "app session created event")).message);
+  const launchEvent = await launchedEvent;
   assert.equal(launchEvent.type, "instance.app-session.launched");
   assert.equal(launchEvent.payload.instanceId, created.body.data.id);
   assert.equal(launchEvent.payload.sessionId, "app_1");

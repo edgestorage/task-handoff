@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AccessibilityInfo, Animated, Easing, PixelRatio, Platform, Pressable, ScrollView, StyleSheet, Text, View, type TextLayoutEvent, type TextStyle } from 'react-native';
+import { AccessibilityInfo, Animated, Easing, PixelRatio, Platform, Pressable, ScrollView, StyleSheet, Text, View, type TextStyle } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { Check, Copy } from 'lucide-react-native';
 import Markdown, { AstRenderer, MarkdownIt, renderRules, type ASTNode, type RenderRules } from 'react-native-markdown-renderer';
@@ -425,7 +425,7 @@ function createRules(
       deferFinalCodeHighlight && node.attributes.__safeMutableTail === 'true',
     ),
     text: (node, _children, parentNodes) => (
-      <Text key={node.key}>
+      <Text key={node.key} selectable>
         <StreamingMarkdownText
           animate={shouldAnimateMarkdownText(revealEnabled, reducedMotion, parentNodes.map((parent) => parent.type))}
           content={node.content}
@@ -450,6 +450,9 @@ const flowRules: Record<string, SafeRenderRule> = {
   heading4: (node, children, parentNodes, styles) => renderHeading(node, children, parentNodes, styles, 'heading4'),
   heading5: (node, children, parentNodes, styles) => renderHeading(node, children, parentNodes, styles, 'heading5'),
   heading6: (node, children, parentNodes, styles) => renderHeading(node, children, parentNodes, styles, 'heading6'),
+  paragraph: (node, children, _parentNodes, styles) => (
+    <Text key={node.key} selectable style={styles.paragraph}>{children}</Text>
+  ),
   code_inline: renderInlineCode,
   code_block: renderCodeBlock,
   fence: renderCodeBlock,
@@ -501,45 +504,7 @@ function renderInlineCode(
   _parentNodes: ASTNode[],
   styles: SafeMarkdownStyles,
 ) {
-  return <InlineCode content={node.content} key={node.key} styles={styles} />;
-}
-
-function InlineCode({ content, styles }: { content: string; styles: SafeMarkdownStyles }) {
-  const [bodyBaseline, setBodyBaseline] = useState<number>();
-  const [codeBaseline, setCodeBaseline] = useState<number>();
-  const handleBodyLayout = useCallback((event: TextLayoutEvent) => {
-    if (Platform.OS !== 'ios') return;
-    const line = event.nativeEvent.lines[0];
-    if (line) setBodyBaseline(line.y + line.ascender);
-  }, []);
-  const handleCodeLayout = useCallback((event: TextLayoutEvent) => {
-    if (Platform.OS !== 'ios') return;
-    const line = event.nativeEvent.lines[0];
-    if (line) setCodeBaseline(line.y + line.ascender);
-  }, []);
-  // Both Text boxes start at the row's top. Align their measured baselines,
-  // while moving the complete rounded box so its internal centering is intact.
-  const baselineOffset = bodyBaseline !== undefined && codeBaseline !== undefined
-    ? bodyBaseline - codeBaseline
-    : 0;
-  return (
-    <View
-      style={[styles.codeInlineContainer, baselineOffset !== 0 && { transform: [{ translateY: baselineOffset }] }]}
-      testID="markdown-inline-code"
-    >
-      {Platform.OS === 'ios' && (
-        <Text
-          accessible={false}
-          onTextLayout={handleBodyLayout}
-          style={[styles.text, styles.codeInlineBaselineProbe]}
-          testID="markdown-inline-code-baseline-probe"
-        >
-          Ag
-        </Text>
-      )}
-      <Text onTextLayout={handleCodeLayout} style={styles.codeInlineText} testID="markdown-inline-code-text">{content}</Text>
-    </View>
-  );
+  return <Text key={node.key} selectable style={styles.codeInlineText} testID="markdown-inline-code">{node.content}</Text>;
 }
 
 type HighlightNode = ReturnType<typeof codeHighlighter.highlight>['children'][number];
@@ -656,7 +621,7 @@ function renderTableCell(
 
 const trimEndParagraph: SafeRenderRule = (node, children, _parentNodes, styles) => {
   const isFinalTopLevelParagraph = node.attributes.__safeTopLevelLast === 'true';
-  return <View key={node.key} style={[styles.paragraph, isFinalTopLevelParagraph && styles.flushEnd]}>{children}</View>;
+  return <Text key={node.key} selectable style={[styles.paragraph, isFinalTopLevelParagraph && styles.flushEnd]}>{children}</Text>;
 };
 
 function renderHeading(
@@ -679,7 +644,7 @@ function markdownStyles(colors: MobileThemeColors, compact: boolean) {
     body: { color: colors.text, fontSize: bodySize, lineHeight: bodyLineHeight },
     text: { color: colors.text, fontSize: bodySize, lineHeight: bodyLineHeight },
     textgroup: { color: colors.text },
-    paragraph: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: compact ? 4 : 9, marginTop: 0 },
+    paragraph: { color: colors.text, fontSize: bodySize, lineHeight: bodyLineHeight, marginBottom: compact ? 4 : 9, marginTop: 0 },
     flushStart: { marginTop: 0 },
     flushEnd: { marginBottom: 0 },
     heading1: { color: colors.text, flexDirection: 'row', fontSize: compact ? 17 : 25, fontWeight: '700', lineHeight: compact ? 22 : 32, marginBottom: compact ? 5 : 7, marginTop: compact ? 8 : 15 },
@@ -703,9 +668,7 @@ function markdownStyles(colors: MobileThemeColors, compact: boolean) {
     ordered_list_content: { flex: 0, flexShrink: 1 },
     code_inline: {},
     codeInline: {},
-    codeInlineContainer: { alignSelf: 'flex-start', backgroundColor: colors.surfaceMuted, borderColor: colors.border, borderRadius: 6, borderWidth: StyleSheet.hairlineWidth, flexShrink: 1, maxWidth: '100%', overflow: 'hidden', paddingHorizontal: 4 },
-    codeInlineBaselineProbe: { opacity: 0, position: 'absolute' },
-    codeInlineText: { color: colors.text, flexShrink: 1, fontFamily: codeFont, fontSize: 13, lineHeight: 20 },
+    codeInlineText: { color: colors.syntaxNumber, fontFamily: codeFont, fontSize: bodySize, lineHeight: bodyLineHeight },
     code_block: {},
     fence: {},
     codeBlockContainer: { backgroundColor: colors.surfaceMuted, borderColor: colors.border, borderRadius: 7, borderWidth: StyleSheet.hairlineWidth, marginBottom: 11, overflow: 'hidden' },

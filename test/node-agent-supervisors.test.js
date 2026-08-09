@@ -5,8 +5,19 @@ const test = require("node:test");
 
 const { allocateNodeAgentExternalListener, NodeAgentExternalListenerManager } = require("../packages/control-plane/src/node-agent/external-listener-manager.ts");
 const { NodeAgentRecoverySupervisor } = require("../packages/control-plane/src/node-agent/recovery-supervisor.ts");
-const { LocalProcessSupervisor } = require("../packages/control-plane/src/node-agent/runtimes/local-process-supervisor.ts");
+const {
+  DEFAULT_LOCAL_PROCESS_READY_TIMEOUT_MS,
+  LocalProcessSupervisor,
+  localProcessReadyTimeoutMs,
+} = require("../packages/control-plane/src/node-agent/runtimes/local-process-supervisor.ts");
 const { InstanceOperationGate } = require("../packages/control-plane/src/node-agent/instances/instance-operation-gate.ts");
+
+test("local process readiness timeout is production-safe and configurable", () => {
+  assert.equal(localProcessReadyTimeoutMs(undefined), DEFAULT_LOCAL_PROCESS_READY_TIMEOUT_MS);
+  assert.equal(localProcessReadyTimeoutMs("45000"), 45_000);
+  assert.equal(localProcessReadyTimeoutMs("0"), DEFAULT_LOCAL_PROCESS_READY_TIMEOUT_MS);
+  assert.equal(localProcessReadyTimeoutMs("invalid"), DEFAULT_LOCAL_PROCESS_READY_TIMEOUT_MS);
+});
 
 test("local recovery retries a transient failed state after bounded backoff", async () => {
   let clock = 1_000;
@@ -154,10 +165,12 @@ test("local process supervisor reports only unexpected exits after readiness", a
   assert.deepEqual(exits, [{ instanceId: "inst_crashed", pid: 101, code: 17, signal: null }]);
 
   const stopped = fakeChild(102);
-  supervisor.track("inst_stopped", stopped);
+  const shutdownStages = [];
+  supervisor.track("inst_stopped", stopped, (event) => shutdownStages.push(event.stage));
   supervisor.markReady("inst_stopped", stopped);
   await supervisor.stop({ id: "inst_stopped" });
   assert.equal(exits.length, 1);
+  assert.deepEqual(shutdownStages, ["graceful-signal-sent"]);
 
   const failedStartup = fakeChild(103);
   supervisor.track("inst_starting", failedStartup);

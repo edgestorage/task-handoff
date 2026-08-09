@@ -170,24 +170,16 @@ export const EnvironmentTemplateOriginSchema = z.object({
   architecture: FinalComputerArchSchema,
 }).strict();
 
-export const ManagedVolumeRoleSchema = z.enum(["data", "agent-home", "workspace"]);
-
-export const ManagedVolumeSchema = z.object({
-  role: ManagedVolumeRoleSchema,
-  name: z.string().trim().min(1).max(255),
-  mountPath: z.string().trim().startsWith("/").max(4096),
-  labels: z.record(z.string(), z.string()),
-}).strict();
+export const InstanceVolumeRoleSchema = z.enum(["data", "agent-home", "workspace"]);
 
 export const InstanceDeleteInputSchema = z.object({
   deleteVolumes: z.boolean(),
 }).strict();
 
-export const ManagedVolumeDispositionSchema = ManagedVolumeSchema.pick({
-  role: true,
-  name: true,
-  mountPath: true,
-}).extend({
+export const InstanceVolumeDispositionSchema = z.object({
+  role: InstanceVolumeRoleSchema,
+  name: z.string().trim().min(1).max(255),
+  mountPath: z.string().trim().startsWith("/").max(4096),
   status: z.enum(["deleted", "retained", "missing", "failed"]),
   error: z.object({
     code: z.string().trim().min(1).max(120),
@@ -199,9 +191,9 @@ export const InstanceDeleteResultSchema = z.object({
   instanceId: IdSchema,
   containerDeleted: z.boolean(),
   completed: z.boolean(),
-  deletedVolumes: z.array(ManagedVolumeDispositionSchema),
-  retainedVolumes: z.array(ManagedVolumeDispositionSchema),
-  volumeResults: z.array(ManagedVolumeDispositionSchema),
+  deletedVolumes: z.array(InstanceVolumeDispositionSchema),
+  retainedVolumes: z.array(InstanceVolumeDispositionSchema),
+  volumeResults: z.array(InstanceVolumeDispositionSchema),
 }).strict();
 
 export const LEGACY_MARKET_IMAGE_IDS: Record<string, string> = {
@@ -1527,10 +1519,9 @@ export const ControlledInstanceSchema = z
         pid: z.number().int().positive().optional(),
         port: z.number().int().positive().max(65535).optional(),
         labels: z.record(z.string(), z.string()).default({}),
-        managedVolumes: z.array(ManagedVolumeSchema).default([]),
       })
       .strict()
-      .default({ labels: {}, managedVolumes: [] }),
+      .default({ labels: {} }),
     registrationToken: z.string().trim().min(1).max(240).optional(),
     lastHeartbeatAt: TimestampSchema.optional(),
     createdAt: TimestampSchema,
@@ -1631,7 +1622,7 @@ export function sanitizeStoredControlledInstance(
   next.workspace = sanitizeStoredStrictObject(WorkspaceStatusSchema, source.workspace, "workspace", onWarning, typeof source.id === "string" ? source.id : undefined) || { status: "unknown" };
   next.environmentSource = sanitizeStoredStrictObject(EnvironmentSourceSchema, source.environmentSource, "environmentSource", onWarning, typeof source.id === "string" ? source.id : undefined);
   next.environmentTemplateOrigin = sanitizeStoredStrictObject(EnvironmentTemplateOriginSchema, source.environmentTemplateOrigin, "environmentTemplateOrigin", onWarning, typeof source.id === "string" ? source.id : undefined);
-  next.runtime = sanitizeStoredStrictObject(ControlledInstanceSchema.shape.runtime.unwrap(), pickObjectFields(source.runtime, ["kind", "containerName", "containerId", "workspacePath", "pid", "port", "labels", "managedVolumes"]), "runtime", onWarning, typeof source.id === "string" ? source.id : undefined) || { labels: {}, managedVolumes: [] };
+  next.runtime = sanitizeStoredStrictObject(ControlledInstanceSchema.shape.runtime.unwrap(), source.runtime, "runtime", onWarning, typeof source.id === "string" ? source.id : undefined) || { labels: {} };
   next.target = sanitizeStoredStrictObject(InstanceTargetSchema, pickObjectFields(source.target ?? source.endpoints, ["strategy", "web", "api", "vnc", "tty", "logs", "status"]), "target", onWarning, typeof source.id === "string" ? source.id : undefined) || { strategy: "direct-port", status: "unknown" };
   next.access = sanitizeStoredStrictObject(InstanceAccessSchema, pickObjectFields(source.access, ["strategy", "web", "api", "ws", "status"]), "access", onWarning, typeof source.id === "string" ? source.id : undefined) || { strategy: "control-plane-proxy", status: "unknown" };
   for (const [key, schema] of Object.entries(ControlledInstanceSchema.shape)) {
@@ -2125,9 +2116,8 @@ export type EnvironmentTemplateStatus = z.infer<typeof EnvironmentTemplateStatus
 export type EnvironmentTemplateError = z.infer<typeof EnvironmentTemplateErrorSchema>;
 export type EnvironmentTemplate = z.infer<typeof EnvironmentTemplateSchema>;
 export type EnvironmentTemplateOrigin = z.infer<typeof EnvironmentTemplateOriginSchema>;
-export type ManagedVolumeRole = z.infer<typeof ManagedVolumeRoleSchema>;
-export type ManagedVolume = z.infer<typeof ManagedVolumeSchema>;
-export type ManagedVolumeDisposition = z.infer<typeof ManagedVolumeDispositionSchema>;
+export type InstanceVolumeRole = z.infer<typeof InstanceVolumeRoleSchema>;
+export type InstanceVolumeDisposition = z.infer<typeof InstanceVolumeDispositionSchema>;
 export type InstanceDeleteInput = z.infer<typeof InstanceDeleteInputSchema>;
 export type InstanceDeleteResult = z.infer<typeof InstanceDeleteResultSchema>;
 export type ImageCover = z.infer<typeof ImageCoverSchema>;

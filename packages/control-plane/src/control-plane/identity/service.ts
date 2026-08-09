@@ -64,6 +64,7 @@ export class ControlPlaneIdentityService {
       aiSessions: true,
       nodes: true,
       instanceBoard: true,
+      triggers: true,
     };
     const payload = ControlPlanePublicIdentityPayloadSchema.parse({
       version: 1,

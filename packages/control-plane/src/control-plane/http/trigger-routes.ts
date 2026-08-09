@@ -47,19 +47,19 @@ export function registerTriggerRoutes({ app, service, events }: RegisterTriggerR
   app.post("/api/controlled-instances/:id/ai-sessions/:sessionId/triggers", async (request) => {
     const params = InstanceSessionParamsSchema.parse(request.params);
     const result = await service.bindAiSessionTrigger(params.id, params.sessionId, request.body || {});
-    events.publish("instance.ai-session.trigger-bound", { instanceId: params.id, sessionId: params.sessionId });
+    events.publish("trigger.deployment.bound", { instanceId: params.id, sessionId: params.sessionId }, { topic: "triggers", scope: { instanceId: params.id } });
     return { data: result };
   });
   app.delete("/api/controlled-instances/:id/ai-sessions/:sessionId/triggers/:configHash", async (request) => {
     const params = InstanceSessionTriggerConfigParamsSchema.parse(request.params);
     const result = await service.unbindAiSessionTrigger(params.id, params.sessionId, params.configHash);
-    events.publish("instance.ai-session.trigger-unbound", { instanceId: params.id, sessionId: params.sessionId, configHash: params.configHash });
+    events.publish("trigger.deployment.unbound", { instanceId: params.id, sessionId: params.sessionId, configHash: params.configHash }, { topic: "triggers", scope: { instanceId: params.id } });
     return { data: result };
   });
   app.post("/api/controlled-instances/:id/triggers/:configHash/run", async (request) => {
     const params = InstanceTriggerConfigParamsSchema.parse(request.params);
     const result = await service.runInstanceTrigger(params.id, params.configHash, request.body || {});
-    events.publish("instance.trigger.run", { instanceId: params.id, configHash: params.configHash });
+    events.publish("trigger.run.requested", { instanceId: params.id, configHash: params.configHash }, { topic: "triggers", scope: { instanceId: params.id } });
     return { data: result };
   });
 }
