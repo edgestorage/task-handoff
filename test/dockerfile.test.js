@@ -37,6 +37,7 @@ test("Docker exports cumulative Codex, AI, and Browser image profiles", () => {
 
 test("Docker image bakes a versioned bootstrap runtime while the managed launcher waits for the node-agent artifact", () => {
   const dockerfile = fs.readFileSync(path.join(root, "Dockerfile"), "utf8");
+  const workflow = fs.readFileSync(path.join(root, ".github", "workflows", "docker.yml"), "utf8");
 
   assert.match(dockerfile, /ARG TASK_HANDOFF_VERSION=0\.0\.1[\s\S]*TASK_HANDOFF_VERSION="\$\{TASK_HANDOFF_VERSION\}" pnpm run runtime:pack:controlled-instance/);
   assert.match(dockerfile, /npm install -g --omit=dev[\s\S]*task-handoff-controlled-instance-/);
@@ -50,6 +51,7 @@ test("Docker image bakes a versioned bootstrap runtime while the managed launche
   assert.doesNotMatch(launcher, /command -v task-handoff-controlled-instance/);
   assert.doesNotMatch(launcher, /exec task-handoff-controlled-instance web/);
   assert.match(launcher, /await import\(pathToFileURL\(entrypoint\)\.href\)/);
+  assert.equal((workflow.match(/task-handoff-controlled-instance web --host 0\.0\.0\.0 --port 8080/g) || []).length, 2);
 });
 
 test("Docker build context includes files read by the test suite", () => {

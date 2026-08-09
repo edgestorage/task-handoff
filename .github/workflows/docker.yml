@@ -150,7 +150,8 @@ jobs:
               --name "task-handoff-${profile}-ci" \
               -p "${port}:8080" \
               -e TASK_HANDOFF_WEB_AUTH=off \
-              "task-handoff-controlled-${profile}:ci-amd64"
+              "task-handoff-controlled-${profile}:ci-amd64" \
+              task-handoff-controlled-instance web --host 0.0.0.0 --port 8080
             for i in $(seq 1 30); do
               if curl -fsS "http://127.0.0.1:${port}/api/health"; then
                 break
@@ -192,7 +193,8 @@ jobs:
             --shm-size=1g \
             --security-opt seccomp=unconfined \
             -e TASK_HANDOFF_WEB_AUTH=off \
-            task-handoff-controlled-browser:ci-amd64
+            task-handoff-controlled-browser:ci-amd64 \
+            task-handoff-controlled-instance web --host 0.0.0.0 --port 8080
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:18080/api/health; then
               break
