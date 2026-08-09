@@ -5525,6 +5525,7 @@ test("web app ai session read routes do not refresh discovery state", async () =
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-web-ai-read-"));
   const paths = appRuntimeTestPaths(root);
   const aiSessionDir = path.join(paths.dataDir, "ai-sessions");
+  const timestamp = new Date().toISOString();
   fs.mkdirSync(aiSessionDir, { recursive: true });
 	  fs.writeFileSync(
 	    path.join(aiSessionDir, "ais_existing.json"),
@@ -5538,8 +5539,8 @@ test("web app ai session read routes do not refresh discovery state", async () =
 	      turns: [{ id: "turn_existing", userPrompt: "existing prompt", status: "running", revision: 0 }],
 	      status: "running",
 	      phase: "thinking",
-      startedAt: "2026-07-04T00:00:00.000Z",
-      updatedAt: "2026-07-04T00:00:00.000Z",
+      startedAt: timestamp,
+      updatedAt: timestamp,
       counters: { toolCalls: 0, edits: 0, approvals: 0 },
       queue: { pendingCount: 0, items: [] },
     })}\n`,
@@ -5573,11 +5574,20 @@ test("web app ai session read routes do not refresh discovery state", async () =
 	    on: () => undefined,
 	    stopAll: () => undefined,
 	  };
-	  const app = await createWebApp({ staticDir: path.join(root, "missing-static"), logger: false, appRuntime });
+  const aiSessionRegistry = createAiSessionRegistry({ dir: aiSessionDir });
+  const app = await createWebApp({
+    staticDir: path.join(root, "missing-static"),
+    logger: false,
+    appRuntime,
+    aiSessionRegistry,
+  });
   try {
     await app.ready();
     process.env.TASK_HANDOFF_AI_SESSION_SCAN = "1";
-    const listed = await app.inject({ method: "GET", url: "/api/ai-sessions" });
+    const listed = await waitForCondition(async () => {
+      const response = await app.inject({ method: "GET", url: "/api/ai-sessions" });
+      return JSON.parse(response.payload).data.revision > 0 ? response : undefined;
+    }, "initial AI session snapshot");
     assert.equal(listed.statusCode, 200);
     const sessions = JSON.parse(listed.payload).data.snapshot.sessions;
     assert.deepEqual(sessions.map((session) => session.id), ["ais_existing"]);
@@ -5812,6 +5822,7 @@ test("web app AI session snapshot exposes Direct sessions without an App binding
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-web-events-bound-ai-"));
   const paths = appRuntimeTestPaths(root);
   const aiSessionDir = path.join(paths.dataDir, "ai-sessions");
+  const timestamp = new Date().toISOString();
   fs.mkdirSync(aiSessionDir, { recursive: true });
   fs.writeFileSync(
     path.join(aiSessionDir, "ais_unbound.json"),
@@ -5822,8 +5833,8 @@ test("web app AI session snapshot exposes Direct sessions without an App binding
       providerSessionId: "thread_unbound",
       status: "idle",
       phase: "unknown",
-      startedAt: "2026-07-04T00:00:00.000Z",
-      updatedAt: "2026-07-04T00:00:00.000Z",
+      startedAt: timestamp,
+      updatedAt: timestamp,
       counters: { toolCalls: 0, edits: 0, approvals: 0 },
       queue: { pendingCount: 0, items: [] },
     })}\n`,
@@ -5838,8 +5849,8 @@ test("web app AI session snapshot exposes Direct sessions without an App binding
       providerSessionId: "thread_direct",
       status: "idle",
       phase: "unknown",
-      startedAt: "2026-07-04T00:00:00.000Z",
-      updatedAt: "2026-07-04T00:00:00.000Z",
+      startedAt: timestamp,
+      updatedAt: timestamp,
       counters: { toolCalls: 0, edits: 0, approvals: 0 },
       queue: { pendingCount: 0, items: [] },
     })}\n`,
@@ -5852,10 +5863,14 @@ test("web app AI session snapshot exposes Direct sessions without an App binding
     TASK_HANDOFF_CODEX_APP_SERVER: "0",
     TASK_HANDOFF_AI_SESSION_SCAN_INTERVAL_MS: "600000",
   });
-  const app = await createWebApp({ staticDir: path.join(root, "missing-static"), logger: false });
+  const aiSessionRegistry = createAiSessionRegistry({ dir: aiSessionDir });
+  const app = await createWebApp({ staticDir: path.join(root, "missing-static"), logger: false, aiSessionRegistry });
   try {
     await app.ready();
-    const response = await app.inject({ method: "GET", url: "/api/ai-sessions/state" });
+    const response = await waitForCondition(async () => {
+      const candidate = await app.inject({ method: "GET", url: "/api/ai-sessions/state" });
+      return JSON.parse(candidate.payload).data.revision > 0 ? candidate : undefined;
+    }, "initial Direct AI session snapshot");
     assert.equal(response.statusCode, 200);
     assert.deepEqual(JSON.parse(response.payload).data.snapshot.sessions.map((session) => session.id), ["ais_direct"]);
   } finally {
