@@ -5,6 +5,7 @@
   "license": "Apache-2.0",
   "main": "expo-router/entry",
   "dependencies": {
+    "@bsky.app/react-native-uitextview": "2.6.0",
     "@expo/ui": "~57.0.9",
     "@expo/vector-icons": "^15.1.1",
     "@react-native-menu/menu": "^2.0.0",
@@ -80,6 +81,9 @@
   },
   "jest": {
     "preset": "jest-expo",
+    "moduleNameMapper": {
+      "^@bsky.app/react-native-uitextview$": "<rootDir>/__mocks__/react-native-uitextview.tsx"
+    },
     "transform": {
       "^.+\\.mjs$": [
         "babel-jest",

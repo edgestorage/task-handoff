@@ -26,15 +26,16 @@ TaskHandoff brings Codex and other AI development work into one control plane. I
 - **Environment templates** — Save a Docker instance's installed tools and container configuration as a node-local reusable environment, then combine it with any project or local-folder workspace.
 - **AI session center** — View and control sessions across instances with real-time state delivered over WebSocket.
 - **Repository workflows** — Inspect files, changes, branches, and worktrees, with conservative remote delivery for Git repositories.
-- **Chat integrations** — Route messages, approvals, and actions from Telegram, DingTalk, WeChat, and future adapters to a selected instance.
+- **Chat integrations** — Route messages, approvals, and actions from Telegram, DingTalk, WeChat, and Feishu/Lark to a selected instance.
 - **Application management** — Install, remove, and run applications on target instances through a trusted built-in catalog.
-- **Desktop and server deployment** — Run TaskHandoff as a desktop application or as systemd services on Debian and Ubuntu.
+- **Mobile client** — Connect an iOS or Android device directly to a user-managed Control Plane for AI sessions, instance operations, applications, and terminals.
+- **Desktop and server deployment** — Run TaskHandoff as a mobile or desktop application, or as systemd services on Debian and Ubuntu.
 - **English and Chinese UI** — Switch languages instantly or follow the browser language automatically.
 
 ## Architecture
 
 ```text
-Browser / Desktop / Chat platforms
+Browser / Desktop / Mobile / Chat platforms
                  │
                  ▼
           Control Plane
@@ -49,14 +50,15 @@ Browser / Desktop / Chat platforms
  Workspace, applications, and AI sessions
 ```
 
-TaskHandoff is organized into four cooperating layers:
+TaskHandoff is organized into three runtime layers:
 
 - **Control Plane** provides the Web/API management surface and owns the node inventory, instance board, chat gateway, and cross-instance AI session views.
 - **Node Agent** runs on each managed machine and owns node-local configuration, runtime resources, folder inventory, and controlled instance lifecycles. Instances continue running when the control plane is stopped or restarted.
-- **Controlled Instance** hosts a workspace, applications, AI sessions, triggers, and metadata. It typically runs in Docker and is accessed through the Node Agent.
-- **Chat Gateway and AI Sessions** keep chat credentials, bindings, command parsing, and routing in the control plane, while each target AI Session remains the source of truth for conversation state.
+- **Controlled Instance** hosts a workspace, applications, AI sessions, triggers, and metadata. It can run standalone; in a managed deployment, its lifecycle and access are owned by the Node Agent.
 
-Docker is the primary runtime today. Runtime capabilities and adapters keep the model open to Kubernetes and local-host runtimes without creating separate UI flows for each environment.
+Chat and AI Session state form a cross-layer path: the Control Plane owns chat credentials, bindings, command parsing, and routing, while each target AI Session remains the source of truth for conversation state.
+
+Docker is the primary isolated runtime and supports multiple instances on one node. A built-in Local Runtime is also available on supported non-Windows nodes for one controlled instance per host user. Runtime capabilities and adapters keep the same model extensible to Kubernetes without creating a separate UI flow.
 
 ### Environment templates
 
@@ -74,7 +76,7 @@ The source node owns both the template record and its Docker image, so a templat
 
 - Node.js `>= 24.15.0 < 25`
 - pnpm `9.15.3`
-- Docker, when running the complete local stack or controlled instances
+- Docker, when using Docker Runtime, building container images, or running the standalone Compose profile
 
 ### Local development
 
@@ -82,6 +84,13 @@ The source node owns both the template record and its Docker image, so a templat
 pnpm install
 pnpm run build:all
 pnpm cli help
+```
+
+Start the Control Plane API and development UI in separate terminals. The disabled authentication mode is intended only for loopback development:
+
+```sh
+pnpm cli control-plane --auth-mode disabled
+pnpm run control-plane-ui:dev
 ```
 
 Common development commands:
@@ -102,17 +111,13 @@ pnpm test
 pnpm run pack:dry
 ```
 
-Start the complete Docker environment:
+To run a standalone Browser-profile controlled instance instead of the Control Plane development stack:
 
 ```sh
-pnpm run docker:up:all
+docker compose up -d --build
 ```
 
-The current directory is mounted at `/workspace` by default. Set `TASK_HANDOFF_WORKSPACE_HOST` to mount a different host directory:
-
-```sh
-TASK_HANDOFF_WORKSPACE_HOST=/path/to/workspace pnpm run docker:up:all
-```
+The current directory is mounted at `/workspace` by default. Set `TASK_HANDOFF_WORKSPACE_HOST` to mount a different host directory. This Compose service is a standalone controlled instance, not a Control Plane and Node Agent deployment.
 
 ## Server Deployment
 
@@ -157,7 +162,7 @@ See [`scripts/install-server.sh`](scripts/install-server.sh) for supported insta
 
 ## Connect a Remote Node
 
-Remote machines only need the Node Agent. Generate a one-time join token in the control plane, then run this on the target node:
+Remote machines only need the Node Agent. Generate a one-time join token in the Control Plane and prefer the exact installation command shown there. Its package version is resolved from the running Control Plane release. The equivalent form is:
 
 ```sh
 curl -fsSL https://CONTROL_PLANE_HOST/install-node-agent.sh | sudo sh -s -- \
@@ -165,8 +170,10 @@ curl -fsSL https://CONTROL_PLANE_HOST/install-node-agent.sh | sudo sh -s -- \
   --join-token JOIN_TOKEN \
   --npm-package @task-handoff/node-agent \
   --controlled-instance-package @task-handoff/controlled-instance \
-  --version 1.0.0
+  --version RELEASE_VERSION
 ```
+
+Replace `RELEASE_VERSION` with the Control Plane's runtime package version so the Node Agent and controlled-instance runtime use the same release.
 
 An installed Node Agent can also generate a one-time invitation directly on the node:
 
@@ -201,7 +208,9 @@ The preference is stored only in the current browser. Terminal output, logs, AI 
 ```text
 apps/cli/                         CLI entry point
 apps/desktop-shell/               Electron desktop shell
+apps/mobile/                      Expo iOS and Android client
 packages/control-plane/           Control plane, Node Agent, and chat gateway
+packages/control-plane-client/    Shared Control Plane API and realtime client
 packages/control-plane-ui/        Control-plane Vue UI
 packages/controlled-instance/     Controlled-instance HTTP/WebSocket API
 packages/controlled-instance-ui/  Frozen controlled-instance Vue UI
@@ -215,19 +224,32 @@ scripts/                          Installation, build, and runtime scripts
 
 ## Releases
 
+### Runtime and server packages
+
+A semantic version tag such as `v1.2.3` builds the controlled-instance runtime artifacts, publishes `@task-handoff/control-plane`, `@task-handoff/node-agent`, `@task-handoff/controlled-instance`, and `@task-handoff/server`, and attaches the installer and immutable artifacts to the GitHub Release. `alpha` and `beta` versions use their matching npm dist-tags; stable versions update `latest`.
+
 ### Docker images
 
-Every push to `main` builds and smoke-tests three cumulative images:
+The Docker workflow builds and smoke-tests four image profiles:
 
-- `task-handoff-controlled-codex`
-- `task-handoff-controlled-ai`
-- `task-handoff-controlled-browser`
+| Image | Profile capabilities |
+| --- | --- |
+| `task-handoff-controlled-codex` | Terminal and Codex |
+| `task-handoff-controlled-ai` | Terminal, Codex, and Claude |
+| `task-handoff-controlled-webcap` | GUI terminal, browser, WebCap, Codex, and Claude |
+| `task-handoff-controlled-browser` | GUI terminal, browser, VS Code Web, Codex, and Claude; no WebCap |
 
-All three receive the same immutable `sha-<commit>` tag. A semantic version tag such as `v1.2.3` promotes the corresponding images to that version; stable releases also update `latest`.
+All four receive the same immutable `sha-<commit>` tag. A semantic version tag such as `v1.2.3` promotes the corresponding images to that version; stable releases also update `latest`.
 
 ### Desktop application
 
 Semantic version tags build macOS arm64/x64, Windows x64, and Linux x64 installers and publish them to GitHub Releases. Versions with an `alpha` or `beta` suffix are marked as prereleases. macOS artifacts are signed, notarized, stapled, and verified with Gatekeeper. Windows code signing is not enabled yet.
+
+### Mobile application
+
+A stable tag in the exact form `mobile-vX.Y.Z` runs the mobile release checks and starts independent Android and iOS release jobs. Android produces an APK and attaches it to the corresponding GitHub Release. After approval through the `ios-production` environment, iOS builds are submitted to App Store Connect/TestFlight; final App Store review remains a manual action. Android is not submitted to Google Play by this workflow.
+
+See [`apps/mobile/README.md`](apps/mobile/README.md) for the client boundary and development commands, and [`apps/mobile/RELEASE.md`](apps/mobile/RELEASE.md) for credentials, first-build setup, and release operations.
 
 ## License
 

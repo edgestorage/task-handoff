@@ -13,12 +13,16 @@ case "${IMAGE_PROFILE}" in
     BUILD_TARGET="profile-ai"
     DEFAULT_IMAGE_REF="task-handoff-controlled-ai:local"
     ;;
+  webcap)
+    BUILD_TARGET="profile-webcap"
+    DEFAULT_IMAGE_REF="task-handoff-controlled-webcap:local"
+    ;;
   browser)
     BUILD_TARGET="profile-browser"
     DEFAULT_IMAGE_REF="task-handoff-controlled-browser:local"
     ;;
   *)
-    echo "Unsupported TASK_HANDOFF_IMAGE_PROFILE: ${IMAGE_PROFILE} (expected codex, ai, or browser)" >&2
+    echo "Unsupported TASK_HANDOFF_IMAGE_PROFILE: ${IMAGE_PROFILE} (expected codex, ai, webcap, or browser)" >&2
     exit 1
     ;;
 esac
@@ -42,7 +46,6 @@ set -- \
   --build-arg "CHROMIUM_EXTENSION_URLS=${CHROMIUM_EXTENSION_URLS:-}" \
   --build-arg "CHROMIUM_EXTENSION_IDS=${CHROMIUM_EXTENSION_IDS:-}" \
   --build-arg "CHROMIUM_EXTENSION_UPDATE_URL=${CHROMIUM_EXTENSION_UPDATE_URL:-https://clients2.google.com/service/update2/crx}" \
-  --build-arg "TASK_HANDOFF_ENABLE_WEB_CAP=${TASK_HANDOFF_ENABLE_WEB_CAP:-0}" \
   --build-arg "WEB_CAPABILITY_VERSION=${WEB_CAPABILITY_VERSION:-0.0.7}" \
   --build-arg "WEB_CAP_EXTENSION_VERSION=${WEB_CAP_EXTENSION_VERSION:-0.0.7}" \
   --build-arg "WEB_CAP_EXTENSION_URL=${WEB_CAP_EXTENSION_URL:-}" \

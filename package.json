@@ -57,8 +57,6 @@
     "check": "node bin/check-package-boundaries.js && pnpm run typecheck:legacy && pnpm run build:legacy && node bin/check-dist.js",
     "check:controlled-instance": "node bin/check-package-boundaries.js && pnpm run typecheck:controlled-instance && pnpm run controlled-instance-ui:typecheck && pnpm run build:controlled-instance && node bin/check-dist.js",
     "docker:build:image": "sh scripts/docker-build-image.sh",
-    "docker:build:image:all-optional": "sh scripts/docker-build-image-all-optional.sh",
-    "docker:up:all": "sh scripts/docker-up-all-optional.sh",
     "pack:dry": "pnpm run build:legacy && npm_config_cache=/private/tmp/task-handoff-npm-cache npm pack --dry-run",
     "test": "pnpm run test:node && pnpm --filter @task-handoff/control-plane-client test && pnpm --filter @task-handoff/control-plane-ui test && pnpm --filter @task-handoff/mobile test",
     "test:node": "node --import ./test/setup-isolated-runtime.mjs --test test/*.test.* apps/*/test/*.test.* packages/protocol/test/*.test.* packages/*/*.test.*"

@@ -1,0 +1,244 @@
+name: Mobile Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing mobile-v* tag to publish
+        required: true
+        type: string
+  push:
+    tags:
+      - "mobile-v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mobile-release
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify mobile release
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      release_tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.release_tag || github.ref }}
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.3
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Resolve release version from tag
+        id: release
+        env:
+          REQUESTED_TAG: ${{ inputs.release_tag }}
+          ASC_APP_ID: ${{ vars.ASC_APP_ID }}
+        shell: bash
+        run: |
+          tag="${REQUESTED_TAG:-$GITHUB_REF_NAME}"
+          if [[ ! "$tag" =~ ^mobile-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::Mobile release tag must use mobile-v<major>.<minor>.<patch> without a prerelease suffix, got: $tag"
+            exit 1
+          fi
+          if ! git rev-parse --verify --quiet "refs/tags/$tag" >/dev/null; then
+            echo "::error::Tag does not exist in the repository: $tag"
+            exit 1
+          fi
+          if [[ ! "$ASC_APP_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Missing or invalid GitHub repository variable: ASC_APP_ID"
+            exit 1
+          fi
+          version="${tag#mobile-v}"
+          node apps/mobile/scripts/set-release-version.mjs "$version" "$ASC_APP_ID"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Validate production Expo configuration
+        env:
+          TASK_HANDOFF_MOBILE_VARIANT: production
+          EXPO_PROJECT_ID: ${{ vars.EXPO_PROJECT_ID }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        working-directory: apps/mobile
+        shell: bash
+        run: |
+          if [[ -z "$EXPO_PROJECT_ID" ]]; then
+            echo "::error::Missing required GitHub repository variable: EXPO_PROJECT_ID"
+            exit 1
+          fi
+          config="$(pnpm exec expo config --type public --json)"
+          node -e '
+            const config = JSON.parse(process.argv[1]);
+            if (config.name !== "TaskHandoff") throw new Error(`Unexpected app name: ${config.name}`);
+            if (config.version !== process.env.RELEASE_VERSION) {
+              throw new Error(`Expo version ${config.version} does not match tag version ${process.env.RELEASE_VERSION}.`);
+            }
+            if (config.ios?.bundleIdentifier !== "com.taskhandoff.mobile") {
+              throw new Error(`Unexpected iOS bundle identifier: ${config.ios?.bundleIdentifier}`);
+            }
+            if (config.android?.package !== "com.taskhandoff.mobile") {
+              throw new Error(`Unexpected Android package: ${config.android?.package}`);
+            }
+            if (config.extra?.eas?.projectId !== process.env.EXPO_PROJECT_ID) {
+              throw new Error("Expo project id was not applied to the production configuration.");
+            }
+            const eas = require("./eas.json");
+            if (!/^\d+$/.test(eas.submit?.production?.ios?.ascAppId || "")) {
+              throw new Error("App Store Connect app id was not applied to the production submit profile.");
+            }
+          ' "$config"
+
+      - run: pnpm --filter @task-handoff/mobile release:check
+        env:
+          TASK_HANDOFF_MOBILE_VARIANT: production
+          EXPO_PROJECT_ID: ${{ vars.EXPO_PROJECT_ID }}
+
+  android:
+    name: Publish Android APK
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.verify.outputs.release_tag }}
+
+      - name: Apply tag version to Expo configuration
+        env:
+          RELEASE_VERSION: ${{ needs.verify.outputs.version }}
+        run: node apps/mobile/scripts/set-release-version.mjs "$RELEASE_VERSION"
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.3
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: 21.7.0
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Validate EAS credentials
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          EXPO_PROJECT_ID: ${{ vars.EXPO_PROJECT_ID }}
+        shell: bash
+        run: |
+          if [[ -z "$EXPO_TOKEN" ]]; then
+            echo "::error::Missing required GitHub repository secret: EXPO_TOKEN"
+            exit 1
+          fi
+          if [[ -z "$EXPO_PROJECT_ID" ]]; then
+            echo "::error::Missing required GitHub repository variable: EXPO_PROJECT_ID"
+            exit 1
+          fi
+
+      - name: Build Android production APK
+        id: android
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          EXPO_PROJECT_ID: ${{ vars.EXPO_PROJECT_ID }}
+          TASK_HANDOFF_MOBILE_VARIANT: production
+          VERSION: ${{ needs.verify.outputs.version }}
+        working-directory: apps/mobile
+        shell: bash
+        run: |
+          build_json="$(eas build --platform android --profile android-release --non-interactive --wait --json)"
+          artifact_url="$(node -e '
+            const value = JSON.parse(process.argv[1]);
+            const build = Array.isArray(value) ? value[0] : value;
+            const url = build?.artifacts?.buildUrl || build?.artifacts?.applicationArchiveUrl;
+            if (!url) throw new Error("EAS build returned no APK artifact URL.");
+            process.stdout.write(url);
+          ' "$build_json")"
+          artifact="$RUNNER_TEMP/TaskHandoff-$VERSION-android.apk"
+          curl --fail --location --retry 3 --output "$artifact" "$artifact_url"
+          echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
+
+      - name: Publish Android APK to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.verify.outputs.release_tag }}
+          VERSION: ${{ needs.verify.outputs.version }}
+          ARTIFACT: ${{ steps.android.outputs.artifact }}
+        shell: bash
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "$ARTIFACT" --clobber
+          else
+            gh release create "$RELEASE_TAG" "$ARTIFACT" \
+              --verify-tag \
+              --generate-notes \
+              --title "TaskHandoff Mobile $VERSION"
+          fi
+
+  ios:
+    name: Submit iOS to App Store Connect
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: ios-production
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.verify.outputs.release_tag }}
+
+      - name: Apply tag version to Expo configuration
+        env:
+          RELEASE_VERSION: ${{ needs.verify.outputs.version }}
+          ASC_APP_ID: ${{ vars.ASC_APP_ID }}
+        run: node apps/mobile/scripts/set-release-version.mjs "$RELEASE_VERSION" "$ASC_APP_ID"
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.3
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: 21.7.0
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Build and submit iOS
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          EXPO_PROJECT_ID: ${{ vars.EXPO_PROJECT_ID }}
+          TASK_HANDOFF_MOBILE_VARIANT: production
+        working-directory: apps/mobile
+        shell: bash
+        run: |
+          if [[ -z "$EXPO_TOKEN" ]]; then
+            echo "::error::Missing required GitHub repository secret: EXPO_TOKEN"
+            exit 1
+          fi
+          if [[ -z "$EXPO_PROJECT_ID" ]]; then
+            echo "::error::Missing required GitHub repository variable: EXPO_PROJECT_ID"
+            exit 1
+          fi
+          eas build --platform ios --profile production --non-interactive --wait --auto-submit

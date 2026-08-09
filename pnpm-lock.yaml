@@ -233,6 +233,9 @@ importers:
 
   apps/mobile:
     dependencies:
+      '@bsky.app/react-native-uitextview':
+        specifier: 2.6.0
+        version: 2.6.0(react-native@0.86.2(@react-native/jest-preset@0.86.2(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.2)(@types/react@19.2.18)(react@19.2.3))(react@19.2.3)
       '@expo/ui':
         specifier: ~57.0.9
         version: 57.0.9(@babel/core@7.29.7)(@types/react@19.2.18)(expo@57.0.10)(react-dom@19.2.3(react@19.2.3))(react-native-worklets@0.10.1(@babel/core@7.29.7)(@react-native/metro-config@0.86.2)(react-native@0.86.2(@react-native/jest-preset@0.86.2(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.2)(@types/react@19.2.18)(react@19.2.3))(react@19.2.3))(react-native@0.86.2(@react-native/jest-preset@0.86.2(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.2)(@types/react@19.2.18)(react@19.2.3))(react@19.2.3)
@@ -1225,6 +1228,12 @@ packages:
 
   '@braintree/sanitize-url@7.1.2':
     resolution: {integrity: sha512-jigsZK+sMF/cuiB7sERuo9V7N9jx+dhmHHnQyDSVdpZwVutaBu7WvNYqMDLSgFgfB30n452TP3vjDAvFC973mA==}
+
+  '@bsky.app/react-native-uitextview@2.6.0':
+    resolution: {integrity: sha512-d6efoPKixj7ycaQWYSDr4JDB1jzIewWie6UtP4Pylgh+K//aXCNaudbLjHN4WP6RVGBfFqNac13hSh3tRikH7A==}
+    peerDependencies:
+      react: '*'
+      react-native: '>=0.81.5'
 
   '@chenglou/pretext@0.0.8':
     resolution: {integrity: sha512-yqm2GMxnPI7VHcHwe84P8ZF0JK/2d2DMKPqMN+s95jQhwDMYYXKVFVJUMEaVWckQStdsjdLav/0Vu+d9YbtGxA==}
@@ -8526,6 +8535,11 @@ snapshots:
   '@bcoe/v8-coverage@0.2.3': {}
 
   '@braintree/sanitize-url@7.1.2': {}
+
+  '@bsky.app/react-native-uitextview@2.6.0(react-native@0.86.2(@react-native/jest-preset@0.86.2(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.2)(@types/react@19.2.18)(react@19.2.3))(react@19.2.3)':
+    dependencies:
+      react: 19.2.3
+      react-native: 0.86.2(@react-native/jest-preset@0.86.2(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.2)(@types/react@19.2.18)(react@19.2.3)
 
   '@chenglou/pretext@0.0.8': {}
 

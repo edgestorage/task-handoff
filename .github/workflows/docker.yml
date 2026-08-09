@@ -33,6 +33,7 @@ concurrency:
 env:
   DOCKERHUB_CODEX_IMAGE_NAME: ${{ vars.DOCKERHUB_CODEX_IMAGE_NAME || 'task-handoff-controlled-codex' }}
   DOCKERHUB_AI_IMAGE_NAME: ${{ vars.DOCKERHUB_AI_IMAGE_NAME || 'task-handoff-controlled-ai' }}
+  DOCKERHUB_WEBCAP_IMAGE_NAME: ${{ vars.DOCKERHUB_WEBCAP_IMAGE_NAME || 'task-handoff-controlled-webcap' }}
   DOCKERHUB_BROWSER_IMAGE_NAME: ${{ vars.DOCKERHUB_BROWSER_IMAGE_NAME || 'task-handoff-controlled-browser' }}
 
 jobs:
@@ -61,16 +62,19 @@ jobs:
             node -e 'if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(process.argv[1])) process.exit(1)' "$version"
             codex_image_ref="${DOCKERHUB_CODEX_IMAGE_NAME}:${GITHUB_REF_NAME}"
             ai_image_ref="${DOCKERHUB_AI_IMAGE_NAME}:${GITHUB_REF_NAME}"
+            webcap_image_ref="${DOCKERHUB_WEBCAP_IMAGE_NAME}:${GITHUB_REF_NAME}"
             browser_image_ref="${DOCKERHUB_BROWSER_IMAGE_NAME}:${GITHUB_REF_NAME}"
           else
             version="$(node -p "require('./package.json').version")"
             codex_image_ref="task-handoff-controlled-codex:ci-${{ matrix.arch }}"
             ai_image_ref="task-handoff-controlled-ai:ci-${{ matrix.arch }}"
+            webcap_image_ref="task-handoff-controlled-webcap:ci-${{ matrix.arch }}"
             browser_image_ref="task-handoff-controlled-browser:ci-${{ matrix.arch }}"
           fi
           echo "value=$version" >> "$GITHUB_OUTPUT"
           echo "codex-image-ref=$codex_image_ref" >> "$GITHUB_OUTPUT"
           echo "ai-image-ref=$ai_image_ref" >> "$GITHUB_OUTPUT"
+          echo "webcap-image-ref=$webcap_image_ref" >> "$GITHUB_OUTPUT"
           echo "browser-image-ref=$browser_image_ref" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v4
@@ -126,11 +130,28 @@ jobs:
           cache-from: type=gha,scope=controlled-instance-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=controlled-instance-${{ matrix.arch }}
 
+      - name: Build WebCap image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          platforms: ${{ matrix.platform }}
+          target: profile-webcap
+          tags: task-handoff-controlled-webcap:ci-${{ matrix.arch }}
+          build-args: |
+            TASK_HANDOFF_VERSION=${{ steps.image-version.outputs.value }}
+            TASK_HANDOFF_BUILD_ID=${{ github.run_id }}
+            TASK_HANDOFF_BUILT_AT=${{ github.event.repository.updated_at }}
+            TASK_HANDOFF_GIT_COMMIT=${{ github.sha }}
+            TASK_HANDOFF_IMAGE_REF=${{ steps.image-version.outputs.webcap-image-ref }}
+          cache-from: type=gha,scope=controlled-instance-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=controlled-instance-${{ matrix.arch }}
+
       - name: Verify image version
         env:
           EXPECTED_VERSION: ${{ steps.image-version.outputs.value }}
         run: |
-          for profile in codex ai browser; do
+          for profile in codex ai webcap browser; do
             actual="$(docker image inspect "task-handoff-controlled-${profile}:ci-${{ matrix.arch }}" --format '{{ index .Config.Labels "org.opencontainers.image.version" }}')"
             declared_profile="$(docker image inspect "task-handoff-controlled-${profile}:ci-${{ matrix.arch }}" --format '{{ index .Config.Labels "io.task-handoff.image.profile" }}')"
             test "$actual" = "$EXPECTED_VERSION"
@@ -180,6 +201,37 @@ jobs:
           docker exec task-handoff-ai-ci codex --version
           docker exec task-handoff-ai-ci claude --version
           ! docker exec task-handoff-ai-ci sh -lc 'command -v chromium'
+
+      - name: Smoke test WebCap profile
+        if: ${{ matrix.arch == 'amd64' }}
+        run: |
+          docker run --rm -d \
+            --name task-handoff-webcap-ci \
+            -p 18083:8080 \
+            --shm-size=1g \
+            --security-opt seccomp=unconfined \
+            -e TASK_HANDOFF_WEB_AUTH=off \
+            task-handoff-controlled-webcap:ci-amd64 \
+            task-handoff-controlled-instance web --host 0.0.0.0 --port 8080
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18083/api/health; then
+              break
+            fi
+            if [ "$i" = "30" ]; then
+              docker logs task-handoff-webcap-ci
+              exit 1
+            fi
+            sleep 1
+          done
+          docker exec task-handoff-webcap-ci codex --version
+          docker exec task-handoff-webcap-ci claude --version
+          docker exec task-handoff-webcap-ci sh -lc 'command -v web-cap && (web-cap --version || web-cap --help >/dev/null)'
+          docker exec task-handoff-webcap-ci sh -lc 'command -v chromium'
+          docker exec task-handoff-webcap-ci sh -lc 'command -v vncserver'
+          docker exec task-handoff-webcap-ci test -f /home/agent/.codex/skills/web-cap/SKILL.md
+          docker exec task-handoff-webcap-ci test -f /home/agent/.claude/skills/web-cap/SKILL.md
+          docker exec task-handoff-webcap-ci test -f /opt/task-handoff/chromium-extensions/web-cap/manifest.json
+          ! docker exec task-handoff-webcap-ci sh -lc 'command -v code-server'
 
       - name: Smoke test Browser profile
         if: ${{ matrix.arch == 'amd64' }}
@@ -405,7 +457,7 @@ jobs:
 
       - name: Cleanup
         if: ${{ always() && matrix.arch == 'amd64' }}
-        run: docker rm -f task-handoff-web-ci task-handoff-codex-ci task-handoff-ai-ci 2>/dev/null || true
+        run: docker rm -f task-handoff-web-ci task-handoff-webcap-ci task-handoff-codex-ci task-handoff-ai-ci 2>/dev/null || true
 
       - name: Login to Docker Hub
         if: ${{ startsWith(github.ref, 'refs/tags/v') }}
@@ -423,6 +475,7 @@ jobs:
           for entry in \
             "codex:${DOCKERHUB_CODEX_IMAGE_NAME}" \
             "ai:${DOCKERHUB_AI_IMAGE_NAME}" \
+            "webcap:${DOCKERHUB_WEBCAP_IMAGE_NAME}" \
             "browser:${DOCKERHUB_BROWSER_IMAGE_NAME}"
           do
             profile="${entry%%:*}"
@@ -454,6 +507,7 @@ jobs:
           for image_name in \
             "${DOCKERHUB_CODEX_IMAGE_NAME}" \
             "${DOCKERHUB_AI_IMAGE_NAME}" \
+            "${DOCKERHUB_WEBCAP_IMAGE_NAME}" \
             "${DOCKERHUB_BROWSER_IMAGE_NAME}"
           do
             image="${DOCKERHUB_USERNAME}/${image_name}"
@@ -500,6 +554,7 @@ jobs:
           for image_name in \
             "${DOCKERHUB_CODEX_IMAGE_NAME}" \
             "${DOCKERHUB_AI_IMAGE_NAME}" \
+            "${DOCKERHUB_WEBCAP_IMAGE_NAME}" \
             "${DOCKERHUB_BROWSER_IMAGE_NAME}"
           do
             image="${DOCKERHUB_USERNAME}/${image_name}"
