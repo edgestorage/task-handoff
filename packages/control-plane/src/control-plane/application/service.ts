@@ -70,7 +70,7 @@ import { ControlPlaneProxyNodeAgentTransport } from "../nodes/control-plane-prox
 import { ControlPlaneProxyPrivateStore, controlPlaneProxyPrivateStorePaths } from "../nodes/control-plane-proxy-private-store.ts";
 import { ControlPlaneProxyLifecycle } from "../nodes/proxy-lifecycle.ts";
 import { NodeConnectionManager, PendingPairingRevokeSchema, type PendingPairingRevoke } from "../nodes/connection-manager.ts";
-import { NodeJoinInviteSchema, NodeJoinService, type NodeJoinInvite } from "../nodes/join-service.ts";
+import { NodeJoinService } from "../nodes/join-service.ts";
 import { ControlPlaneModelService } from "../models/service.ts";
 import { ControlledInstanceGateway } from "../instances/gateway.ts";
 import { InstanceBoardReader } from "../instances/board-reader.ts";
@@ -106,6 +106,7 @@ import {
   type UpdateNodeInput,
 } from "./inputs.ts";
 import type { ControlPlaneStorePaths } from "../persistence/paths.ts";
+import { ControlPlanePersistenceMaintenance } from "../persistence/maintenance.ts";
 import { JsonCollection, JsonFile } from "../../shared/persistence/store.ts";
 import type { ControlPlaneProxyError, ProxyTargetEvent, ProxyTargetSnapshot } from "@task-handoff/protocol/control-plane-proxy";
 import type { NodeConnectionRuntime } from "../nodes/connection-runtime.ts";
@@ -158,7 +159,6 @@ export class ControlPlaneService {
   readonly chatSessions: JsonCollection<ChatSessionBinding>;
   readonly chatBridges: JsonCollection<ChatBridgeConfig>;
   readonly triggers: JsonCollection<ControlPlaneTriggerRecord>;
-  readonly nodeJoinInvites: JsonCollection<NodeJoinInvite>;
   private readonly nodeJoinService: NodeJoinService;
   private readonly configSyncPreferences: JsonCollection<ConfigSyncPreferenceRecord>;
   private readonly settings: JsonFile<ControlPlaneSettings>;
@@ -166,8 +166,10 @@ export class ControlPlaneService {
   private readonly fetchImpl: FetchImpl;
   private readonly dockerCommandRunner: CommandRunner | undefined;
   private readonly logger: ServiceLogger | undefined;
+  private diagnosticLogsState: boolean;
   private readonly nodeConnectionRuntime: NodeConnectionRuntime | undefined;
   private readonly appAccessService: AppAccessService;
+  private readonly persistenceMaintenance: ControlPlanePersistenceMaintenance;
   private readonly chatActionTokenService = new ChatActionTokenService();
   private readonly nodeAgentTransportResolver: NodeAgentTransportResolver;
   readonly proxyPrivateStore: ControlPlaneProxyPrivateStore;
@@ -192,6 +194,13 @@ export class ControlPlaneService {
     this.fetchImpl = options.fetchImpl || fetch;
     this.dockerCommandRunner = options.dockerCommandRunner;
     this.nodeConnectionRuntime = options.nodeConnectionRuntime;
+    this.persistenceMaintenance = new ControlPlanePersistenceMaintenance(paths, {
+      logger: (message, details) => this.logWarn(details, message),
+    });
+    const storeOptions = <T,>(schema: z.ZodType<T>) => ({
+      schema,
+      logger: (message: string, details: Record<string, unknown>) => this.logWarn(details, message),
+    });
     this.proxyPrivateStore = new ControlPlaneProxyPrivateStore(
       controlPlaneProxyPrivateStorePaths(paths.dataDir),
       (message, details) => this.logWarn(details, message),
@@ -204,7 +213,17 @@ export class ControlPlaneService {
         fetchImpl: this.fetchImpl,
       }),
     });
-    this.logger = controlPlaneDiagnosticLogsEnabled() ? options.logger : undefined;
+    const diagnosticLogsDefault = controlPlaneDiagnosticLogsEnabled();
+    this.diagnosticLogsState = diagnosticLogsDefault;
+    this.settings = new JsonFile(paths.settingsPath, () => ControlPlaneSettingsSchema.parse({ diagnosticLogs: diagnosticLogsDefault }), {
+      ...storeOptions(ControlPlaneSettingsSchema),
+      sanitize: (value) => sanitizeStoredControlPlaneSettings(value, { diagnosticLogs: diagnosticLogsDefault }),
+    });
+    this.logger = options.logger ? {
+      info: (data, message) => { if (this.diagnosticLogsEnabled()) options.logger?.info?.(data, message); },
+      warn: (data, message) => { if (this.diagnosticLogsEnabled()) options.logger?.warn?.(data, message); },
+      error: (data, message) => { if (this.diagnosticLogsEnabled()) options.logger?.error?.(data, message); },
+    } : undefined;
     const nodeAgentClient = new ControlPlaneNodeAgentClient({
       request: (node, route, init) => this.nodeAgentFetch(node, route, init),
       logger: this.logger,
@@ -223,10 +242,6 @@ export class ControlPlaneService {
         this.listAiSessions({ refresh: true }),
       ]),
       warn: (data, message) => this.logWarn(data, message),
-    });
-    const storeOptions = <T,>(schema: z.ZodType<T>) => ({
-      schema,
-      logger: (message: string, details: Record<string, unknown>) => this.logWarn(details, message),
     });
     this.projects = new JsonCollection(paths.projectsDir, { ...storeOptions(ProjectSchema), sanitize: sanitizeStoredProject });
     this.models = new JsonCollection(paths.modelsDir, storeOptions(ModelConfigSchema));
@@ -264,18 +279,12 @@ export class ControlPlaneService {
     this.chatSessions = new JsonCollection(paths.chatSessionsDir, storeOptions(ChatSessionBindingSchema));
     this.chatBridges = new JsonCollection(paths.chatBridgesDir, storeOptions(ChatBridgeConfigSchema));
     this.triggers = new JsonCollection(paths.triggersDir, storeOptions(ControlPlaneTriggerRecordSchema));
-    this.nodeJoinInvites = new JsonCollection(paths.nodeJoinInvitesDir, storeOptions(NodeJoinInviteSchema));
     this.nodeJoinService = new NodeJoinService({
-      invites: this.nodeJoinInvites,
       nodes: this.nodes,
     });
     this.configSyncPreferences = new JsonCollection(path.join(paths.dataDir, "config-sync-preferences"), {
       ...storeOptions(ConfigSyncPreferenceRecordSchema),
       sanitize: sanitizeStoredConfigSyncPreferenceRecord,
-    });
-    this.settings = new JsonFile(paths.settingsPath, () => ControlPlaneSettingsSchema.parse({}), {
-      ...storeOptions(ControlPlaneSettingsSchema),
-      sanitize: sanitizeStoredControlPlaneSettings,
     });
     this.marketCatalogService = new MarketCatalogService();
     this.catalogService = new ControlPlaneCatalogService({
@@ -371,6 +380,7 @@ export class ControlPlaneService {
   }
 
   init() {
+    this.runPersistenceMaintenance();
     this.projects.init();
     this.models.init();
     this.images.init();
@@ -379,7 +389,6 @@ export class ControlPlaneService {
     this.chatSessions.init();
     this.chatBridges.init();
     this.triggers.init();
-    this.nodeJoinInvites.init();
     this.proxyPrivateStore.init();
     this.proxyPrivateStore.gcNodeCredentials((credential) => {
       const node = this.nodes.get(credential.nodeId);
@@ -389,8 +398,19 @@ export class ControlPlaneService {
         && node.connectionPath.targetNodeId === credential.targetNodeId;
     });
     this.settings.init();
+    const normalizedSettings = this.settings.put(this.settings.get());
+    this.diagnosticLogsState = normalizedSettings.diagnosticLogs;
     this.migrateLegacyImageCatalog();
     this.seedDefaults();
+  }
+
+  runPersistenceMaintenance() {
+    try {
+      return this.persistenceMaintenance.run();
+    } catch (error) {
+      this.logWarn({ error: error instanceof Error ? error.message : String(error) }, "control-plane persistence maintenance failed");
+      return [];
+    }
   }
 
   private migrateLegacyImageCatalog() {
@@ -464,8 +484,14 @@ export class ControlPlaneService {
     return this.catalogService.getSettings();
   }
 
+  diagnosticLogsEnabled() {
+    return this.diagnosticLogsState;
+  }
+
   updateSettings(input: unknown) {
-    return this.catalogService.updateSettings(input);
+    const settings = this.catalogService.updateSettings(input);
+    this.diagnosticLogsState = settings.diagnosticLogs;
+    return settings;
   }
 
   seedDefaults() {
@@ -480,8 +506,10 @@ export class ControlPlaneService {
     return this.nodes.list().find(isControlPlaneLocalNode)?.id || this.nodes.list()[0]?.id;
   }
 
-  syncLocalNodeConnection() {
-    return this.nodeConnectionManager.syncLocal();
+  async syncLocalNodeConnection() {
+    const node = await this.nodeConnectionManager.syncLocal();
+    this.nodeConnectionRuntime?.observedReachable(node);
+    return this.projectNodeConnection(node);
   }
 
   recoverPendingPairingRevokes() {
@@ -1225,8 +1253,14 @@ export class ControlPlaneService {
     return this.aiSessionActionService.resume(instanceId, aiSessionId);
   }
 
-  createAiSession(instanceId: string, input: AiSessionCreateInput) {
-    return this.aiSessionActionService.create(instanceId, input);
+  async createAiSession(instanceId: string, input: Omit<AiSessionCreateInput, "cwd"> & { cwdFolderId?: string }) {
+    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
+    const { cwdFolderId: _cwdFolderId, ...resolvedInput } = input;
+    const cwdPath = input.cwdFolderId
+      ? await this.runtimeCwdForFolderId(instance, input.cwdFolderId)
+      : instance.runtime.workspacePath || instance.workspace.path || workspacePolicyForSource(instance.source).path || "/workspace";
+    const cwd = { type: "runtime-path" as const, path: cwdPath };
+    return this.aiSessionActionService.create(instanceId, { ...resolvedInput, cwd });
   }
 
   openAiSessionApp(instanceId: string, aiSessionId: string, clientRequestId: string) {
@@ -1436,7 +1470,18 @@ export class ControlPlaneService {
   }
 
   private async nodeAgentFetch(node: Node, route: string, init: RequestInit = {}) {
-    return this.nodeAgentTransportResolver.resolve(node).request(node, route, init);
+    const observesDirectControl = node.connectionMode !== "reverse-wss"
+      && node.connectionMode !== "control-plane-proxy";
+    try {
+      const response = await this.nodeAgentTransportResolver.resolve(node).request(node, route, init);
+      if (observesDirectControl) this.nodeConnectionRuntime?.observedReachable(node);
+      return response;
+    } catch (error) {
+      if (observesDirectControl && !init.signal?.aborted && !isAbortError(error)) {
+        this.nodeConnectionRuntime?.observedFailure(node, errorMessage(error));
+      }
+      throw error;
+    }
   }
 
   private async listNodeInstances() {
@@ -1482,6 +1527,13 @@ export class ControlPlaneService {
     if (!cwdFolderId) {
       return launchOptions;
     }
+    return {
+      ...launchOptions,
+      cwd: await this.runtimeCwdForFolderId(instance, cwdFolderId),
+    };
+  }
+
+  private async runtimeCwdForFolderId(instance: ControlledInstance, cwdFolderId: string) {
     const node = this.requireNode(instance.nodeId);
     const folder = await this.requireNodeLocalFolder(node, cwdFolderId);
     if (folder.nodeId !== instance.nodeId) {
@@ -1490,29 +1542,20 @@ export class ControlPlaneService {
       throw error;
     }
     const runtime = await this.requireNodeRuntimeOnNode(instance.nodeId, instance.runtimeId);
-    return {
-      ...launchOptions,
-      cwd: this.appLaunchCwdForFolder(instance, folder, runtime),
-    };
+    return this.appLaunchCwdForFolder(instance, folder, runtime);
   }
 
   private appLaunchCwdForFolder(instance: ControlledInstance, folder: NodeLocalFolder, runtime: NodeRuntime) {
-    if (runtime.type === "local") {
-      return resolveNodePath(folder.path);
-    }
+    const cwd = runtimeCwdForNodePath(instance, folder.path, runtime);
+    if (cwd) return cwd;
     if (instance.source.type !== "local-folder") {
       const error = new Error(`App cwd folder selection is only supported for local-folder instances.`);
       Object.assign(error, { statusCode: 400, code: "APP_CWD_REQUIRES_LOCAL_FOLDER_SOURCE" });
       throw error;
     }
-    const relativeSegments = relativeNodePathSegments(instance.source.path, folder.path);
-    if (!relativeSegments) {
-      const error = new Error(`Local folder ${folder.path} is outside the instance workspace ${instance.source.path}.`);
-      Object.assign(error, { statusCode: 400, code: "APP_CWD_OUTSIDE_WORKSPACE" });
-      throw error;
-    }
-    const workspacePath = instance.runtime.workspacePath || instance.workspace.path || workspacePolicyForSource(instance.source).path || "/workspace";
-    return relativeSegments.length ? path.posix.join(workspacePath, ...relativeSegments) : workspacePath;
+    const error = new Error(`Local folder ${folder.path} is outside the instance workspace ${instance.source.path}.`);
+    Object.assign(error, { statusCode: 400, code: "APP_CWD_OUTSIDE_WORKSPACE" });
+    throw error;
   }
 
   requireProject(id: string) {
@@ -1548,3 +1591,17 @@ export class ControlPlaneService {
 type ProxyHttpInit = Omit<RequestInit, "body"> & {
   body?: RequestInit["body"] | Buffer;
 };
+
+export function runtimeCwdForNodePath(instance: ControlledInstance, nodePath: string, runtime: NodeRuntime) {
+  if (runtime.type === "local") return resolveNodePath(nodePath);
+  if (instance.source.type !== "local-folder") return undefined;
+  const relativeSegments = relativeNodePathSegments(instance.source.path, nodePath);
+  if (!relativeSegments) return undefined;
+  const workspacePath = instance.runtime.workspacePath || instance.workspace.path || workspacePolicyForSource(instance.source).path || "/workspace";
+  return relativeSegments.length ? path.posix.join(workspacePath, ...relativeSegments) : workspacePath;
+}
+
+function isAbortError(error: unknown) {
+  return error instanceof Error
+    && (error.name === "AbortError" || (error as Error & { code?: string }).code === "ABORT_ERR");
+}

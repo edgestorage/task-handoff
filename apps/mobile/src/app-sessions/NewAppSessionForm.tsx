@@ -1,10 +1,14 @@
-import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useState } from 'react';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { ControlPlaneInstanceResourceEntry, ControlPlaneNodeLocalFolder } from '@task-handoff/control-plane-client';
 
+import { AnchoredSelectMenu, type AnchoredSelectOption } from '../components/AnchoredSelectMenu';
 import { Screen } from '../components/Screen';
 import { SystemIcon } from '../components/SystemIcon';
 import { useMobileTheme } from '../components/theme';
-import { useI18n, type Translate } from '../i18n';
+import { useI18n } from '../i18n';
+
+const DEFAULT_WORKSPACE_VALUE = '__default-workspace__';
 
 type Props = {
   instances: readonly ControlPlaneInstanceResourceEntry[];
@@ -24,9 +28,25 @@ type Props = {
 export function NewAppSessionForm(props: Props) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
+  const [selectionRowWidth, setSelectionRowWidth] = useState<number>();
   const selectedApp = props.selectedInstance?.availableApps.find((app) => app.id === props.selectedAppId);
   const selectedFolder = props.folders.find((folder) => folder.id === props.selectedFolderId);
   const showFolders = selectedApp?.supportsCwdSelection && props.selectedInstance?.runtime.type === 'local';
+  const instanceOptions: AnchoredSelectOption[] = props.instances.map((instance) => ({
+    description: instance.workspace.path,
+    label: instance.name,
+    systemImage: 'server.rack',
+    value: instance.id,
+  }));
+  const appOptions: AnchoredSelectOption[] = (props.selectedInstance?.availableApps ?? []).map((app) => ({
+    label: app.name,
+    systemImage: 'app',
+    value: app.id,
+  }));
+  const folderOptions: AnchoredSelectOption[] = [
+    { label: t('appSessions.defaultWorkspace'), systemImage: 'folder', value: DEFAULT_WORKSPACE_VALUE },
+    ...props.folders.map((folder) => ({ description: folder.path, label: folder.name, systemImage: 'folder' as const, value: folder.id })),
+  ];
 
   return <Screen>
     <View style={styles.intro}>
@@ -34,28 +54,49 @@ export function NewAppSessionForm(props: Props) {
       <Text style={[styles.description, { color: colors.textMuted }]}>{t('appSessions.newDescription')}</Text>
     </View>
 
-    <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-      <SelectionRow
-        icon={{ android: 'dns', ios: 'server.rack' }}
-        label={t('sessions.instance')}
-        value={props.selectedInstance?.name || t('sessions.selectInstance')}
-        onPress={() => choose(t('sessions.instance'), props.instances.map((instance) => ({ label: instance.name, value: instance.id })), props.onInstanceChange, t)}
-      />
+    <View
+      onLayout={(event) => setSelectionRowWidth(event.nativeEvent.layout.width - 28)}
+      style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}
+      testID="new-app-session-selection-card"
+    >
+      <AnchoredSelectMenu cancelLabel={t('common.cancel')} onSelect={props.onInstanceChange} options={instanceOptions} selectedValue={props.selectedInstance?.id ?? ''} title={t('sessions.instance')}>
+        {(onPress) => <SelectionRow
+          disabled={!instanceOptions.length}
+          icon={{ android: 'dns', ios: 'server.rack' }}
+          label={t('sessions.instance')}
+          value={props.selectedInstance?.name || t('sessions.selectInstance')}
+          width={selectionRowWidth}
+          onPress={onPress}
+        />}
+      </AnchoredSelectMenu>
       <View style={[styles.divider, { backgroundColor: colors.border }]} />
-      <SelectionRow
-        icon={{ android: 'apps', ios: 'app' }}
-        label={t('appSessions.app')}
-        value={selectedApp?.name || t('appSessions.selectApp')}
-        onPress={() => choose(t('appSessions.app'), (props.selectedInstance?.availableApps ?? []).map((app) => ({ label: app.name, value: app.id })), props.onAppChange, t)}
-      />
+      <AnchoredSelectMenu cancelLabel={t('common.cancel')} onSelect={props.onAppChange} options={appOptions} selectedValue={props.selectedAppId} title={t('appSessions.app')}>
+        {(onPress) => <SelectionRow
+          disabled={!appOptions.length}
+          icon={{ android: 'apps', ios: 'app' }}
+          label={t('appSessions.app')}
+          value={selectedApp?.name || t('appSessions.selectApp')}
+          width={selectionRowWidth}
+          onPress={onPress}
+        />}
+      </AnchoredSelectMenu>
       {showFolders ? <>
         <View style={[styles.divider, { backgroundColor: colors.border }]} />
-        <SelectionRow
-          icon={{ android: 'folder', ios: 'folder' }}
-          label={t('sessions.folder')}
-          value={selectedFolder?.name || t('appSessions.defaultWorkspace')}
-          onPress={() => chooseOptional(t('sessions.folder'), [{ label: t('appSessions.defaultWorkspace'), value: undefined }, ...props.folders.map((folder) => ({ label: `${folder.name} — ${folder.path}`, value: folder.id }))], props.onFolderChange, t)}
-        />
+        <AnchoredSelectMenu
+          cancelLabel={t('common.cancel')}
+          onSelect={(value) => props.onFolderChange(value === DEFAULT_WORKSPACE_VALUE ? undefined : value)}
+          options={folderOptions}
+          selectedValue={props.selectedFolderId ?? DEFAULT_WORKSPACE_VALUE}
+          title={t('sessions.folder')}
+        >
+          {(onPress) => <SelectionRow
+            icon={{ android: 'folder', ios: 'folder' }}
+            label={t('sessions.folder')}
+            value={selectedFolder?.name || t('appSessions.defaultWorkspace')}
+            width={selectionRowWidth}
+            onPress={onPress}
+          />}
+        </AnchoredSelectMenu>
       </> : null}
     </View>
 
@@ -73,24 +114,23 @@ export function NewAppSessionForm(props: Props) {
   </Screen>;
 }
 
-function SelectionRow({ icon, label, value, onPress }: { icon: { android: 'dns' | 'apps' | 'folder'; ios: 'server.rack' | 'app' | 'folder' }; label: string; value: string; onPress(): void }) {
+function SelectionRow({ disabled, icon, label, value, width, onPress }: { disabled?: boolean; icon: { android: 'dns' | 'apps' | 'folder'; ios: 'server.rack' | 'app' | 'folder' }; label: string; value: string; width?: number; onPress?: () => void }) {
   const { colors } = useMobileTheme();
-  return <Pressable accessibilityRole="button" onPress={onPress} style={({ pressed }) => [styles.row, pressed && styles.pressed]}>
+  return <Pressable
+    accessibilityLabel={`${label}: ${value}`}
+    accessibilityRole="button"
+    accessibilityState={{ disabled: Boolean(disabled) }}
+    disabled={disabled}
+    onPress={onPress}
+    style={({ pressed }) => [styles.row, width === undefined ? styles.rowBeforeLayout : { width }, disabled && styles.disabled, pressed && styles.pressed]}
+  >
     <View style={[styles.icon, { backgroundColor: colors.surfaceMuted }]}><SystemIcon android={icon.android} color={colors.primary} ios={icon.ios} size={19} /></View>
     <View style={styles.rowText}>
       <Text style={[styles.rowLabel, { color: colors.textMuted }]}>{label}</Text>
       <Text numberOfLines={1} style={[styles.rowValue, { color: colors.text }]}>{value}</Text>
     </View>
-    <SystemIcon android="chevron_right" color={colors.textMuted} ios="chevron.right" size={13} />
+    <SystemIcon android="expand_more" color={colors.textMuted} ios="chevron.down" size={13} />
   </Pressable>;
-}
-
-function choose(title: string, options: { label: string; value: string }[], onSelect: (value: string) => void, t: Translate) {
-  Alert.alert(title, undefined, [...options.map((option) => ({ text: option.label, onPress: () => onSelect(option.value) })), { text: t('common.cancel'), style: 'cancel' }]);
-}
-
-function chooseOptional(title: string, options: { label: string; value?: string }[], onSelect: (value?: string) => void, t: Translate) {
-  Alert.alert(title, undefined, [...options.map((option) => ({ text: option.label, onPress: () => onSelect(option.value) })), { text: t('common.cancel'), style: 'cancel' }]);
 }
 
 const styles = StyleSheet.create({
@@ -99,6 +139,7 @@ const styles = StyleSheet.create({
   description: { fontSize: 15, lineHeight: 22, textAlign: 'center' },
   card: { borderRadius: 18, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden', paddingHorizontal: 14 },
   row: { alignItems: 'center', flexDirection: 'row', gap: 12, minHeight: 72 },
+  rowBeforeLayout: { alignSelf: 'stretch' },
   icon: { alignItems: 'center', borderRadius: 10, height: 38, justifyContent: 'center', width: 38 },
   rowText: { flex: 1, gap: 2 },
   rowLabel: { fontSize: 12, fontWeight: '600', lineHeight: 16 },

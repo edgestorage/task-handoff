@@ -101,6 +101,21 @@ export class MobileDirectoryController {
     return result;
   }
 
+  async refresh() {
+    try {
+      await this.requestRefresh();
+    } catch (cause) {
+      if (this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) {
+        const current = this.store.profile(this.controlPlaneId);
+        this.store.set(this.controlPlaneId, {
+          phase: current.nodes.length || current.instances.length ? 'stale' : 'error',
+          error: cause instanceof Error ? cause.message : 'Directory unavailable.',
+        });
+      }
+      throw cause;
+    }
+  }
+
   offline() {
     this.stop();
     if (!this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) return;

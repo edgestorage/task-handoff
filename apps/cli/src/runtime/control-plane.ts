@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import path from "node:path";
 import { resolvePackageVersion } from "@task-handoff/core/core/package-version";
-import { runControlPlaneServer } from "@task-handoff/control-plane/server";
+import { replaceControlPlaneCredentials, runControlPlaneServer } from "@task-handoff/control-plane/server";
 
 function parsePort(value: string) {
   const port = Number(value);
@@ -46,6 +46,26 @@ async function main() {
         staticDir: options.staticDir,
         auth: { mode: options.authMode },
       });
+    });
+
+  program
+    .command("credentials")
+    .description("Replace the Control Plane administrator username and password while the service is stopped.")
+    .requiredOption("--username <username>", "New administrator username")
+    .requiredOption("--password-stdin", "Read the new password from standard input")
+    .option("--data-dir <path>", "Control plane data directory")
+    .action(async (options: { username: string; passwordStdin: boolean; dataDir?: string }) => {
+      if (process.stdin.isTTY) {
+        throw new Error("Pipe the new password to standard input when using --password-stdin.");
+      }
+      const chunks: Buffer[] = [];
+      for await (const chunk of process.stdin) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      const password = Buffer.concat(chunks).toString("utf8").replace(/\r?\n$/, "");
+      const user = await replaceControlPlaneCredentials(options.dataDir, {
+        username: options.username,
+        password,
+      });
+      console.log(`Updated Control Plane credentials for ${user.username}. Existing sessions were revoked.`);
     });
 
   await program.parseAsync(process.argv);

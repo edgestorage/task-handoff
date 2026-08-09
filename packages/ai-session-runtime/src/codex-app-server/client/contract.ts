@@ -25,6 +25,7 @@ export type CodexAppServerClientLike = EventEmitter & {
   startThread?: (options: CodexThreadStartOptions) => Promise<CodexThread>;
   readThread?: (threadId: string, options?: { includeTurns?: boolean }) => Promise<CodexThread | undefined>;
   listThreads?: () => Promise<CodexThread[]>;
+  activeThreadExists?: (threadId: string) => Promise<boolean>;
   startTurn?: (threadId: string, message: string, inputs?: CodexUserInput[], permissions?: CodexTurnPermissionOverrides) => Promise<{ turnId?: string }>;
   steerTurn?: (threadId: string, turnId: string, message: string, inputs?: CodexUserInput[]) => Promise<{ turnId?: string }>;
   listSkills?: (cwd: string) => Promise<JsonValue>;

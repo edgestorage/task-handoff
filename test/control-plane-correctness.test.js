@@ -383,7 +383,7 @@ test("direct node creation failure self-revokes the pairing on a real node-agent
   const stored = new NodeAgentIdentityStore(nodeAgentStorePaths(dataDir)).read();
   assert.equal(stored.controlPlanePairings.length, 1);
   assert.ok(stored.controlPlanePairings[0].revokedAt);
-  assert.deepEqual(stored.pairingInvites, []);
+  assert.equal(stored.pairingInvites, undefined);
   const localHealth = await nodeAgent.inject({
     method: "GET",
     url: "/api/node-agent/health",

@@ -101,7 +101,10 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
   async inspectRuntime(context: ExecutorContext, expected: RuntimeArtifactIdentity) {
     const containerName = context.instance.runtime.containerName;
     if (!containerName) return false;
-    return artifactIdentityMatches(await this.executor.inspectRuntimeVersion(containerName), expected);
+    const matches = artifactIdentityMatches(await this.executor.inspectRuntimeVersion(containerName), expected);
+    const backupName = context.instance.runtime.labels["task-handoff.bootstrap-backup"];
+    if (matches && backupName) await this.executor.removeBootstrapBackup(backupName, context.instance.id);
+    return matches;
   }
 
   start(context: ExecutorContext) {

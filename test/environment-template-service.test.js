@@ -27,7 +27,7 @@ function fixture(runtimeType = "docker") {
     name: "Source",
     nodeId: "node_one",
     runtimeId: "runtime_one",
-    runtime: { containerName: "task-handoff-inst_one", containerId: "container-one", managedVolumes: [] },
+    runtime: { containerName: "task-handoff-inst_one", containerId: "container-one" },
   };
   const runtime = { id: "runtime_one", name: "Runtime", type: runtimeType };
   const gate = new InstanceOperationGate();

@@ -8,6 +8,7 @@ import WebSocket from "ws";
 import type { FastifyServerOptions } from "fastify";
 import { z } from "zod";
 import { processStartIdentity } from "@task-handoff/core/core/process-singleton-lock";
+import { DEFAULT_MAINTENANCE_INTERVAL_MS } from "@task-handoff/core/storage/retention";
 import {
   CONTROL_PLANE_PROTOCOL_VERSION,
   ControlledInstanceSchema,
@@ -25,6 +26,7 @@ import { NodeAgentInstanceEventForwarder } from "./events.ts";
 import { DockerRuntimeMetricsCollector } from "./runtime-metrics.ts";
 import { listFolderTree } from "./folders.ts";
 import { nodeAgentStorePaths, type NodeAgentStorePaths } from "./persistence/paths.ts";
+import { NodeAgentPersistenceMaintenance } from "./persistence/maintenance.ts";
 import { acquireNodeAgentSingletonLock, defaultNodeAgentSingletonLockPath } from "./process/singleton-lock.ts";
 import type { TerminalCommandRunner } from "../shared/process/terminal-command-runner.ts";
 import { nodeAgentIpcEndpoint, nodeAgentIpcPath, prepareNodeAgentIpcPath } from "../shared/transport/node-agent-ipc.ts";
@@ -105,6 +107,7 @@ declare module "fastify" {
 
 const AUTO_IMPORT_AGENT_CONFIG_PRESETS = ["codex", "claude"] as const;
 const DEFAULT_AUTO_IMPORT_AGENT_CONFIG_TIMEOUT_MS = 5_000;
+const ACTIVE_LOG_MAINTENANCE_INTERVAL_MS = 60_000;
 const NODE_AGENT_PROCESS_START_IDENTITY = processStartIdentity(process.pid);
 function optionalEnv(name: string) {
   const value = process.env[name]?.trim();
@@ -543,6 +546,33 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     return resolveArtifactForAdapter(version, requireManagedAdapterForInstance(instance), context);
   };
   const app = Fastify({ logger: options.logger ?? true });
+  const persistenceMaintenance = new NodeAgentPersistenceMaintenance(paths, {
+    logger: (message, details) => app.log.warn(details, message),
+  });
+  const activeInstanceIds = () => state.listInstances().map((instance) => instance.id);
+  const runPersistenceMaintenance = () => {
+    try {
+      persistenceMaintenance.run(activeInstanceIds());
+    } catch (error) {
+      app.log.warn({ error }, "node-agent persistence maintenance failed");
+    }
+  };
+  const capActiveInstanceLogs = () => {
+    try {
+      persistenceMaintenance.capActiveInstanceLogs(activeInstanceIds());
+    } catch (error) {
+      app.log.warn({ error }, "node-agent active log maintenance failed");
+    }
+  };
+  runPersistenceMaintenance();
+  const persistenceMaintenanceTimer = setInterval(() => {
+    runPersistenceMaintenance();
+  }, DEFAULT_MAINTENANCE_INTERVAL_MS);
+  persistenceMaintenanceTimer.unref();
+  const activeLogMaintenanceTimer = setInterval(() => {
+    capActiveInstanceLogs();
+  }, ACTIVE_LOG_MAINTENANCE_INTERVAL_MS);
+  activeLogMaintenanceTimer.unref();
   const instanceProxyMetrics = createInstanceProxyMetrics();
   app.decorate("nodeAgentState", state);
   await app.register(websocket);
@@ -550,7 +580,18 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   const convergence = new RuntimeConvergenceCoordinator(state.controlledInstances, desiredControlledInstanceVersion, {
     isInstalled: async (instance, desiredVersion) => {
       const artifact = await resolveArtifactForInstance(instance, desiredVersion);
-      return requireManagedAdapterForInstance(instance).inspectRuntime(state.context(instance), artifact.identity);
+      const installed = await requireManagedAdapterForInstance(instance).inspectRuntime(state.context(instance), artifact.identity);
+      if (installed && instance.runtime.labels["task-handoff.bootstrap-backup"]) {
+        const current = state.requireInstance(instance.id);
+        const labels = { ...current.runtime.labels };
+        delete labels["task-handoff.bootstrap-backup"];
+        state.controlledInstances.put(ControlledInstanceSchema.parse({
+          ...current,
+          runtime: { ...current.runtime, labels },
+          updatedAt: now(),
+        }));
+      }
+      return installed;
     },
     beginDrain: async (instance) => {
       try {
@@ -685,13 +726,13 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
             error: error instanceof Error ? error.message : String(error),
           }, "node instance runtime convergence failed after start");
         }
-        if (instance.runtimeVersion?.phase === "failed") {
+        if (instance.runtimeVersion?.phase !== "matched" && instance.runtimeVersion?.error) {
           lifecycleLoggers.warn({
             instanceId: id,
             action: "runtime.converge",
             reason,
             error: instance.runtimeVersion.error,
-          }, "node instance started with failed runtime convergence");
+          }, "node instance started with pending runtime convergence");
         }
       }
       if (!shouldContinue()) return state.requireInstance(id);
@@ -849,6 +890,8 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   });
 
   app.addHook("onClose", async () => {
+    clearInterval(persistenceMaintenanceTimer);
+    clearInterval(activeLogMaintenanceTimer);
     runtimeMetrics.stop();
     eventForwarder.stop();
     await recoverySupervisor.stop();
@@ -1009,6 +1052,9 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     deleteMetadata: (id) => {
       state.modelRegistry.deleteInstanceMetadata(id);
       state.instancePrivateConfigs.delete(id);
+    },
+    retireInstanceData: (id) => {
+      persistenceMaintenance.retire(id);
     },
     releaseEnvironmentImage: (imageId) => environmentTemplates.releaseUnusedImage(imageId),
     diagnostic: logDiagnostic,

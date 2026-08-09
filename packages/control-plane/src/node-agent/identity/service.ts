@@ -5,6 +5,14 @@ import type { NodeAgentStorePaths } from "../persistence/paths.ts";
 import { NodeAgentPairingCompleteSchema, NodeAgentPairingInviteSchema } from "./schemas.ts";
 import { NodeAgentIdentityStore } from "./store.ts";
 import type { NodeAgentControlPlaneConnection, NodeAgentControlPlanePairing, NodeAgentIdentity, PublicNodeAgentControlPlanePairing } from "./types.ts";
+import { EphemeralTokenStore } from "../../shared/security/ephemeral-token-store.ts";
+
+type NodeAgentPairingInvite = {
+  tokenHash: string;
+  expiresAt: string;
+  createdAt: string;
+  controlPlaneName?: string;
+};
 
 type StagedControlPlaneConnection = {
   pairing: NodeAgentControlPlanePairing;
@@ -20,10 +28,12 @@ function now() {
 
 export class NodeAgentIdentityService {
   private readonly store: NodeAgentIdentityStore;
+  private readonly pairingInvites = new EphemeralTokenStore<NodeAgentPairingInvite>();
   private readonly controlPlaneConnectionOperations = new Map<string, Promise<void>>();
 
   constructor(paths: NodeAgentStorePaths) {
     this.store = new NodeAgentIdentityStore(paths);
+    this.store.init();
   }
 
   async runControlPlaneConnectionOperation<T>(controlPlaneUrl: string, operation: () => Promise<T>): Promise<T> {
@@ -58,7 +68,6 @@ export class NodeAgentIdentityService {
   }
 
   createPairingInvite(input: z.infer<typeof NodeAgentPairingInviteSchema>) {
-    const current = this.prunePairingInvites(this.store.read() || this.newIdentity());
     const createdAt = now();
     const expiresAt = new Date(Date.now() + (input.expiresInMs || NODE_AGENT_PAIRING_INVITE_TTL_MS)).toISOString();
     const token = createSecret();
@@ -68,14 +77,14 @@ export class NodeAgentIdentityService {
       expiresAt,
       ...(input.controlPlaneName ? { controlPlaneName: input.controlPlaneName } : {}),
     };
-    this.store.write({ ...current, pairingInvites: [...(current.pairingInvites || []), invite] });
+    this.pairingInvites.put(invite.tokenHash, invite);
     return { ...invite, token };
   }
 
   completePairingInvite(input: z.infer<typeof NodeAgentPairingCompleteSchema>) {
-    const current = this.prunePairingInvites(this.store.read() || this.newIdentity());
+    const current = this.store.read() || this.newIdentity();
     const tokenHash = sha256Hex(input.joinToken);
-    const invite = (current.pairingInvites || []).find((item) => item.tokenHash === tokenHash);
+    const invite = this.pairingInvites.take(tokenHash);
     if (!invite) {
       const error = new Error("Node agent pairing invite is invalid or expired.");
       Object.assign(error, { statusCode: 401, code: "NODE_AGENT_PAIRING_INVITE_INVALID" });
@@ -92,7 +101,6 @@ export class NodeAgentIdentityService {
     };
     this.store.write({
       ...current,
-      pairingInvites: (current.pairingInvites || []).filter((item) => item.tokenHash !== tokenHash),
       controlPlanePairings: [...(current.controlPlanePairings || []).filter((item) => item.id !== pairing.id), pairing],
     });
     return pairing;
@@ -295,7 +303,7 @@ export class NodeAgentIdentityService {
   }
 
   private newIdentity(): NodeAgentIdentity {
-    return { nodeId: this.resolveNodeId(), createdAt: now(), updatedAt: now(), pairingInvites: [], controlPlanePairings: [], controlPlaneConnections: [] };
+    return { nodeId: this.resolveNodeId(), createdAt: now(), updatedAt: now(), controlPlanePairings: [], controlPlaneConnections: [] };
   }
 
   private writeNodeId(nodeId: string) {
@@ -304,16 +312,11 @@ export class NodeAgentIdentityService {
       ...(current || { createdAt: now() }),
       nodeId,
       updatedAt: now(),
-      pairingInvites: current?.pairingInvites || [],
       controlPlanePairings: current?.controlPlanePairings || [],
       controlPlaneConnections: current?.controlPlaneConnections || [],
     });
   }
 
-  private prunePairingInvites(identity: NodeAgentIdentity) {
-    const nowMs = Date.now();
-    return { ...identity, pairingInvites: (identity.pairingInvites || []).filter((invite) => Date.parse(invite.expiresAt) > nowMs) };
-  }
 }
 
 export function assertHttpControlPlaneUrl(value: string) {

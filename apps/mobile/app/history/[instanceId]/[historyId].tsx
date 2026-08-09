@@ -7,6 +7,8 @@ import type { AiSessionHistoryDetail } from '@task-handoff/protocol/ai-sessions'
 import { SafeMarkdown } from '../../../src/components/SafeMarkdown';
 import { Screen } from '../../../src/components/Screen';
 import { SystemIcon } from '../../../src/components/SystemIcon';
+import { EmptyState } from '../../../src/components/EmptyState';
+import { useMobileToast } from '../../../src/components/MobileToast';
 import { createDirectControlPlaneClient } from '../../../src/control-plane/client';
 import { mobileProfileStore, mobileSecureStore } from '../../../src/control-plane/runtime';
 import { lifecycleGuidance } from '../../../src/ai-sessions/session-lifecycle';
@@ -18,6 +20,7 @@ export default function HistoryDetailRoute() {
   const insets = useSafeAreaInsets();
   const { colors } = useMobileTheme();
   const { locale, t } = useI18n();
+  const toast = useMobileToast();
   const { instanceId, historyId } = useLocalSearchParams<{ instanceId: string; historyId: string }>();
   const [detail, setDetail] = useState<AiSessionHistoryDetail>();
   const [error, setError] = useState<string>();
@@ -30,11 +33,13 @@ export default function HistoryDetailRoute() {
     return () => { live = false; };
   }, [historyId, instanceId]);
   const resume = async () => {
-    setBusy(true); setError(undefined);
+    setBusy(true);
     try {
       const result = await withClient((api) => api.aiSessions.resume(instanceId, historyId));
       router.replace({ pathname: '/sessions/[instanceId]/[sessionId]', params: { instanceId, sessionId: result.aiSessionId } });
-    } catch (cause) { setError(lifecycleGuidance(cause).message); }
+    } catch (cause) {
+      toast.show({ detail: lifecycleGuidance(cause).message, title: t('toast.actionFailed', { action: t('history.resume') }), tone: 'error' });
+    }
     finally { setBusy(false); }
   };
   return <>
@@ -63,7 +68,7 @@ export default function HistoryDetailRoute() {
       {detail.turns.length ? detail.turns.map((turn) => <View key={turn.id} style={styles.turn}>
         {turn.userPrompt ? <View style={styles.userMessage}><Text style={[styles.role, { color: colors.textMuted }]}>{t('history.you')}</Text><View style={[styles.bubble, styles.userBubble, { backgroundColor: colors.primarySoft }]}><SafeMarkdown trimEnd>{turn.userPrompt}</SafeMarkdown></View></View> : null}
         {turn.lastMessage || turn.summary ? <View style={styles.assistantRow}><View style={[styles.avatar, { backgroundColor: colors.surfaceMuted }]}><SystemIcon android="auto_awesome" color={colors.primary} ios="sparkles" size={15} /></View><View style={styles.assistantMessage}><Text style={[styles.role, { color: colors.textMuted }]}>{detail.item.agent}</Text><View style={[styles.bubble, styles.assistantBubble, { backgroundColor: colors.surface, borderColor: colors.border }]}><SafeMarkdown trimEnd>{turn.lastMessage || turn.summary!}</SafeMarkdown></View></View></View> : null}
-      </View>) : <View style={styles.empty}><Text style={[styles.meta, { color: colors.textMuted }]}>{t('history.empty')}</Text></View>}
+      </View>) : <EmptyState icon={{ android: 'history', ios: 'clock.arrow.circlepath' }} iconSize={26} message={t('history.empty')} style={styles.empty} />}
     </> : <View style={styles.loading}><ActivityIndicator /><Text style={[styles.meta, { color: colors.textMuted }]}>{error ? t('history.loadError') : t('history.loading')}</Text></View>}
     {!detail && error ? <View style={[styles.errorCard, { backgroundColor: colors.errorSoft }]}><SystemIcon android="error" color={colors.error} ios="exclamationmark.triangle.fill" size={17} /><Text accessibilityLiveRegion="polite" style={[styles.error, { color: colors.error }]}>{error}</Text></View> : null}
   </Screen>
@@ -72,7 +77,6 @@ export default function HistoryDetailRoute() {
     style={[styles.actions, { bottom: actionsBottom }]}
     testID="history-resume-actions"
   >
-    {error ? <View style={[styles.errorCard, { backgroundColor: colors.errorSoft }]}><SystemIcon android="error" color={colors.error} ios="exclamationmark.triangle.fill" size={17} /><Text accessibilityLiveRegion="polite" style={[styles.error, { color: colors.error }]}>{error}</Text></View> : null}
     <NativePrimaryButton busy={busy} disabled={busy} label={busy ? t('composer.resuming') : t('history.resume')} systemImage="play.fill" onPress={() => { void resume(); }} />
   </View> : null}
   </View>
@@ -119,7 +123,7 @@ const styles = StyleSheet.create({
   bubble: { borderRadius: 18, paddingHorizontal: 14, paddingVertical: 12 },
   userBubble: { borderTopRightRadius: 6 },
   assistantBubble: { borderTopLeftRadius: 6, borderWidth: StyleSheet.hairlineWidth },
-  empty: { alignItems: 'center', paddingVertical: 28 },
+  empty: { paddingVertical: 28 },
   loading: { alignItems: 'center', flex: 1, gap: 12, justifyContent: 'center', minHeight: 240 },
   errorCard: { alignItems: 'flex-start', borderRadius: 12, flexDirection: 'row', gap: 8, padding: 12 },
   error: { flex: 1, fontSize: 13, lineHeight: 19 },

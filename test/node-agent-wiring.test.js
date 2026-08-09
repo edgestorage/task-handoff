@@ -227,6 +227,7 @@ function lifecycleRouteHarness(options = {}) {
     forgetRecovery: () => { calls.push("recovery:forget"); },
     completeSuppressedRecovery: () => { calls.push("recovery:complete-suppressed"); },
     deleteMetadata: () => { calls.push("metadata:delete"); },
+    retireInstanceData: () => { calls.push("instance-data:retire"); },
     releaseEnvironmentImage: async (imageId) => { calls.push(`environment-image:release:${imageId}`); },
     diagnostic: () => undefined,
   };
@@ -262,7 +263,7 @@ test("instance lifecycle routes order recovery suppression and allowance around 
       method: "POST",
       url: "/api/node-agent/instances/inst_routes/delete",
       payload: { deleteVolumes: true },
-      expected: ["convergence:cancel", "lifecycle:stop-requested", "recovery:suppress", "adapter:delete", "recovery:forget", "metadata:delete", "hook:sync"],
+      expected: ["convergence:cancel", "lifecycle:stop-requested", "recovery:suppress", "adapter:delete", "recovery:forget", "metadata:delete", "instance-data:retire", "hook:sync"],
     },
     {
       method: "POST",

@@ -4209,7 +4209,7 @@ test("codex app server client paginates loaded thread ids", async () => {
   ]);
 });
 
-test("codex app server bridge rebuilds the client when shared socket changes", async () => {
+test("codex app server bridge rebuilds the client when shared connection changes", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-socket-change-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
   class FakeCodexAppServerClient extends EventEmitter {
@@ -4238,14 +4238,20 @@ test("codex app server bridge rebuilds the client when shared socket changes", a
     },
   });
 
-  await bridge.sync([{ id: "app_a", appId: "codex", status: "running", ai: { appServer: { socketPath: "/tmp/codex-a.sock" } } }]);
-  await bridge.sync([{ id: "app_b", appId: "codex", status: "running", ai: { appServer: { socketPath: "/tmp/codex-b.sock" } } }]);
+  await bridge.sync([{ id: "app_a", appId: "codex", status: "running", ai: { appServer: { socketPath: "/tmp/codex-a.sock", command: "/opt/codex-a" } } }]);
+  await bridge.sync([{ id: "app_b", appId: "codex", status: "running", ai: { appServer: { socketPath: "/tmp/codex-b.sock", command: "/opt/codex-a" } } }]);
+  await bridge.sync([{ id: "app_c", appId: "codex", status: "running", ai: { appServer: { socketPath: "/tmp/codex-b.sock", command: "/opt/codex-b" } } }]);
 
-  assert.equal(clients.length, 2);
+  assert.equal(clients.length, 3);
   assert.equal(clients[0].options.socketPath, "/tmp/codex-a.sock");
+  assert.equal(clients[0].options.command, "/opt/codex-a");
   assert.equal(clients[1].options.socketPath, "/tmp/codex-b.sock");
+  assert.equal(clients[1].options.command, "/opt/codex-a");
+  assert.equal(clients[2].options.socketPath, "/tmp/codex-b.sock");
+  assert.equal(clients[2].options.command, "/opt/codex-b");
   assert.equal(clients[0].stopped, true);
-  assert.equal(clients[1].started, true);
+  assert.equal(clients[1].stopped, true);
+  assert.equal(clients[2].started, true);
 });
 
 test("ai session registry treats stopped app session bindings as missing", () => {
@@ -4471,7 +4477,7 @@ test("codex permission modes map to authoritative app-server turn settings", asy
   class FakeCodexPermissionsClient extends EventEmitter {
     async start() {}
     stop() {}
-    async listLoadedThreadIds() { return []; }
+    async listLoadedThreadIds() { return ["thread_permission_0", "thread_permission_1", "thread_permission_2"]; }
     async startTurn(threadId, message, inputs, permissions) {
       turns.push({ threadId, message, inputs, permissions });
       return { turnId: `turn_${turns.length}` };
@@ -4507,7 +4513,7 @@ test("codex mention facade filters catalogs, invalidates cache, searches cwd, an
     turns = [];
     async start() {}
     stop() {}
-    async listLoadedThreadIds() { return []; }
+    async listLoadedThreadIds() { return ["thread_mentions"]; }
     async listSkills(cwd) {
       this.catalogCalls += 1;
       return { data: [{ cwd, skills: [
@@ -4586,7 +4592,7 @@ test("codex command facade invokes structured app-server methods", async () => {
   class FakeCodexCommandsClient extends EventEmitter {
     async start() {}
     stop() {}
-    async listLoadedThreadIds() { return []; }
+    async listLoadedThreadIds() { return ["thread_commands"]; }
     async startReview(threadId) { calls.push(["review", threadId]); return { turnId: "turn_review" }; }
     async setThreadName(threadId, name) { calls.push(["rename", threadId, name]); }
     async setThreadGoal(threadId, objective) { calls.push(["goal-set", threadId, objective]); return { goal: { objective } }; }
@@ -4925,6 +4931,144 @@ test("codex app server bridge subscribes each loaded thread once per connection 
   assert.deepEqual(fake.resumedThreads, ["thread_one", "thread_two", "thread_one", "thread_two"]);
 });
 
+test("codex app server bridge resumes persisted AI sessions after an app-server connection change", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-persisted-thread-resume-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  registry.start({
+    agent: "codex",
+    creationSource: "ai-session",
+    providerSessionId: "thread_persisted",
+    cwd: "/workspace",
+    status: "idle",
+  });
+  const closing = registry.start({
+    agent: "codex",
+    creationSource: "ai-session",
+    providerSessionId: "thread_closing",
+    cwd: "/workspace",
+    status: "idle",
+  });
+  registry.put({
+    ...closing,
+    actions: { send: false, interrupt: false, approval: false, openApp: false, close: false },
+  });
+  class FakeCodexAppServerClient extends EventEmitter {
+    constructor() {
+      super();
+      this.resumedThreads = [];
+      this.loadedThreads = new Set();
+    }
+    async start() {}
+    async listLoadedThreadIds() {
+      return [...this.loadedThreads];
+    }
+    async resumeThread(threadId) {
+      this.resumedThreads.push(threadId);
+      this.loadedThreads.add(threadId);
+      return { id: threadId, cwd: "/workspace", status: { type: "idle" }, turns: [] };
+    }
+    stop() {
+      this.loadedThreads.clear();
+    }
+  }
+
+  const fake = new FakeCodexAppServerClient();
+  const bridge = new CodexAppServerSessionBridge(registry, fake);
+  await bridge.sync();
+  await bridge.sync();
+  assert.deepEqual(fake.resumedThreads, ["thread_persisted"]);
+
+  fake.loadedThreads.clear();
+  await bridge.sync();
+  assert.deepEqual(fake.resumedThreads, ["thread_persisted", "thread_persisted"]);
+
+  bridge.stop();
+  await bridge.sync();
+  assert.deepEqual(fake.resumedThreads, ["thread_persisted", "thread_persisted", "thread_persisted"]);
+});
+
+test("codex app server bridge resumes a persisted thread before send in each connection generation", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-send-resume-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const session = registry.start({
+    agent: "codex",
+    creationSource: "ai-session",
+    providerSessionId: "thread_send_resume",
+    cwd: "/workspace",
+    status: "idle",
+  });
+  class FakeCodexAppServerClient extends EventEmitter {
+    constructor() {
+      super();
+      this.calls = [];
+      this.loadedThreads = new Set();
+      this.failResume = false;
+    }
+    async start() {}
+    async listLoadedThreadIds() {
+      this.calls.push(["loaded-list"]);
+      return [...this.loadedThreads];
+    }
+    async resumeThread(threadId) {
+      this.calls.push(["resume", threadId]);
+      await new Promise((resolve) => setImmediate(resolve));
+      if (this.failResume) {
+        this.failResume = false;
+        throw new Error("resume failed");
+      }
+      this.loadedThreads.add(threadId);
+      return { id: threadId, cwd: "/workspace", status: { type: "idle" }, turns: [] };
+    }
+    async startTurn(threadId, message) {
+      if (!this.loadedThreads.has(threadId)) throw new Error(`thread not found: ${threadId}`);
+      this.calls.push(["turn", threadId, message]);
+      return { turnId: `turn_${message}` };
+    }
+    stop() { this.loadedThreads.clear(); }
+    restart() {
+      this.loadedThreads.clear();
+      this.emit("disconnect");
+    }
+  }
+
+  const fake = new FakeCodexAppServerClient();
+  const bridge = new CodexAppServerSessionBridge(registry, fake);
+
+  await Promise.all([
+    bridge.startMessage(session, { message: "one" }),
+    bridge.startMessage(session, { message: "two" }),
+  ]);
+  assert.deepEqual(fake.calls, [
+    ["loaded-list"],
+    ["resume", "thread_send_resume"],
+    ["turn", "thread_send_resume", "one"],
+    ["turn", "thread_send_resume", "two"],
+  ]);
+
+  fake.restart();
+  fake.loadedThreads.add("thread_send_resume");
+  await bridge.startMessage(registry.get(session.id), { message: "after restart" });
+  assert.deepEqual(fake.calls.slice(-2), [
+    ["loaded-list"],
+    ["turn", "thread_send_resume", "after restart"],
+  ]);
+
+  fake.restart();
+  fake.failResume = true;
+  await assert.rejects(
+    () => bridge.startMessage(registry.get(session.id), { message: "failed resume" }),
+    (error) => error?.code === "AI_SESSION_THREAD_RESUME_FAILED",
+  );
+  await bridge.startMessage(registry.get(session.id), { message: "retry" });
+  assert.deepEqual(fake.calls.slice(-5), [
+    ["loaded-list"],
+    ["resume", "thread_send_resume"],
+    ["loaded-list"],
+    ["resume", "thread_send_resume"],
+    ["turn", "thread_send_resume", "retry"],
+  ]);
+});
+
 test("codex app server bridge isolates thread subscription failures and retries only failures", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-thread-subscription-failure-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
@@ -5123,6 +5267,41 @@ test("ai session discovery coordinator runs providers with shared context", asyn
     ["first", true, true],
     ["second", true, true],
   ]);
+});
+
+test("controlled instance readiness does not wait for initial AI session discovery", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-discovery-startup-"));
+  const paths = appRuntimeTestPaths(root);
+  let releaseDiscovery;
+  const discoveryBlocked = new Promise((resolve) => { releaseDiscovery = resolve; });
+  let discoveryStarted = false;
+  const aiSessionDiscovery = new AiSessionDiscoveryCoordinator();
+  aiSessionDiscovery.register({
+    id: "blocked-startup-discovery",
+    async refresh() {
+      discoveryStarted = true;
+      await discoveryBlocked;
+    },
+  });
+  const restoreEnv = withWebStorageEnv(paths, {
+    TASK_HANDOFF_WEB_AUTH: "off",
+    TASK_HANDOFF_CODEX_APP_SERVER: "0",
+    TASK_HANDOFF_AI_SESSION_SCAN_INTERVAL_MS: "600000",
+  });
+  const app = await createWebApp({
+    staticDir: path.join(root, "missing-static"),
+    logger: false,
+    aiSessionDiscovery,
+  });
+  try {
+    await withTimeout(app.ready(), "controlled instance readiness", 500);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(discoveryStarted, true);
+  } finally {
+    releaseDiscovery();
+    await app.close();
+    restoreEnv();
+  }
 });
 
 test("transcript progress hides codex turn context events", () => {
@@ -6275,6 +6454,7 @@ test("app session title updates through the API, persists, and emits an authorit
   writeAppSessionMetadata(paths, "app_existing", "stopped", "2026-06-20T01:01:00.000Z");
   const restoreEnv = withWebStorageEnv(paths, {
     TASK_HANDOFF_APP_SESSION_PERSIST: "1",
+    TASK_HANDOFF_APP_SESSION_RETENTION_DAYS: "365",
   });
   const runtime = new AppRuntimeManager(paths);
   const updates = [];
@@ -6737,6 +6917,7 @@ test("app runtime loads persisted sessions as restartable history when enabled",
 
   const restoreEnv = withWebStorageEnv(paths, {
     TASK_HANDOFF_APP_SESSION_PERSIST: "1",
+    TASK_HANDOFF_APP_SESSION_RETENTION_DAYS: "365",
   });
   try {
     const runtime = new AppRuntimeManager(paths);
@@ -6755,7 +6936,7 @@ test("app runtime loads persisted sessions as restartable history when enabled",
   }
 });
 
-test("app runtime cleans expired historical sessions when persistence and retention are enabled", () => {
+test("app runtime cleans expired historical sessions using the default retention", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-app-retention-"));
   const paths = appRuntimeTestPaths(root);
   writeAppSessionMetadata(paths, "app_old", "exited", "2000-01-01T00:00:00.000Z");
@@ -6764,7 +6945,7 @@ test("app runtime cleans expired historical sessions when persistence and retent
 
   const restoreEnv = withWebStorageEnv(paths, {
     TASK_HANDOFF_APP_SESSION_PERSIST: "1",
-    TASK_HANDOFF_APP_SESSION_RETENTION_DAYS: "7",
+    TASK_HANDOFF_APP_SESSION_RETENTION_DAYS: undefined,
   });
   try {
     const runtime = new AppRuntimeManager(paths);
@@ -6775,6 +6956,31 @@ test("app runtime cleans expired historical sessions when persistence and retent
     assert.equal(runtime.getSession("app_recent").status, "stopped");
     assert.equal(runtime.getSession("app_running").status, "exited");
     assert.equal(runtime.getSession("app_running").error.code, "APP_SESSION_RESTORED_WITHOUT_PROCESS");
+  } finally {
+    restoreEnv();
+  }
+});
+
+test("app runtime retention derives managed paths instead of trusting persisted paths", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-app-retention-path-"));
+  const external = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-app-retention-external-"));
+  const paths = appRuntimeTestPaths(root);
+  const id = "app_expired_path";
+  writeAppSessionMetadata(paths, id, "stopped", "2000-01-01T00:00:00.000Z");
+  const metadataPath = path.join(paths.appSessionsDir, id, "metadata.json");
+  const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf8"));
+  metadata.paths = { sessionDir: external, logDir: external };
+  fs.writeFileSync(metadataPath, JSON.stringify(metadata));
+  fs.writeFileSync(path.join(external, "keep.txt"), "keep");
+  const restoreEnv = withWebStorageEnv(paths, {
+    TASK_HANDOFF_APP_SESSION_PERSIST: "1",
+    TASK_HANDOFF_APP_SESSION_RETENTION_DAYS: undefined,
+  });
+  try {
+    const runtime = new AppRuntimeManager(paths);
+    runtime.dispose();
+    assert.equal(fs.existsSync(path.join(paths.appSessionsDir, id)), false);
+    assert.equal(fs.readFileSync(path.join(external, "keep.txt"), "utf8"), "keep");
   } finally {
     restoreEnv();
   }
@@ -7008,6 +7214,7 @@ test("web app reports automation route errors", async () => {
     TASK_HANDOFF_WEB_AUTH: "off",
     TASK_HANDOFF_NOVNC_ROOT: path.join(root, "missing-novnc"),
     TASK_HANDOFF_APP_SESSION_PERSIST: "1",
+    TASK_HANDOFF_APP_SESSION_RETENTION_DAYS: "365",
   });
   const app = await createWebApp({ staticDir: path.join(root, "missing-static"), logger: false });
   try {

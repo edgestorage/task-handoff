@@ -118,6 +118,25 @@
         </Button>
       </div>
     </section>
+    <section class="modal-section settings-panel-surface appearance-panel diagnostic-logs-panel">
+      <div class="section-head">
+        <span>{{ t("settings.diagnosticLogs.title") }}</span>
+      </div>
+      <p class="section-description">{{ t("settings.diagnosticLogs.description") }}</p>
+      <label class="diagnostic-logs-toggle">
+        <Checkbox :model-value="diagnosticLogs" :disabled="savingDiagnosticLogs" @update:model-value="emit('update:diagnosticLogs', $event === true)" />
+        <span>
+          <strong>{{ diagnosticLogs ? t("settings.diagnosticLogs.enabled") : t("settings.diagnosticLogs.disabled") }}</strong>
+          <small>{{ t("settings.diagnosticLogs.sensitive") }}</small>
+        </span>
+      </label>
+      <div class="diagnostic-log-actions">
+        <Button variant="outline" size="sm" :disabled="exportingDiagnosticLogs" @click="emit('exportDiagnosticLogs')">
+          <Archive :size="14" />
+          <span>{{ exportingDiagnosticLogs ? t("settings.diagnosticLogs.exporting") : t("settings.diagnosticLogs.export") }}</span>
+        </Button>
+      </div>
+    </section>
     <section class="modal-section settings-panel-surface appearance-panel public-access-panel">
       <div class="section-head">
         <span>{{ t("settings.publicAccess.title") }}</span>
@@ -166,11 +185,12 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
-import { Download, ExternalLink, Moon, RefreshCw, RotateCw, Sun } from "@lucide/vue";
+import { Archive, Download, ExternalLink, Moon, RefreshCw, RotateCw, Sun } from "@lucide/vue";
 import type { UpdateChannel, UpdateCheckResult, UpdateJob } from "../../../api/types";
 import { Badge } from "../../../components/ui/badge";
 import type { ThemePreference } from "../../../utils/theme";
 import { Button } from "../../../components/ui/button";
+import { Checkbox } from "../../../components/ui/checkbox";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { useControlPlaneLocale, type LocalePreference } from "../../../i18n/index.ts";
 import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
@@ -203,6 +223,9 @@ const props = defineProps<{
   desktopUpdatesAvailable: boolean;
   desktopUpdateState?: DesktopUpdateState;
   themePreference: ThemePreference;
+  diagnosticLogs: boolean;
+  savingDiagnosticLogs: boolean;
+  exportingDiagnosticLogs: boolean;
 }>();
 
 const { t } = useI18n();
@@ -231,6 +254,8 @@ const emit = defineEmits<{
   "update:serverUpdateChannel": [value: string];
   "update:desktopUpdateChannel": [value: string];
   "update:themePreference": [theme: ThemePreference];
+  "update:diagnosticLogs": [enabled: boolean];
+  exportDiagnosticLogs: [];
 }>();
 
 const desktopUpdateBusy = computed(() => ["checking", "downloading", "installing"].includes(props.desktopUpdateState?.phase || ""));
@@ -382,8 +407,37 @@ const desktopUpdateSummary = computed(() => {
 }
 
 .public-access-panel,
-.composer-shortcuts-panel {
+.composer-shortcuts-panel,
+.diagnostic-logs-panel {
   grid-column: 1 / -1;
+}
+
+.diagnostic-logs-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.diagnostic-logs-toggle > span {
+  display: grid;
+  gap: 3px;
+}
+
+.diagnostic-logs-toggle strong {
+  color: var(--text-strong);
+  font-size: 13px;
+}
+
+.diagnostic-logs-toggle small {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.diagnostic-log-actions {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .section-head {

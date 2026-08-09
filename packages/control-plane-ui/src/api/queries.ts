@@ -1,6 +1,6 @@
 import { queryOptions, useQuery } from "@tanstack/vue-query";
 import { computed, toValue, type MaybeRefOrGetter } from "vue";
-import { deleteApiData, getApiData, getApiPayload, patchApiData, postApiData, putApiData } from "./client";
+import { api, deleteApiData, getApiData, getApiPayload, patchApiData, postApiData, putApiData, withApiError } from "./client";
 import { mergeInstanceBoardQueryData } from "./instanceBoardMerge.ts";
 import { controlPlaneQueryKeys } from "./queryKeys.ts";
 import { sharedAiSessionsApi, sharedControlPlaneClient } from "./sharedClient.ts";
@@ -107,6 +107,10 @@ export function loginControlPlane(input: { username: string; password: string })
   return sharedControlPlaneClient.auth.login(input);
 }
 
+export function changeControlPlanePassword(input: { currentPassword: string; newPassword: string }) {
+  return sharedControlPlaneClient.auth.changePassword(input);
+}
+
 export function logoutControlPlane() {
   return sharedControlPlaneClient.auth.logout();
 }
@@ -142,6 +146,13 @@ export function useControlPlaneSettingsQuery() {
 
 export function updateControlPlaneSettings(input: Partial<ControlPlaneSettings>) {
   return patchApiData<ControlPlaneSettings>("control-plane/settings", input);
+}
+
+export async function downloadControlPlaneDiagnosticLogs() {
+  const response = await withApiError(api.get("control-plane/diagnostic-logs/export"));
+  const disposition = response.headers.get("content-disposition") || "";
+  const filename = disposition.match(/filename="([^"]+)"/)?.[1] || "task-handoff-diagnostic-logs.tar.gz";
+  return { blob: await response.blob(), filename };
 }
 
 export function useProjectsQuery() {

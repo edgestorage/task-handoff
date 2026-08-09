@@ -190,6 +190,40 @@ export class CodexAppServerClient extends EventEmitter {
     return threads;
   }
 
+  async activeThreadExists(threadId: string) {
+    let cursor: string | null = null;
+    const seenCursors = new Set<string>();
+    while (true) {
+      const result = await this.request("thread/list", {
+        cursor,
+        limit: 100,
+        sortKey: null,
+        sortDirection: null,
+        modelProviders: null,
+        sourceKinds: [],
+        archived: false,
+        cwd: null,
+        useStateDbOnly: false,
+        searchTerm: null,
+      });
+      const candidates = Array.isArray(result.data)
+        ? result.data
+        : Array.isArray(result.threads) ? result.threads : [];
+      if (candidates.some((thread) => (
+        Boolean(thread && typeof thread === "object" && !Array.isArray(thread) && thread.id === threadId)
+      ))) return true;
+      const nextCursor = typeof result.nextCursor === "string" && result.nextCursor
+        ? result.nextCursor
+        : undefined;
+      if (!nextCursor) return false;
+      if (seenCursors.has(nextCursor)) {
+        throw new Error("Codex thread/list returned a repeated cursor while verifying an active thread.");
+      }
+      seenCursors.add(nextCursor);
+      cursor = nextCursor;
+    }
+  }
+
   async startTurn(threadId: string, message: string, inputs?: CodexUserInput[], permissions?: CodexTurnPermissionOverrides) {
     const result = await this.request("turn/start", {
       threadId,

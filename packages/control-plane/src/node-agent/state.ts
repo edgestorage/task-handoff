@@ -64,26 +64,6 @@ function workspacePolicyForSource(source: Project["source"]) {
   return WorkspacePolicySchema.parse({ mode: "git-clone", path: "/workspace", readOnly: false });
 }
 
-function managedVolumesForDockerInstance(instanceId: string, nodeId: string, source: Project["source"]) {
-  const containerName = `task-handoff-${instanceId.replace(/[^a-zA-Z0-9_.-]/g, "-")}`;
-  const roles = [
-    { role: "data" as const, suffix: "data", mountPath: "/data" },
-    { role: "agent-home" as const, suffix: "agent-home", mountPath: "/home/agent" },
-    ...(source.type === "local-folder" ? [] : [{ role: "workspace" as const, suffix: "workspace", mountPath: "/workspace" }]),
-  ];
-  return roles.map(({ role, suffix, mountPath }) => ({
-    role,
-    name: `${containerName}-${suffix}`,
-    mountPath,
-    labels: {
-      "task-handoff.owner": "task-handoff",
-      "task-handoff.instance-id": instanceId,
-      "task-handoff.node-id": nodeId,
-      "task-handoff.volume-role": role,
-    },
-  }));
-}
-
 function projectForInstance(instance: ControlledInstance): Project {
   const source = ProjectSourceSchema.parse(instance.source);
   const projectId =
@@ -337,9 +317,13 @@ export class NodeAgentState {
         ? derived
         : derived.phase === "matched"
         ? (stopped ? derived : { ...derived, phase: "verifying" as const, matchedAt: undefined })
-        : previous?.phase === "failed"
-          ? { ...derived, phase: "failed" as const, attempt: previous.attempt, lastAttemptAt: previous.lastAttemptAt, error: previous.error }
-          : { ...derived, attempt: previous?.attempt || 0, lastAttemptAt: previous?.lastAttemptAt };
+        : {
+            ...derived,
+            phase: "pending" as const,
+            attempt: previous?.attempt || 0,
+            lastAttemptAt: previous?.lastAttemptAt,
+            error: previous?.error || derived.error,
+          };
       this.controlledInstances.put(ControlledInstanceSchema.parse({
         ...instance,
         ready: false,
@@ -612,8 +596,8 @@ export class NodeAgentState {
       workspace: runtime.type === "local" ? { mode: "local-bind", status: "unknown", path: workspacePath } : { status: "unknown" },
       target: { strategy: "node-proxy", status: "unknown" },
       runtime: runtime.type === "local"
-        ? { kind: "local", workspacePath, labels: { "task-handoff.runtime-kind": "local" }, managedVolumes: [] }
-        : { labels: {}, managedVolumes: managedVolumesForDockerInstance(id, this.nodeId, source) },
+        ? { kind: "local", workspacePath, labels: { "task-handoff.runtime-kind": "local" } }
+        : { labels: {} },
       registrationToken: createSecret(),
       createdAt: timestamp,
       updatedAt: timestamp,

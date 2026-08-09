@@ -7,6 +7,10 @@ import { mobileMetrics } from '../observability/mobile-metrics';
 
 export type MobileAiSessionAction = 'send' | 'approval' | 'interrupt' | 'close' | 'queue-steer' | 'queue-retry' | 'queue-remove' | 'queue-edit' | 'queue-reorder';
 export type MobileActionState = { phase: 'idle' | 'busy' | 'result-unknown' | 'failed'; error?: string };
+export type MobileActionResult<T> =
+  | { disposition: 'accepted'; result: T }
+  | { disposition: 'duplicate-blocked' }
+  | { disposition: 'failed' | 'result-unknown'; error: string };
 
 export function mobileAiSessionBusyKey(controlPlaneId: string, instanceId: string, sessionId: string, action: MobileAiSessionAction, queueId?: string) {
   return JSON.stringify([controlPlaneId, instanceId, sessionId, action, queueId || '']);
@@ -57,7 +61,7 @@ export class MobileAiSessionActionCoordinator {
     return this.run(instanceId, sessionId, 'queue-reorder', undefined, () => this.client.aiSessions.reorderQueue(instanceId, sessionId, { expectedRevision, queueIds }));
   }
 
-  private async run<T>(instanceId: string, sessionId: string, action: MobileAiSessionAction, queueId: string | undefined, operation: () => Promise<T>) {
+  private async run<T>(instanceId: string, sessionId: string, action: MobileAiSessionAction, queueId: string | undefined, operation: () => Promise<T>): Promise<MobileActionResult<T>> {
     const key = mobileAiSessionBusyKey(this.controlPlaneId, instanceId, sessionId, action, queueId);
     if (['busy', 'result-unknown'].includes(this.state(key).phase)) return { disposition: 'duplicate-blocked' as const };
     const before = this.authoritativeFingerprint(instanceId, sessionId, queueId);
@@ -67,11 +71,12 @@ export class MobileAiSessionActionCoordinator {
       result = await operation();
     } catch (cause) {
       const uncertain = isUncertainFailure(cause);
+      const error = uncertain
+        ? 'The result is unknown. The request will not be sent again; refresh the authoritative session state.'
+        : cause instanceof Error ? cause.message : 'The action failed.';
       this.set(key, {
         phase: uncertain ? 'result-unknown' : 'failed',
-        error: uncertain
-          ? 'The result is unknown. The request will not be sent again; refresh the authoritative session state.'
-          : cause instanceof Error ? cause.message : 'The action failed.',
+        error,
       });
       mobileMetrics.record('action.error', { action, result: uncertain ? 'unknown' : 'failed' });
       if (uncertain) {
@@ -79,7 +84,7 @@ export class MobileAiSessionActionCoordinator {
           if (this.authoritativeFingerprint(instanceId, sessionId, queueId) !== before) this.set(key, { phase: 'idle' });
         }).catch(() => undefined);
       }
-      return { disposition: uncertain ? 'result-unknown' as const : 'failed' as const };
+      return { disposition: uncertain ? 'result-unknown' : 'failed', error };
     }
     this.set(key, { phase: 'idle' });
     await this.recover().catch(() => undefined);

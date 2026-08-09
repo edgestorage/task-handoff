@@ -4,6 +4,7 @@ import { createControlPlaneAuthApi } from "./auth.ts";
 import { responseSchema } from "@task-handoff/protocol/response-validation";
 import type { ControlPlaneClientTransport } from "./transport.ts";
 import { createControlPlaneResourcesApi } from "./resources.ts";
+import { createControlPlaneTriggersApi } from "./triggers.ts";
 
 export function createControlPlaneClient(transport: ControlPlaneClientTransport) {
   const compatibleTransport: ControlPlaneClientTransport = {
@@ -16,6 +17,7 @@ export function createControlPlaneClient(transport: ControlPlaneClientTransport)
     aiSessions: createControlPlaneAiSessionsApi(compatibleTransport),
     appSessions: createControlPlaneAppSessionsApi(compatibleTransport),
     resources: createControlPlaneResourcesApi(compatibleTransport),
+    triggers: createControlPlaneTriggersApi(compatibleTransport),
   };
 }
 

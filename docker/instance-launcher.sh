@@ -21,11 +21,6 @@ bootstrap_wait() {
 }
 
 if [ ! -L "${current}" ]; then
-  if command -v task-handoff-controlled-instance >/dev/null 2>&1; then
-    exec task-handoff-controlled-instance web \
-      --host "${TASK_HANDOFF_WEB_HOST:-0.0.0.0}" \
-      --port "${TASK_HANDOFF_WEB_PORT:-8080}"
-  fi
   bootstrap_wait
 fi
 

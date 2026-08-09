@@ -21,6 +21,9 @@ test("AI session UI uses authoritative Direct create, Open App, and close action
     panel.indexOf("function canInterrupt"),
   );
   assert.match(panel, /createAiSession\(props\.instance\.id/);
+  assert.match(createNewSession, /cwdFolderId = newSessionFolder\.value\?\.id/);
+  assert.match(createNewSession, /\.\.\.\(cwdFolderId \? \{ cwdFolderId \} : \{\}\)/);
+  assert.doesNotMatch(createNewSession, /runtime-path/);
   assert.match(panel, /emit\("selectAiSession", props\.instance\.id, result\.aiSessionId\)/);
   assert.doesNotMatch(createNewSession, /refreshBoard\(\)/);
   assert.doesNotMatch(createNewSession, /setTimeout\(resolve, 500\)/);

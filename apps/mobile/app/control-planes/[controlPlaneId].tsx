@@ -8,16 +8,17 @@ import { ControlPlaneDetailContent } from '../../src/control-plane/ControlPlaneD
 import type { MobileControlPlaneProfile } from '../../src/control-plane/profile';
 import { deleteMobileControlPlaneProfile, mobileProfileStore as profiles } from '../../src/control-plane/runtime';
 import { useI18n, type Translate } from '../../src/i18n';
+import { useMobileToast } from '../../src/components/MobileToast';
 
 export default function ControlPlaneDetailScreen() {
   const { controlPlaneId } = useLocalSearchParams<{ controlPlaneId: string }>();
   const { colors } = useMobileTheme();
   const { t } = useI18n();
+  const toast = useMobileToast();
   const [profile, setProfile] = useState<MobileControlPlaneProfile>();
   const [active, setActive] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
 
   useEffect(() => {
     let live = true;
@@ -29,7 +30,6 @@ export default function ControlPlaneDetailScreen() {
       setLoading(false);
     }).catch((cause) => {
       if (!live) return;
-      setError(messageFor(cause, t));
       setLoading(false);
     });
     return () => { live = false; };
@@ -38,12 +38,11 @@ export default function ControlPlaneDetailScreen() {
   const makeActive = async () => {
     if (!profile) return;
     setBusy(true);
-    setError(undefined);
     try {
       await profiles.setActive(profile);
       setActive(true);
     } catch (cause) {
-      setError(messageFor(cause, t));
+      toast.show({ detail: messageFor(cause, t), title: t('toast.actionFailed', { action: t('controlPlane.makeActive') }), tone: 'error' });
     } finally {
       setBusy(false);
     }
@@ -61,11 +60,10 @@ export default function ControlPlaneDetailScreen() {
           style: 'destructive',
           onPress: () => {
             setBusy(true);
-            setError(undefined);
             void deleteMobileControlPlaneProfile(profile).then((remaining) => {
               router.replace(remaining.length ? '/(tabs)/(main)/inbox' : '/profiles');
             }).catch((cause) => {
-              setError(messageFor(cause, t));
+              toast.show({ detail: messageFor(cause, t), title: t('toast.actionFailed', { action: t('controlPlane.remove') }), tone: 'error' });
               setBusy(false);
             });
           },
@@ -96,7 +94,6 @@ export default function ControlPlaneDetailScreen() {
       <ControlPlaneDetailContent
         active={active}
         busy={busy}
-        error={error}
         onMakeActive={() => { void makeActive(); }}
         onRemove={remove}
         profile={profile}

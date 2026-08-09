@@ -1,14 +1,15 @@
 import type { AiSessionPermissionMode } from '@task-handoff/protocol/ai-sessions';
-import type { ControlPlaneInstanceDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
+import type { ControlPlaneInstanceDirectoryEntry, ControlPlaneNodeDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
 import type { ControlPlaneNodeLocalFolder } from '@task-handoff/control-plane-client';
 
 export type NewSessionFormProps = {
   instances: readonly ControlPlaneInstanceDirectoryEntry[];
+  nodes: readonly ControlPlaneNodeDirectoryEntry[];
   selectedInstanceId: string;
   selectedInstance?: ControlPlaneInstanceDirectoryEntry;
   folders: readonly ControlPlaneNodeLocalFolder[];
   selectedAgent: string;
-  cwd: string;
+  selectedFolderId?: string;
   message: string;
   permissionMode: AiSessionPermissionMode;
   busy: boolean;
@@ -17,7 +18,7 @@ export type NewSessionFormProps = {
   visualBalanceInset?: number;
   onInstanceChange(value: string): void;
   onAgentChange(value: string): void;
-  onCwdChange(value: string): void;
+  onFolderChange(value?: string): void;
   onMessageChange(value: string): void;
   onPermissionModeChange(value: AiSessionPermissionMode): void;
   onCreate(): void;

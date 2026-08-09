@@ -13,6 +13,7 @@ import { mobileAppSessionStore } from './store';
 type ActiveAppSessions = {
   closeSession(instanceId: string, sessionId: string): Promise<void>;
   createAccess(instanceId: string, sessionId: string): Promise<AppSessionAccessLease>;
+  refresh(): Promise<void>;
   renameSession(instanceId: string, sessionId: string, title: string): Promise<void>;
   revokeAccess(instanceId: string, sessionId: string, token: string): Promise<void>;
   controlPlaneId?: string;
@@ -33,7 +34,6 @@ export function ActiveAppSessionsProvider({ children }: { children: ReactNode })
 
 function ActiveAppSessionsBoundary({ children }: { children: ReactNode }) {
   const runtime = useMobileControlPlaneRuntime();
-  const generation = runtime.controlPlaneId ? mobileAppSessionStore.generation(runtime.controlPlaneId) : 0;
   const controller = useMemo(() => runtime.controlPlaneId && runtime.api && runtime.transport
     ? new MobileAppSessionController(runtime.controlPlaneId, runtime.api, runtime.transport, mobileAppSessionStore)
     : undefined, [runtime.api, runtime.controlPlaneId, runtime.transport]);
@@ -56,17 +56,19 @@ function ActiveAppSessionsBoundary({ children }: { children: ReactNode }) {
     () => empty,
   );
   const closeSession = useCallback(async (instanceId: string, sessionId: string) => {
-    if (!runtime.api || !runtime.controlPlaneId) throw new Error('No active Control Plane.');
+    if (!runtime.api || !controller) throw new Error('No active Control Plane.');
     await runtime.api.appSessions.stop(instanceId, sessionId);
-    const snapshot = await runtime.api.appSessions.refresh();
-    if (mobileAppSessionStore.isGeneration(runtime.controlPlaneId, generation)) mobileAppSessionStore.replaceSnapshot(runtime.controlPlaneId, snapshot);
-  }, [generation, runtime.api, runtime.controlPlaneId]);
+    await controller.refresh();
+  }, [controller, runtime.api]);
   const renameSession = useCallback(async (instanceId: string, sessionId: string, title: string) => {
-    if (!runtime.api || !runtime.controlPlaneId) throw new Error('No active Control Plane.');
+    if (!runtime.api || !controller) throw new Error('No active Control Plane.');
     await runtime.api.appSessions.rename(instanceId, sessionId, title);
-    const snapshot = await runtime.api.appSessions.refresh();
-    if (mobileAppSessionStore.isGeneration(runtime.controlPlaneId, generation)) mobileAppSessionStore.replaceSnapshot(runtime.controlPlaneId, snapshot);
-  }, [generation, runtime.api, runtime.controlPlaneId]);
+    await controller.refresh();
+  }, [controller, runtime.api]);
+  const refresh = useCallback(async () => {
+    if (!controller) throw new Error('No active Control Plane.');
+    await controller.refresh();
+  }, [controller]);
   const createAccess = useCallback(async (instanceId: string, sessionId: string) => {
     if (!runtime.api || !runtime.transport) throw new Error('No active Control Plane.');
     const access = await runtime.api.appSessions.access(instanceId, sessionId);
@@ -79,11 +81,12 @@ function ActiveAppSessionsBoundary({ children }: { children: ReactNode }) {
     closeSession,
     controlPlaneId: runtime.controlPlaneId,
     createAccess,
+    refresh,
     renameSession,
     revokeAccess,
     state,
     transport: runtime.transport,
-  }), [closeSession, createAccess, renameSession, revokeAccess, runtime.controlPlaneId, runtime.transport, state]);
+  }), [closeSession, createAccess, refresh, renameSession, revokeAccess, runtime.controlPlaneId, runtime.transport, state]);
   return createElement(Context.Provider, { value }, children);
 }
 

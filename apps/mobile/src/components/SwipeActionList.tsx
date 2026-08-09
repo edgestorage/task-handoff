@@ -10,6 +10,8 @@ export function SwipeActionList<Item>({
   keyExtractor,
   ListEmptyComponent,
   ListHeaderComponent,
+  onRefresh,
+  refreshing,
   renderItem,
   style,
   swipeAction,
@@ -21,6 +23,8 @@ export function SwipeActionList<Item>({
     keyExtractor={keyExtractor}
     ListEmptyComponent={ListEmptyComponent}
     ListHeaderComponent={ListHeaderComponent}
+    onRefresh={onRefresh}
+    refreshing={refreshing}
     renderItem={(info) => {
       const action = swipeAction(info.item);
       const content = renderItem(info);

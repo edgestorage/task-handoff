@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   AiSessionEventMetaSchema,
   AiSessionCreateInputSchema,
+  AiSessionCreateRefInputSchema,
   AiSessionCreateResultSchema,
   AiSessionCloseInputSchema,
   AiSessionCloseResultSchema,
@@ -122,6 +123,13 @@ test("AI session create, open-app, and close schemas keep trusted identities ser
   assert.deepEqual(AiSessionCreateInputSchema.parse(create), create);
   assert.equal(AiSessionCreateInputSchema.safeParse({ ...create, cwd: { type: "runtime-path", path: "relative/path" } }).success, false);
   assert.equal(AiSessionCreateInputSchema.safeParse({ ...create, providerSessionId: "client-controlled" }).success, false);
+  const { cwd: _cwd, ...createWithoutCwd } = create;
+  assert.deepEqual(AiSessionCreateRefInputSchema.parse({ ...createWithoutCwd, cwdFolderId: "folder-1" }), {
+    ...createWithoutCwd,
+    cwdFolderId: "folder-1",
+  });
+  assert.deepEqual(AiSessionCreateRefInputSchema.parse(createWithoutCwd), createWithoutCwd);
+  assert.equal(AiSessionCreateRefInputSchema.safeParse({ ...create, cwdFolderId: "folder-1" }).success, false);
   assert.deepEqual(AiSessionCreateResultSchema.parse({
     disposition: "created",
     aiSessionId: "ai-1",

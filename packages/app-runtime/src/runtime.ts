@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFileSync, spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
+import type { Writable } from "node:stream";
 import type { IPty } from "node-pty";
 import { spawn as spawnPty } from "node-pty";
 import writeFileAtomic from "write-file-atomic";
@@ -12,6 +13,7 @@ import type { ManagedAppRegistry } from "./managed-app-definitions/registry";
 import type { ManagedAppPreparedTtyLaunch, ManagedAppRuntimeExtension, ManagedAppRuntimeHost } from "./managed-app-definitions/types";
 import { ensureNodePtySpawnHelperExecutable, formatGuiScale, guiAppHomeDir, guiScaleFromEnv, guiVncBackend, type GuiVncBackend } from "./runtime-utils";
 import type { AppAutomationStatus, AppCatalogItem, AppDisplayTarget, AppLaunchOptions, AppSession, AppSessionStatus } from "./types";
+import { enforceInstanceLogBudget, RotatingLogWriter } from "./log-retention";
 
 type TtyClient = {
   send: (value: string) => void;
@@ -25,7 +27,7 @@ type RuntimeSession = {
   appLifecycle?: ManagedAppPreparedTtyLaunch;
   pty?: IPty;
   ttyDimensions?: { cols: number; rows: number };
-  ttyLogStream?: fs.WriteStream;
+  ttyLogStream?: Writable;
   ttyLogClosed?: boolean;
   outputBacklog: string;
   clients: Set<TtyClient>;
@@ -92,8 +94,12 @@ const CDP_PORT_END = 9299;
 const APP_PROCESS_STOP_TIMEOUT_MS = 5_000;
 const APP_PROCESS_KILL_TIMEOUT_MS = 1_000;
 const CLEANABLE_SESSION_STATUSES = new Set<AppSessionStatus>(["stopped", "exited", "failed"]);
+const DEFAULT_SESSION_RETENTION_DAYS = 7;
+const MAINTENANCE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 export class AppRuntimeManager extends EventEmitter {
+  private readonly paths: TaskHandoffStoragePaths;
+  private readonly registry: ManagedAppRegistry;
   private readonly sessions = new Map<string, RuntimeSession>();
   private readonly persistedSessions = new Map<string, AppSession>();
   private nextDisplay = DISPLAY_START;
@@ -108,9 +114,12 @@ export class AppRuntimeManager extends EventEmitter {
   private readonly persistSessionMetadata: boolean;
   private managedEnvironment: NodeJS.ProcessEnv = {};
   private draining = false;
+  private readonly maintenanceTimer?: ReturnType<typeof setInterval>;
 
-  constructor(private readonly paths: TaskHandoffStoragePaths, private readonly registry: ManagedAppRegistry = builtinManagedAppRegistry) {
+  constructor(paths: TaskHandoffStoragePaths, registry: ManagedAppRegistry = builtinManagedAppRegistry) {
     super();
+    this.paths = paths;
+    this.registry = registry;
     this.catalogRepository = new AppCatalogRepository(paths, registry);
     const host: ManagedAppRuntimeHost = {
       paths,
@@ -127,8 +136,10 @@ export class AppRuntimeManager extends EventEmitter {
     this.persistSessionMetadata = envFlag("TASK_HANDOFF_APP_SESSION_PERSIST");
     if (this.persistSessionMetadata) {
       this.loadPersistedSessions();
-      this.cleanupExpiredSessions();
     }
+    this.safeRunPersistenceMaintenance();
+    this.maintenanceTimer = setInterval(() => this.safeRunPersistenceMaintenance(), MAINTENANCE_INTERVAL_MS);
+    this.maintenanceTimer.unref();
   }
 
   catalog() {
@@ -342,7 +353,7 @@ export class AppRuntimeManager extends EventEmitter {
       },
     };
 
-    const ttyLogStream = fs.createWriteStream(path.join(logDir, "tty.log"), { flags: "a" });
+    const ttyLogStream = new RotatingLogWriter(path.join(logDir, "tty.log"));
     const runtimeSession: RuntimeSession = { metadata, processes: [], appLifecycle, ttyDimensions: { cols: 120, rows: 32 }, ttyLogStream, outputBacklog: "", clients: new Set() };
     ttyLogStream.on("error", () => {
       runtimeSession.ttyLogClosed = true;
@@ -1175,6 +1186,29 @@ export class AppRuntimeManager extends EventEmitter {
     return deleted;
   }
 
+  runPersistenceMaintenance(nowDate = new Date()) {
+    const deletedSessions = this.cleanupExpiredSessions(nowDate);
+    const activeLogDirectories = [...this.sessions.values()].map((session) => session.metadata.paths.logDir);
+    const deletedLogs = enforceInstanceLogBudget(path.join(this.paths.logDir, "app-sessions"), activeLogDirectories);
+    return { deletedSessions, deletedLogs };
+  }
+
+  dispose() {
+    if (this.maintenanceTimer) clearInterval(this.maintenanceTimer);
+  }
+
+  private safeRunPersistenceMaintenance() {
+    try {
+      this.runPersistenceMaintenance();
+    } catch (error) {
+      this.emit("maintenance-error", error);
+      console.warn(JSON.stringify({
+        message: "app runtime persistence maintenance failed",
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    }
+  }
+
   screenshot(id: string) {
     const session = this.sessions.get(id);
     if (!session) {
@@ -1398,23 +1432,22 @@ export class AppRuntimeManager extends EventEmitter {
     if (!this.persistSessionMetadata) {
       return;
     }
-    fs.mkdirSync(metadata.paths.sessionDir, { recursive: true });
+    fs.mkdirSync(metadata.paths.sessionDir, { recursive: true, mode: 0o700 });
+    fs.chmodSync(metadata.paths.sessionDir, 0o700);
     writeFileAtomic.sync(path.join(metadata.paths.sessionDir, "metadata.json"), `${JSON.stringify(metadata, null, 2)}\n`, { mode: 0o600 });
   }
 
   private removeSessionFiles(metadata: AppSession) {
-    fs.rmSync(metadata.paths.sessionDir, { recursive: true, force: true });
-    fs.rmSync(metadata.paths.logDir, { recursive: true, force: true });
+    fs.rmSync(path.join(this.paths.appSessionsDir, metadata.id), { recursive: true, force: true });
+    fs.rmSync(path.join(this.paths.logDir, "app-sessions", metadata.id), { recursive: true, force: true });
   }
 
   private sessionRetentionMs() {
     const raw = process.env.TASK_HANDOFF_APP_SESSION_RETENTION_DAYS;
-    if (!raw) {
-      return undefined;
-    }
+    if (!raw) return DEFAULT_SESSION_RETENTION_DAYS * 24 * 60 * 60 * 1000;
     const days = Number(raw);
     if (!Number.isFinite(days) || days <= 0) {
-      return undefined;
+      return DEFAULT_SESSION_RETENTION_DAYS * 24 * 60 * 60 * 1000;
     }
     return days * 24 * 60 * 60 * 1000;
   }
@@ -1499,6 +1532,10 @@ export class AppRuntimeManager extends EventEmitter {
     return {
       ...record,
       workspace: { cwd: path.resolve(candidate) },
+      paths: {
+        sessionDir: path.join(this.paths.appSessionsDir, expectedId),
+        logDir: path.join(this.paths.logDir, "app-sessions", expectedId),
+      },
     } as AppSession;
   }
 
@@ -1876,7 +1913,7 @@ export class AppRuntimeManager extends EventEmitter {
   }
 
   private spawnLogged(command: string, args: string[], env: NodeJS.ProcessEnv, logDir: string, logName: string, cwd?: string) {
-    const logStream = fs.createWriteStream(path.join(logDir, logName), { flags: "a" });
+    const logStream = new RotatingLogWriter(path.join(logDir, logName));
     const child = spawn(command, args, {
       cwd,
       env,
@@ -1890,8 +1927,19 @@ export class AppRuntimeManager extends EventEmitter {
       this.trackManagedProcessTree({ pid: child.pid, child, rootExited: false });
       child.once("exit", () => this.markManagedProcessRootExited(child.pid!));
     }
-    child.stdout.pipe(logStream);
-    child.stderr.pipe(logStream);
+    let openOutputs = 2;
+    const closeLog = () => {
+      openOutputs -= 1;
+      if (openOutputs === 0) logStream.end();
+    };
+    child.stdout.pipe(logStream, { end: false });
+    child.stderr.pipe(logStream, { end: false });
+    logStream.on("error", () => {
+      child.stdout.unpipe(logStream);
+      child.stderr.unpipe(logStream);
+    });
+    child.stdout.once("end", closeLog);
+    child.stderr.once("end", closeLog);
     return child;
   }
 

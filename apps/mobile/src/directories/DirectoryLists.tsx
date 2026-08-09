@@ -5,14 +5,16 @@ import type { ControlPlaneInstanceDirectoryEntry, ControlPlaneNodeDirectoryEntry
 import type { MobileDirectoryProfileState } from './store';
 import { useMobileTheme } from '../components/theme';
 import { SystemIcon } from '../components/SystemIcon';
+import { EmptyState } from '../components/EmptyState';
 import { ScreenFlatList } from '../components/ScreenFlatList';
+import { usePullToRefresh } from '../components/use-pull-to-refresh';
 import { aiSessionSummary, connectionModeLabel, instanceStateLabel, nodeDisplayName, nodeStateLabel, nodeSummary, relativeObservedAt } from './presentation';
 import { useI18n } from '../i18n';
 
 export function NodesDirectory({ state, onOpen }: { state: MobileDirectoryProfileState; onOpen?(node: ControlPlaneNodeDirectoryEntry): void }) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
-  return <View style={[styles.screen, { backgroundColor: colors.background }]}><DirectoryList state={state} data={state.nodes} keyOf={(node) => node.id} render={(node) => (
+  return <View style={[styles.screen, { backgroundColor: colors.background }]}><DirectoryList emptyIcon={{ android: 'dns', ios: 'server.rack' }} state={state} data={state.nodes} keyOf={(node) => node.id} render={(node) => (
     <DirectoryCard icon="node" onPress={() => onOpen?.(node)} title={nodeDisplayName(node, t)} subtitle={connectionModeLabel(node.connectionMode, t)}>
       <View style={styles.nodeSummary}>
         <Text style={[styles.meta, { color: colors.textMuted }]}>{nodeSummary(state.instances.filter((instance) => instance.nodeId === node.id).length, node, t)}</Text>
@@ -23,12 +25,13 @@ export function NodesDirectory({ state, onOpen }: { state: MobileDirectoryProfil
   )} /></View>;
 }
 
-export function InstancesDirectory({ state, nodeId, onOpen }: { state: MobileDirectoryProfileState; nodeId?: string; onOpen?(instance: ControlPlaneInstanceDirectoryEntry): void }) {
+export function InstancesDirectory({ state, nodeId, onOpen, onRefresh }: { state: MobileDirectoryProfileState; nodeId?: string; onOpen?(instance: ControlPlaneInstanceDirectoryEntry): void; onRefresh?: () => Promise<void> }) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
   const [selectedNode, setSelectedNode] = useState(nodeId || 'all');
   const [selectedStatus, setSelectedStatus] = useState('all');
   const [selectedAi, setSelectedAi] = useState<InstanceAiFilter>('all');
+  const pullToRefresh = usePullToRefresh(onRefresh);
   const nodes = useMemo(() => [...new Set(state.instances.map((instance) => instance.nodeId))].sort(), [state.instances]);
   const statuses = useMemo(() => [...new Set(state.instances.map((instance) => instance.status))].sort(), [state.instances]);
   const instances = filterInstances(state.instances, {
@@ -50,7 +53,7 @@ export function InstancesDirectory({ state, nodeId, onOpen }: { state: MobileDir
       {statuses.length > 1 ? <FilterRow label={t('directories.status')} values={['all', ...statuses]} value={selectedStatus} onChange={setSelectedStatus} /> : null}
       <FilterRow label={t('directories.ai')} values={['all', 'active', 'problem', 'idle']} value={selectedAi} onChange={(value) => setSelectedAi(value as InstanceAiFilter)} />
     </View>
-    <DirectoryListContent state={state} data={instances} keyOf={(instance) => instance.id} render={(instance) => (
+    <DirectoryListContent emptyIcon={{ android: 'deployed_code', ios: 'shippingbox' }} state={state} data={instances} keyOf={(instance) => instance.id} onRefresh={pullToRefresh.onRefresh} refreshing={pullToRefresh.refreshing} render={(instance) => (
       <DirectoryCard icon="instance" onPress={() => onOpen?.(instance)} title={instance.name} subtitle={instanceStateLabel(instance, t)}>
       <Text style={[styles.meta, { color: colors.textMuted }]}>{!nodeId ? `Node ${instance.nodeId} · ` : ''}{instance.runtime.name || instance.runtime.id}{instance.runtime.type ? ` · ${instance.runtime.type}` : ''}</Text>
       <Text style={[styles.meta, { color: colors.textMuted }]}>{instance.lastHeartbeatAt ? relativeObservedAt(instance.lastHeartbeatAt, t) : t('directories.heartbeatMissing')}</Text>
@@ -62,21 +65,26 @@ export function InstancesDirectory({ state, nodeId, onOpen }: { state: MobileDir
   </View>;
 }
 
-function DirectoryList<T>({ state, data, keyOf, render }: { state: MobileDirectoryProfileState; data: readonly T[]; keyOf(item: T): string; render(item: T): React.ReactElement }) {
+type DirectoryEmptyIcon = Pick<React.ComponentProps<typeof SystemIcon>, 'android' | 'ios'>;
+
+function DirectoryList<T>({ state, data, emptyIcon, keyOf, render }: { state: MobileDirectoryProfileState; data: readonly T[]; emptyIcon: DirectoryEmptyIcon; keyOf(item: T): string; render(item: T): React.ReactElement }) {
   const { colors } = useMobileTheme();
   return <View style={[styles.screen, { backgroundColor: colors.background }]}>
-    <DirectoryListContent state={state} data={data} keyOf={keyOf} render={render} />
+    <DirectoryListContent emptyIcon={emptyIcon} state={state} data={data} keyOf={keyOf} render={render} />
   </View>;
 }
 
-function DirectoryListContent<T>({ state, data, keyOf, render }: { state: MobileDirectoryProfileState; data: readonly T[]; keyOf(item: T): string; render(item: T): React.ReactElement }) {
+function DirectoryListContent<T>({ state, data, emptyIcon, keyOf, onRefresh, refreshing, render }: { state: MobileDirectoryProfileState; data: readonly T[]; emptyIcon: DirectoryEmptyIcon; keyOf(item: T): string; onRefresh?: () => void; refreshing?: boolean; render(item: T): React.ReactElement }) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
   return <>
     {state.phase === 'stale' ? <Text style={[styles.notice, { backgroundColor: colors.notice, color: colors.noticeText }]}>{t('directories.cached')}</Text> : null}
     {state.phase === 'offline' ? <Text style={[styles.notice, { backgroundColor: colors.notice, color: colors.noticeText }]}>{t('directories.offlineCached')}</Text> : null}
     {state.error ? <Text style={[styles.error, { color: colors.error }]}>{state.error}</Text> : null}
-    <ScreenFlatList contentContainerStyle={data.length ? styles.list : styles.empty} data={[...data]} keyExtractor={keyOf} ListEmptyComponent={<Text style={[styles.emptyText, { color: colors.textMuted }]}>{state.phase === 'loading' ? t('directories.loading') : t('directories.noEntries')}</Text>} renderItem={({ item }) => render(item)} />
+    <ScreenFlatList contentContainerStyle={data.length ? styles.list : styles.empty} data={[...data]} keyExtractor={keyOf} ListEmptyComponent={state.phase === 'loading'
+      ? <Text style={[styles.loadingText, { color: colors.textMuted }]}>{t('directories.loading')}</Text>
+      : <EmptyState icon={emptyIcon} message={t('directories.noEntries')} />}
+      onRefresh={onRefresh} refreshing={refreshing} renderItem={({ item }) => render(item)} />
   </>;
 }
 
@@ -131,7 +139,7 @@ function DirectoryCard({ title, subtitle, children, icon, onPress }: React.Props
 
 const styles = StyleSheet.create({
   screen: { backgroundColor: '#f8fafc', flex: 1, paddingTop: 16 }, title: { color: '#0f172a', fontSize: 28, fontWeight: '700', paddingHorizontal: 16 },
-  list: { gap: 10, padding: 16 }, empty: { alignItems: 'center', flexGrow: 1, justifyContent: 'center' }, emptyText: { color: '#64748b', fontSize: 14 },
+  list: { gap: 10, padding: 16 }, empty: { alignItems: 'center', flexGrow: 1, justifyContent: 'center' }, loadingText: { fontSize: 14 },
   notice: { backgroundColor: '#fef3c7', color: '#854d0e', fontSize: 12, margin: 16, marginBottom: 0, padding: 9 },
   filters: { gap: 7, paddingHorizontal: 16, paddingTop: 10 }, filterRow: { alignItems: 'center', flexDirection: 'row', gap: 8 }, filterLabel: { color: '#475569', fontSize: 12, fontWeight: '700', width: 44 },
   filter: { backgroundColor: '#e2e8f0', borderRadius: 14, justifyContent: 'center', marginRight: 6, minHeight: 44, paddingHorizontal: 10, paddingVertical: 6 }, filterActive: { backgroundColor: '#bfdbfe' }, filterText: { color: '#334155', fontSize: 12, textTransform: 'capitalize' },

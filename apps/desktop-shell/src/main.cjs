@@ -36,13 +36,14 @@ const {
 } = require("./node-agent-handoff.cjs");
 const { applyDesktopDockIcon, desktopIconPath: resolveDesktopIconPath } = require("./icon.cjs");
 const { applyWindowsTitleBarTheme, desktopTitleBarOptions, desktopWindowChromeMode } = require("./window-chrome.cjs");
+const { appendRotatingLog } = require("./rotating-log.cjs");
 
 let mainWindow;
 let controlPlaneProcess;
 let nodeAgentProcess;
 let ownsControlPlaneProcess = false;
 let ownsNodeAgentProcess = false;
-let desktopLogStream;
+let desktopFileLoggingOverride;
 let desktopUpdater;
 let desktopQuitPromise;
 let desktopQuitReady = false;
@@ -88,24 +89,11 @@ function envFlag(value) {
 }
 
 function desktopFileLoggingEnabled() {
-  return envFlag(process.env.TASK_HANDOFF_DIAGNOSTIC_LOGS);
+  return desktopFileLoggingOverride ?? envFlag(process.env.TASK_HANDOFF_DIAGNOSTIC_LOGS);
 }
 
 function resolveDesktopLogFile() {
   return path.resolve(resolveDataDir(), "log", "desktop.log");
-}
-
-function desktopFileLogStream() {
-  if (!desktopFileLoggingEnabled()) {
-    return undefined;
-  }
-  if (!desktopLogStream) {
-    const logFile = resolveDesktopLogFile();
-    fs.mkdirSync(path.dirname(logFile), { recursive: true });
-    desktopLogStream = fs.createWriteStream(logFile, { flags: "a" });
-    desktopLogStream.on("error", reportLogWriteError);
-  }
-  return desktopLogStream;
 }
 
 function isBrokenLogPipe(error) {
@@ -135,13 +123,16 @@ function writeLog(stream, message) {
 }
 
 function writeDesktopFileLog(message) {
-  writeLog(desktopFileLogStream(), message);
+  if (!desktopFileLoggingEnabled()) return;
+  try {
+    appendRotatingLog(resolveDesktopLogFile(), `${message}\n`);
+  } catch (error) {
+    reportLogWriteError(error);
+  }
 }
 
 function closeDesktopFileLog() {
-  if (!desktopLogStream) return;
-  desktopLogStream.end();
-  desktopLogStream = undefined;
+  // File writes are opened per append so disabling logging has no stream to close.
 }
 
 process.stdout?.on?.("error", reportLogWriteError);
@@ -934,6 +925,16 @@ ipcMain.handle("task-handoff:desktop-update-set-channel", (_event, channel) => d
 ipcMain.handle("task-handoff:desktop-update-open-release", () => {
   const url = desktopUpdater?.getState().releaseUrl || "https://github.com/edgestorage/task-handoff/releases";
   return shell.openExternal(url);
+});
+
+ipcMain.handle("task-handoff:set-diagnostic-logs-enabled", (_event, enabled) => {
+  desktopFileLoggingOverride = enabled === true;
+  if (desktopFileLoggingOverride) {
+    logInfo(`[desktop-shell] diagnostic file logging enabled; writing to ${resolveDesktopLogFile()}`);
+  } else {
+    closeDesktopFileLog();
+  }
+  return { enabled: desktopFileLoggingOverride };
 });
 
 const ownsDesktopInstanceLock = app.requestSingleInstanceLock();

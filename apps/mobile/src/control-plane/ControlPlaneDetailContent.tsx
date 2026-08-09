@@ -9,7 +9,6 @@ import type { MobileControlPlaneProfile } from './profile';
 export type ControlPlaneDetailContentProps = {
   active: boolean;
   busy: boolean;
-  error?: string;
   onMakeActive(): void;
   onRemove(): void;
   profile: MobileControlPlaneProfile;
@@ -48,7 +47,6 @@ export function ControlPlaneDetailContent(props: ControlPlaneDetailContentProps)
       </View>
 
       {props.busy ? <ActivityIndicator accessibilityLabel={t('controlPlane.updating')} /> : null}
-      {props.error ? <Text accessibilityLiveRegion="polite" style={[styles.error, { color: colors.error }]}>{props.error}</Text> : null}
     </Screen>
   );
 }
@@ -85,5 +83,4 @@ const styles = StyleSheet.create({
   actionLabel: { fontSize: 16 },
   disabled: { opacity: 0.45 },
   pressed: { opacity: 0.55 },
-  error: { fontSize: 13, lineHeight: 19 },
 });

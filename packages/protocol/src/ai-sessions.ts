@@ -299,7 +299,7 @@ export const AiSessionCreateInputSchema = AiSessionMessageInputSchema.extend({
 
 export const AiSessionCreateRefInputSchema = AiSessionMessageRefInputSchema.extend({
   agent: AiAgentKindSchema,
-  cwd: AiSessionRuntimePathSchema,
+  cwdFolderId: z.string().trim().min(1).max(120).optional(),
   clientRequestId: z.string().trim().min(1).max(160),
 }).strict();
 

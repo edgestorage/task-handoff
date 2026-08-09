@@ -3,13 +3,16 @@ import { z } from "zod";
 export const PUBLIC_CONTROL_PLANE_IDENTITY_VERSION = 1;
 // Public Direct-client capability boundary. This is intentionally independent
 // from the node-agent / controlled-instance connection protocol version.
-export const CONTROL_PLANE_ACCESS_PROTOCOL_VERSION = "2026-08-05";
+export const CONTROL_PLANE_ACCESS_PROTOCOL_VERSION = "2026-08-09";
 
 export const ControlPlanePublicCapabilitiesSchema = z.object({
   authentication: z.enum(["required", "disabled"]),
   aiSessions: z.boolean(),
   nodes: z.boolean(),
   instanceBoard: z.boolean(),
+  // Added after the original mobile access boundary. Its absence means that
+  // the remote Control Plane does not advertise trigger support.
+  triggers: z.boolean().optional(),
 }).strict();
 
 export const ControlPlanePublicIdentityPayloadSchema = z.object({

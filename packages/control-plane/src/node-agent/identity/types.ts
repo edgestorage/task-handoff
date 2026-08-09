@@ -1,10 +1,3 @@
-export type NodeAgentPairingInvite = {
-  tokenHash: string;
-  expiresAt: string;
-  createdAt: string;
-  controlPlaneName?: string;
-};
-
 export type NodeAgentControlPlanePairing = {
   id: string;
   keyId: string;
@@ -33,7 +26,6 @@ export type NodeAgentIdentity = {
   nodeId: string;
   createdAt: string;
   updatedAt: string;
-  pairingInvites?: NodeAgentPairingInvite[];
   controlPlanePairings?: NodeAgentControlPlanePairing[];
   controlPlaneConnections?: NodeAgentControlPlaneConnection[];
 };

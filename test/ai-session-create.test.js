@@ -161,6 +161,29 @@ test("Codex app-server client sends strict thread lifecycle requests", async () 
   assert.equal(requests[0].params.cwd, "/workspace");
 });
 
+test("Codex app-server client verifies active thread identity across unfiltered pages", async () => {
+  const client = new CodexAppServerClient();
+  const requests = [];
+  client.request = async (method, params) => {
+    requests.push({ method, params });
+    if (params.cursor === null) return { data: [{ id: "thread-other" }], nextCursor: "page-2" };
+    return { data: [{ id: "thread-target" }], nextCursor: null };
+  };
+
+  assert.equal(await client.activeThreadExists("thread-target"), true);
+  assert.deepEqual(requests.map((entry) => entry.params.searchTerm), [null, null]);
+  assert.deepEqual(requests.map((entry) => entry.params.cursor), [null, "page-2"]);
+});
+
+test("Codex app-server client fails closed when active thread pagination repeats", async () => {
+  const client = new CodexAppServerClient();
+  client.request = async () => ({ data: [], nextCursor: "same-page" });
+  await assert.rejects(
+    () => client.activeThreadExists("thread-target"),
+    /repeated cursor/,
+  );
+});
+
 test("Open App resumes the original Direct identity and deduplicates concurrent requests", async () => {
   const { registry } = runtime();
   const session = registry.applyAdapterSnapshot({
@@ -299,4 +322,39 @@ test("Close AI Session restores the authoritative current session when provider 
   await assert.rejects(coordinator.close(session.id), (error) => error.code === "AI_SESSION_CLOSE_FAILED");
   assert.equal(registry.get(session.id).actions?.send, undefined);
   assert.equal(registry.get(session.id).providerSessionId, "thread-close-fail");
+});
+
+test("Close AI Session completes when provider archive reports a session that is already absent", async () => {
+  const { registry, controller } = runtime();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-close-absent-"));
+  const resumed = [];
+  const diagnostics = [];
+  controller.register({
+    agent: "codex",
+    async archiveSession() { throw new Error("provider rejected archive"); },
+    async activeSessionExists() { return false; },
+    async resumeSession(id) { resumed.push(id); },
+    async interrupt(session) { return { session, provider: "codex", action: "interrupt" }; },
+  });
+  const session = registry.applyAdapterSnapshot({
+    agent: "codex",
+    creationSource: "ai-session",
+    providerSessionId: "thread-already-absent",
+    cwd: "/workspace",
+    status: "idle",
+  });
+  const history = new AiSessionHistoryStore({ dataDir: root });
+  const coordinator = new AiSessionCloseCoordinator({
+    registry,
+    controller,
+    history,
+    stopApp: () => {},
+    onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+  });
+
+  assert.equal((await coordinator.close(session.id)).disposition, "closed");
+  assert.equal(registry.get(session.id), undefined);
+  assert.ok(history.get(session.id));
+  assert.deepEqual(resumed, []);
+  assert.equal(diagnostics[0].code, "AI_SESSION_CLOSE_PROVIDER_ALREADY_ABSENT");
 });

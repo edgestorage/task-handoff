@@ -101,6 +101,16 @@ export class RuntimeConvergenceCoordinator {
     if (this.cancelled.has(instanceId) && !options.resumeCancelled) {
       return this.storePhase(instance, "pending");
     }
+    const sameRollout = instance.runtimeVersion?.desiredVersion === desiredVersion;
+    const retryWaitMs = sameRollout && !options.startRequested && !isStopped(instance)
+      ? this.remainingRetryDelayMs(instance.runtimeVersion)
+      : 0;
+    if (retryWaitMs > 0) {
+      await this.delay(retryWaitMs);
+      instance = this.requireInstance(instanceId);
+      if (this.cancelled.has(instanceId)) return this.storePhase(instance, "pending");
+    }
+
     const actualVersion = reportedVersion(instance);
     const desiredReleaseInstalled = actualVersion === desiredVersion
       ? await this.hooks.isInstalled?.(instance, desiredVersion) ?? true
@@ -116,24 +126,13 @@ export class RuntimeConvergenceCoordinator {
       }, !isStopped(instance) && instance.health !== "failed");
     }
 
-    const sameRollout = instance.runtimeVersion?.desiredVersion === desiredVersion;
-    if (sameRollout && instance.runtimeVersion?.phase === "failed") return instance;
-    if (sameRollout && (instance.runtimeVersion?.attempt || 0) >= this.maxAttempts) {
-      if (instance.runtimeVersion?.phase === "failed" && instance.runtimeVersion.error) return instance;
-      return this.storeBatchFailure(instance, desiredVersion, pausedError(
-        desiredVersion,
-        actualVersion,
-        this.maxAttempts,
-        instance.runtimeVersion?.error,
-      ));
-    }
-
     instance = this.storeState(instance, mismatchState(instance, desiredVersion, actualVersion, desiredReleaseInstalled));
     if (isStopped(instance) && !options.startRequested) return instance;
 
     let drainStarted = false;
+    let batchAttempts = 0;
     try {
-      while ((instance.runtimeVersion?.attempt || 0) < this.maxAttempts) {
+      while (batchAttempts < this.maxAttempts) {
         if (this.cancelled.has(instanceId)) return this.storePhase(this.requireInstance(instanceId), "pending");
         let failure: RuntimeConvergenceError;
         try {
@@ -151,6 +150,7 @@ export class RuntimeConvergenceCoordinator {
           }
 
           instance = this.storePhase(this.requireInstance(instanceId), "installing", true);
+          batchAttempts += 1;
           await this.hooks.install(instance, desiredVersion);
 
           if (this.cancelled.has(instanceId) || (isStopped(this.requireInstance(instanceId)) && !options.startRequested)) {
@@ -197,7 +197,7 @@ export class RuntimeConvergenceCoordinator {
 
         instance = this.requireInstance(instanceId);
         const attempt = instance.runtimeVersion?.attempt || 1;
-        if (!failure.retryable || attempt >= this.maxAttempts) {
+        if (!failure.retryable || batchAttempts >= this.maxAttempts) {
           return this.storeBatchFailure(instance, desiredVersion,
             attempt >= this.maxAttempts && failure.retryable
               ? pausedError(desiredVersion, reportedVersion(instance), this.maxAttempts, failure)
@@ -231,7 +231,7 @@ export class RuntimeConvergenceCoordinator {
     return this.storeState(instance, {
       desiredVersion,
       ...(actualVersion ? { actualVersion } : {}),
-      phase: "failed",
+      phase: "pending",
       attempt: instance.runtimeVersion?.attempt || 0,
       lastAttemptAt: this.timestamp(),
       error,
@@ -240,6 +240,13 @@ export class RuntimeConvergenceCoordinator {
 
   private retryDelayMs(failedAttempt: number) {
     return Math.min(this.retryMaxDelayMs, this.retryBaseDelayMs * (2 ** Math.max(0, failedAttempt - 1)));
+  }
+
+  private remainingRetryDelayMs(runtimeVersion: RuntimeVersionState | undefined) {
+    if (!runtimeVersion?.error || !runtimeVersion.lastAttemptAt) return 0;
+    const lastAttemptAt = Date.parse(runtimeVersion.lastAttemptAt);
+    if (!Number.isFinite(lastAttemptAt)) return 0;
+    return Math.max(0, lastAttemptAt + this.retryDelayMs(runtimeVersion.attempt || 1) - this.now().getTime());
   }
 
   private storePhase(instance: ControlledInstance, phase: RuntimeVersionState["phase"], incrementAttempt = false) {
@@ -379,7 +386,7 @@ function pausedError(
   const detail = previousError?.message ? ` Last error: ${previousError.message}` : "";
   return convergenceError(
     previousError?.code || "INSTANCE_RUNTIME_INSTALL_FAILED",
-    `Runtime convergence stopped after ${maxAttempts} attempts for this instance run.${detail}`,
+    `Runtime convergence paused after ${maxAttempts} attempts and will retry.${detail}`,
     expectedVersion,
     actualVersion,
     true,

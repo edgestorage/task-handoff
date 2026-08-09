@@ -13,7 +13,9 @@ import type { MobileDirectoryProfileState } from '../directories/store';
 import { mobileMetrics } from '../observability/mobile-metrics';
 import { useMobileTheme } from '../components/theme';
 import { SystemIcon } from '../components/SystemIcon';
+import { EmptyState } from '../components/EmptyState';
 import { SwipeActionList } from '../components/SwipeActionList';
+import { usePullToRefresh } from '../components/use-pull-to-refresh';
 import { markdownPlainText } from '../components/SafeMarkdown';
 import { sessionActivityText } from './SessionDetail';
 import { ToolActivityText } from './ToolActivityText';
@@ -43,12 +45,14 @@ export function AiSessionInbox({
   onOpen,
   directory,
   initialScope,
+  onRefresh,
 }: {
   actions?: MobileAiSessionActionCoordinator;
   state: MobileAiSessionProfileState;
   onOpen?(entry: { instanceId: string; sessionId: string }): void;
   directory?: Pick<MobileDirectoryProfileState, 'nodes' | 'instances'>;
   initialScope?: AiSessionScope;
+  onRefresh?: () => Promise<void>;
 }) {
   const { colors, dark } = useMobileTheme();
   const { locale, t } = useI18n();
@@ -57,6 +61,7 @@ export function AiSessionInbox({
   const [statusFilterTrackWidth, setStatusFilterTrackWidth] = useState(0);
   const [statusFilterOffset] = useState(() => new Animated.Value(0));
   const [closingKey, setClosingKey] = useState('');
+  const pullToRefresh = usePullToRefresh(onRefresh);
   const instanceNodeIds = useMemo(() => new Map((directory?.instances ?? []).map((instance) => [instance.id, instance.nodeId])), [directory]);
   const instanceNames = useMemo(() => new Map((directory?.instances ?? []).map((instance) => [instance.id, instance.name])), [directory]);
   const allEntries = useMemo(() => inboxEntries(state.snapshot, scope, instanceNodeIds), [state.snapshot, scope, instanceNodeIds]);
@@ -93,7 +98,6 @@ export function AiSessionInbox({
       {state.sync.phase === 'loading' && !state.snapshot ? <ActivityIndicator accessibilityLabel={t('sessions.loadingAccessibility')} style={styles.loading} /> : (
         <SwipeActionList
           style={[styles.screen, { backgroundColor: colors.background }]}
-          contentContainerStyle={styles.list}
           data={entries}
           itemContainerStyle={styles.cardContainer}
           keyExtractor={(item) => `${item.instanceId}:${item.session.id}`}
@@ -118,7 +122,16 @@ export function AiSessionInbox({
             </View>
             {statusMessage ? <Text accessibilityLiveRegion="polite" style={[styles.notice, { backgroundColor: colors.notice, color: colors.noticeText }]}>{statusMessage}</Text> : null}
           </View>}
-          ListEmptyComponent={<View style={styles.empty}><Text style={[styles.emptyText, { color: colors.textMuted }]}>{state.sync.phase === 'error' ? t('sessions.loadError') : t('sessions.empty')}</Text></View>}
+          ListEmptyComponent={<EmptyState
+            icon={state.sync.phase === 'error'
+              ? { android: 'error_outline', ios: 'exclamationmark.circle' }
+              : { android: 'chat_bubble_outline', ios: 'bubble.left.and.bubble.right' }}
+            iconColor={state.sync.phase === 'error' ? colors.error : undefined}
+            message={state.sync.phase === 'error' ? t('sessions.loadError') : t('sessions.empty')}
+            style={styles.empty}
+          />}
+          onRefresh={pullToRefresh.onRefresh}
+          refreshing={pullToRefresh.refreshing}
           swipeAction={(item) => {
             const key = `${item.instanceId}:${item.session.id}`;
             return {
@@ -205,11 +218,9 @@ const recordInboxRender: ProfilerOnRenderCallback = (_id, _phase, actualDuration
 const styles = StyleSheet.create({
   screen: { backgroundColor: '#f8fafc', flex: 1 },
   header: { alignItems: 'flex-start', gap: 12, paddingHorizontal: 20, paddingBottom: 12, paddingTop: 16 },
-  notice: { backgroundColor: '#fef3c7', borderRadius: 10, color: '#854d0e', fontSize: 13, lineHeight: 18, padding: 12 },
+  notice: { backgroundColor: '#fef3c7', borderRadius: 10, color: '#854d0e', fontSize: 13, lineHeight: 18, padding: 12, width: '100%' },
   loading: { flex: 1 },
-  list: { paddingBottom: 112 },
-  empty: { alignItems: 'center', justifyContent: 'center', minHeight: 240, padding: 24 },
-  emptyText: { color: '#64748b', fontSize: 14 },
+  empty: { minHeight: 240 },
   statusFilters: { borderRadius: 999, flexDirection: 'row', padding: STATUS_FILTER_PADDING, position: 'relative', width: '100%' },
   statusFilterSelection: { borderRadius: 999, bottom: STATUS_FILTER_PADDING, left: STATUS_FILTER_PADDING, position: 'absolute', top: STATUS_FILTER_PADDING },
   statusFilter: { alignItems: 'center', borderRadius: 999, flex: 1, justifyContent: 'center', minHeight: 34, paddingHorizontal: 4, zIndex: 1 },

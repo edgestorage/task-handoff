@@ -19,7 +19,7 @@ const tempDataDir = (name) => fs.mkdtempSync(path.join(os.tmpdir(), `${name}-`))
 function managedVolumeInspect(args, instanceId) {
   if (args[0] !== "volume" || args[1] !== "inspect") return undefined;
   const name = args.at(-1);
-  const role = name.endsWith("-agent-home") ? "agent-home" : name.endsWith("-workspace") ? "workspace" : "data";
+  const role = name.endsWith("-agent-home") ? "agent-home" : name.endsWith("-runtime") ? "runtime" : name.endsWith("-workspace") ? "workspace" : "data";
   return { stdout: JSON.stringify({ Name: name, Labels: {
     "task-handoff.owner": "task-handoff",
     "task-handoff.instance-id": instanceId,
@@ -330,14 +330,14 @@ test("node-agent queues start while pulling and runs the container when the imag
     const instance = app.nodeAgentState.controlledInstances.get("inst_queued_start");
     return instance?.runtime.containerId === "container-queued" ? instance : undefined;
   }, "queued container start");
-  assert.equal(started.status, "registering");
+  assert.equal(started.status, "starting");
   assert.equal(started.imageProvisioning.phase, "ready");
   assert.equal(calls.filter((args) => args[0] === "run").length, 1);
   const instanceEvents = lifecycleEvents.filter((event) => event.instanceId === "inst_queued_start");
   assert.ok(instanceEvents.some((event) => event.imageProvisioning?.phase === "pulling-image"));
   assert.ok(instanceEvents.some((event) => event.status === "starting" && event.imageProvisioning?.phase === "pulling-image"));
   assert.ok(instanceEvents.some((event) => event.status === "starting" && event.imageProvisioning?.phase === "ready"));
-  assert.ok(instanceEvents.some((event) => event.status === "registering" && event.imageProvisioning?.phase === "ready"));
+  assert.ok(instanceEvents.some((event) => event.status === "starting" && event.imageProvisioning?.phase === "ready"));
   assert.deepEqual(instanceEvents.map((event) => event.revision), [...instanceEvents.map((event) => event.revision)].sort((a, b) => a - b));
   assert.deepEqual(imagePullEvents.map((event) => event.type), ["image.pull.terminal.output", "image.pull.terminal.finished"]);
   assert.equal(imagePullEvents[0].payload.data, "pulled");
@@ -529,7 +529,7 @@ test("node-agent restart migrates and resumes persisted image provisioning witho
     const instance = restored.nodeAgentState.controlledInstances.get("inst_restore");
     return instance?.runtime.containerId === "container-restored" ? instance : undefined;
   }, "restored provisioning");
-  assert.equal(ready.status, "registering");
+  assert.equal(ready.status, "starting");
   assert.equal(ready.imageProvisioning.phase, "ready");
   assert.equal(ready.imageSnapshot.requestedReference, "docker.io/example/controlled:latest");
   assert.equal(ready.imageSnapshot.resolvedDigest, digest("e"));

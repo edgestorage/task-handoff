@@ -10,7 +10,7 @@ export const mobileLightColors = {
 } as const;
 
 export const mobileDarkColors = {
-  background: '#000000', surface: '#1c1c1e', surfaceMuted: '#2c2c2e', text: '#ffffff', textMuted: '#aeaeb2', border: '#38383a',
+  background: '#000000', surface: '#1c1c1e', surfaceMuted: '#2c2c2e', text: '#f2f2f7', textMuted: '#aeaeb2', border: '#38383a',
   primary: '#0a84ff', primaryButton: '#0a84ff', destructiveButton: '#b3261e', primarySoft: '#0c3158', notice: '#3b2f05', noticeText: '#ffd76a', error: '#ff6961', errorSoft: '#3f1715', code: '#1c1c1e', codeText: '#f2f2f7',
   sessionActive: '#2dd4bf', sessionActiveSoft: '#123b38', sessionWaiting: '#f59e0b', sessionWaitingSoft: '#3b2f05', sessionIdle: '#94a3b8', sessionIdleSoft: '#283038',
   syntaxComment: '#8b949e', syntaxKeyword: '#ff7b72', syntaxString: '#7ee787', syntaxNumber: '#e3b341', syntaxTitle: '#79c0ff', syntaxType: '#d2a8ff', tableStripe: '#242426',

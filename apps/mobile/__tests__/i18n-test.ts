@@ -1,6 +1,6 @@
 import { translate } from '../src/i18n';
 import { matchSupportedLocale, resolveLocale, sanitizeLocalePreference } from '../src/i18n/locale';
-import { resolveThemeDark, sanitizeAppearancePreference } from '../src/components/theme';
+import { mobileDarkColors, resolveThemeDark, sanitizeAppearancePreference } from '../src/components/theme';
 
 describe('mobile i18n', () => {
   test('normalizes supported English and simplified Chinese system locales', () => {
@@ -27,5 +27,7 @@ describe('mobile i18n', () => {
     expect(resolveThemeDark('system', 'dark')).toBe(true);
     expect(resolveThemeDark('light', 'dark')).toBe(false);
     expect(resolveThemeDark('dark', 'light')).toBe(true);
+    expect(mobileDarkColors.text).toBe('#f2f2f7');
+    expect(mobileDarkColors.textMuted).toBe('#aeaeb2');
   });
 });

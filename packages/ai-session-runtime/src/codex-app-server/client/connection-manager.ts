@@ -10,7 +10,7 @@ type ConnectionState = "idle" | "connecting" | "ready" | "closing";
 
 type ConnectionManagerOptions = {
   injectedClient?: CodexAppServerClientLike;
-  createClient: (options: { socketPath?: string }) => CodexAppServerClientLike;
+  createClient: (options: { socketPath?: string; command?: string }) => CodexAppServerClientLike;
   onEvent: (event: CodexAppServerEvent, connection: CodexAppServerConnection) => void;
   onDisconnect?: (connection: CodexAppServerConnection) => void;
   onInvalidate?: (connection: CodexAppServerConnection) => void;
@@ -21,6 +21,7 @@ type ConnectionManagerOptions = {
 export class CodexAppServerConnectionManager {
   private clientValue?: CodexAppServerClientLike;
   private socketPathValue?: string;
+  private commandValue?: string;
   private state: ConnectionState = "idle";
   private epochValue = 0;
   private retryAfter = 0;
@@ -32,6 +33,7 @@ export class CodexAppServerConnectionManager {
   };
   private readonly subscribedThreadIds = new Set<string>();
   private readonly subscriptionAttempts = new Map<string, Promise<CodexThread | undefined>>();
+  private readonly readinessAttempts = new Map<string, Promise<CodexAppServerClientLike>>();
 
   constructor(private readonly options: ConnectionManagerOptions) {
     if (options.injectedClient) {
@@ -52,18 +54,21 @@ export class CodexAppServerConnectionManager {
   }
 
   /** Selects the desired endpoint, disposing an older endpoint atomically. */
-  configure(socketPath?: string) {
+  configure(socketPath?: string, command?: string) {
     if (this.options.injectedClient) {
       if (!this.clientValue) {
         this.install(this.options.injectedClient, undefined);
       }
       return this.current();
     }
-    if (this.clientValue && this.socketPathValue === socketPath) {
+    if (this.clientValue && this.socketPathValue === socketPath && this.commandValue === command) {
       return this.current();
     }
     this.disposeCurrent();
-    this.install(this.options.createClient(socketPath ? { socketPath } : {}), socketPath);
+    this.install(this.options.createClient({
+      ...(socketPath ? { socketPath } : {}),
+      ...(command ? { command } : {}),
+    }), socketPath, command);
     return this.current();
   }
 
@@ -140,6 +145,8 @@ export class CodexAppServerConnectionManager {
     if (!this.isCurrent(connection) || !client.resumeThread || this.subscribedThreadIds.has(threadId)) {
       return Promise.resolve(undefined);
     }
+    const readiness = this.readinessAttempts.get(threadId);
+    if (readiness) return readiness.then(() => undefined);
     const pending = this.subscriptionAttempts.get(threadId);
     if (pending) return pending;
     const attempt = client.resumeThread(threadId).then((thread) => {
@@ -156,14 +163,64 @@ export class CodexAppServerConnectionManager {
     return attempt;
   }
 
+  /** Ensures an existing thread is loaded in this exact connection generation. */
+  async ensureThreadReady(connection: CodexAppServerConnection, threadId: string) {
+    if (!this.isCurrent(connection)) {
+      throw new Error("Codex app-server connection changed before the thread could be resumed.");
+    }
+    if (this.subscribedThreadIds.has(threadId)) return connection.client;
+    const subscription = this.subscriptionAttempts.get(threadId);
+    if (subscription) {
+      await subscription;
+      if (!this.isCurrent(connection)) {
+        throw new Error("Codex app-server connection changed while resuming the thread.");
+      }
+      return connection.client;
+    }
+    const pending = this.readinessAttempts.get(threadId);
+    if (pending) return pending;
+    const attempt = (async () => {
+      const loadedThreadIds = await connection.client.listLoadedThreadIds();
+      if (!this.isCurrent(connection)) {
+        throw new Error("Codex app-server connection changed while checking the thread.");
+      }
+      if (!loadedThreadIds.includes(threadId)) {
+        if (!connection.client.resumeThread) {
+          throw new Error("Codex app-server does not support resuming an unloaded thread.");
+        }
+        await connection.client.resumeThread(threadId);
+      }
+      if (!this.isCurrent(connection)) {
+        throw new Error("Codex app-server connection changed while resuming the thread.");
+      }
+      this.subscribedThreadIds.add(threadId);
+      return connection.client;
+    })().finally(() => {
+      if (this.readinessAttempts.get(threadId) === attempt) {
+        this.readinessAttempts.delete(threadId);
+      }
+    });
+    this.readinessAttempts.set(threadId, attempt);
+    return attempt;
+  }
+
+  reconcileLoadedThreadIds(connection: CodexAppServerConnection, loadedThreadIds: readonly string[]) {
+    if (!this.isCurrent(connection)) return;
+    const loaded = new Set(loadedThreadIds);
+    for (const threadId of this.subscribedThreadIds) {
+      if (!loaded.has(threadId)) this.subscribedThreadIds.delete(threadId);
+    }
+  }
+
   stop() {
     this.disposeCurrent();
     this.retryAfter = 0;
   }
 
-  private install(client: CodexAppServerClientLike, socketPath?: string) {
+  private install(client: CodexAppServerClientLike, socketPath?: string, command?: string) {
     this.clientValue = client;
     this.socketPathValue = socketPath;
+    this.commandValue = command;
     this.state = "idle";
     this.epochValue += 1;
     this.attachListeners(client, this.epochValue);
@@ -217,6 +274,7 @@ export class CodexAppServerConnectionManager {
     client?.stop();
     this.clientValue = undefined;
     this.socketPathValue = undefined;
+    this.commandValue = undefined;
     this.state = "idle";
     if (invalidated) this.options.onInvalidate?.(invalidated);
   }
@@ -224,5 +282,6 @@ export class CodexAppServerConnectionManager {
   private resetSubscriptions() {
     this.subscribedThreadIds.clear();
     this.subscriptionAttempts.clear();
+    this.readinessAttempts.clear();
   }
 }

@@ -44,7 +44,7 @@ test("Codex app-server binding resolves only explicit thread metadata on its act
       ai: {
         activeThreadId: "thread-active",
         threadIds: ["thread-active", "thread-known", 42],
-        appServer: { socketPath: "/tmp/codex.sock" },
+        appServer: { socketPath: "/tmp/codex.sock", command: "/opt/codex/bin/codex" },
       },
     },
     {
@@ -55,6 +55,7 @@ test("Codex app-server binding resolves only explicit thread metadata on its act
     },
   ]), "/tmp/codex.sock");
 
+  assert.equal(binding.command, "/opt/codex/bin/codex");
   assert.equal(binding.appSessionIdForThread("thread-active"), "app-one");
   assert.equal(binding.appSessionIdForThread("thread-known"), "app-one");
   assert.equal(binding.appSessionIdForThread("thread-other"), undefined);
@@ -89,5 +90,20 @@ test("Codex app-server binding safely projects historical runtime values", () =>
 
   binding.clear();
   assert.equal(binding.socketPath, undefined);
+  assert.equal(binding.command, undefined);
   assert.equal(binding.appSessionIdForThread("thread-before"), undefined);
+});
+
+test("Codex app-server binding tolerates snapshots without command", () => {
+  const binding = new CodexAppServerSessionBinding();
+
+  binding.update([{
+    id: "legacy",
+    appId: "codex",
+    status: "running",
+    ai: { appServer: { socketPath: "/tmp/legacy.sock" } },
+  }]);
+
+  assert.equal(binding.socketPath, "/tmp/legacy.sock");
+  assert.equal(binding.command, undefined);
 });

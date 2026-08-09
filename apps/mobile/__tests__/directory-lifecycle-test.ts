@@ -1,7 +1,7 @@
 import type { ControlPlaneClient } from '@task-handoff/control-plane-client';
 import { ControlPlaneInstanceDirectoryEntrySchema, ControlPlaneNodeDirectoryEntrySchema } from '@task-handoff/protocol/control-plane-directory';
 
-import { createMobileAiSession, lifecycleGuidance, MobileAiSessionCreateRequestStore, runtimePathForInstance } from '../src/ai-sessions/session-lifecycle';
+import { createMobileAiSession, lifecycleGuidance, MobileAiSessionCreateRequestStore } from '../src/ai-sessions/session-lifecycle';
 import type { ValueStore } from '../src/platform/secure-storage';
 import { MobileAiSessionStore } from '../src/ai-sessions/store';
 import { MobileDirectoryStore } from '../src/directories/store';
@@ -22,21 +22,15 @@ const instance = {
   availableApps: [{ id: 'terminal-tty', name: 'Terminal', kind: 'tty' as const, supportsCwdSelection: true }],
 };
 
-test('runtime paths are absolute, instance-scoped, and never device URIs', () => {
-  expect(runtimePathForInstance('/workspace/project', instance)).toEqual({ type: 'runtime-path', path: '/workspace/project' });
-  expect(() => runtimePathForInstance('file:///device/photo', instance)).toThrow(/Device URIs/);
-  expect(() => runtimePathForInstance('/Users/node-host/project', instance)).toThrow(/workspace reported/);
-  expect(() => runtimePathForInstance('/workspace/../secret', instance)).toThrow(/traverse/);
-});
-
 test('create owns stable idempotency identity and accepts created or already-created results', async () => {
   const create = jest.fn().mockResolvedValueOnce({ disposition: 'created', aiSessionId: 'session-1', providerSessionId: 'provider-1', creationSource: 'ai-session' })
     .mockResolvedValueOnce({ disposition: 'already-created', aiSessionId: 'session-1', providerSessionId: 'provider-1', creationSource: 'ai-session' });
   const api = { aiSessions: { create } } as unknown as ControlPlaneClient;
-  const input = { instance, agent: 'codex', cwd: '/workspace/project', message: 'Build it', clientRequestId: 'mobile-request-1' };
+  const input = { instance, agent: 'codex', cwdFolderId: 'folder-1', message: 'Build it', clientRequestId: 'mobile-request-1' };
   expect((await createMobileAiSession(api, input)).disposition).toBe('created');
   expect((await createMobileAiSession(api, input)).disposition).toBe('already-created');
   expect(create.mock.calls[0][1].clientRequestId).toBe(create.mock.calls[1][1].clientRequestId);
+  expect(create.mock.calls[0][1].cwdFolderId).toBe('folder-1');
   expect(create.mock.calls[0][1].permissionMode).toBe('full-access');
 });
 
@@ -65,7 +59,7 @@ test('app launch selection uses the complete app inventory instead of the AI age
 test('create forwards the selected permission mode', async () => {
   const create = jest.fn().mockResolvedValue({ disposition: 'created', aiSessionId: 'session-1', providerSessionId: 'provider-1', creationSource: 'ai-session' });
   const api = { aiSessions: { create } } as unknown as ControlPlaneClient;
-  await createMobileAiSession(api, { instance, agent: 'codex', cwd: '/workspace', message: 'Build it', permissionMode: 'auto-review', clientRequestId: 'mobile-request-1' });
+  await createMobileAiSession(api, { instance, agent: 'codex', cwdFolderId: 'folder-1', message: 'Build it', permissionMode: 'auto-review', clientRequestId: 'mobile-request-1' });
   expect(create.mock.calls[0][1].permissionMode).toBe('auto-review');
 });
 
@@ -73,7 +67,7 @@ test('Claude creation does not receive the Codex permission mode', async () => {
   const create = jest.fn().mockResolvedValue({ disposition: 'created', aiSessionId: 'session-1', providerSessionId: 'provider-1', creationSource: 'ai-session' });
   const api = { aiSessions: { create } } as unknown as ControlPlaneClient;
   const claudeInstance = { ...instance, availableAgents: [...instance.availableAgents, { id: 'claude', name: 'Claude', kind: 'tty' as const, supportsCwdSelection: true }] };
-  await createMobileAiSession(api, { instance: claudeInstance, agent: 'claude', cwd: '/workspace', message: 'Build it', permissionMode: 'full-access', clientRequestId: 'mobile-request-1' });
+  await createMobileAiSession(api, { instance: claudeInstance, agent: 'claude', cwdFolderId: 'folder-1', message: 'Build it', permissionMode: 'full-access', clientRequestId: 'mobile-request-1' });
   expect(create.mock.calls[0][1].permissionMode).toBeUndefined();
 });
 
@@ -87,7 +81,7 @@ test('create request identity survives a new store instance and changes only wit
   };
   const ids = ['request-1', 'request-2', 'request-3'];
   const createId = () => ids.shift()!;
-  const payload = { agent: 'codex', cwd: '/workspace', message: 'Build it' };
+  const payload = { agent: 'codex', cwdFolderId: 'folder-1', message: 'Build it' };
   const first = new MobileAiSessionCreateRequestStore(storage);
   expect(await first.getOrCreate('cp', 'instance', payload, createId)).toBe('request-1');
   const afterRestart = new MobileAiSessionCreateRequestStore(storage);
@@ -144,6 +138,22 @@ test('directory controller marks cache offline and refreshes authoritative snaps
   expect(store.profile('cp-a').phase).toBe('ready');
   expect(store.profile('cp-a').instances[0].status).toBe('stopped');
   expect(instanceBoard).toHaveBeenCalledTimes(2);
+});
+
+test('directory controller explicitly refreshes nodes and instances as one authoritative snapshot', async () => {
+  const store = new MobileDirectoryStore();
+  const updated = { ...instance, status: 'stopped' as const, connectionStatus: 'offline' as const };
+  const nodes = jest.fn().mockResolvedValue([]);
+  const instanceBoard = jest.fn().mockResolvedValueOnce([instance]).mockResolvedValueOnce([updated]);
+  const api = { resources: { nodes, instanceBoard } } as unknown as ControlPlaneClient;
+  const controller = new MobileDirectoryController('cp-refresh', api, store);
+
+  await controller.start();
+  await controller.refresh();
+
+  expect(nodes).toHaveBeenCalledTimes(2);
+  expect(instanceBoard).toHaveBeenCalledTimes(2);
+  expect(store.profile('cp-refresh').instances[0].status).toBe('stopped');
 });
 
 test('directory controller applies node connection and instance lifecycle events before its recovery snapshot', async () => {

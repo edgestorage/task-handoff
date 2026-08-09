@@ -33,6 +33,7 @@ export const ControlPlaneSettingsSchema = z.object({
   updateChannel: UpdateChannelSchema.default("stable"),
   mentionTrigger: MentionTriggerSchema.default(DEFAULT_MENTION_TRIGGER),
   commandTrigger: CommandTriggerSchema.default(DEFAULT_COMMAND_TRIGGER),
+  diagnosticLogs: z.boolean().default(false),
 }).strict().refine((settings) => settings.mentionTrigger !== settings.commandTrigger, {
   path: ["commandTrigger"], message: "Command and mention triggers must be different.",
 });
@@ -41,9 +42,10 @@ export const UpdateControlPlaneSettingsSchema = z.object({
   updateChannel: UpdateChannelSchema.optional(),
   mentionTrigger: MentionTriggerSchema.optional(),
   commandTrigger: CommandTriggerSchema.optional(),
+  diagnosticLogs: z.boolean().optional(),
 }).strict();
 
-export function sanitizeStoredControlPlaneSettings(value: unknown) {
+export function sanitizeStoredControlPlaneSettings(value: unknown, defaults: { diagnosticLogs?: boolean } = {}) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   const record = { ...(value as Record<string, unknown>) };
   if (typeof record.mentionTrigger !== "string" || !isValidMentionTrigger(record.mentionTrigger)) {
@@ -51,6 +53,9 @@ export function sanitizeStoredControlPlaneSettings(value: unknown) {
   }
   if (typeof record.commandTrigger !== "string" || !isValidCommandTrigger(record.commandTrigger) || record.commandTrigger === record.mentionTrigger) {
     record.commandTrigger = DEFAULT_COMMAND_TRIGGER;
+  }
+  if (typeof record.diagnosticLogs !== "boolean") {
+    record.diagnosticLogs = defaults.diagnosticLogs ?? false;
   }
   return record;
 }

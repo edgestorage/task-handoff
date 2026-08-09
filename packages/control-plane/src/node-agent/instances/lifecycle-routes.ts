@@ -41,6 +41,7 @@ type Hooks = {
   forgetRecovery(id: string): void;
   completeSuppressedRecovery(id: string): void;
   deleteMetadata(id: string): void;
+  retireInstanceData(id: string): void;
   releaseEnvironmentImage?(imageId: string): Promise<unknown>;
   diagnostic(data: Record<string, unknown>, message: string): void;
 };
@@ -224,6 +225,7 @@ export function registerInstanceLifecycleRoutes(
           operations.clearIntent(id);
         }
         hooks.deleteMetadata(id);
+        if (deleted) hooks.retireInstanceData(id);
         if (deleted && authoritative.environmentTemplateOrigin?.imageId && hooks.releaseEnvironmentImage) {
           await hooks.releaseEnvironmentImage(authoritative.environmentTemplateOrigin.imageId).catch((error) => {
             hooks.diagnostic({ instanceId: id, action: "release-environment-image", error: error instanceof Error ? error.message : String(error) }, "environment image cleanup deferred after instance deletion");

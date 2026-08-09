@@ -314,7 +314,7 @@ test("retryable failures use bounded exponential backoff and eventually converge
   assert.equal(updated.runtimeVersion.phase, "matched");
 });
 
-test("a failed attempt budget remains diagnostic for the rest of the instance run", async () => {
+test("a failed attempt batch remains diagnostic and passive recovery keeps converging", async () => {
   const store = memoryStore(instance());
   let installs = 0;
   const coordinator = new RuntimeConvergenceCoordinator(store, () => "2.0.0", {
@@ -331,18 +331,88 @@ test("a failed attempt budget remains diagnostic for the rest of the instance ru
 
   const updated = await coordinator.schedule("inst_runtime");
   assert.equal(installs, 2);
-  assert.equal(updated.runtimeVersion.phase, "failed");
+  assert.equal(updated.runtimeVersion.phase, "pending");
   assert.equal(updated.runtimeVersion.attempt, 2);
   assert.equal(updated.runtimeVersion.error.retryable, true);
-  assert.match(updated.runtimeVersion.error.message, /stopped after 2 attempts for this instance run/);
+  assert.match(updated.runtimeVersion.error.message, /paused after 2 attempts and will retry/);
   assert.match(updated.runtimeVersion.error.message, /Last error: registry unavailable/);
   assert.equal(updated.status, "running");
   assert.equal(updated.health, "ok");
   assert.equal(updated.ready, true);
 
   const recovered = await coordinator.schedule("inst_runtime");
-  assert.equal(installs, 2, "passive recovery cannot reset the run attempt budget");
-  assert.equal(recovered.runtimeVersion.phase, "failed");
+  assert.equal(installs, 4);
+  assert.equal(recovered.runtimeVersion.phase, "pending");
+  assert.equal(recovered.runtimeVersion.attempt, 4);
+});
+
+test("passive recovery honors the remaining cross-batch backoff", async () => {
+  let clock = Date.parse("2026-08-09T00:00:00.000Z");
+  const delays = [];
+  const store = memoryStore(instance());
+  let installs = 0;
+  const coordinator = new RuntimeConvergenceCoordinator(store, () => "2.0.0", {
+    async install() {
+      installs += 1;
+      throw new Error("registry unavailable");
+    },
+    async restart() {},
+  }, {
+    maxAttempts: 1,
+    retryBaseDelayMs: 1_000,
+    retryMaxDelayMs: 10_000,
+    now: () => new Date(clock),
+    delay: async (milliseconds) => {
+      delays.push(milliseconds);
+      clock += milliseconds;
+    },
+  });
+
+  await coordinator.schedule("inst_runtime");
+  clock += 250;
+  await coordinator.schedule("inst_runtime");
+
+  assert.equal(installs, 2);
+  assert.deepEqual(delays, [750]);
+});
+
+test("passive recovery rechecks authoritative version state after backoff", async () => {
+  let releaseDelay;
+  let installs = 0;
+  const timestamp = new Date().toISOString();
+  const store = memoryStore(instance({
+    runtimeVersion: {
+      desiredVersion: "2.0.0",
+      actualVersion: "1.0.0",
+      phase: "pending",
+      attempt: 1,
+      lastAttemptAt: timestamp,
+      error: {
+        code: "INSTANCE_RUNTIME_INSTALL_FAILED",
+        message: "temporary failure",
+        expectedVersion: "2.0.0",
+        actualVersion: "1.0.0",
+        retryable: true,
+      },
+    },
+  }));
+  const coordinator = new RuntimeConvergenceCoordinator(store, () => "2.0.0", {
+    async install() { installs += 1; },
+    async restart() {},
+  }, {
+    retryBaseDelayMs: 1_000,
+    now: () => new Date(timestamp),
+    delay: () => new Promise((resolve) => { releaseDelay = resolve; }),
+  });
+
+  const recovery = coordinator.schedule("inst_runtime");
+  while (!releaseDelay) await new Promise((resolve) => setImmediate(resolve));
+  store.put(instance({ build: { component: "controlled-instance", packageVersion: "2.0.0" } }));
+  releaseDelay();
+
+  const recovered = await recovery;
+  assert.equal(installs, 0);
+  assert.equal(recovered.runtimeVersion.phase, "matched");
 });
 
 test("a new instance run can retry after dependencies return", async () => {
@@ -366,7 +436,7 @@ test("a new instance run can retry after dependencies return", async () => {
   });
 
   const exhausted = await coordinator.schedule("inst_runtime");
-  assert.equal(exhausted.runtimeVersion.phase, "failed");
+  assert.equal(exhausted.runtimeVersion.phase, "pending");
   dependencyReady = true;
 
   store.put(instance({
@@ -394,7 +464,7 @@ test("executor error codes outside the convergence protocol retain their message
   }, { maxAttempts: 1 });
 
   const updated = await coordinator.schedule("inst_runtime");
-  assert.equal(updated.runtimeVersion.phase, "failed");
+  assert.equal(updated.runtimeVersion.phase, "pending");
   assert.equal(updated.runtimeVersion.error.code, "INSTANCE_RUNTIME_INSTALL_FAILED");
   assert.match(updated.runtimeVersion.error.message, /launcher asset does not exist/);
 });
@@ -417,21 +487,21 @@ test("an interrupted phase keeps the last concrete convergence error", async () 
       error: previousError,
     },
   }));
-  let observedError;
+  const observedErrors = [];
   const coordinator = new RuntimeConvergenceCoordinator(store, () => "2.0.0", {
     async install(value) {
-      observedError = value.runtimeVersion.error;
+      observedErrors.push(value.runtimeVersion.error);
       throw Object.assign(new Error("second install failed"), { code: "ENOENT" });
     },
     async restart() {},
   }, { maxAttempts: 2, retryBaseDelayMs: 0, delay: async () => {} });
 
   const updated = await coordinator.schedule("inst_runtime");
-  assert.equal(observedError.message, previousError.message);
+  assert.equal(observedErrors[0].message, previousError.message);
   assert.match(updated.runtimeVersion.error.message, /Last error: second install failed/);
 });
 
-test("non-retryable failures stop immediately", async () => {
+test("non-retryable failures stop each batch but remain eligible for later convergence", async () => {
   const store = memoryStore(instance());
   let installs = 0;
   const coordinator = new RuntimeConvergenceCoordinator(store, () => "2.0.0", {
@@ -451,7 +521,7 @@ test("non-retryable failures stop immediately", async () => {
   assert.equal(updated.runtimeVersion.error.code, "INSTANCE_BASE_RUNTIME_INCOMPATIBLE");
   assert.equal(updated.runtimeVersion.error.retryable, false);
   await coordinator.schedule("inst_runtime");
-  assert.equal(installs, 1, "passive recovery cannot retry a terminal failure in the same instance run");
+  assert.equal(installs, 2);
 });
 
 test("convergence is version-direction agnostic and can move to an older desired version", async () => {
@@ -697,7 +767,7 @@ test("verification failures remain diagnostic without moving away from the desir
 
   const updated = await coordinator.schedule("inst_runtime");
   assert.equal(rollbacks, 0);
-  assert.equal(updated.runtimeVersion.phase, "failed");
+  assert.equal(updated.runtimeVersion.phase, "pending");
   assert.equal(updated.runtimeVersion.error.code, "INSTANCE_RUNTIME_VERIFICATION_FAILED");
   assert.equal(updated.ready, false);
 });

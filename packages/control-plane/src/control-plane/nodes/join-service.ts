@@ -1,26 +1,19 @@
 import { NodeSchema, type Node } from "@task-handoff/protocol/control-plane";
 import crypto from "node:crypto";
 import { z } from "zod";
-import { createId, createSecret, type JsonCollection, type StoredRecord } from "../../shared/persistence/store.ts";
+import { createId, createSecret, type JsonCollection } from "../../shared/persistence/store.ts";
 import { CreateNodeJoinInviteInputSchema } from "../application/inputs.ts";
 import { now } from "../application/helpers.ts";
+import { EphemeralTokenStore } from "../../shared/security/ephemeral-token-store.ts";
 
 const DEFAULT_INVITE_TTL_MS = 10 * 60 * 1000;
 
-export type NodeJoinInvite = StoredRecord & {
+type NodeJoinInvite = {
+  id: string;
   tokenHash: string;
   expiresAt: string;
   nodeName?: string;
 };
-
-export const NodeJoinInviteSchema = z.object({
-  id: z.string().trim().min(1),
-  tokenHash: z.string().trim().min(1),
-  expiresAt: z.string().datetime(),
-  nodeName: z.string().trim().min(1).max(160).optional(),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime(),
-}).strict();
 
 const CompleteNodeJoinInputSchema = z.object({
   joinToken: z.string().trim().min(1).max(4096),
@@ -32,40 +25,34 @@ const CompleteNodeJoinInputSchema = z.object({
 }).strict();
 
 type NodeJoinServiceOptions = {
-  invites: JsonCollection<NodeJoinInvite>;
   nodes: JsonCollection<Node>;
 };
 
 export class NodeJoinService {
   private readonly options: NodeJoinServiceOptions;
+  private readonly invites = new EphemeralTokenStore<NodeJoinInvite>();
 
   constructor(options: NodeJoinServiceOptions) {
     this.options = options;
   }
 
   createInvite(input: unknown = {}) {
-    this.pruneExpiredInvites();
     const parsedInput = CreateNodeJoinInviteInputSchema.parse(input && typeof input === "object" ? input : {});
-    const timestamp = now();
     const token = createSecret();
     const invite: NodeJoinInvite = {
       id: createId("node_join"),
       tokenHash: hashToken(token),
       expiresAt: new Date(Date.now() + (parsedInput.expiresInMs || DEFAULT_INVITE_TTL_MS)).toISOString(),
       ...(parsedInput.nodeName ? { nodeName: parsedInput.nodeName } : {}),
-      createdAt: timestamp,
-      updatedAt: timestamp,
     };
-    this.options.invites.put(invite);
+    this.invites.put(invite.tokenHash, invite);
     return { id: invite.id, joinToken: token, expiresAt: invite.expiresAt };
   }
 
   complete(input: unknown) {
-    this.pruneExpiredInvites();
     const parsedInput = CompleteNodeJoinInputSchema.parse(input);
     const tokenHash = hashToken(parsedInput.joinToken);
-    const invite = this.options.invites.list().find((candidate) =>
-      candidate.tokenHash === tokenHash && Date.parse(candidate.expiresAt) > Date.now());
+    const invite = this.invites.take(tokenHash);
     if (!invite) {
       throw Object.assign(new Error("Node join token is invalid or expired."), {
         statusCode: 401,
@@ -74,7 +61,6 @@ export class NodeJoinService {
     }
 
     // A valid invite is single-use even when the requested node identity conflicts.
-    this.options.invites.delete(invite.id);
     const timestamp = now();
     if (this.options.nodes.get(parsedInput.nodeId)) {
       throw Object.assign(new Error(`Node ${parsedInput.nodeId} already exists in this control-plane.`), {
@@ -102,12 +88,6 @@ export class NodeJoinService {
     }));
   }
 
-  private pruneExpiredInvites() {
-    const timestamp = Date.now();
-    for (const invite of this.options.invites.list()) {
-      if (Date.parse(invite.expiresAt) <= timestamp) this.options.invites.delete(invite.id);
-    }
-  }
 }
 
 function hashToken(token: string) {

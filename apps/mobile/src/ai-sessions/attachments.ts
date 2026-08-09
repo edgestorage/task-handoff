@@ -24,6 +24,30 @@ export type MobilePendingAttachment = {
   error?: string;
 };
 
+const PASTED_IMAGE_MIMES: Record<string, string> = {
+  bmp: 'image/bmp',
+  gif: 'image/gif',
+  jpeg: 'image/jpeg',
+  jpg: 'image/jpeg',
+  png: 'image/png',
+  webp: 'image/webp',
+};
+
+export function mobilePastedImage(uri: string): MobileLocalFile {
+  if (!uri.startsWith('file:')) throw attachmentError('ATTACHMENT_CLIPBOARD_INVALID', 'The pasted image is not a local file.');
+  const file = new File(uri);
+  const info = file.info();
+  const extension = file.extension.replace(/^\./, '').toLowerCase();
+  return {
+    kind: 'image',
+    mime: PASTED_IMAGE_MIMES[extension],
+    name: file.name || `pasted-image.${extension || 'png'}`,
+    size: info.size,
+    temporary: true,
+    uri,
+  };
+}
+
 export function validateMobileLocalFile(file: MobileLocalFile) {
   if (!file.size || file.size < 1) throw attachmentError('ATTACHMENT_SIZE_UNKNOWN', 'The selected file has no readable content or size.');
   const mime = (file.mime || '').toLowerCase();

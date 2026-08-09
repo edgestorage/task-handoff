@@ -1,6 +1,7 @@
 import {
   MOBILE_CONTROL_PLANE_PROFILE_VERSION,
   MobileControlPlaneProfileSchema,
+  normalizeMobileControlPlaneCapabilities,
   parseStoredMobileControlPlaneProfile,
 } from '../src/control-plane/profile';
 import { MobileControlPlaneProfileStore } from '../src/control-plane/profile-store';
@@ -26,6 +27,7 @@ const baseProfile = {
     aiSessions: true,
     nodes: true,
     instanceBoard: true,
+    triggers: true,
   },
   createdAt: '2026-08-05T00:00:00.000Z',
   updatedAt: '2026-08-05T00:00:00.000Z',
@@ -70,6 +72,16 @@ describe('MobileControlPlaneProfile', () => {
     expect(profile.identity.controlPlaneId).toBe('cp_01');
     expect(profile.access.origin).toBe('https://control.example.com');
     expect(profile).not.toHaveProperty('future');
+  });
+
+  test('normalizes a missing trigger capability without dropping an older Control Plane', () => {
+    const { triggers: _triggers, ...legacyCapabilities } = baseProfile.capabilities;
+
+    expect(normalizeMobileControlPlaneCapabilities(legacyCapabilities).triggers).toBe(false);
+    expect(parseStoredMobileControlPlaneProfile({
+      ...baseProfile,
+      capabilities: legacyCapabilities,
+    }).capabilities.triggers).toBe(false);
   });
 
   test('profile store switches and removes identities without leaving the device session', async () => {

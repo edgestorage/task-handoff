@@ -46,6 +46,37 @@ test("shared AI Session client owns route encoding, request input, and response 
   assert.equal(requests[0].init.method, "POST");
 });
 
+test("shared AI Session client sends a node folder identity for server-side runtime path resolution", async () => {
+  const requests = [];
+  const transport = {
+    async request(path, schema, init) {
+      requests.push({ path, init });
+      return schema.parse({ data: {
+        disposition: "created",
+        aiSessionId: "session-1",
+        providerSessionId: "thread-1",
+        creationSource: "ai-session",
+      } });
+    },
+  };
+  const api = createControlPlaneClient(transport);
+  await api.aiSessions.create("instance/1", {
+    agent: "codex",
+    cwdFolderId: "folder/1",
+    message: "Implement it",
+    clientRequestId: "request-1",
+  });
+  assert.equal(requests[0].path, "/api/controlled-instances/instance%2F1/ai-sessions");
+  assert.deepEqual(JSON.parse(requests[0].init.body), {
+    agent: "codex",
+    cwdFolderId: "folder/1",
+    message: "Implement it",
+    attachments: [],
+    references: [],
+    clientRequestId: "request-1",
+  });
+});
+
 test("shared AI Session client owns revisioned queue edit and reorder routes", async () => {
   const requests = [];
   const transport = {
@@ -133,6 +164,15 @@ test("shared auth client owns Web and mobile authentication contracts", async ()
         });
       }
       if (path === "/api/auth/mobile/logout") return schema.parse({ data: { ok: true } });
+      if (path === "/api/auth/password") {
+        return schema.parse({ data: { user: {
+          id: "user-1",
+          username: "admin",
+          role: "admin",
+          createdAt: "2026-08-05T00:00:00.000Z",
+          updatedAt: "2026-08-05T00:00:00.000Z",
+        } } });
+      }
       return schema.parse({
         data: {
           sessionToken: "mobile-token-that-is-at-least-32-characters",
@@ -157,6 +197,7 @@ test("shared auth client owns Web and mobile authentication contracts", async ()
   const api = createControlPlaneClient(transport);
 
   await api.auth.session();
+  await api.auth.changePassword({ currentPassword: "password123", newPassword: "password456" });
   await api.auth.loginMobile({
     username: "admin",
     password: "secret",
@@ -165,15 +206,21 @@ test("shared auth client owns Web and mobile authentication contracts", async ()
   await api.auth.logoutMobile();
 
   assert.equal(requests[0].path, "/api/auth/session");
-  assert.equal(requests[1].path, "/api/auth/mobile/login");
-  assert.equal(requests[1].init.method, "POST");
+  assert.equal(requests[1].path, "/api/auth/password");
+  assert.equal(requests[1].init.method, "PATCH");
   assert.deepEqual(JSON.parse(requests[1].init.body), {
+    currentPassword: "password123",
+    newPassword: "password456",
+  });
+  assert.equal(requests[2].path, "/api/auth/mobile/login");
+  assert.equal(requests[2].init.method, "POST");
+  assert.deepEqual(JSON.parse(requests[2].init.body), {
     username: "admin",
     password: "secret",
     device: { id: "device-0001", name: "Phone", platform: "ios" },
   });
-  assert.equal(requests[2].path, "/api/auth/mobile/logout");
-  assert.equal(requests[2].init.method, "POST");
+  assert.equal(requests[3].path, "/api/auth/mobile/logout");
+  assert.equal(requests[3].init.method, "POST");
 });
 
 test("shared client owns recovery, desktop lifecycle, and command routes used by Web", async () => {
@@ -312,6 +359,62 @@ test("shared resource client validates declared fields and drops unknown respons
     },
   });
   await assert.rejects(() => invalidApi.resources.nodes());
+});
+
+test("shared trigger client owns template, binding, and run routes", async () => {
+  const requests = [];
+  const timestamp = "2026-08-09T00:00:00.000Z";
+  const config = {
+    configHash: "trg_1234567890abcdef12345678",
+    name: "Hourly",
+    source: { type: "schedule", scheduleKind: "interval", intervalMs: 3_600_000 },
+    action: { promptTemplate: "Continue" },
+    policy: { maxConcurrentRuns: 1, whenBusy: "skip" },
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+  const deployment = {
+    configHash: config.configHash,
+    deploymentId: `session:session/1:${config.configHash}`,
+    instanceId: "instance/1",
+    origin: "control-plane",
+    enabled: true,
+    target: { type: "ai-session", aiSessionId: "session/1" },
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+  const transport = {
+    async request(path, schema, init) {
+      requests.push({ path, init });
+      if (path === "/api/triggers" && !init?.method) return schema.parse({ data: { updatedAt: timestamp, triggers: [{ configHash: config.configHash, config, deploymentCount: 0, enabledCount: 0, runningCount: 0, errorCount: 0, ownedByControlPlane: true, controlPlaneDeploymentCount: 0, deployments: [], recentRuns: [], futureField: true }] } });
+      if (path === "/api/triggers" && init.method === "POST") return schema.parse({ data: { ...config, id: config.configHash } });
+      if (path.includes("/ai-sessions/") && init.method === "POST") return schema.parse({ data: { config, deployment } });
+      if (path.includes("/ai-sessions/") && init.method === "DELETE") return schema.parse({ data: { deleted: true } });
+      if (path.endsWith("/run")) return schema.parse({ data: { status: "completed" } });
+      return schema.parse({ data: init.method === "PUT" ? { previousConfigHash: config.configHash, trigger: { ...config, id: config.configHash }, results: [] } : { configHash: config.configHash, deletedTemplate: true, results: [] } });
+    },
+  };
+  const api = createControlPlaneClient(transport);
+  const input = { name: config.name, source: config.source, action: config.action, policy: config.policy };
+  const listed = await api.triggers.list();
+  await api.triggers.create(input);
+  await api.triggers.update(config.configHash, input);
+  await api.triggers.bindSession("instance/1", "session/1", config.configHash);
+  await api.triggers.run("instance/1", config.configHash, deployment.deploymentId);
+  await api.triggers.unbindSession("instance/1", "session/1", config.configHash);
+  await api.triggers.remove(config.configHash);
+
+  assert.equal("futureField" in listed.triggers[0], false);
+  assert.deepEqual(requests.map((request) => request.path), [
+    "/api/triggers",
+    "/api/triggers",
+    `/api/triggers/${config.configHash}`,
+    `/api/controlled-instances/instance%2F1/ai-sessions/session%2F1/triggers`,
+    `/api/controlled-instances/instance%2F1/triggers/${config.configHash}/run`,
+    `/api/controlled-instances/instance%2F1/ai-sessions/session%2F1/triggers/${config.configHash}`,
+    `/api/triggers/${config.configHash}`,
+  ]);
+  assert.deepEqual(JSON.parse(requests[4].init.body), { deploymentId: deployment.deploymentId });
 });
 
 test("shared AI Session state preserves Web sorting, unread, approval, and delta behavior", () => {

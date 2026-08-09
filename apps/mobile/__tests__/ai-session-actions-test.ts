@@ -60,12 +60,20 @@ test('does not replay an uncertain send and recovers from the authoritative snap
   const store = new MobileAiSessionStore();
   const coordinator = new MobileAiSessionActionCoordinator('cp', api, store);
   const result = await coordinator.send('instance', 'session', 'hello');
-  expect(result.disposition).toBe('result-unknown');
+  expect(result).toEqual(expect.objectContaining({ disposition: 'result-unknown', error: expect.stringMatching(/result is unknown/i) }));
   expect(api.aiSessions.sendMessage).toHaveBeenCalledTimes(1);
   expect(api.aiSessions.list).toHaveBeenCalledTimes(1);
   expect(coordinator.state(mobileAiSessionBusyKey('cp', 'instance', 'session', 'send')).phase).toBe('result-unknown');
   expect((await coordinator.send('instance', 'session', 'hello')).disposition).toBe('duplicate-blocked');
   expect(api.aiSessions.sendMessage).toHaveBeenCalledTimes(1);
+});
+
+test('returns a failed action error while retaining it in coordinator diagnostics', async () => {
+  const api = client({ interrupt: jest.fn().mockRejectedValue(Object.assign(new Error('Request rejected'), { status: 400 })) });
+  const coordinator = new MobileAiSessionActionCoordinator('cp', api, new MobileAiSessionStore());
+
+  expect(await coordinator.interrupt('instance', 'session')).toEqual({ disposition: 'failed', error: 'Request rejected' });
+  expect(coordinator.state(mobileAiSessionBusyKey('cp', 'instance', 'session', 'interrupt'))).toEqual(expect.objectContaining({ phase: 'failed', error: 'Request rejected' }));
 });
 
 test('preserves explicit steer mode at the protocol boundary', async () => {

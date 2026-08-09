@@ -9,6 +9,7 @@ import { z } from "zod";
 import { AiSessionUnreadEventType } from "@task-handoff/protocol/ai-sessions";
 import { CONTROL_PLANE_PROTOCOL_VERSION, ImagePullTerminalEventType, type BuildInfo } from "@task-handoff/protocol/control-plane";
 import { packageVersionResolver } from "@task-handoff/core/core/package-version";
+import { DEFAULT_MAINTENANCE_INTERVAL_MS } from "@task-handoff/core/storage/retention";
 import { SESSION_STREAM_PROTOCOL_VERSION, SessionStreamsHelloEventType } from "@task-handoff/protocol/events";
 import { CONTROL_PLANE_SESSION_COOKIE, ControlPlaneAuth, type ControlPlaneAuthOptions } from "../auth/service.ts";
 import { ControlPlaneService, type ControlPlaneServiceOptions } from "../application/service.ts";
@@ -37,6 +38,7 @@ import { registerControlPlaneProxyManagementRoutes } from "./control-plane-proxy
 import { projectControlPlaneProxyTarget, publicControlPlaneProxyTarget } from "../proxy/target-projector.ts";
 import { ControlPlaneIdentityService } from "../identity/service.ts";
 import { NodeConnectionRuntime } from "../nodes/connection-runtime.ts";
+import { createControlPlaneDiagnosticLogger, createDiagnosticLogsArchive } from "../diagnostics/logs.ts";
 
 export type CreateControlPlaneAppOptions = {
   dataDir?: string;
@@ -201,10 +203,16 @@ export function routeAuthorization(method: string, url: string): { action: Contr
     return undefined;
   }
   const action = actionForHttpMethod(method);
+  if (path === "/api/control-plane/diagnostic-logs/export") {
+    return { action: "manage-settings", resource: { type: "control-plane-settings" } };
+  }
   if (path.startsWith("/api/control-plane/settings")) {
     return { action: method === "GET" ? "read" : "manage-settings", resource: { type: "control-plane-settings" } };
   }
   if (path === "/api/auth/mobile/logout" || path.startsWith("/api/auth/mobile/sessions")) {
+    return undefined;
+  }
+  if (path === "/api/auth/password") {
     return undefined;
   }
   if (path.startsWith("/api/models")) {
@@ -281,12 +289,14 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   const paths = controlPlaneStorePaths(options.dataDir);
   const app = Fastify({ logger: options.logger ?? true });
   const events = new ControlPlaneEventBus();
+  let diagnosticLogsEnabled = controlPlaneDiagnosticLogsEnabled();
+  const diagnosticLogger = createControlPlaneDiagnosticLogger(paths.logsDir, () => diagnosticLogsEnabled, app.log);
   const nodeConnectionRuntime = new NodeConnectionRuntime();
   nodeConnectionRuntime.onChange((observation) => events.publish("node.connection.updated", observation, {
     topic: "node.state",
     scope: { nodeId: observation.nodeId },
   }));
-  const service = new ControlPlaneService(paths, { ...options.service, logger: app.log, nodeConnectionRuntime });
+  const service = new ControlPlaneService(paths, { ...options.service, logger: diagnosticLogger, nodeConnectionRuntime });
   const auth = new ControlPlaneAuth(paths, options.auth);
   const identity = new ControlPlaneIdentityService(
     paths.identitySigningPath,
@@ -303,7 +313,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   aiSessionUnread.init();
   const aiSessionAggregator = new ControlPlaneAiSessionAggregator({
     bootstrap: () => service.bootstrapAiSessionsFromInstances(),
-    logger: app.log,
+    logger: diagnosticLogger,
     recoverDelta: (instanceId, streamId, sinceRevision) => service.recoverAiSessionDelta(instanceId, streamId, sinceRevision),
     recoverSnapshot: (instanceId) => service.recoverAiSessionSnapshot(instanceId),
     onRecoveredEvent: (event) => events.publish(event.type, event.payload),
@@ -311,7 +321,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   aiSessionAggregator.onSnapshot((update) => aiSessionUnread.reconcile(update.instanceId, update.aiSessions));
   const appSessionAggregator = new ControlPlaneAppSessionAggregator({
     bootstrap: () => service.bootstrapAppSessionsFromInstances(),
-    logger: app.log,
+    logger: diagnosticLogger,
     recoverDelta: (instanceId, streamId, sinceRevision) => service.recoverAppSessionDelta(instanceId, streamId, sinceRevision),
     recoverSnapshot: (instanceId) => service.recoverAppSessionSnapshot(instanceId),
     onRecoveredEvent: (event) => events.publish(event.type, event.payload),
@@ -374,7 +384,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   });
   const proxyStateSubscriber = new ControlPlaneProxyStateSubscriber(service, {
     fetchImpl: options.service?.fetchImpl,
-    logger: app.log,
+    logger: diagnosticLogger,
     onStateChanged: (node) => events.publish(
       "node.proxy-state.updated",
       { nodeId: node.id, proxyState: node.proxyState },
@@ -407,9 +417,11 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   });
   service.setNodeAgentTransport(nodeAgentTunnel);
   service.init();
+  diagnosticLogsEnabled = service.diagnosticLogsEnabled();
   identity.init();
   let pairingRecoveryInFlight: Promise<void> | undefined;
   let pairingRecoveryTimer: ReturnType<typeof setInterval> | undefined;
+  let persistenceMaintenanceTimer: ReturnType<typeof setInterval> | undefined;
   const recoverPendingPairings = () => {
     if (pairingRecoveryInFlight) return pairingRecoveryInFlight;
     const recovery = service.recoverPendingPairingRevokes().then(() => undefined);
@@ -426,11 +438,15 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   proxyStateSubscriber.start();
   await service.syncLocalNodeConnection().catch(() => undefined);
   auth.init();
-  const chatGateway = new ControlPlaneChatGatewayRuntime(service, options.service?.fetchImpl, { aiSessions: aiSessionAggregator, logger: app.log });
+  const chatGateway = new ControlPlaneChatGatewayRuntime(service, options.service?.fetchImpl, {
+    aiSessions: aiSessionAggregator,
+    logger: diagnosticLogger,
+    diagnosticLogsEnabled: () => diagnosticLogsEnabled,
+  });
   chatGateway.startEnabled();
   const nodeEventSubscriber = new ControlPlaneNodeEventSubscriber(service, nodeAgentTunnel, {
     safetyIntervalMs: Number(process.env.TASK_HANDOFF_EVENT_CONNECTION_SAFETY_INTERVAL_MS) || undefined,
-    logger: app.log,
+    logger: diagnosticLogger,
     connectionRuntime: nodeConnectionRuntime,
   });
   nodeEventSubscriber.start();
@@ -438,6 +454,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   await app.register(websocket);
   app.addHook("onClose", async () => {
     if (pairingRecoveryTimer) clearInterval(pairingRecoveryTimer);
+    if (persistenceMaintenanceTimer) clearInterval(persistenceMaintenanceTimer);
     await pairingRecoveryInFlight?.catch(() => undefined);
     imagePullProgress.close();
     proxyEventHub.stop();
@@ -445,8 +462,6 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     nodeEventSubscriber.stop();
     chatGateway.stopAll();
   });
-
-  const diagnosticLogsEnabled = controlPlaneDiagnosticLogsEnabled();
 
   app.setErrorHandler((error, request, reply) => {
     const payload = controlPlaneErrorPayload(error);
@@ -612,6 +627,20 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   app.post("/api/auth/mobile/login", { config: PUBLIC_CONTROL_PLANE_ROUTE }, async (request) => ({
     data: await auth.loginMobile(request.body, { sourceId: request.ip }),
   }));
+  app.patch("/api/auth/password", async (request, reply) => {
+    const result = await auth.changePassword(
+      request.cookies[CONTROL_PLANE_SESSION_COOKIE],
+      request.body,
+      { sourceId: request.ip },
+    );
+    reply.setCookie(CONTROL_PLANE_SESSION_COOKIE, result.sessionToken, {
+      path: "/",
+      httpOnly: true,
+      sameSite: "lax",
+      expires: new Date(result.expiresAt),
+    });
+    return { data: { user: result.user } };
+  });
   app.post("/api/auth/mobile/logout", async (request) => {
     const credential = requestSessionCredential(request);
     return { data: auth.logout(credential.clientType === "mobile" ? credential.token : undefined) };
@@ -643,7 +672,21 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     },
   }));
   app.get("/api/control-plane/settings", async () => ({ data: service.getSettings() }));
-  app.patch("/api/control-plane/settings", async (request) => ({ data: service.updateSettings(request.body || {}) }));
+  app.patch("/api/control-plane/settings", async (request) => {
+    const settings = service.updateSettings(request.body || {});
+    diagnosticLogsEnabled = settings.diagnosticLogs;
+    return { data: settings };
+  });
+  app.get("/api/control-plane/diagnostic-logs/export", async (_request, reply) => {
+    const archive = await createDiagnosticLogsArchive({
+      dataDir: paths.dataDir,
+      nodeAgentDataDir: process.env.TASK_HANDOFF_DESKTOP_NODE_AGENT_DATA_DIR || process.env.TASK_HANDOFF_NODE_AGENT_DATA_DIR,
+      diagnosticLogsEnabled,
+    });
+    reply.header("content-type", "application/gzip");
+    reply.header("content-disposition", `attachment; filename="${archive.filename}"`);
+    return reply.send(archive.stream);
+  });
 
   app.post("/api/ai-session-attachments", { bodyLimit: 32 * 1024 * 1024 }, async (request, reply) => {
     try {
@@ -719,6 +762,10 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     void recoverPendingPairings().catch((error) => app.log.warn({ error }, "pending node pairing recovery failed"));
   }, 30_000);
   pairingRecoveryTimer.unref();
+  persistenceMaintenanceTimer = setInterval(() => {
+    service.runPersistenceMaintenance();
+  }, DEFAULT_MAINTENANCE_INTERVAL_MS);
+  persistenceMaintenanceTimer.unref();
   return app;
 }
 

@@ -1170,7 +1170,7 @@
 }
 
 .session-preview-actions {
-  background: color-mix(in srgb, var(--terminal-bg) 88%, var(--surface-raised));
+  background: color-mix(in srgb, var(--surface-inset) 88%, var(--surface-raised));
 }
 
 .session-preview-body {

@@ -47,6 +47,7 @@ export interface AiSessionControlProvider {
   readSession?(providerSessionId: string): Promise<void>;
   resumeSession?(providerSessionId: string): Promise<void>;
   archiveSession?(providerSessionId: string): Promise<void>;
+  activeSessionExists?(providerSessionId: string): Promise<boolean>;
   deleteSession?(providerSessionId: string): Promise<void>;
   unsubscribeSession?(providerSessionId: string): Promise<void>;
   startMessage?(session: AiSessionStatus, input: AiSessionSendInput): Promise<AiSessionActionResult>;

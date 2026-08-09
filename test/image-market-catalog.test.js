@@ -449,7 +449,7 @@ test("instance creation sends Market default, explicit tag, and Custom reference
     imageSnapshot: received.find((entry) => entry.id === id)?.image,
     status: "created", health: "unknown", connectionStatus: "unknown", controlMode: "controlled",
     capabilities: {}, config: {}, workspace: { status: "unknown" },
-    runtime: { labels: {}, managedVolumes: [] },
+    runtime: { labels: {} },
     createdAt: now, updatedAt: now,
   } });
   const custom = service.createImage({ name: "Create custom", reference: "docker.io/example/custom:v3" });

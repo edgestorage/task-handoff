@@ -21,7 +21,7 @@ const profile = {
     origin: 'https://control.example.com',
     secureSessionKey: 'session.provider',
   },
-  capabilities: { authentication: 'required' as const, aiSessions: true, nodes: true, instanceBoard: true },
+  capabilities: { authentication: 'required' as const, aiSessions: true, nodes: true, instanceBoard: true, triggers: true },
   createdAt: '2026-08-05T00:00:00.000Z',
   updatedAt: '2026-08-05T00:00:00.000Z',
 };

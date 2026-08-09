@@ -11,6 +11,7 @@ type ApprovalCoordinatorOptions = {
   registry: AiSessionRegistry;
   currentClient: () => CodexAppServerClientLike | undefined;
   readyClient: () => Promise<CodexAppServerClientLike>;
+  readyThreadClient?: (threadId: string) => Promise<CodexAppServerClientLike>;
   findSession: (threadId: string) => AiSessionStatus | undefined;
   applyThreadSnapshot: (thread: CodexThread) => void;
 };
@@ -101,16 +102,18 @@ export class CodexAppServerApprovalCoordinator {
   }
 
   private async attachPendingRequest(session: AiSessionStatus) {
-    const client = await this.options.readyClient();
-    if (!client.resumeThread || this.pending.latestForSession(session.id)) {
+    if (this.pending.latestForSession(session.id)) {
       return;
     }
     if (!session.providerSessionId) {
       throw aiSessionControlError("AI_SESSION_THREAD_NOT_FOUND", "AI session is not bound to a Codex thread.");
     }
-    const resumed = await client.resumeThread(session.providerSessionId);
-    if (resumed) {
-      this.options.applyThreadSnapshot(resumed);
+    const client = this.options.readyThreadClient
+      ? await this.options.readyThreadClient(session.providerSessionId)
+      : await this.options.readyClient();
+    if (!this.options.readyThreadClient && client.resumeThread) {
+      const resumed = await client.resumeThread(session.providerSessionId);
+      if (resumed) this.options.applyThreadSnapshot(resumed);
     }
     await waitFor(() => Boolean(this.pending.latestForSession(session.id)), 1_000);
   }

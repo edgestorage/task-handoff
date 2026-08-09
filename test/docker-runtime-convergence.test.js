@@ -41,7 +41,7 @@ test("Docker runtime install copies, installs through the root-owned updater, ve
   assert.equal(result.version, "1.2.3");
   assert.ok(calls.some(([, args]) => args[0] === "cp" && args[1] === "/cache/runtime.tar.gz"));
   assert.ok(calls.some(([, args]) => args[0] === "cp" && args[2].includes(":/opt/task-handoff/instance-runtime/incoming/")));
-  const install = calls.find(([, args]) => args[0] === "exec" && args.includes("task-handoff-runtime"));
+  const install = calls.find(([, args]) => args[0] === "exec" && args.some((arg) => arg.endsWith("/runtime-installer.mjs")) && args.includes("install"));
   assert.deepEqual(install[1].slice(0, 4), ["exec", "--user", "0", "instance-1"]);
   assert.ok(calls.some(([, args]) => args[0] === "restart" && args[1] === "instance-1"));
   assert.equal(calls.some(([, args]) => args[0] === "rm" || args[0] === "run" || args[0] === "pull"), false);
@@ -115,7 +115,7 @@ test("Docker runtime target falls back to daemon architecture and normalizes ali
   assert.deepEqual(await executor.inspectRuntimeTarget(), { platform: "linux", arch: "arm64", launcherAbi: 1 });
 });
 
-test("runtime launcher installation refreshes node-agent assets with one root exec", async () => {
+test("runtime launcher installation verifies mounted node-agent assets with one root exec", async () => {
   const calls = [];
   const executor = new LocalDockerExecutor(async (_command, args) => {
     calls.push(args);
@@ -127,7 +127,7 @@ test("runtime launcher installation refreshes node-agent assets with one root ex
   const rootExec = calls.filter((args) => args[0] === "exec" && args[1] === "--user" && args[2] === "0");
   assert.equal(rootExec.length, 1);
   assert.match(rootExec[0].at(-1), /install -d -o root/);
-  assert.ok(calls.filter((args) => args[0] === "cp").every((args) => args[2].includes(":/root/.task-handoff-")));
+  assert.equal(calls.some((args) => args[0] === "cp"), false);
   assert.equal(calls.some((args) => args[0] === "rm" || args[0] === "run" || args[0] === "pull"), false);
 });
 
@@ -142,6 +142,11 @@ test("Linux launcher sources and package preparation enforce LF line endings", (
     const contents = fs.readFileSync(path.resolve(__dirname, "../docker", file));
     assert.equal(contents.includes(Buffer.from("\r\n")), false, `${file} must use LF line endings`);
   }
+  const entrypoint = fs.readFileSync(path.resolve(__dirname, "../docker/entrypoint.sh"), "utf8");
+  const launcher = fs.readFileSync(path.resolve(__dirname, "../docker/instance-launcher.sh"), "utf8");
+  assert.match(entrypoint, /sudo --preserve-env -u agent -- bash "\$0"/);
+  assert.match(entrypoint, /exec bash "\$\{TASK_HANDOFF_INSTANCE_LAUNCHER\}"/);
+  assert.doesNotMatch(launcher, /task-handoff-controlled-instance/);
 });
 
 test("runtime launcher installation preserves the root command stderr", async () => {

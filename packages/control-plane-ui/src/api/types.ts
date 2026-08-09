@@ -89,6 +89,7 @@ export type ControlPlaneSettings = {
   updateChannel: UpdateChannel;
   mentionTrigger: string;
   commandTrigger: string;
+  diagnosticLogs: boolean;
 };
 
 export type BuildInfo = {

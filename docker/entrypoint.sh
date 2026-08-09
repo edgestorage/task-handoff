@@ -40,7 +40,7 @@ if [ "$(id -u)" = "0" ] && [ "${TASK_HANDOFF_PRIVILEGE_DROPPED:-0}" != "1" ]; th
     chown agent:agent "${TASK_HANDOFF_WORKSPACE:-/workspace}"
   fi
   export TASK_HANDOFF_PRIVILEGE_DROPPED=1
-  exec sudo --preserve-env -u agent -- "$0" "$@"
+  exec sudo --preserve-env -u agent -- bash "$0" "$@"
 fi
 
 mkdir -p \
@@ -126,12 +126,18 @@ start_web_cap_daemon() {
 if [ "${1:-}" = "task-handoff" ] && [ "${2:-}" = "web" ]; then
   bootstrap_workspace
   start_web_cap_daemon
+  if [ -n "${TASK_HANDOFF_INSTANCE_LAUNCHER:-}" ]; then
+    exec bash "${TASK_HANDOFF_INSTANCE_LAUNCHER}"
+  fi
   exec task-handoff-instance-launcher
 fi
 
 if [ "${1:-}" = "task-handoff" ]; then
   shift
   if [ "$#" -eq 0 ] || { [ "${1:-}" = "web" ] && [ "$#" -eq 1 ]; }; then
+    if [ -n "${TASK_HANDOFF_INSTANCE_LAUNCHER:-}" ]; then
+      exec bash "${TASK_HANDOFF_INSTANCE_LAUNCHER}"
+    fi
     exec task-handoff-instance-launcher
   fi
   echo "Managed container commands must be launched through the active controlled-instance runtime." >&2

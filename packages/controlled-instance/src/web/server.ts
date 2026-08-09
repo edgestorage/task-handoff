@@ -185,6 +185,7 @@ type CreateWebAppOptions = {
   logger?: FastifyServerOptions["logger"];
   appRuntime?: AppRuntimeManager;
   aiSessionRegistry?: AiSessionRegistry;
+  aiSessionDiscovery?: AiSessionDiscoveryCoordinator;
   codexAppServer?: CodexAppServerSessionBridge;
   appManagement?: AppManagementManager;
 };
@@ -229,10 +230,14 @@ function installGracefulShutdown(app: Awaited<ReturnType<typeof createWebApp>>) 
       return;
     }
     closing = true;
+    app.log.info({ signal, pid: process.pid }, "controlled instance graceful shutdown started");
     try {
       await app.close();
-    } finally {
-      process.exitCode = signal ? 0 : process.exitCode;
+      app.log.info({ signal, pid: process.pid }, "controlled instance graceful shutdown completed");
+      process.exitCode = 0;
+    } catch (error) {
+      app.log.error({ err: error, signal, pid: process.pid }, "controlled instance graceful shutdown failed");
+      process.exitCode = 1;
     }
   };
   const onSigint = () => {
@@ -572,6 +577,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   app.addHook("onClose", async () => {
     nodeAgentClient.stop();
     triggerManager.stop();
+    appRuntime.dispose?.();
   });
   let aiSessionsFingerprint = "";
   const instanceId = process.env.TASK_HANDOFF_INSTANCE_ID || "standalone";
@@ -589,6 +595,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   const drainingAiSessionIds = new Set<string>();
   const aiSessionLifecycleById = new Map<string, string>();
   let aiSessionTimer: ReturnType<typeof setInterval> | undefined;
+  let startupAiSessionTask: ReturnType<typeof setImmediate> | undefined;
   let appSessionsFingerprint = "";
   let appSessionSnapshotRevision = 0;
   const streamDiagnostics = { aiDiscoveryUnchanged: 0, aiDiscoveryCorrections: 0, appUnchanged: 0 };
@@ -598,7 +605,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     | { type: typeof AppSessionEventType.Removed; payload: AppSessionRemovedEvent };
   const appSessionEventHistory: Array<AppSessionRuntimeEvent & { createdAtMs: number }> = [];
   let lastAppSessionSnapshot = appSessionsSnapshotFromRecords([]);
-  const aiSessionDiscovery = new AiSessionDiscoveryCoordinator();
+  const aiSessionDiscovery = options.aiSessionDiscovery || new AiSessionDiscoveryCoordinator();
   const configuredDeltaCoalescingWindow = process.env.TASK_HANDOFF_AI_SESSION_DELTA_COALESCE_MS;
   const aiSessionMessageDeltas = new AiSessionMessageDeltaCoalescer({
     emit: (payload) => events.publish(AiSessionEventType.MessageDelta, payload),
@@ -699,7 +706,9 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     stopApp: (appSessionId) => { appRuntime.stop(appSessionId); },
     onDiagnostic: (diagnostic) => app.log.warn({ diagnostic }, "AI session close rollback"),
   });
+  let serviceClosing = false;
   const refreshAiSessions = async () => {
+    if (serviceClosing) return;
     const appSessions = appSessionsWithSharedCodexAppServer();
     const activeAppIds = new Set(appSessions.filter((session) => !session.status || session.status === "running").map((session) => session.id));
     const lostBindings = aiSessions.all().flatMap((session) => {
@@ -707,6 +716,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       return appSessionId && !activeAppIds.has(appSessionId) ? [{ session, appSessionId }] : [];
     });
     await Promise.all(lostBindings.map(async ({ session, appSessionId }) => {
+      if (serviceClosing) return;
       try { await aiSessionClose.closeForAppSession(appSessionId); } catch (error: unknown) {
         app.log.warn({ err: error, aiSessionId: session.id, appSessionId }, "failed to close AI session after App exit");
       }
@@ -995,13 +1005,25 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     }
   });
   app.addHook("onReady", async () => {
-    await refreshAndPublishAiSessions("startup");
+    // Persisted transcript and process discovery can be expensive. It must not
+    // delay the process identity endpoint used to commit Local Runtime startup.
+    startupAiSessionTask = setImmediate(() => {
+      startupAiSessionTask = undefined;
+      if (serviceClosing) return;
+      void refreshAndPublishAiSessions("startup").catch((error) => {
+        app.log.warn({ err: error }, "initial AI session discovery failed");
+      });
+    });
     aiSessionTimer = setInterval(() => {
       void refreshAndPublishAiSessions();
     }, Number(process.env.TASK_HANDOFF_AI_SESSION_SCAN_INTERVAL_MS) || 30_000);
   });
   app.addHook("onClose", async () => {
     stopAiSessionChangeListener();
+    if (startupAiSessionTask) {
+      clearImmediate(startupAiSessionTask);
+      startupAiSessionTask = undefined;
+    }
     if (scheduledAiSessionPublish) {
       clearTimeout(scheduledAiSessionPublish);
       scheduledAiSessionPublish = undefined;
@@ -1014,11 +1036,10 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     claudeControlSock.stop();
   });
   app.addHook("preClose", async () => {
-    await Promise.all(aiSessions.all().map(async (session) => {
-      try { await aiSessionClose.close(session.id); } catch (error: unknown) {
-        app.log.warn({ err: error, aiSessionId: session.id }, "failed to close AI session during program shutdown");
-      }
-    }));
+    // Provider sessions are durable user state, not process-owned resources.
+    // Preserve the registry for discovery/recovery after restart; explicit App
+    // exits and Close AI Session remain responsible for provider archival.
+    serviceClosing = true;
     codexAppServer.stop();
     aiSessionMessageDeltas.close("service-close");
   });

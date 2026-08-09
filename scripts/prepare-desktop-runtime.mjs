@@ -8,9 +8,9 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(import.meta.url);
-const rootPackage = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+const controlledInstancePackage = JSON.parse(fs.readFileSync(path.join(root, "packages", "controlled-instance", "package.json"), "utf8"));
 const nodePtyPackage = JSON.parse(fs.readFileSync(require.resolve("node-pty/package.json"), "utf8"));
-const version = process.env.TASK_HANDOFF_VERSION || rootPackage.version;
+const version = process.env.TASK_HANDOFF_VERSION || controlledInstancePackage.version;
 const prebuildsDir = path.join(root, "release", "node-pty-prebuilds");
 const prebuildVersionFile = path.join(root, "release", "node-pty-prebuilds.version");
 const artifactsDir = path.join(root, "release", "runtime-artifacts");
@@ -74,7 +74,9 @@ function prepareArtifact() {
   buildLinuxPrebuild("arm64");
   fs.mkdirSync(path.dirname(prebuildVersionFile), { recursive: true });
   fs.writeFileSync(prebuildVersionFile, `${nodePtyPackage.version}\n`);
-  run("pnpm", ["runtime:build", "--", "--target", "controlled-instance"]);
+  run("pnpm", ["runtime:build", "--", "--target", "controlled-instance"], {
+    env: { ...process.env, TASK_HANDOFF_VERSION: version },
+  });
   run("pnpm", ["runtime:artifact", "--", "--version", version, "--prebuilds-dir", prebuildsDir]);
   verifyArtifact();
 }
