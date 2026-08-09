@@ -7,6 +7,7 @@ const { execFileSync } = require("node:child_process");
 const test = require("node:test");
 
 const { LocalDockerExecutor } = require("../packages/control-plane/src/node-agent/runtimes/docker.ts");
+const { DockerRuntimeAdapter } = require("../packages/control-plane/src/node-agent/runtimes/adapters.ts");
 
 const identity = {
   packageName: "@task-handoff/controlled-instance",
@@ -42,8 +43,9 @@ test("Docker runtime install copies, installs through the root-owned updater, ve
   assert.ok(calls.some(([, args]) => args[0] === "cp" && args[1] === "/cache/runtime.tar.gz"));
   assert.ok(calls.some(([, args]) => args[0] === "cp" && args[2].includes(":/opt/task-handoff/instance-runtime/incoming/")));
   const install = calls.find(([, args]) => args[0] === "exec" && args.some((arg) => arg.endsWith("/runtime-installer.mjs")) && args.includes("install"));
-  assert.deepEqual(install[1].slice(0, 4), ["exec", "--user", "0", "instance-1"]);
-  assert.ok(calls.some(([, args]) => args[0] === "restart" && args[1] === "instance-1"));
+  assert.deepEqual(install[1].slice(0, 4), ["exec", "--user", "0", "container-abc"]);
+  assert.ok(calls.some(([, args]) => args[0] === "cp" && args[2].startsWith("container-abc:")));
+  assert.ok(calls.some(([, args]) => args[0] === "restart" && args[1] === "container-abc"));
   assert.equal(calls.some(([, args]) => args[0] === "rm" || args[0] === "run" || args[0] === "pull"), false);
 });
 
@@ -73,6 +75,36 @@ test("Docker runtime install rejects a container that does not match the authori
   assert.equal(calls.some((args) => args[0] === "cp" || args[0] === "exec" || args[0] === "restart"), false);
 });
 
+test("Docker adapter promotes the recovered container id to the install authority", async () => {
+  const calls = [];
+  const runCommand = async (_command, args) => {
+    calls.push(args);
+    if (args[0] === "inspect" && args.includes("{{json .}}")) {
+      return { stdout: JSON.stringify({
+        Id: "recovered-container",
+        State: { Running: true },
+        Config: { Entrypoint: [], Cmd: [], Labels: { "task-handoff.instance-id": "instance-1" } },
+        Mounts: [],
+      }), stderr: "" };
+    }
+    if (args[0] === "inspect") return { stdout: "recovered-container", stderr: "" };
+    return { stdout: "", stderr: "" };
+  };
+  const executor = new LocalDockerExecutor(runCommand);
+  const adapter = new DockerRuntimeAdapter(executor, runCommand, "linux", "x64");
+
+  await adapter.installRuntime({
+    project: { id: "project-1" },
+    image: {},
+    node: { id: "node-1" },
+    runtime: { id: "runtime-1" },
+    instance: { id: "instance-1", runtime: { containerName: "instance-1" } },
+  }, { archivePath: "/cache/runtime.tar.gz", identity });
+
+  assert.ok(calls.some((args) => args[0] === "cp" && args[2].startsWith("recovered-container:")));
+  assert.equal(calls.filter((args) => args[0] === "exec").every((args) => args[3] === "recovered-container"), true);
+});
+
 test("Docker restart validates the authoritative container id before restart", async () => {
   const calls = [];
   const executor = new LocalDockerExecutor(async (_command, args) => {
@@ -92,6 +124,53 @@ test("Docker restart validates the authoritative container id before restart", a
     (error) => error.code === "INSTANCE_RUNTIME_RESTART_FAILED" && /identity mismatch before restart/.test(error.message),
   );
   assert.equal(calls.some((args) => args[0] === "restart"), false);
+});
+
+test("Docker runtime install recovery starts the same stopped container before retry", async () => {
+  const calls = [];
+  let running = false;
+  const executor = new LocalDockerExecutor(async (_command, args) => {
+    calls.push(args);
+    if (args[0] === "inspect" && args.includes("{{json .}}")) {
+      return { stdout: JSON.stringify({
+        Id: "authoritative-container",
+        State: { Running: running },
+        Config: { Entrypoint: [], Cmd: [], Labels: { "task-handoff.instance-id": "instance-1" } },
+        Mounts: [],
+      }), stderr: "" };
+    }
+    if (args[0] === "start") {
+      running = true;
+      return { stdout: "instance-1", stderr: "" };
+    }
+    throw new Error(`unexpected Docker command: ${args.join(" ")}`);
+  });
+
+  assert.equal(await executor.ensureRuntimeInstallTargetRunning("instance-1", "authoritative-container"), "authoritative-container");
+  assert.equal(calls.filter((args) => args[0] === "start").length, 1);
+  assert.ok(calls.some((args) => args[0] === "start" && args[1] === "authoritative-container"));
+});
+
+test("Docker runtime install recovery never starts a replacement container", async () => {
+  const calls = [];
+  const executor = new LocalDockerExecutor(async (_command, args) => {
+    calls.push(args);
+    if (args[0] === "inspect" && args.includes("{{json .}}")) {
+      return { stdout: JSON.stringify({
+        Id: "replacement-container",
+        State: { Running: false },
+        Config: { Entrypoint: [], Cmd: [], Labels: { "task-handoff.instance-id": "instance-1" } },
+        Mounts: [],
+      }), stderr: "" };
+    }
+    return { stdout: "", stderr: "" };
+  });
+
+  await assert.rejects(
+    () => executor.ensureRuntimeInstallTargetRunning("instance-1", "authoritative-container"),
+    (error) => error.code === "INSTANCE_RUNTIME_INSTALL_FAILED" && /identity mismatch before runtime install recovery/.test(error.message),
+  );
+  assert.equal(calls.some((args) => args[0] === "start"), false);
 });
 
 test("Docker runtime target follows the target image rather than the node process", async () => {
@@ -123,9 +202,10 @@ test("runtime launcher installation verifies mounted node-agent assets with one 
     if (args[0] === "exec" && args[1] !== "--user") throw new Error("launcher absent");
     return { stdout: "", stderr: "" };
   }, { launcherAssetsDir: "/assets" });
-  await executor.installRuntimeLauncher("instance-1");
+  await executor.installRuntimeLauncher("instance-1", "container-abc");
   const rootExec = calls.filter((args) => args[0] === "exec" && args[1] === "--user" && args[2] === "0");
   assert.equal(rootExec.length, 1);
+  assert.equal(rootExec[0][3], "container-abc");
   assert.match(rootExec[0].at(-1), /install -d -o root/);
   assert.equal(calls.some((args) => args[0] === "cp"), false);
   assert.equal(calls.some((args) => args[0] === "rm" || args[0] === "run" || args[0] === "pull"), false);
@@ -162,6 +242,21 @@ test("runtime launcher installation preserves the root command stderr", async ()
     () => executor.installRuntimeLauncher("instance-1"),
     (error) => error.code === "INSTANCE_BASE_RUNTIME_INCOMPATIBLE" && /Cause: install: permission denied/.test(error.message),
   );
+});
+
+test("runtime launcher installation rejects a replacement before root exec", async () => {
+  const calls = [];
+  const executor = new LocalDockerExecutor(async (_command, args) => {
+    calls.push(args);
+    if (args[0] === "inspect") return { stdout: "replacement-container", stderr: "" };
+    return { stdout: "", stderr: "" };
+  });
+
+  await assert.rejects(
+    () => executor.installRuntimeLauncher("instance-1", "authoritative-container"),
+    (error) => error.code === "INSTANCE_BASE_RUNTIME_INCOMPATIBLE" && /identity mismatch before runtime launcher install/.test(error.message),
+  );
+  assert.equal(calls.some((args) => args[0] === "exec"), false);
 });
 
 test("container installer verifies payload and atomically activates an idempotent release", () => {

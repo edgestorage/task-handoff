@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AccessibilityInfo, Animated, Easing, PixelRatio, Platform, Pressable, ScrollView, StyleSheet, Text, View, type TextStyle } from 'react-native';
+import { UITextView as SelectableText } from '@bsky.app/react-native-uitextview';
 import * as Clipboard from 'expo-clipboard';
 import { Check, Copy } from 'lucide-react-native';
 import Markdown, { AstRenderer, MarkdownIt, renderRules, type ASTNode, type RenderRules } from 'react-native-markdown-renderer';
@@ -224,7 +225,7 @@ const MarkdownChunk = memo(function MarkdownChunk({
 });
 
 type SafeMarkdownStyles = ReturnType<typeof markdownStyles>;
-type SafeRenderRule = (node: ASTNode, children: ReactNode[], parentNodes: ASTNode[], styles: SafeMarkdownStyles) => ReactNode;
+type SafeRenderRule = (node: ASTNode, children: ReactNode[], parentNodes: ASTNode[], styles: SafeMarkdownStyles, ...args: unknown[]) => ReactNode;
 
 export const CHARACTER_FADE_MS = 150;
 type RevealSegment = { id: number; opacity: Animated.Value; text: string };
@@ -425,14 +426,14 @@ function createRules(
       deferFinalCodeHighlight && node.attributes.__safeMutableTail === 'true',
     ),
     text: (node, _children, parentNodes) => (
-      <Text key={node.key} selectable>
+      <SelectableText key={node.key} selectable uiTextView>
         <StreamingMarkdownText
           animate={shouldAnimateMarkdownText(revealEnabled, reducedMotion, parentNodes.map((parent) => parent.type))}
           content={node.content}
           sharedState={textStreamState}
           stateKey={streamKey ? `${streamKey}:${node.key}` : undefined}
         />
-      </Text>
+      </SelectableText>
     ),
   };
   if (trimEnd) rules.paragraph = trimEndParagraph;
@@ -451,11 +452,39 @@ const flowRules: Record<string, SafeRenderRule> = {
   heading5: (node, children, parentNodes, styles) => renderHeading(node, children, parentNodes, styles, 'heading5'),
   heading6: (node, children, parentNodes, styles) => renderHeading(node, children, parentNodes, styles, 'heading6'),
   paragraph: (node, children, _parentNodes, styles) => (
-    <Text key={node.key} selectable style={styles.paragraph}>{children}</Text>
+    <SelectableText key={node.key} selectable style={styles.paragraph} testID="markdown-selectable-text" uiTextView>{children}</SelectableText>
   ),
+  textgroup: (node, children, _parentNodes, styles) => (
+    <SelectableText key={node.key} selectable style={styles.text} uiTextView>{children}</SelectableText>
+  ),
+  inline: (node, children) => <SelectableText key={node.key} selectable uiTextView>{children}</SelectableText>,
+  span: (node, children) => <SelectableText key={node.key} selectable uiTextView>{children}</SelectableText>,
+  strong: (node, children, _parentNodes, styles) => (
+    <SelectableText key={node.key} selectable style={styles.strong} uiTextView>{children}</SelectableText>
+  ),
+  s: (node, children, _parentNodes, styles) => (
+    <SelectableText key={node.key} selectable style={styles.strikethrough} uiTextView>{children}</SelectableText>
+  ),
+  em: (node, children, _parentNodes, styles) => (
+    <SelectableText key={node.key} selectable style={styles.em} uiTextView>{children}</SelectableText>
+  ),
+  u: (node, children) => <SelectableText key={node.key} selectable uiTextView>{children}</SelectableText>,
+  link: (node, children, _parentNodes, styles, onLinkPress) => (
+    <SelectableText
+      key={node.key}
+      onPress={() => (onLinkPress as ((raw: string) => boolean | void) | undefined)?.(node.attributes.href)}
+      selectable
+      style={styles.link}
+      uiTextView
+    >
+      {children}
+    </SelectableText>
+  ),
+  hardbreak: (node) => <SelectableText key={node.key} selectable uiTextView>{'\n'}</SelectableText>,
+  softbreak: (node) => <SelectableText key={node.key} selectable uiTextView>{'\n'}</SelectableText>,
   code_inline: renderInlineCode,
-  code_block: renderCodeBlock,
-  fence: renderCodeBlock,
+  code_block: (node, children, parentNodes, styles) => renderCodeBlock(node, children, parentNodes, styles),
+  fence: (node, children, parentNodes, styles) => renderCodeBlock(node, children, parentNodes, styles),
   table: (node, children, _parentNodes, styles) => (
     <ScrollView
       contentContainerStyle={styles.tableScrollContent}
@@ -504,7 +533,7 @@ function renderInlineCode(
   _parentNodes: ASTNode[],
   styles: SafeMarkdownStyles,
 ) {
-  return <Text key={node.key} selectable style={styles.codeInlineText} testID="markdown-inline-code">{node.content}</Text>;
+  return <SelectableText key={node.key} selectable style={styles.codeInlineText} testID="markdown-inline-code" uiTextView>{node.content}</SelectableText>;
 }
 
 type HighlightNode = ReturnType<typeof codeHighlighter.highlight>['children'][number];
@@ -564,9 +593,9 @@ function MarkdownCodeBlock({ content, deferHighlight, language, styles }: { cont
         </Pressable>
       </View>
       <ScrollView contentContainerStyle={styles.codeBlockScrollContent} horizontal showsHorizontalScrollIndicator={false} style={{ height: blockHeight }} testID="markdown-code-scroll">
-        <Text selectable style={styles.codeBlockText}>
+        <SelectableText selectable style={styles.codeBlockText} uiTextView>
           {highlighted ? highlighted.map((child, index) => renderHighlightNode(child, `code:${index}`, styles)) : content}
-        </Text>
+        </SelectableText>
       </ScrollView>
     </View>
   );
@@ -581,9 +610,9 @@ function renderHighlightNode(
   if (node.type !== 'element') return null;
   const classNames = Array.isArray(node.properties.className) ? node.properties.className.filter((value): value is string => typeof value === 'string') : [];
   return (
-    <Text key={key} style={highlightTokenStyles(classNames, styles)}>
+    <SelectableText key={key} style={highlightTokenStyles(classNames, styles)}>
       {node.children.map((child, index) => renderHighlightNode(child, `${key}:${index}`, styles))}
-    </Text>
+    </SelectableText>
   );
 }
 
@@ -621,7 +650,7 @@ function renderTableCell(
 
 const trimEndParagraph: SafeRenderRule = (node, children, _parentNodes, styles) => {
   const isFinalTopLevelParagraph = node.attributes.__safeTopLevelLast === 'true';
-  return <Text key={node.key} selectable style={[styles.paragraph, isFinalTopLevelParagraph && styles.flushEnd]}>{children}</Text>;
+  return <SelectableText key={node.key} selectable style={[styles.paragraph, isFinalTopLevelParagraph && styles.flushEnd]} testID="markdown-selectable-text" uiTextView>{children}</SelectableText>;
 };
 
 function renderHeading(

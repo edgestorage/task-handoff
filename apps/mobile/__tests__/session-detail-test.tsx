@@ -70,8 +70,11 @@ test('AI detail allows selecting both user messages and assistant Markdown', asy
   });
   const screen = await render(<SessionDetail messages={[]} session={selectableSession} />);
 
-  expect(screen.getByText('Selectable user message').props.selectable).toBe(true);
-  expect(screen.getByText('Selectable AI response').props.selectable).toBe(true);
+  expect(screen.getAllByTestId('markdown-selectable-text')).toHaveLength(2);
+  for (const textHost of screen.getAllByTestId('markdown-selectable-text')) {
+    expect(textHost.props.selectable).toBe(true);
+    expect(textHost.props.uiTextView).toBe(true);
+  }
   screen.unmount();
 });
 
@@ -211,6 +214,7 @@ test('safe markdown renders semantic headings, emphasis, lists, and code', async
     <SafeMarkdown>{'# Result\n\n**Ready**\n\n- first\n- second\n\n`inline`\n\n```ts\nconst ok = true;\n```\n\n| Item | Status |\n| --- | --- |\n| Typecheck | Pass |'}</SafeMarkdown>,
   );
   expect(screen.getByText('Result').props.selectable).toBe(true);
+  expect(screen.getByText('Result').props.uiTextView).toBe(true);
   expect(screen.getByText('Ready').props.selectable).toBe(true);
   screen.getByText('first');
   screen.getByText('second');

@@ -89,10 +89,11 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         { code: "INSTANCE_RUNTIME_INSTALL_FAILED" },
       );
     }
-    await this.executor.installRuntimeLauncher(containerName);
+    const containerId = await this.executor.ensureRuntimeInstallTargetRunning(containerName, context.instance.runtime.containerId);
+    await this.executor.installRuntimeLauncher(containerName, containerId);
     await this.executor.installRuntimeRelease({
       containerName,
-      expectedContainerId: context.instance.runtime.containerId,
+      expectedContainerId: containerId,
       artifactPath: artifact.archivePath,
       identity: artifact.identity,
     });

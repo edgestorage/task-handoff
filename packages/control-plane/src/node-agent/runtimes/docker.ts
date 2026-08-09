@@ -211,7 +211,12 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
         && bootstrapMount?.source
         && path.resolve(bootstrapMount.source) === path.resolve(this.launcherAssetsDir);
       if (!authoritativeBootstrap) {
-        await this.createPersistentVolumes(context);
+        const legacyMountedVolumeNames = new Set(persistentVolumesForContext(context).flatMap((volume) => (
+          existing.mounts.some((mount) => mount.type === "volume" && mount.name === volume.name && mount.destination === volume.mountPath)
+            ? [volume.name]
+            : []
+        )));
+        await this.createPersistentVolumes(context, legacyMountedVolumeNames);
         return this.recreateWithAuthoritativeBootstrap(context, containerName, existing);
       }
       await this.createRuntimeVolume(context);
@@ -358,11 +363,11 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
     }
   }
 
-  private async createPersistentVolumes(context: ExecutorContext) {
+  private async createPersistentVolumes(context: ExecutorContext, legacyMountedVolumeNames: ReadonlySet<string> = new Set()) {
     const runtimeVolume = runtimeVolumeForInstance(context.instance.id, context.node?.id || "node_unset");
     for (const volume of [...persistentVolumesForContext(context), runtimeVolume]) {
       await this.createVolume(volume);
-      await this.validateOwnedVolume(context.instance.id, volume);
+      await this.validateOwnedVolume(context.instance.id, volume, legacyMountedVolumeNames.has(volume.name));
     }
   }
 
@@ -414,7 +419,11 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
     }
   }
 
-  private async validateOwnedVolume(instanceId: string, expected: { role: string; name: string; mountPath: string; labels: Record<string, string> }) {
+  private async validateOwnedVolume(
+    instanceId: string,
+    expected: { role: string; name: string; mountPath: string; labels: Record<string, string> },
+    allowLegacyUnlabeled = false,
+  ) {
     let result;
     try {
       result = await this.runCommand("docker", ["volume", "inspect", "--format", "{{json .}}", expected.name]);
@@ -426,10 +435,16 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
       const labels = inspected.Labels && typeof inspected.Labels === "object" && !Array.isArray(inspected.Labels)
         ? inspected.Labels as Record<string, unknown>
         : {};
-      if (inspected.Name !== expected.name
-        || labels["task-handoff.owner"] !== "task-handoff"
-        || labels["task-handoff.instance-id"] !== instanceId
-        || labels["task-handoff.volume-role"] !== expected.role) {
+      const owned = inspected.Name === expected.name
+        && labels["task-handoff.owner"] === "task-handoff"
+        && labels["task-handoff.instance-id"] === instanceId
+        && labels["task-handoff.volume-role"] === expected.role;
+      // Compatibility for v0.0.16: Docker -v created named volumes without labels. Only an exact
+      // canonical volume already mounted by this instance's owned container may survive migration.
+      const legacyUnlabeled = allowLegacyUnlabeled
+        && inspected.Name === expected.name
+        && Object.keys(labels).length === 0;
+      if (!owned && !legacyUnlabeled) {
         throw new Error("volume name or ownership labels do not match");
       }
     } catch (cause) {
@@ -543,11 +558,31 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
 
   async delete(context: ExecutorContext, input: InstanceDeleteInput): Promise<InstanceDeleteResult> {
     const containerName = context.instance.runtime.containerName || containerNameForInstance(context.instance.id);
-    try {
-      await this.runCommand("docker", ["rm", "-f", containerName]);
-    } catch (cause) {
-      if (!isDockerContainerNotFound(cause)) {
-        throw runtimeExecutorError("RUNTIME_EXECUTOR_FAILED", `Could not delete Docker container ${containerName}.`, cause);
+    const existing = await this.inspectContainerForStart(containerName);
+    const legacyMountedVolumeNames = new Set<string>();
+    if (existing) {
+      assertExpectedContainerId(containerName, existing.id, context.instance.runtime.containerId, "before delete", "RUNTIME_EXECUTOR_FAILED");
+      const owner = existing.labels["task-handoff.instance-id"];
+      if (owner !== context.instance.id) {
+        throw runtimeExecutorError(
+          "RUNTIME_EXECUTOR_FAILED",
+          `Docker container ${containerName} belongs to ${owner || "an unknown instance"}, not ${context.instance.id}.`,
+        );
+      }
+      // Compatibility for v0.0.16: persistent volumes created through Docker -v had no labels.
+      // Capture their exact name and destination from the owned container before removing it;
+      // an idempotent retry without the container must not infer ownership from the name alone.
+      for (const volume of persistentVolumesForContext(context)) {
+        if (existing.mounts.some((mount) => mount.type === "volume" && mount.name === volume.name && mount.destination === volume.mountPath)) {
+          legacyMountedVolumeNames.add(volume.name);
+        }
+      }
+      try {
+        await this.runCommand("docker", ["rm", "-f", existing.id]);
+      } catch (cause) {
+        if (!isDockerContainerNotFound(cause)) {
+          throw runtimeExecutorError("RUNTIME_EXECUTOR_FAILED", `Could not delete Docker container ${containerName}.`, cause);
+        }
       }
     }
     const volumeResults = [];
@@ -562,10 +597,16 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
           volumeResults.push({ role: volume.role, name: volume.name, mountPath: volume.mountPath, status: "missing" as const });
           continue;
         }
-        if (inspected.name !== volume.name
-          || inspected.labels["task-handoff.owner"] !== "task-handoff"
-          || inspected.labels["task-handoff.instance-id"] !== context.instance.id
-          || inspected.labels["task-handoff.volume-role"] !== volume.role) {
+        const owned = inspected.name === volume.name
+          && inspected.labels["task-handoff.owner"] === "task-handoff"
+          && inspected.labels["task-handoff.instance-id"] === context.instance.id
+          && inspected.labels["task-handoff.volume-role"] === volume.role;
+        // Compatibility for v0.0.16: only accept an unlabeled canonical volume when this delete
+        // observed it mounted at the expected destination on the owned container before removal.
+        const legacyUnlabeled = legacyMountedVolumeNames.has(volume.name)
+          && inspected.name === volume.name
+          && Object.keys(inspected.labels).length === 0;
+        if (!owned && !legacyUnlabeled) {
           throw Object.assign(new Error(`Managed volume ${volume.name} ownership does not match instance ${context.instance.id}.`), {
             code: "INSTANCE_VOLUME_IDENTITY_MISMATCH",
           });
@@ -638,7 +679,7 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
     const before = await this.installRuntimeRelease(request);
     assertExpectedContainerId(request.containerName, before, request.expectedContainerId, "before runtime restart", "INSTANCE_RUNTIME_RESTART_FAILED");
     try {
-      await this.runCommand("docker", ["restart", request.containerName]);
+      await this.runCommand("docker", ["restart", before]);
     } catch (cause) {
       throw runtimeExecutorError("INSTANCE_RUNTIME_RESTART_FAILED", `Could not restart Docker container ${request.containerName}.`, cause);
     }
@@ -656,14 +697,14 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
     if (!before) throw runtimeExecutorError("INSTANCE_RUNTIME_INSTALL_FAILED", `Docker container ${request.containerName} does not exist.`);
     assertExpectedContainerId(request.containerName, before, request.expectedContainerId, "before runtime install", "INSTANCE_RUNTIME_INSTALL_FAILED");
     const remoteArtifact = `/opt/task-handoff/instance-runtime/incoming/task-handoff-runtime-${safePathSegment(request.identity.version)}-${request.identity.sha256.slice(0, 12)}.tar.gz`;
-    await this.runCommand("docker", ["exec", "--user", "0", request.containerName, "install", "-d", "-o", "root", "-g", "root", "-m", "0755", "/opt/task-handoff/instance-runtime/incoming"]);
-    await this.runCommand("docker", ["cp", request.artifactPath, `${request.containerName}:${remoteArtifact}`]);
+    await this.runCommand("docker", ["exec", "--user", "0", before, "install", "-d", "-o", "root", "-g", "root", "-m", "0755", "/opt/task-handoff/instance-runtime/incoming"]);
+    await this.runCommand("docker", ["cp", request.artifactPath, `${before}:${remoteArtifact}`]);
     try {
       await this.runCommand("docker", [
         "exec",
         "--user",
         "0",
-        request.containerName,
+        before,
         "node",
         DOCKER_RUNTIME_INSTALLER,
         "install",
@@ -683,7 +724,7 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
     } catch (cause) {
       throw runtimeExecutorError("INSTANCE_RUNTIME_INSTALL_FAILED", `Could not install controlled-instance ${request.identity.version} in ${request.containerName}.`, cause);
     } finally {
-      await this.runCommand("docker", ["exec", "--user", "0", request.containerName, "rm", "-f", remoteArtifact]).catch(() => ({ stdout: "", stderr: "" }));
+      await this.runCommand("docker", ["exec", "--user", "0", before, "rm", "-f", remoteArtifact]).catch(() => ({ stdout: "", stderr: "" }));
     }
 
     const after = await this.inspectContainerId(request.containerName);
@@ -751,16 +792,41 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
     return { platform: normalizedPlatform, arch: normalizedArch, launcherAbi: 1 };
   }
 
+  /** Restores the same stopped container before a retryable runtime installation. */
+  async ensureRuntimeInstallTargetRunning(containerName: string, expectedContainerId?: string): Promise<string> {
+    const before = await this.inspectContainerForStart(containerName);
+    if (!before) {
+      throw runtimeExecutorError("INSTANCE_RUNTIME_INSTALL_FAILED", `Docker container ${containerName} does not exist.`);
+    }
+    assertExpectedContainerId(containerName, before.id, expectedContainerId, "before runtime install recovery", "INSTANCE_RUNTIME_INSTALL_FAILED");
+    if (before.running) return before.id;
+    try {
+      await this.runCommand("docker", ["start", before.id]);
+    } catch (cause) {
+      throw runtimeExecutorError("INSTANCE_RUNTIME_INSTALL_FAILED", `Could not restore stopped Docker container ${containerName} before runtime installation.`, cause);
+    }
+    const after = await this.inspectContainerForStart(containerName);
+    if (!after) {
+      throw runtimeExecutorError("INSTANCE_RUNTIME_INSTALL_FAILED", `Docker container ${containerName} disappeared during runtime install recovery.`);
+    }
+    assertExpectedContainerId(containerName, after.id, expectedContainerId || before.id, "after runtime install recovery", "INSTANCE_RUNTIME_INSTALL_FAILED");
+    if (!after.running) {
+      throw runtimeExecutorError("INSTANCE_RUNTIME_INSTALL_FAILED", `Docker container ${containerName} stopped again during runtime install recovery.`);
+    }
+    return after.id;
+  }
+
   /** Verifies the launcher bundle mounted from this node-agent and prepares its persistent runtime root. */
-  async installRuntimeLauncher(containerName: string): Promise<void> {
+  async installRuntimeLauncher(containerName: string, expectedContainerId?: string): Promise<void> {
     const containerId = await this.inspectContainerId(containerName);
     if (!containerId) throw runtimeExecutorError("INSTANCE_BASE_RUNTIME_INCOMPATIBLE", `Docker container ${containerName} does not exist.`);
+    assertExpectedContainerId(containerName, containerId, expectedContainerId, "before runtime launcher install", "INSTANCE_BASE_RUNTIME_INCOMPATIBLE");
     try {
       await this.runCommand("docker", [
         "exec",
         "--user",
         "0",
-        containerName,
+        containerId,
         "bash",
         "-ceu",
         `test -r ${DOCKER_BOOTSTRAP_ENTRYPOINT}; test -r ${DOCKER_BOOTSTRAP_CONTAINER_DIR}/instance-launcher.sh; test -r ${DOCKER_RUNTIME_INSTALLER}; install -d -o root -g root -m 0755 /opt/task-handoff/instance-runtime /opt/task-handoff/instance-runtime/releases /opt/task-handoff/instance-runtime/staging /opt/task-handoff/instance-runtime/incoming; chown -R root:root /opt/task-handoff/instance-runtime; chmod -R go-w /opt/task-handoff/instance-runtime`,
@@ -770,6 +836,7 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
     }
     const after = await this.inspectContainerId(containerName);
     if (after !== containerId) throw runtimeExecutorError("INSTANCE_BASE_RUNTIME_INCOMPATIBLE", `Docker container identity changed while installing the runtime launcher in ${containerName}.`);
+    assertExpectedContainerId(containerName, after, expectedContainerId, "after runtime launcher install", "INSTANCE_BASE_RUNTIME_INCOMPATIBLE");
   }
 
   private async inspectContainerId(containerName: string) {

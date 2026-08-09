@@ -77,6 +77,16 @@ export function embeddedMarketCatalogSnapshot(): MarketCatalogSnapshot {
         optionalApps: ["terminal-tty"],
       }),
       embeddedImage({
+        id: "market_taskhandoff_webcap",
+        slug: "webcap",
+        name: "TaskHandoff WebCap",
+        description: "Browser automation runtime with WebCap, Codex, Claude, Chromium, and VNC.",
+        localizedDescriptions: { "zh-CN": "浏览器自动化运行环境，包含 WebCap、Codex、Claude、Chromium 和 VNC。" },
+        reference: process.env.TASK_HANDOFF_CONTROLLED_WEB_CAP_IMAGE || "huadream/task-handoff-controlled-webcap:latest",
+        capabilities: ["browser", "terminal", "gui-terminal", "web-cap", "codex", "claude"],
+        optionalApps: ["chromium", "terminal-tty", "gui-terminal"],
+      }),
+      embeddedImage({
         id: "market_taskhandoff_browser",
         slug: "browser",
         name: "TaskHandoff Browser",

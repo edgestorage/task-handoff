@@ -152,8 +152,7 @@ RUN set -eux; \
     "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"; \
   claude --version
 
-FROM profile-ai-root AS profile-browser-root
-ARG CODE_SERVER_VERSION=4.125.0
+FROM profile-ai-root AS profile-gui-root
 ARG KASMVNC_VERSION=1.4.0
 ARG TARGETOS
 ARG TARGETARCH
@@ -164,7 +163,6 @@ ARG CC_SWITCH_COMMAND=cc-switch
 ARG CHROMIUM_EXTENSION_URLS=
 ARG CHROMIUM_EXTENSION_IDS=
 ARG CHROMIUM_EXTENSION_UPDATE_URL=https://clients2.google.com/service/update2/crx
-ARG TASK_HANDOFF_ENABLE_WEB_CAP=0
 ARG WEB_CAPABILITY_VERSION=0.0.7
 ARG WEB_CAP_EXTENSION_VERSION=0.0.7
 ARG WEB_CAP_EXTENSION_URL=
@@ -195,16 +193,6 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 RUN set -eux; \
   case "${TARGETOS:-linux}-${TARGETARCH:-amd64}" in \
-    linux-amd64) code_server_arch="amd64" ;; \
-    linux-arm64) code_server_arch="arm64" ;; \
-    *) echo "Unsupported code-server Docker target: ${TARGETOS:-linux}-${TARGETARCH:-amd64}" >&2; exit 1 ;; \
-  esac; \
-  curl -fsSL -o /tmp/code-server.deb "https://github.com/coder/code-server/releases/download/v${CODE_SERVER_VERSION}/code-server_${CODE_SERVER_VERSION}_${code_server_arch}.deb"; \
-  dpkg -i /tmp/code-server.deb; \
-  rm -f /tmp/code-server.deb; \
-  code-server --version
-RUN set -eux; \
-  case "${TARGETOS:-linux}-${TARGETARCH:-amd64}" in \
     linux-amd64) kasmvnc_arch="amd64" ;; \
     linux-arm64) kasmvnc_arch="arm64" ;; \
     *) echo "Unsupported KasmVNC Docker target: ${TARGETOS:-linux}-${TARGETARCH:-amd64}" >&2; exit 1 ;; \
@@ -221,17 +209,6 @@ RUN set -eux; \
   . /tmp/task-handoff-optional-apps.sh; \
   set_optional_app_defaults; \
   install_chromium_extensions; \
-  if optional_app_enabled "${TASK_HANDOFF_ENABLE_WEB_CAP}"; then \
-    git init /tmp/task-handoff-web-cap-source; \
-    git -C /tmp/task-handoff-web-cap-source remote add origin "${WEB_CAP_SKILL_REPOSITORY}"; \
-    git -C /tmp/task-handoff-web-cap-source sparse-checkout set skills/web-cap; \
-    git -C /tmp/task-handoff-web-cap-source fetch --depth 1 origin "${WEB_CAP_SKILL_REF}"; \
-    git -C /tmp/task-handoff-web-cap-source checkout --detach FETCH_HEAD; \
-    test -f /tmp/task-handoff-web-cap-source/skills/web-cap/SKILL.md; \
-    cp -R /tmp/task-handoff-web-cap-source/skills/web-cap /tmp/task-handoff-web-cap-skill; \
-    rm -rf /tmp/task-handoff-web-cap-source; \
-  fi; \
-  install_web_cap; \
   case "${TASK_HANDOFF_ENABLE_CC_SWITCH}" in \
     1|true|TRUE|yes|YES|on|ON) \
       if [ -z "${CC_SWITCH_DEB_URL}" ]; then \
@@ -249,6 +226,32 @@ RUN set -eux; \
       echo "Skipping optional cc-switch install."; \
       ;; \
   esac
+
+FROM profile-gui-root AS profile-webcap-root
+RUN set -eux; \
+  git init /tmp/task-handoff-web-cap-source; \
+  git -C /tmp/task-handoff-web-cap-source remote add origin "${WEB_CAP_SKILL_REPOSITORY}"; \
+  git -C /tmp/task-handoff-web-cap-source sparse-checkout set skills/web-cap; \
+  git -C /tmp/task-handoff-web-cap-source fetch --depth 1 origin "${WEB_CAP_SKILL_REF}"; \
+  git -C /tmp/task-handoff-web-cap-source checkout --detach FETCH_HEAD; \
+  test -f /tmp/task-handoff-web-cap-source/skills/web-cap/SKILL.md; \
+  cp -R /tmp/task-handoff-web-cap-source/skills/web-cap /tmp/task-handoff-web-cap-skill; \
+  rm -rf /tmp/task-handoff-web-cap-source; \
+  . /tmp/task-handoff-optional-apps.sh; \
+  install_web_cap
+
+FROM profile-gui-root AS profile-browser-root
+ARG CODE_SERVER_VERSION=4.125.0
+RUN set -eux; \
+  case "${TARGETOS:-linux}-${TARGETARCH:-amd64}" in \
+    linux-amd64) code_server_arch="amd64" ;; \
+    linux-arm64) code_server_arch="arm64" ;; \
+    *) echo "Unsupported code-server Docker target: ${TARGETOS:-linux}-${TARGETARCH:-amd64}" >&2; exit 1 ;; \
+  esac; \
+  curl -fsSL -o /tmp/code-server.deb "https://github.com/coder/code-server/releases/download/v${CODE_SERVER_VERSION}/code-server_${CODE_SERVER_VERSION}_${code_server_arch}.deb"; \
+  dpkg -i /tmp/code-server.deb; \
+  rm -f /tmp/code-server.deb; \
+  code-server --version
 
 # Each exported target has its own immutable profile declaration and build
 # identity while inheriting the shared filesystem layers above.
@@ -289,6 +292,28 @@ ENV TASK_HANDOFF_IMAGE_REF=${TASK_HANDOFF_IMAGE_REF}
 ENV TASK_HANDOFF_IMAGE_DIGEST=${TASK_HANDOFF_IMAGE_DIGEST}
 LABEL io.task-handoff.image.profile=ai
 LABEL io.task-handoff.image.capabilities=terminal,codex,claude
+
+USER agent
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["task-handoff-healthcheck"]
+ENTRYPOINT ["tini", "--", "task-handoff-entrypoint"]
+CMD ["task-handoff", "web"]
+
+FROM profile-webcap-root AS profile-webcap
+ARG TASK_HANDOFF_BUILD_ID=local
+ARG TASK_HANDOFF_BUILT_AT=unknown
+ARG TASK_HANDOFF_GIT_COMMIT=
+ARG TASK_HANDOFF_IMAGE_REF=task-handoff-controlled-webcap:local
+ARG TASK_HANDOFF_IMAGE_DIGEST=
+ENV TASK_HANDOFF_IMAGE_PROFILE=webcap
+ENV TASK_HANDOFF_IMAGE_CAPABILITIES=terminal,gui-terminal,browser,web-cap,codex,claude
+ENV TASK_HANDOFF_BUILD_ID=${TASK_HANDOFF_BUILD_ID}
+ENV TASK_HANDOFF_BUILT_AT=${TASK_HANDOFF_BUILT_AT}
+ENV TASK_HANDOFF_GIT_COMMIT=${TASK_HANDOFF_GIT_COMMIT}
+ENV TASK_HANDOFF_IMAGE_REF=${TASK_HANDOFF_IMAGE_REF}
+ENV TASK_HANDOFF_IMAGE_DIGEST=${TASK_HANDOFF_IMAGE_DIGEST}
+LABEL io.task-handoff.image.profile=webcap
+LABEL io.task-handoff.image.capabilities=terminal,gui-terminal,browser,web-cap,codex,claude
 
 USER agent
 EXPOSE 8080

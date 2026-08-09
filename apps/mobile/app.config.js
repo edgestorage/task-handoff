@@ -21,6 +21,7 @@ module.exports = () => {
   }
   const taskStatusWidgetsEnabled = process.env.TASK_HANDOFF_WIDGETS_ENABLED !== '0';
   const carPlayEnabled = variantName === 'development' && process.env.TASK_HANDOFF_CARPLAY_ENABLED === '1';
+  const easProjectId = process.env.EXPO_PROJECT_ID || baseConfig.extra?.eas?.projectId;
   const plugins = [
     ...(baseConfig.plugins || []),
     ...(taskStatusWidgetsEnabled ? [[
@@ -69,6 +70,7 @@ module.exports = () => {
       variant: variantName,
       taskStatusWidgetsEnabled,
       carPlayEnabled,
+      ...(easProjectId ? { eas: { ...baseConfig.extra?.eas, projectId: easProjectId } } : {}),
     },
   };
 };

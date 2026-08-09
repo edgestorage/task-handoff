@@ -81,6 +81,15 @@ function volumeForInspection(value, name) {
   };
 }
 
+function containerForInspection(value, mounts = persistentVolumes(value)) {
+  return {
+    Id: "managed-container-id",
+    State: { Running: true },
+    Config: { Labels: { "task-handoff.instance-id": value.instance.id } },
+    Mounts: mounts.map((volume) => ({ Type: "volume", Name: volume.name, Destination: volume.mountPath })),
+  };
+}
+
 test("private instance config is atomically materialized with restricted permissions", () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-private-config-"));
   try {
@@ -183,7 +192,7 @@ test("legacy containers are rebuilt from the same image under the node-agent boo
     }
     if (args[0] === "volume" && args[1] === "inspect") {
       const volume = volumeForInspection(value, args.at(-1));
-      return { stdout: JSON.stringify({ Name: volume.name, Labels: volume.labels }), stderr: "" };
+      return { stdout: JSON.stringify({ Name: volume.name, Labels: volume.role === "runtime" ? volume.labels : null }), stderr: "" };
     }
     if (args[0] === "run") return { stdout: "current-container-id", stderr: "" };
     return { stdout: "", stderr: "" };
@@ -206,6 +215,27 @@ test("legacy containers are rebuilt from the same image under the node-agent boo
   assert.equal(result.status, "starting");
   assert.equal(result.runtime.containerId, "current-container-id");
   assert.match(result.runtime.labels["task-handoff.bootstrap-backup"], /legacy-conta/);
+});
+
+test("new docker instances reject an unrelated unlabeled volume with a colliding canonical name", async () => {
+  const value = context();
+  const executor = new LocalDockerExecutor(async (_command, args) => {
+    if (args[0] === "inspect" && args.includes("{{json .}}")) {
+      throw Object.assign(new Error("No such container"), { details: { stderr: "No such container" } });
+    }
+    if (args[0] === "image" && args[1] === "inspect") {
+      return { stdout: JSON.stringify({ Id: `sha256:${"a".repeat(64)}`, RepoDigests: [] }), stderr: "" };
+    }
+    if (args[0] === "volume" && args[1] === "inspect") {
+      return { stdout: JSON.stringify({ Name: args.at(-1), Labels: null }), stderr: "" };
+    }
+    return { stdout: args.at(-1) || "", stderr: "" };
+  });
+
+  await assert.rejects(
+    () => executor.start(value),
+    (error) => error.code === "INSTANCE_VOLUME_IDENTITY_MISMATCH",
+  );
 });
 
 test("failed bootstrap migration restores a previously running legacy container", async () => {
@@ -251,6 +281,9 @@ test("failed bootstrap migration restores a previously running legacy container"
 test("managed volume deletion returns partial failures and retained resources", async () => {
   const local = context();
   const executor = new LocalDockerExecutor(async (_command, args) => {
+    if (args[0] === "inspect") {
+      return { stdout: JSON.stringify(containerForInspection(local)), stderr: "" };
+    }
     if (args[0] === "volume" && args[1] === "inspect") {
       const name = args.at(-1);
       const volume = volumeForInspection(local, name);
@@ -263,7 +296,16 @@ test("managed volume deletion returns partial failures and retained resources", 
   assert.equal(partial.completed, false);
   assert.deepEqual(partial.volumeResults.map((item) => item.status).sort(), ["deleted", "failed"]);
 
-  const retained = await executor.delete(local, { deleteVolumes: false });
+  const retainedExecutor = new LocalDockerExecutor(async (_command, args) => {
+    if (args[0] === "inspect") {
+      throw Object.assign(new Error("No such container"), { details: { stderr: "No such container" } });
+    }
+    if (args[0] === "volume" && args[1] === "inspect") {
+      throw Object.assign(new Error("No such volume"), { details: { stderr: "No such volume" } });
+    }
+    return { stdout: "", stderr: "" };
+  });
+  const retained = await retainedExecutor.delete(local, { deleteVolumes: false });
   assert.equal(retained.completed, true);
   assert.equal(retained.retainedVolumes.length, 2);
 });
@@ -274,6 +316,9 @@ test("managed volume deletion is identity-safe and missing resources are idempot
     ref: { type: "branch", name: "main" }, auth: { type: "none" }, clone: { depth: 1, submodules: false, lfs: false },
   });
   const executor = new LocalDockerExecutor(async (_command, args) => {
+    if (args[0] === "inspect") {
+      return { stdout: JSON.stringify(containerForInspection(git)), stderr: "" };
+    }
     if (args[0] === "volume" && args[1] === "inspect") {
       const name = args.at(-1);
       if (name.endsWith("-workspace")) throw Object.assign(new Error("No such volume"), { details: { stderr: "No such volume" } });
@@ -291,6 +336,9 @@ test("managed volume deletion is identity-safe and missing resources are idempot
   assert.equal(result.volumeResults.find((item) => item.role === "workspace").status, "missing");
 
   const missingExecutor = new LocalDockerExecutor(async (_command, args) => {
+    if (args[0] === "inspect") {
+      throw Object.assign(new Error("No such container"), { details: { stderr: "No such container" } });
+    }
     if (args[0] === "volume" && args[1] === "inspect") {
       throw Object.assign(new Error("No such volume"), { details: { stderr: "No such volume" } });
     }
@@ -299,6 +347,94 @@ test("managed volume deletion is identity-safe and missing resources are idempot
   const repeated = await missingExecutor.delete(git, { deleteVolumes: true });
   assert.equal(repeated.completed, true);
   assert.deepEqual(repeated.volumeResults.map((item) => item.status), ["missing", "missing", "missing"]);
+});
+
+test("managed volume deletion accepts mounted unlabeled v0.0.16 volumes", async () => {
+  const local = context();
+  const calls = [];
+  const removed = [];
+  const executor = new LocalDockerExecutor(async (_command, args) => {
+    calls.push(args);
+    if (args[0] === "inspect") {
+      return { stdout: JSON.stringify(containerForInspection(local)), stderr: "" };
+    }
+    if (args[0] === "volume" && args[1] === "inspect") {
+      if (args.at(-1).endsWith("-runtime")) {
+        throw Object.assign(new Error("No such volume"), { details: { stderr: "No such volume" } });
+      }
+      return { stdout: JSON.stringify({ Name: args.at(-1), Labels: null }), stderr: "" };
+    }
+    if (args[0] === "volume" && args[1] === "rm") removed.push(args[2]);
+    return { stdout: "", stderr: "" };
+  });
+
+  const result = await executor.delete(local, { deleteVolumes: true });
+
+  assert.equal(result.completed, true);
+  assert.deepEqual(removed.sort(), [
+    "task-handoff-inst_one-agent-home",
+    "task-handoff-inst_one-data",
+  ]);
+  const containerInspectIndex = calls.findIndex((args) => args[0] === "inspect");
+  const containerRemoveIndex = calls.findIndex((args) => args[0] === "rm");
+  const volumeRemoveIndex = calls.findIndex((args) => args[0] === "volume" && args[1] === "rm");
+  assert.ok(containerInspectIndex >= 0 && containerInspectIndex < containerRemoveIndex);
+  assert.ok(containerRemoveIndex < volumeRemoveIndex);
+  assert.equal(calls[containerRemoveIndex][2], "managed-container-id");
+});
+
+test("managed volume deletion rejects unlabeled volumes without live container mount evidence", async () => {
+  const local = context();
+  const removed = [];
+  const executor = new LocalDockerExecutor(async (_command, args) => {
+    if (args[0] === "inspect") {
+      throw Object.assign(new Error("No such container"), { details: { stderr: "No such container" } });
+    }
+    if (args[0] === "volume" && args[1] === "inspect") {
+      if (args.at(-1).endsWith("-runtime")) {
+        throw Object.assign(new Error("No such volume"), { details: { stderr: "No such volume" } });
+      }
+      return { stdout: JSON.stringify({ Name: args.at(-1), Labels: null }), stderr: "" };
+    }
+    if (args[0] === "volume" && args[1] === "rm") removed.push(args[2]);
+    return { stdout: "", stderr: "" };
+  });
+
+  const result = await executor.delete(local, { deleteVolumes: true });
+
+  assert.equal(result.completed, false);
+  assert.deepEqual(result.volumeResults.map((item) => item.error?.code), [
+    "INSTANCE_VOLUME_IDENTITY_MISMATCH",
+    "INSTANCE_VOLUME_IDENTITY_MISMATCH",
+  ]);
+  assert.deepEqual(removed, []);
+});
+
+test("managed volume deletion rejects unlabeled canonical volumes not mounted by the owned container", async () => {
+  const local = context();
+  const removed = [];
+  const executor = new LocalDockerExecutor(async (_command, args) => {
+    if (args[0] === "inspect") {
+      return { stdout: JSON.stringify(containerForInspection(local, [])), stderr: "" };
+    }
+    if (args[0] === "volume" && args[1] === "inspect") {
+      if (args.at(-1).endsWith("-runtime")) {
+        throw Object.assign(new Error("No such volume"), { details: { stderr: "No such volume" } });
+      }
+      return { stdout: JSON.stringify({ Name: args.at(-1), Labels: null }), stderr: "" };
+    }
+    if (args[0] === "volume" && args[1] === "rm") removed.push(args[2]);
+    return { stdout: "", stderr: "" };
+  });
+
+  const result = await executor.delete(local, { deleteVolumes: true });
+
+  assert.equal(result.completed, false);
+  assert.deepEqual(result.volumeResults.map((item) => item.error?.code), [
+    "INSTANCE_VOLUME_IDENTITY_MISMATCH",
+    "INSTANCE_VOLUME_IDENTITY_MISMATCH",
+  ]);
+  assert.deepEqual(removed, []);
 });
 
 test("docker configuration security check reports fields without exposing values", () => {

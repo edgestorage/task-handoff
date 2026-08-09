@@ -111,11 +111,6 @@ NODE
 }
 
 install_web_cap() {
-  if ! optional_app_enabled "${TASK_HANDOFF_ENABLE_WEB_CAP:-0}"; then
-    echo "Skipping optional web-cap install."
-    return
-  fi
-
   extension_dir="${TASK_HANDOFF_CHROMIUM_EXTENSION_DIR:-/opt/task-handoff/chromium-extensions}"
   : "${WEB_CAPABILITY_VERSION:=0.0.7}"
   : "${WEB_CAP_EXTENSION_VERSION:=${WEB_CAPABILITY_VERSION}}"

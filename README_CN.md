@@ -23,17 +23,19 @@ TaskHandoff 用于集中运行和监管 Codex 等 AI 开发工作。它把分散
 - **多节点管理**：接入本机或远程节点，集中查看节点、运行资源和受控实例状态。
 - **受控工作空间**：创建、启动、停止和恢复隔离的工作空间实例；当前以 Docker 为主要运行时。
 - **镜像市场与自定义镜像**：内置 Market 镜像只读、用户 Custom Image 独立管理，创建实例时通过统一选项选择。
+- **环境模板**：把 Docker 实例中安装的工具和容器配置保存为节点本地的可复用环境，再与任意 Git 项目或本地目录工作空间组合。
 - **AI 会话中心**：统一查看和控制实例中的 AI 会话，通过 WebSocket 实时同步状态。
 - **仓库协作**：在会话中查看文件、变更、分支和 worktree，并提供保守的远程交付能力。
-- **聊天入口整合**：通过适配器接入 Telegram、钉钉、微信等平台，将消息、审批和操作路由到指定实例。
+- **聊天入口整合**：通过适配器接入 Telegram、钉钉、微信和飞书/Lark，将消息、审批和操作路由到指定实例。
 - **应用管理**：通过可信内置目录在目标实例中安装、卸载和运行应用。
-- **桌面与服务器部署**：既可作为桌面应用使用，也可在 Debian/Ubuntu 服务器上部署为 systemd 服务。
+- **移动端客户端**：iOS 或 Android 设备可直接连接用户管理的 Control Plane，访问 AI 会话、实例操作、应用和终端。
+- **移动、桌面与服务器部署**：可作为移动端或桌面应用使用，也可在 Debian/Ubuntu 服务器上部署为 systemd 服务。
 - **中英文界面**：控制平面支持简体中文和英文，可跟随浏览器语言自动切换。
 
 ## 系统架构
 
 ```text
-浏览器 / 桌面端 / 聊天平台
+浏览器 / 桌面端 / 移动端 / 聊天平台
              │
              ▼
        Control Plane
@@ -48,14 +50,25 @@ TaskHandoff 用于集中运行和监管 Codex 等 AI 开发工作。它把分散
  工作空间、应用与 AI 会话运行时
 ```
 
-系统由四类协作组件组成：
+系统由三个运行层组成：
 
 - **Control Plane（控制平面）**：提供 Web/API 管理入口，维护节点清单、实例看板、聊天网关和跨实例 AI 会话视图。
 - **Node Agent（节点代理）**：运行在每台受管机器上，管理本机配置、运行时资源、目录清单和受控实例生命周期。实例启动、恢复和停止不依赖控制平面持续在线。
-- **Controlled Instance（受控实例）**：承载具体工作空间、应用、AI 会话、触发器和元数据。当前通常运行在 Docker 中，并由 Node Agent 负责代理访问。
-- **Chat Gateway 与 AI Session**：聊天凭据、入口绑定、命令解析和路由由控制平面统一管理；会话状态以目标实例中的 AI Session 为唯一来源。
+- **Controlled Instance（受控实例）**：承载具体工作空间、应用、AI 会话、触发器和元数据。它可以独立运行；在受管部署中，其生命周期与访问由 Node Agent 负责。
 
-Docker 是当前主要运行时。整体模型通过运行时能力与适配器扩展，便于后续接入 Kubernetes 或本机运行时，而无需为不同运行环境复制 UI 流程。
+聊天与 AI Session 状态构成一条跨层链路：聊天凭据、入口绑定、命令解析和路由由 Control Plane 统一管理，会话状态则以目标实例中的 AI Session 为唯一来源。
+
+Docker 是主要的隔离运行时，支持一个节点运行多个实例。受支持的非 Windows 节点也内置 Local Runtime，同一宿主用户只能运行一个本机受控实例。整体模型仍可通过运行时能力和适配器扩展到 Kubernetes，无需复制 UI 流程。
+
+### 环境模板
+
+环境模板是 Node Agent 通过 `docker commit` 从现有实例创建的节点本地 Docker 镜像。Registry 镜像与环境模板在实例创建流程中是同级环境来源；工作空间选择保持独立，因此两者都可以与 Git 项目或本地目录工作空间组合。
+
+模板只捕获容器可写层，例如已安装的系统包和工具。它不包含 `/workspace`、`/data`、`/home/agent`、其他 bind mount 或 volume，也不包含内存、进程和网络状态。派生实例始终获得新的身份、注册令牌、端口和托管卷。提交期间 Node Agent 会短暂停止源容器；如果 Docker Config 中包含实例私有凭据，则拒绝创建模板。
+
+每个 Docker 实例都有 `/data` 和 `/home/agent` 托管卷；Git 工作空间另有 `/workspace` 托管卷，本地目录则使用外部 bind mount。删除实例时默认删除全部托管数据；取消该选项会保留并报告所有托管卷名称，但这些卷不会自动挂载到其他实例。
+
+源节点同时拥有模板记录和对应 Docker 镜像，因此模板只有在该节点就绪时才能使用。删除模板会移除内部模板标签；只要仍有派生实例引用它，基于内容地址的内部租约就会保留镜像，最后一个引用删除后才执行垃圾回收。
 
 ## 快速开始
 
@@ -63,7 +76,7 @@ Docker 是当前主要运行时。整体模型通过运行时能力与适配器�
 
 - Node.js `>= 24.15.0 < 25`
 - pnpm `9.15.3`
-- Docker（运行完整本地环境或受控实例时需要）
+- Docker（使用 Docker Runtime、构建容器镜像或运行 standalone Compose 配置时需要）
 
 ### 本地开发
 
@@ -71,6 +84,13 @@ Docker 是当前主要运行时。整体模型通过运行时能力与适配器�
 pnpm install
 pnpm run build:all
 pnpm cli help
+```
+
+分别在两个终端启动 Control Plane API 和开发版 UI。关闭认证仅适用于监听本机回环地址的开发环境：
+
+```sh
+pnpm cli control-plane --auth-mode disabled
+pnpm run control-plane-ui:dev
 ```
 
 常用开发命令：
@@ -91,17 +111,13 @@ pnpm test
 pnpm run pack:dry
 ```
 
-启动完整 Docker 测试环境：
+如需运行 standalone Browser profile 受控实例，而不是 Control Plane 开发环境：
 
 ```sh
-pnpm run docker:up:all
+docker compose up -d --build
 ```
 
-默认会把当前目录挂载为容器内的 `/workspace`。如需指定其他宿主机目录，可设置 `TASK_HANDOFF_WORKSPACE_HOST`：
-
-```sh
-TASK_HANDOFF_WORKSPACE_HOST=/path/to/workspace pnpm run docker:up:all
-```
+默认把当前目录挂载为容器内的 `/workspace`；可通过 `TASK_HANDOFF_WORKSPACE_HOST` 指定其他宿主机目录。该 Compose 服务是独立受控实例，不包含 Control Plane 和 Node Agent 部署。
 
 ## 服务器部署
 
@@ -146,7 +162,7 @@ task-handoff-control-plane.service
 
 ## 接入远程节点
 
-远程机器只需安装 Node Agent。先在控制平面生成一次性加入令牌，然后在目标节点执行：
+远程机器只需安装 Node Agent。先在 Control Plane 生成一次性加入令牌，并优先复制界面提供的完整安装命令；其中的包版本会根据当前 Control Plane 发布版本生成。等价形式如下：
 
 ```sh
 curl -fsSL https://CONTROL_PLANE_HOST/install-node-agent.sh | sudo sh -s -- \
@@ -154,8 +170,10 @@ curl -fsSL https://CONTROL_PLANE_HOST/install-node-agent.sh | sudo sh -s -- \
   --join-token JOIN_TOKEN \
   --npm-package @task-handoff/node-agent \
   --controlled-instance-package @task-handoff/controlled-instance \
-  --version 1.0.0
+  --version RELEASE_VERSION
 ```
+
+请把 `RELEASE_VERSION` 替换为 Control Plane 的运行时包版本，确保 Node Agent 与受控实例运行时使用同一发布版本。
 
 也可以直接在已安装 Node Agent 的机器上生成一次性邀请令牌：
 
@@ -190,7 +208,9 @@ task-handoff help
 ```text
 apps/cli/                         CLI 入口
 apps/desktop-shell/               Electron 桌面外壳
+apps/mobile/                      Expo iOS 与 Android 客户端
 packages/control-plane/           控制平面、Node Agent 与聊天网关
+packages/control-plane-client/    Web 与移动端共享的 Control Plane API 和实时客户端
 packages/control-plane-ui/        控制平面 Vue UI
 packages/controlled-instance/     受控实例 HTTP/WebSocket API
 packages/controlled-instance-ui/  受控实例 Vue UI（已冻结功能演进）
@@ -204,19 +224,32 @@ scripts/                          安装、构建和运行脚本
 
 ## 发布说明
 
+### 运行时与服务器包
+
+推送 `v1.2.3` 形式的语义化版本标签时，工作流会构建受控实例运行时 artifact，发布 `@task-handoff/control-plane`、`@task-handoff/node-agent`、`@task-handoff/controlled-instance` 和 `@task-handoff/server`，并把安装脚本及不可变 artifact 附加到 GitHub Release。`alpha`、`beta` 版本使用对应的 npm dist-tag，稳定版本更新 `latest`。
+
 ### Docker 镜像
 
-每次推送到 `main` 都会构建并冒烟测试三种累积镜像：
+Docker 工作流会构建并冒烟测试四种镜像配置：
 
-- `task-handoff-controlled-codex`
-- `task-handoff-controlled-ai`
-- `task-handoff-controlled-browser`
+| 镜像 | Profile 能力 |
+| --- | --- |
+| `task-handoff-controlled-codex` | Terminal、Codex |
+| `task-handoff-controlled-ai` | Terminal、Codex、Claude |
+| `task-handoff-controlled-webcap` | GUI Terminal、Browser、WebCap、Codex、Claude |
+| `task-handoff-controlled-browser` | GUI Terminal、Browser、VS Code Web、Codex、Claude；不包含 WebCap |
 
-三者使用相同的不可变 `sha-<commit>` 标签。推送 `v1.2.3` 形式的语义化版本标签时，对应镜像会提升为该版本；稳定版本同时更新 `latest`。
+四者使用相同的不可变 `sha-<commit>` 标签。推送 `v1.2.3` 形式的语义化版本标签时，对应镜像会提升为该版本；稳定版本同时更新 `latest`。
 
 ### 桌面应用
 
 推送语义化版本标签会构建 macOS arm64/x64、Windows x64 和 Linux x64 安装包，并发布到 GitHub Release。带 `alpha` 或 `beta` 后缀的版本会标记为预发布版本。macOS 构建会执行签名、公证、票据装订和 Gatekeeper 校验；Windows 代码签名暂未启用。
+
+### 移动端应用
+
+推送严格采用 `mobile-vX.Y.Z` 格式的稳定版本标签时，工作流会执行移动端发布检查，并分别启动 Android 和 iOS 发布任务。Android 生成 APK 并附加到对应 GitHub Release；iOS 通过 `ios-production` 环境审批后构建并提交到 App Store Connect/TestFlight，最终 App Store 审核仍需人工操作。该工作流不会把 Android 构建提交到 Google Play。
+
+移动端能力边界与开发命令见 [`apps/mobile/README.md`](apps/mobile/README.md)，凭据、首次构建和发布操作见 [`apps/mobile/RELEASE.md`](apps/mobile/RELEASE.md)。
 
 ## 许可证
 

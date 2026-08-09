@@ -18,21 +18,40 @@ test("Docker profiles run as agent with passwordless container-root escalation",
   assert.match(dockerfile, /printf 'agent ALL=\(root\) NOPASSWD: ALL\\n' > \/etc\/sudoers\.d\/task-handoff-agent/);
   assert.match(dockerfile, /chmod 0440 \/etc\/sudoers\.d\/task-handoff-agent/);
   assert.match(dockerfile, /visudo -cf \/etc\/sudoers\.d\/task-handoff-agent/);
-  assert.equal((dockerfile.match(/^USER agent$/gm) || []).length, 3);
+  assert.equal((dockerfile.match(/^USER agent$/gm) || []).length, 4);
 });
 
-test("Docker exports cumulative Codex, AI, and Browser image profiles", () => {
+test("Docker exports Codex, AI, WebCap, and Browser image profiles from shared layers", () => {
   const dockerfile = fs.readFileSync(path.join(root, "Dockerfile"), "utf8");
 
   assert.match(dockerfile, /FROM runtime-core AS profile-codex-root/);
   assert.match(dockerfile, /FROM profile-codex-root AS profile-ai-root/);
-  assert.match(dockerfile, /FROM profile-ai-root AS profile-browser-root/);
+  assert.match(dockerfile, /FROM profile-ai-root AS profile-gui-root/);
+  assert.match(dockerfile, /FROM profile-gui-root AS profile-webcap-root/);
+  assert.match(dockerfile, /FROM profile-gui-root AS profile-browser-root/);
   assert.match(dockerfile, /FROM profile-codex-root AS profile-codex[\s\S]*TASK_HANDOFF_IMAGE_PROFILE=codex/);
   assert.match(dockerfile, /FROM profile-ai-root AS profile-ai[\s\S]*TASK_HANDOFF_IMAGE_PROFILE=ai/);
+  assert.match(dockerfile, /FROM profile-webcap-root AS profile-webcap[\s\S]*TASK_HANDOFF_IMAGE_PROFILE=webcap/);
   assert.match(dockerfile, /FROM profile-browser-root AS profile-browser[\s\S]*TASK_HANDOFF_IMAGE_PROFILE=browser/);
   assert.match(dockerfile, /io\.task-handoff\.image\.capabilities=terminal,codex/);
   assert.match(dockerfile, /io\.task-handoff\.image\.capabilities=terminal,codex,claude/);
+  assert.match(dockerfile, /io\.task-handoff\.image\.capabilities=terminal,gui-terminal,browser,web-cap,codex,claude/);
   assert.match(dockerfile, /io\.task-handoff\.image\.capabilities=terminal,gui-terminal,browser,vscode-web,codex,claude/);
+});
+
+test("Docker WebCap profile installs WebCap without code-server", () => {
+  const dockerfile = fs.readFileSync(path.join(root, "Dockerfile"), "utf8");
+  const webcapRootStart = dockerfile.indexOf("FROM profile-gui-root AS profile-webcap-root");
+  const browserRootStart = dockerfile.indexOf("FROM profile-gui-root AS profile-browser-root");
+  const exportedProfilesStart = dockerfile.indexOf("# Each exported target");
+  const webcapRoot = dockerfile.slice(webcapRootStart, browserRootStart);
+  const browserRoot = dockerfile.slice(browserRootStart, exportedProfilesStart);
+
+  assert.ok(webcapRootStart >= 0 && browserRootStart > webcapRootStart);
+  assert.match(webcapRoot, /install_web_cap/);
+  assert.doesNotMatch(dockerfile, /TASK_HANDOFF_ENABLE_WEB_CAP/);
+  assert.doesNotMatch(webcapRoot, /code-server/);
+  assert.match(browserRoot, /code-server_\$\{CODE_SERVER_VERSION\}/);
 });
 
 test("Docker image bakes a versioned bootstrap runtime while the managed launcher waits for the node-agent artifact", () => {
@@ -51,7 +70,7 @@ test("Docker image bakes a versioned bootstrap runtime while the managed launche
   assert.doesNotMatch(launcher, /command -v task-handoff-controlled-instance/);
   assert.doesNotMatch(launcher, /exec task-handoff-controlled-instance web/);
   assert.match(launcher, /await import\(pathToFileURL\(entrypoint\)\.href\)/);
-  assert.equal((workflow.match(/task-handoff-controlled-instance web --host 0\.0\.0\.0 --port 8080/g) || []).length, 2);
+  assert.equal((workflow.match(/task-handoff-controlled-instance web --host 0\.0\.0\.0 --port 8080/g) || []).length, 3);
 });
 
 test("Docker build context includes files read by the test suite", () => {
@@ -75,6 +94,7 @@ test("Docker CI builds amd64 and arm64 concurrently and publishes a multi-archit
   assert.match(workflow, /scope=controlled-instance-\$\{\{ matrix\.arch \}\}/);
   assert.match(workflow, /target: profile-codex/);
   assert.match(workflow, /target: profile-ai/);
+  assert.match(workflow, /target: profile-webcap/);
   assert.match(workflow, /target: profile-browser/);
   assert.match(workflow, /sha_tag="sha-\$\{GITHUB_SHA::7\}-\$\{\{ matrix\.arch \}\}"/);
   assert.match(workflow, /"\$\{image\}:\$\{sha_tag\}-amd64"/);
@@ -94,14 +114,17 @@ test("Docker tag builds inject the release version while branch builds keep the 
   assert.match(workflow, /version="\$\{GITHUB_REF_NAME#v\}"/);
   assert.match(workflow, /codex_image_ref="\$\{DOCKERHUB_CODEX_IMAGE_NAME\}:\$\{GITHUB_REF_NAME\}"/);
   assert.match(workflow, /ai_image_ref="\$\{DOCKERHUB_AI_IMAGE_NAME\}:\$\{GITHUB_REF_NAME\}"/);
+  assert.match(workflow, /webcap_image_ref="\$\{DOCKERHUB_WEBCAP_IMAGE_NAME\}:\$\{GITHUB_REF_NAME\}"/);
   assert.match(workflow, /browser_image_ref="\$\{DOCKERHUB_BROWSER_IMAGE_NAME\}:\$\{GITHUB_REF_NAME\}"/);
   assert.match(workflow, /version="\$\(node -p "require\('\.\/package\.json'\)\.version"\)"/);
   assert.match(workflow, /codex_image_ref="task-handoff-controlled-codex:ci-\$\{\{ matrix\.arch \}\}"/);
   assert.match(workflow, /ai_image_ref="task-handoff-controlled-ai:ci-\$\{\{ matrix\.arch \}\}"/);
+  assert.match(workflow, /webcap_image_ref="task-handoff-controlled-webcap:ci-\$\{\{ matrix\.arch \}\}"/);
   assert.match(workflow, /browser_image_ref="task-handoff-controlled-browser:ci-\$\{\{ matrix\.arch \}\}"/);
   assert.match(workflow, /TASK_HANDOFF_VERSION=\$\{\{ steps\.image-version\.outputs\.value \}\}/);
   assert.match(workflow, /TASK_HANDOFF_IMAGE_REF=\$\{\{ steps\.image-version\.outputs\.codex-image-ref \}\}/);
   assert.match(workflow, /TASK_HANDOFF_IMAGE_REF=\$\{\{ steps\.image-version\.outputs\.ai-image-ref \}\}/);
+  assert.match(workflow, /TASK_HANDOFF_IMAGE_REF=\$\{\{ steps\.image-version\.outputs\.webcap-image-ref \}\}/);
   assert.match(workflow, /TASK_HANDOFF_IMAGE_REF=\$\{\{ steps\.image-version\.outputs\.browser-image-ref \}\}/);
   assert.match(workflow, /Verify image version[\s\S]*org\.opencontainers\.image\.version[\s\S]*EXPECTED_VERSION/);
   assert.match(workflow, /status_response="\$\(curl -fsS http:\/\/127\.0\.0\.1:18080\/api\/instance\/status\)"/);

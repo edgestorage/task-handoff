@@ -6270,24 +6270,6 @@ test("web app exposes cc-switch only when enabled", async () => {
   }
 });
 
-test("web app does not expose internal web-cap when enabled", async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-web-cap-"));
-  const paths = appRuntimeTestPaths(root);
-  const restoreEnv = withWebStorageEnv(paths, {
-    TASK_HANDOFF_WEB_AUTH: "off",
-    TASK_HANDOFF_ENABLE_WEB_CAP: "1",
-  });
-  const app = await createWebApp({ staticDir: path.join(root, "missing-static"), logger: false });
-  try {
-    const catalog = await app.inject({ method: "GET", url: "/api/apps/catalog" });
-    assert.equal(catalog.statusCode, 200);
-    assert.equal(JSON.parse(catalog.payload).data.some((entry) => entry.id === "web-cap"), false);
-  } finally {
-    await app.close();
-    restoreEnv();
-  }
-});
-
 test("web app never starts or stops a receiver in standalone or controlled mode", async () => {
   for (const mode of ["standalone", "controlled"]) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), `task-handoff-web-${mode}-no-receiver-`));
@@ -7714,7 +7696,6 @@ function withWebStorageEnv(paths, extra = {}) {
     TASK_HANDOFF_RUNTIME_ID: undefined,
     TASK_HANDOFF_WORKSPACE_MODE: undefined,
     TASK_HANDOFF_ENABLE_CC_SWITCH: "0",
-    TASK_HANDOFF_ENABLE_WEB_CAP: "0",
     ...extra,
   };
   const previous = Object.fromEntries(Object.keys(patch).map((key) => [key, process.env[key]]));
