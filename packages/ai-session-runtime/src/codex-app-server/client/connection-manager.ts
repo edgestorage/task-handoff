@@ -84,6 +84,14 @@ export class CodexAppServerConnectionManager {
     return client === this.clientValue ? this.current() : undefined;
   }
 
+  /** Records a thread created and subscribed by thread/start in this connection generation. */
+  registerStartedThread(client: CodexAppServerClientLike, threadId: string) {
+    const connection = this.connectionFor(client);
+    if (!connection) return false;
+    this.subscribedThreadIds.add(threadId);
+    return true;
+  }
+
   canRetry() {
     return Date.now() >= this.retryAfter;
   }

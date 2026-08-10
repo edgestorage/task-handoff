@@ -4,6 +4,11 @@ import type { ControlPlaneInstanceDirectoryEntry, ControlPlaneNodeDirectoryEntry
 
 import { NewSessionForm, newSessionInstanceOptions, newSessionKeyboardAvoidingBehavior, newSessionVisualBalanceInset } from '../src/ai-sessions/NewSessionForm';
 import { newSessionMenuActions } from '../src/ai-sessions/NewSessionContextMenu.ios';
+import {
+  ANCHORED_SELECT_MENU_CONTENT_WIDTH,
+  ANCHORED_SELECT_MENU_HORIZONTAL_PADDING,
+  ANCHORED_SELECT_MENU_WIDTH,
+} from '../src/components/anchored-select-menu-layout';
 
 const instance = {
   id: 'instance-1',
@@ -72,6 +77,7 @@ describe('<NewSessionForm />', () => {
     }));
     expect(newSessionVisualBalanceInset('ios', 59)).toBe(103);
     expect(newSessionVisualBalanceInset('android', 24)).toBe(80);
+    expect(ANCHORED_SELECT_MENU_CONTENT_WIDTH + (ANCHORED_SELECT_MENU_HORIZONTAL_PADDING * 2)).toBe(ANCHORED_SELECT_MENU_WIDTH);
 
     fireEvent.press(screen.getByRole('button', { name: 'Create session' }));
     expect(onCreate).toHaveBeenCalledTimes(1);

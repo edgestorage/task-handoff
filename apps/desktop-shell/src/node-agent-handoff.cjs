@@ -128,15 +128,6 @@ function inspectExistingDesktopNodeAgent(options = {}) {
   return { status: "running", owner };
 }
 
-function reusableDesktopNodeAgent(inspection, health, expected = {}) {
-  if (inspection?.status !== "running" || !health || health.role !== "node-agent") return false;
-  if (health.process?.pid !== inspection.owner.pid || health.process?.startIdentity !== inspection.owner.startIdentity) return false;
-  if (health.build?.component !== "node-agent" || health.build.packageVersion !== expected.packageVersion) return false;
-  if (expected.buildId && health.build.buildId !== expected.buildId) return false;
-  if (expected.gitCommit && health.build.gitCommit !== expected.gitCommit) return false;
-  return Number.isInteger(health.listener?.port) && health.listener.port > 0;
-}
-
 async function ensureDesktopNodeAgent(options) {
   const inspection = inspectExistingDesktopNodeAgent({
     dataDir: options.dataDir,
@@ -151,12 +142,6 @@ async function ensureDesktopNodeAgent(options) {
     throw new Error(`The existing Desktop node agent pid=${inspection.owner.pid} could not be verified and was not stopped.`);
   }
   if (inspection.status === "running") {
-    const response = await options.fetchHealth().catch(() => undefined);
-    const health = response?.ok ? response.payload?.data : undefined;
-    if (reusableDesktopNodeAgent(inspection, health, options.expected)) {
-      options.logInfo?.(`[desktop-shell] reusing compatible node agent pid=${inspection.owner.pid} version=${health.build.packageVersion}`);
-      return { action: "reused", child: undefined, health, owner: inspection.owner };
-    }
     const replaced = await stopExistingDesktopNodeAgent({
       dataDir: options.dataDir,
       logInfo: options.logInfo,
@@ -253,7 +238,6 @@ module.exports = {
   inspectExistingDesktopNodeAgent,
   readControlPlaneLockOwner,
   readNodeAgentLockOwner,
-  reusableDesktopNodeAgent,
   resolveControlPlaneSingletonLockPath,
   resolveNodeAgentSingletonLockPath,
   stopExistingDesktopNodeAgent,

@@ -1,5 +1,6 @@
 import path from "node:path";
 import fs from "node:fs";
+import crypto from "node:crypto";
 import Fastify from "fastify";
 import cookie from "@fastify/cookie";
 import websocket from "@fastify/websocket";
@@ -39,6 +40,9 @@ import { projectControlPlaneProxyTarget, publicControlPlaneProxyTarget } from ".
 import { ControlPlaneIdentityService } from "../identity/service.ts";
 import { NodeConnectionRuntime } from "../nodes/connection-runtime.ts";
 import { createControlPlaneDiagnosticLogger, createDiagnosticLogsArchive } from "../diagnostics/logs.ts";
+import { CloudConnectivityService } from "../cloud-connectivity/service.ts";
+import type { CloudConnectivityLifecycle } from "../cloud-connectivity/lifecycle.ts";
+import { CloudConnectivityBackgroundRuntime } from "../cloud-connectivity/coordinator-runtime.ts";
 
 export type CreateControlPlaneAppOptions = {
   dataDir?: string;
@@ -47,7 +51,14 @@ export type CreateControlPlaneAppOptions = {
   service?: ControlPlaneServiceOptions;
   auth?: ControlPlaneAuthOptions;
   proxyOrigin?: string;
+  cloudServiceOrigin?: string;
+  allowNonProductionCloudOrigin?: boolean;
+  cloudConnectivityEnabled?: boolean;
+  cloudConnectivityLifecycle?: (state: CloudConnectivityService) => CloudConnectivityLifecycle;
+  publishCloudBindingChallenge?: (challenge: ReturnType<CloudConnectivityService["createChallenge"]>) => Promise<void>;
 };
+
+const CLOUD_INTERNAL_ACTOR_HEADER = "x-task-handoff-cloud-internal-actor";
 
 export type RunControlPlaneServerOptions = CreateControlPlaneAppOptions & {
   host: string;
@@ -64,6 +75,15 @@ export const ControlPlaneHttpErrorSchema = z.object({
 export const ControlPlaneHttpErrorResponseSchema = z.object({
   error: ControlPlaneHttpErrorSchema,
 }).strict();
+
+const CLOUD_PRODUCTION_ORIGIN = "https://cloud.thandoff.com";
+
+export function trustedCloudServiceOrigin(value: string | undefined, options: { production?: boolean; allowNonProduction?: boolean } = {}) {
+  const origin = new URL(value || CLOUD_PRODUCTION_ORIGIN).origin;
+  if (origin === CLOUD_PRODUCTION_ORIGIN) return origin;
+  if (options.production || options.allowNonProduction !== true) throw Object.assign(new Error("Non-production cloud service origin is not trusted by this build."), { code: "UNTRUSTED_CLOUD_SERVICE_ORIGIN" });
+  return origin;
+}
 
 function defaultStaticDir() {
   return path.resolve(process.cwd(), "packages", "control-plane-ui", "dist");
@@ -289,6 +309,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   const paths = controlPlaneStorePaths(options.dataDir);
   const app = Fastify({ logger: options.logger ?? true });
   const events = new ControlPlaneEventBus();
+  const cloudConnectivityEnabled = options.cloudConnectivityEnabled ?? process.env.TASK_HANDOFF_CLOUD_CONNECTIVITY_ENABLED !== "0";
   let diagnosticLogsEnabled = controlPlaneDiagnosticLogsEnabled();
   const diagnosticLogger = createControlPlaneDiagnosticLogger(paths.logsDir, () => diagnosticLogsEnabled, app.log);
   const nodeConnectionRuntime = new NodeConnectionRuntime();
@@ -303,6 +324,55 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     () => service.proxyPrivateStore.controlPlaneId(),
     (message, details) => app.log.warn(details, message),
   );
+  const cloudConnectivity = new CloudConnectivityService({
+    statePath: paths.cloudConnectivityPath,
+    identity,
+    serviceOrigin: trustedCloudServiceOrigin(options.cloudServiceOrigin || process.env.TASK_HANDOFF_CLOUD_SERVICE_ORIGIN, { production: process.env.NODE_ENV === "production", allowNonProduction: options.allowNonProductionCloudOrigin === true || process.env.TASK_HANDOFF_CLOUD_ENV === "staging" }),
+  });
+  const cloudRelayActors = new Map<string, ControlPlaneActor>();
+  const cloudRelayBridge = {
+    async request(actor: ControlPlaneActor, input: { path: string; method: string; headers: Record<string, string>; body?: unknown }) {
+      const method = String(input?.method || "GET").toUpperCase();
+      const requestPath = String(input?.path || "");
+      const authorization = routeAuthorization(method, requestPath);
+      if (!requestPath.startsWith("/api/") || !authorization || ROUTES_WITHOUT_RBAC.has(requestPath.split("?")[0])) {
+        throw Object.assign(new Error("Cloud access route is not available."), { code: "CLOUD_ROUTE_FORBIDDEN", statusCode: 403 });
+      }
+      assertCan(actor, authorization.action, authorization.resource);
+      const token = crypto.randomBytes(32).toString("base64url");
+      cloudRelayActors.set(token, actor);
+      try {
+        const headers = Object.fromEntries(Object.entries(input.headers ?? {}).filter(([name]) => !["authorization", "cookie", "host", "connection", "upgrade", CLOUD_INTERNAL_ACTOR_HEADER].includes(name.toLowerCase())).map(([name, value]) => [name, String(value)]));
+        const response = await app.inject({ method: method as any, url: requestPath, headers: { ...headers, [CLOUD_INTERNAL_ACTOR_HEADER]: token }, ...(input.body === undefined ? {} : { payload: input.body as any }) });
+        let body: unknown; try { body = response.json(); } catch { body = response.body; }
+        return { status: response.statusCode, body };
+      } finally { cloudRelayActors.delete(token); }
+    },
+    subscribe(actor: ControlPlaneActor, topics: string[], listener: (event: unknown) => void) {
+      if (actor.type !== "cloud-account") throw Object.assign(new Error("Cloud account actor required."), { code: "CLOUD_ACTOR_REQUIRED" });
+      const selected = new Set(topics.length ? topics : ["*"]);
+      return events.on((event) => { if (selected.has("*") || selected.has(event.topic) || selected.has(event.type)) listener(event); });
+    },
+    async openTty(actor: ControlPlaneActor, input: { instanceId: string; sessionId: string }, listener: (message: any) => void) {
+      const instanceId = String(input?.instanceId || ""); const sessionId = String(input?.sessionId || "");
+      assertCan(actor, "proxy", { type: "instance", id: instanceId, instanceId });
+      if (!instanceId || !sessionId) throw Object.assign(new Error("TTY target is required."), { code: "TTY_TARGET_REQUIRED", statusCode: 400 });
+      const callbacks = new Map<string, Set<(...args: any[]) => void>>();
+      const emit = (name: string, ...args: any[]) => { for (const callback of callbacks.get(name) ?? []) callback(...args); };
+      let closed = false;
+      const socket = {
+        readyState: 1,
+        on(name: string, callback: (...args: any[]) => void) { const current = callbacks.get(name) ?? new Set(); current.add(callback); callbacks.set(name, current); },
+        send(raw: unknown) { try { const value = JSON.parse(String(raw)); if (value.type === "snapshot") listener({ type: "tty-snapshot", data: value.data, pendingEscape: value.pendingEscape }); else if (value.type === "output") listener({ type: "tty-output", data: value.data }); else if (value.type === "resize") listener({ type: "tty-resize", body: { cols: value.cols, rows: value.rows } }); else if (value.type === "exit") listener({ type: "tty-exit", code: value.code, signal: value.signal }); else if (value.type === "error") listener({ type: "tty-error" }); } catch { listener({ type: "tty-error" }); } },
+        close() { if (closed) return; closed = true; emit("close"); listener({ type: "tty-closed" }); },
+      };
+      await service.proxyInstanceWebSocket(instanceId, socket as any, `/api/apps/sessions/${encodeURIComponent(sessionId)}/tty`, [], {});
+      return { send(data: string) { if (!closed) emit("message", Buffer.from(JSON.stringify({ type: "input", data }))); }, resize(cols: number, rows: number) { if (!closed && Number.isInteger(cols) && Number.isInteger(rows) && cols > 0 && rows > 0) emit("message", Buffer.from(JSON.stringify({ type: "resize", cols, rows }))); }, close() { socket.close(); } };
+    },
+  };
+  const cloudConnectivityRuntime = new CloudConnectivityBackgroundRuntime({ state: cloudConnectivity, identity, relayBridge: cloudRelayBridge });
+  const cloudConnectivityLifecycle = options.cloudConnectivityLifecycle?.(cloudConnectivity) ?? cloudConnectivityRuntime.lifecycle;
+  const publishCloudBindingChallenge = options.publishCloudBindingChallenge ?? ((challenge: ReturnType<CloudConnectivityService["createChallenge"]>) => cloudConnectivityRuntime.publishBindingChallenge(challenge));
   const imagePullProgress = new ImagePullProgressProjector(events);
   const aiSessionUnread = new AiSessionUnreadStore(paths, {
     onChanged: (state) => queueMicrotask(() => events.publish(AiSessionUnreadEventType.Updated, state, {
@@ -419,6 +489,8 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   service.init();
   diagnosticLogsEnabled = service.diagnosticLogsEnabled();
   identity.init();
+  cloudConnectivity.init();
+  if (cloudConnectivityEnabled) cloudConnectivityRuntime.start();
   let pairingRecoveryInFlight: Promise<void> | undefined;
   let pairingRecoveryTimer: ReturnType<typeof setInterval> | undefined;
   let persistenceMaintenanceTimer: ReturnType<typeof setInterval> | undefined;
@@ -453,6 +525,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   await app.register(cookie);
   await app.register(websocket);
   app.addHook("onClose", async () => {
+    await cloudConnectivityRuntime.stop();
     if (pairingRecoveryTimer) clearInterval(pairingRecoveryTimer);
     if (persistenceMaintenanceTimer) clearInterval(persistenceMaintenanceTimer);
     await pairingRecoveryInFlight?.catch(() => undefined);
@@ -499,6 +572,15 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     const matchedRoute = request.routeOptions.url;
     const securityUrl = matchedRoute && matchedRoute !== "*" ? matchedRoute : request.url;
     const authBoundary = request.routeOptions.config.controlPlaneAuthBoundary;
+    const internalActorToken = request.headers[CLOUD_INTERNAL_ACTOR_HEADER];
+    const cloudActor = typeof internalActorToken === "string" ? cloudRelayActors.get(internalActorToken) : undefined;
+    if (cloudActor) {
+      cloudRelayActors.delete(internalActorToken as string);
+      const authorization = routeAuthorization(request.method, securityUrl);
+      if (!authorization) throw Object.assign(new Error("Cloud access route is not authorized."), { code: "CLOUD_ROUTE_FORBIDDEN", statusCode: 403 });
+      assertCan(cloudActor, authorization.action, authorization.resource);
+      return;
+    }
     // Machine routes opt out of UI sessions explicitly. Their handlers remain
     // responsible for binding credentials or paired node HMAC authentication.
     if (authBoundary === "proxy-binding" || authBoundary === "node-tunnel") {
@@ -554,6 +636,36 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   app.get("/api/control-plane/identity", { config: PUBLIC_CONTROL_PLANE_ROUTE }, async () => (
     identity.publicDocument(auth.enabled() ? "required" : "disabled")
   ));
+
+  const requireCloudConnectivityAdmin = async (request: FastifyRequest) => {
+    if (!cloudConnectivityEnabled) throw Object.assign(new Error("Cloud connectivity is disabled by feature flag."), { code: "CLOUD_CONNECTIVITY_DISABLED", statusCode: 503 });
+    const actor = await actorForRequest(auth, requestSessionCredential(request)) || disabledAuthActor();
+    assertCan(actor, "manage-settings", { type: "control-plane-settings" });
+  };
+
+  app.get("/api/cloud-connectivity", async (request) => {
+    await requireCloudConnectivityAdmin(request);
+    return { data: cloudConnectivity.snapshot() };
+  });
+
+  app.post("/api/cloud-connectivity/challenges", async (request, reply) => {
+    await requireCloudConnectivityAdmin(request);
+    reply.header("cache-control", "no-store");
+    const challenge = cloudConnectivity.createChallenge();
+    await publishCloudBindingChallenge(challenge);
+    return { data: challenge };
+  });
+
+  app.post("/api/cloud-connectivity/remote-access", async (request) => {
+    await requireCloudConnectivityAdmin(request);
+    const input = z.object({ enabled: z.boolean() }).strict().parse(request.body);
+    return { data: cloudConnectivityLifecycle ? await cloudConnectivityLifecycle.setRemoteAccess(input.enabled) : cloudConnectivity.setRemoteAccess(input.enabled) };
+  });
+
+  app.post("/api/cloud-connectivity/disconnect", async (request) => {
+    await requireCloudConnectivityAdmin(request);
+    return { data: cloudConnectivityLifecycle ? await cloudConnectivityLifecycle.disconnect() : cloudConnectivity.beginRevocation() };
+  });
 
   app.get("/api/session-streams/diagnostics", async () => ({
     data: {
@@ -741,6 +853,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       if (!actor) return "system:unknown";
       if (actor.type === "user") return `user:${actor.userId}`;
       if (actor.type === "system") return `system:${actor.reason}`;
+      if (actor.type === "cloud-account") return `cloud-account:${actor.accountId}:${actor.deviceSessionId}`;
       return `chat-bridge:${actor.bridgeId}`;
     },
   });

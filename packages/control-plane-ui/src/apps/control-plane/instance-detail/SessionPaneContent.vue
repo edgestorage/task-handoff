@@ -76,11 +76,10 @@
       <span v-else>{{ previewDetail(instance, t, locale as SupportedLocale) }}</span>
     </div>
     <SessionTerminalPreview
-      v-for="terminalSession in terminalSessions"
-      v-show="!hasInstanceStatusPage(instance) && terminalSession.key === sessionKey"
-      :key="terminalSession.key"
-      :active="!hasInstanceStatusPage(instance) && terminalSession.key === sessionKey"
-      :socket-url="terminalSession.socketUrl"
+      v-if="!hasInstanceStatusPage(instance) && activeTerminalSocketUrl"
+      :key="sessionKey"
+      active
+      :socket-url="activeTerminalSocketUrl"
       class="session-preview-live session-terminal"
     />
   </div>
@@ -117,7 +116,6 @@ const props = defineProps<{
   selectedAiSession: (instance: InstanceBoardItem, sessions?: AiSessionSummary[]) => AiSessionSummary | undefined;
   session?: SessionTab;
   sessionKey: string;
-  tabs: SessionTab[];
 }>();
 
 defineEmits<{
@@ -132,10 +130,6 @@ const activeFrameUrl = computed(() => props.session ? sessionFrameUrl(props.inst
 const activeTerminalSocketUrl = computed(() => props.session ? sessionTerminalSocketUrl(props.instance, props.session) : "");
 const hasStatusActions = computed(() => (["start", "stop", "restart", "retry-image"] as const)
   .some((action) => canShowInstanceAction(props.instance, action)));
-const terminalSessions = computed(() => props.tabs
-  .filter((session) => session.kind === "terminal")
-  .map((session) => ({ key: session.key, socketUrl: sessionTerminalSocketUrl(props.instance, session) }))
-  .filter((session) => Boolean(session.socketUrl)));
 const imagePreparationSteps = computed(() => [
   t("instances.imagePull.checkImage"),
   t("instances.imagePull.pullLayers"),

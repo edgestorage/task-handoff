@@ -179,12 +179,16 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
         ...this.options.threadStartDefaults,
         permissions: codexPermissionOverrides(input.permissionMode),
       });
-      this.projector.applyThreadSnapshot(thread, { creationSource: "ai-session" });
       const providerSessionId = typeof thread.id === "string" ? thread.id.trim() : "";
       const cwd = typeof thread.cwd === "string" ? thread.cwd.trim() : "";
       if (!providerSessionId || !cwd) {
         throw aiSessionControlError("AI_SESSION_CREATE_INVALID_RESPONSE", "Codex app-server returned an invalid thread identity.", 502);
       }
+      // thread/start creates the thread and subscribes this connection to it. Record that
+      // authoritative fact before the first turn so the restart-recovery path does not mistake
+      // a newly created thread for an unloaded persisted thread and call thread/resume.
+      this.connection.registerStartedThread(client, providerSessionId);
+      this.projector.applyThreadSnapshot(thread, { creationSource: "ai-session" });
       return { providerSessionId, cwd, creationSource: "ai-session" };
     } finally {
       this.directCreateRequests -= 1;

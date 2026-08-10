@@ -4,7 +4,7 @@ import { Screen } from '../components/Screen';
 import { SystemIcon } from '../components/SystemIcon';
 import { useMobileTheme } from '../components/theme';
 import { useI18n } from '../i18n';
-import type { MobileControlPlaneProfile } from './profile';
+import { mobileControlPlaneProfileAddress, type MobileControlPlaneProfile } from './profile';
 
 export type ControlPlaneDetailContentProps = {
   active: boolean;
@@ -25,7 +25,7 @@ export function ControlPlaneDetailContent(props: ControlPlaneDetailContentProps)
         <View style={[styles.group, { backgroundColor: colors.surface, borderColor: colors.border }]}>
           <DetailRow label={t('controlPlane.status')} value={props.active ? t('controlPlane.active') : t('controlPlane.saved')} valueColor={props.active ? colors.primary : undefined} />
           <View style={[styles.divider, { backgroundColor: colors.border }]} />
-          <DetailRow label={t('controlPlane.address')} value={props.profile.access.origin} />
+          <DetailRow label={t('controlPlane.address')} value={mobileControlPlaneProfileAddress(props.profile)} />
           <View style={[styles.divider, { backgroundColor: colors.border }]} />
           <DetailRow label={t('controlPlane.id')} value={props.profile.identity.controlPlaneId} />
           <View style={[styles.divider, { backgroundColor: colors.border }]} />

@@ -28,10 +28,11 @@ test("session split follows the focused pane for selection and new app sessions"
 });
 
 test("session preview splits the original tab row into pane-aligned tab groups", async () => {
-  const [preview, pane, styles] = await Promise.all([
+  const [preview, pane, styles, terminalPreview] = await Promise.all([
     source("apps/control-plane/instance-detail/SessionPreview.vue"),
     source("apps/control-plane/instance-detail/SessionPaneContent.vue"),
     source("apps/control-plane/instance-detail/SessionPreview.css"),
+    source("apps/control-plane/useTerminalPreview.ts"),
   ]);
 
   assert.match(preview, /:aria-label="hasSessionSplit \? t\('sessions\.tabs\.closeSplit'\) : t\('sessions\.tabs\.split'\)"/);
@@ -80,8 +81,13 @@ test("session preview splits the original tab row into pane-aligned tab groups",
   assert.match(preview, /hasSessionSplit \? t\('sessions\.tabs\.closeSplit'\) : t\('sessions\.tabs\.split'\)/);
   assert.match(preview, /role="separator"/);
   assert.match(preview, /Math\.round\(sessionSplitRatio \* 100\)/);
-  assert.match(pane, /v-for="terminalSession in terminalSessions"/);
-  assert.match(pane, /props\.tabs[\s\S]*filter\(\(session\) => session\.kind === "terminal"\)/);
+  assert.doesNotMatch(pane, /v-for="terminalSession in terminalSessions"/);
+  assert.doesNotMatch(pane, /v-show=/);
+  assert.match(pane, /v-if="!hasInstanceStatusPage\(instance\) && activeTerminalSocketUrl"/);
+  assert.match(pane, /:key="sessionKey"[\s\S]*active[\s\S]*:socket-url="activeTerminalSocketUrl"/);
+  assert.match(pane, /\.session-terminal \{ position: relative;/);
+  assert.match(terminalPreview, /message\.type === "snapshot"[\s\S]*terminal\.reset\(\)[\s\S]*terminal\.write\(message\.data\)/);
+  assert.match(terminalPreview, /message\.pendingEscape[\s\S]*terminal\.write\(message\.pendingEscape\)/);
   assert.match(styles, /grid-template-columns: minmax\(0, var\(--session-left-ratio\)\) 7px/);
   assert.match(styles, /\.session-pane-layout\.split \.session-pane,[\s\S]*\.session-pane-layout\.split \.session-pane-resize-handle\s*\{[\s\S]*grid-row:\s*1/);
   assert.match(styles, /\.session-pane-resize-handle::after\s*\{[\s\S]*width:\s*2px/);

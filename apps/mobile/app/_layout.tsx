@@ -1,8 +1,8 @@
-import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
+import { DarkTheme, DefaultTheme, SplashScreen, Stack, ThemeProvider, usePathname } from 'expo-router';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import { MobileThemeProvider, useMobileTheme } from '../src/components/theme';
 import { iosTransparentHeaderOptions } from '../src/components/navigation-header';
 import { ActiveAiSessionsProvider } from '../src/ai-sessions/use-active-sessions';
@@ -17,6 +17,8 @@ import { MobileControlPlaneRuntimeProvider } from '../src/control-plane/use-mobi
 import { MobileToastProvider } from '../src/components/MobileToast';
 import { ActiveTriggersProvider } from '../src/triggers/use-active-triggers';
 
+void SplashScreen.preventAutoHideAsync();
+
 export default function RootLayout() {
   return <MobileThemeProvider><MobileI18nProvider><TaskStatusSettingsProvider><LocalizedRootLayout /></TaskStatusSettingsProvider></MobileI18nProvider></MobileThemeProvider>;
 }
@@ -24,6 +26,12 @@ export default function RootLayout() {
 function LocalizedRootLayout() {
   const { colors, dark } = useMobileTheme();
   const { t } = useI18n();
+  const pathname = usePathname();
+  useEffect(() => {
+    if (pathname === '/') return;
+    const frame = requestAnimationFrame(() => { void SplashScreen.hideAsync(); });
+    return () => cancelAnimationFrame(frame);
+  }, [pathname]);
   const navigationTheme = useMemo(() => {
     const base = dark ? DarkTheme : DefaultTheme;
     return {
@@ -63,10 +71,15 @@ function LocalizedRootLayout() {
                       headerTitleStyle: { color: colors.text, fontSize: 17, fontWeight: '600' },
                     }}
                   >
+                    <Stack.Screen name="index" options={{ headerShown: false }} />
                     <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
                     <Stack.Screen name="profiles" options={{ title: t('nav.settings'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="control-planes/add" options={{ title: t('nav.addControlPlane') }} />
                     <Stack.Screen name="control-planes/[controlPlaneId]" options={{ title: t('nav.controlPlane'), ...iosTransparentHeaderOptions(dark) }} />
+                    <Stack.Screen name="cloud-account" options={{ headerStyle: { backgroundColor: colors.background }, title: '' }} />
+                    <Stack.Screen name="cloud-account-totp" options={{ headerStyle: { backgroundColor: colors.background }, title: '' }} />
+                    <Stack.Screen name="cloud-account-security" options={{ title: t('cloudAccount.settings') }} />
+                    <Stack.Screen name="cloud-control-planes" options={{ title: t('nav.controlPlanes') }} />
                     <Stack.Screen name="nodes/[nodeId]" options={{ title: t('nav.node') }} />
                     <Stack.Screen name="instances/[instanceId]" options={{ title: t('nav.instance'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="sessions/new" options={{ headerStyle: { backgroundColor: colors.background }, title: '' }} />
@@ -76,7 +89,7 @@ function LocalizedRootLayout() {
                     <Stack.Screen name="history/[instanceId]/index" options={{ title: t('nav.history'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="history/[instanceId]/[historyId]" options={{ title: t('nav.sessionHistory'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="triggers/index" options={{ title: t('triggers.title'), ...iosTransparentHeaderOptions(dark) }} />
-                    <Stack.Screen name="triggers/new" options={{ title: t('triggers.create') }} />
+                    <Stack.Screen name="triggers/new" options={{ title: t('triggers.create'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="triggers/[configHash]" options={{ title: t('triggers.title'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="sessions/[instanceId]/[sessionId]/triggers" options={{ title: t('triggers.sessionTitle'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="icon-gallery" options={{ title: 'Ionicons 图标选择' }} />

@@ -7,6 +7,7 @@ import type { IPty } from "node-pty";
 import { spawn as spawnPty } from "node-pty";
 import writeFileAtomic from "write-file-atomic";
 import type { TaskHandoffStoragePaths } from "@task-handoff/core/storage/paths";
+import { TTY_STREAM_PROTOCOL_VERSION } from "@task-handoff/protocol/app-sessions";
 import { AppCatalogRepository, executablePath } from "./catalog";
 import { builtinManagedAppRegistry } from "./managed-app-definitions";
 import type { ManagedAppRegistry } from "./managed-app-definitions/registry";
@@ -14,6 +15,7 @@ import type { ManagedAppPreparedTtyLaunch, ManagedAppRuntimeExtension, ManagedAp
 import { ensureNodePtySpawnHelperExecutable, formatGuiScale, guiAppHomeDir, guiScaleFromEnv, guiVncBackend, type GuiVncBackend } from "./runtime-utils";
 import type { AppAutomationStatus, AppCatalogItem, AppDisplayTarget, AppLaunchOptions, AppSession, AppSessionStatus } from "./types";
 import { enforceInstanceLogBudget, RotatingLogWriter } from "./log-retention";
+import { TerminalScreenState } from "./terminal-screen-state";
 
 type TtyClient = {
   send: (value: string) => void;
@@ -29,7 +31,7 @@ type RuntimeSession = {
   ttyDimensions?: { cols: number; rows: number };
   ttyLogStream?: Writable;
   ttyLogClosed?: boolean;
-  outputBacklog: string;
+  terminalScreen?: TerminalScreenState;
   clients: Set<TtyClient>;
   stopping?: boolean;
 };
@@ -354,7 +356,15 @@ export class AppRuntimeManager extends EventEmitter {
     };
 
     const ttyLogStream = new RotatingLogWriter(path.join(logDir, "tty.log"));
-    const runtimeSession: RuntimeSession = { metadata, processes: [], appLifecycle, ttyDimensions: { cols: 120, rows: 32 }, ttyLogStream, outputBacklog: "", clients: new Set() };
+    const runtimeSession: RuntimeSession = {
+      metadata,
+      processes: [],
+      appLifecycle,
+      ttyDimensions: { cols: 120, rows: 32 },
+      ttyLogStream,
+      terminalScreen: new TerminalScreenState(120, 32),
+      clients: new Set(),
+    };
     ttyLogStream.on("error", () => {
       runtimeSession.ttyLogClosed = true;
     });
@@ -363,7 +373,7 @@ export class AppRuntimeManager extends EventEmitter {
     });
     const onOutput = (data: string) => {
       this.writeTtyLog(runtimeSession, data);
-      runtimeSession.outputBacklog = `${runtimeSession.outputBacklog}${data}`.slice(-64 * 1024);
+      runtimeSession.terminalScreen?.write(data);
       this.broadcast(runtimeSession, { type: "output", data });
     };
     const onExit = (exitCode: number | null | undefined, signal: string | number | null | undefined) => {
@@ -377,6 +387,8 @@ export class AppRuntimeManager extends EventEmitter {
       runtimeSession.appLifecycle?.lifecycle?.processExited?.();
       this.broadcast(runtimeSession, { type: "exit", code: exitCode, signal });
       this.closeTtyLog(runtimeSession);
+      runtimeSession.terminalScreen?.dispose();
+      runtimeSession.terminalScreen = undefined;
     };
     let pty: IPty;
     try {
@@ -447,7 +459,6 @@ export class AppRuntimeManager extends EventEmitter {
     const runtimeSession: RuntimeSession = {
       metadata,
       processes: [child],
-      outputBacklog: "",
       clients: new Set(),
     };
     this.sessions.set(id, runtimeSession);
@@ -546,7 +557,6 @@ export class AppRuntimeManager extends EventEmitter {
       const runtimeSession: RuntimeSession = {
         metadata,
         processes: [child],
-        outputBacklog: "",
         clients: new Set(),
       };
       sharedDisplay.appSessionIds.add(id);
@@ -659,7 +669,6 @@ export class AppRuntimeManager extends EventEmitter {
     const runtimeSession: RuntimeSession = {
       metadata,
       processes: [chromium, ...displayProcesses, openbox, ...(compositor ? [compositor] : [])],
-      outputBacklog: "",
       clients: new Set(),
     };
     this.sessions.set(id, runtimeSession);
@@ -1068,6 +1077,8 @@ export class AppRuntimeManager extends EventEmitter {
       }
     }
     session.appLifecycle?.lifecycle?.stop?.();
+    session.terminalScreen?.dispose();
+    session.terminalScreen = undefined;
     if (session.metadata.display?.mode === "shared" && session.metadata.display.displaySessionId) {
       this.releaseSharedDisplaySession(session.metadata.display.displaySessionId, id);
     }
@@ -1311,6 +1322,8 @@ export class AppRuntimeManager extends EventEmitter {
       session.appLifecycle?.lifecycle?.stop?.();
       if (session.pty) this.signalManagedProcessTree(session.pty.pid, "SIGTERM", undefined, session.pty);
       this.closeTtyLog(session);
+      session.terminalScreen?.dispose();
+      session.terminalScreen = undefined;
       for (const process of session.processes) {
         this.signalManagedProcessTree(process.pid, "SIGTERM", process);
       }
@@ -1368,9 +1381,15 @@ export class AppRuntimeManager extends EventEmitter {
       return;
     }
     session.clients.add(client);
-    client.send(JSON.stringify({ type: "connected", session: session.metadata, dimensions: session.ttyDimensions }));
-    if (session.outputBacklog) {
-      client.send(JSON.stringify({ type: "output", data: session.outputBacklog }));
+    client.send(JSON.stringify({
+      type: "connected",
+      protocolVersion: TTY_STREAM_PROTOCOL_VERSION,
+      session: session.metadata,
+      dimensions: session.ttyDimensions,
+    }));
+    const snapshot = session.terminalScreen?.snapshot();
+    if (snapshot) {
+      client.send(JSON.stringify({ type: "snapshot", data: snapshot.data, pendingEscape: snapshot.pendingEscape }));
     }
     client.on("message", (value) => {
       const raw = Buffer.isBuffer(value) ? value.toString("utf8") : String(value || "");
@@ -1381,8 +1400,12 @@ export class AppRuntimeManager extends EventEmitter {
         } else if (message.type === "resize" && Number.isInteger(message.cols) && Number.isInteger(message.rows)) {
           const cols = message.cols;
           const rows = message.rows;
+          if (session.ttyDimensions.cols === cols && session.ttyDimensions.rows === rows) {
+            return;
+          }
           session.ttyDimensions = { cols, rows };
           session.pty?.resize(cols, rows);
+          session.terminalScreen?.resize(cols, rows);
           for (const ttyClient of session.clients) {
             if (ttyClient !== client) {
               ttyClient.send(JSON.stringify({ type: "resize", cols, rows }));

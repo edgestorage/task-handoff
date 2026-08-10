@@ -11,6 +11,11 @@ const variants = {
     scheme: 'taskhandoff',
     applicationId: 'com.taskhandoff.mobile',
   },
+  staging: {
+    name: 'TaskHandoff Staging',
+    scheme: 'taskhandoff-staging',
+    applicationId: 'com.taskhandoff.mobile.staging',
+  },
 };
 
 module.exports = () => {
@@ -70,7 +75,17 @@ module.exports = () => {
       variant: variantName,
       taskStatusWidgetsEnabled,
       carPlayEnabled,
+      cloudRelayEnabled: process.env.TASK_HANDOFF_CLOUD_RELAY_ENABLED !== '0',
+      ...(variantName === 'staging' ? { cloudServiceOrigin: new URL(requiredEnv('TASK_HANDOFF_CLOUD_STAGING_ORIGIN')).origin } : {}),
       ...(easProjectId ? { eas: { ...baseConfig.extra?.eas, projectId: easProjectId } } : {}),
     },
   };
 };
+
+function requiredEnv(name) {
+  const value = process.env[name];
+  if (!value) throw new Error(`${name} is required for the staging mobile build`);
+  const url = new URL(value);
+  if (url.protocol !== 'https:') throw new Error(`${name} must use HTTPS`);
+  return value;
+}

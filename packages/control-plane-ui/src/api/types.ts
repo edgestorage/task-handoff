@@ -92,6 +92,27 @@ export type ControlPlaneSettings = {
   diagnosticLogs: boolean;
 };
 
+export type CloudConnectivity = {
+  version: 1;
+  serviceOrigin: string;
+  status: "unbound" | "pending-claim" | "active" | "pending-revocation" | "clone-conflict";
+  remoteAccessEnabled: boolean;
+  accountId?: string;
+  bindingId?: string;
+  bindingRevision?: number;
+  updatedAt: string;
+  identity: { controlPlaneId: string; algorithm: "Ed25519"; publicKey: string; fingerprint: string };
+  hasBackgroundCredential: boolean;
+  remoteResult?: "confirmed" | "unknown";
+};
+
+export type CloudBindingChallenge = {
+  challengeCode: string;
+  authorizationUrl: string;
+  payload: { controlPlaneId: string; publicKeyFingerprint: string; expiresAt: string };
+  signature: string;
+};
+
 export type BuildInfo = {
   component: "control-plane" | "node-agent" | "controlled-instance";
   packageName?: string;

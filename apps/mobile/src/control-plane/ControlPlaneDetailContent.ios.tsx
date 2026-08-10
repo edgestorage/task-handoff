@@ -5,6 +5,7 @@ import { View } from 'react-native';
 import { useMobileTheme } from '../components/theme';
 import { useI18n } from '../i18n';
 import type { ControlPlaneDetailContentProps } from './ControlPlaneDetailContent';
+import { mobileControlPlaneProfileAddress } from './profile';
 
 export function ControlPlaneDetailContent(props: ControlPlaneDetailContentProps) {
   const { colors, dark } = useMobileTheme();
@@ -24,7 +25,7 @@ export function ControlPlaneDetailContent(props: ControlPlaneDetailContentProps)
                 {props.active ? t('controlPlane.active') : t('controlPlane.saved')}
               </Text>
             </LabeledContent>
-            <ValueRow label={t('controlPlane.address')} systemImage="link" value={props.profile.access.origin} modifiers={secondaryText} />
+            <ValueRow label={t('controlPlane.address')} systemImage="link" value={mobileControlPlaneProfileAddress(props.profile)} modifiers={secondaryText} />
             <ValueRow label={t('controlPlane.id')} systemImage="number" value={props.profile.identity.controlPlaneId} modifiers={secondaryText} />
             <ValueRow label={t('controlPlane.fingerprint')} systemImage="checkmark.seal" value={props.profile.identity.publicKeyFingerprint} modifiers={secondaryText} />
           </Section>

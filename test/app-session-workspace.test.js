@@ -23,6 +23,7 @@ require.extensions[".ts"] = (module, filename) => {
 };
 
 const { AppRuntimeManager } = require("../packages/app-runtime/src/runtime.ts");
+const { TerminalScreenState } = require("../packages/app-runtime/src/terminal-screen-state.ts");
 
 function pathsFor(root) {
   return {
@@ -159,5 +160,81 @@ test("persisted app sessions migrate workspace cwd before recovery", () => {
     assert.equal(restored.status, "exited");
     const persisted = JSON.parse(fs.readFileSync(path.join(sessionDir, "metadata.json"), "utf8"));
     assert.deepEqual(persisted.workspace, { cwd: path.join(root, "legacy-cwd") });
+  });
+});
+
+test("app runtime ignores duplicate tty resize messages", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-tty-resize-"));
+
+  withEnv({ TASK_HANDOFF_CODEX_APP_SERVER_DISABLED: "1" }, () => {
+    const runtime = new AppRuntimeManager(pathsFor(root));
+    const pty = fakePty();
+    const appliedSizes = [];
+    pty.resize = (cols, rows) => appliedSizes.push({ cols, rows });
+    runtime.hasCommand = () => true;
+    runtime.spawnTerminalPty = () => pty;
+    const session = runtime.start("terminal-tty");
+    const client = new EventEmitter();
+    client.send = () => {};
+    client.close = () => {};
+
+    runtime.attachTty(session.id, client);
+    client.emit("message", JSON.stringify({ type: "resize", cols: 120, rows: 32 }));
+    client.emit("message", JSON.stringify({ type: "resize", cols: 100, rows: 30 }));
+    client.emit("message", JSON.stringify({ type: "resize", cols: 100, rows: 30 }));
+
+    assert.deepEqual(appliedSizes, [{ cols: 100, rows: 30 }]);
+  });
+});
+
+test("terminal screen snapshots preserve a control sequence split across PTY chunks", () => {
+  const screen = new TerminalScreenState(40, 6);
+  try {
+    screen.write("\x1b[2");
+    const partial = screen.snapshot();
+    assert.equal(partial.pendingEscape, "\x1b[2");
+    assert.doesNotMatch(partial.data, /\[2/);
+
+    screen.write("mWorking\x1b[0m");
+    const complete = screen.snapshot();
+    assert.equal(complete.pendingEscape, "");
+    assert.match(complete.data, /Working/);
+  } finally {
+    screen.dispose();
+  }
+});
+
+test("detaching a tty client keeps the PTY running and restores a screen snapshot on reattach", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-tty-reattach-"));
+
+  withEnv({ TASK_HANDOFF_CODEX_APP_SERVER_DISABLED: "1" }, () => {
+    const runtime = new AppRuntimeManager(pathsFor(root));
+    const pty = fakePty();
+    let killCount = 0;
+    pty.kill = () => { killCount += 1; };
+    runtime.hasCommand = () => true;
+    runtime.spawnTerminalPty = () => pty;
+    const session = runtime.start("terminal-tty");
+    const firstClient = new EventEmitter();
+    firstClient.send = () => {};
+    firstClient.close = () => {};
+
+    runtime.attachTty(session.id, firstClient);
+    pty.emit("data", "terminal output\r\n");
+    firstClient.emit("close");
+
+    const replayed = [];
+    const secondClient = new EventEmitter();
+    secondClient.send = (message) => replayed.push(JSON.parse(message));
+    secondClient.close = () => {};
+    runtime.attachTty(session.id, secondClient);
+
+    assert.equal(killCount, 0);
+    assert.equal(runtime.getSession(session.id).status, "running");
+    assert.equal(replayed[0].type, "connected");
+    assert.equal(replayed[0].protocolVersion, "2026-08-10");
+    assert.equal(replayed[1].type, "snapshot");
+    assert.match(replayed[1].data, /terminal output/);
+    assert.equal(replayed[1].pendingEscape, "");
   });
 });

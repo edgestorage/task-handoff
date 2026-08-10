@@ -9,7 +9,7 @@ import type { ControlPlaneNodeLocalFolder } from '@task-handoff/control-plane-cl
 import { NewSessionForm, newSessionVisualBalanceInset } from '../../src/ai-sessions/NewSessionForm';
 import { initialInstanceId, instanceCreateGuidance } from '../../src/ai-sessions/new-session-types';
 import { createMobileAiSession, lifecycleGuidance } from '../../src/ai-sessions/session-lifecycle';
-import { createDirectControlPlaneClient } from '../../src/control-plane/client';
+import { createMobileControlPlaneClient } from '../../src/control-plane/client';
 import { mobileCreateRequestStore, mobilePermissionStore, mobileProfileStore, mobileSecureStore } from '../../src/control-plane/runtime';
 import { useActiveDirectories } from '../../src/directories/use-directories';
 import { mobileDirectoryStore } from '../../src/directories/store';
@@ -48,7 +48,7 @@ export default function NewAiSessionRoute() {
     const abort = new AbortController();
     void mobileProfileStore.active().then(async (profile) => {
       if (!profile || abort.signal.aborted) return;
-      const nextFolders = await createDirectControlPlaneClient(profile, mobileSecureStore).api.resources.nodeLocalFolders(nodeId, abort.signal);
+      const nextFolders = await createMobileControlPlaneClient(profile, mobileSecureStore).api.resources.nodeLocalFolders(nodeId, abort.signal);
       if (!abort.signal.aborted) setFolderState({ nodeId, folders: nextFolders });
     }).catch(() => {
       if (!abort.signal.aborted) setFolderState({ nodeId, folders: [] });
@@ -64,7 +64,7 @@ export default function NewAiSessionRoute() {
       if (!profile) throw new Error('No active Control Plane.');
       const requestInput = { agent, cwdFolderId: folderId, message, permissionMode };
       const requestId = await mobileCreateRequestStore.getOrCreate(controlPlaneId, selectedInstance.id, requestInput, Crypto.randomUUID);
-      const result = await createMobileAiSession(createDirectControlPlaneClient(profile, mobileSecureStore).api, {
+      const result = await createMobileAiSession(createMobileControlPlaneClient(profile, mobileSecureStore).api, {
         instance: selectedInstance,
         agent,
         cwdFolderId: folderId,
@@ -90,7 +90,7 @@ export default function NewAiSessionRoute() {
     try {
       const profile = await mobileProfileStore.active();
       if (!profile || profile.identity.controlPlaneId !== controlPlaneId) throw new Error('No active Control Plane.');
-      const saved = await createDirectControlPlaneClient(profile, mobileSecureStore).api.resources.updateInstanceDefaultPermissionMode(selectedInstance.id, next);
+      const saved = await createMobileControlPlaneClient(profile, mobileSecureStore).api.resources.updateInstanceDefaultPermissionMode(selectedInstance.id, next);
       mobileDirectoryStore.setInstanceDefaultPermissionMode(controlPlaneId, selectedInstance.id, saved);
       setPermissionSelection({ instanceId: selectedInstance.id, mode: saved });
     } catch (cause) {

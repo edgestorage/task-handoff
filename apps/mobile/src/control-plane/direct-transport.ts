@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 import type { SecureValueStore } from '../platform/secure-storage';
 import { assertDirectIdentityCompatible, probeDirectControlPlane } from './direct-enrollment';
-import type { MobileControlPlaneProfile } from './profile';
+import type { MobileDirectControlPlaneProfile } from './profile';
 import {
   MobileControlPlaneTransportError,
   type MobileAppSessionTtyConnection,
@@ -32,6 +32,7 @@ const DEFAULT_EVENT_TOPICS = ['ai.sessions', 'app.sessions', 'node.state', 'node
 
 const IncomingTtyMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('connected') }).passthrough(),
+  z.object({ type: z.literal('snapshot'), data: z.string(), pendingEscape: z.string() }).passthrough(),
   z.object({ type: z.literal('output'), data: z.string() }).passthrough(),
   z.object({ type: z.literal('resize'), cols: z.number().int().positive(), rows: z.number().int().positive() }).passthrough(),
   z.object({ type: z.literal('exit'), code: z.number().int().nullable().optional(), signal: z.union([z.string(), z.number()]).nullable().optional() }).passthrough(),
@@ -86,7 +87,7 @@ function websocketUrl(origin: string) {
 }
 
 export class DirectControlPlaneTransport implements MobileControlPlaneTransport {
-  readonly profile: MobileControlPlaneProfile;
+  readonly profile: MobileDirectControlPlaneProfile;
   private verified?: Promise<void>;
   private readonly eventSubscribers = new Set<MobileControlPlaneEventHandlers>();
   private eventSocket?: WebSocketLike;
@@ -94,7 +95,7 @@ export class DirectControlPlaneTransport implements MobileControlPlaneTransport 
   private eventOpen = false;
 
   constructor(
-    profile: MobileControlPlaneProfile,
+    profile: MobileDirectControlPlaneProfile,
     private readonly secureStore: SecureValueStore,
     private readonly options: {
       fetchImpl?: typeof fetch;
@@ -254,7 +255,8 @@ export class DirectControlPlaneTransport implements MobileControlPlaneTransport 
             const parsed = IncomingTtyMessageSchema.safeParse(JSON.parse(event.data));
             if (!parsed.success) return;
             const message = parsed.data;
-            if (message.type === 'output') handlers.onOutput(message.data);
+            if (message.type === 'snapshot') handlers.onSnapshot(message.data, message.pendingEscape);
+            else if (message.type === 'output') handlers.onOutput(message.data);
             else if (message.type === 'resize') handlers.onResize(message.cols, message.rows);
             else if (message.type === 'exit') handlers.onExit(message.code, message.signal == null ? null : String(message.signal));
             else if (message.type === 'error') handlers.onError(new MobileControlPlaneTransportError('TTY_SESSION_ERROR', message.message || 'TTY session error.'));

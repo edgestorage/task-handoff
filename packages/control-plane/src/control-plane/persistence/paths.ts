@@ -18,6 +18,7 @@ export type ControlPlaneStorePaths = {
   triggersDir: string;
   proxyAuthorityPath: string;
   identitySigningPath: string;
+  cloudConnectivityPath: string;
   authUsersDir: string;
   authSessionsDir: string;
   aiSessionUnreadDir: string;
@@ -47,6 +48,7 @@ export function controlPlaneStorePaths(dataDir = defaultControlPlaneDataDir()): 
     triggersDir: path.join(root, "triggers"),
     proxyAuthorityPath: path.join(root, "control-plane-proxy", "authority.json"),
     identitySigningPath: path.join(root, "control-plane-identity-signing.json"),
+    cloudConnectivityPath: path.join(root, "cloud-connectivity.json"),
     authUsersDir: path.join(root, "auth-users"),
     authSessionsDir: path.join(root, "auth-sessions"),
     aiSessionUnreadDir: path.join(root, "ai-session-unread"),

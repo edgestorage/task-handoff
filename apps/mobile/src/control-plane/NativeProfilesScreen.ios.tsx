@@ -15,6 +15,7 @@ import { useMobileTheme } from '../components/theme';
 import { useI18n } from '../i18n';
 import { useTaskStatusSettings } from '../task-status/settings';
 import type { NativeProfilesScreenProps } from './NativeProfilesScreen';
+import { mobileControlPlaneProfileAddress } from './profile';
 
 export function NativeProfilesScreen(props: NativeProfilesScreenProps) {
   const { colors, dark, preference: appearance, setPreference: setAppearance } = useMobileTheme();
@@ -86,7 +87,7 @@ function ConnectedProfiles(props: NativeProfilesScreenProps) {
                 <Image size={22} systemName="server.rack" />
                 <VStack alignment="leading" spacing={3}>
                   <Text modifiers={[font({ textStyle: 'body', weight: 'semibold' }), lineLimit(1)]}>{name}</Text>
-                  <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle({ type: 'hierarchical', style: 'secondary' }), lineLimit(1)]}>{profile.access.origin}</Text>
+                  <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle({ type: 'hierarchical', style: 'secondary' }), lineLimit(1)]}>{mobileControlPlaneProfileAddress(profile)}</Text>
                 </VStack>
                 <Spacer />
                 {active ? <Image size={17} systemName="checkmark.circle.fill" /> : null}

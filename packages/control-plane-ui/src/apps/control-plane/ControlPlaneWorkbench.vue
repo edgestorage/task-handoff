@@ -423,7 +423,7 @@ const instanceViewMode = computed(() => workbenchView.value === "instance");
 const boardMode = computed(() => workbenchView.value === "board");
 const aiBoardMode = computed(() => workbenchView.value === "ai");
 const settingsMode = ref(false);
-const settingsSection = ref<"basic" | "chat" | "images" | "environment-templates" | "projects" | "nodes" | "models" | "triggers" | "mobile-sessions" | "account">("nodes");
+const settingsSection = ref<"basic" | "chat" | "images" | "environment-templates" | "projects" | "nodes" | "models" | "triggers" | "mobile-sessions" | "account" | "cloud-connectivity">("nodes");
 const boardFilter = ref("");
 const aiBoardFilter = ref("");
 const boardProjectFilter = ref(ALL_BOARD_FILTER_VALUE);

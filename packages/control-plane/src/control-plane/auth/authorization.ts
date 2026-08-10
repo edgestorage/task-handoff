@@ -2,6 +2,7 @@ export type ControlPlaneRole = "admin" | "operator" | "viewer";
 
 export type ControlPlaneActor =
   | { type: "user"; userId: string; role: ControlPlaneRole }
+  | { type: "cloud-account"; accountId: string; deviceSessionId: string; bindingId: string; bindingRevision: number }
   | { type: "chat-bridge"; bridgeId: string; channel: string; chatSessionId?: string; userId?: string }
   | { type: "system"; reason: string };
 
@@ -48,6 +49,9 @@ export function can(actor: ControlPlaneActor, action: ControlPlaneAction, resour
   if (actor.type === "chat-bridge") {
     return canChatBridge(action, resource);
   }
+  if (actor.type === "cloud-account") {
+    return canCloudAccount(action, resource);
+  }
   if (actor.role === "admin") {
     return true;
   }
@@ -58,6 +62,12 @@ export function can(actor: ControlPlaneActor, action: ControlPlaneAction, resour
     return canOperator(action, resource);
   }
   return false;
+}
+
+function canCloudAccount(action: ControlPlaneAction, resource: ControlPlaneResource) {
+  if (["control-plane-settings", "secret", "chat-bridge"].includes(resource.type)) return false;
+  if (resource.type === "node") return action === "read";
+  return canOperator(action, resource);
 }
 
 export function assertCan(actor: ControlPlaneActor, action: ControlPlaneAction, resource: ControlPlaneResource) {

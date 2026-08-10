@@ -7,6 +7,7 @@ import {
   useOptionalMobileControlPlaneRuntime,
 } from '../control-plane/use-mobile-control-plane-runtime';
 import type { MobileControlPlaneTransport } from '../control-plane/transport';
+import { mobileControlPlaneProfileAddress } from '../control-plane/profile';
 import { MobileAppSessionController } from './controller';
 import { mobileAppSessionStore } from './store';
 
@@ -72,7 +73,7 @@ function ActiveAppSessionsBoundary({ children }: { children: ReactNode }) {
   const createAccess = useCallback(async (instanceId: string, sessionId: string) => {
     if (!runtime.api || !runtime.transport) throw new Error('No active Control Plane.');
     const access = await runtime.api.appSessions.access(instanceId, sessionId);
-    return { ...access, url: new URL(access.url, runtime.transport.profile.access.origin).toString() };
+    return { ...access, url: new URL(access.url, mobileControlPlaneProfileAddress(runtime.transport.profile)).toString() };
   }, [runtime.api, runtime.transport]);
   const revokeAccess = useCallback(async (instanceId: string, sessionId: string, token: string) => {
     await runtime.api?.appSessions.revokeAccess(instanceId, sessionId, token);

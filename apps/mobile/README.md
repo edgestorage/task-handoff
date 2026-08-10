@@ -1,6 +1,6 @@
 # TaskHandoff Mobile
 
-The mobile client is a React Native application built with Expo SDK 57 and Continuous Native Generation (prebuild). It connects directly to a user-managed Control Plane; it does not connect to node-agent endpoints or include an official account/relay client.
+The mobile client is a React Native application built with Expo SDK 57 and Continuous Native Generation (prebuild). It connects to user-managed Control Planes directly or discovers linked Control Planes through the cloud account relay; it does not connect to node-agent endpoints.
 
 ## Engineering decision
 
@@ -39,7 +39,7 @@ pnpm --filter @task-handoff/mobile release:check
 
 ## Product boundary
 
-The first release opens directly into AI Session Inbox and includes active detail, Markdown/code, complete sub-agent display, create/history/resume, composer, approval, interrupt, queue actions, mobile uploads, server-selected runtime files, realtime Node/Instance directories, server-authorized Instance start/stop/restart/image-retry actions, App Session launch/rename/stop, and terminal access. Instance creation/deletion, full Node lifecycle, full file management, model/environment/application installation management, triggers, full settings, official account, and relay features are intentionally absent.
+The mobile client opens directly into AI Session Inbox and includes cloud-account sign-in and relay discovery, active detail, Markdown/code, complete sub-agent display, create/history/resume, composer, approval, interrupt, queue actions, mobile uploads, server-selected runtime files, realtime Node/Instance directories, server-authorized Instance start/stop/restart/image-retry actions, App Session launch/rename/stop, terminal access, and trigger template creation, editing, deployment, and recent-run inspection. Instance creation/deletion, full Node lifecycle, full file management, model/environment/application installation management, and full settings are intentionally absent.
 
 Operator setup and recovery are documented in [mobile-control-plane-operations.md](../../docs/mobile-control-plane-operations.md). The threat model is [mobile-control-plane-security.md](../../docs/mobile-control-plane-security.md). Deferred work is listed in [mobile-control-plane-future-changes.md](../../docs/mobile-control-plane-future-changes.md).
 

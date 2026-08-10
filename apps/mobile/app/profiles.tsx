@@ -5,7 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import type { AndroidSymbol, SFSymbol } from 'expo-symbols';
 
 import { Screen } from '../src/components/Screen';
-import type { MobileControlPlaneProfile } from '../src/control-plane/profile';
+import { mobileControlPlaneProfileAddress, type MobileControlPlaneProfile } from '../src/control-plane/profile';
 import { mobileProfileStore as profiles } from '../src/control-plane/runtime';
 import { useMobileTheme, type AppearancePreference } from '../src/components/theme';
 import { isMobileTestMode } from '../src/platform/build-variant';
@@ -98,7 +98,7 @@ export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInT
                       <Text numberOfLines={1} style={[styles.profileName, { color: colors.text }]}>{profile.identity.displayName || t('profiles.defaultName')}</Text>
                       {active ? <SystemIcon android="check_circle" color={colors.primary} ios="checkmark.circle.fill" size={16} /> : null}
                     </View>
-                    <Text selectable numberOfLines={1} style={[styles.profileOrigin, { color: colors.textMuted }]}>{profile.access.origin}</Text>
+                    <Text selectable numberOfLines={1} style={[styles.profileOrigin, { color: colors.textMuted }]}>{mobileControlPlaneProfileAddress(profile)}</Text>
                   </View>
                   <SystemIcon android="chevron_right" color={colors.textMuted} ios="chevron.right" size={13} />
                 </Pressable>

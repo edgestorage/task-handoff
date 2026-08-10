@@ -213,9 +213,13 @@ test('safe markdown renders semantic headings, emphasis, lists, and code', async
   const screen = await render(
     <SafeMarkdown>{'# Result\n\n**Ready**\n\n- first\n- second\n\n`inline`\n\n```ts\nconst ok = true;\n```\n\n| Item | Status |\n| --- | --- |\n| Typecheck | Pass |'}</SafeMarkdown>,
   );
-  expect(screen.getByText('Result').props.selectable).toBe(true);
-  expect(screen.getByText('Result').props.uiTextView).toBe(true);
-  expect(screen.getByText('Ready').props.selectable).toBe(true);
+  const selectableAncestor = (node: ReturnType<typeof screen.getByText>) => {
+    let current: typeof node | null = node;
+    while (current && !current.props.uiTextView) current = current.parent;
+    return current;
+  };
+  expect(selectableAncestor(screen.getByText('Result'))?.props.selectable).toBe(true);
+  expect(selectableAncestor(screen.getByText('Ready'))?.props.selectable).toBe(true);
   screen.getByText('first');
   screen.getByText('second');
   screen.getByText('inline');
@@ -279,7 +283,7 @@ test('inline code remains in the paragraph text flow and wraps long values witho
 
 test('safe markdown can remove the final paragraph spacing inside message bubbles', async () => {
   const screen = await render(<SafeMarkdown trimEnd>One paragraph</SafeMarkdown>);
-  const paragraph = screen.getByText('One paragraph').parent?.parent;
+  const paragraph = screen.getByTestId('markdown-selectable-text');
   expect(StyleSheet.flatten(paragraph?.props.style).marginBottom).toBe(0);
 });
 
@@ -302,6 +306,22 @@ test('new text nodes created during streaming run the 150ms character fade', asy
   expect(timing.mock.calls.some(([, config]) => config.duration === CHARACTER_FADE_MS && config.toValue === 1 && config.useNativeDriver === false)).toBe(true);
   screen.unmount();
   timing.mockRestore();
+});
+
+test('iOS streaming Markdown keeps generated text inside a native text child boundary', async () => {
+  const screen = await render(<StreamingMarkdownText animate={false} content="Visible native text" nativeSelectable />);
+
+  expect(screen.getByTestId('markdown-streaming-native-text').props.children).toBe('Visible native text');
+  screen.unmount();
+});
+
+test('active iOS Markdown keeps the animated RN text tree until the response settles', async () => {
+  const screen = await render(<SafeMarkdown streamKey="active-turn" streaming>Animated response</SafeMarkdown>);
+
+  const paragraph = screen.getByTestId('markdown-selectable-text');
+  expect(paragraph.props.selectable).toBe(true);
+  expect(paragraph.props.uiTextView).toBeUndefined();
+  screen.unmount();
 });
 
 test('independent character animations coalesce their completed state into one frame', async () => {

@@ -25,8 +25,11 @@ export const settings = {
   images: "Images",
   environmentTemplates: "Environment templates",
   chatBridges: "Chat bridges",
+  cloud: {
+    navigation: "Thandoff account", title: "Connect Thandoff account", description: "Bind this Control Plane to one Thandoff account. Only local administrators can change this connection.", loading: "Loading Thandoff account connection…", loadFailed: "Could not load the Thandoff account connection.", controlPlaneId: "Control Plane ID", fingerprint: "Identity fingerprint", revision: "Binding revision", background: "Background relay", running: "Credential installed", notConnected: "Not connected", backgroundNote: "Relay is owned by the Control Plane background process. Closing this page, signing out of the local UI, or letting the authorization browser session expire does not stop it.", challengeOnce: "One-time authorization code (copied to clipboard)", challengeExpires: "Expires at {time}", creating: "Creating…", connect: "Connect Thandoff account", disableRemote: "Disable remote access", enableRemote: "Enable remote access", disconnect: "Disconnect Thandoff account", disconnectConfirm: "Disconnect the Thandoff account and immediately stop remote access?", resultUnknown: "Local access is disabled. The remote revocation result is not confirmed yet, so another Thandoff account cannot be bound.", cloneConflict: "This Control Plane identity is online from another installation. Remote access is quarantined until the clone conflict is resolved.", status: { unbound: "Not connected", "pending-claim": "Awaiting authorization", active: "Connected", "pending-revocation": "Revocation pending", "clone-conflict": "Identity conflict" },
+  },
   account: {
-    navigation: "Account",
+    navigation: "User",
     title: "Account security",
     description: "Change the password for the signed-in Control Plane account.",
     authenticationRequired: "Account sign-in is not enabled.",

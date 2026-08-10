@@ -2,7 +2,7 @@ import { createContext, createElement, useCallback, useContext, useEffect, useMe
 import type { ControlPlaneInstanceAction } from '@task-handoff/protocol/control-plane-directory';
 
 import { isCarPlayConnected, subscribeToCarPlayConnection } from '../carplay/runtime';
-import { createDirectControlPlaneClient } from '../control-plane/client';
+import { createMobileControlPlaneClient } from '../control-plane/client';
 import type { MobileControlPlaneProfile } from '../control-plane/profile';
 import {
   MobileControlPlaneRuntimeProvider,
@@ -29,7 +29,7 @@ const Context = createContext<ActiveDirectories | undefined>(undefined);
 export type ActiveDirectoriesDependencies = {
   activeProfile(): Promise<MobileControlPlaneProfile | undefined>;
   subscribeProfiles(listener: () => void): () => void;
-  createClient(profile: MobileControlPlaneProfile): ReturnType<typeof createDirectControlPlaneClient>;
+  createClient(profile: MobileControlPlaneProfile): ReturnType<typeof createMobileControlPlaneClient>;
   subscribeLifecycle: typeof subscribeToAppLifecycle;
   subscribeNetwork: typeof subscribeToNetworkState;
   subscribeCarPlay?: MobileControlPlaneRuntimeDependencies['subscribeCarPlay'];

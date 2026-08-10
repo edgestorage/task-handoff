@@ -9,7 +9,7 @@ import { Screen } from '../../../src/components/Screen';
 import { SystemIcon } from '../../../src/components/SystemIcon';
 import { EmptyState } from '../../../src/components/EmptyState';
 import { useMobileToast } from '../../../src/components/MobileToast';
-import { createDirectControlPlaneClient } from '../../../src/control-plane/client';
+import { createMobileControlPlaneClient } from '../../../src/control-plane/client';
 import { mobileProfileStore, mobileSecureStore } from '../../../src/control-plane/runtime';
 import { lifecycleGuidance } from '../../../src/ai-sessions/session-lifecycle';
 import { useMobileTheme } from '../../../src/components/theme';
@@ -91,10 +91,10 @@ function InfoRow({ icon, label, value }: { icon: 'folder' | 'number'; label: str
   </View>;
 }
 
-async function withClient<T>(operation: (client: ReturnType<typeof createDirectControlPlaneClient>['api']) => Promise<T>) {
+async function withClient<T>(operation: (client: ReturnType<typeof createMobileControlPlaneClient>['api']) => Promise<T>) {
   const profile = await mobileProfileStore.active();
   if (!profile) throw new Error('No active Control Plane.');
-  return operation(createDirectControlPlaneClient(profile, mobileSecureStore).api);
+  return operation(createMobileControlPlaneClient(profile, mobileSecureStore).api);
 }
 
 const styles = StyleSheet.create({

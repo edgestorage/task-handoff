@@ -83,7 +83,7 @@
 - 手机图片/普通文件 `upload-ref` 与实例已有文件 `runtime-path` 两条附件链路；
 - Node/Instance 权威只读目录及到 Inbox/New Session 的稳定 id 导航。
 
-首发明确不包含：官方账号、binding、Control Plane 目录、ticket、relay、Node/Instance 生命周期、terminal、完整文件管理、模型/环境/应用管理、trigger 和完整 settings。生产依赖和网络检查必须证明移动端没有官方账号 SDK、relay 配置、Node credential 或 `NodeAgentTransport`。
+首发明确不包含：Thandoff 账户、binding、Control Plane 目录、ticket、relay、Node/Instance 生命周期、terminal、完整文件管理、模型/环境/应用管理、trigger 和完整 settings。生产依赖和网络检查必须证明移动端没有 Thandoff 账户 SDK、relay 配置、Node credential 或 `NodeAgentTransport`。
 
 ## 待保存视觉基线
 

@@ -7017,7 +7017,6 @@ test("app runtime stop releases live session resources but keeps history", () =>
       },
     },
     processes: [],
-    outputBacklog: "",
     clients: new Set(),
   });
 
@@ -7063,7 +7062,6 @@ test("app runtime delete waits for live gui processes before removing session fi
       paths: { sessionDir, logDir },
     },
     processes: [child],
-    outputBacklog: "",
     clients: new Set(),
   });
 
@@ -7189,7 +7187,6 @@ test("app runtime reports CDP automation readiness", async () => {
         },
       },
       processes: [],
-      outputBacklog: "",
       clients: new Set(),
     });
 
@@ -7315,7 +7312,6 @@ test("web app proxies session HTTP with httpxy while preserving KasmVNC theming"
       },
     },
     processes: [],
-    outputBacklog: "",
     clients: new Set(),
   });
 
@@ -7552,7 +7548,6 @@ test("app runtime allocators skip occupied ports and live displays", async () =>
         },
       },
       processes: [],
-      outputBacklog: "",
       clients: new Set(),
     });
     assert.equal(runtime.allocateDisplay(), 102);

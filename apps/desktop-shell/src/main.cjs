@@ -831,12 +831,6 @@ async function boot() {
     const nodeAgentPort = resolveNodeAgentPort();
     const ensuredNodeAgent = await ensureDesktopNodeAgent({
       dataDir: nodeAgentDataDir,
-      expected: {
-        packageVersion: app.getVersion(),
-        buildId: process.env.TASK_HANDOFF_BUILD_ID,
-        gitCommit: process.env.TASK_HANDOFF_GIT_COMMIT,
-      },
-      fetchHealth: () => fetchNodeAgentHealth(nodeAgentControlEndpoint),
       start: () => startNodeAgent({ host: nodeAgentHost, port: nodeAgentPort }),
       waitUntilReady: (child) => waitForNodeAgent(nodeAgentControlEndpoint, child),
       logInfo,
@@ -982,7 +976,7 @@ if (!ownsDesktopInstanceLock) {
     event.preventDefault();
     if (!desktopQuitPromise) {
       desktopQuitPromise = desktopServiceLifecycle.stop("quit")
-        .catch((error) => logError(`[desktop-shell] failed to stop control plane during quit ${error instanceof Error ? error.stack || error.message : String(error)}`))
+        .catch((error) => logError(`[desktop-shell] failed to stop desktop services during quit ${error instanceof Error ? error.stack || error.message : String(error)}`))
         .finally(() => {
           desktopQuitReady = true;
           closeDesktopFileLog();

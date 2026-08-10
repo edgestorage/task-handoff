@@ -14,7 +14,7 @@ import {
   probeDirectControlPlane,
   type VerifiedDirectControlPlane,
 } from '../../src/control-plane/direct-enrollment';
-import { mobileProfileStore as profiles, mobileSecureStore as secureStore } from '../../src/control-plane/runtime';
+import { hasActiveCloudAccount, mobileProfileStore as profiles, mobileSecureStore as secureStore } from '../../src/control-plane/runtime';
 import { isMobileTestMode } from '../../src/platform/build-variant';
 import { useI18n, type Translate } from '../../src/i18n';
 
@@ -70,6 +70,17 @@ export default function AddControlPlaneScreen() {
     }
   };
 
+  const openCloudAccount = async () => {
+    setBusy(true);
+    try {
+      router.push(await hasActiveCloudAccount() ? '/cloud-control-planes' as never : '/cloud-account' as never);
+    } catch (cause) {
+      setError(messageFor(cause, t));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <>
       <Stack.Screen options={{ title: step === 'address' ? t('nav.addControlPlane') : t('enroll.connect') }} />
@@ -117,6 +128,7 @@ export default function AddControlPlaneScreen() {
             ) : null}
 
             <View style={styles.primaryAction}><NativeActionButton disabled={busy || !address.trim()} icon={{ android: 'verified_user', ios: 'checkmark.shield' }} label={t('enroll.verifyAddress')} onPress={() => { void verifyAddress(); }} /></View>
+            <NativeActionButton compact disabled={busy} label={t('enroll.cloudAccount')} onPress={() => { void openCloudAccount(); }} />
           </>
         ) : null}
 

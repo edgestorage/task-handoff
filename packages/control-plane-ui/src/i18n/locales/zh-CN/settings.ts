@@ -28,8 +28,11 @@ export const settings = {
   images: "镜像",
   environmentTemplates: "环境模板",
   chatBridges: "聊天桥接",
+  cloud: {
+    navigation: "Thandoff 账户", title: "连接 Thandoff 账户", description: "将此 Control Plane 绑定到唯一的 Thandoff 账户。只有本地管理员可以变更连接。", loading: "正在加载 Thandoff 账户连接…", loadFailed: "无法加载 Thandoff 账户连接。", controlPlaneId: "Control Plane ID", fingerprint: "身份指纹", revision: "绑定 revision", background: "后台中转", running: "已安装专用凭证", notConnected: "未连接", backgroundNote: "中转由 Control Plane 后台程序独立运行。关闭此页面、退出本地 UI 或授权浏览器会话过期都不会停止中转。", challengeOnce: "一次性授权码（已复制到剪贴板）", challengeExpires: "有效期至 {time}", creating: "正在创建…", connect: "连接 Thandoff 账户", disableRemote: "关闭远程访问", enableRemote: "开启远程访问", disconnect: "断开 Thandoff 账户", disconnectConfirm: "断开 Thandoff 账户并立即停止远程访问？", resultUnknown: "本地访问已关闭，但远端撤销结果尚未确认，因此暂时不能绑定第二个 Thandoff 账户。", cloneConflict: "另一个安装正在使用相同的 Control Plane 身份。解决克隆冲突前，远程访问已被隔离。", status: { unbound: "未连接", "pending-claim": "等待授权", active: "已连接", "pending-revocation": "等待撤销", "clone-conflict": "身份冲突" },
+  },
   account: {
-    navigation: "账号",
+    navigation: "用户",
     title: "账号安全",
     description: "修改当前登录的控制面板账号密码。",
     authenticationRequired: "当前未启用账号登录。",

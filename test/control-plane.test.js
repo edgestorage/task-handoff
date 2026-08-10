@@ -326,6 +326,7 @@ function managedDockerRuntimeCommand(app, instanceId, web, args) {
       Id: "container-1",
       Platform: "linux",
       Image: "sha256:image",
+      State: { Running: true },
       Config: { Labels: { "task-handoff.instance-id": instanceId } },
     }),
     stderr: "",
@@ -4670,7 +4671,7 @@ test("node agent runs local docker behind node-local target and auto-imports age
         return { stdout: "0.0.0.0:18080", stderr: "" };
       }
       if (args[0] === "inspect" && args.includes("{{json .}}")) {
-        return { stdout: JSON.stringify({ Id: "container-1", Platform: "linux", Image: "sha256:image", Config: { Labels: { "task-handoff.instance-id": "inst_1" } } }), stderr: "" };
+        return { stdout: JSON.stringify({ Id: "container-1", Platform: "linux", Image: "sha256:image", State: { Running: true }, Config: { Labels: { "task-handoff.instance-id": "inst_1" } } }), stderr: "" };
       }
       if (args[0] === "inspect") {
         return { stdout: "container-1", stderr: "" };

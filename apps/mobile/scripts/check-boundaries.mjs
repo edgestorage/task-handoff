@@ -8,7 +8,7 @@ const expoConfig = JSON.parse(fs.readFileSync(path.join(root, 'app.json'), 'utf8
 const failures = [];
 
 const forbiddenDependencies = [
-  /^@task-handoff\/(?!protocol$|control-plane-client$)/,
+  /^@task-handoff\/(?!protocol$|control-plane-client$|cloud-contracts(?:\/mobile)?$)/,
   /^@auth0\//,
   /^@clerk\//,
   /^@supabase\//,
@@ -29,13 +29,14 @@ const productionFiles = sourceFiles(path.join(root, 'app')).concat(sourceFiles(p
 const networkOwners = new Set([
   path.join(root, 'src', 'control-plane', 'direct-enrollment.ts'),
   path.join(root, 'src', 'control-plane', 'direct-transport.ts'),
+  path.join(root, 'src', 'control-plane', 'relay-channel.ts'),
 ]);
 const forbiddenSourcePatterns = [
   [/\bNodeAgentTransport\b/, 'NodeAgentTransport'],
   [/\bnodeCredential\b/, 'Node credential'],
   [/\brelayEndpoint\b/, 'relay endpoint'],
   [/\baccessTicket\b/, 'access ticket'],
-  [/from\s+['"][^'"]*(?:node-agent|relay|official-account)[^'"]*['"]/, 'forbidden transport import'],
+  [/from\s+['"][^'"]*node-agent[^'"]*['"]/, 'forbidden transport import'],
 ];
 for (const file of productionFiles) {
   const source = fs.readFileSync(file, 'utf8');
@@ -52,6 +53,16 @@ for (const file of productionFiles) {
   for (const route of apiRoutes) {
     if (!allowedPlatformRoutes.has(route)) {
       failures.push(`${relative(file)} owns Control Plane user API route ${route}; move it to @task-handoff/control-plane-client`);
+    }
+  }
+}
+
+const businessRoots = ['ai-sessions', 'app-sessions', 'directories', 'instances', 'nodes', 'triggers'];
+for (const directory of businessRoots.map((name) => path.join(root, 'src', name))) {
+  for (const file of sourceFiles(directory)) {
+    const source = fs.readFileSync(file, 'utf8');
+    if (/cloud-relay|RelayControlPlaneTransport|isDirectMobileControlPlaneProfile|access\.kind/.test(source)) {
+      failures.push(`${relative(file)} branches business behavior by Control Plane access kind`);
     }
   }
 }

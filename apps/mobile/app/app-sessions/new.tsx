@@ -5,7 +5,7 @@ import type { ControlPlaneNodeLocalFolder } from '@task-handoff/control-plane-cl
 import { NewAppSessionForm } from '../../src/app-sessions/NewAppSessionForm';
 import { appLaunchIssue, initialAppInstanceId } from '../../src/app-sessions/new-app-session-types';
 import { mobileAppSessionStore } from '../../src/app-sessions/store';
-import { createDirectControlPlaneClient } from '../../src/control-plane/client';
+import { createMobileControlPlaneClient } from '../../src/control-plane/client';
 import { mobileProfileStore, mobileSecureStore } from '../../src/control-plane/runtime';
 import { useActiveDirectories } from '../../src/directories/use-directories';
 import { useI18n } from '../../src/i18n';
@@ -41,7 +41,7 @@ export default function NewAppSessionRoute() {
     const abort = new AbortController();
     void mobileProfileStore.active().then(async (profile) => {
       if (!profile || abort.signal.aborted) return;
-      const folders = await createDirectControlPlaneClient(profile, mobileSecureStore).api.resources.nodeLocalFolders(nodeId, abort.signal);
+      const folders = await createMobileControlPlaneClient(profile, mobileSecureStore).api.resources.nodeLocalFolders(nodeId, abort.signal);
       if (!abort.signal.aborted) setFolderState({ nodeId, folders });
     }).catch(() => {
       if (!abort.signal.aborted) setFolderState({ nodeId, folders: [] });
@@ -55,7 +55,7 @@ export default function NewAppSessionRoute() {
     try {
       const profile = await mobileProfileStore.active();
       if (!profile || profile.identity.controlPlaneId !== controlPlaneId) throw new Error('No active Control Plane.');
-      const api = createDirectControlPlaneClient(profile, mobileSecureStore).api;
+      const api = createMobileControlPlaneClient(profile, mobileSecureStore).api;
       const session = await api.appSessions.launch(selectedInstance.id, {
         appId: selectedAppId,
         ...(selection.folderId ? { cwdFolderId: selection.folderId } : {}),
