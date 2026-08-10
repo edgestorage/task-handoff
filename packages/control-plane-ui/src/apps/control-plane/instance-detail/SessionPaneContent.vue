@@ -77,8 +77,9 @@
     </div>
     <SessionTerminalPreview
       v-if="!hasInstanceStatusPage(instance) && activeTerminalSocketUrl"
-      :key="sessionKey"
       active
+      :cache-key="sessionKey"
+      :cache-scope="instance.id"
       :socket-url="activeTerminalSocketUrl"
       class="session-preview-live session-terminal"
     />

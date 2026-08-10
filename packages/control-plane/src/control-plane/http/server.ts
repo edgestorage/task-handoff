@@ -8,6 +8,8 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import type { FastifyServerOptions } from "fastify";
 import { z } from "zod";
 import { AiSessionUnreadEventType } from "@task-handoff/protocol/ai-sessions";
+import { TtyStreamSnapshotMessageSchema } from "@task-handoff/protocol/app-sessions";
+import { RelayTtySnapshotEnvelopeSchema } from "@task-handoff/cloud-contracts";
 import { CONTROL_PLANE_PROTOCOL_VERSION, ImagePullTerminalEventType, type BuildInfo } from "@task-handoff/protocol/control-plane";
 import { packageVersionResolver } from "@task-handoff/core/core/package-version";
 import { DEFAULT_MAINTENANCE_INTERVAL_MS } from "@task-handoff/core/storage/retention";
@@ -363,7 +365,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       const socket = {
         readyState: 1,
         on(name: string, callback: (...args: any[]) => void) { const current = callbacks.get(name) ?? new Set(); current.add(callback); callbacks.set(name, current); },
-        send(raw: unknown) { try { const value = JSON.parse(String(raw)); if (value.type === "snapshot") listener({ type: "tty-snapshot", data: value.data, pendingEscape: value.pendingEscape }); else if (value.type === "output") listener({ type: "tty-output", data: value.data }); else if (value.type === "resize") listener({ type: "tty-resize", body: { cols: value.cols, rows: value.rows } }); else if (value.type === "exit") listener({ type: "tty-exit", code: value.code, signal: value.signal }); else if (value.type === "error") listener({ type: "tty-error" }); } catch { listener({ type: "tty-error" }); } },
+        send(raw: unknown) { try { const value = JSON.parse(String(raw)); if (value.type === "snapshot") { const snapshot = TtyStreamSnapshotMessageSchema.parse(value); listener(RelayTtySnapshotEnvelopeSchema.parse({ type: "tty-snapshot", data: snapshot.data, pendingEscape: snapshot.pendingEscape, cols: snapshot.cols, rows: snapshot.rows })); } else if (value.type === "output") listener({ type: "tty-output", data: value.data }); else if (value.type === "resize") listener({ type: "tty-resize", body: { cols: value.cols, rows: value.rows } }); else if (value.type === "exit") listener({ type: "tty-exit", code: value.code, signal: value.signal }); else if (value.type === "error") listener({ type: "tty-error" }); } catch { listener({ type: "tty-error" }); } },
         close() { if (closed) return; closed = true; emit("close"); listener({ type: "tty-closed" }); },
       };
       await service.proxyInstanceWebSocket(instanceId, socket as any, `/api/apps/sessions/${encodeURIComponent(sessionId)}/tty`, [], {});

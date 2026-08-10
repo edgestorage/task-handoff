@@ -367,6 +367,7 @@ import AppLaunchMenuItems from "../shared/AppLaunchMenuItems.vue";
 import ProjectFolderPicker from "../shared/ProjectFolderPicker.vue";
 import RepositoryEnvironment from "./RepositoryEnvironment.vue";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
+import { pruneTerminalPreviewCache } from "../useTerminalPreview";
 import {
   appDisplayName,
   groupedAppSessionTabs,
@@ -452,6 +453,16 @@ const sessionSplitAvailable = useMediaQuery("(min-width: 781px)");
 watch([sessionSplitAvailable, () => props.hasSessionSplit], ([available, split]) => {
   if (!available && split) emit("closeSessionSplit");
 }, { immediate: true });
+watch(
+  [() => props.instance.id, () => props.sessionTabs.map((session) => `${session.key}:${session.kind}`).join("\n")],
+  ([instanceId]) => {
+    pruneTerminalPreviewCache(
+      instanceId,
+      new Set(props.sessionTabs.filter((session) => session.kind === "terminal").map((session) => session.key)),
+    );
+  },
+  { immediate: true },
+);
 const { locale } = useControlPlaneLocale();
 const activeRepositorySessionId = computed(() => {
   if (!props.activeSession || props.activeSession.kind === "ai" || props.activeSession.kind === "status" || props.activeSession.kind === "repository") return "";

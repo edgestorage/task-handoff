@@ -4,7 +4,7 @@ import { AccessTicketSchema, RelayAttachCapabilitySchema } from "@task-handoff/c
 import type { ControlPlaneActor } from "../auth/authorization.ts";
 import type { ControlPlaneIdentityService } from "../identity/service.ts";
 
-type RelayEnvelope = { type: string; id?: string; status?: number; body?: any; event?: unknown; streamId?: string; data?: unknown; code?: number | null; signal?: string | null };
+type RelayEnvelope = { type: string; id?: string; status?: number; body?: any; event?: unknown; streamId?: string; data?: unknown; pendingEscape?: unknown; cols?: unknown; rows?: unknown; code?: number | null; signal?: string | null };
 export type RelaySessionBridge = {
   request(actor: ControlPlaneActor, input: { path: string; method: string; headers: Record<string, string>; body?: unknown }): Promise<{ status: number; body: unknown }>;
   subscribe(actor: ControlPlaneActor, topics: string[], listener: (event: unknown) => void): () => void;

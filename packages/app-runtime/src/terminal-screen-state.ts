@@ -85,6 +85,8 @@ class PendingEscapeSequence {
 export type TerminalScreenSnapshot = {
   data: string;
   pendingEscape: string;
+  cols: number;
+  rows: number;
 };
 
 export class TerminalScreenState {
@@ -113,9 +115,20 @@ export class TerminalScreenState {
   }
 
   snapshot(): TerminalScreenSnapshot {
+    const serialized = this.serializer.serialize({ scrollback: this.scrollback });
+    const { cursorX, cursorY } = this.terminal.buffer.active;
+    const absoluteCursor = serialized
+      && cursorX >= 0
+      && cursorX < this.terminal.cols
+      && cursorY >= 0
+      && cursorY < this.terminal.rows
+      ? `\x1b[${cursorY + 1};${cursorX + 1}H`
+      : "";
     return {
-      data: this.serializer.serialize({ scrollback: this.scrollback }),
+      data: `${serialized}${absoluteCursor}`,
       pendingEscape: this.pendingEscape.current,
+      cols: this.terminal.cols,
+      rows: this.terminal.rows,
     };
   }
 

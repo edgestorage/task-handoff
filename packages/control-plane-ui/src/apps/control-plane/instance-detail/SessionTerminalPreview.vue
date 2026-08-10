@@ -8,23 +8,29 @@ import { useTerminalPreview } from "../useTerminalPreview";
 
 const props = defineProps<{
   active: boolean;
+  cacheKey: string;
+  cacheScope: string;
   socketUrl: string;
 }>();
 
 const terminalHost = ref<HTMLElement | null>(null);
+const cacheKey = toRef(props, "cacheKey");
+const cacheScope = toRef(props, "cacheScope");
 const socketUrl = toRef(props, "socketUrl");
 const active = toRef(props, "active");
-const { disposeTerminalPreview, mountTerminalPreview } = useTerminalPreview(socketUrl, terminalHost, active);
+const { detachTerminalPreview, mountTerminalPreview } = useTerminalPreview(cacheScope, cacheKey, socketUrl, terminalHost, active);
 
 watch(
-  [() => props.active, socketUrl, terminalHost],
+  [active, cacheScope, cacheKey, socketUrl, terminalHost],
   ([active]) => {
     if (active) {
       void mountTerminalPreview();
+    } else {
+      detachTerminalPreview();
     }
   },
   { flush: "post", immediate: true },
 );
 
-onBeforeUnmount(disposeTerminalPreview);
+onBeforeUnmount(detachTerminalPreview);
 </script>

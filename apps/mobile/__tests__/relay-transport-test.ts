@@ -24,11 +24,11 @@ test('cloud Relay transport multiplexes events, TTY, cancellation and reconnect 
   const { channel, transport, emit, open } = harness(); const events: any[] = []; const tty: any[] = [];
   await transport.request('/api/bootstrap', z.object({ data: z.object({ ok: z.literal(true) }) }));
   transport.connectEvents({ onOpen() {}, onEvent: (event) => events.push(event), onError() {}, onClose() {} });
-  const terminal = transport.connectAppSessionTty('instance_a', 'session_a', { onOpen: () => tty.push('open'), onSnapshot: (data, pendingEscape) => tty.push(`snapshot:${data}:${pendingEscape}`), onOutput: (data) => tty.push(data), onResize() {}, onExit() {}, onError() {}, onClose() {} });
+  const terminal = transport.connectAppSessionTty('instance_a', 'session_a', { onOpen: () => tty.push('open'), onSnapshot: (data, pendingEscape, cols, rows) => tty.push(`snapshot:${data}:${pendingEscape}:${cols}x${rows}`), onOutput: (data) => tty.push(data), onResize() {}, onExit() {}, onError() {}, onClose() {} });
   await Promise.resolve(); await Promise.resolve();
   const streamId = (channel.send as jest.Mock).mock.calls.map(([value]) => value).find((value) => value.type === 'tty-open').streamId;
-  emit({ type: 'event', event: { type: 'instance.updated' } }); emit({ type: 'tty-snapshot', streamId, data: 'restored', pendingEscape: '\u001b[2' }); emit({ type: 'tty-output', streamId, data: 'hello' }); terminal.sendInput('ls\n');
-  expect(events).toEqual([{ type: 'instance.updated' }]); expect(tty).toEqual(['snapshot:restored:\u001b[2', 'hello']); expect(channel.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'tty-input' }));
+  emit({ type: 'event', event: { type: 'instance.updated' } }); emit({ type: 'tty-snapshot', streamId, data: 'restored', pendingEscape: '\u001b[2', cols: 120, rows: 32 }); emit({ type: 'tty-output', streamId, data: 'hello' }); terminal.sendInput('ls\n');
+  expect(events).toEqual([{ type: 'instance.updated' }]); expect(tty).toEqual(['snapshot:restored:\u001b[2:120x32', 'hello']); expect(channel.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'tty-input' }));
   await transport.revalidate(); expect(open).toHaveBeenLastCalledWith(expect.objectContaining({ epoch: 2 }));
 });
 

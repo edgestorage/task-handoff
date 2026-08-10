@@ -84,10 +84,10 @@ test("session preview splits the original tab row into pane-aligned tab groups",
   assert.doesNotMatch(pane, /v-for="terminalSession in terminalSessions"/);
   assert.doesNotMatch(pane, /v-show=/);
   assert.match(pane, /v-if="!hasInstanceStatusPage\(instance\) && activeTerminalSocketUrl"/);
-  assert.match(pane, /:key="sessionKey"[\s\S]*active[\s\S]*:socket-url="activeTerminalSocketUrl"/);
+  assert.match(pane, /active[\s\S]*:cache-key="sessionKey"[\s\S]*:cache-scope="instance\.id"[\s\S]*:socket-url="activeTerminalSocketUrl"/);
   assert.match(pane, /\.session-terminal \{ position: relative;/);
   assert.match(terminalPreview, /message\.type === "snapshot"[\s\S]*terminal\.reset\(\)[\s\S]*terminal\.write\(message\.data\)/);
-  assert.match(terminalPreview, /message\.pendingEscape[\s\S]*terminal\.write\(message\.pendingEscape\)/);
+  assert.match(terminalPreview, /terminal\.resize\(Number\(message\.cols\), Number\(message\.rows\)\)[\s\S]*terminal\.write\(`\$\{message\.data\}\$\{pendingEscape\}`/);
   assert.match(styles, /grid-template-columns: minmax\(0, var\(--session-left-ratio\)\) 7px/);
   assert.match(styles, /\.session-pane-layout\.split \.session-pane,[\s\S]*\.session-pane-layout\.split \.session-pane-resize-handle\s*\{[\s\S]*grid-row:\s*1/);
   assert.match(styles, /\.session-pane-resize-handle::after\s*\{[\s\S]*width:\s*2px/);

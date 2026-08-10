@@ -1389,7 +1389,7 @@ export class AppRuntimeManager extends EventEmitter {
     }));
     const snapshot = session.terminalScreen?.snapshot();
     if (snapshot) {
-      client.send(JSON.stringify({ type: "snapshot", data: snapshot.data, pendingEscape: snapshot.pendingEscape }));
+      client.send(JSON.stringify({ type: "snapshot", ...snapshot }));
     }
     client.on("message", (value) => {
       const raw = Buffer.isBuffer(value) ? value.toString("utf8") : String(value || "");
@@ -1406,6 +1406,10 @@ export class AppRuntimeManager extends EventEmitter {
           session.ttyDimensions = { cols, rows };
           session.pty?.resize(cols, rows);
           session.terminalScreen?.resize(cols, rows);
+          const resizedSnapshot = session.terminalScreen?.snapshot();
+          if (resizedSnapshot) {
+            client.send(JSON.stringify({ type: "snapshot", ...resizedSnapshot }));
+          }
           for (const ttyClient of session.clients) {
             if (ttyClient !== client) {
               ttyClient.send(JSON.stringify({ type: "resize", cols, rows }));

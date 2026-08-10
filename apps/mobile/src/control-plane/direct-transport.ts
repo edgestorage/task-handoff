@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { TtyStreamSnapshotMessageSchema } from '@task-handoff/protocol/app-sessions';
 
 import type { SecureValueStore } from '../platform/secure-storage';
 import { assertDirectIdentityCompatible, probeDirectControlPlane } from './direct-enrollment';
@@ -32,7 +33,7 @@ const DEFAULT_EVENT_TOPICS = ['ai.sessions', 'app.sessions', 'node.state', 'node
 
 const IncomingTtyMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('connected') }).passthrough(),
-  z.object({ type: z.literal('snapshot'), data: z.string(), pendingEscape: z.string() }).passthrough(),
+  TtyStreamSnapshotMessageSchema,
   z.object({ type: z.literal('output'), data: z.string() }).passthrough(),
   z.object({ type: z.literal('resize'), cols: z.number().int().positive(), rows: z.number().int().positive() }).passthrough(),
   z.object({ type: z.literal('exit'), code: z.number().int().nullable().optional(), signal: z.union([z.string(), z.number()]).nullable().optional() }).passthrough(),
@@ -255,7 +256,7 @@ export class DirectControlPlaneTransport implements MobileControlPlaneTransport 
             const parsed = IncomingTtyMessageSchema.safeParse(JSON.parse(event.data));
             if (!parsed.success) return;
             const message = parsed.data;
-            if (message.type === 'snapshot') handlers.onSnapshot(message.data, message.pendingEscape);
+            if (message.type === 'snapshot') handlers.onSnapshot(message.data, message.pendingEscape, message.cols, message.rows);
             else if (message.type === 'output') handlers.onOutput(message.data);
             else if (message.type === 'resize') handlers.onResize(message.cols, message.rows);
             else if (message.type === 'exit') handlers.onExit(message.code, message.signal == null ? null : String(message.signal));

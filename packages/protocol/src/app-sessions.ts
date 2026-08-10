@@ -1,7 +1,15 @@
 import { z } from "zod";
 
 export const AppSessionEventTopic = "app.sessions";
-export const TTY_STREAM_PROTOCOL_VERSION = "2026-08-10";
+export const TTY_STREAM_PROTOCOL_VERSION = "2026-08-11";
+export const TtyStreamSnapshotMessageSchema = z.object({
+  type: z.literal("snapshot"),
+  data: z.string(),
+  pendingEscape: z.string(),
+  cols: z.number().int().positive(),
+  rows: z.number().int().positive(),
+}).passthrough();
+export type TtyStreamSnapshotMessage = z.infer<typeof TtyStreamSnapshotMessageSchema>;
 export const AppSessionEventType = {
   Snapshot: "app-session.snapshot",
   Patch: "app-session.patch",
