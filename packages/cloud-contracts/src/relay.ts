@@ -4,6 +4,16 @@ import { OUTBOUND_CONNECTION_PROTOCOL_VERSION, OfficialAudience, RELAY_FRAMING_P
 
 export const TrafficClassSchema = z.enum(["interactive", "stream", "bulk"]);
 
+export const RelayTtySnapshotEnvelopeSchema = z.object({
+  type: z.literal("tty-snapshot"),
+  streamId: z.string().trim().min(1).optional(),
+  data: z.string(),
+  pendingEscape: z.string(),
+  cols: z.number().int().positive(),
+  rows: z.number().int().positive(),
+}).passthrough();
+export type RelayTtySnapshotEnvelope = z.infer<typeof RelayTtySnapshotEnvelopeSchema>;
+
 export const OutboundConnectionRegistrationPayloadSchema = z.strictObject({
   protocolVersion: z.literal(OUTBOUND_CONNECTION_PROTOCOL_VERSION),
   audience: z.literal(OfficialAudience.CoordinatorControl),

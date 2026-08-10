@@ -24,6 +24,23 @@ require.extensions[".ts"] = (module, filename) => {
 
 const { AppRuntimeManager } = require("../packages/app-runtime/src/runtime.ts");
 const { TerminalScreenState } = require("../packages/app-runtime/src/terminal-screen-state.ts");
+const { SerializeAddon } = require("../packages/app-runtime/node_modules/@xterm/addon-serialize");
+const { Terminal: HeadlessTerminal } = require("../packages/app-runtime/node_modules/@xterm/headless");
+
+function writeHeadless(terminal, data) {
+  terminal._core.writeSync(data);
+}
+
+function serializedTerminal(cols, rows, data, resizeAfterWrite) {
+  const terminal = new HeadlessTerminal({ cols, rows, allowProposedApi: true, logLevel: "off" });
+  const serializer = new SerializeAddon();
+  terminal.loadAddon(serializer);
+  writeHeadless(terminal, data);
+  if (resizeAfterWrite) terminal.resize(resizeAfterWrite.cols, resizeAfterWrite.rows);
+  const serialized = serializer.serialize();
+  terminal.dispose();
+  return serialized;
+}
 
 function pathsFor(root) {
   return {
@@ -175,7 +192,8 @@ test("app runtime ignores duplicate tty resize messages", () => {
     runtime.spawnTerminalPty = () => pty;
     const session = runtime.start("terminal-tty");
     const client = new EventEmitter();
-    client.send = () => {};
+    const sent = [];
+    client.send = (value) => sent.push(JSON.parse(value));
     client.close = () => {};
 
     runtime.attachTty(session.id, client);
@@ -184,6 +202,10 @@ test("app runtime ignores duplicate tty resize messages", () => {
     client.emit("message", JSON.stringify({ type: "resize", cols: 100, rows: 30 }));
 
     assert.deepEqual(appliedSizes, [{ cols: 100, rows: 30 }]);
+    assert.deepEqual(sent.filter((message) => message.type === "snapshot").map(({ cols, rows }) => ({ cols, rows })), [
+      { cols: 120, rows: 32 },
+      { cols: 100, rows: 30 },
+    ]);
   });
 });
 
@@ -202,6 +224,37 @@ test("terminal screen snapshots preserve a control sequence split across PTY chu
   } finally {
     screen.dispose();
   }
+});
+
+test("a TUI snapshot must be parsed at its captured dimensions", () => {
+  const cols = 120;
+  const rows = 32;
+  const source = new HeadlessTerminal({ cols, rows, allowProposedApi: true, logLevel: "off" });
+  const serializer = new SerializeAddon();
+  source.loadAddon(serializer);
+  writeHeadless(source, `\x1b[?1049h\x1b[2J\x1b[1;1H${"header ".repeat(18)}\x1b[31;100Hstatus`);
+  const snapshot = serializer.serialize();
+  source.dispose();
+
+  const restoredAtCapturedSize = serializedTerminal(cols, rows, snapshot);
+  const restoredBeforeInitialFit = serializedTerminal(80, 24, snapshot, { cols, rows });
+
+  assert.notEqual(restoredBeforeInitialFit, restoredAtCapturedSize);
+  assert.match(restoredAtCapturedSize, /status/);
+});
+
+test("terminal screen snapshots restore the authoritative TUI cursor after a filled row", () => {
+  const source = new TerminalScreenState(10, 4);
+  source.write("\x1b[?1049h\x1b[2;1Habcdefghij\x1b[4;5H");
+  const snapshot = source.snapshot();
+  const restored = new HeadlessTerminal({ cols: 10, rows: 4, allowProposedApi: true, logLevel: "off" });
+  restored.loadAddon(new SerializeAddon());
+  writeHeadless(restored, snapshot.data);
+  const restoredCursor = { x: restored.buffer.active.cursorX, y: restored.buffer.active.cursorY };
+  source.dispose();
+  restored.dispose();
+
+  assert.deepEqual(restoredCursor, { x: 4, y: 3 });
 });
 
 test("detaching a tty client keeps the PTY running and restores a screen snapshot on reattach", () => {
@@ -232,9 +285,10 @@ test("detaching a tty client keeps the PTY running and restores a screen snapsho
     assert.equal(killCount, 0);
     assert.equal(runtime.getSession(session.id).status, "running");
     assert.equal(replayed[0].type, "connected");
-    assert.equal(replayed[0].protocolVersion, "2026-08-10");
+    assert.equal(replayed[0].protocolVersion, "2026-08-11");
     assert.equal(replayed[1].type, "snapshot");
     assert.match(replayed[1].data, /terminal output/);
     assert.equal(replayed[1].pendingEscape, "");
+    assert.deepEqual({ cols: replayed[1].cols, rows: replayed[1].rows }, { cols: 120, rows: 32 });
   });
 });

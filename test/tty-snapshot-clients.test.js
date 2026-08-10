@@ -19,6 +19,8 @@ test("every current TTY client restores authoritative snapshots before live outp
     assert.match(source, /message\.type === "snapshot"/);
     assert.match(source, /terminal\??\.reset\(\)/);
     assert.match(source, /pendingEscape/);
+    assert.match(source, /message\.cols|resizeTerminalGrid\(message\)/);
+    assert.match(source, /message\.rows|resizeTerminalGrid\(message\)/);
     assert.match(source, /message\.type === "output"/);
     assert.ok(source.indexOf('message.type === "snapshot"') < source.indexOf('message.type === "output"'));
   }
@@ -30,9 +32,9 @@ test("mobile direct and relay TTY transports preserve snapshots", () => {
   const screen = read("apps/mobile/app/app-sessions/[instanceId]/[sessionId].tsx");
   const relayBridge = read("packages/control-plane/src/control-plane/http/server.ts");
 
-  assert.match(direct, /type: z\.literal\('snapshot'\)/);
-  assert.match(direct, /handlers\.onSnapshot\(message\.data, message\.pendingEscape\)/);
-  assert.match(relayBridge, /type: "tty-snapshot", data: value\.data, pendingEscape: value\.pendingEscape/);
+  assert.match(direct, /TtyStreamSnapshotMessageSchema/);
+  assert.match(direct, /handlers\.onSnapshot\(message\.data, message\.pendingEscape, message\.cols, message\.rows\)/);
+  assert.match(relayBridge, /TtyStreamSnapshotMessageSchema\.parse\(value\)[\s\S]*RelayTtySnapshotEnvelopeSchema\.parse/);
   assert.match(relay, /value\.type === 'tty-snapshot'/);
-  assert.match(screen, /onSnapshot:[\s\S]*writeText\(`\\x1bc\$\{data\}\$\{pendingEscape\}`\)/);
+  assert.match(screen, /onSnapshot:[\s\S]*grid\.cols !== cols \|\| grid\.rows !== rows[\s\S]*writeText\(`\\x1bc\$\{data\}\$\{pendingEscape\}`\)/);
 });

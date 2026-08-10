@@ -20,6 +20,8 @@ import { subscribeToAppLifecycle } from '../../../src/platform/lifecycle';
 import { subscribeToNetworkState } from '../../../src/platform/network';
 
 type ActiveAppSessionAccess = AppSessionAccessLease & { instanceId: string; sessionId: string };
+type TerminalGrid = { cols: number; rows: number };
+type TerminalSnapshot = TerminalGrid & { data: string; pendingEscape: string };
 
 export default function AppSessionRoute() {
   const params = useLocalSearchParams<{ instanceId: string; sessionId: string }>();
@@ -33,6 +35,8 @@ export default function AppSessionRoute() {
   const terminal = useRef<TerminalViewRef>(null);
   const terminalInput = useRef(new AppSessionTerminalInputNormalizer());
   const connection = useRef<MobileAppSessionTtyConnection | undefined>(undefined);
+  const terminalGrid = useRef<TerminalGrid | undefined>(undefined);
+  const pendingTerminalSnapshot = useRef<TerminalSnapshot | undefined>(undefined);
   const renewAccessRef = useRef<(invalidateCurrent?: boolean) => void>(() => undefined);
   const [status, setStatus] = useState<'connecting' | 'connected' | 'closed' | 'exited' | 'error'>('connecting');
   const [error, setError] = useState('');
@@ -52,8 +56,19 @@ export default function AppSessionRoute() {
     if (!transport || !instanceId || !sessionId || session?.kind !== 'tty' || session.status !== 'running') return;
     const active = transport.connectAppSessionTty(instanceId, sessionId, {
       onOpen: () => setStatus('connected'),
-      onSnapshot: (data, pendingEscape) => { void terminal.current?.writeText(`\x1bc${data}${pendingEscape}`); },
-      onOutput: (data) => { void terminal.current?.writeText(data); },
+      onSnapshot: (data, pendingEscape, cols, rows) => {
+        const grid = terminalGrid.current;
+        if (!grid || grid.cols !== cols || grid.rows !== rows) {
+          pendingTerminalSnapshot.current = { data, pendingEscape, cols, rows };
+          if (grid) connection.current?.resize(grid.cols, grid.rows);
+          return;
+        }
+        pendingTerminalSnapshot.current = undefined;
+        void terminal.current?.writeText(`\x1bc${data}${pendingEscape}`);
+      },
+      onOutput: (data) => {
+        if (!pendingTerminalSnapshot.current) void terminal.current?.writeText(data);
+      },
       onResize: () => undefined,
       onExit: (code) => {
         void terminal.current?.finish(code ?? 0);
@@ -66,8 +81,10 @@ export default function AppSessionRoute() {
       onClose: () => setStatus((current) => current === 'exited' ? current : 'closed'),
     });
     connection.current = active;
+    if (terminalGrid.current) active.resize(terminalGrid.current.cols, terminalGrid.current.rows);
     return () => {
       connection.current = undefined;
+      pendingTerminalSnapshot.current = undefined;
       active.close();
     };
   }, [instanceId, session?.kind, session?.status, sessionId, transport]);
@@ -194,7 +211,16 @@ export default function AppSessionRoute() {
       const input = terminalInput.current.push(nativeEvent.text);
       if (input) connection.current?.sendInput(input);
     }}
-    onResize={({ nativeEvent }) => connection.current?.resize(nativeEvent.cols, nativeEvent.rows)}
+    onResize={({ nativeEvent }) => {
+      terminalGrid.current = nativeEvent;
+      const snapshot = pendingTerminalSnapshot.current;
+      if (snapshot && snapshot.cols === nativeEvent.cols && snapshot.rows === nativeEvent.rows) {
+        pendingTerminalSnapshot.current = undefined;
+        void terminal.current?.writeText(`\x1bc${snapshot.data}${snapshot.pendingEscape}`);
+        return;
+      }
+      connection.current?.resize(nativeEvent.cols, nativeEvent.rows);
+    }}
     style={styles.terminal}
     theme={{ background: colors.code, foreground: colors.codeText, cursorColor: colors.sessionActive, selectionBackground: colors.primarySoft }}
   /> : activeAccess ? <WebView

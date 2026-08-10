@@ -195,8 +195,8 @@ describe('DirectControlPlaneTransport', () => {
     expect(socket.send).toHaveBeenCalledWith(JSON.stringify({ type: 'input', data: 'echo hello\r' }));
     listeners.get('message')?.({ data: JSON.stringify({ type: 'output', data: 'hello\r\n' }) });
     expect(onOutput).toHaveBeenCalledWith('hello\r\n');
-    listeners.get('message')?.({ data: JSON.stringify({ type: 'snapshot', data: 'restored', pendingEscape: '\u001b[2' }) });
-    expect(onSnapshot).toHaveBeenCalledWith('restored', '\u001b[2');
+    listeners.get('message')?.({ data: JSON.stringify({ type: 'snapshot', data: 'restored', pendingEscape: '\u001b[2', cols: 120, rows: 32 }) });
+    expect(onSnapshot).toHaveBeenCalledWith('restored', '\u001b[2', 120, 32);
   });
 
   test('unwraps forwarded node-agent events before delivering them to consumers', async () => {

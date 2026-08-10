@@ -160,6 +160,7 @@ export function useBoardTerminalPreviews(boardMode: Ref<boolean>, interactive: R
           return;
         }
         if (message.type === "snapshot" && typeof message.data === "string") {
+          resizeTerminalGrid(message);
           terminal.reset();
           terminal.write(message.data);
           if (typeof message.pendingEscape === "string" && message.pendingEscape) terminal.write(message.pendingEscape);

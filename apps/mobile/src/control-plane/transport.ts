@@ -33,7 +33,7 @@ export interface MobileControlPlaneEventConnection {
 
 export type MobileAppSessionTtyHandlers = {
   onOpen(): void;
-  onSnapshot(data: string, pendingEscape: string): void;
+  onSnapshot(data: string, pendingEscape: string, cols: number, rows: number): void;
   onOutput(data: string): void;
   onResize(cols: number, rows: number): void;
   onExit(code?: number | null, signal?: string | null): void;

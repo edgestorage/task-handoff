@@ -104,7 +104,9 @@ async function mountTerminal() {
   });
   const fit = new FitAddon();
   const socket = new WebSocket(websocketUrl(socketPath));
+  let restoringSnapshot = false;
   const resize = () => {
+    if (restoringSnapshot) return;
     fit.fit();
     const dimensions = fit.proposeDimensions();
     if (dimensions && socket.readyState === WebSocket.OPEN) {
@@ -121,11 +123,18 @@ async function mountTerminal() {
       return;
     }
     try {
-      const message = JSON.parse(event.data) as { type?: string; data?: unknown; message?: unknown; pendingEscape?: unknown };
+      const message = JSON.parse(event.data) as { type?: string; data?: unknown; message?: unknown; pendingEscape?: unknown; cols?: unknown; rows?: unknown };
       if (message.type === "snapshot" && typeof message.data === "string") {
+        restoringSnapshot = true;
+        if (Number.isInteger(message.cols) && Number.isInteger(message.rows) && Number(message.cols) > 0 && Number(message.rows) > 0) {
+          terminal.resize(Number(message.cols), Number(message.rows));
+        }
         terminal.reset();
-        terminal.write(message.data);
-        if (typeof message.pendingEscape === "string" && message.pendingEscape) terminal.write(message.pendingEscape);
+        const pendingEscape = typeof message.pendingEscape === "string" ? message.pendingEscape : "";
+        terminal.write(`${message.data}${pendingEscape}`, () => {
+          restoringSnapshot = false;
+          resize();
+        });
       } else if (message.type === "output" && typeof message.data === "string") {
         terminal.write(message.data);
       } else if (message.type === "error") {

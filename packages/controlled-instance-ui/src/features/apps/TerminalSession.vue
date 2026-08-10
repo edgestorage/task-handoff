@@ -29,19 +29,21 @@ let socket: WebSocket | undefined;
 let resizeObserver: ResizeObserver | undefined;
 let refreshFrame: number | undefined;
 let refreshTimer: number | undefined;
+let restoringSnapshot = false;
 
 const wsUrl = computed(() => {
   return publicWebSocketUrl(`/api/apps/sessions/${props.session.id}/tty`, auth.token);
 });
 
 function sendResize() {
-  if (!terminal || socket?.readyState !== WebSocket.OPEN) {
+  if (restoringSnapshot || !terminal || socket?.readyState !== WebSocket.OPEN) {
     return;
   }
   socket.send(JSON.stringify({ type: "resize", cols: terminal.cols, rows: terminal.rows }));
 }
 
 function fit() {
+  if (restoringSnapshot) return;
   try {
     fitAddon?.fit();
     if (terminal && terminal.rows > 0) {
@@ -127,9 +129,15 @@ async function connect() {
   socket.addEventListener("message", (event) => {
     const message = JSON.parse(String(event.data || "{}"));
     if (message.type === "snapshot") {
+      restoringSnapshot = true;
+      if (Number.isInteger(message.cols) && Number.isInteger(message.rows) && message.cols > 0 && message.rows > 0) {
+        terminal?.resize(message.cols, message.rows);
+      }
       terminal?.reset();
-      terminal?.write(String(message.data || ""));
-      if (message.pendingEscape) terminal?.write(String(message.pendingEscape));
+      terminal?.write(`${String(message.data || "")}${String(message.pendingEscape || "")}`, () => {
+        restoringSnapshot = false;
+        scheduleRefresh();
+      });
     } else if (message.type === "output") {
       terminal?.write(String(message.data || ""));
     } else if (message.type === "connected") {
