@@ -17,22 +17,55 @@ export const MobileControlPlaneCapabilitiesSchema = ControlPlanePublicCapabiliti
   triggers: z.boolean(),
 }).strict();
 
-export const MobileControlPlaneProfileSchema = z.object({
+const MobileControlPlaneProfileBaseSchema = z.object({
   version: z.literal(MOBILE_CONTROL_PLANE_PROFILE_VERSION),
   identity: MobileControlPlaneIdentitySchema,
-  access: z.object({
-    kind: z.literal('direct'),
-    origin: z.string().url(),
-    secureSessionKey: z.string().trim().min(1).max(160),
-  }).strict(),
   capabilities: MobileControlPlaneCapabilitiesSchema,
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
 }).strict();
 
+const MobileDirectAccessSchema = z.object({
+    kind: z.literal('direct'),
+    origin: z.string().url(),
+    secureSessionKey: z.string().trim().min(1).max(160),
+}).strict();
+
+const MobileCloudRelayAccessSchema = z.object({
+  kind: z.literal('cloud-relay'),
+  serviceOrigin: z.string().url(),
+  bindingId: z.string().trim().min(1).max(160),
+  bindingRevision: z.number().int().positive(),
+  accountSession: z.object({
+    id: z.string().trim().min(1).max(160),
+    secureCredentialKey: z.string().trim().min(1).max(160),
+  }).strict(),
+  transport: z.object({
+    request: z.boolean(),
+    stream: z.boolean(),
+    webSocket: z.boolean(),
+  }).strict(),
+}).strict();
+
+export const MobileDirectControlPlaneProfileSchema = MobileControlPlaneProfileBaseSchema.extend({ access: MobileDirectAccessSchema }).strict();
+export const MobileCloudRelayControlPlaneProfileSchema = MobileControlPlaneProfileBaseSchema.extend({ access: MobileCloudRelayAccessSchema }).strict();
+export const MobileControlPlaneProfileSchema = MobileControlPlaneProfileBaseSchema.extend({
+  access: z.discriminatedUnion('kind', [MobileDirectAccessSchema, MobileCloudRelayAccessSchema]),
+}).strict();
+
 export type MobileControlPlaneIdentity = z.infer<typeof MobileControlPlaneIdentitySchema>;
 export type MobileControlPlaneCapabilities = z.infer<typeof MobileControlPlaneCapabilitiesSchema>;
+export type MobileDirectControlPlaneProfile = z.infer<typeof MobileDirectControlPlaneProfileSchema>;
+export type MobileCloudRelayControlPlaneProfile = z.infer<typeof MobileCloudRelayControlPlaneProfileSchema>;
 export type MobileControlPlaneProfile = z.infer<typeof MobileControlPlaneProfileSchema>;
+
+export function isDirectMobileControlPlaneProfile(profile: MobileControlPlaneProfile): profile is MobileDirectControlPlaneProfile {
+  return profile.access.kind === 'direct';
+}
+
+export function mobileControlPlaneProfileAddress(profile: MobileControlPlaneProfile) {
+  return profile.access.kind === 'direct' ? profile.access.origin : profile.access.serviceOrigin;
+}
 
 export function normalizeMobileControlPlaneCapabilities(input: ControlPlanePublicCapabilities): MobileControlPlaneCapabilities {
   return MobileControlPlaneCapabilitiesSchema.parse({
@@ -44,7 +77,9 @@ export function normalizeMobileControlPlaneCapabilities(input: ControlPlanePubli
 const STORED_PROFILE_FIELDS = {
   '': ['version', 'identity', 'access', 'capabilities', 'createdAt', 'updatedAt'],
   identity: ['controlPlaneId', 'publicKeyFingerprint', 'displayName', 'protocolVersion'],
-  access: ['kind', 'origin', 'secureSessionKey'],
+  access: ['kind', 'origin', 'secureSessionKey', 'serviceOrigin', 'bindingId', 'bindingRevision', 'accountSession', 'transport'],
+  'access.accountSession': ['id', 'secureCredentialKey'],
+  'access.transport': ['request', 'stream', 'webSocket'],
   capabilities: ['authentication', 'aiSessions', 'nodes', 'instanceBoard', 'triggers'],
 } as const;
 
@@ -53,13 +88,19 @@ export function storedMobileControlPlaneProfileUnknownFields(input: unknown) {
   const source = input as Record<string, unknown>;
   const unknown: string[] = [];
   for (const [prefix, allowed] of Object.entries(STORED_PROFILE_FIELDS)) {
-    const value = prefix ? source[prefix] : source;
+    const value = prefix ? nestedValue(source, prefix) : source;
     if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
     for (const key of Object.keys(value)) {
       if (!(allowed as readonly string[]).includes(key)) unknown.push(prefix ? `${prefix}.${key}` : key);
     }
   }
   return unknown.slice(0, 20);
+}
+
+function nestedValue(source: Record<string, unknown>, path: string) {
+  return path.split('.').reduce<unknown>((value, key) => (
+    value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>)[key] : undefined
+  ), source);
 }
 
 function pick(input: unknown, keys: readonly string[]) {
@@ -73,10 +114,23 @@ export function sanitizeStoredMobileControlPlaneProfile(input: unknown) {
   if (!profile || typeof profile !== 'object' || Array.isArray(profile)) return profile;
   const value = profile as Record<string, unknown>;
   const capabilities = pick(value.capabilities, ['authentication', 'aiSessions', 'nodes', 'instanceBoard', 'triggers']);
+  const access = pick(value.access, ['kind', 'origin', 'secureSessionKey', 'serviceOrigin', 'bindingId', 'bindingRevision', 'accountSession', 'transport']);
+  const accessRecord = access && typeof access === 'object' && !Array.isArray(access) ? access as Record<string, unknown> : undefined;
+  const sanitizedAccess = accessRecord
+    ? {
+        ...accessRecord,
+        ...(accessRecord.kind === 'cloud-relay' ? {
+          accountSession: pick(accessRecord.accountSession, ['id', 'secureCredentialKey']),
+          transport: pick(accessRecord.transport, ['request', 'stream', 'webSocket']),
+        } : {}),
+      }
+    : access;
   return {
     ...value,
+    // Compatibility for v0.0.19: its v1 direct profile remains valid unchanged.
+    version: value.version,
     identity: pick(value.identity, ['controlPlaneId', 'publicKeyFingerprint', 'displayName', 'protocolVersion']),
-    access: pick(value.access, ['kind', 'origin', 'secureSessionKey']),
+    access: sanitizedAccess,
     capabilities: capabilities && typeof capabilities === 'object' && !Array.isArray(capabilities)
       ? { triggers: false, ...capabilities }
       : capabilities,

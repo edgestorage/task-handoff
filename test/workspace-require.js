@@ -12,6 +12,8 @@ function registerWorkspaceRequire(rootDir = path.resolve(__dirname, "..")) {
   const workspacePackageAliases = new Map([
     ["@task-handoff/ai-session-runtime", path.join(rootDir, "packages/ai-session-runtime/src/index.ts")],
     ["@task-handoff/ai-session-runtime/", path.join(rootDir, "packages/ai-session-runtime/src/")],
+    ["@task-handoff/cloud-contracts", path.join(rootDir, "packages/cloud-contracts/src/index.ts")],
+    ["@task-handoff/cloud-contracts/", path.join(rootDir, "packages/cloud-contracts/src/")],
     ["@task-handoff/core", path.join(rootDir, "packages/core/src/index.ts")],
     ["@task-handoff/core/", path.join(rootDir, "packages/core/src/")],
     ["@task-handoff/protocol", path.join(rootDir, "packages/protocol/src/index.ts")],

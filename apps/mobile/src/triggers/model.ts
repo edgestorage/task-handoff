@@ -84,6 +84,15 @@ export function triggerInput(draft: TriggerFormDraft): ControlPlaneTriggerTempla
   };
 }
 
+export function triggerDraftCanSubmit(draft: TriggerFormDraft) {
+  if (!draft.name.trim() || !draft.promptTemplate.trim()) return false;
+  if (draft.sourceType === 'file-change') return csv(draft.roots).length > 0 && csv(draft.globs).length > 0;
+  if (draft.sourceType === 'ai-session') return true;
+  if (draft.scheduleKind === 'interval') return Number.isFinite(Number(draft.intervalValue)) && Number(draft.intervalValue) > 0;
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(draft.timeOfDay) || !draft.timezone.trim()) return false;
+  return draft.scheduleKind !== 'weekly' || draft.weekdays.length > 0;
+}
+
 function triggerSource(draft: TriggerFormDraft): TriggerSource {
   if (draft.sourceType === 'file-change') return {
     type: 'file-change', roots: csv(draft.roots), globs: csv(draft.globs), ignore: csv(draft.ignore), debounceMs: integer(draft.debounceMs, 1500, 100, 60_000),

@@ -1,4 +1,5 @@
 import { nextTick, type Ref } from "vue";
+import { TTY_STREAM_PROTOCOL_VERSION } from "@task-handoff/protocol/app-sessions";
 
 function terminalTheme() {
   const styles = window.getComputedStyle(document.documentElement);
@@ -10,7 +11,7 @@ function terminalTheme() {
   };
 }
 
-export function useTerminalPreview(socketUrl: Ref<string>, host: Ref<HTMLElement | null>) {
+export function useTerminalPreview(socketUrl: Ref<string>, host: Ref<HTMLElement | null>, active: Ref<boolean>) {
   let terminalCleanup: (() => void) | undefined;
   let mountedTerminalUrl = "";
   let mountedTerminalHost: HTMLElement | undefined;
@@ -45,61 +46,109 @@ export function useTerminalPreview(socketUrl: Ref<string>, host: Ref<HTMLElement
     });
     const fit = new FitAddon();
     const socket = new WebSocket(url);
-    const sendResize = () => {
-      const dimensions = fit.proposeDimensions();
-      if (dimensions && socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ type: "resize", cols: dimensions.cols, rows: dimensions.rows }));
-      }
-    };
-    const resize = () => {
-      if (!target.isConnected || target.clientWidth === 0 || target.clientHeight === 0) {
-        return;
-      }
-      try {
-        fit.fit();
-        if (terminal.rows > 0) {
-          terminal.refresh(0, terminal.rows - 1);
-        }
-        sendResize();
-      } catch {
-        // xterm can throw while the preview is hidden during a layout change.
+    let lastSentDimensions: { cols: number; rows: number } | undefined;
+    const sendResize = (cols: number, rows: number) => {
+      if (socket.readyState === WebSocket.OPEN && (lastSentDimensions?.cols !== cols || lastSentDimensions.rows !== rows)) {
+        lastSentDimensions = { cols, rows };
+        socket.send(JSON.stringify({ type: "resize", cols, rows }));
       }
     };
     let refreshFrame: number | undefined;
-    let refreshTimer: number | undefined;
+    let resizeGeneration = 0;
+    let repaintRequested = false;
+    let initialResizeRequested = false;
     let resizeObserver: ResizeObserver | undefined;
-    const scheduleResize = () => {
+    const cancelScheduledResize = () => {
+      resizeGeneration += 1;
       if (refreshFrame !== undefined) {
         window.cancelAnimationFrame(refreshFrame);
-      }
-      if (refreshTimer !== undefined) {
-        window.clearTimeout(refreshTimer);
-      }
-      refreshFrame = window.requestAnimationFrame(() => {
         refreshFrame = undefined;
-        resize();
-      });
-      refreshTimer = window.setTimeout(() => {
-        refreshTimer = undefined;
-        resize();
-      }, 80);
+      }
     };
-    refreshTerminalPreview = scheduleResize;
+    const scheduleResize = (options: { repaint?: boolean; sendInitialSize?: boolean } = {}) => {
+      repaintRequested ||= Boolean(options.repaint);
+      initialResizeRequested ||= Boolean(options.sendInitialSize);
+      cancelScheduledResize();
+      const generation = resizeGeneration;
+      let previousDimensions: { cols: number; rows: number } | undefined;
+      let stableFrames = 0;
+      let attempts = 0;
+
+      const measure = () => {
+        refreshFrame = undefined;
+        if (generation !== resizeGeneration || !active.value || !target.isConnected || target.clientWidth === 0 || target.clientHeight === 0) {
+          return;
+        }
+        let dimensions: { cols: number; rows: number } | undefined;
+        try {
+          dimensions = fit.proposeDimensions() || undefined;
+        } catch {
+          return;
+        }
+        if (!dimensions) {
+          return;
+        }
+        attempts += 1;
+        if (previousDimensions?.cols === dimensions.cols && previousDimensions.rows === dimensions.rows) {
+          stableFrames += 1;
+        } else {
+          previousDimensions = dimensions;
+          stableFrames = 1;
+        }
+        if (stableFrames < 2 && attempts < 8) {
+          refreshFrame = window.requestAnimationFrame(measure);
+          return;
+        }
+
+        const shouldRepaint = repaintRequested;
+        const shouldSendInitialSize = initialResizeRequested;
+        repaintRequested = false;
+        initialResizeRequested = false;
+        try {
+          if (terminal.cols !== dimensions.cols || terminal.rows !== dimensions.rows) {
+            fit.fit();
+          }
+          if (shouldRepaint && terminal.rows > 0) {
+            terminal.refresh(0, terminal.rows - 1);
+          }
+          if (shouldSendInitialSize) {
+            sendResize(terminal.cols, terminal.rows);
+          }
+        } catch {
+          // The next visible layout observation will retry the fit.
+        }
+      };
+
+      refreshFrame = window.requestAnimationFrame(measure);
+    };
+    refreshTerminalPreview = () => scheduleResize({ repaint: true, sendInitialSize: true });
     terminal.loadAddon(fit);
     terminal.open(target);
-    resizeObserver = new ResizeObserver(scheduleResize);
+    terminal.onResize(({ cols, rows }) => sendResize(cols, rows));
+    resizeObserver = new ResizeObserver(() => scheduleResize());
     resizeObserver.observe(target);
-    scheduleResize();
+    scheduleResize({ repaint: true });
     socket.binaryType = "arraybuffer";
-    socket.addEventListener("open", scheduleResize);
+    socket.addEventListener("open", () => scheduleResize({ repaint: true, sendInitialSize: true }));
     socket.addEventListener("message", (event) => {
       if (typeof event.data !== "string") {
         terminal.write(new Uint8Array(event.data));
         return;
       }
       try {
-        const message = JSON.parse(event.data) as { type?: string; data?: unknown; message?: unknown };
-        if (message.type === "output" && typeof message.data === "string") {
+        const message = JSON.parse(event.data) as { type?: string; data?: unknown; message?: unknown; pendingEscape?: unknown; protocolVersion?: unknown };
+        if (message.type === "connected" && message.protocolVersion !== TTY_STREAM_PROTOCOL_VERSION) {
+          console.warn("TTY stream protocol version mismatch.", {
+            expected: TTY_STREAM_PROTOCOL_VERSION,
+            received: message.protocolVersion,
+          });
+        } else if (message.type === "snapshot" && typeof message.data === "string") {
+          terminal.reset();
+          terminal.write(message.data);
+          if (typeof message.pendingEscape === "string" && message.pendingEscape) {
+            terminal.write(message.pendingEscape);
+          }
+        } else if (message.type === "output" && typeof message.data === "string") {
           terminal.write(message.data);
         } else if (message.type === "error") {
           terminal.writeln(String(message.message || "TTY session error."));
@@ -113,17 +162,10 @@ export function useTerminalPreview(socketUrl: Ref<string>, host: Ref<HTMLElement
         socket.send(JSON.stringify({ type: "input", data }));
       }
     });
-    window.addEventListener("resize", scheduleResize);
-    scheduleResize();
+    scheduleResize({ repaint: true });
     terminalCleanup = () => {
-      if (refreshFrame !== undefined) {
-        window.cancelAnimationFrame(refreshFrame);
-      }
-      if (refreshTimer !== undefined) {
-        window.clearTimeout(refreshTimer);
-      }
+      cancelScheduledResize();
       resizeObserver?.disconnect();
-      window.removeEventListener("resize", scheduleResize);
       socket.close();
       terminal.dispose();
       mountedTerminalUrl = "";

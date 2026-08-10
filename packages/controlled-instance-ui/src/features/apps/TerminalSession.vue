@@ -126,7 +126,11 @@ async function connect() {
   });
   socket.addEventListener("message", (event) => {
     const message = JSON.parse(String(event.data || "{}"));
-    if (message.type === "output") {
+    if (message.type === "snapshot") {
+      terminal?.reset();
+      terminal?.write(String(message.data || ""));
+      if (message.pendingEscape) terminal?.write(String(message.pendingEscape));
+    } else if (message.type === "output") {
       terminal?.write(String(message.data || ""));
     } else if (message.type === "connected") {
       status.value = "connected";

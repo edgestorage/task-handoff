@@ -121,8 +121,12 @@ async function mountTerminal() {
       return;
     }
     try {
-      const message = JSON.parse(event.data) as { type?: string; data?: unknown; message?: unknown };
-      if (message.type === "output" && typeof message.data === "string") {
+      const message = JSON.parse(event.data) as { type?: string; data?: unknown; message?: unknown; pendingEscape?: unknown };
+      if (message.type === "snapshot" && typeof message.data === "string") {
+        terminal.reset();
+        terminal.write(message.data);
+        if (typeof message.pendingEscape === "string" && message.pendingEscape) terminal.write(message.pendingEscape);
+      } else if (message.type === "output" && typeof message.data === "string") {
         terminal.write(message.data);
       } else if (message.type === "error") {
         terminal.writeln(String(message.message || "TTY session error."));

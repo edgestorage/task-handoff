@@ -300,7 +300,6 @@
           :selected-ai-session="selectedAiSession"
           :session="pane.session"
           :session-key="pane.sessionKey"
-          :tabs="pane.tabs"
           @open-ai-session-app="(target, session) => $emit('openAiSessionApp', target, session)"
           @open-repository-workspace="$emit('openRepositoryWorkspace', $event)"
           @open-launch-menu="updateAppLaunchMenuOpen(pane.id, true)"

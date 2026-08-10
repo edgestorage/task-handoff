@@ -52,6 +52,7 @@ export default function AppSessionRoute() {
     if (!transport || !instanceId || !sessionId || session?.kind !== 'tty' || session.status !== 'running') return;
     const active = transport.connectAppSessionTty(instanceId, sessionId, {
       onOpen: () => setStatus('connected'),
+      onSnapshot: (data, pendingEscape) => { void terminal.current?.writeText(`\x1bc${data}${pendingEscape}`); },
       onOutput: (data) => { void terminal.current?.writeText(data); },
       onResize: () => undefined,
       onExit: (code) => {

@@ -1,5 +1,5 @@
 const DESKTOP_SHUTDOWN_POLICIES = Object.freeze({
-  quit: Object.freeze({ controlPlane: true, nodeAgent: false }),
+  quit: Object.freeze({ controlPlane: true, nodeAgent: true }),
   update: Object.freeze({ controlPlane: true, nodeAgent: true }),
   "boot-failure": Object.freeze({ controlPlane: true, nodeAgent: "unless-ready" }),
 });

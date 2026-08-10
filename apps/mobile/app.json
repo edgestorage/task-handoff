@@ -10,6 +10,18 @@
     "plugins": [
       "expo-router",
       [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#f2f2f7",
+          "dark": {
+            "backgroundColor": "#000000",
+            "image": "./assets/icon.png"
+          },
+          "image": "./assets/icon.png",
+          "imageWidth": 100
+        }
+      ],
+      [
         "expo-secure-store",
         {
           "configureAndroidBackup": true

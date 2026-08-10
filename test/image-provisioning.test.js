@@ -214,7 +214,7 @@ test("node-agent creates immediately, provisions the image, and blocks stale wor
     dataDir: tempDataDir("node-image-provisioning"),
     logger: false,
     token: "agent-secret",
-    dockerCommandRunner: async (_command, args) => {
+    dockerCommandRunner: async (_command, args, options = {}) => {
       const volume = managedVolumeInspect(args, "inst_pull");
       if (volume) return volume;
       if (args[0] === "image") {
@@ -222,9 +222,19 @@ test("node-agent creates immediately, provisions the image, and blocks stale wor
         return { stdout: JSON.stringify({ Id: digest("c"), RepoDigests: [`docker.io/example/controlled@${digest("c")}`] }), stderr: "" };
       }
       if (args[0] === "pull") {
-        await pullGate;
+        await Promise.race([
+          pullGate,
+          new Promise((_, reject) => {
+            const abort = () => reject(Object.assign(new Error("pull aborted"), { code: "RUNTIME_COMMAND_ABORTED" }));
+            if (options.signal?.aborted) abort();
+            else options.signal?.addEventListener("abort", abort, { once: true });
+          }),
+        ]);
         available = true;
         return { stdout: "pulled", stderr: "" };
+      }
+      if (args[0] === "inspect") {
+        throw Object.assign(new Error("No such container"), { details: { stderr: "No such container" } });
       }
       return { stdout: "", stderr: "" };
     },
@@ -252,7 +262,7 @@ test("node-agent creates immediately, provisions the image, and blocks stale wor
     payload: { deleteVolumes: true },
     headers: { authorization: "Bearer agent-secret" },
   });
-  assert.equal(deleted.statusCode, 200);
+  assert.equal(deleted.statusCode, 200, deleted.body);
   releasePull();
   await new Promise((resolve) => setTimeout(resolve, 30));
   assert.equal(app.nodeAgentState.controlledInstances.get("inst_pull"), undefined);

@@ -39,7 +39,7 @@ export function assertDirectIdentityCompatible(
   existingProfiles: readonly MobileControlPlaneProfile[],
 ) {
   const conflict = existingProfiles.find((profile) => (
-    profile.access.origin === target.origin || profile.identity.controlPlaneId === target.identity.controlPlaneId
+    (profile.access.kind === 'direct' && profile.access.origin === target.origin) || profile.identity.controlPlaneId === target.identity.controlPlaneId
   ) && (
     profile.identity.controlPlaneId !== target.identity.controlPlaneId
       || profile.identity.publicKeyFingerprint !== target.identity.publicKey.fingerprint
@@ -56,7 +56,8 @@ export function existingDirectControlPlaneProfile(
   target: VerifiedDirectControlPlane,
   profiles: readonly MobileControlPlaneProfile[],
 ) {
-  return profiles.find((profile) => profile.identity.controlPlaneId === target.identity.controlPlaneId
+  return profiles.find((profile) => profile.access.kind === 'direct'
+    && profile.identity.controlPlaneId === target.identity.controlPlaneId
     && profile.identity.publicKeyFingerprint === target.identity.publicKey.fingerprint);
 }
 

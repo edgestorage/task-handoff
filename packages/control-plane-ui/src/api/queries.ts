@@ -81,6 +81,8 @@ import type {
   PublicPendingProxyClaim,
   PublicProxyBinding,
   PublicProxyInvite,
+  CloudConnectivity,
+  CloudBindingChallenge,
 } from "./types";
 
 export function useHealthQuery() {
@@ -146,6 +148,22 @@ export function useControlPlaneSettingsQuery() {
 
 export function updateControlPlaneSettings(input: Partial<ControlPlaneSettings>) {
   return patchApiData<ControlPlaneSettings>("control-plane/settings", input);
+}
+
+export function useCloudConnectivityQuery() {
+  return useQuery({ queryKey: controlPlaneQueryKeys.cloudConnectivity, queryFn: () => getApiData<CloudConnectivity>("cloud-connectivity"), retry: false });
+}
+
+export function createCloudBindingChallenge() {
+  return postApiData<CloudBindingChallenge>("cloud-connectivity/challenges", {});
+}
+
+export function updateCloudRemoteAccess(enabled: boolean) {
+  return postApiData<CloudConnectivity>("cloud-connectivity/remote-access", { enabled });
+}
+
+export function disconnectCloudAccount() {
+  return postApiData<CloudConnectivity>("cloud-connectivity/disconnect", {});
 }
 
 export async function downloadControlPlaneDiagnosticLogs() {

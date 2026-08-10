@@ -79,6 +79,8 @@
 
       <AccountSecuritySettingsSection v-else-if="settingsSection === 'account'" />
 
+      <CloudConnectivitySettingsSection v-else-if="settingsSection === 'cloud-connectivity'" />
+
       <ScrollArea v-else-if="settingsSection === 'models'" class="settings-section-scroll" :horizontal="false">
         <div class="settings-section-scroll-content">
       <div class="project-management-grid">
@@ -695,7 +697,7 @@ import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useQueryClient } from "@tanstack/vue-query";
 import { AlertTriangle, ArrowLeft, ChevronDown, ChevronUp, Download, Eye, EyeOff, KeyRound, Layers, MapPin, MonitorCog, Plus, RefreshCw, Server, Settings, ShieldAlert, Trash2 } from "@lucide/vue";
-import { cancelControlPlaneProxyClaim, claimControlPlaneProxyNode, controlPlaneQueryKeys, downloadControlPlaneDiagnosticLogs, getNodeExternalListener, resumeControlPlaneProxyClaim, updateControlPlaneSettings, updateNodeExternalListener, useChatBridgesQuery, useChatGatewayStatusQuery, useControlPlaneSettingsQuery, useImageOptionsQuery, useImagesQuery, useInstanceBoardPayloadQuery, useMarketCatalogQuery, useModelRegistryQuery, useModelsQuery, useNodeImageAvailabilityQuery, useNodeRuntimesPayloadQuery, useNodesQuery, usePendingControlPlaneProxyClaimsQuery, useProjectsQuery, useServerUpdateCheckQuery } from "../../../api/queries";
+import { cancelControlPlaneProxyClaim, claimControlPlaneProxyNode, controlPlaneQueryKeys, downloadControlPlaneDiagnosticLogs, getNodeExternalListener, resumeControlPlaneProxyClaim, updateControlPlaneSettings, updateNodeExternalListener, useAuthSessionQuery, useChatBridgesQuery, useChatGatewayStatusQuery, useControlPlaneSettingsQuery, useImageOptionsQuery, useImagesQuery, useInstanceBoardPayloadQuery, useMarketCatalogQuery, useModelRegistryQuery, useModelsQuery, useNodeImageAvailabilityQuery, useNodeRuntimesPayloadQuery, useNodesQuery, usePendingControlPlaneProxyClaimsQuery, useProjectsQuery, useServerUpdateCheckQuery } from "../../../api/queries";
 import { invalidateControlPlaneDomains } from "../../../api/queryInvalidation";
 import type { BuildInfo, ControlPlaneSettings, InstanceBoardItem, ModelLocation, Node, NodeAgentExternalListener, UpdateChannel } from "../../../api/types";
 import { Badge } from "../../../components/ui/badge";
@@ -728,6 +730,7 @@ import NodeAgentInstallDialog from "./NodeAgentInstallDialog.vue";
 import NodeStorageFolderPickerDialog from "./NodeStorageFolderPickerDialog.vue";
 import GeneratedTokenDialog from "./GeneratedTokenDialog.vue";
 import EnvironmentTemplatesSettings from "./EnvironmentTemplatesSettings.vue";
+import CloudConnectivitySettingsSection from "./CloudConnectivitySettingsSection.vue";
 import { nodeEndpointDisplay } from "./nodeEndpointDisplay";
 import { getThemePreference, saveThemePreference, type ThemePreference } from "../../../utils/theme";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
@@ -735,7 +738,7 @@ import { connectionStatusKeys, translateStatus } from "../../../i18n/status";
 import { translateApiError } from "../../../i18n/apiError";
 import { normalizeProxyOrigin, proxyClaimValidation } from "./controlPlaneProxyUi";
 
-type SettingsSection = "basic" | "chat" | "images" | "environment-templates" | "projects" | "nodes" | "models" | "triggers" | "mobile-sessions" | "account";
+type SettingsSection = "basic" | "chat" | "images" | "environment-templates" | "projects" | "nodes" | "models" | "triggers" | "mobile-sessions" | "account" | "cloud-connectivity";
 type NodeDiagnosticLog = {
   route: string;
   method: string;
@@ -760,6 +763,7 @@ const emit = defineEmits<{
 const { locale, t } = useI18n();
 
 const DEFAULT_SELECT_VALUE = "__default__";
+const authSession = useAuthSessionQuery();
 const settingsSections = computed<Array<{ id: SettingsSection; label: string }>>(() => [
   { id: "nodes", label: t("settings.nodes") },
   { id: "images", label: t("settings.images") },
@@ -770,6 +774,7 @@ const settingsSections = computed<Array<{ id: SettingsSection; label: string }>>
   { id: "chat", label: t("settings.chat") },
   { id: "mobile-sessions", label: t("settings.mobileSessions.navigation") },
   { id: "account", label: t("settings.account.navigation") },
+  ...(authSession.data.value?.user?.role === "admin" ? [{ id: "cloud-connectivity" as const, label: t("settings.cloud.navigation") }] : []),
   { id: "basic", label: t("settings.basic") },
 ]);
 
@@ -791,6 +796,9 @@ const updateChannel = computed<UpdateChannel>(() => controlPlaneSettings.data.va
 const diagnosticLogs = computed(() => controlPlaneSettings.data.value?.diagnosticLogs === true);
 
 const settingsSection = ref<SettingsSection>(props.initialSection || "nodes");
+watch(() => authSession.data.value?.user?.role, (role) => {
+  if (role !== "admin" && settingsSection.value === "cloud-connectivity") setSettingsSection("nodes");
+}, { immediate: true });
 const themePreference = ref<ThemePreference>(getThemePreference());
 const publicBaseUrl = ref("");
 const publicBaseUrlMessage = ref("");

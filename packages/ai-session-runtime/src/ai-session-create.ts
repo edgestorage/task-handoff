@@ -88,7 +88,6 @@ export class AiSessionCreateCoordinator {
         }),
         this.options.materializationTimeoutMs ?? 15_000,
       );
-      await provider.readSession?.(providerSessionId);
     } catch (error: unknown) {
       await this.compensate(provider, providerSessionId, session.id, "first-turn-failed", error);
       throw aiSessionControlError(

@@ -2,11 +2,11 @@ import { z } from 'zod';
 
 import { DirectControlPlaneTransport } from '../src/control-plane/direct-transport';
 import { createDirectControlPlaneClient } from '../src/control-plane/client';
-import type { MobileControlPlaneProfile } from '../src/control-plane/profile';
+import type { MobileDirectControlPlaneProfile } from '../src/control-plane/profile';
 import type { SecureValueStore } from '../src/platform/secure-storage';
 
 const fingerprint = `sha256:${'b'.repeat(43)}`;
-const profile: MobileControlPlaneProfile = {
+const profile: MobileDirectControlPlaneProfile = {
   version: 1,
   identity: { controlPlaneId: 'control_plane_test', publicKeyFingerprint: fingerprint, protocolVersion: '2026-08-05' },
   access: { kind: 'direct', origin: 'https://control.example.com', secureSessionKey: 'session.test' },
@@ -173,12 +173,13 @@ describe('DirectControlPlaneTransport', () => {
     };
     const factory = jest.fn((_url: string, _headers: Record<string, string>) => socket);
     const onOutput = jest.fn();
+    const onSnapshot = jest.fn();
     const transport = new DirectControlPlaneTransport(profile, secureStore(), {
       probeImpl: async () => target,
       webSocketFactory: factory,
     });
     const connection = transport.connectAppSessionTty('instance/one', 'tty one', {
-      onOpen: jest.fn(), onOutput, onResize: jest.fn(), onExit: jest.fn(), onError: jest.fn(), onClose: jest.fn(),
+      onOpen: jest.fn(), onSnapshot, onOutput, onResize: jest.fn(), onExit: jest.fn(), onError: jest.fn(), onClose: jest.fn(),
     });
     connection.resize(92, 28);
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -194,6 +195,8 @@ describe('DirectControlPlaneTransport', () => {
     expect(socket.send).toHaveBeenCalledWith(JSON.stringify({ type: 'input', data: 'echo hello\r' }));
     listeners.get('message')?.({ data: JSON.stringify({ type: 'output', data: 'hello\r\n' }) });
     expect(onOutput).toHaveBeenCalledWith('hello\r\n');
+    listeners.get('message')?.({ data: JSON.stringify({ type: 'snapshot', data: 'restored', pendingEscape: '\u001b[2' }) });
+    expect(onSnapshot).toHaveBeenCalledWith('restored', '\u001b[2');
   });
 
   test('unwraps forwarded node-agent events before delivering them to consumers', async () => {

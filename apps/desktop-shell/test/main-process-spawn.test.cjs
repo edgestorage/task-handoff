@@ -34,7 +34,7 @@ test("desktop owns a single Electron process and focuses it on repeated launches
   assert.match(main, /mainWindow\.focus\(\)/);
 });
 
-test("desktop keeps node-agent independent while making Control Plane shutdown awaitable", () => {
+test("desktop supervises its detached node-agent and awaits service shutdown", () => {
   const main = fs.readFileSync(path.join(__dirname, "../src/main.cjs"), "utf8");
   assert.match(main, /detached: true/);
   assert.match(main, /bootNodeAgent\?\.unref\?\.\(\)/);

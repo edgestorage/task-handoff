@@ -1,0 +1,26 @@
+{
+  "name": "@task-handoff/cloud-contracts",
+  "version": "0.1.0-dev.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./mobile": {
+      "types": "./src/mobile.ts",
+      "default": "./src/mobile.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit",
+    "check": "pnpm run build",
+    "test": "node --test contracts.test.ts"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  }
+}

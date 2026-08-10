@@ -137,6 +137,7 @@ function checkWorkspace(root = DEFAULT_ROOT) {
   const packages = workspacePackages(root);
   const packagesByName = new Map(packages.map((owner) => [owner.manifest.name, owner]));
   const violations = [];
+  const enterpriseRoot = path.resolve(root, "ee");
 
   for (const owner of packages) {
     const declared = declaredDependencies(owner.manifest);
@@ -156,6 +157,10 @@ function checkWorkspace(root = DEFAULT_ROOT) {
 
         if (specifier.startsWith(".")) {
           const targetPath = path.resolve(path.dirname(file), specifier);
+          if (targetPath === enterpriseRoot || targetPath.startsWith(`${enterpriseRoot}${path.sep}`)) {
+            violations.push(`${relativeFile}: open-source workspace must not import ignored EE source: ${rawSpecifier}`);
+            continue;
+          }
           const targetOwner = ownerForPath(targetPath, packages);
           if (targetOwner && targetOwner !== owner) {
             violations.push(`${relativeFile}: relative import crosses into ${targetOwner.manifest.name}: ${rawSpecifier}`);

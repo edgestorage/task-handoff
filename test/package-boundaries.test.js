@@ -42,6 +42,15 @@ test("package boundary checker rejects relative imports across workspace units i
   assert.match(checkWorkspace(root).join("\n"), /relative import crosses into @example\/theme/);
 });
 
+test("package boundary checker rejects imports from ignored EE source", () => {
+  const root = fixture({
+    "apps/web/package.json": manifest("@example/web"),
+    "apps/web/src/main.ts": "import '../../../ee/cloud-platform/packages/contracts/src/index.js';",
+  });
+
+  assert.match(checkWorkspace(root).join("\n"), /open-source workspace must not import ignored EE source/);
+});
+
 test("package boundary checker rejects package dependencies on apps", () => {
   const root = fixture({
     "apps/server/package.json": manifest("@example/server"),

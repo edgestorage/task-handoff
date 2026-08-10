@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react';
 import { AccessibilityInfo, Animated, Easing, PixelRatio, Platform, Pressable, ScrollView, StyleSheet, Text, View, type TextStyle } from 'react-native';
 import { UITextView as SelectableText } from '@bsky.app/react-native-uitextview';
 import * as Clipboard from 'expo-clipboard';
@@ -160,7 +160,12 @@ export function SafeMarkdown({
   const { colors } = useMobileTheme();
   const styles = useMemo(() => markdownStyles(colors, compact), [colors, compact]);
   const reducedMotion = useReduceMotion(Boolean(streamKey));
-  const paced = useStreamingMarkdown(sanitizeMarkdown(children), streaming, streamKey);
+  const source = sanitizeMarkdown(children);
+  const paced = useStreamingMarkdown(source, streaming, streamKey);
+  // UITextView cannot host Animated.Text nodes. Keep the animated RN text tree
+  // while authoritative output is changing (or the local reveal is catching
+  // up), then switch the settled block to the native selectable text tree.
+  const nativeSelectable = Platform.OS === 'ios' && !streaming && paced.visible === source;
   const blockAccumulator = useMemo(() => new StreamingMarkdownBlockAccumulator(streamKey), [streamKey]);
   const blocks = streaming
     ? blockAccumulator.advance(paced.visible)
@@ -173,8 +178,8 @@ export function SafeMarkdown({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const textStreamState = useMemo(() => new Map<string, string>(), [streamKey]);
   const rules = useMemo(
-    () => createRules(paced.revealEnabled, reducedMotion, trimEnd, deferFinalCodeHighlight, streamKey, textStreamState),
-    [deferFinalCodeHighlight, paced.revealEnabled, reducedMotion, streamKey, textStreamState, trimEnd],
+    () => createRules(paced.revealEnabled, reducedMotion, trimEnd, deferFinalCodeHighlight, nativeSelectable, streamKey, textStreamState),
+    [deferFinalCodeHighlight, nativeSelectable, paced.revealEnabled, reducedMotion, streamKey, textStreamState, trimEnd],
   );
   const renderer = useMemo(() => new AstRenderer(
     { ...renderRules, ...rules },
@@ -238,11 +243,13 @@ export function initialStreamingText(content: string, animate: boolean, persiste
 export function StreamingMarkdownText({
   animate,
   content,
+  nativeSelectable = false,
   sharedState,
   stateKey,
 }: {
   animate: boolean;
   content: string;
+  nativeSelectable?: boolean;
   sharedState?: Map<string, string>;
   stateKey?: string;
 }) {
@@ -360,6 +367,18 @@ export function StreamingMarkdownText({
 
   useEffect(() => () => stopPending(), [stopPending]);
 
+  // RNUITextView only converts strings that are direct children of one of its
+  // own text components. Returning a fragment here leaves the settled string
+  // and Animated.Text nodes behind this composite component, so iOS measures
+  // the Markdown block but never adds those glyphs to the native attributed
+  // string. Keep every streamed fragment inside the library's child boundary.
+  // Animated.Text is not an RNUITextView child node, so iOS shows pending
+  // graphemes immediately; the existing fade remains available on Android.
+  if (nativeSelectable) return (
+    <SelectableText testID="markdown-streaming-native-text">
+      {state.settled + state.pending.map((segment) => segment.text).join('')}
+    </SelectableText>
+  );
   return <>{state.settled}{state.pending.map((segment) => (
     <Animated.Text key={segment.id} style={{ opacity: segment.opacity }}>{segment.text}</Animated.Text>
   ))}</>;
@@ -406,11 +425,12 @@ function createRules(
   reducedMotion: boolean,
   trimEnd: boolean,
   deferFinalCodeHighlight: boolean,
+  nativeSelectable: boolean,
   streamKey?: string,
   textStreamState?: Map<string, string>,
 ): RenderRules {
   const rules: Record<string, SafeRenderRule> = {
-    ...flowRules,
+    ...createFlowRules(nativeSelectable),
     code_block: (node, children, parentNodes, styles) => renderCodeBlock(
       node,
       children,
@@ -426,17 +446,18 @@ function createRules(
       deferFinalCodeHighlight && node.attributes.__safeMutableTail === 'true',
     ),
     text: (node, _children, parentNodes) => (
-      <SelectableText key={node.key} selectable uiTextView>
+      <MarkdownText key={node.key} nativeSelectable={nativeSelectable}>
         <StreamingMarkdownText
           animate={shouldAnimateMarkdownText(revealEnabled, reducedMotion, parentNodes.map((parent) => parent.type))}
           content={node.content}
+          nativeSelectable={nativeSelectable}
           sharedState={textStreamState}
           stateKey={streamKey ? `${streamKey}:${node.key}` : undefined}
         />
-      </SelectableText>
+      </MarkdownText>
     ),
   };
-  if (trimEnd) rules.paragraph = trimEndParagraph;
+  if (trimEnd) rules.paragraph = (node, children, parentNodes, styles) => trimEndParagraph(node, children, parentNodes, styles, nativeSelectable);
   return rules as unknown as RenderRules;
 }
 
@@ -444,7 +465,15 @@ export function shouldAnimateMarkdownText(revealEnabled: boolean, reducedMotion:
   return revealEnabled && !reducedMotion && !parentTypes.some((type) => ['table', 'thead', 'tbody', 'tr', 'th', 'td'].includes(type));
 }
 
-const flowRules: Record<string, SafeRenderRule> = {
+type MarkdownTextProps = ComponentProps<typeof Text> & { nativeSelectable: boolean };
+
+function MarkdownText({ nativeSelectable, ...props }: MarkdownTextProps) {
+  if (nativeSelectable) return <SelectableText {...props} selectable uiTextView />;
+  return <Text {...props} selectable />;
+}
+
+function createFlowRules(nativeSelectable: boolean): Record<string, SafeRenderRule> {
+  return {
   heading1: (node, children, parentNodes, styles) => renderHeading(node, children, parentNodes, styles, 'heading1'),
   heading2: (node, children, parentNodes, styles) => renderHeading(node, children, parentNodes, styles, 'heading2'),
   heading3: (node, children, parentNodes, styles) => renderHeading(node, children, parentNodes, styles, 'heading3'),
@@ -452,37 +481,36 @@ const flowRules: Record<string, SafeRenderRule> = {
   heading5: (node, children, parentNodes, styles) => renderHeading(node, children, parentNodes, styles, 'heading5'),
   heading6: (node, children, parentNodes, styles) => renderHeading(node, children, parentNodes, styles, 'heading6'),
   paragraph: (node, children, _parentNodes, styles) => (
-    <SelectableText key={node.key} selectable style={styles.paragraph} testID="markdown-selectable-text" uiTextView>{children}</SelectableText>
+    <MarkdownText key={node.key} nativeSelectable={nativeSelectable} style={styles.paragraph} testID="markdown-selectable-text">{children}</MarkdownText>
   ),
   textgroup: (node, children, _parentNodes, styles) => (
-    <SelectableText key={node.key} selectable style={styles.text} uiTextView>{children}</SelectableText>
+    <MarkdownText key={node.key} nativeSelectable={nativeSelectable} style={styles.text}>{children}</MarkdownText>
   ),
-  inline: (node, children) => <SelectableText key={node.key} selectable uiTextView>{children}</SelectableText>,
-  span: (node, children) => <SelectableText key={node.key} selectable uiTextView>{children}</SelectableText>,
+  inline: (node, children) => <MarkdownText key={node.key} nativeSelectable={nativeSelectable}>{children}</MarkdownText>,
+  span: (node, children) => <MarkdownText key={node.key} nativeSelectable={nativeSelectable}>{children}</MarkdownText>,
   strong: (node, children, _parentNodes, styles) => (
-    <SelectableText key={node.key} selectable style={styles.strong} uiTextView>{children}</SelectableText>
+    <MarkdownText key={node.key} nativeSelectable={nativeSelectable} style={styles.strong}>{children}</MarkdownText>
   ),
   s: (node, children, _parentNodes, styles) => (
-    <SelectableText key={node.key} selectable style={styles.strikethrough} uiTextView>{children}</SelectableText>
+    <MarkdownText key={node.key} nativeSelectable={nativeSelectable} style={styles.strikethrough}>{children}</MarkdownText>
   ),
   em: (node, children, _parentNodes, styles) => (
-    <SelectableText key={node.key} selectable style={styles.em} uiTextView>{children}</SelectableText>
+    <MarkdownText key={node.key} nativeSelectable={nativeSelectable} style={styles.em}>{children}</MarkdownText>
   ),
-  u: (node, children) => <SelectableText key={node.key} selectable uiTextView>{children}</SelectableText>,
+  u: (node, children) => <MarkdownText key={node.key} nativeSelectable={nativeSelectable}>{children}</MarkdownText>,
   link: (node, children, _parentNodes, styles, onLinkPress) => (
-    <SelectableText
+    <MarkdownText
       key={node.key}
+      nativeSelectable={nativeSelectable}
       onPress={() => (onLinkPress as ((raw: string) => boolean | void) | undefined)?.(node.attributes.href)}
-      selectable
       style={styles.link}
-      uiTextView
     >
       {children}
-    </SelectableText>
+    </MarkdownText>
   ),
-  hardbreak: (node) => <SelectableText key={node.key} selectable uiTextView>{'\n'}</SelectableText>,
-  softbreak: (node) => <SelectableText key={node.key} selectable uiTextView>{'\n'}</SelectableText>,
-  code_inline: renderInlineCode,
+  hardbreak: (node) => <MarkdownText key={node.key} nativeSelectable={nativeSelectable}>{'\n'}</MarkdownText>,
+  softbreak: (node) => <MarkdownText key={node.key} nativeSelectable={nativeSelectable}>{'\n'}</MarkdownText>,
+  code_inline: (node, children, parentNodes, styles) => renderInlineCode(node, children, parentNodes, styles, nativeSelectable),
   code_block: (node, children, parentNodes, styles) => renderCodeBlock(node, children, parentNodes, styles),
   fence: (node, children, parentNodes, styles) => renderCodeBlock(node, children, parentNodes, styles),
   table: (node, children, _parentNodes, styles) => (
@@ -525,15 +553,17 @@ const flowRules: Record<string, SafeRenderRule> = {
     }
     return <View key={node.key} style={styles.list_item}>{children}</View>;
   },
-};
+  };
+}
 
 function renderInlineCode(
   node: ASTNode,
   _children: ReactNode[],
   _parentNodes: ASTNode[],
   styles: SafeMarkdownStyles,
+  nativeSelectable: boolean,
 ) {
-  return <SelectableText key={node.key} selectable style={styles.codeInlineText} testID="markdown-inline-code" uiTextView>{node.content}</SelectableText>;
+  return <MarkdownText key={node.key} nativeSelectable={nativeSelectable} style={styles.codeInlineText} testID="markdown-inline-code">{node.content}</MarkdownText>;
 }
 
 type HighlightNode = ReturnType<typeof codeHighlighter.highlight>['children'][number];
@@ -648,10 +678,10 @@ function renderTableCell(
   );
 }
 
-const trimEndParagraph: SafeRenderRule = (node, children, _parentNodes, styles) => {
+function trimEndParagraph(node: ASTNode, children: ReactNode[], _parentNodes: ASTNode[], styles: SafeMarkdownStyles, nativeSelectable: boolean) {
   const isFinalTopLevelParagraph = node.attributes.__safeTopLevelLast === 'true';
-  return <SelectableText key={node.key} selectable style={[styles.paragraph, isFinalTopLevelParagraph && styles.flushEnd]} testID="markdown-selectable-text" uiTextView>{children}</SelectableText>;
-};
+  return <MarkdownText key={node.key} nativeSelectable={nativeSelectable} style={[styles.paragraph, isFinalTopLevelParagraph && styles.flushEnd]} testID="markdown-selectable-text">{children}</MarkdownText>;
+}
 
 function renderHeading(
   node: ASTNode,

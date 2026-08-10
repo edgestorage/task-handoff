@@ -5,7 +5,7 @@ import type { AiSessionHistoryItem } from '@task-handoff/protocol/ai-sessions';
 
 import { lifecycleGuidance } from '../../../src/ai-sessions/session-lifecycle';
 import { useMobileTheme } from '../../../src/components/theme';
-import { createDirectControlPlaneClient } from '../../../src/control-plane/client';
+import { createMobileControlPlaneClient } from '../../../src/control-plane/client';
 import { mobileProfileStore, mobileSecureStore } from '../../../src/control-plane/runtime';
 import { InstanceHistory } from '../../../src/instances/InstanceNativeSections';
 import { useI18n } from '../../../src/i18n';
@@ -22,7 +22,7 @@ export default function InstanceHistoryRoute() {
     let live = true;
     void mobileProfileStore.active().then(async (profile) => {
       if (!profile) throw new Error('No active Control Plane.');
-      const result = await createDirectControlPlaneClient(profile, mobileSecureStore).api.aiSessions.history(instanceId);
+      const result = await createMobileControlPlaneClient(profile, mobileSecureStore).api.aiSessions.history(instanceId);
       if (live) setItems(result.items);
     }).catch((cause) => {
       if (live) setError(lifecycleGuidance(cause).message);

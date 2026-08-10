@@ -11,6 +11,7 @@ import { instanceStateLabel, nodeDisplayName, nodeStateLabel } from '../director
 import { useI18n } from '../i18n';
 import { useInstanceScope } from './use-instance-scope';
 import { useMobileControlPlaneRuntime } from '../control-plane/use-mobile-control-plane-runtime';
+import { useCloudAccountState } from '../control-plane/use-cloud-account-state';
 
 export function InstanceDrawerContent(props: DrawerContentComponentProps) {
   const { colors } = useMobileTheme();
@@ -18,6 +19,7 @@ export function InstanceDrawerContent(props: DrawerContentComponentProps) {
   const { controlPlaneOrigin, state } = useActiveDirectories();
   const { scope, setScope } = useInstanceScope();
   const { triggerCapability } = useMobileControlPlaneRuntime();
+  const cloudAccount = useCloudAccountState();
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const instancesByNode = useMemo(() => new Map(state.nodes.map((node) => [node.id, state.instances.filter((instance) => instance.nodeId === node.id)])), [state.instances, state.nodes]);
   const select = (instanceId?: string) => {
@@ -78,6 +80,32 @@ export function InstanceDrawerContent(props: DrawerContentComponentProps) {
     </DrawerContentScrollView>
     <View style={styles.footer}>
       <Pressable
+        accessibilityLabel={cloudAccount.phase === 'signed-in' ? t('cloudAccount.settings') : t('cloudAccount.signIn')}
+        accessibilityRole="button"
+        accessibilityState={{ disabled: cloudAccount.phase === 'loading' }}
+        disabled={cloudAccount.phase === 'loading'}
+        onPress={() => {
+          props.navigation.closeDrawer();
+          router.push(cloudAccount.phase === 'signed-in' ? '/cloud-account-security' as never : '/cloud-account' as never);
+        }}
+        style={({ pressed }) => [styles.accountButton, pressed && styles.pressed]}
+      >
+        <View style={[styles.accountAvatar, { backgroundColor: colors.surfaceMuted }]}>
+          {cloudAccount.phase === 'signed-in' && cloudAccount.profile?.email
+            ? <Text style={[styles.accountInitial, { color: colors.text }]}>{cloudAccount.profile.email.slice(0, 1).toUpperCase()}</Text>
+            : <SystemIcon android="person" color={colors.textMuted} ios="person" size={20} />}
+        </View>
+        <View style={styles.accountCopy}>
+          <Text numberOfLines={1} style={[styles.accountLabel, { color: colors.text }]}>
+            {cloudAccount.phase === 'loading' ? t('common.loading') : cloudAccount.phase === 'signed-in' ? cloudAccount.profile?.email ?? t('cloudAccount.title') : t('cloudAccount.signIn')}
+          </Text>
+          <Text numberOfLines={1} style={[styles.accountDetail, { color: colors.textMuted }]}>
+            {cloudAccount.phase === 'signed-in' ? t('cloudAccount.settings') : t('cloudAccount.optional')}
+          </Text>
+        </View>
+        <SystemIcon android="chevron_right" color={colors.textMuted} ios="chevron.right" size={13} />
+      </Pressable>
+      <Pressable
         accessibilityLabel={t('nav.settings')}
         accessibilityRole="button"
         onPress={() => { props.navigation.closeDrawer(); router.push('/profiles'); }}
@@ -131,6 +159,12 @@ const styles = StyleSheet.create({
   instanceList: { gap: 2, paddingTop: 4 },
   empty: { paddingHorizontal: 4, paddingVertical: 20 },
   pressed: { opacity: 0.58 },
-  footer: { alignItems: 'flex-end', paddingBottom: 22, paddingHorizontal: 24, paddingTop: 10 },
+  footer: { alignItems: 'center', flexDirection: 'row', gap: 10, paddingBottom: 22, paddingHorizontal: 20, paddingTop: 10 },
+  accountButton: { alignItems: 'center', flex: 1, flexDirection: 'row', gap: 10, minHeight: 54, minWidth: 0 },
+  accountAvatar: { alignItems: 'center', borderRadius: 20, height: 40, justifyContent: 'center', width: 40 },
+  accountInitial: { fontSize: 16, fontWeight: '700' },
+  accountCopy: { flex: 1, gap: 2, minWidth: 0 },
+  accountLabel: { fontSize: 14, fontWeight: '600' },
+  accountDetail: { fontSize: 12 },
   settingsButton: { alignItems: 'center', borderRadius: 27, height: 54, justifyContent: 'center', width: 54 },
 });

@@ -13,7 +13,8 @@ const props = defineProps<{
 
 const terminalHost = ref<HTMLElement | null>(null);
 const socketUrl = toRef(props, "socketUrl");
-const { disposeTerminalPreview, mountTerminalPreview } = useTerminalPreview(socketUrl, terminalHost);
+const active = toRef(props, "active");
+const { disposeTerminalPreview, mountTerminalPreview } = useTerminalPreview(socketUrl, terminalHost, active);
 
 watch(
   [() => props.active, socketUrl, terminalHost],

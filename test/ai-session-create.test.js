@@ -140,6 +140,51 @@ test("Codex bridge creates a persistent Direct thread on the shared client", asy
   assert.equal(registry.getByProviderSessionId("codex", "thread-bridge").creationSource, "ai-session");
 });
 
+test("Codex Direct creation starts its first turn without resuming or reading the new thread", async () => {
+  const { registry, controller } = runtime();
+  const calls = [];
+  class FakeClient extends EventEmitter {
+    async start() {}
+    stop() {}
+    async listLoadedThreadIds() {
+      calls.push(["loaded-list"]);
+      return [];
+    }
+    async startThread(options) {
+      calls.push(["thread-start", options.cwd]);
+      return { id: "thread-new", cwd: options.cwd, ephemeral: false, status: { type: "idle" }, turns: [] };
+    }
+    async resumeThread(threadId) {
+      calls.push(["thread-resume", threadId]);
+      throw new Error("rollout is still empty");
+    }
+    async startTurn(threadId, message) {
+      calls.push(["turn-start", threadId, message]);
+      return { turnId: "turn-new" };
+    }
+    async readThread(threadId) {
+      calls.push(["thread-read", threadId]);
+      throw new Error("rollout is still empty");
+    }
+  }
+
+  const bridge = new CodexAppServerSessionBridge(registry, new FakeClient());
+  controller.register(bridge);
+  const created = await new AiSessionCreateCoordinator({ registry, controller }).create({
+    agent: "codex",
+    cwd: "/workspace/project",
+    message: "Start safely",
+    clientRequestId: "create-new-thread",
+  });
+
+  assert.equal(created.providerSessionId, "thread-new");
+  assert.deepEqual(calls, [
+    ["thread-start", "/workspace/project"],
+    ["turn-start", "thread-new", "Start safely"],
+  ]);
+  assert.equal(registry.get(created.aiSessionId).activeTurnId, "turn-new");
+});
+
 test("Codex app-server client sends strict thread lifecycle requests", async () => {
   const client = new CodexAppServerClient();
   const requests = [];

@@ -2,8 +2,8 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 const { createDesktopServiceLifecycle, desktopShutdownPolicy } = require("../src/desktop-service-lifecycle.cjs");
 
-test("desktop shutdown policies preserve node-agent except for update or incomplete boot", () => {
-  assert.deepEqual(desktopShutdownPolicy("quit"), { controlPlane: true, nodeAgent: false });
+test("desktop shutdown policies stop node-agent on quit and update", () => {
+  assert.deepEqual(desktopShutdownPolicy("quit"), { controlPlane: true, nodeAgent: true });
   assert.deepEqual(desktopShutdownPolicy("update"), { controlPlane: true, nodeAgent: true });
   assert.deepEqual(desktopShutdownPolicy("boot-failure", { nodeAgentReady: true }), { controlPlane: true, nodeAgent: false });
   assert.deepEqual(desktopShutdownPolicy("boot-failure", { nodeAgentReady: false }), { controlPlane: true, nodeAgent: true });

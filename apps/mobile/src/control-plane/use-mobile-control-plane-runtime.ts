@@ -12,7 +12,7 @@ import type { ControlPlaneClient } from '@task-handoff/control-plane-client';
 import { isCarPlayConnected, subscribeToCarPlayConnection } from '../carplay/runtime';
 import { subscribeToAppLifecycle } from '../platform/lifecycle';
 import { subscribeToNetworkState } from '../platform/network';
-import { createDirectControlPlaneClient } from './client';
+import { createMobileControlPlaneClient } from './client';
 import type { MobileControlPlaneProfile } from './profile';
 import { mobileProfileStore, mobileSecureStore } from './runtime';
 import type {
@@ -245,7 +245,7 @@ export class MobileControlPlaneConnectionCoordinator {
   }
 }
 
-type DirectClient = ReturnType<typeof createDirectControlPlaneClient>;
+type DirectClient = ReturnType<typeof createMobileControlPlaneClient>;
 
 export type MobileControlPlaneRuntimeDependencies = {
   activeProfile(): Promise<MobileControlPlaneProfile | undefined>;
@@ -260,7 +260,7 @@ export type MobileControlPlaneRuntimeDependencies = {
 const defaultDependencies: MobileControlPlaneRuntimeDependencies = {
   activeProfile: () => mobileProfileStore.active(),
   subscribeProfiles: (listener) => mobileProfileStore.subscribe(listener),
-  createClient: (profile) => createDirectControlPlaneClient(profile, mobileSecureStore),
+  createClient: (profile) => createMobileControlPlaneClient(profile, mobileSecureStore),
   subscribeLifecycle: subscribeToAppLifecycle,
   subscribeNetwork: subscribeToNetworkState,
   subscribeCarPlay: subscribeToCarPlayConnection,
@@ -338,7 +338,7 @@ export function MobileControlPlaneRuntimeProvider({
     api: active?.direct.api,
     carPlayConnected: activeCarPlayConnected,
     controlPlaneId: active?.profile.identity.controlPlaneId,
-    controlPlaneOrigin: active?.profile.access.origin,
+    controlPlaneOrigin: active?.profile.access.kind === 'direct' ? active.profile.access.origin : undefined,
     coordinator: active?.coordinator,
     phase: activePhase,
     triggerCapability: active?.profile.capabilities.triggers === true,

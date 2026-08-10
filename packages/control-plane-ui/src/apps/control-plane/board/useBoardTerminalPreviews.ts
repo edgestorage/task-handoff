@@ -150,7 +150,7 @@ export function useBoardTerminalPreviews(boardMode: Ref<boolean>, interactive: R
         return;
       }
       try {
-        const message = JSON.parse(event.data) as { type?: string; data?: unknown; message?: unknown; dimensions?: { cols?: unknown; rows?: unknown }; cols?: unknown; rows?: unknown };
+        const message = JSON.parse(event.data) as { type?: string; data?: unknown; message?: unknown; pendingEscape?: unknown; dimensions?: { cols?: unknown; rows?: unknown }; cols?: unknown; rows?: unknown };
         if (message.type === "connected") {
           resizeTerminalGrid(message.dimensions);
           return;
@@ -159,7 +159,11 @@ export function useBoardTerminalPreviews(boardMode: Ref<boolean>, interactive: R
           resizeTerminalGrid(message);
           return;
         }
-        if (message.type === "output" && typeof message.data === "string") {
+        if (message.type === "snapshot" && typeof message.data === "string") {
+          terminal.reset();
+          terminal.write(message.data);
+          if (typeof message.pendingEscape === "string" && message.pendingEscape) terminal.write(message.pendingEscape);
+        } else if (message.type === "output" && typeof message.data === "string") {
           terminal.write(message.data);
         } else if (message.type === "error") {
           terminal.writeln(String(message.message || "TTY session error."));
