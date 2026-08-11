@@ -85,9 +85,11 @@ export const runtimePackages = {
     uiDir: "packages/controlled-instance-ui/dist",
     // The controlled-instance application is shipped by node-agent as one
     // portable bundle. Keep only the native dependency external; Rollup owns
-    // the complete JavaScript dependency graph so the artifact does not carry
-    // a workspace-wide pnpm virtual store.
+    // the remaining JavaScript dependency graph so the artifact does not
+    // carry a workspace-wide pnpm virtual store. @xterm/headless is also
+    // external because its Node entry is loaded by the terminal screen model.
     dependencies: {
+      "@xterm/headless": rootPackage.dependencies["@xterm/headless"],
       "node-pty": rootPackage.dependencies["node-pty"],
     },
   },

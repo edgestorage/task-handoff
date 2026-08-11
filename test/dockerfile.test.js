@@ -101,8 +101,11 @@ test("Docker CI builds amd64 and arm64 concurrently and publishes a multi-archit
   assert.match(workflow, /"\$\{image\}:\$\{sha_tag\}-arm64"/);
   assert.doesNotMatch(workflow, /branches:\s*\n\s+- main/);
   assert.doesNotMatch(workflow, /refs\/heads\/main/);
-  assert.match(workflow, /Publish immutable commit image\n\s+if: \$\{\{ startsWith\(github\.ref, 'refs\/tags\/v'\) \}\}/);
+  assert.match(workflow, /Publish immutable commit image\n\s+if: \$\{\{ startsWith\(github\.ref, 'refs\/tags\/v'\) \|\| inputs\.version != '' \}\}/);
   assert.match(workflow, /promote-release:\n\s+if:.*refs\/tags\/v.*\n\s+needs: publish-multiarch-image/);
+  assert.match(workflow, /version="v\$\{\{ inputs\.version \}\}"/);
+  assert.equal((workflow.match(/docker run -d \\/g) || []).length, 3);
+  assert.doesNotMatch(workflow, /docker run --rm -d/);
   assert.doesNotMatch(workflow, /Immutable source image was not published within/);
 });
 
@@ -112,6 +115,7 @@ test("Docker tag builds inject the release version while branch builds keep the 
 
   assert.match(workflow, /if \[\[ "\$GITHUB_REF" == refs\/tags\/v\* \]\]; then/);
   assert.match(workflow, /version="\$\{GITHUB_REF_NAME#v\}"/);
+  assert.match(workflow, /elif \[\[ -n "\$\{\{ inputs\.version \}\}" \]\]; then/);
   assert.match(workflow, /codex_image_ref="\$\{DOCKERHUB_CODEX_IMAGE_NAME\}:\$\{GITHUB_REF_NAME\}"/);
   assert.match(workflow, /ai_image_ref="\$\{DOCKERHUB_AI_IMAGE_NAME\}:\$\{GITHUB_REF_NAME\}"/);
   assert.match(workflow, /webcap_image_ref="\$\{DOCKERHUB_WEBCAP_IMAGE_NAME\}:\$\{GITHUB_REF_NAME\}"/);
