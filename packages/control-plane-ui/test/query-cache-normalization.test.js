@@ -40,3 +40,9 @@ test("workbench local folders consume the shared query cache", () => {
   assert.doesNotMatch(workbenchSource, /getApiData<NodeLocalFolder\[\]>/);
   assert.doesNotMatch(workbenchSource, /reactive<Record<string, NodeLocalFolder\[\]>>/);
 });
+
+test("AI session snapshots do not rebuild unchanged node folder observers", () => {
+  assert.match(workbenchSource, /const nodeLocalFolderNodeIds = ref<string\[\]>\(\[\]\);/);
+  assert.match(workbenchSource, /next\.every\(\(nodeId, index\) => nodeId === nodeLocalFolderNodeIds\.value\[index\]\)\) return;/);
+  assert.doesNotMatch(workbenchSource, /const nodeLocalFolderNodeIds = computed\(/);
+});

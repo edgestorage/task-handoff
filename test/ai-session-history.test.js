@@ -42,6 +42,7 @@ function historyItem(index, overrides = {}) {
     userPrompt: `Prompt ${index}`,
     lastMessage: `Answer ${index}`,
     cwd: "/workspace",
+    cwdFolderId: "folder-project",
     lastActiveAt: timestamp,
     archivedAt: timestamp,
     ...overrides,

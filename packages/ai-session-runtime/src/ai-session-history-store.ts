@@ -25,6 +25,7 @@ const HISTORY_ITEM_FIELDS = new Set([
   "userPrompt",
   "lastMessage",
   "cwd",
+  "cwdFolderId",
   "lastActiveAt",
   "archivedAt",
 ]);

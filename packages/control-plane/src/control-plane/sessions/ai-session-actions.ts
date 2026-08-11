@@ -30,6 +30,11 @@ import {
 } from "@task-handoff/protocol/ai-sessions";
 import type { ControlledInstance, NodeRuntime } from "@task-handoff/protocol/control-plane";
 import { parseResponse } from "@task-handoff/protocol/response-validation";
+import {
+  RepositoryAiSessionWorkspaceSchema,
+  type RepositoryAiSessionGitSelection,
+  type RepositoryAiSessionWorkspace,
+} from "@task-handoff/protocol/repository";
 
 type AiSessionActionServiceOptions = {
   requireInstance: (instanceId: string) => Promise<ControlledInstance>;
@@ -71,6 +76,8 @@ export class AiSessionActionService {
     input: {
       agent: string;
       cwd: { type: "runtime-path"; path: string };
+      cwdFolderId?: string;
+      gitSelection?: RepositoryAiSessionGitSelection;
       message: string;
       attachments?: AiSessionMessageAttachment[];
       references?: AiSessionReference[];
@@ -80,14 +87,37 @@ export class AiSessionActionService {
   ): Promise<AiSessionCreateResult> {
     assertAiSessionAttachmentsWithinLimit(input.attachments || []);
     const instance = await this.options.requireInstance(instanceId);
+    const supportsWorkspaceSelection = instanceSupportsAiSessionWorkspaceSelection(instance);
+    if (input.gitSelection && !supportsWorkspaceSelection) {
+      throw aiSessionWorkspaceSelectionUnsupported();
+    }
     const effectivePermissionMode = input.permissionMode
       || (input.agent === "codex" ? instance.config.defaultCodexPermissionMode : undefined);
-    const result = parseResponse(AiSessionCreateResultSchema, await this.options.request(instance, "/ai-sessions", {
+    const route = input.gitSelection ? "/repository/ai-session-workspace/create" : "/ai-sessions";
+    const { cwdFolderId, ...baseInput } = input;
+    const result = parseResponse(AiSessionCreateResultSchema, await this.options.request(instance, route, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ...input, ...(effectivePermissionMode ? { permissionMode: effectivePermissionMode } : {}) }),
+      body: JSON.stringify({
+        ...baseInput,
+        // Compatibility for v0.0.21: its strict controlled-instance create schema does not accept cwdFolderId.
+        ...(supportsWorkspaceSelection && cwdFolderId ? { cwdFolderId } : {}),
+        ...(effectivePermissionMode ? { permissionMode: effectivePermissionMode } : {}),
+      }),
     }));
     return result;
+  }
+
+  async inspectWorkspace(instanceId: string, cwd: { type: "runtime-path"; path: string }): Promise<RepositoryAiSessionWorkspace> {
+    const instance = await this.options.requireInstance(instanceId);
+    if (!instanceSupportsAiSessionWorkspaceSelection(instance)) {
+      throw aiSessionWorkspaceSelectionUnsupported();
+    }
+    return parseResponse(RepositoryAiSessionWorkspaceSchema, await this.options.request(instance, "/repository/ai-session-workspace/inspect", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ cwd }),
+    }));
   }
 
   async openApp(instanceId: string, aiSessionId: string, clientRequestId: string): Promise<AiSessionOpenAppResult> {
@@ -221,6 +251,18 @@ export class AiSessionActionService {
       body: JSON.stringify(body),
     });
   }
+}
+
+function instanceSupportsAiSessionWorkspaceSelection(instance: ControlledInstance) {
+  const features = instance.capabilities?.features;
+  return Boolean(features && typeof features === "object" && !Array.isArray(features)
+    && (features as Record<string, unknown>).aiSessionWorkspaceSelection === true);
+}
+
+function aiSessionWorkspaceSelectionUnsupported() {
+  const error = new Error("The controlled instance does not support AI session workspace selection.");
+  Object.assign(error, { statusCode: 409, code: "AI_SESSION_WORKSPACE_SELECTION_UNSUPPORTED" });
+  return error;
 }
 
 function errorCode(error: unknown) {

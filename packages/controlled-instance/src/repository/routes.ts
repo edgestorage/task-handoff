@@ -3,7 +3,12 @@ import path from "node:path";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
 import type { AppRuntimeManager } from "@task-handoff/app-runtime/runtime";
-import type { AiSessionCreateCoordinator, AiSessionRegistry } from "@task-handoff/ai-session-runtime";
+import {
+  aiSessionCreateRequestFingerprint,
+  assertAiSessionCreateRequestFingerprint,
+  type AiSessionCreateCoordinator,
+  type AiSessionRegistry,
+} from "@task-handoff/ai-session-runtime";
 import {
   RepositoryCommitRequestSchema,
   RepositoryCheckoutBranchRequestSchema,
@@ -25,6 +30,9 @@ import {
   RepositoryStageRequestSchema,
   RepositoryStartAiSessionRequestSchema,
   RepositoryUnstageRequestSchema,
+  RepositoryAiSessionWorkspaceInspectSchema,
+  RepositoryAiSessionWorkspaceSchema,
+  RepositoryWorkspaceAiSessionCreateSchema,
   RepositoryWriteFileRequestSchema,
 } from "@task-handoff/protocol/repository";
 import { RepositoryChangesService, RepositoryOperationError } from "./changes";
@@ -77,6 +85,43 @@ export function registerRepositoryRoutes(app: FastifyInstance, options: Register
       branches: new RepositoryBranchService(resolve, worktrees, queue),
     };
   };
+  const servicesForWorkspace = (cwd: string) => {
+    const resolve = () => resolver.resolveWorkspace(cwd);
+    const worktrees = new RepositoryWorktreeService(resolve, registry, sessionInventory, options.workspaceRoots, queue);
+    return {
+      resolve,
+      worktrees,
+      branches: new RepositoryBranchService(resolve, worktrees, queue),
+    };
+  };
+  const workspaceLaunches = new Map<string, { fingerprint: string; promise: Promise<unknown> }>();
+
+  app.post<{ Body: unknown }>("/api/repository/ai-session-workspace/inspect", async (request, reply) => {
+    try {
+      const body = RepositoryAiSessionWorkspaceInspectSchema.parse(request.body || {});
+      const cwd = authorizedWorkspaceCwd(body.cwd.path, options.workspaceRoots);
+      return { data: await inspectAiSessionWorkspace(servicesForWorkspace(cwd)) };
+    } catch (error) { return sendRepositoryError(reply, error); }
+  });
+
+  app.post<{ Body: unknown }>("/api/repository/ai-session-workspace/create", async (request, reply) => {
+    try {
+      const body = RepositoryWorkspaceAiSessionCreateSchema.parse(request.body || {});
+      const fingerprint = aiSessionCreateRequestFingerprint(body);
+      const completed = options.aiSessionCreate.completedResult(body.clientRequestId, fingerprint);
+      if (completed) return { data: completed };
+      const active = workspaceLaunches.get(body.clientRequestId);
+      if (active) {
+        assertAiSessionCreateRequestFingerprint(active.fingerprint, fingerprint);
+        return { data: await active.promise };
+      }
+      const cwd = authorizedWorkspaceCwd(body.cwd.path, options.workspaceRoots);
+      const launch = createWorkspaceAiSession(servicesForWorkspace(cwd), options.aiSessionCreate, body, fingerprint)
+        .finally(() => workspaceLaunches.delete(body.clientRequestId));
+      workspaceLaunches.set(body.clientRequestId, { fingerprint, promise: launch });
+      return { data: await launch };
+    } catch (error) { return sendRepositoryError(reply, sanitizeAiSessionLaunchError(error)); }
+  });
 
   for (const kind of ["ai-session", "app-session"] as const) {
     const segment = kind === "ai-session" ? "ai-sessions" : "apps/sessions";
@@ -240,9 +285,10 @@ export function registerRepositoryRoutes(app: FastifyInstance, options: Register
       const body = RepositoryStartAiSessionRequestSchema.parse(request.body || {});
       const services = servicesFor("ai-session", request.params.id);
       const source = await requireRepository(services.resolve);
-      const workspace = body.workspaceSelection.type === "current"
+      const workspaceRoot = body.workspaceSelection.type === "current"
         ? source.worktreeRoot!
         : await services.worktrees.resolveWorkspace(body.workspaceSelection.repositoryContextId, body.workspaceSelection.worktreeId);
+      const workspace = workspaceCwd(workspaceRoot, source);
       const worktrees = await services.worktrees.list();
       const worktreeId = body.workspaceSelection.type === "current"
         ? worktrees.items.find((item) => item.isCurrent)?.id
@@ -251,6 +297,7 @@ export function registerRepositoryRoutes(app: FastifyInstance, options: Register
       const created = await options.aiSessionCreate.create({
         agent: body.agent,
         cwd: workspace,
+        cwdFolderId: options.aiSessions.get(request.params.id)?.cwdFolderId,
         message: body.message,
         permissionMode: body.permissionMode,
         clientRequestId: body.clientRequestId,
@@ -263,12 +310,17 @@ export function registerRepositoryRoutes(app: FastifyInstance, options: Register
     try {
       const body = RepositoryCreateWorktreeAiSessionRequestSchema.parse(request.body || {});
       const services = servicesFor("ai-session", request.params.id);
+      const source = await requireRepository(services.resolve);
       const created = await services.worktrees.create(body.worktree);
       try {
-        const workspace = await services.worktrees.resolveWorkspace(created.worktrees.repositoryContextId, created.worktreeId);
+        const workspace = workspaceCwd(
+          await services.worktrees.resolveWorkspace(created.worktrees.repositoryContextId, created.worktreeId),
+          source,
+        );
         const session = await options.aiSessionCreate.create({
           agent: body.agent,
           cwd: workspace,
+          cwdFolderId: options.aiSessions.get(request.params.id)?.cwdFolderId,
           message: body.message,
           permissionMode: body.permissionMode,
           clientRequestId: body.clientRequestId,
@@ -289,6 +341,115 @@ export function registerRepositoryRoutes(app: FastifyInstance, options: Register
   });
 }
 
+type WorkspaceServices = {
+  resolve: () => Promise<ResolvedRepository>;
+  worktrees: RepositoryWorktreeService;
+  branches: RepositoryBranchService;
+};
+
+function workspaceCwd(worktreeRoot: string, source: ResolvedRepository) {
+  return source.context.cwdRelativePath
+    ? path.join(worktreeRoot, ...source.context.cwdRelativePath.split("/"))
+    : worktreeRoot;
+}
+
+async function inspectAiSessionWorkspace(services: WorkspaceServices) {
+  const state = await services.resolve();
+  if (state.context.availability !== "available") {
+    return RepositoryAiSessionWorkspaceSchema.parse({ availability: state.context.availability });
+  }
+  const [branches, worktrees] = await Promise.all([services.branches.list(), services.worktrees.list()]);
+  const currentWorktree = worktrees.items.find((item) => item.isCurrent);
+  const dirty = Boolean(currentWorktree?.dirty);
+  const headChoice = state.context.head?.oid ? [{
+    name: "HEAD",
+    kind: "head" as const,
+    current: false,
+    currentFolderSelectable: false,
+    worktreeSelectable: true,
+    worktreeCheckout: "detached" as const,
+  }] : [];
+  return RepositoryAiSessionWorkspaceSchema.parse({
+    availability: "available",
+    currentBranch: state.context.head?.state === "branch" ? state.context.head.branch : undefined,
+    dirty,
+    branches: [...headChoice, ...branches.branches.filter((branch) => branch.kind === "local").map((branch) => {
+      const checkedOutElsewhere = !branch.current && branch.checkedOutWorktreeIds.length > 0;
+      const currentFolderReason = branch.current
+        ? undefined
+        : checkedOutElsewhere
+          ? "branch-occupied" as const
+          : undefined;
+      return {
+        name: branch.name,
+        kind: "branch" as const,
+        current: branch.current,
+        currentFolderSelectable: branch.current || !currentFolderReason,
+        worktreeSelectable: true,
+        worktreeCheckout: branch.checkedOutWorktreeIds.length ? "detached" as const : "attached" as const,
+        currentFolderReason,
+      };
+    })],
+  });
+}
+
+async function createWorkspaceAiSession(
+  services: WorkspaceServices,
+  coordinator: AiSessionCreateCoordinator,
+  body: z.infer<typeof RepositoryWorkspaceAiSessionCreateSchema>,
+  idempotencyFingerprint: string,
+) {
+  const source = await requireRepository(services.resolve);
+  // AI-session workspace selection is a ref intent, not an edit against a loaded
+  // repository snapshot. The mutation services revalidate the selected ref and
+  // worktree occupancy under their repository lock, so unrelated file changes
+  // must not invalidate a prompt that took time to compose.
+  const inspected = await inspectAiSessionWorkspace(services);
+  // Compatibility for v0.0.21: the selection field remains named `branch` on
+  // the wire, while the inspected choice kind is the authoritative ref model.
+  const selected = inspected.branches.find((branch) => branch.name === body.gitSelection.branch);
+  if (!selected || (selected.kind === "head" && body.gitSelection.mode !== "worktree")) {
+    throw new RepositoryOperationError("REPOSITORY_BRANCH_INVALID", "Selected local branch does not exist.", source);
+  }
+
+  let workspace = body.cwd.path;
+  let createdWorktreeId: string | undefined;
+  if (body.gitSelection.mode === "current-folder") {
+    if (!selected.current) {
+      if (!selected.currentFolderSelectable) {
+        const code = selected.currentFolderReason === "branch-occupied" ? "REPOSITORY_BRANCH_OCCUPIED" : "REPOSITORY_WORKTREE_OCCUPIED";
+        throw new RepositoryOperationError(code, `The selected branch cannot be checked out in the current folder: ${selected.currentFolderReason}.`, source);
+      }
+      await services.branches.checkoutForAiSession(selected.name);
+    }
+  } else {
+    const created = await services.worktrees.createForAiSession({
+      ref: selected.kind === "head" ? { type: "head" } : { type: "branch", name: selected.name },
+      clientRequestId: body.clientRequestId,
+    });
+    createdWorktreeId = created.worktreeId;
+    const worktrees = created.worktrees;
+    const target = worktrees.items.find((item) => item.id === created.worktreeId);
+    if (!target) throw new RepositoryOperationError("REPOSITORY_WORKTREE_NOT_FOUND", "The selected branch worktree is unavailable.", await services.resolve());
+    const root = await services.worktrees.resolveWorkspace(worktrees.repositoryContextId, target.id);
+    workspace = workspaceCwd(root, source);
+    try {
+      if (!fs.statSync(workspace).isDirectory()) throw new Error("not a directory");
+    } catch {
+      if (createdWorktreeId) await compensateFailedWorktreeLaunch(services.worktrees, createdWorktreeId);
+      throw new RepositoryOperationError("REPOSITORY_CWD_INACCESSIBLE", "The selected folder does not exist in the worktree.", await services.resolve());
+    }
+  }
+
+  try {
+    const { gitSelection: _gitSelection, cwd: _cwd, ...input } = body;
+    return await coordinator.create({ ...input, cwd: workspace, idempotencyFingerprint });
+  } catch (error) {
+    if (createdWorktreeId) await compensateFailedWorktreeLaunch(services.worktrees, createdWorktreeId);
+    throw error;
+  }
+}
+
 async function compensateFailedWorktreeLaunch(worktrees: RepositoryWorktreeService, worktreeId: string) {
   try {
     const current = await worktrees.list();
@@ -303,6 +464,9 @@ async function compensateFailedWorktreeLaunch(worktrees: RepositoryWorktreeServi
 
 function sanitizeAiSessionLaunchError(error: unknown) {
   if (error instanceof z.ZodError || error instanceof RepositoryOperationError || error instanceof RepositoryFileError) return error;
+  if (error && typeof error === "object" && "code" in error && error.code === "AI_SESSION_CREATE_REQUEST_CONFLICT") {
+    return new RepositoryOperationError("REPOSITORY_CONFLICT", error instanceof Error ? error.message : "The request ID conflicts with an earlier session creation.");
+  }
   return new RepositoryOperationError("REPOSITORY_OPERATION_FAILED", "AI session could not be started.");
 }
 
@@ -330,6 +494,26 @@ function repositoryFiles(state: ResolvedRepository, workspaceRoots: string[]) {
 function withinRoot(candidate: string, root: string) {
   const relative = path.relative(root, candidate);
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function authorizedWorkspaceCwd(cwd: string, workspaceRoots: string[]) {
+  let canonicalCwd: string;
+  try {
+    canonicalCwd = fs.realpathSync(cwd);
+  } catch {
+    throw new RepositoryOperationError("REPOSITORY_CWD_INACCESSIBLE", "The selected workspace folder is inaccessible.");
+  }
+  // In controlled mode the Control Plane resolves an authoritative node-local
+  // folder ID into this runtime path. Standalone callers have no such trusted
+  // identity boundary, so their paths must remain inside configured roots.
+  if (process.env.TASK_HANDOFF_CONTROL_MODE === "controlled") return canonicalCwd;
+  const authorized = workspaceRoots.some((root) => {
+    try { return withinRoot(canonicalCwd, fs.realpathSync(root)); } catch { return false; }
+  });
+  if (!authorized) {
+    throw new RepositoryOperationError("REPOSITORY_PATH_FORBIDDEN", "The selected workspace folder is outside the instance workspace boundary.");
+  }
+  return canonicalCwd;
 }
 
 async function requireRepository(resolve: () => Promise<ResolvedRepository>) {

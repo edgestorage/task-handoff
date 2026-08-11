@@ -36,6 +36,16 @@ export class RepositoryBranchService {
     });
   }
 
+  checkoutForAiSession(branch: string) {
+    return this.checkoutMutation(undefined, async (git, state) => {
+      const branches = await this.listFromState(state);
+      const target = branches.branches.find((candidate) => candidate.kind === "local" && candidate.name === branch);
+      if (!target) throw new RepositoryOperationError("REPOSITORY_BRANCH_INVALID", "Local branch does not exist.", state);
+      if (target.checkedOutWorktreeIds.length && !target.current) throw new RepositoryOperationError("REPOSITORY_BRANCH_OCCUPIED", "Branch is checked out in another worktree.", state);
+      await git.run("checkout", [branch]);
+    });
+  }
+
   createTracking(request: { name: string; remoteTrackingRef: string; expectedSnapshotId: string }) {
     return this.checkoutMutation(request.expectedSnapshotId, async (git, state) => {
       const branches = await this.listFromState(state);
@@ -134,11 +144,11 @@ export class RepositoryBranchService {
     });
   }
 
-  private async checkoutMutation(expectedSnapshotId: string, operation: (git: GitProcess, state: ResolvedRepository) => Promise<void>): Promise<BranchResult> {
+  private async checkoutMutation(expectedSnapshotId: string | undefined, operation: (git: GitProcess, state: ResolvedRepository) => Promise<void>): Promise<BranchResult> {
     const initial = await this.requireAvailable();
     return this.queue.withRepositoryAndWorktree(initial.gitCommonDir!, initial.worktreeRoot!, async () => {
       const state = await this.requireAvailable();
-      this.assertSnapshot(state, expectedSnapshotId);
+      if (expectedSnapshotId) this.assertSnapshot(state, expectedSnapshotId);
       try {
         await operation(new GitProcess(state.worktreeRoot!, this.gitOptions), state);
         return this.result(await this.requireAvailable());

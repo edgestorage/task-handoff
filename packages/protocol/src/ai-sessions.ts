@@ -294,12 +294,19 @@ export const AiSessionRuntimePathSchema = z.object({
 export const AiSessionCreateInputSchema = AiSessionMessageInputSchema.extend({
   agent: AiAgentKindSchema,
   cwd: AiSessionRuntimePathSchema,
+  cwdFolderId: z.string().trim().min(1).max(120).optional(),
   clientRequestId: z.string().trim().min(1).max(160),
+}).strict();
+
+export const AiSessionGitSelectionSchema = z.object({
+  mode: z.enum(["current-folder", "worktree"]),
+  branch: z.string().trim().min(1).max(1024),
 }).strict();
 
 export const AiSessionCreateRefInputSchema = AiSessionMessageRefInputSchema.extend({
   agent: AiAgentKindSchema,
   cwdFolderId: z.string().trim().min(1).max(120).optional(),
+  gitSelection: AiSessionGitSelectionSchema.optional(),
   clientRequestId: z.string().trim().min(1).max(160),
 }).strict();
 
@@ -464,6 +471,7 @@ export const AiSessionStatusSchema = z
     activeTurnId: z.string().trim().max(240).optional(),
     title: z.string().trim().max(240).optional(),
     cwd: z.string().trim().max(4096).optional(),
+    cwdFolderId: z.string().trim().min(1).max(120).optional(),
     userPrompt: z.string().trim().optional(),
     turns: z.array(AiSessionTurnSchema).max(50).optional(),
     status: AiSessionLifecycleSchema.default("running"),
@@ -506,6 +514,7 @@ export const AiSessionHistoryItemSchema = z.object({
   userPrompt: z.string().trim().optional(),
   lastMessage: z.string().trim().optional(),
   cwd: z.string().trim().min(1).max(4096),
+  cwdFolderId: z.string().trim().min(1).max(120).optional(),
   lastActiveAt: z.string().datetime(),
   archivedAt: z.string().datetime(),
 }).strict();
@@ -545,6 +554,7 @@ export const AiSessionSummarySchema = AiSessionStatusSchema.pick({
   activeTurnId: true,
   title: true,
   cwd: true,
+  cwdFolderId: true,
   userPrompt: true,
   turns: true,
   status: true,
@@ -766,6 +776,7 @@ export const AiSessionSnapshotInputSchema = AiSessionInputBaseSchema.extend({
   actions: AiSessionActionsSchema.optional(),
   title: z.string().trim().max(240).optional(),
   cwd: z.string().trim().max(4096).optional(),
+  cwdFolderId: z.string().trim().min(1).max(120).optional(),
   activeTurnId: z.string().trim().max(240).optional(),
   userPrompt: z.string().trim().optional(),
   turns: z.array(AiSessionTurnSchema).max(50).optional(),
@@ -873,6 +884,7 @@ export type AiSessionMessageRefInput = z.infer<typeof AiSessionMessageRefInputSc
 export type AiSessionRuntimePath = z.infer<typeof AiSessionRuntimePathSchema>;
 export type AiSessionCreateInput = z.infer<typeof AiSessionCreateInputSchema>;
 export type AiSessionCreateRefInput = z.infer<typeof AiSessionCreateRefInputSchema>;
+export type AiSessionGitSelection = z.infer<typeof AiSessionGitSelectionSchema>;
 export type AiSessionCreateResult = z.infer<typeof AiSessionCreateResultSchema>;
 export type AiSessionOpenAppInput = z.infer<typeof AiSessionOpenAppInputSchema>;
 export type AiSessionOpenAppResult = z.infer<typeof AiSessionOpenAppResultSchema>;

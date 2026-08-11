@@ -392,11 +392,16 @@ const displayContent = computed(() => streamingContent.value || props.responseCo
 }
 
 .ai-session-detail-queue-item p {
+  display: -webkit-box;
+  overflow: hidden;
   margin: 0;
   color: var(--detail-activity-text);
   font-size: 13px;
   line-height: 1.4;
   overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
 }
 
 .ai-session-detail-queue-item small {

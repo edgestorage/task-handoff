@@ -3,7 +3,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
-const { normalizeNodePtyRuntime, validateDesktopServerRuntime } = require("../scripts/after-pack.cjs");
+const { normalizeNodePtyRuntime, validateDesktopServerRuntime, validateDesktopTrayResource } = require("../scripts/after-pack.cjs");
 
 test("afterPack forces node-pty to use its prebuild without doubling app.asar.unpacked", () => {
   const appOutDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-after-pack-"));
@@ -43,4 +43,18 @@ test("afterPack rejects an incomplete unpacked desktop server runtime", () => {
     () => validateDesktopServerRuntime(context),
     /dist\/cli\.js, node_modules\/fastify\/package\.json/,
   );
+});
+
+test("afterPack requires the icon used to derive platform tray images", () => {
+  const appOutDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-after-pack-tray-"));
+  const resources = path.join(appOutDir, "resources");
+  fs.mkdirSync(resources, { recursive: true });
+  const context = {
+    appOutDir,
+    electronPlatformName: "win32",
+    packager: { appInfo: { productFilename: "TaskHandoff" } },
+  };
+  assert.throws(() => validateDesktopTrayResource(context), /tray icon is missing/);
+  fs.writeFileSync(path.join(resources, "icon.png"), "icon");
+  assert.doesNotThrow(() => validateDesktopTrayResource(context));
 });

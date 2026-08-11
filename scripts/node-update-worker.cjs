@@ -133,7 +133,7 @@ function verifyNpmArtifactIntegrity() {
   if (actualIntegrity !== expectedIntegrity) {
     throw new Error(`${packageName} npm artifact integrity mismatch: expected ${expectedIntegrity}, found ${String(actualIntegrity || "unknown")}.`);
   }
-  return packageName;
+  return { packageName, integrity: actualIntegrity };
 }
 
 async function waitForControlPlaneHealth(healthUrl, timeoutMs = 60_000) {
@@ -174,38 +174,36 @@ try {
     error: undefined,
   }));
   if (!claimed) process.exit(0);
-  const packageName = verifyNpmArtifactIntegrity();
+  const verifiedArtifact = verifyNpmArtifactIntegrity();
+  const packageName = verifiedArtifact.packageName;
   const prefixResult = spawnSync(npmCommand, ["prefix", "--global"], { encoding: "utf8" });
   if (prefixResult.status !== 0) throw new Error("Could not determine the npm global prefix.");
   const prefix = prefixResult.stdout.trim();
   const rootResult = spawnSync(npmCommand, ["root", "--global"], { encoding: "utf8" });
   if (rootResult.status !== 0) throw new Error("Could not determine the npm global module root.");
   const globalRoot = rootResult.stdout.trim();
-  const standaloneNodeAgentWasInstalled = packageName === "@task-handoff/server"
-    && installedVersion("@task-handoff/node-agent", globalRoot) !== undefined;
-  run(npmCommand, [
-    "install",
-    "--global",
-    "--prefix",
-    prefix,
-    `${packageName}@${targetVersion}`,
-  ]);
-  verifyInstalledVersion(packageName, globalRoot);
-  if (packageName === "@task-handoff/server") {
-    if (standaloneNodeAgentWasInstalled && installedVersion("@task-handoff/node-agent", globalRoot) !== targetVersion) {
-      const expectedNodeAgentIntegrity = npmArtifactIntegrity("@task-handoff/node-agent");
-      run(npmCommand, [
-        "install",
-        "--global",
-        "--prefix",
-        prefix,
-        `@task-handoff/node-agent@${targetVersion}`,
-      ]);
-      if (npmArtifactIntegrity("@task-handoff/node-agent") !== expectedNodeAgentIntegrity) {
-        throw new Error("@task-handoff/node-agent npm artifact integrity changed during installation.");
-      }
-      verifyInstalledVersion("@task-handoff/node-agent", globalRoot);
+  const packageNames = [packageName];
+  if (packageName === "@task-handoff/server" && installedVersion("@task-handoff/node-agent", globalRoot) !== undefined) {
+    packageNames.push("@task-handoff/node-agent");
+  }
+  const expectedIntegrities = new Map([[packageName, verifiedArtifact.integrity]]);
+  for (const companionPackage of packageNames.slice(1)) {
+    expectedIntegrities.set(companionPackage, npmArtifactIntegrity(companionPackage));
+  }
+  for (const installedPackage of packageNames) {
+    run(npmCommand, [
+      "install",
+      "--global",
+      "--prefix",
+      prefix,
+      `${installedPackage}@${targetVersion}`,
+    ]);
+    if (npmArtifactIntegrity(installedPackage) !== expectedIntegrities.get(installedPackage)) {
+      throw new Error(`${installedPackage} npm artifact integrity changed during installation.`);
     }
+    verifyInstalledVersion(installedPackage, globalRoot);
+  }
+  if (packageName === "@task-handoff/server") {
     verifyServerDistributionVersions(globalRoot);
   }
   if (packageName === "@task-handoff/server") {

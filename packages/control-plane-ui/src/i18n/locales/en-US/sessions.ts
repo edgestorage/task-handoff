@@ -29,7 +29,7 @@ export const sessions = {
   actions: {
     allow: "Allow", skip: "Skip", deny: "Deny", controls: "AI session card controls", searchTriggers: "Search triggers", noTriggers: "No trigger templates",
     noMatchingTriggers: "No matching triggers", remove: "Remove", add: "Add", openAppFor: "Open app session for {agent}", openApp: "Open app session",
-    moreFor: "More actions for {agent}", more: "More actions", closingApp: "Closing app session", closeApp: "Close app session", closingSession: "Closing AI session", closeSession: "Close AI session", unread: "Unread AI session",
+    moreFor: "More actions for {agent}", more: "More actions", closingApp: "Closing app session", closeApp: "Close app session", closingSession: "Closing AI session", closeSession: "Close AI session", unread: "Unread AI session", openedFromTerminal: "Opened from a terminal app session",
     previousMessage: "Previous user message for {agent}", nextMessage: "Next user message for {agent}", addTrigger: "Add trigger", triggersBound: "{count} triggers bound",
   },
   detail: {
@@ -45,7 +45,7 @@ export const sessions = {
   panel: {
     view: "View", status: "Status", listOptions: "AI session list options", sessionList: "AI session list", newSession: "New AI session", allStatuses: "All statuses", active: "Active", waiting: "Waiting", problem: "Problem",
     noMatching: "No matching sessions", noConversations: "No conversations yet", tryFilter: "Try another status filter.", startHint: "Use the + button above to start a conversation.",
-    resizeList: "Resize AI session list", startIdea: "Start with an idea", searchProjects: "Search projects", noProjects: "No projects found", newProject: "New project",
+    resizeList: "Resize AI session list", startIdea: "Start with an idea", searchProjects: "Search projects", noProjects: "No projects found", newProject: "New project", currentFolderMode: "Current folder", worktreeMode: "Worktree", chooseBranch: "Choose branch", searchBranches: "Search branches", detached: "Detached", switchBranchTitle: "Switch the current folder branch?", switchBranchDescription: "Starting the session will switch the current folder to “{branch}”. Uncommitted changes remain, but other active sessions in this folder may observe the new working tree.", confirmBranchSwitch: "Confirm switch",
     promptPlaceholder: "Do anything", chooseProject: "Choose project", projectUnavailable: "This project is no longer registered on the node.", startedWorktree: "AI session started in the selected worktree.", backLatest: "Back to latest",
     defaultPermissionFailed: "Failed to update the default Codex permission mode.", starting: "The new AI session is still starting. Please try again in a moment.",
     startFailed: "Failed to start AI session.", sendFailed: "Failed to send message.", noGoal: "No active goal.", commandFailed: "Failed to run command.", steerFailed: "Failed to steer message.",

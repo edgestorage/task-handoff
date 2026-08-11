@@ -245,6 +245,8 @@ Docker 工作流会构建并冒烟测试四种镜像配置：
 
 推送语义化版本标签会构建 macOS arm64/x64、Windows x64 和 Linux x64 安装包，并发布到 GitHub Release。带 `alpha` 或 `beta` 后缀的版本会标记为预发布版本。macOS 构建会执行签名、公证、票据装订和 Gatekeeper 校验；Windows 代码签名暂未启用。
 
+关闭桌面控制面板窗口后，TaskHandoff 会继续在系统托盘运行。托盘会显示当前 Control Plane 和 Node Agent 服务状态，并可在不重启服务的情况下恢复原窗口。只有从托盘或平台应用菜单选择“退出 TaskHandoff”才会停止桌面后台服务。Node Agent 优雅退出时会停止 Local Runtime controlled instance，并在下次启动时恢复；Docker Runtime controlled instance 保持运行，Node Agent 恢复后会重新发现并接管。
+
 ### 移动端应用
 
 推送严格采用 `mobile-vX.Y.Z` 格式的稳定版本标签时，工作流会执行移动端发布检查，并分别启动 Android 和 iOS 发布任务。Android 生成 APK 并附加到对应 GitHub Release；iOS 通过 `ios-production` 环境审批后构建并提交到 App Store Connect/TestFlight，最终 App Store 审核仍需人工操作。该工作流不会把 Android 构建提交到 Google Play。
