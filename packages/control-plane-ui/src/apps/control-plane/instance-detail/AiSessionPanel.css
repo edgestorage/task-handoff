@@ -292,6 +292,11 @@
 
 :global(.session-ai-project-item span) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 :global(.session-ai-project-item > svg) { width: 13px; height: 13px; }
+:global(.session-ai-branch-tree-item.is-folder) { color: var(--text-muted); }
+:global(.session-ai-branch-tree-toggle) { display: grid; flex: 0 0 9px; width: 9px; height: 13px; place-items: center; }
+:global(.session-ai-branch-tree-toggle > svg) { width: 9px; height: 9px; transition: transform 120ms ease; }
+:global(.session-ai-branch-tree-toggle > svg.expanded) { transform: rotate(90deg); }
+:global(.session-ai-branch-tree-item small) { margin-left: auto; color: var(--text-muted); font-size: 10px; }
 :global(.session-ai-project-item:hover),
 :global(.session-ai-project-item:focus-visible),
 :global(.session-ai-project-item[data-highlighted]) {
@@ -1070,6 +1075,15 @@
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--status-info) 18%, transparent);
 }
 
+.session-ai-row[data-app-session-origin="true"] .ai-session-unread-dot {
+  right: 36px;
+}
+
+.session-ai-row:hover :deep(.ai-session-origin-mark),
+.session-ai-row:focus-within :deep(.ai-session-origin-mark) {
+  opacity: 0;
+}
+
 .session-ai-card-workspace {
   flex: 1 1 auto;
   gap: 6px;
@@ -1109,6 +1123,7 @@
 
 .session-ai-select {
   display: grid;
+  position: relative;
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto auto minmax(0, 1fr);
   gap: 6px;
@@ -1200,11 +1215,17 @@
   background: var(--ai-session-card-content-bg);
   margin: 2px -14px 0;
   min-height: 0;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: hidden;
   padding: 10px 14px 0;
+  scrollbar-width: none;
 }
 
-.session-ai-preview-field-assistant::after {
+.session-ai-preview-field-assistant::-webkit-scrollbar {
+  display: none;
+}
+
+.session-ai-select::after {
   content: "";
   position: absolute;
   right: 0;
@@ -1220,7 +1241,7 @@
   pointer-events: none;
 }
 
-.session-ai-row[data-state="running"] .session-ai-preview-field-assistant::after {
+.session-ai-row[data-state="running"] .session-ai-select::after {
   height: 52px;
   background: linear-gradient(
     to bottom,
@@ -1233,12 +1254,21 @@
 .session-ai-message {
   display: block;
   min-width: 0;
-  max-height: 100%;
-  overflow: hidden;
+  overflow: visible;
   color: var(--ai-session-title);
   font-size: 14px;
   font-weight: 400;
   line-height: 1.35;
+}
+
+.session-ai-message::after {
+  content: "";
+  display: block;
+  height: 34px;
+}
+
+.session-ai-row[data-state="running"] .session-ai-message::after {
+  height: 52px;
 }
 
 .session-ai-question {

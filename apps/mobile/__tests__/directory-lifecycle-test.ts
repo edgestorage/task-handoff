@@ -63,6 +63,14 @@ test('create forwards the selected permission mode', async () => {
   expect(create.mock.calls[0][1].permissionMode).toBe('auto-review');
 });
 
+test('create forwards staged attachment references', async () => {
+  const create = jest.fn().mockResolvedValue({ disposition: 'created', aiSessionId: 'session-1', providerSessionId: 'provider-1', creationSource: 'ai-session' });
+  const api = { aiSessions: { create } } as unknown as ControlPlaneClient;
+  const attachments = [{ id: 'upload-1', kind: 'image' as const, source: { type: 'upload-ref' as const } }];
+  await createMobileAiSession(api, { instance, agent: 'codex', message: 'Review it', attachments, clientRequestId: 'mobile-request-1' });
+  expect(create.mock.calls[0][1].attachments).toEqual(attachments);
+});
+
 test('Claude creation does not receive the Codex permission mode', async () => {
   const create = jest.fn().mockResolvedValue({ disposition: 'created', aiSessionId: 'session-1', providerSessionId: 'provider-1', creationSource: 'ai-session' });
   const api = { aiSessions: { create } } as unknown as ControlPlaneClient;

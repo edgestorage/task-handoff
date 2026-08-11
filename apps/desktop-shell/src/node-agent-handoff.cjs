@@ -4,6 +4,9 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { setTimeout: delay } = require("node:timers/promises");
 
+const DESKTOP_NODE_AGENT_GRACEFUL_TIMEOUT_MS = 20_000;
+const DESKTOP_NODE_AGENT_FORCE_TIMEOUT_MS = 2_000;
+
 function resolveNodeAgentSingletonLockPath(options = {}) {
   const override = options.env?.TASK_HANDOFF_NODE_AGENT_LOCK_PATH || process.env.TASK_HANDOFF_NODE_AGENT_LOCK_PATH;
   if (override?.trim()) return path.resolve(override.trim());
@@ -175,6 +178,7 @@ async function waitForOwnerExit(owner, options) {
 }
 
 async function stopExistingDesktopNodeAgent(options) {
+  const startedAt = Date.now();
   const lockPath = options.lockPath || resolveNodeAgentSingletonLockPath();
   const readOwner = options.readOwner || readNodeAgentLockOwner;
   const isAlive = options.isAlive || processIsAlive;
@@ -207,8 +211,8 @@ async function stopExistingDesktopNodeAgent(options) {
     wait,
     pollMs: options.pollMs ?? 100,
   };
-  if (await waitForOwnerExit(owner, { ...common, timeoutMs: options.gracefulTimeoutMs ?? 5_000 })) {
-    options.logInfo?.(`[desktop-shell] previous desktop node agent stopped pid=${owner.pid}`);
+  if (await waitForOwnerExit(owner, { ...common, timeoutMs: options.gracefulTimeoutMs ?? DESKTOP_NODE_AGENT_GRACEFUL_TIMEOUT_MS })) {
+    options.logInfo?.(`[desktop-shell] previous desktop node agent stopped pid=${owner.pid} elapsedMs=${Date.now() - startedAt}`);
     return { status: "stopped", owner };
   }
 
@@ -219,20 +223,22 @@ async function stopExistingDesktopNodeAgent(options) {
   if (!lockOwnerMatchesProcess(owner, common)) {
     return { status: "stopped", owner };
   }
-  options.logError?.(`[desktop-shell] forcing previous desktop node agent to stop pid=${owner.pid}`);
+  options.logError?.(`[desktop-shell] forcing previous desktop node agent to stop pid=${owner.pid} startIdentity=${owner.startIdentity} elapsedMs=${Date.now() - startedAt}`);
   try {
     signal(owner.pid, "SIGKILL");
   } catch (error) {
     if (error?.code === "ESRCH") return { status: "stopped", owner };
     throw error;
   }
-  if (await waitForOwnerExit(owner, { ...common, timeoutMs: options.forceTimeoutMs ?? 2_000 })) {
+  if (await waitForOwnerExit(owner, { ...common, timeoutMs: options.forceTimeoutMs ?? DESKTOP_NODE_AGENT_FORCE_TIMEOUT_MS })) {
     return { status: "forced", owner };
   }
   throw new Error(`Previous desktop node agent pid=${owner.pid} did not exit.`);
 }
 
 module.exports = {
+  DESKTOP_NODE_AGENT_FORCE_TIMEOUT_MS,
+  DESKTOP_NODE_AGENT_GRACEFUL_TIMEOUT_MS,
   ensureDesktopNodeAgent,
   inspectExistingDesktopControlPlane,
   inspectExistingDesktopNodeAgent,

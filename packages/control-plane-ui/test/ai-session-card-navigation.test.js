@@ -5,6 +5,9 @@ import test from "node:test";
 const card = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionCard.vue", import.meta.url), "utf8");
 const board = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionBoardView.vue", import.meta.url), "utf8");
 const dock = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionFloatingDock.vue", import.meta.url), "utf8");
+const panel = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.vue", import.meta.url), "utf8");
+const panelStyles = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.css", import.meta.url), "utf8");
+const autoScroll = fs.readFileSync(new URL("../src/components/ai-session/aiSessionCardAutoScroll.ts", import.meta.url), "utf8");
 
 test("ai session card navigation stops at the first and last messages", () => {
   assert.match(card, /:disabled="promptIndex <= 0"/);
@@ -67,4 +70,22 @@ test("waiting approval actions float at the bottom left independently from card 
 
 test("ai session board card previews do not open an expanded overlay", () => {
   assert.doesNotMatch(card, /expandedKind|data-ai-preview-trigger|handlePreviewClick|cursor: zoom-in/);
+});
+
+test("AI session and board cards auto-scroll only the assistant preview after the pointer becomes idle", () => {
+  assert.match(card, /v-ai-session-card-auto-scroll="\{ target: '\.ai-board-preview-field-assistant', revision: promptIndex \}"/);
+  assert.match(panel, /v-ai-session-card-auto-scroll="\{ target: '\.session-ai-preview-field-assistant', revision:/);
+  assert.match(autoScroll, /const HOVER_DELAY_MS = 1000;/);
+  assert.match(autoScroll, /const WHEEL_RESUME_DELAY_MS = 1000;/);
+  assert.match(autoScroll, /this\.target\?\.addEventListener\("pointermove", this\.handlePointerMove\)/);
+  assert.match(autoScroll, /handlePointerMove[\s\S]*this\.idleActive = false;[\s\S]*this\.stop\(\);[\s\S]*this\.scheduleStart\(HOVER_DELAY_MS\);/);
+  assert.match(autoScroll, /this\.target\?\.addEventListener\("wheel", this\.handleWheel, \{ passive: false \}\)/);
+  assert.doesNotMatch(autoScroll, /this\.root\.addEventListener\("(?:pointer|wheel)/);
+  assert.match(autoScroll, /handleWheel[\s\S]*!this\.idleActive[\s\S]*return;/);
+  assert.match(autoScroll, /setTimeout[\s\S]*activateIdleScroll\(\)/);
+  assert.match(autoScroll, /this\.resumeTimer = window\.setTimeout[\s\S]*WHEEL_RESUME_DELAY_MS/);
+  assert.match(card, /\.ai-board-preview-field-assistant\s*\{[^}]*overflow-y: hidden;[^}]*scrollbar-width: none;/s);
+  assert.match(panelStyles, /\.session-ai-preview-field-assistant\s*\{[^}]*overflow-y: hidden;[^}]*scrollbar-width: none;/s);
+  assert.doesNotMatch(card, /v-ai-session-card-auto-scroll="\{ target: '\.ai-board-preview-field-user'/);
+  assert.doesNotMatch(panel, /v-ai-session-card-auto-scroll="\{ target: '\.session-ai-preview-field-user'/);
 });

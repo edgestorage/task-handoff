@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type {
@@ -14,11 +15,13 @@ import type { AiSessionRegistry } from "./ai-session-registry";
 export type AiSessionCreateCoordinatorInput = {
   agent: AiAgentKind;
   cwd: string;
+  cwdFolderId?: string;
   message: string;
   attachments?: AiSessionMessageAttachment[];
   references?: AiSessionReference[];
   permissionMode?: AiSessionPermissionMode;
   clientRequestId: string;
+  idempotencyFingerprint?: string;
 };
 
 export type AiSessionCreateCoordinatorOptions = {
@@ -31,23 +34,37 @@ export type AiSessionCreateCoordinatorOptions = {
 };
 
 export class AiSessionCreateCoordinator {
-  private readonly pending = new Map<string, Promise<AiSessionCreateResult>>();
-  private readonly completed = new Map<string, AiSessionCreateResult>();
+  private readonly pending = new Map<string, { fingerprint: string; promise: Promise<AiSessionCreateResult> }>();
+  private readonly completed = new Map<string, { fingerprint?: string; result: AiSessionCreateResult }>();
 
   constructor(private readonly options: AiSessionCreateCoordinatorOptions) {
     this.restoreCompleted();
   }
 
   create(input: AiSessionCreateCoordinatorInput): Promise<AiSessionCreateResult> {
+    const fingerprint = input.idempotencyFingerprint || aiSessionCreateRequestFingerprint(createFingerprintInput(input));
     const completed = this.completed.get(input.clientRequestId);
-    if (completed) return Promise.resolve({ ...completed, disposition: "already-created" });
+    if (completed) {
+      assertAiSessionCreateRequestFingerprint(completed.fingerprint, fingerprint);
+      return Promise.resolve({ ...completed.result, disposition: "already-created" });
+    }
     const active = this.pending.get(input.clientRequestId);
-    if (active) return active;
+    if (active) {
+      assertAiSessionCreateRequestFingerprint(active.fingerprint, fingerprint);
+      return active.promise;
+    }
     const promise = this.perform(input).finally(() => {
-      if (this.pending.get(input.clientRequestId) === promise) this.pending.delete(input.clientRequestId);
+      if (this.pending.get(input.clientRequestId)?.promise === promise) this.pending.delete(input.clientRequestId);
     });
-    this.pending.set(input.clientRequestId, promise);
+    this.pending.set(input.clientRequestId, { fingerprint, promise });
     return promise;
+  }
+
+  completedResult(clientRequestId: string, fingerprint: string) {
+    const completed = this.completed.get(clientRequestId);
+    if (!completed) return undefined;
+    assertAiSessionCreateRequestFingerprint(completed.fingerprint, fingerprint);
+    return { ...completed.result, disposition: "already-created" as const };
   }
 
   private async perform(input: AiSessionCreateCoordinatorInput): Promise<AiSessionCreateResult> {
@@ -70,6 +87,7 @@ export class AiSessionCreateCoordinator {
         appId: input.agent === "codex" ? "codex-app-server" : input.agent,
         providerSessionId,
         cwd: created.cwd || input.cwd,
+        cwdFolderId: input.cwdFolderId,
         status: "idle",
         phase: "unknown",
       });
@@ -77,6 +95,9 @@ export class AiSessionCreateCoordinator {
     if (!session || session.creationSource !== "ai-session") {
       await this.compensate(provider, providerSessionId, session?.id, "registry-projection-failed");
       throw aiSessionControlError("AI_SESSION_MATERIALIZATION_FAILED", "Direct AI session could not be projected.", 502);
+    }
+    if (input.cwdFolderId && session.cwdFolderId !== input.cwdFolderId) {
+      session = this.options.registry.put({ ...session, cwdFolderId: input.cwdFolderId });
     }
     try {
       await withTimeout(
@@ -102,7 +123,8 @@ export class AiSessionCreateCoordinator {
       providerSessionId,
       creationSource: "ai-session",
     });
-    this.completed.set(input.clientRequestId, result);
+    const fingerprint = input.idempotencyFingerprint || aiSessionCreateRequestFingerprint(createFingerprintInput(input));
+    this.completed.set(input.clientRequestId, { fingerprint, result });
     this.persistCompleted();
     return result;
   }
@@ -118,7 +140,10 @@ export class AiSessionCreateCoordinator {
       for (const record of records) {
         if (!record || typeof record !== "object" || Array.isArray(record) || typeof record.clientRequestId !== "string") continue;
         const result = AiSessionCreateResultSchema.safeParse(record.result);
-        if (result.success) this.completed.set(record.clientRequestId, result.data);
+        if (result.success) this.completed.set(record.clientRequestId, {
+          fingerprint: typeof record.fingerprint === "string" && /^[a-f0-9]{64}$/.test(record.fingerprint) ? record.fingerprint : undefined,
+          result: result.data,
+        });
       }
     } catch (error: unknown) {
       this.options.onDiagnostic?.({
@@ -134,8 +159,8 @@ export class AiSessionCreateCoordinator {
     try {
       fs.mkdirSync(path.dirname(storePath), { recursive: true });
       const temporaryPath = `${storePath}.${process.pid}.tmp`;
-      const completed = [...this.completed.entries()].map(([clientRequestId, result]) => ({ clientRequestId, result }));
-      fs.writeFileSync(temporaryPath, JSON.stringify({ version: 1, completed }, null, 2));
+      const completed = [...this.completed.entries()].map(([clientRequestId, record]) => ({ clientRequestId, ...record }));
+      fs.writeFileSync(temporaryPath, JSON.stringify({ version: 2, completed }, null, 2));
       fs.renameSync(temporaryPath, storePath);
     } catch (error: unknown) {
       this.options.onDiagnostic?.({
@@ -174,6 +199,30 @@ export class AiSessionCreateCoordinator {
       cleanupFailures: failures,
     });
   }
+}
+
+export function aiSessionCreateRequestFingerprint(value: unknown) {
+  return crypto.createHash("sha256").update(canonicalJson(value)).digest("hex");
+}
+
+export function assertAiSessionCreateRequestFingerprint(expected: string | undefined, actual: string) {
+  // Compatibility for v0.0.21: restored operation records did not persist fingerprints.
+  if (!expected || expected === actual) return;
+  throw aiSessionControlError("AI_SESSION_CREATE_REQUEST_CONFLICT", "The client request ID was already used with different session creation input.", 409);
+}
+
+function createFingerprintInput(input: AiSessionCreateCoordinatorInput) {
+  const { clientRequestId: _clientRequestId, idempotencyFingerprint: _idempotencyFingerprint, ...value } = input;
+  return value;
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).sort().filter((key) => record[key] !== undefined).map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number) {

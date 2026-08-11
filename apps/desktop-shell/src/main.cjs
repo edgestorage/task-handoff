@@ -4,13 +4,12 @@ const http = require("node:http");
 const net = require("node:net");
 const path = require("node:path");
 const { setTimeout: delay } = require("node:timers/promises");
-const { app, BrowserView, BrowserWindow, dialog, ipcMain, nativeImage, nativeTheme, shell } = require("electron");
+const { app, BrowserView, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification, shell, Tray } = require("electron");
 const { autoUpdater } = require("electron-updater");
 const {
   buildControlPlaneArgs,
   buildDesktopChildProcessEnv,
   buildNodeAgentArgs,
-  controlPlaneUrl,
   nodeAgentUrl,
   repoRoot,
   resolveControlPlaneHost,
@@ -29,7 +28,14 @@ const {
 const { createDesktopUpdater } = require("./updater.cjs");
 const { stopSupervisedDesktopChild, superviseDesktopChild } = require("./child-process.cjs");
 const { createDesktopServiceLifecycle } = require("./desktop-service-lifecycle.cjs");
+const { createDesktopServiceSupervisor } = require("./desktop-service-supervisor.cjs");
+const { createDesktopWindowManager } = require("./desktop-window-manager.cjs");
+const { createDesktopTray } = require("./desktop-tray.cjs");
+const { createDesktopQuitCoordinator } = require("./desktop-quit-coordinator.cjs");
+const { claimBackgroundNotice } = require("./background-notice.cjs");
 const {
+  DESKTOP_NODE_AGENT_FORCE_TIMEOUT_MS,
+  DESKTOP_NODE_AGENT_GRACEFUL_TIMEOUT_MS,
   ensureDesktopNodeAgent,
   inspectExistingDesktopControlPlane,
   stopExistingDesktopNodeAgent,
@@ -42,11 +48,12 @@ let mainWindow;
 let controlPlaneProcess;
 let nodeAgentProcess;
 let ownsControlPlaneProcess = false;
-let ownsNodeAgentProcess = false;
 let desktopFileLoggingOverride;
 let desktopUpdater;
-let desktopQuitPromise;
-let desktopQuitReady = false;
+let desktopTray;
+let desktopWindows;
+let desktopQuitCoordinator;
+const desktopServiceSupervisor = createDesktopServiceSupervisor();
 const controlPlaneWindows = new Set();
 const windowsTitleBarOverlayHeights = new WeakMap();
 const childProcessSpawnErrors = new WeakMap();
@@ -363,6 +370,26 @@ function createWindow(url) {
     mainWindow?.show();
   });
 
+  mainWindow.on("close", (event) => {
+    if (desktopQuitCoordinator?.phase() === "stopping" || ["stopping", "stopped"].includes(desktopServiceSupervisor.snapshot().phase)) return;
+    event.preventDefault();
+    desktopWindows?.background();
+    if (process.platform !== "darwin" && Notification.isSupported()) {
+      try {
+        if (claimBackgroundNotice(resolveDataDir())) {
+          new Notification({
+            title: "TaskHandoff",
+            body: app.getLocale().toLowerCase().startsWith("zh")
+              ? "TaskHandoff 仍在后台运行，可从系统托盘重新打开或退出。"
+              : "TaskHandoff is still running. Use the system tray to reopen or quit.",
+          }).show();
+        }
+      } catch (error) {
+        logError(`[desktop-shell] failed to persist background notice ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  });
+
   mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedUrl, isMainFrame) => {
     const detail = `${validatedUrl || url}\n${errorCode}: ${errorDescription}`;
     logError(`[desktop-shell] failed to load ${detail}`);
@@ -398,13 +425,21 @@ function createWindow(url) {
       logError(`[desktop-shell] failure page load failed ${loadError}`);
     });
   }
+  return mainWindow;
 }
 
 function resolveControlPlaneWindowUrl(url) {
-  const baseUrl = mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.getURL().startsWith("http")
-    ? mainWindow.webContents.getURL()
-    : controlPlaneUrl();
+  const baseUrl = currentControlPlaneBaseUrl();
   return validateControlPlaneWindowUrl(url, { baseUrl });
+}
+
+function currentControlPlaneBaseUrl() {
+  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.getURL().startsWith("http")) {
+    return mainWindow.webContents.getURL();
+  }
+  const endpoint = desktopServiceSupervisor.endpoint();
+  if (!endpoint) throw new Error("The Desktop Control Plane endpoint is not available.");
+  return endpoint;
 }
 
 function createControlPlaneWindow(url) {
@@ -517,7 +552,7 @@ function resolveAppWindowUrl(url) {
   if (/^[a-z][a-z\d+\-.]*:/i.test(value)) {
     return new URL(value);
   }
-  const base = mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents.getURL() : controlPlaneUrl();
+  const base = currentControlPlaneBaseUrl();
   return new URL(value, base);
 }
 
@@ -654,6 +689,7 @@ function startControlPlane(options = {}) {
     onExit: () => {
       controlPlaneProcess = undefined;
       ownsControlPlaneProcess = false;
+      desktopServiceSupervisor.markComponentStopped("control-plane");
     },
   });
 
@@ -702,7 +738,6 @@ function startNodeAgent(options = {}) {
     fs.closeSync(stdout);
     fs.closeSync(stderr);
   }
-  ownsNodeAgentProcess = true;
   const child = nodeAgentProcess;
 
   superviseDesktopChild(child, {
@@ -714,7 +749,7 @@ function startNodeAgent(options = {}) {
     onError: (error) => childProcessSpawnErrors.set(child, error),
     onExit: () => {
       nodeAgentProcess = undefined;
-      ownsNodeAgentProcess = false;
+      desktopServiceSupervisor.markComponentStopped("node-agent");
     },
   });
 
@@ -783,21 +818,21 @@ function stopControlPlane() {
 }
 
 async function stopNodeAgent() {
-  if (nodeAgentProcess && ownsNodeAgentProcess) {
-    const child = nodeAgentProcess;
-    nodeAgentProcess = undefined;
-    ownsNodeAgentProcess = false;
-    await stopSupervisedDesktopChild(child, {
-      label: "Node agent",
-      onForce: () => logError("[desktop-shell] forcing node agent to stop"),
-    });
-    return;
-  }
+  const child = nodeAgentProcess;
+  nodeAgentProcess = undefined;
   const result = await stopExistingDesktopNodeAgent({
     dataDir: resolveNodeAgentDataDir(),
     logInfo,
     logError,
   });
+  if (["absent", "stale"].includes(result.status) && child) {
+    await stopSupervisedDesktopChild(child, {
+      label: "Node agent",
+      gracefulTimeoutMs: DESKTOP_NODE_AGENT_GRACEFUL_TIMEOUT_MS,
+      forceTimeoutMs: DESKTOP_NODE_AGENT_FORCE_TIMEOUT_MS,
+      onForce: () => logError("[desktop-shell] forcing node agent to stop after graceful shutdown timeout"),
+    });
+  }
   if (result.status === "foreign") {
     throw new Error(`Refusing to stop node agent pid=${result.owner.pid} owned by dataDir=${result.owner.dataDir}.`);
   }
@@ -807,8 +842,15 @@ async function stopNodeAgent() {
 }
 
 const desktopServiceLifecycle = createDesktopServiceLifecycle({ stopControlPlane, stopNodeAgent });
+desktopQuitCoordinator = createDesktopQuitCoordinator({
+  stop: (reason) => desktopServiceLifecycle.stop(reason),
+  onStopping: () => desktopServiceSupervisor.markStopping(),
+  onError: (error, reason) => logError(`[desktop-shell] failed to stop desktop services during ${reason} ${error instanceof Error ? error.stack || error.message : String(error)}`),
+  onStopped: () => desktopServiceSupervisor.markStopped(),
+});
 
 async function boot() {
+  desktopServiceSupervisor.markStarting();
   if (desktopFileLoggingEnabled()) {
     logInfo(`[desktop-shell] writing desktop logs to ${resolveDesktopLogFile()}`);
   }
@@ -838,16 +880,19 @@ async function boot() {
     });
     bootNodeAgent = ensuredNodeAgent.child;
     nodeAgentReady = true;
+    desktopServiceSupervisor.markNodeAgentRunning();
     const nodeAgentHealth = ensuredNodeAgent.health;
     const actualNodeAgentPort = Number(nodeAgentHealth?.listener?.port) || nodeAgentPort;
     const nodeAgentEndpoint = localHttpUrl(nodeAgentHost, actualNodeAgentPort);
     const child = startControlPlane({ host: controlPlaneHost, port: controlPlanePort, nodeAgentEndpoint, nodeAgentControlEndpoint });
     await waitForControlPlane(url, child);
     desktopServiceLifecycle.markRunning();
-    createWindow(url);
+    desktopServiceSupervisor.markRunning(url);
+    desktopWindows.open();
     bootNodeAgent?.unref?.();
   } catch (error) {
     const detail = error instanceof Error ? error.stack || error.message : String(error);
+    desktopServiceSupervisor.markDegraded(error);
     logError(`[desktop-shell] desktop services failed to start ${detail}`);
     await desktopServiceLifecycle.stop("boot-failure", { nodeAgentReady }).catch((cleanupError) => {
       logError(`[desktop-shell] failed to roll back desktop services ${cleanupError instanceof Error ? cleanupError.stack || cleanupError.message : String(cleanupError)}`);
@@ -855,13 +900,12 @@ async function boot() {
     if (nodeAgentReady) {
       bootNodeAgent?.unref?.();
     }
-    createWindow(htmlDataUrl(renderFailurePage("TaskHandoff desktop services failed", detail)));
+    desktopWindows.attach(createWindow(htmlDataUrl(renderFailurePage("TaskHandoff desktop services failed", detail))));
   }
 }
 
 async function prepareDesktopUpdateInstall() {
-  await desktopServiceLifecycle.stop("update");
-  desktopQuitReady = true;
+  await desktopQuitCoordinator.request("update");
 }
 
 ipcMain.handle("task-handoff:choose-project-folder", async () => {
@@ -931,6 +975,11 @@ ipcMain.handle("task-handoff:set-diagnostic-logs-enabled", (_event, enabled) => 
   return { enabled: desktopFileLoggingOverride };
 });
 
+desktopWindows = createDesktopWindowManager({
+  endpoint: () => desktopServiceSupervisor.endpoint(),
+  create: (url) => createWindow(url),
+});
+
 const ownsDesktopInstanceLock = app.requestSingleInstanceLock();
 
 if (!ownsDesktopInstanceLock) {
@@ -938,14 +987,22 @@ if (!ownsDesktopInstanceLock) {
   app.quit();
 } else {
   app.on("second-instance", () => {
-    if (!mainWindow || mainWindow.isDestroyed()) return;
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.show();
-    mainWindow.focus();
+    desktopWindows.open();
   });
 
   app.whenReady().then(() => {
     setDesktopDockIcon();
+    desktopTray = createDesktopTray({
+      Tray,
+      Menu,
+      nativeImage,
+      iconPath: desktopIconPath(),
+      platform: process.platform,
+      locale: app.getLocale(),
+      supervisor: desktopServiceSupervisor,
+      onOpen: () => desktopWindows.open(),
+      onQuit: () => app.quit(),
+    });
     desktopUpdater = createDesktopUpdater({
       app,
       autoUpdater,
@@ -962,32 +1019,28 @@ if (!ownsDesktopInstanceLock) {
   });
 
   app.on("activate", () => {
-    if (!mainWindow) {
-      createWindow(controlPlaneUrl());
-    }
+    desktopWindows.open();
   });
 
   app.on("before-quit", (event) => {
     desktopUpdater?.stop();
-    if (desktopQuitReady) {
+    if (desktopQuitCoordinator.isReadyToExit()) {
+      desktopServiceSupervisor.markStopped();
+      desktopTray?.destroy();
+      desktopTray = undefined;
       closeDesktopFileLog();
       return;
     }
     event.preventDefault();
-    if (!desktopQuitPromise) {
-      desktopQuitPromise = desktopServiceLifecycle.stop("quit")
-        .catch((error) => logError(`[desktop-shell] failed to stop desktop services during quit ${error instanceof Error ? error.stack || error.message : String(error)}`))
-        .finally(() => {
-          desktopQuitReady = true;
-          closeDesktopFileLog();
-          app.quit();
-        });
-    }
+    void desktopQuitCoordinator.request("quit").finally(() => {
+      desktopTray?.destroy();
+      desktopTray = undefined;
+      closeDesktopFileLog();
+      app.quit();
+    });
   });
 
   app.on("window-all-closed", () => {
-    if (process.platform !== "darwin") {
-      app.quit();
-    }
+    // Closing UI windows enters background service mode. Only an explicit quit stops services.
   });
 }

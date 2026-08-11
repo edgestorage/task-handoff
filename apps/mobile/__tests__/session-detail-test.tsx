@@ -695,6 +695,7 @@ test('composer expands to a multiline editor while focused', async () => {
   expect(screen.getByTestId('session-composer').props.accessibilityState.expanded).toBe(false);
   const permissionButton = screen.getByRole('button', { name: 'Permission mode: Ask for approval' });
   within(permissionButton).getByText('Ask for approval');
+  expect(screen.getByTestId('session-permission-chevron')).toBeTruthy();
   const permissionFrameStyle = StyleSheet.flatten(screen.getByTestId('session-permission-button-frame').props.style);
   const permissionTriggerStyle = StyleSheet.flatten(screen.getByTestId('session-permission-menu-trigger-frame').props.style);
   expect(permissionTriggerStyle.height).toBe(38);

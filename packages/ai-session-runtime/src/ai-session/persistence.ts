@@ -20,7 +20,7 @@ import { compact, messageText, normalizeTurns } from "../ai-session-turns";
 
 const PERSISTED_SESSION_FIELDS = new Set([
   "id", "agent", "creationSource", "appSessionId", "appId", "providerSessionId", "providerMeta", "appBindingKeys", "actions",
-  "activeTurnId", "title", "cwd", "userPrompt", "turns", "status", "phase", "summary", "lastMessage", "lastMessageItemId",
+  "activeTurnId", "title", "cwd", "cwdFolderId", "userPrompt", "turns", "status", "phase", "summary", "lastMessage", "lastMessageItemId",
   "currentTool", "toolCallsSinceLastMessage", "subAgents", "transcriptPath", "transcriptSize", "startedAt", "updatedAt",
   "completedAt", "error", "counters", "queue",
 ]);
@@ -265,6 +265,7 @@ export function sanitizePersistedAiSession(value: unknown): AiSessionStatus | un
     ...(typeof record.activeTurnId === "string" && record.activeTurnId ? { activeTurnId: compact(record.activeTurnId, 240) } : {}),
     ...(typeof record.title === "string" && record.title ? { title: compact(record.title, 240) } : {}),
     ...(typeof record.cwd === "string" && record.cwd ? { cwd: compact(record.cwd, 4096) } : {}),
+    ...(typeof record.cwdFolderId === "string" && record.cwdFolderId ? { cwdFolderId: compact(record.cwdFolderId, 120) } : {}),
     ...(typeof record.userPrompt === "string" && record.userPrompt ? { userPrompt: messageText(record.userPrompt) } : {}),
     turns: normalizePersistedTurns(record.turns),
     status: normalizeAiSessionLifecycle(record.status),

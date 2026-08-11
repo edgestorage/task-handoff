@@ -55,6 +55,7 @@ import {
   type AiSessionsSnapshot,
 } from "@task-handoff/protocol/ai-sessions";
 import { AppSessionDeltaResponseSchema, AppSessionsStateSchema, emptyAppSessionsSnapshot, type AppSessionDeltaResponse, type AppSessionsSnapshot } from "@task-handoff/protocol/app-sessions";
+import type { RepositoryAiSessionGitSelection } from "@task-handoff/protocol/repository";
 import { AiSessionActionService } from "../sessions/ai-session-actions.ts";
 export { assertAiSessionRuntimePathSupport } from "../sessions/ai-session-actions.ts";
 import fs from "node:fs";
@@ -1253,14 +1254,27 @@ export class ControlPlaneService {
     return this.aiSessionActionService.resume(instanceId, aiSessionId);
   }
 
-  async createAiSession(instanceId: string, input: Omit<AiSessionCreateInput, "cwd"> & { cwdFolderId?: string }) {
+  async createAiSession(instanceId: string, input: Omit<AiSessionCreateInput, "cwd"> & {
+    cwdFolderId?: string;
+    gitSelection?: RepositoryAiSessionGitSelection;
+  }) {
     const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
     const { cwdFolderId: _cwdFolderId, ...resolvedInput } = input;
     const cwdPath = input.cwdFolderId
       ? await this.runtimeCwdForFolderId(instance, input.cwdFolderId)
       : instance.runtime.workspacePath || instance.workspace.path || workspacePolicyForSource(instance.source).path || "/workspace";
     const cwd = { type: "runtime-path" as const, path: cwdPath };
-    return this.aiSessionActionService.create(instanceId, { ...resolvedInput, cwd });
+    return this.aiSessionActionService.create(instanceId, {
+      ...resolvedInput,
+      cwd,
+      ...(input.cwdFolderId ? { cwdFolderId: input.cwdFolderId } : {}),
+    });
+  }
+
+  async inspectAiSessionWorkspace(instanceId: string, cwdFolderId: string) {
+    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
+    const cwd = { type: "runtime-path" as const, path: await this.runtimeCwdForFolderId(instance, cwdFolderId) };
+    return this.aiSessionActionService.inspectWorkspace(instanceId, cwd);
   }
 
   openAiSessionApp(instanceId: string, aiSessionId: string, clientRequestId: string) {

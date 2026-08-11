@@ -1,4 +1,5 @@
 import type { AiSessionPermissionMode } from '@task-handoff/protocol/ai-sessions';
+import type { RepositoryAiSessionWorkspace } from '@task-handoff/protocol/repository';
 import type { ControlPlaneInstanceDirectoryEntry, ControlPlaneNodeDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
 import type { ControlPlaneNodeLocalFolder } from '@task-handoff/control-plane-client';
 
@@ -10,16 +11,26 @@ export type NewSessionFormProps = {
   folders: readonly ControlPlaneNodeLocalFolder[];
   selectedAgent: string;
   selectedFolderId?: string;
+  workspace?: RepositoryAiSessionWorkspace;
+  workspaceMode?: 'current-folder' | 'worktree';
+  selectedBranch?: string;
+  workspaceLoading?: boolean;
   message: string;
   permissionMode: AiSessionPermissionMode;
   busy: boolean;
   disabled: boolean;
   error?: string;
+  attachments: readonly { id: string; kind: 'image' | 'file'; name: string }[];
   visualBalanceInset?: number;
   onInstanceChange(value: string): void;
   onAgentChange(value: string): void;
   onFolderChange(value?: string): void;
+  onWorkspaceModeChange?(value: 'current-folder' | 'worktree'): void;
+  onBranchChange?(value: string): void;
   onMessageChange(value: string): void;
+  onAddImage(): void;
+  onAddFile(): void;
+  onRemoveAttachment(id: string): void;
   onPermissionModeChange(value: AiSessionPermissionMode): void;
   onCreate(): void;
 };

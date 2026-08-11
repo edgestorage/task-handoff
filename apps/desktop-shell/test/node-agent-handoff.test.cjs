@@ -1,11 +1,17 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 const {
+  DESKTOP_NODE_AGENT_GRACEFUL_TIMEOUT_MS,
   ensureDesktopNodeAgent,
   inspectExistingDesktopControlPlane,
   inspectExistingDesktopNodeAgent,
   stopExistingDesktopNodeAgent,
 } = require("../src/node-agent-handoff.cjs");
+
+test("desktop node-agent graceful timeout covers the Local Runtime shutdown window", () => {
+  assert.equal(DESKTOP_NODE_AGENT_GRACEFUL_TIMEOUT_MS, 20_000);
+  assert.ok(DESKTOP_NODE_AGENT_GRACEFUL_TIMEOUT_MS > 12_000);
+});
 
 function owner(overrides = {}) {
   return {

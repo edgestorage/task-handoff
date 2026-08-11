@@ -34,12 +34,15 @@ export class ManagedWorktreeRegistry {
     this.load();
   }
 
-  allocate(repositoryId: string, branchName: string) {
+  allocate(repositoryId: string, branchName: string, allocationKey?: string) {
     this.ensureRoot();
     const repositoryDirectory = path.join(this.root, repositoryId.replace(/^repo:/, ""));
     fs.mkdirSync(repositoryDirectory, { recursive: true, mode: 0o700 });
     const slug = branchName.normalize("NFKD").replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "worktree";
-    return path.join(repositoryDirectory, `${slug}-${crypto.randomUUID()}`);
+    const suffix = allocationKey
+      ? crypto.createHash("sha256").update(allocationKey).digest("hex").slice(0, 24)
+      : crypto.randomUUID();
+    return path.join(repositoryDirectory, `${slug}-${suffix}`);
   }
 
   add(repositoryId: string, worktreeId: string, worktreePath: string) {
@@ -146,6 +149,66 @@ export class RepositoryWorktreeService {
         try { fs.rmSync(destination, { recursive: true }); } catch {}
         if (error instanceof RepositoryOperationError) throw error;
         throw new RepositoryOperationError("REPOSITORY_OPERATION_FAILED", "Git could not create the worktree.", await this.resolve());
+      }
+    });
+  }
+
+  async createForAiSession(request: { ref: { type: "head" } | { type: "branch"; name: string }; clientRequestId: string }) {
+    const initial = await this.requireAvailable();
+    return this.queue.withRepository(initial.gitCommonDir!, async () => {
+      const state = await this.requireAvailable();
+      const git = new GitProcess(state.worktreeRoot!, this.gitOptions);
+      const refLabel = request.ref.type === "head" ? "HEAD" : request.ref.name;
+      const destination = this.registry.allocate(state.context.repositoryId!, refLabel, request.clientRequestId);
+      const current = await this.listFromStateInternal(state);
+      const existing = current.find((item) => item.canonicalPath === path.resolve(destination));
+      if (existing) {
+        if (!existing.canCreateAiSession) {
+          throw new RepositoryOperationError("REPOSITORY_WORKTREE_UNSAFE", `Worktree cannot host an AI session: ${existing.createAiSessionBlockers.join(", ")}.`, state);
+        }
+        return { worktreeId: existing.id, worktrees: await this.listFromState(state) };
+      }
+      if (fs.existsSync(destination)) {
+        throw new RepositoryOperationError(
+          "REPOSITORY_WORKTREE_UNSAFE",
+          "The managed worktree destination already exists but is not registered as a Git worktree.",
+          state,
+        );
+      }
+
+      const revision = request.ref.type === "head"
+        ? "HEAD^{commit}"
+        : `refs/heads/${request.ref.name}^{commit}`;
+      let oid: string;
+      try {
+        oid = (await git.run("rev-parse", ["--verify", "--end-of-options", revision])).stdout.trim();
+      } catch {
+        throw new RepositoryOperationError("REPOSITORY_BRANCH_INVALID", "Selected Git revision no longer exists.", await this.resolve());
+      }
+      const branchName = request.ref.type === "branch" ? request.ref.name : undefined;
+      const branchOccupied = branchName !== undefined
+        && current.some((item) => item.head.state === "branch" && item.head.branch === branchName);
+      let added = false;
+      try {
+        if (branchName !== undefined && !branchOccupied) {
+          await git.run("worktree", ["add", destination, branchName]);
+        } else {
+          await git.run("worktree", ["add", "--detach", destination, oid]);
+        }
+        added = true;
+        const canonicalPath = fs.realpathSync(destination);
+        const worktreeId = repositoryWorktreeId(state.context.repositoryId!, canonicalPath);
+        this.registry.add(state.context.repositoryId!, worktreeId, canonicalPath);
+        return { worktreeId, worktrees: await this.listFromState(await this.requireAvailable()) };
+      } catch (error) {
+        if (added) {
+          try { await git.run("worktree", ["remove", destination]); } catch {}
+          // A successful `git worktree add` establishes ownership of this path.
+          // If Git's own removal was incomplete, remove only that owned residue.
+          try { fs.rmSync(destination, { recursive: true }); } catch {}
+        }
+        if (error instanceof RepositoryOperationError) throw error;
+        throw new RepositoryOperationError("REPOSITORY_OPERATION_FAILED", "Git could not create the AI session worktree.", await this.resolve());
       }
     });
   }

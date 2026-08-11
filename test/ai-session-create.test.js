@@ -52,9 +52,13 @@ test("AI session create coordinator deduplicates a request through its first pro
     async interrupt(session) { return { session, provider: "codex", action: "interrupt" }; },
   });
   const coordinator = new AiSessionCreateCoordinator({ registry, controller });
-  const input = { agent: "codex", cwd: "/workspace", message: "Start", clientRequestId: "create-1" };
+  const input = { agent: "codex", cwd: "/workspace", cwdFolderId: "folder-project", message: "Start", clientRequestId: "create-1" };
   const first = coordinator.create(input);
   const second = coordinator.create(input);
+  assert.throws(
+    () => coordinator.create({ ...input, message: "Different input" }),
+    (error) => error.code === "AI_SESSION_CREATE_REQUEST_CONFLICT" && error.statusCode === 409,
+  );
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(creates, 1);
   assert.equal(turns, 1);
@@ -63,7 +67,12 @@ test("AI session create coordinator deduplicates a request through its first pro
   assert.deepEqual(concurrent, created);
   assert.equal(registry.get(created.aiSessionId).creationSource, "ai-session");
   assert.equal(registry.get(created.aiSessionId).appSessionId, undefined);
+  assert.equal(registry.get(created.aiSessionId).cwdFolderId, "folder-project");
   assert.equal((await coordinator.create(input)).disposition, "already-created");
+  assert.throws(
+    () => coordinator.create({ ...input, cwd: "/different-workspace" }),
+    (error) => error.code === "AI_SESSION_CREATE_REQUEST_CONFLICT" && error.statusCode === 409,
+  );
   assert.equal(creates, 1);
 });
 

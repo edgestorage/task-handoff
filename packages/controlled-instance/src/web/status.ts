@@ -191,6 +191,7 @@ export function controlledInstanceCapabilities(appRuntime: AppRuntimeManager) {
       browser: available.some((item) => item.id === "browser" || item.id === "chromium"),
       screenshots: available.some((item) => item.kind === "gui") && Boolean(executablePath("import")),
       logs: true,
+      aiSessionWorkspaceSelection: true,
     },
   };
 }

@@ -1,6 +1,6 @@
 import type { ControlPlaneClient } from '@task-handoff/control-plane-client';
 import type { ControlPlaneInstanceDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
-import { AiAgentKindSchema, type AiSessionPermissionMode } from '@task-handoff/protocol/ai-sessions';
+import { AiAgentKindSchema, type AiSessionGitSelection, type AiSessionMessageAttachmentRef, type AiSessionPermissionMode } from '@task-handoff/protocol/ai-sessions';
 import type { ValueStore } from '../platform/secure-storage';
 
 const CREATE_REQUEST_VERSION = 1;
@@ -9,7 +9,9 @@ export async function createMobileAiSession(client: ControlPlaneClient, input: {
   instance: ControlPlaneInstanceDirectoryEntry;
   agent: string;
   cwdFolderId?: string;
+  gitSelection?: AiSessionGitSelection;
   message: string;
+  attachments?: AiSessionMessageAttachmentRef[];
   permissionMode?: AiSessionPermissionMode;
   clientRequestId: string;
 }) {
@@ -20,11 +22,12 @@ export async function createMobileAiSession(client: ControlPlaneClient, input: {
   return client.aiSessions.create(input.instance.id, {
     agent: agent.data,
     ...(input.cwdFolderId ? { cwdFolderId: input.cwdFolderId } : {}),
+    ...(input.gitSelection ? { gitSelection: input.gitSelection } : {}),
     clientRequestId: input.clientRequestId,
     message: input.message,
     mode: 'auto',
     permissionMode: agent.data === 'codex' ? input.permissionMode ?? input.instance.config.defaultCodexPermissionMode : undefined,
-    attachments: [],
+    attachments: input.attachments ?? [],
     references: [],
   });
 }
@@ -45,7 +48,7 @@ export class MobileAiSessionCreateRequestStore {
   getOrCreate(
     controlPlaneId: string,
     instanceId: string,
-    input: { agent: string; cwdFolderId?: string; message: string; permissionMode?: AiSessionPermissionMode },
+    input: { agent: string; cwdFolderId?: string; gitSelection?: AiSessionGitSelection; message: string; permissionMode?: AiSessionPermissionMode; attachments?: readonly { kind: string; name: string; size: number }[] },
     createId: () => string,
   ) {
     return this.enqueue(async () => {

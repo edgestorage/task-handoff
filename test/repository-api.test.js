@@ -301,6 +301,144 @@ test("AI session repository API creates Direct sessions in opaque worktrees and 
   }
 });
 
+test("pre-session Git workspace selection persists folder identity and creates an isolated branch worktree", async () => {
+  const fixture = createGitFixture();
+  const outsideFixture = createGitFixture();
+  fixture.write("packages/app/readme.txt", "app\n");
+  fixture.commit("add nested workspace");
+  fixture.git(["branch", "feature/isolated"]);
+  fixture.git(["branch", "feature/in-place"]);
+  const selectedFolder = path.join(fixture.root, "packages", "app");
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-pre-session-workspace-"));
+  const paths = pathsFor(dataRoot);
+  const restore = setEnvironment(paths, fixture.base);
+  const aiSessions = createAiSessionRegistry({ dir: path.join(dataRoot, "ai-sessions") });
+  const appRuntime = new AppRuntimeManager(paths);
+  appRuntime.ensureSharedResource = async () => undefined;
+  const app = await createWebApp({ staticDir: path.join(dataRoot, "missing-static"), logger: false, appRuntime, aiSessionRegistry: aiSessions, codexAppServer: codexBridgeStub() });
+  try {
+    const forbiddenInspect = await app.inject({
+      method: "POST",
+      url: "/api/repository/ai-session-workspace/inspect",
+      payload: { cwd: { type: "runtime-path", path: outsideFixture.root } },
+    });
+    assert.equal(forbiddenInspect.statusCode, 400);
+    assert.equal(forbiddenInspect.json().error.code, "REPOSITORY_PATH_FORBIDDEN");
+
+    const inspect = await app.inject({
+      method: "POST",
+      url: "/api/repository/ai-session-workspace/inspect",
+      payload: { cwd: { type: "runtime-path", path: selectedFolder } },
+    });
+    assert.equal(inspect.statusCode, 200);
+    assert.equal(inspect.json().data.currentBranch, "main");
+    assert.equal(inspect.json().data.branches.find((branch) => branch.name === "HEAD").worktreeSelectable, true);
+    assert.equal(inspect.json().data.branches.find((branch) => branch.name === "main").worktreeSelectable, true);
+    const isolated = inspect.json().data.branches.find((branch) => branch.name === "feature/isolated");
+    assert.equal(isolated.currentFolderSelectable, true);
+    assert.equal(isolated.worktreeSelectable, true);
+
+    const payload = {
+      agent: "codex",
+      cwd: { type: "runtime-path", path: selectedFolder },
+      cwdFolderId: "folder-project",
+      gitSelection: { mode: "worktree", branch: "feature/isolated" },
+      message: "Work in isolation.",
+      attachments: [],
+      references: [],
+      clientRequestId: "pre-session-worktree",
+    };
+    fixture.write("changed-while-composing.txt", "keep this change\n");
+    const created = await app.inject({ method: "POST", url: "/api/repository/ai-session-workspace/create", payload });
+    assert.equal(created.statusCode, 200);
+    const session = aiSessions.get(created.json().data.aiSessionId);
+    assert.equal(session.cwdFolderId, "folder-project");
+    assert.notEqual(session.cwd, selectedFolder);
+    assert.equal(path.relative(session.cwd, path.join(session.cwd, "readme.txt")), "readme.txt");
+    assert.equal(fs.readFileSync(path.join(session.cwd, "readme.txt"), "utf8"), "app\n");
+    assert.equal(require("node:child_process").execFileSync("git", ["branch", "--show-current"], { cwd: session.cwd, encoding: "utf8" }).trim(), "feature/isolated");
+    assert.equal(fs.readFileSync(path.join(fixture.root, "changed-while-composing.txt"), "utf8"), "keep this change\n");
+
+    const detached = await app.inject({
+      method: "POST",
+      url: "/api/repository/ai-session-workspace/create",
+      payload: {
+        ...payload,
+        clientRequestId: "pre-session-current-branch-worktree",
+        gitSelection: { mode: "worktree", branch: "main" },
+      },
+    });
+    assert.equal(detached.statusCode, 200);
+    const detachedSession = aiSessions.get(detached.json().data.aiSessionId);
+    assert.equal(require("node:child_process").execFileSync("git", ["branch", "--show-current"], { cwd: detachedSession.cwd, encoding: "utf8" }).trim(), "");
+    assert.equal(require("node:child_process").execFileSync("git", ["rev-parse", "HEAD"], { cwd: detachedSession.cwd, encoding: "utf8" }).trim(), fixture.git(["rev-parse", "main"]));
+
+    const worktreeCount = fixture.git(["worktree", "list", "--porcelain"]).split("\nworktree ").length;
+    const repeated = await app.inject({ method: "POST", url: "/api/repository/ai-session-workspace/create", payload });
+    assert.equal(repeated.statusCode, 200);
+    assert.equal(repeated.json().data.aiSessionId, session.id);
+    assert.equal(repeated.json().data.disposition, "already-created");
+    assert.equal(fixture.git(["worktree", "list", "--porcelain"]).split("\nworktree ").length, worktreeCount);
+
+    const conflictingRetry = await app.inject({
+      method: "POST",
+      url: "/api/repository/ai-session-workspace/create",
+      payload: { ...payload, gitSelection: { mode: "worktree", branch: "main" } },
+    });
+    assert.equal(conflictingRetry.statusCode, 409);
+    assert.equal(conflictingRetry.json().error.code, "REPOSITORY_CONFLICT");
+    assert.equal(fixture.git(["worktree", "list", "--porcelain"]).split("\nworktree ").length, worktreeCount);
+
+    fixture.write("dirty.txt", "dirty\n");
+    const dirtyInspect = await app.inject({
+      method: "POST",
+      url: "/api/repository/ai-session-workspace/inspect",
+      payload: { cwd: { type: "runtime-path", path: selectedFolder } },
+    });
+    const inPlace = dirtyInspect.json().data.branches.find((branch) => branch.name === "feature/in-place");
+    assert.equal(inPlace.currentFolderSelectable, true);
+    assert.equal(inPlace.currentFolderReason, undefined);
+    const switched = await app.inject({
+      method: "POST",
+      url: "/api/repository/ai-session-workspace/create",
+      payload: { ...payload, clientRequestId: "dirty-in-place", gitSelection: { mode: "current-folder", branch: "feature/in-place" } },
+    });
+    assert.equal(switched.statusCode, 200);
+    assert.equal(fixture.git(["branch", "--show-current"]), "feature/in-place");
+    assert.equal(fs.readFileSync(path.join(fixture.root, "dirty.txt"), "utf8"), "dirty\n");
+  } finally {
+    await app.close();
+    restore();
+  }
+});
+
+test("pre-session workspace inspection omits detached HEAD before the first commit", async () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-unborn-repository-"));
+  const root = path.join(base, "repository");
+  fs.mkdirSync(root);
+  require("node:child_process").execFileSync("git", ["init", "-b", "main", root]);
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-unborn-workspace-"));
+  const paths = pathsFor(dataRoot);
+  const restore = setEnvironment(paths, base);
+  const aiSessions = createAiSessionRegistry({ dir: path.join(dataRoot, "ai-sessions") });
+  const appRuntime = new AppRuntimeManager(paths);
+  appRuntime.ensureSharedResource = async () => undefined;
+  const app = await createWebApp({ staticDir: path.join(dataRoot, "missing-static"), logger: false, appRuntime, aiSessionRegistry: aiSessions, codexAppServer: codexBridgeStub() });
+  try {
+    const inspect = await app.inject({
+      method: "POST",
+      url: "/api/repository/ai-session-workspace/inspect",
+      payload: { cwd: { type: "runtime-path", path: root } },
+    });
+    assert.equal(inspect.statusCode, 200);
+    assert.equal(inspect.json().data.availability, "available");
+    assert.equal(inspect.json().data.branches.some((branch) => branch.name === "HEAD"), false);
+  } finally {
+    await app.close();
+    restore();
+  }
+});
+
 test("controlled instance routes create, bind, and close one Direct AI session identity", async () => {
   const fixture = createGitFixture();
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-direct-route-"));
