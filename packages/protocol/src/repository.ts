@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { AiSessionCreateInputSchema, AiSessionGitSelectionSchema, AiSessionRuntimePathSchema } from "./ai-sessions.ts";
 
 const IdSchema = z.string().trim().min(1).max(160).regex(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$/);
 const TimestampSchema = z.string().datetime();
@@ -360,6 +361,35 @@ export const RepositoryAiSessionLaunchResultSchema = z.object({
   disposition: z.literal("started"),
 }).strict();
 
+export const RepositoryAiSessionWorkspaceBranchSchema = z.object({
+  name: z.string().min(1).max(1024),
+  // Compatibility for v0.0.21: older controlled instances reported only local branches.
+  kind: z.enum(["branch", "head"]).default("branch"),
+  current: z.boolean(),
+  currentFolderSelectable: z.boolean(),
+  worktreeSelectable: z.boolean(),
+  worktreeCheckout: z.enum(["attached", "detached"]).default("attached"),
+  currentFolderReason: z.enum(["dirty", "session-occupied", "branch-occupied"]).optional(),
+  worktreeReason: z.enum(["current-branch", "branch-occupied", "worktree-unavailable"]).optional(),
+}).strict();
+
+export const RepositoryAiSessionWorkspaceSchema = z.object({
+  availability: RepositoryAvailabilitySchema,
+  currentBranch: z.string().min(1).max(1024).optional(),
+  dirty: z.boolean().default(false),
+  branches: z.array(RepositoryAiSessionWorkspaceBranchSchema).max(100_000).default([]),
+}).strict();
+
+export const RepositoryAiSessionWorkspaceInspectSchema = z.object({
+  cwd: AiSessionRuntimePathSchema,
+}).strict();
+
+export const RepositoryAiSessionGitSelectionSchema = AiSessionGitSelectionSchema;
+
+export const RepositoryWorkspaceAiSessionCreateSchema = AiSessionCreateInputSchema.extend({
+  gitSelection: RepositoryAiSessionGitSelectionSchema,
+}).strict();
+
 export const RepositoryCreateBranchRequestSchema = SnapshotMutationSchema.extend({ name: GitNameSchema }).strict();
 export const RepositoryCheckoutBranchRequestSchema = SnapshotMutationSchema.extend({ branch: z.string().trim().min(1).max(2048) }).strict();
 export const RepositoryCreateTrackingBranchRequestSchema = SnapshotMutationSchema.extend({ name: GitNameSchema, remoteTrackingRef: z.string().trim().min(1).max(2048) }).strict();
@@ -399,3 +429,6 @@ export type RepositoryStartAiSessionRequest = z.infer<typeof RepositoryStartAiSe
 export type RepositoryCreateWorktreeAiSessionRequest = z.infer<typeof RepositoryCreateWorktreeAiSessionRequestSchema>;
 export type RepositoryAiSessionLaunchResult = z.infer<typeof RepositoryAiSessionLaunchResultSchema>;
 export type RepositoryRemoveWorktreeResult = z.infer<typeof RepositoryRemoveWorktreeResultSchema>;
+export type RepositoryAiSessionWorkspace = z.infer<typeof RepositoryAiSessionWorkspaceSchema>;
+export type RepositoryAiSessionWorkspaceBranch = z.infer<typeof RepositoryAiSessionWorkspaceBranchSchema>;
+export type RepositoryAiSessionGitSelection = z.infer<typeof RepositoryAiSessionGitSelectionSchema>;

@@ -23,6 +23,7 @@ test("AI session queue edit and reorder actions stay revisioned through both con
   assert.match(result, /sessions\.activity\.reorder/);
   assert.doesNotMatch(result, /ChevronUp|ChevronDown/);
   assert.match(result, /sessions\.activity\.edit/);
+  assert.match(result, /\.ai-session-detail-queue-item p\s*\{[^}]*-webkit-line-clamp: 2;[^}]*line-clamp: 2;/s);
   assert.match(dock, /@edit-queued-message="\$emit\('editQueuedMessage', \$event\)"/);
   assert.match(dock, /:editing-label="editingLabel"/);
   assert.match(board, /messageDraft\.value = payload\.message/);

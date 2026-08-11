@@ -11,6 +11,17 @@ const {
   localProcessReadyTimeoutMs,
 } = require("../packages/control-plane/src/node-agent/runtimes/local-process-supervisor.ts");
 const { InstanceOperationGate } = require("../packages/control-plane/src/node-agent/instances/instance-operation-gate.ts");
+const { RuntimeAdapterRegistry } = require("../packages/control-plane/src/node-agent/runtimes/adapters.ts");
+
+test("node-agent global shutdown stops only the Local Runtime adapter", async () => {
+  const calls = [];
+  const registry = new RuntimeAdapterRegistry(
+    { stopAll: async () => calls.push("docker") },
+    { stopAll: async () => calls.push("local") },
+  );
+  await registry.stopAll();
+  assert.deepEqual(calls, ["local"]);
+});
 
 test("local process readiness timeout is production-safe and configurable", () => {
   assert.equal(localProcessReadyTimeoutMs(undefined), DEFAULT_LOCAL_PROCESS_READY_TIMEOUT_MS);

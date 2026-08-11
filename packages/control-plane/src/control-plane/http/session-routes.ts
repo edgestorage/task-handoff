@@ -13,6 +13,8 @@ import {
   InstanceSessionQueueParamsSchema,
 } from "./route-params.ts";
 
+const AiSessionWorkspaceQuerySchema = z.object({ cwdFolderId: z.string().trim().min(1).max(120) }).strict();
+
 export type RegisterSessionRoutesOptions = {
   app: FastifyInstance;
   service: ControlPlaneService;
@@ -144,6 +146,11 @@ export function registerSessionRoutes({
       disposition: result.disposition,
     });
     return { data: result };
+  });
+  app.get("/api/controlled-instances/:id/ai-sessions/workspace", async (request) => {
+    const params = IdParamsSchema.parse(request.params);
+    const query = AiSessionWorkspaceQuerySchema.parse(request.query || {});
+    return { data: await service.inspectAiSessionWorkspace(params.id, query.cwdFolderId) };
   });
   app.post("/api/controlled-instances/:id/ai-sessions", async (request) => {
     const params = IdParamsSchema.parse(request.params);

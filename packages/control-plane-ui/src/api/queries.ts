@@ -478,8 +478,14 @@ export function resumeAiSession(instanceId: string, aiSessionId: string) {
   return sharedAiSessionsApi.resume(instanceId, aiSessionId);
 }
 
-export function createAiSession(instanceId: string, input: import("@task-handoff/protocol/ai-sessions").AiSessionCreateRefInput) {
+export function createAiSession(instanceId: string, input: import("@task-handoff/protocol/ai-sessions").AiSessionCreateRefInput & {
+  gitSelection?: import("@task-handoff/protocol/repository").RepositoryAiSessionGitSelection;
+}) {
   return sharedAiSessionsApi.create(instanceId, input);
+}
+
+export function getAiSessionWorkspace(instanceId: string, cwdFolderId: string, signal?: AbortSignal) {
+  return sharedAiSessionsApi.workspace(instanceId, cwdFolderId, signal);
 }
 
 export function openAiSessionApp(instanceId: string, aiSessionId: string, clientRequestId: string) {

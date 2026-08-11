@@ -36,6 +36,7 @@ export type AiSessionPatch = Partial<
     | "activeTurnId"
     | "title"
     | "cwd"
+    | "cwdFolderId"
     | "userPrompt"
     | "turns"
     | "status"
@@ -307,6 +308,7 @@ export function reduceAiSessionSnapshot(
     activeTurnId: nextActiveTurnId(current, event, staleActivitySnapshot),
     title: event.title || current.title,
     cwd: event.cwd || current.cwd,
+    cwdFolderId: event.cwdFolderId || current.cwdFolderId,
     userPrompt: staleActivitySnapshot ? current.userPrompt : event.userPrompt || current.userPrompt,
     turns: staleActivitySnapshot ? current.turns : event.turns,
     lastMessage: staleActivitySnapshot

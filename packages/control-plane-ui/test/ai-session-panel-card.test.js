@@ -7,6 +7,7 @@ const styles = fs.readFileSync(new URL("../src/apps/control-plane/instance-detai
 const boardCard = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionCard.vue", import.meta.url), "utf8");
 const sharedActionStyles = fs.readFileSync(new URL("../src/components/ai-session/AiSessionCardAction.css", import.meta.url), "utf8");
 const contextMenu = fs.readFileSync(new URL("../src/components/ai-session/AiSessionCardContextMenu.vue", import.meta.url), "utf8");
+const originMark = fs.readFileSync(new URL("../src/components/ai-session/AiSessionOriginMark.vue", import.meta.url), "utf8");
 const contextSubMenu = fs.readFileSync(new URL("../src/components/ui/context-menu/ContextMenuSubContent.vue", import.meta.url), "utf8");
 const scrollArea = fs.readFileSync(new URL("../src/components/ui/scroll-area/ScrollArea.vue", import.meta.url), "utf8");
 
@@ -16,6 +17,15 @@ test("instance AI session cards match board card status and navigation behavior"
   assert.match(panel, /:disabled="promptIndexFor\(session\) >= promptCount\(session\) - 1"/);
   assert.match(panel, /index: Math\.min\(Math\.max\(index, 0\), count - 1\)/);
   assert.doesNotMatch(panel, /\(index \+ count\) % count/);
+});
+
+test("terminal-origin AI sessions show the same subtle marker in the panel and board", () => {
+  assert.match(originMark, /v-if="creationSource === 'app-session'"/);
+  assert.match(originMark, /<SquareTerminal :size="17"/);
+  assert.match(originMark, /opacity: 0\.38;/);
+  assert.match(panel, /<AiSessionOriginMark :creation-source="session\.creationSource"/);
+  assert.match(boardCard, /<AiSessionOriginMark :creation-source="card\.session\.creationSource"/);
+  assert.doesNotMatch(originMark, /appSessionId/);
 });
 
 test("AI session path labels show only the folder and reveal the full path when hovered", () => {
@@ -30,7 +40,11 @@ test("AI session path labels show only the folder and reveal the full path when 
 
 test("AI session path groups create a session in their registered project", () => {
   assert.doesNotMatch(panel, /group\.(?:sessions|items)\.length/);
-  assert.match(panel, /class="session-ai-path-group-add"[\s\S]*?@click="openNewSessionForPath\(group\.key\)"/);
+  assert.match(panel, /session\.cwdFolderId \? `folder:\$\{session\.cwdFolderId\}` : `cwd:\$\{path\}`/);
+  assert.match(panel, /item\.cwdFolderId \? `folder:\$\{item\.cwdFolderId\}` : `cwd:\$\{path\}`/);
+  assert.match(panel, /class="session-ai-path-group-add"[\s\S]*?@click="openNewSessionForGroup\(group\)"/);
+  assert.match(panel, /group\.cwdFolderId && newSessionFolders\.value\.some/);
+  assert.match(panel, /newSessionFolderId\.value = group\.cwdFolderId;/);
   assert.match(panel, /const folderId = newSessionFolderIdForPath\(sessionPath\);/);
   assert.match(panel, /openNewSession\(\);\s*newSessionFolderId\.value = folderId;/);
   assert.match(styles, /\.session-ai-path-group-head\s*\{[^}]*grid-template-columns: minmax\(0, 1fr\) 28px;/s);
@@ -141,6 +155,23 @@ test("new-session folder picker keeps actions visible while long folder lists sc
   assert.match(styles, /\.session-ai-project-list\s*\{[^}]*min-height: 0;/s);
   assert.doesNotMatch(styles, /\.session-ai-project-list\s*\{[^}]*overflow-y: auto;/s);
   assert.match(scrollArea, /<ScrollBar v-if="horizontal" orientation="horizontal" \/>/);
+});
+
+test("new-session Git inspection reacts only to stable selection changes", () => {
+  assert.match(panel, /watch\(\s*\[\(\) => props\.instance\.id, newSessionFolderId, showNewSession\]/);
+  assert.doesNotMatch(panel, /\(\) => \[props\.instance\.id, newSessionFolderId\.value, showNewSession\.value\]/);
+  assert.match(panel, /const abort = new AbortController\(\);\s*onCleanup\(\(\) => abort\.abort\(\)\);/);
+  assert.match(panel, /getAiSessionWorkspace\(instanceId, folderId, abort\.signal\)/);
+});
+
+test("new-session branches use a folder tree and confirm current-folder switches", () => {
+  assert.match(panel, /branch\.name\.split\("\/"\)\.filter\(Boolean\)/);
+  assert.match(panel, /node\.kind === 'folder' \? toggleNewSessionBranchFolder\(\$event, node\.id\) : selectNewSessionBranch\(node\.branch\)/);
+  assert.match(panel, /newSessionWorkspaceMode\.value === "worktree" \|\| branch\.current/);
+  assert.match(panel, /newSessionBranchSwitchTarget\.value = branch;/);
+  assert.match(panel, /<AlertDialog :open="Boolean\(newSessionBranchSwitchTarget\)"/);
+  assert.match(panel, /confirmNewSessionBranchSwitch/);
+  assert.match(panel, /newSessionWorkspaceMode\.value === "worktree" \? branch\.worktreeSelectable : branch\.currentFolderSelectable/);
 });
 
 test("new-session permission edits update the authoritative instance default", () => {

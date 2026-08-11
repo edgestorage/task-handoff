@@ -773,7 +773,7 @@ const settingsSections = computed<Array<{ id: SettingsSection; label: string }>>
   { id: "triggers", label: t("triggers.title") },
   { id: "chat", label: t("settings.chat") },
   { id: "mobile-sessions", label: t("settings.mobileSessions.navigation") },
-  { id: "account", label: t("settings.account.navigation") },
+  ...(authSession.data.value?.enabled ? [{ id: "account" as const, label: t("settings.account.navigation") }] : []),
   ...(authSession.data.value?.user?.role === "admin" ? [{ id: "cloud-connectivity" as const, label: t("settings.cloud.navigation") }] : []),
   { id: "basic", label: t("settings.basic") },
 ]);
@@ -798,6 +798,9 @@ const diagnosticLogs = computed(() => controlPlaneSettings.data.value?.diagnosti
 const settingsSection = ref<SettingsSection>(props.initialSection || "nodes");
 watch(() => authSession.data.value?.user?.role, (role) => {
   if (role !== "admin" && settingsSection.value === "cloud-connectivity") setSettingsSection("nodes");
+}, { immediate: true });
+watch(() => authSession.data.value?.enabled, (enabled) => {
+  if (!enabled && settingsSection.value === "account") setSettingsSection("nodes");
 }, { immediate: true });
 const themePreference = ref<ThemePreference>(getThemePreference());
 const publicBaseUrl = ref("");

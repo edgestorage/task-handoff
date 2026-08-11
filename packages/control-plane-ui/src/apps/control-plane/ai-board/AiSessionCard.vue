@@ -2,10 +2,12 @@
   <ContextMenu>
     <ContextMenuTrigger as-child>
       <article
+        v-ai-session-card-auto-scroll="{ target: '.ai-board-preview-field-assistant', revision: promptIndex }"
         class="ai-board-card"
         :data-state="card.session.status"
         :data-selected="selected ? 'true' : undefined"
         :data-unread="card.session.unread ? 'true' : undefined"
+        :data-app-session-origin="card.session.creationSource === 'app-session' ? 'true' : undefined"
         role="button"
         tabindex="0"
         @click="$emit('selectCard', card.key)"
@@ -13,6 +15,7 @@
         @keydown.space.prevent="$emit('selectCard', card.key)"
       >
     <span v-if="card.session.unread" class="ai-session-unread-dot" :aria-label="t('sessions.actions.unread')" :title="t('sessions.actions.unread')" />
+    <AiSessionOriginMark :creation-source="card.session.creationSource" />
     <div class="ai-board-card-headline" :data-show-workspace="showWorkspace ? 'true' : undefined">
       <button type="button" class="ai-board-instance" @click.stop="$emit('selectCard', card.key)">
         <span class="ai-board-dot" />
@@ -161,12 +164,14 @@ import { useI18n } from "vue-i18n";
 import { Ban, Check, ChevronLeft, ChevronRight, ExternalLink, MoreHorizontal, Square, X, Zap } from "@lucide/vue";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import AiSessionCardContextMenu from "../../../components/ai-session/AiSessionCardContextMenu.vue";
+import AiSessionOriginMark from "../../../components/ai-session/AiSessionOriginMark.vue";
 import AiSessionToolActivity from "../../../components/ai-session/AiSessionToolActivity.vue";
 import type { AiSessionSummary, ControlPlaneTrigger, InstanceBoardItem, InstanceWithAiSessions, TriggerDeployment } from "../../../api/types";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
 import { ContextMenu, ContextMenuTrigger } from "../../../components/ui/context-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
 import AiSessionStreamingMarkdown from "../../../components/ai-session/AiSessionStreamingMarkdown.vue";
+import { vAiSessionCardAutoScroll } from "../../../components/ai-session/aiSessionCardAutoScroll";
 import {
   aiSessionAppDisplayName,
   aiSessionBasename,
@@ -328,6 +333,15 @@ const filteredTriggerTemplates = computed(() => {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--status-info) 18%, transparent);
 }
 
+.ai-board-card[data-app-session-origin="true"] .ai-session-unread-dot {
+  right: 36px;
+}
+
+.ai-board-card:hover :deep(.ai-session-origin-mark),
+.ai-board-card:focus-within :deep(.ai-session-origin-mark) {
+  opacity: 0;
+}
+
 .ai-board-secondary-line {
   display: flex;
   align-items: baseline;
@@ -380,6 +394,7 @@ const filteredTriggerTemplates = computed(() => {
 
 .ai-board-content {
   display: grid;
+  position: relative;
   grid-template-rows: max-content minmax(0, 1fr);
   gap: 6px;
   min-height: 0;
@@ -406,11 +421,17 @@ const filteredTriggerTemplates = computed(() => {
   background: var(--ai-session-card-content-bg);
   margin: 2px -14px 0;
   min-height: 0;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: hidden;
   padding: 10px 14px 0;
+  scrollbar-width: none;
 }
 
-.ai-board-preview-field-assistant::after {
+.ai-board-preview-field-assistant::-webkit-scrollbar {
+  display: none;
+}
+
+.ai-board-content::after {
   content: "";
   position: absolute;
   right: 0;
@@ -426,7 +447,7 @@ const filteredTriggerTemplates = computed(() => {
   pointer-events: none;
 }
 
-.ai-board-card[data-state="running"] .ai-board-preview-field-assistant::after {
+.ai-board-card[data-state="running"] .ai-board-content::after {
   height: 52px;
   background: linear-gradient(
     to bottom,
@@ -452,14 +473,23 @@ const filteredTriggerTemplates = computed(() => {
 .ai-board-message {
   display: block;
   min-width: 0;
-  max-height: 100%;
-  overflow: hidden;
+  overflow: visible;
   overflow-wrap: anywhere;
   color: var(--ai-board-title);
   font-size: 14px;
   font-weight: 400;
   line-height: 1.35;
   word-break: break-word;
+}
+
+.ai-board-message::after {
+  content: "";
+  display: block;
+  height: 34px;
+}
+
+.ai-board-card[data-state="running"] .ai-board-message::after {
+  height: 52px;
 }
 
 .ai-board-question :deep(*),

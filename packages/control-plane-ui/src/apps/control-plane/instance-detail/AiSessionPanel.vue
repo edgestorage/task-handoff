@@ -101,7 +101,7 @@
                         <TooltipTrigger as-child>
                           <span class="session-ai-path-group-title">{{ group.label }}</span>
                         </TooltipTrigger>
-                        <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ group.key }}</TooltipContent>
+                        <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ group.path }}</TooltipContent>
                       </Tooltip>
                     </TooltipProvider>
                   </span>
@@ -111,7 +111,7 @@
                   class="session-ai-path-group-add"
                   :aria-label="`${t('sessions.panel.newSession')} · ${group.label}`"
                   :title="t('sessions.panel.newSession')"
-                  @click="openNewSessionForPath(group.key)"
+                  @click="openNewSessionForGroup(group)"
                 >
                   <Plus :size="15" />
                 </button>
@@ -123,12 +123,15 @@
                 >
                   <ContextMenuTrigger as-child>
                 <article
+                  v-ai-session-card-auto-scroll="{ target: '.session-ai-preview-field-assistant', revision: `${session.id}:${promptIndexFor(session)}` }"
                   class="session-ai-row"
                   :data-state="session.status"
                   :data-selected="selectedSession?.id === session.id"
                   :data-unread="session.unread ? 'true' : undefined"
+                  :data-app-session-origin="session.creationSource === 'app-session' ? 'true' : undefined"
                 >
                 <span v-if="session.unread" class="ai-session-unread-dot" :aria-label="t('sessions.actions.unread')" :title="t('sessions.actions.unread')" />
+                <AiSessionOriginMark :creation-source="session.creationSource" />
                 <div
                   class="session-ai-select"
                   role="button"
@@ -316,7 +319,7 @@
                           <TooltipTrigger as-child>
                             <span class="session-ai-path-group-title">{{ group.label }}</span>
                           </TooltipTrigger>
-                          <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ group.key }}</TooltipContent>
+                          <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ group.path }}</TooltipContent>
                         </Tooltip>
                       </TooltipProvider>
                     </span>
@@ -326,7 +329,7 @@
                     class="session-ai-path-group-add"
                     :aria-label="`${t('sessions.panel.newSession')} · ${group.label}`"
                     :title="t('sessions.panel.newSession')"
-                    @click="openNewSessionForPath(group.key)"
+                    @click="openNewSessionForGroup(group)"
                   >
                     <Plus :size="15" />
                   </button>
@@ -460,6 +463,59 @@
                   </ScrollArea>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem class="session-ai-project-item" @select="openNewProject"><Plus :size="15" /><span>{{ t("sessions.panel.newProject") }}</span></DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <DropdownMenu v-if="newSessionWorkspace?.availability === 'available' && newSessionWorkspace.branches.length">
+                <DropdownMenuTrigger as-child>
+                  <button type="button" class="session-ai-project-pill" :disabled="newSessionComposerBusy">
+                    <GitBranch :size="14" />
+                    <strong>{{ newSessionWorkspaceMode === "worktree" ? t("sessions.panel.worktreeMode") : t("sessions.panel.currentFolderMode") }}</strong>
+                    <ChevronDown :size="13" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent class="session-ai-project-menu" align="start" :side-offset="8">
+                  <DropdownMenuItem class="session-ai-project-item" @select="selectNewSessionWorkspaceMode('current-folder')">
+                    <Folder :size="14" /><span>{{ t("sessions.panel.currentFolderMode") }}</span><Check v-if="newSessionWorkspaceMode === 'current-folder'" :size="15" />
+                  </DropdownMenuItem>
+                  <DropdownMenuItem class="session-ai-project-item" :disabled="!newSessionWorkspace.branches.some((branch) => branch.worktreeSelectable)" @select="selectNewSessionWorkspaceMode('worktree')">
+                    <GitBranch :size="14" /><span>{{ t("sessions.panel.worktreeMode") }}</span><Check v-if="newSessionWorkspaceMode === 'worktree'" :size="15" />
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <DropdownMenu v-if="newSessionWorkspace?.availability === 'available' && newSessionWorkspace.branches.length">
+                <DropdownMenuTrigger as-child>
+                  <button type="button" class="session-ai-project-pill" :disabled="newSessionComposerBusy">
+                    <GitBranch :size="14" />
+                    <strong>{{ newSessionSelectedBranchLabel }}</strong>
+                    <ChevronDown :size="13" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent class="session-ai-project-menu session-ai-project-picker-menu" align="start" :collision-padding="12" :side-offset="8">
+                  <input v-model="newSessionBranchQuery" class="session-ai-project-search" :placeholder="t('sessions.panel.searchBranches')" :aria-label="t('sessions.panel.searchBranches')" />
+                  <ScrollArea type="auto" :horizontal="false" class="session-ai-project-list">
+                    <DropdownMenuItem
+                      v-for="node in visibleNewSessionBranches"
+                      :key="node.id"
+                      class="session-ai-project-item session-ai-branch-tree-item"
+                      :class="{ 'is-folder': node.kind === 'folder' }"
+                      :disabled="node.kind === 'branch' && !newSessionBranchSelectable(node.branch)"
+                      :style="newSessionBranchTreeLayout(node.depth)"
+                      @select="node.kind === 'folder' ? toggleNewSessionBranchFolder($event, node.id) : selectNewSessionBranch(node.branch)"
+                    >
+                      <template v-if="node.kind === 'folder'">
+                        <i class="session-ai-branch-tree-toggle" aria-hidden="true">
+                          <ChevronRight :class="{ expanded: node.expanded }" :size="9" />
+                        </i>
+                        <FolderOpen v-if="node.expanded" :size="14" />
+                        <Folder v-else :size="14" />
+                        <span>{{ node.label }}</span><small>{{ node.count }}</small>
+                      </template>
+                      <template v-else>
+                        <i class="session-ai-branch-tree-toggle" aria-hidden="true" />
+                        <GitBranch :size="14" /><span :title="node.branch.name">{{ node.label }}</span><small v-if="newSessionBranchDetached(node.branch)">{{ t("sessions.panel.detached") }}</small><Check v-if="newSessionBranch === node.branch.name" :size="15" />
+                      </template>
+                    </DropdownMenuItem>
+                  </ScrollArea>
                 </DropdownMenuContent>
               </DropdownMenu>
               <DropdownMenu>
@@ -666,6 +722,18 @@
       @select="newProjectPicker.selectFolder"
       @update:open="newProjectPicker.setOpen"
     />
+    <AlertDialog :open="Boolean(newSessionBranchSwitchTarget)" @update:open="(open) => !open && (newSessionBranchSwitchTarget = undefined)">
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{{ t("sessions.panel.switchBranchTitle") }}</AlertDialogTitle>
+          <AlertDialogDescription>{{ t("sessions.panel.switchBranchDescription", { branch: newSessionBranchSwitchTarget?.name }) }}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>{{ t("common.actions.cancel") }}</AlertDialogCancel>
+          <AlertDialogAction @click="confirmNewSessionBranchSwitch">{{ t("sessions.panel.confirmBranchSwitch") }}</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   </div>
 </template>
 
@@ -675,21 +743,24 @@ import { useI18n } from "vue-i18n";
 import { formatRelativeTime } from "../../../i18n/presentation";
 import type { SupportedLocale } from "../../../i18n/locale";
 import { translateApiError } from "../../../i18n/apiError";
-import { ArrowDown, ArrowLeft, Ban, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Code2, ExternalLink, Filter, Folder, FolderOpen, History, LoaderCircle, MessageSquare, MoreHorizontal, Plus, SlidersHorizontal, Square, X, Zap } from "@lucide/vue";
+import { ArrowDown, ArrowLeft, Ban, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Code2, ExternalLink, Filter, Folder, FolderOpen, GitBranch, History, LoaderCircle, MessageSquare, MoreHorizontal, Plus, SlidersHorizontal, Square, X, Zap } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import AiSessionCardContextMenu from "../../../components/ai-session/AiSessionCardContextMenu.vue";
-import { bindAiSessionTrigger, closeAiSession, createAiSession, createNodeLocalFolder, editAiSessionQueuedMessage, getAiSessionHistory, getAiSessionHistoryDetail, interruptAiSession, listNodeFolderTree, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, unbindAiSessionTrigger, updateControlledInstance, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery } from "../../../api/queries";
+import AiSessionOriginMark from "../../../components/ai-session/AiSessionOriginMark.vue";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
+import { bindAiSessionTrigger, closeAiSession, createAiSession, createNodeLocalFolder, editAiSessionQueuedMessage, getAiSessionHistory, getAiSessionHistoryDetail, getAiSessionWorkspace, interruptAiSession, listNodeFolderTree, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, unbindAiSessionTrigger, updateControlledInstance, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery } from "../../../api/queries";
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { executeAiSessionCommand } from "../../../api/ai-session-commands";
-import type { AiSessionCommandInput, AiSessionHistoryDetail, AiSessionHistoryItem, AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
-import type { RepositoryAiSessionLaunchResult } from "@task-handoff/protocol/repository";
+import type { AiSessionCommandInput, AiSessionHistoryDetail, AiSessionHistoryItem, AiSessionMessageAttachmentRef, AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
+import type { RepositoryAiSessionLaunchResult, RepositoryAiSessionWorkspace, RepositoryAiSessionWorkspaceBranch } from "@task-handoff/protocol/repository";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, NodeLocalFolder, TriggerConfig, TriggerDeployment, TriggerRuntimeState } from "../../../api/types";
 import type { LaunchableApp } from "../useInstanceSessions";
 import { updateInstanceBoardData } from "../instanceBoardCache.ts";
 import AiSessionComposer, { type AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
 import AiSessionResult from "../../../components/ai-session/AiSessionResult.vue";
 import AiSessionStreamingMarkdown from "../../../components/ai-session/AiSessionStreamingMarkdown.vue";
+import { vAiSessionCardAutoScroll } from "../../../components/ai-session/aiSessionCardAutoScroll";
 import AiSessionToolActivity from "../../../components/ai-session/AiSessionToolActivity.vue";
 import { referencesForBindings, type AiSessionMentionBinding } from "../../../components/ai-session/mentions";
 import { desktopRuntimePathAccess } from "../../../components/ai-session/useAiSessionMentions";
@@ -735,12 +806,16 @@ import {
 type SessionStatusFilter = "all" | "active" | "waiting" | "idle" | "problem";
 type AiSessionPathGroup = {
   key: string;
+  path: string;
+  cwdFolderId?: string;
   label: string;
   parentLabel: string;
   sessions: AiSessionSummary[];
 };
 type AiSessionHistoryPathGroup = {
   key: string;
+  path: string;
+  cwdFolderId?: string;
   label: string;
   parentLabel: string;
   items: AiSessionHistoryItem[];
@@ -810,6 +885,7 @@ const filteredSessions = computed(() => {
 const sortedSessions = computed(() => sortedAiSessionsByLastUserMessage(filteredSessions.value, sortSessionsByStatus.value));
 const displayedSessionGroups = computed<AiSessionPathGroup[]>(() => groupSessionsByPath.value ? groupAiSessionsByPath(sortedSessions.value) : [{
   key: "all",
+  path: "",
   label: "",
   parentLabel: "",
   sessions: sortedSessions.value,
@@ -838,10 +914,22 @@ const newSessionApp = ref("");
 const newSessionFolderId = ref("");
 const newSessionDraft = ref("");
 const newSessionFolderQuery = ref("");
+const newSessionBranchQuery = ref("");
+const collapsedNewSessionBranchFolders = ref(new Set<string>());
+const newSessionWorkspace = ref<RepositoryAiSessionWorkspace>();
+const newSessionWorkspaceMode = ref<"current-folder" | "worktree">("current-folder");
+const newSessionBranch = ref("");
+const newSessionWorkspaceLoading = ref(false);
+let newSessionWorkspaceRevision = 0;
 const launchingNewSession = ref(false);
+const newSessionCreateAttempt = ref<{
+  clientRequestId: string;
+  fingerprint: string;
+  uploadedAttachments?: AiSessionMessageAttachmentRef[];
+}>();
 const savingNewSessionPermission = ref(false);
 const newSessionPermissionMode = ref<AiSessionPermissionMode>(props.instance.config.defaultCodexPermissionMode);
-const newSessionComposerBusy = computed(() => launchingNewSession.value || savingNewSessionPermission.value);
+const newSessionComposerBusy = computed(() => launchingNewSession.value || savingNewSessionPermission.value || newSessionWorkspaceLoading.value);
 const aiSessionLaunchableApps = computed(() => (props.launchableApps || []).filter((app) => app.id === "codex"));
 const createdNewSessionFolders = ref<NodeLocalFolder[]>([]);
 const newSessionFolders = computed(() => {
@@ -865,11 +953,30 @@ const filteredNewSessionFolders = computed(() => {
   const query = newSessionFolderQuery.value.trim().toLowerCase();
   return newSessionFolders.value.filter((folder) => !query || `${folder.name} ${folder.path}`.toLowerCase().includes(query));
 });
+const filteredNewSessionBranches = computed(() => {
+  const query = newSessionBranchQuery.value.trim().toLowerCase();
+  return (newSessionWorkspace.value?.branches || []).filter((branch) => !query || branch.name.toLowerCase().includes(query));
+});
+type NewSessionBranchTreeFolder = { children: NewSessionBranchTreeNode[]; id: string; kind: "folder"; label: string };
+type NewSessionBranchTreeLeaf = { branch: RepositoryAiSessionWorkspaceBranch; id: string; kind: "branch"; label: string };
+type NewSessionBranchTreeNode = NewSessionBranchTreeFolder | NewSessionBranchTreeLeaf;
+type VisibleNewSessionBranchTreeNode =
+  | { count: number; depth: number; expanded: boolean; id: string; kind: "folder"; label: string }
+  | { branch: RepositoryAiSessionWorkspaceBranch; depth: number; id: string; kind: "branch"; label: string };
+const newSessionBranchTree = computed(() => buildNewSessionBranchTree(filteredNewSessionBranches.value));
+const visibleNewSessionBranches = computed(() => flattenNewSessionBranchTree(newSessionBranchTree.value));
 const newSessionFolder = computed(() => newSessionFolders.value.find((folder) => folder.id === newSessionFolderId.value));
 const newSessionProjectLabel = computed(() => {
   if (newSessionFolder.value?.name) return newSessionFolder.value.name;
   const sourcePath = props.instance.source.type === "local-folder" ? props.instance.source.path : "";
   return sourcePath?.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || t("sessions.panel.chooseProject");
+});
+const newSessionSelectedBranchLabel = computed(() => {
+  const selected = newSessionWorkspace.value?.branches.find((branch) => branch.name === newSessionBranch.value);
+  if (!selected) return t("sessions.panel.chooseBranch");
+  return newSessionBranchDetached(selected)
+    ? `${selected.name} (${t("sessions.panel.detached")})`
+    : selected.name;
 });
 const queryClient = useQueryClient();
 const sidebarEl = ref<HTMLElement>();
@@ -987,16 +1094,20 @@ const workspaceStyle = computed(
 );
 
 function groupAiSessionsByPath(sessions: AiSessionSummary[]) {
-  const groups = new Map<string, AiSessionSummary[]>();
+  const groups = new Map<string, { cwdFolderId?: string; path: string; sessions: AiSessionSummary[] }>();
   for (const session of sessions) {
     const path = aiSessionPath(session);
-    groups.set(path, [...(groups.get(path) || []), session]);
+    const key = session.cwdFolderId ? `folder:${session.cwdFolderId}` : `cwd:${path}`;
+    const current = groups.get(key);
+    groups.set(key, { cwdFolderId: session.cwdFolderId, path: current?.path || path, sessions: [...(current?.sessions || []), session] });
   }
   return [...groups.entries()]
-    .map(([label, groupSessions]) => ({
-      key: label,
-      ...aiSessionPathLabel(label),
-      sessions: groupSessions,
+    .map(([key, group]) => ({
+      key,
+      path: aiSessionGroupPath(group.cwdFolderId, group.path),
+      cwdFolderId: group.cwdFolderId,
+      ...aiSessionGroupLabel(group.cwdFolderId, group.path),
+      sessions: group.sessions,
     }))
     .sort((a, b) => {
       const messageTimeDelta = groupLastUserMessageTime(b.sessions) - groupLastUserMessageTime(a.sessions);
@@ -1005,16 +1116,20 @@ function groupAiSessionsByPath(sessions: AiSessionSummary[]) {
 }
 
 function groupAiSessionHistoryByPath(items: AiSessionHistoryItem[]) {
-  const groups = new Map<string, AiSessionHistoryItem[]>();
+  const groups = new Map<string, { cwdFolderId?: string; path: string; items: AiSessionHistoryItem[] }>();
   for (const item of items) {
     const path = item.cwd?.trim() || "";
-    groups.set(path, [...(groups.get(path) || []), item]);
+    const key = item.cwdFolderId ? `folder:${item.cwdFolderId}` : `cwd:${path}`;
+    const current = groups.get(key);
+    groups.set(key, { cwdFolderId: item.cwdFolderId, path: current?.path || path, items: [...(current?.items || []), item] });
   }
   return [...groups.entries()]
-    .map(([path, groupItems]) => ({
-      key: path,
-      ...aiSessionPathLabel(path),
-      items: groupItems,
+    .map(([key, group]) => ({
+      key,
+      path: aiSessionGroupPath(group.cwdFolderId, group.path),
+      cwdFolderId: group.cwdFolderId,
+      ...aiSessionGroupLabel(group.cwdFolderId, group.path),
+      items: group.items,
     }))
     .sort((a, b) => {
       const latestA = Math.max(0, ...a.items.map((item) => Date.parse(item.lastActiveAt) || 0));
@@ -1025,6 +1140,7 @@ function groupAiSessionHistoryByPath(items: AiSessionHistoryItem[]) {
 
 const displayedHistoryGroups = computed<AiSessionHistoryPathGroup[]>(() => groupSessionsByPath.value ? groupAiSessionHistoryByPath(historyItems.value) : [{
   key: "all",
+  path: "",
   label: "",
   parentLabel: "",
   items: historyItems.value,
@@ -1033,6 +1149,18 @@ const selectedHistoryItem = computed(() => historyItems.value.find((item) => ite
 
 function aiSessionPath(session: AiSessionSummary) {
   return session.cwd?.trim() || "";
+}
+
+function aiSessionGroupLabel(cwdFolderId: string | undefined, fallbackPath: string) {
+  const folder = cwdFolderId ? newSessionFolders.value.find((candidate) => candidate.id === cwdFolderId) : undefined;
+  return folder
+    ? { label: folder.name, parentLabel: folder.path }
+    : aiSessionPathLabel(fallbackPath);
+}
+
+function aiSessionGroupPath(cwdFolderId: string | undefined, fallbackPath: string) {
+  return (cwdFolderId ? newSessionFolders.value.find((candidate) => candidate.id === cwdFolderId)?.path : undefined)
+    || fallbackPath;
 }
 
 function aiSessionPathLabel(path: string) {
@@ -1100,7 +1228,7 @@ watch(() => props.instance.id, () => {
 });
 
 watch(
-  () => [props.instance.id, props.instance.config.defaultCodexPermissionMode] as const,
+  [() => props.instance.id, () => props.instance.config.defaultCodexPermissionMode],
   ([, permissionMode]) => {
     newSessionPermissionMode.value = permissionMode;
   },
@@ -1111,6 +1239,42 @@ watch(
   [showNewSession, aiSessionLaunchableApps, newSessionFolders],
   ([show]) => {
     if (show) initializeNewSessionDefaults();
+  },
+  { immediate: true },
+);
+
+watch(
+  [() => props.instance.id, newSessionFolderId, showNewSession],
+  ([instanceId, folderId, show], _previous, onCleanup) => {
+    const revision = ++newSessionWorkspaceRevision;
+    newSessionWorkspace.value = undefined;
+    newSessionWorkspaceMode.value = "current-folder";
+    newSessionBranch.value = "";
+    newSessionBranchQuery.value = "";
+    if (!show || !folderId) {
+      newSessionWorkspaceLoading.value = false;
+      return;
+    }
+    const abort = new AbortController();
+    onCleanup(() => abort.abort());
+    newSessionWorkspaceLoading.value = true;
+    void getAiSessionWorkspace(instanceId, folderId, abort.signal)
+      .then((workspace) => {
+        if (revision !== newSessionWorkspaceRevision) return;
+        newSessionWorkspace.value = workspace;
+        newSessionBranch.value = workspace.currentBranch
+          || workspace.branches.find((branch) => branch.current)?.name
+          || workspace.branches.find((branch) => branch.currentFolderSelectable)?.name
+          || "";
+      })
+      .catch(() => {
+        if (abort.signal.aborted) return;
+        // Compatibility for v0.0.21: instances without pre-session repository inspection keep the original cwd-only flow.
+        if (revision === newSessionWorkspaceRevision) newSessionWorkspace.value = undefined;
+      })
+      .finally(() => {
+        if (revision === newSessionWorkspaceRevision) newSessionWorkspaceLoading.value = false;
+      });
   },
   { immediate: true },
 );
@@ -1348,6 +1512,7 @@ function openNewSession() {
   newSessionDraft.value = "";
   messageAttachments.value = [];
   messageMentionBindings.value = [];
+  newSessionCreateAttempt.value = undefined;
   initializeNewSessionDefaults();
 }
 
@@ -1387,6 +1552,16 @@ async function openNewSessionForPath(sessionPath: string) {
   newSessionFolderId.value = folderId;
 }
 
+async function openNewSessionForGroup(group: AiSessionPathGroup | AiSessionHistoryPathGroup) {
+  if (group.cwdFolderId && newSessionFolders.value.some((folder) => folder.id === group.cwdFolderId)) {
+    if (historyMode.value) await leaveHistoryMode();
+    openNewSession();
+    newSessionFolderId.value = group.cwdFolderId;
+    return;
+  }
+  await openNewSessionForPath(group.path);
+}
+
 function initializeNewSessionDefaults() {
   if (!aiSessionLaunchableApps.value.some((app) => app.id === newSessionApp.value)) {
     newSessionApp.value = aiSessionLaunchableApps.value[0]?.id || "";
@@ -1395,6 +1570,86 @@ function initializeNewSessionDefaults() {
     const sourcePath = props.instance.source.type === "local-folder" ? props.instance.source.path : "";
     newSessionFolderId.value = newSessionFolders.value.find((folder) => folder.path === sourcePath)?.id || "";
   }
+}
+
+function newSessionBranchSelectable(branch: RepositoryAiSessionWorkspaceBranch) {
+  return newSessionWorkspaceMode.value === "worktree" ? branch.worktreeSelectable : branch.currentFolderSelectable;
+}
+
+function newSessionBranchDetached(branch: RepositoryAiSessionWorkspaceBranch) {
+  return newSessionWorkspaceMode.value === "worktree" && branch.worktreeCheckout === "detached";
+}
+
+function buildNewSessionBranchTree(branches: RepositoryAiSessionWorkspaceBranch[]): NewSessionBranchTreeNode[] {
+  const root: NewSessionBranchTreeFolder = { children: [], id: "branch", kind: "folder", label: "branch" };
+  for (const branch of branches) {
+    const parts = branch.name.split("/").filter(Boolean);
+    let parent = root;
+    for (const [index, part] of parts.entries()) {
+      const id = `branch:${parts.slice(0, index + 1).join("/")}`;
+      if (index === parts.length - 1) {
+        parent.children.push({ branch, id: `${id}:leaf`, kind: "branch", label: part });
+        continue;
+      }
+      let folder = parent.children.find((node): node is NewSessionBranchTreeFolder => node.kind === "folder" && node.label === part);
+      if (!folder) {
+        folder = { children: [], id, kind: "folder", label: part };
+        parent.children.push(folder);
+      }
+      parent = folder;
+    }
+  }
+  return root.children;
+}
+
+function flattenNewSessionBranchTree(nodes: NewSessionBranchTreeNode[], depth = 0): VisibleNewSessionBranchTreeNode[] {
+  return nodes.flatMap((node) => {
+    if (node.kind === "branch") return [{ ...node, depth }];
+    const expanded = Boolean(newSessionBranchQuery.value.trim()) || !collapsedNewSessionBranchFolders.value.has(node.id);
+    return [
+      { count: countNewSessionBranchLeaves(node), depth, expanded, id: node.id, kind: "folder" as const, label: node.label },
+      ...(expanded ? flattenNewSessionBranchTree(node.children, depth + 1) : []),
+    ];
+  });
+}
+
+function countNewSessionBranchLeaves(folder: NewSessionBranchTreeFolder): number {
+  return folder.children.reduce((count, node) => count + (node.kind === "branch" ? 1 : countNewSessionBranchLeaves(node)), 0);
+}
+
+function toggleNewSessionBranchFolder(event: Event, id: string) {
+  event.preventDefault();
+  const next = new Set(collapsedNewSessionBranchFolders.value);
+  if (next.has(id)) next.delete(id);
+  else next.add(id);
+  collapsedNewSessionBranchFolders.value = next;
+}
+
+function newSessionBranchTreeLayout(depth: number) {
+  return { paddingInlineStart: `${8 + depth * 16}px` };
+}
+
+const newSessionBranchSwitchTarget = ref<RepositoryAiSessionWorkspaceBranch>();
+
+function selectNewSessionBranch(branch: RepositoryAiSessionWorkspaceBranch) {
+  if (!newSessionBranchSelectable(branch)) return;
+  if (newSessionWorkspaceMode.value === "worktree" || branch.current) {
+    newSessionBranch.value = branch.name;
+    return;
+  }
+  newSessionBranchSwitchTarget.value = branch;
+}
+
+function confirmNewSessionBranchSwitch() {
+  if (newSessionBranchSwitchTarget.value) newSessionBranch.value = newSessionBranchSwitchTarget.value.name;
+  newSessionBranchSwitchTarget.value = undefined;
+}
+
+function selectNewSessionWorkspaceMode(mode: "current-folder" | "worktree") {
+  newSessionWorkspaceMode.value = mode;
+  const selected = newSessionWorkspace.value?.branches.find((branch) => branch.name === newSessionBranch.value);
+  if (selected && newSessionBranchSelectable(selected)) return;
+  newSessionBranch.value = newSessionWorkspace.value?.branches.find(newSessionBranchSelectable)?.name || "";
 }
 
 function closeNewSession() {
@@ -1429,18 +1684,45 @@ async function createNewSession(permissionMode?: AiSessionPermissionMode) {
   const message = newSessionDraft.value.trim();
   const cwdFolderId = newSessionFolder.value?.id;
   if (!newSessionApp.value || !message || newSessionComposerBusy.value) return;
+  const gitSelection = newSessionWorkspace.value?.availability === "available" && newSessionBranch.value
+    ? { mode: newSessionWorkspaceMode.value, branch: newSessionBranch.value }
+    : undefined;
+  const references = referencesForBindings(newSessionDraft.value, messageMentionBindings.value);
+  const fingerprint = JSON.stringify({
+    instanceId: props.instance.id,
+    agent: newSessionApp.value,
+    cwdFolderId,
+    gitSelection,
+    message: aiSessionMessageText(message),
+    attachments: messageAttachments.value.map((attachment) => ({
+      id: attachment.id,
+      kind: attachment.kind,
+      name: attachment.name,
+      mime: attachment.mime,
+      size: attachment.size,
+      source: attachment.source,
+    })),
+    references,
+    permissionMode,
+  });
+  if (newSessionCreateAttempt.value?.fingerprint !== fingerprint) {
+    newSessionCreateAttempt.value = { clientRequestId: crypto.randomUUID(), fingerprint };
+  }
+  const attempt = newSessionCreateAttempt.value;
   launchingNewSession.value = true;
   try {
-    const clientRequestId = crypto.randomUUID();
-    const attachments = await uploadMessageAttachments(props.instance.id, clientRequestId);
+    const attachments = attempt.uploadedAttachments
+      || await uploadMessageAttachments(props.instance.id, attempt.clientRequestId);
+    attempt.uploadedAttachments = attachments;
     const result = await createAiSession(props.instance.id, {
       agent: newSessionApp.value,
       ...(cwdFolderId ? { cwdFolderId } : {}),
+      ...(gitSelection ? { gitSelection } : {}),
       message: aiSessionMessageText(message),
       attachments,
-      references: referencesForBindings(newSessionDraft.value, messageMentionBindings.value),
+      references,
       permissionMode,
-      clientRequestId,
+      clientRequestId: attempt.clientRequestId,
     });
     if (permissionMode) {
       persistAiSessionPermissionMode(aiSessionPermissionKey(props.instance.id, result.aiSessionId), permissionMode);
@@ -1449,6 +1731,7 @@ async function createNewSession(permissionMode?: AiSessionPermissionMode) {
     newSessionDraft.value = "";
     messageMentionBindings.value = [];
     messageAttachments.value = [];
+    newSessionCreateAttempt.value = undefined;
     newSessionOpen.value = false;
   } catch (error) {
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.startFailed")));
