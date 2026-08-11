@@ -6794,7 +6794,7 @@ test("node agent starts localhost runtime as a host controlled-instance process"
       "  res.end('ok');",
       "});",
       "server.listen(port, '127.0.0.1');",
-      "process.on('SIGTERM', () => server.close(() => process.exit(0)));",
+      "process.on('SIGTERM', () => { server.close(() => process.exit(0)); server.closeAllConnections(); });",
       "})().catch((error) => { console.error(error instanceof Error ? error.message : String(error)); process.exit(1); });",
     ].join("\n"),
   );
