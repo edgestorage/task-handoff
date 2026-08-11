@@ -14,7 +14,7 @@ function packageRoots(root, workspaceDirectories) {
   return roots;
 }
 
-export function exactInstalledDependencies(root, dependencies, workspaceDirectories = ["apps", "packages"]) {
+export function installedDependencyManifests(root, dependencies, workspaceDirectories = ["apps", "packages"]) {
   const roots = packageRoots(root, workspaceDirectories);
   return Object.fromEntries(Object.keys(dependencies).map((name) => {
     const manifests = roots
@@ -29,6 +29,26 @@ export function exactInstalledDependencies(root, dependencies, workspaceDirector
     if (versions.size !== 1) {
       throw new Error(`Installed runtime dependency has ambiguous versions: ${name} (${[...versions].join(", ") || "missing"})`);
     }
-    return [name, String([...versions][0]).replace(/^v(?=\d)/, "")];
+    return [name, manifests[0].manifestPath];
   }));
+}
+
+export function exactInstalledDependencies(root, dependencies, workspaceDirectories = ["apps", "packages"]) {
+  const manifests = installedDependencyManifests(root, dependencies, workspaceDirectories);
+  return Object.fromEntries(Object.entries(manifests).map(([name, manifestPath]) => {
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    return [name, String(manifest.version).replace(/^v(?=\d)/, "")];
+  }));
+}
+
+export function materializeInstalledDependencies(packageRoot, root, dependencies, workspaceDirectories = ["apps", "packages"]) {
+  const nodeModules = path.join(packageRoot, "node_modules");
+  if (fs.existsSync(nodeModules)) throw new Error(`Runtime package already contains node_modules: ${packageRoot}`);
+  const manifests = installedDependencyManifests(root, dependencies, workspaceDirectories);
+  for (const [name, manifestPath] of Object.entries(manifests)) {
+    const linkPath = path.join(nodeModules, ...name.split("/"));
+    fs.mkdirSync(path.dirname(linkPath), { recursive: true });
+    fs.symlinkSync(path.dirname(manifestPath), linkPath, process.platform === "win32" ? "junction" : "dir");
+  }
+  return () => fs.rmSync(nodeModules, { recursive: true, force: true });
 }
