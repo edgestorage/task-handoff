@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Argument, Command } from "commander";
 import { runtimePackages } from "../runtime-packages.config.mjs";
+import { exactInstalledDependencies } from "./runtime-dependency-versions.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const rootPackage = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
@@ -17,19 +18,6 @@ const [requestedTarget] = program.processedArgs;
 const selected = requestedTarget
   ? Object.entries(runtimePackages).filter(([name]) => name === requestedTarget)
   : Object.entries(runtimePackages);
-
-function exactDependencies(dependencies) {
-  return Object.fromEntries(
-    Object.keys(dependencies).map((name) => {
-      const manifestPath = path.join(root, "node_modules", ...name.split("/"), "package.json");
-      const installed = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-      if (!installed.version) {
-        throw new Error(`Installed runtime dependency has no version: ${name}`);
-      }
-      return [name, String(installed.version).replace(/^v(?=\d)/, "")];
-    }),
-  );
-}
 
 function copyLinuxExecutable(source, destination) {
   const contents = fs.readFileSync(source, "utf8").replace(/\r\n?/g, "\n");
@@ -114,7 +102,7 @@ for (const [name, definition] of selected) {
     engines: rootPackage.engines,
     dependencies: definition.aggregateDependencies
       ? Object.fromEntries(definition.aggregateDependencies.map((dependency) => [dependency, process.env.TASK_HANDOFF_VERSION || rootPackage.version]))
-      : exactDependencies(definition.dependencies),
+      : exactInstalledDependencies(root, definition.dependencies),
     publishConfig: { access: "public" },
   };
   fs.writeFileSync(path.join(packageDir, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
