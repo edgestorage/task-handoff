@@ -16,8 +16,17 @@ test("runtime dependency versions resolve from their pnpm workspace owner withou
     writeManifest(path.join(root, "packages/control-plane/package.json"), { name: "control-plane" });
     writeManifest(path.join(root, "packages/control-plane/node_modules/tweetnacl/package.json"), { name: "tweetnacl", version: "1.0.3" });
     fs.mkdirSync(path.join(root, "apps"));
-    const { exactInstalledDependencies } = await import("../scripts/runtime-dependency-versions.mjs");
+    const { exactInstalledDependencies, materializeInstalledDependencies } = await import("../scripts/runtime-dependency-versions.mjs");
     assert.deepEqual(exactInstalledDependencies(root, { tweetnacl: "^1.0.3" }), { tweetnacl: "1.0.3" });
+    const packageRoot = path.join(root, "release/npm/control-plane");
+    fs.mkdirSync(packageRoot, { recursive: true });
+    const cleanup = materializeInstalledDependencies(packageRoot, root, { tweetnacl: "1.0.3" });
+    assert.equal(
+      fs.realpathSync(require.resolve("tweetnacl/package.json", { paths: [packageRoot] })),
+      fs.realpathSync(path.join(root, "packages/control-plane/node_modules/tweetnacl/package.json")),
+    );
+    cleanup();
+    assert.equal(fs.existsSync(path.join(packageRoot, "node_modules")), false);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

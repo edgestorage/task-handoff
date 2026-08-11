@@ -8,6 +8,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { Argument, Command } from "commander";
 import { runtimePackages } from "../runtime-packages.config.mjs";
+import { materializeInstalledDependencies } from "./runtime-dependency-versions.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const rootPackage = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
@@ -155,11 +156,16 @@ for (const [name, definition] of selected) {
     }
     continue;
   }
-  const help = spawnSync(process.execPath, [binPath, "--help"], { cwd: root, encoding: "utf8" });
-  if (help.status !== 0 || !help.stdout.includes(definition.binName)) {
-    throw new Error(`${name} package CLI smoke test failed:\n${help.stderr || help.stdout}`);
+  const removeInstalledDependencies = materializeInstalledDependencies(packageDir, root, manifest.dependencies);
+  try {
+    const help = spawnSync(process.execPath, [binPath, "--help"], { cwd: packageDir, encoding: "utf8" });
+    if (help.status !== 0 || !help.stdout.includes(definition.binName)) {
+      throw new Error(`${name} package CLI smoke test failed:\n${help.stderr || help.stdout}`);
+    }
+    await checkBundledRuntime(packageDir, manifest, name, definition);
+  } finally {
+    removeInstalledDependencies();
   }
-  await checkBundledRuntime(packageDir, manifest, name, definition);
 }
 
 console.log(`Checked ${selected.length} runtime package${selected.length === 1 ? "" : "s"}.`);
