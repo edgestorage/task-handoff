@@ -4,6 +4,7 @@ import type { ControlPlaneInstanceDirectoryEntry, ControlPlaneNodeDirectoryEntry
 
 import { NewSessionForm, newSessionInstanceOptions, newSessionKeyboardAvoidingBehavior, newSessionVisualBalanceInset } from '../src/ai-sessions/NewSessionForm';
 import { newSessionMenuActions } from '../src/ai-sessions/NewSessionContextMenu.ios';
+import { SESSION_COMPOSER_ATTACHMENT_ICON_SIZE, SESSION_COMPOSER_TOOL_SIZE, sessionComposerPermissionIconSize } from '../src/ai-sessions/composer-metrics';
 import {
   ANCHORED_SELECT_MENU_CONTENT_WIDTH,
   ANCHORED_SELECT_MENU_HORIZONTAL_PADDING,
@@ -32,15 +33,32 @@ describe('<NewSessionForm />', () => {
       selectedInstanceId={instance.id}
       selectedAgent="codex"
       selectedFolderId="folder-1"
+      workspace={{
+        availability: 'available',
+        currentBranch: 'main',
+        dirty: false,
+        branches: [
+          { name: 'main', kind: 'branch', current: true, currentFolderSelectable: true, worktreeSelectable: false, worktreeCheckout: 'attached', worktreeReason: 'current-branch' },
+          { name: 'feature/cwd', kind: 'branch', current: false, currentFolderSelectable: true, worktreeSelectable: true, worktreeCheckout: 'attached' },
+        ],
+      }}
+      workspaceMode="current-folder"
+      selectedBranch="main"
       message="Build the mobile flow"
       permissionMode="auto-review"
       busy={false}
       disabled={false}
+      attachments={[]}
       visualBalanceInset={103}
       onInstanceChange={jest.fn()}
       onAgentChange={jest.fn()}
       onFolderChange={jest.fn()}
+      onWorkspaceModeChange={jest.fn()}
+      onBranchChange={jest.fn()}
       onMessageChange={jest.fn()}
+      onAddImage={jest.fn()}
+      onAddFile={jest.fn()}
+      onRemoveAttachment={jest.fn()}
       onPermissionModeChange={jest.fn()}
       onCreate={onCreate}
     />);
@@ -49,8 +67,14 @@ describe('<NewSessionForm />', () => {
     expect(screen.getByText('Local workspace')).toBeTruthy();
     expect(screen.getByText('Codex')).toBeTruthy();
     expect(screen.getByText('Mobile')).toBeTruthy();
+    expect(screen.getByText('Current folder')).toBeTruthy();
+    expect(screen.getByText('main')).toBeTruthy();
     expect(screen.getByDisplayValue('Build the mobile flow')).toBeTruthy();
     expect(screen.getByText('Approve for me')).toBeTruthy();
+    const attachmentButton = screen.getByRole('button', { name: 'Add attachment' });
+    expect(StyleSheet.flatten(attachmentButton.props.style)).toEqual(expect.objectContaining({ height: SESSION_COMPOSER_TOOL_SIZE, width: SESSION_COMPOSER_TOOL_SIZE }));
+    expect(SESSION_COMPOSER_ATTACHMENT_ICON_SIZE).toBe(25);
+    expect(sessionComposerPermissionIconSize('auto-review')).toBe(22);
     const nativeActions = newSessionMenuActions([
       ...newSessionInstanceOptions([instance], [node]),
       { label: 'Mobile', description: '/workspace/mobile', systemImage: 'folder', value: 'folder-1' },
@@ -95,17 +119,57 @@ describe('<NewSessionForm />', () => {
       permissionMode="ask"
       busy={false}
       disabled
+      attachments={[]}
       error="Choose an instance to continue."
       onInstanceChange={jest.fn()}
       onAgentChange={jest.fn()}
       onFolderChange={jest.fn()}
       onMessageChange={jest.fn()}
+      onAddImage={jest.fn()}
+      onAddFile={jest.fn()}
+      onRemoveAttachment={jest.fn()}
       onPermissionModeChange={jest.fn()}
       onCreate={jest.fn()}
     />);
 
     expect(screen.getByRole('button', { name: 'Create session' })).toBeDisabled();
     expect(screen.getByText('Choose an instance to continue.')).toBeTruthy();
+  });
+
+  test('freezes request inputs and attachment removal while creation is busy', async () => {
+    const onRemoveAttachment = jest.fn();
+    const screen = await render(<NewSessionForm
+      instances={[instance]}
+      nodes={[node]}
+      selectedInstance={instance}
+      folders={[{ id: 'folder-1', nodeId: 'node-1', name: 'Mobile', path: '/workspace/mobile', labels: {}, createdAt: '2026-08-06T00:00:00.000Z', updatedAt: '2026-08-06T00:00:00.000Z' }]}
+      selectedInstanceId={instance.id}
+      selectedAgent="codex"
+      selectedFolderId="folder-1"
+      message="Uploading"
+      permissionMode="ask"
+      busy
+      disabled
+      attachments={[{ id: 'attachment-1', kind: 'file', name: 'private.txt' }]}
+      onInstanceChange={jest.fn()}
+      onAgentChange={jest.fn()}
+      onFolderChange={jest.fn()}
+      onMessageChange={jest.fn()}
+      onAddImage={jest.fn()}
+      onAddFile={jest.fn()}
+      onRemoveAttachment={onRemoveAttachment}
+      onPermissionModeChange={jest.fn()}
+      onCreate={jest.fn()}
+    />);
+
+    expect(screen.getByLabelText('Prompt').props.editable).toBe(false);
+    expect(screen.getByRole('button', { name: 'Local workspace' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Mobile' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Codex' })).toBeDisabled();
+    const remove = screen.getByRole('button', { name: 'Remove private.txt' });
+    expect(remove).toBeDisabled();
+    fireEvent.press(remove);
+    expect(onRemoveAttachment).not.toHaveBeenCalled();
   });
 
   test('hides Codex permission controls for Claude sessions', async () => {
@@ -122,10 +186,14 @@ describe('<NewSessionForm />', () => {
       permissionMode="full-access"
       busy={false}
       disabled={false}
+      attachments={[]}
       onInstanceChange={jest.fn()}
       onAgentChange={jest.fn()}
       onFolderChange={jest.fn()}
       onMessageChange={jest.fn()}
+      onAddImage={jest.fn()}
+      onAddFile={jest.fn()}
+      onRemoveAttachment={jest.fn()}
       onPermissionModeChange={jest.fn()}
       onCreate={jest.fn()}
     />);

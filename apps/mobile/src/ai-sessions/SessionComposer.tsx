@@ -11,10 +11,13 @@ import {
   SESSION_COMPOSER_ACTION_ICON_SIZE,
   SESSION_COMPOSER_ACTION_RADIUS,
   SESSION_COMPOSER_ACTION_SIZE,
+  SESSION_COMPOSER_ATTACHMENT_ICON_SIZE,
   SESSION_COMPOSER_COLLAPSED_HEIGHT,
   SESSION_COMPOSER_EXPANDED_HEIGHT,
   SESSION_COMPOSER_EXPANDED_RADIUS,
   SESSION_COMPOSER_TOOLBAR_HEIGHT,
+  SESSION_COMPOSER_TOOL_SIZE,
+  sessionComposerPermissionIconSize,
 } from './composer-metrics';
 import { AttachmentMenu, PermissionMenu, type PermissionOption } from './SessionComposerMenus';
 import type { SessionComposerProps } from './session-composer-types';
@@ -61,7 +64,7 @@ export function SessionComposer(props: SessionComposerProps) {
     height: expansion.interpolate({ inputRange: [0, 1], outputRange: [SESSION_COMPOSER_COLLAPSED_HEIGHT, SESSION_COMPOSER_EXPANDED_HEIGHT] }),
   };
   const measuredPermissionWidth = permissionLabelMeasurement?.label === currentPermissionLabel
-    ? Math.ceil(permissionLabelMeasurement.width) + 42
+    ? Math.ceil(permissionLabelMeasurement.width) + 58
     : estimatedPermissionWidth(props.permissionMode);
   const permissionWidth = expansion.interpolate({ inputRange: [0, 1], outputRange: [36, measuredPermissionWidth] });
   const permissionTextOpacity = expansion.interpolate({ inputRange: [0, 0.35, 1], outputRange: [0, 0, 1] });
@@ -138,7 +141,7 @@ export function SessionComposer(props: SessionComposerProps) {
               onPress={onPress}
               style={({ pressed }) => [styles.toolButton, pressed && styles.pressed, attachmentDisabled && styles.disabled]}
             >
-              <Plus color={colors.textMuted} size={ATTACHMENT_ICON_SIZE} strokeWidth={1.9} />
+              <Plus color={colors.textMuted} size={SESSION_COMPOSER_ATTACHMENT_ICON_SIZE} strokeWidth={1.9} />
             </Pressable>}
           </AttachmentMenu>
           {props.permissionEnabled ? <Animated.View style={[styles.permissionButtonFrame, { width: permissionWidth }]} testID="session-permission-button-frame">
@@ -160,11 +163,14 @@ export function SessionComposer(props: SessionComposerProps) {
                   style={({ pressed }) => [styles.permissionButton, props.actionBusy && styles.disabled, pressed && { backgroundColor: colors.surfaceMuted }]}
                 >
                   <View style={styles.permissionIconSlot}>
-                    <PermissionIcon color={permissionDanger ? colors.error : colors.textMuted} size={permissionIconSize(props.permissionMode)} strokeWidth={1.8} />
+                    <PermissionIcon color={permissionDanger ? colors.error : colors.textMuted} size={sessionComposerPermissionIconSize(props.permissionMode)} strokeWidth={1.8} />
                   </View>
                   <Animated.Text numberOfLines={1} style={[styles.permissionText, { color: permissionDanger ? colors.error : colors.textMuted, opacity: permissionTextOpacity }]}>
                     {currentPermissionLabel}
                   </Animated.Text>
+                  <Animated.View pointerEvents="none" style={[styles.permissionChevron, { opacity: permissionTextOpacity }]} testID="session-permission-chevron">
+                    <SystemIcon android="expand_more" color={colors.textMuted} ios="chevron.down" size={10} />
+                  </Animated.View>
                 </Pressable>
               </Animated.View>}
             </PermissionMenu>
@@ -206,14 +212,8 @@ function permissionLabel(mode: SessionComposerProps['permissionMode'], t: Transl
 }
 
 function estimatedPermissionWidth(mode: SessionComposerProps['permissionMode']) {
-  return mode === 'ask' ? 142 : mode === 'auto-review' ? 132 : 126;
+  return mode === 'ask' ? 158 : mode === 'auto-review' ? 148 : 142;
 }
-
-function permissionIconSize(mode: SessionComposerProps['permissionMode']) {
-  return mode === 'ask' ? 21 : 22;
-}
-
-const ATTACHMENT_ICON_SIZE = 25;
 
 const styles = StyleSheet.create({
   composer: {
@@ -233,12 +233,13 @@ const styles = StyleSheet.create({
   editingState: { alignItems: 'center', flex: 1, flexDirection: 'row', gap: 7, minWidth: 0, paddingLeft: 8, paddingRight: 6 },
   editingLabel: { flexShrink: 1, fontSize: 13, fontWeight: '600' },
   cancelEditButton: { alignItems: 'center', height: 34, justifyContent: 'center', width: 34 },
-  toolButton: { alignItems: 'center', height: 40, justifyContent: 'center', width: 40 },
+  toolButton: { alignItems: 'center', height: SESSION_COMPOSER_TOOL_SIZE, justifyContent: 'center', width: SESSION_COMPOSER_TOOL_SIZE },
   permissionButtonFrame: { borderRadius: 19, height: 38, overflow: 'hidden' },
   permissionMenuTriggerFrame: { height: 38 },
   permissionButton: { alignItems: 'center', borderRadius: 19, flex: 1, flexDirection: 'row' },
   permissionIconSlot: { alignItems: 'center', height: 20, justifyContent: 'center', left: 8, position: 'absolute', width: 20 },
-  permissionText: { fontSize: 13, fontWeight: '600', marginLeft: 34, marginRight: 8 },
+  permissionText: { fontSize: 13, fontWeight: '600', marginLeft: 34, marginRight: 24 },
+  permissionChevron: { alignItems: 'center', height: 20, justifyContent: 'center', position: 'absolute', right: 8, width: 10 },
   permissionTextMeasurement: { fontSize: 13, fontWeight: '600', opacity: 0, position: 'absolute' },
   actionButton: { alignItems: 'center', borderRadius: SESSION_COMPOSER_ACTION_RADIUS, height: SESSION_COMPOSER_ACTION_SIZE, justifyContent: 'center', width: SESSION_COMPOSER_ACTION_SIZE },
   disabled: { opacity: 0.4 },

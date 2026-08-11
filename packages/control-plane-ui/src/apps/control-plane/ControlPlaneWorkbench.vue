@@ -505,7 +505,13 @@ const {
 } = useWorkbenchInstances({
   instances: boardInstancesWithAppSessions,
 });
-const nodeLocalFolderNodeIds = computed(() => [...new Set(sortedInstances.value.map((instance) => instance.nodeId).filter(Boolean))].sort());
+const nodeLocalFolderNodeIds = ref<string[]>([]);
+watch(sortedInstances, (instances) => {
+  const next = [...new Set(instances.map((instance) => instance.nodeId).filter(Boolean))].sort();
+  if (next.length === nodeLocalFolderNodeIds.value.length
+    && next.every((nodeId, index) => nodeId === nodeLocalFolderNodeIds.value[index])) return;
+  nodeLocalFolderNodeIds.value = next;
+}, { immediate: true });
 const nodeLocalFolderQueries = useQueries({
   queries: () => nodeLocalFolderNodeIds.value.map(nodeLocalFoldersQueryOptions),
 });

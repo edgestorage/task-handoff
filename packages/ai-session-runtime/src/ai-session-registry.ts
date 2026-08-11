@@ -68,6 +68,7 @@ type AiSessionStartInput = {
   providerSessionId?: string;
   title?: string;
   cwd?: string;
+  cwdFolderId?: string;
   userPrompt?: string;
   turns?: AiSessionStatus["turns"];
   status?: AiSessionLifecycle;
@@ -116,6 +117,7 @@ function summaryForHeartbeat(session: AiSessionStatus): AiSessionSummary {
     activeTurnId: session.activeTurnId,
     title: session.title,
     cwd: session.cwd,
+    cwdFolderId: session.cwdFolderId,
     userPrompt: session.userPrompt,
     turns: session.turns,
     status: session.status,
@@ -219,6 +221,7 @@ export class AiSessionRegistry {
       activeTurnId: undefined,
       title: input.title ? compact(input.title, 240) : undefined,
       cwd: input.cwd ? compact(input.cwd, 4096) : undefined,
+      cwdFolderId: input.cwdFolderId ? compact(input.cwdFolderId, 120) : undefined,
       userPrompt: input.userPrompt ? messageText(input.userPrompt) : undefined,
       turns: updateTurns(undefined, { userPrompt: options.suppressPromptTurn ? undefined : input.userPrompt, turns: input.turns }, timestamp, meta),
       status: normalizeLifecycle(input.status || "idle"),
@@ -249,6 +252,7 @@ export class AiSessionRegistry {
       providerSessionId: item.providerSessionId,
       title: item.title,
       cwd: item.cwd,
+      cwdFolderId: item.cwdFolderId,
       userPrompt: item.userPrompt,
       turns: current?.turns || [],
       status: "idle",
@@ -414,6 +418,7 @@ export class AiSessionRegistry {
         providerSessionId: input.providerSessionId,
         title: input.title,
         cwd: input.cwd,
+        cwdFolderId: input.cwdFolderId,
         userPrompt: input.userPrompt,
         turns: input.turns,
         status: input.status || "idle",

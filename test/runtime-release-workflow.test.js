@@ -116,7 +116,7 @@ test("detached node update worker does not overwrite rollout completion after se
   assert.match(npmCalls, new RegExp(`install --global --prefix .* @task-handoff/node-agent@${targetVersion.replaceAll(".", "\\.")}`));
 });
 
-test("detached node update worker updates and restarts the complete server distribution", () => {
+test("detached node update worker updates both co-installed distributions even when the standalone package already has the target version", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "server-node-update-worker-"));
   const jobFile = path.join(directory, "job.json");
   const targetVersion = require(path.join(root, "package.json")).version;
@@ -157,7 +157,7 @@ test("detached node update worker updates and restarts the complete server distr
   const healthFile = path.join(directory, "control-plane-health.json");
   fs.writeFileSync(healthFile, JSON.stringify({ data: { ok: true, version: "0.0.0" } }));
   fs.mkdirSync(path.join(directory, "lib/node_modules/@task-handoff/node-agent"), { recursive: true });
-  fs.writeFileSync(path.join(directory, "lib/node_modules/@task-handoff/node-agent/package.json"), '{"version":"0.0.0"}\n');
+  fs.writeFileSync(path.join(directory, "lib/node_modules/@task-handoff/node-agent/package.json"), `{"version":"${targetVersion}"}\n`);
   fs.writeFileSync(npm, `#!/bin/sh\nprintf '%s\\n' "$*" >> "${npmLog}"\nif [ "$1" = "view" ]; then\n  echo '"sha512-d29ya2VyLXRlc3Q="'\nelif [ "$1" = "prefix" ]; then\n  echo "${directory}"\nelif [ "$1" = "root" ]; then\n  echo "${directory}/lib/node_modules"\nelif [ "$1" = "install" ]; then\n  case "$*" in\n    *'@task-handoff/server@'*)\n      mkdir -p "${directory}/lib/node_modules/@task-handoff/server/node_modules/@task-handoff/control-plane"\n      mkdir -p "${directory}/lib/node_modules/@task-handoff/server/node_modules/@task-handoff/node-agent"\n      mkdir -p "${directory}/lib/node_modules/@task-handoff/server/node_modules/@task-handoff/controlled-instance"\n      printf '{"version":"${targetVersion}"}\\n' > "${directory}/lib/node_modules/@task-handoff/server/package.json"\n      printf '{"version":"${targetVersion}"}\\n' > "${directory}/lib/node_modules/@task-handoff/server/node_modules/@task-handoff/control-plane/package.json"\n      printf '{"version":"${targetVersion}"}\\n' > "${directory}/lib/node_modules/@task-handoff/server/node_modules/@task-handoff/node-agent/package.json"\n      printf '{"version":"${targetVersion}"}\\n' > "${directory}/lib/node_modules/@task-handoff/server/node_modules/@task-handoff/controlled-instance/package.json"\n      ;;\n    *'@task-handoff/node-agent@'*)\n      mkdir -p "${directory}/lib/node_modules/@task-handoff/node-agent"\n      printf '{"version":"${targetVersion}"}\\n' > "${directory}/lib/node_modules/@task-handoff/node-agent/package.json"\n      ;;\n  esac\nfi\nexit 0\n`, { mode: 0o755 });
   const systemctl = path.join(directory, "systemctl");
   const systemctlLog = path.join(directory, "systemctl.log");
@@ -183,6 +183,11 @@ test("detached node update worker updates and restarts the complete server distr
   const npmCalls = fs.readFileSync(npmLog, "utf8");
   assert.match(npmCalls, new RegExp(`install --global --prefix .* @task-handoff/server@${targetVersion.replaceAll(".", "\\.")}`));
   assert.match(npmCalls, new RegExp(`install --global --prefix .* @task-handoff/node-agent@${targetVersion.replaceAll(".", "\\.")}`));
+  assert.ok(
+    npmCalls.indexOf(`view @task-handoff/node-agent@${targetVersion} dist.integrity --json`)
+      < npmCalls.indexOf(`install --global --prefix ${directory} @task-handoff/server@${targetVersion}`),
+    "all installed package artifacts must be verified before either distribution is changed",
+  );
   assert.deepEqual(fs.readFileSync(systemctlLog, "utf8").trim().split("\n"), [
     "restart task-handoff-control-plane.service",
     "restart task-handoff-node-agent.service",

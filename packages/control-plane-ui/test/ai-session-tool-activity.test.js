@@ -185,8 +185,14 @@ test("running activity floats in the card without competing with approval or tur
 });
 
 test("card footer gradients provide an opaque backdrop for floating controls", () => {
-  assert.match(panelCss, /session-ai-preview-field-assistant::after \{[\s\S]*?height: 34px;[\s\S]*?84%[\s\S]*?58%/);
+  assert.match(panelCss, /session-ai-select::after \{[\s\S]*?height: 34px;[\s\S]*?84%[\s\S]*?58%/);
   assert.match(panelCss, /session-ai-row\[data-state="running"\][\s\S]*?height: 52px;[\s\S]*?var\(--ai-session-card-content-bg\) 70%/);
-  assert.match(card, /ai-board-preview-field-assistant::after \{[\s\S]*?height: 34px;[\s\S]*?84%[\s\S]*?58%/);
+  assert.match(card, /ai-board-content::after \{[\s\S]*?height: 34px;[\s\S]*?84%[\s\S]*?58%/);
   assert.match(card, /ai-board-card\[data-state="running"\][\s\S]*?height: 52px;[\s\S]*?var\(--ai-session-card-content-bg\) 70%/);
+  assert.doesNotMatch(panelCss, /session-ai-preview-field-assistant::after/);
+  assert.doesNotMatch(card, /ai-board-preview-field-assistant::after/);
+  assert.match(panelCss, /session-ai-message::after \{[\s\S]*?height: 34px;/);
+  assert.match(panelCss, /session-ai-row\[data-state="running"\] \.session-ai-message::after \{\s*height: 52px;/);
+  assert.match(card, /ai-board-message::after \{[\s\S]*?height: 34px;/);
+  assert.match(card, /ai-board-card\[data-state="running"\] \.ai-board-message::after \{\s*height: 52px;/);
 });

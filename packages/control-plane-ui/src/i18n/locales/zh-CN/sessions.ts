@@ -32,7 +32,7 @@ export const sessions = {
   actions: {
     allow: "允许", skip: "跳过", deny: "拒绝", controls: "AI 会话卡片控制", searchTriggers: "搜索触发器", noTriggers: "没有触发器模板",
     noMatchingTriggers: "没有匹配的触发器", remove: "移除", add: "添加", openAppFor: "打开 {agent} 的应用会话", openApp: "打开应用会话",
-    moreFor: "{agent} 的更多操作", more: "更多操作", closingApp: "正在关闭应用会话", closeApp: "关闭应用会话", closingSession: "正在关闭 AI 会话", closeSession: "关闭 AI 会话", unread: "未读 AI 会话",
+    moreFor: "{agent} 的更多操作", more: "更多操作", closingApp: "正在关闭应用会话", closeApp: "关闭应用会话", closingSession: "正在关闭 AI 会话", closeSession: "关闭 AI 会话", unread: "未读 AI 会话", openedFromTerminal: "由终端应用会话打开",
     previousMessage: "{agent} 的上一条用户消息", nextMessage: "{agent} 的下一条用户消息", addTrigger: "添加触发器", triggersBound: "已绑定 {count} 个触发器",
   },
   detail: {
@@ -48,7 +48,7 @@ export const sessions = {
   panel: {
     view: "视图", status: "状态", listOptions: "AI 会话列表选项", sessionList: "AI 会话列表", newSession: "新建 AI 会话", allStatuses: "全部状态", active: "活跃", waiting: "等待中", problem: "异常",
     noMatching: "没有匹配的会话", noConversations: "尚无对话", tryFilter: "请尝试其他状态筛选。", startHint: "使用上方的 + 按钮开始对话。",
-    resizeList: "调整 AI 会话列表大小", startIdea: "从一个想法开始", searchProjects: "搜索项目", noProjects: "未找到项目", newProject: "新建项目",
+    resizeList: "调整 AI 会话列表大小", startIdea: "从一个想法开始", searchProjects: "搜索项目", noProjects: "未找到项目", newProject: "新建项目", currentFolderMode: "当前文件夹", worktreeMode: "独立 worktree", chooseBranch: "选择分支", searchBranches: "搜索分支", detached: "Detached", switchBranchTitle: "切换当前文件夹的分支？", switchBranchDescription: "创建会话时会把当前文件夹切换到“{branch}”。未提交的改动会保留，但这个文件夹中的其他活动会话可能看到新的工作树内容。", confirmBranchSwitch: "确认切换",
     promptPlaceholder: "描述你想做的事", chooseProject: "选择项目", projectUnavailable: "这个项目已不在节点的登记目录中。", startedWorktree: "AI 会话已在所选 worktree 中启动。", backLatest: "返回最新消息",
     defaultPermissionFailed: "无法更新默认 Codex 权限模式。", starting: "新的 AI 会话仍在启动，请稍后重试。",
     startFailed: "无法启动 AI 会话。", sendFailed: "无法发送消息。", noGoal: "没有活跃目标。", commandFailed: "无法运行命令。", steerFailed: "无法追加消息。",

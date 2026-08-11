@@ -33,6 +33,7 @@ import {
   type AiSessionSendMode,
 } from "@task-handoff/protocol/ai-sessions";
 import type { ControlPlaneClientTransport } from "./transport.ts";
+import { RepositoryAiSessionWorkspaceSchema } from "@task-handoff/protocol/repository";
 
 const DataSchema = <T extends z.ZodType>(schema: T) => z.object({ data: schema }).strict();
 
@@ -96,6 +97,10 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
     },
     create(instanceId: string, input: AiSessionCreateRefInput) {
       return requestData(`/api/controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions`, AiSessionCreateResultSchema, json("POST", AiSessionCreateRefInputSchema.parse(input)));
+    },
+    workspace(instanceId: string, cwdFolderId: string, signal?: AbortSignal) {
+      const query = new URLSearchParams({ cwdFolderId });
+      return requestData(`/api/controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/workspace?${query}`, RepositoryAiSessionWorkspaceSchema, { signal });
     },
     openApp(instanceId: string, aiSessionId: string, clientRequestId: string) {
       return requestData(`${sessionRoute(instanceId, aiSessionId)}/open-app`, AiSessionOpenAppResultSchema, json("POST", AiSessionOpenAppInputSchema.parse({ clientRequestId })));

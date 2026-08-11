@@ -23,9 +23,9 @@ type AttachmentMenuProps = {
 
 export function AttachmentMenu(props: AttachmentMenuProps) {
   return props.children(() => Alert.alert(props.title, undefined, [
-    { text: props.imageLabel, onPress: props.onAddImage },
-    { text: props.fileLabel, onPress: props.onAddFile },
-    { text: props.runtimeFileLabel, onPress: props.onAddRuntimeFile },
+    ...(!props.imageDisabled ? [{ text: props.imageLabel, onPress: props.onAddImage }] : []),
+    ...(!props.fileDisabled ? [{ text: props.fileLabel, onPress: props.onAddFile }] : []),
+    ...(!props.runtimeFileDisabled ? [{ text: props.runtimeFileLabel, onPress: props.onAddRuntimeFile }] : []),
     { text: props.cancelLabel, style: 'cancel' },
   ]));
 }

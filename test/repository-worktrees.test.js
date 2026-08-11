@@ -135,6 +135,47 @@ test("managed worktrees are allocated privately from new and existing branches",
   assert.equal(reloaded.isManaged(existing.worktrees.repositoryId, existing.worktreeId, managedPath(managedRoot, existing.worktreeId)), true);
 });
 
+test("AI session worktrees are idempotent per request and detach occupied refs", async () => {
+  const fixture = createGitFixture();
+  fixture.git(["branch", "feature/free"]);
+  const { managedRoot, service } = setup(fixture);
+
+  const current = await service.createForAiSession({ ref: { type: "branch", name: "main" }, clientRequestId: "session-main" });
+  const currentPath = managedPath(managedRoot, current.worktreeId);
+  assert.equal(git(currentPath, ["branch", "--show-current"]), "");
+  assert.equal(git(currentPath, ["rev-parse", "HEAD"]), fixture.git(["rev-parse", "main"]));
+
+  const repeated = await service.createForAiSession({ ref: { type: "branch", name: "main" }, clientRequestId: "session-main" });
+  assert.equal(repeated.worktreeId, current.worktreeId);
+
+  const head = await service.createForAiSession({ ref: { type: "head" }, clientRequestId: "session-head" });
+  assert.notEqual(head.worktreeId, current.worktreeId);
+  assert.equal(git(managedPath(managedRoot, head.worktreeId), ["branch", "--show-current"]), "");
+
+  const free = await service.createForAiSession({ ref: { type: "branch", name: "feature/free" }, clientRequestId: "session-free" });
+  assert.equal(git(managedPath(managedRoot, free.worktreeId), ["branch", "--show-current"]), "feature/free");
+  const occupied = await service.createForAiSession({ ref: { type: "branch", name: "feature/free" }, clientRequestId: "session-free-second" });
+  assert.equal(git(managedPath(managedRoot, occupied.worktreeId), ["branch", "--show-current"]), "");
+  assert.equal(git(managedPath(managedRoot, occupied.worktreeId), ["rev-parse", "HEAD"]), fixture.git(["rev-parse", "feature/free"]));
+});
+
+test("AI session worktree creation never removes a preexisting unregistered destination", async () => {
+  const fixture = createGitFixture();
+  const { managedRoot, registry, resolve, service } = setup(fixture);
+  const state = await resolve();
+  const destination = registry.allocate(state.context.repositoryId, "HEAD", "preexisting-request");
+  fs.mkdirSync(destination, { recursive: true });
+  const marker = path.join(destination, "keep.txt");
+  fs.writeFileSync(marker, "owned by somebody else\n");
+
+  await assert.rejects(
+    () => service.createForAiSession({ ref: { type: "head" }, clientRequestId: "preexisting-request" }),
+    (error) => error.code === "REPOSITORY_WORKTREE_UNSAFE",
+  );
+  assert.equal(fs.readFileSync(marker, "utf8"), "owned by somebody else\n");
+  assert.equal(fs.existsSync(path.join(managedRoot, "registry.json")), false);
+});
+
 test("worktree creation serializes refs and rejects stale or occupied branches", async () => {
   const fixture = createGitFixture();
   const { resolve, service } = setup(fixture);

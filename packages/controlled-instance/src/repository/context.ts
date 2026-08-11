@@ -46,6 +46,10 @@ export class RepositorySessionResolver {
     return this.resolve("app-session", id, session ? { cwd: session.workspace?.cwd, status: session.status } : undefined);
   }
 
+  resolveWorkspace(cwd: string) {
+    return this.resolve("ai-session", "workspace-inspection", { cwd, status: "idle" });
+  }
+
   private async resolve(sessionKind: "ai-session" | "app-session", sessionId: string, session: AiRepositorySession | undefined) {
     const observedAt = new Date().toISOString();
     const unavailable = (availability: RepositoryContext["availability"]): ResolvedRepository => ({

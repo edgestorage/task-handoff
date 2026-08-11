@@ -56,6 +56,7 @@ export function aiSessionHistoryItem(
     userPrompt: session.userPrompt,
     lastMessage: session.lastMessage,
     cwd: session.cwd,
+    cwdFolderId: session.cwdFolderId,
     lastActiveAt: session.updatedAt,
     archivedAt,
   });

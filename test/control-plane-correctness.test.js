@@ -479,3 +479,48 @@ test("AI session create, Open App, and close proxy strict controlled-instance re
   assert.deepEqual(requests[1].body, { clientRequestId: "request-open" });
   assert.equal(snapshotRefreshes, 0, "committed lifecycle actions rely on the authoritative event stream");
 });
+
+test("AI session workspace identity is capability-gated for v0.0.21 controlled instances", async () => {
+  const requests = [];
+  const legacy = { capabilities: {}, config: { defaultCodexPermissionMode: "ask" } };
+  const current = {
+    capabilities: { features: { aiSessionWorkspaceSelection: true } },
+    config: { defaultCodexPermissionMode: "ask" },
+  };
+  let instance = legacy;
+  const service = new AiSessionActionService({
+    requireInstance: async () => instance,
+    request: async (_instance, route, init) => {
+      requests.push({ route, body: init?.body ? JSON.parse(init.body) : undefined });
+      if (route.endsWith("/inspect")) return { availability: "not-worktree", dirty: false, branches: [] };
+      return { disposition: "created", aiSessionId: "ai-capability", providerSessionId: "thread-capability", creationSource: "ai-session" };
+    },
+    requireRuntime: async () => ({ type: "local" }),
+    refreshSnapshots: async () => undefined,
+  });
+
+  await service.create("instance-legacy", {
+    agent: "codex",
+    cwd: { type: "runtime-path", path: "/workspace" },
+    cwdFolderId: "folder-1",
+    message: "Legacy",
+    clientRequestId: "request-legacy",
+  });
+  assert.equal(requests[0].body.cwdFolderId, undefined);
+  await assert.rejects(
+    service.inspectWorkspace("instance-legacy", { type: "runtime-path", path: "/workspace" }),
+    (error) => error.code === "AI_SESSION_WORKSPACE_SELECTION_UNSUPPORTED",
+  );
+
+  instance = current;
+  await service.create("instance-current", {
+    agent: "codex",
+    cwd: { type: "runtime-path", path: "/workspace" },
+    cwdFolderId: "folder-1",
+    message: "Current",
+    clientRequestId: "request-current",
+  });
+  await service.inspectWorkspace("instance-current", { type: "runtime-path", path: "/workspace" });
+  assert.equal(requests[1].body.cwdFolderId, "folder-1");
+  assert.equal(requests[2].route, "/repository/ai-session-workspace/inspect");
+});
