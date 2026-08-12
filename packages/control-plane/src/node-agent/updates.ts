@@ -107,7 +107,7 @@ export function resolveNodeAgentUpdateWorker(moduleDir: string, exists: (candida
     path.resolve(moduleDir, "..", "..", "bin", "task-handoff-node-update-worker"),
   ];
   const packagedWorker = packagedCandidates.find(exists);
-  const sourceWorker = path.resolve(moduleDir, "..", "..", "..", "..", "scripts", "node-update-worker.cjs");
+  const sourceWorker = path.resolve(moduleDir, "..", "..", "..", "..", "scripts", "node-update-worker.cts");
   if (packagedWorker) return { worker: packagedWorker, packaged: true, expectedWorker: packagedCandidates[0] };
   if (exists(sourceWorker)) return { worker: sourceWorker, packaged: false, expectedWorker: packagedCandidates[0] };
   return { worker: undefined, packaged: false, expectedWorker: packagedCandidates[0] };

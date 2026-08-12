@@ -10,7 +10,7 @@ import { z } from "zod";
 import { AiSessionUnreadEventType } from "@task-handoff/protocol/ai-sessions";
 import { TtyStreamSnapshotMessageSchema } from "@task-handoff/protocol/app-sessions";
 import { RelayTtySnapshotEnvelopeSchema } from "@task-handoff/cloud-contracts";
-import { CONTROL_PLANE_PROTOCOL_VERSION, ImagePullTerminalEventType, type BuildInfo } from "@task-handoff/protocol/control-plane";
+import { CONTROL_PLANE_PROTOCOL_VERSION, ControlPlaneHealthResponseSchema, ImagePullTerminalEventType, type BuildInfo } from "@task-handoff/protocol/control-plane";
 import { packageVersionResolver } from "@task-handoff/core/core/package-version";
 import { DEFAULT_MAINTENANCE_INTERVAL_MS } from "@task-handoff/core/storage/retention";
 import { SESSION_STREAM_PROTOCOL_VERSION, SessionStreamsHelloEventType } from "@task-handoff/protocol/events";
@@ -624,7 +624,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     });
   }
 
-  app.get("/api/health", { config: PUBLIC_CONTROL_PLANE_ROUTE }, async () => ({
+  app.get("/api/health", { config: PUBLIC_CONTROL_PLANE_ROUTE }, async () => ControlPlaneHealthResponseSchema.parse({
     data: {
       ok: true,
       role: "control-plane",

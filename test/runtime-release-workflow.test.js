@@ -101,7 +101,7 @@ test("detached node update worker does not overwrite rollout completion after se
   fs.writeFileSync(systemctl, `#!/bin/sh\n"${process.execPath}" -e 'const fs=require("fs");const p=process.env.JOB_FILE;const j=JSON.parse(fs.readFileSync(p,"utf8"));j.status="succeeded";j.rollout={...j.rollout,phase:"succeeded",nodeVersion:j.toVersion};j.completedAt=new Date().toISOString();fs.writeFileSync(p,JSON.stringify(j));'\n`, { mode: 0o755 });
 
   const result = spawnSync(process.execPath, [
-    path.join(root, "scripts", "node-update-worker.cjs"),
+    path.join(root, "scripts", "node-update-worker.cts"),
     "--job-file", jobFile,
     "--target-version", targetVersion,
     "--npm-command", npm,
@@ -155,16 +155,21 @@ test("detached node update worker updates both co-installed distributions even w
   const npm = path.join(directory, "npm");
   const npmLog = path.join(directory, "npm.log");
   const healthFile = path.join(directory, "control-plane-health.json");
-  fs.writeFileSync(healthFile, JSON.stringify({ data: { ok: true, version: "0.0.0" } }));
+  fs.writeFileSync(healthFile, JSON.stringify({
+    data: {
+      ok: true,
+      build: { packageVersion: "0.0.0" },
+    },
+  }));
   fs.mkdirSync(path.join(directory, "lib/node_modules/@task-handoff/node-agent"), { recursive: true });
   fs.writeFileSync(path.join(directory, "lib/node_modules/@task-handoff/node-agent/package.json"), `{"version":"${targetVersion}"}\n`);
   fs.writeFileSync(npm, `#!/bin/sh\nprintf '%s\\n' "$*" >> "${npmLog}"\nif [ "$1" = "view" ]; then\n  echo '"sha512-d29ya2VyLXRlc3Q="'\nelif [ "$1" = "prefix" ]; then\n  echo "${directory}"\nelif [ "$1" = "root" ]; then\n  echo "${directory}/lib/node_modules"\nelif [ "$1" = "install" ]; then\n  case "$*" in\n    *'@task-handoff/server@'*)\n      mkdir -p "${directory}/lib/node_modules/@task-handoff/server/node_modules/@task-handoff/control-plane"\n      mkdir -p "${directory}/lib/node_modules/@task-handoff/server/node_modules/@task-handoff/node-agent"\n      mkdir -p "${directory}/lib/node_modules/@task-handoff/server/node_modules/@task-handoff/controlled-instance"\n      printf '{"version":"${targetVersion}"}\\n' > "${directory}/lib/node_modules/@task-handoff/server/package.json"\n      printf '{"version":"${targetVersion}"}\\n' > "${directory}/lib/node_modules/@task-handoff/server/node_modules/@task-handoff/control-plane/package.json"\n      printf '{"version":"${targetVersion}"}\\n' > "${directory}/lib/node_modules/@task-handoff/server/node_modules/@task-handoff/node-agent/package.json"\n      printf '{"version":"${targetVersion}"}\\n' > "${directory}/lib/node_modules/@task-handoff/server/node_modules/@task-handoff/controlled-instance/package.json"\n      ;;\n    *'@task-handoff/node-agent@'*)\n      mkdir -p "${directory}/lib/node_modules/@task-handoff/node-agent"\n      printf '{"version":"${targetVersion}"}\\n' > "${directory}/lib/node_modules/@task-handoff/node-agent/package.json"\n      ;;\n  esac\nfi\nexit 0\n`, { mode: 0o755 });
   const systemctl = path.join(directory, "systemctl");
   const systemctlLog = path.join(directory, "systemctl.log");
-  fs.writeFileSync(systemctl, `#!/bin/sh\nprintf '%s\\n' "$*" >> "${systemctlLog}"\nif [ "$*" = "restart task-handoff-control-plane.service" ]; then\n  printf '{"data":{"ok":true,"version":"${targetVersion}"}}\\n' > "${healthFile}"\nfi\nexit 0\n`, { mode: 0o755 });
+  fs.writeFileSync(systemctl, `#!/bin/sh\nprintf '%s\\n' "$*" >> "${systemctlLog}"\nif [ "$*" = "restart task-handoff-control-plane.service" ]; then\n  printf '{"data":{"ok":true,"role":"control-plane","protocolVersion":"2026-07-01","build":{"component":"control-plane","packageVersion":"${targetVersion}"},"dataDir":"/tmp/task-handoff-control-plane","serverTime":"2026-08-12T00:00:00.000Z"}}\\n' > "${healthFile}"\nfi\nexit 0\n`, { mode: 0o755 });
 
   const result = spawnSync(process.execPath, [
-    path.join(root, "scripts", "node-update-worker.cjs"),
+    path.join(root, "scripts", "node-update-worker.cts"),
     "--job-file", jobFile,
     "--target-version", targetVersion,
     "--npm-command", npm,
@@ -239,7 +244,7 @@ test("detached node update worker CAS preserves a terminal write between observa
   fs.writeFileSync(hook, `const fs=require("node:fs");module.exports=({jobFile,observed})=>{if(observed.status!=="updating-node")return;const current=JSON.parse(fs.readFileSync(jobFile,"utf8"));current.status="succeeded";current.rollout={...current.rollout,phase:"succeeded",nodeVersion:current.toVersion};current.completedAt=new Date().toISOString();fs.writeFileSync(jobFile,JSON.stringify(current));};\n`);
 
   const result = spawnSync(process.execPath, [
-    path.join(root, "scripts", "node-update-worker.cjs"),
+    path.join(root, "scripts", "node-update-worker.cts"),
     "--job-file", jobFile,
     "--target-version", targetVersion,
     "--npm-command", npm,

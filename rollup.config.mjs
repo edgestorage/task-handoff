@@ -135,6 +135,19 @@ function runtimeBuild(name, definition) {
       plugins: [cleanRuntimeDir(outputDir), ...plugins, runtimeMinifier()],
     },
   ];
+  if (definition.updateWorkerInput) {
+    builds.push({
+      input: definition.updateWorkerInput,
+      output: {
+        file: `${outputDir}/${definition.updateWorkerEntryFile}`,
+        format: "cjs",
+        exports: "auto",
+        inlineDynamicImports: true,
+      },
+      external: externalFrom(definition.dependencies),
+      plugins: [cleanRuntimeDir(outputDir), ...plugins, runtimeMinifier()],
+    });
+  }
   return builds;
 }
 
