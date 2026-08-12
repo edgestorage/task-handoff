@@ -1,4 +1,4 @@
-import { onBeforeUnmount, onMounted } from "vue";
+import { onBeforeUnmount, onMounted, toValue, watch, type MaybeRefOrGetter } from "vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import { SessionStreamsHelloEventType, SessionStreamsHelloSchema } from "@task-handoff/protocol/events";
 import {
@@ -41,6 +41,8 @@ const LIFECYCLE_COMMAND_NOTIFICATIONS = new Set([
 ]);
 
 export function useControlPlaneEvents(input: {
+  instanceId?: MaybeRefOrGetter<string>;
+  enabled?: MaybeRefOrGetter<boolean>;
   aiSessions: {
     applyEvent: (event: AiSessionDeltaResponse["events"][number]) => boolean;
     applyUnreadEvent: (state: AiSessionUnreadState) => boolean;
@@ -74,19 +76,23 @@ export function useControlPlaneEvents(input: {
   let reconnectAttempt = 0;
 
   function connect() {
+    if (input.enabled !== undefined && !toValue(input.enabled)) return;
     if (socket && socket.readyState !== WebSocket.CLOSED) return;
     closing = false;
-    const current = new WebSocket(eventsUrl());
+    const current = new WebSocket(eventsUrl(toValue(input.instanceId || "")));
     socket = current;
     current.addEventListener("open", () => {
       reconnectAttempt = 0;
-      void queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.instanceBoard });
+      const instanceId = toValue(input.instanceId || "");
+      current.send(JSON.stringify({ type: "subscribe", topics: ["*"], ...(instanceId ? { instanceIds: [instanceId] } : {}) }));
+      void queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.scopedInstanceBoard(toValue(input.instanceId || "")) });
       void input.appManagement?.recoverOpen();
       void input.resourceMetrics?.recoverOpen();
     });
     current.addEventListener("message", (event) => handleMessage(String(event.data)));
     current.addEventListener("close", () => {
-      if (socket === current) socket = undefined;
+      if (socket !== current) return;
+      socket = undefined;
       if (!closing && !reconnectTimer) {
         const baseDelay = Math.min(30_000, 1_000 * (2 ** reconnectAttempt));
         const delay = Math.min(30_000, Math.round(baseDelay * (0.75 + Math.random() * 0.5)));
@@ -102,6 +108,7 @@ export function useControlPlaneEvents(input: {
   function handleMessage(raw: string) {
     try {
       const message = JSON.parse(raw) as EventMessage;
+      const instanceId = toValue(input.instanceId || "");
       if (message.type === SessionStreamsHelloEventType) {
         const parsed = safeParseResponse(SessionStreamsHelloSchema, message.payload);
         if (!parsed.success) {
@@ -111,14 +118,15 @@ export function useControlPlaneEvents(input: {
           return;
         }
         const hello = parsed.data;
-        for (const descriptor of hello.streams) {
+        for (const descriptor of hello.streams.filter((stream) => !instanceId || stream.instanceId === instanceId)) {
           if (descriptor.topic === "app.sessions") void input.appSessions.recoverDescriptor(descriptor);
           if (descriptor.topic === "ai.sessions") void input.aiSessions.recoverDescriptor(descriptor);
         }
         return;
       }
-      const handled = normalizedEvents(message).some(applyToCache);
-      if (!handled) scheduleTargetedInvalidation(normalizedEvents(message));
+      const events = normalizedEvents(message).filter((event) => !instanceId || !eventInstanceId(event) || eventInstanceId(event) === instanceId);
+      const handled = events.some(applyToCache);
+      if (!handled) scheduleTargetedInvalidation(events);
     } catch (error) {
       console.warn("CONTROL_PLANE_EVENT_INVALID", error);
     }
@@ -180,6 +188,23 @@ export function useControlPlaneEvents(input: {
   }
 
   onMounted(connect);
+  watch(() => input.enabled === undefined || toValue(input.enabled), (enabled) => {
+    if (enabled) {
+      connect();
+      return;
+    }
+    closing = true;
+    socket?.close();
+    socket = undefined;
+  });
+  watch(() => toValue(input.instanceId || ""), () => {
+    if (!socket) return;
+    closing = true;
+    socket.close();
+    socket = undefined;
+    closing = false;
+    connect();
+  });
   onBeforeUnmount(() => {
     closing = true;
     reconnectAttempt = 0;
@@ -190,8 +215,9 @@ export function useControlPlaneEvents(input: {
   });
 }
 
-function eventsUrl() {
+function eventsUrl(instanceId = "") {
   const url = new URL("/api/events", window.location.origin);
+  if (instanceId) url.searchParams.set("instanceId", instanceId);
   url.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   return url.toString();
 }
@@ -203,4 +229,13 @@ function normalizedEvents(message: EventMessage): EventMessage[] {
     : undefined;
   if (!forwarded?.type) return [];
   return [{ ...forwarded, scope: { ...(message.scope || {}), ...(forwarded.scope || {}) } }];
+}
+
+function eventInstanceId(event: EventMessage) {
+  if (event.scope?.instanceId) return event.scope.instanceId;
+  if (event.payload && typeof event.payload === "object" && !Array.isArray(event.payload)) {
+    const instanceId = (event.payload as { instanceId?: unknown }).instanceId;
+    return typeof instanceId === "string" ? instanceId : undefined;
+  }
+  return undefined;
 }

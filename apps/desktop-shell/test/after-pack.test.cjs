@@ -45,7 +45,7 @@ test("afterPack rejects an incomplete unpacked desktop server runtime", () => {
   );
 });
 
-test("afterPack requires the icon used to derive platform tray images", () => {
+test("afterPack requires the dedicated transparent tray icon", () => {
   const appOutDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-after-pack-tray-"));
   const resources = path.join(appOutDir, "resources");
   fs.mkdirSync(resources, { recursive: true });
@@ -55,6 +55,6 @@ test("afterPack requires the icon used to derive platform tray images", () => {
     packager: { appInfo: { productFilename: "TaskHandoff" } },
   };
   assert.throws(() => validateDesktopTrayResource(context), /tray icon is missing/);
-  fs.writeFileSync(path.join(resources, "icon.png"), "icon");
+  fs.writeFileSync(path.join(resources, "tray-icon.png"), "icon");
   assert.doesNotThrow(() => validateDesktopTrayResource(context));
 });

@@ -3,6 +3,16 @@ import type { instances as englishInstances } from "../en-US/instances.ts";
 
 export const instances = {
   title: "实例",
+  window: {
+    invalidRoute: "实例详情链接无效，请从实例切换器中选择实例。",
+    instanceUnavailable: "该实例不可用，请从实例切换器中选择其他实例。",
+    alreadyOpen: "这个实例已在另一个独立窗口中打开。",
+    focusedExisting: "已切换到现有的实例窗口。",
+    switchFailed: "无法切换实例窗口，请重试。",
+    popupBlocked: "浏览器阻止了新窗口，请允许弹出窗口后重试。",
+    focusFailed: "实例窗口已经存在，但浏览器未允许自动聚焦。",
+    openInNewWindow: "在新窗口打开",
+  },
   list: {
     controlledInstances: "受管实例",
     switchInstance: "切换实例",

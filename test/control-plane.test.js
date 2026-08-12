@@ -2179,6 +2179,7 @@ test("control plane viewer cannot reach privileged mutation handlers", async (t)
     ["POST", "/api/chat-gateway/messages", {}],
     ["POST", "/api/chat-gateway/actions", {}],
     ["POST", "/api/controlled-instances/inst_x/ai-sessions/session_x/resume", {}],
+    ["POST", "/api/controlled-instances/inst_x/ai-sessions/session_x/fork", {}],
     ["POST", "/api/controlled-instances/inst_x/ai-sessions/session_x/commands", {}],
     ["POST", "/api/controlled-instances/inst_x/ai-sessions/session_x/triggers", {}],
     ["DELETE", "/api/controlled-instances/inst_x/ai-sessions/session_x/triggers/trigger_x", undefined],
@@ -2301,6 +2302,7 @@ test("control plane mutation route policies never degrade privileged operations 
     ["POST", "/api/chat-gateway/actions", "send-message", "ai-session"],
     ["POST", "/api/controlled-instances/:id/ai-sessions", "send-message", "ai-session"],
     ["POST", "/api/controlled-instances/:id/ai-sessions/:sessionId/resume", "send-message", "ai-session"],
+    ["POST", "/api/controlled-instances/:id/ai-sessions/:sessionId/fork", "send-message", "ai-session"],
     ["POST", "/api/controlled-instances/:id/ai-sessions/:sessionId/commands", "send-message", "ai-session"],
     ["POST", "/api/controlled-instances/:id/ai-sessions/:sessionId/triggers", "create", "trigger"],
     ["DELETE", "/api/controlled-instances/:id/ai-sessions/:sessionId/triggers/:configHash", "delete", "trigger"],
@@ -18072,6 +18074,14 @@ test("control plane aggregates ai session pending routes and proxies ai session 
           headers: { "content-type": "application/json" },
         });
       }
+      if (body?.path === "/api/ai-sessions/ais_waiting/fork" && body.method === "POST") {
+        return new Response(JSON.stringify({ data: {
+          disposition: "created",
+          aiSessionId: "ais_forked_proxy",
+          providerSessionId: "thread_forked_proxy",
+          creationSource: "ai-session",
+        } }), { status: 200, headers: { "content-type": "application/json" } });
+      }
       if (body?.path === "/api/ai-sessions/history" && body.method === "GET") {
         return new Response(JSON.stringify({ data: { items: [{
           id: "ais_history_proxy",
@@ -18234,6 +18244,23 @@ test("control plane aggregates ai session pending routes and proxies ai session 
     ["GET", "/api/ai-sessions/ais_waiting/mentions", undefined],
     ["POST", "/api/ai-sessions/ais_waiting/mentions/files", { query: "Exact Name" }],
     ["POST", "/api/ai-sessions/ais_waiting/messages", { message: "Use @Exact", references, permissionMode: "ask" }],
+  ]);
+
+  const forked = await json(app, "POST", `/api/controlled-instances/${created.body.data.id}/ai-sessions/ais_waiting/fork`, {
+    clientRequestId: "fork-proxy-request",
+    workspace: { mode: "current" },
+  });
+  assert.equal(forked.statusCode, 200, JSON.stringify(forked.body));
+  assert.deepEqual(forked.body.data, {
+    disposition: "created",
+    aiSessionId: "ais_forked_proxy",
+    providerSessionId: "thread_forked_proxy",
+    creationSource: "ai-session",
+  });
+  const forkForward = requests.find((request) => request.body.path === "/api/ai-sessions/ais_waiting/fork");
+  assert.deepEqual([forkForward.body.method, JSON.parse(forkForward.body.body)], [
+    "POST",
+    { clientRequestId: "fork-proxy-request", workspace: { mode: "current" } },
   ]);
 
   const history = await json(app, "GET", `/api/controlled-instances/${created.body.data.id}/ai-sessions/history`);

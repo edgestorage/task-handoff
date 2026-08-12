@@ -11,6 +11,7 @@ import type {
   AiSessionReference,
   AiSessionResumeResult,
   AiSessionCreateResult,
+  AiSessionForkResult,
   AiSessionOpenAppResult,
   AiSessionCloseResult,
   AiSessionPermissionMode,
@@ -59,7 +60,7 @@ import type {
 } from "@task-handoff/control-plane-client";
 import type { ControlPlaneAuthenticatedUser } from "@task-handoff/protocol/control-plane-access";
 
-export type { AiSessionCloseResult, AiSessionCreateResult, AiSessionHistoryDetail, AiSessionHistoryItem, AiSessionHistoryList, AiSessionMentionCandidate, AiSessionMentionCatalog, AiSessionMentionDiagnostic, AiSessionMentionFileSearch, AiSessionOpenAppResult, AiSessionReference, AiSessionResumeResult };
+export type { AiSessionCloseResult, AiSessionCreateResult, AiSessionForkResult, AiSessionHistoryDetail, AiSessionHistoryItem, AiSessionHistoryList, AiSessionMentionCandidate, AiSessionMentionCatalog, AiSessionMentionDiagnostic, AiSessionMentionFileSearch, AiSessionOpenAppResult, AiSessionReference, AiSessionResumeResult };
 
 export type HealthResponse = {
   ok: boolean;

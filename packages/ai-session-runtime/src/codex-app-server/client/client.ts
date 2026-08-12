@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import { Duplex } from "node:stream";
 import WebSocket from "ws";
 import type { AiSessionApprovalDecision } from "../../ai-session-control";
-import type { CodexThreadStartOptions, CodexTurnPermissionOverrides } from "./contract";
+import type { CodexThreadForkCapabilities, CodexThreadForkOptions, CodexThreadStartOptions, CodexTurnPermissionOverrides } from "./contract";
 import { approvalResponseForRequest, codexApprovalRequest } from "../protocol/approvals";
 import { codexNotification } from "../protocol/events";
 import { turnIdFromResult } from "../protocol/turn-control";
@@ -31,6 +31,39 @@ type PendingRequest = {
   timer: ReturnType<typeof setTimeout>;
 };
 
+export class CodexAppServerRpcError extends Error {
+  constructor(
+    message: string,
+    readonly rpcCode?: number,
+    readonly rpcData?: unknown,
+  ) {
+    super(message);
+    this.name = "CodexAppServerRpcError";
+  }
+}
+
+const FULL_HISTORY_FORK_MIN_VERSION = [0, 129, 0] as const;
+
+export function codexThreadForkCapabilities(userAgent: string | undefined): CodexThreadForkCapabilities {
+  const match = userAgent?.match(/(?:^|\s|\/)(\d+)\.(\d+)\.(\d+)(?:[-+\s]|$)/);
+  if (!match) return { fullHistory: false, throughTurn: false };
+  const version = [Number(match[1]), Number(match[2]), Number(match[3])] as const;
+  // Compatibility for v0.0.21: older managed Codex artifacts may expose the
+  // method but predate the stable persistent-fork parameters used below.
+  const fullHistory = compareVersion(version, FULL_HISTORY_FORK_MIN_VERSION) >= 0;
+  // Codex added stable lastTurnId in the 0.143.0 pre-release line after
+  // rust-v0.137.0. Unknown and older managed artifacts must fail closed.
+  const throughTurn = compareVersion(version, [0, 143, 0]) >= 0;
+  return { fullHistory, throughTurn };
+}
+
+function compareVersion(left: readonly number[], right: readonly number[]) {
+  for (let index = 0; index < 3; index += 1) {
+    if (left[index] !== right[index]) return left[index] - right[index];
+  }
+  return 0;
+}
+
 export class CodexAppServerClient extends EventEmitter {
   private child?: ChildProcessWithoutNullStreams;
   private proxyChild?: ChildProcessWithoutNullStreams;
@@ -40,6 +73,8 @@ export class CodexAppServerClient extends EventEmitter {
   private readonly pending = new Map<number, PendingRequest>();
   private readonly mode: CodexAppServerClientMode;
   private readonly requestTimeoutMs: number;
+  private serverUserAgent?: string;
+  private forkMethodAvailable = true;
 
   constructor(options: CodexAppServerClientOptions = {}) {
     super();
@@ -150,6 +185,40 @@ export class CodexAppServerClient extends EventEmitter {
       throw new Error("Codex thread/start returned no cwd.");
     }
     return thread;
+  }
+
+  threadForkCapabilities() {
+    const capability = codexThreadForkCapabilities(this.serverUserAgent);
+    return this.forkMethodAvailable ? capability : { fullHistory: false, throughTurn: false };
+  }
+
+  async forkThread(options: CodexThreadForkOptions) {
+    const capability = this.threadForkCapabilities();
+    if (!capability.fullHistory || (options.lastTurnId && !capability.throughTurn)) {
+      throw new CodexAppServerRpcError("Codex app-server does not support the requested thread/fork operation.", -32601);
+    }
+    try {
+      const result = await this.request("thread/fork", {
+        threadId: options.threadId,
+        ...(options.lastTurnId ? { lastTurnId: options.lastTurnId } : {}),
+        ...(options.cwd ? { cwd: options.cwd } : {}),
+        ephemeral: false,
+      });
+      const thread = result.thread && typeof result.thread === "object" && !Array.isArray(result.thread)
+        ? result.thread as CodexThread
+        : undefined;
+      if (!thread || typeof thread.id !== "string" || !thread.id.trim() || thread.id === options.threadId) {
+        throw new Error("Codex thread/fork returned no unique persistent thread identity.");
+      }
+      if (thread.ephemeral === true) throw new Error("Codex thread/fork returned an ephemeral thread.");
+      if (typeof thread.cwd !== "string" || !thread.cwd.trim()) throw new Error("Codex thread/fork returned no cwd.");
+      return thread;
+    } catch (error) {
+      if (error instanceof CodexAppServerRpcError && error.rpcCode === -32601) {
+        this.forkMethodAvailable = false;
+      }
+      throw error;
+    }
   }
 
   async readThread(threadId: string, options: { includeTurns?: boolean } = {}) {
@@ -342,10 +411,12 @@ export class CodexAppServerClient extends EventEmitter {
   }
 
   private async initialize() {
-    await this.request("initialize", {
+    const result = await this.request("initialize", {
       clientInfo: { name: "task-handoff", version: "1.0.0" },
       capabilities: { experimentalApi: true },
     });
+    this.serverUserAgent = typeof result.userAgent === "string" ? result.userAgent : undefined;
+    this.forkMethodAvailable = true;
     this.notify("initialized", {});
   }
 
@@ -473,7 +544,11 @@ export class CodexAppServerClient extends EventEmitter {
           ? message.error as JsonValue
           : undefined;
         if (error) {
-          request.reject(new Error(String(error.message || "Codex app-server error.")));
+          request.reject(new CodexAppServerRpcError(
+            String(error.message || "Codex app-server error."),
+            typeof error.code === "number" ? error.code : undefined,
+            error.data,
+          ));
         } else {
           request.resolve((message.result && typeof message.result === "object" ? message.result : {}) as JsonValue);
         }

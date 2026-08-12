@@ -1,9 +1,10 @@
 import { queryOptions, useQuery } from "@tanstack/vue-query";
 import { computed, toValue, type MaybeRefOrGetter } from "vue";
-import { api, deleteApiData, getApiData, getApiPayload, patchApiData, postApiData, putApiData, withApiError } from "./client";
+import { api, ApiError, deleteApiData, getApiData, getApiPayload, patchApiData, postApiData, putApiData, withApiError } from "./client";
 import { mergeInstanceBoardQueryData } from "./instanceBoardMerge.ts";
 import { controlPlaneQueryKeys } from "./queryKeys.ts";
 import { sharedAiSessionsApi, sharedControlPlaneClient } from "./sharedClient.ts";
+import type { ControlPlaneInstanceResourceEntry } from "@task-handoff/control-plane-client";
 export { controlPlaneQueryKeys } from "./queryKeys.ts";
 import type {
   ControlPlaneStatusResponse,
@@ -225,19 +226,21 @@ export function useModelRegistryQuery() {
   });
 }
 
-export function useModelsQuery() {
+export function useModelsQuery(enabled: MaybeRefOrGetter<boolean> = true) {
   return useQuery({
     queryKey: controlPlaneQueryKeys.models,
     queryFn: ({ signal }) => fetchModelRegistry(signal),
     select: modelConfigsFromRegistry,
+    enabled: computed(() => toValue(enabled)),
     retry: false,
   });
 }
 
-export function useNodesQuery() {
+export function useNodesQuery(enabled: MaybeRefOrGetter<boolean> = true) {
   return useQuery({
     queryKey: controlPlaneQueryKeys.nodes,
     queryFn: ({ signal }) => getApiData<Node[]>("nodes", { signal }),
+    enabled: computed(() => toValue(enabled)),
     retry: false,
   });
 }
@@ -426,23 +429,32 @@ export function deleteNodeControlPlaneConnection(nodeId: string, connectionId: s
   return deleteApiData<{ deleted: boolean }>(`nodes/${nodeId}/control-plane-connections/${encodeURIComponent(connectionId)}`);
 }
 
-function fetchInstanceBoardPayload(signal?: AbortSignal) {
-  return getApiPayload<InstanceBoardItem[], InstanceBoardPayload["meta"]>("instance-board", { signal });
+async function fetchInstanceBoardPayload(signal?: AbortSignal, instanceId = "") {
+  const route = instanceId ? `instance-board?instanceId=${encodeURIComponent(instanceId)}` : "instance-board";
+  try {
+    return await getApiPayload<InstanceBoardItem[], InstanceBoardPayload["meta"]>(route, { signal });
+  } catch (error) {
+    // Compatibility for v0.0.21: its strict query schema rejects instanceId.
+    if (!instanceId || !(error instanceof ApiError) || error.status !== 400 || error.code !== "VALIDATION_ERROR") throw error;
+    const payload = await getApiPayload<InstanceBoardItem[], InstanceBoardPayload["meta"]>("instance-board", { signal });
+    return { ...payload, data: payload.data.filter((item) => item.id === instanceId) };
+  }
 }
 
-function instanceBoardQueryOptions() {
+export function instanceBoardQueryOptions(instanceId: MaybeRefOrGetter<string> = "") {
   return {
-    queryKey: controlPlaneQueryKeys.instanceBoard,
-    queryFn: ({ signal }: { signal: AbortSignal }) => fetchInstanceBoardPayload(signal),
+    queryKey: computed(() => controlPlaneQueryKeys.scopedInstanceBoard(toValue(instanceId))),
+    queryFn: ({ signal }: { signal: AbortSignal }) => fetchInstanceBoardPayload(signal, toValue(instanceId)),
     structuralSharing: mergeInstanceBoardQueryData,
     retry: false,
   } as const;
 }
 
-export function useInstanceBoardQuery() {
+export function useInstanceBoardQuery(instanceId: MaybeRefOrGetter<string> = "", enabled: MaybeRefOrGetter<boolean> = true) {
   return useQuery({
-    ...instanceBoardQueryOptions(),
+    ...instanceBoardQueryOptions(instanceId),
     select: (payload) => payload.data,
+    enabled: computed(() => toValue(enabled)),
   });
 }
 
@@ -454,10 +466,25 @@ export function useInstanceBoardPayloadQuery() {
   return useQuery(instanceBoardQueryOptions());
 }
 
-export function useControlPlaneAiSessionsQuery() {
+export function useInstanceDirectoryQuery(enabled: MaybeRefOrGetter<boolean> = true) {
   return useQuery({
-    queryKey: ["control-plane-ai-sessions"],
-    queryFn: () => sharedAiSessionsApi.list() as Promise<ControlPlaneAiSessions>,
+    queryKey: controlPlaneQueryKeys.instanceDirectory,
+    queryFn: ({ signal }) => sharedControlPlaneClient.resources.instanceBoard(signal) as Promise<ControlPlaneInstanceResourceEntry[]>,
+    enabled: computed(() => toValue(enabled)),
+    refetchInterval: 15_000,
+    retry: false,
+  });
+}
+
+export function useControlPlaneAiSessionsQuery(instanceId: MaybeRefOrGetter<string> = "", enabled: MaybeRefOrGetter<boolean> = true) {
+  return useQuery({
+    queryKey: computed(() => controlPlaneQueryKeys.aiSessions(toValue(instanceId))),
+    queryFn: async ({ signal }) => {
+      const scope = toValue(instanceId);
+      const view = await sharedAiSessionsApi.list(signal, scope || undefined) as ControlPlaneAiSessions;
+      return scope ? { ...view, instances: view.instances.filter((entry) => entry.instanceId === scope) } : view;
+    },
+    enabled: computed(() => toValue(enabled)),
     retry: false,
   });
 }
@@ -484,6 +511,10 @@ export function createAiSession(instanceId: string, input: import("@task-handoff
   return sharedAiSessionsApi.create(instanceId, input);
 }
 
+export function forkAiSession(instanceId: string, aiSessionId: string, input: import("@task-handoff/protocol/ai-sessions").AiSessionForkInput) {
+  return sharedAiSessionsApi.fork(instanceId, aiSessionId, input);
+}
+
 export function getAiSessionWorkspace(instanceId: string, cwdFolderId: string, signal?: AbortSignal) {
   return sharedAiSessionsApi.workspace(instanceId, cwdFolderId, signal);
 }
@@ -496,10 +527,15 @@ export function closeAiSession(instanceId: string, aiSessionId: string, clientRe
   return sharedAiSessionsApi.close(instanceId, aiSessionId, clientRequestId);
 }
 
-export function useControlPlaneAppSessionsQuery() {
+export function useControlPlaneAppSessionsQuery(instanceId: MaybeRefOrGetter<string> = "", enabled: MaybeRefOrGetter<boolean> = true) {
   return useQuery({
-    queryKey: ["control-plane-app-sessions"],
-    queryFn: () => getApiData<ControlPlaneAppSessions>("app-sessions"),
+    queryKey: computed(() => controlPlaneQueryKeys.appSessions(toValue(instanceId))),
+    queryFn: async ({ signal }) => {
+      const scope = toValue(instanceId);
+      const view = await sharedControlPlaneClient.appSessions.list(signal, scope || undefined) as ControlPlaneAppSessions;
+      return scope ? { ...view, instances: view.instances.filter((entry) => entry.instanceId === scope) } : view;
+    },
+    enabled: computed(() => toValue(enabled)),
     retry: false,
   });
 }

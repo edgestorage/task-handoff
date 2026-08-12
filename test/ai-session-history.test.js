@@ -165,6 +165,29 @@ test("AI session persistence migrates creation source and ignores cross-version 
   assert.equal(migratedHistory.items[0].creationSource, "app-session");
 });
 
+test("AI session history preserves minimal fork lineage and ignores lineage extensions", () => {
+  const warnings = [];
+  const index = sanitizeAiSessionHistoryIndex({
+    schemaVersion: 1,
+    items: [{
+      ...historyItem(6),
+      creationSource: "ai-session",
+      lineage: {
+        kind: "fork",
+        parentProviderSessionId: "parent-thread",
+        throughTurnId: "turn-2",
+        parentSessionId: "legacy-derived-field",
+      },
+    }],
+  }, (warning) => warnings.push(warning));
+
+  assert.deepEqual(index.items[0].lineage, {
+    kind: "fork",
+    parentProviderSessionId: "parent-thread",
+    throughTurnId: "turn-2",
+  });
+});
+
 test("AI session creation source is first-write-wins across later App bindings", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-source-"));
   const registry = createAiSessionRegistry({ dir: root });

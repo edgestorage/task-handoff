@@ -1,4 +1,4 @@
-import type { AiSessionStatus, AiSessionSubAgent } from "@task-handoff/protocol/ai-sessions";
+import type { AiSessionLineage, AiSessionStatus, AiSessionSubAgent } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionRegistry } from "../../ai-session-registry";
 import { CodexSubAgentTracker, CodexToolActivityTracker } from "../protocol/activity";
 import { lifecycleForStatus } from "../protocol/status";
@@ -11,6 +11,7 @@ type ProjectorOptions = {
   clearApprovalSession: (sessionId: string) => void;
   attachApprovalLifecycle: (sessionId: string | undefined, lifecycle: ReturnType<typeof lifecycleForStatus>) => ReturnType<typeof lifecycleForStatus>;
   latestApprovalSummary: (sessionId: string) => string | undefined;
+  threadForkSupported: () => boolean;
   onMessageDelta?: (event: {
     sessionId: string;
     providerSessionId: string;
@@ -25,12 +26,14 @@ export class CodexAppServerSessionProjector {
   private readonly subAgentsByThread = new Map<string, CodexSubAgentTracker>();
   private readonly parentThreadsBySubAgent = new Map<string, Set<string>>();
   private readonly lifecycleByThread = new Map<string, CodexSubAgentUpdate>();
+  private readonly turnErrorsByThread = new Map<string, { turnId: string; error: string }>();
 
   constructor(private readonly options: ProjectorOptions) {}
 
   clearThread(threadId: string) {
     this.toolActivityByThread.delete(threadId);
     this.subAgentsByThread.delete(threadId);
+    this.turnErrorsByThread.delete(threadId);
     for (const [subAgentThreadId, parentThreadIds] of this.parentThreadsBySubAgent) {
       parentThreadIds.delete(threadId);
       if (!parentThreadIds.size) this.parentThreadsBySubAgent.delete(subAgentThreadId);
@@ -42,6 +45,7 @@ export class CodexAppServerSessionProjector {
     this.subAgentsByThread.clear();
     this.parentThreadsBySubAgent.clear();
     this.lifecycleByThread.clear();
+    this.turnErrorsByThread.clear();
   }
 
   apply(event: CodexAppServerEvent) {
@@ -76,7 +80,20 @@ export class CodexAppServerSessionProjector {
       return true;
     }
     if (event.type === "turn-started") {
+      this.turnErrorsByThread.delete(event.threadId);
       this.options.registry.applyRealtimeEvent(session.id, { kind: "turn-started", activeTurnId: event.turnId, providerTurnId: event.turnId, source: "realtime" });
+      return true;
+    }
+    if (event.type === "turn-error") {
+      this.turnErrorsByThread.set(event.threadId, { turnId: event.turnId, error: event.error });
+      return true;
+    }
+    if (event.type === "thread-error") {
+      this.options.registry.applyRealtimeEvent(session.id, {
+        kind: "session-error",
+        error: event.error,
+        source: "realtime",
+      });
       return true;
     }
     if (event.type === "context-compaction") {
@@ -115,6 +132,9 @@ export class CodexAppServerSessionProjector {
       return true;
     }
     if (event.type === "turn-completed") {
+      const pendingError = this.turnErrorsByThread.get(event.threadId);
+      const error = event.error || (pendingError && (!event.turnId || pendingError.turnId === event.turnId) ? pendingError.error : undefined);
+      this.turnErrorsByThread.delete(event.threadId);
       this.options.clearApprovalSession(session.id);
       this.applyToolActivity(session.id, this.toolTracker(event.threadId).clearActiveTools());
       this.options.registry.applyRealtimeEvent(session.id, {
@@ -122,7 +142,7 @@ export class CodexAppServerSessionProjector {
         activeTurnId: event.turnId,
         providerTurnId: event.turnId,
         status: event.status === "failed" ? "failed" : "idle",
-        error: event.status === "failed" ? event.error : undefined,
+        error: event.status === "failed" ? error : undefined,
         source: "realtime",
       });
       return true;
@@ -145,7 +165,7 @@ export class CodexAppServerSessionProjector {
     return false;
   }
 
-  applyThreadSnapshot(thread: CodexThread, context: { appSessionId?: string; creationSource?: AiSessionStatus["creationSource"] } = {}) {
+  applyThreadSnapshot(thread: CodexThread, context: { appSessionId?: string; creationSource?: AiSessionStatus["creationSource"]; lineage?: AiSessionLineage } = {}) {
     const threadId = typeof thread.id === "string" ? thread.id : undefined;
     if (!threadId || thread.ephemeral === true) {
       return;
@@ -154,6 +174,9 @@ export class CodexAppServerSessionProjector {
     const existing = this.options.findSession(threadId);
     const lifecycle = this.options.attachApprovalLifecycle(existing?.id, lifecycleForStatus(thread.status || {}));
     const history = summarizeThreadTurns(thread);
+    const sessionStatus = lifecycle.status === "running" || lifecycle.status === "waiting"
+      ? lifecycle.status
+      : history.latestTurnStatus === "failed" ? "failed" : lifecycle.status;
     const activity = Array.isArray(thread.turns)
       ? this.replaceThreadActivity(threadId, history.toolActivity, history.subAgents)
       : this.snapshotThreadActivity(threadId);
@@ -167,9 +190,13 @@ export class CodexAppServerSessionProjector {
       appBindingKeys: context.appSessionId ? [`app:${context.appSessionId}`] : undefined,
       actions: {
         send: true,
-        interrupt: lifecycle.status === "running" || lifecycle.status === "waiting",
-        approval: lifecycle.status === "waiting" && lifecycle.phase === "approval",
+        interrupt: sessionStatus === "running" || sessionStatus === "waiting",
+        approval: sessionStatus === "waiting" && lifecycle.phase === "approval",
+        fork: this.options.threadForkSupported(),
       },
+      lineage: context.lineage || existing?.lineage || (typeof thread.forkedFromId === "string" && thread.forkedFromId
+        ? { kind: "fork", parentProviderSessionId: thread.forkedFromId }
+        : undefined),
       title: typeof thread.name === "string" ? thread.name : undefined,
       cwd: typeof thread.cwd === "string" ? thread.cwd : undefined,
       activeTurnId: history.activeTurnId,
@@ -178,10 +205,11 @@ export class CodexAppServerSessionProjector {
       summary: existing ? this.options.latestApprovalSummary(existing.id) || history.summary : history.summary,
       lastMessage: history.lastMessage,
       lastMessageItemId: history.lastMessageItemId,
+      error: history.error,
       currentTool: activity.toolActivity.currentTool,
       toolCallsSinceLastMessage: activity.toolActivity.toolCallsSinceLastMessage,
       subAgents: activity.subAgents,
-      status: lifecycle.status,
+      status: sessionStatus,
       phase: lifecycle.phase,
       replaceActivity: true,
     });

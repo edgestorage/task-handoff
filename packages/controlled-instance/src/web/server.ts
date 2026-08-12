@@ -24,6 +24,7 @@ import type { AppCatalogItem, AppLaunchOptions } from "@task-handoff/app-runtime
 import {
   AiSessionController,
   AiSessionCreateCoordinator,
+  AiSessionForkCoordinator,
   AiSessionCloseCoordinator,
   AiSessionDiscoveryCoordinator,
   AiSessionHistoryLifecycle,
@@ -75,6 +76,8 @@ import {
   AiSessionActionResultSchema,
   AiSessionCreateInputSchema,
   AiSessionCreateResultSchema,
+  AiSessionForkInputSchema,
+  AiSessionForkResultSchema,
   AiSessionCloseInputSchema,
   AiSessionCloseResultSchema,
   AiSessionOpenAppInputSchema,
@@ -435,7 +438,13 @@ function sendAiSessionControlError(reply: { code: (statusCode: number) => { send
   }
   const record = error && typeof error === "object" ? error as Record<string, unknown> : {};
   const code = typeof record.code === "string" ? record.code : "AI_SESSION_CONTROL_FAILED";
-  const statusCode = typeof record.statusCode === "number" ? record.statusCode : code === "AI_SESSION_NOT_FOUND" ? 404 : 400;
+  const statusCode = typeof record.statusCode === "number"
+    ? record.statusCode
+    : code === "AI_SESSION_NOT_FOUND"
+      ? 404
+      : code === "AI_SESSION_FORK_WORKTREE_UNAVAILABLE"
+        ? 409
+        : 400;
   return reply.code(statusCode).send({ error: AiSessionControlErrorSchema.parse({ code, message: error instanceof Error ? error.message : String(error) }) });
 }
 
@@ -680,12 +689,24 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     },
     onDiagnostic: (diagnostic) => app.log.warn({ diagnostic }, "AI session create compensation"),
   });
-  registerRepositoryRoutes(app, {
+  const repositoryAiSessionWorkspace = registerRepositoryRoutes(app, {
     appRuntime,
     aiSessions,
     aiSessionCreate,
     managedWorktreesRoot: process.env.TASK_HANDOFF_MANAGED_WORKTREES_ROOT || path.join(storagePaths.dataDir, "managed-worktrees"),
     workspaceRoots: repositoryWorkspaceRootsFromEnv(),
+  });
+  const aiSessionFork = new AiSessionForkCoordinator({
+    registry: aiSessions,
+    controller: aiSessionController,
+    operationStorePath: path.join(storagePaths.runtimeDir, "ai-session-fork-operations.json"),
+    ensureProvider: async (agent) => {
+      await appRuntime.ensureSharedResource(agent);
+      if (agent === "codex") await codexAppServer.sync(appSessionsWithSharedCodexAppServer());
+    },
+    prepareManagedWorktree: async (source, clientRequestId) => repositoryAiSessionWorkspace.prepareForkWorktree(source.id, clientRequestId),
+    removeManagedWorktree: async (source, worktreeId) => repositoryAiSessionWorkspace.removeForkWorktree(source.id, worktreeId),
+    onDiagnostic: (diagnostic) => app.log.warn({ diagnostic }, "AI session Fork compensation"),
   });
   const aiSessionOpenApp = new AiSessionOpenAppCoordinator({
     registry: aiSessions,
@@ -1355,6 +1376,17 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
         ...body,
         cwd: body.cwd.path,
       }));
+      publishAiSessionSnapshot("control-action");
+      return { data: result };
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
+  app.post<{ Params: { id: string }; Body: unknown }>("/api/ai-sessions/:id/fork", async (request, reply) => {
+    try {
+      const body = AiSessionForkInputSchema.parse(request.body || {});
+      const result = AiSessionForkResultSchema.parse(await aiSessionFork.fork(request.params.id, body));
       publishAiSessionSnapshot("control-action");
       return { data: result };
     } catch (error: unknown) {

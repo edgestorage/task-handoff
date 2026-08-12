@@ -4,6 +4,9 @@ import { instanceDisplayName as formatInstanceDisplayName } from "../useInstance
 
 type UseWorkbenchInstancesInput<T extends InstanceBoardItem> = {
   instances: Ref<T[] | undefined>;
+  selection?:
+    | { mode: "persistent" }
+    | { mode: "standalone"; activeInstanceId: Ref<string> };
 };
 
 export type InstanceListSortMode = "name-asc" | "node-asc" | "status-asc";
@@ -39,8 +42,9 @@ function persistActiveInstanceId(id: string) {
   }
 }
 
-export function useWorkbenchInstances<T extends InstanceBoardItem>({ instances }: UseWorkbenchInstancesInput<T>) {
-  const activeInstanceId = ref(storedActiveInstanceId());
+export function useWorkbenchInstances<T extends InstanceBoardItem>({ instances, selection = { mode: "persistent" } }: UseWorkbenchInstancesInput<T>) {
+  const persistentSelection = selection.mode === "persistent";
+  const activeInstanceId = persistentSelection ? ref(storedActiveInstanceId()) : selection.activeInstanceId;
   const instanceFilter = ref("");
   const instanceSortMode = ref<InstanceListSortMode>("node-asc");
   const groupInstancesByNode = ref(storedGroupByNode());
@@ -83,14 +87,15 @@ export function useWorkbenchInstances<T extends InstanceBoardItem>({ instances }
     });
   });
 
-  const activeInstance = computed(() => sortedInstances.value.find((instance) => instance.id === activeInstanceId.value) || sortedInstances.value[0]);
+  const activeInstance = computed(() => sortedInstances.value.find((instance) => instance.id === activeInstanceId.value)
+    || (persistentSelection ? sortedInstances.value[0] : undefined));
 
-  watch(activeInstanceId, persistActiveInstanceId, { flush: "sync" });
+  if (persistentSelection) watch(activeInstanceId, persistActiveInstanceId, { flush: "sync" });
 
   watch(
     sortedInstances,
     (list) => {
-      if ((!activeInstanceId.value || !list.some((instance) => instance.id === activeInstanceId.value)) && list[0]) {
+      if (persistentSelection && (!activeInstanceId.value || !list.some((instance) => instance.id === activeInstanceId.value)) && list[0]) {
         activeInstanceId.value = list[0].id;
       }
     },

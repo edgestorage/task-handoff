@@ -133,6 +133,16 @@
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent class="ai-board-card-menu" align="end" :side-offset="6" @click.stop>
+          <DropdownMenuSub v-if="card.session.actions?.fork">
+            <DropdownMenuSubTrigger class="ai-board-card-menu-item" :disabled="isForking">
+              <GitFork :size="13" />
+              <span>{{ isForking ? t("sessions.actions.forking") : t("sessions.actions.fork") }}</span>
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent class="ai-board-card-menu">
+              <DropdownMenuItem class="ai-board-card-menu-item" @select="$emit('forkSession', card, 'current')">{{ t("sessions.actions.forkCurrent") }}</DropdownMenuItem>
+              <DropdownMenuItem class="ai-board-card-menu-item" @select="$emit('forkSession', card, 'managed-worktree')">{{ t("sessions.actions.forkWorktree") }}</DropdownMenuItem>
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
           <DropdownMenuItem class="ai-board-card-menu-item danger" :disabled="isStoppingAppSession" @select="$emit('stopAppSession', card)">
             <Square :size="13" />
             <span>{{ isStoppingAppSession ? t("sessions.actions.closingSession") : t("sessions.actions.closeSession") }}</span>
@@ -146,6 +156,8 @@
       :bound-trigger-count="boundTriggers(card).length"
       :has-app-session="Boolean(card.session.appSessionId)"
       :can-open-app="Boolean(card.session.appSessionId || card.session.actions?.openApp)"
+      :can-fork="card.session.actions?.fork === true"
+      :is-forking="isForking"
       :is-stopping-app-session="isStoppingAppSession"
       :is-trigger-bound="(configHash) => isTriggerBound(card, configHash)"
       :is-trigger-busy="(configHash) => triggerBusyKey === triggerActionKey(card, configHash)"
@@ -153,6 +165,7 @@
       :trigger-templates="triggerTemplates"
       @close-session="$emit('stopAppSession', card)"
       @open-app="$emit('openAiSessionApp', card.instance, card.session)"
+      @fork-session="$emit('forkSession', card, $event)"
       @toggle-trigger="$emit('toggleTrigger', card, $event)"
     />
   </ContextMenu>
@@ -161,13 +174,13 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { Ban, Check, ChevronLeft, ChevronRight, ExternalLink, MoreHorizontal, Square, X, Zap } from "@lucide/vue";
+import { Ban, Check, ChevronLeft, ChevronRight, ExternalLink, GitFork, MoreHorizontal, Square, X, Zap } from "@lucide/vue";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import AiSessionCardContextMenu from "../../../components/ai-session/AiSessionCardContextMenu.vue";
 import AiSessionOriginMark from "../../../components/ai-session/AiSessionOriginMark.vue";
 import AiSessionToolActivity from "../../../components/ai-session/AiSessionToolActivity.vue";
 import type { AiSessionSummary, ControlPlaneTrigger, InstanceBoardItem, InstanceWithAiSessions, TriggerDeployment } from "../../../api/types";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
 import { ContextMenu, ContextMenuTrigger } from "../../../components/ui/context-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
 import AiSessionStreamingMarkdown from "../../../components/ai-session/AiSessionStreamingMarkdown.vue";
@@ -195,6 +208,7 @@ const props = defineProps<{
   showWorkspace?: boolean;
   shortHash: (value: string) => string;
   stoppingAppSessionKey?: string;
+  forkingSessionKey?: string;
   triggerActionKey: (card: AiBoardCard, configHash: string) => string;
   triggerBusyKey: string;
   triggerButtonTitle: (card: AiBoardCard) => string;
@@ -209,6 +223,7 @@ const emit = defineEmits<{
   selectCard: [key: string];
   selectInstance: [instanceId: string];
   stopAppSession: [card: AiBoardCard];
+  forkSession: [card: AiBoardCard, mode: "current" | "managed-worktree"];
   toggleTrigger: [card: AiBoardCard, configHash: string];
 }>();
 
@@ -218,6 +233,7 @@ function approvalKey(card: AiBoardCard, decision: "allow" | "deny" | "skip") {
 
 const triggerSearch = ref("");
 const isStoppingAppSession = computed(() => props.stoppingAppSessionKey === props.card.key);
+const isForking = computed(() => props.forkingSessionKey === props.card.key);
 const filteredTriggerTemplates = computed(() => {
   const query = triggerSearch.value.trim().toLowerCase();
   if (!query) {
@@ -357,9 +373,9 @@ const filteredTriggerTemplates = computed(() => {
 }
 
 .ai-board-instance strong {
-  color: var(--ai-board-title);
+  color: var(--ai-board-muted);
   font-size: 13px;
-  font-weight: 800;
+  font-weight: 700;
   line-height: 1.2;
 }
 

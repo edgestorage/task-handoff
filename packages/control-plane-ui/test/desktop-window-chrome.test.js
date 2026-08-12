@@ -15,6 +15,11 @@ test("desktop chrome follows the authoritative preload capability", () => {
   assert.match(workbench, /windowChromeMode === "windows-overlay"/);
 });
 
+test("desktop tray settings command opens settings only in the main window", () => {
+  assert.match(workbench, /desktopBridge\?\.onOpenSettings\?\.\(\(\) => \{\s*if \(!standaloneMode\.value\) openSettings\(\);/);
+  assert.match(workbench, /stopDesktopOpenSettings\?\.\(\);/);
+});
+
 test("macOS positions its traffic lights explicitly and reserves the system safe area", () => {
   assert.match(workbench, /class="desktop-window-controls native-window-control-space macos-native-window-control-space"/);
   assert.match(styles, /calc\(env\(titlebar-area-x, 16px\) - 16px\)/);

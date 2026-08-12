@@ -50,3 +50,34 @@ test("history resume waits for source and provider identity without requiring an
   assert.match(panel, /session\.providerSessionId === result\.providerSessionId/);
   assert.match(panel, /result\.appSessionId \? session\.appSessionId === result\.appSessionId : !session\.appSessionId/);
 });
+
+test("Fork creates an authoritative Direct AI session and waits for its projection", async () => {
+  const [panel, board, card, cardMenu, queries, sharedClient] = await Promise.all([
+    source("apps/control-plane/instance-detail/AiSessionPanel.vue"),
+    source("apps/control-plane/ai-board/AiSessionBoardView.vue"),
+    source("apps/control-plane/ai-board/AiSessionCard.vue"),
+    source("components/ai-session/AiSessionCardContextMenu.vue"),
+    source("api/queries.ts"),
+    readFile(new URL("../../control-plane-client/src/ai-sessions.ts", import.meta.url), "utf8"),
+  ]);
+
+  for (const component of [panel, card]) {
+    assert.match(component, /actions\?\.fork/);
+    assert.match(component, /forkSession|forkCardSession/);
+  }
+  assert.match(cardMenu, /canFork/);
+  assert.match(cardMenu, /\$emit\('forkSession', 'current'\)/);
+  assert.match(cardMenu, /\$emit\('forkSession', 'managed-worktree'\)/);
+  assert.match(panel, /turn\?\.status === "completed" && turn\.providerTurnId/);
+  assert.match(panel, /forkSession\(selectedSession, 'current', selectedForkTurn\.id\)/);
+  assert.match(queries, /sharedAiSessionsApi\.fork\(instanceId, aiSessionId, input\)/);
+  assert.match(sharedClient, /requestData\([^\n]+AiSessionForkResultSchema/);
+  for (const component of [panel, board]) {
+    assert.match(component, /providerSessionId === result\.providerSessionId/);
+    assert.match(component, /await new Promise\(\(resolve\) => setTimeout\(resolve, 100\)\)/);
+    assert.match(component, /workspace: \{ mode \}/);
+    assert.match(component, /requestKey = `[^`]+:\$\{mode\}(?::\$\{throughTurnId \|\| "latest"\})?`/);
+  }
+  assert.doesNotMatch(panel, /registry\.put|optimistic/i);
+  assert.doesNotMatch(board, /registry\.put|optimistic/i);
+});

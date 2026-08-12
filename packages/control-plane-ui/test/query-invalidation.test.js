@@ -47,7 +47,7 @@ const expectedDomains = {
     controlPlaneQueryKeys.controlPlaneProxyDiagnostics,
     controlPlaneQueryKeys.controlPlaneProxyPendingClaims,
   ],
-  instances: [controlPlaneQueryKeys.instanceBoard],
+  instances: [controlPlaneQueryKeys.instanceBoard, controlPlaneQueryKeys.instanceDirectory],
   chat: [controlPlaneQueryKeys.chatBridges, controlPlaneQueryKeys.chatStatus],
 };
 
@@ -92,6 +92,7 @@ test("combined domains invalidate overlapping query projections once", async () 
     controlPlaneQueryKeys.images,
     controlPlaneQueryKeys.imageOptions,
     controlPlaneQueryKeys.nodeImageCatalog(),
+    controlPlaneQueryKeys.instanceDirectory,
   ]);
 });
 

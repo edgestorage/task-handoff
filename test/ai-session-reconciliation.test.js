@@ -56,6 +56,20 @@ test("AI session reconciliation preserves canonical identity and activity prefer
   assert.deepEqual(new AiSessionReconciliationService().canonicalSessions([sparse, active]).map(({ id }) => id), ["active"]);
 });
 
+test("AI session canonical identity prefers provider threads over shared app bindings", () => {
+  const service = new AiSessionReconciliationService();
+  const sessions = [
+    session("fork-a", { appSessionId: "shared-app", providerSessionId: "thread-a" }),
+    session("fork-b", { appSessionId: "shared-app", providerSessionId: "thread-b" }),
+    session("legacy-a", { appSessionId: "legacy-app" }),
+    session("legacy-b", { appSessionId: "legacy-app", updatedAt: "2026-01-02T00:00:00.000Z" }),
+  ];
+
+  const canonical = service.canonicalSessions(sessions);
+  assert.deepEqual(canonical.filter((item) => item.providerSessionId).map((item) => item.id).sort(), ["fork-a", "fork-b"]);
+  assert.equal(canonical.filter((item) => item.appSessionId === "legacy-app").length, 1);
+});
+
 test("AI session app binding reconciliation hides, expires, and restores orphans", () => {
   const service = new AiSessionReconciliationService();
   const sessions = [session("bound", { appSessionId: "app-1" }), session("free")];

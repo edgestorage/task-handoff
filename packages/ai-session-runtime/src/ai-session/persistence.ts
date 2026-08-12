@@ -1,4 +1,5 @@
 import {
+  AiSessionLineageSchema,
   AiSessionMessageAttachmentMetaSchema,
   AiSessionQueuedMessageSchema,
   AiSessionReferenceSchema,
@@ -19,7 +20,7 @@ import type {
 import { compact, messageText, normalizeTurns } from "../ai-session-turns";
 
 const PERSISTED_SESSION_FIELDS = new Set([
-  "id", "agent", "creationSource", "appSessionId", "appId", "providerSessionId", "providerMeta", "appBindingKeys", "actions",
+  "id", "agent", "creationSource", "appSessionId", "appId", "providerSessionId", "lineage", "providerMeta", "appBindingKeys", "actions",
   "activeTurnId", "title", "cwd", "cwdFolderId", "userPrompt", "turns", "status", "phase", "summary", "lastMessage", "lastMessageItemId",
   "currentTool", "toolCallsSinceLastMessage", "subAgents", "transcriptPath", "transcriptSize", "startedAt", "updatedAt",
   "completedAt", "error", "counters", "queue",
@@ -111,6 +112,7 @@ function normalizeActions(value: unknown): AiSessionStatus["actions"] {
     send: typeof record.send === "boolean" ? record.send : undefined,
     interrupt: typeof record.interrupt === "boolean" ? record.interrupt : undefined,
     approval: typeof record.approval === "boolean" ? record.approval : undefined,
+    fork: typeof record.fork === "boolean" ? record.fork : undefined,
     openApp: typeof record.openApp === "boolean" ? record.openApp : undefined,
     close: typeof record.close === "boolean" ? record.close : undefined,
   };
@@ -248,6 +250,7 @@ export function sanitizePersistedAiSession(value: unknown): AiSessionStatus | un
   warnUnknownFields(record, PERSISTED_SESSION_FIELDS, "session");
   const appBindingKeys = normalizeStringArray(record.appBindingKeys, 20, 240);
   const actions = normalizeActions(record.actions);
+  const lineage = AiSessionLineageSchema.safeParse(record.lineage);
   const currentTool = normalizeTool(record.currentTool);
   const completedAt = typeof record.completedAt === "string" && AiSessionStatusSchema.shape.completedAt.safeParse(record.completedAt).success
     ? record.completedAt
@@ -259,6 +262,7 @@ export function sanitizePersistedAiSession(value: unknown): AiSessionStatus | un
     ...(typeof record.appSessionId === "string" && record.appSessionId ? { appSessionId: compact(record.appSessionId, 120) } : {}),
     ...(typeof record.appId === "string" && record.appId ? { appId: compact(record.appId, 120) } : {}),
     ...(typeof record.providerSessionId === "string" && record.providerSessionId ? { providerSessionId: compact(record.providerSessionId, 240) } : {}),
+    ...(lineage.success ? { lineage: lineage.data } : {}),
     ...(record.providerMeta && typeof record.providerMeta === "object" && !Array.isArray(record.providerMeta) ? { providerMeta: record.providerMeta } : {}),
     ...(appBindingKeys ? { appBindingKeys } : {}),
     ...(actions ? { actions } : {}),

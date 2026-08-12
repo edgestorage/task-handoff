@@ -18,11 +18,24 @@ export type CodexThreadStartOptions = {
   permissions?: CodexTurnPermissionOverrides;
 };
 
+export type CodexThreadForkOptions = {
+  threadId: string;
+  lastTurnId?: string;
+  cwd?: string;
+};
+
+export type CodexThreadForkCapabilities = {
+  fullHistory: boolean;
+  throughTurn: boolean;
+};
+
 export type CodexAppServerClientLike = EventEmitter & {
   start: () => Promise<void>;
   stop: () => void;
   listLoadedThreadIds: () => Promise<string[]>;
+  threadForkCapabilities?: () => CodexThreadForkCapabilities;
   startThread?: (options: CodexThreadStartOptions) => Promise<CodexThread>;
+  forkThread?: (options: CodexThreadForkOptions) => Promise<CodexThread>;
   readThread?: (threadId: string, options?: { includeTurns?: boolean }) => Promise<CodexThread | undefined>;
   listThreads?: () => Promise<CodexThread[]>;
   activeThreadExists?: (threadId: string) => Promise<boolean>;

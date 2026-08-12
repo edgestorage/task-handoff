@@ -469,6 +469,19 @@
   white-space: nowrap;
 }
 
+.session-status-bar-menu-item {
+  position: relative;
+  padding-left: 30px;
+}
+
+.session-status-bar-menu-item > span:first-child {
+  position: absolute;
+  left: 8px;
+  width: 14px;
+  height: 14px;
+  overflow: visible;
+}
+
 .instance-action-item:hover,
 .instance-action-item:focus-visible,
 .instance-action-item[data-highlighted] {
@@ -800,6 +813,10 @@
   box-shadow: none;
 }
 
+.session-preview.toolbar-in-titlebar {
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
 .session-preview[data-state="online"] {
   border-color: var(--brand-accent-muted);
 }
@@ -875,6 +892,17 @@
   color: var(--text-muted);
   font-size: 12px;
   padding: 0 8px;
+}
+
+.session-preview-toolbar.in-titlebar {
+  -webkit-app-region: drag;
+  align-self: stretch;
+}
+
+.session-preview-toolbar.in-titlebar :is(button, input, [role="tab"], [role="button"]),
+.session-preview-toolbar.in-titlebar .session-tab-sortable-shell,
+.session-preview-toolbar.in-titlebar .session-toolbar-split-divider {
+  -webkit-app-region: no-drag;
 }
 
 .session-preview-toolbar.split {
