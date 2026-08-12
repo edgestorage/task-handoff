@@ -7,12 +7,23 @@ const panel = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail
 const floatingDock = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionFloatingDock.vue", import.meta.url), "utf8");
 const board = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionBoardView.vue", import.meta.url), "utf8");
 const displayHelpers = fs.readFileSync(new URL("../src/apps/control-plane/useInstanceSessions.ts", import.meta.url), "utf8");
+const repositoryEnvironment = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/RepositoryEnvironment.vue", import.meta.url), "utf8");
 
 test("AI session details expose compact message navigation without a visible label", () => {
   assert.match(navigator, /<small>\{\{ index \+ 1 \}\} \/ \{\{ count \}\}<\/small>/);
   assert.doesNotMatch(navigator, />\s*Turn\b/i);
   assert.match(panel, /<AiSessionTurnNavigator[\s\S]*?:count="promptCount\(selectedSession\)"[\s\S]*?@previous="previousPrompt\(selectedSession\)"[\s\S]*?@next="nextPrompt\(selectedSession\)"/);
   assert.match(floatingDock, /<AiSessionTurnNavigator[\s\S]*?:count="promptCount"[\s\S]*?@previous="\$emit\('previousPrompt'\)"[\s\S]*?@next="\$emit\('nextPrompt'\)"/);
+});
+
+test("AI session detail toolbar exposes named tooltips without changing the details tooltip", () => {
+  assert.match(navigator, /<TooltipContent side="bottom"[^>]*>\{\{ previousLabel \|\| t\('sessions\.actions\.previousMessage'/);
+  assert.match(navigator, /<TooltipContent side="bottom"[^>]*>\{\{ nextLabel \|\| t\('sessions\.actions\.nextMessage'/);
+  assert.match(repositoryEnvironment, /<TooltipContent side="bottom"[^>]*>\{\{ t\("repository\.environment\.title"\) \}\}/);
+  for (const action of ["openApp", "fork", "forkThroughTurn", "closeSession"]) {
+    assert.match(panel, new RegExp(`<TooltipContent side="bottom"[^>]*>\\{\\{ t\\("sessions\\.actions\\.${action}"\\) \\}\\}`));
+  }
+  assert.match(panel, /<TooltipContent class="session-ai-info-tooltip"[\s\S]*?<dl>/);
 });
 
 test("AI session details render messages without redundant section titles", () => {

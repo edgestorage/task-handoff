@@ -3,6 +3,7 @@ import type { FitAddon } from "@xterm/addon-fit";
 import type { Terminal as XTermTerminal } from "@xterm/xterm";
 import { TTY_STREAM_PROTOCOL_VERSION } from "@task-handoff/protocol/app-sessions";
 import { BoundedInactiveLruCache } from "./terminalPreviewCache";
+import { canPublishTerminalResize } from "./terminalResizeOwnership.ts";
 
 export const MAX_CACHED_TERMINAL_PREVIEWS = 5;
 
@@ -70,6 +71,7 @@ class CachedTerminalPreview {
   private repaintRequested = false;
   private initialResizeRequested = false;
   private restoringSnapshot = false;
+  private applyingRemoteResize = false;
   private lastSentDimensions?: { cols: number; rows: number };
   private disposed = false;
   private initialization?: Promise<void>;
@@ -79,6 +81,9 @@ class CachedTerminalPreview {
     this.key = key;
     this.socketUrl = socketUrl;
     this.cacheId = terminalPreviewCacheId(scope, key);
+    window.addEventListener("focus", this.handleWindowFocus);
+    window.addEventListener("blur", this.handleWindowBlur);
+    document.addEventListener("visibilitychange", this.handleVisibilityChange);
   }
 
   async attach(host: HTMLElement) {
@@ -128,6 +133,9 @@ class CachedTerminalPreview {
     this.fit = undefined;
     this.container?.remove();
     this.container = undefined;
+    window.removeEventListener("focus", this.handleWindowFocus);
+    window.removeEventListener("blur", this.handleWindowBlur);
+    document.removeEventListener("visibilitychange", this.handleVisibilityChange);
   }
 
   private async ensureTerminal(host: HTMLElement) {
@@ -193,7 +201,7 @@ class CachedTerminalPreview {
           this.restoringSnapshot = true;
           this.cancelScheduledResize();
           if (Number.isInteger(message.cols) && Number.isInteger(message.rows) && Number(message.cols) > 0 && Number(message.rows) > 0) {
-            this.terminal.resize(Number(message.cols), Number(message.rows));
+            this.applyRemoteDimensions(Number(message.cols), Number(message.rows));
           }
           this.terminal.reset();
           const pendingEscape = typeof message.pendingEscape === "string" ? message.pendingEscape : "";
@@ -205,7 +213,7 @@ class CachedTerminalPreview {
         } else if (message.type === "output" && typeof message.data === "string") {
           this.terminal.write(message.data);
         } else if (message.type === "resize" && Number.isInteger(message.cols) && Number.isInteger(message.rows) && Number(message.cols) > 0 && Number(message.rows) > 0) {
-          this.terminal.resize(Number(message.cols), Number(message.rows));
+          this.applyRemoteDimensions(Number(message.cols), Number(message.rows));
         } else if (message.type === "error") {
           this.terminal.writeln(String(message.message || "TTY session error."));
         }
@@ -220,7 +228,12 @@ class CachedTerminalPreview {
 
   private sendResize(cols: number, rows: number) {
     if (
-      !this.active
+      !canPublishTerminalResize({
+        active: this.active,
+        visible: document.visibilityState === "visible",
+        focused: document.hasFocus(),
+        applyingRemoteResize: this.applyingRemoteResize || this.restoringSnapshot,
+      })
       || this.restoringSnapshot
       || this.socket?.readyState !== WebSocket.OPEN
       || (this.lastSentDimensions?.cols === cols && this.lastSentDimensions.rows === rows)
@@ -228,6 +241,33 @@ class CachedTerminalPreview {
     this.lastSentDimensions = { cols, rows };
     this.socket.send(JSON.stringify({ type: "resize", cols, rows }));
   }
+
+  private applyRemoteDimensions(cols: number, rows: number) {
+    if (!this.terminal) return;
+    this.applyingRemoteResize = true;
+    this.lastSentDimensions = { cols, rows };
+    try {
+      this.terminal.resize(cols, rows);
+    } finally {
+      this.applyingRemoteResize = false;
+    }
+  }
+
+  private readonly handleWindowFocus = () => {
+    if (this.active) this.scheduleResize({ repaint: true, sendInitialSize: true });
+  };
+
+  private readonly handleWindowBlur = () => {
+    this.cancelScheduledResize();
+  };
+
+  private readonly handleVisibilityChange = () => {
+    if (document.visibilityState === "visible" && document.hasFocus()) {
+      this.scheduleResize({ repaint: true, sendInitialSize: true });
+    } else {
+      this.cancelScheduledResize();
+    }
+  };
 
   private cancelScheduledResize() {
     this.resizeGeneration += 1;

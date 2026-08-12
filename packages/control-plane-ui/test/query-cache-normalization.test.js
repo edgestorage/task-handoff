@@ -26,8 +26,8 @@ test("node local-folder query options share the centralized key factory", () => 
 test("plain and payload hooks share one payload cache per resource", () => {
   assert.equal((source.match(/queryKey: controlPlaneQueryKeys\.nodeRuntimes/g) || []).length, 2);
   assert.equal((source.match(/queryFn: \(\{ signal \}\) => fetchNodeRuntimesPayload\(signal\)/g) || []).length, 2);
-  assert.match(source, /function instanceBoardQueryOptions\(\)[\s\S]*queryKey: controlPlaneQueryKeys\.instanceBoard[\s\S]*queryFn: \(\{ signal \}[^)]*\) => fetchInstanceBoardPayload\(signal\)[\s\S]*structuralSharing: mergeInstanceBoardQueryData/);
-  assert.match(source, /useInstanceBoardQuery\(\)[\s\S]*\.\.\.instanceBoardQueryOptions\(\)/);
+  assert.match(source, /export function instanceBoardQueryOptions\(instanceId:[\s\S]*queryKey: computed\(\(\) => controlPlaneQueryKeys\.scopedInstanceBoard\(toValue\(instanceId\)\)\)[\s\S]*queryFn: \(\{ signal \}[^)]*\) => fetchInstanceBoardPayload\(signal, toValue\(instanceId\)\)[\s\S]*structuralSharing: mergeInstanceBoardQueryData/);
+  assert.match(source, /useInstanceBoardQuery\(instanceId:[\s\S]*\.\.\.instanceBoardQueryOptions\(instanceId\)/);
   assert.match(source, /useInstanceBoardPayloadQuery\(\)[\s\S]*useQuery\(instanceBoardQueryOptions\(\)\)/);
   assert.doesNotMatch(source, /queryKey: \["control-plane-node-runtimes"\]/);
   assert.doesNotMatch(source, /queryKey: \["instance-board"\]/);

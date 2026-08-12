@@ -271,7 +271,7 @@ export function routeAuthorization(method: string, url: string): { action: Contr
       if (method === "POST" && /\/ai-sessions$/.test(path)) return { action: "send-message", resource: { type: "ai-session" } };
       if (path.endsWith("/approval")) return { action: "approve", resource: { type: "ai-session" } };
       if (path.endsWith("/interrupt")) return { action: "interrupt", resource: { type: "ai-session" } };
-      if (path.endsWith("/resume") || path.endsWith("/commands") || path.includes("/messages") || path.includes("/queue/")) {
+      if (path.endsWith("/resume") || path.endsWith("/fork") || path.endsWith("/commands") || path.includes("/messages") || path.includes("/queue/")) {
         return { action: "send-message", resource: { type: "ai-session" } };
       }
       if (path.endsWith("/read") || path.endsWith("/mentions/files")) {
@@ -687,7 +687,9 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     return nodeAgentInstallScript();
   });
 
-  app.get("/api/events", { websocket: true }, async (socket) => {
+  app.get("/api/events", { websocket: true }, async (socket, request) => {
+    const eventQuery = request.query as { instanceId?: string };
+    const eventInstanceId = typeof eventQuery.instanceId === "string" ? eventQuery.instanceId.trim() : "";
     const pendingFrames: string[] = [];
     let handshakeSent = false;
     const gatedSocket = {
@@ -701,18 +703,18 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
         socket.on(event, listener);
       },
     };
-    events.connect(gatedSocket);
+    events.connect(gatedSocket, { instanceIds: eventInstanceId ? [eventInstanceId] : undefined });
     const [aiStreams, appStreams] = await Promise.all([
       aiSessionAggregator.streamDescriptors(),
       appSessionAggregator.streamDescriptors(),
     ]);
     events.send(socket, SessionStreamsHelloEventType, {
       protocolVersion: SESSION_STREAM_PROTOCOL_VERSION,
-      streams: [...aiStreams, ...appStreams],
+      streams: [...aiStreams, ...appStreams].filter((stream) => !eventInstanceId || stream.instanceId === eventInstanceId),
     });
     handshakeSent = true;
     for (const frame of pendingFrames) socket.send(frame);
-    for (const snapshot of imagePullProgress.snapshots()) {
+    for (const snapshot of imagePullProgress.snapshots().filter((entry) => !eventInstanceId || entry.instanceId === eventInstanceId)) {
       events.send(socket, ImagePullTerminalEventType.Snapshot, snapshot, {
         topic: "instances",
         scope: { instanceId: snapshot.instanceId },

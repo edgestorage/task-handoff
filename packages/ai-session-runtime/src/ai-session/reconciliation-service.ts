@@ -40,11 +40,11 @@ export type AiSessionPruneResult = {
 };
 
 export function sessionIdentityKey(session: AiSessionStatus) {
-  if (session.appSessionId) {
-    return `${session.agent}:app:${session.appSessionId}`;
-  }
   if (session.providerSessionId) {
     return `${session.agent}:provider:${session.providerSessionId}`;
+  }
+  if (session.appSessionId) {
+    return `${session.agent}:app:${session.appSessionId}`;
   }
   if (session.transcriptPath) {
     return `${session.agent}:transcript:${session.transcriptPath}`;

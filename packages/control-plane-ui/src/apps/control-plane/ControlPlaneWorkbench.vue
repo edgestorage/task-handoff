@@ -1,5 +1,5 @@
 <template>
-  <div class="control-plane-shell">
+  <div class="control-plane-shell" :class="{ 'standalone-instance-detail': standaloneMode }">
     <header class="control-plane-topbar" @dblclick="controlWindow('toggle-maximize')">
       <div class="topbar-left">
         <div
@@ -27,13 +27,18 @@
           <strong>{{ topbarTitle }}</strong>
         </div>
         <div v-else class="control-plane-title control-plane-instance-switcher-shell">
-          <span class="control-plane-kicker">{{ topbarKicker }}</span>
-          <DropdownMenu>
+          <span v-if="!standaloneMode" class="control-plane-kicker">{{ topbarKicker }}</span>
+          <DropdownMenu :open="instanceSwitcherOpen" @update:open="updateInstanceSwitcherOpen">
             <DropdownMenuTrigger as-child>
               <button
                 type="button"
                 class="control-plane-instance-switcher"
                 :aria-label="t('instances.list.switchInstance')"
+                @pointerdown.capture="startInstanceSwitcherPointer"
+                @pointermove="moveInstanceSwitcherPointer"
+                @pointerup="finishInstanceSwitcherPointer"
+                @pointercancel="cancelInstanceSwitcherPointer"
+                @click.capture="consumeInstanceSwitcherClick"
                 @dblclick.stop
               >
               <span class="control-plane-instance-switcher-title">
@@ -47,25 +52,25 @@
             <ScrollArea
               class="control-plane-instance-menu-scroll"
               :horizontal="false"
-              :style="{ '--instance-menu-height': `${Math.max(sortedInstances.length, 1) * 52 - 2}px` }"
+              :style="{ '--instance-menu-height': `${Math.max(switcherInstances.length, 1) * 52 - 2}px` }"
             >
               <div class="control-plane-instance-menu-list">
                 <DropdownMenuItem
-                  v-for="instance in sortedInstances"
+                  v-for="instance in switcherInstances"
                   :key="instance.id"
                   class="control-plane-instance-menu-item"
-                  :class="{ selected: instance.id === activeInstance?.id }"
-                  :aria-current="instance.id === activeInstance?.id ? 'true' : undefined"
+                  :class="{ selected: instance.id === selectedInstanceId }"
+                  :aria-current="instance.id === selectedInstanceId ? 'true' : undefined"
                   @select="selectInstance(instance.id)"
                 >
                   <span class="status-dot" :data-state="instance.connectionStatus" />
                   <span class="control-plane-instance-menu-copy">
-                    <strong>{{ instanceDisplayName(instance) }}</strong>
-                    <small>{{ instance.node?.name || instance.nodeId }}</small>
+                    <strong>{{ switcherInstanceName(instance) }}</strong>
+                    <small>{{ switcherNodeName(instance) }}</small>
                   </span>
-                  <Check v-if="instance.id === activeInstance?.id" class="control-plane-instance-menu-check" :size="16" aria-hidden="true" />
+                  <Check v-if="instance.id === selectedInstanceId" class="control-plane-instance-menu-check" :size="16" aria-hidden="true" />
                 </DropdownMenuItem>
-                <DropdownMenuItem v-if="!sortedInstances.length" class="control-plane-instance-menu-item" disabled>
+                <DropdownMenuItem v-if="!switcherInstances.length" class="control-plane-instance-menu-item" disabled>
                   {{ t("instances.list.noMatches") }}
                 </DropdownMenuItem>
               </div>
@@ -73,8 +78,9 @@
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
+        <div v-if="standaloneMode" id="instance-detail-titlebar-tabs" class="instance-detail-titlebar-tabs" />
       </div>
-      <div class="control-plane-actions">
+      <div v-if="!standaloneMode" class="control-plane-actions">
         <TooltipProvider v-if="serverUpdateAvailable" :delay-duration="120">
           <Tooltip>
             <TooltipTrigger as-child>
@@ -124,11 +130,16 @@
           aria-hidden="true"
         />
       </div>
+      <div
+        v-else-if="showWindowsNativeWindowControlSpace"
+        class="desktop-window-controls native-window-control-space windows-native-window-control-space"
+        aria-hidden="true"
+      />
     </header>
 
-    <main class="control-plane-workbench" :class="{ 'instances-collapsed': instancesCollapsed, 'board-mode': !instanceViewMode || settingsMode }" :style="workbenchStyle">
+    <main class="control-plane-workbench" :class="{ 'instances-collapsed': instancesCollapsed, 'board-mode': !instanceViewMode || settingsMode, 'standalone-detail-mode': standaloneMode }" :style="standaloneMode ? undefined : workbenchStyle">
       <InstanceList
-        v-if="instanceViewMode && !settingsMode"
+        v-if="!standaloneMode && instanceViewMode && !settingsMode"
         v-model:filter="instanceFilter"
         :active-action-label="activeActionLabel"
         :active-instance-id="activeInstance?.id"
@@ -148,6 +159,7 @@
         @expand="expandInstances"
         @new-instance="newInstanceOpen = true"
         @open-settings="openInstanceSettings"
+        @open-window="openInstanceWindow"
         @save-template="openSaveEnvironmentTemplate"
         @resize-start="startInstanceResize"
         @run-action="runRowInstanceAction"
@@ -157,7 +169,7 @@
       />
 
       <InstanceBoardView
-        v-if="boardMode && !settingsMode"
+        v-if="!standaloneMode && boardMode && !settingsMode"
         v-model:app-filter="boardBulkAppFilter"
         v-model:filter="boardFilter"
         v-model:group-by-node="groupInstancesByNode"
@@ -200,7 +212,7 @@
       />
 
       <AiSessionBoardView
-        v-if="aiBoardMode && !settingsMode"
+        v-if="!standaloneMode && aiBoardMode && !settingsMode"
         v-model:filter="aiBoardFilter"
         :approval-busy-key="aiApprovalBusyKey"
         :error="board.error.value ? errorText(board.error.value) : ''"
@@ -213,7 +225,7 @@
       />
 
       <SettingsModal
-        v-if="settingsMode"
+        v-if="!standaloneMode && settingsMode"
         :choose-project-folder="desktopBridge?.chooseProjectFolder"
         :initial-section="settingsSection"
         :instances="sortedInstances"
@@ -240,8 +252,8 @@
         :app-launch-button-title="appLaunchButtonTitle"
         :can-launch-app="canLaunchApp"
         :copied-text="copiedText"
-        :error="board.error.value ? errorText(board.error.value) : ''"
-        :instance="activeInstanceWithAiSessions"
+        :error="standaloneDetailError || (board.error.value ? errorText(board.error.value) : '')"
+        :instance="standaloneOwnershipReady ? activeInstanceWithAiSessions : undefined"
         :instance-display-name="instanceDisplayName"
         :is-instance-action-busy="isInstanceActionBusy"
         :last-refresh-label="lastRefreshLabel"
@@ -250,7 +262,8 @@
         :left-session-tabs="leftOrderedSessionTabs"
         :launchable-apps="launchableApps"
         :launching-app="launchingApp"
-        :loading="board.isLoading.value"
+        :loading="board.isLoading.value || (standaloneMode && !standaloneOwnershipResolved)"
+        :standalone="standaloneMode"
         :resource-metrics="activeInstanceResourceMetrics"
         :resource-metrics-error="activeInstanceResourceMetricsError"
         :right-session="rightSession"
@@ -266,12 +279,14 @@
         :ordered-session-tabs="orderedSessionTabs"
         :session-tabs="sessionTabs"
         :stopping-session-id="stoppingSessionId"
+        :session-toolbar-target="standaloneMode && sessionPreviewExpanded && !hasSessionSplit ? '#instance-detail-titlebar-tabs' : undefined"
         @copy-registration="copyRegistration"
         @launch-app="launchSelectedApp"
         @new-instance="newInstanceOpen = true"
         @open-ai-session-app="openAiSessionApp"
         @open-repository-workspace="openRepositoryWorkspace"
         @open-settings="openInstanceSettings"
+        @open-window="openInstanceWindow"
         @open-url="openAppUrl"
         @move-session-tab="moveSessionTab"
         @move-session-to-pane="moveSessionToPane"
@@ -286,7 +301,21 @@
       />
     </main>
 
-    <NewInstanceModal v-if="newInstanceOpen" :choose-project-folder="desktopBridge?.chooseProjectFolder" @close="newInstanceOpen = false" @created="handleInstanceCreated" />
+    <Transition name="instance-switch-loading">
+      <div
+        v-if="standaloneLoadingOverlayVisible"
+        class="instance-switch-loading-overlay"
+        role="status"
+        aria-live="polite"
+      >
+        <span class="instance-switch-loading-indicator">
+          <LoaderCircle :size="17" aria-hidden="true" />
+          {{ t("instances.detail.loading") }}
+        </span>
+      </div>
+    </Transition>
+
+    <NewInstanceModal v-if="!standaloneMode && newInstanceOpen" :choose-project-folder="desktopBridge?.chooseProjectFolder" @close="newInstanceOpen = false" @created="handleInstanceCreated" />
 
     <ConfigSyncDialog
       v-model:open="configSyncDialogOpen"
@@ -331,16 +360,17 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { formatTime } from "../../i18n/presentation";
 import type { SupportedLocale } from "../../i18n/locale";
 import { translateApiError } from "../../i18n/apiError";
 import { useQueries, useQueryClient } from "@tanstack/vue-query";
 import { useEventListener } from "@vueuse/core";
-import { Bot, Check, ChevronDown, Download, House, LayoutGrid, LogOut, Maximize2, Minus, RefreshCw, Settings, X } from "@lucide/vue";
+import { Bot, Check, ChevronDown, Download, House, LayoutGrid, LoaderCircle, LogOut, Maximize2, Minus, RefreshCw, Settings, X } from "@lucide/vue";
 import "@xterm/xterm/css/xterm.css";
-import { controlPlaneQueryKeys, getInstanceAppManagement, getInstanceResourceMetrics, installInstanceApp, logoutControlPlane, nodeLocalFoldersQueryOptions, renameAppSession, resolveAiSessionApproval, saveEnvironmentTemplate, uninstallInstanceApp, updateControlledInstance, useAuthSessionQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useInstanceBoardQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
+import { controlPlaneQueryKeys, getInstanceAppManagement, getInstanceResourceMetrics, installInstanceApp, instanceBoardQueryOptions, logoutControlPlane, nodeLocalFoldersQueryOptions, renameAppSession, resolveAiSessionApproval, saveEnvironmentTemplate, uninstallInstanceApp, updateControlledInstance, useAuthSessionQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useInstanceBoardQuery, useInstanceDirectoryQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
+import type { ControlPlaneInstanceResourceEntry } from "@task-handoff/control-plane-client";
 import type { ConfigSyncDirection } from "@task-handoff/protocol/config-sync";
 import { type AiSessionSummary, type AppManagementOperation, type InstanceBoardItem, type InstanceBoardItemWithAppSessions, type InstanceResourceMetrics, type NodeLocalFolder, type UpdateControlledInstanceInput } from "../../api/types";
 import { Button } from "../../components/ui/button";
@@ -371,6 +401,8 @@ import { useAppSessionStore } from "./useAppSessionStore";
 import { useControlPlaneEvents } from "./useControlPlaneEvents";
 import { useControlPlaneToasts } from "./useControlPlaneToasts";
 import { useImagePullProgress } from "./useImagePullProgress";
+import { buildInstanceDetailPath, openInstanceDetailWindow, switchDesktopInstanceDetailWindow } from "./instance-detail/instanceDetailWindow";
+import { createWebInstanceWindowCoordinator } from "./instance-detail/instanceWindowCoordinator";
 
 type ProjectFolderSelection = string | { path: string; ownerNodeId?: string };
 
@@ -378,9 +410,34 @@ type DesktopBridge = {
   chooseProjectFolder?: () => Promise<ProjectFolderSelection | undefined>;
   openAppWindow?: (url: string) => Promise<{ ok: boolean }>;
   openControlPlaneWindow?: (url: string) => Promise<{ ok: boolean }>;
+  openInstanceDetailWindow?: (instanceId: string) => Promise<{ ok: boolean; action?: string; code?: string }>;
+  switchInstanceDetailWindow?: (instanceId: string) => Promise<{ ok: boolean; action?: "switched" | "focused" | "error"; code?: string }>;
+  windowDrag?: (phase: "start" | "move" | "end", screenX: number, screenY: number) => void;
+  onOpenSettings?: (listener: () => void) => () => void;
   windowChrome?: { mode: "custom" | "macos-overlay" | "windows-overlay" };
   windowAction?: (action: "minimize" | "toggle-maximize" | "close") => Promise<{ ok: boolean; maximized?: boolean }>;
 };
+
+const props = withDefaults(defineProps<{
+  mode?: "workbench" | "standalone";
+  initialInstanceId?: string;
+}>(), {
+  mode: "workbench",
+  initialInstanceId: "",
+});
+const standaloneMode = computed(() => props.mode === "standalone");
+const standaloneInstanceId = ref(props.initialInstanceId);
+const standaloneOwnershipResolved = ref(!standaloneMode.value);
+const standaloneOwnershipReady = ref(!standaloneMode.value);
+const standaloneOwnershipConflict = ref(false);
+const instanceSwitcherOpen = ref(false);
+const instanceSwitchLoadingVisible = ref(false);
+const initialStandaloneLoadingVisible = ref(standaloneMode.value);
+const initialStandaloneLoadingFinished = ref(!standaloneMode.value);
+let instanceSwitcherPointer: { pointerId: number; startScreenX: number; startScreenY: number; moved: boolean } | undefined;
+let suppressInstanceSwitcherClick = false;
+let instanceSwitchLoadingTimer: number | undefined;
+let instanceSwitchSequence = 0;
 
 type BoardSize = "small" | "medium" | "large";
 type WorkbenchView = "instance" | "board" | "ai";
@@ -407,11 +464,27 @@ const queryClient = useQueryClient();
 const { locale, t } = useI18n();
 const authSession = useAuthSessionQuery();
 const controlPlane = useControlPlaneStatusQuery();
-const board = useInstanceBoardQuery();
-const models = useModelsQuery();
-const controlPlaneAiSessions = useControlPlaneAiSessionsQuery();
-const controlPlaneAppSessions = useControlPlaneAppSessionsQuery();
-const nodes = useNodesQuery();
+const sessionQueryInstanceId = computed(() => standaloneMode.value ? standaloneInstanceId.value : "");
+const sessionQueriesEnabled = computed(() => !standaloneMode.value || standaloneOwnershipReady.value);
+const board = useInstanceBoardQuery(sessionQueryInstanceId, sessionQueriesEnabled);
+const instanceDirectory = useInstanceDirectoryQuery(standaloneMode);
+const controlPlaneAiSessions = useControlPlaneAiSessionsQuery(sessionQueryInstanceId, sessionQueriesEnabled);
+const controlPlaneAppSessions = useControlPlaneAppSessionsQuery(sessionQueryInstanceId, sessionQueriesEnabled);
+const nodes = useNodesQuery(computed(() => !standaloneMode.value));
+const standaloneLoadingOverlayVisible = computed(() => standaloneMode.value
+  && (initialStandaloneLoadingVisible.value || instanceSwitchLoadingVisible.value));
+
+watch(
+  () => standaloneMode.value && (!standaloneOwnershipResolved.value || board.isLoading.value),
+  (loading) => {
+    if (loading || initialStandaloneLoadingFinished.value) return;
+    initialStandaloneLoadingFinished.value = true;
+    window.requestAnimationFrame(() => {
+      initialStandaloneLoadingVisible.value = false;
+    });
+  },
+  { flush: "post" },
+);
 
 const workbenchView = ref<WorkbenchView>("instance");
 const workbenchViewOptions = computed<Array<{ value: WorkbenchView; label: string; icon: typeof LayoutGrid }>>(() => [
@@ -452,6 +525,7 @@ const instanceSettingsOpen = computed({
     if (!open) instanceSettingsId.value = "";
   },
 });
+const models = useModelsQuery(computed(() => !standaloneMode.value || instanceSettingsOpen.value));
 const copiedText = ref("");
 const { clearToasts, showToast } = useControlPlaneToasts();
 const lastRefreshAt = ref(new Date().toISOString());
@@ -462,6 +536,19 @@ const signingOut = ref(false);
 const aiApprovalBusyKey = ref("");
 const boardSessionKeys = reactive<Record<string, string>>({});
 const desktopBridge = (window as Window & { taskHandoffDesktop?: DesktopBridge }).taskHandoffDesktop;
+const stopDesktopOpenSettings = desktopBridge?.onOpenSettings?.(() => {
+  if (!standaloneMode.value) openSettings();
+});
+const webWindowCoordinator = standaloneMode.value && !desktopBridge?.switchInstanceDetailWindow
+  ? createWebInstanceWindowCoordinator({
+      onOwnershipLost: (instanceId) => {
+        if (standaloneInstanceId.value !== instanceId) return;
+        standaloneOwnershipResolved.value = true;
+        standaloneOwnershipReady.value = false;
+        standaloneOwnershipConflict.value = true;
+      },
+    })
+  : undefined;
 const serverUpdateNodeId = computed(() => desktopBridge ? "" : nodes.data.value?.find((node) => node.labels["task-handoff.control-plane.builtin"] === "true")?.id || "");
 const serverUpdateQuery = useServerUpdateCheckQuery(serverUpdateNodeId);
 const serverUpdateAvailable = computed(() => Boolean(serverUpdateQuery.data.value?.supported && serverUpdateQuery.data.value.updateAvailable));
@@ -482,13 +569,33 @@ const boardInstances = computed(() => (board.data.value || []).map((instance) =>
 const appSessionStore = useAppSessionStore({
   boardInstances: () => boardInstances.value,
   appSessions: () => controlPlaneAppSessions.data.value,
+  queryKey: () => controlPlaneQueryKeys.appSessions(sessionQueryInstanceId.value),
 });
 const boardInstancesWithAppSessions = appSessionStore.boardInstancesWithAppSessions;
 const aiSessionStore = useAiSessionStore({
   boardInstances: () => boardInstancesWithAppSessions.value,
   aiSessions: () => controlPlaneAiSessions.data.value,
+  queryKey: () => controlPlaneQueryKeys.aiSessions(sessionQueryInstanceId.value),
 });
 const boardInstancesWithAiSessions = aiSessionStore.boardInstancesWithAiSessions;
+const switcherInstances = computed<Array<InstanceBoardItem | ControlPlaneInstanceResourceEntry>>(() => {
+  if (!standaloneMode.value) return sortedInstances.value;
+  return [...(instanceDirectory.data.value || [])].sort((a, b) => a.nodeId.localeCompare(b.nodeId) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+});
+const standaloneDirectoryInstance = computed(() => standaloneMode.value
+  ? switcherInstances.value.find((instance) => instance.id === standaloneInstanceId.value)
+  : undefined);
+const switcherDuplicateNames = computed(() => {
+  const counts = new Map<string, number>();
+  for (const instance of switcherInstances.value) counts.set(instance.name, (counts.get(instance.name) || 0) + 1);
+  return new Set([...counts].filter(([, count]) => count > 1).map(([name]) => name));
+});
+const switcherInstanceName = (instance: InstanceBoardItem | ControlPlaneInstanceResourceEntry) => switcherDuplicateNames.value.has(instance.name)
+  ? `${instance.name} (${instance.id})`
+  : instance.name;
+const switcherNodeName = (instance: InstanceBoardItem | ControlPlaneInstanceResourceEntry) => "node" in instance
+  ? instance.node?.name || instance.nodeId
+  : instance.nodeId;
 const instanceSettingsInstance = computed(() => boardInstancesWithAppSessions.value.find((instance) => instance.id === instanceSettingsId.value));
 const instanceAppManagement = useInstanceAppManagement({ load: getInstanceAppManagement, errorText });
 const instanceSettingsAppManagement = computed(() => instanceSettingsId.value ? instanceAppManagement.state(instanceSettingsId.value) : undefined);
@@ -504,10 +611,14 @@ const {
   sortedInstances,
 } = useWorkbenchInstances({
   instances: boardInstancesWithAppSessions,
+  selection: standaloneMode.value
+    ? { mode: "standalone", activeInstanceId: standaloneInstanceId }
+    : { mode: "persistent" },
 });
 const nodeLocalFolderNodeIds = ref<string[]>([]);
-watch(sortedInstances, (instances) => {
-  const next = [...new Set(instances.map((instance) => instance.nodeId).filter(Boolean))].sort();
+watch([sortedInstances, activeInstanceId], ([instances]) => {
+  const visibleInstances = standaloneMode.value && activeInstance.value ? [activeInstance.value] : instances;
+  const next = [...new Set(visibleInstances.map((instance) => instance.nodeId).filter(Boolean))].sort();
   if (next.length === nodeLocalFolderNodeIds.value.length
     && next.every((nodeId, index) => nodeId === nodeLocalFolderNodeIds.value[index])) return;
   nodeLocalFolderNodeIds.value = next;
@@ -519,6 +630,13 @@ const nodeLocalFoldersByNodeId = computed<Record<string, NodeLocalFolder[]>>(() 
   nodeLocalFolderQueries.value.map((query, index) => [nodeLocalFolderNodeIds.value[index], query.data || []]),
 ));
 const activeInstanceWithAiSessions = computed(() => aiSessionStore.instanceWithAiSessions(activeInstance.value));
+const standaloneDetailError = computed(() => {
+  if (!standaloneMode.value) return "";
+  if (!standaloneInstanceId.value) return t("instances.window.invalidRoute");
+  if (standaloneOwnershipConflict.value) return t("instances.window.alreadyOpen");
+  if (standaloneOwnershipResolved.value && !activeInstance.value) return t("instances.window.instanceUnavailable");
+  return "";
+});
 const resourceMetricsByInstanceId = reactive<Record<string, InstanceResourceMetrics>>({});
 const resourceMetricsErrorByInstanceId = reactive<Record<string, string>>({});
 const activeInstanceResourceMetrics = computed(() => activeInstance.value?.runtime?.type === "docker" ? resourceMetricsByInstanceId[activeInstance.value.id] : undefined);
@@ -577,15 +695,24 @@ const boardAppOptions = computed(() => {
 const activeNodeLocalFolders = computed(() => activeInstance.value ? nodeLocalFoldersByNodeId.value[activeInstance.value.nodeId] || [] : []);
 const configSyncInstance = computed(() => sortedInstances.value.find((instance) => instance.id === configSyncInstanceId.value));
 const topbarKicker = computed(() => (settingsMode.value ? t("navigation.settings") : t("common.productName")));
+const selectedInstanceId = computed(() => standaloneMode.value ? standaloneInstanceId.value : activeInstance.value?.id || "");
 const topbarTitle = computed(() => {
   if (!settingsMode.value) {
-    return activeInstance.value?.name || t("navigation.controlPlane");
+    const selectedDetail = !standaloneMode.value || activeInstance.value?.id === standaloneInstanceId.value
+      ? activeInstance.value
+      : undefined;
+    return selectedDetail?.name || standaloneDirectoryInstance.value?.name || t("navigation.controlPlane");
   }
   return settingsSectionTitle(settingsSection.value);
 });
-const topbarNodeName = computed(() => activeInstance.value?.node?.name || "");
+const topbarNodeName = computed(() => {
+  if (standaloneMode.value && activeInstance.value?.id !== standaloneInstanceId.value) return "";
+  return activeInstance.value?.node?.name || "";
+});
 const refreshing = computed(() => board.isFetching.value || controlPlane.isFetching.value);
 useControlPlaneEvents({
+  instanceId: sessionQueryInstanceId,
+  enabled: sessionQueriesEnabled,
   aiSessions: aiSessionStore,
   appSessions: appSessionStore,
   appManagement: {
@@ -673,10 +800,14 @@ const { disposeBoardTerminalPreviews, disposeHiddenBoardTerminalPreviews, mountB
 let connectingRefreshTimer: ReturnType<typeof setInterval> | undefined;
 
 watch(
-  () => activeInstance.value?.id,
+  [topbarTitle, standaloneInstanceId],
   () => {
     closeFloatingLayers();
+    if (standaloneMode.value) {
+      document.title = `${topbarTitle.value} · TaskHandoff`;
+    }
   },
+  { immediate: true },
 );
 
 watch(boardProjectFilter, (projectId) => {
@@ -800,6 +931,10 @@ useEventListener(window, "click", handleGlobalClick);
 useEventListener(window, "keydown", handleGlobalKeydown);
 
 onBeforeUnmount(() => {
+  finishInstanceSwitch(instanceSwitchSequence);
+  cancelInstanceSwitcherPointer();
+  stopDesktopOpenSettings?.();
+  webWindowCoordinator?.dispose();
   clearToasts();
   if (connectingRefreshTimer) {
     clearInterval(connectingRefreshTimer);
@@ -807,6 +942,24 @@ onBeforeUnmount(() => {
   }
   disposeBoardTerminalPreviews();
   stopInstanceResize();
+});
+
+onMounted(async () => {
+  if (!standaloneMode.value) return;
+  if (!standaloneInstanceId.value) {
+    standaloneOwnershipResolved.value = true;
+    return;
+  }
+  if (!webWindowCoordinator) {
+    standaloneOwnershipResolved.value = true;
+    standaloneOwnershipReady.value = true;
+    return;
+  }
+  const result = await webWindowCoordinator.claim(standaloneInstanceId.value);
+  standaloneOwnershipResolved.value = true;
+  standaloneOwnershipReady.value = result.action === "claimed";
+  standaloneOwnershipConflict.value = result.action === "focused";
+  if (result.action === "focused") showToast(t("instances.window.alreadyOpen"));
 });
 
 function handleGlobalClick() {
@@ -1025,6 +1178,60 @@ async function controlWindow(action: "minimize" | "toggle-maximize" | "close") {
   await desktopBridge?.windowAction?.(action);
 }
 
+function updateInstanceSwitcherOpen(open: boolean) {
+  if (open && instanceSwitcherPointer) return;
+  instanceSwitcherOpen.value = open;
+}
+
+function startInstanceSwitcherPointer(event: PointerEvent) {
+  if (event.button !== 0 || !desktopBridge?.windowDrag) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  suppressInstanceSwitcherClick = true;
+  const target = event.currentTarget instanceof HTMLElement ? event.currentTarget : undefined;
+  target?.setPointerCapture?.(event.pointerId);
+  instanceSwitcherPointer = {
+    pointerId: event.pointerId,
+    startScreenX: event.screenX,
+    startScreenY: event.screenY,
+    moved: false,
+  };
+  desktopBridge.windowDrag("start", event.screenX, event.screenY);
+}
+
+function moveInstanceSwitcherPointer(event: PointerEvent) {
+  const pointer = instanceSwitcherPointer;
+  if (!pointer || pointer.pointerId !== event.pointerId || !desktopBridge?.windowDrag) return;
+  if (!pointer.moved && Math.hypot(event.screenX - pointer.startScreenX, event.screenY - pointer.startScreenY) < 5) return;
+  pointer.moved = true;
+  instanceSwitcherOpen.value = false;
+  desktopBridge.windowDrag("move", event.screenX, event.screenY);
+}
+
+function finishInstanceSwitcherPointer(event: PointerEvent) {
+  const pointer = instanceSwitcherPointer;
+  if (!pointer || pointer.pointerId !== event.pointerId || !desktopBridge?.windowDrag) return;
+  desktopBridge.windowDrag("end", event.screenX, event.screenY);
+  instanceSwitcherPointer = undefined;
+  if (!pointer.moved) instanceSwitcherOpen.value = true;
+  window.setTimeout(() => { suppressInstanceSwitcherClick = false; }, 0);
+}
+
+function cancelInstanceSwitcherPointer(event?: PointerEvent) {
+  const pointer = instanceSwitcherPointer;
+  if (!pointer || (event && pointer.pointerId !== event.pointerId) || !desktopBridge?.windowDrag) return;
+  desktopBridge.windowDrag("end", event?.screenX ?? pointer.startScreenX, event?.screenY ?? pointer.startScreenY);
+  instanceSwitcherPointer = undefined;
+  suppressInstanceSwitcherClick = false;
+}
+
+function consumeInstanceSwitcherClick(event: MouseEvent) {
+  if (!suppressInstanceSwitcherClick) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  suppressInstanceSwitcherClick = false;
+}
+
 async function openAppUrl(url: string) {
   if (desktopBridge?.openAppWindow) {
     await desktopBridge.openAppWindow(url);
@@ -1033,9 +1240,77 @@ async function openAppUrl(url: string) {
   window.open(url, "_blank", "noopener,noreferrer");
 }
 
-function selectInstance(id: string) {
-  setActiveInstance(id);
+async function openInstanceWindow(instance: InstanceBoardItem) {
+  const result = await openInstanceDetailWindow(instance.id);
+  if (!result.ok) showToast(t(result.code === "popup-blocked" ? "instances.window.popupBlocked" : "instances.window.switchFailed"));
+  else if (result.action === "focused") showToast(t("instances.window.focusedExisting"));
   closeFloatingLayers();
+}
+
+async function selectInstance(id: string) {
+  if (!standaloneMode.value) {
+    setActiveInstance(id);
+    closeFloatingLayers();
+    return;
+  }
+  if (id === activeInstanceId.value) {
+    closeFloatingLayers();
+    return;
+  }
+  closeFloatingLayers();
+  const switchSequence = beginInstanceSwitch();
+  try {
+    await queryClient.ensureQueryData(instanceBoardQueryOptions(id));
+  } catch {
+    // The scoped query retains the authoritative error for the target detail view.
+  }
+  if (switchSequence !== instanceSwitchSequence) return;
+  const desktopResult = await switchDesktopInstanceDetailWindow(id);
+  if (desktopResult?.action === "focused") {
+    finishInstanceSwitch(switchSequence);
+    showToast(t("instances.window.focusedExisting"));
+    closeFloatingLayers();
+    return;
+  }
+  if (desktopResult && desktopResult.action !== "switched") {
+    finishInstanceSwitch(switchSequence);
+    showToast(t("instances.window.switchFailed"));
+    closeFloatingLayers();
+    return;
+  }
+  if (!desktopResult && webWindowCoordinator) {
+    const webResult = await webWindowCoordinator.claim(id);
+    if (webResult.action === "focused") {
+      finishInstanceSwitch(switchSequence);
+      showToast(t("instances.window.focusedExisting"));
+      closeFloatingLayers();
+      return;
+    }
+  }
+  standaloneOwnershipResolved.value = true;
+  standaloneOwnershipReady.value = true;
+  standaloneOwnershipConflict.value = false;
+  setActiveInstance(id);
+  window.history.replaceState(null, "", buildInstanceDetailPath(id));
+  await nextTick();
+  window.requestAnimationFrame(() => finishInstanceSwitch(switchSequence));
+}
+
+function beginInstanceSwitch() {
+  instanceSwitchSequence += 1;
+  if (instanceSwitchLoadingTimer) window.clearTimeout(instanceSwitchLoadingTimer);
+  const sequence = instanceSwitchSequence;
+  instanceSwitchLoadingTimer = window.setTimeout(() => {
+    if (sequence === instanceSwitchSequence) instanceSwitchLoadingVisible.value = true;
+  }, 90);
+  return sequence;
+}
+
+function finishInstanceSwitch(sequence: number) {
+  if (sequence !== instanceSwitchSequence) return;
+  if (instanceSwitchLoadingTimer) window.clearTimeout(instanceSwitchLoadingTimer);
+  instanceSwitchLoadingTimer = undefined;
+  instanceSwitchLoadingVisible.value = false;
 }
 
 function openAiSessionAppFromBoard(instance: InstanceBoardItemWithAppSessions, session?: AiSessionSummary) {

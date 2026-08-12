@@ -507,6 +507,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .ai-board-floating-dock {
   --ai-board-floating-radius: 20px;
+  --ai-board-floating-surface-border: var(--line-strong);
   display: grid;
   position: absolute;
   bottom: 18px;
@@ -522,7 +523,7 @@ onBeforeUnmount(() => {
 .ai-board-floating-detail,
 .ai-board-floating-restore {
   overflow: hidden;
-  border: 1px solid var(--ai-board-column-border);
+  border: 1px solid var(--ai-board-floating-surface-border);
   border-radius: var(--ai-board-floating-radius);
   background: color-mix(in srgb, var(--ai-board-column-bg) 82%, transparent);
   -webkit-backdrop-filter: blur(16px) saturate(1.24);
@@ -882,7 +883,7 @@ onBeforeUnmount(() => {
 
 .ai-board-floating-compose {
   --ai-composer-radius: var(--ai-board-floating-radius);
-  --ai-composer-border: var(--ai-board-column-border);
+  --ai-composer-border: var(--ai-board-floating-surface-border);
   --ai-composer-bg: color-mix(in srgb, var(--ai-board-card-bg) 82%, transparent);
   --ai-composer-text: var(--ai-board-title);
   --ai-composer-muted: var(--ai-board-muted);

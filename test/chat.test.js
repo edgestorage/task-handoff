@@ -1161,6 +1161,33 @@ test("codex app-server thread summary preserves context-compaction-only turns", 
   }]);
 });
 
+test("codex app-server thread summary does not revive an older turn error", () => {
+  const summary = summarizeThreadTurns({
+    id: "thread_recovered",
+    turns: [
+      {
+        id: "turn_failed",
+        status: "failed",
+        error: { message: "Temporary provider failure." },
+        items: [{ type: "userMessage", content: [{ type: "text", text: "first prompt" }] }],
+      },
+      {
+        id: "turn_recovered",
+        status: "completed",
+        items: [
+          { type: "userMessage", content: [{ type: "text", text: "second prompt" }] },
+          { type: "agentMessage", text: "Recovered response." },
+        ],
+      },
+    ],
+  });
+
+  assert.equal(summary.error, undefined);
+  assert.equal(summary.latestTurnStatus, "completed");
+  assert.equal(summary.turns[0].lastMessage, "Temporary provider failure.");
+  assert.equal(summary.turns[1].lastMessage, "Recovered response.");
+});
+
 test("ai session bind app snapshot does not replace real prompt with interrupt placeholder", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-bind-interrupt-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
@@ -3197,6 +3224,103 @@ test("codex app server failed turns expose the turn error message", async () => 
   assert.equal(failed.turns[0].lastMessage, "previous answer");
 });
 
+test("codex app server waits for final turn failure before exposing retry errors", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-retry-error-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  class FakeCodexAppServerClient extends EventEmitter {
+    async start() {}
+    async listLoadedThreadIds() { return ["thread_retry_error"]; }
+    async readThread() {
+      return { id: "thread_retry_error", cwd: "/workspace", status: { type: "active" }, turns: [] };
+    }
+    stop() {}
+  }
+  const fake = new FakeCodexAppServerClient();
+  const bridge = new CodexAppServerSessionBridge(registry, fake);
+  await bridge.sync();
+  const session = registry.list()[0];
+  registry.applyRealtimeEvent(session.id, {
+    kind: "send-ack",
+    activeTurnId: "turn_retry_error",
+    userPrompt: "retry the model request",
+    source: "control",
+  });
+
+  fake.emit("event", {
+    type: "turn-error",
+    threadId: "thread_retry_error",
+    turnId: "turn_retry_error",
+    error: "Reconnecting... 1/5\n\nCodex error: responseStreamConnectionFailed (HTTP 502)",
+    willRetry: true,
+  });
+  assert.equal(registry.get(session.id).status, "running");
+  assert.equal(registry.get(session.id).error, undefined);
+
+  fake.emit("event", {
+    type: "turn-error",
+    threadId: "thread_retry_error",
+    turnId: "turn_retry_error",
+    error: "Model stream failed after 5 retries.\n\nCodex error: responseTooManyFailedAttempts (HTTP 502)",
+    willRetry: false,
+  });
+  assert.equal(registry.get(session.id).status, "running");
+  assert.equal(registry.get(session.id).error, undefined);
+
+  fake.emit("event", {
+    type: "turn-completed",
+    threadId: "thread_retry_error",
+    turnId: "turn_retry_error",
+    status: "failed",
+  });
+  assert.equal(registry.get(session.id).status, "failed");
+  assert.equal(registry.get(session.id).error, "Model stream failed after 5 retries. Codex error: responseTooManyFailedAttempts (HTTP 502)");
+
+  fake.emit("event", { type: "turn-started", threadId: "thread_retry_error", turnId: "turn_realtime_error" });
+  assert.equal(registry.get(session.id).error, undefined);
+  const beforeRealtimeError = registry.get(session.id);
+  fake.emit("event", { type: "thread-error", threadId: "thread_retry_error", error: "Realtime transport failed." });
+  const afterRealtimeError = registry.get(session.id);
+  assert.equal(afterRealtimeError.status, "running");
+  assert.equal(afterRealtimeError.activeTurnId, "turn_realtime_error");
+  assert.deepEqual(afterRealtimeError.turns, beforeRealtimeError.turns);
+  assert.equal(afterRealtimeError.error, "Realtime transport failed.");
+});
+
+test("codex failed thread snapshots restore the AI session error", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-snapshot-error-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  class FakeCodexAppServerClient extends EventEmitter {
+    async start() {}
+    async listLoadedThreadIds() { return ["thread_snapshot_error"]; }
+    async readThread() {
+      return {
+        id: "thread_snapshot_error",
+        cwd: "/workspace",
+        status: { type: "idle" },
+        turns: [{
+          id: "turn_snapshot_error",
+          status: "failed",
+          error: {
+            message: "The restored model request failed.",
+            additionalDetails: "Provider remained unavailable.",
+            codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 502 } },
+          },
+          items: [{ type: "userMessage", content: [{ type: "text", text: "restored prompt" }] }],
+        }],
+      };
+    }
+    stop() {}
+  }
+
+  const bridge = new CodexAppServerSessionBridge(registry, new FakeCodexAppServerClient());
+  await bridge.sync();
+  const failed = registry.list()[0];
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.error, "The restored model request failed. Provider remained unavailable. Codex error: httpConnectionFailed (HTTP 502)");
+  assert.equal(failed.turns.at(-1).status, "failed");
+  assert.equal(failed.turns.at(-1).lastMessage, "The restored model request failed.\n\nProvider remained unavailable.\n\nCodex error: httpConnectionFailed (HTTP 502)");
+});
+
 test("codex app server protocol parses failed turn error details", () => {
   const event = codexNotification("turn/completed", {
     threadId: "thread_failed",
@@ -3217,6 +3341,33 @@ test("codex app server protocol parses failed turn error details", () => {
     turnId: "turn_failed",
     status: "failed",
     error: "The model request failed.\n\nHTTP 500 from provider.",
+  });
+});
+
+test("codex app server protocol parses retry and realtime error notifications", () => {
+  assert.deepEqual(codexNotification("error", {
+    threadId: "thread_error",
+    turnId: "turn_error",
+    willRetry: true,
+    error: {
+      message: "Reconnecting... 1/5",
+      additionalDetails: "Upstream returned a bad gateway.",
+      codexErrorInfo: { responseStreamConnectionFailed: { httpStatusCode: 502 } },
+    },
+  }), {
+    type: "turn-error",
+    threadId: "thread_error",
+    turnId: "turn_error",
+    willRetry: true,
+    error: "Reconnecting... 1/5\n\nUpstream returned a bad gateway.\n\nCodex error: responseStreamConnectionFailed (HTTP 502)",
+  });
+  assert.deepEqual(codexNotification("thread/realtime/error", {
+    threadId: "thread_error",
+    message: "Realtime transport failed.",
+  }), {
+    type: "thread-error",
+    threadId: "thread_error",
+    error: "Realtime transport failed.",
   });
 });
 
@@ -4493,6 +4644,60 @@ test("codex permission modes map to authoritative app-server turn settings", asy
     { approvalPolicy: "on-request", approvalsReviewer: "user", permissions: ":workspace" },
     { approvalPolicy: "on-request", approvalsReviewer: "auto_review", permissions: ":workspace" },
     { approvalPolicy: "never", approvalsReviewer: "user", permissions: ":danger-full-access" },
+  ]);
+});
+
+test("codex turns preserve structured image inputs across start, steer, and compatibility restart", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-image-inputs-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const turns = [];
+  class FakeCodexImageClient extends EventEmitter {
+    async start() {}
+    stop() {}
+    async listLoadedThreadIds() { return ["thread_images"]; }
+    async startTurn(threadId, message, inputs) {
+      turns.push({ action: "start", threadId, message, inputs });
+      return { turnId: `turn_${turns.length}` };
+    }
+    async steerTurn(threadId, turnId, message, inputs) {
+      turns.push({ action: "steer", threadId, turnId, message, inputs });
+      if (message === "restart with image") throw new Error("no active turn to steer");
+      return { turnId };
+    }
+  }
+  const bridge = new CodexAppServerSessionBridge(registry, new FakeCodexImageClient());
+  const session = registry.start({ agent: "codex", providerSessionId: "thread_images", cwd: root, status: "idle", phase: "unknown" });
+  const image = {
+    id: "image_1",
+    kind: "image",
+    name: "screen.png",
+    mime: "image/png",
+    size: 3,
+    source: { type: "inline", encoding: "base64", data: "cG5n" },
+  };
+
+  await bridge.startMessage(session, { message: "start with image", attachments: [image] });
+  await bridge.steerMessage(registry.get(session.id), { message: "steer with image", attachments: [image] });
+  await bridge.sendMessage(registry.get(session.id), { message: "restart with image", attachments: [image] });
+
+  assert.deepEqual(turns.map((turn) => [turn.action, turn.message, turn.inputs]), [
+    ["start", "start with image", [
+      { type: "text", text: "start with image", text_elements: [] },
+      { type: "image", url: "data:image/png;base64,cG5n" },
+    ]],
+    ["steer", "steer with image", [
+      { type: "text", text: "steer with image", text_elements: [] },
+      { type: "image", url: "data:image/png;base64,cG5n" },
+    ]],
+    ["steer", "restart with image", [
+      { type: "text", text: "restart with image", text_elements: [] },
+      { type: "image", url: "data:image/png;base64,cG5n" },
+    ]],
+    ["start", "restart with image", [
+      { type: "text", text: "restart with image", text_elements: [] },
+      { type: "image", url: "data:image/png;base64,cG5n" },
+    ]],
   ]);
 });
 

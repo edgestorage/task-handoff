@@ -19,12 +19,17 @@ require.extensions[".ts"] = (module, filename) => {
 
 const { AiSessionController } = require("../packages/ai-session-runtime/src/ai-session-control.ts");
 const { AiSessionCreateCoordinator } = require("../packages/ai-session-runtime/src/ai-session-create.ts");
+const { AiSessionForkCoordinator } = require("../packages/ai-session-runtime/src/ai-session-fork.ts");
 const { AiSessionCloseCoordinator } = require("../packages/ai-session-runtime/src/ai-session-close.ts");
 const { AiSessionHistoryStore } = require("../packages/ai-session-runtime/src/ai-session-history-store.ts");
 const { AiSessionOpenAppCoordinator } = require("../packages/ai-session-runtime/src/ai-session-open-app.ts");
 const { createAiSessionRegistry } = require("../packages/ai-session-runtime/src/ai-session-registry.ts");
 const { CodexAppServerSessionBridge } = require("../packages/ai-session-runtime/src/codex-app-server.ts");
-const { CodexAppServerClient } = require("../packages/ai-session-runtime/src/codex-app-server/client/client.ts");
+const {
+  CodexAppServerClient,
+  CodexAppServerRpcError,
+  codexThreadForkCapabilities,
+} = require("../packages/ai-session-runtime/src/codex-app-server/client/client.ts");
 
 function runtime() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-create-"));
@@ -121,6 +126,334 @@ test("AI session create coordinator removes the projection and provider thread w
   assert.equal(diagnostics[0].providerSessionId, "thread-failed");
 });
 
+test("AI session Fork creates an independent Direct session and deduplicates the request", async () => {
+  const { registry, controller } = runtime();
+  const source = registry.applyAdapterSnapshot({
+    agent: "codex",
+    appId: "codex-app-server",
+    appSessionId: "shared-runtime",
+    providerSessionId: "thread-source",
+    cwd: "/workspace",
+    actions: { send: true, fork: true },
+    status: "idle",
+  });
+  const calls = [];
+  controller.register({
+    agent: "codex",
+    async forkSession(input) {
+      calls.push(input);
+      const providerSessionId = `thread-fork-${calls.length}`;
+      const lineage = { kind: "fork", parentProviderSessionId: input.source.providerSessionId, ...(input.throughTurnId ? { throughTurnId: input.throughTurnId } : {}) };
+      registry.applyAdapterSnapshot({
+        agent: "codex",
+        creationSource: "ai-session",
+        appId: "codex-app-server",
+        providerSessionId,
+        cwd: input.cwd,
+        lineage,
+        actions: { send: true, fork: true },
+        status: "idle",
+      });
+      return { providerSessionId, cwd: input.cwd || input.source.cwd, creationSource: "ai-session", lineage };
+    },
+    async interrupt(session) { return { session, provider: "codex", action: "interrupt" }; },
+  });
+  const coordinator = new AiSessionForkCoordinator({ registry, controller });
+  const input = { clientRequestId: "fork-1", workspace: { mode: "current" } };
+  const first = await coordinator.fork(source.id, input);
+  const repeated = await coordinator.fork(source.id, input);
+
+  assert.equal(first.disposition, "created");
+  assert.equal(repeated.disposition, "already-created");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].cwd, undefined);
+  assert.equal(calls[0].providerThroughTurnId, undefined);
+  assert.equal(registry.get(first.aiSessionId).appSessionId, undefined);
+  assert.deepEqual(registry.get(first.aiSessionId).lineage, { kind: "fork", parentProviderSessionId: "thread-source" });
+  assert.equal(registry.get(source.id).providerSessionId, "thread-source");
+  assert.throws(
+    () => coordinator.fork(source.id, { ...input, workspace: { mode: "managed-worktree" } }),
+    (error) => error.code === "AI_SESSION_FORK_IDEMPOTENCY_CONFLICT",
+  );
+});
+
+test("AI session Fork persists completed idempotency and creates independent branches for new request ids", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "ai-session-fork-store-"));
+  const operationStorePath = path.join(root, "operations.json");
+  const registry = createAiSessionRegistry({ dir: path.join(root, "sessions") });
+  const controller = new AiSessionController(registry);
+  const source = registry.applyAdapterSnapshot({
+    agent: "codex",
+    providerSessionId: "thread-fork-source",
+    cwd: root,
+    actions: { fork: true },
+    status: "idle",
+  });
+  let calls = 0;
+  controller.register({
+    agent: "codex",
+    async forkSession(input) {
+      calls += 1;
+      const providerSessionId = `thread-persisted-fork-${calls}`;
+      registry.applyAdapterSnapshot({
+        agent: "codex",
+        creationSource: "ai-session",
+        providerSessionId,
+        cwd: input.cwd || input.source.cwd,
+        lineage: { kind: "fork", parentProviderSessionId: input.source.providerSessionId },
+        status: "idle",
+      });
+      return { providerSessionId, cwd: input.cwd || input.source.cwd, creationSource: "ai-session" };
+    },
+    async interrupt(session) { return { session, provider: "codex", action: "interrupt" }; },
+  });
+  const coordinator = new AiSessionForkCoordinator({ registry, controller, operationStorePath });
+  const input = { clientRequestId: "fork-persisted", workspace: { mode: "current" } };
+  const [first, concurrent] = await Promise.all([coordinator.fork(source.id, input), coordinator.fork(source.id, input)]);
+  const restored = await new AiSessionForkCoordinator({ registry, controller, operationStorePath }).fork(source.id, input);
+  const independent = await coordinator.fork(source.id, { ...input, clientRequestId: "fork-independent" });
+
+  assert.deepEqual(concurrent, first);
+  assert.equal(restored.disposition, "already-created");
+  assert.equal(restored.aiSessionId, first.aiSessionId);
+  assert.notEqual(independent.aiSessionId, first.aiSessionId);
+  assert.notEqual(independent.providerSessionId, first.providerSessionId);
+  assert.equal(calls, 2);
+});
+
+test("AI session Fork resumes a provider-created saga stage through provider discovery", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "ai-session-fork-provider-stage-"));
+  const operationStorePath = path.join(root, "operations.json");
+  const registry = createAiSessionRegistry({ dir: path.join(root, "sessions") });
+  const controller = new AiSessionController(registry);
+  const source = registry.applyAdapterSnapshot({
+    agent: "codex",
+    providerSessionId: "thread-stage-source",
+    cwd: root,
+    actions: { fork: true },
+    status: "idle",
+  });
+  const input = { clientRequestId: "fork-provider-stage", workspace: { mode: "current" } };
+  const crypto = require("node:crypto");
+  const fingerprint = crypto.createHash("sha256").update(JSON.stringify({ clientRequestId: input.clientRequestId, sourceSessionId: source.id, workspace: input.workspace })).digest("hex");
+  fs.writeFileSync(operationStorePath, JSON.stringify({ version: 1, operations: [{
+    clientRequestId: input.clientRequestId,
+    fingerprint,
+    sourceSessionId: source.id,
+    input,
+    stage: "provider-created",
+    cwd: root,
+    providerSessionId: "thread-stage-fork",
+  }] }));
+  let reads = 0;
+  controller.register({
+    agent: "codex",
+    async readSession(providerSessionId) {
+      reads += 1;
+      registry.applyAdapterSnapshot({
+        agent: "codex",
+        creationSource: "ai-session",
+        providerSessionId,
+        cwd: root,
+        lineage: { kind: "fork", parentProviderSessionId: "thread-stage-source" },
+        status: "idle",
+      });
+    },
+    async forkSession() { throw new Error("restored provider stage must not fork again"); },
+    async interrupt(session) { return { session, provider: "codex", action: "interrupt" }; },
+  });
+
+  const result = await new AiSessionForkCoordinator({ registry, controller, operationStorePath }).fork(source.id, input);
+  assert.equal(reads, 1);
+  assert.equal(result.providerSessionId, "thread-stage-fork");
+  assert.equal(result.creationSource, "ai-session");
+});
+
+test("AI session Fork sanitizes restored saga records before using internal identities", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "ai-session-fork-invalid-store-"));
+  const operationStorePath = path.join(root, "operations.json");
+  const registry = createAiSessionRegistry({ dir: path.join(root, "sessions") });
+  const controller = new AiSessionController(registry);
+  const source = registry.applyAdapterSnapshot({
+    agent: "codex",
+    providerSessionId: "thread-invalid-store-source",
+    cwd: root,
+    actions: { fork: true },
+    status: "idle",
+  });
+  const input = { clientRequestId: "fork-invalid-store", workspace: { mode: "current" } };
+  const fingerprint = require("node:crypto").createHash("sha256")
+    .update(JSON.stringify({ clientRequestId: input.clientRequestId, sourceSessionId: source.id, workspace: input.workspace }))
+    .digest("hex");
+  fs.writeFileSync(operationStorePath, JSON.stringify({ version: 1, operations: [{
+    clientRequestId: input.clientRequestId,
+    fingerprint,
+    sourceSessionId: source.id,
+    input,
+    stage: "workspace-prepared",
+    cwd: root,
+    providerSessionId: "thread-must-not-be-restored",
+  }] }));
+  let forks = 0;
+  controller.register({
+    agent: "codex",
+    async forkSession(forkInput) {
+      forks += 1;
+      registry.applyAdapterSnapshot({
+        agent: "codex",
+        creationSource: "ai-session",
+        providerSessionId: "thread-sanitized-fork",
+        cwd: forkInput.source.cwd,
+        status: "idle",
+      });
+      return { providerSessionId: "thread-sanitized-fork", cwd: forkInput.source.cwd, creationSource: "ai-session" };
+    },
+    async interrupt(session) { return { session, provider: "codex", action: "interrupt" }; },
+  });
+  const diagnostics = [];
+  const result = await new AiSessionForkCoordinator({ registry, controller, operationStorePath, onDiagnostic: (entry) => diagnostics.push(entry) }).fork(source.id, input);
+
+  assert.equal(forks, 1);
+  assert.equal(result.providerSessionId, "thread-sanitized-fork");
+  assert.equal(diagnostics[0].code, "AI_SESSION_FORK_STORE_RECORD_INVALID");
+});
+
+test("AI session Fork compensates provider and managed worktree after projection timeout", async () => {
+  const { registry, controller } = runtime();
+  const source = registry.applyAdapterSnapshot({
+    agent: "codex",
+    providerSessionId: "thread-compensation-source",
+    cwd: "/workspace/project/subfolder",
+    actions: { fork: true },
+    status: "idle",
+  });
+  const deleted = [];
+  const removed = [];
+  const diagnostics = [];
+  controller.register({
+    agent: "codex",
+    async forkSession(input) {
+      assert.equal(input.cwd, "/managed/worktree/subfolder");
+      return { providerSessionId: "thread-unprojected", cwd: input.cwd, creationSource: "ai-session" };
+    },
+    async deleteSession(id) { deleted.push(id); throw new Error("delete unavailable"); },
+    async interrupt(session) { return { session, provider: "codex", action: "interrupt" }; },
+  });
+  const coordinator = new AiSessionForkCoordinator({
+    registry,
+    controller,
+    materializationTimeoutMs: 5,
+    prepareManagedWorktree: async () => ({ cwd: "/managed/worktree/subfolder", worktreeId: "worktree-fork" }),
+    removeManagedWorktree: async (_source, worktreeId) => { removed.push(worktreeId); return true; },
+    onDiagnostic: (entry) => diagnostics.push(entry),
+  });
+
+  await assert.rejects(
+    coordinator.fork(source.id, { clientRequestId: "fork-compensate", workspace: { mode: "managed-worktree" } }),
+    (error) => error.code === "AI_SESSION_FORK_PROJECTION_FAILED" && error.statusCode === 502,
+  );
+  assert.deepEqual(deleted, ["thread-unprojected"]);
+  assert.deepEqual(removed, ["worktree-fork"]);
+  assert.equal(registry.getByProviderSessionId("codex", "thread-unprojected"), undefined);
+  assert.equal(diagnostics[0].clientRequestId, "fork-compensate");
+  assert.equal(diagnostics[0].providerSessionId, "thread-unprojected");
+  assert.equal(diagnostics[0].worktreeId, "worktree-fork");
+  assert.match(diagnostics[0].cleanupFailures[0], /delete unavailable/);
+});
+
+test("AI session Fork rejects invalid turn and managed-worktree history combinations", async () => {
+  const { registry, controller } = runtime();
+  const source = registry.applyAdapterSnapshot({
+    agent: "codex",
+    providerSessionId: "thread-source-invalid",
+    cwd: "/workspace",
+    actions: { fork: true },
+    status: "idle",
+  });
+  registry.applyRealtimeEvent(source.id, { kind: "turn-started", activeTurnId: "turn-running", providerTurnId: "provider-running", source: "realtime" });
+  controller.register({ agent: "codex", async forkSession() { throw new Error("must not run"); }, async interrupt(session) { return { session, provider: "codex", action: "interrupt" }; } });
+  const coordinator = new AiSessionForkCoordinator({ registry, controller });
+  await assert.rejects(
+    coordinator.fork(source.id, { clientRequestId: "fork-running", throughTurnId: "turn-running", workspace: { mode: "current" } }),
+    (error) => error.code === "AI_SESSION_FORK_INVALID_TURN_STATE",
+  );
+  await assert.rejects(
+    coordinator.fork(source.id, { clientRequestId: "fork-worktree-history", throughTurnId: "turn-running", workspace: { mode: "managed-worktree" } }),
+    (error) => error.code === "AI_SESSION_FORK_WORKTREE_UNAVAILABLE",
+  );
+});
+
+test("AI session Fork maps an inclusive completed turn and does not mutate a busy source", async () => {
+  const { registry, controller } = runtime();
+  const source = registry.applyAdapterSnapshot({
+    agent: "codex",
+    providerSessionId: "thread-busy-source",
+    cwd: "/workspace",
+    actions: { fork: true },
+    status: "idle",
+  });
+  registry.applyRealtimeEvent(source.id, { kind: "turn-started", activeTurnId: "turn-completed", providerTurnId: "provider-turn-completed", source: "realtime" });
+  registry.applyRealtimeEvent(source.id, { kind: "user-message", activeTurnId: "turn-completed", providerTurnId: "provider-turn-completed", userPrompt: "First request", source: "realtime" });
+  registry.applyRealtimeEvent(source.id, { kind: "turn-completed", activeTurnId: "turn-completed", status: "idle", text: "Completed", source: "realtime" });
+  registry.applyRealtimeEvent(source.id, { kind: "turn-started", activeTurnId: "turn-running", providerTurnId: "provider-turn-running", source: "realtime" });
+  registry.applyRealtimeEvent(source.id, { kind: "user-message", activeTurnId: "turn-running", providerTurnId: "provider-turn-running", userPrompt: "Second request", source: "realtime" });
+  const calls = [];
+  controller.register({
+    agent: "codex",
+    async forkSession(input) {
+      calls.push(input);
+      registry.applyAdapterSnapshot({
+        agent: "codex",
+        creationSource: "ai-session",
+        providerSessionId: "thread-through-turn",
+        cwd: input.source.cwd,
+        lineage: { kind: "fork", parentProviderSessionId: input.source.providerSessionId, throughTurnId: input.throughTurnId },
+        status: "idle",
+      });
+      return { providerSessionId: "thread-through-turn", cwd: input.source.cwd, creationSource: "ai-session", lineage: { kind: "fork", parentProviderSessionId: input.source.providerSessionId, throughTurnId: input.throughTurnId } };
+    },
+    async interrupt() { throw new Error("Fork must not interrupt the source"); },
+  });
+
+  const result = await new AiSessionForkCoordinator({ registry, controller }).fork(source.id, {
+    clientRequestId: "fork-through-turn",
+    throughTurnId: "turn-completed",
+    workspace: { mode: "current" },
+  });
+
+  assert.equal(calls[0].providerThroughTurnId, "provider-turn-completed");
+  assert.equal(calls[0].throughTurnId, "turn-completed");
+  assert.equal(calls[0].cwd, undefined);
+  assert.equal(result.providerSessionId, "thread-through-turn");
+  assert.equal(registry.get(source.id).status, "running");
+  assert.equal(registry.get(source.id).activeTurnId, "turn-running");
+});
+
+test("Codex bridge Fork projects forkedFromId without using thread sessionId as identity", async () => {
+  const { registry } = runtime();
+  class FakeClient extends EventEmitter {
+    async start() {}
+    stop() {}
+    async listLoadedThreadIds() { return []; }
+    async resumeThread(threadId) { return { id: threadId, cwd: "/workspace", turns: [] }; }
+    threadForkCapabilities() { return { fullHistory: true, throughTurn: true }; }
+    async forkThread(options) {
+      this.options = options;
+      return { id: "thread-forked", sessionId: "shared-app-runtime", forkedFromId: "thread-source", cwd: options.cwd || "/workspace", ephemeral: false, turns: [] };
+    }
+  }
+  const source = registry.applyAdapterSnapshot({ agent: "codex", providerSessionId: "thread-source", cwd: "/workspace", actions: { fork: true }, status: "idle" });
+  const bridge = new CodexAppServerSessionBridge(registry, new FakeClient());
+  await bridge.sync();
+  const result = await bridge.forkSession({ source, cwd: "/workspace" });
+  const forked = registry.getByProviderSessionId("codex", "thread-forked");
+
+  assert.equal(result.providerSessionId, "thread-forked");
+  assert.equal(forked.providerSessionId, "thread-forked");
+  assert.equal(registry.getByProviderSessionId("codex", "shared-app-runtime"), undefined);
+  assert.deepEqual(forked.lineage, { kind: "fork", parentProviderSessionId: "thread-source" });
+});
+
 test("Codex bridge creates a persistent Direct thread on the shared client", async () => {
   const { registry } = runtime();
   class FakeClient extends EventEmitter {
@@ -213,6 +546,45 @@ test("Codex app-server client sends strict thread lifecycle requests", async () 
   assert.equal(requests[0].params.ephemeral, false);
   assert.equal(requests[0].params.threadSource, "user");
   assert.equal(requests[0].params.cwd, "/workspace");
+});
+
+test("Codex app-server capability gate follows released thread/fork wire versions", () => {
+  assert.deepEqual(codexThreadForkCapabilities(undefined), { fullHistory: false, throughTurn: false });
+  assert.deepEqual(codexThreadForkCapabilities("codex-cli/0.79.0 (Darwin)"), { fullHistory: false, throughTurn: false });
+  assert.deepEqual(codexThreadForkCapabilities("codex-cli/0.128.0 (Darwin)"), { fullHistory: false, throughTurn: false });
+  assert.deepEqual(codexThreadForkCapabilities("codex-cli/0.129.0 (Darwin)"), { fullHistory: true, throughTurn: false });
+  assert.deepEqual(codexThreadForkCapabilities("codex-cli/0.142.0 (Darwin)"), { fullHistory: true, throughTurn: false });
+  assert.deepEqual(codexThreadForkCapabilities("codex-cli/0.143.0-alpha.32 (Darwin)"), { fullHistory: true, throughTurn: true });
+});
+
+test("Codex app-server client sends only stable thread/fork params", async () => {
+  const client = new CodexAppServerClient();
+  client.serverUserAgent = "codex-cli/0.143.0-alpha.32 (Darwin)";
+  const requests = [];
+  client.request = async (method, params) => {
+    requests.push({ method, params });
+    return { thread: { id: "thread-fork", cwd: "/workspace-fork", ephemeral: false } };
+  };
+
+  await client.forkThread({ threadId: "thread-source", lastTurnId: "turn-2", cwd: "/workspace-fork" });
+
+  assert.deepEqual(requests, [{
+    method: "thread/fork",
+    params: { threadId: "thread-source", lastTurnId: "turn-2", cwd: "/workspace-fork", ephemeral: false },
+  }]);
+  assert.equal("runtimeWorkspaceRoots" in requests[0].params, false);
+  assert.equal("path" in requests[0].params, false);
+});
+
+test("Codex app-server client disables Fork after structured method-not-found", async () => {
+  const client = new CodexAppServerClient();
+  client.serverUserAgent = "codex-cli/0.143.0-alpha.32 (Darwin)";
+  client.request = async () => {
+    throw new CodexAppServerRpcError("Method not found", -32601);
+  };
+
+  await assert.rejects(() => client.forkThread({ threadId: "thread-source" }), (error) => error.rpcCode === -32601);
+  assert.deepEqual(client.threadForkCapabilities(), { fullHistory: false, throughTurn: false });
 });
 
 test("Codex app-server client verifies active thread identity across unfiltered pages", async () => {

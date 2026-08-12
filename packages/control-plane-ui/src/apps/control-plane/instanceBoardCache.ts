@@ -6,7 +6,7 @@ export function updateInstanceBoardData(
   queryClient: QueryClient,
   update: (instances: InstanceBoardItem[]) => InstanceBoardItem[],
 ) {
-  queryClient.setQueryData<InstanceBoardPayload>(controlPlaneQueryKeys.instanceBoard, (current) => (
+  queryClient.setQueriesData<InstanceBoardPayload>({ queryKey: controlPlaneQueryKeys.instanceBoard }, (current) => (
     current ? { ...current, data: update(current.data) } : current
   ));
 }

@@ -18,15 +18,20 @@ import { createSessionStreamRecovery, type SessionStreamRecoveryRetryOptions } f
 export function useAppSessionStore(input: {
   boardInstances: () => InstanceBoardItem[];
   appSessions: () => ControlPlaneAppSessions | undefined;
+  queryKey: () => readonly unknown[];
   apiLoader?: typeof getApiData;
   recoveryRetry?: SessionStreamRecoveryRetryOptions;
 }) {
   const queryClient = useQueryClient();
   const apiLoader = input.apiLoader || getApiData;
   const boardInstancesWithAppSessions = computed(() => mergeBoardAppSessions(input.boardInstances(), input.appSessions()));
+  const acceptsInstance = (instanceId: string) => {
+    const scope = input.queryKey()[1];
+    return scope === "*" || scope === instanceId;
+  };
   const streamRecovery = createSessionStreamRecovery({
     topic: "app.sessions",
-    getEntry: (instanceId) => queryClient.getQueryData<ControlPlaneAppSessions>(["control-plane-app-sessions"])
+    getEntry: (instanceId) => queryClient.getQueryData<ControlPlaneAppSessions>(input.queryKey())
       ?.instances.find((entry) => entry.instanceId === instanceId),
     refreshSnapshot: async (instanceId, signal) => (await apiLoader<ControlPlaneAppSessions>("app-sessions?refresh=true", { signal }))
       .instances.find((entry) => entry.instanceId === instanceId),
@@ -64,10 +69,11 @@ export function useAppSessionStore(input: {
 
   function applyEvent(event: AppSessionDeltaResponse["events"][number], fromRecovery = false) {
     const instanceId = event.payload.meta.instanceId;
+    if (!acceptsInstance(instanceId)) return false;
     const observation = streamRecovery.observeEvent(event.payload.meta, event.type === AppSessionEventType.Snapshot, fromRecovery);
     if (!observation.apply) return true;
     let applied = false;
-    queryClient.setQueryData<ControlPlaneAppSessions>(["control-plane-app-sessions"], (current) => {
+    queryClient.setQueryData<ControlPlaneAppSessions>(input.queryKey(), (current) => {
       const entry = current?.instances.find((candidate) => candidate.instanceId === instanceId);
       const projection: AppSessionsState | undefined = entry ? { streamId: entry.streamId, revision: entry.revision ?? 0, lastEventAt: entry.lastEventAt || entry.appSessions.updatedAt, snapshot: entry.appSessions } : undefined;
       const result = applyAppSessionStreamEvent(projection, event);
@@ -80,7 +86,8 @@ export function useAppSessionStore(input: {
   }
 
   function applyRecoveredSnapshot(snapshot: ControlPlaneAppSessions["instances"][number]) {
-    queryClient.setQueryData<ControlPlaneAppSessions>(["control-plane-app-sessions"], (current) => (
+    if (!acceptsInstance(snapshot.instanceId)) return;
+    queryClient.setQueryData<ControlPlaneAppSessions>(input.queryKey(), (current) => (
       upsertInstanceAppSessions(current, snapshot.instanceId, snapshot.appSessions, snapshot)
     ));
   }

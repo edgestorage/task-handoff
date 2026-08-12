@@ -14,6 +14,7 @@ import type {
   JsonValue,
 } from "./types";
 import { asRecord } from "./values";
+import { codexTurnErrorMessage } from "./events";
 
 export function summarizeThreadTurns(thread: CodexThread): {
   activeTurnId?: string;
@@ -22,6 +23,8 @@ export function summarizeThreadTurns(thread: CodexThread): {
   summary?: string;
   lastMessage?: string;
   lastMessageItemId?: string;
+  error?: string;
+  latestTurnStatus?: string;
   toolActivity: CodexToolActivityState;
   subAgents: AiSessionSubAgent[];
 } {
@@ -29,6 +32,7 @@ export function summarizeThreadTurns(thread: CodexThread): {
   let userPrompt: string | undefined;
   let lastMessage: string | undefined;
   let lastMessageItemId: string | undefined;
+  let error: string | undefined;
   const historyTurns: NonNullable<AiSessionStatus["turns"]> = [];
   const turns = Array.isArray(thread.turns) ? thread.turns : [];
   for (const [index, turn] of turns.entries()) {
@@ -46,6 +50,12 @@ export function summarizeThreadTurns(thread: CodexThread): {
           : "completed",
       revision: 0,
     };
+    const turnError = providerStatus === "failed" ? codexTurnErrorMessage(record.error) : undefined;
+    if (index === turns.length - 1) error = turnError;
+    if (turnError) {
+      historyTurn.summary = compact(turnError, 1000);
+      historyTurn.lastMessage = turnError;
+    }
     if (providerStatus === "inProgress") {
       activeTurnId = turnId;
     }
@@ -83,6 +93,8 @@ export function summarizeThreadTurns(thread: CodexThread): {
     summary: lastMessage,
     lastMessage,
     lastMessageItemId,
+    error,
+    latestTurnStatus: turns.length ? String(asRecord(turns.at(-1)).status || "completed") : undefined,
     toolActivity: rebuildCodexToolActivity(thread),
     subAgents: rebuildCodexSubAgents(thread, updatedAt),
   };

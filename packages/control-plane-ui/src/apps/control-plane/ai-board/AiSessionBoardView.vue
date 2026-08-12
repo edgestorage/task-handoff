@@ -88,6 +88,7 @@
                 :show-workspace="true"
                 :short-hash="shortHash"
                 :stopping-app-session-key="stoppingAppSessionKey"
+                :forking-session-key="forkingSessionKey"
                 :trigger-action-key="triggerActionKey"
                 :trigger-busy-key="triggerBusyKey"
                 :trigger-button-title="triggerButtonTitle"
@@ -99,6 +100,7 @@
                 @select-card="selectCard"
                 @select-instance="emit('selectInstance', $event)"
                 @stop-app-session="stopCardAppSession"
+                @fork-session="forkCardSession"
                 @toggle-trigger="toggleTrigger"
               />
 
@@ -142,6 +144,7 @@
               :show-workspace="gridGroupBy !== 'path'"
               :short-hash="shortHash"
               :stopping-app-session-key="stoppingAppSessionKey"
+              :forking-session-key="forkingSessionKey"
               :trigger-action-key="triggerActionKey"
               :trigger-busy-key="triggerBusyKey"
               :trigger-button-title="triggerButtonTitle"
@@ -153,6 +156,7 @@
               @select-card="selectCard"
               @select-instance="emit('selectInstance', $event)"
               @stop-app-session="stopCardAppSession"
+              @fork-session="forkCardSession"
               @toggle-trigger="toggleTrigger"
             />
           </template>
@@ -201,6 +205,18 @@
           @update:mention-bindings="messageMentionBindings = $event"
         />
       </Transition>
+      <AlertDialog :open="Boolean(pendingBusyFork)" @update:open="(open) => !open && (pendingBusyFork = undefined)">
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{{ t("sessions.actions.forkBusyTitle") }}</AlertDialogTitle>
+            <AlertDialogDescription>{{ t("sessions.actions.forkBusyDescription") }}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{{ t("common.actions.cancel") }}</AlertDialogCancel>
+            <AlertDialogAction @click="confirmBusyFork">{{ t("sessions.actions.forkConfirm") }}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </template>
   </section>
 </template>
@@ -214,7 +230,7 @@ import { translateApiError } from "../../../i18n/apiError";
 import { useEventListener } from "@vueuse/core";
 import { Columns3, LayoutGrid, Search, SlidersHorizontal } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
-import { closeAiSession, editAiSessionQueuedMessage, interruptAiSession, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, uploadAiSessionAttachment, useControlPlaneSettingsQuery } from "../../../api/queries";
+import { closeAiSession, editAiSessionQueuedMessage, forkAiSession, interruptAiSession, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, uploadAiSessionAttachment, useControlPlaneSettingsQuery } from "../../../api/queries";
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { executeAiSessionCommand } from "../../../api/ai-session-commands";
 import type { AiSessionCommandInput, AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
@@ -224,6 +240,7 @@ import type { AiSessionComposerAttachment } from "../../../components/ai-session
 import { referencesForBindings, type AiSessionMentionBinding } from "../../../components/ai-session/mentions";
 import { desktopRuntimePathAccess } from "../../../components/ai-session/useAiSessionMentions";
 import { Button } from "../../../components/ui/button";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -304,6 +321,9 @@ const queueComposerEdit = ref<{
 }>();
 const aiSessionActionBusy = ref(false);
 const stoppingAppSessionKey = ref("");
+const forkingSessionKey = ref("");
+const forkRequestIds = new Map<string, string>();
+const pendingBusyFork = ref<{ card: AiBoardCard; mode: "current" | "managed-worktree" }>();
 const queryClient = useQueryClient();
 const controlPlaneSettings = useControlPlaneSettingsQuery();
 const mentionTrigger = computed(() => controlPlaneSettings.data.value?.mentionTrigger || "@");
@@ -890,6 +910,48 @@ async function stopCardAppSession(card: AiBoardCard) {
     await refreshBoard();
   } finally {
     stoppingAppSessionKey.value = "";
+  }
+}
+
+async function forkCardSession(card: AiBoardCard, mode: "current" | "managed-worktree" = "current") {
+  if (card.session.status === "running" || card.session.status === "waiting") {
+    pendingBusyFork.value = { card, mode };
+    return;
+  }
+  await performCardFork(card, mode);
+}
+
+function confirmBusyFork() {
+  const pending = pendingBusyFork.value;
+  pendingBusyFork.value = undefined;
+  if (pending) void performCardFork(pending.card, pending.mode);
+}
+
+async function performCardFork(card: AiBoardCard, mode: "current" | "managed-worktree") {
+  if (forkingSessionKey.value || card.session.actions?.fork !== true) return;
+  forkingSessionKey.value = card.key;
+  const requestKey = `${card.key}:${mode}`;
+  const clientRequestId = forkRequestIds.get(requestKey) || crypto.randomUUID();
+  forkRequestIds.set(requestKey, clientRequestId);
+  try {
+    const result = await forkAiSession(card.instance.id, card.session.id, { clientRequestId, workspace: { mode } });
+    let forkedCard: AiBoardCard | undefined;
+    for (let attempt = 0; attempt < 25; attempt += 1) {
+      forkedCard = allCards.value.find((candidate) => candidate.instance.id === card.instance.id && candidate.session.id === result.aiSessionId && candidate.session.providerSessionId === result.providerSessionId);
+      if (forkedCard) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    if (!forkedCard) {
+      await refreshBoard();
+      forkedCard = allCards.value.find((candidate) => candidate.instance.id === card.instance.id && candidate.session.id === result.aiSessionId && candidate.session.providerSessionId === result.providerSessionId);
+    }
+    if (!forkedCard) throw new Error(t("sessions.panel.forkProjectionPending"));
+    selectCard(forkedCard.key);
+    forkRequestIds.delete(requestKey);
+  } catch (error) {
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.forkFailed")));
+  } finally {
+    forkingSessionKey.value = "";
   }
 }
 

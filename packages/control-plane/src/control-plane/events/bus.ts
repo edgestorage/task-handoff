@@ -17,6 +17,7 @@ type EventSocket = {
   send: (value: string) => void;
   on: (event: "close" | "message", listener: (value?: unknown) => void) => void;
   topics?: Set<string>;
+  instanceIds?: Set<string>;
 };
 
 function eventId() {
@@ -28,8 +29,9 @@ export class ControlPlaneEventBus {
   private readonly listeners = new Set<(event: EventEnvelope) => void>();
   private seq = 0;
 
-  connect(socket: EventSocket) {
+  connect(socket: EventSocket, options: { instanceIds?: string[] } = {}) {
     socket.topics = new Set(["*"]);
+    socket.instanceIds = options.instanceIds?.length ? new Set(options.instanceIds) : undefined;
     this.clients.add(socket);
     socket.on("close", () => {
       this.clients.delete(socket);
@@ -38,6 +40,7 @@ export class ControlPlaneEventBus {
       const message = parseClientMessage(value);
       if (message?.type === "subscribe") {
         socket.topics = new Set(message.topics?.length ? message.topics : ["*"]);
+        socket.instanceIds = message.instanceIds?.length ? new Set(message.instanceIds) : undefined;
       }
     });
   }
@@ -54,7 +57,7 @@ export class ControlPlaneEventBus {
       }
     }
     for (const client of this.clients) {
-      if (client.readyState === client.OPEN && subscribed(client.topics, topic, type)) {
+      if (client.readyState === client.OPEN && subscribed(client.topics, topic, type) && subscribedInstance(client.instanceIds, event.scope)) {
         try {
           client.send(encoded);
         } catch {
@@ -96,10 +99,20 @@ function subscribed(topics: Set<string> | undefined, topic: string, type: string
   return !topics || topics.has("*") || topics.has(topic) || topics.has(type);
 }
 
-function parseClientMessage(value: unknown): { type?: string; topics?: string[] } | undefined {
+function subscribedInstance(instanceIds: Set<string> | undefined, scope: EventScope | undefined) {
+  return !instanceIds || !scope?.instanceId || instanceIds.has(scope.instanceId);
+}
+
+function parseClientMessage(value: unknown): { type?: string; topics?: string[]; instanceIds?: string[] } | undefined {
   try {
     const parsed = JSON.parse(String(value || "{}"));
-    return parsed && typeof parsed === "object" ? parsed as { type?: string; topics?: string[] } : undefined;
+    if (!parsed || typeof parsed !== "object") return undefined;
+    const message = parsed as { type?: string; topics?: unknown; instanceIds?: unknown };
+    return {
+      type: message.type,
+      topics: Array.isArray(message.topics) ? message.topics.map(String).filter(Boolean) : undefined,
+      instanceIds: Array.isArray(message.instanceIds) ? message.instanceIds.map(String).map((id) => id.trim()).filter(Boolean) : undefined,
+    };
   } catch {
     return undefined;
   }

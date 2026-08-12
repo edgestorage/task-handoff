@@ -19,7 +19,10 @@ const ConfigSyncFolderQuerySchema = z.object({
 }).strict();
 const InstanceAppParamsSchema = z.object({ id: z.string().trim().min(1), appId: z.string().trim().min(1) }).strict();
 const InstanceAppJobParamsSchema = z.object({ id: z.string().trim().min(1), jobId: z.string().trim().min(1) }).strict();
-const InstanceBoardQuerySchema = z.object({ projection: z.literal("directory").optional() }).strict();
+const InstanceBoardQuerySchema = z.object({
+  projection: z.literal("directory").optional(),
+  instanceId: z.string().trim().min(1).max(120).optional(),
+}).strict();
 
 export function registerInstanceRoutes({ app, service, events }: RegisterInstanceRoutesOptions) {
   app.get("/api/controlled-instances", async () => ({ data: await service.listControlledInstances() }));
@@ -95,7 +98,8 @@ export function registerInstanceRoutes({ app, service, events }: RegisterInstanc
     const query = InstanceBoardQuerySchema.parse(request.query);
     const result = await service.boardWithDiagnostics(signal);
     return {
-      data: query.projection === "directory" ? result.items.map(publicInstanceDirectory) : result.items,
+      data: (query.instanceId ? result.items.filter((item) => item.id === query.instanceId) : result.items)
+        .map((item) => query.projection === "directory" ? publicInstanceDirectory(item) : item),
       meta: { nodeErrors: result.nodeErrors },
     };
   }));

@@ -256,6 +256,16 @@
                       </button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent class="session-ai-card-menu" align="end" :side-offset="6" @click.stop>
+                      <DropdownMenuSub v-if="session.actions?.fork">
+                        <DropdownMenuSubTrigger class="session-ai-card-menu-item" :disabled="forkingAiSessionId === session.id">
+                          <GitFork :size="13" />
+                          <span>{{ forkingAiSessionId === session.id ? t("sessions.actions.forking") : t("sessions.actions.fork") }}</span>
+                        </DropdownMenuSubTrigger>
+                        <DropdownMenuSubContent class="session-ai-card-menu">
+                          <DropdownMenuItem class="session-ai-card-menu-item" @select="forkSession(session, 'current')">{{ t("sessions.actions.forkCurrent") }}</DropdownMenuItem>
+                          <DropdownMenuItem class="session-ai-card-menu-item" @select="forkSession(session, 'managed-worktree')">{{ t("sessions.actions.forkWorktree") }}</DropdownMenuItem>
+                        </DropdownMenuSubContent>
+                      </DropdownMenuSub>
                       <DropdownMenuItem class="session-ai-card-menu-item danger" :disabled="stoppingAppSessionId === session.id" @select="closeSession(session)">
                         <Square :size="13" />
                         <span>{{ stoppingAppSessionId === session.id ? t("sessions.actions.closingSession") : t("sessions.actions.closeSession") }}</span>
@@ -269,6 +279,8 @@
                     :bound-trigger-count="boundTriggers(session).length"
                     :has-app-session="Boolean(aiSessionAppTab(instance, session))"
                     :can-open-app="Boolean(aiSessionAppTab(instance, session) || session.actions?.openApp)"
+                    :can-fork="session.actions?.fork === true"
+                    :is-forking="forkingAiSessionId === session.id"
                     :is-stopping-app-session="stoppingAppSessionId === session.id"
                     :is-trigger-bound="(configHash) => isTriggerBound(session, configHash)"
                     :is-trigger-busy="(configHash) => triggerBusyKey === triggerActionKey(session, configHash)"
@@ -276,6 +288,7 @@
                     :trigger-templates="triggerTemplates"
                     @close-session="closeSession(session)"
                     @open-app="openSessionApp(session)"
+                    @fork-session="forkSession(session, $event)"
                     @toggle-trigger="toggleTrigger(session, $event)"
                   />
                 </ContextMenu>
@@ -598,29 +611,54 @@
                       <dt>{{ t("sessions.detail.appBinding") }}</dt>
                       <dd>{{ selectedSession.appSessionId || t("sessions.detail.notBound") }}</dd>
                     </div>
+                    <div v-if="selectedSession.lineage?.kind === 'fork'">
+                      <dt>{{ t("sessions.detail.forkedFrom") }}</dt>
+                      <dd>{{ parentSessionLabel(selectedSession) }}</dd>
+                    </div>
                   </dl>
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
-            <button
-              v-if="aiSessionAppTab(instance, selectedSession) || selectedSession.actions?.openApp"
-              type="button"
-              :title="t('sessions.actions.openApp')"
-              :aria-label="t('sessions.actions.openApp')"
-              :disabled="openingAiSessionId === selectedSession.id"
-              @click="openSessionApp(selectedSession)"
-            >
-              <ExternalLink :size="15" />
-            </button>
-            <button
-              type="button"
-              :disabled="stoppingAppSessionId === selectedSession.id"
-              :title="t('sessions.actions.closeSession')"
-              :aria-label="t('sessions.actions.closeSession')"
-              @click="closeSession(selectedSession)"
-            >
-              <Square :size="14" />
-            </button>
+            <TooltipProvider v-if="aiSessionAppTab(instance, selectedSession) || selectedSession.actions?.openApp" :delay-duration="120">
+              <Tooltip>
+                <TooltipTrigger as-child>
+                  <button type="button" :aria-label="t('sessions.actions.openApp')" :disabled="openingAiSessionId === selectedSession.id" @click="openSessionApp(selectedSession)">
+                    <ExternalLink :size="15" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" :side-offset="8">{{ t("sessions.actions.openApp") }}</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+            <TooltipProvider v-if="selectedSession.actions?.fork" :delay-duration="120">
+              <Tooltip>
+                <TooltipTrigger as-child>
+                  <button type="button" :disabled="forkingAiSessionId === selectedSession.id" :aria-label="t('sessions.actions.fork')" @click="forkSession(selectedSession)">
+                    <GitFork :size="15" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" :side-offset="8">{{ t("sessions.actions.fork") }}</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+            <TooltipProvider v-if="selectedForkTurn" :delay-duration="120">
+              <Tooltip>
+                <TooltipTrigger as-child>
+                  <button type="button" :disabled="forkingAiSessionId === selectedSession.id" :aria-label="t('sessions.actions.forkThroughTurn')" @click="forkSession(selectedSession, 'current', selectedForkTurn.id)">
+                    <GitBranch :size="15" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" :side-offset="8">{{ t("sessions.actions.forkThroughTurn") }}</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+            <TooltipProvider :delay-duration="120">
+              <Tooltip>
+                <TooltipTrigger as-child>
+                  <button type="button" :disabled="stoppingAppSessionId === selectedSession.id" :aria-label="t('sessions.actions.closeSession')" @click="closeSession(selectedSession)">
+                    <Square :size="14" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" :side-offset="8">{{ t("sessions.actions.closeSession") }}</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </div>
           <header ref="detailHeaderEl">
             <div>
@@ -734,6 +772,18 @@
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
+    <AlertDialog :open="Boolean(pendingBusyFork)" @update:open="(open) => !open && (pendingBusyFork = undefined)">
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{{ t("sessions.actions.forkBusyTitle") }}</AlertDialogTitle>
+          <AlertDialogDescription>{{ t("sessions.actions.forkBusyDescription") }}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>{{ t("common.actions.cancel") }}</AlertDialogCancel>
+          <AlertDialogAction @click="confirmBusyFork">{{ t("sessions.actions.forkConfirm") }}</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   </div>
 </template>
 
@@ -743,13 +793,13 @@ import { useI18n } from "vue-i18n";
 import { formatRelativeTime } from "../../../i18n/presentation";
 import type { SupportedLocale } from "../../../i18n/locale";
 import { translateApiError } from "../../../i18n/apiError";
-import { ArrowDown, ArrowLeft, Ban, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Code2, ExternalLink, Filter, Folder, FolderOpen, GitBranch, History, LoaderCircle, MessageSquare, MoreHorizontal, Plus, SlidersHorizontal, Square, X, Zap } from "@lucide/vue";
+import { ArrowDown, ArrowLeft, Ban, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Code2, ExternalLink, Filter, Folder, FolderOpen, GitBranch, GitFork, History, LoaderCircle, MessageSquare, MoreHorizontal, Plus, SlidersHorizontal, Square, X, Zap } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import AiSessionCardContextMenu from "../../../components/ai-session/AiSessionCardContextMenu.vue";
 import AiSessionOriginMark from "../../../components/ai-session/AiSessionOriginMark.vue";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
-import { bindAiSessionTrigger, closeAiSession, createAiSession, createNodeLocalFolder, editAiSessionQueuedMessage, getAiSessionHistory, getAiSessionHistoryDetail, getAiSessionWorkspace, interruptAiSession, listNodeFolderTree, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, unbindAiSessionTrigger, updateControlledInstance, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery } from "../../../api/queries";
+import { bindAiSessionTrigger, closeAiSession, createAiSession, createNodeLocalFolder, editAiSessionQueuedMessage, forkAiSession, getAiSessionHistory, getAiSessionHistoryDetail, getAiSessionWorkspace, interruptAiSession, listNodeFolderTree, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, unbindAiSessionTrigger, updateControlledInstance, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery } from "../../../api/queries";
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { executeAiSessionCommand } from "../../../api/ai-session-commands";
 import type { AiSessionCommandInput, AiSessionHistoryDetail, AiSessionHistoryItem, AiSessionMessageAttachmentRef, AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
@@ -766,7 +816,7 @@ import { referencesForBindings, type AiSessionMentionBinding } from "../../../co
 import { desktopRuntimePathAccess } from "../../../components/ai-session/useAiSessionMentions";
 import AiSessionTurnNavigator from "../../../components/ai-session/AiSessionTurnNavigator.vue";
 import { Button } from "../../../components/ui/button";
-import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
 import { ContextMenu, ContextMenuTrigger } from "../../../components/ui/context-menu";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
@@ -909,6 +959,12 @@ async function handleRepositoryAiSessionStarted(result: RepositoryAiSessionLaunc
   emit("selectAiSession", props.instance.id, result.aiSessionId);
 }
 const newSessionOpen = ref(false);
+const selectedForkTurn = computed(() => {
+  const session = selectedSession.value;
+  if (!session || session.actions?.fork !== true) return undefined;
+  const turn = aiSessionTurns(session)[promptIndexFor(session)];
+  return turn?.status === "completed" && turn.providerTurnId ? turn : undefined;
+});
 const showNewSession = computed(() => newSessionOpen.value || !selectedSession.value);
 const newSessionApp = ref("");
 const newSessionFolderId = ref("");
@@ -1045,6 +1101,9 @@ let sidebarResizeCleanup: (() => void) | undefined;
 const aiSessionActionBusy = ref(false);
 const stoppingAppSessionId = ref("");
 const openingAiSessionId = ref("");
+const forkingAiSessionId = ref("");
+const forkRequestIds = new Map<string, string>();
+const pendingBusyFork = ref<{ session: AiSessionSummary; mode: "current" | "managed-worktree"; throughTurnId?: string }>();
 const triggerBusyKey = ref("");
 const triggerSearch = ref("");
 const triggers = useControlPlaneTriggersQuery();
@@ -2004,8 +2063,57 @@ async function closeSession(session: AiSessionSummary) {
   }
 }
 
+async function forkSession(session: AiSessionSummary, mode: "current" | "managed-worktree" = "current", throughTurnId?: string) {
+  if (!throughTurnId && (session.status === "running" || session.status === "waiting")) {
+    pendingBusyFork.value = { session, mode };
+    return;
+  }
+  await performFork(session, mode, throughTurnId);
+}
+
+function confirmBusyFork() {
+  const pending = pendingBusyFork.value;
+  pendingBusyFork.value = undefined;
+  if (pending) void performFork(pending.session, pending.mode, pending.throughTurnId);
+}
+
+async function performFork(session: AiSessionSummary, mode: "current" | "managed-worktree", throughTurnId?: string) {
+  if (forkingAiSessionId.value || session.actions?.fork !== true) return;
+  forkingAiSessionId.value = session.id;
+  const requestKey = `${session.id}:${mode}:${throughTurnId || "latest"}`;
+  const clientRequestId = forkRequestIds.get(requestKey) || crypto.randomUUID();
+  forkRequestIds.set(requestKey, clientRequestId);
+  try {
+    const result = await forkAiSession(props.instance.id, session.id, { clientRequestId, ...(throughTurnId ? { throughTurnId } : {}), workspace: { mode } });
+    let forked = props.instance.aiSessions?.sessions.find((candidate) => candidate.id === result.aiSessionId && candidate.providerSessionId === result.providerSessionId);
+    for (let attempt = 0; attempt < 25; attempt += 1) {
+      forked = props.instance.aiSessions?.sessions.find((candidate) => candidate.id === result.aiSessionId && candidate.providerSessionId === result.providerSessionId);
+      if (forked) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    if (!forked) {
+      await refreshBoard();
+      forked = props.instance.aiSessions?.sessions.find((candidate) => candidate.id === result.aiSessionId && candidate.providerSessionId === result.providerSessionId);
+    }
+    if (!forked) throw new Error(t("sessions.panel.forkProjectionPending"));
+    selectSession(forked.id);
+    forkRequestIds.delete(requestKey);
+  } catch (error) {
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.forkFailed")));
+  } finally {
+    forkingAiSessionId.value = "";
+  }
+}
+
 function boundTriggers(session: AiSessionSummary) {
   return (props.instance.triggers?.configs || []).flatMap((entry) => entry.deployments.filter((deployment) => isAiSessionTriggerDeployment(deployment, session.id)));
+}
+
+function parentSessionLabel(session: AiSessionSummary) {
+  const parentProviderSessionId = session.lineage?.parentProviderSessionId;
+  if (!parentProviderSessionId) return t("sessions.detail.unknown");
+  const parent = props.instance.aiSessions?.sessions.find((candidate) => candidate.providerSessionId === parentProviderSessionId);
+  return parent ? displayAiSessionTitle(parent, 0, t) : parentProviderSessionId;
 }
 
 function isAiSessionTriggerDeployment(deployment: TriggerDeployment, sessionId: string) {

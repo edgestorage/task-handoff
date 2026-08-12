@@ -37,6 +37,13 @@ test("desktop owns a single Electron process and focuses it on repeated launches
 test("desktop closes windows into tray-backed service mode", () => {
   const main = fs.readFileSync(path.join(__dirname, "../src/main.cjs"), "utf8");
   assert.match(main, /createDesktopTray\(/);
+  assert.match(main, /onSettings: openDesktopSettings/);
+  assert.match(main, /function openDesktopSettings\(\)[\s\S]*desktopWindows\.open\(\)[\s\S]*task-handoff:open-settings/);
+  assert.match(main, /loadInstances: \(\) => loadDesktopInstanceDirectory\(/);
+  assert.match(main, /function openDesktopInstance\(instanceId, source\)[\s\S]*createControlPlaneWindow\(`\/instance-detail\/\$\{encodeURIComponent\(instanceId\)\}`\)/);
+  assert.match(main, /createDesktopDockMenu\([\s\S]*onOpenInstance: \(instanceId\) => openDesktopInstance\(instanceId, "dock menu"\)/);
+  assert.match(main, /createDesktopTray\([\s\S]*onOpenInstance: \(instanceId\) => openDesktopInstance\(instanceId, "tray"\)/);
+  assert.match(main, /onInstanceDirectoryChange: \(snapshot\) => desktopDockMenu\?\.update\(snapshot\)/);
   assert.match(main, /desktopWindows\?\.background\(\)/);
   assert.match(main, /Closing UI windows enters background service mode/);
   assert.doesNotMatch(main, /app\.on\("window-all-closed"[\s\S]{0,160}app\.quit\(\)/);
@@ -51,6 +58,7 @@ test("desktop supervises its detached node-agent and awaits service shutdown", (
   assert.match(main, /app\.on\("before-quit", \(event\) =>/);
   assert.match(main, /event\.preventDefault\(\)/);
   assert.match(main, /desktopQuitCoordinator\.request\("quit"\)/);
+  assert.match(main, /onStopping: \(\) => \{[\s\S]*?controlPlaneWindows\.closeAll\(\)/);
   assert.match(main, /install: prepareDesktopUpdateInstall/);
   assert.match(main, /async function stopNodeAgent\(\)[\s\S]*stopExistingDesktopNodeAgent/);
 });

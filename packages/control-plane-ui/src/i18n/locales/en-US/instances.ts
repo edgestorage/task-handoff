@@ -1,5 +1,15 @@
 export const instances = {
   title: "Instances",
+  window: {
+    invalidRoute: "This instance detail link is invalid. Choose an instance from the switcher.",
+    instanceUnavailable: "This instance is unavailable. Choose another instance from the switcher.",
+    alreadyOpen: "This instance is already open in another detail window.",
+    focusedExisting: "Focused the existing instance window.",
+    switchFailed: "The instance window could not be switched. Try again.",
+    popupBlocked: "The browser blocked the new window. Allow popups and try again.",
+    focusFailed: "The instance window exists, but the browser did not allow it to be focused.",
+    openInNewWindow: "Open in new window",
+  },
   list: {
     controlledInstances: "Controlled instances",
     switchInstance: "Switch instance",

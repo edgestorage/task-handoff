@@ -28,13 +28,15 @@ test("session split follows the focused pane for selection and new app sessions"
 });
 
 test("session preview splits the original tab row into pane-aligned tab groups", async () => {
-  const [preview, pane, styles, terminalPreview] = await Promise.all([
+  const [workbench, preview, pane, styles, terminalPreview] = await Promise.all([
+    source("apps/control-plane/ControlPlaneWorkbench.vue"),
     source("apps/control-plane/instance-detail/SessionPreview.vue"),
     source("apps/control-plane/instance-detail/SessionPaneContent.vue"),
     source("apps/control-plane/instance-detail/SessionPreview.css"),
     source("apps/control-plane/useTerminalPreview.ts"),
   ]);
 
+  assert.match(workbench, /:session-toolbar-target="standaloneMode && sessionPreviewExpanded && !hasSessionSplit \? '#instance-detail-titlebar-tabs' : undefined"/);
   assert.match(preview, /:aria-label="hasSessionSplit \? t\('sessions\.tabs\.closeSplit'\) : t\('sessions\.tabs\.split'\)"/);
   assert.match(preview, /v-for="pane in visiblePanes"/);
   assert.match(preview, /v-for="tabGroup in visibleTabGroups"/);
@@ -87,7 +89,8 @@ test("session preview splits the original tab row into pane-aligned tab groups",
   assert.match(pane, /active[\s\S]*:cache-key="sessionKey"[\s\S]*:cache-scope="instance\.id"[\s\S]*:socket-url="activeTerminalSocketUrl"/);
   assert.match(pane, /\.session-terminal \{ position: relative;/);
   assert.match(terminalPreview, /message\.type === "snapshot"[\s\S]*terminal\.reset\(\)[\s\S]*terminal\.write\(message\.data\)/);
-  assert.match(terminalPreview, /terminal\.resize\(Number\(message\.cols\), Number\(message\.rows\)\)[\s\S]*terminal\.write\(`\$\{message\.data\}\$\{pendingEscape\}`/);
+  assert.match(terminalPreview, /applyRemoteDimensions\(Number\(message\.cols\), Number\(message\.rows\)\)[\s\S]*terminal\.write\(`\$\{message\.data\}\$\{pendingEscape\}`/);
+  assert.match(terminalPreview, /applyingRemoteResize = true[\s\S]*terminal\.resize\(cols, rows\)[\s\S]*applyingRemoteResize = false/);
   assert.match(styles, /grid-template-columns: minmax\(0, var\(--session-left-ratio\)\) 7px/);
   assert.match(styles, /\.session-pane-layout\.split \.session-pane,[\s\S]*\.session-pane-layout\.split \.session-pane-resize-handle\s*\{[\s\S]*grid-row:\s*1/);
   assert.match(styles, /\.session-pane-resize-handle::after\s*\{[\s\S]*width:\s*2px/);
@@ -109,6 +112,9 @@ test("session tab dragging follows the pointer, reorders live, and accepts pane 
   assert.match(preview, /<TransitionGroup name="session-tab-reorder"[\s\S]*previewSessionTabs\(tabGroup\.id, tabGroup\.appTabs\)/);
   assert.match(preview, /function previewSessionTabs\([\s\S]*nextTabs\.splice\(target\.placement === "after" \? targetIndex \+ 1 : targetIndex, 0, drag\.session\)/);
   assert.match(preview, /document\.elementFromPoint\(clientX, clientY\)/);
+  assert.match(preview, /:ref="\(element\) => setSessionTabSelector\(tabGroup\.id, element\)"/);
+  assert.match(preview, /sessionTabSelectors\.get\(pane\) !== selector/);
+  assert.doesNotMatch(preview, /root\.contains\(selector\)/);
   assert.match(preview, /querySelectorAll<HTMLElement>\("\[data-session-tab-key\]"\)/);
   assert.match(preview, /targetKey: "", placement: "after"/);
   assert.doesNotMatch(preview, /draggable="true"|setDragImage|@dragstart/);

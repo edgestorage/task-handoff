@@ -55,7 +55,10 @@ const domainQueryKeys: Record<Exclude<ControlPlaneQueryDomain, "manual">, () => 
     controlPlaneQueryKeys.controlPlaneProxyDiagnostics,
     controlPlaneQueryKeys.controlPlaneProxyPendingClaims,
   ],
-  instances: () => [controlPlaneQueryKeys.instanceBoard],
+  instances: () => [
+    controlPlaneQueryKeys.instanceBoard,
+    controlPlaneQueryKeys.instanceDirectory,
+  ],
   chat: () => [
     controlPlaneQueryKeys.chatBridges,
     controlPlaneQueryKeys.chatStatus,

@@ -70,6 +70,36 @@ test("instance lifecycle snapshots patch one board item and reject stale revisio
   assert.equal(registering.ready, false);
 });
 
+test("instance lifecycle snapshots patch both global and scoped board caches", () => {
+  const queryClient = new QueryClient();
+  queryClient.setQueryData(controlPlaneQueryKeys.instanceBoard, { data: [boardInstance("inst_target", 1)] });
+  queryClient.setQueryData(controlPlaneQueryKeys.scopedInstanceBoard("inst_target"), { data: [boardInstance("inst_target", 1)] });
+
+  assert.equal(applyInstanceLifecycle(queryClient, lifecycle(2, "starting")), true);
+  assert.equal(queryClient.getQueryData(controlPlaneQueryKeys.instanceBoard).data[0].status, "starting");
+  assert.equal(queryClient.getQueryData(controlPlaneQueryKeys.scopedInstanceBoard("inst_target")).data[0].status, "starting");
+});
+
+test("instance lifecycle snapshots patch the lightweight instance directory", () => {
+  const queryClient = new QueryClient();
+  queryClient.setQueryData(controlPlaneQueryKeys.instanceDirectory, [{
+    id: "inst_target",
+    name: "Target",
+    nodeId: "node_a",
+    status: "created",
+    health: "unknown",
+    connectionStatus: "unknown",
+    ready: false,
+    observedAt: "2026-07-25T00:00:00.000Z",
+    workspace: { status: "unknown" },
+  }]);
+
+  assert.equal(applyInstanceLifecycle(queryClient, lifecycle(2, "starting")), true);
+  const updated = queryClient.getQueryData(controlPlaneQueryKeys.instanceDirectory)[0];
+  assert.equal(updated.status, "starting");
+  assert.equal(updated.workspace.status, "pending");
+});
+
 test("instance lifecycle snapshots converge runtime upgrade phases in the authoritative board cache", () => {
   const queryClient = new QueryClient();
   const target = {
