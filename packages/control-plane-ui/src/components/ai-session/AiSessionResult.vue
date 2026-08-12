@@ -39,7 +39,7 @@
 
     <section v-if="session.queue?.items.length" class="ai-session-detail-queue">
       <span class="ai-session-detail-queue-label">{{ t("sessions.activity.queue", { count: session.queue.pendingCount }) }}</span>
-      <ScrollArea class="ai-session-detail-queue-list" :horizontal="false">
+      <ScrollArea type="auto" class="ai-session-detail-queue-list" :horizontal="false">
         <article
           v-for="item in displayedQueueItems"
           :key="item.id"
@@ -328,10 +328,13 @@ const displayContent = computed(() => streamingContent.value || props.responseCo
 }
 
 .ai-session-detail-queue-list {
-  max-height: 220px;
   border: 1px solid var(--detail-activity-border);
   border-radius: 10px;
   background: var(--detail-action-bg);
+}
+
+.ai-session-detail-queue-list :deep([data-reka-scroll-area-viewport]) {
+  max-height: 220px;
 }
 
 .ai-session-detail-queue-item {
