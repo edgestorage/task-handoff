@@ -91,7 +91,7 @@ test("installer rejects runtime commands inaccessible to the service user", () =
 test("node agent services persist the absolute npm command for managed updates", () => {
   const installer = fs.readFileSync(path.join(root, "scripts", "install-server-services.sh"), "utf8");
   const remoteInstaller = fs.readFileSync(path.join(root, "packages", "control-plane", "src", "control-plane", "nodes", "install-script.ts"), "utf8");
-  const worker = fs.readFileSync(path.join(root, "scripts", "node-update-worker.cjs"), "utf8");
+  const worker = fs.readFileSync(path.join(root, "scripts", "node-update-worker.cts"), "utf8");
   const updater = fs.readFileSync(path.join(root, "apps", "cli", "src", "runtime", "server.ts"), "utf8");
 
   assert.match(installer, /NPM_COMMAND="\$\(command -v npm\)"/);
@@ -394,7 +394,7 @@ test("server update CLI defaults to the installed release channel", async () => 
 });
 
 test("node update worker uses Commander for required and validated options", () => {
-  const worker = path.join(root, "scripts", "node-update-worker.cjs");
+  const worker = path.join(root, "scripts", "node-update-worker.cts");
   const source = fs.readFileSync(worker, "utf8");
   const help = spawnSync(process.execPath, [worker, "--help"], { encoding: "utf8" });
   assert.equal(help.status, 0);

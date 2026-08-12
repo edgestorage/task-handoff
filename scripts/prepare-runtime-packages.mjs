@@ -77,7 +77,7 @@ for (const [name, definition] of selected) {
   }
   if (name === "node-agent") {
     const updateWorkerPath = path.join(binDir, "task-handoff-node-update-worker");
-    copyLinuxExecutable(path.join(root, "scripts", "node-update-worker.cjs"), updateWorkerPath);
+    fs.writeFileSync(updateWorkerPath, `#!/usr/bin/env node\nrequire("../dist/${definition.updateWorkerEntryFile}");\n`, { mode: 0o755 });
     const dockerAssetsDir = path.join(packageDir, "docker");
     fs.mkdirSync(dockerAssetsDir, { recursive: true });
     for (const asset of ["entrypoint.sh", "instance-launcher.sh", "runtime-installer.mjs"]) {
