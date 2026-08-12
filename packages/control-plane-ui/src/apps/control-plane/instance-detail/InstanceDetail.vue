@@ -79,6 +79,16 @@
             </div>
           </TooltipProvider>
           <div class="instance-controls" :aria-label="t('instances.detail.controls')">
+            <TooltipProvider :delay-duration="120">
+              <Tooltip>
+                <TooltipTrigger as-child>
+                  <Button variant="outline" size="icon" :aria-label="t('instances.window.openInNewWindow')" @click="$emit('openWindow', instance)">
+                    <ExternalLink :size="14" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{{ t("instances.window.openInNewWindow") }}</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
             <Button v-if="canShowInstanceAction(instance, 'start')" variant="outline" size="sm" :disabled="isInstanceActionBusy(instance)" @click="$emit('runAction', 'start', instance)">
               <Play :size="14" />
               <span>{{ activeActionLabel(instance, "start", t("instances.actions.start")) }}</span>
@@ -144,6 +154,8 @@
         :session-menu-open="sessionMenuOpen"
         :session-tabs="sessionTabs"
         :stopping-session-id="stoppingSessionId"
+        :standalone="standalone"
+        :toolbar-target="sessionToolbarTarget"
         @copy-registration="$emit('copyRegistration', $event)"
         @launch-app="(target, appId, cwdFolderId) => $emit('launchApp', target, appId, cwdFolderId)"
         @move-session-tab="(sourceKey, targetKey, placement, targetPane) => $emit('moveSessionTab', sourceKey, targetKey, placement, targetPane)"
@@ -170,7 +182,7 @@
     <section v-else class="detail-empty">
       <h1>{{ t("instances.detail.emptyTitle") }}</h1>
       <p>{{ t("instances.detail.emptyDescription") }}</p>
-      <Button size="sm" @click="$emit('newInstance')">
+      <Button v-if="!standalone" size="sm" @click="$emit('newInstance')">
         <Plus :size="15" />
         <span>{{ t("instances.list.new") }}</span>
       </Button>
@@ -180,7 +192,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
-import { Play, Plus, RotateCw, Settings, Square, Trash2 } from "@lucide/vue";
+import { ExternalLink, Play, Plus, RotateCw, Settings, Square, Trash2 } from "@lucide/vue";
 import { useI18n } from "vue-i18n";
 import type { AiSessionSummary, InstanceBoardItem, InstanceResourceMetrics, InstanceWithAiSessions, NodeLocalFolder } from "../../../api/types";
 import { Badge } from "../../../components/ui/badge";
@@ -241,6 +253,8 @@ const props = defineProps<{
   sessionMenuOpen: boolean;
   sessionTabs: SessionTab[];
   stoppingSessionId: string;
+  standalone?: boolean;
+  sessionToolbarTarget?: string;
 }>();
 
 defineEmits<{
@@ -255,6 +269,7 @@ defineEmits<{
   newInstance: [];
   openAiSessionApp: [instance: InstanceBoardItem, session?: AiSessionSummary];
   openRepositoryWorkspace: [target: RepositoryWorkspaceTabTarget];
+  openWindow: [instance: InstanceBoardItem];
   openSettings: [instanceId: string, section?: "general" | "models" | "apps"];
   openUrl: [url: string];
   runAction: [action: InstanceAction, instance: InstanceBoardItem];

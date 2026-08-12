@@ -48,6 +48,7 @@ import {
   type AiSessionCommandInput,
   type AiSessionDeltaResponse,
   type AiSessionCreateInput,
+  type AiSessionForkInput,
   type AiSessionMessageAttachment,
   type AiSessionPermissionMode,
   type AiSessionReference,
@@ -1275,6 +1276,10 @@ export class ControlPlaneService {
     const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
     const cwd = { type: "runtime-path" as const, path: await this.runtimeCwdForFolderId(instance, cwdFolderId) };
     return this.aiSessionActionService.inspectWorkspace(instanceId, cwd);
+  }
+
+  forkAiSession(instanceId: string, aiSessionId: string, input: AiSessionForkInput) {
+    return this.aiSessionActionService.fork(instanceId, aiSessionId, input);
   }
 
   openAiSessionApp(instanceId: string, aiSessionId: string, clientRequestId: string) {

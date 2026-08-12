@@ -1,10 +1,14 @@
 <template>
-  <section ref="sessionPreview" class="session-preview" :class="{ expanded: previewExpanded }" :data-state="instance.connectionStatus">
-    <div class="session-preview-toolbar" :class="{ split: hasSessionSplit }">
+  <section ref="sessionPreview" class="session-preview" :class="{ expanded: previewExpanded, 'toolbar-in-titlebar': Boolean(toolbarTarget) }" :data-state="instance.connectionStatus">
+    <Teleport :to="toolbarTarget || 'body'" :disabled="!toolbarTarget">
+    <ContextMenu>
+    <ContextMenuTrigger as-child>
+    <div class="session-preview-toolbar" :class="{ split: hasSessionSplit, 'in-titlebar': Boolean(toolbarTarget) }">
       <div class="session-preview-primary-tools" :class="{ split: hasSessionSplit }" :style="hasSessionSplit ? { '--session-left-ratio': `${sessionSplitRatio * 100}%` } : undefined">
         <div
           v-for="tabGroup in visibleTabGroups"
           :key="tabGroup.id"
+          :ref="(element) => setSessionTabSelector(tabGroup.id, element)"
           class="session-preview-selector"
           :class="{ 'drop-target': sessionTabDropTarget?.pane === tabGroup.id }"
           :data-pane="tabGroup.id"
@@ -114,6 +118,10 @@
                         <PanelRight :size="14" />
                         <span>{{ t("sessions.tabs.moveRight") }}</span>
                       </ContextMenuItem>
+                      <ContextMenuSeparator />
+                      <ContextMenuCheckboxItem v-model="sessionStatusBarVisible" class="instance-action-item session-status-bar-menu-item">
+                        {{ t("sessions.tabs.showStatusBar") }}
+                      </ContextMenuCheckboxItem>
                     </ContextMenuContent>
                   </ContextMenu>
                 </span>
@@ -261,6 +269,14 @@
         </button>
       </div>
     </div>
+    </ContextMenuTrigger>
+    <ContextMenuContent class="instance-action-menu">
+      <ContextMenuCheckboxItem v-model="sessionStatusBarVisible" class="instance-action-item session-status-bar-menu-item">
+        {{ t("sessions.tabs.showStatusBar") }}
+      </ContextMenuCheckboxItem>
+    </ContextMenuContent>
+    </ContextMenu>
+    </Teleport>
     <Teleport to="body">
       <div
         v-if="sessionTabPointerDrag"
@@ -309,21 +325,30 @@
       </section>
       <div v-if="hasSessionSplit" class="session-pane-resize-handle" role="separator" :aria-label="t('sessions.tabs.resizePanes')" aria-orientation="vertical" :aria-valuenow="Math.round(sessionSplitRatio * 100)" tabindex="0" @pointerdown="startSplitResize" @dblclick="$emit('setSessionSplitRatio', 0.5)" @keydown.left.prevent="$emit('setSessionSplitRatio', sessionSplitRatio - 0.02)" @keydown.right.prevent="$emit('setSessionSplitRatio', sessionSplitRatio + 0.02)" />
     </div>
-    <div class="session-preview-actions">
-      <p class="session-preview-status" :aria-label="t('sessions.tabs.instanceStatus')">
-        <span>{{ t("sessions.tabs.health", { status: instance.health }) }}</span>
-        <span>{{ t("sessions.tabs.workspace", { status: instance.workspace.status }) }}</span>
-        <template v-if="resourceMetrics">
-          <span class="session-resource-metrics" :data-state="resourceMetricsDisplay.state" :title="resourceMetricsDisplay.title">
-            {{ resourceMetricsDisplay.compact }}
-          </span>
-        </template>
-        <span v-else-if="instance.runtime?.type === 'docker'" class="session-resource-metrics" :data-state="resourceMetricsError ? 'unavailable' : 'loading'" :title="resourceMetricsError || t('sessions.tabs.waitingMetrics')">
-          {{ resourceMetricsError ? t("sessions.tabs.resourcesUnavailable") : t("sessions.tabs.resourcesLoading") }}
-        </span>
-        <span v-else>{{ t("sessions.tabs.lastRefresh", { time: lastRefreshLabel }) }}</span>
-      </p>
-    </div>
+    <ContextMenu v-if="sessionStatusBarVisible">
+      <ContextMenuTrigger as-child>
+        <div class="session-preview-actions">
+          <p class="session-preview-status" :aria-label="t('sessions.tabs.instanceStatus')">
+            <span>{{ t("sessions.tabs.health", { status: instance.health }) }}</span>
+            <span>{{ t("sessions.tabs.workspace", { status: instance.workspace.status }) }}</span>
+            <template v-if="resourceMetrics">
+              <span class="session-resource-metrics" :data-state="resourceMetricsDisplay.state" :title="resourceMetricsDisplay.title">
+                {{ resourceMetricsDisplay.compact }}
+              </span>
+            </template>
+            <span v-else-if="instance.runtime?.type === 'docker'" class="session-resource-metrics" :data-state="resourceMetricsError ? 'unavailable' : 'loading'" :title="resourceMetricsError || t('sessions.tabs.waitingMetrics')">
+              {{ resourceMetricsError ? t("sessions.tabs.resourcesUnavailable") : t("sessions.tabs.resourcesLoading") }}
+            </span>
+            <span v-else>{{ t("sessions.tabs.lastRefresh", { time: lastRefreshLabel }) }}</span>
+          </p>
+        </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent class="instance-action-menu">
+        <ContextMenuCheckboxItem v-model="sessionStatusBarVisible" class="instance-action-item session-status-bar-menu-item">
+          {{ t("sessions.tabs.showStatusBar") }}
+        </ContextMenuCheckboxItem>
+      </ContextMenuContent>
+    </ContextMenu>
     <ProjectFolderPicker
       :node-id="instance.nodeId"
       :node-name="instance.nodeId"
@@ -352,12 +377,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch, type ComponentPublicInstance, type ObjectDirective } from "vue";
 import { useI18n } from "vue-i18n";
-import { useMediaQuery, useNow } from "@vueuse/core";
+import { useMediaQuery, useNow, useStorage } from "@vueuse/core";
 import { Activity, AppWindow, Bot, Boxes, ChevronDown, Columns2, Folder, FolderGit2, Maximize2, Minimize2, PanelLeft, PanelRight, PanelRightClose, Pencil, Plus, X } from "@lucide/vue";
 import type { RepositorySessionKind } from "@task-handoff/protocol/repository";
 import type { AiSessionSummary, InstanceBoardItem, InstanceResourceMetrics, InstanceWithAiSessions, NodeLocalFolder } from "../../../api/types";
 import { Button } from "../../../components/ui/button";
-import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "../../../components/ui/context-menu";
+import { ContextMenu, ContextMenuCheckboxItem, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "../../../components/ui/context-menu";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
 import { useControlPlaneLocale, type SupportedLocale } from "../../../i18n/index.ts";
 import { formatBytes, formatPercent, formatTime } from "../../../i18n/presentation.ts";
@@ -422,7 +447,9 @@ const props = defineProps<{
   selectedAiSession: (instance: InstanceBoardItem, sessions?: AiSessionSummary[]) => AiSessionSummary | undefined;
   sessionMenuOpen: boolean;
   sessionTabs: SessionTab[];
+  standalone?: boolean;
   stoppingSessionId: string;
+  toolbarTarget?: string;
 }>();
 
 const emit = defineEmits<{
@@ -449,6 +476,10 @@ const emit = defineEmits<{
 
 const resourceMetricsNow = useNow({ interval: 1_000 });
 const sessionSplitAvailable = useMediaQuery("(min-width: 781px)");
+const sessionStatusBarStorageKey = computed(() => props.standalone
+  ? "task-handoff.control-plane.session-status-bar-visible.standalone"
+  : "task-handoff.control-plane.session-status-bar-visible.main");
+const sessionStatusBarVisible = useStorage(sessionStatusBarStorageKey, computed(() => !props.standalone));
 
 watch([sessionSplitAvailable, () => props.hasSessionSplit], ([available, split]) => {
   if (!available && split) emit("closeSessionSplit");
@@ -608,6 +639,7 @@ const createdProjectFolders = ref<NodeLocalFolder[]>([]);
 const draggingSessionTabKey = ref("");
 const sessionTabDropTarget = ref<{ pane: SessionPaneId; targetKey: string; placement: "before" | "after" }>();
 const sessionPreview = ref<HTMLElement>();
+const sessionTabSelectors = new Map<SessionPaneId, HTMLElement>();
 const sessionTabPointerDrag = ref<{
   pointerId: number;
   session: SessionTab;
@@ -784,6 +816,14 @@ function previewSessionTabs(pane: SessionPaneId, tabs: SessionTab[]) {
   return nextTabs;
 }
 
+function setSessionTabSelector(pane: SessionPaneId, element: Element | ComponentPublicInstance | null) {
+  if (element instanceof HTMLElement) {
+    sessionTabSelectors.set(pane, element);
+    return;
+  }
+  sessionTabSelectors.delete(pane);
+}
+
 function selectSessionFromTab(event: MouseEvent, sessionKey: string) {
   if (Date.now() < suppressSessionTabClickUntil) {
     event.preventDefault();
@@ -871,14 +911,17 @@ function activateSessionTabPointerDrag(clientX: number, clientY: number) {
 }
 
 function updateSessionTabPointerTarget(clientX: number, clientY: number) {
-  const root = sessionPreview.value;
   const hit = document.elementFromPoint(clientX, clientY);
   const selector = hit instanceof Element ? hit.closest<HTMLElement>(".session-preview-selector") : null;
-  if (!root || !selector || !root.contains(selector)) {
+  if (!selector) {
     sessionTabDropTarget.value = undefined;
     return;
   }
   const pane = selector.dataset.pane === "right" ? "right" : "left";
+  if (sessionTabSelectors.get(pane) !== selector) {
+    sessionTabDropTarget.value = undefined;
+    return;
+  }
   const tabs = [...selector.querySelectorAll<HTMLElement>("[data-session-tab-key]")]
     .filter((tab) => tab.dataset.sessionTabKey !== draggingSessionTabKey.value);
   const target = tabs.find((tab) => clientX < tab.getBoundingClientRect().left + tab.getBoundingClientRect().width / 2);

@@ -33,8 +33,9 @@ export function createControlPlaneAppSessionsApi(transport: ControlPlaneClientTr
     (await transport.request(path, DataSchema(schema), init)).data
   );
   return {
-    list(signal?: AbortSignal) {
-      return requestData("/api/app-sessions", ControlPlaneAppSessionsSchema, { signal });
+    list(signal?: AbortSignal, instanceId?: string) {
+      const query = instanceId ? `?instanceId=${encodeURIComponent(instanceId)}` : "";
+      return requestData(`/api/app-sessions${query}`, ControlPlaneAppSessionsSchema, { signal });
     },
     refresh(signal?: AbortSignal) {
       return requestData("/api/app-sessions?refresh=true", ControlPlaneAppSessionsSchema, { signal });

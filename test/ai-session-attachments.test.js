@@ -10,7 +10,7 @@ const {
   AiSessionMessageAttachmentRefSchema,
   AiSessionMessageInputSchema,
 } = require("../packages/protocol/src/ai-sessions.ts");
-const { materializeAiSessionAttachments, withAttachmentPathFallback } = require("../packages/ai-session-runtime/src/ai-session-attachments.ts");
+const { materializeAiSessionAttachments, prepareCodexAiSessionAttachments, withAttachmentPathFallback } = require("../packages/ai-session-runtime/src/ai-session-attachments.ts");
 const { assertAiSessionRuntimePathSupport } = require("../packages/control-plane/src/control-plane/application/service.ts");
 
 function inlineFile(size) {
@@ -51,6 +51,60 @@ test("runtime path references use the target instance filesystem namespace", asy
   let providerMessage = "";
   await withAttachmentPathFallback("inspect", [reference], dir, async (message) => { providerMessage = message; });
   assert.match(providerMessage, new RegExp(`文件路径：${canonicalFilePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`));
+});
+
+test("Codex attachments use data URLs only for small inline images", (t) => {
+  const attachmentDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-attachments-"));
+  const previousDir = process.env.TASK_HANDOFF_AI_SESSION_ATTACHMENT_DIR;
+  process.env.TASK_HANDOFF_AI_SESSION_ATTACHMENT_DIR = attachmentDir;
+  t.after(() => {
+    if (previousDir === undefined) delete process.env.TASK_HANDOFF_AI_SESSION_ATTACHMENT_DIR;
+    else process.env.TASK_HANDOFF_AI_SESSION_ATTACHMENT_DIR = previousDir;
+    fs.rmSync(attachmentDir, { recursive: true, force: true });
+  });
+  const small = {
+    id: "small_image",
+    kind: "image",
+    name: "small.png",
+    mime: "image/png",
+    size: 3,
+    source: { type: "inline", encoding: "base64", data: "cG5n" },
+  };
+  const largeData = Buffer.alloc(AI_SESSION_MAX_INLINE_FILE_BYTES + 1, 1).toString("base64");
+  const large = {
+    ...small,
+    id: "large_image",
+    name: "large.png",
+    size: Buffer.byteLength(largeData, "base64"),
+    source: { type: "inline", encoding: "base64", data: largeData },
+  };
+  const file = inlineFile(1);
+
+  const prepared = prepareCodexAiSessionAttachments("inspect", [small, large, file]);
+  assert.deepEqual(prepared.inputs[0], { type: "image", url: "data:image/png;base64,cG5n" });
+  assert.equal(prepared.inputs[1].type, "localImage");
+  assert.equal(fs.statSync(prepared.inputs[1].path).isFile(), true);
+  assert.doesNotMatch(prepared.message, /图片路径/);
+  assert.match(prepared.message, /文件路径：/);
+});
+
+test("Codex runtime images use canonical localImage inputs", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-runtime-image-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const imagePath = path.join(root, "screen.png");
+  fs.writeFileSync(imagePath, "png");
+  const prepared = prepareCodexAiSessionAttachments("inspect", [{
+    id: "runtime_image",
+    kind: "image",
+    name: "screen.png",
+    mime: "image/png",
+    size: 3,
+    source: { type: "runtime-path", path: imagePath },
+  }], root);
+  assert.deepEqual(prepared, {
+    message: "inspect",
+    inputs: [{ type: "localImage", path: fs.realpathSync(imagePath) }],
+  });
 });
 
 test("runtime paths must resolve to absolute regular files", () => {

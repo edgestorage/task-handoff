@@ -8,6 +8,13 @@ function desktopIconPath({ packaged, resourcesPath, root, existsSync = fs.exists
   return existsSync(iconPath) ? iconPath : undefined;
 }
 
+function desktopTrayIconPath({ packaged, resourcesPath, root, existsSync = fs.existsSync }) {
+  const iconPath = packaged
+    ? path.join(resourcesPath, "tray-icon.png")
+    : path.join(root, "build", "tray-icon.png");
+  return existsSync(iconPath) ? iconPath : undefined;
+}
+
 function applyDesktopDockIcon({ platform, packaged, dock, nativeImage, iconPath }) {
   if (platform === "darwin" && packaged) return false;
   if (!iconPath || !dock) return false;
@@ -17,4 +24,4 @@ function applyDesktopDockIcon({ platform, packaged, dock, nativeImage, iconPath 
   return true;
 }
 
-module.exports = { applyDesktopDockIcon, desktopIconPath };
+module.exports = { applyDesktopDockIcon, desktopIconPath, desktopTrayIconPath };

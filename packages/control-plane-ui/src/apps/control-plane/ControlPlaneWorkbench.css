@@ -8,10 +8,77 @@
 
 .control-plane-shell {
   --control-plane-viewport-height: 100vh;
+  --control-plane-titlebar-height: 56px;
+  position: relative;
   height: var(--control-plane-viewport-height);
   overflow: hidden;
   background: var(--workspace-bg);
   color: var(--text);
+}
+
+.instance-switch-loading-overlay {
+  position: absolute;
+  z-index: 40;
+  inset: var(--control-plane-titlebar-height) 0 0;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--workspace-bg) 48%, transparent);
+  backdrop-filter: blur(2px);
+}
+
+.instance-switch-loading-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  color: var(--text-muted);
+  padding: 8px 12px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 16%);
+  font-size: 12px;
+}
+
+.instance-switch-loading-indicator svg {
+  animation: instance-switch-loading-spin 700ms linear infinite;
+}
+
+.instance-switch-loading-leave-active {
+  transition: opacity 110ms ease;
+}
+
+.instance-switch-loading-leave-to {
+  opacity: 0;
+}
+
+@keyframes instance-switch-loading-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .instance-switch-loading-indicator svg {
+    animation: none;
+  }
+
+  .instance-switch-loading-leave-active {
+    transition: none;
+  }
+}
+
+.control-plane-shell.standalone-instance-detail .control-plane-workbench.standalone-detail-mode {
+  display: block;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.control-plane-shell.standalone-instance-detail {
+  --control-plane-titlebar-height: 42px;
+}
+
+.control-plane-shell.standalone-instance-detail .control-plane-workbench.standalone-detail-mode > .instance-detail {
+  width: 100%;
+  height: 100%;
 }
 
 @supports (height: 100dvh) {
@@ -26,7 +93,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  height: 56px;
+  height: var(--control-plane-titlebar-height);
   border-bottom: 1px solid var(--line);
   background: var(--surface);
   padding: 0 16px;
@@ -46,6 +113,37 @@
   align-items: center;
   min-width: 0;
   gap: 0;
+}
+
+.instance-detail-titlebar-tabs {
+  -webkit-app-region: drag;
+  display: flex;
+  min-width: 0;
+  height: var(--control-plane-titlebar-height);
+  align-items: stretch;
+  flex: 1 1 auto;
+  margin-left: 4px;
+  overflow: hidden;
+}
+
+.standalone-instance-detail .topbar-left {
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.standalone-instance-detail .control-plane-instance-switcher-shell {
+  display: flex;
+  align-items: center;
+}
+
+.instance-detail-titlebar-tabs :deep(.session-preview-toolbar.in-titlebar) {
+  -webkit-app-region: drag;
+  width: 100%;
+  min-width: 0;
+  height: var(--control-plane-titlebar-height);
+  border-bottom: 0;
+  background: transparent;
+  padding-left: 0;
 }
 
 .desktop-window-controls {
@@ -390,7 +488,7 @@
 .control-plane-workbench {
   display: grid;
   grid-template-columns: var(--instances-width, 292px) minmax(0, 1fr);
-  height: calc(var(--control-plane-viewport-height) - 56px);
+  height: calc(var(--control-plane-viewport-height) - var(--control-plane-titlebar-height));
   min-height: 0;
 }
 
@@ -425,8 +523,8 @@
 
 @media (max-width: 780px) {
   .control-plane-topbar {
-    height: 56px;
-    min-height: 56px;
+    height: var(--control-plane-titlebar-height);
+    min-height: var(--control-plane-titlebar-height);
     flex-direction: row;
     padding: 0 12px;
   }
@@ -448,7 +546,7 @@
   .control-plane-workbench {
     grid-template-columns: 1fr;
     grid-template-rows: minmax(0, 1fr);
-    height: calc(var(--control-plane-viewport-height) - 56px);
+    height: calc(var(--control-plane-viewport-height) - var(--control-plane-titlebar-height));
   }
 
   .control-plane-workbench.instances-collapsed {

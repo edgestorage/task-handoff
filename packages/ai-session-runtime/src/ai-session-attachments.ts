@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { AiSessionMessageAttachment } from "@task-handoff/protocol/ai-sessions";
+import { AI_SESSION_MAX_INLINE_FILE_BYTES, type AiSessionMessageAttachment } from "@task-handoff/protocol/ai-sessions";
+
+export type CodexAttachmentInput =
+  | { type: "image"; url: string }
+  | { type: "localImage"; path: string };
 
 const IMAGE_MIME_EXTENSIONS: Record<string, string> = {
   "image/bmp": ".bmp",
@@ -96,6 +100,39 @@ export async function withAttachmentPathFallback<T>(
   if (!files.length) {
     return run(message);
   }
+  return run(appendAttachmentPaths(message, files));
+}
+
+export function prepareCodexAiSessionAttachments(
+  message: string,
+  attachments: AiSessionMessageAttachment[] = [],
+  runtimePathRoot?: string,
+): { message: string; inputs: CodexAttachmentInput[] } {
+  const inputs: CodexAttachmentInput[] = [];
+  const files: ReturnType<typeof materializeAiSessionAttachments> = [];
+  for (const attachment of attachments) {
+    const isSmallInlineImage = attachment.kind === "image"
+      && attachment.source.type === "inline"
+      && Buffer.byteLength(attachment.source.data, "base64") <= AI_SESSION_MAX_INLINE_FILE_BYTES;
+    if (isSmallInlineImage && attachment.source.type === "inline") {
+      inputs.push({ type: "image", url: `data:${attachment.mime};base64,${attachment.source.data}` });
+      continue;
+    }
+    const materialized = materializeAiSessionAttachments([attachment], runtimePathRoot)[0];
+    if (attachment.kind === "image") {
+      inputs.push({ type: "localImage", path: materialized.path });
+    } else {
+      files.push(materialized);
+    }
+  }
+  return { message: appendAttachmentPaths(message, files), inputs };
+}
+
+function appendAttachmentPaths(
+  message: string,
+  files: ReturnType<typeof materializeAiSessionAttachments>,
+) {
+  if (!files.length) return message;
   const kindCounts = files.reduce((counts, attachment) => ({ ...counts, [attachment.kind]: (counts[attachment.kind] || 0) + 1 }), {} as Record<"image" | "file", number>);
   const kindIndexes = { image: 0, file: 0 };
   const lines = files.map((attachment) => {
@@ -104,8 +141,7 @@ export async function withAttachmentPathFallback<T>(
     const index = kindCounts[attachment.kind] > 1 ? kindIndexes[attachment.kind] : "";
     return `${label}${index}路径：${attachment.path}`;
   });
-  const providerMessage = [message.trim(), lines.join("\n")].filter(Boolean).join("\n\n");
-  return run(providerMessage);
+  return [message.trim(), lines.join("\n")].filter(Boolean).join("\n\n");
 }
 
 function runtimePathError(code: string, message: string) {

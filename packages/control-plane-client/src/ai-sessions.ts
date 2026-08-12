@@ -4,6 +4,8 @@ import {
   AiSessionActionResultSchema,
   AiSessionCreateRefInputSchema,
   AiSessionCreateResultSchema,
+  AiSessionForkInputSchema,
+  AiSessionForkResultSchema,
   AiSessionDeltaResponseSchema,
   AiSessionHistoryDetailSchema,
   AiSessionHistoryListSchema,
@@ -24,6 +26,7 @@ import {
   AiSessionUnreadStateSchema,
   AiSessionsSnapshotSchema,
   type AiSessionCreateRefInput,
+  type AiSessionForkInput,
   type AiSessionCommandInput,
   type AiSessionMessageAttachmentRef,
   type AiSessionPermissionMode,
@@ -76,8 +79,9 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
   const sessionRoute = (instanceId: string, sessionId: string) => `/api/controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/${encodeURIComponent(sessionId)}`;
 
   return {
-    list(signal?: AbortSignal) {
-      return requestData("/api/ai-sessions", ControlPlaneAiSessionsSchema, { signal });
+    list(signal?: AbortSignal, instanceId?: string) {
+      const query = instanceId ? `?instanceId=${encodeURIComponent(instanceId)}` : "";
+      return requestData(`/api/ai-sessions${query}`, ControlPlaneAiSessionsSchema, { signal });
     },
     refresh(signal?: AbortSignal) {
       return requestData("/api/ai-sessions?refresh=true", ControlPlaneAiSessionsSchema, { signal });
@@ -97,6 +101,9 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
     },
     create(instanceId: string, input: AiSessionCreateRefInput) {
       return requestData(`/api/controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions`, AiSessionCreateResultSchema, json("POST", AiSessionCreateRefInputSchema.parse(input)));
+    },
+    fork(instanceId: string, aiSessionId: string, input: AiSessionForkInput) {
+      return requestData(`${sessionRoute(instanceId, aiSessionId)}/fork`, AiSessionForkResultSchema, json("POST", AiSessionForkInputSchema.parse(input)));
     },
     workspace(instanceId: string, cwdFolderId: string, signal?: AbortSignal) {
       const query = new URLSearchParams({ cwdFolderId });

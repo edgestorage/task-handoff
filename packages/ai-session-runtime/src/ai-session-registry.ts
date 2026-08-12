@@ -4,6 +4,7 @@ import { EventEmitter } from "node:events";
 import { resolveStoragePaths } from "@task-handoff/core/storage/paths";
 import type {
   AiSessionLifecycle,
+  AiSessionLineage,
   AiSessionCreationSource,
   AiSessionHistoryItem,
   AiSessionMessageAttachment,
@@ -66,6 +67,7 @@ type AiSessionStartInput = {
   appSessionId?: string;
   appId?: string;
   providerSessionId?: string;
+  lineage?: AiSessionLineage;
   title?: string;
   cwd?: string;
   cwdFolderId?: string;
@@ -111,6 +113,7 @@ function summaryForHeartbeat(session: AiSessionStatus): AiSessionSummary {
     appSessionId: session.appSessionId,
     appId: session.appId,
     providerSessionId: session.providerSessionId,
+    lineage: session.lineage,
     providerMeta: session.providerMeta,
     appBindingKeys: session.appBindingKeys,
     actions: actionsForSession(session),
@@ -142,6 +145,7 @@ function actionsForSession(session: AiSessionStatus): AiSessionStatus["actions"]
     send: configured.send ?? true,
     interrupt: Boolean(active && configured.interrupt !== false),
     approval: Boolean(session.status === "waiting" && session.phase === "approval" && configured.approval !== false),
+    fork: configured.fork ?? false,
     openApp: configured.openApp ?? Boolean(session.providerSessionId && !session.appSessionId),
     close: configured.close ?? Boolean(session.providerSessionId),
   };
@@ -217,6 +221,7 @@ export class AiSessionRegistry {
       appSessionId: input.appSessionId ? compact(input.appSessionId, 120) : undefined,
       appId: input.appId ? compact(input.appId, 120) : undefined,
       providerSessionId: input.providerSessionId ? compact(input.providerSessionId, 240) : undefined,
+      lineage: input.lineage,
       providerMeta: undefined,
       activeTurnId: undefined,
       title: input.title ? compact(input.title, 240) : undefined,
@@ -250,6 +255,7 @@ export class AiSessionRegistry {
       creationSource: item.creationSource,
       appId: item.agent,
       providerSessionId: item.providerSessionId,
+      lineage: item.lineage,
       title: item.title,
       cwd: item.cwd,
       cwdFolderId: item.cwdFolderId,
@@ -416,6 +422,7 @@ export class AiSessionRegistry {
         appSessionId: input.appSessionId,
         appId: input.appId,
         providerSessionId: input.providerSessionId,
+        lineage: input.lineage,
         title: input.title,
         cwd: input.cwd,
         cwdFolderId: input.cwdFolderId,
@@ -427,11 +434,13 @@ export class AiSessionRegistry {
       }, { meta, timestamp: input.observedAt, suppressPromptTurn: !input.turns?.length });
       return this.update(session.id, {
         providerMeta: input.providerMeta,
+        lineage: input.lineage,
         appBindingKeys: input.appBindingKeys,
         actions: input.actions,
         activeTurnId: input.activeTurnId,
         lastMessage: input.lastMessage,
         lastMessageItemId: input.lastMessageItemId,
+        error: input.error,
         currentTool: input.status === "running" || input.status === "waiting" ? input.currentTool : undefined,
         toolCallsSinceLastMessage: input.toolCallsSinceLastMessage ?? 0,
         subAgents: input.subAgents || [],

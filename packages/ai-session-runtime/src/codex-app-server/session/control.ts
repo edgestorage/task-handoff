@@ -1,7 +1,7 @@
 import type { AiSessionPermissionMode, AiSessionReference, AiSessionStatus } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionActionResult, AiSessionSendInput } from "../../ai-session-control";
 import { aiSessionControlError } from "../../ai-session-control";
-import { withAttachmentPathFallback } from "../../ai-session-attachments";
+import { prepareCodexAiSessionAttachments, type CodexAttachmentInput } from "../../ai-session-attachments";
 import type { AiSessionRegistry } from "../../ai-session-registry";
 import type { CodexAppServerClientLike, CodexTurnPermissionOverrides } from "../client/contract";
 import type { CodexUserInput } from "../protocol/types";
@@ -20,9 +20,8 @@ export class CodexAppServerSessionControl {
     const threadId = this.requireThreadId(session);
     const client = await this.options.readyThreadClient(threadId);
     const references = await this.validateReferences(session, input.references || []);
-    const result = await withAttachmentPathFallback(input.message, input.attachments, session.cwd, (providerMessage) => (
-      this.steerOrStartTurnForCompatibility(client, threadId, session, providerMessage, references, input.permissionMode)
-    ));
+    const prepared = prepareCodexAiSessionAttachments(input.message, input.attachments, session.cwd);
+    const result = await this.steerOrStartTurnForCompatibility(client, threadId, session, prepared.message, references, input.permissionMode, prepared.inputs);
     const updated = this.options.registry.applyRealtimeEvent(session.id, {
       kind: result.started ? "send-ack" : "user-message",
       activeTurnId: result.turnId,
@@ -37,9 +36,8 @@ export class CodexAppServerSessionControl {
     const threadId = this.requireThreadId(session);
     const client = await this.options.readyThreadClient(threadId);
     const references = await this.validateReferences(session, input.references || []);
-    const result = await withAttachmentPathFallback(input.message, input.attachments, session.cwd, (providerMessage) => (
-      this.startTurn(client, threadId, providerMessage, references, input.permissionMode)
-    ));
+    const prepared = prepareCodexAiSessionAttachments(input.message, input.attachments, session.cwd);
+    const result = await this.startTurn(client, threadId, prepared.message, references, input.permissionMode, prepared.inputs);
     const updated = this.options.registry.applyRealtimeEvent(session.id, {
       kind: "send-ack",
       activeTurnId: result.turnId,
@@ -54,9 +52,8 @@ export class CodexAppServerSessionControl {
     const threadId = this.requireThreadId(session);
     const client = await this.options.readyThreadClient(threadId);
     const references = await this.validateReferences(session, input.references || []);
-    const result = await withAttachmentPathFallback(input.message, input.attachments, session.cwd, (providerMessage) => (
-      this.steerTurn(client, threadId, session, providerMessage, references)
-    ));
+    const prepared = prepareCodexAiSessionAttachments(input.message, input.attachments, session.cwd);
+    const result = await this.steerTurn(client, threadId, session, prepared.message, references, prepared.inputs);
     const updated = this.options.registry.applyRealtimeEvent(session.id, {
       kind: "user-message",
       activeTurnId: result.turnId,
@@ -114,7 +111,7 @@ export class CodexAppServerSessionControl {
     return { session: updated, provider: "codex", action: "interrupt", providerTurnId: turnId };
   }
 
-  private async steerTurn(client: CodexAppServerClientLike, threadId: string, session: AiSessionStatus, message: string, references: AiSessionReference[] = []) {
+  private async steerTurn(client: CodexAppServerClientLike, threadId: string, session: AiSessionStatus, message: string, references: AiSessionReference[] = [], attachmentInputs: CodexAttachmentInput[] = []) {
     if (!session.activeTurnId) {
       throw aiSessionControlError("AI_SESSION_NO_ACTIVE_TURN", "AI session has no active turn to steer.", 409);
     }
@@ -122,36 +119,36 @@ export class CodexAppServerSessionControl {
       throw aiSessionControlError("AI_SESSION_STEER_UNSUPPORTED", "Codex app-server client does not support turn steering.");
     }
     try {
-      return { turnId: (await client.steerTurn(threadId, session.activeTurnId, message, codexInputs(message, references))).turnId || session.activeTurnId };
+      return { turnId: (await client.steerTurn(threadId, session.activeTurnId, message, codexInputs(message, references, attachmentInputs))).turnId || session.activeTurnId };
     } catch (error) {
       const currentTurnId = activeTurnMismatchFoundId(error);
       if (currentTurnId) {
-        return { turnId: (await client.steerTurn(threadId, currentTurnId, message, codexInputs(message, references))).turnId || currentTurnId };
+        return { turnId: (await client.steerTurn(threadId, currentTurnId, message, codexInputs(message, references, attachmentInputs))).turnId || currentTurnId };
       }
       throw error;
     }
   }
 
-  private async steerOrStartTurnForCompatibility(client: CodexAppServerClientLike, threadId: string, session: AiSessionStatus, message: string, references: AiSessionReference[], permissionMode?: AiSessionPermissionMode) {
+  private async steerOrStartTurnForCompatibility(client: CodexAppServerClientLike, threadId: string, session: AiSessionStatus, message: string, references: AiSessionReference[], permissionMode?: AiSessionPermissionMode, attachmentInputs: CodexAttachmentInput[] = []) {
     const shouldSteer = Boolean(session.activeTurnId && (session.status === "running" || session.status === "waiting"));
     if (!shouldSteer) {
-      return this.startTurn(client, threadId, message, references, permissionMode);
+      return this.startTurn(client, threadId, message, references, permissionMode, attachmentInputs);
     }
     try {
-      return { ...(await this.steerTurn(client, threadId, session, message, references)), started: false };
+      return { ...(await this.steerTurn(client, threadId, session, message, references, attachmentInputs)), started: false };
     } catch (error) {
       if (!isNoActiveTurnError(error)) {
         throw error;
       }
-      return this.startTurn(client, threadId, message, references, permissionMode);
+      return this.startTurn(client, threadId, message, references, permissionMode, attachmentInputs);
     }
   }
 
-  private async startTurn(client: CodexAppServerClientLike, threadId: string, message: string, references: AiSessionReference[] = [], permissionMode?: AiSessionPermissionMode) {
+  private async startTurn(client: CodexAppServerClientLike, threadId: string, message: string, references: AiSessionReference[] = [], permissionMode?: AiSessionPermissionMode, attachmentInputs: CodexAttachmentInput[] = []) {
     if (!client.startTurn) {
       throw aiSessionControlError("AI_SESSION_SEND_UNSUPPORTED", "Codex app-server client does not support starting turns.");
     }
-    return { turnId: (await client.startTurn(threadId, message, codexInputs(message, references), codexPermissionOverrides(permissionMode))).turnId, started: true };
+    return { turnId: (await client.startTurn(threadId, message, codexInputs(message, references, attachmentInputs), codexPermissionOverrides(permissionMode))).turnId, started: true };
   }
 
   private validateReferences(session: AiSessionStatus, references: AiSessionReference[]) {
@@ -179,9 +176,10 @@ export function codexPermissionOverrides(mode?: AiSessionPermissionMode): CodexT
   return undefined;
 }
 
-function codexInputs(message: string, references: AiSessionReference[]): CodexUserInput[] {
+function codexInputs(message: string, references: AiSessionReference[], attachmentInputs: CodexAttachmentInput[] = []): CodexUserInput[] {
   return [
     { type: "text", text: message, text_elements: [] },
+    ...attachmentInputs,
     ...references.map((reference): CodexUserInput => reference.kind === "skill"
       ? { type: "skill", name: reference.name, path: reference.path }
       : { type: "mention", name: reference.name, path: reference.path }),

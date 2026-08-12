@@ -31,6 +31,7 @@
           @expand="expandTemporaryList"
           @new-instance="openNewInstanceFromTemporaryList"
           @open-settings="(instanceId) => $emit('openSettings', instanceId)"
+          @open-window="(instance) => $emit('openWindow', instance)"
           @save-template="(instance) => $emit('saveTemplate', instance)"
           @resize-start="$emit('resizeStart', $event)"
           @run-action="(action, instance) => $emit('runAction', action, instance)"
@@ -160,6 +161,10 @@
                         <Settings :size="14" />
                         <span>{{ t("navigation.settings") }}</span>
                       </DropdownMenuItem>
+                      <DropdownMenuItem class="instance-action-item" @select="$emit('openWindow', instance)">
+                        <ExternalLink :size="14" />
+                        <span>{{ t("instances.window.openInNewWindow") }}</span>
+                      </DropdownMenuItem>
                       <DropdownMenuItem class="instance-action-item" :disabled="instance.runtime?.type !== 'docker' || isInstanceActionBusy(instance)" @select="$emit('saveTemplate', instance)">
                         <PackagePlus :size="14" />
                         <span>{{ t("instances.actions.saveEnvironmentTemplate") }}</span>
@@ -202,6 +207,10 @@
                 <Settings :size="14" />
                 <span>{{ t("instances.actions.settings") }}</span>
               </ContextMenuItem>
+              <ContextMenuItem class="instance-action-item" @select="$emit('openWindow', instance)">
+                <ExternalLink :size="14" />
+                <span>{{ t("instances.window.openInNewWindow") }}</span>
+              </ContextMenuItem>
               <ContextMenuItem class="instance-action-item danger" :disabled="isInstanceActionBusy(instance)" @select="$emit('runAction', 'delete', instance)">
                 <Trash2 :size="14" />
                 <span>{{ activeActionLabel(instance, "delete", t("instances.actions.delete")) }}</span>
@@ -221,7 +230,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { Boxes, ChevronRight, Container, Download, Laptop, LoaderCircle, MoreHorizontal, PackagePlus, PanelLeftClose, PanelLeftOpen, Play, Plus, RotateCw, Search, Server, Settings, Square, Trash2, Upload } from "@lucide/vue";
+import { Boxes, ChevronRight, Container, Download, ExternalLink, Laptop, LoaderCircle, MoreHorizontal, PackagePlus, PanelLeftClose, PanelLeftOpen, Play, Plus, RotateCw, Search, Server, Settings, Square, Trash2, Upload } from "@lucide/vue";
 import type { InstanceBoardItem, Node } from "../../../api/types";
 import type { ConfigSyncDirection } from "@task-handoff/protocol/config-sync";
 import { Button } from "../../../components/ui/button";
@@ -262,6 +271,7 @@ const emit = defineEmits<{
   expand: [];
   newInstance: [];
   openSettings: [instanceId: string];
+  openWindow: [instance: InstanceBoardItem];
   saveTemplate: [instance: InstanceBoardItem];
   resizeStart: [event: PointerEvent];
   runAction: [action: InstanceAction, instance: InstanceBoardItem];

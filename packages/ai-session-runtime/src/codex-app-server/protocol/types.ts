@@ -3,6 +3,8 @@ import type { AiSessionSubAgent } from "@task-handoff/protocol/ai-sessions";
 export type JsonValue = Record<string, unknown>;
 export type CodexUserInput =
   | { type: "text"; text: string; text_elements: [] }
+  | { type: "image"; url: string; detail?: "auto" | "low" | "high" | "original" }
+  | { type: "localImage"; path: string; detail?: "auto" | "low" | "high" | "original" }
   | { type: "skill"; name: string; path: string }
   | { type: "mention"; name: string; path: string };
 export type CodexThreadStatus = {
@@ -11,6 +13,8 @@ export type CodexThreadStatus = {
 };
 export type CodexThread = {
   id?: unknown;
+  sessionId?: unknown;
+  forkedFromId?: unknown;
   cwd?: unknown;
   name?: unknown;
   preview?: unknown;
@@ -53,7 +57,9 @@ export type CodexAppServerEvent =
   | { type: "thread-closed"; threadId: string }
   | { type: "thread-name"; threadId: string; name: string }
   | { type: "turn-started"; threadId: string; turnId?: string }
+  | { type: "turn-error"; threadId: string; turnId: string; error: string; willRetry: boolean }
   | { type: "turn-completed"; threadId: string; turnId?: string; status?: string; error?: string }
+  | { type: "thread-error"; threadId: string; error: string }
   | { type: "context-compaction"; threadId: string; turnId: string; itemId: string; status: "running" | "completed"; observedAt?: string }
   | { type: "approval-request"; request: CodexApprovalRequest }
   | { type: "tool-item-started"; threadId: string; turnId?: string; tool: CodexToolDescriptor; subAgents?: CodexSubAgentUpdate[] }

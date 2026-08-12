@@ -122,9 +122,19 @@ function controlPlaneUrl(options = {}) {
 function resolveControlPlaneWindowUrl(url, options = {}) {
   const base = options.baseUrl || controlPlaneUrl(options);
   const parsedUrl = new URL(String(url || ""), base);
-  if (parsedUrl.origin !== new URL(base).origin || parsedUrl.pathname !== "/repository-workspace") {
-    throw new Error("Only same-origin repository workspace windows are supported.");
+  if (parsedUrl.origin !== new URL(base).origin) throw new Error("Only same-origin control plane windows are supported.");
+  if (parsedUrl.hash) throw new Error("Control plane child window fragments are not supported.");
+  if (parsedUrl.pathname === "/repository-workspace") return parsedUrl;
+  if (parsedUrl.search) throw new Error("Instance detail window query parameters are not supported.");
+  const match = parsedUrl.pathname.match(/^\/instance-detail\/([^/]+)$/);
+  if (!match) throw new Error("Only approved control plane child window routes are supported.");
+  let instanceId;
+  try {
+    instanceId = decodeURIComponent(match[1]).trim();
+  } catch {
+    throw new Error("Instance detail window id is invalid.");
   }
+  if (!instanceId || instanceId.includes("/")) throw new Error("Instance detail window id is invalid.");
   return parsedUrl;
 }
 

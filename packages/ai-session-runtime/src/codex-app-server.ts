@@ -1,5 +1,5 @@
 import type { AiSessionCommandInput, AiSessionCommandResult, AiSessionStatus } from "@task-handoff/protocol/ai-sessions";
-import type { AiSessionActionResult, AiSessionApprovalDecision, AiSessionControlProvider, AiSessionProviderCreateInput, AiSessionProviderCreateResult, AiSessionSendInput } from "./ai-session-control";
+import type { AiSessionActionResult, AiSessionApprovalDecision, AiSessionControlProvider, AiSessionProviderCreateInput, AiSessionProviderCreateResult, AiSessionProviderForkInput, AiSessionProviderForkResult, AiSessionSendInput } from "./ai-session-control";
 import { aiSessionControlError } from "./ai-session-control";
 import type { AiSessionDiscoveryContext, AiSessionDiscoveryProvider } from "./ai-session-discovery";
 import type { AiSessionRegistry } from "./ai-session-registry";
@@ -83,6 +83,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       clearApprovalSession: (sessionId) => this.approvalCoordinator.clearSession(sessionId),
       attachApprovalLifecycle: (sessionId, lifecycle) => this.approvalCoordinator.attachLifecycle(sessionId, lifecycle),
       latestApprovalSummary: (sessionId) => this.approvalCoordinator.latestForSession(sessionId)?.summary,
+      threadForkSupported: () => this.connection.client?.threadForkCapabilities?.().fullHistory === true,
       onMessageDelta: (event) => this.options.onMessageDelta?.(event),
     });
     this.mentions = new CodexAppServerMentions({
@@ -192,6 +193,47 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       return { providerSessionId, cwd, creationSource: "ai-session" };
     } finally {
       this.directCreateRequests -= 1;
+    }
+  }
+
+  async forkSession(input: AiSessionProviderForkInput): Promise<AiSessionProviderForkResult> {
+    const sourceProviderSessionId = input.source.providerSessionId;
+    if (!sourceProviderSessionId) {
+      throw aiSessionControlError("AI_SESSION_FORK_SOURCE_INVALID", "Fork source has no provider identity.", 409);
+    }
+    const client = await this.requireReadyThreadClient(sourceProviderSessionId);
+    const capability = client.threadForkCapabilities?.();
+    if (!client.forkThread || capability?.fullHistory !== true || (input.providerThroughTurnId && capability.throughTurn !== true)) {
+      throw aiSessionControlError("AI_SESSION_FORK_UNSUPPORTED", "Codex app-server does not support the requested Fork operation.", 409);
+    }
+    try {
+      const thread = await client.forkThread({
+        threadId: sourceProviderSessionId,
+        ...(input.providerThroughTurnId ? { lastTurnId: input.providerThroughTurnId } : {}),
+        ...(input.cwd ? { cwd: input.cwd } : {}),
+      });
+      const providerSessionId = typeof thread.id === "string" ? thread.id.trim() : "";
+      const cwd = typeof thread.cwd === "string" ? thread.cwd.trim() : "";
+      if (!providerSessionId || providerSessionId === sourceProviderSessionId || !cwd) {
+        throw aiSessionControlError("AI_SESSION_FORK_INVALID_RESPONSE", "Codex app-server returned an invalid Fork thread.", 502);
+      }
+      const lineage = {
+        kind: "fork" as const,
+        parentProviderSessionId: sourceProviderSessionId,
+        ...(input.throughTurnId ? { throughTurnId: input.throughTurnId } : {}),
+      };
+      this.connection.registerStartedThread(client, providerSessionId);
+      this.projector.applyThreadSnapshot(thread, { creationSource: "ai-session", lineage });
+      return { providerSessionId, cwd, creationSource: "ai-session", lineage };
+    } catch (error) {
+      if (error && typeof error === "object" && "rpcCode" in error && error.rpcCode === -32601) {
+        this.registry.put({
+          ...input.source,
+          actions: { ...input.source.actions, fork: false },
+        });
+        throw aiSessionControlError("AI_SESSION_FORK_UNSUPPORTED", "Codex app-server does not support Fork.", 409);
+      }
+      throw error;
     }
   }
 

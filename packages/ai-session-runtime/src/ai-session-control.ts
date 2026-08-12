@@ -4,6 +4,7 @@ import type {
   AiSessionCreationSource,
   AiSessionMessageAttachment,
   AiSessionPermissionMode,
+  AiSessionLineage,
   AiSessionReference,
   AiSessionSendMode,
   AiSessionStatus,
@@ -32,6 +33,17 @@ export type AiSessionProviderCreateResult = {
   creationSource: AiSessionCreationSource;
 };
 
+export type AiSessionProviderForkInput = {
+  source: AiSessionStatus;
+  throughTurnId?: string;
+  providerThroughTurnId?: string;
+  cwd?: string;
+};
+
+export type AiSessionProviderForkResult = AiSessionProviderCreateResult & {
+  lineage: AiSessionLineage;
+};
+
 export type PendingAiSessionApproval = {
   id: string;
   sessionId: string;
@@ -44,6 +56,7 @@ export type PendingAiSessionApproval = {
 export interface AiSessionControlProvider {
   readonly agent: string;
   createSession?(input: AiSessionProviderCreateInput): Promise<AiSessionProviderCreateResult>;
+  forkSession?(input: AiSessionProviderForkInput): Promise<AiSessionProviderForkResult>;
   readSession?(providerSessionId: string): Promise<void>;
   resumeSession?(providerSessionId: string): Promise<void>;
   archiveSession?(providerSessionId: string): Promise<void>;
@@ -119,6 +132,33 @@ export class AiSessionController {
       throw aiSessionControlError("AI_SESSION_CREATE_UNSUPPORTED", `${agent} does not support direct AI session creation.`, 400);
     }
     return provider.createSession(input);
+  }
+
+  async forkSession(sessionId: string, input: { throughTurnId?: string; cwd?: string } = {}) {
+    const source = this.requireSession(sessionId);
+    if (!source.providerSessionId || source.actions?.fork !== true) {
+      throw aiSessionControlError("AI_SESSION_FORK_UNSUPPORTED", "AI session does not support Fork.", 409);
+    }
+    const provider = this.requireProvider(source);
+    if (!provider.forkSession) {
+      throw aiSessionControlError("AI_SESSION_FORK_UNSUPPORTED", `${source.agent} does not support Fork.`, 409);
+    }
+    let providerThroughTurnId: string | undefined;
+    if (input.throughTurnId) {
+      const turn = source.turns?.find((candidate) => candidate.id === input.throughTurnId);
+      if (!turn && source.activeTurnId === input.throughTurnId && isSessionBusy(source)) {
+        throw aiSessionControlError("AI_SESSION_FORK_INVALID_TURN_STATE", "An in-progress turn cannot be used as the Fork boundary.", 409);
+      }
+      if (!turn) throw aiSessionControlError("AI_SESSION_FORK_TURN_NOT_FOUND", "Fork turn was not found.", 404);
+      if (turn.status === "running" || turn.status === "waiting") {
+        throw aiSessionControlError("AI_SESSION_FORK_INVALID_TURN_STATE", "An in-progress turn cannot be used as the Fork boundary.", 409);
+      }
+      providerThroughTurnId = turn.providerTurnId;
+      if (!providerThroughTurnId) {
+        throw aiSessionControlError("AI_SESSION_FORK_TURN_NOT_FOUND", "Fork turn has no provider identity.", 409);
+      }
+    }
+    return provider.forkSession({ source, throughTurnId: input.throughTurnId, providerThroughTurnId, cwd: input.cwd });
   }
 
   async sendMessage(sessionId: string, input: AiSessionSendInput) {
