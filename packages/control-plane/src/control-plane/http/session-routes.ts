@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { AiSessionApprovalInputSchema, AiSessionCloseInputSchema, AiSessionCommandInputSchema, AiSessionCreateRefInputSchema, AiSessionMentionFileSearchInputSchema, AiSessionMessageRefInputSchema, AiSessionOpenAppInputSchema, AiSessionQueueEditInputSchema, AiSessionQueueReorderInputSchema, AiSessionUnreadEventType } from "@task-handoff/protocol/ai-sessions";
+import { AiSessionApprovalInputSchema, AiSessionCloseInputSchema, AiSessionCommandInputSchema, AiSessionCreateRefInputSchema, AiSessionForkInputSchema, AiSessionMentionFileSearchInputSchema, AiSessionMessageRefInputSchema, AiSessionOpenAppInputSchema, AiSessionQueueEditInputSchema, AiSessionQueueReorderInputSchema, AiSessionUnreadEventType } from "@task-handoff/protocol/ai-sessions";
 import type { ControlPlaneService } from "../application/service.ts";
 import type { ControlPlaneEventBus } from "../events/bus.ts";
 import type { ControlPlaneAiSessionAggregator } from "../sessions/ai-session-aggregator.ts";
@@ -76,9 +76,10 @@ export function registerSessionRoutes({
       }
       return { data: await appSessionAggregator.delta({ instanceId: query.instanceId, streamId: query.streamId, sinceRevision }) };
     }
-    return { data: await appSessionAggregator.list({
+    const view = await appSessionAggregator.list({
       refresh: query.refresh === "true" || query.refresh === "1",
-    }) };
+    });
+    return { data: query.instanceId ? { ...view, instances: view.instances.filter((entry) => entry.instanceId === query.instanceId) } : view };
   });
 
   app.post("/api/controlled-instances/:id/apps/sessions", async (request) => {
@@ -165,6 +166,13 @@ export function registerSessionRoutes({
     const parsed = AiSessionOpenAppInputSchema.parse(request.body || {});
     const result = await service.openAiSessionApp(params.id, params.sessionId, parsed.clientRequestId);
     events.publish("instance.ai-session.app-opened", { instanceId: params.id, sessionId: params.sessionId, appSessionId: result.appSessionId });
+    return { data: result };
+  });
+  app.post("/api/controlled-instances/:id/ai-sessions/:sessionId/fork", async (request) => {
+    const params = InstanceSessionParamsSchema.parse(request.params);
+    const parsed = AiSessionForkInputSchema.parse(request.body || {});
+    const result = await service.forkAiSession(params.id, params.sessionId, parsed);
+    events.publish("instance.ai-session.forked", { instanceId: params.id, sourceSessionId: params.sessionId, sessionId: result.aiSessionId, providerSessionId: result.providerSessionId, clientRequestId: parsed.clientRequestId });
     return { data: result };
   });
   app.post("/api/controlled-instances/:id/ai-sessions/:sessionId/close", async (request) => {
@@ -257,7 +265,8 @@ export function registerSessionRoutes({
         throw error;
       }
     }
-    const view = await aiSessionAggregator.list({ refresh: query.refresh === "true" || query.refresh === "1" });
+    const fullView = await aiSessionAggregator.list({ refresh: query.refresh === "true" || query.refresh === "1" });
+    const view = query.instanceId ? { ...fullView, instances: fullView.instances.filter((entry) => entry.instanceId === query.instanceId) } : fullView;
     for (const entry of view.instances) aiSessionUnread.reconcile(entry.instanceId, entry.aiSessions);
     return { data: {
       ...view,

@@ -4,7 +4,7 @@ const http = require("node:http");
 const net = require("node:net");
 const path = require("node:path");
 const { setTimeout: delay } = require("node:timers/promises");
-const { app, BrowserView, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification, shell, Tray } = require("electron");
+const { app, BrowserView, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, net: electronNet, Notification, shell, Tray } = require("electron");
 const { autoUpdater } = require("electron-updater");
 const {
   buildControlPlaneArgs,
@@ -31,8 +31,12 @@ const { createDesktopServiceLifecycle } = require("./desktop-service-lifecycle.c
 const { createDesktopServiceSupervisor } = require("./desktop-service-supervisor.cjs");
 const { createDesktopWindowManager } = require("./desktop-window-manager.cjs");
 const { createDesktopTray } = require("./desktop-tray.cjs");
+const { createDesktopDockMenu } = require("./desktop-dock-menu.cjs");
+const { createDesktopWindowPreferences } = require("./desktop-window-preferences.cjs");
+const { loadDesktopInstanceDirectory } = require("./desktop-instance-directory.cjs");
 const { createDesktopQuitCoordinator } = require("./desktop-quit-coordinator.cjs");
 const { claimBackgroundNotice } = require("./background-notice.cjs");
+const { createControlPlaneWindowRegistry } = require("./control-plane-window-registry.cjs");
 const {
   DESKTOP_NODE_AGENT_FORCE_TIMEOUT_MS,
   DESKTOP_NODE_AGENT_GRACEFUL_TIMEOUT_MS,
@@ -40,7 +44,7 @@ const {
   inspectExistingDesktopControlPlane,
   stopExistingDesktopNodeAgent,
 } = require("./node-agent-handoff.cjs");
-const { applyDesktopDockIcon, desktopIconPath: resolveDesktopIconPath } = require("./icon.cjs");
+const { applyDesktopDockIcon, desktopIconPath: resolveDesktopIconPath, desktopTrayIconPath: resolveDesktopTrayIconPath } = require("./icon.cjs");
 const { applyWindowsTitleBarTheme, desktopTitleBarOptions, desktopWindowChromeMode } = require("./window-chrome.cjs");
 const { appendRotatingLog } = require("./rotating-log.cjs");
 
@@ -51,16 +55,27 @@ let ownsControlPlaneProcess = false;
 let desktopFileLoggingOverride;
 let desktopUpdater;
 let desktopTray;
+let desktopDockMenu;
+let desktopWindowPreferences;
 let desktopWindows;
 let desktopQuitCoordinator;
 const desktopServiceSupervisor = createDesktopServiceSupervisor();
-const controlPlaneWindows = new Set();
+const controlPlaneWindows = createControlPlaneWindowRegistry();
 const windowsTitleBarOverlayHeights = new WeakMap();
+const windowDragStates = new WeakMap();
 const childProcessSpawnErrors = new WeakMap();
 const NODE_AGENT_IPC_ENDPOINT_PREFIX = "ipc://";
 
 function desktopIconPath() {
   return resolveDesktopIconPath({
+    packaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    root: repoRoot(),
+  });
+}
+
+function desktopTrayIconPath() {
+  return resolveDesktopTrayIconPath({
     packaged: app.isPackaged,
     resourcesPath: process.resourcesPath,
     root: repoRoot(),
@@ -84,7 +99,7 @@ function nativeTitleBarWindowOptions() {
   });
 }
 
-function appWindowTitleBarWindowOptions() {
+function compactTitleBarWindowOptions() {
   return desktopTitleBarOptions({
     height: 42,
     trafficLightPosition: { x: 16, y: 15 },
@@ -444,13 +459,26 @@ function currentControlPlaneBaseUrl() {
 
 function createControlPlaneWindow(url) {
   const parsedUrl = resolveControlPlaneWindowUrl(url);
+  const instanceRoute = parsedUrl.pathname.match(/^\/instance-detail\/([^/]+)$/);
+  const instanceId = instanceRoute ? decodeURIComponent(instanceRoute[1]) : undefined;
+  if (instanceId) {
+    const existing = controlPlaneWindows.focusInstance(instanceId);
+    if (existing) {
+      logInfo(`[desktop-shell] focused existing instance detail window instanceId=${instanceId}`);
+      return existing;
+    }
+  }
+  logInfo(`[desktop-shell] creating control plane child window url=${parsedUrl.toString()} instanceId=${instanceId || ""}`);
+  const initialSize = instanceId
+    ? desktopWindowPreferences?.instanceDetailSize() || { width: 1280, height: 820 }
+    : { width: 1280, height: 820 };
   const controlPlaneWindow = new BrowserWindow({
-    width: 1280,
-    height: 820,
-    minWidth: 760,
+    ...initialSize,
+    minWidth: instanceId ? 400 : 760,
     minHeight: 520,
+    ...compactTitleBarWindowOptions(),
     show: false,
-    title: "Repository · TaskHandoff",
+    title: "TaskHandoff",
     icon: desktopIconPath(),
     backgroundColor: "#071013",
     webPreferences: {
@@ -460,19 +488,49 @@ function createControlPlaneWindow(url) {
       sandbox: true,
     },
   });
-  controlPlaneWindows.add(controlPlaneWindow);
-  controlPlaneWindow.once("closed", () => controlPlaneWindows.delete(controlPlaneWindow));
+  if (process.platform === "win32") windowsTitleBarOverlayHeights.set(controlPlaneWindow, 42);
+  if (instanceId) {
+    let persistSizeTimer;
+    const persistSize = () => {
+      if (controlPlaneWindow.isDestroyed() || controlPlaneWindow.isMaximized() || controlPlaneWindow.isFullScreen()) return;
+      desktopWindowPreferences?.rememberInstanceDetailSize(controlPlaneWindow.getBounds());
+    };
+    controlPlaneWindow.on("resize", () => {
+      if (persistSizeTimer) clearTimeout(persistSizeTimer);
+      persistSizeTimer = setTimeout(persistSize, 180);
+    });
+    controlPlaneWindow.on("close", persistSize);
+    controlPlaneWindow.once("closed", () => {
+      if (persistSizeTimer) clearTimeout(persistSizeTimer);
+    });
+  }
+  const registered = controlPlaneWindows.register(controlPlaneWindow, instanceId
+    ? { kind: "instance-detail", instanceId }
+    : { kind: "repository" });
+  if (registered.action !== "registered") {
+    controlPlaneWindow.destroy();
+    return registered;
+  }
   controlPlaneWindow.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
     void shell.openExternal(targetUrl);
     return { action: "deny" };
   });
-  controlPlaneWindow.once("ready-to-show", () => controlPlaneWindow.show());
+  controlPlaneWindow.once("ready-to-show", () => {
+    logInfo(`[desktop-shell] control plane child window ready instanceId=${instanceId || ""}`);
+    controlPlaneWindow.show();
+  });
+  controlPlaneWindow.webContents.on("did-fail-load", (_event, code, description, validatedUrl) => {
+    logError(`[desktop-shell] control plane child window did-fail-load code=${code} description=${description} url=${validatedUrl}`);
+  });
+  controlPlaneWindow.webContents.on("render-process-gone", (_event, details) => {
+    logError(`[desktop-shell] control plane child renderer gone reason=${details.reason} exitCode=${details.exitCode}`);
+  });
   void controlPlaneWindow.loadURL(parsedUrl.toString()).catch((error) => {
     const detail = error instanceof Error ? error.stack || error.message : String(error);
     logError(`[desktop-shell] control plane window loadURL failed ${detail}`);
     if (!controlPlaneWindow.isDestroyed()) controlPlaneWindow.close();
   });
-  return controlPlaneWindow;
+  return { action: "opened", instanceId, window: controlPlaneWindow };
 }
 
 function createAppWindow(url) {
@@ -485,7 +543,7 @@ function createAppWindow(url) {
     height: 780,
     minWidth: 760,
     minHeight: 520,
-    ...appWindowTitleBarWindowOptions(),
+    ...compactTitleBarWindowOptions(),
     parent: mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined,
     show: false,
     title: "TaskHandoff App",
@@ -844,7 +902,10 @@ async function stopNodeAgent() {
 const desktopServiceLifecycle = createDesktopServiceLifecycle({ stopControlPlane, stopNodeAgent });
 desktopQuitCoordinator = createDesktopQuitCoordinator({
   stop: (reason) => desktopServiceLifecycle.stop(reason),
-  onStopping: () => desktopServiceSupervisor.markStopping(),
+  onStopping: () => {
+    desktopServiceSupervisor.markStopping();
+    controlPlaneWindows.closeAll();
+  },
   onError: (error, reason) => logError(`[desktop-shell] failed to stop desktop services during ${reason} ${error instanceof Error ? error.stack || error.message : String(error)}`),
   onStopped: () => desktopServiceSupervisor.markStopped(),
 });
@@ -922,8 +983,31 @@ ipcMain.handle("task-handoff:open-app-window", (_event, url) => {
 });
 
 ipcMain.handle("task-handoff:open-control-plane-window", (_event, url) => {
-  createControlPlaneWindow(url);
-  return { ok: true };
+  const result = createControlPlaneWindow(url);
+  return { ok: true, action: result.action };
+});
+
+ipcMain.handle("task-handoff:open-instance-detail-window", (_event, instanceId) => {
+  const normalized = String(instanceId || "").trim();
+  if (!normalized) return { ok: false, code: "invalid-instance-id" };
+  try {
+    logInfo(`[desktop-shell] open instance detail window requested instanceId=${normalized}`);
+    const result = createControlPlaneWindow(`/instance-detail/${encodeURIComponent(normalized)}`);
+    return { ok: true, action: result.action, instanceId: normalized };
+  } catch (error) {
+    const detail = error instanceof Error ? error.stack || error.message : String(error);
+    logError(`[desktop-shell] open instance detail window failed instanceId=${normalized} error=${detail}`);
+    return { ok: false, action: "error", code: "window-open-failed", instanceId: normalized };
+  }
+});
+
+ipcMain.handle("task-handoff:switch-instance-detail-window", (event, instanceId) => {
+  const normalized = String(instanceId || "").trim();
+  if (!normalized) return { ok: false, action: "error", code: "invalid-instance-id" };
+  const targetWindow = BrowserWindow.fromWebContents(event.sender);
+  if (!targetWindow || targetWindow.isDestroyed()) return { ok: false, action: "error", code: "invalid-window" };
+  const result = controlPlaneWindows.switchInstance(targetWindow, normalized);
+  return { ok: result.action !== "error", ...result };
 });
 
 ipcMain.handle("task-handoff:window-action", (_event, action) => {
@@ -943,6 +1027,31 @@ ipcMain.handle("task-handoff:window-action", (_event, action) => {
     targetWindow.close();
   }
   return { ok: true, maximized: !targetWindow.isDestroyed() ? targetWindow.isMaximized() : false };
+});
+
+ipcMain.on("task-handoff:window-drag", (event, payload) => {
+  const targetWindow = BrowserWindow.fromWebContents(event.sender);
+  const phase = payload?.phase;
+  const screenX = Number(payload?.screenX);
+  const screenY = Number(payload?.screenY);
+  if (!targetWindow || targetWindow.isDestroyed() || !["start", "move", "end"].includes(phase)) return;
+  if (phase === "end") {
+    windowDragStates.delete(event.sender);
+    return;
+  }
+  if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) return;
+  if (phase === "start") {
+    if (targetWindow.isMaximized() || targetWindow.isFullScreen()) return;
+    const [windowX, windowY] = targetWindow.getPosition();
+    windowDragStates.set(event.sender, { targetWindow, screenX, screenY, windowX, windowY });
+    return;
+  }
+  const drag = windowDragStates.get(event.sender);
+  if (!drag || drag.targetWindow !== targetWindow || targetWindow.isMaximized() || targetWindow.isFullScreen()) return;
+  targetWindow.setPosition(
+    Math.round(drag.windowX + screenX - drag.screenX),
+    Math.round(drag.windowY + screenY - drag.screenY),
+  );
 });
 
 ipcMain.handle("task-handoff:set-window-chrome-theme", (_event, theme) => {
@@ -980,6 +1089,24 @@ desktopWindows = createDesktopWindowManager({
   create: (url) => createWindow(url),
 });
 
+function openDesktopSettings() {
+  const window = desktopWindows.open();
+  if (!window || window.isDestroyed()) return;
+  const send = () => {
+    if (!window.isDestroyed()) window.webContents.send("task-handoff:open-settings");
+  };
+  if (window.webContents.isLoadingMainFrame()) window.webContents.once("did-finish-load", send);
+  else send();
+}
+
+function openDesktopInstance(instanceId, source) {
+  try {
+    createControlPlaneWindow(`/instance-detail/${encodeURIComponent(instanceId)}`);
+  } catch (error) {
+    logError(`[desktop-shell] ${source} failed to open instance window instanceId=${instanceId} error=${error instanceof Error ? error.stack || error.message : String(error)}`);
+  }
+}
+
 const ownsDesktopInstanceLock = app.requestSingleInstanceLock();
 
 if (!ownsDesktopInstanceLock) {
@@ -992,15 +1119,32 @@ if (!ownsDesktopInstanceLock) {
 
   app.whenReady().then(() => {
     setDesktopDockIcon();
+    desktopWindowPreferences = createDesktopWindowPreferences({
+      file: path.join(app.getPath("userData"), "desktop-window-preferences.json"),
+    });
+    desktopDockMenu = createDesktopDockMenu({
+      dock: process.platform === "darwin" ? app.dock : undefined,
+      Menu,
+      locale: app.getLocale(),
+      onOpenInstance: (instanceId) => openDesktopInstance(instanceId, "dock menu"),
+    });
     desktopTray = createDesktopTray({
       Tray,
       Menu,
       nativeImage,
-      iconPath: desktopIconPath(),
+      iconPath: desktopTrayIconPath(),
       platform: process.platform,
       locale: app.getLocale(),
       supervisor: desktopServiceSupervisor,
       onOpen: () => desktopWindows.open(),
+      onSettings: openDesktopSettings,
+      loadInstances: () => loadDesktopInstanceDirectory({
+        endpoint: desktopServiceSupervisor.endpoint(),
+        fetch: (url, init) => electronNet.fetch(url, { ...init, useSessionCookies: true }),
+      }),
+      onOpenInstance: (instanceId) => openDesktopInstance(instanceId, "tray"),
+      onInstanceDirectoryChange: (snapshot) => desktopDockMenu?.update(snapshot),
+      onDirectoryError: (error) => logError(`[desktop-shell] tray failed to refresh instance directory ${error instanceof Error ? error.stack || error.message : String(error)}`),
       onQuit: () => app.quit(),
     });
     desktopUpdater = createDesktopUpdater({
@@ -1027,6 +1171,7 @@ if (!ownsDesktopInstanceLock) {
     if (desktopQuitCoordinator.isReadyToExit()) {
       desktopServiceSupervisor.markStopped();
       desktopTray?.destroy();
+      desktopDockMenu?.destroy();
       desktopTray = undefined;
       closeDesktopFileLog();
       return;
@@ -1034,7 +1179,9 @@ if (!ownsDesktopInstanceLock) {
     event.preventDefault();
     void desktopQuitCoordinator.request("quit").finally(() => {
       desktopTray?.destroy();
+      desktopDockMenu?.destroy();
       desktopTray = undefined;
+      desktopDockMenu = undefined;
       closeDesktopFileLog();
       app.quit();
     });

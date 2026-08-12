@@ -6,6 +6,8 @@ import {
   AiSessionCreateInputSchema,
   AiSessionCreateRefInputSchema,
   AiSessionCreateResultSchema,
+  AiSessionForkInputSchema,
+  AiSessionForkResultSchema,
   AiSessionCloseInputSchema,
   AiSessionCloseResultSchema,
   AiSessionEventType,
@@ -154,6 +156,39 @@ test("AI session create, open-app, and close schemas keep trusted identities ser
   }).disposition, "closed");
 });
 
+test("AI session Fork schemas are strict, minimal, and N-1 tolerant", () => {
+  assert.deepEqual(AiSessionForkInputSchema.parse({ clientRequestId: "fork-request-1" }), {
+    clientRequestId: "fork-request-1",
+    workspace: { mode: "current" },
+  });
+  assert.deepEqual(AiSessionForkInputSchema.parse({
+    clientRequestId: "fork-request-2",
+    throughTurnId: "turn-2",
+    workspace: { mode: "managed-worktree" },
+  }), {
+    clientRequestId: "fork-request-2",
+    throughTurnId: "turn-2",
+    workspace: { mode: "managed-worktree" },
+  });
+  assert.equal(AiSessionForkInputSchema.safeParse({ clientRequestId: "fork-request-3", cwd: "/workspace" }).success, false);
+  assert.equal(AiSessionForkInputSchema.safeParse({ clientRequestId: "fork-request-3", workspace: { mode: "current", worktreeId: "private" } }).success, false);
+  const result = { disposition: "created", aiSessionId: "ai-fork", providerSessionId: "thread-fork", creationSource: "ai-session" };
+  assert.deepEqual(AiSessionForkResultSchema.parse(result), result);
+  assert.equal(AiSessionForkResultSchema.safeParse({ ...result, lineage: { kind: "fork", parentProviderSessionId: "thread-source" } }).success, false);
+  assert.equal(AiSessionForkResultSchema.safeParse({ ...result, cwd: "/workspace", worktreeId: "private" }).success, false);
+
+  const status = AiSessionStatusSchema.parse({
+    id: "ai-n-1",
+    agent: "codex",
+    status: "idle",
+    phase: "unknown",
+    actions: { send: true },
+    startedAt: now,
+    updatedAt: now,
+  });
+  assert.equal(status.actions?.fork, undefined);
+});
+
 test("AI session mention schemas enforce canonical references and safe file results", () => {
   const references = [
     { kind: "skill", name: "Docs", path: "/workspace/.agents/skills/docs/SKILL.md" },
@@ -220,6 +255,19 @@ test("AI session tool activity schemas remain strict and require atomic realtime
     kind: "turn-started",
     currentTool: null,
     toolCallsSinceLastMessage: 0,
+  }).success, false);
+  assert.equal(AiSessionRealtimeInputSchema.safeParse({
+    type: "event",
+    source: "realtime",
+    sessionId: "session-a",
+    kind: "session-error",
+    error: "Realtime transport failed.",
+  }).success, true);
+  assert.equal(AiSessionRealtimeInputSchema.safeParse({
+    type: "event",
+    source: "realtime",
+    sessionId: "session-a",
+    kind: "session-error",
   }).success, false);
 });
 

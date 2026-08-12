@@ -1,16 +1,22 @@
 <template>
   <Popover v-model:open="open">
-    <PopoverTrigger as-child>
-      <button
-        type="button"
-        class="repository-environment-trigger"
-        :class="{ 'repository-environment-trigger-detail': triggerAppearance === 'detail' }"
-        :aria-label="t('repository.environment.title')"
-        :title="t('repository.environment.title')"
-      >
-        <FolderGit2 :size="15" />
-      </button>
-    </PopoverTrigger>
+    <TooltipProvider :delay-duration="120">
+      <Tooltip>
+        <TooltipTrigger as-child>
+          <PopoverTrigger as-child>
+            <button
+              type="button"
+              class="repository-environment-trigger"
+              :class="{ 'repository-environment-trigger-detail': triggerAppearance === 'detail' }"
+              :aria-label="t('repository.environment.title')"
+            >
+              <FolderGit2 :size="15" />
+            </button>
+          </PopoverTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" :side-offset="8">{{ t("repository.environment.title") }}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
     <PopoverContent
       class="repository-environment-popover"
       align="end"
@@ -188,6 +194,7 @@ import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRepositoryContextQuery } from "../../../api/repository";
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "../../../components/ui/popover";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
 import RepositoryWorktreesPanel from "./RepositoryWorktreesPanel.vue";
 import RepositoryBranchesPanel from "./RepositoryBranchesPanel.vue";
 import RepositoryDeliveryDialog from "./RepositoryDeliveryDialog.vue";

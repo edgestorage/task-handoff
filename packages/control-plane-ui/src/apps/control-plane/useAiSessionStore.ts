@@ -24,12 +24,17 @@ import { useStreamingMessagesStore } from "./useStreamingMessagesStore.ts";
 export function useAiSessionStore(input: {
   boardInstances: () => InstanceBoardItemWithAppSessions[];
   aiSessions: () => ControlPlaneAiSessions | undefined;
+  queryKey: () => readonly unknown[];
   aiSessionsApi?: Pick<typeof sharedAiSessionsApi, "refresh" | "delta">;
   recoveryRetry?: SessionStreamRecoveryRetryOptions;
 }) {
   const queryClient = useQueryClient();
   const aiSessionsApi = input.aiSessionsApi || sharedAiSessionsApi;
   const streamingMessages = useStreamingMessagesStore();
+  const acceptsInstance = (instanceId: string) => {
+    const scope = input.queryKey()[1];
+    return scope === "*" || scope === instanceId;
+  };
   const boardInstancesWithAiSessions = computed(() => mergeBoardAiSessions(input.boardInstances(), input.aiSessions()));
   const snapshotsByInstanceId = computed(() => {
     const snapshots = new Map<string, AiSessionsSnapshot>();
@@ -41,7 +46,7 @@ export function useAiSessionStore(input: {
   let knownInstanceIds = new Set<string>();
   const streamRecovery = createSessionStreamRecovery({
     topic: "ai.sessions",
-    getEntry: (instanceId) => queryClient.getQueryData<ControlPlaneAiSessions>(["control-plane-ai-sessions"])
+    getEntry: (instanceId) => queryClient.getQueryData<ControlPlaneAiSessions>(input.queryKey())
       ?.instances.find((entry) => entry.instanceId === instanceId),
     refreshSnapshot: async (instanceId, signal) => (await aiSessionsApi.refresh(signal))
       .instances.find((entry) => entry.instanceId === instanceId),
@@ -86,8 +91,8 @@ export function useAiSessionStore(input: {
   }
 
   function applyMessageDelta(payload: AiSessionMessageDeltaEvent) {
-    if (!payload?.instanceId || !payload.sessionId || !payload.delta) return false;
-    const instance = queryClient.getQueryData<ControlPlaneAiSessions>(["control-plane-ai-sessions"])
+    if (!payload?.instanceId || !payload.sessionId || !payload.delta || !acceptsInstance(payload.instanceId)) return false;
+    const instance = queryClient.getQueryData<ControlPlaneAiSessions>(input.queryKey())
       ?.instances.find((entry) => entry.instanceId === payload.instanceId);
     const streamId = streamRecovery.streamId(payload.instanceId) || instance?.streamId;
     if (streamId) {
@@ -109,11 +114,12 @@ export function useAiSessionStore(input: {
 
   function applyEvent(event: AiSessionDeltaResponse["events"][number], fromRecovery = false) {
     const instanceId = event.payload.meta.instanceId;
+    if (!acceptsInstance(instanceId)) return false;
     const observation = streamRecovery.observeEvent(event.payload.meta, event.type === AiSessionEventType.Snapshot, fromRecovery);
     if (!observation.apply) return true;
     streamingMessages.replaceStream(instanceId, event.payload.meta.streamId);
     let applied = false;
-    queryClient.setQueryData<ControlPlaneAiSessions>(["control-plane-ai-sessions"], (current) => {
+    queryClient.setQueryData<ControlPlaneAiSessions>(input.queryKey(), (current) => {
       const entry = current?.instances.find((candidate) => candidate.instanceId === instanceId);
       const { result, entry: nextEntry } = applyControlPlaneAiSessionStreamEvent(entry, event);
       if (result.kind !== "applied") return current;
@@ -130,8 +136,9 @@ export function useAiSessionStore(input: {
   }
 
   function applyUnreadEvent(state: AiSessionUnreadState) {
+    if (!acceptsInstance(state.instanceId)) return false;
     let applied = false;
-    queryClient.setQueryData<ControlPlaneAiSessions>(["control-plane-ai-sessions"], (current) => {
+    queryClient.setQueryData<ControlPlaneAiSessions>(input.queryKey(), (current) => {
       if (!current) return current;
       const instances = current.instances.map((entry) => {
         if (entry.instanceId !== state.instanceId) return entry;
@@ -153,7 +160,8 @@ export function useAiSessionStore(input: {
   }
 
   function applyRecoveredSnapshot(snapshot: ControlPlaneAiSessions["instances"][number]) {
-    queryClient.setQueryData<ControlPlaneAiSessions>(["control-plane-ai-sessions"], (current) => (
+    if (!acceptsInstance(snapshot.instanceId)) return;
+    queryClient.setQueryData<ControlPlaneAiSessions>(input.queryKey(), (current) => (
       upsertInstanceAiSessions(current, snapshot.instanceId, snapshot.aiSessions, snapshot)
     ));
     streamingMessages.applyAuthoritativeSnapshot({

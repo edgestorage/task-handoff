@@ -24,6 +24,12 @@ export const controlPlaneQueryKeys = {
     ? ["node-environment-templates", nodeId] as const
     : ["node-environment-templates"] as const,
   instanceBoard: ["instance-board-payload"] as const,
+  scopedInstanceBoard: (instanceId?: string) => instanceId
+    ? ["instance-board-payload", instanceId] as const
+    : ["instance-board-payload"] as const,
+  instanceDirectory: ["instance-directory"] as const,
+  aiSessions: (instanceId?: string) => ["control-plane-ai-sessions", instanceId || "*"] as const,
+  appSessions: (instanceId?: string) => ["control-plane-app-sessions", instanceId || "*"] as const,
   chatBridges: ["chat-gateway-bridges"] as const,
   chatStatus: ["chat-gateway-status"] as const,
 };

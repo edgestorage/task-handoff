@@ -15,6 +15,14 @@ contextBridge.exposeInMainWorld("taskHandoffDesktop", {
   getPathForFile: (file) => webUtils.getPathForFile(file),
   openAppWindow: (url) => ipcRenderer.invoke("task-handoff:open-app-window", url),
   openControlPlaneWindow: (url) => ipcRenderer.invoke("task-handoff:open-control-plane-window", url),
+  openInstanceDetailWindow: (instanceId) => ipcRenderer.invoke("task-handoff:open-instance-detail-window", instanceId),
+  switchInstanceDetailWindow: (instanceId) => ipcRenderer.invoke("task-handoff:switch-instance-detail-window", instanceId),
+  windowDrag: (phase, screenX, screenY) => ipcRenderer.send("task-handoff:window-drag", { phase, screenX, screenY }),
+  onOpenSettings: (listener) => {
+    const handler = () => listener();
+    ipcRenderer.on("task-handoff:open-settings", handler);
+    return () => ipcRenderer.removeListener("task-handoff:open-settings", handler);
+  },
   setDiagnosticLogsEnabled: (enabled) => ipcRenderer.invoke("task-handoff:set-diagnostic-logs-enabled", enabled),
   desktopUpdates: {
     getState: () => ipcRenderer.invoke("task-handoff:desktop-update-get-state"),

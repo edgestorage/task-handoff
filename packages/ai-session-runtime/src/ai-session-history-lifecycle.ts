@@ -52,6 +52,7 @@ export function aiSessionHistoryItem(
     agent: session.agent,
     creationSource: session.creationSource,
     providerSessionId: session.providerSessionId,
+    lineage: session.lineage,
     title: session.title,
     userPrompt: session.userPrompt,
     lastMessage: session.lastMessage,

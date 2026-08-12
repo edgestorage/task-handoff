@@ -31,6 +31,16 @@
       <ExternalLink :size="14" />
       <span>{{ t("sessions.actions.openApp") }}</span>
     </ContextMenuItem>
+    <ContextMenuSub v-if="canFork">
+      <ContextMenuSubTrigger class="ai-session-context-menu-item" :disabled="isForking">
+        <GitFork :size="14" />
+        <span>{{ isForking ? t("sessions.actions.forking") : t("sessions.actions.fork") }}</span>
+      </ContextMenuSubTrigger>
+      <ContextMenuSubContent class="ai-session-context-menu">
+        <ContextMenuItem class="ai-session-context-menu-item" @select="$emit('forkSession', 'current')">{{ t("sessions.actions.forkCurrent") }}</ContextMenuItem>
+        <ContextMenuItem class="ai-session-context-menu-item" @select="$emit('forkSession', 'managed-worktree')">{{ t("sessions.actions.forkWorktree") }}</ContextMenuItem>
+      </ContextMenuSubContent>
+    </ContextMenuSub>
     <ContextMenuItem class="ai-session-context-menu-item danger" :disabled="isStoppingAppSession" @select="$emit('closeSession')">
       <Square :size="13" />
       <span>{{ isStoppingAppSession ? t("sessions.actions.closingSession") : t("sessions.actions.closeSession") }}</span>
@@ -39,7 +49,7 @@
 </template>
 
 <script setup lang="ts">
-import { Check, ExternalLink, Square, Zap } from "@lucide/vue";
+import { Check, ExternalLink, GitFork, Square, Zap } from "@lucide/vue";
 import { useI18n } from "vue-i18n";
 import type { ControlPlaneTrigger } from "../../api/types";
 import {
@@ -56,6 +66,8 @@ defineProps<{
   boundTriggerCount: number;
   hasAppSession: boolean;
   canOpenApp: boolean;
+  canFork?: boolean;
+  isForking?: boolean;
   isStoppingAppSession?: boolean;
   isTriggerBound: (configHash: string) => boolean;
   isTriggerBusy: (configHash: string) => boolean;
@@ -66,6 +78,7 @@ defineProps<{
 defineEmits<{
   closeSession: [];
   openApp: [];
+  forkSession: [mode: "current" | "managed-worktree"];
   toggleTrigger: [configHash: string];
 }>();
 </script>

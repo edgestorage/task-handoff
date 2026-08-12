@@ -21,6 +21,7 @@ const HISTORY_ITEM_FIELDS = new Set([
   "agent",
   "creationSource",
   "providerSessionId",
+  "lineage",
   "title",
   "userPrompt",
   "lastMessage",
@@ -109,9 +110,11 @@ export function sanitizeAiSessionHistoryIndex(
       onWarning?.({ kind: "item", id, reason: "invalid item removed" });
       return [];
     }
+    const lineage = sanitizeLineage(item.lineage);
     const candidate = {
       ...knownFields(item, HISTORY_ITEM_FIELDS),
       creationSource: item.creationSource === "ai-session" ? "ai-session" : "app-session",
+      ...(lineage ? { lineage } : {}),
     };
     const parsed = AiSessionHistoryItemSchema.safeParse(candidate);
     if (!parsed.success) {
@@ -128,6 +131,16 @@ export function sanitizeAiSessionHistoryIndex(
     onWarning?.({ kind: "index", id: "index", reason: "duplicate or excess items removed" });
   }
   return AiSessionHistoryIndexSchema.parse({ schemaVersion: 1, items: normalized });
+}
+
+function sanitizeLineage(value: unknown) {
+  const record = recordValue(value);
+  if (!record || record.kind !== "fork" || typeof record.parentProviderSessionId !== "string") return undefined;
+  return {
+    kind: "fork" as const,
+    parentProviderSessionId: record.parentProviderSessionId,
+    ...(typeof record.throughTurnId === "string" ? { throughTurnId: record.throughTurnId } : {}),
+  };
 }
 
 export class AiSessionHistoryStore {

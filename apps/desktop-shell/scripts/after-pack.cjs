@@ -40,7 +40,7 @@ function validateDesktopServerRuntime(context) {
 }
 
 function validateDesktopTrayResource(context) {
-  const iconPath = path.join(resourcesDirectory(context), "icon.png");
+  const iconPath = path.join(resourcesDirectory(context), "tray-icon.png");
   if (!fs.existsSync(iconPath)) {
     throw new Error(`Packaged desktop tray icon is missing: ${iconPath}`);
   }

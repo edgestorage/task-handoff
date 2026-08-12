@@ -2,6 +2,7 @@ import {
   AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES,
   AiSessionActionResultSchema,
   AiSessionCreateResultSchema,
+  AiSessionForkResultSchema,
   AiSessionCloseResultSchema,
   AiSessionOpenAppResultSchema,
   AiSessionCommandResultSchema,
@@ -18,6 +19,8 @@ import {
   type AiSessionCommandInput,
   type AiSessionCommandResult,
   type AiSessionCreateResult,
+  type AiSessionForkInput,
+  type AiSessionForkResult,
   type AiSessionCloseResult,
   type AiSessionOpenAppResult,
   type AiSessionHistoryDetail,
@@ -118,6 +121,20 @@ export class AiSessionActionService {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ cwd }),
     }));
+  }
+
+  async fork(instanceId: string, aiSessionId: string, input: AiSessionForkInput): Promise<AiSessionForkResult> {
+    const result = parseResponse(AiSessionForkResultSchema, await this.post(instanceId, sessionRoute(aiSessionId, "fork"), input));
+    try {
+      await this.options.refreshSnapshots();
+    } catch (error) {
+      try {
+        this.options.warn?.({ instanceId, aiSessionId, providerSessionId: result.providerSessionId, code: errorCode(error), message: errorMessage(error) }, "AI session Fork committed but snapshot refresh failed");
+      } catch {
+        // Diagnostics cannot turn a committed remote Fork into an API failure.
+      }
+    }
+    return result;
   }
 
   async openApp(instanceId: string, aiSessionId: string, clientRequestId: string): Promise<AiSessionOpenAppResult> {

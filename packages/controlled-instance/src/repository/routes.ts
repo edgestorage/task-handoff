@@ -339,6 +339,39 @@ export function registerRepositoryRoutes(app: FastifyInstance, options: Register
       }
     } catch (error) { return sendRepositoryError(reply, sanitizeAiSessionLaunchError(error)); }
   });
+
+  return {
+    prepareForkWorktree: async (aiSessionId: string, clientRequestId: string) => {
+      const services = servicesFor("ai-session", aiSessionId);
+      const source = await services.resolve();
+      if (source.context.availability !== "available" || !source.worktreeRoot || !source.changes) {
+        throw new RepositoryOperationError("AI_SESSION_FORK_WORKTREE_UNAVAILABLE", "Fork source is not an available Git worktree.", source);
+      }
+      const dirty = source.changes.summary.staged + source.changes.summary.unstaged + source.changes.summary.untracked + source.changes.summary.conflicts;
+      if (dirty > 0) {
+        throw new RepositoryOperationError("AI_SESSION_FORK_WORKTREE_UNAVAILABLE", "Managed-worktree Fork requires a clean source worktree.", source);
+      }
+      const created = await services.worktrees.createForAiSession({ ref: { type: "head" }, clientRequestId });
+      const target = created.worktrees.items.find((item) => item.id === created.worktreeId);
+      if (!target) {
+        await compensateFailedWorktreeLaunch(services.worktrees, created.worktreeId);
+        throw new RepositoryOperationError("AI_SESSION_FORK_WORKTREE_UNAVAILABLE", "Managed Fork worktree is unavailable.", source);
+      }
+      const root = await services.worktrees.resolveWorkspace(created.worktrees.repositoryContextId, target.id);
+      const cwd = workspaceCwd(root, source);
+      try {
+        if (!fs.statSync(cwd).isDirectory()) throw new Error("not a directory");
+      } catch {
+        await compensateFailedWorktreeLaunch(services.worktrees, created.worktreeId);
+        throw new RepositoryOperationError("AI_SESSION_FORK_WORKTREE_UNAVAILABLE", "Fork source folder does not exist in the managed worktree.", source);
+      }
+      return { cwd, worktreeId: created.worktreeId };
+    },
+    removeForkWorktree: async (aiSessionId: string, worktreeId: string) => {
+      const services = servicesFor("ai-session", aiSessionId);
+      return (await compensateFailedWorktreeLaunch(services.worktrees, worktreeId)).removed;
+    },
+  };
 }
 
 type WorkspaceServices = {

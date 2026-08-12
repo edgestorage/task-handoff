@@ -30,6 +30,7 @@ export type AiSessionPatch = Partial<
     | "appSessionId"
     | "appId"
     | "providerSessionId"
+    | "lineage"
     | "providerMeta"
     | "appBindingKeys"
     | "actions"
@@ -63,6 +64,7 @@ export type ApplyAiSessionPatchOptions = {
   replaceActivity?: boolean;
   replaceTurns?: boolean;
   clearResponse?: boolean;
+  clearError?: boolean;
   suppressPromptTurn?: boolean;
   suppressTurnUpdate?: boolean;
   meta?: TurnMeta;
@@ -127,7 +129,7 @@ export function applyAiSessionPatch(
       ? patch.userPrompt ? messageText(patch.userPrompt) : undefined
       : patch.userPrompt ? messageText(patch.userPrompt) : current.userPrompt),
     turns,
-    error: patch.error ? compact(patch.error, 4000) : current.error,
+    error: options.clearError ? undefined : patch.error ? compact(patch.error, 4000) : current.error,
     counters,
     queue: patch.queue ? normalizeAiSessionQueue(patch.queue) : current.queue,
     subAgents: patch.subAgents !== undefined ? normalizeAiSessionSubAgents(patch.subAgents) : current.subAgents,
@@ -167,7 +169,7 @@ export function reduceAiSessionRealtime(
       status: event.status || "running",
       phase: event.phase || "thinking",
       userPrompt,
-    }, { updatedAt, meta });
+    }, { updatedAt, meta, clearError: true });
   }
   if (event.kind === "lifecycle") {
     const status = event.status || current.status;
@@ -179,14 +181,14 @@ export function reduceAiSessionRealtime(
       status,
       phase: event.phase || current.phase,
       currentTool: status === "idle" || status === "failed" ? undefined : current.currentTool,
-    }, { updatedAt, meta });
+    }, { updatedAt, meta, clearError: status === "running" || status === "waiting" });
   }
   if (event.kind === "turn-started") {
     return applyAiSessionPatch(current, {
       activeTurnId: event.activeTurnId || current.activeTurnId,
       status: event.status || "running",
       phase: event.phase || "thinking",
-    }, { updatedAt, meta });
+    }, { updatedAt, meta, clearError: true });
   }
   if (event.kind === "user-message") {
     return applyAiSessionPatch(current, {
@@ -194,7 +196,7 @@ export function reduceAiSessionRealtime(
       status: event.status || "running",
       phase: event.phase || "thinking",
       userPrompt: event.userPrompt,
-    }, { updatedAt, meta });
+    }, { updatedAt, meta, clearError: true });
   }
   if (event.kind === "assistant-message") {
     const completedFromTranscript = event.source === "transcript-tail";
@@ -227,6 +229,9 @@ export function reduceAiSessionRealtime(
   }
   if (event.kind === "sub-agent-activity") {
     return applyAiSessionPatch(current, { subAgents: event.subAgents }, { updatedAt, meta, suppressTurnUpdate: true });
+  }
+  if (event.kind === "session-error") {
+    return applyAiSessionPatch(current, { error: event.error }, { updatedAt, meta, suppressTurnUpdate: true });
   }
   if (event.kind === "context-compaction" && event.contextCompaction) {
     const turnId = event.activeTurnId || current.activeTurnId;
@@ -266,7 +271,7 @@ export function reduceAiSessionRealtime(
       lastMessage: responseText,
       error,
       currentTool: undefined,
-    }, { updatedAt, meta, clearResponse: !responseText });
+    }, { updatedAt, meta, clearResponse: !responseText, clearError: event.status !== "failed" });
   }
   return undefined;
 }
@@ -302,6 +307,7 @@ export function reduceAiSessionSnapshot(
     appSessionId: replaceAppBinding ? event.appSessionId : event.appSessionId || current.appSessionId,
     appId: event.appId || current.appId,
     providerSessionId: event.providerSessionId || current.providerSessionId,
+    lineage: current.lineage || event.lineage,
     providerMeta: event.providerMeta || current.providerMeta,
     appBindingKeys: replaceAppBinding ? event.appBindingKeys : event.appBindingKeys || current.appBindingKeys,
     actions: event.actions || current.actions,
@@ -324,6 +330,7 @@ export function reduceAiSessionSnapshot(
     lastMessageItemId: staleActivitySnapshot
       ? current.lastMessageItemId
       : ignoreSnapshotTopLevelResponse ? undefined : event.lastMessageItemId || current.lastMessageItemId,
+    error: staleActivitySnapshot ? current.error : event.error,
     currentTool: event.status === "idle" || event.status === "failed"
       ? undefined
       : staleActivitySnapshot
@@ -339,6 +346,7 @@ export function reduceAiSessionSnapshot(
     updatedAt: event.observedAt ?? current.updatedAt,
     meta,
     replaceActivity: Boolean(event.replaceActivity),
+    clearError: Boolean(!staleActivitySnapshot && event.replaceActivity && event.status !== "failed"),
     suppressPromptTurn: !incomingTurns.length,
     suppressTurnUpdate: !incomingTurns.length,
     replaceTurns: Boolean(

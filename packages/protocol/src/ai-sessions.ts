@@ -98,10 +98,17 @@ export const AiSessionActionsSchema = z
     send: z.boolean().optional(),
     interrupt: z.boolean().optional(),
     approval: z.boolean().optional(),
+    fork: z.boolean().optional(),
     openApp: z.boolean().optional(),
     close: z.boolean().optional(),
   })
   .strict();
+
+export const AiSessionLineageSchema = z.object({
+  kind: z.literal("fork"),
+  parentProviderSessionId: z.string().trim().min(1).max(240),
+  throughTurnId: z.string().trim().min(1).max(240).optional(),
+}).strict();
 
 export const AiSessionAttachmentKindSchema = z.enum(["image", "file"]);
 
@@ -317,6 +324,23 @@ export const AiSessionCreateResultSchema = z.object({
   creationSource: z.literal("ai-session"),
 }).strict();
 
+export const AiSessionForkWorkspaceSchema = z.object({
+  mode: z.enum(["current", "managed-worktree"]).default("current"),
+}).strict().default({ mode: "current" });
+
+export const AiSessionForkInputSchema = z.object({
+  clientRequestId: z.string().trim().min(1).max(160),
+  throughTurnId: z.string().trim().min(1).max(240).optional(),
+  workspace: AiSessionForkWorkspaceSchema.optional().default({ mode: "current" }),
+}).strict();
+
+export const AiSessionForkResultSchema = z.object({
+  disposition: z.enum(["created", "already-created"]),
+  aiSessionId: z.string().trim().min(1).max(120),
+  providerSessionId: z.string().trim().min(1).max(240),
+  creationSource: z.literal("ai-session"),
+}).strict();
+
 export const AiSessionOpenAppInputSchema = z.object({
   clientRequestId: z.string().trim().min(1).max(160),
 }).strict();
@@ -465,6 +489,7 @@ export const AiSessionStatusSchema = z
     appSessionId: z.string().trim().max(120).optional(),
     appId: z.string().trim().max(120).optional(),
     providerSessionId: z.string().trim().max(240).optional(),
+    lineage: AiSessionLineageSchema.optional(),
     providerMeta: z.record(z.string(), z.unknown()).optional(),
     appBindingKeys: z.array(z.string().trim().min(1).max(240)).max(20).optional(),
     actions: AiSessionActionsSchema.optional(),
@@ -510,6 +535,7 @@ export const AiSessionHistoryItemSchema = z.object({
   agent: z.enum(["codex", "claude"]),
   creationSource: AiSessionCreationSourceSchema,
   providerSessionId: z.string().trim().min(1).max(240),
+  lineage: AiSessionLineageSchema.optional(),
   title: z.string().trim().max(240).optional(),
   userPrompt: z.string().trim().optional(),
   lastMessage: z.string().trim().optional(),
@@ -548,6 +574,7 @@ export const AiSessionSummarySchema = AiSessionStatusSchema.pick({
   appSessionId: true,
   appId: true,
   providerSessionId: true,
+  lineage: true,
   providerMeta: true,
   appBindingKeys: true,
   actions: true,
@@ -771,6 +798,7 @@ export const AiSessionSnapshotInputSchema = AiSessionInputBaseSchema.extend({
   appSessionId: z.string().trim().max(120).optional(),
   appId: z.string().trim().max(120).optional(),
   providerSessionId: z.string().trim().max(240).optional(),
+  lineage: AiSessionLineageSchema.optional(),
   providerMeta: z.record(z.string(), z.unknown()).optional(),
   appBindingKeys: z.array(z.string().trim().min(1).max(240)).max(20).optional(),
   actions: AiSessionActionsSchema.optional(),
@@ -785,6 +813,7 @@ export const AiSessionSnapshotInputSchema = AiSessionInputBaseSchema.extend({
   summary: z.string().trim().max(1000).optional(),
   lastMessage: z.string().trim().optional(),
   lastMessageItemId: z.string().trim().max(240).optional(),
+  error: z.string().trim().max(4000).optional(),
   currentTool: AiSessionToolSchema.optional(),
   toolCallsSinceLastMessage: z.number().int().min(0).optional(),
   subAgents: z.array(AiSessionSubAgentSchema).max(50).optional(),
@@ -796,7 +825,7 @@ export const AiSessionSnapshotInputSchema = AiSessionInputBaseSchema.extend({
 export const AiSessionRealtimeInputSchema = AiSessionInputBaseSchema.extend({
   type: z.literal("event"),
   sessionId: z.string().trim().min(1).max(120),
-  kind: z.enum(["lifecycle", "send-ack", "turn-started", "user-message", "assistant-message", "approval-requested", "turn-completed", "tool-activity", "sub-agent-activity", "context-compaction"]),
+  kind: z.enum(["lifecycle", "send-ack", "turn-started", "user-message", "assistant-message", "approval-requested", "turn-completed", "session-error", "tool-activity", "sub-agent-activity", "context-compaction"]),
   activeTurnId: z.string().trim().max(240).optional(),
   providerTurnId: z.string().trim().max(240).optional(),
   userPrompt: z.string().trim().optional(),
@@ -816,6 +845,9 @@ export const AiSessionRealtimeInputSchema = AiSessionInputBaseSchema.extend({
     approvals: z.number().int().min(0).optional(),
   }).strict().optional(),
 }).strict().superRefine((input, context) => {
+  if (input.kind === "session-error" && !input.error) {
+    context.addIssue({ code: "custom", path: ["error"], message: "session-error events require error" });
+  }
   if (input.kind === "context-compaction") {
     if (!input.contextCompaction) {
       context.addIssue({ code: "custom", path: ["contextCompaction"], message: "context-compaction events require contextCompaction" });
@@ -886,6 +918,10 @@ export type AiSessionCreateInput = z.infer<typeof AiSessionCreateInputSchema>;
 export type AiSessionCreateRefInput = z.infer<typeof AiSessionCreateRefInputSchema>;
 export type AiSessionGitSelection = z.infer<typeof AiSessionGitSelectionSchema>;
 export type AiSessionCreateResult = z.infer<typeof AiSessionCreateResultSchema>;
+export type AiSessionForkWorkspace = z.infer<typeof AiSessionForkWorkspaceSchema>;
+export type AiSessionForkInput = z.infer<typeof AiSessionForkInputSchema>;
+export type AiSessionForkResult = z.infer<typeof AiSessionForkResultSchema>;
+export type AiSessionLineage = z.infer<typeof AiSessionLineageSchema>;
 export type AiSessionOpenAppInput = z.infer<typeof AiSessionOpenAppInputSchema>;
 export type AiSessionOpenAppResult = z.infer<typeof AiSessionOpenAppResultSchema>;
 export type AiSessionCloseInput = z.infer<typeof AiSessionCloseInputSchema>;
