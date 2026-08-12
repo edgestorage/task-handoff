@@ -426,6 +426,20 @@ export const BuildInfoSchema = z
   })
   .strict();
 
+export const ControlPlaneHealthResponseSchema = z.object({
+  data: z.object({
+    ok: z.literal(true),
+    role: z.literal("control-plane"),
+    protocolVersion: ProtocolVersionSchema,
+    build: BuildInfoSchema.extend({
+      component: z.literal("control-plane"),
+      packageVersion: z.string().trim().min(1).max(80),
+    }).loose(),
+    dataDir: z.string().min(1),
+    serverTime: TimestampSchema,
+  }).loose(),
+}).loose();
+
 export const UpdateChannelSchema = z.enum(["stable", "beta", "alpha"]);
 export const RuntimeArtifactIdentitySchema = z.object({
   packageName: z.literal("@task-handoff/controlled-instance"),
@@ -2152,6 +2166,7 @@ export type NodeAgentDeleteResponse = z.infer<typeof NodeAgentDeleteResponseSche
 export type LocalDockerImage = z.infer<typeof LocalDockerImageSchema>;
 export type NodeAgentInstanceProxyRawResponse = z.infer<typeof NodeAgentInstanceProxyRawResponseSchema>;
 export type BuildInfo = z.infer<typeof BuildInfoSchema>;
+export type ControlPlaneHealthResponse = z.infer<typeof ControlPlaneHealthResponseSchema>;
 export type UpdateChannel = z.infer<typeof UpdateChannelSchema>;
 export type RuntimeArtifactIdentity = z.infer<typeof RuntimeArtifactIdentitySchema>;
 export type RuntimeConvergenceError = z.infer<typeof RuntimeConvergenceErrorSchema>;

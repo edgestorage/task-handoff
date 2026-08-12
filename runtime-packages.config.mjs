@@ -73,6 +73,8 @@ export const runtimePackages = {
     description: "Prebuilt TaskHandoff node agent runtime.",
     input: "apps/cli/src/runtime/node-agent.ts",
     entryFile: "cli.js",
+    updateWorkerInput: "scripts/node-update-worker.cts",
+    updateWorkerEntryFile: "node-update-worker.js",
     binName: "task-handoff-node-agent",
     dependencies: runtimeDependencies(["@task-handoff/control-plane"], ["commander"]),
   },
