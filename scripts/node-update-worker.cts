@@ -6,6 +6,12 @@ const { spawnSync } = require("node:child_process");
 const { Command, InvalidArgumentError } = require("commander");
 const semver = require("semver");
 const writeFileAtomic = require("write-file-atomic");
+const { ControlPlaneHealthResponseSchema } = require("../packages/protocol/src/control-plane.ts") as typeof import("../packages/protocol/src/control-plane.ts");
+
+function controlPlanePackageVersion(payload: unknown) {
+  const parsed = ControlPlaneHealthResponseSchema.safeParse(payload);
+  return parsed.success ? parsed.data.data.build.packageVersion : undefined;
+}
 
 function parseExactVersion(value) {
   if (value.trim() !== value || /^[v=]/.test(value) || semver.valid(value) === null) throw new InvalidArgumentError("must be an exact semantic version");
@@ -73,7 +79,7 @@ function run(command, args) {
   if (result.status !== 0) throw new Error(`${command} exited with status ${result.status ?? "unknown"}`);
 }
 
-function installedVersion(packageName, globalRoot, nestedUnder) {
+function installedVersion(packageName: string, globalRoot: string, nestedUnder?: string) {
   const manifest = nestedUnder
     ? path.join(globalRoot, ...nestedUnder.split("/"), "node_modules", ...packageName.split("/"), "package.json")
     : path.join(globalRoot, ...packageName.split("/"), "package.json");
@@ -143,7 +149,7 @@ async function waitForControlPlaneHealth(healthUrl, timeoutMs = 60_000) {
     try {
       if (process.env.TASK_HANDOFF_UPDATE_WORKER_TEST_HEALTH_FILE) {
         const payload = JSON.parse(fs.readFileSync(process.env.TASK_HANDOFF_UPDATE_WORKER_TEST_HEALTH_FILE, "utf8"));
-        const version = payload?.data?.version;
+        const version = controlPlanePackageVersion(payload);
         if (version === targetVersion) return;
         lastFailure = `reported version ${String(version || "unknown")}`;
         await new Promise((resolve) => setTimeout(resolve, 10));
@@ -154,7 +160,7 @@ async function waitForControlPlaneHealth(healthUrl, timeoutMs = 60_000) {
         signal: AbortSignal.timeout(2_000),
       });
       const payload = await response.json().catch(() => ({}));
-      const version = payload?.data?.version;
+      const version = controlPlanePackageVersion(payload);
       if (response.ok && version === targetVersion) return;
       lastFailure = response.ok ? `reported version ${String(version || "unknown")}` : `returned HTTP ${response.status}`;
     } catch (error) {

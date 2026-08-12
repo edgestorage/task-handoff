@@ -3945,7 +3945,7 @@ test("node update checks use the package that owns the installed service launche
 test("node agent resolves update workers in source and bundled runtime layouts", () => {
   const root = tempDataDir("node-agent-worker-layouts");
   const sourceModuleDir = path.join(root, "packages", "control-plane", "src", "node-agent");
-  const sourceWorker = path.join(root, "scripts", "node-update-worker.cjs");
+  const sourceWorker = path.join(root, "scripts", "node-update-worker.cts");
   fs.mkdirSync(sourceModuleDir, { recursive: true });
   fs.mkdirSync(path.dirname(sourceWorker), { recursive: true });
   fs.writeFileSync(sourceWorker, "// source worker\n");
@@ -4032,7 +4032,7 @@ test("node agent update apply launches the resolved worker through systemd-run",
   const args = calls[4][1];
   const propertyIndex = args.indexOf("--property=Type=exec");
   assert.equal(args[propertyIndex + 1], process.execPath);
-  assert.equal(args[propertyIndex + 2], path.resolve(__dirname, "..", "scripts", "node-update-worker.cjs"));
+  assert.equal(args[propertyIndex + 2], path.resolve(__dirname, "..", "scripts", "node-update-worker.cts"));
   assert.equal(args[args.indexOf("--target-version") + 1], "9.8.7");
   assert.equal(args[args.indexOf("--npm-command") + 1], "npm");
   assert.equal(args[args.indexOf("--control-plane-health-url") + 1], "http://127.0.0.1:8081/api/health");

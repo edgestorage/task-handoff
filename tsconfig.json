@@ -33,6 +33,7 @@
   "include": [
     "apps/cli/src/**/*",
     "apps/controlled-instance-image/src/**/*",
+    "scripts/node-update-worker.cts",
     "packages/core/src/**/*",
     "packages/cloud-contracts/src/**/*",
     "packages/protocol/src/**/*",
