@@ -66,7 +66,7 @@ function createDesktopTray(options) {
         }];
     tray.setToolTip(`TaskHandoff · ${status}`);
     tray.setContextMenu(options.Menu.buildFromTemplate([
-      { label: language === "zh" ? "打开 TaskHandoff" : "Open TaskHandoff", click: options.onOpen },
+      { label: language === "zh" ? "打开主窗口" : "Open Main Window", click: options.onOpen },
       { type: "separator" },
       { label: `${language === "zh" ? "服务" : "Service"}：${status}`, enabled: false },
       { label: `Control Plane：${controlPlane}`, enabled: false },
@@ -112,7 +112,7 @@ function createDesktopTray(options) {
     if (state.controlPlane === "running") void refreshInstances();
   }
 
-  tray.on("click", options.onOpen);
+  if (options.onActivateExisting) tray.on("click", options.onActivateExisting);
   tray.on("right-click", () => { void refreshInstances(); });
   const unsubscribe = options.supervisor.subscribe(update);
   const refreshTimer = options.loadInstances && setInterval(() => { void refreshInstances(); }, options.refreshIntervalMs || 15_000);

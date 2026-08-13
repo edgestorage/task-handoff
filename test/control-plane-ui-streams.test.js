@@ -17,9 +17,17 @@ const { QueryClient, VueQueryPlugin } = require("@tanstack/vue-query");
 const { createApp, nextTick, ref } = require("vue");
 const { AiSessionEventType } = require("../packages/protocol/src/ai-sessions.ts");
 const { AppSessionEventType } = require("../packages/protocol/src/app-sessions.ts");
-const { useAiSessionStore } = require("../packages/control-plane-ui/src/apps/control-plane/useAiSessionStore.ts");
+const { useAiSessionStore: createAiSessionStore } = require("../packages/control-plane-ui/src/apps/control-plane/useAiSessionStore.ts");
 const { useStreamingMessagesStore } = require("../packages/control-plane-ui/src/apps/control-plane/useStreamingMessagesStore.ts");
-const { useAppSessionStore } = require("../packages/control-plane-ui/src/apps/control-plane/useAppSessionStore.ts");
+const { useAppSessionStore: createAppSessionStore } = require("../packages/control-plane-ui/src/apps/control-plane/useAppSessionStore.ts");
+
+function useAiSessionStore(input) {
+  return createAiSessionStore({ queryKey: () => ["control-plane-ai-sessions", "*"], ...input });
+}
+
+function useAppSessionStore(input) {
+  return createAppSessionStore({ queryKey: () => ["control-plane-app-sessions", "*"], ...input });
+}
 
 function aiSessionsApiFromLoader(apiLoader) {
   return {
@@ -93,7 +101,7 @@ test("control-plane UI applies an authoritative AI snapshot while recovery is in
   const queryClient = new QueryClient();
   const streamId = "ai-stream";
   const initial = snapshotEvent(streamId, 1, [summary("old")]);
-  queryClient.setQueryData(["control-plane-ai-sessions"], {
+  queryClient.setQueryData(["control-plane-ai-sessions", "*"], {
     updatedAt: timestamp(),
     instances: [{ instanceId: "instance-one", streamId, revision: 1, lastEventAt: initial.meta.generatedAt, aiSessions: initial.snapshot }],
   });
@@ -125,13 +133,13 @@ test("control-plane UI applies an authoritative AI snapshot while recovery is in
   await new Promise((resolve) => setImmediate(resolve));
   store.applySnapshotEvent(snapshotEvent(streamId, 3, [summary("live")]));
 
-  let entry = queryClient.getQueryData(["control-plane-ai-sessions"]).instances[0];
+  let entry = queryClient.getQueryData(["control-plane-ai-sessions", "*"]).instances[0];
   assert.equal(entry.revision, 3);
   assert.deepEqual(entry.aiSessions.sessions.map((session) => session.id), ["live"]);
 
   releaseDelta();
   await recovery;
-  entry = queryClient.getQueryData(["control-plane-ai-sessions"]).instances[0];
+  entry = queryClient.getQueryData(["control-plane-ai-sessions", "*"]).instances[0];
   assert.equal(entry.revision, 3);
   assert.deepEqual(entry.aiSessions.sessions.map((session) => session.id), ["live"]);
 });
@@ -139,7 +147,7 @@ test("control-plane UI applies an authoritative AI snapshot while recovery is in
 test("a late AI recovery response cannot roll the advertised stream back", async () => {
   const queryClient = new QueryClient();
   const initial = snapshotEvent("old-stream", 1, [summary("old")]);
-  queryClient.setQueryData(["control-plane-ai-sessions"], {
+  queryClient.setQueryData(["control-plane-ai-sessions", "*"], {
     updatedAt: timestamp(),
     instances: [{ instanceId: "instance-one", streamId: "old-stream", revision: 1, lastEventAt: initial.meta.generatedAt, aiSessions: initial.snapshot }],
   });
@@ -189,7 +197,7 @@ test("a late AI recovery response cannot roll the advertised stream back", async
     },
   });
 
-  const entry = queryClient.getQueryData(["control-plane-ai-sessions"]).instances[0];
+  const entry = queryClient.getQueryData(["control-plane-ai-sessions", "*"]).instances[0];
   assert.equal(entry.streamId, "new-stream");
   assert.equal(entry.revision, 2);
   assert.deepEqual(entry.aiSessions.sessions.map((session) => session.id), ["newer"]);
@@ -198,7 +206,7 @@ test("a late AI recovery response cannot roll the advertised stream back", async
 test("an older AI refresh cannot overwrite a newer live snapshot on the same stream", async () => {
   const queryClient = new QueryClient();
   const cached = snapshotEvent("cached-stream", 1, [summary("cached")]);
-  queryClient.setQueryData(["control-plane-ai-sessions"], {
+  queryClient.setQueryData(["control-plane-ai-sessions", "*"], {
     updatedAt: timestamp(),
     instances: [{ instanceId: "instance-one", streamId: "cached-stream", revision: 1, lastEventAt: cached.meta.generatedAt, aiSessions: cached.snapshot }],
   });
@@ -228,7 +236,7 @@ test("an older AI refresh cannot overwrite a newer live snapshot on the same str
   releaseRefresh();
   await recovery;
 
-  const entry = queryClient.getQueryData(["control-plane-ai-sessions"]).instances[0];
+  const entry = queryClient.getQueryData(["control-plane-ai-sessions", "*"]).instances[0];
   assert.equal(entry.streamId, "target-stream");
   assert.equal(entry.revision, 5);
   assert.deepEqual(entry.aiSessions.sessions.map((session) => session.id), ["live-newer"]);
@@ -237,7 +245,7 @@ test("an older AI refresh cannot overwrite a newer live snapshot on the same str
 test("AI recovery retries a transient loader failure until the advertised revision converges", async () => {
   const queryClient = new QueryClient();
   const initial = snapshotEvent("failure-stream", 1, [summary("cached")]);
-  queryClient.setQueryData(["control-plane-ai-sessions"], {
+  queryClient.setQueryData(["control-plane-ai-sessions", "*"], {
     updatedAt: timestamp(),
     instances: [{ instanceId: "instance-one", streamId: "failure-stream", revision: 1, lastEventAt: initial.meta.generatedAt, aiSessions: initial.snapshot }],
   });
@@ -271,7 +279,7 @@ test("AI recovery retries a transient loader failure until the advertised revisi
     earliestRetainedRevision: 2,
   });
   await recovery;
-  const entry = queryClient.getQueryData(["control-plane-ai-sessions"]).instances[0];
+  const entry = queryClient.getQueryData(["control-plane-ai-sessions", "*"]).instances[0];
   assert.equal(calls, 2);
   assert.equal(entry.revision, 2);
   assert.deepEqual(entry.aiSessions.sessions.map((session) => session.id), ["recovered"]);
@@ -280,7 +288,7 @@ test("AI recovery retries a transient loader failure until the advertised revisi
 test("a live AI event immediately wakes a recovery waiting in backoff", async () => {
   const queryClient = new QueryClient();
   const initial = snapshotEvent("wake-stream", 1, [summary("cached")]);
-  queryClient.setQueryData(["control-plane-ai-sessions"], {
+  queryClient.setQueryData(["control-plane-ai-sessions", "*"], {
     updatedAt: timestamp(),
     instances: [{ instanceId: "instance-one", streamId: "wake-stream", revision: 1, lastEventAt: initial.meta.generatedAt, aiSessions: initial.snapshot }],
   });
@@ -309,7 +317,7 @@ test("a live AI event immediately wakes a recovery waiting in backoff", async ()
   await recovery;
 
   assert.equal(calls, 1);
-  assert.equal(queryClient.getQueryData(["control-plane-ai-sessions"]).instances[0].revision, 2);
+  assert.equal(queryClient.getQueryData(["control-plane-ai-sessions", "*"]).instances[0].revision, 2);
 });
 
 test("control-plane UI preserves authoritative tool activity across snapshot and patch events", () => {
@@ -322,7 +330,7 @@ test("control-plane UI preserves authoritative tool activity across snapshot and
     currentTool: { id: "tool_1", kind: "commandExecution", name: "Command", inputPreview: "pnpm test", startedAt },
     toolCallsSinceLastMessage: 1,
   })]);
-  queryClient.setQueryData(["control-plane-ai-sessions"], {
+  queryClient.setQueryData(["control-plane-ai-sessions", "*"], {
     updatedAt: timestamp(),
     instances: [{ instanceId: "instance-one", streamId, revision: 1, lastEventAt: initial.meta.generatedAt, aiSessions: initial.snapshot }],
   });
@@ -351,7 +359,7 @@ test("control-plane UI preserves authoritative tool activity across snapshot and
     },
   });
 
-  const session = queryClient.getQueryData(["control-plane-ai-sessions"]).instances[0].aiSessions.sessions[0];
+  const session = queryClient.getQueryData(["control-plane-ai-sessions", "*"]).instances[0].aiSessions.sessions[0];
   assert.equal(session.currentTool, undefined);
   assert.equal(session.toolCallsSinceLastMessage, 2);
 });
@@ -360,7 +368,7 @@ test("AI recovery cancels mismatched-stream backoff when the next live stream re
   const queryClient = new QueryClient();
   const cached = snapshotEvent("cached-stream", 1, [summary("cached")]);
   const refreshed = snapshotEvent("new-stream", 2, [summary("refreshed")]);
-  queryClient.setQueryData(["control-plane-ai-sessions"], {
+  queryClient.setQueryData(["control-plane-ai-sessions", "*"], {
     updatedAt: timestamp(),
     instances: [{ instanceId: "instance-one", streamId: "cached-stream", revision: 1, lastEventAt: cached.meta.generatedAt, aiSessions: cached.snapshot }],
   });
@@ -385,11 +393,11 @@ test("AI recovery cancels mismatched-stream backoff when the next live stream re
   });
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(requests, 1);
-  assert.equal(queryClient.getQueryData(["control-plane-ai-sessions"]).instances[0].streamId, "cached-stream");
+  assert.equal(queryClient.getQueryData(["control-plane-ai-sessions", "*"]).instances[0].streamId, "cached-stream");
 
   store.applySnapshotEvent(snapshotEvent("new-stream", 3, [summary("live")]));
   await recovery;
-  const entry = queryClient.getQueryData(["control-plane-ai-sessions"]).instances[0];
+  const entry = queryClient.getQueryData(["control-plane-ai-sessions", "*"]).instances[0];
   assert.equal(entry.streamId, "new-stream");
   assert.equal(entry.revision, 3);
   assert.deepEqual(entry.aiSessions.sessions.map((session) => session.id), ["live"]);
@@ -398,7 +406,7 @@ test("AI recovery cancels mismatched-stream backoff when the next live stream re
 test("AI recovery retries when a delta request makes no progress", async () => {
   const queryClient = new QueryClient();
   const cached = snapshotEvent("ai-stream", 1, [summary("cached")]);
-  queryClient.setQueryData(["control-plane-ai-sessions"], {
+  queryClient.setQueryData(["control-plane-ai-sessions", "*"], {
     updatedAt: timestamp(),
     instances: [{ instanceId: "instance-one", streamId: "ai-stream", revision: 1, lastEventAt: cached.meta.generatedAt, aiSessions: cached.snapshot }],
   });
@@ -429,7 +437,7 @@ test("AI recovery retries when a delta request makes no progress", async () => {
 
   await store.recoverDescriptor({ topic: "ai.sessions", instanceId: "instance-one", streamId: "ai-stream", latestRevision: 2, earliestRetainedRevision: 2 });
   assert.equal(requests, 2);
-  assert.equal(queryClient.getQueryData(["control-plane-ai-sessions"]).instances[0].revision, 2);
+  assert.equal(queryClient.getQueryData(["control-plane-ai-sessions", "*"]).instances[0].revision, 2);
 });
 
 test("AI full-snapshot recovery settles the normalized streaming store", async () => {
@@ -457,7 +465,7 @@ test("AI full-snapshot recovery settles the normalized streaming store", async (
       lastMessageItemId: "item-recovering",
     }],
   }]);
-  queryClient.setQueryData(["control-plane-ai-sessions"], {
+  queryClient.setQueryData(["control-plane-ai-sessions", "*"], {
     updatedAt: timestamp(),
     instances: [{ instanceId: "instance-one", streamId, revision: 1, lastEventAt: initial.meta.generatedAt, aiSessions: initial.snapshot }],
   });
@@ -501,7 +509,7 @@ test("removing an authoritative instance releases its streaming projection befor
     updatedAt: timestamp(),
     instances: [{ instanceId: "instance-one", streamId, revision: 1, lastEventAt: initial.meta.generatedAt, aiSessions: initial.snapshot }],
   });
-  queryClient.setQueryData(["control-plane-ai-sessions"], authoritative.value);
+  queryClient.setQueryData(["control-plane-ai-sessions", "*"], authoritative.value);
   const app = createApp({ render: () => null });
   app.use(VueQueryPlugin, { queryClient });
   const store = app.runWithContext(() => useAiSessionStore({ boardInstances: () => [], aiSessions: () => authoritative.value }));
@@ -520,7 +528,7 @@ test("removing an authoritative instance releases its streaming projection befor
   const previousActive = streaming.activeMessage("instance-one", "lifecycle");
 
   authoritative.value = { updatedAt: timestamp(), instances: [] };
-  queryClient.setQueryData(["control-plane-ai-sessions"], authoritative.value);
+  queryClient.setQueryData(["control-plane-ai-sessions", "*"], authoritative.value);
   await nextTick();
 
   assert.equal(previousActive.value, undefined);
@@ -530,7 +538,7 @@ test("removing an authoritative instance releases its streaming projection befor
     updatedAt: timestamp(),
     instances: [{ instanceId: "instance-one", streamId, revision: 1, lastEventAt: initial.meta.generatedAt, aiSessions: initial.snapshot }],
   };
-  queryClient.setQueryData(["control-plane-ai-sessions"], authoritative.value);
+  queryClient.setQueryData(["control-plane-ai-sessions", "*"], authoritative.value);
   await nextTick();
   store.applyMessageDelta({
     instanceId: "instance-one",
@@ -556,7 +564,7 @@ test("removing an authoritative instance prevents an in-flight recovery from res
     updatedAt: timestamp(),
     instances: [{ instanceId: "instance-one", streamId, revision: 1, lastEventAt: initial.meta.generatedAt, aiSessions: initial.snapshot }],
   });
-  queryClient.setQueryData(["control-plane-ai-sessions"], authoritative.value);
+  queryClient.setQueryData(["control-plane-ai-sessions", "*"], authoritative.value);
   let releaseDelta;
   const deltaGate = new Promise((resolve) => { releaseDelta = resolve; });
   const apiLoader = async () => {
@@ -587,12 +595,12 @@ test("removing an authoritative instance prevents an in-flight recovery from res
   await new Promise((resolve) => setImmediate(resolve));
 
   authoritative.value = { updatedAt: timestamp(), instances: [] };
-  queryClient.setQueryData(["control-plane-ai-sessions"], authoritative.value);
+  queryClient.setQueryData(["control-plane-ai-sessions", "*"], authoritative.value);
   await nextTick();
   releaseDelta();
   await recovery;
 
-  assert.deepEqual(queryClient.getQueryData(["control-plane-ai-sessions"]).instances, []);
+  assert.deepEqual(queryClient.getQueryData(["control-plane-ai-sessions", "*"]).instances, []);
   assert.equal(streaming.size(), 0);
 });
 
@@ -607,7 +615,7 @@ test("AI message deltas and authoritative snapshots drive the normalized streami
     turns: [{ id: "turn-streaming", status: "running", revision: 1 }],
   };
   const initial = snapshotEvent(streamId, 1, [running]);
-  queryClient.setQueryData(["control-plane-ai-sessions"], {
+  queryClient.setQueryData(["control-plane-ai-sessions", "*"], {
     updatedAt: timestamp(),
     instances: [{ instanceId: "instance-one", streamId, revision: 1, lastEventAt: initial.meta.generatedAt, aiSessions: initial.snapshot }],
   });
@@ -616,12 +624,12 @@ test("AI message deltas and authoritative snapshots drive the normalized streami
   const store = app.runWithContext(() => useAiSessionStore({ boardInstances: () => [], aiSessions: () => undefined }));
   const streaming = useStreamingMessagesStore();
   streaming.clear();
-  const queryBeforeDelta = queryClient.getQueryData(["control-plane-ai-sessions"]);
+  const queryBeforeDelta = queryClient.getQueryData(["control-plane-ai-sessions", "*"]);
   const instanceBeforeDelta = queryBeforeDelta.instances[0];
   const sessionBeforeDelta = instanceBeforeDelta.aiSessions.sessions[0];
   let queryUpdates = 0;
   const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
-    if (event?.query?.queryHash === '["control-plane-ai-sessions"]' && event.type === "updated") queryUpdates += 1;
+    if (event?.query?.queryHash === '["control-plane-ai-sessions", "*"]' && event.type === "updated") queryUpdates += 1;
   });
 
   assert.equal(store.applyMessageDelta({
@@ -636,7 +644,7 @@ test("AI message deltas and authoritative snapshots drive the normalized streami
   const active = streaming.activeMessage("instance-one", "streaming").value;
   assert.equal(active.value.receivedText, "helo");
   assert.equal(active.value.status, "streaming");
-  assert.strictEqual(queryClient.getQueryData(["control-plane-ai-sessions"]), queryBeforeDelta);
+  assert.strictEqual(queryClient.getQueryData(["control-plane-ai-sessions", "*"]), queryBeforeDelta);
   assert.strictEqual(queryBeforeDelta.instances[0], instanceBeforeDelta);
   assert.strictEqual(instanceBeforeDelta.aiSessions.sessions[0], sessionBeforeDelta);
   assert.equal(queryUpdates, 0);
@@ -658,7 +666,7 @@ test("the first post-refresh assistant item does not inherit the snapshot item t
   const queryClient = new QueryClient();
   const streamId = "ai-refresh-stream";
   const initial = snapshotEvent(streamId, 0, []);
-  queryClient.setQueryData(["control-plane-ai-sessions"], {
+  queryClient.setQueryData(["control-plane-ai-sessions", "*"], {
     updatedAt: timestamp(),
     instances: [{ instanceId: "instance-one", streamId, revision: 0, lastEventAt: initial.meta.generatedAt, aiSessions: initial.snapshot }],
   });
@@ -704,7 +712,7 @@ test("app recovery cancels mismatched-stream backoff when the next live stream r
   const queryClient = new QueryClient();
   const cached = appSnapshotEvent("cached-stream", 1, [{ id: "cached", appId: "codex", status: "running", bindings: [] }]);
   const refreshed = appSnapshotEvent("new-stream", 2, [{ id: "refreshed", appId: "codex", status: "running", bindings: [] }]);
-  queryClient.setQueryData(["control-plane-app-sessions"], {
+  queryClient.setQueryData(["control-plane-app-sessions", "*"], {
     updatedAt: timestamp(),
     instances: [{ instanceId: "instance-one", streamId: "cached-stream", revision: 1, lastEventAt: cached.meta.generatedAt, appSessions: cached.snapshot }],
   });
@@ -729,11 +737,11 @@ test("app recovery cancels mismatched-stream backoff when the next live stream r
   });
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(requests, 1);
-  assert.equal(queryClient.getQueryData(["control-plane-app-sessions"]).instances[0].streamId, "cached-stream");
+  assert.equal(queryClient.getQueryData(["control-plane-app-sessions", "*"]).instances[0].streamId, "cached-stream");
 
   store.applyEvent({ type: AppSessionEventType.Snapshot, payload: appSnapshotEvent("new-stream", 3, [{ id: "live", appId: "codex", status: "running", bindings: [] }]) });
   await recovery;
-  const entry = queryClient.getQueryData(["control-plane-app-sessions"]).instances[0];
+  const entry = queryClient.getQueryData(["control-plane-app-sessions", "*"]).instances[0];
   assert.equal(entry.streamId, "new-stream");
   assert.equal(entry.revision, 3);
   assert.deepEqual(entry.appSessions.sessions.map((session) => session.id), ["live"]);
@@ -742,7 +750,7 @@ test("app recovery cancels mismatched-stream backoff when the next live stream r
 test("app recovery retries when a delta request makes no progress", async () => {
   const queryClient = new QueryClient();
   const cached = appSnapshotEvent("app-stream", 1, [{ id: "cached", appId: "codex", status: "running", bindings: [] }]);
-  queryClient.setQueryData(["control-plane-app-sessions"], {
+  queryClient.setQueryData(["control-plane-app-sessions", "*"], {
     updatedAt: timestamp(),
     instances: [{ instanceId: "instance-one", streamId: "app-stream", revision: 1, lastEventAt: cached.meta.generatedAt, appSessions: cached.snapshot }],
   });
@@ -773,14 +781,14 @@ test("app recovery retries when a delta request makes no progress", async () => 
 
   await store.recoverDescriptor({ topic: "app.sessions", instanceId: "instance-one", streamId: "app-stream", latestRevision: 2, earliestRetainedRevision: 2 });
   assert.equal(requests, 2);
-  assert.equal(queryClient.getQueryData(["control-plane-app-sessions"]).instances[0].revision, 2);
+  assert.equal(queryClient.getQueryData(["control-plane-app-sessions", "*"]).instances[0].revision, 2);
 });
 
 test("control-plane UI consumes the shared authoritative App Session projection without its own status filter", () => {
   const queryClient = new QueryClient();
   const streamId = "app-authoritative";
   const initial = appSnapshotEvent(streamId, 1, [{ id: "app", appId: "terminal-tty", status: "running", bindings: [] }]);
-  queryClient.setQueryData(["control-plane-app-sessions"], {
+  queryClient.setQueryData(["control-plane-app-sessions", "*"], {
     updatedAt: timestamp(),
     instances: [{ instanceId: "instance-one", streamId, revision: 1, lastEventAt: initial.meta.generatedAt, appSessions: initial.snapshot }],
   });
@@ -796,7 +804,7 @@ test("control-plane UI consumes the shared authoritative App Session projection 
     },
   });
 
-  assert.deepEqual(queryClient.getQueryData(["control-plane-app-sessions"]).instances[0].appSessions.sessions, []);
+  assert.deepEqual(queryClient.getQueryData(["control-plane-app-sessions", "*"]).instances[0].appSessions.sessions, []);
 });
 
 test("removing an authoritative app-session instance cancels its in-flight recovery", async () => {
@@ -807,7 +815,7 @@ test("removing an authoritative app-session instance cancels its in-flight recov
     updatedAt: timestamp(),
     instances: [{ instanceId: "instance-one", streamId, revision: 1, lastEventAt: initial.meta.generatedAt, appSessions: initial.snapshot }],
   });
-  queryClient.setQueryData(["control-plane-app-sessions"], authoritative.value);
+  queryClient.setQueryData(["control-plane-app-sessions", "*"], authoritative.value);
   let releaseDelta;
   const deltaGate = new Promise((resolve) => { releaseDelta = resolve; });
   const apiLoader = async () => {
@@ -835,10 +843,10 @@ test("removing an authoritative app-session instance cancels its in-flight recov
   });
   await new Promise((resolve) => setImmediate(resolve));
   authoritative.value = { updatedAt: timestamp(), instances: [] };
-  queryClient.setQueryData(["control-plane-app-sessions"], authoritative.value);
+  queryClient.setQueryData(["control-plane-app-sessions", "*"], authoritative.value);
   await nextTick();
   releaseDelta();
   await recovery;
 
-  assert.deepEqual(queryClient.getQueryData(["control-plane-app-sessions"]).instances, []);
+  assert.deepEqual(queryClient.getQueryData(["control-plane-app-sessions", "*"]).instances, []);
 });

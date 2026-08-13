@@ -2,7 +2,7 @@ import type { ComputedRef, Ref } from "vue";
 import type { InstanceBoardItemWithAppSessions } from "../../../api/types";
 import type { Translate } from "../../../i18n/status";
 import type { SupportedLocale } from "../../../i18n/locale";
-import { absoluteInstanceUrl, buildAppSessionTabs, previewDetail, previewTitle, sessionDisplayName, sessionFrameUrl, sessionMeta, sessionTerminalSocketUrl } from "../useInstanceSessions";
+import { buildAppSessionTabs, previewDetail, previewTitle, sessionDisplayName, sessionFrameUrl, sessionMeta, sessionTerminalSocketUrl } from "../useInstanceSessions";
 
 type UseInstanceBoardSessionsInput = {
   boardInteractive: Ref<boolean>;
@@ -46,17 +46,6 @@ export function useInstanceBoardSessions({ boardInteractive, boardSessionKeys, b
     return session ? sessionTerminalSocketUrl(instance, session) : "";
   }
 
-  function boardOpenUrl(instance: InstanceBoardItemWithAppSessions) {
-    const webUrl = absoluteInstanceUrl(instance, "/");
-    const session = boardPrimarySession(instance);
-    if (!session) {
-      return webUrl;
-    }
-    const frameUrl = sessionFrameUrl(instance, session);
-    const terminalUrl = sessionTerminalSocketUrl(instance, session);
-    return frameUrl || (!terminalUrl ? webUrl : webUrl);
-  }
-
   function boardPreviewState(instance: InstanceBoardItemWithAppSessions) {
     if (boardSessionFrameUrl(instance)) {
       return "live";
@@ -87,7 +76,6 @@ export function useInstanceBoardSessions({ boardInteractive, boardSessionKeys, b
     applyBoardAppSelection,
     boardCardDetail,
     boardCardTitle,
-    boardOpenUrl,
     boardPreviewState,
     boardPrimarySession,
     boardSessionFrameUrl,

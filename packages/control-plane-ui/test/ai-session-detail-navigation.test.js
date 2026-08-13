@@ -16,9 +16,10 @@ test("AI session details expose compact message navigation without a visible lab
   assert.match(floatingDock, /<AiSessionTurnNavigator[\s\S]*?:count="promptCount"[\s\S]*?@previous="\$emit\('previousPrompt'\)"[\s\S]*?@next="\$emit\('nextPrompt'\)"/);
 });
 
-test("AI session detail toolbar exposes named tooltips without changing the details tooltip", () => {
-  assert.match(navigator, /<TooltipContent side="bottom"[^>]*>\{\{ previousLabel \|\| t\('sessions\.actions\.previousMessage'/);
-  assert.match(navigator, /<TooltipContent side="bottom"[^>]*>\{\{ nextLabel \|\| t\('sessions\.actions\.nextMessage'/);
+test("AI session turn navigation keeps accessible labels without redundant tooltips", () => {
+  assert.match(navigator, /<button type="button" :aria-label="previousLabel \|\| t\('sessions\.actions\.previousMessage'/);
+  assert.match(navigator, /<button type="button" :aria-label="nextLabel \|\| t\('sessions\.actions\.nextMessage'/);
+  assert.doesNotMatch(navigator, /Tooltip/);
   assert.match(repositoryEnvironment, /<TooltipContent side="bottom"[^>]*>\{\{ t\("repository\.environment\.title"\) \}\}/);
   for (const action of ["openApp", "fork", "forkThroughTurn", "closeSession"]) {
     assert.match(panel, new RegExp(`<TooltipContent side="bottom"[^>]*>\\{\\{ t\\("sessions\\.actions\\.${action}"\\) \\}\\}`));
