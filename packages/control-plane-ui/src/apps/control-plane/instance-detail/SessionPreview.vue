@@ -57,7 +57,7 @@
                   @focusout="scheduleSessionTabDetailClose"
                 >
                   <ContextMenu>
-                    <ContextMenuTrigger as-child :disabled="!sessionSplitAvailable">
+                    <ContextMenuTrigger as-child :disabled="!sessionSplitAvailable && !windowAlwaysOnTopSupported">
                       <span
                         class="session-tab-item"
                         :class="{ active: isSessionTabActive(session), focused: isSessionTabFocused(session), 'drag-placeholder': draggingSessionTabKey === session.key }"
@@ -119,6 +119,15 @@
                         <span>{{ t("sessions.tabs.moveRight") }}</span>
                       </ContextMenuItem>
                       <ContextMenuSeparator />
+                      <ContextMenuCheckboxItem
+                        v-if="windowAlwaysOnTopSupported"
+                        :model-value="windowAlwaysOnTop"
+                        class="instance-action-item session-window-menu-item"
+                        :disabled="windowAlwaysOnTopBusy"
+                        @update:model-value="setWindowAlwaysOnTop"
+                      >
+                        {{ t("sessions.tabs.alwaysOnTop") }}
+                      </ContextMenuCheckboxItem>
                       <ContextMenuCheckboxItem v-model="sessionStatusBarVisible" class="instance-action-item session-status-bar-menu-item">
                         {{ t("sessions.tabs.showStatusBar") }}
                       </ContextMenuCheckboxItem>
@@ -271,6 +280,15 @@
     </div>
     </ContextMenuTrigger>
     <ContextMenuContent class="instance-action-menu">
+      <ContextMenuCheckboxItem
+        v-if="windowAlwaysOnTopSupported"
+        :model-value="windowAlwaysOnTop"
+        class="instance-action-item session-window-menu-item"
+        :disabled="windowAlwaysOnTopBusy"
+        @update:model-value="setWindowAlwaysOnTop"
+      >
+        {{ t("sessions.tabs.alwaysOnTop") }}
+      </ContextMenuCheckboxItem>
       <ContextMenuCheckboxItem v-model="sessionStatusBarVisible" class="instance-action-item session-status-bar-menu-item">
         {{ t("sessions.tabs.showStatusBar") }}
       </ContextMenuCheckboxItem>
@@ -375,7 +393,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch, type ComponentPublicInstance, type ObjectDirective } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type ComponentPublicInstance, type ObjectDirective } from "vue";
 import { useI18n } from "vue-i18n";
 import { useMediaQuery, useNow, useStorage } from "@vueuse/core";
 import { Activity, AppWindow, Bot, Boxes, ChevronDown, Columns2, Folder, FolderGit2, Maximize2, Minimize2, PanelLeft, PanelRight, PanelRightClose, Pencil, Plus, X } from "@lucide/vue";
@@ -409,6 +427,11 @@ import type { InstanceAction } from "../useInstanceActions";
 import type { SessionPaneId } from "./useActiveInstanceSessions";
 
 const { t } = useI18n();
+
+type DesktopWindowBridge = {
+  getWindowAlwaysOnTop?: () => Promise<{ ok: boolean; alwaysOnTop: boolean }>;
+  setWindowAlwaysOnTop?: (enabled: boolean) => Promise<{ ok: boolean; alwaysOnTop: boolean }>;
+};
 
 const props = defineProps<{
   activeActionLabel: (instance: InstanceBoardItem, action: InstanceAction, idleLabel: string) => string;
@@ -476,6 +499,35 @@ const emit = defineEmits<{
 
 const resourceMetricsNow = useNow({ interval: 1_000 });
 const sessionSplitAvailable = useMediaQuery("(min-width: 781px)");
+const desktopWindowBridge = (window as Window & { taskHandoffDesktop?: DesktopWindowBridge }).taskHandoffDesktop;
+const windowAlwaysOnTopSupported = computed(() => Boolean(props.standalone && desktopWindowBridge?.getWindowAlwaysOnTop && desktopWindowBridge.setWindowAlwaysOnTop));
+const windowAlwaysOnTop = ref(false);
+const windowAlwaysOnTopBusy = ref(false);
+
+onMounted(async () => {
+  if (!windowAlwaysOnTopSupported.value) return;
+  try {
+    const result = await desktopWindowBridge?.getWindowAlwaysOnTop?.();
+    if (result?.ok) windowAlwaysOnTop.value = result.alwaysOnTop;
+  } catch (error) {
+    showControlPlaneToast(translateApiError(error, t, t("sessions.tabs.alwaysOnTopReadFailed")));
+  }
+});
+
+async function setWindowAlwaysOnTop(enabled: boolean) {
+  if (!windowAlwaysOnTopSupported.value || windowAlwaysOnTopBusy.value) return;
+  windowAlwaysOnTopBusy.value = true;
+  try {
+    const result = await desktopWindowBridge?.setWindowAlwaysOnTop?.(enabled);
+    if (!result?.ok) throw new Error("Failed to update the window always-on-top state.");
+    windowAlwaysOnTop.value = result.alwaysOnTop;
+  } catch (error) {
+    showControlPlaneToast(translateApiError(error, t, t("sessions.tabs.alwaysOnTopFailed")));
+  } finally {
+    windowAlwaysOnTopBusy.value = false;
+  }
+}
+
 const sessionStatusBarStorageKey = computed(() => props.standalone
   ? "task-handoff.control-plane.session-status-bar-visible.standalone"
   : "task-handoff.control-plane.session-status-bar-visible.main");

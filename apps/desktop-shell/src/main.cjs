@@ -30,6 +30,7 @@ const { stopSupervisedDesktopChild, superviseDesktopChild } = require("./child-p
 const { createDesktopServiceLifecycle } = require("./desktop-service-lifecycle.cjs");
 const { createDesktopServiceSupervisor } = require("./desktop-service-supervisor.cjs");
 const { createDesktopWindowManager } = require("./desktop-window-manager.cjs");
+const { activateExistingDesktopWindow } = require("./desktop-window-activation.cjs");
 const { createDesktopTray } = require("./desktop-tray.cjs");
 const { createDesktopDockMenu } = require("./desktop-dock-menu.cjs");
 const { createDesktopWindowPreferences } = require("./desktop-window-preferences.cjs");
@@ -1010,6 +1011,31 @@ ipcMain.handle("task-handoff:switch-instance-detail-window", (event, instanceId)
   return { ok: result.action !== "error", ...result };
 });
 
+function senderInstanceDetailWindow(event) {
+  const targetWindow = BrowserWindow.fromWebContents(event.sender);
+  return targetWindow
+    && !targetWindow.isDestroyed()
+    && controlPlaneWindows.metadata(targetWindow)?.kind === "instance-detail"
+    ? targetWindow
+    : undefined;
+}
+
+ipcMain.handle("task-handoff:get-window-always-on-top", (event) => {
+  const targetWindow = senderInstanceDetailWindow(event);
+  return targetWindow
+    ? { ok: true, alwaysOnTop: targetWindow.isAlwaysOnTop() }
+    : { ok: false, code: "not-instance-window", alwaysOnTop: false };
+});
+
+ipcMain.handle("task-handoff:set-window-always-on-top", (event, enabled) => {
+  const targetWindow = senderInstanceDetailWindow(event);
+  if (!targetWindow || typeof enabled !== "boolean") {
+    return { ok: false, code: targetWindow ? "invalid-enabled" : "not-instance-window", alwaysOnTop: false };
+  }
+  targetWindow.setAlwaysOnTop(enabled);
+  return { ok: true, alwaysOnTop: targetWindow.isAlwaysOnTop() };
+});
+
 ipcMain.handle("task-handoff:window-action", (_event, action) => {
   const targetWindow = BrowserWindow.fromWebContents(_event.sender) || mainWindow;
   if (!targetWindow || targetWindow.isDestroyed()) {
@@ -1107,6 +1133,14 @@ function openDesktopInstance(instanceId, source) {
   }
 }
 
+function activateExistingDesktopWindows() {
+  return activateExistingDesktopWindow({
+    windows: BrowserWindow.getAllWindows(),
+    focusedWindow: BrowserWindow.getFocusedWindow(),
+    onEmpty: () => desktopWindows.open(),
+  });
+}
+
 const ownsDesktopInstanceLock = app.requestSingleInstanceLock();
 
 if (!ownsDesktopInstanceLock) {
@@ -1126,6 +1160,7 @@ if (!ownsDesktopInstanceLock) {
       dock: process.platform === "darwin" ? app.dock : undefined,
       Menu,
       locale: app.getLocale(),
+      onOpen: () => desktopWindows.open(),
       onOpenInstance: (instanceId) => openDesktopInstance(instanceId, "dock menu"),
     });
     desktopTray = createDesktopTray({
@@ -1137,6 +1172,7 @@ if (!ownsDesktopInstanceLock) {
       locale: app.getLocale(),
       supervisor: desktopServiceSupervisor,
       onOpen: () => desktopWindows.open(),
+      onActivateExisting: activateExistingDesktopWindows,
       onSettings: openDesktopSettings,
       loadInstances: () => loadDesktopInstanceDirectory({
         endpoint: desktopServiceSupervisor.endpoint(),
@@ -1163,7 +1199,7 @@ if (!ownsDesktopInstanceLock) {
   });
 
   app.on("activate", () => {
-    desktopWindows.open();
+    activateExistingDesktopWindows();
   });
 
   app.on("before-quit", (event) => {

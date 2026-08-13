@@ -52,6 +52,14 @@ test("board VNC URLs follow the same authoritative interaction state", () => {
   assert.match(workbench, /useInstanceBoardSessions\(\{ boardInteractive, boardSessionKeys, boardVisibleInstances, locale, t \}\)/);
 });
 
+test("each instance board card opens the control-plane instance detail window", () => {
+  assert.match(board, /<Button variant="outline" size="sm" @click="\$emit\('openWindow', instance\)">[\s\S]*?instances\.actions\.open/);
+  assert.match(board, /openWindow: \[instance: InstanceBoardItem\]/);
+  assert.doesNotMatch(board, /boardOpenUrl|\$emit\('openUrl'/);
+  assert.match(workbench, /<InstanceBoardView[\s\S]*?@open-window="openInstanceWindow"/);
+  assert.doesNotMatch(workbench, /:board-open-url=/);
+});
+
 test("board empty states use the themed inset surface", () => {
   assert.match(board, /\.board-empty \{[\s\S]*?background: var\(--surface-inset\);/);
   assert.doesNotMatch(board, /\.board-empty \{[\s\S]*?background: var\(--white\);/);

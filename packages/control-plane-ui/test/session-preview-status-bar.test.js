@@ -27,3 +27,22 @@ test("session tab bar and bottom status bar share one persisted visibility actio
   assert.match(english, /showStatusBar: "Show bottom status bar"/);
   assert.match(chinese, /showStatusBar: "显示底部状态栏"/);
 });
+
+test("standalone session tab menus control the authoritative desktop window always-on-top state", async () => {
+  const [preview, styles, english, chinese] = await Promise.all([
+    source("apps/control-plane/instance-detail/SessionPreview.vue"),
+    source("apps/control-plane/instance-detail/SessionPreview.css"),
+    source("i18n/locales/en-US/sessions.ts"),
+    source("i18n/locales/zh-CN/sessions.ts"),
+  ]);
+
+  assert.match(preview, /windowAlwaysOnTopSupported = computed\(\(\) => Boolean\(props\.standalone/);
+  assert.match(preview, /getWindowAlwaysOnTop\?\.\(\)[\s\S]*?windowAlwaysOnTop\.value = result\.alwaysOnTop/);
+  assert.match(preview, /setWindowAlwaysOnTop\?\.\(enabled\)[\s\S]*?windowAlwaysOnTop\.value = result\.alwaysOnTop/);
+  assert.equal((preview.match(/t\("sessions\.tabs\.alwaysOnTop"\)/g) || []).length, 2);
+  assert.equal((preview.match(/class="instance-action-item session-window-menu-item"/g) || []).length, 2);
+  assert.match(preview, /:disabled="!sessionSplitAvailable && !windowAlwaysOnTopSupported"/);
+  assert.match(styles, /\.session-window-menu-item\s*\{[^}]*padding-left: 30px;/s);
+  assert.match(english, /alwaysOnTop: "Keep window on top"/);
+  assert.match(chinese, /alwaysOnTop: "窗口置顶"/);
+});

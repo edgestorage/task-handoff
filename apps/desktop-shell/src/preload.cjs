@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld("taskHandoffDesktop", {
   openControlPlaneWindow: (url) => ipcRenderer.invoke("task-handoff:open-control-plane-window", url),
   openInstanceDetailWindow: (instanceId) => ipcRenderer.invoke("task-handoff:open-instance-detail-window", instanceId),
   switchInstanceDetailWindow: (instanceId) => ipcRenderer.invoke("task-handoff:switch-instance-detail-window", instanceId),
+  getWindowAlwaysOnTop: () => ipcRenderer.invoke("task-handoff:get-window-always-on-top"),
+  setWindowAlwaysOnTop: (enabled) => ipcRenderer.invoke("task-handoff:set-window-always-on-top", enabled),
   windowDrag: (phase, screenX, screenY) => ipcRenderer.send("task-handoff:window-drag", { phase, screenX, screenY }),
   onOpenSettings: (listener) => {
     const handler = () => listener();

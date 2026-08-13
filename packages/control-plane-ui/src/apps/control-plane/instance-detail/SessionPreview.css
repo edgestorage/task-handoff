@@ -482,6 +482,19 @@
   overflow: visible;
 }
 
+.session-window-menu-item {
+  position: relative;
+  padding-left: 30px;
+}
+
+.session-window-menu-item > span:first-child {
+  position: absolute;
+  left: 8px;
+  width: 14px;
+  height: 14px;
+  overflow: visible;
+}
+
 .instance-action-item:hover,
 .instance-action-item:focus-visible,
 .instance-action-item[data-highlighted] {

@@ -16,7 +16,7 @@
   color: var(--text);
 }
 
-.instance-switch-loading-overlay {
+.workbench-loading-overlay {
   position: absolute;
   z-index: 40;
   inset: var(--control-plane-titlebar-height) 0 0;
@@ -26,7 +26,7 @@
   backdrop-filter: blur(2px);
 }
 
-.instance-switch-loading-indicator {
+.workbench-loading-indicator {
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -39,28 +39,28 @@
   font-size: 12px;
 }
 
-.instance-switch-loading-indicator svg {
-  animation: instance-switch-loading-spin 700ms linear infinite;
+.workbench-loading-indicator svg {
+  animation: workbench-loading-spin 700ms linear infinite;
 }
 
-.instance-switch-loading-leave-active {
+.workbench-loading-leave-active {
   transition: opacity 110ms ease;
 }
 
-.instance-switch-loading-leave-to {
+.workbench-loading-leave-to {
   opacity: 0;
 }
 
-@keyframes instance-switch-loading-spin {
+@keyframes workbench-loading-spin {
   to { transform: rotate(360deg); }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .instance-switch-loading-indicator svg {
+  .workbench-loading-indicator svg {
     animation: none;
   }
 
-  .instance-switch-loading-leave-active {
+  .workbench-loading-leave-active {
     transition: none;
   }
 }

@@ -37,11 +37,15 @@ test("desktop owns a single Electron process and focuses it on repeated launches
 test("desktop closes windows into tray-backed service mode", () => {
   const main = fs.readFileSync(path.join(__dirname, "../src/main.cjs"), "utf8");
   assert.match(main, /createDesktopTray\(/);
+  assert.match(main, /onActivateExisting: activateExistingDesktopWindows/);
+  assert.match(main, /function activateExistingDesktopWindows\(\)[\s\S]*onEmpty: \(\) => desktopWindows\.open\(\)/);
+  assert.match(main, /app\.on\("activate", \(\) => \{\s*activateExistingDesktopWindows\(\);/);
+  assert.doesNotMatch(main, /app\.on\("activate", \(\) => \{\s*desktopWindows\.open\(\);/);
   assert.match(main, /onSettings: openDesktopSettings/);
   assert.match(main, /function openDesktopSettings\(\)[\s\S]*desktopWindows\.open\(\)[\s\S]*task-handoff:open-settings/);
   assert.match(main, /loadInstances: \(\) => loadDesktopInstanceDirectory\(/);
   assert.match(main, /function openDesktopInstance\(instanceId, source\)[\s\S]*createControlPlaneWindow\(`\/instance-detail\/\$\{encodeURIComponent\(instanceId\)\}`\)/);
-  assert.match(main, /createDesktopDockMenu\([\s\S]*onOpenInstance: \(instanceId\) => openDesktopInstance\(instanceId, "dock menu"\)/);
+  assert.match(main, /createDesktopDockMenu\([\s\S]*onOpen: \(\) => desktopWindows\.open\(\)[\s\S]*onOpenInstance: \(instanceId\) => openDesktopInstance\(instanceId, "dock menu"\)/);
   assert.match(main, /createDesktopTray\([\s\S]*onOpenInstance: \(instanceId\) => openDesktopInstance\(instanceId, "tray"\)/);
   assert.match(main, /onInstanceDirectoryChange: \(snapshot\) => desktopDockMenu\?\.update\(snapshot\)/);
   assert.match(main, /desktopWindows\?\.background\(\)/);

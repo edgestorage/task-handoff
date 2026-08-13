@@ -1,6 +1,6 @@
 import { toast } from "vue-sonner";
 
-export type ControlPlaneToastKind = "error" | "success";
+export type ControlPlaneToastKind = "error" | "info" | "success";
 
 export function dismissControlPlaneToast(id: string | number) {
   toast.dismiss(id);

@@ -53,10 +53,17 @@ test("standalone window identity follows the selected directory entry while scop
 test("standalone switching warms an uncached target before changing the window identity", () => {
   assert.match(workbench, /async function selectInstance\(id: string\)[\s\S]*?const switchSequence = beginInstanceSwitch\(\);\s*try \{\s*await queryClient\.ensureQueryData\(instanceBoardQueryOptions\(id\)\);[\s\S]*?const desktopResult = await switchDesktopInstanceDetailWindow\(id\);[\s\S]*?setActiveInstance\(id\);[\s\S]*?requestAnimationFrame\(\(\) => finishInstanceSwitch\(switchSequence\)\)/);
   assert.match(workbench, /instanceSwitchLoadingTimer = window\.setTimeout\([\s\S]*?instanceSwitchLoadingVisible\.value = true;[\s\S]*?\}, 90\);/);
-  assert.match(workbench, /<Transition name="instance-switch-loading">[\s\S]*?v-if="standaloneLoadingOverlayVisible"[\s\S]*?class="instance-switch-loading-overlay"/);
-  assert.match(workbench, /const initialStandaloneLoadingVisible = ref\(standaloneMode\.value\);[\s\S]*?const standaloneLoadingOverlayVisible = computed\(\(\) => standaloneMode\.value[\s\S]*?initialStandaloneLoadingVisible\.value \|\| instanceSwitchLoadingVisible\.value/);
-  assert.match(workbench, /standaloneMode\.value && \(!standaloneOwnershipResolved\.value \|\| board\.isLoading\.value\)[\s\S]*?window\.requestAnimationFrame\(\(\) => \{\s*initialStandaloneLoadingVisible\.value = false;/);
-  assert.match(styles, /\.instance-switch-loading-overlay \{[\s\S]*?background: color-mix\(in srgb, var\(--workspace-bg\) 48%, transparent\);[\s\S]*?backdrop-filter: blur\(2px\);/);
-  assert.match(styles, /\.instance-switch-loading-leave-active \{\s*transition: opacity 110ms ease;/);
-  assert.doesNotMatch(styles, /\.instance-switch-loading-enter-active|\.instance-switch-loading-enter-from/);
+  assert.match(workbench, /workbenchLoadingOverlayVisible = computed\(\(\) => initialWorkbenchLoadingVisible\.value[\s\S]*?standaloneMode\.value && instanceSwitchLoadingVisible\.value/);
+  assert.equal((workbench.match(/showToast\(t\("instances\.window\.focusedExisting"\), "info"\)/g) || []).length, 3);
+});
+
+test("initial loading overlay covers both the main workbench and standalone detail before fading out", () => {
+  assert.match(workbench, /<Transition name="workbench-loading">[\s\S]*?v-if="workbenchLoadingOverlayVisible"[\s\S]*?class="workbench-loading-overlay"/);
+  assert.match(workbench, /const initialWorkbenchLoadingVisible = ref\(true\);[\s\S]*?const initialWorkbenchLoadingFinished = ref\(false\);/);
+  assert.match(workbench, /\(standaloneMode\.value && !standaloneOwnershipResolved\.value\) \|\| board\.isLoading\.value[\s\S]*?window\.requestAnimationFrame\(\(\) => \{\s*initialWorkbenchLoadingVisible\.value = false;/);
+  assert.match(workbench, /\{ flush: "post", immediate: true \}/);
+  assert.match(workbench, /standaloneMode \? "instances\.detail\.loading" : "instances\.list\.loading"/);
+  assert.match(styles, /\.workbench-loading-overlay \{[\s\S]*?background: color-mix\(in srgb, var\(--workspace-bg\) 48%, transparent\);[\s\S]*?backdrop-filter: blur\(2px\);/);
+  assert.match(styles, /\.workbench-loading-leave-active \{\s*transition: opacity 110ms ease;/);
+  assert.doesNotMatch(styles, /\.workbench-loading-enter-active|\.workbench-loading-enter-from/);
 });

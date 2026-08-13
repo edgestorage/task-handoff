@@ -151,7 +151,7 @@
                 <RotateCw :size="14" />
                 <span>{{ activeActionLabel(instance, "retry-image", t("instances.actions.retryImage")) }}</span>
               </Button>
-              <Button v-if="boardOpenUrl(instance)" variant="outline" size="sm" @click="$emit('openUrl', boardOpenUrl(instance))">
+              <Button variant="outline" size="sm" @click="$emit('openWindow', instance)">
                 <ExternalLink :size="14" />
                 <span>{{ t("instances.actions.open") }}</span>
               </Button>
@@ -219,7 +219,6 @@ const props = defineProps<{
   appOptions: Array<{ appId: string; count: number }>;
   boardCardDetail: (instance: InstanceBoardItem) => string;
   boardCardTitle: (instance: InstanceBoardItem) => string;
-  boardOpenUrl: (instance: InstanceBoardItem) => string;
   boardPreviewState: (instance: InstanceBoardItem) => string;
   boardPrimarySession: (instance: InstanceBoardItem) => SessionTab | undefined;
   boardSessionFrameUrl: (instance: InstanceBoardItem) => string;
@@ -248,7 +247,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   launchApp: [instance: InstanceBoardItem, appId: string, cwdFolderId?: string];
-  openUrl: [url: string];
+  openWindow: [instance: InstanceBoardItem];
   runAction: [action: InstanceAction, instance: InstanceBoardItem];
   selectBoardSession: [instanceId: string, sessionKey: string];
   selectInstance: [instanceId: string];

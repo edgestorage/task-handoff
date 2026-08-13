@@ -18,7 +18,11 @@ function createDesktopDockMenu(options) {
               : (language === "zh" ? "暂无实例" : "No instances"),
           enabled: false,
         }];
-    options.dock.setMenu(options.Menu.buildFromTemplate(items));
+    options.dock.setMenu(options.Menu.buildFromTemplate([
+      { label: language === "zh" ? "打开主窗口" : "Open Main Window", click: options.onOpen },
+      { type: "separator" },
+      ...items,
+    ]));
   }
 
   update();
