@@ -12,7 +12,7 @@ for (const workspaceDir of ["apps", "packages"]) {
     const manifestPath = path.join(root, workspaceDir, entry.name, "package.json");
     try {
       const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-      workspacePackages.set(manifest.name, manifest);
+      workspacePackages.set(manifest.name, { manifest, manifestPath });
     } catch (error) {
       if (error?.code !== "ENOENT") throw error;
     }
@@ -21,19 +21,22 @@ for (const workspaceDir of ["apps", "packages"]) {
 
 function runtimeDependencies(workspaceRoots, extraNames = []) {
   const dependencies = new Map();
+  const dependencyResolutionRoots = new Map();
   const pending = [...workspaceRoots];
   const visited = new Set();
   while (pending.length) {
     const name = pending.pop();
     if (visited.has(name)) continue;
     visited.add(name);
-    const manifest = workspacePackages.get(name);
-    if (!manifest) throw new Error(`Unknown runtime workspace dependency: ${name}`);
+    const workspacePackage = workspacePackages.get(name);
+    if (!workspacePackage) throw new Error(`Unknown runtime workspace dependency: ${name}`);
+    const { manifest, manifestPath } = workspacePackage;
     for (const [dependency, version] of Object.entries(manifest.dependencies || {})) {
       if (workspacePackages.has(dependency)) {
         pending.push(dependency);
       } else {
         dependencies.set(dependency, version);
+        dependencyResolutionRoots.set(dependency, manifestPath);
       }
     }
   }
@@ -41,9 +44,16 @@ function runtimeDependencies(workspaceRoots, extraNames = []) {
     const version = rootPackage.dependencies[name];
     if (!version) throw new Error(`Runtime dependency ${name} is not declared in the root package.json.`);
     dependencies.set(name, version);
+    dependencyResolutionRoots.set(name, path.join(root, "package.json"));
   }
-  return Object.fromEntries([...dependencies].sort(([left], [right]) => left.localeCompare(right)));
+  const names = [...dependencies.keys()].sort((left, right) => left.localeCompare(right));
+  return {
+    dependencies: Object.fromEntries(names.map((name) => [name, dependencies.get(name)])),
+    dependencyResolutionRoots: Object.fromEntries(names.map((name) => [name, dependencyResolutionRoots.get(name)])),
+  };
 }
+
+const controlPlaneRuntimeDependencies = runtimeDependencies(["@task-handoff/control-plane"], ["commander"]);
 
 export const runtimePackages = {
   server: {
@@ -66,7 +76,7 @@ export const runtimePackages = {
     entryFile: "cli.js",
     binName: "task-handoff-control-plane",
     uiDir: "packages/control-plane-ui/dist",
-    dependencies: runtimeDependencies(["@task-handoff/control-plane"], ["commander"]),
+    ...controlPlaneRuntimeDependencies,
   },
   "node-agent": {
     packageName: "@task-handoff/node-agent",
@@ -76,7 +86,7 @@ export const runtimePackages = {
     updateWorkerInput: "scripts/node-update-worker.cts",
     updateWorkerEntryFile: "node-update-worker.js",
     binName: "task-handoff-node-agent",
-    dependencies: runtimeDependencies(["@task-handoff/control-plane"], ["commander"]),
+    ...controlPlaneRuntimeDependencies,
   },
   "controlled-instance": {
     packageName: "@task-handoff/controlled-instance",
@@ -91,6 +101,9 @@ export const runtimePackages = {
     // a workspace-wide pnpm virtual store.
     dependencies: {
       "node-pty": rootPackage.dependencies["node-pty"],
+    },
+    dependencyResolutionRoots: {
+      "node-pty": path.join(root, "package.json"),
     },
   },
 };

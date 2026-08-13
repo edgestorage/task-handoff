@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const { spawn, spawnSync } = require("node:child_process");
 const { once } = require("node:events");
 const fs = require("node:fs");
+const { createRequire } = require("node:module");
 const os = require("node:os");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
@@ -139,6 +140,29 @@ test("server package owns the unified management command and runtimes stay indep
   assert.match(runtimeCli, /program\.command\("node-agent"[\s\S]*task-handoff-node-agent/);
   assert.match(runtimeCli, /program\.command\("controlled-instance"[\s\S]*task-handoff-controlled-instance/);
   assert.match(runtimeCli, /new Command\(\)/);
+});
+
+test("runtime dependency versions resolve from their declaring workspace owners", async () => {
+  const { runtimePackages } = await import("../runtime-packages.config.mjs");
+  const prepare = fs.readFileSync(path.join(root, "scripts", "prepare-runtime-packages.mjs"), "utf8");
+
+  assert.equal(
+    runtimePackages["control-plane"].dependencyResolutionRoots.tweetnacl,
+    path.join(root, "packages", "control-plane", "package.json"),
+  );
+  assert.equal(runtimePackages["control-plane"].dependencyResolutionRoots.commander, path.join(root, "package.json"));
+  for (const definition of Object.values(runtimePackages)) {
+    if (definition.aggregateDependencies) continue;
+    assert.deepEqual(
+      Object.keys(definition.dependencyResolutionRoots).sort(),
+      Object.keys(definition.dependencies).sort(),
+    );
+    for (const name of Object.keys(definition.dependencies)) {
+      assert.doesNotThrow(() => createRequire(definition.dependencyResolutionRoots[name]).resolve(name));
+    }
+  }
+  assert.match(prepare, /createRequire\(resolutionRoot\)/);
+  assert.doesNotMatch(prepare, /path\.join\(root, "node_modules"/);
 });
 
 test("runtime package archives verify every directly executed helper", () => {
