@@ -15,7 +15,8 @@ test("session tab bar and bottom status bar share one persisted visibility actio
 
   assert.match(detail, /:standalone="standalone"/);
   assert.match(preview, /props\.standalone[\s\S]*session-status-bar-visible\.standalone[\s\S]*session-status-bar-visible\.main/);
-  assert.match(preview, /useStorage\(sessionStatusBarStorageKey, computed\(\(\) => !props\.standalone\)\)/);
+  assert.match(preview, /useStorage\(sessionStatusBarStorageKey, !props\.standalone\)/);
+  assert.doesNotMatch(preview, /useStorage\(sessionStatusBarStorageKey, computed/);
   assert.match(preview, /<ContextMenuTrigger as-child>\s*<div class="session-preview-toolbar"/);
   assert.match(preview, /<ContextMenu v-if="sessionStatusBarVisible">[\s\S]*?<div class="session-preview-actions">/);
   assert.equal((preview.match(/t\("sessions\.tabs\.showStatusBar"\)/g) || []).length, 3);

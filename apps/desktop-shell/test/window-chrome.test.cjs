@@ -3,9 +3,15 @@ const test = require("node:test");
 const {
   applyWindowsTitleBarTheme,
   desktopTitleBarOptions,
+  desktopWindowBackgroundColor,
   desktopWindowChromeMode,
   windowsTitleBarOverlayOptions,
 } = require("../src/window-chrome.cjs");
+
+test("native window surfaces match the renderer theme while it catches up with resize", () => {
+  assert.equal(desktopWindowBackgroundColor("dark"), "#071013");
+  assert.equal(desktopWindowBackgroundColor("light"), "#eef3f4");
+});
 
 test("Windows uses native window controls overlay", () => {
   assert.equal(desktopWindowChromeMode("win32"), "windows-overlay");

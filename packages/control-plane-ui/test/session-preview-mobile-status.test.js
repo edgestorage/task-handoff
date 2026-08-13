@@ -10,9 +10,13 @@ test("mobile session previews omit the bottom instance status bar", () => {
   assert.match(styles, /@media \(max-width: 780px\)\s*\{[\s\S]*?\.session-preview-actions\s*\{\s*display: none;/);
 });
 
-test("mobile session toolbar keeps AI fixed and disables split panes", () => {
+test("narrow desktop windows and mobile keep only AI, launch, and session menu controls", () => {
   assert.match(styles, /\.session-ai-home\s*\{[^}]*flex: 0 0 auto;/s);
-  assert.match(preview, /const sessionSplitAvailable = useMediaQuery\("\(min-width: 781px\)"\);/);
+  assert.match(preview, /const compactSessionToolbar = useMediaQuery\("\(max-width: 600px\)"\);/);
+  assert.match(preview, /const sessionSplitAvailable = useMediaQuery\("\(min-width: 601px\)"\);/);
+  assert.match(preview, /v-if="tabGroup\.statusTab && !compactSessionToolbar"/);
+  assert.match(preview, /v-if="!compactSessionToolbar && previewSessionTabs\(tabGroup\.id, tabGroup\.appTabs\)\.length" class="session-tab-strip-frame"/);
+  assert.equal((preview.match(/v-if="compactSessionToolbar \|\| !tabGroup\.statusTab"/g) || []).length, 2);
   assert.match(preview, /<button v-if="sessionSplitAvailable" type="button" class="preview-expand-button"[^>]*closeSessionSplit/);
   assert.match(preview, /watch\(\[sessionSplitAvailable, \(\) => props\.hasSessionSplit\],[\s\S]*if \(!available && split\) emit\("closeSessionSplit"\);/);
   assert.match(preview, /v-if="sessionSplitAvailable && sessionPaneId\(session\) === 'right'"/);

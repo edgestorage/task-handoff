@@ -7,10 +7,14 @@
             <button
               type="button"
               class="repository-environment-trigger"
-              :class="{ 'repository-environment-trigger-detail': triggerAppearance === 'detail' }"
+              :class="{
+                'repository-environment-trigger-detail': triggerAppearance === 'detail',
+                'repository-environment-trigger-menu': triggerAppearance === 'menu',
+              }"
               :aria-label="t('repository.environment.title')"
             >
-              <FolderGit2 :size="15" />
+              <FolderGit2 :size="triggerAppearance === 'menu' ? 16 : 15" />
+              <span v-if="triggerAppearance === 'menu'">{{ t("repository.environment.title") }}</span>
             </button>
           </PopoverTrigger>
         </TooltipTrigger>
@@ -206,7 +210,7 @@ const props = defineProps<{
   instanceId: string;
   sessionId: string;
   sessionKind: RepositorySessionKind;
-  triggerAppearance?: "toolbar" | "detail";
+  triggerAppearance?: "toolbar" | "detail" | "menu";
 }>();
 const { t } = useI18n();
 
@@ -345,6 +349,34 @@ function runPrimaryAction(action: RepositoryPrimaryAction) {
   border-color: var(--focus-ring);
   background: var(--surface-subtle);
   color: var(--text);
+}
+
+.repository-environment-trigger-menu {
+  display: flex;
+  width: 100%;
+  height: auto;
+  min-height: 32px;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  padding: 6px 8px;
+}
+
+.repository-environment-trigger-menu span {
+  font-size: 12px;
+}
+
+.repository-environment-trigger-menu:hover,
+.repository-environment-trigger-menu:focus-visible,
+.repository-environment-trigger-menu[data-state="open"] {
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--accent-foreground);
+  outline: none;
 }
 
 :global([role="dialog"].repository-environment-popover) {

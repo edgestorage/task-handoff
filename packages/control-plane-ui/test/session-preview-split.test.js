@@ -48,7 +48,7 @@ test("session preview splits the original tab row into pane-aligned tab groups",
   assert.match(preview, /t\("sessions\.tabs\.moveRight"\)/);
   assert.match(preview, /session\.key === props\.leftSessionKey \|\| session\.key === props\.rightSessionKey/);
   assert.match(preview, /:data-pane="hasSessionSplit \? sessionPaneId\(session\) : undefined"/);
-  assert.match(preview, /<div v-if="!tabGroup\.statusTab" class="app-launcher" :class="\{ open: appLaunchMenuOpen && appLaunchMenuPane === tabGroup\.id \}"/);
+  assert.match(preview, /<div v-if="compactSessionToolbar \|\| !tabGroup\.statusTab" class="app-launcher" :class="\{ open: appLaunchMenuOpen && appLaunchMenuPane === tabGroup\.id \}"/);
   assert.match(preview, /class="session-tab-add-button"[\s\S]*<Plus :size="16"/);
   assert.doesNotMatch(preview, /\{\{ appLaunchButtonLabel \}\}/);
   assert.match(preview, /:open="sessionMenuOpen && sessionMenuPane === tabGroup\.id"/);
@@ -77,8 +77,9 @@ test("session preview splits the original tab row into pane-aligned tab groups",
   assert.match(preview, /updated\(tabList\) \{[\s\S]*nextTick\(\(\) => syncSessionTabViewport\(tabList\)\)/);
   assert.match(styles, /\.session-tab-strip \{[^}]*overflow-x:\s*auto;[^}]*overflow-y:\s*hidden;[^}]*scrollbar-width:\s*none;/);
   assert.match(styles, /\.session-tab-strip::-webkit-scrollbar\s*\{[\s\S]*display:\s*none;/);
-  assert.match(styles, /\.session-tab-strip-frame::before,[\s\S]*\.session-tab-strip-frame::after[\s\S]*transition:\s*opacity 140ms ease/);
-  assert.match(styles, /data-overflow-start="true"[\s\S]*data-overflow-end="true"[\s\S]*opacity:\s*1/);
+  assert.match(styles, /data-overflow-start="true"\]\[data-overflow-end="false"[\s\S]*mask-image:\s*linear-gradient\(90deg, transparent, #000 28px\)/);
+  assert.match(styles, /data-overflow-start="false"\]\[data-overflow-end="true"[\s\S]*mask-image:\s*linear-gradient\(270deg, transparent, #000 28px\)/);
+  assert.match(styles, /data-overflow-start="true"\]\[data-overflow-end="true"[\s\S]*#000 calc\(100% - 28px\), transparent 100%/);
   assert.match(styles, /\.app-launcher\.open \.session-tab-add-button\s*\{[\s\S]*background:\s*color-mix\(in srgb, var\(--surface-raised\) 92%, var\(--white\) 4%\)/);
   assert.match(preview, /hasSessionSplit \? t\('sessions\.tabs\.closeSplit'\) : t\('sessions\.tabs\.split'\)/);
   assert.match(preview, /role="separator"/);

@@ -33,7 +33,7 @@
     </ContextMenuItem>
     <ContextMenuSub v-if="canFork">
       <ContextMenuSubTrigger class="ai-session-context-menu-item" :disabled="isForking">
-        <GitFork :size="14" />
+        <Split :size="14" />
         <span>{{ isForking ? t("sessions.actions.forking") : t("sessions.actions.fork") }}</span>
       </ContextMenuSubTrigger>
       <ContextMenuSubContent class="ai-session-context-menu">
@@ -49,7 +49,7 @@
 </template>
 
 <script setup lang="ts">
-import { Check, ExternalLink, GitFork, Square, Zap } from "@lucide/vue";
+import { Check, ExternalLink, Split, Square, Zap } from "@lucide/vue";
 import { useI18n } from "vue-i18n";
 import type { ControlPlaneTrigger } from "../../api/types";
 import {
