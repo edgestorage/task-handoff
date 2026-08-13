@@ -1,33 +1,18 @@
 <template>
   <span v-if="count > 1" class="ai-session-turn-navigator" :data-tone="tone" role="group" :aria-label="ariaLabel || t('sessions.composer.navigation')">
-    <TooltipProvider :delay-duration="120">
-      <Tooltip>
-        <TooltipTrigger as-child>
-          <button type="button" :aria-label="previousLabel || t('sessions.actions.previousMessage', { agent: 'AI' })" :disabled="index <= 0" @click="$emit('previous')">
-            <ChevronLeft :size="13" />
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom" :side-offset="8">{{ previousLabel || t('sessions.actions.previousMessage', { agent: 'AI' }) }}</TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+    <button type="button" :aria-label="previousLabel || t('sessions.actions.previousMessage', { agent: 'AI' })" :disabled="index <= 0" @click="$emit('previous')">
+      <ChevronLeft :size="13" />
+    </button>
     <small>{{ index + 1 }} / {{ count }}</small>
-    <TooltipProvider :delay-duration="120">
-      <Tooltip>
-        <TooltipTrigger as-child>
-          <button type="button" :aria-label="nextLabel || t('sessions.actions.nextMessage', { agent: 'AI' })" :disabled="index >= count - 1" @click="$emit('next')">
-            <ChevronRight :size="13" />
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom" :side-offset="8">{{ nextLabel || t('sessions.actions.nextMessage', { agent: 'AI' }) }}</TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+    <button type="button" :aria-label="nextLabel || t('sessions.actions.nextMessage', { agent: 'AI' })" :disabled="index >= count - 1" @click="$emit('next')">
+      <ChevronRight :size="13" />
+    </button>
   </span>
 </template>
 
 <script setup lang="ts">
 import { ChevronLeft, ChevronRight } from "@lucide/vue";
 import { useI18n } from "vue-i18n";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 
 const { t } = useI18n();
 

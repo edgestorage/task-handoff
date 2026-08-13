@@ -9,6 +9,7 @@ const sharedActionStyles = fs.readFileSync(new URL("../src/components/ai-session
 const contextMenu = fs.readFileSync(new URL("../src/components/ai-session/AiSessionCardContextMenu.vue", import.meta.url), "utf8");
 const originMark = fs.readFileSync(new URL("../src/components/ai-session/AiSessionOriginMark.vue", import.meta.url), "utf8");
 const contextSubMenu = fs.readFileSync(new URL("../src/components/ui/context-menu/ContextMenuSubContent.vue", import.meta.url), "utf8");
+const dropdownSubMenu = fs.readFileSync(new URL("../src/components/ui/dropdown-menu/DropdownMenuSubContent.vue", import.meta.url), "utf8");
 const scrollArea = fs.readFileSync(new URL("../src/components/ui/scroll-area/ScrollArea.vue", import.meta.url), "utf8");
 
 test("instance AI session cards match board card status and navigation behavior", () => {
@@ -130,6 +131,7 @@ test("instance and board AI session cards expose their toolbar actions from one 
   assert.match(contextMenu, /@select="\$emit\('toggleTrigger', trigger\.configHash\)"/);
   assert.match(contextMenu, /:global\(\.ai-session-context-menu\)[\s\S]*backdrop-filter: blur\(16px\)/);
   assert.match(contextSubMenu, /<ContextMenuPortal>[\s\S]*<ContextMenuSubContent/);
+  assert.match(dropdownSubMenu, /<DropdownMenuPortal>[\s\S]*<DropdownMenuSubContent/);
 });
 
 test("an unselected AI session defaults to the new-session surface", () => {

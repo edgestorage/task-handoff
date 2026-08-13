@@ -89,6 +89,8 @@ test("preload API delegates privileged desktop operations through IPC", async ()
   await api.openControlPlaneWindow("/repository-workspace");
   await api.openInstanceDetailWindow("instance-a");
   await api.switchInstanceDetailWindow("instance-b");
+  await api.getWindowAlwaysOnTop();
+  await api.setWindowAlwaysOnTop(true);
   api.windowDrag("start", 120, 80);
   let settingsOpened = 0;
   const stopOpenSettings = api.onOpenSettings(() => { settingsOpened += 1; });
@@ -103,6 +105,8 @@ test("preload API delegates privileged desktop operations through IPC", async ()
     ["task-handoff:open-control-plane-window", "/repository-workspace"],
     ["task-handoff:open-instance-detail-window", "instance-a"],
     ["task-handoff:switch-instance-detail-window", "instance-b"],
+    ["task-handoff:get-window-always-on-top"],
+    ["task-handoff:set-window-always-on-top", true],
     ["task-handoff:set-diagnostic-logs-enabled", true],
     ["task-handoff:desktop-update-check"],
     ["task-handoff:desktop-update-install"],
@@ -120,4 +124,10 @@ test("preload API delegates privileged desktop operations through IPC", async ()
   assert.deepEqual(state, { status: "ready" });
   unsubscribe();
   assert.equal(listeners.has(channel), false);
+});
+
+test("only registered instance detail windows can control their own always-on-top state", () => {
+  assert.match(mainSource, /function senderInstanceDetailWindow\(event\)[\s\S]*?BrowserWindow\.fromWebContents\(event\.sender\)[\s\S]*?controlPlaneWindows\.metadata\(targetWindow\)\?\.kind === "instance-detail"/);
+  assert.match(mainSource, /ipcMain\.handle\("task-handoff:get-window-always-on-top"[\s\S]*?targetWindow\.isAlwaysOnTop\(\)/);
+  assert.match(mainSource, /ipcMain\.handle\("task-handoff:set-window-always-on-top"[\s\S]*?typeof enabled !== "boolean"[\s\S]*?targetWindow\.setAlwaysOnTop\(enabled\)[\s\S]*?targetWindow\.isAlwaysOnTop\(\)/);
 });

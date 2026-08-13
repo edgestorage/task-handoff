@@ -16,7 +16,7 @@ test("control plane follows the visible viewport when mobile browser chrome chan
   );
   assert.match(
     workbenchStyles,
-    /\.control-plane-workbench\s*\{[^}]*height: calc\(var\(--control-plane-viewport-height\) - 56px\);/s,
+    /\.control-plane-workbench\s*\{[^}]*height: calc\(var\(--control-plane-viewport-height\) - var\(--control-plane-titlebar-height\)\);/s,
   );
   assert.doesNotMatch(workbenchStyles, /height: calc\(100vh - 56px\);/);
 });

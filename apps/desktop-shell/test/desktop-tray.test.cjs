@@ -48,6 +48,29 @@ test("tray menu shows authoritative aggregate and component service status", () 
   assert.equal(tray.tray.destroyed, true);
 });
 
+test("tray click activates an existing window while only the explicit menu item opens the main window", () => {
+  const supervisor = createDesktopServiceSupervisor();
+  const actions = [];
+  const { nativeImage } = images();
+  const tray = createDesktopTray({
+    Tray: FakeTray,
+    Menu: { buildFromTemplate: (template) => template },
+    nativeImage,
+    iconPath: "/icon.png",
+    platform: "darwin",
+    locale: "en-US",
+    supervisor,
+    onActivateExisting: () => actions.push("activate"),
+    onOpen: () => actions.push("open"),
+    onQuit: () => undefined,
+  });
+
+  tray.tray.emit("click");
+  tray.tray.menu.find((item) => item.label === "Open Main Window").click();
+  assert.deepEqual(actions, ["activate", "open"]);
+  tray.destroy();
+});
+
 test("macOS tray image is resized and marked as a template image", () => {
   const { nativeImage, resized } = images();
   assert.equal(createTrayImage(nativeImage, "/icon.png", "darwin"), resized);

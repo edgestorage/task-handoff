@@ -182,7 +182,6 @@
         :app-options="boardAppOptions"
         :board-card-detail="boardCardDetail"
         :board-card-title="boardCardTitle"
-        :board-open-url="boardOpenUrl"
         :board-preview-state="boardPreviewState"
         :board-primary-session="boardPrimarySession"
         :board-session-frame-url="boardSessionFrameUrl"
@@ -202,7 +201,7 @@
         :status-options="boardStatusOptions"
         :total-instances="sortedInstances.length"
         :visible-instances="boardVisibleInstances"
-        @open-url="openAppUrl"
+        @open-window="openInstanceWindow"
         @launch-app="launchSelectedApp"
         @run-action="runInstanceAction"
         @select-board-session="selectBoardSession"
@@ -301,16 +300,16 @@
       />
     </main>
 
-    <Transition name="instance-switch-loading">
+    <Transition name="workbench-loading">
       <div
-        v-if="standaloneLoadingOverlayVisible"
-        class="instance-switch-loading-overlay"
+        v-if="workbenchLoadingOverlayVisible"
+        class="workbench-loading-overlay"
         role="status"
         aria-live="polite"
       >
-        <span class="instance-switch-loading-indicator">
+        <span class="workbench-loading-indicator">
           <LoaderCircle :size="17" aria-hidden="true" />
-          {{ t("instances.detail.loading") }}
+          {{ t(standaloneMode ? "instances.detail.loading" : "instances.list.loading") }}
         </span>
       </div>
     </Transition>
@@ -432,8 +431,8 @@ const standaloneOwnershipReady = ref(!standaloneMode.value);
 const standaloneOwnershipConflict = ref(false);
 const instanceSwitcherOpen = ref(false);
 const instanceSwitchLoadingVisible = ref(false);
-const initialStandaloneLoadingVisible = ref(standaloneMode.value);
-const initialStandaloneLoadingFinished = ref(!standaloneMode.value);
+const initialWorkbenchLoadingVisible = ref(true);
+const initialWorkbenchLoadingFinished = ref(false);
 let instanceSwitcherPointer: { pointerId: number; startScreenX: number; startScreenY: number; moved: boolean } | undefined;
 let suppressInstanceSwitcherClick = false;
 let instanceSwitchLoadingTimer: number | undefined;
@@ -471,19 +470,19 @@ const instanceDirectory = useInstanceDirectoryQuery(standaloneMode);
 const controlPlaneAiSessions = useControlPlaneAiSessionsQuery(sessionQueryInstanceId, sessionQueriesEnabled);
 const controlPlaneAppSessions = useControlPlaneAppSessionsQuery(sessionQueryInstanceId, sessionQueriesEnabled);
 const nodes = useNodesQuery(computed(() => !standaloneMode.value));
-const standaloneLoadingOverlayVisible = computed(() => standaloneMode.value
-  && (initialStandaloneLoadingVisible.value || instanceSwitchLoadingVisible.value));
+const workbenchLoadingOverlayVisible = computed(() => initialWorkbenchLoadingVisible.value
+  || (standaloneMode.value && instanceSwitchLoadingVisible.value));
 
 watch(
-  () => standaloneMode.value && (!standaloneOwnershipResolved.value || board.isLoading.value),
+  () => (standaloneMode.value && !standaloneOwnershipResolved.value) || board.isLoading.value,
   (loading) => {
-    if (loading || initialStandaloneLoadingFinished.value) return;
-    initialStandaloneLoadingFinished.value = true;
+    if (loading || initialWorkbenchLoadingFinished.value) return;
+    initialWorkbenchLoadingFinished.value = true;
     window.requestAnimationFrame(() => {
-      initialStandaloneLoadingVisible.value = false;
+      initialWorkbenchLoadingVisible.value = false;
     });
   },
-  { flush: "post" },
+  { flush: "post", immediate: true },
 );
 
 const workbenchView = ref<WorkbenchView>("instance");
@@ -736,7 +735,6 @@ const {
   applyBoardAppSelection,
   boardCardDetail,
   boardCardTitle,
-  boardOpenUrl,
   boardPreviewState,
   boardPrimarySession,
   boardSessionFrameUrl,
@@ -959,7 +957,7 @@ onMounted(async () => {
   standaloneOwnershipResolved.value = true;
   standaloneOwnershipReady.value = result.action === "claimed";
   standaloneOwnershipConflict.value = result.action === "focused";
-  if (result.action === "focused") showToast(t("instances.window.alreadyOpen"));
+  if (result.action === "focused") showToast(t("instances.window.alreadyOpen"), "info");
 });
 
 function handleGlobalClick() {
@@ -1243,7 +1241,7 @@ async function openAppUrl(url: string) {
 async function openInstanceWindow(instance: InstanceBoardItem) {
   const result = await openInstanceDetailWindow(instance.id);
   if (!result.ok) showToast(t(result.code === "popup-blocked" ? "instances.window.popupBlocked" : "instances.window.switchFailed"));
-  else if (result.action === "focused") showToast(t("instances.window.focusedExisting"));
+  else if (result.action === "focused") showToast(t("instances.window.focusedExisting"), "info");
   closeFloatingLayers();
 }
 
@@ -1268,7 +1266,7 @@ async function selectInstance(id: string) {
   const desktopResult = await switchDesktopInstanceDetailWindow(id);
   if (desktopResult?.action === "focused") {
     finishInstanceSwitch(switchSequence);
-    showToast(t("instances.window.focusedExisting"));
+    showToast(t("instances.window.focusedExisting"), "info");
     closeFloatingLayers();
     return;
   }
@@ -1282,7 +1280,7 @@ async function selectInstance(id: string) {
     const webResult = await webWindowCoordinator.claim(id);
     if (webResult.action === "focused") {
       finishInstanceSwitch(switchSequence);
-      showToast(t("instances.window.focusedExisting"));
+      showToast(t("instances.window.focusedExisting"), "info");
       closeFloatingLayers();
       return;
     }
