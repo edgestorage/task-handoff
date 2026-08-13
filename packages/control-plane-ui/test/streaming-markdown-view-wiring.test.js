@@ -39,7 +39,7 @@ test("selected session details use the streaming message view", () => {
 
 test("detail exposes an intent-aware shadcn return-to-latest control", () => {
   assert.match(panel, /<Button[\s\S]*?v-if="!isFollowingLatest"[\s\S]*?@click="followLatest"/);
-  assert.match(panel, /<ArrowDown :size="16" \/>/);
+  assert.match(panel, /<ChevronDown :size="17" \/>/);
   assert.match(panel, /new ResizeObserver\(\(\) => scrollFollow\?\.notifyContentResize\(\)\)/);
   assert.match(panel, /data-task-handoff-scroll-viewport/);
   assert.match(panel, /watch\(\(\) => `\$\{props\.instance\.id\}\\u0000\$\{selectedSession\.value\?\.id \|\| ""\}`/);

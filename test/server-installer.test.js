@@ -145,6 +145,8 @@ test("server package owns the unified management command and runtimes stay indep
 test("runtime dependency versions resolve from their declaring workspace owners", async () => {
   const { runtimePackages } = await import("../runtime-packages.config.mjs");
   const prepare = fs.readFileSync(path.join(root, "scripts", "prepare-runtime-packages.mjs"), "utf8");
+  const checker = fs.readFileSync(path.join(root, "scripts", "check-runtime-packages.mjs"), "utf8");
+  const dependencyHelpers = await import("../scripts/runtime-package-dependencies.mjs");
 
   assert.equal(
     runtimePackages["control-plane"].dependencyResolutionRoots.tweetnacl,
@@ -161,8 +163,13 @@ test("runtime dependency versions resolve from their declaring workspace owners"
       assert.doesNotThrow(() => createRequire(definition.dependencyResolutionRoots[name]).resolve(name));
     }
   }
-  assert.match(prepare, /createRequire\(resolutionRoot\)/);
+  assert.match(prepare, /exactRuntimeDependencies\(definition\.dependencies, definition\.dependencyResolutionRoots\)/);
   assert.doesNotMatch(prepare, /path\.join\(root, "node_modules"/);
+  const controlPlane = runtimePackages["control-plane"];
+  const modulePaths = dependencyHelpers.runtimeDependencyNodePaths(controlPlane.dependencies, controlPlane.dependencyResolutionRoots);
+  assert.ok(modulePaths.some((modulePath) => fs.existsSync(path.join(modulePath, "tweetnacl"))));
+  assert.match(checker, /NODE_PATH: \[\.\.\.dependencyPaths, process\.env\.NODE_PATH\]/);
+  assert.match(checker, /env: runtimeEnvironment\(definition\)/);
 });
 
 test("runtime package archives verify every directly executed helper", () => {

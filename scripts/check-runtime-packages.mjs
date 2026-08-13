@@ -8,6 +8,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { Argument, Command } from "commander";
 import { runtimePackages } from "../runtime-packages.config.mjs";
+import { runtimeDependencyNodePaths } from "./runtime-package-dependencies.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const rootPackage = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
@@ -20,6 +21,16 @@ const [requestedTarget] = program.processedArgs;
 const selected = requestedTarget
   ? Object.entries(runtimePackages).filter(([name]) => name === requestedTarget)
   : Object.entries(runtimePackages);
+
+function runtimeEnvironment(definition, extra = {}) {
+  if (definition.aggregateDependencies) return { ...process.env, ...extra };
+  const dependencyPaths = runtimeDependencyNodePaths(definition.dependencies, definition.dependencyResolutionRoots);
+  return {
+    ...process.env,
+    ...extra,
+    NODE_PATH: [...dependencyPaths, process.env.NODE_PATH].filter(Boolean).join(path.delimiter),
+  };
+}
 
 async function availablePort() {
   const server = net.createServer();
@@ -63,7 +74,7 @@ async function checkBundledRuntime(packageDir, manifest, name, definition) {
     : [binPath, "--host", "127.0.0.1", "--port", String(port), "--data-dir", tempDir, "--connection-mode", "local-loopback"];
   const child = spawn(process.execPath, args, {
     cwd: packageDir,
-    env: { ...process.env, TMPDIR: tempDir },
+    env: runtimeEnvironment(definition, { TMPDIR: tempDir }),
     stdio: ["ignore", "pipe", "pipe"],
   });
   try {
@@ -77,6 +88,7 @@ async function checkBundledRuntime(packageDir, manifest, name, definition) {
       const invite = spawnSync(process.execPath, [binPath, "invite", "--data-dir", tempDir, "--json"], {
         cwd: packageDir,
         encoding: "utf8",
+        env: runtimeEnvironment(definition),
       });
       if (invite.status !== 0) {
         throw new Error(`node-agent bundled invite command failed:\n${invite.stderr || invite.stdout}`);
@@ -155,7 +167,11 @@ for (const [name, definition] of selected) {
     }
     continue;
   }
-  const help = spawnSync(process.execPath, [binPath, "--help"], { cwd: root, encoding: "utf8" });
+  const help = spawnSync(process.execPath, [binPath, "--help"], {
+    cwd: packageDir,
+    encoding: "utf8",
+    env: runtimeEnvironment(definition),
+  });
   if (help.status !== 0 || !help.stdout.includes(definition.binName)) {
     throw new Error(`${name} package CLI smoke test failed:\n${help.stderr || help.stdout}`);
   }

@@ -84,16 +84,43 @@ test("instance AI session card previews do not open an expanded overlay", () => 
   assert.doesNotMatch(styles, /session-ai-expanded|cursor: zoom-in/);
 });
 
-test("mobile AI sessions switch between the card list and one detail pane", () => {
-  assert.match(panel, /class="session-ai-workspace" :data-mobile-pane="mobilePane"/);
-  assert.match(panel, /function selectSession\(sessionId: string\) \{[\s\S]*mobilePane\.value = "detail";[\s\S]*emit\("selectAiSession"/);
-  assert.match(panel, /class="session-ai-mobile-list-button"[\s\S]*@click="showMobileSessionList"/);
-  assert.match(panel, /function showMobileSessionList\(\) \{\s*mobilePane\.value = "list";/);
-  assert.match(styles, /@media \(max-width: 920px\)[\s\S]*data-mobile-pane="list"[^}]*> \.session-ai-detail[\s\S]*data-mobile-pane="detail"[^}]*> \.session-ai-sidebar[^{]*\{\s*display: none;/);
-  assert.match(styles, /@media \(max-width: 920px\)[\s\S]*\.session-ai-panel \{\s*padding: 8px;[\s\S]*data-mobile-pane="detail"\] \{\s*grid-template-rows: 28px minmax\(0, 1fr\);\s*row-gap: 2px;[\s\S]*\.session-ai-mobile-list-button \{[\s\S]*height: 28px;[\s\S]*margin: 0;/);
+test("mobile AI sessions keep detail visible and float the session list in a dismissible sheet", () => {
+  assert.match(panel, /<Sheet v-model:open="sessionListOverlayOpen">/);
+  assert.match(panel, /ref="panelEl" class="session-ai-panel"/);
+  assert.match(panel, /const panelBounds = useElementBounding\(panelEl\);/);
+  assert.match(panel, /overlayStyle: sessionListOverlayBackdropStyle/);
+  assert.match(panel, /style: sessionListOverlayStyle/);
+  assert.match(panel, /:is="compactAiSessionLayout \? SheetContent : 'div'"/);
+  assert.match(panel, /'session-ai-sidebar-sheet': compactAiSessionLayout/);
+  assert.match(panel, /class="session-ai-mobile-list-button"[\s\S]*:data-open="sessionListOverlayOpen \? 'true' : undefined"[\s\S]*@click="sessionListOverlayOpen = true"[\s\S]*<PanelLeftOpen/);
+  assert.match(panel, /watch\(compactAiSessionLayout, \(compact\) => \{\s*if \(!compact\) sessionListOverlayOpen\.value = false;\s*\}\);/);
+  assert.match(panel, /watch\(\(\) => props\.instance\.id, \(\) => \{\s*sessionListOverlayOpen\.value = false;/);
+  assert.doesNotMatch(panel, /if \(compact && !wasCompact\)[\s\S]*sessionListOverlayOpen\.value = true/);
+  assert.match(panel, /<TooltipContent side="right" :side-offset="6">\{\{ t\("sessions\.panel\.sessionList"\) \}\}<\/TooltipContent>/);
+  assert.match(panel, /function selectSession\(sessionId: string\) \{[\s\S]*sessionListOverlayOpen\.value = false;[\s\S]*emit\("selectAiSession"/);
+  assert.doesNotMatch(panel, /mobilePane|data-mobile-pane|showMobileSessionList/);
+  assert.match(styles, /:global\(\.session-ai-sidebar-overlay\) \{\s*background: rgb\(0 0 0 \/ 10%\);/);
+  assert.match(panel, /top: `\$\{panelBounds\.top\.value\}px`[\s\S]*bottom: `calc\(100vh - \$\{panelBounds\.bottom\.value\}px\)`[\s\S]*left: `\$\{panelBounds\.left\.value\}px`[\s\S]*width: `\$\{Math\.min\(sidebarWidth\.value, Math\.max\(0, panelBounds\.width\.value - 40\)\)\}px`[\s\S]*padding: "0"/);
+  assert.match(panel, /class="session-ai-drawer-resize-handle"[\s\S]*@pointerdown="startSidebarResize"/);
+  assert.match(panel, /const maximumWidth = compactAiSessionLayout\.value[\s\S]*panelBounds\.width\.value - 40[\s\S]*sidebarWidth\.value = Math\.min\(maximumWidth, Math\.max\(minimumWidth/);
+  assert.match(styles, /:global\(\.session-ai-drawer-resize-handle\) \{[\s\S]*right: 0;[\s\S]*width: 10px;[\s\S]*cursor: col-resize;/);
+  assert.match(styles, /:global\(\.session-ai-sidebar-sheet\) \{[\s\S]*border-right: 1px solid var\(--line-strong\);[\s\S]*border-radius: 0;[\s\S]*transition-duration: 200ms;/);
+  assert.match(styles, /:global\(\.session-ai-sidebar-sheet \.session-ai-sidebar\) \{\s*--session-ai-list-right-inset: 12px;[\s\S]*padding: 12px 0 12px 12px;/);
+  assert.match(styles, /@media \(max-width: 920px\)[\s\S]*\.session-ai-panel \{\s*padding: 8px;[\s\S]*grid-template-rows: minmax\(0, 1fr\);[\s\S]*\.session-ai-mobile-list-button \{[\s\S]*position: absolute;[\s\S]*top: 10px;[\s\S]*left: 4px;[\s\S]*width: 26px;[\s\S]*height: 26px;/);
+  assert.match(styles, /\.session-ai-detail-content > header,[\s\S]*\.session-ai-history-detail-head \{\s*padding-left: 24px;/);
+  assert.match(styles, /\.session-ai-detail-content > header > \.session-ai-detail-block-user \{[\s\S]*width: calc\(100% \+ 24px\);[\s\S]*margin-left: -24px;[\s\S]*padding-left: 24px;/);
+  assert.match(styles, /\.session-ai-detail\.is-scrolled \.session-ai-detail-content > header \{\s*padding-left: 24px;/);
+  assert.match(styles, /\.session-ai-mobile-list-button \{[\s\S]*border-color: transparent;[\s\S]*background: transparent;/);
+  assert.match(styles, /\.session-ai-mobile-list-button\[data-open="true"\] \{[\s\S]*border-color: transparent;[\s\S]*background: var\(--surface-hover\);/);
   assert.match(styles, /@media \(max-width: 920px\)[\s\S]*\.session-ai-preview-field-assistant \{\s*padding-right: 38px;/);
   assert.doesNotMatch(styles, /@media \(max-width: 920px\)[\s\S]*\.session-ai-select \{\s*padding-right: 38px;/);
   assert.doesNotMatch(styles, /grid-template-rows: minmax\(220px, 42vh\) minmax\(0, 1fr\)/);
+});
+
+test("the return-to-latest control stays compact and visually separated from the composer", () => {
+  assert.match(panel, /class="session-ai-follow-latest"[\s\S]*size="icon-sm"[\s\S]*variant="ghost"[\s\S]*<ChevronDown :size="17" \/>/);
+  assert.doesNotMatch(panel, /<ArrowDown/);
+  assert.match(styles, /\.session-ai-follow-latest\s*\{[^}]*bottom: calc\(var\(--session-ai-compose-offset, 84px\) \+ 24px\);[^}]*width: 32px;[^}]*height: 32px;[^}]*background: color-mix\(in srgb, var\(--surface-raised\) 62%, transparent\);[^}]*backdrop-filter: blur\(10px\);/s);
 });
 
 test("all instance AI sessions expose the unified close menu", () => {

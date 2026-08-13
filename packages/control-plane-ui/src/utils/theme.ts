@@ -2,6 +2,11 @@ export type ThemePreference = "light" | "dark";
 
 const THEME_STORAGE_KEY = "task-handoff.theme";
 const DEFAULT_THEME: ThemePreference = "dark";
+let themeStorageSyncInitialized = false;
+
+function isThemePreference(value: unknown): value is ThemePreference {
+  return value === "light" || value === "dark";
+}
 
 export function getThemePreference(): ThemePreference {
   if (typeof window === "undefined") {
@@ -9,7 +14,7 @@ export function getThemePreference(): ThemePreference {
   }
   try {
     const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
-    return stored === "light" || stored === "dark" ? stored : DEFAULT_THEME;
+    return isThemePreference(stored) ? stored : DEFAULT_THEME;
   } catch {
     return DEFAULT_THEME;
   }
@@ -35,4 +40,10 @@ export function saveThemePreference(theme: ThemePreference) {
 
 export function initializeThemePreference() {
   applyThemePreference(getThemePreference());
+  if (themeStorageSyncInitialized || typeof window === "undefined") return;
+  themeStorageSyncInitialized = true;
+  window.addEventListener("storage", (event) => {
+    if (event.key !== THEME_STORAGE_KEY || !isThemePreference(event.newValue)) return;
+    applyThemePreference(event.newValue);
+  });
 }

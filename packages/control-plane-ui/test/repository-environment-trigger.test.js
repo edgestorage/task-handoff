@@ -11,9 +11,12 @@ test("repository environment matches detail actions without changing the tab too
     readFile(new URL("SessionPreview.vue", sourceRoot), "utf8"),
   ]);
 
-  assert.match(environment, /triggerAppearance\?: "toolbar" \| "detail"/);
+  assert.match(environment, /triggerAppearance\?: "toolbar" \| "detail" \| "menu"/);
   assert.match(environment, /\.repository-environment-trigger-detail \{[^}]*width: 26px;[^}]*height: 26px;[^}]*border-radius: 6px;[^}]*background: var\(--surface-subtle\)/);
+  assert.match(environment, /\.repository-environment-trigger-menu \{[^}]*width: 100%;[^}]*align-items: center;[^}]*justify-content: flex-start;[^}]*gap: 8px;[^}]*color: var\(--text\);/s);
+  assert.match(environment, /\.repository-environment-trigger-menu:hover,[\s\S]*?background: var\(--accent\);[\s\S]*?color: var\(--accent-foreground\);/);
   assert.match(aiPanel, /<RepositoryEnvironment[\s\S]*?session-kind="ai-session"[\s\S]*?trigger-appearance="detail"/);
+  assert.match(aiPanel, /<RepositoryEnvironment[\s\S]*?session-kind="ai-session"[\s\S]*?trigger-appearance="menu"/);
 
   const toolbarEnvironment = sessionPreview.match(/<RepositoryEnvironment[\s\S]*?\/>/)?.[0] || "";
   assert.match(toolbarEnvironment, /session-kind="app-session"/);

@@ -16,7 +16,7 @@
           @click.stop
         >
           <button
-            v-if="tabGroup.statusTab"
+            v-if="tabGroup.statusTab && !compactSessionToolbar"
             type="button"
             class="session-ai-home"
             :class="{ active: isSessionTabActive(tabGroup.statusTab), focused: isSessionTabFocused(tabGroup.statusTab) }"
@@ -26,7 +26,7 @@
             <Activity :size="15" />
             <span>{{ t("sessions.tabs.status") }}</span>
           </button>
-          <span v-if="tabGroup.statusTab && (tabGroup.aiTab || tabGroup.appTabs.length)" class="session-tab-divider" aria-hidden="true" />
+          <span v-if="!compactSessionToolbar && tabGroup.statusTab && (tabGroup.aiTab || tabGroup.appTabs.length)" class="session-tab-divider" aria-hidden="true" />
           <button
             v-if="tabGroup.aiTab"
             type="button"
@@ -42,8 +42,8 @@
             <!-- i18n-audit-allow-next-line protocol-name: AI is the protocol-facing agent category label -->
             <span>AI</span>
           </button>
-          <span v-if="tabGroup.aiTab && previewSessionTabs(tabGroup.id, tabGroup.appTabs).length" class="session-tab-divider" aria-hidden="true" />
-          <div v-if="previewSessionTabs(tabGroup.id, tabGroup.appTabs).length" class="session-tab-strip-frame">
+          <span v-if="!compactSessionToolbar && tabGroup.aiTab && previewSessionTabs(tabGroup.id, tabGroup.appTabs).length" class="session-tab-divider" aria-hidden="true" />
+          <div v-if="!compactSessionToolbar && previewSessionTabs(tabGroup.id, tabGroup.appTabs).length" class="session-tab-strip-frame">
             <div v-session-tab-overflow class="session-tab-strip" @scroll="updateSessionTabOverflowFromEvent" @wheel="scrollSessionTabs">
               <TransitionGroup name="session-tab-reorder" tag="div" class="session-tab-strip-content" role="tablist" :aria-label="hasSessionSplit ? t('sessions.tabs.paneTabs', { pane: tabGroup.id }) : t('sessions.tabs.views')">
                 <span
@@ -137,7 +137,7 @@
               </TransitionGroup>
             </div>
           </div>
-          <div v-if="!tabGroup.statusTab" class="app-launcher" :class="{ open: appLaunchMenuOpen && appLaunchMenuPane === tabGroup.id }" @click.stop>
+          <div v-if="compactSessionToolbar || !tabGroup.statusTab" class="app-launcher" :class="{ open: appLaunchMenuOpen && appLaunchMenuPane === tabGroup.id }" @click.stop>
             <DropdownMenu :open="appLaunchMenuOpen && appLaunchMenuPane === tabGroup.id" @update:open="updateAppLaunchMenuOpen(tabGroup.id, $event)">
               <DropdownMenuTrigger as-child>
                 <Button class="session-tab-add-button" variant="ghost" size="icon" :disabled="!canLaunchApp || launchingApp" :aria-expanded="appLaunchMenuOpen && appLaunchMenuPane === tabGroup.id" :aria-label="appLaunchButtonTitle" :title="appLaunchButtonTitle">
@@ -157,7 +157,7 @@
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
-          <DropdownMenu v-if="!tabGroup.statusTab" :open="sessionMenuOpen && sessionMenuPane === tabGroup.id" @update:open="updateSessionMenuOpen(tabGroup.id, $event)">
+          <DropdownMenu v-if="compactSessionToolbar || !tabGroup.statusTab" :open="sessionMenuOpen && sessionMenuPane === tabGroup.id" @update:open="updateSessionMenuOpen(tabGroup.id, $event)">
             <DropdownMenuTrigger as-child>
               <button type="button" class="session-tab-menu-trigger" :aria-expanded="sessionMenuOpen && sessionMenuPane === tabGroup.id" :title="t('sessions.tabs.paneMenu')" :aria-label="t('sessions.tabs.paneMenu')">
                 <ChevronDown :size="15" />
@@ -498,7 +498,8 @@ const emit = defineEmits<{
 }>();
 
 const resourceMetricsNow = useNow({ interval: 1_000 });
-const sessionSplitAvailable = useMediaQuery("(min-width: 781px)");
+const compactSessionToolbar = useMediaQuery("(max-width: 600px)");
+const sessionSplitAvailable = useMediaQuery("(min-width: 601px)");
 const desktopWindowBridge = (window as Window & { taskHandoffDesktop?: DesktopWindowBridge }).taskHandoffDesktop;
 const windowAlwaysOnTopSupported = computed(() => Boolean(props.standalone && desktopWindowBridge?.getWindowAlwaysOnTop && desktopWindowBridge.setWindowAlwaysOnTop));
 const windowAlwaysOnTop = ref(false);
@@ -531,7 +532,7 @@ async function setWindowAlwaysOnTop(enabled: boolean) {
 const sessionStatusBarStorageKey = computed(() => props.standalone
   ? "task-handoff.control-plane.session-status-bar-visible.standalone"
   : "task-handoff.control-plane.session-status-bar-visible.main");
-const sessionStatusBarVisible = useStorage(sessionStatusBarStorageKey, computed(() => !props.standalone));
+const sessionStatusBarVisible = useStorage(sessionStatusBarStorageKey, !props.standalone);
 
 watch([sessionSplitAvailable, () => props.hasSessionSplit], ([available, split]) => {
   if (!available && split) emit("closeSessionSplit");
