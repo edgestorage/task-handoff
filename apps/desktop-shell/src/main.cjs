@@ -46,7 +46,7 @@ const {
   stopExistingDesktopNodeAgent,
 } = require("./node-agent-handoff.cjs");
 const { applyDesktopDockIcon, desktopIconPath: resolveDesktopIconPath, desktopTrayIconPath: resolveDesktopTrayIconPath } = require("./icon.cjs");
-const { applyWindowsTitleBarTheme, desktopTitleBarOptions, desktopWindowChromeMode } = require("./window-chrome.cjs");
+const { applyWindowsTitleBarTheme, desktopTitleBarOptions, desktopWindowBackgroundColor, desktopWindowChromeMode } = require("./window-chrome.cjs");
 const { appendRotatingLog } = require("./rotating-log.cjs");
 
 let mainWindow;
@@ -367,7 +367,7 @@ function createWindow(url) {
     show: false,
     title: "TaskHandoff Control Plane",
     icon: desktopIconPath(),
-    backgroundColor: "#eef3f4",
+    backgroundColor: desktopWindowBackgroundColor("dark"),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -1082,11 +1082,14 @@ ipcMain.on("task-handoff:window-drag", (event, payload) => {
 
 ipcMain.handle("task-handoff:set-window-chrome-theme", (_event, theme) => {
   const targetWindow = BrowserWindow.fromWebContents(_event.sender);
-  const height = targetWindow ? windowsTitleBarOverlayHeights.get(targetWindow) : undefined;
-  if (process.platform !== "win32" || !targetWindow || targetWindow.isDestroyed() || !height || !["light", "dark"].includes(theme)) {
+  if (!targetWindow || targetWindow.isDestroyed() || !["light", "dark"].includes(theme)) {
     return { ok: false };
   }
-  applyWindowsTitleBarTheme(targetWindow, nativeTheme, { height, theme });
+  targetWindow.setBackgroundColor(desktopWindowBackgroundColor(theme));
+  const height = windowsTitleBarOverlayHeights.get(targetWindow);
+  if (process.platform === "win32" && height) {
+    applyWindowsTitleBarTheme(targetWindow, nativeTheme, { height, theme });
+  }
   return { ok: true };
 });
 

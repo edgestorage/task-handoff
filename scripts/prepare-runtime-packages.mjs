@@ -2,10 +2,10 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { Argument, Command } from "commander";
 import { runtimePackages } from "../runtime-packages.config.mjs";
+import { exactRuntimeDependencies } from "./runtime-package-dependencies.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const rootPackage = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
@@ -18,41 +18,6 @@ const [requestedTarget] = program.processedArgs;
 const selected = requestedTarget
   ? Object.entries(runtimePackages).filter(([name]) => name === requestedTarget)
   : Object.entries(runtimePackages);
-
-function resolveInstalledManifest(name, resolutionRoot) {
-  if (!resolutionRoot) throw new Error(`Runtime dependency has no resolution owner: ${name}`);
-  const resolver = createRequire(resolutionRoot);
-  try {
-    return resolver.resolve(`${name}/package.json`);
-  } catch (error) {
-    if (error?.code !== "ERR_PACKAGE_PATH_NOT_EXPORTED") throw error;
-  }
-  let current = path.dirname(resolver.resolve(name));
-  while (true) {
-    const manifestPath = path.join(current, "package.json");
-    if (fs.existsSync(manifestPath)) {
-      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-      if (manifest.name === name) return manifestPath;
-    }
-    const parent = path.dirname(current);
-    if (parent === current) break;
-    current = parent;
-  }
-  throw new Error(`Could not resolve installed runtime dependency manifest: ${name}`);
-}
-
-function exactDependencies(dependencies, resolutionRoots) {
-  return Object.fromEntries(
-    Object.keys(dependencies).map((name) => {
-      const manifestPath = resolveInstalledManifest(name, resolutionRoots[name]);
-      const installed = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-      if (!installed.version) {
-        throw new Error(`Installed runtime dependency has no version: ${name}`);
-      }
-      return [name, String(installed.version).replace(/^v(?=\d)/, "")];
-    }),
-  );
-}
 
 function copyLinuxExecutable(source, destination) {
   const contents = fs.readFileSync(source, "utf8").replace(/\r\n?/g, "\n");
@@ -137,7 +102,7 @@ for (const [name, definition] of selected) {
     engines: rootPackage.engines,
     dependencies: definition.aggregateDependencies
       ? Object.fromEntries(definition.aggregateDependencies.map((dependency) => [dependency, process.env.TASK_HANDOFF_VERSION || rootPackage.version]))
-      : exactDependencies(definition.dependencies, definition.dependencyResolutionRoots),
+      : exactRuntimeDependencies(definition.dependencies, definition.dependencyResolutionRoots),
     publishConfig: { access: "public" },
   };
   fs.writeFileSync(path.join(packageDir, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);

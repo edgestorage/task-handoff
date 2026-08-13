@@ -37,6 +37,13 @@ test("Windows overlay mirrors the macOS flex spacer inside the titlebar", () => 
   assert.match(theme, /setWindowChromeTheme\?\.\(theme\)/);
 });
 
+test("open desktop windows follow theme changes made in another window", () => {
+  assert.match(theme, /let themeStorageSyncInitialized = false/);
+  assert.match(theme, /window\.addEventListener\("storage", \(event\) => \{/);
+  assert.match(theme, /event\.key !== THEME_STORAGE_KEY \|\| !isThemePreference\(event\.newValue\)/);
+  assert.match(theme, /applyThemePreference\(event\.newValue\)/);
+});
+
 test("an open menu temporarily makes the titlebar clickable for outside dismissal", () => {
   assert.match(styles, /\.control-plane-topbar \{[\s\S]*?-webkit-app-region: drag;/);
   assert.match(

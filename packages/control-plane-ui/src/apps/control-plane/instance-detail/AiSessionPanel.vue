@@ -1,7 +1,22 @@
 <template>
-  <div class="session-ai-panel" :style="workspaceStyle">
-    <div class="session-ai-workspace" :data-mobile-pane="mobilePane">
-      <aside ref="sidebarEl" class="session-ai-sidebar">
+  <div ref="panelEl" class="session-ai-panel" :style="workspaceStyle">
+    <Sheet v-model:open="sessionListOverlayOpen">
+    <div class="session-ai-workspace">
+      <component
+        :is="compactAiSessionLayout ? SheetContent : 'div'"
+        class="session-ai-sidebar-shell"
+        :class="{ 'session-ai-sidebar-sheet': compactAiSessionLayout }"
+        v-bind="compactAiSessionLayout ? {
+          overlayClass: 'session-ai-sidebar-overlay',
+          overlayStyle: sessionListOverlayBackdropStyle,
+          showClose: false,
+          side: 'left',
+          style: sessionListOverlayStyle,
+        } : {}"
+      >
+        <SheetTitle v-if="compactAiSessionLayout" class="sr-only">{{ t("sessions.panel.sessionList") }}</SheetTitle>
+        <SheetDescription v-if="compactAiSessionLayout" class="sr-only">{{ t("sessions.panel.sessionListDescription") }}</SheetDescription>
+        <aside ref="sidebarEl" class="session-ai-sidebar">
         <div class="session-ai-sidebar-head">
           <div v-if="historyMode" class="session-ai-history-head">
             <Button
@@ -258,7 +273,7 @@
                     <DropdownMenuContent class="session-ai-card-menu" align="end" :side-offset="6" @click.stop>
                       <DropdownMenuSub v-if="session.actions?.fork">
                         <DropdownMenuSubTrigger class="session-ai-card-menu-item" :disabled="forkingAiSessionId === session.id">
-                          <GitFork :size="13" />
+                          <Split :size="13" />
                           <span>{{ forkingAiSessionId === session.id ? t("sessions.actions.forking") : t("sessions.actions.fork") }}</span>
                         </DropdownMenuSubTrigger>
                         <DropdownMenuSubContent class="session-ai-card-menu">
@@ -380,7 +395,16 @@
           <span>{{ t("sessions.panel.viewHistory") }}</span>
           <ChevronRight :size="14" />
         </Button>
-      </aside>
+        </aside>
+        <button
+          v-if="compactAiSessionLayout"
+          type="button"
+          class="session-ai-drawer-resize-handle"
+          :aria-label="t('sessions.panel.resizeList')"
+          :title="t('sessions.panel.resizeList')"
+          @pointerdown="startSidebarResize"
+        />
+      </component>
       <button
         type="button"
         class="session-ai-sidebar-resize-handle"
@@ -388,15 +412,23 @@
         :title="t('sessions.panel.resizeList')"
         @pointerdown="startSidebarResize"
       />
-      <Button
-        v-if="mobilePane === 'detail'"
-        variant="ghost"
-        class="session-ai-mobile-list-button"
-        @click="showMobileSessionList"
-      >
-        <ArrowLeft :size="16" />
-        <span>{{ t("sessions.panel.sessionList") }}</span>
-      </Button>
+      <TooltipProvider :delay-duration="120">
+        <Tooltip>
+          <TooltipTrigger as-child>
+            <Button
+              variant="outline"
+              size="icon"
+              class="session-ai-mobile-list-button"
+              :data-open="sessionListOverlayOpen ? 'true' : undefined"
+              :aria-label="t('sessions.panel.sessionList')"
+              @click="sessionListOverlayOpen = true"
+            >
+              <PanelLeftOpen :size="16" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="right" :side-offset="6">{{ t("sessions.panel.sessionList") }}</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
       <section v-if="historyMode" ref="detailEl" class="session-ai-detail session-ai-history-detail">
         <ScrollArea class="session-ai-detail-scroll">
           <div v-if="!selectedHistoryId" class="session-ai-history-detail-state">
@@ -580,17 +612,18 @@
               @previous="previousPrompt(selectedSession)"
               @next="nextPrompt(selectedSession)"
             />
-            <RepositoryEnvironment
-              :ai-agent="repositoryAiAgent"
-              :connection-status="instance.connectionStatus"
-              :instance-id="instance.id"
-              :session-id="selectedSession.id"
-              session-kind="ai-session"
-              trigger-appearance="detail"
-              @ai-session-started="handleRepositoryAiSessionStarted"
-              @open-workspace="emit('openRepositoryWorkspace', $event)"
-            />
-            <TooltipProvider :delay-duration="120">
+            <template v-if="!compactDetailActions">
+              <RepositoryEnvironment
+                :ai-agent="repositoryAiAgent"
+                :connection-status="instance.connectionStatus"
+                :instance-id="instance.id"
+                :session-id="selectedSession.id"
+                session-kind="ai-session"
+                trigger-appearance="detail"
+                @ai-session-started="handleRepositoryAiSessionStarted"
+                @open-workspace="emit('openRepositoryWorkspace', $event)"
+              />
+              <TooltipProvider :delay-duration="120">
               <Tooltip>
                 <TooltipTrigger as-child>
                   <button type="button" :title="t('sessions.detail.sessionDetails')" :aria-label="t('sessions.detail.sessionDetails')">
@@ -618,8 +651,8 @@
                   </dl>
                 </TooltipContent>
               </Tooltip>
-            </TooltipProvider>
-            <TooltipProvider v-if="aiSessionAppTab(instance, selectedSession) || selectedSession.actions?.openApp" :delay-duration="120">
+              </TooltipProvider>
+              <TooltipProvider v-if="aiSessionAppTab(instance, selectedSession) || selectedSession.actions?.openApp" :delay-duration="120">
               <Tooltip>
                 <TooltipTrigger as-child>
                   <button type="button" :aria-label="t('sessions.actions.openApp')" :disabled="openingAiSessionId === selectedSession.id" @click="openSessionApp(selectedSession)">
@@ -628,28 +661,18 @@
                 </TooltipTrigger>
                 <TooltipContent side="bottom" :side-offset="8">{{ t("sessions.actions.openApp") }}</TooltipContent>
               </Tooltip>
-            </TooltipProvider>
-            <TooltipProvider v-if="selectedSession.actions?.fork" :delay-duration="120">
+              </TooltipProvider>
+              <TooltipProvider v-if="selectedForkTurn" :delay-duration="120">
               <Tooltip>
                 <TooltipTrigger as-child>
-                  <button type="button" :disabled="forkingAiSessionId === selectedSession.id" :aria-label="t('sessions.actions.fork')" @click="forkSession(selectedSession)">
-                    <GitFork :size="15" />
+                  <button type="button" :disabled="forkingAiSessionId === selectedSession.id" :aria-label="t('sessions.actions.continueFromTurn')" @click="forkSession(selectedSession, 'current', selectedForkTurn.id)">
+                    <Split :size="15" />
                   </button>
                 </TooltipTrigger>
-                <TooltipContent side="bottom" :side-offset="8">{{ t("sessions.actions.fork") }}</TooltipContent>
+                <TooltipContent side="bottom" :side-offset="8">{{ t("sessions.actions.continueFromTurn") }}</TooltipContent>
               </Tooltip>
-            </TooltipProvider>
-            <TooltipProvider v-if="selectedForkTurn" :delay-duration="120">
-              <Tooltip>
-                <TooltipTrigger as-child>
-                  <button type="button" :disabled="forkingAiSessionId === selectedSession.id" :aria-label="t('sessions.actions.forkThroughTurn')" @click="forkSession(selectedSession, 'current', selectedForkTurn.id)">
-                    <GitBranch :size="15" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom" :side-offset="8">{{ t("sessions.actions.forkThroughTurn") }}</TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-            <TooltipProvider :delay-duration="120">
+              </TooltipProvider>
+              <TooltipProvider :delay-duration="120">
               <Tooltip>
                 <TooltipTrigger as-child>
                   <button type="button" :disabled="stoppingAppSessionId === selectedSession.id" :aria-label="t('sessions.actions.closeSession')" @click="closeSession(selectedSession)">
@@ -658,7 +681,64 @@
                 </TooltipTrigger>
                 <TooltipContent side="bottom" :side-offset="8">{{ t("sessions.actions.closeSession") }}</TooltipContent>
               </Tooltip>
-            </TooltipProvider>
+              </TooltipProvider>
+            </template>
+            <DropdownMenu v-else :modal="false">
+              <DropdownMenuTrigger as-child>
+                <button type="button" :aria-label="t('sessions.actions.more')">
+                  <MoreHorizontal :size="16" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent class="session-ai-detail-actions-menu" align="end" :side-offset="8" @interact-outside="keepCompactActionsMenuOpenForRepository">
+                <RepositoryEnvironment
+                  :ai-agent="repositoryAiAgent"
+                  :connection-status="instance.connectionStatus"
+                  :instance-id="instance.id"
+                  :session-id="selectedSession.id"
+                  session-kind="ai-session"
+                  trigger-appearance="menu"
+                  @ai-session-started="handleRepositoryAiSessionStarted"
+                  @open-workspace="emit('openRepositoryWorkspace', $event)"
+                />
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger class="session-ai-detail-actions-menu-item">
+                    <CircleHelp :size="16" />
+                    <span>{{ t("sessions.detail.sessionDetails") }}</span>
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent class="session-ai-detail-info-menu">
+                    <dl>
+                      <div><dt>{{ t("sessions.detail.workspace") }}</dt><dd>{{ selectedSession.cwd || t("sessions.detail.unknown") }}</dd></div>
+                      <div><dt>{{ t("sessions.detail.session") }}</dt><dd>{{ selectedSession.providerSessionId || selectedSession.id }}</dd></div>
+                      <div><dt>{{ t("sessions.detail.appBinding") }}</dt><dd>{{ selectedSession.appSessionId || t("sessions.detail.notBound") }}</dd></div>
+                      <div v-if="selectedSession.lineage?.kind === 'fork'"><dt>{{ t("sessions.detail.forkedFrom") }}</dt><dd>{{ parentSessionLabel(selectedSession) }}</dd></div>
+                    </dl>
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+                <DropdownMenuItem
+                  v-if="aiSessionAppTab(instance, selectedSession) || selectedSession.actions?.openApp"
+                  class="session-ai-detail-actions-menu-item"
+                  :disabled="openingAiSessionId === selectedSession.id"
+                  @select="openSessionApp(selectedSession)"
+                >
+                  <ExternalLink :size="16" />
+                  <span>{{ t("sessions.actions.openApp") }}</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  v-if="selectedForkTurn"
+                  class="session-ai-detail-actions-menu-item"
+                  :disabled="forkingAiSessionId === selectedSession.id"
+                  @select="forkSession(selectedSession, 'current', selectedForkTurn.id)"
+                >
+                  <Split :size="16" />
+                  <span>{{ t("sessions.actions.continueFromTurn") }}</span>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem class="session-ai-detail-actions-menu-item danger" :disabled="stoppingAppSessionId === selectedSession.id" @select="closeSession(selectedSession)">
+                  <Square :size="16" />
+                  <span>{{ t("sessions.actions.closeSession") }}</span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
           <header ref="detailHeaderEl">
             <div>
@@ -713,13 +793,13 @@
         <Button
           v-if="!isFollowingLatest"
           class="session-ai-follow-latest"
-          size="icon"
-          variant="secondary"
+          size="icon-sm"
+          variant="ghost"
           :aria-label="t('sessions.panel.backLatest')"
           :title="t('sessions.panel.backLatest')"
           @click="followLatest"
         >
-          <ArrowDown :size="16" />
+          <ChevronDown :size="17" />
         </Button>
         <div class="session-ai-compose-gradient" aria-hidden="true" />
         <AiSessionComposer
@@ -745,6 +825,7 @@
         />
       </section>
     </div>
+    </Sheet>
     <NodeStorageFolderPickerDialog
       :can-confirm="newProjectPicker.canConfirm.value"
       :error="newProjectPicker.error.value"
@@ -789,11 +870,12 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type CSSProperties } from "vue";
+import { useElementBounding, useMediaQuery } from "@vueuse/core";
 import { useI18n } from "vue-i18n";
 import { formatRelativeTime } from "../../../i18n/presentation";
 import type { SupportedLocale } from "../../../i18n/locale";
 import { translateApiError } from "../../../i18n/apiError";
-import { ArrowDown, ArrowLeft, Ban, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Code2, ExternalLink, Filter, Folder, FolderOpen, GitBranch, GitFork, History, LoaderCircle, MessageSquare, MoreHorizontal, Plus, SlidersHorizontal, Square, X, Zap } from "@lucide/vue";
+import { ArrowLeft, Ban, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Code2, ExternalLink, Filter, Folder, FolderOpen, GitBranch, History, LoaderCircle, MessageSquare, MoreHorizontal, PanelLeftOpen, Plus, SlidersHorizontal, Split, Square, X, Zap } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import AiSessionCardContextMenu from "../../../components/ai-session/AiSessionCardContextMenu.vue";
@@ -819,6 +901,7 @@ import { Button } from "../../../components/ui/button";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
 import { ContextMenu, ContextMenuTrigger } from "../../../components/ui/context-menu";
 import { ScrollArea } from "../../../components/ui/scroll-area";
+import { Sheet, SheetContent, SheetDescription, SheetTitle } from "../../../components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 import { relativeNodePathSegments } from "../nodePath";
@@ -911,7 +994,26 @@ const markdownCodeTools = computed(() => ({
 }));
 
 const visibleAiSessions = computed(() => props.instance.aiSessions?.sessions || []);
-const mobilePane = ref<"list" | "detail">("list");
+const sessionListOverlayOpen = ref(false);
+const panelEl = ref<HTMLElement | null>(null);
+const panelBounds = useElementBounding(panelEl);
+const sidebarWidth = ref(storedSidebarWidth());
+const sessionListOverlayBackdropStyle = computed<CSSProperties>(() => ({
+  top: `${panelBounds.top.value}px`,
+  right: `calc(100vw - ${panelBounds.right.value}px)`,
+  bottom: `calc(100vh - ${panelBounds.bottom.value}px)`,
+  left: `${panelBounds.left.value}px`,
+}));
+const sessionListOverlayStyle = computed<CSSProperties>(() => ({
+  top: `${panelBounds.top.value}px`,
+  right: "auto",
+  bottom: `calc(100vh - ${panelBounds.bottom.value}px)`,
+  left: `${panelBounds.left.value}px`,
+  width: `${Math.min(sidebarWidth.value, Math.max(0, panelBounds.width.value - 40))}px`,
+  maxWidth: `calc(100vw - ${panelBounds.left.value + 40}px)`,
+  height: "auto",
+  padding: "0",
+}));
 const sessionStatusFilter = ref<SessionStatusFilter>("all");
 const groupSessionsByPath = ref(storedGroupByPath());
 const sortSessionsByStatus = ref(storedSortByStatus());
@@ -954,6 +1056,16 @@ const repositoryAiAgent = computed<"codex" | "claude" | undefined>(() => {
   const agent = selectedSession.value?.agent;
   return agent === "codex" || agent === "claude" ? agent : undefined;
 });
+const compactDetailActions = useMediaQuery("(max-width: 920px)");
+const compactAiSessionLayout = compactDetailActions;
+watch(compactAiSessionLayout, (compact) => {
+  if (!compact) sessionListOverlayOpen.value = false;
+});
+function keepCompactActionsMenuOpenForRepository(event: Event) {
+  const originalEvent = (event as CustomEvent<{ originalEvent?: Event }>).detail?.originalEvent;
+  const target = originalEvent?.target;
+  if (target instanceof Element && target.closest(".repository-environment-popover")) event.preventDefault();
+}
 async function handleRepositoryAiSessionStarted(result: RepositoryAiSessionLaunchResult) {
   showControlPlaneToast(t("sessions.panel.startedWorktree"), "success");
   emit("selectAiSession", props.instance.id, result.aiSessionId);
@@ -1144,7 +1256,6 @@ const filteredTriggerTemplates = computed(() => {
     return searchable.includes(query);
   });
 });
-const sidebarWidth = ref(storedSidebarWidth());
 const workspaceStyle = computed(
   () =>
     ({
@@ -1358,9 +1469,13 @@ function startSidebarResize(event: PointerEvent) {
   stopSidebarResize();
   const startX = event.clientX;
   const startWidth = sidebarWidth.value;
+  const maximumWidth = compactAiSessionLayout.value
+    ? Math.min(SIDEBAR_WIDTH_MAX, Math.max(0, panelBounds.width.value - 40))
+    : SIDEBAR_WIDTH_MAX;
+  const minimumWidth = Math.min(SIDEBAR_WIDTH_MIN, maximumWidth);
   document.body.classList.add("session-ai-sidebar-resizing");
   const handlePointerMove = (moveEvent: PointerEvent) => {
-    sidebarWidth.value = clampSidebarWidth(startWidth + moveEvent.clientX - startX);
+    sidebarWidth.value = Math.min(maximumWidth, Math.max(minimumWidth, Math.round(startWidth + moveEvent.clientX - startX)));
   };
   const handlePointerUp = () => {
     window.localStorage?.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(sidebarWidth.value));
@@ -1426,12 +1541,8 @@ function nextPrompt(session: AiSessionSummary) {
 
 function selectSession(sessionId: string) {
   newSessionOpen.value = false;
-  mobilePane.value = "detail";
+  sessionListOverlayOpen.value = false;
   emit("selectAiSession", props.instance.id, sessionId);
-}
-
-function showMobileSessionList() {
-  mobilePane.value = "list";
 }
 
 function sidebarViewport() {
@@ -1474,7 +1585,7 @@ async function loadHistory() {
 
 async function selectHistoryItem(item: AiSessionHistoryItem) {
   if (resumingHistoryId.value) return;
-  mobilePane.value = "detail";
+  sessionListOverlayOpen.value = false;
   if (selectedHistoryId.value !== item.id) {
     historyMessageDraft.value = "";
     historyMessageAttachments.value = [];
@@ -1563,11 +1674,10 @@ async function sendHistoryMessage(permissionMode?: AiSessionPermissionMode) {
 function openNewSession() {
   const wasVisible = showNewSession.value;
   newSessionOpen.value = true;
+  sessionListOverlayOpen.value = false;
   if (wasVisible) {
-    mobilePane.value = "detail";
     return;
   }
-  mobilePane.value = "detail";
   newSessionDraft.value = "";
   messageAttachments.value = [];
   messageMentionBindings.value = [];
@@ -1640,6 +1750,7 @@ function newSessionBranchDetached(branch: RepositoryAiSessionWorkspaceBranch) {
 }
 
 function buildNewSessionBranchTree(branches: RepositoryAiSessionWorkspaceBranch[]): NewSessionBranchTreeNode[] {
+  // i18n-audit-allow-next-line code-token: internal Git branch tree root identifier
   const root: NewSessionBranchTreeFolder = { children: [], id: "branch", kind: "folder", label: "branch" };
   for (const branch of branches) {
     const parts = branch.name.split("/").filter(Boolean);
@@ -2416,7 +2527,7 @@ onMounted(() => {
   });
 });
 watch(() => props.instance.id, () => {
-  mobilePane.value = "list";
+  sessionListOverlayOpen.value = false;
 });
 onBeforeUnmount(() => {
   composerResizeObserver?.disconnect();

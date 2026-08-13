@@ -957,6 +957,7 @@ onMounted(async () => {
   standaloneOwnershipResolved.value = true;
   standaloneOwnershipReady.value = result.action === "claimed";
   standaloneOwnershipConflict.value = result.action === "focused";
+  // i18n-audit-allow-next-line code-token: toast presentation variant
   if (result.action === "focused") showToast(t("instances.window.alreadyOpen"), "info");
 });
 
@@ -1241,6 +1242,7 @@ async function openAppUrl(url: string) {
 async function openInstanceWindow(instance: InstanceBoardItem) {
   const result = await openInstanceDetailWindow(instance.id);
   if (!result.ok) showToast(t(result.code === "popup-blocked" ? "instances.window.popupBlocked" : "instances.window.switchFailed"));
+  // i18n-audit-allow-next-line code-token: toast presentation variant
   else if (result.action === "focused") showToast(t("instances.window.focusedExisting"), "info");
   closeFloatingLayers();
 }
@@ -1266,6 +1268,7 @@ async function selectInstance(id: string) {
   const desktopResult = await switchDesktopInstanceDetailWindow(id);
   if (desktopResult?.action === "focused") {
     finishInstanceSwitch(switchSequence);
+    // i18n-audit-allow-next-line code-token: toast presentation variant
     showToast(t("instances.window.focusedExisting"), "info");
     closeFloatingLayers();
     return;
@@ -1280,6 +1283,7 @@ async function selectInstance(id: string) {
     const webResult = await webWindowCoordinator.claim(id);
     if (webResult.action === "focused") {
       finishInstanceSwitch(switchSequence);
+      // i18n-audit-allow-next-line code-token: toast presentation variant
       showToast(t("instances.window.focusedExisting"), "info");
       closeFloatingLayers();
       return;

@@ -16,6 +16,10 @@ function windowsTitleBarOverlayOptions({ height, theme = "dark" } = {}) {
   };
 }
 
+function desktopWindowBackgroundColor(theme = "dark") {
+  return theme === "light" ? "#eef3f4" : "#071013";
+}
+
 function desktopTitleBarOptions({
   platform = process.platform,
   height,
@@ -47,6 +51,7 @@ function applyWindowsTitleBarTheme(targetWindow, nativeTheme, { height, theme })
 module.exports = {
   applyWindowsTitleBarTheme,
   desktopTitleBarOptions,
+  desktopWindowBackgroundColor,
   desktopWindowChromeMode,
   windowsTitleBarOverlayOptions,
 };
