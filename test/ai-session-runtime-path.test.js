@@ -60,7 +60,7 @@ test("AI session creation resolves a node folder identity before calling the ins
 
   assert.equal(result.instanceId, "instance-1");
   assert.deepEqual(result.input.cwd, { type: "runtime-path", path: "/workspace/packages/web" });
-  assert.equal("cwdFolderId" in result.input, false);
+  assert.equal(result.input.cwdFolderId, "folder-1");
 });
 
 test("AI session creation uses the instance workspace when no folder is selected", async () => {

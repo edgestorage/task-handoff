@@ -22,7 +22,7 @@ test("mobile session toolbar keeps AI fixed and disables split panes", () => {
 test("mobile session tabs require a long press before dragging", () => {
   assert.match(styles, /@media \(max-width: 780px\)[\s\S]*?\.session-tab-item\s*\{[^}]*touch-action: pan-x;[^}]*-webkit-touch-callout: none;/);
   assert.match(preview, /const mobileSessionTabDragHoldMs = 420;/);
-  assert.match(preview, /<ContextMenuTrigger as-child :disabled="!sessionSplitAvailable">/);
+  assert.match(preview, /<ContextMenuTrigger as-child :disabled="!sessionSplitAvailable && !windowAlwaysOnTopSupported">/);
   assert.match(preview, /!sessionSplitAvailable\.value && event\.pointerType === "touch"/);
   assert.match(preview, /window\.setTimeout\(\(\) => \{[\s\S]*activateSessionTabPointerDrag\(pending\.startX, pending\.startY\);[\s\S]*mobileSessionTabDragHoldMs/);
   assert.match(preview, /if \(!sessionTabPointerDrag\.value && waitsForLongPress\) \{\s*if \(distance > mobileSessionTabDragMoveTolerance\) cleanupSessionTabPointerDrag\(false\);\s*return;/);
