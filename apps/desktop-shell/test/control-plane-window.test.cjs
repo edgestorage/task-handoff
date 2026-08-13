@@ -42,6 +42,13 @@ test("control plane child windows use the compact content-backed titlebar", () =
   assert.match(createWindowSource, /rememberInstanceDetailSize\(controlPlaneWindow\.getBounds\(\)\)/);
 });
 
+test("the main window and live theme changes keep the native surface aligned with the renderer", () => {
+  const createWindowSource = mainSource.match(/function createWindow\(url\) \{[\s\S]*?\n\}/)?.[0] || "";
+  assert.match(createWindowSource, /backgroundColor: desktopWindowBackgroundColor\("dark"\)/);
+  assert.doesNotMatch(createWindowSource, /backgroundColor: "#eef3f4"/);
+  assert.match(mainSource, /ipcMain\.handle\("task-handoff:set-window-chrome-theme"[\s\S]*?targetWindow\.setBackgroundColor\(desktopWindowBackgroundColor\(theme\)\)/);
+});
+
 test("desktop constrains manual titlebar dragging to the sender window", () => {
   assert.match(mainSource, /ipcMain\.on\("task-handoff:window-drag"/);
   assert.match(mainSource, /BrowserWindow\.fromWebContents\(event\.sender\)/);

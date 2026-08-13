@@ -133,7 +133,23 @@
 
 .standalone-instance-detail .control-plane-instance-switcher-shell {
   display: flex;
+  width: fit-content;
+  max-width: min(200px, 28vw);
+  min-width: 100px;
   align-items: center;
+  flex: 0 1 auto;
+  overflow: hidden;
+}
+
+.standalone-instance-detail .control-plane-instance-switcher {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.standalone-instance-detail .control-plane-instance-node-name {
+  max-width: 140px;
 }
 
 .instance-detail-titlebar-tabs :deep(.session-preview-toolbar.in-titlebar) {
@@ -263,12 +279,11 @@
 }
 
 .control-plane-instance-switcher-title > strong {
-  flex: 0 1 auto;
-  min-width: 0;
+  flex: 0 0 auto;
 }
 
 .control-plane-instance-node-name {
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-width: 0;
   overflow: hidden;
   color: var(--text-muted);

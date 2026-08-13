@@ -19,12 +19,16 @@ test("instance title appends the authoritative node name as muted metadata", () 
   assert.match(styles, /\.control-plane-instance-switcher-shell > \.control-plane-kicker \{[\s\S]*?padding: 0 6px;/);
   assert.match(styles, /\.control-plane-shell \{[\s\S]*?--control-plane-titlebar-height: 56px;/);
   assert.match(styles, /\.control-plane-shell\.standalone-instance-detail \{\s*--control-plane-titlebar-height: 42px;/);
-  assert.match(styles, /\.standalone-instance-detail \.control-plane-instance-switcher-shell \{[\s\S]*?display: flex;[\s\S]*?align-items: center;/);
+  assert.match(styles, /\.standalone-instance-detail \.control-plane-instance-switcher-shell \{[\s\S]*?display: flex;[\s\S]*?max-width: min\(200px, 28vw\);[\s\S]*?min-width: 100px;[\s\S]*?align-items: center;[\s\S]*?overflow: hidden;/);
+  assert.match(styles, /\.standalone-instance-detail \.control-plane-instance-switcher \{[\s\S]*?width: 100%;[\s\S]*?max-width: 100%;[\s\S]*?overflow: hidden;/);
+  assert.match(styles, /\.standalone-instance-detail \.control-plane-instance-node-name \{\s*max-width: 140px;/);
   assert.match(styles, /\.instance-detail-titlebar-tabs \{[^}]*margin-left: 4px;/);
   assert.match(styles, /\.instance-detail-titlebar-tabs :deep\(\.session-preview-toolbar\.in-titlebar\) \{[^}]*padding-left: 0;/);
   assert.doesNotMatch(styles, /\.standalone-instance-detail \.control-plane-instance-switcher \{[^}]*height:/);
   assert.match(styles, /\.control-plane-workbench \{[\s\S]*?height: calc\(var\(--control-plane-viewport-height\) - var\(--control-plane-titlebar-height\)\);/);
   assert.match(styles, /\.control-plane-instance-switcher-title \{[\s\S]*?align-items: baseline;/);
+  assert.match(styles, /\.control-plane-instance-switcher-title > strong \{\s*flex: 0 0 auto;/);
+  assert.match(styles, /\.control-plane-instance-node-name \{[\s\S]*?flex: 1 1 0;[\s\S]*?min-width: 0;/);
   assert.match(styles, /\.control-plane-instance-switcher-chevron \{[\s\S]*?align-self: center;/);
   assert.match(styles, /\.control-plane-instance-node-name \{[\s\S]*?color: var\(--text-muted\);[\s\S]*?font-size: 12px;[\s\S]*?text-overflow: ellipsis;/);
   assert.match(styles, /@media \(max-width: 780px\) \{[\s\S]*?\.control-plane-instance-node-name \{\s*display: none;/);

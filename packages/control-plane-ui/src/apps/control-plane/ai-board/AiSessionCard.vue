@@ -135,7 +135,7 @@
         <DropdownMenuContent class="ai-board-card-menu" align="end" :side-offset="6" @click.stop>
           <DropdownMenuSub v-if="card.session.actions?.fork">
             <DropdownMenuSubTrigger class="ai-board-card-menu-item" :disabled="isForking">
-              <GitFork :size="13" />
+              <Split :size="13" />
               <span>{{ isForking ? t("sessions.actions.forking") : t("sessions.actions.fork") }}</span>
             </DropdownMenuSubTrigger>
             <DropdownMenuSubContent class="ai-board-card-menu">
@@ -174,7 +174,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { Ban, Check, ChevronLeft, ChevronRight, ExternalLink, GitFork, MoreHorizontal, Square, X, Zap } from "@lucide/vue";
+import { Ban, Check, ChevronLeft, ChevronRight, ExternalLink, MoreHorizontal, Split, Square, X, Zap } from "@lucide/vue";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import AiSessionCardContextMenu from "../../../components/ai-session/AiSessionCardContextMenu.vue";
 import AiSessionOriginMark from "../../../components/ai-session/AiSessionOriginMark.vue";

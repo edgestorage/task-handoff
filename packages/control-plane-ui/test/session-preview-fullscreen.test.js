@@ -21,4 +21,11 @@ test("expanded instance preview removes only the detail gutter", () => {
   assert.match(workbenchStyles, /\.instance-detail-titlebar-tabs\s*{[\s\S]*?-webkit-app-region: drag;/);
   assert.match(previewStyles, /\.session-preview-toolbar\.in-titlebar\s*{[\s\S]*?-webkit-app-region: drag;/);
   assert.match(previewStyles, /\.session-preview-toolbar\.in-titlebar :is\(button, input, \[role="tab"\], \[role="button"\]\),[\s\S]*?\.session-preview-toolbar\.in-titlebar \.session-tab-sortable-shell,[\s\S]*?-webkit-app-region: no-drag;/);
+  assert.doesNotMatch(previewStyles, /session-tab-overflow-mask-bg/);
+  assert.match(previewStyles, /\.session-tab-strip\[data-overflow-start="true"\]\[data-overflow-end="false"\] \{[\s\S]*?mask-image: linear-gradient\(90deg, transparent, #000 28px\);/);
+  assert.match(previewStyles, /\.session-tab-strip\[data-overflow-start="false"\]\[data-overflow-end="true"\] \{[\s\S]*?mask-image: linear-gradient\(270deg, transparent, #000 28px\);/);
+  assert.match(previewStyles, /\.session-tab-strip\[data-overflow-start="true"\]\[data-overflow-end="true"\] \{[\s\S]*?transparent 0,[\s\S]*?transparent 100%/);
+  assert.match(previewStyles, /\.session-preview-toolbar\.in-titlebar \.session-tab-strip \{[\s\S]*?mask-image: none;/);
+  assert.match(previewStyles, /\.session-preview-toolbar\.in-titlebar \.session-tab-strip-frame::before \{[\s\S]*?linear-gradient\(90deg, #0b1519, transparent\)/);
+  assert.match(previewStyles, /\.session-preview-toolbar\.in-titlebar \.session-tab-strip-frame::after \{[\s\S]*?linear-gradient\(270deg, #0b1519, transparent\)/);
 });

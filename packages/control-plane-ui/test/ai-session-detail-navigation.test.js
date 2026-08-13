@@ -21,10 +21,21 @@ test("AI session turn navigation keeps accessible labels without redundant toolt
   assert.match(navigator, /<button type="button" :aria-label="nextLabel \|\| t\('sessions\.actions\.nextMessage'/);
   assert.doesNotMatch(navigator, /Tooltip/);
   assert.match(repositoryEnvironment, /<TooltipContent side="bottom"[^>]*>\{\{ t\("repository\.environment\.title"\) \}\}/);
-  for (const action of ["openApp", "fork", "forkThroughTurn", "closeSession"]) {
+  for (const action of ["openApp", "continueFromTurn", "closeSession"]) {
     assert.match(panel, new RegExp(`<TooltipContent side="bottom"[^>]*>\\{\\{ t\\("sessions\\.actions\\.${action}"\\) \\}\\}`));
   }
   assert.match(panel, /<TooltipContent class="session-ai-info-tooltip"[\s\S]*?<dl>/);
+});
+
+test("narrow desktop windows and mobile share one compact detail actions menu", () => {
+  assert.match(panel, /compactDetailActions = useMediaQuery\("\(max-width: 920px\)"\)/);
+  assert.match(panel, /<template v-if="!compactDetailActions">[\s\S]*?trigger-appearance="detail"/);
+  assert.match(panel, /<DropdownMenu v-else :modal="false">[\s\S]*?<MoreHorizontal[\s\S]*?trigger-appearance="menu"/);
+  assert.match(panel, /@interact-outside="keepCompactActionsMenuOpenForRepository"/);
+  assert.match(panel, /target\.closest\("\.repository-environment-popover"\)[\s\S]*?event\.preventDefault\(\)/);
+  for (const action of ["openApp", "continueFromTurn", "closeSession"]) {
+    assert.match(panel, new RegExp(`session-ai-detail-actions-menu-item[\\s\\S]*?sessions\\.actions\\.${action}`));
+  }
 });
 
 test("AI session details render messages without redundant section titles", () => {
