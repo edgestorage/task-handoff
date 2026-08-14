@@ -128,7 +128,7 @@
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent class="board-launch-menu" align="center" :side-offset="6">
-                    <AppLaunchMenuItems :apps="launchableAppsForInstance(instance, t)" :folders="projectFoldersForInstance(instance)" :instance="instance" :launching="launchingApp" @launch="(appId, cwdFolderId) => launchBoardApp(instance, appId, cwdFolderId)" @new-project="openProjectPicker(instance)" />
+                    <AppLaunchMenuItems :apps="launchableAppsForInstance(instance, t)" :folders="projectFoldersForInstance(instance)" :instance="instance" :launching="launchingApp" submenu-class="board-launch-menu" @launch="(appId, cwdFolderId) => launchBoardApp(instance, appId, cwdFolderId)" @new-project="openProjectPicker(instance)" />
                   </DropdownMenuContent>
                 </DropdownMenu>
                 <span v-else>{{ boardCardDetail(instance) }}</span>
@@ -780,9 +780,9 @@ function canLaunchBoardApp(instance: InstanceBoardItem) {
   padding: 5px;
 }
 
-:global(.board-launch-menu-item) {
+:global(.board-launch-menu .app-launch-menu-item) {
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
+  grid-template-columns: 18px minmax(0, 1fr) 16px;
   align-items: center;
   gap: 8px;
   border-radius: 6px;
@@ -790,31 +790,32 @@ function canLaunchBoardApp(instance: InstanceBoardItem) {
   padding: 8px;
 }
 
-:global(.board-launch-menu-item:hover),
-:global(.board-launch-menu-item:focus-visible),
-:global(.board-launch-menu-item[data-highlighted]) {
+:global(.board-launch-menu .app-launch-menu-item:hover),
+:global(.board-launch-menu .app-launch-menu-item:focus-visible),
+:global(.board-launch-menu .app-launch-menu-item[data-highlighted]) {
   background: var(--surface-active);
   color: var(--white);
 }
 
-:global(.board-launch-menu-item span) {
+:global(.board-launch-menu .app-launch-menu-item span) {
   display: grid;
   min-width: 0;
+  gap: 2px;
 }
 
-:global(.board-launch-menu-item strong),
-:global(.board-launch-menu-item small) {
+:global(.board-launch-menu .app-launch-menu-item strong),
+:global(.board-launch-menu .app-launch-menu-item small) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-:global(.board-launch-menu-item strong) {
+:global(.board-launch-menu .app-launch-menu-item strong) {
   font-size: 12px;
   line-height: 1.25;
 }
 
-:global(.board-launch-menu-item small) {
+:global(.board-launch-menu .app-launch-menu-item small) {
   color: var(--text-subtle);
   font-size: 11px;
   line-height: 1.25;

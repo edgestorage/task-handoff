@@ -30,6 +30,7 @@
     --surface-overlay: hsl(0 0% 100%);
     --surface-hover: hsl(190 26% 93%);
     --surface-active: hsl(189 34% 88%);
+    --titlebar-overflow-fade: #ffffff;
     --text: hsl(198 30% 13%);
     --text-strong: hsl(195 33% 9%);
     --text-muted: hsl(194 11% 42%);
@@ -288,6 +289,7 @@
     --surface-overlay: hsl(198 33% 11%);
     --surface-hover: hsl(198 30% 17%);
     --surface-active: #173038;
+    --titlebar-overflow-fade: #0b1519;
     --text: #d9e5e8;
     --text-strong: hsl(188 38% 97%);
     --text-muted: hsl(192 13% 61%);

@@ -7,6 +7,7 @@ const read = (path) => fs.readFileSync(new URL(`../src/apps/control-plane/${path
 
 const workbench = read("ControlPlaneWorkbench.vue");
 const board = read("board/InstanceBoardView.vue");
+const appLaunchItems = read("shared/AppLaunchMenuItems.vue");
 const options = read("shared/InstanceViewOptionsMenu.vue");
 const terminal = read("board/useBoardTerminalPreviews.ts");
 
@@ -63,6 +64,14 @@ test("each instance board card opens the control-plane instance detail window", 
 test("board empty states use the themed inset surface", () => {
   assert.match(board, /\.board-empty \{[\s\S]*?background: var\(--surface-inset\);/);
   assert.doesNotMatch(board, /\.board-empty \{[\s\S]*?background: var\(--white\);/);
+});
+
+test("board app launch menus keep parent and project flyout layouts consistent", () => {
+  assert.match(board, /<AppLaunchMenuItems[\s\S]*?submenu-class="board-launch-menu"/);
+  assert.match(appLaunchItems, /<DropdownMenuSubContent :class="submenuClass \|\| 'app-launch-menu'">/);
+  assert.match(board, /:global\(\.board-launch-menu \.app-launch-menu-item\) \{[\s\S]*?grid-template-columns: 18px minmax\(0, 1fr\) 16px;/);
+  assert.match(board, /:global\(\.board-launch-menu \.app-launch-menu-item span\) \{[\s\S]*?display: grid;[\s\S]*?gap: 2px;/);
+  assert.doesNotMatch(board, /board-launch-menu-item/);
 });
 
 test("mobile board groups flow directly into a single card column", () => {

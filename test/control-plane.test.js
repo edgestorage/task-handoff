@@ -4442,7 +4442,8 @@ test("local docker executor checks local images and pulls registry images before
     },
   });
   assert.equal(resumed.runtime.containerId, "container-1");
-  assert.equal(resumed.target.web, undefined);
+  assert.equal(resumed.target.web, "http://127.0.0.1:18081");
+  assert.equal(resumed.target.api, "http://127.0.0.1:18081/api");
   assert.equal(existingCalls.filter(([, args]) => args[0] === "volume" && args[1] === "create").length, 1);
   assert.ok(existingCalls.some(([, args]) => args[0] === "volume" && args[1] === "create" && args.at(-1) === "task-handoff-inst_1-runtime"));
   assert.deepEqual(existingCalls.filter(([, args]) => args[0] === "volume" && args[1] === "inspect").map(([, args]) => args.at(-1)), [
@@ -4616,6 +4617,7 @@ test("local docker executor checks local images and pulls registry images before
 test("node agent runs local docker behind node-local target and auto-imports agent config on start and restart", async (t) => {
   const calls = [];
   const fetchCalls = [];
+  let modelEnvironmentStatus = 200;
   let containerExists = false;
   const desiredRuntimeVersion = runtimeVersionStateForActual().desiredVersion;
   let app;
@@ -4642,6 +4644,12 @@ test("node agent runs local docker behind node-local target and auto-imports age
     }),
     fetchImpl: async (url, init = {}) => {
       fetchCalls.push({ url: String(url), method: init.method || "GET" });
+      if (new URL(String(url)).pathname === "/api/internal/model-environment") {
+        return new Response(JSON.stringify({ error: { code: "INSTANCE_UNAVAILABLE", message: "stale endpoint" } }), {
+          status: modelEnvironmentStatus,
+          headers: { "content-type": "application/json" },
+        });
+      }
       return new Response(JSON.stringify({ data: { ok: true } }), {
         status: 200,
         headers: { "content-type": "application/json" },
@@ -4773,7 +4781,15 @@ test("node agent runs local docker behind node-local target and auto-imports age
   assert.ok(calls.some(([, args]) => args[0] === "run" && args.includes("127.0.0.1::8080")));
   assert.ok(calls.some(([, args]) => args[0] === "run" && args.includes("TASK_HANDOFF_NODE_AGENT_URL=http://host.docker.internal:18091")));
 
+  modelEnvironmentStatus = 503;
+  await createAndAssignNodeModel(app, "inst_1", { key: "restart-fallback-key" });
+  assert.equal(
+    app.nodeAgentState.instancePrivateConfigs.get("inst_1").environment.OPENAI_API_KEY,
+    "restart-fallback-key",
+  );
+
   fetchCalls.length = 0;
+  const restartCallsBeforeRequest = calls.filter(([, args]) => args[0] === "restart").length;
   const restarted = await app.inject({
     method: "POST",
     url: "/api/node-agent/instances/inst_1/restart",
@@ -4783,6 +4799,7 @@ test("node agent runs local docker behind node-local target and auto-imports age
     payload: {},
   });
   assert.equal(restarted.statusCode, 200);
+  assert.equal(calls.filter(([, args]) => args[0] === "restart").length, restartCallsBeforeRequest + 1);
   assert.deepEqual(
     fetchCalls
       .map((call) => `${call.method} ${new URL(call.url).pathname}`)

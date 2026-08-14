@@ -128,8 +128,16 @@
                       >
                         {{ t("sessions.tabs.alwaysOnTop") }}
                       </ContextMenuCheckboxItem>
-                      <ContextMenuCheckboxItem v-model="sessionStatusBarVisible" class="instance-action-item session-status-bar-menu-item">
+                      <ContextMenuCheckboxItem v-model="sessionStatusBarVisible" class="instance-action-item session-toggle-menu-item session-status-bar-menu-item">
                         {{ t("sessions.tabs.showStatusBar") }}
+                      </ContextMenuCheckboxItem>
+                      <ContextMenuCheckboxItem
+                        v-if="!standalone"
+                        :model-value="instanceSidebarVisible"
+                        class="instance-action-item session-toggle-menu-item session-instance-sidebar-menu-item"
+                        @update:model-value="$emit('update:instanceSidebarVisible', Boolean($event))"
+                      >
+                        {{ t("sessions.tabs.showInstanceSidebar") }}
                       </ContextMenuCheckboxItem>
                     </ContextMenuContent>
                   </ContextMenu>
@@ -289,8 +297,16 @@
       >
         {{ t("sessions.tabs.alwaysOnTop") }}
       </ContextMenuCheckboxItem>
-      <ContextMenuCheckboxItem v-model="sessionStatusBarVisible" class="instance-action-item session-status-bar-menu-item">
+      <ContextMenuCheckboxItem v-model="sessionStatusBarVisible" class="instance-action-item session-toggle-menu-item session-status-bar-menu-item">
         {{ t("sessions.tabs.showStatusBar") }}
+      </ContextMenuCheckboxItem>
+      <ContextMenuCheckboxItem
+        v-if="!standalone"
+        :model-value="instanceSidebarVisible"
+        class="instance-action-item session-toggle-menu-item session-instance-sidebar-menu-item"
+        @update:model-value="$emit('update:instanceSidebarVisible', Boolean($event))"
+      >
+        {{ t("sessions.tabs.showInstanceSidebar") }}
       </ContextMenuCheckboxItem>
     </ContextMenuContent>
     </ContextMenu>
@@ -362,8 +378,16 @@
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent class="instance-action-menu">
-        <ContextMenuCheckboxItem v-model="sessionStatusBarVisible" class="instance-action-item session-status-bar-menu-item">
+        <ContextMenuCheckboxItem v-model="sessionStatusBarVisible" class="instance-action-item session-toggle-menu-item session-status-bar-menu-item">
           {{ t("sessions.tabs.showStatusBar") }}
+        </ContextMenuCheckboxItem>
+        <ContextMenuCheckboxItem
+          v-if="!standalone"
+          :model-value="instanceSidebarVisible"
+          class="instance-action-item session-toggle-menu-item session-instance-sidebar-menu-item"
+          @update:model-value="$emit('update:instanceSidebarVisible', Boolean($event))"
+        >
+          {{ t("sessions.tabs.showInstanceSidebar") }}
         </ContextMenuCheckboxItem>
       </ContextMenuContent>
     </ContextMenu>
@@ -448,6 +472,7 @@ const props = defineProps<{
   canLaunchApp: boolean;
   copiedText: string;
   instance: InstanceWithAiSessions;
+  instanceSidebarVisible?: boolean;
   isInstanceActionBusy: (instance: InstanceBoardItem) => boolean;
   launchableApps: LaunchableApp[];
   launchingApp: boolean;
@@ -493,6 +518,7 @@ const emit = defineEmits<{
   selectSession: [sessionKey: string, pane?: SessionPaneId];
   stopSession: [instance: InstanceBoardItem, session: SessionTab];
   "update:appLaunchMenuOpen": [open: boolean];
+  "update:instanceSidebarVisible": [visible: boolean];
   "update:previewExpanded": [expanded: boolean];
   "update:sessionMenuOpen": [open: boolean];
 }>();

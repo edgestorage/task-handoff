@@ -176,6 +176,57 @@ test("docker executor creates and labels authoritative volumes before docker run
   assert.equal("managedVolumes" in result.runtime, false);
 });
 
+test("docker executor refreshes the published endpoint when starting an existing container", async () => {
+  const value = context();
+  const containerName = "task-handoff-inst_one";
+  const containerId = "existing-container-id";
+  const runtimeVolume = volumeForInspection(value, `task-handoff-${value.instance.id}-runtime`);
+  const calls = [];
+  const executor = new LocalDockerExecutor(async (_command, args) => {
+    calls.push(args);
+    if (args[0] === "inspect" && args.includes("{{json .}}")) {
+      return { stdout: JSON.stringify({
+        Id: containerId,
+        State: { Running: false },
+        Config: {
+          Entrypoint: ["/bin/bash"],
+          Cmd: ["/run/task-handoff/bootstrap/entrypoint.sh", "task-handoff", "web"],
+          Labels: {
+            "task-handoff.bootstrap-abi": "1",
+            "task-handoff.instance-id": value.instance.id,
+          },
+        },
+        Mounts: [
+          ...persistentVolumes(value).map((volume) => ({ Type: "volume", Name: volume.name, Destination: volume.mountPath })),
+          { Type: "volume", Name: runtimeVolume.name, Destination: runtimeVolume.mountPath },
+          { Type: "bind", Source: path.resolve("docker"), Destination: "/run/task-handoff/bootstrap" },
+          { Type: "bind", Source: path.resolve(value.project.source.path), Destination: value.project.workspacePolicy.path },
+        ],
+      }), stderr: "" };
+    }
+    if (args[0] === "volume" && args[1] === "inspect") {
+      const volume = volumeForInspection(value, args.at(-1));
+      return { stdout: JSON.stringify({ Name: volume.name, Labels: volume.labels }), stderr: "" };
+    }
+    if (args[0] === "port") return { stdout: "127.0.0.1:19090", stderr: "" };
+    return { stdout: "", stderr: "" };
+  }, { launcherAssetsDir: path.resolve("docker") });
+
+  const result = await executor.start({
+    ...value,
+    instance: {
+      ...value.instance,
+      target: { strategy: "direct-port", status: "reachable", web: "http://127.0.0.1:18080", api: "http://127.0.0.1:18080/api" },
+      runtime: { ...value.instance.runtime, containerName, containerId },
+    },
+  });
+
+  assert.equal(result.target.web, "http://127.0.0.1:19090");
+  assert.equal(result.target.api, "http://127.0.0.1:19090/api");
+  assert.ok(calls.some((args) => args[0] === "start" && args[1] === containerName));
+  assert.ok(calls.some((args) => args[0] === "port" && args[1] === containerName && args[2] === "8080/tcp"));
+});
+
 test("legacy containers are rebuilt from the same image under the node-agent bootstrap without starting the old entrypoint", async () => {
   const value = context();
   const calls = [];

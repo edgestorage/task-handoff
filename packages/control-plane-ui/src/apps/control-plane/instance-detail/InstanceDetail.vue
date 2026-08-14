@@ -79,10 +79,10 @@
             </div>
           </TooltipProvider>
           <div class="instance-controls" :aria-label="t('instances.detail.controls')">
-            <TooltipProvider :delay-duration="120">
+            <TooltipProvider v-if="!standalone" :delay-duration="120">
               <Tooltip>
                 <TooltipTrigger as-child>
-                  <Button variant="outline" size="icon" :aria-label="t('instances.window.openInNewWindow')" @click="$emit('openWindow', instance)">
+                  <Button variant="outline" size="icon-sm" :aria-label="t('instances.window.openInNewWindow')" @click="$emit('openWindow', instance)">
                     <ExternalLink :size="14" />
                   </Button>
                 </TooltipTrigger>
@@ -131,6 +131,7 @@
         :can-launch-app="canLaunchApp"
         :copied-text="copiedText"
         :instance="instance"
+        :instance-sidebar-visible="instanceSidebarVisible"
         :is-instance-action-busy="isInstanceActionBusy"
         :launchable-apps="launchableApps"
         :launching-app="launchingApp"
@@ -173,6 +174,7 @@
         @select-session="(sessionKey, pane) => $emit('selectSession', sessionKey, pane)"
         @stop-session="(target, session) => $emit('stopSession', target, session)"
         @update:app-launch-menu-open="$emit('update:appLaunchMenuOpen', $event)"
+        @update:instance-sidebar-visible="$emit('update:instanceSidebarVisible', $event)"
         @update:preview-expanded="$emit('update:previewExpanded', $event)"
         @update:session-menu-open="$emit('update:sessionMenuOpen', $event)"
       />
@@ -228,6 +230,7 @@ const props = defineProps<{
   error?: string;
   instance?: InstanceWithAiSessions;
   instanceDisplayName: (instance: InstanceBoardItem) => string;
+  instanceSidebarVisible?: boolean;
   isInstanceActionBusy: (instance: InstanceBoardItem) => boolean;
   lastRefreshLabel: string;
   leftSession?: SessionTab;
@@ -277,6 +280,7 @@ defineEmits<{
   selectSession: [sessionKey: string, pane?: SessionPaneId];
   stopSession: [instance: InstanceBoardItem, session: SessionTab];
   "update:appLaunchMenuOpen": [open: boolean];
+  "update:instanceSidebarVisible": [visible: boolean];
   "update:previewExpanded": [expanded: boolean];
   "update:sessionMenuOpen": [open: boolean];
 }>();

@@ -103,6 +103,7 @@ import {
   APP_SESSION_DELTA_RETENTION_MS,
   AppSessionDeltaResponseSchema,
   AppSessionEventType,
+  AppSessionRecordSchema,
   activeAppSessionsSnapshotFromRecords,
   appSessionsSnapshotFromRecords,
   type AppSessionPatchEvent,
@@ -1833,9 +1834,11 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       const closed = await aiSessionClose.closeForAppSession(request.params.id);
       if (closed) {
         publishAiSessionSnapshot("control-action");
-        return { data: closed };
       }
-      return { data: appRuntime.stop(request.params.id) };
+      const session = closed
+        ? appRuntime.getSession(request.params.id)
+        : appRuntime.stop(request.params.id);
+      return { data: AppSessionRecordSchema.parse(session) };
     } catch (error: unknown) {
       return reply.code(404).send({ error: { code: "APP_SESSION_NOT_FOUND", message: error instanceof Error ? error.message : String(error) } });
     }

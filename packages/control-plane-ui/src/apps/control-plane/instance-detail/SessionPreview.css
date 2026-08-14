@@ -211,12 +211,12 @@
 
 .session-preview-toolbar.in-titlebar .session-tab-strip-frame::before {
   left: 0;
-  background: linear-gradient(90deg, #0b1519, transparent);
+  background: linear-gradient(90deg, var(--titlebar-overflow-fade), transparent);
 }
 
 .session-preview-toolbar.in-titlebar .session-tab-strip-frame::after {
   right: 0;
-  background: linear-gradient(270deg, #0b1519, transparent);
+  background: linear-gradient(270deg, var(--titlebar-overflow-fade), transparent);
 }
 
 .session-preview-toolbar.in-titlebar .session-tab-strip-frame:has(.session-tab-strip[data-overflow-start="true"])::before,
@@ -489,12 +489,12 @@
   white-space: nowrap;
 }
 
-.session-status-bar-menu-item {
+.session-toggle-menu-item {
   position: relative;
   padding-left: 30px;
 }
 
-.session-status-bar-menu-item > span:first-child {
+.session-toggle-menu-item > span:first-child {
   position: absolute;
   left: 8px;
   width: 14px;

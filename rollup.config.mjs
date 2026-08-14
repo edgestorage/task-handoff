@@ -4,8 +4,10 @@ import terser from "@rollup/plugin-terser";
 import typescript from "@rollup/plugin-typescript";
 import { rmSync } from "node:fs";
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { runtimePackages } from "./runtime-packages.config.mjs";
 
+const require = createRequire(import.meta.url);
 const packageJson = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"));
 const external = Object.keys({
   ...(packageJson.dependencies || {}),
@@ -42,6 +44,18 @@ const plugins = [
   }),
   commonjs({ transformMixedEsModules: true, extensions: [".js", ".ts"] }),
 ];
+
+const runtimeDependencyEntrypoints = {
+  name: "runtime-dependency-entrypoints",
+  resolveId(source) {
+    // @xterm/headless@6.0.0 publishes a Node-compatible CommonJS entrypoint,
+    // but its `module` field points at a file that is absent from the package.
+    // Resolve the authoritative `main` entry so Rollup includes it instead of
+    // silently leaving a runtime require in the portable controlled instance.
+    if (source === "@xterm/headless") return require.resolve(source);
+    return null;
+  },
+};
 
 let cleaned = false;
 const cleanDist = {
@@ -122,6 +136,12 @@ function runtimeMinifier() {
 
 function runtimeBuild(name, definition) {
   const outputDir = `dist/runtime-packages/${name}`;
+  const onwarn = (warning, warn) => {
+    if (warning.code === "UNRESOLVED_IMPORT") {
+      throw new Error(`Runtime package ${name} contains an unresolved import: ${warning.source || warning.message}`);
+    }
+    warn(warning);
+  };
   const builds = [
     {
       input: definition.input,
@@ -132,7 +152,8 @@ function runtimeBuild(name, definition) {
         inlineDynamicImports: true,
       },
       external: externalFrom(definition.dependencies),
-      plugins: [cleanRuntimeDir(outputDir), ...plugins, runtimeMinifier()],
+      onwarn,
+      plugins: [cleanRuntimeDir(outputDir), runtimeDependencyEntrypoints, ...plugins, runtimeMinifier()],
     },
   ];
   if (definition.updateWorkerInput) {
@@ -145,7 +166,8 @@ function runtimeBuild(name, definition) {
         inlineDynamicImports: true,
       },
       external: externalFrom(definition.dependencies),
-      plugins: [cleanRuntimeDir(outputDir), ...plugins, runtimeMinifier()],
+      onwarn,
+      plugins: [cleanRuntimeDir(outputDir), runtimeDependencyEntrypoints, ...plugins, runtimeMinifier()],
     });
   }
   return builds;

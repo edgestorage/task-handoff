@@ -40,7 +40,7 @@ if [ "$(id -u)" = "0" ] && [ "${TASK_HANDOFF_PRIVILEGE_DROPPED:-0}" != "1" ]; th
     chown agent:agent "${TASK_HANDOFF_WORKSPACE:-/workspace}"
   fi
   export TASK_HANDOFF_PRIVILEGE_DROPPED=1
-  exec sudo --preserve-env -u agent -- bash "$0" "$@"
+  exec sudo --preserve-env --set-home -u agent -- bash "$0" "$@"
 fi
 
 mkdir -p \

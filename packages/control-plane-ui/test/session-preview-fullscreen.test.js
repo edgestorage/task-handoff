@@ -6,10 +6,11 @@ const workbench = fs.readFileSync(new URL("../src/apps/control-plane/ControlPlan
 const workbenchStyles = fs.readFileSync(new URL("../src/apps/control-plane/ControlPlaneWorkbench.css", import.meta.url), "utf8");
 const detailStyles = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/InstanceDetail.css", import.meta.url), "utf8");
 const previewStyles = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/SessionPreview.css", import.meta.url), "utf8");
+const themeStyles = fs.readFileSync(new URL("../../web-theme/theme.css", import.meta.url), "utf8");
 
 test("expanded instance preview removes only the detail gutter", () => {
   assert.match(workbench, /<header class="control-plane-topbar"/);
-  assert.match(workbench, /<InstanceList\s+[\s\S]*?v-if="!standaloneMode && instanceViewMode && !settingsMode"/);
+  assert.match(workbench, /<InstanceList\s+[\s\S]*?v-if="!standaloneMode && instanceViewMode && !settingsMode && instancesSidebarVisible"/);
   assert.match(workbench, /<InstanceDetail\s+[\s\S]*?:class="\{ 'preview-expanded': sessionPreviewExpanded \}"/);
   assert.doesNotMatch(workbench, /detailFullscreen|detail-fullscreen/);
   assert.doesNotMatch(workbenchStyles, /detail-fullscreen/);
@@ -26,6 +27,8 @@ test("expanded instance preview removes only the detail gutter", () => {
   assert.match(previewStyles, /\.session-tab-strip\[data-overflow-start="false"\]\[data-overflow-end="true"\] \{[\s\S]*?mask-image: linear-gradient\(270deg, transparent, #000 28px\);/);
   assert.match(previewStyles, /\.session-tab-strip\[data-overflow-start="true"\]\[data-overflow-end="true"\] \{[\s\S]*?transparent 0,[\s\S]*?transparent 100%/);
   assert.match(previewStyles, /\.session-preview-toolbar\.in-titlebar \.session-tab-strip \{[\s\S]*?mask-image: none;/);
-  assert.match(previewStyles, /\.session-preview-toolbar\.in-titlebar \.session-tab-strip-frame::before \{[\s\S]*?linear-gradient\(90deg, #0b1519, transparent\)/);
-  assert.match(previewStyles, /\.session-preview-toolbar\.in-titlebar \.session-tab-strip-frame::after \{[\s\S]*?linear-gradient\(270deg, #0b1519, transparent\)/);
+  assert.match(previewStyles, /\.session-preview-toolbar\.in-titlebar \.session-tab-strip-frame::before \{[\s\S]*?linear-gradient\(90deg, var\(--titlebar-overflow-fade\), transparent\)/);
+  assert.match(previewStyles, /\.session-preview-toolbar\.in-titlebar \.session-tab-strip-frame::after \{[\s\S]*?linear-gradient\(270deg, var\(--titlebar-overflow-fade\), transparent\)/);
+  assert.match(themeStyles, /:root,\s*\[data-theme="light"\] \{[\s\S]*?--titlebar-overflow-fade: #ffffff;/);
+  assert.match(themeStyles, /\.dark,\s*\[data-theme="dark"\] \{[\s\S]*?--titlebar-overflow-fade: #0b1519;/);
 });

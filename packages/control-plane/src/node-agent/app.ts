@@ -312,23 +312,40 @@ async function autoImportAgentConfig(fetchImpl: typeof fetch, instance: Controll
   }
 }
 
-async function syncAssignedModelEnvironment(fetchImpl: typeof fetch, state: NodeAgentState, instanceId: string) {
+async function syncAssignedModelEnvironment(
+  fetchImpl: typeof fetch,
+  state: NodeAgentState,
+  instanceId: string,
+  warn?: (data: Record<string, unknown>, message: string) => void,
+) {
   const instance = state.requireInstance(instanceId);
   state.instancePrivateConfigs.materialize(instance.id, instance.registrationToken, state.resolvedAssignedModelEnvironment(instanceId));
   if (instance.targetStatus !== "reachable" || !instance.target.web) return false;
-  const response = await fetchWithTimeout(fetchImpl, `${nodeLocalInstanceWebBase(instance)}/api/internal/model-environment`, {
-    method: "PUT",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${instance.registrationToken}`,
-    },
-    body: JSON.stringify(state.resolvedAssignedModelEnvironment(instanceId)),
-  }, DEFAULT_AUTO_IMPORT_AGENT_CONFIG_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetchWithTimeout(fetchImpl, `${nodeLocalInstanceWebBase(instance)}/api/internal/model-environment`, {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${instance.registrationToken}`,
+      },
+      body: JSON.stringify(state.resolvedAssignedModelEnvironment(instanceId)),
+    }, DEFAULT_AUTO_IMPORT_AGENT_CONFIG_TIMEOUT_MS);
+  } catch (error) {
+    warn?.({
+      instanceId,
+      targetWeb: instance.target.web,
+      error: error instanceof Error ? error.message : String(error),
+    }, "node instance model environment live sync deferred");
+    return false;
+  }
   if (!response.ok) {
-    throw Object.assign(new Error(`Instance ${instanceId} rejected its managed model environment with HTTP ${response.status}.`), {
-      statusCode: 502,
-      code: "INSTANCE_MODEL_ENVIRONMENT_APPLY_FAILED",
-    });
+    warn?.({
+      instanceId,
+      targetWeb: instance.target.web,
+      statusCode: response.status,
+    }, "node instance model environment live sync deferred");
+    return false;
   }
   return true;
 }
@@ -964,7 +981,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     deleteLocalFolder: (id) => state.localFolders.delete(id),
   });
 
-  registerNodeModelRoutes(app, state.modelRegistry, (id) => syncAssignedModelEnvironment(fetchImpl, state, id));
+  registerNodeModelRoutes(app, state.modelRegistry, (id) => syncAssignedModelEnvironment(fetchImpl, state, id, lifecycleLoggers.warn));
 
   registerEnvironmentTemplateRoutes(app, environmentTemplates);
 
@@ -1064,7 +1081,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     fetchImpl,
     metrics: instanceProxyMetrics,
     instanceBase: (id) => nodeLocalInstanceWebBase(state.requireInstance(id)),
-    syncModelEnvironment: (id) => syncAssignedModelEnvironment(fetchImpl, state, id),
+    syncModelEnvironment: (id) => syncAssignedModelEnvironment(fetchImpl, state, id, lifecycleLoggers.warn),
     diagnostic: logDiagnostic,
   });
 

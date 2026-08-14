@@ -48,6 +48,6 @@ test("an open menu temporarily makes the titlebar clickable for outside dismissa
   assert.match(styles, /\.control-plane-topbar \{[\s\S]*?-webkit-app-region: drag;/);
   assert.match(
     styles,
-    /:global\(body:has\(\[role="menu"\]\[data-state="open"\]\) \.control-plane-topbar\) \{\s*-webkit-app-region: no-drag;/,
+    /:global\(body:has\(\[role="menu"\]\[data-state="open"\]\) \.control-plane-topbar\),\s*:global\(body:has\(\[role="menu"\]\[data-state="open"\]\) \.instance-detail-titlebar-tabs\),\s*:global\(body:has\(\[role="menu"\]\[data-state="open"\]\) \.session-preview-toolbar\.in-titlebar\),\s*:global\(body:has\(\[role="menu"\]\[data-state="open"\]\) \[role="menu"\]\[data-state="open"\]\) \{\s*-webkit-app-region: no-drag;/,
   );
 });

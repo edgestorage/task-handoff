@@ -2,6 +2,7 @@ import { computed, onBeforeUnmount, ref, type CSSProperties } from "vue";
 
 const INSTANCE_WIDTH_STORAGE_KEY = "task-handoff.control-plane.instances-width";
 const INSTANCE_COLLAPSED_STORAGE_KEY = "task-handoff.control-plane.instances-collapsed";
+const INSTANCE_VISIBLE_STORAGE_KEY = "task-handoff.control-plane.instances-visible";
 const INSTANCE_WIDTH_DEFAULT = 292;
 const INSTANCE_WIDTH_MIN = 220;
 const INSTANCE_WIDTH_MAX = 440;
@@ -17,12 +18,17 @@ function storedInstancesCollapsed() {
   return window.localStorage?.getItem(INSTANCE_COLLAPSED_STORAGE_KEY) === "true";
 }
 
+function storedInstancesVisible() {
+  return window.localStorage?.getItem(INSTANCE_VISIBLE_STORAGE_KEY) !== "false";
+}
+
 function clampInstanceWidth(value: number) {
   return Math.min(INSTANCE_WIDTH_MAX, Math.max(INSTANCE_WIDTH_MIN, Math.round(value)));
 }
 
 export function useResizableInstancesSidebar() {
   const instancesCollapsed = ref(storedInstancesCollapsed());
+  const instancesSidebarVisible = ref(storedInstancesVisible());
   const instancesWidth = ref(storedInstanceWidth());
   let instanceResizeCleanup: (() => void) | undefined;
 
@@ -39,6 +45,11 @@ export function useResizableInstancesSidebar() {
 
   function persistInstancesCollapsed() {
     window.localStorage?.setItem(INSTANCE_COLLAPSED_STORAGE_KEY, String(instancesCollapsed.value));
+  }
+
+  function setInstancesSidebarVisible(visible: boolean) {
+    instancesSidebarVisible.value = visible;
+    window.localStorage?.setItem(INSTANCE_VISIBLE_STORAGE_KEY, String(visible));
   }
 
   function collapseInstances() {
@@ -97,6 +108,8 @@ export function useResizableInstancesSidebar() {
     collapseInstances,
     expandInstances,
     instancesCollapsed,
+    instancesSidebarVisible,
+    setInstancesSidebarVisible,
     startInstanceResize,
     stopInstanceResize,
     workbenchStyle,

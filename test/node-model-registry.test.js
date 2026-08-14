@@ -136,6 +136,52 @@ test("node model registry uses immutable content hashes, private storage, and ha
   assert.equal(app.nodeAgentState.resolvedAssignedModelEnvironment("inst_models").OPENAI_API_KEY, "rotated-secret");
 });
 
+test("node model assignment persists private config when live environment sync cannot connect", async (t) => {
+  const dataDir = tempDataDir();
+  const app = await createNodeAgentApp({
+    dataDir,
+    logger: false,
+    token: "agent-secret",
+    nodeId: "node_offline_assignment",
+    fetchImpl: async () => {
+      throw new TypeError("fetch failed");
+    },
+  });
+  t.after(async () => app.close());
+
+  const timestamp = new Date().toISOString();
+  assert.equal((await request(app, "POST", "/api/node-agent/instances", instancePayload("inst_offline_assignment", timestamp))).statusCode, 201);
+  const current = app.nodeAgentState.requireInstance("inst_offline_assignment");
+  app.nodeAgentState.controlledInstances.put({
+    ...current,
+    status: "running",
+    connectionStatus: "online",
+    targetStatus: "reachable",
+    uiAccessStatus: "reachable",
+    target: {
+      strategy: "direct-port",
+      status: "reachable",
+      web: "http://127.0.0.1:18080",
+      api: "http://127.0.0.1:18080/api",
+    },
+    updatedAt: timestamp,
+  });
+
+  const model = modelInput({ key: "offline-instance-secret" });
+  const created = await request(app, "POST", "/api/node-agent/models", model);
+  assert.equal(created.statusCode, 201);
+  const assigned = await request(app, "PUT", "/api/node-agent/instances/inst_offline_assignment/model-assignment", {
+    modelSelection: { codexModelHash: created.json().data.id },
+    codexModelHash: created.json().data.id,
+  });
+
+  assert.equal(assigned.statusCode, 200);
+  assert.equal(
+    app.nodeAgentState.instancePrivateConfigs.get("inst_offline_assignment").environment.OPENAI_API_KEY,
+    "offline-instance-secret",
+  );
+});
+
 test("node agent migrates complete legacy model sidecars to content hashes and preserves unmappable sidecars", async (t) => {
   const dataDir = tempDataDir();
   let app = await createNodeAgentApp({ dataDir, logger: false, token: "agent-secret", nodeId: "node_migration" });
