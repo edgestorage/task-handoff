@@ -6623,6 +6623,77 @@ test("controlled instance history routes use trusted Task Handoff entries for re
   }
 });
 
+test("controlled instance app stop always returns the App Session record", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-app-stop-response-"));
+  const paths = appRuntimeTestPaths(root);
+  const restoreEnv = withWebStorageEnv(paths);
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const runtime = new AppRuntimeManager(paths);
+  const sessions = new Map([
+    ["app_plain", {
+      id: "app_plain", appId: "terminal-tty", title: "Plain terminal", kind: "tty", status: "running",
+      createdAt: "2026-08-15T00:00:00.000Z", updatedAt: "2026-08-15T00:00:00.000Z",
+    }],
+    ["app_ai", {
+      id: "app_ai", appId: "codex", title: "Codex", kind: "tty", status: "running",
+      createdAt: "2026-08-15T00:00:00.000Z", updatedAt: "2026-08-15T00:00:00.000Z",
+    }],
+  ]);
+  const stops = [];
+  runtime.listSessions = () => [...sessions.values()];
+  runtime.getSession = (id) => sessions.get(id);
+  runtime.stop = (id) => {
+    const current = sessions.get(id);
+    if (!current) throw Object.assign(new Error("App session not found."), { code: "APP_SESSION_NOT_FOUND" });
+    const stopped = { ...current, status: "stopped", updatedAt: "2026-08-15T00:01:00.000Z" };
+    sessions.set(id, stopped);
+    stops.push(id);
+    return stopped;
+  };
+  registry.applyAdapterSnapshot({
+    agent: "codex",
+    creationSource: "app-session",
+    appId: "codex",
+    appSessionId: "app_ai",
+    providerSessionId: "thread_ai",
+    cwd: "/workspace",
+    status: "idle",
+  });
+  const bridge = {
+    id: "app-stop-response-codex-stub",
+    agent: "codex",
+    refresh() {},
+    async sync() {},
+    stop() {},
+    async archiveSession() {},
+    async unsubscribeSession() {},
+    async interrupt(session) { return { session, provider: "codex", action: "interrupt" }; },
+  };
+  const app = await createWebApp({
+    staticDir: path.join(root, "missing-static"),
+    logger: false,
+    appRuntime: runtime,
+    aiSessionRegistry: registry,
+    codexAppServer: bridge,
+  });
+  try {
+    const plain = await app.inject({ method: "POST", url: "/api/apps/sessions/app_plain/stop", payload: {} });
+    assert.equal(plain.statusCode, 200);
+    assert.equal(plain.json().data.id, "app_plain");
+    assert.equal(plain.json().data.status, "stopped");
+
+    const ai = await app.inject({ method: "POST", url: "/api/apps/sessions/app_ai/stop", payload: {} });
+    assert.equal(ai.statusCode, 200);
+    assert.equal(ai.json().data.id, "app_ai");
+    assert.equal(ai.json().data.status, "stopped");
+    assert.equal("aiSessionId" in ai.json().data, false);
+    assert.deepEqual(stops, ["app_plain", "app_ai"]);
+  } finally {
+    await app.close();
+    restoreEnv();
+  }
+});
+
 test("app runtime catalog reflects executable availability on every read", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-app-availability-"));
   const paths = appRuntimeTestPaths(root);

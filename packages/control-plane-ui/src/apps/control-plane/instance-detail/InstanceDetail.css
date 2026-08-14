@@ -283,8 +283,8 @@
   }
 
   .instance-detail-layout {
-    height: auto;
-    min-height: 640px;
+    height: 100%;
+    min-height: 0;
   }
 
   .detail-head {

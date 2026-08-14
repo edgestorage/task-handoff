@@ -76,6 +76,10 @@
   --control-plane-titlebar-height: 42px;
 }
 
+.control-plane-shell.standalone-instance-detail .control-plane-topbar {
+  padding-right: 0;
+}
+
 .control-plane-shell.standalone-instance-detail .control-plane-workbench.standalone-detail-mode > .instance-detail {
   width: 100%;
   height: 100%;
@@ -104,7 +108,10 @@
  * them as outside interactions. While a menu portal is open, let the page
  * receive the first titlebar click so the menu can dismiss normally.
  */
-:global(body:has([role="menu"][data-state="open"]) .control-plane-topbar) {
+:global(body:has([role="menu"][data-state="open"]) .control-plane-topbar),
+:global(body:has([role="menu"][data-state="open"]) .instance-detail-titlebar-tabs),
+:global(body:has([role="menu"][data-state="open"]) .session-preview-toolbar.in-titlebar),
+:global(body:has([role="menu"][data-state="open"]) [role="menu"][data-state="open"]) {
   -webkit-app-region: no-drag;
 }
 
@@ -122,8 +129,15 @@
   height: var(--control-plane-titlebar-height);
   align-items: stretch;
   flex: 1 1 auto;
-  margin-left: 4px;
   overflow: hidden;
+}
+
+.instance-detail-titlebar-divider {
+  width: 1px;
+  height: 20px;
+  margin: 0 8px;
+  flex: 0 0 auto;
+  background: color-mix(in srgb, var(--line) 70%, transparent);
 }
 
 .standalone-instance-detail .topbar-left {
@@ -142,14 +156,92 @@
 }
 
 .standalone-instance-detail .control-plane-instance-switcher {
+  --instance-switcher-fade-color: var(--titlebar-overflow-fade);
+  position: relative;
   width: 100%;
+  height: 30px;
   max-width: 100%;
   min-width: 0;
   overflow: hidden;
 }
 
+.standalone-instance-detail .control-plane-instance-switcher:hover,
+.standalone-instance-detail .control-plane-instance-switcher[data-state="open"] {
+  --instance-switcher-fade-color: color-mix(in srgb, hsl(var(--accent)) 70%, var(--surface));
+  background: var(--instance-switcher-fade-color);
+}
+
+.standalone-instance-detail .control-plane-instance-switcher:focus-visible {
+  outline: none;
+}
+
+.standalone-instance-detail .control-plane-instance-switcher::after {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 14px;
+  opacity: 0;
+  pointer-events: none;
+  background: linear-gradient(to right, transparent, var(--instance-switcher-fade-color) 72%);
+  transition: opacity 0.15s ease, width 0.15s ease;
+}
+
+.standalone-instance-detail .control-plane-instance-switcher[data-overflow="true"]::after {
+  opacity: 1;
+}
+
+.standalone-instance-detail .control-plane-instance-switcher:hover::after,
+.standalone-instance-detail .control-plane-instance-switcher:focus-visible::after,
+.standalone-instance-detail .control-plane-instance-switcher[data-state="open"]::after {
+  width: 32px;
+  opacity: 1;
+}
+
+.standalone-instance-detail .control-plane-instance-switcher-title > strong {
+  overflow: visible;
+  color: var(--text-muted);
+  font-size: 14px;
+  text-overflow: clip;
+}
+
+.standalone-instance-detail .control-plane-instance-switcher-title {
+  width: max-content;
+}
+
+.standalone-instance-detail .control-plane-instance-switcher-icon {
+  display: inline-flex;
+  align-self: center;
+  flex: 0 0 auto;
+  color: var(--text-subtle);
+}
+
+.standalone-instance-detail .control-plane-instance-switcher-chevron {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  right: 5px;
+  transform: translate(3px, -50%);
+}
+
 .standalone-instance-detail .control-plane-instance-node-name {
-  max-width: 140px;
+  flex: 0 0 auto;
+  max-width: none;
+  overflow: visible;
+  color: var(--text-subtle);
+  text-overflow: clip;
+}
+
+.standalone-instance-detail .control-plane-instance-switcher:hover .control-plane-instance-switcher-chevron,
+.standalone-instance-detail .control-plane-instance-switcher:focus-visible .control-plane-instance-switcher-chevron,
+.standalone-instance-detail .control-plane-instance-switcher[data-state="open"] .control-plane-instance-switcher-chevron {
+  transform: translate(0, -50%);
+}
+
+.standalone-instance-detail .control-plane-instance-switcher[data-state="open"] .control-plane-instance-switcher-chevron {
+  transform: translate(0, -50%) rotate(180deg);
 }
 
 .instance-detail-titlebar-tabs :deep(.session-preview-toolbar.in-titlebar) {
@@ -509,6 +601,10 @@
 
 .control-plane-workbench.instances-collapsed {
   grid-template-columns: 52px minmax(0, 1fr);
+}
+
+.control-plane-workbench.instances-sidebar-hidden {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .control-plane-workbench.board-mode {

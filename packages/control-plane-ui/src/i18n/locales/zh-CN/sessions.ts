@@ -89,7 +89,7 @@ export const sessions = {
     views: "会话视图", paneViews: "{pane} 会话视图", paneTabs: "{pane} 会话标签", status: "状态", close: "关闭会话", closeNamed: "关闭 {name}",
     rename: "重命名会话", moveLeft: "移到左侧", moveRight: "移到右侧", manageApps: "管理应用", manageAppsDescription: "安装或卸载应用",
     paneMenu: "此窗格中的会话", emptyPane: "此窗格中没有会话", closeSplit: "关闭分栏视图", split: "分栏显示会话", restore: "还原会话预览",
-    expand: "展开会话预览", restoreShort: "还原预览", expandShort: "展开预览", resizePanes: "调整会话窗格大小", instanceStatus: "实例状态", showStatusBar: "显示底部状态栏", alwaysOnTop: "窗口置顶", alwaysOnTopReadFailed: "无法读取窗口置顶设置。", alwaysOnTopFailed: "无法更新窗口置顶设置。",
+    expand: "展开会话预览", restoreShort: "还原预览", expandShort: "展开预览", resizePanes: "调整会话窗格大小", instanceStatus: "实例状态", showStatusBar: "显示底部状态栏", showInstanceSidebar: "显示实例侧栏", alwaysOnTop: "窗口置顶", alwaysOnTopReadFailed: "无法读取窗口置顶设置。", alwaysOnTopFailed: "无法更新窗口置顶设置。",
     health: "健康状态 {status}", workspace: "工作区 {status}", waitingMetrics: "正在等待第一份资源采样。", resourcesUnavailable: "资源不可用",
     resourcesLoading: "正在加载资源", lastRefresh: "上次刷新 {time}", appSession: "应用会话", app: "应用", titleRequired: "会话标题不能为空。", renameFailed: "无法重命名会话。",
     resourcesStarting: "资源正在启动", resourcesStopped: "资源已停止", resourcesStale: "资源数据已过期", waitingContainer: "正在等待 Docker 容器 · 采样于 {time}",

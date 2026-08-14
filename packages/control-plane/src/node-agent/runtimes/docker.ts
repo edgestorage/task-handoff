@@ -226,7 +226,7 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
       } catch (cause) {
         throw runtimeExecutorError("RUNTIME_EXECUTOR_FAILED", `Could not start Docker container ${containerName}.`, cause);
       }
-      return this.bootstrapResult(context, containerName, existing.id);
+      return this.resumedContainerResult(context, containerName, existing.id);
     }
     if (context.instance.environmentTemplateOrigin) {
       const inspected = await this.inspectEnvironmentTemplateImage(context.instance.environmentTemplateOrigin.imageId);
@@ -456,21 +456,20 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
   }
 
   private async runningResult(context: ExecutorContext, containerName: string, containerId?: string): Promise<ExecutorStartResult> {
-    const webPort = await this.containerPort(containerName, "8080/tcp");
-    const web = webPort ? `http://127.0.0.1:${webPort}` : undefined;
+    const endpoint = await this.publishedEndpoint(containerName);
     const nodeId = context.node?.id || "node_unset";
     const runtimeId = context.runtime?.id || "runtime_local_docker";
     return {
       status: "registering",
       health: "unknown",
-      connectionStatus: web ? "online" : "unknown",
+      connectionStatus: "online",
       agentStatus: "unknown",
       targetStatus: "unknown",
       uiAccessStatus: "unknown",
       target: {
         strategy: "direct-port",
-        status: web ? "reachable" : "unknown",
-        ...(web ? { web, api: `${web}/api` } : {}),
+        status: "reachable",
+        ...endpoint,
       },
       workspace: {
         mode: context.project.workspacePolicy.mode,
@@ -492,6 +491,22 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
         },
       },
     };
+  }
+
+  private async resumedContainerResult(context: ExecutorContext, containerName: string, containerId: string): Promise<ExecutorStartResult> {
+    const result = this.bootstrapResult(context, containerName, containerId);
+    return {
+      ...result,
+      target: {
+        ...result.target,
+        ...await this.publishedEndpoint(containerName),
+      },
+    };
+  }
+
+  private async publishedEndpoint(containerName: string) {
+    const web = `http://127.0.0.1:${await this.containerPort(containerName, "8080/tcp")}`;
+    return { web, api: `${web}/api` };
   }
 
   private bootstrapResult(context: ExecutorContext, containerName: string, containerId?: string, backupName?: string): ExecutorStartResult {
@@ -792,28 +807,72 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
     return { platform: normalizedPlatform, arch: normalizedArch, launcherAbi: 1 };
   }
 
-  /** Restores the same stopped container before a retryable runtime installation. */
-  async ensureRuntimeInstallTargetRunning(containerName: string, expectedContainerId?: string): Promise<string> {
+  /**
+   * Installs through the managed container when it is healthy enough for
+   * docker exec, or through a disposable helper sharing the same mounts when
+   * the active application release is too broken to keep the container alive.
+   */
+  async installRuntimeReleaseWithRecovery(request: DockerRuntimeInstallRequest): Promise<void> {
+    const containerName = request.containerName;
     const before = await this.inspectContainerForStart(containerName);
     if (!before) {
       throw runtimeExecutorError("INSTANCE_RUNTIME_INSTALL_FAILED", `Docker container ${containerName} does not exist.`);
     }
-    assertExpectedContainerId(containerName, before.id, expectedContainerId, "before runtime install recovery", "INSTANCE_RUNTIME_INSTALL_FAILED");
-    if (before.running) return before.id;
-    try {
-      await this.runCommand("docker", ["start", before.id]);
-    } catch (cause) {
-      throw runtimeExecutorError("INSTANCE_RUNTIME_INSTALL_FAILED", `Could not restore stopped Docker container ${containerName} before runtime installation.`, cause);
+    assertExpectedContainerId(containerName, before.id, request.expectedContainerId, "before runtime install recovery", "INSTANCE_RUNTIME_INSTALL_FAILED");
+    if (before.running) {
+      await this.installRuntimeLauncher(containerName, before.id);
+      await this.installRuntimeRelease({ ...request, expectedContainerId: before.id });
+      return;
     }
+    if (!before.image) {
+      throw runtimeExecutorError("INSTANCE_RUNTIME_INSTALL_FAILED", `Docker container ${containerName} does not expose its immutable image identity.`);
+    }
+
+    const mountedArtifact = "/run/task-handoff/runtime-rescue-artifact.tar.gz";
+    const installScript = [
+      `test -r ${DOCKER_BOOTSTRAP_ENTRYPOINT}`,
+      `test -r ${DOCKER_BOOTSTRAP_CONTAINER_DIR}/instance-launcher.sh`,
+      `test -r ${DOCKER_RUNTIME_INSTALLER}`,
+      `install -d -o root -g root -m 0755 ${DOCKER_RUNTIME_ROOT} ${DOCKER_RUNTIME_ROOT}/releases ${DOCKER_RUNTIME_ROOT}/staging ${DOCKER_RUNTIME_ROOT}/incoming`,
+      `chown -R root:root ${DOCKER_RUNTIME_ROOT}`,
+      `chmod -R go-w ${DOCKER_RUNTIME_ROOT}`,
+      `node ${DOCKER_RUNTIME_INSTALLER} install --artifact "$1" --version "$2" --sha256 "$3" --platform "$4" --arch "$5" --launcher-abi "$6"`,
+    ].join("; ");
+    try {
+      await this.runCommand("docker", [
+        "run",
+        "--rm",
+        "--user",
+        "0:0",
+        "--volumes-from",
+        before.id,
+        "--mount",
+        `type=bind,source=${path.resolve(request.artifactPath)},target=${mountedArtifact},readonly`,
+        "--entrypoint",
+        DOCKER_BOOTSTRAP_EXECUTABLE,
+        before.image,
+        "-ceu",
+        installScript,
+        "task-handoff-runtime-rescue",
+        mountedArtifact,
+        request.identity.version,
+        request.identity.sha256,
+        request.identity.platform,
+        request.identity.arch,
+        String(request.identity.launcherAbi),
+      ]);
+    } catch (cause) {
+      throw runtimeExecutorError("INSTANCE_RUNTIME_INSTALL_FAILED", `Could not rescue controlled-instance ${request.identity.version} in stopped container ${containerName}.`, cause);
+    }
+
     const after = await this.inspectContainerForStart(containerName);
     if (!after) {
       throw runtimeExecutorError("INSTANCE_RUNTIME_INSTALL_FAILED", `Docker container ${containerName} disappeared during runtime install recovery.`);
     }
-    assertExpectedContainerId(containerName, after.id, expectedContainerId || before.id, "after runtime install recovery", "INSTANCE_RUNTIME_INSTALL_FAILED");
-    if (!after.running) {
-      throw runtimeExecutorError("INSTANCE_RUNTIME_INSTALL_FAILED", `Docker container ${containerName} stopped again during runtime install recovery.`);
+    assertExpectedContainerId(containerName, after.id, before.id, "after runtime install recovery", "INSTANCE_RUNTIME_INSTALL_FAILED");
+    if (after.running) {
+      throw runtimeExecutorError("INSTANCE_RUNTIME_INSTALL_FAILED", `Stopped Docker container ${containerName} changed lifecycle state during runtime install recovery.`);
     }
-    return after.id;
   }
 
   /** Verifies the launcher bundle mounted from this node-agent and prepares its persistent runtime root. */

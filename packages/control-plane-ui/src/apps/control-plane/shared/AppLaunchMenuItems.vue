@@ -8,7 +8,7 @@
           <small>{{ app.id }}</small>
         </span>
       </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent class="app-launch-menu">
+      <DropdownMenuSubContent :class="submenuClass || 'app-launch-menu'">
         <div class="app-launch-project-search" @click.stop @keydown.stop>
           <Search :size="13" />
           <input v-model="folderSearch" type="search" :placeholder="t('sessions.tabs.searchProjects')" :aria-label="t('sessions.tabs.searchProjects')" />
@@ -58,6 +58,7 @@ const props = defineProps<{
   folders?: NodeLocalFolder[];
   instance: InstanceBoardItem;
   launching: boolean;
+  submenuClass?: string;
 }>();
 const { t } = useI18n();
 

@@ -131,8 +131,7 @@ test("server package owns the unified management command and runtimes stay indep
   assert.equal(runtimePackages["control-plane"].binName, "task-handoff-control-plane");
   assert.equal(runtimePackages["node-agent"].binName, "task-handoff-node-agent");
   assert.equal(runtimePackages["controlled-instance"].binName, "task-handoff-controlled-instance");
-  assert.equal(runtimePackages["controlled-instance"].dependencies["@xterm/headless"], "^6.0.0");
-  assert.equal(runtimePackages["controlled-instance"].dependencies["node-pty"], "^1.1.0");
+  assert.deepEqual(runtimePackages["controlled-instance"].dependencies, { "node-pty": "^1.1.0" });
   assert.equal(runtimePackages.server.input, "apps/cli/src/runtime/server.ts");
   assert.doesNotMatch(prepare, /task-handoff-server-install/);
   assert.doesNotMatch(prepare, /name === "control-plane"/);

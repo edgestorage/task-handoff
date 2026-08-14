@@ -31,8 +31,10 @@
           <DropdownMenu :open="instanceSwitcherOpen" @update:open="updateInstanceSwitcherOpen">
             <DropdownMenuTrigger as-child>
               <button
+                ref="instanceSwitcherElement"
                 type="button"
                 class="control-plane-instance-switcher"
+                :data-overflow="instanceSwitcherOverflow ? 'true' : undefined"
                 :aria-label="t('instances.list.switchInstance')"
                 @pointerdown.capture="startInstanceSwitcherPointer"
                 @pointermove="moveInstanceSwitcherPointer"
@@ -41,7 +43,12 @@
                 @click.capture="consumeInstanceSwitcherClick"
                 @dblclick.stop
               >
-              <span class="control-plane-instance-switcher-title">
+              <span ref="instanceSwitcherTitleElement" class="control-plane-instance-switcher-title">
+                <span v-if="standaloneMode" class="control-plane-instance-switcher-icon" aria-hidden="true">
+                  <Laptop v-if="topbarRuntimeType === 'local'" :size="14" />
+                  <Container v-else-if="topbarRuntimeType === 'docker'" :size="14" />
+                  <Boxes v-else :size="14" />
+                </span>
                 <strong>{{ topbarTitle }}</strong>
                 <small v-if="topbarNodeName" class="control-plane-instance-node-name" :title="topbarNodeName">· {{ topbarNodeName }}</small>
                 <ChevronDown class="control-plane-instance-switcher-chevron" :size="16" aria-hidden="true" />
@@ -78,6 +85,7 @@
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
+        <span v-if="standaloneMode && sessionPreviewExpanded && !hasSessionSplit" class="instance-detail-titlebar-divider" aria-hidden="true" />
         <div v-if="standaloneMode" id="instance-detail-titlebar-tabs" class="instance-detail-titlebar-tabs" />
       </div>
       <div v-if="!standaloneMode" class="control-plane-actions">
@@ -137,9 +145,9 @@
       />
     </header>
 
-    <main class="control-plane-workbench" :class="{ 'instances-collapsed': instancesCollapsed, 'board-mode': !instanceViewMode || settingsMode, 'standalone-detail-mode': standaloneMode }" :style="standaloneMode ? undefined : workbenchStyle">
+    <main class="control-plane-workbench" :class="{ 'instances-collapsed': instancesCollapsed, 'instances-sidebar-hidden': !instancesSidebarVisible, 'board-mode': !instanceViewMode || settingsMode, 'standalone-detail-mode': standaloneMode }" :style="standaloneMode ? undefined : workbenchStyle">
       <InstanceList
-        v-if="!standaloneMode && instanceViewMode && !settingsMode"
+        v-if="!standaloneMode && instanceViewMode && !settingsMode && instancesSidebarVisible"
         v-model:filter="instanceFilter"
         :active-action-label="activeActionLabel"
         :active-instance-id="activeInstance?.id"
@@ -254,6 +262,7 @@
         :error="standaloneDetailError || (board.error.value ? errorText(board.error.value) : '')"
         :instance="standaloneOwnershipReady ? activeInstanceWithAiSessions : undefined"
         :instance-display-name="instanceDisplayName"
+        :instance-sidebar-visible="instancesSidebarVisible"
         :is-instance-action-busy="isInstanceActionBusy"
         :last-refresh-label="lastRefreshLabel"
         :left-session="leftSession"
@@ -297,6 +306,7 @@
         @select-ai-session="selectAiSession"
         @select-session="selectSession"
         @stop-session="stopSelectedAppSession"
+        @update:instance-sidebar-visible="setInstancesSidebarVisible"
       />
     </main>
 
@@ -366,7 +376,7 @@ import type { SupportedLocale } from "../../i18n/locale";
 import { translateApiError } from "../../i18n/apiError";
 import { useQueries, useQueryClient } from "@tanstack/vue-query";
 import { useEventListener } from "@vueuse/core";
-import { Bot, Check, ChevronDown, Download, House, LayoutGrid, LoaderCircle, LogOut, Maximize2, Minus, RefreshCw, Settings, X } from "@lucide/vue";
+import { Bot, Boxes, Check, ChevronDown, Container, Download, House, Laptop, LayoutGrid, LoaderCircle, LogOut, Maximize2, Minus, RefreshCw, Settings, X } from "@lucide/vue";
 import "@xterm/xterm/css/xterm.css";
 import { controlPlaneQueryKeys, getInstanceAppManagement, getInstanceResourceMetrics, installInstanceApp, instanceBoardQueryOptions, logoutControlPlane, nodeLocalFoldersQueryOptions, renameAppSession, resolveAiSessionApproval, saveEnvironmentTemplate, uninstallInstanceApp, updateControlledInstance, useAuthSessionQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useInstanceBoardQuery, useInstanceDirectoryQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
 import type { ControlPlaneInstanceResourceEntry } from "@task-handoff/control-plane-client";
@@ -430,6 +440,9 @@ const standaloneOwnershipResolved = ref(!standaloneMode.value);
 const standaloneOwnershipReady = ref(!standaloneMode.value);
 const standaloneOwnershipConflict = ref(false);
 const instanceSwitcherOpen = ref(false);
+const instanceSwitcherElement = ref<HTMLButtonElement>();
+const instanceSwitcherTitleElement = ref<HTMLElement>();
+const instanceSwitcherOverflow = ref(false);
 const instanceSwitchLoadingVisible = ref(false);
 const initialWorkbenchLoadingVisible = ref(true);
 const initialWorkbenchLoadingFinished = ref(false);
@@ -437,6 +450,23 @@ let instanceSwitcherPointer: { pointerId: number; startScreenX: number; startScr
 let suppressInstanceSwitcherClick = false;
 let instanceSwitchLoadingTimer: number | undefined;
 let instanceSwitchSequence = 0;
+let instanceSwitcherResizeObserver: ResizeObserver | undefined;
+
+function syncInstanceSwitcherOverflow() {
+  const trigger = instanceSwitcherElement.value;
+  instanceSwitcherOverflow.value = Boolean(trigger && trigger.scrollWidth > trigger.clientWidth + 1);
+}
+
+function observeInstanceSwitcherOverflow() {
+  if (!standaloneMode.value) return;
+  instanceSwitcherResizeObserver?.disconnect();
+  if (typeof ResizeObserver !== "undefined") {
+    instanceSwitcherResizeObserver = new ResizeObserver(syncInstanceSwitcherOverflow);
+    if (instanceSwitcherElement.value) instanceSwitcherResizeObserver.observe(instanceSwitcherElement.value);
+    if (instanceSwitcherTitleElement.value) instanceSwitcherResizeObserver.observe(instanceSwitcherTitleElement.value);
+  }
+  syncInstanceSwitcherOverflow();
+}
 
 type BoardSize = "small" | "medium" | "large";
 type WorkbenchView = "instance" | "board" | "ai";
@@ -557,7 +587,7 @@ const windowChromeMode = desktopBridge?.windowChrome?.mode;
 const showCustomWindowControls = hasDesktopWindowControls && windowChromeMode === "custom";
 const showNativeWindowControlSpace = hasDesktopWindowControls && windowChromeMode === "macos-overlay";
 const showWindowsNativeWindowControlSpace = hasDesktopWindowControls && windowChromeMode === "windows-overlay";
-const { collapseInstances, expandInstances, instancesCollapsed, startInstanceResize, stopInstanceResize, workbenchStyle } = useResizableInstancesSidebar();
+const { collapseInstances, expandInstances, instancesCollapsed, instancesSidebarVisible, setInstancesSidebarVisible, startInstanceResize, stopInstanceResize, workbenchStyle } = useResizableInstancesSidebar();
 const imagePullProgress = useImagePullProgress();
 const boardInstances = computed(() => (board.data.value || []).map((instance) => {
   const progress = imagePullProgress.state(instance.id);
@@ -703,6 +733,11 @@ const topbarTitle = computed(() => {
     return selectedDetail?.name || standaloneDirectoryInstance.value?.name || t("navigation.controlPlane");
   }
   return settingsSectionTitle(settingsSection.value);
+});
+const topbarRuntimeType = computed(() => {
+  if (!standaloneMode.value) return activeInstance.value?.runtime?.type;
+  if (activeInstance.value?.id === standaloneInstanceId.value) return activeInstance.value.runtime?.type;
+  return standaloneDirectoryInstance.value?.runtime.type;
 });
 const topbarNodeName = computed(() => {
   if (standaloneMode.value && activeInstance.value?.id !== standaloneInstanceId.value) return "";
@@ -929,6 +964,8 @@ useEventListener(window, "click", handleGlobalClick);
 useEventListener(window, "keydown", handleGlobalKeydown);
 
 onBeforeUnmount(() => {
+  instanceSwitcherResizeObserver?.disconnect();
+  instanceSwitcherResizeObserver = undefined;
   finishInstanceSwitch(instanceSwitchSequence);
   cancelInstanceSwitcherPointer();
   stopDesktopOpenSettings?.();
@@ -944,6 +981,8 @@ onBeforeUnmount(() => {
 
 onMounted(async () => {
   if (!standaloneMode.value) return;
+  await nextTick();
+  observeInstanceSwitcherOverflow();
   if (!standaloneInstanceId.value) {
     standaloneOwnershipResolved.value = true;
     return;

@@ -126,29 +126,36 @@ test("Docker restart validates the authoritative container id before restart", a
   assert.equal(calls.some((args) => args[0] === "restart"), false);
 });
 
-test("Docker runtime install recovery starts the same stopped container before retry", async () => {
+test("Docker runtime install recovery uses a disposable helper when the managed runtime cannot stay alive", async () => {
   const calls = [];
-  let running = false;
   const executor = new LocalDockerExecutor(async (_command, args) => {
     calls.push(args);
     if (args[0] === "inspect" && args.includes("{{json .}}")) {
       return { stdout: JSON.stringify({
         Id: "authoritative-container",
-        State: { Running: running },
+        Image: "sha256:managed-image",
+        State: { Running: false },
         Config: { Entrypoint: [], Cmd: [], Labels: { "task-handoff.instance-id": "instance-1" } },
         Mounts: [],
       }), stderr: "" };
     }
-    if (args[0] === "start") {
-      running = true;
-      return { stdout: "instance-1", stderr: "" };
-    }
+    if (args[0] === "run") return { stdout: "", stderr: "" };
     throw new Error(`unexpected Docker command: ${args.join(" ")}`);
   });
 
-  assert.equal(await executor.ensureRuntimeInstallTargetRunning("instance-1", "authoritative-container"), "authoritative-container");
-  assert.equal(calls.filter((args) => args[0] === "start").length, 1);
-  assert.ok(calls.some((args) => args[0] === "start" && args[1] === "authoritative-container"));
+  await executor.installRuntimeReleaseWithRecovery({
+    containerName: "instance-1",
+    expectedContainerId: "authoritative-container",
+    artifactPath: "/cache/runtime.tar.gz",
+    identity,
+  });
+  const rescue = calls.find((args) => args[0] === "run");
+  assert.ok(rescue);
+  assert.ok(rescue.includes("--rm"));
+  assert.deepEqual(rescue.slice(rescue.indexOf("--volumes-from"), rescue.indexOf("--volumes-from") + 2), ["--volumes-from", "authoritative-container"]);
+  assert.ok(rescue.includes("sha256:managed-image"));
+  assert.ok(rescue.some((arg) => arg.includes("source=/cache/runtime.tar.gz")));
+  assert.equal(calls.some((args) => ["start", "exec", "cp", "restart"].includes(args[0])), false);
 });
 
 test("Docker runtime install recovery never starts a replacement container", async () => {
@@ -167,7 +174,7 @@ test("Docker runtime install recovery never starts a replacement container", asy
   });
 
   await assert.rejects(
-    () => executor.ensureRuntimeInstallTargetRunning("instance-1", "authoritative-container"),
+    () => executor.installRuntimeReleaseWithRecovery({ containerName: "instance-1", expectedContainerId: "authoritative-container", artifactPath: "/cache/runtime.tar.gz", identity }),
     (error) => error.code === "INSTANCE_RUNTIME_INSTALL_FAILED" && /identity mismatch before runtime install recovery/.test(error.message),
   );
   assert.equal(calls.some((args) => args[0] === "start"), false);
@@ -224,7 +231,7 @@ test("Linux launcher sources and package preparation enforce LF line endings", (
   }
   const entrypoint = fs.readFileSync(path.resolve(__dirname, "../docker/entrypoint.sh"), "utf8");
   const launcher = fs.readFileSync(path.resolve(__dirname, "../docker/instance-launcher.sh"), "utf8");
-  assert.match(entrypoint, /sudo --preserve-env -u agent -- bash "\$0"/);
+  assert.match(entrypoint, /sudo --preserve-env --set-home -u agent -- bash "\$0"/);
   assert.match(entrypoint, /exec bash "\$\{TASK_HANDOFF_INSTANCE_LAUNCHER\}"/);
   assert.doesNotMatch(launcher, /task-handoff-controlled-instance/);
 });
