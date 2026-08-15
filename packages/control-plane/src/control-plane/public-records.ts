@@ -3,6 +3,7 @@ import {
   CONTROL_PLANE_PROTOCOL_VERSION,
   FinalComputerPlatformSchema,
   FinalComputerArchSchema,
+  NodeAgentCapabilitiesSchema,
   ModelConfigSchema,
   ProjectSchema,
   sanitizeStoredProject,
@@ -25,6 +26,7 @@ export function publicNodeAgentCapabilities(data: unknown) {
   const build = BuildInfoSchema.safeParse(record.build);
   const platform = FinalComputerPlatformSchema.safeParse(record.platform);
   const arch = FinalComputerArchSchema.safeParse(record.arch);
+  const capabilities = NodeAgentCapabilitiesSchema.safeParse(record.capabilities);
   return {
     ...(typeof record.ok === "boolean" ? { ok: record.ok } : {}),
     ...(typeof record.role === "string" ? { role: record.role } : {}),
@@ -32,6 +34,7 @@ export function publicNodeAgentCapabilities(data: unknown) {
     ...(typeof record.protocolVersion === "string" ? { protocolVersion: record.protocolVersion } : {}),
     ...(platform.success ? { platform: platform.data } : {}),
     ...(arch.success ? { arch: arch.data } : {}),
+    ...(capabilities.success ? { capabilities: capabilities.data } : {}),
     ...(build.success ? { build: build.data } : {}),
     ...(typeof record.serverTime === "string" ? { serverTime: record.serverTime } : {}),
   };

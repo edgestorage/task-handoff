@@ -344,6 +344,7 @@ test("AI session Fork compensates provider and managed worktree after projection
     controller,
     materializationTimeoutMs: 5,
     prepareManagedWorktree: async () => ({ cwd: "/managed/worktree/subfolder", worktreeId: "worktree-fork" }),
+    validateManagedWorktree: async () => true,
     removeManagedWorktree: async (_source, worktreeId) => { removed.push(worktreeId); return true; },
     onDiagnostic: (entry) => diagnostics.push(entry),
   });
@@ -359,6 +360,38 @@ test("AI session Fork compensates provider and managed worktree after projection
   assert.equal(diagnostics[0].providerSessionId, "thread-unprojected");
   assert.equal(diagnostics[0].worktreeId, "worktree-fork");
   assert.match(diagnostics[0].cleanupFailures[0], /delete unavailable/);
+});
+
+test("AI session Fork revalidates a restored managed worktree before provider creation", async () => {
+  const { registry, controller } = runtime();
+  const source = registry.applyAdapterSnapshot({
+    agent: "codex",
+    providerSessionId: "thread-worktree-validation-source",
+    cwd: "/workspace/project",
+    actions: { fork: true },
+    status: "idle",
+  });
+  let forks = 0;
+  const removed = [];
+  controller.register({
+    agent: "codex",
+    async forkSession() { forks += 1; throw new Error("must not fork"); },
+    async interrupt(session) { return { session, provider: "codex", action: "interrupt" }; },
+  });
+  const coordinator = new AiSessionForkCoordinator({
+    registry,
+    controller,
+    prepareManagedWorktree: async () => ({ cwd: "/managed/worktree", worktreeId: "worktree-invalid" }),
+    validateManagedWorktree: async () => false,
+    removeManagedWorktree: async (_source, worktreeId) => { removed.push(worktreeId); return true; },
+  });
+
+  await assert.rejects(
+    coordinator.fork(source.id, { clientRequestId: "fork-invalid-worktree", workspace: { mode: "managed-worktree" } }),
+    (error) => error.code === "AI_SESSION_FORK_WORKTREE_UNAVAILABLE",
+  );
+  assert.equal(forks, 0);
+  assert.deepEqual(removed, ["worktree-invalid"]);
 });
 
 test("AI session Fork rejects invalid turn and managed-worktree history combinations", async () => {

@@ -8,7 +8,7 @@ import {
   InstanceResourceMetricsSchema,
   type InstanceLifecycleSnapshot,
 } from "@task-handoff/protocol/control-plane";
-import { AiSessionUnreadEventType, AiSessionUnreadStateSchema, type AiSessionUnreadState } from "@task-handoff/protocol/ai-sessions";
+import { AiSessionTimelineItemEventSchema, AiSessionUnreadEventType, AiSessionUnreadStateSchema, type AiSessionTimelineItemEvent, type AiSessionUnreadState } from "@task-handoff/protocol/ai-sessions";
 import { safeParseResponse } from "@task-handoff/protocol/response-validation";
 import type { SessionStreamDescriptor } from "@task-handoff/protocol/events";
 import type { AppManagementEvent } from "../../api/types";
@@ -47,6 +47,8 @@ export function useControlPlaneEvents(input: {
     applyEvent: (event: AiSessionDeltaResponse["events"][number]) => boolean;
     applyUnreadEvent: (state: AiSessionUnreadState) => boolean;
     applyMessageDelta: (payload: AiSessionMessageDeltaEvent) => boolean;
+    applyTimelineItem: (payload: AiSessionTimelineItemEvent) => boolean;
+    recoverTimelineItems: () => void;
     recoverDescriptor: (descriptor: SessionStreamDescriptor) => Promise<void>;
   };
   appSessions: {
@@ -74,6 +76,7 @@ export function useControlPlaneEvents(input: {
   let socket: WebSocket | undefined;
   let closing = false;
   let reconnectAttempt = 0;
+  let hasOpened = false;
 
   function connect() {
     if (input.enabled !== undefined && !toValue(input.enabled)) return;
@@ -82,12 +85,15 @@ export function useControlPlaneEvents(input: {
     const current = new WebSocket(eventsUrl(toValue(input.instanceId || "")));
     socket = current;
     current.addEventListener("open", () => {
+      const recovering = hasOpened;
+      hasOpened = true;
       reconnectAttempt = 0;
       const instanceId = toValue(input.instanceId || "");
       current.send(JSON.stringify({ type: "subscribe", topics: ["*"], ...(instanceId ? { instanceIds: [instanceId] } : {}) }));
       void queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.scopedInstanceBoard(toValue(input.instanceId || "")) });
       void input.appManagement?.recoverOpen();
       void input.resourceMetrics?.recoverOpen();
+      if (recovering) input.aiSessions.recoverTimelineItems();
     });
     current.addEventListener("message", (event) => handleMessage(String(event.data)));
     current.addEventListener("close", () => {
@@ -141,6 +147,10 @@ export function useControlPlaneEvents(input: {
     }
     if (event.type === AiSessionEventType.MessageDelta) {
       return input.aiSessions.applyMessageDelta(event.payload as AiSessionMessageDeltaEvent);
+    }
+    if (event.type === AiSessionEventType.TimelineItem) {
+      const item = safeParseResponse(AiSessionTimelineItemEventSchema, event.payload);
+      return item.success ? input.aiSessions.applyTimelineItem(item.data) : false;
     }
     if (event.type === AiSessionUnreadEventType.Updated) {
       const state = safeParseResponse(AiSessionUnreadStateSchema, event.payload);

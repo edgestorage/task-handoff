@@ -21,11 +21,31 @@ type WorktreeRecord = {
   prunable: boolean;
 };
 type InternalWorktree = RepositoryWorktrees["items"][number] & { canonicalPath: string };
+type ManagedWorktreeIntent = {
+  requestId?: string;
+  ref: { type: "head" } | { type: "branch"; name: string };
+  resolvedOid: string;
+  checkout: "attached" | "detached";
+};
+type ManagedWorktreeEntry = {
+  repositoryId: string;
+  worktreeId: string;
+  path: string;
+  createdAt: string;
+  generationId: string;
+  state: "preparing" | "ready" | "removing" | "quarantined";
+  intent?: ManagedWorktreeIntent;
+  legacy?: boolean;
+};
+
+const MANAGED_WORKTREE_REGISTRY_VERSION = 2;
+const WORKTREE_STATUS_CONCURRENCY = 8;
+const WORKTREE_GENERATION_MARKER = "task-handoff-generation";
 
 export class ManagedWorktreeRegistry {
   root: string;
   private registryPath: string;
-  private entries = new Map<string, { repositoryId: string; worktreeId: string; path: string; createdAt: string }>();
+  private entries = new Map<string, ManagedWorktreeEntry>();
 
   constructor(root: string) {
     const resolvedRoot = path.resolve(root);
@@ -45,43 +65,184 @@ export class ManagedWorktreeRegistry {
     return path.join(repositoryDirectory, `${slug}-${suffix}`);
   }
 
-  add(repositoryId: string, worktreeId: string, worktreePath: string) {
-    const canonicalPath = fs.realpathSync(worktreePath);
-    if (!withinRoot(canonicalPath, this.root)) throw new Error("Managed worktree path is outside the managed root.");
-    this.entries.set(worktreeId, { repositoryId, worktreeId, path: canonicalPath, createdAt: new Date().toISOString() });
+  prepare(repositoryId: string, worktreeId: string, worktreePath: string, intent: ManagedWorktreeIntent) {
+    const resolvedPath = path.resolve(worktreePath);
+    if (!withinRoot(resolvedPath, this.root)) throw new Error("Managed worktree path is outside the managed root.");
+    const existing = this.entries.get(worktreeId);
+    if (existing && (existing.repositoryId !== repositoryId || path.resolve(existing.path) !== resolvedPath)) {
+      throw new Error("Managed worktree identity is already assigned to another path.");
+    }
+    this.entries.set(worktreeId, {
+      repositoryId,
+      worktreeId,
+      path: resolvedPath,
+      createdAt: existing?.createdAt || new Date().toISOString(),
+      generationId: existing?.generationId || crypto.randomUUID(),
+      state: "preparing",
+      intent,
+    });
     this.persist();
   }
 
-  remove(worktreeId: string) {
+  markReady(worktreeId: string, worktreePath: string, gitCommonDir: string) {
+    const entry = this.requireEntry(worktreeId, worktreePath);
+    writeGenerationMarker(worktreePath, gitCommonDir, entry.generationId);
+    entry.path = fs.realpathSync(worktreePath);
+    entry.state = "ready";
+    entry.legacy = false;
+    this.persist();
+  }
+
+  abortPreparation(worktreeId: string) {
+    const entry = this.entries.get(worktreeId);
+    if (!entry || entry.state !== "preparing") return;
     this.entries.delete(worktreeId);
     this.persist();
   }
 
-  isManaged(repositoryId: string, worktreeId: string, worktreePath: string) {
+  beginRemove(worktreeId: string, worktreePath: string) {
+    const entry = this.requireEntry(worktreeId, worktreePath);
+    if (entry.state !== "ready") throw new Error("Managed worktree is not ready for removal.");
+    entry.state = "removing";
+    this.persist();
+  }
+
+  cancelRemove(worktreeId: string) {
     const entry = this.entries.get(worktreeId);
-    return Boolean(entry && entry.repositoryId === repositoryId && path.resolve(entry.path) === path.resolve(worktreePath) && withinRoot(entry.path, this.root));
+    if (!entry || entry.state !== "removing") return;
+    entry.state = "ready";
+    this.persist();
+  }
+
+  completeRemove(worktreeId: string) {
+    if (!this.entries.delete(worktreeId)) return;
+    this.persist();
+  }
+
+  matchesCreation(worktreeId: string, worktreePath: string, request: { requestId: string; ref: ManagedWorktreeIntent["ref"] }) {
+    const entry = this.entries.get(worktreeId);
+    return Boolean(
+      entry
+      && entry.state === "ready"
+      && path.resolve(entry.path) === path.resolve(worktreePath)
+      && entry.intent?.requestId === request.requestId
+      && sameManagedRef(entry.intent.ref, request.ref),
+    );
+  }
+
+  reconcile(repositoryId: string, gitCommonDir: string, records: WorktreeRecord[]) {
+    const recordsById = new Map(records.map((record) => {
+      const canonicalPath = canonicalWorktreePath(record.path);
+      return [repositoryWorktreeId(repositoryId, canonicalPath), { ...record, path: canonicalPath }] as const;
+    }));
+    const managed = new Set<string>();
+    let changed = false;
+    for (const entry of [...this.entries.values()]) {
+      if (entry.repositoryId !== repositoryId) continue;
+      const record = recordsById.get(entry.worktreeId);
+      if (!record || path.resolve(record.path) !== path.resolve(entry.path)) {
+        if (entry.state === "preparing" && fs.existsSync(entry.path)) {
+          entry.state = "quarantined";
+          changed = true;
+        } else {
+          this.entries.delete(entry.worktreeId);
+          changed = true;
+        }
+        continue;
+      }
+
+      const marker = readGenerationMarker(record.path, gitCommonDir);
+      if (marker === entry.generationId) {
+        if (entry.state === "preparing" || entry.state === "removing") {
+          entry.state = "ready";
+          changed = true;
+        }
+        if (entry.state === "ready") managed.add(entry.worktreeId);
+        continue;
+      }
+
+      // Compatibility for v0.0.21: an older controlled instance can read the
+      // additive v2 entry fields but rewrites the registry as v1. The Git admin
+      // marker survives that downgrade and remains the strongest identity, so
+      // adopt it when the v1 record still proves the same repository and path.
+      if (entry.legacy === true && marker !== undefined) {
+        entry.generationId = marker;
+        entry.state = "ready";
+        entry.legacy = false;
+        managed.add(entry.worktreeId);
+        changed = true;
+        continue;
+      }
+
+      const canRecover = marker === undefined && (
+        entry.legacy === true
+        || (entry.state === "preparing" && entry.intent && recordMatchesIntent(record, entry.intent))
+      );
+      if (canRecover) {
+        try {
+          writeGenerationMarker(record.path, gitCommonDir, entry.generationId);
+          entry.path = record.path;
+          entry.state = "ready";
+          entry.legacy = false;
+          managed.add(entry.worktreeId);
+          changed = true;
+          continue;
+        } catch {}
+      }
+      if (entry.state !== "quarantined") {
+        entry.state = "quarantined";
+        changed = true;
+      }
+    }
+    if (changed) this.persist();
+    return managed;
   }
 
   private load() {
     if (!fs.existsSync(this.registryPath)) return;
     try {
       const parsed = JSON.parse(fs.readFileSync(this.registryPath, "utf8"));
+      if (parsed?.version !== 1 && parsed?.version !== MANAGED_WORKTREE_REGISTRY_VERSION) {
+        throw new Error(`Unsupported managed worktree registry version: ${String(parsed?.version)}`);
+      }
       const records = Array.isArray(parsed?.entries) ? parsed.entries : [];
+      const legacyRegistry = parsed?.version === 1;
       for (const item of records) {
         if (!item || typeof item !== "object") continue;
         if (typeof item.repositoryId !== "string" || typeof item.worktreeId !== "string" || typeof item.path !== "string" || typeof item.createdAt !== "string") continue;
         const resolved = path.resolve(item.path);
         if (!withinRoot(resolved, this.root)) continue;
-        this.entries.set(item.worktreeId, { repositoryId: item.repositoryId, worktreeId: item.worktreeId, path: resolved, createdAt: item.createdAt });
+        const intent = sanitizeManagedWorktreeIntent(item.intent);
+        const state = ["preparing", "ready", "removing", "quarantined"].includes(item.state) ? item.state : "ready";
+        this.entries.set(item.worktreeId, {
+          repositoryId: item.repositoryId,
+          worktreeId: item.worktreeId,
+          path: resolved,
+          createdAt: item.createdAt,
+          generationId: typeof item.generationId === "string" && /^[0-9a-f-]{36}$/i.test(item.generationId) ? item.generationId : crypto.randomUUID(),
+          state,
+          ...(intent ? { intent } : {}),
+          ...(legacyRegistry || item.legacy === true ? { legacy: true } : {}),
+        });
       }
-    } catch {}
+    } catch (error) {
+      console.warn("[managed-worktrees] registry could not be loaded; managed ownership is unavailable", error instanceof Error ? error.message : String(error));
+    }
   }
 
   private persist() {
     this.ensureRoot();
     const tempPath = `${this.registryPath}.${crypto.randomUUID()}.tmp`;
-    fs.writeFileSync(tempPath, `${JSON.stringify({ version: 1, entries: [...this.entries.values()] }, null, 2)}\n`, { mode: 0o600 });
+    fs.writeFileSync(tempPath, `${JSON.stringify({ version: MANAGED_WORKTREE_REGISTRY_VERSION, entries: [...this.entries.values()] }, null, 2)}\n`, { mode: 0o600 });
     fs.renameSync(tempPath, this.registryPath);
+  }
+
+  private requireEntry(worktreeId: string, worktreePath: string) {
+    const entry = this.entries.get(worktreeId);
+    if (!entry || path.resolve(entry.path) !== path.resolve(worktreePath) || !withinRoot(entry.path, this.root)) {
+      throw new Error("Managed worktree ownership could not be verified.");
+    }
+    return entry;
   }
 
   private ensureRoot() {
@@ -111,6 +272,10 @@ export class RepositoryWorktreeService {
 
   async list(): Promise<RepositoryWorktrees> {
     const state = await this.requireAvailable();
+    return this.listForState(state);
+  }
+
+  listForState(state: ResolvedRepository): Promise<RepositoryWorktrees> {
     return this.listFromState(state);
   }
 
@@ -128,25 +293,43 @@ export class RepositoryWorktreeService {
       }
       const git = new GitProcess(state.worktreeRoot!, this.gitOptions);
       const destination = this.registry.allocate(state.context.repositoryId!, request.branchName);
+      const worktreeId = repositoryWorktreeId(state.context.repositoryId!, path.resolve(destination));
       let added = false;
       try {
+        let resolvedOid: string;
         if (request.mode === "new-branch") {
-          const startOid = (await git.run("rev-parse", ["--verify", "--end-of-options", `${request.startRef}^{commit}`])).stdout.trim();
-          await git.run("worktree", ["add", "-b", request.branchName, destination, startOid]);
+          resolvedOid = (await git.run("rev-parse", ["--verify", "--end-of-options", `${request.startRef}^{commit}`])).stdout.trim();
+          this.registry.prepare(state.context.repositoryId!, worktreeId, destination, {
+            ref: { type: "branch", name: request.branchName },
+            resolvedOid,
+            checkout: "attached",
+          });
+          await git.run("worktree", ["add", "-b", request.branchName, destination, resolvedOid]);
         } else {
-          await git.run("rev-parse", ["--verify", "--end-of-options", `refs/heads/${request.branchName}^{commit}`]);
+          resolvedOid = (await git.run("rev-parse", ["--verify", "--end-of-options", `refs/heads/${request.branchName}^{commit}`])).stdout.trim();
+          this.registry.prepare(state.context.repositoryId!, worktreeId, destination, {
+            ref: { type: "branch", name: request.branchName },
+            resolvedOid,
+            checkout: "attached",
+          });
           await git.run("worktree", ["add", destination, request.branchName]);
         }
         added = true;
         const canonicalPath = fs.realpathSync(destination);
-        const worktreeId = repositoryWorktreeId(state.context.repositoryId!, canonicalPath);
-        this.registry.add(state.context.repositoryId!, worktreeId, canonicalPath);
+        this.registry.markReady(worktreeId, canonicalPath, state.gitCommonDir!);
         return { worktreeId, worktrees: await this.listFromState(await this.requireAvailable()) };
       } catch (error) {
+        let removed = !added;
         if (added) {
-          try { await git.run("worktree", ["remove", destination]); } catch {}
+          try {
+            await git.run("worktree", ["remove", destination]);
+            removed = true;
+          } catch {}
         }
-        try { fs.rmSync(destination, { recursive: true }); } catch {}
+        if (removed) {
+          try { fs.rmSync(destination, { recursive: true }); } catch {}
+          this.registry.abortPreparation(worktreeId);
+        }
         if (error instanceof RepositoryOperationError) throw error;
         throw new RepositoryOperationError("REPOSITORY_OPERATION_FAILED", "Git could not create the worktree.", await this.resolve());
       }
@@ -160,9 +343,13 @@ export class RepositoryWorktreeService {
       const git = new GitProcess(state.worktreeRoot!, this.gitOptions);
       const refLabel = request.ref.type === "head" ? "HEAD" : request.ref.name;
       const destination = this.registry.allocate(state.context.repositoryId!, refLabel, request.clientRequestId);
+      const worktreeId = repositoryWorktreeId(state.context.repositoryId!, path.resolve(destination));
       const current = await this.listFromStateInternal(state);
       const existing = current.find((item) => item.canonicalPath === path.resolve(destination));
       if (existing) {
+        if (!existing.managed || !this.registry.matchesCreation(existing.id, existing.canonicalPath, { requestId: request.clientRequestId, ref: request.ref })) {
+          throw new RepositoryOperationError("REPOSITORY_WORKTREE_UNSAFE", "The worktree destination belongs to another creation request.", state);
+        }
         if (!existing.canCreateAiSession) {
           throw new RepositoryOperationError("REPOSITORY_WORKTREE_UNSAFE", `Worktree cannot host an AI session: ${existing.createAiSessionBlockers.join(", ")}.`, state);
         }
@@ -188,24 +375,35 @@ export class RepositoryWorktreeService {
       const branchName = request.ref.type === "branch" ? request.ref.name : undefined;
       const branchOccupied = branchName !== undefined
         && current.some((item) => item.head.state === "branch" && item.head.branch === branchName);
+      const checkout = branchName !== undefined && !branchOccupied ? "attached" as const : "detached" as const;
       let added = false;
       try {
-        if (branchName !== undefined && !branchOccupied) {
+        this.registry.prepare(state.context.repositoryId!, worktreeId, destination, {
+          requestId: request.clientRequestId,
+          ref: request.ref,
+          resolvedOid: oid,
+          checkout,
+        });
+        if (checkout === "attached" && branchName !== undefined) {
           await git.run("worktree", ["add", destination, branchName]);
         } else {
           await git.run("worktree", ["add", "--detach", destination, oid]);
         }
         added = true;
         const canonicalPath = fs.realpathSync(destination);
-        const worktreeId = repositoryWorktreeId(state.context.repositoryId!, canonicalPath);
-        this.registry.add(state.context.repositoryId!, worktreeId, canonicalPath);
+        this.registry.markReady(worktreeId, canonicalPath, state.gitCommonDir!);
         return { worktreeId, worktrees: await this.listFromState(await this.requireAvailable()) };
       } catch (error) {
+        let removed = !added;
         if (added) {
-          try { await git.run("worktree", ["remove", destination]); } catch {}
-          // A successful `git worktree add` establishes ownership of this path.
-          // If Git's own removal was incomplete, remove only that owned residue.
+          try {
+            await git.run("worktree", ["remove", destination]);
+            removed = true;
+          } catch {}
+        }
+        if (removed) {
           try { fs.rmSync(destination, { recursive: true }); } catch {}
+          this.registry.abortPreparation(worktreeId);
         }
         if (error instanceof RepositoryOperationError) throw error;
         throw new RepositoryOperationError("REPOSITORY_OPERATION_FAILED", "Git could not create the AI session worktree.", await this.resolve());
@@ -226,10 +424,12 @@ export class RepositoryWorktreeService {
       if (!target) throw new RepositoryOperationError("REPOSITORY_WORKTREE_NOT_FOUND", "Worktree no longer exists.", state);
       if (!target.canRemove) throw new RepositoryOperationError("REPOSITORY_WORKTREE_UNSAFE", `Worktree cannot be removed: ${target.removeBlockers.join(", ")}.`, state);
       try {
+        this.registry.beginRemove(target.id, target.canonicalPath);
         await new GitProcess(state.worktreeRoot!, this.gitOptions).run("worktree", ["remove", target.canonicalPath]);
-        this.registry.remove(target.id);
+        this.registry.completeRemove(target.id);
         return { removedWorktreeId: target.id, branchRetained: true, worktrees: await this.listFromState(await this.requireAvailable()) };
       } catch (error) {
+        this.registry.cancelRemove(target.id);
         if (error instanceof RepositoryOperationError) throw error;
         throw new RepositoryOperationError("REPOSITORY_OPERATION_FAILED", "Git could not remove the worktree.", await this.resolve());
       }
@@ -264,11 +464,12 @@ export class RepositoryWorktreeService {
 
   private async listFromStateInternal(state: ResolvedRepository): Promise<InternalWorktree[]> {
     const output = (await new GitProcess(state.worktreeRoot!, this.gitOptions).run("worktree", ["list", "--porcelain", "-z"])).stdout;
-    const records = parseWorktreePorcelain(output);
-    return Promise.all(records.map(async (record, index) => {
+    const records = parseWorktreePorcelain(output).map((record) => ({ ...record, path: canonicalWorktreePath(record.path) }));
+    const managedIds = this.registry.reconcile(state.context.repositoryId!, state.gitCommonDir!, records);
+    return mapWithConcurrency(records, WORKTREE_STATUS_CONCURRENCY, async (record, index) => {
       const canonicalPath = canonicalWorktreePath(record.path);
       const id = repositoryWorktreeId(state.context.repositoryId!, canonicalPath);
-      const managed = this.registry.isManaged(state.context.repositoryId!, id, canonicalPath);
+      const managed = managedIds.has(id);
       const current = canonicalPath === state.worktreeRoot;
       const authorized = current || managed || this.workspaceRoots.some((root) => withinRoot(canonicalPath, root));
       const accessible = authorized && fs.existsSync(canonicalPath);
@@ -318,7 +519,7 @@ export class RepositoryWorktreeService {
         createAiSessionBlockers,
         removeBlockers,
       };
-    }));
+    });
   }
 
   private async requireAvailable() {
@@ -355,11 +556,7 @@ export function parseWorktreePorcelain(output: string): WorktreeRecord[] {
 }
 
 async function isDirty(worktreePath: string, gitOptions: GitProcessOptions) {
-  try {
-    return Boolean((await new GitProcess(worktreePath, gitOptions).run("status", ["--porcelain=v2", "-z", "--untracked-files=all"])).stdout);
-  } catch {
-    return false;
-  }
+  return Boolean((await new GitProcess(worktreePath, gitOptions).run("status", ["--porcelain=v2", "-z", "--untracked-files=all"])).stdout);
 }
 
 function activeSessionsForWorktree<T extends { id: string; status?: string }>(sessions: T[], worktreePath: string, cwd: (session: T) => string | undefined) {
@@ -367,8 +564,127 @@ function activeSessionsForWorktree<T extends { id: string; status?: string }>(se
     if (["stopped", "exited", "failed", "closed", "terminated", "completed"].includes(session.status || "")) return false;
     const value = cwd(session);
     if (!value) return false;
-    try { return withinRoot(fs.realpathSync(value), worktreePath); } catch { return false; }
+    try { return withinRoot(fs.realpathSync(value), worktreePath); }
+    catch { return path.isAbsolute(value) && withinRoot(path.resolve(value), worktreePath); }
   });
+}
+
+function sameManagedRef(left: ManagedWorktreeIntent["ref"], right: ManagedWorktreeIntent["ref"]) {
+  return left.type === right.type && (left.type === "head" || (right.type === "branch" && left.name === right.name));
+}
+
+function recordMatchesIntent(record: WorktreeRecord, intent: ManagedWorktreeIntent) {
+  if (record.prunable || !record.headOid) return false;
+  if (intent.checkout === "detached") return record.detached && record.headOid === intent.resolvedOid;
+  return !record.detached
+    && intent.ref.type === "branch"
+    && record.branch === intent.ref.name
+    && record.headOid === intent.resolvedOid;
+}
+
+function sanitizeManagedWorktreeIntent(value: unknown): ManagedWorktreeIntent | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const refValue = record.ref;
+  if (!refValue || typeof refValue !== "object" || Array.isArray(refValue)) return undefined;
+  const refRecord = refValue as Record<string, unknown>;
+  const ref = refRecord.type === "head"
+    ? { type: "head" as const }
+    : refRecord.type === "branch" && typeof refRecord.name === "string" && refRecord.name
+      ? { type: "branch" as const, name: refRecord.name }
+      : undefined;
+  if (!ref || typeof record.resolvedOid !== "string" || !/^[0-9a-f]{40,64}$/i.test(record.resolvedOid)) return undefined;
+  if (record.checkout !== "attached" && record.checkout !== "detached") return undefined;
+  if (record.requestId !== undefined && (typeof record.requestId !== "string" || !record.requestId)) return undefined;
+  return {
+    ...(typeof record.requestId === "string" ? { requestId: record.requestId } : {}),
+    ref,
+    resolvedOid: record.resolvedOid,
+    checkout: record.checkout,
+  };
+}
+
+function readGenerationMarker(worktreePath: string, gitCommonDir: string) {
+  const adminDir = linkedWorktreeAdminDir(worktreePath, gitCommonDir);
+  if (!adminDir) return undefined;
+  try {
+    const value = fs.readFileSync(path.join(adminDir, WORKTREE_GENERATION_MARKER), "utf8").trim();
+    return /^[0-9a-f-]{36}$/i.test(value) ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeGenerationMarker(worktreePath: string, gitCommonDir: string, generationId: string) {
+  const adminDir = linkedWorktreeAdminDir(worktreePath, gitCommonDir);
+  if (!adminDir) throw new Error("Git linked-worktree ownership could not be verified.");
+  const markerPath = path.join(adminDir, WORKTREE_GENERATION_MARKER);
+  try {
+    const existing = fs.readFileSync(markerPath, "utf8").trim();
+    if (existing === generationId) return;
+    throw new Error("Git linked-worktree generation belongs to another managed worktree.");
+  } catch (error) {
+    if (!isMissingFileError(error)) throw error;
+  }
+  fs.writeFileSync(markerPath, `${generationId}\n`, { mode: 0o600, flag: "wx" });
+}
+
+function linkedWorktreeAdminDir(worktreePath: string, gitCommonDir: string) {
+  const gitFilePath = path.join(worktreePath, ".git");
+  const worktreesRoot = path.join(path.resolve(gitCommonDir), "worktrees");
+  try {
+    if (fs.statSync(gitFilePath).isFile()) {
+      const gitFile = fs.readFileSync(gitFilePath, "utf8");
+      const match = /^gitdir:\s*(.+)$/im.exec(gitFile);
+      if (match?.[1]?.trim()) {
+        const adminDir = path.resolve(worktreePath, match[1].trim());
+        if (pathsEqual(path.dirname(adminDir), worktreesRoot) && adminDirPointsToWorktree(adminDir, gitFilePath)) return adminDir;
+      }
+    }
+  } catch {}
+
+  // A prunable worktree has lost its directory and `.git` file. Its Git admin
+  // row and generation marker still survive, so use the authoritative backlink
+  // instead of downgrading a known managed worktree to external ownership.
+  try {
+    for (const name of fs.readdirSync(worktreesRoot)) {
+      const adminDir = path.join(worktreesRoot, name);
+      if (adminDirPointsToWorktree(adminDir, gitFilePath)) return adminDir;
+    }
+  } catch {}
+  return undefined;
+}
+
+function adminDirPointsToWorktree(adminDir: string, gitFilePath: string) {
+  try {
+    if (!fs.statSync(adminDir).isDirectory()) return false;
+    const backlink = fs.readFileSync(path.join(adminDir, "gitdir"), "utf8").trim();
+    const resolvedBacklink = path.resolve(adminDir, backlink);
+    return pathsEqual(resolvedBacklink, path.resolve(gitFilePath));
+  } catch {
+    return false;
+  }
+}
+
+function pathsEqual(left: string, right: string) {
+  return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
+}
+
+function isMissingFileError(error: unknown) {
+  return Boolean(error && typeof error === "object" && "code" in error && ["ENOENT", "ENOTDIR"].includes(String(error.code)));
+}
+
+async function mapWithConcurrency<T, U>(items: T[], concurrency: number, operation: (item: T, index: number) => Promise<U>) {
+  const results = new Array<U>(items.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(Math.max(1, concurrency), items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex++;
+      results[index] = await operation(items[index], index);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 function canonicalWorktreePath(value: string) {

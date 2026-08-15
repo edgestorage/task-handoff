@@ -660,7 +660,7 @@ onBeforeUnmount(() => {
 }
 
 .ai-board-floating-head .ai-board-floating-workspace {
-  color: inherit;
+  color: color-mix(in srgb, var(--ai-board-muted) 78%, transparent);
   font-size: inherit;
   font-weight: inherit;
 }
@@ -668,12 +668,12 @@ onBeforeUnmount(() => {
 .ai-board-floating-secondary-line {
   display: flex;
   align-items: baseline;
-  gap: 6px;
+  gap: 4px;
 }
 
 .ai-board-floating-head .ai-board-floating-secondary-line > span:first-child,
 .ai-board-floating-head .ai-board-floating-secondary-line > span:nth-child(2) {
-  color: inherit;
+  color: color-mix(in srgb, var(--ai-board-muted) 78%, transparent);
   font-size: inherit;
   font-weight: inherit;
 }
@@ -701,7 +701,7 @@ onBeforeUnmount(() => {
 }
 
 .ai-board-floating-workspace b {
-  flex: 0 1 auto;
+  flex: 1 1 auto;
   color: inherit;
   font-size: inherit;
   font-weight: inherit;

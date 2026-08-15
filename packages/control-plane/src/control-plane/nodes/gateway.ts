@@ -253,6 +253,25 @@ export class ControlPlaneNodeAgentGateway {
     return this.client.requestSchema(node, `/models/${encodeURIComponent(modelId)}`, NodeAgentDeleteResponseSchema, { method: "DELETE" });
   }
 
+  discoverModels(node: Node, input: unknown) {
+    return this.client.requestSchema(node, "/models/discover", z.object({
+      models: z.array(z.object({ id: z.string(), ownedBy: z.string().optional() }).strict()),
+      latencyMs: z.number().nonnegative(),
+    }).strict(), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    });
+  }
+
+  testModel(node: Node, input: unknown) {
+    return this.client.requestSchema(node, "/models/test", z.object({ success: z.literal(true), latencyMs: z.number().nonnegative() }).strict(), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    });
+  }
+
   assignInstanceModels(node: Node, instanceId: string, input: unknown) {
     return this.client.requestSchema(node, `/instances/${encodeURIComponent(instanceId)}/model-assignment`, z.object({
       assignment: NodeModelAssignmentSchema,

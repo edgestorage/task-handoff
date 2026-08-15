@@ -1,3 +1,4 @@
+import type { AiSessionOpenAppResult } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionSummary, InstanceBoardItem, InstanceBoardItemWithAppSessions, InstanceWithAiSessions } from "../../api/types";
 import type { RepositorySessionKind } from "@task-handoff/protocol/repository";
 import { appSessionBindingKeys } from "./appSessionVisibility.ts";
@@ -33,10 +34,11 @@ export type SessionTab = {
 };
 
 export type RepositoryWorkspaceTabTarget = {
+  aiAgent?: "codex" | "claude";
   filePath?: string;
   fileRequestId?: number;
   initialView: "files" | "changes";
-  page?: "workspace" | "changes-review";
+  page?: "workspace" | "changes-review" | "worktrees";
   sessionId: string;
   sessionKind: RepositorySessionKind;
 };
@@ -555,8 +557,21 @@ export function aiSessionAppTab(instance: InstanceBoardItemWithAppSessions | Ins
       return match;
     }
   }
-  const bindingKeys = new Set(session.appBindingKeys || []);
+  const bindingKeys = new Set([
+    ...(session.appBindingKeys || []),
+    ...(session.providerSessionId ? [`provider:${session.agent}:${session.providerSessionId}`] : []),
+  ]);
   return bindingKeys.size ? tabs.find((tab) => appSessionBindingKeys(tab.source).some((key) => bindingKeys.has(key))) : undefined;
+}
+
+export function aiSessionAppNavigationTarget(session: AiSessionSummary, result: AiSessionOpenAppResult): AiSessionSummary {
+  return {
+    ...session,
+    id: result.aiSessionId,
+    providerSessionId: result.providerSessionId,
+    appSessionId: result.appSessionId,
+    creationSource: result.creationSource,
+  };
 }
 
 export function aiSessionBasename(value?: string) {

@@ -1,6 +1,6 @@
-import { computed, reactive, ref } from "vue";
-import { createModel, createNodeModel, deleteModel, deleteNodeModel, reorderModels, updateModel, updateNodeModel } from "../../../api/queries";
-import type { ModelApp, ModelConfig, ModelLocation, Node } from "../../../api/types";
+import { computed, reactive, ref, watch } from "vue";
+import { createModel, createNodeModel, deleteModel, deleteNodeModel, discoverModels, reorderModels, testModel, updateModel, updateNodeModel } from "../../../api/queries";
+import type { DiscoveredModel, ModelApp, ModelConfig, ModelLocation, Node } from "../../../api/types";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 import type { Translate } from "../../../i18n/status.ts";
 import { translateApiError } from "../../../i18n/apiError.ts";
@@ -20,6 +20,10 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
   const savingModelId = ref("");
   const deletingModelId = ref("");
   const modelSaveSuccess = ref("");
+  const discoveredModels = ref<DiscoveredModel[]>([]);
+  const discoveringModels = ref(false);
+  const testingModel = ref(false);
+  const modelEndpointFeedback = ref<{ kind: "success" | "error"; text: string }>();
   const settingsModel = reactive({
     name: "",
     endpoint: "",
@@ -31,6 +35,22 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
   });
 
   const formModelBusyId = computed(() => editingModelId.value || "__new_model__");
+  const selectedNodeSupportsModelEndpointProbe = computed(() => {
+    if (settingsModel.locationScope === "control-plane") return true;
+    const node = nodes().find((item) => item.id === settingsModel.locationScope);
+    const agent = node?.capabilities?.agent;
+    if (!agent || typeof agent !== "object" || Array.isArray(agent)) return false;
+    const capabilities = (agent as Record<string, unknown>).capabilities;
+    return Boolean(capabilities && typeof capabilities === "object" && !Array.isArray(capabilities)
+      && (capabilities as Record<string, unknown>).modelEndpointProbe === true);
+  });
+  const canDiscoverModels = computed(() => Boolean(
+    selectedNodeSupportsModelEndpointProbe.value
+    &&
+    settingsModel.endpoint.trim()
+    && (settingsModel.key.trim() || editingModelId.value),
+  ));
+  const canTestModel = computed(() => canDiscoverModels.value && Boolean(settingsModel.model.trim()));
   const canSaveModel = computed(() => {
     if (!settingsModel.name.trim() || !settingsModel.endpoint.trim() || !settingsModel.model.trim()) {
       return false;
@@ -46,6 +66,70 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
 
   function clearModelFeedback() {
     modelSaveSuccess.value = "";
+    modelEndpointFeedback.value = undefined;
+  }
+
+  watch(
+    () => [settingsModel.endpoint, settingsModel.key, settingsModel.locationScope, editingModelId.value],
+    () => {
+      discoveredModels.value = [];
+      modelEndpointFeedback.value = undefined;
+    },
+  );
+
+  watch(
+    () => [settingsModel.model, settingsModel.app],
+    () => { modelEndpointFeedback.value = undefined; },
+  );
+
+  function endpointDraft() {
+    return {
+      endpoint: settingsModel.endpoint.trim(),
+      ...(settingsModel.key.trim() ? { key: settingsModel.key.trim() } : {}),
+      ...(editingModelId.value ? { existingModelId: editingModelId.value } : {}),
+    };
+  }
+
+  function endpointNodeId() {
+    return settingsModel.locationScope === "control-plane" ? undefined : settingsModel.locationScope;
+  }
+
+  async function fetchModelOptions() {
+    if (!canDiscoverModels.value || discoveringModels.value) return;
+    discoveringModels.value = true;
+    modelEndpointFeedback.value = undefined;
+    try {
+      const result = await discoverModels(endpointDraft(), endpointNodeId());
+      discoveredModels.value = result.models;
+      modelEndpointFeedback.value = {
+        kind: "success",
+        text: result.models.length
+          ? t("settings.modelRegistry.discovered", { count: result.models.length, latency: result.latencyMs })
+          : t("settings.modelRegistry.discoveredEmpty", { latency: result.latencyMs }),
+      };
+    } catch (error) {
+      modelEndpointFeedback.value = { kind: "error", text: translateError(error) };
+    } finally {
+      discoveringModels.value = false;
+    }
+  }
+
+  async function checkModel() {
+    if (!canTestModel.value || testingModel.value) return;
+    testingModel.value = true;
+    modelEndpointFeedback.value = undefined;
+    try {
+      const result = await testModel({
+        ...endpointDraft(),
+        model: settingsModel.model.trim(),
+        app: settingsModel.app,
+      }, endpointNodeId());
+      modelEndpointFeedback.value = { kind: "success", text: t("settings.modelRegistry.testSucceeded", { latency: result.latencyMs }) };
+    } catch (error) {
+      modelEndpointFeedback.value = { kind: "error", text: translateError(error) };
+    } finally {
+      testingModel.value = false;
+    }
   }
 
   function resetModelForm() {
@@ -174,18 +258,27 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
 
   return {
     canSaveModel,
+    selectedNodeSupportsModelEndpointProbe,
+    canDiscoverModels,
+    canTestModel,
+    checkModel,
     canMoveModel,
     clearModelFeedback,
     deletingModelId,
+    discoveredModels,
+    discoveringModels,
     editModel,
     editingModelId,
     formModelBusyId,
     modelSaveSuccess,
+    modelEndpointFeedback,
     moveModel,
     removeModel,
     resetModelForm,
     saveModel,
     savingModelId,
     settingsModel,
+    testingModel,
+    fetchModelOptions,
   };
 }

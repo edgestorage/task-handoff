@@ -36,6 +36,7 @@ export function codexNotification(method: string, params: JsonValue): CodexAppSe
   }
   if ((method === "item/started" || method === "item/completed") && typeof params.threadId === "string") {
     const item = asRecord(params.item);
+    if (item.type === "reasoning") return undefined;
     if (item.type === "contextCompaction" && typeof params.turnId === "string" && typeof item.id === "string") {
       const observedAt = isoTimestampFromMs(method === "item/started" ? params.startedAtMs as number | undefined : params.completedAtMs as number | undefined);
       return {
@@ -45,24 +46,30 @@ export function codexNotification(method: string, params: JsonValue): CodexAppSe
         itemId: `context_compaction:${params.turnId}`,
         status: method === "item/started" ? "running" : "completed",
         observedAt,
+        timelineItem: withItemStatus(item, method),
       };
     }
     if (item.type === "userMessage") {
       const text = textFromUserMessageItem(item);
-      return text ? { type: "user-message", threadId: params.threadId, turnId: typeof params.turnId === "string" ? params.turnId : undefined, text } : undefined;
+      return text && typeof item.id === "string" ? { type: "user-message", threadId: params.threadId, turnId: typeof params.turnId === "string" ? params.turnId : undefined, itemId: item.id, timelineItem: withItemStatus(item, method), text } : undefined;
     }
     const observedAt = isoTimestampFromMs(method === "item/started" ? params.startedAtMs as number | undefined : params.completedAtMs as number | undefined);
     const subAgents = codexSubAgentUpdates(item).map((subAgent) => observedAt ? { ...subAgent, observedAt } : subAgent);
-    if (item.type === "subAgentActivity" && subAgents[0]) return { type: "sub-agent-activity", threadId: params.threadId, turnId: typeof params.turnId === "string" ? params.turnId : undefined, subAgent: subAgents[0] };
+    if (item.type === "subAgentActivity" && subAgents[0]) return { type: "sub-agent-activity", threadId: params.threadId, turnId: typeof params.turnId === "string" ? params.turnId : undefined, timelineItem: withItemStatus(item, method), subAgent: subAgents[0] };
     const tool = codexToolDescriptor(item, method === "item/started" && typeof params.startedAtMs === "number" ? params.startedAtMs : undefined);
-    if (tool) return { type: method === "item/started" ? "tool-item-started" : "tool-item-completed", threadId: params.threadId, turnId: typeof params.turnId === "string" ? params.turnId : undefined, tool, subAgents: subAgents.length ? subAgents : undefined };
+    if (tool) return { type: method === "item/started" ? "tool-item-started" : "tool-item-completed", threadId: params.threadId, turnId: typeof params.turnId === "string" ? params.turnId : undefined, item, timelineItem: withItemStatus(item, method), tool, subAgents: subAgents.length ? subAgents : undefined };
+    if (item.type !== "agentMessage" && typeof params.turnId === "string" && typeof item.id === "string") return { type: "timeline-item", threadId: params.threadId, turnId: params.turnId, timelineItem: withItemStatus(item, method) };
   }
   if (method === "item/agentMessage/delta" && typeof params.threadId === "string" && typeof params.turnId === "string" && typeof params.itemId === "string" && typeof params.delta === "string") return { type: "agent-message-delta", threadId: params.threadId, turnId: params.turnId, itemId: params.itemId, delta: params.delta };
   if (method === "item/completed" && typeof params.threadId === "string") {
     const item = asRecord(params.item);
-    if (item.type === "agentMessage" && typeof params.turnId === "string" && typeof item.id === "string" && typeof item.text === "string") return { type: "agent-message-completed", threadId: params.threadId, turnId: params.turnId, itemId: item.id, text: item.text };
+    if (item.type === "agentMessage" && typeof params.turnId === "string" && typeof item.id === "string" && typeof item.text === "string") return { type: "agent-message-completed", threadId: params.threadId, turnId: params.turnId, itemId: item.id, timelineItem: withItemStatus(item, method), text: item.text };
   }
   return undefined;
+}
+
+function withItemStatus(item: JsonValue, method: "item/started" | "item/completed"): JsonValue {
+  return typeof item.status === "string" ? item : { ...item, status: method === "item/started" ? "inProgress" : "completed" };
 }
 
 export function codexTurnErrorMessage(value: unknown) {

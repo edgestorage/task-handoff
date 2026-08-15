@@ -33,6 +33,7 @@ export {
   approvalDecisionVerb,
 } from "./codex-app-server/protocol/approvals";
 export { summarizeThreadTurns } from "./codex-app-server/protocol/thread-summary";
+export { codexItemTimeline, codexThreadTimeline, mergeCodexTimelineItems } from "./codex-app-server/protocol/timeline";
 export {
   turnIdFromResult,
   isNoActiveTurnError,

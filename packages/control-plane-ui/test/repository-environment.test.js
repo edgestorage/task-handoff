@@ -39,21 +39,32 @@ test("Environment uses a portal popover and authoritative repository context", a
 });
 
 test("Worktrees use opaque server ids and expose AI-session creation without cwd switching", async () => {
-  const [environment, panel, repositoryApi] = await Promise.all([
+  const [environment, panel, tab, pane, sessions, repositoryApi] = await Promise.all([
     source("apps/control-plane/instance-detail/RepositoryEnvironment.vue"),
     source("apps/control-plane/instance-detail/RepositoryWorktreesPanel.vue"),
+    source("apps/control-plane/instance-detail/RepositoryWorktreesTab.vue"),
+    source("apps/control-plane/instance-detail/SessionPaneContent.vue"),
+    source("apps/control-plane/instance-detail/useActiveInstanceSessions.ts"),
     source("api/repository.ts"),
   ]);
 
-  assert.match(environment, /class="repository-worktrees-popover"/);
+  assert.match(environment, /page: "worktrees"/);
+  assert.doesNotMatch(environment, /repository-worktrees-popover/);
+  assert.match(tab, /<RepositoryWorktreesPanel/);
+  assert.match(tab, /appearance="page"/);
+  assert.match(pane, /session\.source\?\.page === 'worktrees'/);
+  assert.match(sessions, /repository-worktrees:/);
+  assert.match(sessions, /repository\.worktreesPanel\.title/);
   assert.match(panel, /repository\.worktreesPanel\.current/);
   assert.match(panel, /repository\.worktreesPanel\.managed/);
   assert.match(panel, /repository\.worktreesPanel\.dirty/);
   assert.match(panel, /repository\.worktreesPanel\.locked/);
   assert.match(panel, /repository\.environmentExtra\.activeSessions/);
   assert.match(panel, /repository\.worktreesPanel\.newHere/);
+  assert.match(panel, /repository\.worktreesPanel\.search/);
+  assert.match(panel, /filteredWorktrees/);
+  assert.match(panel, /<ScrollArea/);
   assert.match(panel, /<strong :title="worktreeLabel\(worktree\)">/);
-  assert.match(panel, /\.repository-worktree-list \{[\s\S]*overflow-x: hidden/);
   assert.match(panel, /\.repository-worktree-branch \{[\s\S]*flex: 1 1 auto;[\s\S]*overflow: hidden/);
   assert.match(environment, /class="repository-environment-branch-summary" :title="branchSummary"/);
   assert.match(environment, /\.repository-environment-branch-summary \{[\s\S]*white-space: nowrap/);
@@ -64,9 +75,9 @@ test("Worktrees use opaque server ids and expose AI-session creation without cwd
 });
 
 test("managed worktree creation launches a new session without a client filesystem path", async () => {
-  const [panel, aiPanel, repositoryApi] = await Promise.all([
+  const [panel, worktreesTab, repositoryApi] = await Promise.all([
     source("apps/control-plane/instance-detail/RepositoryWorktreesPanel.vue"),
-    source("apps/control-plane/instance-detail/AiSessionPanel.vue"),
+    source("apps/control-plane/instance-detail/RepositoryWorktreesTab.vue"),
     source("api/repository.ts"),
   ]);
 
@@ -81,10 +92,8 @@ test("managed worktree creation launches a new session without a client filesyst
   assert.match(panel, /\.repository-worktree-card\[data-current="true"\] \.repository-worktree-branch strong,[\s\S]*color: var\(--brand-accent-muted, var\(--brand-accent\)\)/);
   assert.match(repositoryApi, /\/worktrees\/ai-sessions/);
   assert.doesNotMatch(panel, /worktree:\s*\{[^}]*\b(path|cwd)\s*:/);
-  assert.match(aiPanel, /handleRepositoryAiSessionStarted\(result: RepositoryAiSessionLaunchResult\)/);
-  assert.match(aiPanel, /emit\("selectAiSession", props\.instance\.id, result\.aiSessionId\)/);
-  assert.doesNotMatch(aiPanel, /pendingRepositoryAppSessionId/);
-  assert.match(aiPanel, /emit\("selectAiSession", props\.instance\.id, session\.id\)/);
+  assert.match(worktreesTab, /props\.session\.source\?\.aiAgent/);
+  assert.match(worktreesTab, /agent === "codex" \|\| agent === "claude"/);
 });
 
 test("managed worktree removal is AI-only, confirmed, non-force, and retains the branch", async () => {
@@ -153,10 +162,9 @@ test("Repository workspace opens as a session tab with a resizable ScrollArea si
   ]);
 
   assert.match(environment, /emit\("openWorkspace", \{ initialView: view, sessionId: props\.sessionId, sessionKind: props\.sessionKind \}\)/);
-  assert.match(workspaceTab, /<RepositoryWorkspace[\s\S]*embedded/);
-  assert.match(workspaceTab, /:embedded="!dialogOpen"/);
-  assert.match(workspace, /repository\.workspace\.openDialog/);
-  assert.match(workspace, /repository\.workspace\.returnTab/);
+  assert.match(workspaceTab, /<RepositoryWorkspace[\s\S]*:context="contextQuery\.data\.value"/);
+  assert.doesNotMatch(workspaceTab, /dialogOpen|open-dialog|open-tab/);
+  assert.doesNotMatch(workspace, /repository\.workspace\.(?:openDialog|returnTab|openWindow)/);
   assert.match(sessionState, /kind: "repository"/);
   assert.match(sessionState, /function openRepositoryWorkspace\(target: RepositoryWorkspaceTabTarget\)/);
   assert.match(workspace, /RepositoryFileTree/);
@@ -173,7 +181,7 @@ test("Repository workspace opens as a session tab with a resizable ScrollArea si
   assert.match(fileEditor, /overflow: auto/);
   assert.match(syntaxHighlight, /tsx: "typescript"/);
   assert.doesNotMatch(workspace, /stageRepositoryPaths|unstageRepositoryPaths|discardRepositoryWorktree|commitRepositoryIndex/);
-  assert.match(workspace, /repository-workspace-dialog[^}]*top: calc\(50% \+ 24px\)[^}]*height: min\(920px, calc\(100vh - 80px\)\)/);
+  assert.match(workspace, /\.repository-workspace-content \{[^}]*width: 100%;[^}]*height: 100%;/);
   assert.match(workspace, /repository-workspace-empty[^}]*grid-row: 2/);
   assert.match(tree, /entry\.traversable/);
   assert.match(repositoryApi, /getRepositoryDirectory/);
@@ -197,27 +205,18 @@ test("Repository file and directory failures preserve the file tree", async () =
   assert.doesNotMatch(toggleDirectory, /workspaceLoadError/);
 });
 
-test("Repository workspace can move to a recoverable authenticated window", async () => {
-  const [app, workspace, page, windowHelper] = await Promise.all([
+test("Repository workspace is tab-only and has no independent-window route", async () => {
+  const [app, workspace] = await Promise.all([
     source("App.vue"),
     source("apps/control-plane/instance-detail/RepositoryWorkspace.vue"),
-    source("apps/control-plane/instance-detail/RepositoryWorkspacePage.vue"),
-    source("apps/control-plane/instance-detail/repositoryWorkspaceWindow.ts"),
   ]);
 
-  assert.match(app, /RepositoryWorkspacePage v-if="isRepositoryWorkspaceRoute"/);
-  assert.match(app, /<AuthGate v-else>/);
-  assert.match(workspace, /repository\.workspace\.openWindow/);
-  assert.match(workspace, /openRepositoryWorkspaceWindow\(\{ \.\.\.target\.value, view: "files" \}\)/);
+  assert.doesNotMatch(app, /RepositoryWorkspacePage|isRepositoryWorkspaceRoute|repository-workspace/);
+  assert.doesNotMatch(workspace, /openInNewWindow|openRepositoryWorkspaceWindow|repository\.workspace\.openWindow/);
   assert.doesNotMatch(workspace, /Unsaved drafts remain in this window/);
-  assert.match(workspace, /repositoryWorkspaceChannelName/);
-  assert.match(workspace, /refreshRepositoryState\(\), refreshLoadedDirectories\(\)/);
-  assert.match(page, /getRepositoryContext\(route\)/);
-  assert.match(page, /standalone/);
-  assert.match(windowHelper, /location\.pathname !== "\/repository-workspace"/);
-  assert.match(windowHelper, /sessionKind !== "ai-session" && sessionKind !== "app-session"/);
-  assert.match(windowHelper, /new URLSearchParams\(\{[\s\S]*instanceId:[\s\S]*sessionKind:[\s\S]*sessionId:[\s\S]*view:/);
-  assert.doesNotMatch(windowHelper, /snapshotId|displayName|RepositoryContext/);
+  assert.doesNotMatch(workspace, /BroadcastChannel|repositoryInvalidationChannelName/);
+  assert.match(workspace, /watch\(\(\) => `\$\{props\.instanceId\}:\$\{props\.sessionKind\}:\$\{props\.sessionId\}`,[\s\S]*\{ immediate: true \}\)/);
+  assert.doesNotMatch(workspace, /standalone|embedded\?|open: boolean|update:open/);
 });
 
 test("Repository file actions keep previews read-only and refresh stale server content", async () => {
@@ -332,7 +331,7 @@ test("Repository UI preserves edge states and structured recovery guidance", asy
   assert.match(apiClient, /payload\.error\?\.retryable/);
 });
 
-test("Repository navigation keeps portal, keyboard, focus, path, and confirmation contracts", async () => {
+test("Repository navigation keeps portal, keyboard, path, and confirmation contracts", async () => {
   const [environment, workspace, worktrees, popoverContent, dialogContent, repositoryApi] = await Promise.all([
     source("apps/control-plane/instance-detail/RepositoryEnvironment.vue"),
     source("apps/control-plane/instance-detail/RepositoryWorkspace.vue"),
@@ -345,13 +344,9 @@ test("Repository navigation keeps portal, keyboard, focus, path, and confirmatio
   assert.match(popoverContent, /PopoverPortal/);
   assert.match(dialogContent, /DialogPortal/);
   assert.doesNotMatch(environment, /@open-auto-focus\.prevent/);
-  assert.match(workspace, /@open-auto-focus="focusWorkspace"/);
-  assert.match(workspace, /DialogTitle v-if="!embedded" class="sr-only"/);
-  assert.match(workspace, /DialogDescription v-if="!embedded" class="sr-only"/);
   assert.match(workspace, /class="repository-workspace-tabs" role="tablist"[\s\S]*@keydown="navigateOpenTabs"/);
   assert.match(workspace, /\["ArrowLeft", "ArrowRight", "Home", "End"\]/);
   assert.match(workspace, /tabindex="-1"/);
-  assert.match(workspace, /workspaceBody\.value\?\.focus\(\)/);
   assert.match(workspace, /:tabindex="activeTabId === tab\.id \? 0 : -1"/);
   assert.match(workspace, /class="repository-workspace-tab-close" :aria-label="t\('repository\.workspace\.closeFile'/);
   assert.doesNotMatch(workspace, /<button[^>]*role="tab"[\s\S]{0,500}<X[^>]*role="button"/);

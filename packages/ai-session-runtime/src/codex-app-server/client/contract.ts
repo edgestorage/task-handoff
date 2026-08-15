@@ -1,6 +1,6 @@
 import type { EventEmitter } from "node:events";
 import type { AiSessionApprovalInput } from "@task-handoff/protocol/ai-sessions";
-import type { CodexApprovalRequest, CodexThread, CodexUserInput, JsonValue } from "../protocol/types";
+import type { CodexApprovalRequest, CodexThread, CodexThreadItemEntry, CodexUserInput, JsonValue } from "../protocol/types";
 
 type CodexApprovalDecision = AiSessionApprovalInput["decision"];
 
@@ -37,6 +37,7 @@ export type CodexAppServerClientLike = EventEmitter & {
   startThread?: (options: CodexThreadStartOptions) => Promise<CodexThread>;
   forkThread?: (options: CodexThreadForkOptions) => Promise<CodexThread>;
   readThread?: (threadId: string, options?: { includeTurns?: boolean }) => Promise<CodexThread | undefined>;
+  listThreadItems?: (threadId: string) => Promise<CodexThreadItemEntry[] | undefined>;
   listThreads?: () => Promise<CodexThread[]>;
   activeThreadExists?: (threadId: string) => Promise<boolean>;
   startTurn?: (threadId: string, message: string, inputs?: CodexUserInput[], permissions?: CodexTurnPermissionOverrides) => Promise<{ turnId?: string }>;

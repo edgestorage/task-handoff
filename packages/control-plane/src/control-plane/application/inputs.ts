@@ -67,6 +67,17 @@ export const CreateModelInputSchema = z.object({
 
 export const UpdateModelInputSchema = CreateModelInputSchema.partial().strict();
 
+export const ModelDiscoveryInputSchema = z.object({
+  endpoint: ModelConfigSchema.shape.endpoint,
+  key: ModelConfigSchema.shape.key.optional(),
+  existingModelId: ModelConfigSchema.shape.id.optional(),
+}).strict();
+
+export const ModelTestInputSchema = ModelDiscoveryInputSchema.extend({
+  model: ModelConfigSchema.shape.model,
+  app: ModelConfigSchema.shape.app,
+}).strict();
+
 export const CreateNodeInputSchema = z.object({
   id: NodeSchema.shape.id.optional(),
   name: NodeSchema.shape.name,
@@ -117,6 +128,8 @@ export const CreateNodeJoinInviteInputSchema = z.object({
 
 export type CreateModelInput = z.infer<typeof CreateModelInputSchema>;
 export type UpdateModelInput = z.infer<typeof UpdateModelInputSchema>;
+export type ModelDiscoveryInput = z.infer<typeof ModelDiscoveryInputSchema>;
+export type ModelTestInput = z.infer<typeof ModelTestInputSchema>;
 export type CreateNodeInput = z.infer<typeof CreateNodeInputSchema>;
 export type UpdateNodeInput = z.infer<typeof UpdateNodeInputSchema>;
 export type CreateNodeControlPlaneConnectionInput = z.infer<typeof CreateNodeControlPlaneConnectionInputSchema>;

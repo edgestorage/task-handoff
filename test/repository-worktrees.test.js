@@ -15,7 +15,7 @@ require.extensions[".ts"] = (module, filename) => {
   module._compile(output.outputText, filename);
 };
 
-const { RepositorySessionResolver } = require("../packages/controlled-instance/src/repository/context.ts");
+const { RepositorySessionResolver, repositoryWorktreeId } = require("../packages/controlled-instance/src/repository/context.ts");
 const { RepositoryOperationError } = require("../packages/controlled-instance/src/repository/changes.ts");
 const { ManagedWorktreeRegistry, RepositoryWorktreeService } = require("../packages/controlled-instance/src/repository/worktrees.ts");
 
@@ -34,6 +34,8 @@ function setup(fixture, options = {}) {
     registry,
     { aiSessions: () => aiSessions, appSessions: () => appSessions },
     options.workspaceRoots || [fixture.base],
+    undefined,
+    options.gitOptions,
   );
   return { aiSessions, appSessions, resolve, managedRoot, registry, service };
 }
@@ -114,9 +116,43 @@ test("existing sessions do not block another AI session and host app sessions ar
   assert.equal(current.removeBlockers.includes("session-occupied"), true);
 });
 
+test("an active session with a missing nested cwd still blocks worktree removal", async () => {
+  const fixture = createGitFixture();
+  const setupResult = setup(fixture);
+  const state = await setupResult.resolve();
+  const created = await setupResult.service.create({
+    mode: "new-branch",
+    branchName: "feature/missing-session-cwd",
+    startRef: "HEAD",
+    expectedSnapshotId: state.context.snapshotId,
+  });
+  const targetPath = managedPath(setupResult.managedRoot, created.worktreeId);
+  setupResult.aiSessions.push({ id: "ai-missing-cwd", cwd: path.join(targetPath, "deleted-subdirectory"), status: "running" });
+  const target = (await setupResult.service.list()).items.find((item) => item.id === created.worktreeId);
+  assert.deepEqual(target.activeAiSessionIds, ["ai-missing-cwd"]);
+  assert.equal(target.removeBlockers.includes("session-occupied"), true);
+});
+
+test("worktree listing fails closed when Git cannot determine dirty state", async () => {
+  const fixture = createGitFixture();
+  const gitWrapper = path.join(fixture.base, "git-status-failure.js");
+  fs.writeFileSync(gitWrapper, `#!/usr/bin/env node
+const { spawnSync } = require("node:child_process");
+const args = process.argv.slice(2);
+const subcommand = args.find((arg) => !arg.startsWith("-") && arg !== "color.ui=false" && arg !== "core.pager=cat" && arg !== "pager.branch=false" && arg !== "diff.external=" && arg !== "diff.trustExitCode=false" && arg !== "diff.colorMoved=false");
+if (subcommand === "status") process.exit(71);
+const result = spawnSync("git", args, { stdio: "inherit" });
+process.exit(result.status ?? 1);
+`);
+  fs.chmodSync(gitWrapper, 0o700);
+  const { service } = setup(fixture, { gitOptions: { gitCommand: gitWrapper } });
+
+  await assert.rejects(() => service.list(), (error) => error?.code === "GIT_EXIT");
+});
+
 test("managed worktrees are allocated privately from new and existing branches", async () => {
   const fixture = createGitFixture();
-  const { resolve, managedRoot, service } = setup(fixture);
+  const { aiSessions, appSessions, resolve, managedRoot, service } = setup(fixture);
   const before = await resolve();
   const created = await service.create({ mode: "new-branch", branchName: "feature/managed", startRef: "HEAD", expectedSnapshotId: before.context.snapshotId });
   const createdItem = created.worktrees.items.find((item) => item.id === created.worktreeId);
@@ -132,7 +168,105 @@ test("managed worktrees are allocated privately from new and existing branches",
   const existing = await service.create({ mode: "existing-branch", branchName: "feature/existing", expectedSnapshotId: next.context.snapshotId });
   assert.equal(git(managedPath(managedRoot, existing.worktreeId), ["branch", "--show-current"]), "feature/existing");
   const reloaded = new ManagedWorktreeRegistry(managedRoot);
-  assert.equal(reloaded.isManaged(existing.worktrees.repositoryId, existing.worktreeId, managedPath(managedRoot, existing.worktreeId)), true);
+  const reloadedService = new RepositoryWorktreeService(
+    resolve,
+    reloaded,
+    { aiSessions: () => aiSessions, appSessions: () => appSessions },
+    [fixture.base],
+  );
+  assert.equal((await reloadedService.list()).items.find((item) => item.id === existing.worktreeId).managed, true);
+});
+
+test("registry reconciliation recovers interrupted creation only when Git state matches the recorded intent", async () => {
+  const fixture = createGitFixture();
+  const setupResult = setup(fixture);
+  const state = await setupResult.resolve();
+  const destination = setupResult.registry.allocate(state.context.repositoryId, "HEAD", "interrupted-create");
+  const worktreeId = repositoryWorktreeId(state.context.repositoryId, path.resolve(destination));
+  const oid = fixture.git(["rev-parse", "HEAD"]);
+  setupResult.registry.prepare(state.context.repositoryId, worktreeId, destination, {
+    requestId: "interrupted-create",
+    ref: { type: "head" },
+    resolvedOid: oid,
+    checkout: "detached",
+  });
+  fixture.git(["worktree", "add", "--detach", destination, oid]);
+
+  const recoveredSetup = setup(fixture, { managedRoot: setupResult.managedRoot });
+  const recovered = (await recoveredSetup.service.list()).items.find((item) => item.id === worktreeId);
+  assert.equal(recovered.managed, true);
+  const registry = JSON.parse(fs.readFileSync(path.join(setupResult.managedRoot, "registry.json"), "utf8"));
+  assert.equal(registry.version, 2);
+  assert.equal(registry.entries.find((entry) => entry.worktreeId === worktreeId).state, "ready");
+});
+
+test("v0.0.21 registry downgrade preserves the existing worktree generation on re-upgrade", async () => {
+  const fixture = createGitFixture();
+  const setupResult = setup(fixture);
+  const state = await setupResult.resolve();
+  const created = await setupResult.service.create({
+    mode: "new-branch",
+    branchName: "feature/downgrade-roundtrip",
+    startRef: "HEAD",
+    expectedSnapshotId: state.context.snapshotId,
+  });
+  const registryPath = path.join(setupResult.managedRoot, "registry.json");
+  const current = JSON.parse(fs.readFileSync(registryPath, "utf8"));
+  fs.writeFileSync(registryPath, `${JSON.stringify({
+    version: 1,
+    entries: current.entries.map(({ repositoryId, worktreeId, path: worktreePath, createdAt }) => ({
+      repositoryId,
+      worktreeId,
+      path: worktreePath,
+      createdAt,
+    })),
+  }, null, 2)}\n`);
+
+  const upgraded = setup(fixture, { managedRoot: setupResult.managedRoot });
+  const target = (await upgraded.service.list()).items.find((item) => item.id === created.worktreeId);
+  assert.equal(target.managed, true);
+  assert.equal(JSON.parse(fs.readFileSync(registryPath, "utf8")).version, 2);
+});
+
+test("stale registry ownership does not transfer to a replacement worktree at the same path", async () => {
+  const fixture = createGitFixture();
+  const setupResult = setup(fixture);
+  const state = await setupResult.resolve();
+  const created = await setupResult.service.create({
+    mode: "new-branch",
+    branchName: "feature/original-generation",
+    startRef: "HEAD",
+    expectedSnapshotId: state.context.snapshotId,
+  });
+  const targetPath = managedPath(setupResult.managedRoot, created.worktreeId);
+  fixture.git(["worktree", "remove", targetPath]);
+  fixture.git(["branch", "feature/replacement-generation"]);
+  fixture.git(["worktree", "add", targetPath, "feature/replacement-generation"]);
+
+  const replacementSetup = setup(fixture, { managedRoot: setupResult.managedRoot });
+  const replacement = (await replacementSetup.service.list()).items.find((item) => item.id === created.worktreeId);
+  assert.equal(replacement.managed, false);
+  assert.equal(replacement.canRemove, false);
+  assert.equal(replacement.removeBlockers.includes("external-worktree"), true);
+});
+
+test("interrupted removal rolls back to ready when the original generation still exists", async () => {
+  const fixture = createGitFixture();
+  const setupResult = setup(fixture);
+  const state = await setupResult.resolve();
+  const created = await setupResult.service.create({
+    mode: "new-branch",
+    branchName: "feature/interrupted-remove",
+    startRef: "HEAD",
+    expectedSnapshotId: state.context.snapshotId,
+  });
+  const targetPath = managedPath(setupResult.managedRoot, created.worktreeId);
+  setupResult.registry.beginRemove(created.worktreeId, targetPath);
+
+  const recoveredSetup = setup(fixture, { managedRoot: setupResult.managedRoot });
+  const recovered = (await recoveredSetup.service.list()).items.find((item) => item.id === created.worktreeId);
+  assert.equal(recovered.managed, true);
+  assert.equal(recovered.canRemove, true);
 });
 
 test("AI session worktrees are idempotent per request and detach occupied refs", async () => {
@@ -236,6 +370,7 @@ test("managed removal rejects locked, prunable, external, and stale worktrees", 
   fixture.makeWorktreePrunable(managedPath(setupResult.managedRoot, prunable.worktreeId));
   const prunableList = await setupResult.service.list();
   assert.equal(prunableList.items.find((item) => item.id === prunable.worktreeId).prunable, true);
+  assert.equal(prunableList.items.find((item) => item.id === prunable.worktreeId).managed, true);
   await assert.rejects(() => setupResult.service.remove({ worktreeId: prunable.worktreeId, expectedSnapshotId: prunableList.snapshotId, confirm: true }), (error) => error.code === "REPOSITORY_WORKTREE_UNSAFE");
 
   state = await setupResult.resolve();

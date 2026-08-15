@@ -103,12 +103,12 @@ onBeforeUnmount(() => {
   white-space: normal;
 }
 
-:where(.markdown-content) :deep(> :first-child) {
-  margin-top: 0;
+.markdown-content :deep(> :first-child) {
+  margin-top: 0 !important;
 }
 
-:where(.markdown-content) :deep(> :last-child) {
-  margin-bottom: 0;
+.markdown-content :deep(> :last-child) {
+  margin-bottom: 0 !important;
 }
 
 .markdown-content :deep(p) {

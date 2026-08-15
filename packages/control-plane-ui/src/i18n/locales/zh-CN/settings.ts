@@ -138,6 +138,10 @@ export const settings = {
     controlPlane: "控制面板", allLocations: "全部 {count} 个位置", model: "模型", keepKey: "留空以保留当前密钥",
     keepCredential: "留空以保留所有位置的当前凭据。", save: "保存模型", create: "创建模型", saving: "正在保存", saved: "{name} 已保存。",
     deleteConfirm: "确认从 {location} 删除 {name}？其他位置将保留。", selectLocation: "选择位置", selectApp: "选择应用", namePlaceholder: "OpenAI 主配置", nodeLocation: "节点 · {name}",
+    discover: "获取模型", discovering: "获取中", discovered: "获取到 {count} 个模型 · {latency}ms", discoveredEmpty: "接口可用，但未返回模型 · {latency}ms",
+    chooseDiscovered: "选择已获取的模型", searchModels: "搜索模型", noModelMatches: "没有匹配的模型", manualModelHint: "可以从获取结果中选择，也可以直接填写模型 ID。",
+    test: "测试连接", testing: "测试中", testSucceeded: "模型请求成功 · {latency}ms",
+    probeUnsupported: "所选节点需要升级后才能获取模型或测试连接。",
   },
   imageRegistry: {
     count: "已注册镜像 · {count}", selectNode: "选择节点", noCapabilities: "无预期能力", deleting: "正在删除", empty: "尚无镜像配置。",

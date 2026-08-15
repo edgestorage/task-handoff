@@ -256,6 +256,8 @@ export const instances = {
     options: "看板选项",
     cardSize: "看板卡片大小",
     switchSession: "切换 {name} 的会话",
+    previousAiSession: "上一个 AI 会话",
+    nextAiSession: "下一个 AI 会话",
     sessionFrame: "{name} 会话",
     noMatches: "没有匹配的实例",
     empty: "暂无实例",

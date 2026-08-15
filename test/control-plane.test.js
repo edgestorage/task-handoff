@@ -368,7 +368,7 @@ function testAppInventory(apps, observedAt = new Date().toISOString()) {
 }
 
 test("controlled instance heartbeat protocol rejects legacy receiver projection", () => {
-  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-08-01");
+  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-08-15");
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, receiver: { status: "running", pendingCount: 1 } }).success, false);
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, apps: { runningCount: 1 } }).success, false);
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, appInventory: emptyAppInventory(), apps: { runningCount: 1 } }).success, true);
@@ -18126,6 +18126,14 @@ test("control plane aggregates ai session pending routes and proxies ai session 
           turns: [{ id: "turn_history_proxy", userPrompt: "Proxy prompt", lastMessage: "Proxy answer", status: "completed" }],
         } }), { status: 200, headers: { "content-type": "application/json" } });
       }
+      if (body?.path === "/api/ai-sessions/ais_waiting/timeline" && body.method === "GET") {
+        return new Response(JSON.stringify({ data: {
+          sessionId: "ais_waiting",
+          providerSessionId: "thread_waiting",
+          items: [{ id: "agent_1", turnId: "turn_1", type: "ai-message", text: "Working." }],
+          generatedAt: "2026-08-15T00:00:00.000Z",
+        } }), { status: 200, headers: { "content-type": "application/json" } });
+      }
       if (body?.path === "/api/ai-sessions/ais_history_proxy/resume" && body.method === "POST") {
         return new Response(JSON.stringify({ data: {
           disposition: "resumed",
@@ -18206,6 +18214,7 @@ test("control plane aggregates ai session pending routes and proxies ai session 
       status: "running",
       health: "ok",
       connectionStatus: "online",
+      capabilities: { features: { aiSessionTimeline: true } },
       apps: {
         runningCount: 1,
       },
@@ -18286,6 +18295,9 @@ test("control plane aggregates ai session pending routes and proxies ai session 
   const historyDetail = await json(app, "GET", `/api/controlled-instances/${created.body.data.id}/ai-sessions/history/ais_history_proxy`);
   assert.equal(historyDetail.statusCode, 200);
   assert.deepEqual(historyDetail.body.data.turns.map((turn) => [turn.id, turn.userPrompt, turn.lastMessage]), [["turn_history_proxy", "Proxy prompt", "Proxy answer"]]);
+  const timeline = await json(app, "GET", `/api/controlled-instances/${created.body.data.id}/ai-sessions/ais_waiting/timeline`);
+  assert.equal(timeline.statusCode, 200);
+  assert.deepEqual(timeline.body.data.items.map((item) => [item.type, item.id]), [["ai-message", "agent_1"]]);
   const resumed = await json(app, "POST", `/api/controlled-instances/${created.body.data.id}/ai-sessions/ais_history_proxy/resume`, {});
   assert.equal(resumed.statusCode, 200);
   assert.deepEqual(resumed.body.data, {

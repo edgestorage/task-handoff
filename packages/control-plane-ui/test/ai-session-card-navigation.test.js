@@ -38,8 +38,14 @@ test("ai session board cards show workspace context unless paths already group t
   assert.match(dock, /<TooltipTrigger as-child>\s*<b>/);
   assert.match(dock, /<TooltipContent[^>]*>\{\{ card\.session\.cwd \|\| t\("sessions\.board\.unknownPath"\) \}\}<\/TooltipContent>/);
   assert.match(board, /:global\(\.ai-session-path-tooltip\)\s*\{[^}]*background: var\(--surface-overlay\) !important;[^}]*font-size: 11px;/s);
-  assert.match(card, /\.ai-board-workspace b\s*\{[^}]*color: inherit;[^}]*font-weight: inherit;/s);
-  assert.match(dock, /\.ai-board-floating-workspace b\s*\{[^}]*color: inherit;[^}]*font-weight: inherit;/s);
+  assert.match(card, /\.ai-board-workspace\s*\{[^}]*flex: 1 1 0;[^}]*color: color-mix\(in srgb, var\(--ai-board-muted\) 78%, transparent\);[^}]*font-size: 12px;/s);
+  assert.match(card, /\.ai-board-workspace b\s*\{[^}]*flex: 1 1 auto;[^}]*color: inherit;[^}]*font-size: inherit;[^}]*font-weight: inherit;/s);
+  assert.match(card, /\.ai-board-secondary-line\s*\{[^}]*gap: 4px;/s);
+  assert.match(card, /\.ai-board-instance strong\s*\{[^}]*color: color-mix\(in srgb, var\(--ai-board-muted\) 78%, transparent\);/s);
+  assert.doesNotMatch(card, /\.ai-board-card-headline\s*\{[^}]*padding-right:/s);
+  assert.match(dock, /\.ai-board-floating-head \.ai-board-floating-workspace\s*\{[^}]*color: color-mix\(in srgb, var\(--ai-board-muted\) 78%, transparent\);[^}]*font-size: inherit;/s);
+  assert.match(dock, /\.ai-board-floating-workspace b\s*\{[^}]*flex: 1 1 auto;[^}]*color: inherit;[^}]*font-size: inherit;[^}]*font-weight: inherit;/s);
+  assert.match(dock, /\.ai-board-floating-secondary-line\s*\{[^}]*gap: 4px;/s);
 });
 
 test("reselecting the selected AI session card restores collapsed details", () => {

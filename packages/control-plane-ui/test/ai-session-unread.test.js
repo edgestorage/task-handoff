@@ -22,7 +22,9 @@ test("AI session unread state is pushed once and cleared only by opening details
   assert.match(sharedState, /session\.status === "running" \|\| session\.status === "waiting" \? false/);
   assert.match(sharedState, /session\.updatedAt !== state\.sessionUpdatedAt/);
   assert.match(board, /selectedCard\.value\?\.session\.unread[\s\S]*markAiSessionRead/);
-  assert.match(sessions, /function openAiSessionApp[\s\S]*markAiSessionRead/);
+  assert.match(sessions, /function selectAiSessionAppTab[\s\S]*markAiSessionRead/);
+  assert.match(sessions, /session\.providerSessionId[\s\S]*pendingAiSessionAppSelections\.set\(instance\.id, session\)/);
+  assert.match(sessions, /applyPendingAiSessionAppSelection\(\)/);
   assert.match(panel, /watch\(\(\) => \(\{[\s\S]*selectedSession\.value\?\.unread[\s\S]*markAiSessionRead/);
   assert.match(card, /:data-unread="card\.session\.unread \? 'true' : undefined"[\s\S]*?<span v-if="card\.session\.unread" class="ai-session-unread-dot"/);
   assert.match(panel, /:data-unread="session\.unread \? 'true' : undefined"[\s\S]*?<span v-if="session\.unread" class="ai-session-unread-dot"/);

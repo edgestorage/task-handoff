@@ -253,6 +253,8 @@ export const instances = {
     options: "Board options",
     cardSize: "Board card size",
     switchSession: "Switch session for {name}",
+    previousAiSession: "Previous AI session",
+    nextAiSession: "Next AI session",
     sessionFrame: "{name} session",
     noMatches: "No matching instances",
     empty: "No instances yet",

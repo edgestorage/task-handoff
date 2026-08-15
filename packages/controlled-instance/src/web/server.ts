@@ -86,8 +86,10 @@ import {
   AiSessionControlErrorSchema,
   AiSessionHistoryListSchema,
   AiSessionHistoryDetailSchema,
+  AiSessionTimelineSchema,
   AiSessionDeltaResponseSchema,
   AiSessionMessageDeltaEventSchema,
+  AiSessionTimelineItemEventSchema,
   type AiSessionEventReason,
   type AiSessionSnapshotEvent,
   type AiSessionsSnapshot,
@@ -624,6 +626,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       : Number(configuredDeltaCoalescingWindow),
   });
   const codexAppServer = options.codexAppServer || new CodexAppServerSessionBridge(aiSessions, {
+    timelineStorePath: path.join(storagePaths.dataDir, "ai-session-timeline", "codex"),
     threadStartDefaults: {
       model: process.env.TASK_HANDOFF_CODEX_MODEL?.trim() || undefined,
       modelProvider: process.env.TASK_HANDOFF_CODEX_MODEL?.trim() ? "openai" : undefined,
@@ -636,6 +639,14 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
         generatedAt: new Date().toISOString(),
       });
       aiSessionMessageDeltas.push(payload);
+    },
+    onTimelineItem: (timelineItem) => {
+      events.publish(AiSessionEventType.TimelineItem, AiSessionTimelineItemEventSchema.parse({
+        instanceId,
+        nodeId: process.env.TASK_HANDOFF_NODE_ID,
+        ...timelineItem,
+        generatedAt: new Date().toISOString(),
+      }));
     },
     onEventSourceClose: () => aiSessionMessageDeltas.flushAll("event-source-close"),
   });
@@ -706,6 +717,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       if (agent === "codex") await codexAppServer.sync(appSessionsWithSharedCodexAppServer());
     },
     prepareManagedWorktree: async (source, clientRequestId) => repositoryAiSessionWorkspace.prepareForkWorktree(source.id, clientRequestId),
+    validateManagedWorktree: async (source, worktreeId, cwd) => repositoryAiSessionWorkspace.validateForkWorktree(source.id, worktreeId, cwd),
     removeManagedWorktree: async (source, worktreeId) => repositoryAiSessionWorkspace.removeForkWorktree(source.id, worktreeId),
     onDiagnostic: (diagnostic) => app.log.warn({ diagnostic }, "AI session Fork compensation"),
   });
@@ -1420,6 +1432,18 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   app.get<{ Params: { id: string } }>("/api/ai-sessions/:id", async (request, reply) => {
     const session = aiSessions.get(request.params.id);
     return session ? { data: session } : reply.code(404).send({ error: { code: "AI_SESSION_NOT_FOUND", message: "AI session not found." } });
+  });
+
+  app.get<{ Params: { id: string } }>("/api/ai-sessions/:id/timeline", async (request, reply) => {
+    const session = aiSessions.get(request.params.id);
+    if (!session) {
+      return reply.code(404).send({ error: { code: "AI_SESSION_NOT_FOUND", message: "AI session not found." } });
+    }
+    try {
+      return { data: AiSessionTimelineSchema.parse(await codexAppServer.timeline(session)) };
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
   });
 
   app.get<{ Params: { id: string }; Querystring: { afterTurnId?: string; afterRevision?: string } }>("/api/ai-sessions/:id/turns", async (request, reply) => {

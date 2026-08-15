@@ -1,4 +1,4 @@
-import type { RepositoryBranches, RepositoryContext } from "@task-handoff/protocol/repository";
+import type { RepositoryBranches, RepositoryContext, RepositoryWorktrees } from "@task-handoff/protocol/repository";
 import type { ResolvedRepository } from "./context";
 import { GitProcess, GitProcessError, type GitProcessOptions } from "./git-process";
 import { RepositoryMutationQueue } from "./mutation-queue";
@@ -18,6 +18,10 @@ export class RepositoryBranchService {
   async list(): Promise<RepositoryBranches> {
     const state = await this.requireAvailable();
     return this.listFromState(state);
+  }
+
+  listForState(state: ResolvedRepository, worktrees?: RepositoryWorktrees | Promise<RepositoryWorktrees>) {
+    return this.listFromState(state, worktrees);
   }
 
   create(request: { name: string; expectedSnapshotId: string }) {
@@ -159,14 +163,16 @@ export class RepositoryBranchService {
     });
   }
 
-  private async listFromState(state: ResolvedRepository): Promise<RepositoryBranches> {
+  private async listFromState(state: ResolvedRepository, suppliedWorktrees?: RepositoryWorktrees | Promise<RepositoryWorktrees>): Promise<RepositoryBranches> {
     const git = new GitProcess(state.worktreeRoot!, this.gitOptions);
-    const result = await git.run("for-each-ref", [
-      "--format=%(refname)%00%(objectname)%00%(upstream:short)%00%(upstream:track,nobracket)",
-      "refs/heads",
-      "refs/remotes",
+    const [result, worktrees] = await Promise.all([
+      git.run("for-each-ref", [
+        "--format=%(refname)%00%(objectname)%00%(upstream:short)%00%(upstream:track,nobracket)",
+        "refs/heads",
+        "refs/remotes",
+      ]),
+      suppliedWorktrees || this.worktrees.listForState(state),
     ]);
-    const worktrees = await this.worktrees.list();
     const occupied = new Map<string, string[]>();
     for (const worktree of worktrees.items) {
       if (worktree.head.state === "branch" && worktree.head.branch) {

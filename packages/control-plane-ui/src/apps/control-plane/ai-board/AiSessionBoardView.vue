@@ -257,6 +257,7 @@ import { showControlPlaneToast } from "../useControlPlaneToasts";
 import { aiSessionMessageText, clearAiSessionDraft, loadAiSessionDraftPayload, persistAiSessionDraftPayload } from "../useAiSessionDraft";
 import {
   aiSessionAppTab,
+  aiSessionAppNavigationTarget,
   aiSessionBasename,
   aiSessionStableSortKey,
   aiSessionTurns,
@@ -962,17 +963,9 @@ async function openCardApp(instance: InstanceWithAiSessions, session?: AiSession
     return;
   }
   try {
+    emit("openAiSessionApp", instance, session);
     const result = await openAiSessionApp(instance.id, session.id, crypto.randomUUID());
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      await refreshBoard();
-      const current = instance.aiSessions?.sessions.find((candidate) => candidate.id === result.aiSessionId);
-      if (current?.appSessionId) {
-        emit("openAiSessionApp", instance, current);
-        return;
-      }
-      await new Promise((resolve) => window.setTimeout(resolve, 500));
-    }
-    throw new Error(t("sessions.panel.starting"));
+    emit("openAiSessionApp", instance, aiSessionAppNavigationTarget(session, result));
   } catch (error) {
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.openAppFailed")));
     await refreshBoard();

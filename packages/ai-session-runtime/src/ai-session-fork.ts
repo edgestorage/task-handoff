@@ -28,6 +28,7 @@ export type AiSessionForkCoordinatorOptions = {
   controller: AiSessionController;
   ensureProvider?: (agent: string) => void | Promise<void>;
   prepareManagedWorktree?: (source: AiSessionStatus, clientRequestId: string) => Promise<AiSessionForkWorkspacePreparation>;
+  validateManagedWorktree?: (source: AiSessionStatus, worktreeId: string, cwd: string) => Promise<boolean>;
   removeManagedWorktree?: (source: AiSessionStatus, worktreeId: string) => Promise<boolean>;
   materializationTimeoutMs?: number;
   operationStorePath?: string;
@@ -96,6 +97,15 @@ export class AiSessionForkCoordinator {
         }
         operation.stage = "workspace-prepared";
         this.persist();
+      }
+
+      if (operation.input.workspace.mode === "managed-worktree") {
+        if (!operation.worktreeId || !this.options.validateManagedWorktree) {
+          throw aiSessionControlError("AI_SESSION_FORK_WORKTREE_UNAVAILABLE", "Managed Fork worktree validation is unavailable.", 409);
+        }
+        if (!await this.options.validateManagedWorktree(source, operation.worktreeId, operation.cwd)) {
+          throw aiSessionControlError("AI_SESSION_FORK_WORKTREE_UNAVAILABLE", "Managed Fork worktree changed before the provider session was created.", 409);
+        }
       }
 
       if (!operation.providerSessionId) {

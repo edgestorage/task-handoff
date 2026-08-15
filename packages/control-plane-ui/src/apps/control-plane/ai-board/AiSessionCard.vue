@@ -293,15 +293,17 @@ const filteredTriggerTemplates = computed(() => {
 
 .ai-board-card-headline {
   min-width: 0;
-  padding-right: 112px;
 }
 
 .ai-board-workspace {
   display: flex;
   align-items: baseline;
-  gap: 6px;
-  flex: 1 1 auto;
+  gap: 4px;
+  flex: 1 1 0;
   min-width: 0;
+  color: color-mix(in srgb, var(--ai-board-muted) 78%, transparent);
+  font-size: 12px;
+  line-height: 1.2;
   white-space: nowrap;
 }
 
@@ -313,7 +315,7 @@ const filteredTriggerTemplates = computed(() => {
 }
 
 .ai-board-workspace b {
-  flex: 0 1 auto;
+  flex: 1 1 auto;
   color: inherit;
   font-size: inherit;
   font-weight: inherit;
@@ -361,7 +363,7 @@ const filteredTriggerTemplates = computed(() => {
 .ai-board-secondary-line {
   display: flex;
   align-items: baseline;
-  gap: 6px;
+  gap: 4px;
 }
 
 .ai-board-identity strong,
@@ -373,7 +375,7 @@ const filteredTriggerTemplates = computed(() => {
 }
 
 .ai-board-instance strong {
-  color: var(--ai-board-muted);
+  color: color-mix(in srgb, var(--ai-board-muted) 78%, transparent);
   font-size: 13px;
   font-weight: 700;
   line-height: 1.2;

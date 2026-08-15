@@ -54,6 +54,7 @@ export function useActiveInstanceSessions({
   const sessionTabOrderKeys = reactive<Record<string, string[]>>({});
   const selectedAiSessionKeys = reactive<Record<string, string>>({});
   const repositorySessionTabs = reactive<Record<string, SessionTab[]>>({});
+  const pendingAiSessionAppSelections = new Map<string, AiSessionSummary>();
 
   const sessionTabs = computed(() => {
     const instanceId = activeInstance.value?.id;
@@ -173,7 +174,7 @@ export function useActiveInstanceSessions({
   );
 
   watch(
-    () => sessionTabs.value.map((session) => session.key).join("\n"),
+    () => [activeInstance.value?.id || "", sessionTabs.value.map((session) => session.key).join("\n")] as const,
     () => {
       if (!sessionTabs.value.length) {
         leftSessionKey.value = "overview";
@@ -183,6 +184,7 @@ export function useActiveInstanceSessions({
       }
       pruneSessionTabOrder();
       normalizeSessionLayout();
+      applyPendingAiSessionAppSelection();
     },
   );
 
@@ -434,20 +436,40 @@ export function useActiveInstanceSessions({
   function openAiSessionApp(instance: InstanceBoardItemWithAppSessions, session?: AiSessionSummary) {
     const tab = aiSessionAppTab(instance, session);
     if (tab) {
-      selectedSessionKeys[instance.id] = tab.key;
-      focusedSessionPanes[instance.id] = "left";
-      rememberSessionKey(instance.id, tab.key);
-      if (session?.unread) void markAiSessionRead(instance.id, session.id, session.updatedAt).catch(() => undefined);
+      selectAiSessionAppTab(instance.id, tab, session);
+    } else if (session && (session.appSessionId || session.providerSessionId || session.appBindingKeys?.length)) {
+      pendingAiSessionAppSelections.set(instance.id, session);
     }
+  }
+
+  function applyPendingAiSessionAppSelection() {
+    const instance = activeInstance.value;
+    if (!instance) return;
+    const session = pendingAiSessionAppSelections.get(instance.id);
+    if (!session) return;
+    const tab = aiSessionAppTab(instance, session);
+    if (!tab) return;
+    pendingAiSessionAppSelections.delete(instance.id);
+    selectAiSessionAppTab(instance.id, tab, session);
+  }
+
+  function selectAiSessionAppTab(instanceId: string, tab: SessionTab, session?: AiSessionSummary) {
+    const alreadySelected = selectedSessionKeys[instanceId] === tab.key && focusedSessionPanes[instanceId] === "left";
+    selectedSessionKeys[instanceId] = tab.key;
+    focusedSessionPanes[instanceId] = "left";
+    rememberSessionKey(instanceId, tab.key);
+    if (session?.unread && !alreadySelected) void markAiSessionRead(instanceId, session.id, session.updatedAt).catch(() => undefined);
   }
 
   function openRepositoryWorkspace(target: RepositoryWorkspaceTabTarget) {
     const instanceId = activeInstance.value?.id;
     if (!instanceId) return;
-    const page = target.page === "changes-review" ? "changes-review" : "workspace";
+    const page = target.page === "changes-review" || target.page === "worktrees" ? target.page : "workspace";
     const key = page === "changes-review"
       ? `repository-changes:${target.sessionKind}:${target.sessionId}`
-      : `repository:${target.sessionKind}:${target.sessionId}`;
+      : page === "worktrees"
+        ? `repository-worktrees:${target.sessionKind}:${target.sessionId}`
+        : `repository:${target.sessionKind}:${target.sessionId}`;
     const tabs = repositorySessionTabs[instanceId] ||= reactive<SessionTab[]>([]);
     const existingTab = tabs.find((tab) => tab.key === key);
     const source = target.filePath
@@ -457,7 +479,11 @@ export function useActiveInstanceSessions({
       tabs.push({
         key,
         kind: "repository",
-        label: page === "changes-review" ? t("repository.review.title") : t("repository.workspace.explorer"),
+        label: page === "changes-review"
+          ? t("repository.review.title")
+          : page === "worktrees"
+            ? t("repository.worktreesPanel.title")
+            : t("repository.workspace.explorer"),
         status: "open",
         source,
       });

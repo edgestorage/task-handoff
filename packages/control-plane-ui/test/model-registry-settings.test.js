@@ -51,3 +51,16 @@ test("models settings edits aggregate entries and deletes explicit locations thr
   assert.match(settings, /@select="removeModel\(model, location\)"/);
   assert.match(settings, /location\.type === 'node' && location\.referenceCount > 0/);
 });
+
+test("model settings discovers models into a searchable picker while preserving direct input and real endpoint testing", () => {
+  const settings = read("src/apps/control-plane/settings/SettingsModal.vue");
+  const state = read("src/apps/control-plane/settings/useModelSettings.ts");
+  assert.match(settings, /<ControlPlaneInput v-model="settingsModel\.model"/);
+  assert.match(settings, /<CommandInput :placeholder="t\('settings\.modelRegistry\.searchModels'\)"/);
+  assert.match(settings, /v-for="option in discoveredModels"/);
+  assert.match(settings, /@click="fetchModelOptions"/);
+  assert.match(settings, /@click="checkModel"/);
+  assert.match(state, /discoverModels\(endpointDraft\(\), endpointNodeId\(\)\)/);
+  assert.match(state, /testModel\(\{/);
+  assert.match(state, /existingModelId: editingModelId\.value/);
+});

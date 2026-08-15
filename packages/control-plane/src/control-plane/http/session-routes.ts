@@ -135,6 +135,10 @@ export function registerSessionRoutes({
     const params = InstanceSessionParamsSchema.parse(request.params);
     return { data: await service.getAiSessionHistoryDetail(params.id, params.sessionId) };
   });
+  app.get("/api/controlled-instances/:id/ai-sessions/:sessionId/timeline", async (request) => {
+    const params = InstanceSessionParamsSchema.parse(request.params);
+    return { data: await service.getAiSessionTimeline(params.id, params.sessionId) };
+  });
   app.post("/api/controlled-instances/:id/ai-sessions/:sessionId/resume", async (request) => {
     const params = InstanceSessionParamsSchema.parse(request.params);
     EmptyRequestSchema.parse(request.body || {});

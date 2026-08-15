@@ -16,6 +16,8 @@ test("repository workspace, diff, branch, worktree, and delivery labels render i
   assert.equal(chinese("repository.branchesPanel.delete"), "删除分支");
   assert.equal(english("repository.worktreesPanel.remove"), "Remove worktree");
   assert.equal(chinese("repository.worktreesPanel.remove"), "移除工作树");
+  assert.equal(english("repository.worktreesPanel.search"), "Search branches, commits, or worktree types…");
+  assert.equal(chinese("repository.worktreesPanel.search"), "搜索分支、提交或工作树类型…");
   assert.equal(english("repository.delivery.divergedHint", { ahead: 2, behind: 3 }), "The branch is 2 ahead and 3 behind. Resolve it in the session terminal, then refresh Environment.");
   assert.equal(chinese("repository.delivery.divergedHint", { ahead: 2, behind: 3 }), "分支领先 2、落后 3。请在会话终端中处理后刷新环境。");
 });

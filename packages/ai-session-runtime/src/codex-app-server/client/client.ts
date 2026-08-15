@@ -11,6 +11,7 @@ import type {
   CodexAppServerEvent,
   CodexApprovalRequest,
   CodexThread,
+  CodexThreadItemEntry,
   CodexUserInput,
   JsonValue,
 } from "../protocol/types";
@@ -75,6 +76,7 @@ export class CodexAppServerClient extends EventEmitter {
   private readonly requestTimeoutMs: number;
   private serverUserAgent?: string;
   private forkMethodAvailable = true;
+  private threadItemsListAvailable = true;
 
   constructor(options: CodexAppServerClientOptions = {}) {
     super();
@@ -224,6 +226,41 @@ export class CodexAppServerClient extends EventEmitter {
   async readThread(threadId: string, options: { includeTurns?: boolean } = {}) {
     const result = await this.request("thread/read", { threadId, includeTurns: Boolean(options.includeTurns) });
     return result.thread && typeof result.thread === "object" ? result.thread as CodexThread : undefined;
+  }
+
+  async listThreadItems(threadId: string): Promise<CodexThreadItemEntry[] | undefined> {
+    if (!this.threadItemsListAvailable) return undefined;
+    const items: CodexThreadItemEntry[] = [];
+    let cursor: string | null | undefined;
+    try {
+      do {
+        const result = await this.request("thread/items/list", {
+          threadId,
+          turnId: null,
+          cursor: cursor || null,
+          limit: 1_000,
+          sortDirection: "asc",
+        });
+        if (Array.isArray(result.data)) {
+          for (const value of result.data) {
+            if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+            const entry = value as Record<string, unknown>;
+            if (typeof entry.turnId !== "string" || !entry.item || typeof entry.item !== "object" || Array.isArray(entry.item)) continue;
+            items.push({ turnId: entry.turnId, item: entry.item as JsonValue });
+          }
+        }
+        cursor = typeof result.nextCursor === "string" && result.nextCursor ? result.nextCursor : null;
+      } while (cursor);
+      return items;
+    } catch (error) {
+      // Compatibility for v0.0.21: its managed Codex app-server predates the
+      // persistent single-item history endpoint. Fall back to thread/read.
+      if (error instanceof CodexAppServerRpcError && error.rpcCode === -32601) {
+        this.threadItemsListAvailable = false;
+        return undefined;
+      }
+      throw error;
+    }
   }
 
   async listThreads() {

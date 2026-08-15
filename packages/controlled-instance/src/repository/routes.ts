@@ -367,6 +367,20 @@ export function registerRepositoryRoutes(app: FastifyInstance, options: Register
       }
       return { cwd, worktreeId: created.worktreeId };
     },
+    validateForkWorktree: async (aiSessionId: string, worktreeId: string, expectedCwd: string) => {
+      try {
+        const services = servicesFor("ai-session", aiSessionId);
+        const source = await requireRepository(services.resolve);
+        const worktrees = await services.worktrees.listForState(source);
+        const target = worktrees.items.find((item) => item.id === worktreeId);
+        if (!target?.managed || !target.canCreateAiSession) return false;
+        const root = await services.worktrees.resolveWorkspace(worktrees.repositoryContextId, worktreeId);
+        const cwd = workspaceCwd(root, source);
+        return fs.realpathSync(cwd) === fs.realpathSync(expectedCwd) && fs.statSync(cwd).isDirectory();
+      } catch {
+        return false;
+      }
+    },
     removeForkWorktree: async (aiSessionId: string, worktreeId: string) => {
       const services = servicesFor("ai-session", aiSessionId);
       return (await compensateFailedWorktreeLaunch(services.worktrees, worktreeId)).removed;
@@ -391,7 +405,11 @@ async function inspectAiSessionWorkspace(services: WorkspaceServices) {
   if (state.context.availability !== "available") {
     return RepositoryAiSessionWorkspaceSchema.parse({ availability: state.context.availability });
   }
-  const [branches, worktrees] = await Promise.all([services.branches.list(), services.worktrees.list()]);
+  const worktreesPromise = services.worktrees.listForState(state);
+  const [branches, worktrees] = await Promise.all([
+    services.branches.listForState(state, worktreesPromise),
+    worktreesPromise,
+  ]);
   const currentWorktree = worktrees.items.find((item) => item.isCurrent);
   const dirty = Boolean(currentWorktree?.dirty);
   const headChoice = state.context.head?.oid ? [{

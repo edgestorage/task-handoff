@@ -6,10 +6,12 @@
       { 'has-response': displayContent },
     ]"
   >
+    <AiSessionTurnHistory :nodes="activityHistory" />
+
     <section
       v-show="displayContent"
       class="ai-session-detail-response"
-      :class="{ 'ai-session-detail-response-active': session.status === 'running' || session.status === 'waiting' }"
+      :class="{ 'ai-session-detail-response-active': active }"
     >
       <AiSessionStreamingMarkdown
         :code-tools="markdownCodeTools"
@@ -23,21 +25,25 @@
     </section>
 
     <AiSessionToolActivity
-      v-if="isLatest"
+      v-if="isLatest && active"
       :current-tool="session.currentTool"
       :phase="session.phase"
       :status="session.status"
       :summary="session.summary"
       :tool-calls-since-last-message="session.toolCallsSinceLastMessage"
       :tone="tone"
+      :activities="activities"
+      :error="activityError"
+      :interactive="activityInteractive"
+      :loading="activityLoading"
     />
 
     <AiSessionSubAgents
-      v-if="session.subAgents?.length"
+      v-if="isLatest && session.subAgents?.length"
       :sub-agents="session.subAgents"
     />
 
-    <section v-if="session.queue?.items.length" class="ai-session-detail-queue">
+    <section v-if="isLatest && session.queue?.items.length" class="ai-session-detail-queue">
       <span class="ai-session-detail-queue-label">{{ t("sessions.activity.queue", { count: session.queue.pendingCount }) }}</span>
       <ScrollArea type="auto" class="ai-session-detail-queue-list" :horizontal="false">
         <article
@@ -89,7 +95,7 @@
       </ScrollArea>
     </section>
 
-    <div v-if="canResolveApproval" class="ai-session-detail-approval">
+    <div v-if="isLatest && canResolveApproval" class="ai-session-detail-approval">
       <button type="button" :disabled="busy" @click="$emit('resolveApproval', 'allow')">
         <Check :size="14" />
         <span>{{ t("sessions.actions.allow") }}</span>
@@ -111,9 +117,12 @@ import { Ban, Check, CornerDownRight, GripVertical, Pencil, RotateCcw, Trash2, X
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type { AiSessionSummary } from "../../api/types";
+import type { AiSessionTimelineActivity } from "@task-handoff/protocol/ai-sessions";
+import type { TimelineTurnNode } from "./timelineActivities";
 import { useStreamingMessagesStore } from "../../apps/control-plane/useStreamingMessagesStore";
 import { ScrollArea } from "../ui/scroll-area";
 import AiSessionStreamingMarkdown from "./AiSessionStreamingMarkdown.vue";
+import AiSessionTurnHistory from "./AiSessionTurnHistory.vue";
 import AiSessionSubAgents from "./AiSessionSubAgents.vue";
 import AiSessionToolActivity from "./AiSessionToolActivity.vue";
 
@@ -134,6 +143,11 @@ const props = withDefaults(defineProps<{
   responseContent?: string;
   session: AiSessionSummary;
   tone?: "detail" | "board";
+  activities?: AiSessionTimelineActivity[];
+  activityHistory?: TimelineTurnNode[];
+  activityError?: string;
+  activityInteractive?: boolean;
+  activityLoading?: boolean;
 }>(), {
   busy: false,
   canInterrupt: false,
@@ -142,6 +156,11 @@ const props = withDefaults(defineProps<{
   isLatest: false,
   responseContent: "",
   tone: "detail",
+  activities: () => [],
+  activityHistory: () => [],
+  activityError: "",
+  activityInteractive: false,
+  activityLoading: false,
 });
 
 const emit = defineEmits<{
@@ -158,6 +177,7 @@ const draggingQueueId = ref("");
 const queueOrderPreview = ref<string[]>([]);
 const queuedItems = computed(() => props.session.queue.items.filter((item) => item.status === "queued"));
 const displayedQueueItems = computed(() => queueItemsWithQueuedOrder(props.session.queue.items, queueOrderPreview.value));
+const active = computed(() => props.isLatest && (props.session.status === "running" || props.session.status === "waiting"));
 
 function moveQueuedMessage(queueId: string, offset: -1 | 1) {
   const queueIds = queuedItems.value.map((item) => item.id);
@@ -247,7 +267,7 @@ const displayContent = computed(() => streamingContent.value || props.responseCo
 
 <style scoped>
 .ai-session-result {
-  --detail-activity-gap: 12px;
+  --detail-activity-gap: 24px;
   --detail-response-line-height: 1.55;
   --detail-activity-border: var(--line-subtle);
   --detail-activity-surface: var(--surface-subtle);
@@ -257,8 +277,21 @@ const displayContent = computed(() => streamingContent.value || props.responseCo
   --detail-activity-danger: var(--status-danger);
   --detail-action-bg: var(--surface-raised);
   display: grid;
+  align-content: start;
   gap: var(--detail-activity-gap);
   min-width: 0;
+}
+
+.ai-session-result-detail {
+  gap: 0;
+}
+
+.ai-session-result-detail > * {
+  margin-top: 0;
+}
+
+.ai-session-result-detail > * + * {
+  margin-top: var(--detail-activity-gap);
 }
 
 .ai-session-result-board {
@@ -285,6 +318,7 @@ const displayContent = computed(() => streamingContent.value || props.responseCo
 .ai-session-result-detail .ai-session-detail-response {
   margin-inline: -10px;
   padding-inline: 10px;
+  padding-bottom: 0;
 }
 
 .ai-session-result-board .ai-session-detail-response {
@@ -296,6 +330,10 @@ const displayContent = computed(() => streamingContent.value || props.responseCo
   padding-bottom: 4px;
 }
 
+.ai-session-result-detail .ai-session-detail-response-active {
+  padding-bottom: 0;
+}
+
 .ai-session-detail-response :deep(> div) {
   color: var(--detail-activity-strong);
   font-size: 14px;
@@ -305,11 +343,11 @@ const displayContent = computed(() => streamingContent.value || props.responseCo
   white-space: normal;
 }
 
-.ai-session-result :deep(.ai-session-tool-activity) {
+.ai-session-result-board :deep(.ai-session-tool-activity) {
   margin-top: 0;
 }
 
-.ai-session-result.has-response .ai-session-detail-response + :deep(.ai-session-tool-activity) {
+.ai-session-result-board.has-response .ai-session-detail-response + :deep(.ai-session-tool-activity) {
   margin-top: calc(-1 * var(--detail-activity-gap));
 }
 

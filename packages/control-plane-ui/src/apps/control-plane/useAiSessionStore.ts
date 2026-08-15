@@ -1,6 +1,6 @@
 import { computed, watch } from "vue";
 import { useQueryClient } from "@tanstack/vue-query";
-import type { AiSessionStreamEvent } from "@task-handoff/protocol/ai-sessions";
+import type { AiSessionStreamEvent, AiSessionTimelineItemEvent } from "@task-handoff/protocol/ai-sessions";
 import { applyAiSessionUnreadState, applyControlPlaneAiSessionStreamEvent } from "@task-handoff/control-plane-client";
 import { sharedAiSessionsApi } from "../../api/sharedClient";
 import {
@@ -20,6 +20,7 @@ import {
 } from "../../api/types";
 import { createSessionStreamRecovery, type SessionStreamRecoveryRetryOptions } from "./sessionStreamRecovery.ts";
 import { useStreamingMessagesStore } from "./useStreamingMessagesStore.ts";
+import { useAiSessionTimelineStore } from "./useAiSessionTimelineStore.ts";
 
 export function useAiSessionStore(input: {
   boardInstances: () => InstanceBoardItemWithAppSessions[];
@@ -31,6 +32,7 @@ export function useAiSessionStore(input: {
   const queryClient = useQueryClient();
   const aiSessionsApi = input.aiSessionsApi || sharedAiSessionsApi;
   const streamingMessages = useStreamingMessagesStore();
+  const timelineItems = useAiSessionTimelineStore();
   const acceptsInstance = (instanceId: string) => {
     const scope = input.queryKey()[1];
     return scope === "*" || scope === instanceId;
@@ -112,6 +114,12 @@ export function useAiSessionStore(input: {
     return false;
   }
 
+  function applyTimelineItem(payload: AiSessionTimelineItemEvent) {
+    if (!payload?.instanceId || !payload.sessionId || !acceptsInstance(payload.instanceId)) return false;
+    timelineItems.apply(payload);
+    return true;
+  }
+
   function applyEvent(event: AiSessionDeltaResponse["events"][number], fromRecovery = false) {
     const instanceId = event.payload.meta.instanceId;
     if (!acceptsInstance(instanceId)) return false;
@@ -156,6 +164,7 @@ export function useAiSessionStore(input: {
 
   function cleanupInstance(instanceId: string) {
     streamingMessages.cleanupInstance(instanceId);
+    timelineItems.cleanupInstance(instanceId);
     streamRecovery.cleanupInstance(instanceId);
   }
 
@@ -177,6 +186,8 @@ export function useAiSessionStore(input: {
     instanceWithAiSessions,
     applySnapshotEvent,
     applyMessageDelta,
+    applyTimelineItem,
+    recoverTimelineItems: timelineItems.recoverConnection,
     applyEvent,
     applyUnreadEvent,
     recoverDescriptor: streamRecovery.recoverDescriptor,

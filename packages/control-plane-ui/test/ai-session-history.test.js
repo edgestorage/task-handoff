@@ -14,7 +14,15 @@ test("AI session history is an on-demand sidebar mode entered from the current-l
   assert.match(panel, /<History :size="15" \/>/);
   assert.match(panel, /async function enterHistoryMode\(\) \{[\s\S]*historyMode\.value = true;[\s\S]*await loadHistory\(\);/);
   assert.doesNotMatch(panel, /useQuery\([^)]*history/);
-  assert.match(styles, /\.session-ai-sidebar\s*\{[^}]*grid-template-rows: auto minmax\(0, 1fr\) auto;/s);
+  assert.match(panel, /<ScrollArea class="session-ai-list" :class="\{ 'has-history-entry': !historyMode \}">/);
+  assert.match(panel, /<aside ref="sidebarEl" class="session-ai-sidebar" :class="\{ 'has-history-entry': !historyMode \}">/);
+  assert.match(styles, /\.session-ai-sidebar\s*\{[^}]*grid-template-rows: auto minmax\(0, 1fr\);/s);
+  assert.match(styles, /\.session-ai-sidebar\s*\{[^}]*gap: 6px;/s);
+  assert.match(styles, /\.session-ai-list\.has-history-entry \.session-ai-list-content\s*\{[^}]*padding-bottom: 36px;/s);
+  assert.match(styles, /\.session-ai-sidebar\.has-history-entry::after\s*\{[^}]*height: 52px;[^}]*background: linear-gradient\(to bottom, transparent, var\(--workspace-bg\) 72%\);[^}]*pointer-events: none;/s);
+  assert.match(styles, /:global\(\.session-ai-sidebar-sheet \.session-ai-sidebar\)\s*\{[^}]*--session-ai-list-left-inset: 12px;[^}]*--session-ai-list-bottom-inset: 12px;/s);
+  assert.match(styles, /\.session-ai-history-entry\s*\{[^}]*position: absolute;[^}]*bottom: var\(--session-ai-list-bottom-inset\);[^}]*left: var\(--session-ai-list-left-inset\);[^}]*width: calc\(100% - var\(--session-ai-list-left-inset\) - var\(--session-ai-list-right-inset\)\);[^}]*height: 30px;[^}]*min-height: 30px;[^}]*padding: 0 6px;/s);
+  assert.match(styles, /\.session-ai-history-entry:hover,[\s\S]*?\.session-ai-history-entry:focus-visible\s*\{[^}]*background: var\(--surface-hover\);/s);
   assert.doesNotMatch(styles, /\.session-ai-empty\.session-ai-filter-empty\s*\{[^}]*border:/s);
 });
 

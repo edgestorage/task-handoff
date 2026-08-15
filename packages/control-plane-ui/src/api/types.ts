@@ -4,6 +4,7 @@ import type {
   AiSessionHistoryItem,
   AiSessionHistoryList,
   AiSessionHistoryDetail,
+  AiSessionTimeline,
   AiSessionMentionCandidate,
   AiSessionMentionCatalog,
   AiSessionMentionDiagnostic,
@@ -60,7 +61,7 @@ import type {
 } from "@task-handoff/control-plane-client";
 import type { ControlPlaneAuthenticatedUser } from "@task-handoff/protocol/control-plane-access";
 
-export type { AiSessionCloseResult, AiSessionCreateResult, AiSessionForkResult, AiSessionHistoryDetail, AiSessionHistoryItem, AiSessionHistoryList, AiSessionMentionCandidate, AiSessionMentionCatalog, AiSessionMentionDiagnostic, AiSessionMentionFileSearch, AiSessionOpenAppResult, AiSessionReference, AiSessionResumeResult };
+export type { AiSessionCloseResult, AiSessionCreateResult, AiSessionForkResult, AiSessionHistoryDetail, AiSessionHistoryItem, AiSessionHistoryList, AiSessionMentionCandidate, AiSessionMentionCatalog, AiSessionMentionDiagnostic, AiSessionMentionFileSearch, AiSessionOpenAppResult, AiSessionReference, AiSessionResumeResult, AiSessionTimeline };
 
 export type HealthResponse = {
   ok: boolean;
@@ -1035,6 +1036,27 @@ export type CreateModelInput = {
 };
 
 export type UpdateModelInput = Partial<CreateModelInput>;
+
+export type ModelEndpointDraft = {
+  endpoint: string;
+  key?: string;
+  existingModelId?: string;
+};
+
+export type DiscoveredModel = {
+  id: string;
+  ownedBy?: string;
+};
+
+export type ModelDiscoveryResult = {
+  models: DiscoveredModel[];
+  latencyMs: number;
+};
+
+export type ModelTestResult = {
+  success: true;
+  latencyMs: number;
+};
 
 export type UpdateProjectInput = Partial<CreateProjectInput>;
 

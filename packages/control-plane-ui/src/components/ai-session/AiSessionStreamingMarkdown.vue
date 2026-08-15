@@ -228,11 +228,11 @@ watch(
   --ms-radius: 7px;
 }
 
-.ai-session-streaming-markdown :deep(.markstream-vue > :first-child) {
+.ai-session-streaming-markdown :deep(.markstream-vue > .node-slot:first-child > .node-content > :first-child) {
   margin-top: 0;
 }
 
-.ai-session-streaming-markdown :deep(.markstream-vue > :last-child) {
+.ai-session-streaming-markdown :deep(.markstream-vue > .node-slot:last-child > .node-content > :last-child) {
   margin-bottom: 0;
 }
 

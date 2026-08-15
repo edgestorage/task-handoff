@@ -1,9 +1,10 @@
-import type { AiSessionLineage, AiSessionStatus, AiSessionSubAgent } from "@task-handoff/protocol/ai-sessions";
+import type { AiSessionLineage, AiSessionStatus, AiSessionSubAgent, AiSessionTimelineItem } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionRegistry } from "../../ai-session-registry";
 import { CodexSubAgentTracker, CodexToolActivityTracker } from "../protocol/activity";
 import { lifecycleForStatus } from "../protocol/status";
 import { summarizeThreadTurns } from "../protocol/thread-summary";
-import type { CodexAppServerEvent, CodexSubAgentUpdate, CodexThread, CodexToolActivityState } from "../protocol/types";
+import type { CodexAppServerEvent, CodexSubAgentUpdate, CodexThread, CodexToolActivityState, JsonValue } from "../protocol/types";
+import { projectCodexTimelineItem, type CodexRealtimeTimelineItem } from "../protocol/timeline";
 
 type ProjectorOptions = {
   registry: AiSessionRegistry;
@@ -19,6 +20,7 @@ type ProjectorOptions = {
     itemId: string;
     delta: string;
   }) => void;
+  onTimelineItem?: (event: { sessionId: string; providerSessionId: string; item: AiSessionTimelineItem }) => void;
 };
 
 export class CodexAppServerSessionProjector {
@@ -27,6 +29,7 @@ export class CodexAppServerSessionProjector {
   private readonly parentThreadsBySubAgent = new Map<string, Set<string>>();
   private readonly lifecycleByThread = new Map<string, CodexSubAgentUpdate>();
   private readonly turnErrorsByThread = new Map<string, { turnId: string; error: string }>();
+  private readonly realtimeTimelineByThread = new Map<string, Map<string, CodexRealtimeTimelineItem>>();
 
   constructor(private readonly options: ProjectorOptions) {}
 
@@ -34,6 +37,7 @@ export class CodexAppServerSessionProjector {
     this.toolActivityByThread.delete(threadId);
     this.subAgentsByThread.delete(threadId);
     this.turnErrorsByThread.delete(threadId);
+    this.realtimeTimelineByThread.delete(threadId);
     for (const [subAgentThreadId, parentThreadIds] of this.parentThreadsBySubAgent) {
       parentThreadIds.delete(threadId);
       if (!parentThreadIds.size) this.parentThreadsBySubAgent.delete(subAgentThreadId);
@@ -46,6 +50,7 @@ export class CodexAppServerSessionProjector {
     this.parentThreadsBySubAgent.clear();
     this.lifecycleByThread.clear();
     this.turnErrorsByThread.clear();
+    this.realtimeTimelineByThread.clear();
   }
 
   apply(event: CodexAppServerEvent) {
@@ -56,6 +61,10 @@ export class CodexAppServerSessionProjector {
     const session = this.options.findSession(event.threadId);
     if (!session) {
       return false;
+    }
+    if ("timelineItem" in event && event.timelineItem) {
+      this.recordRealtimeTimelineItem(event.threadId, event.turnId || session.activeTurnId, event.timelineItem);
+      this.emitTimelineItem(session.id, event.threadId, event.turnId || session.activeTurnId, event.timelineItem);
     }
     if (event.type === "thread-closed") {
       this.options.clearApprovalSession(session.id);
@@ -127,6 +136,7 @@ export class CodexAppServerSessionProjector {
       this.applySubAgentUpdates(session.id, event.threadId, [event.subAgent]);
       return true;
     }
+    if (event.type === "timeline-item") return true;
     if (event.type === "user-message") {
       this.options.registry.applyRealtimeEvent(session.id, { kind: "user-message", activeTurnId: event.turnId || session.activeTurnId, providerTurnId: event.turnId || session.activeTurnId, userPrompt: event.text, source: "realtime" });
       return true;
@@ -230,6 +240,36 @@ export class CodexAppServerSessionProjector {
       toolActivity: this.toolTracker(threadId).snapshot(),
       subAgents: this.subAgentTracker(threadId).snapshot(),
     };
+  }
+
+  realtimeTimelineItems(threadId: string) {
+    return [...(this.realtimeTimelineByThread.get(threadId)?.values() || [])];
+  }
+
+  private recordRealtimeTimelineItem(
+    threadId: string,
+    turnId: string | undefined,
+    item: JsonValue,
+  ) {
+    const itemId = typeof item.id === "string" ? item.id : undefined;
+    if (!itemId || !turnId) return;
+    let activities = this.realtimeTimelineByThread.get(threadId);
+    if (!activities) {
+      activities = new Map();
+      this.realtimeTimelineByThread.set(threadId, activities);
+    }
+    activities.set(itemId, {
+      turnId,
+      item,
+    });
+    while (activities.size > 500) activities.delete(activities.keys().next().value as string);
+  }
+
+  private emitTimelineItem(sessionId: string, providerSessionId: string, turnId: string | undefined, item: JsonValue) {
+    const itemId = typeof item.id === "string" ? item.id : undefined;
+    if (!itemId || !turnId) return;
+    const projected = projectCodexTimelineItem(itemId, turnId, item);
+    if (projected) this.options.onTimelineItem?.({ sessionId, providerSessionId, item: projected });
   }
 
   private toolTracker(threadId: string) {

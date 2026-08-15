@@ -192,6 +192,7 @@ export function controlledInstanceCapabilities(appRuntime: AppRuntimeManager) {
       screenshots: available.some((item) => item.kind === "gui") && Boolean(executablePath("import")),
       logs: true,
       aiSessionWorkspaceSelection: true,
+      aiSessionTimeline: true,
     },
   };
 }

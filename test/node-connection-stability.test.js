@@ -244,12 +244,14 @@ test("node agent health response drops unknown cross-version fields", () => {
   const parsed = NodeAgentHealthSchema.parse({
     ok: true,
     futureTopLevel: true,
+    capabilities: { modelEndpointProbe: true, futureProbe: true },
     build: { component: "node-agent", packageVersion: "1.2.3", futureBuildField: true },
     listener: { host: "127.0.0.1", port: 8091, futureListenerField: true },
     process: { pid: 42, startIdentity: "process-start", futureProcessField: true },
   });
   assert.deepEqual(parsed, {
     ok: true,
+    capabilities: { modelEndpointProbe: true },
     build: { component: "node-agent", packageVersion: "1.2.3" },
     listener: { host: "127.0.0.1", port: 8091 },
     process: { pid: 42, startIdentity: "process-start" },
