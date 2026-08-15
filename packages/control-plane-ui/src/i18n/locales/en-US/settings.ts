@@ -136,6 +136,10 @@ export const settings = {
     model: "Model", keepKey: "Leave blank to keep current key", keepCredential: "Leave blank to keep the current credential at every location.",
     save: "Save model", create: "Create model", saving: "Saving", saved: "{name} saved.", deleteConfirm: "Delete {name} from {location}? Other locations will be kept.",
     selectLocation: "Select location", selectApp: "Select app", namePlaceholder: "OpenAI primary", nodeLocation: "Node · {name}",
+    discover: "Fetch models", discovering: "Fetching", discovered: "Found {count} models · {latency}ms", discoveredEmpty: "Endpoint is available but returned no models · {latency}ms",
+    chooseDiscovered: "Choose a fetched model", searchModels: "Search models", noModelMatches: "No matching models", manualModelHint: "Choose a fetched model or enter a model ID directly.",
+    test: "Test connection", testing: "Testing", testSucceeded: "Model request succeeded · {latency}ms",
+    probeUnsupported: "Upgrade the selected node before discovering models or testing the connection.",
   },
   imageRegistry: {
     count: "Registered images · {count}", selectNode: "Select node", noCapabilities: "no expected capabilities", deleting: "Deleting",

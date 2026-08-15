@@ -36,7 +36,12 @@ test("AI session path labels show only the folder and reveal the full path when 
   assert.match(panel, /<TooltipTrigger as-child>\s*<b>/);
   assert.match(panel, /<TooltipContent[^>]*>\{\{ session\.cwd \|\| t\("sessions\.board\.unknownPath"\) \}\}<\/TooltipContent>/);
   assert.match(panel, /<TooltipTrigger as-child>\s*<span class="session-ai-path-group-title">/);
-  assert.match(styles, /\.session-ai-card-workspace b\s*\{[^}]*color: inherit;[^}]*font-weight: inherit;/s);
+  assert.match(styles, /\.session-ai-card-workspace\s*\{[^}]*flex: 1 1 0;[^}]*color: color-mix\(in srgb, var\(--text-muted\) 78%, transparent\);[^}]*font-size: 13px;/s);
+  assert.match(styles, /\.session-ai-card-workspace b\s*\{[^}]*flex: 1 1 auto;[^}]*color: inherit;[^}]*font-size: inherit;[^}]*font-weight: inherit;/s);
+  assert.match(styles, /\.session-ai-state-line\s*\{[^}]*gap: 4px;/s);
+  assert.match(styles, /\.session-ai-state-line > strong\s*\{[^}]*color: color-mix\(in srgb, var\(--text-muted\) 78%, transparent\);/s);
+  assert.match(styles, /\.session-ai-card-workspace\s*\{[^}]*gap: 4px;/s);
+  assert.doesNotMatch(styles, /\.session-ai-state\s*\{[^}]*padding-right:/s);
 });
 
 test("AI session path groups create a session in their registered project", () => {
@@ -105,7 +110,7 @@ test("mobile AI sessions keep detail visible and float the session list in a dis
   assert.match(panel, /const maximumWidth = compactAiSessionLayout\.value[\s\S]*panelBounds\.width\.value - 40[\s\S]*sidebarWidth\.value = Math\.min\(maximumWidth, Math\.max\(minimumWidth/);
   assert.match(styles, /:global\(\.session-ai-drawer-resize-handle\) \{[\s\S]*right: 0;[\s\S]*width: 10px;[\s\S]*cursor: col-resize;/);
   assert.match(styles, /:global\(\.session-ai-sidebar-sheet\) \{[\s\S]*border-right: 1px solid var\(--line-strong\);[\s\S]*border-radius: 0;[\s\S]*transition-duration: 200ms;/);
-  assert.match(styles, /:global\(\.session-ai-sidebar-sheet \.session-ai-sidebar\) \{\s*--session-ai-list-right-inset: 12px;[\s\S]*padding: 12px 0 12px 12px;/);
+  assert.match(styles, /:global\(\.session-ai-sidebar-sheet \.session-ai-sidebar\) \{[\s\S]*--session-ai-list-left-inset: 12px;[\s\S]*--session-ai-list-right-inset: 12px;[\s\S]*--session-ai-list-bottom-inset: 12px;[\s\S]*padding: 12px 0 12px 12px;/);
   assert.match(styles, /@media \(max-width: 920px\)[\s\S]*\.session-ai-panel \{\s*padding: 8px;[\s\S]*grid-template-rows: minmax\(0, 1fr\);[\s\S]*\.session-ai-mobile-list-button \{[\s\S]*position: absolute;[\s\S]*top: 10px;[\s\S]*left: 4px;[\s\S]*width: 26px;[\s\S]*height: 26px;/);
   assert.match(styles, /\.session-ai-detail-content > header,[\s\S]*\.session-ai-history-detail-head \{\s*padding-left: 24px;/);
   assert.match(styles, /\.session-ai-detail-content > header > \.session-ai-detail-block-user \{[\s\S]*width: calc\(100% \+ 24px\);[\s\S]*margin-left: -24px;[\s\S]*padding-left: 24px;/);

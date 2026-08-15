@@ -96,10 +96,47 @@
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
-              <div v-if="boardPrimarySession(instance)?.kind === 'ai'" class="board-ai-preview">
-                <span>{{ aiSessionHeadline(instance, t) }}</span>
-                <span class="board-ai-message">{{ aiSessionHeadline(instance, t) }}</span>
-                <small>{{ t("sessions.board.updated", { time: relativeTime(instance.aiSessions.updatedAt, locale as SupportedLocale) }) }}</small>
+              <div v-if="boardPrimarySession(instance)?.kind === 'ai' && boardPrimaryAiSession(instance)" class="board-ai-preview">
+                <div class="board-ai-card-head">
+                  <span class="board-ai-dot" :data-state="boardPrimaryAiSession(instance)?.status" />
+                  <span>
+                    <strong>{{ boardPrimaryAiSession(instance)?.agent }}</strong>
+                  </span>
+                </div>
+                <div class="board-ai-question">
+                  <MarkdownContent :content="displayAiSessionTitle(boardPrimaryAiSession(instance), undefined, t)" />
+                </div>
+                <div class="board-ai-answer">
+                  <AiSessionStreamingMarkdown
+                    :content="displayAiSessionMessage(boardPrimaryAiSession(instance), undefined, t)"
+                    :instance-id="instance.id"
+                    :is-latest="true"
+                    :session-id="boardPrimaryAiSession(instance)?.id || ''"
+                  />
+                </div>
+                <button
+                  v-if="boardAiSessions(instance).length > 1"
+                  type="button"
+                  class="board-ai-slide board-ai-slide-previous"
+                  :aria-label="t('instances.board.previousAiSession')"
+                  :disabled="boardAiSessionIndex(instance) <= 0"
+                  @click.stop="$emit('stepBoardAiSession', instance, -1)"
+                >
+                  <ChevronLeft :size="16" />
+                </button>
+                <button
+                  v-if="boardAiSessions(instance).length > 1"
+                  type="button"
+                  class="board-ai-slide board-ai-slide-next"
+                  :aria-label="t('instances.board.nextAiSession')"
+                  :disabled="boardAiSessionIndex(instance) >= boardAiSessions(instance).length - 1"
+                  @click.stop="$emit('stepBoardAiSession', instance, 1)"
+                >
+                  <ChevronRight :size="16" />
+                </button>
+                <small v-if="boardAiSessions(instance).length > 1" class="board-ai-slide-count">
+                  {{ boardAiSessionIndex(instance) + 1 }} / {{ boardAiSessions(instance).length }}
+                </small>
               </div>
               <iframe
                 v-else-if="boardSessionFrameUrl(instance)"
@@ -151,7 +188,7 @@
                 <RotateCw :size="14" />
                 <span>{{ activeActionLabel(instance, "retry-image", t("instances.actions.retryImage")) }}</span>
               </Button>
-              <Button variant="outline" size="sm" @click="$emit('openWindow', instance)">
+              <Button variant="outline" size="sm" @click="$emit('openWindow', instance, boardPrimarySession(instance), boardPrimaryAiSession(instance))">
                 <ExternalLink :size="14" />
                 <span>{{ t("instances.actions.open") }}</span>
               </Button>
@@ -174,14 +211,15 @@
 </template>
 
 <script setup lang="ts">
-import { ChevronDown, ExternalLink, Monitor, Play, Plus, RotateCw, Search, Square } from "@lucide/vue";
+import { ChevronDown, ChevronLeft, ChevronRight, ExternalLink, Monitor, Play, Plus, RotateCw, Search, Square } from "@lucide/vue";
+import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import { computed, ref, type ComponentPublicInstance } from "vue";
 import { useI18n } from "vue-i18n";
-import type { SupportedLocale } from "../../../i18n/locale";
-import type { InstanceBoardItem, NodeLocalFolder } from "../../../api/types";
+import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, NodeLocalFolder } from "../../../api/types";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
+import AiSessionStreamingMarkdown from "../../../components/ai-session/AiSessionStreamingMarkdown.vue";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
@@ -193,21 +231,18 @@ import AppLaunchMenuItems from "../shared/AppLaunchMenuItems.vue";
 import ProjectFolderPicker from "../shared/ProjectFolderPicker.vue";
 import { connectionStatusKeys, instanceStatusKeys, translateStatus } from "../../../i18n/status";
 import {
-  aiSessionHeadline,
-  aiSessionStatusLabel,
   appDisplayName,
+  displayAiSessionMessage,
+  displayAiSessionTitle,
   launchableAppsForInstance,
-  primaryAiSession,
-  primaryAiSessionMessage,
-  relativeTime,
   sessionDisplayName,
   sessionMeta,
-  type SessionTab,
 } from "../useInstanceSessions";
+import type { BoardSessionTab } from "./useInstanceBoardSessions";
 
 type BoardSize = "small" | "medium" | "large";
 
-const { locale, t } = useI18n();
+const { t } = useI18n();
 const instanceStatusLabel = (status: string) => translateStatus(instanceStatusKeys, status, t);
 const connectionStatusLabel = (status: string) => translateStatus(connectionStatusKeys, status, t);
 
@@ -219,10 +254,12 @@ const props = defineProps<{
   appOptions: Array<{ appId: string; count: number }>;
   boardCardDetail: (instance: InstanceBoardItem) => string;
   boardCardTitle: (instance: InstanceBoardItem) => string;
+  boardAiSessions: (instance: InstanceWithAiSessions) => AiSessionSummary[];
   boardPreviewState: (instance: InstanceBoardItem) => string;
-  boardPrimarySession: (instance: InstanceBoardItem) => SessionTab | undefined;
+  boardPrimaryAiSession: (instance: InstanceWithAiSessions) => AiSessionSummary | undefined;
+  boardPrimarySession: (instance: InstanceWithAiSessions) => BoardSessionTab | undefined;
   boardSessionFrameUrl: (instance: InstanceBoardItem) => string;
-  boardSessions: (instance: InstanceBoardItem) => SessionTab[];
+  boardSessions: (instance: InstanceWithAiSessions) => BoardSessionTab[];
   boardTerminalSocketUrl: (instance: InstanceBoardItem) => string;
   error?: string;
   filter: string;
@@ -242,14 +279,15 @@ const props = defineProps<{
   statusFilter: string;
   statusOptions: string[];
   totalInstances: number;
-  visibleInstances: InstanceBoardItem[];
+  visibleInstances: InstanceWithAiSessions[];
 }>();
 
 const emit = defineEmits<{
   launchApp: [instance: InstanceBoardItem, appId: string, cwdFolderId?: string];
-  openWindow: [instance: InstanceBoardItem];
+  openWindow: [instance: InstanceWithAiSessions, session?: BoardSessionTab, aiSession?: AiSessionSummary];
   runAction: [action: InstanceAction, instance: InstanceBoardItem];
   selectBoardSession: [instanceId: string, sessionKey: string];
+  stepBoardAiSession: [instance: InstanceWithAiSessions, direction: -1 | 1];
   selectInstance: [instanceId: string];
   setSize: [size: BoardSize];
   "update:groupByNode": [value: boolean];
@@ -264,6 +302,11 @@ const emit = defineEmits<{
 const boardLaunchMenuId = ref("");
 const projectPickerInstance = ref<InstanceBoardItem>();
 const createdProjectFoldersByNodeId = ref<Record<string, NodeLocalFolder[]>>({});
+
+function boardAiSessionIndex(instance: InstanceWithAiSessions) {
+  const activeId = props.boardPrimaryAiSession(instance)?.id;
+  return Math.max(0, props.boardAiSessions(instance).findIndex((session) => session.id === activeId));
+}
 
 function launchBoardApp(instance: InstanceBoardItem, appId: string, cwdFolderId?: string) {
   boardLaunchMenuId.value = "";
@@ -301,7 +344,7 @@ const boardGroups = computed(() => {
   if (!props.groupByNode) {
     return [{ key: "__all__", label: t("instances.board.allNodes"), instances: props.visibleInstances }];
   }
-  const groups = new Map<string, { key: string; label: string; instances: InstanceBoardItem[] }>();
+  const groups = new Map<string, { key: string; label: string; instances: InstanceWithAiSessions[] }>();
   for (const instance of props.visibleInstances) {
     const key = instance.nodeId || "__unknown__";
     const current = groups.get(key) || { key, label: instanceNodeLabel(instance), instances: [] };
@@ -823,47 +866,205 @@ function canLaunchBoardApp(instance: InstanceBoardItem) {
 
 .board-ai-preview {
   display: grid;
-  align-content: center;
-  gap: 6px;
+  position: relative;
+  grid-template-rows: auto auto minmax(0, 1fr);
   height: 100%;
   min-width: 0;
-  background: var(--surface-inset);
-  color: var(--terminal-text);
-  padding: 18px;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--ai-board-card-bg);
+  color: var(--ai-board-title);
+  padding: 40px 0 0;
 }
 
-.board-ai-preview span,
-.board-ai-preview small {
+.board-ai-card-head {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr);
+  align-items: start;
+  gap: 9px;
+  min-width: 0;
+  padding: 10px 14px 8px;
+}
+
+.board-ai-card-head > span:last-child {
+  display: grid;
+  min-width: 0;
+}
+
+.board-ai-card-head strong {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.board-ai-preview span,
-.board-ai-preview small {
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
-.board-ai-message {
-  color: var(--text-strong);
+.board-ai-card-head strong {
+  color: color-mix(in srgb, var(--ai-board-muted) 78%, transparent);
   font-size: 13px;
-  font-weight: 800;
+  font-weight: 700;
+  line-height: 1.2;
 }
 
-.board-ai-message code {
-  border: 1px solid var(--line-subtle);
+.board-ai-dot {
+  width: 8px;
+  height: 8px;
+  margin-top: 4px;
+  border-radius: 999px;
+  background: var(--ai-board-dot-active);
+  box-shadow: var(--ai-board-dot-active-shadow);
+}
+
+.board-ai-dot[data-state="waiting"] {
+  background: var(--ai-board-dot-waiting);
+  box-shadow: var(--ai-board-dot-waiting-shadow);
+}
+
+.board-ai-dot[data-state="failed"] {
+  background: var(--ai-board-dot-failed);
+  box-shadow: var(--ai-board-dot-failed-shadow);
+}
+
+.board-ai-dot[data-state="idle"] {
+  background: var(--ai-board-dot-idle);
+  box-shadow: var(--ai-board-dot-idle-shadow);
+}
+
+.board-ai-question,
+.board-ai-answer {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.board-ai-question {
+  display: -webkit-box;
+  max-height: 19px;
+  overflow-wrap: anywhere;
+  color: var(--ai-board-title);
+  font-size: 14px;
+  line-height: 1.35;
+  padding: 0 14px;
+  word-break: break-word;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+}
+
+.board-ai-question :deep(p),
+.board-ai-answer :deep(p) {
+  margin: 0;
+}
+
+.board-ai-answer {
+  position: relative;
+  margin-top: 8px;
+  border-top: 1px solid var(--ai-session-card-divider);
+  background: var(--ai-session-card-content-bg);
+  color: var(--ai-board-title);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  padding: 10px 14px 34px;
+  word-break: break-word;
+}
+
+.board-ai-question :deep(*),
+.board-ai-answer :deep(*) {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.board-ai-answer::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 34px;
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--ai-session-card-content-bg) 0%, transparent),
+    color-mix(in srgb, var(--ai-session-card-content-bg) 84%, transparent) 58%,
+    var(--ai-session-card-content-bg)
+  );
+  pointer-events: none;
+}
+
+.board-ai-answer :deep(code) {
   border-radius: 4px;
-  background: var(--surface-subtle);
-  color: var(--text);
+  background: var(--ai-board-code-bg);
+  color: var(--ai-board-code-text);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   font-size: 0.92em;
+  font-weight: 400;
   padding: 1px 4px;
+  white-space: normal;
 }
 
-.board-ai-message strong {
+.board-ai-answer :deep(strong),
+.board-ai-answer :deep(b) {
+  color: var(--ai-board-title);
+}
+
+.board-ai-slide {
+  display: grid;
+  position: absolute;
+  top: 50%;
+  z-index: 3;
+  width: 28px;
+  height: 44px;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--surface-overlay) 52%, transparent);
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(-50%) scale(0.96);
+  backdrop-filter: blur(8px);
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease,
+    background-color 120ms ease;
+}
+
+.board-ai-preview:hover .board-ai-slide,
+.board-ai-preview:focus-within .board-ai-slide {
+  opacity: 0.72;
+  transform: translateY(-50%) scale(1);
+}
+
+.board-ai-slide:hover,
+.board-ai-slide:focus-visible {
+  background: color-mix(in srgb, var(--surface-active) 72%, transparent);
   color: var(--text-strong);
-  font-weight: 800;
+  opacity: 1;
+  outline: none;
+}
+
+.board-ai-slide:disabled {
+  cursor: default;
+  opacity: 0;
+}
+
+.board-ai-preview:hover .board-ai-slide:disabled,
+.board-ai-preview:focus-within .board-ai-slide:disabled {
+  opacity: 0.24;
+}
+
+.board-ai-slide-previous { left: 6px; }
+.board-ai-slide-next { right: 6px; }
+
+.board-ai-slide-count {
+  position: absolute;
+  right: 10px;
+  bottom: 8px;
+  z-index: 3;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-overlay) 82%, transparent);
+  color: var(--text-muted);
+  font-size: 10px;
+  padding: 2px 7px;
+  backdrop-filter: blur(8px);
 }
 
 .board-card-actions {

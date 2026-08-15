@@ -1,26 +1,28 @@
 <template>
   <Popover v-model:open="open">
-    <TooltipProvider :delay-duration="120">
-      <Tooltip>
-        <TooltipTrigger as-child>
-          <PopoverTrigger as-child>
-            <button
-              type="button"
-              class="repository-environment-trigger"
-              :class="{
-                'repository-environment-trigger-detail': triggerAppearance === 'detail',
-                'repository-environment-trigger-menu': triggerAppearance === 'menu',
-              }"
-              :aria-label="t('repository.environment.title')"
-            >
+    <PopoverTrigger as-child>
+      <button
+        type="button"
+        class="repository-environment-trigger"
+        :class="{
+          'repository-environment-trigger-detail': triggerAppearance === 'detail',
+          'repository-environment-trigger-menu': triggerAppearance === 'menu',
+        }"
+        :aria-label="t('repository.environment.title')"
+      >
+        <TooltipProvider :delay-duration="120">
+          <Tooltip>
+            <TooltipTrigger as-child>
+              <span class="repository-environment-trigger-content">
               <FolderGit2 :size="triggerAppearance === 'menu' ? 16 : 15" />
               <span v-if="triggerAppearance === 'menu'">{{ t("repository.environment.title") }}</span>
-            </button>
-          </PopoverTrigger>
-        </TooltipTrigger>
-        <TooltipContent side="bottom" :side-offset="8">{{ t("repository.environment.title") }}</TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" :side-offset="8">{{ t("repository.environment.title") }}</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      </button>
+    </PopoverTrigger>
     <PopoverContent
       class="repository-environment-popover"
       align="end"
@@ -98,41 +100,20 @@
           <span v-else>{{ t("repository.environment.unbornNotice") }}</span>
         </div>
 
-        <Popover v-model:open="worktreesOpen">
-          <PopoverAnchor as-child>
-            <button
-              type="button"
-              class="repository-environment-row"
-              :disabled="context.availability !== 'available'"
-              aria-haspopup="dialog"
-              :aria-expanded="worktreesOpen"
-              @click="worktreesOpen = !worktreesOpen"
-            >
-              <span class="repository-environment-row-icon"><GitFork :size="16" /></span>
-              <span class="repository-environment-row-copy">
-                <strong>{{ t("repository.environment.worktree") }}</strong>
-                <small v-if="context.currentWorktree">{{ worktreeSummary }}</small>
-                <small v-else>{{ unavailableMessage }}</small>
-              </span>
-              <ChevronRight v-if="context.availability === 'available'" :size="15" />
-            </button>
-          </PopoverAnchor>
-          <PopoverContent
-            class="repository-worktrees-popover"
-            side="left"
-            align="start"
-            :side-offset="10"
-          >
-            <RepositoryWorktreesPanel
-              :ai-agent="aiAgent"
-              :instance-id="instanceId"
-              :open="worktreesOpen"
-              :session-id="sessionId"
-              :session-kind="sessionKind"
-              @ai-session-started="emit('aiSessionStarted', $event)"
-            />
-          </PopoverContent>
-        </Popover>
+        <button
+          type="button"
+          class="repository-environment-row"
+          :disabled="context.availability !== 'available'"
+          @click="openWorktrees"
+        >
+          <span class="repository-environment-row-icon"><GitFork :size="16" /></span>
+          <span class="repository-environment-row-copy">
+            <strong>{{ t("repository.environment.worktree") }}</strong>
+            <small v-if="context.currentWorktree">{{ worktreeSummary }}</small>
+            <small v-else>{{ unavailableMessage }}</small>
+          </span>
+          <ChevronRight v-if="context.availability === 'available'" :size="15" />
+        </button>
 
         <Popover v-model:open="branchesOpen">
           <PopoverAnchor as-child>
@@ -199,7 +180,7 @@ import { useI18n } from "vue-i18n";
 import { useRepositoryContextQuery } from "../../../api/repository";
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "../../../components/ui/popover";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
-import RepositoryWorktreesPanel from "./RepositoryWorktreesPanel.vue";
+import type { RepositoryWorkspaceTabTarget } from "../useInstanceSessions";
 import RepositoryBranchesPanel from "./RepositoryBranchesPanel.vue";
 import RepositoryDeliveryDialog from "./RepositoryDeliveryDialog.vue";
 import RepositoryErrorNotice from "./RepositoryErrorNotice.vue";
@@ -215,12 +196,10 @@ const props = defineProps<{
 const { t } = useI18n();
 
 const emit = defineEmits<{
-  aiSessionStarted: [result: import("@task-handoff/protocol/repository").RepositoryAiSessionLaunchResult];
-  openWorkspace: [target: { initialView: "files" | "changes"; page?: "workspace" | "changes-review"; sessionId: string; sessionKind: RepositorySessionKind }];
+  openWorkspace: [target: RepositoryWorkspaceTabTarget];
 }>();
 
 const open = ref(false);
-const worktreesOpen = ref(false);
 const branchesOpen = ref(false);
 const deliveryOpen = ref(false);
 const canQuery = computed(() => props.connectionStatus === "online" && Boolean(props.instanceId && props.sessionId));
@@ -289,7 +268,17 @@ const primaryActionLabel = computed(() => t({
 
 function toggleBranches() {
   branchesOpen.value = !branchesOpen.value;
-  if (branchesOpen.value) worktreesOpen.value = false;
+}
+
+function openWorktrees() {
+  emit("openWorkspace", {
+    aiAgent: props.aiAgent,
+    initialView: "files",
+    page: "worktrees",
+    sessionId: props.sessionId,
+    sessionKind: props.sessionKind,
+  });
+  open.value = false;
 }
 
 function openRepositoryWorkspace(view: "files" | "changes") {
@@ -334,6 +323,14 @@ function runPrimaryAction(action: RepositoryPrimaryAction) {
   color: var(--control-plane-icon-button-hover-text, var(--text));
 }
 
+.repository-environment-trigger-content {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+}
+
 .repository-environment-trigger-detail {
   width: 26px;
   height: 26px;
@@ -363,11 +360,19 @@ function runPrimaryAction(action: RepositoryPrimaryAction) {
   border-radius: 6px;
   background: transparent;
   color: var(--text);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 20px;
   padding: 6px 8px;
 }
 
 .repository-environment-trigger-menu span {
-  font-size: 12px;
+  font-size: inherit;
+}
+
+.repository-environment-trigger-menu .repository-environment-trigger-content {
+  justify-content: flex-start;
+  gap: 8px;
 }
 
 .repository-environment-trigger-menu:hover,
@@ -381,16 +386,6 @@ function runPrimaryAction(action: RepositoryPrimaryAction) {
 
 :global([role="dialog"].repository-environment-popover) {
   width: min(360px, calc(100vw - 24px));
-  border-color: var(--line-subtle);
-  border-radius: 12px;
-  background: var(--surface-raised, var(--popover));
-  padding: 8px;
-  color: var(--text);
-  box-shadow: 0 18px 52px rgb(0 0 0 / 0.34);
-}
-
-:global([role="dialog"].repository-worktrees-popover) {
-  width: min(390px, calc(100vw - 24px));
   border-color: var(--line-subtle);
   border-radius: 12px;
   background: var(--surface-raised, var(--popover));

@@ -252,6 +252,7 @@ export class ControlPlaneService {
       gateway: this.nodeAgentGateway,
       listNodes: () => this.listNodes(),
       requireNode: (id) => this.requireNode(id),
+      fetchImpl: this.fetchImpl,
     });
     this.images = new JsonCollection(paths.imagesDir, {
       ...storeOptions(CustomImageProfileSchema),
@@ -552,6 +553,22 @@ export class ControlPlaneService {
 
   deleteNodeModel(nodeId: string, modelId: string) {
     return this.modelService.deleteOnNode(nodeId, modelId);
+  }
+
+  discoverModels(input: unknown) {
+    return this.modelService.discover(input);
+  }
+
+  testModel(input: unknown) {
+    return this.modelService.test(input);
+  }
+
+  discoverNodeModels(nodeId: string, input: unknown) {
+    return this.modelService.discoverOnNode(nodeId, input);
+  }
+
+  testNodeModel(nodeId: string, input: unknown) {
+    return this.modelService.testOnNode(nodeId, input);
   }
 
   createProject(input: unknown) {
@@ -1249,6 +1266,10 @@ export class ControlPlaneService {
 
   getAiSessionHistoryDetail(instanceId: string, aiSessionId: string) {
     return this.aiSessionActionService.historyDetail(instanceId, aiSessionId);
+  }
+
+  getAiSessionTimeline(instanceId: string, aiSessionId: string) {
+    return this.aiSessionActionService.timeline(instanceId, aiSessionId);
   }
 
   resumeAiSession(instanceId: string, aiSessionId: string) {

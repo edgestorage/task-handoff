@@ -5,10 +5,11 @@ import test from "node:test";
 const source = (path) => readFile(new URL(`../src/${path}`, import.meta.url), "utf8");
 
 test("AI session UI uses authoritative Direct create, Open App, and close actions", async () => {
-  const [panel, board, store, cardMenu, queries, sharedClient, en, zh] = await Promise.all([
+  const [panel, board, store, instanceSessions, cardMenu, queries, sharedClient, en, zh] = await Promise.all([
     source("apps/control-plane/instance-detail/AiSessionPanel.vue"),
     source("apps/control-plane/ai-board/AiSessionBoardView.vue"),
     source("apps/control-plane/useAiSessionStore.ts"),
+    source("apps/control-plane/useInstanceSessions.ts"),
     source("components/ai-session/AiSessionCardContextMenu.vue"),
     source("api/queries.ts"),
     readFile(new URL("../../control-plane-client/src/ai-sessions.ts", import.meta.url), "utf8"),
@@ -31,9 +32,16 @@ test("AI session UI uses authoritative Direct create, Open App, and close action
   assert.doesNotMatch(store, /hasBoundVisibleAppSession/);
   assert.doesNotMatch(panel, /async function createNewSession[\s\S]{0,1600}launchAppSession/);
   assert.match(panel, /openAiSessionApp\(props\.instance\.id, session\.id/);
+  assert.match(panel, /emit\("openAiSessionApp", props\.instance, session\);\s*const result = await openAiSessionApp/);
+  assert.match(panel, /emit\("openAiSessionApp", props\.instance, aiSessionAppNavigationTarget\(session, result\)\)/);
+  assert.doesNotMatch(panel, /async function openSessionApp[\s\S]{0,1200}current\?\.appSessionId/);
   assert.match(panel, /closeAiSession\(props\.instance\.id, session\.id/);
   assert.match(panel, /session\.actions\?\.openApp/);
   assert.match(board, /openAiSessionApp\(instance\.id, session\.id/);
+  assert.match(board, /emit\("openAiSessionApp", instance, session\);\s*const result = await openAiSessionApp/);
+  assert.match(board, /emit\("openAiSessionApp", instance, aiSessionAppNavigationTarget\(session, result\)\)/);
+  assert.doesNotMatch(board, /async function openCardApp[\s\S]{0,1200}current\?\.appSessionId/);
+  assert.match(instanceSessions, /session\.providerSessionId \? \[`provider:\$\{session\.agent\}:\$\{session\.providerSessionId\}`\]/);
   assert.match(board, /closeAiSession\(card\.instance\.id, card\.session\.id/);
   assert.match(cardMenu, /\$emit\('closeSession'\)/);
   assert.match(queries, /sharedAiSessionsApi\.create\(instanceId, input\)/);

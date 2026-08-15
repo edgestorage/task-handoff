@@ -194,11 +194,17 @@ test("codex app-server parser projects supported tool items without output field
   assert.equal(completed.type, "tool-item-completed");
   assert.equal(completed.tool.startedAt, undefined);
   assert.doesNotMatch(JSON.stringify(completed.tool), /secret/);
+  assert.equal(completed.item.aggregatedOutput, "secret output");
 });
 
-test("codex app-server parser excludes non-tools and diagnoses unknown items", () => {
+test("codex app-server parser exposes non-tool ThreadItems to the live timeline", () => {
   for (const type of ["agentMessage", "reasoning", "plan", "hookPrompt", "enteredReviewMode", "exitedReviewMode"]) {
-    assert.equal(codexNotification("item/started", { threadId: "thread_non_tools", item: { type, id: type } }), undefined);
+    const event = codexNotification("item/started", { threadId: "thread_non_tools", turnId: "turn_non_tools", item: { type, id: type } });
+    if (type === "agentMessage" || type === "reasoning") assert.equal(event, undefined);
+    else {
+      assert.equal(event.type, "timeline-item");
+      assert.equal(event.timelineItem.id, type);
+    }
   }
   const warnings = [];
   const originalWarn = console.warn;
@@ -224,6 +230,7 @@ test("codex app-server parser projects canonical and deprecated context compacti
     itemId: "context_compaction:turn_compact",
     status: "running",
     observedAt: "2025-06-15T15:06:40.000Z",
+    timelineItem: { type: "contextCompaction", id: "compact_1", status: "inProgress" },
   });
   assert.deepEqual(codexNotification("item/completed", {
     threadId: "thread_compact",
@@ -237,6 +244,7 @@ test("codex app-server parser projects canonical and deprecated context compacti
     itemId: "context_compaction:turn_compact",
     status: "completed",
     observedAt: "2025-06-15T15:06:40.100Z",
+    timelineItem: { type: "contextCompaction", id: "compact_1", status: "completed" },
   });
   assert.deepEqual(codexNotification("thread/compacted", {
     threadId: "thread_compact",
@@ -261,6 +269,7 @@ test("codex app-server parser preserves assistant item identity on completion", 
     threadId: "thread_messages",
     turnId: "turn_1",
     itemId: "item_2",
+    timelineItem: { type: "agentMessage", id: "item_2", text: "second response", status: "completed" },
     text: "second response",
   });
 });
@@ -302,6 +311,14 @@ test("codex app-server projects sub-agent activity separately from tools", () =>
     type: "sub-agent-activity",
     threadId: "thread-parent",
     turnId: "turn-parent",
+    timelineItem: {
+      type: "subAgentActivity",
+      id: "call-1",
+      kind: "interacted",
+      agentThreadId: "thread-child",
+      agentPath: "agent-a",
+      status: "completed",
+    },
     subAgent: {
       threadId: "thread-child",
       path: "agent-a",
@@ -3399,6 +3416,35 @@ test("codex app server bridge emits raw message deltas without persisting partia
 
   fake.emit("event", { type: "agent-message-completed", threadId: "thread_delta", turnId: "turn_delta", itemId: "item_delta", text: "hello" });
   assert.equal(registry.get(session.id).lastMessage, "hello");
+});
+
+test("codex app server bridge emits complete timeline items, preserves identity, and excludes reasoning", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-timeline-item-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  class FakeCodexAppServerClient extends EventEmitter {
+    async start() {}
+    async listLoadedThreadIds() { return ["thread_items"]; }
+    async readThread() { return { id: "thread_items", status: { type: "active" }, turns: [] }; }
+    stop() {}
+  }
+  const fake = new FakeCodexAppServerClient();
+  const items = [];
+  const bridge = new CodexAppServerSessionBridge(registry, fake, {
+    onTimelineItem: (event) => items.push(event.item),
+  });
+  await bridge.sync();
+
+  const command = { type: "commandExecution", id: "cmd_live", command: "pnpm test" };
+  fake.emit("event", codexNotification("item/started", { threadId: "thread_items", turnId: "turn_items", item: command }));
+  fake.emit("event", codexNotification("item/completed", { threadId: "thread_items", turnId: "turn_items", item: { ...command, aggregatedOutput: "passed", exitCode: 0 } }));
+  const reasoning = codexNotification("item/started", { threadId: "thread_items", turnId: "turn_items", item: { type: "reasoning", id: "reason_live", summary: ["Inspecting"] } });
+
+  assert.deepEqual(items.map((item) => [item.id, item.status]), [
+    ["cmd_live", "running"],
+    ["cmd_live", "completed"],
+  ]);
+  assert.equal(items[1].output, "passed");
+  assert.equal(reasoning, undefined);
 });
 
 test("codex app server bridge reports event source closure before reconnect or stop", async () => {

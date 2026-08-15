@@ -1,9 +1,12 @@
 <template>
-  <section class="repository-worktrees-panel" :aria-label="t('repository.worktreesPanel.region')">
+  <section class="repository-worktrees-panel" :data-appearance="appearance" :aria-label="t('repository.worktreesPanel.region')">
     <header>
-      <span>
+      <span class="repository-worktree-title">
         <GitFork :size="16" />
-        <strong>{{ t("repository.worktreesPanel.title") }}</strong>
+        <span>
+          <strong>{{ t("repository.worktreesPanel.title") }}</strong>
+          <small v-if="appearance === 'page'">{{ t("repository.worktreesPanel.description") }}</small>
+        </span>
       </span>
       <span class="repository-worktree-header-actions">
         <button
@@ -62,6 +65,12 @@
       </button>
     </form>
 
+    <label v-if="worktrees?.items.length" class="repository-worktree-search">
+      <Search :size="15" />
+      <input v-model="searchQuery" type="search" :placeholder="t('repository.worktreesPanel.search')" />
+      <span>{{ t("repository.worktreesPanel.count", { count: filteredWorktrees.length }) }}</span>
+    </label>
+
     <div v-if="worktreesQuery.isPending.value" class="repository-worktree-state" role="status">
       <LoaderCircle class="repository-worktree-spin" :size="17" />
       <span>{{ t("repository.worktreesPanel.reading") }}</span>
@@ -71,14 +80,15 @@
       <GitFork :size="17" />
       <span>{{ t("repository.worktreesPanel.empty") }}</span>
     </div>
-    <div v-else class="repository-worktree-list">
+    <ScrollArea v-else class="repository-worktree-scroll" :horizontal="false">
+      <div class="repository-worktree-list">
       <div v-if="removeSuccessKey" class="repository-worktree-mutation-success" role="status">
         <Check :size="14" />
         <span>{{ t(removeSuccessKey) }}</span>
       </div>
       <RepositoryErrorNotice v-if="startError" :error="startError" :fallback="t('repository.worktreesPanel.startError')" />
       <article
-        v-for="worktree in orderedWorktrees"
+        v-for="worktree in filteredWorktrees"
         :key="worktree.id"
         class="repository-worktree-card"
         :data-current="worktree.isCurrent ? 'true' : undefined"
@@ -143,7 +153,12 @@
           <span>{{ t("repository.worktreesPanel.remove") }}</span>
         </button>
       </article>
-    </div>
+      <div v-if="!filteredWorktrees.length" class="repository-worktree-state">
+        <Search :size="17" />
+        <span>{{ t("repository.worktreesPanel.noMatch") }}</span>
+      </div>
+      </div>
+    </ScrollArea>
 
     <Dialog v-model:open="removeDialogOpen">
       <DialogContent class="repository-worktree-remove-dialog">
@@ -174,22 +189,24 @@
 
 <script setup lang="ts">
 import type { RepositoryAiSessionLaunchResult, RepositorySessionKind, RepositoryWorktree, RepositoryWorktreeBlocker } from "@task-handoff/protocol/repository";
-import { Check, GitBranch, GitCommitHorizontal, GitFork, LoaderCircle, Plus, RefreshCw, Trash2, X } from "@lucide/vue";
+import { Check, GitBranch, GitCommitHorizontal, GitFork, LoaderCircle, Plus, RefreshCw, Search, Trash2, X } from "@lucide/vue";
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { ApiError } from "../../../api/client";
 import { createRepositoryWorktreeAiSession, removeRepositoryWorktree, startRepositoryAiSession, useRepositoryWorktreesQuery } from "../../../api/repository";
 import { Button } from "../../../components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
+import { ScrollArea } from "../../../components/ui/scroll-area";
 import RepositoryErrorNotice from "./RepositoryErrorNotice.vue";
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   aiAgent?: "codex" | "claude";
+  appearance?: "popover" | "page";
   instanceId: string;
   open: boolean;
   sessionId: string;
   sessionKind: RepositorySessionKind;
-}>();
+}>(), { appearance: "popover" });
 const { t } = useI18n();
 
 const emit = defineEmits<{
@@ -203,11 +220,22 @@ const target = computed(() => ({
 }));
 const worktreesQuery = useRepositoryWorktreesQuery(target, computed(() => props.open));
 const worktrees = computed(() => worktreesQuery.data.value);
+const searchQuery = ref("");
 const orderedWorktrees = computed(() => [...(worktrees.value?.items || [])].sort((left, right) => {
   if (left.isCurrent !== right.isCurrent) return left.isCurrent ? -1 : 1;
   if (left.isMain !== right.isMain) return left.isMain ? -1 : 1;
   return worktreeLabel(left).localeCompare(worktreeLabel(right));
 }));
+const filteredWorktrees = computed(() => {
+  const query = searchQuery.value.trim().toLocaleLowerCase();
+  if (!query) return orderedWorktrees.value;
+  return orderedWorktrees.value.filter((worktree) => [
+    worktreeLabel(worktree),
+    worktree.head.oid,
+    worktree.isMain ? t("repository.worktreesPanel.main") : "",
+    worktree.managed ? t("repository.worktreesPanel.managed") : t("repository.worktreesPanel.external"),
+  ].some((value) => value?.toLocaleLowerCase().includes(query)));
+});
 const canStartAiSession = computed(() => props.sessionKind === "ai-session" && Boolean(props.aiAgent));
 const canManageWorktrees = computed(() => props.sessionKind === "ai-session");
 const startingWorktreeId = ref("");
@@ -387,6 +415,17 @@ async function startAiSession(worktree: RepositoryWorktree) {
   overflow: hidden;
 }
 
+.repository-worktrees-panel[data-appearance="page"] {
+  display: flex;
+  flex-direction: column;
+  width: min(1120px, 100%);
+  height: 100%;
+  max-height: none;
+  min-height: 0;
+  margin: 0 auto;
+  padding: 24px;
+}
+
 .repository-worktrees-panel > header,
 .repository-worktrees-panel > header > span,
 .repository-worktree-card-head,
@@ -410,6 +449,31 @@ async function startAiSession(worktree: RepositoryWorktree) {
 
 .repository-worktrees-panel > header strong {
   font-size: 13px;
+}
+
+.repository-worktree-title > span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.repository-worktree-title small {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.repository-worktrees-panel[data-appearance="page"] > header {
+  padding: 2px 2px 18px;
+}
+
+.repository-worktrees-panel[data-appearance="page"] > header strong {
+  font-size: 16px;
+}
+
+.repository-worktrees-panel[data-appearance="page"] > header .repository-worktree-title > svg {
+  width: 19px;
+  height: 19px;
 }
 
 .repository-worktree-header-actions {
@@ -457,19 +521,19 @@ async function startAiSession(worktree: RepositoryWorktree) {
 .repository-worktree-create strong,
 .repository-worktree-create label > span {
   color: var(--text-strong);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
 }
 
 .repository-worktree-create small {
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.4;
 }
 
 .repository-worktree-recovery {
   color: var(--text-muted);
-  font-size: 9px;
+  font-size: 12px;
   line-height: 1.4;
 }
 
@@ -536,7 +600,7 @@ async function startAiSession(worktree: RepositoryWorktree) {
   background: color-mix(in srgb, var(--focus-ring) 16%, var(--surface-subtle));
   color: var(--text-strong);
   cursor: pointer;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
 }
 
@@ -545,13 +609,71 @@ async function startAiSession(worktree: RepositoryWorktree) {
   opacity: 0.55;
 }
 
+.repository-worktree-search {
+  display: flex;
+  min-width: 0;
+  min-height: 36px;
+  align-items: center;
+  gap: 8px;
+  margin: 0 2px 9px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 8px;
+  background: var(--surface-subtle);
+  color: var(--text-muted);
+  padding: 0 10px;
+}
+
+.repository-worktree-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.repository-worktree-search span {
+  flex: 0 0 auto;
+  font-size: 12px;
+}
+
+.repository-worktree-search:focus-within {
+  border-color: var(--focus-ring);
+}
+
+.repository-worktree-scroll {
+  min-height: 0;
+  max-height: 500px;
+}
+
+.repository-worktrees-panel[data-appearance="page"] .repository-worktree-scroll {
+  flex: 1 1 auto;
+  height: auto;
+  max-height: none;
+}
+
+.repository-worktrees-panel[data-appearance="page"] > .repository-worktree-state {
+  flex: 1 1 auto;
+}
+
 .repository-worktree-list {
   display: grid;
   min-width: 0;
   gap: 2px;
-  overflow-x: hidden;
-  overflow-y: auto;
-  padding: 1px 2px 2px;
+  padding: 1px 10px 2px 2px;
+}
+
+.repository-worktrees-panel[data-appearance="page"] .repository-worktree-list {
+  grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr));
+  align-items: start;
+  gap: 10px;
+}
+
+.repository-worktrees-panel[data-appearance="page"] .repository-worktree-list > .repository-worktree-mutation-success,
+.repository-worktrees-panel[data-appearance="page"] .repository-worktree-list > :deep(.repository-error-notice),
+.repository-worktrees-panel[data-appearance="page"] .repository-worktree-list > .repository-worktree-state {
+  grid-column: 1 / -1;
 }
 
 .repository-worktree-mutation-error {
@@ -562,7 +684,7 @@ async function startAiSession(worktree: RepositoryWorktree) {
   border-radius: 7px;
   color: var(--status-warning);
   padding: 8px;
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.4;
 }
 
@@ -574,7 +696,7 @@ async function startAiSession(worktree: RepositoryWorktree) {
   border-radius: 7px;
   color: var(--status-success, #2dd4bf);
   padding: 8px;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .repository-worktree-card {
@@ -587,6 +709,13 @@ async function startAiSession(worktree: RepositoryWorktree) {
   background: transparent;
   padding: 7px 8px;
   transition: background-color 120ms ease;
+}
+
+.repository-worktrees-panel[data-appearance="page"] .repository-worktree-card {
+  border: 1px solid var(--line-subtle);
+  border-radius: 10px;
+  background: var(--surface-raised, var(--background));
+  padding: 12px;
 }
 
 .repository-worktree-card[data-current="true"] {
@@ -633,7 +762,7 @@ async function startAiSession(worktree: RepositoryWorktree) {
   flex: 0 0 auto;
   gap: 3px;
   color: var(--brand-accent-muted, var(--brand-accent));
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 700;
 }
 
@@ -647,7 +776,7 @@ async function startAiSession(worktree: RepositoryWorktree) {
   background: var(--surface-subtle);
   color: var(--text-muted);
   padding: 1px 6px;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .repository-worktree-badges span.warning,
@@ -658,7 +787,7 @@ async function startAiSession(worktree: RepositoryWorktree) {
 
 .repository-worktree-reason,
 .repository-worktree-blocked {
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.35;
 }
 
@@ -673,7 +802,7 @@ async function startAiSession(worktree: RepositoryWorktree) {
   border-radius: 999px;
   color: var(--status-warning);
   padding: 2px 6px;
-  font-size: 9px;
+  font-size: 12px;
 }
 
 .repository-worktree-start {
@@ -685,7 +814,7 @@ async function startAiSession(worktree: RepositoryWorktree) {
   background: var(--surface-subtle);
   color: var(--text-strong);
   cursor: pointer;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
 }
 
@@ -710,7 +839,7 @@ async function startAiSession(worktree: RepositoryWorktree) {
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .repository-worktree-remove:hover:not(:disabled),
@@ -749,7 +878,7 @@ async function startAiSession(worktree: RepositoryWorktree) {
 
 .repository-worktree-remove-summary small {
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .repository-worktree-state {
@@ -758,7 +887,17 @@ async function startAiSession(worktree: RepositoryWorktree) {
   gap: 8px;
   border-top: 1px solid var(--line-subtle);
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: 12px;
+}
+
+@media (max-width: 720px) {
+  .repository-worktrees-panel[data-appearance="page"] {
+    padding: 14px;
+  }
+
+  .repository-worktrees-panel[data-appearance="page"] .repository-worktree-list {
+    grid-template-columns: 1fr;
+  }
 }
 
 .repository-worktree-spin {

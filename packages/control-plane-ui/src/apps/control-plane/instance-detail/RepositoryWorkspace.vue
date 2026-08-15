@@ -1,8 +1,6 @@
 <template>
-  <component :is="embedded ? 'section' : Dialog" :open="embedded || open" :class="{ 'repository-workspace-embedded': embedded }" @update:open="$emit('update:open', $event)">
-    <component :is="embedded ? 'div' : DialogContent" :class="['repository-workspace-dialog', { 'repository-workspace-window': standalone, 'repository-workspace-embedded-content': embedded }]" @open-auto-focus="focusWorkspace">
-      <DialogTitle v-if="!embedded" class="sr-only">{{ t("repository.workspace.explorer") }}</DialogTitle>
-      <DialogDescription v-if="!embedded" class="sr-only">{{ t("repository.workspace.description") }}</DialogDescription>
+  <section class="repository-workspace">
+    <div class="repository-workspace-content">
       <header class="repository-workspace-head">
         <span class="repository-workspace-title">
           <FolderGit2 :size="17" />
@@ -10,7 +8,6 @@
         </span>
         <span class="repository-workspace-head-actions">
           <Button
-            v-if="!standalone"
             variant="ghost"
             size="icon"
             class="repository-workspace-view-switch"
@@ -21,11 +18,6 @@
             <GitCompareArrows :size="14" />
             <span v-if="changeCount" class="repository-workspace-view-count">{{ changeCount }}</span>
           </Button>
-          <small v-if="popoutMessage" class="repository-workspace-popout-message" role="status">{{ popoutMessage }}</small>
-          <button v-if="embedded" type="button" :aria-label="t('repository.workspace.openDialog')" :title="t('repository.workspace.openAsDialog')" @click="emit('openDialog')"><Maximize2 :size="16" /></button>
-          <button v-else-if="!standalone" type="button" :aria-label="t('repository.workspace.returnTab')" :title="t('repository.workspace.returnToTab')" @click="emit('openTab')"><PanelTop :size="16" /></button>
-          <button v-if="!standalone" type="button" :aria-label="t('repository.workspace.openWindow')" :title="t('repository.workspace.openWindow')" @click="openInNewWindow"><ExternalLink :size="16" /></button>
-          <button v-if="!embedded" type="button" :aria-label="t('repository.common.close')" :title="t('repository.common.close')" @click="emit('update:open', false)"><X :size="16" /></button>
         </span>
       </header>
 
@@ -126,8 +118,8 @@
         </DialogContent>
       </Dialog>
 
-    </component>
-  </component>
+    </div>
+  </section>
 </template>
 
 <script setup lang="ts">
@@ -139,9 +131,9 @@ import type {
   RepositoryFileMutationResult,
   RepositorySessionKind,
 } from "@task-handoff/protocol/repository";
-import { ExternalLink, FileCode2, FilePlus2, FolderGit2, FolderOpen, GitCompareArrows, LoaderCircle, Maximize2, PanelTop, PencilLine, Trash2, X } from "@lucide/vue";
+import { FileCode2, FilePlus2, FolderGit2, FolderOpen, GitCompareArrows, LoaderCircle, PencilLine, Trash2, X } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { ApiError } from "../../../api/client";
 import { createRepositoryFile, deleteRepositoryFile, getRepositoryChanges, getRepositoryContext, getRepositoryDirectory, getRepositoryFile, renameRepositoryFile } from "../../../api/repository";
@@ -155,7 +147,6 @@ import RepositoryErrorNotice from "./RepositoryErrorNotice.vue";
 import RepositoryFilePreview from "./RepositoryFilePreview.vue";
 import RepositoryFileTree from "./RepositoryFileTree.vue";
 import { repositoryFileLocation } from "./repositoryFilePath";
-import { openRepositoryWorkspaceWindow, repositoryWorkspaceChannelName } from "./repositoryWorkspaceWindow";
 
 type FileTab = RepositoryFileContent & {
   id: string;
@@ -170,22 +161,16 @@ type ScopedRepositoryError = {
 
 const props = defineProps<{
   context: RepositoryContext;
-  embedded?: boolean;
   instanceId: string;
   initialFilePath?: string;
   initialFileRequestId?: number;
-  open: boolean;
   sessionId: string;
   sessionKind: RepositorySessionKind;
-  standalone?: boolean;
 }>();
 const { locale, t } = useI18n();
 
 const emit = defineEmits<{
   openChanges: [target: { initialView: "changes"; page: "changes-review"; sessionId: string; sessionKind: RepositorySessionKind }];
-  openDialog: [];
-  openTab: [];
-  "update:open": [open: boolean];
 }>();
 
 function openChangesReview() {
@@ -208,12 +193,6 @@ const directoryLoadError = ref<ScopedRepositoryError>();
 const fileOpenError = ref<ScopedRepositoryError>();
 const loadRevision = ref(0);
 let fileOpenRevision = 0;
-const popoutRawMessage = ref("");
-const popoutBlocked = ref(false);
-const popoutFailed = ref(false);
-const popoutMessage = computed(() => popoutRawMessage.value || (popoutBlocked.value
-  ? t("repository.workspace.popoutBlocked")
-  : popoutFailed.value ? t("repository.workspacePopoutFailed") : ""));
 const newFileDialogOpen = ref(false);
 const newFilePath = ref("");
 const newFileError = ref<unknown>();
@@ -233,17 +212,9 @@ const workspaceSubtitle = computed(() => {
     : t("repository.workspace.unborn");
   return [branch, props.context.cwdRelativePath ? t("repository.common.cwd", { path: props.context.cwdRelativePath }) : t("repository.common.repositoryRoot")].filter(Boolean).join(" · ");
 });
-let repositoryChannel: BroadcastChannel | undefined;
 let stopSidebarResize: (() => void) | undefined;
 
-onMounted(() => {
-  connectRepositoryChannel();
-  window.addEventListener("focus", refreshFromExternalChange);
-});
-
 onBeforeUnmount(() => {
-  window.removeEventListener("focus", refreshFromExternalChange);
-  repositoryChannel?.close();
   stopSidebarResize?.();
 });
 
@@ -273,45 +244,6 @@ function startSidebarResize(event: PointerEvent) {
   window.addEventListener("pointercancel", stop);
 }
 
-function connectRepositoryChannel() {
-  repositoryChannel?.close();
-  repositoryChannel = undefined;
-  if (typeof BroadcastChannel === "undefined") return;
-  repositoryChannel = new BroadcastChannel(repositoryWorkspaceChannelName(target.value));
-  repositoryChannel.addEventListener("message", refreshFromExternalChange);
-}
-
-async function openInNewWindow() {
-  popoutRawMessage.value = "";
-  popoutBlocked.value = false;
-  popoutFailed.value = false;
-  try {
-    const opened = await openRepositoryWorkspaceWindow({ ...target.value, view: "files" });
-    if (!opened) {
-      popoutBlocked.value = true;
-      return;
-    }
-    emit("update:open", false);
-  } catch (error) {
-    if (error instanceof Error) popoutRawMessage.value = error.message;
-    else popoutFailed.value = true;
-  }
-}
-
-function notifyRepositoryChanged() {
-  repositoryChannel?.postMessage({ type: "repository-invalidated" });
-}
-
-function refreshFromExternalChange() {
-  if (!props.open || loadingWorkspace.value) return;
-  void Promise.all([refreshRepositoryState(), refreshLoadedDirectories(), refreshOpenFiles()]);
-}
-
-function focusWorkspace(event: Event) {
-  event.preventDefault();
-  void nextTick(() => workspaceBody.value?.focus());
-}
-
 function navigateOpenTabs(event: KeyboardEvent) {
   if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key) || !tabs.value.length) return;
   event.preventDefault();
@@ -334,15 +266,9 @@ function scrollOpenTabs(event: WheelEvent) {
   tabList.scrollLeft = nextScrollLeft;
 }
 
-watch(() => props.open, (open) => {
-  if (!open) return;
+watch(() => `${props.instanceId}:${props.sessionKind}:${props.sessionId}`, () => {
   void loadWorkspace();
 }, { immediate: true });
-
-watch(() => `${props.instanceId}:${props.sessionKind}:${props.sessionId}`, () => {
-  connectRepositoryChannel();
-  if (props.open) void loadWorkspace();
-});
 
 async function loadWorkspace() {
   const revision = ++loadRevision.value;
@@ -554,7 +480,6 @@ async function applyFileMutation(result: RepositoryFileMutationResult) {
   changes.value = result.changes;
   queryClient.setQueryData(repositoryContextQueryKey(), result.context);
   await refreshLoadedDirectories();
-  notifyRepositoryChanged();
 }
 
 async function refreshLoadedDirectories() {
@@ -593,10 +518,8 @@ function closeTab(id: string) {
 </script>
 
 <style scoped>
-:global([role="dialog"].repository-workspace-dialog) { display: grid; top: calc(50% + 24px); width: min(1500px, calc(100vw - 32px)); max-width: none; height: min(920px, calc(100vh - 80px)); grid-template-rows: auto minmax(0, 1fr); gap: 0; overflow: hidden; border-color: var(--line-subtle); border-radius: 13px; background: var(--workspace-bg, var(--background)); padding: 0; color: var(--text); }
-:global([role="dialog"].repository-workspace-dialog.repository-workspace-window) { top: 50%; width: 100vw; height: 100vh; border: 0; border-radius: 0; box-shadow: none; }
-.repository-workspace-embedded { display: block; width: 100%; height: 100%; min-width: 0; min-height: 0; }
-.repository-workspace-embedded-content { display: grid; width: 100%; height: 100%; min-width: 0; min-height: 0; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; background: var(--workspace-bg, var(--background)); color: var(--text); }
+.repository-workspace { display: block; width: 100%; height: 100%; min-width: 0; min-height: 0; }
+.repository-workspace-content { display: grid; width: 100%; height: 100%; min-width: 0; min-height: 0; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; background: var(--workspace-bg, var(--background)); color: var(--text); }
 .repository-workspace-head { display: flex; min-height: 52px; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line-subtle); padding: 0 10px 0 15px; }
 .repository-workspace-title, .repository-workspace-title > span { display: flex; align-items: center; }
 .repository-workspace-title { gap: 9px; }
@@ -608,7 +531,6 @@ function closeTab(id: string) {
 .repository-workspace-head-actions > button:hover, .repository-workspace-head-actions > button:focus-visible { background: var(--surface-subtle); color: var(--text); }
 .repository-workspace-head-actions :deep(.repository-workspace-view-switch) { display: inline-flex; width: auto; min-width: 30px; height: 30px; align-items: center; justify-content: center; gap: 5px; padding: 0 7px; white-space: nowrap; }
 .repository-workspace-view-count { display: inline-flex; min-width: 19px; height: 18px; align-items: center; justify-content: center; border: 1px solid var(--line-subtle); border-radius: 999px; background: var(--surface-subtle); color: var(--text); font-size: 11px; font-weight: 600; line-height: 1; padding: 0 5px; }
-.repository-workspace-popout-message { max-width: 300px; overflow: hidden; margin-right: 6px; color: var(--status-warning); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .repository-workspace-body { display: grid; min-height: 0; grid-template-columns: minmax(220px, var(--repository-sidebar-width)) 7px minmax(0, 1fr); overflow: hidden; }
 .repository-workspace-sidebar { display: grid; min-width: 0; min-height: 0; grid-template-rows: auto auto minmax(0, 1fr); background: var(--surface-raised, var(--background)); }
 .repository-workspace-resize-handle { position: relative; z-index: 2; cursor: col-resize; background: transparent; touch-action: none; }

@@ -11,6 +11,7 @@ export const AiSessionEventType = {
   Patch: "ai-session.patch",
   Removed: "ai-session.removed",
   MessageDelta: "ai-session.message-delta",
+  TimelineItem: "ai-session.timeline-item",
   SyncRequired: "ai-session.sync-required",
 } as const;
 export const AiSessionUnreadEventType = {
@@ -56,6 +57,54 @@ export const AiSessionToolSchema = z
     startedAt: z.string().datetime().optional(),
   })
   .strict();
+
+export const AiSessionTimelineActivityStatusSchema = z.enum([
+  "running",
+  "completed",
+  "failed",
+  "waiting",
+]);
+
+const AiSessionTimelineItemBaseSchema = z.object({
+  id: z.string().trim().min(1).max(240),
+  turnId: z.string().trim().min(1).max(240),
+}).strict();
+
+export const AiSessionTimelineUserMessageSchema = AiSessionTimelineItemBaseSchema.extend({
+  type: z.literal("user-message"),
+  text: z.string(),
+}).strict();
+
+export const AiSessionTimelineAgentMessageSchema = AiSessionTimelineItemBaseSchema.extend({
+  type: z.literal("ai-message"),
+  text: z.string(),
+}).strict();
+
+export const AiSessionTimelineActivitySchema = AiSessionTimelineItemBaseSchema.extend({
+  type: z.literal("activity"),
+  activityKind: z.string().trim().min(1).max(120),
+  title: z.string().trim().min(1).max(240),
+  status: AiSessionTimelineActivityStatusSchema.optional(),
+  summary: z.string().max(4_000).optional(),
+  input: z.string().max(100_000).optional(),
+  output: z.string().max(1_000_000).optional(),
+  paths: z.array(z.string().trim().min(1).max(4096)).max(500).optional(),
+  exitCode: z.number().int().optional(),
+  durationMs: z.number().int().nonnegative().optional(),
+}).strict();
+
+export const AiSessionTimelineItemSchema = z.discriminatedUnion("type", [
+  AiSessionTimelineUserMessageSchema,
+  AiSessionTimelineAgentMessageSchema,
+  AiSessionTimelineActivitySchema,
+]);
+
+export const AiSessionTimelineSchema = z.object({
+  sessionId: z.string().trim().min(1).max(120),
+  providerSessionId: z.string().trim().min(1).max(240),
+  items: z.array(AiSessionTimelineItemSchema),
+  generatedAt: z.string().datetime(),
+}).strict();
 
 export const AiSessionSubAgentStatusSchema = z.enum([
   "pending-init",
@@ -702,6 +751,18 @@ export const AiSessionMessageDeltaEventSchema = z
   })
   .strict();
 
+export const AiSessionTimelineItemEventSchema = z.object({
+  instanceId: z.string().trim().min(1).max(160),
+  nodeId: z.string().trim().min(1).max(160).optional(),
+  sessionId: z.string().trim().min(1).max(120),
+  providerSessionId: z.string().trim().min(1).max(240),
+  item: AiSessionTimelineItemSchema,
+  generatedAt: z.string().datetime(),
+}).strict();
+
+// Compatibility for v0.0.21: keep this additive live event outside the retained
+// revision delta union so older control-plane UIs can ignore it and continue syncing.
+
 export const AiSessionDeltaResponseSchema = z
   .object({
     streamId: z.string().trim().min(1).max(240),
@@ -890,6 +951,12 @@ export type AiSessionLifecycle = z.infer<typeof AiSessionLifecycleSchema>;
 export type AiSessionUnreadState = z.infer<typeof AiSessionUnreadStateSchema>;
 export type AiSessionPhase = z.infer<typeof AiSessionPhaseSchema>;
 export type AiSessionTool = z.infer<typeof AiSessionToolSchema>;
+export type AiSessionTimelineActivityStatus = z.infer<typeof AiSessionTimelineActivityStatusSchema>;
+export type AiSessionTimelineUserMessage = z.infer<typeof AiSessionTimelineUserMessageSchema>;
+export type AiSessionTimelineAgentMessage = z.infer<typeof AiSessionTimelineAgentMessageSchema>;
+export type AiSessionTimelineActivity = z.infer<typeof AiSessionTimelineActivitySchema>;
+export type AiSessionTimelineItem = z.infer<typeof AiSessionTimelineItemSchema>;
+export type AiSessionTimeline = z.infer<typeof AiSessionTimelineSchema>;
 export type AiSessionSubAgentStatus = z.infer<typeof AiSessionSubAgentStatusSchema>;
 export type AiSessionSubAgentActivity = z.infer<typeof AiSessionSubAgentActivitySchema>;
 export type AiSessionSubAgent = z.infer<typeof AiSessionSubAgentSchema>;
@@ -953,7 +1020,36 @@ export type AiSessionSnapshotEvent = z.infer<typeof AiSessionSnapshotEventSchema
 export type AiSessionPatchEvent = z.infer<typeof AiSessionPatchEventSchema>;
 export type AiSessionRemovedEvent = z.infer<typeof AiSessionRemovedEventSchema>;
 export type AiSessionMessageDeltaEvent = z.infer<typeof AiSessionMessageDeltaEventSchema>;
+export type AiSessionTimelineItemEvent = z.infer<typeof AiSessionTimelineItemEventSchema>;
 export type AiSessionDeltaResponse = z.infer<typeof AiSessionDeltaResponseSchema>;
 export type AiSessionSnapshotInput = z.infer<typeof AiSessionSnapshotInputSchema>;
 export type AiSessionRealtimeInput = z.infer<typeof AiSessionRealtimeInputSchema>;
 export type AiSessionReducerInput = z.infer<typeof AiSessionReducerInputSchema>;
+
+/** Merge a partial live item stream into a snapshot while preserving both streams' order constraints. */
+export function mergeAiSessionTimelineItems(
+  snapshot: readonly AiSessionTimelineItem[],
+  liveItems: readonly AiSessionTimelineItem[],
+): AiSessionTimelineItem[] {
+  if (!liveItems.length) return [...snapshot];
+  const liveById = new Map<string, AiSessionTimelineItem>();
+  for (const item of liveItems) liveById.set(item.id, item);
+  const snapshotIds = new Set(snapshot.map((item) => item.id));
+  const insertBefore = new Map<string, AiSessionTimelineItem[]>();
+  let pending: AiSessionTimelineItem[] = [];
+  for (const item of liveById.values()) {
+    if (!snapshotIds.has(item.id)) {
+      pending.push(item);
+      continue;
+    }
+    if (pending.length) insertBefore.set(item.id, pending);
+    pending = [];
+  }
+  const merged: AiSessionTimelineItem[] = [];
+  for (const item of snapshot) {
+    merged.push(...(insertBefore.get(item.id) || []));
+    merged.push(liveById.get(item.id) || item);
+  }
+  merged.push(...pending);
+  return merged;
+}

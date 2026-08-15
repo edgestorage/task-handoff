@@ -7,18 +7,13 @@
     <RepositoryErrorNotice v-else-if="contextQuery.error.value" :error="contextQuery.error.value" :fallback="t('repository.errors.workspaceLoad')" />
     <RepositoryWorkspace
       v-else-if="contextQuery.data.value"
-      :embedded="!dialogOpen"
       :context="contextQuery.data.value"
       :instance-id="instanceId"
       :initial-file-path="initialFilePath"
       :initial-file-request-id="initialFileRequestId"
-      :open="true"
       :session-id="sessionId"
       :session-kind="sessionKind"
-      @open-dialog="dialogOpen = true"
       @open-changes="$emit('openWorkspace', $event)"
-      @open-tab="dialogOpen = false"
-      @update:open="dialogOpen = $event"
     />
   </div>
 </template>
@@ -26,7 +21,7 @@
 <script setup lang="ts">
 import type { RepositorySessionKind } from "@task-handoff/protocol/repository";
 import { LoaderCircle } from "@lucide/vue";
-import { computed, ref } from "vue";
+import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRepositoryContextQuery } from "../../../api/repository";
 import type { SessionTab } from "../useInstanceSessions";
@@ -36,7 +31,6 @@ import RepositoryWorkspace from "./RepositoryWorkspace.vue";
 const props = defineProps<{ instanceId: string; session: SessionTab }>();
 const { t } = useI18n();
 defineEmits<{ openWorkspace: [target: { initialView: "files" | "changes"; page?: "workspace" | "changes-review"; sessionId: string; sessionKind: RepositorySessionKind }] }>();
-const dialogOpen = ref(false);
 const sessionId = computed(() => typeof props.session.source?.sessionId === "string" ? props.session.source.sessionId : "");
 const sessionKind = computed<RepositorySessionKind>(() => props.session.source?.sessionKind === "ai-session" ? "ai-session" : "app-session");
 const initialFilePath = computed(() => typeof props.session.source?.filePath === "string" ? props.session.source.filePath : undefined);

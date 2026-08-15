@@ -201,11 +201,43 @@
               <!-- i18n-audit-allow-next-line code-token: example model API endpoint -->
               <ControlPlaneInput v-model="settingsModel.endpoint" placeholder="https://api.openai.com/v1" />
             </label>
-            <label>
-              <span>{{ t("settings.modelRegistry.model") }}</span>
-              <!-- i18n-audit-allow-next-line product-name: example model identifier -->
-              <ControlPlaneInput v-model="settingsModel.model" placeholder="gpt-5-codex" />
-            </label>
+            <div class="model-field">
+              <div class="model-field-head">
+                <span>{{ t("settings.modelRegistry.model") }}</span>
+                <Button variant="ghost" size="sm" :disabled="!canDiscoverModels || discoveringModels" @click="fetchModelOptions">
+                  <RefreshCw :size="13" :class="{ 'spin': discoveringModels }" />
+                  <span>{{ discoveringModels ? t("settings.modelRegistry.discovering") : t("settings.modelRegistry.discover") }}</span>
+                </Button>
+              </div>
+              <div class="model-input-row">
+                <!-- i18n-audit-allow-next-line product-name: example model identifier -->
+                <ControlPlaneInput v-model="settingsModel.model" :aria-label="t('settings.modelRegistry.model')" placeholder="gpt-5-codex" />
+                <Popover v-model:open="modelPickerOpen">
+                  <PopoverTrigger as-child>
+                    <Button variant="outline" size="sm" class="model-picker-trigger" :disabled="!discoveredModels.length" :aria-label="t('settings.modelRegistry.chooseDiscovered')">
+                      <ChevronsUpDown :size="14" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent class="model-picker-popover" align="end" :side-offset="6">
+                    <Command :model-value="settingsModel.model" @update:model-value="selectDiscoveredModel">
+                      <CommandInput :placeholder="t('settings.modelRegistry.searchModels')" />
+                      <CommandList>
+                        <CommandEmpty>{{ t("settings.modelRegistry.noModelMatches") }}</CommandEmpty>
+                        <CommandGroup>
+                          <CommandItem v-for="option in discoveredModels" :key="option.id" :value="option.id">
+                            <Check :size="14" :class="{ 'model-option-unselected': option.id !== settingsModel.model }" />
+                            <span>{{ option.id }}</span>
+                            <small v-if="option.ownedBy">{{ option.ownedBy }}</small>
+                          </CommandItem>
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
+              </div>
+              <small>{{ t("settings.modelRegistry.manualModelHint") }}</small>
+              <small v-if="!selectedNodeSupportsModelEndpointProbe">{{ t("settings.modelRegistry.probeUnsupported") }}</small>
+            </div>
             <label>
               <span>{{ t("settings.fields.apiKey") }}</span>
               <ControlPlaneInput v-model="settingsModel.key" type="password" :placeholder="editingModelId ? t('settings.modelRegistry.keepKey') : t('settings.fields.apiKey')" />
@@ -224,10 +256,17 @@
                 <span>{{ t("common.status.enabled") }}</span>
               </label>
             </div>
-            <Button size="sm" class="model-submit" :disabled="!canSaveModel || savingModelId === formModelBusyId" @click="saveModel">
-              <Plus :size="15" />
-              <span>{{ savingModelId === formModelBusyId ? t("settings.modelRegistry.saving") : editingModelId ? t("settings.modelRegistry.save") : t("settings.modelRegistry.create") }}</span>
-            </Button>
+            <p v-if="modelEndpointFeedback" class="model-endpoint-feedback" :data-kind="modelEndpointFeedback.kind">{{ modelEndpointFeedback.text }}</p>
+            <div class="model-form-actions">
+              <Button variant="outline" size="sm" :disabled="!canTestModel || testingModel" @click="checkModel">
+                <Activity :size="14" />
+                <span>{{ testingModel ? t("settings.modelRegistry.testing") : t("settings.modelRegistry.test") }}</span>
+              </Button>
+              <Button size="sm" class="model-submit" :disabled="!canSaveModel || savingModelId === formModelBusyId" @click="saveModel">
+                <Plus :size="15" />
+                <span>{{ savingModelId === formModelBusyId ? t("settings.modelRegistry.saving") : editingModelId ? t("settings.modelRegistry.save") : t("settings.modelRegistry.create") }}</span>
+              </Button>
+            </div>
           </div>
         </section>
       </div>
@@ -696,7 +735,7 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useQueryClient } from "@tanstack/vue-query";
-import { AlertTriangle, ArrowLeft, ChevronDown, ChevronUp, Download, Eye, EyeOff, KeyRound, Layers, MapPin, MonitorCog, Plus, RefreshCw, Server, Settings, ShieldAlert, Trash2 } from "@lucide/vue";
+import { Activity, AlertTriangle, ArrowLeft, Check, ChevronDown, ChevronUp, ChevronsUpDown, Download, Eye, EyeOff, KeyRound, Layers, MapPin, MonitorCog, Plus, RefreshCw, Server, Settings, ShieldAlert, Trash2 } from "@lucide/vue";
 import { cancelControlPlaneProxyClaim, claimControlPlaneProxyNode, controlPlaneQueryKeys, downloadControlPlaneDiagnosticLogs, getNodeExternalListener, resumeControlPlaneProxyClaim, updateControlPlaneSettings, updateNodeExternalListener, useAuthSessionQuery, useChatBridgesQuery, useChatGatewayStatusQuery, useControlPlaneSettingsQuery, useImageOptionsQuery, useImagesQuery, useInstanceBoardPayloadQuery, useMarketCatalogQuery, useModelRegistryQuery, useModelsQuery, useNodeImageAvailabilityQuery, useNodeRuntimesPayloadQuery, useNodesQuery, usePendingControlPlaneProxyClaimsQuery, useProjectsQuery, useServerUpdateCheckQuery } from "../../../api/queries";
 import { invalidateControlPlaneDomains } from "../../../api/queryInvalidation";
 import type { BuildInfo, ControlPlaneSettings, InstanceBoardItem, ModelLocation, Node, NodeAgentExternalListener, UpdateChannel } from "../../../api/types";
@@ -705,6 +744,8 @@ import { Button } from "../../../components/ui/button";
 import { Checkbox } from "../../../components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "../../../components/ui/command";
+import { Popover, PopoverContent, PopoverTrigger } from "../../../components/ui/popover";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../../components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
@@ -763,6 +804,7 @@ const emit = defineEmits<{
 const { locale, t } = useI18n();
 
 const DEFAULT_SELECT_VALUE = "__default__";
+const modelPickerOpen = ref(false);
 const authSession = useAuthSessionQuery();
 const settingsSections = computed<Array<{ id: SettingsSection; label: string }>>(() => [
   { id: "nodes", label: t("settings.nodes") },
@@ -1114,20 +1156,29 @@ async function submitRegistryImage() {
   if (imageCreateSuccess.value) imageCreateOpen.value = false;
 }
 const {
+  canDiscoverModels,
   canSaveModel,
+  canTestModel,
+  checkModel,
   canMoveModel,
   clearModelFeedback,
   deletingModelId,
+  discoveredModels,
+  discoveringModels,
   editModel,
   editingModelId,
   formModelBusyId,
   modelSaveSuccess,
+  modelEndpointFeedback,
   moveModel,
   removeModel,
   resetModelForm,
   saveModel,
   savingModelId,
+  selectedNodeSupportsModelEndpointProbe,
   settingsModel,
+  testingModel,
+  fetchModelOptions,
 } = useModelSettings({
   errorText,
   models: () => models.data.value || [],
@@ -1136,6 +1187,11 @@ const {
   refreshModels,
   translate: t,
 });
+function selectDiscoveredModel(value: unknown) {
+  if (typeof value !== "string") return;
+  settingsModel.model = value;
+  modelPickerOpen.value = false;
+}
 const editingModelLocationCount = computed(() => {
   const model = (models.data.value || []).find((item) => item.id === editingModelId.value);
   return model?.locations?.length || 1;
@@ -2457,8 +2513,95 @@ function errorText(error: unknown) {
 }
 
 .model-submit {
-  width: 100%;
-  margin-top: 2px;
+  flex: 1 1 auto;
+}
+
+.model-field {
+  display: grid;
+  gap: 7px;
+}
+
+.model-field > small {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.model-field-head,
+.model-input-row,
+.model-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.model-field-head {
+  justify-content: space-between;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.model-field-head button {
+  min-height: 26px;
+  height: 26px;
+  padding-inline: 7px;
+  font-size: 12px;
+}
+
+.model-input-row > :first-child {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.model-picker-trigger {
+  width: 34px;
+  min-width: 34px;
+  padding: 0;
+}
+
+.model-picker-popover {
+  width: min(360px, var(--reka-popover-content-available-width));
+  max-height: min(360px, var(--reka-popover-content-available-height));
+  padding: 0;
+}
+
+.model-picker-popover [cmdk-list] {
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.model-picker-popover small {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.model-option-unselected {
+  opacity: 0;
+}
+
+.model-endpoint-feedback {
+  margin: 0;
+  color: var(--status-success);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.model-endpoint-feedback[data-kind="error"] {
+  color: var(--status-danger);
+}
+
+.model-form-actions > button:first-child {
+  flex: 0 0 auto;
+}
+
+.spin {
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 .checkbox-row,

@@ -108,7 +108,7 @@ import type { RepositoryChangeEntry, RepositoryChanges, RepositoryContext, Repos
 import { CheckCircle2, ChevronRight, Columns2, FileDiff, Files, Folder, GitCompareArrows, LoaderCircle, PanelLeftOpen, RefreshCw, RotateCcw, Rows3, Search } from "@lucide/vue";
 import { useVirtualizer } from "@tanstack/vue-virtual";
 import { useMediaQuery } from "@vueuse/core";
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useQueryClient } from "@tanstack/vue-query";
 import { ApiError } from "../../../api/client";
@@ -120,7 +120,6 @@ import { ToggleGroup, ToggleGroupItem } from "../../../components/ui/toggle-grou
 import RepositoryChangeDiffCard from "./RepositoryChangeDiffCard.vue";
 import RepositoryErrorNotice from "./RepositoryErrorNotice.vue";
 import type { ContextDirection, GapExpansion } from "./repositoryDiffPresentation";
-import { repositoryWorkspaceChannelName } from "./repositoryWorkspaceWindow";
 
 type ReviewScope = "all" | "working" | "staged" | "conflict";
 type DiffViewMode = "unified" | "split";
@@ -159,7 +158,6 @@ const discardOpen = ref(false);
 const discardTarget = ref<RepositoryChangeEntry>();
 const scrollElement = ref<HTMLElement>();
 const expandedGaps = reactive(new Map<string, GapExpansion>());
-let repositoryChannel: BroadcastChannel | undefined;
 
 const allEntries = computed(() => changes.value?.entries || []);
 const filteredEntries = computed(() => allEntries.value
@@ -200,12 +198,9 @@ const virtualRows = computed(() => rowVirtualizer.value.getVirtualItems());
 const virtualTotalSize = computed(() => rowVirtualizer.value.getTotalSize());
 
 onMounted(() => {
-  connectRepositoryChannel();
   void refresh();
 });
-onBeforeUnmount(() => repositoryChannel?.close());
 watch([() => props.instanceId, sessionId, sessionKind], () => {
-  connectRepositoryChannel();
   void refresh();
 });
 watch(splitAvailable, (available) => {
@@ -369,7 +364,6 @@ async function mutateEntry(entry: RepositoryChangeEntry, operation: () => Promis
     else await refresh();
     queryClient.setQueryData(["repository-context", props.instanceId, sessionKind.value, sessionId.value], result.context);
     mutationMessageKey.value = successKey;
-    repositoryChannel?.postMessage({ type: "repository-invalidated" });
   } catch (cause) {
     pageError.value = cause;
     if (cause instanceof ApiError && cause.code === "REPOSITORY_STATE_STALE") {
@@ -401,15 +395,6 @@ function openFiles() {
   emit("openWorkspace", { initialView: "files", page: "workspace", sessionId: sessionId.value, sessionKind: sessionKind.value });
 }
 
-function connectRepositoryChannel() {
-  repositoryChannel?.close();
-  repositoryChannel = undefined;
-  if (typeof BroadcastChannel === "undefined") return;
-  repositoryChannel = new BroadcastChannel(repositoryWorkspaceChannelName(target.value));
-  repositoryChannel.addEventListener("message", () => {
-    if (!loading.value && !mutationPending.value) void refresh();
-  });
-}
 </script>
 
 <style scoped>

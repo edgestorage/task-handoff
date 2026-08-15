@@ -8,16 +8,18 @@ import {
   type NodeModelPublicRecord,
 } from "@task-handoff/protocol/control-plane";
 import type { JsonCollection } from "../../shared/persistence/store.ts";
-import { CreateModelInputSchema, UpdateModelInputSchema, type UpdateModelInput } from "../application/inputs.ts";
+import { CreateModelInputSchema, ModelDiscoveryInputSchema, ModelTestInputSchema, UpdateModelInputSchema, type ModelDiscoveryInput, type ModelTestInput, type UpdateModelInput } from "../application/inputs.ts";
 import { now, throwNotFound } from "../application/helpers.ts";
 import type { ControlPlaneNodeAgentGateway } from "../nodes/gateway.ts";
 import { normalizeModel, publicModel } from "../public-records.ts";
+import { discoverModels, testModelEndpoint } from "../../shared/models/model-endpoint.ts";
 
 type ControlPlaneModelServiceOptions = {
   models: JsonCollection<ModelConfig>;
   gateway: ControlPlaneNodeAgentGateway;
   listNodes: () => Node[];
   requireNode: (id: string) => Node;
+  fetchImpl: typeof fetch;
 };
 
 export class ControlPlaneModelService {
@@ -147,6 +149,28 @@ export class ControlPlaneModelService {
     return this.options.gateway.deleteModel(this.options.requireNode(nodeId), modelId);
   }
 
+  discover(input: unknown) {
+    const parsed = ModelDiscoveryInputSchema.parse(input);
+    return discoverModels(this.options.fetchImpl, this.resolvePrivateInput(parsed));
+  }
+
+  test(input: unknown) {
+    const parsed = ModelTestInputSchema.parse(input);
+    return testModelEndpoint(this.options.fetchImpl, this.resolvePrivateInput(parsed));
+  }
+
+  discoverOnNode(nodeId: string, input: unknown) {
+    const node = this.options.requireNode(nodeId);
+    requireModelEndpointProbe(node);
+    return this.options.gateway.discoverModels(node, input);
+  }
+
+  testOnNode(nodeId: string, input: unknown) {
+    const node = this.options.requireNode(nodeId);
+    requireModelEndpointProbe(node);
+    return this.options.gateway.testModel(node, input);
+  }
+
   require(id: string, includeSecret = false) {
     const model = this.requireSecret(id);
     return includeSecret ? model : publicModel(model);
@@ -211,6 +235,28 @@ export class ControlPlaneModelService {
 
   private nextOrder() {
     return this.options.models.list().reduce((max, model) => Math.max(max, model.order), 0) + 100;
+  }
+
+  private resolvePrivateInput<T extends ModelDiscoveryInput | ModelTestInput>(input: T): T & { key: string } {
+    const key = input.key?.trim() || (input.existingModelId ? this.requireSecret(input.existingModelId).key : "");
+    if (!key) {
+      throw Object.assign(new Error("An API key is required to contact the model endpoint."), { statusCode: 400, code: "MODEL_API_KEY_REQUIRED" });
+    }
+    return { ...input, key };
+  }
+}
+
+function requireModelEndpointProbe(node: Node) {
+  const agent = node.capabilities.agent;
+  const agentCapabilities = agent && typeof agent === "object" && !Array.isArray(agent)
+    ? (agent as Record<string, unknown>).capabilities
+    : undefined;
+  if (!agentCapabilities || typeof agentCapabilities !== "object" || Array.isArray(agentCapabilities)
+    || (agentCapabilities as Record<string, unknown>).modelEndpointProbe !== true) {
+    throw Object.assign(new Error("This node agent does not support model endpoint discovery or testing."), {
+      statusCode: 409,
+      code: "NODE_MODEL_ENDPOINT_PROBE_UNSUPPORTED",
+    });
   }
 }
 

@@ -11,9 +11,12 @@ import {
 import { TriggerConfigSchema, TriggerDeploymentSchema, TriggerRunSchema, TriggerRuntimeStateSchema } from "./triggers.ts";
 import { ControlPlaneProxyErrorSchema, ProxyTargetStateSchema } from "./control-plane-proxy.ts";
 
-export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-08-01";
+export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-08-15";
 export const NODE_TUNNEL_PROTOCOL_VERSION = "2026-08-01";
 export const MARKET_CATALOG_PROTOCOL_VERSION = "2026-07-29";
+// Compatibility for v0.0.21: this released protocol already requires appInventory
+// and remains inside the N-1 support window after adding model endpoint probes.
+const APP_INVENTORY_REQUIRED_PROTOCOL_VERSIONS = new Set(["2026-08-01", CONTROL_PLANE_PROTOCOL_VERSION]);
 // The local value follows the date-only convention. Parsing remains permissive
 // so persisted records written before that convention do not disappear.
 export const ProtocolVersionSchema = z.string();
@@ -1250,6 +1253,10 @@ export const InstanceResourceMetricsEventType = {
   Snapshot: "instance.metrics.snapshot",
 } as const;
 
+export const NodeAgentCapabilitiesSchema = z.object({
+  modelEndpointProbe: z.boolean().optional(),
+}).strip();
+
 export const NodeAgentHealthSchema = z
   .object({
     ok: z.boolean().optional(),
@@ -1258,6 +1265,7 @@ export const NodeAgentHealthSchema = z
     platform: FinalComputerPlatformSchema.optional(),
     arch: FinalComputerArchSchema.optional(),
     protocolVersion: ProtocolVersionSchema.optional(),
+    capabilities: NodeAgentCapabilitiesSchema.optional(),
     build: BuildInfoSchema.strip().optional(),
     process: z.object({
       pid: z.number().int().positive(),
@@ -1953,7 +1961,7 @@ export const ControlledInstanceRegisterSchema = z
   })
   .strict()
   .superRefine((value, context) => {
-    if (value.protocolVersion === CONTROL_PLANE_PROTOCOL_VERSION && !value.appInventory) {
+    if (APP_INVENTORY_REQUIRED_PROTOCOL_VERSIONS.has(value.protocolVersion) && !value.appInventory) {
       context.addIssue({ code: "custom", path: ["appInventory"], message: "Current protocol register payload requires appInventory." });
     }
   });
@@ -1975,7 +1983,7 @@ export const ControlledInstanceHeartbeatSchema = z
   })
   .strict()
   .superRefine((value, context) => {
-    if (value.protocolVersion === CONTROL_PLANE_PROTOCOL_VERSION && !value.appInventory) {
+    if (APP_INVENTORY_REQUIRED_PROTOCOL_VERSIONS.has(value.protocolVersion) && !value.appInventory) {
       context.addIssue({ code: "custom", path: ["appInventory"], message: "Current protocol heartbeat payload requires appInventory." });
     }
   });

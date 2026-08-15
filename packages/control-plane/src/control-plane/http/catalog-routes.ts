@@ -50,6 +50,8 @@ export function registerCatalogRoutes({ app, service, events }: RegisterCatalogR
     events.publish("model.created", { modelId: model.id });
     return reply.code(201).send({ data: model });
   });
+  app.post("/api/models/discover", async (request) => ({ data: await service.discoverModels(request.body) }));
+  app.post("/api/models/test", async (request) => ({ data: await service.testModel(request.body) }));
   app.post("/api/models/reorder", async (request) => {
     const parsed = ModelReorderRequestSchema.parse(request.body);
     const models = await service.reorderModels(parsed.ids);
@@ -74,6 +76,14 @@ export function registerCatalogRoutes({ app, service, events }: RegisterCatalogR
     const model = await service.createNodeModel(nodeId, request.body);
     events.publish("model.created", { modelId: model.id, nodeId });
     return reply.code(201).send({ data: model });
+  });
+  app.post("/api/nodes/:nodeId/models/discover", async (request) => {
+    const { nodeId } = NodeModelParamsSchema.parse(request.params);
+    return { data: await service.discoverNodeModels(nodeId, request.body) };
+  });
+  app.post("/api/nodes/:nodeId/models/test", async (request) => {
+    const { nodeId } = NodeModelParamsSchema.parse(request.params);
+    return { data: await service.testNodeModel(nodeId, request.body) };
   });
   app.patch("/api/nodes/:nodeId/models/:modelId", async (request) => {
     const { nodeId, modelId } = NodeModelParamsSchema.parse(request.params);

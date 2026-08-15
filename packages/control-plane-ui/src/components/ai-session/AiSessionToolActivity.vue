@@ -12,14 +12,33 @@
       '--tool-activity-sweep-stop': shimmerSweepStop,
     }"
   >
-    <span ref="activityTextEl" :data-status-text="statusText">{{ statusText }}</span>
+    <button
+      v-if="interactive"
+      type="button"
+      class="ai-session-tool-activity-trigger"
+      :aria-expanded="expanded"
+      @click="toggleExpanded"
+    >
+      <ChevronRight :size="15" :class="{ open: expanded }" />
+      <span ref="activityTextEl" :data-status-text="statusText">{{ statusText }}</span>
+    </button>
+    <span v-else ref="activityTextEl" :data-status-text="statusText">{{ statusText }}</span>
+    <div v-if="interactive && expanded" class="ai-session-tool-activity-expanded">
+      <span v-if="loading">{{ t("sessions.timeline.loading") }}</span>
+      <span v-else-if="error" role="alert">{{ error }}</span>
+      <AiSessionActivityGroup v-else-if="activities.length" :activities="activities" open :summary-visible="false" />
+      <span v-else>{{ t("sessions.timeline.noActivities") }}</span>
+    </div>
   </section>
 </template>
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { ChevronRight } from "@lucide/vue";
+import type { AiSessionTimelineActivity } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionLifecycle, AiSessionPhase, AiSessionTool } from "../../api/types";
+import AiSessionActivityGroup from "./AiSessionActivityGroup.vue";
 
 const props = withDefaults(defineProps<{
   currentTool?: AiSessionTool;
@@ -28,6 +47,10 @@ const props = withDefaults(defineProps<{
   summary?: string;
   toolCallsSinceLastMessage?: number;
   tone?: "detail" | "board";
+  activities?: AiSessionTimelineActivity[];
+  error?: string;
+  interactive?: boolean;
+  loading?: boolean;
 }>(), {
   currentTool: undefined,
   phase: "unknown",
@@ -35,11 +58,16 @@ const props = withDefaults(defineProps<{
   summary: undefined,
   toolCallsSinceLastMessage: 0,
   tone: "detail",
+  activities: () => [],
+  error: "",
+  interactive: false,
+  loading: false,
 });
 const { t } = useI18n();
 
 const count = computed(() => Math.max(0, props.toolCallsSinceLastMessage));
 const visible = computed(() => props.status === "running" || props.status === "waiting");
+const expanded = ref(false);
 const shimmerDuration = ref(2.2);
 const shimmerSweepStop = ref("50%");
 const activityTextEl = ref<HTMLElement>();
@@ -66,6 +94,9 @@ watch(activityTextEl, (element) => {
 }, { flush: "post" });
 
 onBeforeUnmount(() => resizeObserver?.disconnect());
+function toggleExpanded() {
+  expanded.value = !expanded.value;
+}
 const statusText = computed(() => {
   if (props.phase === "approval") {
     return props.summary ? `${t("sessions.status.waitingApproval")} · ${props.summary}` : t("sessions.activity.waitingApproval");
@@ -76,7 +107,9 @@ const statusText = computed(() => {
       : props.currentTool.name;
   }
   if (props.phase === "responding") {
-    return t("sessions.activity.responding");
+    return count.value > 0
+      ? t("sessions.activity.respondingTools", { count: count.value })
+      : t("sessions.activity.responding");
   }
   if (props.phase === "editing") {
     return t("sessions.activity.editing");
@@ -97,9 +130,11 @@ const statusText = computed(() => {
   display: flex;
   align-items: center;
   min-width: 0;
+  flex-wrap: wrap;
 }
 
-.ai-session-tool-activity > span {
+.ai-session-tool-activity > span,
+.ai-session-tool-activity-trigger > span {
   position: relative;
   display: block;
   width: fit-content;
@@ -110,6 +145,27 @@ const statusText = computed(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.ai-session-tool-activity-trigger {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 400;
+  line-height: 1.45;
+  cursor: pointer;
+  text-align: left;
+}
+.ai-session-tool-activity-trigger > span { font-weight: 400; }
+.ai-session-tool-activity-trigger > svg { flex: 0 0 auto; transition: transform 120ms ease; }
+.ai-session-tool-activity-trigger > svg.open { transform: rotate(90deg); }
+.ai-session-tool-activity-expanded { flex: 0 0 100%; min-width: 0; margin-top: 10px; padding-left: 20px; }
+.ai-session-tool-activity-expanded > span { color: var(--text-muted); font-size: 12px; }
 
 .ai-session-tool-activity-detail {
   font-size: 14px;
@@ -128,7 +184,8 @@ const statusText = computed(() => {
   color: var(--ai-board-muted);
 }
 
-.ai-session-tool-activity-running > span::after {
+.ai-session-tool-activity-running > span::after,
+.ai-session-tool-activity-running .ai-session-tool-activity-trigger > span::after {
   position: absolute;
   inset: 0;
   color: var(--tool-activity-highlight);

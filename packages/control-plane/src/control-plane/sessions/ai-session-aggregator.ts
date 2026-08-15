@@ -6,6 +6,7 @@ import {
   AiSessionMessageDeltaEventSchema,
   AiSessionRemovedEventSchema,
   AiSessionSnapshotEventSchema,
+  AiSessionTimelineItemEventSchema,
   applyAiSessionStreamEvent,
   type AiSessionDeltaResponse,
   type AiSessionPatchEvent,
@@ -67,15 +68,18 @@ export class ControlPlaneAiSessionAggregator {
   }
 
   handleEvent(event: EventEnvelope) {
-    if (event.type === AiSessionEventType.MessageDelta) {
-      const parsed = safeParseResponse(AiSessionMessageDeltaEventSchema, event.payload);
+    if (event.type === AiSessionEventType.MessageDelta || event.type === AiSessionEventType.TimelineItem) {
+      const schema = event.type === AiSessionEventType.MessageDelta
+        ? AiSessionMessageDeltaEventSchema
+        : AiSessionTimelineItemEventSchema;
+      const parsed = safeParseResponse(schema, event.payload);
       if (!parsed.success) {
-        this.logger?.warn?.({ eventType: event.type, issues: parsed.error.issues, errorCode: "AI_SESSION_MESSAGE_DELTA_INVALID" }, "ai-session.aggregator.message-delta.invalid");
+        this.logger?.warn?.({ eventType: event.type, issues: parsed.error.issues, errorCode: "AI_SESSION_TRANSIENT_EVENT_INVALID" }, "ai-session.aggregator.transient-event.invalid");
         return false;
       }
-      // Message deltas cross the aggregator boundary after schema validation but are
-      // excluded from recoverable snapshots; the next revisioned event remains the
-      // authoritative projection boundary.
+      // Transient per-item events cross the aggregator boundary after schema validation
+      // but are excluded from recoverable snapshots. HTTP restores the authoritative
+      // timeline after reconnect, while revisioned events restore session state.
       return true;
     }
     const schema = event.type === AiSessionEventType.Snapshot

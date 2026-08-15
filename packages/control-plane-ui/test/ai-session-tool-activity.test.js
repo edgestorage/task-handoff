@@ -21,6 +21,17 @@ test("tool activity uses the authoritative API projection", () => {
   assert.doesNotMatch(activity, /watch\(\(\) => props/);
 });
 
+test("expanded tool activity consumes live items without triggering timeline reloads", () => {
+  const activity = fs.readFileSync(new URL("../src/components/ai-session/AiSessionToolActivity.vue", import.meta.url), "utf8");
+  assert.doesNotMatch(activity, /requestExpand|activityRevision|defineEmits/);
+  assert.match(activity, /function toggleExpanded\(\) \{[\s\S]*expanded\.value = !expanded\.value;/);
+});
+
+test("expanded activity keeps its previous Timeline visible during a background refresh", () => {
+  assert.match(panel, /:activity-loading="timelineLoading && !timeline"/);
+  assert.match(panel, /:activity-error="timeline \? '' : timelineError"/);
+});
+
 test("tool activity projects the current execution into one line", () => {
   assert.match(activity, /`\$\{props\.currentTool\.name\} · \$\{props\.currentTool\.inputPreview\}`/);
   assert.match(activity, /t\("sessions\.activity\.thinking"\)/);
@@ -28,6 +39,9 @@ test("tool activity projects the current execution into one line", () => {
   assert.match(activity, /t\("sessions\.activity\.waitingApproval"\)/);
   assert.match(activity, /`\$\{t\("sessions\.status\.waitingApproval"\)\} · \$\{props\.summary\}`/);
   assert.match(activity, /t\("sessions\.activity\.responding"\)/);
+  assert.match(activity, /props\.phase === "responding"[\s\S]*?count\.value > 0[\s\S]*?t\("sessions\.activity\.respondingTools", \{ count: count\.value \}\)/);
+  assert.match(activity, /\.ai-session-tool-activity-trigger \{[\s\S]*?font-weight: 400;[\s\S]*?line-height: 1\.45;/);
+  assert.match(activity, /\.ai-session-tool-activity-trigger > span \{ font-weight: 400; \}/);
   assert.match(activity, /text-overflow: ellipsis/);
   assert.match(activity, /white-space: nowrap/);
   assert.match(activity, /ai-session-tool-activity-detail \{[\s\S]*?font-size: 14px/);
@@ -45,7 +59,7 @@ test("tool activity follows the authoritative active lifecycle", () => {
 });
 
 test("turn-aware surfaces only attach current activity to the latest turn", () => {
-  assert.match(result, /<AiSessionToolActivity\s+v-if="isLatest"/);
+  assert.match(result, /<AiSessionToolActivity\s+v-if="isLatest && active"/);
   assert.match(panel, /<AiSessionToolActivity\s+v-if="promptIndexFor\(session\) >= promptCount\(session\) - 1 && !canResolveApproval\(session\)"/);
   assert.match(card, /<AiSessionToolActivity\s+v-if="promptIndex >= promptCount - 1 && !canResolveApproval\(card\.session\)"/);
 });
@@ -90,7 +104,7 @@ test("both detail surfaces share the complete AI result while cards remain uncha
   assert.match(result, /<AiSessionToolActivity[\s\S]*?:current-tool="session\.currentTool"[\s\S]*?:phase="session\.phase"[\s\S]*?:status="session\.status"[\s\S]*?:summary="session\.summary"[\s\S]*?:tool-calls-since-last-message="session\.toolCallsSinceLastMessage"[\s\S]*?:tone="tone"/);
   assert.match(result, /<AiSessionSubAgents/);
   assert.match(result, /v-for="item in displayedQueueItems"/);
-  assert.match(result, /v-if="canResolveApproval"/);
+  assert.match(result, /v-if="isLatest && canResolveApproval"/);
   assert.match(result, /\$emit\('resolveApproval', 'allow'\)/);
   assert.match(floatingDock, /tone="board"/);
   assert.doesNotMatch(panel, /session-ai-card[\s\S]{0,180}toolCallsSinceLastMessage/);
@@ -116,12 +130,25 @@ test("detail surfaces omit the legacy running response placeholder", () => {
   assert.match(sessions, /includeProgress \? aiSessionProgressText\(session, t\) : ""/);
 });
 
-test("active tool activity sits directly below the assistant response", () => {
-  assert.match(result, /'ai-session-detail-response-active': session\.status === 'running' \|\| session\.status === 'waiting'/);
+test("active tool activity sits directly below the latest assistant response", () => {
+  assert.match(result, /<section[\s\S]*'ai-session-detail-response-active': active[\s\S]*<AiSessionToolActivity/);
   assert.match(result, /ai-session-detail-response \{[\s\S]*?background: transparent;/);
-  assert.match(result, /ai-session-detail-response-active \{\s*padding-bottom: 4px;/);
-  assert.match(result, /ai-session-result\.has-response \.ai-session-detail-response \+ :deep\(\.ai-session-tool-activity\) \{\s*margin-top: calc\(-1 \* var\(--detail-activity-gap\)\);/);
+  assert.match(result, /\.ai-session-result-detail \{\s*gap: 0;/);
+  assert.match(result, /\.ai-session-result \{[\s\S]*?align-content: start;/);
+  assert.match(result, /\.ai-session-result-detail > \* \{\s*margin-top: 0;/);
+  assert.match(result, /\.ai-session-result-detail > \* \+ \* \{\s*margin-top: var\(--detail-activity-gap\);/);
+  assert.match(result, /\.ai-session-result-detail \.ai-session-detail-response \{[\s\S]*padding-bottom: 0;/);
+  assert.match(result, /\.ai-session-result-detail \.ai-session-detail-response-active \{\s*padding-bottom: 0;/);
+  assert.doesNotMatch(result, /\.ai-session-result-detail\.has-response[\s\S]*margin-top: calc\(-1/);
+  assert.match(panelCss, /\.session-ai-detail-content > \.ai-session-result \{\s*margin-top: 24px;/);
   assert.match(activity, /ai-session-tool-activity-board \{[\s\S]*?margin-top: -12px;/);
+});
+
+test("detail content reserves the visible bottom gap outside the floating composer", () => {
+  assert.match(panelCss, /\.session-ai-detail \{[\s\S]*--session-ai-compose-bottom: 10px;[\s\S]*--session-ai-content-bottom-gap: 36px;/);
+  assert.match(panelCss, /\.session-ai-detail-content \{[\s\S]*padding: 0 10px calc\([\s\S]*var\(--session-ai-compose-offset, 84px\)[\s\S]*\+ var\(--session-ai-compose-bottom\)[\s\S]*\+ var\(--session-ai-content-bottom-gap\)[\s\S]*\);/);
+  assert.match(panelCss, /\.session-ai-compose \{[\s\S]*bottom: var\(--session-ai-compose-bottom\);/);
+  assert.match(panelCss, /\.session-ai-follow-latest \{[\s\S]*bottom: calc\([\s\S]*var\(--session-ai-compose-offset, 84px\)[\s\S]*\+ var\(--session-ai-compose-bottom\)[\s\S]*\+ var\(--session-ai-content-bottom-gap\)[\s\S]*\);/);
 });
 
 test("shared detail responses preserve the previous 14px typography", () => {

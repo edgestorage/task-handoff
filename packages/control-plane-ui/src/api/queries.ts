@@ -49,6 +49,9 @@ import type {
   LocalDockerImage,
   NodeImageAvailability,
   ModelConfig,
+  ModelDiscoveryResult,
+  ModelEndpointDraft,
+  ModelTestResult,
   FederatedModelRegistry,
   Node,
   NodeAgentExternalListener,
@@ -501,6 +504,10 @@ export function getAiSessionHistoryDetail(instanceId: string, aiSessionId: strin
   return sharedAiSessionsApi.historyDetail(instanceId, aiSessionId);
 }
 
+export function getAiSessionTimeline(instanceId: string, aiSessionId: string, signal?: AbortSignal) {
+  return sharedAiSessionsApi.timeline(instanceId, aiSessionId, signal);
+}
+
 export function resumeAiSession(instanceId: string, aiSessionId: string) {
   return sharedAiSessionsApi.resume(instanceId, aiSessionId);
 }
@@ -763,6 +770,14 @@ export function deleteNodeModel(nodeId: string, id: string) {
 
 export function reorderModels(ids: string[]) {
   return postApiData<ModelConfig[]>("models/reorder", { ids });
+}
+
+export function discoverModels(input: ModelEndpointDraft, nodeId?: string) {
+  return postApiData<ModelDiscoveryResult>(nodeId ? `nodes/${nodeId}/models/discover` : "models/discover", input);
+}
+
+export function testModel(input: ModelEndpointDraft & { model: string; app: "codex" | "claude" }, nodeId?: string) {
+  return postApiData<ModelTestResult>(nodeId ? `nodes/${nodeId}/models/test` : "models/test", input);
 }
 
 export function createImage(input: CreateImageInput) {

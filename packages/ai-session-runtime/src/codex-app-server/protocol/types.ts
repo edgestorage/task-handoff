@@ -23,6 +23,10 @@ export type CodexThread = {
   status?: CodexThreadStatus;
   turns?: unknown;
 };
+export type CodexThreadItemEntry = {
+  turnId: string;
+  item: JsonValue;
+};
 export type CodexApprovalKind = "command" | "file-change" | "permissions";
 export type CodexApprovalRequest = {
   id: number;
@@ -60,11 +64,12 @@ export type CodexAppServerEvent =
   | { type: "turn-error"; threadId: string; turnId: string; error: string; willRetry: boolean }
   | { type: "turn-completed"; threadId: string; turnId?: string; status?: string; error?: string }
   | { type: "thread-error"; threadId: string; error: string }
-  | { type: "context-compaction"; threadId: string; turnId: string; itemId: string; status: "running" | "completed"; observedAt?: string }
+  | { type: "context-compaction"; threadId: string; turnId: string; itemId: string; status: "running" | "completed"; observedAt?: string; timelineItem?: JsonValue }
   | { type: "approval-request"; request: CodexApprovalRequest }
-  | { type: "tool-item-started"; threadId: string; turnId?: string; tool: CodexToolDescriptor; subAgents?: CodexSubAgentUpdate[] }
-  | { type: "tool-item-completed"; threadId: string; turnId?: string; tool: CodexToolDescriptor; subAgents?: CodexSubAgentUpdate[] }
-  | { type: "sub-agent-activity"; threadId: string; turnId?: string; subAgent: CodexSubAgentUpdate }
-  | { type: "user-message"; threadId: string; turnId?: string; text: string }
+  | { type: "tool-item-started"; threadId: string; turnId?: string; item: JsonValue; timelineItem: JsonValue; tool: CodexToolDescriptor; subAgents?: CodexSubAgentUpdate[] }
+  | { type: "tool-item-completed"; threadId: string; turnId?: string; item: JsonValue; timelineItem: JsonValue; tool: CodexToolDescriptor; subAgents?: CodexSubAgentUpdate[] }
+  | { type: "sub-agent-activity"; threadId: string; turnId?: string; timelineItem: JsonValue; subAgent: CodexSubAgentUpdate }
+  | { type: "user-message"; threadId: string; turnId?: string; itemId: string; timelineItem: JsonValue; text: string }
+  | { type: "timeline-item"; threadId: string; turnId: string; timelineItem: JsonValue }
   | { type: "agent-message-delta"; threadId: string; turnId: string; itemId: string; delta: string }
-  | { type: "agent-message-completed"; threadId: string; turnId?: string; itemId: string; text: string };
+  | { type: "agent-message-completed"; threadId: string; turnId?: string; itemId: string; timelineItem: JsonValue; text: string };

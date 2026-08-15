@@ -190,7 +190,9 @@
         :app-options="boardAppOptions"
         :board-card-detail="boardCardDetail"
         :board-card-title="boardCardTitle"
+        :board-ai-sessions="boardAiSessions"
         :board-preview-state="boardPreviewState"
+        :board-primary-ai-session="boardPrimaryAiSession"
         :board-primary-session="boardPrimarySession"
         :board-session-frame-url="boardSessionFrameUrl"
         :board-sessions="boardSessions"
@@ -213,6 +215,7 @@
         @launch-app="launchSelectedApp"
         @run-action="runInstanceAction"
         @select-board-session="selectBoardSession"
+        @step-board-ai-session="stepBoardAiSession"
         @select-instance="selectInstance"
         @set-size="setBoardSize"
         @update:interactive="boardInteractive = $event"
@@ -400,7 +403,7 @@ import SettingsModal from "./settings/SettingsModal.vue";
 import { useActiveInstanceSessions } from "./instance-detail/useActiveInstanceSessions";
 import { useBoardTerminalPreviews } from "./board/useBoardTerminalPreviews";
 import { useInstanceActions } from "./useInstanceActions";
-import { useInstanceBoardSessions } from "./board/useInstanceBoardSessions";
+import { useInstanceBoardSessions, type BoardSessionTab } from "./board/useInstanceBoardSessions";
 import { appDisplayName, buildAppSessionTabs, type SessionTab } from "./useInstanceSessions";
 import { isInstanceConnecting } from "./useInstanceStatus";
 import { useResizableInstancesSidebar } from "./instance-list/useResizableInstancesSidebar";
@@ -411,6 +414,7 @@ import { useControlPlaneEvents } from "./useControlPlaneEvents";
 import { useControlPlaneToasts } from "./useControlPlaneToasts";
 import { useImagePullProgress } from "./useImagePullProgress";
 import { buildInstanceDetailPath, openInstanceDetailWindow, switchDesktopInstanceDetailWindow } from "./instance-detail/instanceDetailWindow";
+import { consumeInstanceDetailSelection, instanceDetailSelectionStorageKey, persistInstanceDetailSelection, type InstanceDetailSelection } from "./instance-detail/instanceDetailSelection";
 import { createWebInstanceWindowCoordinator } from "./instance-detail/instanceWindowCoordinator";
 
 type ProjectFolderSelection = string | { path: string; ownerNodeId?: string };
@@ -436,6 +440,9 @@ const props = withDefaults(defineProps<{
 });
 const standaloneMode = computed(() => props.mode === "standalone");
 const standaloneInstanceId = ref(props.initialInstanceId);
+const pendingInstanceDetailSelection = ref<InstanceDetailSelection | undefined>(standaloneMode.value && props.initialInstanceId
+  ? consumeInstanceDetailSelection(props.initialInstanceId)
+  : undefined);
 const standaloneOwnershipResolved = ref(!standaloneMode.value);
 const standaloneOwnershipReady = ref(!standaloneMode.value);
 const standaloneOwnershipConflict = ref(false);
@@ -639,7 +646,7 @@ const {
   selectInstance: setActiveInstance,
   sortedInstances,
 } = useWorkbenchInstances({
-  instances: boardInstancesWithAppSessions,
+  instances: boardInstancesWithAiSessions,
   selection: standaloneMode.value
     ? { mode: "standalone", activeInstanceId: standaloneInstanceId }
     : { mode: "persistent" },
@@ -658,7 +665,7 @@ const nodeLocalFolderQueries = useQueries({
 const nodeLocalFoldersByNodeId = computed<Record<string, NodeLocalFolder[]>>(() => Object.fromEntries(
   nodeLocalFolderQueries.value.map((query, index) => [nodeLocalFolderNodeIds.value[index], query.data || []]),
 ));
-const activeInstanceWithAiSessions = computed(() => aiSessionStore.instanceWithAiSessions(activeInstance.value));
+const activeInstanceWithAiSessions = computed(() => activeInstance.value);
 const standaloneDetailError = computed(() => {
   if (!standaloneMode.value) return "";
   if (!standaloneInstanceId.value) return t("instances.window.invalidRoute");
@@ -768,14 +775,17 @@ const lastRefreshLabel = computed(() => formatTime(lastRefreshAt.value, locale.v
 const connectingInstanceIds = computed(() => sortedInstances.value.filter(isInstanceConnecting).map((instance) => instance.id).join("\n"));
 const {
   applyBoardAppSelection,
+  boardAiSessions,
   boardCardDetail,
   boardCardTitle,
   boardPreviewState,
   boardPrimarySession,
+  boardPrimaryAiSession,
   boardSessionFrameUrl,
   boardSessions,
   boardTerminalSocketUrl,
   selectBoardSession,
+  stepBoardAiSession,
 } = useInstanceBoardSessions({ boardInteractive, boardSessionKeys, boardVisibleInstances, locale, t });
 const {
   activeAttachUrl,
@@ -828,6 +838,35 @@ const {
   sessionMenuOpen,
   t,
 });
+
+function applyPendingInstanceDetailSelection() {
+  const selection = pendingInstanceDetailSelection.value;
+  const instanceId = activeInstance.value?.id;
+  if (!standaloneMode.value || !selection || !instanceId || instanceId !== standaloneInstanceId.value) return;
+  if (selection.kind === "ai") {
+    if (!sessionTabs.value.some((session) => session.key === "ai-sessions")) return;
+    selectAiSession(instanceId, selection.aiSessionId);
+    selectSession("ai-sessions");
+  } else {
+    if (!sessionTabs.value.some((session) => session.key === selection.sessionKey)) return;
+    selectSession(selection.sessionKey);
+  }
+  pendingInstanceDetailSelection.value = undefined;
+}
+
+watch(
+  [activeInstanceId, () => sessionTabs.value.map((session) => session.key).join("\n"), pendingInstanceDetailSelection],
+  applyPendingInstanceDetailSelection,
+  { immediate: true },
+);
+
+useEventListener(window, "storage", (event) => {
+  if (!standaloneMode.value || event.key !== instanceDetailSelectionStorageKey(standaloneInstanceId.value)) return;
+  const selection = consumeInstanceDetailSelection(standaloneInstanceId.value);
+  if (!selection) return;
+  pendingInstanceDetailSelection.value = selection;
+});
+
 const { disposeBoardTerminalPreviews, disposeHiddenBoardTerminalPreviews, mountBoardTerminalPreviews, setBoardTerminalHost } = useBoardTerminalPreviews(boardMode, boardInteractive);
 
 let connectingRefreshTimer: ReturnType<typeof setInterval> | undefined;
@@ -1278,9 +1317,21 @@ async function openAppUrl(url: string) {
   window.open(url, "_blank", "noopener,noreferrer");
 }
 
-async function openInstanceWindow(instance: InstanceBoardItem) {
+async function openInstanceWindow(instance: InstanceBoardItem, session?: BoardSessionTab, aiSession?: AiSessionSummary) {
+  if (session?.kind === "ai" && aiSession) {
+    persistInstanceDetailSelection(instance.id, { kind: "ai", aiSessionId: aiSession.id });
+  } else if (session) {
+    persistInstanceDetailSelection(instance.id, { kind: "app", sessionKey: session.key });
+  }
   const result = await openInstanceDetailWindow(instance.id);
-  if (!result.ok) showToast(t(result.code === "popup-blocked" ? "instances.window.popupBlocked" : "instances.window.switchFailed"));
+  if (!result.ok) {
+    try {
+      window.localStorage?.removeItem(instanceDetailSelectionStorageKey(instance.id));
+    } catch {
+      // Storage can be unavailable in privacy-restricted browser contexts.
+    }
+    showToast(t(result.code === "popup-blocked" ? "instances.window.popupBlocked" : "instances.window.switchFailed"));
+  }
   // i18n-audit-allow-next-line code-token: toast presentation variant
   else if (result.action === "focused") showToast(t("instances.window.focusedExisting"), "info");
   closeFloatingLayers();

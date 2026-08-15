@@ -7,6 +7,8 @@ const read = (path) => fs.readFileSync(new URL(`../src/apps/control-plane/${path
 
 const workbench = read("ControlPlaneWorkbench.vue");
 const board = read("board/InstanceBoardView.vue");
+const boardSessions = read("board/useInstanceBoardSessions.ts");
+const detailSelection = read("instance-detail/instanceDetailSelection.ts");
 const appLaunchItems = read("shared/AppLaunchMenuItems.vue");
 const options = read("shared/InstanceViewOptionsMenu.vue");
 const terminal = read("board/useBoardTerminalPreviews.ts");
@@ -53,11 +55,35 @@ test("board VNC URLs follow the same authoritative interaction state", () => {
   assert.match(workbench, /useInstanceBoardSessions\(\{ boardInteractive, boardSessionKeys, boardVisibleInstances, locale, t \}\)/);
 });
 
-test("each instance board card opens the control-plane instance detail window", () => {
-  assert.match(board, /<Button variant="outline" size="sm" @click="\$emit\('openWindow', instance\)">[\s\S]*?instances\.actions\.open/);
-  assert.match(board, /openWindow: \[instance: InstanceBoardItem\]/);
+test("instance board cards keep App and AI in the session menu and slide individual AI sessions", () => {
+  assert.match(boardSessions, /key: "ai-sessions"/);
+  assert.match(boardSessions, /return aiSessionTab \? \[\.\.\.appSessions, aiSessionTab\] : appSessions/);
+  assert.match(boardSessions, /function selectBoardSession[\s\S]*boardSessionKeys\[instanceId\] = sessionKey/);
+  assert.match(boardSessions, /function stepBoardAiSession[\s\S]*boardAiSessionKeys\[instance\.id\] = next\.id/);
+  assert.match(board, /<DropdownMenu>[\s\S]*v-for="session in boardSessions\(instance\)"[\s\S]*selectBoardSession/);
+  assert.match(board, /instances\.board\.previousAiSession/);
+  assert.match(board, /instances\.board\.nextAiSession/);
+  assert.match(board, /boardPrimaryAiSession\(instance\)/);
+  assert.match(board, /class="board-ai-slide board-ai-slide-previous"/);
+  assert.match(board, /class="board-ai-slide board-ai-slide-next"/);
+  assert.match(board, /\.board-ai-slide \{[\s\S]*position: absolute;[\s\S]*opacity: 0;[\s\S]*backdrop-filter: blur\(8px\)/);
+  assert.match(board, /\.board-ai-preview:hover \.board-ai-slide,[\s\S]*opacity: 0\.72/);
+  assert.match(board, /\.board-ai-card-head strong \{[\s\S]*var\(--ai-board-muted\)[\s\S]*font-size: 13px;[\s\S]*font-weight: 700/);
+  assert.doesNotMatch(board, /board-ai-card-head[\s\S]{0,500}sessions\.board\.updated/);
+  assert.match(board, /\.board-ai-question \{[\s\S]*color: var\(--ai-board-title\);[\s\S]*font-size: 14px;[\s\S]*line-height: 1\.35/);
+  assert.match(board, /\.board-ai-answer \{[\s\S]*background: var\(--ai-session-card-content-bg\);[\s\S]*color: var\(--ai-board-title\);[\s\S]*font-size: 14px;[\s\S]*font-weight: 400;[\s\S]*line-height: 1\.35/);
+});
+
+test("each instance board card opens its current session in the instance detail window", () => {
+  assert.match(board, /<Button variant="outline" size="sm" @click="\$emit\('openWindow', instance, boardPrimarySession\(instance\), boardPrimaryAiSession\(instance\)\)">[\s\S]*?instances\.actions\.open/);
+  assert.match(board, /openWindow: \[instance: InstanceWithAiSessions, session\?: BoardSessionTab, aiSession\?: AiSessionSummary\]/);
   assert.doesNotMatch(board, /boardOpenUrl|\$emit\('openUrl'/);
   assert.match(workbench, /<InstanceBoardView[\s\S]*?@open-window="openInstanceWindow"/);
+  assert.match(workbench, /session\?\.kind === "ai" && aiSession[\s\S]*persistInstanceDetailSelection\(instance\.id, \{ kind: "ai", aiSessionId: aiSession\.id \}\)/);
+  assert.match(workbench, /persistInstanceDetailSelection\(instance\.id, \{ kind: "app", sessionKey: session\.key \}\)/);
+  assert.match(workbench, /selectAiSession\(instanceId, selection\.aiSessionId\);\s*selectSession\("ai-sessions"\)/);
+  assert.match(workbench, /selectSession\(selection\.sessionKey\)/);
+  assert.match(detailSelection, /localStorage\?\.removeItem\(key\)/);
   assert.doesNotMatch(workbench, /:board-open-url=/);
 });
 

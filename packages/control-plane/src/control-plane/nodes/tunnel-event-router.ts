@@ -13,6 +13,7 @@ import {
   AiSessionPatchEventSchema,
   AiSessionRemovedEventSchema,
   AiSessionSnapshotEventSchema,
+  AiSessionTimelineItemEventSchema,
 } from "@task-handoff/protocol/ai-sessions";
 import {
   AppSessionEventType,
@@ -29,6 +30,7 @@ const SESSION_EVENT_SCHEMAS = {
   [AiSessionEventType.Patch]: AiSessionPatchEventSchema,
   [AiSessionEventType.Removed]: AiSessionRemovedEventSchema,
   [AiSessionEventType.MessageDelta]: AiSessionMessageDeltaEventSchema,
+  [AiSessionEventType.TimelineItem]: AiSessionTimelineItemEventSchema,
   [AppSessionEventType.Snapshot]: AppSessionSnapshotEventSchema,
   [AppSessionEventType.Patch]: AppSessionPatchEventSchema,
   [AppSessionEventType.Removed]: AppSessionRemovedEventSchema,

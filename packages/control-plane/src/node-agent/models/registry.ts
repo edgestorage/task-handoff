@@ -120,6 +120,12 @@ export class NodeModelRegistry {
     return this.models.delete(id);
   }
 
+  resolveProbeKey(existingModelId?: string, override?: string) {
+    const key = override?.trim() || (existingModelId ? this.requireModel(existingModelId).key : "");
+    if (!key) throw Object.assign(new Error("An API key is required to contact the model endpoint."), { statusCode: 400, code: "MODEL_API_KEY_REQUIRED" });
+    return key;
+  }
+
   assign(instanceId: string, input: z.infer<typeof UpdateNodeModelAssignmentSchema>) {
     const current = this.instances.require(instanceId);
     this.validateRef("codex", input.codexModelHash);

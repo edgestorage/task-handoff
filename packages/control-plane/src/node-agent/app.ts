@@ -934,6 +934,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       platform: finalComputerPlatform(platform),
       arch: process.arch,
       protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+      capabilities: { modelEndpointProbe: true },
       build: buildInfo("node-agent"),
       instanceProxy: { ...instanceProxyMetrics },
       serverTime: new Date().toISOString(),
@@ -981,7 +982,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     deleteLocalFolder: (id) => state.localFolders.delete(id),
   });
 
-  registerNodeModelRoutes(app, state.modelRegistry, (id) => syncAssignedModelEnvironment(fetchImpl, state, id, lifecycleLoggers.warn));
+  registerNodeModelRoutes(app, state.modelRegistry, (id) => syncAssignedModelEnvironment(fetchImpl, state, id, lifecycleLoggers.warn), fetchImpl);
 
   registerEnvironmentTemplateRoutes(app, environmentTemplates);
 

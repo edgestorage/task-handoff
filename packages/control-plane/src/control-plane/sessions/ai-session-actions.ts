@@ -8,6 +8,7 @@ import {
   AiSessionCommandResultSchema,
   AiSessionHistoryDetailSchema,
   AiSessionHistoryListSchema,
+  AiSessionTimelineSchema,
   AiSessionMentionCatalogSchema,
   AiSessionMentionFileSearchSchema,
   AiSessionQueueSchema,
@@ -25,6 +26,7 @@ import {
   type AiSessionOpenAppResult,
   type AiSessionHistoryDetail,
   type AiSessionHistoryList,
+  type AiSessionTimeline,
   type AiSessionMessageAttachment,
   type AiSessionPermissionMode,
   type AiSessionReference,
@@ -66,6 +68,19 @@ export class AiSessionActionService {
 
   async historyDetail(instanceId: string, aiSessionId: string): Promise<AiSessionHistoryDetail> {
     return parseResponse(AiSessionHistoryDetailSchema, await this.get(instanceId, `/ai-sessions/history/${encodeURIComponent(aiSessionId)}`));
+  }
+
+  async timeline(instanceId: string, aiSessionId: string): Promise<AiSessionTimeline> {
+    const instance = await this.options.requireInstance(instanceId);
+    // Compatibility for v0.0.21: Timeline is an optional controlled-instance capability.
+    if (!instanceSupportsAiSessionTimeline(instance)) {
+      throw aiSessionTimelineUnsupported();
+    }
+    return parseResponse(AiSessionTimelineSchema, await this.options.request(
+      instance,
+      sessionRoute(aiSessionId, "timeline"),
+      { method: "GET" },
+    ));
   }
 
   async resume(instanceId: string, aiSessionId: string): Promise<AiSessionResumeResult> {
@@ -274,6 +289,20 @@ function instanceSupportsAiSessionWorkspaceSelection(instance: ControlledInstanc
   const features = instance.capabilities?.features;
   return Boolean(features && typeof features === "object" && !Array.isArray(features)
     && (features as Record<string, unknown>).aiSessionWorkspaceSelection === true);
+}
+
+function instanceSupportsAiSessionTimeline(instance: ControlledInstance) {
+  const features = instance.capabilities && typeof instance.capabilities === "object"
+    ? (instance.capabilities as Record<string, unknown>).features
+    : undefined;
+  return Boolean(features && typeof features === "object"
+    && (features as Record<string, unknown>).aiSessionTimeline === true);
+}
+
+function aiSessionTimelineUnsupported() {
+  const error = new Error("The controlled instance does not support AI session Timeline reads.");
+  Object.assign(error, { statusCode: 409, code: "AI_SESSION_TIMELINE_UNSUPPORTED" });
+  return error;
 }
 
 function aiSessionWorkspaceSelectionUnsupported() {

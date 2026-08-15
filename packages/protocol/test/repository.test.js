@@ -122,3 +122,21 @@ test("app session projection migrates legacy cwd into workspace", () => {
     launch: { cwd: "/workspace/legacy" },
   }).workspace.cwd, "/workspace/current");
 });
+
+test("app session projection derives a provider binding from an AI session resume launch", () => {
+  const projected = normalizeAppSessionRecord({
+    id: "app-1",
+    appId: "codex",
+    status: "running",
+    launch: {
+      aiSessionResume: {
+        aiSessionId: "ai-1",
+        providerSessionId: "thread-1",
+      },
+    },
+  });
+  assert.deepEqual(projected.bindings, [
+    { type: "app-session", id: "app-1" },
+    { type: "provider-session", agent: "codex", id: "thread-1" },
+  ]);
+});

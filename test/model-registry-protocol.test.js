@@ -3,6 +3,7 @@ const test = require("node:test");
 
 const {
   CONTROL_PLANE_PROTOCOL_VERSION,
+  ControlledInstanceHeartbeatSchema,
   DeployNodeModelSchema,
   FederatedModelRegistrySchema,
   ModelConfigSchema,
@@ -21,6 +22,14 @@ test("control plane emits a date-only protocol version while parsing historical 
   assert.match(CONTROL_PLANE_PROTOCOL_VERSION, /^\d{4}-\d{2}-\d{2}$/);
   assert.equal(ProtocolVersionSchema.safeParse(CONTROL_PLANE_PROTOCOL_VERSION).success, true);
   assert.equal(ProtocolVersionSchema.safeParse("2026-07-15-model-hash-registry").success, true);
+});
+
+test("v0.0.21 instance reports keep their released app inventory requirement", () => {
+  assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: "2026-08-01" }).success, false);
+  assert.equal(ControlledInstanceHeartbeatSchema.safeParse({
+    protocolVersion: "2026-08-01",
+    appInventory: { items: [], issues: [], observedAt: timestamp },
+  }).success, true);
 });
 
 test("model identity is a stable canonical content hash", () => {
