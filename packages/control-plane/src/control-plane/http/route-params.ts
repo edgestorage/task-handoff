@@ -31,6 +31,12 @@ export const InstanceSessionParamsSchema = z.object({
   sessionId: RouteIdSchema,
 }).strict();
 
+export const InstanceSessionTurnParamsSchema = z.object({
+  id: RouteIdSchema,
+  sessionId: RouteIdSchema,
+  turnId: RouteIdSchema,
+}).strict();
+
 export const InstanceSessionQueueParamsSchema = z.object({
   id: RouteIdSchema,
   sessionId: RouteIdSchema,

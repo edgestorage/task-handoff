@@ -24,7 +24,8 @@ test("board, instance session cards, and selected details use the streaming Mark
   assert.match(panel, /import AiSessionStreamingMarkdown from "\.\.\/\.\.\/\.\.\/components\/ai-session\/AiSessionStreamingMarkdown\.vue"/);
   assert.match(panel, /<AiSessionToolActivity/);
   assert.match(panel, /import AiSessionToolActivity from "\.\.\/\.\.\/\.\.\/components\/ai-session\/AiSessionToolActivity\.vue"/);
-  assert.match(result, /v-show="displayContent"/);
+  assert.match(result, /v-if="displayContent"/);
+  assert.doesNotMatch(result, /v-show="displayContent"/);
   assert.match(result, /useStreamingMessagesStore/);
 });
 
@@ -39,8 +40,16 @@ test("selected session details use the streaming message view", () => {
 
 test("detail exposes an intent-aware shadcn return-to-latest control", () => {
   assert.match(panel, /<Button[\s\S]*?v-if="!isFollowingLatest"[\s\S]*?@click="followLatest"/);
+  assert.match(panel, /keepFollowingAfterSend = detailScrollViewport[\s\S]*distanceFromBottom\(detailScrollViewport\) <= STREAMING_SCROLL_FOLLOW_THRESHOLD/);
+  assert.match(panel, /keepFollowingAfterSend && scrollFollow\?\.isFollowing\(\)[\s\S]*await nextTick\(\);[\s\S]*scrollFollow\?\.followLatest\(\);[\s\S]*scrollFollow\?\.notifyContentResize\(\);/);
   assert.match(panel, /<ChevronDown :size="17" \/>/);
-  assert.match(panel, /new ResizeObserver\(\(\) => scrollFollow\?\.notifyContentResize\(\)\)/);
+  assert.match(panel, /new ResizeObserver\(\(\) => \{[\s\S]*!userDetailLayoutAnchor\.isActive\(\)[\s\S]*scrollFollow\?\.notifyContentResize\(\)/);
+  assert.match(panel, /createLayoutScrollAnchor/);
+  assert.match(panel, /ref="detailBottomAnchorEl" class="session-ai-detail-bottom-anchor"/);
+  assert.match(panel, /@layout-will-change="beginDetailLayoutAnchor"/);
+  assert.match(panel, /@layout-committed="commitDetailLayoutAnchor"/);
+  assert.match(result, /onBeforeUpdate\([\s\S]*emit\("layoutWillChange", turnElement\.value\)/);
+  assert.match(result, /onUpdated\([\s\S]*emit\("layoutCommitted", turnElement\.value\)/);
   assert.match(panel, /data-task-handoff-scroll-viewport/);
   assert.match(panel, /watch\(\(\) => `\$\{props\.instance\.id\}\\u0000\$\{selectedSession\.value\?\.id \|\| ""\}`/);
 });

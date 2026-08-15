@@ -82,6 +82,7 @@ export const sessions = {
     noRecent: "近期没有 AI 活动", runningTool: "正在运行 {tool}", running: "运行中...",
   },
   timeline: {
+    turnActions: "回合操作",
     viewMode: "会话详情视图",
     compact: "简洁",
     full: "对话",
@@ -92,6 +93,8 @@ export const sessions = {
     noActivities: "这条消息之后没有活动。",
     activityCount: "{count} 项 Activity",
     earlierProcess: "更早的过程",
+    earlierProcessLoading: "更早的过程 · 加载中…",
+    earlierProcessFailed: "更早的过程 · 加载失败，重试",
     details: "查看详情",
     input: "输入",
     output: "输出",

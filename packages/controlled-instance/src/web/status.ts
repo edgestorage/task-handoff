@@ -193,6 +193,7 @@ export function controlledInstanceCapabilities(appRuntime: AppRuntimeManager) {
       logs: true,
       aiSessionWorkspaceSelection: true,
       aiSessionTimeline: true,
+      aiSessionTurnTimeline: true,
     },
   };
 }

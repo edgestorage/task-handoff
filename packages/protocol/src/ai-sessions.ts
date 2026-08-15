@@ -106,6 +106,13 @@ export const AiSessionTimelineSchema = z.object({
   generatedAt: z.string().datetime(),
 }).strict();
 
+export const AiSessionTurnTimelineSchema = z.object({
+  sessionId: z.string().trim().min(1).max(120),
+  turnId: z.string().trim().min(1).max(240),
+  items: z.array(AiSessionTimelineItemSchema),
+  generatedAt: z.string().datetime(),
+}).strict();
+
 export const AiSessionSubAgentStatusSchema = z.enum([
   "pending-init",
   "running",
@@ -957,6 +964,7 @@ export type AiSessionTimelineAgentMessage = z.infer<typeof AiSessionTimelineAgen
 export type AiSessionTimelineActivity = z.infer<typeof AiSessionTimelineActivitySchema>;
 export type AiSessionTimelineItem = z.infer<typeof AiSessionTimelineItemSchema>;
 export type AiSessionTimeline = z.infer<typeof AiSessionTimelineSchema>;
+export type AiSessionTurnTimeline = z.infer<typeof AiSessionTurnTimelineSchema>;
 export type AiSessionSubAgentStatus = z.infer<typeof AiSessionSubAgentStatusSchema>;
 export type AiSessionSubAgentActivity = z.infer<typeof AiSessionSubAgentActivitySchema>;
 export type AiSessionSubAgent = z.infer<typeof AiSessionSubAgentSchema>;

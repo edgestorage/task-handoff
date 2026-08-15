@@ -1272,6 +1272,10 @@ export class ControlPlaneService {
     return this.aiSessionActionService.timeline(instanceId, aiSessionId);
   }
 
+  getAiSessionTurnTimeline(instanceId: string, aiSessionId: string, turnId: string) {
+    return this.aiSessionActionService.turnTimeline(instanceId, aiSessionId, turnId);
+  }
+
   resumeAiSession(instanceId: string, aiSessionId: string) {
     return this.aiSessionActionService.resume(instanceId, aiSessionId);
   }

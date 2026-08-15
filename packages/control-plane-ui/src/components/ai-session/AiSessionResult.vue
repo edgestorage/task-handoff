@@ -1,125 +1,135 @@
 <template>
   <div
+    ref="turnElement"
     class="ai-session-result"
     :class="[
       `ai-session-result-${tone}`,
       { 'has-response': displayContent },
     ]"
+    :style="turnMinHeight ? { minHeight: `${turnMinHeight}px` } : undefined"
   >
-    <AiSessionTurnHistory :nodes="activityHistory" />
-
-    <section
-      v-show="displayContent"
-      class="ai-session-detail-response"
-      :class="{ 'ai-session-detail-response-active': active }"
-    >
-      <AiSessionStreamingMarkdown
-        :code-tools="markdownCodeTools"
-        :content="responseContent"
-        :file-links="fileLinks"
-        :instance-id="instanceId"
-        :is-latest="isLatest"
-        :session-id="session.id"
-        @open-file="$emit('openFile', $event)"
+    <div ref="turnContentElement" class="ai-session-result-content">
+      <AiSessionTurnHistory
+        :nodes="activityHistory"
+        :loading="activityHistoryStatus === 'idle' || activityHistoryStatus === 'loading' || activityHistoryStatus === 'stale'"
+        :error="activityHistoryError"
+        @retry="$emit('retryActivityHistory')"
       />
-    </section>
 
-    <AiSessionToolActivity
-      v-if="isLatest && active"
-      :current-tool="session.currentTool"
-      :phase="session.phase"
-      :status="session.status"
-      :summary="session.summary"
-      :tool-calls-since-last-message="session.toolCallsSinceLastMessage"
-      :tone="tone"
-      :activities="activities"
-      :error="activityError"
-      :interactive="activityInteractive"
-      :loading="activityLoading"
-    />
+      <section
+        v-if="displayContent"
+        class="ai-session-detail-response"
+        :class="{ 'ai-session-detail-response-active': active }"
+      >
+        <AiSessionStreamingMarkdown
+          :code-tools="markdownCodeTools"
+          :content="responseContent"
+          :file-links="fileLinks"
+          :instance-id="instanceId"
+          :is-latest="isLatest"
+          :session-id="session.id"
+          @open-file="$emit('openFile', $event)"
+        />
+      </section>
 
-    <AiSessionSubAgents
-      v-if="isLatest && session.subAgents?.length"
-      :sub-agents="session.subAgents"
-    />
+      <AiSessionToolActivity
+        v-if="isLatest && active"
+        :current-tool="session.currentTool"
+        :phase="session.phase"
+        :status="session.status"
+        :summary="session.summary"
+        :tool-calls-since-last-message="session.toolCallsSinceLastMessage"
+        :tone="tone"
+        :activities="activities"
+        :error="activityError"
+        :interactive="activityInteractive"
+        :loading="activityLoading"
+      />
 
-    <section v-if="isLatest && session.queue?.items.length" class="ai-session-detail-queue">
-      <span class="ai-session-detail-queue-label">{{ t("sessions.activity.queue", { count: session.queue.pendingCount }) }}</span>
-      <ScrollArea type="auto" class="ai-session-detail-queue-list" :horizontal="false">
-        <article
-          v-for="item in displayedQueueItems"
-          :key="item.id"
-          class="ai-session-detail-queue-item"
-          :class="{ 'ai-session-detail-queue-item-dragging': draggingQueueId === item.id }"
-          :data-state="item.status"
-          @dragenter.prevent="previewQueueDrag(item.id)"
-          @dragover.prevent
-          @drop.prevent="commitQueueDrag"
-        >
-          <div
-            v-if="item.status === 'queued'"
-            class="ai-session-detail-queue-drag-handle"
-            :aria-disabled="busy"
-            :aria-label="t('sessions.activity.reorder')"
-            :draggable="!busy"
-            role="button"
-            tabindex="0"
-            :title="t('sessions.activity.reorder')"
-            @dragend="cancelQueueDrag"
-            @dragstart="startQueueDrag($event, item.id)"
-            @keydown="handleQueueHandleKeydown($event, item.id)"
+      <AiSessionSubAgents
+        v-if="isLatest && session.subAgents?.length"
+        :sub-agents="session.subAgents"
+      />
+
+      <section v-if="isLatest && session.queue?.items.length" class="ai-session-detail-queue">
+        <span class="ai-session-detail-queue-label">{{ t("sessions.activity.queue", { count: session.queue.pendingCount }) }}</span>
+        <ScrollArea type="auto" class="ai-session-detail-queue-list" :horizontal="false">
+          <article
+            v-for="item in displayedQueueItems"
+            :key="item.id"
+            class="ai-session-detail-queue-item"
+            :class="{ 'ai-session-detail-queue-item-dragging': draggingQueueId === item.id }"
+            :data-state="item.status"
+            @dragenter.prevent="previewQueueDrag(item.id)"
+            @dragover.prevent
+            @drop.prevent="commitQueueDrag"
           >
-            <GripVertical :size="17" :stroke-width="1.8" />
-          </div>
-          <GripVertical v-else class="ai-session-detail-queue-icon" :size="17" :stroke-width="1.8" />
-          <div class="ai-session-detail-queue-copy">
-            <p>{{ item.message }}</p>
-            <small v-if="item.error">{{ item.error }}</small>
-          </div>
-          <div class="ai-session-detail-queue-actions">
-            <button v-if="item.status === 'queued'" type="button" :disabled="busy" :aria-label="t('sessions.activity.edit')" :title="t('sessions.activity.edit')" @click="$emit('editQueuedMessage', { queueId: item.id, message: item.message })">
-              <Pencil :size="15" />
-            </button>
-            <button type="button" :disabled="busy || !canInterrupt" :title="t('sessions.activity.steer')" @click="$emit('steerQueuedMessage', item.id)">
-              <CornerDownRight :size="15" />
-              <span>{{ t("sessions.activity.steer") }}</span>
-            </button>
-            <button v-if="item.status === 'failed'" type="button" :disabled="busy" :aria-label="t('sessions.activity.retry')" :title="t('sessions.activity.retry')" @click="$emit('retryQueuedMessage', item.id)">
-              <RotateCcw :size="15" />
-            </button>
-            <button type="button" class="ai-session-detail-queue-remove" :disabled="busy" :aria-label="t('sessions.activity.remove')" :title="t('sessions.activity.remove')" @click="$emit('removeQueuedMessage', item.id)">
-              <Trash2 :size="15" />
-            </button>
-          </div>
-        </article>
-      </ScrollArea>
-    </section>
+            <div
+              v-if="item.status === 'queued'"
+              class="ai-session-detail-queue-drag-handle"
+              :aria-disabled="busy"
+              :aria-label="t('sessions.activity.reorder')"
+              :draggable="!busy"
+              role="button"
+              tabindex="0"
+              :title="t('sessions.activity.reorder')"
+              @dragend="cancelQueueDrag"
+              @dragstart="startQueueDrag($event, item.id)"
+              @keydown="handleQueueHandleKeydown($event, item.id)"
+            >
+              <GripVertical :size="17" :stroke-width="1.8" />
+            </div>
+            <GripVertical v-else class="ai-session-detail-queue-icon" :size="17" :stroke-width="1.8" />
+            <div class="ai-session-detail-queue-copy">
+              <p>{{ item.message }}</p>
+              <small v-if="item.error">{{ item.error }}</small>
+            </div>
+            <div class="ai-session-detail-queue-actions">
+              <button v-if="item.status === 'queued'" type="button" :disabled="busy" :aria-label="t('sessions.activity.edit')" :title="t('sessions.activity.edit')" @click="$emit('editQueuedMessage', { queueId: item.id, message: item.message })">
+                <Pencil :size="15" />
+              </button>
+              <button type="button" :disabled="busy || !canInterrupt" :title="t('sessions.activity.steer')" @click="$emit('steerQueuedMessage', item.id)">
+                <CornerDownRight :size="15" />
+                <span>{{ t("sessions.activity.steer") }}</span>
+              </button>
+              <button v-if="item.status === 'failed'" type="button" :disabled="busy" :aria-label="t('sessions.activity.retry')" :title="t('sessions.activity.retry')" @click="$emit('retryQueuedMessage', item.id)">
+                <RotateCcw :size="15" />
+              </button>
+              <button type="button" class="ai-session-detail-queue-remove" :disabled="busy" :aria-label="t('sessions.activity.remove')" :title="t('sessions.activity.remove')" @click="$emit('removeQueuedMessage', item.id)">
+                <Trash2 :size="15" />
+              </button>
+            </div>
+          </article>
+        </ScrollArea>
+      </section>
 
-    <div v-if="isLatest && canResolveApproval" class="ai-session-detail-approval">
-      <button type="button" :disabled="busy" @click="$emit('resolveApproval', 'allow')">
-        <Check :size="14" />
-        <span>{{ t("sessions.actions.allow") }}</span>
-      </button>
-      <button type="button" :disabled="busy" @click="$emit('resolveApproval', 'skip')">
-        <Ban :size="14" />
-        <span>{{ t("sessions.actions.skip") }}</span>
-      </button>
-      <button type="button" :disabled="busy" @click="$emit('resolveApproval', 'deny')">
-        <X :size="14" />
-        <span>{{ t("sessions.actions.deny") }}</span>
-      </button>
+      <div v-if="isLatest && canResolveApproval" class="ai-session-detail-approval">
+        <button type="button" :disabled="busy" @click="$emit('resolveApproval', 'allow')">
+          <Check :size="14" />
+          <span>{{ t("sessions.actions.allow") }}</span>
+        </button>
+        <button type="button" :disabled="busy" @click="$emit('resolveApproval', 'skip')">
+          <Ban :size="14" />
+          <span>{{ t("sessions.actions.skip") }}</span>
+        </button>
+        <button type="button" :disabled="busy" @click="$emit('resolveApproval', 'deny')">
+          <X :size="14" />
+          <span>{{ t("sessions.actions.deny") }}</span>
+        </button>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { Ban, Check, CornerDownRight, GripVertical, Pencil, RotateCcw, Trash2, X } from "@lucide/vue";
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onBeforeUpdate, onUpdated, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type { AiSessionSummary } from "../../api/types";
 import type { AiSessionTimelineActivity } from "@task-handoff/protocol/ai-sessions";
 import type { TimelineTurnNode } from "./timelineActivities";
 import { useStreamingMessagesStore } from "../../apps/control-plane/useStreamingMessagesStore";
+import { createLatestTurnHeightBuffer } from "../../lib/latest-turn-height";
 import { ScrollArea } from "../ui/scroll-area";
 import AiSessionStreamingMarkdown from "./AiSessionStreamingMarkdown.vue";
 import AiSessionTurnHistory from "./AiSessionTurnHistory.vue";
@@ -145,6 +155,8 @@ const props = withDefaults(defineProps<{
   tone?: "detail" | "board";
   activities?: AiSessionTimelineActivity[];
   activityHistory?: TimelineTurnNode[];
+  activityHistoryStatus?: "idle" | "loading" | "ready" | "stale" | "error";
+  activityHistoryError?: string;
   activityError?: string;
   activityInteractive?: boolean;
   activityLoading?: boolean;
@@ -158,6 +170,8 @@ const props = withDefaults(defineProps<{
   tone: "detail",
   activities: () => [],
   activityHistory: () => [],
+  activityHistoryStatus: "ready",
+  activityHistoryError: "",
   activityError: "",
   activityInteractive: false,
   activityLoading: false,
@@ -171,6 +185,9 @@ const emit = defineEmits<{
   resolveApproval: [decision: "allow" | "deny" | "skip"];
   retryQueuedMessage: [queueId: string];
   steerQueuedMessage: [queueId: string];
+  layoutWillChange: [element: HTMLElement];
+  layoutCommitted: [element: HTMLElement];
+  retryActivityHistory: [];
 }>();
 
 const draggingQueueId = ref("");
@@ -178,6 +195,34 @@ const queueOrderPreview = ref<string[]>([]);
 const queuedItems = computed(() => props.session.queue.items.filter((item) => item.status === "queued"));
 const displayedQueueItems = computed(() => queueItemsWithQueuedOrder(props.session.queue.items, queueOrderPreview.value));
 const active = computed(() => props.isLatest && (props.session.status === "running" || props.session.status === "waiting"));
+const turnElement = ref<HTMLElement>();
+const turnContentElement = ref<HTMLElement>();
+const turnMinHeight = ref(0);
+const turnHeightBuffer = createLatestTurnHeightBuffer(100);
+let turnResizeObserver: ResizeObserver | undefined;
+
+function bufferLatestTurnHeight() {
+  const content = turnContentElement.value;
+  const enabled = props.isLatest && props.tone === "detail";
+  turnMinHeight.value = content
+    ? turnHeightBuffer.update(content.getBoundingClientRect().height, enabled)
+    : 0;
+}
+
+function observeTurnHeight() {
+  turnResizeObserver?.disconnect();
+  turnResizeObserver = undefined;
+  const content = turnContentElement.value;
+  if (!content) {
+    turnMinHeight.value = 0;
+    return;
+  }
+  bufferLatestTurnHeight();
+  if (typeof ResizeObserver !== "undefined") {
+    turnResizeObserver = new ResizeObserver(bufferLatestTurnHeight);
+    turnResizeObserver.observe(content);
+  }
+}
 
 function moveQueuedMessage(queueId: string, offset: -1 | 1) {
   const queueIds = queuedItems.value.map((item) => item.id);
@@ -258,6 +303,24 @@ watch(() => props.session.queue.revision, () => {
   queueOrderPreview.value = [];
 });
 
+watch(turnContentElement, () => void nextTick(observeTurnHeight), { flush: "post" });
+watch(() => [props.isLatest, props.tone] as const, () => {
+  turnHeightBuffer.reset();
+  turnMinHeight.value = 0;
+  void nextTick(observeTurnHeight);
+});
+onBeforeUnmount(() => turnResizeObserver?.disconnect());
+onBeforeUpdate(() => {
+  if (props.isLatest && props.tone === "detail" && turnElement.value) {
+    emit("layoutWillChange", turnElement.value);
+  }
+});
+onUpdated(() => {
+  if (props.isLatest && props.tone === "detail" && turnElement.value) {
+    emit("layoutCommitted", turnElement.value);
+  }
+});
+
 const streamingMessages = useStreamingMessagesStore();
 const streamingContent = computed(() => props.isLatest
   ? streamingMessages.activeMessage(props.instanceId, props.session.id).value?.value.receivedText || ""
@@ -267,7 +330,7 @@ const displayContent = computed(() => streamingContent.value || props.responseCo
 
 <style scoped>
 .ai-session-result {
-  --detail-activity-gap: 24px;
+  --detail-activity-gap: 16px;
   --detail-response-line-height: 1.55;
   --detail-activity-border: var(--line-subtle);
   --detail-activity-surface: var(--surface-subtle);
@@ -278,19 +341,25 @@ const displayContent = computed(() => streamingContent.value || props.responseCo
   --detail-action-bg: var(--surface-raised);
   display: grid;
   align-content: start;
+  min-width: 0;
+}
+
+.ai-session-result-content {
+  display: grid;
+  align-content: start;
   gap: var(--detail-activity-gap);
   min-width: 0;
 }
 
-.ai-session-result-detail {
+.ai-session-result-detail .ai-session-result-content {
   gap: 0;
 }
 
-.ai-session-result-detail > * {
+.ai-session-result-detail > .ai-session-result-content > * {
   margin-top: 0;
 }
 
-.ai-session-result-detail > * + * {
+.ai-session-result-detail > .ai-session-result-content > * + * {
   margin-top: var(--detail-activity-gap);
 }
 

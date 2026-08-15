@@ -9,6 +9,7 @@ import {
   AiSessionHistoryDetailSchema,
   AiSessionHistoryListSchema,
   AiSessionTimelineSchema,
+  AiSessionTurnTimelineSchema,
   AiSessionMentionCatalogSchema,
   AiSessionMentionFileSearchSchema,
   AiSessionQueueSchema,
@@ -27,6 +28,7 @@ import {
   type AiSessionHistoryDetail,
   type AiSessionHistoryList,
   type AiSessionTimeline,
+  type AiSessionTurnTimeline,
   type AiSessionMessageAttachment,
   type AiSessionPermissionMode,
   type AiSessionReference,
@@ -79,6 +81,18 @@ export class AiSessionActionService {
     return parseResponse(AiSessionTimelineSchema, await this.options.request(
       instance,
       sessionRoute(aiSessionId, "timeline"),
+      { method: "GET" },
+    ));
+  }
+
+  async turnTimeline(instanceId: string, aiSessionId: string, turnId: string): Promise<AiSessionTurnTimeline> {
+    const instance = await this.options.requireInstance(instanceId);
+    if (!instanceSupportsAiSessionTurnTimeline(instance)) {
+      throw aiSessionTurnTimelineUnsupported();
+    }
+    return parseResponse(AiSessionTurnTimelineSchema, await this.options.request(
+      instance,
+      `${sessionRoute(aiSessionId, "turns")}/${encodeURIComponent(turnId)}/timeline`,
       { method: "GET" },
     ));
   }
@@ -299,9 +313,23 @@ function instanceSupportsAiSessionTimeline(instance: ControlledInstance) {
     && (features as Record<string, unknown>).aiSessionTimeline === true);
 }
 
+function instanceSupportsAiSessionTurnTimeline(instance: ControlledInstance) {
+  const features = instance.capabilities && typeof instance.capabilities === "object"
+    ? (instance.capabilities as Record<string, unknown>).features
+    : undefined;
+  return Boolean(features && typeof features === "object"
+    && (features as Record<string, unknown>).aiSessionTurnTimeline === true);
+}
+
 function aiSessionTimelineUnsupported() {
   const error = new Error("The controlled instance does not support AI session Timeline reads.");
   Object.assign(error, { statusCode: 409, code: "AI_SESSION_TIMELINE_UNSUPPORTED" });
+  return error;
+}
+
+function aiSessionTurnTimelineUnsupported() {
+  const error = new Error("The controlled instance does not support per-turn AI session Timeline reads.");
+  Object.assign(error, { statusCode: 409, code: "AI_SESSION_TURN_TIMELINE_UNSUPPORTED" });
   return error;
 }
 

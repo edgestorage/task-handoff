@@ -1,5 +1,13 @@
 <template>
-  <details v-if="nodes.length" class="ai-session-turn-history">
+  <div v-if="loading && !nodes.length" class="ai-session-turn-history-status" aria-busy="true">
+    <ChevronRight :size="15" />
+    <span>{{ t("sessions.timeline.earlierProcessLoading") }}</span>
+  </div>
+  <button v-else-if="error && !nodes.length" type="button" class="ai-session-turn-history-status ai-session-turn-history-retry" @click="$emit('retry')">
+    <ChevronRight :size="15" />
+    <span>{{ t("sessions.timeline.earlierProcessFailed") }}</span>
+  </button>
+  <details v-else-if="nodes.length" class="ai-session-turn-history">
     <summary>
       <ChevronRight :size="15" />
       <span>{{ t("sessions.timeline.earlierProcess") }}</span>
@@ -23,7 +31,8 @@ import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import type { TimelineTurnNode } from "./timelineActivities";
 import AiSessionActivityGroup from "./AiSessionActivityGroup.vue";
 
-defineProps<{ nodes: TimelineTurnNode[] }>();
+defineProps<{ nodes: TimelineTurnNode[]; loading?: boolean; error?: string }>();
+defineEmits<{ retry: [] }>();
 const { t } = useI18n();
 const markdownCodeTools = computed(() => ({
   copiedLabel: t("sessions.markdown.copied"),
@@ -34,6 +43,20 @@ const markdownCodeTools = computed(() => ({
 
 <style scoped>
 .ai-session-turn-history { min-width: 0; color: var(--text-muted); }
+.ai-session-turn-history-status {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: fit-content;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 14px;
+  line-height: inherit;
+}
+.ai-session-turn-history-retry { cursor: pointer; }
 .ai-session-turn-history > summary {
   display: flex;
   align-items: center;

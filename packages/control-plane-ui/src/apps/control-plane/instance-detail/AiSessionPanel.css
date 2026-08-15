@@ -1235,36 +1235,6 @@
   outline: none;
 }
 
-.session-ai-detail-head-actions .session-ai-timeline-mode {
-  box-sizing: border-box;
-  height: 26px;
-  gap: 0;
-  border: 1px solid var(--line-subtle);
-  border-radius: 7px;
-  background: var(--surface-inset);
-  padding: 2px;
-}
-
-.session-ai-detail-head-actions .session-ai-timeline-mode button {
-  width: auto;
-  min-width: 0;
-  height: 20px;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 20px;
-  padding: 0 7px;
-}
-
-.session-ai-detail-head-actions .session-ai-timeline-mode button[data-state="on"] {
-  background: var(--surface-elevated);
-  color: var(--text-strong);
-  box-shadow: var(--shadow-soft);
-}
-
 .session-ai-timeline-state {
   display: grid;
   gap: 12px;
@@ -1725,7 +1695,7 @@
   gap: 7px;
   min-width: 0;
   border-bottom: 1px solid var(--line-subtle);
-  padding-bottom: 12px;
+  padding-bottom: 16px;
 }
 
 .session-ai-detail-block > span {
@@ -1845,13 +1815,29 @@
 }
 
 .session-ai-detail-content > .ai-session-result {
-  margin-top: 24px;
+  margin-top: 16px;
 }
 
-.session-ai-detail-content > .session-ai-detail-head-placeholder {
-  min-height: 0;
-  margin-top: 0;
+.session-ai-detail-bottom-anchor {
+  display: block;
+  width: 1px;
+  height: 1px;
+  margin-top: 0 !important;
+  overflow-anchor: none;
   pointer-events: none;
+}
+
+.session-ai-detail-content.is-following-latest > :not(.session-ai-detail-bottom-anchor) {
+  overflow-anchor: none;
+}
+
+.session-ai-detail-content.is-following-latest > .session-ai-detail-bottom-anchor {
+  overflow-anchor: auto;
+}
+
+.session-ai-detail.is-user-layout-changing .session-ai-detail-content,
+.session-ai-detail.is-user-layout-changing .session-ai-detail-content * {
+  overflow-anchor: none !important;
 }
 
 .session-ai-detail header {
@@ -1883,40 +1869,31 @@
   pointer-events: auto;
 }
 
-.session-ai-detail.is-scrolled header {
-  position: sticky;
+.session-ai-timeline-sticky-prompt {
+  position: absolute;
   top: 0;
-  z-index: 4;
-  align-items: center;
-  grid-template-columns: minmax(0, 1fr);
+  right: 10px;
+  left: calc(var(--session-ai-detail-left-inset) + 10px);
+  z-index: 5;
+  box-sizing: border-box;
+  height: calc(
+    var(--session-ai-sticky-prompt-height)
+    + var(--session-ai-sticky-padding-top)
+    + var(--session-ai-sticky-padding-bottom)
+    + var(--session-ai-sticky-border-width)
+  );
+  overflow: hidden;
   border-bottom: var(--session-ai-sticky-border-width) solid var(--line-subtle);
   background: var(--workspace-bg);
-  padding: var(--session-ai-sticky-padding-top) 0 var(--session-ai-sticky-padding-bottom);
-  padding-right: calc(var(--session-ai-fixed-actions-width, 160px) + 12px);
+  padding: var(--session-ai-sticky-padding-top) calc(var(--session-ai-fixed-actions-width, 160px) + 12px)
+    var(--session-ai-sticky-padding-bottom) 0;
+  color: var(--text);
+  font-size: 14px;
+  line-height: var(--session-ai-sticky-prompt-height);
+  pointer-events: none;
 }
 
-.session-ai-detail header > .session-ai-detail-block-user {
-  grid-column: 1 / -1;
-}
-
-.session-ai-detail.is-scrolled header > div:first-child {
-  display: none;
-}
-
-.session-ai-detail.is-scrolled header > .session-ai-detail-block-user {
-  grid-column: 1;
-  min-width: 0;
-  border-bottom: 0;
-  padding: 0;
-}
-
-.session-ai-detail.is-scrolled .session-ai-detail-block-user .session-ai-detail-prompt-content {
-  max-height: var(--session-ai-sticky-prompt-height);
-  overflow: hidden;
-}
-
-.session-ai-detail.is-scrolled .session-ai-detail-block-user .session-ai-detail-prompt-content :deep(.markdown-content),
-.session-ai-detail.is-scrolled .session-ai-detail-block-user .session-ai-detail-prompt-content :deep(.markdown-content > *) {
+.session-ai-timeline-sticky-prompt :deep(.markdown-content) {
   display: block;
   max-width: 100%;
   margin-block: 0;
@@ -1925,8 +1902,22 @@
   white-space: nowrap;
 }
 
-.session-ai-detail.is-scrolled .session-ai-detail-prompt-toggle {
+.session-ai-timeline-sticky-prompt :deep(.markdown-content *) {
+  display: inline;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.session-ai-timeline-sticky-prompt :deep(.markdown-content > * + *::before) {
+  content: " ";
+}
+
+.session-ai-timeline-sticky-prompt :deep(.markdown-content br) {
   display: none;
+}
+
+.session-ai-detail header > .session-ai-detail-block-user {
+  grid-column: 1 / -1;
 }
 
 .session-ai-detail header > div:first-child {
@@ -1992,6 +1983,37 @@
   border-radius: 6px;
   font-size: 12px;
   padding: 6px 8px;
+}
+
+:global(.session-ai-detail-actions-view-mode) {
+  display: flex;
+  height: 28px;
+  gap: 2px;
+  border: 0;
+  background: transparent;
+  margin: 0 0 4px;
+  padding: 0;
+}
+
+:global(.session-ai-detail-actions-view-mode button) {
+  flex: 1 1 0;
+  width: 100%;
+  min-width: 0;
+  height: 24px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 24px;
+  padding: 0 8px;
+}
+
+:global(.session-ai-detail-actions-view-mode button[data-state="on"]) {
+  background: var(--surface-hover);
+  color: var(--text-strong);
+  box-shadow: var(--shadow-soft);
 }
 
 :global(.session-ai-detail-actions-menu-item.danger) {
@@ -2273,11 +2295,7 @@
     padding-left: 24px;
   }
 
-  .session-ai-detail.is-scrolled .session-ai-detail-content > header {
-    padding-left: 24px;
-  }
-
-  .session-ai-detail.is-scrolled .session-ai-detail-content > header > .session-ai-detail-block-user {
+  .session-ai-timeline-sticky-prompt {
     padding-left: 24px;
   }
 

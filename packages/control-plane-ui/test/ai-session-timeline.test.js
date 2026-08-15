@@ -28,40 +28,89 @@ test("live Timeline store replaces item lifecycle updates in place", () => {
   }]);
 });
 
-test("AI session Timeline is detail-only and loaded for both turn display modes", () => {
+test("turn Timeline cache merges authoritative snapshots with live item upserts", () => {
+  const store = useAiSessionTimelineStore();
+  const turn = { id: "turn-public", providerTurnId: "turn-provider" };
+  store.beginTurnLoad("instance-cache", "session-cache", turn.id);
+  assert.equal(store.turnState("instance-cache", "session-cache", turn).status, "loading");
+  store.resolveTurn("instance-cache", "session-cache", turn.id, [{
+    id: "cmd-cache",
+    turnId: "turn-provider",
+    type: "activity",
+    activityKind: "commandExecution",
+    title: "Command",
+    status: "running",
+  }]);
+  store.apply({
+    instanceId: "instance-cache",
+    sessionId: "session-cache",
+    providerSessionId: "thread-cache",
+    generatedAt: "2026-08-15T00:00:01.000Z",
+    item: {
+      id: "cmd-cache",
+      turnId: "turn-provider",
+      type: "activity",
+      activityKind: "commandExecution",
+      title: "Command",
+      status: "completed",
+      output: "ok",
+    },
+  });
+  assert.deepEqual(store.turnState("instance-cache", "session-cache", turn), {
+    status: "ready",
+    items: [{
+      id: "cmd-cache",
+      turnId: "turn-provider",
+      type: "activity",
+      activityKind: "commandExecution",
+      title: "Command",
+      status: "completed",
+      output: "ok",
+    }],
+  });
+});
+
+test("AI session turns render immediately while Timeline loads per turn", () => {
   const panel = fs.readFileSync(panelUrl, "utf8");
   const result = fs.readFileSync(new URL("../src/components/ai-session/AiSessionResult.vue", import.meta.url), "utf8");
   const board = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionCard.vue", import.meta.url), "utf8");
-  assert.match(panel, /effectiveTimelineViewMode === 'full'[\s\S]*loadTimeline/);
-  assert.match(panel, /session-ai-timeline-mode/);
+  assert.match(panel, /:turn-timelines="conversationTurnTimelines"/);
+  assert.match(panel, /@load-turn-timeline="loadTurnTimeline"/);
+  assert.match(panel, /getAiSessionTurnTimeline\(instanceId, session\.id, turn\.id\)/);
+  assert.match(panel, /Compatibility for v0\.0\.21:[\s\S]*state\.status === "ready" \|\| state\.status === "loading"[\s\S]*loadFullTimelineForSession\(session, true\)/);
+  assert.match(panel, /class="session-ai-detail-actions-view-mode"[\s\S]*:model-value="effectiveTimelineViewMode"/);
   const panelStyles = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.css", import.meta.url), "utf8");
-  assert.match(panelStyles, /\.session-ai-detail-head-actions \.session-ai-timeline-mode \{[\s\S]*height: 26px;[\s\S]*gap: 0;[\s\S]*border: 1px solid var\(--line-subtle\);[\s\S]*background: var\(--surface-inset\);[\s\S]*padding: 2px;/);
-  assert.match(panelStyles, /\.session-ai-detail-head-actions \.session-ai-timeline-mode button \{[\s\S]*height: 20px;[\s\S]*border: 0;[\s\S]*border-radius: 4px;[\s\S]*background: transparent;[\s\S]*font-weight: 600;/);
-  assert.match(panelStyles, /\.session-ai-detail-head-actions \.session-ai-timeline-mode button\[data-state="on"\] \{[\s\S]*background: var\(--surface-elevated\);[\s\S]*color: var\(--text-strong\);[\s\S]*box-shadow: var\(--shadow-soft\);/);
+  assert.doesNotMatch(panelStyles, /\.session-ai-detail-head-actions \.session-ai-timeline-mode/);
+  assert.match(panelStyles, /\.session-ai-detail-actions-view-mode/);
   assert.doesNotMatch(panel, /request-activity-timeline/);
-  assert.match(panel, /timeline\.value = undefined;[\s\S]*void loadTimeline\(\);/);
   assert.doesNotMatch(result, /requestActivityTimeline/);
-  assert.match(panel, /timelineReloadPending[\s\S]*if \(reload\) void loadTimeline\(true\)/);
-  assert.match(panel, /timelineLoading && !timeline/);
-  assert.match(panel, /:activity-loading="timelineLoading && !timeline"/);
-  assert.match(panel, /watch\(timelineItemStore\.revision[\s\S]*mergeTimelineItems/);
+  assert.match(panel, /selectedTurnTimelineState\.status/);
+  assert.match(panel, /timelineItemStore\.turnState\(props\.instance\.id, session\.id, turn\)/);
   assert.doesNotMatch(board, /AiSessionTimelineView|getAiSessionTimeline/);
 });
 
 test("conversation Timeline composes every turn from the same compact result component", () => {
+  const panel = fs.readFileSync(panelUrl, "utf8");
+  const styles = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.css", import.meta.url), "utf8");
   const timeline = fs.readFileSync(new URL("../src/components/ai-session/AiSessionTimelineView.vue", import.meta.url), "utf8");
   const group = fs.readFileSync(new URL("../src/components/ai-session/AiSessionActivityGroup.vue", import.meta.url), "utf8");
   const history = fs.readFileSync(new URL("../src/components/ai-session/AiSessionTurnHistory.vue", import.meta.url), "utf8");
   const result = fs.readFileSync(new URL("../src/components/ai-session/AiSessionResult.vue", import.meta.url), "utf8");
   const streamingMarkdown = fs.readFileSync(new URL("../src/components/ai-session/AiSessionStreamingMarkdown.vue", import.meta.url), "utf8");
   const markdownContent = fs.readFileSync(new URL("../../web-theme/MarkdownContent.vue", import.meta.url), "utf8");
-  assert.match(timeline, /conversationTimelineTurns\(props\.items\)/);
+  assert.match(timeline, /props\.session\.turns \|\| \[\]/);
+  assert.match(timeline, /conversationTimelineTurns\(state\.items\)/);
+  assert.match(timeline, /turn\.lastMessage\?\.trim\(\)/);
+  assert.match(timeline, /loadVisibleTurnTimelines/);
   assert.match(timeline, /\.ai-session-timeline-turn \{[\s\S]*gap: 24px;/);
+  assert.match(timeline, /\.ai-session-timeline-message\[data-role="user-message"\] \{[\s\S]*justify-self: end;[\s\S]*width: fit-content;[\s\S]*max-width: min\(78%, 620px\);[\s\S]*border-radius: 14px;[\s\S]*background: var\(--surface-hover\);[\s\S]*padding: 12px 14px;/);
   assert.doesNotMatch(timeline, /\.ai-session-timeline-message\[data-role="ai-message"\] \{[\s\S]*padding-(?:top|bottom):/);
-  assert.match(result, /\.ai-session-result \{[\s\S]*--detail-activity-gap: 24px;/);
-  assert.match(result, /\.ai-session-result-detail \{[\s\S]*gap: 0;/);
-  assert.match(result, /\.ai-session-result-detail > \* \{[\s\S]*margin-top: 0;/);
-  assert.match(result, /\.ai-session-result-detail > \* \+ \* \{[\s\S]*margin-top: var\(--detail-activity-gap\);/);
+  assert.match(result, /\.ai-session-result \{[\s\S]*--detail-activity-gap: 16px;/);
+  assert.match(result, /\.ai-session-result-detail \.ai-session-result-content \{[\s\S]*gap: 0;/);
+  assert.match(result, /\.ai-session-result-detail > \.ai-session-result-content > \* \{[\s\S]*margin-top: 0;/);
+  assert.match(result, /\.ai-session-result-detail > \.ai-session-result-content > \* \+ \* \{[\s\S]*margin-top: var\(--detail-activity-gap\);/);
+  assert.match(result, /ref="turnContentElement" class="ai-session-result-content"/);
+  assert.match(result, /turnHeightBuffer\.update\(content\.getBoundingClientRect\(\)\.height, enabled\)/);
   assert.match(streamingMarkdown, /\.ai-session-streaming-markdown :deep\(\.markstream-vue > \.node-slot:first-child > \.node-content > :first-child\) \{\s*margin-top: 0;/);
   assert.match(streamingMarkdown, /\.ai-session-streaming-markdown :deep\(\.markstream-vue > \.node-slot:last-child > \.node-content > :last-child\) \{\s*margin-bottom: 0;/);
   assert.match(markdownContent, /\.markdown-content :deep\(> :first-child\) \{\s*margin-top: 0 !important;/);
@@ -73,10 +122,38 @@ test("conversation Timeline composes every turn from the same compact result com
   assert.match(timeline, /import \{ useVirtualizer \} from "@tanstack\/vue-virtual"/);
   assert.match(timeline, /v-for="virtualTurn in virtualTurns"[\s\S]*:ref="measureVirtualTurn"[\s\S]*:data-index="virtualTurn\.index"[\s\S]*virtualTurn\.start - scrollMargin/);
   assert.match(timeline, /useVirtualizer\(computed\(\(\) => \(\{[\s\S]*count: turns\.value\.length,[\s\S]*gap: 24,[\s\S]*getItemKey:[\s\S]*getScrollElement:[\s\S]*overscan: 3,[\s\S]*scrollMargin: scrollMargin\.value/);
+  assert.match(timeline, /anchorTo: "end"/);
+  assert.match(timeline, /scrollEndThreshold: 48/);
+  assert.match(timeline, /measureElement: \(element\) => Math\.ceil\(element\.getBoundingClientRect\(\)\.height\)/);
+  assert.match(timeline, /@layout-will-change="\$emit\('layoutWillChange'\)"/);
+  assert.match(timeline, /@layout-committed="commitVirtualTurnLayout\(virtualTurn\.index, \$event\)"/);
+  assert.match(timeline, /turnVirtualizer\.value\.resizeItem\(index, Math\.ceil\(turn\.getBoundingClientRect\(\)\.height\)\)/);
   assert.match(timeline, /closest<HTMLElement>\("\[data-task-handoff-scroll-viewport\]"\)/);
   assert.match(timeline, /turnVirtualizer\.value\.measureElement\(element\)/);
+  assert.match(timeline, /:data-message-id="message\.id"/);
+  assert.match(timeline, /class="ai-session-turn-actions"/);
+  assert.match(timeline, /latestResponse && completedTurn\(turns\[virtualTurn\.index\]\.id\)/);
+  assert.match(timeline, /@click="copyTurnResponse\(turns\[virtualTurn\.index\]\)"/);
+  assert.match(timeline, /@click="continueFromTurn\(turns\[virtualTurn\.index\]\.id\)"/);
+  assert.match(timeline, /turn\.id === turnId \|\| turn\.providerTurnId === turnId/);
+  assert.match(timeline, /turn\?\.completedAt \|\| turn\?\.updatedAt \|\| turn\?\.startedAt/);
+  assert.match(timeline, /\.ai-session-turn-actions \{[\s\S]*min-height: 26px;[\s\S]*opacity: 0;[\s\S]*pointer-events: none;/);
+  assert.match(timeline, /\.ai-session-turn-actions :deep\(\.ai-session-turn-action\) \{[\s\S]*width: 26px;[\s\S]*height: 26px;[\s\S]*padding: 0;/);
+  assert.match(timeline, /\.ai-session-turn-actions :deep\(\.ai-session-turn-action svg\) \{[\s\S]*width: 13px;[\s\S]*height: 13px;/);
+  assert.match(timeline, /\.ai-session-timeline-turn:hover \.ai-session-turn-actions,[\s\S]*\.ai-session-timeline-turn:focus-within \.ai-session-turn-actions \{[\s\S]*opacity: 1;[\s\S]*pointer-events: auto;/);
+  assert.match(panel, /@continue-from-turn="forkSession\(selectedSession, 'current', \$event\)"/);
+  assert.match(timeline, /stickyUserMessageChange: \[message: \{ id: string; text: string \} \| undefined\]/);
+  assert.match(timeline, /naturalTop <= viewport\.scrollTop \+ 0\.5 && naturalTop > nearestTop/);
+  assert.match(timeline, /scrollElement\.value\?\.removeEventListener\("scroll", scheduleStickyUserMessageUpdate\)/);
+  assert.match(panel, /@sticky-user-message-change="timelineStickyUserMessage = \$event"/);
+  assert.match(panel, /effectiveTimelineViewMode === 'full' && timelineStickyUserMessage[\s\S]*session-ai-timeline-sticky-prompt[\s\S]*timelineStickyUserMessage\.text/);
+  assert.match(styles, /\.session-ai-timeline-sticky-prompt \{[\s\S]*position: absolute;[\s\S]*z-index: 5;[\s\S]*height: calc\([\s\S]*background: var\(--workspace-bg\);/);
+  assert.match(styles, /\.session-ai-timeline-sticky-prompt :deep\(\.markdown-content\) \{[\s\S]*overflow: hidden;[\s\S]*text-overflow: ellipsis;[\s\S]*white-space: nowrap;/);
+  assert.match(styles, /\.session-ai-timeline-sticky-prompt :deep\(\.markdown-content \*\) \{[\s\S]*display: inline;[\s\S]*white-space: nowrap;/);
+  assert.match(styles, /\.session-ai-timeline-sticky-prompt :deep\(\.markdown-content > \* \+ \*::before\) \{[\s\S]*content: " ";/);
+  assert.match(styles, /@media \(max-width: 920px\) \{[\s\S]*\.session-ai-timeline-sticky-prompt \{[\s\S]*padding-left: 24px;/);
   assert.doesNotMatch(timeline, /sessions\.timeline\.user|agentLabel/);
-  assert.doesNotMatch(timeline, /border-radius|surface-subtle/);
+  assert.doesNotMatch(timeline, /surface-subtle/);
   assert.match(group, /:is="summaryVisible \? 'details' : 'div'"[\s\S]*ai-session-activity-group/);
   assert.match(group, /:is="hasDetails\(activity\) \? 'details' : 'div'"/);
   assert.match(group, /<summary v-if="hasDetails\(activity\)" class="ai-session-activity-item-head">/);

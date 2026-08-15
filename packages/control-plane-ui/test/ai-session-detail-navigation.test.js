@@ -21,16 +21,15 @@ test("AI session turn navigation keeps accessible labels without redundant toolt
   assert.match(navigator, /<button type="button" :aria-label="nextLabel \|\| t\('sessions\.actions\.nextMessage'/);
   assert.doesNotMatch(navigator, /Tooltip/);
   assert.match(repositoryEnvironment, /<TooltipContent side="bottom"[^>]*>\{\{ t\("repository\.environment\.title"\) \}\}/);
-  for (const action of ["openApp", "continueFromTurn", "closeSession"]) {
-    assert.match(panel, new RegExp(`<TooltipContent side="bottom"[^>]*>\\{\\{ t\\("sessions\\.actions\\.${action}"\\) \\}\\}`));
-  }
-  assert.match(panel, /<TooltipContent class="session-ai-info-tooltip"[\s\S]*?<dl>/);
 });
 
-test("narrow desktop windows and mobile share one compact detail actions menu", () => {
-  assert.match(panel, /compactDetailActions = useMediaQuery\("\(max-width: 920px\)"\)/);
-  assert.match(panel, /<template v-if="!compactDetailActions">[\s\S]*?trigger-appearance="detail"/);
-  assert.match(panel, /<DropdownMenu v-else :modal="false">[\s\S]*?<MoreHorizontal[\s\S]*?trigger-appearance="menu"/);
+test("all viewport sizes share one compact detail actions menu", () => {
+  assert.doesNotMatch(panel, /compactDetailActions/);
+  assert.match(panel, /compactAiSessionLayout = useMediaQuery\("\(max-width: 920px\)"\)/);
+  assert.match(panel, /v-if="!compactAiSessionLayout"[\s\S]*?trigger-appearance="detail"[\s\S]*?sessions\.detail\.sessionDetails/);
+  assert.match(panel, /<DropdownMenu :modal="false">[\s\S]*?<MoreHorizontal[\s\S]*?trigger-appearance="menu"/);
+  assert.match(panel, /selectedSession\.agent === 'codex'[\s\S]*?<ToggleGroup[\s\S]*?class="session-ai-detail-actions-view-mode"[\s\S]*?:model-value="effectiveTimelineViewMode"[\s\S]*?value="compact"[\s\S]*?value="full"/);
+  assert.match(panel, /<RepositoryEnvironment[\s\S]*?v-if="compactAiSessionLayout"[\s\S]*?trigger-appearance="menu"/);
   assert.match(panel, /@interact-outside="keepCompactActionsMenuOpenForRepository"/);
   assert.match(panel, /target\.closest\("\.repository-environment-popover"\)[\s\S]*?event\.preventDefault\(\)/);
   for (const action of ["openApp", "continueFromTurn", "closeSession"]) {

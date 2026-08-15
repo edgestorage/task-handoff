@@ -27,9 +27,10 @@ test("expanded tool activity consumes live items without triggering timeline rel
   assert.match(activity, /function toggleExpanded\(\) \{[\s\S]*expanded\.value = !expanded\.value;/);
 });
 
-test("expanded activity keeps its previous Timeline visible during a background refresh", () => {
-  assert.match(panel, /:activity-loading="timelineLoading && !timeline"/);
-  assert.match(panel, /:activity-error="timeline \? '' : timelineError"/);
+test("background Timeline loading affects history without hiding authoritative live activity", () => {
+  assert.match(panel, /:activity-history-status="selectedTurnTimelineState\.status"/);
+  assert.match(panel, /:activity-history-error="selectedTurnTimelineState\.error"/);
+  assert.doesNotMatch(panel, /:activity-loading="selectedTurnTimelineState/);
 });
 
 test("tool activity projects the current execution into one line", () => {
@@ -122,7 +123,8 @@ test("context compaction uses the transient activity lane instead of a persisten
 
 test("detail surfaces omit the legacy running response placeholder", () => {
   assert.match(sessions, /export function displayAiSessionResponse[\s\S]*?displayAiSessionContent\(session, promptIndex, false, t\)/);
-  assert.match(result, /v-show="displayContent"/);
+  assert.match(result, /v-if="displayContent"/);
+  assert.doesNotMatch(result, /v-show="displayContent"/);
   assert.match(result, /const displayContent = computed\(\(\) => streamingContent\.value \|\| props\.responseContent\)/);
   assert.match(result, /props\.isLatest[\s\S]*?streamingMessages\.activeMessage\(props\.instanceId, props\.session\.id\)/);
   assert.match(panel, /:response-content="displayAiSessionResponse\(selectedSession, promptIndexFor\(selectedSession\), t\)"/);
@@ -133,14 +135,14 @@ test("detail surfaces omit the legacy running response placeholder", () => {
 test("active tool activity sits directly below the latest assistant response", () => {
   assert.match(result, /<section[\s\S]*'ai-session-detail-response-active': active[\s\S]*<AiSessionToolActivity/);
   assert.match(result, /ai-session-detail-response \{[\s\S]*?background: transparent;/);
-  assert.match(result, /\.ai-session-result-detail \{\s*gap: 0;/);
+  assert.match(result, /\.ai-session-result-detail \.ai-session-result-content \{\s*gap: 0;/);
   assert.match(result, /\.ai-session-result \{[\s\S]*?align-content: start;/);
-  assert.match(result, /\.ai-session-result-detail > \* \{\s*margin-top: 0;/);
-  assert.match(result, /\.ai-session-result-detail > \* \+ \* \{\s*margin-top: var\(--detail-activity-gap\);/);
+  assert.match(result, /\.ai-session-result-detail > \.ai-session-result-content > \* \{\s*margin-top: 0;/);
+  assert.match(result, /\.ai-session-result-detail > \.ai-session-result-content > \* \+ \* \{\s*margin-top: var\(--detail-activity-gap\);/);
   assert.match(result, /\.ai-session-result-detail \.ai-session-detail-response \{[\s\S]*padding-bottom: 0;/);
   assert.match(result, /\.ai-session-result-detail \.ai-session-detail-response-active \{\s*padding-bottom: 0;/);
   assert.doesNotMatch(result, /\.ai-session-result-detail\.has-response[\s\S]*margin-top: calc\(-1/);
-  assert.match(panelCss, /\.session-ai-detail-content > \.ai-session-result \{\s*margin-top: 24px;/);
+  assert.match(panelCss, /\.session-ai-detail-content > \.ai-session-result \{\s*margin-top: 16px;/);
   assert.match(activity, /ai-session-tool-activity-board \{[\s\S]*?margin-top: -12px;/);
 });
 
@@ -173,7 +175,9 @@ test("detail user prompts collapse to three lines with a local toggle", () => {
   assert.match(panelCss, /max-height: calc\(1\.55em \* 3\)/);
   assert.match(panelCss, /\.session-ai-detail-prompt-content \{[\s\S]*?font-size: 14px;[\s\S]*?line-height: 1\.55;/);
   assert.match(panelCss, /session-ai-detail-prompt-toggle/);
-  assert.match(panelCss, /session-ai-detail\.is-scrolled \.session-ai-detail-prompt-toggle \{\s*display: none;/);
+  assert.match(panel, /v-else-if="effectiveTimelineViewMode === 'compact' && detailScrolled"[\s\S]*class="session-ai-timeline-sticky-prompt"/);
+  assert.doesNotMatch(panelCss, /session-ai-detail\.is-scrolled header/);
+  assert.doesNotMatch(panel, /session-ai-detail-head-placeholder|detailHeaderPlaceholderHeight/);
 });
 
 test("floating user prompts collapse to three lines and become compact when sticky", () => {
@@ -202,6 +206,16 @@ test("detail sticky thresholds follow the complete user prompt height", () => {
   assert.match(panel, /expandedDividerOffset - stickyHeaderHeight/);
   assert.match(panel, /scrollTop > detailStickyThreshold/);
   assert.match(panel, /scrollTop <= detailStickyThreshold/);
+  assert.doesNotMatch(panel, /detailScrollViewport\.scrollTop = previousScrollTop/);
+});
+
+test("all detail disclosures use one user-anchored layout transaction", () => {
+  assert.match(panel, /createUserLayoutScrollAnchor/);
+  assert.match(panel, /target\.closest<HTMLElement>\("summary, button\[aria-expanded\]"\)/);
+  assert.match(panel, /scrollFollow\?\.stopFollowing\(\)[\s\S]*detailLayoutAnchor\.cancel\(\)[\s\S]*userDetailLayoutAnchor\.begin\(trigger\)/);
+  assert.match(panel, /addEventListener\("click", handleDetailExpansionClick, true\)/);
+  assert.match(panel, /if \(!userDetailLayoutAnchor\.isActive\(\)\) scrollFollow\?\.notifyContentResize\(\)/);
+  assert.match(panelCss, /\.session-ai-detail\.is-user-layout-changing \.session-ai-detail-content[\s\S]*overflow-anchor: none !important;/);
 });
 
 test("running activity floats in the card without competing with approval or turn controls", () => {

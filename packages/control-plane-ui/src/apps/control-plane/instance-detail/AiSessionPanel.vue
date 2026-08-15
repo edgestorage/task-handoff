@@ -601,7 +601,7 @@
       </section>
       <section v-else-if="selectedSession" ref="detailEl" class="session-ai-detail" :class="{ 'is-scrolled': detailScrolled }">
         <ScrollArea class="session-ai-detail-scroll">
-          <section class="session-ai-detail-content">
+          <section class="session-ai-detail-content" :class="{ 'is-following-latest': isFollowingLatest && !isSmoothFollowingLatest }">
           <div ref="detailActionsEl" class="session-ai-detail-fixed-actions session-ai-detail-head-actions">
             <AiSessionTurnNavigator
               v-if="effectiveTimelineViewMode === 'compact'"
@@ -613,18 +613,7 @@
               @previous="previousPrompt(selectedSession)"
               @next="nextPrompt(selectedSession)"
             />
-            <ToggleGroup
-              v-if="supportsAiSessionTimeline && selectedSession.agent === 'codex'"
-              class="session-ai-timeline-mode"
-              type="single"
-              :model-value="effectiveTimelineViewMode"
-              :aria-label="t('sessions.timeline.viewMode')"
-              @update:model-value="setTimelineViewMode"
-            >
-              <ToggleGroupItem value="compact" size="sm">{{ t("sessions.timeline.compact") }}</ToggleGroupItem>
-              <ToggleGroupItem value="full" size="sm">{{ t("sessions.timeline.full") }}</ToggleGroupItem>
-            </ToggleGroup>
-            <template v-if="!compactDetailActions">
+            <template v-if="!compactAiSessionLayout">
               <RepositoryEnvironment
                 :ai-agent="repositoryAiAgent"
                 :connection-status="instance.connectionStatus"
@@ -635,73 +624,45 @@
                 @open-workspace="emit('openRepositoryWorkspace', $event)"
               />
               <TooltipProvider :delay-duration="120">
-              <Tooltip>
-                <TooltipTrigger as-child>
-                  <button type="button" :title="t('sessions.detail.sessionDetails')" :aria-label="t('sessions.detail.sessionDetails')">
-                    <CircleHelp :size="15" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent class="session-ai-info-tooltip" align="end" side="bottom" :side-offset="8">
-                  <dl>
-                    <div>
-                      <dt>{{ t("sessions.detail.workspace") }}</dt>
-                      <dd>{{ selectedSession.cwd || t("sessions.detail.unknown") }}</dd>
-                    </div>
-                    <div>
-                      <dt>{{ t("sessions.detail.session") }}</dt>
-                      <dd>{{ selectedSession.providerSessionId || selectedSession.id }}</dd>
-                    </div>
-                    <div>
-                      <dt>{{ t("sessions.detail.appBinding") }}</dt>
-                      <dd>{{ selectedSession.appSessionId || t("sessions.detail.notBound") }}</dd>
-                    </div>
-                    <div v-if="selectedSession.lineage?.kind === 'fork'">
-                      <dt>{{ t("sessions.detail.forkedFrom") }}</dt>
-                      <dd>{{ parentSessionLabel(selectedSession) }}</dd>
-                    </div>
-                  </dl>
-                </TooltipContent>
-              </Tooltip>
-              </TooltipProvider>
-              <TooltipProvider v-if="aiSessionAppTab(instance, selectedSession) || selectedSession.actions?.openApp" :delay-duration="120">
-              <Tooltip>
-                <TooltipTrigger as-child>
-                  <button type="button" :aria-label="t('sessions.actions.openApp')" :disabled="openingAiSessionId === selectedSession.id" @click="openSessionApp(selectedSession)">
-                    <ExternalLink :size="15" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom" :side-offset="8">{{ t("sessions.actions.openApp") }}</TooltipContent>
-              </Tooltip>
-              </TooltipProvider>
-              <TooltipProvider v-if="selectedForkTurn" :delay-duration="120">
-              <Tooltip>
-                <TooltipTrigger as-child>
-                  <button type="button" :disabled="forkingAiSessionId === selectedSession.id" :aria-label="t('sessions.actions.continueFromTurn')" @click="forkSession(selectedSession, 'current', selectedForkTurn.id)">
-                    <Split :size="15" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom" :side-offset="8">{{ t("sessions.actions.continueFromTurn") }}</TooltipContent>
-              </Tooltip>
-              </TooltipProvider>
-              <TooltipProvider :delay-duration="120">
-              <Tooltip>
-                <TooltipTrigger as-child>
-                  <button type="button" :disabled="stoppingAppSessionId === selectedSession.id" :aria-label="t('sessions.actions.closeSession')" @click="closeSession(selectedSession)">
-                    <Square :size="14" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom" :side-offset="8">{{ t("sessions.actions.closeSession") }}</TooltipContent>
-              </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger as-child>
+                    <button type="button" :title="t('sessions.detail.sessionDetails')" :aria-label="t('sessions.detail.sessionDetails')">
+                      <CircleHelp :size="15" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent class="session-ai-info-tooltip" align="end" side="bottom" :side-offset="8">
+                    <dl>
+                      <div><dt>{{ t("sessions.detail.workspace") }}</dt><dd>{{ selectedSession.cwd || t("sessions.detail.unknown") }}</dd></div>
+                      <div><dt>{{ t("sessions.detail.session") }}</dt><dd>{{ selectedSession.providerSessionId || selectedSession.id }}</dd></div>
+                      <div><dt>{{ t("sessions.detail.appBinding") }}</dt><dd>{{ selectedSession.appSessionId || t("sessions.detail.notBound") }}</dd></div>
+                      <div v-if="selectedSession.lineage?.kind === 'fork'"><dt>{{ t("sessions.detail.forkedFrom") }}</dt><dd>{{ parentSessionLabel(selectedSession) }}</dd></div>
+                    </dl>
+                  </TooltipContent>
+                </Tooltip>
               </TooltipProvider>
             </template>
-            <DropdownMenu v-else :modal="false">
+            <DropdownMenu :modal="false">
               <DropdownMenuTrigger as-child>
                 <button type="button" :aria-label="t('sessions.actions.more')">
                   <MoreHorizontal :size="16" />
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent class="session-ai-detail-actions-menu" align="end" :side-offset="8" @interact-outside="keepCompactActionsMenuOpenForRepository">
+                <template v-if="supportsAiSessionTimeline && selectedSession.agent === 'codex'">
+                  <ToggleGroup
+                    class="session-ai-detail-actions-view-mode"
+                    type="single"
+                    :model-value="effectiveTimelineViewMode"
+                    :aria-label="t('sessions.timeline.viewMode')"
+                    @update:model-value="setTimelineViewMode"
+                  >
+                    <ToggleGroupItem value="compact" size="sm">{{ t("sessions.timeline.compact") }}</ToggleGroupItem>
+                    <ToggleGroupItem value="full" size="sm">{{ t("sessions.timeline.full") }}</ToggleGroupItem>
+                  </ToggleGroup>
+                  <DropdownMenuSeparator />
+                </template>
                 <RepositoryEnvironment
+                  v-if="compactAiSessionLayout"
                   :ai-agent="repositoryAiAgent"
                   :connection-status="instance.connectionStatus"
                   :instance-id="instance.id"
@@ -710,7 +671,7 @@
                   trigger-appearance="menu"
                   @open-workspace="emit('openRepositoryWorkspace', $event)"
                 />
-                <DropdownMenuSub>
+                <DropdownMenuSub v-if="compactAiSessionLayout">
                   <DropdownMenuSubTrigger class="session-ai-detail-actions-menu-item">
                     <CircleHelp :size="16" />
                     <span>{{ t("sessions.detail.sessionDetails") }}</span>
@@ -775,27 +736,16 @@
               </button>
             </section>
           </header>
-          <div
-            v-if="detailScrolled && detailHeaderPlaceholderHeight > 0"
-            class="session-ai-detail-head-placeholder"
-            :style="{ height: `${detailHeaderPlaceholderHeight}px` }"
-            aria-hidden="true"
-          />
           <div v-if="effectiveTimelineViewMode === 'full'" class="session-ai-timeline-state">
-            <span v-if="timelineLoading && !timeline">{{ t("sessions.timeline.loading") }}</span>
-            <div v-else-if="timelineError && !timeline" role="alert">
-              <span>{{ timelineError }}</span>
-              <Button size="sm" variant="outline" @click="loadTimeline(true)">{{ t("sessions.panel.retry") }}</Button>
-            </div>
             <AiSessionTimelineView
-              v-else-if="timeline"
+              v-if="aiSessionTurns(selectedSession).length"
               :busy="aiSessionActionBusy"
               :can-interrupt="canInterrupt(selectedSession)"
               :can-resolve-approval="canResolveApproval(selectedSession)"
               :instance-id="instance.id"
               file-links
-              :items="timeline.items"
               :session="selectedSession"
+              :turn-timelines="conversationTurnTimelines"
               @edit-queued-message="editQueuedMessage(selectedSession.id, $event)"
               @open-file="openMarkdownFile(selectedSession, $event)"
               @steer-queued-message="steerQueuedMessage(selectedSession.id, $event)"
@@ -803,6 +753,11 @@
               @remove-queued-message="removeQueuedMessage(selectedSession.id, $event)"
               @reorder-queued-messages="reorderQueuedMessages(selectedSession.id, $event)"
               @resolve-approval="resolveSelectedApproval"
+              @sticky-user-message-change="timelineStickyUserMessage = $event"
+              @continue-from-turn="forkSession(selectedSession, 'current', $event)"
+              @layout-will-change="beginDetailLayoutAnchor"
+              @layout-committed="commitDetailLayoutAnchor"
+              @load-turn-timeline="loadTurnTimeline"
             />
             <span v-else>{{ t("sessions.timeline.noHistory") }}</span>
           </div>
@@ -818,9 +773,12 @@
             :session="selectedSession"
             :activities="selectedTurnTimeline.activities"
             :activity-history="selectedTurnTimeline.history"
-            :activity-error="timeline ? '' : timelineError"
+            :activity-history-status="selectedTurnTimelineState.status"
+            :activity-history-error="selectedTurnTimelineState.error"
             activity-interactive
-            :activity-loading="timelineLoading && !timeline"
+            @layout-will-change="beginDetailLayoutAnchor"
+            @layout-committed="commitDetailLayoutAnchor"
+            @retry-activity-history="loadSelectedTurnTimeline(true)"
             @edit-queued-message="editQueuedMessage(selectedSession.id, $event)"
             @open-file="openMarkdownFile(selectedSession, $event)"
             @steer-queued-message="steerQueuedMessage(selectedSession.id, $event)"
@@ -829,8 +787,23 @@
             @reorder-queued-messages="reorderQueuedMessages(selectedSession.id, $event)"
             @resolve-approval="resolveSelectedApproval"
           />
+          <span ref="detailBottomAnchorEl" class="session-ai-detail-bottom-anchor" aria-hidden="true" />
           </section>
         </ScrollArea>
+        <article
+          v-if="effectiveTimelineViewMode === 'full' && timelineStickyUserMessage"
+          class="session-ai-timeline-sticky-prompt"
+          aria-hidden="true"
+        >
+          <MarkdownContent :content="timelineStickyUserMessage.text" :code-tools="markdownCodeTools" />
+        </article>
+        <article
+          v-else-if="effectiveTimelineViewMode === 'compact' && detailScrolled"
+          class="session-ai-timeline-sticky-prompt"
+          aria-hidden="true"
+        >
+          <MarkdownContent :content="displayAiSessionTitle(selectedSession, promptIndexFor(selectedSession), t)" :code-tools="markdownCodeTools" />
+        </article>
         <Button
           v-if="!isFollowingLatest"
           class="session-ai-follow-latest"
@@ -922,10 +895,10 @@ import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import AiSessionCardContextMenu from "../../../components/ai-session/AiSessionCardContextMenu.vue";
 import AiSessionOriginMark from "../../../components/ai-session/AiSessionOriginMark.vue";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
-import { bindAiSessionTrigger, closeAiSession, createAiSession, createNodeLocalFolder, editAiSessionQueuedMessage, forkAiSession, getAiSessionHistory, getAiSessionHistoryDetail, getAiSessionTimeline, getAiSessionWorkspace, interruptAiSession, listNodeFolderTree, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, unbindAiSessionTrigger, updateControlledInstance, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery } from "../../../api/queries";
+import { bindAiSessionTrigger, closeAiSession, createAiSession, createNodeLocalFolder, editAiSessionQueuedMessage, forkAiSession, getAiSessionHistory, getAiSessionHistoryDetail, getAiSessionTimeline, getAiSessionTurnTimeline, getAiSessionWorkspace, interruptAiSession, listNodeFolderTree, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, unbindAiSessionTrigger, updateControlledInstance, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery } from "../../../api/queries";
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { executeAiSessionCommand } from "../../../api/ai-session-commands";
-import { mergeAiSessionTimelineItems, type AiSessionCommandInput, type AiSessionHistoryDetail, type AiSessionHistoryItem, type AiSessionMessageAttachmentRef, type AiSessionPermissionMode, type AiSessionTimeline } from "@task-handoff/protocol/ai-sessions";
+import { type AiSessionCommandInput, type AiSessionHistoryDetail, type AiSessionHistoryItem, type AiSessionMessageAttachmentRef, type AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
 import type { RepositoryAiSessionWorkspace, RepositoryAiSessionWorkspaceBranch } from "@task-handoff/protocol/repository";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, NodeLocalFolder, TriggerConfig, TriggerDeployment, TriggerRuntimeState } from "../../../api/types";
 import type { LaunchableApp } from "../useInstanceSessions";
@@ -942,11 +915,11 @@ import { referencesForBindings, type AiSessionMentionBinding } from "../../../co
 import { desktopRuntimePathAccess } from "../../../components/ai-session/useAiSessionMentions";
 import AiSessionTurnNavigator from "../../../components/ai-session/AiSessionTurnNavigator.vue";
 import { Button } from "../../../components/ui/button";
-import { ToggleGroup, ToggleGroupItem } from "../../../components/ui/toggle-group";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
 import { ContextMenu, ContextMenuTrigger } from "../../../components/ui/context-menu";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "../../../components/ui/sheet";
+import { ToggleGroup, ToggleGroupItem } from "../../../components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 import { relativeNodePathSegments } from "../nodePath";
@@ -960,7 +933,8 @@ import {
   historyAiSessionPermissionKey,
   persistAiSessionPermissionMode,
 } from "../useAiSessionPermissionMode";
-import { createStreamingScrollFollow, type ScrollViewport } from "../../../lib/streaming-scroll-follow";
+import { createStreamingScrollFollow, distanceFromBottom, STREAMING_SCROLL_FOLLOW_THRESHOLD, type ScrollViewport } from "../../../lib/streaming-scroll-follow";
+import { createLayoutScrollAnchor, createUserLayoutScrollAnchor } from "../../../lib/layout-scroll-anchor";
 import {
   aiSessionStatusGroup as sessionStatusGroup,
   canInterruptAiSession,
@@ -1095,12 +1069,9 @@ const displayedSessionGroups = computed<AiSessionPathGroup[]>(() => groupSession
 }]);
 const selectedSession = computed(() => props.selectedAiSession(props.instance, filteredSessions.value));
 const timelineViewMode = ref<"compact" | "full">(storedTimelineViewMode());
-const timeline = ref<AiSessionTimeline>();
 const timelineItemStore = useAiSessionTimelineStore();
-const timelineLoading = ref(false);
-const timelineError = ref("");
-let timelineLoadRevision = 0;
-let timelineReloadPending = false;
+const activeTurnTimelineLoads = new Map<string, Promise<void>>();
+const activeSessionTimelineLoads = new Map<string, Promise<void>>();
 const supportsAiSessionTimeline = computed(() => {
   const capabilities = props.instance.capabilities;
   const features = capabilities && typeof capabilities === "object"
@@ -1108,6 +1079,14 @@ const supportsAiSessionTimeline = computed(() => {
     : undefined;
   return Boolean(features && typeof features === "object"
     && (features as Record<string, unknown>).aiSessionTimeline === true);
+});
+const supportsAiSessionTurnTimeline = computed(() => {
+  const capabilities = props.instance.capabilities;
+  const features = capabilities && typeof capabilities === "object"
+    ? (capabilities as Record<string, unknown>).features
+    : undefined;
+  return Boolean(features && typeof features === "object"
+    && (features as Record<string, unknown>).aiSessionTurnTimeline === true);
 });
 const effectiveTimelineViewMode = computed(() => (
   supportsAiSessionTimeline.value && selectedSession.value?.agent === "codex"
@@ -1118,60 +1097,94 @@ const selectedTimelineTurn = computed(() => {
   const session = selectedSession.value;
   return session ? aiSessionTurns(session)[promptIndexFor(session)] : undefined;
 });
+const selectedTurnTimelineState = computed(() => {
+  const session = selectedSession.value;
+  const turn = selectedTimelineTurn.value;
+  return session && turn && supportsAiSessionTimeline.value && session.agent === "codex"
+    ? timelineItemStore.turnState(props.instance.id, session.id, turn)
+    : { status: "ready" as const, items: [] };
+});
 const selectedTurnTimeline = computed(() => {
-  return compactTimelineForTurn(timeline.value?.items || [], selectedTimelineTurn.value);
+  return compactTimelineForTurn(selectedTurnTimelineState.value.items, selectedTimelineTurn.value);
+});
+const conversationTurnTimelines = computed(() => {
+  const session = selectedSession.value;
+  if (!session) return {};
+  return Object.fromEntries(aiSessionTurns(session).map((turn) => [
+    turn.id,
+    timelineItemStore.turnState(props.instance.id, session.id, turn),
+  ]));
 });
 
 function setTimelineViewMode(value: unknown) {
   if (value !== "compact" && value !== "full") return;
   timelineViewMode.value = value;
   window.localStorage?.setItem(TIMELINE_VIEW_MODE_STORAGE_KEY, value);
-  void loadTimeline();
+  if (value === "compact") void loadSelectedTurnTimeline();
 }
 
-async function loadTimeline(force = false) {
+function timelineLoadKey(instanceId: string, sessionId: string, turnId?: string) {
+  return JSON.stringify([instanceId, sessionId, turnId || ""]);
+}
+
+async function loadFullTimelineForSession(session: AiSessionSummary, force = false) {
+  const instanceId = props.instance.id;
+  const key = timelineLoadKey(instanceId, session.id);
+  const existing = activeSessionTimelineLoads.get(key);
+  if (existing) return existing;
+  const sessionState = timelineItemStore.sessionState(instanceId, session.id);
+  if (!force && sessionState.status === "ready") return;
+  const turns = aiSessionTurns(session);
+  timelineItemStore.beginSessionLoad(instanceId, session.id);
+  for (const turn of turns) timelineItemStore.beginTurnLoad(instanceId, session.id, turn.id);
+  const load = getAiSessionTimeline(instanceId, session.id)
+    .then((result) => timelineItemStore.resolveSession(instanceId, session.id, turns, result))
+    .catch((error) => {
+      const message = translateApiError(error, t, t("sessions.timeline.loadFailed"));
+      timelineItemStore.rejectSession(instanceId, session.id, message);
+      for (const turn of turns) timelineItemStore.rejectTurn(instanceId, session.id, turn.id, message);
+    })
+    .finally(() => activeSessionTimelineLoads.delete(key));
+  activeSessionTimelineLoads.set(key, load);
+  return load;
+}
+
+async function loadTurnTimeline(turnId: string, force = false) {
   const session = selectedSession.value;
   if (!session || !supportsAiSessionTimeline.value || session.agent !== "codex") return;
-  if (timelineLoading.value) {
-    if (force) timelineReloadPending = true;
-    return;
+  const instanceId = props.instance.id;
+  const turn = aiSessionTurns(session).find((candidate) => candidate.id === turnId || candidate.providerTurnId === turnId);
+  if (!turn) return;
+  const state = timelineItemStore.turnState(instanceId, session.id, turn);
+  // Compatibility for v0.0.21: older controlled instances expose only the full-session Timeline endpoint.
+  if (!supportsAiSessionTurnTimeline.value) {
+    if (!force && (state.status === "ready" || state.status === "loading")) return;
+    return loadFullTimelineForSession(session, true);
   }
-  if (!force && timeline.value?.sessionId === session.id) return;
-  const revision = ++timelineLoadRevision;
-  timelineLoading.value = true;
-  timelineError.value = "";
-  try {
-    const result = await getAiSessionTimeline(props.instance.id, session.id);
-    if (revision === timelineLoadRevision && selectedSession.value?.id === session.id) {
-      timeline.value = mergeTimelineItems(result, timelineItemStore.items(props.instance.id, session.id));
-    }
-  } catch (error) {
-    if (revision === timelineLoadRevision && selectedSession.value?.id === session.id) {
-      timelineError.value = translateApiError(error, t, t("sessions.timeline.loadFailed"));
-    }
-  } finally {
-    if (revision === timelineLoadRevision) {
-      timelineLoading.value = false;
-      const reload = timelineReloadPending;
-      timelineReloadPending = false;
-      if (reload) void loadTimeline(true);
-    }
-  }
+  if (!force && (state.status === "ready" || state.status === "loading")) return;
+  const key = timelineLoadKey(instanceId, session.id, turn.id);
+  const existing = activeTurnTimelineLoads.get(key);
+  if (existing) return existing;
+  timelineItemStore.beginTurnLoad(instanceId, session.id, turn.id);
+  const load = getAiSessionTurnTimeline(instanceId, session.id, turn.id)
+    .then((result) => timelineItemStore.resolveTurn(instanceId, session.id, turn.id, result.items))
+    .catch((error) => timelineItemStore.rejectTurn(
+      instanceId,
+      session.id,
+      turn.id,
+      translateApiError(error, t, t("sessions.timeline.loadFailed")),
+    ))
+    .finally(() => activeTurnTimelineLoads.delete(key));
+  activeTurnTimelineLoads.set(key, load);
+  return load;
 }
 
-watch(timelineItemStore.revision, () => {
-  const session = selectedSession.value;
-  if (!session || timeline.value?.sessionId !== session.id) return;
-  timeline.value = mergeTimelineItems(timeline.value, timelineItemStore.items(props.instance.id, session.id));
-});
-watch(timelineItemStore.recoveryRevision, () => {
-  if (timeline.value) void loadTimeline(true);
-});
-
-function mergeTimelineItems(base: AiSessionTimeline, updates: readonly AiSessionTimeline["items"][number][]): AiSessionTimeline {
-  if (!updates.length) return base;
-  return { ...base, items: mergeAiSessionTimelineItems(base.items, updates) };
+function loadSelectedTurnTimeline(force = false) {
+  const turn = selectedTimelineTurn.value;
+  return turn ? loadTurnTimeline(turn.id, force) : undefined;
 }
+
+watch(timelineItemStore.recoveryRevision, () => void loadSelectedTurnTimeline(true));
 watch(() => ({
   id: selectedSession.value?.id,
   unread: selectedSession.value?.unread,
@@ -1185,8 +1198,7 @@ const repositoryAiAgent = computed<"codex" | "claude" | undefined>(() => {
   const agent = selectedSession.value?.agent;
   return agent === "codex" || agent === "claude" ? agent : undefined;
 });
-const compactDetailActions = useMediaQuery("(max-width: 920px)");
-const compactAiSessionLayout = compactDetailActions;
+const compactAiSessionLayout = useMediaQuery("(max-width: 920px)");
 watch(compactAiSessionLayout, (compact) => {
   if (!compact) sessionListOverlayOpen.value = false;
 });
@@ -1320,10 +1332,11 @@ const detailScrolled = ref(false);
 const detailHeaderEl = ref<HTMLElement>();
 const detailPromptSectionEl = ref<HTMLElement>();
 const detailActionsEl = ref<HTMLElement>();
-const detailHeaderPlaceholderHeight = ref(0);
+const detailBottomAnchorEl = ref<HTMLElement>();
 const promptContentEl = ref<HTMLElement>();
 const promptHasOverflow = ref(false);
 const promptExpanded = ref(false);
+const timelineStickyUserMessage = ref<{ id: string; text: string }>();
 let composerResizeObserver: ResizeObserver | undefined;
 let detailActionsResizeObserver: ResizeObserver | undefined;
 let detailScrollViewport: HTMLElement | undefined;
@@ -1333,7 +1346,22 @@ let detailStickyThreshold = 0;
 let promptResizeObserver: ResizeObserver | undefined;
 let streamingResizeObserver: ResizeObserver | undefined;
 let scrollFollow: ReturnType<typeof createStreamingScrollFollow> | undefined;
+const userDetailLayoutAnchor = createUserLayoutScrollAnchor(
+  () => detailScrollViewport,
+  {
+    onActiveChange: (active) => {
+      detailEl.value?.classList.toggle("is-user-layout-changing", active);
+      if (!active) scrollFollow?.handleScroll();
+    },
+  },
+);
+const detailLayoutAnchor = createLayoutScrollAnchor(
+  () => detailScrollViewport,
+  () => detailBottomAnchorEl.value,
+  () => !userDetailLayoutAnchor.isActive() && scrollFollow?.isFollowing() === true && !scrollFollow.isAutoScrolling(),
+);
 const isFollowingLatest = ref(true);
+const isSmoothFollowingLatest = ref(false);
 let sidebarResizeCleanup: (() => void) | undefined;
 const aiSessionActionBusy = ref(false);
 const stoppingAppSessionId = ref("");
@@ -2087,6 +2115,10 @@ async function sendSelectedSessionMessage(permissionMode?: AiSessionPermissionMo
   if (!session || (!message && !messageAttachments.value.length) || aiSessionActionBusy.value) {
     return;
   }
+  const keepFollowingAfterSend = detailScrollViewport
+    ? distanceFromBottom(detailScrollViewport) <= STREAMING_SCROLL_FOLLOW_THRESHOLD
+    : scrollFollow?.isFollowing() !== false;
+  if (keepFollowingAfterSend) scrollFollow?.followLatest();
   aiSessionActionBusy.value = true;
   try {
     const attachments = await uploadMessageAttachments(props.instance.id, session.id);
@@ -2095,6 +2127,11 @@ async function sendSelectedSessionMessage(permissionMode?: AiSessionPermissionMo
     messageDraft.value = "";
     messageMentionBindings.value = [];
     messageAttachments.value = [];
+    if (keepFollowingAfterSend && scrollFollow?.isFollowing()) {
+      await nextTick();
+      scrollFollow?.followLatest();
+      scrollFollow?.notifyContentResize();
+    }
   } catch (error) {
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.sendFailed")));
   } finally {
@@ -2484,6 +2521,27 @@ function followLatest() {
   scrollFollow?.followLatest();
 }
 
+function beginDetailLayoutAnchor() {
+  detailLayoutAnchor.begin();
+}
+
+function commitDetailLayoutAnchor() {
+  detailLayoutAnchor.commit();
+}
+
+function handleDetailExpansionClick(event: MouseEvent) {
+  if (event.button !== 0 || event.defaultPrevented) return;
+  const target = event.target;
+  if (!(target instanceof Element)) return;
+  const trigger = target.closest<HTMLElement>("summary, button[aria-expanded]");
+  const content = detailEl.value?.querySelector<HTMLElement>(".session-ai-detail-content");
+  if (!trigger || !content?.contains(trigger) || trigger.matches(":disabled")) return;
+  userDetailLayoutAnchor.cancel();
+  scrollFollow?.stopFollowing();
+  detailLayoutAnchor.cancel();
+  userDetailLayoutAnchor.begin(trigger);
+}
+
 function observeComposerOffset() {
   composerResizeObserver?.disconnect();
   composerResizeObserver = undefined;
@@ -2521,15 +2579,19 @@ function observeDetailActionsWidth() {
 
 function observeDetailScroll() {
   detailScrollViewport?.removeEventListener("scroll", handleDetailScroll);
+  detailScrollViewport?.removeEventListener("wheel", pauseDetailScrollFollow);
+  detailScrollViewport?.removeEventListener("touchstart", pauseDetailScrollFollow);
+  detailScrollViewport?.removeEventListener("click", handleDetailExpansionClick, true);
   streamingResizeObserver?.disconnect();
   streamingResizeObserver = undefined;
   scrollFollow?.dispose();
   scrollFollow = undefined;
   detailScrollViewport = undefined;
+  userDetailLayoutAnchor.cancel();
+  detailLayoutAnchor.cancel();
   const layoutRevision = ++detailScrollLayoutRevision;
   detailScrollLayoutPending = true;
   detailScrolled.value = false;
-  detailHeaderPlaceholderHeight.value = 0;
   detailStickyThreshold = 0;
   const viewport = detailEl.value?.querySelector<HTMLElement>(".session-ai-detail-scroll [data-task-handoff-scroll-viewport]");
   if (!viewport) {
@@ -2540,14 +2602,22 @@ function observeDetailScroll() {
   detailScrollViewport = viewport;
   scrollFollow = createStreamingScrollFollow(
     () => detailScrollViewport as (HTMLElement & ScrollViewport) | undefined,
-    { onFollowingChange: (value) => { isFollowingLatest.value = value; } },
+    {
+      onAutoScrollingChange: (value) => { isSmoothFollowingLatest.value = value; },
+      onFollowingChange: (value) => { isFollowingLatest.value = value; },
+    },
   );
   const content = detailEl.value?.querySelector<HTMLElement>(".session-ai-detail-content");
   if (content && typeof ResizeObserver !== "undefined") {
-    streamingResizeObserver = new ResizeObserver(() => scrollFollow?.notifyContentResize());
+    streamingResizeObserver = new ResizeObserver(() => {
+      if (!userDetailLayoutAnchor.isActive()) scrollFollow?.notifyContentResize();
+    });
     streamingResizeObserver.observe(content);
   }
   viewport.addEventListener("scroll", handleDetailScroll, { passive: true });
+  viewport.addEventListener("wheel", pauseDetailScrollFollow, { passive: true });
+  viewport.addEventListener("touchstart", pauseDetailScrollFollow, { passive: true });
+  viewport.addEventListener("click", handleDetailExpansionClick, true);
   void nextTick(() => {
     if (layoutRevision !== detailScrollLayoutRevision || detailScrollViewport !== viewport) return;
     updateDetailStickyThreshold();
@@ -2555,6 +2625,12 @@ function observeDetailScroll() {
     handleDetailScroll();
     scrollFollow?.followLatest();
   });
+}
+
+function pauseDetailScrollFollow() {
+  userDetailLayoutAnchor.cancel();
+  detailLayoutAnchor.cancel();
+  scrollFollow?.pauseFollowing();
 }
 
 function handleDetailScroll() {
@@ -2567,37 +2643,10 @@ function handleDetailScroll() {
     updateDetailStickyThreshold();
   }
   if (!detailScrolled.value && detailStickyThreshold > 0 && scrollTop > detailStickyThreshold) {
-    void enterDetailStickyLayout();
+    detailScrolled.value = true;
   } else if (detailScrolled.value && scrollTop <= detailStickyThreshold) {
-    detailScrollLayoutRevision += 1;
-    detailHeaderPlaceholderHeight.value = 0;
     detailScrolled.value = false;
   }
-}
-
-async function enterDetailStickyLayout() {
-  const header = detailHeaderEl.value;
-  if (!header || detailScrolled.value) {
-    return;
-  }
-  const revision = ++detailScrollLayoutRevision;
-  const previousScrollTop = detailScrollViewport?.scrollTop || 0;
-  const expandedHeight = header.getBoundingClientRect().height;
-  updateDetailStickyThreshold();
-  detailScrollLayoutPending = true;
-  detailScrolled.value = true;
-  await nextTick();
-  if (revision !== detailScrollLayoutRevision || !detailScrolled.value || !detailHeaderEl.value) {
-    detailScrollLayoutPending = false;
-    return;
-  }
-  const stickyHeight = detailHeaderEl.value.getBoundingClientRect().height;
-  detailHeaderPlaceholderHeight.value = Math.max(0, Math.ceil(expandedHeight - stickyHeight));
-  await nextTick();
-  if (revision === detailScrollLayoutRevision && detailScrollViewport) {
-    detailScrollViewport.scrollTop = previousScrollTop;
-  }
-  detailScrollLayoutPending = false;
 }
 
 watch([selectedSession, messageAttachments, messageDraft, historyMessageAttachments, historyMessageDraft, historyDetail], () => {
@@ -2605,17 +2654,13 @@ watch([selectedSession, messageAttachments, messageDraft, historyMessageAttachme
 }, { immediate: true });
 
 watch(() => `${props.instance.id}\u0000${selectedSession.value?.id || ""}`, () => {
-  timelineLoadRevision += 1;
-  timeline.value = undefined;
-  timelineError.value = "";
-  timelineLoading.value = false;
-  timelineReloadPending = false;
-  void loadTimeline();
+  void loadSelectedTurnTimeline();
   queueComposerEdit.value = undefined;
   const draft = selectedSession.value ? loadAiSessionDraftPayload(selectedSession.value.id) : { value: "", bindings: [] };
   messageDraft.value = draft.value;
   messageMentionBindings.value = draft.bindings;
   promptExpanded.value = false;
+  timelineStickyUserMessage.value = undefined;
   promptHasOverflow.value = false;
   void nextTick(() => {
     updatePromptOverflow();
@@ -2649,6 +2694,8 @@ onMounted(() => {
     observeDetailScroll();
   });
 });
+
+watch(() => selectedTimelineTurn.value?.id, () => void loadSelectedTurnTimeline());
 watch(() => props.instance.id, () => {
   sessionListOverlayOpen.value = false;
 });
@@ -2657,6 +2704,10 @@ onBeforeUnmount(() => {
   detailActionsResizeObserver?.disconnect();
   promptResizeObserver?.disconnect();
   detailScrollViewport?.removeEventListener("scroll", handleDetailScroll);
+  detailScrollViewport?.removeEventListener("wheel", pauseDetailScrollFollow);
+  detailScrollViewport?.removeEventListener("touchstart", pauseDetailScrollFollow);
+  detailScrollViewport?.removeEventListener("click", handleDetailExpansionClick, true);
+  userDetailLayoutAnchor.cancel();
   streamingResizeObserver?.disconnect();
   scrollFollow?.dispose();
   stopSidebarResize();
