@@ -79,6 +79,7 @@ export const sessions = {
     noRecent: "No recent AI activity", runningTool: "Running {tool}", running: "Running...",
   },
   timeline: {
+    turnActions: "Turn actions",
     viewMode: "Conversation detail view",
     compact: "Compact",
     full: "Conversation",
@@ -89,6 +90,8 @@ export const sessions = {
     noActivities: "No activity is available for this message.",
     activityCount: "{count} activity | {count} activities",
     earlierProcess: "Earlier process",
+    earlierProcessLoading: "Earlier process · Loading…",
+    earlierProcessFailed: "Earlier process · Failed to load, retry",
     details: "Show details",
     input: "Input",
     output: "Output",

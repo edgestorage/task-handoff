@@ -508,6 +508,10 @@ export function getAiSessionTimeline(instanceId: string, aiSessionId: string, si
   return sharedAiSessionsApi.timeline(instanceId, aiSessionId, signal);
 }
 
+export function getAiSessionTurnTimeline(instanceId: string, aiSessionId: string, turnId: string, signal?: AbortSignal) {
+  return sharedAiSessionsApi.turnTimeline(instanceId, aiSessionId, turnId, signal);
+}
+
 export function resumeAiSession(instanceId: string, aiSessionId: string) {
   return sharedAiSessionsApi.resume(instanceId, aiSessionId);
 }

@@ -228,7 +228,7 @@ export class CodexAppServerClient extends EventEmitter {
     return result.thread && typeof result.thread === "object" ? result.thread as CodexThread : undefined;
   }
 
-  async listThreadItems(threadId: string): Promise<CodexThreadItemEntry[] | undefined> {
+  async listThreadItems(threadId: string, turnId?: string): Promise<CodexThreadItemEntry[] | undefined> {
     if (!this.threadItemsListAvailable) return undefined;
     const items: CodexThreadItemEntry[] = [];
     let cursor: string | null | undefined;
@@ -236,7 +236,7 @@ export class CodexAppServerClient extends EventEmitter {
       do {
         const result = await this.request("thread/items/list", {
           threadId,
-          turnId: null,
+          turnId: turnId || null,
           cursor: cursor || null,
           limit: 1_000,
           sortDirection: "asc",

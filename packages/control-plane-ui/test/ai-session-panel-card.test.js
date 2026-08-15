@@ -12,6 +12,10 @@ const contextSubMenu = fs.readFileSync(new URL("../src/components/ui/context-men
 const dropdownSubMenu = fs.readFileSync(new URL("../src/components/ui/dropdown-menu/DropdownMenuSubContent.vue", import.meta.url), "utf8");
 const scrollArea = fs.readFileSync(new URL("../src/components/ui/scroll-area/ScrollArea.vue", import.meta.url), "utf8");
 
+test("compact detail prompt keeps 16px before its divider", () => {
+  assert.match(styles, /\.session-ai-detail-block \{[\s\S]*padding-bottom: 16px;/);
+});
+
 test("instance AI session cards match board card status and navigation behavior", () => {
   assert.doesNotMatch(panel, /<small>\{\{ aiSessionStatusLabel\(session\) \}\}<\/small>/);
   assert.match(panel, /:disabled="promptIndexFor\(session\) <= 0"/);
@@ -114,7 +118,7 @@ test("mobile AI sessions keep detail visible and float the session list in a dis
   assert.match(styles, /@media \(max-width: 920px\)[\s\S]*\.session-ai-panel \{\s*padding: 8px;[\s\S]*grid-template-rows: minmax\(0, 1fr\);[\s\S]*\.session-ai-mobile-list-button \{[\s\S]*position: absolute;[\s\S]*top: 10px;[\s\S]*left: 4px;[\s\S]*width: 26px;[\s\S]*height: 26px;/);
   assert.match(styles, /\.session-ai-detail-content > header,[\s\S]*\.session-ai-history-detail-head \{\s*padding-left: 24px;/);
   assert.match(styles, /\.session-ai-detail-content > header > \.session-ai-detail-block-user \{[\s\S]*width: calc\(100% \+ 24px\);[\s\S]*margin-left: -24px;[\s\S]*padding-left: 24px;/);
-  assert.match(styles, /\.session-ai-detail\.is-scrolled \.session-ai-detail-content > header \{\s*padding-left: 24px;/);
+  assert.doesNotMatch(styles, /\.session-ai-detail\.is-scrolled \.session-ai-detail-content > header/);
   assert.match(styles, /\.session-ai-mobile-list-button \{[\s\S]*border-color: transparent;[\s\S]*background: transparent;/);
   assert.match(styles, /\.session-ai-mobile-list-button\[data-open="true"\] \{[\s\S]*border-color: transparent;[\s\S]*background: var\(--surface-hover\);/);
   assert.match(styles, /@media \(max-width: 920px\)[\s\S]*\.session-ai-preview-field-assistant \{\s*padding-right: 38px;/);
@@ -125,7 +129,7 @@ test("mobile AI sessions keep detail visible and float the session list in a dis
 test("the return-to-latest control stays compact and visually separated from the composer", () => {
   assert.match(panel, /class="session-ai-follow-latest"[\s\S]*size="icon-sm"[\s\S]*variant="ghost"[\s\S]*<ChevronDown :size="17" \/>/);
   assert.doesNotMatch(panel, /<ArrowDown/);
-  assert.match(styles, /\.session-ai-follow-latest\s*\{[^}]*bottom: calc\(var\(--session-ai-compose-offset, 84px\) \+ 24px\);[^}]*width: 32px;[^}]*height: 32px;[^}]*background: color-mix\(in srgb, var\(--surface-raised\) 62%, transparent\);[^}]*backdrop-filter: blur\(10px\);/s);
+  assert.match(styles, /\.session-ai-follow-latest\s*\{[^}]*bottom: calc\([^}]*var\(--session-ai-compose-offset, 84px\)[^}]*var\(--session-ai-compose-bottom\)[^}]*var\(--session-ai-content-bottom-gap\)[^}]*\);[^}]*width: 32px;[^}]*height: 32px;[^}]*background: color-mix\(in srgb, var\(--surface-raised\) 62%, transparent\);[^}]*backdrop-filter: blur\(10px\);/s);
 });
 
 test("all instance AI sessions expose the unified close menu", () => {

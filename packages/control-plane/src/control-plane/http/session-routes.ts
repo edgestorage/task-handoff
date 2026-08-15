@@ -10,6 +10,7 @@ import type { AiSessionUnreadStore } from "../sessions/ai-session-unread-store.t
 import {
   IdParamsSchema,
   InstanceSessionParamsSchema,
+  InstanceSessionTurnParamsSchema,
   InstanceSessionQueueParamsSchema,
 } from "./route-params.ts";
 
@@ -138,6 +139,10 @@ export function registerSessionRoutes({
   app.get("/api/controlled-instances/:id/ai-sessions/:sessionId/timeline", async (request) => {
     const params = InstanceSessionParamsSchema.parse(request.params);
     return { data: await service.getAiSessionTimeline(params.id, params.sessionId) };
+  });
+  app.get("/api/controlled-instances/:id/ai-sessions/:sessionId/turns/:turnId/timeline", async (request) => {
+    const params = InstanceSessionTurnParamsSchema.parse(request.params);
+    return { data: await service.getAiSessionTurnTimeline(params.id, params.sessionId, params.turnId) };
   });
   app.post("/api/controlled-instances/:id/ai-sessions/:sessionId/resume", async (request) => {
     const params = InstanceSessionParamsSchema.parse(request.params);

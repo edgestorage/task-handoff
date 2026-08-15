@@ -1,4 +1,4 @@
-import { AiSessionTimelineSchema, type AiSessionCommandInput, type AiSessionCommandResult, type AiSessionStatus, type AiSessionTimelineItem } from "@task-handoff/protocol/ai-sessions";
+import { AiSessionTimelineSchema, AiSessionTurnTimelineSchema, type AiSessionCommandInput, type AiSessionCommandResult, type AiSessionStatus, type AiSessionTimelineItem } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionActionResult, AiSessionApprovalDecision, AiSessionControlProvider, AiSessionProviderCreateInput, AiSessionProviderCreateResult, AiSessionProviderForkInput, AiSessionProviderForkResult, AiSessionSendInput } from "./ai-session-control";
 import { aiSessionControlError } from "./ai-session-control";
 import type { AiSessionDiscoveryContext, AiSessionDiscoveryProvider } from "./ai-session-discovery";
@@ -258,13 +258,35 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
   }
 
   async timeline(session: AiSessionStatus) {
+    return this.readTimeline(session);
+  }
+
+  async turnTimeline(session: AiSessionStatus, turnId: string) {
+    const turn = session.turns?.find((candidate) => candidate.id === turnId || candidate.providerTurnId === turnId);
+    if (!turn) {
+      throw aiSessionControlError("AI_SESSION_TURN_NOT_FOUND", "AI session turn was not found.", 404);
+    }
+    const providerTurnId = turn.providerTurnId || turn.id;
+    const timeline = await this.readTimeline(session, providerTurnId, turn.id);
+    return AiSessionTurnTimelineSchema.parse({
+      sessionId: session.id,
+      turnId: turn.id,
+      items: timeline.items,
+      generatedAt: timeline.generatedAt,
+    });
+  }
+
+  private async readTimeline(session: AiSessionStatus, providerTurnId?: string, publicTurnId?: string) {
     if (session.agent !== "codex" || !session.providerSessionId) {
       throw aiSessionControlError("AI_SESSION_TIMELINE_UNSUPPORTED", "Only Codex app-server sessions support Timeline reads.", 400);
     }
     const client = await this.requireReadyThreadClient(session.providerSessionId);
-    const realtimeItems = this.projector.realtimeTimelineItems(session.providerSessionId);
-    const durableItems = this.timelineStore?.items(session.providerSessionId) || [];
-    const persistedItems = await client.listThreadItems?.(session.providerSessionId);
+    const matchesTurn = (turnId: string) => !providerTurnId || turnId === providerTurnId || turnId === publicTurnId;
+    const realtimeItems = this.projector.realtimeTimelineItems(session.providerSessionId)
+      .filter((entry) => matchesTurn(entry.turnId));
+    const durableItems = (this.timelineStore?.items(session.providerSessionId) || [])
+      .filter((item) => matchesTurn(item.turnId));
+    const persistedItems = await client.listThreadItems?.(session.providerSessionId, providerTurnId);
     if (persistedItems) {
       const timeline = codexItemTimeline(
         session.id,
@@ -292,7 +314,10 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
     );
     return AiSessionTimelineSchema.parse({
       ...timeline,
-      items: mergeCodexTimelineItems(timeline.items, durableItems),
+      items: mergeCodexTimelineItems(
+        timeline.items.filter((item) => matchesTurn(item.turnId)),
+        durableItems,
+      ),
     });
   }
 

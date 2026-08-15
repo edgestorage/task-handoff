@@ -25,7 +25,7 @@ const { CodexAppServerClient, CodexAppServerSessionBridge } = require("../packag
 const { createAiSessionRegistry } = require("../packages/ai-session-runtime/src/ai-session-registry.ts");
 const { CodexAppServerRpcError } = require("../packages/ai-session-runtime/src/codex-app-server/client/client.ts");
 const { CodexTimelineStore } = require("../packages/ai-session-runtime/src/codex-app-server/session/timeline-store.ts");
-const { AiSessionEventType, AiSessionTimelineSchema, mergeAiSessionTimelineItems } = require("../packages/protocol/src/ai-sessions.ts");
+const { AiSessionEventType, AiSessionTimelineSchema, AiSessionTurnTimelineSchema, mergeAiSessionTimelineItems } = require("../packages/protocol/src/ai-sessions.ts");
 const { AiSessionActionService } = require("../packages/control-plane/src/control-plane/sessions/ai-session-actions.ts");
 const { ControlPlaneAiSessionAggregator } = require("../packages/control-plane/src/control-plane/sessions/ai-session-aggregator.ts");
 const { NodeTunnelEventRouter } = require("../packages/control-plane/src/control-plane/nodes/tunnel-event-router.ts");
@@ -279,6 +279,46 @@ test("Codex bridge restores live item events after a full process restart withou
   secondBridge.stop();
 });
 
+test("Codex bridge returns one authoritative turn Timeline", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-turn-timeline-"));
+  const snapshot = {
+    id: "thread_turn_timeline",
+    cwd: "/workspace",
+    status: { type: "idle" },
+    turns: [
+      { id: "turn_1", status: "completed", items: [{ id: "message_1", type: "agentMessage", text: "First" }] },
+      { id: "turn_2", status: "completed", items: [{ id: "message_2", type: "agentMessage", text: "Second" }] },
+    ],
+  };
+  const requestedTurns = [];
+  class TurnTimelineCodexClient extends EventEmitter {
+    async start() {}
+    async listLoadedThreadIds() { return [snapshot.id]; }
+    async readThread() { return snapshot; }
+    async listThreadItems(_threadId, turnId) {
+      requestedTurns.push(turnId);
+      const turn = snapshot.turns.find((candidate) => candidate.id === turnId);
+      return turn?.items.map((item) => ({ turnId, item })) || [];
+    }
+    stop() {}
+  }
+
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const bridge = new CodexAppServerSessionBridge(registry, new TurnTimelineCodexClient(), {
+    timelineStorePath: path.join(root, "timeline"),
+  });
+  await bridge.sync();
+  const session = registry.getByProviderSessionId("codex", snapshot.id);
+  assert.ok(session);
+  const publicTurn = session.turns.find((turn) => turn.providerTurnId === "turn_2" || turn.id === "turn_2");
+  assert.ok(publicTurn);
+  const timeline = await bridge.turnTimeline(session, publicTurn.id);
+  assert.deepEqual(requestedTurns, ["turn_2"]);
+  assert.deepEqual(timeline.items.map((item) => item.id), ["message_2"]);
+  assert.equal(timeline.turnId, publicTurn.id);
+  bridge.stop();
+});
+
 test("Codex client pages through the persistent single-item history", async () => {
   const client = new CodexAppServerClient();
   const requests = [];
@@ -291,6 +331,19 @@ test("Codex client pages through the persistent single-item history", async () =
   assert.deepEqual(items.map((entry) => entry.item.id), ["command_1", "message_1"]);
   assert.deepEqual(requests.map(({ method }) => method), ["thread/items/list", "thread/items/list"]);
   assert.equal(requests[0].params.sortDirection, "asc");
+  assert.equal(requests[0].params.turnId, null);
+});
+
+test("Codex client asks persistent history for only one turn", async () => {
+  const client = new CodexAppServerClient();
+  const requests = [];
+  client.request = async (method, params) => {
+    requests.push({ method, params });
+    return { data: [{ turnId: "turn_2", item: { id: "message_2", type: "agentMessage", text: "Done" } }], nextCursor: null };
+  };
+  const items = await client.listThreadItems("thread_1", "turn_2");
+  assert.deepEqual(items.map((entry) => entry.item.id), ["message_2"]);
+  assert.equal(requests[0].params.turnId, "turn_2");
 });
 
 test("Codex client falls back when v0.0.21 lacks persistent single-item history", async () => {
@@ -343,6 +396,33 @@ test("Timeline forwarding is capability-gated for v0.0.21 compatibility", async 
     refreshSnapshots: async () => undefined,
   });
   await assert.rejects(() => legacy.timeline("instance_legacy", "ais_1"), (error) => error.code === "AI_SESSION_TIMELINE_UNSUPPORTED");
+});
+
+test("per-turn Timeline forwarding is independently capability-gated", async () => {
+  let requestedPath = "";
+  const service = new AiSessionActionService({
+    requireInstance: async () => ({ capabilities: { features: { aiSessionTurnTimeline: true } } }),
+    request: async (_instance, route) => {
+      requestedPath = route;
+      return { sessionId: "ais_1", turnId: "turn_2", items: [], generatedAt: "2026-08-15T00:00:00.000Z" };
+    },
+    requireRuntime: async () => ({}),
+    refreshSnapshots: async () => undefined,
+  });
+  const timeline = await service.turnTimeline("instance_1", "ais_1", "turn_2");
+  assert.equal(requestedPath, "/ai-sessions/ais_1/turns/turn_2/timeline");
+  assert.equal(AiSessionTurnTimelineSchema.safeParse(timeline).success, true);
+
+  const legacy = new AiSessionActionService({
+    requireInstance: async () => ({ capabilities: { features: { aiSessionTimeline: true } } }),
+    request: async () => { throw new Error("must not forward"); },
+    requireRuntime: async () => ({}),
+    refreshSnapshots: async () => undefined,
+  });
+  await assert.rejects(
+    () => legacy.turnTimeline("instance_legacy", "ais_1", "turn_2"),
+    (error) => error.code === "AI_SESSION_TURN_TIMELINE_UNSUPPORTED",
+  );
 });
 
 test("control-plane tunnel forwards a validated single Timeline item event", async () => {

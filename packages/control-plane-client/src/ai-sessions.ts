@@ -10,6 +10,7 @@ import {
   AiSessionHistoryDetailSchema,
   AiSessionHistoryListSchema,
   AiSessionTimelineSchema,
+  AiSessionTurnTimelineSchema,
   AiSessionMentionCatalogSchema,
   AiSessionMentionFileSearchSchema,
   AiSessionMessageRefInputSchema,
@@ -99,6 +100,9 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
     },
     timeline(instanceId: string, aiSessionId: string, signal?: AbortSignal) {
       return requestData(`${sessionRoute(instanceId, aiSessionId)}/timeline`, AiSessionTimelineSchema, { signal });
+    },
+    turnTimeline(instanceId: string, aiSessionId: string, turnId: string, signal?: AbortSignal) {
+      return requestData(`${sessionRoute(instanceId, aiSessionId)}/turns/${encodeURIComponent(turnId)}/timeline`, AiSessionTurnTimelineSchema, { signal });
     },
     resume(instanceId: string, aiSessionId: string) {
       return requestData(`${sessionRoute(instanceId, aiSessionId)}/resume`, AiSessionResumeResultSchema, json("POST"));

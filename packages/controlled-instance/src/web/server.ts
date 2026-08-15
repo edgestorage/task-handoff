@@ -87,6 +87,7 @@ import {
   AiSessionHistoryListSchema,
   AiSessionHistoryDetailSchema,
   AiSessionTimelineSchema,
+  AiSessionTurnTimelineSchema,
   AiSessionDeltaResponseSchema,
   AiSessionMessageDeltaEventSchema,
   AiSessionTimelineItemEventSchema,
@@ -1441,6 +1442,18 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     }
     try {
       return { data: AiSessionTimelineSchema.parse(await codexAppServer.timeline(session)) };
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
+  app.get<{ Params: { id: string; turnId: string } }>("/api/ai-sessions/:id/turns/:turnId/timeline", async (request, reply) => {
+    const session = aiSessions.get(request.params.id);
+    if (!session) {
+      return reply.code(404).send({ error: { code: "AI_SESSION_NOT_FOUND", message: "AI session not found." } });
+    }
+    try {
+      return { data: AiSessionTurnTimelineSchema.parse(await codexAppServer.turnTimeline(session, request.params.turnId)) };
     } catch (error: unknown) {
       return sendAiSessionControlError(reply, error);
     }
