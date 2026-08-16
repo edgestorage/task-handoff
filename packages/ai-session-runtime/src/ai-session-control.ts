@@ -8,7 +8,11 @@ import type {
   AiSessionReference,
   AiSessionSendMode,
   AiSessionStatus,
+  AiSessionTimeline,
+  AiSessionTimelineItem,
+  AiSessionTurnTimeline,
 } from "@task-handoff/protocol/ai-sessions";
+import type { AiSessionTimelineCapabilities } from "@task-handoff/protocol/control-plane";
 import type { AiSessionRegistry } from "./ai-session-registry";
 
 export type AiSessionSendInput = {
@@ -53,6 +57,20 @@ export type PendingAiSessionApproval = {
   resolve: (decision: AiSessionApprovalDecision) => Promise<void> | void;
 };
 
+export type AiSessionProviderTimelineItemEvent = {
+  sessionId: string;
+  providerSessionId: string;
+  item: AiSessionTimelineItem;
+};
+
+export type AiSessionProviderTimelineItemListener = (event: AiSessionProviderTimelineItemEvent) => void;
+
+export type AiSessionProviderTimelineCapabilities = {
+  sessionRead: boolean;
+  turnRead: boolean;
+  liveItems: boolean;
+};
+
 export interface AiSessionControlProvider {
   readonly agent: string;
   createSession?(input: AiSessionProviderCreateInput): Promise<AiSessionProviderCreateResult>;
@@ -66,6 +84,14 @@ export interface AiSessionControlProvider {
   startMessage?(session: AiSessionStatus, input: AiSessionSendInput): Promise<AiSessionActionResult>;
   steerMessage?(session: AiSessionStatus, input: AiSessionSendInput): Promise<AiSessionActionResult>;
   sendMessage?(session: AiSessionStatus, input: AiSessionSendInput): Promise<AiSessionActionResult>;
+  /** Reads an authoritative snapshot for the complete session Timeline. */
+  timeline?(session: AiSessionStatus): Promise<AiSessionTimeline>;
+  /** Reads one Turn independently; implementing this does not require a complete-session reader. */
+  turnTimeline?(session: AiSessionStatus, turnId: string): Promise<AiSessionTurnTimeline>;
+  /** Publishes authoritative single-item lifecycle updates; implementing reads does not imply this capability. */
+  subscribeTimelineItems?(listener: AiSessionProviderTimelineItemListener): () => void;
+  /** Reports the provider's current runtime support for each independent Timeline operation. */
+  timelineCapabilities?(): AiSessionProviderTimelineCapabilities;
   interrupt(session: AiSessionStatus): Promise<AiSessionActionResult>;
   resolveApproval?(session: AiSessionStatus, decision: AiSessionApprovalDecision): Promise<AiSessionActionResult>;
 }
@@ -111,11 +137,29 @@ export class PendingAiSessionApprovalStore {
 
 export class AiSessionController {
   private readonly providers = new Map<string, AiSessionControlProvider>();
+  private readonly timelineItemListeners = new Set<AiSessionProviderTimelineItemListener>();
+  private readonly providerTimelineSubscriptions = new Map<string, () => void>();
 
   constructor(private readonly registry: AiSessionRegistry) {}
 
   register(provider: AiSessionControlProvider) {
+    this.providerTimelineSubscriptions.get(provider.agent)?.();
     this.providers.set(provider.agent, provider);
+    if (provider.subscribeTimelineItems) {
+      this.providerTimelineSubscriptions.set(
+        provider.agent,
+        provider.subscribeTimelineItems((event) => {
+          for (const listener of this.timelineItemListeners) listener(event);
+        }),
+      );
+    } else {
+      this.providerTimelineSubscriptions.delete(provider.agent);
+    }
+  }
+
+  subscribeTimelineItems(listener: AiSessionProviderTimelineItemListener) {
+    this.timelineItemListeners.add(listener);
+    return () => this.timelineItemListeners.delete(listener);
   }
 
   provider(agent: string) {
@@ -124,6 +168,22 @@ export class AiSessionController {
       throw aiSessionControlError("AI_SESSION_CONTROL_UNSUPPORTED", `${agent} sessions do not support direct control yet.`, 400);
     }
     return provider;
+  }
+
+  timelineCapabilities(): AiSessionTimelineCapabilities {
+    const providers = [...this.providers.values()];
+    const supports = (provider: AiSessionControlProvider, capability: keyof AiSessionProviderTimelineCapabilities) => {
+      const reported = provider.timelineCapabilities?.();
+      if (reported) return reported[capability];
+      if (capability === "sessionRead") return Boolean(provider.timeline);
+      if (capability === "turnRead") return Boolean(provider.turnTimeline);
+      return Boolean(provider.subscribeTimelineItems);
+    };
+    return {
+      sessionReadAgents: providers.filter((provider) => supports(provider, "sessionRead")).map((provider) => provider.agent),
+      turnReadAgents: providers.filter((provider) => supports(provider, "turnRead")).map((provider) => provider.agent),
+      liveItemAgents: providers.filter((provider) => supports(provider, "liveItems")).map((provider) => provider.agent),
+    };
   }
 
   async createSession(agent: string, input: AiSessionProviderCreateInput) {
@@ -300,6 +360,24 @@ export class AiSessionController {
       throw aiSessionControlError("AI_SESSION_NOT_ACTIVE", "AI session is not active.", 400);
     }
     return this.requireProvider(session).interrupt(session);
+  }
+
+  async timeline(sessionId: string) {
+    const session = this.requireSession(sessionId);
+    const provider = this.requireProvider(session);
+    if (!provider.timeline) {
+      throw aiSessionControlError("AI_SESSION_TIMELINE_UNSUPPORTED", `${session.agent} sessions do not expose Timeline reads.`, 409);
+    }
+    return provider.timeline(session);
+  }
+
+  async turnTimeline(sessionId: string, turnId: string) {
+    const session = this.requireSession(sessionId);
+    const provider = this.requireProvider(session);
+    if (!provider.turnTimeline) {
+      throw aiSessionControlError("AI_SESSION_TURN_TIMELINE_UNSUPPORTED", `${session.agent} sessions do not expose per-turn Timeline reads.`, 409);
+    }
+    return provider.turnTimeline(session, turnId);
   }
 
   async resolveApproval(sessionId: string, decision: AiSessionApprovalDecision) {

@@ -41,6 +41,10 @@ import {
 import { NodeAgentRegistrationClient, nodeAgentRegistrationConfigFromEnv } from "./node-agent-client";
 import { nodeAgentApiRoute, publicApiRoute, registerAuth, resolveWebAuth } from "./auth";
 import { AiSessionMessageDeltaCoalescer } from "./ai-session-message-delta-coalescer";
+import {
+  AiSessionPersistenceSettingsInputSchema,
+  AiSessionPersistenceSettingsStore,
+} from "./ai-session-persistence-settings";
 import { WebEventBus } from "./events";
 import { AppManagementManager, AppManagementRequestError } from "./app-management";
 import { configSyncPresets, configSyncPrograms, listConfigSyncFolders, runConfigSync, runConfigSyncBatch } from "./config-sync";
@@ -568,7 +572,12 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     },
   });
   const aiSessions = options.aiSessionRegistry || createAiSessionRegistry();
+  const aiSessionPersistenceSettings = new AiSessionPersistenceSettingsStore(storagePaths, (reason) => {
+    app.log.warn({ reason }, "AI session persistence settings were sanitized");
+  });
+  const initialAiSessionPersistenceSettings = aiSessionPersistenceSettings.get();
   const aiSessionHistory = new AiSessionHistoryStore(storagePaths, {
+    limit: initialAiSessionPersistenceSettings.historyLimit,
     onWarning: (warning) => app.log.warn({ warning }, "AI session history entry was sanitized"),
   });
   const aiSessionHistoryLifecycle = new AiSessionHistoryLifecycle(aiSessionHistory);
@@ -576,7 +585,13 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   const triggers = new TriggerStore(storagePaths);
   const triggerExecutor = new TriggerExecutor(triggers, aiSessionController);
   const triggerManager = new TriggerManager(triggers, triggerExecutor, storagePaths, (type, payload) => events.publish(type, payload));
-  nodeAgentClient = new NodeAgentRegistrationClient(nodeAgentRegistrationConfigFromEnv(), () => controlledInstanceSnapshot(appRuntime, storagePaths, aiSessions, triggers));
+  nodeAgentClient = new NodeAgentRegistrationClient(nodeAgentRegistrationConfigFromEnv(), () => controlledInstanceSnapshot(
+    appRuntime,
+    storagePaths,
+    aiSessions,
+    triggers,
+    aiSessionController.timelineCapabilities(),
+  ));
 
   await app.register(websocket);
   registerAuth(app, auth);
@@ -641,19 +656,46 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       });
       aiSessionMessageDeltas.push(payload);
     },
-    onTimelineItem: (timelineItem) => {
-      events.publish(AiSessionEventType.TimelineItem, AiSessionTimelineItemEventSchema.parse({
-        instanceId,
-        nodeId: process.env.TASK_HANDOFF_NODE_ID,
-        ...timelineItem,
-        generatedAt: new Date().toISOString(),
-      }));
-    },
     onEventSourceClose: () => aiSessionMessageDeltas.flushAll("event-source-close"),
+  });
+  const retainCodexTimelineHistory = () => {
+    if (typeof codexAppServer.retainTimelineHistory !== "function") return;
+    try {
+      codexAppServer.retainTimelineHistory([
+        ...aiSessions.all()
+          .filter((session) => session.agent === "codex")
+          .flatMap((session) => session.providerSessionId ? [session.providerSessionId] : []),
+        ...aiSessionHistory.list()
+          .filter((session) => session.agent === "codex")
+          .map((session) => session.providerSessionId),
+      ]);
+    } catch (error) {
+      app.log.warn({ err: error }, "Codex Timeline persistence cleanup failed");
+    }
+  };
+  retainCodexTimelineHistory();
+  app.put<{ Body: unknown }>("/api/internal/ai-session-persistence-settings", nodeAgentApiRoute({
+    code: "AI_SESSION_PERSISTENCE_SETTINGS_FORBIDDEN",
+    message: "Instance registration token is required.",
+  }), async (request) => {
+    const next = AiSessionPersistenceSettingsInputSchema.parse(request.body || {});
+    aiSessionPersistenceSettings.put(next);
+    const history = aiSessionHistory.setRetentionLimit(next.historyLimit);
+    retainCodexTimelineHistory();
+    return { data: { applied: true, historyLimit: history.limit, removedHistoryCount: history.removed.length } };
   });
   const claudeControlSock = new ClaudeControlSockSessionBridge(aiSessions);
   aiSessionController.register(codexAppServer);
   aiSessionController.register(claudeControlSock);
+  const unsubscribeTimelineItems = aiSessionController.subscribeTimelineItems((timelineItem) => {
+    events.publish(AiSessionEventType.TimelineItem, AiSessionTimelineItemEventSchema.parse({
+      instanceId,
+      nodeId: process.env.TASK_HANDOFF_NODE_ID,
+      ...timelineItem,
+      generatedAt: new Date().toISOString(),
+    }));
+  });
+  app.addHook("onClose", async () => unsubscribeTimelineItems());
   aiSessionDiscovery.register(new ClaudeAppSessionBindingProvider());
   aiSessionDiscovery.register(claudeControlSock);
   aiSessionDiscovery.register(new TranscriptTailDiscoveryProvider());
@@ -762,6 +804,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       appSessions,
     });
     aiSessionHistoryLifecycle.activate(aiSessions.all(), appSessions);
+    retainCodexTimelineHistory();
   };
   const aiSessionRefreshScheduler = new AiSessionRefreshScheduler(
     refreshAiSessions,
@@ -1019,7 +1062,8 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       publishAiSessionSnapshot();
     }, Number(process.env.TASK_HANDOFF_AI_SESSION_PUBLISH_DEBOUNCE_MS) || 50);
   };
-  const stopAiSessionChangeListener = aiSessions.onChange(() => {
+  const stopAiSessionChangeListener = aiSessions.onChange((changeReason) => {
+    if (changeReason === "delete") retainCodexTimelineHistory();
     scheduleAiSessionPublish();
     for (const session of aiSessions.list()) {
       const previousStatus = aiSessionLifecycleById.get(session.id);
@@ -1214,7 +1258,13 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   });
 
   app.get("/api/instance/status", async () => {
-    const snapshot = await controlledInstanceSnapshot(appRuntime, storagePaths, aiSessions, triggers);
+    const snapshot = await controlledInstanceSnapshot(
+      appRuntime,
+      storagePaths,
+      aiSessions,
+      triggers,
+      aiSessionController.timelineCapabilities(),
+    );
     return {
       data: {
         id: process.env.TASK_HANDOFF_INSTANCE_ID,
@@ -1226,7 +1276,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   });
 
   app.get("/api/instance/capabilities", async () => ({
-    data: controlledInstanceCapabilities(appRuntime),
+    data: controlledInstanceCapabilities(appRuntime, aiSessionController.timelineCapabilities()),
   }));
 
   app.get("/api/workspace/status", async () => ({
@@ -1436,24 +1486,16 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   });
 
   app.get<{ Params: { id: string } }>("/api/ai-sessions/:id/timeline", async (request, reply) => {
-    const session = aiSessions.get(request.params.id);
-    if (!session) {
-      return reply.code(404).send({ error: { code: "AI_SESSION_NOT_FOUND", message: "AI session not found." } });
-    }
     try {
-      return { data: AiSessionTimelineSchema.parse(await codexAppServer.timeline(session)) };
+      return { data: AiSessionTimelineSchema.parse(await aiSessionController.timeline(request.params.id)) };
     } catch (error: unknown) {
       return sendAiSessionControlError(reply, error);
     }
   });
 
   app.get<{ Params: { id: string; turnId: string } }>("/api/ai-sessions/:id/turns/:turnId/timeline", async (request, reply) => {
-    const session = aiSessions.get(request.params.id);
-    if (!session) {
-      return reply.code(404).send({ error: { code: "AI_SESSION_NOT_FOUND", message: "AI session not found." } });
-    }
     try {
-      return { data: AiSessionTurnTimelineSchema.parse(await codexAppServer.turnTimeline(session, request.params.turnId)) };
+      return { data: AiSessionTurnTimelineSchema.parse(await aiSessionController.turnTimeline(request.params.id, request.params.turnId)) };
     } catch (error: unknown) {
       return sendAiSessionControlError(reply, error);
     }

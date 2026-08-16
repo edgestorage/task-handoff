@@ -6,7 +6,12 @@ import { AppRuntimeManager } from "@task-handoff/app-runtime/runtime";
 import { createAiSessionRegistry } from "@task-handoff/ai-session-runtime";
 import type { TaskHandoffStoragePaths } from "@task-handoff/core/storage/paths";
 import { controlledInstancePackageVersionResolver } from "@task-handoff/core/core/package-version";
-import { CONTROL_PLANE_PROTOCOL_VERSION } from "@task-handoff/protocol/control-plane";
+import {
+  CONTROL_PLANE_PROTOCOL_VERSION,
+  ControlledInstanceCapabilitiesSchema,
+  type AiSessionTimelineCapabilities,
+  type ControlledInstanceCapabilities,
+} from "@task-handoff/protocol/control-plane";
 import { TriggerStore } from "../triggers/store";
 
 // The controlled-instance artifact is hot-swapped inside an older base image.
@@ -179,11 +184,13 @@ export function workspaceStatus(paths: TaskHandoffStoragePaths) {
   };
 }
 
-export function controlledInstanceCapabilities(appRuntime: AppRuntimeManager) {
+export function controlledInstanceCapabilities(
+  appRuntime: AppRuntimeManager,
+  aiSessionTimeline: AiSessionTimelineCapabilities,
+): ControlledInstanceCapabilities {
   const inventory = appRuntime.appInventory();
   const available = inventory.items.filter((item) => item.availability === "available");
-  return {
-    protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+  return ControlledInstanceCapabilitiesSchema.parse({
     features: {
       appRuntime: true,
       tty: available.some((item) => item.kind === "tty"),
@@ -192,10 +199,10 @@ export function controlledInstanceCapabilities(appRuntime: AppRuntimeManager) {
       screenshots: available.some((item) => item.kind === "gui") && Boolean(executablePath("import")),
       logs: true,
       aiSessionWorkspaceSelection: true,
-      aiSessionTimeline: true,
-      aiSessionTurnTimeline: true,
+      aiSessionPersistenceSettings: true,
+      aiSessionTimeline,
     },
-  };
+  });
 }
 
 export function triggerSnapshot(triggers: TriggerStore) {
@@ -217,8 +224,9 @@ export function triggerSnapshot(triggers: TriggerStore) {
 export async function controlledInstanceSnapshot(
   appRuntime: AppRuntimeManager,
   paths: TaskHandoffStoragePaths,
-  aiSessions = createAiSessionRegistry(),
-  triggers?: TriggerStore,
+  aiSessions: ReturnType<typeof createAiSessionRegistry>,
+  triggers: TriggerStore | undefined,
+  aiSessionTimeline: AiSessionTimelineCapabilities,
 ) {
   const appSessions = appRuntime.listSessions();
   return {
@@ -228,7 +236,7 @@ export async function controlledInstanceSnapshot(
     protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
     build: buildInfo(),
     controlMode: (controlledMode() ? "controlled" : "standalone") as "standalone" | "controlled",
-    capabilities: controlledInstanceCapabilities(appRuntime),
+    capabilities: controlledInstanceCapabilities(appRuntime, aiSessionTimeline),
     appInventory: appRuntime.appInventory(),
     apps: {
       runningCount: appRuntime.runningSessionCount(),

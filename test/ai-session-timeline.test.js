@@ -20,31 +20,111 @@ require.extensions[".ts"] = (module, filename) => {
   }).outputText;
   module._compile(output, filename);
 };
-const { codexItemTimeline, codexThreadTimeline, mergeCodexTimelineItems } = require("../packages/ai-session-runtime/src/codex-app-server-protocol.ts");
+const { codexItemTimeline } = require("../packages/ai-session-runtime/src/codex-app-server-protocol.ts");
 const { CodexAppServerClient, CodexAppServerSessionBridge } = require("../packages/ai-session-runtime/src/codex-app-server.ts");
 const { createAiSessionRegistry } = require("../packages/ai-session-runtime/src/ai-session-registry.ts");
-const { CodexAppServerRpcError } = require("../packages/ai-session-runtime/src/codex-app-server/client/client.ts");
+const { CodexAppServerRpcError, codexPaginatedTimelineSupported } = require("../packages/ai-session-runtime/src/codex-app-server/client/client.ts");
+const { codexNotification } = require("../packages/ai-session-runtime/src/codex-app-server/protocol/events.ts");
 const { CodexTimelineStore } = require("../packages/ai-session-runtime/src/codex-app-server/session/timeline-store.ts");
+const { AiSessionController } = require("../packages/ai-session-runtime/src/ai-session-control.ts");
 const { AiSessionEventType, AiSessionTimelineSchema, AiSessionTurnTimelineSchema, mergeAiSessionTimelineItems } = require("../packages/protocol/src/ai-sessions.ts");
 const { AiSessionActionService } = require("../packages/control-plane/src/control-plane/sessions/ai-session-actions.ts");
 const { ControlPlaneAiSessionAggregator } = require("../packages/control-plane/src/control-plane/sessions/ai-session-aggregator.ts");
 const { NodeTunnelEventRouter } = require("../packages/control-plane/src/control-plane/nodes/tunnel-event-router.ts");
 
+test("AI session controller routes Timeline reads through provider capabilities", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-timeline-control-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const session = registry.start({ agent: "claude", appSessionId: "app-1", userPrompt: "Inspect" });
+  const controller = new AiSessionController(registry);
+  controller.register({
+    agent: "claude",
+    async timeline(current) {
+      return { sessionId: current.id, providerSessionId: "provider-1", items: [], generatedAt: "2026-08-16T00:00:00.000Z" };
+    },
+    async turnTimeline(current, turnId) {
+      return { sessionId: current.id, turnId, items: [], generatedAt: "2026-08-16T00:00:00.000Z" };
+    },
+    async interrupt(current) {
+      return { session: current, provider: "claude", action: "interrupt" };
+    },
+  });
+  assert.deepEqual(controller.timelineCapabilities(), {
+    sessionReadAgents: ["claude"],
+    turnReadAgents: ["claude"],
+    liveItemAgents: [],
+  });
+  assert.equal((await controller.timeline(session.id)).sessionId, session.id);
+  assert.equal((await controller.turnTimeline(session.id, "turn-1")).turnId, "turn-1");
+});
+
+test("AI session controller relays provider-neutral realtime Timeline items", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-timeline-events-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const controller = new AiSessionController(registry);
+  let providerListener;
+  controller.register({
+    agent: "future-agent",
+    subscribeTimelineItems(listener) {
+      providerListener = listener;
+      return () => { providerListener = undefined; };
+    },
+    async interrupt(session) {
+      return { session, provider: "future-agent", action: "interrupt" };
+    },
+  });
+  const received = [];
+  const unsubscribe = controller.subscribeTimelineItems((event) => received.push(event));
+  const event = {
+    sessionId: "session-1",
+    providerSessionId: "provider-1",
+    item: { id: "command-1", turnId: "turn-1", type: "activity", activityKind: "commandExecution", title: "Command" },
+  };
+  providerListener(event);
+  assert.deepEqual(received, [event]);
+  unsubscribe();
+  providerListener(event);
+  assert.equal(received.length, 1);
+});
+
+test("AI session controller advertises Timeline read and live-item capabilities independently", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-timeline-independent-capabilities-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const controller = new AiSessionController(registry);
+  controller.register({
+    agent: "turn-reader",
+    async turnTimeline(session, turnId) {
+      return { sessionId: session.id, turnId, items: [], generatedAt: "2026-08-16T00:00:00.000Z" };
+    },
+    async interrupt(session) {
+      return { session, provider: "turn-reader", action: "interrupt" };
+    },
+  });
+  controller.register({
+    agent: "live-only",
+    subscribeTimelineItems() {
+      return () => undefined;
+    },
+    async interrupt(session) {
+      return { session, provider: "live-only", action: "interrupt" };
+    },
+  });
+  assert.deepEqual(controller.timelineCapabilities(), {
+    sessionReadAgents: [],
+    turnReadAgents: ["turn-reader"],
+    liveItemAgents: ["live-only"],
+  });
+});
+
 test("Codex timeline preserves visible message and activity order without exposing reasoning", () => {
-  const timeline = codexThreadTimeline("ais_1", "thread_1", {
-    turns: [{
-      id: "turn_1",
-      status: "completed",
-      items: [
+  const timeline = codexItemTimeline("ais_1", "thread_1", [
         { id: "user_1", type: "userMessage", content: [{ type: "text", text: "Fix it" }] },
         { id: "reason_1", type: "reasoning", summary: ["Inspect the state"] },
         { id: "agent_1", type: "agentMessage", text: "I found the source." },
         { id: "cmd_1", type: "commandExecution", command: "rg appSessionId", cwd: "/workspace", status: "completed", aggregatedOutput: "one match", exitCode: 0, durationMs: 12 },
         { id: "agent_2", type: "agentMessage", text: "Fixed." },
         { id: "file_1", type: "fileChange", status: "completed", changes: [{ path: "/workspace/a.ts", kind: "update" }] },
-      ],
-    }],
-  }, "2026-08-15T00:00:00.000Z");
+  ].map((item) => ({ turnId: "turn_1", item })), "2026-08-15T00:00:00.000Z");
 
   assert.deepEqual(timeline.items.map((item) => item.type), [
     "user-message",
@@ -72,9 +152,10 @@ test("Codex timeline preserves visible message and activity order without exposi
 });
 
 test("unknown Codex items remain visible as generic activity", () => {
-  const timeline = codexThreadTimeline("ais_1", "thread_1", {
-    turns: [{ id: "turn_1", items: [{ id: "future_1", type: "futureActivity", secretInternalShape: true }] }],
-  });
+  const timeline = codexItemTimeline("ais_1", "thread_1", [{
+    turnId: "turn_1",
+    item: { id: "future_1", type: "futureActivity", secretInternalShape: true },
+  }]);
   assert.deepEqual(timeline.items, [{
     id: "future_1",
     turnId: "turn_1",
@@ -90,26 +171,21 @@ test("unknown Codex items remain visible as generic activity", () => {
   }]);
 });
 
-test("Codex timeline fills lagging thread reads from realtime tool items without duplicates", () => {
-  const thread = {
-    turns: [{
-      id: "turn_live",
-      items: [
+test("Codex timeline merges current-connection realtime items into authoritative history", () => {
+  const entries = [
         { id: "user_live", type: "userMessage", content: [{ type: "text", text: "Run it" }] },
         { id: "agent_live", type: "agentMessage", text: "I will inspect it." },
-      ],
-    }],
-  };
+  ].map((item) => ({ turnId: "turn_live", item }));
   const realtime = [{
     turnId: "turn_live",
     item: { id: "cmd_live", type: "commandExecution", command: "pnpm test", status: "completed", aggregatedOutput: "passed", exitCode: 0 },
   }];
-  const timeline = codexThreadTimeline("ais_live", "thread_live", thread, "2026-08-15T00:00:00.000Z", realtime);
+  const timeline = codexItemTimeline("ais_live", "thread_live", entries, "2026-08-15T00:00:00.000Z", realtime);
   assert.deepEqual(timeline.items.map((item) => item.id), ["user_live", "agent_live", "cmd_live"]);
   assert.equal(timeline.items.at(-1).output, "passed");
 
-  thread.turns[0].items.push(realtime[0].item);
-  const converged = codexThreadTimeline("ais_live", "thread_live", thread, "2026-08-15T00:00:01.000Z", realtime);
+  entries.push(realtime[0]);
+  const converged = codexItemTimeline("ais_live", "thread_live", entries, "2026-08-15T00:00:01.000Z", realtime);
   assert.equal(converged.items.filter((item) => item.id === "cmd_live").length, 1);
 });
 
@@ -125,50 +201,19 @@ test("live Timeline items use shared message ids as ordering anchors", () => {
   assert.deepEqual(merged.map((item) => item.id), ["message_progress", "command_live", "file_live", "message_final"]);
 });
 
-test("Codex v0.0.21 recovery aligns synthetic thread/read ids with authoritative item event ids", () => {
-  const snapshot = [
-    { id: "item-141", turnId: "turn-1", type: "user-message", text: "Question" },
-    { id: "item-142", turnId: "turn-1", type: "ai-message", text: "Checking" },
-    { id: "item-143", turnId: "turn-1", type: "activity", activityKind: "commandExecution", title: "Command", input: "pnpm test" },
-    { id: "item-144", turnId: "turn-1", type: "ai-message", text: "Done" },
-  ];
-  const itemEvents = [
-    { id: "user-real", turnId: "turn-1", type: "user-message", text: "Question" },
-    { id: "msg-progress", turnId: "turn-1", type: "ai-message", text: "Checking" },
-    { id: "exec-real", turnId: "turn-1", type: "activity", activityKind: "commandExecution", title: "Command", status: "completed", input: "pnpm test" },
-    { id: "msg-final", turnId: "turn-1", type: "ai-message", text: "Done" },
-  ];
-
-  const merged = mergeCodexTimelineItems(snapshot, itemEvents);
-  assert.deepEqual(merged.map((item) => item.id), ["user-real", "msg-progress", "exec-real", "msg-final"]);
-  assert.equal(merged[2].status, "completed");
-});
-
-test("Codex identity alignment preserves repeated equal messages as separate occurrences", () => {
-  const snapshot = [
-    { id: "item-1", turnId: "turn-1", type: "ai-message", text: "Still working" },
-    { id: "item-2", turnId: "turn-1", type: "ai-message", text: "Still working" },
-  ];
-  const itemEvents = [
-    { id: "msg-1", turnId: "turn-1", type: "ai-message", text: "Still working" },
-    { id: "msg-2", turnId: "turn-1", type: "ai-message", text: "Still working" },
-  ];
-  assert.deepEqual(mergeCodexTimelineItems(snapshot, itemEvents).map((item) => item.id), ["msg-1", "msg-2"]);
-});
-
-test("Codex realtime compensation does not append Commands after a later AI message", () => {
-  const thread = { turns: [{ id: "turn_live", items: [
+test("Codex current-connection realtime ordering does not append Commands after a later AI message", () => {
+  const entries = [
     { id: "message_progress", type: "agentMessage", text: "Checking" },
     { id: "file_live", type: "fileChange", status: "completed", changes: [{ path: "/workspace/a.ts" }] },
     { id: "message_final", type: "agentMessage", text: "Done" },
-  ] }] };
+  ].map((item) => ({ turnId: "turn_live", item }));
   const realtime = [
     { turnId: "turn_live", item: { id: "message_progress", type: "agentMessage", text: "Checking", status: "completed" } },
     { turnId: "turn_live", item: { id: "command_live", type: "commandExecution", command: "pnpm test", status: "completed" } },
     { turnId: "turn_live", item: { id: "file_live", type: "fileChange", status: "completed", changes: [{ path: "/workspace/a.ts" }] } },
     { turnId: "turn_live", item: { id: "message_final", type: "agentMessage", text: "Done", status: "completed" } },
   ];
-  const timeline = codexThreadTimeline("session_live", "thread_live", thread, "2026-08-15T00:00:00.000Z", realtime);
+  const timeline = codexItemTimeline("session_live", "thread_live", entries, "2026-08-15T00:00:00.000Z", realtime);
   assert.deepEqual(timeline.items.map((item) => item.id), ["message_progress", "command_live", "file_live", "message_final"]);
 });
 
@@ -208,7 +253,21 @@ test("Codex Timeline store restores item order and lifecycle updates after proce
   assert.equal(restored[1].output, "ok");
 });
 
-test("Codex bridge restores live item events after a full process restart without persisting reasoning", async () => {
+test("Codex Timeline store retains only provider sessions owned by AI session persistence", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-timeline-retain-"));
+  const store = new CodexTimelineStore(directory);
+  store.upsert("thread_active", { id: "message_active", turnId: "turn_1", type: "ai-message", text: "Active" });
+  store.upsert("thread_history", { id: "message_history", turnId: "turn_1", type: "ai-message", text: "History" });
+  store.upsert("thread_expired", { id: "message_expired", turnId: "turn_1", type: "ai-message", text: "Expired" });
+
+  assert.equal(store.retain(["thread_active", "thread_history"]), 1);
+  assert.deepEqual(store.items("thread_active").map((item) => item.id), ["message_active"]);
+  assert.deepEqual(store.items("thread_history").map((item) => item.id), ["message_history"]);
+  assert.deepEqual(store.items("thread_expired"), []);
+  assert.equal(fs.readdirSync(directory).length, 2);
+});
+
+test("legacy Codex restores adapter-owned item events after a full process restart", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-timeline-restart-"));
   const registryPath = path.join(root, "ai-sessions");
   const timelineStorePath = path.join(root, "timeline");
@@ -237,31 +296,19 @@ test("Codex bridge restores live item events after a full process restart withou
   const session = firstRegistry.getByProviderSessionId("codex", snapshot.id);
   assert.ok(session);
 
-  firstClient.emit("event", {
-    type: "tool-item-started",
+  const command = { type: "commandExecution", id: "command_live", command: "pnpm test" };
+  firstClient.emit("event", codexNotification("item/started", {
     threadId: snapshot.id,
     turnId: "turn_restart",
-    item: { id: "command_live", type: "commandExecution", command: "pnpm test" },
-    timelineItem: { id: "command_live", type: "commandExecution", command: "pnpm test", status: "inProgress" },
-    tool: { id: "command_live", kind: "commandExecution", name: "Command" },
-  });
-  firstClient.emit("event", {
-    type: "timeline-item",
+    item: command,
+  }));
+  firstClient.emit("event", codexNotification("item/completed", {
     threadId: snapshot.id,
     turnId: "turn_restart",
-    timelineItem: { id: "reasoning_live", type: "reasoning", summary: ["private chain of thought"], status: "completed" },
-  });
-  firstClient.emit("event", {
-    type: "tool-item-completed",
-    threadId: snapshot.id,
-    turnId: "turn_restart",
-    item: { id: "command_live", type: "commandExecution", command: "pnpm test", aggregatedOutput: "ok", exitCode: 0 },
-    timelineItem: { id: "command_live", type: "commandExecution", command: "pnpm test", status: "completed", aggregatedOutput: "ok", exitCode: 0 },
-    tool: { id: "command_live", kind: "commandExecution", name: "Command" },
-  });
+    item: { ...command, aggregatedOutput: "ok", exitCode: 0 },
+  }));
   const beforeRestart = await firstBridge.timeline(session);
   assert.deepEqual(beforeRestart.items.map((item) => item.id), ["message_before", "command_live"]);
-  assert.equal(beforeRestart.items[1].status, "completed");
   firstBridge.stop();
 
   const secondRegistry = createAiSessionRegistry({ dir: registryPath });
@@ -270,19 +317,70 @@ test("Codex bridge restores live item events after a full process restart withou
   const restoredSession = secondRegistry.getByProviderSessionId("codex", snapshot.id);
   assert.ok(restoredSession);
   const afterRestart = await secondBridge.timeline(restoredSession);
-
-  assert.deepEqual(
-    JSON.parse(JSON.stringify(afterRestart.items)),
-    JSON.parse(JSON.stringify(beforeRestart.items)),
-  );
-  assert.equal(JSON.stringify(fs.readdirSync(timelineStorePath).map((name) => fs.readFileSync(path.join(timelineStorePath, name), "utf8"))).includes("reasoning_live"), false);
+  assert.deepEqual(JSON.parse(JSON.stringify(afterRestart.items)), JSON.parse(JSON.stringify(beforeRestart.items)));
   secondBridge.stop();
+});
+
+test("legacy Codex uses thread/read plus adapter-owned item history without calling native item history", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-timeline-unsupported-"));
+  const snapshot = {
+    id: "thread_unsupported",
+    cwd: "/workspace",
+    status: { type: "idle" },
+    turns: [{
+      id: "turn_old",
+      status: "completed",
+      items: [{ id: "command_old", type: "commandExecution", command: "pnpm test" }],
+    }],
+  };
+  let reads = 0;
+  let itemReads = 0;
+  class UnsupportedTimelineCodexClient extends EventEmitter {
+    async start() {}
+    async listLoadedThreadIds() { return [snapshot.id]; }
+    async readThread() { reads += 1; return snapshot; }
+    async listThreadItems() { itemReads += 1; return undefined; }
+    stop() {}
+  }
+
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const client = new UnsupportedTimelineCodexClient();
+  const timelineStorePath = path.join(root, "timeline");
+  const bridge = new CodexAppServerSessionBridge(registry, client, { timelineStorePath });
+  await bridge.sync();
+  const session = registry.getByProviderSessionId("codex", snapshot.id);
+  assert.ok(session);
+  const discoveryReads = reads;
+  assert.deepEqual(bridge.timelineCapabilities(), {
+    sessionRead: true,
+    turnRead: true,
+    liveItems: true,
+  });
+  const command = { type: "commandExecution", id: "command_new", command: "pnpm test" };
+  client.emit("event", codexNotification("item/started", {
+    threadId: snapshot.id,
+    turnId: "turn_new",
+    item: command,
+  }));
+  client.emit("event", codexNotification("item/completed", {
+    threadId: snapshot.id,
+    turnId: "turn_new",
+    item: { ...command, aggregatedOutput: "passed", exitCode: 0 },
+  }));
+  const timeline = await bridge.timeline(session);
+  assert.deepEqual(timeline.items.map((item) => item.id), ["command_old", "command_new"]);
+  assert.equal(timeline.items[1].output, "passed");
+  assert.equal(JSON.stringify(fs.readdirSync(timelineStorePath).map((name) => fs.readFileSync(path.join(timelineStorePath, name), "utf8"))).includes("command_new"), true);
+  assert.equal(reads, discoveryReads + 1);
+  assert.equal(itemReads, 0);
+  bridge.stop();
 });
 
 test("Codex bridge returns one authoritative turn Timeline", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-turn-timeline-"));
   const snapshot = {
     id: "thread_turn_timeline",
+    historyMode: "paginated",
     cwd: "/workspace",
     status: { type: "idle" },
     turns: [
@@ -304,10 +402,15 @@ test("Codex bridge returns one authoritative turn Timeline", async () => {
   }
 
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
-  const bridge = new CodexAppServerSessionBridge(registry, new TurnTimelineCodexClient(), {
-    timelineStorePath: path.join(root, "timeline"),
-  });
+  const client = new TurnTimelineCodexClient();
+  const timelineStorePath = path.join(root, "timeline");
+  const bridge = new CodexAppServerSessionBridge(registry, client, { timelineStorePath });
   await bridge.sync();
+  assert.deepEqual(bridge.timelineCapabilities(), {
+    sessionRead: true,
+    turnRead: true,
+    liveItems: true,
+  });
   const session = registry.getByProviderSessionId("codex", snapshot.id);
   assert.ok(session);
   const publicTurn = session.turns.find((turn) => turn.providerTurnId === "turn_2" || turn.id === "turn_2");
@@ -316,6 +419,12 @@ test("Codex bridge returns one authoritative turn Timeline", async () => {
   assert.deepEqual(requestedTurns, ["turn_2"]);
   assert.deepEqual(timeline.items.map((item) => item.id), ["message_2"]);
   assert.equal(timeline.turnId, publicTurn.id);
+  client.emit("event", codexNotification("item/started", {
+    threadId: snapshot.id,
+    turnId: "turn_3",
+    item: { type: "commandExecution", id: "native_command", command: "pnpm test" },
+  }));
+  assert.equal(fs.existsSync(timelineStorePath), false);
   bridge.stop();
 });
 
@@ -334,6 +443,36 @@ test("Codex client pages through the persistent single-item history", async () =
   assert.equal(requests[0].params.turnId, null);
 });
 
+test("Codex paginated Timeline support follows the source-backed release boundary", () => {
+  assert.equal(codexPaginatedTimelineSupported(undefined), false);
+  assert.equal(codexPaginatedTimelineSupported("codex-cli/0.144.1 (Darwin)"), false);
+  assert.equal(codexPaginatedTimelineSupported("codex-cli/0.145.0-alpha.17"), false);
+  assert.equal(codexPaginatedTimelineSupported("codex-cli/0.145.0-alpha.18"), true);
+  assert.equal(codexPaginatedTimelineSupported("codex-cli 0.145.0"), true);
+  assert.equal(codexPaginatedTimelineSupported("codex-cli/1.0.0"), true);
+});
+
+test("Codex client requests paginated history only from supporting versions", async () => {
+  const start = async (userAgent) => {
+    const client = new CodexAppServerClient();
+    client.serverUserAgent = userAgent;
+    let params;
+    client.request = async (method, value) => {
+      assert.equal(method, "thread/start");
+      params = value;
+      return { thread: { id: `thread-${userAgent}`, cwd: "/workspace", ephemeral: false, historyMode: value.historyMode || "legacy" } };
+    };
+    await client.startThread({
+      cwd: "/workspace",
+      ...(client.supportsPaginatedTimeline() ? { historyMode: "paginated" } : {}),
+    });
+    return params;
+  };
+
+  assert.equal((await start("codex-cli/0.144.1")).historyMode, undefined);
+  assert.equal((await start("codex-cli/0.145.0-alpha.18")).historyMode, "paginated");
+});
+
 test("Codex client asks persistent history for only one turn", async () => {
   const client = new CodexAppServerClient();
   const requests = [];
@@ -346,14 +485,14 @@ test("Codex client asks persistent history for only one turn", async () => {
   assert.equal(requests[0].params.turnId, "turn_2");
 });
 
-test("Codex client falls back when v0.0.21 lacks persistent single-item history", async () => {
+test("Codex client disables Timeline reads when thread/items/list is unsupported", async () => {
   const client = new CodexAppServerClient();
   let requests = 0;
   client.request = async () => {
     requests += 1;
     throw new CodexAppServerRpcError("unsupported", -32601);
   };
-  assert.equal(await client.listThreadItems("thread_legacy"), undefined);
+  assert.equal(await client.listThreadItems("thread_native"), undefined);
   assert.equal(await client.listThreadItems("thread_legacy"), undefined);
   assert.equal(requests, 1);
 });
@@ -374,10 +513,14 @@ test("real Codex app-server exposes restart-safe persistent Timeline items", {
   }
 });
 
-test("Timeline forwarding is capability-gated for v0.0.21 compatibility", async () => {
+test("complete-session Timeline forwarding is capability-gated by the canonical document", async () => {
   let requestedPath = "";
   const service = new AiSessionActionService({
-    requireInstance: async () => ({ capabilities: { features: { aiSessionTimeline: true } } }),
+    requireInstance: async () => ({ capabilities: { features: { aiSessionTimeline: {
+      sessionReadAgents: ["codex"],
+      turnReadAgents: [],
+      liveItemAgents: [],
+    } } } }),
     request: async (_instance, route) => {
       requestedPath = route;
       return { sessionId: "ais_1", providerSessionId: "thread_1", items: [], generatedAt: "2026-08-15T00:00:00.000Z" };
@@ -389,19 +532,23 @@ test("Timeline forwarding is capability-gated for v0.0.21 compatibility", async 
   assert.equal(requestedPath, "/ai-sessions/ais_1/timeline");
   assert.equal(timeline.sessionId, "ais_1");
 
-  const legacy = new AiSessionActionService({
+  const unsupported = new AiSessionActionService({
     requireInstance: async () => ({ capabilities: { features: {} } }),
     request: async () => { throw new Error("must not forward"); },
     requireRuntime: async () => ({}),
     refreshSnapshots: async () => undefined,
   });
-  await assert.rejects(() => legacy.timeline("instance_legacy", "ais_1"), (error) => error.code === "AI_SESSION_TIMELINE_UNSUPPORTED");
+  await assert.rejects(() => unsupported.timeline("instance_unsupported", "ais_1"), (error) => error.code === "AI_SESSION_TIMELINE_UNSUPPORTED");
 });
 
 test("per-turn Timeline forwarding is independently capability-gated", async () => {
   let requestedPath = "";
   const service = new AiSessionActionService({
-    requireInstance: async () => ({ capabilities: { features: { aiSessionTurnTimeline: true } } }),
+    requireInstance: async () => ({ capabilities: { features: { aiSessionTimeline: {
+      sessionReadAgents: [],
+      turnReadAgents: ["codex"],
+      liveItemAgents: [],
+    } } } }),
     request: async (_instance, route) => {
       requestedPath = route;
       return { sessionId: "ais_1", turnId: "turn_2", items: [], generatedAt: "2026-08-15T00:00:00.000Z" };
@@ -413,16 +560,52 @@ test("per-turn Timeline forwarding is independently capability-gated", async () 
   assert.equal(requestedPath, "/ai-sessions/ais_1/turns/turn_2/timeline");
   assert.equal(AiSessionTurnTimelineSchema.safeParse(timeline).success, true);
 
-  const legacy = new AiSessionActionService({
-    requireInstance: async () => ({ capabilities: { features: { aiSessionTimeline: true } } }),
+  const unsupported = new AiSessionActionService({
+    requireInstance: async () => ({ capabilities: { features: { aiSessionTimeline: {
+      sessionReadAgents: ["codex"],
+      turnReadAgents: [],
+      liveItemAgents: [],
+    } } } }),
     request: async () => { throw new Error("must not forward"); },
     requireRuntime: async () => ({}),
     refreshSnapshots: async () => undefined,
   });
   await assert.rejects(
-    () => legacy.turnTimeline("instance_legacy", "ais_1", "turn_2"),
+    () => unsupported.turnTimeline("instance_unsupported", "ais_1", "turn_2"),
     (error) => error.code === "AI_SESSION_TURN_TIMELINE_UNSUPPORTED",
   );
+});
+
+test("Timeline forwarding accepts provider-scoped capabilities", async () => {
+  const requested = [];
+  const service = new AiSessionActionService({
+    requireInstance: async () => ({
+      capabilities: {
+        features: {
+          aiSessionTimeline: {
+            sessionReadAgents: ["future-agent"],
+            turnReadAgents: ["future-agent"],
+            liveItemAgents: [],
+          },
+        },
+      },
+    }),
+    request: async (_instance, route) => {
+      requested.push(route);
+      if (route.endsWith("/timeline") && route.includes("/turns/")) {
+        return { sessionId: "ais_1", turnId: "turn_1", items: [], generatedAt: "2026-08-16T00:00:00.000Z" };
+      }
+      return { sessionId: "ais_1", providerSessionId: "provider_1", items: [], generatedAt: "2026-08-16T00:00:00.000Z" };
+    },
+    requireRuntime: async () => ({}),
+    refreshSnapshots: async () => undefined,
+  });
+  await service.timeline("instance_1", "ais_1");
+  await service.turnTimeline("instance_1", "ais_1", "turn_1");
+  assert.deepEqual(requested, [
+    "/ai-sessions/ais_1/timeline",
+    "/ai-sessions/ais_1/turns/turn_1/timeline",
+  ]);
 });
 
 test("control-plane tunnel forwards a validated single Timeline item event", async () => {

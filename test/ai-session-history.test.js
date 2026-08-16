@@ -27,6 +27,7 @@ const {
   sanitizeAiSessionHistoryIndex,
 } = require("../packages/ai-session-runtime/src/ai-session-history-store.ts");
 const { AiSessionHistoryLifecycle } = require("../packages/ai-session-runtime/src/ai-session-history-lifecycle.ts");
+const { AiSessionPersistenceSettingsStore } = require("../packages/controlled-instance/src/web/ai-session-persistence-settings.ts");
 const { AiSessionResumeCoordinator } = require("../packages/ai-session-runtime/src/ai-session-resume.ts");
 const { createAiSessionRegistry } = require("../packages/ai-session-runtime/src/ai-session-registry.ts");
 const { sanitizePersistedAiSession } = require("../packages/ai-session-runtime/src/ai-session/persistence.ts");
@@ -75,6 +76,29 @@ test("AI session history store keeps the newest 50 Task Handoff entries", () => 
   assert.equal(items.at(-1).id, "ai-1");
   assert.equal(items.some((item) => item.id === "ai-0"), false);
   assert.equal(fs.readdirSync(path.join(path.dirname(store.path()), "details")).length, 50);
+});
+
+test("AI session history retention limit is configurable and removes evicted details", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-history-configurable-limit-"));
+  const store = new AiSessionHistoryStore({ dataDir: root }, { limit: 3 });
+  for (let index = 0; index < 3; index += 1) {
+    store.upsert(historyItem(index), [{ id: `turn-${index}`, status: "completed", lastMessage: `Answer ${index}` }]);
+  }
+
+  const result = store.setRetentionLimit(2);
+  assert.equal(result.limit, 2);
+  assert.deepEqual(result.removed.map((item) => item.id), ["ai-0"]);
+  assert.deepEqual(store.list().map((item) => item.id), ["ai-2", "ai-1"]);
+  assert.equal(fs.readdirSync(path.join(path.dirname(store.path()), "details")).length, 2);
+});
+
+test("controlled instance persists the applied AI session history limit", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-history-settings-"));
+  const first = new AiSessionPersistenceSettingsStore({ dataDir: root });
+  assert.equal(first.get().historyLimit, 50);
+  first.put({ historyLimit: 120 });
+  assert.equal(new AiSessionPersistenceSettingsStore({ dataDir: root }).get().historyLimit, 120);
+  assert.throws(() => first.put({ historyLimit: 501 }));
 });
 
 test("AI session history details persist normalized turns and isolate damaged files", () => {

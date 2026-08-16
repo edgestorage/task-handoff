@@ -317,7 +317,7 @@ export const instances = {
     none: "无", notReported: "未报告", configurationTitle: "配置", configurationDescription: "实例级 agent 配置和新会话默认值。",
     instanceName: "实例名称", instanceNameDescription: "用于在控制面板中识别此实例。", autoImport: "自动导入 agent 配置",
     autoImportDescription: "实例启动时导入支持的 agent 配置。", sessionPermissions: "新 Codex 会话权限",
-    sessionPermissionsDescription: "用于初始化新会话的输入区；现有会话保留各自选择。", askApproval: "请求批准", approveForMe: "自动批准", fullAccess: "完全访问",
+    sessionPermissionsDescription: "用于初始化新会话的输入区；现有会话保留各自选择。", aiSessionHistoryLimit: "AI 会话历史保留数量", aiSessionHistoryLimitDescription: "在实例中保留指定数量的已关闭 AI 会话及其旧版 Timeline 历史（1–500）。", aiSessionHistoryLimitUnsupported: "升级节点代理和受管实例后才能配置历史保留数量。", askApproval: "请求批准", approveForMe: "自动批准", fullAccess: "完全访问",
     saving: "正在保存", saveChanges: "保存更改", generalSaved: "常规设置已保存。", modelSelection: "模型选择",
     modelSelectionDescription: "分配前会将控制面板模型部署到此实例的节点；节点本地模型仅在所属节点可用。更改会在下次启动或重启时生效。",
     noModel: "不使用模型", globalDefault: "全局默认", invalidModel: "保存的选择已删除、已禁用或属于其他应用。请选择模型或全局默认。", unavailableModel: "不可用 · {id}", effectiveModel: "当前生效：{name}",

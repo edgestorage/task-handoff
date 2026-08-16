@@ -16,6 +16,13 @@ require.extensions[".ts"] = (module, filename) => {
 };
 
 const { controlledInstanceCapabilities, runtimeDiagnostics } = require("../packages/controlled-instance/src/web/status.ts");
+const {
+  ControlledInstanceCapabilitiesSchema,
+  normalizeControlledInstanceCapabilities,
+  supportsAiSessionPersistenceSettings,
+  supportsAiSessionTimelineCapability,
+  supportsAiSessionWorkspaceSelection,
+} = require("../packages/protocol/src/control-plane.ts");
 
 function storagePaths(root) {
   const paths = {
@@ -73,9 +80,46 @@ test("instance capabilities are projected from available inventory items", () =>
         { id: "chromium", kind: "gui", availability: "missing-dependency" },
       ],
     }),
+  }, {
+    sessionReadAgents: ["codex"],
+    turnReadAgents: ["codex"],
+    liveItemAgents: ["codex"],
   });
   assert.equal(capabilities.features.tty, true);
   assert.equal(capabilities.features.gui, false);
   assert.equal(capabilities.features.browser, false);
   assert.equal(capabilities.features.screenshots, false);
+  assert.equal(capabilities.features.aiSessionPersistenceSettings, true);
+  assert.equal(supportsAiSessionPersistenceSettings(capabilities), true);
+  assert.deepEqual(capabilities.features.aiSessionTimeline, {
+    sessionReadAgents: ["codex"],
+    turnReadAgents: ["codex"],
+    liveItemAgents: ["codex"],
+  });
+  assert.equal(ControlledInstanceCapabilitiesSchema.safeParse(capabilities).success, true);
+  assert.equal("protocolVersion" in capabilities, false);
+});
+
+test("controlled instance capability normalization isolates malformed feature domains", () => {
+  const malformed = {
+    futureDocumentField: "preserved",
+    features: {
+      aiSessionWorkspaceSelection: true,
+      aiSessionTimeline: true,
+      futureFeature: { enabled: true },
+    },
+  };
+  assert.equal(ControlledInstanceCapabilitiesSchema.safeParse(malformed).success, false);
+
+  const normalized = normalizeControlledInstanceCapabilities(malformed);
+  assert.equal(supportsAiSessionWorkspaceSelection(normalized), true);
+  assert.equal(supportsAiSessionPersistenceSettings(normalized), false);
+  assert.equal(supportsAiSessionTimelineCapability(normalized, "codex", "session-read"), false);
+  assert.deepEqual(normalized.features.aiSessionTimeline, {
+    sessionReadAgents: [],
+    turnReadAgents: [],
+    liveItemAgents: [],
+  });
+  assert.deepEqual(normalized.features.futureFeature, { enabled: true });
+  assert.equal(normalized.futureDocumentField, "preserved");
 });

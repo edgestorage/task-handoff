@@ -56,8 +56,16 @@ test("model settings discovers models into a searchable picker while preserving 
   const settings = read("src/apps/control-plane/settings/SettingsModal.vue");
   const state = read("src/apps/control-plane/settings/useModelSettings.ts");
   assert.match(settings, /<ControlPlaneInput v-model="settingsModel\.model"/);
-  assert.match(settings, /<CommandInput :placeholder="t\('settings\.modelRegistry\.searchModels'\)"/);
+  assert.match(settings, /<PopoverContent[\s\S]*class="model-picker-popover"[\s\S]*:collision-padding="12"[\s\S]*:style="\{ width: 'min\(360px, var\(--reka-popover-content-available-width\)\)', padding: '4px' \}"/);
+  assert.match(settings, /<Command class="model-picker-command"[\s\S]*<CommandInput class="model-picker-search-input" :placeholder="t\('settings\.modelRegistry\.searchModels'\)"/);
+  assert.match(settings, /<ScrollArea class="model-picker-scroll" :horizontal="false">[\s\S]*<CommandList class="model-picker-list">/);
   assert.match(settings, /v-for="option in discoveredModels"/);
+  assert.match(settings, /<span>\{\{ option\.id \}\}<\/span>[\s\S]*<Check :size="14"/);
+  assert.match(settings, /:global\(\.model-picker-popover\) \{[\s\S]*grid-template-rows: minmax\(0, 1fr\);[\s\S]*height: min\(360px, var\(--reka-popover-content-available-height\)\);[\s\S]*overflow: hidden;[\s\S]*padding: 4px;/);
+  assert.match(settings, /\.model-picker-command :deep\(\[cmdk-input-wrapper\]\) \{[\s\S]*height: 34px;[\s\S]*margin: 2px 2px 4px;[\s\S]*padding: 0 9px;/);
+  assert.match(settings, /\.model-picker-scroll \{[\s\S]*min-height: 0;[\s\S]*max-height: none;/);
+  assert.match(settings, /\.model-picker-group \{\s*padding: 0;\s*\}/);
+  assert.match(settings, /\.model-picker-option:hover,[\s\S]*\.model-picker-option:focus-visible,[\s\S]*\.model-picker-option\[data-highlighted\] \{[\s\S]*background: var\(--surface-active\);/);
   assert.match(settings, /@click="fetchModelOptions"/);
   assert.match(settings, /@click="checkModel"/);
   assert.match(state, /discoverModels\(endpointDraft\(\), endpointNodeId\(\)\)/);

@@ -35,7 +35,12 @@ import {
   type AiSessionResumeResult,
   type AiSessionSendMode,
 } from "@task-handoff/protocol/ai-sessions";
-import type { ControlledInstance, NodeRuntime } from "@task-handoff/protocol/control-plane";
+import {
+  aiSessionTimelineCapabilityAgents,
+  supportsAiSessionWorkspaceSelection,
+  type ControlledInstance,
+  type NodeRuntime,
+} from "@task-handoff/protocol/control-plane";
 import { parseResponse } from "@task-handoff/protocol/response-validation";
 import {
   RepositoryAiSessionWorkspaceSchema,
@@ -74,7 +79,6 @@ export class AiSessionActionService {
 
   async timeline(instanceId: string, aiSessionId: string): Promise<AiSessionTimeline> {
     const instance = await this.options.requireInstance(instanceId);
-    // Compatibility for v0.0.21: Timeline is an optional controlled-instance capability.
     if (!instanceSupportsAiSessionTimeline(instance)) {
       throw aiSessionTimelineUnsupported();
     }
@@ -300,25 +304,15 @@ export class AiSessionActionService {
 }
 
 function instanceSupportsAiSessionWorkspaceSelection(instance: ControlledInstance) {
-  const features = instance.capabilities?.features;
-  return Boolean(features && typeof features === "object" && !Array.isArray(features)
-    && (features as Record<string, unknown>).aiSessionWorkspaceSelection === true);
+  return supportsAiSessionWorkspaceSelection(instance.capabilities);
 }
 
 function instanceSupportsAiSessionTimeline(instance: ControlledInstance) {
-  const features = instance.capabilities && typeof instance.capabilities === "object"
-    ? (instance.capabilities as Record<string, unknown>).features
-    : undefined;
-  return Boolean(features && typeof features === "object"
-    && (features as Record<string, unknown>).aiSessionTimeline === true);
+  return aiSessionTimelineCapabilityAgents(instance.capabilities, "session-read").length > 0;
 }
 
 function instanceSupportsAiSessionTurnTimeline(instance: ControlledInstance) {
-  const features = instance.capabilities && typeof instance.capabilities === "object"
-    ? (instance.capabilities as Record<string, unknown>).features
-    : undefined;
-  return Boolean(features && typeof features === "object"
-    && (features as Record<string, unknown>).aiSessionTurnTimeline === true);
+  return aiSessionTimelineCapabilityAgents(instance.capabilities, "turn-read").length > 0;
 }
 
 function aiSessionTimelineUnsupported() {

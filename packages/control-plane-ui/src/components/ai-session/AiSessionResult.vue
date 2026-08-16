@@ -42,6 +42,7 @@
         :tool-calls-since-last-message="session.toolCallsSinceLastMessage"
         :tone="tone"
         :activities="activities"
+        :nodes="activityNodes"
         :error="activityError"
         :interactive="activityInteractive"
         :loading="activityLoading"
@@ -157,6 +158,7 @@ const props = withDefaults(defineProps<{
   session: AiSessionSummary;
   tone?: "detail" | "board";
   activities?: AiSessionTimelineActivity[];
+  activityNodes?: TimelineTurnNode[];
   activityHistory?: TimelineTurnNode[];
   activityHistoryStatus?: "idle" | "loading" | "ready" | "stale" | "error";
   activityHistoryError?: string;
@@ -172,6 +174,7 @@ const props = withDefaults(defineProps<{
   responseContent: "",
   tone: "detail",
   activities: () => [],
+  activityNodes: () => [],
   activityHistory: () => [],
   activityHistoryStatus: "ready",
   activityHistoryError: "",

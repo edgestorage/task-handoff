@@ -55,6 +55,7 @@ const { AiSessionDiscoveryCoordinator } = require("../packages/ai-session-runtim
 const { AiSessionHistoryStore } = require("../packages/ai-session-runtime/src/ai-session-history-store.ts");
 const { CodexAppServerClient, CodexAppServerSessionBridge } = require("../packages/ai-session-runtime/src/codex-app-server.ts");
 const { CodexAppServerApprovalCoordinator } = require("../packages/ai-session-runtime/src/codex-app-server/session/approval-coordinator.ts");
+const { CodexTimelineStore } = require("../packages/ai-session-runtime/src/codex-app-server/session/timeline-store.ts");
 const { CodexAppServerConnectionManager } = require("../packages/ai-session-runtime/src/codex-app-server/client/connection-manager.ts");
 const { CodexAppServerSessionDiscovery } = require("../packages/ai-session-runtime/src/codex-app-server/session/discovery.ts");
 const { ClaudeControlSockSessionBridge } = require("../packages/ai-session-runtime/src/claude-control-sock.ts");
@@ -3429,9 +3430,11 @@ test("codex app server bridge emits complete timeline items, preserves identity,
   }
   const fake = new FakeCodexAppServerClient();
   const items = [];
+  const providerItems = [];
   const bridge = new CodexAppServerSessionBridge(registry, fake, {
     onTimelineItem: (event) => items.push(event.item),
   });
+  bridge.subscribeTimelineItems((event) => providerItems.push(event.item));
   await bridge.sync();
 
   const command = { type: "commandExecution", id: "cmd_live", command: "pnpm test" };
@@ -3444,6 +3447,7 @@ test("codex app server bridge emits complete timeline items, preserves identity,
     ["cmd_live", "completed"],
   ]);
   assert.equal(items[1].output, "passed");
+  assert.deepEqual(providerItems, items);
   assert.equal(reasoning, undefined);
 });
 
@@ -6367,6 +6371,27 @@ test("controlled instance refreshes managed model auth through its registration-
   const paths = appRuntimeTestPaths(root);
   const codexHome = path.join(root, ".codex");
   const claudeHome = path.join(root, ".claude");
+  const history = new AiSessionHistoryStore(paths, { limit: 3 });
+  const timelinePath = path.join(paths.dataDir, "ai-session-timeline", "codex");
+  const timeline = new CodexTimelineStore(timelinePath);
+  for (let index = 0; index < 3; index += 1) {
+    const timestamp = new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString();
+    history.upsert({
+      id: `ai-managed-${index}`,
+      agent: "codex",
+      creationSource: "ai-session",
+      providerSessionId: `thread-managed-${index}`,
+      cwd: "/workspace",
+      lastActiveAt: timestamp,
+      archivedAt: timestamp,
+    }, [{ id: `turn-managed-${index}`, status: "completed", lastMessage: `Done ${index}` }]);
+    timeline.upsert(`thread-managed-${index}`, {
+      id: `message-managed-${index}`,
+      turnId: `turn-managed-${index}`,
+      type: "ai-message",
+      text: `Done ${index}`,
+    });
+  }
   const restoreEnv = withWebStorageEnv(paths, {
     TASK_HANDOFF_WEB_AUTH: "off",
     TASK_HANDOFF_CONTROL_MODE: "controlled",
@@ -6456,6 +6481,28 @@ test("controlled instance refreshes managed model auth through its registration-
       claudeAuthConfigured: true,
       configUpdated: true,
     });
+    const forbiddenPersistenceSettings = await app.inject({
+      method: "PUT",
+      url: "/api/internal/ai-session-persistence-settings",
+      payload: { historyLimit: 2 },
+    });
+    assert.equal(forbiddenPersistenceSettings.statusCode, 403);
+    const appliedPersistenceSettings = await app.inject({
+      method: "PUT",
+      url: "/api/internal/ai-session-persistence-settings",
+      headers: { authorization: "Bearer instance-registration-token" },
+      payload: { historyLimit: 2 },
+    });
+    assert.equal(appliedPersistenceSettings.statusCode, 200);
+    assert.deepEqual(appliedPersistenceSettings.json().data, {
+      applied: true,
+      historyLimit: 2,
+      removedHistoryCount: 1,
+    });
+    assert.equal(JSON.parse(fs.readFileSync(path.join(paths.dataDir, "ai-session-persistence", "settings.json"), "utf8")).historyLimit, 2);
+    assert.deepEqual(new AiSessionHistoryStore(paths, { limit: 2 }).list().map((item) => item.id), ["ai-managed-2", "ai-managed-1"]);
+    assert.equal(fs.readdirSync(path.join(paths.dataDir, "ai-session-history", "details")).length, 2);
+    assert.equal(fs.readdirSync(timelinePath).length, 2);
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(codexHome, "auth.json"), "utf8")), {
       auth_mode: "apikey",
       OPENAI_API_KEY: "rotated-managed-key",

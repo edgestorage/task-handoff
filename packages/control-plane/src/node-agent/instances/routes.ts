@@ -25,7 +25,7 @@ type Operations = {
   sanitizeReport(id: string, report: "register" | "heartbeat", input: unknown): unknown;
   afterCreate(instance: ControlledInstance): void;
   afterImageRetry(instance: ControlledInstance): void;
-  afterUpdate(instance: ControlledInstance): void;
+  afterUpdate(instance: ControlledInstance): void | Promise<void>;
   afterReport(instance: ControlledInstance, report: "register" | "heartbeat"): void;
 };
 
@@ -49,7 +49,7 @@ export function registerInstanceManagementRoutes(app: FastifyInstance, operation
       (request.params as { id: string }).id,
       UpdateNodeInstanceSchema.parse(request.body),
     );
-    operations.afterUpdate(instance);
+    await operations.afterUpdate(instance);
     return { data: instance };
   });
 

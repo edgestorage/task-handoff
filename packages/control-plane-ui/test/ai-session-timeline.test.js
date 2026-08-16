@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
+import { supportsAiSessionTimelineCapability } from "@task-handoff/protocol/control-plane";
 import { compactTimelineForTurn, conversationTimelineTurns, groupTimelineTurns } from "../src/components/ai-session/timelineActivities.ts";
+import { shouldDeferTurnTimelineLoad } from "../src/components/ai-session/timelineLoading.ts";
 import { useAiSessionTimelineStore } from "../src/apps/control-plane/useAiSessionTimelineStore.ts";
 
 const panelUrl = new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.vue", import.meta.url);
@@ -31,9 +33,9 @@ test("live Timeline store replaces item lifecycle updates in place", () => {
 test("turn Timeline cache merges authoritative snapshots with live item upserts", () => {
   const store = useAiSessionTimelineStore();
   const turn = { id: "turn-public", providerTurnId: "turn-provider" };
-  store.beginTurnLoad("instance-cache", "session-cache", turn.id);
+  store.beginTurnLoad("instance-cache", "session-cache", turn);
   assert.equal(store.turnState("instance-cache", "session-cache", turn).status, "loading");
-  store.resolveTurn("instance-cache", "session-cache", turn.id, [{
+  store.resolveTurn("instance-cache", "session-cache", turn, [{
     id: "cmd-cache",
     turnId: "turn-provider",
     type: "activity",
@@ -70,6 +72,195 @@ test("turn Timeline cache merges authoritative snapshots with live item upserts"
   });
 });
 
+test("realtime Turn state excludes unavailable history snapshots and read errors", () => {
+  const store = useAiSessionTimelineStore();
+  const instanceId = "instance-realtime-only";
+  const sessionId = "session-realtime-only";
+  const turn = { id: "turn-public", providerTurnId: "turn-provider" };
+  store.cleanupInstance(instanceId);
+  store.resolveTurn(instanceId, sessionId, turn, [{
+    id: "old-command",
+    turnId: "turn-provider",
+    type: "activity",
+    activityKind: "commandExecution",
+    title: "Old command",
+    status: "completed",
+  }]);
+  store.rejectTurn(instanceId, sessionId, turn, "Timeline unsupported");
+  store.apply({
+    instanceId,
+    sessionId,
+    providerSessionId: "thread-realtime-only",
+    generatedAt: "2026-08-16T00:00:00.000Z",
+    item: {
+      id: "live-command",
+      turnId: "turn-provider",
+      type: "activity",
+      activityKind: "commandExecution",
+      title: "Live command",
+      status: "running",
+    },
+  });
+
+  assert.deepEqual(store.realtimeTurnState(instanceId, sessionId, turn), {
+    status: "ready",
+    items: [{
+      id: "live-command",
+      turnId: "turn-provider",
+      type: "activity",
+      activityKind: "commandExecution",
+      title: "Live command",
+      status: "running",
+    }],
+  });
+  assert.equal(store.turnState(instanceId, sessionId, turn).status, "error");
+  assert.deepEqual(
+    store.turnState(instanceId, sessionId, turn).items.map((item) => item.id),
+    ["old-command", "live-command"],
+  );
+  store.cleanupInstance(instanceId);
+});
+
+test("live Timeline buckets are bounded and snapshots compact live events into the Turn cache", () => {
+  const store = useAiSessionTimelineStore();
+  store.recoverConnection();
+  const base = {
+    instanceId: "instance-bounded",
+    sessionId: "session-bounded",
+    providerSessionId: "thread-bounded",
+    generatedAt: "2026-08-15T00:00:00.000Z",
+  };
+  for (let index = 0; index <= 500; index += 1) {
+    store.apply({
+      ...base,
+      item: {
+        id: `cmd-${index}`,
+        turnId: `turn-${index}`,
+        type: "activity",
+        activityKind: "commandExecution",
+        title: "Command",
+        status: "completed",
+      },
+    });
+  }
+  assert.equal(store.items(base.instanceId, base.sessionId).length, 500);
+  assert.equal(store.items(base.instanceId, base.sessionId).some((item) => item.id === "cmd-0"), false);
+  const latestTurn = { id: "turn-public-500", providerTurnId: "turn-500" };
+  store.resolveTurn(base.instanceId, base.sessionId, latestTurn, [{
+    id: "cmd-500",
+    turnId: "turn-500",
+    type: "activity",
+    activityKind: "commandExecution",
+    title: "Command",
+    status: "running",
+  }]);
+  assert.equal(store.items(base.instanceId, base.sessionId).some((item) => item.id === "cmd-500"), false);
+  assert.equal(store.turnState(base.instanceId, base.sessionId, latestTurn).items[0]?.id, "cmd-500");
+  assert.equal(store.turnState(base.instanceId, base.sessionId, latestTurn).items[0]?.status, "completed");
+});
+
+test("a single live Turn retains only its newest bounded item window", () => {
+  const store = useAiSessionTimelineStore();
+  const instanceId = "instance-single-turn-bound";
+  const sessionId = "session-single-turn-bound";
+  store.cleanupInstance(instanceId);
+  for (let index = 0; index <= 500; index += 1) {
+    store.apply({
+      instanceId,
+      sessionId,
+      providerSessionId: "thread-single-turn-bound",
+      generatedAt: "2026-08-16T00:00:00.000Z",
+      item: {
+        id: `cmd-${index}`,
+        turnId: "turn-single",
+        type: "activity",
+        activityKind: "commandExecution",
+        title: "Command",
+        status: "completed",
+      },
+    });
+  }
+  const items = store.items(instanceId, sessionId);
+  assert.equal(items.length, 500);
+  assert.equal(items.some((item) => item.id === "cmd-0"), false);
+  assert.equal(items.some((item) => item.id === "cmd-500"), true);
+  store.apply({
+    instanceId,
+    sessionId,
+    providerSessionId: "thread-single-turn-bound",
+    generatedAt: "2026-08-16T00:00:01.000Z",
+    item: {
+      id: "cmd-0",
+      turnId: "turn-single",
+      type: "activity",
+      activityKind: "commandExecution",
+      title: "Command",
+      status: "completed",
+      output: "late lifecycle update",
+    },
+  });
+  assert.equal(store.items(instanceId, sessionId).some((item) => item.id === "cmd-0"), false);
+  store.cleanupInstance(instanceId);
+});
+
+test("snapshot cache eviction does not delete a newer live Turn bucket", () => {
+  const store = useAiSessionTimelineStore();
+  const instanceId = "instance-independent-lru";
+  const sessionId = "session-independent-lru";
+  const activeTurn = { id: "turn-active", providerTurnId: "provider-turn-active" };
+  store.cleanupInstance(instanceId);
+  store.resolveTurn(instanceId, sessionId, activeTurn, []);
+  store.apply({
+    instanceId,
+    sessionId,
+    providerSessionId: "thread-independent-lru",
+    generatedAt: "2026-08-16T00:00:00.000Z",
+    item: {
+      id: "cmd-active",
+      turnId: "provider-turn-active",
+      type: "activity",
+      activityKind: "commandExecution",
+      title: "Command",
+      status: "running",
+    },
+  });
+  for (let index = 0; index < 500; index += 1) {
+    store.beginTurnLoad(instanceId, sessionId, { id: `other-${index}` });
+  }
+  assert.equal(
+    store.turnState(instanceId, sessionId, activeTurn).items.some((item) => item.id === "cmd-active"),
+    true,
+  );
+  store.cleanupInstance(instanceId);
+});
+
+test("latest live Turn defers HTTP Timeline loading until it completes", () => {
+  const completed = { id: "turn-1", status: "completed" };
+  for (const status of ["queued", "running", "waiting"]) {
+    const latest = { id: "turn-2", providerTurnId: "provider-turn-2", status };
+    assert.equal(shouldDeferTurnTimelineLoad([completed, latest], latest, true), true);
+    assert.equal(shouldDeferTurnTimelineLoad([completed, latest], { ...latest, id: "public-alias" }, true), true);
+    assert.equal(shouldDeferTurnTimelineLoad([completed, latest], completed, true), false);
+    assert.equal(shouldDeferTurnTimelineLoad([completed, latest], latest, false), false);
+  }
+  assert.equal(shouldDeferTurnTimelineLoad([completed, { id: "turn-2", status: "completed" }], { id: "turn-2", status: "completed" }, true), false);
+  assert.equal(shouldDeferTurnTimelineLoad([completed, { id: "turn-2", status: "failed" }], { id: "turn-2", status: "failed" }, true), false);
+});
+
+test("Timeline capabilities are provider-scoped, independent, and queried through the protocol model", () => {
+  const current = { features: { aiSessionTimeline: {
+    sessionReadAgents: ["claude"],
+    turnReadAgents: ["turn-only"],
+    liveItemAgents: ["live-only"],
+  } } };
+  assert.equal(supportsAiSessionTimelineCapability(current, "claude", "session-read"), true);
+  assert.equal(supportsAiSessionTimelineCapability(current, "turn-only", "turn-read"), true);
+  assert.equal(supportsAiSessionTimelineCapability(current, "live-only", "live-items"), true);
+  assert.equal(supportsAiSessionTimelineCapability(current, "codex", "session-read"), false);
+  assert.equal(supportsAiSessionTimelineCapability({ features: {} }, "codex", "session-read"), false);
+  assert.equal(supportsAiSessionTimelineCapability({ features: { aiSessionTimeline: true } }, "codex", "session-read"), false);
+});
+
 test("AI session turns render immediately while Timeline loads per turn", () => {
   const panel = fs.readFileSync(panelUrl, "utf8");
   const result = fs.readFileSync(new URL("../src/components/ai-session/AiSessionResult.vue", import.meta.url), "utf8");
@@ -77,8 +268,12 @@ test("AI session turns render immediately while Timeline loads per turn", () => 
   assert.match(panel, /:turn-timelines="conversationTurnTimelines"/);
   assert.match(panel, /@load-turn-timeline="loadTurnTimeline"/);
   assert.match(panel, /getAiSessionTurnTimeline\(instanceId, session\.id, turn\.id\)/);
-  assert.match(panel, /Compatibility for v0\.0\.21:[\s\S]*state\.status === "ready" \|\| state\.status === "loading"[\s\S]*loadFullTimelineForSession\(session, true\)/);
+  assert.match(panel, /async function loadTurnTimeline[\s\S]*shouldDeferTurnTimelineLoad\(turns, turn, supportsAiSessionLiveTimelineItems\.value\)/);
+  assert.match(panel, /if \(!supportsAiSessionTurnTimeline\.value\)[\s\S]*state\.status === "ready" \|\| state\.status === "loading"[\s\S]*loadFullTimelineForSession\(session, true\)/);
+  assert.match(panel, /selectedTimelineTurn\.value\.id}:\$\{selectedTimelineTurn\.value\.status}/);
   assert.match(panel, /class="session-ai-detail-actions-view-mode"[\s\S]*:model-value="effectiveTimelineViewMode"/);
+  assert.match(panel, /supportsAiSessionTimelineCapability/);
+  assert.doesNotMatch(panel, /supportsAiSessionTimeline && selectedSession\.agent === 'codex'/);
   const panelStyles = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.css", import.meta.url), "utf8");
   assert.doesNotMatch(panelStyles, /\.session-ai-detail-head-actions \.session-ai-timeline-mode/);
   assert.match(panelStyles, /\.session-ai-detail-actions-view-mode/);
@@ -86,6 +281,7 @@ test("AI session turns render immediately while Timeline loads per turn", () => 
   assert.doesNotMatch(result, /requestActivityTimeline/);
   assert.match(panel, /selectedTurnTimelineState\.status/);
   assert.match(panel, /timelineItemStore\.turnState\(props\.instance\.id, session\.id, turn\)/);
+  assert.match(panel, /supportsAiSessionTimelineReads\.value[\s\S]*timelineItemStore\.realtimeTurnState/);
   assert.doesNotMatch(board, /AiSessionTimelineView|getAiSessionTimeline/);
 });
 
@@ -103,8 +299,7 @@ test("conversation Timeline composes every turn from the same compact result com
   assert.match(timeline, /turn\.lastMessage\?\.trim\(\)/);
   assert.doesNotMatch(timeline, /projected\?\.latestResponse|projected\?\.userMessages/);
   assert.match(timeline, /loadVisibleTurnTimelines/);
-  assert.match(timeline, /sourceTurn\.status === "queued" \|\| sourceTurn\.status === "running" \|\| sourceTurn\.status === "waiting"/);
-  assert.match(timeline, /liveLatestTurn && turn\.timelineStatus === "idle"/);
+  assert.doesNotMatch(timeline, /shouldDeferTurnTimelineLoad/);
   assert.match(timeline, /props\.session\.turns\?\.map\(\(turn\) => `\$\{turn\.id\}:\$\{turn\.status\}`\)\.join\("\|"\)/);
   assert.match(timeline, /\.ai-session-timeline-turn \{[\s\S]*gap: 24px;/);
   assert.match(timeline, /\.ai-session-timeline-message\[data-role="user-message"\] \{[\s\S]*justify-self: end;[\s\S]*width: fit-content;[\s\S]*max-width: min\(78%, 620px\);[\s\S]*border-radius: 14px;[\s\S]*background: var\(--surface-hover\);[\s\S]*padding: 12px 14px;/);
@@ -178,7 +373,9 @@ test("conversation Timeline composes every turn from the same compact result com
   assert.match(group, /:title="activityHoverText\(activity\)"/);
   assert.doesNotMatch(group, /ai-session-activity-dot/);
   assert.match(group, /border-left: 1px solid var\(--line-subtle\)/);
-  assert.match(history, /\.ai-session-turn-history-content \{[\s\S]*gap: 6px;[\s\S]*margin: 6px 0 0 7px;[\s\S]*padding-left: 12px;[\s\S]*border-left: 1px solid var\(--line-subtle\);/);
+  assert.match(history, /\.ai-session-turn-history-content \{[\s\S]*gap: 12px;[\s\S]*margin: 12px 0 0 7px;[\s\S]*padding-left: 12px;[\s\S]*border-left: 1px solid var\(--line-subtle\);/);
+  assert.match(history, /\.ai-session-turn-history-message :deep\(\.markdown-content > :first-child\) \{ margin-top: 0; \}/);
+  assert.match(history, /\.ai-session-turn-history-message :deep\(\.markdown-content > :last-child\) \{ margin-bottom: 0; \}/);
   assert.match(history, /v-else class="ai-session-turn-history-status ai-session-turn-history-empty"[\s\S]*sessions\.timeline\.noEarlierProcess/);
   assert.match(history, /<LoaderCircle class="ai-session-turn-history-loading-icon" :size="15"/);
   assert.match(history, /<Minus :size="15"/);
@@ -258,11 +455,40 @@ test("compact Timeline keeps user messages inserted after the primary prompt in 
   assert.equal(compact.history.some((node) => node.id === "user-primary"), false);
 });
 
+test("compact Timeline preserves follow-up user messages after the latest AI response in the live process", () => {
+  const compact = compactTimelineForTurn([
+    { id: "user-primary", turnId: "turn-1", type: "user-message", text: "initial prompt" },
+    { id: "ai-latest", turnId: "turn-1", type: "ai-message", text: "current answer" },
+    { id: "activity-before", turnId: "turn-1", type: "activity", activityKind: "commandExecution", title: "Command" },
+    { id: "user-followup", turnId: "turn-1", type: "user-message", text: "additional direction" },
+    { id: "activity-after", turnId: "turn-1", type: "activity", activityKind: "fileChange", title: "File change" },
+  ], { id: "turn-1" });
+
+  assert.deepEqual(compact.activityNodes.map((node) => node.id), [
+    "activities:activity-before",
+    "user-followup",
+    "activities:activity-after",
+  ]);
+  assert.deepEqual(compact.activities.map((activity) => activity.id), ["activity-before", "activity-after"]);
+});
+
+test("compact Timeline preserves follow-up user messages before the first AI response", () => {
+  const compact = compactTimelineForTurn([
+    { id: "user-primary", turnId: "turn-1", type: "user-message", text: "initial prompt" },
+    { id: "activity-before", turnId: "turn-1", type: "activity", activityKind: "commandExecution", title: "Command" },
+    { id: "user-followup", turnId: "turn-1", type: "user-message", text: "additional direction" },
+  ], { id: "turn-1" });
+
+  assert.deepEqual(compact.activityNodes.map((node) => node.id), ["activities:activity-before", "user-followup"]);
+  assert.equal(compact.activityNodes.some((node) => node.id === "user-primary"), false);
+});
+
 test("compact mode renders history, latest AI response, then only the live activity expansion", () => {
   const panel = fs.readFileSync(panelUrl, "utf8");
   const result = fs.readFileSync(new URL("../src/components/ai-session/AiSessionResult.vue", import.meta.url), "utf8");
   assert.match(panel, /aiSessionTurns\(session\)\[promptIndexFor\(session\)\]/);
   assert.match(panel, /:activities="selectedTurnTimeline\.activities"/);
+  assert.match(panel, /:activity-nodes="selectedTurnTimeline\.activityNodes"/);
   assert.match(panel, /:activity-history="selectedTurnTimeline\.history"/);
   assert.match(result, /<AiSessionTurnHistory[\s\S]*<section[\s\S]*class="ai-session-detail-response"[\s\S]*<AiSessionToolActivity/);
   assert.match(result, /<AiSessionTurnHistory\s+v-if="activityHistory\.length \|\| !active"/);

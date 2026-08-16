@@ -16,6 +16,7 @@ import {
   InstanceResourceMetricsEventType,
   sanitizeCrossVersionControlledInstanceHeartbeat,
   sanitizeCrossVersionControlledInstanceRegister,
+  supportsAiSessionPersistenceSettings,
   type BuildInfo,
   type ControlledInstance,
   type InstanceResourceMetrics,
@@ -529,6 +530,39 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   );
   const updateCommandRunner = options.updateCommandRunner || options.dockerCommandRunner || defaultCommandRunner;
   const fetchImpl = options.fetchImpl || fetch;
+  const aiSessionPersistenceSyncKeys = new Map<string, string>();
+  const syncAiSessionPersistenceSettings = async (id: string) => {
+    const instance = state.requireInstance(id);
+    if (!supportsAiSessionPersistenceSettings(instance.capabilities)
+      || instance.targetStatus !== "reachable"
+      || !instance.target.web
+      || !instance.registrationToken) return false;
+    const syncKey = `${instance.processIncarnationId || "unknown"}:${instance.config.aiSessionHistoryLimit}`;
+    if (aiSessionPersistenceSyncKeys.get(id) === syncKey) return true;
+    let response: Response;
+    try {
+      response = await fetchWithTimeout(fetchImpl, `${nodeLocalInstanceWebBase(instance)}/api/internal/ai-session-persistence-settings`, {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${instance.registrationToken}`,
+        },
+        body: JSON.stringify({ historyLimit: instance.config.aiSessionHistoryLimit }),
+      }, DEFAULT_AUTO_IMPORT_AGENT_CONFIG_TIMEOUT_MS);
+    } catch (error) {
+      lifecycleLoggers.warn({
+        instanceId: id,
+        error: error instanceof Error ? error.message : String(error),
+      }, "node instance AI session persistence settings live sync deferred");
+      return false;
+    }
+    if (!response.ok) {
+      lifecycleLoggers.warn({ instanceId: id, statusCode: response.status }, "node instance AI session persistence settings live sync deferred");
+      return false;
+    }
+    aiSessionPersistenceSyncKeys.set(id, syncKey);
+    return true;
+  };
   const artifactResolver = new RuntimeArtifactResolver({ cacheDir: path.join(paths.dataDir, "runtime-artifacts"), fetchImpl });
   const releaseResolver = options.resolveRuntimeArtifactRelease
     || ((version: string, targetPlatform: string, targetArch: string) => resolvePublishedRuntimeArtifact(version, targetPlatform, targetArch, fetchImpl));
@@ -934,7 +968,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       platform: finalComputerPlatform(platform),
       arch: process.arch,
       protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
-      capabilities: { modelEndpointProbe: true },
+      capabilities: { modelEndpointProbe: true, aiSessionHistoryLimit: true },
       build: buildInfo("node-agent"),
       instanceProxy: { ...instanceProxyMetrics },
       serverTime: new Date().toISOString(),
@@ -1012,9 +1046,13 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       eventForwarder.syncNow();
       provisionInstanceImage(instance);
     },
-    afterUpdate: () => eventForwarder.syncNow(),
+    afterUpdate: async (instance) => {
+      eventForwarder.syncNow();
+      await syncAiSessionPersistenceSettings(instance.id);
+    },
     afterReport: (instance, report) => {
       eventForwarder.syncNow();
+      void syncAiSessionPersistenceSettings(instance.id);
       if (report === "register") {
         logDiagnostic({ instanceId: instance.id, action: report, protocolVersion: instance.protocolVersion, build: instance.build, targetStatus: instance.targetStatus, targetStrategy: instance.target.strategy }, "node instance registered");
       } else {
@@ -1068,6 +1106,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     forgetRecovery: (id) => recoverySupervisor.forgetInstance(id),
     completeSuppressedRecovery: (id) => recoverySupervisor.completeSuppressedOperation(id),
     deleteMetadata: (id) => {
+      aiSessionPersistenceSyncKeys.delete(id);
       state.modelRegistry.deleteInstanceMetadata(id);
       state.instancePrivateConfigs.delete(id);
     },

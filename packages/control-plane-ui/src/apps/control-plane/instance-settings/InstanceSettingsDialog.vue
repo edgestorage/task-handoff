@@ -78,8 +78,22 @@
                       <ControlPlaneSelectItem value="full-access">{{ t("instances.settings.fullAccess") }}</ControlPlaneSelectItem>
                     </ControlPlaneSelect>
                   </label>
+                  <label class="instance-settings-name-control">
+                    <span>
+                      <strong>{{ t("instances.settings.aiSessionHistoryLimit") }}</strong>
+                      <small>{{ historyLimitSupported ? t("instances.settings.aiSessionHistoryLimitDescription") : t("instances.settings.aiSessionHistoryLimitUnsupported") }}</small>
+                    </span>
+                    <ControlPlaneInput
+                      v-model="aiSessionHistoryLimit"
+                      type="number"
+                      min="1"
+                      :max="AI_SESSION_HISTORY_MAX_LIMIT"
+                      step="1"
+                      :disabled="savingGeneral || !historyLimitSupported"
+                    />
+                  </label>
                 </div>
-                <Button size="sm" :disabled="savingGeneral || !generalChanged || !validInstanceName" @click="saveGeneral">
+                <Button size="sm" :disabled="savingGeneral || !generalChanged || !validInstanceName || !validHistoryLimit" @click="saveGeneral">
                   {{ savingGeneral ? t("instances.settings.saving") : t("instances.settings.saveChanges") }}
                 </Button>
               </div>
@@ -243,7 +257,7 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { Bot, Boxes, Code2, Cpu, Globe2, LoaderCircle, Monitor, RefreshCw, SlidersHorizontal, TerminalSquare, X } from "@lucide/vue";
-import type { AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
+import { AI_SESSION_HISTORY_MAX_LIMIT, type AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
 import type { AppManagementJob, AppManagementOperation, AppManagementSnapshot, InstanceBoardItem, ManagedAppProjection, ModelApp, ModelConfig, ModelSelection, UpdateControlledInstanceInput } from "../../../api/types";
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
 import { Badge } from "../../../components/ui/badge";
@@ -288,6 +302,7 @@ const section = ref<InstanceSettingsSection>("general");
 const instanceName = ref("");
 const autoImportAgentConfigs = ref(true);
 const defaultCodexPermissionMode = ref<AiSessionPermissionMode>("ask");
+const aiSessionHistoryLimit = ref("50");
 const modelSelection = ref<ModelSelection>({});
 const savingGeneral = ref(false);
 const savingModels = ref(false);
@@ -304,8 +319,27 @@ const generalChanged = computed(() => Boolean(props.instance && (
   instanceName.value.trim() !== props.instance.name
   || autoImportAgentConfigs.value !== props.instance.config.autoImportAgentConfigs
   || defaultCodexPermissionMode.value !== props.instance.config.defaultCodexPermissionMode
+  || (historyLimitSupported.value && Number(aiSessionHistoryLimit.value) !== props.instance.config.aiSessionHistoryLimit)
 )));
 const validInstanceName = computed(() => instanceName.value.trim().length > 0);
+const validHistoryLimit = computed(() => {
+  const value = Number(aiSessionHistoryLimit.value);
+  return !historyLimitSupported.value || (Number.isInteger(value) && value >= 1 && value <= AI_SESSION_HISTORY_MAX_LIMIT);
+});
+const historyLimitSupported = computed(() => {
+  const instance = props.instance;
+  if (!instance) return false;
+  const nodeAgent = instance.node?.capabilities?.agent;
+  const nodeCapabilities = nodeAgent && typeof nodeAgent === "object" && !Array.isArray(nodeAgent)
+    ? (nodeAgent as Record<string, unknown>).capabilities
+    : undefined;
+  const nodeSupported = Boolean(nodeCapabilities && typeof nodeCapabilities === "object" && !Array.isArray(nodeCapabilities)
+    && (nodeCapabilities as Record<string, unknown>).aiSessionHistoryLimit === true);
+  const features = instance.capabilities?.features;
+  const instanceSupported = Boolean(features && typeof features === "object" && !Array.isArray(features)
+    && (features as Record<string, unknown>).aiSessionPersistenceSettings === true);
+  return nodeSupported && instanceSupported;
+});
 const modelsChanged = computed(() => JSON.stringify(normalizedSelection(modelSelection.value)) !== JSON.stringify(normalizedSelection(props.instance?.modelSelection || {})));
 const inventoryState = computed<"current" | "stale" | "not-reported" | "empty" | "degraded">(() => {
   const inventory = props.instance?.appInventory;
@@ -345,6 +379,7 @@ watch(
     instanceName.value = props.instance.name;
     autoImportAgentConfigs.value = props.instance.config.autoImportAgentConfigs;
     defaultCodexPermissionMode.value = props.instance.config.defaultCodexPermissionMode;
+    aiSessionHistoryLimit.value = String(props.instance.config.aiSessionHistoryLimit);
     modelSelection.value = { ...props.instance.modelSelection };
     error.value = "";
     success.value = "";
@@ -419,7 +454,7 @@ function normalizedSelection(value: ModelSelection): ModelSelection {
 }
 
 async function saveGeneral() {
-  if (!props.instance || savingGeneral.value || !validInstanceName.value) return;
+  if (!props.instance || savingGeneral.value || !validInstanceName.value || !validHistoryLimit.value) return;
   savingGeneral.value = true;
   error.value = "";
   success.value = "";
@@ -429,6 +464,7 @@ async function saveGeneral() {
       config: {
         autoImportAgentConfigs: autoImportAgentConfigs.value,
         defaultCodexPermissionMode: defaultCodexPermissionMode.value,
+        ...(historyLimitSupported.value ? { aiSessionHistoryLimit: Number(aiSessionHistoryLimit.value) } : {}),
       },
     });
     instanceName.value = instanceName.value.trim();
@@ -437,6 +473,7 @@ async function saveGeneral() {
     instanceName.value = props.instance.name;
     autoImportAgentConfigs.value = props.instance.config.autoImportAgentConfigs;
     defaultCodexPermissionMode.value = props.instance.config.defaultCodexPermissionMode;
+    aiSessionHistoryLimit.value = String(props.instance.config.aiSessionHistoryLimit);
     error.value = translateApiError(cause, t);
   } finally {
     savingGeneral.value = false;

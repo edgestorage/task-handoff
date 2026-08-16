@@ -218,19 +218,27 @@
                       <ChevronsUpDown :size="14" />
                     </Button>
                   </PopoverTrigger>
-                  <PopoverContent class="model-picker-popover" align="end" :side-offset="6">
-                    <Command :model-value="settingsModel.model" @update:model-value="selectDiscoveredModel">
-                      <CommandInput :placeholder="t('settings.modelRegistry.searchModels')" />
-                      <CommandList>
-                        <CommandEmpty>{{ t("settings.modelRegistry.noModelMatches") }}</CommandEmpty>
-                        <CommandGroup>
-                          <CommandItem v-for="option in discoveredModels" :key="option.id" :value="option.id">
-                            <Check :size="14" :class="{ 'model-option-unselected': option.id !== settingsModel.model }" />
-                            <span>{{ option.id }}</span>
-                            <small v-if="option.ownedBy">{{ option.ownedBy }}</small>
-                          </CommandItem>
-                        </CommandGroup>
-                      </CommandList>
+                  <PopoverContent
+                    class="model-picker-popover"
+                    align="end"
+                    :collision-padding="12"
+                    :side-offset="6"
+                    :style="{ width: 'min(360px, var(--reka-popover-content-available-width))', padding: '4px' }"
+                  >
+                    <Command class="model-picker-command" :model-value="settingsModel.model" @update:model-value="selectDiscoveredModel">
+                      <CommandInput class="model-picker-search-input" :placeholder="t('settings.modelRegistry.searchModels')" />
+                      <ScrollArea class="model-picker-scroll" :horizontal="false">
+                        <CommandList class="model-picker-list">
+                          <CommandEmpty>{{ t("settings.modelRegistry.noModelMatches") }}</CommandEmpty>
+                          <CommandGroup class="model-picker-group">
+                            <CommandItem v-for="option in discoveredModels" :key="option.id" class="model-picker-option" :value="option.id">
+                              <span>{{ option.id }}</span>
+                              <small v-if="option.ownedBy">{{ option.ownedBy }}</small>
+                              <Check :size="14" :class="{ 'model-option-unselected': option.id !== settingsModel.model }" />
+                            </CommandItem>
+                          </CommandGroup>
+                        </CommandList>
+                      </ScrollArea>
                     </Command>
                   </PopoverContent>
                 </Popover>
@@ -2560,15 +2568,98 @@ function errorText(error: unknown) {
   padding: 0;
 }
 
-.model-picker-popover {
+:global(.model-picker-popover) {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
   width: min(360px, var(--reka-popover-content-available-width));
-  max-height: min(360px, var(--reka-popover-content-available-height));
+  height: min(360px, var(--reka-popover-content-available-height));
+  overflow: hidden;
+  border-color: var(--line);
+  background: var(--surface-raised);
+  padding: 4px;
+}
+
+.model-picker-command {
+  display: grid;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+  border-radius: 7px;
+  background: transparent;
+}
+
+.model-picker-command :deep([cmdk-input-wrapper]) {
+  height: 34px;
+  gap: 7px;
+  margin: 2px 2px 4px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 7px;
+  background: var(--surface-inset);
+  padding: 0 9px;
+}
+
+.model-picker-command :deep([cmdk-input-wrapper]:focus-within) {
+  border-color: var(--focus-ring);
+}
+
+.model-picker-command :deep([cmdk-input-wrapper] > svg) {
+  width: 14px;
+  height: 14px;
+  margin-right: 0;
+}
+
+.model-picker-search-input {
+  height: 32px;
+  padding: 0;
+  font-size: 12px;
+}
+
+.model-picker-scroll {
+  min-height: 0;
+  max-height: none;
+}
+
+.model-picker-scroll :deep([data-task-handoff-scroll-viewport]) {
+  padding-right: 8px;
+}
+
+.model-picker-list {
+  max-height: none;
+  overflow: visible;
+}
+
+.model-picker-group {
   padding: 0;
 }
 
-.model-picker-popover [cmdk-list] {
-  max-height: 280px;
-  overflow-y: auto;
+.model-picker-option {
+  min-height: 32px;
+  border-radius: 6px;
+  cursor: pointer;
+  padding: 5px 8px;
+  font-size: 12px;
+}
+
+.model-picker-option:hover,
+.model-picker-option:focus-visible,
+.model-picker-option[data-highlighted] {
+  background: var(--surface-active);
+  color: var(--text-strong);
+}
+
+.model-picker-option[data-state="checked"] {
+  background: var(--surface-active);
+  color: var(--status-success);
+}
+
+.model-picker-option > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-picker-option > span + svg {
+  margin-left: auto;
 }
 
 .model-picker-popover small {
