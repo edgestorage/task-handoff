@@ -7,6 +7,7 @@ const dock = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessi
 const panel = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.vue", import.meta.url), "utf8");
 const result = fs.readFileSync(new URL("../src/components/ai-session/AiSessionResult.vue", import.meta.url), "utf8");
 const message = fs.readFileSync(new URL("../src/components/ai-session/AiSessionStreamingMarkdown.vue", import.meta.url), "utf8");
+const timeline = fs.readFileSync(new URL("../src/components/ai-session/AiSessionTimelineView.vue", import.meta.url), "utf8");
 const animatedText = fs.readFileSync(new URL("../src/components/ai-session/AiSessionAnimatedTextNode.vue", import.meta.url), "utf8");
 const codeBlock = fs.readFileSync(new URL("../src/components/ai-session/AiSessionCodeBlock.vue", import.meta.url), "utf8");
 const markdownNode = fs.readFileSync(new URL("../src/components/ai-session/AiSessionMarkdownNode.vue", import.meta.url), "utf8");
@@ -48,10 +49,15 @@ test("detail exposes an intent-aware shadcn return-to-latest control", () => {
   assert.match(panel, /ref="detailBottomAnchorEl" class="session-ai-detail-bottom-anchor"/);
   assert.match(panel, /@layout-will-change="beginDetailLayoutAnchor"/);
   assert.match(panel, /@layout-committed="commitDetailLayoutAnchor"/);
+  assert.match(panel, /function commitDetailLayoutAnchor\(\) \{[\s\S]*?detailLayoutAnchor\.commit\(\);[\s\S]*?scrollFollow\?\.notifyContentResize\(\);/);
+  assert.match(timeline, /watch\(virtualTotalSize,[\s\S]*?emit\("layoutCommitted"\)/);
+  assert.match(panel, /function pauseDetailScrollFollow\(event: WheelEvent \| TouchEvent\)[\s\S]*?event instanceof TouchEvent \|\| event\.deltaY < 0[\s\S]*?scrollFollow\?\.stopFollowing\(\)/);
   assert.match(result, /onBeforeUpdate\([\s\S]*emit\("layoutWillChange", turnElement\.value\)/);
   assert.match(result, /onUpdated\([\s\S]*emit\("layoutCommitted", turnElement\.value\)/);
   assert.match(panel, /data-task-handoff-scroll-viewport/);
   assert.match(panel, /watch\(\(\) => `\$\{props\.instance\.id\}\\u0000\$\{selectedSession\.value\?\.id \|\| ""\}`/);
+  assert.match(panel, /onMounted\(\(\) => \{[\s\S]*if \(!detailScrollViewport\) observeDetailScroll\(\);/);
+  assert.match(panel, /isFollowingLatest\.value = true;[\s\S]*isSmoothFollowingLatest\.value = false;[\s\S]*scrollFollow\?\.jumpLatest\(\);[\s\S]*handleDetailScroll\(\);/);
 });
 
 test("streaming Markdown uses markstream pacing with independent character reveal", () => {

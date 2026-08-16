@@ -1,6 +1,6 @@
 <template>
   <div v-if="loading && !nodes.length" class="ai-session-turn-history-status" aria-busy="true">
-    <ChevronRight :size="15" />
+    <LoaderCircle class="ai-session-turn-history-loading-icon" :size="15" aria-hidden="true" />
     <span>{{ t("sessions.timeline.earlierProcessLoading") }}</span>
   </div>
   <button v-else-if="error && !nodes.length" type="button" class="ai-session-turn-history-status ai-session-turn-history-retry" @click="$emit('retry')">
@@ -14,19 +14,27 @@
     </summary>
     <div class="ai-session-turn-history-content">
       <template v-for="node in nodes" :key="node.id">
-        <article v-if="node.type === 'message'" class="ai-session-turn-history-message">
+        <article
+          v-if="node.type === 'message'"
+          class="ai-session-turn-history-message"
+          :class="{ 'ai-session-turn-history-message-user': node.message.type === 'user-message' }"
+        >
           <MarkdownContent :content="node.message.text" :code-tools="markdownCodeTools" />
         </article>
         <AiSessionActivityGroup v-else :activities="node.activities" />
       </template>
     </div>
   </details>
+  <div v-else class="ai-session-turn-history-status ai-session-turn-history-empty">
+    <Minus :size="15" aria-hidden="true" />
+    <span>{{ t("sessions.timeline.noEarlierProcess") }}</span>
+  </div>
 </template>
 
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
-import { ChevronRight } from "@lucide/vue";
+import { ChevronRight, LoaderCircle, Minus } from "@lucide/vue";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import type { TimelineTurnNode } from "./timelineActivities";
 import AiSessionActivityGroup from "./AiSessionActivityGroup.vue";
@@ -57,6 +65,7 @@ const markdownCodeTools = computed(() => ({
   line-height: inherit;
 }
 .ai-session-turn-history-retry { cursor: pointer; }
+.ai-session-turn-history-loading-icon { animation: ai-session-turn-history-spin 800ms linear infinite; }
 .ai-session-turn-history > summary {
   display: flex;
   align-items: center;
@@ -78,6 +87,15 @@ const markdownCodeTools = computed(() => ({
   border-left: 1px solid var(--line-subtle);
 }
 .ai-session-turn-history-message { color: var(--text); font-size: 14px; line-height: 1.55; }
+.ai-session-turn-history-message-user {
+  justify-self: end;
+  width: fit-content;
+  max-width: min(78%, 620px);
+  border-radius: 14px;
+  background: var(--surface-hover);
+  padding: 12px 14px;
+}
 .ai-session-turn-history-message :deep(.markdown-content),
 .ai-session-turn-history-message :deep(.markdown-content > *) { max-width: 100%; overflow-wrap: anywhere; }
+@keyframes ai-session-turn-history-spin { to { transform: rotate(360deg); } }
 </style>

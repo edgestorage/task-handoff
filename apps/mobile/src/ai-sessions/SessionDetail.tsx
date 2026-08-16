@@ -56,6 +56,10 @@ export function SessionDetail({
   const [canScroll, setCanScroll] = useState(false);
   const selectedMode = mode ?? localMode;
   const selectedIndex = Math.min(Math.max(turnIndex ?? localTurnIndex, 0), latestIndex);
+  const latestIndexRef = useRef(latestIndex);
+  const controlledTurnIndexRef = useRef(turnIndex);
+  latestIndexRef.current = latestIndex;
+  controlledTurnIndexRef.current = turnIndex;
   const isLatest = selectedIndex >= latestIndex;
   const showsLatest = selectedMode === 'conversation' || isLatest;
   const activityText = session ? sessionActivityText(session, t) : undefined;
@@ -108,6 +112,13 @@ export function SessionDetail({
   useEffect(() => {
     if (session) onVisible?.(session.updatedAt);
   }, [onVisible, session]);
+  useEffect(() => {
+    if (controlledTurnIndexRef.current === undefined) setLocalTurnIndex(latestIndexRef.current);
+    userDragging.current = false;
+    setFollowing(true);
+    setAtBottom(true);
+    scheduleScrollToBottom(false);
+  }, [scheduleScrollToBottom, session?.id, setFollowing]);
   useEffect(() => () => {
     if (scrollFrame.current !== undefined) cancelAnimationFrame(scrollFrame.current);
   }, []);

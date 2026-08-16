@@ -10,6 +10,7 @@
   >
     <div ref="turnContentElement" class="ai-session-result-content">
       <AiSessionTurnHistory
+        v-if="activityHistory.length || !active"
         :nodes="activityHistory"
         :loading="activityHistoryStatus === 'idle' || activityHistoryStatus === 'loading' || activityHistoryStatus === 'stale'"
         :error="activityHistoryError"
@@ -117,6 +118,8 @@
           <span>{{ t("sessions.actions.deny") }}</span>
         </button>
       </div>
+
+      <slot name="turn-footer" />
     </div>
   </div>
 </template>
@@ -361,6 +364,10 @@ const displayContent = computed(() => streamingContent.value || props.responseCo
 
 .ai-session-result-detail > .ai-session-result-content > * + * {
   margin-top: var(--detail-activity-gap);
+}
+
+.ai-session-result-detail :slotted(.ai-session-turn-actions) {
+  margin-top: 8px;
 }
 
 .ai-session-result-board {

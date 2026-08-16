@@ -90,6 +90,7 @@ export const sessions = {
     noActivities: "No activity is available for this message.",
     activityCount: "{count} activity | {count} activities",
     earlierProcess: "Earlier process",
+    noEarlierProcess: "No earlier process",
     earlierProcessLoading: "Earlier process · Loading…",
     earlierProcessFailed: "Earlier process · Failed to load, retry",
     details: "Show details",

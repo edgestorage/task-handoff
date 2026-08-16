@@ -6,12 +6,11 @@ export interface LayoutAnchorElement {
   getBoundingClientRect: () => Pick<DOMRect, "top">;
 }
 
-export interface UserLayoutScrollAnchorOptions {
+export interface UserLayoutChangeGuardOptions {
   cancelFrame?: (handle: number) => void;
-  maxFrames?: number;
+  frames?: number;
   onActiveChange?: (active: boolean) => void;
   requestFrame?: (callback: FrameRequestCallback) => number;
-  stableFrames?: number;
 }
 
 export function createLayoutScrollAnchor(
@@ -47,54 +46,37 @@ export function createLayoutScrollAnchor(
   return { begin, cancel, commit };
 }
 
-export function createUserLayoutScrollAnchor(
-  getViewport: () => LayoutAnchorViewport | undefined,
-  options: UserLayoutScrollAnchorOptions = {},
-) {
+export function createUserLayoutChangeGuard(options: UserLayoutChangeGuardOptions = {}) {
   const requestFrame = options.requestFrame ?? requestAnimationFrame;
   const cancelFrame = options.cancelFrame ?? cancelAnimationFrame;
-  const maxFrames = options.maxFrames ?? 12;
-  const stableFrames = options.stableFrames ?? 3;
-  let anchor: LayoutAnchorElement | undefined;
-  let anchorTop = 0;
+  const frames = options.frames ?? 3;
   let frame: number | undefined;
-  let attempts = 0;
-  let stable = 0;
+  let active = false;
+  let remaining = 0;
 
   function finish() {
     if (frame !== undefined) cancelFrame(frame);
     frame = undefined;
-    const wasActive = Boolean(anchor);
-    anchor = undefined;
-    attempts = 0;
-    stable = 0;
-    if (wasActive) options.onActiveChange?.(false);
+    remaining = 0;
+    if (!active) return;
+    active = false;
+    options.onActiveChange?.(false);
   }
 
   function settle() {
     frame = undefined;
-    const viewport = getViewport();
-    const currentAnchor = anchor;
-    if (!viewport || !currentAnchor) {
-      finish();
-      return;
-    }
-    const delta = currentAnchor.getBoundingClientRect().top - anchorTop;
-    if (Math.abs(delta) > 0.25) viewport.scrollTop += delta;
-    const residual = currentAnchor.getBoundingClientRect().top - anchorTop;
-    stable = Math.abs(residual) <= 0.25 ? stable + 1 : 0;
-    attempts += 1;
-    if (stable >= stableFrames || attempts >= maxFrames) {
+    remaining -= 1;
+    if (remaining <= 0) {
       finish();
       return;
     }
     frame = requestFrame(settle);
   }
 
-  function begin(nextAnchor: LayoutAnchorElement) {
+  function begin() {
     finish();
-    anchor = nextAnchor;
-    anchorTop = nextAnchor.getBoundingClientRect().top;
+    active = true;
+    remaining = frames;
     options.onActiveChange?.(true);
     frame = requestFrame(settle);
   }
@@ -102,6 +84,6 @@ export function createUserLayoutScrollAnchor(
   return {
     begin,
     cancel: finish,
-    isActive: () => Boolean(anchor),
+    isActive: () => active,
   };
 }

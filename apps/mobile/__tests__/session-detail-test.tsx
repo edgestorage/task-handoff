@@ -118,6 +118,44 @@ test('detail pauses scroll following away from the bottom and resumes it from th
   cancelFrame.mockRestore();
 });
 
+test('switching sessions resets scroll following and jumps directly to the latest content', async () => {
+  const frame = jest.spyOn(globalThis, 'requestAnimationFrame').mockImplementation((callback) => {
+    callback(0);
+    return 1;
+  });
+  const cancelFrame = jest.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => undefined);
+  const scrollToOffset = jest.spyOn(FlatList.prototype, 'scrollToOffset').mockImplementation(() => undefined);
+  const nextSession = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    id: 'session-2',
+    title: 'Next session',
+    turns: [{ ...session.turns![0], id: 'turn-2', userPrompt: 'Newest conversation' }],
+  });
+  const screen = await render(<SessionDetail messages={[]} session={session} />);
+  const list = screen.getByTestId('session-detail-scroll');
+
+  await fireEvent(list, 'layout', { nativeEvent: { layout: { height: 500 } } });
+  await fireEvent(list, 'contentSizeChange', 390, 1_200);
+  await fireEvent(list, 'scrollBeginDrag');
+  await fireEvent.scroll(list, {
+    nativeEvent: {
+      contentOffset: { x: 0, y: 300 },
+      contentSize: { height: 1_200, width: 390 },
+      layoutMeasurement: { height: 500, width: 390 },
+    },
+  });
+  scrollToOffset.mockClear();
+
+  screen.rerender(<SessionDetail messages={[]} session={nextSession} />);
+
+  await waitFor(() => expect(scrollToOffset).toHaveBeenCalledWith({ animated: false, offset: 1_200 }));
+  expect(screen.queryByRole('button', { name: 'Scroll to latest message' })).toBeNull();
+  screen.unmount();
+  scrollToOffset.mockRestore();
+  frame.mockRestore();
+  cancelFrame.mockRestore();
+});
+
 test('scroll following uses a bottom tolerance and treats short content as settled', () => {
   expect(isSessionScrollNearBottom({ contentHeight: 400, offsetY: 0, viewportHeight: 500 })).toBe(true);
   expect(isSessionScrollNearBottom({ contentHeight: 1_000, offsetY: 460, viewportHeight: 500 })).toBe(true);

@@ -32,9 +32,12 @@ function groupTurnItems(items: readonly AiSessionTimelineItem[]): TimelineTurnNo
   return nodes;
 }
 
-function splitTimelineTurnNodes(nodes: TimelineTurnNode[]) {
+function splitTimelineTurnNodes(nodes: TimelineTurnNode[], retainFollowupUserMessages = false) {
   const latestResponseIndex = nodes.findLastIndex(
     (node) => node.type === "message" && node.message.type === "ai-message",
+  );
+  const primaryUserMessageIndex = nodes.findIndex(
+    (node) => node.type === "message" && node.message.type === "user-message",
   );
   const userMessages = nodes.flatMap((node) => (
     node.type === "message" && node.message.type === "user-message" ? [node.message] : []
@@ -51,7 +54,11 @@ function splitTimelineTurnNodes(nodes: TimelineTurnNode[]) {
   return {
     userMessages,
     history: nodes.slice(0, latestResponseIndex)
-      .filter((node) => node.type !== "message" || node.message.type !== "user-message"),
+      .filter((node, index) => (
+        node.type !== "message"
+        || node.message.type !== "user-message"
+        || (retainFollowupUserMessages && index !== primaryUserMessageIndex)
+      )),
     latestResponse: latestResponseNode.type === "message" ? latestResponseNode.message : undefined,
     trailing: nodes.slice(latestResponseIndex + 1)
       .filter((node) => node.type !== "message" || node.message.type !== "user-message"),
@@ -81,7 +88,10 @@ export function compactTimelineForTurn(
   turn: Pick<AiSessionTurn, "id" | "providerTurnId"> | undefined,
 ) {
   const identities = turnIdentity(turn);
-  const split = splitTimelineTurnNodes(groupTurnItems(items.filter((item) => identities.has(item.turnId))));
+  const split = splitTimelineTurnNodes(
+    groupTurnItems(items.filter((item) => identities.has(item.turnId))),
+    true,
+  );
   return {
     history: split.history,
     activities: split.trailing.flatMap((node) => node.type === "activities" ? node.activities : []),

@@ -29,7 +29,10 @@ export function createStreamingScrollFollow(
   let following = true;
   let autoScrolling = false;
   let frame: number | undefined;
-  const smoothApproachDistance = 800;
+  let manuallyPaused = false;
+  let movedAwayAfterManualPause = false;
+  let observedScrollHeight: number | undefined;
+  const smoothApproachDistance = 1600;
 
   function setFollowing(value: boolean) {
     if (following === value) return;
@@ -43,9 +46,38 @@ export function createStreamingScrollFollow(
     options.onAutoScrollingChange?.(value);
   }
 
+  function cancelAutomaticScroll() {
+    if (frame !== undefined) cancelFrame(frame);
+    frame = undefined;
+    const viewport = getViewport();
+    if (autoScrolling && viewport?.scrollTo) {
+      viewport.scrollTo({ top: viewport.scrollTop, behavior: "auto" });
+    }
+    setAutoScrolling(false);
+  }
+
   function handleScroll() {
     const viewport = getViewport();
     if (!viewport) return;
+    const contentGrew = observedScrollHeight !== undefined
+      && viewport.scrollHeight > observedScrollHeight + 0.25;
+    observedScrollHeight = viewport.scrollHeight;
+    if (manuallyPaused) {
+      const distance = distanceFromBottom(viewport);
+      if (distance > 0.5) movedAwayAfterManualPause = true;
+      if (movedAwayAfterManualPause && distance <= 0.5) {
+        manuallyPaused = false;
+        movedAwayAfterManualPause = false;
+        setFollowing(true);
+      } else {
+        setFollowing(false);
+      }
+      return;
+    }
+    if (following && !autoScrolling && contentGrew) {
+      viewport.scrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+      return;
+    }
     if (autoScrolling) {
       if (distanceFromBottom(viewport) <= threshold) setAutoScrolling(false);
       return;
@@ -59,6 +91,7 @@ export function createStreamingScrollFollow(
       frame = undefined;
       const viewport = getViewport();
       if (!viewport || !following) return;
+      observedScrollHeight = viewport.scrollHeight;
       if (viewport.scrollTo) {
         const maxScrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
         if (maxScrollTop - viewport.scrollTop > smoothApproachDistance) {
@@ -81,32 +114,45 @@ export function createStreamingScrollFollow(
     }
     const viewport = getViewport();
     if (!viewport) return;
+    observedScrollHeight = viewport.scrollHeight;
     viewport.scrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
   }
 
   function followLatest() {
+    manuallyPaused = false;
+    movedAwayAfterManualPause = false;
     setFollowing(true);
     setAutoScrolling(true);
     scheduleFollow();
   }
 
-  function pauseFollowing() {
-    setAutoScrolling(false);
+  function jumpLatest() {
+    cancelAutomaticScroll();
+    manuallyPaused = false;
+    movedAwayAfterManualPause = false;
+    setFollowing(true);
     const viewport = getViewport();
+    if (!viewport) return;
+    observedScrollHeight = viewport.scrollHeight;
+    viewport.scrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+  }
+
+  function pauseFollowing() {
+    cancelAutomaticScroll();
+    const viewport = getViewport();
+    if (viewport) observedScrollHeight = viewport.scrollHeight;
     setFollowing(Boolean(viewport && distanceFromBottom(viewport) <= threshold));
   }
 
   function stopFollowing() {
-    if (frame !== undefined) cancelFrame(frame);
-    frame = undefined;
-    setAutoScrolling(false);
+    cancelAutomaticScroll();
+    manuallyPaused = true;
+    movedAwayAfterManualPause = false;
     setFollowing(false);
   }
 
   function dispose() {
-    if (frame !== undefined) cancelFrame(frame);
-    frame = undefined;
-    setAutoScrolling(false);
+    cancelAutomaticScroll();
   }
 
   return {
@@ -115,6 +161,7 @@ export function createStreamingScrollFollow(
     handleScroll,
     isAutoScrolling: () => autoScrolling,
     isFollowing: () => following,
+    jumpLatest,
     notifyContentResize: maintainLatest,
     pauseFollowing,
     stopFollowing,
