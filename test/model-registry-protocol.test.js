@@ -18,10 +18,10 @@ const timestamp = "2026-07-15T00:00:00.000Z";
 const spec = { app: "codex", endpoint: "https://example.test/v1", key: "secret", model: "gpt-test" };
 const id = modelConfigHash(spec);
 
-test("control plane emits a date-only protocol version while parsing historical identifiers", () => {
+test("control plane emits and accepts only date-formatted protocol versions", () => {
   assert.match(CONTROL_PLANE_PROTOCOL_VERSION, /^\d{4}-\d{2}-\d{2}$/);
   assert.equal(ProtocolVersionSchema.safeParse(CONTROL_PLANE_PROTOCOL_VERSION).success, true);
-  assert.equal(ProtocolVersionSchema.safeParse("2026-07-15-model-hash-registry").success, true);
+  assert.equal(ProtocolVersionSchema.safeParse("2026-07-15-model-hash-registry").success, false);
 });
 
 test("v0.0.21 instance reports keep their released app inventory requirement", () => {

@@ -19,15 +19,17 @@
         :data-status="activity.status"
       >
         <summary v-if="hasDetails(activity)" class="ai-session-activity-item-head">
-          <ChevronRight :size="14" aria-hidden="true" />
-          <span class="ai-session-activity-title">{{ activity.title }}</span>
+          <ChevronRight v-if="!activityIcon(activity)" class="ai-session-activity-disclosure-icon" :size="14" aria-hidden="true" />
+          <component :is="activityIcon(activity)" v-else class="ai-session-activity-kind-icon" :size="14" aria-hidden="true" />
+          <span class="ai-session-activity-title">{{ activityLabel(activity) }}</span>
           <span v-if="activitySummary(activity)" class="ai-session-activity-summary" :title="activityHoverText(activity)">{{ activitySummary(activity) }}</span>
-          <small v-if="visibleStatus(activity.status)">{{ statusLabel(activity.status!) }}</small>
+          <small v-if="!isCommandActivity(activity) && visibleStatus(activity.status)">{{ statusLabel(activity.status!) }}</small>
         </summary>
         <div v-else class="ai-session-activity-item-head">
-          <span class="ai-session-activity-title">{{ activity.title }}</span>
+          <component :is="activityIcon(activity)" v-if="activityIcon(activity)" class="ai-session-activity-kind-icon" :size="14" aria-hidden="true" />
+          <span class="ai-session-activity-title">{{ activityLabel(activity) }}</span>
           <span v-if="activitySummary(activity)" class="ai-session-activity-summary" :title="activityHoverText(activity)">{{ activitySummary(activity) }}</span>
-          <small v-if="visibleStatus(activity.status)">{{ statusLabel(activity.status!) }}</small>
+          <small v-if="!isCommandActivity(activity) && visibleStatus(activity.status)">{{ statusLabel(activity.status!) }}</small>
         </div>
         <div v-if="hasDetails(activity)" class="ai-session-activity-details">
           <section v-if="activity.input">
@@ -46,10 +48,46 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, type Component } from "vue";
 import { useI18n } from "vue-i18n";
-import { ChevronRight } from "@lucide/vue";
+import {
+  Bot,
+  Brain,
+  ChevronRight,
+  CircleHelp,
+  ClipboardCheck,
+  Clock3,
+  FilePenLine,
+  Image as ImageIcon,
+  ListTodo,
+  Minimize2,
+  Plug,
+  Search,
+  Sparkles,
+  SquareTerminal,
+  Users,
+  Wrench,
+} from "@lucide/vue";
 import type { AiSessionTimelineActivity } from "@task-handoff/protocol/ai-sessions";
+
+const activityIcons: Record<string, Component> = {
+  reasoning: Brain,
+  plan: ListTodo,
+  hookPrompt: CircleHelp,
+  commandExecution: SquareTerminal,
+  fileChange: FilePenLine,
+  mcpToolCall: Plug,
+  dynamicToolCall: Wrench,
+  collabAgentToolCall: Users,
+  subAgentActivity: Bot,
+  webSearch: Search,
+  imageView: ImageIcon,
+  sleep: Clock3,
+  imageGeneration: Sparkles,
+  enteredReviewMode: ClipboardCheck,
+  exitedReviewMode: ClipboardCheck,
+  contextCompaction: Minimize2,
+};
 
 const props = withDefaults(defineProps<{
   activities: AiSessionTimelineActivity[];
@@ -72,7 +110,18 @@ function statusLabel(status: NonNullable<AiSessionTimelineActivity["status"]>) {
 function visibleStatus(status: AiSessionTimelineActivity["status"]) {
   return status === "running" || status === "failed";
 }
+function isCommandActivity(activity: AiSessionTimelineActivity) {
+  return activity.activityKind === "commandExecution";
+}
+function activityIcon(activity: AiSessionTimelineActivity) {
+  return activityIcons[activity.activityKind];
+}
+function activityLabel(activity: AiSessionTimelineActivity) {
+  if (!isCommandActivity(activity)) return activity.title;
+  return t(`sessions.timeline.commandStatus.${activity.status || "unknown"}`);
+}
 function activitySummary(activity: AiSessionTimelineActivity) {
+  if (isCommandActivity(activity)) return activity.input?.trim() || "";
   if (activity.activityKind === "fileChange" && activity.paths?.length) {
     return activity.paths.map(runtimePathBasename).join(", ");
   }
@@ -141,7 +190,7 @@ function runtimePathBasename(path: string) {
   gap: 5px;
   min-width: 0;
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.45;
   list-style: none;
   white-space: nowrap;
@@ -152,7 +201,11 @@ function runtimePathBasename(path: string) {
   align-self: center;
   transition: transform 120ms ease;
 }
-.ai-session-activity-item[open] > summary > svg { transform: rotate(90deg); }
+.ai-session-activity-item-head > .ai-session-activity-kind-icon {
+  color: var(--text-muted);
+  transition: none;
+}
+.ai-session-activity-item[open] > summary > .ai-session-activity-disclosure-icon { transform: rotate(90deg); }
 .ai-session-activity-item-head > .ai-session-activity-title {
   flex: 0 0 auto;
   color: var(--text-muted);
@@ -169,9 +222,11 @@ function runtimePathBasename(path: string) {
 .ai-session-activity-item-head small {
   flex: 0 0 auto;
   margin-left: auto;
-  font-size: 12px;
+  font-size: inherit;
 }
 .ai-session-activity-item[data-status="failed"] .ai-session-activity-item-head small { color: var(--status-danger); }
+.ai-session-activity-item[data-status="failed"] .ai-session-activity-kind-icon,
+.ai-session-activity-item[data-status="failed"] .ai-session-activity-title { color: var(--status-danger); }
 .ai-session-activity-details {
   margin-top: 2px;
   padding-top: 7px;

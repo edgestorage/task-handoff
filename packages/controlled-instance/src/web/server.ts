@@ -44,7 +44,7 @@ import { AiSessionMessageDeltaCoalescer } from "./ai-session-message-delta-coale
 import {
   AiSessionPersistenceSettingsInputSchema,
   AiSessionPersistenceSettingsStore,
-} from "./ai-session-persistence-settings";
+} from "@task-handoff/ai-session-runtime/ai-session-persistence-settings";
 import { WebEventBus } from "./events";
 import { AppManagementManager, AppManagementRequestError } from "./app-management";
 import { configSyncPresets, configSyncPrograms, listConfigSyncFolders, runConfigSync, runConfigSyncBatch } from "./config-sync";

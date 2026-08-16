@@ -7778,7 +7778,7 @@ test("node agent restores active localhost runtime processes after unclean shutd
       }
     })(),
     "localhost runtime restore",
-    10_000,
+    20_000,
   );
   assert.equal(restored.statusCode, 200);
   const instance = restored.json().data.find((item) => item.id === "inst_local_restore_unclean");

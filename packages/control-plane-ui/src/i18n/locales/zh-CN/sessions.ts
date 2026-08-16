@@ -101,6 +101,7 @@ export const sessions = {
     output: "输出",
     exitCode: "退出码：{code}",
     status: { running: "运行中", completed: "已完成", failed: "失败", waiting: "等待中" },
+    commandStatus: { running: "运行中", completed: "已运行", failed: "运行失败", waiting: "等待运行", unknown: "运行命令" },
   },
   subAgents: {
     label: "子 Agent 活动", summary: "子 Agent · {details}", pending: "等待中", running: "运行中", interrupted: "已中断", completed: "已完成",

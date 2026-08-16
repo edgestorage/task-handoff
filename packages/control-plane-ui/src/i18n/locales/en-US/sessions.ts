@@ -98,6 +98,7 @@ export const sessions = {
     output: "Output",
     exitCode: "Exit code: {code}",
     status: { running: "Running", completed: "Completed", failed: "Failed", waiting: "Waiting" },
+    commandStatus: { running: "Running", completed: "Ran", failed: "Run failed", waiting: "Waiting to run", unknown: "Run command" },
   },
   subAgents: {
     label: "Sub-agent activity", summary: "Sub-agents · {details}", pending: "Pending", running: "Running", interrupted: "Interrupted", completed: "Completed",

@@ -27,7 +27,7 @@ const {
   sanitizeAiSessionHistoryIndex,
 } = require("../packages/ai-session-runtime/src/ai-session-history-store.ts");
 const { AiSessionHistoryLifecycle } = require("../packages/ai-session-runtime/src/ai-session-history-lifecycle.ts");
-const { AiSessionPersistenceSettingsStore } = require("../packages/controlled-instance/src/web/ai-session-persistence-settings.ts");
+const { AiSessionPersistenceSettingsStore } = require("../packages/ai-session-runtime/src/ai-session-persistence-settings.ts");
 const { AiSessionResumeCoordinator } = require("../packages/ai-session-runtime/src/ai-session-resume.ts");
 const { createAiSessionRegistry } = require("../packages/ai-session-runtime/src/ai-session-registry.ts");
 const { sanitizePersistedAiSession } = require("../packages/ai-session-runtime/src/ai-session/persistence.ts");
