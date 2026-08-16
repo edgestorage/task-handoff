@@ -28,7 +28,7 @@
             :is-latest="isLatestTurn(virtualTurn.index)"
             :response-content="turns[virtualTurn.index].latestResponse?.text || ''"
             :session="session"
-            :activities="trailingActivities(turns[virtualTurn.index])"
+            :activities="turns[virtualTurn.index].activities"
             :activity-history="turns[virtualTurn.index].history"
             :activity-history-status="turns[virtualTurn.index].timelineStatus"
             :activity-history-error="turns[virtualTurn.index].timelineError"
@@ -43,44 +43,47 @@
             @reorder-queued-messages="$emit('reorderQueuedMessages', $event)"
             @resolve-approval="$emit('resolveApproval', $event)"
             @retry-activity-history="$emit('loadTurnTimeline', turns[virtualTurn.index].id, true)"
-          />
-          <footer
-            v-if="turns[virtualTurn.index].latestResponse && completedTurn(turns[virtualTurn.index].id)"
-            class="ai-session-turn-actions"
-            :aria-label="t('sessions.timeline.turnActions')"
           >
-            <Button
-              type="button"
-              size="xs"
-              variant="ghost"
-              class="ai-session-turn-action"
-              :aria-label="copiedTurnId === turns[virtualTurn.index].id ? t('sessions.markdown.copied') : t('sessions.markdown.copy')"
-              :title="copiedTurnId === turns[virtualTurn.index].id ? t('sessions.markdown.copied') : t('sessions.markdown.copy')"
-              @click="copyTurnResponse(turns[virtualTurn.index])"
-            >
-              <Check v-if="copiedTurnId === turns[virtualTurn.index].id" :size="13" />
-              <Copy v-else :size="13" />
-            </Button>
-            <Button
-              v-if="continuableTurn(turns[virtualTurn.index].id)"
-              type="button"
-              size="xs"
-              variant="ghost"
-              class="ai-session-turn-action"
-              :disabled="busy"
-              :aria-label="t('sessions.actions.continueFromTurn')"
-              :title="t('sessions.actions.continueFromTurn')"
-              @click="continueFromTurn(turns[virtualTurn.index].id)"
-            >
-              <Split :size="13" />
-            </Button>
-            <time
-              v-if="turnTime(turns[virtualTurn.index].id)"
-              class="ai-session-turn-time"
-              :datetime="turnTime(turns[virtualTurn.index].id)"
-              :title="formatTurnDateTime(turnTime(turns[virtualTurn.index].id))"
-            >{{ formatTurnTime(turnTime(turns[virtualTurn.index].id)) }}</time>
-          </footer>
+            <template #turn-footer>
+              <footer
+                v-if="turns[virtualTurn.index].latestResponse && completedTurn(turns[virtualTurn.index].id)"
+                class="ai-session-turn-actions"
+                :aria-label="t('sessions.timeline.turnActions')"
+              >
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="ghost"
+                  class="ai-session-turn-action"
+                  :aria-label="copiedTurnId === turns[virtualTurn.index].id ? t('sessions.markdown.copied') : t('sessions.markdown.copy')"
+                  :title="copiedTurnId === turns[virtualTurn.index].id ? t('sessions.markdown.copied') : t('sessions.markdown.copy')"
+                  @click="copyTurnResponse(turns[virtualTurn.index])"
+                >
+                  <Check v-if="copiedTurnId === turns[virtualTurn.index].id" :size="13" />
+                  <Copy v-else :size="13" />
+                </Button>
+                <Button
+                  v-if="continuableTurn(turns[virtualTurn.index].id)"
+                  type="button"
+                  size="xs"
+                  variant="ghost"
+                  class="ai-session-turn-action"
+                  :disabled="busy"
+                  :aria-label="t('sessions.actions.continueFromTurn')"
+                  :title="t('sessions.actions.continueFromTurn')"
+                  @click="continueFromTurn(turns[virtualTurn.index].id)"
+                >
+                  <Split :size="13" />
+                </Button>
+                <time
+                  v-if="turnTime(turns[virtualTurn.index].id)"
+                  class="ai-session-turn-time"
+                  :datetime="turnTime(turns[virtualTurn.index].id)"
+                  :title="formatTurnDateTime(turnTime(turns[virtualTurn.index].id))"
+                >{{ formatTurnTime(turnTime(turns[virtualTurn.index].id)) }}</time>
+              </footer>
+            </template>
+          </AiSessionResult>
         </div>
       </section>
     </div>
@@ -88,7 +91,7 @@
 </template>
 
 <script setup lang="ts">
-import { useVirtualizer } from "@tanstack/vue-virtual";
+import { elementScroll, useVirtualizer } from "@tanstack/vue-virtual";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { Check, Copy, Split } from "@lucide/vue";
@@ -98,8 +101,8 @@ import type { AiSessionSummary } from "../../api/types";
 import type { AiSessionTurnTimelineState } from "../../apps/control-plane/useAiSessionTimelineStore";
 import { Button } from "../ui/button";
 import AiSessionResult from "./AiSessionResult.vue";
-import type { ConversationTimelineTurn } from "./timelineActivities";
-import { conversationTimelineTurns } from "./timelineActivities";
+import type { TimelineMessage, TimelineTurnNode } from "./timelineActivities";
+import { compactTimelineForTurn } from "./timelineActivities";
 
 const props = defineProps<{
   busy?: boolean;
@@ -131,28 +134,31 @@ const markdownCodeTools = computed(() => ({
   plainTextLabel: t("sessions.markdown.plainText"),
 }));
 
-type DisplayConversationTurn = ConversationTimelineTurn & {
+type DisplayConversationTurn = {
+  id: string;
+  userMessages: TimelineMessage[];
+  history: TimelineTurnNode[];
+  latestResponse?: TimelineMessage;
+  activities: AiSessionTimelineActivity[];
   timelineStatus: AiSessionTurnTimelineState["status"];
   timelineError?: string;
 };
 
 const turns = computed<DisplayConversationTurn[]>(() => (props.session.turns || []).map((turn) => {
   const state = props.turnTimelines[turn.id] || { status: "idle" as const, items: [] };
-  const projected = conversationTimelineTurns(state.items)[0];
-  const userMessages = projected?.userMessages.length
-    ? projected.userMessages
-    : turn.userPrompt?.trim()
-      ? [{ id: `${turn.id}:user-summary`, turnId: turn.id, type: "user-message" as const, text: turn.userPrompt.trim() }]
-      : [];
-  const latestResponse = projected?.latestResponse || (turn.lastMessage?.trim()
+  const timeline = compactTimelineForTurn(state.items, turn);
+  const userMessages = turn.userPrompt?.trim()
+    ? [{ id: `${turn.id}:user-summary`, turnId: turn.id, type: "user-message" as const, text: turn.userPrompt.trim() }]
+    : [];
+  const latestResponse = turn.lastMessage?.trim()
     ? { id: turn.lastMessageItemId || `${turn.id}:ai-summary`, turnId: turn.id, type: "ai-message" as const, text: turn.lastMessage.trim() }
-    : undefined);
+    : undefined;
   return {
     id: turn.id,
     userMessages,
-    history: projected?.history || [],
+    history: timeline.history,
     latestResponse,
-    trailing: projected?.trailing || [],
+    activities: timeline.activities,
     timelineStatus: state.status,
     timelineError: state.error,
   };
@@ -175,6 +181,10 @@ const turnVirtualizer = useVirtualizer(computed(() => ({
   scrollEndThreshold: 48,
   scrollMargin: scrollMargin.value,
   measureElement: (element) => Math.ceil(element.getBoundingClientRect().height),
+  scrollToFn: (offset, options, instance) => {
+    if (options.adjustments && scrollElement.value?.closest(".is-user-layout-changing")) return;
+    elementScroll(offset, options, instance);
+  },
 })));
 const virtualTurns = computed(() => turnVirtualizer.value.getVirtualItems());
 const virtualTotalSize = computed(() => turnVirtualizer.value.getTotalSize());
@@ -231,13 +241,28 @@ function scheduleStickyUserMessageUpdate() {
 }
 
 function measureVirtualTurn(element: unknown) {
-  if (element instanceof HTMLElement) turnVirtualizer.value.measureElement(element);
+  if (!(element instanceof HTMLElement)) return;
+  turnVirtualizer.value.measureElement(element);
+  const index = Number(element.dataset.index);
+  if (!Number.isInteger(index)) return;
+  // TanStack deliberately skips its synchronous measurement path during a
+  // user scroll and waits for ResizeObserver. For these dynamic Turn rows that
+  // leaves the estimate in the DOM for one paint; the later correction then
+  // looks like a jump on the first upward pass. The Vue ref runs after the row
+  // is patched but before paint, so commit the first real size here while still
+  // keeping measureElement registered for subsequent content changes.
+  turnVirtualizer.value.resizeItem(index, Math.ceil(element.getBoundingClientRect().height));
 }
 
 function loadVisibleTurnTimelines() {
   for (const virtualTurn of virtualTurns.value) {
     const turn = turns.value[virtualTurn.index];
     if (!turn || (turn.timelineStatus !== "idle" && turn.timelineStatus !== "stale")) continue;
+    const sourceTurn = sessionTurn(turn.id);
+    const liveLatestTurn = isLatestTurn(virtualTurn.index)
+      && sourceTurn
+      && (sourceTurn.status === "queued" || sourceTurn.status === "running" || sourceTurn.status === "waiting");
+    if (liveLatestTurn && turn.timelineStatus === "idle") continue;
     emit("loadTurnTimeline", turn.id);
   }
 }
@@ -250,10 +275,6 @@ function commitVirtualTurnLayout(index: number, element: HTMLElement) {
 
 function isLatestTurn(index: number) {
   return index === turns.value.length - 1;
-}
-
-function trailingActivities(turn: ConversationTimelineTurn): AiSessionTimelineActivity[] {
-  return turn.trailing.flatMap((node) => node.type === "activities" ? node.activities : []);
 }
 
 function sessionTurn(turnId: string): AiSessionTurn | undefined {
@@ -294,7 +315,7 @@ function formatTurnDateTime(value: string) {
   }).format(new Date(value));
 }
 
-async function copyTurnResponse(turn: ConversationTimelineTurn) {
+async function copyTurnResponse(turn: DisplayConversationTurn) {
   const text = turn.latestResponse?.text;
   if (!text || !navigator.clipboard?.writeText) return;
   try {
@@ -336,6 +357,10 @@ watch(virtualTurns, () => void nextTick(() => {
   scheduleStickyUserMessageUpdate();
   loadVisibleTurnTimelines();
 }), { flush: "post" });
+watch(() => props.session.turns?.map((turn) => `${turn.id}:${turn.status}`).join("|"), () => {
+  void nextTick(loadVisibleTurnTimelines);
+});
+watch(virtualTotalSize, () => void nextTick(() => emit("layoutCommitted")), { flush: "post" });
 watch(() => turns.value.length, () => void nextTick(syncScrollElement));
 </script>
 
@@ -359,6 +384,12 @@ watch(() => turns.value.length, () => void nextTick(syncScrollElement));
   width: 100%;
   gap: 24px;
   min-width: 0;
+}
+
+/* The outer TanStack list owns offscreen sizing for each mounted turn. */
+.ai-session-timeline-turn :deep(.markdown-renderer) {
+  content-visibility: visible;
+  contain-intrinsic-size: none;
 }
 
 .ai-session-timeline-response {

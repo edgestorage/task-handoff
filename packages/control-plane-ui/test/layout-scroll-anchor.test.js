@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createLayoutScrollAnchor, createUserLayoutScrollAnchor } from "../src/lib/layout-scroll-anchor.ts";
+import { createLayoutScrollAnchor, createUserLayoutChangeGuard } from "../src/lib/layout-scroll-anchor.ts";
 import { FakeAnimationFrameScheduler } from "../../../test/support/streaming-test-tools.mjs";
 
 test("layout transaction keeps the bottom anchor at the same viewport position", () => {
@@ -34,32 +34,22 @@ test("native anchoring and paused following do not cause duplicate adjustments",
   assert.equal(viewport.scrollTop, 600);
 });
 
-test("user layout transaction keeps the clicked disclosure at a stable viewport position", () => {
+test("user layout guard suppresses competing anchors without writing scroll position", () => {
   const frames = new FakeAnimationFrameScheduler();
   const viewport = { scrollTop: 600 };
-  let documentTop = 700;
   const activeChanges = [];
-  const anchor = { getBoundingClientRect: () => ({ top: documentTop - viewport.scrollTop }) };
-  const transaction = createUserLayoutScrollAnchor(() => viewport, {
+  const guard = createUserLayoutChangeGuard({
     requestFrame: frames.requestAnimationFrame,
     cancelFrame: frames.cancelAnimationFrame,
     onActiveChange: (active) => activeChanges.push(active),
   });
 
-  transaction.begin(anchor);
-  documentTop += 80;
-  frames.step();
-  assert.equal(viewport.scrollTop, 680);
-  assert.equal(anchor.getBoundingClientRect().top, 100);
-
-  documentTop += 20;
-  frames.step();
-  assert.equal(viewport.scrollTop, 700);
-  assert.equal(anchor.getBoundingClientRect().top, 100);
-
+  guard.begin();
+  viewport.scrollTop = 620;
   frames.step();
   frames.step();
   frames.step();
-  assert.equal(transaction.isActive(), false);
+  assert.equal(viewport.scrollTop, 620);
+  assert.equal(guard.isActive(), false);
   assert.deepEqual(activeChanges, [true, false]);
 });

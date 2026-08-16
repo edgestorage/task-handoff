@@ -209,12 +209,12 @@ test("detail sticky thresholds follow the complete user prompt height", () => {
   assert.doesNotMatch(panel, /detailScrollViewport\.scrollTop = previousScrollTop/);
 });
 
-test("all detail disclosures use one user-anchored layout transaction", () => {
-  assert.match(panel, /createUserLayoutScrollAnchor/);
+test("all detail disclosures use one layout-change guard without scroll restoration", () => {
+  assert.match(panel, /createUserLayoutChangeGuard/);
   assert.match(panel, /target\.closest<HTMLElement>\("summary, button\[aria-expanded\]"\)/);
-  assert.match(panel, /scrollFollow\?\.stopFollowing\(\)[\s\S]*detailLayoutAnchor\.cancel\(\)[\s\S]*userDetailLayoutAnchor\.begin\(trigger\)/);
+  assert.match(panel, /scrollFollow\?\.stopFollowing\(\)[\s\S]*detailLayoutAnchor\.cancel\(\)[\s\S]*userDetailLayoutGuard\.begin\(\)/);
   assert.match(panel, /addEventListener\("click", handleDetailExpansionClick, true\)/);
-  assert.match(panel, /if \(!userDetailLayoutAnchor\.isActive\(\)\) scrollFollow\?\.notifyContentResize\(\)/);
+  assert.match(panel, /if \(!userDetailLayoutGuard\.isActive\(\)\) scrollFollow\?\.notifyContentResize\(\)/);
   assert.match(panelCss, /\.session-ai-detail\.is-user-layout-changing \.session-ai-detail-content[\s\S]*overflow-anchor: none !important;/);
 });
 

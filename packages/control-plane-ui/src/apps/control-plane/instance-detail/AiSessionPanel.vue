@@ -934,7 +934,7 @@ import {
   persistAiSessionPermissionMode,
 } from "../useAiSessionPermissionMode";
 import { createStreamingScrollFollow, distanceFromBottom, STREAMING_SCROLL_FOLLOW_THRESHOLD, type ScrollViewport } from "../../../lib/streaming-scroll-follow";
-import { createLayoutScrollAnchor, createUserLayoutScrollAnchor } from "../../../lib/layout-scroll-anchor";
+import { createLayoutScrollAnchor, createUserLayoutChangeGuard } from "../../../lib/layout-scroll-anchor";
 import {
   aiSessionStatusGroup as sessionStatusGroup,
   canInterruptAiSession,
@@ -1346,19 +1346,16 @@ let detailStickyThreshold = 0;
 let promptResizeObserver: ResizeObserver | undefined;
 let streamingResizeObserver: ResizeObserver | undefined;
 let scrollFollow: ReturnType<typeof createStreamingScrollFollow> | undefined;
-const userDetailLayoutAnchor = createUserLayoutScrollAnchor(
-  () => detailScrollViewport,
-  {
-    onActiveChange: (active) => {
-      detailEl.value?.classList.toggle("is-user-layout-changing", active);
-      if (!active) scrollFollow?.handleScroll();
-    },
+const userDetailLayoutGuard = createUserLayoutChangeGuard({
+  onActiveChange: (active) => {
+    detailEl.value?.classList.toggle("is-user-layout-changing", active);
+    if (!active) scrollFollow?.handleScroll();
   },
-);
+});
 const detailLayoutAnchor = createLayoutScrollAnchor(
   () => detailScrollViewport,
   () => detailBottomAnchorEl.value,
-  () => !userDetailLayoutAnchor.isActive() && scrollFollow?.isFollowing() === true && !scrollFollow.isAutoScrolling(),
+  () => !userDetailLayoutGuard.isActive() && scrollFollow?.isFollowing() === true && !scrollFollow.isAutoScrolling(),
 );
 const isFollowingLatest = ref(true);
 const isSmoothFollowingLatest = ref(false);
@@ -2527,6 +2524,7 @@ function beginDetailLayoutAnchor() {
 
 function commitDetailLayoutAnchor() {
   detailLayoutAnchor.commit();
+  if (!userDetailLayoutGuard.isActive()) scrollFollow?.notifyContentResize();
 }
 
 function handleDetailExpansionClick(event: MouseEvent) {
@@ -2536,10 +2534,10 @@ function handleDetailExpansionClick(event: MouseEvent) {
   const trigger = target.closest<HTMLElement>("summary, button[aria-expanded]");
   const content = detailEl.value?.querySelector<HTMLElement>(".session-ai-detail-content");
   if (!trigger || !content?.contains(trigger) || trigger.matches(":disabled")) return;
-  userDetailLayoutAnchor.cancel();
+  userDetailLayoutGuard.cancel();
   scrollFollow?.stopFollowing();
   detailLayoutAnchor.cancel();
-  userDetailLayoutAnchor.begin(trigger);
+  userDetailLayoutGuard.begin();
 }
 
 function observeComposerOffset() {
@@ -2587,7 +2585,7 @@ function observeDetailScroll() {
   scrollFollow?.dispose();
   scrollFollow = undefined;
   detailScrollViewport = undefined;
-  userDetailLayoutAnchor.cancel();
+  userDetailLayoutGuard.cancel();
   detailLayoutAnchor.cancel();
   const layoutRevision = ++detailScrollLayoutRevision;
   detailScrollLayoutPending = true;
@@ -2600,6 +2598,8 @@ function observeDetailScroll() {
     return;
   }
   detailScrollViewport = viewport;
+  isFollowingLatest.value = true;
+  isSmoothFollowingLatest.value = false;
   scrollFollow = createStreamingScrollFollow(
     () => detailScrollViewport as (HTMLElement & ScrollViewport) | undefined,
     {
@@ -2610,7 +2610,7 @@ function observeDetailScroll() {
   const content = detailEl.value?.querySelector<HTMLElement>(".session-ai-detail-content");
   if (content && typeof ResizeObserver !== "undefined") {
     streamingResizeObserver = new ResizeObserver(() => {
-      if (!userDetailLayoutAnchor.isActive()) scrollFollow?.notifyContentResize();
+      if (!userDetailLayoutGuard.isActive()) scrollFollow?.notifyContentResize();
     });
     streamingResizeObserver.observe(content);
   }
@@ -2622,14 +2622,18 @@ function observeDetailScroll() {
     if (layoutRevision !== detailScrollLayoutRevision || detailScrollViewport !== viewport) return;
     updateDetailStickyThreshold();
     detailScrollLayoutPending = false;
+    scrollFollow?.jumpLatest();
     handleDetailScroll();
-    scrollFollow?.followLatest();
   });
 }
 
-function pauseDetailScrollFollow() {
-  userDetailLayoutAnchor.cancel();
+function pauseDetailScrollFollow(event: WheelEvent | TouchEvent) {
+  userDetailLayoutGuard.cancel();
   detailLayoutAnchor.cancel();
+  if (event instanceof TouchEvent || event.deltaY < 0) {
+    scrollFollow?.stopFollowing();
+    return;
+  }
   scrollFollow?.pauseFollowing();
 }
 
@@ -2691,7 +2695,7 @@ onMounted(() => {
   void nextTick(() => {
     observeComposerOffset();
     observeDetailActionsWidth();
-    observeDetailScroll();
+    if (!detailScrollViewport) observeDetailScroll();
   });
 });
 
@@ -2707,7 +2711,7 @@ onBeforeUnmount(() => {
   detailScrollViewport?.removeEventListener("wheel", pauseDetailScrollFollow);
   detailScrollViewport?.removeEventListener("touchstart", pauseDetailScrollFollow);
   detailScrollViewport?.removeEventListener("click", handleDetailExpansionClick, true);
-  userDetailLayoutAnchor.cancel();
+  userDetailLayoutGuard.cancel();
   streamingResizeObserver?.disconnect();
   scrollFollow?.dispose();
   stopSidebarResize();

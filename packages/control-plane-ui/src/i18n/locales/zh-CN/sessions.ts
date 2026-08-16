@@ -93,6 +93,7 @@ export const sessions = {
     noActivities: "这条消息之后没有活动。",
     activityCount: "{count} 项 Activity",
     earlierProcess: "更早的过程",
+    noEarlierProcess: "无过程",
     earlierProcessLoading: "更早的过程 · 加载中…",
     earlierProcessFailed: "更早的过程 · 加载失败，重试",
     details: "查看详情",
