@@ -81,8 +81,8 @@ const markdownCodeTools = computed(() => ({
 .ai-session-turn-history[open] > summary svg { transform: rotate(90deg); }
 .ai-session-turn-history-content {
   display: grid;
-  gap: 6px;
-  margin: 6px 0 0 7px;
+  gap: 12px;
+  margin: 12px 0 0 7px;
   padding-left: 12px;
   border-left: 1px solid var(--line-subtle);
 }
@@ -97,5 +97,7 @@ const markdownCodeTools = computed(() => ({
 }
 .ai-session-turn-history-message :deep(.markdown-content),
 .ai-session-turn-history-message :deep(.markdown-content > *) { max-width: 100%; overflow-wrap: anywhere; }
+.ai-session-turn-history-message :deep(.markdown-content > :first-child) { margin-top: 0; }
+.ai-session-turn-history-message :deep(.markdown-content > :last-child) { margin-bottom: 0; }
 @keyframes ai-session-turn-history-spin { to { transform: rotate(360deg); } }
 </style>

@@ -28,7 +28,7 @@ test("all viewport sizes share one compact detail actions menu", () => {
   assert.match(panel, /compactAiSessionLayout = useMediaQuery\("\(max-width: 920px\)"\)/);
   assert.match(panel, /v-if="!compactAiSessionLayout"[\s\S]*?trigger-appearance="detail"[\s\S]*?sessions\.detail\.sessionDetails/);
   assert.match(panel, /<DropdownMenu :modal="false">[\s\S]*?<MoreHorizontal[\s\S]*?trigger-appearance="menu"/);
-  assert.match(panel, /selectedSession\.agent === 'codex'[\s\S]*?<ToggleGroup[\s\S]*?class="session-ai-detail-actions-view-mode"[\s\S]*?:model-value="effectiveTimelineViewMode"[\s\S]*?value="compact"[\s\S]*?value="full"/);
+  assert.match(panel, /v-if="supportsAiSessionTimeline"[\s\S]*?<ToggleGroup[\s\S]*?class="session-ai-detail-actions-view-mode"[\s\S]*?:model-value="effectiveTimelineViewMode"[\s\S]*?value="compact"[\s\S]*?value="full"/);
   assert.match(panel, /<RepositoryEnvironment[\s\S]*?v-if="compactAiSessionLayout"[\s\S]*?trigger-appearance="menu"/);
   assert.match(panel, /@interact-outside="keepCompactActionsMenuOpenForRepository"/);
   assert.match(panel, /target\.closest\("\.repository-environment-popover"\)[\s\S]*?event\.preventDefault\(\)/);

@@ -1,5 +1,6 @@
 import path from "node:path";
 import { z } from "zod";
+import { AI_SESSION_HISTORY_DEFAULT_LIMIT } from "@task-handoff/protocol/ai-sessions";
 import {
   CONTROL_PLANE_PROTOCOL_VERSION,
   ControlledInstanceHeartbeatSchema,
@@ -592,6 +593,7 @@ export class NodeAgentState {
       config: {
         autoImportAgentConfigs: input.config?.autoImportAgentConfigs ?? true,
         defaultCodexPermissionMode: input.config?.defaultCodexPermissionMode ?? (runtime.type === "docker" ? "full-access" : "ask"),
+        aiSessionHistoryLimit: input.config?.aiSessionHistoryLimit ?? AI_SESSION_HISTORY_DEFAULT_LIMIT,
       },
       workspace: runtime.type === "local" ? { mode: "local-bind", status: "unknown", path: workspacePath } : { status: "unknown" },
       target: { strategy: "node-proxy", status: "unknown" },

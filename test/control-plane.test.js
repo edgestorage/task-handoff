@@ -368,7 +368,7 @@ function testAppInventory(apps, observedAt = new Date().toISOString()) {
 }
 
 test("controlled instance heartbeat protocol rejects legacy receiver projection", () => {
-  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-08-15");
+  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-08-17");
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, receiver: { status: "running", pendingCount: 1 } }).success, false);
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, apps: { runningCount: 1 } }).success, false);
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, appInventory: emptyAppInventory(), apps: { runningCount: 1 } }).success, true);
@@ -542,7 +542,17 @@ test("app inventory protocol is strict and stored legacy app capability is disca
     updatedAt: timestamp,
   }, (warning) => warnings.push(warning));
   assert.equal(parsed.appInventory, undefined);
-  assert.deepEqual(parsed.capabilities, { features: { tty: true } });
+  assert.deepEqual(parsed.capabilities, { features: {
+    appRuntime: false,
+    tty: true,
+    gui: false,
+    browser: false,
+    screenshots: false,
+    logs: false,
+    aiSessionWorkspaceSelection: false,
+    aiSessionPersistenceSettings: false,
+    aiSessionTimeline: { sessionReadAgents: [], turnReadAgents: [], liveItemAgents: [] },
+  } });
   assert.deepEqual(warnings, [{ instanceId: "inst_legacy_apps", field: "capabilities.apps" }]);
 });
 
@@ -1542,7 +1552,7 @@ function createMockNodeAgentFetch(options = {}) {
         health: "unknown",
         connectionStatus: "unknown",
         controlMode: "controlled",
-        capabilities: {},
+        capabilities: options.instanceCapabilities || {},
         config: body.config || { autoImportAgentConfigs: true },
         workspace: { status: "unknown" },
         target: { strategy: "node-proxy", status: "unknown" },
@@ -4722,6 +4732,7 @@ test("node agent runs local docker behind node-local target and auto-imports age
   assert.equal(health.json().data.protocolVersion, CONTROL_PLANE_PROTOCOL_VERSION);
   assert.equal(health.json().data.build.component, "node-agent");
   assert.equal(health.json().data.build.protocolVersion, CONTROL_PLANE_PROTOCOL_VERSION);
+  assert.equal(health.json().data.capabilities.aiSessionHistoryLimit, true);
   assert.equal(health.json().data.endpoint, undefined);
   assert.equal(health.json().data.controlEndpoint, undefined);
   assert.equal(health.json().data.containerUrl, undefined);
@@ -6528,6 +6539,7 @@ test("node agent provisions one built-in local runtime and creates local instanc
   assert.equal(createdInstance.json().data.workspace.path, "/tmp/task-handoff-localhost-workspace");
   assert.equal(createdInstance.json().data.runtime.kind, "local");
   assert.equal(createdInstance.json().data.config.defaultCodexPermissionMode, "ask");
+  assert.equal(createdInstance.json().data.config.aiSessionHistoryLimit, 50);
 
   const updatedPermissionDefault = await app.inject({
     method: "PATCH",
@@ -6539,6 +6551,7 @@ test("node agent provisions one built-in local runtime and creates local instanc
   assert.deepEqual(updatedPermissionDefault.json().data.config, {
     autoImportAgentConfigs: true,
     defaultCodexPermissionMode: "auto-review",
+    aiSessionHistoryLimit: 50,
   });
 
   const mergedConfigUpdate = await app.inject({
@@ -6551,7 +6564,17 @@ test("node agent provisions one built-in local runtime and creates local instanc
   assert.deepEqual(mergedConfigUpdate.json().data.config, {
     autoImportAgentConfigs: false,
     defaultCodexPermissionMode: "auto-review",
+    aiSessionHistoryLimit: 50,
   });
+
+  const updatedHistoryLimit = await app.inject({
+    method: "PATCH",
+    url: "/api/node-agent/instances/inst_local",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: { config: { aiSessionHistoryLimit: 120 } },
+  });
+  assert.equal(updatedHistoryLimit.statusCode, 200);
+  assert.equal(updatedHistoryLimit.json().data.config.aiSessionHistoryLimit, 120);
 
   const duplicateInstance = await app.inject({
     method: "POST",
@@ -10266,7 +10289,10 @@ test("node model edits create a new hash and retain the previous location until 
 });
 
 test("control plane models deploy to the target node and instances store assignments", async (t) => {
-  const mockOptions = {};
+  const mockOptions = {
+    health: { capabilities: { modelEndpointProbe: true, aiSessionHistoryLimit: true } },
+    instanceCapabilities: { features: { aiSessionPersistenceSettings: true } },
+  };
   const mock = createMockNodeAgentFetch(mockOptions);
   const app = await createControlPlaneApp({
     dataDir: tempDataDir("control-plane-models"),
@@ -10459,9 +10485,17 @@ test("control plane models deploy to the target node and instances store assignm
     config: { autoImportAgentConfigs: false },
   });
   assert.equal(generalUpdated.statusCode, 200);
-  assert.deepEqual(generalUpdated.body.data.config, { autoImportAgentConfigs: false, defaultCodexPermissionMode: "ask" });
+  assert.deepEqual(generalUpdated.body.data.config, { autoImportAgentConfigs: false, defaultCodexPermissionMode: "ask", aiSessionHistoryLimit: 50 });
   const generalUpdateRequest = mock.requests.findLast((request) => request.path === `/instances/${instance.body.data.id}` && request.method === "PATCH" && request.body.config);
   assert.deepEqual(generalUpdateRequest.body.config, { autoImportAgentConfigs: false });
+
+  const historyLimitUpdated = await json(app, "PATCH", `/api/controlled-instances/${instance.body.data.id}`, {
+    config: { aiSessionHistoryLimit: 120 },
+  });
+  assert.equal(historyLimitUpdated.statusCode, 200, JSON.stringify(historyLimitUpdated.body));
+  assert.equal(historyLimitUpdated.body.data.config.aiSessionHistoryLimit, 120);
+  const historyLimitRequest = mock.requests.findLast((request) => request.path === `/instances/${instance.body.data.id}` && request.method === "PATCH" && request.body.config?.aiSessionHistoryLimit);
+  assert.deepEqual(historyLimitRequest.body.config, { aiSessionHistoryLimit: 120 });
 
   const rejectedGeneralUpdate = await json(app, "PATCH", `/api/controlled-instances/${instance.body.data.id}`, {
     config: { autoImportAgentConfigs: true, unknown: true },
@@ -18214,7 +18248,11 @@ test("control plane aggregates ai session pending routes and proxies ai session 
       status: "running",
       health: "ok",
       connectionStatus: "online",
-      capabilities: { features: { aiSessionTimeline: true } },
+      capabilities: { features: { aiSessionTimeline: {
+        sessionReadAgents: ["codex"],
+        turnReadAgents: ["codex"],
+        liveItemAgents: ["codex"],
+      } } },
       apps: {
         runningCount: 1,
       },

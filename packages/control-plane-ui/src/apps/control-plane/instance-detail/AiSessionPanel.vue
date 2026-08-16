@@ -648,7 +648,7 @@
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent class="session-ai-detail-actions-menu" align="end" :side-offset="8" @interact-outside="keepCompactActionsMenuOpenForRepository">
-                <template v-if="supportsAiSessionTimeline && selectedSession.agent === 'codex'">
+                <template v-if="supportsAiSessionTimeline">
                   <ToggleGroup
                     class="session-ai-detail-actions-view-mode"
                     type="single"
@@ -772,6 +772,7 @@
             :response-content="displayAiSessionResponse(selectedSession, promptIndexFor(selectedSession), t)"
             :session="selectedSession"
             :activities="selectedTurnTimeline.activities"
+            :activity-nodes="selectedTurnTimeline.activityNodes"
             :activity-history="selectedTurnTimeline.history"
             :activity-history-status="selectedTurnTimelineState.status"
             :activity-history-error="selectedTurnTimelineState.error"
@@ -909,6 +910,8 @@ import AiSessionStreamingMarkdown from "../../../components/ai-session/AiSession
 import { vAiSessionCardAutoScroll } from "../../../components/ai-session/aiSessionCardAutoScroll";
 import AiSessionToolActivity from "../../../components/ai-session/AiSessionToolActivity.vue";
 import { compactTimelineForTurn } from "../../../components/ai-session/timelineActivities";
+import { shouldDeferTurnTimelineLoad } from "../../../components/ai-session/timelineLoading";
+import { supportsAiSessionTimelineCapability } from "@task-handoff/protocol/control-plane";
 import { useAiSessionTimelineStore } from "../useAiSessionTimelineStore";
 import AiSessionTimelineView from "../../../components/ai-session/AiSessionTimelineView.vue";
 import { referencesForBindings, type AiSessionMentionBinding } from "../../../components/ai-session/mentions";
@@ -1072,24 +1075,28 @@ const timelineViewMode = ref<"compact" | "full">(storedTimelineViewMode());
 const timelineItemStore = useAiSessionTimelineStore();
 const activeTurnTimelineLoads = new Map<string, Promise<void>>();
 const activeSessionTimelineLoads = new Map<string, Promise<void>>();
-const supportsAiSessionTimeline = computed(() => {
-  const capabilities = props.instance.capabilities;
-  const features = capabilities && typeof capabilities === "object"
-    ? (capabilities as Record<string, unknown>).features
-    : undefined;
-  return Boolean(features && typeof features === "object"
-    && (features as Record<string, unknown>).aiSessionTimeline === true);
+const supportsAiSessionSessionTimeline = computed(() => {
+  const session = selectedSession.value;
+  return Boolean(session && supportsAiSessionTimelineCapability(props.instance.capabilities, session.agent, "session-read"));
 });
 const supportsAiSessionTurnTimeline = computed(() => {
-  const capabilities = props.instance.capabilities;
-  const features = capabilities && typeof capabilities === "object"
-    ? (capabilities as Record<string, unknown>).features
-    : undefined;
-  return Boolean(features && typeof features === "object"
-    && (features as Record<string, unknown>).aiSessionTurnTimeline === true);
+  const session = selectedSession.value;
+  return Boolean(session && supportsAiSessionTimelineCapability(props.instance.capabilities, session.agent, "turn-read"));
 });
+const supportsAiSessionLiveTimelineItems = computed(() => {
+  const session = selectedSession.value;
+  return Boolean(session && supportsAiSessionTimelineCapability(props.instance.capabilities, session.agent, "live-items"));
+});
+const supportsAiSessionTimeline = computed(() => (
+  supportsAiSessionSessionTimeline.value
+  || supportsAiSessionTurnTimeline.value
+  || supportsAiSessionLiveTimelineItems.value
+));
+const supportsAiSessionTimelineReads = computed(() => (
+  supportsAiSessionSessionTimeline.value || supportsAiSessionTurnTimeline.value
+));
 const effectiveTimelineViewMode = computed(() => (
-  supportsAiSessionTimeline.value && selectedSession.value?.agent === "codex"
+  supportsAiSessionTimeline.value
     ? timelineViewMode.value
     : "compact"
 ));
@@ -1100,8 +1107,12 @@ const selectedTimelineTurn = computed(() => {
 const selectedTurnTimelineState = computed(() => {
   const session = selectedSession.value;
   const turn = selectedTimelineTurn.value;
-  return session && turn && supportsAiSessionTimeline.value && session.agent === "codex"
-    ? timelineItemStore.turnState(props.instance.id, session.id, turn)
+  if (!session || !turn) return { status: "ready" as const, items: [] };
+  if (supportsAiSessionTimelineReads.value) {
+    return timelineItemStore.turnState(props.instance.id, session.id, turn);
+  }
+  return supportsAiSessionLiveTimelineItems.value
+    ? timelineItemStore.realtimeTurnState(props.instance.id, session.id, turn)
     : { status: "ready" as const, items: [] };
 });
 const selectedTurnTimeline = computed(() => {
@@ -1112,7 +1123,11 @@ const conversationTurnTimelines = computed(() => {
   if (!session) return {};
   return Object.fromEntries(aiSessionTurns(session).map((turn) => [
     turn.id,
-    timelineItemStore.turnState(props.instance.id, session.id, turn),
+    supportsAiSessionTimelineReads.value
+      ? timelineItemStore.turnState(props.instance.id, session.id, turn)
+      : supportsAiSessionLiveTimelineItems.value
+        ? timelineItemStore.realtimeTurnState(props.instance.id, session.id, turn)
+        : { status: "ready" as const, items: [] },
   ]));
 });
 
@@ -1128,6 +1143,7 @@ function timelineLoadKey(instanceId: string, sessionId: string, turnId?: string)
 }
 
 async function loadFullTimelineForSession(session: AiSessionSummary, force = false) {
+  if (!supportsAiSessionSessionTimeline.value) return;
   const instanceId = props.instance.id;
   const key = timelineLoadKey(instanceId, session.id);
   const existing = activeSessionTimelineLoads.get(key);
@@ -1136,13 +1152,13 @@ async function loadFullTimelineForSession(session: AiSessionSummary, force = fal
   if (!force && sessionState.status === "ready") return;
   const turns = aiSessionTurns(session);
   timelineItemStore.beginSessionLoad(instanceId, session.id);
-  for (const turn of turns) timelineItemStore.beginTurnLoad(instanceId, session.id, turn.id);
+  for (const turn of turns) timelineItemStore.beginTurnLoad(instanceId, session.id, turn);
   const load = getAiSessionTimeline(instanceId, session.id)
     .then((result) => timelineItemStore.resolveSession(instanceId, session.id, turns, result))
     .catch((error) => {
       const message = translateApiError(error, t, t("sessions.timeline.loadFailed"));
       timelineItemStore.rejectSession(instanceId, session.id, message);
-      for (const turn of turns) timelineItemStore.rejectTurn(instanceId, session.id, turn.id, message);
+      for (const turn of turns) timelineItemStore.rejectTurn(instanceId, session.id, turn, message);
     })
     .finally(() => activeSessionTimelineLoads.delete(key));
   activeSessionTimelineLoads.set(key, load);
@@ -1151,12 +1167,15 @@ async function loadFullTimelineForSession(session: AiSessionSummary, force = fal
 
 async function loadTurnTimeline(turnId: string, force = false) {
   const session = selectedSession.value;
-  if (!session || !supportsAiSessionTimeline.value || session.agent !== "codex") return;
+  if (!session || (!supportsAiSessionSessionTimeline.value && !supportsAiSessionTurnTimeline.value)) return;
   const instanceId = props.instance.id;
-  const turn = aiSessionTurns(session).find((candidate) => candidate.id === turnId || candidate.providerTurnId === turnId);
+  const turns = aiSessionTurns(session);
+  const turn = turns.find((candidate) => candidate.id === turnId || candidate.providerTurnId === turnId);
   if (!turn) return;
+  if (shouldDeferTurnTimelineLoad(turns, turn, supportsAiSessionLiveTimelineItems.value)) return;
   const state = timelineItemStore.turnState(instanceId, session.id, turn);
-  // Compatibility for v0.0.21: older controlled instances expose only the full-session Timeline endpoint.
+  // A provider may expose only the complete-session reader; use it as the
+  // authoritative fallback when independent Turn reads are unavailable.
   if (!supportsAiSessionTurnTimeline.value) {
     if (!force && (state.status === "ready" || state.status === "loading")) return;
     return loadFullTimelineForSession(session, true);
@@ -1165,13 +1184,13 @@ async function loadTurnTimeline(turnId: string, force = false) {
   const key = timelineLoadKey(instanceId, session.id, turn.id);
   const existing = activeTurnTimelineLoads.get(key);
   if (existing) return existing;
-  timelineItemStore.beginTurnLoad(instanceId, session.id, turn.id);
+  timelineItemStore.beginTurnLoad(instanceId, session.id, turn);
   const load = getAiSessionTurnTimeline(instanceId, session.id, turn.id)
-    .then((result) => timelineItemStore.resolveTurn(instanceId, session.id, turn.id, result.items))
+    .then((result) => timelineItemStore.resolveTurn(instanceId, session.id, turn, result.items))
     .catch((error) => timelineItemStore.rejectTurn(
       instanceId,
       session.id,
-      turn.id,
+      turn,
       translateApiError(error, t, t("sessions.timeline.loadFailed")),
     ))
     .finally(() => activeTurnTimelineLoads.delete(key));
@@ -2699,7 +2718,10 @@ onMounted(() => {
   });
 });
 
-watch(() => selectedTimelineTurn.value?.id, () => void loadSelectedTurnTimeline());
+watch(
+  () => selectedTimelineTurn.value ? `${selectedTimelineTurn.value.id}:${selectedTimelineTurn.value.status}` : "",
+  () => void loadSelectedTurnTimeline(),
+);
 watch(() => props.instance.id, () => {
   sessionListOverlayOpen.value = false;
 });

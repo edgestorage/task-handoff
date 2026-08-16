@@ -47,7 +47,11 @@ function splitTimelineTurnNodes(nodes: TimelineTurnNode[], retainFollowupUserMes
       userMessages,
       history: [] as TimelineTurnNode[],
       latestResponse: undefined,
-      trailing: nodes.filter((node) => node.type !== "message" || node.message.type !== "user-message"),
+      trailing: nodes.filter((node, index) => (
+        node.type !== "message"
+        || node.message.type !== "user-message"
+        || (retainFollowupUserMessages && index !== primaryUserMessageIndex)
+      )),
     };
   }
   const latestResponseNode = nodes[latestResponseIndex];
@@ -61,7 +65,12 @@ function splitTimelineTurnNodes(nodes: TimelineTurnNode[], retainFollowupUserMes
       )),
     latestResponse: latestResponseNode.type === "message" ? latestResponseNode.message : undefined,
     trailing: nodes.slice(latestResponseIndex + 1)
-      .filter((node) => node.type !== "message" || node.message.type !== "user-message"),
+      .filter((node, offset) => {
+        const index = latestResponseIndex + 1 + offset;
+        return node.type !== "message"
+          || node.message.type !== "user-message"
+          || (retainFollowupUserMessages && index !== primaryUserMessageIndex);
+      }),
   };
 }
 
@@ -94,6 +103,7 @@ export function compactTimelineForTurn(
   );
   return {
     history: split.history,
+    activityNodes: split.trailing,
     activities: split.trailing.flatMap((node) => node.type === "activities" ? node.activities : []),
   };
 }

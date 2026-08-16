@@ -44,11 +44,26 @@ export class CodexAppServerRpcError extends Error {
 }
 
 const FULL_HISTORY_FORK_MIN_VERSION = [0, 129, 0] as const;
+// Compatibility for v0.0.21: managed Codex 0.144.x creates legacy-history
+// threads. Starting with v0.0.22, capable Codex versions are asked to create
+// paginated threads so Codex owns the authoritative Timeline history.
+const NATIVE_TIMELINE_MIN_VERSION = [0, 145, 0] as const;
+
+export type CodexTimelineHistorySource = "adapter-store" | "codex-native";
+
+export function codexPaginatedTimelineSupported(userAgent: string | undefined) {
+  const version = codexVersion(userAgent);
+  if (!version) return false;
+  const comparison = compareVersion(version, NATIVE_TIMELINE_MIN_VERSION);
+  if (comparison !== 0) return comparison > 0;
+  const prerelease = userAgent?.match(/0\.145\.0-([a-z]+)\.(\d+)/i);
+  if (!prerelease) return true;
+  return prerelease[1].toLowerCase() !== "alpha" || Number(prerelease[2]) >= 18;
+}
 
 export function codexThreadForkCapabilities(userAgent: string | undefined): CodexThreadForkCapabilities {
-  const match = userAgent?.match(/(?:^|\s|\/)(\d+)\.(\d+)\.(\d+)(?:[-+\s]|$)/);
-  if (!match) return { fullHistory: false, throughTurn: false };
-  const version = [Number(match[1]), Number(match[2]), Number(match[3])] as const;
+  const version = codexVersion(userAgent);
+  if (!version) return { fullHistory: false, throughTurn: false };
   // Compatibility for v0.0.21: older managed Codex artifacts may expose the
   // method but predate the stable persistent-fork parameters used below.
   const fullHistory = compareVersion(version, FULL_HISTORY_FORK_MIN_VERSION) >= 0;
@@ -56,6 +71,11 @@ export function codexThreadForkCapabilities(userAgent: string | undefined): Code
   // rust-v0.137.0. Unknown and older managed artifacts must fail closed.
   const throughTurn = compareVersion(version, [0, 143, 0]) >= 0;
   return { fullHistory, throughTurn };
+}
+
+function codexVersion(userAgent: string | undefined) {
+  const match = userAgent?.match(/(?:^|\s|\/)(\d+)\.(\d+)\.(\d+)(?:[-+\s]|$)/);
+  return match ? [Number(match[1]), Number(match[2]), Number(match[3])] as const : undefined;
 }
 
 function compareVersion(left: readonly number[], right: readonly number[]) {
@@ -171,6 +191,7 @@ export class CodexAppServerClient extends EventEmitter {
       runtimeWorkspaceRoots: options.runtimeWorkspaceRoots || [options.cwd],
       ...(options.permissions || {}),
       ephemeral: false,
+      ...(options.historyMode ? { historyMode: options.historyMode } : {}),
       sessionStartSource: "startup",
       threadSource: "user",
     });
@@ -253,14 +274,19 @@ export class CodexAppServerClient extends EventEmitter {
       } while (cursor);
       return items;
     } catch (error) {
-      // Compatibility for v0.0.21: its managed Codex app-server predates the
-      // persistent single-item history endpoint. Fall back to thread/read.
+      // A native-history Codex that violates its version contract remains on
+      // the native source; callers surface the capability failure rather than
+      // mixing in adapter-owned history.
       if (error instanceof CodexAppServerRpcError && error.rpcCode === -32601) {
         this.threadItemsListAvailable = false;
         return undefined;
       }
       throw error;
     }
+  }
+
+  supportsPaginatedTimeline() {
+    return codexPaginatedTimelineSupported(this.serverUserAgent);
   }
 
   async listThreads() {
@@ -454,6 +480,7 @@ export class CodexAppServerClient extends EventEmitter {
     });
     this.serverUserAgent = typeof result.userAgent === "string" ? result.userAgent : undefined;
     this.forkMethodAvailable = true;
+    this.threadItemsListAvailable = true;
     this.notify("initialized", {});
   }
 

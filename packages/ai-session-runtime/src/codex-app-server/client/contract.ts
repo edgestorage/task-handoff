@@ -12,6 +12,7 @@ export type CodexTurnPermissionOverrides = {
 
 export type CodexThreadStartOptions = {
   cwd: string;
+  historyMode?: "paginated";
   model?: string;
   modelProvider?: string;
   runtimeWorkspaceRoots?: string[];
@@ -38,6 +39,7 @@ export type CodexAppServerClientLike = EventEmitter & {
   forkThread?: (options: CodexThreadForkOptions) => Promise<CodexThread>;
   readThread?: (threadId: string, options?: { includeTurns?: boolean }) => Promise<CodexThread | undefined>;
   listThreadItems?: (threadId: string, turnId?: string) => Promise<CodexThreadItemEntry[] | undefined>;
+  supportsPaginatedTimeline?: () => boolean;
   listThreads?: () => Promise<CodexThread[]>;
   activeThreadExists?: (threadId: string) => Promise<boolean>;
   startTurn?: (threadId: string, message: string, inputs?: CodexUserInput[], permissions?: CodexTurnPermissionOverrides) => Promise<{ turnId?: string }>;

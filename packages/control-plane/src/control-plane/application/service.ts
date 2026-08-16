@@ -14,6 +14,7 @@ import {
   sanitizeStoredImageProfile,
   sanitizeStoredNode,
   sanitizeStoredProject,
+  supportsAiSessionPersistenceSettings,
   ModelConfigSchema,
   NodeSchema,
   PendingRouteSchema,
@@ -930,6 +931,9 @@ export class ControlPlaneService {
     const parsedInput: UpdateInstanceInput = UpdateInstanceInputSchema.parse(input);
     const current = await this.requireNodeInstance(id);
     const node = this.requireNode(current.nodeId);
+    if (parsedInput.config?.aiSessionHistoryLimit !== undefined) {
+      requireAiSessionHistoryLimitSupport(node, current);
+    }
     const { modelSelection, ...instancePatch } = parsedInput;
     let instance = Object.keys(instancePatch).length
       ? await this.nodeAgentGateway.updateInstance(node, id, instancePatch)
@@ -1629,6 +1633,25 @@ export class ControlPlaneService {
   async requireControlledInstance(id: string, includeSecret = false) {
     const record = await this.requireNodeInstance(id);
     return includeSecret ? record : publicInstanceWithAccess(record);
+  }
+}
+
+function requireAiSessionHistoryLimitSupport(node: Node, instance: ControlledInstance) {
+  const agent = node.capabilities.agent;
+  const agentCapabilities = agent && typeof agent === "object" && !Array.isArray(agent)
+    ? (agent as Record<string, unknown>).capabilities
+    : undefined;
+  const nodeSupported = Boolean(
+    agentCapabilities
+    && typeof agentCapabilities === "object"
+    && !Array.isArray(agentCapabilities)
+    && (agentCapabilities as Record<string, unknown>).aiSessionHistoryLimit === true,
+  );
+  if (!nodeSupported || !supportsAiSessionPersistenceSettings(instance.capabilities)) {
+    throw Object.assign(new Error("This instance does not support managed AI session history retention settings."), {
+      statusCode: 409,
+      code: "AI_SESSION_HISTORY_LIMIT_UNSUPPORTED",
+    });
   }
 }
 

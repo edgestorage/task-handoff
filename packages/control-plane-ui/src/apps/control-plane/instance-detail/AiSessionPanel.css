@@ -1,9 +1,10 @@
 .session-ai-panel {
+  --session-ai-scrollbar-outset: 6px;
   display: grid;
   min-height: 0;
   overflow: hidden;
   background: var(--workspace-bg);
-  padding: 12px;
+  padding: 12px calc(12px - var(--session-ai-scrollbar-outset)) 12px 12px;
 }
 
 .session-ai-workspace {
@@ -1771,6 +1772,7 @@
 
 .session-ai-detail {
   --session-ai-detail-left-inset: 12px;
+  --session-ai-detail-right-inset: calc(10px + var(--session-ai-scrollbar-outset, 0px));
   --session-ai-compose-bottom: 10px;
   --session-ai-content-bottom-gap: 36px;
   --session-ai-sticky-prompt-height: 26px;
@@ -1803,11 +1805,11 @@
   align-content: start;
   gap: 0;
   min-height: 100%;
-  padding: 0 10px calc(
+  padding: 0 var(--session-ai-detail-right-inset) calc(
     var(--session-ai-compose-offset, 84px)
     + var(--session-ai-compose-bottom)
     + var(--session-ai-content-bottom-gap)
-  );
+  ) 10px;
 }
 
 .session-ai-detail-content > * + * {
@@ -1872,7 +1874,7 @@
 .session-ai-timeline-sticky-prompt {
   position: absolute;
   top: 0;
-  right: 10px;
+  right: var(--session-ai-detail-right-inset);
   left: calc(var(--session-ai-detail-left-inset) + 10px);
   z-index: 5;
   box-sizing: border-box;
@@ -2093,7 +2095,7 @@
   --ai-composer-danger: var(--status-danger);
   --ai-composer-shadow: none;
   position: absolute;
-  right: 10px;
+  right: var(--session-ai-detail-right-inset);
   bottom: var(--session-ai-compose-bottom);
   left: calc(10px + var(--session-ai-detail-left-inset, 0px));
   z-index: 5;
@@ -2105,7 +2107,7 @@
 
 .session-ai-compose-gradient {
   position: absolute;
-  right: 10px;
+  right: var(--session-ai-detail-right-inset);
   bottom: -22px;
   left: calc(10px + var(--session-ai-detail-left-inset, 0px));
   z-index: 4;
@@ -2123,7 +2125,7 @@
 
 .session-ai-follow-latest {
   position: absolute;
-  right: 20px;
+  right: calc(20px + var(--session-ai-scrollbar-outset, 0px));
   bottom: calc(
     var(--session-ai-compose-offset, 84px)
     + var(--session-ai-compose-bottom)
@@ -2245,6 +2247,7 @@
 
 @media (max-width: 920px) {
   .session-ai-panel {
+    --session-ai-scrollbar-outset: 0px;
     padding: 8px;
   }
 

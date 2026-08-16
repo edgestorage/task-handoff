@@ -29,6 +29,7 @@
             :response-content="turns[virtualTurn.index].latestResponse?.text || ''"
             :session="session"
             :activities="turns[virtualTurn.index].activities"
+            :activity-nodes="turns[virtualTurn.index].activityNodes"
             :activity-history="turns[virtualTurn.index].history"
             :activity-history-status="turns[virtualTurn.index].timelineStatus"
             :activity-history-error="turns[virtualTurn.index].timelineError"
@@ -140,6 +141,7 @@ type DisplayConversationTurn = {
   history: TimelineTurnNode[];
   latestResponse?: TimelineMessage;
   activities: AiSessionTimelineActivity[];
+  activityNodes: TimelineTurnNode[];
   timelineStatus: AiSessionTurnTimelineState["status"];
   timelineError?: string;
 };
@@ -159,6 +161,7 @@ const turns = computed<DisplayConversationTurn[]>(() => (props.session.turns || 
     history: timeline.history,
     latestResponse,
     activities: timeline.activities,
+    activityNodes: timeline.activityNodes,
     timelineStatus: state.status,
     timelineError: state.error,
   };
@@ -258,11 +261,6 @@ function loadVisibleTurnTimelines() {
   for (const virtualTurn of virtualTurns.value) {
     const turn = turns.value[virtualTurn.index];
     if (!turn || (turn.timelineStatus !== "idle" && turn.timelineStatus !== "stale")) continue;
-    const sourceTurn = sessionTurn(turn.id);
-    const liveLatestTurn = isLatestTurn(virtualTurn.index)
-      && sourceTurn
-      && (sourceTurn.status === "queued" || sourceTurn.status === "running" || sourceTurn.status === "waiting");
-    if (liveLatestTurn && turn.timelineStatus === "idle") continue;
     emit("loadTurnTimeline", turn.id);
   }
 }

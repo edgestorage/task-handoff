@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AiSessionPermissionModeSchema } from "@task-handoff/protocol/ai-sessions";
+import { AI_SESSION_HISTORY_MAX_LIMIT, AiSessionPermissionModeSchema } from "@task-handoff/protocol/ai-sessions";
 import {
   ControlledInstanceSchema,
   EnvironmentSourceSchema,
@@ -49,6 +49,7 @@ export const CreateNodeInstanceSchema = z
     config: z.object({
       autoImportAgentConfigs: z.boolean().optional(),
       defaultCodexPermissionMode: AiSessionPermissionModeSchema.optional(),
+      aiSessionHistoryLimit: z.number().int().min(1).max(AI_SESSION_HISTORY_MAX_LIMIT).optional(),
     }).strict().optional(),
     modelSelection: ControlledInstanceSchema.shape.modelSelection,
   })
@@ -68,6 +69,7 @@ export const UpdateNodeInstanceSchema = z
     config: z.object({
       autoImportAgentConfigs: z.boolean().optional(),
       defaultCodexPermissionMode: AiSessionPermissionModeSchema.optional(),
+      aiSessionHistoryLimit: z.number().int().min(1).max(AI_SESSION_HISTORY_MAX_LIMIT).optional(),
     }).strict().optional(),
     modelSelection: ControlledInstanceSchema.shape.modelSelection.optional(),
   })

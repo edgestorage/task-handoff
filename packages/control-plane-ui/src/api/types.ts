@@ -695,6 +695,7 @@ export type ControlledInstance = {
   config: {
     autoImportAgentConfigs: boolean;
     defaultCodexPermissionMode: AiSessionPermissionMode;
+    aiSessionHistoryLimit: number;
   };
   workspace: {
     mode?: WorkspacePolicy["mode"];
@@ -995,6 +996,7 @@ export type CreateControlledInstanceInput = {
   config?: {
     autoImportAgentConfigs?: boolean;
     defaultCodexPermissionMode?: AiSessionPermissionMode;
+    aiSessionHistoryLimit?: number;
   };
   modelSelection?: ModelSelection;
   start?: boolean;
@@ -1013,6 +1015,7 @@ export type UpdateControlledInstanceInput = {
   config?: {
     autoImportAgentConfigs?: boolean;
     defaultCodexPermissionMode?: AiSessionPermissionMode;
+    aiSessionHistoryLimit?: number;
   };
   modelSelection?: ModelSelection;
 };

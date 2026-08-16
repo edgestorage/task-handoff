@@ -26,7 +26,18 @@
     <div v-if="interactive && expanded" class="ai-session-tool-activity-expanded">
       <span v-if="loading">{{ t("sessions.timeline.loading") }}</span>
       <span v-else-if="error" role="alert">{{ error }}</span>
-      <AiSessionActivityGroup v-else-if="activities.length" :activities="activities" open :summary-visible="false" />
+      <template v-else-if="displayNodes.length">
+        <template v-for="node in displayNodes" :key="node.id">
+          <article
+            v-if="node.type === 'message'"
+            class="ai-session-tool-activity-message"
+            :class="{ 'ai-session-tool-activity-message-user': node.message.type === 'user-message' }"
+          >
+            <MarkdownContent :content="node.message.text" :code-tools="markdownCodeTools" />
+          </article>
+          <AiSessionActivityGroup v-else :activities="node.activities" open :summary-visible="false" />
+        </template>
+      </template>
       <span v-else>{{ t("sessions.timeline.noActivities") }}</span>
     </div>
   </section>
@@ -38,7 +49,9 @@ import { useI18n } from "vue-i18n";
 import { ChevronRight } from "@lucide/vue";
 import type { AiSessionTimelineActivity } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionLifecycle, AiSessionPhase, AiSessionTool } from "../../api/types";
+import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import AiSessionActivityGroup from "./AiSessionActivityGroup.vue";
+import type { TimelineTurnNode } from "./timelineActivities";
 
 const props = withDefaults(defineProps<{
   currentTool?: AiSessionTool;
@@ -48,6 +61,7 @@ const props = withDefaults(defineProps<{
   toolCallsSinceLastMessage?: number;
   tone?: "detail" | "board";
   activities?: AiSessionTimelineActivity[];
+  nodes?: TimelineTurnNode[];
   error?: string;
   interactive?: boolean;
   loading?: boolean;
@@ -59,11 +73,22 @@ const props = withDefaults(defineProps<{
   toolCallsSinceLastMessage: 0,
   tone: "detail",
   activities: () => [],
+  nodes: () => [],
   error: "",
   interactive: false,
   loading: false,
 });
 const { t } = useI18n();
+const markdownCodeTools = computed(() => ({
+  copiedLabel: t("sessions.markdown.copied"),
+  copyLabel: t("sessions.markdown.copy"),
+  plainTextLabel: t("sessions.markdown.plainText"),
+}));
+const displayNodes = computed<TimelineTurnNode[]>(() => props.nodes.length
+  ? props.nodes
+  : props.activities.length
+    ? [{ id: `activities:${props.activities[0].id}`, type: "activities", activities: props.activities }]
+    : []);
 
 const count = computed(() => Math.max(0, props.toolCallsSinceLastMessage));
 const visible = computed(() => props.status === "running" || props.status === "waiting");
@@ -164,8 +189,20 @@ const statusText = computed(() => {
 .ai-session-tool-activity-trigger > span { font-weight: 400; }
 .ai-session-tool-activity-trigger > svg { flex: 0 0 auto; transition: transform 120ms ease; }
 .ai-session-tool-activity-trigger > svg.open { transform: rotate(90deg); }
-.ai-session-tool-activity-expanded { flex: 0 0 100%; min-width: 0; margin-top: 10px; padding-left: 20px; }
+.ai-session-tool-activity-expanded { display: grid; flex: 0 0 100%; gap: 6px; min-width: 0; margin-top: 10px; padding-left: 20px; }
 .ai-session-tool-activity-expanded > span { color: var(--text-muted); font-size: 12px; }
+.ai-session-tool-activity-message { min-width: 0; color: var(--text); font-size: 14px; line-height: 1.55; }
+.ai-session-tool-activity-message-user {
+  justify-self: end;
+  margin-left: auto;
+  width: fit-content;
+  max-width: min(78%, 620px);
+  border-radius: 14px;
+  background: var(--surface-hover);
+  padding: 12px 14px;
+}
+.ai-session-tool-activity-message :deep(.markdown-content),
+.ai-session-tool-activity-message :deep(.markdown-content > *) { max-width: 100%; overflow-wrap: anywhere; }
 
 .ai-session-tool-activity-detail {
   font-size: 14px;

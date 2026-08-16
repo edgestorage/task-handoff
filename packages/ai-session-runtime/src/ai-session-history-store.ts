@@ -3,7 +3,8 @@ import crypto from "node:crypto";
 import path from "node:path";
 import writeFileAtomic from "write-file-atomic";
 import {
-  AI_SESSION_HISTORY_LIMIT,
+  AI_SESSION_HISTORY_DEFAULT_LIMIT,
+  AI_SESSION_HISTORY_MAX_LIMIT,
   AiSessionHistoryIndexSchema,
   AiSessionHistoryDetailSchema,
   AiSessionHistoryItemSchema,
@@ -51,8 +52,15 @@ export type AiSessionHistoryWarning = {
 };
 
 export type AiSessionHistoryStoreOptions = {
+  limit?: number;
   onWarning?: (warning: AiSessionHistoryWarning) => void;
 };
+
+function historyLimit(value: number | undefined) {
+  return Number.isInteger(value) && value !== undefined && value >= 1 && value <= AI_SESSION_HISTORY_MAX_LIMIT
+    ? value
+    : AI_SESSION_HISTORY_DEFAULT_LIMIT;
+}
 
 function recordValue(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
@@ -66,7 +74,10 @@ function providerIdentity(item: Pick<AiSessionHistoryItem, "agent" | "providerSe
   return `${item.agent}:${item.providerSessionId}`;
 }
 
-export function sortAndLimitAiSessionHistory(items: readonly AiSessionHistoryItem[]) {
+export function sortAndLimitAiSessionHistory(
+  items: readonly AiSessionHistoryItem[],
+  limit = AI_SESSION_HISTORY_DEFAULT_LIMIT,
+) {
   const sorted = [...items].sort((left, right) => (
     Date.parse(right.lastActiveAt) - Date.parse(left.lastActiveAt)
     || Date.parse(right.archivedAt) - Date.parse(left.archivedAt)
@@ -81,7 +92,7 @@ export function sortAndLimitAiSessionHistory(items: readonly AiSessionHistoryIte
     ids.add(item.id);
     providerIds.add(providerId);
     normalized.push(item);
-    if (normalized.length === AI_SESSION_HISTORY_LIMIT) break;
+    if (normalized.length === historyLimit(limit)) break;
   }
   return normalized;
 }
@@ -89,6 +100,7 @@ export function sortAndLimitAiSessionHistory(items: readonly AiSessionHistoryIte
 export function sanitizeAiSessionHistoryIndex(
   value: unknown,
   onWarning?: (warning: AiSessionHistoryWarning) => void,
+  limit = AI_SESSION_HISTORY_DEFAULT_LIMIT,
 ): AiSessionHistoryIndex {
   const record = recordValue(value);
   if (!record) {
@@ -126,7 +138,7 @@ export function sanitizeAiSessionHistoryIndex(
     }
     return [parsed.data];
   });
-  const normalized = sortAndLimitAiSessionHistory(items);
+  const normalized = sortAndLimitAiSessionHistory(items, limit);
   if (normalized.length < items.length) {
     onWarning?.({ kind: "index", id: "index", reason: "duplicate or excess items removed" });
   }
@@ -146,19 +158,42 @@ function sanitizeLineage(value: unknown) {
 export class AiSessionHistoryStore {
   private readonly filePath: string;
   private readonly onWarning?: (warning: AiSessionHistoryWarning) => void;
+  private limit: number;
 
   constructor(paths: Pick<TaskHandoffStoragePaths, "dataDir">, options: AiSessionHistoryStoreOptions = {}) {
     this.filePath = path.join(paths.dataDir, "ai-session-history", "index.json");
     this.onWarning = options.onWarning;
+    this.limit = historyLimit(options.limit);
   }
 
   path() {
     return this.filePath;
   }
 
+  retentionLimit() {
+    return this.limit;
+  }
+
+  setRetentionLimit(limit: number) {
+    const nextLimit = historyLimit(limit);
+    if (nextLimit !== limit) throw new Error(`AI session history limit must be an integer between 1 and ${AI_SESSION_HISTORY_MAX_LIMIT}.`);
+    const current = this.list();
+    this.limit = nextLimit;
+    const retained = sortAndLimitAiSessionHistory(current, this.limit);
+    const removed = current.filter((item) => !retained.some((candidate) => candidate.id === item.id));
+    if (removed.length) {
+      this.saveIndex({ schemaVersion: 1, items: retained });
+      this.removeDetails(removed.map((item) => item.id));
+    }
+    return { limit: this.limit, removed };
+  }
+
   list() {
     const loaded = this.load();
-    if (loaded.rewrite) this.saveIndex(loaded.index);
+    if (loaded.rewrite) {
+      this.saveIndex(loaded.index);
+      this.removeDetails(loaded.removedIds);
+    }
     return loaded.index.items;
   }
 
@@ -189,7 +224,7 @@ export class AiSessionHistoryStore {
     const items = sortAndLimitAiSessionHistory([
       parsed,
       ...current.filter((entry) => entry.id !== parsed.id && providerIdentity(entry) !== providerIdentity(parsed)),
-    ]);
+    ], this.limit);
     if (JSON.stringify(items) !== JSON.stringify(current)) this.saveIndex({ schemaVersion: 1, items });
     this.removeDetails(current.filter((entry) => !items.some((next) => next.id === entry.id)).map((entry) => entry.id));
     return parsed;
@@ -214,25 +249,34 @@ export class AiSessionHistoryStore {
     return true;
   }
 
-  private load(): { index: AiSessionHistoryIndex; rewrite: boolean } {
+  private load(): { index: AiSessionHistoryIndex; rewrite: boolean; removedIds: string[] } {
     let raw: unknown;
     try {
       raw = JSON.parse(fs.readFileSync(this.filePath, "utf8"));
     } catch (error: unknown) {
       if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-        return { index: AiSessionHistoryIndexSchema.parse({}), rewrite: false };
+        return { index: AiSessionHistoryIndexSchema.parse({}), rewrite: false, removedIds: [] };
       }
       this.onWarning?.({ kind: "index", id: "index", reason: "unreadable index replaced with an empty index" });
-      return { index: AiSessionHistoryIndexSchema.parse({}), rewrite: false };
+      return { index: AiSessionHistoryIndexSchema.parse({}), rewrite: false, removedIds: [] };
     }
-    const index = sanitizeAiSessionHistoryIndex(raw, this.onWarning);
-    return { index, rewrite: JSON.stringify(raw) !== JSON.stringify(index) };
+    const index = sanitizeAiSessionHistoryIndex(raw, this.onWarning, this.limit);
+    const retainedIds = new Set(index.items.map((item) => item.id));
+    const source = recordValue(raw);
+    const removedIds = (Array.isArray(source?.items) ? source.items : [])
+      .flatMap((item) => {
+        const record = recordValue(item);
+        return typeof record?.id === "string" && record.id.trim() && !retainedIds.has(record.id.trim())
+          ? [record.id.trim()]
+          : [];
+      });
+    return { index, rewrite: JSON.stringify(raw) !== JSON.stringify(index), removedIds };
   }
 
   private saveIndex(index: AiSessionHistoryIndex) {
     const normalized = AiSessionHistoryIndexSchema.parse({
       schemaVersion: 1,
-      items: sortAndLimitAiSessionHistory(index.items),
+      items: sortAndLimitAiSessionHistory(index.items, this.limit),
     });
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
     writeFileAtomic.sync(this.filePath, `${JSON.stringify(normalized, null, 2)}\n`, { mode: 0o600 });

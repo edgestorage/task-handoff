@@ -41,6 +41,39 @@ export class CodexTimelineStore {
     this.write({ schemaVersion: 1, providerSessionId, items });
   }
 
+  retain(providerSessionIds: Iterable<string>) {
+    const retained = new Set([...providerSessionIds].map((id) => id.trim()).filter(Boolean));
+    let removed = 0;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(this.directory, { withFileTypes: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return removed;
+      throw error;
+    }
+    for (const entry of entries) {
+      if (!entry.isFile() || !/^[a-f0-9]{64}\.json$/.test(entry.name)) continue;
+      const filePath = path.join(this.directory, entry.name);
+      let providerSessionId: string | undefined;
+      try {
+        const raw = JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
+        const record = raw && typeof raw === "object" && !Array.isArray(raw)
+          ? raw as Record<string, unknown>
+          : undefined;
+        providerSessionId = typeof record?.providerSessionId === "string"
+          ? record.providerSessionId.trim()
+          : undefined;
+      } catch {
+        // Invalid managed entries have no recoverable owner and are discarded.
+      }
+      if (providerSessionId && retained.has(providerSessionId)) continue;
+      fs.unlinkSync(filePath);
+      if (providerSessionId) this.cache.delete(providerSessionId);
+      removed += 1;
+    }
+    return removed;
+  }
+
   private read(providerSessionId: string) {
     try {
       const raw = JSON.parse(fs.readFileSync(this.filePath(providerSessionId), "utf8")) as unknown;

@@ -1,5 +1,5 @@
 import { AiSessionTimelineSchema, AiSessionTurnTimelineSchema, type AiSessionCommandInput, type AiSessionCommandResult, type AiSessionStatus, type AiSessionTimelineItem } from "@task-handoff/protocol/ai-sessions";
-import type { AiSessionActionResult, AiSessionApprovalDecision, AiSessionControlProvider, AiSessionProviderCreateInput, AiSessionProviderCreateResult, AiSessionProviderForkInput, AiSessionProviderForkResult, AiSessionSendInput } from "./ai-session-control";
+import type { AiSessionActionResult, AiSessionApprovalDecision, AiSessionControlProvider, AiSessionProviderCreateInput, AiSessionProviderCreateResult, AiSessionProviderForkInput, AiSessionProviderForkResult, AiSessionProviderTimelineItemListener, AiSessionSendInput } from "./ai-session-control";
 import { aiSessionControlError } from "./ai-session-control";
 import type { AiSessionDiscoveryContext, AiSessionDiscoveryProvider } from "./ai-session-discovery";
 import type { AiSessionRegistry } from "./ai-session-registry";
@@ -50,6 +50,8 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
   private readonly timelineStore?: CodexTimelineStore;
   private readonly injectedClient?: CodexAppServerClientLike;
   private readonly options: CodexAppServerBridgeOptions;
+  private readonly timelineItemListeners = new Set<AiSessionProviderTimelineItemListener>();
+  private readonly timelineSourceByThread = new Map<string, "adapter-store" | "codex-native">();
   private directCreateRequests = 0;
 
   constructor(
@@ -71,6 +73,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       createClient: (options) => this.createClient(options),
       onEvent: (event) => this.applyProviderEvent(event),
       onInvalidate: () => {
+        this.timelineSourceByThread.clear();
         this.options.onEventSourceClose?.();
         this.approvalCoordinator?.resetConnection();
         this.projector?.resetConnection();
@@ -94,8 +97,11 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       threadForkSupported: () => this.connection.client?.threadForkCapabilities?.().fullHistory === true,
       onMessageDelta: (event) => this.options.onMessageDelta?.(event),
       onTimelineItem: (event) => {
-        this.timelineStore?.upsert(event.providerSessionId, event.item);
+        if (this.timelineHistorySource(event.providerSessionId) === "adapter-store") {
+          this.timelineStore?.upsert(event.providerSessionId, event.item);
+        }
         this.options.onTimelineItem?.(event);
+        for (const listener of this.timelineItemListeners) listener(event);
       },
     });
     this.mentions = new CodexAppServerMentions({
@@ -129,6 +135,25 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
           : Promise.resolve(undefined);
       },
     });
+  }
+
+  subscribeTimelineItems(listener: AiSessionProviderTimelineItemListener) {
+    this.timelineItemListeners.add(listener);
+    return () => this.timelineItemListeners.delete(listener);
+  }
+
+  timelineCapabilities() {
+    const client = this.connection.client;
+    const reads = Boolean(client?.listThreadItems || (this.timelineStore && client?.readThread));
+    return { sessionRead: reads, turnRead: reads, liveItems: true };
+  }
+
+  retainTimelineHistory(providerSessionIds: Iterable<string>) {
+    return this.timelineStore?.retain(providerSessionIds) || 0;
+  }
+
+  private timelineHistorySource(providerSessionId: string): "adapter-store" | "codex-native" {
+    return this.timelineSourceByThread.get(providerSessionId) || "adapter-store";
   }
 
   async sync(appSessions: CodexAppSession[] = []) {
@@ -190,6 +215,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
         cwd: input.cwd,
         runtimeWorkspaceRoots: [input.cwd],
         ...this.options.threadStartDefaults,
+        ...(client.supportsPaginatedTimeline?.() ? { historyMode: "paginated" as const } : {}),
         permissions: codexPermissionOverrides(input.permissionMode),
       });
       const providerSessionId = typeof thread.id === "string" ? thread.id.trim() : "";
@@ -201,6 +227,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       // authoritative fact before the first turn so the restart-recovery path does not mistake
       // a newly created thread for an unloaded persisted thread and call thread/resume.
       this.connection.registerStartedThread(client, providerSessionId);
+      this.recordTimelineHistorySource(thread);
       this.projector.applyThreadSnapshot(thread, { creationSource: "ai-session" });
       return { providerSessionId, cwd, creationSource: "ai-session" };
     } finally {
@@ -235,6 +262,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
         ...(input.throughTurnId ? { throughTurnId: input.throughTurnId } : {}),
       };
       this.connection.registerStartedThread(client, providerSessionId);
+      this.recordTimelineHistorySource(thread);
       this.projector.applyThreadSnapshot(thread, { creationSource: "ai-session", lineage });
       return { providerSessionId, cwd, creationSource: "ai-session", lineage };
     } catch (error) {
@@ -254,6 +282,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
     if (!client.readThread) throw aiSessionControlError("AI_SESSION_READ_UNSUPPORTED", "Codex app-server does not support thread reads.", 400);
     const thread = await client.readThread(providerSessionId, { includeTurns: true });
     if (!thread) throw aiSessionControlError("AI_SESSION_THREAD_NOT_FOUND", "Codex thread was not found.", 404);
+    this.recordTimelineHistorySource(thread);
     this.projector.applyThreadSnapshot(thread, { creationSource: "ai-session" });
   }
 
@@ -284,41 +313,41 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
     const matchesTurn = (turnId: string) => !providerTurnId || turnId === providerTurnId || turnId === publicTurnId;
     const realtimeItems = this.projector.realtimeTimelineItems(session.providerSessionId)
       .filter((entry) => matchesTurn(entry.turnId));
-    const durableItems = (this.timelineStore?.items(session.providerSessionId) || [])
-      .filter((item) => matchesTurn(item.turnId));
-    const persistedItems = await client.listThreadItems?.(session.providerSessionId, providerTurnId);
-    if (persistedItems) {
-      const timeline = codexItemTimeline(
+    const source = this.timelineHistorySource(session.providerSessionId);
+    if (source === "adapter-store") {
+      if (!client.readThread || !this.timelineStore) {
+        throw aiSessionControlError("AI_SESSION_TIMELINE_UNSUPPORTED", "Codex adapter Timeline history is unavailable.", 409);
+      }
+      const durableItems = this.timelineStore.items(session.providerSessionId)
+        .filter((item) => matchesTurn(item.turnId));
+      const thread = await client.readThread(session.providerSessionId, { includeTurns: true });
+      if (!thread) throw aiSessionControlError("AI_SESSION_THREAD_NOT_FOUND", "Codex thread was not found.", 404);
+      const timeline = codexThreadTimeline(
         session.id,
         session.providerSessionId,
-        persistedItems,
+        thread,
         new Date().toISOString(),
         realtimeItems,
       );
       return AiSessionTimelineSchema.parse({
         ...timeline,
-        items: mergeCodexTimelineItems(timeline.items, durableItems),
+        items: mergeCodexTimelineItems(
+          timeline.items.filter((item) => matchesTurn(item.turnId)),
+          durableItems,
+        ),
       });
     }
-    if (!client.readThread) {
-      throw aiSessionControlError("AI_SESSION_TIMELINE_UNSUPPORTED", "Codex app-server does not support thread reads.", 400);
+    const persistedItems = await client.listThreadItems?.(session.providerSessionId, providerTurnId);
+    if (!persistedItems) {
+      throw aiSessionControlError("AI_SESSION_TIMELINE_UNSUPPORTED", "Codex native Timeline history became unavailable.", 409);
     }
-    const thread = await client.readThread(session.providerSessionId, { includeTurns: true });
-    if (!thread) throw aiSessionControlError("AI_SESSION_THREAD_NOT_FOUND", "Codex thread was not found.", 404);
-    const timeline = codexThreadTimeline(
+    return AiSessionTimelineSchema.parse(codexItemTimeline(
       session.id,
       session.providerSessionId,
-      thread,
+      persistedItems,
       new Date().toISOString(),
       realtimeItems,
-    );
-    return AiSessionTimelineSchema.parse({
-      ...timeline,
-      items: mergeCodexTimelineItems(
-        timeline.items.filter((item) => matchesTurn(item.turnId)),
-        durableItems,
-      ),
-    });
+    ));
   }
 
   async resumeSession(providerSessionId: string) {
@@ -328,6 +357,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       ? await client.resumeThread(providerSessionId)
       : client.readThread ? await client.readThread(providerSessionId, { includeTurns: true }) : undefined;
     if (!thread) throw aiSessionControlError("AI_SESSION_RESUME_UNSUPPORTED", "Codex app-server could not resume the thread.", 409);
+    this.recordTimelineHistorySource(thread);
     this.projector.applyThreadSnapshot(thread, { creationSource: "ai-session" });
   }
 
@@ -454,8 +484,15 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
     if (!id || thread.ephemeral === true) {
       return;
     }
+    this.recordTimelineHistorySource(thread);
     const appSessionId = options.bindAppSession ? this.binding.appSessionIdForThread(id) : undefined;
     this.projector.applyThreadSnapshot(thread, { appSessionId, creationSource: options.creationSource });
+  }
+
+  private recordTimelineHistorySource(thread: CodexThread) {
+    if (typeof thread.id !== "string") return;
+    const source = thread.historyMode === "paginated" ? "codex-native" : "adapter-store";
+    this.timelineSourceByThread.set(thread.id, source);
   }
 
   private async requireReadyClient() {

@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 import { z } from "zod";
 import {
+  AI_SESSION_HISTORY_DEFAULT_LIMIT,
+  AI_SESSION_HISTORY_MAX_LIMIT,
   AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES,
   AI_SESSION_MAX_MESSAGE_ATTACHMENTS,
   AiSessionMessageAttachmentSchema,
@@ -11,21 +13,138 @@ import {
 import { TriggerConfigSchema, TriggerDeploymentSchema, TriggerRunSchema, TriggerRuntimeStateSchema } from "./triggers.ts";
 import { ControlPlaneProxyErrorSchema, ProxyTargetStateSchema } from "./control-plane-proxy.ts";
 
-export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-08-15";
+export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-08-17";
 export const NODE_TUNNEL_PROTOCOL_VERSION = "2026-08-01";
 export const MARKET_CATALOG_PROTOCOL_VERSION = "2026-07-29";
 // Compatibility for v0.0.21: this released protocol already requires appInventory
 // and remains inside the N-1 support window after adding model endpoint probes.
-const APP_INVENTORY_REQUIRED_PROTOCOL_VERSIONS = new Set(["2026-08-01", CONTROL_PLANE_PROTOCOL_VERSION]);
-// The local value follows the date-only convention. Parsing remains permissive
-// so persisted records written before that convention do not disappear.
-export const ProtocolVersionSchema = z.string();
+const APP_INVENTORY_REQUIRED_PROTOCOL_VERSIONS = new Set(["2026-08-01", "2026-08-16", CONTROL_PLANE_PROTOCOL_VERSION]);
+export const ProtocolVersionSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Protocol version must use YYYY-MM-DD format.");
+
+const AiSessionCapabilityAgentSchema = z.string().trim().min(1).max(120);
+
+function emptyAiSessionTimelineCapabilities() {
+  return {
+    sessionReadAgents: [] as string[],
+    turnReadAgents: [] as string[],
+    liveItemAgents: [] as string[],
+  };
+}
+
+function defaultControlledInstanceFeatures() {
+  return {
+    appRuntime: false,
+    tty: false,
+    gui: false,
+    browser: false,
+    screenshots: false,
+    logs: false,
+    aiSessionWorkspaceSelection: false,
+    aiSessionPersistenceSettings: false,
+    aiSessionTimeline: emptyAiSessionTimelineCapabilities(),
+  };
+}
+
+function defaultControlledInstanceCapabilities() {
+  return { features: defaultControlledInstanceFeatures() };
+}
+
+/**
+ * Provider-scoped Timeline capabilities on the controlled-instance/control-plane boundary.
+ * The three capabilities are independent: snapshot reads never imply live item delivery.
+ */
+export const AiSessionTimelineCapabilitiesSchema = z.object({
+  sessionReadAgents: z.array(AiSessionCapabilityAgentSchema).max(100).default([]),
+  turnReadAgents: z.array(AiSessionCapabilityAgentSchema).max(100).default([]),
+  liveItemAgents: z.array(AiSessionCapabilityAgentSchema).max(100).default([]),
+}).passthrough();
+
+export const ControlledInstanceFeatureCapabilitiesSchema = z.object({
+  appRuntime: z.boolean().default(false),
+  tty: z.boolean().default(false),
+  gui: z.boolean().default(false),
+  browser: z.boolean().default(false),
+  screenshots: z.boolean().default(false),
+  logs: z.boolean().default(false),
+  aiSessionWorkspaceSelection: z.boolean().default(false),
+  aiSessionPersistenceSettings: z.boolean().default(false),
+  aiSessionTimeline: AiSessionTimelineCapabilitiesSchema.default(emptyAiSessionTimelineCapabilities),
+}).passthrough();
+
+/** The single capability document for the controlled-instance/control-plane boundary. */
+export const ControlledInstanceCapabilitiesSchema = z.object({
+  features: ControlledInstanceFeatureCapabilitiesSchema.default(defaultControlledInstanceFeatures),
+}).passthrough();
+
+export type AiSessionTimelineCapabilities = z.infer<typeof AiSessionTimelineCapabilitiesSchema>;
+export type AiSessionTimelineCapability = "session-read" | "turn-read" | "live-items";
+export type ControlledInstanceCapabilities = z.infer<typeof ControlledInstanceCapabilitiesSchema>;
+
+/** Normalize the only capability document on this boundary before querying any feature. */
+export function normalizeControlledInstanceCapabilities(capabilities: unknown): ControlledInstanceCapabilities {
+  const defaults = defaultControlledInstanceCapabilities();
+  if (!capabilities || typeof capabilities !== "object" || Array.isArray(capabilities)) return defaults;
+  const document = capabilities as Record<string, unknown>;
+  const rawFeatures = document.features;
+  if (!rawFeatures || typeof rawFeatures !== "object" || Array.isArray(rawFeatures)) return defaults;
+  const features = rawFeatures as Record<string, unknown>;
+  const normalizedFeatures = defaultControlledInstanceFeatures();
+  for (const feature of [
+    "appRuntime",
+    "tty",
+    "gui",
+    "browser",
+    "screenshots",
+    "logs",
+    "aiSessionWorkspaceSelection",
+    "aiSessionPersistenceSettings",
+  ] as const) {
+    const parsed = z.boolean().safeParse(features[feature]);
+    if (parsed.success) normalizedFeatures[feature] = parsed.data;
+  }
+  const timeline = AiSessionTimelineCapabilitiesSchema.safeParse(features.aiSessionTimeline);
+  if (timeline.success) normalizedFeatures.aiSessionTimeline = timeline.data;
+  return ControlledInstanceCapabilitiesSchema.parse({
+    ...document,
+    features: { ...features, ...normalizedFeatures },
+  });
+}
+
+export function supportsAiSessionWorkspaceSelection(capabilities: unknown) {
+  return normalizeControlledInstanceCapabilities(capabilities).features.aiSessionWorkspaceSelection;
+}
+
+export function supportsAiSessionPersistenceSettings(capabilities: unknown) {
+  return normalizeControlledInstanceCapabilities(capabilities).features.aiSessionPersistenceSettings;
+}
+
+/** Query the structured Timeline feature from the normalized capability document. */
+export function aiSessionTimelineCapabilities(capabilities: unknown): AiSessionTimelineCapabilities {
+  return normalizeControlledInstanceCapabilities(capabilities).features.aiSessionTimeline;
+}
+
+export function aiSessionTimelineCapabilityAgents(
+  capabilities: unknown,
+  capability: AiSessionTimelineCapability,
+) {
+  const normalized = aiSessionTimelineCapabilities(capabilities);
+  if (capability === "session-read") return normalized.sessionReadAgents;
+  if (capability === "turn-read") return normalized.turnReadAgents;
+  return normalized.liveItemAgents;
+}
+
+export function supportsAiSessionTimelineCapability(
+  capabilities: unknown,
+  agent: string,
+  capability: AiSessionTimelineCapability,
+) {
+  return aiSessionTimelineCapabilityAgents(capabilities, capability).includes(agent);
+}
 
 const IdSchema = z.string().trim().min(1).max(120).regex(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$/);
 const TimestampSchema = z.string().datetime();
 const LabelsSchema = z.record(z.string(), z.string()).default({});
 const StringRecordSchema = z.record(z.string(), z.string()).default({});
-const DateProtocolVersionSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Protocol version must use YYYY-MM-DD format.");
 
 export const NodeTunnelRequestBodySchema = z.object({
   encoding: z.enum(["utf8", "base64"]),
@@ -815,7 +934,7 @@ export const MarketImageSchema = z.object({
 });
 
 export const MarketCatalogSnapshotSchema = z.object({
-  protocolVersion: DateProtocolVersionSchema,
+  protocolVersion: ProtocolVersionSchema,
   catalogId: IdSchema,
   revision: z.string().trim().min(1).max(240),
   source: z.enum(["embedded", "remote", "cache"]),
@@ -1255,6 +1374,7 @@ export const InstanceResourceMetricsEventType = {
 
 export const NodeAgentCapabilitiesSchema = z.object({
   modelEndpointProbe: z.boolean().optional(),
+  aiSessionHistoryLimit: z.boolean().optional(),
 }).strip();
 
 export const NodeAgentHealthSchema = z
@@ -1489,15 +1609,16 @@ export const ControlledInstanceSchema = z
     build: BuildInfoSchema.optional(),
     runtimeVersion: RuntimeVersionStateSchema.optional(),
     ready: z.boolean().default(false),
-    capabilities: z.record(z.string(), z.unknown()).default({}),
+    capabilities: ControlledInstanceCapabilitiesSchema.default(defaultControlledInstanceCapabilities),
     appInventory: InstanceAppInventorySchema.optional(),
     config: z
       .object({
         autoImportAgentConfigs: z.boolean().default(true),
         defaultCodexPermissionMode: AiSessionPermissionModeSchema.default("ask"),
+        aiSessionHistoryLimit: z.number().int().min(1).max(AI_SESSION_HISTORY_MAX_LIMIT).default(AI_SESSION_HISTORY_DEFAULT_LIMIT),
       })
       .strict()
-      .default({ autoImportAgentConfigs: true, defaultCodexPermissionMode: "ask" }),
+      .default({ autoImportAgentConfigs: true, defaultCodexPermissionMode: "ask", aiSessionHistoryLimit: AI_SESSION_HISTORY_DEFAULT_LIMIT }),
     workspace: WorkspaceStatusSchema.default({ status: "unknown" }),
     target: InstanceTargetSchema.default({ strategy: "direct-port", status: "unknown" }),
     access: InstanceAccessSchema,
@@ -1610,9 +1731,9 @@ export function sanitizeStoredControlledInstance(
       });
       delete capabilities.apps;
     }
-    next.capabilities = capabilities;
+    next.capabilities = normalizeControlledInstanceCapabilities(capabilities);
   } else {
-    next.capabilities = {};
+    next.capabilities = normalizeControlledInstanceCapabilities(undefined);
   }
   next.appInventory = sanitizeStoredAppInventory(source.appInventory, onWarning, typeof source.id === "string" ? source.id : undefined);
   next.source = sanitizeStoredProjectSource(source.source, onWarning, typeof source.id === "string" ? source.id : undefined);
@@ -1621,7 +1742,7 @@ export function sanitizeStoredControlledInstance(
   next.aiSessions = sanitizeStoredAiSessions(source.aiSessions, onWarning, typeof source.id === "string" ? source.id : undefined);
   next.triggers = sanitizeStoredTriggers(source.triggers, onWarning, typeof source.id === "string" ? source.id : undefined);
   next.apps = sanitizeStoredStrictObject(ControlledInstanceSchema.shape.apps.unwrap(), pickObjectFields(source.apps, ["runningCount", "problemCount", "updatedAt", "revision"]), "apps", onWarning, typeof source.id === "string" ? source.id : undefined) || { runningCount: 0, problemCount: 0 };
-  next.config = sanitizeStoredStrictObject(ControlledInstanceSchema.shape.config.unwrap(), pickObjectFields(source.config, ["autoImportAgentConfigs", "defaultCodexPermissionMode"]), "config", onWarning, typeof source.id === "string" ? source.id : undefined) || { autoImportAgentConfigs: true, defaultCodexPermissionMode: "ask" };
+  next.config = sanitizeStoredStrictObject(ControlledInstanceSchema.shape.config.unwrap(), pickObjectFields(source.config, ["autoImportAgentConfigs", "defaultCodexPermissionMode", "aiSessionHistoryLimit"]), "config", onWarning, typeof source.id === "string" ? source.id : undefined) || { autoImportAgentConfigs: true, defaultCodexPermissionMode: "ask", aiSessionHistoryLimit: AI_SESSION_HISTORY_DEFAULT_LIMIT };
   next.modelSelection = sanitizeStoredStrictObject(ModelSelectionSchema.unwrap(), pickObjectFields(source.modelSelection, ["codexModelHash", "claudeModelHash"]), "modelSelection", onWarning, typeof source.id === "string" ? source.id : undefined) || {};
   next.imageSnapshot = sanitizeStoredInstanceImageSnapshot(
     source.imageSnapshot,
@@ -1952,7 +2073,7 @@ export const ControlledInstanceRegisterSchema = z
     protocolVersion: ProtocolVersionSchema,
     build: BuildInfoSchema.optional(),
     controlMode: z.enum(["standalone", "controlled"]).default("controlled"),
-    capabilities: z.record(z.string(), z.unknown()).default({}),
+    capabilities: ControlledInstanceCapabilitiesSchema.default(defaultControlledInstanceCapabilities),
     appInventory: InstanceAppInventorySchema.optional(),
     target: InstanceTargetSchema.default({ strategy: "direct-port", status: "unknown" }),
     workspace: WorkspaceStatusSchema.default({ status: "unknown" }),

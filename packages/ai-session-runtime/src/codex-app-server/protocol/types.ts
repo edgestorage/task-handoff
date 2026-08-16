@@ -19,6 +19,7 @@ export type CodexThread = {
   name?: unknown;
   preview?: unknown;
   ephemeral?: unknown;
+  historyMode?: unknown;
   path?: unknown;
   status?: CodexThreadStatus;
   turns?: unknown;

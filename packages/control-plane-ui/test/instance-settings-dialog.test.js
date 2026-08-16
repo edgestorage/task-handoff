@@ -67,6 +67,8 @@ test("instance settings exposes general, models, apps, and inventory freshness s
   assert.match(dialog, /t\("instances\.settings\.sessionPermissions"\)/);
   assert.match(dialog, /defaultCodexPermissionMode/);
   assert.match(dialog, /t\("instances\.settings\.sessionPermissionsDescription"\)/);
+  assert.match(dialog, /t\("instances\.settings\.aiSessionHistoryLimit"\)/);
+  assert.match(dialog, /aiSessionHistoryLimit:\s*Number\(aiSessionHistoryLimit\.value\)/);
 });
 
 test("instance settings edits the instance name through the general settings update", () => {

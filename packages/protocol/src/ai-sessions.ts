@@ -584,7 +584,10 @@ export const AiSessionActionResultSchema = z.object({
   queueId: z.string().trim().min(1).max(120).optional(),
 }).strict();
 
-export const AI_SESSION_HISTORY_LIMIT = 50;
+export const AI_SESSION_HISTORY_DEFAULT_LIMIT = 50;
+export const AI_SESSION_HISTORY_MAX_LIMIT = 500;
+// Compatibility alias for consumers that used the original fixed default.
+export const AI_SESSION_HISTORY_LIMIT = AI_SESSION_HISTORY_DEFAULT_LIMIT;
 
 export const AiSessionHistoryItemSchema = z.object({
   id: z.string().trim().min(1).max(120),
@@ -603,11 +606,11 @@ export const AiSessionHistoryItemSchema = z.object({
 
 export const AiSessionHistoryIndexSchema = z.object({
   schemaVersion: z.literal(1).default(1),
-  items: z.array(AiSessionHistoryItemSchema).max(AI_SESSION_HISTORY_LIMIT).default([]),
+  items: z.array(AiSessionHistoryItemSchema).max(AI_SESSION_HISTORY_MAX_LIMIT).default([]),
 }).strict();
 
 export const AiSessionHistoryListSchema = z.object({
-  items: z.array(AiSessionHistoryItemSchema).max(AI_SESSION_HISTORY_LIMIT).default([]),
+  items: z.array(AiSessionHistoryItemSchema).max(AI_SESSION_HISTORY_MAX_LIMIT).default([]),
 }).strict();
 
 export const AiSessionHistoryDetailSchema = z.object({
