@@ -367,9 +367,22 @@ test("conversation Timeline composes every turn from the same compact result com
   assert.match(group, /<summary v-if="hasDetails\(activity\)" class="ai-session-activity-item-head">/);
   assert.doesNotMatch(group, /<strong>\{\{ activity\.title \}\}<\/strong>/);
   assert.match(group, /ai-session-activity-title[\s\S]*font-weight: 400;/);
+  assert.match(group, /\.ai-session-activity-item-head \{[\s\S]*font-size: 14px;/);
+  assert.match(group, /\.ai-session-activity-item-head small \{[\s\S]*font-size: inherit;/);
   assert.match(group, /\.ai-session-activity-group > summary small \{[\s\S]*font-size: inherit;[\s\S]*line-height: inherit;/);
   assert.doesNotMatch(group, /sessions\.timeline\.details/);
   assert.match(group, /activity\.activityKind === "fileChange"[\s\S]*activity\.paths\.map\(runtimePathBasename\)/);
+  assert.match(group, /FilePenLine,[\s\S]*Image as ImageIcon,[\s\S]*SquareTerminal,/);
+  assert.match(group, /activity\.activityKind === "commandExecution"/);
+  for (const kind of [
+    "reasoning", "plan", "hookPrompt", "commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall",
+    "subAgentActivity", "webSearch", "imageView", "sleep", "imageGeneration", "enteredReviewMode", "exitedReviewMode", "contextCompaction",
+  ]) assert.match(group, new RegExp(`\\b${kind}:`));
+  assert.match(group, /<ChevronRight v-if="!activityIcon\(activity\)" class="ai-session-activity-disclosure-icon"/);
+  assert.match(group, /<component :is="activityIcon\(activity\)" v-else class="ai-session-activity-kind-icon"/);
+  assert.match(group, /sessions\.timeline\.commandStatus\.\$\{activity\.status \|\| "unknown"\}/);
+  assert.match(group, /isCommandActivity\(activity\)[\s\S]*activity\.input\?\.trim\(\) \|\| ""/);
+  assert.doesNotMatch(group, /activity\.title === "Command"/);
   assert.match(group, /:title="activityHoverText\(activity\)"/);
   assert.doesNotMatch(group, /ai-session-activity-dot/);
   assert.match(group, /border-left: 1px solid var\(--line-subtle\)/);

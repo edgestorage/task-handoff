@@ -16,6 +16,7 @@ import {
   AiSessionHistoryDetailSchema,
   AiSessionHistoryItemSchema,
   AiSessionHistoryListSchema,
+  AI_SESSION_HISTORY_MAX_LIMIT,
   AiSessionMessageDeltaEventSchema,
   AiSessionMentionCandidateSchema,
   AiSessionMentionFileSearchSchema,
@@ -83,7 +84,7 @@ test("AI session history schemas expose bounded strict summaries and resume resu
   assert.deepEqual(AiSessionHistoryItemSchema.parse(item), item);
   assert.equal(AiSessionHistoryItemSchema.safeParse({ ...item, transcriptPath: "/home/agent/.codex/session.jsonl" }).success, false);
   assert.equal(AiSessionHistoryItemSchema.safeParse({ ...item, agent: "other" }).success, false);
-  assert.equal(AiSessionHistoryIndexSchema.safeParse({ schemaVersion: 1, items: Array.from({ length: 51 }, () => item) }).success, false);
+  assert.equal(AiSessionHistoryIndexSchema.safeParse({ schemaVersion: 1, items: Array.from({ length: AI_SESSION_HISTORY_MAX_LIMIT + 1 }, () => item) }).success, false);
   assert.equal(AiSessionHistoryListSchema.safeParse({ items: [item], extra: true }).success, false);
   assert.deepEqual(AiSessionHistoryDetailSchema.parse({
     item,

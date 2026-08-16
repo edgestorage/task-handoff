@@ -5,6 +5,7 @@ export * from "./ai-session-fork.ts";
 export * from "./ai-session-close.ts";
 export * from "./ai-session-discovery.ts";
 export * from "./ai-session-history-lifecycle.ts";
+export * from "./ai-session-persistence-settings.ts";
 export * from "./ai-session-history-store.ts";
 export * from "./ai-session-registry.ts";
 export * from "./ai-session-resume.ts";

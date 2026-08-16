@@ -417,6 +417,9 @@ importers:
       ws:
         specifier: ^8.21.0
         version: 8.21.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@types/ws':
         specifier: ^8.18.1
@@ -649,9 +652,6 @@ importers:
       tar:
         specifier: ^7.5.20
         version: 7.5.20
-      write-file-atomic:
-        specifier: ^8.0.0
-        version: 8.0.0
       ws:
         specifier: ^8.21.0
         version: 8.21.0
