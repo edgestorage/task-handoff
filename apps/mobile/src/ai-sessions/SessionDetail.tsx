@@ -149,12 +149,13 @@ export function SessionDetail({
     if (session) onVisible?.(session.updatedAt);
   }, [onVisible, session]);
   useEffect(() => {
-    if (resetSessionId.current === session?.id) return;
-    resetSessionId.current = session?.id;
+    const projectionId = `${session?.id || ''}:${selectedMode}`;
+    if (resetSessionId.current === projectionId) return;
+    resetSessionId.current = projectionId;
     userDragging.current = false;
     setFollowing(true);
     scheduleScrollToBottom(false);
-  }, [scheduleScrollToBottom, session?.id, setFollowing]);
+  }, [scheduleScrollToBottom, selectedMode, session?.id, setFollowing]);
   useEffect(() => () => {
     if (scrollFrame.current !== undefined) cancelAnimationFrame(scrollFrame.current);
   }, []);
@@ -181,6 +182,7 @@ export function SessionDetail({
     <Profiler id="detail" onRender={recordDetailRender}>
       <ScrollViewMarker scrollEdgeEffects={{ top: 'soft' }} style={[styles.fill, { backgroundColor: colors.surface }]}>
         <FlatList
+          key={`${session.id}:${selectedMode}`}
           ref={listRef}
           contentContainerStyle={[styles.list, { backgroundColor: colors.surface, paddingBottom: Math.max(28, bottomInset + 16) }]}
           contentInsetAdjustmentBehavior="automatic"
