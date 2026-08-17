@@ -1,11 +1,11 @@
 import type { ControlPlaneClient } from '@task-handoff/control-plane-client';
-import type { AiSessionMessageAttachmentRef, AiSessionPermissionMode, AiSessionSendMode } from '@task-handoff/protocol/ai-sessions';
+import type { AiSessionForkResult, AiSessionMessageAttachmentRef, AiSessionPermissionMode, AiSessionSendMode } from '@task-handoff/protocol/ai-sessions';
 
 import type { ValueStore } from '../platform/secure-storage';
 import type { MobileAiSessionStore } from './store';
 import { mobileMetrics } from '../observability/mobile-metrics';
 
-export type MobileAiSessionAction = 'send' | 'approval' | 'interrupt' | 'close' | 'queue-steer' | 'queue-retry' | 'queue-remove' | 'queue-edit' | 'queue-reorder';
+export type MobileAiSessionAction = 'send' | 'approval' | 'interrupt' | 'close' | 'fork' | 'queue-steer' | 'queue-retry' | 'queue-remove' | 'queue-edit' | 'queue-reorder';
 export type MobileActionState = { phase: 'idle' | 'busy' | 'result-unknown' | 'failed'; error?: string };
 export type MobileActionResult<T> =
   | { disposition: 'accepted'; result: T }
@@ -19,6 +19,7 @@ export function mobileAiSessionBusyKey(controlPlaneId: string, instanceId: strin
 export class MobileAiSessionActionCoordinator {
   private readonly states = new Map<string, MobileActionState>();
   private readonly listeners = new Set<() => void>();
+  private readonly forkRequestIds = new Map<string, string>();
   private readonly storeGeneration: number;
 
   constructor(
@@ -46,6 +47,34 @@ export class MobileAiSessionActionCoordinator {
   close(instanceId: string, sessionId: string, clientRequestId: string) {
     return this.run(instanceId, sessionId, 'close', undefined, () => this.client.aiSessions.close(instanceId, sessionId, clientRequestId));
   }
+  async fork(instanceId: string, sessionId: string, throughTurnId: string, proposedClientRequestId: string) {
+    const requestKey = JSON.stringify([instanceId, sessionId, throughTurnId]);
+    const clientRequestId = this.forkRequestIds.get(requestKey) ?? proposedClientRequestId;
+    this.forkRequestIds.set(requestKey, clientRequestId);
+    const input = { clientRequestId, throughTurnId, workspace: { mode: 'current' as const } };
+    const knownForkIds = new Set(this.matchingForks(instanceId, sessionId, throughTurnId).map((session) => session.id));
+    const result = await this.run<AiSessionForkResult>(instanceId, sessionId, 'fork', throughTurnId, async () => {
+      try {
+        return await this.client.aiSessions.fork(instanceId, sessionId, input);
+      } catch (cause) {
+        if (!isUncertainFailure(cause)) throw cause;
+        await this.recover().catch(() => undefined);
+        const recovered = this.matchingForks(instanceId, sessionId, throughTurnId)
+          .find((session) => !knownForkIds.has(session.id) && session.providerSessionId);
+        if (recovered?.providerSessionId) return {
+          disposition: 'already-created',
+          aiSessionId: recovered.id,
+          providerSessionId: recovered.providerSessionId,
+          creationSource: 'ai-session',
+        };
+        // Fork is idempotent by clientRequestId. Replaying the same request is
+        // the only safe way to distinguish a lost response from no commit.
+        return this.client.aiSessions.fork(instanceId, sessionId, input);
+      }
+    }, () => JSON.stringify(this.matchingForks(instanceId, sessionId, throughTurnId).map((session) => session.id).sort()), true);
+    if (result.disposition === 'accepted') this.forkRequestIds.delete(requestKey);
+    return result;
+  }
   queue(instanceId: string, sessionId: string, queueId: string, action: 'steer' | 'retry' | 'remove') {
     const kind = `queue-${action}` as const;
     return this.run<unknown>(instanceId, sessionId, kind, queueId, () => (
@@ -61,10 +90,12 @@ export class MobileAiSessionActionCoordinator {
     return this.run(instanceId, sessionId, 'queue-reorder', undefined, () => this.client.aiSessions.reorderQueue(instanceId, sessionId, { expectedRevision, queueIds }));
   }
 
-  private async run<T>(instanceId: string, sessionId: string, action: MobileAiSessionAction, queueId: string | undefined, operation: () => Promise<T>): Promise<MobileActionResult<T>> {
+  private async run<T>(instanceId: string, sessionId: string, action: MobileAiSessionAction, queueId: string | undefined, operation: () => Promise<T>, fingerprint?: () => string, allowResultUnknownRetry = false): Promise<MobileActionResult<T>> {
     const key = mobileAiSessionBusyKey(this.controlPlaneId, instanceId, sessionId, action, queueId);
-    if (['busy', 'result-unknown'].includes(this.state(key).phase)) return { disposition: 'duplicate-blocked' as const };
-    const before = this.authoritativeFingerprint(instanceId, sessionId, queueId);
+    const phase = this.state(key).phase;
+    if (phase === 'busy' || (phase === 'result-unknown' && !allowResultUnknownRetry)) return { disposition: 'duplicate-blocked' as const };
+    const authoritativeFingerprint = fingerprint ?? (() => this.authoritativeFingerprint(instanceId, sessionId, queueId));
+    const before = authoritativeFingerprint();
     this.set(key, { phase: 'busy' });
     let result: T;
     try {
@@ -81,7 +112,7 @@ export class MobileAiSessionActionCoordinator {
       mobileMetrics.record('action.error', { action, result: uncertain ? 'unknown' : 'failed' });
       if (uncertain) {
         await this.recover().then(() => {
-          if (this.authoritativeFingerprint(instanceId, sessionId, queueId) !== before) this.set(key, { phase: 'idle' });
+          if (authoritativeFingerprint() !== before) this.set(key, { phase: 'idle' });
         }).catch(() => undefined);
       }
       return { disposition: uncertain ? 'result-unknown' : 'failed', error };
@@ -106,6 +137,18 @@ export class MobileAiSessionActionCoordinator {
     if (!session) return 'missing';
     if (queueId) return JSON.stringify(session.queue.items.find((item) => item.id === queueId) ?? null);
     return JSON.stringify({ status: session.status, phase: session.phase, updatedAt: session.updatedAt, actions: session.actions, queue: session.queue });
+  }
+
+  private matchingForks(instanceId: string, sessionId: string, throughTurnId: string) {
+    const source = this.store.session(this.controlPlaneId, instanceId, sessionId);
+    if (!source?.providerSessionId) return [];
+    return this.store.snapshot(this.controlPlaneId)?.instances
+      .find((instance) => instance.instanceId === instanceId)
+      ?.aiSessions.sessions.filter((session) => (
+        session.lineage?.kind === 'fork'
+        && session.lineage.parentProviderSessionId === source.providerSessionId
+        && session.lineage.throughTurnId === throughTurnId
+      )) ?? [];
   }
 }
 

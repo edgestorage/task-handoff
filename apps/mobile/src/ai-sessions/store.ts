@@ -10,9 +10,13 @@ import {
   applyControlPlaneAiSessionStreamEvent,
 } from '@task-handoff/control-plane-client';
 import {
+  mergeAiSessionTimelineItems,
   type AiSessionMessageDeltaEvent,
   type AiSessionStreamApplyResult,
   type AiSessionStreamEvent,
+  type AiSessionTimelineItem,
+  type AiSessionTimelineItemEvent,
+  type AiSessionTurn,
   type AiSessionUnreadState,
 } from '@task-handoff/protocol/ai-sessions';
 
@@ -60,10 +64,25 @@ export type MobileStreamingMessage = {
 export type MobileAiSessionViewState = {
   session?: ControlPlaneAiSessionSummary;
   messages: readonly MobileStreamingMessage[];
+  timelines: Readonly<Record<string, MobileTurnTimelineState>>;
   syncPhase: MobileAiSessionProfileState['sync']['phase'];
 };
 
+export type MobileTurnTimelineState = {
+  status: 'idle' | 'loading' | 'ready' | 'stale' | 'error';
+  items: readonly AiSessionTimelineItem[];
+  error?: string;
+};
+
+type StoredTurnTimelineState = MobileTurnTimelineState & {
+  controlPlaneId: string;
+  instanceId: string;
+  sessionId: string;
+};
+
 export const MOBILE_MESSAGE_TURN_LIMIT = 50;
+export const MOBILE_TIMELINE_TURN_LIMIT = 500;
+export const MOBILE_TIMELINE_ITEMS_PER_TURN = 500;
 
 export function activeMobileStreamingMessage(
   messages: readonly MobileStreamingMessage[],
@@ -85,9 +104,14 @@ export class MobileAiSessionStore {
   private readonly sessionViewCache = new Map<string, MobileAiSessionViewState>();
   private readonly sessionViewKeysByControlPlane = new Map<string, Set<string>>();
   private readonly messageTurnsByControlPlane = new Map<string, Set<string>>();
+  private readonly timelineStates = new Map<string, StoredTurnTimelineState>();
+  private readonly liveTimelineItems = new Map<string, Map<string, AiSessionTimelineItem>>();
+  private readonly evictedTimelineItemIds = new Map<string, Set<string>>();
+  private readonly timelineRecoveryRevisions = new Map<string, number>();
   private readonly generations = new Map<string, number>();
 
   generation(controlPlaneId: string) { return this.generations.get(controlPlaneId) ?? 0; }
+  timelineRecoveryRevision(controlPlaneId: string) { return this.timelineRecoveryRevisions.get(controlPlaneId) ?? 0; }
   isGeneration(controlPlaneId: string, generation: number) { return this.generation(controlPlaneId) === generation; }
   hasProfile(controlPlaneId: string) { return this.profiles.has(controlPlaneId); }
 
@@ -114,13 +138,18 @@ export class MobileAiSessionStore {
     const cached = this.sessionViewCache.get(key);
     if (cached) return cached;
     const profile = this.profiles.get(controlPlaneId);
-    const view: MobileAiSessionViewState = {
-      session: profile?.snapshot?.instances
+    const session = profile?.snapshot?.instances
         .find((instance) => instance.instanceId === instanceId)
-        ?.aiSessions.sessions.find((session) => session.id === sessionId),
+        ?.aiSessions.sessions.find((candidate) => candidate.id === sessionId);
+    const view: MobileAiSessionViewState = {
+      session,
       messages: Object.values(profile?.messages ?? {}).filter((message) => (
         message.instanceId === instanceId && message.sessionId === sessionId
       )),
+      timelines: Object.fromEntries((session?.turns ?? []).map((turn) => [
+        turn.id,
+        this.timelineTurnState(controlPlaneId, instanceId, sessionId, turn),
+      ])),
       syncPhase: profile?.sync.phase ?? 'idle',
     };
     this.sessionViewCache.set(key, view);
@@ -248,9 +277,85 @@ export class MobileAiSessionStore {
     return messages[key];
   }
 
+  applyTimelineItem(controlPlaneId: string, event: AiSessionTimelineItemEvent) {
+    const key = mobileTimelineTurnKey(controlPlaneId, event.instanceId, event.sessionId, event.item.turnId);
+    if (this.evictedTimelineItemIds.get(key)?.has(event.item.id)) return;
+    const items = this.liveTimelineItems.get(key) ?? new Map<string, AiSessionTimelineItem>();
+    items.set(event.item.id, event.item);
+    while (items.size > MOBILE_TIMELINE_ITEMS_PER_TURN) {
+      const itemId = items.keys().next().value as string;
+      items.delete(itemId);
+      const evicted = this.evictedTimelineItemIds.get(key) ?? new Set<string>();
+      evicted.add(itemId);
+      while (evicted.size > MOBILE_TIMELINE_ITEMS_PER_TURN) evicted.delete(evicted.values().next().value as string);
+      this.evictedTimelineItemIds.set(key, evicted);
+    }
+    this.liveTimelineItems.delete(key);
+    this.liveTimelineItems.set(key, items);
+    while (this.liveTimelineItems.size > MOBILE_TIMELINE_TURN_LIMIT) {
+      const oldestKey = this.liveTimelineItems.keys().next().value as string;
+      this.liveTimelineItems.delete(oldestKey);
+      this.evictedTimelineItemIds.delete(oldestKey);
+    }
+    this.notifyTimelineSession(controlPlaneId, event.instanceId, event.sessionId);
+  }
+
+  beginTurnTimeline(controlPlaneId: string, instanceId: string, sessionId: string, turn: Pick<AiSessionTurn, 'id' | 'providerTurnId'>) {
+    const current = this.storedTimelineState(controlPlaneId, instanceId, sessionId, turn);
+    this.setTurnTimeline(controlPlaneId, instanceId, sessionId, turn, { status: 'loading', items: current?.items ?? [] });
+  }
+
+  resolveTurnTimeline(controlPlaneId: string, instanceId: string, sessionId: string, turn: Pick<AiSessionTurn, 'id' | 'providerTurnId'>, snapshot: readonly AiSessionTimelineItem[]) {
+    const identities = mobileTurnIdentities(turn);
+    const items = mergeAiSessionTimelineItems(snapshot, this.liveItemsForTurn(controlPlaneId, instanceId, sessionId, identities));
+    for (const identity of identities) {
+      const key = mobileTimelineTurnKey(controlPlaneId, instanceId, sessionId, identity);
+      this.liveTimelineItems.delete(key);
+      this.evictedTimelineItemIds.delete(key);
+    }
+    this.setTurnTimeline(controlPlaneId, instanceId, sessionId, turn, { status: 'ready', items });
+  }
+
+  rejectTurnTimeline(controlPlaneId: string, instanceId: string, sessionId: string, turn: Pick<AiSessionTurn, 'id' | 'providerTurnId'>, error: string) {
+    const current = this.storedTimelineState(controlPlaneId, instanceId, sessionId, turn);
+    this.setTurnTimeline(controlPlaneId, instanceId, sessionId, turn, { status: 'error', items: current?.items ?? [], error });
+  }
+
+  retryTurnTimeline(controlPlaneId: string, instanceId: string, sessionId: string, turn: Pick<AiSessionTurn, 'id' | 'providerTurnId'>) {
+    const current = this.storedTimelineState(controlPlaneId, instanceId, sessionId, turn);
+    this.timelineRecoveryRevisions.set(controlPlaneId, this.timelineRecoveryRevision(controlPlaneId) + 1);
+    this.setTurnTimeline(controlPlaneId, instanceId, sessionId, turn, { status: 'stale', items: current?.items ?? [] });
+  }
+
+  timelineTurnState(controlPlaneId: string, instanceId: string, sessionId: string, turn: Pick<AiSessionTurn, 'id' | 'providerTurnId'>): MobileTurnTimelineState {
+    const stored = this.storedTimelineState(controlPlaneId, instanceId, sessionId, turn);
+    return {
+      status: stored?.status ?? 'idle',
+      items: mergeAiSessionTimelineItems(stored?.items ?? [], this.liveItemsForTurn(controlPlaneId, instanceId, sessionId, mobileTurnIdentities(turn))),
+      ...(stored?.error ? { error: stored.error } : {}),
+    };
+  }
+
+  recoverTimelines(controlPlaneId: string) {
+    const affected = new Set<string>();
+    for (const [key, state] of this.timelineStates) {
+      if (state.controlPlaneId !== controlPlaneId || !['ready', 'loading'].includes(state.status)) continue;
+      this.timelineStates.set(key, { ...state, status: 'stale' });
+      affected.add(mobileSessionSubscriptionKey(controlPlaneId, state.instanceId, state.sessionId));
+    }
+    this.timelineRecoveryRevisions.set(controlPlaneId, this.timelineRecoveryRevision(controlPlaneId) + 1);
+    this.invalidateSessions(affected);
+    this.emitSessions(affected);
+  }
+
   clearProfile(controlPlaneId: string) {
     const deleted = this.profiles.delete(controlPlaneId);
     this.messageTurnsByControlPlane.delete(controlPlaneId);
+    this.timelineRecoveryRevisions.delete(controlPlaneId);
+    for (const [key, state] of this.timelineStates) if (state.controlPlaneId === controlPlaneId) this.timelineStates.delete(key);
+    const timelinePrefix = `${JSON.stringify([controlPlaneId]).slice(0, -1)},`;
+    for (const key of this.liveTimelineItems.keys()) if (key.startsWith(timelinePrefix)) this.liveTimelineItems.delete(key);
+    for (const key of this.evictedTimelineItemIds.keys()) if (key.startsWith(timelinePrefix)) this.evictedTimelineItemIds.delete(key);
     this.generations.set(controlPlaneId, this.generation(controlPlaneId) + 1);
     if (deleted) {
       this.invalidateControlPlaneSessions(controlPlaneId);
@@ -313,6 +418,33 @@ export class MobileAiSessionStore {
     for (const key of keys) {
       for (const listener of this.sessionListeners.get(key) ?? []) listener();
     }
+  }
+
+  private storedTimelineState(controlPlaneId: string, instanceId: string, sessionId: string, turn: Pick<AiSessionTurn, 'id' | 'providerTurnId'>) {
+    return this.timelineStates.get(mobileTimelineTurnKey(controlPlaneId, instanceId, sessionId, turn.id));
+  }
+
+  private liveItemsForTurn(controlPlaneId: string, instanceId: string, sessionId: string, identities: readonly string[]) {
+    return identities.flatMap((identity) => [...(this.liveTimelineItems.get(mobileTimelineTurnKey(controlPlaneId, instanceId, sessionId, identity))?.values() ?? [])]);
+  }
+
+  private setTurnTimeline(controlPlaneId: string, instanceId: string, sessionId: string, turn: Pick<AiSessionTurn, 'id' | 'providerTurnId'>, state: MobileTurnTimelineState) {
+    const key = mobileTimelineTurnKey(controlPlaneId, instanceId, sessionId, turn.id);
+    this.timelineStates.delete(key);
+    this.timelineStates.set(key, { ...state, controlPlaneId, instanceId, sessionId });
+    while (this.timelineStates.size > MOBILE_TIMELINE_TURN_LIMIT) {
+      const oldestKey = this.timelineStates.keys().next().value as string;
+      this.timelineStates.delete(oldestKey);
+      this.liveTimelineItems.delete(oldestKey);
+      this.evictedTimelineItemIds.delete(oldestKey);
+    }
+    this.notifyTimelineSession(controlPlaneId, instanceId, sessionId);
+  }
+
+  private notifyTimelineSession(controlPlaneId: string, instanceId: string, sessionId: string) {
+    const key = mobileSessionSubscriptionKey(controlPlaneId, instanceId, sessionId);
+    this.sessionViewCache.delete(key);
+    for (const listener of this.sessionListeners.get(key) ?? []) listener();
   }
 
   private invalidateSessions(keys: ReadonlySet<string>) {
@@ -398,6 +530,14 @@ function mobileMessageTurnKey(message: Pick<MobileStreamingMessage, 'instanceId'
 
 function mobileSessionSubscriptionKey(controlPlaneId: string, instanceId: string, sessionId: string) {
   return JSON.stringify([controlPlaneId, instanceId, sessionId]);
+}
+
+function mobileTimelineTurnKey(controlPlaneId: string, instanceId: string, sessionId: string, turnId: string) {
+  return JSON.stringify([controlPlaneId, instanceId, sessionId, turnId]);
+}
+
+function mobileTurnIdentities(turn: Pick<AiSessionTurn, 'id' | 'providerTurnId'>) {
+  return [...new Set([turn.id, turn.providerTurnId].filter((value): value is string => Boolean(value)))];
 }
 
 function addIndex(index: Map<string, Set<string>>, owner: string, key: string) {

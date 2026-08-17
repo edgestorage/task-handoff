@@ -4,6 +4,7 @@ import test from "node:test";
 
 const panel = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.vue", import.meta.url), "utf8");
 const styles = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.css", import.meta.url), "utf8");
+const timeline = fs.readFileSync(new URL("../src/components/ai-session/AiSessionTimelineView.vue", import.meta.url), "utf8");
 const queries = fs.readFileSync(new URL("../src/api/queries.ts", import.meta.url), "utf8");
 
 test("AI session history is an on-demand sidebar mode entered from the current-list footer", () => {
@@ -68,9 +69,17 @@ test("history reuses path grouping and opens stored turn details without resumin
   assert.match(panel, /groupAiSessionHistoryByPath\(historyItems\.value\)/);
   assert.match(panel, /@click="selectHistoryItem\(item\)"/);
   assert.match(panel, /const detail = await getAiSessionHistoryDetail\(props\.instance\.id, item\.id\);/);
-  assert.match(panel, /v-for="turn in historyDetail\.turns"/);
-  assert.match(panel, /turn\.userPrompt/);
-  assert.match(panel, /turn\.lastMessage \|\| turn\.summary/);
+  assert.match(panel, /<AiSessionTimelineView[\s\S]*:stored-turns="historyDetail\.turns"/);
+  assert.match(panel, /:stored-turns="historyDetail\.turns"/);
+  assert.match(panel, /:stored-turns="historyDetail\.turns"[\s\S]*@sticky-user-message-change="timelineStickyUserMessage = \$event"/);
+  assert.match(panel, /v-if="historyDetail && timelineStickyUserMessage"[\s\S]*class="session-ai-timeline-sticky-prompt"[\s\S]*timelineStickyUserMessage\.text/);
+  assert.match(panel, /async function selectHistoryItem[\s\S]*timelineStickyUserMessage\.value = undefined;/);
+  assert.match(panel, /async function leaveHistoryMode[\s\S]*timelineStickyUserMessage\.value = undefined;/);
+  assert.match(panel, /v-else-if="historyDetail" class="session-ai-detail-content"[\s\S]*class="session-ai-detail-fixed-actions session-ai-detail-head-actions"[\s\S]*class="session-ai-history-continue"[\s\S]*@click="continueHistoryConversation"[\s\S]*sessions\.panel\.continue/);
+  assert.match(panel, /async function continueHistoryConversation\(\) \{[\s\S]*resumeHistorySession\(item\)[\s\S]*emit\("selectAiSession", props\.instance\.id, session\.id\);[\s\S]*await leaveHistoryMode\(\);/);
+  assert.doesNotMatch(panel, /session-ai-history-detail-head/);
+  assert.match(timeline, /sourceTurns = computed\(\(\) => props\.session\?\.turns \|\| props\.storedTurns\)/);
+  assert.match(timeline, /function loadVisibleTurnTimelines\(\) \{\s*if \(!props\.session\) return;/);
   assert.doesNotMatch(panel, /<small>你<\/small>/);
   assert.match(panel, /t\("sessions\.panel\.selectHistory"\)/);
   assert.doesNotMatch(panel, /selectHistoryItem[\s\S]{0,500}resumeAiSession/);
@@ -78,6 +87,6 @@ test("history reuses path grouping and opens stored turn details without resumin
   assert.match(styles, /\.session-ai-history-row:hover\s*\{[^}]*background: var\(--surface-hover\);/s);
   assert.match(styles, /\.session-ai-history-head\s*\{[^}]*grid-template-columns: 30px minmax\(0, 1fr\) 30px;/s);
   assert.match(styles, /\.session-ai-history-head \.session-ai-options-trigger\s*\{[^}]*justify-self: end;/s);
-  assert.match(styles, /\.session-ai-history-detail-content/);
-  assert.match(styles, /\.session-ai-history-message\s*\{[^}]*font-size: 14px;/s);
+  assert.match(styles, /\.session-ai-detail-head-actions \.session-ai-history-continue\s*\{[^}]*width: auto;/s);
+  assert.doesNotMatch(styles, /\.session-ai-history-message/);
 });

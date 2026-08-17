@@ -138,7 +138,7 @@
                 >
                   <ContextMenuTrigger as-child>
                 <article
-                  v-ai-session-card-auto-scroll="{ target: '.session-ai-preview-field-assistant', revision: `${session.id}:${promptIndexFor(session)}` }"
+                  v-ai-session-card-auto-scroll="{ target: '.session-ai-preview-field-assistant', revision: `${session.id}:${latestPromptIndex(session)}` }"
                   class="session-ai-row"
                   :data-state="session.status"
                   :data-selected="selectedSession?.id === session.id"
@@ -173,32 +173,23 @@
                     </span>
                   </div>
                   <div class="session-ai-preview-field session-ai-preview-field-user">
-                    <MarkdownContent class="session-ai-question" :content="displayAiSessionTitle(session, promptIndexFor(session), t)" />
+                    <MarkdownContent class="session-ai-question" :content="displayAiSessionTitle(session, latestPromptIndex(session), t)" />
                   </div>
                   <div class="session-ai-preview-field session-ai-preview-field-assistant">
                     <AiSessionStreamingMarkdown
                       class="session-ai-message"
                       :code-tools="markdownCodeTools"
-                      :content="displayAiSessionMessage(session, promptIndexFor(session), t)"
+                      :content="displayAiSessionMessage(session, latestPromptIndex(session), t)"
                       :instance-id="instance.id"
                       file-links
-                      :is-latest="promptIndexFor(session) >= promptCount(session) - 1"
+                      :is-latest="true"
                       :session-id="session.id"
                       @open-file="openMarkdownFile(session, $event)"
                     />
                   </div>
-                  <span v-if="promptCount(session) > 1" class="session-ai-turn-nav">
-                    <button type="button" :aria-label="t('sessions.actions.previousMessage', { agent: session.agent })" :disabled="promptIndexFor(session) <= 0" @click.stop="previousPrompt(session)">
-                      <ChevronLeft :size="13" />
-                    </button>
-                    <small>{{ promptIndexFor(session) + 1 }} / {{ promptCount(session) }}</small>
-                    <button type="button" :aria-label="t('sessions.actions.nextMessage', { agent: session.agent })" :disabled="promptIndexFor(session) >= promptCount(session) - 1" @click.stop="nextPrompt(session)">
-                      <ChevronRight :size="13" />
-                    </button>
-                  </span>
                 </div>
                 <AiSessionToolActivity
-                  v-if="promptIndexFor(session) >= promptCount(session) - 1 && !canResolveApproval(session)"
+                  v-if="!canResolveApproval(session)"
                   class="session-ai-card-activity"
                   :current-tool="session.currentTool"
                   :phase="session.phase"
@@ -443,31 +434,41 @@
             <span>{{ historyDetailError }}</span>
             <Button v-if="selectedHistoryItem" variant="ghost" size="sm" @click="selectHistoryItem(selectedHistoryItem)">{{ t("sessions.panel.retry") }}</Button>
           </div>
-          <section v-else-if="historyDetail" class="session-ai-history-detail-content">
-            <header class="session-ai-history-detail-head">
+          <section v-else-if="historyDetail" class="session-ai-detail-content">
+            <div class="session-ai-detail-fixed-actions session-ai-detail-head-actions">
+              <button
+                type="button"
+                class="session-ai-history-continue"
+                :disabled="resumingHistoryId === historyDetail.item.id"
+                @click="continueHistoryConversation"
+              >
+                {{ t("sessions.panel.continue") }}
+              </button>
+            </div>
+            <header>
               <div>
                 <span>{{ historyDetail.item.agent === "claude" ? t("common.products.claude") : t("common.products.codex") }}</span>
-                <time :datetime="historyDetail.item.lastActiveAt">{{ relativeHistoryTime(historyDetail.item.lastActiveAt) }}</time>
+                <strong>{{ historyItemTitle(historyDetail.item) }}</strong>
               </div>
-              <h2>{{ historyItemTitle(historyDetail.item) }}</h2>
-              <small :title="historyDetail.item.cwd">{{ historyDetail.item.cwd }}</small>
             </header>
             <div v-if="!historyDetail.turns.length" class="session-ai-history-detail-state">
               <span>{{ t("sessions.panel.noHistoryDetail") }}</span>
             </div>
-            <div v-else class="session-ai-history-turns">
-              <article v-for="turn in historyDetail.turns" :key="turn.id" class="session-ai-history-turn">
-                <section v-if="turn.userPrompt" class="session-ai-history-message session-ai-history-message-user">
-                  <MarkdownContent :code-tools="markdownCodeTools" :content="turn.userPrompt" />
-                </section>
-                <section v-if="turn.lastMessage || turn.summary" class="session-ai-history-message session-ai-history-message-assistant">
-                  <small>{{ historyDetail.item.agent === "claude" ? t("common.products.claude") : t("common.products.codex") }}</small>
-                  <MarkdownContent :code-tools="markdownCodeTools" :content="turn.lastMessage || turn.summary || ''" />
-                </section>
-              </article>
-            </div>
+            <AiSessionTimelineView
+              v-else
+              :instance-id="instance.id"
+              :stored-turns="historyDetail.turns"
+              @sticky-user-message-change="timelineStickyUserMessage = $event"
+            />
           </section>
         </ScrollArea>
+        <article
+          v-if="historyDetail && timelineStickyUserMessage"
+          class="session-ai-timeline-sticky-prompt"
+          aria-hidden="true"
+        >
+          <MarkdownContent :content="timelineStickyUserMessage.text" :code-tools="markdownCodeTools" />
+        </article>
         <template v-if="historyDetail">
           <div class="session-ai-compose-gradient" aria-hidden="true" />
           <AiSessionComposer
@@ -770,6 +771,8 @@
             file-links
             :is-latest="promptIndexFor(selectedSession) >= promptCount(selectedSession) - 1"
             :response-content="displayAiSessionResponse(selectedSession, promptIndexFor(selectedSession), t)"
+            :turn-started-at="selectedTimelineTurn?.startedAt"
+            :turn-ended-at="turnElapsedEnd(selectedTimelineTurn)"
             :session="selectedSession"
             :activities="selectedTurnTimeline.activities"
             :activity-nodes="selectedTurnTimeline.activityNodes"
@@ -890,7 +893,7 @@ import { useI18n } from "vue-i18n";
 import { formatRelativeTime } from "../../../i18n/presentation";
 import type { SupportedLocale } from "../../../i18n/locale";
 import { translateApiError } from "../../../i18n/apiError";
-import { ArrowLeft, Ban, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Code2, ExternalLink, Filter, Folder, FolderOpen, GitBranch, History, LoaderCircle, MessageSquare, MoreHorizontal, PanelLeftOpen, Plus, SlidersHorizontal, Split, Square, X, Zap } from "@lucide/vue";
+import { ArrowLeft, Ban, Bot, Check, ChevronDown, ChevronRight, CircleHelp, Code2, ExternalLink, Filter, Folder, FolderOpen, GitBranch, History, LoaderCircle, MessageSquare, MoreHorizontal, PanelLeftOpen, Plus, SlidersHorizontal, Split, Square, X, Zap } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import AiSessionCardContextMenu from "../../../components/ai-session/AiSessionCardContextMenu.vue";
@@ -909,7 +912,7 @@ import AiSessionResult from "../../../components/ai-session/AiSessionResult.vue"
 import AiSessionStreamingMarkdown from "../../../components/ai-session/AiSessionStreamingMarkdown.vue";
 import { vAiSessionCardAutoScroll } from "../../../components/ai-session/aiSessionCardAutoScroll";
 import AiSessionToolActivity from "../../../components/ai-session/AiSessionToolActivity.vue";
-import { compactTimelineForTurn } from "../../../components/ai-session/timelineActivities";
+import { compactTimelineForTurn, turnElapsedEnd } from "../../../components/ai-session/timelineActivities";
 import { shouldDeferTurnTimelineLoad } from "../../../components/ai-session/timelineLoading";
 import { supportsAiSessionTimelineCapability } from "@task-handoff/protocol/control-plane";
 import { useAiSessionTimelineStore } from "../useAiSessionTimelineStore";
@@ -1131,11 +1134,19 @@ const conversationTurnTimelines = computed(() => {
   ]));
 });
 
-function setTimelineViewMode(value: unknown) {
+async function setTimelineViewMode(value: unknown) {
   if (value !== "compact" && value !== "full") return;
+  const enteringFullTimeline = value === "full" && timelineViewMode.value !== "full";
   timelineViewMode.value = value;
   window.localStorage?.setItem(TIMELINE_VIEW_MODE_STORAGE_KEY, value);
-  if (value === "compact") void loadSelectedTurnTimeline();
+  if (value === "compact") {
+    void loadSelectedTurnTimeline();
+    return;
+  }
+  if (!enteringFullTimeline) return;
+  await nextTick();
+  scrollFollow?.jumpLatest();
+  handleDetailScroll();
 }
 
 function timelineLoadKey(instanceId: string, sessionId: string, turnId?: string) {
@@ -1664,6 +1675,10 @@ function promptCount(session: AiSessionSummary) {
   return aiSessionTurns(session).length;
 }
 
+function latestPromptIndex(session: AiSessionSummary) {
+  return Math.max(0, promptCount(session) - 1);
+}
+
 function updatePromptOverflow() {
   const element = promptContentEl.value;
   if (promptExpanded.value) return;
@@ -1727,6 +1742,7 @@ async function enterHistoryMode() {
 async function leaveHistoryMode() {
   historyDetailRevision += 1;
   historyMode.value = false;
+  timelineStickyUserMessage.value = undefined;
   historyMessageDraft.value = "";
   historyMessageAttachments.value = [];
   await nextTick();
@@ -1755,6 +1771,7 @@ async function loadHistory() {
 async function selectHistoryItem(item: AiSessionHistoryItem) {
   if (resumingHistoryId.value) return;
   sessionListOverlayOpen.value = false;
+  timelineStickyUserMessage.value = undefined;
   if (selectedHistoryId.value !== item.id) {
     historyMessageDraft.value = "";
     historyMessageAttachments.value = [];
@@ -1806,6 +1823,21 @@ async function resumeHistorySession(item: AiSessionHistoryItem) {
   }
   if (!session) throw new Error(t("sessions.panel.resumePending"));
   return session;
+}
+
+async function continueHistoryConversation() {
+  const item = historyDetail.value?.item;
+  if (!item || resumingHistoryId.value) return;
+  resumingHistoryId.value = item.id;
+  try {
+    const session = await resumeHistorySession(item);
+    emit("selectAiSession", props.instance.id, session.id);
+    await leaveHistoryMode();
+  } catch (error) {
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.continueFailed")));
+  } finally {
+    resumingHistoryId.value = "";
+  }
 }
 
 async function sendHistoryMessage(permissionMode?: AiSessionPermissionMode) {

@@ -29,11 +29,12 @@ export default function SessionDetailRoute() {
   const sessionView = useActiveAiSessionView(controlPlaneId, params.instanceId, params.sessionId);
   const session = sessionView.session;
   const messages = sessionView.messages;
+  const instance = directories.controlPlaneId === controlPlaneId
+    ? directories.state.instances.find((candidate) => candidate.id === params.instanceId)
+    : undefined;
   const [detailMode, setDetailMode] = useState<SessionDetailMode>('turn');
   const [closing, setClosing] = useState(false);
-  const defaultPermissionMode = directories.controlPlaneId === controlPlaneId
-    ? directories.state.instances.find((instance) => instance.id === params.instanceId)?.config.defaultCodexPermissionMode
-    : undefined;
+  const defaultPermissionMode = instance?.config.defaultCodexPermissionMode;
   const markVisible = useCallback((sessionUpdatedAt: string) => {
     if (!client || !controlPlaneId || !session?.unread) return;
     void client.aiSessions.markRead(params.instanceId, params.sessionId, sessionUpdatedAt).then((unread) => {
@@ -74,8 +75,8 @@ export default function SessionDetailRoute() {
       headerRight: () => (
         <MenuView
           actions={[
-            { id: 'view-turn', image: 'rectangle.stack', state: detailMode === 'turn' ? 'on' : 'off', title: t('sessions.turn') },
-            { id: 'view-conversation', image: 'text.bubble', state: detailMode === 'conversation' ? 'on' : 'off', title: t('sessions.filterAll') },
+            { id: 'view-turn', image: 'rectangle.stack', state: detailMode === 'turn' ? 'on' : 'off', title: t('sessions.compact') },
+            { id: 'view-conversation', image: 'text.bubble', state: detailMode === 'conversation' ? 'on' : 'off', title: t('sessions.conversation') },
             ...(liveActivityAction ? [liveActivityAction] : []),
             ...(triggers.available ? [{ id: 'triggers', image: 'bolt', title: t('triggers.sessionTitle') } as MenuAction] : []),
             { id: 'close', image: 'xmark.circle', title: closing ? t('sessions.closing') : t('sessions.closeSession'), attributes: { destructive: true, disabled: closing || !actions || sessionView.syncPhase !== 'ready' } },
@@ -107,11 +108,14 @@ export default function SessionDetailRoute() {
     defaultPermissionMode={defaultPermissionMode}
     detailMode={detailMode}
     instanceId={params.instanceId}
+    instanceCapabilities={instance?.capabilities}
     messages={messages}
     onVisible={markVisible}
+    onOpenSession={(sessionId) => router.push({ pathname: '/sessions/[instanceId]/[sessionId]', params: { instanceId: params.instanceId, sessionId } })}
     onDetailModeChange={setDetailMode}
     session={session}
     syncPhase={sessionView.syncPhase}
+    timelines={sessionView.timelines}
     />
   </>;
 }

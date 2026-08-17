@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { Duplex } from "node:stream";
 import WebSocket from "ws";
@@ -23,6 +23,7 @@ export type CodexAppServerClientMode =
 export type CodexAppServerClientOptions = {
   command?: string;
   requestTimeoutMs?: number;
+  resolveVersion?: (command: string) => Promise<string>;
   socketPath?: string;
 };
 
@@ -48,6 +49,33 @@ const FULL_HISTORY_FORK_MIN_VERSION = [0, 129, 0] as const;
 // threads. Starting with v0.0.22, capable Codex versions are asked to create
 // paginated threads so Codex owns the authoritative Timeline history.
 const NATIVE_TIMELINE_MIN_VERSION = [0, 145, 0] as const;
+const CODEX_VERSION_PATTERN = /(?:^|\s)codex(?:-cli)?\s+v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)(?=\s|$)/i;
+
+export function parseCodexCliVersion(output: string) {
+  return output.match(CODEX_VERSION_PATTERN)?.[1];
+}
+
+export function resolveCodexCliVersion(command: string) {
+  return new Promise<string>((resolve, reject) => {
+    execFile(command, ["--version"], {
+      env: process.env,
+      encoding: "utf8",
+      timeout: 2_000,
+      maxBuffer: 64 * 1024,
+    }, (error, stdout, stderr) => {
+      const output = `${stdout || ""}\n${stderr || ""}`;
+      const version = parseCodexCliVersion(output);
+      if (!error && version) {
+        resolve(version);
+        return;
+      }
+      reject(Object.assign(
+        new Error(`Codex version could not be determined from ${command} --version.`),
+        { code: "CODEX_VERSION_DETECTION_FAILED", cause: error || undefined },
+      ));
+    });
+  });
+}
 
 export type CodexTimelineHistorySource = "adapter-store" | "codex-native";
 
@@ -94,6 +122,8 @@ export class CodexAppServerClient extends EventEmitter {
   private readonly pending = new Map<number, PendingRequest>();
   private readonly mode: CodexAppServerClientMode;
   private readonly requestTimeoutMs: number;
+  private readonly resolveVersion: (command: string) => Promise<string>;
+  private versionPromise?: Promise<string>;
   private serverUserAgent?: string;
   private forkMethodAvailable = true;
   private threadItemsListAvailable = true;
@@ -110,6 +140,7 @@ export class CodexAppServerClient extends EventEmitter {
     this.requestTimeoutMs = options.requestTimeoutMs
       || Number(process.env.TASK_HANDOFF_CODEX_APP_SERVER_TIMEOUT_MS)
       || 5_000;
+    this.resolveVersion = options.resolveVersion || resolveCodexCliVersion;
   }
 
   get connected() {
@@ -141,7 +172,12 @@ export class CodexAppServerClient extends EventEmitter {
       }
       this.emit("disconnect");
     });
-    await this.initialize();
+    try {
+      await this.initialize();
+    } catch (error) {
+      if (this.child === child) this.stop();
+      throw error;
+    }
   }
 
   stop() {
@@ -474,8 +510,17 @@ export class CodexAppServerClient extends EventEmitter {
   }
 
   private async initialize() {
+    const versionAttempt = this.versionPromise || this.resolveVersion(this.mode.command);
+    this.versionPromise = versionAttempt;
+    let version: string;
+    try {
+      version = await versionAttempt;
+    } catch (error) {
+      if (this.versionPromise === versionAttempt) this.versionPromise = undefined;
+      throw error;
+    }
     const result = await this.request("initialize", {
-      clientInfo: { name: "task-handoff", version: "1.0.0" },
+      clientInfo: { name: "codex_cli_rs", version },
       capabilities: { experimentalApi: true },
     });
     this.serverUserAgent = typeof result.userAgent === "string" ? result.userAgent : undefined;

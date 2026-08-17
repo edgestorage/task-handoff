@@ -61,7 +61,7 @@ test("tool activity follows the authoritative active lifecycle", () => {
 
 test("turn-aware surfaces only attach current activity to the latest turn", () => {
   assert.match(result, /<AiSessionToolActivity\s+v-if="isLatest && active"/);
-  assert.match(panel, /<AiSessionToolActivity\s+v-if="promptIndexFor\(session\) >= promptCount\(session\) - 1 && !canResolveApproval\(session\)"/);
+  assert.match(panel, /displayAiSessionMessage\(session, latestPromptIndex\(session\), t\)[\s\S]*<AiSessionToolActivity\s+v-if="!canResolveApproval\(session\)"/);
   assert.match(card, /<AiSessionToolActivity\s+v-if="promptIndex >= promptCount - 1 && !canResolveApproval\(card\.session\)"/);
 });
 
@@ -220,9 +220,9 @@ test("all detail disclosures use one layout-change guard without scroll restorat
   assert.match(panelCss, /\.session-ai-detail\.is-user-layout-changing \.session-ai-detail-content[\s\S]*overflow-anchor: none !important;/);
 });
 
-test("running activity floats in the card without competing with approval or turn controls", () => {
-  assert.match(panel, /v-if="promptIndexFor\(session\) >= promptCount\(session\) - 1 && !canResolveApproval\(session\)"[\s\S]*class="session-ai-card-activity"/);
-  assert.match(panelCss, /\.session-ai-card-activity \{[\s\S]*right: 104px;[\s\S]*left: 14px;/);
+test("running activity fills the list card footer without competing with approval actions", () => {
+  assert.match(panel, /v-if="!canResolveApproval\(session\)"[\s\S]*class="session-ai-card-activity"/);
+  assert.match(panelCss, /\.session-ai-card-activity \{[\s\S]*right: 14px;[\s\S]*left: 14px;/);
   assert.match(card, /v-if="promptIndex >= promptCount - 1 && !canResolveApproval\(card\.session\)"[\s\S]*class="ai-board-card-activity"/);
   assert.match(card, /\.ai-board-card-activity \{[\s\S]*right: 96px;[\s\S]*left: 14px;/);
 });

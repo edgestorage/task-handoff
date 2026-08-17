@@ -58,6 +58,7 @@ test("detail exposes an intent-aware shadcn return-to-latest control", () => {
   assert.match(panel, /watch\(\(\) => `\$\{props\.instance\.id\}\\u0000\$\{selectedSession\.value\?\.id \|\| ""\}`/);
   assert.match(panel, /onMounted\(\(\) => \{[\s\S]*if \(!detailScrollViewport\) observeDetailScroll\(\);/);
   assert.match(panel, /isFollowingLatest\.value = true;[\s\S]*isSmoothFollowingLatest\.value = false;[\s\S]*scrollFollow\?\.jumpLatest\(\);[\s\S]*handleDetailScroll\(\);/);
+  assert.match(panel, /enteringFullTimeline = value === "full"[\s\S]*await nextTick\(\);[\s\S]*scrollFollow\?\.jumpLatest\(\);[\s\S]*handleDetailScroll\(\);/);
 });
 
 test("streaming Markdown uses markstream pacing with independent character reveal", () => {

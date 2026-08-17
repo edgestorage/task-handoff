@@ -4,6 +4,36 @@ import { AiSessionPermissionModeSchema, InstanceBoardAiSummarySchema } from "./a
 const IdSchema = z.string().trim().min(1).max(120).regex(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$/);
 const TimestampSchema = z.string().datetime();
 
+const ControlPlaneDirectoryTimelineCapabilitiesSchema = z.object({
+  sessionReadAgents: z.array(z.string().trim().min(1).max(120)).max(100).default([]),
+  turnReadAgents: z.array(z.string().trim().min(1).max(120)).max(100).default([]),
+  liveItemAgents: z.array(z.string().trim().min(1).max(120)).max(100).default([]),
+}).passthrough();
+
+function emptyDirectoryTimelineCapabilities() {
+  return { sessionReadAgents: [] as string[], turnReadAgents: [] as string[], liveItemAgents: [] as string[] };
+}
+
+// Compatibility for v0.0.21: older directory responses omit this additive
+// public capability projection and therefore normalize to unsupported.
+export const ControlPlaneInstanceDirectoryCapabilitiesSchema = z.object({
+  aiSessionTimeline: ControlPlaneDirectoryTimelineCapabilitiesSchema.default(emptyDirectoryTimelineCapabilities),
+}).passthrough();
+
+export function supportsDirectoryAiSessionTimelineCapability(
+  capabilities: unknown,
+  agent: string,
+  capability: "session-read" | "turn-read" | "live-items",
+) {
+  const parsed = ControlPlaneInstanceDirectoryCapabilitiesSchema.safeParse(capabilities);
+  if (!parsed.success) return false;
+  const timeline = parsed.data.aiSessionTimeline;
+  const agents = capability === "session-read" ? timeline.sessionReadAgents
+    : capability === "turn-read" ? timeline.turnReadAgents
+      : timeline.liveItemAgents;
+  return agents.includes(agent);
+}
+
 export const ControlPlaneNodeConnectionPhaseSchema = z.enum([
   "connecting",
   "handshaking",
@@ -66,6 +96,7 @@ export const ControlPlaneInstanceDirectoryEntrySchema = z.object({
   health: z.enum(["unknown", "ok", "degraded", "failed"]),
   connectionStatus: z.enum(["unknown", "online", "offline", "endpoint-unreachable"]),
   ready: z.boolean(),
+  capabilities: ControlPlaneInstanceDirectoryCapabilitiesSchema.default({ aiSessionTimeline: emptyDirectoryTimelineCapabilities() }),
   config: z.object({
     defaultCodexPermissionMode: AiSessionPermissionModeSchema.default("ask"),
   }).strict().default({ defaultCodexPermissionMode: "ask" }),

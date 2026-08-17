@@ -10,10 +10,12 @@
   >
     <div ref="turnContentElement" class="ai-session-result-content">
       <AiSessionTurnHistory
-        v-if="activityHistory.length || !active"
         :nodes="activityHistory"
-        :loading="activityHistoryStatus === 'idle' || activityHistoryStatus === 'loading' || activityHistoryStatus === 'stale'"
+        :loading="!active && (activityHistoryStatus === 'idle' || activityHistoryStatus === 'loading' || activityHistoryStatus === 'stale')"
         :error="activityHistoryError"
+        :started-at="turnStartedAt"
+        :ended-at="turnEndedAt"
+        :active="active"
         @retry="$emit('retryActivityHistory')"
       />
 
@@ -155,6 +157,8 @@ const props = withDefaults(defineProps<{
   instanceId: string;
   isLatest?: boolean;
   responseContent?: string;
+  turnStartedAt?: string;
+  turnEndedAt?: string;
   session: AiSessionSummary;
   tone?: "detail" | "board";
   activities?: AiSessionTimelineActivity[];

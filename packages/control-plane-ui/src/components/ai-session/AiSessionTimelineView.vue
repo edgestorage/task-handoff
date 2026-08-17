@@ -9,17 +9,42 @@
         :data-index="virtualTurn.index"
         :style="{ transform: `translateY(${virtualTurn.start - scrollMargin}px)` }"
       >
-        <article
+        <div
           v-for="message in turns[virtualTurn.index].userMessages"
           :key="message.id"
-          class="ai-session-timeline-message"
-          data-role="user-message"
-          :data-message-id="message.id"
+          class="ai-session-timeline-user-message"
         >
-          <MarkdownContent :content="message.text" :code-tools="markdownCodeTools" />
-        </article>
+          <article
+            class="ai-session-timeline-message"
+            data-role="user-message"
+            :data-message-id="message.id"
+          >
+            <MarkdownContent :content="message.text" :code-tools="markdownCodeTools" />
+          </article>
+          <footer class="ai-session-user-message-actions" :aria-label="t('sessions.timeline.turnActions')">
+            <time
+              v-if="turns[virtualTurn.index].startedAt"
+              class="ai-session-turn-time"
+              :datetime="turns[virtualTurn.index].startedAt"
+              :title="formatTurnDateTime(turns[virtualTurn.index].startedAt || '')"
+            >{{ formatTurnTime(turns[virtualTurn.index].startedAt || '') }}</time>
+            <Button
+              type="button"
+              size="xs"
+              variant="ghost"
+              class="ai-session-user-message-copy"
+              :aria-label="copiedMessageId === message.id ? t('sessions.markdown.copied') : t('sessions.markdown.copy')"
+              :title="copiedMessageId === message.id ? t('sessions.markdown.copied') : t('sessions.markdown.copy')"
+              @click="copyMessage(message)"
+            >
+              <Check v-if="copiedMessageId === message.id" :size="13" />
+              <Copy v-else :size="13" />
+            </Button>
+          </footer>
+        </div>
         <div class="ai-session-timeline-response">
           <AiSessionResult
+            v-if="session"
             :busy="busy"
             :can-interrupt="canInterrupt"
             :can-resolve-approval="canResolveApproval"
@@ -27,6 +52,8 @@
             :file-links="fileLinks"
             :is-latest="isLatestTurn(virtualTurn.index)"
             :response-content="turns[virtualTurn.index].latestResponse?.text || ''"
+            :turn-started-at="turns[virtualTurn.index].startedAt"
+            :turn-ended-at="turns[virtualTurn.index].endedAt"
             :session="session"
             :activities="turns[virtualTurn.index].activities"
             :activity-nodes="turns[virtualTurn.index].activityNodes"
@@ -56,11 +83,11 @@
                   size="xs"
                   variant="ghost"
                   class="ai-session-turn-action"
-                  :aria-label="copiedTurnId === turns[virtualTurn.index].id ? t('sessions.markdown.copied') : t('sessions.markdown.copy')"
-                  :title="copiedTurnId === turns[virtualTurn.index].id ? t('sessions.markdown.copied') : t('sessions.markdown.copy')"
-                  @click="copyTurnResponse(turns[virtualTurn.index])"
+                  :aria-label="copiedMessageId === turns[virtualTurn.index].latestResponse?.id ? t('sessions.markdown.copied') : t('sessions.markdown.copy')"
+                  :title="copiedMessageId === turns[virtualTurn.index].latestResponse?.id ? t('sessions.markdown.copied') : t('sessions.markdown.copy')"
+                  @click="copyMessage(turns[virtualTurn.index].latestResponse)"
                 >
-                  <Check v-if="copiedTurnId === turns[virtualTurn.index].id" :size="13" />
+                  <Check v-if="copiedMessageId === turns[virtualTurn.index].latestResponse?.id" :size="13" />
                   <Copy v-else :size="13" />
                 </Button>
                 <Button
@@ -85,6 +112,15 @@
               </footer>
             </template>
           </AiSessionResult>
+          <section
+            v-else-if="turns[virtualTurn.index].latestResponse"
+            class="ai-session-timeline-stored-response"
+          >
+            <MarkdownContent
+              :content="turns[virtualTurn.index].latestResponse?.text || ''"
+              :code-tools="markdownCodeTools"
+            />
+          </section>
         </div>
       </section>
     </div>
@@ -97,23 +133,27 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n";
 import { Check, Copy, Split } from "@lucide/vue";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
-import type { AiSessionTimelineActivity, AiSessionTurn } from "@task-handoff/protocol/ai-sessions";
+import type { AiSessionHistoryTurn, AiSessionTimelineActivity, AiSessionTurn } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionSummary } from "../../api/types";
 import type { AiSessionTurnTimelineState } from "../../apps/control-plane/useAiSessionTimelineStore";
 import { Button } from "../ui/button";
 import AiSessionResult from "./AiSessionResult.vue";
 import type { TimelineMessage, TimelineTurnNode } from "./timelineActivities";
-import { compactTimelineForTurn } from "./timelineActivities";
+import { compactTimelineForTurn, turnElapsedEnd } from "./timelineActivities";
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   busy?: boolean;
   canInterrupt?: boolean;
   canResolveApproval?: boolean;
   fileLinks?: boolean;
   instanceId: string;
-  session: AiSessionSummary;
-  turnTimelines: Record<string, AiSessionTurnTimelineState>;
-}>();
+  session?: AiSessionSummary;
+  storedTurns?: AiSessionHistoryTurn[];
+  turnTimelines?: Record<string, AiSessionTurnTimelineState>;
+}>(), {
+  storedTurns: () => [],
+  turnTimelines: () => ({}),
+});
 const emit = defineEmits<{
   editQueuedMessage: [payload: { queueId: string; message: string }];
   openFile: [href: string];
@@ -137,6 +177,8 @@ const markdownCodeTools = computed(() => ({
 
 type DisplayConversationTurn = {
   id: string;
+  startedAt?: string;
+  endedAt?: string;
   userMessages: TimelineMessage[];
   history: TimelineTurnNode[];
   latestResponse?: TimelineMessage;
@@ -146,17 +188,29 @@ type DisplayConversationTurn = {
   timelineError?: string;
 };
 
-const turns = computed<DisplayConversationTurn[]>(() => (props.session.turns || []).map((turn) => {
+const sourceTurns = computed(() => props.session?.turns || props.storedTurns);
+const turns = computed<DisplayConversationTurn[]>(() => sourceTurns.value.map((turn) => {
   const state = props.turnTimelines[turn.id] || { status: "idle" as const, items: [] };
   const timeline = compactTimelineForTurn(state.items, turn);
   const userMessages = turn.userPrompt?.trim()
     ? [{ id: `${turn.id}:user-summary`, turnId: turn.id, type: "user-message" as const, text: turn.userPrompt.trim() }]
     : [];
-  const latestResponse = turn.lastMessage?.trim()
-    ? { id: turn.lastMessageItemId || `${turn.id}:ai-summary`, turnId: turn.id, type: "ai-message" as const, text: turn.lastMessage.trim() }
+  const responseText = turn.lastMessage?.trim() || (!props.session ? turn.summary?.trim() : "");
+  const lastMessageItemId = "lastMessageItemId" in turn && typeof turn.lastMessageItemId === "string"
+    ? turn.lastMessageItemId
+    : `${turn.id}:ai-summary`;
+  const latestResponse = responseText
+    ? {
+        id: lastMessageItemId,
+        turnId: turn.id,
+        type: "ai-message" as const,
+        text: responseText,
+      }
     : undefined;
   return {
     id: turn.id,
+    startedAt: turn.startedAt,
+    endedAt: turnElapsedEnd(turn),
     userMessages,
     history: timeline.history,
     latestResponse,
@@ -166,7 +220,7 @@ const turns = computed<DisplayConversationTurn[]>(() => (props.session.turns || 
     timelineError: state.error,
   };
 }));
-const copiedTurnId = ref("");
+const copiedMessageId = ref("");
 const timelineElement = ref<HTMLElement>();
 const scrollElement = ref<HTMLElement>();
 const scrollMargin = ref(0);
@@ -258,6 +312,7 @@ function measureVirtualTurn(element: unknown) {
 }
 
 function loadVisibleTurnTimelines() {
+  if (!props.session) return;
   for (const virtualTurn of virtualTurns.value) {
     const turn = turns.value[virtualTurn.index];
     if (!turn || (turn.timelineStatus !== "idle" && turn.timelineStatus !== "stale")) continue;
@@ -276,12 +331,12 @@ function isLatestTurn(index: number) {
 }
 
 function sessionTurn(turnId: string): AiSessionTurn | undefined {
-  return props.session.turns?.find((turn) => turn.id === turnId || turn.providerTurnId === turnId);
+  return props.session?.turns?.find((turn) => turn.id === turnId || turn.providerTurnId === turnId);
 }
 
 function continuableTurn(turnId: string): AiSessionTurn | undefined {
   const turn = completedTurn(turnId);
-  return props.session.actions?.fork === true && turn?.providerTurnId
+  return props.session?.actions?.fork === true && turn?.providerTurnId
     ? turn
     : undefined;
 }
@@ -313,18 +368,17 @@ function formatTurnDateTime(value: string) {
   }).format(new Date(value));
 }
 
-async function copyTurnResponse(turn: DisplayConversationTurn) {
-  const text = turn.latestResponse?.text;
-  if (!text || !navigator.clipboard?.writeText) return;
+async function copyMessage(message?: TimelineMessage) {
+  if (!message?.text || !navigator.clipboard?.writeText) return;
   try {
-    await navigator.clipboard.writeText(text);
+    await navigator.clipboard.writeText(message.text);
   } catch {
     return;
   }
-  copiedTurnId.value = turn.id;
+  copiedMessageId.value = message.id;
   clearTimeout(copiedTurnTimer);
   copiedTurnTimer = setTimeout(() => {
-    if (copiedTurnId.value === turn.id) copiedTurnId.value = "";
+    if (copiedMessageId.value === message.id) copiedMessageId.value = "";
   }, 1_500);
 }
 
@@ -355,7 +409,7 @@ watch(virtualTurns, () => void nextTick(() => {
   scheduleStickyUserMessageUpdate();
   loadVisibleTurnTimelines();
 }), { flush: "post" });
-watch(() => props.session.turns?.map((turn) => `${turn.id}:${turn.status}`).join("|"), () => {
+watch(() => sourceTurns.value.map((turn) => `${turn.id}:${turn.status}`).join("|"), () => {
   void nextTick(loadVisibleTurnTimelines);
 });
 watch(virtualTotalSize, () => void nextTick(() => emit("layoutCommitted")), { flush: "post" });
@@ -445,10 +499,17 @@ watch(() => turns.value.length, () => void nextTick(syncScrollElement));
   min-width: 0;
 }
 
-.ai-session-timeline-message[data-role="user-message"] {
+.ai-session-timeline-user-message {
   justify-self: end;
+  display: grid;
+  justify-items: end;
   width: fit-content;
   max-width: min(78%, 620px);
+  min-width: 0;
+}
+
+.ai-session-timeline-message[data-role="user-message"] {
+  max-width: 100%;
   border-radius: 14px;
   background: var(--surface-hover);
   padding: 12px 14px;
@@ -457,9 +518,56 @@ watch(() => turns.value.length, () => void nextTick(syncScrollElement));
   line-height: 1.55;
 }
 
+.ai-session-user-message-actions {
+  display: flex;
+  min-height: 26px;
+  align-items: center;
+  margin-top: 8px;
+  color: var(--text-muted);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.ai-session-timeline-user-message:hover .ai-session-user-message-actions,
+.ai-session-timeline-user-message:focus-within .ai-session-user-message-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.ai-session-user-message-actions :deep(.ai-session-user-message-copy) {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: inherit;
+}
+
+@media (hover: none) {
+  .ai-session-user-message-actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
 .ai-session-timeline-message :deep(.markdown-content),
 .ai-session-timeline-message :deep(.markdown-content > *) {
   max-width: 100%;
   overflow-wrap: anywhere;
 }
+
+.ai-session-timeline-stored-response {
+  min-width: 0;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.ai-session-timeline-stored-response :deep(.markdown-content),
+.ai-session-timeline-stored-response :deep(.markdown-content > *) {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.ai-session-timeline-stored-response :deep(.markdown-content > :first-child) { margin-top: 0; }
+.ai-session-timeline-stored-response :deep(.markdown-content > :last-child) { margin-bottom: 0; }
 </style>

@@ -1,19 +1,23 @@
+import { useEffect, useReducer } from 'react';
 import { act, fireEvent, render, waitFor, within } from '@testing-library/react-native';
 import * as Clipboard from 'expo-clipboard';
 import { File } from 'expo-file-system';
 import { Animated, FlatList, Keyboard, PixelRatio, StyleSheet, Text } from 'react-native';
+import { Brain, CornerDownRight, FilePenLine, Minimize2, Pencil, RotateCcw, SquareTerminal, Trash2 } from 'lucide-react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ControlPlaneAiSessionSummarySchema, type ControlPlaneClient } from '@task-handoff/control-plane-client';
 
 import { conversationDetailItems, detailItems, isSessionScrollNearBottom, SessionDetail } from '../src/ai-sessions/SessionDetail';
-import { COMPOSER_BACKDROP_OPACITIES, composerBottomBackdropGeometry, moveQueueId, queueDragPreview, queueItemsWithQueuedOrder, queueListScrollEnabled, sessionKeyboardAvoidingBehavior, SessionWorkspace } from '../src/ai-sessions/SessionWorkspace';
+import { COMPOSER_BACKDROP_OPACITIES, composerBottomBackdropGeometry, moveQueueId, queueActionIcon, queueDragPreview, queueItemsWithQueuedOrder, queueListScrollEnabled, sessionKeyboardAvoidingBehavior, SessionWorkspace } from '../src/ai-sessions/SessionWorkspace';
 import { MobileAiSessionActionCoordinator } from '../src/ai-sessions/actions';
 import { advanceStreamingMarkdownBlocks, CHARACTER_FADE_MS, hasUnclosedMarkdownFence, initialStreamingText, SafeMarkdown, shouldAnimateMarkdownText, safeMarkdownLink, sanitizeMarkdown, StreamingMarkdownText, streamingMarkdownStableCutoff } from '../src/components/SafeMarkdown';
 import { nextStreamingMarkdownCommit } from '../src/components/useStreamingMarkdown';
 import { MobileAiSessionPermissionStore } from '../src/ai-sessions/permission-store';
 import type { ValueStore } from '../src/platform/secure-storage';
-import { MobileAiSessionStore } from '../src/ai-sessions/store';
+import { mobileAiSessionStore, MobileAiSessionStore } from '../src/ai-sessions/store';
 import { MobileToastProvider } from '../src/components/MobileToast';
+import { TimelineActivityGroup, timelineActivityIcon } from '../src/ai-sessions/TimelineActivityGroup';
+import { mobileWebMetric, mobileWebType } from '../src/components/mobile-web-typography';
 
 const session = ControlPlaneAiSessionSummarySchema.parse({
   id: 'session-1', agent: 'codex', title: 'Long session', status: 'running', phase: 'tool',
@@ -34,6 +38,46 @@ function actionClient(sendMessage: jest.Mock) {
     },
   } as unknown as ControlPlaneClient;
 }
+
+test('mobile timeline activities use the latest Web activity-kind icons', () => {
+  expect(timelineActivityIcon('commandExecution')).toBe(SquareTerminal);
+  expect(timelineActivityIcon('fileChange')).toBe(FilePenLine);
+  expect(timelineActivityIcon('reasoning')).toBe(Brain);
+  expect(timelineActivityIcon('contextCompaction')).toBe(Minimize2);
+  expect(timelineActivityIcon('unknown')).toBeUndefined();
+});
+
+test('timeline activity groups stay collapsed until explicitly expanded', async () => {
+  const screen = await render(<TimelineActivityGroup activities={[{
+    id: 'failed-command',
+    turnId: 'turn-1',
+    type: 'activity',
+    activityKind: 'commandExecution',
+    title: 'Command',
+    status: 'failed',
+    input: 'pnpm test',
+  }]} />);
+
+  expect(screen.queryByText('Command failed')).toBeNull();
+  await act(async () => { fireEvent.press(screen.getByRole('button', { name: /1 activities/ })); });
+  screen.getByText('Command failed');
+  screen.unmount();
+});
+
+test('mobile detail scales Web typography, spacing, and icon metrics upward from 14px to 16px', () => {
+  expect(mobileWebType.body).toBe(16);
+  expect(mobileWebMetric(5)).toBe(6);
+  expect(mobileWebMetric(13)).toBe(15);
+  expect(mobileWebMetric(14)).toBe(16);
+  expect(mobileWebMetric(15)).toBe(18);
+});
+
+test('mobile queue uses the same action icons as Web', () => {
+  expect(queueActionIcon('edit')).toBe(Pencil);
+  expect(queueActionIcon('steer')).toBe(CornerDownRight);
+  expect(queueActionIcon('retry')).toBe(RotateCcw);
+  expect(queueActionIcon('remove')).toBe(Trash2);
+});
 
 test('detail preserves turn and streaming message identity order', () => {
   const items = detailItems(session, [{ instanceId: 'instance-1', sessionId: 'session-1', turnId: 'turn-1', itemId: 'item-1', receivedText: 'Streaming result', status: 'streaming', updatedAt: '2026-08-05T00:01:00.000Z' }]);
@@ -206,6 +250,206 @@ test('detail navigates one authoritative turn and applies streaming only to late
   screen.unmount();
 });
 
+test('timeline detail follows the Web three-part layout around the final AI response', async () => {
+  const timelineSession = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    currentTool: undefined,
+    subAgents: [],
+    status: 'running',
+    turns: [{ ...session.turns![0], lastMessage: 'Final answer' }],
+  });
+  const timelines = {
+    'turn-1': {
+      status: 'ready' as const,
+      items: [
+        { id: 'user-1', turnId: 'turn-1', type: 'user-message' as const, text: 'Please **test** this' },
+        { id: 'command-old', turnId: 'turn-1', type: 'activity' as const, activityKind: 'commandExecution', title: 'Command', status: 'completed' as const, input: 'pnpm lint' },
+        { id: 'draft', turnId: 'turn-1', type: 'ai-message' as const, text: 'Interim answer' },
+        { id: 'file-old', turnId: 'turn-1', type: 'activity' as const, activityKind: 'fileChange', title: 'Edited files', paths: ['/workspace/src/app.ts'] },
+        { id: 'final', turnId: 'turn-1', type: 'ai-message' as const, text: 'Final answer' },
+        { id: 'command-live', turnId: 'turn-1', type: 'activity' as const, activityKind: 'commandExecution', title: 'Command', status: 'running' as const, input: 'pnpm test' },
+      ],
+    },
+  };
+  const projected = detailItems(timelineSession, [], 0, undefined, timelines);
+  expect(projected.map((item) => item.role)).toEqual(['user', 'history', 'assistant', 'current']);
+  expect(projected[0].actions).toEqual({ timestamp: timelineSession.turns![0].startedAt });
+  expect(projected[1].history?.map((item) => item.role)).toEqual(['activity', 'assistant', 'activity']);
+  expect(projected[3].history?.map((item) => item.role)).toEqual(['activity']);
+  const projectedWithoutCurrentItems = detailItems(timelineSession, [], 0, undefined, {
+    'turn-1': { status: 'ready', items: timelines['turn-1'].items.slice(0, -1) },
+  });
+  expect(projectedWithoutCurrentItems.at(-1)).toEqual(expect.objectContaining({ role: 'current', history: [], interactive: true }));
+
+  const screen = await render(<SessionDetail messages={[]} session={timelineSession} timelineEnabled timelines={timelines} />);
+  screen.getByText(/Processed/);
+  screen.getByText('Final answer');
+  await act(async () => { fireEvent.press(screen.getByRole('button', { name: 'Thinking…' })); });
+  await waitFor(() => screen.getByText('Running command'));
+  expect(StyleSheet.flatten(screen.getByTestId('session-current-activity-items').props.style).gap).toBe(7);
+  expect(screen.queryByText('1 activities')).toBeNull();
+  screen.getByText('· pnpm test');
+  expect(screen.queryByText('Interim answer')).toBeNull();
+  await act(async () => { fireEvent.press(screen.getByRole('button', { name: /Processed/ })); });
+  await waitFor(() => screen.getByText('Interim answer'));
+  const historyItemsStyle = StyleSheet.flatten(screen.getByTestId('session-timeline-history-items').props.style);
+  expect(historyItemsStyle).toEqual(expect.objectContaining({
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    gap: 14,
+    marginLeft: 8,
+    paddingLeft: 14,
+  }));
+  screen.unmount();
+});
+
+test('completed timeline exposes loading, failure retry, and empty history states', async () => {
+  const completed = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    status: 'idle',
+    currentTool: undefined,
+    subAgents: [],
+    turns: [{ ...session.turns![0], status: 'completed', lastMessage: 'Done' }],
+  });
+  const retry = jest.fn();
+  expect(detailItems(completed, [], 0, undefined, { 'turn-1': { status: 'loading', items: [] } }, true)).toEqual(expect.arrayContaining([
+    expect.objectContaining({ role: 'history', historyStatus: 'loading' }),
+  ]));
+  expect(detailItems(completed, [], 0, undefined, { 'turn-1': { status: 'ready', items: [] } }, true)).toEqual(expect.arrayContaining([
+    expect.objectContaining({ role: 'history', historyStatus: 'ready' }),
+  ]));
+  const failed = await render(<SessionDetail messages={[]} onRetryTimeline={retry} session={completed} timelineEnabled timelines={{ 'turn-1': { status: 'error', items: [], error: 'offline' } }} />);
+  expect(StyleSheet.flatten(failed.getByTestId('session-message-actions-user').props.style).justifyContent).toBe('flex-end');
+  expect(StyleSheet.flatten(failed.getByTestId('session-message-actions-assistant').props.style).justifyContent).toBe('flex-start');
+  const retryButton = failed.getByRole('button', { name: /Failed to load full activity/ });
+  await act(async () => { fireEvent.press(retryButton); });
+  expect(retry).toHaveBeenCalledWith(expect.objectContaining({ id: 'turn-1' }));
+  failed.unmount();
+});
+
+test('workspace retries a failed authoritative turn timeline request', async () => {
+  const completed = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    id: 'session-timeline-load',
+    status: 'idle',
+    currentTool: undefined,
+    subAgents: [],
+    turns: [{ ...session.turns![0], id: 'turn-timeline-load', status: 'completed', lastMessage: 'Done' }],
+  });
+  const turnTimeline = jest.fn()
+    .mockRejectedValueOnce(new Error('offline'))
+    .mockResolvedValueOnce({
+      sessionId: completed.id,
+      turnId: 'turn-timeline-load',
+      items: [{ id: 'answer', turnId: 'turn-timeline-load', type: 'ai-message', text: 'Done' }],
+      generatedAt: session.updatedAt,
+  });
+  const client = { aiSessions: { turnTimeline } } as unknown as ControlPlaneClient;
+  function Harness() {
+    const [, rerender] = useReducer((value: number) => value + 1, 0);
+    useEffect(() => mobileAiSessionStore.subscribeSession('cp-timeline-load', 'instance-timeline-load', completed.id, rerender), []);
+    return <SessionWorkspace
+      client={client}
+      controlPlaneId="cp-timeline-load"
+      instanceCapabilities={{ aiSessionTimeline: { sessionReadAgents: [], turnReadAgents: ['codex'], liveItemAgents: [] } }}
+      instanceId="instance-timeline-load"
+      messages={[]}
+      session={completed}
+      timelines={{
+        'turn-timeline-load': mobileAiSessionStore.timelineTurnState('cp-timeline-load', 'instance-timeline-load', completed.id, completed.turns![0]),
+      }}
+    />;
+  }
+  const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}>
+    <Harness />
+  </SafeAreaProvider>);
+
+  await waitFor(() => expect(mobileAiSessionStore.timelineTurnState('cp-timeline-load', 'instance-timeline-load', completed.id, completed.turns![0]).status).toBe('error'));
+  await act(async () => { fireEvent.press(screen.getByRole('button', { name: /Failed to load full activity/ })); });
+  await waitFor(() => expect(turnTimeline).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(mobileAiSessionStore.timelineTurnState('cp-timeline-load', 'instance-timeline-load', completed.id, completed.turns![0]).status).toBe('ready'));
+  screen.unmount();
+  mobileAiSessionStore.clearProfile('cp-timeline-load');
+});
+
+test('live-only capability renders cached live activity without inventing a history load', async () => {
+  const completed = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    status: 'idle',
+    currentTool: undefined,
+    subAgents: [],
+    turns: [{ ...session.turns![0], status: 'completed', lastMessage: 'Done' }],
+  });
+  const screen = await render(<SessionDetail
+    messages={[]}
+    session={completed}
+    timelineEnabled
+    timelineHistoryEnabled={false}
+    timelines={{ 'turn-1': { status: 'idle', items: [] } }}
+  />);
+
+  expect(screen.queryByText(/Loading full activity/)).toBeNull();
+  expect(screen.getByText('Done')).toBeTruthy();
+  screen.unmount();
+});
+
+test('session-read capability loads older turns while the latest turn uses live items', async () => {
+  const running = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    id: 'session-timeline-session-read',
+    subAgents: [],
+    turns: [
+      { ...session.turns![0], id: 'turn-old', providerTurnId: 'provider-turn-old', status: 'completed', lastMessage: 'Old answer' },
+      { ...session.turns![0], id: 'turn-live', providerTurnId: 'provider-turn-live', status: 'running', lastMessage: undefined },
+    ],
+  });
+  const timeline = jest.fn().mockResolvedValue({
+    sessionId: running.id,
+    items: [{ id: 'old-answer', turnId: 'provider-turn-old', type: 'ai-message', text: 'Old answer' }],
+    generatedAt: session.updatedAt,
+  });
+  const client = { aiSessions: { timeline } } as unknown as ControlPlaneClient;
+  const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}>
+    <SessionWorkspace
+      client={client}
+      controlPlaneId="cp-session-read-live"
+      detailMode="conversation"
+      instanceCapabilities={{ aiSessionTimeline: { sessionReadAgents: ['codex'], turnReadAgents: [], liveItemAgents: ['codex'] } }}
+      instanceId="instance-session-read-live"
+      messages={[]}
+      session={running}
+    />
+  </SafeAreaProvider>);
+
+  await waitFor(() => expect(timeline).toHaveBeenCalledWith('instance-session-read-live', running.id));
+  screen.unmount();
+  mobileAiSessionStore.clearProfile('cp-session-read-live');
+});
+
+test('workspace defers the latest queued turn timeline while live items are authoritative', async () => {
+  const queued = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    id: 'session-timeline-queued',
+    turns: [{ ...session.turns![0], id: 'turn-timeline-queued', status: 'queued' }],
+  });
+  const turnTimeline = jest.fn();
+  const client = { aiSessions: { turnTimeline } } as unknown as ControlPlaneClient;
+  const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}>
+    <SessionWorkspace
+      client={client}
+      controlPlaneId="cp-timeline-queued"
+      instanceCapabilities={{ aiSessionTimeline: { sessionReadAgents: [], turnReadAgents: ['codex'], liveItemAgents: ['codex'] } }}
+      instanceId="instance-timeline-queued"
+      messages={[]}
+      session={queued}
+    />
+  </SafeAreaProvider>);
+
+  await act(async () => undefined);
+  expect(turnTimeline).not.toHaveBeenCalled();
+  screen.unmount();
+  mobileAiSessionStore.clearProfile('cp-timeline-queued');
+});
+
 test('safe markdown normalizes protocol text and rejects executable schemes', () => {
   expect(sanitizeMarkdown('one\r\ntwo\0')).toBe('one\ntwo\uFFFD');
   expect(safeMarkdownLink('javascript:alert(1)')).toBeUndefined();
@@ -289,14 +533,14 @@ test('untyped fenced code exposes a plain text language label', async () => {
 
 test('fenced code constrains its cross-axis height inside a vertical conversation', async () => {
   const screen = await render(<SafeMarkdown>{'```\nline one\nline two\nline three\n```'}</SafeMarkdown>);
-  expect(StyleSheet.flatten(screen.getByTestId('markdown-code-scroll').props.style).height).toBe(Math.ceil(60 * PixelRatio.getFontScale() + 24));
+  expect(StyleSheet.flatten(screen.getByTestId('markdown-code-scroll').props.style).height).toBe(Math.ceil(75 * PixelRatio.getFontScale() + 28));
   screen.unmount();
 });
 
 test('fenced code height follows the accessibility font scale', async () => {
   const fontScale = jest.spyOn(PixelRatio, 'getFontScale').mockReturnValue(1.5);
   const screen = await render(<SafeMarkdown>{'```\nline one\nline two\nline three\n```'}</SafeMarkdown>);
-  expect(StyleSheet.flatten(screen.getByTestId('markdown-code-scroll').props.style).height).toBe(114);
+  expect(StyleSheet.flatten(screen.getByTestId('markdown-code-scroll').props.style).height).toBe(141);
   screen.unmount();
   fontScale.mockRestore();
 });
@@ -306,7 +550,7 @@ test('inline code remains in the paragraph text flow and wraps long values witho
   const screen = await render(<SafeMarkdown>{`- SHA-256: \`${digest}\``}</SafeMarkdown>);
   const inlineCode = screen.getByTestId('markdown-inline-code');
   const inlineCodeStyle = StyleSheet.flatten(inlineCode.props.style);
-  expect(inlineCodeStyle).toEqual(expect.objectContaining({ color: '#9a6700', fontSize: 16, lineHeight: 24 }));
+  expect(inlineCodeStyle).toEqual(expect.objectContaining({ color: '#9a6700', fontSize: 15, lineHeight: 24 }));
   expect(inlineCodeStyle.backgroundColor).toBeUndefined();
   expect(inlineCodeStyle.borderRadius).toBeUndefined();
   expect(inlineCodeStyle.paddingHorizontal).toBeUndefined();
@@ -485,6 +729,9 @@ test('queued messages expose edit controls and a drag handle that reorders with 
 
   const handles = screen.getAllByTestId('queue-drag-handle');
   expect(handles).toHaveLength(2);
+  const queueTitle = screen.getByText('first queued message');
+  expect(queueTitle.props.numberOfLines).toBe(1);
+  expect(queueTitle.props.ellipsizeMode).toBe('tail');
   expect(queueListScrollEnabled('queue-1')).toBe(false);
   expect(queueListScrollEnabled()).toBe(true);
   await act(async () => { fireEvent(handles[0], 'accessibilityAction', { nativeEvent: { actionName: 'increment' } }); });

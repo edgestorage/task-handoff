@@ -10,6 +10,7 @@ import { useI18n } from '../i18n';
 import { openSystemLink } from '../platform/links';
 import { splitGraphemes } from './graphemes';
 import { useMobileTheme, type MobileThemeColors } from './theme';
+import { mobileWebMetric, mobileWebType } from './mobile-web-typography';
 import { useStreamingMarkdown } from './useStreamingMarkdown';
 
 // Keep one parser configuration for snapshots and streaming updates. Raw HTML is
@@ -588,7 +589,10 @@ function MarkdownCodeBlock({ content, deferHighlight, language, styles }: { cont
   // A horizontal ScrollView needs an explicit cross-axis size inside a
   // virtualized list. Include the current accessibility font scale so the
   // explicit height never clips enlarged code text.
-  const blockHeight = Math.ceil(Math.max(1, content.split('\n').length) * 20 * PixelRatio.getFontScale() + 24);
+  const blockHeight = Math.ceil(
+    Math.max(1, content.split('\n').length) * mobileWebMetric(14 * 1.55) * PixelRatio.getFontScale()
+      + mobileWebMetric(12) * 2,
+  );
   const highlighted = useMemo(() => {
     if (deferHighlight || !language || !codeHighlighter.registered(language)) return undefined;
     try {
@@ -618,7 +622,7 @@ function MarkdownCodeBlock({ content, deferHighlight, language, styles }: { cont
       <View style={styles.codeBlockToolbar} testID="markdown-code-toolbar">
         <Text numberOfLines={1} style={styles.codeBlockLanguage}>{language || t('sessions.plainText')}</Text>
         <Pressable accessibilityLabel={copyLabel} accessibilityRole="button" hitSlop={6} onPress={() => void copyCode()} style={({ pressed }) => [styles.codeBlockCopy, pressed && styles.codeBlockCopyPressed]} testID="markdown-code-copy">
-          {copied ? <Check color={styles.codeBlockCopyText.color} size={14} /> : <Copy color={styles.codeBlockCopyText.color} size={14} />}
+          {copied ? <Check color={styles.codeBlockCopyText.color} size={mobileWebMetric(14)} /> : <Copy color={styles.codeBlockCopyText.color} size={mobileWebMetric(14)} />}
           <Text style={styles.codeBlockCopyText}>{copyLabel}</Text>
         </Pressable>
       </View>
@@ -698,46 +702,52 @@ function markdownStyles(colors: MobileThemeColors, compact: boolean) {
   const codeFont = Platform.OS === 'ios' ? 'Menlo' : 'monospace';
   const bodySize = compact ? 13 : 16;
   const bodyLineHeight = compact ? 20 : 24;
+  const heading1Size = compact ? 17 : mobileWebMetric(14 * 1.65);
+  const heading2Size = compact ? 16 : mobileWebMetric(14 * 1.4);
+  const heading3Size = compact ? 15 : mobileWebMetric(14 * 1.2);
+  const heading4Size = compact ? 16 : mobileWebMetric(14 * 1.08);
+  const heading5Size = compact ? 15 : mobileWebType.body;
+  const inlineCodeSize = compact ? 13 : mobileWebMetric(14 * 0.9);
   return StyleSheet.create({
     root: {},
     body: { color: colors.text, fontSize: bodySize, lineHeight: bodyLineHeight },
     text: { color: colors.text, fontSize: bodySize, lineHeight: bodyLineHeight },
     textgroup: { color: colors.text },
-    paragraph: { color: colors.text, fontSize: bodySize, lineHeight: bodyLineHeight, marginBottom: compact ? 4 : 9, marginTop: 0 },
+    paragraph: { color: colors.text, fontSize: bodySize, lineHeight: bodyLineHeight, marginBottom: compact ? 4 : mobileWebMetric(14 * 0.6), marginTop: 0 },
     flushStart: { marginTop: 0 },
     flushEnd: { marginBottom: 0 },
-    heading1: { color: colors.text, flexDirection: 'row', fontSize: compact ? 17 : 25, fontWeight: '700', lineHeight: compact ? 22 : 32, marginBottom: compact ? 5 : 7, marginTop: compact ? 8 : 15 },
-    heading2: { color: colors.text, flexDirection: 'row', fontSize: compact ? 16 : 21, fontWeight: '700', lineHeight: compact ? 21 : 28, marginBottom: compact ? 5 : 7, marginTop: compact ? 8 : 15 },
-    heading3: { color: colors.text, flexDirection: 'row', fontSize: compact ? 15 : 18, fontWeight: '700', lineHeight: compact ? 20 : 25, marginBottom: compact ? 5 : 7, marginTop: compact ? 8 : 15 },
-    heading4: { color: colors.text, flexDirection: 'row', fontSize: 16, fontWeight: '700', lineHeight: 23, marginBottom: 7, marginTop: 15 },
-    heading5: { color: colors.text, flexDirection: 'row', fontSize: 15, fontWeight: '700', lineHeight: 23, marginBottom: 7, marginTop: 15 },
-    heading6: { color: colors.textMuted, flexDirection: 'row', fontSize: 15, fontWeight: '700', lineHeight: 23, marginBottom: 7, marginTop: 15 },
+    heading1: { color: colors.text, flexDirection: 'row', fontSize: heading1Size, fontWeight: '700', lineHeight: compact ? 22 : Math.ceil(heading1Size * 1.25), marginBottom: compact ? 5 : mobileWebMetric(14 * 0.45), marginTop: compact ? 8 : mobileWebMetric(14) },
+    heading2: { color: colors.text, flexDirection: 'row', fontSize: heading2Size, fontWeight: '700', lineHeight: compact ? 21 : Math.ceil(heading2Size * 1.25), marginBottom: compact ? 5 : mobileWebMetric(14 * 0.45), marginTop: compact ? 8 : mobileWebMetric(14) },
+    heading3: { color: colors.text, flexDirection: 'row', fontSize: heading3Size, fontWeight: '700', lineHeight: compact ? 20 : Math.ceil(heading3Size * 1.25), marginBottom: compact ? 5 : mobileWebMetric(14 * 0.45), marginTop: compact ? 8 : mobileWebMetric(14) },
+    heading4: { color: colors.text, flexDirection: 'row', fontSize: heading4Size, fontWeight: '700', lineHeight: compact ? 23 : Math.ceil(heading4Size * 1.25), marginBottom: compact ? 7 : mobileWebMetric(14 * 0.45), marginTop: compact ? 15 : mobileWebMetric(14) },
+    heading5: { color: colors.text, flexDirection: 'row', fontSize: heading5Size, fontWeight: '700', lineHeight: compact ? 23 : Math.ceil(heading5Size * 1.25), marginBottom: compact ? 7 : mobileWebMetric(14 * 0.45), marginTop: compact ? 15 : mobileWebMetric(14) },
+    heading6: { color: colors.textMuted, flexDirection: 'row', fontSize: heading5Size, fontWeight: '700', lineHeight: compact ? 23 : Math.ceil(heading5Size * 1.25), marginBottom: compact ? 7 : mobileWebMetric(14 * 0.45), marginTop: compact ? 15 : mobileWebMetric(14) },
     strong: { fontWeight: '700' },
     em: { fontStyle: 'italic' },
     s: { textDecorationLine: 'line-through' },
     strikethrough: { textDecorationLine: 'line-through' },
     link: { color: colors.primary, textDecorationLine: 'underline' },
     blocklink: { borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth },
-    blockquote: { borderLeftColor: colors.border, borderLeftWidth: 3, marginBottom: 11, marginLeft: 0, paddingHorizontal: 13, paddingVertical: 7 },
-    list: { marginBottom: 9 },
-    list_item: { alignItems: 'flex-start', flexDirection: 'row', justifyContent: 'flex-start', marginBottom: 3 },
-    bullet_list_icon: { color: colors.text, fontSize: bodySize, lineHeight: bodyLineHeight, marginLeft: 2, marginRight: 9 },
+    blockquote: { borderLeftColor: colors.border, borderLeftWidth: 3, marginBottom: mobileWebMetric(10), marginLeft: 0, paddingHorizontal: mobileWebMetric(12), paddingVertical: mobileWebMetric(6) },
+    list: { marginBottom: compact ? 4 : mobileWebMetric(14 * 0.6) },
+    list_item: { alignItems: 'flex-start', flexDirection: 'row', justifyContent: 'flex-start', marginBottom: mobileWebMetric(3) },
+    bullet_list_icon: { color: colors.text, fontSize: bodySize, lineHeight: bodyLineHeight, marginLeft: mobileWebMetric(2), marginRight: mobileWebMetric(9) },
     bullet_list_content: { flex: 0, flexShrink: 1 },
-    ordered_list_icon: { color: colors.text, fontSize: bodySize, lineHeight: bodyLineHeight, marginLeft: 0, marginRight: 9 },
+    ordered_list_icon: { color: colors.text, fontSize: bodySize, lineHeight: bodyLineHeight, marginLeft: 0, marginRight: mobileWebMetric(9) },
     ordered_list_content: { flex: 0, flexShrink: 1 },
     code_inline: {},
     codeInline: {},
-    codeInlineText: { color: colors.syntaxNumber, fontFamily: codeFont, fontSize: bodySize, lineHeight: bodyLineHeight },
+    codeInlineText: { color: colors.syntaxNumber, fontFamily: codeFont, fontSize: inlineCodeSize, lineHeight: bodyLineHeight },
     code_block: {},
     fence: {},
-    codeBlockContainer: { backgroundColor: colors.surfaceMuted, borderColor: colors.border, borderRadius: 7, borderWidth: StyleSheet.hairlineWidth, marginBottom: 11, overflow: 'hidden' },
-    codeBlockToolbar: { alignItems: 'center', borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', justifyContent: 'space-between', minHeight: 36, paddingLeft: 12, paddingRight: 6 },
-    codeBlockLanguage: { color: colors.textMuted, flexShrink: 1, fontSize: 12, lineHeight: 16, marginRight: 12 },
-    codeBlockCopy: { alignItems: 'center', borderRadius: 6, flexDirection: 'row', gap: 5, minHeight: 30, paddingHorizontal: 7 },
+    codeBlockContainer: { backgroundColor: colors.surfaceMuted, borderColor: colors.border, borderRadius: 7, borderWidth: StyleSheet.hairlineWidth, marginBottom: mobileWebMetric(14 * 0.75), overflow: 'hidden' },
+    codeBlockToolbar: { alignItems: 'center', borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', justifyContent: 'space-between', minHeight: mobileWebMetric(34), paddingLeft: mobileWebMetric(12), paddingRight: mobileWebMetric(6) },
+    codeBlockLanguage: { color: colors.textMuted, flexShrink: 1, fontSize: mobileWebType.small, lineHeight: mobileWebMetric(16), marginRight: mobileWebMetric(12) },
+    codeBlockCopy: { alignItems: 'center', borderRadius: 6, flexDirection: 'row', gap: mobileWebMetric(5), minHeight: mobileWebMetric(30), paddingHorizontal: mobileWebMetric(7) },
     codeBlockCopyPressed: { backgroundColor: colors.surface },
-    codeBlockCopyText: { color: colors.textMuted, fontSize: 12, lineHeight: 16 },
-    codeBlockScrollContent: { paddingHorizontal: 14, paddingVertical: 12 },
-    codeBlockText: { color: colors.text, fontFamily: codeFont, fontSize: 13, lineHeight: 20 },
+    codeBlockCopyText: { color: colors.textMuted, fontSize: mobileWebType.small, lineHeight: mobileWebMetric(16) },
+    codeBlockScrollContent: { paddingHorizontal: mobileWebMetric(14), paddingVertical: mobileWebMetric(12) },
+    codeBlockText: { color: colors.text, fontFamily: codeFont, fontSize: inlineCodeSize, lineHeight: mobileWebMetric(14 * 1.55) },
     syntaxComment: { color: colors.syntaxComment, fontStyle: 'italic' },
     syntaxKeyword: { color: colors.syntaxKeyword, fontWeight: '600' },
     syntaxString: { color: colors.syntaxString },
@@ -746,9 +756,9 @@ function markdownStyles(colors: MobileThemeColors, compact: boolean) {
     syntaxType: { color: colors.syntaxType },
     syntaxEmphasis: { fontStyle: 'italic' },
     syntaxStrong: { fontWeight: '700' },
-    pre: { marginBottom: 11 },
-    hr: { backgroundColor: colors.border, height: StyleSheet.hairlineWidth, marginBottom: 15, marginTop: 6 },
-    tableScroll: { marginBottom: 11, maxWidth: '100%' },
+    pre: { marginBottom: mobileWebMetric(14 * 0.75) },
+    hr: { backgroundColor: colors.border, height: StyleSheet.hairlineWidth, marginBottom: mobileWebMetric(14), marginTop: mobileWebMetric(6) },
+    tableScroll: { marginBottom: mobileWebMetric(10), maxWidth: '100%' },
     tableScrollContent: { flexGrow: 1 },
     table: { alignSelf: 'flex-start', borderColor: colors.border, borderRadius: 9, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },
     thead: { backgroundColor: colors.surfaceMuted },

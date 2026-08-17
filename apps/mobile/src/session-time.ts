@@ -19,6 +19,16 @@ export function formatSessionUpdatedTime(value: string, locale: string, yesterda
   return `${date} ${time}`;
 }
 
+export function formatSessionTurnTime(value: string, locale: string) {
+  const timestamp = new Date(value);
+  if (Number.isNaN(timestamp.getTime())) return '';
+  return new Intl.DateTimeFormat(locale, {
+    weekday: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(timestamp);
+}
+
 function isSameCalendarDay(left: Date, right: Date) {
   return left.getFullYear() === right.getFullYear()
     && left.getMonth() === right.getMonth()

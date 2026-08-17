@@ -1,15 +1,16 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ComponentProps } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { File } from 'expo-file-system';
-import { GripVertical } from 'lucide-react-native';
+import { CornerDownRight, GripVertical, Pencil, RotateCcw, Trash2, type LucideIcon } from 'lucide-react-native';
 import { Alert, Animated, FlatList, Keyboard, KeyboardAvoidingView, PanResponder, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
 import { canInterruptAiSession, isAiSessionApprovalPending, type ControlPlaneAiSessionSummary, type ControlPlaneClient } from '@task-handoff/control-plane-client';
 import type { AiSessionMentionCandidate, AiSessionPermissionMode } from '@task-handoff/protocol/ai-sessions';
+import { supportsDirectoryAiSessionTimelineCapability, type ControlPlaneInstanceDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
 
 import { mobileAiSessionBusyKey, MobileAiSessionActionCoordinator, MobileAiSessionDraftStore, type MobileActionResult } from './actions';
 import { aiSessionDisplayTurns, SessionDetail, type SessionDetailMode } from './SessionDetail';
-import type { MobileStreamingMessage } from './store';
+import { mobileAiSessionStore, type MobileStreamingMessage, type MobileTurnTimelineState } from './store';
 import { pickDocument, pickImage } from '../platform/file-picker';
 import { mobilePastedImage, runtimeAttachmentFromServerCandidate, uploadMobileAttachment, usableUploadRefs, type MobilePendingAttachment } from './attachments';
 import { useMobileTheme } from '../components/theme';
@@ -19,18 +20,22 @@ import { SESSION_COMPOSER_COLLAPSED_HEIGHT, SESSION_COMPOSER_EXPANDED_HEIGHT } f
 import { useI18n, type Translate } from '../i18n';
 import type { MobileAiSessionPermissionStore } from './permission-store';
 import { useMobileToast } from '../components/MobileToast';
+import { mobileWebMetric, mobileWebType } from '../components/mobile-web-typography';
 
 export function SessionWorkspace({
   controlPlaneId,
   instanceId,
   session,
   messages,
+  timelines = {},
+  instanceCapabilities,
   actions,
   drafts,
   permissions,
   defaultPermissionMode,
   client,
   onVisible,
+  onOpenSession,
   detailMode: controlledDetailMode,
   onDetailModeChange,
   syncPhase = 'ready',
@@ -39,12 +44,15 @@ export function SessionWorkspace({
   instanceId: string;
   session?: ControlPlaneAiSessionSummary;
   messages: readonly MobileStreamingMessage[];
+  timelines?: Readonly<Record<string, MobileTurnTimelineState>>;
+  instanceCapabilities?: ControlPlaneInstanceDirectoryEntry['capabilities'];
   actions?: MobileAiSessionActionCoordinator;
   drafts?: MobileAiSessionDraftStore;
   permissions?: MobileAiSessionPermissionStore;
   defaultPermissionMode?: AiSessionPermissionMode;
   client?: ControlPlaneClient;
   onVisible?(updatedAt: string): void;
+  onOpenSession?(sessionId: string): void;
   detailMode?: SessionDetailMode;
   onDetailModeChange?(mode: SessionDetailMode): void;
   syncPhase?: 'idle' | 'loading' | 'ready' | 'stale' | 'offline' | 'error';
@@ -103,6 +111,12 @@ export function SessionWorkspace({
     : defaultPermissionMode ?? 'ask';
   const turnCount = aiSessionDisplayTurns(session).length;
   const latestTurnIndex = Math.max(0, turnCount - 1);
+  const timelineTurnSignature = (session?.turns ?? []).map((turn) => `${turn.id}:${turn.providerTurnId || ''}:${turn.status}`).join('|');
+  const supportsTurnTimeline = session ? supportsDirectoryAiSessionTimelineCapability(instanceCapabilities, session.agent, 'turn-read') : false;
+  const supportsSessionTimeline = session ? supportsDirectoryAiSessionTimelineCapability(instanceCapabilities, session.agent, 'session-read') : false;
+  const supportsLiveTimeline = session ? supportsDirectoryAiSessionTimelineCapability(instanceCapabilities, session.agent, 'live-items') : false;
+  const timelineRecoveryRevision = mobileAiSessionStore.timelineRecoveryRevision(controlPlaneId);
+  const timelineLoadInputs = useRef({ session, timelines });
   useEffect(() => actions?.subscribe(() => rerender((value) => value + 1)), [actions]);
   useEffect(() => {
     let live = true;
@@ -139,6 +153,48 @@ export function SessionWorkspace({
     knownTurnCount.current = turnCount;
   }, [latestTurnIndex, sessionId, turnCount]);
   useEffect(() => {
+    timelineLoadInputs.current = { session, timelines };
+  }, [session, timelines]);
+  useEffect(() => {
+    const timelineSession = timelineLoadInputs.current.session;
+    const timelineStates = timelineLoadInputs.current.timelines;
+    if (!client || !timelineSession || (!supportsTurnTimeline && !supportsSessionTimeline)) return;
+    const turns = aiSessionDisplayTurns(timelineSession);
+    const visibleTurns = detailMode === 'conversation' ? turns : turns.slice(selectedTurnIndex, selectedTurnIndex + 1);
+    const loadableTurns = visibleTurns.filter((turn, index) => {
+      const state = timelineStates[turn.id];
+      if (state?.status && !['idle', 'stale'].includes(state.status)) return false;
+      const isLatest = (detailMode === 'conversation' ? turns.indexOf(turn) : selectedTurnIndex + index) === turns.length - 1;
+      return !(supportsLiveTimeline && isLatest && ['queued', 'running', 'waiting'].includes(turn.status));
+    });
+    if (!loadableTurns.length) return;
+    let active = true;
+    if (supportsTurnTimeline) {
+      for (const turn of loadableTurns) {
+        mobileAiSessionStore.beginTurnTimeline(controlPlaneId, instanceId, timelineSession.id, turn);
+        void client.aiSessions.turnTimeline(instanceId, timelineSession.id, turn.id).then((timeline) => {
+          if (active) mobileAiSessionStore.resolveTurnTimeline(controlPlaneId, instanceId, timelineSession.id, turn, timeline.items);
+        }).catch((cause) => {
+          if (active) mobileAiSessionStore.rejectTurnTimeline(controlPlaneId, instanceId, timelineSession.id, turn, cause instanceof Error ? cause.message : 'Could not load the turn timeline.');
+        });
+      }
+    } else {
+      for (const turn of turns) mobileAiSessionStore.beginTurnTimeline(controlPlaneId, instanceId, timelineSession.id, turn);
+      void client.aiSessions.timeline(instanceId, timelineSession.id).then((timeline) => {
+        if (!active) return;
+        for (const turn of turns) {
+          const identities = new Set([turn.id, turn.providerTurnId].filter(Boolean));
+          mobileAiSessionStore.resolveTurnTimeline(controlPlaneId, instanceId, timelineSession.id, turn, timeline.items.filter((item) => identities.has(item.turnId)));
+        }
+      }).catch((cause) => {
+        if (!active) return;
+        for (const turn of turns) mobileAiSessionStore.rejectTurnTimeline(controlPlaneId, instanceId, timelineSession.id, turn, cause instanceof Error ? cause.message : 'Could not load the session timeline.');
+      });
+    }
+    return () => { active = false; };
+    // Timeline store transitions deliberately do not restart in-flight reads.
+  }, [client, controlPlaneId, detailMode, instanceId, selectedTurnIndex, session?.id, supportsLiveTimeline, supportsSessionTimeline, supportsTurnTimeline, timelineRecoveryRevision, timelineTurnSignature]);
+  useEffect(() => {
     queueOrderPreviewRef.current = undefined;
     setQueueOrderPreview(undefined);
     setDraggingQueueId(undefined);
@@ -158,6 +214,11 @@ export function SessionWorkspace({
       toast.show({ detail: result.error, title: t('toast.actionFailed', { action: label }), tone: 'error' });
     }
     return result;
+  };
+  const continueFromTurn = async (turn: { id: string }) => {
+    if (!actions || !authoritativeActionsEnabled) return;
+    const result = await performAction(t('sessions.continueFromTurn'), () => actions.fork(instanceId, session.id, turn.id, crypto.randomUUID()));
+    if (result.disposition === 'accepted') onOpenSession?.(result.result.aiSessionId);
   };
   const queuedItems = session.queue.items.filter((item) => item.status === 'queued');
   const displayedQueueItems = queueItemsWithQueuedOrder(session.queue.items, queueOrderPreview);
@@ -361,7 +422,22 @@ export function SessionWorkspace({
   return (
     <KeyboardAvoidingView behavior={sessionKeyboardAvoidingBehavior(Platform.OS)} style={styles.fill} testID="session-workspace">
       <View onTouchStart={Keyboard.dismiss} style={styles.fill} testID="session-content">
-        <SessionDetail bottomInset={composerOverlayHeight} messages={messages} mode={detailMode} onModeChange={setDetailMode} onVisible={onVisible} onTurnIndexChange={setSelectedTurnIndex} session={session} showModePicker={controlledDetailMode === undefined} turnIndex={selectedTurnIndex} />
+        <SessionDetail
+          bottomInset={composerOverlayHeight}
+          messages={messages}
+          mode={detailMode}
+          onModeChange={setDetailMode}
+          onRetryTimeline={(turn) => mobileAiSessionStore.retryTurnTimeline(controlPlaneId, instanceId, session.id, turn)}
+          onContinueFromTurn={continueFromTurn}
+          onVisible={onVisible}
+          onTurnIndexChange={setSelectedTurnIndex}
+          session={session}
+          showModePicker={controlledDetailMode === undefined}
+          timelineEnabled={supportsTurnTimeline || supportsSessionTimeline || supportsLiveTimeline}
+          timelineHistoryEnabled={supportsTurnTimeline || supportsSessionTimeline}
+          timelines={timelines}
+          turnIndex={selectedTurnIndex}
+        />
       </View>
       <>
         <Animated.View pointerEvents="none" style={[styles.composerBackdrop, { bottom: composerFadeBottom, height: 16 }]} testID="session-composer-fade-backdrop">
@@ -450,18 +526,18 @@ export function SessionWorkspace({
                     onDragStart={() => beginQueueDrag(item.id)}
                     onMoveDown={() => moveQueuedMessage(item.id, 1)}
                     onMoveUp={() => moveQueuedMessage(item.id, -1)}
-                  /> : <GripVertical color={colors.error} size={17} strokeWidth={1.8} />}
+                  /> : <GripVertical color={colors.error} size={mobileWebMetric(17)} strokeWidth={1.8} />}
                   <View style={styles.queueCopy}>
-                    <Text numberOfLines={2} style={[styles.queueText, { color: colors.text }]}>{item.message}</Text>
+                    <Text ellipsizeMode="tail" numberOfLines={1} style={[styles.queueText, { color: colors.text }]}>{item.message}</Text>
                     {metadata ? <Text numberOfLines={1} style={[styles.queueMeta, { color: colors.textMuted }]}>{metadata}</Text> : null}
                     {item.error ? <Text numberOfLines={2} style={[styles.error, styles.queueError, { color: colors.error }]}>{item.error}</Text> : null}
                   </View>
                 </View>
                 <View style={styles.queueActions}>
-                  {item.status === 'queued' ? <QueueActionButton icon={{ android: 'edit', ios: 'pencil' }} label={t('workspace.editAction')} disabled={!authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes(state('queue-edit', item.id)?.phase || '')} onPress={() => beginQueueEdit(item.id, item.message)} /> : null}
-                  <QueueActionButton icon={{ android: 'turn_right', ios: 'arrow.turn.up.right' }} label={t('workspace.steerAction')} disabled={!authoritativeActionsEnabled || !actions || !canInterrupt || ['busy', 'result-unknown'].includes(state('queue-steer', item.id)?.phase || '')} onPress={() => { if (actions) void performAction(t('workspace.steerAction'), () => actions.queue(instanceId, session.id, item.id, 'steer')); }} showLabel />
-                  {item.status === 'failed' ? <QueueActionButton icon={{ android: 'refresh', ios: 'arrow.clockwise' }} label={t('workspace.retryAction')} disabled={!authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes(state('queue-retry', item.id)?.phase || '')} onPress={() => { if (actions) void performAction(t('workspace.retryAction'), () => actions.queue(instanceId, session.id, item.id, 'retry')); }} /> : null}
-                  <QueueActionButton destructive icon={{ android: 'close', ios: 'xmark' }} label={t('workspace.removeAction')} disabled={!authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes(state('queue-remove', item.id)?.phase || '')} onPress={() => { if (actions) void performAction(t('workspace.removeAction'), () => actions.queue(instanceId, session.id, item.id, 'remove')); }} />
+                  {item.status === 'queued' ? <QueueActionButton icon={queueActionIcon('edit')} label={t('workspace.editAction')} disabled={!authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes(state('queue-edit', item.id)?.phase || '')} onPress={() => beginQueueEdit(item.id, item.message)} /> : null}
+                  <QueueActionButton icon={queueActionIcon('steer')} label={t('workspace.steerAction')} disabled={!authoritativeActionsEnabled || !actions || !canInterrupt || ['busy', 'result-unknown'].includes(state('queue-steer', item.id)?.phase || '')} onPress={() => { if (actions) void performAction(t('workspace.steerAction'), () => actions.queue(instanceId, session.id, item.id, 'steer')); }} showLabel />
+                  {item.status === 'failed' ? <QueueActionButton icon={queueActionIcon('retry')} label={t('workspace.retryAction')} disabled={!authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes(state('queue-retry', item.id)?.phase || '')} onPress={() => { if (actions) void performAction(t('workspace.retryAction'), () => actions.queue(instanceId, session.id, item.id, 'retry')); }} /> : null}
+                  <QueueActionButton destructive icon={queueActionIcon('remove')} label={t('workspace.removeAction')} disabled={!authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes(state('queue-remove', item.id)?.phase || '')} onPress={() => { if (actions) void performAction(t('workspace.removeAction'), () => actions.queue(instanceId, session.id, item.id, 'remove')); }} />
                 </View>
               </View>
             );
@@ -546,10 +622,17 @@ function ApprovalButton({ label, decision, disabled, onPress }: { label: string;
   );
 }
 
-function QueueActionButton({ label, icon, destructive = false, disabled, onPress, showLabel = false }: { label: string; icon: Pick<ComponentProps<typeof SystemIcon>, 'android' | 'ios'>; destructive?: boolean; disabled?: boolean; onPress(): void; showLabel?: boolean }) {
+function QueueActionButton({ label, icon: Icon, destructive = false, disabled, onPress, showLabel = false }: { label: string; icon: LucideIcon; destructive?: boolean; disabled?: boolean; onPress(): void; showLabel?: boolean }) {
   const { colors } = useMobileTheme();
   const color = destructive ? colors.error : colors.primary;
-  return <Pressable accessibilityLabel={label} accessibilityRole="button" accessibilityState={{ disabled: Boolean(disabled) }} disabled={disabled} hitSlop={5} onPress={onPress} style={({ pressed }) => [styles.queueAction, disabled && styles.disabled, pressed && styles.pressed]}><SystemIcon android={icon.android} color={color} ios={icon.ios} size={14} />{showLabel ? <Text style={[styles.queueActionText, { color }]}>{label}</Text> : null}</Pressable>;
+  return <Pressable accessibilityLabel={label} accessibilityRole="button" accessibilityState={{ disabled: Boolean(disabled) }} disabled={disabled} hitSlop={5} onPress={onPress} style={({ pressed }) => [styles.queueAction, disabled && styles.disabled, pressed && styles.pressed]}><Icon color={color} size={mobileWebMetric(15)} />{showLabel ? <Text style={[styles.queueActionText, { color }]}>{label}</Text> : null}</Pressable>;
+}
+
+export function queueActionIcon(action: 'edit' | 'steer' | 'retry' | 'remove'): LucideIcon {
+  if (action === 'edit') return Pencil;
+  if (action === 'steer') return CornerDownRight;
+  if (action === 'retry') return RotateCcw;
+  return Trash2;
 }
 
 function QueueDragHandle({ disabled, label, moveDownLabel, moveUpLabel, onDragCancel, onDragEnd, onDragMove, onDragStart, onMoveDown, onMoveUp }: { disabled?: boolean; label: string; moveDownLabel: string; moveUpLabel: string; onDragCancel(): void; onDragEnd(): void; onDragMove(dy: number): void; onDragStart(): void; onMoveDown(): void; onMoveUp(): void }) {
@@ -589,7 +672,7 @@ function QueueDragHandle({ disabled, label, moveDownLabel, moveUpLabel, onDragCa
       testID="queue-drag-handle"
       {...responder.panHandlers}
     >
-      <GripVertical color={colors.textMuted} size={18} strokeWidth={1.8} />
+      <GripVertical color={colors.textMuted} size={mobileWebMetric(17)} strokeWidth={1.8} />
     </View>
   );
 }
@@ -650,7 +733,7 @@ const styles = StyleSheet.create({
   approvalTitleRow: { alignItems: 'center', flexDirection: 'row', gap: 7, paddingHorizontal: 2 },
   approvalTitle: { fontSize: 14, fontWeight: '700', lineHeight: 19 },
   approvalButton: { alignItems: 'center', borderRadius: 9, borderWidth: StyleSheet.hairlineWidth, flex: 1, flexDirection: 'row', gap: 5, justifyContent: 'center', minHeight: 38, paddingHorizontal: 8 },
-  approvalButtonText: { fontSize: 13, fontWeight: '700', lineHeight: 18 },
+  approvalButtonText: { fontSize: mobileWebType.small, fontWeight: '700', lineHeight: mobileWebType.smallLine },
   disabled: { opacity: 0.4 },
   pressed: { opacity: 0.7 },
   queueListFrame: { borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },
@@ -660,20 +743,20 @@ const styles = StyleSheet.create({
   queueRowDragging: { opacity: 0.72 },
   queueContent: { alignItems: 'center', flex: 1, flexDirection: 'row', gap: 4, minWidth: 0 },
   queueCopy: { flex: 1, gap: 1, minWidth: 0 },
-  queueText: { fontSize: 14, fontWeight: '500', lineHeight: 20 },
-  queueMeta: { fontSize: 12, lineHeight: 17 },
+  queueText: { fontSize: mobileWebType.meta, fontWeight: '500', lineHeight: mobileWebType.metaLine },
+  queueMeta: { fontSize: mobileWebType.small, lineHeight: mobileWebType.smallLine },
   queueError: { marginTop: 1 },
   queueActions: { alignItems: 'center', flexDirection: 'row', gap: 2 },
   queueDragHandle: { alignItems: 'center', height: 40, justifyContent: 'center', width: 24 },
   queueAction: { alignItems: 'center', borderRadius: 8, flexDirection: 'row', gap: 4, height: 34, justifyContent: 'center', minWidth: 34, paddingHorizontal: 6 },
-  queueActionText: { fontSize: 12, fontWeight: '700', lineHeight: 17 },
+  queueActionText: { fontSize: mobileWebType.small, fontWeight: '700', lineHeight: mobileWebType.smallLine },
   notice: { alignItems: 'flex-start', borderRadius: 10, flexDirection: 'row', gap: 8, padding: 12 },
-  noticeText: { flex: 1, fontSize: 13, lineHeight: 18 },
-  error: { color: '#b91c1c', fontSize: 13, lineHeight: 18 },
+  noticeText: { flex: 1, fontSize: mobileWebType.meta, lineHeight: mobileWebType.metaLine },
+  error: { color: '#b91c1c', fontSize: mobileWebType.meta, lineHeight: mobileWebType.metaLine },
   attachments: { gap: 8 },
   attachment: { alignItems: 'center', borderRadius: 10, flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 10, paddingVertical: 8 },
-  attachmentName: { flex: 1, fontSize: 13, fontWeight: '600', lineHeight: 18 },
-  attachmentPhase: { fontSize: 12, lineHeight: 17, textTransform: 'capitalize' },
+  attachmentName: { flex: 1, fontSize: mobileWebType.meta, fontWeight: '600', lineHeight: mobileWebType.metaLine },
+  attachmentPhase: { fontSize: mobileWebType.small, lineHeight: mobileWebType.smallLine, textTransform: 'capitalize' },
   runtimeFiles: { backgroundColor: '#f8fafc', borderRadius: 10, maxHeight: 128 }, runtimeFilesContent: { gap: 8, padding: 10 },
-  runtimeFile: { color: '#2563eb', fontSize: 13, lineHeight: 18 },
+  runtimeFile: { color: '#2563eb', fontSize: mobileWebType.meta, lineHeight: mobileWebType.metaLine },
 });
