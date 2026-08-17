@@ -128,7 +128,7 @@ test('detail pauses scroll following away from the bottom and resumes it from th
     return 1;
   });
   const cancelFrame = jest.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => undefined);
-  const scrollToOffset = jest.spyOn(FlatList.prototype, 'scrollToOffset').mockImplementation(() => undefined);
+  const scrollToEnd = jest.spyOn(FlatList.prototype, 'scrollToEnd').mockImplementation(() => undefined);
   const screen = await render(<SessionDetail messages={[]} session={session} />);
   const list = screen.getByTestId('session-detail-scroll');
 
@@ -144,9 +144,9 @@ test('detail pauses scroll following away from the bottom and resumes it from th
   });
 
   const resume = await screen.findByRole('button', { name: 'Scroll to latest message' });
-  scrollToOffset.mockClear();
+  scrollToEnd.mockClear();
   await fireEvent.press(resume);
-  expect(scrollToOffset).toHaveBeenCalledWith({ animated: true, offset: 1_200 });
+  expect(scrollToEnd).toHaveBeenCalledWith({ animated: true });
   expect(screen.queryByRole('button', { name: 'Scroll to latest message' })).not.toBeNull();
   await fireEvent.scroll(list, {
     nativeEvent: {
@@ -157,7 +157,7 @@ test('detail pauses scroll following away from the bottom and resumes it from th
   });
   await waitFor(() => expect(screen.queryByRole('button', { name: 'Scroll to latest message' })).toBeNull());
   screen.unmount();
-  scrollToOffset.mockRestore();
+  scrollToEnd.mockRestore();
   frame.mockRestore();
   cancelFrame.mockRestore();
 });
@@ -168,7 +168,7 @@ test('switching sessions resets scroll following and jumps directly to the lates
     return 1;
   });
   const cancelFrame = jest.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => undefined);
-  const scrollToOffset = jest.spyOn(FlatList.prototype, 'scrollToOffset').mockImplementation(() => undefined);
+  const scrollToEnd = jest.spyOn(FlatList.prototype, 'scrollToEnd').mockImplementation(() => undefined);
   const nextSession = ControlPlaneAiSessionSummarySchema.parse({
     ...session,
     id: 'session-2',
@@ -188,14 +188,14 @@ test('switching sessions resets scroll following and jumps directly to the lates
       layoutMeasurement: { height: 500, width: 390 },
     },
   });
-  scrollToOffset.mockClear();
+  scrollToEnd.mockClear();
 
   screen.rerender(<SessionDetail messages={[]} session={nextSession} />);
 
-  await waitFor(() => expect(scrollToOffset).toHaveBeenCalledWith({ animated: false, offset: 1_200 }));
+  await waitFor(() => expect(scrollToEnd).toHaveBeenCalledWith({ animated: false }));
   expect(screen.queryByRole('button', { name: 'Scroll to latest message' })).toBeNull();
   screen.unmount();
-  scrollToOffset.mockRestore();
+  scrollToEnd.mockRestore();
   frame.mockRestore();
   cancelFrame.mockRestore();
 });
