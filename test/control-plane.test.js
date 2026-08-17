@@ -6150,6 +6150,11 @@ test("control plane node instance aggregation isolates invalid node protocol dat
   assert.match(goodDirectoryInstance.protocol.warning, /Node protocol 2026-06-22/);
   assert.ok(Array.isArray(goodDirectoryInstance.availableApps));
   assert.deepEqual(goodDirectoryInstance.availableActions, ["stop", "restart"]);
+  assert.deepEqual(goodDirectoryInstance.capabilities.aiSessionTimeline, {
+    sessionReadAgents: [],
+    turnReadAgents: [],
+    liveItemAgents: [],
+  });
   const oldDirectoryInstance = directory.body.data.find((instance) => instance.id === "inst_old_protocol");
   assert.equal(oldDirectoryInstance.protocol.compatible, false);
   assert.match(oldDirectoryInstance.protocol.warning, /Instance protocol 2026-06-23/);

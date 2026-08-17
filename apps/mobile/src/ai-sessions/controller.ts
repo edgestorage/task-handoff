@@ -5,6 +5,7 @@ import {
   AiSessionPatchEventSchema,
   AiSessionRemovedEventSchema,
   AiSessionSnapshotEventSchema,
+  AiSessionTimelineItemEventSchema,
   AiSessionUnreadEventType,
   AiSessionUnreadStateSchema,
   type AiSessionStreamEvent,
@@ -45,6 +46,7 @@ export class MobileAiSessionController {
     const epoch = ++this.epoch;
     this.recoveries.clear();
     this.firstDeltas.clear();
+    this.store.recoverTimelines(this.controlPlaneId);
     this.store.setSyncState(this.controlPlaneId, {
       phase: this.store.profile(this.controlPlaneId).snapshot ? 'stale' : 'loading',
       lastSyncedAt: this.store.profile(this.controlPlaneId).sync.lastSyncedAt,
@@ -178,6 +180,12 @@ export class MobileAiSessionController {
         const transitDuration = Math.max(0, Math.min(Date.now() - Date.parse(parsed.data.generatedAt), 5 * 60 * 1000));
         mobileMetrics.record('message.first-delta', { result: 'received' }, transitDuration);
       }
+      return true;
+    }
+    if (event.type === AiSessionEventType.TimelineItem) {
+      const parsed = safeParseResponse(AiSessionTimelineItemEventSchema, event.payload);
+      if (!parsed.success || event.scope?.instanceId !== parsed.data.instanceId) return false;
+      this.store.applyTimelineItem(this.controlPlaneId, parsed.data);
       return true;
     }
     if (event.type === AiSessionUnreadEventType.Updated) {

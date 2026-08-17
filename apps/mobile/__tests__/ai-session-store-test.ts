@@ -1,4 +1,4 @@
-import { activeMobileStreamingMessage, MOBILE_MESSAGE_TURN_LIMIT, MobileAiSessionStore, mobileControlPlaneQueryKeys } from '../src/ai-sessions/store';
+import { activeMobileStreamingMessage, MOBILE_MESSAGE_TURN_LIMIT, MOBILE_TIMELINE_ITEMS_PER_TURN, MobileAiSessionStore, mobileControlPlaneQueryKeys } from '../src/ai-sessions/store';
 import { MobileAiSessionController } from '../src/ai-sessions/controller';
 import {
   applyControlPlaneAiSessionStreamEvent,
@@ -6,6 +6,7 @@ import {
   type ControlPlaneClient,
 } from '@task-handoff/control-plane-client';
 import { AiSessionEventType, AiSessionUnreadEventType, type AiSessionStreamEvent } from '@task-handoff/protocol/ai-sessions';
+import { supportsDirectoryAiSessionTimelineCapability } from '@task-handoff/protocol/control-plane-directory';
 import type { MobileControlPlaneEventHandlers, MobileControlPlaneTransport } from '../src/control-plane/transport';
 
 function snapshot(instanceId: string, sessionId: string): ControlPlaneAiSessions {
@@ -41,6 +42,12 @@ function snapshot(instanceId: string, sessionId: string): ControlPlaneAiSessions
 }
 
 describe('MobileAiSessionStore identity isolation', () => {
+  test('directory timeline capabilities default old responses to unsupported and remain provider-scoped', () => {
+    expect(supportsDirectoryAiSessionTimelineCapability(undefined, 'codex', 'turn-read')).toBe(false);
+    expect(supportsDirectoryAiSessionTimelineCapability({ aiSessionTimeline: { turnReadAgents: ['codex'] } }, 'codex', 'turn-read')).toBe(true);
+    expect(supportsDirectoryAiSessionTimelineCapability({ aiSessionTimeline: { turnReadAgents: ['codex'] } }, 'claude', 'turn-read')).toBe(false);
+  });
+
   test('query keys include Control Plane, instance, and session identity', () => {
     expect(mobileControlPlaneQueryKeys.aiSession('cp-a', 'instance-1', 'session-1')).toEqual([
       'control-plane',
@@ -259,6 +266,84 @@ describe('MobileAiSessionStore identity isolation', () => {
       },
     })).toBe(true);
     expect(Object.values(store.profile('cp-a').messages)[0]?.receivedText).toBe('hello');
+
+    expect(controller.applyEvent({
+      type: AiSessionEventType.TimelineItem,
+      topic: 'ai.sessions',
+      scope: { instanceId: 'instance-1' },
+      payload: {
+        instanceId: 'instance-1',
+        sessionId: 'session-1',
+        providerSessionId: 'session-1',
+        item: { id: 'command-1', turnId: 'provider-turn-1', type: 'activity', activityKind: 'commandExecution', title: 'Command', status: 'running', input: 'pnpm test' },
+        generatedAt: updatedAt,
+      },
+    })).toBe(true);
+    expect(store.timelineTurnState('cp-a', 'instance-1', 'session-1', { id: 'turn-1', providerTurnId: 'provider-turn-1' }).items).toEqual([
+      expect.objectContaining({ id: 'command-1', status: 'running' }),
+    ]);
+  });
+
+  test('turn timeline snapshots merge live lifecycle updates and become stale on reconnect', () => {
+    const store = new MobileAiSessionStore();
+    const turn = { id: 'turn-local', providerTurnId: 'turn-provider' };
+    store.beginTurnTimeline('cp-timeline', 'instance-1', 'session-1', turn);
+    store.applyTimelineItem('cp-timeline', {
+      instanceId: 'instance-1', sessionId: 'session-1', providerSessionId: 'provider-session', generatedAt: '2026-08-05T00:01:00.000Z',
+      item: { id: 'command-1', turnId: 'turn-provider', type: 'activity', activityKind: 'commandExecution', title: 'Command', status: 'completed', output: 'passed' },
+    });
+    store.resolveTurnTimeline('cp-timeline', 'instance-1', 'session-1', turn, [
+      { id: 'prompt-1', turnId: 'turn-provider', type: 'user-message', text: 'Test this' },
+      { id: 'command-1', turnId: 'turn-provider', type: 'activity', activityKind: 'commandExecution', title: 'Command', status: 'running' },
+    ]);
+
+    expect(store.timelineTurnState('cp-timeline', 'instance-1', 'session-1', turn)).toEqual({
+      status: 'ready',
+      items: [
+        expect.objectContaining({ id: 'prompt-1' }),
+        expect.objectContaining({ id: 'command-1', status: 'completed', output: 'passed' }),
+      ],
+    });
+    store.recoverTimelines('cp-timeline');
+    expect(store.timelineTurnState('cp-timeline', 'instance-1', 'session-1', turn).status).toBe('stale');
+    expect(store.timelineRecoveryRevision('cp-timeline')).toBe(1);
+  });
+
+  test('reconnect preserves live-only timeline items until an authoritative reader can replace them', () => {
+    const store = new MobileAiSessionStore();
+    const turn = { id: 'turn-local', providerTurnId: 'turn-provider' };
+    store.applyTimelineItem('cp-live-only', {
+      instanceId: 'instance-1', sessionId: 'session-1', providerSessionId: 'provider-session', generatedAt: '2026-08-05T00:01:00.000Z',
+      item: { id: 'command-1', turnId: 'turn-provider', type: 'activity', activityKind: 'commandExecution', title: 'Command', status: 'running' },
+    });
+
+    store.recoverTimelines('cp-live-only');
+
+    expect(store.timelineTurnState('cp-live-only', 'instance-1', 'session-1', turn).items).toEqual([
+      expect.objectContaining({ id: 'command-1', status: 'running' }),
+    ]);
+  });
+
+  test('evicted live timeline items cannot return out of order', () => {
+    const store = new MobileAiSessionStore();
+    const base = {
+      instanceId: 'instance-1', sessionId: 'session-1', providerSessionId: 'provider-session', generatedAt: '2026-08-05T00:01:00.000Z',
+    };
+    for (let index = 0; index <= MOBILE_TIMELINE_ITEMS_PER_TURN; index += 1) {
+      store.applyTimelineItem('cp-eviction', {
+        ...base,
+        item: { id: `activity-${index}`, turnId: 'turn-1', type: 'activity', activityKind: 'commandExecution', title: 'Command' },
+      });
+    }
+    store.applyTimelineItem('cp-eviction', {
+      ...base,
+      item: { id: 'activity-0', turnId: 'turn-1', type: 'activity', activityKind: 'commandExecution', title: 'Late duplicate' },
+    });
+
+    const items = store.timelineTurnState('cp-eviction', 'instance-1', 'session-1', { id: 'turn-1' }).items;
+    expect(items).toHaveLength(MOBILE_TIMELINE_ITEMS_PER_TURN);
+    expect(items.some((item) => item.id === 'activity-0')).toBe(false);
+    expect(items.at(0)?.id).toBe('activity-1');
   });
 
   test('Web projection and React Native store converge for the same reducer sequence', () => {

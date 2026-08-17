@@ -11,6 +11,7 @@ function client(overrides: Partial<ControlPlaneClient['aiSessions']> = {}) {
     list: jest.fn().mockResolvedValue(snapshot),
     sendMessage: jest.fn().mockResolvedValue({}), approval: jest.fn().mockResolvedValue({}), interrupt: jest.fn().mockResolvedValue({}),
     close: jest.fn().mockResolvedValue({}),
+    fork: jest.fn().mockResolvedValue({ disposition: 'created', aiSessionId: 'forked-session', providerSessionId: 'forked-provider', creationSource: 'ai-session' }),
     steerQueue: jest.fn().mockResolvedValue({}), retryQueue: jest.fn().mockResolvedValue({}), removeQueue: jest.fn().mockResolvedValue({}),
     editQueue: jest.fn().mockResolvedValue({}), reorderQueue: jest.fn().mockResolvedValue({}),
     ...overrides,
@@ -66,6 +67,39 @@ test('does not replay an uncertain send and recovers from the authoritative snap
   expect(coordinator.state(mobileAiSessionBusyKey('cp', 'instance', 'session', 'send')).phase).toBe('result-unknown');
   expect((await coordinator.send('instance', 'session', 'hello')).disposition).toBe('duplicate-blocked');
   expect(api.aiSessions.sendMessage).toHaveBeenCalledTimes(1);
+});
+
+test('replays an uncertain fork only with the same idempotency key', async () => {
+  const error = Object.assign(new Error('connection lost'), { code: 'DIRECT_NETWORK_FAILED', retryable: true });
+  const fork = jest.fn()
+    .mockRejectedValueOnce(error)
+    .mockResolvedValueOnce({ disposition: 'already-created', aiSessionId: 'forked-session', providerSessionId: 'forked-provider', creationSource: 'ai-session' });
+  const api = client({ fork });
+  const coordinator = new MobileAiSessionActionCoordinator('cp', api, new MobileAiSessionStore());
+
+  expect(await coordinator.fork('instance', 'session', 'turn-1', 'fork-request-1')).toEqual({
+    disposition: 'accepted',
+    result: expect.objectContaining({ aiSessionId: 'forked-session' }),
+  });
+  expect(fork).toHaveBeenCalledTimes(2);
+  expect(fork).toHaveBeenNthCalledWith(1, 'instance', 'session', expect.objectContaining({ clientRequestId: 'fork-request-1', throughTurnId: 'turn-1' }));
+  expect(fork).toHaveBeenNthCalledWith(2, 'instance', 'session', expect.objectContaining({ clientRequestId: 'fork-request-1', throughTurnId: 'turn-1' }));
+  expect(coordinator.state(mobileAiSessionBusyKey('cp', 'instance', 'session', 'fork', 'turn-1')).phase).toBe('idle');
+});
+
+test('allows an unknown fork to be retried later without changing its idempotency key', async () => {
+  const error = Object.assign(new Error('connection lost'), { code: 'DIRECT_NETWORK_FAILED', retryable: true });
+  const fork = jest.fn()
+    .mockRejectedValueOnce(error)
+    .mockRejectedValueOnce(error)
+    .mockResolvedValueOnce({ disposition: 'already-created', aiSessionId: 'forked-session', providerSessionId: 'forked-provider', creationSource: 'ai-session' });
+  const api = client({ fork });
+  const coordinator = new MobileAiSessionActionCoordinator('cp', api, new MobileAiSessionStore());
+
+  expect((await coordinator.fork('instance', 'session', 'turn-1', 'original-request')).disposition).toBe('result-unknown');
+  expect((await coordinator.fork('instance', 'session', 'turn-1', 'different-proposal')).disposition).toBe('accepted');
+  expect(fork).toHaveBeenCalledTimes(3);
+  for (const call of fork.mock.calls) expect(call[2]).toEqual(expect.objectContaining({ clientRequestId: 'original-request' }));
 });
 
 test('returns a failed action error while retaining it in coordinator diagnostics', async () => {

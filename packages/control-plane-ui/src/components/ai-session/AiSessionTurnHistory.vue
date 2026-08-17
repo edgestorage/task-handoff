@@ -1,16 +1,16 @@
 <template>
   <div v-if="loading && !nodes.length" class="ai-session-turn-history-status" aria-busy="true">
     <LoaderCircle class="ai-session-turn-history-loading-icon" :size="15" aria-hidden="true" />
-    <span>{{ t("sessions.timeline.earlierProcessLoading") }}</span>
+    <span>{{ elapsedLabel }} · {{ t("sessions.timeline.loading") }}</span>
   </div>
   <button v-else-if="error && !nodes.length" type="button" class="ai-session-turn-history-status ai-session-turn-history-retry" @click="$emit('retry')">
     <ChevronRight :size="15" />
-    <span>{{ t("sessions.timeline.earlierProcessFailed") }}</span>
+    <span>{{ elapsedLabel }} · {{ t("sessions.timeline.loadFailed") }}</span>
   </button>
   <details v-else-if="nodes.length" class="ai-session-turn-history">
     <summary>
       <ChevronRight :size="15" />
-      <span>{{ t("sessions.timeline.earlierProcess") }}</span>
+      <span>{{ elapsedLabel }}</span>
     </summary>
     <div class="ai-session-turn-history-content">
       <template v-for="node in nodes" :key="node.id">
@@ -26,27 +26,73 @@
     </div>
   </details>
   <div v-else class="ai-session-turn-history-status ai-session-turn-history-empty">
-    <Minus :size="15" aria-hidden="true" />
-    <span>{{ t("sessions.timeline.noEarlierProcess") }}</span>
+    <Timer :size="15" aria-hidden="true" />
+    <span>{{ elapsedLabel }}</span>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { ChevronRight, LoaderCircle, Minus } from "@lucide/vue";
+import { ChevronRight, LoaderCircle, Timer } from "@lucide/vue";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import type { TimelineTurnNode } from "./timelineActivities";
 import AiSessionActivityGroup from "./AiSessionActivityGroup.vue";
 
-defineProps<{ nodes: TimelineTurnNode[]; loading?: boolean; error?: string }>();
+const props = defineProps<{
+  nodes: TimelineTurnNode[];
+  loading?: boolean;
+  error?: string;
+  startedAt?: string;
+  endedAt?: string;
+  active?: boolean;
+}>();
 defineEmits<{ retry: [] }>();
 const { t } = useI18n();
+const now = ref(Date.now());
+let elapsedTimer: ReturnType<typeof setInterval> | undefined;
+
+function syncElapsedTimer() {
+  clearInterval(elapsedTimer);
+  elapsedTimer = undefined;
+  now.value = Date.now();
+  if (props.active && props.startedAt && !props.endedAt) {
+    elapsedTimer = setInterval(() => {
+      now.value = Date.now();
+    }, 1_000);
+  }
+}
+
+const elapsedSeconds = computed(() => {
+  if (!props.startedAt) return undefined;
+  const startedAt = Date.parse(props.startedAt);
+  const endedAt = props.endedAt ? Date.parse(props.endedAt) : now.value;
+  if (!Number.isFinite(startedAt) || !Number.isFinite(endedAt) || endedAt < startedAt) return undefined;
+  return Math.floor((endedAt - startedAt) / 1_000);
+});
+const elapsedLabel = computed(() => {
+  const seconds = elapsedSeconds.value;
+  if (seconds === undefined) return t("sessions.timeline.processedUnavailable");
+  if (seconds < 60) return t("sessions.timeline.processedSeconds", { seconds });
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return t("sessions.timeline.processedMinutes", { minutes, seconds: seconds % 60 });
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return t("sessions.timeline.processedHours", { hours, minutes: minutes % 60, seconds: seconds % 60 });
+  return t("sessions.timeline.processedDays", {
+    days: Math.floor(hours / 24),
+    hours: hours % 24,
+    minutes: minutes % 60,
+    seconds: seconds % 60,
+  });
+});
 const markdownCodeTools = computed(() => ({
   copiedLabel: t("sessions.markdown.copied"),
   copyLabel: t("sessions.markdown.copy"),
   plainTextLabel: t("sessions.markdown.plainText"),
 }));
+onMounted(syncElapsedTimer);
+onBeforeUnmount(() => clearInterval(elapsedTimer));
+watch(() => [props.active, props.startedAt, props.endedAt], syncElapsedTimer);
 </script>
 
 <style scoped>
@@ -75,6 +121,7 @@ const markdownCodeTools = computed(() => ({
   list-style: none;
   font-size: 14px;
   font-weight: 400;
+  user-select: none;
 }
 .ai-session-turn-history > summary::-webkit-details-marker { display: none; }
 .ai-session-turn-history > summary svg { transition: transform 120ms ease; }

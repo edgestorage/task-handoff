@@ -12,7 +12,7 @@ export function NativeSessionModePicker({ mode, onChange }: { mode: SessionDetai
     <Host colorScheme={dark ? 'dark' : 'light'} seedColor={colors.primary} style={{ height: 36, width: 210 }}>
       <Picker label={t('sessions.sessionView')} modifiers={[pickerStyle('segmented'), tint(colors.primary), accessibilityLabel(t('sessions.sessionViewMode'))]} onSelectionChange={(value) => onChange(value as SessionDetailMode)} selection={mode}>
         <Text modifiers={[tag('conversation')]}>{t('sessions.conversation')}</Text>
-        <Text modifiers={[tag('turn')]}>{t('sessions.turn')}</Text>
+        <Text modifiers={[tag('turn')]}>{t('sessions.compact')}</Text>
       </Picker>
     </Host>
   );

@@ -1,6 +1,7 @@
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { SystemIcon } from '../components/SystemIcon';
+import { mobileWebType } from '../components/mobile-web-typography';
 import { useMobileTheme } from '../components/theme';
 import { useI18n, type Translate } from '../i18n';
 import type { AiSessionPermissionMode } from '@task-handoff/protocol/ai-sessions';
@@ -70,7 +71,7 @@ const styles = StyleSheet.create({
   toolbar: { alignItems: 'center', flexDirection: 'row', gap: 1, minHeight: 38 },
   iconButton: { alignItems: 'center', height: 38, justifyContent: 'center', width: 38 },
   permission: { alignItems: 'center', borderRadius: 16, flexDirection: 'row', gap: 5, marginLeft: 2, minHeight: 32, paddingHorizontal: 9 },
-  permissionText: { fontSize: 12, fontWeight: '600' },
+  permissionText: { fontSize: mobileWebType.small, fontWeight: '600' },
   primaryButton: { alignItems: 'center', borderRadius: 12, flexDirection: 'row', gap: 8, justifyContent: 'center', minHeight: 48, marginTop: 6 },
   primaryButtonText: { color: '#ffffff', fontSize: 15, fontWeight: '700' },
   disabled: { opacity: 0.4 },

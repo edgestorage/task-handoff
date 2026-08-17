@@ -34,7 +34,7 @@ type ActiveAiSessions = {
 
 const ActiveAiSessionsContext = createContext<ActiveAiSessions | undefined>(undefined);
 const ActiveAiSessionsRuntimeContext = createContext<Omit<ActiveAiSessions, 'state'> | undefined>(undefined);
-const emptySessionView: MobileAiSessionViewState = { messages: [], syncPhase: 'idle' };
+const emptySessionView: MobileAiSessionViewState = { messages: [], timelines: {}, syncPhase: 'idle' };
 
 export type ActiveAiSessionsDependencies = {
   activeProfile(): Promise<MobileControlPlaneProfile | undefined>;

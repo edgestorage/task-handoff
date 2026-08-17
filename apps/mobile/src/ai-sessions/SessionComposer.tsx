@@ -6,6 +6,7 @@ import { ActivityIndicator, Animated, Easing, Pressable, StyleSheet, Text, TextI
 
 import { SystemIcon } from '../components/SystemIcon';
 import { useMobileTheme } from '../components/theme';
+import { mobileWebType } from '../components/mobile-web-typography';
 import { useI18n, type Translate } from '../i18n';
 import {
   SESSION_COMPOSER_ACTION_ICON_SIZE,
@@ -231,16 +232,16 @@ const styles = StyleSheet.create({
   toolbar: { alignItems: 'center', bottom: 0, flexDirection: 'row', height: SESSION_COMPOSER_TOOLBAR_HEIGHT, justifyContent: 'space-between', left: 0, paddingHorizontal: 8, position: 'absolute', right: 0 },
   leadingTools: { alignItems: 'center', flexDirection: 'row' },
   editingState: { alignItems: 'center', flex: 1, flexDirection: 'row', gap: 7, minWidth: 0, paddingLeft: 8, paddingRight: 6 },
-  editingLabel: { flexShrink: 1, fontSize: 13, fontWeight: '600' },
+  editingLabel: { flexShrink: 1, fontSize: mobileWebType.meta, fontWeight: '600' },
   cancelEditButton: { alignItems: 'center', height: 34, justifyContent: 'center', width: 34 },
   toolButton: { alignItems: 'center', height: SESSION_COMPOSER_TOOL_SIZE, justifyContent: 'center', width: SESSION_COMPOSER_TOOL_SIZE },
   permissionButtonFrame: { borderRadius: 19, height: 38, overflow: 'hidden' },
   permissionMenuTriggerFrame: { height: 38 },
   permissionButton: { alignItems: 'center', borderRadius: 19, flex: 1, flexDirection: 'row' },
   permissionIconSlot: { alignItems: 'center', height: 20, justifyContent: 'center', left: 8, position: 'absolute', width: 20 },
-  permissionText: { fontSize: 13, fontWeight: '600', marginLeft: 34, marginRight: 24 },
+  permissionText: { fontSize: mobileWebType.meta, fontWeight: '600', marginLeft: 34, marginRight: 24 },
   permissionChevron: { alignItems: 'center', height: 20, justifyContent: 'center', position: 'absolute', right: 8, width: 10 },
-  permissionTextMeasurement: { fontSize: 13, fontWeight: '600', opacity: 0, position: 'absolute' },
+  permissionTextMeasurement: { fontSize: mobileWebType.meta, fontWeight: '600', opacity: 0, position: 'absolute' },
   actionButton: { alignItems: 'center', borderRadius: SESSION_COMPOSER_ACTION_RADIUS, height: SESSION_COMPOSER_ACTION_SIZE, justifyContent: 'center', width: SESSION_COMPOSER_ACTION_SIZE },
   disabled: { opacity: 0.4 },
   pressed: { opacity: 0.7 },

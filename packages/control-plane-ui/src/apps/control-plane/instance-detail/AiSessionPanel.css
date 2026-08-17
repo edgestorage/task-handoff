@@ -860,102 +860,9 @@
   font-weight: 650;
 }
 
-.session-ai-history-detail-content {
-  display: grid;
-  width: min(820px, calc(100% - 48px));
-  margin: 0 auto;
-  gap: 22px;
-  padding: 28px 0 calc(var(--session-ai-compose-offset, 84px) + 32px);
-}
-
-.session-ai-history-detail-head {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  align-items: center;
-  gap: 8px 16px;
-  border-bottom: 1px solid var(--line);
-  padding-bottom: 18px;
-}
-
-.session-ai-history-detail-head > div {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
-.session-ai-history-detail-head time::before {
-  content: "·";
-  margin-right: 8px;
-}
-
-.session-ai-history-detail-head h2,
-.session-ai-history-detail-head small {
-  grid-column: 1;
-  min-width: 0;
-  margin: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.session-ai-history-detail-head h2 {
-  color: var(--text-strong);
-  font-size: 18px;
-  font-weight: 700;
-  line-height: 1.35;
-}
-
-.session-ai-history-detail-head small {
-  color: var(--text-muted);
-  font-size: 11px;
-  white-space: nowrap;
-}
-
-.session-ai-history-turns,
-.session-ai-history-turn {
-  display: grid;
-  gap: 18px;
-}
-
-.session-ai-history-turn + .session-ai-history-turn {
-  border-top: 1px solid var(--line);
-  padding-top: 22px;
-}
-
-.session-ai-history-message {
-  display: grid;
-  gap: 7px;
-  min-width: 0;
-  font-size: 14px;
-}
-
-.session-ai-history-message > small {
-  color: var(--text-muted);
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.session-ai-history-message-user {
-  justify-self: end;
-  width: min(78%, 620px);
-  border-radius: 14px;
-  background: var(--surface-hover);
-  padding: 12px 14px;
-}
-
 .session-ai-history-composer {
   --ai-composer-bg: color-mix(in srgb, var(--workspace-bg) 88%, transparent);
 }
-
-.session-ai-history-message-assistant {
-  color: var(--text);
-}
-
-.session-ai-history-message :deep(.markdown-content),
-.session-ai-history-message :deep(.markdown-content > :first-child) { margin-top: 0; }
-
-.session-ai-history-message :deep(.markdown-content > :last-child) { margin-bottom: 0; }
 
 .session-ai-spin { animation: session-ai-spin 700ms linear infinite; }
 
@@ -1460,7 +1367,7 @@
 
 .session-ai-card-activity {
   position: absolute;
-  right: 104px;
+  right: 14px;
   bottom: 8px;
   left: 14px;
   z-index: 3;
@@ -1533,63 +1440,6 @@
 
 :global(.session-ai-card-menu-item.danger) {
   color: var(--ai-board-stale-text);
-}
-
-.session-ai-turn-nav {
-  display: inline-flex;
-  position: absolute;
-  right: 10px;
-  bottom: 8px;
-  z-index: 3;
-  align-items: center;
-  flex: 0 0 auto;
-  height: 20px;
-  min-height: 20px;
-  border: 1px solid var(--line-subtle);
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--surface-overlay) 88%, transparent);
-  color: var(--text-muted);
-  -webkit-backdrop-filter: blur(6px);
-  backdrop-filter: blur(6px);
-}
-
-.session-ai-turn-nav {
-  gap: 2px;
-  padding: 0;
-}
-
-.session-ai-turn-nav button {
-  cursor: pointer;
-}
-
-.session-ai-turn-nav button {
-  display: grid;
-  width: 18px;
-  height: 18px;
-  place-items: center;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: inherit;
-}
-
-.session-ai-turn-nav small {
-  min-width: 26px;
-  color: var(--text-muted);
-  font-size: 10px;
-  line-height: 1;
-  text-align: center;
-}
-
-.session-ai-turn-nav button:not(:disabled):hover {
-  border-color: var(--focus-ring);
-  background: var(--brand-accent-soft);
-  color: var(--text);
-}
-
-.session-ai-turn-nav button:disabled {
-  cursor: default;
-  opacity: 0.32;
 }
 
 .session-ai-trigger-button {
@@ -1972,6 +1822,12 @@
   color: var(--text);
 }
 
+.session-ai-detail-head-actions .session-ai-history-continue {
+  width: auto;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
 :global(.session-ai-detail-actions-menu) {
   min-width: 210px;
   border: 1px solid var(--line);
@@ -2286,8 +2142,7 @@
     color: var(--control-plane-icon-button-hover-text);
   }
 
-  .session-ai-detail-content > header,
-  .session-ai-history-detail-head {
+  .session-ai-detail-content > header {
     padding-left: 24px;
   }
 
@@ -2311,7 +2166,4 @@
     padding-left: 0;
   }
 
-  .session-ai-preview-field-assistant {
-    padding-right: 38px;
-  }
 }
