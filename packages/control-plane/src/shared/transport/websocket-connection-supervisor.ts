@@ -22,6 +22,14 @@ function positive(value: number | undefined, fallback: number) {
   return Number.isFinite(value) && Number(value) > 0 ? Number(value) : fallback;
 }
 
+const RECENT_PING_RTT_SAMPLE_LIMIT = 20;
+
+function percentile95(values: number[]) {
+  if (!values.length) return undefined;
+  const sorted = [...values].sort((left, right) => left - right);
+  return sorted[Math.ceil(sorted.length * 0.95) - 1];
+}
+
 function unref(timer: Timer) {
   timer.unref?.();
   return timer;
@@ -54,6 +62,8 @@ export class WebSocketConnectionSupervisor {
   private currentPhase: WebSocketConnectionPhase = "connecting";
   private lastActivityAt?: number;
   private lastPongAt?: number;
+  private pingRttMs?: number;
+  private readonly recentPingRttMs: number[] = [];
 
   constructor(options: WebSocketConnectionSupervisorOptions) {
     this.connectTimeoutMs = positive(options.connectTimeoutMs, 10_000);
@@ -111,6 +121,11 @@ export class WebSocketConnectionSupervisor {
   pong() {
     if (this.stopped) return;
     const timestamp = this.now();
+    if (this.awaitingPongSince !== undefined) {
+      this.pingRttMs = Math.max(0, timestamp - this.awaitingPongSince);
+      this.recentPingRttMs.push(this.pingRttMs);
+      if (this.recentPingRttMs.length > RECENT_PING_RTT_SAMPLE_LIMIT) this.recentPingRttMs.shift();
+    }
     this.awaitingPongSince = undefined;
     this.lastPongAt = timestamp;
     this.lastActivityAt = timestamp;
@@ -129,6 +144,8 @@ export class WebSocketConnectionSupervisor {
     return {
       phase: this.currentPhase,
       stable: this.stable,
+      ...(this.pingRttMs === undefined ? {} : { pingRttMs: this.pingRttMs }),
+      ...(this.recentPingRttMs.length ? { pingRttP95Ms: percentile95(this.recentPingRttMs) } : {}),
       ...(this.lastActivityAt === undefined ? {} : { lastActivityAt: new Date(this.lastActivityAt).toISOString() }),
       ...(this.lastPongAt === undefined ? {} : { lastPongAt: new Date(this.lastPongAt).toISOString() }),
     };

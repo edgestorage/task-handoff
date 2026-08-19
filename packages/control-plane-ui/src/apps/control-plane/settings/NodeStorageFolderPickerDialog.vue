@@ -7,17 +7,20 @@
       </DialogHeader>
 
       <div class="node-storage-folder-picker-body">
-        <label>
-          <span>{{ t("settings.nodeDialogs.selectedPath") }}</span>
-          <ControlPlaneInput :model-value="selectedPath" :placeholder="t('settings.nodeDialogs.selectFolderBelow')" readonly />
-        </label>
         <NodeFolderTree
+          :breadcrumbs="breadcrumbs"
+          :can-go-up="canGoUp"
+          :current-path="currentPath"
+          directory
           :error="error"
           :loading="loading"
+          :places="places"
           :rows="rows"
           :selected-path="selectedPath"
+          @navigate="$emit('navigate', $event)"
           @refresh="$emit('refresh')"
           @select="$emit('select', $event)"
+          @up="$emit('up')"
         />
         <p v-if="submitError" class="control-plane-error">{{ submitError }}</p>
       </div>
@@ -38,18 +41,23 @@ import { FolderPlus } from "@lucide/vue";
 import { useI18n } from "vue-i18n";
 import { Button } from "../../../components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
-import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
 import NodeFolderTree from "../new-instance/NodeFolderTree.vue";
+import type { NodeFolderPlace } from "../../../api/types";
+import type { NodePathBreadcrumb } from "../nodePath";
 import type { NodeFolderTreeNode } from "../new-instance/nodeFolderTree";
 
 const { t } = useI18n();
 
 defineProps<{
   canConfirm: boolean;
+  breadcrumbs: NodePathBreadcrumb[];
+  canGoUp: boolean;
+  currentPath: string;
   error: string;
   loading: boolean;
   nodeName: string;
   open: boolean;
+  places: NodeFolderPlace[];
   rows: NodeFolderTreeNode[];
   selectedPath: string;
   submitError: string;
@@ -58,15 +66,17 @@ defineProps<{
 
 defineEmits<{
   confirm: [];
+  navigate: [path: string];
   refresh: [];
   select: [folder: NodeFolderTreeNode];
+  up: [];
   "update:open": [open: boolean];
 }>();
 </script>
 
 <style scoped>
 :global(.node-storage-folder-picker-dialog) {
-  width: min(720px, calc(100vw - 32px)) !important;
+  width: min(900px, calc(100vw - 32px)) !important;
   max-width: calc(100vw - 32px) !important;
   max-height: calc(100vh - 32px);
   overflow: hidden;
@@ -78,19 +88,7 @@ defineEmits<{
   gap: 12px;
 }
 
-.node-storage-folder-picker-body > label {
-  display: grid;
-  gap: 6px;
-  min-width: 0;
-}
-
-.node-storage-folder-picker-body > label > span {
-  color: var(--text-muted);
-  font-size: 12px;
-  font-weight: 750;
-}
-
 .node-storage-folder-picker-body :deep(.node-folder-tree-list) {
-  max-height: min(360px, calc(100vh - 360px));
+  max-height: min(460px, calc(100vh - 300px));
 }
 </style>

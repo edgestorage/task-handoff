@@ -22,8 +22,12 @@ test("AI session UI uses authoritative Direct create, Open App, and close action
     panel.indexOf("function canInterrupt"),
   );
   assert.match(panel, /createAiSession\(props\.instance\.id/);
-  assert.match(createNewSession, /cwdFolderId = newSessionFolder\.value\?\.id/);
+  assert.match(createNewSession, /cwdFolderId = newSessionFolder\.value\?\.cwdFolderId/);
+  assert.match(createNewSession, /!newSessionFolder\.value/);
   assert.match(createNewSession, /\.\.\.\(cwdFolderId \? \{ cwdFolderId \} : \{\}\)/);
+  assert.match(panel, /:disabled="!newSessionFolder"/);
+  assert.match(panel, /source\.localFolderId/);
+  assert.match(panel, /relativeNodePathSegments\(folder\.path, sourcePath\)\?\.length === 0/);
   assert.doesNotMatch(createNewSession, /runtime-path/);
   assert.match(panel, /emit\("selectAiSession", props\.instance\.id, result\.aiSessionId\)/);
   assert.doesNotMatch(createNewSession, /refreshBoard\(\)/);
@@ -50,6 +54,29 @@ test("AI session UI uses authoritative Direct create, Open App, and close action
     assert.match(locale, /closeSession:/);
     assert.match(locale, /openApp:/);
   }
+});
+
+test("AI session new projects use the Electron folder picker only for the built-in local node", async () => {
+  const [workbench, detail, preview, pane, panel] = await Promise.all([
+    source("apps/control-plane/ControlPlaneWorkbench.vue"),
+    source("apps/control-plane/instance-detail/InstanceDetail.vue"),
+    source("apps/control-plane/instance-detail/SessionPreview.vue"),
+    source("apps/control-plane/instance-detail/SessionPaneContent.vue"),
+    source("apps/control-plane/instance-detail/AiSessionPanel.vue"),
+  ]);
+
+  assert.match(workbench, /labels\?\.\["task-handoff\.control-plane\.local"\] === "true"/);
+  assert.match(workbench, /labels\?\.\["task-handoff\.control-plane\.builtin"\] === "true"/);
+  assert.match(workbench, /:choose-project-folder="activeProjectFolderChooser"/);
+  for (const component of [detail, preview, pane]) {
+    assert.match(component, /chooseProjectFolder\?: NativeNodeFolderPicker/);
+    assert.match(component, /:choose-project-folder="chooseProjectFolder"/);
+  }
+  assert.match(panel, /if \(!props\.chooseProjectFolder\) \{[\s\S]*newProjectPicker\.openForNode/);
+  assert.match(panel, /nativeNodeFolderSelectionResult\(await props\.chooseProjectFolder\(\), props\.instance\.nodeId\)/);
+  assert.match(panel, /registerNewSessionFolder\(props\.instance\.nodeId, \{[\s\S]*name: nodePathName\(result\.path\),[\s\S]*path: result\.path/);
+  assert.match(panel, /createNodeLocalFolder\(nodeId, input\)/);
+  assert.match(panel, /<template v-if="instance\.source\.type === 'local-folder'">[\s\S]*openNewProject/);
 });
 
 test("history resume waits for source and provider identity without requiring an App binding", async () => {

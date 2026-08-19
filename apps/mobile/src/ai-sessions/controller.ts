@@ -20,6 +20,7 @@ import type {
 import { MobileControlPlaneTransportError } from '../control-plane/transport';
 import { MobileAiSessionStore } from './store';
 import { mobileMetrics } from '../observability/mobile-metrics';
+import { MobileReconnectBackoff } from '../platform/reconnect';
 
 export class MobileAiSessionController {
   private connection?: MobileControlPlaneEventConnection;
@@ -27,7 +28,7 @@ export class MobileAiSessionController {
   private readonly firstDeltas = new Set<string>();
   private epoch = 0;
   private readonly storeGeneration: number;
-  private reconnectAttempt = 0;
+  private readonly reconnectBackoff = new MobileReconnectBackoff();
   private reconnectTimer?: ReturnType<typeof setTimeout>;
 
   constructor(
@@ -59,7 +60,7 @@ export class MobileAiSessionController {
         if (!auth.authenticated) throw new MobileControlPlaneTransportError('DIRECT_SESSION_EXPIRED', 'The mobile Control Plane session expired. Sign in again.', false, 401);
       }
       if (!(await this.refreshSnapshot(signal, epoch))) return;
-      this.reconnectAttempt = 0;
+      this.reconnectBackoff.reset();
       mobileMetrics.record('connection.result', { result: 'connected' });
     } catch (cause) {
       if (epoch === this.epoch && this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) this.store.setSyncState(this.controlPlaneId, {
@@ -102,7 +103,7 @@ export class MobileAiSessionController {
     this.recoveries.clear();
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined;
-    this.reconnectAttempt = 0;
+    this.reconnectBackoff.reset();
     this.connection?.close();
     this.connection = undefined;
   }
@@ -128,8 +129,7 @@ export class MobileAiSessionController {
 
   private scheduleReconnect(epoch: number) {
     if (epoch !== this.epoch || this.reconnectTimer || !this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) return;
-    const delay = Math.min(1_000 * (2 ** this.reconnectAttempt), 30_000);
-    this.reconnectAttempt += 1;
+    const { delay } = this.reconnectBackoff.next();
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = undefined;
       if (epoch !== this.epoch || !this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) return;

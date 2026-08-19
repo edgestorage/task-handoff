@@ -80,6 +80,7 @@ function sourceSpecifiers(file, source) {
   const specifiers = [];
   const extension = path.extname(file);
   const scripts = extension === ".vue" ? [...source.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)].map((match) => match[1]) : [source];
+  const styles = extension === ".vue" ? [...source.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/g)].map((match) => match[1]) : [source];
   if (extension !== ".css") {
     for (const script of scripts) {
       const sourceFile = ts.createSourceFile(file, script, ts.ScriptTarget.Latest, false, ts.ScriptKind.TSX);
@@ -105,8 +106,10 @@ function sourceSpecifiers(file, source) {
     }
   }
   if (path.extname(file) === ".css" || path.extname(file) === ".vue") {
-    for (const match of source.matchAll(CSS_IMPORT_SPECIFIER)) specifiers.push(match[1]);
-    for (const match of source.matchAll(CSS_URL_SPECIFIER)) specifiers.push(match[1]);
+    for (const style of styles) {
+      for (const match of style.matchAll(CSS_IMPORT_SPECIFIER)) specifiers.push(match[1]);
+      for (const match of style.matchAll(CSS_URL_SPECIFIER)) specifiers.push(match[1]);
+    }
   }
   return [...new Set(specifiers)];
 }

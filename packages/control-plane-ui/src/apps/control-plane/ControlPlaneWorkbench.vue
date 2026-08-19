@@ -262,6 +262,7 @@
         :app-launch-button-title="appLaunchButtonTitle"
         :can-launch-app="canLaunchApp"
         :copied-text="copiedText"
+        :choose-project-folder="activeProjectFolderChooser"
         :error="standaloneDetailError || (board.error.value ? errorText(board.error.value) : '')"
         :instance="standaloneOwnershipReady ? activeInstanceWithAiSessions : undefined"
         :instance-display-name="instanceDisplayName"
@@ -666,6 +667,14 @@ const nodeLocalFoldersByNodeId = computed<Record<string, NodeLocalFolder[]>>(() 
   nodeLocalFolderQueries.value.map((query, index) => [nodeLocalFolderNodeIds.value[index], query.data || []]),
 ));
 const activeInstanceWithAiSessions = computed(() => activeInstance.value);
+const activeProjectFolderChooser = computed(() => {
+  const labels = activeInstance.value?.node?.labels;
+  return desktopBridge?.chooseProjectFolder
+    && labels?.["task-handoff.control-plane.local"] === "true"
+    && labels?.["task-handoff.control-plane.builtin"] === "true"
+    ? desktopBridge.chooseProjectFolder
+    : undefined;
+});
 const standaloneDetailError = computed(() => {
   if (!standaloneMode.value) return "";
   if (!standaloneInstanceId.value) return t("instances.window.invalidRoute");

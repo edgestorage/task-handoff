@@ -2,7 +2,7 @@
   <template v-for="app in apps" :key="app.id">
     <DropdownMenuSub v-if="app.supportsCwdSelection">
       <DropdownMenuSubTrigger class="app-launch-menu-item" :disabled="launching" @click.prevent.stop="$emit('launch', app.id)">
-        <Play :size="14" />
+        <AppLaunchIcon :app-id="app.id" />
         <span>
           <strong>{{ app.label }}</strong>
           <small>{{ app.id }}</small>
@@ -29,7 +29,7 @@
       </DropdownMenuSubContent>
     </DropdownMenuSub>
     <DropdownMenuItem v-else class="app-launch-menu-item" :disabled="launching" @select="$emit('launch', app.id)">
-      <Play :size="14" />
+      <AppLaunchIcon :app-id="app.id" />
       <span>
         <strong>{{ app.label }}</strong>
         <small>{{ app.id }}</small>
@@ -41,7 +41,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { Folder, FolderPlus, Play, Search } from "@lucide/vue";
+import { Folder, FolderPlus, Search } from "@lucide/vue";
 import type { InstanceBoardItem, NodeLocalFolder } from "../../../api/types";
 import { isSameOrChildNodePath } from "../nodePath";
 import {
@@ -52,6 +52,7 @@ import {
   DropdownMenuSubTrigger,
 } from "../../../components/ui/dropdown-menu";
 import type { LaunchableApp } from "../useInstanceSessions";
+import AppLaunchIcon from "./AppLaunchIcon.vue";
 
 const props = defineProps<{
   apps: LaunchableApp[];

@@ -6,10 +6,9 @@ import { Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { AiSessionGitSelection, AiSessionPermissionMode } from '@task-handoff/protocol/ai-sessions';
 import type { RepositoryAiSessionWorkspace } from '@task-handoff/protocol/repository';
-import type { ControlPlaneNodeLocalFolder } from '@task-handoff/control-plane-client';
 
 import { NewSessionForm, newSessionVisualBalanceInset } from '../../src/ai-sessions/NewSessionForm';
-import { initialInstanceId, instanceCreateGuidance } from '../../src/ai-sessions/new-session-types';
+import { aiSessionFolderOptions, defaultAiSessionFolderId, initialInstanceId, instanceCreateGuidance, type AiSessionFolderOption } from '../../src/ai-sessions/new-session-types';
 import { createMobileAiSession, lifecycleGuidance } from '../../src/ai-sessions/session-lifecycle';
 import { uploadMobileAttachment, usableUploadRefs, validateMobileLocalFile, type MobilePendingAttachment } from '../../src/ai-sessions/attachments';
 import { pickDocument, pickImage, type MobileLocalFile } from '../../src/platform/file-picker';
@@ -30,7 +29,7 @@ export default function NewAiSessionRoute() {
   const [message, setMessage] = useState('');
   const [permissionSelection, setPermissionSelection] = useState<{ instanceId: string; mode: AiSessionPermissionMode }>();
   const [savingPermission, setSavingPermission] = useState(false);
-  const [folderState, setFolderState] = useState<{ nodeId: string; folders: ControlPlaneNodeLocalFolder[] }>({ nodeId: '', folders: [] });
+  const [folderState, setFolderState] = useState<{ nodeId: string; folders: AiSessionFolderOption[] }>({ nodeId: '', folders: [] });
   const [workspaceState, setWorkspaceState] = useState<{
     instanceId?: string;
     folderId?: string;
@@ -49,6 +48,8 @@ export default function NewAiSessionRoute() {
     ? selection.agent!
     : selectedInstance?.availableAgents[0]?.id ?? '';
   const folderId = selection.instanceId === selectedInstanceId ? selection.folderId : undefined;
+  const folders = folderState.nodeId === selectedInstance?.nodeId ? folderState.folders : [];
+  const selectedFolder = folders.find((folder) => folder.id === folderId);
   const permissionMode = permissionSelection?.instanceId === selectedInstanceId
     ? permissionSelection.mode
     : selectedInstance?.config.defaultCodexPermissionMode ?? 'ask';
@@ -60,20 +61,38 @@ export default function NewAiSessionRoute() {
     const abort = new AbortController();
     void mobileProfileStore.active().then(async (profile) => {
       if (!profile || abort.signal.aborted) return;
-      const nextFolders = await createMobileControlPlaneClient(profile, mobileSecureStore).api.resources.nodeLocalFolders(nodeId, abort.signal);
-      if (!abort.signal.aborted) setFolderState({ nodeId, folders: nextFolders });
+      const api = createMobileControlPlaneClient(profile, mobileSecureStore).api;
+      const [nextFolders, source] = await Promise.all([
+        api.resources.nodeLocalFolders(nodeId, abort.signal),
+        api.resources.instanceWorkspaceSource(selectedInstanceId, abort.signal).catch(() => undefined),
+      ]);
+      if (abort.signal.aborted) return;
+      const folderOptions = aiSessionFolderOptions(source, selectedInstance?.workspace.path, nextFolders);
+      const defaultFolderId = defaultAiSessionFolderId(source, selectedInstance?.workspace.path, nextFolders);
+      setFolderState({ nodeId, folders: folderOptions });
+      setSelection((current) => {
+        const sameInstance = current.instanceId === selectedInstanceId;
+        const selectedFolderId = sameInstance && folderOptions.some((folder) => folder.id === current.folderId)
+          ? current.folderId
+          : defaultFolderId;
+        return {
+          instanceId: selectedInstanceId,
+          agent: sameInstance ? current.agent : undefined,
+          folderId: selectedFolderId,
+        };
+      });
     }).catch(() => {
       if (!abort.signal.aborted) setFolderState({ nodeId, folders: [] });
     });
     return () => abort.abort();
-  }, [selectedInstance?.nodeId]);
+  }, [selectedInstance?.nodeId, selectedInstanceId]);
 
   useEffect(() => {
-    if (!selectedInstanceId || !folderId) return;
+    if (!selectedInstanceId || !selectedFolder) return;
     const abort = new AbortController();
     void mobileProfileStore.active().then(async (profile) => {
       if (!profile || abort.signal.aborted) return;
-      const workspace = await createMobileControlPlaneClient(profile, mobileSecureStore).api.aiSessions.workspace(selectedInstanceId, folderId, abort.signal);
+      const workspace = await createMobileControlPlaneClient(profile, mobileSecureStore).api.aiSessions.workspace(selectedInstanceId, selectedFolder.cwdFolderId, abort.signal);
       if (abort.signal.aborted) return;
       setWorkspaceState({
         instanceId: selectedInstanceId,
@@ -89,7 +108,7 @@ export default function NewAiSessionRoute() {
       if (!abort.signal.aborted) setWorkspaceState({ instanceId: selectedInstanceId, folderId, mode: 'current-folder' });
     });
     return () => abort.abort();
-  }, [selectedInstanceId, folderId]);
+  }, [selectedInstanceId, folderId, selectedFolder?.cwdFolderId]);
 
   const workspaceMatchesSelection = workspaceState.instanceId === selectedInstanceId && workspaceState.folderId === folderId;
   const workspaceLoading = Boolean(selectedInstanceId && folderId && !workspaceMatchesSelection);
@@ -101,14 +120,14 @@ export default function NewAiSessionRoute() {
     : undefined;
 
   const create = async () => {
-    if (!selectedInstance || !controlPlaneId || guidance) return;
+    if (!selectedInstance || !controlPlaneId || guidance || !selectedFolder) return;
     setBusy(true);
     try {
       const profile = await mobileProfileStore.active();
       if (!profile) throw new Error('No active Control Plane.');
       const requestInput = {
         agent,
-        cwdFolderId: folderId,
+        cwdFolderId: selectedFolder.cwdFolderId,
         gitSelection,
         message,
         permissionMode,
@@ -126,7 +145,7 @@ export default function NewAiSessionRoute() {
       const result = await createMobileAiSession(client, {
         instance: selectedInstance,
         agent,
-        cwdFolderId: folderId,
+        cwdFolderId: selectedFolder.cwdFolderId,
         gitSelection,
         message,
         attachments: usableUploadRefs(uploadedAttachments),
@@ -189,7 +208,7 @@ export default function NewAiSessionRoute() {
     instances={state.instances}
     nodes={state.nodes}
     selectedInstance={selectedInstance}
-    folders={folderState.nodeId === selectedInstance?.nodeId ? folderState.folders : []}
+    folders={folders}
     selectedInstanceId={selectedInstanceId}
     selectedAgent={agent}
     selectedFolderId={folderId}
@@ -201,7 +220,7 @@ export default function NewAiSessionRoute() {
     attachments={attachments.map(({ id, local }) => ({ id, kind: local.kind, name: local.name }))}
     permissionMode={permissionMode}
     busy={busy || savingPermission || workspaceLoading}
-    disabled={busy || savingPermission || workspaceLoading || Boolean(guidance) || !agent || !message.trim()}
+    disabled={busy || savingPermission || workspaceLoading || Boolean(guidance) || !agent || !selectedFolder || !message.trim()}
     error={guidance}
     visualBalanceInset={newSessionVisualBalanceInset(Platform.OS, insets.top)}
     onInstanceChange={(instanceId) => {

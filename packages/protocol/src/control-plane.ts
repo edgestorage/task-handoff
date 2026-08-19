@@ -13,12 +13,12 @@ import {
 import { TriggerConfigSchema, TriggerDeploymentSchema, TriggerRunSchema, TriggerRuntimeStateSchema } from "./triggers.ts";
 import { ControlPlaneProxyErrorSchema, ProxyTargetStateSchema } from "./control-plane-proxy.ts";
 
-export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-08-17";
+export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-08-18";
 export const NODE_TUNNEL_PROTOCOL_VERSION = "2026-08-01";
 export const MARKET_CATALOG_PROTOCOL_VERSION = "2026-07-29";
 // Compatibility for v0.0.21: this released protocol already requires appInventory
-// and remains inside the N-1 support window after adding model endpoint probes.
-const APP_INVENTORY_REQUIRED_PROTOCOL_VERSIONS = new Set(["2026-08-01", "2026-08-16", CONTROL_PLANE_PROTOCOL_VERSION]);
+// and remains inside the N-1 support window as later additive features advance the boundary.
+const APP_INVENTORY_REQUIRED_PROTOCOL_VERSIONS = new Set(["2026-08-01", "2026-08-16", "2026-08-17", CONTROL_PLANE_PROTOCOL_VERSION]);
 export const ProtocolVersionSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Protocol version must use YYYY-MM-DD format.");
 
 const AiSessionCapabilityAgentSchema = z.string().trim().min(1).max(120);
@@ -1375,7 +1375,12 @@ export const InstanceResourceMetricsEventType = {
 export const NodeAgentCapabilitiesSchema = z.object({
   modelEndpointProbe: z.boolean().optional(),
   aiSessionHistoryLimit: z.boolean().optional(),
+  folderPlaces: z.boolean().optional(),
 }).strip();
+
+export function supportsNodeFolderPlaces(capabilities: unknown) {
+  return NodeAgentCapabilitiesSchema.safeParse(capabilities).data?.folderPlaces === true;
+}
 
 export const NodeAgentHealthSchema = z
   .object({
@@ -1467,6 +1472,12 @@ export const NodeAgentControlPlaneConnectionSchema = z
     createdAt: TimestampSchema,
     updatedAt: TimestampSchema,
     status: z.enum(["disabled", "connecting", "connected", "reconnecting", "failed"]),
+    // Compatibility for v0.0.21: connection diagnostics are additive because
+    // older node agents omit them and older control planes ignore them.
+    pingRttMs: z.number().nonnegative().optional(),
+    pingRttP95Ms: z.number().nonnegative().optional(),
+    consecutiveReconnects: z.number().int().nonnegative().optional(),
+    nextRetryAt: TimestampSchema.optional(),
     lastConnectedAt: TimestampSchema.optional(),
     lastDisconnectedAt: TimestampSchema.optional(),
     error: z.string().optional(),
@@ -1538,6 +1549,14 @@ export const NodeFolderTreeEntrySchema: z.ZodType<NodeFolderTreeEntry> = z.lazy(
     children: z.array(NodeFolderTreeEntrySchema),
   })
   .passthrough());
+
+export const NodeFolderPlaceSchema = z.object({
+  kind: z.enum(["home", "root"]),
+  name: z.string().trim().min(1),
+  path: z.string().trim().min(1).max(4096),
+}).passthrough();
+
+export type NodeFolderPlace = z.infer<typeof NodeFolderPlaceSchema>;
 
 export const NodeAgentInstanceProxyRawResponseSchema = z
   .object({

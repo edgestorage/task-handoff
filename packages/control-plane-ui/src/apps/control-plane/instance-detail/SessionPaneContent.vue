@@ -52,6 +52,7 @@
     <AiSessionPanel
       v-else-if="session?.kind === 'ai'"
       :active-session="session"
+      :choose-project-folder="chooseProjectFolder"
       :instance="instance"
       :launchable-apps="launchableApps"
       :node-local-folders="nodeLocalFolders"
@@ -104,6 +105,7 @@ import RepositoryChangesReviewTab from "./RepositoryChangesReviewTab.vue";
 import RepositoryWorktreesTab from "./RepositoryWorktreesTab.vue";
 import RepositoryWorkspaceTab from "./RepositoryWorkspaceTab.vue";
 import ImagePullStatus from "./ImagePullStatus.vue";
+import type { NativeNodeFolderPicker } from "../nodePath";
 
 const { locale, t } = useI18n();
 
@@ -111,6 +113,7 @@ const props = defineProps<{
   activeActionLabel: (instance: InstanceBoardItem, action: InstanceAction, idleLabel: string) => string;
   appLaunchButtonTitle: string;
   canLaunchApp: boolean;
+  chooseProjectFolder?: NativeNodeFolderPicker;
   instance: InstanceWithAiSessions;
   isInstanceActionBusy: (instance: InstanceBoardItem) => boolean;
   launchableApps: LaunchableApp[];

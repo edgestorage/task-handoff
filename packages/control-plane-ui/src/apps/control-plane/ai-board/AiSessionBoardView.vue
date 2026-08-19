@@ -91,7 +91,6 @@
                 :forking-session-key="forkingSessionKey"
                 :trigger-action-key="triggerActionKey"
                 :trigger-busy-key="triggerBusyKey"
-                :trigger-button-title="triggerButtonTitle"
                 :trigger-templates="triggerTemplates"
                 @next-prompt="nextPrompt"
                 @open-ai-session-app="openCardApp"
@@ -147,7 +146,6 @@
               :forking-session-key="forkingSessionKey"
               :trigger-action-key="triggerActionKey"
               :trigger-busy-key="triggerBusyKey"
-              :trigger-button-title="triggerButtonTitle"
               :trigger-templates="triggerTemplates"
               @next-prompt="nextPrompt"
               @open-ai-session-app="openCardApp"
@@ -348,9 +346,8 @@ const {
   toggleTrigger,
   triggerActionKey,
   triggerBusyKey,
-  triggerButtonTitle,
   triggerTemplates,
-} = useAiBoardTriggers(t);
+} = useAiBoardTriggers();
 
 const allCards = computed<AiBoardCard[]>(() => {
   const cards: AiBoardCard[] = [];

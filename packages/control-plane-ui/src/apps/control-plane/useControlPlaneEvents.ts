@@ -1,5 +1,6 @@
 import { onBeforeUnmount, onMounted, toValue, watch, type MaybeRefOrGetter } from "vue";
 import { useQueryClient } from "@tanstack/vue-query";
+import { StandardReconnectBackoff } from "@task-handoff/core/core/reconnect";
 import { SessionStreamsHelloEventType, SessionStreamsHelloSchema } from "@task-handoff/protocol/events";
 import {
   InstanceLifecycleEventType,
@@ -75,7 +76,7 @@ export function useControlPlaneEvents(input: {
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   let socket: WebSocket | undefined;
   let closing = false;
-  let reconnectAttempt = 0;
+  const reconnectBackoff = new StandardReconnectBackoff();
   let hasOpened = false;
 
   function connect() {
@@ -87,7 +88,6 @@ export function useControlPlaneEvents(input: {
     current.addEventListener("open", () => {
       const recovering = hasOpened;
       hasOpened = true;
-      reconnectAttempt = 0;
       const instanceId = toValue(input.instanceId || "");
       current.send(JSON.stringify({ type: "subscribe", topics: ["*"], ...(instanceId ? { instanceIds: [instanceId] } : {}) }));
       void queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.scopedInstanceBoard(toValue(input.instanceId || "")) });
@@ -100,9 +100,7 @@ export function useControlPlaneEvents(input: {
       if (socket !== current) return;
       socket = undefined;
       if (!closing && !reconnectTimer) {
-        const baseDelay = Math.min(30_000, 1_000 * (2 ** reconnectAttempt));
-        const delay = Math.min(30_000, Math.round(baseDelay * (0.75 + Math.random() * 0.5)));
-        reconnectAttempt += 1;
+        const { delay } = reconnectBackoff.next();
         reconnectTimer = setTimeout(() => {
           reconnectTimer = undefined;
           connect();
@@ -124,6 +122,9 @@ export function useControlPlaneEvents(input: {
           return;
         }
         const hello = parsed.data;
+        // Transport open is not recovery: reset only after the authoritative
+        // session-stream handshake succeeds.
+        reconnectBackoff.reset();
         for (const descriptor of hello.streams.filter((stream) => !instanceId || stream.instanceId === instanceId)) {
           if (descriptor.topic === "app.sessions") void input.appSessions.recoverDescriptor(descriptor);
           if (descriptor.topic === "ai.sessions") void input.aiSessions.recoverDescriptor(descriptor);
@@ -217,7 +218,7 @@ export function useControlPlaneEvents(input: {
   });
   onBeforeUnmount(() => {
     closing = true;
-    reconnectAttempt = 0;
+    reconnectBackoff.reset();
     socket?.close();
     socket = undefined;
     if (invalidationTimer) clearTimeout(invalidationTimer);

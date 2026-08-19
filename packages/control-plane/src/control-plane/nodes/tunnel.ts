@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { PassThrough, Readable } from "node:stream";
-import { WebSocket as WsClient } from "ws";
 import {
   encodeNodeTunnelRequestBody,
   type Node,
@@ -10,9 +9,8 @@ import { bridgeWebSockets, closeWebSocket, normalizeWebSocketCloseCode, normaliz
 import type { ControlPlaneService } from "../application/service.ts";
 import type { NodeAgentTransport } from "./client.ts";
 import type { ControlPlaneEventBus } from "../events/bus.ts";
-import { createDirectNodeAgentAuthHeaders, hmacHeadersFromRecord, sha256Hex, signNodeAgentRequest, timingSafeHexEqual, NODE_AGENT_HMAC_TIMESTAMP_WINDOW_MS, NODE_TUNNEL_API_PATH } from "../../shared/security/node-agent-auth.ts";
+import { hmacHeadersFromRecord, sha256Hex, signNodeAgentRequest, timingSafeHexEqual, NODE_AGENT_HMAC_TIMESTAMP_WINDOW_MS, NODE_TUNNEL_API_PATH } from "../../shared/security/node-agent-auth.ts";
 import { NODE_TUNNEL_ROUTE } from "../http/auth-boundary.ts";
-import { createNodeAgentIpcWebSocket, parseNodeAgentIpcEndpoint } from "../../shared/transport/node-agent-ipc.ts";
 import { EventConnectionRetryTimer, eventConnectionSafetyIntervalMs } from "../../shared/events/connection-retry.ts";
 import { WebSocketConnectionSupervisor } from "../../shared/transport/websocket-connection-supervisor.ts";
 import { NodeTunnelIngress, type NodeAgentTunnelSocket } from "./tunnel-ingress.ts";
@@ -33,6 +31,60 @@ type ReverseTunnelSocket = {
   ping?: () => void;
   terminate?: () => void;
 };
+
+type NodeEventSocket = {
+  readonly OPEN?: number;
+  readyState: number;
+  on: (event: string, listener: (...args: unknown[]) => void) => void;
+  send: (data: unknown, options?: { binary?: boolean }) => void;
+  close: (code?: number, reason?: string) => void;
+  ping: () => void;
+  terminate: () => void;
+};
+
+class TransportNodeEventSocket implements NodeEventSocket {
+  readonly OPEN = 1;
+  readyState = this.OPEN;
+  private readonly listeners = new Map<string, Set<(...args: unknown[]) => void>>();
+  private pingUpstream?: () => void;
+
+  on(event: string, listener: (...args: unknown[]) => void) {
+    const current = this.listeners.get(event) || new Set();
+    current.add(listener);
+    this.listeners.set(event, current);
+  }
+
+  send(data: unknown) {
+    if (this.readyState === this.OPEN) this.emit("message", data, false);
+  }
+
+  ping() {
+    if (this.readyState === this.OPEN) this.pingUpstream?.();
+  }
+
+  control(ping?: () => void, onPong?: (listener: () => void) => void) {
+    this.pingUpstream = ping;
+    onPong?.(() => this.emit("pong"));
+  }
+
+  opened() {
+    if (this.readyState === this.OPEN) this.emit("open");
+  }
+
+  terminate() {
+    this.close(1006);
+  }
+
+  close(code = 1000, reason = "") {
+    if (this.readyState !== this.OPEN) return;
+    this.readyState = 3;
+    this.emit("close", code, Buffer.from(reason));
+  }
+
+  private emit(event: string, ...args: unknown[]) {
+    for (const listener of this.listeners.get(event) || []) listener(...args);
+  }
+}
 
 type ReverseHttpStreamEntry = {
   resolve: (response: Response) => void;
@@ -738,9 +790,9 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
 }
 
 export class ControlPlaneNodeEventSubscriber {
-  private readonly sockets = new Map<string, WsClient>();
-  private readonly socketUrls = new Map<string, string>();
-  private readonly retries = new Map<string, { timer: EventConnectionRetryTimer; url?: string }>();
+  private readonly sockets = new Map<string, NodeEventSocket>();
+  private readonly connectionKeys = new Map<string, string>();
+  private readonly retries = new Map<string, { timer: EventConnectionRetryTimer; connectionKey?: string }>();
   private readonly supervisors = new Map<string, WebSocketConnectionSupervisor>();
   private readonly runtimeGenerations = new Map<string, number>();
   private readonly service: ControlPlaneService;
@@ -748,7 +800,6 @@ export class ControlPlaneNodeEventSubscriber {
   private readonly safetyIntervalMs: number;
   private readonly logger?: { info?: (data: Record<string, unknown>, message?: string) => void };
   private readonly connectionRuntime?: NodeConnectionRuntime;
-  private readonly createSocket: (url: string, options: { headers: Record<string, string> }) => WsClient;
   private readonly connectionOptions: {
     connectTimeoutMs?: number;
     handshakeTimeoutMs?: number;
@@ -758,7 +809,6 @@ export class ControlPlaneNodeEventSubscriber {
     now?: () => number;
     setTimeoutFn?: typeof setTimeout;
     clearTimeoutFn?: typeof clearTimeout;
-    createSocket?: (url: string, options: { headers: Record<string, string> }) => WsClient;
   };
   private reconnectAttempts = 0;
   private safetyReconciliations = 0;
@@ -780,7 +830,7 @@ export class ControlPlaneNodeEventSubscriber {
       now?: () => number;
       setTimeoutFn?: typeof setTimeout;
       clearTimeoutFn?: typeof clearTimeout;
-      createSocket?: (url: string, options: { headers: Record<string, string> }) => WsClient;
+      createSocket?: (url: string, options: { headers: Record<string, string> }) => NodeEventSocket;
     } = {},
   ) {
     this.service = service;
@@ -789,7 +839,6 @@ export class ControlPlaneNodeEventSubscriber {
     this.logger = options.logger;
     this.connectionRuntime = options.connectionRuntime;
     this.connectionOptions = options;
-    this.createSocket = options.createSocket || ((url, socketOptions) => new WsClient(url, socketOptions));
   }
 
   start() {
@@ -813,7 +862,7 @@ export class ControlPlaneNodeEventSubscriber {
     }
     for (const supervisor of this.supervisors.values()) supervisor.close();
     this.sockets.clear();
-    this.socketUrls.clear();
+    this.connectionKeys.clear();
     this.supervisors.clear();
     this.runtimeGenerations.clear();
     for (const retry of this.retries.values()) retry.timer.cancel();
@@ -838,29 +887,29 @@ export class ControlPlaneNodeEventSubscriber {
   private sync() {
     const active = new Set<string>();
     for (const node of this.service.listNodes()) {
-      const url = this.nodeEventsUrl(node);
-      if (!url) {
+      const connectionKey = this.nodeEventConnectionKey(node);
+      if (!connectionKey) {
         continue;
       }
       active.add(node.id);
       const scheduledRetry = this.retries.get(node.id);
-      if (scheduledRetry?.timer.pending && scheduledRetry.url !== url) {
+      if (scheduledRetry?.timer.pending && scheduledRetry.connectionKey !== connectionKey) {
         scheduledRetry.timer.cancel();
         this.retries.delete(node.id);
       }
-      if (this.socketUrls.get(node.id) !== url && this.sockets.has(node.id)) {
+      if (this.connectionKeys.get(node.id) !== connectionKey && this.sockets.has(node.id)) {
         const staleSocket = this.sockets.get(node.id);
         const generation = this.runtimeGenerations.get(node.id);
         this.supervisors.get(node.id)?.close();
         this.sockets.delete(node.id);
-        this.socketUrls.delete(node.id);
+        this.connectionKeys.delete(node.id);
         this.supervisors.delete(node.id);
         this.runtimeGenerations.delete(node.id);
         if (generation !== undefined) this.connectionRuntime?.disconnected(node.id, generation, { error: "Direct event endpoint changed." });
         staleSocket?.close();
       }
       if (!this.sockets.has(node.id) && !this.retries.get(node.id)?.timer.pending) {
-        this.connect(node, url);
+        this.connect(node, connectionKey);
       }
     }
     for (const [nodeId, socket] of this.sockets) {
@@ -868,7 +917,7 @@ export class ControlPlaneNodeEventSubscriber {
         const generation = this.runtimeGenerations.get(nodeId);
         this.supervisors.get(nodeId)?.close();
         this.sockets.delete(nodeId);
-        this.socketUrls.delete(nodeId);
+        this.connectionKeys.delete(nodeId);
         this.supervisors.delete(nodeId);
         this.runtimeGenerations.delete(nodeId);
         if (generation !== undefined) this.connectionRuntime?.disconnected(nodeId, generation, { error: "Direct event connection is no longer configured." });
@@ -882,26 +931,18 @@ export class ControlPlaneNodeEventSubscriber {
       if (!active.has(nodeId)) {
         retry.timer.cancel();
         this.retries.delete(nodeId);
-        this.socketUrls.delete(nodeId);
+        this.connectionKeys.delete(nodeId);
       }
     }
   }
 
-  private connect(node: Node, url: string) {
-    const ipcPath = parseNodeAgentIpcEndpoint(url);
-    const pathWithQuery = "/api/node-agent/events";
-    const parsedUrl = ipcPath ? undefined : new URL(url);
-    const authHeaders = createDirectNodeAgentAuthHeaders(node, {
-      method: "GET",
-      pathWithQuery: parsedUrl ? `${parsedUrl.pathname}${parsedUrl.search}` : pathWithQuery,
-    });
-    const socket = ipcPath
-      ? createNodeAgentIpcWebSocket(ipcPath, "/events", undefined, authHeaders)
-      : this.createSocket(url, { headers: authHeaders });
-    const runtimeGeneration = this.connectionRuntime?.begin(node.id, "direct-http", "connecting");
+  private connect(node: Node, connectionKey: string) {
+    const socket = new TransportNodeEventSocket();
+    const observesDirectConnection = node.connectionMode !== "control-plane-proxy";
+    const runtimeGeneration = observesDirectConnection ? this.connectionRuntime?.begin(node.id, "direct-http", "connecting") : undefined;
     if (runtimeGeneration !== undefined) this.runtimeGenerations.set(node.id, runtimeGeneration);
     const retry = this.retries.get(node.id)?.timer || new EventConnectionRetryTimer();
-    this.retries.set(node.id, { timer: retry, url });
+    this.retries.set(node.id, { timer: retry, connectionKey });
     const supervisor = new WebSocketConnectionSupervisor({
       ...this.connectionOptions,
       ping: () => socket.ping(),
@@ -918,7 +959,7 @@ export class ControlPlaneNodeEventSubscriber {
       },
     });
     this.sockets.set(node.id, socket);
-    this.socketUrls.set(node.id, url);
+    this.connectionKeys.set(node.id, connectionKey);
     this.supervisors.set(node.id, supervisor);
     supervisor.start();
     socket.on("open", () => {
@@ -956,7 +997,7 @@ export class ControlPlaneNodeEventSubscriber {
       if (this.sockets.get(node.id) === socket) {
         supervisor.close();
         this.sockets.delete(node.id);
-        this.socketUrls.delete(node.id);
+        this.connectionKeys.delete(node.id);
         this.supervisors.delete(node.id);
         this.runtimeGenerations.delete(node.id);
         this.scheduleReconnect(node.id, {
@@ -969,20 +1010,27 @@ export class ControlPlaneNodeEventSubscriber {
     socket.on("error", () => {
       if (this.sockets.get(node.id) === socket) socket.terminate();
     });
+    try {
+      socket.opened();
+      const control = this.service.resolveNodeAgentTransport(node).proxyWebSocket(node, socket, "/events");
+      socket.control(control && control.ping, control && control.onPong);
+    } catch {
+      socket.close(1011, "Node event transport failed.");
+    }
   }
 
   private scheduleReconnect(nodeId: string, disconnect: { generation?: number; closeCode?: number; error?: string } = {}) {
     const node = this.service.listNodes().find((candidate) => candidate.id === nodeId);
-    const url = node && this.nodeEventsUrl(node);
-    if (!this.running || !node || !url) {
+    const connectionKey = node && this.nodeEventConnectionKey(node);
+    if (!this.running || !node || !connectionKey) {
       if (disconnect.generation !== undefined) this.connectionRuntime?.disconnected(nodeId, disconnect.generation, disconnect);
       return;
     }
     const current = this.retries.get(nodeId) ?? { timer: new EventConnectionRetryTimer() };
     if (current.timer.pending) return;
-    current.url = url;
+    current.connectionKey = connectionKey;
     const scheduled = current.timer.schedule(() => {
-      if (this.running && !this.sockets.has(nodeId)) this.connect(node, url);
+      if (this.running && !this.sockets.has(nodeId)) this.connect(node, connectionKey);
     });
     if (scheduled) {
       this.reconnectAttempts += 1;
@@ -992,27 +1040,21 @@ export class ControlPlaneNodeEventSubscriber {
           nextRetryAt: new Date(Date.now() + scheduled.delay).toISOString(),
         });
       }
-      this.logger?.info?.({ nodeId, url, attempt: scheduled.attempt, delay: scheduled.delay, reconnectAttempts: this.reconnectAttempts }, "session-stream.node-connection.reconnect-scheduled");
+      this.logger?.info?.({ nodeId, attempt: scheduled.attempt, delay: scheduled.delay, reconnectAttempts: this.reconnectAttempts }, "session-stream.node-connection.reconnect-scheduled");
     }
     this.retries.set(nodeId, current);
   }
 
-  private nodeEventsUrl(node: Node) {
+  private nodeEventConnectionKey(node: Node) {
     if (node.connectionEnabled === false) return undefined;
-    const endpoint = node.controlEndpoint || node.endpoint;
-    if (!endpoint || node.connectionMode === "reverse-wss") {
-      return undefined;
-    }
-    if (parseNodeAgentIpcEndpoint(endpoint)) {
-      return endpoint;
-    }
-    try {
-      const url = new URL("/api/node-agent/events", endpoint.replace(/\/$/, ""));
-      url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-      return url.toString();
-    } catch {
-      return undefined;
-    }
+    // Reverse nodes already carry node-agent events on their main tunnel. Every
+    // other connection mode opens the same /events capability through its
+    // NodeAgentTransport adapter (direct, local IPC, or trusted proxy).
+    if (node.connectionMode === "reverse-wss") return undefined;
+    const connectionIdentity = node.connectionMode === "control-plane-proxy"
+      ? node.connectionPath
+      : { endpoint: node.controlEndpoint || node.endpoint, auth: node.auth };
+    return `transport:${node.connectionMode}:${sha256Hex(JSON.stringify(connectionIdentity))}`;
   }
 }
 

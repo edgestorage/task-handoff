@@ -6,6 +6,7 @@ import { z } from 'zod';
 
 import { MobileDirectoryStore } from './store';
 import type { MobileControlPlaneEvent, MobileControlPlaneEventConnection, MobileControlPlaneTransport, MobileControlPlaneTransportError } from '../control-plane/transport';
+import { MobileReconnectBackoff } from '../platform/reconnect';
 
 const NodeConnectionObservationSchema = z.object({
   nodeId: z.string().trim().min(1).max(160),
@@ -23,7 +24,7 @@ export class MobileDirectoryController {
   private refreshInFlight?: Promise<void>;
   private refreshQueued = false;
   private activeSignal?: AbortSignal;
-  private reconnectAttempt = 0;
+  private readonly reconnectBackoff = new MobileReconnectBackoff();
   private reconnectTimer?: ReturnType<typeof setTimeout>;
 
   constructor(
@@ -59,7 +60,7 @@ export class MobileDirectoryController {
         updatedAt: new Date().toISOString(),
         error: undefined,
       });
-      this.reconnectAttempt = 0;
+      this.reconnectBackoff.reset();
       if (!options.managed) this.connectEvents(epoch);
       return true;
     } catch (cause) {
@@ -143,7 +144,7 @@ export class MobileDirectoryController {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.refreshTimer = undefined;
     this.reconnectTimer = undefined;
-    this.reconnectAttempt = 0;
+    this.reconnectBackoff.reset();
     this.refreshQueued = false;
     this.activeSignal = undefined;
     this.connection?.close();
@@ -225,8 +226,7 @@ export class MobileDirectoryController {
 
   private scheduleReconnect(epoch: number) {
     if (this.reconnectTimer || epoch !== this.epoch) return;
-    const delay = Math.min(1_000 * (2 ** this.reconnectAttempt), 30_000);
-    this.reconnectAttempt += 1;
+    const { delay } = this.reconnectBackoff.next();
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = undefined;
       if (epoch !== this.epoch) return;

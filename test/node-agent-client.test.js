@@ -146,7 +146,6 @@ test("controlled instance starts serving while registration retries in the backg
         headers: { "content-type": "application/json" },
       });
     },
-    { retryBaseDelayMs: 1, retryMaxDelayMs: 2 },
   );
 
   await client.start();
@@ -222,7 +221,6 @@ test("a missing heartbeat registration automatically returns to the register flo
         headers: { "content-type": "application/json" },
       });
     },
-    { retryBaseDelayMs: 1, retryMaxDelayMs: 2 },
   );
 
   await client.start();

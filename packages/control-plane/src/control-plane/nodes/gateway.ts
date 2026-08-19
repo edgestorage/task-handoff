@@ -15,6 +15,7 @@ import {
   NodeAgentControlPlanePairingSchema,
   NodeAgentControlPlaneConnectionSchema,
   NodeFolderTreeEntrySchema,
+  NodeFolderPlaceSchema,
   NodeLocalFolderSchema,
   NodeModelAssignmentSchema,
   NodeModelPublicRecordSchema,
@@ -158,6 +159,10 @@ export class ControlPlaneNodeAgentGateway {
     }
     const query = params.toString();
     return this.client.requestSchema(node, `/folders/tree${query ? `?${query}` : ""}`, z.array(NodeFolderTreeEntrySchema));
+  }
+
+  listFolderPlaces(node: Node) {
+    return this.client.requestSchema(node, "/folders/places", z.array(NodeFolderPlaceSchema));
   }
 
   listLocalFolders(node: Node, init: RequestInit = {}) {

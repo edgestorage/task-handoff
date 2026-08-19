@@ -118,6 +118,21 @@ test("node-agent maintenance retains active data and ages orphan data through tr
   assert.deepEqual(fs.readdirSync(path.join(paths.dataDir, "local-instances-trash")), []);
 });
 
+test("node-agent maintenance copy-truncates its open process logs", () => {
+  const paths = nodeAgentStorePaths(tempDir("node-agent-open-logs"));
+  fs.mkdirSync(paths.logsDir, { recursive: true });
+  const outPath = path.join(paths.logsDir, "node-agent.out.log");
+  const errPath = path.join(paths.logsDir, "node-agent.err.log");
+  fs.writeFileSync(outPath, "o".repeat(10 * 1024 * 1024 + 1));
+  fs.writeFileSync(errPath, "error\n");
+
+  const maintenance = new NodeAgentPersistenceMaintenance(paths);
+  assert.deepEqual(maintenance.capNodeAgentLogs(), [outPath]);
+  assert.equal(fs.statSync(outPath).size, 0);
+  assert.equal(fs.statSync(path.join(paths.logsDir, "node-agent.out.1.log")).size, 10 * 1024 * 1024);
+  assert.equal(fs.readFileSync(errPath, "utf8"), "error\n");
+});
+
 test("rotating log writer bounds each generation", async () => {
   const logPath = path.join(tempDir("rotating-log"), "tty.log");
   fs.writeFileSync(logPath, "z".repeat(100));

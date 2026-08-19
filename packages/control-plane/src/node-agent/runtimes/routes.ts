@@ -13,6 +13,7 @@ type RuntimeRouteOperations = {
   deleteRuntime(id: string): unknown;
   checkRuntime(id: string): Promise<unknown>;
   listLocalFolders(): unknown;
+  listFolderPlaces(): unknown;
   listFolderTree(input: ReturnType<typeof FolderTreeQuerySchema.parse>): unknown;
   createLocalFolder(input: ReturnType<typeof CreateLocalFolderSchema.parse>): unknown;
   deleteLocalFolder(id: string): unknown;
@@ -34,6 +35,7 @@ export function registerRuntimeRoutes(app: FastifyInstance, operations: RuntimeR
   }));
 
   app.get("/api/node-agent/local-folders", async () => ({ data: operations.listLocalFolders() }));
+  app.get("/api/node-agent/folders/places", async () => ({ data: operations.listFolderPlaces() }));
   app.get("/api/node-agent/folders/tree", async (request) => ({
     data: operations.listFolderTree(FolderTreeQuerySchema.parse(request.query)),
   }));

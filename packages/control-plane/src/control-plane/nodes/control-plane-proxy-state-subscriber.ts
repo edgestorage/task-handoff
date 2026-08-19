@@ -10,6 +10,7 @@ import {
 } from "@task-handoff/protocol/control-plane-proxy";
 import type { Node } from "@task-handoff/protocol/control-plane";
 import { parseResponse, safeParseResponse } from "@task-handoff/protocol/response-validation";
+import { StandardReconnectBackoff } from "@task-handoff/core/core/reconnect";
 import { WebSocket as WsClient } from "ws";
 import { controlPlaneProxyAuthenticationHeaders } from "./control-plane-proxy-transport.ts";
 
@@ -33,7 +34,6 @@ export type ControlPlaneProxyStateSubscriberService = {
 export type ControlPlaneProxyStateSubscriberOptions = {
   fetchImpl?: typeof fetch;
   openWebSocket?: (url: string, headers: Record<string, string>) => EventSocket;
-  reconnectDelayMs?: number;
   onStateChanged?: (node: Node) => void;
   logger?: { warn?: (details: unknown, message?: string) => void };
 };
@@ -43,6 +43,7 @@ type Subscription = {
   identity: string;
   socket?: EventSocket;
   reconnect?: ReturnType<typeof setTimeout>;
+  retry: StandardReconnectBackoff;
 };
 
 const unavailableError = (message: string): ControlPlaneProxyError => ControlPlaneProxyErrorSchema.parse({
@@ -56,7 +57,6 @@ export class ControlPlaneProxyStateSubscriber {
   private readonly subscriptions = new Map<string, Subscription>();
   private readonly fetchImpl: typeof fetch;
   private readonly openWebSocket: NonNullable<ControlPlaneProxyStateSubscriberOptions["openWebSocket"]>;
-  private readonly reconnectDelayMs: number;
   private readonly onStateChanged: (node: Node) => void;
   private readonly logger: ControlPlaneProxyStateSubscriberOptions["logger"];
   private running = false;
@@ -65,7 +65,6 @@ export class ControlPlaneProxyStateSubscriber {
     this.service = service;
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.openWebSocket = options.openWebSocket ?? ((url, headers) => new WsClient(url, { headers }));
-    this.reconnectDelayMs = Math.max(0, options.reconnectDelayMs ?? 2_000);
     this.onStateChanged = options.onStateChanged ?? (() => undefined);
     this.logger = options.logger;
   }
@@ -87,7 +86,7 @@ export class ControlPlaneProxyStateSubscriber {
       const existing = this.subscriptions.get(node.id);
       if (existing?.identity === identity) continue;
       if (existing) this.remove(node.id);
-      const subscription = { generation: 1, identity };
+      const subscription = { generation: 1, identity, retry: new StandardReconnectBackoff() };
       this.subscriptions.set(node.id, subscription);
       void this.connect(node.id, subscription.generation);
     }
@@ -124,7 +123,8 @@ export class ControlPlaneProxyStateSubscriber {
       if (!response.ok) {
         const parsedError = safeParseResponse(ControlPlaneProxyErrorSchema, payload?.error);
         const error = parsedError.success ? parsedError.data : unavailableError(`Proxy snapshot failed with HTTP ${response.status}.`);
-        if (error.code === ControlPlaneProxyErrorCode.BindingRevoked) {
+        if (error.code === ControlPlaneProxyErrorCode.BindingRevoked
+          || error.code === ControlPlaneProxyErrorCode.BindingUnknown) {
           this.onStateChanged(this.service.markProxyBindingRevoked(nodeId, error));
           return;
         }
@@ -175,7 +175,10 @@ export class ControlPlaneProxyStateSubscriber {
           this.restart(nodeId, generation);
           return;
         }
-        if (parsed.type === "control-plane-proxy.events.ready") return;
+        if (parsed.type === "control-plane-proxy.events.ready") {
+          subscription.retry.reset();
+          return;
+        }
         this.onStateChanged(this.service.applyProxyTargetEvent(nodeId, parsed));
       } catch (cause) {
         this.logger?.warn?.({ nodeId, error: proxyFailureLog(cause) }, "control-plane proxy event requires a new snapshot");
@@ -208,10 +211,11 @@ export class ControlPlaneProxyStateSubscriber {
     subscription.generation += 1;
     subscription.socket?.close();
     subscription.socket = undefined;
+    const scheduled = subscription.retry.next();
     subscription.reconnect = setTimeout(() => {
       subscription.reconnect = undefined;
       void this.connect(nodeId, subscription.generation);
-    }, this.reconnectDelayMs);
+    }, scheduled.delay);
     subscription.reconnect.unref?.();
   }
 

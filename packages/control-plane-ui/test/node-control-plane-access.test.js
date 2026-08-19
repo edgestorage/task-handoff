@@ -13,6 +13,12 @@ test("node settings separates paired control planes from active connections", ()
   assert.match(panel, /resources\.controlPlanePairings/);
   assert.match(panel, /resources\.controlPlaneConnections/);
   assert.match(panel, /connection\.status === 'connected'/);
+  assert.match(panel, /node-connection-status-trigger/);
+  assert.match(panel, /connection\.pingRttMs/);
+  assert.match(panel, /connection\.pingRttP95Ms/);
+  assert.match(panel, /connection\.consecutiveReconnects/);
+  assert.match(panel, /connectionRetryCountdown\(connection\.nextRetryAt\)/);
+  assert.match(panel, /@update:open="refreshConnectionDiagnostics"/);
   assert.doesNotMatch(panel, /remote\.current \?[^\n]*remote\.active/);
   assert.match(queries, /control-plane-pairings/);
   assert.match(queries, /control-plane-connections/);

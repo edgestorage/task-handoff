@@ -9,10 +9,15 @@ export type NodeAgentWebSocket = {
   readyState: number;
 };
 
+export type NodeAgentWebSocketControl = {
+  ping?: () => void;
+  onPong?: (listener: () => void) => void;
+};
+
 export type NodeAgentTransport = {
   request(node: Node, route: string, init?: RequestInit): Promise<Response>;
   requestStream(node: Node, route: string, init?: RequestInit): Promise<Response>;
-  proxyWebSocket(node: Node, socket: NodeAgentWebSocket, route: string, protocols?: string | string[], headers?: Record<string, string>): void;
+  proxyWebSocket(node: Node, socket: NodeAgentWebSocket, route: string, protocols?: string | string[], headers?: Record<string, string>): NodeAgentWebSocketControl | void;
 };
 
 type NodeAgentClientLogger = {

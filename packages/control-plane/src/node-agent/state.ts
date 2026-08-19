@@ -44,6 +44,7 @@ import {
 import { reduceInstanceLifecycle, type InstanceLifecycleEvent } from "./instance-lifecycle-state.ts";
 import type { ExecutorContext } from "./runtimes/docker.ts";
 import type { RuntimeAdapter } from "./runtimes/adapters.ts";
+import { requireBrowsableFolderPath } from "./folders.ts";
 
 const BUILTIN_LOCAL_RUNTIME_ID = "runtime_local_host";
 const BUILTIN_RUNTIME_LABEL = "task-handoff.node-agent.builtin";
@@ -361,6 +362,7 @@ export class NodeAgentState {
     const timestamp = now();
     const folder = NodeLocalFolderSchema.parse({
       ...input,
+      path: requireBrowsableFolderPath(input.path),
       id: input.id || createId("folder"),
       nodeId: this.nodeId,
       labels: input.labels || {},

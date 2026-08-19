@@ -3,6 +3,7 @@ const test = require("node:test");
 
 const {
   appendAiSessionMessageDelta,
+  aiSessionElapsedSeconds,
   applyAiSessionUnreadState,
   createControlPlaneClient,
   deriveAiSessionUnreadAfterStreamEvent,
@@ -10,6 +11,13 @@ const {
   sortedAiSessions,
   sortedAiSessionInboxEntries,
 } = require("../src/index.ts");
+
+test("shared AI Session elapsed time requires a terminal timestamp once inactive", () => {
+  const startedAt = "2026-08-17T00:00:00.000Z";
+  assert.equal(aiSessionElapsedSeconds(startedAt, undefined, false, Date.parse("2026-08-21T00:00:00.000Z")), undefined);
+  assert.equal(aiSessionElapsedSeconds(startedAt, undefined, true, Date.parse("2026-08-17T00:00:09.900Z")), 9);
+  assert.equal(aiSessionElapsedSeconds(startedAt, "2026-08-17T00:00:07.500Z", false), 7);
+});
 
 test("shared AI Session client owns route encoding, request input, and response schema", async () => {
   const requests = [];
@@ -75,6 +83,45 @@ test("shared AI Session client sends a node folder identity for server-side runt
     references: [],
     clientRequestId: "request-1",
   });
+});
+
+test("shared AI Session client inspects either a node folder or the instance runtime workspace", async () => {
+  const requests = [];
+  const transport = {
+    async request(path, schema, init) {
+      requests.push({ path, init });
+      return schema.parse({ data: { availability: "not-worktree", dirty: false, branches: [] } });
+    },
+  };
+  const api = createControlPlaneClient(transport);
+
+  await api.aiSessions.workspace("instance/1", "folder/1");
+  await api.aiSessions.workspace("instance/1");
+
+  assert.deepEqual(requests.map((request) => request.path), [
+    "/api/controlled-instances/instance%2F1/ai-sessions/workspace?cwdFolderId=folder%2F1",
+    "/api/controlled-instances/instance%2F1/ai-sessions/workspace",
+  ]);
+});
+
+test("shared resource client reads the instance workspace source used for default project selection", async () => {
+  const requests = [];
+  const transport = {
+    async request(path, schema, init) {
+      requests.push({ path, init });
+      return schema.parse({ data: {
+        source: { type: "local-folder", localFolderId: "folder/1", path: "/workspace/project" },
+      } });
+    },
+  };
+  const api = createControlPlaneClient(transport);
+  assert.deepEqual(await api.resources.instanceWorkspaceSource("instance/1"), {
+    type: "local-folder",
+    localFolderId: "folder/1",
+    path: "/workspace/project",
+  });
+  assert.equal(requests[0].path, "/api/controlled-instances/instance%2F1");
+  assert.equal(requests[0].init.method, undefined);
 });
 
 test("shared AI Session client owns revisioned queue edit and reorder routes", async () => {

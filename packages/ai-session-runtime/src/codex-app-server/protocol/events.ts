@@ -1,4 +1,4 @@
-import { codexSubAgentUpdates, codexToolDescriptor, isoTimestampFromMs } from "./items";
+import { codexSubAgentUpdates, codexToolDescriptor, isoTimestampFromMs, isoTimestampFromSeconds } from "./items";
 import type { CodexAppServerEvent, CodexThread, CodexThreadStatus, JsonValue } from "./types";
 import { asRecord } from "./values";
 
@@ -15,7 +15,8 @@ export function codexNotification(method: string, params: JsonValue): CodexAppSe
   }
   if (method === "turn/started" && typeof params.threadId === "string") {
     const turn = asRecord(params.turn);
-    return { type: "turn-started", threadId: params.threadId, turnId: typeof turn.id === "string" ? turn.id : undefined };
+    const observedAt = isoTimestampFromSeconds(turn.startedAt);
+    return { type: "turn-started", threadId: params.threadId, turnId: typeof turn.id === "string" ? turn.id : undefined, ...(observedAt ? { observedAt } : {}) };
   }
   if (method === "error" && typeof params.threadId === "string" && typeof params.turnId === "string") {
     const error = codexTurnErrorMessage(params.error);
@@ -29,7 +30,8 @@ export function codexNotification(method: string, params: JsonValue): CodexAppSe
   }
   if (method === "turn/completed" && typeof params.threadId === "string") {
     const turn = asRecord(params.turn);
-    return { type: "turn-completed", threadId: params.threadId, turnId: typeof turn.id === "string" ? turn.id : undefined, status: typeof turn.status === "string" ? turn.status : undefined, error: codexTurnErrorMessage(turn.error) };
+    const observedAt = isoTimestampFromSeconds(turn.completedAt);
+    return { type: "turn-completed", threadId: params.threadId, turnId: typeof turn.id === "string" ? turn.id : undefined, status: typeof turn.status === "string" ? turn.status : undefined, error: codexTurnErrorMessage(turn.error), ...(observedAt ? { observedAt } : {}) };
   }
   if (method === "thread/realtime/error" && typeof params.threadId === "string" && typeof params.message === "string" && params.message.trim()) {
     return { type: "thread-error", threadId: params.threadId, error: params.message.trim() };

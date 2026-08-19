@@ -58,6 +58,7 @@ export function SessionWorkspace({
   syncPhase?: 'idle' | 'loading' | 'ready' | 'stale' | 'offline' | 'error';
 }) {
   const insets = useSafeAreaInsets();
+  const composerBottomInset = Math.max(insets.bottom, 8);
   const { colors } = useMobileTheme();
   const { t } = useI18n();
   const toast = useMobileToast();
@@ -70,8 +71,11 @@ export function SessionWorkspace({
     resolved: boolean;
   }>();
   const [composerFocused, setComposerFocused] = useState(false);
+  const [keyboardViewportRevision, setKeyboardViewportRevision] = useState(0);
   const [composerExpansion] = useState(() => new Animated.Value(0));
-  const [composerOverlayHeight, setComposerOverlayHeight] = useState(0);
+  const [composerOverlayHeight, setComposerOverlayHeight] = useState(
+    () => SESSION_COMPOSER_COLLAPSED_HEIGHT + 16 + composerBottomInset,
+  );
   const [, rerender] = useState(0);
   const [attachments, setAttachments] = useState<MobilePendingAttachment[]>([]);
   const [runtimeCandidates, setRuntimeCandidates] = useState<AiSessionMentionCandidate[]>([]);
@@ -105,6 +109,12 @@ export function SessionWorkspace({
   const currentSessionId = useRef(sessionId);
   currentSessionId.current = sessionId;
   const activeQueueEdit = queueEdit?.sessionId === sessionId ? queueEdit : undefined;
+  useEffect(() => {
+    const subscription = Keyboard.addListener('keyboardDidShow', () => {
+      setKeyboardViewportRevision((revision) => revision + 1);
+    });
+    return () => subscription?.remove?.();
+  }, []);
   const permissionKey = sessionId ? `${controlPlaneId}\u0000${instanceId}\u0000${sessionId}` : undefined;
   const permissionMode = permissionSelection && permissionSelection.key === permissionKey
     ? permissionSelection.mode
@@ -161,11 +171,10 @@ export function SessionWorkspace({
     if (!client || !timelineSession || (!supportsTurnTimeline && !supportsSessionTimeline)) return;
     const turns = aiSessionDisplayTurns(timelineSession);
     const visibleTurns = detailMode === 'conversation' ? turns : turns.slice(selectedTurnIndex, selectedTurnIndex + 1);
-    const loadableTurns = visibleTurns.filter((turn, index) => {
+    const loadableTurns = visibleTurns.filter((turn) => {
       const state = timelineStates[turn.id];
       if (state?.status && !['idle', 'stale'].includes(state.status)) return false;
-      const isLatest = (detailMode === 'conversation' ? turns.indexOf(turn) : selectedTurnIndex + index) === turns.length - 1;
-      return !(supportsLiveTimeline && isLatest && ['queued', 'running', 'waiting'].includes(turn.status));
+      return true;
     });
     if (!loadableTurns.length) return;
     let active = true;
@@ -193,7 +202,7 @@ export function SessionWorkspace({
     }
     return () => { active = false; };
     // Timeline store transitions deliberately do not restart in-flight reads.
-  }, [client, controlPlaneId, detailMode, instanceId, selectedTurnIndex, session?.id, supportsLiveTimeline, supportsSessionTimeline, supportsTurnTimeline, timelineRecoveryRevision, timelineTurnSignature]);
+  }, [client, controlPlaneId, detailMode, instanceId, selectedTurnIndex, session?.id, supportsSessionTimeline, supportsTurnTimeline, timelineRecoveryRevision, timelineTurnSignature]);
   useEffect(() => {
     queueOrderPreviewRef.current = undefined;
     setQueueOrderPreview(undefined);
@@ -412,7 +421,6 @@ export function SessionWorkspace({
     if (permissionKey) setPermissionSelection({ key: permissionKey, mode, resolved: true });
     if (sessionId && permissions) void permissions.write(controlPlaneId, instanceId, sessionId, mode).catch(() => undefined);
   };
-  const composerBottomInset = Math.max(insets.bottom, 8);
   const composerBackdropHeight = composerExpansion.interpolate({
     inputRange: [0, 1],
     outputRange: [SESSION_COMPOSER_COLLAPSED_HEIGHT, SESSION_COMPOSER_EXPANDED_HEIGHT],
@@ -420,10 +428,12 @@ export function SessionWorkspace({
   const composerFadeBottom = Animated.add(composerBackdropHeight, composerBottomInset);
   const bottomBackdrop = composerBottomBackdropGeometry(composerBottomInset);
   return (
-    <KeyboardAvoidingView behavior={sessionKeyboardAvoidingBehavior(Platform.OS)} style={styles.fill} testID="session-workspace">
-      <View onTouchStart={Keyboard.dismiss} style={styles.fill} testID="session-content">
+    <View style={[styles.fill, { backgroundColor: colors.surface }]} testID="session-workspace-background">
+      <KeyboardAvoidingView behavior={sessionKeyboardAvoidingBehavior(Platform.OS)} style={[styles.fill, { backgroundColor: colors.surface }]} testID="session-workspace">
+      <View onTouchStart={Keyboard.dismiss} style={[styles.fill, { backgroundColor: colors.surface }]} testID="session-content">
         <SessionDetail
           bottomInset={composerOverlayHeight}
+          keyboardViewportRevision={keyboardViewportRevision}
           messages={messages}
           mode={detailMode}
           onModeChange={setDetailMode}
@@ -578,7 +588,8 @@ export function SessionWorkspace({
           value={draft}
         />
       </View>
-    </KeyboardAvoidingView>
+      </KeyboardAvoidingView>
+    </View>
   );
 }
 

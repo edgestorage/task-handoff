@@ -25,7 +25,7 @@ import { defaultCommandRunner, LocalDockerExecutor, listLocalDockerImages, type 
 import { DockerImageService } from "./docker-images.ts";
 import { NodeAgentInstanceEventForwarder } from "./events.ts";
 import { DockerRuntimeMetricsCollector } from "./runtime-metrics.ts";
-import { listFolderTree } from "./folders.ts";
+import { folderPlaces, listFolderTree } from "./folders.ts";
 import { nodeAgentStorePaths, type NodeAgentStorePaths } from "./persistence/paths.ts";
 import { NodeAgentPersistenceMaintenance } from "./persistence/maintenance.ts";
 import { acquireNodeAgentSingletonLock, defaultNodeAgentSingletonLockPath } from "./process/singleton-lock.ts";
@@ -608,11 +608,12 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       app.log.warn({ error }, "node-agent persistence maintenance failed");
     }
   };
-  const capActiveInstanceLogs = () => {
+  const capOpenProcessLogs = () => {
     try {
+      persistenceMaintenance.capNodeAgentLogs();
       persistenceMaintenance.capActiveInstanceLogs(activeInstanceIds());
     } catch (error) {
-      app.log.warn({ error }, "node-agent active log maintenance failed");
+      app.log.warn({ error }, "node-agent open log maintenance failed");
     }
   };
   runPersistenceMaintenance();
@@ -621,7 +622,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   }, DEFAULT_MAINTENANCE_INTERVAL_MS);
   persistenceMaintenanceTimer.unref();
   const activeLogMaintenanceTimer = setInterval(() => {
-    capActiveInstanceLogs();
+    capOpenProcessLogs();
   }, ACTIVE_LOG_MAINTENANCE_INTERVAL_MS);
   activeLogMaintenanceTimer.unref();
   const instanceProxyMetrics = createInstanceProxyMetrics();
@@ -968,7 +969,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       platform: finalComputerPlatform(platform),
       arch: process.arch,
       protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
-      capabilities: { modelEndpointProbe: true, aiSessionHistoryLimit: true },
+      capabilities: { modelEndpointProbe: true, aiSessionHistoryLimit: true, folderPlaces: true },
       build: buildInfo("node-agent"),
       instanceProxy: { ...instanceProxyMetrics },
       serverTime: new Date().toISOString(),
@@ -1011,6 +1012,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       return state.checkRuntime(id, runtimeAdapters.forRuntime(runtime));
     },
     listLocalFolders: () => state.localFolders.list(),
+    listFolderPlaces: folderPlaces,
     listFolderTree,
     createLocalFolder: (input) => state.createLocalFolder(input),
     deleteLocalFolder: (id) => state.localFolders.delete(id),

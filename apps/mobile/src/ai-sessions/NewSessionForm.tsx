@@ -22,20 +22,15 @@ import { NewSessionBranchPicker } from './NewSessionBranchPicker';
 import { NewSessionContextMenu } from './NewSessionContextMenu';
 import { AttachmentMenu } from './SessionComposerMenus';
 
-const DEFAULT_WORKSPACE_VALUE = '__default-workspace__';
-
 export function NewSessionForm(props: NewSessionFormProps) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
   const workspaceMode = props.workspaceMode ?? 'current-folder';
   const selectedAgentName = props.selectedInstance?.availableAgents.find((agent) => agent.id === props.selectedAgent)?.name;
   const selectedFolder = props.folders.find((folder) => folder.id === props.selectedFolderId);
-  const folderName = selectedFolder?.name || t('appSessions.defaultWorkspace');
+  const folderName = selectedFolder?.name || t('sessions.selectFolder');
   const instanceOptions = newSessionInstanceOptions(props.instances, props.nodes);
-  const folderOptions: AnchoredSelectOption[] = [
-    { label: t('appSessions.defaultWorkspace'), systemImage: 'folder', value: DEFAULT_WORKSPACE_VALUE },
-    ...props.folders.map((folder) => ({ label: folder.name, description: folder.path, systemImage: 'folder' as const, value: folder.id })),
-  ];
+  const folderOptions: AnchoredSelectOption[] = props.folders.map((folder) => ({ label: folder.name, description: folder.path, systemImage: 'folder' as const, value: folder.id }));
   const agentOptions: AnchoredSelectOption[] = (props.selectedInstance?.availableAgents ?? []).map((agent) => ({ label: agent.name, systemImage: 'sparkles', value: agent.id }));
   const gitWorkspace = props.workspace?.availability === 'available' && props.workspace.branches.length ? props.workspace : undefined;
   const workspaceModeOptions: AnchoredSelectOption<'current-folder' | 'worktree'>[] = [
@@ -70,7 +65,7 @@ export function NewSessionForm(props: NewSessionFormProps) {
           <NewSessionContextMenu cancelLabel={t('common.cancel')} disabled={props.busy} onSelect={props.onInstanceChange} options={instanceOptions} selectedValue={props.selectedInstanceId} title={t('sessions.instance')}>
             {(onPress) => <ContextPill disabled={props.busy || !instanceOptions.length} icon={{ android: 'dns', ios: 'server.rack' }} label={props.selectedInstance?.name || t('sessions.selectInstance')} onPress={onPress} />}
           </NewSessionContextMenu>
-          <NewSessionContextMenu cancelLabel={t('common.cancel')} disabled={props.busy} onSelect={(value) => props.onFolderChange(value === DEFAULT_WORKSPACE_VALUE ? undefined : value)} options={folderOptions} selectedValue={props.selectedFolderId ?? DEFAULT_WORKSPACE_VALUE} title={t('sessions.folder')}>
+          <NewSessionContextMenu cancelLabel={t('common.cancel')} disabled={props.busy} onSelect={props.onFolderChange} options={folderOptions} selectedValue={props.selectedFolderId ?? ''} title={t('sessions.folder')}>
             {(onPress) => <ContextPill disabled={props.busy || !folderOptions.length} icon={{ android: 'folder', ios: 'folder' }} label={folderName} onPress={onPress} />}
           </NewSessionContextMenu>
           {gitWorkspace ? <NewSessionContextMenu cancelLabel={t('common.cancel')} disabled={props.busy} onSelect={(value) => props.onWorkspaceModeChange?.(value)} options={workspaceModeOptions} selectedValue={workspaceMode} title={t('sessions.workspaceMode')}>

@@ -36,7 +36,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { ChevronRight, LoaderCircle, Timer } from "@lucide/vue";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
-import type { TimelineTurnNode } from "./timelineActivities";
+import { turnElapsedSeconds, type TimelineTurnNode } from "./timelineActivities";
 import AiSessionActivityGroup from "./AiSessionActivityGroup.vue";
 
 const props = defineProps<{
@@ -63,13 +63,12 @@ function syncElapsedTimer() {
   }
 }
 
-const elapsedSeconds = computed(() => {
-  if (!props.startedAt) return undefined;
-  const startedAt = Date.parse(props.startedAt);
-  const endedAt = props.endedAt ? Date.parse(props.endedAt) : now.value;
-  if (!Number.isFinite(startedAt) || !Number.isFinite(endedAt) || endedAt < startedAt) return undefined;
-  return Math.floor((endedAt - startedAt) / 1_000);
-});
+const elapsedSeconds = computed(() => turnElapsedSeconds(
+  props.startedAt,
+  props.endedAt,
+  props.active === true,
+  now.value,
+));
 const elapsedLabel = computed(() => {
   const seconds = elapsedSeconds.value;
   if (seconds === undefined) return t("sessions.timeline.processedUnavailable");

@@ -10,6 +10,7 @@ const board = read("board/InstanceBoardView.vue");
 const boardSessions = read("board/useInstanceBoardSessions.ts");
 const detailSelection = read("instance-detail/instanceDetailSelection.ts");
 const appLaunchItems = read("shared/AppLaunchMenuItems.vue");
+const appLaunchIcon = read("shared/AppLaunchIcon.vue");
 const options = read("shared/InstanceViewOptionsMenu.vue");
 const terminal = read("board/useBoardTerminalPreviews.ts");
 
@@ -98,6 +99,14 @@ test("board app launch menus keep parent and project flyout layouts consistent",
   assert.match(board, /:global\(\.board-launch-menu \.app-launch-menu-item\) \{[\s\S]*?grid-template-columns: 18px minmax\(0, 1fr\) 16px;/);
   assert.match(board, /:global\(\.board-launch-menu \.app-launch-menu-item span\) \{[\s\S]*?display: grid;[\s\S]*?gap: 2px;/);
   assert.doesNotMatch(board, /board-launch-menu-item/);
+});
+
+test("app launch menus use product and terminal icons instead of a generic launch glyph", () => {
+  assert.match(appLaunchItems, /<AppLaunchIcon :app-id="app\.id" \/>/);
+  assert.match(appLaunchIcon, /terminalAppIds = new Set\(\["terminal", "terminal-tty", "gui-terminal"\]\)/);
+  assert.match(appLaunchIcon, /<AiAgentIcon v-if="agent"/);
+  assert.match(appLaunchIcon, /<SquareTerminal v-else-if=/);
+  assert.match(appLaunchIcon, /<Play v-else/);
 });
 
 test("mobile board groups flow directly into a single card column", () => {

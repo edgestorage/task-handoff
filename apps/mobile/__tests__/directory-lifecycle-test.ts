@@ -7,7 +7,7 @@ import { MobileAiSessionStore } from '../src/ai-sessions/store';
 import { MobileDirectoryStore } from '../src/directories/store';
 import { MobileDirectoryController } from '../src/directories/controller';
 import { filterInstances } from '../src/directories/DirectoryLists';
-import { canCreateSession, initialInstanceId, instanceCreateGuidance } from '../src/ai-sessions/new-session-types';
+import { aiSessionFolderOptions, canCreateSession, defaultAiSessionFolderId, initialInstanceId, INSTANCE_WORKSPACE_FOLDER_ID, instanceCreateGuidance } from '../src/ai-sessions/new-session-types';
 import { appLaunchIssue, canLaunchApp, initialAppInstanceId } from '../src/app-sessions/new-app-session-types';
 import { RESOURCE_NAME_MAX_LENGTH, validateResourceName } from '../src/instances/resource-name';
 
@@ -43,6 +43,34 @@ test('new session selection honors a requested instance and exposes readiness gu
   expect(instanceCreateGuidance(offline)).toMatch(/not ready/);
 });
 
+test('new session selects the instance project by authoritative folder id with a path fallback for older data', () => {
+  const folders = [
+    { id: 'folder-default', name: 'Default', path: '/workspace/default' },
+    { id: 'folder-other', name: 'Other', path: '/workspace/other' },
+  ];
+  expect(defaultAiSessionFolderId(
+    { type: 'local-folder', localFolderId: 'folder-default', path: '/stale/path' },
+    '/workspace',
+    folders,
+  )).toBe('folder-default');
+  expect(defaultAiSessionFolderId(
+    { type: 'local-folder', path: '/workspace/other/' },
+    '/workspace',
+    folders,
+  )).toBe('folder-other');
+  expect(defaultAiSessionFolderId({ type: 'git-repository' }, '/workspace', folders)).toBe(INSTANCE_WORKSPACE_FOLDER_ID);
+  expect(aiSessionFolderOptions({ type: 'git-repository' }, '/workspace', folders)).toEqual([
+    { id: INSTANCE_WORKSPACE_FOLDER_ID, name: 'workspace', path: '/workspace' },
+  ]);
+});
+
+test('create uses the instance runtime workspace without materializing a node folder id', async () => {
+  const create = jest.fn().mockResolvedValue({ disposition: 'created', aiSessionId: 'session-1', providerSessionId: 'provider-1', creationSource: 'ai-session' });
+  const api = { aiSessions: { create } } as unknown as ControlPlaneClient;
+  await createMobileAiSession(api, { instance, agent: 'codex', message: 'Build it', clientRequestId: 'mobile-request-workspace' });
+  expect(create.mock.calls[0][1].cwdFolderId).toBeUndefined();
+});
+
 test('directory exposes the authoritative default permission mode used by new sessions', () => {
   expect(instance.config.defaultCodexPermissionMode).toBe('full-access');
 });
@@ -67,7 +95,7 @@ test('create forwards staged attachment references', async () => {
   const create = jest.fn().mockResolvedValue({ disposition: 'created', aiSessionId: 'session-1', providerSessionId: 'provider-1', creationSource: 'ai-session' });
   const api = { aiSessions: { create } } as unknown as ControlPlaneClient;
   const attachments = [{ id: 'upload-1', kind: 'image' as const, source: { type: 'upload-ref' as const } }];
-  await createMobileAiSession(api, { instance, agent: 'codex', message: 'Review it', attachments, clientRequestId: 'mobile-request-1' });
+  await createMobileAiSession(api, { instance, agent: 'codex', cwdFolderId: 'folder-1', message: 'Review it', attachments, clientRequestId: 'mobile-request-1' });
   expect(create.mock.calls[0][1].attachments).toEqual(attachments);
 });
 

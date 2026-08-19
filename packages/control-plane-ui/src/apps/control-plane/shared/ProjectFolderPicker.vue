@@ -1,17 +1,23 @@
 <template>
   <NodeStorageFolderPickerDialog
+    :breadcrumbs="picker.breadcrumbs.value"
     :can-confirm="picker.canConfirm.value"
+    :can-go-up="picker.canGoUp.value"
+    :current-path="picker.currentPath.value"
     :error="picker.error.value"
     :loading="picker.loading.value"
     :node-name="nodeName"
     :open="open"
+    :places="picker.places.value"
     :rows="picker.rows.value"
     :selected-path="picker.selectedPath.value"
     :submit-error="picker.submitError.value"
     :submitting="picker.submitting.value"
     @confirm="confirm"
-    @refresh="picker.loadRoots(nodeId)"
+    @navigate="picker.navigateTo"
+    @refresh="picker.refresh"
     @select="picker.selectFolder"
+    @up="picker.goUp"
     @update:open="setOpen"
   />
 </template>
@@ -19,7 +25,7 @@
 <script setup lang="ts">
 import { watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { createNodeLocalFolder, listNodeFolderTree } from "../../../api/queries";
+import { createNodeLocalFolder, listNodeFolderPlaces, listNodeFolderTree } from "../../../api/queries";
 import type { NodeLocalFolder } from "../../../api/types";
 import NodeStorageFolderPickerDialog from "../settings/NodeStorageFolderPickerDialog.vue";
 import { useNodeStorageFolderPicker } from "../settings/useNodeStorageFolderPicker";
@@ -45,6 +51,7 @@ const picker = useNodeStorageFolderPicker({
   },
   errorText: (error) => translateApiError(error, t),
   loadFolders: listNodeFolderTree,
+  loadPlaces: listNodeFolderPlaces,
   refresh: async () => undefined,
 });
 

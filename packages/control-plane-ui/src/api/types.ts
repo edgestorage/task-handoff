@@ -430,11 +430,9 @@ export type ControlPlaneProxyError = {
 export type PublicProxyInvite = {
   id: string;
   targetNodeId: string;
-  status: "active" | "consumed" | "revoked" | "expired";
+  status: "active" | "revoked";
   createdBy: string;
   expiresAt: string;
-  consumedByClaimId?: string;
-  consumedAt?: string;
   revokedAt?: string;
   createdAt: string;
   updatedAt: string;
@@ -490,6 +488,9 @@ export type CancelProxyClaimResult = {
   deleted: boolean;
   compensationRequired: boolean;
   remoteRevoke: "not-required" | "not-created" | "already-revoked" | "revoked";
+  /** Added after v0.0.21; absent for normal compensation and older servers. */
+  forced?: true;
+  orphanRisk?: boolean;
 };
 
 export type DeleteNodeResult = {
@@ -563,6 +564,12 @@ export type NodeFolderTreeEntry = {
   children: NodeFolderTreeEntry[];
 };
 
+export type NodeFolderPlace = {
+  kind: "home" | "root";
+  name: string;
+  path: string;
+};
+
 export type NodeStatus = {
   id: string;
   status: "online" | "offline" | "unsupported" | string;
@@ -632,6 +639,10 @@ export type NodeControlPlaneConnection = {
   createdAt: string;
   updatedAt: string;
   status: "disabled" | "connecting" | "connected" | "reconnecting" | "failed";
+  pingRttMs?: number;
+  pingRttP95Ms?: number;
+  consecutiveReconnects?: number;
+  nextRetryAt?: string;
   lastConnectedAt?: string;
   lastDisconnectedAt?: string;
   error?: string;

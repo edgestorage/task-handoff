@@ -4,7 +4,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { normalizeProxyOrigin, proxyClaimValidation, proxyForceDeleteAllowed, proxyPathState } from "../src/apps/control-plane/settings/controlPlaneProxyUi.ts";
+import { normalizeProxyOrigin, proxyClaimForceDeleteAllowed, proxyClaimValidation, proxyForceDeleteAllowed, proxyPathState } from "../src/apps/control-plane/settings/controlPlaneProxyUi.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
@@ -79,6 +79,12 @@ test("proxy force delete consumes explicit backend eligibility instead of an err
   assert.equal(proxyForceDeleteAllowed({ connectionMode: "direct-http" }, { details: { forceDeleteAllowed: true } }), false);
 });
 
+test("pending claim force removal consumes explicit backend eligibility", () => {
+  assert.equal(proxyClaimForceDeleteAllowed({ code: "ANY_CODE", details: { forceDeleteAllowed: true } }), true);
+  assert.equal(proxyClaimForceDeleteAllowed({ code: "CONTROL_PLANE_PROXY_COMPENSATION_REQUIRED", details: { forceDeleteAllowed: false } }), false);
+  assert.equal(proxyClaimForceDeleteAllowed({ code: "CONTROL_PLANE_PROXY_COMPENSATION_REQUIRED" }), false);
+});
+
 test("pending claim resume uses only its persisted requested name", () => {
   const settings = read("src/apps/control-plane/settings/SettingsModal.vue");
   const protocol = read("../protocol/src/control-plane-proxy.ts");
@@ -93,7 +99,7 @@ test("public proxy projections do not expose stored credential material", () => 
   assert.doesNotMatch(publicTypes, /tokenHash|credentialHash|credential:/);
 });
 
-test("proxy components distinguish loading, empty, success, and expired invite states", () => {
+test("proxy components distinguish loading, empty, and success states", () => {
   const management = read("src/apps/control-plane/settings/ControlPlaneProxyManagementPanel.vue");
   assert.match(management, /invites\.isLoading\.value[^>]*role="status"/);
   assert.match(management, /bindings\.isLoading\.value[^>]*role="status"/);
@@ -101,7 +107,6 @@ test("proxy components distinguish loading, empty, success, and expired invite s
   assert.match(management, /v-else class="proxy-empty"[^>]*>\{\{ t\("settings\.controlPlaneProxy\.noBindings"\)/);
   assert.match(management, /GeneratedTokenDialog[\s\S]*generatedInvite\.invite\.expiresAt[\s\S]*generatedInvite\.token/);
   assert.match(management, /inviteStatus\.\$\{invite\.status\}/);
-  assert.match(read("src/i18n/locales/en-US/settings.ts"), /expired: "Expired"/);
 });
 
 test("offline proxy state remains layered instead of overwriting the last target state", () => {
@@ -152,11 +157,22 @@ test("proxy management query failures never masquerade as empty or zero activity
 test("pending claims serialize actions and remain reachable inside a bounded ScrollArea", () => {
   const settings = read("src/apps/control-plane/settings/SettingsModal.vue");
   assert.match(settings, /<ScrollArea class="pending-proxy-list" :horizontal="false">/);
-  assert.match(settings, /\.pending-proxy-list \{ max-height: min\(220px, max\(96px, calc\(100dvh - 430px\)\)\); \}/);
+  assert.match(settings, /\.pending-proxy-list \{ max-height: min\(180px, max\(88px, calc\(100dvh - 480px\)\)\); \}/);
   assert.match(settings, /:disabled="Boolean\(pendingClaimBusyId\)"/);
   assert.match(settings, /async function resumeProxyClaim\(id: string\) \{\s*if \(pendingClaimBusyId\.value\) return;/);
   assert.match(settings, /async function cancelProxyClaim\(id: string\) \{\s*if \(pendingClaimBusyId\.value\) return;/);
   assert.match(settings, /finally \{[\s\S]*pendingClaimBusyId\.value = "";[\s\S]*pendingClaimAction\.value = undefined;/);
+});
+
+test("pending claim recovery is outside the add-remote-node form and offers confirmed force removal", () => {
+  const settings = read("src/apps/control-plane/settings/SettingsModal.vue");
+  const remoteDialog = settings.match(/<Dialog :open="remoteNodeDialogOpen"[\s\S]*?<\/Dialog>/)?.[0] || "";
+  assert.doesNotMatch(remoteDialog, /pendingProxyClaims/);
+  assert.match(settings, /proxyClaimForceDeleteAllowed\(error\)/);
+  assert.match(settings, /<AlertDialog :open="Boolean\(pendingClaimForceId\)"/);
+  assert.match(settings, /cancelControlPlaneProxyClaim\(id, true\)/);
+  assert.match(settings, /async function forceCancelProxyClaim\(\)[\s\S]*catch \(error\) \{\s*showControlPlaneToast\(translateApiError\(error, t\)\);/);
+  assert.match(read("src/api/queries.ts"), /force \? "\?force=true"/);
 });
 
 test("proxy invite input is masked by default with an accessible reveal control", () => {

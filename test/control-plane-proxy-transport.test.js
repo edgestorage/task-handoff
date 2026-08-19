@@ -15,6 +15,7 @@ class TestSocket extends EventEmitter {
     this.readyState = 1;
     this.sent = [];
     this.closes = [];
+    this.pings = 0;
   }
 
   send(data, options) {
@@ -24,6 +25,10 @@ class TestSocket extends EventEmitter {
   close(code, reason) {
     this.readyState = 3;
     this.closes.push({ code, reason });
+  }
+
+  ping() {
+    this.pings += 1;
   }
 }
 
@@ -114,13 +119,20 @@ test("control-plane proxy websocket keeps route and auth binding-scoped and uses
     },
   });
 
-  transport.proxyWebSocket(node, downstream, "/instances/instance_1/terminal?cols=100", ["terminal-v1"], {
+  const control = transport.proxyWebSocket(node, downstream, "/instances/instance_1/terminal?cols=100", ["terminal-v1"], {
     authorization: "Bearer application-token",
   });
   assert.equal(opened[0].url, "wss://proxy.example.test/api/node-proxy/bindings/binding_1/websocket?route=%2Finstances%2Finstance_1%2Fterminal%3Fcols%3D100");
   assert.deepEqual(opened[0].protocols, ["terminal-v1"]);
   assert.equal(opened[0].headers.authorization, "Bearer application-token");
   assert.equal(opened[0].headers["x-task-handoff-proxy-credential"], credential.credential);
+
+  let pongs = 0;
+  control.onPong(() => { pongs += 1; });
+  control.ping();
+  upstream.emit("pong");
+  assert.equal(upstream.pings, 1);
+  assert.equal(pongs, 1);
 
   downstream.emit("message", "input", false);
   upstream.emit("message", Buffer.from([7, 8]), true);

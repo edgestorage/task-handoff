@@ -300,8 +300,8 @@ export function resumeControlPlaneProxyClaim(id: string) {
   return postApiData<ClaimProxyNodeResult>(`control-plane-proxy/pending-claims/${id}/resume`);
 }
 
-export function cancelControlPlaneProxyClaim(id: string) {
-  return deleteApiData<CancelProxyClaimResult>(`control-plane-proxy/pending-claims/${id}`);
+export function cancelControlPlaneProxyClaim(id: string, force = false) {
+  return deleteApiData<CancelProxyClaimResult>(`control-plane-proxy/pending-claims/${id}${force ? "?force=true" : ""}`);
 }
 
 export function checkNodeUpdate(nodeId: string, channel: UpdateChannel) {
@@ -376,6 +376,10 @@ export function listNodeFolderTree(nodeId: string, input: { path?: string; depth
   }
   const query = params.toString();
   return getApiData<NodeFolderTreeEntry[]>(`nodes/${nodeId}/folders/tree${query ? `?${query}` : ""}`);
+}
+
+export function listNodeFolderPlaces(nodeId: string) {
+  return getApiData<import("./types").NodeFolderPlace[]>(`nodes/${nodeId}/folders/places`);
 }
 
 export function useLocalDockerImagesQuery(nodeId: MaybeRefOrGetter<string>) {
@@ -526,7 +530,7 @@ export function forkAiSession(instanceId: string, aiSessionId: string, input: im
   return sharedAiSessionsApi.fork(instanceId, aiSessionId, input);
 }
 
-export function getAiSessionWorkspace(instanceId: string, cwdFolderId: string, signal?: AbortSignal) {
+export function getAiSessionWorkspace(instanceId: string, cwdFolderId?: string, signal?: AbortSignal) {
   return sharedAiSessionsApi.workspace(instanceId, cwdFolderId, signal);
 }
 

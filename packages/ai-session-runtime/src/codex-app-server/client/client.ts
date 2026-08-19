@@ -520,7 +520,7 @@ export class CodexAppServerClient extends EventEmitter {
       throw error;
     }
     const result = await this.request("initialize", {
-      clientInfo: { name: "codex_cli_rs", version },
+      clientInfo: { name: "codex-tui", version },
       capabilities: { experimentalApi: true },
     });
     this.serverUserAgent = typeof result.userAgent === "string" ? result.userAgent : undefined;

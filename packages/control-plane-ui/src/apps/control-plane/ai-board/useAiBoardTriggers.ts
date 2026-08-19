@@ -4,7 +4,6 @@ import { bindAiSessionTrigger, unbindAiSessionTrigger, useControlPlaneTriggersQu
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import type { InstanceBoardItem, TriggerConfig, TriggerDeployment, TriggerRuntimeState } from "../../../api/types";
 import type { AiBoardCard } from "./aiBoardTypes";
-import type { Translate } from "../../../i18n/status.ts";
 import { updateInstanceBoardData } from "../instanceBoardCache.ts";
 
 type TriggerMutationResult = {
@@ -15,7 +14,7 @@ type TriggerMutationResult = {
 
 type InstanceTriggerSnapshot = NonNullable<InstanceBoardItem["triggers"]>;
 
-export function useAiBoardTriggers(t: Translate) {
+export function useAiBoardTriggers() {
   const queryClient = useQueryClient();
   const triggerBusyKey = ref("");
   const triggers = useControlPlaneTriggersQuery();
@@ -31,11 +30,6 @@ export function useAiBoardTriggers(t: Translate) {
 
   function triggerActionKey(card: AiBoardCard, configHash: string) {
     return `${card.instance.id}:${card.session.id}:${configHash}`;
-  }
-
-  function triggerButtonTitle(card: AiBoardCard) {
-    const count = boundTriggers(card).length;
-    return count ? t("sessions.actions.triggersBound", { count }) : t("sessions.actions.addTrigger");
   }
 
   async function toggleTrigger(card: AiBoardCard, configHash: string) {
@@ -68,7 +62,6 @@ export function useAiBoardTriggers(t: Translate) {
     toggleTrigger,
     triggerActionKey,
     triggerBusyKey,
-    triggerButtonTitle,
     triggerTemplates,
   };
 

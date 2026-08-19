@@ -12,6 +12,13 @@ const DataSchema = <T extends z.ZodType>(schema: T) => z.object({ data: schema }
 const InstancePermissionConfigSchema = z.object({
   config: z.object({ defaultCodexPermissionMode: AiSessionPermissionModeSchema }).passthrough(),
 }).passthrough();
+const InstanceWorkspaceSourceSchema = z.object({
+  source: z.object({
+    type: z.string().trim().min(1).max(80),
+    localFolderId: z.string().trim().min(1).max(120).optional(),
+    path: z.string().trim().min(1).max(4096).optional(),
+  }).passthrough(),
+}).passthrough();
 const NamedResourceSchema = z.object({
   id: z.string().trim().min(1).max(160),
   name: z.string().trim().min(1).max(160),
@@ -43,6 +50,13 @@ export function createControlPlaneResourcesApi(transport: ControlPlaneClientTran
     },
     instanceBoard(signal?: AbortSignal) {
       return requestData("/api/instance-board?projection=directory", ControlPlaneInstanceDirectorySchema, signal);
+    },
+    async instanceWorkspaceSource(instanceId: string, signal?: AbortSignal) {
+      return (await requestData(
+        `/api/controlled-instances/${encodeURIComponent(instanceId)}`,
+        InstanceWorkspaceSourceSchema,
+        signal,
+      )).source;
     },
     async updateInstanceName(instanceId: string, name: string) {
       const response = await transport.request(

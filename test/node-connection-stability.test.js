@@ -2,7 +2,7 @@ const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
 const test = require("node:test");
 
-const { NodeAgentHealthSchema } = require("../packages/protocol/src/control-plane.ts");
+const { NodeAgentControlPlaneConnectionSchema, NodeAgentHealthSchema } = require("../packages/protocol/src/control-plane.ts");
 const { ControlPlaneNodeAgentClient } = require("../packages/control-plane/src/control-plane/nodes/client.ts");
 const { ControlPlaneNodeAgentGateway } = require("../packages/control-plane/src/control-plane/nodes/gateway.ts");
 const { NodeConnectionRuntime } = require("../packages/control-plane/src/control-plane/nodes/connection-runtime.ts");
@@ -89,6 +89,61 @@ test("shared websocket supervisor resets retry only after a stable healthy windo
   clock.advance(1);
   assert.equal(stable, 1);
   supervisor.close();
+});
+
+test("shared websocket supervisor reports current and recent p95 ping RTT", () => {
+  const clock = fakeClock();
+  const supervisor = new WebSocketConnectionSupervisor({
+    heartbeatIntervalMs: 10,
+    heartbeatTimeoutMs: 100,
+    ...clock,
+    ping() {},
+    onTimeout: () => assert.fail("connection should remain healthy"),
+  });
+  supervisor.start();
+  supervisor.opened();
+  supervisor.healthy();
+
+  for (const rtt of [5, 8, 3, 12]) {
+    clock.advance(10);
+    clock.advance(rtt);
+    supervisor.pong();
+  }
+
+  assert.deepEqual(supervisor.diagnostics(), {
+    phase: "healthy",
+    stable: false,
+    pingRttMs: 12,
+    pingRttP95Ms: 12,
+    lastActivityAt: new Date(clock.now()).toISOString(),
+    lastPongAt: new Date(clock.now()).toISOString(),
+  });
+});
+
+test("control-plane connection diagnostics remain optional across the v0.0.21 boundary", () => {
+  const base = {
+    id: "connection_1",
+    pairingKeyId: "key_1",
+    url: "https://control.example.test",
+    enabled: true,
+    createdAt: "2026-08-18T00:00:00.000Z",
+    updatedAt: "2026-08-18T00:00:00.000Z",
+    status: "connected",
+  };
+  assert.equal(NodeAgentControlPlaneConnectionSchema.safeParse(base).success, true);
+  assert.deepEqual(NodeAgentControlPlaneConnectionSchema.parse({
+    ...base,
+    pingRttMs: 18,
+    pingRttP95Ms: 31,
+    consecutiveReconnects: 2,
+    nextRetryAt: "2026-08-18T00:00:05.000Z",
+  }), {
+    ...base,
+    pingRttMs: 18,
+    pingRttP95Ms: 31,
+    consecutiveReconnects: 2,
+    nextRetryAt: "2026-08-18T00:00:05.000Z",
+  });
 });
 
 test("runtime projection rejects persisted direct HTTP health until the control API is observed", () => {
@@ -260,17 +315,7 @@ test("node agent health response drops unknown cross-version fields", () => {
 
 test("direct event connection terminates a half-open socket and publishes reconnecting state", async (t) => {
   const clock = fakeClock();
-  class Socket extends EventEmitter {
-    constructor() {
-      super();
-      this.readyState = 0;
-      this.pings = 0;
-    }
-    ping() { this.pings += 1; }
-    terminate() { this.readyState = 3; this.emit("close", 1006, Buffer.alloc(0)); }
-    close() { this.readyState = 3; this.emit("close", 1000, Buffer.alloc(0)); }
-  }
-  const socket = new Socket();
+  let pings = 0;
   const runtime = new NodeConnectionRuntime();
   const node = {
     id: "node_direct_events",
@@ -279,8 +324,15 @@ test("direct event connection terminates a half-open socket and publishes reconn
     endpoint: "http://127.0.0.1:18080",
     auth: { mode: "local-static-key", secret: "secret" },
   };
+  const transport = {
+    proxyWebSocket(_node, socket, route) {
+      assert.equal(route, "/events");
+      queueMicrotask(() => socket.send(JSON.stringify({ type: "node-agent.events.connected" })));
+      return { ping: () => { pings += 1; } };
+    },
+  };
   const subscriber = new ControlPlaneNodeEventSubscriber(
-    { listNodes: () => [node] },
+    { listNodes: () => [node], resolveNodeAgentTransport: () => transport },
     { handleMessage() {} },
     {
       connectionRuntime: runtime,
@@ -290,16 +342,65 @@ test("direct event connection terminates a half-open socket and publishes reconn
       heartbeatTimeoutMs: 5,
       stableThresholdMs: 50,
       ...clock,
-      createSocket: () => socket,
     },
   );
   t.after(() => subscriber.stop());
   subscriber.start();
-  socket.readyState = 1;
-  socket.emit("open");
-  socket.emit("message", JSON.stringify({ type: "node-agent.events.connected" }));
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(runtime.observation(node.id).phase, "healthy");
   clock.advance(10);
-  assert.equal(socket.pings, 1);
+  assert.equal(pings, 1);
   assert.equal(runtime.observation(node.id).phase, "reconnecting");
+});
+
+test("proxy node event subscriber opens the authoritative node-agent event stream through the shared transport", async (t) => {
+  const hellos = [];
+  const opened = [];
+  const node = {
+    id: "node_proxy_events",
+    connectionMode: "control-plane-proxy",
+    connectionEnabled: true,
+    connectionPath: {
+      kind: "control-plane-proxy",
+      proxyId: "proxy.example.test",
+      proxyBindingId: "binding_proxy_events",
+      targetNodeId: "node_target_events",
+    },
+    auth: { mode: "paired-hmac" },
+  };
+  const transport = {
+    proxyWebSocket(target, socket, route) {
+      opened.push({ target, route });
+      queueMicrotask(() => socket.send(JSON.stringify({
+        type: "node-agent.streams.hello",
+        instanceId: "inst_proxy_events",
+        payload: {
+          protocolVersion: 1,
+          streams: [],
+        },
+      })));
+    },
+  };
+  const subscriber = new ControlPlaneNodeEventSubscriber(
+    {
+      listNodes: () => [node],
+      resolveNodeAgentTransport: () => transport,
+    },
+    new ControlPlaneNodeAgentTunnelTransport(undefined, {
+      onStreamsHello: (instanceId, hello) => hellos.push({ instanceId, hello }),
+      validateInstanceScope: () => true,
+    }),
+    { safetyIntervalMs: 60_000 },
+  );
+  t.after(() => subscriber.stop());
+
+  subscriber.start();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(opened.length, 1);
+  assert.equal(opened[0].target, node);
+  assert.equal(opened[0].route, "/events");
+  assert.equal(hellos.length, 1);
+  assert.equal(hellos[0].instanceId, "inst_proxy_events");
+  assert.equal(subscriber.diagnostics().activeConnections, 1);
 });

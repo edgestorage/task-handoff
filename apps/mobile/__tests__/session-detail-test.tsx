@@ -7,7 +7,7 @@ import { Brain, CornerDownRight, FilePenLine, Minimize2, Pencil, RotateCcw, Squa
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ControlPlaneAiSessionSummarySchema, type ControlPlaneClient } from '@task-handoff/control-plane-client';
 
-import { conversationDetailItems, detailItems, isSessionScrollNearBottom, SessionDetail } from '../src/ai-sessions/SessionDetail';
+import { conversationDetailItems, detailItems, isSessionScrollNearBottom, processedDurationLabel, SessionDetail } from '../src/ai-sessions/SessionDetail';
 import { COMPOSER_BACKDROP_OPACITIES, composerBottomBackdropGeometry, moveQueueId, queueActionIcon, queueDragPreview, queueItemsWithQueuedOrder, queueListScrollEnabled, sessionKeyboardAvoidingBehavior, SessionWorkspace } from '../src/ai-sessions/SessionWorkspace';
 import { MobileAiSessionActionCoordinator } from '../src/ai-sessions/actions';
 import { advanceStreamingMarkdownBlocks, CHARACTER_FADE_MS, hasUnclosedMarkdownFence, initialStreamingText, SafeMarkdown, shouldAnimateMarkdownText, safeMarkdownLink, sanitizeMarkdown, StreamingMarkdownText, streamingMarkdownStableCutoff } from '../src/components/SafeMarkdown';
@@ -129,6 +129,7 @@ test('detail pauses scroll following away from the bottom and resumes it from th
   });
   const cancelFrame = jest.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => undefined);
   const scrollToEnd = jest.spyOn(FlatList.prototype, 'scrollToEnd').mockImplementation(() => undefined);
+  const scrollToOffset = jest.spyOn(FlatList.prototype, 'scrollToOffset').mockImplementation(() => undefined);
   const screen = await render(<SessionDetail messages={[]} session={session} />);
   const list = screen.getByTestId('session-detail-scroll');
 
@@ -145,8 +146,10 @@ test('detail pauses scroll following away from the bottom and resumes it from th
 
   const resume = await screen.findByRole('button', { name: 'Scroll to latest message' });
   scrollToEnd.mockClear();
+  scrollToOffset.mockClear();
   await fireEvent.press(resume);
-  expect(scrollToEnd).toHaveBeenCalledWith({ animated: true });
+  expect(scrollToEnd).not.toHaveBeenCalled();
+  expect(scrollToOffset).toHaveBeenCalledWith({ animated: true, offset: 700 });
   expect(screen.queryByRole('button', { name: 'Scroll to latest message' })).not.toBeNull();
   await fireEvent.scroll(list, {
     nativeEvent: {
@@ -158,17 +161,19 @@ test('detail pauses scroll following away from the bottom and resumes it from th
   await waitFor(() => expect(screen.queryByRole('button', { name: 'Scroll to latest message' })).toBeNull());
   screen.unmount();
   scrollToEnd.mockRestore();
+  scrollToOffset.mockRestore();
   frame.mockRestore();
   cancelFrame.mockRestore();
 });
 
-test('switching sessions resets scroll following and jumps directly to the latest content', async () => {
+test('compact mode does not force a scroll to the latest content when switching sessions', async () => {
   const frame = jest.spyOn(globalThis, 'requestAnimationFrame').mockImplementation((callback) => {
     callback(0);
     return 1;
   });
   const cancelFrame = jest.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => undefined);
   const scrollToEnd = jest.spyOn(FlatList.prototype, 'scrollToEnd').mockImplementation(() => undefined);
+  const scrollToOffset = jest.spyOn(FlatList.prototype, 'scrollToOffset').mockImplementation(() => undefined);
   const nextSession = ControlPlaneAiSessionSummarySchema.parse({
     ...session,
     id: 'session-2',
@@ -189,13 +194,134 @@ test('switching sessions resets scroll following and jumps directly to the lates
     },
   });
   scrollToEnd.mockClear();
+  scrollToOffset.mockClear();
 
   screen.rerender(<SessionDetail messages={[]} session={nextSession} />);
 
-  await waitFor(() => expect(scrollToEnd).toHaveBeenCalledWith({ animated: false }));
+  await waitFor(() => expect(screen.getByText('Newest conversation')).toBeTruthy());
+  expect(scrollToEnd).not.toHaveBeenCalled();
+  expect(scrollToOffset).not.toHaveBeenCalled();
   expect(screen.queryByRole('button', { name: 'Scroll to latest message' })).toBeNull();
   screen.unmount();
   scrollToEnd.mockRestore();
+  scrollToOffset.mockRestore();
+  frame.mockRestore();
+  cancelFrame.mockRestore();
+});
+
+test('conversation mode anchors its virtual window at the latest logical row', async () => {
+  const frame = jest.spyOn(globalThis, 'requestAnimationFrame').mockImplementation((callback) => {
+    callback(0);
+    return 1;
+  });
+  const cancelFrame = jest.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => undefined);
+  const scrollToEnd = jest.spyOn(FlatList.prototype, 'scrollToEnd').mockImplementation(() => undefined);
+  const longSession = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    currentTool: undefined,
+    status: 'idle',
+    subAgents: [],
+    turns: Array.from({ length: 50 }, (_, index) => ({
+      id: `turn-${index}`,
+      lastMessage: `Response ${index}`,
+      phase: 'responding',
+      revision: index + 1,
+      startedAt: session.startedAt,
+      status: 'completed',
+      updatedAt: session.updatedAt,
+      userPrompt: `Prompt ${index}`,
+    })),
+  });
+  const screen = await render(<SessionDetail messages={[]} mode="conversation" session={longSession} />);
+  const list = screen.getByTestId('session-detail-scroll');
+
+  expect(list.props.inverted).toBeUndefined();
+  expect(list.props.initialNumToRender).toBe(18);
+  expect(list.props.maintainVisibleContentPosition).toEqual({ minIndexForVisible: 0 });
+  expect(list.props.data).toHaveLength(18);
+  expect(list.props.data[0]).toEqual(expect.objectContaining({ role: 'user', text: 'Prompt 44' }));
+  expect(list.props.data.at(-1)).toEqual(expect.objectContaining({ role: 'assistant', text: 'Response 49' }));
+  await waitFor(() => expect(scrollToEnd).toHaveBeenCalledWith({ animated: false }));
+
+  await fireEvent(list, 'layout', { nativeEvent: { layout: { height: 500 } } });
+  await fireEvent(list, 'contentSizeChange', 390, 1_200);
+  await fireEvent(list, 'scrollBeginDrag');
+  await fireEvent.scroll(list, {
+    nativeEvent: {
+      contentOffset: { x: 0, y: 0 },
+      contentSize: { height: 1_200, width: 390 },
+      layoutMeasurement: { height: 500, width: 390 },
+    },
+  });
+  await act(async () => { list.props.onStartReached(); });
+  await waitFor(() => expect(screen.getByTestId('session-detail-scroll').props.data).toHaveLength(36));
+  expect(screen.getByTestId('session-detail-scroll').props.initialNumToRender).toBe(18);
+  expect(screen.getByTestId('session-detail-scroll').props.data[0]).toEqual(expect.objectContaining({ role: 'user', text: 'Prompt 38' }));
+
+  screen.unmount();
+  scrollToEnd.mockRestore();
+  frame.mockRestore();
+  cancelFrame.mockRestore();
+});
+
+test('switching to conversation clears the previous mode metrics before following its measured bottom', async () => {
+  const frame = jest.spyOn(globalThis, 'requestAnimationFrame').mockImplementation((callback) => {
+    callback(0);
+    return 1;
+  });
+  const cancelFrame = jest.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => undefined);
+  const scrollToEnd = jest.spyOn(FlatList.prototype, 'scrollToEnd').mockImplementation(() => undefined);
+  const scrollToOffset = jest.spyOn(FlatList.prototype, 'scrollToOffset').mockImplementation(() => undefined);
+  const screen = await render(<SessionDetail messages={[]} mode="turn" session={session} />);
+  const turnList = screen.getByTestId('session-detail-scroll');
+
+  await fireEvent(turnList, 'layout', { nativeEvent: { layout: { height: 500 } } });
+  await fireEvent(turnList, 'contentSizeChange', 390, 1_200);
+  await fireEvent(turnList, 'scrollBeginDrag');
+  await fireEvent.scroll(turnList, {
+    nativeEvent: {
+      contentOffset: { x: 0, y: 300 },
+      contentSize: { height: 1_200, width: 390 },
+      layoutMeasurement: { height: 500, width: 390 },
+    },
+  });
+  scrollToEnd.mockClear();
+  scrollToOffset.mockClear();
+
+  screen.rerender(<SessionDetail messages={[]} mode="conversation" session={session} />);
+  await waitFor(() => expect(scrollToEnd).toHaveBeenCalledWith({ animated: false }));
+  expect(scrollToOffset).not.toHaveBeenCalled();
+
+  const conversationList = screen.getByTestId('session-detail-scroll');
+  await fireEvent(conversationList, 'layout', { nativeEvent: { layout: { height: 500 } } });
+  await fireEvent(conversationList, 'contentSizeChange', 390, 1_500);
+  await waitFor(() => expect(scrollToOffset).toHaveBeenCalledWith({ animated: false, offset: 1_000 }));
+
+  screen.unmount();
+  scrollToEnd.mockRestore();
+  scrollToOffset.mockRestore();
+  frame.mockRestore();
+  cancelFrame.mockRestore();
+});
+
+test('conversation reanchors after the keyboard viewport settles', async () => {
+  const frame = jest.spyOn(globalThis, 'requestAnimationFrame').mockImplementation((callback) => {
+    callback(0);
+    return 1;
+  });
+  const cancelFrame = jest.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => undefined);
+  const scrollToOffset = jest.spyOn(FlatList.prototype, 'scrollToOffset').mockImplementation(() => undefined);
+  const screen = await render(<SessionDetail keyboardViewportRevision={0} messages={[]} mode="conversation" session={session} />);
+  const list = screen.getByTestId('session-detail-scroll');
+
+  await fireEvent(list, 'layout', { nativeEvent: { layout: { height: 300 } } });
+  await fireEvent(list, 'contentSizeChange', 390, 1_200);
+  scrollToOffset.mockClear();
+  screen.rerender(<SessionDetail keyboardViewportRevision={1} messages={[]} mode="conversation" session={session} />);
+  await waitFor(() => expect(scrollToOffset).toHaveBeenCalledWith({ animated: false, offset: 900 }));
+
+  screen.unmount();
+  scrollToOffset.mockRestore();
   frame.mockRestore();
   cancelFrame.mockRestore();
 });
@@ -204,6 +330,39 @@ test('scroll following uses a bottom tolerance and treats short content as settl
   expect(isSessionScrollNearBottom({ contentHeight: 400, offsetY: 0, viewportHeight: 500 })).toBe(true);
   expect(isSessionScrollNearBottom({ contentHeight: 1_000, offsetY: 460, viewportHeight: 500 })).toBe(true);
   expect(isSessionScrollNearBottom({ contentHeight: 1_000, offsetY: 300, viewportHeight: 500 })).toBe(false);
+});
+
+test('running Turn elapsed time advances from the authoritative start timestamp', () => {
+  expect(processedDurationLabel({
+    id: 'turn-timed',
+    status: 'running',
+    startedAt: '2026-08-05T00:00:00.000Z',
+    updatedAt: '2026-08-05T00:00:00.000Z',
+  }, undefined, Date.parse('2026-08-05T00:00:07.000Z'))).toBe('Processed in 7s');
+});
+
+test('terminal Turn without an authoritative completion timestamp shows a dash', () => {
+  expect(processedDurationLabel({
+    id: 'turn-stopped-without-time',
+    status: 'completed',
+    startedAt: '2026-08-05T00:00:00.000Z',
+    updatedAt: '2026-08-09T00:00:00.000Z',
+  }, undefined, Date.parse('2026-08-10T00:00:00.000Z'))).toBe('-');
+});
+
+test('active Turn keeps elapsed time separate from recovered current activity', () => {
+  const projected = detailItems(session, [], undefined, undefined, {
+    'turn-1': {
+      status: 'ready',
+      items: [
+        { id: 'prompt', turnId: 'turn-1', type: 'user-message', text: 'Please **test** this' },
+        { id: 'command', turnId: 'turn-1', type: 'activity', activityKind: 'commandExecution', title: 'Command', status: 'running', input: 'pnpm test' },
+      ],
+    },
+  }, true, true);
+
+  expect(projected.map((item) => item.role)).toEqual(['user', 'history', 'current']);
+  expect(projected[2].history?.map((item) => item.role)).toEqual(['activity']);
 });
 
 test('turn mode replaces the previous assistant item when a new item starts', () => {
@@ -227,7 +386,7 @@ test('detail navigates one authoritative turn and applies streaming only to late
       { id: 'turn-2', userPrompt: 'Second prompt', lastMessage: 'Snapshot response', status: 'running', phase: 'responding', revision: 2, startedAt: session.startedAt, updatedAt: session.updatedAt },
     ],
   });
-  expect(detailItems(multiTurn, [{ instanceId: 'instance', sessionId: multiTurn.id, turnId: 'turn-2', itemId: 'stream', receivedText: 'Live response', status: 'streaming', updatedAt: session.updatedAt }], 0).map((item) => item.text)).toEqual(['First prompt', 'First response']);
+  expect(detailItems(multiTurn, [{ instanceId: 'instance', sessionId: multiTurn.id, turnId: 'turn-2', itemId: 'stream', receivedText: 'Live response', status: 'streaming', updatedAt: session.updatedAt }], 0).map((item) => item.role)).toEqual(['user', 'history', 'assistant']);
   const screen = await render(<SessionDetail messages={[]} session={multiTurn} />);
   screen.getByText('Second prompt');
   screen.getByText('2 / 2');
@@ -240,7 +399,7 @@ test('detail navigates one authoritative turn and applies streaming only to late
   screen.rerender(<SessionDetail messages={[]} mode="conversation" session={multiTurn} />);
   await waitFor(() => screen.getByText('Second prompt'));
   expect(conversationDetailItems(multiTurn, []).map((item) => item.id)).toEqual([
-    'turn-1:user', 'turn-1:assistant', 'turn-2:user', 'turn-2:assistant',
+    'turn-1:user', 'turn-1:timeline-history-status', 'turn-1:assistant', 'turn-2:user', 'turn-2:assistant',
   ]);
   screen.getByText('First prompt');
   screen.getByText('shell · pnpm test');
@@ -282,7 +441,7 @@ test('timeline detail follows the Web three-part layout around the final AI resp
   expect(projectedWithoutCurrentItems.at(-1)).toEqual(expect.objectContaining({ role: 'current', history: [], interactive: true }));
 
   const screen = await render(<SessionDetail messages={[]} session={timelineSession} timelineEnabled timelines={timelines} />);
-  screen.getByText(/Processed/);
+  screen.getByText('-');
   screen.getByText('Final answer');
   await act(async () => { fireEvent.press(screen.getByRole('button', { name: 'Thinking…' })); });
   await waitFor(() => screen.getByText('Running command'));
@@ -290,7 +449,7 @@ test('timeline detail follows the Web three-part layout around the final AI resp
   expect(screen.queryByText('1 activities')).toBeNull();
   screen.getByText('· pnpm test');
   expect(screen.queryByText('Interim answer')).toBeNull();
-  await act(async () => { fireEvent.press(screen.getByRole('button', { name: /Processed/ })); });
+  await act(async () => { fireEvent.press(screen.getByRole('button', { name: 'Process details' })); });
   await waitFor(() => screen.getByText('Interim answer'));
   const historyItemsStyle = StyleSheet.flatten(screen.getByTestId('session-timeline-history-items').props.style);
   expect(historyItemsStyle).toEqual(expect.objectContaining({
@@ -388,11 +547,12 @@ test('live-only capability renders cached live activity without inventing a hist
   />);
 
   expect(screen.queryByText(/Loading full activity/)).toBeNull();
+  expect(screen.getByText('-')).toBeTruthy();
   expect(screen.getByText('Done')).toBeTruthy();
   screen.unmount();
 });
 
-test('session-read capability loads older turns while the latest turn uses live items', async () => {
+test('session-read capability loads a recovery snapshot while live items remain enabled', async () => {
   const running = ControlPlaneAiSessionSummarySchema.parse({
     ...session,
     id: 'session-timeline-session-read',
@@ -425,13 +585,18 @@ test('session-read capability loads older turns while the latest turn uses live 
   mobileAiSessionStore.clearProfile('cp-session-read-live');
 });
 
-test('workspace defers the latest queued turn timeline while live items are authoritative', async () => {
+test('workspace loads the latest queued turn timeline to recover items emitted before subscription', async () => {
   const queued = ControlPlaneAiSessionSummarySchema.parse({
     ...session,
     id: 'session-timeline-queued',
     turns: [{ ...session.turns![0], id: 'turn-timeline-queued', status: 'queued' }],
   });
-  const turnTimeline = jest.fn();
+  const turnTimeline = jest.fn().mockResolvedValue({
+    sessionId: queued.id,
+    turnId: 'turn-timeline-queued',
+    items: [{ id: 'queued-user', turnId: 'turn-timeline-queued', type: 'user-message', text: 'Queued prompt' }],
+    generatedAt: session.updatedAt,
+  });
   const client = { aiSessions: { turnTimeline } } as unknown as ControlPlaneClient;
   const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}>
     <SessionWorkspace
@@ -444,8 +609,8 @@ test('workspace defers the latest queued turn timeline while live items are auth
     />
   </SafeAreaProvider>);
 
-  await act(async () => undefined);
-  expect(turnTimeline).not.toHaveBeenCalled();
+  await waitFor(() => expect(turnTimeline).toHaveBeenCalledWith('instance-timeline-queued', queued.id, 'turn-timeline-queued'));
+  await waitFor(() => expect(mobileAiSessionStore.timelineTurnState('cp-timeline-queued', 'instance-timeline-queued', queued.id, queued.turns![0]).status).toBe('ready'));
   screen.unmount();
   mobileAiSessionStore.clearProfile('cp-timeline-queued');
 });
@@ -1010,11 +1175,15 @@ test('floating composer follows the keyboard without creating an opaque layout s
   const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}><SessionWorkspace actions={actions} controlPlaneId="cp" instanceId="instance" messages={[]} session={actionable} /></SafeAreaProvider>);
 
   const actionsStyle = StyleSheet.flatten(screen.getByTestId('session-actions').props.style);
+  const detailContentStyle = StyleSheet.flatten(screen.getByTestId('session-detail-scroll').props.contentContainerStyle);
+  const workspaceBackgroundStyle = StyleSheet.flatten(screen.getByTestId('session-workspace-background').props.style);
   const workspaceStyle = StyleSheet.flatten(screen.getByTestId('session-workspace').props.style);
   expect(sessionKeyboardAvoidingBehavior('ios')).toBe('height');
   expect(sessionKeyboardAvoidingBehavior('android')).toBeUndefined();
   expect(actionsStyle.position).toBe('absolute');
-  expect(workspaceStyle.backgroundColor).toBeUndefined();
+  expect(detailContentStyle.paddingBottom).toBe(122);
+  expect(workspaceStyle.backgroundColor).toBe('#ffffff');
+  expect(workspaceBackgroundStyle.backgroundColor).toBe(workspaceStyle.backgroundColor);
   screen.unmount();
 });
 

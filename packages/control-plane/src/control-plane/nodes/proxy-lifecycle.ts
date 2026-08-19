@@ -86,28 +86,47 @@ export class ControlPlaneProxyLifecycle {
     });
   }
 
-  async cancelClaim(claimId: string) {
+  async cancelClaim(claimId: string, force = false) {
     return this.withClaimLock(claimId, async () => {
       const pending = this.options.privateStore.pendingClaimByClaimId(claimId);
       if (!pending) return { deleted: false, compensationRequired: false, remoteRevoke: "not-required" as const };
       if (pending.status === "pending") {
         return { ...this.options.privateStore.cancelPendingClaim(claimId, false), remoteRevoke: "not-required" as const };
       }
+      if (force) {
+        return {
+          deleted: this.options.privateStore.completePendingClaimCompensation(claimId),
+          compensationRequired: false,
+          remoteRevoke: "not-required" as const,
+          forced: true as const,
+          orphanRisk: true,
+        };
+      }
 
       let response: Response;
       try {
         response = await this.requestClaim(pending);
       } catch (cause) {
-        throw this.compensationError(pending, "Trusted control-plane proxy is unavailable; claim cancellation requires retry.", cause);
+        throw this.compensationError(
+          pending,
+          "Trusted control-plane proxy is unavailable; claim cancellation requires retry.",
+          cause,
+          503,
+          "CONTROL_PLANE_PROXY_COMPENSATION_REQUIRED",
+          true,
+          { forceDeleteAllowed: true, forceDeleteReason: "proxy-unavailable" },
+        );
       }
       const payload = await this.responsePayload(response);
       if (!response.ok) {
         const code = payload?.error?.code;
-        if (code === ControlPlaneProxyErrorCode.InviteInvalid || code === ControlPlaneProxyErrorCode.BindingRevoked) {
+        if (code === ControlPlaneProxyErrorCode.InviteInvalid
+          || code === ControlPlaneProxyErrorCode.BindingRevoked
+          || code === ControlPlaneProxyErrorCode.BindingUnknown) {
           return {
             deleted: this.options.privateStore.completePendingClaimCompensation(claimId),
             compensationRequired: false,
-            remoteRevoke: code === ControlPlaneProxyErrorCode.BindingRevoked ? "already-revoked" as const : "not-created" as const,
+            remoteRevoke: code === ControlPlaneProxyErrorCode.InviteInvalid ? "not-created" as const : "already-revoked" as const,
           };
         }
         throw this.compensationError(
@@ -127,10 +146,20 @@ export class ControlPlaneProxyLifecycle {
       try {
         revoke = await this.revokeBinding(credential);
       } catch (cause) {
-        throw this.compensationError(pending, "Trusted control-plane proxy is unavailable; binding revocation requires retry.", cause);
+        throw this.compensationError(
+          pending,
+          "Trusted control-plane proxy is unavailable; binding revocation requires retry.",
+          cause,
+          503,
+          "CONTROL_PLANE_PROXY_COMPENSATION_REQUIRED",
+          true,
+          { forceDeleteAllowed: true, forceDeleteReason: "proxy-unavailable" },
+        );
       }
       const revokePayload = await this.responsePayload(revoke);
-      if (!revoke.ok && revokePayload?.error?.code !== ControlPlaneProxyErrorCode.BindingRevoked) {
+      if (!revoke.ok
+        && revokePayload?.error?.code !== ControlPlaneProxyErrorCode.BindingRevoked
+        && revokePayload?.error?.code !== ControlPlaneProxyErrorCode.BindingUnknown) {
         throw this.compensationError(
           pending,
           revokePayload?.error?.message || `Proxy binding revoke failed with HTTP ${revoke.status}.`,
@@ -283,7 +312,8 @@ export class ControlPlaneProxyLifecycle {
 
     const payload = await this.responsePayload(response);
     if (!response.ok) {
-      if (payload?.error?.code === ControlPlaneProxyErrorCode.BindingRevoked) {
+      if (payload?.error?.code === ControlPlaneProxyErrorCode.BindingRevoked
+        || payload?.error?.code === ControlPlaneProxyErrorCode.BindingUnknown) {
         const bindingId = (payload.error.details as { bindingId?: unknown } | undefined)?.bindingId;
         if (bindingId === credential.proxyBindingId) return this.finishRevokedNodeDelete(node.id);
       }
@@ -521,9 +551,17 @@ export class ControlPlaneProxyLifecycle {
     statusCode = 503,
     code = "CONTROL_PLANE_PROXY_COMPENSATION_REQUIRED",
     retryable = true,
+    details?: Record<string, unknown>,
   ) {
     const error = new Error(message, cause === undefined ? undefined : { cause });
-    Object.assign(error, { statusCode, code, retryable, claimId: pending.claimId, compensationRequired: true });
+    Object.assign(error, {
+      statusCode,
+      code,
+      retryable,
+      claimId: pending.claimId,
+      compensationRequired: true,
+      ...(details ? { details } : {}),
+    });
     return error;
   }
 

@@ -129,6 +129,9 @@ export class AiSessionForkCoordinator {
       if (session.creationSource !== "ai-session" || session.appSessionId || session.providerSessionId === source.providerSessionId) {
         throw aiSessionControlError("AI_SESSION_FORK_INVALID_RESPONSE", "Fork did not materialize as an independent Direct AI Session.", 502);
       }
+      if (source.cwdFolderId && session.cwdFolderId !== source.cwdFolderId) {
+        session = this.options.registry.put({ ...session, cwdFolderId: source.cwdFolderId });
+      }
       operation.aiSessionId = session.id;
       operation.stage = "materialized";
       this.persist();

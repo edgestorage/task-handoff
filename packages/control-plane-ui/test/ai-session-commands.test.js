@@ -39,6 +39,19 @@ test("the composer plus button opens the same command menu as the command trigge
   assert.doesNotMatch(composer, /add-context/);
 });
 
+test("composer arrow keys are only consumed by a menu with selectable items", () => {
+  assert.doesNotMatch(composer, /@keydown\.(?:up|down)(?:\.[^=\s]+)*=/);
+  assert.match(composer, /if \(event\.key === "ArrowDown" \|\| event\.key === "ArrowUp"\) \{[\s\S]*const moved = moveActiveMention[\s\S]*if \(moved\) \{[\s\S]*event\.preventDefault\(\);[\s\S]*event\.stopPropagation\(\);/);
+  assert.match(composer, /if \(commandOpen\.value\) \{[\s\S]*const length = commandCandidates\.value\.length;[\s\S]*if \(!length\) return false;/);
+  assert.match(composer, /if \(!mentions\.open\.value\) return false;[\s\S]*const length = mentions\.candidates\.value\.length;[\s\S]*if \(!length\) return false;/);
+});
+
+test("the composer offers steer while the session is running and no action request is in flight", () => {
+  assert.match(composer, /const canSteer = computed\(\(\) => !editing\.value && props\.sessionBusy && hasDraft\.value\);/);
+  assert.doesNotMatch(composer, /const canSteer = computed\(\(\) =>[^;]*props\.busy[^;]*\);/);
+  assert.match(composer, /v-if="canSteer"[\s\S]*:disabled="busy"[\s\S]*@click="emit\('steer'\)"/);
+});
+
 test("the Codex composer exposes exactly three permission modes beside the plus button", () => {
   assert.match(composer, /class="ai-session-composer__leading">[\s\S]*<Plus :size="18" \/>[\s\S]*<DropdownMenu v-if="permissionProvider === 'codex'">/);
   assert.match(composer, /value: "ask", label: t\("sessions\.permission\.ask"\)/);

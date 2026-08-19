@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BoundedReconnectBackoff, CloudControlConnectionManager, CloudRelayDataConnectionManager } from "../src/control-plane/cloud-connectivity/connections.ts";
+import { StandardReconnectBackoff } from "@task-handoff/core/core/reconnect";
+import { CloudControlConnectionManager, CloudRelayDataConnectionManager } from "../src/control-plane/cloud-connectivity/connections.ts";
 import { CloudAuthorityEventConsumer } from "../src/control-plane/cloud-connectivity/authority-events.ts";
 import { verifyCoordinatorRelayAllocation } from "../src/control-plane/cloud-connectivity/relay-connector.ts";
 
@@ -9,7 +10,7 @@ test("control connection uses background credential, persistent monotonic epoch 
   const connects = [];
   const closed = [];
   const state = { backgroundCredential: () => "credential", snapshot: () => ({ status: "active", remoteAccessEnabled: true, serviceOrigin: "https://cloud.example.test", identity: { controlPlaneId: "control_plane_a" } }), nextConnectionEpoch: () => ++epoch };
-  const manager = new CloudControlConnectionManager({ state, connector: { async connect(input) { connects.push(input); return { async close(reason) { closed.push(reason); } }; } }, onEvent: async () => undefined, backoff: new BoundedReconnectBackoff(100, 400, () => 1) });
+  const manager = new CloudControlConnectionManager({ state, connector: { async connect(input) { connects.push(input); return { async close(reason) { closed.push(reason); } }; } }, onEvent: async () => undefined, backoff: new StandardReconnectBackoff(() => 0.5) });
   assert.equal((await manager.connectOnce()).epoch, 1);
   assert.equal((await manager.connectOnce()).reused, true);
   assert.equal(connects.length, 1);
@@ -18,7 +19,7 @@ test("control connection uses background credential, persistent monotonic epoch 
   assert.deepEqual(closed, []);
   assert.equal(connects[0].credential, "credential");
   assert.equal(connects[0].processInstanceId, connects[1].processInstanceId);
-  assert.deepEqual([manager.reconnectDelay(), manager.reconnectDelay(), manager.reconnectDelay(), manager.reconnectDelay()], [100, 200, 400, 400]);
+  assert.deepEqual([manager.reconnectDelay(), manager.reconnectDelay(), manager.reconnectDelay(), manager.reconnectDelay()], [0, 250, 500, 1_000]);
 });
 
 test("relay data connection verifies signed allocation and rejects old/double epochs", async () => {

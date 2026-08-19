@@ -422,7 +422,19 @@
                     <small v-if="connection.error" class="control-plane-error">{{ connection.error }}</small>
                   </div>
                   <div class="settings-row-actions">
-                    <Badge :variant="connection.status === 'connected' ? 'default' : 'secondary'">{{ localizedStatus(remoteConnectStatusKeys, connection.status) }}</Badge>
+                    <Tooltip @update:open="refreshConnectionDiagnostics">
+                      <RekaTooltipTrigger as="button" type="button" class="node-connection-status-trigger">
+                        <Badge :variant="connection.status === 'connected' ? 'default' : 'secondary'">{{ localizedStatus(remoteConnectStatusKeys, connection.status) }}</Badge>
+                      </RekaTooltipTrigger>
+                      <TooltipContent class="node-connection-diagnostic-tooltip" align="end" side="bottom" :side-offset="6">
+                        <div class="node-connection-diagnostic-grid">
+                          <span><b>{{ t("settings.nodeDetail.connectionPingRtt") }}</b><em>{{ connectionMetricMs(connection.pingRttMs) }}</em></span>
+                          <span><b>{{ t("settings.nodeDetail.connectionPingP95") }}</b><em>{{ connectionMetricMs(connection.pingRttP95Ms) }}</em></span>
+                          <span><b>{{ t("settings.nodeDetail.connectionReconnects") }}</b><em>{{ connection.consecutiveReconnects ?? 0 }}</em></span>
+                          <span><b>{{ t("settings.nodeDetail.connectionNextRetry") }}</b><em>{{ connectionRetryCountdown(connection.nextRetryAt) }}</em></span>
+                        </div>
+                      </TooltipContent>
+                    </Tooltip>
                     <Button variant="outline" size="sm" :disabled="busy.deletingControlPlaneConnectionId === connection.id" @click="actions.removeControlPlaneConnection(selectedNode.id, connection.id)">
                       <Trash2 :size="14" />
                       <span>{{ busy.deletingControlPlaneConnectionId === connection.id ? t("settings.nodeDetail.deleting") : t("settings.nodeDetail.delete") }}</span>
@@ -483,7 +495,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, type Component } from "vue";
+import { computed, onMounted, onScopeDispose, ref, watch, type Component } from "vue";
 import { useI18n } from "vue-i18n";
 import { Box, Boxes, Download, FolderOpen, Gauge, KeyRound, Monitor, MoreHorizontal, Network, Pencil, Plus, RefreshCw, ServerCog, Settings, Trash2 } from "@lucide/vue";
 import { TooltipTrigger as RekaTooltipTrigger } from "reka-ui";
@@ -626,10 +638,24 @@ const props = defineProps<{
 
 const activeTab = ref<NodeDetailTab>("overview");
 const remoteConnectionDialogOpen = ref(false);
+const connectionClock = ref(Date.now());
+let connectionClockTimer: ReturnType<typeof setInterval> | undefined;
 const localizedStatus = (keys: Record<string, string>, value: string) => translateStatus(keys, value, t);
 const localizedDateTime = (value: string) => {
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? value : formatDateTime(parsed, locale.value as SupportedLocale);
+};
+const connectionMetricMs = (value?: number) => value === undefined
+  ? t("common.status.unavailable")
+  : t("settings.nodeDetail.connectionMilliseconds", { value: Math.round(value) });
+const connectionRetryCountdown = (value?: string) => {
+  if (!value) return t("settings.nodeDetail.connectionRetryNotScheduled");
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return t("common.status.unavailable");
+  const remainingSeconds = Math.max(0, Math.ceil((timestamp - connectionClock.value) / 1_000));
+  return remainingSeconds > 0
+    ? t("settings.nodeDetail.connectionRetryIn", { seconds: remainingSeconds })
+    : t("settings.nodeDetail.connectionRetryNow");
 };
 const headerActionState = computed(() => nodeDetailActionState({
   nodeId: props.selectedNode?.id || "",
@@ -651,9 +677,24 @@ const tabs = computed(() => [
 const nodeUpdateCheck = computed(() => props.resources.updateChecks[props.selectedNode?.id || ""]);
 const remoteConnectionSubmitting = computed(() => props.busy.connectingRemoteNodeId === props.selectedNode?.id);
 
+onMounted(() => {
+  connectionClockTimer = setInterval(() => {
+    connectionClock.value = Date.now();
+  }, 1_000);
+});
+
+onScopeDispose(() => {
+  if (connectionClockTimer) clearInterval(connectionClockTimer);
+});
+
 function setRemoteConnectionDialogOpen(open: boolean) {
   if (!open && remoteConnectionSubmitting.value) return;
   remoteConnectionDialogOpen.value = open;
+}
+
+function refreshConnectionDiagnostics(open: boolean) {
+  const nodeId = props.selectedNode?.id;
+  if (open && nodeId) void props.actions.loadControlPlaneAccess(nodeId);
 }
 
 async function submitRemoteConnection() {
@@ -1374,6 +1415,58 @@ watch(
 :global(.node-diagnostic-tooltip-grid em) {
   color: var(--text-strong) !important;
   font-weight: 650;
+}
+
+.node-connection-status-trigger {
+  display: inline-flex;
+  appearance: none;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: help;
+}
+
+:global(.node-connection-diagnostic-tooltip) {
+  min-width: 236px;
+  max-width: min(320px, calc(100vw - 24px));
+  border: 1px solid var(--line-strong) !important;
+  background: var(--surface-inset) !important;
+  color: var(--text) !important;
+  box-shadow: var(--shadow-popover);
+}
+
+:global(.node-connection-diagnostic-grid) {
+  display: grid;
+  gap: 7px;
+}
+
+:global(.node-connection-diagnostic-grid span) {
+  display: grid;
+  grid-template-columns: minmax(88px, 1fr) auto;
+  align-items: baseline;
+  gap: 14px;
+}
+
+:global(.node-connection-diagnostic-grid b),
+:global(.node-connection-diagnostic-grid em) {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  font-style: normal;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:global(.node-connection-diagnostic-grid b) {
+  color: var(--text-muted) !important;
+  font-weight: 650;
+}
+
+:global(.node-connection-diagnostic-grid em) {
+  color: var(--text-strong) !important;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
 }
 
 @media (max-width: 780px) {

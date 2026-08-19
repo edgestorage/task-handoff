@@ -6,6 +6,8 @@ const panel = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail
 const styles = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.css", import.meta.url), "utf8");
 const timeline = fs.readFileSync(new URL("../src/components/ai-session/AiSessionTimelineView.vue", import.meta.url), "utf8");
 const queries = fs.readFileSync(new URL("../src/api/queries.ts", import.meta.url), "utf8");
+const zhSessions = fs.readFileSync(new URL("../src/i18n/locales/zh-CN/sessions.ts", import.meta.url), "utf8");
+const enSessions = fs.readFileSync(new URL("../src/i18n/locales/en-US/sessions.ts", import.meta.url), "utf8");
 
 test("AI session history is an on-demand sidebar mode entered from the current-list footer", () => {
   const emptyIndex = panel.indexOf('t("sessions.panel.noConversations")');
@@ -53,6 +55,8 @@ test("history detail composer resumes, waits for authoritative state, and then s
   assert.match(panel, /showControlPlaneToast/);
   assert.doesNotMatch(panel, />继续对话</);
   assert.doesNotMatch(panel, /historyItems\.value\s*=\s*historyItems\.value\.filter/);
+  assert.match(zhSessions, /continue: "继续对话", continueConversation:/);
+  assert.match(enSessions, /continue: "Continue conversation", continueConversation:/);
 });
 
 test("history API clients send only instance and AI session identities", () => {

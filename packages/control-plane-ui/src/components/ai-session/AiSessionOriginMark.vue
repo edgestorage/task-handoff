@@ -5,7 +5,7 @@
     :aria-label="t('sessions.actions.openedFromTerminal')"
     :title="t('sessions.actions.openedFromTerminal')"
   >
-    <SquareTerminal :size="17" aria-hidden="true" />
+    <SquareTerminal :size="14" aria-hidden="true" />
   </span>
 </template>
 
@@ -23,17 +23,12 @@ const { t } = useI18n();
 <style scoped>
 .ai-session-origin-mark {
   display: inline-flex;
-  position: absolute;
-  top: 6px;
-  right: 8px;
-  z-index: 2;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 18px;
+  height: 18px;
   color: var(--text-muted);
   opacity: 0.38;
-  pointer-events: none;
   transition: opacity 120ms ease;
 }
 </style>

@@ -78,8 +78,16 @@
               </DropdownMenuTrigger>
               <DropdownMenuContent class="session-ai-options-menu" align="end" :side-offset="6">
                 <DropdownMenuLabel class="session-ai-options-label">{{ t("sessions.panel.view") }}</DropdownMenuLabel>
+                <DropdownMenuRadioGroup :model-value="sessionListLayout" @update:model-value="sessionListLayout = $event as AiSessionListLayout">
+                  <DropdownMenuRadioItem class="session-ai-options-item option-item" value="cards">{{ t("sessions.panel.cardLayout") }}</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem class="session-ai-options-item option-item" value="list">{{ t("sessions.panel.listLayout") }}</DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+                <DropdownMenuSeparator />
                 <DropdownMenuCheckboxItem class="session-ai-options-item option-item" :model-value="groupSessionsByPath" @update:model-value="(value) => groupSessionsByPath = Boolean(value)">
                   {{ t("sessions.panel.groupByPath") }}
+                </DropdownMenuCheckboxItem>
+                <DropdownMenuCheckboxItem v-if="groupSessionsByPath" class="session-ai-options-item option-item" :model-value="showEmptyPathGroups" @update:model-value="(value) => showEmptyPathGroups = Boolean(value)">
+                  {{ t("sessions.panel.showEmptyPathGroups") }}
                 </DropdownMenuCheckboxItem>
                 <DropdownMenuCheckboxItem class="session-ai-options-item option-item" :model-value="sortSessionsByStatus" @update:model-value="(value) => sortSessionsByStatus = Boolean(value)">
                   {{ t("sessions.panel.sortByStatus") }}
@@ -97,6 +105,8 @@
               v-for="group in displayedSessionGroups"
               :key="group.key"
               class="session-ai-path-group"
+              :class="{ 'is-compact-list': sessionListLayout === 'list' }"
+              :data-collapsed="groupSessionsByPath && collapsedPathGroups[group.key] ? 'true' : undefined"
             >
               <div
                 v-if="groupSessionsByPath"
@@ -137,16 +147,36 @@
                   :key="session.id"
                 >
                   <ContextMenuTrigger as-child>
+                <button
+                  v-if="sessionListLayout === 'list'"
+                  type="button"
+                  class="session-ai-compact-row"
+                  :class="{ 'is-grouped': groupSessionsByPath }"
+                  :data-state="session.status"
+                  :data-selected="selectedListSessionId === session.id"
+                  :data-unread="session.unread ? 'true' : undefined"
+                  @click="selectSession(session.id)"
+                  @mouseenter="showSessionListPreview($event, session)"
+                  @pointermove="showSessionListPreview($event, session)"
+                  @mouseleave="scheduleSessionListPreviewClose"
+                  @focusin="showSessionListPreview($event, session)"
+                  @focusout="scheduleSessionListPreviewClose"
+                >
+                  <AiSessionStatusIndicator :status="session.status" size="compact" />
+                  <span class="session-ai-compact-title">{{ displayAiSessionTitle(session, latestPromptIndex(session), t) }}</span>
+                  <span v-if="session.unread" class="session-ai-compact-unread" :aria-label="t('sessions.actions.unread')" :title="t('sessions.actions.unread')" />
+                </button>
                 <article
+                  v-else
                   v-ai-session-card-auto-scroll="{ target: '.session-ai-preview-field-assistant', revision: `${session.id}:${latestPromptIndex(session)}` }"
                   class="session-ai-row"
                   :data-state="session.status"
-                  :data-selected="selectedSession?.id === session.id"
+                  :data-selected="selectedListSessionId === session.id"
                   :data-unread="session.unread ? 'true' : undefined"
                   :data-app-session-origin="session.creationSource === 'app-session' ? 'true' : undefined"
                 >
                 <span v-if="session.unread" class="ai-session-unread-dot" :aria-label="t('sessions.actions.unread')" :title="t('sessions.actions.unread')" />
-                <AiSessionOriginMark :creation-source="session.creationSource" />
+                <AiSessionCardMarks :agent="session.agent" :creation-source="session.creationSource" />
                 <div
                   class="session-ai-select"
                   role="button"
@@ -156,7 +186,7 @@
                   @keydown.space.prevent="selectSession(session.id)"
                 >
                   <div class="session-ai-state">
-                    <span class="session-ai-dot" />
+                    <AiSessionStatusIndicator :status="session.status" />
                     <span class="session-ai-state-line">
                       <strong>{{ aiSessionAppDisplayName(aiSessionAppTab(instance, session), session.agent, t) }}</strong>
                       <span v-if="!groupSessionsByPath" class="session-ai-card-workspace">
@@ -210,74 +240,6 @@
                     <X :size="13" />
                     <span>{{ t("sessions.actions.deny") }}</span>
                   </button>
-                </div>
-                <div class="session-ai-card-tools" :aria-label="t('sessions.actions.controls')">
-                  <DropdownMenu>
-                    <DropdownMenuTrigger as-child>
-                      <button type="button" class="session-ai-trigger-button ai-session-card-action" :data-bound="boundTriggers(session).length ? 'true' : undefined" :title="triggerButtonTitle(session)" @click.stop>
-                        <Zap :size="13" />
-                        <small v-if="boundTriggers(session).length">{{ boundTriggers(session).length }}</small>
-                      </button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent class="session-ai-trigger-menu" align="end" :side-offset="6" @click.stop>
-                      <div class="session-ai-trigger-search" @click.stop @keydown.stop>
-                        <input v-model="triggerSearch" type="search" :placeholder="t('sessions.actions.searchTriggers')" :aria-label="t('sessions.actions.searchTriggers')" />
-                      </div>
-                      <DropdownMenuItem v-if="!triggerTemplates.length" class="session-ai-trigger-menu-empty" disabled>{{ t("sessions.actions.noTriggers") }}</DropdownMenuItem>
-                      <DropdownMenuItem v-else-if="!filteredTriggerTemplates.length" class="session-ai-trigger-menu-empty" disabled>{{ t("sessions.actions.noMatchingTriggers") }}</DropdownMenuItem>
-                      <template v-else>
-                        <DropdownMenuItem
-                          v-for="trigger in filteredTriggerTemplates"
-                          :key="`${session.id}:${trigger.configHash}`"
-                          class="session-ai-trigger-menu-item"
-                          :disabled="triggerBusyKey === triggerActionKey(session, trigger.configHash)"
-                          @select="toggleTrigger(session, trigger.configHash)"
-                        >
-                          <Check v-if="isTriggerBound(session, trigger.configHash)" :size="13" />
-                          <Zap v-else :size="13" />
-                          <span>
-                            <strong>{{ trigger.config.name }}</strong>
-                            <small>{{ trigger.config.source.type }} · {{ shortHash(trigger.configHash) }}</small>
-                          </span>
-                          <small>{{ isTriggerBound(session, trigger.configHash) ? t("sessions.actions.remove") : t("sessions.actions.add") }}</small>
-                        </DropdownMenuItem>
-                      </template>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                  <button
-                    v-if="aiSessionAppTab(instance, session) || session.actions?.openApp"
-                    type="button"
-                    class="session-ai-open ai-session-card-action"
-                    :aria-label="t('sessions.actions.openAppFor', { agent: session.agent })"
-                    :title="t('sessions.actions.openApp')"
-                    :disabled="openingAiSessionId === session.id"
-                    @click="openSessionApp(session)"
-                  >
-                    <ExternalLink :size="14" />
-                  </button>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger as-child>
-                      <button type="button" class="session-ai-more ai-session-card-action" :aria-label="t('sessions.actions.moreFor', { agent: session.agent })" :title="t('sessions.actions.more')" @click.stop>
-                        <MoreHorizontal :size="14" />
-                      </button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent class="session-ai-card-menu" align="end" :side-offset="6" @click.stop>
-                      <DropdownMenuSub v-if="session.actions?.fork">
-                        <DropdownMenuSubTrigger class="session-ai-card-menu-item" :disabled="forkingAiSessionId === session.id">
-                          <Split :size="13" />
-                          <span>{{ forkingAiSessionId === session.id ? t("sessions.actions.forking") : t("sessions.actions.fork") }}</span>
-                        </DropdownMenuSubTrigger>
-                        <DropdownMenuSubContent class="session-ai-card-menu">
-                          <DropdownMenuItem class="session-ai-card-menu-item" @select="forkSession(session, 'current')">{{ t("sessions.actions.forkCurrent") }}</DropdownMenuItem>
-                          <DropdownMenuItem class="session-ai-card-menu-item" @select="forkSession(session, 'managed-worktree')">{{ t("sessions.actions.forkWorktree") }}</DropdownMenuItem>
-                        </DropdownMenuSubContent>
-                      </DropdownMenuSub>
-                      <DropdownMenuItem class="session-ai-card-menu-item danger" :disabled="stoppingAppSessionId === session.id" @select="closeSession(session)">
-                        <Square :size="13" />
-                        <span>{{ stoppingAppSessionId === session.id ? t("sessions.actions.closingSession") : t("sessions.actions.closeSession") }}</span>
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
                 </div>
                 </article>
                   </ContextMenuTrigger>
@@ -493,7 +455,7 @@
             <div class="session-ai-new-pills">
               <DropdownMenu>
                 <DropdownMenuTrigger as-child>
-                  <button type="button" class="session-ai-project-pill" :disabled="launchingNewSession">
+                  <button type="button" class="session-ai-project-pill" :disabled="newSessionComposerBusy">
                     <Folder :size="14" />
                     <strong>{{ newSessionProjectLabel }}</strong>
                     <ChevronDown :size="13" />
@@ -507,8 +469,10 @@
                     </DropdownMenuItem>
                     <p v-if="!filteredNewSessionFolders.length" class="session-ai-project-empty">{{ t("sessions.panel.noProjects") }}</p>
                   </ScrollArea>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem class="session-ai-project-item" @select="openNewProject"><Plus :size="15" /><span>{{ t("sessions.panel.newProject") }}</span></DropdownMenuItem>
+                  <template v-if="instance.source.type === 'local-folder'">
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem class="session-ai-project-item" @select="openNewProject"><Plus :size="15" /><span>{{ t("sessions.panel.newProject") }}</span></DropdownMenuItem>
+                  </template>
                 </DropdownMenuContent>
               </DropdownMenu>
               <DropdownMenu v-if="newSessionWorkspace?.availability === 'available' && newSessionWorkspace.branches.length">
@@ -567,16 +531,14 @@
               <DropdownMenu>
                 <DropdownMenuTrigger as-child>
                   <button type="button" class="session-ai-app-pill" :disabled="launchingNewSession">
-                    <Bot v-if="newSessionApp === 'claude'" :size="14" />
-                    <Code2 v-else :size="14" />
+                    <AiAgentIcon :agent="newSessionApp === 'claude' ? 'claude' : 'codex'" :size="14" />
                     <strong>{{ newSessionApp === "claude" ? t("common.products.claude") : t("common.products.codex") }}</strong>
                     <ChevronDown :size="13" />
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent class="session-ai-project-menu" align="start" :side-offset="8">
                   <DropdownMenuItem v-for="app in aiSessionLaunchableApps" :key="app.id" class="session-ai-project-item" @select="newSessionApp = app.id">
-                    <Bot v-if="app.id === 'claude'" :size="14" />
-                    <Code2 v-else :size="14" />
+                    <AiAgentIcon :agent="app.id === 'claude' ? 'claude' : 'codex'" :size="14" />
                     <span>{{ app.label }}</span><Check v-if="newSessionApp === app.id" :size="15" />
                   </DropdownMenuItem>
                 </DropdownMenuContent>
@@ -589,6 +551,7 @@
               :class="{ 'is-loading': newSessionComposerBusy }"
               :aria-busy="newSessionComposerBusy"
               :busy="newSessionComposerBusy"
+              :disabled="!newSessionFolder"
               :can-interrupt="false"
               :provider="newSessionApp === 'claude' ? 'claude' : 'codex'"
               :permission-mode="newSessionPermissionMode"
@@ -844,19 +807,102 @@
       </section>
     </div>
     </Sheet>
+    <Teleport to="body">
+      <Transition name="session-ai-list-preview">
+        <article
+          v-if="sessionListPreviewVisible && sessionListPreviewSession"
+          v-ai-session-card-auto-scroll="{ target: '.session-ai-preview-field-assistant', revision: `${sessionListPreviewSession.id}:${latestPromptIndex(sessionListPreviewSession)}` }"
+          class="session-ai-row session-ai-list-hover-card"
+          :data-state="sessionListPreviewSession.status"
+          :data-unread="sessionListPreviewSession.unread ? 'true' : undefined"
+          :data-app-session-origin="sessionListPreviewSession.creationSource === 'app-session' ? 'true' : undefined"
+          :style="sessionListPreviewStyle"
+          :aria-label="displayAiSessionTitle(sessionListPreviewSession, latestPromptIndex(sessionListPreviewSession), t)"
+          role="dialog"
+          @mouseenter="cancelSessionListPreviewClose"
+          @mouseleave="scheduleSessionListPreviewClose"
+        >
+          <span v-if="sessionListPreviewSession.unread" class="ai-session-unread-dot" :aria-label="t('sessions.actions.unread')" :title="t('sessions.actions.unread')" />
+          <AiSessionCardMarks :agent="sessionListPreviewSession.agent" :creation-source="sessionListPreviewSession.creationSource" />
+          <div
+            class="session-ai-select"
+            role="button"
+            tabindex="0"
+            @click="selectSession(sessionListPreviewSession.id)"
+            @keydown.enter.prevent="selectSession(sessionListPreviewSession.id)"
+            @keydown.space.prevent="selectSession(sessionListPreviewSession.id)"
+          >
+            <div class="session-ai-state">
+              <AiSessionStatusIndicator :status="sessionListPreviewSession.status" />
+              <span class="session-ai-state-line">
+                <strong>{{ aiSessionAppDisplayName(aiSessionAppTab(instance, sessionListPreviewSession), sessionListPreviewSession.agent, t) }}</strong>
+                <span class="session-ai-card-workspace">
+                  <span aria-hidden="true">·</span>
+                  <b>{{ aiSessionBasename(sessionListPreviewSession.cwd) || t("sessions.board.unknownFolder") }}</b>
+                </span>
+              </span>
+            </div>
+            <div class="session-ai-preview-field session-ai-preview-field-user">
+              <MarkdownContent class="session-ai-question" :content="displayAiSessionTitle(sessionListPreviewSession, latestPromptIndex(sessionListPreviewSession), t)" />
+            </div>
+            <div class="session-ai-preview-field session-ai-preview-field-assistant">
+              <AiSessionStreamingMarkdown
+                class="session-ai-message"
+                :code-tools="markdownCodeTools"
+                :content="displayAiSessionMessage(sessionListPreviewSession, latestPromptIndex(sessionListPreviewSession), t)"
+                :instance-id="instance.id"
+                file-links
+                :is-latest="true"
+                :session-id="sessionListPreviewSession.id"
+                @open-file="openMarkdownFile(sessionListPreviewSession, $event)"
+              />
+            </div>
+          </div>
+          <AiSessionToolActivity
+            v-if="!canResolveApproval(sessionListPreviewSession)"
+            class="session-ai-card-activity"
+            :current-tool="sessionListPreviewSession.currentTool"
+            :phase="sessionListPreviewSession.phase"
+            :status="sessionListPreviewSession.status"
+            :summary="sessionListPreviewSession.summary"
+            :tool-calls-since-last-message="sessionListPreviewSession.toolCallsSinceLastMessage"
+          />
+          <div v-if="canResolveApproval(sessionListPreviewSession)" class="session-ai-card-approval-actions">
+            <button type="button" :disabled="aiSessionActionBusy" :title="t('sessions.actions.allow')" @click.stop="resolveApproval(sessionListPreviewSession, 'allow')">
+              <Check :size="13" />
+              <span>{{ t("sessions.actions.allow") }}</span>
+            </button>
+            <button type="button" :disabled="aiSessionActionBusy" :title="t('sessions.actions.skip')" @click.stop="resolveApproval(sessionListPreviewSession, 'skip')">
+              <Ban :size="13" />
+              <span>{{ t("sessions.actions.skip") }}</span>
+            </button>
+            <button type="button" :disabled="aiSessionActionBusy" :title="t('sessions.actions.deny')" @click.stop="resolveApproval(sessionListPreviewSession, 'deny')">
+              <X :size="13" />
+              <span>{{ t("sessions.actions.deny") }}</span>
+            </button>
+          </div>
+        </article>
+      </Transition>
+    </Teleport>
     <NodeStorageFolderPickerDialog
+      :breadcrumbs="newProjectPicker.breadcrumbs.value"
       :can-confirm="newProjectPicker.canConfirm.value"
+      :can-go-up="newProjectPicker.canGoUp.value"
+      :current-path="newProjectPicker.currentPath.value"
       :error="newProjectPicker.error.value"
       :loading="newProjectPicker.loading.value"
       :node-name="newProjectPicker.targetNode.value?.name || instance.nodeId"
       :open="newProjectPicker.dialogOpen.value"
+      :places="newProjectPicker.places.value"
       :rows="newProjectPicker.rows.value"
       :selected-path="newProjectPicker.selectedPath.value"
       :submit-error="newProjectPicker.submitError.value"
       :submitting="newProjectPicker.submitting.value"
       @confirm="confirmNewProject"
-      @refresh="newProjectPicker.loadRoots(instance.nodeId)"
+      @navigate="newProjectPicker.navigateTo"
+      @refresh="newProjectPicker.refresh"
       @select="newProjectPicker.selectFolder"
+      @up="newProjectPicker.goUp"
       @update:open="newProjectPicker.setOpen"
     />
     <AlertDialog :open="Boolean(newSessionBranchSwitchTarget)" @update:open="(open) => !open && (newSessionBranchSwitchTarget = undefined)">
@@ -893,13 +939,15 @@ import { useI18n } from "vue-i18n";
 import { formatRelativeTime } from "../../../i18n/presentation";
 import type { SupportedLocale } from "../../../i18n/locale";
 import { translateApiError } from "../../../i18n/apiError";
-import { ArrowLeft, Ban, Bot, Check, ChevronDown, ChevronRight, CircleHelp, Code2, ExternalLink, Filter, Folder, FolderOpen, GitBranch, History, LoaderCircle, MessageSquare, MoreHorizontal, PanelLeftOpen, Plus, SlidersHorizontal, Split, Square, X, Zap } from "@lucide/vue";
+import { ArrowLeft, Ban, Check, ChevronDown, ChevronRight, CircleHelp, ExternalLink, Filter, Folder, FolderOpen, GitBranch, History, LoaderCircle, MessageSquare, MoreHorizontal, PanelLeftOpen, Plus, SlidersHorizontal, Split, Square, X } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import AiSessionCardContextMenu from "../../../components/ai-session/AiSessionCardContextMenu.vue";
-import AiSessionOriginMark from "../../../components/ai-session/AiSessionOriginMark.vue";
+import AiSessionCardMarks from "../../../components/ai-session/AiSessionCardMarks.vue";
+import AiSessionStatusIndicator from "../../../components/ai-session/AiSessionStatusIndicator.vue";
+import AiAgentIcon from "../../../components/AiAgentIcon.vue";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
-import { bindAiSessionTrigger, closeAiSession, createAiSession, createNodeLocalFolder, editAiSessionQueuedMessage, forkAiSession, getAiSessionHistory, getAiSessionHistoryDetail, getAiSessionTimeline, getAiSessionTurnTimeline, getAiSessionWorkspace, interruptAiSession, listNodeFolderTree, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, unbindAiSessionTrigger, updateControlledInstance, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery } from "../../../api/queries";
+import { bindAiSessionTrigger, closeAiSession, createAiSession, createNodeLocalFolder, editAiSessionQueuedMessage, forkAiSession, getAiSessionHistory, getAiSessionHistoryDetail, getAiSessionTimeline, getAiSessionTurnTimeline, getAiSessionWorkspace, interruptAiSession, listNodeFolderPlaces, listNodeFolderTree, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, unbindAiSessionTrigger, updateControlledInstance, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery } from "../../../api/queries";
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { executeAiSessionCommand } from "../../../api/ai-session-commands";
 import { type AiSessionCommandInput, type AiSessionHistoryDetail, type AiSessionHistoryItem, type AiSessionMessageAttachmentRef, type AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
@@ -921,17 +969,18 @@ import { referencesForBindings, type AiSessionMentionBinding } from "../../../co
 import { desktopRuntimePathAccess } from "../../../components/ai-session/useAiSessionMentions";
 import AiSessionTurnNavigator from "../../../components/ai-session/AiSessionTurnNavigator.vue";
 import { Button } from "../../../components/ui/button";
-import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
 import { ContextMenu, ContextMenuTrigger } from "../../../components/ui/context-menu";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "../../../components/ui/sheet";
 import { ToggleGroup, ToggleGroupItem } from "../../../components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
-import { relativeNodePathSegments } from "../nodePath";
+import { nativeNodeFolderSelectionResult, nodePathName, relativeNodePathSegments, type NativeNodeFolderPicker } from "../nodePath";
 import NodeStorageFolderPickerDialog from "../settings/NodeStorageFolderPickerDialog.vue";
 import RepositoryEnvironment from "./RepositoryEnvironment.vue";
 import { useNodeStorageFolderPicker } from "../settings/useNodeStorageFolderPicker";
+import { groupAiSessionEntriesByPath } from "./aiSessionPathGrouping";
 import { aiSessionMessageText, clearAiSessionDraft, loadAiSessionDraftPayload, persistAiSessionDraftPayload } from "../useAiSessionDraft";
 import {
   aiSessionPermissionKey,
@@ -963,6 +1012,7 @@ import {
 } from "../useInstanceSessions";
 
 type SessionStatusFilter = "all" | "active" | "waiting" | "idle" | "problem";
+type AiSessionListLayout = "cards" | "list";
 type AiSessionPathGroup = {
   key: string;
   path: string;
@@ -981,7 +1031,9 @@ type AiSessionHistoryPathGroup = {
 };
 
 const GROUP_BY_PATH_STORAGE_KEY = "task-handoff.control-plane.ai-sessions-group-by-path";
+const SHOW_EMPTY_PATH_GROUPS_STORAGE_KEY = "task-handoff.control-plane.ai-sessions-show-empty-path-groups";
 const SORT_BY_STATUS_STORAGE_KEY = "task-handoff.control-plane.ai-sessions-sort-by-status";
+const SESSION_LIST_LAYOUT_STORAGE_KEY = "task-handoff.control-plane.ai-sessions-list-layout";
 const SIDEBAR_WIDTH_STORAGE_KEY = "task-handoff.control-plane.ai-sessions-sidebar-width";
 const TIMELINE_VIEW_MODE_STORAGE_KEY = "task-handoff.control-plane.ai-session-timeline-view-mode";
 const SIDEBAR_WIDTH_DEFAULT = 360;
@@ -992,8 +1044,16 @@ function storedGroupByPath() {
   return window.localStorage?.getItem(GROUP_BY_PATH_STORAGE_KEY) !== "false";
 }
 
+function storedShowEmptyPathGroups() {
+  return window.localStorage?.getItem(SHOW_EMPTY_PATH_GROUPS_STORAGE_KEY) === "true";
+}
+
 function storedSortByStatus() {
   return window.localStorage?.getItem(SORT_BY_STATUS_STORAGE_KEY) !== "false";
+}
+
+function storedSessionListLayout(): AiSessionListLayout {
+  return window.localStorage?.getItem(SESSION_LIST_LAYOUT_STORAGE_KEY) === "list" ? "list" : "cards";
 }
 
 function clampSidebarWidth(value: number) {
@@ -1012,6 +1072,7 @@ function storedTimelineViewMode(): "compact" | "full" {
 
 const props = defineProps<{
   activeSession: SessionTab;
+  chooseProjectFolder?: NativeNodeFolderPicker;
   instance: InstanceWithAiSessions;
   launchableApps?: LaunchableApp[];
   nodeLocalFolders?: NodeLocalFolder[];
@@ -1047,7 +1108,24 @@ const sessionListOverlayStyle = computed<CSSProperties>(() => ({
 }));
 const sessionStatusFilter = ref<SessionStatusFilter>("all");
 const groupSessionsByPath = ref(storedGroupByPath());
+const showEmptyPathGroups = ref(storedShowEmptyPathGroups());
 const sortSessionsByStatus = ref(storedSortByStatus());
+const sessionListLayout = ref<AiSessionListLayout>(storedSessionListLayout());
+const sessionListPreviewSession = ref<AiSessionSummary>();
+const sessionListPreviewVisible = ref(false);
+const sessionListPreviewPosition = ref({ left: 12, top: 12 });
+const sessionListPreviewStyle = computed(() => ({
+  left: `${sessionListPreviewPosition.value.left}px`,
+  top: `${sessionListPreviewPosition.value.top}px`,
+}));
+const SESSION_LIST_PREVIEW_DELAY_MS = 1_000;
+const SESSION_LIST_PREVIEW_SKIP_DELAY_MS = 800;
+const SESSION_LIST_PREVIEW_CLOSE_DELAY_MS = 120;
+const SESSION_LIST_PREVIEW_WIDTH = 340;
+const SESSION_LIST_PREVIEW_HEIGHT = 162;
+let sessionListPreviewOpenTimer: ReturnType<typeof setTimeout> | undefined;
+let sessionListPreviewCloseTimer: ReturnType<typeof setTimeout> | undefined;
+let sessionListPreviewClosedAt = 0;
 const statusFilterOptions = computed(() => {
   const sessions = visibleAiSessions.value;
   return [
@@ -1229,6 +1307,7 @@ const repositoryAiAgent = computed<"codex" | "claude" | undefined>(() => {
   return agent === "codex" || agent === "claude" ? agent : undefined;
 });
 const compactAiSessionLayout = useMediaQuery("(max-width: 920px)");
+const supportsSessionListHoverPreview = useMediaQuery("(hover: hover) and (pointer: fine)");
 watch(compactAiSessionLayout, (compact) => {
   if (!compact) sessionListOverlayOpen.value = false;
 });
@@ -1245,6 +1324,7 @@ const selectedForkTurn = computed(() => {
   return turn?.status === "completed" && turn.providerTurnId ? turn : undefined;
 });
 const showNewSession = computed(() => newSessionOpen.value || !selectedSession.value);
+const selectedListSessionId = computed(() => showNewSession.value ? undefined : selectedSession.value?.id);
 const newSessionApp = ref("");
 const newSessionFolderId = ref("");
 const newSessionDraft = ref("");
@@ -1263,23 +1343,41 @@ const newSessionCreateAttempt = ref<{
   uploadedAttachments?: AiSessionMessageAttachmentRef[];
 }>();
 const savingNewSessionPermission = ref(false);
+const choosingNewSessionFolder = ref(false);
 const newSessionPermissionMode = ref<AiSessionPermissionMode>(props.instance.config.defaultCodexPermissionMode);
-const newSessionComposerBusy = computed(() => launchingNewSession.value || savingNewSessionPermission.value || newSessionWorkspaceLoading.value);
+const newSessionComposerBusy = computed(() => launchingNewSession.value || savingNewSessionPermission.value || newSessionWorkspaceLoading.value || choosingNewSessionFolder.value);
 const aiSessionLaunchableApps = computed(() => (props.launchableApps || []).filter((app) => app.id === "codex"));
 const createdNewSessionFolders = ref<NodeLocalFolder[]>([]);
-const newSessionFolders = computed(() => {
+const INSTANCE_WORKSPACE_FOLDER_ID = "__instance_workspace__";
+type NewSessionFolderOption = Pick<NodeLocalFolder, "id" | "name" | "path"> & { cwdFolderId?: string };
+const newSessionFolders = computed<NewSessionFolderOption[]>(() => {
   const folders = [...(props.nodeLocalFolders || []), ...createdNewSessionFolders.value];
-  return [...new Map(folders.map((folder) => [folder.id, folder])).values()];
+  if (props.instance.source.type !== "local-folder") {
+    const workspacePath = props.instance.runtime?.workspacePath || props.instance.workspace.path || "/workspace";
+    return [{
+      id: INSTANCE_WORKSPACE_FOLDER_ID,
+      name: nodePathName(workspacePath),
+      path: workspacePath,
+    }] satisfies NewSessionFolderOption[];
+  }
+  return [...new Map(folders.map((folder) => [folder.id, {
+    id: folder.id,
+    cwdFolderId: folder.id,
+    name: folder.name,
+    path: folder.path,
+  }])).values()];
 });
+async function registerNewSessionFolder(nodeId: string, input: { name: string; path: string }) {
+  const folder = await createNodeLocalFolder(nodeId, input);
+  createdNewSessionFolders.value = [...createdNewSessionFolders.value, folder];
+  newSessionFolderId.value = folder.id;
+  return folder;
+}
 const newProjectPicker = useNodeStorageFolderPicker({
-  createFolder: async (nodeId, input) => {
-    const folder = await createNodeLocalFolder(nodeId, input);
-    createdNewSessionFolders.value = [...createdNewSessionFolders.value, folder];
-    newSessionFolderId.value = folder.id;
-    return folder;
-  },
+  createFolder: registerNewSessionFolder,
   errorText: (error) => translateApiError(error, t),
   loadFolders: listNodeFolderTree,
+  loadPlaces: listNodeFolderPlaces,
   refresh: async () => {
     await queryClient.invalidateQueries({ queryKey: ["control-plane-node-local-folders", props.instance.nodeId] });
   },
@@ -1301,11 +1399,7 @@ type VisibleNewSessionBranchTreeNode =
 const newSessionBranchTree = computed(() => buildNewSessionBranchTree(filteredNewSessionBranches.value));
 const visibleNewSessionBranches = computed(() => flattenNewSessionBranchTree(newSessionBranchTree.value));
 const newSessionFolder = computed(() => newSessionFolders.value.find((folder) => folder.id === newSessionFolderId.value));
-const newSessionProjectLabel = computed(() => {
-  if (newSessionFolder.value?.name) return newSessionFolder.value.name;
-  const sourcePath = props.instance.source.type === "local-folder" ? props.instance.source.path : "";
-  return sourcePath?.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || t("sessions.panel.chooseProject");
-});
+const newSessionProjectLabel = computed(() => newSessionFolder.value?.name || t("sessions.panel.chooseProject"));
 const newSessionSelectedBranchLabel = computed(() => {
   const selected = newSessionWorkspace.value?.branches.find((branch) => branch.name === newSessionBranch.value);
   if (!selected) return t("sessions.panel.chooseBranch");
@@ -1397,7 +1491,6 @@ const forkingAiSessionId = ref("");
 const forkRequestIds = new Map<string, string>();
 const pendingBusyFork = ref<{ session: AiSessionSummary; mode: "current" | "managed-worktree"; throughTurnId?: string }>();
 const triggerBusyKey = ref("");
-const triggerSearch = ref("");
 const triggers = useControlPlaneTriggersQuery();
 const triggerTemplates = computed(() => triggers.data.value?.triggers || []);
 
@@ -1422,20 +1515,6 @@ function updateDetailStickyThreshold() {
     + viewport.scrollTop;
   detailStickyThreshold = Math.max(0, Math.ceil(expandedDividerOffset - stickyHeaderHeight));
 }
-const filteredTriggerTemplates = computed(() => {
-  const query = triggerSearch.value.trim().toLowerCase();
-  if (!query) {
-    return triggerTemplates.value;
-  }
-  return triggerTemplates.value.filter((trigger) => {
-    const searchable = [
-      trigger.config.name,
-      trigger.config.source.type,
-      trigger.configHash,
-    ].join(" ").toLowerCase();
-    return searchable.includes(query);
-  });
-});
 const workspaceStyle = computed(
   () =>
     ({
@@ -1444,20 +1523,13 @@ const workspaceStyle = computed(
 );
 
 function groupAiSessionsByPath(sessions: AiSessionSummary[]) {
-  const groups = new Map<string, { cwdFolderId?: string; path: string; sessions: AiSessionSummary[] }>();
-  for (const session of sessions) {
-    const path = aiSessionPath(session);
-    const key = session.cwdFolderId ? `folder:${session.cwdFolderId}` : `cwd:${path}`;
-    const current = groups.get(key);
-    groups.set(key, { cwdFolderId: session.cwdFolderId, path: current?.path || path, sessions: [...(current?.sessions || []), session] });
-  }
-  return [...groups.entries()]
-    .map(([key, group]) => ({
-      key,
+  return groupAiSessionEntriesByPath(sessions, showEmptyPathGroups.value ? newSessionFolders.value : [])
+    .map((group) => ({
+      key: group.key,
       path: aiSessionGroupPath(group.cwdFolderId, group.path),
       cwdFolderId: group.cwdFolderId,
       ...aiSessionGroupLabel(group.cwdFolderId, group.path),
-      sessions: group.sessions,
+      sessions: group.entries,
     }))
     .sort((a, b) => {
       const messageTimeDelta = groupLastUserMessageTime(b.sessions) - groupLastUserMessageTime(a.sessions);
@@ -1466,20 +1538,13 @@ function groupAiSessionsByPath(sessions: AiSessionSummary[]) {
 }
 
 function groupAiSessionHistoryByPath(items: AiSessionHistoryItem[]) {
-  const groups = new Map<string, { cwdFolderId?: string; path: string; items: AiSessionHistoryItem[] }>();
-  for (const item of items) {
-    const path = item.cwd?.trim() || "";
-    const key = item.cwdFolderId ? `folder:${item.cwdFolderId}` : `cwd:${path}`;
-    const current = groups.get(key);
-    groups.set(key, { cwdFolderId: item.cwdFolderId, path: current?.path || path, items: [...(current?.items || []), item] });
-  }
-  return [...groups.entries()]
-    .map(([key, group]) => ({
-      key,
+  return groupAiSessionEntriesByPath(items)
+    .map((group) => ({
+      key: group.key,
       path: aiSessionGroupPath(group.cwdFolderId, group.path),
       cwdFolderId: group.cwdFolderId,
       ...aiSessionGroupLabel(group.cwdFolderId, group.path),
-      items: group.items,
+      items: group.entries,
     }))
     .sort((a, b) => {
       const latestA = Math.max(0, ...a.items.map((item) => Date.parse(item.lastActiveAt) || 0));
@@ -1560,9 +1625,20 @@ watch(groupSessionsByPath, (value) => {
   window.localStorage?.setItem(GROUP_BY_PATH_STORAGE_KEY, String(value));
 });
 
+watch(showEmptyPathGroups, (value) => {
+  window.localStorage?.setItem(SHOW_EMPTY_PATH_GROUPS_STORAGE_KEY, String(value));
+});
+
 watch(sortSessionsByStatus, (value) => {
   window.localStorage?.setItem(SORT_BY_STATUS_STORAGE_KEY, String(value));
 });
+
+watch(sessionListLayout, (value) => {
+  window.localStorage?.setItem(SESSION_LIST_LAYOUT_STORAGE_KEY, value);
+  closeSessionListPreview();
+});
+
+watch([historyMode, supportsSessionListHoverPreview], closeSessionListPreview);
 
 watch(() => props.instance.id, () => {
   historyDetailRevision += 1;
@@ -1608,7 +1684,8 @@ watch(
     const abort = new AbortController();
     onCleanup(() => abort.abort());
     newSessionWorkspaceLoading.value = true;
-    void getAiSessionWorkspace(instanceId, folderId, abort.signal)
+    const cwdFolderId = newSessionFolders.value.find((folder) => folder.id === folderId)?.cwdFolderId;
+    void getAiSessionWorkspace(instanceId, cwdFolderId, abort.signal)
       .then((workspace) => {
         if (revision !== newSessionWorkspaceRevision) return;
         newSessionWorkspace.value = workspace;
@@ -1723,9 +1800,58 @@ function nextPrompt(session: AiSessionSummary) {
   setPromptIndex(session, promptIndexFor(session) + 1);
 }
 
+function cancelSessionListPreviewClose() {
+  if (!sessionListPreviewCloseTimer) return;
+  clearTimeout(sessionListPreviewCloseTimer);
+  sessionListPreviewCloseTimer = undefined;
+}
+
+function closeSessionListPreview() {
+  if (sessionListPreviewOpenTimer) clearTimeout(sessionListPreviewOpenTimer);
+  if (sessionListPreviewCloseTimer) clearTimeout(sessionListPreviewCloseTimer);
+  sessionListPreviewOpenTimer = undefined;
+  sessionListPreviewCloseTimer = undefined;
+  if (sessionListPreviewVisible.value) sessionListPreviewClosedAt = Date.now();
+  sessionListPreviewVisible.value = false;
+}
+
+function scheduleSessionListPreviewClose() {
+  if (sessionListPreviewOpenTimer) clearTimeout(sessionListPreviewOpenTimer);
+  sessionListPreviewOpenTimer = undefined;
+  cancelSessionListPreviewClose();
+  sessionListPreviewCloseTimer = setTimeout(closeSessionListPreview, SESSION_LIST_PREVIEW_CLOSE_DELAY_MS);
+}
+
+function showSessionListPreview(event: Event, session: AiSessionSummary) {
+  if (sessionListLayout.value !== "list" || !supportsSessionListHoverPreview.value || historyMode.value) return;
+  if (!(event.currentTarget instanceof HTMLElement)) return;
+  cancelSessionListPreviewClose();
+  if (sessionListPreviewOpenTimer) clearTimeout(sessionListPreviewOpenTimer);
+  const bounds = event.currentTarget.getBoundingClientRect();
+  const cardWidth = Math.min(SESSION_LIST_PREVIEW_WIDTH, window.innerWidth - 24);
+  const preferredLeft = bounds.right + 8;
+  const left = preferredLeft + cardWidth <= window.innerWidth - 12
+    ? preferredLeft
+    : bounds.left - cardWidth - 8;
+  sessionListPreviewPosition.value = {
+    left: Math.max(12, Math.min(left, window.innerWidth - cardWidth - 12)),
+    top: Math.max(12, Math.min(bounds.top, window.innerHeight - SESSION_LIST_PREVIEW_HEIGHT - 12)),
+  };
+  sessionListPreviewSession.value = session;
+  if (sessionListPreviewVisible.value || Date.now() - sessionListPreviewClosedAt <= SESSION_LIST_PREVIEW_SKIP_DELAY_MS) {
+    sessionListPreviewVisible.value = true;
+    return;
+  }
+  sessionListPreviewOpenTimer = setTimeout(() => {
+    sessionListPreviewVisible.value = true;
+    sessionListPreviewOpenTimer = undefined;
+  }, SESSION_LIST_PREVIEW_DELAY_MS);
+}
+
 function selectSession(sessionId: string) {
   newSessionOpen.value = false;
   sessionListOverlayOpen.value = false;
+  closeSessionListPreview();
   emit("selectAiSession", props.instance.id, sessionId);
 }
 
@@ -1891,6 +2017,9 @@ function newSessionFolderIdForPath(sessionPath: string) {
   const sourcePath = props.instance.source.type === "local-folder" ? props.instance.source.path : "";
   const workspacePath = props.instance.runtime?.workspacePath || props.instance.workspace.path || "/workspace";
   return newSessionFolders.value.find((folder) => {
+    if (!folder.cwdFolderId) {
+      return relativeNodePathSegments(folder.path, sessionPath)?.length === 0;
+    }
     if (runtimeIsLocal) {
       return relativeNodePathSegments(folder.path, sessionPath)?.length === 0;
     }
@@ -1937,8 +2066,15 @@ function initializeNewSessionDefaults() {
     newSessionApp.value = aiSessionLaunchableApps.value[0]?.id || "";
   }
   if (!newSessionFolders.value.some((folder) => folder.id === newSessionFolderId.value)) {
+    if (props.instance.source.type !== "local-folder") {
+      newSessionFolderId.value = INSTANCE_WORKSPACE_FOLDER_ID;
+      return;
+    }
     const sourcePath = props.instance.source.type === "local-folder" ? props.instance.source.path : "";
-    newSessionFolderId.value = newSessionFolders.value.find((folder) => folder.path === sourcePath)?.id || "";
+    const sourceFolderId = props.instance.source.type === "local-folder" ? props.instance.source.localFolderId : undefined;
+    newSessionFolderId.value = newSessionFolders.value.find((folder) => folder.id === sourceFolderId)?.id
+      || newSessionFolders.value.find((folder) => relativeNodePathSegments(folder.path, sourcePath)?.length === 0)?.id
+      || "";
   }
 }
 
@@ -2043,8 +2179,30 @@ async function updateNewSessionPermissionMode(permissionMode: AiSessionPermissio
   }
 }
 
-function openNewProject() {
-  void newProjectPicker.openForNode({ id: props.instance.nodeId, name: props.instance.nodeId });
+async function openNewProject() {
+  if (!props.chooseProjectFolder) {
+    await newProjectPicker.openForNode({ id: props.instance.nodeId, name: props.instance.nodeId });
+    return;
+  }
+  if (choosingNewSessionFolder.value) return;
+  choosingNewSessionFolder.value = true;
+  try {
+    const result = nativeNodeFolderSelectionResult(await props.chooseProjectFolder(), props.instance.nodeId);
+    if (result.status === "cancelled") return;
+    if (result.status === "invalid-owner") {
+      showControlPlaneToast(t("settings.nodeDetail.invalidLocalFolderOwner"));
+      return;
+    }
+    await registerNewSessionFolder(props.instance.nodeId, {
+      name: nodePathName(result.path),
+      path: result.path,
+    });
+    await queryClient.invalidateQueries({ queryKey: ["control-plane-node-local-folders", props.instance.nodeId] });
+  } catch (error) {
+    showControlPlaneToast(translateApiError(error, t));
+  } finally {
+    choosingNewSessionFolder.value = false;
+  }
 }
 
 async function confirmNewProject() {
@@ -2053,8 +2211,8 @@ async function confirmNewProject() {
 
 async function createNewSession(permissionMode?: AiSessionPermissionMode) {
   const message = newSessionDraft.value.trim();
-  const cwdFolderId = newSessionFolder.value?.id;
-  if (!newSessionApp.value || !message || newSessionComposerBusy.value) return;
+  const cwdFolderId = newSessionFolder.value?.cwdFolderId;
+  if (!newSessionApp.value || !newSessionFolder.value || !message || newSessionComposerBusy.value) return;
   const gitSelection = newSessionWorkspace.value?.availability === "available" && newSessionBranch.value
     ? { mode: newSessionWorkspaceMode.value, branch: newSessionBranch.value }
     : undefined;
@@ -2441,11 +2599,6 @@ function triggerActionKey(session: AiSessionSummary, configHash: string) {
   return `${props.instance.id}:${session.id}:${configHash}`;
 }
 
-function triggerButtonTitle(session: AiSessionSummary) {
-  const count = boundTriggers(session).length;
-  return count ? t("sessions.actions.triggersBound", { count }) : t("sessions.actions.addTrigger");
-}
-
 async function toggleTrigger(session: AiSessionSummary, configHash: string) {
   const key = triggerActionKey(session, configHash);
   if (triggerBusyKey.value) {
@@ -2758,6 +2911,7 @@ watch(() => props.instance.id, () => {
   sessionListOverlayOpen.value = false;
 });
 onBeforeUnmount(() => {
+  closeSessionListPreview();
   composerResizeObserver?.disconnect();
   detailActionsResizeObserver?.disconnect();
   promptResizeObserver?.disconnect();
@@ -2788,4 +2942,3 @@ function openMarkdownFile(session: AiSessionSummary, filePath: string) {
 </script>
 
 <style scoped src="./AiSessionPanel.css"></style>
-<style scoped src="../../../components/ai-session/AiSessionCardAction.css"></style>

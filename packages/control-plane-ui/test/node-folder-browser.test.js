@@ -84,3 +84,36 @@ test("ignores stale root and child responses after reset or node changes", async
   assert.deepEqual(browser.rows.value, []);
   assert.equal(browser.selectedPath.value, "");
 });
+
+test("directory presentation navigates current folders, breadcrumbs, and parent", async () => {
+  const calls = [];
+  const browser = useNodeFolderBrowser({
+    presentation: "directory",
+    load: async (nodeId, input) => {
+      calls.push([nodeId, input]);
+      if (input.depth === 0) return [entry("root", "/")];
+      if (input.path === "/") return [entry("root", "/", [entry("home", "/home")])];
+      if (input.path === "/home") return [entry("home", "/home", [entry("coder", "/home/coder")])];
+      return [entry("coder", "/home/coder")];
+    },
+  });
+
+  await browser.loadRoots("node_remote");
+  assert.equal(browser.currentPath.value, "/");
+  assert.deepEqual(browser.rows.value.map((folder) => folder.path), ["/home"]);
+
+  await browser.selectFolder(browser.rows.value[0]);
+  assert.equal(browser.selectedPath.value, "/home");
+  assert.deepEqual(browser.breadcrumbs.value, [{ label: "/", path: "/" }, { label: "home", path: "/home" }]);
+  assert.equal(browser.canGoUp.value, true);
+
+  await browser.goUp();
+  assert.equal(browser.currentPath.value, "/");
+  assert.equal(browser.canGoUp.value, false);
+  assert.deepEqual(calls, [
+    ["node_remote", { depth: 0 }],
+    ["node_remote", { path: "/", depth: 1 }],
+    ["node_remote", { path: "/home", depth: 1 }],
+    ["node_remote", { path: "/", depth: 1 }],
+  ]);
+});

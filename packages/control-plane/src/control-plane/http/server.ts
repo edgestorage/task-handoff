@@ -852,6 +852,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     proxy,
     runtime: proxyRuntime,
     events,
+    syncNodeEvents: () => nodeEventSubscriber.syncNow(),
     actorId: async (request) => {
       const actor = await actorForRequest(auth, requestSessionCredential(request));
       if (!actor) return "system:unknown";

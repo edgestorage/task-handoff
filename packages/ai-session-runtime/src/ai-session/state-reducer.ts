@@ -104,6 +104,14 @@ export function applyAiSessionPatch(
     !latestTurn.summary &&
     !latestTurn.lastMessage
   );
+  const status = patch.status ? normalizeAiSessionLifecycle(patch.status) : current.status;
+  const actions = {
+    ...(patch.actions || current.actions),
+    // Action availability is part of the lifecycle projection. Adapter snapshots
+    // often record interrupt=false while idle; a realtime turn start must not
+    // carry that stale value into the running state.
+    interrupt: status === "running" || status === "waiting",
+  };
 
   return {
     ...current,
@@ -113,8 +121,9 @@ export function applyAiSessionPatch(
     creationSource: current.creationSource,
     startedAt: current.startedAt,
     updatedAt,
-    status: patch.status ? normalizeAiSessionLifecycle(patch.status) : current.status,
+    status,
     phase: patch.phase ? normalizeAiSessionPhase(patch.phase) : current.phase,
+    actions,
     summary: options.replaceActivity
       ? patch.summary ? compact(patch.summary, 1000) : undefined
       : options.clearResponse
