@@ -188,10 +188,15 @@ export const instances = {
     create: "Create",
     folders: {
       title: "Node folders",
+      quickLocations: "Quick locations",
+      home: "Home",
+      up: "Up one level",
+      currentPath: "Current folder",
       loading: "Loading",
       refresh: "Refresh",
       loadingFolders: "Loading folders...",
       empty: "No folders reported by this node.",
+      emptyDirectory: "This folder has no subfolders.",
     },
     availability: {
       available: "Available",

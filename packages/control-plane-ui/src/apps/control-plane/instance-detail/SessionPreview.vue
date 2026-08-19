@@ -342,6 +342,7 @@
           :active-action-label="activeActionLabel"
           :app-launch-button-title="appLaunchButtonTitle"
           :can-launch-app="canLaunchApp"
+          :choose-project-folder="chooseProjectFolder"
           :instance="instance"
           :is-instance-action-busy="isInstanceActionBusy"
           :launchable-apps="launchableApps"
@@ -449,6 +450,7 @@ import {
 import { hasInstanceStatusPage, instanceStatusTitle } from "../useInstanceStatus";
 import type { InstanceAction } from "../useInstanceActions";
 import type { SessionPaneId } from "./useActiveInstanceSessions";
+import type { NativeNodeFolderPicker } from "../nodePath";
 
 const { t } = useI18n();
 
@@ -470,6 +472,7 @@ const props = defineProps<{
   appLaunchButtonTitle: string;
   appLaunchMenuOpen: boolean;
   canLaunchApp: boolean;
+  chooseProjectFolder?: NativeNodeFolderPicker;
   copiedText: string;
   instance: InstanceWithAiSessions;
   instanceSidebarVisible?: boolean;

@@ -12,6 +12,7 @@ import type { NodeAgentStorePaths } from "./paths.ts";
 type MaintenanceLogger = (message: string, details: Record<string, unknown>) => void;
 
 export class NodeAgentPersistenceMaintenance {
+  readonly logsDir: string;
   readonly localInstancesRoot: string;
   readonly localInstancesTrashRoot: string;
   private readonly options: { retentionMs?: number; now?: () => number; logger?: MaintenanceLogger };
@@ -21,11 +22,13 @@ export class NodeAgentPersistenceMaintenance {
     options: { retentionMs?: number; now?: () => number; logger?: MaintenanceLogger } = {},
   ) {
     this.options = options;
+    this.logsDir = paths.logsDir;
     this.localInstancesRoot = path.join(paths.dataDir, "local-instances");
     this.localInstancesTrashRoot = path.join(paths.dataDir, "local-instances-trash");
   }
 
   run(activeInstanceIds: Iterable<string>) {
+    this.capNodeAgentLogs();
     const active = new Set(activeInstanceIds);
     if (fs.existsSync(this.localInstancesRoot)) {
       ensurePrivateDirectory(this.localInstancesRoot);
@@ -45,6 +48,22 @@ export class NodeAgentPersistenceMaintenance {
 
   capActiveInstanceLogs(activeInstanceIds: Iterable<string>) {
     for (const instanceId of activeInstanceIds) this.capControlledInstanceLogs(instanceId);
+  }
+
+  capNodeAgentLogs() {
+    const rotated: string[] = [];
+    for (const name of ["node-agent.out.log", "node-agent.err.log"]) {
+      const filePath = path.join(this.logsDir, name);
+      try {
+        if (copyTruncateOpenLog(filePath)) rotated.push(filePath);
+      } catch (error) {
+        this.options.logger?.("node-agent log rotation failed", {
+          filePath,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    return rotated;
   }
 
   capControlledInstanceLogs(instanceId: string) {

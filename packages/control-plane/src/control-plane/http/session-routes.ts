@@ -14,7 +14,7 @@ import {
   InstanceSessionQueueParamsSchema,
 } from "./route-params.ts";
 
-const AiSessionWorkspaceQuerySchema = z.object({ cwdFolderId: z.string().trim().min(1).max(120) }).strict();
+const AiSessionWorkspaceQuerySchema = z.object({ cwdFolderId: z.string().trim().min(1).max(120).optional() }).strict();
 
 export type RegisterSessionRoutesOptions = {
   app: FastifyInstance;

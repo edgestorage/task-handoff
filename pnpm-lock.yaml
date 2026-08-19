@@ -531,6 +531,9 @@ importers:
 
   packages/control-plane-ui:
     dependencies:
+      '@lobehub/icons-static-svg':
+        specifier: 1.94.0
+        version: 1.94.0
       '@lucide/vue':
         specifier: ^1.21.0
         version: 1.21.0(vue@3.5.38(typescript@6.0.3))
@@ -543,6 +546,9 @@ importers:
       '@task-handoff/control-plane-client':
         specifier: workspace:*
         version: link:../control-plane-client
+      '@task-handoff/core':
+        specifier: workspace:*
+        version: link:../core
       '@task-handoff/protocol':
         specifier: workspace:*
         version: link:../protocol
@@ -1941,6 +1947,9 @@ packages:
 
   '@larksuiteoapi/node-sdk@1.72.0':
     resolution: {integrity: sha512-8oKnaTxRFRNPQfeeG69yafdLzWvvrvXlIqX3QRvozR1/6kvZyi9iMhp6lwC+hMgJA/GCFwMZRadkJzlUE+kyvQ==}
+
+  '@lobehub/icons-static-svg@1.94.0':
+    resolution: {integrity: sha512-Inx1TYkjLH6YeHOIHeVW9+OM/xxRnk8TmcQVKquFUDBmE3X9sUuRGt7kALrrDBNNAbrWz7Qq6fAiFj9E9Mmw9Q==}
 
   '@lucide/vue@1.21.0':
     resolution: {integrity: sha512-eoFn3tppjKAc12ZqdnRSMFdtwQ1ZMRQFb6SV1Eub6Y8kU28ccnqKeSFdnur9hMg8gIbosU2Y3WFJr/J/xS/IlQ==}
@@ -9571,6 +9580,8 @@ snapshots:
       - debug
       - supports-color
       - utf-8-validate
+
+  '@lobehub/icons-static-svg@1.94.0': {}
 
   '@lucide/vue@1.21.0(vue@3.5.38(typescript@6.0.3))':
     dependencies:

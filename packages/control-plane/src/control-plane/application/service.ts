@@ -11,10 +11,12 @@ import {
   LEGACY_MARKET_IMAGE_IDS,
   NodeImageAvailabilitySchema,
   NodeFolderTreeEntrySchema,
+  NodeFolderPlaceSchema,
   sanitizeStoredImageProfile,
   sanitizeStoredNode,
   sanitizeStoredProject,
   supportsAiSessionPersistenceSettings,
+  supportsNodeFolderPlaces,
   ModelConfigSchema,
   NodeSchema,
   PendingRouteSchema,
@@ -651,6 +653,27 @@ export class ControlPlaneService {
     return this.nodeAgentGateway.listFolderTree(node, input);
   }
 
+  async listNodeFolderPlaces(nodeId: string) {
+    const node = this.requireNode(nodeId);
+    const agentCapabilities = node.capabilities?.agent && typeof node.capabilities.agent === "object"
+      ? (node.capabilities.agent as { capabilities?: unknown }).capabilities
+      : undefined;
+    if (!supportsNodeFolderPlaces(agentCapabilities)) {
+      // Compatibility for v0.0.21: missing capability means the node-agent exposes roots only.
+      const roots = await this.nodeAgentGateway.listFolderTree(node, { depth: 0 });
+      return roots.map((entry) => NodeFolderPlaceSchema.parse({ kind: "root", name: entry.name, path: entry.path }));
+    }
+    try {
+      return await this.nodeAgentGateway.listFolderPlaces(node);
+    } catch (error) {
+      const statusCode = error && typeof error === "object" ? (error as { statusCode?: unknown }).statusCode : undefined;
+      if (statusCode !== 404) throw error;
+      // Compatibility for v0.0.21: tolerate stale capability projections during rolling upgrades.
+      const roots = await this.nodeAgentGateway.listFolderTree(node, { depth: 0 });
+      return roots.map((entry) => NodeFolderPlaceSchema.parse({ kind: "root", name: entry.name, path: entry.path }));
+    }
+  }
+
   async createNodeLocalFolder(nodeId: string, input: unknown) {
     const node = this.requireNode(nodeId);
     return this.nodeAgentGateway.createLocalFolder(node, input);
@@ -819,8 +842,8 @@ export class ControlPlaneService {
     return this.proxyLifecycle.resumeClaim(claimId);
   }
 
-  cancelProxyClaim(claimId: string) {
-    return this.proxyLifecycle.cancelClaim(claimId);
+  cancelProxyClaim(claimId: string, force = false) {
+    return this.proxyLifecycle.cancelClaim(claimId, force);
   }
 
   applyProxyTargetSnapshot(nodeId: string, snapshot: ProxyTargetSnapshot) {
@@ -1290,9 +1313,7 @@ export class ControlPlaneService {
   }) {
     const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
     const { cwdFolderId: _cwdFolderId, ...resolvedInput } = input;
-    const cwdPath = input.cwdFolderId
-      ? await this.runtimeCwdForFolderId(instance, input.cwdFolderId)
-      : instance.runtime.workspacePath || instance.workspace.path || workspacePolicyForSource(instance.source).path || "/workspace";
+    const cwdPath = await this.aiSessionRuntimeCwd(instance, input.cwdFolderId);
     const cwd = { type: "runtime-path" as const, path: cwdPath };
     return this.aiSessionActionService.create(instanceId, {
       ...resolvedInput,
@@ -1301,9 +1322,9 @@ export class ControlPlaneService {
     });
   }
 
-  async inspectAiSessionWorkspace(instanceId: string, cwdFolderId: string) {
+  async inspectAiSessionWorkspace(instanceId: string, cwdFolderId?: string) {
     const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
-    const cwd = { type: "runtime-path" as const, path: await this.runtimeCwdForFolderId(instance, cwdFolderId) };
+    const cwd = { type: "runtime-path" as const, path: await this.aiSessionRuntimeCwd(instance, cwdFolderId) };
     return this.aiSessionActionService.inspectWorkspace(instanceId, cwd);
   }
 
@@ -1591,6 +1612,12 @@ export class ControlPlaneService {
     }
     const runtime = await this.requireNodeRuntimeOnNode(instance.nodeId, instance.runtimeId);
     return this.appLaunchCwdForFolder(instance, folder, runtime);
+  }
+
+  private async aiSessionRuntimeCwd(instance: ControlledInstance, cwdFolderId?: string) {
+    return cwdFolderId
+      ? this.runtimeCwdForFolderId(instance, cwdFolderId)
+      : instance.runtime.workspacePath || instance.workspace.path || workspacePolicyForSource(instance.source).path || "/workspace";
   }
 
   private appLaunchCwdForFolder(instance: ControlledInstance, folder: NodeLocalFolder, runtime: NodeRuntime) {

@@ -113,9 +113,9 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
     fork(instanceId: string, aiSessionId: string, input: AiSessionForkInput) {
       return requestData(`${sessionRoute(instanceId, aiSessionId)}/fork`, AiSessionForkResultSchema, json("POST", AiSessionForkInputSchema.parse(input)));
     },
-    workspace(instanceId: string, cwdFolderId: string, signal?: AbortSignal) {
-      const query = new URLSearchParams({ cwdFolderId });
-      return requestData(`/api/controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/workspace?${query}`, RepositoryAiSessionWorkspaceSchema, { signal });
+    workspace(instanceId: string, cwdFolderId?: string, signal?: AbortSignal) {
+      const query = cwdFolderId ? `?${new URLSearchParams({ cwdFolderId })}` : "";
+      return requestData(`/api/controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/workspace${query}`, RepositoryAiSessionWorkspaceSchema, { signal });
     },
     openApp(instanceId: string, aiSessionId: string, clientRequestId: string) {
       return requestData(`${sessionRoute(instanceId, aiSessionId)}/open-app`, AiSessionOpenAppResultSchema, json("POST", AiSessionOpenAppInputSchema.parse({ clientRequestId })));

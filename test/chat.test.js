@@ -1179,6 +1179,40 @@ test("codex app-server thread summary preserves context-compaction-only turns", 
   }]);
 });
 
+test("codex app-server thread summary preserves authoritative Turn timing", () => {
+  const summary = summarizeThreadTurns({
+    id: "thread_timing",
+    turns: [{
+      id: "turn_timing",
+      status: "completed",
+      startedAt: 1_756_800_000,
+      completedAt: 1_756_800_007,
+      durationMs: 7_000,
+      items: [{ type: "userMessage", content: [{ type: "text", text: "timed prompt" }] }],
+    }],
+  });
+
+  assert.equal(summary.turns[0].startedAt, "2025-09-02T08:00:00.000Z");
+  assert.equal(summary.turns[0].completedAt, "2025-09-02T08:00:07.000Z");
+  assert.equal(summary.turns[0].updatedAt, "2025-09-02T08:00:07.000Z");
+});
+
+test("codex app-server thread summary derives completion time from duration when needed", () => {
+  const summary = summarizeThreadTurns({
+    id: "thread_duration",
+    turns: [{
+      id: "turn_duration",
+      status: "completed",
+      startedAt: 1_756_800_000,
+      completedAt: null,
+      durationMs: 2_500,
+      items: [{ type: "userMessage", content: [{ type: "text", text: "duration prompt" }] }],
+    }],
+  });
+
+  assert.equal(summary.turns[0].completedAt, "2025-09-02T08:00:02.500Z");
+});
+
 test("codex app-server thread summary does not revive an older turn error", () => {
   const summary = summarizeThreadTurns({
     id: "thread_recovered",
@@ -1513,6 +1547,30 @@ test("ai session summaries disable interrupt for idle sessions even when provide
   assert.equal(session.status, "idle");
   assert.equal(session.actions.interrupt, false);
   assert.equal(session.actions.send, true);
+});
+
+test("ai session realtime start enables interrupt after an idle adapter snapshot", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-start-actions-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const idle = registry.applyAdapterSnapshot({
+    agent: "codex",
+    appId: "codex-app-server",
+    providerSessionId: "thread-start-actions",
+    status: "idle",
+    phase: "unknown",
+    actions: { send: true, interrupt: false, approval: false },
+  });
+
+  registry.applyRealtimeEvent(idle.id, {
+    kind: "send-ack",
+    activeTurnId: "turn-start-actions",
+    userPrompt: "continue",
+    source: "control",
+  });
+
+  const session = registry.snapshot().sessions.find((candidate) => candidate.id === idle.id);
+  assert.equal(session.status, "running");
+  assert.equal(session.actions.interrupt, true);
 });
 
 test("ai session controller rejects interrupt for idle sessions", async () => {
@@ -3362,6 +3420,29 @@ test("codex app server protocol parses failed turn error details", () => {
   });
 });
 
+test("codex app server protocol preserves authoritative Turn event timing", () => {
+  assert.deepEqual(codexNotification("turn/started", {
+    threadId: "thread_timed",
+    turn: { id: "turn_timed", status: "inProgress", startedAt: 1_756_800_000 },
+  }), {
+    type: "turn-started",
+    threadId: "thread_timed",
+    turnId: "turn_timed",
+    observedAt: "2025-09-02T08:00:00.000Z",
+  });
+  assert.deepEqual(codexNotification("turn/completed", {
+    threadId: "thread_timed",
+    turn: { id: "turn_timed", status: "completed", completedAt: 1_756_800_007 },
+  }), {
+    type: "turn-completed",
+    threadId: "thread_timed",
+    turnId: "turn_timed",
+    status: "completed",
+    error: undefined,
+    observedAt: "2025-09-02T08:00:07.000Z",
+  });
+});
+
 test("codex app server protocol parses retry and realtime error notifications", () => {
   assert.deepEqual(codexNotification("error", {
     threadId: "thread_error",
@@ -4634,8 +4715,20 @@ test("codex app server bridge controls turns through the ai session provider int
   );
   assert.equal(fake.steeredTurns.length, 1);
 
-  await bridge.interrupt(registry.get(session.id));
+  const interrupted = await bridge.interrupt(registry.get(session.id));
   assert.deepEqual(fake.interruptedTurns, [{ threadId: "thread_control", turnId: "turn_started_1" }]);
+  assert.equal(interrupted.session.status, "idle");
+  assert.equal(interrupted.session.activeTurnId, undefined);
+  assert.equal(registry.get(session.id).status, "idle");
+  assert.equal(registry.get(session.id).activeTurnId, undefined);
+  fake.emit("event", {
+    type: "turn-completed",
+    threadId: "thread_control",
+    turnId: "turn_started_1",
+    status: "interrupted",
+  });
+  assert.equal(registry.get(session.id).status, "idle");
+  assert.equal(registry.get(session.id).activeTurnId, undefined);
 
   registry.update(session.id, { activeTurnId: "stale_turn", status: "running", phase: "thinking" });
   const fallbackSent = await bridge.sendMessage(registry.get(session.id), { message: "stale follow up" });
@@ -4668,7 +4761,8 @@ test("codex app server bridge controls turns through the ai session provider int
     { threadId: "thread_control", turnId: "mismatched_turn" },
     { threadId: "thread_control", turnId: "actual_turn" },
   ]);
-  assert.equal(registry.get(session.id).activeTurnId, "actual_turn");
+  assert.equal(registry.get(session.id).status, "idle");
+  assert.equal(registry.get(session.id).activeTurnId, undefined);
 });
 
 test("codex permission modes map to authoritative app-server turn settings", async () => {

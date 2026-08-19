@@ -4,8 +4,10 @@ import test from "node:test";
 import {
   isSameOrChildNodePath,
   nativeNodeFolderSelectionResult,
+  nodePathBreadcrumbs,
   nodeFolderSelectionMode,
   nodePathName,
+  nodePathParent,
   relativeNodePathSegments,
 } from "../src/apps/control-plane/nodePath.ts";
 
@@ -13,6 +15,25 @@ test("web local nodes use node browsing when no native picker exists", () => {
   assert.equal(nodeFolderSelectionMode(true, true), "native");
   assert.equal(nodeFolderSelectionMode(true, false), "node");
   assert.equal(nodeFolderSelectionMode(false, true), "node");
+});
+
+test("node folder navigation derives parents and breadcrumbs across node platforms", () => {
+  assert.equal(nodePathParent("/home/coder/project"), "/home/coder");
+  assert.equal(nodePathParent("/"), undefined);
+  assert.equal(nodePathParent("C:\\Users\\coder"), "C:\\Users");
+  assert.equal(nodePathParent("C:\\"), undefined);
+  assert.equal(nodePathParent("\\\\server\\share\\project"), "\\\\server\\share");
+  assert.equal(nodePathParent("\\\\server\\share"), undefined);
+  assert.deepEqual(nodePathBreadcrumbs("/home/coder"), [
+    { label: "/", path: "/" },
+    { label: "home", path: "/home" },
+    { label: "coder", path: "/home/coder" },
+  ]);
+  assert.deepEqual(nodePathBreadcrumbs("C:\\Users\\coder"), [
+    { label: "C:", path: "C:\\" },
+    { label: "Users", path: "C:\\Users" },
+    { label: "coder", path: "C:\\Users\\coder" },
+  ]);
 });
 
 test("native folder selections cancel cleanly and stay bound to the target node", () => {

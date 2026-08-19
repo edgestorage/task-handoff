@@ -28,7 +28,7 @@ test("parses stable and prerelease Codex CLI versions", () => {
   assert.equal(parseCodexCliVersion("wrapper 1.2.3\n"), undefined);
 });
 
-test("initializes Codex app-server with the official CLI identity and detected version", async () => {
+test("initializes Codex app-server with the TUI identity and detected version", async () => {
   const versionCommands = [];
   const requests = [];
   const client = new CodexAppServerClient({
@@ -50,7 +50,7 @@ test("initializes Codex app-server with the official CLI identity and detected v
   assert.deepEqual(requests, [{
     method: "initialize",
     params: {
-      clientInfo: { name: "codex_cli_rs", version: "0.145.0-alpha.18" },
+      clientInfo: { name: "codex-tui", version: "0.145.0-alpha.18" },
       capabilities: { experimentalApi: true },
     },
   }]);

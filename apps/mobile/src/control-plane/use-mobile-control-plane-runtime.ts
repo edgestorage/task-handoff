@@ -12,6 +12,7 @@ import type { ControlPlaneClient } from '@task-handoff/control-plane-client';
 import { isCarPlayConnected, subscribeToCarPlayConnection } from '../carplay/runtime';
 import { subscribeToAppLifecycle } from '../platform/lifecycle';
 import { subscribeToNetworkState } from '../platform/network';
+import { MobileReconnectBackoff } from '../platform/reconnect';
 import { createMobileControlPlaneClient } from './client';
 import type { MobileControlPlaneProfile } from './profile';
 import { mobileProfileStore, mobileSecureStore } from './runtime';
@@ -64,7 +65,7 @@ export class MobileControlPlaneConnectionCoordinator {
   private foreground = false;
   private connected = true;
   private carPlayConnected = false;
-  private reconnectAttempt = 0;
+  private readonly reconnectBackoff = new MobileReconnectBackoff();
   private desiredSignature = '';
   private reconcileQueued = false;
   private snapshotValue: RuntimeSnapshot = { phase: 'idle' };
@@ -156,7 +157,7 @@ export class MobileControlPlaneConnectionCoordinator {
     const abortController = new AbortController();
     this.abortController = abortController;
     try {
-      this.publish({ phase: this.reconnectAttempt ? 'reconnecting' : 'verifying' });
+      this.publish({ phase: this.reconnectBackoff.attempts ? 'reconnecting' : 'verifying' });
       await this.transport.revalidate?.();
       if (!this.live(epoch, abortController)) return;
       const auth = await this.api.auth.session(abortController.signal);
@@ -164,7 +165,7 @@ export class MobileControlPlaneConnectionCoordinator {
         this.publish({ phase: 'session-expired', error: 'The mobile Control Plane session expired.' });
         return;
       }
-      this.publish({ phase: this.reconnectAttempt ? 'reconnecting' : 'loading' });
+      this.publish({ phase: this.reconnectBackoff.attempts ? 'reconnecting' : 'loading' });
       await Promise.all(desired.map((domain) => domain.start(abortController.signal)));
       if (!this.live(epoch, abortController)) return;
       const topics = [...new Set(desired.flatMap((domain) => [...domain.topics]))].sort();
@@ -175,7 +176,7 @@ export class MobileControlPlaneConnectionCoordinator {
           this.clearConnectTimer();
           this.publish({ phase: 'connected' });
           this.stableTimer = setTimeout(() => {
-            if (this.live(epoch, abortController)) this.reconnectAttempt = 0;
+            if (this.live(epoch, abortController)) this.reconnectBackoff.reset();
           }, STABLE_CONNECTION_MS);
         },
         onEvent: (event) => {
@@ -212,8 +213,7 @@ export class MobileControlPlaneConnectionCoordinator {
     if (this.stableTimer) clearTimeout(this.stableTimer);
     this.stableTimer = undefined;
     this.publish({ phase: 'reconnecting', ...(error ? { error } : {}) });
-    const delay = Math.min(1_000 * (2 ** this.reconnectAttempt), 30_000);
-    this.reconnectAttempt += 1;
+    const { delay } = this.reconnectBackoff.next();
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = undefined;
       if (!this.live(epoch, abortController)) return;

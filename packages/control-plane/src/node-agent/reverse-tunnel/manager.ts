@@ -252,9 +252,12 @@ export function createReverseTunnelManager(
   const state = (connectionId: string) => {
     const entry = tunnels.get(connectionId);
     if (!entry) return undefined;
+    const connection = entry.supervisor?.diagnostics();
     return {
       status: entry.status,
-      connection: entry.supervisor?.diagnostics(),
+      ...(connection?.pingRttMs === undefined ? {} : { pingRttMs: connection.pingRttMs }),
+      ...(connection?.pingRttP95Ms === undefined ? {} : { pingRttP95Ms: connection.pingRttP95Ms }),
+      consecutiveReconnects: entry.retry.attempts,
       ...(entry.lastConnectedAt ? { lastConnectedAt: entry.lastConnectedAt } : {}),
       ...(entry.lastDisconnectedAt ? { lastDisconnectedAt: entry.lastDisconnectedAt } : {}),
       ...(entry.nextRetryAt ? { nextRetryAt: entry.nextRetryAt } : {}),

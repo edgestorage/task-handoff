@@ -73,3 +73,21 @@ test("package boundary checker rejects undeclared and unexported deep imports", 
   assert.match(violations, /@example\/protocol\/private is not exported/);
   assert.match(violations, /imports undeclared dependency missing-package/);
 });
+
+test("package boundary checker scans Vue CSS URLs only inside style blocks", () => {
+  const root = fixture({
+    "apps/web/package.json": manifest("@example/web"),
+    "apps/web/src/DynamicIcon.vue": `<template><span :style="iconStyle" /></template>
+<script setup>
+const icons = { codex: '/codex.svg' };
+const current = 'codex';
+const iconStyle = \`url("\${icons[current]}")\`;
+</script>`,
+    "apps/web/src/StaticIcon.vue": `<template><span /></template>
+<style>.icon { mask-image: url("missing-package/icon.svg"); }</style>`,
+  });
+  const violations = checkWorkspace(root).join("\n");
+
+  assert.doesNotMatch(violations, /\$\{icons\[current\]\}/);
+  assert.match(violations, /imports undeclared dependency missing-package/);
+});

@@ -148,5 +148,13 @@ export class ControlPlaneProxyNodeAgentTransport implements NodeAgentTransport {
       onUpstreamError: () => socket.close(1011, "Control-plane proxy websocket failed."),
       onUpstreamErrorBeforeOpen: () => true,
     });
+    return {
+      ping: () => {
+        const ping = (upstream as WebSocketLike & { ping?: () => void }).ping;
+        if (!ping) throw new Error("Control-plane proxy websocket does not support ping.");
+        ping.call(upstream);
+      },
+      onPong: (listener) => (upstream as WebSocketLike & { on(event: "pong", listener: () => void): void }).on("pong", listener),
+    };
   }
 }

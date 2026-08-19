@@ -85,3 +85,24 @@ test("AI session creation uses the instance workspace when no folder is selected
 
   assert.deepEqual(result.cwd, { type: "runtime-path", path: "/workspace" });
 });
+
+test("AI session workspace inspection uses the instance runtime workspace without a node folder", async () => {
+  const service = Object.create(ControlPlaneService.prototype);
+  service.requireControlledInstance = async () => ({
+    ...instance(undefined),
+    source: { type: "git-repository", url: "https://example.test/project.git" },
+    id: "instance-1",
+    nodeId: "node-1",
+    runtimeId: "runtime-1",
+  });
+  service.aiSessionActionService = {
+    inspectWorkspace: async (instanceId, cwd) => ({ instanceId, cwd }),
+  };
+
+  const result = await service.inspectAiSessionWorkspace("instance-1");
+
+  assert.deepEqual(result, {
+    instanceId: "instance-1",
+    cwd: { type: "runtime-path", path: "/workspace" },
+  });
+});

@@ -162,7 +162,10 @@
                   <article v-for="app in filteredManagedApps" :key="app.id" class="instance-app-row instance-managed-app-row">
                     <div class="instance-app-main">
                       <div class="instance-app-identity">
-                        <span class="instance-app-icon" aria-hidden="true"><component :is="managedAppIcon(app)" :size="17" /></span>
+                        <span class="instance-app-icon" aria-hidden="true">
+                          <AiAgentIcon v-if="app.id === 'codex' || app.id === 'claude'" :agent="app.id" :size="17" />
+                          <component :is="managedAppIcon(app)" v-else :size="17" />
+                        </span>
                         <div class="instance-app-copy">
                           <strong>{{ app.name }}</strong>
                           <small v-if="app.description">{{ app.description }}</small>
@@ -256,12 +259,13 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { Bot, Boxes, Code2, Cpu, Globe2, LoaderCircle, Monitor, RefreshCw, SlidersHorizontal, TerminalSquare, X } from "@lucide/vue";
+import { Boxes, Cpu, Globe2, LoaderCircle, Monitor, RefreshCw, SlidersHorizontal, TerminalSquare, X } from "@lucide/vue";
 import { AI_SESSION_HISTORY_MAX_LIMIT, type AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
 import type { AppManagementJob, AppManagementOperation, AppManagementSnapshot, InstanceBoardItem, ManagedAppProjection, ModelApp, ModelConfig, ModelSelection, UpdateControlledInstanceInput } from "../../../api/types";
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
+import AiAgentIcon from "../../../components/AiAgentIcon.vue";
 import { Checkbox } from "../../../components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import { Progress } from "../../../components/ui/progress";
@@ -563,7 +567,6 @@ function managedAppStateLabel(state: ManagedAppProjection["state"]) {
 }
 
 function managedAppIcon(app: ManagedAppProjection) {
-  if (app.id === "codex" || app.id === "claude") return app.id === "codex" ? Code2 : Bot;
   if (app.kind === "gui") return app.id === "chromium" ? Globe2 : Monitor;
   if (app.kind === "web") return Globe2;
   return TerminalSquare;

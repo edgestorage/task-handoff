@@ -1,11 +1,14 @@
 import type { AiSessionTimelineActivity, AiSessionTimelineItem, AiSessionTurn } from "@task-handoff/protocol/ai-sessions";
+import { aiSessionElapsedSeconds } from "@task-handoff/control-plane-client";
 
-type TurnTiming = Pick<AiSessionTurn, "status" | "completedAt" | "updatedAt">;
+type TurnTiming = Pick<AiSessionTurn, "status" | "completedAt">;
 
 export function turnElapsedEnd(turn?: TurnTiming) {
   if (!turn || (turn.status !== "completed" && turn.status !== "failed")) return undefined;
-  return turn.completedAt || turn.updatedAt;
+  return turn.completedAt;
 }
+
+export const turnElapsedSeconds = aiSessionElapsedSeconds;
 
 export type TimelineMessage = Extract<AiSessionTimelineItem, { type: "user-message" | "ai-message" }>;
 export type TimelineTurnNode =

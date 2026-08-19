@@ -8,6 +8,7 @@ import { PUBLIC_CONTROL_PLANE_ROUTE } from "./auth-boundary.ts";
 
 const IdParamsSchema = z.object({ id: z.string().trim().min(1).max(160) }).strict();
 const ResumeProxyClaimInputSchema = z.object({}).strict();
+const CancelProxyClaimQuerySchema = z.object({ force: z.enum(["true", "false"]).optional() }).strict();
 
 export function registerControlPlaneProxyManagementRoutes(options: {
   app: FastifyInstance;
@@ -15,9 +16,10 @@ export function registerControlPlaneProxyManagementRoutes(options: {
   proxy: ControlPlaneProxyService;
   runtime: ControlPlaneNodeProxyRuntime;
   events: ControlPlaneEventBus;
+  syncNodeEvents?: () => void;
   actorId: (request: FastifyRequest) => Promise<string>;
 }) {
-  const { app, service, proxy, runtime, events, actorId } = options;
+  const { app, service, proxy, runtime, events, syncNodeEvents, actorId } = options;
 
   app.get("/api/control-plane-proxy/invites", async () => ({ data: proxy.listInvites() }));
   app.post("/api/control-plane-proxy/invites", async (request, reply) => {
@@ -68,6 +70,7 @@ export function registerControlPlaneProxyManagementRoutes(options: {
   app.get("/api/control-plane-proxy/pending-claims", async () => ({ data: service.listPendingProxyClaims() }));
   app.post("/api/control-plane-proxy/claims", async (request, reply) => {
     const result = await service.claimProxyNode(request.body);
+    syncNodeEvents?.();
     events.publish("node.created", { nodeId: result.node.id });
     return reply.code(201).send({ data: result });
   });
@@ -75,10 +78,15 @@ export function registerControlPlaneProxyManagementRoutes(options: {
     const id = IdParamsSchema.parse(request.params).id;
     ResumeProxyClaimInputSchema.parse(request.body || {});
     const result = await service.resumeProxyClaim(id);
+    syncNodeEvents?.();
     events.publish("node.created", { nodeId: result.node.id });
     return { data: result };
   });
-  app.delete("/api/control-plane-proxy/pending-claims/:id", async (request) => ({
-    data: await service.cancelProxyClaim(IdParamsSchema.parse(request.params).id),
-  }));
+  app.delete("/api/control-plane-proxy/pending-claims/:id", async (request) => {
+    const query = CancelProxyClaimQuerySchema.parse(request.query || {});
+    // Compatibility for v0.0.21: requests without `force` retain safe remote compensation semantics.
+    return {
+      data: await service.cancelProxyClaim(IdParamsSchema.parse(request.params).id, query.force === "true"),
+    };
+  });
 }

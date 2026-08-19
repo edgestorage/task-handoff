@@ -10,13 +10,14 @@ import { safeParseResponse } from '@task-handoff/protocol/response-validation';
 
 import type { MobileControlPlaneEvent, MobileControlPlaneEventConnection, MobileControlPlaneTransport, MobileControlPlaneTransportError } from '../control-plane/transport';
 import { MobileAppSessionStore } from './store';
+import { MobileReconnectBackoff } from '../platform/reconnect';
 
 export class MobileAppSessionController {
   private connection?: MobileControlPlaneEventConnection;
   private epoch = 0;
   private readonly recoveries = new Map<string, Promise<void>>();
   private readonly generation: number;
-  private reconnectAttempt = 0;
+  private readonly reconnectBackoff = new MobileReconnectBackoff();
   private reconnectTimer?: ReturnType<typeof setTimeout>;
 
   constructor(private readonly id: string, private readonly client: ControlPlaneClient, private readonly transport: MobileControlPlaneTransport, private readonly store: MobileAppSessionStore) {
@@ -34,7 +35,7 @@ export class MobileAppSessionController {
       const snapshot = await this.client.appSessions.list(signal);
       if (!this.live(epoch)) return;
       this.store.replaceSnapshot(this.id, snapshot);
-      this.reconnectAttempt = 0;
+      this.reconnectBackoff.reset();
     } catch (cause) {
       if (this.live(epoch)) this.store.setSyncState(this.id, {
         phase: this.store.profile(this.id).snapshot ? 'stale' : 'error',
@@ -64,7 +65,7 @@ export class MobileAppSessionController {
     this.epoch += 1;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined;
-    this.reconnectAttempt = 0;
+    this.reconnectBackoff.reset();
     this.connection?.close();
     this.connection = undefined;
     this.recoveries.clear();
@@ -131,8 +132,7 @@ export class MobileAppSessionController {
   }
   private scheduleReconnect(epoch: number) {
     if (!this.live(epoch) || this.reconnectTimer) return;
-    const delay = Math.min(1_000 * (2 ** this.reconnectAttempt), 30_000);
-    this.reconnectAttempt += 1;
+    const { delay } = this.reconnectBackoff.next();
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = undefined;
       if (!this.live(epoch)) return;

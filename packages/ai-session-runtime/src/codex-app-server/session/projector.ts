@@ -90,7 +90,7 @@ export class CodexAppServerSessionProjector {
     }
     if (event.type === "turn-started") {
       this.turnErrorsByThread.delete(event.threadId);
-      this.options.registry.applyRealtimeEvent(session.id, { kind: "turn-started", activeTurnId: event.turnId, providerTurnId: event.turnId, source: "realtime" });
+      this.options.registry.applyRealtimeEvent(session.id, { kind: "turn-started", activeTurnId: event.turnId, providerTurnId: event.turnId, observedAt: event.observedAt, source: "realtime" });
       return true;
     }
     if (event.type === "turn-error") {
@@ -153,6 +153,7 @@ export class CodexAppServerSessionProjector {
         providerTurnId: event.turnId,
         status: event.status === "failed" ? "failed" : "idle",
         error: event.status === "failed" ? error : undefined,
+        observedAt: event.observedAt,
         source: "realtime",
       });
       return true;

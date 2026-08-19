@@ -181,9 +181,10 @@ function runtimePathBasename(path: string) {
 .ai-session-activity-list-inline { margin: 0; }
 .ai-session-activity-item {
   display: grid;
-  gap: 5px;
+  gap: 0;
   min-width: 0;
 }
+.ai-session-activity-item[open] { gap: 5px; }
 .ai-session-activity-item-head {
   display: flex;
   align-items: baseline;

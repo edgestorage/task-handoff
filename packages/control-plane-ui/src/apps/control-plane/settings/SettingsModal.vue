@@ -507,6 +507,42 @@
                 </Button>
               </div>
             </div>
+            <div v-if="pendingProxyClaims.isLoading.value" class="pending-proxy-state" role="status">{{ t("settings.nodeDetail.loading") }}</div>
+            <div v-else-if="pendingProxyClaims.error.value" class="pending-proxy-state control-plane-error" role="alert">
+              <span>{{ translateApiError(pendingProxyClaims.error.value, t) }}</span>
+              <Button type="button" size="sm" variant="outline" @click="pendingProxyClaims.refetch()">{{ t("common.actions.retry") }}</Button>
+            </div>
+            <div v-else-if="pendingProxyClaims.data.value?.length" class="pending-proxy-claims" role="region" :aria-label="t('settings.controlPlaneProxy.pendingClaims')">
+              <div class="pending-proxy-heading">
+                <AlertTriangle :size="15" aria-hidden="true" />
+                <strong>{{ t("settings.controlPlaneProxy.pendingClaims") }}</strong>
+              </div>
+              <p>{{ t("settings.controlPlaneProxy.pendingClaimsDescription") }}</p>
+              <p v-if="pendingClaimError" class="control-plane-error" role="alert">{{ pendingClaimError }}</p>
+              <ScrollArea class="pending-proxy-list" :horizontal="false">
+                <div class="pending-proxy-list-content">
+                  <div v-for="claim in pendingProxyClaims.data.value" :key="claim.id" class="pending-proxy-row">
+                    <span>{{ claim.proxyOrigin }} · {{ t(`settings.controlPlaneProxy.claimStatus.${claim.status}`) }}</span>
+                    <div>
+                      <Button type="button" size="sm" variant="outline" :disabled="Boolean(pendingClaimBusyId)" @click="resumeProxyClaim(claim.id)">
+                        {{ pendingClaimBusyId === claim.id && pendingClaimAction === 'resume' ? t("settings.controlPlaneProxy.resuming") : t("settings.controlPlaneProxy.resume") }}
+                      </Button>
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="outline"
+                        :disabled="Boolean(pendingClaimBusyId)"
+                        :aria-label="t(pendingClaimBusyId === claim.id && pendingClaimAction === 'cancel' ? 'settings.controlPlaneProxy.cancelling' : 'settings.controlPlaneProxy.cancelClaim')"
+                        @click="cancelProxyClaim(claim.id)"
+                      >
+                        <RefreshCw v-if="pendingClaimBusyId === claim.id && pendingClaimAction === 'cancel'" class="proxy-spin" :size="14" />
+                        <Trash2 v-else :size="14" />
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </ScrollArea>
+            </div>
             <ScrollArea class="node-list">
               <div class="settings-scroll-content">
               <button v-for="target in orderedNodes" :key="target.id" type="button" class="node-list-item" :class="{ active: selectedNodeId === target.id }" @click="selectNode(target.id)">
@@ -550,18 +586,24 @@
         </TooltipProvider>
       </div>
       <NodeStorageFolderPickerDialog
+        :breadcrumbs="nodeStorageFolderBreadcrumbs"
         :can-confirm="nodeStorageFolderCanConfirm"
+        :can-go-up="nodeStorageFolderCanGoUp"
+        :current-path="nodeStorageFolderCurrentPath"
         :error="nodeStorageFolderError"
         :loading="nodeStorageFolderLoading"
         :node-name="nodeStorageFolderTarget?.name || ''"
         :open="nodeStorageFolderDialogOpen"
+        :places="nodeStorageFolderPlaces"
         :rows="nodeStorageFolderRows"
         :selected-path="nodeStorageFolderSelectedPath"
         :submit-error="nodeStorageFolderSubmitError"
         :submitting="nodeStorageFolderSubmitting"
         @confirm="confirmNodeStorageFolder"
+        @navigate="navigateNodeStorageFolder"
         @refresh="refreshNodeStorageFolderRoots"
         @select="selectNodeStorageFolder"
+        @up="goUpNodeStorageFolder"
         @update:open="setNodeStorageFolderDialogOpen"
       />
       <Dialog :open="nodeRenameOpen" @update:open="setNodeRenameOpen">
@@ -672,37 +714,6 @@
                   />
                   <span>{{ t("settings.controlPlaneProxy.trustConfirmation") }}</span>
                 </label>
-                <div v-if="pendingProxyClaims.isLoading.value" class="pending-proxy-state" role="status">{{ t("settings.nodeDetail.loading") }}</div>
-                <div v-else-if="pendingProxyClaims.error.value" class="pending-proxy-state control-plane-error" role="alert">
-                  <span>{{ translateApiError(pendingProxyClaims.error.value, t) }}</span>
-                  <Button type="button" size="sm" variant="outline" @click="pendingProxyClaims.refetch()">{{ t("common.actions.retry") }}</Button>
-                </div>
-                <div v-else-if="pendingProxyClaims.data.value?.length" class="pending-proxy-claims">
-                  <strong>{{ t("settings.controlPlaneProxy.pendingClaims") }}</strong>
-                  <ScrollArea class="pending-proxy-list" :horizontal="false">
-                    <div class="pending-proxy-list-content">
-                      <div v-for="claim in pendingProxyClaims.data.value" :key="claim.id" class="pending-proxy-row">
-                        <span>{{ claim.proxyOrigin }} · {{ t(`settings.controlPlaneProxy.claimStatus.${claim.status}`) }}</span>
-                        <div>
-                          <Button type="button" size="sm" variant="outline" :disabled="Boolean(pendingClaimBusyId)" @click="resumeProxyClaim(claim.id)">
-                            {{ pendingClaimBusyId === claim.id && pendingClaimAction === 'resume' ? t("settings.controlPlaneProxy.resuming") : t("settings.controlPlaneProxy.resume") }}
-                          </Button>
-                          <Button
-                            type="button"
-                            size="icon"
-                            variant="outline"
-                            :disabled="Boolean(pendingClaimBusyId)"
-                            :aria-label="t(pendingClaimBusyId === claim.id && pendingClaimAction === 'cancel' ? 'settings.controlPlaneProxy.cancelling' : 'settings.controlPlaneProxy.cancelClaim')"
-                            @click="cancelProxyClaim(claim.id)"
-                          >
-                            <RefreshCw v-if="pendingClaimBusyId === claim.id && pendingClaimAction === 'cancel'" class="proxy-spin" :size="14" />
-                            <Trash2 v-else :size="14" />
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  </ScrollArea>
-                </div>
               </TabsContent>
             </Tabs>
             <p v-if="proxyNodeError" id="proxy-node-error" class="control-plane-error" role="alert">{{ proxyNodeError }}</p>
@@ -736,6 +747,20 @@
         :version="nodeAgentInstallVersion"
         @close="nodeAgentInstallInvite = undefined"
       />
+      <AlertDialog :open="Boolean(pendingClaimForceId)" @update:open="(open) => !open && (pendingClaimForceId = '')">
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{{ t("settings.controlPlaneProxy.forceCancelTitle") }}</AlertDialogTitle>
+            <AlertDialogDescription>{{ t("settings.controlPlaneProxy.forceCancelConfirm") }}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{{ t("common.actions.cancel") }}</AlertDialogCancel>
+            <AlertDialogAction :disabled="pendingClaimAction === 'force-cancel'" @click="forceCancelProxyClaim">
+              {{ pendingClaimAction === 'force-cancel' ? t("settings.controlPlaneProxy.forceCancelling") : t("settings.controlPlaneProxy.forceCancel") }}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
   </section>
 </template>
 
@@ -748,6 +773,7 @@ import { cancelControlPlaneProxyClaim, claimControlPlaneProxyNode, controlPlaneQ
 import { invalidateControlPlaneDomains } from "../../../api/queryInvalidation";
 import type { BuildInfo, ControlPlaneSettings, InstanceBoardItem, ModelLocation, Node, NodeAgentExternalListener, UpdateChannel } from "../../../api/types";
 import { Badge } from "../../../components/ui/badge";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
 import { Button } from "../../../components/ui/button";
 import { Checkbox } from "../../../components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
@@ -785,7 +811,7 @@ import { getThemePreference, saveThemePreference, type ThemePreference } from ".
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 import { connectionStatusKeys, translateStatus } from "../../../i18n/status";
 import { translateApiError } from "../../../i18n/apiError";
-import { normalizeProxyOrigin, proxyClaimValidation } from "./controlPlaneProxyUi";
+import { normalizeProxyOrigin, proxyClaimForceDeleteAllowed, proxyClaimValidation } from "./controlPlaneProxyUi";
 
 type SettingsSection = "basic" | "chat" | "images" | "environment-templates" | "projects" | "nodes" | "models" | "triggers" | "mobile-sessions" | "account" | "cloud-connectivity";
 type NodeDiagnosticLog = {
@@ -875,7 +901,9 @@ const proxyNodeErrorField = ref<"origin" | "token" | "trust" | "form">("form");
 const proxyNodeDraft = ref({ proxyOrigin: "", inviteToken: "", name: "", trusted: false });
 const showProxyInviteToken = ref(false);
 const pendingClaimBusyId = ref("");
-const pendingClaimAction = ref<"resume" | "cancel">();
+const pendingClaimAction = ref<"resume" | "cancel" | "force-cancel">();
+const pendingClaimError = ref("");
+const pendingClaimForceId = ref("");
 const pendingProxyClaims = usePendingControlPlaneProxyClaimsQuery();
 const creatingNodeAgentInstall = ref(false);
 const nodeAgentInstallInvite = ref<{ joinToken: string; expiresAt: string }>();
@@ -1010,6 +1038,7 @@ const {
   checkingRuntimeId,
   closeNodeStorageFolderPicker,
   confirmNodeStorageFolder,
+  goUpNodeStorageFolder,
   creatingNodeLocalFolder,
   deletingNodeLocalFolderId,
   deletingRuntimeId,
@@ -1019,14 +1048,19 @@ const {
   nodeFolderDefaultImageId,
   nodeFolderImageOptions,
   nodeStorageFolderCanConfirm,
+  nodeStorageFolderBreadcrumbs,
+  nodeStorageFolderCanGoUp,
+  nodeStorageFolderCurrentPath,
   nodeStorageFolderDialogOpen,
   nodeStorageFolderError,
   nodeStorageFolderLoading,
+  nodeStorageFolderPlaces,
   nodeStorageFolderRows,
   nodeStorageFolderSelectedPath,
   nodeStorageFolderSubmitError,
   nodeStorageFolderSubmitting,
   nodeStorageFolderTarget,
+  navigateNodeStorageFolder,
   nodeLocationLabel,
   orderedNodes,
   removeNodeLocalFolder,
@@ -1362,14 +1396,14 @@ async function resumeProxyClaim(id: string) {
   if (pendingClaimBusyId.value) return;
   pendingClaimBusyId.value = id;
   pendingClaimAction.value = "resume";
+  pendingClaimError.value = "";
   try {
     const result = await resumeControlPlaneProxyClaim(id);
     await invalidateControlPlaneDomains(queryClient, ["nodeTopology", "controlPlaneProxy"]);
     selectNode(result.node.id);
     setRemoteNodeDialogOpen(false);
   } catch (error) {
-    proxyNodeErrorField.value = "form";
-    proxyNodeError.value = translateApiError(error, t);
+    pendingClaimError.value = translateApiError(error, t);
   } finally {
     pendingClaimBusyId.value = "";
     pendingClaimAction.value = undefined;
@@ -1380,12 +1414,34 @@ async function cancelProxyClaim(id: string) {
   if (pendingClaimBusyId.value) return;
   pendingClaimBusyId.value = id;
   pendingClaimAction.value = "cancel";
+  pendingClaimError.value = "";
   try {
     await cancelControlPlaneProxyClaim(id);
     await pendingProxyClaims.refetch();
   } catch (error) {
-    proxyNodeErrorField.value = "form";
-    proxyNodeError.value = translateApiError(error, t);
+    if (proxyClaimForceDeleteAllowed(error)) {
+      pendingClaimForceId.value = id;
+    } else {
+      pendingClaimError.value = translateApiError(error, t);
+    }
+  } finally {
+    pendingClaimBusyId.value = "";
+    pendingClaimAction.value = undefined;
+  }
+}
+
+async function forceCancelProxyClaim() {
+  const id = pendingClaimForceId.value;
+  if (!id || pendingClaimBusyId.value) return;
+  pendingClaimBusyId.value = id;
+  pendingClaimAction.value = "force-cancel";
+  pendingClaimError.value = "";
+  try {
+    await cancelControlPlaneProxyClaim(id, true);
+    pendingClaimForceId.value = "";
+    await pendingProxyClaims.refetch();
+  } catch (error) {
+    showControlPlaneToast(translateApiError(error, t));
   } finally {
     pendingClaimBusyId.value = "";
     pendingClaimAction.value = undefined;
@@ -1907,7 +1963,7 @@ function errorText(error: unknown) {
 }
 
 .node-list-panel {
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
 }
 
 .node-list {
@@ -2147,8 +2203,10 @@ function errorText(error: unknown) {
 .proxy-trust-confirmation { grid-template-columns: auto minmax(0, 1fr) !important; align-items: start; color: var(--text); font-size: 12px; line-height: 1.5; }
 .pending-proxy-state, .pending-proxy-claims { font-size: 12px; }
 .pending-proxy-state { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.pending-proxy-claims { display: grid; gap: 8px; min-height: 0; padding-top: 4px; }
-.pending-proxy-list { max-height: min(220px, max(96px, calc(100dvh - 430px))); }
+.pending-proxy-claims { display: grid; gap: 6px; min-height: 0; border: 1px solid var(--status-warning); border-radius: 7px; background: var(--status-warning-bg); padding: 9px; }
+.pending-proxy-heading { display: flex; align-items: center; gap: 6px; color: var(--text-strong); }
+.pending-proxy-claims > p { margin: 0; color: var(--text-muted); }
+.pending-proxy-list { max-height: min(180px, max(88px, calc(100dvh - 480px))); }
 .pending-proxy-list-content { min-width: 0; padding-right: 10px; }
 .pending-proxy-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
 .pending-proxy-row > span { min-width: 0; overflow-wrap: anywhere; }

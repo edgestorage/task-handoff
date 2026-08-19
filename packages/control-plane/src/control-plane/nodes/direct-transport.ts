@@ -166,11 +166,20 @@ export function createDirectNodeAgentTransport(fetchImpl: FetchImpl = fetch, opt
     proxyWebSocket(node: Node, socket: NodeAgentWebSocket, route: string, protocols?: string | string[], headers: Record<string, string> = {}) {
       const pathWithQuery = `/api/node-agent${route}`;
       const mergedHeaders = directNodeAgentHeaders(node, { method: "GET", pathWithQuery }, headers);
-      bridgeWebSockets(socket, openWebSocket(node, route, protocols, mergedHeaders), {
+      const upstream = openWebSocket(node, route, protocols, mergedHeaders);
+      bridgeWebSockets(socket, upstream, {
         upstreamOpenTimeoutMs: websocketOpenTimeoutMs,
         onUpstreamError: () => socket.close(1011, "Instance websocket proxy failed."),
         onUpstreamErrorBeforeOpen: () => true,
       });
+      return {
+        ping: () => {
+          const ping = (upstream as WebSocketLike & { ping?: () => void }).ping;
+          if (!ping) throw new Error("Direct node-agent websocket does not support ping.");
+          ping.call(upstream);
+        },
+        onPong: (listener) => (upstream as WebSocketLike & { on(event: "pong", listener: () => void): void }).on("pong", listener),
+      };
     },
   };
 }

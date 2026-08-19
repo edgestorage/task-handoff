@@ -134,6 +134,7 @@ test("AI session Fork creates an independent Direct session and deduplicates the
     appSessionId: "shared-runtime",
     providerSessionId: "thread-source",
     cwd: "/workspace",
+    cwdFolderId: "folder-project",
     actions: { send: true, fork: true },
     status: "idle",
   });
@@ -169,6 +170,7 @@ test("AI session Fork creates an independent Direct session and deduplicates the
   assert.equal(calls[0].cwd, undefined);
   assert.equal(calls[0].providerThroughTurnId, undefined);
   assert.equal(registry.get(first.aiSessionId).appSessionId, undefined);
+  assert.equal(registry.get(first.aiSessionId).cwdFolderId, "folder-project");
   assert.deepEqual(registry.get(first.aiSessionId).lineage, { kind: "fork", parentProviderSessionId: "thread-source" });
   assert.equal(registry.get(source.id).providerSessionId, "thread-source");
   assert.throws(

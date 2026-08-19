@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 import { supportsAiSessionTimelineCapability } from "@task-handoff/protocol/control-plane";
-import { compactTimelineForTurn, conversationTimelineTurns, groupTimelineTurns, turnElapsedEnd } from "../src/components/ai-session/timelineActivities.ts";
+import { compactTimelineForTurn, conversationTimelineTurns, groupTimelineTurns, turnElapsedEnd, turnElapsedSeconds } from "../src/components/ai-session/timelineActivities.ts";
 import { shouldDeferTurnTimelineLoad } from "../src/components/ai-session/timelineLoading.ts";
 import { useAiSessionTimelineStore } from "../src/apps/control-plane/useAiSessionTimelineStore.ts";
 
@@ -251,7 +251,14 @@ test("Turn elapsed time ends only at an authoritative terminal timestamp", () =>
   assert.equal(turnElapsedEnd({ status: "running", updatedAt: "2026-08-17T00:00:05.000Z" }), undefined);
   assert.equal(turnElapsedEnd({ status: "waiting", updatedAt: "2026-08-17T00:00:05.000Z" }), undefined);
   assert.equal(turnElapsedEnd({ status: "completed", completedAt: "2026-08-17T00:00:09.000Z", updatedAt: "2026-08-17T00:00:08.000Z" }), "2026-08-17T00:00:09.000Z");
-  assert.equal(turnElapsedEnd({ status: "failed", updatedAt: "2026-08-17T00:00:07.000Z" }), "2026-08-17T00:00:07.000Z");
+  assert.equal(turnElapsedEnd({ status: "failed" }), undefined);
+});
+
+test("Turn elapsed time is unavailable when an inactive Turn has no terminal timestamp", () => {
+  const startedAt = "2026-08-17T00:00:00.000Z";
+  assert.equal(turnElapsedSeconds(startedAt, undefined, false, Date.parse("2026-08-21T00:00:00.000Z")), undefined);
+  assert.equal(turnElapsedSeconds(startedAt, undefined, true, Date.parse("2026-08-17T00:00:09.900Z")), 9);
+  assert.equal(turnElapsedSeconds(startedAt, "2026-08-17T00:00:07.500Z", false, Date.parse("2026-08-21T00:00:00.000Z")), 7);
 });
 
 test("Timeline capabilities are provider-scoped, independent, and queried through the protocol model", () => {
@@ -318,6 +325,8 @@ test("conversation Timeline composes every turn from the same compact result com
   assert.doesNotMatch(history, /runningElapsed|elapsedUnavailable|elapsedSeconds"|elapsedMinutes|elapsedHours|elapsedDays/);
   assert.match(english, /processedSeconds: "Processed in \{seconds\}s"/);
   assert.match(chinese, /processedSeconds: "已处理 \{seconds\}秒"/);
+  assert.match(english, /processedUnavailable: "-"/);
+  assert.match(chinese, /processedUnavailable: "-"/);
   assert.match(timeline, /\.ai-session-timeline-user-message \{[\s\S]*justify-self: end;[\s\S]*width: fit-content;[\s\S]*max-width: min\(78%, 620px\);/);
   assert.match(timeline, /\.ai-session-timeline-message\[data-role="user-message"\] \{[\s\S]*border-radius: 14px;[\s\S]*background: var\(--surface-hover\);[\s\S]*padding: 12px 14px;/);
   assert.doesNotMatch(timeline, /\.ai-session-timeline-message\[data-role="ai-message"\] \{[\s\S]*padding-(?:top|bottom):/);
@@ -393,6 +402,8 @@ test("conversation Timeline composes every turn from the same compact result com
   assert.match(group, /ai-session-activity-title[\s\S]*font-weight: 400;/);
   assert.match(group, /\.ai-session-activity-item-head \{[\s\S]*font-size: 14px;/);
   assert.match(group, /\.ai-session-activity-item-head small \{[\s\S]*font-size: inherit;/);
+  assert.match(group, /\.ai-session-activity-item \{[\s\S]*gap: 0;/);
+  assert.match(group, /\.ai-session-activity-item\[open\] \{ gap: 5px; \}/);
   assert.match(group, /\.ai-session-activity-group > summary small \{[\s\S]*font-size: inherit;[\s\S]*line-height: inherit;/);
   assert.doesNotMatch(group, /sessions\.timeline\.details/);
   assert.match(group, /activity\.activityKind === "fileChange"[\s\S]*activity\.paths\.map\(runtimePathBasename\)/);

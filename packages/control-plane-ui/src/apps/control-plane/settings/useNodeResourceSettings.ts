@@ -1,5 +1,5 @@
 import { computed, ref, watch, type Ref } from "vue";
-import { checkNodeRuntime, createNodeLocalFolder, deleteNodeLocalFolder, deleteNodeRuntime, listNodeFolderTree, useNodeLocalFoldersQuery } from "../../../api/queries";
+import { checkNodeRuntime, createNodeLocalFolder, deleteNodeLocalFolder, deleteNodeRuntime, listNodeFolderPlaces, listNodeFolderTree, useNodeLocalFoldersQuery } from "../../../api/queries";
 import type { InstanceBoardItem, Node, NodeRuntime, SelectableImage } from "../../../api/types";
 import { nativeNodeFolderSelectionResult, nodeFolderSelectionMode, nodePathName } from "../nodePath";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
@@ -49,6 +49,7 @@ export function useNodeResourceSettings({ chooseProjectFolder, clearDefaultRunti
     }),
     errorText,
     loadFolders: listNodeFolderTree,
+    loadPlaces: listNodeFolderPlaces,
     refresh: refreshFolders,
     translate: t,
   });
@@ -186,9 +187,13 @@ export function useNodeResourceSettings({ chooseProjectFolder, clearDefaultRunti
     isControlPlaneLocalNode,
     localNodeId,
     nodeStorageFolderCanConfirm: storageFolderPicker.canConfirm,
+    nodeStorageFolderBreadcrumbs: storageFolderPicker.breadcrumbs,
+    nodeStorageFolderCanGoUp: storageFolderPicker.canGoUp,
+    nodeStorageFolderCurrentPath: storageFolderPicker.currentPath,
     nodeStorageFolderDialogOpen: storageFolderPicker.dialogOpen,
     nodeStorageFolderError: storageFolderPicker.error,
     nodeStorageFolderLoading: storageFolderPicker.loading,
+    nodeStorageFolderPlaces: storageFolderPicker.places,
     nodeStorageFolderRows: storageFolderPicker.rows,
     nodeStorageFolderSelectedPath: storageFolderPicker.selectedPath,
     nodeStorageFolderSubmitError: storageFolderPicker.submitError,
@@ -210,11 +215,12 @@ export function useNodeResourceSettings({ chooseProjectFolder, clearDefaultRunti
     selectedNodeRuntimes,
     selectNode,
     selectNodeStorageFolder: storageFolderPicker.selectFolder,
+    navigateNodeStorageFolder: storageFolderPicker.navigateTo,
+    goUpNodeStorageFolder: storageFolderPicker.goUp,
     setNodeStorageFolderDialogOpen: storageFolderPicker.setOpen,
     submitNodeLocalFolder,
     refreshNodeStorageFolderRoots: () => {
-      const nodeId = storageFolderPicker.targetNode.value?.id;
-      return nodeId ? storageFolderPicker.loadRoots(nodeId) : Promise.resolve();
+      return storageFolderPicker.refresh();
     },
   };
 }

@@ -368,7 +368,11 @@ function testAppInventory(apps, observedAt = new Date().toISOString()) {
 }
 
 test("controlled instance heartbeat protocol rejects legacy receiver projection", () => {
-  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-08-17");
+  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-08-18");
+  // Compatibility for v0.0.21: advancing the current protocol must not relax
+  // the appInventory requirement of an already released wire version.
+  assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: "2026-08-17" }).success, false);
+  assert.equal(ControlledInstanceRegisterSchema.safeParse({ protocolVersion: "2026-08-17" }).success, false);
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, receiver: { status: "running", pendingCount: 1 } }).success, false);
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, apps: { runningCount: 1 } }).success, false);
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, appInventory: emptyAppInventory(), apps: { runningCount: 1 } }).success, true);
@@ -1450,6 +1454,10 @@ function createMockNodeAgentFetch(options = {}) {
     if (path === "/folders/tree") {
       return jsonResponse(options.folderTree || []);
     }
+    if (path === "/folders/places") {
+      if (options.folderPlacesUnsupported) return errorResponse("Folder places are unavailable.", 404, "NOT_FOUND");
+      return jsonResponse(options.folderPlaces || []);
+    }
     if (path === "/local-folders" && init.method === "POST") {
       const folder = {
         id: body.id || `folder_${folders.length + 1}`,
@@ -2349,10 +2357,11 @@ test("control plane mutation route policies never degrade privileged operations 
 });
 
 test("event connection retry timing is bounded, jittered, and safety reconciliation is clamped", () => {
-  assert.equal(eventConnectionRetryDelay(0, () => 0), 750);
-  assert.equal(eventConnectionRetryDelay(1, () => 0.5), 2_000);
-  assert.equal(eventConnectionRetryDelay(10, () => 0.5), 30_000);
-  assert.equal(eventConnectionRetryDelay(10, () => 1), 30_000);
+  assert.equal(eventConnectionRetryDelay(0, () => 0.5), 0);
+  assert.equal(eventConnectionRetryDelay(1, () => 0.5), 250);
+  assert.equal(eventConnectionRetryDelay(2, () => 0), 375);
+  assert.equal(eventConnectionRetryDelay(2, () => 0.5), 500);
+  assert.equal(eventConnectionRetryDelay(20, () => 1), 60_000);
   assert.equal(eventConnectionSafetyIntervalMs(1_000), 30_000);
   assert.equal(eventConnectionSafetyIntervalMs(50_000), 50_000);
   assert.equal(eventConnectionSafetyIntervalMs(120_000), 60_000);
@@ -2369,19 +2378,38 @@ test("event connection retry timer resets after success and cancels removal clea
   const clearTimeoutFn = (handle) => cleared.push(handle);
   const retry = new EventConnectionRetryTimer();
 
-  assert.deepEqual(retry.schedule(() => undefined, { random: () => 0.5, setTimeoutFn }), { attempt: 1, delay: 1_000 });
+  assert.deepEqual(retry.schedule(() => undefined, { setTimeoutFn }), { attempt: 1, delay: 0 });
   assert.equal(retry.pending, true);
   assert.equal(retry.schedule(() => undefined, { random: () => 0.5, setTimeoutFn }), undefined);
   scheduled[0].callback();
   assert.equal(retry.pending, false);
-  assert.deepEqual(retry.schedule(() => undefined, { random: () => 0.5, setTimeoutFn }), { attempt: 2, delay: 2_000 });
+  assert.deepEqual(retry.schedule(() => undefined, { setTimeoutFn }), { attempt: 2, delay: 250 });
   retry.reset(clearTimeoutFn);
   assert.equal(retry.attempts, 0);
   assert.equal(cleared.includes(scheduled[1]), true);
-  assert.deepEqual(retry.schedule(() => undefined, { random: () => 0.5, setTimeoutFn }), { attempt: 1, delay: 1_000 });
+  assert.deepEqual(retry.schedule(() => undefined, { setTimeoutFn }), { attempt: 1, delay: 0 });
   retry.cancel(clearTimeoutFn);
   assert.equal(retry.pending, false);
   assert.equal(cleared.includes(scheduled[2]), true);
+});
+
+test("event connection retry timer reconnects immediately before the shared exponential backoff", () => {
+  const scheduled = [];
+  const setTimeoutFn = (callback, delay) => {
+    const handle = { callback, delay };
+    scheduled.push(handle);
+    return handle;
+  };
+  const retry = new EventConnectionRetryTimer();
+  const options = { setTimeoutFn };
+
+  assert.deepEqual(retry.schedule(() => undefined, options), { attempt: 1, delay: 0 });
+  scheduled[0].callback();
+  assert.deepEqual(retry.schedule(() => undefined, options), { attempt: 2, delay: 250 });
+  scheduled[1].callback();
+  const third = retry.schedule(() => undefined, options);
+  assert.equal(third.attempt, 3);
+  assert.ok(third.delay >= 375 && third.delay <= 625);
 });
 
 test("instance event connections reconcile immediately, clean retries on removal, and safety-repair missed lifecycle changes", () => {
@@ -2444,6 +2472,72 @@ test("instance event connections reconcile immediately, clean retries on removal
   instances.push({ id: "inst_immediate", target: { api: "http://127.0.0.1:18082" } });
   forwarder.syncNow();
   assert.equal(sockets.length, 3);
+  forwarder.stop();
+});
+
+test("instance event reconnect backoff resets only after a valid stream handshake", () => {
+  const sockets = [];
+  const scheduled = [];
+  class FakeSocket extends EventEmitter {
+    constructor() {
+      super();
+      this.readyState = WebSocket.CONNECTING;
+      this.sent = [];
+    }
+    send(value) { this.sent.push(String(value)); }
+    close() {}
+  }
+  const instance = {
+    id: "inst_handshake_retry",
+    ready: true,
+    status: "running",
+    health: "ok",
+    connectionStatus: "online",
+    target: { status: "reachable", api: "http://127.0.0.1:18083" },
+  };
+  const forwarder = new NodeAgentInstanceEventForwarder(
+    { listInstances: () => [instance] },
+    undefined,
+    {
+      createSocket: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+      setIntervalFn: () => ({ kind: "interval" }),
+      clearIntervalFn: () => undefined,
+      setTimeoutFn: (callback, delay) => {
+        const handle = { callback, delay, unref() {} };
+        scheduled.push(handle);
+        return handle;
+      },
+    },
+  );
+  const output = new EventEmitter();
+  output.readyState = WebSocket.OPEN;
+  output.send = () => undefined;
+  forwarder.addOutput(output);
+
+  sockets[0].readyState = WebSocket.OPEN;
+  sockets[0].emit("open");
+  sockets[0].emit("message", JSON.stringify({ type: "streams.hello", payload: { protocolVersion: 2, streams: [] } }));
+  sockets[0].emit("close");
+  assert.equal(scheduled[0].delay, 0);
+
+  scheduled[0].callback();
+  sockets[1].readyState = WebSocket.OPEN;
+  sockets[1].emit("open");
+  sockets[1].emit("message", JSON.stringify({ type: "streams.hello", payload: { protocolVersion: 2, streams: [] } }));
+  sockets[1].emit("close");
+  assert.equal(scheduled[1].delay, 250);
+
+  scheduled[1].callback();
+  sockets[2].readyState = WebSocket.OPEN;
+  sockets[2].emit("open");
+  sockets[2].emit("message", JSON.stringify({ type: "streams.hello", payload: { protocolVersion: 1, streams: [] } }));
+  sockets[2].emit("close");
+  assert.equal(scheduled[2].delay, 0);
+
   forwarder.stop();
 });
 
@@ -8724,9 +8818,10 @@ test("node agent proxies instance websocket subprotocols", async (t) => {
 
 test("control plane checks node agent runtime targets and lists their images", async (t) => {
   const timestamp = new Date().toISOString();
-  const mock = createMockNodeAgentFetch({
+  const nodeAgentOptions = {
     nodeId: "node_agent",
     health: {
+      capabilities: { folderPlaces: true },
       build: {
         component: "node-agent",
         packageName: "@task-handoff/node-agent",
@@ -8770,7 +8865,12 @@ test("control plane checks node agent runtime targets and lists their images", a
         ],
       },
     ],
-  });
+    folderPlaces: [
+      { kind: "home", name: "builder", path: "/home/builder" },
+      { kind: "root", name: "/", path: "/" },
+    ],
+  };
+  const mock = createMockNodeAgentFetch(nodeAgentOptions);
   const app = await createControlPlaneApp({
     dataDir: tempDataDir("control-plane-runtime-check"),
     logger: false,
@@ -8811,6 +8911,7 @@ test("control plane checks node agent runtime targets and lists their images", a
     role: "node-agent",
     nodeId: "node_agent",
     protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+    capabilities: { folderPlaces: true },
     build: {
       component: "node-agent",
       packageName: "@task-handoff/node-agent",
@@ -8843,12 +8944,25 @@ test("control plane checks node agent runtime targets and lists their images", a
   const folders = await json(app, "GET", "/api/nodes/node_agent/folders/tree?path=%2Fworkspace&depth=1");
   assert.equal(folders.statusCode, 200);
   assert.equal(folders.body.data[0].children[0].path, "/workspace/project");
+  const places = await json(app, "GET", "/api/nodes/node_agent/folders/places");
+  assert.equal(places.statusCode, 200);
+  assert.deepEqual(places.body.data, [
+    { kind: "home", name: "builder", path: "/home/builder" },
+    { kind: "root", name: "/", path: "/" },
+  ]);
+  nodeAgentOptions.folderPlacesUnsupported = true;
+  const legacyPlaces = await json(app, "GET", "/api/nodes/node_agent/folders/places");
+  assert.equal(legacyPlaces.statusCode, 200);
+  assert.deepEqual(legacyPlaces.body.data, [{ kind: "root", name: "workspace", path: "/workspace" }]);
   assert.deepEqual(mock.requests.map((request) => [request.method, request.url, Boolean(request.headers["x-taskhandoff-signature"]), request.headers.authorization]), [
     ["GET", "http://agent.example:8091/api/node-agent/health", true, undefined],
     ["GET", "http://agent.example:8091/api/node-agent/health", true, undefined],
     ["GET", "http://agent.example:8091/api/node-agent/runtimes", true, undefined],
     ["GET", "http://agent.example:8091/api/node-agent/docker/images", true, undefined],
     ["GET", "http://agent.example:8091/api/node-agent/folders/tree?path=%2Fworkspace&depth=1", true, undefined],
+    ["GET", "http://agent.example:8091/api/node-agent/folders/places", true, undefined],
+    ["GET", "http://agent.example:8091/api/node-agent/folders/places", true, undefined],
+    ["GET", "http://agent.example:8091/api/node-agent/folders/tree?depth=0", true, undefined],
   ]);
 });
 
@@ -9180,11 +9294,12 @@ test("persisted control-plane access suppresses the bootstrap reverse tunnel", a
   await withTimeout(attempted, "persisted reverse tunnel attempt");
   await new Promise((resolve) => setTimeout(resolve, 100));
 
-  assert.equal(attempts, 1);
+  assert.equal(attempts, 2, "one configured tunnel should make its initial and immediate retry attempts");
+  const attemptsBeforeRemoval = attempts;
   assert.equal(identity.deleteControlPlaneConnection(pending.connection.id), true);
   manager.connectConfigured();
   await new Promise((resolve) => setTimeout(resolve, 100));
-  assert.equal(attempts, 1);
+  assert.equal(attempts, attemptsBeforeRemoval, "persisted access should continue suppressing a bootstrap tunnel");
   manager.closeAll();
 });
 
@@ -9274,13 +9389,15 @@ test("deleting a node agent control-plane connection cancels its pending reverse
   manager.connectConfigured();
   await withTimeout(attempted, "deleted reverse tunnel initial attempt");
   await new Promise((resolve) => setTimeout(resolve, 50));
-  assert.equal(attempts, 1);
+  assert.equal(attempts, 2, "the first failed connection should be retried immediately");
 
   const connections = await fetchNodeAgentIpc(ipcPath, "/control-plane-connections");
   assert.equal(connections.status, 200);
   const connectionState = (await connections.json()).data[0];
   assert.equal(connectionState.id, pending.connection.id);
   assert.equal(connectionState.status, "reconnecting");
+  assert.equal(connectionState.consecutiveReconnects, 2);
+  assert.ok(connectionState.nextRetryAt);
   assert.ok(connectionState.lastDisconnectedAt);
 
   const pairingInUse = await fetchNodeAgentIpc(ipcPath, `/control-plane-pairings/${encodeURIComponent(pending.pairing.keyId)}`, {
@@ -9299,7 +9416,7 @@ test("deleting a node agent control-plane connection cancels its pending reverse
   assert.equal(storedAfterDelete.controlPlanePairings.length, 1);
 
   await new Promise((resolve) => setTimeout(resolve, 1_400));
-  assert.equal(attempts, 1);
+  assert.equal(attempts, 2, "deleting the connection should cancel its remaining backoff retries");
 });
 
 test("control plane accepts node agent reverse tunnel handshake", async (t) => {

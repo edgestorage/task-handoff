@@ -14,6 +14,7 @@ import { mentionTokenAt, reconcileMentionBindings, replaceMentionToken, type AiS
 import { commandTokenAt, matchingCommands, parseAiSessionCommand, replaceCommandToken, type AiSessionCommandCandidate } from "./commands";
 import { useAiSessionMentions, type AiSessionMentionContext } from "./useAiSessionMentions";
 import { useAiSessionPermissionMode } from "../../apps/control-plane/useAiSessionPermissionMode";
+import { showControlPlaneToast } from "../../apps/control-plane/useControlPlaneToasts";
 
 export type AiSessionComposerAttachment = {
   id: string;
@@ -35,8 +36,8 @@ const props = defineProps<{
   modelValue: string;
   attachments?: AiSessionComposerAttachment[];
   busy?: boolean;
+  disabled?: boolean;
   canInterrupt?: boolean;
-  error?: string;
   placeholder?: string;
   mentionBindings?: AiSessionMentionBinding[];
   mentionContext?: AiSessionMentionContext;
@@ -72,7 +73,6 @@ const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 const MAX_INLINE_FILE_BYTES = 500 * 1024;
 const MAX_TOTAL_ATTACHMENT_BYTES = 40 * 1024 * 1024;
 const SUPPORTED_IMAGE_MIME = new Set(["image/bmp", "image/gif", "image/jpeg", "image/png", "image/webp"]);
-const attachmentError = ref("");
 const composerEl = ref<HTMLFormElement>();
 const inputEl = ref<unknown>();
 const attachments = computed(() => props.attachments || []);
@@ -97,8 +97,8 @@ const groupedMentionCandidates = computed(() => mentionKinds.map((kind) => ({
 })).filter((group) => group.candidates.length || group.diagnostics.length));
 const hasDraft = computed(() => props.modelValue.trim().length > 0 || attachments.value.length > 0);
 const actionKind = computed(() => editing.value ? "save" : hasDraft.value || !props.canInterrupt ? "send" : "stop");
-const canRun = computed(() => editing.value ? props.modelValue.trim().length > 0 : hasDraft.value || (!props.busy && props.canInterrupt));
-const canSteer = computed(() => !editing.value && props.busy && hasDraft.value);
+const canRun = computed(() => !props.disabled && (editing.value ? props.modelValue.trim().length > 0 : hasDraft.value || (!props.busy && props.canInterrupt)));
+const canSteer = computed(() => !editing.value && props.sessionBusy && hasDraft.value);
 const actionTitle = computed(() => {
   if (props.busy) {
     return actionKind.value === "stop"
@@ -201,31 +201,31 @@ function validateFiles(files: File[], runtimePathFiles: Set<File>, outsideWorksp
     const mime = file.type || (kind === "image" ? "image/png" : "application/octet-stream");
     const usesRuntimePath = runtimePathFiles.has(file);
     if (kind === "image" && !SUPPORTED_IMAGE_MIME.has(mime)) {
-      attachmentError.value = t("sessions.composer.supportedImages");
+      showControlPlaneToast(t("sessions.composer.supportedImages"));
       continue;
     }
     if (file.size <= 0) {
-      attachmentError.value = t("sessions.composer.emptyFile");
+      showControlPlaneToast(t("sessions.composer.emptyFile"));
       continue;
     }
     if (!usesRuntimePath && kind === "image" && file.size > MAX_ATTACHMENT_BYTES) {
-      attachmentError.value = t("sessions.composer.imageTooLarge");
+      showControlPlaneToast(t("sessions.composer.imageTooLarge"));
       continue;
     }
     if (!usesRuntimePath && kind === "file" && file.size >= MAX_INLINE_FILE_BYTES) {
-      attachmentError.value = outsideWorkspaceFiles.has(file)
+      showControlPlaneToast(outsideWorkspaceFiles.has(file)
         ? t("sessions.composer.runtimePathOutside")
         : props.mentionContext?.runtimeType === "local"
           ? t("sessions.composer.browserPathUnavailable")
-        : t("sessions.composer.fileTooLarge");
+        : t("sessions.composer.fileTooLarge"));
       continue;
     }
     if (attachments.value.length + accepted.length >= MAX_ATTACHMENTS) {
-      attachmentError.value = t("sessions.composer.tooManyAttachments");
+      showControlPlaneToast(t("sessions.composer.tooManyAttachments"));
       continue;
     }
     if (!usesRuntimePath && nextBytes + file.size > MAX_TOTAL_ATTACHMENT_BYTES) {
-      attachmentError.value = t("sessions.composer.totalTooLarge");
+      showControlPlaneToast(t("sessions.composer.totalTooLarge"));
       continue;
     }
     if (!usesRuntimePath) nextBytes += file.size;
@@ -257,7 +257,6 @@ async function addFiles(files: File[]) {
     return;
   }
   void Promise.all(accepted.map((file) => readAttachment(file, runtimePaths.get(file)))).then((items) => {
-    attachmentError.value = "";
     emit("update:attachments", [...attachments.value, ...items]);
   });
 }
@@ -314,7 +313,6 @@ function removeAttachment(id: string) {
   if (props.busy) {
     return;
   }
-  attachmentError.value = "";
   emit("update:attachments", attachments.value.filter((attachment) => attachment.id !== id));
 }
 
@@ -361,6 +359,14 @@ function submit() {
 function handleInputKeydown(event: KeyboardEvent) {
   if (props.busy) return;
   if (event.isComposing) return;
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    const moved = moveActiveMention(event.key === "ArrowDown" ? 1 : -1);
+    if (moved) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+    return;
+  }
   if (commandOpen.value) {
     const command = commandCandidates.value[activeCommandIndex.value];
     if ((event.key === "Enter" || event.key === "Tab") && command && !(props.sessionBusy && command.requiresIdle)) {
@@ -394,19 +400,20 @@ function handleInputKeydown(event: KeyboardEvent) {
 }
 
 function moveActiveMention(direction: 1 | -1) {
-  if (props.busy) return;
+  if (props.busy) return false;
   if (commandOpen.value) {
     const length = commandCandidates.value.length;
-    if (!length) return;
+    if (!length) return false;
     activeCommandIndex.value = (activeCommandIndex.value + direction + length) % length;
     void nextTick(() => document.querySelector(".ai-session-mention-popover__item--active")?.scrollIntoView({ block: "nearest" }));
-    return;
+    return true;
   }
-  if (!mentions.open.value) return;
+  if (!mentions.open.value) return false;
   const length = mentions.candidates.value.length;
-  if (!length) return;
+  if (!length) return false;
   activeMentionIndex.value = (activeMentionIndex.value + direction + length) % length;
   void nextTick(() => document.querySelector(".ai-session-mention-popover__item--active")?.scrollIntoView({ block: "nearest" }));
+  return true;
 }
 
 function handleComposerInput(event: Event) {
@@ -574,8 +581,6 @@ watch(() => props.busy, (busy) => {
             :disabled="busy"
             :placeholder="placeholder || t('sessions.composer.followUp')"
             rows="3"
-            @keydown.down.stop.prevent="moveActiveMention(1)"
-            @keydown.up.stop.prevent="moveActiveMention(-1)"
             @keydown="handleInputKeydown"
             @input="handleComposerInput"
             @click="updateOverlayMenu()"
@@ -729,7 +734,6 @@ watch(() => props.busy, (busy) => {
         </button>
       </div>
     </div>
-    <p v-if="attachmentError || error" class="ai-session-composer__error">{{ attachmentError || error }}</p>
   </form>
 </template>
 
@@ -1092,16 +1096,6 @@ watch(() => props.busy, (busy) => {
 .ai-session-composer__primary:disabled {
   cursor: not-allowed;
   opacity: 0.55;
-}
-
-.ai-session-composer__error {
-  flex: 0 0 auto;
-  margin: 0;
-  padding: 0 14px 10px;
-  color: var(--ai-composer-danger, var(--status-danger));
-  font-size: 12px;
-  line-height: 1.4;
-  overflow-wrap: anywhere;
 }
 
 :global(.ai-session-mention-popover) {

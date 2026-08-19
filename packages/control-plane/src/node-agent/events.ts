@@ -57,8 +57,9 @@ export class NodeAgentInstanceEventForwarder {
   private readonly createSocket: (url: string, options: { headers?: { authorization: string } }) => WebSocket;
   private readonly setIntervalFn: typeof setInterval;
   private readonly clearIntervalFn: typeof clearInterval;
+  private readonly setTimeoutFn: typeof setTimeout;
 
-  constructor(state: NodeAgentInstanceEventState, token?: string, options: { logger?: Logger; safetyIntervalMs?: number; createSocket?: NodeAgentInstanceEventForwarder["createSocket"]; setIntervalFn?: typeof setInterval; clearIntervalFn?: typeof clearInterval } = {}) {
+  constructor(state: NodeAgentInstanceEventState, token?: string, options: { logger?: Logger; safetyIntervalMs?: number; createSocket?: NodeAgentInstanceEventForwarder["createSocket"]; setIntervalFn?: typeof setInterval; clearIntervalFn?: typeof clearInterval; setTimeoutFn?: typeof setTimeout } = {}) {
     this.state = state;
     this.token = token;
     this.logger = options.logger;
@@ -66,6 +67,7 @@ export class NodeAgentInstanceEventForwarder {
     this.createSocket = options.createSocket || ((url, socketOptions) => new WebSocket(url, socketOptions));
     this.setIntervalFn = options.setIntervalFn || setInterval;
     this.clearIntervalFn = options.clearIntervalFn || clearInterval;
+    this.setTimeoutFn = options.setTimeoutFn || setTimeout;
   }
 
   start() {
@@ -251,7 +253,6 @@ export class NodeAgentInstanceEventForwarder {
     this.socketUrls.set(instanceId, url);
     socket.on("open", () => {
       const retry = this.retries.get(instanceId);
-      retry?.timer.reset();
       this.retries.set(instanceId, { timer: retry?.timer || new EventConnectionRetryTimer(), url });
       if (socket.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ v: 1, type: "subscribe", topics: [AiSessionEventTopic, "app.sessions", "apps", "instances"] }));
@@ -271,6 +272,10 @@ export class NodeAgentInstanceEventForwarder {
           socket.close(1002, "Incompatible session stream handshake.");
           return;
         }
+        // Transport open is not recovery: a peer can repeatedly accept the
+        // socket and then reject or omit the authoritative stream handshake.
+        // Reset only after the current protocol handshake has succeeded.
+        this.retries.get(instanceId)?.timer.reset();
         const encoded = JSON.stringify({ type: "node-agent.streams.hello", instanceId, payload: hello.data });
         for (const output of this.outputs) if (output.readyState === WebSocket.OPEN) output.send(encoded);
         return;
@@ -310,7 +315,7 @@ export class NodeAgentInstanceEventForwarder {
     current.url = url;
     const scheduled = current.timer.schedule(() => {
       if (!this.sockets.has(instanceId)) this.connect(instanceId, url);
-    });
+    }, { setTimeoutFn: this.setTimeoutFn });
     if (scheduled) {
       this.reconnectAttempts += 1;
       this.logger?.info?.({ instanceId, url, attempt: scheduled.attempt, delay: scheduled.delay, reconnectAttempts: this.reconnectAttempts }, "session-stream.connection.reconnect-scheduled");

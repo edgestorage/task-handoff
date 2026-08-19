@@ -130,6 +130,7 @@
         :app-launch-menu-open="appLaunchMenuOpen"
         :can-launch-app="canLaunchApp"
         :copied-text="copiedText"
+        :choose-project-folder="chooseProjectFolder"
         :instance="instance"
         :instance-sidebar-visible="instanceSidebarVisible"
         :is-instance-action-busy="isInstanceActionBusy"
@@ -208,6 +209,7 @@ import type { SessionPaneId } from "./useActiveInstanceSessions";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 import { connectionStatusKeys, instanceStatusKeys, translateStatus } from "../../../i18n/status";
 import { translateApiError } from "../../../i18n/apiError";
+import type { NativeNodeFolderPicker } from "../nodePath";
 
 const { t } = useI18n();
 const instanceStatusLabel = (status: string) => translateStatus(instanceStatusKeys, status, t);
@@ -227,6 +229,7 @@ const props = defineProps<{
   appLaunchMenuOpen: boolean;
   canLaunchApp: boolean;
   copiedText: string;
+  chooseProjectFolder?: NativeNodeFolderPicker;
   error?: string;
   instance?: InstanceWithAiSessions;
   instanceDisplayName: (instance: InstanceBoardItem) => string;

@@ -174,6 +174,9 @@ export function registerNodeRoutes({
   app.get("/api/nodes/:id/local-folders", async (request, reply) => withRequestSignal(request, reply, async (signal) => ({
     data: await service.listNodeLocalFolders(IdParamsSchema.parse(request.params).id, signal),
   })));
+  app.get("/api/nodes/:id/folders/places", async (request) => ({
+    data: await service.listNodeFolderPlaces(IdParamsSchema.parse(request.params).id),
+  }));
   app.get("/api/nodes/:id/folders/tree", async (request) => {
     const params = IdParamsSchema.parse(request.params);
     const query = NodeFolderTreeQuerySchema.parse(request.query);

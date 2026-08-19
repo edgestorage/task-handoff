@@ -191,10 +191,15 @@ export const instances = {
     create: "创建",
     folders: {
       title: "节点文件夹",
+      quickLocations: "快捷位置",
+      home: "主目录",
+      up: "返回上一级",
+      currentPath: "当前文件夹",
       loading: "正在加载",
       refresh: "刷新",
       loadingFolders: "正在加载文件夹...",
       empty: "此节点未报告任何文件夹。",
+      emptyDirectory: "此文件夹中没有子文件夹。",
     },
     availability: {
       available: "可用",

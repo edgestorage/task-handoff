@@ -28,8 +28,8 @@ test("AI session unread state is pushed once and cleared only by opening details
   assert.match(panel, /watch\(\(\) => \(\{[\s\S]*selectedSession\.value\?\.unread[\s\S]*markAiSessionRead/);
   assert.match(card, /:data-unread="card\.session\.unread \? 'true' : undefined"[\s\S]*?<span v-if="card\.session\.unread" class="ai-session-unread-dot"/);
   assert.match(panel, /:data-unread="session\.unread \? 'true' : undefined"[\s\S]*?<span v-if="session\.unread" class="ai-session-unread-dot"/);
-  assert.match(card, /\.ai-session-unread-dot \{[\s\S]*?position: absolute;[\s\S]*?top: 13px;[\s\S]*?right: 14px;[\s\S]*?background: var\(--status-info\);/);
-  assert.match(panelStyles, /\.ai-session-unread-dot \{[\s\S]*?position: absolute;[\s\S]*?top: 13px;[\s\S]*?right: 14px;[\s\S]*?background: var\(--status-info\);/);
-  assert.match(card, /\.ai-board-card\[data-unread="true"\] \.ai-board-card-tools \{\s*right: 28px;/);
-  assert.match(panelStyles, /\.session-ai-row\[data-unread="true"\] \.session-ai-card-tools \{\s*right: 28px;/);
+  assert.match(card, /\.ai-session-unread-dot \{[\s\S]*?position: absolute;[\s\S]*?top: 13px;[\s\S]*?right: 32px;[\s\S]*?background: var\(--status-info\);/);
+  assert.match(panelStyles, /\.ai-session-unread-dot \{[\s\S]*?position: absolute;[\s\S]*?top: 13px;[\s\S]*?right: 32px;[\s\S]*?background: var\(--status-info\);/);
+  assert.doesNotMatch(card, /ai-board-card-tools/);
+  assert.doesNotMatch(panel, /session-ai-card-tools/);
 });

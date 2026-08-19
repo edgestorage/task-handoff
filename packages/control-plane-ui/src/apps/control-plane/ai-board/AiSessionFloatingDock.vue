@@ -957,10 +957,6 @@ onBeforeUnmount(() => {
   height: 30px;
 }
 
-.ai-board-floating-compose :deep(.ai-session-composer__error) {
-  padding: 0 12px 8px;
-}
-
 @media (max-width: 780px) {
   .ai-board-floating-dock {
     bottom: 12px;

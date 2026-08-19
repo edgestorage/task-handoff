@@ -11,6 +11,19 @@ import type { ControlPlaneAiSessions } from "./ai-sessions.ts";
 export type AiSessionStatusGroup = "waiting" | "problem" | "active" | "idle";
 export type AiSessionStreamingMessageStatus = "streaming" | "complete" | "waiting" | "failed" | "interrupted";
 
+export function aiSessionElapsedSeconds(
+  startedAt: string | undefined,
+  endedAt: string | undefined,
+  active: boolean,
+  now = Date.now(),
+) {
+  if (!startedAt || (!endedAt && !active)) return undefined;
+  const startedAtMs = Date.parse(startedAt);
+  const endedAtMs = endedAt ? Date.parse(endedAt) : now;
+  if (!Number.isFinite(startedAtMs) || !Number.isFinite(endedAtMs) || endedAtMs < startedAtMs) return undefined;
+  return Math.floor((endedAtMs - startedAtMs) / 1_000);
+}
+
 export type AiSessionMessageIdentity = {
   instanceId: string;
   sessionId: string;

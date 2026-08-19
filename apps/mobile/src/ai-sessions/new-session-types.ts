@@ -3,12 +3,22 @@ import type { RepositoryAiSessionWorkspace } from '@task-handoff/protocol/reposi
 import type { ControlPlaneInstanceDirectoryEntry, ControlPlaneNodeDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
 import type { ControlPlaneNodeLocalFolder } from '@task-handoff/control-plane-client';
 
+type InstanceWorkspaceSource = { type: string; localFolderId?: string; path?: string };
+export const INSTANCE_WORKSPACE_FOLDER_ID = "__instance_workspace__";
+
+export type AiSessionFolderOption = {
+  id: string;
+  cwdFolderId?: string;
+  name: string;
+  path: string;
+};
+
 export type NewSessionFormProps = {
   instances: readonly ControlPlaneInstanceDirectoryEntry[];
   nodes: readonly ControlPlaneNodeDirectoryEntry[];
   selectedInstanceId: string;
   selectedInstance?: ControlPlaneInstanceDirectoryEntry;
-  folders: readonly ControlPlaneNodeLocalFolder[];
+  folders: readonly AiSessionFolderOption[];
   selectedAgent: string;
   selectedFolderId?: string;
   workspace?: RepositoryAiSessionWorkspace;
@@ -38,6 +48,40 @@ export type NewSessionFormProps = {
 export function initialInstanceId(instances: readonly ControlPlaneInstanceDirectoryEntry[], requested?: string) {
   if (requested && instances.some((instance) => instance.id === requested)) return requested;
   return instances.find(canCreateSession)?.id ?? instances[0]?.id ?? '';
+}
+
+export function defaultAiSessionFolderId(
+  source: InstanceWorkspaceSource | undefined,
+  workspacePath: string | undefined,
+  folders: readonly Pick<ControlPlaneNodeLocalFolder, 'id' | 'path'>[],
+) {
+  if (source?.type !== 'local-folder') return workspacePath?.trim() ? INSTANCE_WORKSPACE_FOLDER_ID : undefined;
+  if (source.localFolderId && folders.some((folder) => folder.id === source.localFolderId)) return source.localFolderId;
+  const sourcePath = normalizeFolderPath(source.path);
+  return sourcePath ? folders.find((folder) => normalizeFolderPath(folder.path) === sourcePath)?.id : undefined;
+}
+
+export function aiSessionFolderOptions(
+  source: InstanceWorkspaceSource | undefined,
+  workspacePath: string | undefined,
+  folders: readonly Pick<ControlPlaneNodeLocalFolder, 'id' | 'name' | 'path'>[],
+): AiSessionFolderOption[] {
+  if (source?.type === 'local-folder') {
+    return folders.map((folder) => ({ ...folder, cwdFolderId: folder.id }));
+  }
+  const path = workspacePath?.trim();
+  return path ? [{ id: INSTANCE_WORKSPACE_FOLDER_ID, name: folderPathName(path), path }] : [];
+}
+
+function normalizeFolderPath(value: string | undefined) {
+  const path = value?.trim() || '';
+  if (!path || /^\/+$/u.test(path) || /^[A-Za-z]:[\\/]*$/u.test(path)) return path;
+  return path.replace(/[\\/]+$/u, '');
+}
+
+function folderPathName(value: string) {
+  const normalized = value.replace(/[\\/]+$/u, '');
+  return normalized.split(/[\\/]+/u).filter(Boolean).at(-1) || value;
 }
 
 export function canCreateSession(instance: ControlPlaneInstanceDirectoryEntry) {

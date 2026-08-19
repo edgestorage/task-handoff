@@ -29,7 +29,7 @@ describe('<NewSessionForm />', () => {
       instances={[instance]}
       nodes={[node]}
       selectedInstance={instance}
-      folders={[{ id: 'folder-1', nodeId: 'node-1', name: 'Mobile', path: '/workspace/mobile', labels: {}, createdAt: '2026-08-06T00:00:00.000Z', updatedAt: '2026-08-06T00:00:00.000Z' }]}
+      folders={[{ id: 'folder-1', cwdFolderId: 'folder-1', name: 'Mobile', path: '/workspace/mobile' }]}
       selectedInstanceId={instance.id}
       selectedAgent="codex"
       selectedFolderId="folder-1"
@@ -67,6 +67,7 @@ describe('<NewSessionForm />', () => {
     expect(screen.getByText('Local workspace')).toBeTruthy();
     expect(screen.getByText('Codex')).toBeTruthy();
     expect(screen.getByText('Mobile')).toBeTruthy();
+    expect(screen.queryByText('Default workspace')).toBeNull();
     expect(screen.getByText('Current folder')).toBeTruthy();
     expect(screen.getByText('main')).toBeTruthy();
     expect(screen.getByDisplayValue('Build the mobile flow')).toBeTruthy();
@@ -142,7 +143,7 @@ describe('<NewSessionForm />', () => {
       instances={[instance]}
       nodes={[node]}
       selectedInstance={instance}
-      folders={[{ id: 'folder-1', nodeId: 'node-1', name: 'Mobile', path: '/workspace/mobile', labels: {}, createdAt: '2026-08-06T00:00:00.000Z', updatedAt: '2026-08-06T00:00:00.000Z' }]}
+      folders={[{ id: 'folder-1', cwdFolderId: 'folder-1', name: 'Mobile', path: '/workspace/mobile' }]}
       selectedInstanceId={instance.id}
       selectedAgent="codex"
       selectedFolderId="folder-1"
