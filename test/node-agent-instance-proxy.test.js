@@ -84,3 +84,38 @@ test("raw instance proxy cancels a declared oversized upstream response", async 
   assert.equal(response.json().error.code, "INSTANCE_PROXY_RESPONSE_TOO_LARGE");
   assert.equal(cancellations, 1);
 });
+
+test("instance proxy propagates trace id and appends its Server-Timing phase", async (t) => {
+  const diagnostics = [];
+  const app = Fastify({ logger: false });
+  t.after(() => app.close());
+  registerInstanceProxyRoutes(app, {
+    fetchImpl: async (_url, init) => new Response(JSON.stringify({ data: { ok: true } }), {
+      headers: {
+        "content-type": "application/json",
+        "server-timing": "instance_action;dur=12.5",
+        "x-task-handoff-trace-id": init.headers["x-task-handoff-trace-id"],
+      },
+    }),
+    metrics: createInstanceProxyMetrics(),
+    instanceBase: () => "http://instance.invalid",
+    syncModelEnvironment: async () => undefined,
+    diagnostic: (data) => diagnostics.push(data),
+  });
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_proxy/proxy",
+    payload: {
+      path: "/api/ai-sessions/ais_1/messages",
+      method: "POST",
+      headers: { "content-type": "application/json", "x-task-handoff-trace-id": "trace-message-1" },
+      body: "{}",
+    },
+  });
+
+  assert.equal(response.headers["x-task-handoff-trace-id"], "trace-message-1");
+  assert.match(response.headers["server-timing"], /instance_action;dur=12\.5/);
+  assert.match(response.headers["server-timing"], /node_proxy;dur=/);
+  assert.equal(diagnostics.at(-1).traceId, "trace-message-1");
+});

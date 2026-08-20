@@ -6,7 +6,7 @@ import {
   ProjectSourceSchema,
 } from "@task-handoff/protocol/control-plane";
 import { z } from "zod";
-import { AI_SESSION_HISTORY_MAX_LIMIT, AiSessionPermissionModeSchema } from "@task-handoff/protocol/ai-sessions";
+import { AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS, AI_SESSION_HISTORY_MAX_LIMIT, AiSessionPermissionModeSchema } from "@task-handoff/protocol/ai-sessions";
 
 export * from "../catalog/inputs.ts";
 export * from "../chat/bridges/inputs.ts";
@@ -28,6 +28,7 @@ export const InstanceConfigInputSchema = z.object({
   autoImportAgentConfigs: z.boolean().optional(),
   defaultCodexPermissionMode: AiSessionPermissionModeSchema.optional(),
   aiSessionHistoryLimit: z.number().int().min(1).max(AI_SESSION_HISTORY_MAX_LIMIT).optional(),
+  aiSessionAttachmentRetentionDays: z.number().int().min(0).max(AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS).optional(),
 }).strict();
 
 export const CreateInstanceInputSchema = z.object({

@@ -232,7 +232,7 @@ export class MobileAiSessionStore {
     return applied;
   }
 
-  appendMessageDelta(controlPlaneId: string, event: AiSessionMessageDeltaEvent) {
+  appendMessageDelta(controlPlaneId: string, event: AiSessionMessageDeltaEvent, options: { replay?: boolean } = {}) {
     const current = this.profile(controlPlaneId);
     const identity = {
       instanceId: event.instanceId,
@@ -242,6 +242,7 @@ export class MobileAiSessionStore {
     };
     const key = aiSessionMessageKey(identity);
     const existingMessage = current.messages[key];
+    if (options.replay && existingMessage?.receivedAt && event.generatedAt <= existingMessage.receivedAt) return existingMessage;
     const existing = existingMessage ?? {
       ...identity,
       receivedText: '',

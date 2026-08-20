@@ -28,7 +28,7 @@ const PERSISTED_SESSION_FIELDS = new Set([
 
 const PERSISTED_TOOL_FIELDS = new Set(["id", "kind", "name", "inputPreview", "startedAt"]);
 const PERSISTED_SUB_AGENT_FIELDS = new Set(["threadId", "path", "status", "activity", "message", "updatedAt"]);
-const PERSISTED_QUEUE_ITEM_FIELDS = new Set(["id", "message", "attachments", "references", "permissionMode", "status", "createdAt", "updatedAt", "error"]);
+const PERSISTED_QUEUE_ITEM_FIELDS = new Set(["id", "messageId", "message", "attachments", "references", "permissionMode", "status", "createdAt", "updatedAt", "error"]);
 const PERSISTED_ATTACHMENT_META_FIELDS = new Set(["id", "kind", "name", "mime", "size", "sourceType"]);
 
 function warnUnknownFields(record: Record<string, unknown>, allowed: ReadonlySet<string>, context: string) {

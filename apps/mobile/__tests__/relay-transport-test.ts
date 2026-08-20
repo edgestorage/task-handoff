@@ -32,6 +32,37 @@ test('cloud Relay transport multiplexes events, TTY, cancellation and reconnect 
   await transport.revalidate(); expect(open).toHaveBeenLastCalledWith(expect.objectContaining({ epoch: 2 }));
 });
 
+test('cloud Relay transport aggregates event topics and sends an explicit empty subscription after the last consumer closes', async () => {
+  const { channel, transport } = harness();
+  await transport.request('/api/bootstrap', z.object({ data: z.object({ ok: z.literal(true) }) }));
+  const handlers = (topics?: string[], aiSessionTransient?: any) => ({ topics, aiSessionTransient, onOpen() {}, onEvent() {}, onError() {}, onClose() {} });
+  const transient = { messageDeltas: { allInstances: false, instanceIds: [] }, timelineAllSessions: false, timelineSessions: [] };
+  const ai = transport.connectEvents(handlers(['ai.sessions'], transient));
+  await Promise.resolve(); await Promise.resolve();
+  expect(channel.send).toHaveBeenLastCalledWith({ type: 'event-subscribe', body: { topics: ['ai.sessions'], aiSessionTransient: transient } });
+
+  const nodes = transport.connectEvents(handlers(['nodes']));
+  await Promise.resolve(); await Promise.resolve();
+  expect(channel.send).toHaveBeenLastCalledWith({ type: 'event-subscribe', body: { topics: ['ai.sessions', 'nodes'], aiSessionTransient: transient } });
+
+  ai.close();
+  expect(channel.send).toHaveBeenLastCalledWith({ type: 'event-subscribe', body: { topics: ['nodes'] } });
+  nodes.close();
+  expect(channel.send).toHaveBeenLastCalledWith({ type: 'event-subscribe', body: { topics: [] } });
+});
+
+test('cloud Relay transport preserves wildcard semantics while any consumer omits topics', async () => {
+  const { channel, transport } = harness();
+  await transport.request('/api/bootstrap', z.object({ data: z.object({ ok: z.literal(true) }) }));
+  const wildcard = transport.connectEvents({ onOpen() {}, onEvent() {}, onError() {}, onClose() {} });
+  const nodes = transport.connectEvents({ topics: ['nodes'], onOpen() {}, onEvent() {}, onError() {}, onClose() {} });
+  await Promise.resolve(); await Promise.resolve();
+  expect(channel.send).toHaveBeenLastCalledWith({ type: 'event-subscribe', body: { topics: undefined } });
+  wildcard.close();
+  expect(channel.send).toHaveBeenLastCalledWith({ type: 'event-subscribe', body: { topics: ['nodes'] } });
+  nodes.close();
+});
+
 test('cloud Relay profile cannot inject authorization, cross-origin route or stale binding identity', async () => {
   const first = harness(); await expect(first.transport.request('https://attacker.test/', z.any())).rejects.toMatchObject({ code: 'RELAY_ROUTE_INVALID' });
   await expect(first.transport.request('/api/health', z.any(), { headers: { authorization: 'Bearer stolen' } })).rejects.toMatchObject({ code: 'RELAY_AUTH_HEADER_FORBIDDEN' });

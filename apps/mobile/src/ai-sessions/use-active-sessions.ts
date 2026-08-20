@@ -123,6 +123,22 @@ export function useActiveAiSessionsSnapshot() {
 }
 
 export function useActiveAiSessionView(controlPlaneId: string | undefined, instanceId: string, sessionId: string) {
+  const runtime = useMobileControlPlaneRuntime();
+  const active = useActiveAiSessionsRuntime();
+  useEffect(() => {
+    if (!controlPlaneId || runtime.controlPlaneId !== controlPlaneId || !instanceId || !sessionId || !runtime.coordinator) return;
+    const replaySince = new Date().toISOString();
+    const dispose = runtime.coordinator.registerAiSessionTransientDemand({
+      replaySince,
+      messageDeltas: { allInstances: false, instanceIds: [instanceId] },
+      timelineAllSessions: false,
+      timelineSessions: [{ instanceId, sessionId }],
+    });
+    // The snapshot and source replay form one recovery barrier: the snapshot
+    // covers state before this cursor and replay covers events after it.
+    void active.refresh().catch(() => undefined);
+    return dispose;
+  }, [active, controlPlaneId, instanceId, runtime.controlPlaneId, runtime.coordinator, sessionId]);
   return useSyncExternalStore(
     (listener) => controlPlaneId
       ? mobileAiSessionStore.subscribeSession(controlPlaneId, instanceId, sessionId, listener)

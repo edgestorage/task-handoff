@@ -4,7 +4,8 @@ import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { Readable } from "node:stream";
+import { PassThrough, Readable } from "node:stream";
+import { once } from "node:events";
 import { pipeline } from "node:stream/promises";
 import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
@@ -23,6 +24,7 @@ import { AppRuntimeManager } from "@task-handoff/app-runtime/runtime";
 import type { AppCatalogItem, AppLaunchOptions } from "@task-handoff/app-runtime/types";
 import {
   AiSessionController,
+  AiSessionConversationAttachmentStore,
   AiSessionCreateCoordinator,
   AiSessionForkCoordinator,
   AiSessionCloseCoordinator,
@@ -79,6 +81,7 @@ import {
   AiSessionEventType,
   AiSessionActionResultSchema,
   AiSessionCreateInputSchema,
+  AiSessionCreateRefInputSchema,
   AiSessionCreateResultSchema,
   AiSessionForkInputSchema,
   AiSessionForkResultSchema,
@@ -96,9 +99,13 @@ import {
   AiSessionMessageDeltaEventSchema,
   AiSessionTimelineItemEventSchema,
   type AiSessionEventReason,
+  type AiSessionMessageAttachment,
   type AiSessionSnapshotEvent,
+  type AiSessionStatus,
   type AiSessionsSnapshot,
   AiSessionMessageInputSchema,
+  AiSessionMessageAttachmentSchema,
+  AiSessionMessageRefInputSchema,
   AiSessionCommandInputSchema,
   AiSessionCommandResultSchema,
   AiSessionMentionFileSearchInputSchema,
@@ -456,6 +463,34 @@ function sendAiSessionControlError(reply: { code: (statusCode: number) => { send
   return reply.code(statusCode).send({ error: AiSessionControlErrorSchema.parse({ code, message: error instanceof Error ? error.message : String(error) }) });
 }
 
+function projectConversationAttachmentStates(
+  session: AiSessionStatus,
+  store: AiSessionConversationAttachmentStore,
+): AiSessionStatus {
+  return {
+    ...session,
+    turns: projectConversationAttachmentTurns(session.id, session.turns, store),
+  };
+}
+
+function projectConversationAttachmentTurns<T extends {
+  userMessages?: NonNullable<NonNullable<AiSessionStatus["turns"]>[number]["userMessages"]>;
+}>(
+  sessionId: string,
+  turns: T[] | undefined,
+  store: AiSessionConversationAttachmentStore,
+) {
+  return turns?.map((turn) => ({
+      ...turn,
+      userMessages: turn.userMessages?.map((message) => ({
+        ...message,
+        attachments: message.attachments.map((attachment) => (
+          store.attachmentMetadata(sessionId, message.id, attachment.id) || { ...attachment, contentState: "missing" as const }
+        )),
+      })),
+    }));
+}
+
 function defaultStaticDir() {
   const candidates = [
     path.resolve(process.cwd(), "packages", "controlled-instance-ui", "dist"),
@@ -560,6 +595,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   const appRuntime = options.appRuntime || new AppRuntimeManager(storagePaths);
   appRuntime.replaceManagedEnvironment(managedAppEnvironment(managedModelEnv));
   const app = Fastify({ logger: options.logger ?? true });
+  app.addContentTypeParser("application/octet-stream", (_request, payload, done) => done(null, payload));
   let nodeAgentClient!: NodeAgentRegistrationClient;
   const appManagement = options.appManagement || new AppManagementManager({
     stateDir: path.join(storagePaths.runtimeDir, "app-management"),
@@ -571,14 +607,27 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       if (nodeAgentClient.enabled()) await nodeAgentClient.heartbeat();
     },
   });
-  const aiSessions = options.aiSessionRegistry || createAiSessionRegistry();
   const aiSessionPersistenceSettings = new AiSessionPersistenceSettingsStore(storagePaths, (reason) => {
     app.log.warn({ reason }, "AI session persistence settings were sanitized");
   });
   const initialAiSessionPersistenceSettings = aiSessionPersistenceSettings.get();
+  const aiSessionConversationAttachments = new AiSessionConversationAttachmentStore(storagePaths, {
+    retentionDays: initialAiSessionPersistenceSettings.attachmentRetentionDays,
+    onWarning: (reason) => app.log.warn({ reason }, "AI session conversation attachment was sanitized"),
+  });
+  const attachmentDraftStreams = new Map<string, {
+    source: PassThrough;
+    creation: ReturnType<AiSessionConversationAttachmentStore["createDraft"]>;
+    written: number;
+    timer: NodeJS.Timeout;
+  }>();
+  const aiSessionAttachmentGcTimer = setInterval(() => aiSessionConversationAttachments.gc(), 60 * 60 * 1000);
+  aiSessionAttachmentGcTimer.unref?.();
+  const aiSessions = options.aiSessionRegistry || createAiSessionRegistry({ conversationAttachments: aiSessionConversationAttachments });
   const aiSessionHistory = new AiSessionHistoryStore(storagePaths, {
     limit: initialAiSessionPersistenceSettings.historyLimit,
     onWarning: (warning) => app.log.warn({ warning }, "AI session history entry was sanitized"),
+    onRemove: (sessionId) => aiSessionConversationAttachments.releaseSession(sessionId),
   });
   const aiSessionHistoryLifecycle = new AiSessionHistoryLifecycle(aiSessionHistory);
   const aiSessionController = new AiSessionController(aiSessions);
@@ -603,6 +652,12 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   });
 
   app.addHook("onClose", async () => {
+    clearInterval(aiSessionAttachmentGcTimer);
+    for (const stream of attachmentDraftStreams.values()) {
+      clearTimeout(stream.timer);
+      stream.source.destroy(new Error("Controlled instance is closing."));
+    }
+    attachmentDraftStreams.clear();
     nodeAgentClient.stop();
     triggerManager.stop();
     appRuntime.dispose?.();
@@ -679,10 +734,16 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     message: "Instance registration token is required.",
   }), async (request) => {
     const next = AiSessionPersistenceSettingsInputSchema.parse(request.body || {});
-    aiSessionPersistenceSettings.put(next);
+    const settings = aiSessionPersistenceSettings.put(next);
+    aiSessionConversationAttachments.setRetentionDays(settings.attachmentRetentionDays);
     const history = aiSessionHistory.setRetentionLimit(next.historyLimit);
     retainCodexTimelineHistory();
-    return { data: { applied: true, historyLimit: history.limit, removedHistoryCount: history.removed.length } };
+    return { data: {
+      applied: true,
+      historyLimit: history.limit,
+      attachmentRetentionDays: settings.attachmentRetentionDays,
+      removedHistoryCount: history.removed.length,
+    } };
   });
   const claudeControlSock = new ClaudeControlSockSessionBridge(aiSessions);
   aiSessionController.register(codexAppServer);
@@ -1219,8 +1280,9 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     },
   }));
 
-  app.get("/api/events", { websocket: true }, (socket) => {
-    events.connect(socket);
+  app.get("/api/events", { websocket: true }, (socket, request) => {
+    const query = request.query as { aiSessionTransient?: string };
+    events.connect(socket, { expectsTransientSubscription: query.aiSessionTransient === "1" });
     events.send(socket, SessionStreamsHelloEventType, {
       protocolVersion: SESSION_STREAM_PROTOCOL_VERSION,
       streams: [
@@ -1411,6 +1473,119 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     data: AiSessionHistoryListSchema.parse({ items: aiSessionHistory.list() }),
   }));
 
+  app.post<{ Querystring: Record<string, unknown>; Body: Readable }>("/api/ai-session-attachments/drafts", { bodyLimit: 21 * 1024 * 1024 }, async (request, reply) => {
+    try {
+      const input = z.object({
+        scopeType: z.enum(["session", "create-request"]),
+        scopeId: z.string().trim().min(1).max(160),
+        kind: z.enum(["image", "file"]),
+        name: z.string().trim().min(1).max(240),
+        mime: z.string().trim().min(1).max(120),
+        size: z.coerce.number().int().positive().max(20 * 1024 * 1024),
+      }).strict().parse(request.query);
+      if (input.scopeType === "session" && !aiSessions.get(input.scopeId)) {
+        return reply.code(404).send({ error: { code: "AI_SESSION_NOT_FOUND", message: "AI session not found." } });
+      }
+      const inlineRaster = new Set(["image/bmp", "image/gif", "image/jpeg", "image/png", "image/webp"]);
+      if (input.kind === "image" && !inlineRaster.has(input.mime.toLowerCase())) {
+        return reply.code(400).send({ error: { code: "AI_SESSION_ATTACHMENT_INVALID", message: "Unsupported image MIME type." } });
+      }
+      const draft = await aiSessionConversationAttachments.createDraft({ ...input, source: request.body });
+      return reply.code(201).send({ data: draft });
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
+  app.post<{ Body: unknown }>("/api/ai-session-attachments/draft-streams", async (request, reply) => {
+    try {
+      const input = z.object({
+        attachmentId: z.string().regex(/^cia_[a-f0-9]{24}$/),
+        scopeType: z.enum(["session", "create-request"]),
+        scopeId: z.string().trim().min(1).max(160),
+        kind: z.enum(["image", "file"]),
+        name: z.string().trim().min(1).max(240),
+        mime: z.string().trim().min(1).max(120),
+        size: z.number().int().positive().max(20 * 1024 * 1024),
+      }).strict().parse(request.body);
+      if (input.scopeType === "session" && !aiSessions.get(input.scopeId)) {
+        return reply.code(404).send({ error: { code: "AI_SESSION_NOT_FOUND", message: "AI session not found." } });
+      }
+      if (attachmentDraftStreams.has(input.attachmentId)) {
+        return reply.code(409).send({ error: { code: "AI_SESSION_ATTACHMENT_UPLOAD_EXISTS", message: "AI session attachment upload already exists." } });
+      }
+      const source = new PassThrough({ highWaterMark: 256 * 1024 });
+      const creation = aiSessionConversationAttachments.createDraft({ id: input.attachmentId, ...input, source });
+      // Observe early pipeline failures even before the completing request awaits it.
+      creation.catch(() => undefined);
+      const timer = setTimeout(() => {
+        attachmentDraftStreams.delete(input.attachmentId);
+        source.destroy(new Error("AI session attachment upload expired."));
+      }, 10 * 60 * 1000);
+      timer.unref?.();
+      attachmentDraftStreams.set(input.attachmentId, { source, creation, written: 0, timer });
+      return reply.code(201).send({ data: { attachmentId: input.attachmentId, offset: 0 } });
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
+  app.put<{ Params: { attachmentId: string }; Querystring: { offset?: string }; Body: Readable }>("/api/ai-session-attachments/draft-streams/:attachmentId", { bodyLimit: 512 * 1024 }, async (request, reply) => {
+    try {
+      const stream = attachmentDraftStreams.get(request.params.attachmentId);
+      if (!stream) return reply.code(404).send({ error: { code: "AI_SESSION_ATTACHMENT_UPLOAD_NOT_FOUND", message: "AI session attachment upload not found." } });
+      const offset = z.coerce.number().int().nonnegative().parse(request.query.offset);
+      if (offset !== stream.written) return reply.code(409).send({ error: { code: "AI_SESSION_ATTACHMENT_OFFSET_MISMATCH", message: "AI session attachment upload offset does not match." } });
+      for await (const raw of request.body) {
+        const chunk = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
+        stream.written += chunk.length;
+        if (!stream.source.write(chunk)) await once(stream.source, "drain");
+      }
+      return { data: { attachmentId: request.params.attachmentId, offset: stream.written } };
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
+  app.post<{ Params: { attachmentId: string }; Body: unknown }>("/api/ai-session-attachments/draft-streams/:attachmentId/complete", async (request, reply) => {
+    try {
+      z.object({}).strict().parse(request.body || {});
+      const stream = attachmentDraftStreams.get(request.params.attachmentId);
+      if (!stream) return reply.code(404).send({ error: { code: "AI_SESSION_ATTACHMENT_UPLOAD_NOT_FOUND", message: "AI session attachment upload not found." } });
+      attachmentDraftStreams.delete(request.params.attachmentId);
+      clearTimeout(stream.timer);
+      stream.source.end();
+      const draft = await stream.creation;
+      return { data: draft };
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
+  app.delete<{ Params: { attachmentId: string } }>("/api/ai-session-attachments/draft-streams/:attachmentId", async (request, reply) => {
+    const stream = attachmentDraftStreams.get(request.params.attachmentId);
+    if (!stream) return reply.code(404).send({ error: { code: "AI_SESSION_ATTACHMENT_UPLOAD_NOT_FOUND", message: "AI session attachment upload not found." } });
+    attachmentDraftStreams.delete(request.params.attachmentId);
+    clearTimeout(stream.timer);
+    stream.source.destroy(new Error("AI session attachment upload canceled."));
+    return { data: { removed: true } };
+  });
+
+  app.delete<{ Params: { attachmentId: string }; Querystring: Record<string, unknown> }>("/api/ai-session-attachments/drafts/:attachmentId", async (request, reply) => {
+    try {
+      const scope = z.object({
+        scopeType: z.enum(["session", "create-request"]),
+        scopeId: z.string().trim().min(1).max(160),
+      }).strict().parse(request.query);
+      const removed = aiSessionConversationAttachments.cancelDraft(scope.scopeType, scope.scopeId, request.params.attachmentId);
+      return removed
+        ? { data: { removed: true } }
+        : reply.code(404).send({ error: { code: "AI_SESSION_ATTACHMENT_DRAFT_NOT_FOUND", message: "AI session attachment draft not found or expired." } });
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
   app.get<{ Params: { id: string } }>("/api/ai-sessions/history/:id", async (request, reply) => {
     const detail = aiSessionHistory.detail(request.params.id);
     if (!detail) {
@@ -1419,7 +1594,10 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
         message: "AI session history entry not found.",
       }) });
     }
-    return { data: AiSessionHistoryDetailSchema.parse(detail) };
+    return { data: AiSessionHistoryDetailSchema.parse({
+      ...detail,
+      turns: projectConversationAttachmentTurns(detail.item.id, detail.turns, aiSessionConversationAttachments),
+    }) };
   });
 
   app.post<{ Params: { id: string }; Body: unknown }>("/api/ai-sessions/:id/resume", async (request, reply) => {
@@ -1435,10 +1613,20 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
 
   app.post<{ Body: unknown }>("/api/ai-sessions", { bodyLimit: 64 * 1024 * 1024 }, async (request, reply) => {
     try {
-      const body = AiSessionCreateInputSchema.parse(request.body || {});
+      const referenced = AiSessionCreateRefInputSchema.extend({ cwd: AiSessionCreateInputSchema.shape.cwd }).strict().safeParse(request.body || {});
+      const body = referenced.success ? referenced.data : AiSessionCreateInputSchema.parse(request.body || {});
+      const attachments: AiSessionMessageAttachment[] = [];
+      for (const attachment of body.attachments) {
+        if (attachment.source.type !== "upload-ref") attachments.push(AiSessionMessageAttachmentSchema.parse(attachment));
+      }
+      const draftAttachmentIds = (referenced.success ? referenced.data.attachments : [])
+        .filter((attachment) => attachment.source.type === "upload-ref")
+        .map((attachment) => attachment.id);
       const result = AiSessionCreateResultSchema.parse(await aiSessionCreate.create({
         ...body,
         cwd: body.cwd.path,
+        attachments,
+        ...(draftAttachmentIds.length ? { draftAttachmentIds, draftScopeType: "create-request", draftScopeId: body.clientRequestId } : {}),
       }));
       publishAiSessionSnapshot("control-action");
       return { data: result };
@@ -1482,7 +1670,29 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
 
   app.get<{ Params: { id: string } }>("/api/ai-sessions/:id", async (request, reply) => {
     const session = aiSessions.get(request.params.id);
-    return session ? { data: session } : reply.code(404).send({ error: { code: "AI_SESSION_NOT_FOUND", message: "AI session not found." } });
+    return session ? { data: projectConversationAttachmentStates(session, aiSessionConversationAttachments) } : reply.code(404).send({ error: { code: "AI_SESSION_NOT_FOUND", message: "AI session not found." } });
+  });
+
+  app.get<{ Params: { id: string; messageId: string; attachmentId: string } }>("/api/ai-sessions/:id/messages/:messageId/attachments/:attachmentId/content", async (request, reply) => {
+    try {
+      const content = aiSessionConversationAttachments.content(request.params.id, request.params.messageId, request.params.attachmentId);
+      reply.header("Content-Type", content.attachment.mime);
+      reply.header("Content-Length", String(content.attachment.size));
+      reply.header("ETag", content.etag);
+      // Internal proxy metadata. The control-plane consumes and strips this
+      // header so its derived cache never outlives controlled-instance policy.
+      reply.header("X-Task-Handoff-Attachment-Cache-Until", String(content.cacheUntil));
+      reply.header("X-Task-Handoff-Attachment-Size", String(content.attachment.size));
+      reply.header("Cache-Control", "private, max-age=0, must-revalidate");
+      reply.header("X-Content-Type-Options", "nosniff");
+      reply.header("Accept-Ranges", "none");
+      const inlineRaster = new Set(["image/bmp", "image/gif", "image/jpeg", "image/png", "image/webp"]).has(content.attachment.mime.toLowerCase());
+      reply.header("Content-Disposition", `${inlineRaster ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(content.attachment.name)}`);
+      if (request.headers["if-none-match"] === content.etag) return reply.code(304).send();
+      return reply.send(fs.createReadStream(content.path));
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
   });
 
   app.get<{ Params: { id: string } }>("/api/ai-sessions/:id/timeline", async (request, reply) => {
@@ -1508,7 +1718,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     }
     const afterTurnId = String(request.query.afterTurnId || "").trim();
     const afterRevision = Number(request.query.afterRevision);
-    const turns = session.turns || [];
+    const turns = projectConversationAttachmentStates(session, aiSessionConversationAttachments).turns || [];
     const afterIndex = afterTurnId ? turns.findIndex((entry) => entry.id === afterTurnId) : -1;
     const filtered = turns.filter((turn) => {
       if (!afterTurnId) {
@@ -1545,12 +1755,41 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   });
 
   app.post<{ Params: { id: string }; Body: unknown }>("/api/ai-sessions/:id/messages", { bodyLimit: 64 * 1024 * 1024 }, async (request, reply) => {
+    const startedAt = performance.now();
+    const traceIdHeader = request.headers["x-task-handoff-trace-id"];
+    const traceId = Array.isArray(traceIdHeader) ? traceIdHeader[0] : traceIdHeader;
+    const finishTiming = (outcome: "completed" | "failed") => {
+      const durationMs = performance.now() - startedAt;
+      reply.header("server-timing", `instance_action;dur=${durationMs.toFixed(1)}`);
+      if (traceId && /^[A-Za-z0-9._:-]{1,128}$/.test(traceId)) reply.header("x-task-handoff-trace-id", traceId);
+      request.log.info({ traceId, aiSessionId: request.params.id, outcome, durationMs }, "AI session message action timing");
+    };
     try {
-      const body = AiSessionMessageInputSchema.parse(request.body || {});
-      const result = AiSessionActionResultSchema.parse(await aiSessionController.sendMessage(request.params.id, body));
+      // Compatibility for v0.0.21: accept the prior materialized inline model
+      // while newer control-planes send controlled-instance draft handles.
+      const referenced = AiSessionMessageRefInputSchema.safeParse(request.body || {});
+      const body = referenced.success ? referenced.data : AiSessionMessageInputSchema.parse(request.body || {});
+      const draftAttachmentIds = (referenced.success ? referenced.data.attachments : [])
+        .filter((attachment) => attachment.source.type === "upload-ref")
+        .map((attachment) => attachment.id);
+      const attachments: AiSessionMessageAttachment[] = [];
+      for (const attachment of body.attachments) {
+        if (attachment.source.type !== "upload-ref") attachments.push(AiSessionMessageAttachmentSchema.parse(attachment));
+      }
+      const result = AiSessionActionResultSchema.parse(await aiSessionController.sendMessage(request.params.id, {
+        ...body,
+        attachments,
+        ...(draftAttachmentIds.length ? {
+          draftAttachmentIds,
+          draftScopeType: "session",
+          draftScopeId: request.params.id,
+        } : {}),
+      }));
       publishAiSessionSnapshot("control-action");
+      finishTiming("completed");
       return { data: result };
     } catch (error: unknown) {
+      finishTiming("failed");
       return sendAiSessionControlError(reply, error);
     }
   });

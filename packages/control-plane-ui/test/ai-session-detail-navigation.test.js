@@ -6,6 +6,7 @@ const navigator = fs.readFileSync(new URL("../src/components/ai-session/AiSessio
 const panel = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.vue", import.meta.url), "utf8");
 const floatingDock = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionFloatingDock.vue", import.meta.url), "utf8");
 const board = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionBoardView.vue", import.meta.url), "utf8");
+const conversation = fs.readFileSync(new URL("../src/components/ai-session/AiSessionConversationContent.vue", import.meta.url), "utf8");
 const displayHelpers = fs.readFileSync(new URL("../src/apps/control-plane/useInstanceSessions.ts", import.meta.url), "utf8");
 const repositoryEnvironment = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/RepositoryEnvironment.vue", import.meta.url), "utf8");
 
@@ -39,9 +40,10 @@ test("all viewport sizes share one compact detail actions menu", () => {
 
 test("AI session details render messages without redundant section titles", () => {
   assert.match(panel, /class="session-ai-detail-prompt-content"[\s\S]*?<MarkdownContent :content="displayAiSessionTitle/);
-  assert.match(panel, /<AiSessionResult[\s\S]*?:response-content="displayAiSessionResponse/);
+  assert.match(panel, /<AiSessionConversationContent/);
   assert.match(floatingDock, /class="ai-board-floating-prompt-content"[\s\S]*?<MarkdownContent :content="displayAiSessionTitle/);
-  assert.match(floatingDock, /<AiSessionResult[\s\S]*?:response-content="displayAiSessionResponse/);
+  assert.match(floatingDock, /<AiSessionConversationContent/);
+  assert.match(conversation, /<AiSessionResult[\s\S]*?:response-content="displayAiSessionResponse/);
   for (const detail of [panel, floatingDock]) assert.doesNotMatch(detail, /message-section-title|response-section-title/);
 });
 

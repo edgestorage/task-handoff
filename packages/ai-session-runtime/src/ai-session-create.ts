@@ -18,6 +18,9 @@ export type AiSessionCreateCoordinatorInput = {
   cwdFolderId?: string;
   message: string;
   attachments?: AiSessionMessageAttachment[];
+  draftAttachmentIds?: string[];
+  draftScopeType?: "session" | "create-request";
+  draftScopeId?: string;
   references?: AiSessionReference[];
   permissionMode?: AiSessionPermissionMode;
   clientRequestId: string;
@@ -104,6 +107,9 @@ export class AiSessionCreateCoordinator {
         this.options.controller.startMessage(session.id, {
           message: input.message,
           attachments: input.attachments || [],
+          draftAttachmentIds: input.draftAttachmentIds,
+          draftScopeType: input.draftScopeType,
+          draftScopeId: input.draftScopeId,
           references: input.references || [],
           permissionMode: input.permissionMode,
         }),

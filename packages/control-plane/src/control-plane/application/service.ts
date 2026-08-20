@@ -17,6 +17,7 @@ import {
   sanitizeStoredProject,
   supportsAiSessionPersistenceSettings,
   supportsNodeFolderPlaces,
+  supportsNodeLocalFolderNameUpdate,
   ModelConfigSchema,
   NodeSchema,
   PendingRouteSchema,
@@ -53,6 +54,7 @@ import {
   type AiSessionCreateInput,
   type AiSessionForkInput,
   type AiSessionMessageAttachment,
+  type AiSessionMessageAttachmentRef,
   type AiSessionPermissionMode,
   type AiSessionReference,
   type AiSessionSendMode,
@@ -61,6 +63,7 @@ import {
 import { AppSessionDeltaResponseSchema, AppSessionsStateSchema, emptyAppSessionsSnapshot, type AppSessionDeltaResponse, type AppSessionsSnapshot } from "@task-handoff/protocol/app-sessions";
 import type { RepositoryAiSessionGitSelection } from "@task-handoff/protocol/repository";
 import { AiSessionActionService } from "../sessions/ai-session-actions.ts";
+import type { RequestTimingDiagnostics } from "../../shared/http/server-timing.ts";
 export { assertAiSessionRuntimePathSupport } from "../sessions/ai-session-actions.ts";
 import fs from "node:fs";
 import path from "node:path";
@@ -240,7 +243,7 @@ export class ControlPlaneService {
     });
     this.aiSessionActionService = new AiSessionActionService({
       requireInstance: (instanceId) => this.requireControlledInstance(instanceId, true) as Promise<ControlledInstance>,
-      request: (instance, route, init) => this.instanceRequest(instance, route, init),
+      request: (instance, route, init, onTiming) => this.instanceRequest(instance, route, init, onTiming),
       requireRuntime: (nodeId, runtimeId) => this.requireNodeRuntimeOnNode(nodeId, runtimeId),
       refreshSnapshots: () => Promise.all([
         this.listAppSessions({ refresh: true }),
@@ -679,6 +682,19 @@ export class ControlPlaneService {
     return this.nodeAgentGateway.createLocalFolder(node, input);
   }
 
+  async updateNodeLocalFolder(nodeId: string, folderId: string, input: unknown) {
+    const node = this.requireNode(nodeId);
+    const agentCapabilities = node.capabilities?.agent && typeof node.capabilities.agent === "object"
+      ? (node.capabilities.agent as { capabilities?: unknown }).capabilities
+      : undefined;
+    if (!supportsNodeLocalFolderNameUpdate(agentCapabilities)) {
+      // Compatibility for v0.0.21: older node-agents do not expose local-folder display-name updates.
+      const error = new Error(`Node ${node.id} does not support local folder name updates.`);
+      throw Object.assign(error, { statusCode: 409, code: "NODE_LOCAL_FOLDER_NAME_UPDATE_UNSUPPORTED" });
+    }
+    return this.nodeAgentGateway.updateLocalFolder(node, folderId, input);
+  }
+
   async deleteNodeLocalFolder(nodeId: string, folderId: string) {
     const node = this.requireNode(nodeId);
     return this.nodeAgentGateway.deleteLocalFolder(node, folderId);
@@ -805,9 +821,6 @@ export class ControlPlaneService {
     this.catalogService.requireImage(id);
     const project = this.listProjects().find((item) => item.defaultImageSelection?.imageId === id);
     if (project) throw Object.assign(new Error(`Image ${id} is the default for project ${project.name}.`), { statusCode: 409, code: "IMAGE_IN_USE" });
-    const folders = (await Promise.all(this.listNodes().map((node) => this.nodeAgentGateway.listLocalFolders(node)))).flat();
-    const folder = folders.find((item) => item.defaultImageSelection?.imageId === id);
-    if (folder) throw Object.assign(new Error(`Image ${id} is the default for local folder ${folder.name}.`), { statusCode: 409, code: "IMAGE_IN_USE" });
     const instances = await this.listNodeInstances();
     const instance = instances.find((item) => item.imageSelection?.imageId === id);
     if (instance) throw Object.assign(new Error(`Image ${id} is used by instance ${instance.name}.`), { statusCode: 409, code: "IMAGE_IN_USE" });
@@ -956,6 +969,9 @@ export class ControlPlaneService {
     const node = this.requireNode(current.nodeId);
     if (parsedInput.config?.aiSessionHistoryLimit !== undefined) {
       requireAiSessionHistoryLimitSupport(node, current);
+    }
+    if (parsedInput.config?.aiSessionAttachmentRetentionDays !== undefined) {
+      requireAiSessionAttachmentRetentionSupport(node, current);
     }
     const { modelSelection, ...instancePatch } = parsedInput;
     let instance = Object.keys(instancePatch).length
@@ -1307,7 +1323,8 @@ export class ControlPlaneService {
     return this.aiSessionActionService.resume(instanceId, aiSessionId);
   }
 
-  async createAiSession(instanceId: string, input: Omit<AiSessionCreateInput, "cwd"> & {
+  async createAiSession(instanceId: string, input: Omit<AiSessionCreateInput, "cwd" | "attachments"> & {
+    attachments?: Array<AiSessionMessageAttachment | AiSessionMessageAttachmentRef>;
     cwdFolderId?: string;
     gitSelection?: RepositoryAiSessionGitSelection;
   }) {
@@ -1417,9 +1434,10 @@ export class ControlPlaneService {
     sessionId: string,
     message: string,
     mode?: AiSessionSendMode,
-    attachments: AiSessionMessageAttachment[] = [],
+    attachments: Array<AiSessionMessageAttachment | AiSessionMessageAttachmentRef> = [],
     references: AiSessionReference[] = [],
     permissionMode?: AiSessionPermissionMode,
+    diagnostics?: { traceId: string; onTiming?: (timing: RequestTimingDiagnostics) => void },
   ) {
     return this.aiSessionActionService.sendMessage(
       instanceId,
@@ -1429,6 +1447,7 @@ export class ControlPlaneService {
       attachments,
       references,
       permissionMode,
+      diagnostics,
     );
   }
 
@@ -1446,6 +1465,10 @@ export class ControlPlaneService {
 
   aiSessionQueue(instanceId: string, sessionId: string) {
     return this.aiSessionActionService.queue(instanceId, sessionId);
+  }
+
+  getAiSessionDetail(instanceId: string, sessionId: string) {
+    return this.aiSessionActionService.detail(instanceId, sessionId);
   }
 
   steerAiSessionQueuedMessage(instanceId: string, sessionId: string, queueId: string) {
@@ -1530,8 +1553,13 @@ export class ControlPlaneService {
     return result;
   }
 
-  private async instanceRequest(instance: ControlledInstance, route: string, init: RequestInit = {}) {
-    return this.controlledInstanceGateway.request(instance, route, init);
+  private async instanceRequest(
+    instance: ControlledInstance,
+    route: string,
+    init: RequestInit = {},
+    onTiming?: (diagnostics: RequestTimingDiagnostics) => void,
+  ) {
+    return this.controlledInstanceGateway.request(instance, route, init, onTiming);
   }
 
   private async reportInstanceHeartbeat(instance: ControlledInstance, input: ControlledInstanceHeartbeat) {
@@ -1678,6 +1706,25 @@ function requireAiSessionHistoryLimitSupport(node: Node, instance: ControlledIns
     throw Object.assign(new Error("This instance does not support managed AI session history retention settings."), {
       statusCode: 409,
       code: "AI_SESSION_HISTORY_LIMIT_UNSUPPORTED",
+    });
+  }
+}
+
+function requireAiSessionAttachmentRetentionSupport(node: Node, instance: ControlledInstance) {
+  const agent = node.capabilities.agent;
+  const agentCapabilities = agent && typeof agent === "object" && !Array.isArray(agent)
+    ? (agent as Record<string, unknown>).capabilities
+    : undefined;
+  const nodeSupported = Boolean(
+    agentCapabilities
+    && typeof agentCapabilities === "object"
+    && !Array.isArray(agentCapabilities)
+    && (agentCapabilities as Record<string, unknown>).aiSessionAttachmentRetention === true,
+  );
+  if (!nodeSupported || instance.capabilities.features.aiSessionConversationAttachments?.retentionSettings !== true) {
+    throw Object.assign(new Error("This instance does not support managed AI session attachment retention settings."), {
+      statusCode: 409,
+      code: "AI_SESSION_ATTACHMENT_RETENTION_UNSUPPORTED",
     });
   }
 }

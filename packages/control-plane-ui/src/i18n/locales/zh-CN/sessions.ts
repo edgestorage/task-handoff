@@ -66,7 +66,7 @@ export const sessions = {
   composer: {
     plugins: "插件", skills: "技能", files: "文件", directories: "目录", apps: "应用", stopTurn: "停止当前 AI 回合", send: "发送消息", sending: "正在发送…", stopping: "正在停止…", editingQueuedMessage: "正在编辑排队消息", saveQueuedMessage: "保存排队消息", saving: "正在保存…", cancelQueuedEdit: "取消编辑排队消息",
     askDescription: "访问互联网或编辑工作区外文件前进行询问。", autoReviewDescription: "仅对检测为可能不安全的操作进行询问。",
-    fullAccessDescription: "无需审批即可无限制访问互联网和文件。", localPath: "本地路径", removeAttachment: "移除附件", followUp: "请求后续修改",
+    fullAccessDescription: "无需审批即可无限制访问互联网和文件。", localPath: "本地路径", removeAttachment: "移除附件", previewImage: "预览 {name}", copyImage: "复制图片", imageCopied: "图片已复制", copyImageFailed: "无法复制图片。", uploadProgress: "正在上传：{progress}%", followUp: "请求后续修改",
     noMatches: "没有匹配项", commands: "命令", loading: "正在加载...", openCommands: "打开命令菜单", permissionMode: "权限模式：{mode}", choosePermission: "选择权限模式",
     steerTurn: "追加到当前 AI 回合", availableIdle: "空闲时可用", review: "审查未提交变更", rename: "重命名当前线程", goal: "设置或查看长期目标",
     compact: "总结对话上下文", threadName: "线程名称", objective: "目标",
@@ -91,6 +91,8 @@ export const sessions = {
     loadFailed: "无法加载完整活动。",
     noHistory: "暂无完整会话历史。",
     noActivities: "这条消息之后没有活动。",
+    attachmentExpired: "内容已过期",
+    attachmentMissing: "内容不可用",
     activityCount: "{count} 项 Activity",
     processedUnavailable: "-",
     processedSeconds: "已处理 {seconds}秒",

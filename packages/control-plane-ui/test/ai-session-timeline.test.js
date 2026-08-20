@@ -3,7 +3,6 @@ import fs from "node:fs";
 import test from "node:test";
 import { supportsAiSessionTimelineCapability } from "@task-handoff/protocol/control-plane";
 import { compactTimelineForTurn, conversationTimelineTurns, groupTimelineTurns, turnElapsedEnd, turnElapsedSeconds } from "../src/components/ai-session/timelineActivities.ts";
-import { shouldDeferTurnTimelineLoad } from "../src/components/ai-session/timelineLoading.ts";
 import { useAiSessionTimelineStore } from "../src/apps/control-plane/useAiSessionTimelineStore.ts";
 
 const panelUrl = new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.vue", import.meta.url);
@@ -234,19 +233,6 @@ test("snapshot cache eviction does not delete a newer live Turn bucket", () => {
   store.cleanupInstance(instanceId);
 });
 
-test("latest live Turn defers HTTP Timeline loading until it completes", () => {
-  const completed = { id: "turn-1", status: "completed" };
-  for (const status of ["queued", "running", "waiting"]) {
-    const latest = { id: "turn-2", providerTurnId: "provider-turn-2", status };
-    assert.equal(shouldDeferTurnTimelineLoad([completed, latest], latest, true), true);
-    assert.equal(shouldDeferTurnTimelineLoad([completed, latest], { ...latest, id: "public-alias" }, true), true);
-    assert.equal(shouldDeferTurnTimelineLoad([completed, latest], completed, true), false);
-    assert.equal(shouldDeferTurnTimelineLoad([completed, latest], latest, false), false);
-  }
-  assert.equal(shouldDeferTurnTimelineLoad([completed, { id: "turn-2", status: "completed" }], { id: "turn-2", status: "completed" }, true), false);
-  assert.equal(shouldDeferTurnTimelineLoad([completed, { id: "turn-2", status: "failed" }], { id: "turn-2", status: "failed" }, true), false);
-});
-
 test("Turn elapsed time ends only at an authoritative terminal timestamp", () => {
   assert.equal(turnElapsedEnd({ status: "running", updatedAt: "2026-08-17T00:00:05.000Z" }), undefined);
   assert.equal(turnElapsedEnd({ status: "waiting", updatedAt: "2026-08-17T00:00:05.000Z" }), undefined);
@@ -278,25 +264,47 @@ test("Timeline capabilities are provider-scoped, independent, and queried throug
 test("AI session turns render immediately while Timeline loads per turn", () => {
   const panel = fs.readFileSync(panelUrl, "utf8");
   const result = fs.readFileSync(new URL("../src/components/ai-session/AiSessionResult.vue", import.meta.url), "utf8");
+  const presentation = fs.readFileSync(new URL("../src/apps/control-plane/useAiSessionTimelinePresentation.ts", import.meta.url), "utf8");
+  const conversation = fs.readFileSync(new URL("../src/components/ai-session/AiSessionConversationContent.vue", import.meta.url), "utf8");
   const board = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionCard.vue", import.meta.url), "utf8");
   assert.match(panel, /:turn-timelines="conversationTurnTimelines"/);
   assert.match(panel, /@load-turn-timeline="loadTurnTimeline"/);
-  assert.match(panel, /getAiSessionTurnTimeline\(instanceId, session\.id, turn\.id\)/);
-  assert.match(panel, /async function loadTurnTimeline[\s\S]*shouldDeferTurnTimelineLoad\(turns, turn, supportsAiSessionLiveTimelineItems\.value\)/);
-  assert.match(panel, /if \(!supportsAiSessionTurnTimeline\.value\)[\s\S]*state\.status === "ready" \|\| state\.status === "loading"[\s\S]*loadFullTimelineForSession\(session, true\)/);
+  assert.match(conversation, /<AiSessionTimelineView/);
+  assert.match(presentation, /getAiSessionTurnTimeline\(instanceId, current\.id, turn\.id\)/);
+  assert.doesNotMatch(presentation, /shouldDeferTurnTimelineLoad/);
+  assert.match(presentation, /if \(!supportsTurnRead\.value\)[\s\S]*state\.status === "ready" \|\| state\.status === "loading"[\s\S]*loadFullTimeline\(current, true\)/);
   assert.match(panel, /selectedTimelineTurn\.value\.id}:\$\{selectedTimelineTurn\.value\.status}/);
   assert.match(panel, /class="session-ai-detail-actions-view-mode"[\s\S]*:model-value="effectiveTimelineViewMode"/);
-  assert.match(panel, /supportsAiSessionTimelineCapability/);
+  assert.match(presentation, /supportsAiSessionTimelineCapability/);
   assert.doesNotMatch(panel, /supportsAiSessionTimeline && selectedSession\.agent === 'codex'/);
   const panelStyles = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.css", import.meta.url), "utf8");
   assert.doesNotMatch(panelStyles, /\.session-ai-detail-head-actions \.session-ai-timeline-mode/);
   assert.match(panelStyles, /\.session-ai-detail-actions-view-mode/);
   assert.doesNotMatch(panel, /request-activity-timeline/);
   assert.doesNotMatch(result, /requestActivityTimeline/);
-  assert.match(panel, /selectedTurnTimelineState\.status/);
-  assert.match(panel, /timelineItemStore\.turnState\(props\.instance\.id, session\.id, turn\)/);
-  assert.match(panel, /supportsAiSessionTimelineReads\.value[\s\S]*timelineItemStore\.realtimeTurnState/);
+  assert.match(panel, /:selected-turn-state="selectedTurnTimelineState"/);
+  assert.match(presentation, /timelineStore\.turnState\(currentInstance\.id, current\.id, turn\)/);
+  assert.match(presentation, /supportsTimelineReads\.value[\s\S]*timelineStore\.realtimeTurnState/);
   assert.doesNotMatch(board, /AiSessionTimelineView|getAiSessionTimeline/);
+});
+
+test("board floating detail consumes the same Timeline presentation as instance detail", () => {
+  const panel = fs.readFileSync(panelUrl, "utf8");
+  const board = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionBoardView.vue", import.meta.url), "utf8");
+  const dock = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionFloatingDock.vue", import.meta.url), "utf8");
+  const conversation = fs.readFileSync(new URL("../src/components/ai-session/AiSessionConversationContent.vue", import.meta.url), "utf8");
+  for (const source of [panel, board]) {
+    assert.match(source, /useAiSessionTimelinePresentation/);
+    assert.match(source, /useAiSessionTimelineDemand/);
+    assert.match(source, /conversationTurnTimelines/);
+    assert.match(source, /selectedTurnTimelineState/);
+  }
+  for (const source of [panel, dock]) assert.match(source, /<AiSessionConversationContent/);
+  assert.match(dock, /:mode="timelineMode"/);
+  assert.match(conversation, /v-if="mode === 'full'"[\s\S]*<AiSessionTimelineView[\s\S]*<AiSessionResult/);
+  assert.match(board, /getAiSessionDetail\(card\.instance\.id, card\.session\.id\)/);
+  assert.match(board, /@continue-from-turn="forkCardSession\(selectedCard, 'current', \$event\)"/);
+  assert.doesNotMatch(dock, /<AiSessionResult/);
 });
 
 test("conversation Timeline composes every turn from the same compact result component", () => {
@@ -532,12 +540,12 @@ test("compact Timeline preserves follow-up user messages before the first AI res
 });
 
 test("compact mode renders history, latest AI response, then only the live activity expansion", () => {
-  const panel = fs.readFileSync(panelUrl, "utf8");
+  const conversation = fs.readFileSync(new URL("../src/components/ai-session/AiSessionConversationContent.vue", import.meta.url), "utf8");
   const result = fs.readFileSync(new URL("../src/components/ai-session/AiSessionResult.vue", import.meta.url), "utf8");
-  assert.match(panel, /aiSessionTurns\(session\)\[promptIndexFor\(session\)\]/);
-  assert.match(panel, /:activities="selectedTurnTimeline\.activities"/);
-  assert.match(panel, /:activity-nodes="selectedTurnTimeline\.activityNodes"/);
-  assert.match(panel, /:activity-history="selectedTurnTimeline\.history"/);
+  assert.match(conversation, /aiSessionTurns\(props\.session\)\[props\.promptIndex\]/);
+  assert.match(conversation, /:activities="selectedTimeline\.activities"/);
+  assert.match(conversation, /:activity-nodes="selectedTimeline\.activityNodes"/);
+  assert.match(conversation, /:activity-history="selectedTimeline\.history"/);
   assert.match(result, /<AiSessionTurnHistory[\s\S]*<section[\s\S]*class="ai-session-detail-response"[\s\S]*<AiSessionToolActivity/);
   assert.match(result, /<AiSessionTurnHistory\s+:nodes="activityHistory"/);
   assert.match(result, /:loading="!active && \(activityHistoryStatus === 'idle' \|\| activityHistoryStatus === 'loading' \|\| activityHistoryStatus === 'stale'\)"/);

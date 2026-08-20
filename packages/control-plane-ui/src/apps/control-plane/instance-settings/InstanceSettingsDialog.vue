@@ -60,6 +60,21 @@
                     </span>
                     <ControlPlaneInput v-model="instanceName" :disabled="savingGeneral" maxlength="160" :placeholder="t('instances.settings.instanceName')" />
                   </label>
+                  <label class="instance-settings-name-control">
+                    <span>
+                      <strong>{{ t("instances.settings.aiSessionAttachmentRetention") }}</strong>
+                      <small>{{ attachmentRetentionSupported ? t("instances.settings.aiSessionAttachmentRetentionDescription") : t("instances.settings.aiSessionAttachmentRetentionUnsupported") }}</small>
+                    </span>
+                    <ControlPlaneInput
+                      v-model="aiSessionAttachmentRetentionDays"
+                      type="number"
+                      min="0"
+                      :max="AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS"
+                      step="1"
+                      :disabled="savingGeneral || !attachmentRetentionSupported"
+                    />
+                  </label>
+                  <p v-if="attachmentRetentionWillShorten" class="instance-settings-help">{{ t("instances.settings.aiSessionAttachmentRetentionWarning") }}</p>
                   <label class="instance-settings-checkbox">
                     <Checkbox :model-value="autoImportAgentConfigs" :disabled="savingGeneral" @update:model-value="autoImportAgentConfigs = $event === true" />
                     <span>
@@ -93,7 +108,7 @@
                     />
                   </label>
                 </div>
-                <Button size="sm" :disabled="savingGeneral || !generalChanged || !validInstanceName || !validHistoryLimit" @click="saveGeneral">
+                <Button size="sm" :disabled="savingGeneral || !generalChanged || !validInstanceName || !validHistoryLimit || !validAttachmentRetention" @click="saveGeneral">
                   {{ savingGeneral ? t("instances.settings.saving") : t("instances.settings.saveChanges") }}
                 </Button>
               </div>
@@ -260,7 +275,7 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { Boxes, Cpu, Globe2, LoaderCircle, Monitor, RefreshCw, SlidersHorizontal, TerminalSquare, X } from "@lucide/vue";
-import { AI_SESSION_HISTORY_MAX_LIMIT, type AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
+import { AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS, AI_SESSION_HISTORY_MAX_LIMIT, type AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
 import type { AppManagementJob, AppManagementOperation, AppManagementSnapshot, InstanceBoardItem, ManagedAppProjection, ModelApp, ModelConfig, ModelSelection, UpdateControlledInstanceInput } from "../../../api/types";
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
 import { Badge } from "../../../components/ui/badge";
@@ -307,6 +322,7 @@ const instanceName = ref("");
 const autoImportAgentConfigs = ref(true);
 const defaultCodexPermissionMode = ref<AiSessionPermissionMode>("ask");
 const aiSessionHistoryLimit = ref("50");
+const aiSessionAttachmentRetentionDays = ref("30");
 const modelSelection = ref<ModelSelection>({});
 const savingGeneral = ref(false);
 const savingModels = ref(false);
@@ -324,6 +340,7 @@ const generalChanged = computed(() => Boolean(props.instance && (
   || autoImportAgentConfigs.value !== props.instance.config.autoImportAgentConfigs
   || defaultCodexPermissionMode.value !== props.instance.config.defaultCodexPermissionMode
   || (historyLimitSupported.value && Number(aiSessionHistoryLimit.value) !== props.instance.config.aiSessionHistoryLimit)
+  || (attachmentRetentionSupported.value && Number(aiSessionAttachmentRetentionDays.value) !== props.instance.config.aiSessionAttachmentRetentionDays)
 )));
 const validInstanceName = computed(() => instanceName.value.trim().length > 0);
 const validHistoryLimit = computed(() => {
@@ -344,6 +361,30 @@ const historyLimitSupported = computed(() => {
     && (features as Record<string, unknown>).aiSessionPersistenceSettings === true);
   return nodeSupported && instanceSupported;
 });
+const validAttachmentRetention = computed(() => {
+  const value = Number(aiSessionAttachmentRetentionDays.value);
+  return !attachmentRetentionSupported.value || (Number.isInteger(value) && value >= 0 && value <= AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS);
+});
+const attachmentRetentionSupported = computed(() => {
+  const instance = props.instance;
+  if (!instance) return false;
+  const nodeAgent = instance.node?.capabilities?.agent;
+  const nodeCapabilities = nodeAgent && typeof nodeAgent === "object" && !Array.isArray(nodeAgent)
+    ? (nodeAgent as Record<string, unknown>).capabilities
+    : undefined;
+  const nodeSupported = Boolean(nodeCapabilities && typeof nodeCapabilities === "object" && !Array.isArray(nodeCapabilities)
+    && (nodeCapabilities as Record<string, unknown>).aiSessionAttachmentRetention === true);
+  const features = instance.capabilities?.features;
+  const feature = features && typeof features === "object" && !Array.isArray(features)
+    ? (features as Record<string, unknown>).aiSessionConversationAttachments
+    : undefined;
+  return nodeSupported && Boolean(feature && typeof feature === "object" && !Array.isArray(feature) && (feature as Record<string, unknown>).retentionSettings === true);
+});
+const attachmentRetentionWillShorten = computed(() => Boolean(
+  props.instance
+  && attachmentRetentionSupported.value
+  && Number(aiSessionAttachmentRetentionDays.value) < props.instance.config.aiSessionAttachmentRetentionDays,
+));
 const modelsChanged = computed(() => JSON.stringify(normalizedSelection(modelSelection.value)) !== JSON.stringify(normalizedSelection(props.instance?.modelSelection || {})));
 const inventoryState = computed<"current" | "stale" | "not-reported" | "empty" | "degraded">(() => {
   const inventory = props.instance?.appInventory;
@@ -384,6 +425,7 @@ watch(
     autoImportAgentConfigs.value = props.instance.config.autoImportAgentConfigs;
     defaultCodexPermissionMode.value = props.instance.config.defaultCodexPermissionMode;
     aiSessionHistoryLimit.value = String(props.instance.config.aiSessionHistoryLimit);
+    aiSessionAttachmentRetentionDays.value = String(props.instance.config.aiSessionAttachmentRetentionDays);
     modelSelection.value = { ...props.instance.modelSelection };
     error.value = "";
     success.value = "";
@@ -458,7 +500,7 @@ function normalizedSelection(value: ModelSelection): ModelSelection {
 }
 
 async function saveGeneral() {
-  if (!props.instance || savingGeneral.value || !validInstanceName.value || !validHistoryLimit.value) return;
+  if (!props.instance || savingGeneral.value || !validInstanceName.value || !validHistoryLimit.value || !validAttachmentRetention.value) return;
   savingGeneral.value = true;
   error.value = "";
   success.value = "";
@@ -469,6 +511,7 @@ async function saveGeneral() {
         autoImportAgentConfigs: autoImportAgentConfigs.value,
         defaultCodexPermissionMode: defaultCodexPermissionMode.value,
         ...(historyLimitSupported.value ? { aiSessionHistoryLimit: Number(aiSessionHistoryLimit.value) } : {}),
+        ...(attachmentRetentionSupported.value ? { aiSessionAttachmentRetentionDays: Number(aiSessionAttachmentRetentionDays.value) } : {}),
       },
     });
     instanceName.value = instanceName.value.trim();
@@ -478,6 +521,7 @@ async function saveGeneral() {
     autoImportAgentConfigs.value = props.instance.config.autoImportAgentConfigs;
     defaultCodexPermissionMode.value = props.instance.config.defaultCodexPermissionMode;
     aiSessionHistoryLimit.value = String(props.instance.config.aiSessionHistoryLimit);
+    aiSessionAttachmentRetentionDays.value = String(props.instance.config.aiSessionAttachmentRetentionDays);
     error.value = translateApiError(cause, t);
   } finally {
     savingGeneral.value = false;

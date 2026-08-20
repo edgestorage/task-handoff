@@ -239,6 +239,7 @@ import {
   sessionMeta,
 } from "../useInstanceSessions";
 import type { BoardSessionTab } from "./useInstanceBoardSessions";
+import { useAiSessionMessageDeltaDemand } from "../useAiSessionEventDemand";
 
 type BoardSize = "small" | "medium" | "large";
 
@@ -281,6 +282,8 @@ const props = defineProps<{
   totalInstances: number;
   visibleInstances: InstanceWithAiSessions[];
 }>();
+
+useAiSessionMessageDeltaDemand(computed(() => ({ instanceIds: props.visibleInstances.map((instance) => instance.id) })));
 
 const emit = defineEmits<{
   launchApp: [instance: InstanceBoardItem, appId: string, cwdFolderId?: string];

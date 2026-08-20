@@ -28,6 +28,7 @@ import { JsonCollection, createId, createSecret } from "../shared/persistence/st
 import type { NodeAgentStorePaths } from "./persistence/paths.ts";
 import {
   CreateLocalFolderSchema,
+  UpdateLocalFolderSchema,
   CreateNodeInstanceSchema,
   CreateNodeRuntimeSchema,
   UpdateNodeRuntimeSchema,
@@ -360,9 +361,11 @@ export class NodeAgentState {
 
   createLocalFolder(input: z.infer<typeof CreateLocalFolderSchema>) {
     const timestamp = now();
+    const folderPath = requireBrowsableFolderPath(input.path);
     const folder = NodeLocalFolderSchema.parse({
       ...input,
-      path: requireBrowsableFolderPath(input.path),
+      name: input.name.trim() || path.basename(folderPath),
+      path: folderPath,
       id: input.id || createId("folder"),
       nodeId: this.nodeId,
       labels: input.labels || {},
@@ -370,6 +373,19 @@ export class NodeAgentState {
       updatedAt: timestamp,
     });
     return this.localFolders.put(folder);
+  }
+
+  updateLocalFolder(id: string, input: z.infer<typeof UpdateLocalFolderSchema>) {
+    const folder = this.localFolders.get(id);
+    if (!folder) {
+      const error = new Error(`Local folder ${id} was not found.`);
+      throw Object.assign(error, { statusCode: 404, code: "NODE_LOCAL_FOLDER_NOT_FOUND" });
+    }
+    return this.localFolders.put(NodeLocalFolderSchema.parse({
+      ...folder,
+      name: input.name.trim() || path.basename(folder.path),
+      updatedAt: now(),
+    }));
   }
 
   createRuntime(input: z.infer<typeof CreateNodeRuntimeSchema>) {
@@ -596,6 +612,7 @@ export class NodeAgentState {
         autoImportAgentConfigs: input.config?.autoImportAgentConfigs ?? true,
         defaultCodexPermissionMode: input.config?.defaultCodexPermissionMode ?? (runtime.type === "docker" ? "full-access" : "ask"),
         aiSessionHistoryLimit: input.config?.aiSessionHistoryLimit ?? AI_SESSION_HISTORY_DEFAULT_LIMIT,
+        aiSessionAttachmentRetentionDays: input.config?.aiSessionAttachmentRetentionDays ?? 30,
       },
       workspace: runtime.type === "local" ? { mode: "local-bind", status: "unknown", path: workspacePath } : { status: "unknown" },
       target: { strategy: "node-proxy", status: "unknown" },

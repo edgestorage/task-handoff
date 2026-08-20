@@ -3,6 +3,7 @@ import {
   CreateLocalFolderSchema,
   CreateNodeRuntimeSchema,
   FolderTreeQuerySchema,
+  UpdateLocalFolderSchema,
   UpdateNodeRuntimeSchema,
 } from "../schemas.ts";
 
@@ -16,6 +17,7 @@ type RuntimeRouteOperations = {
   listFolderPlaces(): unknown;
   listFolderTree(input: ReturnType<typeof FolderTreeQuerySchema.parse>): unknown;
   createLocalFolder(input: ReturnType<typeof CreateLocalFolderSchema.parse>): unknown;
+  updateLocalFolder(id: string, input: ReturnType<typeof UpdateLocalFolderSchema.parse>): unknown;
   deleteLocalFolder(id: string): unknown;
 };
 
@@ -41,6 +43,9 @@ export function registerRuntimeRoutes(app: FastifyInstance, operations: RuntimeR
   }));
   app.post("/api/node-agent/local-folders", async (request, reply) => reply.code(201).send({
     data: operations.createLocalFolder(CreateLocalFolderSchema.parse(request.body)),
+  }));
+  app.patch("/api/node-agent/local-folders/:id", async (request) => ({
+    data: operations.updateLocalFolder((request.params as { id: string }).id, UpdateLocalFolderSchema.parse(request.body)),
   }));
   app.delete("/api/node-agent/local-folders/:id", async (request) => ({
     data: { deleted: operations.deleteLocalFolder((request.params as { id: string }).id) },

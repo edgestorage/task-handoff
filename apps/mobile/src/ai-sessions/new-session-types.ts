@@ -1,7 +1,7 @@
 import type { AiSessionPermissionMode } from '@task-handoff/protocol/ai-sessions';
 import type { RepositoryAiSessionWorkspace } from '@task-handoff/protocol/repository';
 import type { ControlPlaneInstanceDirectoryEntry, ControlPlaneNodeDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
-import type { ControlPlaneNodeLocalFolder } from '@task-handoff/control-plane-client';
+import { controlPlaneLocalFolderDisplayName, type ControlPlaneNodeLocalFolder } from '@task-handoff/control-plane-client';
 
 type InstanceWorkspaceSource = { type: string; localFolderId?: string; path?: string };
 export const INSTANCE_WORKSPACE_FOLDER_ID = "__instance_workspace__";
@@ -67,7 +67,7 @@ export function aiSessionFolderOptions(
   folders: readonly Pick<ControlPlaneNodeLocalFolder, 'id' | 'name' | 'path'>[],
 ): AiSessionFolderOption[] {
   if (source?.type === 'local-folder') {
-    return folders.map((folder) => ({ ...folder, cwdFolderId: folder.id }));
+    return folders.map((folder) => ({ ...folder, name: controlPlaneLocalFolderDisplayName(folder), cwdFolderId: folder.id }));
   }
   const path = workspacePath?.trim();
   return path ? [{ id: INSTANCE_WORKSPACE_FOLDER_ID, name: folderPathName(path), path }] : [];

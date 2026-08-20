@@ -12,6 +12,8 @@ export type EventEnvelope<T = unknown> = {
   topic: string;
   createdAt: string;
   payload: T;
+  /** True only when a transient source replays an event after a demand cursor. */
+  replay?: true;
   scope?: EventScope;
 };
 
@@ -19,6 +21,8 @@ export type EventSubscribeMessage = {
   v?: 1;
   type: "subscribe";
   topics?: string[];
+  instanceIds?: string[];
+  aiSessionTransient?: AiSessionTransientSubscription;
 };
 
 export type SessionStreamTopic = z.infer<typeof SessionStreamTopicSchema>;
@@ -59,6 +63,43 @@ export function eventTopic(type: string) {
   return "system";
 }
 import { z } from "zod";
+
+export const AiSessionTransientSubscriptionSchema = z.object({
+  // Connection-scoped replay cursor. This is intentionally transient wire state:
+  // it is owned by the consumer and must never be persisted on an AI Session.
+  replaySince: z.string().datetime().optional(),
+  messageDeltas: z.object({
+    allInstances: z.boolean().default(false),
+    instanceIds: z.array(z.string().trim().min(1).max(160)).max(1_000).default([]),
+  }).default({ allInstances: false, instanceIds: [] }),
+  timelineAllSessions: z.boolean().default(false),
+  timelineSessions: z.array(z.object({
+    instanceId: z.string().trim().min(1).max(160),
+    sessionId: z.string().trim().min(1).max(120),
+  })).max(1_000).default([]),
+});
+
+export type AiSessionTransientSubscription = z.infer<typeof AiSessionTransientSubscriptionSchema>;
+
+export function aiSessionTransientSubscriptionAccepts(
+  subscription: AiSessionTransientSubscription | undefined,
+  event: { type: string; payload?: unknown; scope?: { instanceId?: string } },
+) {
+  // Compatibility for v0.0.21: absence of the additive subscription model
+  // retains the full transient stream selected by legacy topics.
+  if (!subscription) return true;
+  if (event.type !== "ai-session.message-delta" && event.type !== "ai-session.timeline-item") return true;
+  const payload = event.payload && typeof event.payload === "object" && !Array.isArray(event.payload)
+    ? event.payload as Record<string, unknown>
+    : {};
+  const instanceId = String(payload.instanceId || event.scope?.instanceId || "");
+  if (event.type === "ai-session.message-delta") {
+    return subscription.messageDeltas.allInstances || subscription.messageDeltas.instanceIds.includes(instanceId);
+  }
+  return subscription.timelineAllSessions || subscription.timelineSessions.some((entry) => (
+    entry.instanceId === instanceId && entry.sessionId === payload.sessionId
+  ));
+}
 
 export const SESSION_STREAM_PROTOCOL_VERSION = 1;
 

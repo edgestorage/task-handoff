@@ -7,7 +7,7 @@
             <span>{{ status.locationLabel(selectedNode) }}</span>
             <div class="node-detail-title-row">
               <strong>{{ selectedNode.name }}</strong>
-              <Tooltip>
+              <Tooltip @update:open="refreshNodeConnectionDiagnostics">
                 <RekaTooltipTrigger
                   as="button"
                   type="button"
@@ -24,6 +24,7 @@
                     <span v-if="status.build(selectedNode.id)?.imageRef"><b>{{ t("settings.nodeDetail.image") }}</b><em>{{ status.build(selectedNode.id)?.imageRef }}</em></span>
                     <span v-if="status.build(selectedNode.id)?.builtAt"><b>{{ t("settings.nodeDetail.built") }}</b><em>{{ status.build(selectedNode.id)?.builtAt }}</em></span>
                   </div>
+                  <NodeConnectionDiagnostics class="node-status-connection-diagnostics" :diagnostics="selectedNode.connectionDiagnostics" />
                 </TooltipContent>
               </Tooltip>
             </div>
@@ -237,7 +238,7 @@
                       </Button>
                     </div>
                   </div>
-                  <p v-if="nodeUpdateCheck" class="section-description">
+                  <p v-if="nodeUpdateCheck" class="managed-update-impact">
                     {{ t("settings.nodeDetail.updateImpact", { restarting: nodeUpdateCheck.impact.restartInstanceCount, active: nodeUpdateCheck.impact.activeInstanceCount, stopped: nodeUpdateCheck.impact.stoppedInstanceCount }) }}
                   </p>
                 </section>
@@ -296,10 +297,6 @@
               <div class="section-head">
                 <span>{{ t("settings.nodeDetail.localFolderCount", { count: resources.localFolders.length }) }}</span>
                 <div class="node-folder-add-controls">
-                  <ControlPlaneSelect :model-value="resources.nodeFolderDefaultImageId || '__none__'" :placeholder="t('settings.nodeDetail.defaultImage')" @update:model-value="actions.updateNodeFolderDefaultImage">
-                    <ControlPlaneSelectItem value="__none__">{{ t("settings.nodeDetail.noDefaultImage") }}</ControlPlaneSelectItem>
-                    <ControlPlaneSelectItem v-for="image in resources.nodeFolderImageOptions" :key="image.id" :value="image.id">{{ image.name }}</ControlPlaneSelectItem>
-                  </ControlPlaneSelect>
                   <Button variant="outline" size="sm" :disabled="busy.creatingNodeLocalFolder" @click="actions.submitNodeLocalFolder">
                     <FolderOpen :size="14" />
                     <span>{{ busy.creatingNodeLocalFolder ? t("settings.nodeDetail.adding") : t("settings.nodeDetail.add") }}</span>
@@ -310,13 +307,19 @@
                 <div class="settings-scroll-content">
                   <div v-for="folder in resources.localFolders" :key="folder.id" class="node-resource-row">
                     <div>
-                      <strong>{{ folder.name }}</strong>
+                      <strong>{{ nodeLocalFolderDisplayName(folder) }}</strong>
                       <code>{{ folder.path }}</code>
                     </div>
-                    <Button variant="outline" size="sm" :disabled="busy.deletingNodeLocalFolderId === folder.id" @click="actions.removeNodeLocalFolder(folder.id)">
-                      <Trash2 :size="14" />
-                      <span>{{ busy.deletingNodeLocalFolderId === folder.id ? t("settings.nodeDetail.deleting") : t("settings.nodeDetail.delete") }}</span>
-                    </Button>
+                    <div class="node-resource-actions">
+                      <Button v-if="canRenameLocalFolders" variant="outline" size="sm" :disabled="Boolean(busy.renamingNodeLocalFolderId || busy.deletingNodeLocalFolderId)" @click="openLocalFolderRename(folder)">
+                        <Pencil :size="14" />
+                        <span>{{ t("settings.nodeDetail.renameLocalFolder") }}</span>
+                      </Button>
+                      <Button variant="outline" size="sm" :disabled="busy.deletingNodeLocalFolderId === folder.id || Boolean(busy.renamingNodeLocalFolderId)" @click="actions.removeNodeLocalFolder(folder.id)">
+                        <Trash2 :size="14" />
+                        <span>{{ busy.deletingNodeLocalFolderId === folder.id ? t("settings.nodeDetail.deleting") : t("settings.nodeDetail.delete") }}</span>
+                      </Button>
+                    </div>
                   </div>
                   <p v-if="!resources.localFolders.length" class="settings-empty">{{ t("settings.nodeDetail.noLocalFolders") }}</p>
                 </div>
@@ -427,12 +430,7 @@
                         <Badge :variant="connection.status === 'connected' ? 'default' : 'secondary'">{{ localizedStatus(remoteConnectStatusKeys, connection.status) }}</Badge>
                       </RekaTooltipTrigger>
                       <TooltipContent class="node-connection-diagnostic-tooltip" align="end" side="bottom" :side-offset="6">
-                        <div class="node-connection-diagnostic-grid">
-                          <span><b>{{ t("settings.nodeDetail.connectionPingRtt") }}</b><em>{{ connectionMetricMs(connection.pingRttMs) }}</em></span>
-                          <span><b>{{ t("settings.nodeDetail.connectionPingP95") }}</b><em>{{ connectionMetricMs(connection.pingRttP95Ms) }}</em></span>
-                          <span><b>{{ t("settings.nodeDetail.connectionReconnects") }}</b><em>{{ connection.consecutiveReconnects ?? 0 }}</em></span>
-                          <span><b>{{ t("settings.nodeDetail.connectionNextRetry") }}</b><em>{{ connectionRetryCountdown(connection.nextRetryAt) }}</em></span>
-                        </div>
+                        <NodeConnectionDiagnostics :diagnostics="connection" />
                       </TooltipContent>
                     </Tooltip>
                     <Button variant="outline" size="sm" :disabled="busy.deletingControlPlaneConnectionId === connection.id" @click="actions.removeControlPlaneConnection(selectedNode.id, connection.id)">
@@ -491,15 +489,38 @@
         </form>
       </DialogContent>
     </Dialog>
+    <Dialog :open="Boolean(localFolderRenameTarget)" @update:open="setLocalFolderRenameOpen">
+      <DialogContent class="node-rename-dialog">
+        <DialogHeader>
+          <DialogTitle>{{ t("settings.nodeDetail.renameLocalFolder") }}</DialogTitle>
+          <DialogDescription>{{ t("settings.nodeDetail.renameLocalFolderDescription") }}</DialogDescription>
+        </DialogHeader>
+        <form class="node-rename-form" @submit.prevent="submitLocalFolderRename">
+          <label for="local-folder-name">{{ t("settings.nodeDetail.name") }}</label>
+          <ControlPlaneInput
+            id="local-folder-name"
+            v-model="localFolderRenameDraft"
+            :maxlength="160"
+            :disabled="Boolean(busy.renamingNodeLocalFolderId)"
+            autofocus
+          />
+          <code v-if="localFolderRenameTarget">{{ localFolderRenameTarget.path }}</code>
+          <DialogFooter>
+            <Button type="button" variant="outline" :disabled="Boolean(busy.renamingNodeLocalFolderId)" @click="setLocalFolderRenameOpen(false)">{{ t("common.actions.cancel") }}</Button>
+            <Button type="submit" :disabled="!canSubmitLocalFolderRename">{{ t("common.actions.save") }}</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onScopeDispose, ref, watch, type Component } from "vue";
+import { computed, ref, watch, type Component } from "vue";
 import { useI18n } from "vue-i18n";
 import { Box, Boxes, Download, FolderOpen, Gauge, KeyRound, Monitor, MoreHorizontal, Network, Pencil, Plus, RefreshCw, ServerCog, Settings, Trash2 } from "@lucide/vue";
 import { TooltipTrigger as RekaTooltipTrigger } from "reka-ui";
-import type { BuildInfo, InstanceBoardItem, LocalDockerImage, Node, NodeAgentExternalListener, NodeControlPlaneConnection, NodeControlPlanePairing, NodeLocalFolder, NodeRuntime, SelectableImage, UpdateChannel, UpdateCheckResult, UpdateJob } from "../../../api/types";
+import type { BuildInfo, InstanceBoardItem, LocalDockerImage, Node, NodeAgentExternalListener, NodeControlPlaneConnection, NodeControlPlanePairing, NodeLocalFolder, NodeRuntime, UpdateChannel, UpdateCheckResult, UpdateJob } from "../../../api/types";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
@@ -512,6 +533,8 @@ import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
 import ControlPlaneProxyManagementPanel from "./ControlPlaneProxyManagementPanel.vue";
 import ControlPlaneProxyNodePanel from "./ControlPlaneProxyNodePanel.vue";
+import NodeConnectionDiagnostics from "./NodeConnectionDiagnostics.vue";
+import { nodeLocalFolderDisplayName } from "../nodePath";
 import { nodeEndpointDisplay } from "./nodeEndpointDisplay";
 import { nodeDetailActionState } from "./nodeDetailActions";
 import { externalListenerSourceKeys, externalListenerStatusKeys, instanceStatusKeys, nodeConnectionModeKeys, nodeRuntimeStatusKeys, remoteConnectStatusKeys, runtimeAccessStrategyKeys, runtimeTypeKeys, runtimeVersionStatusKeys, translateStatus, updateJobStatusKeys } from "../../../i18n/status";
@@ -553,16 +576,17 @@ type NodeDetailActions = {
   loadNodeImages: (nodeId: string) => void | Promise<void>;
   loadControlPlaneAccess: (nodeId: string) => void | Promise<void>;
   loadManagedUpdateJobs: (nodeId: string) => void | Promise<void>;
+  refreshNodeConnectionState: () => void | Promise<void>;
   openNodeRename: (node: Node) => void;
   openInstanceSettings: (instanceId: string) => void;
   removeNode: (node: Node) => void | Promise<void>;
   removeNodeLocalFolder: (folderId: string) => void | Promise<void>;
+  renameNodeLocalFolder: (folder: NodeLocalFolder, name: string) => boolean | Promise<boolean>;
   removeRemoteKey: (nodeId: string, keyId: string) => void | Promise<void>;
   removeControlPlaneConnection: (nodeId: string, connectionId: string) => void | Promise<void>;
   removeRuntime: (runtime: NodeRuntime) => void | Promise<void>;
   saveExternalListener: () => void | Promise<void>;
   submitNodeLocalFolder: () => void | Promise<void>;
-  updateNodeFolderDefaultImage: (value: string) => void;
   setUpdateChannel: (value: string) => void;
   updateExternalListenerDraft: (field: "bindScope" | "port", value: string) => void;
   updateRemoteConnect: (field: keyof RemoteConnectDraft, value: string) => void;
@@ -578,6 +602,7 @@ type NodeDetailBusy = {
   creatingPairingInviteNodeId: string;
   deletingNodeId: string;
   deletingNodeLocalFolderId: string;
+  renamingNodeLocalFolderId: string;
   deletingRemoteKeyId: string;
   deletingControlPlaneConnectionId: string;
   deletingRuntimeId: string;
@@ -595,8 +620,6 @@ type NodeDetailResources = {
   instances: InstanceBoardItem[];
   localFoldersError: string;
   localFolders: NodeLocalFolder[];
-  nodeFolderDefaultImageId: string;
-  nodeFolderImageOptions: SelectableImage[];
   remoteConnect: RemoteConnectDraft;
   remoteConnectResultByNodeId: Record<string, RemoteConnectResult>;
   controlPlanePairings: NodeControlPlanePairing[];
@@ -638,24 +661,42 @@ const props = defineProps<{
 
 const activeTab = ref<NodeDetailTab>("overview");
 const remoteConnectionDialogOpen = ref(false);
-const connectionClock = ref(Date.now());
-let connectionClockTimer: ReturnType<typeof setInterval> | undefined;
+const localFolderRenameTarget = ref<NodeLocalFolder>();
+const localFolderRenameDraft = ref("");
+const canRenameLocalFolders = computed(() => {
+  const agent = props.selectedNode?.capabilities?.agent;
+  if (!agent || typeof agent !== "object" || Array.isArray(agent)) return false;
+  const capabilities = (agent as Record<string, unknown>).capabilities;
+  return Boolean(capabilities && typeof capabilities === "object" && !Array.isArray(capabilities)
+    && (capabilities as Record<string, unknown>).localFolderNameUpdate === true);
+});
+const canSubmitLocalFolderRename = computed(() => Boolean(
+  localFolderRenameTarget.value
+  && localFolderRenameDraft.value.trim() !== localFolderRenameTarget.value.name
+  && !props.busy.renamingNodeLocalFolderId,
+));
+
+function openLocalFolderRename(folder: NodeLocalFolder) {
+  localFolderRenameTarget.value = folder;
+  localFolderRenameDraft.value = folder.name;
+}
+
+function setLocalFolderRenameOpen(open: boolean) {
+  if (open || props.busy.renamingNodeLocalFolderId) return;
+  localFolderRenameTarget.value = undefined;
+  localFolderRenameDraft.value = "";
+}
+
+async function submitLocalFolderRename() {
+  const folder = localFolderRenameTarget.value;
+  const name = localFolderRenameDraft.value.trim();
+  if (!folder || !name || !canSubmitLocalFolderRename.value) return;
+  if (await props.actions.renameNodeLocalFolder(folder, name)) setLocalFolderRenameOpen(false);
+}
 const localizedStatus = (keys: Record<string, string>, value: string) => translateStatus(keys, value, t);
 const localizedDateTime = (value: string) => {
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? value : formatDateTime(parsed, locale.value as SupportedLocale);
-};
-const connectionMetricMs = (value?: number) => value === undefined
-  ? t("common.status.unavailable")
-  : t("settings.nodeDetail.connectionMilliseconds", { value: Math.round(value) });
-const connectionRetryCountdown = (value?: string) => {
-  if (!value) return t("settings.nodeDetail.connectionRetryNotScheduled");
-  const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) return t("common.status.unavailable");
-  const remainingSeconds = Math.max(0, Math.ceil((timestamp - connectionClock.value) / 1_000));
-  return remainingSeconds > 0
-    ? t("settings.nodeDetail.connectionRetryIn", { seconds: remainingSeconds })
-    : t("settings.nodeDetail.connectionRetryNow");
 };
 const headerActionState = computed(() => nodeDetailActionState({
   nodeId: props.selectedNode?.id || "",
@@ -677,16 +718,6 @@ const tabs = computed(() => [
 const nodeUpdateCheck = computed(() => props.resources.updateChecks[props.selectedNode?.id || ""]);
 const remoteConnectionSubmitting = computed(() => props.busy.connectingRemoteNodeId === props.selectedNode?.id);
 
-onMounted(() => {
-  connectionClockTimer = setInterval(() => {
-    connectionClock.value = Date.now();
-  }, 1_000);
-});
-
-onScopeDispose(() => {
-  if (connectionClockTimer) clearInterval(connectionClockTimer);
-});
-
 function setRemoteConnectionDialogOpen(open: boolean) {
   if (!open && remoteConnectionSubmitting.value) return;
   remoteConnectionDialogOpen.value = open;
@@ -695,6 +726,10 @@ function setRemoteConnectionDialogOpen(open: boolean) {
 function refreshConnectionDiagnostics(open: boolean) {
   const nodeId = props.selectedNode?.id;
   if (open && nodeId) void props.actions.loadControlPlaneAccess(nodeId);
+}
+
+function refreshNodeConnectionDiagnostics(open: boolean) {
+  if (open) void props.actions.refreshNodeConnectionState();
 }
 
 async function submitRemoteConnection() {
@@ -1224,6 +1259,13 @@ watch(
   line-height: 1.5;
 }
 
+.managed-update-impact {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--node-detail-body-size);
+  line-height: 1.5;
+}
+
 .update-job-title {
   display: flex;
   align-items: center;
@@ -1368,11 +1410,34 @@ watch(
   gap: 8px;
 }
 
-.node-folder-add-controls {
-  display: grid;
-  grid-template-columns: minmax(150px, 220px) auto;
+.node-resource-actions {
+  display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.node-rename-form {
+  display: grid;
+  gap: 12px;
+}
+
+.node-rename-form > label {
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.node-rename-form > code {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-folder-add-controls {
+  display: flex;
+  align-items: center;
 }
 
 :global(.node-diagnostic-tooltip) {
@@ -1435,38 +1500,10 @@ watch(
   box-shadow: var(--shadow-popover);
 }
 
-:global(.node-connection-diagnostic-grid) {
-  display: grid;
-  gap: 7px;
-}
-
-:global(.node-connection-diagnostic-grid span) {
-  display: grid;
-  grid-template-columns: minmax(88px, 1fr) auto;
-  align-items: baseline;
-  gap: 14px;
-}
-
-:global(.node-connection-diagnostic-grid b),
-:global(.node-connection-diagnostic-grid em) {
-  min-width: 0;
-  overflow: hidden;
-  font-size: 12px;
-  font-style: normal;
-  line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-:global(.node-connection-diagnostic-grid b) {
-  color: var(--text-muted) !important;
-  font-weight: 650;
-}
-
-:global(.node-connection-diagnostic-grid em) {
-  color: var(--text-strong) !important;
-  font-variant-numeric: tabular-nums;
-  font-weight: 700;
+.node-status-connection-diagnostics {
+  margin-top: 9px;
+  border-top: 1px solid var(--line-subtle);
+  padding-top: 9px;
 }
 
 @media (max-width: 780px) {

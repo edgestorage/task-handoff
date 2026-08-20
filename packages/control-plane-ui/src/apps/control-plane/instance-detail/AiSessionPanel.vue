@@ -402,9 +402,16 @@
                 type="button"
                 class="session-ai-history-continue"
                 :disabled="resumingHistoryId === historyDetail.item.id"
+                :aria-busy="resumingHistoryId === historyDetail.item.id"
                 @click="continueHistoryConversation"
               >
-                {{ t("sessions.panel.continue") }}
+                <LoaderCircle
+                  v-if="resumingHistoryId === historyDetail.item.id"
+                  class="session-ai-spin"
+                  :size="14"
+                  aria-hidden="true"
+                />
+                <span>{{ resumingHistoryId === historyDetail.item.id ? t("sessions.actions.forking") : t("sessions.panel.continue") }}</span>
               </button>
             </div>
             <header>
@@ -419,6 +426,7 @@
             <AiSessionTimelineView
               v-else
               :instance-id="instance.id"
+              :conversation-session-id="historyDetail.item.id"
               :stored-turns="historyDetail.turns"
               @sticky-user-message-change="timelineStickyUserMessage = $event"
             />
@@ -700,52 +708,23 @@
               </button>
             </section>
           </header>
-          <div v-if="effectiveTimelineViewMode === 'full'" class="session-ai-timeline-state">
-            <AiSessionTimelineView
-              v-if="aiSessionTurns(selectedSession).length"
-              :busy="aiSessionActionBusy"
-              :can-interrupt="canInterrupt(selectedSession)"
-              :can-resolve-approval="canResolveApproval(selectedSession)"
-              :instance-id="instance.id"
-              file-links
-              :session="selectedSession"
-              :turn-timelines="conversationTurnTimelines"
-              @edit-queued-message="editQueuedMessage(selectedSession.id, $event)"
-              @open-file="openMarkdownFile(selectedSession, $event)"
-              @steer-queued-message="steerQueuedMessage(selectedSession.id, $event)"
-              @retry-queued-message="retryQueuedMessage(selectedSession.id, $event)"
-              @remove-queued-message="removeQueuedMessage(selectedSession.id, $event)"
-              @reorder-queued-messages="reorderQueuedMessages(selectedSession.id, $event)"
-              @resolve-approval="resolveSelectedApproval"
-              @sticky-user-message-change="timelineStickyUserMessage = $event"
-              @continue-from-turn="forkSession(selectedSession, 'current', $event)"
-              @layout-will-change="beginDetailLayoutAnchor"
-              @layout-committed="commitDetailLayoutAnchor"
-              @load-turn-timeline="loadTurnTimeline"
-            />
-            <span v-else>{{ t("sessions.timeline.noHistory") }}</span>
-          </div>
-          <AiSessionResult
-            v-else
+          <AiSessionConversationContent
+            :class="{ 'session-ai-timeline-state': effectiveTimelineViewMode === 'full' }"
             :busy="aiSessionActionBusy"
             :can-interrupt="canInterrupt(selectedSession)"
             :can-resolve-approval="canResolveApproval(selectedSession)"
             :instance-id="instance.id"
             file-links
-            :is-latest="promptIndexFor(selectedSession) >= promptCount(selectedSession) - 1"
-            :response-content="displayAiSessionResponse(selectedSession, promptIndexFor(selectedSession), t)"
-            :turn-started-at="selectedTimelineTurn?.startedAt"
-            :turn-ended-at="turnElapsedEnd(selectedTimelineTurn)"
-            :session="selectedSession"
-            :activities="selectedTurnTimeline.activities"
-            :activity-nodes="selectedTurnTimeline.activityNodes"
-            :activity-history="selectedTurnTimeline.history"
-            :activity-history-status="selectedTurnTimelineState.status"
-            :activity-history-error="selectedTurnTimelineState.error"
+            :mode="effectiveTimelineViewMode"
+            :prompt-count="promptCount(selectedSession)"
+            :prompt-index="promptIndexFor(selectedSession)"
+            :session="selectedConversationSession || selectedSession"
+            :selected-turn-state="selectedTurnTimelineState"
+            :turn-timelines="conversationTurnTimelines"
             activity-interactive
             @layout-will-change="beginDetailLayoutAnchor"
             @layout-committed="commitDetailLayoutAnchor"
-            @retry-activity-history="loadSelectedTurnTimeline(true)"
+            @load-turn-timeline="loadTurnTimeline"
             @edit-queued-message="editQueuedMessage(selectedSession.id, $event)"
             @open-file="openMarkdownFile(selectedSession, $event)"
             @steer-queued-message="steerQueuedMessage(selectedSession.id, $event)"
@@ -753,6 +732,8 @@
             @remove-queued-message="removeQueuedMessage(selectedSession.id, $event)"
             @reorder-queued-messages="reorderQueuedMessages(selectedSession.id, $event)"
             @resolve-approval="resolveSelectedApproval"
+            @sticky-user-message-change="timelineStickyUserMessage = $event"
+            @continue-from-turn="forkSession(selectedSession, 'current', $event)"
           />
           <span ref="detailBottomAnchorEl" class="session-ai-detail-bottom-anchor" aria-hidden="true" />
           </section>
@@ -947,23 +928,23 @@ import AiSessionCardMarks from "../../../components/ai-session/AiSessionCardMark
 import AiSessionStatusIndicator from "../../../components/ai-session/AiSessionStatusIndicator.vue";
 import AiAgentIcon from "../../../components/AiAgentIcon.vue";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
-import { bindAiSessionTrigger, closeAiSession, createAiSession, createNodeLocalFolder, editAiSessionQueuedMessage, forkAiSession, getAiSessionHistory, getAiSessionHistoryDetail, getAiSessionTimeline, getAiSessionTurnTimeline, getAiSessionWorkspace, interruptAiSession, listNodeFolderPlaces, listNodeFolderTree, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, unbindAiSessionTrigger, updateControlledInstance, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery } from "../../../api/queries";
+import { bindAiSessionTrigger, closeAiSession, createAiSession, createNodeLocalFolder, editAiSessionQueuedMessage, forkAiSession, getAiSessionDetail, getAiSessionHistory, getAiSessionHistoryDetail, getAiSessionWorkspace, interruptAiSession, listNodeFolderPlaces, listNodeFolderTree, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, unbindAiSessionTrigger, updateControlledInstance, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery } from "../../../api/queries";
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { executeAiSessionCommand } from "../../../api/ai-session-commands";
-import { type AiSessionCommandInput, type AiSessionHistoryDetail, type AiSessionHistoryItem, type AiSessionMessageAttachmentRef, type AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
+import { type AiSessionCommandInput, type AiSessionHistoryDetail, type AiSessionHistoryItem, type AiSessionMessageAttachmentRef, type AiSessionPermissionMode, type AiSessionStatus } from "@task-handoff/protocol/ai-sessions";
 import type { RepositoryAiSessionWorkspace, RepositoryAiSessionWorkspaceBranch } from "@task-handoff/protocol/repository";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, NodeLocalFolder, TriggerConfig, TriggerDeployment, TriggerRuntimeState } from "../../../api/types";
 import type { LaunchableApp } from "../useInstanceSessions";
 import { updateInstanceBoardData } from "../instanceBoardCache.ts";
 import AiSessionComposer, { type AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
-import AiSessionResult from "../../../components/ai-session/AiSessionResult.vue";
+import { uploadAiSessionComposerAttachment } from "../../../components/ai-session/attachmentUpload";
+import AiSessionConversationContent from "../../../components/ai-session/AiSessionConversationContent.vue";
 import AiSessionStreamingMarkdown from "../../../components/ai-session/AiSessionStreamingMarkdown.vue";
 import { vAiSessionCardAutoScroll } from "../../../components/ai-session/aiSessionCardAutoScroll";
 import AiSessionToolActivity from "../../../components/ai-session/AiSessionToolActivity.vue";
-import { compactTimelineForTurn, turnElapsedEnd } from "../../../components/ai-session/timelineActivities";
-import { shouldDeferTurnTimelineLoad } from "../../../components/ai-session/timelineLoading";
-import { supportsAiSessionTimelineCapability } from "@task-handoff/protocol/control-plane";
-import { useAiSessionTimelineStore } from "../useAiSessionTimelineStore";
+import { useAiSessionTimelinePresentation } from "../useAiSessionTimelinePresentation";
+import { useAiSessionTimelineViewMode } from "../useAiSessionTimelineViewMode";
+import { useAiSessionMessageDeltaDemand, useAiSessionTimelineDemand } from "../useAiSessionEventDemand";
 import AiSessionTimelineView from "../../../components/ai-session/AiSessionTimelineView.vue";
 import { referencesForBindings, type AiSessionMentionBinding } from "../../../components/ai-session/mentions";
 import { desktopRuntimePathAccess } from "../../../components/ai-session/useAiSessionMentions";
@@ -975,8 +956,8 @@ import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "../../../components/ui/sheet";
 import { ToggleGroup, ToggleGroupItem } from "../../../components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
-import { showControlPlaneToast } from "../useControlPlaneToasts";
-import { nativeNodeFolderSelectionResult, nodePathName, relativeNodePathSegments, type NativeNodeFolderPicker } from "../nodePath";
+import { showControlPlaneToast, showDelayedControlPlaneLoadingToast } from "../useControlPlaneToasts";
+import { nativeNodeFolderSelectionResult, nodeLocalFolderDisplayName, nodePathName, relativeNodePathSegments, type NativeNodeFolderPicker } from "../nodePath";
 import NodeStorageFolderPickerDialog from "../settings/NodeStorageFolderPickerDialog.vue";
 import RepositoryEnvironment from "./RepositoryEnvironment.vue";
 import { useNodeStorageFolderPicker } from "../settings/useNodeStorageFolderPicker";
@@ -1035,7 +1016,6 @@ const SHOW_EMPTY_PATH_GROUPS_STORAGE_KEY = "task-handoff.control-plane.ai-sessio
 const SORT_BY_STATUS_STORAGE_KEY = "task-handoff.control-plane.ai-sessions-sort-by-status";
 const SESSION_LIST_LAYOUT_STORAGE_KEY = "task-handoff.control-plane.ai-sessions-list-layout";
 const SIDEBAR_WIDTH_STORAGE_KEY = "task-handoff.control-plane.ai-sessions-sidebar-width";
-const TIMELINE_VIEW_MODE_STORAGE_KEY = "task-handoff.control-plane.ai-session-timeline-view-mode";
 const SIDEBAR_WIDTH_DEFAULT = 360;
 const SIDEBAR_WIDTH_MIN = 260;
 const SIDEBAR_WIDTH_MAX = 520;
@@ -1064,10 +1044,6 @@ function storedSidebarWidth() {
   const stored = window.localStorage?.getItem(SIDEBAR_WIDTH_STORAGE_KEY);
   const value = stored ? Number(stored) : Number.NaN;
   return Number.isFinite(value) ? clampSidebarWidth(value) : SIDEBAR_WIDTH_DEFAULT;
-}
-
-function storedTimelineViewMode(): "compact" | "full" {
-  return window.localStorage?.getItem(TIMELINE_VIEW_MODE_STORAGE_KEY) === "full" ? "full" : "compact";
 }
 
 const props = defineProps<{
@@ -1152,71 +1128,42 @@ const displayedSessionGroups = computed<AiSessionPathGroup[]>(() => groupSession
   sessions: sortedSessions.value,
 }]);
 const selectedSession = computed(() => props.selectedAiSession(props.instance, filteredSessions.value));
-const timelineViewMode = ref<"compact" | "full">(storedTimelineViewMode());
-const timelineItemStore = useAiSessionTimelineStore();
-const activeTurnTimelineLoads = new Map<string, Promise<void>>();
-const activeSessionTimelineLoads = new Map<string, Promise<void>>();
-const supportsAiSessionSessionTimeline = computed(() => {
+useAiSessionMessageDeltaDemand(computed(() => ({ instanceIds: [props.instance.id] })));
+useAiSessionTimelineDemand(computed(() => selectedSession.value ? {
+  instanceId: props.instance.id,
+  sessionId: selectedSession.value.id,
+} : undefined));
+const selectedSessionDetail = ref<AiSessionStatus>();
+let selectedSessionDetailRevision = 0;
+const selectedConversationSession = computed<AiSessionSummary | undefined>(() => {
   const session = selectedSession.value;
-  return Boolean(session && supportsAiSessionTimelineCapability(props.instance.capabilities, session.agent, "session-read"));
+  const detail = selectedSessionDetail.value;
+  if (!session || !detail || detail.id !== session.id) return session;
+  return { ...session, turns: detail.turns || session.turns };
 });
-const supportsAiSessionTurnTimeline = computed(() => {
-  const session = selectedSession.value;
-  return Boolean(session && supportsAiSessionTimelineCapability(props.instance.capabilities, session.agent, "turn-read"));
+const { setViewMode: persistTimelineViewMode, viewMode: timelineViewMode } = useAiSessionTimelineViewMode();
+const {
+  conversationTurnTimelines,
+  loadSelectedTurnTimeline,
+  loadTurnTimeline,
+  selectedTurn: selectedTimelineTurn,
+  selectedTurnState: selectedTurnTimelineState,
+  supportsTimeline: supportsAiSessionTimeline,
+} = useAiSessionTimelinePresentation({
+  instance: () => props.instance,
+  promptIndex: () => selectedSession.value ? promptIndexFor(selectedSession.value) : 0,
+  session: selectedSession,
 });
-const supportsAiSessionLiveTimelineItems = computed(() => {
-  const session = selectedSession.value;
-  return Boolean(session && supportsAiSessionTimelineCapability(props.instance.capabilities, session.agent, "live-items"));
-});
-const supportsAiSessionTimeline = computed(() => (
-  supportsAiSessionSessionTimeline.value
-  || supportsAiSessionTurnTimeline.value
-  || supportsAiSessionLiveTimelineItems.value
-));
-const supportsAiSessionTimelineReads = computed(() => (
-  supportsAiSessionSessionTimeline.value || supportsAiSessionTurnTimeline.value
-));
 const effectiveTimelineViewMode = computed(() => (
   supportsAiSessionTimeline.value
     ? timelineViewMode.value
     : "compact"
 ));
-const selectedTimelineTurn = computed(() => {
-  const session = selectedSession.value;
-  return session ? aiSessionTurns(session)[promptIndexFor(session)] : undefined;
-});
-const selectedTurnTimelineState = computed(() => {
-  const session = selectedSession.value;
-  const turn = selectedTimelineTurn.value;
-  if (!session || !turn) return { status: "ready" as const, items: [] };
-  if (supportsAiSessionTimelineReads.value) {
-    return timelineItemStore.turnState(props.instance.id, session.id, turn);
-  }
-  return supportsAiSessionLiveTimelineItems.value
-    ? timelineItemStore.realtimeTurnState(props.instance.id, session.id, turn)
-    : { status: "ready" as const, items: [] };
-});
-const selectedTurnTimeline = computed(() => {
-  return compactTimelineForTurn(selectedTurnTimelineState.value.items, selectedTimelineTurn.value);
-});
-const conversationTurnTimelines = computed(() => {
-  const session = selectedSession.value;
-  if (!session) return {};
-  return Object.fromEntries(aiSessionTurns(session).map((turn) => [
-    turn.id,
-    supportsAiSessionTimelineReads.value
-      ? timelineItemStore.turnState(props.instance.id, session.id, turn)
-      : supportsAiSessionLiveTimelineItems.value
-        ? timelineItemStore.realtimeTurnState(props.instance.id, session.id, turn)
-        : { status: "ready" as const, items: [] },
-  ]));
-});
 
 async function setTimelineViewMode(value: unknown) {
   if (value !== "compact" && value !== "full") return;
   const enteringFullTimeline = value === "full" && timelineViewMode.value !== "full";
-  timelineViewMode.value = value;
-  window.localStorage?.setItem(TIMELINE_VIEW_MODE_STORAGE_KEY, value);
+  persistTimelineViewMode(value);
   if (value === "compact") {
     void loadSelectedTurnTimeline();
     return;
@@ -1227,72 +1174,6 @@ async function setTimelineViewMode(value: unknown) {
   handleDetailScroll();
 }
 
-function timelineLoadKey(instanceId: string, sessionId: string, turnId?: string) {
-  return JSON.stringify([instanceId, sessionId, turnId || ""]);
-}
-
-async function loadFullTimelineForSession(session: AiSessionSummary, force = false) {
-  if (!supportsAiSessionSessionTimeline.value) return;
-  const instanceId = props.instance.id;
-  const key = timelineLoadKey(instanceId, session.id);
-  const existing = activeSessionTimelineLoads.get(key);
-  if (existing) return existing;
-  const sessionState = timelineItemStore.sessionState(instanceId, session.id);
-  if (!force && sessionState.status === "ready") return;
-  const turns = aiSessionTurns(session);
-  timelineItemStore.beginSessionLoad(instanceId, session.id);
-  for (const turn of turns) timelineItemStore.beginTurnLoad(instanceId, session.id, turn);
-  const load = getAiSessionTimeline(instanceId, session.id)
-    .then((result) => timelineItemStore.resolveSession(instanceId, session.id, turns, result))
-    .catch((error) => {
-      const message = translateApiError(error, t, t("sessions.timeline.loadFailed"));
-      timelineItemStore.rejectSession(instanceId, session.id, message);
-      for (const turn of turns) timelineItemStore.rejectTurn(instanceId, session.id, turn, message);
-    })
-    .finally(() => activeSessionTimelineLoads.delete(key));
-  activeSessionTimelineLoads.set(key, load);
-  return load;
-}
-
-async function loadTurnTimeline(turnId: string, force = false) {
-  const session = selectedSession.value;
-  if (!session || (!supportsAiSessionSessionTimeline.value && !supportsAiSessionTurnTimeline.value)) return;
-  const instanceId = props.instance.id;
-  const turns = aiSessionTurns(session);
-  const turn = turns.find((candidate) => candidate.id === turnId || candidate.providerTurnId === turnId);
-  if (!turn) return;
-  if (shouldDeferTurnTimelineLoad(turns, turn, supportsAiSessionLiveTimelineItems.value)) return;
-  const state = timelineItemStore.turnState(instanceId, session.id, turn);
-  // A provider may expose only the complete-session reader; use it as the
-  // authoritative fallback when independent Turn reads are unavailable.
-  if (!supportsAiSessionTurnTimeline.value) {
-    if (!force && (state.status === "ready" || state.status === "loading")) return;
-    return loadFullTimelineForSession(session, true);
-  }
-  if (!force && (state.status === "ready" || state.status === "loading")) return;
-  const key = timelineLoadKey(instanceId, session.id, turn.id);
-  const existing = activeTurnTimelineLoads.get(key);
-  if (existing) return existing;
-  timelineItemStore.beginTurnLoad(instanceId, session.id, turn);
-  const load = getAiSessionTurnTimeline(instanceId, session.id, turn.id)
-    .then((result) => timelineItemStore.resolveTurn(instanceId, session.id, turn, result.items))
-    .catch((error) => timelineItemStore.rejectTurn(
-      instanceId,
-      session.id,
-      turn,
-      translateApiError(error, t, t("sessions.timeline.loadFailed")),
-    ))
-    .finally(() => activeTurnTimelineLoads.delete(key));
-  activeTurnTimelineLoads.set(key, load);
-  return load;
-}
-
-function loadSelectedTurnTimeline(force = false) {
-  const turn = selectedTimelineTurn.value;
-  return turn ? loadTurnTimeline(turn.id, force) : undefined;
-}
-
-watch(timelineItemStore.recoveryRevision, () => void loadSelectedTurnTimeline(true));
 watch(() => ({
   id: selectedSession.value?.id,
   unread: selectedSession.value?.unread,
@@ -1363,7 +1244,7 @@ const newSessionFolders = computed<NewSessionFolderOption[]>(() => {
   return [...new Map(folders.map((folder) => [folder.id, {
     id: folder.id,
     cwdFolderId: folder.id,
-    name: folder.name,
+    name: nodeLocalFolderDisplayName(folder),
     path: folder.path,
   }])).values()];
 });
@@ -1955,13 +1836,16 @@ async function continueHistoryConversation() {
   const item = historyDetail.value?.item;
   if (!item || resumingHistoryId.value) return;
   resumingHistoryId.value = item.id;
+  const loadingToast = showDelayedControlPlaneLoadingToast(t("sessions.actions.forking"));
   try {
     const session = await resumeHistorySession(item);
     emit("selectAiSession", props.instance.id, session.id);
     await leaveHistoryMode();
   } catch (error) {
+    loadingToast.dismiss();
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.continueFailed")));
   } finally {
+    loadingToast.dismiss();
     resumingHistoryId.value = "";
   }
 }
@@ -1971,6 +1855,7 @@ async function sendHistoryMessage(permissionMode?: AiSessionPermissionMode) {
   const message = historyMessageDraft.value.trim();
   if (!item || resumingHistoryId.value || (!message && !historyMessageAttachments.value.length)) return;
   resumingHistoryId.value = item.id;
+  const loadingToast = showDelayedControlPlaneLoadingToast(t("sessions.actions.forking"));
   try {
     const session = await resumeHistorySession(item);
     const attachments = await uploadAttachments(props.instance.id, session.id, historyMessageAttachments.value);
@@ -1992,8 +1877,10 @@ async function sendHistoryMessage(permissionMode?: AiSessionPermissionMode) {
     emit("selectAiSession", props.instance.id, session.id);
     await leaveHistoryMode();
   } catch (error) {
+    loadingToast.dismiss();
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.continueFailed")));
   } finally {
+    loadingToast.dismiss();
     resumingHistoryId.value = "";
   }
 }
@@ -2241,7 +2128,7 @@ async function createNewSession(permissionMode?: AiSessionPermissionMode) {
   launchingNewSession.value = true;
   try {
     const attachments = attempt.uploadedAttachments
-      || await uploadMessageAttachments(props.instance.id, attempt.clientRequestId);
+      || await uploadAttachments(props.instance.id, attempt.clientRequestId, messageAttachments.value, "create-request");
     attempt.uploadedAttachments = attachments;
     const result = await createAiSession(props.instance.id, {
       agent: newSessionApp.value,
@@ -2300,14 +2187,20 @@ async function runSelectedSessionAction(permissionMode?: AiSessionPermissionMode
   await interruptSelectedSession();
 }
 
-async function uploadAttachments(instanceId: string, sessionId: string, attachments: AiSessionComposerAttachment[]) {
+async function uploadAttachments(instanceId: string, sessionId: string, attachments: AiSessionComposerAttachment[], scopeType: "session" | "create-request" = "session") {
   return Promise.all(attachments.map(async (attachment) => {
-    if (attachment.source.type === "runtime-path") {
-      return { id: attachment.id, kind: attachment.kind, name: attachment.name, mime: attachment.mime, size: attachment.size, source: attachment.source };
-    }
-    if (!attachment.dataUrl) throw new Error(t("sessions.panel.attachmentUnavailable", { name: attachment.name }));
-    const uploaded = await uploadAiSessionAttachment({ instanceId, sessionId, kind: attachment.kind, name: attachment.name, mime: attachment.mime, data: attachment.dataUrl });
-    return { id: uploaded.id, kind: uploaded.kind, source: { type: "upload-ref" as const } };
+    return uploadAiSessionComposerAttachment(attachment, (onProgress) => {
+      if (!attachment.dataUrl) throw new Error(t("sessions.panel.attachmentUnavailable", { name: attachment.name }));
+      return uploadAiSessionAttachment({
+        instanceId,
+        sessionId,
+        scopeType,
+        kind: attachment.kind,
+        name: attachment.name,
+        mime: attachment.mime,
+        data: attachment.dataUrl,
+      }, onProgress);
+    });
   }));
 }
 
@@ -2523,13 +2416,16 @@ async function openSessionApp(session: AiSessionSummary) {
 async function closeSession(session: AiSessionSummary) {
   if (stoppingAppSessionId.value) return;
   stoppingAppSessionId.value = session.id;
+  const loadingToast = showDelayedControlPlaneLoadingToast(t("sessions.actions.closingSession"));
   try {
     await closeAiSession(props.instance.id, session.id, crypto.randomUUID());
     await refreshBoard();
   } catch (error) {
+    loadingToast.dismiss();
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.closeSessionFailed")));
     await refreshBoard();
   } finally {
+    loadingToast.dismiss();
     stoppingAppSessionId.value = "";
   }
 }
@@ -2554,6 +2450,7 @@ async function performFork(session: AiSessionSummary, mode: "current" | "managed
   const requestKey = `${session.id}:${mode}:${throughTurnId || "latest"}`;
   const clientRequestId = forkRequestIds.get(requestKey) || crypto.randomUUID();
   forkRequestIds.set(requestKey, clientRequestId);
+  const loadingToast = showDelayedControlPlaneLoadingToast(t("sessions.actions.forking"));
   try {
     const result = await forkAiSession(props.instance.id, session.id, { clientRequestId, ...(throughTurnId ? { throughTurnId } : {}), workspace: { mode } });
     let forked = props.instance.aiSessions?.sessions.find((candidate) => candidate.id === result.aiSessionId && candidate.providerSessionId === result.providerSessionId);
@@ -2570,8 +2467,10 @@ async function performFork(session: AiSessionSummary, mode: "current" | "managed
     selectSession(forked.id);
     forkRequestIds.delete(requestKey);
   } catch (error) {
+    loadingToast.dismiss();
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.forkFailed")));
   } finally {
+    loadingToast.dismiss();
     forkingAiSessionId.value = "";
   }
 }
@@ -2902,6 +2801,19 @@ onMounted(() => {
     if (!detailScrollViewport) observeDetailScroll();
   });
 });
+
+watch(() => `${props.instance.id}\u0000${selectedSession.value?.id || ""}\u0000${selectedSession.value?.updatedAt || ""}`, async () => {
+  const session = selectedSession.value;
+  const revision = ++selectedSessionDetailRevision;
+  selectedSessionDetail.value = undefined;
+  if (!session) return;
+  try {
+    const detail = await getAiSessionDetail(props.instance.id, session.id);
+    if (revision === selectedSessionDetailRevision) selectedSessionDetail.value = detail;
+  } catch {
+    // Compatibility for v0.0.21: detail absence only disables retained attachment rendering.
+  }
+}, { immediate: true });
 
 watch(
   () => selectedTimelineTurn.value ? `${selectedTimelineTurn.value.id}:${selectedTimelineTurn.value.status}` : "",

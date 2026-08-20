@@ -524,18 +524,18 @@
                   <div v-for="claim in pendingProxyClaims.data.value" :key="claim.id" class="pending-proxy-row">
                     <span>{{ claim.proxyOrigin }} · {{ t(`settings.controlPlaneProxy.claimStatus.${claim.status}`) }}</span>
                     <div>
-                      <Button type="button" size="sm" variant="outline" :disabled="Boolean(pendingClaimBusyId)" @click="resumeProxyClaim(claim.id)">
-                        {{ pendingClaimBusyId === claim.id && pendingClaimAction === 'resume' ? t("settings.controlPlaneProxy.resuming") : t("settings.controlPlaneProxy.resume") }}
+                      <Button type="button" size="sm" variant="outline" :disabled="Boolean(pendingClaimBusyId)" @click="resumeProxyClaim(claim.claimId)">
+                        {{ pendingClaimBusyId === claim.claimId && pendingClaimAction === 'resume' ? t("settings.controlPlaneProxy.resuming") : t("settings.controlPlaneProxy.resume") }}
                       </Button>
                       <Button
                         type="button"
                         size="icon"
                         variant="outline"
                         :disabled="Boolean(pendingClaimBusyId)"
-                        :aria-label="t(pendingClaimBusyId === claim.id && pendingClaimAction === 'cancel' ? 'settings.controlPlaneProxy.cancelling' : 'settings.controlPlaneProxy.cancelClaim')"
-                        @click="cancelProxyClaim(claim.id)"
+                        :aria-label="t(pendingClaimBusyId === claim.claimId && pendingClaimAction === 'cancel' ? 'settings.controlPlaneProxy.cancelling' : 'settings.controlPlaneProxy.cancelClaim')"
+                        @click="cancelProxyClaim(claim.claimId)"
                       >
-                        <RefreshCw v-if="pendingClaimBusyId === claim.id && pendingClaimAction === 'cancel'" class="proxy-spin" :size="14" />
+                        <RefreshCw v-if="pendingClaimBusyId === claim.claimId && pendingClaimAction === 'cancel'" class="proxy-spin" :size="14" />
                         <Trash2 v-else :size="14" />
                       </Button>
                     </div>
@@ -552,7 +552,7 @@
                   <small>{{ nodeLocationLabel(target) }} · {{ nodeEndpointDisplay(target.endpoint) || target.connectionMode }}</small>
                 </span>
                 <span class="node-list-meta">
-                  <Tooltip>
+                  <Tooltip @update:open="refreshNodeConnectionDiagnostics">
                     <TooltipTrigger as-child>
                       <span class="node-diagnostic-badge" :aria-label="nodeBuildTitle(target.id)">
                         <Badge :variant="nodeStatusVariant(target.id)">{{ nodeStatusLabel(target.id) }}</Badge>
@@ -566,6 +566,7 @@
                         <span v-if="nodeBuild(target.id)?.imageRef"><b>{{ t("settings.nodeRegistry.image") }}</b><em>{{ nodeBuild(target.id)?.imageRef }}</em></span>
                         <span v-if="nodeBuild(target.id)?.builtAt"><b>{{ t("settings.nodeRegistry.built") }}</b><em>{{ nodeBuild(target.id)?.builtAt }}</em></span>
                       </div>
+                      <NodeConnectionDiagnostics class="node-list-connection-diagnostics" :diagnostics="target.connectionDiagnostics" />
                     </TooltipContent>
                   </Tooltip>
                   <small>{{ nodeRuntimeSummary(target.id) }} · {{ nodeInstanceSummary(target.id) }}</small>
@@ -801,6 +802,7 @@ import { useNodeResourceSettings } from "./useNodeResourceSettings";
 import { useNodeSettings } from "./useNodeSettings";
 import { useDesktopUpdates, type DesktopUpdateChannel } from "./useDesktopUpdates";
 import NodeDetailPanel from "./NodeDetailPanel.vue";
+import NodeConnectionDiagnostics from "./NodeConnectionDiagnostics.vue";
 import NodeAgentInstallDialog from "./NodeAgentInstallDialog.vue";
 import NodeStorageFolderPickerDialog from "./NodeStorageFolderPickerDialog.vue";
 import GeneratedTokenDialog from "./GeneratedTokenDialog.vue";
@@ -1045,8 +1047,6 @@ const {
   isControlPlaneBuiltinNode,
   isControlPlaneLocalNode,
   nodeLocalFolders,
-  nodeFolderDefaultImageId,
-  nodeFolderImageOptions,
   nodeStorageFolderCanConfirm,
   nodeStorageFolderBreadcrumbs,
   nodeStorageFolderCanGoUp,
@@ -1064,6 +1064,8 @@ const {
   nodeLocationLabel,
   orderedNodes,
   removeNodeLocalFolder,
+  renameNodeLocalFolder,
+  renamingNodeLocalFolderId,
   removeRuntime,
   runtimeName,
   checkRuntime,
@@ -1081,7 +1083,6 @@ const {
   chooseProjectFolder: props.chooseProjectFolder,
   clearDefaultRuntime,
   errorText,
-  imageOptions: imageOptions.data,
   instances: boardItems,
   nodes: nodes.data,
   refreshFolders: refreshNodeFolders,
@@ -1437,9 +1438,13 @@ async function forceCancelProxyClaim() {
   pendingClaimAction.value = "force-cancel";
   pendingClaimError.value = "";
   try {
-    await cancelControlPlaneProxyClaim(id, true);
-    pendingClaimForceId.value = "";
+    const result = await cancelControlPlaneProxyClaim(id, true);
     await pendingProxyClaims.refetch();
+    if (!result.deleted && pendingProxyClaims.data.value?.some((claim) => claim.claimId === id)) {
+      pendingClaimError.value = t("settings.controlPlaneProxy.forceCancelFailed");
+      return;
+    }
+    pendingClaimForceId.value = "";
   } catch (error) {
     showControlPlaneToast(translateApiError(error, t));
   } finally {
@@ -1540,16 +1545,17 @@ const nodeDetailActions = computed(() => ({
   loadNodeImages,
   loadControlPlaneAccess,
   loadManagedUpdateJobs,
+  refreshNodeConnectionState: async () => { await nodes.refetch(); },
   openInstanceSettings: (instanceId: string) => emit("openInstanceSettings", instanceId),
   openNodeRename,
   removeNode,
   removeNodeLocalFolder,
+  renameNodeLocalFolder,
   removeRemoteKey,
   removeControlPlaneConnection,
   removeRuntime,
   saveExternalListener,
   submitNodeLocalFolder,
-  updateNodeFolderDefaultImage: (value: string) => { nodeFolderDefaultImageId.value = value === "__none__" ? "" : value; },
   setUpdateChannel,
   updateExternalListenerDraft,
   updateRemoteConnect,
@@ -1565,6 +1571,7 @@ const nodeDetailBusy = computed(() => ({
   creatingPairingInviteNodeId: creatingPairingInviteNodeId.value,
   deletingNodeId: deletingNodeId.value,
   deletingNodeLocalFolderId: deletingNodeLocalFolderId.value,
+  renamingNodeLocalFolderId: renamingNodeLocalFolderId.value,
   deletingRemoteKeyId: deletingRemoteKeyId.value,
   deletingControlPlaneConnectionId: deletingControlPlaneConnectionId.value,
   deletingRuntimeId: deletingRuntimeId.value,
@@ -1582,8 +1589,6 @@ const nodeDetailResources = computed(() => ({
   instances: selectedNodeInstances.value,
   localFoldersError: nodeLocalFolders.error.value ? errorText(nodeLocalFolders.error.value) : "",
   localFolders: nodeLocalFolders.data.value || [],
-  nodeFolderDefaultImageId: nodeFolderDefaultImageId.value,
-  nodeFolderImageOptions: nodeFolderImageOptions.value || [],
   remoteConnect,
   remoteConnectResultByNodeId,
   controlPlanePairings: selectedNode.value ? controlPlanePairingsByNodeId[selectedNode.value.id] || [] : [],
@@ -1812,6 +1817,10 @@ function nodeStatusVariant(nodeId: string) {
 
 function nodeStatusClass(nodeId: string) {
   return `status-${nodeStatusValue(nodeId)}`;
+}
+
+function refreshNodeConnectionDiagnostics(open: boolean) {
+  if (open) void nodes.refetch();
 }
 
 function updateRemoteConnect(field: "controlPlaneUrl" | "joinToken" | "controlPlaneName", value: string) {
@@ -2100,6 +2109,12 @@ function errorText(error: unknown) {
 :global(.node-diagnostic-tooltip-grid em) {
   color: var(--text-strong) !important;
   font-weight: 650;
+}
+
+.node-list-connection-diagnostics {
+  margin-top: 9px;
+  border-top: 1px solid var(--line-subtle);
+  padding-top: 9px;
 }
 
 :global(.node-add-menu) {

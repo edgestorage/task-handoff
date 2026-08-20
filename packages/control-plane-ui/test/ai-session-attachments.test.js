@@ -16,6 +16,42 @@ test("composer supports generic files and Local Runtime path references", () => 
   assert.match(composer, /attachment\.kind === 'file'/);
 });
 
+test("composer image attachments expose upload progress, contain previews, and image copy", () => {
+  const composer = fs.readFileSync(new URL("../src/components/ai-session/AiSessionComposer.vue", import.meta.url), "utf8");
+  const upload = fs.readFileSync(new URL("../src/components/ai-session/attachmentUpload.ts", import.meta.url), "utf8");
+  const transport = fs.readFileSync(new URL("../src/api/sharedClient.ts", import.meta.url), "utf8");
+  assert.match(composer, /role="progressbar"/);
+  assert.match(composer, /object-fit: contain/);
+  assert.match(composer, /openImagePreview\(attachment\)/);
+  assert.match(composer, /ai-session-composer__image-dialog/);
+  assert.match(composer, /<ContextMenuItem @select="copyAttachmentImage\(attachment\)">/);
+  assert.match(composer, /navigator\.clipboard\.write\(\[new ClipboardItem/);
+  assert.match(composer, /imageBlobAsPng/);
+  assert.match(upload, /attachment\.uploadState = "uploading"/);
+  assert.match(upload, /attachment\.uploadProgress = Math\.max\(0, Math\.min\(1, progress\)\)/);
+  assert.match(transport, /requestJsonWithUploadProgress/);
+  assert.doesNotMatch(transport, /onUploadProgress:/);
+});
+
+test("conversation detail renders retained image and file metadata without a UI attachment overlay", () => {
+  const attachments = fs.readFileSync(new URL("../src/components/ai-session/AiSessionMessageAttachments.vue", import.meta.url), "utf8");
+  const timeline = fs.readFileSync(new URL("../src/components/ai-session/AiSessionTimelineView.vue", import.meta.url), "utf8");
+  const panel = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.vue", import.meta.url), "utf8");
+  assert.match(timeline, /turn\.userMessages/);
+  assert.match(timeline, /<AiSessionMessageAttachments/);
+  assert.match(attachments, /contentState === 'available'/);
+  assert.match(attachments, /object-fit: contain/);
+  assert.match(attachments, /<Dialog/);
+  assert.match(attachments, /<ContextMenuItem @select="copyImage\(attachment\)">/);
+  assert.match(attachments, /navigator\.clipboard\.write/);
+  assert.match(attachments, /attachment\.contentState === 'expired'/);
+  assert.match(attachments, /'Expired' : 'Missing'/);
+  assert.match(panel, /getAiSessionDetail/);
+  assert.match(panel, /selectedConversationSession \|\| selectedSession/);
+  assert.match(panel, /return \{ \.\.\.session, turns: detail\.turns \|\| session\.turns \};/);
+  assert.doesNotMatch(panel, /session\.turns\s*=.*attachments/);
+});
+
 test("desktop runtime paths are limited to the control-plane local node", () => {
   const mentions = fs.readFileSync(new URL("../src/components/ai-session/useAiSessionMentions.ts", import.meta.url), "utf8");
   const board = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionBoardView.vue", import.meta.url), "utf8");

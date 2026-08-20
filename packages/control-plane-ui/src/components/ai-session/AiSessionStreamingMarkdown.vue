@@ -405,11 +405,4 @@ watch(
 .ai-session-streaming-markdown :deep(.hljs-emphasis) { font-style: italic; }
 .ai-session-streaming-markdown :deep(.hljs-strong) { font-weight: 700; }
 
-.ai-session-streaming-markdown :deep(.ai-session-highlighted-code > :first-child) {
-  margin-top: 0;
-}
-
-.ai-session-streaming-markdown :deep(.ai-session-highlighted-code > :last-child) {
-  margin-bottom: 0;
-}
 </style>

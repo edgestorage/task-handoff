@@ -142,6 +142,22 @@ test("control-plane proxy websocket keeps route and auth binding-scoped and uses
   assert.deepEqual(downstream.closes.at(-1), { code: 1000, reason: "done" });
 });
 
+test("control-plane proxy keeps only the latest control frame until the upstream websocket opens", () => {
+  const upstream = new TestSocket();
+  upstream.readyState = 0;
+  const transport = new ControlPlaneProxyNodeAgentTransport({
+    credentialForNode: () => credential,
+    openWebSocket: () => upstream,
+  });
+  const control = transport.proxyWebSocket(node, new TestSocket(), "/events");
+  control.send("old-subscription");
+  control.send("current-subscription");
+  assert.deepEqual(upstream.sent, []);
+  upstream.readyState = upstream.OPEN;
+  upstream.emit("open");
+  assert.deepEqual(upstream.sent.map((entry) => entry.data), ["current-subscription"]);
+});
+
 test("control-plane proxy validates route and credential identity before I/O", async () => {
   let requests = 0;
   const transport = new ControlPlaneProxyNodeAgentTransport({

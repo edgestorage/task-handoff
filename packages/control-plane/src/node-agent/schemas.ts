@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AI_SESSION_HISTORY_MAX_LIMIT, AiSessionPermissionModeSchema } from "@task-handoff/protocol/ai-sessions";
+import { AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS, AI_SESSION_HISTORY_MAX_LIMIT, AiSessionPermissionModeSchema } from "@task-handoff/protocol/ai-sessions";
 import {
   ControlledInstanceSchema,
   EnvironmentSourceSchema,
@@ -21,10 +21,17 @@ export const ProxyRequestSchema = z
 export const CreateLocalFolderSchema = z
   .object({
     id: z.string().trim().min(1).max(120).optional(),
-    name: z.string().trim().min(1).max(160),
+    name: z.string().trim().max(160),
     path: z.string().trim().min(1).max(4096),
+    // Compatibility for v0.0.21 control planes; new clients do not associate local folders with images.
     defaultImageSelection: ImageSelectionSchema.optional(),
     labels: z.record(z.string(), z.string()).default({}),
+  })
+  .strict();
+
+export const UpdateLocalFolderSchema = z
+  .object({
+    name: z.string().trim().max(160),
   })
   .strict();
 
@@ -50,6 +57,7 @@ export const CreateNodeInstanceSchema = z
       autoImportAgentConfigs: z.boolean().optional(),
       defaultCodexPermissionMode: AiSessionPermissionModeSchema.optional(),
       aiSessionHistoryLimit: z.number().int().min(1).max(AI_SESSION_HISTORY_MAX_LIMIT).optional(),
+      aiSessionAttachmentRetentionDays: z.number().int().min(0).max(AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS).optional(),
     }).strict().optional(),
     modelSelection: ControlledInstanceSchema.shape.modelSelection,
   })
@@ -70,6 +78,7 @@ export const UpdateNodeInstanceSchema = z
       autoImportAgentConfigs: z.boolean().optional(),
       defaultCodexPermissionMode: AiSessionPermissionModeSchema.optional(),
       aiSessionHistoryLimit: z.number().int().min(1).max(AI_SESSION_HISTORY_MAX_LIMIT).optional(),
+      aiSessionAttachmentRetentionDays: z.number().int().min(0).max(AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS).optional(),
     }).strict().optional(),
     modelSelection: ControlledInstanceSchema.shape.modelSelection.optional(),
   })

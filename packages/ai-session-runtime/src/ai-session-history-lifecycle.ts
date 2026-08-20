@@ -17,6 +17,7 @@ export function aiSessionHistoryTurns(session: AiSessionStatus): AiSessionHistor
     id: turn.id,
     providerTurnId: turn.providerTurnId,
     userPrompt: turn.userPrompt,
+    userMessages: turn.userMessages,
     status: turn.status,
     phase: turn.phase,
     summary: turn.summary,
@@ -75,8 +76,8 @@ export class AiSessionHistoryLifecycle {
     let activated = 0;
     for (const session of sessions) {
       if (!resumableAgent(session.agent) || !session.providerSessionId || !session.appSessionId || !activeIds.has(session.appSessionId)) continue;
-      activated += Number(this.store.remove(session.id));
-      activated += Number(this.store.removeIdentity(session.agent, session.providerSessionId));
+      activated += Number(this.store.activate(session.id));
+      activated += Number(this.store.activateIdentity(session.agent, session.providerSessionId));
     }
     return { activated, items: this.store.list() };
   }
@@ -92,8 +93,8 @@ export class AiSessionHistoryLifecycle {
     for (const session of sessions) {
       if (!resumableAgent(session.agent) || !session.providerSessionId || !session.appSessionId) continue;
       if (activeIds.has(session.appSessionId)) {
-        activated += Number(this.store.remove(session.id));
-        activated += Number(this.store.removeIdentity(session.agent, session.providerSessionId));
+        activated += Number(this.store.activate(session.id));
+        activated += Number(this.store.activateIdentity(session.agent, session.providerSessionId));
         continue;
       }
       const existing = this.store.get(session.id)

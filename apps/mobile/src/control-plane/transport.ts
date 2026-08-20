@@ -1,5 +1,6 @@
 import type { z } from 'zod';
 import type { ControlPlaneClientTransport } from '@task-handoff/control-plane-client';
+import type { AiSessionTransientSubscription } from '@task-handoff/protocol/events';
 
 import type {
   MobileControlPlaneCapabilities,
@@ -13,6 +14,8 @@ export type MobileControlPlaneProbe = {
 };
 
 export type MobileControlPlaneEvent = {
+  id?: string;
+  replay?: boolean;
   type: string;
   topic?: string;
   payload?: unknown;
@@ -21,6 +24,7 @@ export type MobileControlPlaneEvent = {
 
 export type MobileControlPlaneEventHandlers = {
   topics?: readonly string[];
+  aiSessionTransient?: AiSessionTransientSubscription;
   onOpen(): void;
   onEvent(event: MobileControlPlaneEvent): void;
   onError(error: MobileControlPlaneTransportError): void;
@@ -29,6 +33,7 @@ export type MobileControlPlaneEventHandlers = {
 
 export interface MobileControlPlaneEventConnection {
   close(): void;
+  updateAiSessionTransient?(subscription: AiSessionTransientSubscription): void;
 }
 
 export type MobileAppSessionTtyHandlers = {

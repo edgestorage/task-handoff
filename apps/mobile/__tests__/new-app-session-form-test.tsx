@@ -26,7 +26,7 @@ test('new App session uses full-width anchored selectors for instance, App, and 
     onInstanceChange={jest.fn()}
   />);
 
-  fireEvent(screen.getByTestId('new-app-session-selection-card'), 'layout', { nativeEvent: { layout: { height: 216, width: 362, x: 0, y: 0 } } });
+  await fireEvent(screen.getByTestId('new-app-session-selection-card'), 'layout', { nativeEvent: { layout: { height: 216, width: 362, x: 0, y: 0 } } });
   const instanceButton = screen.getByRole('button', { name: 'Instance: Local workspace' });
   const appButton = screen.getByRole('button', { name: 'App: Terminal' });
   const folderButton = screen.getByRole('button', { name: 'Folder: Default workspace' });
@@ -35,5 +35,5 @@ test('new App session uses full-width anchored selectors for instance, App, and 
     expect(StyleSheet.flatten(appButton.props.style).width).toBe(334);
     expect(StyleSheet.flatten(folderButton.props.style).width).toBe(334);
   });
-  screen.unmount();
+  await screen.unmount();
 });

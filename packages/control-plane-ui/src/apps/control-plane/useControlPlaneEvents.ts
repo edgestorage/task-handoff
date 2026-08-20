@@ -18,6 +18,7 @@ import { controlPlaneQueryKeys } from "../../api/queryKeys.ts";
 import { controlPlaneDomainQueryKeys } from "../../api/queryInvalidation.ts";
 import { applyInstanceLifecycle } from "./instanceLifecycleCache.ts";
 import { controlPlaneEventDomains } from "./eventInvalidation.ts";
+import { aiSessionMessageDeltaDemand, aiSessionTimelineDemand, aiSessionTransientReplaySince } from "./useAiSessionEventDemand.ts";
 import {
   AiSessionEventType,
   AppSessionEventType,
@@ -27,6 +28,8 @@ import {
 } from "../../api/types";
 
 type EventMessage = {
+  id?: string;
+  replay?: boolean;
   type?: string;
   topic?: string;
   payload?: unknown;
@@ -47,7 +50,7 @@ export function useControlPlaneEvents(input: {
   aiSessions: {
     applyEvent: (event: AiSessionDeltaResponse["events"][number]) => boolean;
     applyUnreadEvent: (state: AiSessionUnreadState) => boolean;
-    applyMessageDelta: (payload: AiSessionMessageDeltaEvent) => boolean;
+    applyMessageDelta: (payload: AiSessionMessageDeltaEvent, options?: { replay?: boolean }) => boolean;
     applyTimelineItem: (payload: AiSessionTimelineItemEvent) => boolean;
     recoverTimelineItems: () => void;
     recoverDescriptor: (descriptor: SessionStreamDescriptor) => Promise<void>;
@@ -78,6 +81,7 @@ export function useControlPlaneEvents(input: {
   let closing = false;
   const reconnectBackoff = new StandardReconnectBackoff();
   let hasOpened = false;
+  const seenTransientEventIds = new Set<string>();
 
   function connect() {
     if (input.enabled !== undefined && !toValue(input.enabled)) return;
@@ -89,7 +93,7 @@ export function useControlPlaneEvents(input: {
       const recovering = hasOpened;
       hasOpened = true;
       const instanceId = toValue(input.instanceId || "");
-      current.send(JSON.stringify({ type: "subscribe", topics: ["*"], ...(instanceId ? { instanceIds: [instanceId] } : {}) }));
+      sendSubscription(current, new Date().toISOString());
       void queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.scopedInstanceBoard(toValue(input.instanceId || "")) });
       void input.appManagement?.recoverOpen();
       void input.resourceMetrics?.recoverOpen();
@@ -107,6 +111,29 @@ export function useControlPlaneEvents(input: {
         }, delay);
       }
     });
+  }
+
+  function sendSubscription(target = socket, replaySince = aiSessionTransientReplaySince.value) {
+    if (!target || target.readyState !== WebSocket.OPEN) return;
+    const instanceId = toValue(input.instanceId || "");
+    const messageDeltaDemand = aiSessionMessageDeltaDemand.value;
+    const scopedMessageDeltaDemanded = Boolean(instanceId) && (
+      messageDeltaDemand.allInstances || messageDeltaDemand.instanceIds.includes(instanceId)
+    );
+    target.send(JSON.stringify({
+      v: 1,
+      type: "subscribe",
+      topics: ["*"],
+      ...(instanceId ? { instanceIds: [instanceId] } : {}),
+      aiSessionTransient: {
+        ...(replaySince ? { replaySince } : {}),
+        messageDeltas: instanceId
+          ? { allInstances: false, instanceIds: scopedMessageDeltaDemanded ? [instanceId] : [] }
+          : messageDeltaDemand,
+        timelineAllSessions: false,
+        timelineSessions: aiSessionTimelineDemand.value.filter((entry) => !instanceId || entry.instanceId === instanceId),
+      },
+    }));
   }
 
   function handleMessage(raw: string) {
@@ -147,9 +174,13 @@ export function useControlPlaneEvents(input: {
       return input.imagePullProgress?.applyEvent(event.type, event.payload) || false;
     }
     if (event.type === AiSessionEventType.MessageDelta) {
-      return input.aiSessions.applyMessageDelta(event.payload as AiSessionMessageDeltaEvent);
+      if (event.id && seenTransientEventIds.has(event.id)) return true;
+      if (event.id) rememberTransientEventId(event.id);
+      return input.aiSessions.applyMessageDelta(event.payload as AiSessionMessageDeltaEvent, { replay: event.replay });
     }
     if (event.type === AiSessionEventType.TimelineItem) {
+      if (event.id && seenTransientEventIds.has(event.id)) return true;
+      if (event.id) rememberTransientEventId(event.id);
       const item = safeParseResponse(AiSessionTimelineItemEventSchema, event.payload);
       return item.success ? input.aiSessions.applyTimelineItem(item.data) : false;
     }
@@ -179,6 +210,12 @@ export function useControlPlaneEvents(input: {
       return applyInstanceLifecycle(queryClient, lifecycle.data);
     }
     return false;
+  }
+
+  function rememberTransientEventId(id: string) {
+    seenTransientEventIds.delete(id);
+    seenTransientEventIds.add(id);
+    while (seenTransientEventIds.size > 10_000) seenTransientEventIds.delete(seenTransientEventIds.values().next().value!);
   }
 
   function scheduleTargetedInvalidation(events: EventMessage[]) {
@@ -216,6 +253,15 @@ export function useControlPlaneEvents(input: {
     closing = false;
     connect();
   });
+  watch([aiSessionMessageDeltaDemand, aiSessionTimelineDemand, aiSessionTransientReplaySince], () => {
+    const replaySince = aiSessionTransientReplaySince.value;
+    sendSubscription(socket, replaySince);
+    // Establish the authoritative half of the snapshot/replay barrier. Events
+    // produced after replaySince are recovered by the source replay below it.
+    if (replaySince) {
+      void queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.scopedInstanceBoard(toValue(input.instanceId || "")) });
+    }
+  }, { deep: false });
   onBeforeUnmount(() => {
     closing = true;
     reconnectBackoff.reset();
@@ -228,6 +274,7 @@ export function useControlPlaneEvents(input: {
 
 function eventsUrl(instanceId = "") {
   const url = new URL("/api/events", window.location.origin);
+  url.searchParams.set("aiSessionTransient", "1");
   if (instanceId) url.searchParams.set("instanceId", instanceId);
   url.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   return url.toString();

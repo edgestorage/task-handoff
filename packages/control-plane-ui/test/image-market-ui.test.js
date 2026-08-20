@@ -79,6 +79,10 @@ test("instance and settings surfaces preserve Market and Custom ownership", () =
   assert.doesNotMatch(project, /defaultImageId/);
 
   const nodeFolders = fs.readFileSync(path.join(__dirname, "../src/apps/control-plane/settings/useNodeResourceSettings.ts"), "utf8");
-  assert.match(nodeFolders, /defaultImageSelection/);
-  assert.match(nodeFolders, /nodeFolderImageOptions/);
+  assert.doesNotMatch(nodeFolders, /defaultImageSelection/);
+  assert.doesNotMatch(nodeFolders, /nodeFolderImageOptions/);
+
+  const nodeDetail = fs.readFileSync(path.join(__dirname, "../src/apps/control-plane/settings/NodeDetailPanel.vue"), "utf8");
+  assert.doesNotMatch(nodeDetail, /nodeFolderDefaultImageId|nodeFolderImageOptions/);
+  assert.match(nodeDetail, /renameNodeLocalFolder/);
 });

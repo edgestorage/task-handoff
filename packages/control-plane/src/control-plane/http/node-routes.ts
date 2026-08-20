@@ -193,6 +193,12 @@ export function registerNodeRoutes({
     events.publish("node.local-folder.created", { nodeId: params.id, folderId: folder.id });
     return reply.code(201).send({ data: folder });
   });
+  app.patch("/api/nodes/:id/local-folders/:folderId", async (request) => {
+    const params = NodeLocalFolderParamsSchema.parse(request.params);
+    const folder = await service.updateNodeLocalFolder(params.id, params.folderId, request.body);
+    events.publish("node.local-folder.updated", { nodeId: params.id, folderId: params.folderId });
+    return { data: folder };
+  });
   app.delete("/api/nodes/:id/local-folders/:folderId", async (request) => {
     const params = NodeLocalFolderParamsSchema.parse(request.params);
     const result = await service.deleteNodeLocalFolder(params.id, params.folderId);

@@ -73,6 +73,9 @@ export const CONTROL_PLANE_PROXY_APPLICATION_REQUEST_HEADERS = new Set([
   "if-none-match",
   "range",
   "x-request-id",
+  // Compatibility for v0.0.21: this optional diagnostic header is ignored by
+  // older proxies and must never gate the underlying application request.
+  "x-task-handoff-trace-id",
 ]);
 
 export const CONTROL_PLANE_PROXY_APPLICATION_RESPONSE_HEADERS = new Set([
@@ -84,7 +87,9 @@ export const CONTROL_PLANE_PROXY_APPLICATION_RESPONSE_HEADERS = new Set([
   "content-type",
   "etag",
   "last-modified",
+  "server-timing",
   "x-request-id",
+  "x-task-handoff-trace-id",
 ]);
 
 export const CONTROL_PLANE_PROXY_AUTH_HEADERS = {

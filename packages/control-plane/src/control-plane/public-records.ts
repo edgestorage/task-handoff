@@ -109,7 +109,10 @@ export function publicInstanceDirectory(item: InstanceBoardResult["items"][numbe
     health: item.health,
     connectionStatus: item.connectionStatus,
     ready: item.ready,
-    capabilities: { aiSessionTimeline: item.capabilities.features.aiSessionTimeline },
+    capabilities: {
+      aiSessionTimeline: item.capabilities.features.aiSessionTimeline,
+      aiSessionConversationAttachments: item.capabilities.features.aiSessionConversationAttachments,
+    },
     config: { defaultCodexPermissionMode: item.config.defaultCodexPermissionMode },
     lastHeartbeatAt: item.lastHeartbeatAt,
     heartbeatAgeMs: item.heartbeatAgeMs,

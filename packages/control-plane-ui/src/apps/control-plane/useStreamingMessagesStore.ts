@@ -49,6 +49,7 @@ type AppendDeltaInput = {
   streamId: string;
   delta: string;
   generatedAt?: string;
+  replay?: boolean;
 };
 
 type StreamingMessagesStoreOptions = {
@@ -96,6 +97,10 @@ export function createStreamingMessagesStore(options: StreamingMessagesStoreOpti
     const at = input.generatedAt || now();
     const entry = ensureMessage(input.identity, input.streamId, at);
     const current = entry.value;
+    // A demand transition loads an authoritative snapshot while the source
+    // replays transient events after its cursor. Do not append replay that the
+    // snapshot already incorporates.
+    if (input.replay && current.receivedAt && at <= current.receivedAt) return entry;
     entry.value = appendAiSessionMessageDelta(current, input.delta, at);
     return entry;
   }

@@ -11,6 +11,7 @@ import {
   proxyWebSocketProtocols,
   readResponseBodyWithLimit,
 } from "../instance-proxy-codec.ts";
+import { appendServerTiming, serverTimingDuration, TRACE_ID_HEADER } from "../../shared/http/server-timing.ts";
 
 type Diagnostic = (data: Record<string, unknown>, message: string) => void;
 
@@ -51,6 +52,7 @@ export function registerInstanceProxyRoutes(app: FastifyInstance, options: Optio
   const { fetchImpl, metrics, diagnostic } = options;
 
   app.post("/api/node-agent/instances/:id/proxy", async (request, reply) => {
+    const startedAt = performance.now();
     const id = (request.params as { id: string }).id;
     const parsed = ProxyRequestSchema.parse(request.body);
     const instanceBase = options.instanceBase(id);
@@ -64,7 +66,15 @@ export function registerInstanceProxyRoutes(app: FastifyInstance, options: Optio
     });
     const contentType = response.headers.get("content-type") || "application/octet-stream";
     const text = await response.text();
-    diagnostic({ instanceId: id, action: "proxy", method: parsed.method, path: proxyPath, statusCode: response.status, contentType }, "node instance proxy completed");
+    const durationMs = performance.now() - startedAt;
+    const traceId = response.headers.get(TRACE_ID_HEADER) || parsed.headers[TRACE_ID_HEADER];
+    const serverTiming = appendServerTiming(
+      response.headers.get("server-timing"),
+      serverTimingDuration("node_proxy", durationMs),
+    );
+    reply.header("server-timing", serverTiming);
+    if (traceId) reply.header(TRACE_ID_HEADER, traceId);
+    diagnostic({ instanceId: id, action: "proxy", method: parsed.method, path: proxyPath, statusCode: response.status, contentType, durationMs, traceId }, "node instance proxy completed");
     reply.code(response.status).type(contentType).send(text);
   });
 

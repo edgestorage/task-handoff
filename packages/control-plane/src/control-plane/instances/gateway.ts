@@ -1,6 +1,7 @@
 import { controlledInstanceAcceptsTraffic, type ControlledInstance, type ControlledInstanceHeartbeat, type Node } from "@task-handoff/protocol/control-plane";
 import { plainHeaders } from "../common/helpers.ts";
 import type { NodeAgentTransport, NodeAgentWebSocket } from "../nodes/client.ts";
+import { appendServerTiming, serverTimingDuration, TRACE_ID_HEADER, type RequestTimingDiagnostics } from "../../shared/http/server-timing.ts";
 
 export type ControlledInstanceGatewayOptions = {
   requireNode: (nodeId: string) => Node;
@@ -20,7 +21,12 @@ export class ControlledInstanceGateway {
     this.nodeAgentTransport = options.nodeAgentTransport;
   }
 
-  async request(instance: ControlledInstance, route: string, init: RequestInit = {}) {
+  async request(
+    instance: ControlledInstance,
+    route: string,
+    init: RequestInit = {},
+    onTiming?: (diagnostics: RequestTimingDiagnostics) => void,
+  ) {
     if (!instance.target.web || (instance.connectionStatus !== "online" && instance.agentStatus !== "online")) {
       const error = new Error(`Instance ${instance.name} is not reachable.`);
       Object.assign(error, { statusCode: 409, code: "INSTANCE_UNREACHABLE" });
@@ -28,15 +34,30 @@ export class ControlledInstanceGateway {
     }
     assertInstanceAcceptsTraffic(instance);
     const node = this.requireNode(instance.nodeId);
+    const applicationHeaders = plainHeaders(init.headers);
+    const startedAt = performance.now();
     const response = await this.nodeAgentTransport(node).request(node, `/instances/${encodeURIComponent(instance.id)}/proxy`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        ...(applicationHeaders[TRACE_ID_HEADER] ? { [TRACE_ID_HEADER]: applicationHeaders[TRACE_ID_HEADER] } : {}),
+      },
       body: JSON.stringify({
         path: `/api/${route.replace(/^\/+/, "")}`,
         method: init.method || "GET",
-        headers: plainHeaders(init.headers),
+        headers: applicationHeaders,
         body: requestBody(init.body),
       }),
+    });
+    const nodeTransportMs = performance.now() - startedAt;
+    const serverTiming = appendServerTiming(
+      response.headers.get("server-timing"),
+      serverTimingDuration("node_transport", nodeTransportMs),
+    );
+    onTiming?.({
+      traceId: response.headers.get(TRACE_ID_HEADER) || undefined,
+      serverTiming,
+      nodeTransportMs,
     });
     const payload = await response.json().catch(() => ({})) as { data?: unknown; error?: unknown };
     if (!response.ok) {

@@ -123,7 +123,7 @@ describe('DirectControlPlaneTransport', () => {
     transport.connectEvents({ onOpen: jest.fn(), onEvent, onError: jest.fn(), onClose: jest.fn() });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(factory).toHaveBeenCalledWith('wss://control.example.com/api/events', { authorization: 'Bearer msess_test.secret' });
+    expect(factory).toHaveBeenCalledWith('wss://control.example.com/api/events?aiSessionTransient=1', { authorization: 'Bearer msess_test.secret' });
     listeners.get('open')?.({});
     expect(socket.send).toHaveBeenCalledWith(expect.stringContaining('"type":"subscribe"'));
     expect(socket.send).toHaveBeenCalledWith(expect.stringContaining('"node.state"'));
@@ -146,13 +146,14 @@ describe('DirectControlPlaneTransport', () => {
       probeImpl: async () => target,
       webSocketFactory: factory,
     });
-    const first = transport.connectEvents({ topics: ['ai.sessions'], onOpen: jest.fn(), onEvent: firstEvent, onError: jest.fn(), onClose: jest.fn() });
+    const aiSessionTransient = { messageDeltas: { allInstances: false, instanceIds: [] }, timelineAllSessions: false, timelineSessions: [] };
+    const first = transport.connectEvents({ topics: ['ai.sessions'], aiSessionTransient, onOpen: jest.fn(), onEvent: firstEvent, onError: jest.fn(), onClose: jest.fn() });
     const second = transport.connectEvents({ topics: ['nodes'], onOpen: jest.fn(), onEvent: secondEvent, onError: jest.fn(), onClose: jest.fn() });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(factory).toHaveBeenCalledTimes(1);
     listeners.get('open')?.({});
-    expect(socket.send).toHaveBeenLastCalledWith(JSON.stringify({ v: 1, type: 'subscribe', topics: ['ai.sessions', 'nodes'] }));
+    expect(socket.send).toHaveBeenLastCalledWith(JSON.stringify({ v: 1, type: 'subscribe', topics: ['ai.sessions', 'nodes'], aiSessionTransient }));
     listeners.get('message')?.({ data: JSON.stringify({ v: 1, type: 'streams.hello', topic: 'system', payload: {} }) });
     expect(firstEvent).toHaveBeenCalledTimes(1);
     expect(secondEvent).toHaveBeenCalledTimes(1);

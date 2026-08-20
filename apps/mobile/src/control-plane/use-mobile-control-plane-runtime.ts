@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from 'react';
 import type { ControlPlaneClient } from '@task-handoff/control-plane-client';
+import { AiSessionTransientSubscriptionSchema, type AiSessionTransientSubscription } from '@task-handoff/protocol/events';
 
 import { isCarPlayConnected, subscribeToCarPlayConnection } from '../carplay/runtime';
 import { subscribeToAppLifecycle } from '../platform/lifecycle';
@@ -55,6 +56,7 @@ const STABLE_CONNECTION_MS = 15_000;
 export class MobileControlPlaneConnectionCoordinator {
   private readonly domains = new Map<string, MobileControlPlaneDomain>();
   private readonly listeners = new Set<() => void>();
+  private readonly transientDemands = new Map<symbol, AiSessionTransientSubscription>();
   private activeDomains: MobileControlPlaneDomain[] = [];
   private connection?: MobileControlPlaneEventConnection;
   private abortController?: AbortController;
@@ -89,6 +91,16 @@ export class MobileControlPlaneConnectionCoordinator {
       if (this.domains.get(domain.key) !== domain) return;
       this.domains.delete(domain.key);
       this.queueReconcile();
+    };
+  }
+
+  registerAiSessionTransientDemand(input: AiSessionTransientSubscription) {
+    const token = Symbol('mobile-ai-session-transient-demand');
+    this.transientDemands.set(token, AiSessionTransientSubscriptionSchema.parse(input));
+    this.updateTransientDemand();
+    return () => {
+      this.transientDemands.delete(token);
+      this.updateTransientDemand();
     };
   }
 
@@ -169,8 +181,13 @@ export class MobileControlPlaneConnectionCoordinator {
       await Promise.all(desired.map((domain) => domain.start(abortController.signal)));
       if (!this.live(epoch, abortController)) return;
       const topics = [...new Set(desired.flatMap((domain) => [...domain.topics]))].sort();
+      const aiSessionTransient = this.aggregateTransientDemand();
       this.connection = this.transport.connectEvents({
         topics,
+        aiSessionTransient: {
+          ...aiSessionTransient,
+          ...(this.transientDemands.size ? { replaySince: new Date().toISOString() } : {}),
+        },
         onOpen: () => {
           if (!this.live(epoch, abortController)) return;
           this.clearConnectTimer();
@@ -205,6 +222,34 @@ export class MobileControlPlaneConnectionCoordinator {
       for (const domain of desired) domain.onConnectionError?.();
       this.scheduleReconnect(epoch, abortController, error);
     }
+  }
+
+  private updateTransientDemand() {
+    this.connection?.updateAiSessionTransient?.({
+      ...this.aggregateTransientDemand(),
+      ...(this.transientDemands.size ? { replaySince: new Date().toISOString() } : {}),
+    });
+  }
+
+  private aggregateTransientDemand(): AiSessionTransientSubscription {
+    const instanceIds = new Set<string>();
+    const timelineSessions = new Map<string, { instanceId: string; sessionId: string }>();
+    let allInstances = false;
+    let timelineAllSessions = false;
+    let replaySince: string | undefined;
+    for (const demand of this.transientDemands.values()) {
+      allInstances ||= demand.messageDeltas.allInstances;
+      timelineAllSessions ||= demand.timelineAllSessions;
+      for (const instanceId of demand.messageDeltas.instanceIds) instanceIds.add(instanceId);
+      for (const session of demand.timelineSessions) timelineSessions.set(`${session.instanceId}\0${session.sessionId}`, session);
+      if (demand.replaySince && (!replaySince || demand.replaySince < replaySince)) replaySince = demand.replaySince;
+    }
+    return {
+      ...(replaySince ? { replaySince } : {}),
+      messageDeltas: { allInstances, instanceIds: [...instanceIds] },
+      timelineAllSessions,
+      timelineSessions: [...timelineSessions.values()],
+    };
   }
 
   private scheduleReconnect(epoch: number, abortController: AbortController, error?: string) {

@@ -1,4 +1,5 @@
 export * from "./ai-session-attachments.ts";
+export * from "./ai-session-conversation-attachment-store.ts";
 export * from "./ai-session-control.ts";
 export * from "./ai-session-create.ts";
 export * from "./ai-session-fork.ts";

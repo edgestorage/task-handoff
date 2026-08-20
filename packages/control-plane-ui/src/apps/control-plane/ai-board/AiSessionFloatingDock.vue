@@ -74,7 +74,7 @@
 
         <ScrollArea class="ai-board-floating-scroll">
           <div class="ai-board-floating-content">
-            <section ref="promptSectionEl" class="ai-board-floating-block ai-board-floating-block-user">
+            <section v-if="timelineMode === 'compact'" ref="promptSectionEl" class="ai-board-floating-block ai-board-floating-block-user">
               <div
                 ref="promptContentEl"
                 class="ai-board-floating-prompt-content"
@@ -95,27 +95,33 @@
             </section>
 
             <div
-              v-if="detailScrolled && promptStickyPlaceholderHeight > 0"
+              v-if="timelineMode === 'compact' && detailScrolled && promptStickyPlaceholderHeight > 0"
               class="ai-board-floating-prompt-placeholder"
               :style="{ height: `${promptStickyPlaceholderHeight}px` }"
               aria-hidden="true"
             />
 
-            <AiSessionResult
+            <AiSessionConversationContent
+              class="ai-board-floating-conversation"
               :busy="busy"
               :can-interrupt="canInterrupt"
               :can-resolve-approval="canResolveApproval"
               :instance-id="card.instance.id"
-              :is-latest="promptIndex >= promptCount - 1"
-              :response-content="displayAiSessionResponse(card.session, promptIndex, t)"
-              :session="card.session"
-              tone="board"
+              :mode="timelineMode"
+              :prompt-count="promptCount"
+              :prompt-index="promptIndex"
+              :session="conversationSession"
+              :selected-turn-state="selectedTurnState"
+              :turn-timelines="turnTimelines"
+              activity-interactive
               @edit-queued-message="$emit('editQueuedMessage', $event)"
               @reorder-queued-messages="$emit('reorderQueuedMessages', $event)"
               @steer-queued-message="$emit('steerQueuedMessage', $event)"
               @retry-queued-message="$emit('retryQueuedMessage', $event)"
               @remove-queued-message="$emit('removeQueuedMessage', $event)"
               @resolve-approval="$emit('resolveApproval', $event)"
+              @continue-from-turn="$emit('continueFromTurn', $event)"
+              @load-turn-timeline="(turnId, force) => $emit('loadTurnTimeline', turnId, force)"
             />
           </div>
         </ScrollArea>
@@ -161,7 +167,8 @@ import { ChevronDown, ChevronUp, CircleHelp, ExternalLink } from "@lucide/vue";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions } from "../../../api/types";
 import AiSessionComposer, { type AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
-import AiSessionResult from "../../../components/ai-session/AiSessionResult.vue";
+import AiSessionConversationContent from "../../../components/ai-session/AiSessionConversationContent.vue";
+import type { AiSessionTurnTimelineState } from "../useAiSessionTimelineStore";
 import type { AiSessionMentionBinding } from "../../../components/ai-session/mentions";
 import type { AiSessionCommandInput, AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionMentionContext } from "../../../components/ai-session/useAiSessionMentions";
@@ -172,7 +179,6 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../
 import {
   aiSessionAppDisplayName,
   aiSessionBasename,
-  displayAiSessionResponse,
   displayAiSessionTitle,
 } from "../useInstanceSessions";
 import type { AiBoardCard } from "./aiBoardTypes";
@@ -184,6 +190,7 @@ const props = defineProps<{
   canInterrupt: boolean;
   canResolveApproval: boolean;
   card: AiBoardCard;
+  conversationSession: AiSessionSummary;
   collapsed: boolean;
   attachments: AiSessionComposerAttachment[];
   draft: string;
@@ -196,11 +203,16 @@ const props = defineProps<{
   instanceDisplayName: (instance: InstanceBoardItem) => string;
   promptCount: number;
   promptIndex: number;
+  selectedTurnState: AiSessionTurnTimelineState;
+  timelineMode: "compact" | "full";
+  turnTimelines: Record<string, AiSessionTurnTimelineState>;
 }>();
 
 defineEmits<{
   cancelEdit: [];
+  continueFromTurn: [turnId: string];
   editQueuedMessage: [payload: { queueId: string; message: string }];
+  loadTurnTimeline: [turnId: string, force?: boolean];
   nextPrompt: [];
   openAiSessionApp: [instance: InstanceWithAiSessions, session?: AiSessionSummary];
   previousPrompt: [];
@@ -469,9 +481,13 @@ watch(
   [
     () => props.card.session.id,
     () => props.promptIndex,
+    () => props.timelineMode,
     () => displayAiSessionTitle(props.card.session, props.promptIndex, t),
   ],
   () => {
+    detailScrolled.value = false;
+    promptStickyPlaceholderHeight.value = 0;
+    promptStickyThreshold = 0;
     promptExpanded.value = false;
     promptHasOverflow.value = false;
     void nextTick(observePrompt);
@@ -746,17 +762,21 @@ onBeforeUnmount(() => {
 
 .ai-board-floating-content {
   display: grid;
-  gap: 8px;
+  gap: 0;
   min-width: 0;
   padding: 14px;
+}
+
+.ai-board-floating-block + .ai-board-floating-conversation {
+  margin-top: 16px;
 }
 
 .ai-board-floating-block {
   display: grid;
   gap: 7px;
   min-width: 0;
-  border-bottom: 1px solid var(--ai-board-column-border);
-  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line-subtle);
+  padding-bottom: 16px;
 }
 
 .ai-board-floating-block > span {
@@ -766,7 +786,7 @@ onBeforeUnmount(() => {
 }
 
 .ai-board-floating-block > div {
-  color: var(--ai-board-title);
+  color: var(--text);
   font-size: 14px;
   line-height: 1.5;
   overflow-wrap: anywhere;
@@ -803,14 +823,14 @@ onBeforeUnmount(() => {
   gap: 3px;
   border: 0;
   background: transparent;
-  color: var(--ai-board-muted);
+  color: var(--text-muted);
   cursor: pointer;
   font-size: 12px;
   padding: 0;
 }
 
 .ai-board-floating-prompt-toggle:hover {
-  color: var(--ai-board-title);
+  color: var(--text);
 }
 
 .ai-board-floating-prompt-toggle svg {

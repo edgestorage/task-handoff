@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import type { ControlPlaneInstanceResourceEntry, ControlPlaneNodeLocalFolder } from '@task-handoff/control-plane-client';
+import { controlPlaneLocalFolderDisplayName, type ControlPlaneInstanceResourceEntry, type ControlPlaneNodeLocalFolder } from '@task-handoff/control-plane-client';
 
 import { AnchoredSelectMenu, type AnchoredSelectOption } from '../components/AnchoredSelectMenu';
 import { Screen } from '../components/Screen';
@@ -45,7 +45,7 @@ export function NewAppSessionForm(props: Props) {
   }));
   const folderOptions: AnchoredSelectOption[] = [
     { label: t('appSessions.defaultWorkspace'), systemImage: 'folder', value: DEFAULT_WORKSPACE_VALUE },
-    ...props.folders.map((folder) => ({ description: folder.path, label: folder.name, systemImage: 'folder' as const, value: folder.id })),
+    ...props.folders.map((folder) => ({ description: folder.path, label: controlPlaneLocalFolderDisplayName(folder), systemImage: 'folder' as const, value: folder.id })),
   ];
 
   return <Screen>

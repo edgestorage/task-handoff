@@ -55,7 +55,7 @@ export class NodeUpdateController {
   async check(input: unknown) {
     const parsed = UpdateCheckRequestSchema.parse(input);
     const impact = updateImpact(this.options.listInstances());
-    const selection = await resolveNodeUpdatePackage(this.options.runCommand);
+    const selection = await resolveNodeUpdatePackage(this.options.runCommand, this.options.moduleDir);
     const currentRuntimeVersion = this.options.currentRuntimeVersion();
     const relatedCurrentVersions = selection.packageName === "@task-handoff/server"
       ? [...new Set([...selection.relatedCurrentVersions, currentRuntimeVersion])]
@@ -153,7 +153,7 @@ export class NodeUpdateController {
       });
     }
     const check = preflight.result;
-    const selection = await resolveNodeUpdatePackage(this.options.runCommand);
+    const selection = await resolveNodeUpdatePackage(this.options.runCommand, this.options.moduleDir);
     const unchanged = check.channel === input.channel
       && check.availableVersion === input.targetVersion
       && check.currentVersion === (selection.currentVersion || this.options.currentRuntimeVersion())

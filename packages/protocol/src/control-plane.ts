@@ -3,6 +3,8 @@ import { z } from "zod";
 import {
   AI_SESSION_HISTORY_DEFAULT_LIMIT,
   AI_SESSION_HISTORY_MAX_LIMIT,
+  AI_SESSION_ATTACHMENT_RETENTION_DEFAULT_DAYS,
+  AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS,
   AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES,
   AI_SESSION_MAX_MESSAGE_ATTACHMENTS,
   AiSessionMessageAttachmentSchema,
@@ -13,7 +15,7 @@ import {
 import { TriggerConfigSchema, TriggerDeploymentSchema, TriggerRunSchema, TriggerRuntimeStateSchema } from "./triggers.ts";
 import { ControlPlaneProxyErrorSchema, ProxyTargetStateSchema } from "./control-plane-proxy.ts";
 
-export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-08-18";
+export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-08-20";
 export const NODE_TUNNEL_PROTOCOL_VERSION = "2026-08-01";
 export const MARKET_CATALOG_PROTOCOL_VERSION = "2026-07-29";
 // Compatibility for v0.0.21: this released protocol already requires appInventory
@@ -31,6 +33,15 @@ function emptyAiSessionTimelineCapabilities() {
   };
 }
 
+function emptyAiSessionConversationAttachmentCapabilities() {
+  return {
+    metadataAgents: [] as string[],
+    contentAgents: [] as string[],
+    uploadAgents: [] as string[],
+    retentionSettings: false,
+  };
+}
+
 function defaultControlledInstanceFeatures() {
   return {
     appRuntime: false,
@@ -42,6 +53,7 @@ function defaultControlledInstanceFeatures() {
     aiSessionWorkspaceSelection: false,
     aiSessionPersistenceSettings: false,
     aiSessionTimeline: emptyAiSessionTimelineCapabilities(),
+    aiSessionConversationAttachments: emptyAiSessionConversationAttachmentCapabilities(),
   };
 }
 
@@ -59,6 +71,13 @@ export const AiSessionTimelineCapabilitiesSchema = z.object({
   liveItemAgents: z.array(AiSessionCapabilityAgentSchema).max(100).default([]),
 }).passthrough();
 
+export const AiSessionConversationAttachmentCapabilitiesSchema = z.object({
+  metadataAgents: z.array(AiSessionCapabilityAgentSchema).max(100).default([]),
+  contentAgents: z.array(AiSessionCapabilityAgentSchema).max(100).default([]),
+  uploadAgents: z.array(AiSessionCapabilityAgentSchema).max(100).default([]),
+  retentionSettings: z.boolean().default(false),
+}).passthrough();
+
 export const ControlledInstanceFeatureCapabilitiesSchema = z.object({
   appRuntime: z.boolean().default(false),
   tty: z.boolean().default(false),
@@ -69,6 +88,8 @@ export const ControlledInstanceFeatureCapabilitiesSchema = z.object({
   aiSessionWorkspaceSelection: z.boolean().default(false),
   aiSessionPersistenceSettings: z.boolean().default(false),
   aiSessionTimeline: AiSessionTimelineCapabilitiesSchema.default(emptyAiSessionTimelineCapabilities),
+  // Compatibility for v0.0.21: the additive wire field must remain optional.
+  aiSessionConversationAttachments: AiSessionConversationAttachmentCapabilitiesSchema.optional(),
 }).passthrough();
 
 /** The single capability document for the controlled-instance/control-plane boundary. */
@@ -78,10 +99,17 @@ export const ControlledInstanceCapabilitiesSchema = z.object({
 
 export type AiSessionTimelineCapabilities = z.infer<typeof AiSessionTimelineCapabilitiesSchema>;
 export type AiSessionTimelineCapability = "session-read" | "turn-read" | "live-items";
+export type AiSessionConversationAttachmentCapabilities = z.infer<typeof AiSessionConversationAttachmentCapabilitiesSchema>;
+export type AiSessionConversationAttachmentCapability = "metadata" | "content" | "upload";
 export type ControlledInstanceCapabilities = z.infer<typeof ControlledInstanceCapabilitiesSchema>;
+type NormalizedControlledInstanceCapabilities = ControlledInstanceCapabilities & {
+  features: ControlledInstanceCapabilities["features"] & {
+    aiSessionConversationAttachments: AiSessionConversationAttachmentCapabilities;
+  };
+};
 
 /** Normalize the only capability document on this boundary before querying any feature. */
-export function normalizeControlledInstanceCapabilities(capabilities: unknown): ControlledInstanceCapabilities {
+export function normalizeControlledInstanceCapabilities(capabilities: unknown): NormalizedControlledInstanceCapabilities {
   const defaults = defaultControlledInstanceCapabilities();
   if (!capabilities || typeof capabilities !== "object" || Array.isArray(capabilities)) return defaults;
   const document = capabilities as Record<string, unknown>;
@@ -104,10 +132,12 @@ export function normalizeControlledInstanceCapabilities(capabilities: unknown): 
   }
   const timeline = AiSessionTimelineCapabilitiesSchema.safeParse(features.aiSessionTimeline);
   if (timeline.success) normalizedFeatures.aiSessionTimeline = timeline.data;
+  const conversationAttachments = AiSessionConversationAttachmentCapabilitiesSchema.safeParse(features.aiSessionConversationAttachments);
+  if (conversationAttachments.success) normalizedFeatures.aiSessionConversationAttachments = conversationAttachments.data;
   return ControlledInstanceCapabilitiesSchema.parse({
     ...document,
     features: { ...features, ...normalizedFeatures },
-  });
+  }) as NormalizedControlledInstanceCapabilities;
 }
 
 export function supportsAiSessionWorkspaceSelection(capabilities: unknown) {
@@ -116,6 +146,32 @@ export function supportsAiSessionWorkspaceSelection(capabilities: unknown) {
 
 export function supportsAiSessionPersistenceSettings(capabilities: unknown) {
   return normalizeControlledInstanceCapabilities(capabilities).features.aiSessionPersistenceSettings;
+}
+
+export function aiSessionConversationAttachmentCapabilities(capabilities: unknown): AiSessionConversationAttachmentCapabilities {
+  return normalizeControlledInstanceCapabilities(capabilities).features.aiSessionConversationAttachments;
+}
+
+export function aiSessionConversationAttachmentCapabilityAgents(
+  capabilities: unknown,
+  capability: AiSessionConversationAttachmentCapability,
+) {
+  const normalized = aiSessionConversationAttachmentCapabilities(capabilities);
+  if (capability === "metadata") return normalized.metadataAgents;
+  if (capability === "content") return normalized.contentAgents;
+  return normalized.uploadAgents;
+}
+
+export function supportsAiSessionConversationAttachmentCapability(
+  capabilities: unknown,
+  agent: string,
+  capability: AiSessionConversationAttachmentCapability,
+) {
+  return aiSessionConversationAttachmentCapabilityAgents(capabilities, capability).includes(agent);
+}
+
+export function supportsAiSessionAttachmentRetentionSettings(capabilities: unknown) {
+  return aiSessionConversationAttachmentCapabilities(capabilities).retentionSettings;
 }
 
 /** Query the structured Timeline feature from the normalized capability document. */
@@ -707,6 +763,7 @@ export const NodeLocalFolderSchema = z
     nodeId: IdSchema,
     name: z.string().trim().min(1).max(160),
     path: z.string().trim().min(1).max(4096),
+    // Compatibility for v0.0.21: accepted from older node-agents, but local folders no longer select images.
     defaultImageSelection: ImageSelectionSchema.optional(),
     labels: LabelsSchema,
     createdAt: TimestampSchema,
@@ -1223,6 +1280,18 @@ export const NodeConnectionPathSchema = z.discriminatedUnion("kind", [
   }).strict(),
 ]);
 
+/** Ephemeral public diagnostics for the control-plane/node-agent connection. */
+export const NodeConnectionDiagnosticsSchema = z.object({
+  // Compatibility for v0.0.21: older Control Plane responses omit this
+  // additive runtime projection, so every consumer must accept its absence.
+  pingRttMs: z.number().nonnegative().optional(),
+  pingRttP95Ms: z.number().nonnegative().optional(),
+  consecutiveReconnects: z.number().int().nonnegative(),
+  nextRetryAt: TimestampSchema.optional(),
+}).strict();
+
+export type NodeConnectionDiagnostics = z.infer<typeof NodeConnectionDiagnosticsSchema>;
+
 export const NodeControlPlaneProxyStateSchema = z.object({
   reachability: z.enum(["unknown", "reachable", "unreachable"]),
   bindingStatus: z.enum(["unknown", "active", "revoked"]),
@@ -1375,11 +1444,17 @@ export const InstanceResourceMetricsEventType = {
 export const NodeAgentCapabilitiesSchema = z.object({
   modelEndpointProbe: z.boolean().optional(),
   aiSessionHistoryLimit: z.boolean().optional(),
+  aiSessionAttachmentRetention: z.boolean().optional(),
   folderPlaces: z.boolean().optional(),
+  localFolderNameUpdate: z.boolean().optional(),
 }).strip();
 
 export function supportsNodeFolderPlaces(capabilities: unknown) {
   return NodeAgentCapabilitiesSchema.safeParse(capabilities).data?.folderPlaces === true;
+}
+
+export function supportsNodeLocalFolderNameUpdate(capabilities: unknown) {
+  return NodeAgentCapabilitiesSchema.safeParse(capabilities).data?.localFolderNameUpdate === true;
 }
 
 export const NodeAgentHealthSchema = z
@@ -1635,9 +1710,10 @@ export const ControlledInstanceSchema = z
         autoImportAgentConfigs: z.boolean().default(true),
         defaultCodexPermissionMode: AiSessionPermissionModeSchema.default("ask"),
         aiSessionHistoryLimit: z.number().int().min(1).max(AI_SESSION_HISTORY_MAX_LIMIT).default(AI_SESSION_HISTORY_DEFAULT_LIMIT),
+        aiSessionAttachmentRetentionDays: z.number().int().min(0).max(AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS).default(AI_SESSION_ATTACHMENT_RETENTION_DEFAULT_DAYS),
       })
       .strict()
-      .default({ autoImportAgentConfigs: true, defaultCodexPermissionMode: "ask", aiSessionHistoryLimit: AI_SESSION_HISTORY_DEFAULT_LIMIT }),
+      .default({ autoImportAgentConfigs: true, defaultCodexPermissionMode: "ask", aiSessionHistoryLimit: AI_SESSION_HISTORY_DEFAULT_LIMIT, aiSessionAttachmentRetentionDays: AI_SESSION_ATTACHMENT_RETENTION_DEFAULT_DAYS }),
     workspace: WorkspaceStatusSchema.default({ status: "unknown" }),
     target: InstanceTargetSchema.default({ strategy: "direct-port", status: "unknown" }),
     access: InstanceAccessSchema,
@@ -1761,7 +1837,7 @@ export function sanitizeStoredControlledInstance(
   next.aiSessions = sanitizeStoredAiSessions(source.aiSessions, onWarning, typeof source.id === "string" ? source.id : undefined);
   next.triggers = sanitizeStoredTriggers(source.triggers, onWarning, typeof source.id === "string" ? source.id : undefined);
   next.apps = sanitizeStoredStrictObject(ControlledInstanceSchema.shape.apps.unwrap(), pickObjectFields(source.apps, ["runningCount", "problemCount", "updatedAt", "revision"]), "apps", onWarning, typeof source.id === "string" ? source.id : undefined) || { runningCount: 0, problemCount: 0 };
-  next.config = sanitizeStoredStrictObject(ControlledInstanceSchema.shape.config.unwrap(), pickObjectFields(source.config, ["autoImportAgentConfigs", "defaultCodexPermissionMode", "aiSessionHistoryLimit"]), "config", onWarning, typeof source.id === "string" ? source.id : undefined) || { autoImportAgentConfigs: true, defaultCodexPermissionMode: "ask", aiSessionHistoryLimit: AI_SESSION_HISTORY_DEFAULT_LIMIT };
+  next.config = sanitizeStoredStrictObject(ControlledInstanceSchema.shape.config.unwrap(), pickObjectFields(source.config, ["autoImportAgentConfigs", "defaultCodexPermissionMode", "aiSessionHistoryLimit", "aiSessionAttachmentRetentionDays"]), "config", onWarning, typeof source.id === "string" ? source.id : undefined) || { autoImportAgentConfigs: true, defaultCodexPermissionMode: "ask", aiSessionHistoryLimit: AI_SESSION_HISTORY_DEFAULT_LIMIT, aiSessionAttachmentRetentionDays: AI_SESSION_ATTACHMENT_RETENTION_DEFAULT_DAYS };
   next.modelSelection = sanitizeStoredStrictObject(ModelSelectionSchema.unwrap(), pickObjectFields(source.modelSelection, ["codexModelHash", "claudeModelHash"]), "modelSelection", onWarning, typeof source.id === "string" ? source.id : undefined) || {};
   next.imageSnapshot = sanitizeStoredInstanceImageSnapshot(
     source.imageSnapshot,

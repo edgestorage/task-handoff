@@ -14,10 +14,22 @@ function emptyDirectoryTimelineCapabilities() {
   return { sessionReadAgents: [] as string[], turnReadAgents: [] as string[], liveItemAgents: [] as string[] };
 }
 
+const ControlPlaneDirectoryConversationAttachmentCapabilitiesSchema = z.object({
+  metadataAgents: z.array(z.string().trim().min(1).max(120)).max(100).default([]),
+  contentAgents: z.array(z.string().trim().min(1).max(120)).max(100).default([]),
+  uploadAgents: z.array(z.string().trim().min(1).max(120)).max(100).default([]),
+  retentionSettings: z.boolean().default(false),
+}).passthrough();
+
+function emptyDirectoryConversationAttachmentCapabilities() {
+  return { metadataAgents: [] as string[], contentAgents: [] as string[], uploadAgents: [] as string[], retentionSettings: false };
+}
+
 // Compatibility for v0.0.21: older directory responses omit this additive
 // public capability projection and therefore normalize to unsupported.
 export const ControlPlaneInstanceDirectoryCapabilitiesSchema = z.object({
   aiSessionTimeline: ControlPlaneDirectoryTimelineCapabilitiesSchema.default(emptyDirectoryTimelineCapabilities),
+  aiSessionConversationAttachments: ControlPlaneDirectoryConversationAttachmentCapabilitiesSchema.optional(),
 }).passthrough();
 
 export function supportsDirectoryAiSessionTimelineCapability(
@@ -32,6 +44,25 @@ export function supportsDirectoryAiSessionTimelineCapability(
     : capability === "turn-read" ? timeline.turnReadAgents
       : timeline.liveItemAgents;
   return agents.includes(agent);
+}
+
+export function supportsDirectoryAiSessionConversationAttachmentCapability(
+  capabilities: unknown,
+  agent: string,
+  capability: "metadata" | "content" | "upload",
+) {
+  const parsed = ControlPlaneInstanceDirectoryCapabilitiesSchema.safeParse(capabilities);
+  if (!parsed.success) return false;
+  const attachments = parsed.data.aiSessionConversationAttachments || emptyDirectoryConversationAttachmentCapabilities();
+  const agents = capability === "metadata" ? attachments.metadataAgents
+    : capability === "content" ? attachments.contentAgents
+      : attachments.uploadAgents;
+  return agents.includes(agent);
+}
+
+export function supportsDirectoryAiSessionAttachmentRetentionSettings(capabilities: unknown) {
+  const parsed = ControlPlaneInstanceDirectoryCapabilitiesSchema.safeParse(capabilities);
+  return parsed.success && (parsed.data.aiSessionConversationAttachments?.retentionSettings ?? false);
 }
 
 export const ControlPlaneNodeConnectionPhaseSchema = z.enum([
@@ -96,7 +127,9 @@ export const ControlPlaneInstanceDirectoryEntrySchema = z.object({
   health: z.enum(["unknown", "ok", "degraded", "failed"]),
   connectionStatus: z.enum(["unknown", "online", "offline", "endpoint-unreachable"]),
   ready: z.boolean(),
-  capabilities: ControlPlaneInstanceDirectoryCapabilitiesSchema.default({ aiSessionTimeline: emptyDirectoryTimelineCapabilities() }),
+  capabilities: ControlPlaneInstanceDirectoryCapabilitiesSchema.default({
+    aiSessionTimeline: emptyDirectoryTimelineCapabilities(),
+  }),
   config: z.object({
     defaultCodexPermissionMode: AiSessionPermissionModeSchema.default("ask"),
   }).strict().default({ defaultCodexPermissionMode: "ask" }),

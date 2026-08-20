@@ -80,7 +80,8 @@ test("AI session history store keeps the newest 50 Task Handoff entries", () => 
 
 test("AI session history retention limit is configurable and removes evicted details", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-history-configurable-limit-"));
-  const store = new AiSessionHistoryStore({ dataDir: root }, { limit: 3 });
+  const removedSessions = [];
+  const store = new AiSessionHistoryStore({ dataDir: root }, { limit: 3, onRemove: (sessionId) => removedSessions.push(sessionId) });
   for (let index = 0; index < 3; index += 1) {
     store.upsert(historyItem(index), [{ id: `turn-${index}`, status: "completed", lastMessage: `Answer ${index}` }]);
   }
@@ -90,6 +91,31 @@ test("AI session history retention limit is configurable and removes evicted det
   assert.deepEqual(result.removed.map((item) => item.id), ["ai-0"]);
   assert.deepEqual(store.list().map((item) => item.id), ["ai-2", "ai-1"]);
   assert.equal(fs.readdirSync(path.join(path.dirname(store.path()), "details")).length, 2);
+  assert.deepEqual(removedSessions, ["ai-0"]);
+});
+
+test("AI session history restart preserves authoritative user message attachments", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-history-attachments-"));
+  const item = historyItem(4);
+  new AiSessionHistoryStore({ dataDir: root }).upsert(item, [{
+    id: "turn-with-attachment",
+    status: "completed",
+    userMessages: [{
+      id: "message-with-attachment",
+      text: "See report",
+      attachments: [{
+        id: "attachment-retained",
+        kind: "file",
+        name: "report.txt",
+        mime: "text/plain",
+        size: 12,
+        contentState: "available",
+      }],
+    }],
+  }]);
+
+  const detail = new AiSessionHistoryStore({ dataDir: root }).detail(item.id);
+  assert.equal(detail.turns[0].userMessages[0].attachments[0].id, "attachment-retained");
 });
 
 test("controlled instance persists the applied AI session history limit", () => {
@@ -99,6 +125,19 @@ test("controlled instance persists the applied AI session history limit", () => 
   first.put({ historyLimit: 120 });
   assert.equal(new AiSessionPersistenceSettingsStore({ dataDir: root }).get().historyLimit, 120);
   assert.throws(() => first.put({ historyLimit: 501 }));
+});
+
+test("AI session persistence settings migrate v0.0.21 and preserve retention on legacy PUT", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-history-settings-v1-"));
+  const settingsPath = path.join(root, "ai-session-persistence", "settings.json");
+  fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+  fs.writeFileSync(settingsPath, `${JSON.stringify({ schemaVersion: 1, historyLimit: 24 })}\n`);
+  const store = new AiSessionPersistenceSettingsStore({ dataDir: root });
+  assert.deepEqual(store.get(), { schemaVersion: 2, historyLimit: 24, attachmentRetentionDays: 30 });
+  assert.equal(store.put({ historyLimit: 25, attachmentRetentionDays: 7 }).attachmentRetentionDays, 7);
+  assert.equal(store.put({ historyLimit: 26 }).attachmentRetentionDays, 7);
+  assert.equal(new AiSessionPersistenceSettingsStore({ dataDir: root }).get().attachmentRetentionDays, 7);
+  assert.throws(() => store.put({ historyLimit: 26, attachmentRetentionDays: 366 }));
 });
 
 test("AI session history details persist normalized turns and isolate damaged files", () => {
@@ -255,7 +294,8 @@ test("AI session history store rewrites sanitized persisted data and tolerates u
 
 test("AI session lifecycle archives stopped bindings before prune and activates them only after a running binding", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-history-lifecycle-"));
-  const store = new AiSessionHistoryStore({ dataDir: root });
+  const releasedSessions = [];
+  const store = new AiSessionHistoryStore({ dataDir: root }, { onRemove: (sessionId) => releasedSessions.push(sessionId) });
   const lifecycle = new AiSessionHistoryLifecycle(store);
   const session = {
     id: "ai-lifecycle",
@@ -271,6 +311,18 @@ test("AI session lifecycle archives stopped bindings before prune and activates 
     turns: [{
       id: "turn-lifecycle",
       userPrompt: "Keep this session",
+      userMessages: [{
+        id: "message-lifecycle",
+        text: "Keep this session",
+        attachments: [{
+          id: "attachment-lifecycle",
+          kind: "file",
+          name: "report.txt",
+          mime: "text/plain",
+          size: 12,
+          contentState: "available",
+        }],
+      }],
       lastMessage: "Saved",
       status: "completed",
       startedAt: "2026-01-01T00:00:00.000Z",
@@ -293,14 +345,16 @@ test("AI session lifecycle archives stopped bindings before prune and activates 
   lifecycle.reconcile([session], [{ id: session.appSessionId, status: "stopped" }], "2026-01-03T00:00:00.000Z");
   assert.deepEqual(store.list().map((item) => [item.id, item.archivedAt]), [[session.id, "2026-01-03T00:00:00.000Z"]]);
   assert.deepEqual(store.detail(session.id).turns.map((turn) => [turn.id, turn.userPrompt, turn.lastMessage]), [["turn-lifecycle", "Keep this session", "Saved"]]);
+  assert.equal(store.detail(session.id).turns[0].userMessages[0].attachments[0].id, "attachment-lifecycle");
 
-  const recovered = new AiSessionHistoryLifecycle(new AiSessionHistoryStore({ dataDir: root }));
+  const recovered = new AiSessionHistoryLifecycle(new AiSessionHistoryStore({ dataDir: root }, { onRemove: (sessionId) => releasedSessions.push(sessionId) }));
   recovered.reconcile([session], [], "2026-01-04T00:00:00.000Z");
   assert.equal(store.list()[0].archivedAt, "2026-01-03T00:00:00.000Z");
 
   recovered.reconcile([session], [{ id: session.appSessionId, status: "running" }], "2026-01-04T00:00:00.000Z");
   assert.deepEqual(store.list(), []);
   assert.equal(store.detail(session.id), undefined);
+  assert.deepEqual(releasedSessions, []);
 });
 
 test("AI session lifecycle ignores sessions without a resumable provider identity", () => {
@@ -392,7 +446,8 @@ test("AI session resume coordinator reuses an authoritative running binding", as
 
 test("AI session resume coordinator restores Direct history without launching an App", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-history-direct-resume-"));
-  const history = new AiSessionHistoryStore({ dataDir: root });
+  const releasedSessions = [];
+  const history = new AiSessionHistoryStore({ dataDir: root }, { onRemove: (sessionId) => releasedSessions.push(sessionId) });
   const registry = createAiSessionRegistry({ dir: path.join(root, "registry") });
   const item = historyItem(15, { id: "ai-direct-resume", creationSource: "ai-session" });
   history.upsert(item);
@@ -418,6 +473,7 @@ test("AI session resume coordinator restores Direct history without launching an
   assert.equal(registry.get(item.id).creationSource, "ai-session");
   assert.equal(registry.get(item.id).appSessionId, undefined);
   assert.equal(history.get(item.id), undefined);
+  assert.deepEqual(releasedSessions, []);
 });
 
 test("AI session resume coordinator retains history and permits retry after provider failure", async () => {

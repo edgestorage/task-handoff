@@ -59,6 +59,14 @@ test("history detail composer resumes, waits for authoritative state, and then s
   assert.match(enSessions, /continue: "Continue conversation", continueConversation:/);
 });
 
+test("history continue action shows immediate button loading state", () => {
+  assert.match(panel, /class="session-ai-history-continue"[\s\S]*:disabled="resumingHistoryId === historyDetail\.item\.id"[\s\S]*:aria-busy="resumingHistoryId === historyDetail\.item\.id"/);
+  assert.match(panel, /<LoaderCircle[\s\S]*v-if="resumingHistoryId === historyDetail\.item\.id"[\s\S]*class="session-ai-spin"[\s\S]*:size="14"/);
+  assert.match(panel, /resumingHistoryId === historyDetail\.item\.id \? t\("sessions\.actions\.forking"\) : t\("sessions\.panel\.continue"\)/);
+  assert.match(styles, /\.session-ai-detail-head-actions \.session-ai-history-continue\s*\{[^}]*gap: 6px;/s);
+  assert.match(styles, /\.session-ai-detail-head-actions \.session-ai-history-continue:disabled\s*\{[^}]*cursor: wait;[^}]*opacity: 0\.72;/s);
+});
+
 test("history API clients send only instance and AI session identities", () => {
   assert.match(queries, /getAiSessionHistory\(instanceId: string\)[\s\S]*sharedAiSessionsApi\.history\(instanceId\)/);
   assert.match(queries, /getAiSessionHistoryDetail\(instanceId: string, aiSessionId: string\)[\s\S]*sharedAiSessionsApi\.historyDetail\(instanceId, aiSessionId\)/);

@@ -104,7 +104,7 @@ describe('<NewSessionForm />', () => {
     expect(newSessionVisualBalanceInset('android', 24)).toBe(80);
     expect(ANCHORED_SELECT_MENU_CONTENT_WIDTH + (ANCHORED_SELECT_MENU_HORIZONTAL_PADDING * 2)).toBe(ANCHORED_SELECT_MENU_WIDTH);
 
-    fireEvent.press(screen.getByRole('button', { name: 'Create session' }));
+    await fireEvent.press(screen.getByRole('button', { name: 'Create session' }));
     expect(onCreate).toHaveBeenCalledTimes(1);
   });
 
@@ -169,7 +169,7 @@ describe('<NewSessionForm />', () => {
     expect(screen.getByRole('button', { name: 'Codex' })).toBeDisabled();
     const remove = screen.getByRole('button', { name: 'Remove private.txt' });
     expect(remove).toBeDisabled();
-    fireEvent.press(remove);
+    await fireEvent.press(remove);
     expect(onRemoveAttachment).not.toHaveBeenCalled();
   });
 

@@ -130,7 +130,12 @@ async function removeTemplate() {
 .environment-template-head > div { display: grid; gap: 4px; }
 .environment-template-head strong { font-size: 16px; }
 .environment-template-head span, .environment-template-copy span, .environment-template-meta span, .environment-template-empty, .environment-template-error { color: var(--text-muted); font-size: 12px; }
-.environment-template-head :deep(.control-plane-select) { min-width: 220px; }
+.environment-template-head :deep(.control-plane-select) {
+  flex: 0 1 280px;
+  width: 280px;
+  min-width: 220px;
+  max-width: 100%;
+}
 .environment-template-search { display: flex; min-height: 36px; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-raised); padding: 0 10px; color: var(--text-muted); }
 .environment-template-search input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 12px; }
 .environment-template-list { display: grid; gap: 7px; }
@@ -147,5 +152,23 @@ async function removeTemplate() {
 .environment-template-delete-dialog { max-width: 480px; }
 .spin { animation: environment-template-settings-spin 1s linear infinite; }
 @keyframes environment-template-settings-spin { to { transform: rotate(360deg); } }
-@media (max-width: 720px) { .environment-template-head { align-items: stretch; flex-direction: column; } .environment-template-row { grid-template-columns: 24px minmax(0, 1fr) auto; } .environment-template-meta { grid-column: 2 / -1; justify-items: start; } }
+@media (max-width: 720px) {
+  .environment-template-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .environment-template-head :deep(.control-plane-select) {
+    width: 100%;
+  }
+
+  .environment-template-row {
+    grid-template-columns: 24px minmax(0, 1fr) auto;
+  }
+
+  .environment-template-meta {
+    grid-column: 2 / -1;
+    justify-items: start;
+  }
+}
 </style>

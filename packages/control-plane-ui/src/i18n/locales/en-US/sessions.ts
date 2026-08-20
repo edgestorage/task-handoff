@@ -63,7 +63,7 @@ export const sessions = {
   composer: {
     plugins: "Plugins", skills: "Skills", files: "Files", directories: "Directories", apps: "Apps", stopTurn: "Stop current AI turn", send: "Send message", sending: "Sending…", stopping: "Stopping…", editingQueuedMessage: "Editing queued message", saveQueuedMessage: "Save queued message", saving: "Saving…", cancelQueuedEdit: "Cancel queued message editing",
     askDescription: "Ask before accessing the internet or editing files outside the workspace.", autoReviewDescription: "Only ask for actions detected as potentially unsafe.",
-    fullAccessDescription: "Unrestricted internet and file access without approval.", localPath: "Local path", removeAttachment: "Remove attachment", followUp: "Ask for follow-up changes",
+    fullAccessDescription: "Unrestricted internet and file access without approval.", localPath: "Local path", removeAttachment: "Remove attachment", previewImage: "Preview {name}", copyImage: "Copy image", imageCopied: "Image copied", copyImageFailed: "Could not copy the image.", uploadProgress: "Uploading: {progress}%", followUp: "Ask for follow-up changes",
     noMatches: "No matches", commands: "Commands", loading: "Loading...", openCommands: "Open command menu", permissionMode: "Permission mode: {mode}", choosePermission: "Choose permission mode",
     steerTurn: "Steer current AI turn", availableIdle: "available when idle", review: "Review uncommitted changes", rename: "Rename the current thread", goal: "Set or view the long-running goal",
     compact: "Summarize conversation context", threadName: "thread name", objective: "objective",
@@ -88,6 +88,8 @@ export const sessions = {
     loadFailed: "Failed to load full activity.",
     noHistory: "No full conversation history is available.",
     noActivities: "No activity is available for this message.",
+    attachmentExpired: "Content expired",
+    attachmentMissing: "Content unavailable",
     activityCount: "{count} activity | {count} activities",
     processedUnavailable: "-",
     processedSeconds: "Processed in {seconds}s",

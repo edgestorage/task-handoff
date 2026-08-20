@@ -35,6 +35,7 @@ const HISTORY_TURN_FIELDS = new Set([
   "id",
   "providerTurnId",
   "userPrompt",
+  "userMessages",
   "status",
   "phase",
   "summary",
@@ -54,6 +55,7 @@ export type AiSessionHistoryWarning = {
 export type AiSessionHistoryStoreOptions = {
   limit?: number;
   onWarning?: (warning: AiSessionHistoryWarning) => void;
+  onRemove?: (sessionId: string) => void;
 };
 
 function historyLimit(value: number | undefined) {
@@ -158,11 +160,13 @@ function sanitizeLineage(value: unknown) {
 export class AiSessionHistoryStore {
   private readonly filePath: string;
   private readonly onWarning?: (warning: AiSessionHistoryWarning) => void;
+  private readonly onRemove?: (sessionId: string) => void;
   private limit: number;
 
   constructor(paths: Pick<TaskHandoffStoragePaths, "dataDir">, options: AiSessionHistoryStoreOptions = {}) {
     this.filePath = path.join(paths.dataDir, "ai-session-history", "index.json");
     this.onWarning = options.onWarning;
+    this.onRemove = options.onRemove;
     this.limit = historyLimit(options.limit);
   }
 
@@ -183,7 +187,7 @@ export class AiSessionHistoryStore {
     const removed = current.filter((item) => !retained.some((candidate) => candidate.id === item.id));
     if (removed.length) {
       this.saveIndex({ schemaVersion: 1, items: retained });
-      this.removeDetails(removed.map((item) => item.id));
+      this.removeEntries(removed.map((item) => item.id));
     }
     return { limit: this.limit, removed };
   }
@@ -192,7 +196,7 @@ export class AiSessionHistoryStore {
     const loaded = this.load();
     if (loaded.rewrite) {
       this.saveIndex(loaded.index);
-      this.removeDetails(loaded.removedIds);
+      this.removeEntries(loaded.removedIds);
     }
     return loaded.index.items;
   }
@@ -226,26 +230,45 @@ export class AiSessionHistoryStore {
       ...current.filter((entry) => entry.id !== parsed.id && providerIdentity(entry) !== providerIdentity(parsed)),
     ], this.limit);
     if (JSON.stringify(items) !== JSON.stringify(current)) this.saveIndex({ schemaVersion: 1, items });
-    this.removeDetails(current.filter((entry) => !items.some((next) => next.id === entry.id)).map((entry) => entry.id));
+    this.removeEntries(current.filter((entry) => !items.some((next) => next.id === entry.id)).map((entry) => entry.id));
     return parsed;
   }
 
   remove(id: string) {
-    const items = this.list();
-    const next = items.filter((item) => item.id !== id);
-    if (next.length === items.length) return false;
-    this.saveIndex({ schemaVersion: 1, items: next });
-    this.removeDetails([id]);
-    return true;
+    return this.removeByIds([id], true);
+  }
+
+  /** Removes an entry from archived history without releasing resources now owned by the active session. */
+  activate(id: string) {
+    return this.removeByIds([id], false);
   }
 
   removeIdentity(agent: AiSessionHistoryItem["agent"], providerSessionId: string) {
+    return this.removeByIdentity(agent, providerSessionId, true);
+  }
+
+  /** Removes an identity from archived history without releasing resources now owned by the active session. */
+  activateIdentity(agent: AiSessionHistoryItem["agent"], providerSessionId: string) {
+    return this.removeByIdentity(agent, providerSessionId, false);
+  }
+
+  private removeByIds(ids: readonly string[], releaseResources: boolean) {
+    const removedIds = new Set(ids);
+    const items = this.list();
+    const next = items.filter((item) => !removedIds.has(item.id));
+    if (next.length === items.length) return false;
+    this.saveIndex({ schemaVersion: 1, items: next });
+    this.removeEntries(items.filter((item) => removedIds.has(item.id)).map((item) => item.id), releaseResources);
+    return true;
+  }
+
+  private removeByIdentity(agent: AiSessionHistoryItem["agent"], providerSessionId: string, releaseResources: boolean) {
     const items = this.list();
     const identity = `${agent}:${providerSessionId}`;
     const next = items.filter((item) => providerIdentity(item) !== identity);
     if (next.length === items.length) return false;
     this.saveIndex({ schemaVersion: 1, items: next });
-    this.removeDetails(items.filter((item) => providerIdentity(item) === identity).map((item) => item.id));
+    this.removeEntries(items.filter((item) => providerIdentity(item) === identity).map((item) => item.id), releaseResources);
     return true;
   }
 
@@ -322,5 +345,10 @@ export class AiSessionHistoryStore {
         }
       }
     }
+  }
+
+  private removeEntries(ids: readonly string[], releaseResources = true) {
+    this.removeDetails(ids);
+    if (releaseResources) for (const id of new Set(ids)) this.onRemove?.(id);
   }
 }

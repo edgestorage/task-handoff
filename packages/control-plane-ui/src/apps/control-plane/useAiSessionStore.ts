@@ -92,7 +92,7 @@ export function useAiSessionStore(input: {
     return applyEvent({ type: AiSessionEventType.Removed, payload });
   }
 
-  function applyMessageDelta(payload: AiSessionMessageDeltaEvent) {
+  function applyMessageDelta(payload: AiSessionMessageDeltaEvent, options: { replay?: boolean } = {}) {
     if (!payload?.instanceId || !payload.sessionId || !payload.delta || !acceptsInstance(payload.instanceId)) return false;
     const instance = queryClient.getQueryData<ControlPlaneAiSessions>(input.queryKey())
       ?.instances.find((entry) => entry.instanceId === payload.instanceId);
@@ -108,6 +108,7 @@ export function useAiSessionStore(input: {
         streamId,
         delta: payload.delta,
         generatedAt: payload.generatedAt,
+        replay: options.replay,
       });
       return true;
     }

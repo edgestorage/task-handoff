@@ -15,6 +15,7 @@ export type ReverseTunnelManagerOptions = {
   handshakeTimeoutMs?: number;
   heartbeatIntervalMs?: number;
   heartbeatTimeoutMs?: number;
+  heartbeatMissThreshold?: number;
   stableThresholdMs?: number;
 };
 
@@ -67,6 +68,7 @@ export function createReverseTunnelManager(
     nextRetryAt?: string;
     error?: string;
     supervisor?: WebSocketConnectionSupervisor;
+    failureReason?: string;
   };
   const tunnels = new Map<string, TunnelEntry>();
   let closing = false;
@@ -91,6 +93,7 @@ export function createReverseTunnelManager(
   const open = (key: string, entry: TunnelEntry) => {
     entry.status = entry.lastDisconnectedAt ? "reconnecting" : "connecting";
     entry.error = undefined;
+    entry.failureReason = undefined;
     entry.nextRetryAt = undefined;
     let socket: WebSocket;
     try {
@@ -113,12 +116,14 @@ export function createReverseTunnelManager(
       handshakeTimeoutMs: options.handshakeTimeoutMs,
       heartbeatIntervalMs: options.heartbeatIntervalMs,
       heartbeatTimeoutMs: options.heartbeatTimeoutMs,
+      heartbeatMissThreshold: options.heartbeatMissThreshold,
       stableThresholdMs: options.stableThresholdMs,
       ping: () => socket.ping(),
       onTimeout: (kind) => {
         if (tunnels.get(key) !== entry || entry.socket !== socket) return;
         entry.status = "failed";
-        entry.error = `Reverse tunnel ${kind} timeout.`;
+        entry.failureReason = `Reverse tunnel ${kind} timeout.`;
+        entry.error = entry.failureReason;
         socket.terminate();
       },
       onStable: () => entry.retry.reset(),
@@ -132,7 +137,9 @@ export function createReverseTunnelManager(
       }
     });
     socket.on("message", (raw) => {
-      if (tunnels.get(key) !== entry || entry.socket !== socket || entry.status === "connected") return;
+      if (tunnels.get(key) !== entry || entry.socket !== socket) return;
+      supervisor.activity();
+      if (entry.status === "connected") return;
       let message: unknown;
       try {
         message = JSON.parse(String(raw));
@@ -155,13 +162,16 @@ export function createReverseTunnelManager(
       supervisor.close();
       entry.socket = undefined;
       entry.lastDisconnectedAt = new Date().toISOString();
-      entry.error = `WebSocket closed${code ? ` (${code})` : ""}${reason ? `: ${Buffer.isBuffer(reason) ? reason.toString("utf8") : String(reason)}` : ""}`;
+      const transportReason = `WebSocket closed${code ? ` (${code})` : ""}${reason ? `: ${Buffer.isBuffer(reason) ? reason.toString("utf8") : String(reason)}` : ""}`;
+      entry.error = entry.failureReason || transportReason;
       if (!closing) {
         app.log.warn({
           nodeId,
           tunnelUrl: new URL(entry.config.tunnelUrl).origin,
           code,
           reason: Buffer.isBuffer(reason) ? reason.toString("utf8") : String(reason || ""),
+          error: entry.error,
+          closeOrigin: entry.failureReason ? "supervisor" : "transport",
         }, "node agent reverse tunnel disconnected");
         scheduleReconnect(key, entry);
       }
@@ -169,7 +179,8 @@ export function createReverseTunnelManager(
     socket.on("error", (error) => {
       if (tunnels.get(key) === entry && entry.socket === socket) {
         entry.status = "failed";
-        entry.error = error instanceof Error ? error.message : String(error);
+        entry.failureReason = error instanceof Error ? error.message : String(error);
+        entry.error = entry.failureReason;
         socket.terminate();
       }
     });

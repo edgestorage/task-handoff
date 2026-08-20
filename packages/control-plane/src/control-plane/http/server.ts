@@ -13,12 +13,13 @@ import { RelayTtySnapshotEnvelopeSchema } from "@task-handoff/cloud-contracts";
 import { CONTROL_PLANE_PROTOCOL_VERSION, ControlPlaneHealthResponseSchema, ImagePullTerminalEventType, type BuildInfo } from "@task-handoff/protocol/control-plane";
 import { packageVersionResolver } from "@task-handoff/core/core/package-version";
 import { DEFAULT_MAINTENANCE_INTERVAL_MS } from "@task-handoff/core/storage/retention";
-import { SESSION_STREAM_PROTOCOL_VERSION, SessionStreamsHelloEventType } from "@task-handoff/protocol/events";
+import { SESSION_STREAM_PROTOCOL_VERSION, SessionStreamsHelloEventType, aiSessionTransientSubscriptionAccepts, type AiSessionTransientSubscription } from "@task-handoff/protocol/events";
 import { CONTROL_PLANE_SESSION_COOKIE, ControlPlaneAuth, type ControlPlaneAuthOptions } from "../auth/service.ts";
 import { ControlPlaneService, type ControlPlaneServiceOptions } from "../application/service.ts";
 import { ControlPlaneChatGatewayRuntime } from "../chat/gateway/runtime.ts";
 import { ControlPlaneEventBus } from "../events/bus.ts";
 import { AiSessionAttachmentStore } from "../sessions/ai-session-attachments.ts";
+import { AiSessionAttachmentCache } from "../sessions/ai-session-attachment-cache.ts";
 import { ControlPlaneNodeAgentTunnelTransport, ControlPlaneNodeEventSubscriber } from "../nodes/tunnel.ts";
 import { controlPlaneStorePaths } from "../persistence/paths.ts";
 import { acquireControlPlaneSingletonLock, defaultControlPlaneSingletonLockPath } from "../process/singleton-lock.ts";
@@ -310,6 +311,7 @@ function actionForHttpMethod(method: string): ControlPlaneAction {
 export async function createControlPlaneApp(options: CreateControlPlaneAppOptions = {}) {
   const paths = controlPlaneStorePaths(options.dataDir);
   const app = Fastify({ logger: options.logger ?? true });
+  app.addContentTypeParser("application/octet-stream", (_request, payload, done) => done(null, payload));
   const events = new ControlPlaneEventBus();
   const cloudConnectivityEnabled = options.cloudConnectivityEnabled ?? process.env.TASK_HANDOFF_CLOUD_CONNECTIVITY_ENABLED !== "0";
   let diagnosticLogsEnabled = controlPlaneDiagnosticLogsEnabled();
@@ -350,10 +352,26 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
         return { status: response.statusCode, body };
       } finally { cloudRelayActors.delete(token); }
     },
-    subscribe(actor: ControlPlaneActor, topics: string[], listener: (event: unknown) => void) {
+    subscribe(actor: ControlPlaneActor, topics: string[], listener: (event: unknown) => void, aiSessionTransient?: AiSessionTransientSubscription) {
       if (actor.type !== "cloud-account") throw Object.assign(new Error("Cloud account actor required."), { code: "CLOUD_ACTOR_REQUIRED" });
-      const selected = new Set(topics.length ? topics : ["*"]);
-      return events.on((event) => { if (selected.has("*") || selected.has(event.topic) || selected.has(event.type)) listener(event); });
+      // The relay decoder supplies ["*"] when the legacy field is absent.
+      // An explicit empty list means the last consumer has unsubscribed.
+      const selected = new Set(topics);
+      if (!selected.size) return () => undefined;
+      // Compatibility for v0.0.21 cloud clients: absence of the additive model
+      // retains topic-derived legacy demand. Current mobile clients are precise.
+      const stopEvents = events.on((event) => {
+        if ((selected.has("*") || selected.has(event.topic) || selected.has(event.type)) && aiSessionTransientSubscriptionAccepts(aiSessionTransient, event)) listener(event);
+      });
+      // Install delivery before publishing upstream demand so a synchronous
+      // source replay cannot overtake this relay consumer.
+      const stopTransientDemand = aiSessionTransient
+        ? events.registerAiSessionTransientDemand(aiSessionTransient)
+        : events.registerLegacyAiSessionTransientDemand(selected);
+      return () => {
+        stopEvents();
+        stopTransientDemand();
+      };
     },
     async openTty(actor: ControlPlaneActor, input: { instanceId: string; sessionId: string }, listener: (message: any) => void) {
       const instanceId = String(input?.instanceId || ""); const sessionId = String(input?.sessionId || "");
@@ -400,16 +418,22 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   });
   service.setAppSessionSnapshotProvider((options) => appSessionAggregator.list(options));
   service.setAiSessionSnapshotProvider((options) => aiSessionAggregator.list(options));
+  const aiSessionAttachmentCache = new AiSessionAttachmentCache(paths.dataDir, {
+    onWarning: (reason) => app.log.warn(reason),
+  });
   events.on((event) => {
     imagePullProgress.handle(event);
-    if (event.type === "instance.deleted") {
+    if (event.type === "instance.deleted" || event.type === "instance.updated") {
       const instanceId = event.payload && typeof event.payload === "object" && "instanceId" in event.payload
         ? String((event.payload as { instanceId?: unknown }).instanceId || "")
         : "";
       if (instanceId) {
-        appSessionAggregator.removeInstance(instanceId);
-        aiSessionAggregator.removeInstance(instanceId);
-        aiSessionUnread.removeInstance(instanceId);
+        if (event.type === "instance.deleted") {
+          appSessionAggregator.removeInstance(instanceId);
+          aiSessionAggregator.removeInstance(instanceId);
+          aiSessionUnread.removeInstance(instanceId);
+        }
+        aiSessionAttachmentCache.removeInstance(instanceId);
       }
     }
   });
@@ -523,6 +547,9 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     logger: diagnosticLogger,
     connectionRuntime: nodeConnectionRuntime,
   });
+  const stopAiSessionTransientDemand = events.onAiSessionTransientDemand((demand) => {
+    nodeEventSubscriber.setAiSessionTransientDemand(demand);
+  });
   nodeEventSubscriber.start();
   await app.register(cookie);
   await app.register(websocket);
@@ -535,6 +562,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     proxyEventHub.stop();
     proxyStateSubscriber.stop();
     nodeEventSubscriber.stop();
+    stopAiSessionTransientDemand();
     chatGateway.stopAll();
   });
 
@@ -688,12 +716,13 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   });
 
   app.get("/api/events", { websocket: true }, async (socket, request) => {
-    const eventQuery = request.query as { instanceId?: string };
+    const eventQuery = request.query as { aiSessionTransient?: string; instanceId?: string };
     const eventInstanceId = typeof eventQuery.instanceId === "string" ? eventQuery.instanceId.trim() : "";
     const pendingFrames: string[] = [];
     let handshakeSent = false;
     const gatedSocket = {
       get readyState() { return socket.readyState; },
+      get bufferedAmount() { return socket.bufferedAmount; },
       OPEN: socket.OPEN,
       send(value: string) {
         if (handshakeSent) socket.send(value);
@@ -702,8 +731,14 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       on(event: "close" | "message", listener: (value?: unknown) => void) {
         socket.on(event, listener);
       },
+      close(code?: number, reason?: string) {
+        socket.close(code, reason);
+      },
     };
-    events.connect(gatedSocket, { instanceIds: eventInstanceId ? [eventInstanceId] : undefined });
+    events.connect(gatedSocket, {
+      instanceIds: eventInstanceId ? [eventInstanceId] : undefined,
+      expectsTransientSubscription: eventQuery.aiSessionTransient === "1",
+    });
     const [aiStreams, appStreams] = await Promise.all([
       aiSessionAggregator.streamDescriptors(),
       appSessionAggregator.streamDescriptors(),
@@ -826,6 +861,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     aiSessionUnread,
     chatGateway,
     aiSessionAttachments,
+    aiSessionAttachmentCache,
     nodeAgentTunnel,
     nodeEventSubscriber,
     errorPayload: controlPlaneErrorPayload,

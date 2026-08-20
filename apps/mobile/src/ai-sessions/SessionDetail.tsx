@@ -1,8 +1,8 @@
 import { Profiler, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ProfilerOnRenderCallback } from 'react';
-import { FlatList, Pressable, StyleSheet, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
+import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import { ScrollViewMarker } from 'react-native-screens/experimental';
 import * as Clipboard from 'expo-clipboard';
-import { Check, ChevronDown, ChevronRight, Copy, LoaderCircle, Sparkles, Split, Timer } from 'lucide-react-native';
+import { Check, ChevronDown, ChevronRight, Copy, Sparkles, Split, Timer } from 'lucide-react-native';
 import { aiSessionElapsedSeconds, aiSessionStatusGroup, isAiSessionApprovalPending, type ControlPlaneAiSessionSummary } from '@task-handoff/control-plane-client';
 import type { AiSessionTimelineActivity, AiSessionTimelineItem, AiSessionTurn } from '@task-handoff/protocol/ai-sessions';
 
@@ -524,7 +524,7 @@ function TimelineHistory({
   const [expanded, setExpanded] = useState(false);
   const processedLabel = useProcessedLabel(turn, t);
   if (!items.length && ['idle', 'loading', 'stale'].includes(status)) return <View accessibilityState={{ busy: true }} style={styles.timelineHistoryHeader}>
-    <LoaderCircle color={colors.textMuted} size={mobileWebMetric(15)} />
+    <ActivityIndicator animating color={colors.textMuted} size="small" testID="session-timeline-loading-indicator" />
     <Text style={[styles.timelineHistoryTitle, { color: colors.textMuted }]}>{processedLabel} · {t('sessions.timelineLoading')}</Text>
   </View>;
   if (!items.length && status === 'error') return <Pressable accessibilityRole="button" onPress={onRetry} style={styles.timelineHistoryHeader}>

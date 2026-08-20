@@ -54,6 +54,39 @@ test("shared AI Session client owns route encoding, request input, and response 
   assert.equal(requests[0].init.method, "POST");
 });
 
+test("shared AI Session attachment upload forwards transport progress", async () => {
+  const progress = [];
+  const transport = {
+    async request(path, schema, init, onUploadProgress) {
+      assert.equal(path, "/api/controlled-instances/instance-1/ai-session-attachments/drafts?scopeType=session&scopeId=session-1&kind=image&name=pasted.png&mime=image%2Fpng&size=1");
+      assert.equal(init.method, "POST");
+      assert.equal(init.headers["content-type"], "application/octet-stream");
+      assert.equal(init.body.size, 1);
+      onUploadProgress?.(0.4);
+      return schema.parse({ data: {
+        id: "attachment-1",
+        kind: "image",
+        name: "pasted.png",
+        mime: "image/png",
+        size: 12,
+        futureField: true,
+      } });
+    },
+  };
+  const api = createControlPlaneClient(transport);
+  const uploaded = await api.aiSessions.uploadAttachment({
+    instanceId: "instance-1",
+    sessionId: "session-1",
+    kind: "image",
+    name: "pasted.png",
+    mime: "image/png",
+    data: "data:image/png;base64,eA==",
+  }, (value) => progress.push(value));
+
+  assert.deepEqual(progress, [0, 0.4, 1]);
+  assert.equal("futureField" in uploaded, false);
+});
+
 test("shared AI Session client sends a node folder identity for server-side runtime path resolution", async () => {
   const requests = [];
   const transport = {

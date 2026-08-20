@@ -144,11 +144,28 @@ export class ControlPlaneProxyNodeAgentTransport implements NodeAgentTransport {
       protocols,
       controlPlaneProxyAuthenticationHeaders(credential, headers),
     );
+    let pendingControlFrame: unknown;
+    let hasPendingControlFrame = false;
+    upstream.on("open", () => {
+      if (!hasPendingControlFrame || upstream.readyState !== (upstream.OPEN ?? 1)) return;
+      const frame = pendingControlFrame;
+      pendingControlFrame = undefined;
+      hasPendingControlFrame = false;
+      upstream.send(frame);
+    });
     bridgeWebSockets(socket, upstream, {
       onUpstreamError: () => socket.close(1011, "Control-plane proxy websocket failed."),
       onUpstreamErrorBeforeOpen: () => true,
     });
     return {
+      send: (data) => {
+        if (upstream.readyState === (upstream.OPEN ?? 1)) {
+          upstream.send(data);
+          return;
+        }
+        pendingControlFrame = data;
+        hasPendingControlFrame = true;
+      },
       ping: () => {
         const ping = (upstream as WebSocketLike & { ping?: () => void }).ping;
         if (!ping) throw new Error("Control-plane proxy websocket does not support ping.");

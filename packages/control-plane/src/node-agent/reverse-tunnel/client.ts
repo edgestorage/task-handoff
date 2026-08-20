@@ -16,7 +16,8 @@ export type ReverseTunnelHost = {
     signal?: AbortSignal;
   }): Promise<NodeAgentInjectResponse>;
   nodeAgentEventForwarder?: {
-    addOutput(socket: WebSocket): () => void;
+    addOutput(socket: WebSocket, options?: { expectsTransientSubscription?: boolean; legacyFallbackMs?: number }): () => void;
+    setOutputSubscription?(socket: WebSocket, input: unknown): boolean;
   };
   nodeAgentState?: {
     currentListenerPort: number;
@@ -119,7 +120,10 @@ export function connectReverseTunnel(app: ReverseTunnelHost, input: ReverseTunne
   });
   socket.on("open", () => {
     socket.send(JSON.stringify({ type: "node-agent.identify", nodeId: input.nodeId, serverTime: new Date().toISOString() }));
-    disposeEventForwarderOutput = app.nodeAgentEventForwarder?.addOutput(socket);
+    // A current control-plane sends its precise demand immediately after attach.
+    // Hold the legacy stream briefly so reconnect ordering cannot wake every
+    // transient producer; v0.0.21 peers still fall back to the full stream.
+    disposeEventForwarderOutput = app.nodeAgentEventForwarder?.addOutput(socket, { legacyFallbackMs: 1_000 });
   });
   socket.on("close", () => {
     for (const streamId of streams.keys()) {
@@ -146,6 +150,10 @@ export function connectReverseTunnel(app: ReverseTunnelHost, input: ReverseTunne
       return;
     }
     const record = message && typeof message === "object" ? message as Record<string, unknown> : {};
+    if (record.type === "control-plane.event-subscribe") {
+      app.nodeAgentEventForwarder?.setOutputSubscription?.(socket, record.aiSessionTransient);
+      return;
+    }
     if (record.type === "control-plane.http.open") {
       const streamId = typeof record.streamId === "string" ? record.streamId : "";
       const route = typeof record.route === "string" && record.route.startsWith("/") ? record.route : "/health";

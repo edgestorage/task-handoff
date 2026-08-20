@@ -8,8 +8,8 @@ import { createControlPlaneTriggersApi } from "./triggers.ts";
 
 export function createControlPlaneClient(transport: ControlPlaneClientTransport) {
   const compatibleTransport: ControlPlaneClientTransport = {
-    request(path, schema, init) {
-      return transport.request(path, responseSchema(schema), init);
+    request(path, schema, init, onUploadProgress) {
+      return transport.request(path, responseSchema(schema), init, onUploadProgress);
     },
   };
   return {

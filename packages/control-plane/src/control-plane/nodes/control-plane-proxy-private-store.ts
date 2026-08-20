@@ -93,6 +93,10 @@ export class ControlPlaneProxyPrivateStore {
     return this.pendingClaims.list().find((record) => record.claimId === claimId);
   }
 
+  pendingClaimByReference(reference: string) {
+    return this.pendingClaims.get(reference) || this.pendingClaimByClaimId(reference);
+  }
+
   putPendingClaim(record: PendingProxyClaim) {
     const existing = this.pendingClaimByClaimId(record.claimId);
     if (!existing) return this.pendingClaims.put(record);
@@ -185,6 +189,11 @@ export class ControlPlaneProxyPrivateStore {
     const pending = this.pendingClaimByClaimId(claimId);
     if (!pending || pending.status !== "compensation-required") return false;
     return this.pendingClaims.delete(pending.id);
+  }
+
+  forceDeletePendingClaim(reference: string) {
+    const pending = this.pendingClaimByReference(reference);
+    return pending ? this.pendingClaims.delete(pending.id) : false;
   }
 
   gcPendingClaims(now = Date.now()) {

@@ -76,6 +76,14 @@ test('one root provider owns one AI session connection for multiple screens', as
     expect(connectEvents).toHaveBeenCalledTimes(1);
   });
   expect(subscribeProfiles).toHaveBeenCalledTimes(1);
+  expect(connectEvents).toHaveBeenCalledWith(expect.objectContaining({
+    topics: ['ai.sessions'],
+    aiSessionTransient: {
+      messageDeltas: { allInstances: false, instanceIds: [] },
+      timelineAllSessions: false,
+      timelineSessions: [],
+    },
+  }));
   const stableRuntimeRenderCount = runtimeRenders.mock.calls.length;
 
   await act(async () => {
@@ -86,6 +94,6 @@ test('one root provider owns one AI session connection for multiple screens', as
   });
   await waitFor(() => screen.getByText('messages:1'));
   expect(runtimeRenders).toHaveBeenCalledTimes(stableRuntimeRenderCount);
-  screen.unmount();
+  await screen.unmount();
   mobileAiSessionStore.clearProfile('cp-provider');
 });

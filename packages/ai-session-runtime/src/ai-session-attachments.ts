@@ -7,6 +7,11 @@ export type CodexAttachmentInput =
   | { type: "image"; url: string }
   | { type: "localImage"; path: string };
 
+type MaterializableAiSessionAttachment = AiSessionMessageAttachment & {
+  /** Internal-only path owned by the controlled-instance retention store. */
+  retainedPath?: string;
+};
+
 const IMAGE_MIME_EXTENSIONS: Record<string, string> = {
   "image/bmp": ".bmp",
   "image/gif": ".gif",
@@ -52,7 +57,7 @@ function cleanupExpiredAttachments(dir: string) {
   }
 }
 
-export function materializeAiSessionAttachments(attachments: AiSessionMessageAttachment[] = [], runtimePathRoot?: string) {
+export function materializeAiSessionAttachments(attachments: MaterializableAiSessionAttachment[] = [], runtimePathRoot?: string) {
   if (!attachments.length) {
     return [];
   }
@@ -60,6 +65,18 @@ export function materializeAiSessionAttachments(attachments: AiSessionMessageAtt
   fs.mkdirSync(dir, { recursive: true });
   cleanupExpiredAttachments(dir);
   return attachments.map((attachment) => {
+    if (attachment.retainedPath) {
+      const retainedPath = canonicalRuntimePath(
+        attachment.retainedPath,
+        "AI_SESSION_ATTACHMENT_CONTENT_MISSING",
+        "Retained attachment content does not exist",
+      );
+      const stat = fs.statSync(retainedPath);
+      if (!stat.isFile()) {
+        throw runtimePathError("AI_SESSION_ATTACHMENT_CONTENT_MISSING", `Retained attachment content is not a file: ${attachment.retainedPath}`);
+      }
+      return { ...attachment, size: stat.size, path: retainedPath };
+    }
     if (attachment.source.type === "runtime-path") {
       if (!path.isAbsolute(attachment.source.path)) {
         throw new Error(`Runtime attachment path must be absolute: ${attachment.source.path}`);
@@ -92,7 +109,7 @@ export function materializeAiSessionAttachments(attachments: AiSessionMessageAtt
 
 export async function withAttachmentPathFallback<T>(
   message: string,
-  attachments: AiSessionMessageAttachment[] = [],
+  attachments: MaterializableAiSessionAttachment[] = [],
   runtimePathRoot: string | undefined,
   run: (message: string) => Promise<T>,
 ) {
@@ -105,7 +122,7 @@ export async function withAttachmentPathFallback<T>(
 
 export function prepareCodexAiSessionAttachments(
   message: string,
-  attachments: AiSessionMessageAttachment[] = [],
+  attachments: MaterializableAiSessionAttachment[] = [],
   runtimePathRoot?: string,
 ): { message: string; inputs: CodexAttachmentInput[] } {
   const inputs: CodexAttachmentInput[] = [];
